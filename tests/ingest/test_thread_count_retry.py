@@ -3,6 +3,7 @@
 import time
 
 import job_ops
+import mcs_contract
 from ingest_testkit import _ledger, _message
 
 
@@ -21,6 +22,8 @@ def test_missing_reply_count_reserves_thread_until_all_replies_arrive(tmp_path):
             if self.complete:
                 replies.append(_message(mid=22, project_id=pid, parent_id=mid))
             return replies
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     adapter = Adapter()
     merged = job_ops.merge_full_replies(

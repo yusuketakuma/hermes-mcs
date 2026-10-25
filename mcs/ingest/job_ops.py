@@ -409,20 +409,11 @@ def run_reply_jobs(adapter, ledger, result, deadline,
             result["errors"].append("reply: invalid_payload")
             continue
         try:
-            window_error = None
-            win = getattr(adapter, "fetch_thread_window", None)
-            if win is not None:
-                window = win(
-                    job["project_id"], job["parent_id"] or 0,
-                    start_page=page)
-                full = window.messages
-                next_page = None if window.reached else page + window.pages
-                window_error = window.error
-            else:
-                # stubs/simpler adapters: whole thread in one call
-                full = adapter.fetch_thread(
-                    job["project_id"], job["parent_id"] or 0)
-                next_page = None
+            window = adapter.fetch_thread_window(
+                job["project_id"], job["parent_id"] or 0, start_page=page)
+            full = window.messages
+            next_page = None if window.reached else page + window.pages
+            window_error = window.error
         except SessionExpired:
             raise  # auth failure aborts the run — never consumed as job retry
         except MCSError as e:

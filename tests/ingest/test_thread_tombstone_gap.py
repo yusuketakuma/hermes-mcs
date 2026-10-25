@@ -3,6 +3,7 @@
 import time
 
 import job_ops
+import mcs_contract
 import mcs_repair
 from ingest_testkit import _ledger, _message
 from mcs_queries import incomplete_reply_roots
@@ -19,6 +20,8 @@ def test_tombstoned_reply_agrees_between_job_view_and_repair(tmp_path):
         def fetch_thread(self, pid, mid):
             return [_message(mid=21, project_id=pid, parent_id=mid),
                     _message(mid=22, project_id=pid, parent_id=mid, state="deleted")]
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     db.job_add("thread", 1, 10, parent_id=10)
     job_ops.run_reply_jobs(Adapter(), db, {"errors": []}, time.monotonic() + 60)

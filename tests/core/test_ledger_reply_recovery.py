@@ -3,6 +3,7 @@
 import time
 
 import job_ops
+import mcs_contract
 from ingest_testkit import _ledger, _message
 
 
@@ -24,6 +25,8 @@ def test_null_body_state_reply_is_refetched(tmp_path):
         def fetch_thread(self, pid, parent_id):
             assert (pid, parent_id) == (1, 20)
             return [_message(mid=21, project_id=1, parent_id=20)]
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     job_ops.run_reply_jobs(
         Adapter(), db, {"errors": []}, time.monotonic() + 60)
@@ -53,6 +56,8 @@ def test_snippet_siblings_do_not_revive_each_others_failed_jobs(tmp_path):
                 _message(mid=102, project_id=1, parent_id=100,
                          state="snippet"),
             ]
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     for _ in range(40):
         db.db.execute(

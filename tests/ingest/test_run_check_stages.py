@@ -71,6 +71,8 @@ def test_backfill_does_not_advance_past_missing_reply():
 
         def fetch_thread(self, *args):
             return []
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     class Store:
         # no prior history_head row (stall probe reads fetch_jobs)
@@ -1608,8 +1610,10 @@ def test_relogin_replay_keeps_job_drain_failures(tmp_path):
             expired.append(1)
             raise mcs_contract.SessionExpired(status=403)
         return []
-    adapter = SimpleNamespace(auto_login=lambda **kw: "ok",
-                              fetch_thread=fetch_thread)
+    adapter = SimpleNamespace(
+        auto_login=lambda **kw: "ok", fetch_thread=fetch_thread,
+        fetch_thread_window=lambda pid, parent, start_page=1: mcs_contract.MessageBatch(
+            fetch_thread(pid, parent), pages=1, reached=True))
     result = {"errors": [], "run_id": 7}
     collection_stages.with_relogin(
         adapter, db, result, "reply_jobs", job_ops.run_reply_jobs,
@@ -3096,6 +3100,8 @@ def test_new_message_paths_mark_karte_summary_due(tmp_path):
     class ReplyAdapter:
         def fetch_thread(self, pid, parent_id):
             return [_msg_at(11, pid, _iso(1))]
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": [], "incomplete": []}
     job_ops.run_reply_jobs(ReplyAdapter(), db, result, time.monotonic() + 300)

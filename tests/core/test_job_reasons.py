@@ -41,6 +41,8 @@ def test_reply_failure_persists_only_a_reason_code(db, monkeypatch, error, reaso
     class Adapter:
         def fetch_thread(self, pid, parent_id):
             raise error
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     monkeypatch.setattr(job_ops.time, "monotonic", lambda: 1000.0)
     result = {"errors": []}

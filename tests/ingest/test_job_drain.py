@@ -67,6 +67,8 @@ def test_reply_merge_result_is_per_call():
             if self.fail:
                 raise mcs_contract.MCSError("broken")
             return [_message(mid=20, parent_id=10)]
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     adapter = Adapter()
     stats = {"errors": [], "threads": 0}
@@ -122,6 +124,8 @@ def test_deep_job_payload_does_not_starve_the_next_patient(tmp_path, kind, recur
             def fetch_thread(self, pid, mid):
                 calls.append(pid)
                 return [_message(mid=21, project_id=pid, parent_id=mid)]
+            def fetch_thread_window(self, pid, parent_id, start_page=1):
+                return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
             def fetch_history(self, pid, since, **kwargs):
                 calls.append(pid)
@@ -199,6 +203,8 @@ def test_complete_embedded_replies_need_no_thread_refetch():
     class Adapter:
         def fetch_thread(self, *_):
             pytest.fail("complete embedded replies must not be refetched")
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = job_ops.merge_full_replies(
         Adapter(), [parent], 0, time.monotonic() + 5,
@@ -367,6 +373,8 @@ def test_history_floor_withheld_for_nonterminal_parent(tmp_path):
 
         def fetch_thread(self, *a):
             return []
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     job_ops.run_history_jobs(Adapter(), db, result,
@@ -395,6 +403,8 @@ def test_history_stalled_window_fails_visibly(tmp_path):
 
         def fetch_thread(self, *a):
             return []
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     for _ in range(job_ops.HISTORY_STALL_LIMIT):
@@ -426,6 +436,8 @@ def test_history_batch_error_consumes_attempts(tmp_path):
 
         def fetch_thread(self, *a):
             return []
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     for _ in range(8):   # job_retry's default max_attempts
@@ -455,6 +467,8 @@ def test_history_batch_session_expired_stays_attempt_free(tmp_path):
 
         def fetch_thread(self, *a):
             return []
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     with pytest.raises(mcs_contract.SessionExpired):
@@ -518,6 +532,8 @@ def test_history_stall_counter_resets_on_progress(tmp_path):
 
         def fetch_thread(self, *a):
             return []
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     for _ in range(2):
@@ -546,6 +562,8 @@ def test_history_floor_set_when_all_parents_terminal(tmp_path):
 
         def fetch_thread(self, *a):
             return []
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     job_ops.run_history_jobs(Adapter(), db, result,
@@ -561,6 +579,8 @@ def test_failed_thread_with_partial_replies_not_checkpoint_safe():
     class Adapter:
         def fetch_thread(self, *_):
             raise mcs_contract.MCSError("broken")
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     m = _message(mid=10)
     m.reply_count = 2
@@ -580,6 +600,8 @@ def test_reply_job_saves_thread_siblings(tmp_path):
         def fetch_thread(self, pid, mid):
             return [_message(mid=21, project_id=80),
                     _message(mid=22, project_id=80)]
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     job_ops.run_reply_jobs(Adapter(), db, result, time.monotonic() + 60)
@@ -602,6 +624,8 @@ def test_reply_job_excludes_thread_root(tmp_path):
             # API contract violation defence: the parent is in the list
             return [_message(mid=30, project_id=81),
                     _message(mid=31, project_id=81)]
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     job_ops.run_reply_jobs(Adapter(), db, result, time.monotonic() + 60)
@@ -623,6 +647,8 @@ def test_reply_job_unread_sibling_notifies_once(tmp_path):
         def fetch_thread(self, pid, mid):
             return [_message(mid=41, project_id=82, unread=True),
                     _message(mid=42, project_id=82, unread=True)]
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     job_ops.run_reply_jobs(Adapter(), db, result, time.monotonic() + 60)
@@ -638,6 +664,8 @@ def test_reply_job_unread_sibling_notifies_once(tmp_path):
             return [_message(mid=41, project_id=82, unread=True),
                     _message(mid=42, project_id=82, unread=True),
                     _message(mid=43, project_id=82, unread=False)]
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     job_ops.run_reply_jobs(Adapter2(), db, result, time.monotonic() + 60)
     assert db.db.execute(
@@ -678,6 +706,8 @@ def test_old_history_reply_does_not_notify(tmp_path):
         def fetch_thread(self, pid, mid):
             return [_message(mid=61, project_id=84, unread=False),
                     _message(mid=62, project_id=84, unread=False)]
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     job_ops.run_reply_jobs(Adapter(), db, result, time.monotonic() + 60)
@@ -706,6 +736,8 @@ def test_snippet_parent_blocks_cursor_advance(tmp_path):
 
         def fetch_thread(self, *a):
             return []
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     job_ops.run_history_jobs(Adapter(), db, result,
@@ -732,6 +764,8 @@ def test_history_drain_rotates_fairly(tmp_path):
 
         def fetch_thread(self, *a):
             return []
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     job_ops.run_history_jobs(Adapter(), db, result,
@@ -881,6 +915,8 @@ def test_head_job_done_preserves_floor(tmp_path):
 
         def fetch_thread(self, *a):
             return []
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     job_ops.run_history_jobs(Adapter(), db, result,
@@ -980,6 +1016,8 @@ def test_discovery_archived_off_skips_kartes(tmp_path):
 
         def fetch_thread(self, *a):
             return []
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     job_ops.run_history_jobs(HAdapter(), db, result,
                              time.monotonic() + 300, trickle=True)
@@ -1020,6 +1058,8 @@ def test_reply_drain_retires_failed_sibling_job(tmp_path):
             # fetching for 12 returns the whole thread: 11 is full too
             return [_message(mid=11, project_id=1),
                     _message(mid=12, project_id=1)]
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     job_ops.run_reply_jobs(Adapter(), db, result, time.monotonic() + 60)
@@ -1040,6 +1080,8 @@ def test_reply_drain_enqueues_incomplete_sibling(tmp_path):
         def fetch_thread(self, pid, mid):
             return [_message(mid=11, project_id=1),
                     _message(mid=13, project_id=1, state="snippet")]
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     job_ops.run_reply_jobs(Adapter(), db, result, time.monotonic() + 60)
@@ -1069,6 +1111,8 @@ def test_head_job_blocked_only_by_live_reply_work(tmp_path):
 
         def fetch_thread(self, *a):
             return []
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     job_ops.run_history_jobs(HAdapter(), db, result,
@@ -1101,6 +1145,8 @@ def test_orphan_reply_gets_durable_job(tmp_path):
     class Adapter:
         def fetch_thread(self, pid, mid):
             return [_message(mid=21, project_id=1)]
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     result = {"errors": []}
     job_ops.run_reply_jobs(Adapter(), db, result, time.monotonic() + 60)
@@ -1450,6 +1496,8 @@ def test_reconcile_hydrates_changed_reply_and_rotates_patients(tmp_path):
 
         def fetch_thread(self, *args):
             return [_message(mid=11, parent_id=10, body="corrected")]
+        def fetch_thread_window(self, pid, parent_id, start_page=1):
+            return mcs_contract.MessageBatch(self.fetch_thread(pid, parent_id), pages=1, reached=True)
 
     adapter = Adapter()
     job_ops.run_reconcile_jobs(adapter, db, {"errors": []}, time.monotonic() + 300)
