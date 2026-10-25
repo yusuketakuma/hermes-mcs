@@ -64,6 +64,11 @@ CATCHUP_WINDOW_MIN = 24 * 60
 _CODE = re.compile(r"[a-z][a-z0-9_:.-]{0,63}")
 
 
+def _is_background(job) -> bool:
+    """A drainer or the LINE WORKS connector: stopped, never waited on, when orphaned."""
+    return job in BACKGROUND or job == "lineworks"
+
+
 def _backoff(failures):
     return min(RESTART_BACKOFF_S * 2 ** max(failures - 1, 0), BACKOFF_CAP_S)
 
@@ -100,6 +105,18 @@ def _try_lock(path, *, require_known=False):
 IDENTITY_BYTES = 16384
 IDENTITY_TIMEOUT_S = 5.0
 IDENTITY_RETRY_S = 30.0
+
+
+def _drain_probe_stdout(probe, process) -> None:
+    """Read what the identity probe wrote so far, up to one byte past the cap."""
+    try:
+        room = IDENTITY_BYTES + 1 - len(probe["raw"])
+        if room > 0:
+            probe["raw"].extend(os.read(process.stdout.fileno(), room))
+    except BlockingIOError:
+        pass
+    except OSError:
+        probe["discard"] = True
 
 
 def _process_args(pid):
@@ -316,7 +333,7 @@ class Runtime:
                 "restart_reservation": ("uncertain" if self._restart_reservation_uncertain
                                         else "active" if self._restart_reservation is not None else None),
                 "children": {
-                    **{job: {"pid": pid, "kind": "background" if job in BACKGROUND or job == "lineworks" else "core",
+                    **{job: {"pid": pid, "kind": "background" if _is_background(job) else "core",
                              "state": "orphan_identity_unknown"}
                        for job, pid in self.orphan_candidates.items()},
                     **{job: {"pid": row["process"].pid, "kind": row["kind"]}
@@ -718,7 +735,7 @@ class Runtime:
         if pending and identity is not None:
             del self.orphan_candidates[job]
             if identity is True:
-                kind = "background" if job in BACKGROUND or job == "lineworks" else "core"
+                kind = "background" if _is_background(job) else "core"
                 child = _Adopted(pid, self.argv[job])
                 self.children[job] = {"process": child, "kind": kind, "pending": None,
                                       "adopted": True, "stopping_at": None}
@@ -755,14 +772,7 @@ class Runtime:
                 if not probe["input"]:
                     with suppress(OSError):
                         process.stdin.close()
-            try:
-                room = IDENTITY_BYTES + 1 - len(probe["raw"])
-                if room > 0:
-                    probe["raw"].extend(os.read(process.stdout.fileno(), room))
-            except BlockingIOError:
-                pass
-            except OSError:
-                probe["discard"] = True
+            _drain_probe_stdout(probe, process)
         if (probe["discard"] or len(probe["raw"]) > IDENTITY_BYTES
                 or time.monotonic() - probe["started"] >= IDENTITY_TIMEOUT_S):
             probe["discard"] = True
@@ -783,14 +793,7 @@ class Runtime:
             return
         # A child can finish between the nonblocking read and poll; drain its final bytes.
         if not probe["discard"]:
-            try:
-                room = IDENTITY_BYTES + 1 - len(probe["raw"])
-                if room > 0:
-                    probe["raw"].extend(os.read(process.stdout.fileno(), room))
-            except BlockingIOError:
-                pass
-            except OSError:
-                probe["discard"] = True
+            _drain_probe_stdout(probe, process)
         self.identity_probe = None
         for stream in (process.stdin, process.stdout):
             with suppress(OSError):
@@ -807,7 +810,7 @@ class Runtime:
     def _start_identity(self):
         if self.identity_probe is not None:
             return
-        targets = {job: (pid, signal.SIGTERM if job in BACKGROUND or job == "lineworks" else None)
+        targets = {job: (pid, signal.SIGTERM if _is_background(job) else None)
                    for job, pid in self.orphan_candidates.items()}
         targets.update({job: (row["process"].pid, row["process"].operation)
                         for job, row in self.children.items()

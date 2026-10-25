@@ -748,6 +748,11 @@ def standalone_loaded(*, paths: ServicePaths):
         return lifecycle_io.run_bounded(['systemctl', '--user', 'is-active', '--quiet', contract.STANDALONE_UNIT]).returncode == 0
     return False
 
+def _known_cron_scripts() -> set:
+    """Cron wrapper names MCS owns (read at call time); mcs_recover is not cron."""
+    return {script for _, _, script in scheduled_jobs.CRON_JOBS} | {'mcs_offsite.sh'}
+
+
 def retire_previous_runtime(prev, desired_mode, note, dry, *, paths: ServicePaths):
     """Stop only the previous manifest's owned jobs before switching runtimes."""
     if not prev or prev.get('runtime_mode', 'hermes') == desired_mode:
@@ -755,7 +760,7 @@ def retire_previous_runtime(prev, desired_mode, note, dry, *, paths: ServicePath
     if prev.get('runtime_mode') == 'standalone':
         return 0
     labels = {row.get('label') for row in prev.get('agents', []) if isinstance(row, dict)} & set(contract.AGENT_LABELS)
-    scripts = {row.get('script') for row in prev.get('cron', []) if isinstance(row, dict)} & ({script for _, _, script in scheduled_jobs.CRON_JOBS} | {'mcs_offsite.sh'})
+    scripts = {row.get('script') for row in prev.get('cron', []) if isinstance(row, dict)} & _known_cron_scripts()
     if dry:
         note('以前のHermes経由のMCS処理を停止します: ' + ', '.join(sorted(labels | scripts)))
         return 0
@@ -958,7 +963,7 @@ def retire_to_snapshot(desired: dict, *, cfg, paths: ServicePaths) -> list[str]:
             return ['service_snapshot_invalid']
     hermes = mcs_util.hermes_exe(cfg)
     desired_cron = {d.get('script') or '': d for d in desired.get('cron', [])}
-    known_scripts = {s for _, _, s in scheduled_jobs.CRON_JOBS} | {'mcs_offsite.sh'}
+    known_scripts = _known_cron_scripts()
     current = {}
     try:
         fd = os.open(paths.manifest_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -992,12 +997,12 @@ def retire_to_snapshot(desired: dict, *, cfg, paths: ServicePaths) -> list[str]:
     else:
         problems.append('cron_list_unverifiable')
     desired_agents = {a.get('label') for a in desired.get('agents', [])}
-    current = set(contract.desired_agent_labels(cfg))
+    current_agents = set(contract.desired_agent_labels(cfg))
     for path in glob.glob(os.path.join(paths.agents_dir, '*.plist')):
         label = os.path.basename(path)[:-6]
         if not contract.owns_agent(label):
             continue
-        if label not in desired_agents and label not in current:
+        if label not in desired_agents and label not in current_agents:
             lifecycle_io.run_bounded(['launchctl', 'bootout', f'gui/{paths.uid}/{label}'], timeout=10)
             stopped = lifecycle_io.run_bounded(['launchctl', 'print', f'gui/{paths.uid}/{label}'], timeout=10)
             if getattr(stopped, 'returncode', None) != 113:
