@@ -38,6 +38,36 @@ def _launcher():
     return mod
 
 
+def test_release_fence_stops_old_target_before_git_extraction_or_python(tmp_path, monkeypatch):
+    import release_apply_owner
+    runtime = str(tmp_path / 'runtime')
+    monkeypatch.setenv('MCS_ROOT', runtime)
+    with release_apply_owner._control_store(runtime) as store:
+        store.write('release-owner-activation.json', {'synthetic': True})
+    launcher = _launcher()
+    monkeypatch.setattr(launcher, '_git', lambda *_a, **_k: pytest.fail('Git before release hold'))
+    monkeypatch.setattr(launcher, 'extract', lambda *_a, **_k: pytest.fail('old target extraction'))
+    assert launcher.main(['--repo', str(tmp_path / 'repo'), 'apply', '--to', 'v1.0.0']) == 2
+    assert launcher._RELEASE_GATE_FD is None
+
+
+def test_bootstrap_git_child_inherits_gate_and_scope_restores_on_error(tmp_path, monkeypatch):
+    launcher = _launcher()
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(tuple(os.fstat(fd).st_ino for fd in kwargs.get('pass_fds', ())))
+        return subprocess.CompletedProcess(argv, 0, '', '')
+
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    with pytest.raises(RuntimeError), launcher._release_scope(str(tmp_path / 'runtime')) as fd:
+        identity = os.fstat(fd).st_ino
+        launcher._git(str(tmp_path), 'status')
+        raise RuntimeError('synthetic scope exit')
+    launcher._git(str(tmp_path), 'status')
+    assert calls == [(identity,), ()] and launcher._RELEASE_GATE_FD is None
+
+
 def _release(work, bare, tag, files):
     for path, text in files.items():
         (work / path).parent.mkdir(parents=True, exist_ok=True)

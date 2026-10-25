@@ -15,7 +15,7 @@ for _path in (str(REPO), str(REPO / 'mcs')):
 import _mcs_path  # noqa: E402,F401
 from adapters.sdc.keychain import KeychainCredentialStore, KeychainError  # noqa: E402
 from adapters.sdc.protocol import strict_json  # noqa: E402
-from adapters.sdc.storage import Store  # noqa: E402
+from adapters.sdc.credential_mutation import credential_value  # noqa: E402
 
 MAX_RAW = 4096
 MAX_FRAME = 8192
@@ -51,7 +51,7 @@ def decode_payload(raw):
 def credential_raw(raw):
     if type(raw) is not bytes or not 1 <= len(raw) <= MAX_RAW:
         raise ValueError('SDC_RESTART_CREDENTIAL_PROTOCOL')
-    Store._credential_value(raw)
+    credential_value(raw)
     return raw
 
 

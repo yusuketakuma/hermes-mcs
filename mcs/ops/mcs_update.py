@@ -24,6 +24,8 @@ shell user it runs as.
 from __future__ import annotations
 
 import argparse
+from contextvars import ContextVar
+from functools import wraps
 import glob
 import hashlib
 import json
@@ -40,7 +42,7 @@ import time
 from pathlib import Path
 import unicodedata
 import urllib.request
-from contextlib import suppress
+from contextlib import ExitStack, suppress
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
@@ -206,6 +208,67 @@ class RestoreConsentPending(UpdateError):
 def journal(state: dict, stage: str) -> None:
     state["stages"].append({"stage": stage, "at": time.time()})
     journal_store.save_state(STATE_PATH, state)
+
+
+
+def _release_legacy_blocked(state):
+    """Read the fixed release namespace under update.lock; config cannot erase its fence."""
+    records = [state.get('applying') or {}, *state.get('applied', []), *state.get('stages', [])]
+    if 'release_ref' in state or any('release_ref' in row for row in records):
+        return True
+    try:
+        from release_apply_owner import _legacy_scope
+        with _legacy_scope(HOME) as current:
+            held = _RELEASE_GATE_FD.get()
+            if held is not None:
+                before, after = os.fstat(held), os.fstat(current)
+                if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                    return True
+        return False
+    except (OSError, ValueError, TypeError, ImportError):
+        return True
+
+
+def _release_legacy_hold(state):
+    if _release_legacy_blocked(state):
+        print('release更新の制御状態を確認する必要があります。通常の更新・復旧は停止しました。状態ファイルを削除せず、release statusで確認してください。')
+        return True
+    return False
+
+
+_RELEASE_GATE_FD = ContextVar('mcs_update_release_gate_fd', default=None)
+
+
+def _call_legacy(function, *args, **kwargs):
+    # Only entry/cleanup failures are converted to hold; preserve the old body's exception contract.
+    with ExitStack() as stack:
+        try:
+            from release_apply_owner import _legacy_scope
+            fd = stack.enter_context(_legacy_scope(HOME))
+            stack.enter_context(owned_process.lifetime_fds((fd,)))
+        except (OSError, ValueError, ImportError):
+            print('release制御の確認中または状態が不明なため、通常の更新・復旧を停止しました。')
+            return 2
+        token = _RELEASE_GATE_FD.set(fd)
+        try:
+            return function(*args, **kwargs)
+        finally:
+            _RELEASE_GATE_FD.reset(token)
+
+
+
+def _run_with_lifetime(argv, **kwargs):
+    with owned_process._inherited_fds(kwargs.pop('pass_fds', ())) as inherited:
+        if inherited:
+            kwargs['pass_fds'] = tuple(inherited.values())
+        return subprocess.run(argv, **kwargs)
+
+
+def _legacy_entry(function):
+    @wraps(function)
+    def guarded(*args, **kwargs):
+        return _call_legacy(function, *args, **kwargs)
+    return guarded
 
 
 def acquire_update_lock() -> int | None:
@@ -454,7 +517,7 @@ def _migration_checkout_problem(cfg: dict) -> str | None:
     if checkout is None:
         return None
     def git(*args):
-        return subprocess.run(["git", "-C", checkout, *args], capture_output=True,
+        return _run_with_lifetime(["git", "-C", checkout, *args], capture_output=True,
                               text=True, timeout=30)
     try:
         head = git("rev-parse", "HEAD")
@@ -500,7 +563,7 @@ def _python314() -> str | None:
         if not exe:
             continue
         try:
-            ok = subprocess.run([exe, "-I", "-c", "import sys; sys.exit(not (3, 14) <= "
+            ok = _run_with_lifetime([exe, "-I", "-c", "import sys; sys.exit(not (3, 14) <= "
                                  "sys.version_info[:2] < (3, 15))"],
                                 capture_output=True, timeout=30).returncode == 0
         except (OSError, subprocess.TimeoutExpired):
@@ -517,7 +580,7 @@ def _checkout_admits_python314(checkout: str) -> bool:
     if python is None:
         return False
     try:
-        return subprocess.run([python, "-I", script, os.path.join(checkout, "pyproject.toml")],
+        return _run_with_lifetime([python, "-I", script, os.path.join(checkout, "pyproject.toml")],
                               capture_output=True, timeout=30).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -582,7 +645,7 @@ def precheck_tag(tag: str) -> list[str]:
     # anything the repo's own ignore rules would cover.
     if paths:
         try:
-            r = subprocess.run(
+            r = _run_with_lifetime(
                 ["git", "-C", REPO, "check-ignore", "-z", "--stdin",
                  "--no-index"],
                 input="\0".join(paths), capture_output=True, text=True,
@@ -646,7 +709,7 @@ def precheck_tag(tag: str) -> list[str]:
                 raise UpdateError("unsafe_path: " + path)
             dst = os.path.join(tmp, path)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            blob = subprocess.run(
+            blob = _run_with_lifetime(
                 ["git", "-C", REPO, "cat-file", "blob", bsha],
                 capture_output=True, timeout=update_discovery.LOCAL_TIMEOUT_S)
             if blob.returncode != 0:
@@ -655,7 +718,7 @@ def precheck_tag(tag: str) -> list[str]:
                 f.write(blob.stdout)
             if mode == "100755":
                 os.chmod(dst, 0o755)
-        probe = subprocess.run(
+        probe = _run_with_lifetime(
             [sys.executable, "-c",
              "import sys, json, os\n"
              "sys.path.insert(0, sys.argv[1])\n"
@@ -684,6 +747,10 @@ def precheck_tag(tag: str) -> list[str]:
     if _git(["diff", "--quiet", "HEAD", tag, "--", "install.sh"]
             ).returncode != 0:
         errors.append("install_sh_changed")
+    if _git(["diff", "--quiet", "HEAD", tag, "--",
+             "deployment/sdc-release-lock.json", "deployment/sdc-wheels/"]
+            ).returncode != 0:
+        errors.append("release_dependency_lock_changed")
     # standalone SDK pins live in ~/.mcs/venv, which only install.sh updates
     if standalone and _git(
             ["diff", "--quiet", "HEAD", tag, "--",
@@ -852,7 +919,7 @@ def _run(argv: list, timeout: int = T_LAUNCHCTL
     127: every launchctl caller records a per-label problem and moves on,
     so one wedged label never aborts a restart loop mid-way (H4)."""
     try:
-        return subprocess.run(argv, capture_output=True, text=True,
+        return _run_with_lifetime(argv, capture_output=True, text=True,
                               timeout=timeout)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(argv, 124, "",
@@ -1287,7 +1354,7 @@ def _enqueue_notice(text: str, use_run_lock: bool = False) -> bool:
             # launcher copy (scripts/mcs_upgrade.py): this code's Ledger
             # would migrate the live DB past what the live tree runs, so
             # only the live tree's own Ledger may open it
-            r = subprocess.run(
+            r = _run_with_lifetime(
                 [sys.executable, "-c", _NOTICE_CHILD, live, LEDGER, text],
                 stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
             return r.returncode == 0
@@ -1393,11 +1460,14 @@ def _reinstall(applying: dict) -> None:
     else:
         env.pop(RUN_LOCK_FD_ENV, None)   # no migration: no venv move allowed
     try:
-        child = subprocess.Popen(
-            ["/bin/sh", os.path.join(REPO, "install.sh"), *args,
-             "--no-services"], stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            env=env, pass_fds=fds, start_new_session=True)
+        with owned_process._inherited_fds(fds) as inherited:
+            if migration:
+                env[RUN_LOCK_FD_ENV] = str(inherited[fds[0]])
+            child = subprocess.Popen(
+                ["/bin/sh", os.path.join(REPO, "install.sh"), *args,
+                 "--no-services"], stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                env=env, pass_fds=tuple(inherited.values()), start_new_session=True)
     except OSError as e:
         raise UpdateError(f"install_failed: {e}") from e
     try:
@@ -1427,7 +1497,7 @@ def _runtime_version(venv: str) -> tuple[str, tuple[int, int]] | None:
         exe = os.path.join(venv, "bin", name)
         if os.access(exe, os.X_OK):
             try:
-                out = subprocess.run(
+                out = _run_with_lifetime(
                     [exe, "-I", "-c", "import sys; print(*sys.version_info[:2])"],
                     capture_output=True, text=True, timeout=30)
                 major, minor = map(int, out.stdout.split())
@@ -1480,7 +1550,7 @@ def _plan_runtime_migration(state: dict, held_fd: int | None = None) -> None:
     needs_python = _needs_migration(venv)
     head_sha = None
     if checkout:
-        head = subprocess.run(["git", "-C", checkout, "rev-parse", "HEAD"],
+        head = _run_with_lifetime(["git", "-C", checkout, "rev-parse", "HEAD"],
                               capture_output=True, text=True, timeout=30)
         if head.returncode != 0 or not update_discovery.COMMIT_SHA_RE.fullmatch(head.stdout.strip()):
             raise UpdateError("runtime_migration_checkout_unreadable")
@@ -1536,7 +1606,7 @@ def _check_runtime_restore(entry: dict) -> str | None:
         raise UpdateError("runtime_restore_checkout_unreadable")
     try:
         def git(*args):
-            return subprocess.run(["git", "-C", checkout, *args], capture_output=True,
+            return _run_with_lifetime(["git", "-C", checkout, *args], capture_output=True,
                                   text=True, timeout=30)
         now = git("rev-parse", "HEAD")
         branch = git("symbolic-ref", "-q", "HEAD")
@@ -1573,7 +1643,7 @@ def _restore_runtime(entry: dict) -> None:
         # the old venv's editable install expects the pre-migration source
         if current == head:
             return
-        r = subprocess.run(["git", "-C", checkout, "checkout", "-q", "--detach", head],
+        r = _run_with_lifetime(["git", "-C", checkout, "checkout", "-q", "--detach", head],
                            capture_output=True, text=True, timeout=120)
         if r.returncode != 0:
             raise UpdateError("runtime_restore_checkout_failed")
@@ -1583,7 +1653,11 @@ def _post_merge(state: dict) -> int:
     """Post-merge stages, run as a NEW-code subprocess while the parent
     (old code) holds both locks (--locks-held)."""
     applying = state["applying"]
-    _plan_runtime_migration(state)
+    if 'release_ref' in applying:
+        if applying.get('reinstall') or applying.get('runtime_migration'):
+            raise UpdateError('release_runtime_change_forbidden')
+    else:
+        _plan_runtime_migration(state)
     if applying.get("reinstall") and not applying.get("reinstall_done"):
         _reinstall(applying)
         journal(state, "reinstall")      # persists reinstall_done
@@ -1613,6 +1687,8 @@ def _post_merge(state: dict) -> int:
         **({"target_kind": "local_candidate", "human_confirmed": True,
             "reason": applying["reason"]}
            if applying.get("target_kind") == "local_candidate" else {}),
+        **({"release_ref": applying["release_ref"]} if "release_ref" in applying else {}),
+        **({"release_child": applying["release_child"]} if "release_child" in applying else {}),
         "command_id": applying.get("command_id"), "at": time.time()})
     state["stages"].append({"stage": "done", "at": time.time()})
     state["applying"] = None
@@ -1667,6 +1743,7 @@ def _rollback_applying(entry, prev_sha, command_id) -> dict:
         "manifest_snapshot": entry.get("manifest_snapshot"),
         **({"runtime_migration": entry["runtime_migration"]}
            if entry.get("runtime_migration") else {}),
+        **({"release_ref": entry["release_ref"]} if "release_ref" in entry else {}),
         "command_id": command_id,
         "at": time.time()}
 
@@ -1703,16 +1780,17 @@ def _run_post_merge(sha: str, *, run_lock_fd: int | None) -> None:
     env[_UPDATE_PM_ENV] = sha       # child handshake token (L17)
     env.pop(RUN_LOCK_FD_ENV, None)
     run_fd = run_lock_fd
-    if run_fd is not None:
-        env[RUN_LOCK_FD_ENV] = str(run_fd)
     # the merged checkout's updater, not __file__: scripts/mcs_upgrade.py
     # runs this module from a temp copy of the target tag
-    child = subprocess.Popen(
-        [sys.executable, os.path.join(REPO, "mcs", "ops", "mcs_update.py"),
-         "--post-merge"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env=env, pass_fds=() if run_fd is None else (run_fd,),
-        start_new_session=True)
+    with owned_process._inherited_fds(() if run_fd is None else (run_fd,)) as inherited:
+        if run_fd is not None:
+            env[RUN_LOCK_FD_ENV] = str(inherited[run_fd])
+        child = subprocess.Popen(
+            [sys.executable, os.path.join(REPO, "mcs", "ops", "mcs_update.py"),
+             "--post-merge"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            env=env, pass_fds=tuple(inherited.values()),
+            start_new_session=True)
     try:
         cout, cerr = child.communicate(
             timeout=T_POST_MERGE + (T_INSTALL if (journal_store.load_state(STATE_PATH).get(
@@ -1827,6 +1905,19 @@ def _apply_record_success(tag: str, command_id: str | None) -> dict:
 
 
 def apply(tag: str | None, sha: str | None, command_id: str | None,
+          base_sha: str | None = None, reinstall: bool = False,
+          install_args: tuple = (), *, candidate_sha: str | None = None,
+          confirm_human: bool = False, reason: str | None = None) -> int:
+    rc = _apply_validate_args(tag, sha, command_id, reinstall, install_args,
+                              candidate_sha=candidate_sha, base_sha=base_sha,
+                              confirm_human=confirm_human, reason=reason)
+    if rc is not None:
+        return rc
+    return _call_legacy(_apply_pipeline, tag, sha, command_id, base_sha, reinstall, install_args,
+                        candidate_sha=candidate_sha, confirm_human=confirm_human, reason=reason)
+
+
+def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
           base_sha: str | None = None, reinstall: bool = False,
           install_args: tuple = (), *, candidate_sha: str | None = None,
           confirm_human: bool = False, reason: str | None = None) -> int:
@@ -1983,6 +2074,8 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
         if upd_fd is None:
             return 0                    # another updater is alive
         state = journal_store.load_state(STATE_PATH)            # fresh view under the lock
+        if _release_legacy_hold(state):
+            return 2
         if state.get("_corrupt"):
             return 2
         if state.get("applying") or state.get("stages"):
@@ -2293,6 +2386,7 @@ def _cancel_unsent_notices() -> int:
         return 0
 
 
+@_legacy_entry
 def rollback(command_id: str | None = None) -> int:
     """Restore the latest applied entry's prev_sha (⑤).
 
@@ -2316,6 +2410,8 @@ def rollback(command_id: str | None = None) -> int:
     consent_hold = False
     try:
         state = journal_store.load_state(STATE_PATH)            # fresh view under the lock
+        if _release_legacy_hold(state):
+            return 2
         if state.get("_corrupt"):
             return 2
         if state.get("applying") or state.get("stages"):
@@ -2707,6 +2803,7 @@ def _restore_db(backup_path: str, on_hold=None) -> None:
 
 # -------------------------------------------------------------- recover
 
+@_legacy_entry
 def reinstall_done() -> int:
     """Operator acknowledgement, after finishing install.sh by hand
     (docs/guides/UPGRADE_AGENT.md), that an interrupted --reinstall is
@@ -2718,6 +2815,8 @@ def reinstall_done() -> int:
         return 1
     try:
         state = journal_store.load_state(STATE_PATH)
+        if _release_legacy_hold(state):
+            return 2
         if state.get("_corrupt"):
             return 2
         applying = state.get("applying")
@@ -2805,6 +2904,7 @@ def _finish_resumed(state: dict, applying: dict) -> int:
     return 0
 
 
+@_legacy_entry
 def recover_interrupted(if_stale: bool = False) -> int:
     """Journal-driven recovery (⑤). Safe to call any time.
 
@@ -2823,6 +2923,9 @@ def recover_interrupted(if_stale: bool = False) -> int:
         return 0                       # apply alive — leave it alone
     run_fd = None
     try:
+        state = journal_store.load_state(STATE_PATH)
+        if _release_legacy_hold(state):
+            return 2
         run_fd = _acquire_run_lock_wait(tries=2)
         if run_fd is None:
             return 0                   # a tick is running — retry next
@@ -3228,6 +3331,7 @@ def _drug_info_notices(cfg: dict) -> None:
         return
 
 
+@_legacy_entry
 def cmd_check() -> int:
     """Daily driver: detect -> notify -> pending approvals -> auto.
 
@@ -3259,20 +3363,6 @@ def cmd_check() -> int:
         raise UpdateError(str(exc)) from exc
     notes = impact = None
     newer = _tag_is_newer(tag, sha, cur_sha)
-    # refetch for a deferred notice only while one is still owed — a
-    # checkout ahead of the latest tag never gets it and must not refetch
-    if tag and (tag != state.get("latest_tag")
-                or (newer and state.get("notified_at") != tag)):
-        with suppress(UpdateError):
-            # fetch objects BEFORE notes/impact — otherwise the summary
-            # silently runs against missing objects (dead code, F15)
-            _git(["fetch", "--tags", "origin"], timeout=T_FETCH)
-        notes = fetch_notes(tag)
-        try:
-            impact = impact_summary(cur_sha, tag) if cur_sha else []
-        except (UpdateError, ValueError):     # ValueError: invalid runtime_mode
-            impact = []
-        newer = _tag_is_newer(tag, sha, cur_sha)   # objects present now
     # --- serialized state update + decision --------------------------
     picked = auto = None
     held = False
@@ -3281,8 +3371,24 @@ def cmd_check() -> int:
         return 0                        # another updater is alive
     try:
         state = journal_store.load_state(STATE_PATH)            # fresh view under the lock
+        if _release_legacy_hold(state):
+            return 2
         if state.get("_corrupt"):
             return 2
+        # refetch for a deferred notice only while one is still owed — a
+        # checkout ahead of the latest tag never gets it and must not refetch
+        if tag and (tag != state.get("latest_tag")
+                    or (newer and state.get("notified_at") != tag)):
+            with suppress(UpdateError):
+                # fetch objects BEFORE notes/impact — otherwise the summary
+                # silently runs against missing objects (dead code, F15)
+                _git(["fetch", "--tags", "origin"], timeout=T_FETCH)
+            notes = fetch_notes(tag)
+            try:
+                impact = impact_summary(cur_sha, tag) if cur_sha else []
+            except (UpdateError, ValueError):     # ValueError: invalid runtime_mode
+                impact = []
+            newer = _tag_is_newer(tag, sha, cur_sha)   # objects present now
         if state.get("applying") or state.get("stages"):
             # an interrupted/held update owns the journal — check must
             # defer to recovery AFTER releasing update.lock (a
@@ -3384,12 +3490,25 @@ def cmd_post_merge() -> int:
     state = journal_store.load_state(STATE_PATH)
     applying = state.get("applying") or {}
     # the post-merge stage is only reachable from the parent apply
-    # — the env token proves we were spawned by it, not invoked
-    # directly against whatever journal happens to exist (L17)
+    # — this retains the old legacy continuity check (L17). It is not
+    # proof of release authority or permission to resume a saved grant.
     if state.get("_corrupt") or not applying \
             or os.environ.get(_UPDATE_PM_ENV) != applying.get("sha"):
         return 2
-    return _post_merge(state)
+    if 'release_ref' in state or 'release_ref' in applying:
+        try:
+            from release_apply_owner import CHILD_FDS_ENV, _adopt_post_merge
+            locators = os.environ.get(CHILD_FDS_ENV, '').split(':')
+            if len(locators) != 4 or any(not value.isascii() or not value.isdecimal() for value in locators):
+                return 2
+            pipe_fd, *locks = map(int, locators)
+            state = _adopt_post_merge(HOME, REPO, ticket_fd=pipe_fd,
+                                      locks=tuple(locks), deadline=time.monotonic() + 2)
+        except (OSError, ValueError, ImportError):
+            return 2
+        with owned_process.lifetime_fds(tuple(locks)):
+            return _post_merge(state)
+    return _call_legacy(_post_merge, state)
 
 
 def _build_parser() -> argparse.ArgumentParser:

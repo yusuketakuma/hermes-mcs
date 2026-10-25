@@ -36,7 +36,7 @@ import sys
 import tempfile
 import time
 import uuid
-from contextlib import suppress
+from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 
 INTERACTIVE_GUIDE_VERSION = 1
@@ -99,6 +99,71 @@ T_GIT = 30
 GIT_TERM_GRACE_S = 2      # an owned git removes its own *.lock on SIGTERM
 
 
+
+_RELEASE_GATE_FD = None
+
+
+def _release_control_root(runtime_home):
+    canonical = os.path.realpath(os.path.abspath(os.path.expanduser(runtime_home)))
+    namespace = hashlib.sha256(os.fsencode(canonical)).hexdigest()
+    return Path(os.path.realpath(os.path.expanduser('~'))) / '.mcs-release-control' / namespace
+
+
+def _open_release_gate(runtime_home):
+    root = _release_control_root(runtime_home)
+    directory, held = os.open('/', os.O_RDONLY | os.O_DIRECTORY), None
+    try:
+        for index, part in enumerate(root.parts[1:]):
+            private = index >= len(root.parts) - 3
+            if private:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=directory)
+                    os.fsync(directory)
+                except FileExistsError:
+                    pass
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+            info = os.fstat(directory)
+            if private and (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700):
+                raise ValueError('release_entry_hold')
+        held = os.open('release-entry.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+                       0o600, dir_fd=directory)
+        info = os.fstat(held)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1
+                or info.st_size != 0 or stat.S_IMODE(info.st_mode) != 0o600):
+            raise ValueError('release_entry_hold')
+        fcntl.flock(held, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        for name in ('release-owner.json', 'release-owner-activation.json'):
+            try:
+                os.stat(name, dir_fd=directory, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            raise ValueError('release_entry_hold')
+        result, held = held, None
+        return result
+    finally:
+        if held is not None:
+            os.close(held)
+        os.close(directory)
+
+
+@contextmanager
+def _release_scope(runtime_home):
+    global _RELEASE_GATE_FD
+    fd = _open_release_gate(runtime_home)
+    previous, _RELEASE_GATE_FD = _RELEASE_GATE_FD, fd
+    try:
+        yield fd
+    finally:
+        _RELEASE_GATE_FD = previous
+        os.close(fd)
+
+
+def _lifetime_fds():
+    return {} if _RELEASE_GATE_FD is None else {'pass_fds': (_RELEASE_GATE_FD,)}
+
+
 def _run_owned(argv, timeout, env, stdin=None):
     """= owned_process.run_owned, self-contained without the checkout. subprocess.run(capture_output,
     text) for one command in its own
@@ -107,7 +172,7 @@ def _run_owned(argv, timeout, env, stdin=None):
     GIT_TERM_GRACE_S + the bounded reap."""
     child = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True, env=env,
-                             start_new_session=True)
+                             start_new_session=True, **_lifetime_fds())
     try:
         out, err = child.communicate(timeout=timeout)
     except BaseException:
@@ -1630,6 +1695,18 @@ def _recovery_explanation(detail):
 
 
 def recover(if_stale=False):
+    # Gate/fence precedes even the old lock-free reports and alert publication.
+    with ExitStack() as scope:
+        try:
+            scope.enter_context(_release_scope(os.path.dirname(DATA)))
+        except BlockingIOError:
+            return 0
+        except (OSError, ValueError):
+            return 2
+        return _recover_legacy(if_stale=if_stale)
+
+
+def _recover_legacy(if_stale=False):
     state = _load_state()
     if state.get("_corrupt"):
         _report("corrupt_state",

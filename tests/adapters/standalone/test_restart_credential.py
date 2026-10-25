@@ -571,3 +571,12 @@ def test_unknown_reaper_never_signals_a_potentially_reused_pid(world, monkeypatc
             owner._close_pipes()
         assert child.returncode is None and not owner.closed
     asyncio.run(scenario())
+
+
+def test_credential_raw_uses_shared_shape_and_preserves_bytes():
+    from ops.sdc_restart_credential import credential_raw
+
+    raw = b'{ "key" : "' + b'1' * 64 + b'" }'
+    assert credential_raw(raw) is raw
+    with pytest.raises(KeychainError, match='SDC_KEYCHAIN_INVALID_VALUE'):
+        credential_raw(b'{"key":"invalid"}')

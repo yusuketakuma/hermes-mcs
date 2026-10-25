@@ -1,0 +1,590 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "title": "SDC release apply (R5b) HTTP wrappers",
+ "description": "Device POST /v2/releases/apply/* and admin POST /admin/v1/support/releases/operations/*. Raw body <= 16384 bytes.",
+ "x-max-raw-bytes": 16384,
+ "x-routes": {
+  "device": {
+   "plans/report": "plan_report",
+   "cases/preview": "preview",
+   "cases/accept": "accept",
+   "requests/poll": "poll",
+   "operations/admit": "admit",
+   "operations/grant": "grant",
+   "operations/report": "report",
+   "operations/status": "status"
+  },
+  "admin": {
+   "propose": "propose",
+   "approve": "approve",
+   "revoke": "revoke",
+   "read": "read"
+  }
+ },
+ "$defs": {
+  "OperationState": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "state",
+    "state_revision",
+    "slot_held",
+    "integrity_hold"
+   ],
+   "properties": {
+    "state": {
+     "enum": [
+      "proposed",
+      "approved",
+      "queued",
+      "locally_admitted",
+      "grant_consumed",
+      "running",
+      "succeeded",
+      "failed",
+      "unknown",
+      "canceled",
+      "expired",
+      "stale"
+     ]
+    },
+    "state_revision": {
+     "type": "integer",
+     "minimum": 0,
+     "maximum": 9007199254740991
+    },
+    "slot_held": {
+     "type": "boolean"
+    },
+    "integrity_hold": {
+     "type": "boolean"
+    }
+   }
+  },
+  "ReportRef": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "report_id",
+    "outcome_hash",
+    "sequence",
+    "reported_state",
+    "state"
+   ],
+   "properties": {
+    "report_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    },
+    "outcome_hash": {
+     "$ref": "apply.schema.json#/$defs/Hex64"
+    },
+    "sequence": {
+     "$ref": "apply.schema.json#/$defs/Positive"
+    },
+    "reported_state": {
+     "enum": [
+      "running",
+      "succeeded",
+      "failed",
+      "unknown"
+     ]
+    },
+    "state": {
+     "enum": [
+      "running",
+      "succeeded",
+      "failed",
+      "unknown"
+     ]
+    }
+   }
+  },
+  "AdminView": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "operation_id",
+    "release_id",
+    "target_code_seq",
+    "window",
+    "intent_hash",
+    "approval_hash",
+    "operation",
+    "report"
+   ],
+   "properties": {
+    "operation_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    },
+    "release_id": {
+     "$ref": "apply.schema.json#/$defs/Hex64"
+    },
+    "target_code_seq": {
+     "$ref": "apply.schema.json#/$defs/Positive"
+    },
+    "window": {
+     "$ref": "apply.schema.json#/$defs/Window"
+    },
+    "intent_hash": {
+     "$ref": "apply.schema.json#/$defs/Hex64"
+    },
+    "approval_hash": {
+     "oneOf": [
+      {
+       "$ref": "apply.schema.json#/$defs/Hex64"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "operation": {
+     "$ref": "#/$defs/OperationState"
+    },
+    "report": {
+     "oneOf": [
+      {
+       "$ref": "#/$defs/ReportRef"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   }
+  },
+  "AcceptRequest": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "control",
+    "receipt"
+   ],
+   "properties": {
+    "control": {
+     "$ref": "apply.schema.json#/$defs/Control_accept"
+    },
+    "receipt": {
+     "$ref": "apply.schema.json#/$defs/LocalReceipt"
+    }
+   }
+  },
+  "PlanReportResponse": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "report_id",
+    "plan_hash",
+    "blockers",
+    "request_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-plan-report-response.v1"
+    },
+    "report_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    },
+    "plan_hash": {
+     "$ref": "apply.schema.json#/$defs/Hex64"
+    },
+    "blockers": {
+     "type": "array",
+     "maxItems": 0
+    },
+    "request_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    }
+   }
+  },
+  "PreviewResponse": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "intent",
+    "approval",
+    "preview",
+    "request_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-preview-response.v1"
+    },
+    "intent": {
+     "$ref": "apply.schema.json#/$defs/Intent"
+    },
+    "approval": {
+     "$ref": "apply.schema.json#/$defs/Approval"
+    },
+    "preview": {
+     "allOf": [
+      {
+       "$ref": "apply.schema.json#/$defs/Envelope"
+      },
+      {
+       "properties": {
+        "purpose": {
+         "const": "release-apply-consent-preview"
+        }
+       }
+      }
+     ]
+    },
+    "request_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    }
+   }
+  },
+  "AcceptResponse": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "acceptance",
+    "request_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-accept-response.v1"
+    },
+    "acceptance": {
+     "$ref": "apply.schema.json#/$defs/Acceptance"
+    },
+    "request_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    }
+   }
+  },
+  "PollResponse": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "context",
+    "request_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-poll-response.v1"
+    },
+    "context": {
+     "oneOf": [
+      {
+       "type": "null"
+      },
+      {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "intent",
+        "approval",
+        "acceptance",
+        "operation",
+        "admission"
+       ],
+       "properties": {
+        "intent": {
+         "$ref": "apply.schema.json#/$defs/Intent"
+        },
+        "approval": {
+         "$ref": "apply.schema.json#/$defs/Approval"
+        },
+        "acceptance": {
+         "$ref": "apply.schema.json#/$defs/Acceptance"
+        },
+        "operation": {
+         "allOf": [
+          {
+           "$ref": "apply.schema.json#/$defs/Envelope"
+          },
+          {
+           "properties": {
+            "purpose": {
+             "const": "release-apply-operation"
+            }
+           }
+          }
+         ]
+        },
+        "admission": {
+         "oneOf": [
+          {
+           "$ref": "apply.schema.json#/$defs/Admission"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        }
+       }
+      }
+     ]
+    },
+    "request_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    }
+   }
+  },
+  "AdmitResponse": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "admission",
+    "request_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-admit-response.v1"
+    },
+    "admission": {
+     "$ref": "apply.schema.json#/$defs/Admission"
+    },
+    "request_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    }
+   }
+  },
+  "GrantResponse": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "admission",
+    "grant",
+    "request_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-grant-response.v1"
+    },
+    "admission": {
+     "$ref": "apply.schema.json#/$defs/Admission"
+    },
+    "grant": {
+     "allOf": [
+      {
+       "$ref": "apply.schema.json#/$defs/Envelope"
+      },
+      {
+       "properties": {
+        "purpose": {
+         "const": "release-apply-execution-grant"
+        }
+       }
+      }
+     ]
+    },
+    "request_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    }
+   }
+  },
+  "ReportResponse": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "operation_id",
+    "receipt_id",
+    "report_id",
+    "outcome_hash",
+    "disposition",
+    "operation",
+    "request_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-report-response.v1"
+    },
+    "operation_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    },
+    "receipt_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    },
+    "report_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    },
+    "outcome_hash": {
+     "$ref": "apply.schema.json#/$defs/Hex64"
+    },
+    "disposition": {
+     "enum": [
+      "advanced",
+      "history",
+      "duplicate"
+     ]
+    },
+    "operation": {
+     "$ref": "#/$defs/OperationState"
+    },
+    "request_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    }
+   }
+  },
+  "StatusResponse": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "operation_id",
+    "receipt_id",
+    "report",
+    "operation",
+    "request_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-status-response.v1"
+    },
+    "operation_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    },
+    "receipt_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    },
+    "report": {
+     "oneOf": [
+      {
+       "$ref": "#/$defs/ReportRef"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "operation": {
+     "$ref": "#/$defs/OperationState"
+    },
+    "request_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    }
+   }
+  },
+  "ProposeResponse": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "intent",
+    "operation",
+    "request_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-propose-response.v1"
+    },
+    "intent": {
+     "$ref": "apply.schema.json#/$defs/Intent"
+    },
+    "operation": {
+     "$ref": "#/$defs/OperationState"
+    },
+    "request_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    }
+   }
+  },
+  "ApproveResponse": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "approval",
+    "operation",
+    "request_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-approve-response.v1"
+    },
+    "approval": {
+     "$ref": "apply.schema.json#/$defs/Approval"
+    },
+    "operation": {
+     "$ref": "#/$defs/OperationState"
+    },
+    "request_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    }
+   }
+  },
+  "RevokeResponse": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "operation_id",
+    "operation",
+    "request_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-revoke-response.v1"
+    },
+    "operation_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    },
+    "operation": {
+     "$ref": "#/$defs/OperationState"
+    },
+    "request_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    }
+   }
+  },
+  "ReadResponse": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "case_id",
+    "device_id",
+    "operations",
+    "request_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-read-response.v1"
+    },
+    "case_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    },
+    "device_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    },
+    "operations": {
+     "type": "array",
+     "maxItems": 20,
+     "items": {
+      "$ref": "#/$defs/AdminView"
+     }
+    },
+    "request_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    }
+   }
+  },
+  "Error": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "code",
+    "request_id"
+   ],
+   "properties": {
+    "code": {
+     "type": "string",
+     "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+    },
+    "request_id": {
+     "$ref": "apply.schema.json#/$defs/UUID"
+    }
+   }
+  }
+ }
+}

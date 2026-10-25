@@ -335,3 +335,263 @@ def verify_restart_envelope(raw, *, purpose, pins, expected, now_ms, allow_expir
         raise
     except (ValueError, TypeError, KeyError, RecursionError, OverflowError, UnicodeError, ImportError):
         raise SignatureError() from None
+
+
+APPLY_PURPOSES = frozenset({'release-apply-consent-preview', 'release-apply-operation', 'release-apply-execution-grant'})
+
+
+def validate_apply_pins(pins, *, purpose, now_ms):
+    """release.apply専用の公開pin集合を検査し、旧purposeとの共用を拒否する。"""
+    try:
+        pinned = parse_canonical(canonical(pins, max_bytes=16384), max_bytes=16384)
+        return _validate_pins(pinned, purpose=purpose, now_ms=now_ms, purposes=APPLY_PURPOSES)
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError, UnicodeError):
+        raise SignatureError() from None
+
+
+def verify_apply_envelope(raw, *, purpose, pins, expected, now_ms, allow_expired=False):
+    """独立した登録・承認との束縛とrelease.apply署名だけを検証する。"""
+    try:
+        from adapters.sdc.release_apply_contract import EXPECTED_FIELDS, validate_apply_typed_payload
+        _require(type(allow_expired) is bool and type(pins) is list and type(expected) is dict)
+        bindings = parse_canonical(canonical(expected), max_bytes=8192)
+        pinned = parse_canonical(canonical(pins, max_bytes=16384), max_bytes=16384)
+        _pin_set(pinned, APPLY_PURPOSES)
+        _require(set(EXPECTED_FIELDS) <= set(bindings))
+
+        def validate(payload):
+            v = validate_apply_typed_payload(purpose, payload, now_ms=now_ms, allow_expired=allow_expired)
+            _require(all(k in v and canonical(value) == canonical(v[k]) for k, value in bindings.items()))
+            return v
+
+        return _verify_envelope(raw, purpose=purpose, pins=pinned, now_ms=now_ms, purposes=APPLY_PURPOSES,
+                                payload_validator=validate, cover_lifetime=True, allow_expired=allow_expired)
+    except SignatureError:
+        raise
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError, UnicodeError, ImportError):
+        raise SignatureError() from None
+
+
+class ReleaseSignatureError(ValueError):
+    """リリース署名の固定拒否コードだけを公開する。"""
+    def __init__(self, code='RELEASE_SIGNATURE_INVALID'):
+        self.code = code
+        super().__init__(code)
+
+
+def _release_require(ok, code='RELEASE_SIGNATURE_INVALID'):
+    if not ok:
+        raise ReleaseSignatureError(code)
+
+
+def _release_public_key(spki):
+    try:
+        key = _spki(_b64(spki, 2731))
+        outer, _ = _tlv(key, 0, 0x30)
+        _, position = _tlv(outer, 0, 0x30)
+        bits, _ = _tlv(outer, position, 0x03)
+        public, _ = _tlv(bits, 1, 0x30)
+        modulus, _ = _tlv(public, 0, 0x02)
+        n = base64.urlsafe_b64encode(modulus[1:]).rstrip(b'=').decode('ascii')
+        import hashlib
+        kid = hashlib.sha256(canonical(dict(e='AQAB', kty='RSA', n=n)).encode('ascii')).hexdigest()
+        return dict(key=key, n=n, kid=kid)
+    except (ValueError, TypeError, KeyError, IndexError, binascii.Error):
+        raise ReleaseSignatureError('RELEASE_SIGNATURE_KEY_DENIED') from None
+
+
+def release_key_fingerprint(spki):
+    """RSA3072/e65537の正規化した公開JWKからkidを計算する。"""
+    return _release_public_key(spki)['kid']
+
+
+def _release_snapshot(value, limit=8192):
+    from adapters.sdc.release_contract import input_record
+    try:
+        return input_record(value, limit, plain_integers=False)
+    except ValueError:
+        raise ReleaseSignatureError() from None
+
+
+def _release_context(expected, now_ms):
+    from adapters.sdc.release_contract import EXPECTED_FIELDS, integer
+    _release_require(integer(now_ms))
+    _release_require(type(expected) is dict, 'RELEASE_SIGNATURE_SCOPE_DENIED')
+    v = _release_snapshot(expected)
+    _release_require(set(v) == set(EXPECTED_FIELDS) and all(type(v[k]) is str for k in EXPECTED_FIELDS), 'RELEASE_SIGNATURE_SCOPE_DENIED')
+    return v
+
+
+def _release_scope(v, expected):
+    _release_require(all(v.get(k) == x for k, x in expected.items()), 'RELEASE_SIGNATURE_SCOPE_DENIED')
+
+
+def _release_trust(value, now_ms, allow_expired=False):
+    from adapters.sdc.release_contract import validate_release_trust
+    try:
+        return validate_release_trust(value, now_ms=now_ms, allow_expired=allow_expired)
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise ReleaseSignatureError('RELEASE_SIGNATURE_KEY_DENIED') from None
+
+
+def _release_unpack(value, purpose):
+    try:
+        from adapters.sdc.release_contract import hex64
+        envelope = _release_snapshot(value, 16384)
+        _release_require(type(envelope) is dict and set(envelope) == {'alg', 'kid', 'purpose', 'payload', 'signature'})
+        _release_require(envelope['alg'] == 'PS256' and hex64(envelope['kid']) and envelope['purpose'] == purpose)
+        raw = _b64(envelope['payload'], 10923)
+        payload = parse_canonical(raw, max_bytes=8192)
+        _release_require(type(payload) is dict)
+        signature = _b64(envelope['signature'], 512)
+        _release_require(len(signature) == 384)
+        return dict(envelope=envelope, payload=payload, raw=raw, signature=signature)
+    except ReleaseSignatureError:
+        raise
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError, UnicodeError):
+        raise ReleaseSignatureError() from None
+
+
+def _release_proof(value):
+    if type(value) in (bytes, str):
+        try:
+            text = value.decode('utf-8') if type(value) is bytes else value
+            _release_require(len(text.encode('utf-8')) <= 98304 and not text.startswith('\ufeff'))
+        except UnicodeError:
+            raise ReleaseSignatureError() from None
+
+        def pairs(items):
+            result = {}
+            for k, v in items:
+                _release_require(k not in result)
+                result[k] = v
+            return result
+
+        try:
+            value = json.loads(text, object_pairs_hook=pairs)
+        except (ValueError, TypeError, RecursionError, UnicodeError):
+            raise ReleaseSignatureError() from None
+    _release_require(type(value) is list and 2 <= len(value) <= 6)
+    entries = [_release_unpack(e, 'release-root') for e in value]
+    _release_require(len({e['envelope']['kid'] for e in entries}) == len(entries))
+    _release_require(all(e['envelope']['payload'] == entries[0]['envelope']['payload'] for e in entries))
+    _release_require(1 + sum(len(canonical(e['envelope'], max_bytes=16384)) + 1 for e in entries) <= 98304)
+    return entries
+
+
+def _release_keyring(trust):
+    roots, releases, moduli = {}, {}, set()
+    for records, dest in ((trust['root_keys'], roots), (trust['release_keys'], releases)):
+        for record in records:
+            key = _release_public_key(record['spki'])
+            _release_require(key['kid'] == record['kid'] and key['kid'] not in roots and key['kid'] not in releases and key['n'] not in moduli, 'RELEASE_SIGNATURE_KEY_DENIED')
+            moduli.add(key['n'])
+            dest[record['kid']] = dict(**key, record=record)
+    return roots, releases
+
+
+def _release_valid(entry, key):
+    e = entry['envelope']
+    message = b'SDC-SIGNED-v1\n' + e['purpose'].encode('ascii') + b'\n' + e['kid'].encode('ascii') + b'\n' + entry['raw']
+    try:
+        _verify_pss(key['key'], entry['signature'], message)
+        return True
+    except SignatureError as exc:
+        if exc.code == 'SDC_SUPPORT_CRYPTO_UNAVAILABLE':
+            raise
+        return False
+
+
+def _release_votes(entries, allowed, retired=()):
+    votes = set()
+    for e in entries:
+        kid = e['envelope']['kid']
+        key = allowed.get(kid)
+        _release_require(key is not None or kid in retired, 'RELEASE_SIGNATURE_KEY_DENIED')
+        if key is not None and _release_valid(e, key):
+            votes.add(kid)
+    return votes
+
+
+def _release_monotonic(old, new):
+    code = 'RELEASE_TRUST_CONFLICT'
+    roots, releases = {k['kid'] for k in new['root_keys']}, {k['kid'] for k in new['release_keys']}
+    _release_require(set(old['retired_root_kids']) <= set(new['retired_root_kids']) and set(old['revoked_release_kids']) <= set(new['revoked_release_kids']), code)
+    _release_require(all(k['kid'] in roots or k['kid'] in new['retired_root_kids'] for k in old['root_keys']), code)
+    _release_require(all(k['kid'] in releases or k['kid'] in new['revoked_release_kids'] for k in old['release_keys']), code)
+    old_roots = {k['kid'] for k in old['root_keys']} | set(old['retired_root_kids'])
+    old_releases = {k['kid'] for k in old['release_keys']} | set(old['revoked_release_kids'])
+    _release_require(not roots & old_releases and not releases & old_roots, code)
+    r = new['recovery']
+    if r is None:
+        _release_require(new['metadata_epoch'] == old['metadata_epoch'], code)
+    else:
+        _release_require(new['metadata_epoch'] == old['metadata_epoch'] + 1 and r['previous_epoch'] == old['metadata_epoch'] and r['new_epoch'] == new['metadata_epoch'], code)
+        _release_require(all(k in {x['kid'] for x in old['release_keys']} and k in new['revoked_release_kids'] and k not in releases for k in r['affected_release_kids']), code)
+
+
+def verify_release_bootstrap(value, *, expected_trust_hash, expected, now_ms):
+    """独立配布されたdigestと2つのroot票でTrustを検証し、採用は行わない。"""
+    from adapters.sdc.release_contract import hash_release_trust, hex64
+    bindings = _release_context(expected, now_ms)
+    entries = _release_proof(value)
+    trust = _release_trust(entries[0]['payload'], now_ms)
+    _release_require(hex64(expected_trust_hash), 'RELEASE_SIGNATURE_SCOPE_DENIED')
+    _release_scope(trust, bindings)
+    _release_require(hash_release_trust(trust) == expected_trust_hash, 'RELEASE_SIGNATURE_SCOPE_DENIED')
+    roots, _ = _release_keyring(trust)
+    _release_require(len(_release_votes(entries, roots, trust['retired_root_kids'])) >= 2, 'RELEASE_SIGNATURE_THRESHOLD_DENIED')
+    return trust
+
+
+def verify_release_root_chain(values, *, trusted, expected, now_ms):
+    """最大32遷移を旧・新root閾値で検証し、最終Trustの有効期限を要求する。"""
+    from adapters.sdc.release_contract import hash_release_trust, integer
+    bindings = _release_context(expected, now_ms)
+    current = _release_trust(_release_snapshot(trusted), now_ms, True)
+    _release_scope(current, bindings)
+    _release_require(type(values) is list and 1 <= len(values) <= 32)
+    chain = [_release_proof(v) for v in values]
+    roots, _ = _release_keyring(current)
+    for i, entries in enumerate(chain):
+        candidate = _release_trust(entries[0]['payload'], now_ms, i < len(chain) - 1)
+        _release_scope(candidate, bindings)
+        if candidate['root_version'] == current['root_version']:
+            _release_require(hash_release_trust(candidate) == hash_release_trust(current), 'RELEASE_TRUST_CONFLICT')
+            _release_require(len(_release_votes(entries, roots, current['retired_root_kids'])) >= 2, 'RELEASE_SIGNATURE_THRESHOLD_DENIED')
+            continue
+        _release_require(integer(current['root_version'] + 1) and candidate['root_version'] == current['root_version'] + 1 and candidate['previous_trust_digest'] == hash_release_trust(current) and candidate['issued_at'] >= current['issued_at'], 'RELEASE_TRUST_CONFLICT')
+        _release_monotonic(current, candidate)
+        next_roots, _ = _release_keyring(candidate)
+        for kid, key in next_roots.items():
+            _release_require(kid not in roots or roots[kid]['n'] == key['n'], 'RELEASE_SIGNATURE_KEY_DENIED')
+        counted = _release_votes(entries, {**roots, **next_roots})
+        _release_require(len(set(roots) & counted) >= 2 and len(set(next_roots) & counted) >= 2, 'RELEASE_SIGNATURE_THRESHOLD_DENIED')
+        current, roots = candidate, next_roots
+    return _release_trust(current, now_ms)
+
+
+def verify_release_root(value, *, trusted, expected, now_ms):
+    """1遷移のroot署名を検証し、永続的な採用は行わない。"""
+    return verify_release_root_chain([value], trusted=trusted, expected=expected, now_ms=now_ms)
+
+
+def verify_release_attestation(value, *, trust, expected, now_ms):
+    """現在のTrustと独立scopeに束縛したrelease署名を検証する。"""
+    from adapters.sdc.release_contract import validate_release_attestation
+    bindings = _release_context(expected, now_ms)
+    authority = _release_trust(_release_snapshot(trust), now_ms)
+    entry = _release_unpack(value, 'release-attestation')
+    _release_scope(authority, bindings)
+    _release_scope(entry['payload'], bindings)
+    try:
+        payload = validate_release_attestation(entry['payload'], trust=authority, now_ms=now_ms)
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise ReleaseSignatureError() from None
+    _, releases = _release_keyring(authority)
+    key = releases.get(entry['envelope']['kid'])
+    _release_require(key is not None and entry['envelope']['kid'] not in authority['revoked_release_kids'], 'RELEASE_SIGNATURE_KEY_DENIED')
+    record = key['record']
+    _release_require(record['not_before'] <= payload['issued_at'] and payload['expires_at'] <= record['expires_at'] and record['not_before'] <= now_ms < record['expires_at'], 'RELEASE_SIGNATURE_KEY_DENIED')
+    _release_require(_release_valid(entry, key))
+    return payload

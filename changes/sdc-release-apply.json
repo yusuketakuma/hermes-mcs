@@ -1,0 +1,20 @@
+{
+  "category": "added",
+  "title": "遠隔更新の契約検査と固定依存の導入部品を追加",
+  "summary": "遠隔更新計画・個別同意・一回限りの実行許可を検査する部品に加え、正式な依存lockとwheelがある場合だけ、オフラインでhashを照合して導入する経路を追加します。遠隔更新処理への接続はまだありません。",
+  "upgrade": "lockのない既存の導入手順・既定値は変わりません。固定依存を初めて導入する版や依存の変更には人による再導入と基線認定が必要です。今回、実配布lock・wheel・実鍵・端末登録・有効化は提供しません。",
+  "details": [
+    "同じsequenceへの異なる版の割当て、署名purposeの交差、期限切れや未知fieldを拒否します。",
+    "公開された完全合成vectorを契約互換性試験に使います。",
+    "package変更前に未完了記録を保存し、選択したPythonの現在の版をSDKをimportせず照合してから完了を記録します。",
+    "通常の更新は依存lockやwheelの変更を拒否します。試験は完全合成wheelと隔離した実行環境だけを使います。"
+  ],
+  "refs": [
+    "adapters/sdc/release_contract.py",
+    "adapters/sdc/release_apply_contract.py",
+    "mcs/ops/sdc_support_signatures.py",
+    "mcs/ops/release_dependency_lock.py",
+    "deployment/sdc-release-lock.schema.json",
+    "scripts/development/build_release_lock.py"
+  ]
+}

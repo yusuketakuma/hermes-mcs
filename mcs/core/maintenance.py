@@ -114,6 +114,7 @@ def _publish_backup(db_path: str, tmp: str, dest: str,
         if deadline is not None and monotonic() >= deadline:
             raise MaintenanceError("backup_deadline_exceeded")
     try:
+        check_deadline()
         with closing(sqlite3.connect(
                 Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as src:
             with closing(sqlite3.connect(tmp)) as dst:
@@ -127,6 +128,7 @@ def _publish_backup(db_path: str, tmp: str, dest: str,
             if deadline is not None and monotonic() >= deadline:
                 raise MaintenanceError("backup_deadline_exceeded")
             raise MaintenanceError("backup_verify_failed")
+        check_deadline()
         publish_tmp(tmp, dest, mode=0o600)
     except BaseException:
         with suppress(OSError):
@@ -332,10 +334,15 @@ def backup_overdue() -> bool:
     return age is not None and age > BACKUP_OVERDUE_S
 
 
-def preupdate_backup(db_path: str) -> str:
+def preupdate_backup(db_path: str, *, deadline: float | None = None) -> str:
     """Verified .backup before an apply — distinct 'preupdate-' prefix
     so the daily ledger-* rotation can never evict a rollback point
-    (B3). Returns the published path."""
+    (B3). Returns the published path; an optional monotonic deadline bounds the copy."""
+    if deadline is not None:
+        if type(deadline) not in (int, float) or not math.isfinite(deadline):
+            raise MaintenanceError("backup_deadline_invalid")
+        if deadline - monotonic() < backup_time_needed_s(db_path):
+            raise MaintenanceError("backup_deadline_exceeded")
     os.makedirs(BACKUP_DIR, mode=0o700, exist_ok=True)
     os.chmod(BACKUP_DIR, 0o700)
     # same room check as daily_backup: apply bails on this before quiesce
@@ -346,7 +353,10 @@ def preupdate_backup(db_path: str) -> str:
         prefix=f"preupdate-{stamp}-", suffix=".db.tmp", dir=BACKUP_DIR)
     os.close(fd)
     dest = tmp[:-4]
-    _publish_backup(db_path, tmp, dest)
+    if deadline is None:
+        _publish_backup(db_path, tmp, dest)
+    else:
+        _publish_backup(db_path, tmp, dest, deadline=deadline)
     return dest
 
 

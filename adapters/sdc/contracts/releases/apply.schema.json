@@ -1,0 +1,1870 @@
+{
+ "$schema": "https://json-schema.org/draft/2020-12/schema",
+ "title": "SDC release apply (R5b) closed records",
+ "description": "Closed shapes for fleet/releases/apply-wire.js. Shape only: hashes, bindings, freshness and current authority are checked by the validators and the central CAS.",
+ "x-max-signed-payload-bytes": 8192,
+ "x-max-control-raw-bytes": 16384,
+ "x-json-max-depth": 8,
+ "$defs": {
+  "Hex64": {
+   "type": "string",
+   "pattern": "^[0-9a-f]{64}$"
+  },
+  "UUID": {
+   "type": "string",
+   "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+  },
+  "Owner32": {
+   "type": "string",
+   "pattern": "^[0-9a-f]{32}$"
+  },
+  "Slug": {
+   "type": "string",
+   "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+  },
+  "Token": {
+   "type": "string",
+   "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
+  },
+  "Environment": {
+   "type": "string",
+   "pattern": "^[a-z0-9_-]{1,32}$"
+  },
+  "Realm": {
+   "type": "string",
+   "pattern": "^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$"
+  },
+  "Audience": {
+   "type": "string",
+   "pattern": "^[A-Za-z0-9:_-]{1,100}$"
+  },
+  "Positive": {
+   "type": "integer",
+   "minimum": 1,
+   "maximum": 9007199254740991
+  },
+  "Time": {
+   "type": "integer",
+   "minimum": 0,
+   "maximum": 9007199254740991
+  },
+  "Window": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "starts_at",
+    "ends_at"
+   ],
+   "properties": {
+    "starts_at": {
+     "$ref": "#/$defs/Time"
+    },
+    "ends_at": {
+     "$ref": "#/$defs/Time"
+    }
+   }
+  },
+  "Envelope": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "alg",
+    "kid",
+    "purpose",
+    "payload",
+    "signature"
+   ],
+   "properties": {
+    "alg": {
+     "const": "PS256"
+    },
+    "kid": {
+     "type": "string",
+     "pattern": "^[A-Za-z0-9_-]{1,64}$"
+    },
+    "purpose": {
+     "enum": [
+      "release-apply-consent-preview",
+      "release-apply-operation",
+      "release-apply-execution-grant"
+     ]
+    },
+    "payload": {
+     "type": "string",
+     "pattern": "^[A-Za-z0-9_-]+$",
+     "maxLength": 10923
+    },
+    "signature": {
+     "type": "string",
+     "pattern": "^[A-Za-z0-9_-]{512}$"
+    }
+   }
+  },
+  "Intent": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "product",
+    "audience",
+    "tenant",
+    "installation",
+    "device_id",
+    "environment",
+    "trust_domain",
+    "stream_id",
+    "case_id",
+    "claim_id",
+    "key_id",
+    "realm_epoch",
+    "policy_epoch",
+    "device_epoch",
+    "case_epoch",
+    "local_consent_epoch",
+    "trust_digest",
+    "root_version",
+    "metadata_epoch",
+    "release_id",
+    "manifest_digest",
+    "target_code_seq",
+    "plan_id",
+    "plan_hash",
+    "capability_revision",
+    "consent_revision",
+    "operation_id",
+    "type",
+    "purpose_code",
+    "requested_by",
+    "plan_report_id",
+    "plan_report_hash",
+    "window",
+    "canary_stage",
+    "completion_timeout_ms",
+    "issued_at",
+    "not_before",
+    "expires_at"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-intent.v1"
+    },
+    "product": {
+     "const": "hermes-mcs"
+    },
+    "audience": {
+     "$ref": "#/$defs/Audience"
+    },
+    "tenant": {
+     "const": "self"
+    },
+    "installation": {
+     "$ref": "#/$defs/Slug"
+    },
+    "device_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "environment": {
+     "$ref": "#/$defs/Environment"
+    },
+    "trust_domain": {
+     "$ref": "#/$defs/Token"
+    },
+    "stream_id": {
+     "$ref": "#/$defs/Token"
+    },
+    "case_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "claim_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "key_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "realm_epoch": {
+     "$ref": "#/$defs/Realm"
+    },
+    "policy_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "device_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "case_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "local_consent_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "trust_digest": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "root_version": {
+     "$ref": "#/$defs/Positive"
+    },
+    "metadata_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "release_id": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "manifest_digest": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "target_code_seq": {
+     "$ref": "#/$defs/Positive"
+    },
+    "plan_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "plan_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "capability_revision": {
+     "const": "sdc-release-apply-capabilities-v1"
+    },
+    "consent_revision": {
+     "const": "sdc-release-apply-consent-v1"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "type": {
+     "const": "release.apply"
+    },
+    "purpose_code": {
+     "enum": [
+      "NOTIFICATION_FAILURE",
+      "PROCESS_STALL",
+      "CONFIG_MISMATCH",
+      "UPDATE_FAILURE",
+      "HEALTH_CHECK"
+     ]
+    },
+    "requested_by": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "plan_report_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "plan_report_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "window": {
+     "$ref": "#/$defs/Window"
+    },
+    "canary_stage": {
+     "const": "self_test"
+    },
+    "completion_timeout_ms": {
+     "const": 3600000
+    },
+    "issued_at": {
+     "$ref": "#/$defs/Time"
+    },
+    "not_before": {
+     "$ref": "#/$defs/Time"
+    },
+    "expires_at": {
+     "$ref": "#/$defs/Time"
+    }
+   }
+  },
+  "Approval": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "product",
+    "audience",
+    "tenant",
+    "installation",
+    "device_id",
+    "environment",
+    "trust_domain",
+    "stream_id",
+    "case_id",
+    "claim_id",
+    "key_id",
+    "realm_epoch",
+    "policy_epoch",
+    "device_epoch",
+    "case_epoch",
+    "local_consent_epoch",
+    "trust_digest",
+    "root_version",
+    "metadata_epoch",
+    "release_id",
+    "manifest_digest",
+    "target_code_seq",
+    "plan_id",
+    "plan_hash",
+    "capability_revision",
+    "consent_revision",
+    "approval_id",
+    "intent_hash",
+    "approved_by",
+    "approval_kind",
+    "issued_at",
+    "not_before",
+    "expires_at",
+    "approval_hash"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-approval.v1"
+    },
+    "product": {
+     "const": "hermes-mcs"
+    },
+    "audience": {
+     "$ref": "#/$defs/Audience"
+    },
+    "tenant": {
+     "const": "self"
+    },
+    "installation": {
+     "$ref": "#/$defs/Slug"
+    },
+    "device_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "environment": {
+     "$ref": "#/$defs/Environment"
+    },
+    "trust_domain": {
+     "$ref": "#/$defs/Token"
+    },
+    "stream_id": {
+     "$ref": "#/$defs/Token"
+    },
+    "case_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "claim_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "key_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "realm_epoch": {
+     "$ref": "#/$defs/Realm"
+    },
+    "policy_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "device_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "case_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "local_consent_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "trust_digest": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "root_version": {
+     "$ref": "#/$defs/Positive"
+    },
+    "metadata_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "release_id": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "manifest_digest": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "target_code_seq": {
+     "$ref": "#/$defs/Positive"
+    },
+    "plan_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "plan_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "capability_revision": {
+     "const": "sdc-release-apply-capabilities-v1"
+    },
+    "consent_revision": {
+     "const": "sdc-release-apply-consent-v1"
+    },
+    "approval_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "intent_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "approved_by": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "approval_kind": {
+     "const": "individual"
+    },
+    "issued_at": {
+     "$ref": "#/$defs/Time"
+    },
+    "not_before": {
+     "$ref": "#/$defs/Time"
+    },
+    "expires_at": {
+     "$ref": "#/$defs/Time"
+    },
+    "approval_hash": {
+     "$ref": "#/$defs/Hex64"
+    }
+   }
+  },
+  "Preview": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "product",
+    "audience",
+    "tenant",
+    "installation",
+    "device_id",
+    "environment",
+    "trust_domain",
+    "stream_id",
+    "case_id",
+    "claim_id",
+    "key_id",
+    "realm_epoch",
+    "policy_epoch",
+    "device_epoch",
+    "case_epoch",
+    "local_consent_epoch",
+    "trust_digest",
+    "root_version",
+    "metadata_epoch",
+    "release_id",
+    "manifest_digest",
+    "target_code_seq",
+    "plan_id",
+    "plan_hash",
+    "capability_revision",
+    "consent_revision",
+    "operation_id",
+    "preview_id",
+    "intent",
+    "approval",
+    "intent_hash",
+    "change_consent_id",
+    "change_binding_hash",
+    "issued_at",
+    "not_before",
+    "expires_at"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-consent-preview.v1"
+    },
+    "product": {
+     "const": "hermes-mcs"
+    },
+    "audience": {
+     "$ref": "#/$defs/Audience"
+    },
+    "tenant": {
+     "const": "self"
+    },
+    "installation": {
+     "$ref": "#/$defs/Slug"
+    },
+    "device_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "environment": {
+     "$ref": "#/$defs/Environment"
+    },
+    "trust_domain": {
+     "$ref": "#/$defs/Token"
+    },
+    "stream_id": {
+     "$ref": "#/$defs/Token"
+    },
+    "case_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "claim_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "key_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "realm_epoch": {
+     "$ref": "#/$defs/Realm"
+    },
+    "policy_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "device_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "case_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "local_consent_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "trust_digest": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "root_version": {
+     "$ref": "#/$defs/Positive"
+    },
+    "metadata_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "release_id": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "manifest_digest": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "target_code_seq": {
+     "$ref": "#/$defs/Positive"
+    },
+    "plan_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "plan_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "capability_revision": {
+     "const": "sdc-release-apply-capabilities-v1"
+    },
+    "consent_revision": {
+     "const": "sdc-release-apply-consent-v1"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "preview_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "intent": {
+     "$ref": "#/$defs/Intent"
+    },
+    "approval": {
+     "$ref": "#/$defs/Approval"
+    },
+    "intent_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "change_consent_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "change_binding_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "issued_at": {
+     "$ref": "#/$defs/Time"
+    },
+    "not_before": {
+     "$ref": "#/$defs/Time"
+    },
+    "expires_at": {
+     "$ref": "#/$defs/Time"
+    }
+   }
+  },
+  "Operation": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "product",
+    "audience",
+    "tenant",
+    "installation",
+    "device_id",
+    "environment",
+    "trust_domain",
+    "stream_id",
+    "case_id",
+    "claim_id",
+    "key_id",
+    "realm_epoch",
+    "policy_epoch",
+    "device_epoch",
+    "case_epoch",
+    "local_consent_epoch",
+    "trust_digest",
+    "root_version",
+    "metadata_epoch",
+    "release_id",
+    "manifest_digest",
+    "target_code_seq",
+    "plan_id",
+    "plan_hash",
+    "capability_revision",
+    "consent_revision",
+    "operation_id",
+    "type",
+    "purpose_code",
+    "requested_by",
+    "plan_report_id",
+    "plan_report_hash",
+    "window",
+    "canary_stage",
+    "completion_timeout_ms",
+    "issued_at",
+    "not_before",
+    "expires_at",
+    "intent_hash",
+    "approval_id",
+    "approval_hash",
+    "approved_by",
+    "change_consent_id",
+    "change_binding_hash",
+    "local_change_receipt_id",
+    "change_accept_id",
+    "preview_id",
+    "preview_payload_hash",
+    "local_change_receipt_hash",
+    "payload_hash"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-operation.v1"
+    },
+    "product": {
+     "const": "hermes-mcs"
+    },
+    "audience": {
+     "$ref": "#/$defs/Audience"
+    },
+    "tenant": {
+     "const": "self"
+    },
+    "installation": {
+     "$ref": "#/$defs/Slug"
+    },
+    "device_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "environment": {
+     "$ref": "#/$defs/Environment"
+    },
+    "trust_domain": {
+     "$ref": "#/$defs/Token"
+    },
+    "stream_id": {
+     "$ref": "#/$defs/Token"
+    },
+    "case_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "claim_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "key_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "realm_epoch": {
+     "$ref": "#/$defs/Realm"
+    },
+    "policy_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "device_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "case_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "local_consent_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "trust_digest": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "root_version": {
+     "$ref": "#/$defs/Positive"
+    },
+    "metadata_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "release_id": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "manifest_digest": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "target_code_seq": {
+     "$ref": "#/$defs/Positive"
+    },
+    "plan_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "plan_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "capability_revision": {
+     "const": "sdc-release-apply-capabilities-v1"
+    },
+    "consent_revision": {
+     "const": "sdc-release-apply-consent-v1"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "type": {
+     "const": "release.apply"
+    },
+    "purpose_code": {
+     "enum": [
+      "NOTIFICATION_FAILURE",
+      "PROCESS_STALL",
+      "CONFIG_MISMATCH",
+      "UPDATE_FAILURE",
+      "HEALTH_CHECK"
+     ]
+    },
+    "requested_by": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "plan_report_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "plan_report_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "window": {
+     "$ref": "#/$defs/Window"
+    },
+    "canary_stage": {
+     "const": "self_test"
+    },
+    "completion_timeout_ms": {
+     "const": 3600000
+    },
+    "issued_at": {
+     "$ref": "#/$defs/Time"
+    },
+    "not_before": {
+     "$ref": "#/$defs/Time"
+    },
+    "expires_at": {
+     "$ref": "#/$defs/Time"
+    },
+    "intent_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "approval_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "approval_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "approved_by": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "change_consent_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "change_binding_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "local_change_receipt_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "change_accept_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "preview_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "preview_payload_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "local_change_receipt_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "payload_hash": {
+     "$ref": "#/$defs/Hex64"
+    }
+   }
+  },
+  "LocalReceipt": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "product",
+    "audience",
+    "tenant",
+    "installation",
+    "device_id",
+    "environment",
+    "trust_domain",
+    "stream_id",
+    "case_id",
+    "claim_id",
+    "key_id",
+    "realm_epoch",
+    "policy_epoch",
+    "device_epoch",
+    "case_epoch",
+    "local_consent_epoch",
+    "trust_digest",
+    "root_version",
+    "metadata_epoch",
+    "release_id",
+    "manifest_digest",
+    "target_code_seq",
+    "plan_id",
+    "plan_hash",
+    "capability_revision",
+    "consent_revision",
+    "operation_id",
+    "intent_hash",
+    "approval_hash",
+    "change_consent_id",
+    "change_binding_hash",
+    "preview_id",
+    "preview_payload_hash",
+    "local_change_receipt_id",
+    "change_accept_id",
+    "confirmed_at",
+    "expires_at",
+    "receipt_hash"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-local-change-receipt.v1"
+    },
+    "product": {
+     "const": "hermes-mcs"
+    },
+    "audience": {
+     "$ref": "#/$defs/Audience"
+    },
+    "tenant": {
+     "const": "self"
+    },
+    "installation": {
+     "$ref": "#/$defs/Slug"
+    },
+    "device_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "environment": {
+     "$ref": "#/$defs/Environment"
+    },
+    "trust_domain": {
+     "$ref": "#/$defs/Token"
+    },
+    "stream_id": {
+     "$ref": "#/$defs/Token"
+    },
+    "case_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "claim_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "key_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "realm_epoch": {
+     "$ref": "#/$defs/Realm"
+    },
+    "policy_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "device_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "case_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "local_consent_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "trust_digest": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "root_version": {
+     "$ref": "#/$defs/Positive"
+    },
+    "metadata_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "release_id": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "manifest_digest": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "target_code_seq": {
+     "$ref": "#/$defs/Positive"
+    },
+    "plan_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "plan_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "capability_revision": {
+     "const": "sdc-release-apply-capabilities-v1"
+    },
+    "consent_revision": {
+     "const": "sdc-release-apply-consent-v1"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "intent_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "approval_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "change_consent_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "change_binding_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "preview_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "preview_payload_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "local_change_receipt_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "change_accept_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "confirmed_at": {
+     "$ref": "#/$defs/Time"
+    },
+    "expires_at": {
+     "$ref": "#/$defs/Time"
+    },
+    "receipt_hash": {
+     "$ref": "#/$defs/Hex64"
+    }
+   }
+  },
+  "Acceptance": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "accept_id",
+    "preview_id",
+    "operation_id",
+    "change_consent_id",
+    "change_binding_hash",
+    "local_change_receipt_id",
+    "preview_payload_hash",
+    "local_change_receipt_hash",
+    "state",
+    "accepted_at",
+    "expires_at"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-acceptance.v1"
+    },
+    "accept_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "preview_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "change_consent_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "change_binding_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "local_change_receipt_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "preview_payload_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "local_change_receipt_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "state": {
+     "const": "accepted"
+    },
+    "accepted_at": {
+     "$ref": "#/$defs/Time"
+    },
+    "expires_at": {
+     "$ref": "#/$defs/Time"
+    }
+   }
+  },
+  "Admission": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "admission_id",
+    "operation_id",
+    "payload_hash",
+    "receipt_id",
+    "owner_generation",
+    "admitted_at"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-admission.v1"
+    },
+    "admission_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "payload_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "receipt_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "owner_generation": {
+     "$ref": "#/$defs/Owner32"
+    },
+    "admitted_at": {
+     "$ref": "#/$defs/Time"
+    }
+   }
+  },
+  "Grant": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "product",
+    "audience",
+    "tenant",
+    "installation",
+    "device_id",
+    "environment",
+    "trust_domain",
+    "stream_id",
+    "case_id",
+    "claim_id",
+    "key_id",
+    "realm_epoch",
+    "policy_epoch",
+    "device_epoch",
+    "case_epoch",
+    "local_consent_epoch",
+    "trust_digest",
+    "root_version",
+    "metadata_epoch",
+    "release_id",
+    "manifest_digest",
+    "target_code_seq",
+    "plan_id",
+    "plan_hash",
+    "capability_revision",
+    "consent_revision",
+    "operation_id",
+    "intent_hash",
+    "payload_hash",
+    "approval_hash",
+    "change_consent_id",
+    "change_binding_hash",
+    "local_change_receipt_id",
+    "change_accept_id",
+    "preview_id",
+    "preview_payload_hash",
+    "local_change_receipt_hash",
+    "grant_id",
+    "grant_request_id",
+    "receipt_id",
+    "admission_id",
+    "owner_generation",
+    "preflight_sha256",
+    "state_sha256",
+    "issued_at",
+    "not_before",
+    "expires_at"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-execution-grant.v1"
+    },
+    "product": {
+     "const": "hermes-mcs"
+    },
+    "audience": {
+     "$ref": "#/$defs/Audience"
+    },
+    "tenant": {
+     "const": "self"
+    },
+    "installation": {
+     "$ref": "#/$defs/Slug"
+    },
+    "device_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "environment": {
+     "$ref": "#/$defs/Environment"
+    },
+    "trust_domain": {
+     "$ref": "#/$defs/Token"
+    },
+    "stream_id": {
+     "$ref": "#/$defs/Token"
+    },
+    "case_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "claim_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "key_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "realm_epoch": {
+     "$ref": "#/$defs/Realm"
+    },
+    "policy_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "device_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "case_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "local_consent_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "trust_digest": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "root_version": {
+     "$ref": "#/$defs/Positive"
+    },
+    "metadata_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "release_id": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "manifest_digest": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "target_code_seq": {
+     "$ref": "#/$defs/Positive"
+    },
+    "plan_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "plan_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "capability_revision": {
+     "const": "sdc-release-apply-capabilities-v1"
+    },
+    "consent_revision": {
+     "const": "sdc-release-apply-consent-v1"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "intent_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "payload_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "approval_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "change_consent_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "change_binding_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "local_change_receipt_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "change_accept_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "preview_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "preview_payload_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "local_change_receipt_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "grant_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "grant_request_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "receipt_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "admission_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "owner_generation": {
+     "$ref": "#/$defs/Owner32"
+    },
+    "preflight_sha256": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "state_sha256": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "issued_at": {
+     "$ref": "#/$defs/Time"
+    },
+    "not_before": {
+     "$ref": "#/$defs/Time"
+    },
+    "expires_at": {
+     "$ref": "#/$defs/Time"
+    }
+   }
+  },
+  "Result": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "operation_id",
+    "payload_hash",
+    "receipt_id",
+    "grant_id",
+    "release_id",
+    "manifest_digest",
+    "target_code_seq",
+    "generated_at",
+    "start_receipt_id",
+    "started_at",
+    "installed_release_id",
+    "installed_code_seq",
+    "verified_at",
+    "readiness",
+    "error_code"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-result.v1"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "payload_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "receipt_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "grant_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "release_id": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "manifest_digest": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "target_code_seq": {
+     "$ref": "#/$defs/Positive"
+    },
+    "generated_at": {
+     "$ref": "#/$defs/Time"
+    },
+    "start_receipt_id": {
+     "oneOf": [
+      {
+       "$ref": "#/$defs/UUID"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "started_at": {
+     "oneOf": [
+      {
+       "$ref": "#/$defs/Time"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "installed_release_id": {
+     "oneOf": [
+      {
+       "$ref": "#/$defs/Hex64"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "installed_code_seq": {
+     "oneOf": [
+      {
+       "$ref": "#/$defs/Positive"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "verified_at": {
+     "oneOf": [
+      {
+       "$ref": "#/$defs/Time"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    },
+    "readiness": {
+     "enum": [
+      "unknown",
+      "ready",
+      "not_ready"
+     ]
+    },
+    "error_code": {
+     "enum": [
+      "NONE",
+      "PRECHECK_FAILED",
+      "START_WINDOW_EXPIRED",
+      "APPLY_FAILED",
+      "VERIFY_FAILED",
+      "RESULT_UNKNOWN"
+     ]
+    }
+   }
+  },
+  "Owner": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "product",
+    "owner_id",
+    "owner_revision",
+    "owner_evidence_sha256"
+   ],
+   "properties": {
+    "product": {
+     "const": "hermes-mcs"
+    },
+    "owner_id": {
+     "const": "mcs.updater"
+    },
+    "owner_revision": {
+     "$ref": "#/$defs/Positive"
+    },
+    "owner_evidence_sha256": {
+     "$ref": "#/$defs/Hex64"
+    }
+   }
+  },
+  "Registration": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "registration_id",
+    "product",
+    "tenant",
+    "installation",
+    "device_id",
+    "environment",
+    "claim_id",
+    "key_id",
+    "realm_epoch",
+    "policy_epoch",
+    "device_epoch",
+    "owner_id",
+    "owner_revision",
+    "capability_revision",
+    "verified_result_supported",
+    "device_evidence_sha256",
+    "not_before",
+    "expires_at"
+   ],
+   "properties": {
+    "registration_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "product": {
+     "const": "hermes-mcs"
+    },
+    "tenant": {
+     "const": "self"
+    },
+    "installation": {
+     "$ref": "#/$defs/Slug"
+    },
+    "device_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "environment": {
+     "$ref": "#/$defs/Environment"
+    },
+    "claim_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "key_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "realm_epoch": {
+     "$ref": "#/$defs/Realm"
+    },
+    "policy_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "device_epoch": {
+     "$ref": "#/$defs/Positive"
+    },
+    "owner_id": {
+     "const": "mcs.updater"
+    },
+    "owner_revision": {
+     "$ref": "#/$defs/Positive"
+    },
+    "capability_revision": {
+     "const": "sdc-release-apply-capabilities-v1"
+    },
+    "verified_result_supported": {
+     "type": "boolean"
+    },
+    "device_evidence_sha256": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "not_before": {
+     "$ref": "#/$defs/Time"
+    },
+    "expires_at": {
+     "$ref": "#/$defs/Time"
+    }
+   }
+  },
+  "Policy": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "policy_revision",
+    "owners",
+    "device_registrations"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-policy.v1"
+    },
+    "policy_revision": {
+     "$ref": "#/$defs/Positive"
+    },
+    "owners": {
+     "type": "array",
+     "maxItems": 1,
+     "items": {
+      "$ref": "#/$defs/Owner"
+     }
+    },
+    "device_registrations": {
+     "type": "array",
+     "maxItems": 16,
+     "items": {
+      "$ref": "#/$defs/Registration"
+     }
+    }
+   }
+  },
+  "Control_plan_report": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "report_id",
+    "case_id",
+    "local_planning_consent_id",
+    "state",
+    "plan"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-control.v1"
+    },
+    "report_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "case_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "local_planning_consent_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "state": {
+     "$ref": "release.schema.json#/$defs/State"
+    },
+    "plan": {
+     "$ref": "release.schema.json#/$defs/Plan"
+    }
+   }
+  },
+  "Control_preview": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "preview_id",
+    "operation_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-control.v1"
+    },
+    "preview_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    }
+   }
+  },
+  "Control_accept": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "accept_id",
+    "preview_id",
+    "change_consent_id",
+    "change_binding_hash",
+    "local_change_receipt_id",
+    "preview_payload_hash",
+    "local_change_receipt_hash"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-control.v1"
+    },
+    "accept_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "preview_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "change_consent_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "change_binding_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "local_change_receipt_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "preview_payload_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "local_change_receipt_hash": {
+     "$ref": "#/$defs/Hex64"
+    }
+   }
+  },
+  "Control_poll": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "poll_id",
+    "case_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-control.v1"
+    },
+    "poll_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "case_id": {
+     "$ref": "#/$defs/UUID"
+    }
+   }
+  },
+  "Control_admit": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "admission_id",
+    "operation_id",
+    "payload_hash",
+    "receipt_id",
+    "owner_generation"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-control.v1"
+    },
+    "admission_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "payload_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "receipt_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "owner_generation": {
+     "$ref": "#/$defs/Owner32"
+    }
+   }
+  },
+  "Control_grant": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "grant_request_id",
+    "operation_id",
+    "payload_hash",
+    "receipt_id",
+    "admission_id",
+    "preconditions",
+    "state"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-control.v1"
+    },
+    "grant_request_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "payload_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "receipt_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "admission_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "preconditions": {
+     "$ref": "release.schema.json#/$defs/Preconditions"
+    },
+    "state": {
+     "$ref": "release.schema.json#/$defs/State"
+    }
+   }
+  },
+  "Control_report": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "report_id",
+    "operation_id",
+    "payload_hash",
+    "receipt_id",
+    "grant_id",
+    "sequence",
+    "state",
+    "observed_at",
+    "result"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-control.v1"
+    },
+    "report_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "payload_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "receipt_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "grant_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "sequence": {
+     "$ref": "#/$defs/Positive"
+    },
+    "state": {
+     "enum": [
+      "running",
+      "succeeded",
+      "failed",
+      "unknown"
+     ]
+    },
+    "observed_at": {
+     "$ref": "#/$defs/Time"
+    },
+    "result": {
+     "oneOf": [
+      {
+       "$ref": "#/$defs/Result"
+      },
+      {
+       "type": "null"
+      }
+     ]
+    }
+   }
+  },
+  "Control_status": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "status_id",
+    "operation_id",
+    "payload_hash",
+    "receipt_id",
+    "report_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-control.v1"
+    },
+    "status_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "payload_hash": {
+     "$ref": "#/$defs/Hex64"
+    },
+    "receipt_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "report_id": {
+     "$ref": "#/$defs/UUID"
+    }
+   }
+  },
+  "Admin_propose": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "proposal_id",
+    "operation_id",
+    "plan_report_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-admin.v1"
+    },
+    "proposal_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "plan_report_id": {
+     "$ref": "#/$defs/UUID"
+    }
+   }
+  },
+  "Admin_approve": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "approval_id",
+    "operation_id",
+    "intent_hash"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-admin.v1"
+    },
+    "approval_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "intent_hash": {
+     "$ref": "#/$defs/Hex64"
+    }
+   }
+  },
+  "Admin_revoke": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "revoke_id",
+    "operation_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-admin.v1"
+    },
+    "revoke_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "operation_id": {
+     "$ref": "#/$defs/UUID"
+    }
+   }
+  },
+  "Admin_read": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "schema_version",
+    "case_id",
+    "device_id"
+   ],
+   "properties": {
+    "schema_version": {
+     "const": "sdc.release.apply-admin.v1"
+    },
+    "case_id": {
+     "$ref": "#/$defs/UUID"
+    },
+    "device_id": {
+     "$ref": "#/$defs/UUID"
+    }
+   }
+  }
+ }
+}
