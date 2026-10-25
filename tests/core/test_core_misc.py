@@ -1516,3 +1516,31 @@ def test_a_failed_due_clear_never_leaves_half_a_summary(tmp_path, caller_open):
             assert db.karte_summary_due() == [1]
     finally:
         db.close()
+
+
+def test_a_failed_commit_never_leaves_half_a_summary(tmp_path):
+    db = _ledger(tmp_path)
+    denied = []
+
+    def deny_commit(action, arg1, *_):
+        if action == sqlite3.SQLITE_TRANSACTION and arg1 == "COMMIT":
+            denied.append(arg1)
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK                     # ROLLBACK and everything else stay allowed
+    try:
+        _karte_due_patient(db)
+        db.db.set_authorizer(deny_commit)
+        try:
+            with pytest.raises(sqlite3.DatabaseError):
+                db.karte_summary_store(1, 10, {"comment": "合成"})
+        finally:
+            db.db.set_authorizer(None)
+        assert len(denied) == 1 and not db.db.in_transaction
+        with closing(sqlite3.connect(str(tmp_path / "ledger.db"))) as reader:
+            assert reader.execute("SELECT COUNT(*) FROM artifacts WHERE kind='karte_summary'").fetchone()[0] == 0
+        db.db.execute("UPDATE patients SET last_seen=last_seen WHERE project_id=1")   # unrelated
+        db.db.commit()
+        assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='karte_summary'").fetchone()[0] == 0
+        assert db.karte_summary_due() == [1]
+    finally:
+        db.close()
