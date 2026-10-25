@@ -6,8 +6,10 @@ import asyncio
 import getpass
 import json
 import logging
+import os
 import signal
 import sys
+import tempfile
 import threading
 import time
 from contextlib import ExitStack
@@ -19,7 +21,7 @@ if __package__ in (None, ""):
 
 from adapters.common import eventlog, paths, registry
 from mcs_util import HOME
-from safe_io import publish_new_bytes
+from safe_io import fdopen_owned
 from .actions import Actions
 from .client import ClientError, Credentials, _sign, valid_protocol_text, valid_filename
 from .config import credentials_path, destination, load_credentials, settings
@@ -55,8 +57,18 @@ def initialize(root):
     if not valid_protocol_text(values["bot_secret"], 4096):
         raise ClientError("credentials_invalid")
     path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    # Exclusive publication: another init's existing file is never overwritten.
-    publish_new_bytes(path, json.dumps(values, ensure_ascii=False).encode())
+    # Kept inline: unlike publish_new_bytes, a failed staging cleanup must fail init.
+    fd, temporary = tempfile.mkstemp(prefix=".lineworks-init-", dir=path.parent)
+    try:
+        with fdopen_owned(fd, "wb") as stream:
+            stream.write(json.dumps(values, ensure_ascii=False).encode())
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Exclusive publication: another init's existing file is never overwritten.
+        os.link(temporary, path)
+        paths.fsync_dir(str(path.parent))
+    finally:
+        os.unlink(temporary)
     print("LINE WORKS認証設定を保存しました。次にcheckを実行してください。")
     return 0
 
