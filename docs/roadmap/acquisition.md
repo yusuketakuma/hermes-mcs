@@ -267,11 +267,11 @@
 | 箇所 | 上限の仕組み | 超過の可能性 | 根拠 |
 |---|---|---|---|
 | `hermes send`（`mcs/notify/notify_flush.py:641-666`） | `subprocess.run(timeout=min(180, remain))` | 超えない。ただし `remain` が小さいと途中打切りで `_SendUncertain` → hold になり、**deadline が不確実性を作る**。下限がない | :647-657、:663-666 |
-| `extract.run_pending`（`extract.py:332-357`） | なし | 超える。`RULE_VERSION` 更新後は全件を 1 tick で再抽出し、1 行ごとに commit（`ledger.py:1814-1820`） | `run_check.py:655-659` |
-| `rollup.rebuild_many`（`rollup.py:394-403`） | なし | 超えうる | `run_check.py:701-712` |
+| `extract.run_pending`（`mcs/extract/rules/extract.py:397`） | `deadline`（tick の deadline − 45 秒）で打切り | 超えない。打ち切った残りは次の tick に回る | `run_check.py:161` |
+| `rollup.rebuild_many`（`mcs/patients/rollup.py:810`） | `deadline`（tick の deadline − 30 秒）で打切り | 超えない。打ち切った残りは次の tick に回る | `run_check.py:230-231` |
 | `daily_backup` の再検証と `publish_snapshot` | なし（毎 tick） | DB サイズに比例。端末固有の容量・所要時間の記録は除去 | `maintenance.py:55`、`run_check.py:1089` |
 | SQLite の busy | `timeout=30`・`busy_timeout=30000` | 1 文あたり最大 +30 秒 | `ledger.py:110,123` |
-| `bounded_call` の kill 後の回収 | `process.communicate()` に timeout なし | 理論上のみ | `mcs_worker.py:65,70` |
+| `bounded_call` の kill 後の回収 | `worker_process.reap_worker` が `REAP_TIMEOUT_S`（5 秒）で回収を打切り、残った pipe を閉じる | 超えない | `mcs/core/worker_process.py:5-22`、`mcs_worker.py:74,79` |
 | プロセス全体 | 外側は hermes cron の script timeout 3600 秒（テスト定数） | 固着するとロックを最大 3600 秒保持 | `tests/meta/test_deployment_scripts.py:12-14` |
 
 - 実 tick の所要時間の分布は未確認。`runs` 表に `started_at` / `finished_at` が残るので、コードなしで測れる（下記）。途中で kill された run は次の `begin_run` が `crashed` に更新する（`ledger.py:498-501`）。`health_watch` の猶予は 480 秒固定（`mcs/ingest/health_watch.py:41`）。

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Bounded HTTP transport — one short-lived worker per request.
 
-Stdlib-only request mechanism shared by the two HTTP surfaces that need
-process-level isolation: the TypeSafe Jev API (semantic_jev) and the
-loopback llama.cpp server (local_llm). Each request runs in a fresh
+Stdlib-only request mechanism shared by the HTTP surfaces that need
+process-level isolation: the TypeSafe Jev API (semantic_jev), the
+loopback llama.cpp server (local_llm) and the public drug-information
+lookups (drug_info). Each request runs in a fresh
 interpreter: the JSON body and credential travel over stdin (never
 argv), the worker follows no proxy and no redirect, reads at most
 ``MAX_RESPONSE_BYTES + 1`` bytes, and the parent enforces an absolute

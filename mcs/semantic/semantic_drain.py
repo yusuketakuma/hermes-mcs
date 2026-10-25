@@ -747,7 +747,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                        jev_transport=None, jev_timing=None,
                        diagnostics: dict, shadow_stats: dict | None = None) -> str:
     """One semantic job -> durable artifacts + job state transition.
-    Returns 'done'|'deferred'|'retry'|'failed'."""
+    Returns 'done'|'deferred'|'deferred_short'|'retry'|'failed'|'stale'."""
     pid, root = job["project_id"], job["message_id"]
     token = runtime.JobToken.from_row(job)
     deadline = runtime.job_deadline(scfg, deadline)
