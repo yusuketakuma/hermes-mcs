@@ -77,6 +77,11 @@ def config_ids(value: Any, *, projects: bool) -> frozenset[str | int] | None:
     return frozenset(result)
 
 
+def project_scope(value: Any, *, auto: bool) -> frozenset[str | int] | None:
+    """Static project ids; project_ids_auto=true allows an empty static list."""
+    return frozenset() if auto and value == [] else config_ids(value, projects=True)
+
+
 def resolve_settings(get_config) -> dict[str, Any] | None:
     try:
         raw = {key: get_config(key, _MISSING) for key in _CONFIG_KEYS}
@@ -90,9 +95,7 @@ def resolve_settings(get_config) -> dict[str, Any] | None:
     users = config_ids(raw["allowed_user_ids"], projects=False)
     chats = config_ids(raw["allowed_chat_ids"], projects=False)
     auto = get_config("project_ids_auto", None) is True
-    # project_ids_auto=true allows an empty static list (standalone config)
-    projects = (frozenset() if auto and raw["project_ids"] == []
-                else config_ids(raw["project_ids"], projects=True))
+    projects = project_scope(raw["project_ids"], auto=auto)
     if users is None or chats is None or projects is None:
         return None
     settings = {

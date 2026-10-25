@@ -174,7 +174,7 @@ def make_discord_factory(ctx):
 def _slack_adapter_settings(ctx) -> dict[str, Any] | None:
     """Only a complete opt-in can start Slack card delivery."""
     _ensure_repo_root()
-    from adapters.common.access import config_ids as _config_ids
+    from adapters.common.access import config_ids as _config_ids, project_scope
     if ctx.get_config("slack_adapter_enabled", False) is not True:
         return None
     keys = ("slack_team_id", "slack_application_id", "slack_channel_id")
@@ -185,10 +185,7 @@ def _slack_adapter_settings(ctx) -> dict[str, Any] | None:
     users = _config_ids(ctx.get_config("slack_allowed_user_ids", None),
                         projects=False)
     auto = ctx.get_config("project_ids_auto", None) is True
-    raw_projects = ctx.get_config("project_ids", None)
-    # Same shared settings rule: auto allows an empty static list
-    projects = (frozenset() if auto and raw_projects == []
-                else _config_ids(raw_projects, projects=True))
+    projects = project_scope(ctx.get_config("project_ids", None), auto=auto)
     if users is None or projects is None:
         return None
     data_root = ctx.get_config("data_root", None)

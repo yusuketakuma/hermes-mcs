@@ -267,3 +267,18 @@ def test_llama_restart_log_failure_has_no_private_traceback(tmp_path, failure):
     assert "/private/injected-path" not in proc.stdout + proc.stderr + log
     trace = tmp_path / "stub/launchctl.args"
     assert not trace.exists() or "kickstart" not in trace.read_text()
+
+
+def test_llama_restart_log_path_survives_the_rendered_quoting():
+    """The installer substitutes __DATA__ already shell-quoted (service_contract.render_script);
+    a second pair of quotes around it would keep the quote characters in the log path."""
+    import shlex
+
+    import service_contract
+
+    data = "/synthetic/da ta 'x"
+    path = Path(__file__).resolve().parents[2] / "deployment/scripts/llamacpp_restart_if_idle.sh"
+    rendered = service_contract.render_script(path.read_text(), {"DATA": data})
+    exec_line = next(line for line in rendered.splitlines() if line.startswith("exec "))
+    assert shlex.split(exec_line.split(" <<", 1)[0]) == [
+        "exec", "/usr/bin/python3", "-", f"{data}/llamacpp-restart.log"]

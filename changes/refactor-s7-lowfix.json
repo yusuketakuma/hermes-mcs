@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "llama.cpp の再起動スクリプトが空白を含む導入先でもログを正しい場所に書く",
+  "summary": "導入先のパスに空白や引用符が含まれる場合、ローカルLLM（llama.cpp）の日次再起動スクリプトが、引用符を含んだ誤った相対パスにログを書いていました。導入先のパスをそのまま使うように直しました。通常の導入先（~/.mcs）では動作は変わりません。あわせて、Slack・Discord の通知カードで対象患者の範囲（project_ids・project_ids_auto）を判定する規則を1か所にまとめました（判定は変わりません）。",
+  "upgrade": "既存の更新手順（mcs_update.py）では、サービス定義の再生成のときにスクリプトが書き直され、次回の日次実行から使われます。Git の差分だけを直接反映した場合、deployment/ の変更は実機に反映されないため、サービス定義を再生成するまで古いスクリプトのままです。通知カードの判定は、Hermes gateway を再起動するまで古いコードで動きますが、判定は同じです。このコードは意味チェック候補のfingerprintと抽出コードのdigestの対象外です。設定・保存済みの記録の書換えはありません。",
+  "details": [],
+  "refs": [
+    "deployment/scripts/llamacpp_restart_if_idle.sh",
+    "adapters/common/access.py",
+    "hermes_plugin/card_workers.py"
+  ]
+}

@@ -71,7 +71,7 @@ jobs:
             echo "::error::possible secret committed:"; echo "$bad"; exit 1
           fi
       - name: shellcheck
-        run: shellcheck install.sh scripts/*.sh deployment/scripts/*.sh
+        run: shellcheck install.sh scripts/*.sh scripts/development/*.sh scripts/evaluation/*.sh deployment/scripts/*.sh
       - name: plugin manifest sanity
         run: |
           grep -q "kind: standalone" hermes_plugin/plugin.yaml

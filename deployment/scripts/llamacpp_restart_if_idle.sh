@@ -1,6 +1,6 @@
 #!/bin/bash
 # Daily restart only after a valid, idle /slots observation within 15 minutes.
-exec /usr/bin/python3 - "__DATA__/llamacpp-restart.log" <<'PY'
+exec /usr/bin/python3 - __DATA__/llamacpp-restart.log <<'PY'
 import datetime
 import json
 import os
