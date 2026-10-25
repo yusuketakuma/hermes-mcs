@@ -1027,15 +1027,19 @@ def test_initialize_never_reports_success_when_staging_cleanup_fails(monkeypatch
     monkeypatch.setattr(cli, "_sign", lambda *a: b"synthetic-signature")
     if path.exists():
         path.unlink()
-    real_unlink = cli.os.unlink
+    real_unlink, injected = os.unlink, []
 
     def failing_unlink(target, *a, **kw):
-        if ".lineworks-init-" in str(target):
+        # either staging name (inline init or the shared publisher) in the private dir
+        if Path(target).parent == path.parent and Path(target).name.startswith(
+                (".lineworks-init-", ".alias-")):
+            injected.append(target)
             raise PermissionError("synthetic cleanup failure")
         return real_unlink(target, *a, **kw)
-    monkeypatch.setattr(cli.os, "unlink", failing_unlink)
+    monkeypatch.setattr(os, "unlink", failing_unlink)
     try:
         rc = cli.main(["init", "--root", str(tmp_path)])
     except PermissionError:
         rc = "raised"
+    assert len(injected) == 1                        # the cleanup really failed once
     assert rc != 0                                   # a left-behind staging file is not a success
