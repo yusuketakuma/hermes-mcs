@@ -7,7 +7,8 @@
     "同じsequenceへの異なる版の割当て、署名purposeの交差、期限切れや未知fieldを拒否します。",
     "公開された完全合成vectorを契約互換性試験に使います。",
     "package変更前に未完了記録を保存し、選択したPythonの現在の版をSDKをimportせず照合してから完了を記録します。",
-    "通常の更新は依存lockやwheelの変更を拒否します。試験は完全合成wheelと隔離した実行環境だけを使います。"
+    "通常の更新は依存lockやwheelの変更を拒否します。試験は完全合成wheelと隔離した実行環境だけを使います。",
+    "現在のcommit・手編集・依存profile・runtime・schemaを読取り観測し、途中変更や未観測を停止する部品を追加します。観測結果だけから計画や実行許可は作りません。"
   ],
   "refs": [
     "adapters/sdc/release_contract.py",

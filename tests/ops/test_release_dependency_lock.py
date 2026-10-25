@@ -207,6 +207,7 @@ def test_offline_install_consumes_hash_input_and_metadata_without_sdk_import(pro
     assert receipt['packages'][0]['wheel_sha256'] == value['profiles'][0]['packages'][0]['wheels'][0]['sha256']
     result = lock.observe_locked(repo, python=python, venv=venv, runtime_mode='standalone', platform=platform)
     assert result['lock_sha256'] == lock.digest(value)
+    assert result['runtime_fingerprint'] == receipt['runtime_fingerprint']
     assert stat.S_IMODE((venv / lock.RECEIPT_NAME).stat().st_mode) == 0o600
     assert not sentinel.exists()
     # Same profile under a different whole-lock hash is a read-only observation.
@@ -218,6 +219,44 @@ def test_offline_install_consumes_hash_input_and_metadata_without_sdk_import(pro
     before = (venv / lock.RECEIPT_NAME).read_bytes()
     assert lock.observe_locked(repo, python=python, venv=venv, runtime_mode='standalone', platform=platform)['lock_sha256'] == lock.digest(value)
     assert (venv / lock.RECEIPT_NAME).read_bytes() == before
+
+
+def test_observation_deadline_expires_before_any_probe(product, tmp_path, monkeypatch):
+    monkeypatch.setattr(lock, '_runtime', lambda *_a, **_k: pytest.fail('probe after deadline'))
+    with pytest.raises(lock.LockError, match='TIMEOUT'):
+        lock.observe_locked(product[0], python=tmp_path / 'absent', venv=tmp_path,
+                            runtime_mode='standalone', platform=product[2], deadline=time.monotonic() - 1)
+
+
+def test_runtime_probe_rejects_interpreter_replacement(tmp_path, monkeypatch):
+    venv = tmp_path / 'venv'
+    (venv / 'bin').mkdir(parents=True)
+    python = venv / 'bin/python'
+    python.write_text('synthetic first interpreter')
+    def probe(argv, **kwargs):
+        assert '-B' in argv
+        replacement = python.with_name('replacement')
+        replacement.write_text('synthetic other interpreter')
+        replacement.replace(python)
+        return json.dumps({'python': [3, 14], 'executable': str(python)}).encode()
+    monkeypatch.setattr(lock, '_run', probe)
+    with pytest.raises(lock.LockError, match='RUNTIME_MISMATCH'):
+        lock._runtime(python, venv, deadline=time.monotonic() + 10, cwd=tmp_path)
+
+
+def test_hermes_source_observation_receives_the_same_absolute_deadline(product, tmp_path, monkeypatch):
+    repo, value, _ = product
+    profile = copy.deepcopy(value['profiles'][0])
+    profile.update(runtime_mode='hermes', host={'commit': 'a' * 40})
+    deadline = time.monotonic() + 0.1
+    seen = []
+    def git_observation(path, **kwargs):
+        seen.append((path, kwargs['deadline']))
+        raise lock.LockError('TIMEOUT')
+    monkeypatch.setattr(lock, '_git_observation', git_observation)
+    with pytest.raises(lock.LockError, match='TIMEOUT'):
+        lock.source_requirements(profile, repo, tmp_path, deadline=deadline)
+    assert seen == [(tmp_path, deadline)]
 
 
 def test_resolver_missing_closure_stops_before_pending(product, tmp_path):

@@ -114,6 +114,96 @@ def _repository_fingerprint(repository):
         os.close(descriptor)
 
 
+def _observe_installed(repository, *, python, venv, runtime_mode, platform, ledger_path,
+                       deadline, host_source=None):
+    """現在の導入物だけを読む。計画・署名認可・基線認定を生成しない。"""
+    import platform as host_platform
+    import math
+    import sys
+    import release_dependency_lock as dependencies
+    import restore_evidence
+
+    if type(deadline) not in (int, float) or not math.isfinite(deadline):
+        raise ReleaseApplyError('OBSERVATION_TIMEOUT')
+
+    def remaining(minimum=0):
+        if deadline - time.monotonic() <= minimum:
+            raise ReleaseApplyError('OBSERVATION_TIMEOUT')
+
+    def identity(info):
+        return tuple(getattr(info, field) for field in (
+            'st_dev', 'st_ino', 'st_uid', 'st_mode', 'st_size', 'st_mtime_ns'))
+
+    def schema():
+        # The existing read-only SQLite reader has a five-second busy timeout.
+        remaining(5)
+        sidecars = [Path(str(ledger_path) + suffix) for suffix in ('-wal', '-shm')]
+        present = []
+        for path in sidecars:
+            try:
+                info = path.lstat()
+            except FileNotFoundError:
+                present.append(False)
+                continue
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+                raise ReleaseApplyError('SCHEMA_UNOBSERVED')
+            present.append(True)
+        if present[0] and not present[1]:
+            raise ReleaseApplyError('SCHEMA_UNOBSERVED')  # Do not create a missing WAL index.
+        value = restore_evidence.database_version(str(ledger_path))
+        if type(value) is not int or value < 1:
+            raise ReleaseApplyError('SCHEMA_UNOBSERVED')
+        return value
+
+    ledger_fd = venv_fd = None
+    try:
+        remaining()
+        actual_os = {'darwin': 'macos', 'linux': 'linux'}.get(sys.platform)
+        actual_cpu = {'aarch64': 'arm64', 'arm64': 'arm64', 'x86_64': 'x86_64'}.get(host_platform.machine().lower())
+        if (type(platform) is not dict or set(platform) != {'os', 'cpu', 'python'}
+                or type(platform['python']) is not list or actual_os is None or actual_cpu is None
+                or (platform.get('os'), platform.get('cpu')) != (actual_os, actual_cpu)):
+            raise ReleaseApplyError('PLATFORM_MISMATCH')
+        platform = {**platform, 'python': list(platform['python'])}
+        repository_id = _repository_fingerprint(repository)
+        head, clean = dependencies._git_observation(repository, deadline=deadline)
+        venv_fd = os.open(venv, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        fcntl.flock(venv_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        ledger_fd = os.open(ledger_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        ledger_before = os.fstat(ledger_fd)
+        if not stat.S_ISREG(ledger_before.st_mode) or ledger_before.st_uid != os.getuid() or ledger_before.st_nlink != 1:
+            raise ReleaseApplyError('SCHEMA_UNOBSERVED')
+        installed_schema = schema()
+        observed = dependencies.observe_locked(repository, python=python, venv=venv,
+            runtime_mode=runtime_mode, platform=platform, host_source=host_source, deadline=deadline)
+        final_head, final_clean = dependencies._git_observation(repository, deadline=deadline)
+        if (repository_id != _repository_fingerprint(repository) or (head, clean) != (final_head, final_clean)
+                or observed['lock_sha256'] != dependencies.digest(dependencies.read_lock(repository))
+                or installed_schema != schema()
+                or identity(ledger_before) != identity(os.fstat(ledger_fd))
+                or identity(ledger_before) != identity(os.stat(ledger_path, follow_symlinks=False))):
+            raise ReleaseApplyError('OBSERVATION_CHANGED')
+        remaining()
+        return {'repo_fingerprint': repository_id, 'commit': head, 'hand_edited': not clean,
+                'lock_sha256': observed['lock_sha256'], 'schema': installed_schema,
+                'runtime_mode': runtime_mode, 'platform': dict(platform),
+                'runtime_fingerprint': observed['runtime_fingerprint'],
+                'profile_id': observed['profile_id'], 'profile_sha256': observed['profile_sha256']}
+    except ReleaseApplyError:
+        raise
+    except subprocess.TimeoutExpired:
+        raise ReleaseApplyError('OBSERVATION_TIMEOUT') from None
+    except dependencies.LockError:
+        raise ReleaseApplyError('DEPENDENCIES_UNOBSERVED') from None
+    except (OSError, ValueError, TypeError, KeyError):
+        raise ReleaseApplyError('OBSERVATION_UNAVAILABLE') from None
+    finally:
+        if ledger_fd is not None:
+            os.close(ledger_fd)
+        if venv_fd is not None:
+            os.close(venv_fd)
+
+
 def _adopt_post_merge(runtime_home, repository, *, ticket_fd, locks, deadline):
     """Consume only an already-issued native continuation; never mint a release owner."""
     import update_journal

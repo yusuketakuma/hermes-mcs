@@ -268,7 +268,29 @@ def verify_wheels(profile, wheelhouse):
     return result
 
 
-def source_requirements(profile, repo, host_source=None):
+def _git_read(repo, args, *, deadline=None):
+    return _run(['/usr/bin/git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
+                 '-c', 'core.untrackedCache=false', '-c', 'core.attributesFile=/dev/null',
+                 '-c', 'protocol.allow=never', '-C', str(repo), *args],
+                cwd=repo, deadline=deadline if deadline is not None else time.monotonic() + 10)
+
+
+def _git_observation(repo, *, deadline=None):
+    # Reject executable filters and nested repositories before asking status to inspect files.
+    keys = _git_read(repo, ['config', '--local', '--includes', '--null', '--name-only', '--list'], deadline=deadline)
+    _check(not any(key.lower().startswith(b'filter.') for key in keys.split(b'\0')), 'REPOSITORY_UNSUPPORTED')
+    stages = _git_read(repo, ['ls-files', '--stage', '-z'], deadline=deadline)
+    _check(not any(row.startswith(b'160000 ') for row in stages.split(b'\0')), 'REPOSITORY_UNSUPPORTED')
+    flags = _git_read(repo, ['ls-files', '-v', '-z'], deadline=deadline)
+    _check(all(row.startswith(b'H ') for row in flags.split(b'\0') if row), 'REPOSITORY_UNSUPPORTED')
+    head = _git_read(repo, ['rev-parse', '--verify', 'HEAD'], deadline=deadline).strip().decode('ascii')
+    _check(_ascii(head, r'[0-9a-f]{40}'), 'REPOSITORY_UNSUPPORTED')
+    clean = not _git_read(repo, ['status', '--porcelain=v1', '-z', '--untracked-files=all',
+                                '--ignore-submodules=all'], deadline=deadline)
+    return head, clean
+
+
+def source_requirements(profile, repo, host_source=None, *, deadline=None):
     """解決器へ渡す固定sourceとoverride。source/buildコードは実行しない。"""
     if profile['runtime_mode'] == 'standalone':
         raw = read_regular_nofollow(Path(repo) / 'deployment/requirements-standalone.txt', MAX_LOCK, LockError)
@@ -287,20 +309,11 @@ def source_requirements(profile, repo, host_source=None):
     host = profile['host']
     install = read_regular_nofollow(Path(repo) / 'install.sh', MAX_LOCK, LockError)
     _check(hermes_pin(install) == host['commit'], 'HOST_MISMATCH')
-    # All Git queries are local/read-only and ignore caller config, hooks and replace refs.
-    env = {key: value for key, value in os.environ.items() if not key.startswith(('GIT_', 'UV_', 'PIP_', 'PYTHON'))}
-    env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, GIT_NO_REPLACE_OBJECTS='1',
-               GIT_TERMINAL_PROMPT='0', GIT_OPTIONAL_LOCKS='0')
-    def git(*args):
-        result = subprocess.run(['/usr/bin/git', '-C', str(host_source), *args], env=env,
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
-        _check(result.returncode == 0, 'HOST_MISMATCH')
-        return result.stdout
-    _check(git('rev-parse', 'HEAD').strip().decode('ascii') == host['commit']
-           and git('status', '--porcelain', '--untracked-files=all') == b'', 'HOST_MISMATCH')
+    head, clean = _git_observation(host_source, deadline=deadline)
+    _check(head == host['commit'] and clean, 'HOST_MISMATCH')
     raw = read_regular_nofollow(Path(host_source) / 'pyproject.toml', MAX_LOCK, LockError)
     _check(hashlib.sha256(raw).hexdigest() == host['pyproject_sha256'], 'HOST_MISMATCH')
-    _check(git('show', 'HEAD:pyproject.toml') == raw, 'HOST_MISMATCH')
+    _check(_git_read(host_source, ['show', 'HEAD:pyproject.toml'], deadline=deadline) == raw, 'HOST_MISMATCH')
     import tomllib
     try:
         project = tomllib.loads(raw.decode('utf-8'))
@@ -387,7 +400,8 @@ def _run(argv, *, cwd, deadline, input_bytes=None):
            if not key.startswith(('UV_', 'PIP_', 'PYTHON', 'VIRTUAL_ENV', 'CONDA_', 'GIT_'))}
     env.update(UV_OFFLINE='1', UV_NO_CONFIG='1', UV_PYTHON_DOWNLOADS='never',
                GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
-               GIT_NO_REPLACE_OBJECTS='1', GIT_TERMINAL_PROMPT='0')
+               GIT_NO_REPLACE_OBJECTS='1', GIT_TERMINAL_PROMPT='0',
+               GIT_OPTIONAL_LOCKS='0', GIT_NO_LAZY_FETCH='1', GIT_ATTR_NOSYSTEM='1')
     with tempfile.TemporaryFile() as output:
         child = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.PIPE if input_bytes is not None else subprocess.DEVNULL,
                                  stdout=output, stderr=subprocess.DEVNULL, start_new_session=True)
@@ -422,13 +436,17 @@ def _runtime(python, venv, *, deadline, cwd):
     executable = Path(python).resolve(strict=True)
     executable_stat = executable.stat()
     _check(stat.S_ISREG(executable_stat.st_mode), 'RUNTIME_MISMATCH')
-    raw = _run([str(python), '-I', '-S', '-c', _METADATA_PROBE], cwd=cwd, deadline=deadline,
+    raw = _run([str(python), '-I', '-S', '-B', '-c', _METADATA_PROBE], cwd=cwd, deadline=deadline,
                input_bytes=json.dumps({'venv': str(venv)}).encode())
     try:
         observed = json.loads(raw)
         _check(Path(observed['executable']).resolve() == executable, 'RUNTIME_MISMATCH')
         after = os.stat(venv, follow_symlinks=False)
         _check((before.st_dev, before.st_ino, before.st_uid) == (after.st_dev, after.st_ino, after.st_uid), 'RUNTIME_MISMATCH')
+        final_executable = Path(python).resolve(strict=True)
+        final_stat = final_executable.stat()
+        _check(final_executable == executable and all(getattr(executable_stat, field) == getattr(final_stat, field)
+               for field in ('st_dev', 'st_ino', 'st_uid', 'st_mode', 'st_size', 'st_mtime_ns')), 'RUNTIME_MISMATCH')
         identity = {'venv': str(venv), 'uid': before.st_uid, 'device': before.st_dev,
                     'inode': before.st_ino, 'executable': str(executable),
                     'executable_device': executable_stat.st_dev, 'executable_inode': executable_stat.st_ino,
@@ -808,9 +826,10 @@ def install_locked(repo, *, python, venv, runtime_mode, platform, host_source=No
         os.close(fd)
 
 
-def observe_locked(repo, *, python, venv, runtime_mode, platform, host_source=None, timeout=30):
+def observe_locked(repo, *, python, venv, runtime_mode, platform, host_source=None, timeout=30, deadline=None):
     """既存completed記録と現在metadataを読むだけ。lock全体差はprofile同一なら許す。"""
-    deadline = time.monotonic() + timeout
+    deadline = min(deadline, time.monotonic() + timeout) if deadline is not None else time.monotonic() + timeout
+    _check(deadline > time.monotonic(), 'TIMEOUT')
     lock = read_lock(repo)
     profile = select(lock, runtime_mode, platform)
     receipt = _read_receipt(venv)
@@ -819,7 +838,7 @@ def observe_locked(repo, *, python, venv, runtime_mode, platform, host_source=No
            and receipt['host_commit'] == (profile['host']['commit'] if profile['host'] else None), 'UNKNOWN_BASELINE')
     fingerprint, observed = _runtime(python, venv, deadline=deadline, cwd=repo)
     _check(fingerprint == receipt['runtime_fingerprint'] and observed['python'] == platform['python'], 'RUNTIME_MISMATCH')
-    source_requirements(profile, repo, host_source)
+    source_requirements(profile, repo, host_source, deadline=deadline)
     _observed_packages(observed, profile, host_source)
     for field in ('packages', 'build_packages'):
         _check(len(receipt[field]) == len(profile[field]), 'RECEIPT_INVALID')
@@ -827,7 +846,9 @@ def observe_locked(repo, *, python, venv, runtime_mode, platform, host_source=No
             _check(recorded['name'] == expected['name'] and recorded['version'] == expected['version']
                    and recorded['wheel_sha256'] in {wheel['sha256'] for wheel in expected['wheels']}, 'RECEIPT_INVALID')
     _check(_read_receipt(venv) == receipt and read_lock(repo) == lock, 'CONFLICT')
-    return {'lock_sha256': digest(lock), 'profile_sha256': digest(profile), 'profile_id': profile['profile_id']}
+    _check(deadline > time.monotonic(), 'TIMEOUT')
+    return {'lock_sha256': digest(lock), 'profile_sha256': digest(profile), 'profile_id': profile['profile_id'],
+            'runtime_fingerprint': fingerprint}
 
 
 def main(argv=None):
