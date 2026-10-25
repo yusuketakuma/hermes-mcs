@@ -93,8 +93,8 @@ def main(argv: list[str] | None = None) -> int:
             return mcs_drug.main(rest)
         case "setup":
             import mcs_setup
-            # services/check are explicit; init owns its final check and secrets.
-            command = (rest[0] if rest and rest[0] in ("init", "services", "check")
+            # services/check/features are explicit; init owns its final check and secrets.
+            command = (rest[0] if rest and rest[0] in ("init", "services", "check", "features")
                        else "init")
             forwarded = rest[1:] if rest and rest[0] == command else rest
             return mcs_setup.main([command, *forwarded])

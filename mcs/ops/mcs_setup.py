@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import json
 import math
 import os
@@ -1202,11 +1203,24 @@ def _doctor_optional_features(cfg) -> dict:
             for name, default in OPTIONAL_FEATURE_DEFAULTS.items()}
 
 
+def _config_identity():
+    """The config file's inode and content digest; None when absent, a unique token when unreadable."""
+    try:
+        st = os.lstat(CONF_PATH)
+        with open(CONF_PATH, "rb") as f:
+            return st.st_dev, st.st_ino, hashlib.sha256(f.read()).hexdigest()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return object()
+
+
 def cmd_features(args) -> int:
     """Choose whether optional setup guidance follows the release default (CSDC: off now)."""
     if _config_problem():
         print("任意機能: config.json を読み取れないため変更しません。mcs_setup.py check で確認してください")
         return 1
+    identity = _config_identity()
     cfg = mcs_util.load_config()
     before = json.dumps(cfg.get("optional_features"), sort_keys=True)
     if not sys.stdin.isatty():
@@ -1227,6 +1241,11 @@ def cmd_features(args) -> int:
     except (KeyboardInterrupt, EOFError):
         print("\n任意機能: 中止しました。保存していません。")
         return 130
+    # Not an atomic compare-and-swap: this only refuses changes made while the questions were open.
+    if _config_identity() != identity:
+        print("任意機能: 質問の間に config.json が変更・置換・削除・作成されたため保存していません。"
+              "もう一度実行してください。")
+        return 1
     service_management.write_service_file(
         CONF_PATH, json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True) + '\n', 0o600)
     print("任意機能の選択を保存しました。登録・同意・送信はこの操作では行っていません。")

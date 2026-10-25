@@ -73,7 +73,7 @@ def test_without_a_terminal_nothing_is_asked_or_written(monkeypatch, capsys):
     setup_wizard.wizard_optional_features(cfg, interactive=False)
     assert cfg == {"optional_features": {"csdc": True}}
     out = capsys.readouterr().out
-    assert "現在の選択: 案内を表示する" in out and "mcs_setup.py features" in out
+    assert "現在の選択: 案内を表示する" in out and "mcs setup features" in out
 
 
 def test_the_csdc_guidance_runs_only_when_enabled_after_interactive_success():
@@ -120,3 +120,80 @@ def test_features_command_refuses_without_a_terminal(monkeypatch, tmp_path):
     monkeypatch.setattr(mcs_setup.sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr("builtins.input", lambda *_a: pytest.fail("input question"))
     assert mcs_setup.main(["features"]) == 1
+
+
+def test_an_unimplemented_feature_name_is_never_enabled():
+    cfg = {"optional_features": {"future_unimplemented": True}}
+    assert mcs_config.feature_enabled(cfg, "future_unimplemented") is False
+    assert mcs_config.feature_enabled({}, "future_unimplemented") is False
+    assert mcs_config.feature_enabled(cfg, "csdc") is False            # known name keeps its default
+
+
+def _features_env(monkeypatch, tmp_path, initial):
+    path = tmp_path / "config.json"
+    if initial is not None:
+        path.write_text(json.dumps(initial))
+        path.chmod(0o600)
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(path))
+    monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
+    monkeypatch.setattr(mcs_setup.mcs_util, "load_config",
+                        lambda: json.loads(path.read_text()) if path.exists() else {})
+    monkeypatch.setattr(mcs_setup.sys.stdin, "isatty", lambda: True)
+    return path
+
+
+def _during_the_prompt(monkeypatch, change):
+    """Answer 'show', let another writer act while the save confirmation waits, then confirm."""
+    replies = iter(["2", "1"])
+
+    def answer(prompt):
+        reply = next(replies)
+        if "保存しますか" in prompt:
+            change()
+        return reply
+    monkeypatch.setattr("builtins.input", answer)
+
+
+@pytest.mark.parametrize("change", ["other_key", "same_feature", "secret_like", "sdc_flag"])
+def test_features_never_overwrites_a_config_changed_while_asking(monkeypatch, tmp_path, change):
+    initial = {"mcs_login_id": "synthetic", "notify_target": "local", "sdc": {"enabled": True}}
+    path = _features_env(monkeypatch, tmp_path, initial)
+    other = {"other_key": {**initial, "trickle_pages": 9},
+             "same_feature": {**initial, "optional_features": {"csdc": False}},
+             "secret_like": {**initial, "mcs_login_id": "synthetic-rotated"},
+             "sdc_flag": {**initial, "sdc": {"enabled": False}}}[change]
+    _during_the_prompt(monkeypatch, lambda: path.write_text(json.dumps(other)))
+    assert mcs_setup.main(["features"]) == 1
+    assert json.loads(path.read_text()) == other                    # the other writer's state is kept
+
+
+@pytest.mark.parametrize("change", ["deleted", "replaced_same_bytes", "corrupted"])
+def test_features_aborts_when_the_config_is_removed_replaced_or_broken(monkeypatch, tmp_path, change):
+    initial = {"mcs_login_id": "synthetic", "notify_target": "local"}
+    path = _features_env(monkeypatch, tmp_path, initial)
+    raw = path.read_bytes()
+    after = {}
+
+    def act():
+        if change == "deleted":
+            path.unlink()
+        elif change == "replaced_same_bytes":
+            fresh = tmp_path / "fresh.json"
+            fresh.write_bytes(raw)
+            fresh.replace(path)
+        else:
+            path.write_text("{broken")
+        after["state"] = path.read_bytes() if path.exists() else None
+    _during_the_prompt(monkeypatch, act)
+    assert mcs_setup.main(["features"]) == 1
+    assert (path.read_bytes() if path.exists() else None) == after["state"]   # left as the other writer left it
+
+
+def test_features_aborts_when_a_config_appears_while_asking(monkeypatch, tmp_path):
+    path = _features_env(monkeypatch, tmp_path, None)
+    # an absent config never validates; isolate the guard from the required-key check
+    monkeypatch.setattr(mcs_setup, "validate_config", lambda cfg: ([], []))
+    created = {"mcs_login_id": "synthetic-new"}
+    _during_the_prompt(monkeypatch, lambda: path.write_text(json.dumps(created)))
+    assert mcs_setup.main(["features"]) == 1
+    assert json.loads(path.read_text()) == created

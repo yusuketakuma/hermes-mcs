@@ -63,6 +63,8 @@ def _optional_features(value):
 
 def feature_enabled(cfg, name: str) -> bool:
     """The explicit optional_features choice, else this release's default."""
+    if name not in OPTIONAL_FEATURE_DEFAULTS:
+        return False                                # a feature this release does not implement
     value = cfg.get("optional_features") if isinstance(cfg, dict) else None
     choice = value.get(name) if isinstance(value, dict) else None
     return choice if type(choice) is bool else OPTIONAL_FEATURE_DEFAULTS[name]

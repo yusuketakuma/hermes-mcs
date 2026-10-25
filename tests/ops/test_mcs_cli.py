@@ -72,6 +72,13 @@ def test_setup_check_routes_to_check(pinned, monkeypatch):
     assert calls == [["check"]]
 
 
+def test_setup_features_routes_to_features(pinned, monkeypatch):
+    calls = []
+    monkeypatch.setattr(mcs_setup, "main", lambda argv: calls.append(argv) or 0)
+    assert mcs_cli.main(["setup", "features"]) == 0
+    assert calls == [["features"]]
+
+
 @pytest.mark.parametrize("argv", [
     ["doctor", "--probe", "all"], ["doctor", "--fix"],
     ["setup", "--password", "synthetic"],

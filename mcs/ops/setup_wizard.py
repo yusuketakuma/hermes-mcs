@@ -446,7 +446,7 @@ def wizard_optional_features(cfg: dict, *, interactive: bool | None = None) -> N
               f"\n  この版の既定: 案内を{default}。現在の選択: {state}。"
               "ここで選ぶのは案内の表示だけで、登録・同意・送信は行いません。")
         if not interactive:
-            print("  変更する場合は端末で python3 mcs/ops/mcs_setup.py features を実行してください。")
+            print("  変更する場合は端末で mcs setup features（PATH未設定なら ~/.local/bin/mcs setup features）を実行してください。")
             continue
         choice = ask(f"optional_features.{name}", "choice:follow,show,omit", "follow",
                      label, {None: None, True: "show", False: "omit"}[current])
