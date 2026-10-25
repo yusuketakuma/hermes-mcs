@@ -6,7 +6,6 @@ reservation, mid-run config recheck) apply verbatim — the job never
 mutates the extraction artifact and never suppresses an item.
 """
 from __future__ import annotations
-import semantic_jev
 
 import json
 import time
@@ -240,11 +239,28 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
             source_fingerprint=f"{art[1]}:{art[2]}", current_source=current_source,
             stage=stage)
 
+    def write(content, qc, extra=None):
+        # stale QC rows for a superseded hash are replaced in the same tx;
+        # the job transition lands here too so the row is never left
+        # claimable after its result
+        with ledger.db:
+            _drop_stale_qc(ledger, mid, art[1])
+            ledger.artifact_add_tx(
+                QC_ARTIFACT, json.dumps(content, ensure_ascii=False),
+                project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+                meta={"hash": art[1],
+                      "extract_version": extract_llm.EXTRACT_VERSION,
+                      "source_artifact_id": art[2],
+                      "qc": qc, **(extra or {})})
+            if not runtime.transition_tx(ledger, token, "done"):
+                raise runtime.RuntimeStale("qc:write")
+
+    unevaluated = None
     req0 = jev_client.requests_made
     client = runtime.bind_jev(jev_client, guard, reserve_fn, transport=jev_transport, timing=jev_timing)
     try:
-        out = (semantic_jev.evaluate_chunked(client, state, questions, deadline,
-                             scfg["max_questions_per_request"])
+        out = (jev.evaluate_chunked(client, state, questions, deadline,
+                                    scfg["max_questions_per_request"])
                if questions else {"answers": {}})
     except jev.JevError as error:
         with suppress(Exception):
@@ -262,24 +278,15 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
             return "stale"
         except (runtime.RuntimeOff, runtime.RuntimeBudget):
             return "deferred"
-        with ledger.db:
-            _drop_stale_qc(ledger, mid, art[1])
-            ledger.artifact_add_tx(
-                QC_ARTIFACT, json.dumps({"qc": "unevaluated",
-                                         "reason": error.kind},
-                                        ensure_ascii=False),
-                project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-                meta={"hash": art[1],
-                      "extract_version": extract_llm.EXTRACT_VERSION,
-                      "source_artifact_id": art[2],
-                      "qc": "unevaluated"})
-            if not runtime.transition_tx(ledger, token, "done"):
-                raise runtime.RuntimeStale("qc:write") from None
-        return "done"
+        unevaluated = error.kind
     except runtime.RuntimeStale:
         return "stale"
     except (runtime.RuntimeOff, runtime.RuntimeBudget):
         return "deferred"
+    if unevaluated is not None:
+        # a failed CAS here propagates, as it always has for this path
+        write({"qc": "unevaluated", "reason": unevaluated}, "unevaluated")
+        return "done"
     answers = out["answers"]
     items, urgency = [], None
     for qid, section, i in layout:
@@ -328,21 +335,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
         content["urgency"] = urgency
     try:
         guard("qc:write")
-        with ledger.db:
-            # stale QC rows for a superseded hash are replaced in the
-            # same tx; the job transition lands here too so the row is
-            # never left claimable after its result
-            _drop_stale_qc(ledger, mid, art[1])
-            ledger.artifact_add_tx(
-                QC_ARTIFACT, json.dumps(content, ensure_ascii=False),
-                project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-                meta={"hash": art[1],
-                      "extract_version": extract_llm.EXTRACT_VERSION,
-                      "source_artifact_id": art[2],
-                      "qc": "done",
-                      "jev_requests": jev_client.requests_made - req0})
-            if not runtime.transition_tx(ledger, token, "done"):
-                raise runtime.RuntimeStale("qc:write")
+        write(content, "done", {"jev_requests": jev_client.requests_made - req0})
     except runtime.RuntimeStale:
         return "stale"
     except (runtime.RuntimeOff, runtime.RuntimeBudget):

@@ -14,6 +14,7 @@ from mcs_queries import JST
 import semantic_facts as sf
 import semantic_send_gate
 from semantic_send_gate import enforce_block_reason
+from semantic_llm import OVERSIZE_LIMITATION
 
 _SECTION_LABEL = {"medication": "薬剤・処方に関する情報",
                   "status": "現在の状況（対象投稿時点）",
@@ -37,7 +38,7 @@ def summary_limitations(summary: dict) -> list[str]:
     """Render only fixed code vocabulary from the mixed limitations channel."""
     allowed = {f"{label}の判定が未確定のため要約対象外（原文確認）"
                for label in _CATEGORY_LABEL.values()}
-    allowed.add("対象投稿または文脈が大きすぎるため要約を生成できませんでした")
+    allowed.add(OVERSIZE_LIMITATION)
     lines = []
     for item in summary.get("code_limitations") or []:
         if isinstance(item, str) and (item in allowed or re.fullmatch(

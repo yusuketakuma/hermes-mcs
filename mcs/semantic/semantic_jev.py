@@ -221,10 +221,7 @@ def validate_answers(raw: dict, questions: dict, model: str) -> dict:
         # only the failed questions again (evaluate_once_more).
         first.answers, first.failed = out, failed
         raise first
-    result = {"answers": out, "model": got_model}
-    if usage is not None:
-        result["usage"] = usage
-    return result
+    return {"answers": out, "model": got_model, "usage": usage}
 
 
 def is_answer_defect(error) -> bool:

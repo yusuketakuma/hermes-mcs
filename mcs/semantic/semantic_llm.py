@@ -195,6 +195,7 @@ def _verdicts_brief(verdicts: dict) -> str:
 # CJK-dense text can approach 1 token/char, so 12000 chars keeps the
 # prompt under the slot window with headroom for the output budget.
 PROMPT_CHAR_LIMIT = 12000
+OVERSIZE_LIMITATION = "対象投稿または文脈が大きすぎるため要約を生成できませんでした"
 
 
 def _oversize_stub(bundle: dict, target_id: int) -> dict:
@@ -206,10 +207,8 @@ def _oversize_stub(bundle: dict, target_id: int) -> dict:
             "schema_version": SCHEMA_VERSION,
             "target_message_id": target_id,
             "claims": [],
-            "limitations": ["対象投稿または文脈が大きすぎるため"
-                            "要約を生成できませんでした"],
-            "code_limitations": ["対象投稿または文脈が大きすぎるため"
-                                 "要約を生成できませんでした"],
+            "limitations": [OVERSIZE_LIMITATION],
+            "code_limitations": [OVERSIZE_LIMITATION],
             "audit_status": "pending", "_input_oversize": True}
 
 
