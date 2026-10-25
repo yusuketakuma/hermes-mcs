@@ -533,10 +533,11 @@ def _try_lock(path):
 
 def _setup_python():
     """Interpreter able to run mcs_setup (>= 3.14), or None."""
-    if _runtime_mode() == "standalone":
+    mode = _runtime_mode()
+    if mode == "standalone":
         exe = str(Path(DATA).parent / "venv/bin/python3")
         return exe if os.access(exe, os.X_OK) else (sys.executable if sys.version_info >= (3, 14) else None)
-    if _runtime_mode() != "hermes":
+    if mode != "hermes":
         return None
     if os.access(HERMES_PY, os.X_OK):
         return HERMES_PY
@@ -703,7 +704,6 @@ def _gateway_restart_run(data, agents, uid):
     """Resolve the owned gateway, then verify a changed PID in a detached child."""
     import plistlib
     import shlex
-    import shutil
 
     label = "ai.hermes.gateway"
     expected = os.path.realpath(os.path.join(agents, label + ".plist"))
@@ -908,7 +908,8 @@ def _restart_gateway():
     """True when the restart request was saved/started (or none applies).
     Runs after durable bookkeeping — never undo it (mirrors
     mcs_update.restart_gateway, which reports a lost request too)."""
-    if _runtime_mode() == "standalone":
+    mode = _runtime_mode()
+    if mode == "standalone":
         live = _standalone_status()
         if live is not None:
             path = Path(DATA, "standalone-restart.request")
@@ -919,7 +920,7 @@ def _restart_gateway():
             except OSError:
                 return False
         return True
-    if _runtime_mode() != "hermes":
+    if mode != "hermes":
         return True
     return request_gateway_restart(DATA, AGENTS_DIR, os.getuid())
 
@@ -1011,8 +1012,9 @@ def _reconcile_membership(snapshot):
                    for key, field in (("cron", "script"), ("agents", "label")))):
         return ["service_snapshot_invalid"]
     problems = []
-    standalone = _runtime_mode() == "standalone"
-    if _runtime_mode() not in ("hermes", "standalone"):
+    mode = _runtime_mode()
+    standalone = mode == "standalone"
+    if mode not in ("hermes", "standalone"):
         return ["runtime_mode_unverifiable"]
     try:
         manifest = _read_local_json(MANIFEST_PATH, 262144)
@@ -1139,7 +1141,6 @@ def _notify(text):
     try:
         if cfg.get("runtime_mode", "hermes") != "hermes":
             return
-        import shutil
         hermes = shutil.which("hermes") \
             or os.path.expanduser("~/.local/bin/hermes")
         if os.path.isfile(hermes):
