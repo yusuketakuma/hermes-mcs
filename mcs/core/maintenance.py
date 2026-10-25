@@ -23,9 +23,8 @@ from time import monotonic
 from snapshots import publish_snapshot as _publish_snapshot
 from ledger import valid_mcs_db
 from mcs_util import HOME
-from safe_io import atomic_write, publish_tmp, fdopen_owned
+from safe_io import atomic_write, publish_tmp, fdopen_owned, read_regular_nofollow
 from llm_availability import disk_floor_mb
-from safe_io import read_regular_nofollow
 
 BACKUP_DIR = os.path.join(HOME, "data", "backups")
 SNAPSHOT_DIR = os.path.join(HOME, "data", "snapshots")
@@ -358,7 +357,6 @@ def prune_preupdate_backups(state_path: str | None = None) -> int:
     and every schema_bump `applied` entry, so successive rollbacks retain
     the DB copy for each schema boundary. Ordinary applied updates do not
     retain a separate copy."""
-    import json
     state_path = state_path or os.path.join(
         HOME, "data", "update_state.json")
     referenced: set[str] = set()
