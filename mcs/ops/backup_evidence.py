@@ -744,5 +744,3 @@ def plan(policy_path: str | Path, *, snapshot: str | None = None,
     if report["blockers"]:
         report.update(status="blocked", exit_code=1)
     return report
-
-
