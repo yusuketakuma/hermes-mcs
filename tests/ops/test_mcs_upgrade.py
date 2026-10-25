@@ -316,7 +316,7 @@ def test_launcher_cleans_staging_on_launch_error_or_cancellation(tmp_path, monke
     monkeypatch.setattr(launcher.tempfile, "mkdtemp", lambda **_kw: str(staged))
     monkeypatch.setattr(launcher, "_git", lambda *_args, **_kw: str(tmp_path))
 
-    def extract(*_args):
+    def extract(*_args, local_candidate=False):
         target = staged / "mcs/ops/mcs_update.py"
         target.parent.mkdir(parents=True)
         target.write_text("# synthetic updater\n")
