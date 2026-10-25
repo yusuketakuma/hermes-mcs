@@ -253,6 +253,11 @@ def build_envelopes(records: object, *, profile: JSONValue,
 
 def validate_envelope(envelope: JSONValue) -> None:
     """Check observable /2 content, not unseen auth, receipt, age policy or authenticity."""
+    _validate_envelope(envelope)
+
+
+def _validate_envelope(envelope: JSONValue) -> tuple[list[Record], list[list[Record]]]:
+    """validate_envelope, returning the (shared, groups) it already grouped."""
     if not isinstance(envelope, dict) or envelope.get("contract") != CONTRACT:
         raise C1ContractError("sink_contract_mismatch")
     if not _FIELDS <= envelope.keys() or envelope.keys() - (_FIELDS | {"part"}):
@@ -274,7 +279,7 @@ def validate_envelope(envelope: JSONValue) -> None:
     if _time(envelope["created_at"]) < generated_at:
         raise C1ContractError("snapshot_time_invalid")
     _part(envelope)
-    _, _, meta = _group_records(envelope["records"])
+    shared, groups, meta = _group_records(envelope["records"])
     snapshot = meta["snapshot"]
     assert isinstance(snapshot, dict)
     if (envelope["snapshot_generation_id"] != meta["snapshot_generation_id"]
@@ -289,6 +294,7 @@ def validate_envelope(envelope: JSONValue) -> None:
             or envelope["records_sha256"] != _hash(records)
             or envelope["envelope_id"] != _envelope_id(envelope)):
         raise C1ContractError("envelope_integrity_invalid")
+    return shared, groups
 
 
 def parse_envelope(raw: bytes) -> Record:
@@ -385,8 +391,7 @@ def validate_collection(envelopes: list[Record], *,
     if not envelopes:
         return {"status": "incomplete", "received_parts": 0, "expected_parts": None,
                 "evidence": None}
-    for envelope in envelopes:
-        validate_envelope(envelope)
+    grouped = [_validate_envelope(envelope) for envelope in envelopes]    # every envelope first
     first = envelopes[0]
     first_part = _part(first)
     count = first_part[1] if first_part else 1
@@ -403,7 +408,7 @@ def validate_collection(envelopes: list[Record], *,
     indexed: dict[int, Record] = {}
     common = None
     exclusive: set[tuple[str, str]] = set()
-    for envelope in envelopes:
+    for envelope, (shared, groups) in zip(envelopes, grouped):
         part = _part(envelope)
         if (part is None) != (first_part is None):
             raise C1ContractError("collection_split_mixed")
@@ -415,7 +420,6 @@ def validate_collection(envelopes: list[Record], *,
         if index in indexed:
             raise C1ContractError("collection_index_duplicate")
         indexed[index] = envelope
-        shared, groups, _ = _group_records(envelope["records"])
         shared_bytes = sorted(canonical_json(record) for record in shared)
         if common is not None and shared_bytes != common:
             raise C1ContractError("collection_common_mismatch")
