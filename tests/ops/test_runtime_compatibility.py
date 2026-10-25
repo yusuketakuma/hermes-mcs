@@ -21,6 +21,16 @@ import mcs_setup
 from test_mcs_update import updater as updater
 
 
+# git now runs through lifecycle_io.run_bounded; keep it on the real runner (which
+# still sees any subprocess.run patch) and send every other argv to the test stub
+_RUN_BOUNDED = lifecycle_io.run_bounded
+
+
+def _services(stub):
+    return lambda argv, **kw: _RUN_BOUNDED(argv, **kw) if argv[:1] == ["git"] else stub(argv, **kw)
+
+
+
 def _facts(python="3.14.8", sqlite="3.51.3"):
     return {"python": python, "sqlite": sqlite,
             "packages": {"discord.py": "2.7.1", "slack-bolt": "1.30.0",
@@ -123,7 +133,7 @@ def test_doctor_reports_selected_versions_not_parent(
         calls.append(exe)
         return _facts(sqlite=sqlite)
     monkeypatch.setattr(runtime_inspection, "probe_python", probe)
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **k: pytest.fail("service access"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(lambda *a, **k: pytest.fail("service access")))
     assert mcs_setup.cmd_doctor(SimpleNamespace(json=True)) == expected
     out = capsys.readouterr().out
     report = json.loads(out)
@@ -165,7 +175,7 @@ def test_doctor_blocks_unsafe_recovery_without_touching_services(
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe:
                         _facts("3.9.6", "3.51.0") if exe == "/synthetic/recovery-python"
                         else _facts())
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **k: pytest.fail("service access"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(lambda *a, **k: pytest.fail("service access")))
     assert mcs_setup.cmd_doctor(SimpleNamespace(json=True)) == 1
     report = json.loads(capsys.readouterr().out)
     assert report["checks"]["recovery_runtime"]["status"] == "blocked"
@@ -473,7 +483,7 @@ def test_doctor_and_updater_do_not_mask_deployed_drift(
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: _facts(sqlite="3.51.0") if exe == old else _facts())
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **kw: pytest.fail("external action"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(lambda *a, **kw: pytest.fail("external action")))
     assert mcs_setup.cmd_doctor(SimpleNamespace(json=True)) == 1
     report = json.loads(capsys.readouterr().out)
     assert report["runtimes"]["desired_recovery"]["sqlite"] == "3.51.3"

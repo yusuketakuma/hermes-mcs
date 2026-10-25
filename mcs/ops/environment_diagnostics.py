@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 import math
 import os
+import subprocess  # noqa: F401 - tests patch environment_diagnostics.subprocess.run (the module run_bounded uses)
 import re
-import subprocess
 import sys
 import time
 from contextlib import suppress
@@ -274,20 +274,16 @@ def check_llm(cfg: dict) -> tuple[list[str], list[str]]:
 def source_status(cfg: dict, *, probe: bool, paths: service_management.ServicePaths) -> dict:
     """Report disk revision separately from observed process start evidence."""
     revision, dirty = None, None
-    try:
-        r = subprocess.run(["git", "-C", paths.checkout, "rev-parse", "HEAD"],
-                           capture_output=True, text=True, timeout=5)
-        value = (r.stdout or "").strip()
-        if r.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", value):
-            revision = value
-            # status refreshes stale index stat data (touch/rsync); the
-            # plumbing diff-index would report those files as modified
-            r = subprocess.run(["git", "-C", paths.checkout, "status", "--porcelain",
-                                "--untracked-files=no"],
-                               capture_output=True, text=True, timeout=5)
-            dirty = bool((r.stdout or "").strip()) if r.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+    # run_bounded turns a timeout or a missing git into a failed result (124/127)
+    r = lifecycle_io.run_bounded(["git", "-C", paths.checkout, "rev-parse", "HEAD"], timeout=5)
+    value = (r.stdout or "").strip()
+    if r.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", value):
+        revision = value
+        # status refreshes stale index stat data (touch/rsync); the
+        # plumbing diff-index would report those files as modified
+        r = lifecycle_io.run_bounded(["git", "-C", paths.checkout, "status", "--porcelain",
+                                      "--untracked-files=no"], timeout=5)
+        dirty = bool((r.stdout or "").strip()) if r.returncode == 0 else None
     running = {"status": "not_checked", "pid": None, "started_at": None,
                "source_revision": None, "matches_disk": None}
     if probe and cfg.get("runtime_mode") != "standalone" and paths.platform == "darwin":

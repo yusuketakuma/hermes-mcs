@@ -77,13 +77,15 @@ def python_problem(exe: str) -> str | None:
                 f"(rc={r.returncode})")
     # Inspect the actual service interpreter's linked SQLite, not the
     # version of a sqlite3 executable or a different Python on PATH.
+    # the child stays self-contained (no repo import); the policy lives in mcs_runtime only
     r = run_bounded([exe, "-c",
-              "import sqlite3,sys; v=sqlite3.sqlite_version_info; "
-              "sys.exit(0 if v >= (3,51,3) or "
-              "(v[:2] == (3,50) and v >= (3,50,7)) or "
-              "(v[:2] == (3,44) and v >= (3,44,6)) else 1)"],
+              "import sqlite3; print(*sqlite3.sqlite_version_info)"],
              timeout=20)
-    if r.returncode:
+    try:
+        version = tuple(int(part) for part in (r.stdout or "").split())
+    except ValueError:
+        version = ()
+    if r.returncode or len(version) != 3 or not mcs_runtime.sqlite_wal_safe(version):
         return "常駐処理のSQLiteに安全なデータ保存の修正がありません（3.51.3以上、3.50.7以上、または3.44.6以上の対応系列が必要です）"
     return None
 

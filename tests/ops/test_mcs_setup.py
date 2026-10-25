@@ -19,6 +19,16 @@ import local_llm
 import mcs_util
 
 
+# git now runs through lifecycle_io.run_bounded; keep it on the real runner (which
+# still sees any subprocess.run patch) and send every other argv to the test stub
+_RUN_BOUNDED = lifecycle_io.run_bounded
+
+
+def _services(stub):
+    return lambda argv, **kw: _RUN_BOUNDED(argv, **kw) if argv[:1] == ["git"] else stub(argv, **kw)
+
+
+
 def test_missing_required_keys():
     errors, warnings = mcs_setup.validate_config({})
     assert "必須の設定項目がありません: mcs_login_id" in errors
@@ -1040,7 +1050,8 @@ def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
                 argv[argv.index("--schedule") + 1]
         elif argv[1:3] == ["cron", "remove"] and cron_applies:
             entries[:] = [e for e in entries if e["id"] != argv[3]]
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        # the service SQLite probe reads the version the child prints
+        return SimpleNamespace(returncode=0, stdout="3 51 3\n" if "sqlite3" in argv[-1] else "", stderr="")
     monkeypatch.setattr(mcs_setup.subprocess, "run", fake_run)
     return calls, SimpleNamespace(dry_run=False)
 
@@ -1558,7 +1569,7 @@ def test_invalid_runtime_doctor_fails_without_service_probes(monkeypatch, capsys
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(mcs_setup, "_queue_warnings", lambda cfg: [])
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: pytest.fail("invalid mode must not probe Hermes"))
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *args, **kwargs: pytest.fail("invalid mode must not probe services"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(lambda *args, **kwargs: pytest.fail("invalid mode must not probe services")))
     assert mcs_setup.cmd_doctor(SimpleNamespace()) == 1
     assert "常駐処理の実行環境: 要修正" in capsys.readouterr().out
 
@@ -2106,7 +2117,8 @@ def test_doctor_is_local_and_does_not_run_check(monkeypatch, capsys):
 # ---- runtime: services interpreter, launchd hermes, recovery, llama ----
 
 def _stub_py(path, rc):
-    path.write_text(f"#!/bin/sh\nexit {rc}\n")
+    # the service SQLite probe reads the version the child prints
+    path.write_text(f'#!/bin/sh\ncase "$2" in *sqlite3*) echo 3 51 3;; esac\nexit {rc}\n')
     path.chmod(0o755)
     return str(path)
 

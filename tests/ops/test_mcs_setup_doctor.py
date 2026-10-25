@@ -16,6 +16,16 @@ import mcs_setup
 from ops_testkit import bounded_python
 
 
+# git now runs through lifecycle_io.run_bounded; keep it on the real runner (which
+# still sees any subprocess.run patch) and send every other argv to the test stub
+_RUN_BOUNDED = lifecycle_io.run_bounded
+
+
+def _services(stub):
+    return lambda argv, **kw: _RUN_BOUNDED(argv, **kw) if argv[:1] == ["git"] else stub(argv, **kw)
+
+
+
 @pytest.fixture
 def local_config(monkeypatch):
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {
@@ -33,7 +43,7 @@ def local_config(monkeypatch):
 
 
 def test_default_doctor_checks_no_services_secrets_or_network(local_config, monkeypatch, capsys):
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **k: pytest.fail("service probe"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(lambda *a, **k: pytest.fail("service probe")))
     monkeypatch.setattr(local_llm, "bounded_request", lambda *a: pytest.fail("network"))
     assert mcs_setup.main(["doctor", "--json"]) == 0
     out = capsys.readouterr().out
@@ -55,7 +65,7 @@ def test_data_probe_reaches_restore_diagnosis_only_when_requested(
                 "restore_delivery_held": False if probe_data else None,
                 "recovery_scope": "collect_only"}
     monkeypatch.setattr(card_worker_status, "diagnose", diagnose)
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **k: pytest.fail("service probe"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(lambda *a, **k: pytest.fail("service probe")))
     monkeypatch.setattr(local_llm, "bounded_request", lambda *a: pytest.fail("network"))
     args = ["doctor", "--json"] + (["--probe", "data"] if explicit else [])
     assert mcs_setup.main(args) == 0
@@ -71,7 +81,7 @@ def test_explicit_llm_probe_is_bounded_and_other_scopes_stay_unchecked(
         calls.append((url, method, body, timeout))
         return 200, {}, b'[{}, {}, {}]' if url.endswith("/slots") else b'{"data":[]}'
     monkeypatch.setattr(local_llm, "bounded_request", request)
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *a, **k: pytest.fail("service probe"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(lambda *a, **k: pytest.fail("service probe")))
     assert mcs_setup.main(["doctor", "--probe", "llm", "--json"]) == 0
     checks = json.loads(capsys.readouterr().out)["checks"]
     assert checks["llm"]["status"] == "healthy"
@@ -100,7 +110,7 @@ def test_undersized_llm_slots_block(local_config, monkeypatch, capsys):
 def test_service_domain_failure_is_not_checked(local_config, monkeypatch, capsys):
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
     monkeypatch.setattr(lifecycle_io, 'run_bounded',
-                        lambda *a, **k: SimpleNamespace(returncode=1))
+                        _services(lambda *a, **k: SimpleNamespace(returncode=1)))
     monkeypatch.setattr(service_management, 'check_runtime', lambda cfg, **_service_kwargs: pytest.fail("unavailable"))
     assert mcs_setup.main(["doctor", "--probe", "services", "--json"]) == 0
     check = json.loads(capsys.readouterr().out)["checks"]["services"]
@@ -110,7 +120,7 @@ def test_service_domain_failure_is_not_checked(local_config, monkeypatch, capsys
 def test_service_probe_excludes_arbitrary_diagnostic_text(local_config, monkeypatch, capsys):
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
     monkeypatch.setattr(lifecycle_io, 'run_bounded',
-                        lambda *a, **k: SimpleNamespace(returncode=0))
+                        _services(lambda *a, **k: SimpleNamespace(returncode=0)))
     monkeypatch.setattr(service_management, 'check_runtime',
                         lambda cfg, **_service_kwargs: (["synthetic-secret/body/123456"], []))
     assert mcs_setup.main(["doctor", "--probe", "services", "--json"]) == 1
@@ -138,10 +148,36 @@ def test_service_runtime_sqlite_is_checked_not_path_python(monkeypatch, tmp_path
     calls = []
     def run(argv, **kw):
         calls.append(argv)
-        return SimpleNamespace(returncode=1 if "sqlite3" in argv[-1] else 0)
+        return SimpleNamespace(returncode=0, stdout="3 51 2\n" if "sqlite3" in argv[-1] else "")
     monkeypatch.setattr(runtime_inspection, "run_bounded", run)
     assert runtime_inspection.python_problem(str(python)) is not None
     assert len(calls) == 2 and all(argv[0] == str(python) for argv in calls)
+    assert "import" in calls[1][-1] and "mcs" not in calls[1][-1]     # the child stays self-contained
+
+
+# independent oracle: the maintained fixed releases, not mcs_runtime's own expression
+_SAFE = {(3, 44, 6), (3, 44, 7), (3, 50, 7), (3, 50, 9), (3, 51, 3), (3, 52, 0), (3, 53, 4)}
+
+
+@pytest.mark.parametrize("reported,rc", [
+    ("3 44 5\n", 0), ("3 44 6\n", 0), ("3 44 7\n", 0), ("3 45 9\n", 0), ("3 50 6\n", 0),
+    ("3 50 7\n", 0), ("3 50 9\n", 0), ("3 51 2\n", 0), ("3 51 3\n", 0), ("3 52 0\n", 0),
+    ("3 53 4\n", 0), ("3 51 3\n", 1), ("", 0), ("garbage\n", 0), ("3 51\n", 0),
+    ("3 51 3 1\n", 0), ("3.51.3\n", 0)])
+def test_service_runtime_sqlite_uses_the_shared_policy_and_fails_closed(monkeypatch, tmp_path, reported, rc):
+    python = tmp_path / "runtime"
+    python.write_text("#!/bin/sh\nexit 0\n")
+    python.chmod(0o700)
+    monkeypatch.setattr(runtime_inspection, "run_bounded", lambda argv, **kw: SimpleNamespace(
+        returncode=rc if "sqlite3" in argv[-1] else 0, stdout=reported if "sqlite3" in argv[-1] else ""))
+    parts = reported.split()
+    safe = rc == 0 and len(parts) == 3 and all(p.isdigit() for p in parts) \
+        and tuple(map(int, parts)) in _SAFE
+    problem = runtime_inspection.python_problem(str(python))
+    assert (problem is None) is safe
+    if not safe:
+        assert problem == ("常駐処理のSQLiteに安全なデータ保存の修正がありません"
+                           "（3.51.3以上、3.50.7以上、または3.44.6以上の対応系列が必要です）")
 
 
 @pytest.mark.parametrize("started,modified,expected", [(100, 101, True), (102, 101, False),
@@ -154,7 +190,7 @@ def test_doctor_does_not_invent_loaded_revision(monkeypatch, started, modified, 
     monkeypatch.setattr(environment_diagnostics.subprocess, "run", git)
     def probe(argv, **kw):
         return SimpleNamespace(returncode=0, stdout="pid = 123\n" if argv[0] == "launchctl" else "invalid")
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', probe)
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(probe))
     monkeypatch.setattr(environment_diagnostics.time, "mktime", lambda value: started)
     monkeypatch.setattr(environment_diagnostics.time, "strptime", lambda value, fmt: ())
     source = environment_diagnostics.source_status({}, probe=True, paths=mcs_setup._service_paths())
@@ -167,7 +203,7 @@ def test_doctor_does_not_invent_loaded_revision(monkeypatch, started, modified, 
 
 
 def test_doctor_source_default_does_not_probe_services(monkeypatch):
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *args, **kw: pytest.fail("service access"))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(lambda *args, **kw: pytest.fail("service access")))
     monkeypatch.setattr(environment_diagnostics.subprocess, "run", lambda *args, **kw:
                         SimpleNamespace(returncode=1, stdout="synthetic-secret-not-a-sha"))
     source = environment_diagnostics.source_status({}, probe=False, paths=mcs_setup._service_paths())
