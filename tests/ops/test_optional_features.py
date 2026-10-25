@@ -3,12 +3,15 @@ explicit choice that survives a default change, and no CSDC registration, consen
 or sending implied by the choice (synthetic config only)."""
 import ast
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
 
 import mcs_config
 import mcs_setup
+import mcs_util
 import setup_wizard
 
 
@@ -197,3 +200,41 @@ def test_features_aborts_when_a_config_appears_while_asking(monkeypatch, tmp_pat
     _during_the_prompt(monkeypatch, lambda: path.write_text(json.dumps(created)))
     assert mcs_setup.main(["features"]) == 1
     assert json.loads(path.read_text()) == created
+
+
+@pytest.mark.parametrize("change", ["fifo", "symlink_same_bytes", "oversize"])
+def test_features_rechecks_without_following_blocking_or_reading_unbounded(monkeypatch, tmp_path, change):
+    initial = {"mcs_login_id": "synthetic", "notify_target": "local"}
+    path = _features_env(monkeypatch, tmp_path, initial)
+    raw = path.read_bytes()
+
+    def act():
+        if change == "fifo":                     # a blocking open would never return
+            path.unlink()
+            os.mkfifo(path)
+        elif change == "symlink_same_bytes":
+            target = tmp_path / "elsewhere.json"
+            target.write_bytes(raw)
+            path.unlink()
+            path.symlink_to(target)
+        else:
+            path.write_bytes(raw + b" " * (mcs_util.CONFIG_MAX_BYTES + 1))
+    _during_the_prompt(monkeypatch, act)
+    assert mcs_setup.main(["features"]) == 1
+    if change == "fifo":
+        assert stat.S_ISFIFO(os.lstat(path).st_mode)
+    elif change == "symlink_same_bytes":
+        assert path.is_symlink() and (tmp_path / "elsewhere.json").read_bytes() == raw
+    else:
+        assert path.stat().st_size > mcs_util.CONFIG_MAX_BYTES
+
+
+def test_features_never_saves_through_a_symlinked_config(monkeypatch, tmp_path):
+    target = tmp_path / "elsewhere.json"
+    target.write_text(json.dumps({"mcs_login_id": "synthetic", "notify_target": "local"}))
+    path = _features_env(monkeypatch, tmp_path, None)
+    path.symlink_to(target)
+    before = target.read_bytes()
+    _during_the_prompt(monkeypatch, lambda: None)
+    assert mcs_setup.main(["features"]) == 1
+    assert path.is_symlink() and target.read_bytes() == before

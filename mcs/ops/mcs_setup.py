@@ -38,6 +38,7 @@ import os
 import plistlib
 import re
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -73,7 +74,7 @@ import mcs_runtime
 import runtime_inspection
 
 from mcs_util import (CONF_PATH, HOME, REPO, env_value)
-from safe_io import read_regular_nofollow
+from safe_io import fdopen_owned, read_regular_nofollow
 
 ENV_PATH = os.path.join(HOME, ".env")
 CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -1204,15 +1205,25 @@ def _doctor_optional_features(cfg) -> dict:
 
 
 def _config_identity():
-    """The config file's inode and content digest; None when absent, a unique token when unreadable."""
+    """The config file's inode and bounded digest from one no-follow, non-blocking FD;
+    None when absent, a unique token when unreadable, not regular, a link or oversize."""
     try:
-        st = os.lstat(CONF_PATH)
-        with open(CONF_PATH, "rb") as f:
-            return st.st_dev, st.st_ino, hashlib.sha256(f.read()).hexdigest()
+        fd = os.open(CONF_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         return None
     except OSError:
         return object()
+    try:
+        with fdopen_owned(fd, "rb") as stream:
+            st = os.fstat(stream.fileno())
+            if not stat.S_ISREG(st.st_mode):
+                return object()
+            raw = stream.read(mcs_util.CONFIG_MAX_BYTES + 1)
+    except OSError:
+        return object()
+    if len(raw) > mcs_util.CONFIG_MAX_BYTES:
+        return object()
+    return st.st_dev, st.st_ino, hashlib.sha256(raw).hexdigest()
 
 
 def cmd_features(args) -> int:
