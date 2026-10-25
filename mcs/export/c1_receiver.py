@@ -24,7 +24,7 @@ from typing import TypedDict
 from c1_contract import C1ContractError, C1_FIELDS, canonical_json
 from c1_envelopes import (
     CONTRACT, RECEIPT_CONTRACT, Record, _hash, encode_envelope, intent_hash, parse_envelope,
-    parse_withdrawal, validate_collection, validate_envelope,
+    parse_withdrawal, validate_collection,
 )
 from safe_io import atomic_write, fdopen_owned
 
@@ -398,7 +398,7 @@ class ReferenceReceiver:
                     raise C1ContractError("receiver_state_invalid")
             if entry["status"] == "received":
                 envelope = _envelope(entry)
-                validate_envelope(envelope)
+                # intent_hash validates this same envelope first (validation never mutates it).
                 if (intent_hash(envelope) != entry["intent_sha256"]
                         or self._items(json.loads(canonical_json(envelope))) != entry["items"]
                         or Counter(r["type"] for r in (entry["records"] or [])) != entry["counts"]):

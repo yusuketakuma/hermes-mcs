@@ -223,11 +223,7 @@ class GovernedExporter:
             entry = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError, RecursionError) as e:
             raise export_contract.ContractError("journal_unreadable") from e
-        if not isinstance(entry, dict) or entry.get("envelope_id") != envelope_id \
-                or entry.get("status") not in (
-                    "sent", "held", "acked", "refused", "withdrawn", "delete_held",
-                    "rejected") \
-                or not isinstance(entry.get("attempts"), list):
+        if not _journal_ok(entry, envelope_id):
             raise export_contract.ContractError("journal_invalid")
         return entry
 
@@ -278,8 +274,9 @@ class GovernedExporter:
             sink_root = str(sink.root.resolve())
             if prior and prior["status"] != "refused" and prior.get("sink_root") != sink_root:
                 raise export_contract.ContractError("sink_binding_mismatch")
-            if prior and prior["status"] != "refused" \
-                    and prior.get("intent_sha256") != export_contract.export_intent_hash(envelope):
+            # The owned copy is not handed to the sink until after the reservation below.
+            intent = export_contract.export_intent_hash(envelope)
+            if prior and prior["status"] != "refused" and prior.get("intent_sha256") != intent:
                 raise export_contract.ContractError("envelope_identity_conflict")
             if prior and prior["status"] == "acked":
                 self._audit("deliver", "already_acked",
@@ -306,7 +303,7 @@ class GovernedExporter:
             # lost response leaves sent/unknown, never an unjournaled retry.
             self._set_journal(eid, "sent", sink_root=sink_root,
                               auth_id=auth["auth_id"],
-                              intent_sha256=export_contract.export_intent_hash(envelope),
+                              intent_sha256=intent,
                               records_sha256=envelope["records_sha256"],
                               record_count=envelope["record_count"],
                               record_types=dict(Counter(r["type"] for r in envelope["records"])),
@@ -574,14 +571,6 @@ class GovernedExporter:
             return ack
         return None
 
-    def audit_entries(self) -> list:
-        p = self.dir / "audit.jsonl"
-        if not p.exists():
-            return []
-        return [json.loads(line) for line in
-                p.read_text(encoding="utf-8").splitlines() if line]
-
-
 def _read_health_json(path: Path):
     """Read at most one bounded regular file without following a link or FIFO."""
     raw = read_regular_nofollow(
@@ -589,6 +578,17 @@ def _read_health_json(path: Path):
     if len(raw) > export_contract.RECEIPT_MAX_BYTES:
         raise export_contract.ContractError("health_file_size_or_type")
     return json.loads(raw)
+
+
+# A tuple, not a set: an unhashable stored status is malformed, not a TypeError.
+_JOURNAL_STATUSES = ("sent", "held", "acked", "refused", "withdrawn", "delete_held", "rejected")
+
+
+def _journal_ok(entry, envelope_id: str) -> bool:
+    """The strict journal-entry shape every reader requires before trusting a status."""
+    return (isinstance(entry, dict) and entry.get("envelope_id") == envelope_id
+            and entry.get("status") in _JOURNAL_STATUSES
+            and isinstance(entry.get("attempts"), list))
 
 
 def journal_paths(state, max_entries=None):
@@ -644,11 +644,7 @@ def health(state: str | Path, *, auth_path: str | Path | None = None,
                 if path.suffix != ".json":
                     raise export_contract.ContractError("journal_invalid")
                 entry = _read_health_json(path)
-                if (not isinstance(entry, dict) or entry.get("envelope_id") != eid
-                        or entry.get("status") not in (
-                            "sent", "held", "delete_held", "acked", "withdrawn",
-                            "refused", "rejected")
-                        or not isinstance(entry.get("attempts"), list)):
+                if not _journal_ok(entry, eid):
                     raise export_contract.ContractError("journal_invalid")
                 status = "held" if entry["status"] == "sent" else entry["status"]
                 counts[status] += 1

@@ -226,6 +226,14 @@ def test_withdraw_propagates_and_holds_unacked_delete(tmp_path):
         and res["reason"] == "envelope_withdrawn"
 
 
+def _audit(exporter):
+    """Every audit.jsonl entry, as the exporter appended it."""
+    p = exporter.dir / "audit.jsonl"
+    if not p.exists():
+        return []
+    return [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line]
+
+
 def test_audit_records_refusals_and_sends(tmp_path):
     auth = export_delivery.load_authorization(_auth(tmp_path), NOW)
     env = export_contract.build_envelope(_records(), auth, NOW - 10, now=NOW)
@@ -237,7 +245,7 @@ def test_audit_records_refusals_and_sends(tmp_path):
     env2["records"] = [{"type": "message", "message_id": 1,
                         "patient_name": "SYNTH NAME"}]
     exp.deliver(env2, sink, auth_path=tmp_path / "auth.json")
-    outcomes = [e["outcome"] for e in exp.audit_entries()]
+    outcomes = [e["outcome"] for e in _audit(exp)]
     assert "acked" in outcomes and "refused" in outcomes
 
 

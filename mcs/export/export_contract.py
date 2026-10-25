@@ -1,7 +1,6 @@
 """外部搬出の承認・世代別envelope・receiptを、既存の形式と拒否条件で検証する。"""
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import time
@@ -12,7 +11,7 @@ from c1_envelopes import (AUTH_ID_MAX, CONTRACT as C1_CONTRACT,
 from export_schema import (FORBIDDEN_KEYS, RECORD_TYPES, TYPE_FORBIDDEN,
                            validate_record)
 from stats_math import finite_number
-from mcs_util import canonical
+from mcs_util import canonical, text_sha256
 
 
 AUTH_CONTRACT = "mcs-ext-auth/1"
@@ -42,10 +41,6 @@ class ContractError(Exception):
 
 def canonical_text(obj) -> str:
     return canonical(obj).decode("utf-8")
-
-
-def _sha(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def validate_authorization(raw, now: float, *, c1: bool = False) -> dict:
@@ -218,7 +213,7 @@ def build_envelope(records: list[dict], auth: dict,
         "created_at": now,
         "retention_days": auth.get("retention_days"),
         "record_count": len(kept),
-        "records_sha256": _sha(body),
+        "records_sha256": text_sha256(body),
         "records": kept,
     }
     envelope["envelope_id"] = _envelope_id(envelope)
@@ -227,7 +222,7 @@ def build_envelope(records: list[dict], auth: dict,
 
 def _envelope_id(envelope: dict) -> str:
     # Preserve the /1 idempotency key, including for persisted envelopes.
-    return _sha(canonical_text({"auth_id": envelope["auth_id"],
+    return text_sha256(canonical_text({"auth_id": envelope["auth_id"],
                             "gen": envelope["snapshot_generation_id"],
                             "records_sha256": envelope["records_sha256"]}))[:24]
 
@@ -236,7 +231,7 @@ def export_intent_hash(envelope: dict) -> str:
     if envelope.get("contract") == C1_CONTRACT:
         return intent_hash(envelope)
     # Reusing an auth_id cannot change a previously dispatched intent.
-    return _sha(canonical_text({key: envelope.get(key) for key in (
+    return text_sha256(canonical_text({key: envelope.get(key) for key in (
         "auth_id", "destination", "purpose", "scope", "retention_days",
         "snapshot_generation_id", "snapshot_generated_at", "records_sha256")}))
 
@@ -346,6 +341,6 @@ def validate_export_envelope(envelope: dict) -> None:
             or not finite_number(envelope["snapshot_generated_at"]):
         raise ContractError("envelope_metadata_invalid")
     if type(envelope["record_count"]) is not int or envelope["record_count"] != len(records) \
-            or envelope["records_sha256"] != _sha(canonical_text(records)) \
+            or envelope["records_sha256"] != text_sha256(canonical_text(records)) \
             or eid != _envelope_id(envelope):
         raise ContractError("envelope_integrity_invalid")
