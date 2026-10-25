@@ -92,7 +92,7 @@ def transports(root):
 
 
 def connector_settings(root, transport, *, require_interactive=True, target=None):
-    if transport not in {"slack", "discord", "lineworks"}:
+    if transport not in TOKENS:
         raise ValueError("standalone_transport_invalid")
     root = Path(root).expanduser().resolve()
     cfg = load(root)

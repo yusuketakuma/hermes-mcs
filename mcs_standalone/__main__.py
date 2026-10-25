@@ -15,7 +15,6 @@ import logging
 import os
 import re
 import sys
-import tempfile
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -25,7 +24,7 @@ if __package__ in (None, ""):
 import mcs_standalone  # noqa: E402,F401  (path bootstrap)
 from adapters.common.paths import read_verified_attachment  # noqa: E402
 from mcs_util import HOME  # noqa: E402
-from safe_io import fdopen_owned  # noqa: E402
+from safe_io import publish_new_bytes  # noqa: E402
 
 from . import config  # noqa: E402
 from .host import NotSent, Refused, log  # noqa: E402
@@ -82,16 +81,15 @@ def _payload(root: str) -> dict:
         if not isinstance(text, str) or not 0 < len(text) <= 2000 \
                 or not isinstance(files, list) or len(files) > _MAX_FILES:
             raise ValueError("payload")
-        allowed = Path(root).expanduser().resolve() / "data" / "attachments"
+        data_root = str(Path(root).expanduser().resolve() / "data")
         for item in files:
             name = item["name"]
             if not isinstance(name, str) or not 0 < len(name) <= 255 \
                     or any(c in name for c in "/\\\x00\r\n") or name in (".", ".."):
                 raise ValueError("attachment_name")
             path = Path(item["path"]).resolve(strict=True)
-            if not path.is_relative_to(allowed):
-                raise ValueError("attachment_path")
-            blob = read_verified_attachment(str(path), item)
+            # confined to <data>/attachments, as the Slack/Discord senders are
+            blob = read_verified_attachment(str(path), item, root=data_root)
             if blob is None:
                 raise ValueError("attachment_mismatch")
         return payload
@@ -158,17 +156,7 @@ def initialize(root, transport, *, yes=False):
         value = {key: getpass.getpass(f"{transport}: {labels[key]}: ").strip() for key in fields}
         _coded(config.validate_credentials, value, transport)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(prefix=".standalone-init-", dir=path.parent)
-    try:
-        with fdopen_owned(fd, "w", encoding="utf-8") as stream:
-            json.dump(value, stream)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.link(temporary, path)
-        from adapters.common.paths import fsync_dir
-        fsync_dir(str(path.parent))
-    finally:
-        os.unlink(temporary)
+    publish_new_bytes(path, json.dumps(value).encode("utf-8"))   # 0600, never overwrites
     print("認証設定を保存しました（本人だけが読み書きできる権限）。")
     return 0
 
