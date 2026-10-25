@@ -4,7 +4,7 @@ import semantic_store
 
 import json
 
-from mcs_util import positive, valid_hash
+from mcs_util import loads_dict, positive, valid_hash
 
 def latest_policy(db):
     """Content of the newest semantic_policy artifact, or None."""
@@ -142,12 +142,12 @@ def current_candidate(db, project_id: int, artifact_id: int,
             "candidate": candidate}
 
 
-def loop_links(db, pid, *, request_id=None, loop_id=None):
-    """Read linked requests whose own status is the authority for closure."""
-    from mcs_util import loads_dict
+def _link_items(db, pid, request_id, loop_id):
+    """(loop ref as SQLite reads it, link item) pairs, newest link first."""
     # The request row is the authority; link artifacts contain no task state.
     rows = db.execute("""
-      SELECT a.artifact_id,a.created_at,a.content,r.request_id,r.status,r.revision,r.title
+      SELECT a.artifact_id,a.created_at,a.content,r.request_id,r.status,r.revision,r.title,
+        CASE WHEN json_valid(a.content) THEN json_extract(a.content,'$.loop_artifact_id') END loop_ref
       FROM artifacts a JOIN requests r ON r.project_id=a.project_id
         AND r.request_id=CASE WHEN json_valid(a.content)
           THEN json_extract(a.content,'$.request_id') END
@@ -157,36 +157,32 @@ def loop_links(db, pid, *, request_id=None, loop_id=None):
           THEN json_extract(a.content,'$.loop_artifact_id') END=?)
       ORDER BY a.artifact_id DESC
     """, (pid, request_id, request_id, loop_id, loop_id))
-    links = []
     for row in rows:
         item = dict(row)
+        ref = item.pop("loop_ref")
         link = loads_dict(item.pop("content"))
         if link is None:
             continue
         item["link"] = link
-        links.append(item)
-    return links
+        yield ref, item
+
+
+def loop_links(db, pid, *, request_id=None, loop_id=None):
+    """Read linked requests whose own status is the authority for closure."""
+    return [item for _, item in _link_items(db, pid, request_id, loop_id)]
 
 
 def _loop_source_state(db, candidate_row, policy, bundles, sources):
     """Validate source and adoption before reading any relation history."""
     r = candidate_row
     pid = r["project_id"]
-    try:
-        cand = json.loads(r["content"])
-    except (ValueError, TypeError, RecursionError):
-        return None
-    if not isinstance(cand, dict):
+    cand = loads_dict(r["content"])
+    if cand is None:
         return None
     origin = cand.get("origin") or {}
     if not isinstance(origin, dict):
         origin = {}
-    try:
-        candidate_meta = json.loads(r["meta"] or "{}")
-    except (ValueError, TypeError, RecursionError):
-        candidate_meta = {}
-    if not isinstance(candidate_meta, dict):
-        candidate_meta = {}
+    candidate_meta = loads_dict(r["meta"] or "{}") or {}
     key = (pid, r["message_id"])
     if key not in sources:
         sources[key] = db.execute(
@@ -222,7 +218,7 @@ def effective_loop_state(db, candidate_row, *, policy=None, bundles=None, relati
 
 
 def _effective_loop_state(db, r, state, policy, relation_limit,
-                          event_rows=None, rejection_rows=None):
+                          event_rows=None, rejection_rows=None, links=None):
     import semantic_jev as jev
     from semantic_loops import rejected_relation_pair
     from mcs_util import loads_dict
@@ -325,7 +321,8 @@ def _effective_loop_state(db, r, state, policy, relation_limit,
                for _, e in events)
         else cand.get("state"))
     cand["artifact_id"] = r["artifact_id"]
-    cand["linked_requests"] = loop_links(db, pid, loop_id=r["artifact_id"])
+    cand["linked_requests"] = (loop_links(db, pid, loop_id=r["artifact_id"])
+                               if links is None else links)
     return cand
 
 
@@ -344,6 +341,10 @@ def effective_loop_states(db, candidate_rows, *, policy=None, bundles=None,
     result = []
     for pid, rows in projects.items():
         ids = {r["artifact_id"] for r in rows}
+        # one link read per project, grouped by the same SQL value loop_links filters on
+        links = {}
+        for ref, item in _link_items(db, pid, None, None):
+            links.setdefault(ref, []).append(item)
         origins = {}
         for row in rows:
             origins.setdefault(row["message_id"], []).append(row["artifact_id"])
@@ -365,5 +366,6 @@ def effective_loop_states(db, candidate_rows, *, policy=None, bundles=None,
                 collection[aid].append(record)
         result.extend(_effective_loop_state(db, row, states[row["artifact_id"]], policy,
                                             relation_limit, events[row["artifact_id"]],
-                                            rejections[row["artifact_id"]]) for row in rows)
+                                            rejections[row["artifact_id"]],
+                                            links.get(row["artifact_id"], [])) for row in rows)
     return result
