@@ -256,7 +256,8 @@ def offsite(snapshot: str, policy: backup_evidence.BackupPolicy,
         work = Path(work)
         plain = work / "ledger.db"
         _copy_private(source, plain, policy.max_snapshot_bytes)
-        if file_sha256(source) != file_sha256(plain):
+        plain_sha256 = file_sha256(plain)
+        if file_sha256(source) != plain_sha256:
             raise backup_evidence.BackupError("backup_source_changed")
         inventory = backup_evidence.inventory_snapshot(plain)
         backup_evidence.check_fresh(inventory["last_successful_run"], policy)
@@ -270,7 +271,7 @@ def offsite(snapshot: str, policy: backup_evidence.BackupPolicy,
         manifest: Manifest = {
             "v": 1, "suite": SUITE, "mac_salt": salt.hex(),
             "created_at": time.time(), "policy_id": policy.policy_id,
-            "plain_sha256": file_sha256(plain), "plain_size": plain.stat().st_size,
+            "plain_sha256": plain_sha256, "plain_size": plain.stat().st_size,
             "enc_sha256": file_sha256(encrypted),
             "enc_size": encrypted.stat().st_size, "inventory": inventory,
         }
@@ -567,7 +568,7 @@ def main(argv: list[str] | None = None, *,
                     raise backup_evidence.BackupError("backup_key_required")
                 if args.action == "offsite":
                     snapshot = args.snapshot or (
-                        backup_evidence.latest_snapshot(args.snapshot_dir, policy)
+                        backup_evidence.latest_snapshot(args.snapshot_dir)
                         if args.snapshot_dir else None)
                     if snapshot is None:
                         raise backup_evidence.BackupError("backup_explicit_snapshot_required")

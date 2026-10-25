@@ -257,7 +257,7 @@ def test_rendered_wrapper_consumes_only_explicit_static_generation(
         assert not list(Path(policy.destination).glob("snapshot-*.mcsb"))
         assert health_report.backup_health(cfg, NOW)["state"] != "healthy"
     with pytest.raises(backup_evidence.BackupError, match="backup_no_valid_daily_snapshot"):
-        backup_evidence.latest_snapshot(str(source.parent), policy)
+        backup_evidence.latest_snapshot(str(source.parent))
 
 
 def test_standalone_host_owns_only_explicit_offsite_schedule(backup_settings):

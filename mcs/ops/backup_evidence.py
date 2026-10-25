@@ -513,7 +513,7 @@ def inventory_snapshot(path: Path, *, max_steps: int | None = None,
 
 
 
-def latest_snapshot(directory: str, policy: BackupPolicy) -> str:
+def latest_snapshot(directory: str) -> str:
     root = Path(directory)
     require_private_directory(root)
     for path in sorted(root.iterdir(), reverse=True):
@@ -746,5 +746,3 @@ def plan(policy_path: str | Path, *, snapshot: str | None = None,
     return report
 
 
-
-preflight = plan

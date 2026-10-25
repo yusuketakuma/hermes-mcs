@@ -2,7 +2,6 @@
 from dataclasses import asdict
 import hashlib
 import json
-import os
 from pathlib import Path
 import sqlite3
 from collections import namedtuple
@@ -12,17 +11,7 @@ import pytest
 import mcs_backup as backup
 import backup_evidence
 from test_mcs_backup import NOW, world as world
-
-
-def _tree(root):
-    """Witness contents, names, modes and nanosecond mtimes, not access times."""
-    result = {}
-    for path in [root, *sorted(root.rglob("*"))]:
-        st = path.lstat()
-        content = (os.readlink(path) if path.is_symlink() else
-                   hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None)
-        result[str(path.relative_to(root))] = (st.st_mode, st.st_mtime_ns, st.st_size, content)
-    return result
+from ops_testkit import _tree
 
 
 @pytest.fixture
@@ -117,7 +106,6 @@ def test_cli_drives_real_readonly_plan(inspection, tmp_path, capsys, action):
     assert report["actions_applied"] is False
     assert str(tmp_path) not in json.dumps(report)
     assert _tree(tmp_path) == before
-    assert backup_evidence.preflight is backup_evidence.plan
 
 
 @pytest.mark.parametrize("case", [
