@@ -31,9 +31,9 @@ def test_pending_job_index_on_reopen_and_state_changes(tmp_path):
         assert [row['project_id'] for row in rows] == [2000]
         assert len(steps) < 10
         ledger.job_done(rows[0]['job_id'])
-        assert ledger.job_due(kind='reply') == []
+        assert _pending_due(ledger, kind='reply') == []
         ledger.job_add('reply', 2000)
-        assert [row['project_id'] for row in ledger.job_due(kind='reply')] == [2000]
+        assert [row['project_id'] for row in _pending_due(ledger, kind='reply')] == [2000]
     finally:
         db.set_progress_handler(None, 0)
         ledger.close()
@@ -114,3 +114,10 @@ def test_artifact_iterator_preserves_list_api_scope_and_order(tmp_path):
         assert list(ledger.iter_artifacts('absent')) == []
     finally:
         ledger.close()
+
+
+def _pending_due(ledger, *, kind, limit=20):
+    # independent oracle for the removed Ledger.job_due
+    return ledger.db.execute(
+        "SELECT * FROM fetch_jobs WHERE state='pending' AND next_try <= ? AND kind=? "
+        "ORDER BY job_id LIMIT ?", (time.time(), kind, limit)).fetchall()

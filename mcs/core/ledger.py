@@ -334,11 +334,14 @@ class Ledger:
         Non-terminal replies are NOT enqueued here — the walk's merge and
         the reply-job drain own that decision."""
         if m.body_state in TERMINAL_BODY_STATES:
-            self.db.execute(
-                "UPDATE fetch_jobs SET state='done',reason_code=NULL,updated_at=? "
-                "WHERE kind='reply' AND project_id=? AND message_id=? "
-                "AND state != 'done'",
-                (now, m.project_id, m.message_id))
+            self._retire_reply_job_id(m.project_id, m.message_id, now)
+
+    def _retire_reply_job_id(self, project_id, message_id, now: float):
+        """Close any open reply job for one message (no commit; the caller's save owns it)."""
+        self.db.execute(
+            "UPDATE fetch_jobs SET state='done',reason_code=NULL,updated_at=? "
+            "WHERE kind='reply' AND project_id=? AND message_id=? AND state != 'done'",
+            (now, project_id, message_id))
 
     def _outbox_insert(self, kind, project_id, payload, next_try=None,
                        route=None):
@@ -804,11 +807,7 @@ class Ledger:
                     "SELECT body_state s FROM messages WHERE message_id=?",
                     (m.message_id,)).fetchone()
                 if st and st["s"] in TERMINAL_BODY_STATES:
-                    self.db.execute(
-                        "UPDATE fetch_jobs SET state='done',reason_code=NULL,updated_at=? "
-                        "WHERE kind='reply' AND project_id=? "
-                        "AND message_id=? AND state != 'done'",
-                        (now, project_id, m.message_id))
+                    self._retire_reply_job_id(project_id, m.message_id, now)
                 else:
                     # never revive a failed sibling: two replies the
                     # thread API keeps returning as snippets would
@@ -1114,18 +1113,26 @@ class Ledger:
                          row["artifact_id"]))
                     self._karte_summary_stored(project_id)
                     return False
-        self.artifact_add("karte_summary", text, project_id=project_id,
-                          meta={"karte_id": karte_id, "fetched_at": now,
-                                "sha256": sha})
-        self._karte_summary_stored(project_id)
+        meta = {"karte_id": karte_id, "fetched_at": now, "sha256": sha}
+        if self.db.in_transaction:
+            # a caller's own open writes keep the old commit points; never roll them back here
+            self.artifact_add("karte_summary", text, project_id=project_id, meta=meta)
+            self._karte_summary_stored(project_id)
+            return True
+        with self.db:   # the new row and the cleared due flag commit together, or neither does
+            self.artifact_add_tx("karte_summary", text, project_id=project_id, meta=meta)
+            self._clear_karte_summary_due(project_id)
         return True
 
     def _karte_summary_stored(self, project_id: int):
+        self._clear_karte_summary_due(project_id)
+        self.db.commit()
+
+    def _clear_karte_summary_due(self, project_id: int):
         self.db.execute(
             "UPDATE patients SET karte_summary_due=0,"
             "karte_summary_failed_at=NULL WHERE project_id=?",
             (project_id,))
-        self.db.commit()
 
     def karte_summary_failed(self, project_id: int):
         """Record a failed 連携サマリー GET; the project sits out selection for KARTE_SUMMARY_BACKOFF_S."""
@@ -1281,20 +1288,6 @@ class Ledger:
         self.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
                         (json.dumps(pl), row["job_id"]))
         self.db.commit()
-
-    def job_due(self, limit: int = 20, kind: str | None = None,
-                after_job_id: int = 0) -> list:
-        q = """
-          SELECT * FROM fetch_jobs
-          WHERE state='pending' AND next_try <= ? AND job_id > ?
-        """
-        params: list = [time.time(), after_job_id]
-        if kind is not None:
-            q += " AND kind=?"
-            params.append(kind)
-        q += " ORDER BY job_id LIMIT ?"
-        params.append(limit)
-        return self.db.execute(q, params).fetchall()
 
     def job_done(self, job_id: int):
         self.db.execute(

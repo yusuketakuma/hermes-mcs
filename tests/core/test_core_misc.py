@@ -32,7 +32,7 @@ def test_job_due_filters_before_limit(tmp_path):
         db.job_add("history", pid, payload={"since": 0})
     db.job_add("reply", 99, message_id=100, parent_id=90)
 
-    rows = db.job_due(limit=10, kind="reply")
+    rows = _pending_due(db, kind="reply", limit=10)
 
     assert [r["message_id"] for r in rows] == [100]
     db.close()
@@ -1475,3 +1475,44 @@ def test_dotenv_symlink_is_skipped_like_a_missing_file(tmp_path):
     second.write_text("SYNTH_KEY=from-second\n")
     assert mcs_util.env_value("SYNTH_KEY", paths=[str(link), str(second)],
                               check_env=False) == "from-second"
+
+
+def _pending_due(db, *, kind, limit=20):
+    # independent oracle for the removed Ledger.job_due: pending, due now, kind before the limit
+    return db.db.execute(
+        "SELECT * FROM fetch_jobs WHERE state='pending' AND next_try <= ? AND kind=? "
+        "ORDER BY job_id LIMIT ?", (time.time(), kind, limit)).fetchall()
+
+
+def _karte_due_patient(db, pid=1):
+    p = _unread_patient(pid)
+    p.karte_id = pid * 10
+    db.upsert_patient_info(p)
+    db.karte_summary_mark_due(pid)
+
+
+@pytest.mark.parametrize("caller_open", [False, True])
+def test_a_failed_due_clear_never_leaves_half_a_summary(tmp_path, caller_open):
+    db = _ledger(tmp_path)
+    try:
+        _karte_due_patient(db)
+        db.db.execute("CREATE TRIGGER synthetic_fail BEFORE UPDATE OF karte_summary_due ON patients "
+                      "BEGIN SELECT RAISE(ABORT, 'synthetic due failure'); END")
+        db.db.commit()
+        if caller_open:                              # a caller's own uncommitted write
+            db.db.execute("UPDATE patients SET disease='synthetic-pending' WHERE project_id=1")
+        with pytest.raises(sqlite3.DatabaseError, match="synthetic due failure"):
+            db.karte_summary_store(1, 10, {"comment": "合成"})
+        db.db.execute("DROP TRIGGER synthetic_fail")
+        db.db.execute("UPDATE patients SET last_seen=last_seen WHERE project_id=1")   # unrelated
+        db.db.commit()
+        stored = db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='karte_summary'").fetchone()[0]
+        disease = db.db.execute("SELECT disease FROM patients WHERE project_id=1").fetchone()[0]
+        if caller_open:
+            # the caller's transaction is not rolled back here; its old commit points stay
+            assert disease == "synthetic-pending"
+        else:
+            assert stored == 0                       # insert and due clear commit together or not at all
+            assert db.karte_summary_due() == [1]
+    finally:
+        db.close()
