@@ -225,6 +225,9 @@ PRODUCER_CODES = [
     ("mark 7: reaction_request_failed", "auxiliary"), ("project 7: capacity_limit", "incomplete"),
     ("project 7: scope_changed", "incomplete"), ("mark 7: disk_full", "storage"),
     ({"message_id": 7, "kind": "deadline_exceeded"}, "deadline"),
+    # run_check producer prefixes without an id (CodeRabbit round 2)
+    ("self_profile: OSError", "auxiliary"), ("cmd_int: OSError", "command"),
+    ("stamps: RuntimeError", "command"), ("cmd_int_tail: RuntimeError", "command"),
 ]
 
 
