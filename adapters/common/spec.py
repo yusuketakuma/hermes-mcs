@@ -63,6 +63,12 @@ def reply_card_key(key) -> bool:
     return isinstance(key, str) and REPLY_CARD_KEY.search(key) is not None
 
 
+def post_scoped(spec) -> bool:
+    """A part bound to one source post or a reply card: its prior reply is owned exactly."""
+    return (spec["parts"].get("post_source_id") is not None
+            or reply_card_key(spec.get("card_key")))
+
+
 SPEC_KEYS = frozenset({
     "schema", "delivery_id", "logical_intent_id", "card_key", "kind", "op",
     "render_rev", "source_generation", "presentation_generation",

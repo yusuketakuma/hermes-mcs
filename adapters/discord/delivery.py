@@ -17,7 +17,7 @@ import io
 from functools import partial
 
 from adapters.common import paths, registry, worker
-from adapters.common.spec import reply_card_key
+from adapters.common.spec import post_scoped
 from . import cards
 
 # discord.py releases whose HTTPClient.request retry loop and private
@@ -264,8 +264,7 @@ class DeliveryWorker(worker.DeliveryWorker):
                 return {"result": "not_sent",
                         "error_code": "attachment_unavailable"}
             if part.get("prior_remote_id"):
-                if (spec["parts"].get("post_source_id") is not None
-                        or reply_card_key(spec.get("card_key"))):
+                if post_scoped(spec):
                     return await self._text_part(
                         spec, thread, part, cards.escape_md(part["caption"]), ctx)
                 # already posted — never a second caption post
@@ -291,9 +290,7 @@ class DeliveryWorker(worker.DeliveryWorker):
                 thread, part.get("prior_remote_id"), ctx)
             if mid is not None:
                 return {"result": "delivered", "remote_id": str(mid)}
-            if part.get("prior_remote_id") and (
-                    spec["parts"].get("post_source_id") is not None
-                    or reply_card_key(spec.get("card_key"))):
+            if part.get("prior_remote_id") and post_scoped(spec):
                 return {"result": "unknown", "error_code": "file_target_unverified"}
             blob = await asyncio.to_thread(
                 paths.read_verified_attachment, part.get("path"), part,
@@ -321,15 +318,14 @@ class DeliveryWorker(worker.DeliveryWorker):
         bot's history and rewritten in place when its text changed."""
         if part.get("edit_only") is True:
             return await self._edit_only_prior(spec, thread, part, body, ctx, view=view)
-        post_scoped = (spec["parts"].get("post_source_id") is not None
-                       or reply_card_key(spec.get("card_key")))
-        if post_scoped and part.get("prior_remote_id"):
+        scoped = post_scoped(spec)
+        if scoped and part.get("prior_remote_id"):
             mid = await self._remote_match(thread, body, ctx, view=view,
                                            update_view=update_view, prior=part["prior_remote_id"])
             if mid is not None:
                 return {"result": "delivered", "remote_id": str(mid)}
             return await self._edit_only_prior(spec, thread, part, body, ctx, view=view)
-        if not post_scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id")):
+        if not scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id")):
             # writing into a pre-existing thread — a chunk whose
             # text is already remote binds to that message id
             # instead of posting a duplicate (remote-verified)
@@ -437,8 +433,7 @@ class DeliveryWorker(worker.DeliveryWorker):
 
     async def _edit_only_prior(self, spec, thread, part, text, ctx, *, view=None, attachment=False):
         """Edit only the exact owned thread post; uncertain ownership or edits never POST."""
-        missing_is_settled = (spec["parts"].get("post_source_id") is None
-                              and not reply_card_key(spec.get("card_key")))
+        missing_is_settled = not post_scoped(spec)
         prior = part.get("prior_remote_id")
         delivery = spec["delivery"]
         parent, guild = _thread_parent_guild(thread)

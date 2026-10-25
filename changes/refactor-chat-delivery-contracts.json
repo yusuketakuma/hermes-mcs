@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "Slack・Discord の配信で投稿単位の判定とヘッダー判定を共通化",
+  "summary": "Slack・Discord へのカード配信、返信の編集、添付の扱い、独立実行の Slack 送信は、結果とエラーの種類が変わりません。投稿や返信カードに紐づく配信かどうかの判定と、投稿の要約ヘッダーかどうかの判定を共通の関数にまとめ、Slack の独立実行で使う時刻の形式を既存の定義から読むようにしました。",
+  "upgrade": "通常のコード更新で適用されます。設定・認証情報・保存済みの配信記録は変わらず、サービスの再起動も不要です。変更したコードは意味チェック候補のfingerprintの対象外です。",
+  "details": [
+    "投稿に紐づく配信で、以前の返信が見つからない・確認できない場合は、従来どおり完了とは扱わずに確認待ちのまま残します。",
+    "Slack の独立実行の添付は、従来どおり data/attachments の中の、名前・大きさ・hash が一致するファイルだけを送り、外のファイルは添付不正、内容の不一致は添付不一致として拒否します。data ディレクトリ自体が別の場所への symlink の場合は、MCS 本体の独立実行と同じく symlink の先の data/attachments を基準にします。",
+    "Slack の独立実行での設定変更の監視は、この変更に含めていません。"
+  ],
+  "refs": ["adapters/common/spec.py", "adapters/slack/delivery.py", "adapters/discord/delivery.py", "adapters/slack/presentation.py", "adapters/slack/standalone.py"]
+}

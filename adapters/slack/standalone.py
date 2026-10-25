@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from adapters.common import eventlog
 from adapters.common.paths import read_verified_attachment
 from adapters.common.worker import await_settled
-from .delivery import _failed, _payload, _upload_file_id
+from .delivery import _TS, _failed, _payload, _upload_file_id
 from .tasks import Supervisor
 
 _API_METHODS = frozenset({
@@ -354,7 +354,8 @@ def _files(root, payload):
     files = payload.get("files", [])
     if not isinstance(files, list) or len(files) > 10:
         raise ValueError("slack_payload_invalid")
-    allowed = Path(root).expanduser().resolve() / "data" / "attachments"
+    # the resolved data root, as read_verified_attachment(root=data_root) confines it
+    allowed = (Path(root).expanduser().resolve() / "data").resolve() / "attachments"
     blobs = []
     for part in files:
         if not isinstance(part, dict):
@@ -413,7 +414,6 @@ async def send(root, target, payload):
                     and str(exc) == "slack_configuration_changed_restart_required":
                 return {"result": "not_sent", "error_code": str(exc)}
             return _failed(exc, "create", None)
-        from .delivery import _TS
         message_id = response.get("ts")
         if response.get("ok") is not True \
                 or response.get("channel") != settings["channel_id"] \

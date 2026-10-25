@@ -1718,3 +1718,23 @@ def test_closing_the_host_before_the_task_runs_releases_the_supervisor(tmp_path,
     refs = asyncio.run(run())
     gc.collect()
     assert [r() for r in refs] == [None, None]
+
+
+def test_post_scoped_and_header_part_match_the_former_inline_checks():
+    from adapters.common.spec import post_scoped, reply_card_key
+    from adapters.slack.presentation import has_header_part, is_header_part
+    for source, key in itertools.product((None, 0, "", "m:1", 5),
+                                          (None, "", "thread|1", "thread|1|reply:7", 7)):
+        spec = {"parts": {"post_source_id": source}, "card_key": key}
+        former = (spec["parts"].get("post_source_id") is not None
+                  or reply_card_key(spec.get("card_key")))
+        assert post_scoped(spec) is former
+        assert (not post_scoped(spec)) is (spec["parts"].get("post_source_id") is None
+                                            and not reply_card_key(spec.get("card_key")))
+    for manifest in (None, [], [{"name": "m:7:header#1"}], [{"name": None}, {}], [{"name": "m:70:header#1"}]):
+        spec = {"parts": {"manifest": manifest}}
+        names = {str(p.get("name") or "") for p in manifest or []}
+        assert has_header_part(spec, "m:7") is ("m:7:header#1" in names)
+    for name, header in (("m:7:header#1", True), ("m:7#1", False), ("m:0:header#1", False),
+                         ("m:7:header#2", False), (" m:7:header#1", False), ("m:7:header#1\n", False)):
+        assert is_header_part(name) is header

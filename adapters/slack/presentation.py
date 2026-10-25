@@ -55,7 +55,7 @@ def thread_part_blocks(spec, part, text):
     behind a collapsed 「原文（N字）」 container. ``text`` is the
     unescaped chunk — plain_text blocks never parse it."""
     name = str((part or {}).get("name") or "")
-    if _HEADER_PART.fullmatch(name):
+    if is_header_part(name):
         lines = text.split("\n")
         rest = [ln for ln in lines[1:] if ln]
         summary = "\n".join(ln for ln in rest if not ln.startswith(_STAMP_LINE))
@@ -65,13 +65,23 @@ def thread_part_blocks(spec, part, text):
                 blocks.extend(contexts(ln))
         return blocks
     found = _BODY_PART.fullmatch(name)
-    if not found or f"{found.group(1)}:header#1" not in {
-            str(p.get("name") or "") for p in spec["parts"].get("manifest") or []}:
+    if not found or not has_header_part(spec, found.group(1)):
         return None
     sections = text_sections(text)
     if len(sections) > _CONTAINER_MAX:
         return None                      # longer than one container holds
     return [_folded_original(text)]
+
+def is_header_part(name) -> bool:
+    """The summary/stamps header chunk of one post (``m:<id>:header#1``)."""
+    return _HEADER_PART.fullmatch(name) is not None
+
+
+def has_header_part(spec, post) -> bool:
+    """Whether the manifest splits post ``m:<id>`` into a header and its body chunks."""
+    return f"{post}:header#1" in {
+        str(p.get("name") or "") for p in spec["parts"].get("manifest") or []}
+
 
 def _folded_original(text):
     """The post's original as one collapsed 「原文（N字）」 container."""

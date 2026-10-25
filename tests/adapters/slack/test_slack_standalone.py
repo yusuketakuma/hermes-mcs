@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import sys
 import threading
 from types import ModuleType, SimpleNamespace
@@ -399,3 +400,23 @@ def test_config_change_before_post_is_not_sent(monkeypatch, tmp_path):
     assert posted == []
     assert result == {"result": "not_sent",
                       "error_code": "slack_configuration_changed_restart_required"}
+
+
+def test_attachments_follow_the_resolved_data_root_with_unchanged_codes(tmp_path):
+    real = tmp_path / "real-data"
+    (real / "attachments").mkdir(parents=True)
+    os.symlink(real, tmp_path / "data")
+    blob = b"fictional attachment"
+    for path in (real / "attachments" / "a", real / "sibling", tmp_path / "other"):
+        path.write_bytes(blob)
+
+    def pin(path, **over):
+        return {"path": str(path), "name": "a.txt", "bytes": len(blob),
+                "sha256": hashlib.sha256(blob).hexdigest(), **over}
+    for inside in (tmp_path / "data" / "attachments" / "a", real / "attachments" / "a"):
+        assert st._files(tmp_path, {"text": "x", "files": [pin(inside)]}) == [("a.txt", blob)]
+    for outside in (real / "sibling", tmp_path / "other", tmp_path / "data" / "sibling"):
+        with pytest.raises(ValueError, match="^slack_attachment_invalid$"):   # never "mismatch"
+            st._files(tmp_path, {"text": "x", "files": [pin(outside)]})
+    with pytest.raises(ValueError, match="^slack_attachment_mismatch$"):
+        st._files(tmp_path, {"text": "x", "files": [pin(real / "attachments" / "a", bytes=1)]})

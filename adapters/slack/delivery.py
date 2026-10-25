@@ -13,11 +13,11 @@ from collections.abc import Mapping
 
 from adapters.common.paths import read_verified_attachment
 from adapters.common import envelopes, eventlog
-from adapters.common.spec import reply_card_key, token_map
+from adapters.common.spec import post_scoped, reply_card_key, token_map
 from adapters.common.worker import WorkspaceDeliveryWorker as _BaseWorker
 
 from .cards import render, validate
-from .presentation import mention_ids, thread_part_blocks
+from .presentation import has_header_part, is_header_part, mention_ids, thread_part_blocks
 from .paths import notify_dirs
 
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
@@ -136,7 +136,6 @@ async def call_native(fn, *, retry_allowed=None, **kwargs):
 # its summary/stamps header when the post is header/body-split, else
 # its first source-text chunk
 _NEW_POST = re.compile(r"(m:[1-9][0-9]{0,18})#1")
-_HEADER_POST = re.compile(r"m:[1-9][0-9]{0,18}:header#1")
 
 
 def _announces(spec, part) -> bool:
@@ -144,11 +143,10 @@ def _announces(spec, part) -> bool:
     if part.get("broadcast") is False:
         return False
     name = str(part.get("name") or "")
-    if _HEADER_POST.fullmatch(name):
+    if is_header_part(name):
         return True
     found = _NEW_POST.fullmatch(name)
-    return bool(found) and f"{found.group(1)}:header#1" not in {
-        str(p.get("name") or "") for p in spec["parts"].get("manifest") or []}
+    return bool(found) and not has_header_part(spec, found.group(1))
 # chat.update rejections that prove the prior reply cannot be edited
 _REPOST_ON_UPDATE = frozenset({"message_not_found", "cant_update_message",
                                "edit_window_closed"})
@@ -507,14 +505,13 @@ class DeliveryWorker(_BaseWorker):
         text = escape(text, quote=False)
         if part and part.get("edit_only") is True:
             return await self._edit_only_prior(spec, part, text, ctx, blocks=blocks)
-        post_scoped = (spec["parts"].get("post_source_id") is not None
-                       or reply_card_key(spec.get("card_key")))
-        if post_scoped and part and part.get("prior_remote_id"):
+        scoped = post_scoped(spec)
+        if scoped and part and part.get("prior_remote_id"):
             mid = await self._remote_match(thread_ts, text, ctx, prior=part["prior_remote_id"])
             if mid is not None:
                 return {"result": "delivered", "remote_id": mid}
             return await self._edit_only_prior(spec, part, text, ctx, blocks=blocks)
-        if not post_scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id")):
+        if not scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id")):
             # writing into an existing thread — an identical reply
             # authored by this bot binds the part to its real ts
             # instead of posting a duplicate (remote-verified)
@@ -583,8 +580,7 @@ class DeliveryWorker(_BaseWorker):
 
     async def _edit_only_prior(self, spec, part, text, ctx, *, attachment=False, blocks=None):
         """Edit one exact owned reply; no text dedupe, upload or fresh-post fallback."""
-        missing_is_settled = (spec["parts"].get("post_source_id") is None
-                              and not reply_card_key(spec.get("card_key")))
+        missing_is_settled = not post_scoped(spec)
         thread_ts, prior = ctx.get("thread_id"), part.get("prior_remote_id")
         if (spec.get("op") != "update" or not isinstance(thread_ts, str) or thread_ts != spec["delivery"].get("thread_id")
                 or spec["delivery"].get("channel_id") != self._settings["channel_id"]
@@ -743,8 +739,7 @@ class DeliveryWorker(_BaseWorker):
         if part.get("edit_only") is True:
             return await self._edit_only_prior(spec, part, escape(part["caption"], quote=False), ctx,
                                                attachment=not part.get("unavailable"))
-        post_scoped = (spec["parts"].get("post_source_id") is not None
-                       or reply_card_key(spec.get("card_key")))
+        scoped = post_scoped(spec)
         if part.get("unavailable"):
             # no file to send — its caption ("📎 name — 取得失敗") is the
             # visible line, posted and deduped like a body chunk
@@ -752,7 +747,7 @@ class DeliveryWorker(_BaseWorker):
                 return {"result": "not_sent",
                         "error_code": "attachment_unavailable"}
             if part.get("prior_remote_id"):
-                if post_scoped:
+                if scoped:
                     return await self._body_part(spec, part["caption"], ctx, part)
                 # already posted — never a second caption post
                 return {"result": "delivered",
@@ -770,12 +765,12 @@ class DeliveryWorker(_BaseWorker):
         if upload is None:
             return {"result": "not_sent",
                     "error_code": "sdk_capability_missing"}
-        if (not post_scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id"))) \
-                or (post_scoped and part.get("prior_remote_id")):
+        if (not scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id"))) \
+                or (scoped and part.get("prior_remote_id")):
             # an identical file already remote in this thread binds the
             # part to its real file id (remote-verified) — post-seal
             # corruption locally cannot fake a match either way
-            rid = await self._file_remote_match(thread_ts, part, ctx, prior_only=post_scoped)
+            rid = await self._file_remote_match(thread_ts, part, ctx, prior_only=scoped)
             if rid is not None:
                 return {"result": "delivered", "remote_id": rid,
                         "attachment_origin": "remote_match"}
