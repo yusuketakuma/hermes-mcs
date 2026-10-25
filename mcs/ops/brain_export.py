@@ -435,9 +435,7 @@ def main(argv=None) -> int:
         print(json.dumps(result, ensure_ascii=False, allow_nan=False))
         return 0
     except (ValueError, OSError, sqlite3.Error, RecursionError) as e:
-        code = str(e) if type(e) is ValueError and \
-            str(e).replace("_", "").isalnum() else type(e).__name__
-        print(json.dumps({"ok": False, "error": code}))
+        print(json.dumps({"ok": False, "error": mcs_util.safe_error_code(e)}))
         return 1
 
 

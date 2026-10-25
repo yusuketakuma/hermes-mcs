@@ -21,8 +21,7 @@ from mcs_util import valid_text
 from mcs_requests import canonical, payload_hash
 from update_policy import RELEASE_TAG_RE
 from operation_contract import bounded_integer, retry_error
-# paused() is a core read (mcs_queries); re-exported for callers
-from mcs_queries import SEMANTIC_CONTROL_KIND as _CONTROL_ARTIFACT, paused
+from mcs_queries import SEMANTIC_CONTROL_KIND as _CONTROL_ARTIFACT
 from safe_io import fsync_dir, fdopen_owned
 
 
@@ -684,4 +683,4 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     return "unknown_ops_cmd", {}
 
 
-__all__ = ["apply_tx", "paused", "prepare_update_pins"]
+__all__ = ["apply_tx", "prepare_update_pins"]

@@ -24,7 +24,7 @@ from ledger import JOB_REASON_CODES, LedgerReader
 from ledger_audit import AuditReport, audit_db
 from mcs_queries import REPLY_GAP
 from mcs_requests import canonical, valid_uuid
-from mcs_util import valid_hash
+from mcs_util import payload_hash as canonical_digest, reject_constant, unique_pairs, valid_hash
 from mcs_util import has_sqlite_sidecars
 from safe_io import fsync_dir, read_regular_nofollow, fdopen_owned
 
@@ -97,10 +97,6 @@ def hash_file(path: str | Path, *, deadline: float | None = None,
                 raise ValueError("time_budget_exceeded")
             digest.update(chunk)
         return digest.hexdigest()
-
-
-def canonical_digest(value) -> str:
-    return hashlib.sha256(canonical(value)).hexdigest()
 
 
 def snapshot_binding(db) -> SnapshotBinding | None:
@@ -383,25 +379,12 @@ def save_new(path: str | Path, value) -> None:
             raise
 
 
-def _pairs(items):
-    result = {}
-    for key, value in items:
-        if key in result:
-            raise ValueError("duplicate_key")
-        result[key] = value
-    return result
-
-
-def _invalid_number(_):
-    raise ValueError("invalid_number")
-
-
 def _parse_json(raw):
     """Parse strict JSON bounded by MAX_BYTES, not the 16 KiB command-queue cap."""
     if len(raw) > MAX_BYTES:
         raise ValueError("input_too_large")
     try:
-        return json.loads(raw, object_pairs_hook=_pairs, parse_constant=_invalid_number)
+        return json.loads(raw, object_pairs_hook=unique_pairs, parse_constant=reject_constant)
     except RecursionError:
         raise ValueError("input_too_deep") from None
 

@@ -43,7 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
-from mcs_util import HOME, file_sha256
+from mcs_util import HOME, file_sha256, safe_error_code
 from safe_io import atomic_write
 from operation_contract import (REFSTAT_APPROVAL_KIND, reference_path,
                                 refstats_dir, valid_reference_name)
@@ -362,9 +362,7 @@ def main(argv=None) -> int:
         return args.fn(args)
     except (ValueError, OSError, sqlite3.Error, RecursionError,
             TypeError, AttributeError) as e:
-        code = str(e) if type(e) is ValueError and \
-            str(e).replace("_", "").isalnum() else type(e).__name__
-        print(json.dumps({"ok": False, "error": code}))
+        print(json.dumps({"ok": False, "error": safe_error_code(e)}))
         return 1
 
 

@@ -10,7 +10,7 @@ import pytest
 
 from ledger import Ledger
 import job_ops
-import mcs_operations
+import mcs_queries
 import mcs_requests
 
 
@@ -156,7 +156,7 @@ def test_pause_resume_records_control_and_invalidates_pending_tokens(tmp_path):
         "ORDER BY artifact_id DESC LIMIT 1").fetchone()
     assert paused_receipt["outcome"] == "applied"
     assert paused_receipt["skipped_jobs"] == 1
-    assert mcs_operations.paused(db, 1)
+    assert mcs_queries.paused(db, 1)
     assert control["content"] == "paused"
     assert json.loads(control["meta"])["actor"] == "synthetic-cco"
     assert paused_payload["control_generation"] == \
@@ -170,7 +170,7 @@ def test_pause_resume_records_control_and_invalidates_pending_tokens(tmp_path):
     resumed_payload = json.loads(resumed_row["payload"])
     assert resumed_receipt["outcome"] == "applied"
     assert resumed_receipt["skipped_jobs"] == 1
-    assert not mcs_operations.paused(db, 1)
+    assert not mcs_queries.paused(db, 1)
     assert resumed_payload["control_generation"] == \
         resumed_receipt["control_artifact_id"]
     assert resumed_payload["control_generation"] != \
