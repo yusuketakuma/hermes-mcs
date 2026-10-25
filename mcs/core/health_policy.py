@@ -13,9 +13,9 @@ RUN_GRACE_S = 480           # run_check's whole-run deadline
 COVERAGE_STALL_S = 24 * 3600
 
 
-def _tick_settings(cfg: dict) -> tuple[dict, float, float]:
-    """(health block, tick_interval_s, max_missed_runs) with defaults
-    applied to missing or invalid values."""
+def _tick_settings(cfg: dict) -> tuple[float, float]:
+    """(tick_interval_s, max_missed_runs) with defaults applied to
+    missing or invalid values."""
     h = cfg.get("health") if isinstance(cfg, dict) else None
     h = h if isinstance(h, dict) else {}
     tick = h.get("tick_interval_s", DEFAULT_TICK_S)
@@ -24,14 +24,14 @@ def _tick_settings(cfg: dict) -> tuple[dict, float, float]:
         tick = DEFAULT_TICK_S
     if not (_finite_number(missed) and missed >= 0):
         missed = DEFAULT_MAX_MISSED
-    return h, tick, missed
+    return tick, missed
 
 
 def freshness_deadline(cfg: dict) -> int:
     """tick_interval_s * (max_missed_runs + 1) from config — a reader
     must not assume 'healthy' while the producer could legitimately be
     inside its allowed missed-run window."""
-    h, tick, missed = _tick_settings(cfg)
+    tick, missed = _tick_settings(cfg)
     deadline = tick * (int(missed) + 1)
     return max(1, int(deadline)) if _finite_number(deadline) \
         else DEFAULT_TICK_S * (DEFAULT_MAX_MISSED + 1)

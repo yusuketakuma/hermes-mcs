@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "通知の対象患者範囲の設定チェックを1か所にまとめる（判定は変更なし）",
+  "summary": "LINE WORKS と、独立実行の Slack・Discord の設定チェックで別々に書かれていた「対象患者の範囲（project_ids・project_ids_auto）」の検査を1か所にまとめました。受け付ける設定、エラーの文言と順序、既定値は変わりません。健康状態の鮮度の判定でも、使われていない値の受け渡しを除きました（判定は同じです）。",
+  "upgrade": "利用者の操作は不要です。既存の更新手順（mcs_update.py）で反映されます。設定チェックと健康状態の確認は都度起動する処理から読まれるため、次回の実行から新しいコードが使われます。常駐中の Hermes gateway・LINE WORKS アダプター・独立実行の host は再起動まで古いコードを使いますが、判定は同じです。このコードは意味チェック候補のfingerprintと抽出コードのdigestの対象外です。設定・保存済みの記録の書換えはありません。",
+  "details": [],
+  "refs": [
+    "mcs/core/mcs_config.py",
+    "mcs/core/health_policy.py"
+  ]
+}

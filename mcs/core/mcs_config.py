@@ -198,6 +198,21 @@ def _validate_llm(ll: dict) -> list[str]:
 PROJECT_SCOPE_MAX = 1000
 
 
+def _project_scope_errors(transport: str, scope: dict) -> list[str]:
+    """project_ids_auto must be a bool; project_ids a list of positive
+    int64 ids, empty only when project_ids_auto is true."""
+    errors = []
+    automatic = scope.get("project_ids_auto", False)
+    if type(automatic) is not bool:
+        errors.append(f"notify.{transport}.project_ids_auto: true（有効）かfalse（無効）を指定してください")
+    projects = scope.get("project_ids", [])
+    if not (isinstance(projects, list)
+            and all(type(v) is int and 0 < v < 2**63 for v in projects)
+            and (projects or automatic is True)):
+        errors.append(f"notify.{transport}.project_ids: 0より大きい整数のリスト、またはproject_ids_auto=trueを指定してください")
+    return errors
+
+
 def validate_notify(ntf: dict) -> list[str]:
     """Subkey checks for the notify block — mirrors notify_cards'
     contracts: interactive is a closed enum, discord delivery scope is
@@ -263,14 +278,7 @@ def validate_notify(ntf: dict) -> list[str]:
                         and isinstance(v, str) and 0 < len(v.strip()) <= 40
                         for k, v in names.items())):
                     errors.append("notify.lineworks.user_names: {userId: 表示名(40字以内)}の形式で指定してください")
-                automatic = d.get("project_ids_auto", False)
-                if type(automatic) is not bool:
-                    errors.append("notify.lineworks.project_ids_auto: true（有効）かfalse（無効）を指定してください")
-                projects = d.get("project_ids", [])
-                if not (isinstance(projects, list)
-                        and all(type(v) is int and 0 < v < 2**63 for v in projects)
-                        and (projects or automatic is True)):
-                    errors.append("notify.lineworks.project_ids: 0より大きい整数のリスト、またはproject_ids_auto=trueを指定してください")
+                errors.extend(_project_scope_errors("lineworks", d))
     return errors
 
 
@@ -464,14 +472,7 @@ def validate_standalone_scope(cfg: dict) -> list[str]:
         if not (isinstance(users, list) and users and all(
                 isinstance(uid, str) and uid.strip() for uid in users)):
             errors.append(f"notify.{transport}.allowed_user_ids: IDを1件以上のリストで指定してください")
-        automatic = scope.get("project_ids_auto", False)
-        if type(automatic) is not bool:
-            errors.append(f"notify.{transport}.project_ids_auto: true（有効）かfalse（無効）を指定してください")
-        projects = scope.get("project_ids", [])
-        if not (isinstance(projects, list) and all(
-                type(pid) is int and 0 < pid < 2**63 for pid in projects)
-                and (projects or automatic is True)):
-            errors.append(f"notify.{transport}.project_ids: 0より大きい整数のリスト、またはproject_ids_auto=trueを指定してください")
+        errors.extend(_project_scope_errors(transport, scope))
         if transport == "discord" and "allowed_chat_ids" in scope:
             chats = scope["allowed_chat_ids"]
             try:
