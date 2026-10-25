@@ -8,6 +8,7 @@ used by the synthetic CLI tests available.
 from __future__ import annotations
 
 import atexit
+import ipaddress
 import os
 import shlex
 import shutil
@@ -174,6 +175,24 @@ _install(urllib.request.OpenerDirector, "open", _blocked)
 _install(socket, "create_connection", _blocked)
 _install(socket.socket, "connect", _blocked)
 _install(socket.socket, "connect_ex", _blocked)
+_install(socket.socket, "sendto", _blocked)
+_ORIGINAL_GETADDRINFO = socket.getaddrinfo
+
+
+def _guarded_getaddrinfo(host, *args, **kwargs):
+    """Resolve only what needs no DNS (None, localhost, numeric) so loopback
+    binds keep working while a real hostname never leaves the machine."""
+    name = host.decode() if isinstance(host, bytes) else host
+    if name is None or name == "localhost":
+        return _ORIGINAL_GETADDRINFO(host, *args, **kwargs)
+    try:
+        ipaddress.ip_address(name.split("%", 1)[0])
+    except ValueError:
+        return _blocked()
+    return _ORIGINAL_GETADDRINFO(host, *args, **kwargs)
+
+
+_install(socket, "getaddrinfo", _guarded_getaddrinfo)
 _install(subprocess, "run", _guarded_run)
 _install(subprocess, "Popen", _guarded_popen)
 

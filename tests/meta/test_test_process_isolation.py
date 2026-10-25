@@ -6,9 +6,12 @@ security sits ahead of /usr/bin, so even a regressed guard never reaches the
 real binary."""
 import json
 import os
+import socket
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 CONFTEST = Path(__file__).resolve().parents[1] / "conftest.py"
 
@@ -52,3 +55,18 @@ def test_exported_live_root_and_bare_security_never_reach_a_direct_run(tmp_path)
     assert seen["path_head"] == seen["guard"]
     assert seen["security_rc"] == 97             # the conftest shim; 55 would mean the guard regressed
     assert list(sentinel.iterdir()) == []
+
+
+def test_only_dns_free_names_are_resolved_and_udp_sends_are_blocked(monkeypatch):
+    """No real lookup happens here: the original resolver is a recorder."""
+    guard = sys.modules["mcs_test_guard"]
+    assert socket.getaddrinfo is guard._guarded_getaddrinfo
+    assert socket.socket.sendto is guard._blocked
+    seen = []
+    monkeypatch.setattr(guard, "_ORIGINAL_GETADDRINFO", lambda host, *a, **k: seen.append(host) or [])
+    for allowed in (None, "localhost", b"localhost", "127.0.0.1", "::1", "fe80::1%lo0", "192.0.2.10"):
+        guard._guarded_getaddrinfo(allowed, 443)
+    for name in ("synthetic.example", "slack.com", b"api.synthetic.invalid", "localhost.evil"):
+        with pytest.raises(RuntimeError, match="external network access is disabled"):
+            guard._guarded_getaddrinfo(name, 443)
+    assert seen == [None, "localhost", b"localhost", "127.0.0.1", "::1", "fe80::1%lo0", "192.0.2.10"]
