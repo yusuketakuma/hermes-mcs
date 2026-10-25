@@ -142,8 +142,9 @@ def current_candidate(db, project_id: int, artifact_id: int,
             "candidate": candidate}
 
 
-def _link_items(db, pid, request_id, loop_id):
-    """(loop ref as SQLite reads it, link item) pairs, newest link first."""
+def _link_items(db, pid, request_id, loop_id, loop_ids=None):
+    """(loop ref as SQLite reads it, link item) pairs, newest link first; ``loop_ids``
+    keeps only links whose ref is one of those loops, before any row is decoded."""
     # The request row is the authority; link artifacts contain no task state.
     rows = db.execute("""
       SELECT a.artifact_id,a.created_at,a.content,r.request_id,r.status,r.revision,r.title,
@@ -155,8 +156,11 @@ def _link_items(db, pid, request_id, loop_id):
         AND (? IS NULL OR r.request_id=?)
         AND (? IS NULL OR CASE WHEN json_valid(a.content)
           THEN json_extract(a.content,'$.loop_artifact_id') END=?)
+        AND (? IS NULL OR CASE WHEN json_valid(a.content)
+          THEN json_extract(a.content,'$.loop_artifact_id') END IN (SELECT value FROM json_each(?)))
       ORDER BY a.artifact_id DESC
-    """, (pid, request_id, request_id, loop_id, loop_id))
+    """, (pid, request_id, request_id, loop_id, loop_id, *(
+        (None, None) if loop_ids is None else (json.dumps(sorted(loop_ids)),) * 2)))
     for row in rows:
         item = dict(row)
         ref = item.pop("loop_ref")
@@ -343,7 +347,7 @@ def effective_loop_states(db, candidate_rows, *, policy=None, bundles=None,
         ids = {r["artifact_id"] for r in rows}
         # one link read per project, grouped by the same SQL value loop_links filters on
         links = {}
-        for ref, item in _link_items(db, pid, None, None):
+        for ref, item in _link_items(db, pid, None, None, ids):
             links.setdefault(ref, []).append(item)
         origins = {}
         for row in rows:

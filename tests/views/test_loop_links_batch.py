@@ -47,3 +47,27 @@ def test_two_candidates_in_one_project_never_share_linked_requests(tmp_path):
         assert sum("request_loop_link" in sql for sql in trace) == 1         # one read per project
     finally:
         db.close()
+
+
+def test_links_of_other_loops_are_filtered_before_decoding(tmp_path, monkeypatch):
+    db, _, template, _, _ = _setup(tmp_path)
+    try:
+        rows = list(db.db.execute("SELECT * FROM artifacts WHERE kind='loop_candidate'"))
+        (aid,) = (row["artifact_id"] for row in rows)
+        with db.db:
+            r1 = _request(db, "合成1")
+            _link(db, json.dumps({"request_id": r1, "loop_artifact_id": aid}))
+            for other in range(300):                     # older or unrelated loops of the same patient
+                _link(db, json.dumps({"request_id": r1, "loop_artifact_id": aid + 1000 + other,
+                                      "pad": "x" * 64}))
+        decoded = []
+        real = request_loops.loads_dict
+        monkeypatch.setattr(request_loops, "loads_dict", lambda raw: (
+            decoded.append(raw) if isinstance(raw, str) and "loop_artifact_id" in raw else None)
+            or real(raw))
+        (state,) = request_loops.effective_loop_states(db.db, rows,
+                                                       policy=request_loops.latest_policy(db.db))
+        assert [x["request_id"] for x in state["linked_requests"]] == [r1]
+        assert len(decoded) == 1                                         # not the 300 others
+    finally:
+        db.close()
