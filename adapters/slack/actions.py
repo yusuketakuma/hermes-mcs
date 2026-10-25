@@ -16,7 +16,8 @@ from adapters.common.text import (ERR_JA, RECEIPT_TEXT, SEARCH_EMPTY, STAMP_FORM
                                  ja, preview_text, followup_waiting, split_body,
                                  view_answer, view_scope_ok)
 from .cards import LINK_ACTION, MENU_ACTION, STAMP_MENU_ACTION, STAMP_PAIR_PREFIX
-from .presentation import text_sections, context_list_blocks, render_parts
+from .delivery import _TS
+from .presentation import BLOCK_MAX, text_sections, context_list_blocks, render_parts
 
 _LINK = re.compile("^" + re.escape(LINK_ACTION) + "$")
 _MENU = re.compile("^(?:" + "|".join(map(re.escape, (MENU_ACTION, STAMP_MENU_ACTION))) + ")$")
@@ -24,7 +25,6 @@ _STAMP_PAIR = re.compile("^" + re.escape(STAMP_PAIR_PREFIX) + r"([0-9a-f]{32}):(
 _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$|" + _STAMP_PAIR.pattern)
 _CONFIRM = re.compile(r"^mcs:c:([0-9a-f]{16})(:cancel)?$")
 _TOKEN = re.compile(r"^[0-9a-f]{32}$")
-_TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
 _EXPIRED = "この確認は期限切れです。もう一度操作してください。"
 # block ids of modals opened by a worker that predates pending
 # field_ids — forms.task_attrs / dismiss_attrs still accept these keys
@@ -182,7 +182,7 @@ def _parts_blocks(result) -> list | None:
         blocks = render_parts(parts)
     except (KeyError, TypeError):
         return None
-    return blocks if 0 < len(blocks) <= 50 else None
+    return blocks if 0 < len(blocks) <= BLOCK_MAX else None
 
 
 _EPHEMERAL_MAX = 3000          # characters (Slack counts text in chars)
@@ -216,20 +216,8 @@ class Actions:
                             commands.NATIVE_ADMISSION_CLOSED_TEXT)
 
     async def _publish_taken_confirm(self, confirm_id, payload):
-        started = False
-        def publish():
-            nonlocal started
-            started = True
-            return envelopes.publish_command(self._dirs["cmd_int"], payload)
-        try:
-            await self._offload(publish)
-        except commands.NativeAdmissionClosed:
-            # Only a denied reservation proves no publish was attempted.
-            # An exception after entering the worker retains unknown evidence.
-            if not started:
-                self._reg.end_confirm(confirm_id)
-                self._reg.drop_followup(payload["command_id"])
-            raise
+        await commands.publish_taken_confirm(self._reg, self._offload, self._dirs["cmd_int"],
+                                             confirm_id, payload)
 
     async def _offload(self, handler, *args, **kwargs):
         return await commands.run_native(
@@ -266,29 +254,33 @@ class Actions:
             command(SUMMARY_COMMAND)(self._summary)
             command(MCS_COMMAND)(self._command)
 
+    def _slash_scope_ok(self, body):
+        """A flat slash payload from the configured team, app, user and channel while active."""
+        return (self._active and body.get("team_id") == self._settings["team_id"]
+                and body.get("api_app_id") == self._settings["application_id"]
+                and body.get("user_id") in self._settings["allowed_user_ids"]
+                and body.get("channel_id") == self._settings["channel_id"])
+
+    async def _slash_current(self):
+        """Live authority for a slash answer, re-read at every use."""
+        return (self._native_command_current()
+                and await self._interactive(require_epoch=True))
+
+    def _allowed_pid(self, pid):
+        return projects.project_allowed(self._settings, pid)
+
     async def _command(self, ack, body):
         try:
             await ack()
-            if not (self._active and body.get("team_id") == self._settings["team_id"]
-                    and body.get("api_app_id") == self._settings["application_id"]
-                    and body.get("user_id") in self._settings["allowed_user_ids"]
-                    and body.get("channel_id") == self._settings["channel_id"]):
-                return
-            from adapters.common import text
-
-            async def current():
-                return (self._native_command_current()
-                        and await self._interactive(require_epoch=True))
-
-            if not await current():
+            if not self._slash_scope_ok(body) or not await self._slash_current():
                 return
             answer = await self._offload(
                 commands.answer, self._settings, body.get("text"),
                 user=body["user_id"], channel=body["channel_id"],
                 authorized=self._native_command_current)
-            for chunk in text.split_body(answer, max_chunks=None):
+            for chunk in split_body(answer, max_chunks=None):
                 if not await self._say(body["channel_id"], body["user_id"], chunk,
-                                       authorized=current):
+                                       authorized=self._slash_current):
                     break
         except commands.NativeAdmissionClosed:
             await self._native_refused(body)
@@ -300,19 +292,11 @@ class Actions:
         off-loop, answered ephemerally through the existing client."""
         try:
             await ack()
-            if not (self._active
-                    and body.get("team_id") == self._settings["team_id"]
-                    and body.get("api_app_id") == self._settings["application_id"]
-                    and body.get("user_id") in self._settings["allowed_user_ids"]
-                    and body.get("channel_id") == self._settings["channel_id"]):
+            if not self._slash_scope_ok(body):
                 return
             channel = body["channel_id"]
             user = body["user_id"]
-
-            async def current():
-                return (self._native_command_current()
-                        and await self._interactive(require_epoch=True))
-
+            current = self._slash_current
             if not await current():
                 return
             snapshot = self._settings.get("snapshot")
@@ -656,8 +640,7 @@ class Actions:
             pending["action"], pending["actor"], pending["context"],
             result.get("params") or {}, pending["fields"],
             form=pending.get("form"))
-        if isinstance(payload, str) or not projects.project_allowed(
-                self._settings, payload["project_id"]):
+        if isinstance(payload, str) or not self._allowed_pid(payload["project_id"]):
             await self._say(origin["channel_id"], pending["user"],
                             payload if isinstance(payload, str)
                             else "対象が無効です。")
@@ -727,8 +710,7 @@ class Actions:
             allowed = bool(cancel) or (bool(self._pinned(
                                            pending["token"],
                                            {**origin, "actor": actor}, actor))
-                                       and projects.project_allowed(
-                                           self._settings, payload["project_id"]))
+                                       and self._allowed_pid(payload["project_id"]))
             # decided before the publish await: a racing cancel sees in_flight
             taken = self._reg.take_confirm(confirm_id, bool(cancel),
                                            allowed=allowed)
@@ -799,8 +781,7 @@ class Actions:
                 allowed = (interactive
                            and rec.get("route_epoch")
                            == self._settings.get("route_epoch")
-                           and projects.project_allowed(
-                               self._settings, rec["project_id"]))
+                           and self._allowed_pid(rec["project_id"]))
             else:
                 # followups saved before route_epoch/project_id were
                 # recorded keep the token pin
@@ -830,9 +811,7 @@ class Actions:
                     await self._say(origin["channel_id"], rec["user"],
                                     ja(result))
                 continue
-            def allowed(pid):
-                return projects.project_allowed(self._settings, pid)
-            answer = view_answer(result, allowed, markdown=False, plain=True)
+            answer = view_answer(result, self._allowed_pid, markdown=False, plain=True)
             if answer is not None:
                 pin = self._pinned(rec["token"],
                                    {**origin, "actor": rec["actor"]}, rec["actor"])
@@ -879,9 +858,9 @@ class Actions:
                     await self._offload(self._reg.put_tokens, token_ctx,
                                             durable=bool(thread_ts))
                 cards = ((_parts_blocks(result) or (
-                    context_list_blocks(result.get("list"), allowed)
+                    context_list_blocks(result.get("list"), self._allowed_pid)
                     if result.get("action") == "list" else None))
-                         if view_scope_ok(result, allowed) else None)
+                         if view_scope_ok(result, self._allowed_pid) else None)
                 if cards:
                     # 📊 / patient context: one Block Kit message; the text is the fallback
                     answer = answer[:1]

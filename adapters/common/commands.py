@@ -7,7 +7,7 @@ import threading
 
 from .dispatch import dispatch, parse
 from .mcs_api import deny
-from . import paths
+from . import envelopes, paths
 
 
 NATIVE_ADMISSION_CLOSED_TEXT = (
@@ -151,3 +151,23 @@ def answer(settings, raw, *, user, channel, authorized=None):
         return dispatch(data, scoped, identity, authorized=current)
     except Exception:
         return deny("operation_failed")
+
+
+async def publish_taken_confirm(reg, offload, cmd_dir, confirm_id, payload) -> None:
+    """Publish a taken confirm's command; free the confirm and its followup only
+    when the admission refused before any publish was attempted."""
+    started = False
+
+    def publish():
+        nonlocal started
+        started = True
+        return envelopes.publish_command(cmd_dir, payload)
+    try:
+        await offload(publish)
+    except NativeAdmissionClosed:
+        # Only a denied reservation proves no publish was attempted.
+        # An exception after entering the worker retains unknown evidence.
+        if not started:
+            reg.end_confirm(confirm_id)
+            reg.drop_followup(payload["command_id"])
+        raise

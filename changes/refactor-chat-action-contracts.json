@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "Slack・Discord の操作確定と Slack のコマンド判定の重複を整理",
+  "summary": "Slack・Discord で確認ボタンから操作を確定するとき、送信前に受付を断られた場合だけ確認を解放し、送信を始めた後は解放も再送もしない動作は変わりません。この処理を Slack と Discord で共通にし、Slack のスラッシュコマンドの受付範囲と権限の再確認、案件の可否の判定を1か所にまとめました。Discord の独立実行で使う SDK の版の確認は、配信処理と同じ固定の版一覧を使います。",
+  "upgrade": "既存の更新手順で、稼働中のプロセスへ反映されます（Hermes 経路は gateway の再起動、独立実行は host・worker の再起動で、読み込み済みの処理が置き換わります）。設定・認証情報・保存済みの記録の書換えはありません。",
+  "details": [
+    "スラッシュコマンドの受付範囲（ワークスペース・アプリ・利用者・チャンネル）と、回答のたびの権限の再確認は、従来と同じ時点で毎回行い、結果を使い回しません。",
+    "Discord の独立実行は、従来どおり固定の版（2.7.1）以外の SDK では起動しません。"
+  ],
+  "refs": ["adapters/common/commands.py", "adapters/slack/actions.py", "adapters/discord/actions.py", "adapters/discord/standalone.py"]
+}

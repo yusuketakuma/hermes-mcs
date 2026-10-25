@@ -16,7 +16,6 @@ from . import cards, delivery
 from .actions import _authorizing_channel
 from .tasks import Supervisor
 
-SDK_VERSION = "2.7.1"
 _BOUNDARY = "_mcs_discord_boundary"
 _CURRENT = "_mcs_standalone_current"
 
@@ -27,7 +26,9 @@ def _sdk():
         from discord.ext import commands
     except ImportError:
         raise ValueError("discord_sdk_missing") from None
-    if discord.__version__ != SDK_VERSION:
+    version = discord.__version__
+    # the same pinned set the delivery single-post guard accepts
+    if not isinstance(version, str) or version not in delivery._VERIFIED_SDK:
         raise ValueError("discord_sdk_unverified")
     return discord, commands
 

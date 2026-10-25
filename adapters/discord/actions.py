@@ -132,20 +132,8 @@ def _same_origin(pinned: dict, current: dict,
 
 class Actions:
     async def _publish_taken_confirm(self, confirm_id, payload):
-        started = False
-        def publish():
-            nonlocal started
-            started = True
-            return envelopes.publish_command(self._dirs["cmd_int"], payload)
-        try:
-            await self._offload(publish)
-        except commands.NativeAdmissionClosed:
-            # Only a denied reservation proves no publish was attempted.
-            # An exception after entering the worker retains unknown evidence.
-            if not started:
-                self._reg.end_confirm(confirm_id)
-                self._reg.drop_followup(payload["command_id"])
-            raise
+        await commands.publish_taken_confirm(self._reg, self._offload, self._dirs["cmd_int"],
+                                             confirm_id, payload)
 
     async def _offload(self, handler, *args, **kwargs):
         return await commands.run_native(
