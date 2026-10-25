@@ -1,0 +1,13 @@
+{
+  "category": "changed",
+  "title": "初期設定・更新に任意機能（CSDC）のセットアップ案内の選択を追加し、既定は省略",
+  "summary": "初期設定の最後に表示していたCSDC（状態監視・遠隔支援）の登録案内は、この版では既定で表示しなくなります。初期設定の対話と新しい mcs_setup.py features で「既定に従う／案内を表示する／案内を省略する」を選べ、doctor で現在の選択を確認できます。この選択は案内の表示だけを決め、CSDCの登録・同意・鍵の保管・送信は行いません。",
+  "upgrade": "既存の更新手順で反映されます。設定・認証情報・CSDCの登録状態の書換えはありません。案内を表示したい場合は、更新後に端末で python3 mcs/ops/mcs_setup.py features を実行して「案内を表示する」を選んでください。",
+  "details": [
+    "「既定に従う」（未選択を含む）は、将来の版でCSDCの機能が整い既定が「表示」に変わったとき、その既定に従います。明示した選択は版が変わっても保持します。",
+    "案内を省略しても、既に登録済みのCSDCの登録や送信は止まりません。登録・稼働の状態はCSDCの手順と診断で確認します。",
+    "端末以外での実行（--yes を含む）では質問せず、何も書き込みません。",
+    "設定ファイルの optional_features に bool 以外の値がある場合は設定エラーです。この版にない機能名は警告にとどめ、新しい版から戻した場合も止まりません。"
+  ],
+  "refs": ["mcs/core/mcs_config.py", "mcs/ops/setup_wizard.py", "mcs/ops/mcs_setup.py", "docs/guides/SETUP_AGENT.md", "docs/guides/UPGRADE_AGENT.md", "docs/guides/EASY_SETUP.md"]
+}

@@ -304,6 +304,13 @@ _CHOICE_LABELS = {
     "shadow": "外部サービスへ送信して結果を記録する",
     "enforce": "外部サービスへ送信して判定に使う",
     "annotate": "外部サービスの検査結果を付ける",
+    "follow": "既定に従う（版の既定が変われば追従します）",
+    "show": "案内を表示する",
+    "omit": "案内を省略する（今後の既定変更でも表示しません）",
+}
+# optional feature -> (what the guidance is about, where it is explained)
+OPTIONAL_FEATURES = {
+    "csdc": ("CSDC（状態監視・遠隔支援）のセットアップ案内", "docs/guides/SDC_SELF_MONITORING.md"),
 }
 
 
@@ -416,6 +423,45 @@ def wizard(cfg: dict, *, home):
                      ask(key, kind, default, desc, get_key(cfg, key),
                           has_key(cfg, key)))
     return step + 1
+
+
+def wizard_optional_features(cfg: dict, *, interactive: bool | None = None) -> None:
+    """Choose per optional feature whether its setup guidance follows the release default.
+
+    Only the guidance choice is stored; registration, consent, keys and sending
+    stay with their own steps. Choosing the default removes the explicit key so a
+    later release that changes the default applies. Without a terminal the current
+    choice is only shown and nothing is written."""
+    import sys
+    from mcs_config import OPTIONAL_FEATURE_DEFAULTS
+    if interactive is None:
+        interactive = sys.stdin.isatty()
+    current_all = cfg.get("optional_features")
+    for name, (label, guide) in OPTIONAL_FEATURES.items():
+        current = current_all.get(name) if isinstance(current_all, dict) else None
+        current = current if type(current) is bool else None
+        default = "表示" if OPTIONAL_FEATURE_DEFAULTS[name] else "省略"
+        state = {None: "既定に従う", True: "案内を表示する", False: "案内を省略する"}[current]
+        print(f"\n【任意機能】{label}（説明: {guide}）"
+              f"\n  この版の既定: 案内を{default}。現在の選択: {state}。"
+              "ここで選ぶのは案内の表示だけで、登録・同意・送信は行いません。")
+        if not interactive:
+            print("  変更する場合は端末で python3 mcs/ops/mcs_setup.py features を実行してください。")
+            continue
+        choice = ask(f"optional_features.{name}", "choice:follow,show,omit", "follow",
+                     label, {None: None, True: "show", False: "omit"}[current])
+        values = cfg.get("optional_features")
+        values = dict(values) if isinstance(values, dict) else {}
+        if choice == "show":
+            values[name] = True
+        elif choice == "omit":
+            values[name] = False
+        else:
+            values.pop(name, None)
+        if values:
+            cfg["optional_features"] = values
+        else:
+            cfg.pop("optional_features", None)
 
 
 def offer_sdc_enrollment(cfg: dict) -> None:

@@ -689,6 +689,7 @@ def cmd_init(args) -> int:
     if not args.yes:
         try:
             wizard_step = setup_wizard.wizard(cfg, home=HOME)
+            setup_wizard.wizard_optional_features(cfg)
         except (KeyboardInterrupt, EOFError):
             print("\n設定を中止しました。設定ファイルやパスワードは保存していません。"
                   "同じ操作で最初からやり直せます。")
@@ -801,7 +802,10 @@ def cmd_init(args) -> int:
         print("初期設定と動作条件の確認が完了しました。"
               "実際の通知が届くことを、通知先の画面で確認してください。")
         if not args.yes:
-            setup_wizard.offer_sdc_enrollment(cfg)
+            from mcs_config import feature_enabled
+            # the CSDC guidance is optional; its registration stays a separate consent
+            if feature_enabled(cfg, "csdc"):
+                setup_wizard.offer_sdc_enrollment(cfg)
     return result
 
 
@@ -1188,6 +1192,47 @@ def _doctor_collection(cfg: dict, *, probe: bool) -> dict:
     return result
 
 
+def _doctor_optional_features(cfg) -> dict:
+    """The guidance choice per optional feature; never a registration or operating state."""
+    from mcs_config import OPTIONAL_FEATURE_DEFAULTS, feature_enabled
+    values = cfg.get("optional_features") if isinstance(cfg, dict) else None
+    return {name: {"choice": ("explicit" if isinstance(values, dict)
+                              and type(values.get(name)) is bool else "default"),
+                   "guidance_shown": feature_enabled(cfg, name), "release_default": default}
+            for name, default in OPTIONAL_FEATURE_DEFAULTS.items()}
+
+
+def cmd_features(args) -> int:
+    """Choose whether optional setup guidance follows the release default (CSDC: off now)."""
+    if _config_problem():
+        print("任意機能: config.json を読み取れないため変更しません。mcs_setup.py check で確認してください")
+        return 1
+    cfg = mcs_util.load_config()
+    before = json.dumps(cfg.get("optional_features"), sort_keys=True)
+    if not sys.stdin.isatty():
+        print("任意機能: 端末から実行してください。設定は変更していません。")
+        return 1
+    try:
+        setup_wizard.wizard_optional_features(cfg, interactive=True)
+        if json.dumps(cfg.get("optional_features"), sort_keys=True) == before:
+            print("任意機能: 変更はありません。")
+            return 0
+        errors, _ = validate_config(cfg)
+        if errors:
+            print("任意機能: 設定に誤りがあるため保存していません: " + "; ".join(errors))
+            return 1
+        if input("この選択を保存しますか？ 1: 保存する / 2: 保存しない [2]: ").strip() != "1":
+            print("任意機能: 保存していません。")
+            return 130
+    except (KeyboardInterrupt, EOFError):
+        print("\n任意機能: 中止しました。保存していません。")
+        return 130
+    service_management.write_service_file(
+        CONF_PATH, json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True) + '\n', 0o600)
+    print("任意機能の選択を保存しました。登録・同意・送信はこの操作では行っていません。")
+    return 0
+
+
 def cmd_doctor(args) -> int:
     """Local read-only diagnostics; explicit probes return only safe counts."""
     cfg = mcs_util.load_config()
@@ -1270,7 +1315,7 @@ def cmd_doctor(args) -> int:
         ['restore_delivery_held'] if worker['restore_delivery_held'] else [])
     nightly = _doctor_nightly(cfg, probe="data" in probes and not config_errors)
     collection = _doctor_collection(cfg, probe="data" in probes and not config_errors)
-    report = {"mode": mode, "python": sys.version.split()[0],
+    report = {"optional_features": _doctor_optional_features(cfg), "mode": mode, "python": sys.version.split()[0],
               "sqlite": sqlite3.sqlite_version, "checks": checks,
               "runtimes": runtimes,
               "operations": operations, "card_worker": worker,
@@ -1321,6 +1366,11 @@ def cmd_doctor(args) -> int:
             names = ("初回未生成", "差分待ち", "過去走査待ち", "根拠点検待ち", "失敗", "完了")
             print("    " + "、".join(f"{name}{nightly['counts'][key]}件"
                                     for key, name in zip(_NIGHTLY_COUNTS, names)))
+        for name, feature in report["optional_features"].items():
+            choice = ("既定に従う" if feature["choice"] == "default" else "明示の選択")
+            print(f"  任意機能の案内（{name}）: {choice}、現在は案内を"
+                  f"{'表示' if feature['guidance_shown'] else '省略'}"
+                  "（登録・同意・稼働の状態はこの項目では判断しません）")
         print(f"  収集の内訳: {labels.get(collection['status'], '未確認')}")
         if collection["counts"] is not None:
             from collection_diagnostics import detail_lines, guidance
@@ -1471,6 +1521,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--dry-run", action="store_true",
                    help='変更予定だけを表示します（設定やサービスは変更しません）')
     p.set_defaults(fn=cmd_services, yes=True)
+    p = sub.add_parser("features", help='任意機能のセットアップ案内を表示するかを選びます（CSDCは現在既定で省略）')
+    p.set_defaults(fn=cmd_features, yes=False)
     p = sub.add_parser("check", help='必要な設定と動作条件を確認し、問題と対処方法を表示します')
     p.set_defaults(fn=cmd_check, yes=True)
     p = sub.add_parser("doctor", help='状態を読取り専用で診断します。未確認は正常扱いしません。設定の修正方法はcheckで確認')

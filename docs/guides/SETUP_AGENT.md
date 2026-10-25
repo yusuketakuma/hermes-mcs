@@ -312,6 +312,10 @@ ls -l ~/.mcs/.env                    # 0600・中身は見せない
 security find-generic-password -s mcs-adapter >/dev/null && echo keychain-ok
 ```
 
+### 5-1a. 任意機能のセットアップ案内
+
+`init` の対話の最後に、任意機能の案内（現在はCSDC: 状態監視・遠隔支援）を「既定に従う／案内を表示する／案内を省略する」から選びます。この版の既定は「省略」で、空欄のEnterは現在の選択を保持します。選ぶのは案内の表示だけで、CSDCの登録・同意・送信はここでは行いません。端末以外（`--yes` を含む）では質問せず、現在の選択だけを表示して何も書きません。後から変える場合は端末で `python3 mcs/ops/mcs_setup.py features` を実行します。内容は[状態監視の説明](SDC_SELF_MONITORING.md)を参照してください。
+
 ### 5-2. サービスの再同期（必要時のみ）
 
 通常の初回導入では install.sh が cron/launchd を登録済みで、`init` が

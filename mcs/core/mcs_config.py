@@ -47,6 +47,27 @@ def _drug_map_config(value):
     return f"薬剤辞書の設定を確認してください（詳細: {problem}）" if problem else None
 
 
+# Optional setup guidance: the code default applies until a release flips it,
+# while an explicit true/false in optional_features always wins over that flip.
+# The value only decides whether the guidance is shown; it never registers,
+# consents, sends or starts anything.
+OPTIONAL_FEATURE_DEFAULTS = {"csdc": False}
+
+
+def _optional_features(value):
+    if not isinstance(value, dict):
+        return "JSONオブジェクト（キーと値の組）を指定してください"
+    bad = sorted(k for k, v in value.items() if k in OPTIONAL_FEATURE_DEFAULTS and type(v) is not bool)
+    return f"{bad[0]}: true（案内を表示）かfalse（案内を省略）を指定してください" if bad else None
+
+
+def feature_enabled(cfg, name: str) -> bool:
+    """The explicit optional_features choice, else this release's default."""
+    value = cfg.get("optional_features") if isinstance(cfg, dict) else None
+    choice = value.get(name) if isinstance(value, dict) else None
+    return choice if type(choice) is bool else OPTIONAL_FEATURE_DEFAULTS[name]
+
+
 def _stamps_config(value):
     from stamp_contract import config_error
     problem = config_error(value)
@@ -104,6 +125,7 @@ CONFIG_RULES = {
     "metadata_refresh_publish": (False, _bool),
     "metadata_actors":       (False, _bool),
     "stamps":                (False, _stamps_config),
+    "optional_features":     (False, _optional_features),
     "clinical_metadata":     (False, _bool),
     "notify":                (False, _dict),
     "signals":               (False, _dict),
@@ -301,6 +323,11 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
         err = check(cfg[key])
         if err:
             errors.append(f"{key}: {err}")
+    features = cfg.get("optional_features")
+    if isinstance(features, dict):
+        # a later release's feature name survives a rollback as a warning only
+        warnings.extend(f"未対応の任意機能: optional_features.{key}（この版では使いません）"
+                        for key in sorted(set(features) - set(OPTIONAL_FEATURE_DEFAULTS)))
     sig = cfg.get("signals")
     ext = cfg.get("extract")
     if isinstance(ext, dict) and "patient_state_context" in ext and type(ext["patient_state_context"]) is not bool:
