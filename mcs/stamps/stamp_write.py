@@ -21,7 +21,8 @@ from mcs_contract import MCSError
 from mcs_util import canonical, payload_hash, positive, valid_hash, valid_text
 from message_observations import decode_metadata, get_message_metadata
 import notify_scope
-from safe_io import atomic_write, fsync_dir, publish_new_bytes, read_private_bytes
+from safe_io import (STAGING_PREFIXES, STAGING_SUFFIX, atomic_write, fsync_dir,
+                     publish_new_bytes, read_private_bytes)
 from stamp_contract import REACTION_LABELS, STAMP_EMOJI, normalize_reactions, options
 
 KIND = "mcs_stamp_operation_v1"
@@ -293,7 +294,7 @@ def _scope_witnesses(directory, req, namespace):
         for index, entry in enumerate(entries):
             if index >= MAX_SCOPE_OPERATIONS * 2:
                 raise StampRefused("stamp_witness_capacity")
-            if entry.name.startswith((".alias-", ".atomic.")) and entry.name.endswith(".tmp"):
+            if entry.name.startswith(STAGING_PREFIXES) and entry.name.endswith(STAGING_SUFFIX):
                 # Unpublished safe_io staging may survive a crash; it grants no attempt.
                 read_private_bytes(scope / entry.name)
                 continue
@@ -392,12 +393,16 @@ def _fresh_post(adapter, ledger, req):
     return own["type"]
 
 
-def _check_live_intent(db, req, cfg, root, now, value):
+def _check_authorized(req, cfg, root):
     if not enabled(cfg, req["actor"]) or options(cfg)["account_user_id"] != req["mcs_user_id"]:
         raise StampRefused("stamp_not_allowed")
     import notify_spool
     if notify_spool.restore_pending(root) is not None:
         raise StampRefused("stamp_restore_hold")
+
+
+def _check_live_intent(db, req, cfg, root, now, value):
+    _check_authorized(req, cfg, root)
     if now - value["queued_at"] > INTENT_MAX_AGE_S:
         raise StampRefused("stamp_intent_expired")
     card = notify_scope.card_row(db, req["card_id"])
@@ -413,11 +418,7 @@ def _check_live_intent(db, req, cfg, root, now, value):
 
 
 def _check_reconciliation(db, req, cfg, root):
-    if not enabled(cfg, req["actor"]) or options(cfg)["account_user_id"] != req["mcs_user_id"]:
-        raise StampRefused("stamp_not_allowed")
-    import notify_spool
-    if notify_spool.restore_pending(root) is not None:
-        raise StampRefused("stamp_restore_hold")
+    _check_authorized(req, cfg, root)
     card = notify_scope.card_row(db, req["card_id"])
     scope = notify_scope.delivery_scope(cfg)
     if (card is None or card["project_id"] != req["project_id"]
@@ -565,14 +566,12 @@ def drain(ledger, adapter, cfg, root, deadline):
                 "SELECT content FROM artifacts WHERE artifact_id=?", (row["artifact_id"],)).fetchone()[0])
             try:
                 _publish_result(ledger, root, value)
+                rerender = value.get("state") in {"confirmed", "unknown"}
                 if value.get("state") == "rejected":
                     refreshed = refresh_rejected(ledger, value["request"],
                                                  {"outcome": "rejected", "error": value.get("error")}, cfg)
-                    if not refreshed.get("stamp_reselect"):
-                        import notify_cards
-                        notify_cards.rerender_message_cards(
-                            ledger, cfg, value["request"]["project_id"], value["request"]["message_id"])
-                elif value.get("state") in {"confirmed", "unknown"}:
+                    rerender = not refreshed.get("stamp_reselect")    # a reselect card replaces it
+                if rerender:
                     import notify_cards
                     notify_cards.rerender_message_cards(
                         ledger, cfg, value["request"]["project_id"], value["request"]["message_id"])

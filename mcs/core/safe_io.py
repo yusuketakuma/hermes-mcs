@@ -49,9 +49,15 @@ def fsync_dir(path, *, require_dir: bool = True) -> None:
         os.close(fd)
 
 
+ATOMIC_TMP_PREFIX = ".atomic."      # atomic_write staging
+ALIAS_TMP_PREFIX = ".alias-"        # publish_new_bytes staging
+STAGING_PREFIXES = (ALIAS_TMP_PREFIX, ATOMIC_TMP_PREFIX)
+STAGING_SUFFIX = ".tmp"
+
+
 def atomic_write(path: str, writer, mode: int | None = None,
-                 tmp_prefix: str = ".atomic.", *, binary: bool = False,
-                 tmp_suffix: str = ".tmp", makedirs: bool = True,
+                 tmp_prefix: str = ATOMIC_TMP_PREFIX, *, binary: bool = False,
+                 tmp_suffix: str = STAGING_SUFFIX, makedirs: bool = True,
                  require_dir: bool = True) -> None:
     """tmp -> fsync -> [chmod] -> os.replace -> dir fsync: consumers see
     the whole old file or the whole new one, and a mid-write crash never
@@ -115,7 +121,7 @@ def read_regular_nofollow(path, limit: int, error, *,
 def publish_new_bytes(path, raw):
     """Publish a fully synced private file without replacing an existing destination."""
     path = Path(path)
-    fd, staging = tempfile.mkstemp(dir=path.parent, prefix=".alias-", suffix=".tmp")
+    fd, staging = tempfile.mkstemp(dir=path.parent, prefix=ALIAS_TMP_PREFIX, suffix=STAGING_SUFFIX)
     try:
         with fdopen_owned(fd, "wb") as stream:
             stream.write(raw)
