@@ -645,8 +645,10 @@ def test_cached_key_r1_request_is_refused_once_an_intent_is_unfinished(world):
     assert len(world.peer.calls) == calls
 
 
-def test_tick_entry_holds_every_sender_without_copy_or_network(world, capsys):
+def test_tick_entry_holds_every_sender_without_copy_or_network(world, capsys, monkeypatch):
     pending_rotation(world)
+    monkeypatch.setattr(sdc_cli.lifecycle_io, 'read_owner_config', lambda _: {
+        'sdc': {'enabled': True, 'state_root': str(world.root)}})
     reads, calls, before = len(world.reads), len(world.peer.calls), world.state()
     assert sdc_cli.tick(world.root) == 0
     assert (len(world.reads), len(world.peer.calls)) == (reads, calls)

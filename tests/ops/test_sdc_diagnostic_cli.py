@@ -549,6 +549,9 @@ def tick_world(tmp_path, monkeypatch):
         def lock(self):
             yield
 
+        def guard_credential(self):
+            pass  # This fake models a settled credential; mutation holds use the real Store tests.
+
         def read(self, name, default=None):
             assert name in ('state.json', 'endpoint.json', 'inventory-policy.json')
             if name == 'state.json':
@@ -612,6 +615,8 @@ def tick_world(tmp_path, monkeypatch):
     monkeypatch.setattr(sdc_cli, 'facts', lambda: {'mode': t.mode})
     monkeypatch.setattr(sdc_cli, 'service', forbidden)
     monkeypatch.setattr(sdc_cli.mcs_util, 'load_config', lambda: {'runtime_mode': t.configured_mode})
+    monkeypatch.setattr(sdc_cli.lifecycle_io, 'read_owner_config', lambda _: {
+        'sdc': {'enabled': True, 'state_root': str(t.root)}})
     monkeypatch.setattr(sdc_cli.mcs_util, 'HOME', str(t.trusted))
     monkeypatch.setattr(sdc_cli.mcs_runtime, 'mode', lambda cfg: cfg['runtime_mode'])
     monkeypatch.setattr(sdc_cli.mcs_runtime, 'python_executable', lambda cfg: t.interpreter)
