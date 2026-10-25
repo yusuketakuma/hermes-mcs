@@ -1010,7 +1010,8 @@ def test_initialize_publishes_a_private_file_and_leaves_no_staging(monkeypatch, 
     assert cli.main(["init", "--root", str(tmp_path)]) == 0
     assert path.stat().st_mode & 0o777 == 0o600
     assert json.loads(path.read_text())["bot_secret"] == SECRET
-    assert not [p for p in path.parent.iterdir() if p.name.endswith(".tmp")]   # no staging left
+    assert not [p for p in path.parent.iterdir()                               # no staging left
+                if p.name.startswith((".lineworks-init-", ".alias-")) or p.name.endswith(".tmp")]
 
 
 def test_initialize_never_reports_success_when_staging_cleanup_fails(monkeypatch, tmp_path):
