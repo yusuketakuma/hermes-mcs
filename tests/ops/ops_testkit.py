@@ -256,3 +256,20 @@ def _tree(root):
                    hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None)
         result[str(path.relative_to(root))] = (st.st_mode, st.st_mtime_ns, st.st_size, content)
     return result
+
+
+def git_reads_or(stub):
+    """run_bounded stand-in for diagnostics tests: only the two read-only git calls of
+    environment_diagnostics.source_status reach the real bounded runner (and through it
+    any lifecycle_io.subprocess.run patch); every other argv, any other git included,
+    goes to ``stub`` so tests keep forbidding service access."""
+    import lifecycle_io
+    real = lifecycle_io.run_bounded
+
+    def run(argv, **kwargs):
+        if (len(argv) >= 4 and argv[0] == "git" and argv[1] == "-C"
+                and argv[3:] in (["rev-parse", "HEAD"],
+                                 ["status", "--porcelain", "--untracked-files=no"])):
+            return real(argv, **kwargs)
+        return stub(argv, **kwargs)
+    return run

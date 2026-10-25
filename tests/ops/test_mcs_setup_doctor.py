@@ -13,16 +13,8 @@ import pytest
 
 import local_llm
 import mcs_setup
-from ops_testkit import bounded_python
+from ops_testkit import bounded_python, git_reads_or
 
-
-# git now runs through lifecycle_io.run_bounded; keep it on the real runner (which
-# still sees any subprocess.run patch) and send every other argv to the test stub
-_RUN_BOUNDED = lifecycle_io.run_bounded
-
-
-def _services(stub):
-    return lambda argv, **kw: _RUN_BOUNDED(argv, **kw) if argv[:1] == ["git"] else stub(argv, **kw)
 
 
 
@@ -43,7 +35,7 @@ def local_config(monkeypatch):
 
 
 def test_default_doctor_checks_no_services_secrets_or_network(local_config, monkeypatch, capsys):
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(lambda *a, **k: pytest.fail("service probe")))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', git_reads_or(lambda *a, **k: pytest.fail("service probe")))
     monkeypatch.setattr(local_llm, "bounded_request", lambda *a: pytest.fail("network"))
     assert mcs_setup.main(["doctor", "--json"]) == 0
     out = capsys.readouterr().out
@@ -65,7 +57,7 @@ def test_data_probe_reaches_restore_diagnosis_only_when_requested(
                 "restore_delivery_held": False if probe_data else None,
                 "recovery_scope": "collect_only"}
     monkeypatch.setattr(card_worker_status, "diagnose", diagnose)
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(lambda *a, **k: pytest.fail("service probe")))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', git_reads_or(lambda *a, **k: pytest.fail("service probe")))
     monkeypatch.setattr(local_llm, "bounded_request", lambda *a: pytest.fail("network"))
     args = ["doctor", "--json"] + (["--probe", "data"] if explicit else [])
     assert mcs_setup.main(args) == 0
@@ -81,7 +73,7 @@ def test_explicit_llm_probe_is_bounded_and_other_scopes_stay_unchecked(
         calls.append((url, method, body, timeout))
         return 200, {}, b'[{}, {}, {}]' if url.endswith("/slots") else b'{"data":[]}'
     monkeypatch.setattr(local_llm, "bounded_request", request)
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(lambda *a, **k: pytest.fail("service probe")))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', git_reads_or(lambda *a, **k: pytest.fail("service probe")))
     assert mcs_setup.main(["doctor", "--probe", "llm", "--json"]) == 0
     checks = json.loads(capsys.readouterr().out)["checks"]
     assert checks["llm"]["status"] == "healthy"
@@ -110,7 +102,7 @@ def test_undersized_llm_slots_block(local_config, monkeypatch, capsys):
 def test_service_domain_failure_is_not_checked(local_config, monkeypatch, capsys):
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
     monkeypatch.setattr(lifecycle_io, 'run_bounded',
-                        _services(lambda *a, **k: SimpleNamespace(returncode=1)))
+                        git_reads_or(lambda *a, **k: SimpleNamespace(returncode=1)))
     monkeypatch.setattr(service_management, 'check_runtime', lambda cfg, **_service_kwargs: pytest.fail("unavailable"))
     assert mcs_setup.main(["doctor", "--probe", "services", "--json"]) == 0
     check = json.loads(capsys.readouterr().out)["checks"]["services"]
@@ -120,7 +112,7 @@ def test_service_domain_failure_is_not_checked(local_config, monkeypatch, capsys
 def test_service_probe_excludes_arbitrary_diagnostic_text(local_config, monkeypatch, capsys):
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
     monkeypatch.setattr(lifecycle_io, 'run_bounded',
-                        _services(lambda *a, **k: SimpleNamespace(returncode=0)))
+                        git_reads_or(lambda *a, **k: SimpleNamespace(returncode=0)))
     monkeypatch.setattr(service_management, 'check_runtime',
                         lambda cfg, **_service_kwargs: (["synthetic-secret/body/123456"], []))
     assert mcs_setup.main(["doctor", "--probe", "services", "--json"]) == 1
@@ -187,10 +179,10 @@ def test_doctor_does_not_invent_loaded_revision(monkeypatch, started, modified, 
     monkeypatch.setattr(environment_diagnostics, "gateway_sources_mtime", lambda checkout: modified)
     def git(argv, **kw):
         return SimpleNamespace(returncode=0, stdout="a" * 40 + "\n")
-    monkeypatch.setattr(environment_diagnostics.subprocess, "run", git)
+    monkeypatch.setattr(lifecycle_io.subprocess, "run", git)
     def probe(argv, **kw):
         return SimpleNamespace(returncode=0, stdout="pid = 123\n" if argv[0] == "launchctl" else "invalid")
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(probe))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', git_reads_or(probe))
     monkeypatch.setattr(environment_diagnostics.time, "mktime", lambda value: started)
     monkeypatch.setattr(environment_diagnostics.time, "strptime", lambda value, fmt: ())
     source = environment_diagnostics.source_status({}, probe=True, paths=mcs_setup._service_paths())
@@ -203,8 +195,8 @@ def test_doctor_does_not_invent_loaded_revision(monkeypatch, started, modified, 
 
 
 def test_doctor_source_default_does_not_probe_services(monkeypatch):
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(lambda *args, **kw: pytest.fail("service access")))
-    monkeypatch.setattr(environment_diagnostics.subprocess, "run", lambda *args, **kw:
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', git_reads_or(lambda *args, **kw: pytest.fail("service access")))
+    monkeypatch.setattr(lifecycle_io.subprocess, "run", lambda *args, **kw:
                         SimpleNamespace(returncode=1, stdout="synthetic-secret-not-a-sha"))
     source = environment_diagnostics.source_status({}, probe=False, paths=mcs_setup._service_paths())
     assert source["disk"]["revision"] is None
@@ -222,7 +214,7 @@ def test_doctor_restart_receipt_is_supervisor_evidence_only(tmp_path, monkeypatc
     (tmp_path / "data" / "gateway_restart.json").write_text(json.dumps(
         {"status": status, "pid": pid, "at": environment_diagnostics.time.time(), "extra": "synthetic-secret"}))
     monkeypatch.setattr(environment_diagnostics.sys, "platform", "darwin")
-    monkeypatch.setattr(environment_diagnostics.subprocess, "run", lambda *a, **k:
+    monkeypatch.setattr(lifecycle_io.subprocess, "run", lambda *a, **k:
                         SimpleNamespace(returncode=0, stdout="a" * 40))
     monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda argv, **kw:
                         SimpleNamespace(returncode=0, stdout="pid = 123\n" if argv[0] == "launchctl" else "invalid"))
@@ -246,7 +238,7 @@ def test_doctor_dirty_comes_from_a_refreshing_status(monkeypatch, rc, out, expec
         if "diff-index" in argv:
             return SimpleNamespace(returncode=1, stdout="")   # stale stat data
         return SimpleNamespace(returncode=rc, stdout=out)
-    monkeypatch.setattr(environment_diagnostics.subprocess, "run", git)
+    monkeypatch.setattr(lifecycle_io.subprocess, "run", git)
     assert environment_diagnostics.source_status({}, probe=False, paths=mcs_setup._service_paths())["disk"]["dirty"] is expected
     assert not any("diff-index" in argv for argv in seen)
 
@@ -266,8 +258,9 @@ def test_doctor_restart_receipt_refuses_unsafe_file(tmp_path, monkeypatch, kind)
 from types import SimpleNamespace
 import mcs_setup
 import environment_diagnostics
+import lifecycle_io
 mcs_setup.HOME = sys.argv[1]
-environment_diagnostics.subprocess.run = lambda *a, **k: SimpleNamespace(returncode=1, stdout='')
+lifecycle_io.subprocess.run = lambda *a, **k: SimpleNamespace(returncode=1, stdout='')
 environment_diagnostics.gateway_sources_mtime = lambda checkout: None
 source = environment_diagnostics.source_status({'runtime_mode': 'standalone'}, probe=True, paths=mcs_setup._service_paths())
 assert source['restart_request'] == {'status': 'unknown'}
@@ -277,7 +270,7 @@ assert source['restart_request'] == {'status': 'unknown'}
         receipt.mkdir()
     else:
         receipt.write_bytes(b" " * 8193)
-    monkeypatch.setattr(environment_diagnostics.subprocess, "run", lambda *a, **k:
+    monkeypatch.setattr(lifecycle_io.subprocess, "run", lambda *a, **k:
                         SimpleNamespace(returncode=1, stdout=""))
     monkeypatch.setattr(environment_diagnostics, "gateway_sources_mtime", lambda checkout: None)
     source = environment_diagnostics.source_status({"runtime_mode": "standalone"}, probe=True, paths=mcs_setup._service_paths())

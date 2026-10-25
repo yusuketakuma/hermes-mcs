@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import math
 import os
-import subprocess  # noqa: F401 - tests patch environment_diagnostics.subprocess.run (the module run_bounded uses)
 import re
 import sys
 import time

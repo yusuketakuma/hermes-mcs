@@ -17,15 +17,8 @@ import pytest
 import mcs_setup
 import local_llm
 import mcs_util
+from ops_testkit import git_reads_or
 
-
-# git now runs through lifecycle_io.run_bounded; keep it on the real runner (which
-# still sees any subprocess.run patch) and send every other argv to the test stub
-_RUN_BOUNDED = lifecycle_io.run_bounded
-
-
-def _services(stub):
-    return lambda argv, **kw: _RUN_BOUNDED(argv, **kw) if argv[:1] == ["git"] else stub(argv, **kw)
 
 
 
@@ -274,7 +267,7 @@ def test_check_environment_detects_locked_keychain(monkeypatch):
     def fake_run(argv, **kw):
         return SimpleNamespace(returncode=36 if "-w" in argv else 0,
                                stdout="", stderr="")
-    monkeypatch.setattr(environment_diagnostics.subprocess, "run", fake_run)
+    monkeypatch.setattr(lifecycle_io.subprocess, "run", fake_run)
 
     errors, _ = mcs_setup.check_environment({"notify_target": "slack"})
     assert any("キーチェーンのロックや" in e.lower() for e in errors)
@@ -283,7 +276,7 @@ def test_check_environment_detects_locked_keychain(monkeypatch):
     def missing(argv, **kw):
         return SimpleNamespace(returncode=44, stdout="",
                                stderr="could not be found")
-    monkeypatch.setattr(environment_diagnostics.subprocess, "run", missing)
+    monkeypatch.setattr(lifecycle_io.subprocess, "run", missing)
     errors, _ = mcs_setup.check_environment({"notify_target": "slack"})
     assert any(mcs_setup.KEYCHAIN_SERVICE in e and "見つかりません" in e for e in errors)
     assert not any("キーチェーンのロックや" in e for e in errors)
@@ -304,7 +297,7 @@ def test_check_environment_flags_installed_but_unloaded_agent(
     monkeypatch.setattr(
         local_llm, "bounded_request",
         lambda *a, **k: (200, {}, b"{}"))
-    monkeypatch.setattr(environment_diagnostics.subprocess, "run",
+    monkeypatch.setattr(lifecycle_io.subprocess, "run",
                         lambda *a, **k: SimpleNamespace(
                             returncode=0, stdout="", stderr=""))
     monkeypatch.setattr(lifecycle_io, 'run_bounded',
@@ -484,7 +477,7 @@ def test_process_start_is_parsed_in_the_c_locale(monkeypatch):
     monkeypatch.setattr(environment_diagnostics, "gateway_sources_mtime", lambda checkout: started + 60)
     assert environment_diagnostics.plugin_newer_than_gateway("PID 123 running", checkout=mcs_setup.REPO_ROOT) is True
     monkeypatch.setattr(environment_diagnostics.sys, "platform", "darwin")
-    monkeypatch.setattr(environment_diagnostics.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1, stdout=""))
+    monkeypatch.setattr(lifecycle_io.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1, stdout=""))
     gateway = environment_diagnostics.source_status({}, probe=True, paths=mcs_setup._service_paths())["gateway"]
     assert gateway["started_at"] == started and gateway["restart_required"] is True
 
@@ -651,7 +644,7 @@ def test_check_environment_locked_keychain_with_env_fallback(monkeypatch):
     monkeypatch.setattr(environment_diagnostics, "env_value",
                         lambda *a, **k: "env_pw")
     monkeypatch.setattr(
-        environment_diagnostics.subprocess, "run",
+        lifecycle_io.subprocess, "run",
         lambda argv, **kw: SimpleNamespace(
             returncode=36 if "-w" in argv else 0, stdout="", stderr=""))
 
@@ -1569,7 +1562,7 @@ def test_invalid_runtime_doctor_fails_without_service_probes(monkeypatch, capsys
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(mcs_setup, "_queue_warnings", lambda cfg: [])
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: pytest.fail("invalid mode must not probe Hermes"))
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(lambda *args, **kwargs: pytest.fail("invalid mode must not probe services")))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', git_reads_or(lambda *args, **kwargs: pytest.fail("invalid mode must not probe services")))
     assert mcs_setup.cmd_doctor(SimpleNamespace()) == 1
     assert "常駐処理の実行環境: 要修正" in capsys.readouterr().out
 

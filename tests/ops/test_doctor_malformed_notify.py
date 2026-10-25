@@ -8,15 +8,8 @@ import pytest
 
 import local_llm
 import mcs_setup
+from ops_testkit import git_reads_or
 
-
-# git now runs through lifecycle_io.run_bounded; keep it on the real runner (which
-# still sees any subprocess.run patch) and send every other argv to the test stub
-_RUN_BOUNDED = lifecycle_io.run_bounded
-
-
-def _services(stub):
-    return lambda argv, **kw: _RUN_BOUNDED(argv, **kw) if argv[:1] == ["git"] else stub(argv, **kw)
 
 
 
@@ -30,7 +23,7 @@ def malformed_config(monkeypatch):
         "packages": {"discord.py": None, "slack-bolt": None, "slack-sdk": None}})
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version_info", (3, 51, 3))
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version", "3.51.3")
-    monkeypatch.setattr(lifecycle_io, 'run_bounded', _services(lambda *a, **k: pytest.fail("service probe")))
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', git_reads_or(lambda *a, **k: pytest.fail("service probe")))
     monkeypatch.setattr(local_llm, "bounded_request", lambda *a: pytest.fail("network"))
     return install
 
