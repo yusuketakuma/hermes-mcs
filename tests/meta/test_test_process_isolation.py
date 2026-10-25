@@ -1,7 +1,9 @@
-"""A direct pytest run gets the runner's isolation even when the caller exported a
-live MCS root: tests/conftest.py drops MCS_ROOT/MCS_UPDATE_REPO, sets the sandbox
-flag and shadows a bare-name `security` for child processes (synthetic roots only;
-the real security binary is never executed)."""
+"""tests/conftest.py, run directly with an exported live MCS root, drops
+MCS_ROOT/MCS_UPDATE_REPO, sets the sandbox flag and shadows a bare-name
+`security` on PATH for child processes. This covers only those selectors; an
+absolute /usr/bin/security path or ctypes is out of scope. A synthetic fake
+security sits ahead of /usr/bin, so even a regressed guard never reaches the
+real binary."""
 import json
 import os
 import subprocess
@@ -34,7 +36,11 @@ def test_exported_live_root_and_bare_security_never_reach_a_direct_run(tmp_path)
     sentinel.mkdir()
     home = tmp_path / "home"
     home.mkdir()
-    env = {"HOME": str(home), "TMPDIR": str(tmp_path), "PATH": "/usr/bin:/bin",
+    fakebin = tmp_path / "fakebin"            # last line of defence if the guard regresses
+    fakebin.mkdir()
+    (fakebin / "security").write_text("#!/bin/sh\nexit 55\n")
+    (fakebin / "security").chmod(0o755)
+    env = {"HOME": str(home), "TMPDIR": str(tmp_path), "PATH": f"{fakebin}:/usr/bin:/bin",
            "MCS_ROOT": str(sentinel), "MCS_UPDATE_REPO": str(tmp_path / "exported-repo")}
     proc = subprocess.run([sys.executable, "-c", CHILD, str(CONFTEST)], env=env,
                           capture_output=True, text=True, timeout=60)
@@ -44,5 +50,5 @@ def test_exported_live_root_and_bare_security_never_reach_a_direct_run(tmp_path)
     assert seen["sandbox"] == "1"
     assert os.path.realpath(seen["home"]) != os.path.realpath(sentinel)
     assert seen["path_head"] == seen["guard"]
-    assert seen["security_rc"] == 97             # the fail-closed shim, not /usr/bin/security
+    assert seen["security_rc"] == 97             # the conftest shim; 55 would mean the guard regressed
     assert list(sentinel.iterdir()) == []
