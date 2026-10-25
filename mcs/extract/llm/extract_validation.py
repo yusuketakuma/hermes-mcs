@@ -745,6 +745,13 @@ class Validator:
             else:
                 self.drop_item("points")
 
+def _add_urgency_evidence(out: dict, d: dict) -> None:
+    """Add up to two distinct quotes; no key is created when d has none."""
+    for q in d.get("urgency_evidence") or []:
+        if len(out.setdefault("urgency_evidence", [])) < 2 and q not in out["urgency_evidence"]:
+            out["urgency_evidence"].append(q)
+
+
 def merge(outs: list[dict]) -> dict:
     """Deterministic merge of per-chunk validated outputs, in document
     order.
@@ -831,10 +838,7 @@ def merge(outs: list[dict]) -> dict:
             out.setdefault("vitals", {})[k] = v   # latest reading wins
         if d.get("urgency") == "high":
             out["urgency"] = "high"
-            for q in d.get("urgency_evidence") or []:
-                if len(out.setdefault("urgency_evidence", [])) < 2 \
-                        and q not in out["urgency_evidence"]:
-                    out["urgency_evidence"].append(q)
+            _add_urgency_evidence(out, d)
         if "reply" not in out and d.get("reply"):
             out["reply"] = d["reply"]
         for k in ("_items_dropped", "_evidence_dropped"):
@@ -849,10 +853,7 @@ def merge(outs: list[dict]) -> dict:
         if any(d.get("urgency") == "unclear" for d in outs):
             out["urgency"] = "unclear"
             for d in outs:
-                for q in d.get("urgency_evidence") or []:
-                    if len(out.setdefault("urgency_evidence", [])) < 2 \
-                            and q not in out["urgency_evidence"]:
-                        out["urgency_evidence"].append(q)
+                _add_urgency_evidence(out, d)
         elif outs and all(d.get("urgency") == "routine" for d in outs):
             out["urgency"] = "routine"
     return out

@@ -187,16 +187,19 @@ def _input(v) -> bool:
     return all(valid_text(x, 120) for k, x in v.items() if k != "projects")
 
 
+_TRANSPORT_BY_VERSION = {v: t for t, v in notify_scope.TRANSPORT_VERSIONS.items()}
+
+
 def validate_int(req) -> str | None:
     """cmd_int envelope validation — per op, since notification commands
     use a composite '<token>:<actor_hash>' command_id that the common
     UUID validator must never see."""
     if not isinstance(req, dict):
         return "bad_command"
-    if type(req.get("version")) is not int or req["version"] not in (1, 2, 3):
+    if type(req.get("version")) is not int or req["version"] not in _TRANSPORT_BY_VERSION:
         return "bad_version"
     op = req.get("op")
-    transport = {1: "discord", 2: "slack", 3: "lineworks"}[req["version"]]
+    transport = _TRANSPORT_BY_VERSION[req["version"]]
     if transport != "discord":
         if req.get("transport") != transport:
             return "bad_transport"

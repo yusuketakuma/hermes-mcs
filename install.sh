@@ -475,6 +475,14 @@ repo_conflict() {
         dirname -- "$_t"
     fi
 }
+# the recovery tool is wanted: --recovery-python given, or macOS without --no-recovery
+recovery_wanted() {
+    [ -n "$RECOVERY_OPTION" ] || { [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0 ]; }
+}
+# resident services are registered but cannot use a custom HERMES_HOME
+custom_home_blocks_services() {
+    [ "$RUNTIME_MODE" = hermes ] && [ "$HERMES_HOME" != "$DEFAULT_HERMES_HOME" ] && [ "$SKIP_SERVICES" -eq 0 ]
+}
 # why ~/.local/bin/mcs blocks the launcher step: "foreign" (not an MCS
 # lifecycle launcher), "other" (another checkout's launcher) or nothing
 mcs_shim_conflict() {
@@ -544,7 +552,7 @@ preflight() {
     if _py="$(find_py)"; then pf_ok "Python 3.14: $_py"
     elif [ "$_brew_fills" -eq 1 ]; then pf_info "Python 3.14 は未導入です。段階1で python@3.14 を導入します"
     else pf_ng "実行できる Python 3.14 が見つかりません" "brew install python@3.14"; fi
-    if [ -n "$RECOVERY_OPTION" ] || { [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0 ]; }; then
+    if recovery_wanted; then
         if [ -n "$_py" ] && RECOVERY_PYTHON="$(recovery_runtime_ok "$_py")"; then
             pf_ok "復旧用 Python: 3.14以降で SQLite の安全条件を満たしています"
         elif [ -z "$_py" ] && [ -z "$RECOVERY_OPTION" ] && [ "$_brew_fills" -eq 1 ]; then
@@ -614,7 +622,7 @@ preflight() {
                    pf_ng "$MCS_SHIM は別のフォルダを参照しています" "$REPO へ切り替える場合は --force-repo を指定して再実行してください"
                else pf_warn "--force-repo: $MCS_SHIM の参照先を $REPO へ切り替えます" ""; fi ;;
     esac
-    if [ "$RUNTIME_MODE" = hermes ] && [ "$HERMES_HOME" != "$DEFAULT_HERMES_HOME" ] && [ "$SKIP_SERVICES" -eq 0 ]; then
+    if custom_home_blocks_services; then
         pf_ng "常駐サービスは独自の HERMES_HOME（${HERMES_HOME}）に対応していません" "既定の ~/.hermes を使うか、--no-services でサービス登録を省略してください"
     fi
 
@@ -694,7 +702,7 @@ fi
 # mcs_setup services renders cron wrappers/plists against ~/.hermes (its
 # HERMES_PY and scripts dir are fixed there) — a custom HERMES_HOME would
 # install services pointing at an interpreter that does not exist
-if [ "$RUNTIME_MODE" = hermes ] && [ "$HERMES_HOME" != "$DEFAULT_HERMES_HOME" ] && [ "$SKIP_SERVICES" -eq 0 ]; then
+if custom_home_blocks_services; then
     printf '%s\n' "常駐サービスは独自の HERMES_HOME（${HERMES_HOME}）に対応していません。" \
         "既定の ~/.hermes を使うか、--no-services を指定してサービスを手動登録してください" >&2
     exit 2
@@ -712,7 +720,7 @@ if [ -f "$REPO/.git" ]; then
     warn "Git の作業用フォルダ（${REPO}）から実行しています。ここを削除するとサービスとプラグインが動かなくなります。恒久的なメインのフォルダを使ってください"
 fi
 
-if [ -n "$RECOVERY_OPTION" ] || { [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0 ]; }; then
+if recovery_wanted; then
     if _probe_host="$(find_py)"; then
         RECOVERY_PYTHON="$(recovery_runtime_ok "$_probe_host")" \
             || die "指定した復旧用 Python の安全性が確認できないか、稼働設定と一致しません。変更は行っていません"
@@ -1004,7 +1012,7 @@ case ":$PATH:" in
 esac
 
 # Verify the desired target before even the first private config write.
-if [ -n "$RECOVERY_OPTION" ] || { [ "$OS" = Darwin ] && [ "$SKIP_RECOVERY" -eq 0 ]; }; then
+if recovery_wanted; then
     RECOVERY_PYTHON="$(recovery_runtime_ok "$MCS_PY")" \
         || die "指定した復旧用 Python の安全性を確認できません。設定は保存していません"
 fi

@@ -23,6 +23,7 @@ AUTH_URL = "https://auth.worksmobile.com/oauth2/v2.0/token"
 API_BASE = "https://www.worksapis.com/v1.0"
 UPLOAD_HOSTS = frozenset({"apis-storage.worksmobile.com", "storage.worksmobile.com"})
 MAX_RESPONSE_BYTES = 262144
+MAX_MESSAGE_BODY_BYTES = 262144
 MAX_REQUEST_BYTES = 25 * 1024 * 1024
 
 
@@ -393,8 +394,7 @@ class LineWorksClient:
 
     def send_message(self, content: dict, *, channel_id=None, user_id=None):
         """Send content once; HTTP 201 is the official receipt, without message IDs."""
-        if ((channel_id is None) == (user_id is None) or not isinstance(content, dict)
-                or not valid_protocol_text(content.get("type"))):
+        if (channel_id is None) == (user_id is None):
             raise ClientError("validation_invalid")
         _validate_content(content)
         target = channel_id if channel_id is not None else user_id
@@ -408,7 +408,7 @@ class LineWorksClient:
                               allow_nan=False, separators=(",", ":")).encode("utf-8")
         except (ValueError, TypeError, UnicodeError, RecursionError):
             raise ClientError("validation_invalid") from None
-        if len(body) > MAX_RESPONSE_BYTES:
+        if len(body) > MAX_MESSAGE_BODY_BYTES:
             raise ClientError("validation_invalid")
         status, _ = self._request(url, body, "application/json; charset=UTF-8", self._access_token())
         if status != 201:

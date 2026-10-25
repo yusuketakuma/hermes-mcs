@@ -666,18 +666,8 @@ def test_backfill_tail_survives_a_completed_deep_import(tmp_path):
     db.save_messages([_message(mid=100)])
     db.set_history_floor(1, 0)
     db.set_coverage(1, db.high_watermark(1))
-    items = [{"id": mid, "comment": "synthetic post",
-              "created_at": "2026-09-19T01:00:00+09:00"}
-             for mid in range(1, 33)]
-
-    class Adapter(mcs_adapter.MCSAdapter):
-        def _get(self, path, params=None, **kwargs):
-            start = (params["page"] - 1) * params["per_page"]
-            return {"messages": items[start:start + params["per_page"]],
-                    "paginate": {"has_next": start + params["per_page"] < len(items)}}
-
     result = {"errors": [], "backfilled": 0}
-    adapter = Adapter()
+    adapter = _pinned_history_adapter()
     collection_stages.stage_backfill(adapter, db, result, time.monotonic() + 300, 1)
     assert db.job_pending("history_head", 1)
     assert result["coverage_gaps"]
@@ -698,18 +688,8 @@ def test_backfill_deferred_certification_is_not_an_error(tmp_path):
     db.save_messages([_message(mid=100)])
     db.set_history_floor(1, 0)
     db.set_coverage(1, db.high_watermark(1))
-    items = [{"id": mid, "comment": "synthetic post",
-              "created_at": "2026-09-19T00:00:00+09:00"}
-             for mid in range(1, 33)]
-
-    class Adapter(mcs_adapter.MCSAdapter):
-        def _get(self, path, params=None, **kwargs):
-            start = (params["page"] - 1) * params["per_page"]
-            return {"messages": items[start:start + params["per_page"]],
-                    "paginate": {"has_next": start + params["per_page"] < len(items)}}
-
     result = {"errors": [], "backfilled": 0}
-    collection_stages.stage_backfill(Adapter(), db, result, time.monotonic() + 300, 1)
+    collection_stages.stage_backfill(_pinned_history_adapter(created_at="2026-09-19T00:00:00+09:00"), db, result, time.monotonic() + 300, 1)
     assert result["errors"] == []
     assert not result.get("coverage_gaps")
     assert db.job_pending("history_head", 1)
@@ -2260,11 +2240,11 @@ def test_waited_lock_is_given_back_after_an_update(tmp_path, monkeypatch,
     os.close(fd)
 
 
-def _pinned_history_adapter(count=32):
+def _pinned_history_adapter(count=32, created_at="2026-09-19T01:00:00+09:00"):
     """Synthetic timeline longer than BACKFILL_MAX_PAGES, newer than the
     stored head — the bounded backfill cannot certify it."""
     items = [{"id": mid, "comment": "synthetic post",
-              "created_at": "2026-09-19T01:00:00+09:00"}
+              "created_at": created_at}
              for mid in range(1, count + 1)]
 
     class Adapter(mcs_adapter.MCSAdapter):
@@ -2961,6 +2941,27 @@ def test_karte_summary_cap_twelve_and_carry_over(tmp_path, artifact):
     assert result["karte_summary"]["fetched"] == 1
     assert db.karte_summary_due() == []
     assert _run_stage(adapter, db)["karte_summary"]["fetched"] == 0
+    db.close()
+
+
+def test_karte_summary_deferral_rewrites_only_rows_not_already_due(tmp_path, monkeypatch):
+    # past the cap a flagged project stays due=1 untouched, while a deep-run
+    # fill target (missing/stale, never flagged) is flagged for the next tick
+    db = _karte_db(tmp_path, 20)
+    for pid in range(8, 21):                                     # 13 flagged: one over the cap
+        db.karte_summary_mark_due(pid)
+    due = db.karte_summary_due()
+    fill = list(dict.fromkeys(db.karte_summary_missing(collection_stages.KARTE_SUMMARY_FILL)))
+    rewrites = []
+    real = db.karte_summary_mark_due
+    monkeypatch.setattr(db, "karte_summary_mark_due",
+                        lambda pid, due=True: rewrites.append(pid) or real(pid, due))
+    result = _run_stage(_MemoAdapter(), db, jobs_only=True)
+    expected = [pid for pid in fill if pid not in due]
+    assert result["karte_summary"]["fetched"] == collection_stages.KARTE_SUMMARY_TICK_CAP
+    assert result["karte_summary"]["deferred"] == 1 + len(expected)
+    assert expected and rewrites == expected                     # never the already-due 8
+    assert set(db.karte_summary_due()) == {8, *expected}
     db.close()
 
 

@@ -173,7 +173,7 @@ def iter_audit_rows(db, scope: dict):
                 "profession": _profession(message["profession"] or message["sender_type"]),
                 "length": "len_s" if len(body) < 200 else "len_m" if len(body) < 1000 else "len_l",
                 "month": _month(message["posted_at_ts"]),
-                "_body": body, "_document": document, "_meta": meta,
+                "_document": document, "_meta": meta,
             }
 
 

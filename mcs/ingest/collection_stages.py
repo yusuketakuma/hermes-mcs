@@ -747,11 +747,6 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
     result["self_probe"] = probed
 
 
-def _download_session_ok(adapter) -> bool:
-    probe = getattr(adapter, "_probe_session_ok", None)
-    return bool(probe()) if callable(probe) else True
-
-
 def stage_attachments(adapter, ledger, result, deadline, semantic=False):
     # attachments referenced by queued notify events jump the queue —
     # otherwise a deep backlog leaves new-message files undownloaded
@@ -787,7 +782,7 @@ def stage_attachments(adapter, ledger, result, deadline, semantic=False):
             # session as a plain 401/403 — re-login instead of burning
             # the row into a permanent 'failed' (same rule as _request)
             if e.kind == "http_error" and getattr(e, "status", None) in (
-                    401, 403) and not _download_session_ok(adapter):
+                    401, 403) and not adapter._probe_session_ok():
                 raise SessionExpired("attachments", status=e.status) from e
             # keep the HTTP status in the recorded kind — the failure
             # class (permanent 4xx vs transient) and triage need it (F11)
@@ -821,10 +816,12 @@ def stage_karte_summary(adapter, ledger, result, deadline,
     stats = {"fetched": 0, "stored": 0, "empty": 0, "skipped": 0,
              "deferred": 0, "errors": []}
     result["karte_summary"] = stats
-    targets = ledger.karte_summary_due()
+    due = ledger.karte_summary_due()
+    targets = list(due)
     if jobs_only:
         missing = ledger.karte_summary_missing(KARTE_SUMMARY_FILL)
         targets += missing + ledger.karte_summary_stale(KARTE_SUMMARY_FILL - len(missing))
+    due_set = set(due)
     gets = 0
     for pid in dict.fromkeys(targets):
         karte_id = ledger.karte_id(pid)
@@ -833,7 +830,8 @@ def stage_karte_summary(adapter, ledger, result, deadline,
         if (gets >= KARTE_SUMMARY_TICK_CAP
                 or time.monotonic() > deadline - KARTE_SUMMARY_MARGIN_S):
             stats["deferred"] += 1
-            ledger.karte_summary_mark_due(pid)
+            if pid not in due_set:              # already flagged rows need no rewrite
+                ledger.karte_summary_mark_due(pid)
             continue
         gets += 1
         try:
