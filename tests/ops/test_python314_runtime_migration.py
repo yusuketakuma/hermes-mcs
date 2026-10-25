@@ -137,20 +137,27 @@ def test_reinstall_hands_lock_and_backup_to_install_sh(updater, monkeypatch, tmp
             return "", None
 
     def popen(argv, **kwargs):
+        if kwargs['pass_fds']:
+            inherited, = kwargs['pass_fds']
+            assert inherited != lock.fileno()
+            assert kwargs['env'][updater.RUN_LOCK_FD_ENV] == str(inherited)
+            assert os.fstat(inherited) == os.fstat(lock.fileno())
         calls.append((argv, kwargs))
         return Child()
 
     monkeypatch.setattr(updater.subprocess, "Popen", popen)
-    monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "9")
     backup = str(tmp_path / "venv.pre-python314")
     applying = {"reinstall": True, "install_args": ["--no-llm", "--no-plugin"],
                 "runtime_migration": {"venv": str(tmp_path / "venv"), "backup_path": backup}}
-    updater._reinstall(applying)
+    with (tmp_path / 'run.lock').open('w+b') as lock:
+        monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, str(lock.fileno()))
+        updater._reinstall(applying)
+        os.fstat(lock.fileno())  # The child borrows a copy; the parent keeps its descriptor.
+    with pytest.raises(OSError):
+        os.fstat(calls[0][1]['pass_fds'][0])
     argv, kwargs = calls[0]
     assert argv[-3:] == ["--no-llm", "--no-plugin", "--no-services"]
-    assert kwargs["pass_fds"] == (9,)
     assert kwargs["env"][updater.RUNTIME_BACKUP_ENV] == backup
-    assert kwargs["env"][updater.RUN_LOCK_FD_ENV] == "9"
     # a plain operator reinstall never carries the migration permission
     calls.clear()
     updater._reinstall({"reinstall": True, "install_args": []})
@@ -189,13 +196,21 @@ def test_post_merge_child_inherits_the_held_run_lock(updater, monkeypatch, tmp_p
             return "", ""
 
     def popen(argv, **kwargs):
+        if kwargs['pass_fds']:
+            inherited, = kwargs['pass_fds']
+            assert inherited != lock.fileno()
+            assert kwargs['env'][updater.RUN_LOCK_FD_ENV] == str(inherited)
+            assert os.fstat(inherited) == os.fstat(lock.fileno())
         seen.update(kwargs)
         return Child()
 
     monkeypatch.setattr(updater.subprocess, "Popen", popen)
     monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "99")   # a stale value never leaks
-    updater._run_post_merge("b" * 40, run_lock_fd=11)
-    assert seen["pass_fds"] == (11,) and seen["env"][updater.RUN_LOCK_FD_ENV] == "11"
+    with (tmp_path / 'run.lock').open('w+b') as lock:
+        updater._run_post_merge("b" * 40, run_lock_fd=lock.fileno())
+        os.fstat(lock.fileno())
+    with pytest.raises(OSError):
+        os.fstat(seen['pass_fds'][0])
     updater._run_post_merge("b" * 40, run_lock_fd=None)
     assert seen["pass_fds"] == () and updater.RUN_LOCK_FD_ENV not in seen["env"]
 

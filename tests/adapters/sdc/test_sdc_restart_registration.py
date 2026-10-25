@@ -44,7 +44,21 @@ def test_central_copies_and_existing_shared_contracts_keep_their_frozen_bytes():
               'provision/provision-vectors.json': 'd6c49ea2dc62d5780f87b8f26f3cb9106f7b36ca36fa66f88b84bcd396fd81aa',
               'diagnostics/diagnostics.schema.json': 'ada29dd8777db53672e75a14a16fc1ed175135a34c4fdb21e56e29908b3ac427',
               'diagnostics/diagnostics-vectors.json': '97ee03a1766fc538ac5c505a508b5e16f765b64c698c76b8bf04218a1b561fae'}
-    assert len(sources['files']) == 20
+    release_files = {
+        'releases/apply-api.schema.json': 'a7f68f5cdc8c69b32b3803c03556106e67b464337b5def9089e1d8532d80b082',
+        'releases/apply-vectors.json': '0ed3564a62d7e24f18170ad25e882ca1f63feac0d1164bab73fc26fd168329a3',
+        'releases/apply.schema.json': '1f10723acabb3defa2639e81aaf1cd8cb4c4f4a48e7959cc7c9ba806215416a0',
+        'releases/release-vectors.json': '8d6fd9ddfb445b3a47b96b4359bd88d3d277a6884b2ee2ab9a2a7544ea888381',
+        'releases/release.schema.json': 'ba6161cb73cc2e77409412e74b4c09ca91bef90504d5b5eca9cf9315a37d763f',
+        'releases/signature-vectors.json': '6c33fb6823f2c784f126b6b6f3be6ab3dd3e9c17882fba100ba22a08f1b31379',
+    }
+    assert len(sources['files']) == 26
+    assert {path: sources['files'][path] for path in release_files} == release_files
+    assert set(sources['release_apply_component']['files']) == release_files.keys()
+    original = {path: digest for path, digest in sources['files'].items() if path not in release_files}
+    # Pin the original 20 entries as well as the six byte-identical central release contracts.
+    assert len(original) == 20
+    assert hashlib.sha256(raw(original)).hexdigest() == '63dcc9080cc19d99e57faed6d159944fa5c88d8d43bb1198a63a75adf0f46c98'
     assert frozen.keys() <= sources['files'].keys()
     for path, expected in sources['files'].items():
         assert hashlib.sha256((ROOT / path).read_bytes()).hexdigest() == expected
