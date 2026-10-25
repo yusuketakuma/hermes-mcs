@@ -109,7 +109,8 @@ def test_reply_acknowledged_by_thread_read_is_notified_when_stored(db):
         assert json.loads(db.job_pending("reply", 1, rid)["payload"]) \
             == {"unread": True}
     replies = [_message(mid=i, parent_id=10, unread=False) for i in (11, 13, 14)]
-    drain = SimpleNamespace(fetch_thread=lambda pid, parent: replies)
+    drain = SimpleNamespace(fetch_thread_window=lambda pid, parent, start_page=1:
+                            mcs_contract.MessageBatch(replies, pages=1, reached=True))
     job_ops.run_reply_jobs(drain, db, {"errors": []}, time.monotonic() + 120)
     assert sorted(_notified(db)) == [13, 14]
     assert db.job_state("reply", 1, 13) == "done"
