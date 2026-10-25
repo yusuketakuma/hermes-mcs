@@ -66,7 +66,9 @@ def test_only_dns_free_names_are_resolved_and_udp_sends_are_blocked(monkeypatch)
     monkeypatch.setattr(guard, "_ORIGINAL_GETADDRINFO", lambda host, *a, **k: seen.append(host) or [])
     for allowed in (None, "localhost", b"localhost", "127.0.0.1", "::1", "fe80::1%lo0", "192.0.2.10"):
         guard._guarded_getaddrinfo(allowed, 443)
-    for name in ("synthetic.example", "slack.com", b"api.synthetic.invalid", "localhost.evil"):
+    for name in ("synthetic.example", "slack.com", b"api.synthetic.invalid", "localhost.evil",
+                 "192.0.2.1%synthetic.example", "192.0.2.1%1", "fe80::1%a%b", "fe80::1%",
+                 "fe80::1%lo0 ", "fe80::1%lo0\n", "1.2.3", " 127.0.0.1"):
         with pytest.raises(RuntimeError, match="external network access is disabled"):
             guard._guarded_getaddrinfo(name, 443)
     assert seen == [None, "localhost", b"localhost", "127.0.0.1", "::1", "fe80::1%lo0", "192.0.2.10"]

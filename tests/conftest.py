@@ -43,7 +43,9 @@ _TEST_HOME = tempfile.mkdtemp(prefix="mcs-test-home-")
 
 
 def _reset_environment() -> None:
-    """Give direct pytest invocations the same isolated HOME as the runner."""
+    """Isolate a direct pytest run: temp HOME/XDG/TMPDIR, no secret-looking or
+    exported MCS root variables, the sandbox flag and child-PATH shims. This is
+    narrower than scripts/run_tests.sh, which starts from an empty env -i."""
     for key in tuple(os.environ):
         upper = key.upper()
         if any(part in upper for part in _SENSITIVE_ENV):
@@ -186,8 +188,13 @@ def _guarded_getaddrinfo(host, *args, **kwargs):
     if name is None or name == "localhost":
         return _ORIGINAL_GETADDRINFO(host, *args, **kwargs)
     try:
-        ipaddress.ip_address(name.split("%", 1)[0])
-    except ValueError:
+        # the whole literal, scope included: "192.0.2.1%x" or "fe80::1%a%b" is
+        # not numeric, and whitespace or control characters never are
+        ipaddress.ip_address(name)
+        literal = name.isprintable() and not any(c.isspace() for c in name)
+    except (ValueError, TypeError):
+        literal = False
+    if not literal:
         return _blocked()
     return _ORIGINAL_GETADDRINFO(host, *args, **kwargs)
 
