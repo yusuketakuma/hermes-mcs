@@ -1508,12 +1508,10 @@ def test_a_failed_due_clear_never_leaves_half_a_summary(tmp_path, caller_open):
         db.db.commit()
         stored = db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='karte_summary'").fetchone()[0]
         disease = db.db.execute("SELECT disease FROM patients WHERE project_id=1").fetchone()[0]
-        if caller_open:
-            # the caller's transaction is not rolled back here; its old commit points stay
+        assert stored == 0                           # insert and due clear commit together or not at all
+        assert db.karte_summary_due() == [1]
+        if caller_open:                              # only this store was undone
             assert disease == "synthetic-pending"
-        else:
-            assert stored == 0                       # insert and due clear commit together or not at all
-            assert db.karte_summary_due() == [1]
     finally:
         db.close()
 
@@ -1544,3 +1542,150 @@ def test_a_failed_commit_never_leaves_half_a_summary(tmp_path):
         assert db.karte_summary_due() == [1]
     finally:
         db.close()
+
+
+
+def _summary_rows(path):
+    with closing(sqlite3.connect(str(path))) as reader:
+        return reader.execute("SELECT COUNT(*) FROM artifacts WHERE kind='karte_summary'").fetchone()[0]
+
+
+def _deny(db, rules):
+    """Authorizer denying the listed (action, arg1) pairs once each, counting denials."""
+    denied = []
+
+    def hook(action, arg1, *_):
+        if (action, arg1) in rules and (action, arg1) not in denied:
+            denied.append((action, arg1))
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+    db.db.set_authorizer(hook)
+    return denied
+
+
+@pytest.mark.parametrize("unchanged", [False, True])
+@pytest.mark.parametrize("caller_open", [False, True])
+def test_summary_store_failures_never_persist_half_a_store(tmp_path, unchanged, caller_open):
+    db = _ledger(tmp_path)
+    try:
+        _karte_due_patient(db)
+        if unchanged:
+            db.karte_summary_store(1, 10, {"comment": "合成"})
+            db.karte_summary_mark_due(1)
+        before = _summary_rows(tmp_path / "ledger.db")
+        fetched = db.karte_summary_current(1) and db.karte_summary_current(1)["fetched_at"]
+        db.db.execute("CREATE TRIGGER synthetic_fail BEFORE UPDATE OF karte_summary_due ON patients "
+                      "BEGIN SELECT RAISE(ABORT, 'synthetic due failure'); END")
+        db.db.commit()
+        if caller_open:
+            db.db.execute("UPDATE patients SET disease='synthetic-pending' WHERE project_id=1")
+        with pytest.raises(sqlite3.DatabaseError, match="synthetic due failure"):
+            db.karte_summary_store(1, 10, {"comment": "合成"})
+        assert db.db.in_transaction is caller_open    # only this store was undone
+        db.db.execute("DROP TRIGGER synthetic_fail")
+        db.db.commit()
+        assert _summary_rows(tmp_path / "ledger.db") == before
+        assert db.karte_summary_due() == [1]
+        if unchanged:
+            assert db.karte_summary_current(1)["fetched_at"] == fetched
+        disease = db.db.execute("SELECT disease FROM patients WHERE project_id=1").fetchone()[0]
+        assert (disease == "synthetic-pending") is caller_open
+    finally:
+        db.close()
+
+
+def test_summary_store_inside_a_caller_savepoint_commits_the_caller_write(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        _karte_due_patient(db)
+        db.db.execute("UPDATE patients SET disease='synthetic-pending' WHERE project_id=1")
+        db.db.execute("SAVEPOINT caller_outer")
+        assert db.karte_summary_store(1, 10, {"comment": "合成"}) is True
+        assert not db.db.in_transaction                 # the method-owned commit, as before
+        assert _summary_rows(tmp_path / "ledger.db") == 1 and db.karte_summary_due() == []
+        with closing(sqlite3.connect(str(tmp_path / "ledger.db"))) as reader:
+            assert reader.execute("SELECT disease FROM patients WHERE project_id=1").fetchone()[0] \
+                == "synthetic-pending"
+    finally:
+        db.close()
+
+
+def test_a_denied_commit_inside_a_caller_transaction_keeps_the_caller_write(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        _karte_due_patient(db)
+        db.db.execute("UPDATE patients SET disease='synthetic-pending' WHERE project_id=1")
+        denied = _deny(db, {(sqlite3.SQLITE_TRANSACTION, "COMMIT")})
+        try:
+            with pytest.raises(sqlite3.DatabaseError):
+                db.karte_summary_store(1, 10, {"comment": "合成"})
+        finally:
+            db.db.set_authorizer(None)
+        assert denied == [(sqlite3.SQLITE_TRANSACTION, "COMMIT")] and db.db.in_transaction
+        db.db.commit()
+        assert _summary_rows(tmp_path / "ledger.db") == 0 and db.karte_summary_due() == [1]
+        assert db.db.execute("SELECT disease FROM patients WHERE project_id=1").fetchone()[0] \
+            == "synthetic-pending"
+    finally:
+        db.close()
+
+
+def test_sqlite_automatic_rollback_skips_the_savepoint_cleanup(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        _karte_due_patient(db)
+        db.db.execute("CREATE TRIGGER synthetic_rollback BEFORE UPDATE OF karte_summary_due ON patients "
+                      "BEGIN SELECT RAISE(ROLLBACK, 'synthetic whole rollback'); END")
+        db.db.commit()
+        db.db.execute("UPDATE patients SET disease='synthetic-pending' WHERE project_id=1")
+        with pytest.raises(sqlite3.DatabaseError, match="synthetic whole rollback"):
+            db.karte_summary_store(1, 10, {"comment": "合成"})   # no missing-savepoint error
+        assert not db.db.in_transaction
+        assert _summary_rows(tmp_path / "ledger.db") == 0
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("refused", ["ROLLBACK", "RELEASE"])
+def test_a_failed_local_undo_drops_the_whole_uncommitted_transaction(tmp_path, refused):
+    db = _ledger(tmp_path)
+    try:
+        _karte_due_patient(db)
+        db.db.execute("CREATE TRIGGER synthetic_fail BEFORE UPDATE OF karte_summary_due ON patients "
+                      "BEGIN SELECT RAISE(ABORT, 'synthetic due failure'); END")
+        db.db.commit()
+        db.db.execute("UPDATE patients SET disease='synthetic-pending' WHERE project_id=1")
+        denied = _deny(db, {(sqlite3.SQLITE_SAVEPOINT, refused)})
+        try:
+            with pytest.raises(sqlite3.DatabaseError, match="synthetic due failure"):  # original kept
+                db.karte_summary_store(1, 10, {"comment": "合成"})
+        finally:
+            db.db.set_authorizer(None)
+        assert denied == [(sqlite3.SQLITE_SAVEPOINT, refused)] and not db.db.in_transaction
+        assert _summary_rows(tmp_path / "ledger.db") == 0
+        # the caller's uncommitted write went with the transaction; nothing was claimed saved
+        assert db.db.execute("SELECT disease FROM patients WHERE project_id=1").fetchone()[0] \
+            != "synthetic-pending"
+    finally:
+        db.close()
+
+
+def test_a_failed_full_undo_closes_the_connection(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        _karte_due_patient(db)
+        db.db.execute("CREATE TRIGGER synthetic_fail BEFORE UPDATE OF karte_summary_due ON patients "
+                      "BEGIN SELECT RAISE(ABORT, 'synthetic due failure'); END")
+        db.db.commit()
+        db.db.execute("UPDATE patients SET disease='synthetic-pending' WHERE project_id=1")
+        _deny(db, {(sqlite3.SQLITE_SAVEPOINT, "ROLLBACK"), (sqlite3.SQLITE_TRANSACTION, "ROLLBACK")})
+        with pytest.raises(sqlite3.DatabaseError, match="synthetic due failure"):
+            db.karte_summary_store(1, 10, {"comment": "合成"})
+        with pytest.raises(sqlite3.ProgrammingError):          # nothing can commit afterwards
+            db.db.commit()
+        assert _summary_rows(tmp_path / "ledger.db") == 0
+        with closing(sqlite3.connect(str(tmp_path / "ledger.db"))) as reader:
+            assert reader.execute("SELECT disease FROM patients WHERE project_id=1").fetchone()[0] \
+                != "synthetic-pending"
+    finally:
+        db.close()                                             # a second close is harmless

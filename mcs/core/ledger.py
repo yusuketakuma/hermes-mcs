@@ -1100,6 +1100,7 @@ class Ledger:
         sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
         now = time.time()
         row = karte_summary_row(self.db, project_id)
+        unchanged = None
         if row:
             with suppress(ValueError, TypeError, RecursionError):
                 meta = json.loads(row["meta"] or "{}")
@@ -1107,26 +1108,48 @@ class Ledger:
                 if (isinstance(meta, dict) and meta.get("sha256") == sha
                         and meta.get("karte_id") == karte_id):
                     meta["fetched_at"] = now
-                    self.db.execute(
-                        "UPDATE artifacts SET meta=? WHERE artifact_id=?",
-                        (json.dumps(meta, ensure_ascii=False),
-                         row["artifact_id"]))
-                    self._karte_summary_stored(project_id)
-                    return False
+                    unchanged = (json.dumps(meta, ensure_ascii=False), row["artifact_id"])
+        if unchanged is not None:
+            self._karte_summary_write(project_id, lambda: self.db.execute(
+                "UPDATE artifacts SET meta=? WHERE artifact_id=?", unchanged))
+            return False
         meta = {"karte_id": karte_id, "fetched_at": now, "sha256": sha}
-        if self.db.in_transaction:
-            # a caller's own open writes keep the old commit points; never roll them back here
-            self.artifact_add("karte_summary", text, project_id=project_id, meta=meta)
-            self._karte_summary_stored(project_id)
-            return True
-        with self.db:   # the new row and the cleared due flag commit together, or neither does
-            self.artifact_add_tx("karte_summary", text, project_id=project_id, meta=meta)
-            self._clear_karte_summary_due(project_id)
+        self._karte_summary_write(project_id, lambda: self.artifact_add_tx(
+            "karte_summary", text, project_id=project_id, meta=meta))
         return True
 
-    def _karte_summary_stored(self, project_id: int):
-        self._clear_karte_summary_due(project_id)
-        self.db.commit()
+    def _karte_summary_write(self, project_id: int, write) -> None:
+        """Run write() and the due clear as one unit, then commit as before.
+
+        A caller's already-open transaction is committed with it on success
+        (the method has always owned that commit); on failure only this unit
+        is undone through a savepoint, so the caller's earlier writes stay."""
+        savepoint = f"karte_summary_{uuid.uuid4().hex}" if self.db.in_transaction else None
+        if savepoint:
+            self.db.execute(f"SAVEPOINT {savepoint}")    # fails before anything is written
+        try:
+            write()
+            self._clear_karte_summary_due(project_id)
+            self.db.commit()
+        except BaseException:
+            if self.db.in_transaction:                    # SQLite may already have rolled back
+                self._undo_karte_summary_write(savepoint)
+            raise
+
+    def _undo_karte_summary_write(self, savepoint) -> None:
+        """Undo the unit; if that fails, drop the whole uncommitted transaction,
+        and if even that fails close the connection so nothing can commit it."""
+        if savepoint:
+            try:
+                self.db.execute(f"ROLLBACK TO {savepoint}")
+                self.db.execute(f"RELEASE {savepoint}")
+                return
+            except sqlite3.Error:
+                pass                                     # the caller's open writes are lost below
+        try:
+            self.db.rollback()
+        except sqlite3.Error:
+            self.db.close()
 
     def _clear_karte_summary_due(self, project_id: int):
         self.db.execute(
