@@ -390,8 +390,7 @@ def initialize(db, *, schema_version: int) -> bool:
               END;
             """)
         _install_fts_update_trigger(db)
-    db.execute(f"PRAGMA user_version={schema_version}")
-    db.commit()
+    # only _migrate moves user_version, inside its own commit (Oracle F03)
     return fts
 
 
