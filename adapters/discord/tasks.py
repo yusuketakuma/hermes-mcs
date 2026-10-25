@@ -21,7 +21,7 @@ import weakref
 from typing import Any
 
 from adapters.common import paths, registry
-from adapters.common.worker import POLL_S, await_settled, retry_startup
+from adapters.common.worker import POLL_S, await_settled, hook_unload, retry_startup
 from . import actions, delivery
 from contextlib import suppress
 
@@ -42,23 +42,8 @@ _HOOKED = weakref.WeakKeyDictionary()
 
 
 def _hook_unload(ctx, key) -> None:
-    try:
-        hooked = _HOOKED.setdefault(ctx, set())
-    except TypeError:                # a host that cannot be weakly referenced
-        hooked = None
-    if hooked is not None and key in hooked:
-        return
-
-    def unload():
-        live = _LIVE.get(key)
-        if live is not None and live._ctx is ctx:
-            # a task cancelled before it ever ran skips its finally, so the
-            # host's unload drops the entry itself
-            del _LIVE[key]
-            live.unload()
-    ctx.on_unload(unload)
-    if hooked is not None:
-        hooked.add(key)
+    # module globals are read at call time so a test may swap _HOOKED
+    hook_unload(ctx, key, _LIVE, _HOOKED)
 
 
 def _bot_closed(bot: Any) -> bool:

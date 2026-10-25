@@ -56,6 +56,28 @@ NO_BACKUP_HORIZON_S = 90 * 86400.0  # with no local backup set, settled rows
 NOT_SENT_STATUS = frozenset({400, 401, 403, 404, 405, 410})
 
 
+def hook_unload(ctx, key, live: dict, hooked) -> None:
+    """Register one host unload per (host, scope) that stops only the newest
+    supervisor in ``live``; ``hooked`` is the caller's weak host -> keys map."""
+    try:
+        keys = hooked.setdefault(ctx, set())
+    except TypeError:                # a host that cannot be weakly referenced
+        keys = None
+    if keys is not None and key in keys:
+        return
+
+    def unload():
+        current = live.get(key)
+        if current is not None and current._ctx is ctx:
+            # a task cancelled before it ever ran skips its finally, so the
+            # host's unload drops the entry itself
+            del live[key]
+            current.unload()
+    ctx.on_unload(unload)
+    if keys is not None:
+        keys.add(key)
+
+
 async def await_settled(coroutine, *, on_cancel=None):
     """Wait for owned I/O to finish even when its outer waiter is cancelled."""
     try:
@@ -613,8 +635,7 @@ class DeliveryWorker:
         marked done — the registry flag bounds resume scans to one
         journal read per pending spec per tick."""
         spec = claim["spec"]
-        if (spec.get("parts", {}).get("post_source_id") is not None
-                or spec_mod.reply_card_key(spec.get("card_key"))):
+        if spec_mod.post_scoped(spec):
             # Old workers could bind two cards to the same body post. A
             # recorded prior is not safe when another card also owns it.
             priors = {p["prior_remote_id"] for p in manifest if p.get("prior_remote_id")}
@@ -997,8 +1018,7 @@ class DeliveryWorker:
         records = await asyncio.to_thread(self._jview.refresh)
         card_message_ids, invalid = await asyncio.to_thread(journal.primary_results, records)
         part_owners = None
-        if any((spec.get("parts", {}).get("post_source_id") is not None
-                or spec_mod.reply_card_key(spec.get("card_key")))
+        if any(spec_mod.post_scoped(spec)
                and any(p.get("prior_remote_id")
                        for p in spec.get("parts", {}).get("manifest", ()))
                for spec in resume):
