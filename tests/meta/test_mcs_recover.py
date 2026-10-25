@@ -31,6 +31,42 @@ def _make_repo(tmp_path):
     return repo
 
 
+def test_release_fence_holds_before_recovery_reports_or_lock_cleanup(rec, monkeypatch):
+    import release_apply_owner
+    runtime = os.path.dirname(rec.DATA)
+    with release_apply_owner._control_store(runtime) as store:
+        store.write('release-owner-activation.json', {'synthetic': True})
+    monkeypatch.setattr(rec, '_report', lambda *_a, **_k: pytest.fail('report before release hold'))
+    monkeypatch.setattr(rec, '_report_alert', lambda *_a, **_k: pytest.fail('alert before release hold'))
+    monkeypatch.setattr(rec, '_try_lock', lambda *_a: pytest.fail('old locks before release hold'))
+    monkeypatch.setattr(rec, '_remove_marker', lambda: pytest.fail('cleanup before release hold'))
+    assert rec.recover() == 2
+    assert rec._RELEASE_GATE_FD is None
+    assert not Path(rec.REPORT_PATH).exists()
+
+
+def test_recovery_owned_child_inherits_gate_only_during_scope(rec, monkeypatch):
+    captured = []
+
+    class Child:
+        returncode = 0
+
+        def communicate(self, timeout):
+            return '', ''
+
+    def spawn(argv, **kwargs):
+        captured.append(tuple(os.fstat(fd).st_ino for fd in kwargs.get('pass_fds', ())))
+        return Child()
+
+    monkeypatch.setattr(rec.subprocess, 'Popen', spawn)
+    with rec._release_scope(os.path.dirname(rec.DATA)) as fd:
+        identity = os.fstat(fd).st_ino
+        rec._run_owned(['synthetic'], 1, {})
+        assert os.fstat(fd).st_ino == identity
+    rec._run_owned(['synthetic'], 1, {})
+    assert captured == [(identity,), ()] and rec._RELEASE_GATE_FD is None
+
+
 @pytest.fixture
 def rec(tmp_path, monkeypatch):
     mod = _load()

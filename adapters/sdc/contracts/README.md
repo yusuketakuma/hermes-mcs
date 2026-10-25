@@ -55,3 +55,7 @@ HTTP応答の `request_id` は要求の追跡値で、承認や実行証拠で�
 診断イベントは固定enumと件数・10分単位の時刻だけです。新規送信には独立した現地同意と中央同意を必要とし、患者情報・秘密・path・URL・例外文・生ログを収集しません。新規データの鮮度検証と、保存済み同ID・同bytesの履歴照合は別です。中央の `unknown` は未送信の証明ではなく、内容の期限切れも再実行の許可にはなりません。
 
 契約validatorだけでは、送信や適用の許可を作りません。monitorの初回import・既存R1への続行・device ACK/statusは `../provision.py` と `mcs/ops/sdc_provision_cli.py` の開発候補へ接続し、手順は[状態監視ガイド](../../../docs/guides/SDC_SELF_MONITORING.md)を正本とします。support/restart profile、診断の独立同意・私有spool・自動送信は未接続です。実actor/channel/pin配布・外部の復元基線・実observer sink・実D1/Macの受入がない状態を、顧客有効化済みとは扱いません。R1・既存R4の経路、署名用途、中央grant CAS以後最大30秒のin-flight契約は変更しません。
+
+## releases
+
+`releases/` はCSDCのR5a/R5b公開契約6ファイルの同一bytesです。出典とSHA-256は`sources.json`のrelease_apply_component/filesに記録します。完全合成の公開鍵・vectorだけを含み、秘密鍵・実設定は含みません。Pythonの契約・署名互換性だけを検証し、製品owner接続・実機の信頼基線・有効化・再接続成功は未受入です。中央の1062件は提供された中央合成検証の件数で、製品試験数ではありません。

@@ -1,0 +1,2828 @@
+{
+  "notice": "All keys, digests, scopes and policy values are synthetic. Private keys were discarded after export. Policy numbers are test inputs, not product defaults.",
+  "now": 1792663200000,
+  "max_legal_trust_bytes": 7967,
+  "positive": [
+    {
+      "name": "Trust root version 1",
+      "definition": "Trust",
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 1,
+        "previous_trust_digest": null,
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwGRi_ivgB5_7KbHjWtgAES0AaGirxUgk96mMRSog7VkOLXnXkE21qNKcs2KYKpN7lT9UtC_NvesQRTIkgrCj1XZhIrU70opu6WUxYI44J-CiBdw8P50gh6qrtucZHL4-o_PirnA_-QTXaXiroSNMb4XvmxzKQo4JyxdfJwHMssavYw_T0jXIGaRJsNAX2BeINED1VFYhgOJEBpQrHUo6tmaBj4iUaQUlfOOQUFyXxnDldHtSCjiUI-B_WoVqCJoMO4gG3RWszCF7LGXoGE9NPsYJ217x5Ang5Ln3vFX9XOWpjvsVa_i-LcmANz9garpd53ltTlDWhq6Aa-yIJzjOyh7lHAY11KJg198ZBBq_8tfxG_sru-aJ6N2QnC2lN_jZL_JxpnyAY_8LwRkHU3CEuD8uhE439dXDgSsOmtfztyAissWAEC2-TXy5OUC-tf6Y9WiZRDrNsLcmrI3p_YVdEnJHWFnBAhUZJQhT9dCEVvGJqBVRYCigB4VWroln0qgXAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApdnBmfc2nlhPz1d2i7HO_s8h33SJhy8DdX_FTffwkEmOBiQW5fi14Py_a1mb3x3wr3SKQXT2_VC9W_8H7zjNhJuTYR5TzyMNpF3r6U0zbrDdTRpwvMz99WQSxhbezBzJr_7mf4o4iNSLxUiM3RhnPBdzYA0Y3JCxi2x3Bhw4l0-6vhjkvX8qUfvJ7k6tb4zXVZuiG6F12vDhZkQrVWBT6rGIpBkBOQ0lrfpdDuNsmhj3voykIeKcP32CcCNb7eX9AliqzogYNYd_LnPPZV0DvSEr5ydyysWE7GBzQL27mOr_DVxrf-oqSlms_y67F0qxl_Ek4FyE2iW9EiP5DdI9k8fFr0dBOR5x_1oyxtZ19SCap77DQfjMKogiJkPZmILzLU3XqNg_2sBcRPirHwIk6nT6RSCRuyolDyZORK5v3i2Rjobf3e7mqls_zXLN1VqQc2nSseFKfgZG4aTxP1nVq_xruVkQeeXe8LKVTQeuhBcMEZfiybHr7SB6WiODZyZPAgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [],
+        "retired_root_kids": [],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null
+      }
+    },
+    {
+      "name": "Trust ordinary rotation",
+      "definition": "Trust",
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 2,
+        "previous_trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          },
+          {
+            "kid": "bbb2f070e61eef752508112f18483b913f3977d36235e730ed2ae248b4d7f9c6",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAzQP8pdARUGGQLNNPPC012ErZkvpL8746bnLWjNhrFDBDtlYu8y9c5m2ueGucr35-s5zwDAlE4OtdQIQbm9YyRAZwQp40AiW6Q0K88XgQ-gSWnZDplS3Rapu0tCwvIEtnnB7kLoYZrZVoReYUTri7cZKasHYEwwzA_Sk0LwaF7lyQSBriIWEPpitf_Zkig63BV8U4uu04QEeiZqd8VYL1MUfnawoSigx4gzUaivmcw7K3xE9q5FHdqNhhJZINwPqqDNO5v6ulrEncDlnRShOq8fNEuHidjLXAxkIAi9KA4poFodcsoHD2Npk7qtEXJqdvVKdZx1UNeXHDkuiMrl2PSyCvZhoUYV8P9kY8BFESyI5fPNT5S7zns3QtKLeuuHwMEA90v5AMwhpjuxxssNK3S3yxJSmhBsVqFbFFO1aBtM-axmp0ntIwTB5gdoED_V1wPKhnxC30VehR5TG3lNuUaIIxSejgEvQnpvW5o-icvQ68q4vxKhunso4ARrmlsk25AgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "85b4785067a14877b71baa47cb62dbae6c51d78601281d3c58cada65557053ee",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAvG59Wr_kTHI5xtPuLoIxTXGe9Oe81P5d7BS27vfTVyLwXILv7VzmUNEwXqueuJ6QDK5LkR2Qo-h0dRyNcVqd6CfEibhyWyTZgF0twsddETLZEvvoJwgWC6zwfbzS9EQMt-Vgwl0NcAEQ0F2WCatp9VebXT0s5cpZH18cBN-kY3K0tAQ7yZpBI1ybx16INqwf5UTMiqP6CgMJyYS6WwKJDoStT24S-ew95ZRFhkhSWjRW6B3RRx7f7UcK4oQgvk0C2OO5G96PYcb3KGh9g1OgCgUTMOR2tC_fWVkcFnOhvyhglhHDZxTbqpu9FFuI3Hd519P1z8JwppzyFHL-jkRBlGQ-RMOqz09I45xzppzUx3N4gcZbukJOzhnVEDSTkEd_FrAbK87KVzBiwm8brTrQt49Fgd77tkl48E8F-PQixH3_iSoAI9tnRDIv15-hisi3URdefGd66C7jiFQvRuZEn9YHaBdnna-7NPquCrKtLuv3aZiAy7FLsMczN-9y-t-9AgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [
+          "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949"
+        ],
+        "retired_root_kids": [
+          "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340"
+        ],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null
+      }
+    },
+    {
+      "name": "Trust recovery checkpoint",
+      "definition": "Trust",
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 3,
+        "previous_trust_digest": "230ebc6274ee27a77923d6dbf97476ea15b4263a5c62677ab04515dee2fd61d1",
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          },
+          {
+            "kid": "bbb2f070e61eef752508112f18483b913f3977d36235e730ed2ae248b4d7f9c6",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAzQP8pdARUGGQLNNPPC012ErZkvpL8746bnLWjNhrFDBDtlYu8y9c5m2ueGucr35-s5zwDAlE4OtdQIQbm9YyRAZwQp40AiW6Q0K88XgQ-gSWnZDplS3Rapu0tCwvIEtnnB7kLoYZrZVoReYUTri7cZKasHYEwwzA_Sk0LwaF7lyQSBriIWEPpitf_Zkig63BV8U4uu04QEeiZqd8VYL1MUfnawoSigx4gzUaivmcw7K3xE9q5FHdqNhhJZINwPqqDNO5v6ulrEncDlnRShOq8fNEuHidjLXAxkIAi9KA4poFodcsoHD2Npk7qtEXJqdvVKdZx1UNeXHDkuiMrl2PSyCvZhoUYV8P9kY8BFESyI5fPNT5S7zns3QtKLeuuHwMEA90v5AMwhpjuxxssNK3S3yxJSmhBsVqFbFFO1aBtM-axmp0ntIwTB5gdoED_V1wPKhnxC30VehR5TG3lNuUaIIxSejgEvQnpvW5o-icvQ68q4vxKhunso4ARrmlsk25AgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "51b0467db07fd8036a9b5db15559d2d086a17486cb1912b4a60592c27bcc7fb5",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA5kDzCQYaKdFAFVVBAy6SPjpkJ2_xp8xwCsEOXPIkZg8l1hbnGYZYDkcyrOk40y_XJNcbCDdNDxXxcj6CQlPuIOkdq7EfXEM4XYRngs7-Ij24PW4bae50k0iKex3AqAFkhqNqwdqQiJFyBfgDulGxk2Wq0lhtgLxdYzcobb6-NY6TfluSOxqMbnmeRAbVJ6RktZKx9OzWFH_V20E-V4kgbxqb7hGdRtPXAIVZ5hFfoG6249qcYHONomeVOqq3wlGIXjWpqFInQrKiu8imNd6pSGkDyE8JHuri_Z5MkIUv9Gw55DGGnm6vk7VdBrPbsEJsAQassz0i-HLfVGiiVKHmRYehDYaKNPghp35Bx_kKS0gC4IYaFL2eheusF-eSS_GJ3__2QDkUwabKXPI2RM6OdnVeOkhmNBSFzrZd3O0AfYZZsUfL7lmMnV5oTkZvvaKk2JleI3Hqm_FyqpYH6-Lo_o0IaG0ZSrrvD2f0OuwoE8P6eWlTESeDFEqHJSWqU419AgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [
+          "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+          "85b4785067a14877b71baa47cb62dbae6c51d78601281d3c58cada65557053ee"
+        ],
+        "retired_root_kids": [
+          "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340"
+        ],
+        "metadata_epoch": 2,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": {
+          "schema_version": "sdc.release.recovery-checkpoint.v1",
+          "previous_epoch": 1,
+          "new_epoch": 2,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+          "manifest_digest": "db0797812e997c6ddf15d4d6b7370351ebc82e5187e11d1bd448b2a4c2fb598a",
+          "reason": "metadata_forward_attack",
+          "affected_release_kids": [
+            "85b4785067a14877b71baa47cb62dbae6c51d78601281d3c58cada65557053ee"
+          ],
+          "preserve_bindings": true,
+          "preserve_successful_frontier": true
+        }
+      }
+    },
+    {
+      "name": "Trust largest legal",
+      "definition": "Trust",
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
+        "environment": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "stream_id": "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+        "root_version": 9007199254740991,
+        "previous_trust_digest": "230ebc6274ee27a77923d6dbf97476ea15b4263a5c62677ab04515dee2fd61d1",
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwGRi_ivgB5_7KbHjWtgAES0AaGirxUgk96mMRSog7VkOLXnXkE21qNKcs2KYKpN7lT9UtC_NvesQRTIkgrCj1XZhIrU70opu6WUxYI44J-CiBdw8P50gh6qrtucZHL4-o_PirnA_-QTXaXiroSNMb4XvmxzKQo4JyxdfJwHMssavYw_T0jXIGaRJsNAX2BeINED1VFYhgOJEBpQrHUo6tmaBj4iUaQUlfOOQUFyXxnDldHtSCjiUI-B_WoVqCJoMO4gG3RWszCF7LGXoGE9NPsYJ217x5Ang5Ln3vFX9XOWpjvsVa_i-LcmANz9garpd53ltTlDWhq6Aa-yIJzjOyh7lHAY11KJg198ZBBq_8tfxG_sru-aJ6N2QnC2lN_jZL_JxpnyAY_8LwRkHU3CEuD8uhE439dXDgSsOmtfztyAissWAEC2-TXy5OUC-tf6Y9WiZRDrNsLcmrI3p_YVdEnJHWFnBAhUZJQhT9dCEVvGJqBVRYCigB4VWroln0qgXAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApdnBmfc2nlhPz1d2i7HO_s8h33SJhy8DdX_FTffwkEmOBiQW5fi14Py_a1mb3x3wr3SKQXT2_VC9W_8H7zjNhJuTYR5TzyMNpF3r6U0zbrDdTRpwvMz99WQSxhbezBzJr_7mf4o4iNSLxUiM3RhnPBdzYA0Y3JCxi2x3Bhw4l0-6vhjkvX8qUfvJ7k6tb4zXVZuiG6F12vDhZkQrVWBT6rGIpBkBOQ0lrfpdDuNsmhj3voykIeKcP32CcCNb7eX9AliqzogYNYd_LnPPZV0DvSEr5ydyysWE7GBzQL27mOr_DVxrf-oqSlms_y67F0qxl_Ek4FyE2iW9EiP5DdI9k8fFr0dBOR5x_1oyxtZ19SCap77DQfjMKogiJkPZmILzLU3XqNg_2sBcRPirHwIk6nT6RSCRuyolDyZORK5v3i2Rjobf3e7mqls_zXLN1VqQc2nSseFKfgZG4aTxP1nVq_xruVkQeeXe8LKVTQeuhBcMEZfiybHr7SB6WiODZyZPAgMBAAE",
+            "not_before": 9007199081940991,
+            "expires_at": 9007199168340991
+          },
+          {
+            "kid": "85b4785067a14877b71baa47cb62dbae6c51d78601281d3c58cada65557053ee",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAvG59Wr_kTHI5xtPuLoIxTXGe9Oe81P5d7BS27vfTVyLwXILv7VzmUNEwXqueuJ6QDK5LkR2Qo-h0dRyNcVqd6CfEibhyWyTZgF0twsddETLZEvvoJwgWC6zwfbzS9EQMt-Vgwl0NcAEQ0F2WCatp9VebXT0s5cpZH18cBN-kY3K0tAQ7yZpBI1ybx16INqwf5UTMiqP6CgMJyYS6WwKJDoStT24S-ew95ZRFhkhSWjRW6B3RRx7f7UcK4oQgvk0C2OO5G96PYcb3KGh9g1OgCgUTMOR2tC_fWVkcFnOhvyhglhHDZxTbqpu9FFuI3Hd519P1z8JwppzyFHL-jkRBlGQ-RMOqz09I45xzppzUx3N4gcZbukJOzhnVEDSTkEd_FrAbK87KVzBiwm8brTrQt49Fgd77tkl48E8F-PQixH3_iSoAI9tnRDIv15-hisi3URdefGd66C7jiFQvRuZEn9YHaBdnna-7NPquCrKtLuv3aZiAy7FLsMczN-9y-t-9AgMBAAE",
+            "not_before": 9007199081940991,
+            "expires_at": 9007199168340991
+          },
+          {
+            "kid": "bbb2f070e61eef752508112f18483b913f3977d36235e730ed2ae248b4d7f9c6",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAzQP8pdARUGGQLNNPPC012ErZkvpL8746bnLWjNhrFDBDtlYu8y9c5m2ueGucr35-s5zwDAlE4OtdQIQbm9YyRAZwQp40AiW6Q0K88XgQ-gSWnZDplS3Rapu0tCwvIEtnnB7kLoYZrZVoReYUTri7cZKasHYEwwzA_Sk0LwaF7lyQSBriIWEPpitf_Zkig63BV8U4uu04QEeiZqd8VYL1MUfnawoSigx4gzUaivmcw7K3xE9q5FHdqNhhJZINwPqqDNO5v6ulrEncDlnRShOq8fNEuHidjLXAxkIAi9KA4poFodcsoHD2Npk7qtEXJqdvVKdZx1UNeXHDkuiMrl2PSyCvZhoUYV8P9kY8BFESyI5fPNT5S7zns3QtKLeuuHwMEA90v5AMwhpjuxxssNK3S3yxJSmhBsVqFbFFO1aBtM-axmp0ntIwTB5gdoED_V1wPKhnxC30VehR5TG3lNuUaIIxSejgEvQnpvW5o-icvQ68q4vxKhunso4ARrmlsk25AgMBAAE",
+            "not_before": 9007199081940991,
+            "expires_at": 9007199168340991
+          }
+        ],
+        "revoked_release_kids": [
+          "a099999999999999999999999999999999999999999999999999999999999999",
+          "a199999999999999999999999999999999999999999999999999999999999999",
+          "a299999999999999999999999999999999999999999999999999999999999999",
+          "a399999999999999999999999999999999999999999999999999999999999999",
+          "a499999999999999999999999999999999999999999999999999999999999999",
+          "a599999999999999999999999999999999999999999999999999999999999999",
+          "a699999999999999999999999999999999999999999999999999999999999999",
+          "a799999999999999999999999999999999999999999999999999999999999999",
+          "a899999999999999999999999999999999999999999999999999999999999999",
+          "a999999999999999999999999999999999999999999999999999999999999999",
+          "aa99999999999999999999999999999999999999999999999999999999999999",
+          "ab99999999999999999999999999999999999999999999999999999999999999",
+          "ac99999999999999999999999999999999999999999999999999999999999999",
+          "ad99999999999999999999999999999999999999999999999999999999999999",
+          "ae99999999999999999999999999999999999999999999999999999999999999",
+          "af99999999999999999999999999999999999999999999999999999999999999"
+        ],
+        "retired_root_kids": [
+          "b099999999999999999999999999999999999999999999999999999999999999",
+          "b199999999999999999999999999999999999999999999999999999999999999",
+          "b299999999999999999999999999999999999999999999999999999999999999",
+          "b399999999999999999999999999999999999999999999999999999999999999",
+          "b499999999999999999999999999999999999999999999999999999999999999",
+          "b599999999999999999999999999999999999999999999999999999999999999",
+          "b699999999999999999999999999999999999999999999999999999999999999",
+          "b799999999999999999999999999999999999999999999999999999999999999",
+          "b899999999999999999999999999999999999999999999999999999999999999",
+          "b999999999999999999999999999999999999999999999999999999999999999",
+          "ba99999999999999999999999999999999999999999999999999999999999999",
+          "bb99999999999999999999999999999999999999999999999999999999999999",
+          "bc99999999999999999999999999999999999999999999999999999999999999",
+          "bd99999999999999999999999999999999999999999999999999999999999999",
+          "be99999999999999999999999999999999999999999999999999999999999999",
+          "bf99999999999999999999999999999999999999999999999999999999999999"
+        ],
+        "metadata_epoch": 9007199254740991,
+        "issued_at": 9007173334740991,
+        "not_before": 9007173334740991,
+        "expires_at": 9007199168340991,
+        "policy": {
+          "download_origin": "https://abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbc.abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbc.abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbc.abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbc",
+          "max_attestation_ttl_ms": 86400000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 268435456,
+          "max_unpacked_bytes": 1073741824,
+          "max_archive_entries": 50000,
+          "download_timeout_ms": 300000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": {
+          "schema_version": "sdc.release.recovery-checkpoint.v1",
+          "previous_epoch": 9007199254740990,
+          "new_epoch": 9007199254740991,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+          "manifest_digest": "db0797812e997c6ddf15d4d6b7370351ebc82e5187e11d1bd448b2a4c2fb598a",
+          "reason": "metadata_forward_attack",
+          "affected_release_kids": [
+            "a099999999999999999999999999999999999999999999999999999999999999",
+            "a199999999999999999999999999999999999999999999999999999999999999",
+            "a299999999999999999999999999999999999999999999999999999999999999"
+          ],
+          "preserve_bindings": true,
+          "preserve_successful_frontier": true
+        }
+      },
+      "validate_without_now": true
+    },
+    {
+      "name": "Attestation",
+      "definition": "Attestation",
+      "value": {
+        "schema_version": "sdc.release.attestation.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "metadata_epoch": 1,
+        "core": {
+          "schema_version": "sdc.release.core.v1",
+          "product": "hermes-mcs",
+          "trust_domain": "csdc-synthetic",
+          "environment": "synthetic",
+          "stream_id": "stable",
+          "code_seq": 42,
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "artifact": {
+            "format": "git-bundle-v2",
+            "object_format": "sha1",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 1048576
+          },
+          "lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "platforms": [
+            {
+              "os": "macos",
+              "cpu": "arm64",
+              "python": [
+                3,
+                12
+              ]
+            }
+          ],
+          "minimum_updater": [
+            1,
+            4,
+            0
+          ],
+          "schema": {
+            "accepts_installed": [
+              7,
+              8
+            ],
+            "target": 8,
+            "migration": "none",
+            "rollback_requires_db_restore": false
+          },
+          "apply": {
+            "quiesce_required": true,
+            "restart_required": true
+          },
+          "recovery": {
+            "code_rollback": "previous_release",
+            "db_recovery": "separate_approval"
+          }
+        },
+        "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+        "issued_at": 1792663140000,
+        "not_before": 1792663140000,
+        "expires_at": 1792684800000
+      },
+      "trust": "Trust root version 1"
+    },
+    {
+      "name": "State",
+      "definition": "State",
+      "value": {
+        "schema_version": "sdc.release.state.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "tenant": "self",
+        "installation": "self",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "realm_epoch": "synthetic-release-realm",
+        "trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_version": 1,
+        "metadata_epoch": 1,
+        "highest_seen": {
+          "code_seq": 42,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b"
+        },
+        "installed": {
+          "code_seq": 40,
+          "release_id": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "highest_installed": {
+          "code_seq": 41,
+          "release_id": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "unresolved": null
+      }
+    },
+    {
+      "name": "State after recovery checkpoint",
+      "definition": "State",
+      "value": {
+        "schema_version": "sdc.release.state.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "tenant": "self",
+        "installation": "self",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "realm_epoch": "synthetic-release-realm",
+        "trust_digest": "109a2dd5ec2efd63d07d1addddc6148a2a32bdf85c17253106324dd9d6d22d44",
+        "root_version": 3,
+        "metadata_epoch": 2,
+        "highest_seen": {
+          "code_seq": 19,
+          "release_id": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "installed": {
+          "code_seq": 40,
+          "release_id": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "highest_installed": {
+          "code_seq": 41,
+          "release_id": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "unresolved": null
+      }
+    },
+    {
+      "name": "Plan",
+      "definition": "Plan",
+      "value": {
+        "schema_version": "sdc.release.plan.v1",
+        "plan_id": "00000000-0000-4000-8000-000000000042",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "tenant": "self",
+        "installation": "self",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "realm_epoch": "synthetic-release-realm",
+        "trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_version": 1,
+        "metadata_epoch": 1,
+        "highest_seen": {
+          "code_seq": 42,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b"
+        },
+        "installed": {
+          "code_seq": 40,
+          "release_id": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "highest_installed": {
+          "code_seq": 41,
+          "release_id": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+        "manifest_digest": "db0797812e997c6ddf15d4d6b7370351ebc82e5187e11d1bd448b2a4c2fb598a",
+        "target_code_seq": 42,
+        "preconditions": {
+          "current_commit": "dddddddddddddddddddddddddddddddddddddddd",
+          "hand_edited": false,
+          "installed_lock_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "free_bytes": 2147483648,
+          "platform": {
+            "os": "macos",
+            "cpu": "arm64",
+            "python": [
+              3,
+              12
+            ]
+          },
+          "updater": [
+            1,
+            4,
+            2
+          ],
+          "installed_schema": 8,
+          "backup_verified": true,
+          "backup_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "observed_at": 1792663140000
+        },
+        "precondition_sha256": "7fb5395eebd7b2e0386ce486cee386dab9098b5054f189b3c8ea233e7393868d",
+        "window": {
+          "starts_at": 1792663140000,
+          "ends_at": 1792666800000
+        },
+        "canary_stage": "self_test",
+        "modes": [],
+        "issued_at": 1792663200000,
+        "expires_at": 1792665000000
+      }
+    }
+  ],
+  "negative": [
+    {
+      "name": "Trust unknown field",
+      "definition": "Trust",
+      "layer": "schema",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 1,
+        "previous_trust_digest": null,
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwGRi_ivgB5_7KbHjWtgAES0AaGirxUgk96mMRSog7VkOLXnXkE21qNKcs2KYKpN7lT9UtC_NvesQRTIkgrCj1XZhIrU70opu6WUxYI44J-CiBdw8P50gh6qrtucZHL4-o_PirnA_-QTXaXiroSNMb4XvmxzKQo4JyxdfJwHMssavYw_T0jXIGaRJsNAX2BeINED1VFYhgOJEBpQrHUo6tmaBj4iUaQUlfOOQUFyXxnDldHtSCjiUI-B_WoVqCJoMO4gG3RWszCF7LGXoGE9NPsYJ217x5Ang5Ln3vFX9XOWpjvsVa_i-LcmANz9garpd53ltTlDWhq6Aa-yIJzjOyh7lHAY11KJg198ZBBq_8tfxG_sru-aJ6N2QnC2lN_jZL_JxpnyAY_8LwRkHU3CEuD8uhE439dXDgSsOmtfztyAissWAEC2-TXy5OUC-tf6Y9WiZRDrNsLcmrI3p_YVdEnJHWFnBAhUZJQhT9dCEVvGJqBVRYCigB4VWroln0qgXAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApdnBmfc2nlhPz1d2i7HO_s8h33SJhy8DdX_FTffwkEmOBiQW5fi14Py_a1mb3x3wr3SKQXT2_VC9W_8H7zjNhJuTYR5TzyMNpF3r6U0zbrDdTRpwvMz99WQSxhbezBzJr_7mf4o4iNSLxUiM3RhnPBdzYA0Y3JCxi2x3Bhw4l0-6vhjkvX8qUfvJ7k6tb4zXVZuiG6F12vDhZkQrVWBT6rGIpBkBOQ0lrfpdDuNsmhj3voykIeKcP32CcCNb7eX9AliqzogYNYd_LnPPZV0DvSEr5ydyysWE7GBzQL27mOr_DVxrf-oqSlms_y67F0qxl_Ek4FyE2iW9EiP5DdI9k8fFr0dBOR5x_1oyxtZ19SCap77DQfjMKogiJkPZmILzLU3XqNg_2sBcRPirHwIk6nT6RSCRuyolDyZORK5v3i2Rjobf3e7mqls_zXLN1VqQc2nSseFKfgZG4aTxP1nVq_xruVkQeeXe8LKVTQeuhBcMEZfiybHr7SB6WiODZyZPAgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [],
+        "retired_root_kids": [],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null,
+        "extra": true
+      }
+    },
+    {
+      "name": "Trust two root keys",
+      "definition": "Trust",
+      "layer": "schema",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 1,
+        "previous_trust_digest": null,
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwGRi_ivgB5_7KbHjWtgAES0AaGirxUgk96mMRSog7VkOLXnXkE21qNKcs2KYKpN7lT9UtC_NvesQRTIkgrCj1XZhIrU70opu6WUxYI44J-CiBdw8P50gh6qrtucZHL4-o_PirnA_-QTXaXiroSNMb4XvmxzKQo4JyxdfJwHMssavYw_T0jXIGaRJsNAX2BeINED1VFYhgOJEBpQrHUo6tmaBj4iUaQUlfOOQUFyXxnDldHtSCjiUI-B_WoVqCJoMO4gG3RWszCF7LGXoGE9NPsYJ217x5Ang5Ln3vFX9XOWpjvsVa_i-LcmANz9garpd53ltTlDWhq6Aa-yIJzjOyh7lHAY11KJg198ZBBq_8tfxG_sru-aJ6N2QnC2lN_jZL_JxpnyAY_8LwRkHU3CEuD8uhE439dXDgSsOmtfztyAissWAEC2-TXy5OUC-tf6Y9WiZRDrNsLcmrI3p_YVdEnJHWFnBAhUZJQhT9dCEVvGJqBVRYCigB4VWroln0qgXAgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApdnBmfc2nlhPz1d2i7HO_s8h33SJhy8DdX_FTffwkEmOBiQW5fi14Py_a1mb3x3wr3SKQXT2_VC9W_8H7zjNhJuTYR5TzyMNpF3r6U0zbrDdTRpwvMz99WQSxhbezBzJr_7mf4o4iNSLxUiM3RhnPBdzYA0Y3JCxi2x3Bhw4l0-6vhjkvX8qUfvJ7k6tb4zXVZuiG6F12vDhZkQrVWBT6rGIpBkBOQ0lrfpdDuNsmhj3voykIeKcP32CcCNb7eX9AliqzogYNYd_LnPPZV0DvSEr5ydyysWE7GBzQL27mOr_DVxrf-oqSlms_y67F0qxl_Ek4FyE2iW9EiP5DdI9k8fFr0dBOR5x_1oyxtZ19SCap77DQfjMKogiJkPZmILzLU3XqNg_2sBcRPirHwIk6nT6RSCRuyolDyZORK5v3i2Rjobf3e7mqls_zXLN1VqQc2nSseFKfgZG4aTxP1nVq_xruVkQeeXe8LKVTQeuhBcMEZfiybHr7SB6WiODZyZPAgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [],
+        "retired_root_kids": [],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null
+      }
+    },
+    {
+      "name": "Trust threshold three",
+      "definition": "Trust",
+      "layer": "schema",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 1,
+        "previous_trust_digest": null,
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwGRi_ivgB5_7KbHjWtgAES0AaGirxUgk96mMRSog7VkOLXnXkE21qNKcs2KYKpN7lT9UtC_NvesQRTIkgrCj1XZhIrU70opu6WUxYI44J-CiBdw8P50gh6qrtucZHL4-o_PirnA_-QTXaXiroSNMb4XvmxzKQo4JyxdfJwHMssavYw_T0jXIGaRJsNAX2BeINED1VFYhgOJEBpQrHUo6tmaBj4iUaQUlfOOQUFyXxnDldHtSCjiUI-B_WoVqCJoMO4gG3RWszCF7LGXoGE9NPsYJ217x5Ang5Ln3vFX9XOWpjvsVa_i-LcmANz9garpd53ltTlDWhq6Aa-yIJzjOyh7lHAY11KJg198ZBBq_8tfxG_sru-aJ6N2QnC2lN_jZL_JxpnyAY_8LwRkHU3CEuD8uhE439dXDgSsOmtfztyAissWAEC2-TXy5OUC-tf6Y9WiZRDrNsLcmrI3p_YVdEnJHWFnBAhUZJQhT9dCEVvGJqBVRYCigB4VWroln0qgXAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          }
+        ],
+        "root_threshold": 3,
+        "release_keys": [
+          {
+            "kid": "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApdnBmfc2nlhPz1d2i7HO_s8h33SJhy8DdX_FTffwkEmOBiQW5fi14Py_a1mb3x3wr3SKQXT2_VC9W_8H7zjNhJuTYR5TzyMNpF3r6U0zbrDdTRpwvMz99WQSxhbezBzJr_7mf4o4iNSLxUiM3RhnPBdzYA0Y3JCxi2x3Bhw4l0-6vhjkvX8qUfvJ7k6tb4zXVZuiG6F12vDhZkQrVWBT6rGIpBkBOQ0lrfpdDuNsmhj3voykIeKcP32CcCNb7eX9AliqzogYNYd_LnPPZV0DvSEr5ydyysWE7GBzQL27mOr_DVxrf-oqSlms_y67F0qxl_Ek4FyE2iW9EiP5DdI9k8fFr0dBOR5x_1oyxtZ19SCap77DQfjMKogiJkPZmILzLU3XqNg_2sBcRPirHwIk6nT6RSCRuyolDyZORK5v3i2Rjobf3e7mqls_zXLN1VqQc2nSseFKfgZG4aTxP1nVq_xruVkQeeXe8LKVTQeuhBcMEZfiybHr7SB6WiODZyZPAgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [],
+        "retired_root_kids": [],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null
+      }
+    },
+    {
+      "name": "Trust padded SPKI spelling",
+      "definition": "Trust",
+      "layer": "schema",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 1,
+        "previous_trust_digest": null,
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE="
+          },
+          {
+            "kid": "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwGRi_ivgB5_7KbHjWtgAES0AaGirxUgk96mMRSog7VkOLXnXkE21qNKcs2KYKpN7lT9UtC_NvesQRTIkgrCj1XZhIrU70opu6WUxYI44J-CiBdw8P50gh6qrtucZHL4-o_PirnA_-QTXaXiroSNMb4XvmxzKQo4JyxdfJwHMssavYw_T0jXIGaRJsNAX2BeINED1VFYhgOJEBpQrHUo6tmaBj4iUaQUlfOOQUFyXxnDldHtSCjiUI-B_WoVqCJoMO4gG3RWszCF7LGXoGE9NPsYJ217x5Ang5Ln3vFX9XOWpjvsVa_i-LcmANz9garpd53ltTlDWhq6Aa-yIJzjOyh7lHAY11KJg198ZBBq_8tfxG_sru-aJ6N2QnC2lN_jZL_JxpnyAY_8LwRkHU3CEuD8uhE439dXDgSsOmtfztyAissWAEC2-TXy5OUC-tf6Y9WiZRDrNsLcmrI3p_YVdEnJHWFnBAhUZJQhT9dCEVvGJqBVRYCigB4VWroln0qgXAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApdnBmfc2nlhPz1d2i7HO_s8h33SJhy8DdX_FTffwkEmOBiQW5fi14Py_a1mb3x3wr3SKQXT2_VC9W_8H7zjNhJuTYR5TzyMNpF3r6U0zbrDdTRpwvMz99WQSxhbezBzJr_7mf4o4iNSLxUiM3RhnPBdzYA0Y3JCxi2x3Bhw4l0-6vhjkvX8qUfvJ7k6tb4zXVZuiG6F12vDhZkQrVWBT6rGIpBkBOQ0lrfpdDuNsmhj3voykIeKcP32CcCNb7eX9AliqzogYNYd_LnPPZV0DvSEr5ydyysWE7GBzQL27mOr_DVxrf-oqSlms_y67F0qxl_Ek4FyE2iW9EiP5DdI9k8fFr0dBOR5x_1oyxtZ19SCap77DQfjMKogiJkPZmILzLU3XqNg_2sBcRPirHwIk6nT6RSCRuyolDyZORK5v3i2Rjobf3e7mqls_zXLN1VqQc2nSseFKfgZG4aTxP1nVq_xruVkQeeXe8LKVTQeuhBcMEZfiybHr7SB6WiODZyZPAgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [],
+        "retired_root_kids": [],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null
+      }
+    },
+    {
+      "name": "Trust policy missing value",
+      "definition": "Trust",
+      "layer": "schema",
+      "t_id": "T43",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 1,
+        "previous_trust_digest": null,
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwGRi_ivgB5_7KbHjWtgAES0AaGirxUgk96mMRSog7VkOLXnXkE21qNKcs2KYKpN7lT9UtC_NvesQRTIkgrCj1XZhIrU70opu6WUxYI44J-CiBdw8P50gh6qrtucZHL4-o_PirnA_-QTXaXiroSNMb4XvmxzKQo4JyxdfJwHMssavYw_T0jXIGaRJsNAX2BeINED1VFYhgOJEBpQrHUo6tmaBj4iUaQUlfOOQUFyXxnDldHtSCjiUI-B_WoVqCJoMO4gG3RWszCF7LGXoGE9NPsYJ217x5Ang5Ln3vFX9XOWpjvsVa_i-LcmANz9garpd53ltTlDWhq6Aa-yIJzjOyh7lHAY11KJg198ZBBq_8tfxG_sru-aJ6N2QnC2lN_jZL_JxpnyAY_8LwRkHU3CEuD8uhE439dXDgSsOmtfztyAissWAEC2-TXy5OUC-tf6Y9WiZRDrNsLcmrI3p_YVdEnJHWFnBAhUZJQhT9dCEVvGJqBVRYCigB4VWroln0qgXAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApdnBmfc2nlhPz1d2i7HO_s8h33SJhy8DdX_FTffwkEmOBiQW5fi14Py_a1mb3x3wr3SKQXT2_VC9W_8H7zjNhJuTYR5TzyMNpF3r6U0zbrDdTRpwvMz99WQSxhbezBzJr_7mf4o4iNSLxUiM3RhnPBdzYA0Y3JCxi2x3Bhw4l0-6vhjkvX8qUfvJ7k6tb4zXVZuiG6F12vDhZkQrVWBT6rGIpBkBOQ0lrfpdDuNsmhj3voykIeKcP32CcCNb7eX9AliqzogYNYd_LnPPZV0DvSEr5ydyysWE7GBzQL27mOr_DVxrf-oqSlms_y67F0qxl_Ek4FyE2iW9EiP5DdI9k8fFr0dBOR5x_1oyxtZ19SCap77DQfjMKogiJkPZmILzLU3XqNg_2sBcRPirHwIk6nT6RSCRuyolDyZORK5v3i2Rjobf3e7mqls_zXLN1VqQc2nSseFKfgZG4aTxP1nVq_xruVkQeeXe8LKVTQeuhBcMEZfiybHr7SB6WiODZyZPAgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [],
+        "retired_root_kids": [],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null
+      }
+    },
+    {
+      "name": "Trust policy origin with port",
+      "definition": "Trust",
+      "layer": "schema",
+      "t_id": "T43",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 1,
+        "previous_trust_digest": null,
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwGRi_ivgB5_7KbHjWtgAES0AaGirxUgk96mMRSog7VkOLXnXkE21qNKcs2KYKpN7lT9UtC_NvesQRTIkgrCj1XZhIrU70opu6WUxYI44J-CiBdw8P50gh6qrtucZHL4-o_PirnA_-QTXaXiroSNMb4XvmxzKQo4JyxdfJwHMssavYw_T0jXIGaRJsNAX2BeINED1VFYhgOJEBpQrHUo6tmaBj4iUaQUlfOOQUFyXxnDldHtSCjiUI-B_WoVqCJoMO4gG3RWszCF7LGXoGE9NPsYJ217x5Ang5Ln3vFX9XOWpjvsVa_i-LcmANz9garpd53ltTlDWhq6Aa-yIJzjOyh7lHAY11KJg198ZBBq_8tfxG_sru-aJ6N2QnC2lN_jZL_JxpnyAY_8LwRkHU3CEuD8uhE439dXDgSsOmtfztyAissWAEC2-TXy5OUC-tf6Y9WiZRDrNsLcmrI3p_YVdEnJHWFnBAhUZJQhT9dCEVvGJqBVRYCigB4VWroln0qgXAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApdnBmfc2nlhPz1d2i7HO_s8h33SJhy8DdX_FTffwkEmOBiQW5fi14Py_a1mb3x3wr3SKQXT2_VC9W_8H7zjNhJuTYR5TzyMNpF3r6U0zbrDdTRpwvMz99WQSxhbezBzJr_7mf4o4iNSLxUiM3RhnPBdzYA0Y3JCxi2x3Bhw4l0-6vhjkvX8qUfvJ7k6tb4zXVZuiG6F12vDhZkQrVWBT6rGIpBkBOQ0lrfpdDuNsmhj3voykIeKcP32CcCNb7eX9AliqzogYNYd_LnPPZV0DvSEr5ydyysWE7GBzQL27mOr_DVxrf-oqSlms_y67F0qxl_Ek4FyE2iW9EiP5DdI9k8fFr0dBOR5x_1oyxtZ19SCap77DQfjMKogiJkPZmILzLU3XqNg_2sBcRPirHwIk6nT6RSCRuyolDyZORK5v3i2Rjobf3e7mqls_zXLN1VqQc2nSseFKfgZG4aTxP1nVq_xruVkQeeXe8LKVTQeuhBcMEZfiybHr7SB6WiODZyZPAgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [],
+        "retired_root_kids": [],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid:8443",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null
+      }
+    },
+    {
+      "name": "Trust policy above ceiling",
+      "definition": "Trust",
+      "layer": "schema",
+      "t_id": "T43",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 1,
+        "previous_trust_digest": null,
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwGRi_ivgB5_7KbHjWtgAES0AaGirxUgk96mMRSog7VkOLXnXkE21qNKcs2KYKpN7lT9UtC_NvesQRTIkgrCj1XZhIrU70opu6WUxYI44J-CiBdw8P50gh6qrtucZHL4-o_PirnA_-QTXaXiroSNMb4XvmxzKQo4JyxdfJwHMssavYw_T0jXIGaRJsNAX2BeINED1VFYhgOJEBpQrHUo6tmaBj4iUaQUlfOOQUFyXxnDldHtSCjiUI-B_WoVqCJoMO4gG3RWszCF7LGXoGE9NPsYJ217x5Ang5Ln3vFX9XOWpjvsVa_i-LcmANz9garpd53ltTlDWhq6Aa-yIJzjOyh7lHAY11KJg198ZBBq_8tfxG_sru-aJ6N2QnC2lN_jZL_JxpnyAY_8LwRkHU3CEuD8uhE439dXDgSsOmtfztyAissWAEC2-TXy5OUC-tf6Y9WiZRDrNsLcmrI3p_YVdEnJHWFnBAhUZJQhT9dCEVvGJqBVRYCigB4VWroln0qgXAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApdnBmfc2nlhPz1d2i7HO_s8h33SJhy8DdX_FTffwkEmOBiQW5fi14Py_a1mb3x3wr3SKQXT2_VC9W_8H7zjNhJuTYR5TzyMNpF3r6U0zbrDdTRpwvMz99WQSxhbezBzJr_7mf4o4iNSLxUiM3RhnPBdzYA0Y3JCxi2x3Bhw4l0-6vhjkvX8qUfvJ7k6tb4zXVZuiG6F12vDhZkQrVWBT6rGIpBkBOQ0lrfpdDuNsmhj3voykIeKcP32CcCNb7eX9AliqzogYNYd_LnPPZV0DvSEr5ydyysWE7GBzQL27mOr_DVxrf-oqSlms_y67F0qxl_Ek4FyE2iW9EiP5DdI9k8fFr0dBOR5x_1oyxtZ19SCap77DQfjMKogiJkPZmILzLU3XqNg_2sBcRPirHwIk6nT6RSCRuyolDyZORK5v3i2Rjobf3e7mqls_zXLN1VqQc2nSseFKfgZG4aTxP1nVq_xruVkQeeXe8LKVTQeuhBcMEZfiybHr7SB6WiODZyZPAgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [],
+        "retired_root_kids": [],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 268435457,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null
+      }
+    },
+    {
+      "name": "Trust unsorted root keys",
+      "definition": "Trust",
+      "layer": "semantic",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 1,
+        "previous_trust_digest": null,
+        "root_keys": [
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          },
+          {
+            "kid": "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwGRi_ivgB5_7KbHjWtgAES0AaGirxUgk96mMRSog7VkOLXnXkE21qNKcs2KYKpN7lT9UtC_NvesQRTIkgrCj1XZhIrU70opu6WUxYI44J-CiBdw8P50gh6qrtucZHL4-o_PirnA_-QTXaXiroSNMb4XvmxzKQo4JyxdfJwHMssavYw_T0jXIGaRJsNAX2BeINED1VFYhgOJEBpQrHUo6tmaBj4iUaQUlfOOQUFyXxnDldHtSCjiUI-B_WoVqCJoMO4gG3RWszCF7LGXoGE9NPsYJ217x5Ang5Ln3vFX9XOWpjvsVa_i-LcmANz9garpd53ltTlDWhq6Aa-yIJzjOyh7lHAY11KJg198ZBBq_8tfxG_sru-aJ6N2QnC2lN_jZL_JxpnyAY_8LwRkHU3CEuD8uhE439dXDgSsOmtfztyAissWAEC2-TXy5OUC-tf6Y9WiZRDrNsLcmrI3p_YVdEnJHWFnBAhUZJQhT9dCEVvGJqBVRYCigB4VWroln0qgXAgMBAAE"
+          },
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApdnBmfc2nlhPz1d2i7HO_s8h33SJhy8DdX_FTffwkEmOBiQW5fi14Py_a1mb3x3wr3SKQXT2_VC9W_8H7zjNhJuTYR5TzyMNpF3r6U0zbrDdTRpwvMz99WQSxhbezBzJr_7mf4o4iNSLxUiM3RhnPBdzYA0Y3JCxi2x3Bhw4l0-6vhjkvX8qUfvJ7k6tb4zXVZuiG6F12vDhZkQrVWBT6rGIpBkBOQ0lrfpdDuNsmhj3voykIeKcP32CcCNb7eX9AliqzogYNYd_LnPPZV0DvSEr5ydyysWE7GBzQL27mOr_DVxrf-oqSlms_y67F0qxl_Ek4FyE2iW9EiP5DdI9k8fFr0dBOR5x_1oyxtZ19SCap77DQfjMKogiJkPZmILzLU3XqNg_2sBcRPirHwIk6nT6RSCRuyolDyZORK5v3i2Rjobf3e7mqls_zXLN1VqQc2nSseFKfgZG4aTxP1nVq_xruVkQeeXe8LKVTQeuhBcMEZfiybHr7SB6WiODZyZPAgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [],
+        "retired_root_kids": [],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null
+      }
+    },
+    {
+      "name": "Trust root kid reused as release kid",
+      "definition": "Trust",
+      "layer": "semantic",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 1,
+        "previous_trust_digest": null,
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwGRi_ivgB5_7KbHjWtgAES0AaGirxUgk96mMRSog7VkOLXnXkE21qNKcs2KYKpN7lT9UtC_NvesQRTIkgrCj1XZhIrU70opu6WUxYI44J-CiBdw8P50gh6qrtucZHL4-o_PirnA_-QTXaXiroSNMb4XvmxzKQo4JyxdfJwHMssavYw_T0jXIGaRJsNAX2BeINED1VFYhgOJEBpQrHUo6tmaBj4iUaQUlfOOQUFyXxnDldHtSCjiUI-B_WoVqCJoMO4gG3RWszCF7LGXoGE9NPsYJ217x5Ang5Ln3vFX9XOWpjvsVa_i-LcmANz9garpd53ltTlDWhq6Aa-yIJzjOyh7lHAY11KJg198ZBBq_8tfxG_sru-aJ6N2QnC2lN_jZL_JxpnyAY_8LwRkHU3CEuD8uhE439dXDgSsOmtfztyAissWAEC2-TXy5OUC-tf6Y9WiZRDrNsLcmrI3p_YVdEnJHWFnBAhUZJQhT9dCEVvGJqBVRYCigB4VWroln0qgXAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApdnBmfc2nlhPz1d2i7HO_s8h33SJhy8DdX_FTffwkEmOBiQW5fi14Py_a1mb3x3wr3SKQXT2_VC9W_8H7zjNhJuTYR5TzyMNpF3r6U0zbrDdTRpwvMz99WQSxhbezBzJr_7mf4o4iNSLxUiM3RhnPBdzYA0Y3JCxi2x3Bhw4l0-6vhjkvX8qUfvJ7k6tb4zXVZuiG6F12vDhZkQrVWBT6rGIpBkBOQ0lrfpdDuNsmhj3voykIeKcP32CcCNb7eX9AliqzogYNYd_LnPPZV0DvSEr5ydyysWE7GBzQL27mOr_DVxrf-oqSlms_y67F0qxl_Ek4FyE2iW9EiP5DdI9k8fFr0dBOR5x_1oyxtZ19SCap77DQfjMKogiJkPZmILzLU3XqNg_2sBcRPirHwIk6nT6RSCRuyolDyZORK5v3i2Rjobf3e7mqls_zXLN1VqQc2nSseFKfgZG4aTxP1nVq_xruVkQeeXe8LKVTQeuhBcMEZfiybHr7SB6WiODZyZPAgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [],
+        "retired_root_kids": [],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null
+      }
+    },
+    {
+      "name": "Trust same SPKI in two roles",
+      "definition": "Trust",
+      "layer": "semantic",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 1,
+        "previous_trust_digest": null,
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwGRi_ivgB5_7KbHjWtgAES0AaGirxUgk96mMRSog7VkOLXnXkE21qNKcs2KYKpN7lT9UtC_NvesQRTIkgrCj1XZhIrU70opu6WUxYI44J-CiBdw8P50gh6qrtucZHL4-o_PirnA_-QTXaXiroSNMb4XvmxzKQo4JyxdfJwHMssavYw_T0jXIGaRJsNAX2BeINED1VFYhgOJEBpQrHUo6tmaBj4iUaQUlfOOQUFyXxnDldHtSCjiUI-B_WoVqCJoMO4gG3RWszCF7LGXoGE9NPsYJ217x5Ang5Ln3vFX9XOWpjvsVa_i-LcmANz9garpd53ltTlDWhq6Aa-yIJzjOyh7lHAY11KJg198ZBBq_8tfxG_sru-aJ6N2QnC2lN_jZL_JxpnyAY_8LwRkHU3CEuD8uhE439dXDgSsOmtfztyAissWAEC2-TXy5OUC-tf6Y9WiZRDrNsLcmrI3p_YVdEnJHWFnBAhUZJQhT9dCEVvGJqBVRYCigB4VWroln0qgXAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [],
+        "retired_root_kids": [],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null
+      }
+    },
+    {
+      "name": "Trust revoked kid still active",
+      "definition": "Trust",
+      "layer": "semantic",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 2,
+        "previous_trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          },
+          {
+            "kid": "bbb2f070e61eef752508112f18483b913f3977d36235e730ed2ae248b4d7f9c6",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAzQP8pdARUGGQLNNPPC012ErZkvpL8746bnLWjNhrFDBDtlYu8y9c5m2ueGucr35-s5zwDAlE4OtdQIQbm9YyRAZwQp40AiW6Q0K88XgQ-gSWnZDplS3Rapu0tCwvIEtnnB7kLoYZrZVoReYUTri7cZKasHYEwwzA_Sk0LwaF7lyQSBriIWEPpitf_Zkig63BV8U4uu04QEeiZqd8VYL1MUfnawoSigx4gzUaivmcw7K3xE9q5FHdqNhhJZINwPqqDNO5v6ulrEncDlnRShOq8fNEuHidjLXAxkIAi9KA4poFodcsoHD2Npk7qtEXJqdvVKdZx1UNeXHDkuiMrl2PSyCvZhoUYV8P9kY8BFESyI5fPNT5S7zns3QtKLeuuHwMEA90v5AMwhpjuxxssNK3S3yxJSmhBsVqFbFFO1aBtM-axmp0ntIwTB5gdoED_V1wPKhnxC30VehR5TG3lNuUaIIxSejgEvQnpvW5o-icvQ68q4vxKhunso4ARrmlsk25AgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "85b4785067a14877b71baa47cb62dbae6c51d78601281d3c58cada65557053ee",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAvG59Wr_kTHI5xtPuLoIxTXGe9Oe81P5d7BS27vfTVyLwXILv7VzmUNEwXqueuJ6QDK5LkR2Qo-h0dRyNcVqd6CfEibhyWyTZgF0twsddETLZEvvoJwgWC6zwfbzS9EQMt-Vgwl0NcAEQ0F2WCatp9VebXT0s5cpZH18cBN-kY3K0tAQ7yZpBI1ybx16INqwf5UTMiqP6CgMJyYS6WwKJDoStT24S-ew95ZRFhkhSWjRW6B3RRx7f7UcK4oQgvk0C2OO5G96PYcb3KGh9g1OgCgUTMOR2tC_fWVkcFnOhvyhglhHDZxTbqpu9FFuI3Hd519P1z8JwppzyFHL-jkRBlGQ-RMOqz09I45xzppzUx3N4gcZbukJOzhnVEDSTkEd_FrAbK87KVzBiwm8brTrQt49Fgd77tkl48E8F-PQixH3_iSoAI9tnRDIv15-hisi3URdefGd66C7jiFQvRuZEn9YHaBdnna-7NPquCrKtLuv3aZiAy7FLsMczN-9y-t-9AgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [
+          "85b4785067a14877b71baa47cb62dbae6c51d78601281d3c58cada65557053ee"
+        ],
+        "retired_root_kids": [
+          "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340"
+        ],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null
+      }
+    },
+    {
+      "name": "Trust first version with previous digest",
+      "definition": "Trust",
+      "layer": "semantic",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 1,
+        "previous_trust_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwGRi_ivgB5_7KbHjWtgAES0AaGirxUgk96mMRSog7VkOLXnXkE21qNKcs2KYKpN7lT9UtC_NvesQRTIkgrCj1XZhIrU70opu6WUxYI44J-CiBdw8P50gh6qrtucZHL4-o_PirnA_-QTXaXiroSNMb4XvmxzKQo4JyxdfJwHMssavYw_T0jXIGaRJsNAX2BeINED1VFYhgOJEBpQrHUo6tmaBj4iUaQUlfOOQUFyXxnDldHtSCjiUI-B_WoVqCJoMO4gG3RWszCF7LGXoGE9NPsYJ217x5Ang5Ln3vFX9XOWpjvsVa_i-LcmANz9garpd53ltTlDWhq6Aa-yIJzjOyh7lHAY11KJg198ZBBq_8tfxG_sru-aJ6N2QnC2lN_jZL_JxpnyAY_8LwRkHU3CEuD8uhE439dXDgSsOmtfztyAissWAEC2-TXy5OUC-tf6Y9WiZRDrNsLcmrI3p_YVdEnJHWFnBAhUZJQhT9dCEVvGJqBVRYCigB4VWroln0qgXAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApdnBmfc2nlhPz1d2i7HO_s8h33SJhy8DdX_FTffwkEmOBiQW5fi14Py_a1mb3x3wr3SKQXT2_VC9W_8H7zjNhJuTYR5TzyMNpF3r6U0zbrDdTRpwvMz99WQSxhbezBzJr_7mf4o4iNSLxUiM3RhnPBdzYA0Y3JCxi2x3Bhw4l0-6vhjkvX8qUfvJ7k6tb4zXVZuiG6F12vDhZkQrVWBT6rGIpBkBOQ0lrfpdDuNsmhj3voykIeKcP32CcCNb7eX9AliqzogYNYd_LnPPZV0DvSEr5ydyysWE7GBzQL27mOr_DVxrf-oqSlms_y67F0qxl_Ek4FyE2iW9EiP5DdI9k8fFr0dBOR5x_1oyxtZ19SCap77DQfjMKogiJkPZmILzLU3XqNg_2sBcRPirHwIk6nT6RSCRuyolDyZORK5v3i2Rjobf3e7mqls_zXLN1VqQc2nSseFKfgZG4aTxP1nVq_xruVkQeeXe8LKVTQeuhBcMEZfiybHr7SB6WiODZyZPAgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [],
+        "retired_root_kids": [],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null
+      }
+    },
+    {
+      "name": "Trust lifetime over 365 days",
+      "definition": "Trust",
+      "layer": "semantic",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 1,
+        "previous_trust_digest": null,
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwGRi_ivgB5_7KbHjWtgAES0AaGirxUgk96mMRSog7VkOLXnXkE21qNKcs2KYKpN7lT9UtC_NvesQRTIkgrCj1XZhIrU70opu6WUxYI44J-CiBdw8P50gh6qrtucZHL4-o_PirnA_-QTXaXiroSNMb4XvmxzKQo4JyxdfJwHMssavYw_T0jXIGaRJsNAX2BeINED1VFYhgOJEBpQrHUo6tmaBj4iUaQUlfOOQUFyXxnDldHtSCjiUI-B_WoVqCJoMO4gG3RWszCF7LGXoGE9NPsYJ217x5Ang5Ln3vFX9XOWpjvsVa_i-LcmANz9garpd53ltTlDWhq6Aa-yIJzjOyh7lHAY11KJg198ZBBq_8tfxG_sru-aJ6N2QnC2lN_jZL_JxpnyAY_8LwRkHU3CEuD8uhE439dXDgSsOmtfztyAissWAEC2-TXy5OUC-tf6Y9WiZRDrNsLcmrI3p_YVdEnJHWFnBAhUZJQhT9dCEVvGJqBVRYCigB4VWroln0qgXAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEApdnBmfc2nlhPz1d2i7HO_s8h33SJhy8DdX_FTffwkEmOBiQW5fi14Py_a1mb3x3wr3SKQXT2_VC9W_8H7zjNhJuTYR5TzyMNpF3r6U0zbrDdTRpwvMz99WQSxhbezBzJr_7mf4o4iNSLxUiM3RhnPBdzYA0Y3JCxi2x3Bhw4l0-6vhjkvX8qUfvJ7k6tb4zXVZuiG6F12vDhZkQrVWBT6rGIpBkBOQ0lrfpdDuNsmhj3voykIeKcP32CcCNb7eX9AliqzogYNYd_LnPPZV0DvSEr5ydyysWE7GBzQL27mOr_DVxrf-oqSlms_y67F0qxl_Ek4FyE2iW9EiP5DdI9k8fFr0dBOR5x_1oyxtZ19SCap77DQfjMKogiJkPZmILzLU3XqNg_2sBcRPirHwIk6nT6RSCRuyolDyZORK5v3i2Rjobf3e7mqls_zXLN1VqQc2nSseFKfgZG4aTxP1nVq_xruVkQeeXe8LKVTQeuhBcMEZfiybHr7SB6WiODZyZPAgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [],
+        "retired_root_kids": [],
+        "metadata_epoch": 1,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1824199200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": null
+      }
+    },
+    {
+      "name": "Trust recovery skips an epoch",
+      "definition": "Trust",
+      "layer": "semantic",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 3,
+        "previous_trust_digest": "230ebc6274ee27a77923d6dbf97476ea15b4263a5c62677ab04515dee2fd61d1",
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          },
+          {
+            "kid": "bbb2f070e61eef752508112f18483b913f3977d36235e730ed2ae248b4d7f9c6",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAzQP8pdARUGGQLNNPPC012ErZkvpL8746bnLWjNhrFDBDtlYu8y9c5m2ueGucr35-s5zwDAlE4OtdQIQbm9YyRAZwQp40AiW6Q0K88XgQ-gSWnZDplS3Rapu0tCwvIEtnnB7kLoYZrZVoReYUTri7cZKasHYEwwzA_Sk0LwaF7lyQSBriIWEPpitf_Zkig63BV8U4uu04QEeiZqd8VYL1MUfnawoSigx4gzUaivmcw7K3xE9q5FHdqNhhJZINwPqqDNO5v6ulrEncDlnRShOq8fNEuHidjLXAxkIAi9KA4poFodcsoHD2Npk7qtEXJqdvVKdZx1UNeXHDkuiMrl2PSyCvZhoUYV8P9kY8BFESyI5fPNT5S7zns3QtKLeuuHwMEA90v5AMwhpjuxxssNK3S3yxJSmhBsVqFbFFO1aBtM-axmp0ntIwTB5gdoED_V1wPKhnxC30VehR5TG3lNuUaIIxSejgEvQnpvW5o-icvQ68q4vxKhunso4ARrmlsk25AgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "51b0467db07fd8036a9b5db15559d2d086a17486cb1912b4a60592c27bcc7fb5",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA5kDzCQYaKdFAFVVBAy6SPjpkJ2_xp8xwCsEOXPIkZg8l1hbnGYZYDkcyrOk40y_XJNcbCDdNDxXxcj6CQlPuIOkdq7EfXEM4XYRngs7-Ij24PW4bae50k0iKex3AqAFkhqNqwdqQiJFyBfgDulGxk2Wq0lhtgLxdYzcobb6-NY6TfluSOxqMbnmeRAbVJ6RktZKx9OzWFH_V20E-V4kgbxqb7hGdRtPXAIVZ5hFfoG6249qcYHONomeVOqq3wlGIXjWpqFInQrKiu8imNd6pSGkDyE8JHuri_Z5MkIUv9Gw55DGGnm6vk7VdBrPbsEJsAQassz0i-HLfVGiiVKHmRYehDYaKNPghp35Bx_kKS0gC4IYaFL2eheusF-eSS_GJ3__2QDkUwabKXPI2RM6OdnVeOkhmNBSFzrZd3O0AfYZZsUfL7lmMnV5oTkZvvaKk2JleI3Hqm_FyqpYH6-Lo_o0IaG0ZSrrvD2f0OuwoE8P6eWlTESeDFEqHJSWqU419AgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [
+          "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+          "85b4785067a14877b71baa47cb62dbae6c51d78601281d3c58cada65557053ee"
+        ],
+        "retired_root_kids": [
+          "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340"
+        ],
+        "metadata_epoch": 3,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": {
+          "schema_version": "sdc.release.recovery-checkpoint.v1",
+          "previous_epoch": 1,
+          "new_epoch": 3,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+          "manifest_digest": "db0797812e997c6ddf15d4d6b7370351ebc82e5187e11d1bd448b2a4c2fb598a",
+          "reason": "metadata_forward_attack",
+          "affected_release_kids": [
+            "85b4785067a14877b71baa47cb62dbae6c51d78601281d3c58cada65557053ee"
+          ],
+          "preserve_bindings": true,
+          "preserve_successful_frontier": true
+        }
+      }
+    },
+    {
+      "name": "Trust recovery affected key still active",
+      "definition": "Trust",
+      "layer": "semantic",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 3,
+        "previous_trust_digest": "230ebc6274ee27a77923d6dbf97476ea15b4263a5c62677ab04515dee2fd61d1",
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          },
+          {
+            "kid": "bbb2f070e61eef752508112f18483b913f3977d36235e730ed2ae248b4d7f9c6",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAzQP8pdARUGGQLNNPPC012ErZkvpL8746bnLWjNhrFDBDtlYu8y9c5m2ueGucr35-s5zwDAlE4OtdQIQbm9YyRAZwQp40AiW6Q0K88XgQ-gSWnZDplS3Rapu0tCwvIEtnnB7kLoYZrZVoReYUTri7cZKasHYEwwzA_Sk0LwaF7lyQSBriIWEPpitf_Zkig63BV8U4uu04QEeiZqd8VYL1MUfnawoSigx4gzUaivmcw7K3xE9q5FHdqNhhJZINwPqqDNO5v6ulrEncDlnRShOq8fNEuHidjLXAxkIAi9KA4poFodcsoHD2Npk7qtEXJqdvVKdZx1UNeXHDkuiMrl2PSyCvZhoUYV8P9kY8BFESyI5fPNT5S7zns3QtKLeuuHwMEA90v5AMwhpjuxxssNK3S3yxJSmhBsVqFbFFO1aBtM-axmp0ntIwTB5gdoED_V1wPKhnxC30VehR5TG3lNuUaIIxSejgEvQnpvW5o-icvQ68q4vxKhunso4ARrmlsk25AgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "51b0467db07fd8036a9b5db15559d2d086a17486cb1912b4a60592c27bcc7fb5",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA5kDzCQYaKdFAFVVBAy6SPjpkJ2_xp8xwCsEOXPIkZg8l1hbnGYZYDkcyrOk40y_XJNcbCDdNDxXxcj6CQlPuIOkdq7EfXEM4XYRngs7-Ij24PW4bae50k0iKex3AqAFkhqNqwdqQiJFyBfgDulGxk2Wq0lhtgLxdYzcobb6-NY6TfluSOxqMbnmeRAbVJ6RktZKx9OzWFH_V20E-V4kgbxqb7hGdRtPXAIVZ5hFfoG6249qcYHONomeVOqq3wlGIXjWpqFInQrKiu8imNd6pSGkDyE8JHuri_Z5MkIUv9Gw55DGGnm6vk7VdBrPbsEJsAQassz0i-HLfVGiiVKHmRYehDYaKNPghp35Bx_kKS0gC4IYaFL2eheusF-eSS_GJ3__2QDkUwabKXPI2RM6OdnVeOkhmNBSFzrZd3O0AfYZZsUfL7lmMnV5oTkZvvaKk2JleI3Hqm_FyqpYH6-Lo_o0IaG0ZSrrvD2f0OuwoE8P6eWlTESeDFEqHJSWqU419AgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [
+          "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+          "85b4785067a14877b71baa47cb62dbae6c51d78601281d3c58cada65557053ee"
+        ],
+        "retired_root_kids": [
+          "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340"
+        ],
+        "metadata_epoch": 2,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": {
+          "schema_version": "sdc.release.recovery-checkpoint.v1",
+          "previous_epoch": 1,
+          "new_epoch": 2,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+          "manifest_digest": "db0797812e997c6ddf15d4d6b7370351ebc82e5187e11d1bd448b2a4c2fb598a",
+          "reason": "metadata_forward_attack",
+          "affected_release_kids": [
+            "51b0467db07fd8036a9b5db15559d2d086a17486cb1912b4a60592c27bcc7fb5"
+          ],
+          "preserve_bindings": true,
+          "preserve_successful_frontier": true
+        }
+      }
+    },
+    {
+      "name": "Trust recovery without affected keys",
+      "definition": "Trust",
+      "layer": "schema",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.trust.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "root_version": 3,
+        "previous_trust_digest": "230ebc6274ee27a77923d6dbf97476ea15b4263a5c62677ab04515dee2fd61d1",
+        "root_keys": [
+          {
+            "kid": "7f5d087f299ad2df445c5d65c758dd6e657d7e6baab443ab88dd36a315f3f8e3",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEArbjv6aPtwiqDjeqP4Dbqqg6EMDrH6saaNVA9OZkkxLVtfHID-mYfGRZy9pHQ-SmYhgnXFwz49x_PrFJ6sCLezCMIV2W5GC--z-KW4YNr36edDNGFb7p-PxMcvuscErynM_8kij30UwNh9EQZ_4yGyNEGIlJc3dBECBoxodmwTiZhxB8KU8PWIEpnrJLO3UzNjdOOcwLysRTBZk_P35LpqMr5hTYRtXjDuxMx13hubolSU8TEJjYnI_76mDJdxsKD3dBziv11K7G7pcyoE2iugHRbDnNDWwt_A6m-1usC4wur9jObRZw3bwiJykfqr-iLFYRnron3xct89FhTB2hjL9OKsXPQ3V_PthU7LzVBcJUByXXIrX29B4BQfhQ9zWeHHyuS6I-oG2ZQfBQLrBSJ1b4jxvhgL4Bd70RbsFAZpsdkZVt2sFI3iNpqKzlppmmrq3oUsqlxN0V35H0xgClCa4M4y2kbo5EAKX8pT8Vo7CBs1_3SuSG9os-y4PmCt54rAgMBAAE"
+          },
+          {
+            "kid": "99124b46f9ebad825bc07907d304a92b1c6af369e4efdba88a082f3371809c24",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAwybxQ2xZJViiH_bd4qYM0GDeN46JrHbr5nhjR7nnbk36UeseWXZNxK0xsSoPtwX1_QAoP8bFIvb9e8N2G8-eH_HjTfLOPa2J0bfMJ8F-4tLRJMtJBkHfQ_wS6Fyz5Mr8x-fiPBY3lJbdaDPVV9B-s7dckAiC_ZQbfZ4abooGnmuDj1CXkktI04CuiqP5htHm_16mz33Xq2yS-J9KuDjbenOiz4xwjXFrOViAYWKgIcpS_wdHy_OKQnLvhc0GiGZG-H4GfVQHU9FscHNaJnUkxyWsgovhrEXHihnd8Wf5hbAAX4nZNdjguZHGaKMu0bGynz0zVWY60DUKrtNictcWBaFRzrtATzNXPOgMnH66_t1JNfPr1mIKZTjECkCQC-17A-7yGPzv7WycHbCxVYHtg2IuhoCZHh2Hcmv6IMEHyfPuoR_oMGpfVjwcMs7wLziWI6zuZtoTe3onfiJ2epcSNjmq1fEDViDce0wL4YdvztuPbo07oXJ-M0MejkCuC56rAgMBAAE"
+          },
+          {
+            "kid": "bbb2f070e61eef752508112f18483b913f3977d36235e730ed2ae248b4d7f9c6",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAzQP8pdARUGGQLNNPPC012ErZkvpL8746bnLWjNhrFDBDtlYu8y9c5m2ueGucr35-s5zwDAlE4OtdQIQbm9YyRAZwQp40AiW6Q0K88XgQ-gSWnZDplS3Rapu0tCwvIEtnnB7kLoYZrZVoReYUTri7cZKasHYEwwzA_Sk0LwaF7lyQSBriIWEPpitf_Zkig63BV8U4uu04QEeiZqd8VYL1MUfnawoSigx4gzUaivmcw7K3xE9q5FHdqNhhJZINwPqqDNO5v6ulrEncDlnRShOq8fNEuHidjLXAxkIAi9KA4poFodcsoHD2Npk7qtEXJqdvVKdZx1UNeXHDkuiMrl2PSyCvZhoUYV8P9kY8BFESyI5fPNT5S7zns3QtKLeuuHwMEA90v5AMwhpjuxxssNK3S3yxJSmhBsVqFbFFO1aBtM-axmp0ntIwTB5gdoED_V1wPKhnxC30VehR5TG3lNuUaIIxSejgEvQnpvW5o-icvQ68q4vxKhunso4ARrmlsk25AgMBAAE"
+          }
+        ],
+        "root_threshold": 2,
+        "release_keys": [
+          {
+            "kid": "51b0467db07fd8036a9b5db15559d2d086a17486cb1912b4a60592c27bcc7fb5",
+            "spki": "MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEA5kDzCQYaKdFAFVVBAy6SPjpkJ2_xp8xwCsEOXPIkZg8l1hbnGYZYDkcyrOk40y_XJNcbCDdNDxXxcj6CQlPuIOkdq7EfXEM4XYRngs7-Ij24PW4bae50k0iKex3AqAFkhqNqwdqQiJFyBfgDulGxk2Wq0lhtgLxdYzcobb6-NY6TfluSOxqMbnmeRAbVJ6RktZKx9OzWFH_V20E-V4kgbxqb7hGdRtPXAIVZ5hFfoG6249qcYHONomeVOqq3wlGIXjWpqFInQrKiu8imNd6pSGkDyE8JHuri_Z5MkIUv9Gw55DGGnm6vk7VdBrPbsEJsAQassz0i-HLfVGiiVKHmRYehDYaKNPghp35Bx_kKS0gC4IYaFL2eheusF-eSS_GJ3__2QDkUwabKXPI2RM6OdnVeOkhmNBSFzrZd3O0AfYZZsUfL7lmMnV5oTkZvvaKk2JleI3Hqm_FyqpYH6-Lo_o0IaG0ZSrrvD2f0OuwoE8P6eWlTESeDFEqHJSWqU419AgMBAAE",
+            "not_before": 1792576800000,
+            "expires_at": 1800439200000
+          }
+        ],
+        "revoked_release_kids": [
+          "0cfef11da0d2645af37cd4e2652c1d2d89f46747d8f0df53c22eb99e9adfb949",
+          "85b4785067a14877b71baa47cb62dbae6c51d78601281d3c58cada65557053ee"
+        ],
+        "retired_root_kids": [
+          "923ddf5cfc5164652131ac794eb24d43175ec67f574e935e704ff7a880aa7340"
+        ],
+        "metadata_epoch": 2,
+        "issued_at": 1792576800000,
+        "not_before": 1792576800000,
+        "expires_at": 1808215200000,
+        "policy": {
+          "download_origin": "https://releases.synthetic.invalid",
+          "max_attestation_ttl_ms": 43200000,
+          "plan_ttl_ms": 1800000,
+          "preflight_ttl_ms": 300000,
+          "max_artifact_bytes": 67108864,
+          "max_unpacked_bytes": 268435456,
+          "max_archive_entries": 20000,
+          "download_timeout_ms": 120000,
+          "max_clock_skew_ms": 1000
+        },
+        "recovery": {
+          "schema_version": "sdc.release.recovery-checkpoint.v1",
+          "previous_epoch": 1,
+          "new_epoch": 2,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+          "manifest_digest": "db0797812e997c6ddf15d4d6b7370351ebc82e5187e11d1bd448b2a4c2fb598a",
+          "reason": "metadata_forward_attack",
+          "affected_release_kids": [],
+          "preserve_bindings": true,
+          "preserve_successful_frontier": true
+        }
+      }
+    },
+    {
+      "name": "Attestation release id not the Core hash",
+      "definition": "Attestation",
+      "layer": "semantic",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.attestation.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "metadata_epoch": 1,
+        "core": {
+          "schema_version": "sdc.release.core.v1",
+          "product": "hermes-mcs",
+          "trust_domain": "csdc-synthetic",
+          "environment": "synthetic",
+          "stream_id": "stable",
+          "code_seq": 42,
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "artifact": {
+            "format": "git-bundle-v2",
+            "object_format": "sha1",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 1048576
+          },
+          "lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "platforms": [
+            {
+              "os": "macos",
+              "cpu": "arm64",
+              "python": [
+                3,
+                12
+              ]
+            }
+          ],
+          "minimum_updater": [
+            1,
+            4,
+            0
+          ],
+          "schema": {
+            "accepts_installed": [
+              7,
+              8
+            ],
+            "target": 8,
+            "migration": "none",
+            "rollback_requires_db_restore": false
+          },
+          "apply": {
+            "quiesce_required": true,
+            "restart_required": true
+          },
+          "recovery": {
+            "code_rollback": "previous_release",
+            "db_recovery": "separate_approval"
+          }
+        },
+        "release_id": "9999999999999999999999999999999999999999999999999999999999999999",
+        "issued_at": 1792663140000,
+        "not_before": 1792663140000,
+        "expires_at": 1792684800000
+      }
+    },
+    {
+      "name": "Attestation stream differs from Trust",
+      "definition": "Attestation",
+      "layer": "semantic",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.attestation.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "beta",
+        "metadata_epoch": 1,
+        "core": {
+          "schema_version": "sdc.release.core.v1",
+          "product": "hermes-mcs",
+          "trust_domain": "csdc-synthetic",
+          "environment": "synthetic",
+          "stream_id": "beta",
+          "code_seq": 42,
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "artifact": {
+            "format": "git-bundle-v2",
+            "object_format": "sha1",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 1048576
+          },
+          "lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "platforms": [
+            {
+              "os": "macos",
+              "cpu": "arm64",
+              "python": [
+                3,
+                12
+              ]
+            }
+          ],
+          "minimum_updater": [
+            1,
+            4,
+            0
+          ],
+          "schema": {
+            "accepts_installed": [
+              7,
+              8
+            ],
+            "target": 8,
+            "migration": "none",
+            "rollback_requires_db_restore": false
+          },
+          "apply": {
+            "quiesce_required": true,
+            "restart_required": true
+          },
+          "recovery": {
+            "code_rollback": "previous_release",
+            "db_recovery": "separate_approval"
+          }
+        },
+        "release_id": "f81c8d88a2ed6457672e927049bd58be18ef31164c443d4e20e2c7ab4c2d00b0",
+        "issued_at": 1792663140000,
+        "not_before": 1792663140000,
+        "expires_at": 1792684800000
+      }
+    },
+    {
+      "name": "Attestation epoch differs from Trust",
+      "definition": "Attestation",
+      "layer": "semantic",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.attestation.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "metadata_epoch": 2,
+        "core": {
+          "schema_version": "sdc.release.core.v1",
+          "product": "hermes-mcs",
+          "trust_domain": "csdc-synthetic",
+          "environment": "synthetic",
+          "stream_id": "stable",
+          "code_seq": 42,
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "artifact": {
+            "format": "git-bundle-v2",
+            "object_format": "sha1",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 1048576
+          },
+          "lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "platforms": [
+            {
+              "os": "macos",
+              "cpu": "arm64",
+              "python": [
+                3,
+                12
+              ]
+            }
+          ],
+          "minimum_updater": [
+            1,
+            4,
+            0
+          ],
+          "schema": {
+            "accepts_installed": [
+              7,
+              8
+            ],
+            "target": 8,
+            "migration": "none",
+            "rollback_requires_db_restore": false
+          },
+          "apply": {
+            "quiesce_required": true,
+            "restart_required": true
+          },
+          "recovery": {
+            "code_rollback": "previous_release",
+            "db_recovery": "separate_approval"
+          }
+        },
+        "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+        "issued_at": 1792663140000,
+        "not_before": 1792663140000,
+        "expires_at": 1792684800000
+      }
+    },
+    {
+      "name": "Attestation lifetime over policy",
+      "definition": "Attestation",
+      "layer": "semantic",
+      "t_id": "T42",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.attestation.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "metadata_epoch": 1,
+        "core": {
+          "schema_version": "sdc.release.core.v1",
+          "product": "hermes-mcs",
+          "trust_domain": "csdc-synthetic",
+          "environment": "synthetic",
+          "stream_id": "stable",
+          "code_seq": 42,
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "artifact": {
+            "format": "git-bundle-v2",
+            "object_format": "sha1",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 1048576
+          },
+          "lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "platforms": [
+            {
+              "os": "macos",
+              "cpu": "arm64",
+              "python": [
+                3,
+                12
+              ]
+            }
+          ],
+          "minimum_updater": [
+            1,
+            4,
+            0
+          ],
+          "schema": {
+            "accepts_installed": [
+              7,
+              8
+            ],
+            "target": 8,
+            "migration": "none",
+            "rollback_requires_db_restore": false
+          },
+          "apply": {
+            "quiesce_required": true,
+            "restart_required": true
+          },
+          "recovery": {
+            "code_rollback": "previous_release",
+            "db_recovery": "separate_approval"
+          }
+        },
+        "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+        "issued_at": 1792663140000,
+        "not_before": 1792663140000,
+        "expires_at": 1792706340001
+      }
+    },
+    {
+      "name": "Core commit given as tag",
+      "definition": "Attestation",
+      "layer": "schema",
+      "t_id": "T43",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.attestation.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "metadata_epoch": 1,
+        "core": {
+          "schema_version": "sdc.release.core.v1",
+          "product": "hermes-mcs",
+          "trust_domain": "csdc-synthetic",
+          "environment": "synthetic",
+          "stream_id": "stable",
+          "code_seq": 42,
+          "commit": "v1.2.3",
+          "artifact": {
+            "format": "git-bundle-v2",
+            "object_format": "sha1",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 1048576
+          },
+          "lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "platforms": [
+            {
+              "os": "macos",
+              "cpu": "arm64",
+              "python": [
+                3,
+                12
+              ]
+            }
+          ],
+          "minimum_updater": [
+            1,
+            4,
+            0
+          ],
+          "schema": {
+            "accepts_installed": [
+              7,
+              8
+            ],
+            "target": 8,
+            "migration": "none",
+            "rollback_requires_db_restore": false
+          },
+          "apply": {
+            "quiesce_required": true,
+            "restart_required": true
+          },
+          "recovery": {
+            "code_rollback": "previous_release",
+            "db_recovery": "separate_approval"
+          }
+        },
+        "release_id": "bb43fc5dc8b93fef6a4d2b78d5b0482a9bce49283f3107d6538746c0a89656a1",
+        "issued_at": 1792663140000,
+        "not_before": 1792663140000,
+        "expires_at": 1792684800000
+      }
+    },
+    {
+      "name": "Core carries a URL",
+      "definition": "Attestation",
+      "layer": "schema",
+      "t_id": "T43",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.attestation.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "metadata_epoch": 1,
+        "core": {
+          "schema_version": "sdc.release.core.v1",
+          "product": "hermes-mcs",
+          "trust_domain": "csdc-synthetic",
+          "environment": "synthetic",
+          "stream_id": "stable",
+          "code_seq": 42,
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "artifact": {
+            "format": "git-bundle-v2",
+            "object_format": "sha1",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 1048576
+          },
+          "lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "platforms": [
+            {
+              "os": "macos",
+              "cpu": "arm64",
+              "python": [
+                3,
+                12
+              ]
+            }
+          ],
+          "minimum_updater": [
+            1,
+            4,
+            0
+          ],
+          "schema": {
+            "accepts_installed": [
+              7,
+              8
+            ],
+            "target": 8,
+            "migration": "none",
+            "rollback_requires_db_restore": false
+          },
+          "apply": {
+            "quiesce_required": true,
+            "restart_required": true
+          },
+          "recovery": {
+            "code_rollback": "previous_release",
+            "db_recovery": "separate_approval"
+          },
+          "url": "https://example.invalid/latest"
+        },
+        "release_id": "846c1cd5691cc9e409758aad2861912681c3bb87d790f3f42b5dce68d0ca514e",
+        "issued_at": 1792663140000,
+        "not_before": 1792663140000,
+        "expires_at": 1792684800000
+      }
+    },
+    {
+      "name": "Core artifact above policy size",
+      "definition": "Attestation",
+      "layer": "semantic",
+      "t_id": "T43",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.attestation.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "metadata_epoch": 1,
+        "core": {
+          "schema_version": "sdc.release.core.v1",
+          "product": "hermes-mcs",
+          "trust_domain": "csdc-synthetic",
+          "environment": "synthetic",
+          "stream_id": "stable",
+          "code_seq": 42,
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "artifact": {
+            "format": "git-bundle-v2",
+            "object_format": "sha1",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 67108865
+          },
+          "lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "platforms": [
+            {
+              "os": "macos",
+              "cpu": "arm64",
+              "python": [
+                3,
+                12
+              ]
+            }
+          ],
+          "minimum_updater": [
+            1,
+            4,
+            0
+          ],
+          "schema": {
+            "accepts_installed": [
+              7,
+              8
+            ],
+            "target": 8,
+            "migration": "none",
+            "rollback_requires_db_restore": false
+          },
+          "apply": {
+            "quiesce_required": true,
+            "restart_required": true
+          },
+          "recovery": {
+            "code_rollback": "previous_release",
+            "db_recovery": "separate_approval"
+          }
+        },
+        "release_id": "33dd3abd0428df115a02d75eb9498071b3ab1c568c2dd01ea71e92e5e15843fa",
+        "issued_at": 1792663140000,
+        "not_before": 1792663140000,
+        "expires_at": 1792684800000
+      }
+    },
+    {
+      "name": "Core artifact without a format",
+      "definition": "Attestation",
+      "layer": "schema",
+      "t_id": "T43",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.attestation.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "metadata_epoch": 1,
+        "core": {
+          "schema_version": "sdc.release.core.v1",
+          "product": "hermes-mcs",
+          "trust_domain": "csdc-synthetic",
+          "environment": "synthetic",
+          "stream_id": "stable",
+          "code_seq": 42,
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "artifact": {
+            "object_format": "sha1",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 1048576
+          },
+          "lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "platforms": [
+            {
+              "os": "macos",
+              "cpu": "arm64",
+              "python": [
+                3,
+                12
+              ]
+            }
+          ],
+          "minimum_updater": [
+            1,
+            4,
+            0
+          ],
+          "schema": {
+            "accepts_installed": [
+              7,
+              8
+            ],
+            "target": 8,
+            "migration": "none",
+            "rollback_requires_db_restore": false
+          },
+          "apply": {
+            "quiesce_required": true,
+            "restart_required": true
+          },
+          "recovery": {
+            "code_rollback": "previous_release",
+            "db_recovery": "separate_approval"
+          }
+        },
+        "release_id": "db71aed144aa33a3b10412559651420b2a9c67b5686fc0a8d17793c927c35eff",
+        "issued_at": 1792663140000,
+        "not_before": 1792663140000,
+        "expires_at": 1792684800000
+      }
+    },
+    {
+      "name": "Core artifact as a tar archive",
+      "definition": "Attestation",
+      "layer": "schema",
+      "t_id": "T43",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.attestation.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "metadata_epoch": 1,
+        "core": {
+          "schema_version": "sdc.release.core.v1",
+          "product": "hermes-mcs",
+          "trust_domain": "csdc-synthetic",
+          "environment": "synthetic",
+          "stream_id": "stable",
+          "code_seq": 42,
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "artifact": {
+            "format": "tar",
+            "object_format": "sha1",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 1048576
+          },
+          "lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "platforms": [
+            {
+              "os": "macos",
+              "cpu": "arm64",
+              "python": [
+                3,
+                12
+              ]
+            }
+          ],
+          "minimum_updater": [
+            1,
+            4,
+            0
+          ],
+          "schema": {
+            "accepts_installed": [
+              7,
+              8
+            ],
+            "target": 8,
+            "migration": "none",
+            "rollback_requires_db_restore": false
+          },
+          "apply": {
+            "quiesce_required": true,
+            "restart_required": true
+          },
+          "recovery": {
+            "code_rollback": "previous_release",
+            "db_recovery": "separate_approval"
+          }
+        },
+        "release_id": "1c64447b4bf7df6c0d99787cdd99437a4bc91230d31795401f932c949cdbad03",
+        "issued_at": 1792663140000,
+        "not_before": 1792663140000,
+        "expires_at": 1792684800000
+      }
+    },
+    {
+      "name": "Core artifact with SHA-256 Git objects",
+      "definition": "Attestation",
+      "layer": "schema",
+      "t_id": "T43",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.attestation.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "metadata_epoch": 1,
+        "core": {
+          "schema_version": "sdc.release.core.v1",
+          "product": "hermes-mcs",
+          "trust_domain": "csdc-synthetic",
+          "environment": "synthetic",
+          "stream_id": "stable",
+          "code_seq": 42,
+          "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "artifact": {
+            "format": "git-bundle-v2",
+            "object_format": "sha256",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 1048576
+          },
+          "lock_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "platforms": [
+            {
+              "os": "macos",
+              "cpu": "arm64",
+              "python": [
+                3,
+                12
+              ]
+            }
+          ],
+          "minimum_updater": [
+            1,
+            4,
+            0
+          ],
+          "schema": {
+            "accepts_installed": [
+              7,
+              8
+            ],
+            "target": 8,
+            "migration": "none",
+            "rollback_requires_db_restore": false
+          },
+          "apply": {
+            "quiesce_required": true,
+            "restart_required": true
+          },
+          "recovery": {
+            "code_rollback": "previous_release",
+            "db_recovery": "separate_approval"
+          }
+        },
+        "release_id": "a59968939210e7a153cdc4c5fdb096b7de5cc91a408aece5424a88787fb3dba9",
+        "issued_at": 1792663140000,
+        "not_before": 1792663140000,
+        "expires_at": 1792684800000
+      }
+    },
+    {
+      "name": "State installed above highest installed",
+      "definition": "State",
+      "layer": "semantic",
+      "t_id": "T45",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.state.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "tenant": "self",
+        "installation": "self",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "realm_epoch": "synthetic-release-realm",
+        "trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_version": 1,
+        "metadata_epoch": 1,
+        "highest_seen": {
+          "code_seq": 42,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b"
+        },
+        "installed": {
+          "code_seq": 41,
+          "release_id": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "highest_installed": {
+          "code_seq": 40,
+          "release_id": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "unresolved": null
+      }
+    },
+    {
+      "name": "State installed without a highest installed frontier",
+      "definition": "State",
+      "layer": "semantic",
+      "t_id": "T45",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.state.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "tenant": "self",
+        "installation": "self",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "realm_epoch": "synthetic-release-realm",
+        "trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_version": 1,
+        "metadata_epoch": 1,
+        "highest_seen": {
+          "code_seq": 42,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b"
+        },
+        "installed": {
+          "code_seq": 40,
+          "release_id": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "highest_installed": null,
+        "unresolved": null
+      }
+    },
+    {
+      "name": "State one sequence with two identities",
+      "definition": "State",
+      "layer": "semantic",
+      "t_id": "T45",
+      "status": 409,
+      "value": {
+        "schema_version": "sdc.release.state.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "tenant": "self",
+        "installation": "self",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "realm_epoch": "synthetic-release-realm",
+        "trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_version": 1,
+        "metadata_epoch": 1,
+        "highest_seen": {
+          "code_seq": 42,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b"
+        },
+        "installed": {
+          "code_seq": 40,
+          "release_id": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "highest_installed": {
+          "code_seq": 42,
+          "release_id": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "unresolved": null
+      }
+    },
+    {
+      "name": "Plan target sequence bound to another identity in H",
+      "definition": "Plan",
+      "layer": "semantic",
+      "t_id": "T44",
+      "status": 409,
+      "value": {
+        "schema_version": "sdc.release.plan.v1",
+        "plan_id": "00000000-0000-4000-8000-000000000042",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "tenant": "self",
+        "installation": "self",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "realm_epoch": "synthetic-release-realm",
+        "trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_version": 1,
+        "metadata_epoch": 1,
+        "highest_seen": {
+          "code_seq": 42,
+          "release_id": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "installed": {
+          "code_seq": 40,
+          "release_id": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "highest_installed": {
+          "code_seq": 41,
+          "release_id": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+        "manifest_digest": "db0797812e997c6ddf15d4d6b7370351ebc82e5187e11d1bd448b2a4c2fb598a",
+        "target_code_seq": 42,
+        "preconditions": {
+          "current_commit": "dddddddddddddddddddddddddddddddddddddddd",
+          "hand_edited": false,
+          "installed_lock_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "free_bytes": 2147483648,
+          "platform": {
+            "os": "macos",
+            "cpu": "arm64",
+            "python": [
+              3,
+              12
+            ]
+          },
+          "updater": [
+            1,
+            4,
+            2
+          ],
+          "installed_schema": 8,
+          "backup_verified": true,
+          "backup_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "observed_at": 1792663140000
+        },
+        "precondition_sha256": "7fb5395eebd7b2e0386ce486cee386dab9098b5054f189b3c8ea233e7393868d",
+        "window": {
+          "starts_at": 1792663140000,
+          "ends_at": 1792666800000
+        },
+        "canary_stage": "self_test",
+        "modes": [],
+        "issued_at": 1792663200000,
+        "expires_at": 1792665000000
+      },
+      "state": {
+        "schema_version": "sdc.release.state.v1",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "tenant": "self",
+        "installation": "self",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "realm_epoch": "synthetic-release-realm",
+        "trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_version": 1,
+        "metadata_epoch": 1,
+        "highest_seen": {
+          "code_seq": 42,
+          "release_id": "5555555555555555555555555555555555555555555555555555555555555555"
+        },
+        "installed": {
+          "code_seq": 40,
+          "release_id": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "highest_installed": {
+          "code_seq": 41,
+          "release_id": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "unresolved": null
+      }
+    },
+    {
+      "name": "Plan precondition changed after hashing",
+      "definition": "Plan",
+      "layer": "semantic",
+      "t_id": "T44",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.plan.v1",
+        "plan_id": "00000000-0000-4000-8000-000000000042",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "tenant": "self",
+        "installation": "self",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "realm_epoch": "synthetic-release-realm",
+        "trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_version": 1,
+        "metadata_epoch": 1,
+        "highest_seen": {
+          "code_seq": 42,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b"
+        },
+        "installed": {
+          "code_seq": 40,
+          "release_id": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "highest_installed": {
+          "code_seq": 41,
+          "release_id": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+        "manifest_digest": "db0797812e997c6ddf15d4d6b7370351ebc82e5187e11d1bd448b2a4c2fb598a",
+        "target_code_seq": 42,
+        "preconditions": {
+          "current_commit": "0000000000000000000000000000000000000000",
+          "hand_edited": false,
+          "installed_lock_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "free_bytes": 2147483648,
+          "platform": {
+            "os": "macos",
+            "cpu": "arm64",
+            "python": [
+              3,
+              12
+            ]
+          },
+          "updater": [
+            1,
+            4,
+            2
+          ],
+          "installed_schema": 8,
+          "backup_verified": true,
+          "backup_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "observed_at": 1792663140000
+        },
+        "precondition_sha256": "7fb5395eebd7b2e0386ce486cee386dab9098b5054f189b3c8ea233e7393868d",
+        "window": {
+          "starts_at": 1792663140000,
+          "ends_at": 1792666800000
+        },
+        "canary_stage": "self_test",
+        "modes": [],
+        "issued_at": 1792663200000,
+        "expires_at": 1792665000000
+      }
+    },
+    {
+      "name": "Plan manifest digest of another attestation",
+      "definition": "Plan",
+      "layer": "semantic",
+      "t_id": "T44",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.plan.v1",
+        "plan_id": "00000000-0000-4000-8000-000000000042",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "tenant": "self",
+        "installation": "self",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "realm_epoch": "synthetic-release-realm",
+        "trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_version": 1,
+        "metadata_epoch": 1,
+        "highest_seen": {
+          "code_seq": 42,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b"
+        },
+        "installed": {
+          "code_seq": 40,
+          "release_id": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "highest_installed": {
+          "code_seq": 41,
+          "release_id": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+        "manifest_digest": "8888888888888888888888888888888888888888888888888888888888888888",
+        "target_code_seq": 42,
+        "preconditions": {
+          "current_commit": "dddddddddddddddddddddddddddddddddddddddd",
+          "hand_edited": false,
+          "installed_lock_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "free_bytes": 2147483648,
+          "platform": {
+            "os": "macos",
+            "cpu": "arm64",
+            "python": [
+              3,
+              12
+            ]
+          },
+          "updater": [
+            1,
+            4,
+            2
+          ],
+          "installed_schema": 8,
+          "backup_verified": true,
+          "backup_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "observed_at": 1792663140000
+        },
+        "precondition_sha256": "7fb5395eebd7b2e0386ce486cee386dab9098b5054f189b3c8ea233e7393868d",
+        "window": {
+          "starts_at": 1792663140000,
+          "ends_at": 1792666800000
+        },
+        "canary_stage": "self_test",
+        "modes": [],
+        "issued_at": 1792663200000,
+        "expires_at": 1792665000000
+      }
+    },
+    {
+      "name": "Plan declares a mode the state does not derive",
+      "definition": "Plan",
+      "layer": "semantic",
+      "t_id": "T44",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.plan.v1",
+        "plan_id": "00000000-0000-4000-8000-000000000042",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "tenant": "self",
+        "installation": "self",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "realm_epoch": "synthetic-release-realm",
+        "trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_version": 1,
+        "metadata_epoch": 1,
+        "highest_seen": {
+          "code_seq": 42,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b"
+        },
+        "installed": {
+          "code_seq": 40,
+          "release_id": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "highest_installed": {
+          "code_seq": 41,
+          "release_id": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+        "manifest_digest": "db0797812e997c6ddf15d4d6b7370351ebc82e5187e11d1bd448b2a4c2fb598a",
+        "target_code_seq": 42,
+        "preconditions": {
+          "current_commit": "dddddddddddddddddddddddddddddddddddddddd",
+          "hand_edited": false,
+          "installed_lock_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "free_bytes": 2147483648,
+          "platform": {
+            "os": "macos",
+            "cpu": "arm64",
+            "python": [
+              3,
+              12
+            ]
+          },
+          "updater": [
+            1,
+            4,
+            2
+          ],
+          "installed_schema": 8,
+          "backup_verified": true,
+          "backup_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "observed_at": 1792663140000
+        },
+        "precondition_sha256": "7fb5395eebd7b2e0386ce486cee386dab9098b5054f189b3c8ea233e7393868d",
+        "window": {
+          "starts_at": 1792663140000,
+          "ends_at": 1792666800000
+        },
+        "canary_stage": "self_test",
+        "modes": [
+          "code_rollback"
+        ],
+        "issued_at": 1792663200000,
+        "expires_at": 1792665000000
+      }
+    },
+    {
+      "name": "Plan lifetime over policy",
+      "definition": "Plan",
+      "layer": "semantic",
+      "t_id": "T44",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.plan.v1",
+        "plan_id": "00000000-0000-4000-8000-000000000042",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "tenant": "self",
+        "installation": "self",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "realm_epoch": "synthetic-release-realm",
+        "trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_version": 1,
+        "metadata_epoch": 1,
+        "highest_seen": {
+          "code_seq": 42,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b"
+        },
+        "installed": {
+          "code_seq": 40,
+          "release_id": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "highest_installed": {
+          "code_seq": 41,
+          "release_id": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+        "manifest_digest": "db0797812e997c6ddf15d4d6b7370351ebc82e5187e11d1bd448b2a4c2fb598a",
+        "target_code_seq": 42,
+        "preconditions": {
+          "current_commit": "dddddddddddddddddddddddddddddddddddddddd",
+          "hand_edited": false,
+          "installed_lock_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "free_bytes": 2147483648,
+          "platform": {
+            "os": "macos",
+            "cpu": "arm64",
+            "python": [
+              3,
+              12
+            ]
+          },
+          "updater": [
+            1,
+            4,
+            2
+          ],
+          "installed_schema": 8,
+          "backup_verified": true,
+          "backup_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "observed_at": 1792663140000
+        },
+        "precondition_sha256": "7fb5395eebd7b2e0386ce486cee386dab9098b5054f189b3c8ea233e7393868d",
+        "window": {
+          "starts_at": 1792663140000,
+          "ends_at": 1792666800000
+        },
+        "canary_stage": "self_test",
+        "modes": [],
+        "issued_at": 1792663200000,
+        "expires_at": 1792665000001
+      }
+    },
+    {
+      "name": "Plan preflight older than policy",
+      "definition": "Plan",
+      "layer": "semantic",
+      "t_id": "T44",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.plan.v1",
+        "plan_id": "00000000-0000-4000-8000-000000000042",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "tenant": "self",
+        "installation": "self",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "realm_epoch": "synthetic-release-realm",
+        "trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_version": 1,
+        "metadata_epoch": 1,
+        "highest_seen": {
+          "code_seq": 42,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b"
+        },
+        "installed": {
+          "code_seq": 40,
+          "release_id": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "highest_installed": {
+          "code_seq": 41,
+          "release_id": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+        "manifest_digest": "db0797812e997c6ddf15d4d6b7370351ebc82e5187e11d1bd448b2a4c2fb598a",
+        "target_code_seq": 42,
+        "preconditions": {
+          "current_commit": "dddddddddddddddddddddddddddddddddddddddd",
+          "hand_edited": false,
+          "installed_lock_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "free_bytes": 2147483648,
+          "platform": {
+            "os": "macos",
+            "cpu": "arm64",
+            "python": [
+              3,
+              12
+            ]
+          },
+          "updater": [
+            1,
+            4,
+            2
+          ],
+          "installed_schema": 8,
+          "backup_verified": true,
+          "backup_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "observed_at": 1792662899999
+        },
+        "precondition_sha256": "bc3acddb46789289756018199e0f530a200f81bb1dc5533057dcd8130c3217a6",
+        "window": {
+          "starts_at": 1792663140000,
+          "ends_at": 1792666800000
+        },
+        "canary_stage": "self_test",
+        "modes": [],
+        "issued_at": 1792663200000,
+        "expires_at": 1792665000000
+      }
+    },
+    {
+      "name": "Plan canary to all customers",
+      "definition": "Plan",
+      "layer": "schema",
+      "t_id": "T46",
+      "status": 400,
+      "value": {
+        "schema_version": "sdc.release.plan.v1",
+        "plan_id": "00000000-0000-4000-8000-000000000042",
+        "product": "hermes-mcs",
+        "trust_domain": "csdc-synthetic",
+        "environment": "synthetic",
+        "stream_id": "stable",
+        "tenant": "self",
+        "installation": "self",
+        "device_id": "00000000-0000-4000-8000-000000000001",
+        "realm_epoch": "synthetic-release-realm",
+        "trust_digest": "05f115c41edbaca175974a277c285eedb52a277e75b5493be34d06f9a65d6811",
+        "root_version": 1,
+        "metadata_epoch": 1,
+        "highest_seen": {
+          "code_seq": 42,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b"
+        },
+        "installed": {
+          "code_seq": 40,
+          "release_id": "3333333333333333333333333333333333333333333333333333333333333333"
+        },
+        "highest_installed": {
+          "code_seq": 41,
+          "release_id": "4444444444444444444444444444444444444444444444444444444444444444"
+        },
+        "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b",
+        "manifest_digest": "db0797812e997c6ddf15d4d6b7370351ebc82e5187e11d1bd448b2a4c2fb598a",
+        "target_code_seq": 42,
+        "preconditions": {
+          "current_commit": "dddddddddddddddddddddddddddddddddddddddd",
+          "hand_edited": false,
+          "installed_lock_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "free_bytes": 2147483648,
+          "platform": {
+            "os": "macos",
+            "cpu": "arm64",
+            "python": [
+              3,
+              12
+            ]
+          },
+          "updater": [
+            1,
+            4,
+            2
+          ],
+          "installed_schema": 8,
+          "backup_verified": true,
+          "backup_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+          "observed_at": 1792663140000
+        },
+        "precondition_sha256": "7fb5395eebd7b2e0386ce486cee386dab9098b5054f189b3c8ea233e7393868d",
+        "window": {
+          "starts_at": 1792663140000,
+          "ends_at": 1792666800000
+        },
+        "canary_stage": "all_customers",
+        "modes": [],
+        "issued_at": 1792663200000,
+        "expires_at": 1792665000000
+      }
+    }
+  ],
+  "observations": [
+    {
+      "name": "Higher authenticated sequence raises H before preflight",
+      "t_id": "T42",
+      "existing_binding": null,
+      "state_override": {
+        "highest_seen": {
+          "code_seq": 41,
+          "release_id": "4444444444444444444444444444444444444444444444444444444444444444"
+        }
+      },
+      "expect": {
+        "status": "ok",
+        "highest_seen": {
+          "code_seq": 42,
+          "release_id": "bb3184c52c68fb1604d0860d4504e31fc0457ef7a320b8c5c6789a40a771860b"
+        },
+        "binding_new": true
+      }
+    },
+    {
+      "name": "Known sequence bound to another release is a conflict",
+      "t_id": "T43",
+      "existing_binding": {
+        "stream_id": "stable",
+        "code_seq": 42,
+        "release_id": "7777777777777777777777777777777777777777777777777777777777777777"
+      },
+      "expect": {
+        "status": 409
+      }
+    },
+    {
+      "name": "Existing binding must be supplied explicitly",
+      "t_id": "T42",
+      "existing_binding": "absent",
+      "expect": {
+        "status": 400
+      }
+    }
+  ],
+  "modes": [
+    {
+      "name": "Target at H and above F",
+      "t_id": "T44",
+      "target": 42,
+      "expect": []
+    },
+    {
+      "name": "Target below F only after recovery lowered H",
+      "t_id": "T45",
+      "target": 30,
+      "state_override": {
+        "highest_seen": {
+          "code_seq": 19,
+          "release_id": "2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      },
+      "expect": [
+        "code_rollback"
+      ]
+    },
+    {
+      "name": "Target below H only",
+      "t_id": "T44",
+      "target": 41,
+      "state_override": {
+        "highest_seen": {
+          "code_seq": 43,
+          "release_id": "6666666666666666666666666666666666666666666666666666666666666666"
+        }
+      },
+      "expect": [
+        "select_below_seen"
+      ]
+    },
+    {
+      "name": "Target below H and F",
+      "t_id": "T45",
+      "target": 40,
+      "expect": [
+        "select_below_seen",
+        "code_rollback"
+      ]
+    }
+  ]
+}

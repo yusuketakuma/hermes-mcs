@@ -23,7 +23,13 @@
     "provision/provision.schema.json": "b2bea5be19d01a3fb3021408145e39aa9f8a4cd2d76fd7acc0d54c404f2b3649",
     "provision/provision-vectors.json": "d6c49ea2dc62d5780f87b8f26f3cb9106f7b36ca36fa66f88b84bcd396fd81aa",
     "diagnostics/diagnostics.schema.json": "ada29dd8777db53672e75a14a16fc1ed175135a34c4fdb21e56e29908b3ac427",
-    "diagnostics/diagnostics-vectors.json": "97ee03a1766fc538ac5c505a508b5e16f765b64c698c76b8bf04218a1b561fae"
+    "diagnostics/diagnostics-vectors.json": "97ee03a1766fc538ac5c505a508b5e16f765b64c698c76b8bf04218a1b561fae",
+    "releases/release.schema.json": "ba6161cb73cc2e77409412e74b4c09ca91bef90504d5b5eca9cf9315a37d763f",
+    "releases/release-vectors.json": "8d6fd9ddfb445b3a47b96b4359bd88d3d277a6884b2ee2ab9a2a7544ea888381",
+    "releases/signature-vectors.json": "6c33fb6823f2c784f126b6b6f3be6ab3dd3e9c17882fba100ba22a08f1b31379",
+    "releases/apply.schema.json": "1f10723acabb3defa2639e81aaf1cd8cb4c4f4a48e7959cc7c9ba806215416a0",
+    "releases/apply-api.schema.json": "a7f68f5cdc8c69b32b3803c03556106e67b464337b5def9089e1d8532d80b082",
+    "releases/apply-vectors.json": "0ed3564a62d7e24f18170ad25e882ca1f63feac0d1164bab73fc26fd168329a3"
   },
   "status": "contract_snapshot_only",
   "central_integration": "provided_central_synthetic_427_passed_pregrant_status_real_acceptance_pending",
@@ -120,5 +126,23 @@
         "reason": "Preserve central relative schema references; product compatibility reads the byte-identical local JSON copies."
       }
     ]
+  },
+  "release_apply_component": {
+    "received_message": null,
+    "status": "pure_contract_snapshot_only",
+    "central_source_tree_sha256": "64bdce8eacb5d23a8b46b135f61bafb78e0b079d6a1815c50a25989874786fad",
+    "provided_synthetic_passed": 1062,
+    "product_runtime_connected": false,
+    "real_environment_accepted": false,
+    "customer_enabled": false,
+    "files": [
+      "releases/release.schema.json",
+      "releases/release-vectors.json",
+      "releases/signature-vectors.json",
+      "releases/apply.schema.json",
+      "releases/apply-api.schema.json",
+      "releases/apply-vectors.json"
+    ],
+    "source_mode": "local_canonical_csdc_checkout_verified_file_bytes"
   }
 }

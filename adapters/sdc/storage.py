@@ -32,6 +32,9 @@ LIMITS['provision-state.json'] = 1024 * 1024  # File-read ceiling; the provision
 LIMITS.update({'diagnostic-state.json': 1024 * 1024, 'diagnostic-anchor.json': 4096,
                'diagnostic-state.lock': 0})
 LIMITS['credential-store.json'] = mutation_contract.MAX_MARKER
+NAMES = NAMES | {'release-owner.json', 'release-owner.lock', 'release-owner-activation.json', 'release-entry.lock'}
+LIMITS.update({'release-owner.json': MAX_FILE, 'release-owner.lock': 0,
+               'release-owner-activation.json': 16384, 'release-entry.lock': 0})
 _IDS = ('claim_id', 'device_id', 'key_id', 'rotation_id')
 _STOP = ('state', 'enabled', 'disconnected', 'central_suspended', 'enrollment_hold')
 _OPERATIONS = {'connect': {'initial-key', 'claim-key-id', 'reenroll-key'},
@@ -73,6 +76,9 @@ class Store:
         self._mutation_approval = None
         self._mutation_deadline = None
         self._credential_uncertain = False
+        self._release_entry_fd = None
+        self._release_entry_thread = None
+        self._release_entry_shared = None
         repo = Path(__file__).resolve().parents[2]
         if self.root.is_relative_to(repo) or '..' in self.root.parts:
             raise ValueError('SDC_PRIVATE_ROOT_REQUIRED')
@@ -276,7 +282,7 @@ class Store:
             from .provision import support_bootstrap
             value = self._managed_or_legacy(name, support_bootstrap(self))
             return default if value is None else value
-        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'diagnostic-anchor.json'):
+        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'diagnostic-anchor.json', 'release-owner.json', 'release-owner-activation.json'):
             # Local consent/disable has its own root binding and needs no monitor endpoint.
             return self._read_file(name, default)
         marker = self._marker()
@@ -537,9 +543,14 @@ class Store:
         self._name(name)
         if name == 'diagnostic-anchor.json':
             raise ValueError('SDC_DIAGNOSTIC_ANCHOR_IMMUTABLE')
+        if name == 'release-owner-activation.json':
+            if self._read_file(name, _MISSING) is not _MISSING:
+                raise ValueError('SDC_RELEASE_OWNER_ACTIVATION_IMMUTABLE')
+            self._write_file(name, value)
+            return
         if name in ('endpoint.json', 'support-bootstrap.json') and self._read_file('provision-state.json', _MISSING) is not _MISSING:
             raise ValueError('SDC_PROVISION_MANAGED_ROOT')
-        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json'):
+        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'release-owner.json'):
             self._write_file(name, value)
             return
         if name == 'credential-store.json':
@@ -639,7 +650,26 @@ class Store:
             yield
 
     @contextmanager
-    def _file_lock(self, name):
+    def release_owner_lock(self):
+        """Serialize release authority separately from patient data and updater journals."""
+        with self._file_lock('release-owner.lock') as fd:
+            yield fd
+
+    @contextmanager
+    def release_entry_lock(self, *, shared=False):
+        """Lifetime interlock only; neither a held FD nor its mode grants permission to update."""
+        if type(shared) is not bool or self._release_entry_fd is not None:
+            raise ValueError('SDC_RELEASE_ENTRY_LOCK_REENTRY')
+        with self._file_lock('release-entry.lock', shared=shared) as fd:
+            self._release_entry_fd, self._release_entry_thread = fd, threading.get_ident()
+            self._release_entry_shared = shared
+            try:
+                yield fd
+            finally:
+                self._release_entry_fd = self._release_entry_thread = self._release_entry_shared = None
+
+    @contextmanager
+    def _file_lock(self, name, *, shared=False):
         flags = os.O_RDWR | os.O_CREAT
         if name == 'tick.lock':
             # A customer root must not recreate its bound lock inode. Presence alone decides, so
@@ -651,7 +681,7 @@ class Store:
                 pass
         fd = self._open(name, flags)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fcntl.flock(fd, (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | fcntl.LOCK_NB)
             yield fd
         finally:
             os.close(fd)

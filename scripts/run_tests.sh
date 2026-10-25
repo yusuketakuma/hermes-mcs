@@ -30,6 +30,12 @@ fi
 test_home=$(mktemp -d "${TMPDIR:-/tmp}/mcs-test-home.XXXXXX")
 trap 'rm -rf "$test_home" 2>/dev/null || :' EXIT
 mkdir -p "$test_home/tmp" "$test_home/config" "$test_home/cache" "$test_home/data"
+mkdir -p "$test_home/tool-bin"
+if test_uv=$(command -v uv); then
+    # Keep only uv reachable when the test guard removes a shared Hermes PATH entry.
+    case "$test_uv" in /*) ;; *) test_uv="$repo_root/$test_uv" ;; esac
+    ln -s "$test_uv" "$test_home/tool-bin/uv"
+fi
 
 env -i \
     HOME="$test_home" \
@@ -37,7 +43,7 @@ env -i \
     XDG_CONFIG_HOME="$test_home/config" \
     XDG_CACHE_HOME="$test_home/cache" \
     XDG_DATA_HOME="$test_home/data" \
-    PATH="${PATH:-/usr/bin:/bin}" \
+    PATH="$test_home/tool-bin:${PATH:-/usr/bin:/bin}" \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     TZ=UTC \

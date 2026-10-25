@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MCS release dependency lock",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "const": "mcs.release-dependency-lock.v1"
+    },
+    "product": {
+      "const": "hermes-mcs"
+    },
+    "core_kind": {
+      "const": "stdlib-only"
+    },
+    "profiles": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "properties": {
+          "profile_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+          },
+          "runtime_mode": {
+            "enum": [
+              "hermes",
+              "standalone"
+            ]
+          },
+          "platform": {
+            "type": "object",
+            "properties": {
+              "os": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+              },
+              "cpu": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+              },
+              "python": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "const": 3
+                  },
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                ],
+                "items": false,
+                "minItems": 2
+              }
+            },
+            "required": [
+              "os",
+              "cpu",
+              "python"
+            ],
+            "additionalProperties": false
+          },
+          "requirements_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "host": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "commit": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{40}$"
+                  },
+                  "pyproject_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{64}$"
+                  },
+                  "extras": {
+                    "const": [
+                      "messaging"
+                    ]
+                  },
+                  "project_name": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "commit",
+                  "pyproject_sha256",
+                  "extras",
+                  "project_name"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "packages": {
+            "type": "array",
+            "maxItems": 256,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
+                  "maxLength": 128
+                },
+                "version": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9.!+_-]{0,127}$"
+                },
+                "wheels": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 8,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "filename": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.+-]*\\.whl$",
+                        "maxLength": 255
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 268435456
+                      }
+                    },
+                    "required": [
+                      "filename",
+                      "sha256",
+                      "size"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "version",
+                "wheels"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "build_packages": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?$",
+                  "maxLength": 128
+                },
+                "version": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9.!+_-]{0,127}$"
+                },
+                "wheels": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 8,
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "filename": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9][A-Za-z0-9_.+-]*\\.whl$",
+                        "maxLength": 255
+                      },
+                      "sha256": {
+                        "type": "string",
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "size": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 268435456
+                      }
+                    },
+                    "required": [
+                      "filename",
+                      "sha256",
+                      "size"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "version",
+                "wheels"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "profile_id",
+          "runtime_mode",
+          "platform",
+          "requirements_sha256",
+          "host",
+          "packages",
+          "build_packages"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "product",
+    "core_kind",
+    "profiles"
+  ],
+  "additionalProperties": false
+}

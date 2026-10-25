@@ -38,7 +38,7 @@ jobs:
         run: python3 scripts/development/check_drug_master_bundle.py
       # no -x: every failure of the run is reported, not only the first
       - name: pytest
-        run: pip install "pytest==9.1.1" && scripts/run_tests.sh
+        run: pip install "pytest==9.1.1" "uv==0.13.4" && scripts/run_tests.sh
       - name: check generated docs on PR
         if: github.event_name == 'pull_request'
         run: |
@@ -121,7 +121,7 @@ jobs:
           python-version: "3.14"
       - name: pytest (installer, updater, setup and launchd)
         run: |
-          python3 -m pip install "pytest==9.1.1"
+          python3 -m pip install "pytest==9.1.1" "uv==0.13.4"
           scripts/run_tests.sh tests/meta tests/ops -r fEs
 
   hermes-integration:

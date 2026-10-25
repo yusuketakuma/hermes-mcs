@@ -1,0 +1,971 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "R5a closed release records",
+  "description": "Closed R5a records for csdc. Shape only: semantic rules (hash identities, sorting, role exclusivity, freshness, H/I/F ordering, mode derivation) live in fleet/releases/contracts.js; signatures and thresholds in the signature module. Synthetic vectors are in release-vectors.json.",
+  "x-payload-bytes": 8192,
+  "x-envelope-bytes": 16384,
+  "x-root-proof-bytes": 98304,
+  "$defs": {
+    "Hex64": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "Commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "Token": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$"
+    },
+    "Slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+    },
+    "Environment": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]{1,32}$"
+    },
+    "Realm": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$"
+    },
+    "UUID": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "Spki": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "maxLength": 2731,
+      "description": "canonical unpadded base64url SPKI, decoded <= 2048 bytes; RSA-3072/65537 fingerprint and role checks belong to the signature module"
+    },
+    "Version3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      }
+    },
+    "Python": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "description": "[3, minor]"
+    },
+    "Platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "os",
+        "cpu",
+        "python"
+      ],
+      "properties": {
+        "os": {
+          "$ref": "#/$defs/Slug"
+        },
+        "cpu": {
+          "$ref": "#/$defs/Slug"
+        },
+        "python": {
+          "$ref": "#/$defs/Python"
+        }
+      }
+    },
+    "Policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "download_origin",
+        "max_attestation_ttl_ms",
+        "plan_ttl_ms",
+        "preflight_ttl_ms",
+        "max_artifact_bytes",
+        "max_unpacked_bytes",
+        "max_archive_entries",
+        "download_timeout_ms",
+        "max_clock_skew_ms"
+      ],
+      "properties": {
+        "download_origin": {
+          "type": "string",
+          "maxLength": 261,
+          "pattern": "^https://[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$"
+        },
+        "max_attestation_ttl_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86400000
+        },
+        "plan_ttl_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1800000
+        },
+        "preflight_ttl_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300000
+        },
+        "max_artifact_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 268435456
+        },
+        "max_unpacked_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1073741824
+        },
+        "max_archive_entries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50000
+        },
+        "download_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300000
+        },
+        "max_clock_skew_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000
+        }
+      },
+      "description": "Signed install policy. Every value is required; maxima are initial design ceilings, not measured guarantees."
+    },
+    "RootKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kid",
+        "spki"
+      ],
+      "properties": {
+        "kid": {
+          "$ref": "#/$defs/Hex64"
+        },
+        "spki": {
+          "$ref": "#/$defs/Spki"
+        }
+      }
+    },
+    "ReleaseKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kid",
+        "spki",
+        "not_before",
+        "expires_at"
+      ],
+      "properties": {
+        "kid": {
+          "$ref": "#/$defs/Hex64"
+        },
+        "spki": {
+          "$ref": "#/$defs/Spki"
+        },
+        "not_before": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "Recovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "previous_epoch",
+        "new_epoch",
+        "release_id",
+        "manifest_digest",
+        "reason",
+        "affected_release_kids",
+        "preserve_bindings",
+        "preserve_successful_frontier"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.release.recovery-checkpoint.v1"
+        },
+        "previous_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "new_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "release_id": {
+          "$ref": "#/$defs/Hex64"
+        },
+        "manifest_digest": {
+          "$ref": "#/$defs/Hex64"
+        },
+        "reason": {
+          "enum": [
+            "metadata_forward_attack",
+            "release_key_compromise"
+          ]
+        },
+        "affected_release_kids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/Hex64"
+          }
+        },
+        "preserve_bindings": {
+          "const": true
+        },
+        "preserve_successful_frontier": {
+          "const": true
+        }
+      }
+    },
+    "Trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "product",
+        "trust_domain",
+        "environment",
+        "stream_id",
+        "root_version",
+        "previous_trust_digest",
+        "root_keys",
+        "root_threshold",
+        "release_keys",
+        "revoked_release_kids",
+        "retired_root_kids",
+        "metadata_epoch",
+        "issued_at",
+        "not_before",
+        "expires_at",
+        "policy",
+        "recovery"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.release.trust.v1"
+        },
+        "product": {
+          "enum": [
+            "hermes-mcs"
+          ]
+        },
+        "trust_domain": {
+          "$ref": "#/$defs/Token"
+        },
+        "environment": {
+          "$ref": "#/$defs/Environment"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Token"
+        },
+        "root_version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "previous_trust_digest": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Hex64"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "root_keys": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/RootKey"
+          }
+        },
+        "root_threshold": {
+          "const": 2
+        },
+        "release_keys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 3,
+          "items": {
+            "$ref": "#/$defs/ReleaseKey"
+          }
+        },
+        "revoked_release_kids": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/Hex64"
+          }
+        },
+        "retired_root_kids": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/Hex64"
+          }
+        },
+        "metadata_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "issued_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "not_before": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "policy": {
+          "$ref": "#/$defs/Policy"
+        },
+        "recovery": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Recovery"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "Sorting, uniqueness, one role per kid/SPKI, version-1 null previous digest, <=365 day lifetime and recovery epoch rules are semantic checks in fleet/releases/contracts.js."
+    },
+    "Core": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "product",
+        "trust_domain",
+        "environment",
+        "stream_id",
+        "code_seq",
+        "commit",
+        "artifact",
+        "lock_sha256",
+        "platforms",
+        "minimum_updater",
+        "schema",
+        "apply",
+        "recovery"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.release.core.v1"
+        },
+        "product": {
+          "enum": [
+            "hermes-mcs"
+          ]
+        },
+        "trust_domain": {
+          "$ref": "#/$defs/Token"
+        },
+        "environment": {
+          "$ref": "#/$defs/Environment"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Token"
+        },
+        "code_seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "commit": {
+          "$ref": "#/$defs/Commit"
+        },
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "format",
+            "object_format",
+            "sha256",
+            "size"
+          ],
+          "properties": {
+            "format": {
+              "const": "git-bundle-v2"
+            },
+            "object_format": {
+              "const": "sha1"
+            },
+            "sha256": {
+              "$ref": "#/$defs/Hex64"
+            },
+            "size": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "description": "Registered R5 distribution format: a Git bundle (v2, SHA-1 objects) fixed by SHA-256/size, verified before handing to the existing Git owner. Not a claim about the current product medium; tar/zip/unknown formats are rejected."
+        },
+        "lock_sha256": {
+          "$ref": "#/$defs/Hex64"
+        },
+        "platforms": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/Platform"
+          }
+        },
+        "minimum_updater": {
+          "$ref": "#/$defs/Version3"
+        },
+        "schema": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "accepts_installed",
+            "target",
+            "migration",
+            "rollback_requires_db_restore"
+          ],
+          "properties": {
+            "accepts_installed": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 16,
+              "items": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            },
+            "target": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "migration": {
+              "enum": [
+                "none",
+                "forward_only"
+              ]
+            },
+            "rollback_requires_db_restore": {
+              "type": "boolean"
+            }
+          }
+        },
+        "apply": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "quiesce_required",
+            "restart_required"
+          ],
+          "properties": {
+            "quiesce_required": {
+              "type": "boolean"
+            },
+            "restart_required": {
+              "type": "boolean"
+            }
+          }
+        },
+        "recovery": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "code_rollback",
+            "db_recovery"
+          ],
+          "properties": {
+            "code_rollback": {
+              "enum": [
+                "previous_release",
+                "not_supported"
+              ]
+            },
+            "db_recovery": {
+              "const": "separate_approval"
+            }
+          }
+        }
+      }
+    },
+    "Attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "product",
+        "trust_domain",
+        "environment",
+        "stream_id",
+        "metadata_epoch",
+        "core",
+        "release_id",
+        "issued_at",
+        "not_before",
+        "expires_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.release.attestation.v1"
+        },
+        "product": {
+          "enum": [
+            "hermes-mcs"
+          ]
+        },
+        "trust_domain": {
+          "$ref": "#/$defs/Token"
+        },
+        "environment": {
+          "$ref": "#/$defs/Environment"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Token"
+        },
+        "metadata_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "core": {
+          "$ref": "#/$defs/Core"
+        },
+        "release_id": {
+          "$ref": "#/$defs/Hex64"
+        },
+        "issued_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "not_before": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "description": "release_id = SHA-256('SDC-RELEASE-CORE-v1\\n' + CJSON(core)); manifest_digest = SHA-256('SDC-RELEASE-MANIFEST-v1\\n' + CJSON(attestation))."
+    },
+    "Point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code_seq",
+        "release_id"
+      ],
+      "properties": {
+        "code_seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "release_id": {
+          "$ref": "#/$defs/Hex64"
+        }
+      }
+    },
+    "Unresolved": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "plan_sha256",
+        "phase"
+      ],
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "plan_sha256": {
+          "$ref": "#/$defs/Hex64"
+        },
+        "phase": {
+          "enum": [
+            "started",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "State": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "product",
+        "trust_domain",
+        "environment",
+        "stream_id",
+        "tenant",
+        "installation",
+        "device_id",
+        "realm_epoch",
+        "trust_digest",
+        "root_version",
+        "metadata_epoch",
+        "highest_seen",
+        "installed",
+        "highest_installed",
+        "unresolved"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.release.state.v1"
+        },
+        "product": {
+          "enum": [
+            "hermes-mcs"
+          ]
+        },
+        "trust_domain": {
+          "$ref": "#/$defs/Token"
+        },
+        "environment": {
+          "$ref": "#/$defs/Environment"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Token"
+        },
+        "tenant": {
+          "$ref": "#/$defs/Slug"
+        },
+        "installation": {
+          "$ref": "#/$defs/Slug"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "realm_epoch": {
+          "$ref": "#/$defs/Realm"
+        },
+        "trust_digest": {
+          "$ref": "#/$defs/Hex64"
+        },
+        "root_version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "metadata_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "highest_seen": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Point"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "installed": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Point"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "highest_installed": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Point"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unresolved": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Unresolved"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "T/R/H/I/F/J. Bindings are not stored here; the caller supplies the row for the exact sequence."
+    },
+    "Preconditions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "current_commit",
+        "hand_edited",
+        "installed_lock_sha256",
+        "free_bytes",
+        "platform",
+        "updater",
+        "installed_schema",
+        "backup_verified",
+        "backup_sha256",
+        "observed_at"
+      ],
+      "properties": {
+        "current_commit": {
+          "$ref": "#/$defs/Commit"
+        },
+        "hand_edited": {
+          "type": "boolean"
+        },
+        "installed_lock_sha256": {
+          "$ref": "#/$defs/Hex64"
+        },
+        "free_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "platform": {
+          "$ref": "#/$defs/Platform"
+        },
+        "updater": {
+          "$ref": "#/$defs/Version3"
+        },
+        "installed_schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "backup_verified": {
+          "type": "boolean"
+        },
+        "backup_sha256": {
+          "$ref": "#/$defs/Hex64"
+        },
+        "observed_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "Plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "plan_id",
+        "product",
+        "trust_domain",
+        "environment",
+        "stream_id",
+        "tenant",
+        "installation",
+        "device_id",
+        "realm_epoch",
+        "trust_digest",
+        "root_version",
+        "metadata_epoch",
+        "highest_seen",
+        "installed",
+        "highest_installed",
+        "release_id",
+        "manifest_digest",
+        "target_code_seq",
+        "preconditions",
+        "precondition_sha256",
+        "window",
+        "canary_stage",
+        "modes",
+        "issued_at",
+        "expires_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.release.plan.v1"
+        },
+        "plan_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "product": {
+          "enum": [
+            "hermes-mcs"
+          ]
+        },
+        "trust_domain": {
+          "$ref": "#/$defs/Token"
+        },
+        "environment": {
+          "$ref": "#/$defs/Environment"
+        },
+        "stream_id": {
+          "$ref": "#/$defs/Token"
+        },
+        "tenant": {
+          "$ref": "#/$defs/Slug"
+        },
+        "installation": {
+          "$ref": "#/$defs/Slug"
+        },
+        "device_id": {
+          "$ref": "#/$defs/UUID"
+        },
+        "realm_epoch": {
+          "$ref": "#/$defs/Realm"
+        },
+        "trust_digest": {
+          "$ref": "#/$defs/Hex64"
+        },
+        "root_version": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "metadata_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "highest_seen": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Point"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "installed": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Point"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "highest_installed": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Point"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "release_id": {
+          "$ref": "#/$defs/Hex64"
+        },
+        "manifest_digest": {
+          "$ref": "#/$defs/Hex64"
+        },
+        "target_code_seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "preconditions": {
+          "$ref": "#/$defs/Preconditions"
+        },
+        "precondition_sha256": {
+          "$ref": "#/$defs/Hex64"
+        },
+        "window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "starts_at",
+            "ends_at"
+          ],
+          "properties": {
+            "starts_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "ends_at": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "canary_stage": {
+          "enum": [
+            "self_test",
+            "consented_single",
+            "customer_batch"
+          ]
+        },
+        "modes": {
+          "type": "array",
+          "maxItems": 2,
+          "items": {
+            "enum": [
+              "select_below_seen",
+              "code_rollback"
+            ]
+          }
+        },
+        "issued_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "expires_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "description": "Read-only plan. Its validity never authorizes R5b approval, grant or owner effects."
+    }
+  }
+}

@@ -786,6 +786,18 @@ else
 fi
 
 # ----------------------------------------------------------- 2. hermes
+LOCKED_DEPENDENCIES=0
+if [ -e "$REPO/deployment/sdc-release-lock.json" ] || [ -L "$REPO/deployment/sdc-release-lock.json" ]; then
+    LOCKED_DEPENDENCIES=1
+    LOCK_CHECK_PY="$(find_py)" || die "固定依存の確認には Python 3.14 が必要です。既存環境は保持しました"
+    locked_dependencies() {
+        "$1" -I -S -c 'import sys; sys.path[:0] = [sys.argv[1], sys.argv[1]+"/mcs"]; import _mcs_path; from release_dependency_lock import main; raise SystemExit(main(sys.argv[2:]))' \
+            "$REPO" --repo "$REPO" --python "$VENV_PY" --venv "$VENV" \
+            --mode "$RUNTIME_MODE" --host-source "$HERMES_DIR" ${2:+"$2"}
+    }
+    locked_dependencies "$LOCK_CHECK_PY" --check-only \
+        || die "固定依存の入力を確認できません。既存 SDK と実行環境は保持しました"
+fi
 if [ "$RUNTIME_MODE" = standalone ]; then
     say "【2/6】MCS 単独接続の実行環境"
     mkdir -p "$RUNTIME_HOME"
@@ -801,7 +813,10 @@ if [ "$RUNTIME_MODE" = standalone ]; then
     fi
     REQUIREMENTS="$REPO/deployment/requirements-standalone.txt"
     [ -f "$REQUIREMENTS" ] || die "独立接続の依存一覧がありません。deployment/requirements-standalone.txt を確認してください"
-    if [ -f "$PIP_MARK" ] || ! cmp -s "$REQUIREMENTS" "$VENV/.mcs-connector-requirements"; then
+    if [ "$LOCKED_DEPENDENCIES" -eq 1 ]; then
+        locked_dependencies "$VENV_PY" || die "固定依存の導入が未完了です。記録を削除せず確認してください"
+        rm -f "$PIP_MARK"
+    elif [ -f "$PIP_MARK" ] || ! cmp -s "$REQUIREMENTS" "$VENV/.mcs-connector-requirements"; then
         : > "$PIP_MARK"
         if command -v uv >/dev/null 2>&1; then
             uv pip install --python "$VENV_PY" -r "$REQUIREMENTS"
@@ -940,7 +955,11 @@ if { [ -n "$_runtime_backup" ] && [ ! -e "$_runtime_backup" ] && [ ! -L "$_runti
 else
     _venv="Python 環境を保持"
 fi
-if [ -f "$PIP_MARK" ] || [ ! -x "$VENV_HERMES" ]; then
+if [ "$LOCKED_DEPENDENCIES" -eq 1 ]; then
+    locked_dependencies "$VENV_PY" || die "固定依存の導入が未完了です。記録を削除せず確認してください"
+    rm -f "$PIP_MARK"
+    _venv="$_venv, 固定依存を確認"
+elif [ -f "$PIP_MARK" ] || [ ! -x "$VENV_HERMES" ]; then
     : > "$PIP_MARK"
     # Hermes's uv security overrides apply only when its project is selected.
     (cd "$HERMES_DIR" && uv pip install --python "$VENV_PY" -e ".[messaging]") \

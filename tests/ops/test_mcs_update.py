@@ -12,6 +12,7 @@ import service_contract
 import service_management
 import owned_process
 import update_discovery
+import release_apply_owner
 import runtime_inspection
 import json
 import os
@@ -28,6 +29,42 @@ import mcs_update
 import mcs_util
 from ops_testkit import (_FakeLaunchd, _git, _make_repo, _mk_schema, _receipts_db,
                          _seed_consent)
+
+
+@pytest.mark.parametrize('native', [False, True])
+def test_release_post_merge_requires_native_adoption_and_never_calls_legacy(updater, tmp_path, monkeypatch, native):
+    saved = {'applying': {'sha': 'a' * 40, 'release_ref': {'synthetic': True}},
+             'release_ref': {'synthetic': True}}
+    monkeypatch.setattr(updater.journal_store, 'load_state', lambda *_: saved)
+    monkeypatch.setenv(updater._UPDATE_PM_ENV, 'a' * 40)
+    monkeypatch.delenv(release_apply_owner.CHILD_FDS_ENV, raising=False)
+    monkeypatch.setattr(updater, '_call_legacy', lambda *_: pytest.fail('release fell back to legacy'))
+    calls = []
+    monkeypatch.setattr(updater, '_post_merge', lambda value: calls.append(value) or 0)
+    if not native:
+        assert updater.cmd_post_merge() == 2
+        assert calls == []
+        return
+    fds = [os.open(tmp_path / f'lock-{i}', os.O_CREAT | os.O_RDWR, 0o600) for i in range(3)]
+    reader, writer = os.pipe()
+    try:
+        monkeypatch.setenv(release_apply_owner.CHILD_FDS_ENV, ':'.join(map(str, (reader, *fds))))
+        consumed = {**saved, 'applying': {**saved['applying'], 'release_child': {'phase': 'consumed'}}}
+
+        def adopt(home, repo, *, ticket_fd, locks, deadline):
+            assert (home, repo) == (updater.HOME, updater.REPO)
+            assert ticket_fd == reader and locks == tuple(fds)
+            assert time.monotonic() < deadline <= time.monotonic() + 2
+            return consumed
+
+        monkeypatch.setattr(release_apply_owner, '_adopt_post_merge', adopt)
+        assert updater.cmd_post_merge() == 0
+        assert calls == [consumed]
+        for descriptor in fds:
+            os.fstat(descriptor)  # The child scope borrows; it never closes native descriptors.
+    finally:
+        for descriptor in (*fds, reader, writer):
+            os.close(descriptor)
 
 
 def test_repo_fixture_clones_main_with_master_default(tmp_path, monkeypatch):
@@ -357,6 +394,20 @@ def test_impact_summary_distinguishes_gateway_and_independent_adapter(
 
 
 # ------------------------------------------------------- protected paths
+
+@pytest.mark.parametrize('changed', ['deployment/sdc-release-lock.json', 'deployment/sdc-wheels/synthetic.whl'])
+def test_precheck_tag_rejects_dependency_lock_changes(updater, tmp_path, monkeypatch, changed):
+    _mk_schema(tmp_path / 'ledger.db', 8)
+    monkeypatch.setattr(updater, 'LEDGER', str(tmp_path / 'ledger.db'))
+    monkeypatch.setattr(updater, '_ls_tree_paths', lambda *args: [])
+    def git(argv):
+        denied = argv[:2] == ['diff', '--quiet'] and changed.startswith(tuple(argv[argv.index('--') + 1:]))
+        return subprocess.CompletedProcess(argv, int(denied), '', '')
+    monkeypatch.setattr(updater, '_git', git)
+    monkeypatch.setattr(updater, '_git_out', lambda argv: 'SCHEMA_VERSION = 8' if argv[0] == 'show' else '')
+    monkeypatch.setattr(updater.subprocess, 'run', lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, '[]', ''))
+    assert 'release_dependency_lock_changed' in updater.precheck_tag('v1.1.0')
+
 
 def test_precheck_tag_rejects_protected_and_symlink(updater, tmp_path,
                                                     monkeypatch):
@@ -2862,3 +2913,62 @@ def test_marker_is_private_and_never_follows_a_link(updater, tmp_path):
     with pytest.raises(OSError):
         updater._write_marker()
     assert not (tmp_path / "elsewhere").exists()
+
+
+@pytest.mark.parametrize('marker', ['release-owner.json', 'release-owner-activation.json'])
+@pytest.mark.parametrize('entry', ['apply', 'rollback', 'recover', 'reinstall_done', 'check'])
+def test_release_activation_blocks_legacy_before_journal_or_cleanup(updater, tmp_path, monkeypatch, marker, entry):
+    import release_apply_owner
+    # pytest can reuse a removed tmp_path; the private census must belong to this test user too.
+    user_home = tmp_path / 'synthetic-user-home'
+    user_home.mkdir(mode=0o700)
+    monkeypatch.setenv('HOME', str(user_home))
+    root = release_apply_owner._control_root(updater.HOME)
+    with release_apply_owner._control_store(updater.HOME) as store:
+        store.write(marker, {'synthetic': True})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {'sdc': {'state_root': str(root)}, 'update': {'mode': 'notify'}})
+    monkeypatch.setattr(updater, '_apply_runtime_gate_errors', lambda *_: [])
+    monkeypatch.setattr(updater, 'journal', lambda *_: pytest.fail('legacy journal forbidden'))
+    monkeypatch.setattr(updater, '_remove_marker', lambda: pytest.fail('cleanup forbidden'))
+    monkeypatch.setattr(updater, '_acquire_run_lock_wait', lambda **_: pytest.fail('legacy run lock forbidden'))
+    before = Path(updater.STATE_PATH).read_bytes() if Path(updater.STATE_PATH).exists() else None
+    if entry == 'apply':
+        result = updater.apply('v1.1.0', 'a' * 40, None)
+    elif entry == 'rollback':
+        result = updater.rollback()
+    elif entry == 'reinstall_done':
+        result = updater.reinstall_done()
+    elif entry == 'check':
+        monkeypatch.setattr(update_discovery, 'detect_latest', lambda *_, **__: ('v1.1.0', 'a' * 40))
+        monkeypatch.setattr(update_discovery, 'current_version', lambda **_: ('v1.0.0', 'b' * 40))
+        monkeypatch.setattr(updater, '_tag_is_newer', lambda *_: True)
+        monkeypatch.setattr(updater, '_git', lambda *_, **__: pytest.fail('fetch forbidden'))
+        result = updater.cmd_check()
+    else:
+        result = updater.recover_interrupted()
+    assert result == 2
+    assert (Path(updater.STATE_PATH).read_bytes() if Path(updater.STATE_PATH).exists() else None) == before
+
+
+def test_release_reference_and_unsafe_fixed_control_root_are_legacy_holds(updater):
+    import release_apply_owner
+    assert updater._release_legacy_blocked({'applying': {'release_ref': {}}})
+    assert not updater._release_legacy_blocked({})
+    with release_apply_owner._control_store(updater.HOME) as store:
+        root = store.root
+    gate = root / 'release-entry.lock'
+    gate.chmod(0o644)
+    assert updater._release_legacy_blocked({})
+    assert gate.stat().st_mode & 0o777 == 0o644  # No repair by the reader.
+    gate.chmod(0o600)
+    (root / 'release-owner-activation.json').write_bytes(b'invalid-json')
+    assert updater._release_legacy_blocked({})
+
+
+def test_fixed_release_fence_survives_lost_sdc_config(updater, monkeypatch):
+    import release_apply_owner
+    with release_apply_owner._control_store(updater.HOME) as store:
+        store.write('release-owner-activation.json', {'synthetic': True})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
+    monkeypatch.setattr(updater, '_apply_pipeline', lambda *_a, **_k: pytest.fail('legacy pipeline after config loss'))
+    assert updater.apply('v1.1.0', 'a' * 40, None) == 2

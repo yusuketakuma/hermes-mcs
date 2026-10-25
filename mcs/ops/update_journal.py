@@ -2,14 +2,56 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import re
 import stat
 
 from safe_io import atomic_write, fdopen_owned
 
+
+def valid_release_ref(value):
+    """Causal journal data only; a saved reference never creates execution authority."""
+    fields = {'schema_version', 'root_fingerprint', 'repo_fingerprint', 'operation_id', 'grant_id',
+              'plan_sha256', 'release_id', 'target_code_seq', 'target_commit', 'artifact_sha256',
+              'lock_sha256', 'target_schema', 'start_receipt_id', 'started_at'}
+    if type(value) is not dict or set(value) != fields or value['schema_version'] != 'mcs.release-reference.v1':
+        return False
+    for key in ('root_fingerprint', 'repo_fingerprint', 'plan_sha256', 'release_id', 'artifact_sha256', 'lock_sha256'):
+        if type(value[key]) is not str or re.fullmatch('[0-9a-f]{64}', value[key]) is None:
+            return False
+    if type(value['target_commit']) is not str or re.fullmatch('[0-9a-f]{40}', value['target_commit']) is None:
+        return False
+    for key in ('operation_id', 'grant_id', 'start_receipt_id'):
+        if type(value[key]) is not str or re.fullmatch(
+                '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', value[key]) is None:
+            return False
+    return all(type(value[key]) is int and lower <= value[key] <= 2**53 - 1
+               for key, lower in (('target_code_seq', 1), ('target_schema', 1), ('started_at', 0)))
+
 def default_state() -> dict:
     return {"v": 1, "stages": [], "applied": [], "attempts": {},
             "executed": {}, "applying": None}
+
+
+def release_ref_digest(reference):
+    if not valid_release_ref(reference):
+        raise ValueError('invalid_release_reference')
+    return hashlib.sha256(json.dumps(reference, sort_keys=True, separators=(',', ':'),
+                                     ensure_ascii=False).encode('utf-8')).hexdigest()
+
+
+def valid_release_child(value, reference):
+    if (type(value) is not dict or set(value) != {
+            'schema_version', 'purpose', 'release_ref_sha256', 'ticket_sha256', 'phase'}
+            or value['schema_version'] != 'mcs.release-child.v1'
+            or value['purpose'] != 'post-merge.v1'
+            or value['phase'] not in ('issued', 'consumed')
+            or not valid_release_ref(reference)):
+        return False
+    return (value['release_ref_sha256'] == release_ref_digest(reference)
+            and type(value['ticket_sha256']) is str
+            and re.fullmatch('[0-9a-f]{64}', value['ticket_sha256']) is not None)
 
 
 def valid_state(state):
@@ -17,6 +59,8 @@ def valid_state(state):
     if not isinstance(state, dict) or type(state.get("v")) is not int \
             or state["v"] != 1:
         return False
+    if 'release_child' in state:
+        return False  # A child receipt belongs to its reference-bearing stage only.
     for key in ("stages", "applied"):
         if not isinstance(state.get(key, []), list) \
                 or any(not isinstance(row, dict) for row in state.get(key, [])):
@@ -28,7 +72,21 @@ def valid_state(state):
             return False
     records = [*state.get("stages", []), *state.get("applied", []),
                state.get("applying") or {}]
+    references = [row['release_ref'] for row in [state, *records] if 'release_ref' in row]
+    if not all(valid_release_ref(reference) for reference in references):
+        return False
+    operations = {}
+    for reference in references:
+        prior = operations.setdefault(reference['operation_id'], reference)
+        if prior != reference:
+            return False
+    if 'release_ref' in state and 'release_ref' in (state.get('applying') or {}):
+        if state['release_ref'] != state['applying']['release_ref']:
+            return False
     for row in records:
+        if 'release_child' in row and not valid_release_child(
+                row['release_child'], row.get('release_ref')):
+            return False
         stamp = row.get("at", 0)
         if type(stamp) not in (int, float) or not 0 <= stamp < 1e12:
             return False

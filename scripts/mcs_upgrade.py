@@ -18,10 +18,15 @@ docs/guides/UPGRADE_AGENT.md.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack, contextmanager
+import fcntl
+import hashlib
 import json
 import os
 import re
 import shutil
+import stat
+from pathlib import Path
 import subprocess
 import sys
 import tempfile
@@ -33,11 +38,76 @@ SEMVER_RE = re.compile(
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
+_RELEASE_GATE_FD = None
+
+
+def _release_control_root(runtime_home):
+    canonical = os.path.realpath(os.path.abspath(os.path.expanduser(runtime_home)))
+    namespace = hashlib.sha256(os.fsencode(canonical)).hexdigest()
+    return Path(os.path.realpath(os.path.expanduser('~'))) / '.mcs-release-control' / namespace
+
+
+def _open_release_gate(runtime_home):
+    root = _release_control_root(runtime_home)
+    directory, held = os.open('/', os.O_RDONLY | os.O_DIRECTORY), None
+    try:
+        for index, part in enumerate(root.parts[1:]):
+            private = index >= len(root.parts) - 3
+            if private:
+                try:
+                    os.mkdir(part, 0o700, dir_fd=directory)
+                    os.fsync(directory)
+                except FileExistsError:
+                    pass
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+            info = os.fstat(directory)
+            if private and (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700):
+                raise ValueError('release_entry_hold')
+        held = os.open('release-entry.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+                       0o600, dir_fd=directory)
+        info = os.fstat(held)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1
+                or info.st_size != 0 or stat.S_IMODE(info.st_mode) != 0o600):
+            raise ValueError('release_entry_hold')
+        fcntl.flock(held, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        for name in ('release-owner.json', 'release-owner-activation.json'):
+            try:
+                os.stat(name, dir_fd=directory, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            raise ValueError('release_entry_hold')
+        result, held = held, None
+        return result
+    finally:
+        if held is not None:
+            os.close(held)
+        os.close(directory)
+
+
+@contextmanager
+def _release_scope(runtime_home):
+    global _RELEASE_GATE_FD
+    fd = _open_release_gate(runtime_home)
+    previous, _RELEASE_GATE_FD = _RELEASE_GATE_FD, fd
+    try:
+        yield fd
+    finally:
+        _RELEASE_GATE_FD = previous
+        os.close(fd)
+
+
+def _lifetime_fds():
+    return {} if _RELEASE_GATE_FD is None else {'pass_fds': (_RELEASE_GATE_FD,)}
+
+
+
 def _git(repo: str, *args: str, binary: bool = False):
     try:
         r = subprocess.run(["git", "-C", repo, *args], capture_output=True,
                            text=not binary, timeout=120,
-                           env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+                           env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, **_lifetime_fds())
     except subprocess.TimeoutExpired:
         raise SystemExit(f"git {args[0]} が時間内に完了しませんでした。接続状況を確認してください") from None
     except OSError as exc:
@@ -117,7 +187,7 @@ def interactive_update(cmd, env, repo):
     """Explain the target updater's plan before an explicit local update."""
     print("手順 2/3: この Mac を更新できるか確認しています。")
     try:
-        result = subprocess.run(cmd, env=env, cwd=repo, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(cmd, env=env, cwd=repo, capture_output=True, text=True, timeout=600, **_lifetime_fds())
     except subprocess.TimeoutExpired:
         print("確認が時間内に終わりませんでした。更新は開始していません。担当者に接続と導入状態の確認を依頼してください。")
         return 1
@@ -174,12 +244,12 @@ def interactive_update(cmd, env, repo):
     if route == "reinstall":
         apply_cmd.append("--reinstall")
         apply_cmd.extend(f"--install-arg={arg}" for arg in install_args)
-    result = subprocess.run(apply_cmd, env=env, cwd=repo)
+    result = subprocess.run(apply_cmd, env=env, cwd=repo, **_lifetime_fds())
     if result.returncode:
         print("更新は完了していません。繰り返し実行せず、mcs recover で状態を確認してください。")
         return result.returncode
     try:
-        checked = subprocess.run(cmd, env=env, cwd=repo, capture_output=True, text=True, timeout=600)
+        checked = subprocess.run(cmd, env=env, cwd=repo, capture_output=True, text=True, timeout=600, **_lifetime_fds())
         final = json.loads(checked.stdout)
         if (checked.returncode or not isinstance(final, dict)
                 or final.get("route") != "noop" or final.get("blockers")):
@@ -240,59 +310,66 @@ def _main(argv=None) -> int:
     if sys.version_info < (3, 10):
         raise SystemExit("Python 3.10以上が必要です。Hermesまたは "
                          "~/.mcs/venv のPythonを使ってください（UPGRADE_AGENT.md 第1節）")
-    repo = os.path.realpath(_git(args.repo, "rev-parse", "--show-toplevel").strip())
-    if not args.no_fetch and candidate_sha is None:
-        _git(repo, "fetch", "--tags", "origin")
-    if args.keep_hermes_checkout and not re.fullmatch(r"[0-9a-f]{40}", args.keep_hermes_checkout):
-        raise SystemExit("--keep-hermes-checkout には省略しない40桁の16進数のコミット識別子が必要です")
-    tag = candidate_sha or args.to or latest_tag(repo)
-    if candidate_sha is not None:
+    with ExitStack() as scope:
         try:
-            candidate_available = (_git(repo, "cat-file", "-t", candidate_sha).strip() == "commit"
-                and _git(repo, "rev-parse", "--verify", candidate_sha + "^{commit}").strip() == candidate_sha)
-        except SystemExit:
-            candidate_available = False
-        if not candidate_available:
-            raise SystemExit("未公開候補のコミットをローカルで確認できません。--candidate-sha と --repo を確認してください") from None
-    elif len(tag) > 255 or not SEMVER_RE.fullmatch(tag):
-        raise SystemExit(f"更新する版の指定が正しくありません（例: v1.0.23）: {tag}")
-    tmp = tempfile.mkdtemp(prefix="mcs_upgrade_")
-    try:
-        if candidate_sha is None:
-            extract(repo, tag, tmp)
-        else:
-            extract(repo, tag, tmp, local_candidate=True)
-        updater = os.path.join(tmp, "mcs", "ops", "mcs_update.py")
-        if not os.path.exists(updater):
-            raise SystemExit(f"{tag} に更新プログラム mcs/ops/mcs_update.py がありません")
-        cmd = [sys.executable, updater, "plan" if args.cmd == "guide" else args.cmd]
-        cmd += (["--candidate-sha", candidate_sha, "--base-sha", base_sha]
-                if candidate_sha is not None else ["--tag", tag])
-        if args.cmd == "apply":
-            cmd += ["--reinstall"] if args.reinstall else []
-            cmd += [f"--install-arg={a}" for a in args.install_arg]
-            if candidate_sha is not None:
-                cmd += ["--confirm-human", f"--reason={args.reason}"]
-        env = {**os.environ, "MCS_UPDATE_REPO": repo}
-        env.pop("MCS_UPDATE_KEEP_HERMES_CHECKOUT", None)
-        if args.keep_hermes_checkout:
-            env["MCS_UPDATE_KEEP_HERMES_CHECKOUT"] = args.keep_hermes_checkout
-        try:
-            if args.cmd == "guide":
-                print(f"更新する版: {tag}")
-                return interactive_update(cmd, env, repo)
-            rc = subprocess.run(cmd, env=env, cwd=repo).returncode
-        except OSError as exc:
-            raise SystemExit(f"更新プログラムを起動できませんでした。Pythonの実行環境を確認してください（{exc.strerror}）") from None
-        # The updater also exits 0 when it defers (another update running, recovery pending).
-        if args.cmd == "apply" and rc == 0 and _git(repo, "rev-parse", "HEAD").strip() \
-                != (candidate_sha or _git(repo, "rev-parse", f"refs/tags/{tag}^{{commit}}").strip()):
-            print(f"{tag} は適用されていません。別の更新処理の実行中か、中断した更新の復旧待ちの可能性があります。"
-                  "しばらく待ってから data/recovery_report.json を確認し、もう一度実行してください", file=sys.stderr)
+            runtime_home = os.path.abspath(os.path.expanduser(os.environ.get('MCS_ROOT', '~/.mcs')))
+            scope.enter_context(_release_scope(runtime_home))
+        except (OSError, ValueError):
+            print('release制御の確認中または状態が不明なため、通常の更新を停止しました。')
             return 2
-        return rc
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        repo = os.path.realpath(_git(args.repo, "rev-parse", "--show-toplevel").strip())
+        if not args.no_fetch and candidate_sha is None:
+            _git(repo, "fetch", "--tags", "origin")
+        if args.keep_hermes_checkout and not re.fullmatch(r"[0-9a-f]{40}", args.keep_hermes_checkout):
+            raise SystemExit("--keep-hermes-checkout には省略しない40桁の16進数のコミット識別子が必要です")
+        tag = candidate_sha or args.to or latest_tag(repo)
+        if candidate_sha is not None:
+            try:
+                candidate_available = (_git(repo, "cat-file", "-t", candidate_sha).strip() == "commit"
+                    and _git(repo, "rev-parse", "--verify", candidate_sha + "^{commit}").strip() == candidate_sha)
+            except SystemExit:
+                candidate_available = False
+            if not candidate_available:
+                raise SystemExit("未公開候補のコミットをローカルで確認できません。--candidate-sha と --repo を確認してください") from None
+        elif len(tag) > 255 or not SEMVER_RE.fullmatch(tag):
+            raise SystemExit(f"更新する版の指定が正しくありません（例: v1.0.23）: {tag}")
+        tmp = tempfile.mkdtemp(prefix="mcs_upgrade_")
+        try:
+            if candidate_sha is None:
+                extract(repo, tag, tmp)
+            else:
+                extract(repo, tag, tmp, local_candidate=True)
+            updater = os.path.join(tmp, "mcs", "ops", "mcs_update.py")
+            if not os.path.exists(updater):
+                raise SystemExit(f"{tag} に更新プログラム mcs/ops/mcs_update.py がありません")
+            cmd = [sys.executable, updater, "plan" if args.cmd == "guide" else args.cmd]
+            cmd += (["--candidate-sha", candidate_sha, "--base-sha", base_sha]
+                    if candidate_sha is not None else ["--tag", tag])
+            if args.cmd == "apply":
+                cmd += ["--reinstall"] if args.reinstall else []
+                cmd += [f"--install-arg={a}" for a in args.install_arg]
+                if candidate_sha is not None:
+                    cmd += ["--confirm-human", f"--reason={args.reason}"]
+            env = {**os.environ, "MCS_UPDATE_REPO": repo}
+            env.pop("MCS_UPDATE_KEEP_HERMES_CHECKOUT", None)
+            if args.keep_hermes_checkout:
+                env["MCS_UPDATE_KEEP_HERMES_CHECKOUT"] = args.keep_hermes_checkout
+            try:
+                if args.cmd == "guide":
+                    print(f"更新する版: {tag}")
+                    return interactive_update(cmd, env, repo)
+                rc = subprocess.run(cmd, env=env, cwd=repo, **_lifetime_fds()).returncode
+            except OSError as exc:
+                raise SystemExit(f"更新プログラムを起動できませんでした。Pythonの実行環境を確認してください（{exc.strerror}）") from None
+            # The updater also exits 0 when it defers (another update running, recovery pending).
+            if args.cmd == "apply" and rc == 0 and _git(repo, "rev-parse", "HEAD").strip() \
+                    != (candidate_sha or _git(repo, "rev-parse", f"refs/tags/{tag}^{{commit}}").strip()):
+                print(f"{tag} は適用されていません。別の更新処理の実行中か、中断した更新の復旧待ちの可能性があります。"
+                      "しばらく待ってから data/recovery_report.json を確認し、もう一度実行してください", file=sys.stderr)
+                return 2
+            return rc
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main(argv=None) -> int:

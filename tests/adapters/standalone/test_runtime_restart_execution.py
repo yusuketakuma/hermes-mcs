@@ -235,6 +235,9 @@ def replace_managed_bundle(world):
 
 
 def customer_reader(world, monkeypatch):
+    # Customer markers bind an existing tick inode; they never permit recreating it.
+    with world.store.lock():
+        pass
     marker = {'schema_version': 'sdc.credential-store.v2', 'mode': 'keychain',
               'account': '00000000-0000-4000-8000-000000000077',
               'root_fingerprint': world.store.root_fingerprint(),
@@ -511,9 +514,14 @@ def test_customer_cleanup_retains_owner_store_and_update_lock_under_repeated_can
     async def scenario():
         nonlocal task
         task = asyncio.create_task(run(world))
-        while not getattr(world, 'reader', None) or world.reader.closing is None:
+        deadline = asyncio.get_running_loop().time() + 10
+        while (not getattr(world, 'reader', None) or world.reader.closing is None
+               or not world.reader.closing.is_set()):
+            if task.done():
+                await task
+                pytest.fail('restart completed before its cleanup barrier')
+            assert asyncio.get_running_loop().time() < deadline, 'cleanup barrier was not reached'
             await asyncio.sleep(0)
-        await world.reader.closing.wait()
         task.cancel()
         await asyncio.sleep(0)
         assert not task.done() and not world.reader.closed
