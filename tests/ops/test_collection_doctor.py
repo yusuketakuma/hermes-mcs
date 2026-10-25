@@ -97,3 +97,27 @@ def test_doctor_cli_preserves_probe_and_invalid_config_boundaries(evidence, tmp_
     monkeypatch.setattr(health_watch, 'classify_health', lambda *_: pytest.fail('invalid config read health'))
     assert mcs_setup.main(['doctor', '--json', '--probe', 'data']) == 1
     assert json.loads(capsys.readouterr().out)['collection']['status'] == 'not_checked'
+
+
+def test_doctor_shows_the_fine_category_and_its_next_step(evidence, tmp_path, monkeypatch, capsys):
+    import mcs_util
+    import runtime_inspection
+    import support_diagnostics
+
+    monkeypatch.setattr(mcs_setup, 'AGENTS_DIR', str(tmp_path / 'LaunchAgents'))
+    monkeypatch.setattr(mcs_setup, '_config_problem', lambda: None)
+    monkeypatch.setattr(mcs_setup.sqlite3, 'sqlite_version_info', (3, 51, 3))
+    monkeypatch.setattr(runtime_inspection, 'probe_python', lambda _: {
+        'python': '3.14.8', 'sqlite': '3.51.3', 'packages': {}})
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {'mcs_login_id': 'synthetic', 'notify_target': 'local'})
+    assert mcs_setup.main(['doctor', '--json', '--probe', 'data']) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report['collection']['counts']['errors']['categories']['deadline'] == 1
+    # the support DTO keeps its legacy nine-reason shape
+    shared = support_diagnostics.shared_report(report)
+    assert 'categories' not in shared['collection']['errors']
+    assert shared['collection']['errors']['reasons']['deadline'] == 1
+    mcs_setup.main(['doctor', '--probe', 'data'])
+    out = capsys.readouterr().out
+    assert '・時間切れ（1件）: 処理が制限時間内に終わりませんでした' in out
+    assert '→ 次回の収集で続きから再試行されます' in out

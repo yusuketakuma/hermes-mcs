@@ -39,6 +39,13 @@ STATE_REL = os.path.join("data", "health_watch.json")
 STATUS_REL = os.path.join("data", "health_watch_status.json")
 
 REALERT_S = 4 * 3600        # unchanged bad state re-alerts every 4h
+# Reasons that usually clear on their own: a degraded verdict made only of
+# these alerts once one of them was seen in STREAK_ALERT consecutive fresh
+# health observations (distinct health_at); every other reason alerts at once.
+TRANSIENT_REASONS = frozenset({"stage_errors", "run_deadline_exceeded", "collection_incomplete",
+                               "notification_deferred", "notification_parked",
+                               "notification_pending"})
+STREAK_ALERT = 3
 DELIVERY_RETRY_S = 60       # only provably unsent alerts may retry
 UNKNOWN_HISTORY = 50        # retained uncertain-delivery records
 
@@ -181,7 +188,7 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         reasons = None
     report["state_reasons"] = reasons
     from collection_diagnostics import validated
-    report["collection_diagnostics"] = validated(h.get("collection_diagnostics"), h["at"])
+    report["collection_diagnostics"] = validated(h.get("collection_diagnostics"), h["at"], fine=True)
     backup = h.get("backup")
     if (isinstance(backup, dict) and backup.get("state") in ("degraded", "failed")
             and report["status"] in ("degraded", "failed")):
@@ -310,6 +317,27 @@ def _apply_standalone(obs: dict, home: str, now: float, cfg: dict) -> None:
         obs["state_reasons"] = list(reasons)
 
 
+def _streak(state: dict, obs: dict) -> tuple[dict | None, bool]:
+    """(streak block to persist, whether it can be trusted for holding an alert back)."""
+    prior = state.get("streak")
+    valid = prior is None or (
+        isinstance(prior, dict) and finite_number(prior.get("health_at"))
+        and isinstance(prior.get("count"), dict) and isinstance(prior.get("first_at"), dict)
+        and all(r in TRANSIENT_REASONS and type(n) is int and n >= 1
+                and finite_number(prior["first_at"].get(r)) for r, n in prior["count"].items()))
+    at = obs.get("health_at")
+    if obs["status"] not in OVERALL_STATUS or not finite_number(at):
+        return (prior if valid else None), valid      # not a fresh observation: nothing to count
+    reasons = {r.split(":")[0] for r in obs.get("state_reasons") or []} & TRANSIENT_REASONS
+    if valid and prior is not None and at == prior["health_at"]:
+        return prior, True                            # the same observation read again
+    newer = valid and prior is not None and at > prior["health_at"]
+    count = {r: (prior["count"].get(r, 0) + 1 if newer else 1) for r in reasons}
+    first = {r: (prior["first_at"].get(r, at) if newer and r in prior["count"] else at)
+             for r in reasons}
+    return {"health_at": at, "count": count, "first_at": first}, valid
+
+
 def _dedup_stamp(record: dict):
     """Verdict timestamp. Pre-evidence_at files key on health_at."""
     if "evidence_at" in record:
@@ -402,6 +430,22 @@ def evaluate(home: str = HOME, now: float | None = None,
         seen = set(episode_reasons)
     alert = obs["status"] != "ok" and (
         (transition and not reflap) or realert or new_reason)
+    streak, trusted = _streak(state, obs)
+    bases = {r.split(":")[0] for r in reasons}
+    transient_only = (obs["status"] == "degraded" and bool(bases)
+                      and bases <= TRANSIENT_REASONS)
+    ready = bool(streak) and any(streak["count"].get(r, 0) >= STREAK_ALERT for r in bases)
+    held = False
+    if transient_only and trusted:
+        if not ready:
+            held, alert = alert or state.get("held_episode") is True, False
+        elif state.get("held_episode") is True:
+            alert = True                    # the held episode reaches the threshold
+    state["held_episode"] = held
+    if streak is not None:
+        state["streak"] = streak
+    else:
+        state.pop("streak", None)
     disk_prev = state.get("disk_low") is True
     disk_low = (obs["disk_low"] if obs["status"] in OVERALL_STATUS
                 else disk_prev)
@@ -411,7 +455,11 @@ def evaluate(home: str = HOME, now: float | None = None,
     report = dict(obs)
     report.update({"deadline_s": obs.get("deadline_s", deadline), "alert": alert,
                    "disk_low": disk_low, "disk_alert": disk_alert,
-                   "watched_at": now})
+                   "watched_at": now, "alert_held": held})
+    if transient_only and streak and streak["count"]:
+        top = max(bases, key=lambda r: streak["count"].get(r, 0))
+        report["streak"] = {"count": streak["count"].get(top, 0),
+                            "first_at": streak["first_at"].get(top)}
     state["last"] = {"status": obs["status"],
                      "health_at": obs.get("health_at"),
                      "evidence_at": _dedup_stamp(obs)}
@@ -435,6 +483,8 @@ def evaluate(home: str = HOME, now: float | None = None,
             state_path, json.dumps(state, ensure_ascii=False))
     except OSError:
         report["delivery_error"] = "state_persist_failed"
+        if held:        # an unsaved streak cannot grow: never hold the alert back silently
+            report["alert"], report["alert_held"] = True, False
     try:
         safe_io.atomic_publish_text(
             status_path, json.dumps(report, ensure_ascii=False))
@@ -775,12 +825,21 @@ def _reason_rows(report: dict, reasons) -> list[str]:
                      else _backup_local_text(report.get("backup_local")))
         elif base == "semantic_backlog_stalled" and _hours(oldest.get("semantic_jobs")):
             extra = f"（最古 {_hours(oldest.get('semantic_jobs'))}）"
+        guide = None
         if base in ("stage_errors", "collection_incomplete") and not report.get("observations_recorded") \
                 and report.get("collection_diagnostics") is not None:
-            from collection_diagnostics import detail_lines
+            from collection_diagnostics import detail_lines, guidance
             section = "errors" if base == "stage_errors" else "incomplete"
             details = detail_lines(report.get("collection_diagnostics"), section)
             extra += "（" + " / ".join(details) + "）"
+            if base == "stage_errors":
+                guide = guidance(report.get("collection_diagnostics"))
+        if guide:
+            # one fixed cause and next step per observed category, most frequent first
+            rows.append(f"・{meaning}{extra}")
+            for label, n, what, todo in guide:
+                rows += [f"　・{label}（{n}件）: {what}", f"　　→ {todo}"]
+            continue
         rows += [f"・{meaning}{extra}", f"　→ {action}"]
     return rows
 
@@ -796,6 +855,13 @@ def _alert_lines(report: dict) -> list[str]:
         glyph = "🔴" if status in _SEVERE else "🟠"
         lines.append(f"{glyph} MCS監視: {_STATUS_JA.get(status, status)}")
         lines.append("影響: " + _impact(report, reasons))
+        streak = report.get("streak") or {}
+        count, first, at = streak.get("count"), streak.get("first_at"), report.get("health_at")
+        if type(count) is int and count >= STREAK_ALERT and finite_number(first) \
+                and finite_number(at) and 0 <= at - first:
+            # observed count and the actual elapsed time, never a nominal cadence
+            lines.append(f"継続: 同じ異常を{count}回続けて観測"
+                         f"（初回 {_jst(first)}、約{round((at - first) / 60)}分継続）")
         lines.append("原因と対処:")
         lines.extend(_reason_rows(report, reasons))
         interrupt = report.get("last_interrupt")

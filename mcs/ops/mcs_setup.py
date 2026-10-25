@@ -1323,10 +1323,13 @@ def cmd_doctor(args) -> int:
                                     for key, name in zip(_NIGHTLY_COUNTS, names)))
         print(f"  収集の内訳: {labels.get(collection['status'], '未確認')}")
         if collection["counts"] is not None:
-            from collection_diagnostics import detail_lines
+            from collection_diagnostics import detail_lines, guidance
             for section in ("errors", "incomplete"):
                 for line in detail_lines(collection["counts"], section):
                     print("    " + line)
+            for label, n, what, todo in guidance(collection["counts"]) or ():
+                print(f"    ・{label}（{n}件）: {what}")
+                print(f"      → {todo}")
         for line in status_lines(operations):
             print(line)
         source = report["source"]

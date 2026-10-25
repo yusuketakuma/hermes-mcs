@@ -42,7 +42,7 @@ def test_counts_use_active_incomplete_patients_and_original_observation(db):
         'reasons': {**dict.fromkeys(diagnostics.FETCH_LABELS, 0), 'parent_body_incomplete': 2, 'thread_incomplete': 1},
         'parent_bodies': 1, 'oldest_observed_age_s': 3600, 'age_unknown': 0}
     assert block['errors']['reasons']['incomplete'] == block['errors']['reasons']['storage'] == 1
-    assert diagnostics.validated(block) == block
+    assert diagnostics.validated(block, fine=True) == block
     assert '最長1.0時間' in diagnostics.detail_lines(block, 'incomplete')[1]
     db.execute('UPDATE patients SET fetch_state="complete"')
     db.commit()
@@ -115,7 +115,7 @@ def test_error_work_is_bounded_and_unknown_is_distinct_from_zero(db):
     assert block['errors']['state'] == 'partial'
     assert block['errors']['total'] == diagnostics.MAX_ERRORS + 10
     assert sum(block['errors']['reasons'].values()) == diagnostics.MAX_ERRORS
-    assert diagnostics.validated(block) == block
+    assert diagnostics.validated(block, fine=True) == block
     assert diagnostics.error_counts(None)['total'] is None
     assert observe(db)['incomplete']['projects'] == 0
 
@@ -184,3 +184,102 @@ def test_monitor_uses_counts_but_keeps_stale_reasons_unknown(tmp_path, db):
     stale = health_watch.classify_health(str(path), 5000, 600)
     assert stale['state_reasons'] is None
     assert '時間切れ1件' not in '\n'.join(health_watch._reason_rows(stale, None))
+
+
+# Every producer shape found in collection_stages / job_ops / init_data / run_check.
+PRODUCER_CODES = [
+    ("project 7: unread_cap_stuck", "incomplete"), ("mark 7: post_ack_gap", "incomplete"),
+    ("deadline_exceeded", "deadline"), ("self_probe: deadline_exceeded", "deadline"),
+    ("project 7: parent_body_incomplete", "incomplete"), ("project 7: db_write_failed", "storage"),
+    ("mark 7: http_error(status=503)", "server"), ("mark 7: rate_limited(status=429)", "rate_limit"),
+    ("mark 7: http_error(status=429)", "rate_limit"), ("mark 7: http_error(status=401)", "login"),
+    ("mark 7: http_error(status=403)", "permission"), ("mark 7: http_error", "network"),
+    ("thread_read: reply_stored_for_other_patient", "incomplete"), ("thread_read: reply_failed", "incomplete"),
+    ("thread_read: network_error: GET /x", "network"), ("backfill 7: deadline_exceeded", "deadline"),
+    ("backfill 7: coverage_stalled_window", "incomplete"), ("probe 7: history_incomplete", "incomplete"),
+    ("probe 7: pages_exceeded: messages[7]", "incomplete"), ("attach 9: fs", "storage"),
+    ("attach 9: http_404", "server"), ("attach 9: download_failed", "attachment"),
+    ("attach 9: url_not_allowed", "attachment"), ("attach 9: download_too_large", "attachment"),
+    ("attach 9: download_empty", "attachment"), ("attach 9: no_token", "login"),
+    ("cmd_invalid: unparsable", "command"), ("update_spawn_failed", "command"),
+    ("consent_respawn_failed", "command"), ("thread 7/8: thread_incomplete", "incomplete"),
+    ("reply: invalid_payload", "schema"), ("reply 8: session_expired", "login"),
+    ("thread 7: replies_missing", "incomplete"), ("import job: invalid_payload", "schema"),
+    ("import 7: forbidden", "permission"), ("import 7 replies: OperationalError", "storage"),
+    ("import 7: window_stalled", "incomplete"), ("reconcile 7: bootstrap_error: cdp", "browser"),
+    ("discovery: schema_error: projects: page invalid", "schema"),
+    ("discovery: patient_write_failed:OSError archived:none", "storage"),
+    ("health_write_failed: OSError", "storage"), ("code_changed", "runtime"),
+    ("extract: ValueError", "postprocess"), ("extract_llm: TimeoutError", "postprocess"),
+    ("drug_map: partial", "postprocess"), ("rollup: KeyError", "postprocess"),
+    ("signals: request_aging:KeyError", "postprocess"), ("cmd:OSError", "command"),
+    ("restore_reconcile:OSError", "command"), ("cmd_sweep:OSError", "command"),
+    ("snapshot_publish_failed", "runtime"), ("config: semantic_not_object", "config"),
+    ("semantic_init: ValueError", "postprocess"), ("config: self_posts_invalid", "config"),
+    ("deadline_deferred:housekeeping", "deferred"), ("run_lock_lost", "runtime"),
+    ("run_record_failed: OSError", "runtime"), ("crash_site: KeyError@run_check.py:12", "runtime"),
+    ("stall_check_failed: ValueError", "postprocess"), ("history 7: auto_login=failed", "login"),
+    ("history 7: session_expired", "login"), ("db 7: write_failed", "storage"),
+    ("mark 7: mark_result_unknown", "incomplete"), ("mark 7: bad_snapshot_ts", "schema"),
+    ("probe 7: self_profile_unavailable", "auxiliary"), ("probe 7: station_staffs_unavailable", "auxiliary"),
+    ("mark 7: reaction_request_failed", "auxiliary"), ("project 7: capacity_limit", "incomplete"),
+    ("project 7: scope_changed", "incomplete"), ("mark 7: disk_full", "storage"),
+    ({"message_id": 7, "kind": "deadline_exceeded"}, "deadline"),
+]
+
+
+@pytest.mark.parametrize("error,category", PRODUCER_CODES)
+def test_every_producer_code_has_a_fixed_category(error, category):
+    assert diagnostics.classify(error) == category
+
+
+@pytest.mark.parametrize("error", ["brand_new_code", "", None, 7, {"kind": 7}, "project 7: ???"])
+def test_unknown_codes_stay_other(error):
+    assert diagnostics.classify(error) == "other"
+
+
+def test_fine_categories_project_onto_the_legacy_nine_reasons(db):
+    block = observe(db, [error for error, _ in PRODUCER_CODES])
+    errors = block["errors"]
+    assert set(errors["reasons"]) == set(diagnostics.ERROR_LABELS)
+    assert sum(errors["categories"].values()) == sum(errors["reasons"].values()) == len(PRODUCER_CODES)
+    assert errors["categories"]["other"] == errors["reasons"]["other"] - errors["categories"]["config"] \
+        - errors["categories"]["postprocess"] - errors["categories"]["runtime"]
+    fine = diagnostics.validated(block, fine=True)
+    assert fine == block
+    legacy = diagnostics.validated(block)
+    assert "categories" not in legacy["errors"] and legacy["errors"]["reasons"] == errors["reasons"]
+
+
+def test_health_written_before_categories_still_validates_and_renders(db):
+    block = observe(db, ["mark 7: network_error"])
+    old = copy.deepcopy(block)
+    del old["errors"]["categories"]
+    assert diagnostics.validated(old, fine=True) == old
+    assert diagnostics.detail_lines(old, "errors") == ["収集エラー1件: 通信1件"]
+    assert diagnostics.guidance(old) is None
+
+
+def test_inconsistent_categories_are_rejected(db):
+    block = observe(db, ["mark 7: network_error"])
+    bad = copy.deepcopy(block)
+    bad["errors"]["categories"]["network"] = 0
+    bad["errors"]["categories"]["storage"] = 1
+    assert diagnostics.validated(bad, fine=True) is None
+
+
+def test_guidance_gives_a_fixed_cause_and_next_step_per_category(db):
+    block = observe(db, ["deadline_deferred:housekeeping", "mark 7: network_error", "mark 8: network_error"])
+    rows = diagnostics.guidance(block)
+    assert [row[:2] for row in rows] == [("通信", 2), ("時間内に終わらず先送り", 1)]
+    assert all(row[2] and row[3] for row in rows)
+    assert "housekeeping" not in json.dumps(rows, ensure_ascii=False)
+    for category, (label, legacy, transient, what, todo) in diagnostics.CATEGORIES.items():
+        assert legacy in diagnostics.ERROR_LABELS and type(transient) is bool and what and todo
+
+
+def test_the_user_guide_lists_every_category_with_its_action():
+    from pathlib import Path
+    guide = (Path(__file__).resolve().parents[2] / "docs/guides/COLLECTION_DIAGNOSTICS.md").read_text(encoding="utf-8")
+    for label, _legacy, transient, what, todo in diagnostics.CATEGORIES.values():
+        assert f"| {label} | {what} | {'はい' if transient else 'いいえ'} | {todo} |" in guide

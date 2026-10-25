@@ -560,6 +560,8 @@ def test_new_degraded_reason_alerts_but_flapping_reason_does_not(tmp_path):
         _health_file(tmp_path, {"overall": "degraded", "at": at,
                                 "state_reasons": reasons})
         return _eval(tmp_path, at + 10.0)["alert"]
+    assert not tick(390, ["notification_pending"])        # transient: held until the
+    assert not tick(690, ["notification_pending"])        # third fresh observation
     assert tick(990, ["notification_pending"])
     assert not tick(1290, ["notification_pending"])
     # a new cause inside the same degraded episode is news
@@ -831,9 +833,11 @@ def test_unknown_delivery_is_not_resent_when_a_reason_drops(tmp_path, monkeypatc
     calls = []
     monkeypatch.setattr(health_watch, "deliver_alert", lambda *args: calls.append(args))
     args = ["--home", str(tmp_path), "--config", str(tmp_path / "none.json")]
-    _health_file(tmp_path, {"overall": "degraded", "at": 990,
-                            "state_reasons": ["stage_errors", "collection_incomplete"]})
-    health_watch.main(args + ["--now", "1000"])
+    for at in (390, 690, 990):         # transient reasons alert on the third observation
+        _health_file(tmp_path, {"overall": "degraded", "at": at,
+                                "state_reasons": ["stage_errors", "collection_incomplete"]})
+        health_watch.main(args + ["--now", str(at + 10)])
+    assert len(calls) == 1
     _health_file(tmp_path, {"overall": "degraded", "at": 5000,
                             "state_reasons": ["stage_errors"]})
     health_watch.main(args + ["--now", "5001"])
@@ -959,15 +963,20 @@ def test_degraded_flapping_does_not_realert_until_interval(tmp_path):
         _health_file(tmp_path, {"overall": overall, "at": now - 1,
                                 "state_reasons": reasons})
         return health_watch.evaluate(str(tmp_path), now, cfg={})["alert"]
+    assert not tick(400, "degraded", ["stage_errors"])        # transient: held twice
+    assert not tick(700, "degraded", ["stage_errors"])
     assert tick(1000, "degraded", ["stage_errors"])
     assert not tick(1600, "ok", [])
     assert not tick(2200, "degraded", ["stage_errors"])       # same episode: quiet
-    assert tick(2800, "degraded", ["stage_errors", "disk_low"])  # new reason
+    assert tick(2800, "degraded", ["stage_errors", "disk_low"])  # new non-transient reason
     assert not tick(3400, "ok", [])
     assert tick(4000, "failed", ["run_failed"])               # severe: always
     assert not tick(4600, "ok", [])
     later = 4000 + health_watch.REALERT_S
-    assert tick(later, "degraded", ["stage_errors"])           # interval passed
+    # after the interval a returning transient reason is a new streak again
+    assert not tick(later, "degraded", ["stage_errors"])
+    assert not tick(later + 600, "degraded", ["stage_errors"])
+    assert tick(later + 1200, "degraded", ["stage_errors"])
 
 
 def test_standalone_owned_reason_is_shown_in_japanese():
