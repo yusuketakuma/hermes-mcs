@@ -767,8 +767,10 @@ def _gateway_restart_report(data, status, **facts):
 
 def _gateway_restart_run(data, agents, uid):
     """Resolve the owned gateway, then verify a changed PID in a detached child."""
+    # Local imports: _GATEWAY_RESTART_PROGRAM runs this source without the module header.
     import plistlib
     import shlex
+    import shutil
 
     label = "ai.hermes.gateway"
     expected = os.path.realpath(os.path.join(agents, label + ".plist"))
