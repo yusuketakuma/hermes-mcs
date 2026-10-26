@@ -2213,7 +2213,10 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
     """Tick-side change detection over live cards: edited/deleted
     thread messages, signal state transitions, archive revokes,
     defer_until arrival, and renders stuck unpublished. Bounded per
-    call; cards with an unsettled attempt are left to the settle path."""
+    call: at most limit ordinary cards and limit history checks, with
+    at most two history renders.
+    Each group rotates independently; cards with an unsettled attempt
+    are left to the settle path."""
     db = connection(ledger)
     now = time.time() if now is None else now
     root = notify_spool.data_root(ledger)
@@ -2222,17 +2225,23 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
     specs = []
     withdrawn = []
     scanned = updated = 0
-    history_refreshes = 0
     with db:
         db.execute("BEGIN IMMEDIATE")
         cards = db.execute(
             """SELECT card_id,kind,project_id,delivery_state FROM
                  notification_cards
-               WHERE delivery_state IN ('pending','delivered',
+               WHERE kind!='patient_history' AND delivery_state IN ('pending','delivered',
                                         'update_failed','delivery_unknown',
                                         'message_deleted','revoked')
-               ORDER BY updated_at,card_id LIMIT ?""", (limit,)).fetchall()
+               ORDER BY updated_at,card_id LIMIT ?""", (max(0, limit),)).fetchall()
+        cards += db.execute(
+            """SELECT card_id,kind,project_id,delivery_state FROM notification_cards
+               WHERE kind='patient_history' AND delivery_state IN ('pending','delivered',
+                                        'update_failed','delivery_unknown',
+                                        'message_deleted','revoked')
+               ORDER BY updated_at,card_id LIMIT ?""", (max(0, limit),)).fetchall()
         scanned = len(cards)
+        history_renders = 0
         for row in cards:
             card = notify_scope.card_row(db, row["card_id"])
             if card is None:
@@ -2255,19 +2264,18 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
                       card["presentation_generation"],
                       card["desired_render_rev"])
             history_due = card["kind"] == "patient_history" and notify_history.refresh_needed(db, card, now)
-            history_deferred = history_due and history_refreshes >= 2
+            history_deferred = history_due and history_renders >= 2
             if card["kind"] != "patient_history" or history_due and not history_deferred:
-                if card["kind"] == "patient_history":
-                    history_refreshes += 1
                 issue_render(db, card["card_id"], cfg, now, specs)
-            if card["kind"] == "patient_history" and not history_deferred:
+                history_renders += card["kind"] == "patient_history"
+            if card["kind"] == "patient_history":
                 notify_history.emit_completion_tx(ledger, notify_scope.card_row(db, card["card_id"]), now)
             after = notify_scope.card_row(db, card["card_id"])
             if (after["source_generation"], after["presentation_generation"],
                     after["desired_render_rev"]) != before:
                 updated += 1
-            # Quota-deferred work stays older than attempted work for the next tick.
-            # Other unchanged/in-flight cards rotate so they cannot block newer cards.
+            # Rotate inert history too; quota-deferred work keeps its place
+            # ahead of the two renders just processed in this separate window.
             if not history_deferred:
                 db.execute("UPDATE notification_cards SET updated_at=? WHERE card_id=?",
                            (now, card["card_id"]))

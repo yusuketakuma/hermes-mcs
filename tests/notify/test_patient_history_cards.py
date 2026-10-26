@@ -10,7 +10,7 @@ import notify_cards
 import notify_history
 import notify_render
 from notify_testkit import (CFG, NOW, _begin, _card, _dispatch, _latest_render,
-                            _patient, _receipt, led, pinned_clock)
+                            _intent, _patient, _receipt, _seed_thread, led, pinned_clock)
 from notify_lineworks_testkit import LINEWORKS, _apply, _claim, _deliver
 
 __all__ = ["led", "pinned_clock"]
@@ -497,3 +497,142 @@ def test_sweep_limits_heavy_refresh_attempts_even_when_no_spec_is_issued_and_rot
     notify_cards.sweep(led,CFG,now=NOW+903)
     assert observed == [1,2,3,4,5,1]
     assert led.db.execute('SELECT COUNT(*) FROM notification_renders').fetchone()[0] == 5
+
+
+def test_sweep_expired_normal_defer_is_not_starved_by_four_due_history_cards(led,monkeypatch):
+    ready(monkeypatch,False)
+    for pid in range(1,5):
+        _patient(led,pid=pid)
+        led.db.execute("INSERT INTO messages(message_id,project_id,posted_at_ts,body_text,content_hash,body_state,first_seen) VALUES(?,?,?,'合成履歴',?,'full',?)",
+                       (pid,pid,int(NOW)-1,f'{pid:064x}',NOW-10))
+        with led.db:
+            initial_import_state.start_tx(led,pid,int(NOW),NOW-20,boundary_source='server')
+            initial_import_state.classify_tx(led,pid,[pid],NOW)
+        event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' AND project_id=? ORDER BY event_id LIMIT 1", (pid,)).fetchone()
+        _dispatch(led,event)
+        led.db.execute("UPDATE notification_renders SET state='held' WHERE card_id=?", (pid,))
+        led.db.commit()
+    _seed_thread(led,pid=99,root=99,mids=(99,))
+    _dispatch(led,_intent(led,pid=99,payload={'message_ids':[99]}))
+    normal = led.db.execute("SELECT card_id FROM notification_cards WHERE project_id=99 AND kind!='patient_history'").fetchone()[0]
+    with led.db:
+        led.db.execute("UPDATE notification_cards SET updated_at=? WHERE card_id=?", (NOW+100,normal))
+        led.db.execute("INSERT INTO notification_triage(card_id,state,defer_until,updated_at) VALUES(?,'deferred',?,?)", (normal,NOW+1,NOW))
+    observed = []
+    original = notify_history.snapshot
+    def counted(db,card,cfg,now):
+        observed.append(card['card_id'])
+        return original(db,card,cfg,now)
+    monkeypatch.setattr(notify_history,'snapshot',counted)
+    monkeypatch.setattr(notify_history,'refresh_needed',lambda *args:True)
+    first = notify_cards.sweep(led,CFG,limit=3,now=NOW+301)
+    assert first['scanned'] == 4  # One ordinary card plus three cheap history checks.
+    assert observed == [1,2]
+    triage = led.db.execute('SELECT state,revision FROM notification_triage WHERE card_id=?', (normal,)).fetchone()
+    assert tuple(triage) == ('open',1)
+    second = notify_cards.sweep(led,CFG,limit=3,now=NOW+602)
+    assert second['scanned'] == 4 and observed == [1,2,3,4]
+    assert led.db.execute('SELECT revision FROM notification_triage WHERE card_id=?', (normal,)).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize('cfg',[CFG,SLACK,LINEWORKS])
+def test_history_counts_multiple_root_and_reply_attachments_without_delivering_file_parts(led,monkeypatch,cfg):
+    from ingest_testkit import _att, _message
+    event = seed(led,2)
+    root = _message(mid=1,body='完全合成の親投稿',posted_at='2026-09-01T09:00:00+09:00')
+    root.attachments = [_att('shared-file','synthetic-root-report.txt'),
+                        _att('root-image','synthetic-root-image.png')]
+    root.files_present = True
+    reply = _message(mid=2,parent_id=1,body='完全合成の返信',posted_at='2026-09-02T09:00:00+09:00')
+    reply.attachments = [_att('shared-file','synthetic-reply-report.txt')]
+    reply.files_present = True
+    root.replies = [reply]
+    led.save_messages([root],project_id=1)
+    before = [tuple(row) for row in led.db.execute(
+        'SELECT message_id,file_id,name,state FROM attachments ORDER BY message_id,file_id')]
+    assert before == [(1,'root-image','synthetic-root-image.png','pending'),
+                      (1,'shared-file','synthetic-root-report.txt','pending'),
+                      (2,'shared-file','synthetic-reply-report.txt','pending')]
+    captured(led)
+    ready(monkeypatch)
+    _dispatch(led,event,cfg)
+    snapshot = json.loads(_card(led)['ui_state'])['history_snapshot']
+    assert snapshot['saved'] == snapshot['analyzed'] == 2
+    assert snapshot['attachments'] == 3  # The same file ID in two source posts is two associations.
+    rendered = spec(led)
+    encoded = json.dumps(rendered,ensure_ascii=False)
+    assert '添付 3件（MCSで確認）' in encoded
+    assert [part['kind'] for part in rendered['parts']['manifest']] == ['card']
+    assert not any(a.name in encoded for a in [*root.attachments,*reply.attachments])
+    assert [tuple(row) for row in led.db.execute(
+        'SELECT message_id,file_id,name,state FROM attachments ORDER BY message_id,file_id')] == before
+    assert not led.db.execute("SELECT 1 FROM notify_outbox WHERE kind='attachment_followup'").fetchone()
+
+
+@pytest.mark.parametrize('invalid',['deleted','foreign_patient','malformed_artifact'])
+def test_history_high_count_excludes_deleted_foreign_and_unreadable_artifacts(led,monkeypatch,invalid):
+    import clinical_urgency
+    from notify_testkit import _llm_extract
+    event = seed(led,2)
+    evidence = '本人が急変し至急確認が必要です。'
+    with led.db:
+        led.db.execute('UPDATE messages SET body_text=? WHERE message_id IN (1,2)',(evidence,))
+    _llm_extract(led,1,{'urgency':'high','urgency_evidence':[evidence]})
+    bad = _llm_extract(led,2,{'urgency':'high','urgency_evidence':[evidence]})
+    with led.db:
+        if invalid == 'deleted':
+            led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=2")
+        elif invalid == 'foreign_patient':
+            _patient(led,pid=2,name='完全合成の別患者')
+            # Upgraded ledgers can retain older mismatches under the shadow guard.
+            led.db.execute("UPDATE ledger_relation_guards SET mode='shadow' WHERE relation='artifacts'")
+            led.db.execute('UPDATE artifacts SET project_id=2 WHERE artifact_id=?',(bad,))
+        else:
+            led.db.execute("UPDATE artifacts SET content='{broken' WHERE artifact_id=?",(bad,))
+    assert clinical_urgency.message_urgency(led.db,1) == 'llm'
+    assert clinical_urgency.message_urgency(led.db,2) is None
+    captured(led)
+    ready(monkeypatch)
+    _dispatch(led,event)
+    snapshot = json.loads(_card(led)['ui_state'])['history_snapshot']
+    assert snapshot['saved'] == 2 and snapshot['high'] == 1
+    assert snapshot['deleted'] == int(invalid == 'deleted')
+    rendered = json.dumps(spec(led),ensure_ascii=False)
+    assert '現行抽出で緊急度が高い投稿 1件（MCSで確認）' in rendered
+    assert '現行抽出で緊急度が高い投稿 2件' not in rendered
+
+
+def test_completed_history_checks_do_not_consume_the_two_render_slots(led, monkeypatch):
+    ready(monkeypatch)
+    for pid in range(1,5):
+        _patient(led,pid=pid)
+        led.db.execute("INSERT INTO messages(message_id,project_id,posted_at_ts,body_text,content_hash,body_state,first_seen) VALUES(?,?,?,'合成履歴',?,'full',?)",
+                       (pid,pid,int(NOW)-1,f'{pid:064x}',NOW-10))
+        with led.db:
+            initial_import_state.start_tx(led,pid,int(NOW),NOW-20,boundary_source='server')
+            initial_import_state.classify_tx(led,pid,[pid],NOW)
+            state = initial_import_state.load(led.db,pid)
+            state.update(capture_phase='complete',capture_proof={
+                'v':1,'scope':history_walk.scope(pid,state['cohort_id']),'digest':'a'*64})
+            led.db.execute('UPDATE patients SET initial_import=? WHERE project_id=?',(json.dumps(state),pid))
+        event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' AND project_id=? ORDER BY event_id LIMIT 1",(pid,)).fetchone()
+        _dispatch(led,event)
+        render = _latest_render(led,pid)
+        assert _begin(led,render,n=pid)['granted']
+        _receipt(led,render,f'{pid:016x}',n=pid+10,message_id=f'm-{pid}')
+    # The first three have complete, settled history and truly need no refresh.
+    for pid in range(1,4):
+        assert not notify_history.refresh_needed(led.db,_card(led,pid),NOW+301)
+    with led.db:
+        ui=json.loads(_card(led,4)['ui_state'])
+        ui['history_dirty_since']=NOW
+        led.db.execute('UPDATE notification_cards SET ui_state=? WHERE card_id=4',(json.dumps(ui),))
+    observed=[]
+    original=notify_history.snapshot
+    def counted(db,card,cfg,now):
+        observed.append(card['card_id'])
+        return original(db,card,cfg,now)
+    monkeypatch.setattr(notify_history,'snapshot',counted)
+    notify_cards.sweep(led,CFG,limit=4,now=NOW+301)
+    assert observed == [4]
+    assert notify_history.refresh_needed(led.db,_card(led,4),NOW+302) is False

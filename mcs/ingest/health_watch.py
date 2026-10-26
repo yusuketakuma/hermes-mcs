@@ -687,6 +687,8 @@ _REASON_JA = {
                                      "翌日に自動で再開します。上限は semantic.daily_request_budget"),
     "semantic_jev_auth_error": ("TypeSafe Jev の認証に失敗しました",
                                 "TYPESAFE_API_KEY の値と有効期限を確認"),
+    "cloud_llm_no_api_key": ("Anthropic のAPIキーが未登録のため、ローカルLLMで処理を継続しています",
+                              "外部AIを使う場合は、MCSの .env に MCS_ANTHROPIC_API_KEY を登録し、ファイル権限を0600にしてください"),
     "cloud_llm_auth_error": ("Anthropic の認証に失敗し、外部AI処理を停止しました",
                               "MCS_ANTHROPIC_API_KEY を確認し、cloud-llm resume --confirm-human --reason '確認理由' で再開。処理はローカルLLMへ戻ります"),
     "cloud_llm_payment_required": ("Anthropic の支払い条件を確認するため、外部AI処理を停止しました",

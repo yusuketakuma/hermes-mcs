@@ -1417,6 +1417,12 @@ def cmd_doctor(args) -> int:
         for name, provider in providers.items():
             print(f"  {name}: mode={provider['mode']}、キー={'登録済み' if provider['key_present'] else '未登録'}、"
                   f"状態={provider['status']}")
+            if provider.get("block_reason") == "no_api_key":
+                print("    鍵が未登録のためローカルで処理中です。MCSの.envにMCS_ANTHROPIC_API_KEYを権限0600で登録してください。")
+            for day in (provider.get("dry_run") or {}).get("days", []):
+                print(f"    ドライラン {day['day']}（JST）: {day['units']}単位・{day['requests']}要求相当、"
+                      f"入力{day['input_chars']}字／推定{day['estimated_input_tokens']}tokens、"
+                      f"出力上限{day['estimated_output_tokens']}tokens（実使用量ではありません）")
         print(f"  患者コンテキスト作成: {labels.get(context_refresh_result['status'], '未確認')}、"
               f"生成={'有効' if context_refresh_result['enabled'] else '無効'}、"
               f"限定閲覧={'有効' if context_refresh_result['publication'] else '無効'}")

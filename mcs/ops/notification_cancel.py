@@ -27,7 +27,7 @@ from notify_spool import notify_dirs  # noqa: E402
 from safe_io import read_regular_nofollow  # noqa: E402
 
 
-def _target(db, event_id):
+def _target(db, event_id, requested_event_ids):
     row = db.execute("SELECT * FROM notify_outbox WHERE event_id=?", (event_id,)).fetchone()
     if row is None or row["route"] != "interactive":
         raise ValueError("unsupported_event")
@@ -56,11 +56,12 @@ def _target(db, event_id):
                           (coverage[0]["card_id"],)).fetchone()
         if row["kind"] == "patient_history" and (card is None or card["message_id"] is not None or card["desired_render_rev"] != 0):
             raise ValueError("notification_already_issued")
-        if row["kind"] == "patient_history" and db.execute(
-                "SELECT 1 FROM notification_intent_cards WHERE card_id=? "
-                "AND event_id!=? AND state='pending' LIMIT 1",
-                (coverage[0]["card_id"], event_id)).fetchone():
-            raise ValueError("history_card_has_other_pending_intents")
+        if row["kind"] == "patient_history":
+            siblings = {r[0] for r in db.execute(
+                "SELECT event_id FROM notification_intent_cards WHERE card_id=? "
+                "AND state='pending' LIMIT 21", (coverage[0]["card_id"],))}
+            if not siblings <= requested_event_ids:
+                raise ValueError("history_card_has_other_pending_intents")
         if card is None or card[0] not in TRANSPORTS:
             raise ValueError("unsupported_transport")
     elif row["kind"] == "daily_digest":
@@ -132,7 +133,8 @@ def build_plan(db, event_ids):
     if (not event_ids or len(event_ids) > 20 or len(set(event_ids)) != len(event_ids)
             or any(type(i) is not int or i <= 0 for i in event_ids)):
         raise ValueError("bad_event_ids")
-    targets = [_target(db, i) for i in sorted(event_ids)]
+    requested_event_ids = frozenset(event_ids)
+    targets = [_target(db, i, requested_event_ids) for i in sorted(event_ids)]
     expanded = set(event_ids).union(*(e.get("unsealed_history", {}).get("event_ids", []) for e in targets))
     if len(expanded) > 20:
         raise ValueError("history_cancel_scope_too_large")

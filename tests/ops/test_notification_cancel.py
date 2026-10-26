@@ -604,6 +604,7 @@ def _bind_history_sibling(case, card, state="pending"):
     case.led.db.execute("INSERT INTO notification_intent_cards(event_id,card_id,coverage,state) VALUES(?,?,?,?)",
                         (sibling, card, json.dumps(["a"*32]), state))
     case.led.db.commit()
+    return sibling
 
 
 @pytest.mark.parametrize("stage", ["plan", "apply", "reentrant"])
@@ -642,3 +643,35 @@ def test_bound_history_shared_card_terminal_sibling_does_not_block_cancellation(
     receipt = cancel.apply(case.root, _request(case))
     assert receipt["outcome"] == "applied" and receipt["remote_operations"] == 0
     assert case.led.db.execute("SELECT delivery_state FROM notification_cards WHERE card_id=?", (card,)).fetchone()[0] == "revoked"
+
+
+def test_bound_history_shared_card_cancels_all_explicitly_selected_pending_siblings(case):
+    card = _bound_history_event(case)
+    case.events.append(_bind_history_sibling(case,card))
+    before = _snapshot(case.led.db)
+    request = _request(case)
+    assert _snapshot(case.led.db) == before
+    receipt = cancel.apply(case.root,request)
+    assert receipt['outcome'] == 'applied' and receipt['remote_operations'] == 0
+    assert receipt['event_ids'] == case.events
+    for event_id in case.events:
+        assert case.led.db.execute('SELECT state FROM notify_outbox WHERE event_id=?',(event_id,)).fetchone()[0] == 'suppressed'
+        assert case.led.db.execute('SELECT state FROM notification_intent_cards WHERE event_id=?',(event_id,)).fetchone()[0] == 'suppressed'
+    assert case.led.db.execute('SELECT delivery_state FROM notification_cards WHERE card_id=?',(card,)).fetchone()[0] == 'revoked'
+    assert not case.led.db.execute('SELECT 1 FROM notification_renders WHERE card_id=?',(card,)).fetchone()
+    assert all(case.led.db.execute('SELECT state FROM notification_renders WHERE delivery_id=?',(render['delivery_id'],)).fetchone()[0] == 'unknown'
+               for render,_ in case.old_renders)
+    assert cancel.apply(case.root,request) == receipt
+    assert case.led.db.execute('SELECT COUNT(*) FROM command_receipts').fetchone()[0] == 1
+
+
+def test_selected_history_sibling_with_issued_state_still_blocks_entire_cancellation(case):
+    card = _bound_history_event(case)
+    sibling = _bind_history_sibling(case,card)
+    case.events.append(sibling)
+    with case.led.db:
+        case.led.db.execute('UPDATE notification_intent_cards SET required_render_rev=1 WHERE event_id=?',(sibling,))
+    before = _snapshot(case.led.db)
+    with pytest.raises(ValueError,match='notification_already_issued'):
+        _request(case)
+    assert _snapshot(case.led.db) == before
