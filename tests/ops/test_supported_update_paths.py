@@ -207,8 +207,8 @@ def test_manifest_preserves_exact_historical_26_and_supported_sources():
                  for t in (11, 12) for mode in ("hermes", "standalone")}
     expected |= {("v1.0.11", "v1.0.12", mode) for mode in ("hermes", "standalone")}
     assert historical == expected and len(historical) == 26
-    assert MANIFEST["target"]["version"] == "v1.0.29"
-    assert set(FEATURES) == set(ORIGINS) == {f"v1.0.{n}" for n in range(29)}
+    assert MANIFEST["target"]["version"] == "v1.1.0"
+    assert set(FEATURES) == set(ORIGINS) == {f"v1.0.{n}" for n in range(30)}
     assert {(p["source"], p["runtime"]) for p in PATHS} == {
         (release, mode) for release, flags in FEATURES.items()
         for mode in (["hermes", "standalone"] if flags["standalone"] else ["hermes"])}

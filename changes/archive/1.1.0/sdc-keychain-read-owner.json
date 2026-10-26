@@ -9,5 +9,5 @@
     "Storeは借用中の子処理の終了が確認された場合だけディレクトリのfdを閉じる。処理中の元の例外や取消は、終了処理の別の例外で置き換えない。終了が不明な資源は保持する。",
     "明示注入した合成providerは維持し、通常テストから実読取用の子を起動する経路は拒否する。実機の権限や遠隔操作を有効化する変更ではない。"
   ],
-  "refs": ["adapters/sdc/keychain_reader.py", "mcs/ops/sdc_keychain_read.py", "adapters/sdc/storage.py"]
+  "refs": ["adapters/sdc/keychain_owner.py", "mcs/ops/sdc_keychain.py", "adapters/sdc/storage.py"]
 }

@@ -9,5 +9,5 @@
     "親の期限によるTimeoutErrorを、読取り・起動結果の受取り・終了確認・signal・pipe閉鎖で別の固定エラーへ変えたり無視したりしない。起動結果の受取りが中断された場合もFutureの所有を残し、終了処理で子とpipeを再採用する。",
     "最初の取消・TimeoutErrorを終了処理の後発エラーで置き換えず、Store本体で発生した元の取消・TimeoutErrorも維持する。通常OSErrorの既存分類と内部の読取り期限エラーは維持し、回収不明のownerで新たな読取りや再試行を許可しない。"
   ],
-  "refs": ["adapters/sdc/keychain_reader.py", "tests/adapters/sdc/test_sdc_keychain_reader.py"]
+  "refs": ["adapters/sdc/keychain_owner.py", "tests/adapters/sdc/test_sdc_keychain_reader.py"]
 }

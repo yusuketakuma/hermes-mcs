@@ -8,6 +8,7 @@
 
 | 版 | 記録 |
 |---|---|
+| 1.1.0（候補） | [受入・残条件](v1.1.0/ACCEPTANCE_1.1.0.md) · [変更の要点](v1.1.0/README.md) · [変更記録の対応表](v1.1.0/change-map.json) |
 | 1.0.29（候補） | [受入・残条件](v1.0.29/ACCEPTANCE_1.0.29.md) · [変更の要点](v1.0.29/README.md) · [変更記録の対応表](v1.0.29/change-map.json) |
 | 1.0.28（候補） | [受入・残条件](v1.0.28/ACCEPTANCE_1.0.28.md) · [スタンプの説明図](v1.0.28/README.md) |
 | 1.0.27 | [受入・残条件](v1.0.27/ACCEPTANCE_1.0.27.md) · [統合対応表](v1.0.27/integration-manifest.json) · [処理の説明図](v1.0.27/README.md) |

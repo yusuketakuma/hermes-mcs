@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="800" viewBox="0 0 390 800" role="img" aria-labelledby="title desc">
+  <title id="title">MCS 1.1.0 の収集エラー警報の判定の説明図</title>
+  <desc id="desc">収集エラーを18の原因分類に分け、警報に何が起きたかと対処を添える。時間切れ・通信・取得未完了・通知の待ちなど自然に回復しやすい異常は、別々の収集結果で同じ異常が3回続いたときに通知し、回復した回があれば数え直す。ログイン切れ・保存できない・設定の誤り・原因未分類などの異常と、一時的でない分類を含む場合はすぐ通知する。実画面ではない説明図。</desc>
+  <rect width="390" height="800" fill="#f7f5f0"/>
+  <g font-family="Hiragino Sans,Noto Sans CJK JP,sans-serif" fill="#202124">
+    <text x="16" y="31" font-size="16" font-weight="700" fill="#087f5b">HERMES-MCS / 1.1.0</text>
+    <text x="16" y="65" font-size="24" font-weight="700">収集エラーの警報を見直し</text>
+    <text x="16" y="90" font-size="15" fill="#596560">通知するまでの判定（説明図）</text>
+
+    <rect x="16" y="110" width="358" height="128" rx="12" fill="#edf4ff" stroke="#afc3dc"/>
+    <circle cx="43" cy="141" r="17" fill="#305b91"/>
+    <text x="43" y="148" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">1</text>
+    <text x="72" y="149" font-size="20" font-weight="700">原因を18分類に分ける</text>
+    <text x="31" y="181" font-size="15">警報に「何が起きたか」と</text>
+    <text x="31" y="203" font-size="15">「利用者の対処」を添える</text>
+    <text x="31" y="226" font-size="13" fill="#44566b">患者名・本文・例外の原文は表示しない</text>
+
+    <text x="195" y="260" text-anchor="middle" font-size="20" fill="#8a948f">↓</text>
+
+    <rect x="16" y="272" width="358" height="222" rx="12" fill="#fff4e5" stroke="#e3c79b"/>
+    <circle cx="43" cy="303" r="17" fill="#b35c00"/>
+    <text x="43" y="310" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">2</text>
+    <text x="72" y="311" font-size="20" font-weight="700">回復しやすい異常</text>
+    <text x="31" y="342" font-size="14" fill="#6b5a44">例：時間切れ・通信・取得未完了・</text>
+    <text x="31" y="362" font-size="14" fill="#6b5a44">　　取得制限・通知の待ち</text>
+    <rect x="31" y="378" width="328" height="58" rx="8" fill="#fff" stroke="#e3c79b"/>
+    <text x="45" y="403" font-size="16" font-weight="700">同じ異常が3回続いたら通知</text>
+    <text x="45" y="425" font-size="13" fill="#6b5a44">観測回数と初回からの経過時間を添える</text>
+    <text x="31" y="460" font-size="13" fill="#6b5a44">別々の収集結果だけを数え、回復した回が</text>
+    <text x="31" y="479" font-size="13" fill="#6b5a44">あれば数え直す（10分間隔なら約20分後）</text>
+
+    <text x="195" y="516" text-anchor="middle" font-size="16" fill="#8a948f">それ以外は ↓</text>
+
+    <rect x="16" y="528" width="358" height="176" rx="12" fill="#fdecec" stroke="#e0b4b4"/>
+    <circle cx="43" cy="559" r="17" fill="#a33a3a"/>
+    <text x="43" y="566" text-anchor="middle" font-size="20" font-weight="700" fill="#fff">3</text>
+    <text x="72" y="567" font-size="20" font-weight="700">重い異常はすぐ通知</text>
+    <text x="31" y="598" font-size="14" fill="#6b4444">例：ログイン切れ・保存できない・</text>
+    <text x="31" y="618" font-size="14" fill="#6b4444">　　設定の誤り・空き容量不足・原因未分類</text>
+    <text x="31" y="648" font-size="13" fill="#6b4444">一時的でない分類を1つでも含む場合と、</text>
+    <text x="31" y="667" font-size="13" fill="#6b4444">分類を読み取れない場合も待たない</text>
+    <text x="31" y="690" font-size="13" fill="#6b4444">（従来どおり）</text>
+
+    <text x="16" y="736" font-size="13" fill="#596560">サポート共有用の診断（<tspan font-family="Menlo,monospace">doctor --share</tspan>）は</text>
+    <text x="16" y="756" font-size="13" fill="#596560">従来の9分類のまま。実画面ではない説明図です。</text>
+  </g>
+</svg>

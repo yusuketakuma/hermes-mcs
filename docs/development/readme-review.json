@@ -1,72 +1,58 @@
 {
-  "version": "1.0.29",
+  "version": "1.1.0",
   "sections": {
     "features": {
-      "notes": "2026-10-22 1.0.29リリース候補（release/v1.0.29 53a0e127＋敵対的レビュー・CR2追補）: 変更記録46件を機能説明へ照合。README冒頭のMCSサーバー負荷対策に、HTTP 429でRetry-After（最大60秒）を守り1回の定期実行で2回受けたら残りを次回へ回す挙動を追記（mcs_adapter.py・bounded_http.py）。再解析順の変更（patient-focus）・health/doctorの件数表示・添付点検はいずれも既定ON/OFFや取得範囲・通知・人承認を変えないため、機能一覧の既定値記載は変更不要と判断。スタンプ・通知カードの機能説明は今回の変更（別投稿からの選び直し案内）と矛盾しない。 2026-10-22 53a0e127以降の敵対的レビュー・CR2追補: 追加9記録を含む44件・公開17項目へ照合。依頼履歴の一括読取りは表示上限と全件coverageを保持し、本番の速度向上は未測定。統計は採用日数をローカルwindow_daysへ明示し、外部mcs-read-model/1は旧項目を保持。通知workerは所有者確認後に公開された配送条件が揃わない場合の拒否を固定理由の状態記録で確認する。 2026-10-23追補: 返信カード（Slack・Discord、既定で有効、notify.reply_cards=falseで従来表示）を冒頭と機能表へ反映（mcs/notify/notify_cards.py の reply_cards_on・_split_reply_targets、notify_render.reply_source）。確認・担当とスタンプの対象をカードの投稿へ修正。SDC自己監視は未配備・試験段階のためREADMEの機能には載せない。",
+      "notes": "2026-10-26 1.1.0（release/v1.1.0、基点main a27efa15）: 変更記録131件を機能説明へ照合。収集エラーの18分類と、一時的な分類（10種）だけを3回連続で通知する判定を「できること」へ追記（collection_diagnostics.CATEGORIES、health_watch.TRANSIENT_REASONS・STREAK_ALERT=3）。health.jsonのDB容量・バックアップ種類別容量・保守経過時間とdb_maintenance_overdue（日次2日超）を追記（health_report.py、maintenance.py）。本文未取得時の「緊急度: 要確認」を追記。CSDCは任意支援の表にコードのみ同梱・1.1.0では有効化・接続しない・新規は sdc.enabled 未設定で専用ジョブなし・既存の明示設定は更新で変更しない・案内表示は mcs setup features と記載（v110-csdc-default-off、mcs_setup.cmd_features）。返信カードの既定・取得範囲・モデル・取得間隔は変更なし。内部整理（refactor-*）は利用者の機能説明に影響しないため本文は追加しない。",
       "sources": [
         "README.md",
-        "mcs/ingest/mcs_adapter.py",
-        "mcs/core/bounded_http.py",
-        "mcs/ingest/collection_diagnostics.py",
-        "mcs/ops/attachment_audit.py",
-        "mcs/ops/mcs_repair.py",
         "CHANGELOG.md",
-        "mcs/views/mcs_stats.py",
-        "mcs/views/extraction_audit.py",
-        "mcs/views/card_worker_status.py"
+        "mcs/ingest/collection_diagnostics.py",
+        "mcs/ingest/health_watch.py",
+        "mcs/ingest/health_report.py",
+        "mcs/core/maintenance.py",
+        "mcs/ops/mcs_setup.py"
       ]
     },
     "demos": {
-      "notes": "2026-10-22 1.0.29リリース候補（release/v1.0.29 53a0e127＋敵対的レビュー・CR2追補）: Slack 8画面・LINE WORKS 2画面の表示例と生成元を確認。今回の変更でカードの配置・ボタン・表示条件は変わらない（スタンプの選び直しは拒否時の案内文、範囲不明時は内容を送らず案内を返す変更で、既存の画面例に含まれない）。そのためSVG・PNGの再生成は不要で、ギャラリーのhash記録も変更しない。人物・組織・本文は架空の説明用データのまま。 2026-10-22 53a0e127以降の敵対的レビュー・CR2追補: 追加修正でもカード配置・ボタン・画像は変わらず、既存SVG/PNGとvisual-sourceのhashを保持。実画面・公開後画像表示は未確認。 2026-10-23追補: 01-overview・02-notificationを返信カードの表示で生成元から描き直し、SVG/PNGとassets.jsonを更新、generate_slack_gallery.py --checkで整合を確認。文字切れ・重なりは描画画像で目視確認。ほかの6画面は変更なし。",
+      "notes": "2026-10-26 1.1.0: Slack 8画面・Discord・LINE WORKSの表示例と生成元を確認。今回のカード関連の変更（返信カードの本文・操作を投稿ごとにそろえる、親スレッド不明時の保留、緊急度: 要確認、長い本文の分割）は、既存の画面例のカード配置・ボタン・表示条件を変えないため、SVG・PNGとassets.jsonのhashは変更しない。人物・組織・本文は架空の説明用データのまま。版の説明図は新規の docs/releases/v1.1.0/collection-alerts（合成の説明図、実画面ではない）。実画面・公開後の画像表示は未確認。",
       "sources": [
         "docs/screenshots/slack-gallery/README.md",
         "docs/screenshots/slack-gallery/assets.json",
         "docs/screenshots/lineworks-gallery/README.md",
         "docs/screenshots/lineworks-gallery/assets.json",
-        "adapters/slack/actions.py",
-        "mcs/stamps/stamp_write.py"
+        "docs/releases/v1.1.0/visual-source.json",
+        "mcs/notify/notify_render.py"
       ]
     },
     "quickstart": {
-      "notes": "2026-10-22 1.0.29リリース候補（release/v1.0.29 53a0e127＋敵対的レビュー・CR2追補）: 導入・診断・更新の導線を照合。doctorの説明に、--probe dataで収集エラーの原因分類と件数・未取得本文の最長経過時間を表示できることと、収集の診断ガイドへの導線を追記（mcs_setup.py の _doctor_collection、collection_diagnostics.py）。install.shのモデルsha256上書きはMCS_ALLOW_MODEL_SHA_OVERRIDE=1併用時だけになったが、通常導入では操作不要のため導入手順の本文は変更不要。config.json・.envのシンボリックリンク不可と権限の警告・独立実行の起動拒否は、更新ガイドの1.0.29節とCHANGELOGの更新時の注意で案内する。 2026-10-22 53a0e127以降の敵対的レビュー・CR2追補: init/fact-sourceの読めない設定の保存拒否とinit --yesのリンク自体退避を確認。追加修正は通常更新と使用中のgateway/独立adapter/解析worker再起動で反映。 2026-10-23追補: 導入・更新の手順に変更なし。返信カードは設定不要で既定有効、従来表示へ戻す設定を本文で案内。",
+      "notes": "2026-10-26 1.1.0: 導入・診断・更新の導線を照合。macOS・Apple silicon・Slackのstandaloneを初回受入候補とする記載は維持。doctor --share（患者件数・設定値・パスを含めない共有用JSON、自動送信なし）を診断の説明へ追記（mcs_setup.py、support_diagnostics.py）。対話の初期設定の保存前確認・AIモデルのSHA256不一致時の停止・通知先準備の失敗時の停止は、CHANGELOGの更新時の注意で案内し、導入コマンド自体は変わらないため本文の手順は変更不要。CSDCの登録案内は既定で表示しない（mcs setup features）ことを任意支援の表に記載。",
       "sources": [
         "README.md",
         "install.sh",
         "mcs/ops/mcs_setup.py",
-        "mcs/core/mcs_util.py",
-        "docs/guides/UPGRADE_AGENT.md",
-        "docs/guides/COLLECTION_DIAGNOSTICS.md"
+        "mcs/ops/support_diagnostics.py",
+        "mcs/ops/setup_wizard.py",
+        "docs/guides/UPGRADE_AGENT.md"
       ]
     },
     "safety": {
-      "notes": "2026-10-22 1.0.29リリース候補（release/v1.0.29 53a0e127＋敵対的レビュー・CR2追補）: 既読化・外部送信・承認・復旧の限界を照合。既読化の条件に、本文を取得できていない親投稿がある患者は既読にせず後続の収集で補完することを追記（collection_stages.py）。範囲不明の表示結果を送らない・接続世代の失効後に送らない変更は送信を減らす方向で、送信先と人承認の記載は変更不要。添付点検（mcs_repair.py attachments）は読取り専用で、DB・ファイル変更・再取得・再送・既読化をしない。公式医薬品masterは2026-10-22に公式siteとZIP（20261013版、sha256一致）を確認し同梱版のまま、activation falseと人承認必須を維持。 2026-10-22 53a0e127以降の敵対的レビュー・CR2追補: 未読上限時にも未読範囲の親本文がfull/deletedとなるまで既読化しない。送信前保留は失敗待ちを進めず、LINE WORKSは待機後の停止・送信権限を再確認。検査単位・服薬二重否定・事実有効時点の根拠照合を修正し、旧候補/保留の現行性と再評価条件を保持。実推論品質・本番適用は未検証。 2026-10-23追補: 返信カードはチャンネルへ再掲せず、送信先・人承認・既読化の条件は変わらない。公式医薬品masterは2026-10-23に公式download menuをforce_freshで確認し、令和8年度版の医薬品マスター（19,286件、最終更新令和8年10月13日）が同梱20261013版と一致、check_drug_master_bundle.pyもok。",
+      "notes": "2026-10-26 1.1.0: 情報の行き先の表に、公開医薬品情報の照会（PMDA添付文書・Mindsガイドライン）の行を追加。送信は同梱公開マスターと一致した薬品名・一般疾患キーワード・公式URLだけで、患者データ・私有辞書は送らない。TinyFishのトークンファイルがない環境では無料・認証不要のExa MCP（https://mcp.exa.ai/mcp）へ接続し、取得内容は医学的評価を経ていない参考資料（drug_info.py、drug-web-fallback）。status_snapshotは患者情報・本文・ホスト名・IPを含めず送信しない部品で、外部送信の経路を追加しないため表には加えない。CSDCは1.1.0で接続しないため、外部送信の行は追加しない。既読化・人承認・no-redirect/no-proxyの条件に変更なし。",
       "sources": [
         "README.md",
         "SECURITY.md",
-        "mcs/ingest/collection_stages.py",
-        "adapters/slack/actions.py",
-        "mcs/ops/attachment_audit.py",
-        "resources/drug-master/README.md",
-        "mcs/ingest/project_metadata.py",
-        "mcs/core/ledger.py",
-        "adapters/lineworks/delivery.py",
-        "mcs/extract/clinical/clinical_values.py",
-        "mcs/signals/mcs_signals.py",
-        "mcs/semantic/semantic_audit.py"
+        "mcs/ops/drug_info.py",
+        "mcs/ops/status_snapshot.py",
+        "changes/archive/1.1.0/drug-web-fallback.json",
+        "changes/archive/1.1.0/v110-csdc-default-off.json"
       ]
     },
     "docs": {
-      "notes": "2026-10-22 1.0.29リリース候補（release/v1.0.29 53a0e127＋敵対的レビュー・CR2追補）: 文書導線と相対リンクを照合。ドキュメント表の更新・復旧の行に、収集の診断と保存済み添付の点検のガイドを追加。OpenWiki（openwiki/と更新workflow）はユーザー指示で廃止し、README・docs索引に導線は残っていない。CHANGELOGの1.0.29は44件の変更記録を17項目へまとめ、全件の対応をdocs/releases/v1.0.29/change-map.jsonで照合。過去版の記載とarchiveは変更しない。 2026-10-22 53a0e127以降の敵対的レビュー・CR2追補: 追加9記録を既存の公開17項目へ統合し、計44件と対応表hashを照合。旧35archive原文・過去版・画像は保持し、現候補の最終suite・CR2追補後の確認・本番・公開を以前の成功記録と区別。 2026-10-23追補: CHANGELOGの1.0.29は46件の変更記録を19項目へまとめ、change-map.jsonを更新。",
+      "notes": "2026-10-26 1.1.0: ドキュメント表の更新・復旧の行に1.1.0のリリース資料（docs/releases/v1.1.0/README.md）への導線を追加。機能説明から説明図へのリンクも同じ資料へ向ける。既存のガイド・仕様のリンク先は移動・廃止なし。readme_release.py --checkで相対リンクと主要アンカーを検査。ライセンス節（1.1.0からの外部利用は個別の書面契約）は既存の記載のまま。",
       "sources": [
         "README.md",
-        "CHANGELOG.md",
         "docs/README.md",
-        "docs/releases/README.md",
-        "docs/guides/COLLECTION_DIAGNOSTICS.md",
-        "docs/guides/ATTACHMENT_RECOVERY.md",
-        "docs/development/README_MAINTENANCE.md",
-        "docs/releases/v1.0.29/change-map.json",
-        "docs/releases/v1.0.29/ACCEPTANCE_1.0.29.md"
+        "docs/releases/v1.1.0/README.md",
+        "LICENSE"
       ]
     }
   }
