@@ -355,6 +355,7 @@ def _seed_history(db, now):
                       "updated_at) VALUES(?,'{}',?,?,?)", (kind, state, at, at))
     for kind, age in (("semantic_drain_run", 40 * DAY), ("semantic_drain_run", DAY),
                       ("semantic_usage", 8 * DAY), ("semantic_usage", 60),
+                      ("cloud_usage_result", 63 * DAY), ("cloud_usage_result", DAY),
                       ("semantic_bundle", 400 * DAY)):
         db.db.execute("INSERT INTO artifacts(kind,content,created_at) "
                       "VALUES(?,'{}',?)", (kind, now - age))
@@ -379,7 +380,7 @@ def test_prune_history_keeps_references_and_audit_rows(tmp_path):
         out = maintenance.prune_history(con, now)
     assert out == {"runs": 2, "read_marks": 1, "alerts": 1,
                    "unsent_renders": 0, "view_manifests": 0,
-                   "drain_runs": 1, "usage_receipts": 1}
+                   "drain_runs": 1, "usage_receipts": 1, "cloud_usage_receipts": 1}
     assert sorted(r[0] for r in db.db.execute("SELECT status FROM runs")) \
         == ["failed", "ok"]           # newest per status survives
     left = {(r[0], r[1]) for r in db.db.execute(
@@ -390,6 +391,9 @@ def test_prune_history_keeps_references_and_audit_rows(tmp_path):
     assert ("semantic_notice", "accepted") in left
     assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='semantic_bundle'"
                          ).fetchone()[0] == 1
+    assert [r[0] for r in db.db.execute(
+        "SELECT created_at FROM artifacts WHERE kind='cloud_usage_result'"
+    )] == [now - DAY]
     assert db.db.execute("SELECT COUNT(*) FROM message_revisions"
                          ).fetchone()[0] == revisions > 0
     db.close()

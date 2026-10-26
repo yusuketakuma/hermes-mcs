@@ -3,6 +3,7 @@ import setup_wizard
 import pytest
 
 import mcs_setup
+import semantic_policy
 
 
 @pytest.mark.parametrize("raw, expected", [("はい", True), ("いいえ", False),
@@ -67,7 +68,9 @@ def test_unused_connectors_have_no_empty_steps(monkeypatch, capsys):
     assert "Discordの接続先と操作できる人" not in output
     assert "LINE WORKSの接続先と操作できる人" not in output
     assert cfg["notify"]["interactive"] == "off"
-    assert cfg["semantic"]["mode"] == "off"
+    assert "mode" not in cfg.get("semantic", {})
+    assert semantic_policy.semantic_config(cfg, key_present=False)[0]["mode"] == "off"
+    assert semantic_policy.semantic_config(cfg, key_present=True)[0]["mode"] == "assist"
     assert cfg["deep_history"] is True
 
 

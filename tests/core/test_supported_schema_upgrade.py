@@ -391,15 +391,17 @@ def test_released_schema_update_rollback_requires_bound_consent(
 
 def test_same_schema_restored_witness_reconciles_then_resumes(
         tmp_path, monkeypatch, updater):
-    """A compatible schema9 post-swap witness can finish actual reconciliation.
+    """A same-schema post-swap witness can finish actual reconciliation.
 
     Build the approved post-swap state with the real staging primitive under
     both updater locks. No schema number/guard/reconcile stub or forced old-DB
     writer open is used; old-writer binary compatibility is not asserted.
     """
     origin = RELEASES[-1]
-    assert origin["schema_version"] == ledger.SCHEMA_VERSION
     source = _historical(tmp_path / "source", origin)
+    # Create the current schema through the real migration, not a version pragma.
+    migrated = ledger.Ledger(str(source))
+    migrated.close()
     expected, original_hash = _records(source), _sha(source)
     live = Path(updater.LEDGER)
     shutil.copy2(source, live)

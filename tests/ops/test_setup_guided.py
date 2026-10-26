@@ -8,6 +8,7 @@ import pytest
 
 import mcs_setup
 import mcs_util
+import semantic_policy
 from test_mcs_setup import _init_env
 
 
@@ -38,10 +39,33 @@ def test_recommended_path_keeps_settings_and_collects_authority(monkeypatch):
     monkeypatch.setattr('builtins.input', answer)
     setup_wizard.wizard(cfg)
     assert 'trickle_pages' not in seen and cfg['trickle_pages'] == 7
-    assert 'semantic.mode' not in seen and cfg['semantic']['mode'] == 'off'
+    assert 'semantic.mode' not in seen and 'mode' not in cfg.get('semantic', {})
+    assert semantic_policy.semantic_config(cfg, key_present=False)[0]['mode'] == 'off'
+    assert semantic_policy.semantic_config(cfg, key_present=True)[0]['mode'] == 'assist'
     assert cfg['notify']['slack']['allowed_user_ids'] == ['U123']
     assert cfg['notify']['slack']['project_ids'] == [101]
     assert mcs_setup.validate_config(cfg)[0] == []
+
+
+def test_recommended_path_preserves_explicit_semantic_off(monkeypatch):
+    cfg = {'mcs_login_id': 'synthetic-login', 'notify_target': 'local',
+           'semantic': {'mode': 'off', 'daily_request_budget': 17}}
+    seen = []
+
+    def answer(prompt):
+        key = prompt.split('設定項目: ', 1)[1].split()[0].rstrip(':')
+        assert key not in seen, f'fixture answer was rejected: {key}'
+        seen.append(key)
+        return 'いいえ' if key == 'drug_map.bundled' else ''
+
+    monkeypatch.setattr('builtins.input', answer)
+    setup_wizard.wizard(cfg)
+    assert 'semantic.mode' not in seen
+    assert cfg['semantic'] == {'mode': 'off', 'daily_request_budget': 17}
+    for key_present in (False, True):
+        actual, errors = semantic_policy.semantic_config(cfg, key_present=key_present)
+        assert not errors
+        assert actual['mode'] == 'off' and actual['daily_request_budget'] == 17
 
 
 def test_required_unknown_does_not_invent_an_identifier(monkeypatch, capsys):

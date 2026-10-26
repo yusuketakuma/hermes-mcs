@@ -57,7 +57,10 @@ def _operation(site, tmp_path, monkeypatch):
         key = tmp_path / "synthetic.key"
         key.write_bytes(b"synthetic, never signed")
         key.chmod(0o600)
-        monkeypatch.setattr(cli, "settings", lambda *a: {"application_id": "synthetic"})
+        def settings(root, *, require_interactive=True):
+            assert root == tmp_path and require_interactive is False
+            return {"application_id": "synthetic"}
+        monkeypatch.setattr(cli, "settings", settings)
         monkeypatch.setattr(cli, "credentials_path", lambda *a: tmp_path / "credentials.json")
         monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
         monkeypatch.setattr(cli.getpass, "getpass", lambda *a: "SYNTHETIC_TOKEN")

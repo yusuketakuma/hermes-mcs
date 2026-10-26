@@ -67,4 +67,4 @@ def test_runtime_policy_reads_key_only_for_omitted_mode(tmp_path, monkeypatch):
     monkeypatch.setattr(semantic_jev, "api_key", lambda root: "synthetic")
     cfg, errors = semantic_policy.runtime_config({}, root=str(tmp_path))
     assert not errors and cfg["mode"] == "assist"
-    assert cfg["project_ids"] is None and cfg["daily_request_budget"] == 500
+    assert cfg["project_ids"] is None and cfg["daily_request_budget"] == 10000
