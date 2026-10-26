@@ -57,7 +57,7 @@ from bounded_http import MAX_RESPONSE_BYTES
 
 JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 JEV_MODEL = "jev-1.13.0"
-DAILY_REQUEST_LIMIT = 500
+DAILY_REQUEST_LIMIT = 10000
 JEV_MODELS_URL = "https://api.typesafe.ai/v1/models"
 JEV_ALLOWED_ENDPOINTS = frozenset({JEV_ENDPOINT})
 REGISTRY_VERSION = "2026-09-20"

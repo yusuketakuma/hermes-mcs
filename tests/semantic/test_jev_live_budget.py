@@ -36,12 +36,12 @@ def _used(home):
         return jev_usage_today(db)
 
 
-@pytest.mark.parametrize("cap", [None, 1000])
+@pytest.mark.parametrize("cap", [None, 20000])
 def test_manual_post_and_models_get_cannot_exceed_shared_500(home, monkeypatch, cap):
     if cap is not None:
         (home / "config.json").write_text(json.dumps({"semantic": {"daily_request_budget": cap}}))
     with closing(Ledger(str(home / "data" / "ledger.db"))) as db:
-        db.artifact_add("semantic_usage", "{}", meta={"jev_requests": 499})
+        db.artifact_add("semantic_usage", "{}", meta={"jev_requests": jev.DAILY_REQUEST_LIMIT - 1})
     calls = []
     with jev.live_client("synthetic", operation="jev_value", root=str(home),
                          post_fn=lambda *args: calls.append("post") or _answer(*args)) as client:
@@ -49,7 +49,7 @@ def test_manual_post_and_models_get_cannot_exceed_shared_500(home, monkeypatch, 
         monkeypatch.setattr(client._client, "request", lambda *a, **k: pytest.fail("GET beyond daily cap"))
         with pytest.raises(jev.JevError, match="budget_exceeded"):
             client.models()
-    assert calls == ["post"] and _used(home) == 500
+    assert calls == ["post"] and _used(home) == jev.DAILY_REQUEST_LIMIT
 
 
 def test_lower_explicit_budget_zero_is_respected_without_mode_or_scope_gate(home):
