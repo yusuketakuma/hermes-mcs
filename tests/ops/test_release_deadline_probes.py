@@ -56,15 +56,16 @@ def test_updater_deadline_stops_waiting_instead_of_accepting_a_late_child_result
 def test_git_receives_the_remaining_budget_and_no_lazy_fetch_environment(monkeypatch):
     now, seen = [100.0], []
     monkeypatch.setattr(mcs_update.time, 'monotonic', lambda: now[0])
-    def git(args, timeout, **kwargs):
-        seen.append((args, timeout, kwargs))
+    def git(args, timeout, environment, **kwargs):
+        seen.append((args, timeout, environment, kwargs))
         return subprocess.CompletedProcess(args, 0, 'synthetic', '')
-    monkeypatch.setattr(mcs_update.update_discovery, 'git', git)
+    monkeypatch.setattr(mcs_update.owned_process, 'run_owned', git)
     mcs_update._git(['status'], timeout=30, deadline=100.5)
-    assert seen[0][1] == .5
-    env = seen[0][2]['environment']
+    assert seen[0][0] == ['/usr/bin/git', '-C', mcs_update.REPO, '--work-tree', mcs_update.REPO, 'status']
+    assert seen[0][1] == .5 and seen[0][3]['deadline'] == 100.5
+    env = seen[0][2]
     assert env['GIT_NO_LAZY_FETCH'] == env['GIT_NO_REPLACE_OBJECTS'] == '1'
-    assert env['GIT_CONFIG_VALUE_3'] == 'never'
+    assert env['GIT_CONFIG_VALUE_3'] == 'never' and env['GIT_CONFIG_VALUE_4'] == '/dev/null'
     now[0] = 101
     with pytest.raises(mcs_update.UpdateError, match='release_prequiesce_timeout'):
         mcs_update._git(['status'], deadline=100.5)
