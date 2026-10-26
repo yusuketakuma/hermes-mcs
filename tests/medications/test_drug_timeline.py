@@ -14,8 +14,8 @@ from inference_version import CURRENT_VERSION, VERSION_KEY
 from medications_testkit import _seed
 
 
-def current(store, mid, meds):
-    _seed(store, mid=mid)
+def current(store, mid, meds, *, posted="2026-09-19T00:00:00+09:00"):
+    _seed(store, mid=mid, posted=posted)
     message = dict(store.db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone())
     message["_source_binding"] = source_binding(store.db, 1, mid)
     context = extract_llm._thread_context(store.db, message)
@@ -203,7 +203,7 @@ def canonical_source(store, monkeypatch, *, name="キラナ錠5mg", grounded=Tru
     monkeypatch.setattr("drug_map._source", lambda *a, **k: (row[0], "semantic_facts_v4", "{}", "synthetic", 1))
     monkeypatch.setattr("semantic_v4.reproject_doc", lambda *a: (doc, None))
     monkeypatch.setattr("semantic_store.thread_bundle", lambda *a, **k: {"source_fingerprint": "synthetic"})
-    monkeypatch.setattr("semantic_policy.semantic_config", lambda *a: ({}, []))
+    monkeypatch.setattr("semantic_policy.semantic_config", lambda *a, **k: ({}, []))
     monkeypatch.setattr("semantic_policy.policy_fingerprint", lambda *a: "synthetic")
     monkeypatch.setattr(semantic_transport, 'llm_model', lambda *a: "synthetic")
     return doc

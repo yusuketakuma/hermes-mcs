@@ -43,6 +43,10 @@ def test_each_full_post_is_read_once_across_coverage_and_page(corpus, monkeypatc
 
 def test_a_page_row_outside_the_memo_falls_back_to_a_fresh_read(corpus, monkeypatch):
     _seed(corpus)
+    # Prepare an actual current result at the excluded date. Changing its
+    # timestamp after extraction would correctly invalidate the source binding.
+    current(corpus, 3, [{"name": "キラナ3", "subject": "patient"}],
+            posted="1970-01-01T00:00:00+00:00")
     view = view_of(corpus)
     real_page = view._page
     extra = dict(corpus.db.execute(
@@ -55,8 +59,6 @@ def test_a_page_row_outside_the_memo_falls_back_to_a_fresh_read(corpus, monkeypa
     view._page = page
     calls = _counted(monkeypatch)
     # since excludes post 3 from the covered rows, but the page still returns it
-    corpus.db.execute("UPDATE messages SET posted_at_ts=0 WHERE message_id=3")
-    corpus.db.commit()
     report = drug_timeline.timeline(view, 1, since=1)
     assert calls[3] == 1 and calls[1] == 1
     assert [item["message_id"] for item in report["items"]].count(3) == 1

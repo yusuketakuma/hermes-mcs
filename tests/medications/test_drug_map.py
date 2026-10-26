@@ -384,11 +384,16 @@ def test_rule_only_source_is_annotated_as_unverified_rollup(store, tmp_path):
 
 
 def test_aliases_stay_separate_and_stop_never_suppresses_sibling(store, tmp_path):
-    _seed(store, names=("キラナ", "別キラナ"))
+    source_id = _seed(store, names=("キラナ", "別キラナ"))
     dictionary = _dictionary(tmp_path)
     drug_map.derive(store, dictionary)
     rows = rollup.build_rollup(store.db, 1)["medications"]
-    assert [row["name"] for row in rows] == ["別キラナ", "キラナ"]
+    # Distinct same-post facts retain their source order; the old name-only
+    # last-mention-wins reducer reversed this order before dropping duplicates.
+    original = json.loads(store.db.execute(
+        "SELECT content FROM artifacts WHERE artifact_id=?", (source_id,)).fetchone()[0])
+    assert [med["name"] for med in original["meds"]] == ["キラナ", "別キラナ"]
+    assert [row["name"] for row in rows] == [med["name"] for med in original["meds"]]
     assert all(row["ref"]["cands"][0]["code"] == "fiction-i1" for row in rows)
     _seed(store, mid=2, names=("キラナ",), action="stop",
           posted="2026-09-20T00:00:00+09:00")
