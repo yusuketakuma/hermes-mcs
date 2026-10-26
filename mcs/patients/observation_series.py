@@ -24,6 +24,11 @@ _VITAL_LIST_ITEM = re.compile(
     r"(?P<name>体温|BT|SpO2|酸素飽和度|脈拍|心拍|HR|呼吸数|RR)"
     r"\s*(?:は|が|[:：])?\s*(?P<value>\d{1,3}(?:[.．]\d{1,2})?)\s*"
     r"(?P<unit>℃|%|％|回/分|回／分)", re.I)
+_BLOOD_PRESSURE_LIST_ITEM = re.compile(
+    r"(?:血圧|BP)\s*(?:は|が|[:：])?\s*\d{2,3}\s*[/／]\s*\d{2,3}"
+    r"(?![\d.．/／])\s*(?:mmHg)?", re.I)
+_TRAILING_OXYGEN_FLOW = re.compile(r"酸素\s*\d{1,3}(?:[.．]\d{1,2})?\s*[LＬ]"
+                                  r"(?:\s*[/／]\s*分)?", re.I)
 
 
 def _subject(item):
@@ -66,21 +71,35 @@ def _supported_vital_list(quote, wanted, condition, date_kind):
         return False
     prefix = re.match(r"\s*(?:ご本人|本人|患者本人|患者さん|患者様|利用者本人|利用者さん|利用者様)"
                       r"(?:は|が)\s*" + re.escape(wanted[date_kind])
-                      + r"\s*(?:に|の)\s*(?:測定|計測)(?:した|の)\s*", quote)
+                      + r"\s*(?:(?:に|の)\s*(?:測定|計測)(?:した|の)"
+                        r"|の\s*(?:測定|計測))\s*", quote)
     if prefix is None:
         return None
-    items, seen, offset = [], set(), prefix.end()
+    items, seen, offset, trailing_flow = [], set(), prefix.end(), False
     while len(items) < 6:
         match = _VITAL_LIST_ITEM.match(quote, offset)
         if match is None:
-            return False
-        name = match["name"]
-        item_key = _VITAL_NAMES.get(name.casefold())
-        if (item_key is None or item_key in seen or match["unit"] not in _VITAL_UNITS[item_key]
-                or match["condition"] is not None and item_key != "spo2"):
+            match = _BLOOD_PRESSURE_LIST_ITEM.match(quote, offset)
+            if match is None:
+                match = _TRAILING_OXYGEN_FLOW.match(quote, offset)
+                if (match is None or "spo2" not in seen
+                        or not re.fullmatch(r"\s*[。．]?\s*", quote[match.end():])):
+                    return False
+                # A bare flow at the end has no proven relationship to SpO2.
+                item_key, trailing_flow = "oxygen_flow", True
+            else:
+                # Consume a complete, explicitly labelled pair without projecting
+                # it as a separate observation or borrowing either side's value.
+                item_key = "bp"
+        else:
+            item_key = _VITAL_NAMES.get(match["name"].casefold())
+            if (item_key is None or match["unit"] not in _VITAL_UNITS[item_key]
+                    or match["condition"] is not None and item_key != "spo2"):
+                return False
+        if item_key in seen:
             return False
         seen.add(item_key)
-        items.append(match)
+        items.append((item_key, match))
         offset = match.end()
         ending = re.match(r"\s*[。．]?\s*$", quote[offset:])
         if ending:
@@ -91,9 +110,11 @@ def _supported_vital_list(quote, wanted, condition, date_kind):
         offset += separator.end()
     else:
         return False
-    if len(items) < 2 and not items[0]["condition"]:
+    if len(items) < 2 and items[0][0] not in ("bp", "oxygen_flow") and not items[0][1]["condition"]:
         return None
-    target = next((m for m in items if _VITAL_NAMES[m["name"].casefold()] == key), None)
+    if trailing_flow and key == "spo2":
+        return False
+    target = next((m for item_key, m in items if item_key == key), None)
     if (target is None or target["name"].casefold() != wanted["observation_name"].casefold()
             or target["value"] != wanted["value"] or target["unit"] != wanted["unit"]
             or target["condition"] != condition):

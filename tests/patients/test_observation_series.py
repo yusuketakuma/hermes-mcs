@@ -92,6 +92,45 @@ def test_same_explicit_measurement_lists_distinct_vitals_without_inventing_condi
     assert result["unconfirmed"] == []
 
 
+@pytest.mark.parametrize("pressure", ["血圧120/80", "BP120/80mmHg", "血圧120/96mmHg"])
+def test_blood_pressure_in_list_does_not_hide_other_written_vitals(pressure):
+    quote = f"本人は2026-10-01に測定した体温36.5℃、{pressure}、SpO2 96%。"
+    items = [_single(1, name, value, unit, quote) for name, value, unit in (
+        ("体温", "36.5", "℃"), ("SpO2", "96", "%"))]
+    for item in items:
+        item.pop("_heading_group")
+    result = _view(items)
+    assert {row["name"] for row in result["series"]} == {"体温", "SpO2"}
+    assert all(row["records"][0]["event_date_text"] == "2026-10-01" for row in result["series"])
+    assert all(row["condition"] is None for row in result["series"])
+    assert result["unconfirmed"] == []
+
+
+def test_date_no_sokutei_binds_each_item_in_explicit_list():
+    quote = "本人は2026-10-01の測定 体温36.5℃、SpO2 96%。"
+    items = [_single(1, name, value, unit, quote) for name, value, unit in (
+        ("体温", "36.5", "℃"), ("SpO2", "96", "%"))]
+    for item in items:
+        item.pop("_heading_group")
+    result = _view(items)
+    assert {row["name"] for row in result["series"]} == {"体温", "SpO2"}
+    assert all(row["records"][0]["event_date_text"] == "2026-10-01" for row in result["series"])
+    assert result["unconfirmed"] == []
+
+
+@pytest.mark.parametrize("middle", [
+    "血圧120/", "血圧120/80℃", "血圧120/80、血圧130/85",
+    "家族の血圧120/80", "2026-10-02の血圧120/80", "血圧120/80を予定",
+    "血圧120/80ではありません", "酸素2L/分投与下の血圧120/80",
+])
+def test_ambiguous_blood_pressure_token_does_not_allow_other_list_items(middle):
+    quote = f"本人は2026-10-01に測定した体温36.5℃、{middle}、SpO2 96%。"
+    for name, value, unit in (("体温", "36.5", "℃"), ("SpO2", "96", "%")):
+        result = _view([_single(1, name, value, unit, quote)])
+        assert result["series"] == [] and result["unconfirmed"]
+        assert quote not in str(result)
+
+
 def test_oxygen_flow_is_bound_only_to_its_spo2_observation():
     quote = "本人は2026-10-01に測定した体温36.5℃、酸素2L/分投与下のSpO2 96%。"
     temperature = _single(1, "体温", "36.5", "℃", quote)
@@ -105,6 +144,31 @@ def test_oxygen_flow_is_bound_only_to_its_spo2_observation():
     assert result["unconfirmed"] == []
     wrong_flow_as_reading = _single(2, "SpO2", "2", "%", quote, condition="酸素2L/分投与下")
     assert _view([wrong_flow_as_reading])["series"] == []
+
+
+@pytest.mark.parametrize("flow", ["酸素2L", "酸素2L/分"])
+def test_trailing_unbound_oxygen_flow_does_not_hide_temperature_or_prove_spo2_condition(flow):
+    quote = f"本人は2026-10-01に測定した体温36.5℃、SpO2 97%、{flow}。"
+    temperature = _single(1, "体温", "36.5", "℃", quote)
+    oxygen = _single(1, "SpO2", "97", "%", quote)
+    for item in (temperature, oxygen):
+        item.pop("_heading_group")
+    result = _view([temperature, oxygen])
+    assert [row["name"] for row in result["series"]] == ["体温"]
+    assert result["series"][0]["condition"] is None
+    assert result["series"][0]["records"][0]["event_date_text"] == "2026-10-01"
+    assert len(result["unconfirmed"]) == 1
+    assert quote not in str(result["unconfirmed"])
+
+
+@pytest.mark.parametrize("suffix", [
+    "酸素2", "酸素2L、酸素3L", "酸素2L、SpO2 97%", "酸素2Lではありません",
+    "家族の酸素2L", "2026-10-02の酸素2L", "酸素2Lを予定",
+])
+def test_ambiguous_or_nonterminal_oxygen_flow_does_not_prove_a_list(suffix):
+    quote = f"本人は2026-10-01に測定した体温36.5℃、SpO2 97%、{suffix}。"
+    result = _view([_single(1, "体温", "36.5", "℃", quote)])
+    assert result["series"] == [] and result["unconfirmed"]
 
 
 @pytest.mark.parametrize("quote", [
