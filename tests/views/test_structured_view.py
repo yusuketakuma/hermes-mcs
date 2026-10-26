@@ -5,6 +5,7 @@ import pytest
 
 import ledger
 import structured_view
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_projection import PROJECTION_VERSION
 import clinical_urgency
 
@@ -23,7 +24,7 @@ def db(tmp_path):
 def _render(db, llm, rules=None):
     for kind, content in (("extract_llm", llm), ("extract_v1", rules or {})):
         db.artifact_add(kind, json.dumps(content), project_id=1, message_id=1,
-                        meta={"hash": "synthetic-hash"})
+                        meta={"hash": "synthetic-hash", VERSION_KEY: CURRENT_VERSION})
     return "\n".join(structured_view.structured_lines(db.db, 1))
 
 
@@ -148,7 +149,8 @@ def test_rule_fallback_skipped_when_llm_excluded_medication(db):
 
 def _fact_artifact(db, kind, content, chash="synthetic-hash"):
     db.artifact_add(kind, json.dumps(content), project_id=1, message_id=1,
-                    meta={"hash": chash, "projection_version": PROJECTION_VERSION})
+                    meta={"hash": chash, "projection_version": PROJECTION_VERSION,
+                          VERSION_KEY: CURRENT_VERSION})
 
 
 def test_current_projection_shadows_extract_llm(db):
@@ -255,7 +257,7 @@ def test_projected_findings_keep_qualifiers_before_full_text(db, kind, attrs, ma
         chunks=[{"chunk_id": "chunk-a", "core_atom_ids": ["atom-a"], "status": "done"}]))
     content = project_v2_doc_legacy(doc)
     db.artifact_add(kind, json.dumps(content), project_id=1, message_id=1,
-                    meta={"hash": "synthetic-hash", "engine_version": 4,
+                    meta={"hash": "synthetic-hash", "engine_version": 4, VERSION_KEY: CURRENT_VERSION,
                           "projection_version": PROJECTION_VERSION})
     text = "\n".join(structured_view.structured_lines(db.db, 1))
     assert marker in text and text.index(marker) < text.index(statement[:60])
@@ -286,12 +288,12 @@ def test_malformed_canonical_qualifiers_preserve_readable_finding(db, value):
 @pytest.mark.parametrize("kind", ["extract_v1", "extract_llm",
                                  "canonical_projection", "semantic_facts_v4"])
 def test_foreign_project_artifact_cannot_supply_structured_facts(db, kind):
-    # Preserve the reader's negative assertion against malformed legacy data.
+    # Make the generation current so project mismatch alone rejects the row.
     db.db.execute("DROP TRIGGER g1_artifacts_msg_ins")
     db.artifact_add(kind, json.dumps({"summary": "別患者の合成情報",
                                      "medications": [{"name": "別患者薬"}]}),
                     project_id=2, message_id=1,
-                    meta={"hash": "synthetic-hash", "engine_version": 4,
+                    meta={"hash": "synthetic-hash", "engine_version": 4, VERSION_KEY: CURRENT_VERSION,
                           "projection_version": PROJECTION_VERSION})
     assert structured_view.structured_lines(db.db, 1) == []
 
@@ -299,7 +301,8 @@ def test_foreign_project_artifact_cannot_supply_structured_facts(db, kind):
 def test_error_rule_artifact_cannot_supply_structured_facts(db):
     db.artifact_add("extract_v1", json.dumps({"symptoms": ["合成症状"]}),
                     project_id=1, message_id=1,
-                    meta={"hash": "synthetic-hash", "error": "synthetic failure"})
+                    meta={"hash": "synthetic-hash", VERSION_KEY: CURRENT_VERSION,
+                          "error": "synthetic failure"})
     assert structured_view.structured_lines(db.db, 1) == []
 
 
@@ -314,8 +317,19 @@ def test_canonical_finding_with_missing_id_does_not_break_render(db):
 
 def test_legacy_artifact_without_project_uses_message_scope(db):
     db.artifact_add("extract_llm", json.dumps({"summary": "旧形式の合成結果"}),
-                    message_id=1, meta={"hash": "synthetic-hash"})
+                    message_id=1, meta={"hash": "synthetic-hash", VERSION_KEY: CURRENT_VERSION})
     assert structured_view.structured_lines(db.db, 1) == ["旧形式の合成結果"]
+
+
+@pytest.mark.parametrize("kind", ["extract_v1", "extract_llm", "canonical_projection",
+                                 "semantic_facts_v4"])
+def test_missing_inference_version_does_not_supply_current_structured_facts(db, kind):
+    db.artifact_add(kind, json.dumps({"summary": "旧世代の合成結果",
+                                     "symptoms": ["旧世代の合成症状"]}),
+                    project_id=1, message_id=1,
+                    meta={"hash": "synthetic-hash", "engine_version": 4,
+                          "projection_version": PROJECTION_VERSION})
+    assert structured_view.structured_lines(db.db, 1) == []
 
 
 @pytest.mark.parametrize("field", ["summary", "points", "events", "labs",
@@ -421,9 +435,10 @@ def test_mixed_labs_preserve_total_limit(db):
 def test_empty_current_facts_do_not_restore_rule_events_or_vitals(db, kind):
     db.artifact_add("extract_v1", json.dumps({"events": ["eol", "media_ref"],
                                               "vitals": {"spo2": 10}}),
-                    project_id=1, message_id=1, meta={"hash": "synthetic-hash"})
+                    project_id=1, message_id=1,
+                    meta={"hash": "synthetic-hash", VERSION_KEY: CURRENT_VERSION})
     db.artifact_add(kind, "{}", project_id=1, message_id=1,
-                    meta={"hash": "synthetic-hash", "engine_version": 4,
+                    meta={"hash": "synthetic-hash", "engine_version": 4, VERSION_KEY: CURRENT_VERSION,
                           "projection_version": PROJECTION_VERSION})
     assert structured_view.structured_lines(db.db, 1) == ["区分: 添付"]
 
@@ -432,10 +447,11 @@ def test_empty_current_facts_do_not_restore_rule_events_or_vitals(db, kind):
 def test_absent_or_stale_facts_keep_rule_events_and_vitals(db, kind):
     db.artifact_add("extract_v1", json.dumps({"events": ["visit"],
                                               "vitals": {"hr": 72}}),
-                    project_id=1, message_id=1, meta={"hash": "synthetic-hash"})
+                    project_id=1, message_id=1,
+                    meta={"hash": "synthetic-hash", VERSION_KEY: CURRENT_VERSION})
     if kind is not None:
         db.artifact_add(kind, "{}", project_id=1, message_id=1,
-                        meta={"hash": "synthetic-stale", "engine_version": 4,
+                        meta={"hash": "synthetic-stale", "engine_version": 4, VERSION_KEY: CURRENT_VERSION,
                               "projection_version": PROJECTION_VERSION})
     assert structured_view.structured_lines(db.db, 1) == ["区分: 訪問", "バイタル: HR 72"]
 
@@ -452,15 +468,28 @@ def test_plain_summary_uses_one_fixed_order():
                        "区分: 依頼"]
 
 
+def test_current_valid_qc_verdict_can_report_disagreement(db):
+    source = db.artifact_add("extract_llm", json.dumps({"urgency": "high"}),
+                             project_id=1, message_id=1,
+                             meta={"hash": "synthetic-hash", VERSION_KEY: CURRENT_VERSION})
+    verdict = {"extracted": "high", "jev": "routine", "confidence": 0.99}
+    db.artifact_add("extract_qc", json.dumps({"urgency": verdict}),
+                    project_id=1, message_id=1,
+                    meta={"hash": "synthetic-hash", "source_artifact_id": source,
+                          VERSION_KEY: CURRENT_VERSION})
+    assert clinical_urgency.urgency_qc_disagreement(db.db, 1) == verdict
+    assert structured_view.urgency_qc_suffix(db.db, 1) == "（監査では通常判定）"
+
+
 @pytest.mark.parametrize("field", ["jev", "extracted"])
 @pytest.mark.parametrize("value", [[], {}, 7, True, "wrong-verdict"])
 def test_malformed_qc_verdict_never_stops_display_or_vetoes_urgency(db, field, value):
     source = db.artifact_add("extract_llm", json.dumps({"urgency": "high"}),
-        project_id=1, message_id=1, meta={"hash": "synthetic-hash"})
+        project_id=1, message_id=1, meta={"hash": "synthetic-hash", VERSION_KEY: CURRENT_VERSION})
     verdict = {"extracted": "high", "jev": "routine", "confidence": 0.99, field: value}
     db.artifact_add("extract_qc", json.dumps({"urgency": verdict}),
         project_id=1, message_id=1,
-        meta={"hash": "synthetic-hash", "source_artifact_id": source})
+        meta={"hash": "synthetic-hash", "source_artifact_id": source, VERSION_KEY: CURRENT_VERSION})
     assert clinical_urgency.urgency_qc_disagreement(db.db, 1) is None
     assert structured_view.urgency_qc_suffix(db.db, 1) == ""
 
@@ -493,6 +522,6 @@ def test_summary_starting_with_a_label_word_stays_in_the_summary_slot(db, summar
     db.artifact_add("extract_llm", json.dumps({
         "summary": summary, "points": ["合成の要点"], "events": ["visit"],
         "requests": [{"to": "医師", "action": "合成確認"}]}),
-        project_id=1, message_id=1, meta={"hash": "synthetic-hash"})
+        project_id=1, message_id=1, meta={"hash": "synthetic-hash", VERSION_KEY: CURRENT_VERSION})
     lines = structured_view.structured_lines(db.db, 1, plain=True)
     assert lines == [summary, "要点: 合成の要点", "依頼: 医師へ合成確認", "区分: 訪問"]
