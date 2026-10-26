@@ -636,7 +636,7 @@ class _CloudProvider:
         reserved_caps = {}
 
         def caps(settings):
-            return {k: settings[k] for k in ("daily_request_budget", "monthly_cost_limit_usd")}
+            return {k: settings[k] for k in ("daily_request_budget", "daily_cost_limit_usd", "monthly_cost_limit_usd")}
 
         def tightened(now):
             # a cap set or lowered after this attempt's reservation stops the send it
@@ -3959,7 +3959,8 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
         print(json.dumps({"carry_settled": settled, "ts": time.time()}), flush=True)
 
 
-_CLOUD_OPERATING_LIMITS = ("daily_request_budget", "monthly_cost_limit_usd", "max_concurrency", "usd_jpy")
+_CLOUD_OPERATING_LIMITS = ("daily_request_budget", "daily_cost_limit_usd", "monthly_cost_limit_usd",
+                           "max_concurrency", "usd_jpy")
 
 
 def _same_but_operating_limits(current, cfg):

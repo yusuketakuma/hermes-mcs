@@ -496,3 +496,19 @@ def test_scope_generation_ignores_caps_rate_and_currency():
                                            max_concurrency=2, usd_jpy=150))
     assert base != c.scope_generation(_cfg(exclude_project_ids=[1]))
     assert base != c.scope_generation(_cfg(mode="shadow"))
+
+
+def test_daily_cost_cap_stops_reservations_once_reached(tmp_path, now):
+    one = float(c.max_cost(100))
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        _reserve(db, _cfg(daily_cost_limit_usd=one))
+        with pytest.raises(AnthropicError, match="budget_exceeded"):
+            _reserve(db, _cfg(daily_cost_limit_usd=one), unit="second")
+        assert c.budget_block_reason(db, _cfg(daily_cost_limit_usd=one), max_tokens=100) == "daily_cost_cap"
+        _reserve(db, _cfg(daily_cost_limit_usd=one * 2 + 0.001), unit="third")
+
+
+@pytest.mark.parametrize("value", [-1, "5", True])
+def test_invalid_daily_cost_cap_turns_the_route_off(value):
+    settings, errors = c.cloud_config(_cfg(daily_cost_limit_usd=value))
+    assert errors and settings["mode"] == "off"

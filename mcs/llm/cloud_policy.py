@@ -48,7 +48,8 @@ def cloud_config(cfg, *, key_present=False):
     """Normalize the optional cloud block, failing closed on every config error."""
     out = {"mode": "off", "routes": list(ROUTES), "project_ids": [],
            "exclude_project_ids": [], "model": MODEL, "daily_request_budget": None,
-           "max_concurrency": 4, "monthly_cost_limit_usd": None, "usd_jpy": None}
+           "max_concurrency": 4, "daily_cost_limit_usd": None, "monthly_cost_limit_usd": None,
+           "usd_jpy": None}
     errors = []
     block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
     if block is None:
@@ -93,7 +94,7 @@ def cloud_config(cfg, *, key_present=False):
             errors.append(f"config: cloud_llm_{key}_invalid")
         else:
             out[key] = value
-    for key in ("monthly_cost_limit_usd", "usd_jpy"):
+    for key in ("daily_cost_limit_usd", "monthly_cost_limit_usd", "usd_jpy"):
         value = block.get(key)
         if value is None:
             continue
@@ -361,6 +362,12 @@ def budget_block_reason(ledger, cfg, *, max_tokens=1600):
         return "pricing_unverified"
     if c["daily_request_budget"] is not None and report["daily_requests"] >= c["daily_request_budget"]:
         return "daily_cap"
+    if c["daily_cost_limit_usd"] is not None:
+        today = report if limit is None else usage_report(ledger, period="day")
+        if today["pricing_unverified"]:
+            return "pricing_unverified"
+        if _decimal(today["monthly_cost_usd"]) + max_cost(max_tokens) > _decimal(c["daily_cost_limit_usd"]):
+            return "daily_cost_cap"
     if limit is not None and _decimal(report["monthly_cost_usd"]) + max_cost(max_tokens) > _decimal(limit):
         return "monthly_cap"
     return None

@@ -522,6 +522,66 @@ def command(args):
         return 1
 
 
+_BUDGET_KEYS = {"daily_usd": "daily_cost_limit_usd", "monthly_usd": "monthly_cost_limit_usd"}
+
+
+def _budget_value(text):
+    """A dollar amount >= 0, or none/off to remove that cap."""
+    if text.strip().lower() in ("none", "off", "null"):
+        return None
+    value = float(text)
+    if not math.isfinite(value) or value < 0:
+        raise ValueError
+    return value
+
+
+def budget_command(args):
+    """Show or set the Anthropic daily/monthly cost caps in config.json."""
+    from mcs_config import validate_config
+    import service_management
+    try:
+        changes = {}
+        for option, key in _BUDGET_KEYS.items():
+            text = getattr(args, option, None)
+            if text is not None:
+                changes[key] = _budget_value(text)
+    except ValueError:
+        print("予算: 金額はドル単位の0以上の数値、または none で指定してください")
+        return 1
+    # load_config() turns a missing or unreadable file into {}; writing that back
+    # would erase every other setting, so read the file strictly here.
+    try:
+        path = Path(mcs_util.CONF_PATH)
+        if path.is_symlink() or path.stat().st_size > mcs_util.CONFIG_MAX_BYTES:
+            raise ValueError
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(cfg, dict):
+            raise ValueError
+    except (OSError, ValueError, RecursionError):
+        print("予算: 設定ファイルを読み取れないため変更していません（先に mcs_setup.py init で設定してください）")
+        return 1
+    if changes:
+        block = dict(cfg.get("cloud_llm") or {})
+        for key, value in changes.items():
+            if value is None:
+                block.pop(key, None)
+            else:
+                block[key] = value
+        cfg = {**cfg, "cloud_llm": block}
+        errors, _ = validate_config(cfg)
+        cloud_errors = [e for e in errors if "cloud_llm" in e]
+        if cloud_errors:   # never write a config the runtime validator rejects
+            print("予算の設定に誤りがあるため保存していません: " + "; ".join(cloud_errors))
+            return 1
+        service_management.write_service_file(
+            mcs_util.CONF_PATH, json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True) + "\n", 0o600)
+    settings = policy.cloud_config(cfg)[0]
+    print(json.dumps({"daily_cost_limit_usd": settings["daily_cost_limit_usd"],
+                      "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
+                      "saved": bool(changes)}, ensure_ascii=False))
+    return 0
+
+
 def add_parsers(sub):
     p = sub.add_parser("cloud-llm", help="外部AIの件数・費用を送信せずに試算、照会します")
     actions = p.add_subparsers(dest="cloud_action", required=True)
@@ -532,6 +592,10 @@ def add_parsers(sub):
         if action == "log":
             q.add_argument("--project", type=int)
         q.set_defaults(fn=command)
+    q = actions.add_parser("budget", help="Anthropicの1日・1か月の費用上限（ドル）を表示・設定します")
+    q.add_argument("--daily-usd", dest="daily_usd", help="1日の上限（ドル）。none で解除")
+    q.add_argument("--monthly-usd", dest="monthly_usd", help="1か月の上限（ドル）。none で解除")
+    q.set_defaults(fn=budget_command, cloud_action="budget")
     for action in ("stop", "resume"):
         q = actions.add_parser(action, help="人の確認と記録を伴うクラウド処理の" + ("停止" if action == "stop" else "再開"))
         q.add_argument("--confirm-human", action="store_true")

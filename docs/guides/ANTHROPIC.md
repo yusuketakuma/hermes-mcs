@@ -39,8 +39,18 @@ Jevは日本時間の1日10000要求が上限です。再試行、モデル一�
 modeを明示した既存設定で予算を省略した場合は、従来どおり `0` です。
 500を超える設定でも実効上限は500です。評価CLIが通常のmodeを迂回する場合も、この件数上限を迂回しません。
 
-Anthropicには `cloud_llm.daily_request_budget` と `monthly_cost_limit_usd` を設定できます。
-どちらも未指定の場合、件数・月額の上限はありません。`max_concurrency` の既定値4はプロセスごとの上限です。
+Anthropicには、1日の件数 `cloud_llm.daily_request_budget`、1日の費用 `daily_cost_limit_usd`、1か月の費用 `monthly_cost_limit_usd`（費用はドル）を設定できます。
+いずれも未指定の場合、その上限はありません。費用の上限は、予約時の最大額で判定するため、実際の費用が上限より低くても先に止まることがあります。
+
+費用の上限は、次のコマンドで表示・設定できます。CodexやClaude Codeからもそのまま実行でき、値は `config.json` に保存されます。
+
+```bash
+python3 mcs/ops/mcs_setup.py cloud-llm budget                                   # 現在の上限を表示
+python3 mcs/ops/mcs_setup.py cloud-llm budget --daily-usd 2 --monthly-usd 40     # 上限を設定
+python3 mcs/ops/mcs_setup.py cloud-llm budget --daily-usd none                    # 1日の上限を解除
+```
+
+設定ファイルを読み取れない場合や、値が不正な場合は保存しません。`max_concurrency` の既定値4はプロセスごとの上限です。
 `usd_jpy` は円換算の試算に使う任意の固定レートで、自動更新しません。
 
 `config.json` の該当部分を編集する例です。既存設定全体をこの断片で置き換えないでください。
