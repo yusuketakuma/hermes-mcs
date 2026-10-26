@@ -39,6 +39,74 @@ def _view(items, coverage=None, *, source_bodies=None):
                                                  source_bodies=source_bodies)
 
 
+def _single(mid, name, value, unit, quote, *, condition=None, day="2026-10-01"):
+    posted = datetime(2026, 10, 3, tzinfo=timezone.utc).timestamp()
+    item = _item(mid, "observation_name", name, posted=posted, unit_text=quote)
+    fields = [("observation_name", name), ("value", value), ("unit", unit), ("measured_on", day)]
+    if condition is not None:
+        fields.append(("condition", condition))
+    item["details"] = [{"key": key, "value": val, "evidence": quote} for key, val in fields]
+    return item
+
+
+def test_unrecorded_conditions_are_visible_but_never_assumed_equal_across_posts():
+    a = _single(1, "Cr", "1.0", "mg/dL", "本人は2026-10-01の採血 Cr 1.0 mg/dL。")
+    b = _single(2, "Cr", "1.5", "mg/dL", "本人は2026-10-01の採血 Cr 1.5 mg/dL。")
+    known = _block(3, "2026-10-01")[0]
+    result = _view([known, b, a])
+    unspecified = [series for series in result["series"] if series["condition_status"] == "not_recorded"]
+    assert len(unspecified) == 2 and all(series["condition"] is None for series in unspecified)
+    assert all(len(series["records"]) == 1 for series in unspecified)
+    assert [series["condition"] for series in result["series"] if series["condition_status"] == "recorded"] == ["空腹"]
+
+
+@pytest.mark.parametrize("name,value,unit,quote", [
+    ("体温", "36.5", "℃", "本人は2026-10-01に測定した体温36.5℃。"),
+    ("SpO2", "96", "%", "本人は2026-10-01に測定したSpO2 96%。"),
+    ("脈拍", "72", "回/分", "本人は2026-10-01に測定した脈拍72回/分。"),
+    ("体温", "36.5", "℃", "本人は2026-10-01に体温36.5 ℃を測定しました。"),
+    ("SpO2", "97", "%", "本人は2026-10-01にSpO2 97 %を測定しました。"),
+])
+def test_source_bound_vital_with_unrecorded_condition_is_visible(name, value, unit, quote):
+    item = _single(1, name, value, unit, quote)
+    result = _view([item])
+    [series] = result["series"]
+    assert (series["name"], series["unit"], series["condition_status"]) == (name, unit, "not_recorded")
+    assert series["records"][0]["items"][0]["quote"] == quote
+    assert result["unconfirmed"] == []
+
+
+@pytest.mark.parametrize("quote", [
+    "本人は2026-10-01に受診し、その後に測定した体温36.5℃。",
+    "本人は2026-10-01に測定した脈拍72回/分、その後に体温36.5℃を測定。",
+])
+def test_other_event_date_does_not_date_a_vital_measurement(quote):
+    result = _view([_single(1, "体温", "36.5", "℃", quote)])
+    assert result["series"] == [] and result["unconfirmed"]
+
+
+def test_condition_must_describe_the_measurement_not_another_action():
+    unrelated = "本人は空腹時に薬を服用し、2026-10-01の食後採血 Cr 1.0 mg/dL。"
+    recorded = "本人は2026-10-01の空腹時の採血 Cr 1.0 mg/dL。"
+    result = _view([_single(1, "Cr", "1.0", "mg/dL", unrelated, condition="空腹")])
+    assert result["series"] == [] and result["unconfirmed"]
+    result = _view([_single(2, "Cr", "1.0", "mg/dL", recorded, condition="空腹")])
+    assert len(result["series"]) == 1 and result["series"][0]["condition"] == "空腹"
+
+
+@pytest.mark.parametrize("name,value,unit,quote", [
+    ("SpO2", "2", "%", "本人は2026-10-01に測定、酸素2LでSpO2 96%。"),
+    ("体温", "36.5", "℃", "本人は2026-10-01に測定した体温36.5℃、体温37℃。"),
+    ("体温", "36.5", "℃", "家族は2026-10-01に測定した体温36.5℃。"),
+    ("体温", "36.5", "℃", "本人は2026-10-01の体温36.5℃を測定していません。"),
+])
+def test_flow_multiple_readings_family_and_negation_do_not_form_a_series(name, value, unit, quote):
+    item = _single(1, name, value, unit, quote)
+    result = _view([item])
+    assert result["series"] == [] and result["unconfirmed"]
+    assert quote not in str(result)
+
+
 def test_series_keeps_posting_order_source_values_and_measured_date_separate():
     old = _block(1, "2026-09-01", posted=datetime(2026, 10, 1, tzinfo=timezone.utc).timestamp())
     new = _block(2, "2026-10-02", value="1.5")

@@ -986,7 +986,8 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
             head.append("原文の照合は一部のみ完了")
         for series in view["series"]:
             date_label = {"measured_on": "測定日", "observed_on": "観察日"}[series["event_date_kind"]]
-            group = f"{series['name']} · {series['unit']} · {series['condition']} · {date_label}の記載"
+            condition = series["condition"] if series["condition"] else "条件の記載なし"
+            group = f"{series['name']} · {series['unit']} · {condition} · {date_label}の記載"
             for record in series["records"]:
                 add([{**item, "event_date_kind": record["event_date_kind"],
                       "event_date_text": record["event_date_text"]} for item in record["items"]], group)

@@ -3,15 +3,21 @@ from datetime import datetime, timedelta, timezone
 import math
 import re
 
-from clinical_values import lab_candidate, written_day
+from clinical_values import (_FLOW_AFTER, _nearest_vital_label, _vital_numbers, grounded_vitals,
+                             lab_candidate, written_day)
 from patient_context_state import paired_date_conflict
 
 _FIELDS = ("observation_name", "value", "unit", "condition", "measured_on", "observed_on", "last_confirmed_on")
 _RISK = re.compile(r"未確認|未確定|不明|疑い|かもしれ|未測定|未実施|未検査|ない|なし|無し|なく|"
-                   r"ありません|認めず|認めません|否定|せず|予定|計画|見込み|明日|翌日")
+                   r"ありません|認めず|認めません|否定|せず|予定|計画|見込み|明日|翌日|または|あるいは")
 _JST = timezone(timedelta(hours=9))
 _PATIENT = re.compile(r"(?:ご本人|本人|患者(?:本人|さん|様)?|利用者(?:本人|さん|様)?)(?:の|は|が|を|に|へ|も|、|，|:|：|\s|$)")
 _OTHER = re.compile(r"家族|母|父|他者|友人|夫|妻|息子|娘|配偶者|同居人")
+_CONDITION_CUE = re.compile(r"空腹|食前|食後|安静|起立|臥位|坐位|座位|室内気|酸素投与|酸素\s*\d")
+_VITAL_NAMES = {"体温": "bt", "bt": "bt", "spo2": "spo2", "酸素飽和度": "spo2",
+                "脈拍": "hr", "心拍": "hr", "hr": "hr", "呼吸数": "rr", "rr": "rr"}
+_VITAL_UNITS = {"bt": ("℃",), "spo2": ("%", "％"), "hr": ("回/分", "回／分"),
+                "rr": ("回/分", "回／分")}
 
 
 def _subject(item):
@@ -50,8 +56,12 @@ def _supported_item(item, values, date_kind):
     quote = item.get("quote")
     if not isinstance(quote, str) or _OTHER.search(quote):
         return False
-    wanted = {field: next(iter(values[field])) for field in
-              ("observation_name", "value", "unit", "condition", date_kind)}
+    wanted = {field: next(iter(values[field])) for field in ("observation_name", "value", "unit", date_kind)}
+    condition = next(iter(values["condition"])) if values["condition"] else None
+    if condition is not None:
+        wanted["condition"] = condition
+    elif _CONDITION_CUE.search(quote):
+        return False
     details = item.get("details") or []
     if any(not any(isinstance(d, dict) and d.get("key") == key and d.get("value") == value
                        and isinstance(d.get("evidence"), str) and d["evidence"] in quote
@@ -68,10 +78,47 @@ def _supported_item(item, values, date_kind):
     if (person is None or clause.find(wanted["observation_name"]) < person.end()
             or any(value not in clause for value in wanted.values())):
         return False
+    if condition is not None:
+        marker = r"(?:採血|検査|測定|計測|観測|観察)"
+        # shortcut: unlisted conditions stay unconfirmed, expand only with source-bound grammar.
+        if not re.fullmatch(r"(?:空腹|食前|食後|安静|起立|臥位|坐位|座位|室内気|酸素投与)"
+                            r"(?:時|下)?(?:の)?(?:採血|検査|測定|計測|観測|観察)?", condition):
+            return False
+        link = r"(?:時)?(?:の|に|で)?" + marker if not re.search(marker + r"$", condition) else ""
+        if not re.search(re.escape(condition) + link + r"(?:の結果は|した|の|は|が)?\s*"
+                         + re.escape(wanted["observation_name"]), clause, re.I):
+            return False
+    if re.fullmatch(r"\d+(?:[.．]\d+)?", wanted["value"]):
+        numbers = re.findall(r"(?<![\d.．])\d+(?:[.．]\d+)?\s*" + re.escape(wanted["unit"]), clause)
+        if len(numbers) != 1:
+            return False
+    key = _VITAL_NAMES.get(wanted["observation_name"].casefold())
+    if key is not None:
+        day = re.escape(wanted[date_kind])
+        marker = r"(?:測定|計測|観測|観察)"
+        name = re.escape(wanted["observation_name"])
+        date_first = day + r"\s*(?:に|の)?\s*" + marker + r"(?:した|の)?\s*" + name
+        value_first = (day + r"\s*(?:に|の)\s*" + name + r"\s*" + re.escape(wanted["value"])
+                       + r"\s*" + re.escape(wanted["unit"]) + r"\s*を?\s*" + marker)
+        if not re.search(date_first + "|" + value_first, clause, re.I):
+            return False
     candidate = lab_candidate(wanted["observation_name"], wanted["value"], wanted["unit"], clause,
-                              subject="patient", measured_on=wanted[date_kind], condition=wanted["condition"])
-    return (candidate["confirmation"] == "quote_supported"
-            and candidate["measured_on"] == wanted[date_kind])
+                              subject="patient", measured_on=wanted[date_kind], condition=condition)
+    if candidate["confirmation"] == "quote_supported" and candidate["measured_on"] == wanted[date_kind]:
+        return True
+    unit, value = wanted["unit"], wanted["value"]
+    if (key is None or unit not in _VITAL_UNITS[key] or not re.fullmatch(r"\d+(?:[.．]\d+)?", value)
+            or not re.search(r"測定|計測|観測|観察", clause)
+            or written_day(clause) != ("ymd", written_day(wanted[date_kind])[1])):
+        return False
+    number = float(value.replace("．", "."))
+    if not math.isfinite(number) or number > 1e20:
+        return False
+    hits = [m for m in _vital_numbers(clause) if _nearest_vital_label(clause, *m.span()) == key
+            and not _FLOW_AFTER.match(clause, m.end())]
+    return (len(hits) == 1 and float(hits[0][0].replace("．", ".")) == number
+            and clause[hits[0].end():].lstrip().startswith(unit)
+            and grounded_vitals(clause, {key: number}) == {key: number})
 
 
 def _reference(item):
@@ -171,7 +218,8 @@ def observation_series(ev, *, source_bodies=None):
                      and isinstance(item.get("content_hash"), str)
                      and re.fullmatch(r"[0-9a-f]{64}", item["content_hash"])
                      and isinstance(item.get("quote"), str) and item["quote"] for item in items)
-                 and all(len(values[field]) == 1 for field in ("observation_name", "value", "unit", "condition"))
+                 and all(len(values[field]) == 1 for field in ("observation_name", "value", "unit"))
+                 and len(values["condition"]) <= 1
                  and date_kind in ("measured_on", "observed_on") and day is not None and posted is not None
                  and day <= posted and not conflicted
                  and all(_whole_statement(item, source_bodies) for item in items)
@@ -188,12 +236,16 @@ def observation_series(ev, *, source_bodies=None):
             continue
         record = {"items": [_visible_item(item) for item in items], "event_date_kind": date_kind, "event_date_text": date_text,
                   "posted_at_ts": items[0].get("posted_at_ts"), "relation": "as_written"}
-        identity = (*tuple(next(iter(values[field])) for field in ("observation_name", "unit", "condition")),
-                    date_kind)
+        condition = next(iter(values["condition"])) if values["condition"] else None
+        # Missing recorded conditions do not prove that two observations had
+        # the same condition, so retain each source as its own series.
+        separate = None if condition is not None else (items[0]["message_id"], items[0]["content_hash"], key)
+        identity = (next(iter(values["observation_name"])), next(iter(values["unit"])), condition, date_kind, separate)
         if identity not in identities:
             identities[identity] = len(series)
             series.append({"subject": "patient", "name": identity[0], "unit": identity[1],
-                           "condition": identity[2], "event_date_kind": identity[3], "records": []})
+                           "condition": identity[2], "condition_status": "recorded" if condition else "not_recorded",
+                           "event_date_kind": identity[3], "records": []})
         series[identities[identity]]["records"].append(record)
     return {"view": "observation_series", "series": series, "unconfirmed": unconfirmed,
             "scope_valid": True, "scope_rejected": rejected,

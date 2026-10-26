@@ -13,13 +13,13 @@ from semantic_testkit import _message
 from test_read_model import _artifact, _db, _hash_of
 
 
-def seed(db, mid, body, evidence=None):
+def seed(db, mid, body, evidence=None, *, name="Cr", value="1.0", unit="mg/dL", condition="空腹"):
     msg = replace(_message(mid, body=body), posted_at="2026-10-03T09:00:00+09:00")
     db.save_messages([msg], project_id=1)
     quote = evidence or body
-    details = [{"key": key, "value": value, "evidence": quote} for key, value in (
-        ("observation_name", "Cr"), ("value", "1.0"), ("unit", "mg/dL"),
-        ("condition", "空腹"), ("measured_on", "2026-10-01"))]
+    details = [{"key": key, "value": item_value, "evidence": quote} for key, item_value in (
+        ("observation_name", name), ("value", value), ("unit", unit),
+        ("condition", condition), ("measured_on", "2026-10-01")) if item_value is not None]
     item = {"category": "observations", "subject": "patient", "text": quote,
             "evidence": quote, "details": details}
     _artifact(db, "extract_llm", mid, {"patient_context": [item]}, {"hash": _hash_of(db, mid)})
@@ -89,3 +89,19 @@ def test_changed_original_and_limited_source_checks_remain_unconfirmed(ctx):
     changed = views.observations(ctx.db, ev)
     assert changed["source_checks"]["unavailable"] == 1
     assert all(record["items"][0]["message_id"] != 2 for series in changed["series"] for record in series["records"])
+
+
+@pytest.mark.parametrize("body,name,value,unit", [
+    ("本人は2026-10-01に採血 Cr 1.0 mg/dL。", "Cr", "1.0", "mg/dL"),
+    ("本人は2026-10-01に体温36.5 ℃を測定しました。", "体温", "36.5", "℃"),
+    ("本人は2026-10-01にSpO2 97 %を測定しました。", "SpO2", "97", "%"),
+])
+def test_condition_absent_lab_and_vitals_are_displayed_as_written(ctx, body, name, value, unit):
+    seed(ctx, 1, body, name=name, value=value, unit=unit, condition=None)
+    ev = views.evidence(ctx.db, 1, cfg={})
+    result = views.observations(ctx.db, ev)
+    assert len(result["series"]) == 1
+    assert result["series"][0]["condition"] is None
+    display = notify_views.patient_context_list(ctx.db, 1, "observations", cfg={}, since=0, now=1_790_000_000)
+    assert any(body in row["text"] and "条件の記載なし" in row["group"] for row in display["items"])
+    assert "None" not in str(display)
