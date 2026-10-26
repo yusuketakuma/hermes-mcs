@@ -9,15 +9,16 @@ from message_observations import observation_timestamp
 from stamp_contract import STAMP_EMOJI
 
 def stamp_counts(metadata) -> dict | None:
-    """{emoji: count} in STAMP_EMOJI order, excluding one's own stamp on
-    every post (owner 2026-10-26). None when unfetched or invalid."""
+    """{emoji: count} in STAMP_EMOJI order — for one's own post the
+    count excludes one's own stamp. None when unfetched or invalid."""
     reactions = metadata["reactions"]
     if reactions is None:
         return None
+    own = metadata.get("own_post")
     out: dict = {}
     for r in sorted(reactions, key=lambda r: list(STAMP_EMOJI).index(r["type"])
                     if r["type"] in STAMP_EMOJI else len(STAMP_EMOJI)):
-        n = r["count"] - (1 if r["self_reacted"] else 0)
+        n = r["count"] - (1 if own and r["self_reacted"] else 0)
         if n > 0:
             e = STAMP_EMOJI.get(r["type"], "❔")
             out[e] = out.get(e, 0) + n
@@ -86,8 +87,8 @@ def thread_stamp_line(metadata, summary=None, *, observed_time=True) -> str:
     names: dict = {}
     if observation_timestamp(summary.get("complete_at")) is not None:
         for a in summary.get("actors") or []:
-            if a.get("self"):
-                continue          # never listed on any post: the stamp menu shows it
+            if a.get("self") and metadata.get("own_post"):
+                continue          # one's own post counts others only
             names.setdefault(STAMP_EMOJI.get(a["reaction_type"], "❔"), []).append(
                 _actor_text(a["name"], 40) or "氏名不明")
     parts, shown = [], 0

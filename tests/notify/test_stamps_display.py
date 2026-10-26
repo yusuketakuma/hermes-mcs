@@ -78,15 +78,19 @@ def test_own_post_text_counts_others_and_keeps_unfetched_distinct(led):
     assert own().startswith("スタンプ なし · ") and "自分" not in own()
 
 
-def test_own_stamp_is_not_listed_and_alone_shows_no_row(led):
-    """The stamp menu already shows one's own stamp (owner 2026-10-26)."""
+def test_own_stamp_is_not_listed_and_alone_shows_a_row_only_on_others_posts(led):
+    """The stamp menu already shows one's own stamp (owner 2026-10-26); on
+    another's post it still counts, even alone (owner 2026-10-27)."""
     _patient(led)
+    _self_known(led)
     _msg(led, 100)
     _meta(led, 100, reactions=[_r("viewed", 1, True)])
-    assert notify_render.thread_stamp_row(led.db, 100, OTHER) == ""
+    assert notify_render.thread_stamp_row(led.db, 100, SELF) == ""
+    alone = notify_render.thread_stamp_row(led.db, 100, OTHER)
+    assert alone.startswith("スタンプ 👀1 · ") and "自分" not in alone
     _meta(led, 100, reactions=[_r("viewed", 2, True), _r("thanked", 1)])
     row = notify_render.thread_stamp_row(led.db, 100, OTHER)
-    assert row.startswith("スタンプ 👀1 🙏1 · ") and "自分" not in row
+    assert row.startswith("スタンプ 👀2 🙏1 · ") and "自分" not in row
 
 
 def test_card_footer_uses_sender_id_not_same_name(led):
@@ -99,12 +103,12 @@ def test_card_footer_uses_sender_id_not_same_name(led):
     _dispatch(led, _intent(led, payload={"message_ids": [100, 101]}))
     footer = "\n".join(i["text"] for i in
                        notify_render.card_content(led.db, _card(led))["footer"])
-    # one's own stamp is excluded on both posts (1 each)
-    assert "スタンプ 👀2 · 自分 2投稿" in footer
+    # own post counts others only (1), the other's post counts both (2)
+    assert "スタンプ 👀3 · 自分 2投稿" in footer
     body = notify_render.card_body_text(
         led.db, _card(led), {"shown": "[100, 101]"}, max_chars=None)[1]
     own, other = body.split("\n\n")
-    assert "スタンプ 👀1 · " in own and "スタンプ 👀1 · " in other
+    assert "スタンプ 👀1 · " in own and "スタンプ 👀2 · " in other
 
 
 def test_unreacted_own_posts_section_only_when_published(led):
@@ -361,7 +365,7 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
     body = notify_render.card_body_text(
         led.db, _card(led), {"shown": "[100, 101]"}, max_chars=None)[1]
     for post, mid, stamps in zip(body.split("\n\n"), (100, 101),
-                                 ("スタンプ 🙆1 👍1 · ",   # one's own 🙆 is not counted
+                                 ("スタンプ 🙆2 👍1 · ",
                                   "スタンプ 未取得")):
         lines = post.split("\n")
         assert lines[1] == f"・要約{mid}"
@@ -478,7 +482,7 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
     assert _dispatch(led, _intent(led), cfg)["dispatched"]
     spec = json.loads(_latest_render(led)["spec_json"])
     footer = "\n".join(item["text"] for item in spec["parts"]["footer"] if item["type"] == "text")
-    assert ("スタンプ 👀2 · 自分 2投稿" in footer) == (platform == "lineworks")
+    assert ("スタンプ 👀3 · 自分 2投稿" in footer) == (platform == "lineworks")
     assert "MCS 👀" not in footer
     assert "合成本人" not in footer and "合成他者" not in footer
     if platform == "slack":
@@ -496,10 +500,10 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
                 (card, None)]:
             fallback_footer = "\n".join(item["text"] for item in
                 notify_render.card_content(led.db, fallback, cfg=fallback_cfg)["footer"])
-            assert "スタンプ 👀2 · 自分 2投稿" in fallback_footer
+            assert "スタンプ 👀3 · 自分 2投稿" in fallback_footer
             assert "再取得失敗" in fallback_footer
         blocks = slack_cards.render(spec)[1]
-        assert not any("スタンプ 👀2" in element.get("text", "") for block in blocks
+        assert not any("スタンプ 👀3" in element.get("text", "") for block in blocks
                    for element in block.get("elements", []))
         stamp_context = [element for block in blocks if block["type"] == "context"
                          for element in block["elements"] if "スタンプ" in element["text"]]
@@ -514,14 +518,14 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
                  for child in container.children]
         # per-post rows on the face (no folded original); the total is hidden
         assert [p.keys() for p in spec["parts"]["discord"]["face_posts"]] == [{"at", "stamps"}] * 2
-        assert not any("スタンプ 👀2" in t for t in texts)
+        assert not any("スタンプ 👀3" in t for t in texts)
         assert sum(t.count("-# スタンプ 👀") for t in texts) == 2
         assert "合成他者100" in "\n".join(texts) and "再取得失敗" in "\n".join(texts)
     else:
         shown = lineworks_cards.render(spec)
         visible = (shown["contents"]["body"]["contents"][0]["text"]
                    if shown["type"] == "flex" else shown.get("contentText", shown.get("text", "")))
-        assert "スタンプ 👀2" in visible
+        assert "スタンプ 👀3" in visible
 
     calls = []
 
@@ -578,9 +582,12 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
         assert front.index("要約 処理待ち") < front.index("スタンプ")
         assert "スタンプ" not in tail
 
-        assert "合成本人" not in post
-        # one's own stamp is neither counted nor named on any post
-        assert f"スタンプ 👀1 合成他者{mid}＜＠UFAKE＞" in post
+        assert f"合成本人{201 - mid}" not in post
+        if mid == 100:
+            # one's own post counts and names others only
+            assert "スタンプ 👀1 合成他者100＜＠UFAKE＞" in post
+        else:
+            assert "スタンプ 👀2 合成本人101・合成他者101＜＠UFAKE＞" in post
         assert ("投稿時点" in post) is (platform == "lineworks")
         assert "時点" in post
     for _, kwargs in calls:

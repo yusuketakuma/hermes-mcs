@@ -1012,11 +1012,7 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
         else:
             stamp = (thread_stamp_line(meta, actors, observed_time=stamp_time)
                      if stamp_counts(meta) != {} or meta["last_error"] else "")
-            # one's own stamp is in no count or name, so it joins the
-            # fingerprint here: pressing it again re-renders the menu's ✓;
-            # posts without one keep their stored fingerprint
-            own = self_stamps(meta)
-            reactions.append((mid, actor_line(actors) if stamp_time else "", stamp) + ((own,) if own else ()))
+            reactions.append((mid, actor_line(actors) if stamp_time else "", stamp))
     actor_fp = payload_hash(reactions)
     content = {"containers": containers, "footer": footer,
             "shown": shown, "shown_kind": shown_kind,
@@ -1161,7 +1157,7 @@ def card_reactions(db, card, shown=None) -> list:
 
 def card_reaction_lines(reactions) -> list:
     """The card face's single stamp line: emoji totals over the shown
-    posts (one's own stamp never counted), how many posts carry
+    posts (one's own posts count others only), how many posts carry
     one's own stamp, and how many are still unfetched. Per-post detail
     lives in each post's thread message, keeping the face short."""
     if not reactions:
