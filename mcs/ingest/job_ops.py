@@ -248,8 +248,8 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                 # A deeper request must revisit the old cutoff page: rows
                 # below that cutoff were filtered out before persistence.
                 existing = ledger.history_job(req["project_id"])
-                if existing is None:
-                    existing = dict(stopped) if stopped is not None else None
+                if existing is None and restart_initial:
+                    existing = dict(stopped)
                 if existing:
                     try:
                         pl = loads_dict(existing["payload"] or "{}")
@@ -260,7 +260,7 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                                         reason_code="invalid_payload")
                         existing = None
                 if existing:
-                    if existing["state"] == "failed" and existing["reason_code"] == "window_stalled":
+                    if restart_initial:
                         history_walk.restart_failed(pl)
                     if since < pl["since"]:
                         pl["page"] = 1

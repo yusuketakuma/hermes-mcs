@@ -47,6 +47,30 @@ def test_deeper_single_page_command_restarts_and_imports_old_cutoff_gap(tmp_path
         ledger.close()
 
 
+@pytest.mark.parametrize('days',[7,30])
+def test_stopped_ordinary_import_uses_new_request_payload_and_retry_budget(tmp_path,monkeypatch,days):
+    now = 10_000_000
+    monkeypatch.setattr(job_ops.time,'time',lambda:now)
+    monkeypatch.setattr(notify_spool,'restore_awaiting_consent',lambda path:None)
+    with closing(Ledger(str(tmp_path/'synthetic-stopped.db'))) as store:
+        store.ensure_patient(1)
+        store.job_add('history',1,payload={'since':now-14*86400,'page':4,'pages':99,'stalls':8,'trickle':True})
+        job = store.job_pending('history',1)
+        store.job_fail(job['job_id'],reason_code='window_stalled')
+        with store.db:
+            store.db.execute('UPDATE fetch_jobs SET attempts=2 WHERE job_id=?',(job['job_id'],))
+        commands = tmp_path/'cmd'
+        commands.mkdir()
+        (commands/'ordinary.json').write_text(json.dumps({'cmd':'import','project_id':1,'days':days,'pages':1}))
+        result = {'errors':[]}
+        job_ops.drain_commands(store,result,str(commands))
+        restarted = store.job_pending('history',1)
+        assert result['errors'] == [] and restarted['job_id'] == job['job_id']
+        assert restarted['attempts'] == 0 and restarted['reason_code'] is None
+        assert store.job_payload('history',1) == {'since':now-days*86400,'page':1,'pages':1,'cmd':'ordinary.json'}
+        assert not (commands/'ordinary.json').exists()
+
+
 # init_data: a deeper --since after a finished shallower walk must
 # re-walk from page 1 so the gap is fetched before the floor deepens.
 NOW = time.time()

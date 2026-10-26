@@ -66,6 +66,33 @@ def _checkpoint(deadline, rows=0):
         raise ValueError("observation_budget_exceeded")
 
 
+def _dryrun_report(db, deadline, now):
+    fields = ("requests", "input_chars", "estimated_input_tokens", "estimated_output_tokens")
+    start = now - 62 * 86400
+    days = {}
+    for n, row in enumerate(db.execute(
+            "SELECT created_at,model,meta FROM artifacts WHERE kind='cloud_usage_dryrun' "
+            "AND created_at>=? ORDER BY artifact_id LIMIT ?",
+            (start, READ_ROWS + 1)), 1):
+        _checkpoint(deadline, n)
+        meta = mcs_util.loads_dict(row["meta"])
+        if (not isinstance(meta, dict) or meta.get("route") not in policy.ROUTES
+                or row["model"] != policy.MODEL
+                or type(row["created_at"]) not in (int, float)
+                or not math.isfinite(row["created_at"]) or not start <= row["created_at"] <= now
+                or any(type(meta.get(k)) is not int or not 0 <= meta[k] <= 2**53 for k in fields)):
+            raise ValueError("dryrun_observation_invalid")
+        day = datetime.fromtimestamp(row["created_at"], policy.JST).date().isoformat()
+        item = days.setdefault(day, {"day": day, "units": 0, **dict.fromkeys(fields, 0)})
+        item["units"] += 1
+        for field in fields:
+            item[field] += meta[field]
+    _checkpoint(deadline)
+    return {"observed_at": now, "since": start, "timezone": "Asia/Tokyo",
+            "input_estimate_basis": "character_proxy", "output_estimate_basis": "request_ceiling",
+            "days": [days[day] for day in sorted(days)]}
+
+
 def diagnostics(cfg, *, root=None, probe=False):
     """Return only effective modes, key presence, budgets and optional safe accounting."""
     cloud, errors, key = _settings(cfg, root)
@@ -83,16 +110,22 @@ def diagnostics(cfg, *, root=None, probe=False):
                 "monthly_cost_limit_usd": cloud["monthly_cost_limit_usd"],
                 "scope": "all" if cloud["project_ids"] is None else "none" if not cloud["project_ids"] else "selected",
                 "price_version": policy.PRICE_VERSION, "price_valid": policy.pricing_valid(),
-                "accounting": None, "block_reason": None}}
+                "accounting": None, "dry_run": None, "block_reason": None}}
+    eligible_scope = cloud["project_ids"] is None or bool(set(cloud["project_ids"]) - set(cloud["exclude_project_ids"]))
+    if (not errors and not key and cloud["mode"] in ("on", "shadow")
+            and cloud["routes"] and eligible_scope):
+        out["anthropic"].update(status="warning", block_reason="no_api_key")
     if probe:
         try:
-            with _reader(root) as (db, _):
+            with _reader(root) as (db, deadline):
                 borrowed = SimpleNamespace(db=db)
                 out["anthropic"]["accounting"] = policy.usage_report(borrowed)
+                out["anthropic"]["dry_run"] = _dryrun_report(db, deadline, time.time())
                 reason = policy.global_block_reason(borrowed) or policy.budget_block_reason(borrowed, cloud)
-                out["anthropic"]["block_reason"] = reason
-                if reason:
-                    out["anthropic"]["status"] = "blocked"
+                if reason == "paused":
+                    out["anthropic"].update(status="local", block_reason=reason)
+                elif reason:
+                    out["anthropic"].update(status="blocked", block_reason=reason)
         except (OSError, ValueError, sqlite3.Error):
             out["anthropic"]["status"] = "unknown"
     return out

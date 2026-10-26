@@ -284,14 +284,18 @@ def cloud_stop_reason(db, cfg) -> str | None:
     """Observe a configured provider's durable stop without probing it or reading source bodies."""
     from types import SimpleNamespace
     import cloud_policy
-    if not cloud_policy.api_key():
-        return None
-    settings, errors = cloud_policy.cloud_config(cfg, key_present=True)
+    key_present = bool(cloud_policy.api_key())
+    settings, errors = cloud_policy.cloud_config(cfg, key_present=key_present)
     if (errors or settings["mode"] not in ("on", "shadow")
-            or not settings["routes"] or settings["project_ids"] == []):
+            or not settings["routes"] or settings["project_ids"] is not None
+            and not set(settings["project_ids"]) - set(settings["exclude_project_ids"])):
         return None
     reason = cloud_policy.global_block_reason(SimpleNamespace(db=db))
-    if reason in (None, "paused"):
+    if reason == "paused":
+        return None
+    if not key_present:
+        return "no_api_key"
+    if reason is None:
         return None
     return reason if reason in ("auth_error", "payment_required", "pricing_unverified") else "circuit_open"
 
