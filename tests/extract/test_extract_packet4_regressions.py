@@ -14,6 +14,7 @@ import pytest
 import extract
 import extract_bench
 import extract_llm
+import inference_version
 import rollup
 import structured_view
 from semantic_projection import PROJECTION_VERSION
@@ -127,10 +128,11 @@ def test_qualitative_lab_prefix_does_not_confirm_a_different_result(db, suffix):
     assert lab["unverified"] is True
     assert lab["normalized"]["confirmation"] == "unverified"
     db.save_messages([_message(body=body)])
-    # An old artifact may claim confirmation: the shared view rechecks the quote.
+    # A stored artifact may claim confirmation: the shared view rechecks the quote.
     db.artifact_add("extract_llm", json.dumps({"labs": [{**raw, "normalized": {
         "confirmation": "quote_supported"}}]}), project_id=1, message_id=1,
-        meta={"hash": _hash(db), "extract_version": extract_llm.EXTRACT_VERSION})
+        meta={"hash": _hash(db), "extract_version": extract_llm.EXTRACT_VERSION,
+              inference_version.VERSION_KEY: inference_version.CURRENT_VERSION})
     lines = structured_view.structured_lines(db.db, 1)
     qualifier = "(条件・可能性の記載)" if suffix == "かもしれません" else ""
     assert "検査候補（未確認）: 合成検査Q 陰性" + qualifier in lines
