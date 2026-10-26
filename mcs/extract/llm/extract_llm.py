@@ -48,7 +48,7 @@ import semantic_quantities
 import semantic_transport
 import semantic_loops
 import semantic_assessment
-import patient_nightly_plan
+import patient_context_plan
 import semantic_jev
 import semantic_runtime
 import semantic_projection
@@ -65,6 +65,10 @@ import llm_availability  # noqa: E402
 import self_identity  # noqa: E402
 import safe_io  # noqa: E402
 import bounded_http
+import anthropic_client
+import cloud_policy
+import llm_retry
+import mcs_config
 import clinical_values
 import clinical_urgency
 import clinical_scope
@@ -77,7 +81,9 @@ import extract
 from clinical_chunking import PLAN_VERSION, plan_chunks
 import local_llm
 import patient_context
+import patient_context_refresh
 import mcs_queries
+import mcs_util
 import semantic_assembly
 import semantic_facts
 import patient_state_context
@@ -115,6 +121,12 @@ PATIENT_CONTEXT_VERSION = 4
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
     for name, path in (("extract_llm", __file__),
+                       ("anthropic_client", anthropic_client.__file__),
+                       ("cloud_policy", cloud_policy.__file__),
+                       ("llm_retry", llm_retry.__file__),
+                       ("mcs_config", mcs_config.__file__),
+                       ("mcs_util", mcs_util.__file__),
+                       ("bounded_http", bounded_http.__file__),
                        ("writer_lock", writer_lock.__file__),
                        ("semantic_store", semantic_store.__file__),
                        ("semantic_notice", semantic_notice.__file__),
@@ -126,7 +138,8 @@ _LOADED_SOURCE_DIGESTS = {
                        ("semantic_projection", semantic_projection.__file__),
                        ("semantic_runtime", semantic_runtime.__file__),
                        ("semantic_jev", semantic_jev.__file__),
-                       ("patient_nightly_plan", patient_nightly_plan.__file__),
+                       ("patient_context_plan", patient_context_plan.__file__),
+                       ("patient_context_refresh", patient_context_refresh.__file__),
                        ("semantic_transport", semantic_transport.__file__),
                        ("semantic_loops", semantic_loops.__file__),
                        ("semantic_assessment", semantic_assessment.__file__),
@@ -595,10 +608,115 @@ def _integrity_summary(notes: list) -> dict:
     return summary
 
 
+class CloudFallback(Exception):
+    """Discard this provider's unit and retry under the local contract."""
+
+
+class _CloudProvider:
+    """Bind one unit's guarded HTTP attempts to the ledger's owning thread."""
+
+    def __init__(self, ledger, cfg, *, route, project_id, unit_key, deadline,
+                 current, dispatch, message_id=None, owner=None, discard_reason=None):
+        cfg = {**cfg, "cloud_llm": _cloud_settings(cfg)}
+        self.model = cfg["cloud_llm"]["model"]
+        self.contract = _cloud_contract(cfg)
+        generation = cloud_policy.config_generation(cfg)
+        updater = writer_lock.updater_state()
+        key = cloud_policy.api_key(HOME)
+        self.dispatch = dispatch
+
+        def guard():
+            if (time.monotonic() >= deadline or writer_lock.updater_state() != updater
+                    or updater[0] or cloud_policy.api_key(HOME) != key
+                    or cloud_policy.config_generation({"cloud_llm": _cloud_settings(load_config())}) != generation
+                    or cloud_policy.block_reason(ledger, _cloud_settings(load_config()), route, project_id)
+                    or not current()):
+                raise CloudFallback("cloud_unit_changed")
+        self.guard = lambda: dispatch(guard)
+        reserve = cloud_policy.usage_reserver(ledger, cfg, route=route,
+            project_id=project_id, unit_key=unit_key, message_id=message_id, owner=owner)
+        self.reserve = lambda body, timeout: dispatch(lambda: reserve(body, timeout))
+        def record(reservation, metadata):
+            def write():
+                try:
+                    guard()
+                except CloudFallback:
+                    outcome = {**metadata, "disposition": discard_reason() if discard_reason else "discarded_scope"}
+                else:
+                    outcome = dict(metadata)
+                return cloud_policy.record_result(ledger, reservation, outcome)
+            return dispatch(write, result=True)
+        self.result = record
+        self.client = anthropic_client.AnthropicClient(key)
+
+    def __call__(self, prompt, *, deadline, max_tokens, **unused):
+        try:
+            answer = self.client.complete(prompt, deadline=deadline, max_tokens=max_tokens,
+                before_attempt=self.guard, reserve_fn=self.reserve, after_result=self.result)
+            self.guard()
+            return answer
+        except CloudFallback:
+            raise
+        except Exception as exc:
+            # Client errors contain fixed categories; no remote body enters local errors.
+            raise CloudFallback("cloud_unit_failed") from exc
+
+
+def _cloud_settings(cfg):
+    block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
+    if isinstance(block, dict) and "mode" in block:
+        return cloud_policy.cloud_config(cfg)[0]
+    return cloud_policy.cloud_config(cfg, key_present=bool(cloud_policy.api_key(HOME)))[0]
+
+
+def _cloud_contract(cfg):
+    settings = _cloud_settings(cfg)
+    return {"backend": "anthropic", "model": settings["model"],
+            "config_generation": cloud_policy.config_generation(settings),
+            "code_contract": _upgrade_contract()}
+
+
+def _cloud_mode(ledger, cfg, route, project_id):
+    settings = _cloud_settings(cfg)
+    if not cloud_policy.eligible(settings, route, project_id):
+        return "off"
+    mode = settings["mode"]
+    if mode in ("on", "shadow") and (not cloud_policy.api_key(HOME)
+            or cloud_policy.block_reason(ledger, settings, route, project_id)):
+        return "off"
+    return mode
+
+
+def _cloud_compare(ledger, *, route, project_id, local_facts, cloud_facts,
+                   rejected=0, held=0, repairs=0):
+    left, right = set(local_facts), set(cloud_facts)
+    with ledger.db:
+        ledger.artifact_add_tx("cloud_compare_v1", "{}", project_id=project_id,
+            meta={"route": route, "local_facts": len(left), "cloud_facts": len(right),
+                  "matched": len(left & right), "rejected": rejected,
+                  "held": held, "repairs": repairs})
+
+
+def _cloud_reextract(ledger, row):
+    if row["qc_src"] or row["thin_src"] or row["human_src"] or row["attempts"]:
+        return False
+    if ledger.db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? "
+            f"AND EXISTS ({_hold_sql()})", (row["message_id"],)).fetchone():
+        return False
+    prior = _prior_extract(ledger.db, row)
+    meta = loads_dict(prior["meta"]) if prior else None
+    if not meta or type(meta.get("extract_version")) is not int:
+        return False
+    if meta["extract_version"] < EXTRACT_VERSION:
+        return True
+    return ledger.db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? "
+        f"AND EXISTS ({_hold_sql(released=True)})", (row["message_id"],)).fetchone() is not None
+
+
 def _llm_call(prompt: str, deadline: float | None = None,
               schema: dict | None = None,
               max_tokens: int = MAX_TOKENS,
-              need_s: float | None = None, kind: str = "first") -> dict | None:
+              need_s: float | None = None, kind: str = "first", provider=None) -> dict | None:
     """One chat-completions round-trip -> the model's JSON object, or
     None on transport/parse failure. Applies the probed
     response_format; a format rejected mid-run (server restart/model
@@ -619,6 +737,18 @@ def _llm_call(prompt: str, deadline: float | None = None,
     whose call then returns None/_DEFERRED without a note is uncounted
     (the row re-runs)."""
     global _FMT_MODE
+    if provider is not None:
+        if deadline is not None and deadline - time.monotonic() < (need_s or 0):
+            return _DEFERRED
+        response = provider(prompt, deadline=deadline, max_tokens=max_tokens,
+                            need_s=need_s, kind=kind)
+        _integrity_note(response, kind)
+        if local_llm.acceptance_error(response) is not None:
+            raise CloudFallback("cloud_incomplete_response")
+        answer = json_object(response.get("text"))
+        if answer is None:
+            raise CloudFallback("cloud_invalid_response")
+        return answer
     if deadline is not None \
             and deadline - time.monotonic() < (need_s or 0):
         return _DEFERRED
@@ -748,7 +878,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 on_chunk=None,
                 vital_policy: dict | None = None,
                 chunk_size: int | None = None, on_split=None, splits_in: dict | None = None,
-                references: dict | None = None
+                references: dict | None = None, provider=None
                 ) -> dict | None | object:
     """One message -> validated structured dict, None on failure, or
     _DEFERRED when `deadline` (time.monotonic()) ran out mid-chunk.
@@ -770,6 +900,7 @@ def llm_extract(body: str, *, context: str | None = None,
     artifact would gate re-extraction permanently while looking
     complete, which is exactly the silent-coverage-loss failure mode
     the error+backoff path exists to avoid."""
+    call = _llm_call if provider is None else functools.partial(_llm_call, provider=provider)
     prompt = _PROMPT_HEAD
     has_ctx = bool(context)   # thread and/or summary: lift guard on
     if context and context.startswith(_KARTE_HEAD):
@@ -868,7 +999,7 @@ def llm_extract(body: str, *, context: str | None = None,
         piece_context = has_ctx or bool(reference)
         call_start = len(notes)
         d = ({k: value for k, value in cached.items() if k != "_quality_status"}
-             if quality_status else _llm_call(scoped_prompt + thead + piece + _PROMPT_TAIL,
+             if quality_status else call(scoped_prompt + thead + piece + _PROMPT_TAIL,
                                              deadline=deadline, need_s=_MIN_CALL_S))
         if deadline is not None and time.monotonic() > deadline:
             # A dispatched failure still consumes its attempt after the deadline.
@@ -961,7 +1092,7 @@ def llm_extract(body: str, *, context: str | None = None,
                             pending_quality.add(key)
                         return finish_piece(key, v, quality_record, pending=key in pending_quality)
                 repair_start = len(notes)
-                rd = _llm_call(
+                rd = call(
                     _repair_prompt(posted_at, issues, d, piece_hints, reference)
                     + piece + _PROMPT_TAIL,
                     deadline=repair_deadline, need_s=_MIN_REPAIR_S, kind="repair")
@@ -1217,7 +1348,7 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
             _record_hold_tx(ledger, r, prior, "attempts_exhausted")
 
 
-# Nightly automatic retry of permanently failed extractions (owner
+# Periodic automatic retry of permanently failed extractions (owner
 # request 2026-09-30): an error row that reached the 5-attempt ceiling
 # gets ONE more attempt per maintenance pass, at most REVIVE_PER_INPUT times for
 # the same body hash and REVIVE_MAX rows per pass, only after
@@ -1288,7 +1419,7 @@ def _fail(ledger, r, attempts: int):
 
 
 def _error_auto_retry(ledger, mid: int, content_hash) -> int:
-    """Nightly revivals already spent on this body hash under the CURRENT
+    """Periodic revivals already spent on this body hash under the CURRENT
     extract version (0 for a new body or version) — carried so a refail
     keeps the per-input cap without an older version's spent revivals
     blocking the current version's budget."""
@@ -1455,6 +1586,8 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
     meta.update(actual_model=actual_model, plan_version=PLAN_VERSION,
                 context_binding=_chunk_context(r, bound_context))
     meta.update(_frame_meta(r))
+    if isinstance(r, dict) and r.get("_provider_contract"):
+        meta.update(r["_provider_contract"])
     if ctx:
         meta["ctx"] = True
     if integrity:
@@ -1467,6 +1600,11 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
     with ledger.db:
         if not ledger.db.in_transaction:
             ledger.db.execute("BEGIN IMMEDIATE")
+        if isinstance(r, dict) and r.get("_cloud_guard"):
+            try:
+                r["_cloud_guard"]()
+            except CloudFallback:
+                return False
         source = ledger.db.execute(
             "SELECT project_id,body_text FROM messages m WHERE message_id=? AND content_hash=? AND project_id=? "
             "AND (body_state IS NULL OR body_state='full') "
@@ -1765,14 +1903,14 @@ def _next_due_in(ledger, now: float, *, semantic: bool, context: bool) -> float 
             if row and row[0] is not None:
                 due.append(row[0])
         if context:
-            import patient_nightly
+            import patient_context_refresh
             safe = json_or_null("content")
             t = f"json_extract({safe},'$.next_try')"
             row = ledger.db.execute(
                 f"SELECT MIN({t}) FROM artifacts WHERE kind IN (?,?) "
                 f"AND COALESCE(json_extract({safe},'$.attempts'),0) < 5 "
                 f"AND json_type({safe},'$.next_try') IN ('integer','real') AND {t} > ?",
-                (patient_nightly.PROGRESS, patient_nightly.SCAN, now)).fetchone()
+                (patient_context_refresh.PROGRESS, patient_context_refresh.SCAN, now)).fetchone()
             if row and row[0] is not None:
                 due.append(row[0])
     except Exception:
@@ -1926,6 +2064,8 @@ def _chunk_context(r, context: str | None, *, checkpoint: bool = False) -> str:
     binding = [r["posted_at"], context,
          _actual_model(r),
          _PROMPT_HEAD, extract_schema.SCHEMA, "clinical-plan/v4" if checkpoint else "clinical-plan/v3", PLAN_VERSION]
+    if isinstance(r, dict) and r.get("_provider_contract"):
+        binding.append(r["_provider_contract"])
     if isinstance(r, dict) and r.get("_frame"):
         binding.append(r["_frame"]["digest"])
     return hashlib.sha256(json.dumps(binding,
@@ -2563,7 +2703,7 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
     return rows, fresh_selected
 
 
-def _prepare_jobs(ledger, rows, target, prefilter: bool) -> tuple[list, int, int]:
+def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True) -> tuple[list, int, int]:
     """Load contexts/checkpoints on the calling thread; settle prefiltered rows."""
     jobs = []
     skipped = 0
@@ -2574,6 +2714,16 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool) -> tuple[list, int, int
     for r in rows:
         r = dict(r)
         r["_target"] = target
+        mode = _cloud_mode(ledger, cfg, "reextract", r["project_id"]) if allow_cloud and _cloud_reextract(ledger, r) else "off"
+        r["_cloud_mode"] = mode
+        if mode in ("on", "shadow"):
+            r["_cloud_settings"] = _cloud_settings(cfg)
+        if mode == "dry_run":
+            cloud_policy.dryrun(ledger, route="reextract", project_id=r["project_id"],
+                unit_key=str(r["message_id"]), input_chars=len(r["body_text"] or ""), max_tokens=MAX_TOKENS)
+        if mode == "on":
+            r["_provider_contract"] = {"backend": "anthropic", "model": _cloud_settings(cfg)["model"]}
+            r["_target"] = (target[0], r["_provider_contract"]["model"])
         qc = _qc_feedback(ledger, r["qc_src"]) if r["qc_src"] else None
         if r["qc_src"] and qc is None:
             continue   # flagged in SQL but the audit is gone or clean
@@ -2597,7 +2747,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool) -> tuple[list, int, int
         attempt = {key: r.get(key) for key in ("qc_src", "human_src", "thin_src")}
         attempt["auto_retry"] = auto if type(auto) is int and auto >= 0 else 0
         try:
-            r["_frame"] = patient_state_context.prepare(ledger, r, model=target[1],
+            r["_frame"] = patient_state_context.prepare(ledger, r, model=r["_target"][1],
                 contract=_context_contract(), attempt=attempt, enabled=enabled, base_context=base,
                 version=EXTRACT_VERSION)
         except (ValueError, sqlite3.Error):
@@ -2619,7 +2769,7 @@ def _plan_units(claimed: list, batch_k: int) -> list:
         # QC-flagged/thin-retry rows take the single lane — their
         # feedback/repair prompts differ from the shared batch
         # envelope.
-        if batch_k >= 2 and qc is None and not r["thin_src"] \
+        if batch_k >= 2 and r.get("_cloud_mode") != "on" and qc is None and not r["thin_src"] \
                 and ctx is None and not saved \
                 and r["_chunk_size"] == _CHUNK_SIZE \
                 and len(plan_chunks(r["body_text"], _CHUNK_SIZE)) <= 1:
@@ -2802,6 +2952,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # holds the run lock for minutes) — written before returning, or
     # carried to the next call (see `carry`)
     pending_writes: list = []
+    shadow_tasks = []
     carry_out: list = []
     carried = 0
     keep_claims: set = set()
@@ -2817,7 +2968,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     batch_metas = []
     checkpoints = queue.SimpleQueue()
     checkpoint_stopped = threading.Event()
-    parallel = workers > 1 and len(jobs) > 1
+    cfg = load_config()
+    cloud_workers = _cloud_settings(cfg)["max_concurrency"] if any(
+        r.get("_cloud_mode") == "on" for r, *_ in jobs) else 1
+    pool_workers = max(workers, cloud_workers)
+    local_slots = threading.BoundedSemaphore(max(1, workers))
+    cloud_slots = threading.BoundedSemaphore(cloud_workers)
+    parallel = pool_workers > 1 and len(jobs) > 1
+    owner_thread = threading.get_ident()
     leases = {}
 
     def _checkpoint(index, chunk, value, split=False, receipt=None):
@@ -2829,6 +2987,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             if (isinstance(value, dict) and value.get("_quality_status") == "started"
                     and (checkpoint_stopped.is_set() or time.monotonic() >= deadline)):
                 return False
+            if r.get("_cloud_mode") == "on":
+                saved = True
+                return True
             if _owns_current_source(ledger, r, leases[index]):
                 if split:
                     r["_splits"][chunk] = value
@@ -2854,13 +3015,36 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             receipt["event"].wait(min(0.05, max(0.0, deadline - time.monotonic())))
         return receipt["saved"] and not checkpoint_stopped.is_set() and time.monotonic() < deadline
 
+    def _owner_call(fn, *, result=False):
+        if threading.get_ident() == owner_thread:
+            return fn()
+        receipt = {"event": threading.Event()}
+        checkpoints.put(("owner", fn, receipt, result))
+        while not receipt["event"].wait(0.05):
+            if checkpoint_stopped.is_set() or (not result and time.monotonic() >= deadline):
+                raise CloudFallback("cloud_owner_stopped")
+        if "error" in receipt:
+            raise receipt["error"]
+        return receipt.get("value")
+
     def _flush_checkpoints():
         while True:
             try:
                 item = checkpoints.get_nowait()
             except queue.Empty:
                 return
-            _checkpoint(*item)
+            if item[0] == "owner":
+                _, fn, receipt, result = item
+                try:
+                    if checkpoint_stopped.is_set() or (not result and time.monotonic() >= deadline):
+                        raise CloudFallback("cloud_owner_stopped")
+                    receipt["value"] = fn()
+                except BaseException as exc:
+                    receipt["error"] = exc
+                finally:
+                    receipt["event"].set()
+            else:
+                _checkpoint(*item)
 
     def _extract(item):
         index, (r, ctx, saved, hints, qc) = item
@@ -2881,11 +3065,51 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             r["_transport_at"] = getattr(_CALL_NOTES, "transport_at", None)
 
     def _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out):
+        provider = None
+        if r.get("_cloud_mode") == "on":
+            provider = _owner_call(lambda: _CloudProvider(ledger, {"cloud_llm": r["_cloud_settings"]}, route="reextract",
+                project_id=r["project_id"], message_id=r["message_id"],
+                unit_key=str(r["message_id"]), deadline=deadline,
+                current=lambda: _owns_current_source(ledger, r, leases[index]),
+                dispatch=_owner_call, owner={"lease": leases[index]}))
+        if provider is not None:
+            try:
+                with cloud_slots:
+                    result = _infer(r, ctx, saved, hints, qc, index, meta, chunks_out, provider)
+                    provider.guard()
+                    r["_cloud_guard"] = provider.guard
+                    if result is None:
+                        raise CloudFallback("cloud_validation_failed")
+                    return result
+            except CloudFallback:
+                # A posting is the provider unit: partial cloud chunks never seed local work.
+                def reset_local():
+                    r.pop("_provider_contract", None)
+                    r.pop("_cloud_guard", None)
+                    r["_cloud_mode"] = "off"
+                    r["_target"] = target
+                    fresh, _, _ = _prepare_jobs(ledger, [r], target, False, allow_cloud=False)
+                    if not fresh:
+                        raise CloudFallback("cloud_local_context_unavailable")
+                    local_r, local_ctx, local_saved, _, _ = fresh[0]
+                    r.update(local_r)
+                    jobs[index] = (r, local_ctx, local_saved, hints, qc)
+                    return local_ctx, local_saved
+                ctx, saved = _owner_call(reset_local)
+                chunks_out.clear()
+                meta.clear()
+        with local_slots:
+            if _owner_call(lambda: bool(circuit_open_s(ledger.db))):
+                return _DEFERRED
+            return _infer(r, ctx, saved, hints, qc, index, meta, chunks_out)
+
+    def _infer(r, ctx, saved, hints, qc, index, meta, chunks_out, provider=None):
         with pin_target(r["_target"]):
             return llm_extract(r["body_text"], context=ctx, hints=hints,
                            **({"references": _frame_refs(r)} if _frame_refs(r) else {}),
                            deadline=deadline, meta_out=meta,
                            posted_at=r["posted_at"],
+                           **({"provider": provider} if provider is not None else {}),
                            chunks_in=saved,
                            chunks_out=chunks_out,
                            vital_policy=vital_policy,
@@ -2904,6 +3128,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         True when the artifact was written (a carried commit from an
         earlier pass counts it in the pass that finally wrote it)."""
         nonlocal done, deferred, held_prior
+        if r.get("_cloud_guard"):
+            try:
+                r["_cloud_guard"]()
+            except CloudFallback:
+                deferred += 1
+                return False
         # QC-flagged/thin/human-reported rows already hold a current
         # artifact — replacing it is the point of the feedback pass.
         if qc is None and not r["thin_src"] and not r["human_src"] \
@@ -2945,11 +3175,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if settled is not None:
             settled["done"] += 1
         done_pids.add(r["project_id"])
+        if r.get("_cloud_mode") == "shadow":
+            shadow_tasks.append((r, d, ctx))
         return True
 
     def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
         nonlocal done, failed, deferred, endpoint_down, lock_lost, slow_deferred
         nonlocal breaker_fed
+        ctx = r.get("_context", ctx)
         keep_lease = False
         try:
             if not _owns_current_source(ledger, r, lease):
@@ -3057,7 +3290,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 return
             # a usable result whose last call (an optional repair) failed
             # still saw an outage; no call note at all means an answer
-            _observe(transport or "answered", at)
+            if r.get("_cloud_mode") != "on":
+                _observe(transport or "answered", at)
             if r["thin_src"] and qc is None and not r["human_src"]:
                 content = _thin_retry_content(ledger, r)
                 if content is None:
@@ -3099,8 +3333,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     claimed = []
     try:
         for index, (r, ctx, saved, hints, qc) in enumerate(jobs):
-            if circuit_s or disk_low:
+            if disk_low:
                 break
+            if circuit_s and r.get("_cloud_mode") != "on":
+                continue
             lease = _claim(ledger, r, max(_EXTRACT_LEASE_S,
                                           deadline - time.monotonic() + TIMEOUT + 30))
             if lease is not None:
@@ -3180,13 +3416,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # workers would otherwise race to mutate the global mode.
             # Below the smallest floor every unit defers anyway, so the
             # probe would be a call nobody uses.
-            if deadline - time.monotonic() >= _MIN_CALL_S:
+            if any(r.get("_cloud_mode") != "on" for _, r, *_ in claimed) and deadline - time.monotonic() >= _MIN_CALL_S:
                 probed_at = _FMT_TS
                 _probe_format(deadline=deadline)
                 pre_probes = int(_FMT_TS != probed_at)
             from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
             with ThreadPoolExecutor(
-                    max_workers=min(workers, len(units))) as pool, contextlib.ExitStack() as cleanup:
+                    max_workers=min(pool_workers, len(units))) as pool, contextlib.ExitStack() as cleanup:
                 cleanup.callback(checkpoint_stopped.set)  # release ack waiters before executor shutdown
                 futs = {}
                 for kind, payload in units:
@@ -3298,6 +3534,29 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                 if id(r) not in keep_claims:
                     _release(ledger, r, lease)
+    for r, local_result, ctx in shadow_tasks:
+        if deadline - time.monotonic() < _MIN_CALL_S:
+            break
+        try:
+            provider = _CloudProvider(ledger, {"cloud_llm": r["_cloud_settings"]}, route="reextract", project_id=r["project_id"],
+                message_id=r["message_id"], unit_key=str(r["message_id"]), deadline=deadline,
+                current=lambda r=r: _current(ledger, r["message_id"], r["content_hash"]),
+                dispatch=lambda fn, **kw: fn(), owner={"after_commit": True})
+            comparison_meta = {}
+            cloud_result = llm_extract(r["body_text"], context=ctx, hints=_rule_hints(r),
+                deadline=deadline, meta_out=comparison_meta, posted_at=r["posted_at"],
+                vital_policy=vital_policy, provider=provider,
+                **({"references": _frame_refs(r)} if _frame_refs(r) else {}))
+            provider.guard()
+            if isinstance(cloud_result, dict):
+                _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
+                    local_facts=extract_quality.facts(local_result),
+                    cloud_facts=extract_quality.facts(cloud_result),
+                    rejected=sum(cloud_result.get(k, 0) for k in ("_items_dropped", "_evidence_dropped")),
+                    held=int(bool(extract_quality.protected_lost(local_result, cloud_result, r["body_text"]))),
+                    repairs=comparison_meta.get("repairs", 0))
+        except (CloudFallback, ValueError):
+            pass
     left, age_min, age_max, estimate = _backlog_report(
         ledger, len(rows), limit, done + skipped + held_prior)
     now_ts = time.time()
@@ -3413,7 +3672,7 @@ def legacy_admissions(ledger, cfg) -> set | None:
             _admission_closed(["config_not_object"])
             return set()
         import semantic_policy
-        policy, error = semantic_policy.semantic_config(cfg)
+        policy, error = semantic_policy.runtime_config(cfg)
         if error:
             _admission_closed(error)
             return set()
@@ -3480,7 +3739,7 @@ def _background_semantic(ledger, stop=None):
         os.close(lock_fd)
 
 
-def _nightly_memory_available() -> bool:
+def _context_memory_available() -> bool:
     """Reserve ten percent memory for foreground work; unknown pressure defers."""
     try:
         if sys.platform == "darwin":
@@ -3540,7 +3799,7 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
         print(json.dumps({"carry_settled": settled, "ts": time.time()}), flush=True)
 
 
-def _background_nightly(ledger, initial_state, stop=None):
+def _background_context_refresh(ledger, initial_state, stop=None):
     """Lane 3's first priority: one patient-context unit (up to 15 min)
     per call, any hour. ``admit`` is re-checked at every unit boundary;
     the per-patient extraction-complete rule lives in run_due."""
@@ -3549,8 +3808,8 @@ def _background_nightly(ledger, initial_state, stop=None):
         return {"status": "off", "done": 0}
     try:
         cfg = load_config()
-        import patient_nightly
-        if not patient_nightly.options(cfg)["enabled"]:
+        import patient_context_refresh
+        if not patient_context_refresh.options(cfg)["enabled"]:
             return {"status": "off", "done": 0}
     except Exception as exc:
         return {"status": "error", "done": 0, "error": type(exc).__name__}
@@ -3563,25 +3822,29 @@ def _background_nightly(ledger, initial_state, stop=None):
         # and an unchanged config all have to be proven.
         if (time.monotonic() >= deadline
                 or writer_lock.updater_state() != initial_state
-                or initial_state[0] or circuit_open_s(ledger.db)):
+                or initial_state[0]):
             return False
         if load_config() != cfg:
-            return False
-        if not _nightly_memory_available():
             return False
         free = disk_free_mb(ledger.db)
         return free is not None and free >= disk_floor_mb()
 
+    def local_admit():
+        return admit() and not circuit_open_s(ledger.db) and _context_memory_available()
+
     try:
-        if not admit():
+        cloud_cfg = _cloud_settings(cfg)
+        cloud_enabled = cloud_cfg["mode"] != "off"
+        if not (admit() if cloud_enabled else local_admit()):
             result = {"status": "deferred", "done": 0}
         else:
             with local_llm.pinned_slot(local_llm.LANES[3]):
-                result = patient_nightly.run_due(
-                    ledger, cfg, deadline=deadline, admit=admit,
+                result = patient_context_refresh.run_due(
+                    ledger, cfg, deadline=deadline, admit=admit if cloud_enabled else local_admit,
+                    **({"local_admit": local_admit} if cloud_enabled else {}),
                     complete=functools.partial(patient_extraction_complete, ledger))
     except Exception as exc:
-        # Nightly failures must not interrupt collection or normal extraction.
+        # Context refresh failures must not interrupt collection or normal extraction.
         result = {"status": "error", "done": 0, "error": type(exc).__name__}
     if writer_lock.updater_state() != initial_state:
         result["run_lock_lost"] = "updated"
@@ -3737,7 +4000,7 @@ def _main() -> int:
             total = {"done": 0, "failed": 0, "left": 0}
             context_lane = _SLOT_OVERRIDE == local_llm.LANES[3]
             semantic_first_until = 0.0
-            nightly_state = writer_lock.updater_state()
+            context_state = writer_lock.updater_state()
             carry: list = []   # finished results waiting for the run lock
 
             while True:
@@ -3751,20 +4014,20 @@ def _main() -> int:
                         # carried result gets its lock attempt first and its
                         # claim lease renewed, so the context units it waits
                         # through cannot outlive the claim.
-                        if writer_lock.updater_state() != nightly_state:
+                        if writer_lock.updater_state() != context_state:
                             # an updater ran since the last pass: old code
                             # must not write the carried result either
                             _settle_carry(led, carry, write=False)
                             return 0
-                        _settle_carry(led, carry, final=False, fence=nightly_state)
-                        nightly = _background_nightly(led, nightly_state, stop)
-                        if nightly.get("status") != "off":
-                            print(json.dumps({"nightly": nightly, "ts": time.time()},
+                        _settle_carry(led, carry, final=False, fence=context_state)
+                        context_refresh = _background_context_refresh(led, context_state, stop)
+                        if context_refresh.get("status") != "off":
+                            print(json.dumps({"nightly": context_refresh, "ts": time.time()},
                                              ensure_ascii=False), flush=True)
-                        if nightly.get("run_lock_lost") == "updated":
+                        if context_refresh.get("run_lock_lost") == "updated":
                             _settle_carry(led, carry, write=False)
                             return 0
-                        if nightly.get("done"):
+                        if context_refresh.get("done"):
                             pause(1)
                             continue
                     # the inner batch must also honor --stop-after: its
@@ -3870,7 +4133,7 @@ def _main() -> int:
                     idle(min(300.0, max(5.0, nt - time.time())))
                 else:
                     pause(1)  # yield the write window between batches
-            _settle_carry(led, carry, fence=nightly_state)
+            _settle_carry(led, carry, fence=context_state)
             print(json.dumps(total, ensure_ascii=False))
         else:
             # Bounded single batch: keep the whole-run lock so the batch

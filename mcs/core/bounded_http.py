@@ -41,9 +41,10 @@ import worker_process
 
 MAX_RESPONSE_BYTES = 262144
 
+ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
 _HTTP_WORKER_ARG = "--http-worker"
 _WORKER_HEADER_NAMES = frozenset({
-    "content-length", "content-type", "retry-after", "transfer-encoding",
+    "content-length", "content-type", "retry-after", "transfer-encoding", "request-id",
 })
 
 
@@ -109,6 +110,7 @@ def _http_worker_main() -> int:
         body = envelope.get("body")
         allowed = envelope.get("allowed_endpoints") or []
         public_mcp = envelope.get("public_mcp", False)
+        auth = envelope.get("auth", "bearer")
         if (not isinstance(endpoint, str)
                 or not isinstance(allowed, list)
                 or not all(isinstance(e, str) for e in allowed)
@@ -118,6 +120,9 @@ def _http_worker_main() -> int:
                 or isinstance(timeout, bool) or not math.isfinite(timeout)
                 or timeout <= 0
                 or (api_key is not None and not isinstance(api_key, str))
+                or auth not in ("bearer", "anthropic")
+                or (auth == "anthropic" and (endpoint != ANTHROPIC_ENDPOINT
+                    or method != "POST" or not api_key or public_mcp))
                 or not isinstance(public_mcp, bool)
                 or (public_mcp and not _public_mcp_allowed(endpoint, method, api_key, allowed))
                 or (not public_mcp and api_key is None
@@ -129,7 +134,11 @@ def _http_worker_main() -> int:
         if public_mcp:
             headers["Accept"] = "application/json, text/event-stream"
         if api_key is not None:
-            headers["Authorization"] = f"Bearer {api_key}"
+            if auth == "anthropic":
+                headers["x-api-key"] = api_key
+                headers["anthropic-version"] = "2023-06-01"
+            else:
+                headers["Authorization"] = f"Bearer {api_key}"
         if raw is not None:
             headers["Content-Type"] = "application/json"
         request = urllib.request.Request(endpoint, data=raw, method=method,
@@ -179,7 +188,7 @@ class NotSentTimeout(TimeoutError):
 def bounded_http_request(endpoint: str, method: str, body,
                          timeout: float, api_key: str | None = None,
                          deadline: float | None = None,
-                         allowed_endpoints=(), _public_mcp=False):
+                         allowed_endpoints=(), _public_mcp=False, auth="bearer"):
     """Make one bounded request through a short-lived, reaped worker.
 
     An ``api_key`` request must target ``allowed_endpoints`` — the
@@ -193,6 +202,10 @@ def bounded_http_request(endpoint: str, method: str, body,
     if not isinstance(endpoint, str) or method not in ("GET", "POST"):
         raise ValueError("request_invalid")
     allowed = {e for e in allowed_endpoints if isinstance(e, str)}
+    if (auth not in ("bearer", "anthropic")
+            or (auth == "anthropic" and (endpoint != ANTHROPIC_ENDPOINT
+                or method != "POST" or not api_key or _public_mcp))):
+        raise ValueError("auth_endpoint_not_allowed")
     if not isinstance(_public_mcp, bool):
         raise ValueError("request_invalid")
     if _public_mcp:
@@ -226,6 +239,7 @@ def bounded_http_request(endpoint: str, method: str, body,
         "timeout": remaining,
         "allowed_endpoints": sorted(allowed),
         "public_mcp": _public_mcp,
+        "auth": auth,
     }
     payload = json.dumps(envelope, ensure_ascii=False,
                          allow_nan=False).encode("utf-8")

@@ -48,7 +48,7 @@ MODES = ("off", "shadow", "assist", "enforce")
 FACT_SOURCES = ("legacy", "shadow", "canonical")
 
 
-def semantic_config(cfg: dict) -> tuple[dict, list]:
+def semantic_config(cfg: dict, *, key_present=False) -> tuple[dict, list]:
     """Validate config.json's "semantic" block. Unknown/malformed values
     fail CLOSED — mode falls back to off and each error is reported, so a
     typo can never widen the rollout stage (spec §22.1, AT-067)."""
@@ -59,7 +59,7 @@ def semantic_config(cfg: dict) -> tuple[dict, list]:
            "fact_source": "legacy", "fact_source_gate": None,
            "fact_source_evidence": None, "fact_source_approval": None,
            "model": jev.JEV_MODEL,
-           "daily_request_budget": 0,
+           "daily_request_budget": jev.DAILY_REQUEST_LIMIT,
            "attempt_timeout_seconds": 20.0,
            "job_budget_seconds": 45.0,
            "max_attempts_per_try": 3,
@@ -70,17 +70,19 @@ def semantic_config(cfg: dict) -> tuple[dict, list]:
            "project_ids": []}
     block = cfg.get("semantic")
     if block is None:
-        return out, errors
+        block = {}
     if not isinstance(block, dict):
         return out, ["config: semantic_not_object"]
     if block.keys() - out.keys():
         errors.append("config: semantic_unknown_field")
-    mode = block.get("mode", "off")
+    mode = block.get("mode", "assist" if key_present is True else "off")
     if mode not in MODES:
         errors.append("config: semantic_mode_invalid")
         mode = "off"
     out["mode"] = mode
-    if mode != "off" and "project_ids" not in block:
+    if key_present is True and "mode" not in block and "project_ids" not in block:
+        out["project_ids"] = None
+    if "mode" in block and mode != "off" and "project_ids" not in block:
         errors.append("config: semantic_project_scope_required")
     for feature in ("summary_mode", "loop_mode"):
         value = block.get(feature, "off")
@@ -137,7 +139,7 @@ def semantic_config(cfg: dict) -> tuple[dict, list]:
             if type(v) is not int or not lo <= v <= hi:
                 errors.append(f"config: semantic_{key}_invalid")
             else:
-                out[key] = v
+                out[key] = min(v, jev.DAILY_REQUEST_LIMIT) if key == "daily_request_budget" else v
     for key, lo, hi in (("attempt_timeout_seconds", 1.0, 60.0),
                         # 1260 s holds a full backlog commit reserve
                         # (semantic_drain); the pass (+30 s) stays well
@@ -152,15 +154,12 @@ def semantic_config(cfg: dict) -> tuple[dict, list]:
             else:
                 out[key] = float(v)
     if "project_ids" in block:
-        v = block["project_ids"]
-        if v is None:
-            out["project_ids"] = None          # explicit null = all
-        elif not isinstance(v, list) \
-                or any(type(p) is not int or p <= 0 for p in v):
+        from mcs_config import project_scope
+        try:
+            out["project_ids"] = project_scope(block["project_ids"])
+        except ValueError:
             errors.append("config: semantic_project_ids_invalid")
             out["project_ids"] = []
-        else:
-            out["project_ids"] = sorted(set(v))
     if out["nomatch_threshold"] >= out["match_threshold"]:
         errors.append("config: semantic_threshold_order_invalid")
     if fact_source == "canonical":
@@ -182,6 +181,13 @@ def semantic_config(cfg: dict) -> tuple[dict, list]:
         out["fact_source"] = "legacy"
         out["mode"] = "off"
     return out, errors
+
+
+def runtime_config(cfg: dict, *, root=None) -> tuple[dict, list]:
+    """Resolve an omitted Jev mode from this MCS dotenv without widening its scope."""
+    block = cfg.get("semantic")
+    explicit = isinstance(block, dict) and "mode" in block
+    return semantic_config(cfg, key_present=not explicit and bool(jev.api_key(root)))
 
 
 def policy_fingerprint(scfg: dict) -> str:

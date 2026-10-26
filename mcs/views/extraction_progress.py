@@ -5,7 +5,7 @@ import semantic_transport
 import sqlite3
 
 from mcs_util import valid_hash
-from semantic_policy import semantic_config, policy_fingerprint
+from semantic_policy import runtime_config, policy_fingerprint
 
 LATEST_POSTS = 20
 
@@ -13,7 +13,7 @@ LATEST_POSTS = 20
 def message_progress(db, row, *, cfg=None):
     """Return only validated current counts for one source and configured backend."""
     row = dict(row)
-    scfg, errors = semantic_config(cfg) if isinstance(cfg, dict) else ({}, ["config_unknown"])
+    scfg, errors = runtime_config(cfg) if isinstance(cfg, dict) else ({}, ["config_unknown"])
     canonical = (not errors and scfg["mode"] != "off" and scfg["fact_source"] == "canonical"
                  and (scfg["project_ids"] is None or row["project_id"] in scfg["project_ids"]))
     progress = None

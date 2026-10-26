@@ -28,7 +28,7 @@ from contextlib import contextmanager
 import math
 import time
 
-from mcs_util import env_value, load_config, loads_dict
+from mcs_util import load_config, loads_dict
 import semantic_jev as jev
 import semantic_runtime as runtime
 import semantic_v4 as v4
@@ -45,7 +45,7 @@ from semantic_policy import (JOB_KIND, KIND_ASSESS, KIND_AUDIT,
                              KIND_SHADOW_V2, KIND_SUMMARY,
                              KIND_SUMMARY_FORMAT_REPAIR, KIND_USAGE,
                              QC_JOB_KIND, SCHEMA_VERSION, SCHED_KIND,
-                             policy_fingerprint, semantic_config)
+                             policy_fingerprint, runtime_config)
 import semantic_notice
 from semantic_store import current_artifact, jev_state, jev_usage_today
 
@@ -785,7 +785,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 ledger, token, deadline=deadline,
                 expected_config_generation=config_generation,
                 expected_mode=scfg["mode"], cfg_path=cfg_path,
-                load_cfg=load_config, parse_cfg=semantic_config,
+                load_cfg=load_config, parse_cfg=runtime_config,
                 source_fingerprint=fp, current_source=current_source_fp,
                 stage=stage)
         except runtime.RuntimeStale as error:
@@ -1869,7 +1869,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         raise ValueError("semantic_lane_invalid")
     if type(max_jobs) is not int or not 1 <= max_jobs <= 32:
         raise ValueError("semantic_max_jobs_invalid")
-    scfg, errors = semantic_config(cfg)
+    scfg, errors = runtime_config(cfg)
     cfg_generation = runtime.config_generation(cfg)
     observation_config_changed = False
     for e in errors:
@@ -1944,7 +1944,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         llm_fn = semantic_transport.llm_chat
     if jev_client is None and scfg["daily_request_budget"] > 0:
         jev_client = jev.JevClient(
-            api_key=env_value("TYPESAFE_API_KEY"), model=scfg["model"],
+            api_key=jev.api_key(), model=scfg["model"],
             attempt_timeout=scfg["attempt_timeout_seconds"],
             job_budget=scfg["job_budget_seconds"],
             max_attempts=scfg["max_attempts_per_try"])
@@ -2077,7 +2077,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 continue
             if cfg_path is not None:
                 current_cfg = load_config(cfg_path)
-                scfg, errs = semantic_config(current_cfg)
+                scfg, errs = runtime_config(current_cfg)
                 current_generation = runtime.config_generation(current_cfg)
                 observation_config_changed |= current_generation != cfg_generation
                 cfg_generation = current_generation
@@ -2436,7 +2436,7 @@ def main() -> int:
                 # bounded: the tick waits at most job_budget+30 s.
                 try:
                     batch_s = max(
-                        120.0, float(semantic_config(cfg)[0]
+                        120.0, float(runtime_config(cfg)[0]
                                      ["job_budget_seconds"]) + 30.0)
                 except Exception:
                     batch_s = 480.0

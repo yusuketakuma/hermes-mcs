@@ -20,7 +20,7 @@ SERVER=http://127.0.0.1:8080            # loopback only, --noproxy '*' on every 
 MODEL=${MCS_BENCH_MODEL:-$HOME/.hermes/models/Qwen3.5-9B-Q4_K_M.gguf}
 LABELS="ai.mcs.extract-drainer ai.mcs.extract-drainer-2"
 TIMEOUT=300   # = extract_llm.TIMEOUT
-MAX_TOKENS=1600   # = extract_llm.MAX_TOKENS / patient_nightly
+MAX_TOKENS=1600   # = extract_llm.MAX_TOKENS / patient_context_refresh
 REPS=3
 UB_ORDER="512 128 256 512"       # A B C A, after one discarded warm-up at 512
 OUT_ROOT=$HOME/.local/state/mcs-quality/v1.0.27/llm-bench

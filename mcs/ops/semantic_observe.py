@@ -358,8 +358,8 @@ def _incomplete(snap) -> bool:
 
 
 def _daily_budget(cfg) -> int:
-    from semantic_policy import semantic_config
-    return semantic_config(cfg if isinstance(cfg, dict) else {})[0]["daily_request_budget"]
+    from semantic_policy import runtime_config
+    return runtime_config(cfg if isinstance(cfg, dict) else {})[0]["daily_request_budget"]
 
 
 def main() -> int:

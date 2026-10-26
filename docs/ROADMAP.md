@@ -11,7 +11,7 @@
 |---|---|---|---|
 | 通知の個別復旧 | plan・人承認・receiptの[通知復旧手順](guides/NOTIFICATION_RECOVERY.md)、[notify_transport](../mcs/notify/notify_transport.py) | [1.0.23受入](releases/v1.0.23/ACCEPTANCE_1.0.23.md) | 実配送の証拠照合と人判断。送信結果不明を自動再送せず、管理CLIをチャットへ無断公開しない |
 | 薬剤の言及履歴・別名承認 | [薬剤ワークフロー](specs/DRUG_MASTER_WORKFLOWS.md)、[drug_timeline](../mcs/medications/drug_timeline.py)、[drug_alias](../mcs/medications/drug_alias.py) | [1.0.23受入](releases/v1.0.23/ACCEPTANCE_1.0.23.md) | 公開masterの配布と、私有辞書の利用条件確認・採用・有効化は別の操作 |
-| 患者コンテキスト | [構造化契約](specs/patient-context.md)、[patient_nightly](../mcs/patients/patient_nightly.py) | [1.0.25受入](releases/v1.0.25/ACCEPTANCE_1.0.25.md)・[1.0.27受入](releases/v1.0.27/ACCEPTANCE_1.0.27.md) | 作成・公開の既定有効と、下段の患者状態参照の品質昇格を混同しない。終日処理、JST 03:30が作業日の境界 |
+| 患者コンテキスト | [構造化契約](specs/patient-context.md)、[patient_context_refresh](../mcs/patients/patient_context_refresh.py) | [1.0.25受入](releases/v1.0.25/ACCEPTANCE_1.0.25.md)・[1.0.27受入](releases/v1.0.27/ACCEPTANCE_1.0.27.md) | 作成・公開の既定有効と、下段の患者状態参照の品質昇格を混同しない。終日処理、JST 03:30が作業日の境界 |
 | 患者状態参照・意味解析の昇格 | [封印候補の評価](specs/SEALED_CANDIDATE_EVALUATION.md)、[patient_state_context](../mcs/patients/patient_state_context.py) | 合成資産とvalidatorの検証。人手評価は[review manifest](../evaluation/request_following_review_manifest.json)でpending | sealed holdout・人手評価・候補指紋・独立承認が必要。合成220件を人手ラベルや臨床品質合格にしない |
 | 更新・復旧 | [更新手順](guides/UPGRADE_AGENT.md)、[互換matrix](../tests/fixtures/schema_upgrade/update-paths.json) | 対象版の受入票と完全合成matrix | 旧updater・独立復旧・rollbackの検証と、実機update receiptを分ける。過去のCI省略を恒久免除にしない |
 | 責務分離・依存整理 | [責務・状態所有](development/REPOSITORY_STRUCTURE.md)、[開発リファレンス](development/DEVELOPMENT.md)、[推論経路](development/LLM_RUNTIME.md) | 開発中。最終統合検証・全領域の精読・独立レビューは未完 | 外部契約、候補hash、同一TX、旧版からの更新経路を保って完了させる。公開・本番適用は含めない |

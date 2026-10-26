@@ -46,7 +46,7 @@ def _loop(db, monkeypatch, flags, result=None, *, carry=None, settle=None):
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
     monkeypatch.setattr(extract_llm, "_background_semantic",
                         lambda *a, **k: {"errors": [], "done": 0})
-    monkeypatch.setattr(extract_llm, "_background_nightly",
+    monkeypatch.setattr(extract_llm, "_background_context_refresh",
                         lambda *a, **k: {"status": "complete", "done": 0})
     base = result or {"done": 0, "failed": 0, "selected": 0, "left": 0}
     monkeypatch.setattr(extract_llm, "run_pending",
@@ -84,18 +84,18 @@ def test_claim_lease_rows_never_shorten(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("kind", ["PROGRESS", "SCAN"])
 def test_patient_context_retry_shortens_lane3_only(tmp_path, monkeypatch, kind):
-    import patient_nightly
+    import patient_context_refresh
     db = _ledger(tmp_path)
-    _seed_artifact(db, getattr(patient_nightly, kind), {"next_try": WALL0 + 40, "attempts": 1})
+    _seed_artifact(db, getattr(patient_context_refresh, kind), {"next_try": WALL0 + 40, "attempts": 1})
     assert _loop(db, monkeypatch, ["--lane", "3"])[0] == 40
     assert _loop(db, monkeypatch, ["--lane", "2"])[0] == 120
 
 
 def test_capped_or_malformed_context_rows_do_not_wake(tmp_path, monkeypatch):
-    import patient_nightly
+    import patient_context_refresh
     db = _ledger(tmp_path)
-    _seed_artifact(db, patient_nightly.SCAN, {"next_try": WALL0 + 40, "attempts": 5})
-    _seed_artifact(db, patient_nightly.SCAN, {"next_try": "soon", "attempts": 0})
+    _seed_artifact(db, patient_context_refresh.SCAN, {"next_try": WALL0 + 40, "attempts": 5})
+    _seed_artifact(db, patient_context_refresh.SCAN, {"next_try": "soon", "attempts": 0})
     assert _loop(db, monkeypatch, ["--lane", "3"])[0] == 120
 
 
@@ -137,9 +137,9 @@ def test_failure_pass_waits_for_the_nearer_due_job(tmp_path, monkeypatch):
 
 
 def test_failure_pass_without_retriable_row_uses_due_jobs(tmp_path, monkeypatch):
-    import patient_nightly
+    import patient_context_refresh
     db = _ledger(tmp_path)
-    _seed_artifact(db, patient_nightly.SCAN, {"next_try": WALL0 + 40, "attempts": 1})
+    _seed_artifact(db, patient_context_refresh.SCAN, {"next_try": WALL0 + 40, "attempts": 1})
     failed = {"done": 0, "failed": 2, "selected": 2, "left": 2}
     assert _loop(db, monkeypatch, ["--lane", "3"], failed)[0] == 40
 
@@ -184,11 +184,11 @@ def test_next_due_in_survives_a_locked_database():
 
 
 def test_next_due_in_excludes_past_and_picks_earliest(tmp_path):
-    import patient_nightly
+    import patient_context_refresh
     db = _ledger(tmp_path)
     _seed_artifact(db, "extract_llm", meta={"error": 1, "attempts": 1, "next_try": WALL0 - 5})
     _seed_job(db, "semantic", WALL0 + 70)
-    _seed_artifact(db, patient_nightly.PROGRESS, {"next_try": WALL0 + 30, "attempts": 0})
+    _seed_artifact(db, patient_context_refresh.PROGRESS, {"next_try": WALL0 + 30, "attempts": 0})
     assert extract_llm._next_due_in(db, WALL0, semantic=True, context=True) == 30
     assert extract_llm._next_due_in(db, WALL0, semantic=True, context=False) == 70
     assert extract_llm._next_due_in(db, WALL0 + 100, semantic=True, context=True) is None

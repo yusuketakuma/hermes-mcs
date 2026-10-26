@@ -1,5 +1,6 @@
 """Offline contracts for the live detection command's reported outcome."""
 import semantic_transport
+from contextlib import nullcontext
 from types import SimpleNamespace
 import json
 from pathlib import Path
@@ -38,7 +39,7 @@ def test_run_refuses_unbound_corpus_before_model_or_credentials(
     source, output = tmp_path / "input.json", tmp_path / "result.json"
     source.write_text(json.dumps(corpus))
     monkeypatch.setattr(semantic_transport, 'llm_chat', lambda *_: pytest.fail("model dispatched"))
-    monkeypatch.setattr(bench, "env_value", lambda *_: pytest.fail("credentials read"))
+    monkeypatch.setattr(bench.jev, "api_key", lambda *_: pytest.fail("credentials read"))
     assert bench.cmd_run(SimpleNamespace(corpus=source, out=str(output), tag="synthetic",
                                         job_budget=1, jev=live_jev)) == 2
     assert not output.exists()
@@ -137,7 +138,7 @@ def test_corpus_rejects_invalid_count_without_ledger_or_output(tmp_path, monkeyp
 def test_run_rejects_malformed_json_without_dispatch_or_output(tmp_path, monkeypatch):
     source, output = tmp_path / "input.json", tmp_path / "result.json"
     source.write_text("{synthetic invalid json")
-    monkeypatch.setattr(bench, "env_value", lambda *_: pytest.fail("credentials read"))
+    monkeypatch.setattr(bench.jev, "api_key", lambda *_: pytest.fail("credentials read"))
     assert bench.cmd_run(SimpleNamespace(corpus=source, out=str(output), jev=True)) == 2
     assert not output.exists()
 
@@ -158,8 +159,8 @@ def test_detection_requires_every_probe_to_be_evaluated(monkeypatch, capsys, une
         [{"code": "claim_not_supported"}] if p["expect_reject"] else [], True)
         for i, p in enumerate(probes)])
     monkeypatch.setattr(bench, "_PROBES", probes)
-    monkeypatch.setattr(bench, "env_value", lambda name: "synthetic")
-    monkeypatch.setattr(bench.jev, "JevClient", lambda **kw: SimpleNamespace(requests_made=2))
+    monkeypatch.setattr(bench.jev, "api_key", lambda: "synthetic")
+    monkeypatch.setattr(bench.jev, "live_client", lambda *a, **kw: nullcontext(SimpleNamespace(requests_made=2)))
     monkeypatch.setattr(bench, "audit_claims", lambda *args: next(replies))
 
     assert bench.cmd_detect(SimpleNamespace()) == (1 if unevaluated else 0)

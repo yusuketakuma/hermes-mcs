@@ -621,7 +621,7 @@ class View:
             return pcv.search(self.db, pid, query)
         if view == "replies":
             return pcv.replies(self.db, pid)
-        # current publication settings gate the nightly prose, not the flag stored at generation
+        # current publication settings gate the published context, not the flag stored at generation
         ev = pcv.evidence(self.db, pid, cfg=load_config())
         now = self.meta["generated_at"]
         return {

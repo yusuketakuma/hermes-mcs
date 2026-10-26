@@ -3,7 +3,7 @@ import copy
 import json
 
 import extract_llm
-import patient_nightly as nightly
+import patient_context_refresh as context_refresh
 from extract_testkit import _ledger, _message, _hash
 
 
@@ -48,15 +48,15 @@ def test_original_detail_fields_reach_already_found_without_raw_metadata(tmp_pat
              "evidence": quotes[2]}], "source": dict(origin)},
         ]
         total_changes = led.db.total_changes
-        source = next(nightly._sources(led.db, 1, mid=1))
+        source = next(context_refresh._sources(led.db, 1, mid=1))
         assert source["items"] == expected
         assert json.dumps(source["items"], ensure_ascii=False) == json.dumps(expected, ensure_ascii=False)
         calls = []
         def ask(cfg, payload, *args):
             calls.append(copy.deepcopy(payload))
             return {"patient_context": []}
-        monkeypatch.setattr(nightly, "_ask", ask)
-        result = nightly._scan({}, source, {}, "2026-10-17", 1000.0, lambda: True, 2000.0)
+        monkeypatch.setattr(context_refresh, "_ask", ask)
+        result = context_refresh._scan({}, source, {}, "2026-10-17", 1000.0, lambda: True, 2000.0)
         prompt = {"instruction": EXPECTED_INSTRUCTION, "categories": EXPECTED_CATEGORIES,
                   "already_found": expected, "source": body}
         assert calls == [prompt]

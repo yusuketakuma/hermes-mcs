@@ -55,9 +55,9 @@ def mentions(reader, mid, *, cfg=None):
         return source, meds
     from semantic_v4 import reproject_doc
     from semantic_store import thread_bundle
-    from semantic_policy import semantic_config, policy_fingerprint
+    from semantic_policy import runtime_config, policy_fingerprint
     message = db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone()
-    scfg, errors = semantic_config(cfg or {})
+    scfg, errors = runtime_config(cfg or {})
     bundle = thread_bundle(reader.db, message["project_id"], message["parent_id"] or mid,
                            local_model=semantic_transport.llm_model(cfg or {}))
     if errors or bundle is None or bundle["source_fingerprint"] != meta.get("fingerprint") or policy_fingerprint(scfg) != meta.get("policy_fingerprint"):

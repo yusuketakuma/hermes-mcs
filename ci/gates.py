@@ -27,6 +27,7 @@ LEDGER_WRITERS = {
     "run_check.py", "semantic.py", "semantic_drain.py", "mcs_update.py",
     "project_metadata.py",
     "cross_lists.py",
+    "cloud_cli.py", "semantic_jev.py",  # Short, run-lock-protected controls and live usage reservations.
 }
 
 _LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin", "adapters", "lineworks_adapter", "mcs_standalone"}

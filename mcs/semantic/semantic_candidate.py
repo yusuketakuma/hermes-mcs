@@ -7,6 +7,7 @@ import json
 import marshal
 import math
 import types
+from datetime import timezone
 from pathlib import Path
 import re
 from zoneinfo import ZoneInfo
@@ -14,18 +15,22 @@ from zoneinfo import ZoneInfo
 from mcs_util import payload_hash, valid_hash
 
 # Capture loaded source once; an on-disk update cannot bless an old worker.
-_MODULES = ('semantic_extraction', 'semantic_facts', 'semantic_audit',
+_MODULES = ('anthropic_client', 'cloud_policy', 'llm_retry', 'mcs_config', 'mcs_util', 'bounded_http', 'patient_context_refresh', 'semantic_extraction', 'semantic_facts', 'semantic_audit',
             'semantic_relations', 'semantic_render', 'semantic_notice', 'semantic_send_gate', 'semantic_llm', 'semantic_jev',
             'semantic', 'semantic_transport', 'semantic_assessment', 'semantic_loops', 'semantic_projection', 'semantic_policy',
             'semantic_acceptance', 'structured_view', 'clinical_display',
             'extract_schema', 'extract_validation', 'extract_quality',
-            'clinical_scope', 'clinical_urgency', 'clinical_chunking', 'semantic_quantities', 'clinical_values', 'patient_context', 'mcs_queries', 'semantic_assembly', 'writer_lock', 'semantic_store', 'semantic_v4', 'semantic_v4_cohort', 'patient_nightly_plan', 'semantic_runtime', 'llm_availability', 'self_identity', 'safe_io')
+            'clinical_scope', 'clinical_urgency', 'clinical_chunking', 'semantic_quantities', 'clinical_values', 'patient_context', 'mcs_queries', 'semantic_assembly', 'writer_lock', 'semantic_store', 'semantic_v4', 'semantic_v4_cohort', 'patient_context_plan', 'semantic_runtime', 'llm_availability', 'self_identity', 'safe_io')
 
 
-# Runtime locations and mutable probe state are not interpretation constants.
+# Runtime paths and callable registries are bound by loaded source, not runtime values.
 _RUNTIME_STATE = {'semantic_transport': frozenset({'_FMT_MODE', '_FMT_TS', '_LONG_UNSAVED',
                                        '_LONG_MARK_FAILURES', '_LLM_FAILURE'}),
-                  'writer_lock': frozenset({'_MCS_ROOT', 'RUN_LOCK'})}
+                  'writer_lock': frozenset({'_MCS_ROOT', 'RUN_LOCK'}),
+                  'cloud_policy': frozenset({'HOME'}),
+                  'mcs_config': frozenset({'REPO', 'CONFIG_RULES'}),
+                  'mcs_util': frozenset({'HOME', 'REPO', 'CONF_PATH', 'DB', 'ATTACH_DIR',
+                                         'CACHE', 'CHROME_PROFILE'})}
 
 
 def _constant(value):
@@ -41,6 +46,8 @@ def _constant(value):
         return ['bytes', value.hex()]
     if isinstance(value, re.Pattern):
         return ['regex', _constant(value.pattern), value.flags]
+    if isinstance(value, timezone):
+        return ["fixed_timezone", value.utcoffset(None).total_seconds(), value.tzname(None)]
     if isinstance(value, ZoneInfo):
         if not isinstance(value.key, str):
             raise ValueError('unkeyed_candidate_timezone')
@@ -111,6 +118,20 @@ def _sources():
 _LOADED_SOURCES = None
 
 
+def _cloud_contract(cfg):
+    import cloud_policy
+    block = cfg.get("cloud_llm")
+    automatic = block is None or isinstance(block, dict) and "mode" not in block
+    settings, errors = cloud_policy.cloud_config(cfg, key_present=automatic)
+    if errors:
+        return None
+    if automatic:
+        settings["mode"] = "auto"
+    elif settings["mode"] in ("off", "dry_run"):
+        return None
+    return {key: settings[key] for key in ("mode", "routes", "project_ids", "exclude_project_ids", "model")}
+
+
 def candidate_fingerprint(cfg: dict) -> str:
     """Hash versions, prompts, schemas, models and all interpretation settings."""
     import extract_llm
@@ -146,6 +167,7 @@ def candidate_fingerprint(cfg: dict) -> str:
         'extract': extraction,
         'vital_urgency': extract_validation.vital_threshold_policy(cfg),
         'local_llm': cfg.get('local_llm', {}),
+        'cloud_llm': _cloud_contract(cfg),
     })
 
 

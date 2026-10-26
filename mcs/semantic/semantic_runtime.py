@@ -289,11 +289,11 @@ def _circuit_failure_class(error) -> str | None:
     return None
 
 
-def _circuit_state(ledger, now=None) -> dict:
+def _circuit_state(ledger, now=None, *, kind=_CIRCUIT_ARTIFACT_KIND) -> dict:
     row = ledger.db.execute(
         "SELECT content,created_at FROM artifacts WHERE kind=? AND project_id IS NULL "
         "AND message_id IS NULL ORDER BY artifact_id DESC LIMIT 1",
-        (_CIRCUIT_ARTIFACT_KIND,)).fetchone()
+        (kind,)).fetchone()
     if row is None:
         return {"consecutive_failures": 0, "open_until": 0.0,
                 "failure_class": None}
@@ -306,7 +306,9 @@ def _circuit_state(ledger, now=None) -> dict:
                 or type(open_until) not in (int, float)
                 or not math.isfinite(float(open_until))
                 or (failure_class is not None
-                    and failure_class not in _CIRCUIT_FAILURE_CLASSES)):
+                    and failure_class not in (_CIRCUIT_FAILURE_CLASSES |
+                        ({"auth_error", "payment_required", "pricing_unverified", "contract_error"}
+                         if kind == "cloud_circuit" else set())))):
             raise ValueError
         return {"consecutive_failures": min(count, _CIRCUIT_FAILURE_LIMIT),
                 "open_until": float(open_until),
@@ -324,37 +326,54 @@ def _circuit_state(ledger, now=None) -> dict:
         except (KeyError, OverflowError, TypeError, ValueError):
             created_at = _circuit_now(now)
         return {"consecutive_failures": _CIRCUIT_FAILURE_LIMIT,
-                "open_until": created_at + _CIRCUIT_COOLDOWN_SECONDS,
-                "failure_class": "malformed"}
+                "open_until": 1e30 if kind == "cloud_circuit" else created_at + _CIRCUIT_COOLDOWN_SECONDS,
+                "failure_class": "pricing_unverified" if kind == "cloud_circuit" else "malformed"}
 
 
 def _circuit_is_open(state: dict, now: float) -> bool:
     return float(state.get("open_until", 0.0)) > now
 
 
-def _write_circuit_state(ledger, state: dict, now: float) -> None:
+def _write_circuit_state(ledger, state: dict, now: float, *, kind=_CIRCUIT_ARTIFACT_KIND) -> None:
     payload = {
         "consecutive_failures": int(state["consecutive_failures"]),
         "open_until": float(state["open_until"]),
         "failure_class": state.get("failure_class"),
         "updated_at": now,
     }
-    ledger.artifact_add(
-        _CIRCUIT_ARTIFACT_KIND,
+    write = ledger.artifact_add_tx if kind == "cloud_circuit" else ledger.artifact_add
+    write(
+        kind,
         json.dumps(payload, ensure_ascii=False, separators=(",", ":"),
                    allow_nan=False),
-        model="jev",
+        model="jev" if kind == _CIRCUIT_ARTIFACT_KIND else "claude-haiku-5-5",
         meta={"state": "open" if payload["open_until"] > now else "closed"},
     )
 
 
-def circuit_open(ledger, now=None) -> bool:
+def circuit_open(ledger, now=None, *, kind=_CIRCUIT_ARTIFACT_KIND) -> bool:
     """Return whether the durable Jev circuit is within its cooldown."""
     current = _circuit_now(now)
-    return _circuit_is_open(_circuit_state(ledger, current), current)
+    return _circuit_is_open(_circuit_state(ledger, current, kind=kind), current)
 
 
-def record_circuit_result(ledger, error, now=None) -> bool:
+def record_circuit_result(ledger, error, now=None, *, kind=_CIRCUIT_ARTIFACT_KIND, reset=False) -> bool:
+    """Persist one result; cloud read/write owns one immediate transaction.
+
+    Cloud rejects a borrowed active transaction without committing caller work.
+    Terminal cloud failures survive successful results until explicit reset;
+    the existing Jev cooldown and transaction behavior remain unchanged.
+    """
+    if kind != "cloud_circuit":
+        return _record_circuit_result(ledger, error, now, kind=kind, reset=reset)
+    if ledger.db.in_transaction:
+        raise RuntimeError("cloud_circuit_transaction_active")
+    ledger.db.execute("BEGIN IMMEDIATE")
+    with ledger.db:
+        return _record_circuit_result(ledger, error, now, kind=kind, reset=reset)
+
+
+def _record_circuit_result(ledger, error, now=None, *, kind=_CIRCUIT_ARTIFACT_KIND, reset=False) -> bool:
     """Persist one Jev result and return the resulting open state.
 
     Only retryable rate-limit/5xx/transport/timeout failures count.  Error
@@ -363,18 +382,31 @@ def record_circuit_result(ledger, error, now=None) -> bool:
     failure count.
     """
     current = _circuit_now(now)
-    state = _circuit_state(ledger, current)
+    state = _circuit_state(ledger, current, kind=kind)
+    terminal = {"auth_error", "payment_required", "pricing_unverified"}
+    if (kind == "cloud_circuit" and not reset
+            and state["failure_class"] in terminal):
+        return True
+    if kind == "cloud_circuit" and getattr(error, "kind", "") in terminal:
+        updated = {"consecutive_failures": _CIRCUIT_FAILURE_LIMIT,
+                   "open_until": 1e30, "failure_class": error.kind}
+        _write_circuit_state(ledger, updated, current, kind=kind)
+        return True
     failure_class = _circuit_failure_class(error)
+    if kind == "cloud_circuit" and getattr(error, "kind", "") == "contract_error":
+        failure_class = "contract_error"
     if error is None:
         if state["consecutive_failures"] == 0 and not _circuit_is_open(state, current):
             return False
         clean = {"consecutive_failures": 0, "open_until": 0.0,
                  "failure_class": None}
-        _write_circuit_state(ledger, clean, current)
+        _write_circuit_state(ledger, clean, current, kind=kind)
         return False
     if failure_class is None or _circuit_is_open(state, current):
         return _circuit_is_open(state, current)
     failures = state["consecutive_failures"]
+    if kind == "cloud_circuit" and state["failure_class"] != failure_class:
+        failures = 0
     if state["open_until"] > 0 and current >= state["open_until"]:
         failures = 0
     failures = min(_CIRCUIT_FAILURE_LIMIT, failures + 1)
@@ -382,7 +414,7 @@ def record_circuit_result(ledger, error, now=None) -> bool:
                   if failures >= _CIRCUIT_FAILURE_LIMIT else 0.0)
     updated = {"consecutive_failures": failures, "open_until": open_until,
                "failure_class": failure_class}
-    _write_circuit_state(ledger, updated, current)
+    _write_circuit_state(ledger, updated, current, kind=kind)
     return open_until > current
 
 
@@ -476,6 +508,15 @@ def _jev_cutoff(cutoff, attempt_s: float = 0.0) -> None:
 
 
 
+def reserve_artifact(ledger, check, write):
+    """Check and write one usage reservation in the same immediate transaction."""
+    if not ledger.db.in_transaction:
+        ledger.db.execute("BEGIN IMMEDIATE")
+    with ledger.db:
+        check()
+        return write()
+
+
 def usage_reserver(ledger, token: JobToken, *, kind: str,
                    model: str, project_id: int, message_id: int,
                    daily_request_budget: int | None = None):
@@ -483,12 +524,13 @@ def usage_reserver(ledger, token: JobToken, *, kind: str,
     if daily_request_budget is not None and (
             type(daily_request_budget) is not int or daily_request_budget < 0):
         raise ValueError("semantic_daily_budget_invalid")
+    from semantic_jev import DAILY_REQUEST_LIMIT
+    daily_request_budget = (DAILY_REQUEST_LIMIT if daily_request_budget is None
+                            else min(daily_request_budget, DAILY_REQUEST_LIMIT))
 
     def reserve(body: dict, timeout: float):
         request_fp = payload_hash(body)
-        if not ledger.db.in_transaction:
-            ledger.db.execute("BEGIN IMMEDIATE")
-        with ledger.db:
+        def check():
             if daily_request_budget is not None:
                 from semantic_jev import JevError
                 from semantic_store import jev_usage_today
@@ -498,7 +540,8 @@ def usage_reserver(ledger, token: JobToken, *, kind: str,
                     raise JevError("budget_exceeded", "semantic_usage_invalid", retryable=True) from None
                 if used >= daily_request_budget:
                     raise JevError("budget_exceeded", "daily_cap", retryable=True)
-            ledger.artifact_add_tx(
+        def write():
+            return ledger.artifact_add_tx(
                 kind,
                 json.dumps({"job_id": token.job_id, "reserved": True},
                            ensure_ascii=False),
@@ -508,6 +551,39 @@ def usage_reserver(ledger, token: JobToken, *, kind: str,
                       "request_fp": request_fp,
                       "timeout_seconds": float(timeout),
                       "reservation_id": uuid.uuid4().hex})
+        return reserve_artifact(ledger, check, write)
+    return reserve
+
+
+def manual_usage_reserver(ledger, *, operation: str, daily_request_budget=None):
+    """Reserve every explicit live-evaluation HTTP against the same MCS daily count."""
+    from semantic_jev import DAILY_REQUEST_LIMIT, JEV_MODEL, JevError
+    if operation not in {"wire_smoke", "jev_value", "semantic_bench", "semantic_detect", "semantic_shadow_e2e"}:
+        raise ValueError("manual_jev_operation_invalid")
+    if daily_request_budget is None:
+        daily_request_budget = DAILY_REQUEST_LIMIT
+    if type(daily_request_budget) is not int or daily_request_budget < 0:
+        raise JevError("budget_exceeded", "semantic_daily_budget_invalid")
+    limit = min(daily_request_budget, DAILY_REQUEST_LIMIT)
+
+    def reserve(body, timeout):
+        def check():
+            from semantic_store import jev_usage_today
+            try:
+                used = jev_usage_today(ledger)
+            except ValueError:
+                raise JevError("budget_exceeded", "semantic_usage_invalid") from None
+            if used >= limit:
+                raise JevError("budget_exceeded", "daily_cap")
+
+        def write():
+            return ledger.artifact_add_tx("semantic_usage", "{}", model=JEV_MODEL,
+                meta={"jev_requests": 1, "reserved": True, "operation": operation,
+                      "request_fp": payload_hash(body), "timeout_seconds": float(timeout),
+                      "reservation_id": uuid.uuid4().hex})
+        if ledger.db.in_transaction:
+            raise RuntimeError("manual_jev_transaction_active")
+        return reserve_artifact(ledger, check, write)
     return reserve
 
 
@@ -592,6 +668,13 @@ class JevEvaluation:
     @last_error.setter
     def last_error(self, error):
         self._client.last_error = error
+
+    def models(self, timeout=10.0):
+        self._guard("jev_attempt")
+        _jev_cutoff(self._cutoff, timeout)
+        result = self._client.models(timeout, reserve_fn=self._reserve)
+        self._guard("jev_result")
+        return result
 
     def _evaluate(self, state, questions, deadline, **hooks):
         started = time.perf_counter()

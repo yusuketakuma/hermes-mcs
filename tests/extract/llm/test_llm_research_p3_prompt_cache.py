@@ -6,7 +6,7 @@ import os
 import sys
 
 import extract_llm
-import patient_nightly
+import patient_context_refresh
 import semantic_extraction as extraction
 import semantic_llm
 from test_semantic_facts_v2 import FP
@@ -70,21 +70,21 @@ def test_repair_prompt_without_reference_is_byte_stable():
     assert "＞＞＞" in expected
 
 
-def test_nightly_prompts_lead_with_the_fixed_instruction(monkeypatch):
+def test_context_refresh_prompts_lead_with_the_fixed_instruction(monkeypatch):
     payloads = []
 
     def ask(cfg, payload, deadline, admit, end):
         payloads.append(payload)
-        raise patient_nightly.Deferred("captured")
-    monkeypatch.setattr(patient_nightly, "_ask", ask)
+        raise patient_context_refresh.Deferred("captured")
+    monkeypatch.setattr(patient_context_refresh, "_ask", ask)
     fact = {"id": "f1", "source": "s", "project_id": 1, "message_id": 1, "category": "living",
             "text": "合成の背景", "posted_at": POSTED, "subject": "patient"}
-    for fn, args in ((patient_nightly._summary, ({}, [fact], None, lambda: True, None)),
-                     (patient_nightly._scan, ({}, {"body_text": "合成の本文", "items": []},
+    for fn, args in ((patient_context_refresh._summary, ({}, [fact], None, lambda: True, None)),
+                     (patient_context_refresh._scan, ({}, {"body_text": "合成の本文", "items": []},
                                               {}, "n1", None, lambda: True, None))):
         try:
             fn(*args)
-        except patient_nightly.Deferred:
+        except patient_context_refresh.Deferred:
             pass
     assert list(payloads[0]) == ["instruction", "reports"]
     assert list(payloads[1])[:2] == ["instruction", "categories"]

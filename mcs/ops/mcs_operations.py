@@ -660,6 +660,9 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     if req["cmd"] in ("ops.drug_alias_apply", "ops.drug_alias_rollback"):
         from drug_alias import apply_tx as apply_alias_tx
         return apply_alias_tx(db, req, filesystem_changes)
+    if req["cmd"] in ("ops.cloud_stop", "ops.cloud_resume"):
+        from cloud_cli import apply_control_tx
+        return apply_control_tx(db, req, current)
     if req["cmd"] == "ops.scan":
         return _apply_scan_tx(db, req, current)
     if req["cmd"] == "ops.retry":

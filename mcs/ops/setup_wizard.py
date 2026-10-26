@@ -40,7 +40,7 @@ def _digest_on(cfg):
 
 
 def _semantic_on(cfg):
-    m = (cfg.get("semantic") or {}).get("mode", "off")
+    m = (cfg.get("semantic") or {}).get("mode", "auto")
     return m != "off"
 
 
@@ -191,17 +191,17 @@ WIZARD = [
         ("signals.med_exclude_names", "csv", None,
          "薬剤判定から除外する語・カンマ区切り（空欄可）", None),
     ]),
-    ("外部サービスによる追加解析（通常は使いません）", [
-        ("semantic.mode", "choice:off,shadow,enforce", "off",
-         "追加解析を使いますか？ off=使わない（推奨）。off以外は投稿本文を外部のJev APIへ送信します。"
-         "shadow=結果を記録するだけ / enforce=結果を判定に使用", None),
-        ("semantic.project_ids", "reqintlist", None,
-         "対象プロジェクトID・カンマ区切り（modeがoff以外では必須）",
+    ("外部サービスによる追加解析", [
+        ("semantic.mode", "choice:auto,off,shadow,assist,enforce", "auto",
+         "auto=このMCSの.envにキーがあれば追加解析を使用。対象の投稿本文をJev APIへ送信します。"
+         "off=使わない / shadow=比較用 / assist=解析結果を使用 / enforce=承認済みの通知判断に使用", None),
+        ("semantic.project_ids", "intlist", None,
+         "対象プロジェクトID・カンマ区切り（autoで未指定なら全対象、手動有効化時は必須）",
          _semantic_on),
         ("semantic.extract_qc", "choice:off,annotate", "off",
          "抽出結果への Jev 監査注記", _semantic_on),
         ("semantic.daily_request_budget", "int", None,
-         "Jev 呼出の1日上限（空欄=既定）", _semantic_on),
+         "Jev要求の1日上限（再試行込み、空欄=500、最大500、0=送信停止）", _semantic_on),
     ]),
 ]
 
@@ -225,6 +225,8 @@ def has_key(cfg: dict, dotted: str) -> bool:
 
 
 def set_key(cfg: dict, dotted: str, val):
+    if dotted == "semantic.mode" and val == "auto":
+        val = UNSET
     parts = dotted.split(".")
     if val is UNSET:
         cur = cfg
@@ -301,6 +303,8 @@ _CHOICE_LABELS = {
     "standalone": "MCS だけで動かす（Hermes が不要）",
     "off": "使わない", "slack": "Slack のカード通知（通知を使う場合の推奨）",
     "discord": "Discord のカード通知", "lineworks": "LINE WORKS のカード通知",
+    "auto": "キーがあれば自動で追加解析を使用する",
+    "assist": "外部サービスへ送信して解析結果を使用する",
     "shadow": "外部サービスへ送信して結果を記録する",
     "enforce": "外部サービスへ送信して判定に使う",
     "annotate": "外部サービスの検査結果を付ける",
@@ -520,11 +524,12 @@ def offer_sdc_enrollment(cfg: dict) -> None:
         print('状態監視の登録は未完了です。同意記録と本体設定は保持します。mcs connect で再開できます。')
 
 
-def confirm_save(cfg: dict, *, plugin_profile) -> bool:
+def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
     """Show the selected destinations and writes; require an explicit answer before saving."""
     import stamp_write
     import local_llm
-    from semantic_policy import semantic_config
+    from semantic_policy import runtime_config, semantic_config
+    import cloud_policy
 
     def shown(value):
         if value is None or value == "":
@@ -536,7 +541,11 @@ def confirm_save(cfg: dict, *, plugin_profile) -> bool:
     interactive = ntf.get("interactive", "off")
     scope = ntf.get(interactive) or {}
     digest = cfg.get("daily_digest") or {}
-    semantic, _ = semantic_config(cfg)
+    semantic, _ = (runtime_config(cfg) if key_presence is None else
+                   semantic_config(cfg, key_present=key_presence.get("jev") is True))
+    cloud_key = (bool(cloud_policy.api_key()) if key_presence is None
+                 else key_presence.get("anthropic") is True)
+    cloud, _ = cloud_policy.cloud_config(cfg, key_present=cloud_key)
     print("\n【保存前の確認】設定した送り先と、この後に保存する内容を確認してください。"
           "\n  ここで中止すると、今回の設定・認証情報・辞書は保存しません。")
     print(f"  実行方法: {shown(mode)}"
@@ -560,14 +569,21 @@ def confirm_save(cfg: dict, *, plugin_profile) -> bool:
     endpoint, _model = local_llm.resolve(cfg)
     print("  通常の要約・抽出: このMacのAIで処理します。接続先: "
           + shown(endpoint))
+    project_scope = "全対象" if semantic["project_ids"] is None else shown(semantic["project_ids"])
     features = ("mode", "summary_mode", "loop_mode", "extract_qc")
     if any(semantic[key] != "off" for key in features) and semantic["daily_request_budget"] > 0:
-        print(f"  外部Jev追加解析: 対象プロジェクト {shown(semantic['project_ids'])} の投稿本文を、"
+        print(f"  外部Jev追加解析: 対象プロジェクト {project_scope} の投稿本文を、"
               "機能ごとの許可条件がそろった場合にJev APIへ送ります。")
     else:
         print("  外部Jev追加解析: 無効（有効な機能と送信予算が必要です）")
     print("  Jev設定: " + ", ".join(f"{key}={shown(semantic[key])}" for key in features)
-          + f" / 1日の要求上限 {semantic['daily_request_budget']} / 対象 {shown(semantic['project_ids'])}")
+          + f" / 1日の要求上限 {semantic['daily_request_budget']} / 対象 {project_scope}")
+    cloud_scope = "全対象" if cloud["project_ids"] is None else shown(cloud["project_ids"])
+    if cloud["mode"] in ("on", "shadow") and cloud_key:
+        print(f"  Anthropic追加処理: {cloud['mode']} / 対象 {cloud_scope}。患者コンテキストと対象の再抽出で、"
+              "投稿本文・参考文脈をAnthropic APIへ送信します。通常のAPI保持条件が適用されます。")
+    else:
+        print(f"  Anthropic追加処理: {cloud['mode']} / キー未登録・off・dry_runの場合は外部送信しません。")
     print("  公開薬情報の照会: 同梱公開マスターで照合した薬品名・一般疾患名・公式URLを"
           "TinyFishへ送り、トークンファイルがない場合だけ固定の無料Exaへ送ります。患者本文は送りません。"
           "\n  定期的な薬情報更新確認: "

@@ -280,6 +280,22 @@ def jev_block_reason(db) -> str | None:
     return kind if kind in _JEV_BLOCK_KINDS else None
 
 
+def cloud_stop_reason(db, cfg) -> str | None:
+    """Observe a configured provider's durable stop without probing it or reading source bodies."""
+    from types import SimpleNamespace
+    import cloud_policy
+    if not cloud_policy.api_key():
+        return None
+    settings, errors = cloud_policy.cloud_config(cfg, key_present=True)
+    if (errors or settings["mode"] not in ("on", "shadow")
+            or not settings["routes"] or settings["project_ids"] == []):
+        return None
+    reason = cloud_policy.global_block_reason(SimpleNamespace(db=db))
+    if reason in (None, "paused"):
+        return None
+    return reason if reason in ("auth_error", "payment_required", "pricing_unverified") else "circuit_open"
+
+
 def carried_since(key: str, active: bool, now: float) -> float | None:
     """Start of a condition observed on every health write since: the
     previous health block's mark while it held, else now; None when the
@@ -319,6 +335,9 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
     import semantic_policy
     from mcs_queries import current_v4_id
     reasons = []
+    cloud_reason = cloud_stop_reason(db, cfg)
+    if cloud_reason:
+        reasons.append(f"cloud_llm_{cloud_reason}")
     if notify_scope.interactive_enabled(cfg):
         oldest = db.execute(
             "SELECT MIN(created_at) FROM notification_renders "
@@ -347,7 +366,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
             reasons.append("restore_delivery_held")
     marks = {} if marks is None else marks
     window = now - BACKLOG_STALL_S
-    scfg, errors = semantic_policy.semantic_config(cfg)
+    scfg, errors = semantic_policy.runtime_config(cfg)
 
     def llm_due() -> bool:
         """Work that needs the local model is waiting: due semantic jobs
@@ -513,14 +532,14 @@ def _observation_failure(exc) -> str:
 
 
 def patient_context_health(db, checked_cfg, now, source) -> dict:
-    """Counts only, never patients: nightly lane outcomes, extraction-complete
+    """Counts only, never patients: context refresh lane outcomes, extraction-complete
     and patient-focus counts, stored published contexts. Counts are reused for
     COVERAGE_COUNT_S on the same db and extraction generation; publication is
     always read from the current checked config (None when unchecked). A read
     past its bound is 'unknown', never zero."""
     import extract_llm
-    import patient_nightly
-    publication = patient_nightly.options(checked_cfg)["publication"] if checked_cfg is not None else None
+    import patient_context_refresh
+    publication = patient_context_refresh.options(checked_cfg)["publication"] if checked_cfg is not None else None
     key = {"source": source, "extract_version": extract_llm.EXTRACT_VERSION}
     prev = prev_health().get("patient_context")
     if (isinstance(prev, dict) and prev.get("status") == "recorded"
@@ -530,7 +549,7 @@ def patient_context_health(db, checked_cfg, now, source) -> dict:
         return {**prev, "publication": publication}
     try:
         counts = bounded_health_read(db, lambda _check: {
-            **patient_nightly.lane_metrics(db), **extract_llm.patient_progress_counts(db)},
+            **patient_context_refresh.lane_metrics(db), **extract_llm.patient_progress_counts(db)},
             seconds=PATIENT_CONTEXT_S)
     except Exception as exc:
         return {"status": "unknown", "observed_at": now, "reason": _observation_failure(exc),

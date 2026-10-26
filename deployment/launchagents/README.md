@@ -133,7 +133,7 @@ llama-server は `-c 49152 -np 3`（各枠16384 tokens）。枠はレーン1/2/3
 - `ai.mcs.extract-drainer-2`: `--all --workers 1 --lane 3 --semantic`
 
 両workerは24時間動く。レーン3は各周回の最初に患者コンテキスト作成
-（`patient_nightly.run_due`。保存済み投稿がすべて現行LLM世代で解析済みの
+（`patient_context_refresh.run_due`。保存済み投稿がすべて現行LLM世代で解析済みの
 患者だけ）を進め、進める対象がなければ抽出1件とsemantic/QC 1件を交互に
 処理する。レーン2は抽出とsemantic/QCの交互処理のみ。
 どちらもアクティブ患者を先にし、余った枠でアーカイブ済み患者を処理する。

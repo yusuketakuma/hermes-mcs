@@ -60,21 +60,20 @@ def main() -> int:
         print("cases file must declare source: synthetic", file=sys.stderr)
         return 1
 
-    jev_client = None
+    from contextlib import nullcontext
+    context = nullcontext(None)
     if args.jev:
         import semantic_jev as jev
-        from mcs_util import env_value
-        api_key = env_value("TYPESAFE_API_KEY")
-        if api_key:
-            jev_client = jev.JevClient(api_key=api_key,
-                                       model=jev.JEV_MODEL)
+        key = jev.api_key()
+        if key:
+            context = jev.live_client(key, operation="semantic_shadow_e2e", model=jev.JEV_MODEL)
         else:
-            print("warning: TYPESAFE_API_KEY unset — audit stages will "
-                  "be INCOMPLETE", file=sys.stderr)
+            print("warning: TYPESAFE_API_KEY unset — audit stages will be INCOMPLETE", file=sys.stderr)
 
-    report = semantic_evaluation.run_shadow_e2e(
-        cases, semantic_transport.llm_chat, jev_client, source=payload["source"],
-        deadline_s=args.deadline)
+    with context as jev_client:
+        report = semantic_evaluation.run_shadow_e2e(
+            cases, semantic_transport.llm_chat, jev_client, source=payload["source"],
+            deadline_s=args.deadline)
     Path(args.out).write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8")

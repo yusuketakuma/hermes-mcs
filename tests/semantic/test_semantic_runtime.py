@@ -368,3 +368,100 @@ def test_budget_short_on_second_target_commits_first(tmp_path, monkeypatch):
     # only target 2 is audited on the resumed pass
     assert state["aud"] == audits_run1 + 1
     assert db.artifacts("semantic_summary", message_id=2)
+
+
+def test_small_reservation_primitive_needs_no_semantic_job(tmp_path):
+    db = Ledger(str(tmp_path / "primitive.db"))
+    events = []
+
+    def check():
+        assert db.db.in_transaction
+        events.append("check")
+
+    def write():
+        events.append("write")
+        return db.artifact_add_tx("cloud_usage_reserve", "{}")
+
+    row_id = runtime.reserve_artifact(db, check, write)
+    assert events == ["check", "write"] and not db.db.in_transaction
+    assert db.db.execute("SELECT COUNT(*) FROM fetch_jobs").fetchone()[0] == 0
+    assert db.db.execute("SELECT artifact_id FROM artifacts").fetchone()[0] == row_id
+    db.close()
+
+
+def test_jev_key_based_auto_assist_defaults_to_all_and_500_but_preserves_explicit_off():
+    cfg, errors = semantic_policy.semantic_config({}, key_present=True)
+    assert not errors and cfg["mode"] == "assist"
+    assert cfg["daily_request_budget"] == 500 and cfg["project_ids"] is None
+    cfg, errors = semantic_policy.semantic_config({"semantic": {
+        "mode": "off", "project_ids": [1], "daily_request_budget": 0}}, key_present=True)
+    assert not errors and cfg["mode"] == "off" and cfg["daily_request_budget"] == 0
+
+
+def test_jev_explicit_budget_never_exceeds_user_500_cap():
+    for budget, expected in ((0, 0), (200, 200), (500, 500), (1000, 500)):
+        cfg, errors = semantic_policy.semantic_config({"semantic": {
+            "daily_request_budget": budget, "project_ids": []}}, key_present=True)
+        assert not errors and cfg["daily_request_budget"] == expected and cfg["project_ids"] == []
+
+
+def test_cloud_circuit_read_write_is_one_immediate_transaction(tmp_path, monkeypatch):
+    db = Ledger(str(tmp_path / "circuit.db"))
+    observed = []
+    original = runtime._circuit_state
+
+    def read(*args, **kwargs):
+        assert db.db.in_transaction
+        observed.append("read")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(runtime, "_circuit_state", read)
+    monkeypatch.setattr(db, "artifact_add", lambda *a, **k: pytest.fail("must not commit through artifact_add"))
+    statements = []
+    db.db.set_trace_callback(statements.append)
+    runtime.record_circuit_result(db, jev.JevError("transport", retryable=True), kind="cloud_circuit")
+    assert observed == ["read"] and not db.db.in_transaction
+    assert statements[0] == "BEGIN IMMEDIATE" and statements[-1] == "COMMIT"
+    db.close()
+
+
+def test_cloud_circuit_rejects_borrowed_transaction_without_committing(tmp_path):
+    db = Ledger(str(tmp_path / "circuit.db"))
+    db.db.execute("BEGIN")
+    db.artifact_add_tx("synthetic_caller_work", "{}")
+    with pytest.raises(RuntimeError, match="cloud_circuit_transaction_active"):
+        runtime.record_circuit_result(db, None, kind="cloud_circuit")
+    assert db.db.in_transaction
+    db.db.rollback()
+    assert not db.artifacts("synthetic_caller_work") and not db.artifacts("cloud_circuit")
+    db.close()
+
+
+def test_cloud_circuit_concurrent_failures_preserve_counts_and_terminal_stop(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    path = str(tmp_path / "circuit.db")
+    Ledger(path).close()
+
+    def failure(kind):
+        db = Ledger(path)
+        try:
+            return runtime.record_circuit_result(db, jev.JevError(kind, retryable=kind == "transport"),
+                                                  kind="cloud_circuit")
+        finally:
+            db.close()
+
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        list(pool.map(failure, ["transport"] * 3))
+    db = Ledger(path)
+    assert runtime._circuit_state(db, kind="cloud_circuit")["consecutive_failures"] == 3
+    assert runtime.circuit_open(db, kind="cloud_circuit")
+    runtime.record_circuit_result(db, None, kind="cloud_circuit", reset=True)
+    db.close()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(failure, ["auth_error", "transport"]))
+    db = Ledger(path)
+    assert runtime._circuit_state(db, kind="cloud_circuit")["failure_class"] == "auth_error"
+    assert runtime.record_circuit_result(db, None, kind="cloud_circuit")
+    runtime.record_circuit_result(db, None, kind="cloud_circuit", reset=True)
+    assert not runtime.circuit_open(db, kind="cloud_circuit")
+    db.close()

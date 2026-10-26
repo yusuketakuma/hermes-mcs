@@ -307,7 +307,7 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
                 "text": parts_text(got["parts"],
                                    card["transport"])}
     if action == "summary":
-        from patient_nightly import options
+        from patient_context_refresh import options
 
         def legacy():
             title, text = patient_summary_text(db, card["project_id"], cfg=cfg)
@@ -320,7 +320,7 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
             db.execute("SAVEPOINT patient_context")
             opened = True
             result = _context_navigation(db, base, card, params or {}, cfg, now, legacy)
-        except Exception:  # a broken nightly view must never hide the existing summary
+        except Exception:  # a broken context refresh view must never hide the existing summary
             if opened:
                 db.execute("ROLLBACK TO patient_context")
             result = legacy()
@@ -421,7 +421,7 @@ def _context_navigation(db, base, card, params, cfg, now, legacy):
         return {**base, "outcome": "rejected", "error": "action_not_applicable"}
     navigation, token_ctx = [], {}
     if "section" not in params:
-        # The card's 🧾 keeps showing the existing summary; the nightly views open from it.
+        # The card's 🧾 keeps showing the existing summary; the context refresh views open from it.
         result = legacy()
         for target in ("background", "changes", "previsit", "replies", "discrepancies"):
             _private_button(db, base, card, now, navigation, token_ctx, "summary",

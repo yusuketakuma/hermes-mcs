@@ -9,13 +9,13 @@ from types import SimpleNamespace
 import pytest
 
 import mcs_setup
-import patient_nightly
+import patient_context_refresh
 
 
 @pytest.mark.parametrize('value', [None, [], True, 'yes', 1,
     {'enabled': 1}, {'publication': 'false'}, {'enabled': None},
     {'publication': []}, {'window': 'all-day'}])
-def test_nightly_options_reject_invalid_shape_and_values(value):
+def test_context_refresh_options_reject_invalid_shape_and_values(value):
     errors, _ = mcs_setup.validate_config({'mcs_login_id': 'synthetic',
         'extract': {'patient_context_nightly': value}})
     assert any('extract.patient_context_nightly' in e for e in errors)
@@ -23,7 +23,7 @@ def test_nightly_options_reject_invalid_shape_and_values(value):
 
 @pytest.mark.parametrize('value', [{}, {'enabled': False, 'publication': False},
     {'enabled': True}, {'enabled': True, 'publication': True}])
-def test_nightly_options_accept_explicit_booleans(value):
+def test_context_refresh_options_accept_explicit_booleans(value):
     errors, _ = mcs_setup.validate_config({'mcs_login_id': 'synthetic',
         'extract': {'patient_context_nightly': value}})
     assert not any('extract.patient_context_nightly' in e for e in errors)
@@ -31,7 +31,7 @@ def test_nightly_options_accept_explicit_booleans(value):
 
 def test_unprobed_diagnostic_does_not_open_database(monkeypatch):
     monkeypatch.setattr(sqlite3, 'connect', lambda *a, **k: pytest.fail('DB access'))
-    assert mcs_setup._doctor_nightly({}, probe=False) == {
+    assert mcs_setup._doctor_context_refresh({}, probe=False) == {
         'status': 'not_checked', 'enabled': True, 'publication': True, 'counts': None}
 
 
@@ -46,13 +46,13 @@ def synthetic_database(tmp_path, monkeypatch):
 
 
 def test_probe_uses_readonly_connection_and_whitelists_counts(synthetic_database, monkeypatch):
-    counts = dict.fromkeys(mcs_setup._NIGHTLY_COUNTS, 2)
+    counts = dict.fromkeys(mcs_setup._CONTEXT_REFRESH_COUNTS, 2)
     def status(db, cfg):
         with pytest.raises(sqlite3.OperationalError, match='readonly'):
             db.execute('INSERT INTO synthetic VALUES (1)')
         return {**counts, 'patient_name': 'synthetic-private-name'}
-    monkeypatch.setitem(sys.modules, 'patient_nightly', SimpleNamespace(options=patient_nightly.options, status=status))
-    report = mcs_setup._doctor_nightly({'extract': {'patient_context_nightly': {
+    monkeypatch.setitem(sys.modules, 'patient_context_refresh', SimpleNamespace(options=patient_context_refresh.options, status=status))
+    report = mcs_setup._doctor_context_refresh({'extract': {'patient_context_nightly': {
         'enabled': True, 'publication': False}}}, probe=True)
     assert report == {'status': 'warning', 'enabled': True, 'publication': False,
                       'counts': counts, 'lanes': None}
@@ -60,32 +60,32 @@ def test_probe_uses_readonly_connection_and_whitelists_counts(synthetic_database
 
 
 def test_probe_passes_only_fixed_lane_codes(synthetic_database, monkeypatch):
-    counts = dict.fromkeys(mcs_setup._NIGHTLY_COUNTS, 0)
-    lanes = {lane: dict.fromkeys(mcs_setup._NIGHTLY_LANE_CODES, 1) for lane in 'ABC'}
+    counts = dict.fromkeys(mcs_setup._CONTEXT_REFRESH_COUNTS, 0)
+    lanes = {lane: dict.fromkeys(mcs_setup._CONTEXT_REFRESH_LANE_CODES, 1) for lane in 'ABC'}
     lanes['B']['synthetic-private-name'] = 3
-    monkeypatch.setitem(sys.modules, 'patient_nightly', SimpleNamespace(
-        options=patient_nightly.options, status=lambda *a: {**counts, 'lanes': lanes}))
-    report = mcs_setup._doctor_nightly({}, probe=True)
-    assert report['lanes'] == {lane: dict.fromkeys(mcs_setup._NIGHTLY_LANE_CODES, 1) for lane in 'ABC'}
+    monkeypatch.setitem(sys.modules, 'patient_context_refresh', SimpleNamespace(
+        options=patient_context_refresh.options, status=lambda *a: {**counts, 'lanes': lanes}))
+    report = mcs_setup._doctor_context_refresh({}, probe=True)
+    assert report['lanes'] == {lane: dict.fromkeys(mcs_setup._CONTEXT_REFRESH_LANE_CODES, 1) for lane in 'ABC'}
     assert 'private' not in json.dumps(report)
     lanes['C']['repair'] = -1                      # malformed is unknown, never zero
-    assert mcs_setup._doctor_nightly({}, probe=True)['lanes'] is None
+    assert mcs_setup._doctor_context_refresh({}, probe=True)['lanes'] is None
 
 
 @pytest.mark.parametrize('bad', [-1, True, '2', None])
 def test_invalid_count_is_unknown_not_zero(synthetic_database, monkeypatch, bad):
-    counts = dict.fromkeys(mcs_setup._NIGHTLY_COUNTS, 0)
+    counts = dict.fromkeys(mcs_setup._CONTEXT_REFRESH_COUNTS, 0)
     counts['complete'] = bad
-    monkeypatch.setitem(sys.modules, 'patient_nightly', SimpleNamespace(options=patient_nightly.options, status=lambda *a: counts))
-    assert mcs_setup._doctor_nightly({}, probe=True)['counts'] is None
-    assert mcs_setup._doctor_nightly({}, probe=True)['status'] == 'unknown'
+    monkeypatch.setitem(sys.modules, 'patient_context_refresh', SimpleNamespace(options=patient_context_refresh.options, status=lambda *a: counts))
+    assert mcs_setup._doctor_context_refresh({}, probe=True)['counts'] is None
+    assert mcs_setup._doctor_context_refresh({}, probe=True)['status'] == 'unknown'
 
 
 def test_missing_database_remains_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_setup, 'HOME', str(tmp_path))
-    monkeypatch.setitem(sys.modules, 'patient_nightly', SimpleNamespace(
-        options=patient_nightly.options, status=lambda *a: pytest.fail('missing database inspected')))
-    assert mcs_setup._doctor_nightly({}, probe=True)['status'] == 'unknown'
+    monkeypatch.setitem(sys.modules, 'patient_context_refresh', SimpleNamespace(
+        options=patient_context_refresh.options, status=lambda *a: pytest.fail('missing database inspected')))
+    assert mcs_setup._doctor_context_refresh({}, probe=True)['status'] == 'unknown'
     assert not (tmp_path / 'data').exists()
 
 
@@ -102,7 +102,7 @@ def test_doctor_respects_explicit_data_probe_and_invalid_config(tmp_path, monkey
     def diagnose(cfg, *, probe):
         calls.append(probe)
         return {'status': 'not_checked', 'enabled': False, 'publication': False, 'counts': None}
-    monkeypatch.setattr(mcs_setup, '_doctor_nightly', diagnose)
+    monkeypatch.setattr(mcs_setup, '_doctor_context_refresh', diagnose)
     import card_worker_status
     monkeypatch.setattr(card_worker_status, 'diagnose', lambda *a, **k: {
         'state': 'not_applicable', 'reason': 'worker_not_hermes_owned',
@@ -119,9 +119,9 @@ def test_probe_does_not_follow_symlink(synthetic_database, monkeypatch):
     target = synthetic_database.with_name('other.db')
     synthetic_database.rename(target)
     synthetic_database.symlink_to(target)
-    monkeypatch.setitem(sys.modules, 'patient_nightly', SimpleNamespace(
-        options=patient_nightly.options, status=lambda *a: pytest.fail('followed symlink')))
-    assert mcs_setup._doctor_nightly({}, probe=True)['status'] == 'unknown'
+    monkeypatch.setitem(sys.modules, 'patient_context_refresh', SimpleNamespace(
+        options=patient_context_refresh.options, status=lambda *a: pytest.fail('followed symlink')))
+    assert mcs_setup._doctor_context_refresh({}, probe=True)['status'] == 'unknown'
 
 
 def test_expensive_sql_is_interrupted(synthetic_database, monkeypatch):
@@ -131,14 +131,14 @@ def test_expensive_sql_is_interrupted(synthetic_database, monkeypatch):
         db.execute('WITH RECURSIVE n(x) AS (VALUES(0) UNION ALL '
                    'SELECT x+1 FROM n WHERE x<1000000) SELECT sum(x) FROM n').fetchone()
         pytest.fail('diagnostic exceeded deadline')
-    monkeypatch.setitem(sys.modules, 'patient_nightly', SimpleNamespace(options=patient_nightly.options, status=status))
-    assert mcs_setup._doctor_nightly({}, probe=True)['status'] == 'unknown'
+    monkeypatch.setitem(sys.modules, 'patient_context_refresh', SimpleNamespace(options=patient_context_refresh.options, status=status))
+    assert mcs_setup._doctor_context_refresh({}, probe=True)['status'] == 'unknown'
 
 
 def test_zero_counts_are_distinct_from_missing_status(synthetic_database, monkeypatch):
-    counts = dict.fromkeys(mcs_setup._NIGHTLY_COUNTS, 0)
-    monkeypatch.setitem(sys.modules, 'patient_nightly', SimpleNamespace(options=patient_nightly.options, status=lambda *a: counts))
-    report = mcs_setup._doctor_nightly({}, probe=True)
+    counts = dict.fromkeys(mcs_setup._CONTEXT_REFRESH_COUNTS, 0)
+    monkeypatch.setitem(sys.modules, 'patient_context_refresh', SimpleNamespace(options=patient_context_refresh.options, status=lambda *a: counts))
+    report = mcs_setup._doctor_context_refresh({}, probe=True)
     assert report['status'] == 'healthy'
     assert report['counts'] == counts
 
@@ -152,6 +152,6 @@ def test_zero_counts_are_distinct_from_missing_status(synthetic_database, monkey
     ({'enabled': True, 'unknown': True}, {'enabled': False, 'publication': False}),
 ])
 def test_doctor_uses_engine_defaults_and_fails_closed(settings, expected):
-    result = mcs_setup._doctor_nightly({'extract': {'patient_context_nightly': settings}}, probe=False)
+    result = mcs_setup._doctor_context_refresh({'extract': {'patient_context_nightly': settings}}, probe=False)
     assert {key: result[key] for key in expected} == expected
     assert result['status'] == 'not_checked' and result['counts'] is None

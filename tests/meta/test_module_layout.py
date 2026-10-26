@@ -17,7 +17,7 @@ MODULES = {
     'clinical_chunking': 'extract/clinical/clinical_chunking.py',
     'semantic_quantities': 'extract/clinical/semantic_quantities.py',
     'patient_context': 'patients/patient_context.py',
-    'patient_nightly': 'patients/patient_nightly.py',
+    'patient_context_refresh': 'patients/patient_context_refresh.py',
     'rollup': 'patients/rollup.py',
     'drug_map': 'medications/drug_map.py',
     'drug_alias': 'medications/drug_alias.py',

@@ -32,6 +32,15 @@ def positive_number_problem(v):
             else "0より大きく10億以下の数値を指定してください")
 
 
+def project_scope(value):
+    """Normalize an explicit patient scope; null means all and [] means none."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(type(p) is not int or p <= 0 for p in value):
+        raise ValueError("project_ids_invalid")
+    return sorted(set(value))
+
+
 def _bot_profile(v):
     ok = isinstance(v, str) and re.fullmatch(r"[a-z0-9_-]+", v)
     return None if ok else "半角英小文字・数字・ハイフン・アンダースコアだけで指定してください"
@@ -132,6 +141,7 @@ CONFIG_RULES = {
     "notify":                (False, _dict),
     "signals":               (False, _dict),
     "semantic":              (False, _dict),
+    "cloud_llm":             (False, _dict),
     "extract":               (False, _dict),
     "update":                (False, _dict),
     "local_llm":             (False, _dict),
@@ -343,15 +353,15 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
     if isinstance(ext, dict) and "patient_state_context" in ext and type(ext["patient_state_context"]) is not bool:
         errors.append("extract.patient_state_context: true（有効）かfalse（無効）を指定してください")
     if isinstance(ext, dict) and "patient_context_nightly" in ext:
-        nightly = ext["patient_context_nightly"]
+        context_settings = ext["patient_context_nightly"]
         prefix = "extract.patient_context_nightly"
-        if not isinstance(nightly, dict):
+        if not isinstance(context_settings, dict):
             errors.append(f"{prefix}: JSONオブジェクト（キーと値の組）を指定してください")
         else:
-            if set(nightly) - {"enabled", "publication"}:
+            if set(context_settings) - {"enabled", "publication"}:
                 errors.append(f"{prefix}: enabledとpublication以外の設定項目は使えません")
             for key in ("enabled", "publication"):
-                if key in nightly and type(nightly[key]) is not bool:
+                if key in context_settings and type(context_settings[key]) is not bool:
                     errors.append(f"{prefix}.{key}: true（有効）かfalse（無効）を指定してください")
     if isinstance(sig, dict) and "notify" in sig and type(sig["notify"]) is not bool:
         errors.append("signals.notify: true（有効）かfalse（無効）を指定してください")
@@ -444,6 +454,9 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
                           for error in semantic_config(cfg)[1])
         except Exception as e:  # validator itself must not crash check
             errors.append(f"semantic: 設定の検証に失敗しました（{type(e).__name__}）")
+    if isinstance(cfg.get("cloud_llm"), dict):
+        from cloud_policy import cloud_config
+        errors.extend(cloud_config(cfg)[1])
     if isinstance(cfg.get("update"), dict):
         errors.extend(_validate_update(cfg["update"]))
     if isinstance(cfg.get("health"), dict):

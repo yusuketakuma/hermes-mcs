@@ -413,7 +413,7 @@ def semantic_summary_block(db, r, cfg: dict) -> str:
     silently absent, and in shadow/assist/off the notification stays
     byte-identical to pre-Phase-J (INV-16, spec §20.2)."""
     try:
-        scfg, _ = semantic_policy.semantic_config(cfg)
+        scfg, _ = semantic_policy.runtime_config(cfg)
         if enforce_block_reason(db, scfg, r["project_id"]) is not None:
             return ""
         root = r["parent_id"] or r["message_id"]
