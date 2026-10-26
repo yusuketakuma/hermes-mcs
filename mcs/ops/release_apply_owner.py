@@ -373,6 +373,157 @@ def _verify_registration_read(prepared, raw, *, now_ms):
 
 
 @dataclass(frozen=True, repr=False)
+class _PreparedApplyControl:
+    endpoint: str
+    path: str
+    body: bytes
+    headers: tuple
+    binding: bytes
+    deadline: float
+
+
+def _prepare_apply_control(current, kind, body, *, now_ms, deadline):
+    """Freeze a device control and fresh HMAC; it never grants execution authority."""
+    from adapters.sdc import protocol, release_apply_contract, release_contract
+    from adapters.sdc.support_contract import canonical
+    try:
+        if (type(current) is not _ReleaseCurrentness or type(kind) is not str
+                or kind not in release_apply_contract.CONTROLS or not release_contract.integer(now_ms)
+                or type(deadline) not in (int, float) or not math.isfinite(deadline)
+                or time.monotonic() >= deadline):
+            raise ValueError
+        path = next(path for path, value in protocol.RELEASE_APPLY_PATHS.items() if value == kind)
+        value = release_apply_contract.validate_apply_control(kind, body, now_ms=now_ms)
+        if kind in ('plan_report', 'grant'):
+            for key in (*release_contract.EXPECTED_FIELDS, 'tenant', 'installation', 'device_id', 'realm_epoch'):
+                if value['state'][key] != current.scope[key]:
+                    raise ValueError
+        encoded = canonical(value, max_bytes=16384).encode('ascii')
+        endpoint = protocol.endpoint(current.bootstrap['release_endpoint'])
+        if endpoint['environment'] != current.scope['environment']:
+            raise ValueError
+        headers = protocol.sign_release_apply(endpoint, path, encoded, current.identity, current.secret,
+            now=now_ms / 1000, nonce=secrets.token_hex(16))
+        if time.monotonic() >= deadline:
+            raise ValueError
+        return _PreparedApplyControl(endpoint['origin'], path, encoded, tuple(sorted(headers.items())),
+            canonical(current.binding).encode('ascii'), float(deadline))
+    except (ValueError, TypeError, KeyError, AttributeError, StopIteration, OverflowError, RecursionError):
+        raise ReleaseApplyError('CONTROL_HOLD') from None
+
+
+def _read_frozen_plan(control):
+    """Read a fixed local report as data only; it cannot restore a grant or a live owner."""
+    from adapters.sdc import release_apply_contract as apply, release_contract as release
+    from adapters.sdc.support_contract import canonical, parse_canonical
+    try:
+        value = control.read('release-plan.json')
+        if value is None:
+            return None
+        release.fields(value, ('schema_version', 'root_fingerprint', 'repo_fingerprint', 'binding',
+            'planning_consent_id', 'raw', 'body_sha256', 'attestation', 'target_source_sha256', 'record_sha256'))
+        if (value['schema_version'] != 'mcs.release-plan-report.v1'
+                or not all(release.hex64(value[k]) for k in ('root_fingerprint', 'repo_fingerprint', 'body_sha256', 'target_source_sha256', 'record_sha256'))
+                or value['root_fingerprint'] != control.root_fingerprint()
+                or not release.uuid(value['planning_consent_id']) or type(value['binding']) is not dict
+                or type(value['raw']) is not str):
+            raise ValueError
+        record_body = {key: item for key, item in value.items() if key != 'record_sha256'}
+        if control._fingerprint(record_body) != value['record_sha256']:
+            raise ValueError
+        raw = value['raw'].encode('ascii')
+        body = parse_canonical(raw, max_bytes=16384)
+        apply.validate_apply_control('plan_report', body, now_ms=body['plan']['issued_at'])
+        if (canonical(body, max_bytes=16384).encode('ascii') != raw or hashlib.sha256(raw).hexdigest() != value['body_sha256']
+                or body['local_planning_consent_id'] != value['planning_consent_id']):
+            raise ValueError
+        return value
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, UnicodeError, RecursionError):
+        raise ReleaseApplyError('PLAN_HOLD') from None
+
+
+def _prepare_native_plan(control, monitor, *, runtime_home, repository, case_id,
+                         attestation_envelope, artifact_source, deadline):
+    """Freeze a native plan before sending; incoming operations cannot supply its report or receipt."""
+    from adapters.sdc import release_contract as release, release_apply_contract as apply, release_state
+    import mcs_update
+    import release_owner_source
+    try:
+        if not release.uuid(case_id) or control._release_entry_fd is not None:
+            raise ValueError
+        mcs_update._bounded_timeout(None, deadline)
+        with control.release_authority_lock(), monitor.lock():
+            now = int(time.time() * 1000)
+            current = _load_release_currentness(control, monitor, runtime_home=runtime_home, now_ms=now, deadline=deadline)
+            consent = _validate_planning_consent(control.read('release-planning.json'))
+            if (consent['case_id'] != case_id or consent['binding'] != current.binding
+                    or consent['root_fingerprint'] != control.root_fingerprint()
+                    or consent['repo_fingerprint'] != _repository_fingerprint(repository)
+                    or not consent['confirmed_at'] <= now < consent['expires_at']):
+                raise ValueError
+            prior = _read_frozen_plan(control)
+            if prior is not None:
+                previous_body = json.loads(prior['raw'])
+                if (previous_body['plan']['expires_at'] > now
+                        or prior['planning_consent_id'] == consent['planning_consent_id']):
+                    raise ValueError
+        # All crypto, source/SDK observations and artifact workers run without A/T/S held.
+        envelope = release.input_record(attestation_envelope, 16384)
+        attestation, _ = release_state._observe_attestation(control, envelope, now_ms=int(time.time() * 1000))
+        with control.release_owner_lock():
+            owner = release_state._read(control)
+        provider = _initial_provider_source(control, repository, deadline=deadline)
+        if list(provider['provider_profile']) < attestation['core']['minimum_updater']:
+            raise ValueError
+        with _inspect_artifact(artifact_source, core=attestation['core'], policy=owner['trust']['policy'],
+                profile_id=owner['baseline']['profile_id'], profile_sha256=owner['baseline']['profile_sha256'], deadline=deadline) as artifact:
+            target_source = release_owner_source.verify_target(artifact['tree_files'], deadline=deadline)
+        sampled = _native_preflight(control, runtime_home=runtime_home, repository=repository, deadline=deadline)
+        now = int(time.time() * 1000)
+        expires = min(now + owner['trust']['policy']['plan_ttl_ms'], attestation['expires_at'],
+                      owner['trust']['expires_at'], consent['expires_at'])
+        state = owner['state']
+        plan = dict(schema_version=release.VERSIONS['plan'], plan_id=str(uuid.uuid4()),
+            **{key: state[key] for key in (*release.EXPECTED_FIELDS, 'tenant', 'installation', 'device_id',
+                'realm_epoch', 'trust_digest', 'root_version', 'metadata_epoch', *release.STATE_POINTS)},
+            release_id=attestation['release_id'], manifest_digest=release.hash_release_manifest(attestation),
+            target_code_seq=attestation['core']['code_seq'], preconditions=sampled['preconditions'],
+            precondition_sha256=release.hash_release_preconditions(sampled['preconditions']),
+            window={'starts_at': now, 'ends_at': expires}, canary_stage='self_test', modes=[], issued_at=now, expires_at=expires)
+        plan = release.validate_release_plan(plan, trust=owner['trust'], attestation=attestation, state=state, now_ms=now)
+        if release.release_plan_blockers(plan, attestation, owner['trust'], state, now_ms=now):
+            raise ValueError
+        body = dict(schema_version=apply.VERSIONS['control'], report_id=str(uuid.uuid4()), case_id=case_id,
+            local_planning_consent_id=consent['planning_consent_id'], state=state, plan=plan)
+        with control.release_authority_lock(), monitor.lock():
+            now = int(time.time() * 1000)
+            fresh = _load_release_currentness(control, monitor, runtime_home=runtime_home, now_ms=now, deadline=deadline)
+            if (fresh.binding != current.binding or control.read('release-planning.json') != consent
+                    or now >= expires or mcs_update.mcs_util.load_config() != sampled['configuration']):
+                raise ValueError
+            prepared = _prepare_apply_control(fresh, 'plan_report', body, now_ms=now, deadline=deadline)
+            record = dict(schema_version='mcs.release-plan-report.v1', root_fingerprint=control.root_fingerprint(),
+                repo_fingerprint=consent['repo_fingerprint'], binding=fresh.binding,
+                planning_consent_id=consent['planning_consent_id'], raw=prepared.body.decode('ascii'),
+                body_sha256=hashlib.sha256(prepared.body).hexdigest(), attestation=envelope,
+                target_source_sha256=target_source['sha256'])
+            record['record_sha256'] = control._fingerprint(record)
+            with control.release_owner_lock():
+                if release_state._read(control) != owner or _read_frozen_plan(control) != prior:
+                    raise ValueError
+                try:
+                    control.write('release-plan.json', record)
+                    if _read_frozen_plan(control) != record or time.monotonic() >= deadline:
+                        raise ReleaseApplyError('PLAN_HOLD')
+                except BaseException:
+                    control._release_owner_uncertain = True
+                    raise
+            return record, prepared
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, mcs_update.UpdateError):
+        raise ReleaseApplyError('PLAN_HOLD') from None
+
+
+@dataclass(frozen=True, repr=False)
 class _StartedArtifact:
     descriptor: int
     descriptor_identity: tuple

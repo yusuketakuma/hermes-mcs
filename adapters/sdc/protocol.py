@@ -197,3 +197,22 @@ def sign_release_registration(config, path, raw, state, key, *, now, nonce):
         raise ValueError('SDC_REQUEST_INVALID')
     validate_request(raw)
     return _sign_support_request(config, path, raw, state, key, now=now, nonce=nonce)
+
+
+RELEASE_APPLY_PATHS = {f'/v2/releases/apply/{path}': kind for path, kind in (
+    ('plans/report', 'plan_report'), ('cases/preview', 'preview'), ('cases/accept', 'accept'),
+    ('requests/poll', 'poll'), ('operations/admit', 'admit'), ('operations/grant', 'grant'),
+    ('operations/report', 'report'), ('operations/status', 'status'))}
+
+
+def sign_release_apply(config, path, raw, state, key, *, now, nonce):
+    """Sign only the eight closed device controls, never registration or admin mutations."""
+    from .release_apply_contract import validate_apply_control
+    try:
+        if (type(path) is not str or path not in RELEASE_APPLY_PATHS or type(raw) is not bytes
+                or type(now) not in (int, float) or not math.isfinite(now)):
+            raise ValueError
+        validate_apply_control(RELEASE_APPLY_PATHS[path], raw, now_ms=int(now * 1000))
+        return _sign_support_request(config, path, raw, state, key, now=now, nonce=nonce)
+    except (ValueError, TypeError, KeyError, OverflowError):
+        raise ValueError('SDC_REQUEST_INVALID') from None

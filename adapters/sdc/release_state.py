@@ -264,6 +264,11 @@ def _verified_snapshot(store, verifier):
 
 def observe(store, envelope, *, now_ms):
     """署名済みAttestationのbinding/Hを、後続preflightの成否と独立して保存する。"""
+    return _observe_attestation(store, envelope, now_ms=now_ms)[1]
+
+
+def _observe_attestation(store, envelope, *, now_ms):
+    """Return the exact authenticated payload to its native caller without re-verifying crypto."""
     from sdc_support_signatures import verify_release_attestation
     def verify(value):
         expected = {key: value['state'][key] for key in contract.EXPECTED_FIELDS}
@@ -280,7 +285,7 @@ def observe(store, envelope, *, now_ms):
                 value['bindings'].sort(key=lambda binding: binding['code_seq'])
             value['revision'] += 1
             _write(store, value)
-        return observed
+        return attestation, observed
 
 
 def update_trust(store, proofs, *, now_ms):
