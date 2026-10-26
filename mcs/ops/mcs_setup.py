@@ -611,14 +611,20 @@ def _init_store_secrets(args, login_id) -> int | None:
 
 def _init_standalone_connectors(cfg: dict, args, integration_ok: bool) -> bool:
     """Run the native standalone initializer for each enabled transport."""
-    for transport in ("slack", "discord"):
+    for transport in ("slack", "discord", "lineworks"):
         if transport_enabled(cfg, transport):
-            argv = [sys.executable, "-m", "mcs_standalone", "init", "--root", HOME,
-                    "--transport", transport] + (["--yes"] if args.yes else [])
+            if transport == "lineworks":
+                # The adapter's own init owns its credential file; it has no --yes, so
+                # --yes withholds the terminal (existing credentials kept, else it stops).
+                argv = [sys.executable, "-m", "lineworks_adapter", "init", "--root", HOME]
+            else:
+                argv = [sys.executable, "-m", "mcs_standalone", "init", "--root", HOME,
+                        "--transport", transport] + (["--yes"] if args.yes else [])
             # Terminal-bound getpass owns credentials; no secret ever travels in argv.
             try:
                 result = subprocess.run(argv, timeout=300 if not args.yes else 30,
-                                        cwd=REPO_ROOT)
+                                        cwd=REPO_ROOT,
+                                        stdin=subprocess.DEVNULL if args.yes else None)
                 integration_ok = integration_ok and result.returncode == 0
             except (OSError, subprocess.TimeoutExpired):
                 integration_ok = False
@@ -1379,8 +1385,17 @@ def cmd_doctor(args) -> int:
             "data": "保存データ", "current": "現在の実行環境",
         }
         print(f"動作診断: 実行方法={labels.get(mode, mode)}、Python={report['python']}、SQLite={report['sqlite']}")
-        print(f"  通知の配送処理: {labels.get(worker['state'], '未確認')}"
+        ntf = cfg.get("notify") if not config_errors else None
+        lineworks = isinstance(ntf, dict) and ntf.get("interactive") == "lineworks" \
+            and worker['state'] != 'not_applicable'
+        print(f"  通知の配送処理{'（LINE WORKSアダプター）' if lineworks else ''}: "
+              f"{labels.get(worker['state'], '未確認')}"
               f"（{labels.get(worker['reason'], '診断コード: ' + worker['reason'])}）")
+        if lineworks:
+            # Same remedy text health_watch alerts show for the separate adapter.
+            from health_watch import _LINEWORKS_ACTION
+            if worker['reason'] in _LINEWORKS_ACTION:
+                print(f"    対処: {_LINEWORKS_ACTION[worker['reason']]}")
         if worker['restore_delivery_held']:
             print("  復元後の保留: 収集のみ継続し、配送は保留しています")
         elif worker['restore_delivery_held'] is None:
