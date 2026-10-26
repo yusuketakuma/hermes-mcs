@@ -1,5 +1,6 @@
 """v1.0.26 sweep: notify views / digest wording regressions (all synthetic)."""
 import re
+from datetime import datetime
 
 import notify_digest
 import notify_views
@@ -8,6 +9,7 @@ from mcs_contract import project_url
 from notify_testkit import NOW as CARD_NOW, _delivered_card, led, pinned_clock  # noqa: F401
 from notify_views import CONTEXT_PAGE_SIZE, patient_context_list
 from patient_context import extract_context
+from mcs_util import JST
 from semantic_testkit import _message
 from test_patient_context_v3_views import DAY, T0, ctx  # noqa: F401 - shared synthetic fixture
 from test_read_model import _artifact, _hash_of
@@ -82,9 +84,22 @@ def test_background_keeps_an_informative_sub_heading(ctx):
 
 
 def test_transition_windows_name_their_anchor_date(ctx):
+    # A nominal discharge report is retained, but cannot establish execution.
+    reported = _view(ctx, "transition_course")
+    assert {r["group"] for r in reported["items"]} == {"移行に関する記載"}
+    body = "経過: 本人は本日退院しました。"
+    ctx.db.save_messages([_message(6, body=body)], project_id=1)
+    anchor_at = T0 + 6 * DAY
+    ctx.db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=6", (anchor_at,))
+    _artifact(ctx.db, "extract_v1", 6, {"patient_context": extract_context(body)},
+              {"hash": _hash_of(ctx.db, 6)})
     view = _view(ctx, "transition_course")
     groups = [r["group"] for r in view["items"]]
     assert any(re.fullmatch(r"\d\d/\d\dの前後14日の記録", g) for g in groups), groups
+    day = datetime.fromtimestamp(anchor_at, JST).strftime("%m/%d")
+    assert f"{day}の前後14日の記録" in groups, groups
+    assert "本人の移行実施の記録" in groups
+    assert any(h.startswith(f"{day}の前後14日で記載なし: ") for h in view["head"])
     assert not any(h.startswith("この範囲で記載なし") for h in view["head"])
 
 
