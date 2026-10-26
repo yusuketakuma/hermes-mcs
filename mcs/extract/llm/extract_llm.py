@@ -633,8 +633,21 @@ class _CloudProvider:
         self.discarded = False
         self.final_disposition = None
 
+        reserved_caps = {}
+
+        def caps(settings):
+            return {k: settings[k] for k in ("daily_request_budget", "monthly_cost_limit_usd")}
+
+        def tightened(now):
+            # a cap set or lowered after this attempt's reservation stops the send it
+            # has not made yet; the reservation itself stays counted at its maximum
+            return any(reserved_caps.get(k, now[k]) is None and now[k] is not None
+                       or None not in (reserved_caps.get(k), now[k]) and now[k] < reserved_caps[k]
+                       for k in now)
+
         def guard(*, inference=True):
-            if ((inference and time.monotonic() >= deadline) or writer_lock.updater_state() != updater
+            if ((inference and (time.monotonic() >= deadline or tightened(caps(_cloud_settings(load_config())))))
+                    or writer_lock.updater_state() != updater
                     or updater[0] or cloud_policy.api_key(HOME) != key
                     or cloud_policy.scope_generation({"cloud_llm": _cloud_settings(load_config())}) != scope
                     or cloud_policy.block_reason(ledger, _cloud_settings(load_config()), route, project_id)
@@ -646,6 +659,8 @@ class _CloudProvider:
             # every new attempt (retry, repair, next chunk) is judged against the
             # budget in force now, not the one the unit started under
             current_cfg = {"cloud_llm": _cloud_settings(load_config())}
+            reserved_caps.clear()
+            reserved_caps.update(caps(current_cfg["cloud_llm"]))
             return cloud_policy.usage_reserver(ledger, current_cfg, route=route, project_id=project_id,
                 unit_key=unit_key, message_id=message_id, owner=owner)(body, timeout)
         self.reserve = lambda body, timeout: dispatch(lambda: reserve(body, timeout))
@@ -3641,8 +3656,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     _release(ledger, r, lease)
     for r, local_result, ctx in shadow_tasks:
         if deadline - time.monotonic() < _MIN_CALL_S:
-            _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
-                           local_facts=_comparison_extract(r, local_result), uncompared="deadline")
+            with lock(per_write_lock) as held:
+                if held:
+                    _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
+                                   local_facts=_comparison_extract(r, local_result), uncompared="deadline")
             continue
         comparison_meta = {}
         cloud_result = None
@@ -3664,12 +3681,15 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         except ValueError:
             cloud_result = None
         valid = isinstance(cloud_result, dict)
-        _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
-            local_facts=_comparison_extract(r, local_result),
-            cloud_facts=_comparison_extract(r, cloud_result) if valid else None,
-            rejected=sum(cloud_result.get(k, 0) for k in ("_items_dropped", "_evidence_dropped")) if valid else None,
-            held=int(bool(extract_quality.protected_lost(local_result, cloud_result, r["body_text"]))) if valid else None,
-            repairs=comparison_meta.get("repairs", 0 if valid else None))
+        with lock(per_write_lock) as held:
+            if not held:     # the audit row is a write: never without the run lock
+                continue
+            _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
+                local_facts=_comparison_extract(r, local_result),
+                cloud_facts=_comparison_extract(r, cloud_result) if valid else None,
+                rejected=sum(cloud_result.get(k, 0) for k in ("_items_dropped", "_evidence_dropped")) if valid else None,
+                held=int(bool(extract_quality.protected_lost(local_result, cloud_result, r["body_text"]))) if valid else None,
+                repairs=comparison_meta.get("repairs", 0 if valid else None))
     left, age_min, age_max, estimate = _backlog_report(
         ledger, len(rows), limit, done + skipped + held_prior)
     now_ts = time.time()
@@ -3912,11 +3932,12 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
                     # whose owner fence must match the renewed DB lease
                     carry[i] = (r, renewed, commit)
                     keep.append((r, renewed, commit))
+        # no comparison budget outside run_pending: these units stay visible as
+        # uncompared, written under the lock their commits were made under
+        for r, local_result, _ctx in shadow:
+            _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
+                           local_facts=_comparison_extract(r, local_result), uncompared="carried_commit")
     carry[:] = keep
-    # no comparison budget outside run_pending: keep these units visible as uncompared
-    for r, local_result, _ctx in shadow:
-        _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
-                       local_facts=_comparison_extract(r, local_result), uncompared="carried_commit")
     if any(settled.values()):
         print(json.dumps({"carry_settled": settled, "ts": time.time()}), flush=True)
 

@@ -33,7 +33,7 @@ _UNPRICED_USAGE = {"service_tier": {"standard"}, "inference_geo": {"global", "no
 
 def _unpriced(key, value):
     if key in _UNPRICED_USAGE:
-        return value in _UNPRICED_USAGE[key]
+        return isinstance(value, str) and value in _UNPRICED_USAGE[key]
     if key == "server_tool_use":    # tools are never requested: every count must be zero
         return isinstance(value, dict) and all(type(v) is int and v == 0 for v in value.values())
     return False

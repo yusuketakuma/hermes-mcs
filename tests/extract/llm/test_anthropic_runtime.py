@@ -117,7 +117,7 @@ def test_new_post_and_edited_body_are_not_version_reextract(routed):
     assert not worker._cloud_reextract(led, row)
 
 
-@pytest.mark.parametrize("change", ["scope", "stop", "mode"])
+@pytest.mark.parametrize("change", ["scope", "stop", "mode", "daily_cap", "monthly_cap"])
 def test_scope_change_while_reserving_never_starts_http(routed, monkeypatch, change):
     led, cfg, calls, reserves, _ = routed
     old(led)
@@ -130,6 +130,10 @@ def test_scope_change_while_reserving_never_starts_http(routed, monkeypatch, cha
                 cfg["cloud_llm"]["exclude_project_ids"] = [1]
             elif change == "stop":
                 monkeypatch.setattr(cloud_policy, "block_reason", lambda *args: "paused")
+            elif change == "daily_cap":      # lowered between reservation and the send
+                cfg["cloud_llm"]["daily_request_budget"] = 0
+            elif change == "monthly_cap":
+                cfg["cloud_llm"]["monthly_cost_limit_usd"] = 0
             else:
                 cfg["cloud_llm"]["mode"] = "shadow"
             return result
@@ -645,7 +649,7 @@ def test_operating_limit_change_while_reserving_still_sends_the_paid_unit(routed
         reserve = original(*args, **kwargs)
         def changed(body, timeout):
             result = reserve(body, timeout)
-            cfg["cloud_llm"].update(max_concurrency=3, monthly_cost_limit_usd=50, usd_jpy=140)
+            cfg["cloud_llm"].update(max_concurrency=3, usd_jpy=140)
             return result
         return changed
     monkeypatch.setattr(cloud_policy, "usage_reserver", factory)
@@ -695,3 +699,25 @@ def test_carried_shadow_commits_settled_outside_a_pass_stay_counted_as_uncompare
     [compare] = [json.loads(a["meta"]) for a in led.artifacts("cloud_compare_v1")]
     assert compare["uncompared"] == "carried_commit" and compare["units"] == 1
     assert compare["validated_units"] == 0 and compare["cloud_facts"] is None
+
+
+def test_shadow_audit_rows_are_never_written_without_the_run_lock(routed, monkeypatch):
+    led, cfg, calls, *_ = routed
+    cfg["cloud_llm"]["mode"] = "shadow"
+    old(led)
+    def committed():
+        return any(json.loads(a["meta"]).get("extract_version") == worker.EXTRACT_VERSION
+                   for a in led.artifacts(worker.KIND))
+    @contextmanager
+    def lock(enabled, wait_s=60):
+        # the result commit gets the lock; the later shadow audit does not
+        yield not committed() or not enabled
+    monkeypatch.setattr(worker, "_write_lock", lock)
+    def extract(body, **kwargs):
+        if kwargs.get("provider"):
+            kwargs["provider"]("synthetic", deadline=kwargs["deadline"], max_tokens=100)
+        return {}
+    monkeypatch.setattr(worker, "llm_extract", extract)
+    report = worker.run_pending(led, budget_s=180, per_write_lock=True)
+    assert report["done"] == 1 and len(calls) == 1
+    assert not led.artifacts("cloud_compare_v1")

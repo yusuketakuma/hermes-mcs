@@ -130,6 +130,7 @@ def test_only_known_unpriced_usage_metadata_is_accepted():
         200, {}, json.dumps(_reply(usage=usage)).encode()))
     assert client.complete("synthetic", deadline=time.monotonic() + 10)["usage"]["input_tokens"] == 10
     for extra in ({"service_tier": "priority"}, {"inference_geo": "us"}, {"new_charge_usd": "10"},
+                  {"service_tier": {"tier": "standard"}}, {"inference_geo": ["global"]}, {"service_tier": True},
                   {"server_tool_use": {"web_search_requests": 1}}, {"unknown_flag": None}):
         client = a.AnthropicClient("synthetic", post_fn=lambda *args, e=extra: (
             200, {}, json.dumps(_reply(usage={"input_tokens": 1, "output_tokens": 1, **e})).encode()))
