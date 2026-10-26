@@ -5,6 +5,8 @@ import json
 import pytest
 
 import extract_llm as llm
+import inference_dependency_loss as dependency_loss
+from inference_version import CURRENT_VERSION, VERSION_KEY
 import notify_views
 import patient_state_context as state
 import read_model
@@ -20,19 +22,24 @@ def seed(led):
     body = "本人の合成薬Aの保管場所は前と同じ場所です。"
     led.save_messages([_message(mid=1, body=prior, posted_at="2026-10-01T10:00:00+09:00"),
                        _message(mid=2, body=body, posted_at="2026-10-02T10:00:00+09:00")])
+    integrity = {"validation": {"items_dropped": 0, "evidence_dropped": 0},
+                 "completeness_chunks": 1,
+                 "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}
     aid = led.artifact_add(llm.KIND, json.dumps({"patient_context": [context(prior, key="storage_place",
              values=("冷蔵庫",))]}), project_id=1, message_id=1, model=llm.MODEL,
-             meta={"hash": _hash(led, 1), "extract_version": llm.EXTRACT_VERSION, "actual_model": llm.MODEL,
-                   "integrity": {"validation": {"items_dropped": 0, "evidence_dropped": 0}}})
+             meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(led, 1), "extract_version": llm.EXTRACT_VERSION, "actual_model": llm.MODEL,
+                   "integrity": integrity})
     row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=2").fetchone())
+    row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
     frame = state.prepare(led, row, model=llm.MODEL, contract="synthetic/1", attempt={},
                           enabled=True, base_context=None, version=llm.EXTRACT_VERSION)
+    assert frame["refs"]["S1"]["value"] == "冷蔵庫"
     item = context(body, key="storage_place", values=("前と同じ場所",))
     item["details"][-1]["refers_to"] = "S1"
     doc = extract_validation.validate({"patient_context": [item]}, body, references=frame["refs"])
     r = {**row, "_frame": frame, "_context": frame["text"], "_target": ("", llm.MODEL)}
     assert llm._replace_current(led, r, json.dumps(doc), ctx=True,
-                              integrity={"validation": {"items_dropped": 0, "evidence_dropped": 0}})
+                              integrity=integrity)
     return aid, row, rollup.build_rollup(led.db, 1)
 
 

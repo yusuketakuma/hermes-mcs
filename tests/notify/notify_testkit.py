@@ -256,6 +256,8 @@ def _llm_extract(led, mid, content, version=True):
                        "message_id=?", (mid,)).fetchone()[0]
     meta = {"hash": h}
     if version:
+        from inference_version import CURRENT_VERSION, VERSION_KEY
+        meta[VERSION_KEY] = CURRENT_VERSION
         meta["extract_version"] = extract_llm.EXTRACT_VERSION
     aid = led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"

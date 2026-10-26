@@ -72,6 +72,54 @@ def facts(v: dict | None, split_conditions: bool = False) -> set:
     return facts
 
 
+def _retains_clinical_items(prior, candidate):
+    """Retain distinct clinical items with iterative matching."""
+    if not isinstance(prior, list):
+        return False
+    if not prior:
+        return True
+    if not isinstance(candidate, list):
+        return False
+    def distinct(items):
+        unique = {}
+        for item in items:
+            identity = {key: value for key, value in item.items()
+                        if key not in ('unverified', 'normalized') and not key.startswith('_')} if isinstance(item, dict) else item
+            unique.setdefault(json.dumps(identity, sort_keys=True, ensure_ascii=False), item)
+        return list(unique.values())
+    prior, candidate = distinct(prior), distinct(candidate)
+    if len(prior) > len(candidate):
+        return False
+    assigned, owners = {}, {}
+    for start in range(len(prior)):
+        queue, seen, via = [start], {start}, {}
+        found = False
+        for old_index in queue:
+            for new_index, item in enumerate(candidate):
+                if new_index in via or not retains_assertion(prior[old_index], item):
+                    continue
+                via[new_index] = old_index
+                owner = owners.get(new_index)
+                if owner is None:
+                    # Move the previous assignments along the augmenting path.
+                    while new_index is not None:
+                        old_index = via[new_index]
+                        previous = assigned.get(old_index)
+                        assigned[old_index] = new_index
+                        owners[new_index] = old_index
+                        new_index = previous
+                    found = True
+                    break
+                if owner not in seen:
+                    seen.add(owner)
+                    queue.append(owner)
+            if found:
+                break
+        if not found:
+            return False
+    return True
+
+
 def improves(candidate: dict | None, prior: dict | None) -> bool:
     """Accept repairs only when retained assertions do not regress."""
     if candidate is None:
@@ -80,12 +128,18 @@ def improves(candidate: dict | None, prior: dict | None) -> bool:
         return True
     prior_facts = facts(prior, split_conditions=True)
     candidate_facts = facts(candidate, split_conditions=True)
-    if not prior_facts.issubset(candidate_facts):
+    # A repair may fill an unknown attribute without changing any known assertion.
+    if not retains_assertion({key: value for key, value in prior.items()
+                              if key in ("vitals", "reply")}, candidate):
         return False
+    for key in _FACT_LIST_FIELDS:
+        if prior.get(key) is not None and not _retains_clinical_items(prior[key], candidate.get(key)):
+            return False
     if prior.get("urgency") == "high" and candidate.get("urgency") != "high":
         return False
     return (drop_total(candidate), -len(candidate_facts)) < (
-        drop_total(prior), -len(prior_facts))
+        drop_total(prior), -len(prior_facts)) or (
+            drop_total(candidate) == drop_total(prior) and candidate_facts != prior_facts)
 
 
 # One bounded completeness pass for sparse clinical assertions. Prose
@@ -96,6 +150,10 @@ _THIN_FACTS_MIN = 2
 
 
 def is_thin(v: dict | None, body: str | None) -> bool:
+    # Repeated spans of the same event do not make a sparse result richer.
+    if isinstance(v, dict) and v.get("event_records"):
+        v = {**v, "event_records": [{k: value for k, value in item.items() if k != "span"}
+                                   if isinstance(item, dict) else item for item in v["event_records"]]}
     return (v is not None and body is not None
             and len(body) >= _THIN_BODY_MIN
             and len(facts(v)) < _THIN_FACTS_MIN)

@@ -13,6 +13,7 @@ import drug_map
 from semantic_projection import PROJECTION_VERSION
 from extract_testkit import _hash, _message
 from common_testkit import ledger_fixture
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 class _FictionalEntryRequired(TypedDict):
@@ -65,15 +66,17 @@ def _dictionary(tmp_path, document=None):
 
 def _seed(store, mid=1, names=("キラナ",), *, kind="extract_llm",
           action="start", posted="2026-09-19T00:00:00+09:00"):
-    store.save_messages([_message(mid=mid, body="entirely fictional source",
+    quotes = {name: f"本人は{name}を" + ("中止しました。" if action == "stop" else "開始し服用しています。")
+              for name in names}
+    store.save_messages([_message(mid=mid, body="".join(quotes.values()) or "完全合成の薬剤記録はありません。",
                                   posted_at=posted)])
     key = "medications" if kind == "extract_v1" else "meds"
     meds = [{"name": n, "action": action, "subject": "patient",
              "status": "current", "negated": False, "unverified": False,
-             "evidence": "fictional quotation only"} for n in names]
+             "evidence": quotes[n]} for n in names]
     return store.artifact_add(
         kind, json.dumps({key: meds}), project_id=1, message_id=mid,
-        meta={"hash": _hash(store, mid), "engine_version": 4,
+        meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(store, mid), "engine_version": 4,
               **({"projection_version": PROJECTION_VERSION}
                  if kind in ("canonical_projection", "semantic_facts_v4") else {})})
 

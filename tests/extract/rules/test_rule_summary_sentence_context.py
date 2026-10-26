@@ -9,6 +9,7 @@ import pytest
 import extract
 import ledger
 import structured_view
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 POSTED = "2026-08-23T09:00:00+09:00"
 
@@ -119,7 +120,7 @@ def test_stale_rules_rebuild_and_render_without_unrelated_sentences(tmp_path):
         store.db.commit()
         store.artifact_add("extract_v1", json.dumps({
             "events": ["exam"], "requests": [{"kind": "contact", "ctx": "obsolete synthetic fragment"}]}),
-            project_id=1, message_id=1, meta={"hash": digest, "rule_version": extract.RULE_VERSION - 1})
+            project_id=1, message_id=1, meta={VERSION_KEY: CURRENT_VERSION, "hash": digest, "rule_version": extract.RULE_VERSION - 1})
         assert extract.run_pending(store)["done"] == 1
         current = json.loads(store.db.execute(
             "SELECT content FROM artifacts WHERE kind='extract_v1' AND message_id=1"

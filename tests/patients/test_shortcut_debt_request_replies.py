@@ -16,6 +16,7 @@ def seed_loop_replies(store):
     """Explicit synthetic request relations; no real inference or external access."""
     import hashlib
     from mcs_queries import current_extraction_blobs, decode_current_extractions
+    from inference_version import CURRENT_VERSION, VERSION_KEY
 
     policy = hashlib.sha256(b"synthetic-request-relations").hexdigest()
     store.artifact_add("semantic_policy", policy)
@@ -31,7 +32,7 @@ def seed_loop_replies(store):
             bundle = semantic_store.thread_bundle(store.db, pid, root)
             if not bundle:
                 continue
-            meta = {"fingerprint": bundle["source_fingerprint"], "policy_fingerprint": policy}
+            meta = {VERSION_KEY: CURRENT_VERSION, "fingerprint": bundle["source_fingerprint"], "policy_fingerprint": policy}
             member = next(m for m in bundle["members"] if m["message_id"] == source["message_id"])
             body = member["body_original"]
             v1, lm, _, _ = decode_current_extractions(blobs.get(source["message_id"], {}))

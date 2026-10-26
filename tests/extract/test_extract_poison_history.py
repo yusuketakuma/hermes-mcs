@@ -8,6 +8,7 @@ import extract
 import rollup
 from extract_testkit import _extract_artifact, _hash, _ledger, _message, _seed_qc_flagged
 from medications_testkit import _dictionary, _seed
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 def poison(extra=""):
@@ -21,9 +22,10 @@ def test_revival_skips_unreadable_error_metadata_and_revives_sibling(tmp_path):
         ids = []
         for mid in (1, 2):
             aid = ledger.artifact_add(extract_llm.KIND, '{}', project_id=1, message_id=mid,
-                                      meta={"error": True, "extract_version": extract_llm.EXTRACT_VERSION, "attempts": 5})
+                                      meta={VERSION_KEY: CURRENT_VERSION, "error": True,
+                                            "extract_version": extract_llm.EXTRACT_VERSION, "attempts": 5})
             ids.append(aid)
-        raw = poison(f'"error":true,"extract_version":{extract_llm.EXTRACT_VERSION},"attempts":5,')
+        raw = poison(f'"{VERSION_KEY}":"{CURRENT_VERSION}","error":true,"extract_version":{extract_llm.EXTRACT_VERSION},"attempts":5,')
         ledger.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (raw, ids[0]))
         now = time.time()
         ledger.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id IN (?,?)",

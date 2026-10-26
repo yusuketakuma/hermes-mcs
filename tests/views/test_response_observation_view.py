@@ -454,3 +454,34 @@ def test_recaptured_unchanged_mentions_stay_self_target(store, tmp_path, capture
         assert result["counts"]["unknown_target"] == 0
     finally:
         view.close()
+
+
+def test_metadata_occurrence_does_not_rebind_or_hide_true_body_revision(store, tmp_path):
+    from dataclasses import replace
+    ledger, clock = store
+    _post(ledger)
+    message = _norm_message({'id': 1, 'comment': 'BODY-FREE-TEXT-CANARY', 'user': {'id': 22}}, 1)
+    ledger.save_messages([replace(message, sender_name='合成表示A')], project_id=1, notify=False)
+    _meta(ledger)
+    view = _view(store, tmp_path)
+    try:
+        result = _read(view)
+        assert result['state'] == 'complete' and result['counts']['self_target'] == 1
+    finally:
+        view.close()
+    # An actual same-clock body edit followed by a metadata-only occurrence must
+    # retain the body edit boundary, so pre-edit observations cannot look fresh.
+    clock[0] = NOW
+    changed = replace(message, body_html='NEW-SYNTHETIC-BODY', sender_name='合成表示A')
+    ledger.save_messages([changed], project_id=1, notify=False)
+    ledger.save_messages([replace(changed, sender_name='合成表示B')], project_id=1, notify=False)
+    _meta(ledger)
+    path = publish_snapshot(ledger.db.execute('PRAGMA database_list').fetchone()['file'],
+                            str(tmp_path / 'body-snapshot'))
+    view = View(path)
+    try:
+        result = _read(view)
+        assert result['state'] == 'unknown' and result['counts']['self_target'] == 0
+        assert result['unknown_reasons'] == {'source_binding_unknown': 1}
+    finally:
+        view.close()

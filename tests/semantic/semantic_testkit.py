@@ -23,6 +23,7 @@ import semantic_evaluation as evaluation
 import semantic_facts as sf
 import semantic_jev as jev
 import mcs_test_guard as test_guard
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from common_testkit import make_ledger
 
 
@@ -282,7 +283,7 @@ def _drained_old_version(tmp_path):
         "'$.projection_version') WHERE kind IN (?,?)",
         (json.dumps({"meds": [{"name": "OLD"}]}), "canonical_projection",
          v4.KIND_V4))
-    db.artifact_add("patient_rollup", "{}", project_id=1)
+    db.artifact_add("patient_rollup", "{}", project_id=1,meta={VERSION_KEY:CURRENT_VERSION})
     db.db.commit()
     return db
 

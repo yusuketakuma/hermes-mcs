@@ -687,12 +687,16 @@ def test_private_drug_thread_pin_requires_delivered_reply_and_live_token(
 
 def test_slack_private_medication_pages_and_post_navigation_roundtrip(led):
     _seed_thread(led)
-    med = {"dose": "5mg", "action": "start", "subject": "patient",
-           "status": "current", "negated": False, "unverified": False,
-           "evidence": "fictional quotation only"}
-    _llm_extract(led, 100, {"meds": [{**med, "name": "合成旧薬"}]})
     names = [f"合成薬{index:02d}" for index in range(16)]
-    _llm_extract(led, 101, {"meds": [{**med, "name": name} for name in names]})
+    old_quote = "本人は本日、合成旧薬を5mg服用しています。"
+    quotes = {name: f"本人は本日、{name}を5mg服用しています。" for name in names}
+    with led.db:
+        led.db.execute('UPDATE messages SET body_text=? WHERE message_id=100', (old_quote,))
+        led.db.execute('UPDATE messages SET body_text=? WHERE message_id=101', (''.join(quotes.values()),))
+    med = {"dose": "5mg", "action": "start", "subject": "patient",
+           "status": "current", "negated": False, "unverified": False}
+    _llm_extract(led, 100, {"meds": [{**med, "name": "合成旧薬", "evidence": old_quote}]})
+    _llm_extract(led, 101, {"meds": [{**med, "name": name, "evidence": quotes[name]} for name in names]})
     assert _dispatch(led, _intent(led), SLACK)["dispatched"]
     spec = json.loads(_latest_render(led)["spec_json"])
     token = next(token for token, ctx in token_map(spec).items()

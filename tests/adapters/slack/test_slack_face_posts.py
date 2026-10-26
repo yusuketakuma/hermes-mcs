@@ -73,9 +73,12 @@ def test_face_drug_thread_binding_requires_proven_same_card_and_thread(led, faul
     from slack_testkit import SCOPE
     from notify_testkit import _llm_extract
     _seed_thread(led)
+    quote = "本人は本日、合成薬を5mg服用しています。"
+    with led.db:
+        led.db.execute('UPDATE messages SET body_text=? WHERE message_id=100', (quote,))
     _llm_extract(led, 100, {"meds": [{"name": "合成薬", "dose": "5mg", "action": "start",
                                    "subject": "patient", "status": "current", "negated": False,
-                                   "unverified": False, "evidence": "合成の薬剤記録"}]})
+                                   "unverified": False, "evidence": quote}]})
     _dispatch(led, _intent(led), SLACK)
     w = _mkworld(led)
     asyncio.run(_granted_card(w.worker, led, w.root))

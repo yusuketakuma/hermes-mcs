@@ -9,6 +9,7 @@ import pytest
 
 import extract_llm as llm
 import inference_version as inference
+import inference_dependency_loss as dependency_loss
 import mcs_util
 import semantic_candidate as candidate
 import semantic_policy
@@ -17,7 +18,7 @@ from candidate_testkit import approved_config
 from extract_testkit import _ledger, _message
 
 
-MODULES = ("inference_version", "inference_dependency_loss", "clinical_events", "rollup", "patient_context_state")
+MODULES = ("inference_version", "inference_dependency_loss", "clinical_events", "rollup", "patient_context_state", "patient_state_context")
 
 
 @pytest.fixture
@@ -51,6 +52,7 @@ def _reject_old_approval(approved):
     ("clinical_events", "validate_record"),
     ("rollup", "inference_coverage"),
     ("patient_context_state", "project"),
+    ("patient_state_context", "reference_current"),
     ("inference_dependency_loss", "read"),
 ])
 def test_changed_definition_invalidates_new_worker_approval_without_blessing_old_worker(
@@ -74,6 +76,7 @@ def test_changed_definition_invalidates_new_worker_approval_without_blessing_old
     ("clinical_events", "SUBJECTS", ("patient", "family", "other", "unknown", "synthetic_subject")),
     ("rollup", "PERIOD_CHECK_VERSION", -123),
     ("patient_context_state", "_VALUE_KEYS", {"actual_dose", "synthetic_dimension"}),
+    ("patient_state_context", "STATE_MAX", 601),
     ("inference_dependency_loss", "SCHEMA", "dependency-loss/synthetic-change"),
 ])
 def test_meaning_constant_changes_invalidate_old_promotion_receipt(approved, monkeypatch, owner, constant, value):
@@ -134,6 +137,7 @@ def test_source_drift_refuses_old_worker_lock_even_while_its_candidate_identity_
 @pytest.mark.parametrize("owner,change", [
     ("inference_version", b"\n_MAX_VERSION_LENGTH = _MAX_VERSION_LENGTH - 1\n"),
     ("clinical_events", b"\nSUBJECTS = SUBJECTS + ('synthetic_subject',)\n"),
+    ("patient_state_context", b"\nSTATE_MAX = STATE_MAX - 1\n"),
 ])
 def test_new_loaded_interpretation_reopens_old_hold_but_keeps_its_legacy_source_facts(
         tmp_path, monkeypatch, owner, change):
@@ -143,6 +147,7 @@ def test_new_loaded_interpretation_reopens_old_hold_but_keeps_its_legacy_source_
     try:
         ledger.save_messages([_message(body=body)])
         row = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+        row['_source_binding'] = dependency_loss.source_binding(ledger.db,row['project_id'],row['message_id'])
         original = {"symptoms": [{"text": "息切れ", "subject": "patient", "negated": True,
                                   "evidence": body}]}
         prior = ledger.artifact_add(llm.KIND, json.dumps(original), project_id=1, message_id=1,

@@ -1,6 +1,7 @@
 """Source-scoped alerts retain patient emergencies without inheriting another person's report."""
 import clinical_scope
 import clinical_values
+from inference_version import CURRENT_VERSION, VERSION_KEY
 import json
 
 import pytest
@@ -81,7 +82,7 @@ def test_request_and_patient_sign_across_sentences_keep_independent_source_scope
     try:
         from semantic_testkit import _message
         db.save_messages([_message(1, body=body)], project_id=1)
-        _artifact(db, "extract_v1", 1, {"urgency": "high"}, {"hash": _hash_of(db, 1)})
+        _artifact(db, "extract_v1", 1, {"urgency": "high"}, {VERSION_KEY: CURRENT_VERSION, "hash": _hash_of(db, 1)})
         details = clinical_urgency.message_urgency_details(db.db, 1)
         assert details["source"] == source
         if source:
@@ -104,7 +105,7 @@ def test_clinical_emergency_is_distinct_from_request_or_denied_sign(tmp_path, bo
         from semantic_testkit import _message
         db.save_messages([_message(1, body=body)], project_id=1)
         _artifact(db, "extract_llm", 1, {"urgency": "high", "urgency_evidence": [body]},
-                  {"hash": _hash_of(db, 1)})
+                  {VERSION_KEY: CURRENT_VERSION, "hash": _hash_of(db, 1)})
         details = clinical_urgency.message_urgency_details(db.db, 1)
         assert details["source"] == source
         assert details["kind"] == expected_kind
@@ -136,7 +137,7 @@ def test_cached_high_for_family_never_becomes_patient_high_across_read_surfaces(
         body = "母が意識を失っています。本人は落ち着いています。"
         db.save_messages([_message(1, body=body)], project_id=1)
         _artifact(db, kind, 1, {"urgency": "high", "urgency_evidence": ["意識を失っています"]},
-                  {"hash": _hash_of(db, 1), "engine_version": 4})
+                  {VERSION_KEY: CURRENT_VERSION, "hash": _hash_of(db, 1), "engine_version": 4})
         detail = clinical_urgency.message_urgency_details(db.db, 1)
         assert detail["held"] and detail["verdict"] == "unclear"
         assert clinical_urgency.message_urgency(db.db, 1) is None
@@ -158,7 +159,7 @@ def test_mixed_high_quotes_keep_only_current_patient_reason(tmp_path):
         body = "母が急変。本人が意識を失っています。"
         db.save_messages([_message(1, body=body)], project_id=1)
         _artifact(db, "extract_llm", 1, {"urgency": "high", "urgency_evidence": ["母が急変", "意識を失っています"]},
-                  {"hash": _hash_of(db, 1)})
+                  {VERSION_KEY: CURRENT_VERSION, "hash": _hash_of(db, 1)})
         details = clinical_urgency.message_urgency_details(db.db, 1)
         assert details["source"] == "llm" and details["subject"] == "patient"
         assert details["reasons"] == ["意識を失っています"]

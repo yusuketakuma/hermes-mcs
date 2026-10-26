@@ -15,6 +15,7 @@ import pytest
 import semantic_projection as projection
 import mcs_requests as requests
 from mcs_queries import current_fact_pred
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import (EV, _drained_old_version, _kind_rows, _seeded,
                               v2_doc, v2_fact)
 
@@ -27,8 +28,8 @@ def _fact(fid, kind="medication_event", verified=True, **kw):
     return v2_fact(fid, **{**base, **kw})
 
 
-def _doc(facts):
-    return v2_doc(facts, [EV])
+def _doc(facts, evidence=None):
+    return v2_doc(facts, [EV] if evidence is None else evidence)
 
 
 def test_projection_maps_verified_medication_fact():
@@ -61,13 +62,16 @@ def test_projection_subject_and_events():
     doc = _doc([_fact("f1", subject="role:family"),
                 _fact("f2", kind="care_event",
                       statement="本日退院済み",
-                      workflow_status="done")])
+                      workflow_status="done", evidence_ids=['event-source'])],
+               [EV, {**EV,'evidence_id':'event-source','quote':'本人は本日退院しました。','start':0,'end':12}])
     out = projection.project_v2_doc_legacy(doc)
     assert out["meds"][0]["subject"] == "family"
     assert out["events"] == ["discharge"]
 
 
 def _artifact(db, kind, mid, content, meta):
+    if isinstance(meta, dict):
+        meta = {VERSION_KEY:CURRENT_VERSION, **meta}
     project_id = db.execute(
         "SELECT project_id FROM messages WHERE message_id=?", (mid,)
     ).fetchone()[0]
@@ -285,7 +289,8 @@ def test_care_event_typed_gates(tmp_path):
     for workflow in ("performed", "done"):
         doc = _doc([_fact("f1", kind="care_event",
                           statement="本日退院済み",
-                          workflow_status=workflow)])
+                          workflow_status=workflow)],
+                   [{**EV,'quote':'本人は本日退院しました。','start':0,'end':12}])
         assert projection.project_v2_doc_legacy(doc)["events"] == ["discharge"]
 
 
@@ -459,12 +464,12 @@ def test_projection_expiry_releases_legacy_and_invalidates_rollup(tmp_path, monk
         source_hash = db.db.execute(
             "SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
         db.artifact_add("extract_llm", "{}", project_id=1, message_id=1,
-                        meta={"hash": source_hash})
+                        meta={VERSION_KEY: CURRENT_VERSION, "hash": source_hash})
         projection_id = db.artifact_add(
             "canonical_projection", "{}", project_id=1, message_id=1,
-            meta={"hash": source_hash, "fingerprint": bundle["source_fingerprint"],
+            meta={VERSION_KEY: CURRENT_VERSION, "hash": source_hash, "fingerprint": bundle["source_fingerprint"],
                   "policy_fingerprint": semantic_policy.policy_fingerprint(scfg)})
-        db.artifact_add("patient_rollup", "{}", project_id=1)
+        db.artifact_add("patient_rollup", "{}", project_id=1, meta={VERSION_KEY: CURRENT_VERSION})
         assert invalidate_projections(db.db, scfg) == 0
         if change == "context":
             db.db.execute("UPDATE messages SET body_text='別の合成文脈' WHERE message_id=2")
@@ -764,7 +769,7 @@ def test_run_due_switch_hides_then_revives_only_current_projections(
                 "SELECT content_hash FROM messages WHERE message_id=?",
                 (mid,)).fetchone()[0]
             db.artifact_add("extract_llm", "{}", project_id=1, message_id=mid,
-                            meta={"hash": source_hash})
+                            meta={VERSION_KEY: CURRENT_VERSION, "hash": source_hash})
         if change == "unknown":
             db.db.execute(
                 "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',"
@@ -863,7 +868,7 @@ def test_invalidation_reads_model_config_once_per_active_scan(
             for kind in ("canonical_projection", "semantic_facts_v4"):
                 db.artifact_add(
                     kind, "{}", project_id=1, message_id=mid,
-                    meta={"hash": source_hash,
+                    meta={VERSION_KEY: CURRENT_VERSION, "hash": source_hash,
                           "fingerprint": bundle["source_fingerprint"],
                           "policy_fingerprint": semantic_policy.policy_fingerprint(scfg)})
         reads = []

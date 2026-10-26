@@ -1,10 +1,13 @@
 """Attempt frames use wholly synthetic, prior, source-grounded pharmacy reports."""
 import json
 import sqlite3
+from dataclasses import replace
 
 import pytest
 
 import extract_llm
+from inference_version import CURRENT_VERSION, VERSION_KEY
+from inference_dependency_loss import source_binding
 import patient_state_context as state
 from extract_testkit import _hash, _ledger, _message
 from test_pharmacy_state import context
@@ -13,10 +16,12 @@ from test_pharmacy_state import context
 def seed(led, mid=1, *, body="本人の合成薬Aの残薬は3錠。", value="3錠", subject="patient",
          names=("合成薬A",), date="2026-10-01T10:00:00+09:00", pid=1, clean=True):
     led.save_messages([_message(mid=mid, body=body, project_id=pid, posted_at=date)])
-    meta = {"hash": _hash(led, mid), "extract_version": extract_llm.EXTRACT_VERSION,
-            "actual_model": "synthetic-model"}
+    meta = {VERSION_KEY: CURRENT_VERSION, "hash": _hash(led, mid), "extract_version": extract_llm.EXTRACT_VERSION,
+            "actual_model": "synthetic-model", "source_binding": source_binding(led.db, pid, mid)}
     if clean:
-        meta["integrity"] = {"validation": {"items_dropped": 0, "evidence_dropped": 0}}
+        meta["integrity"] = {"validation": {"items_dropped": 0, "evidence_dropped": 0},
+            "completeness_chunks": 1,
+            "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}
     aid = led.artifact_add("extract_llm", json.dumps({"patient_context": [
         context(body, subject=subject, names=names, values=(value,))]}),
         project_id=pid, message_id=mid, model="synthetic-model", meta=meta)
@@ -176,7 +181,7 @@ def test_canonical_precedence_requires_complete_verified_uncontested_patient_fac
                                        if relation else []),
                "canonical_quality": {"coverage_status": "complete", "open_obligation_ids": [], "limitations": []}}
         aid = led.artifact_add("canonical_projection", json.dumps(doc), project_id=1, message_id=1,
-                              meta={"hash": _hash(led), "projection_version": PROJECTION_VERSION})
+                              meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(led), "projection_version": PROJECTION_VERSION})
         block, refs = state.format_state(state.history(led.db, row, version=extract_llm.EXTRACT_VERSION))
         assert bool(refs) is (relation is None)
         with led.db:
@@ -384,5 +389,158 @@ def test_a_newly_recognized_second_value_invalidates_an_ambiguous_same_body_refe
             led.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (json.dumps({
                 "patient_context": [context(body, values=("3錠", "8錠"))]}), aid))
         assert state.reference_current(led.db, row, ref, version=extract_llm.EXTRACT_VERSION) is False
+    finally:
+        led.close()
+
+
+def test_reference_occurrence_rejects_aba_even_after_same_dto_is_legitimately_reextracted(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        seed(led, 2)
+        row = target(led)
+        error_id = led.artifact_add('extract_llm', '{}', project_id=1, message_id=999,
+            meta={VERSION_KEY: CURRENT_VERSION, 'hash': row['content_hash'], 'error': True,
+                  'extract_version': extract_llm.EXTRACT_VERSION, 'attempts': 2, 'auto_retry': 1})
+        error_before = tuple(led.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (error_id,)).fetchone())
+        frozen = frame(led, row)
+        old = {**frozen['refs']['S1'], 'token': 'S1'}
+        assert state.reference_current(led.db, row, old, version=extract_llm.EXTRACT_VERSION)
+        seed(led, 2, body='本人の合成薬Aの残薬は4錠。', value='4錠')
+        edited_frame = frame(led, row)
+        assert edited_frame['binding'] == frozen['binding']
+        assert edited_frame['artifact_id'] != frozen['artifact_id'] and edited_frame['digest'] != frozen['digest']
+        edited_ref = {**edited_frame['refs']['S1'], 'token': 'S1'}
+        assert edited_ref['value'] == '4錠'
+        assert state.reference_current(led.db, row, edited_ref, version=extract_llm.EXTRACT_VERSION)
+        assert state.load(led.db, frozen['artifact_id'], row) == frozen
+        seed(led, 2)
+        assert _hash(led, 2) == old['content_hash']
+        assert led.db.execute('SELECT MAX(seq) FROM message_revisions WHERE message_id=2').fetchone()[0] == 3
+        assert not state.reference_current(led.db, row, old, version=extract_llm.EXTRACT_VERSION)
+        _, refs = state.format_state(state.history(led.db, row, version=extract_llm.EXTRACT_VERSION))
+        current = {**refs['S1'], 'token': 'S1'}
+        assert set(current) == set(old) and current['value'] == old['value'] == '3錠'
+        assert current['fingerprint'] != old['fingerprint']
+        assert current['parent_fingerprint'] != old['parent_fingerprint']
+        assert state.reference_current(led.db, row, current, version=extract_llm.EXTRACT_VERSION)
+        assert not state.reference_current(led.db, {**row, 'project_id': 2}, current,
+                                           version=extract_llm.EXTRACT_VERSION)
+        assert state.load(led.db, frozen['artifact_id'], row) == frozen
+        restored_frame = frame(led, row)
+        assert restored_frame['binding'] == frozen['binding']
+        assert restored_frame['artifact_id'] not in (frozen['artifact_id'], edited_frame['artifact_id'])
+        assert restored_frame['refs']['S1'] == refs['S1']
+        assert restored_frame['digest'] not in (frozen['digest'], edited_frame['digest'])
+        assert frame(led, row) == restored_frame
+        assert len(led.artifacts(state.KIND)) == 3
+        assert state.load(led.db, edited_frame['artifact_id'], row) == edited_frame
+        assert tuple(led.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (error_id,)).fetchone()) == error_before
+    finally:
+        led.close()
+
+
+@pytest.mark.parametrize('field,value', [
+    ('parent_id', 999), ('sender_id', 12), ('sender_name', '完全合成の表示名'),
+    ('body_text', '本人の合成薬Aの残薬は3錠。完全合成の補足です。'),
+])
+def test_reference_fingerprint_covers_actual_source_inputs_even_when_hash_and_dto_stay_same(tmp_path, field, value):
+    led = _ledger(tmp_path)
+    try:
+        seed(led, 2)
+        row = target(led)
+        old = {**frame(led, row)['refs']['S1'], 'token': 'S1'}
+        with led.db:
+            led.db.execute('UPDATE messages SET ' + field + '=? WHERE message_id=2', (value,))
+        assert _hash(led, 2) == old['content_hash']
+        assert not state.reference_current(led.db, row, old, version=extract_llm.EXTRACT_VERSION)
+        _, refs = state.format_state(state.history(led.db, row, version=extract_llm.EXTRACT_VERSION))
+        assert refs['S1']['value'] == '3錠' and refs['S1']['fingerprint'] != old['fingerprint']
+    finally:
+        led.close()
+
+
+def test_snapshot_without_revision_table_preserves_reports_but_cannot_offer_or_confirm_references(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        seed(led)
+        row = target(led)
+        old = {**frame(led, row)['refs']['S1'], 'token': 'S1'}
+        with led.db:
+            led.db.execute('DROP TABLE message_revisions')
+        changes = led.db.total_changes
+        reports = state.history(led.db, row, version=extract_llm.EXTRACT_VERSION)
+        assert reports and reports[0]['value'] == '3錠'
+        assert reports[0]['reference_eligible'] is False
+        assert state.format_state(reports) == ('', {})
+        assert not state.reference_current(led.db, row, old, version=extract_llm.EXTRACT_VERSION)
+        assert led.db.total_changes == changes
+    finally:
+        led.close()
+
+
+@pytest.mark.parametrize('field', ['parent', 'sender', 'name', 'time', 'html'])
+def test_legitimate_metadata_aba_cannot_revive_old_reference_or_frame(tmp_path, field):
+    led = _ledger(tmp_path)
+    body = '本人の合成薬Aの残薬は3錠。'
+    try:
+        led.save_messages([_message(mid=11, body='完全合成の親投稿A', posted_at='2026-09-29T10:00:00+09:00'),
+                           _message(mid=12, body='完全合成の親投稿B', posted_at='2026-09-29T11:00:00+09:00')])
+        original = _message(mid=2, body=body, parent_id=11, posted_at='2026-10-01T10:00:00+09:00')
+        led.save_messages([original])
+        aid = seed(led, 2)
+        template = led.db.execute('SELECT content,meta FROM artifacts WHERE artifact_id=?', (aid,)).fetchone()
+        document, metadata = json.loads(template[0]), json.loads(template[1])
+        target_row = target(led)
+        before_binding = source_binding(led.db, 1, 2)
+        before_frame = frame(led, target_row)
+        before_ref = {**before_frame['refs']['S1'], 'token': 'S1'}
+        assert state.reference_current(led.db, target_row, before_ref, version=extract_llm.EXTRACT_VERSION)
+        if field == 'parent':
+            changed = replace(original, parent_id=12)
+        elif field == 'sender':
+            changed = replace(original, sender_id=2)
+        elif field == 'name':
+            changed = replace(original, sender_name='完全合成の別表示')
+        elif field == 'time':
+            changed = replace(original, posted_at='2026-10-01T01:00:00+00:00')
+        else:
+            changed = replace(original, body_html='<span data-fictional="x">' + body + '</span>')
+
+        def adopt(message):
+            led.save_messages([message])
+            source = led.db.execute('SELECT * FROM messages WHERE message_id=2').fetchone()
+            assert source['body_text'] == body  # no clinical assertion is changed by the fixture
+            assert source['posted_at_ts'] == before_ref['posted_at_ts']
+            meta = {**metadata, 'hash': source['content_hash'], 'source_binding': source_binding(led.db, 1, 2)}
+            # The same fully synthetic DTO is a fresh success for this actual source occurrence.
+            new_id = led.artifact_add('extract_llm', json.dumps(document), project_id=1, message_id=2,
+                                     model='synthetic-model', meta=meta)
+            assert json.loads(led.db.execute('SELECT content FROM artifacts WHERE artifact_id=?', (new_id,)).fetchone()[0]) == document
+            return meta['source_binding']
+
+        middle_binding = adopt(changed)
+        assert middle_binding != before_binding
+        if field != 'html':
+            assert _hash(led, 2) == before_ref['content_hash']
+        assert not state.reference_current(led.db, target_row, before_ref, version=extract_llm.EXTRACT_VERSION)
+        middle_frame = frame(led, target_row)
+        middle_ref = {**middle_frame['refs']['S1'], 'token': 'S1'}
+        assert middle_frame['artifact_id'] != before_frame['artifact_id']
+        assert state.reference_current(led.db, target_row, middle_ref, version=extract_llm.EXTRACT_VERSION)
+        after_binding = adopt(original)
+        assert len({before_binding, middle_binding, after_binding}) == 3
+        assert _hash(led, 2) == before_ref['content_hash']
+        assert not state.reference_current(led.db, target_row, before_ref, version=extract_llm.EXTRACT_VERSION)
+        assert not state.reference_current(led.db, target_row, middle_ref, version=extract_llm.EXTRACT_VERSION)
+        after_frame = frame(led, target_row)
+        after_ref = {**after_frame['refs']['S1'], 'token': 'S1'}
+        assert len({before_frame['artifact_id'], middle_frame['artifact_id'], after_frame['artifact_id']}) == 3
+        assert len({before_frame['digest'], middle_frame['digest'], after_frame['digest']}) == 3
+        assert before_frame['binding'] == middle_frame['binding'] == after_frame['binding']
+        assert before_ref['value'] == middle_ref['value'] == after_ref['value'] == '3錠'
+        assert state.reference_current(led.db, target_row, after_ref, version=extract_llm.EXTRACT_VERSION)
+        assert frame(led, target_row) == after_frame
+        assert state.load(led.db, before_frame['artifact_id'], target_row) == before_frame
+        assert state.load(led.db, middle_frame['artifact_id'], target_row) == middle_frame
     finally:
         led.close()

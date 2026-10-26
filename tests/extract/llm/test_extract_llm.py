@@ -117,15 +117,17 @@ def test_validate_symptom_status_preserved():
 
 
 def test_validate_request_from_due():
+    body = "家族から医師へ2026年10月1日までに状態確認をお願いします。薬剤師へ明日薬確認をお願いします。"
     out = extract_validation.validate({"requests": [
         {"to": "医師", "from": "家族", "action": "状態確認",
-         "due": "2026-10-01"},
-        {"to": "薬剤師", "action": "薬確認", "due": "明日"},  # not ISO
-    ]})
+         "due": "2026-10-01", "evidence": "家族から医師へ2026年10月1日までに状態確認をお願いします"},
+        {"to": "薬剤師", "action": "薬確認", "due": "明日",
+         "evidence": "薬剤師へ明日薬確認をお願いします"},  # not ISO
+    ]}, body)
     assert out["requests"][0] == {"to": "医師", "from": "家族",
                                   "action": "状態確認",
                                   "due": "2026-10-01",
-                                  "unverified": True}
+                                  "evidence": "家族から医師へ2026年10月1日までに状態確認をお願いします"}
     assert "due" not in out["requests"][1]
 
 
@@ -145,21 +147,21 @@ def test_validate_request_kind_is_descriptive():
 
 
 def test_validate_request_condition_must_locate_in_body():
-    """condition is a quote: stored as the body's own span, dropped at
-    the key (never the item) when it does not locate, capped at 60."""
+    """A condition needs its target assertion; overlong text is never truncated."""
     long = "".join(chr(0x3042 + i) for i in range(80))   # unique 80-char run
     body = "血圧が 160を超えるようなら医師へ連絡をお願いします。" + long + "なら。"
     out = extract_validation.validate({"requests": [
-        {"to": "看護師", "action": "医師へ連絡",
-         "condition": "血圧が160を超えるようなら"},     # whitespace-tolerant
-        {"to": "看護師", "action": "報告", "condition": "熱が出たら"},
+        {"to": "医師", "action": "医師へ連絡",
+         "condition": "血圧が160を超えるようなら", "evidence": "血圧が 160を超えるようなら医師へ連絡をお願いします"},
+        {"to": "医師", "action": "医師へ連絡", "condition": "熱が出たら",
+         "evidence": "医師へ連絡をお願いします"},
         {"to": "看護師", "action": "再確認", "condition": long},
         {"to": "看護師", "action": "無条件", "condition": None},
     ]}, body)
     reqs = out["requests"]
     assert reqs[0]["condition"] == "血圧が 160を超えるようなら"
     assert "condition" not in reqs[1]
-    assert reqs[2]["condition"] == long[:60]
+    assert "condition" not in reqs[2] and reqs[2]["unverified"] is True
     assert "condition" not in reqs[3]
     assert len(reqs) == 4
     # an unlocated condition is a counted miss and leaves the request
@@ -168,8 +170,8 @@ def test_validate_request_condition_must_locate_in_body():
     assert out["_evidence_dropped"] == 1
     # no condition key: a located request stays verified
     plain = extract_validation.validate({"requests": [
-        {"to": "看護師", "action": "医師へ連絡",
-         "evidence": "医師へ連絡をお願いします"}]}, body)
+        {"to": "医師", "action": "医師へ連絡",
+         "evidence": "医師へ連絡をお願いします"}]}, "医師へ連絡をお願いします。")
     assert "unverified" not in plain["requests"][0]
     # no body at all -> nothing to locate against -> key absent
     nobody = extract_validation.validate({"requests": [
@@ -185,7 +187,7 @@ def test_unlocated_condition_triggers_repair_and_stays_unverified(monkeypatch):
         calls.append(prompt)
         return {"requests": [{"to": "看護師", "action": "医師へ連絡",
                               "condition": "熱が出たら",
-                              "evidence": "医師へ連絡をお願いします"}],
+                              "evidence": body}],
                 "summary": "s"}
     monkeypatch.setattr(extract_llm, "_llm_call", fake)
     out = extract_llm.llm_extract(body)
@@ -199,9 +201,9 @@ def test_repair_that_locates_condition_is_adopted(monkeypatch):
     conds = iter(["発熱時", "熱が出たら"])
 
     def fake(prompt, **kw):
-        return {"requests": [{"to": "看護師", "action": "医師へ連絡",
+        return {"requests": [{"to": "医師", "action": "医師へ連絡",
                               "kind": "request", "condition": next(conds),
-                              "evidence": "医師へ連絡をお願いします"}],
+                              "evidence": body}],
                 "summary": "s"}
     monkeypatch.setattr(extract_llm, "_llm_call", fake)
     (rq,) = extract_llm.llm_extract(body)["requests"]
@@ -221,22 +223,22 @@ def test_request_from_and_due_text_must_be_in_body():
     body = "ケアマネより: 明日までに医師へ連絡をお願いします。"
     reqs = extract_validation.validate({"requests": [
         {"to": "看護師", "from": "ケアマネ", "action": "連絡",
-         "due_text": "明日 までに"},                         # both located
+         "due_text": "明日 までに", "evidence": body},
         {"to": "看護師", "from": "家族", "action": "連絡",
-         "due": "2026-10-01", "due_text": "来週"},           # neither
+         "due": "2026-10-01", "due_text": "来週", "evidence": body},
         {"to": "看護師", "action": "連絡", "due": "2026-10-01"},
     ]}, body)["requests"]
     assert reqs[0]["from"] == "ケアマネ" and reqs[0]["due_text"] == "明日 までに"
     assert "from" not in reqs[1] and "due_text" not in reqs[1]
     assert "due" not in reqs[1]          # derived from an unlocated text
-    assert reqs[2]["due"] == "2026-10-01"   # no due_text: unaffected
+    assert "due" not in reqs[2] and reqs[2]["unverified"] is True
 
 
 def test_lift_guard_drops_context_detail_keeps_body_detail(monkeypatch):
     body = "カロナール５ｍｇ 1日3回 継続。アムロジピンも継続。咳が続く。"
     reply = {"meds": [
         {"name": "カロナール", "dose": "5mg", "freq": "1日3回",
-         "evidence": "カロナール５ｍｇ"},
+         "evidence": "カロナール５ｍｇ 1日3回 継続"},
         {"name": "アムロジピン", "dose": "10mg", "freq": "朝1回",
          "evidence": "アムロジピンも継続"}],
         "symptoms": [{"text": "咳", "onset": "3日前", "duration": "続く",
@@ -251,9 +253,9 @@ def test_lift_guard_drops_context_detail_keeps_body_detail(monkeypatch):
     assert aml["name"] == "アムロジピン"                     # med kept
     sym = out["symptoms"][0]
     assert "onset" not in sym and sym["duration"] == "続く"
-    # without context in the prompt nothing could be lifted
+    # Unsupported attributes stay unverified even when no reference context was supplied.
     plain = extract_llm.llm_extract(body)
-    assert plain["meds"][1]["dose"] == "10mg"
+    assert plain["meds"][1]["dose"] is None and plain["meds"][1]["unverified"] is True
 
 
 def test_validate_reply_requires_kind_and_located_evidence():
@@ -316,7 +318,9 @@ def test_validate_evidence_without_body_is_dropped():
 
 def test_validate_events_still_string_only():
     out = extract_validation.validate({"events": ["visit", {"e": "fall"}]})
-    assert out["events"] == ["visit"]
+    assert out["events"] == []
+    assert len(out["event_records"]) == 1
+    assert out["event_records"][0]["kind"] == "visit" and out["event_records"][0]["unverified"] is True
 
 
 def test_validate_events_grounded_in_body():
@@ -326,9 +330,10 @@ def test_validate_events_grounded_in_body():
     drops = {}
     out = extract_validation.validate(
         {"events": ["visit", "eol", "fall"], "summary": "訪問確認"},
-        "本日訪問しました。状態は安定しています。", drops)
+        "本人を本日訪問しました。状態は安定しています。", drops)
     assert out["events"] == ["visit"]
-    assert set(drops["events"]) == {"eol", "fall"}
+    unresolved = [record for record in out["event_records"] if record.get("unverified")]
+    assert {record["kind"] for record in unresolved} == {"eol", "fall"}
     out = extract_validation.validate(
         {"events": ["eol"], "summary": "連絡"},
         "本日ご本人がお亡くなりになりました")
@@ -383,7 +388,7 @@ def test_thin_artifact_re_pends_once(tmp_path, monkeypatch):
     # a prior extraction wrote a thin but valid current artifact
     db.artifact_add("extract_llm", json.dumps({"urgency": "routine"}),
                     project_id=1, message_id=1,
-                    meta={"hash": _hash(db),
+                    meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(db),
                           "extract_version": extract_llm.EXTRACT_VERSION})
     monkeypatch.setattr(
         extract_llm, "llm_extract",
@@ -409,7 +414,7 @@ def test_thin_retry_failure_settles_without_loop(tmp_path, monkeypatch):
     db.save_messages([_message(body="合成の長い本文です。" * 30)])
     db.artifact_add("extract_llm", json.dumps({"urgency": "routine"}),
                     project_id=1, message_id=1,
-                    meta={"hash": _hash(db),
+                    meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(db),
                           "extract_version": extract_llm.EXTRACT_VERSION})
     monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: None)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **_: True)
@@ -470,7 +475,7 @@ def test_shard_selects_disjoint_partition(tmp_path, monkeypatch):
     db.close()
 
 
-def test_v1_row_is_replaced_atomically(tmp_path, monkeypatch):
+def test_legacy_row_is_retained_beside_atomic_current_replacement(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     db.save_messages([_message(body="プレドニン中止の連絡")])
     _v1_artifact(db, 1, {"meds": [{"name": "プレドニン",
@@ -482,20 +487,21 @@ def test_v1_row_is_replaced_atomically(tmp_path, monkeypatch):
 
     assert res["done"] == 1 and res["left"] == 0
     rows = db.artifacts("extract_llm", message_id=1)
-    assert len(rows) == 1                      # v1 row gone, not stacked
-    meta = json.loads(rows[0]["meta"])
+    assert len(rows) == 2 and VERSION_KEY not in json.loads(rows[0]["meta"])
+    meta = json.loads(rows[-1]["meta"])
     assert meta["extract_version"] == extract_llm.EXTRACT_VERSION
-    assert json.loads(rows[0]["content"])["meds"][0]["status"] == "past"
+    assert meta[VERSION_KEY] == CURRENT_VERSION
+    assert json.loads(rows[-1]["content"])["meds"][0]["status"] == "past"
     db.close()
 
 
-def test_v1_row_stays_current_for_readers_until_replaced(tmp_path):
+def test_legacy_row_stays_history_and_is_not_a_current_reader_fallback(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message(body="現行本文")])
     _v1_artifact(db, 1, {"summary": "v1"}, _hash(db))
 
-    # readers keep the hash-only contract -> v1 is still visible
-    assert mcs_queries.current_message_extract(db.db, "extract_llm", 1)["summary"] == "v1"
+    assert mcs_queries.current_message_extract(db.db, "extract_llm", 1) is None
+    assert json.loads(db.artifacts("extract_llm", message_id=1)[0]["content"])["summary"] == "v1"
     # but the write side treats it as pending
     assert not extract_llm._current(db, 1, _hash(db))
     db.close()
@@ -514,7 +520,8 @@ def test_v1_permanent_error_does_not_block_v2(tmp_path, monkeypatch):
 
     assert res["done"] == 1
     rows = db.artifacts("extract_llm", message_id=1)
-    assert len(rows) == 1  # error row cleaned by the atomic replace
+    assert len(rows) == 2 and json.loads(rows[0]["meta"])["error"] is True
+    assert json.loads(rows[-1]["meta"])[VERSION_KEY] == CURRENT_VERSION
     db.close()
 
 
@@ -574,19 +581,23 @@ def test_backoff_reads_python_clock_not_sqlite(tmp_path, monkeypatch, skew):
 def _llm_artifact(db, mid, content, chash):
     db.artifact_add(
         "extract_llm", json.dumps(content), project_id=1,
-        message_id=mid, meta={"hash": chash, "extract_version": 2})
+        message_id=mid, meta={VERSION_KEY: CURRENT_VERSION, "hash": chash,
+                              "extract_version": extract_llm.EXTRACT_VERSION})
 
 
 def test_rollup_excludes_negated_family_past_meds(tmp_path):
     db = _ledger(tmp_path)
     db.ensure_patient(1)
-    db.save_messages([_message(body="薬の記録")])
+    reports = ["本人は現行薬を服用しています。", "本人は否定薬を服用していません。",
+               "母は家族の薬を服用しています。", "本人は以前、過去薬を中止しました。",
+               "本人は明日、予定薬を開始予定です。"]
+    db.save_messages([_message(body="".join(reports))])
     _llm_artifact(db, 1, {"meds": [
-        {"name": "現行薬", "action": "none"},
-        {"name": "否定薬", "action": "none", "negated": True},
-        {"name": "家族の薬", "action": "none", "subject": "family"},
-        {"name": "過去薬", "action": "stop", "status": "past"},
-        {"name": "予定薬", "action": "start", "status": "planned"},
+        {"name": "現行薬", "action": "none", "subject": "patient", "status": "current", "negated": False, "evidence": reports[0]},
+        {"name": "否定薬", "action": "none", "subject": "patient", "status": "current", "negated": True, "evidence": reports[1]},
+        {"name": "家族の薬", "action": "none", "subject": "family", "status": "current", "negated": False, "evidence": reports[2]},
+        {"name": "過去薬", "action": "stop", "subject": "patient", "status": "past", "negated": False, "evidence": reports[3]},
+        {"name": "予定薬", "action": "start", "subject": "patient", "status": "planned", "negated": False, "evidence": reports[4]},
     ]}, _hash(db))
 
     names = [m["name"] for m in
@@ -622,19 +633,27 @@ def test_rollup_symptom_null_ts_shows_posted_at_not_zero(tmp_path):
                   "WHERE message_id=1")
     db.db.commit()
     db.artifact_add("extract_v1", json.dumps({"symptoms": ["頭痛"]}),
-                    project_id=1, message_id=1, meta={"hash": _hash(db, 1)})
-    syms = rollup.build_rollup(db.db, 1).get("recent_symptoms", [])
-    assert syms and syms[0]["last"] == "bad-date"
+                    project_id=1, message_id=1, meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(db, 1)})
+    out = rollup.build_rollup(db.db, 1)
+    assert not out.get("recent_symptoms")
+    state = out["clinical_state"]
+    assert len(state["groups"]["unknown"]) == len(state["facts"]) == 1
+    assert state["facts"][0]["posted_at"] == "bad-date"
     db.close()
 
 
 def test_med_rows_skip_negated_and_nonpatient(tmp_path):
     db = _ledger(tmp_path)
-    db.save_messages([_message(body="薬の記録")])
+    reports = ["本人は本日Aを開始しました。", "本人は本日Bを開始していません。",
+               "母は本日Cを開始しました。"]
+    db.save_messages([_message(body="".join(reports))])
     _llm_artifact(db, 1, {"meds": [
-        {"name": "A", "action": "start"},
-        {"name": "B", "action": "start", "negated": True},
-        {"name": "C", "action": "start", "subject": "family"},
+        {"name": "A", "action": "start", "subject": "patient", "status": "current",
+         "negated": False, "evidence": reports[0]},
+        {"name": "B", "action": "start", "subject": "patient", "status": "current",
+         "negated": True, "evidence": reports[1]},
+        {"name": "C", "action": "start", "subject": "family", "status": "current",
+         "negated": False, "evidence": reports[2]},
     ]}, _hash(db))
     scope = {"since": None, "until": None, "project_id": None}
     meds = [m["name"] for _, _, m, _ in mcs_stats._med_rows(db.db, scope)]
@@ -647,12 +666,18 @@ def test_med_followup_ignores_family_and_negated_meds(tmp_path):
     but a genuine patient change mention still fires."""
     db = _ledger(tmp_path)
     db.ensure_patient(1)
-    db.save_messages([_message(body="母親の薬を変更し、本人の薬Aも変更")])
+    reports = ["母は本日家族薬を変更しました。", "本人は本日否定薬を中止していません。",
+               "本人は以前、過去薬を中止しました。", "本人は本日薬Aを変更しました。"]
+    db.save_messages([_message(body="".join(reports))])
     _llm_artifact(db, 1, {"meds": [
-        {"name": "家族薬", "action": "change", "subject": "family"},
-        {"name": "否定薬", "action": "stop", "negated": True},
-        {"name": "過去薬", "action": "stop", "status": "past"},
-        {"name": "薬A", "action": "change"}]}, _hash(db))
+        {"name": "家族薬", "action": "change", "subject": "family", "status": "current",
+         "negated": False, "evidence": reports[0]},
+        {"name": "否定薬", "action": "stop", "subject": "patient", "status": "current",
+         "negated": True, "evidence": reports[1]},
+        {"name": "過去薬", "action": "stop", "subject": "patient", "status": "past",
+         "negated": False, "evidence": reports[2]},
+        {"name": "薬A", "action": "change", "subject": "patient", "status": "current",
+         "negated": False, "evidence": reports[3]}]}, _hash(db))
     now = db.db.execute(
         "SELECT posted_at_ts FROM messages WHERE message_id=1"
     ).fetchone()[0] + 30 * 86400
@@ -686,21 +711,20 @@ def test_prompt_concat_handles_percent_body(monkeypatch):
     assert "SpO2 97% 低下" in sent["messages"][0]["content"]
 
 
-def test_replace_current_keeps_poison_row(tmp_path, monkeypatch):
-    """An invalid-meta artifact still gates reprocessing after the v2
-    write — the atomic replace must not delete it."""
+def test_replace_current_keeps_invalid_history_without_poisoning_reprocessing(tmp_path, monkeypatch):
+    """Invalid history is retained and cannot veto evaluation of the current source."""
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     with db.db:
         db.db.execute(
             "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
             "VALUES('extract_llm',1,1,'{}','{broken')")
-    monkeypatch.setattr(
-        extract_llm, "llm_extract",
-        lambda body, **_: pytest.fail("poison row must gate selection"))
+    calls = []
+    monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: calls.append(body) or {})
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
-    assert res["done"] == 0
-    assert len(db.artifacts("extract_llm", message_id=1)) == 1
+    assert res["done"] == 1 and calls == ["body"]
+    rows = db.artifacts("extract_llm", message_id=1)
+    assert len(rows) == 2 and sum(row["meta"] == "{broken" for row in rows) == 1
     db.close()
 
 
@@ -733,8 +757,7 @@ def test_replace_current_rerenders_card_once_written(tmp_path, monkeypatch):
 
 
 def test_v1_success_plus_v2_error_backoff_suppresses(tmp_path, monkeypatch):
-    """v1 success + v2 error inside backoff: message is NOT re-selected
-    (attempts gate it) and v1 stays readable meanwhile."""
+    """Current backoff suppresses retries while legacy success remains history only."""
     db = _ledger(tmp_path)
     db.save_messages([_message(body="対象本文")])
     _v1_artifact(db, 1, {"summary": "v1"}, _hash(db))
@@ -746,7 +769,8 @@ def test_v1_success_plus_v2_error_backoff_suppresses(tmp_path, monkeypatch):
         lambda body, **_: pytest.fail("backoff must suppress"))
     res = extract_llm.run_pending(db, limit=10, budget_s=30)
     assert res["done"] == 0 and res["selected"] == 0
-    assert mcs_queries.current_message_extract(db.db, "extract_llm", 1)["summary"] == "v1"
+    assert mcs_queries.current_message_extract(db.db, "extract_llm", 1) is None
+    assert any(json.loads(row["content"]).get("summary") == "v1" for row in db.artifacts("extract_llm", message_id=1))
     db.close()
 
 
@@ -755,15 +779,23 @@ def test_st_med_change_followup_filters(tmp_path):
     change mentions needing follow-up."""
     db = _ledger(tmp_path)
     db.ensure_patient(1)
-    db.save_messages([_message(mid=1, body="薬の記録"),
-                      _message(mid=2, body="変更あり")])
+    reports = ["本人は本日無変更薬を服用中で変更はありません。", "本人は本日否定薬を中止していません。",
+               "母は本日家族薬を中止しました。", "本人は以前、過去薬を中止しました。"]
+    change = "本人は本日薬Aを中止しました。"
+    db.save_messages([_message(mid=1, body="".join(reports)),
+                      _message(mid=2, body=change)])
     _llm_artifact(db, 1, {"meds": [
-        {"name": "無変更薬", "action": "none"},
-        {"name": "否定薬", "action": "stop", "negated": True},
-        {"name": "家族薬", "action": "stop", "subject": "family"},
-        {"name": "過去薬", "action": "stop", "status": "past"}]},
+        {"name": "無変更薬", "action": "none", "subject": "patient", "status": "current",
+         "negated": False, "evidence": reports[0]},
+        {"name": "否定薬", "action": "stop", "subject": "patient", "status": "current",
+         "negated": True, "evidence": reports[1]},
+        {"name": "家族薬", "action": "stop", "subject": "family", "status": "current",
+         "negated": False, "evidence": reports[2]},
+        {"name": "過去薬", "action": "stop", "subject": "patient", "status": "past",
+         "negated": False, "evidence": reports[3]}]},
         _hash(db, 1))
-    _llm_artifact(db, 2, {"meds": [{"name": "薬A", "action": "stop"}]},
+    _llm_artifact(db, 2, {"meds": [{"name": "薬A", "action": "stop", "subject": "patient", "status": "current",
+                                        "negated": False, "evidence": change}]},
                   _hash(db, 2))
     old_ts = db.db.execute(
         "SELECT posted_at_ts FROM messages WHERE message_id=1"
@@ -1560,7 +1592,7 @@ def test_rollup_v1_only_med_is_unverified_candidate(tmp_path):
     db.save_messages([_message(mid=1, body="カロナールを内服")])
     db.artifact_add("extract_v1", json.dumps(
         {"medications": [{"name": "カロナール", "dose": "300mg"}]}),
-        project_id=1, message_id=1, meta={"hash": _hash(db, 1)})
+        project_id=1, message_id=1, meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(db, 1)})
     out = rollup.build_rollup(db.db, 1)
     assert out.get("medications", []) == []
     names = [m["name"] for m in out.get("unverified_medications", [])]
@@ -1571,10 +1603,11 @@ def test_rollup_v1_only_med_is_unverified_candidate(tmp_path):
 def test_rollup_planned_med_is_separate_bucket(tmp_path):
     db = _ledger(tmp_path)
     db.ensure_patient(1)
-    db.save_messages([_message(mid=1, body="トラマドール検討中")])
+    body = "本人は明日、トラマドールを開始予定です。"
+    db.save_messages([_message(mid=1, body=body)])
     _llm_artifact(db, 1, {"meds": [
         {"name": "トラマドール", "action": None, "status": "planned",
-         "subject": "patient"}]}, _hash(db, 1))
+         "subject": "patient", "negated": False, "evidence": body}]}, _hash(db, 1))
     out = rollup.build_rollup(db.db, 1)
     assert out.get("medications", []) == []
     names = [m["name"] for m in out.get("planned_medications", [])]
@@ -1671,8 +1704,9 @@ def test_posted_at_reaches_prompt(monkeypatch):
 def test_validate_request_due_text_preserved():
     """F09: relative phrasing is kept verbatim — never coerced into a
     guessed ISO date."""
+    body = "看護師へ明日までに確認してください。"
     out = extract_validation.validate({"requests": [
-        {"to": "看護師", "action": "確認", "due_text": "明日までに"}]})
+        {"to": "看護師", "action": "確認", "due_text": "明日までに", "evidence": body}]}, body)
     assert out["requests"][0]["due_text"] == "明日までに"
     assert "due" not in out["requests"][0]
 
@@ -2355,7 +2389,7 @@ def test_qc_feedback_ignores_superseded_generation_audit(tmp_path,
     db.artifact_add(
         "extract_qc", json.dumps({"qc": "done", "items": []}),
         project_id=1, message_id=1, model="jev-test",
-        meta={"hash": chash,
+        meta={VERSION_KEY: CURRENT_VERSION, "hash": chash,
               "extract_version": extract_llm.EXTRACT_VERSION - 1,
               "source_artifact_id": src, "qc": "done"})
     fb = extract_llm._qc_feedback(db, src)
@@ -2444,7 +2478,8 @@ def test_malformed_old_metadata_is_preserved_without_poisoning_current_retry(tmp
     result = extract_llm.run_pending(db, limit=1, budget_s=5)
 
     assert calls == ["完全合成の記録です"]
-    assert result["done"] == 1 and result["left"] == 0
+    assert result["done"] == 1
+    assert db.db.execute("SELECT 1 FROM messages m WHERE " + extract_llm.pending_pred()).fetchone() is None
     rows = db.artifacts("extract_llm", message_id=1)
     assert len(rows) == 2 and sum(row["meta"] == "{broken" for row in rows) == 1
     current = [row for row in rows if row["meta"] != "{broken"]
@@ -2514,12 +2549,12 @@ def test_v3_pass_folds_v1v2_inline(tmp_path, monkeypatch):
 # ---------- schema v4 detail fields ----------
 
 def test_validate_v4_med_route_freq_prn():
-    body = "カロナール500mgを頓服で、1日3回まで内服可能です"
+    body = "本人はカロナールを500mg頓服で、1日3回まで内服しています。"
     out = extract_validation.validate({"meds": [{
         "name": "カロナール", "dose": "500mg", "action": "none",
         "status": "current", "subject": "patient", "negated": False,
         "route": "oral", "freq": "1日3回まで", "prn": True,
-        "evidence": "カロナール500mgを頓服で"}]}, body)
+        "evidence": body}]}, body)
     med = out["meds"][0]
     assert med["route"] == "oral" and med["freq"] == "1日3回まで"
     assert med["prn"] is True
@@ -2572,7 +2607,7 @@ def test_structured_view_shows_v4_detail(tmp_path):
                   "flag": "high"}],
         "summary": "疼痛コントロール中"}),
         project_id=1, message_id=1,
-        meta={"hash": chash,
+        meta={VERSION_KEY: CURRENT_VERSION, "hash": chash,
               "extract_version": extract_llm.EXTRACT_VERSION})
     lines = structured_view.structured_lines(db.db, 1)
     joined = "\n".join(lines)
@@ -2721,7 +2756,8 @@ def test_request_free_text_fields_are_length_capped():
     d = extract_validation.validate({"requests": [
         {"to": "医" * 100, "from": "看" * 100, "action": "合" * 500}]})
     rq = d["requests"][0]
-    assert len(rq["to"]) == 30 and len(rq["from"]) == 30
+    assert len(rq["to"]) == 30 and "from" not in rq
+    assert rq["unverified"] is True
     # the prompt now asks for 30字 (#20 order 1) but the stored cap
     # stays 60 so existing expected actions keep substring-matching
     assert len(rq["action"]) == 60
@@ -2797,7 +2833,7 @@ def _seed_human_report(db, body="合成の本文 BT37.5 咳あり", content=None
             "summary": "旧", "symptoms": [{"text": "咳"}],
             "vitals": {"bt": 37.5}}),
         project_id=1, message_id=1,
-        meta={"hash": _hash(db),
+        meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(db),
               "extract_version": extract_llm.EXTRACT_VERSION})
     fid = db.artifact_add(
         "extract_feedback_v1",
@@ -2882,7 +2918,8 @@ def test_periodic_revive_reopens_exhausted_extract_errors(tmp_path):
     try:
         db.save_messages([_message(7)])
         now = time.time()
-        r = {"project_id": 1, "message_id": 7, "content_hash": "h1"}
+        r = dict(db.db.execute("SELECT * FROM messages WHERE message_id=7").fetchone())
+        r["_source_binding"] = dependency_loss.source_binding(db.db, 1, 7)
         extract_llm._fail(db, r, 4)                       # attempts=5
         with db.db:
             db.db.execute("UPDATE artifacts SET created_at=? WHERE kind='extract_llm'",
@@ -2897,7 +2934,10 @@ def test_periodic_revive_reopens_exhausted_extract_errors(tmp_path):
                 db.db.execute("UPDATE artifacts SET created_at=? WHERE kind='extract_llm'",
                               (now - extract_llm.REVIVE_COOLDOWN_S - 1,))
         assert extract_llm.revive_failed(db, now) == {"revived": 0, "skipped_cap": 1}
-        extract_llm._fail(db, dict(r, content_hash="h2"), 4)   # edited body
+        db.save_messages([_message(7, body="合成の訂正済み本文")])
+        r = dict(db.db.execute("SELECT * FROM messages WHERE message_id=7").fetchone())
+        r["_source_binding"] = dependency_loss.source_binding(db.db, 1, 7)
+        extract_llm._fail(db, r, 4)
         with db.db:
             db.db.execute("UPDATE artifacts SET created_at=? WHERE kind='extract_llm'",
                           (now - extract_llm.REVIVE_COOLDOWN_S - 1,))

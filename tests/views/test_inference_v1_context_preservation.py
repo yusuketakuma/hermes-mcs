@@ -170,7 +170,7 @@ def test_previsit_keeps_distinct_checks_and_requests_of_the_same_post(monkeypatc
     ('本人は安定したら退院します。','patient','conditional',None),
     ('本人は退院していません。','patient','current',True),
     ('佐藤さんは退院しました。','unknown','current',False),
-    ('本人は退院したかもしれません。','patient','current',None),
+    ('本人は退院したかもしれません。','patient','conditional',None),
     ('退院後の連絡。','patient','current',None),
 ])
 def test_noncurrent_or_unconfirmed_transition_is_retained_without_a_patient_window(text,subject,period,negated):

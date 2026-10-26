@@ -14,6 +14,7 @@ import anthropic_client
 import cloud_cli as cli
 import cloud_policy
 import extract_llm
+import inference_version as inference
 import mcs_operations
 import mcs_requests
 import mcs_setup
@@ -87,6 +88,30 @@ def test_estimate_has_daily_monthly_oneoff_and_optional_fx(world):
     assert Decimal(daily["estimated_cost_low_jpy"]) == Decimal(daily["estimated_cost_low_usd"]) * 150
     assert report["reextract_backlog_once"]["targets"] == 1
     assert report["new_posts_daily_estimate"] > 0
+
+
+
+@pytest.mark.parametrize("public_version", [None, "0.1", inference.CURRENT_VERSION])
+def test_reextract_estimate_tracks_public_generation_even_at_the_same_internal_version(world, public_version):
+    root, path, config = world
+    with closing(Ledger(str(path))) as db:
+        meta = {"hash": _hash(db, 1), "extract_version": extract_llm.EXTRACT_VERSION}
+        if public_version is not None:
+            meta[inference.VERSION_KEY] = public_version
+        db.artifact_add("extract_llm", "{}", project_id=1, message_id=1, meta=meta)
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+    report = cli.observe(config, root=str(root))
+    assert report["routes"]["reextract"]["targets"] == int(public_version != inference.CURRENT_VERSION)
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == before
+
+
+def test_reextract_estimate_never_uses_legacy_facts_for_a_changed_source(world):
+    root, path, config = world
+    with closing(Ledger(str(path))) as db:
+        db.save_messages([_message(1, body="different wholly synthetic source", project_id=1)])
+    before = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert cli.observe(config, root=str(root))["routes"]["reextract"]["targets"] == 0
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == before
 
 
 def test_log_filter_never_displays_ids_or_untrusted_metadata(world):
@@ -288,20 +313,33 @@ def test_resume_refuses_unreadable_or_schema_invalid_config_at_mutation_owner(wo
 
 
 def _complete_context(db, config):
+    """Fabricate checked empty facts for the fixture's nonclinical full source."""
     import patient_context_refresh as context
     settings = cloud_policy.cloud_config(config, key_present=True)[0]
     contract = context._contract({**config, "cloud_llm": {"mode": "off"}})
     contract["provider"] = extract_llm._cloud_contract({"cloud_llm": settings})
     snapshot = context._snapshot(db.db, 1, config, hydrate=False, contract=contract)
-    for source in snapshot["sources"]:
-        db.artifact_add(context.SCAN, json.dumps({"complete": True, "audited": True, "facts": []}),
-            project_id=1, message_id=source["message_id"],
-            meta={"source_sig": context._source_sig(source), "contract": contract,
-                  "provider": contract["provider"], "model": cloud_policy.MODEL})
-    db.artifact_add(context.KIND, '{"facts":[],"summary":[]}', project_id=1,
-        meta={"source_sig": snapshot["source_sig"], "contract": contract,
-              "provider": contract["provider"], "model": cloud_policy.MODEL,
-              "published": context.options(config)["publication"]})
+    with db.db:
+        for source in snapshot["sources"]:
+            meta = {"source_sig": context._source_sig(source), "contract": contract,
+                    "provider": contract["provider"], "model": cloud_policy.MODEL}
+            span = [0, source["body_length"]]
+            unit = context._digest([context._source_key(source), meta["source_sig"], span])
+            chunk = {"chunk_span": span, "part": 0, "parts": 1, "facts": []}
+            chunk_key = context._digest([unit, 0])
+            context._replace(db, context.CHUNK, 1, chunk,
+                {**meta, "unit_key": unit, "chunk_key": chunk_key}, source["message_id"])
+            chunks_sig = context._digest([context._digest([chunk_key, json.dumps(chunk, ensure_ascii=False)])])
+            context._replace(db, context.SCAN, 1,
+                {"complete": True, "audited": True, "facts": [], "audited_chunks_sig": chunks_sig},
+                meta, source["message_id"])
+        context._replace(db, context.KIND, 1, {"facts": [], "summary": []},
+            {"source_sig": snapshot["source_sig"], "contract": contract,
+             "provider": contract["provider"], "model": cloud_policy.MODEL,
+             "published": context.options(config)["publication"], "summary_checked": True,
+             "scan_sig": context._scan_sig(db.db, 1)})
+    assert not any(context._pending(db.db, 1, config, contract=contract)[2].values())
+
 
 
 @pytest.mark.parametrize("change", ["rule_version", "extraction", "karte"])
@@ -319,7 +357,9 @@ def test_current_context_targets_follow_runtime_signatures_without_message_times
     else:
         with closing(Ledger(str(path))) as db:
             if change == "extraction":
-                db.artifact_add("extract_v1", "{}", project_id=1, message_id=1, meta={"version": "synthetic-change"})
+                db.artifact_add("extract_v1", "{}", project_id=1, message_id=1,
+                    meta={inference.VERSION_KEY: inference.CURRENT_VERSION, "hash": _hash(db, 1),
+                          "rule_version": extract_llm.extract.RULE_VERSION})
             else:
                 db.db.execute("UPDATE patients SET karte_id=10 WHERE project_id=1")
                 db.db.commit()

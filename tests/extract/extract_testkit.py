@@ -7,6 +7,7 @@ import mcs_contract
 import json
 
 import extract_llm
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from common_testkit import make_ledger
 
 
@@ -39,7 +40,7 @@ def _v2_artifact(db, mid, chash, content=None, project_id=1):
                                          "subject": "patient"}],
                                "urgency": "routine"}),
         project_id=project_id, message_id=mid,
-        meta={"hash": chash,
+        meta={VERSION_KEY: CURRENT_VERSION, "hash": chash,
               "extract_version": extract_llm.EXTRACT_VERSION})
 
 
@@ -50,7 +51,7 @@ def _qc_job(db, mid=1):
 
 
 def _extract_artifact(db, mid, content, chash, qc_fix=None):
-    meta = {"hash": chash,
+    meta = {VERSION_KEY: CURRENT_VERSION, "hash": chash,
             "extract_version": extract_llm.EXTRACT_VERSION}
     if qc_fix is not None:
         meta["qc_fix"] = qc_fix
@@ -62,7 +63,7 @@ def _qc_artifact(db, mid, src_id, chash, content):
     return db.artifact_add(
         "extract_qc", json.dumps(content, ensure_ascii=False),
         project_id=1, message_id=mid, model="jev-test",
-        meta={"hash": chash,
+        meta={VERSION_KEY: CURRENT_VERSION, "hash": chash,
               "extract_version": extract_llm.EXTRACT_VERSION,
               "source_artifact_id": src_id, "qc": "done"})
 

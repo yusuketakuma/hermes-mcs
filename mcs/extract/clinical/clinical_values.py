@@ -122,23 +122,28 @@ _ROUTE_WORDS = {"oral": r"経口|内服|服用|飲(?:む|み|ん|め)",
                 "injection": r"注射|皮下注|筋注|静注",
                 "infusion": r"点滴|持続静注", "inhalation": r"吸入",
                 "tube": r"経管|胃瘻|チューブ(?:から|で).*投与", "other": r"他の投与経路"}
-_PRN_WORDS = r"頓用|必要時|必要(?:な|のある)(?:とき|時|場合)"
+_PRN_WORDS = r"頓用|頓服|必要時|必要(?:な|のある)(?:とき|時|場合)"
 
 
 def medication_attribute_supported(key, value, assertion):
     """Check a supplied attribute against this drug's own assertion without dose conversions."""
     source = re.sub(r"\s+", "", unicodedata.normalize("NFKC", assertion).casefold())
+    denied = r"(?:は|が|も|を)?(?:(?:では|じゃ)(?:なく|ない|ありません)|せず|しない|しません|して(?:いない|いません))"
     if key == "route":
-        return value in _ROUTE_WORDS and re.search(_ROUTE_WORDS[value], source) is not None
+        return value in _ROUTE_WORDS and any(not re.match(denied, source[match.end():])
+            for match in re.finditer(_ROUTE_WORDS[value], source))
     if key == "prn":
-        prn = re.search(_PRN_WORDS, source) is not None and not re.search(
-            r"(?:頓用|必要時)(?:では|じゃ)?(?:ない|ありません)", source)
+        mentions = list(re.finditer(_PRN_WORDS, source))
+        prn = bool(mentions) and all(not re.match(denied, source[match.end():]) for match in mentions)
         return prn if value is True else not prn
     if not isinstance(value, str) or not value.strip():
         return False
     wanted = re.sub(r"\s+", "", unicodedata.normalize("NFKC", value).casefold())
     matches = list(re.finditer(r"(?<![0-9.])" + re.escape(wanted) + r"(?![0-9.])", source))
     for match in matches:
+        if (re.match(denied, source[match.end():])
+                or key == "freq" and source[match.end():].startswith("まで") and not wanted.endswith("まで")):
+            continue
         if key == "dose":
             prefix, suffix = source[:match.start()], source[match.end():]
             if (re.search(r"(?:1日|一日)(?:量)?$|(?:規格|含有量)(?:は|が|[:：])?$", prefix)
@@ -148,18 +153,22 @@ def medication_attribute_supported(key, value, assertion):
                     and re.match(r"(?:錠|カプセル)(?:を|は)?[0-9.]+(?:錠|カプセル)", suffix)):
                 continue  # The tablet strength is not its administered count or a multiplied dose.
         return True
+    if matches:
+        return False
     if key == "dose":
         # A per-dose count may be written as 各1錠. Never multiply strength by count.
         return bool(re.fullmatch(r"1回[0-9.]+(?:錠|包|カプセル)", wanted)
-                    and wanted.replace("1回", "各", 1) in source)
+                    and any(not re.match(denied, source[match.end():]) for match in re.finditer(
+                        re.escape(wanted.replace("1回", "各", 1)) + r"(?![0-9.])", source)))
     if key == "freq":
         match = re.fullmatch(r"1日([1-6])回", wanted)
         if not match:
             return False
         explicit = re.search(r"(?:1日|毎日)([1-6])回|([1-6])回/日|分([1-6])(?![0-9])", source)
         if explicit:
-            return str(next(v for v in explicit.groups() if v)) == match[1]
-        if re.search(r"隔日|週|月|日おき|頓用|必要|明朝|今朝|昨日|明日|本日|当日", source):
+            return (not re.match(denied + r"|まで", source[explicit.end():])
+                    and str(next(v for v in explicit.groups() if v)) == match[1])
+        if re.search(r"隔日|週|月|日おき|頓用|頓服|必要|明朝|今朝|昨日|明日|本日|当日", source):
             return False
         periods = {m[0] for m in re.finditer(r"朝|昼|夕|就寝", source)}
         return len(periods) >= 2 and len(periods) == int(match[1])

@@ -214,9 +214,11 @@ def project(facts, *, dependency_losses=()):
         t = fact.get("temporal") or {}
         if fact.get("historical") or t.get("subject") in ("family", "other") or t.get("period") == "past":
             bucket = "history"
+        elif t.get("unknown"):
+            bucket = "unknown"
         elif t.get("period") in ("planned", "conditional"):
             bucket = "plan"
-        elif (t.get("unknown") or t.get("subject") != "patient" or t.get("period") != "current"
+        elif (t.get("subject") != "patient" or t.get("period") != "current"
               or t.get("action") and t.get("negated") is not False
               or t.get("posted_day") is None
               or t.get("event_day") is None and t.get("as_of_day") is None):

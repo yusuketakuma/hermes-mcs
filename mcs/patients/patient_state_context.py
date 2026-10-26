@@ -76,6 +76,13 @@ def _held_sql(version):
         AND json_extract({json_or_null('h.content')},'$.target_version')={version})"""
 
 
+
+def _source_occurrence_sql(db):
+    columns = {row[1] for row in db.execute('PRAGMA table_info(message_revisions)')}
+    if not {'message_id', 'seq'}.issubset(columns):
+        return 'NULL'
+    return '(SELECT COALESCE(MAX(r.seq),1) FROM message_revisions r WHERE r.message_id=m.message_id)'
+
 def history(db, target, *, version):
     """Read at most 200 earlier source messages, with current reader precedence."""
     target = dict(target)
@@ -84,6 +91,7 @@ def history(db, target, *, version):
             or not _finite(stamp) or type(target.get("project_id")) is not int
             or type(target.get("message_id")) is not int):
         return []
+    occurrence = _source_occurrence_sql(db)
     rows = db.execute(f"""
         WITH earlier AS MATERIALIZED (
           SELECT * FROM messages m WHERE m.project_id=? AND m.message_id!=?
@@ -91,7 +99,7 @@ def history(db, target, *, version):
           AND m.posted_at_ts > -1e308 AND m.posted_at_ts < 1e308
           ORDER BY m.posted_at_ts DESC,m.message_id DESC LIMIT 200)
         SELECT m.*,a.artifact_id,a.kind,a.content,a.meta,a.model,
-          {_held_sql(version)} AS held
+          {_held_sql(version)} AS held,{occurrence} AS source_occurrence
         FROM earlier m
         LEFT JOIN artifacts a ON a.message_id=m.message_id
           AND a.kind IN ({FACT_KINDS_SQL})
@@ -113,8 +121,16 @@ def _reports(row, version):
     if row["kind"] not in ("extract_llm", "canonical_projection", "semantic_facts_v4"):
         return []
     reports = patient_context.pharmacy_state_items(document, row)
+    occurrence = row.get('source_occurrence')
+    source_known = type(occurrence) is int and 0 < occurrence < 2**63
+    binding = _digest({'contract': 'pharmacy-reference-source/v1', 'occurrence': occurrence,
+        'source': {key: row.get(key) for key in ('project_id', 'message_id', 'content_hash', 'body_text',
+            'body_state', 'parent_id', 'sender_id', 'sender_name', 'sender_type', 'profession',
+            'organization', 'posted_at', 'posted_at_ts')}})
     for report in reports:
-        report["reference_eligible"] = (not row.get("held") and not document.get("_error")
+        report['parent_fingerprint'] = _digest([report['parent_fingerprint'], binding])
+        report['fingerprint'] = _digest([report['fingerprint'], binding])
+        report["reference_eligible"] = (source_known and not row.get("held") and not document.get("_error")
             and ((_clean_legacy(meta, version) and isinstance(meta.get("actual_model"), str)
                   and bool(meta["actual_model"]) and meta["actual_model"] == row["model"])
                  if row["kind"] == "extract_llm" else _canonical_report(document, report)))
@@ -131,8 +147,11 @@ def reference_current(db, target, reference, *, version):
             or reference["message_id"] == target.get("message_id")
             or reference["posted_at_ts"] >= target["posted_at_ts"]):
         return False
+    occurrence = _source_occurrence_sql(db)
+    if occurrence == 'NULL':
+        return False
     row = db.execute(f"""SELECT m.*,a.artifact_id,a.kind,a.content,a.meta,a.model,
-        {_held_sql(version)} AS held
+        {_held_sql(version)} AS held,{occurrence} AS source_occurrence
         FROM messages m JOIN artifacts a ON a.message_id=m.message_id
           AND a.kind IN ({FACT_KINDS_SQL})
           {current_fact_pred()}
@@ -255,7 +274,17 @@ def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, 
                                      (KIND, target["project_id"], target["message_id"])):
             old = load(ledger.db, row[0], target)
             if old is not None and old["binding"] == binding:
-                return old
+                references = []
+                for token, value in old['refs'].items():
+                    reference = reference_item({**value, 'token': token}) if isinstance(value, dict) else None
+                    if reference is None:
+                        raise ValueError('context_snapshot_invalid')
+                    references.append(reference)
+                if all(reference_current(ledger.db, target, reference, version=version) for reference in references):
+                    return old
+                # The old attempt frame remains immutable history. Only its
+                # now-invalid antecedents justify reading a fresh bounded set.
+                continue
             doc, meta = loads_dict(row["content"]), loads_dict(row["meta"])
             if isinstance(meta, dict) and patient_context.valid_reference_hash(meta.get("hash")) and meta["hash"] != target["content_hash"]:
                 continue

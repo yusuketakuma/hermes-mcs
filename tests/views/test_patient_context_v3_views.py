@@ -31,6 +31,7 @@ def ctx(tmp_path, monkeypatch):
     import patient_context_refresh
     monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(
         context_view_input=lambda conn, pid, cfg=None: context_refresh["value"],
+        inference_coverage=lambda *args: {'complete':False,'status':'scan_pending','sources':{'pending':6}},
         workday_window=patient_context_refresh.workday_window))
     yield SimpleNamespace(db=db, context_refresh=context_refresh)
     db.close()

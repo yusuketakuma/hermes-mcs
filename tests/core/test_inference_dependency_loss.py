@@ -160,11 +160,19 @@ def test_failed_replacement_insert_and_held_prior_do_not_create_witness(store, m
     import extract_llm as llm
     monkeypatch.setattr(llm, '_writer_current', lambda **kw: True)
     monkeypatch.setattr(llm, '_rerender_cards', lambda *a, **kw: None)
-    save(store, 1, '本人は本日、合成薬Aを中止しました。')
-    publish(store, 1)
+    save(store, 1, '本人は本日、合成薬Aを服用していません。')
     selected = row(store, 1)
+    prior = {'meds': [{'name': '合成薬A', 'subject': 'patient', 'status': 'current',
+                      'negated': True, 'evidence': selected['body_text']}]}
+    store.artifact_add('extract_llm', json.dumps(prior, ensure_ascii=False), project_id=1, message_id=1,
+        meta={VERSION_KEY: CURRENT_VERSION, 'hash': selected['content_hash'],
+              'extract_version': llm.EXTRACT_VERSION, 'source_binding': loss.source_binding(store.db, 1, 1)})
+    assert llm.extract_quality.protected_lost(prior, {}, selected['body_text']) == {'meds': 1}
     assert llm._claim(store, selected) is not None
     assert not llm._replace_current(store, selected, '{}')
+    held = json.loads(store.db.execute('SELECT content FROM artifacts WHERE kind=? ORDER BY artifact_id DESC LIMIT 1',
+                                      (llm.UPGRADE_KIND,)).fetchone()[0])
+    assert held['state'] == 'held_prior' and held['reason'] == 'protected_loss'
     assert not loss.read(store.db, 1)['losses']
     store.db.executescript("CREATE TRIGGER ignore_extract BEFORE INSERT ON artifacts "
         "WHEN NEW.kind='extract_llm' BEGIN SELECT RAISE(IGNORE); END;")
@@ -441,3 +449,90 @@ def test_worker_rule_hint_carries_prepared_binding_across_revisions_without_fals
     before = [tuple(item) for item in store.db.execute("SELECT * FROM artifacts WHERE kind='extract_v1'")]
     llm._ensure_v1(store, prepared, {'v': 1, 'summary': '遅延した完全合成結果'})
     assert [tuple(item) for item in store.db.execute("SELECT * FROM artifacts WHERE kind='extract_v1'")] == before
+
+
+@pytest.mark.parametrize('field,other', [('parent_id', 77), ('sender_id', 88),
+    ('sender_name', '合成別投稿者'), ('profession', '合成役割'),
+    ('posted_at', '2026-09-20T09:00:00+09:00')])
+def test_adopted_metadata_aba_advances_only_its_source_occurrence(store, field, other):
+    original = replace(_message(1, body='合成のお知らせです。'), parent_id=5, profession='合成役割A')
+    store.save_messages([original], project_id=1)
+    save(store, 2, '独立した合成のお知らせです。')
+    first = loss.source_binding(store.db, 1, 1)
+    unrelated = loss.source_binding(store.db, 1, 2)
+    store.save_messages([replace(original, **{field: other})], project_id=1)
+    second = loss.source_binding(store.db, 1, 1)
+    store.save_messages([original], project_id=1)
+    assert len({first, second, loss.source_binding(store.db, 1, 1)}) == 3
+    revisions = store.db.execute('SELECT seq,content_hash,prev_content_hash FROM message_revisions '
+                                'WHERE message_id=1 ORDER BY seq').fetchall()
+    assert [r['seq'] for r in revisions] == [1, 2, 3]
+    assert len({r['content_hash'] for r in revisions}) == 1
+    assert revisions[1]['prev_content_hash'] == revisions[0]['content_hash']
+    assert loss.source_binding(store.db, 1, 2) == unrelated
+    proof = loss.read(store.db, 1)
+    assert proof['coverage']['reasons'].get('uncaptured_chat_revision', 0) == 0
+    if field in ('sender_name', 'profession'):
+        assert proof['complete'] and proof['losses'] == []
+    else:
+        # Unanalysed lost support remains unknown; occurrence capture must not refund it.
+        assert not proof['complete'] and proof['coverage']['terminal'] > 0
+
+
+def test_source_occurrence_unchanged_and_retained_snippet_do_not_advance(store):
+    original = save(store, 1, '本人は本日、合成薬Aを中止しました。')
+    publish(store, 1)
+    binding = loss.source_binding(store.db, 1, 1)
+    for message in (original, replace(original, body_html='省略', body_state='snippet'),
+                    replace(original, is_unread=not original.is_unread, reply_count=9)):
+        store.save_messages([message], project_id=1)
+    assert loss.source_binding(store.db, 1, 1) == binding
+    assert store.db.execute('SELECT COUNT(*) FROM message_revisions').fetchone()[0] == 0
+    assert not store.db.execute('SELECT 1 FROM artifacts WHERE kind=?', (loss.KIND,)).fetchone()
+
+
+def test_epoch_repair_with_same_timestamp_text_is_an_observed_occurrence(store):
+    original = save(store, 1, '合成のお知らせです。')
+    with store.db:
+        store.db.execute('UPDATE messages SET posted_at_ts=NULL WHERE message_id=1')
+    before = loss.source_binding(store.db, 1, 1)
+    store.save_messages([original], project_id=1)
+    assert loss.source_binding(store.db, 1, 1) != before
+    assert store.db.execute('SELECT MAX(seq) FROM message_revisions').fetchone()[0] == 2
+    assert row(store, 1)['posted_at_ts'] is not None
+
+
+def test_legacy_null_hash_is_not_seeded_as_an_invented_revision(store):
+    original = save(store, 1, '合成のお知らせです。')
+    with store.db:
+        store.db.execute('UPDATE messages SET content_hash=NULL,body_state=NULL WHERE message_id=1')
+    store.save_messages([original], project_id=1)
+    revisions = store.db.execute('SELECT * FROM message_revisions').fetchall()
+    assert len(revisions) == 1 and revisions[0]['seq'] == 1
+    assert revisions[0]['content_hash'] == row(store, 1)['content_hash']
+    assert revisions[0]['prev_content_hash'] is None
+
+
+def test_same_hash_full_to_deleted_advances_occurrence_and_retains_state_change(store):
+    original = save(store, 1, '')
+    store.save_messages([replace(original, body_state='deleted')], project_id=1)
+    assert [(r[0], r[1]) for r in store.db.execute('SELECT seq,body_state FROM message_revisions '
+                                                'ORDER BY seq')] == [(1, 'full'), (2, 'deleted')]
+    store.save_messages([replace(original, body_state='deleted', sender_name='合成別投稿者')], project_id=1)
+    assert store.db.execute('SELECT MAX(seq) FROM message_revisions').fetchone()[0] == 3
+    assert loss.read(store.db, 1)['complete']
+
+
+def test_retained_legacy_null_hash_snippet_metadata_is_not_fake_hydration(store):
+    original = save(store, 1, '合成のお知らせです。')
+    with store.db:
+        store.db.execute('UPDATE messages SET content_hash=NULL WHERE message_id=1')
+    store.save_messages([replace(original, body_html='省略', body_state='snippet', sender_name='合成別投稿者')], project_id=1)
+    current = row(store, 1)
+    assert current['content_hash'] is None and current['body_state'] == 'full'
+    assert current['body_html'] == original.body_html and current['sender_name'] == '合成別投稿者'
+    assert not store.db.execute('SELECT 1 FROM message_revisions').fetchone()
+    assert not store.db.execute('SELECT 1 FROM artifacts WHERE kind=?', (loss.KIND,)).fetchone()
+    store.save_messages([original], project_id=1)
+    assert row(store, 1)['content_hash'] is not None
+    assert store.db.execute('SELECT COUNT(*) FROM message_revisions').fetchone()[0] == 1

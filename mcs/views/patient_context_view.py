@@ -245,7 +245,9 @@ def changes(db, ev, since_ts) -> dict:
     for mid, state, at in db.execute(
             "SELECT r.message_id, r.body_state, MAX(r.observed_at) FROM message_revisions r "
             "JOIN messages m ON m.message_id=r.message_id WHERE m.project_id=? AND r.observed_at>=? "
-            "AND r.prev_content_hash IS NOT NULL GROUP BY r.message_id", (ev["project_id"], since_ts)):
+            "AND r.prev_content_hash IS NOT NULL AND (r.content_hash IS NOT r.prev_content_hash OR "
+            "r.body_state IS NOT (SELECT p.body_state FROM message_revisions p WHERE p.message_id=r.message_id "
+            "AND p.seq<r.seq ORDER BY p.seq DESC LIMIT 1)) GROUP BY r.message_id", (ev["project_id"], since_ts)):
         revised[mid] = (state, at)
 
     def kind(item):

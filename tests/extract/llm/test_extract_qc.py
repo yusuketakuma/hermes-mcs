@@ -13,6 +13,7 @@ import semantic_drain
 import semantic_jev as jev
 from extract_testkit import _hash, _ledger, _message, _qc_job, _v2_artifact
 from semantic_testkit import _FakeJev
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 def _cfg(**kw):
@@ -50,7 +51,7 @@ def test_seed_skips_when_qc_artifact_exists_for_same_hash(tmp_path):
     h = _hash(db)
     source_id = _v2_artifact(db, 1, h)
     db.artifact_add("extract_qc", "{}", project_id=1, message_id=1,
-        meta={"hash": h,
+        meta={VERSION_KEY: CURRENT_VERSION, "hash": h,
                           "extract_version": extract_llm.EXTRACT_VERSION,
                           "source_artifact_id": source_id})
     assert semantic_qc._qc_seed(db, time.time()) == 0
@@ -65,10 +66,10 @@ def test_seed_skips_stale_v1_and_error_artifacts(tmp_path):
     db.artifact_add("extract_llm", "{}", project_id=1, message_id=1,
                     meta={"hash": h})                       # v1: no version
     db.artifact_add("extract_llm", "{}", project_id=1, message_id=2,
-                    meta={"hash": _hash(db, 2), "error": "x",
+                    meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(db, 2), "error": "x",
                           "extract_version": extract_llm.EXTRACT_VERSION})
     db.artifact_add("extract_llm", "{}", project_id=1, message_id=3,
-                    meta={"hash": "old-hash",
+                    meta={VERSION_KEY: CURRENT_VERSION, "hash": "old-hash",
                           "extract_version":
                           extract_llm.EXTRACT_VERSION})      # stale
     assert semantic_qc._qc_seed(db, time.time()) == 0
@@ -196,7 +197,7 @@ def test_qc_seed_and_drain_use_same_valid_source(tmp_path):
         source_id = _v2_artifact(db, 1, _hash(db))
         for content in ("broken json", "[]"):
             db.artifact_add("extract_llm", content, project_id=1, message_id=1,
-                            meta={"hash": _hash(db),
+                            meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(db),
                                   "extract_version": extract_llm.EXTRACT_VERSION})
         out = semantic_drain.run_due(db, _cfg(extract_qc="annotate"), {"errors": []},
                                time.monotonic() + 60, jev_client=_FakeJev(choice="routine"))
@@ -235,9 +236,10 @@ def test_seed_skips_when_qc_exists_for_same_hash_and_version(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     h = _hash(db)
-    _v2_artifact(db, 1, h)
+    source_id = _v2_artifact(db, 1, h)
     db.artifact_add("extract_qc", "{}", project_id=1, message_id=1,
-                    meta={"hash": h,
+                    meta={VERSION_KEY: CURRENT_VERSION, "hash": h,
+                          "source_artifact_id": source_id,
                           "extract_version": extract_llm.EXTRACT_VERSION
                           - 1})
     assert semantic_qc._qc_seed(db, time.time()) == 1
@@ -317,7 +319,8 @@ def test_process_qc_job_skips_aged_post(tmp_path):
     db.db.execute(
         "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,"
         "state,next_try,created_at,updated_at) "
-        "VALUES('extract_qc',1,1,'{}','pending',0,0,0)")
+        "VALUES('extract_qc',1,1,?,'pending',0,0,0)",
+        (json.dumps({VERSION_KEY: CURRENT_VERSION}),))
     db.db.commit()
     job = db.db.execute(
         "SELECT * FROM fetch_jobs WHERE kind='extract_qc'").fetchone()
@@ -437,7 +440,8 @@ def test_qc_job_done_when_no_current_artifact(tmp_path):
     db.db.execute(
         "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,"
         "state,next_try,created_at,updated_at) "
-        "VALUES('extract_qc',1,1,'{}','pending',0,0,0)")
+        "VALUES('extract_qc',1,1,?,'pending',0,0,0)",
+        (json.dumps({VERSION_KEY: CURRENT_VERSION}),))
     db.db.commit()
     client = _FakeJev(choice="routine")
     out = semantic_drain.run_due(db, _cfg(extract_qc="annotate"),
@@ -531,7 +535,7 @@ def test_semantic_jobs_outrank_qc_backfill(tmp_path):
     _v2_artifact(db, 1, _hash(db))
     semantic_qc._qc_seed(db, time.time())          # QC job first (job_id smaller)
     db.job_add("semantic", 1, 1, payload={
-        "targets": [1], "origin": {"source": "history_import"}})
+        VERSION_KEY: CURRENT_VERSION, "targets": [1], "origin": {"source": "history_import"}})
     client = _FakeJev(choice="routine")
     out = semantic_drain.run_due(db, _cfg(extract_qc="annotate"),
                            {"errors": []}, time.monotonic() + 300,
@@ -619,7 +623,7 @@ def test_qc_dedup_keeps_original_item_indices():
 def _sem_job(db, mid, eligible=False):
     """Direct semantic job seed — mirrors the fairness fixture:
     arrival jobs carry eligible=True."""
-    payload = {"targets": [mid],
+    payload = {VERSION_KEY: CURRENT_VERSION, "targets": [mid],
                "origin": {"source": "unread" if eligible
                           else "history_import",
                           "event_id": mid if eligible else None},

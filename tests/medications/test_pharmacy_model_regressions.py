@@ -181,7 +181,10 @@ def test_repeated_wrong_nonuse_is_not_coerced_or_retried_again(monkeypatch):
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k: calls.append(a) or copy.deepcopy(wrong))
     meta = {}
     out = extract_llm.llm_extract(body, meta_out=meta)
-    assert not out.get("meds") and out["summary"] == "合成要約"
+    med, = out['meds']
+    assert med['name'] == '解熱剤' and med['evidence'] == body and med['unverified'] is True
+    assert 'negated' not in med and not mcs_queries.med_is_patient_current(med)
+    assert out['summary'] == '合成要約'
     assert len(calls) == 2 and meta["repairs"] == 1
 
 
@@ -189,8 +192,13 @@ def test_repeated_wrong_nonuse_is_not_coerced_or_retried_again(monkeypatch):
 def test_family_drug_cannot_become_patient_medication(quote):
     body = "兄が合成薬Zを服用しています。本人の薬に変更はありません。"
     out = extract_validation.validate({"summary": "合成要約", "meds": [medication("合成薬Z", quote)]}, body)
-    assert not out.get("meds")
-    assert out["_items_dropped"] == 1
+    if '合成薬Z' not in quote:
+        assert not out.get('meds') and out['_items_dropped'] == 1
+    else:
+        candidate, = out['meds']
+        assert candidate['name'] == '合成薬Z' and candidate['evidence'] == quote
+        assert candidate['unverified'] is True and 'subject' not in candidate
+        assert not mcs_queries.med_is_patient_current(candidate)
 
 
 @pytest.mark.parametrize("subject,quote", [
@@ -215,7 +223,13 @@ def test_rejected_medication_reports_the_specific_source_conflict(quote, reason)
                                 body, drops)
     issues = extract_quality.repair_issues(drops, out)
     assert any("meds[0]" in issue and reason in issue for issue in issues)
-    assert not out.get("meds")
+    if '合成薬Z' not in quote:
+        assert not out.get('meds')
+    else:
+        candidate, = out['meds']
+        assert candidate['evidence'] == quote and candidate['name'] == '合成薬Z'
+        assert candidate['unverified'] and 'subject' not in candidate
+        assert not mcs_queries.med_is_patient_current(candidate)
 
 
 def test_concrete_medication_feedback_recovers_family_quote_in_one_repair(monkeypatch):
@@ -380,7 +394,8 @@ def test_unresolved_references_keep_the_change_as_an_unverified_candidate(body, 
     out = extract_validation.validate({"meds": [med]}, body)
     assert len(out["meds"]) == 1
     assert out["meds"][0]["action"] == action and out["meds"][0]["status"] == status
-    assert out["meds"][0]["unverified"] and "evidence" not in out["meds"][0]
+    assert out["meds"][0]["unverified"] and out["meds"][0]["evidence"] == quote
+    assert quote in body and out['meds'][0]['name'] == name
     assert not mcs_queries.med_is_patient_current(out["meds"][0])
     assert out["_evidence_dropped"] == 1
 
@@ -393,7 +408,11 @@ def test_unresolved_references_keep_the_change_as_an_unverified_candidate(body, 
 def test_a_reference_cannot_bypass_an_explicit_different_drug_owner(body, name):
     med = {**medication(name, body), "action": "stop", "status": "past"}
     out = extract_validation.validate({"summary": "合成要約", "meds": [med]}, body)
-    assert not out.get("meds") and out["_items_dropped"] == 1
+    candidate, = out['meds']
+    assert candidate['name'] == name and candidate['evidence'] == body
+    assert candidate['action'] == 'stop' and candidate['status'] == 'past'
+    assert candidate['unverified'] and 'subject' not in candidate
+    assert not mcs_queries.med_is_patient_current(candidate)
 
 
 @pytest.mark.parametrize("owner,subject,kept", [
@@ -405,10 +424,14 @@ def test_reference_scope_uses_known_owners_symmetrically_without_guessing_unknow
     body = f"上記の{owner + 'の' if owner else ''}薬は中止です。"
     med = {**medication("合成薬E", body, subject), "action": "stop", "status": "past"}
     out = extract_validation.validate({"summary": "合成要約", "meds": [med]}, body)
-    assert bool(out.get("meds")) is kept
-    if kept:
-        assert out["meds"][0]["unverified"] and "evidence" not in out["meds"][0]
-        assert out["meds"][0]["subject"] == subject
+    candidate, = out['meds']
+    assert candidate['name'] == '合成薬E' and candidate['evidence'] == body
+    assert candidate['unverified'] and candidate['action'] == 'stop' and candidate['status'] == 'past'
+    assert not mcs_queries.med_is_patient_current(candidate)
+    if kept:  # The source supports this reported owner; identity remains unresolved.
+        assert candidate['subject'] == subject
+    else:
+        assert 'subject' not in candidate
 
 
 @pytest.mark.parametrize("body,key,value", [

@@ -7,6 +7,7 @@ import ledger
 import mcs_view
 import read_model
 from semantic_projection import PROJECTION_VERSION
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from patient_context import extract_context
 from semantic_testkit import _message, _patient
 from test_read_model import _artifact, _db, _hash_of
@@ -163,7 +164,7 @@ def test_legacy_message_bound_context_without_project_id_is_current(context_db, 
     db = context_db
     items = extract_context(BODY)
     aid = db.artifact_add(kind, json.dumps({"patient_context": items}),
-                          message_id=1, meta={"hash": _hash_of(db, 1)})
+                          message_id=1, meta={"hash": _hash_of(db, 1),VERSION_KEY:CURRENT_VERSION})
     detail = read_model.read_model(db.db, scope="detail", project_id=1)
     row = detail["records"][0]
     assert row["extraction"][kind] == {"state": "current", "artifact_id": aid}
@@ -179,7 +180,7 @@ def test_legacy_message_bound_context_without_project_id_is_current(context_db, 
 def test_published_context_still_requires_explicit_project_binding(context_db, kind):
     db = context_db
     db.artifact_add(kind, json.dumps({"canonical_facts": [], "patient_context": extract_context(BODY)}),
-                    message_id=1, meta={"hash": _hash_of(db, 1), "engine_version": 4,
+                    message_id=1, meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash_of(db, 1), "engine_version": 4,
                                         "projection_version": PROJECTION_VERSION})
     row = read_model.read_model(db.db, scope="detail", project_id=1)["records"][0]
     assert row["extraction"][kind]["state"] == "pending"
@@ -300,3 +301,29 @@ def test_patient_mentions_accept_known_repeated_occurrence_with_null_full_body(c
     row = mcs_queries.source_patient_mentions(context_db.db,1)[0]
     assert row['evidence'] == text and row['evidence_span'] == [len(prefix),len(body)]
     assert 'unverified' not in row['mention']
+
+
+@pytest.mark.parametrize('deleted', [False, True])
+def test_changes_excludes_metadata_occurrences_but_preserves_last_body_transition(context_db, monkeypatch, deleted):
+    from dataclasses import replace
+    from patient_context_view import changes
+    db = context_db
+    source = _message(1, body=BODY)
+    clock = [100.0]
+    monkeypatch.setattr(ledger.time, 'time', lambda: clock[0])
+    with db.db:
+        db.db.execute('UPDATE messages SET first_seen=1 WHERE message_id=1')
+    db.save_messages([replace(source, sender_name='合成表示A')], project_id=1)
+    ev = {'project_id': 1, 'items': [{'message_id': 1, 'discovery': 'initial'}], 'as_of': 400, 'coverage': {}}
+    assert changes(db.db, ev, 50)['by_discovery']['edited'] == []
+    clock[0] = 200.0
+    body = replace(source, body_html='' if deleted else '<p>合成の本文編集です。</p>',
+                   body_state='deleted' if deleted else 'full', sender_name='合成表示A')
+    db.save_messages([body], project_id=1)
+    clock[0] = 300.0
+    db.save_messages([replace(body, sender_name='合成表示B')], project_id=1)
+    result = changes(db.db, ev, 50)['by_discovery']
+    assert result['edited'] == ev['items']
+    assert result['deleted'] == ([{'message_id': 1, 'observed_at': 200.0}] if deleted else [])
+    later = changes(db.db, ev, 250)['by_discovery']
+    assert later['edited'] == [] and later['deleted'] == []

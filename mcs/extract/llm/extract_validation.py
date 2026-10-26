@@ -263,7 +263,7 @@ class Validator:
             item.pop(key, None)
         item["unverified"] = True
 
-    def assertion(self, item, surfaces=(), *, request=False, sender=None):
+    def assertion(self, item, surfaces=(), *, request=False, sender=None, medication=False):
         """Locate one target assertion inside its exact evidence, never another item's clause."""
         quote = item.get("evidence")
         span = locate_quote_span(self.body, quote) if isinstance(quote, str) and self.body is not None else None
@@ -285,7 +285,7 @@ class Validator:
             # A suffix inside a different object name is not the same request.
             for match in re.finditer(re.escape(wanted), source):
                 prefix = source[:match.start()]
-                if not prefix or re.search(r"へ$|に$|を$|から$|より$|[:：]$", prefix):
+                if not prefix or re.search(r"へ$|に$|を$|から$|より$|[:：]$|なら$|たら$|場合は$|ときは$|れば$", prefix):
                     return True
                 if sender and re.search(re.escape(normalize(sender)) + r"(?:は|が)$", prefix):
                     return True
@@ -302,9 +302,38 @@ class Validator:
         else:
             (left, right), (text, term) = next(iter(selected.items()))
         inner = locate_quote_span(text, term) if term is not None else None
+        if medication and term is not None and (inner is None or len(list(re.finditer(
+                r"(?=" + re.escape(flat_text(term)) + r")", flat_text(quote)))) != 1):
+            return None
         start = span[0] + left + (inner[0] if inner else 0)
         end = span[0] + left + (inner[1] if inner else len(text))
         return text, start, end, span[0] + right
+
+    def medication_continuation(self, item, assertion):
+        """Prove one positive current medication continuation inside a complete quoted sentence."""
+        quote = item.get("evidence")
+        span = locate_quote_span(self.body, quote)
+        start, end = assertion[1:3]
+        left = max(self.body.rfind(mark, 0, start) for mark in "。！？!?;；\n") + 1
+        stop = re.search(r"[。！？!?;；\n]", self.body[end:])
+        right = end + stop.start() if stop else len(self.body)
+        if (self.body[right:right + 1] in ("？", "?", "！", "!")
+                or self.body[left:span[0]].strip() or self.body[span[1]:right].strip()):
+            return None
+        prefix = flat_text(self.body[left:start])
+        owner = re.fullmatch(r"(.+?)(?:は|が)", prefix)
+        subject = clinical_scope.person_scope(owner[1], None) if owner else "unknown"
+        if subject == "unknown":
+            return None
+        tail = flat_text(self.body[end:right]).casefold()
+        match = re.fullmatch(r"を(?P<dose>[0-9]+(?:\.[0-9]+)?(?:mg|μg|mcg|g|ml|錠|包|カプセル))"
+                             r"(?P<prn>頓(?:服|用)で)?[、,]"
+                             r"(?P<freq>1日[1-6]回(?:まで)?|就寝前)(?:に)?"
+                             r"(?:内服|服用)(?:しています|している)", tail)
+        if match is None or clinical_scope.source_axes(self.body, start, end, default="unknown") != (subject, "current"):
+            return None
+        return {"dose": match["dose"], "freq": match["freq"], "route": "oral",
+                "prn": bool(match["prn"]), "subject": subject, "status": "current", "negated": False}
 
     def identity_attributes(self, item, assertion, *, symptom=False):
         text, start, end, assertion_end = assertion
@@ -520,6 +549,8 @@ class Validator:
                         wrong_person = any(s in _MED_SUBJECTS and s != sj for s in scopes)
                 if wrong_person:
                     self.uncertain(item, "subject")
+                    if self.drops is not None and len(self.drops.setdefault("reasons", [])) < 5:
+                        self.drops["reasons"].append(f"meds[{index}].subjectと引用の対象者が一致しません。原文の服用者を確認してください。")
                 if missing_name and re.search(r"同薬|同剤|当該薬|その薬|あの薬|上記", quote):
                     # Preserve a possible stop/reference, without confirming an unproved identity.
                     self.miss(quote)
@@ -528,7 +559,7 @@ class Validator:
                     self.drop_item("meds", f"meds[{index}].evidenceにnameが含まれていません。"
                                    "別の文を流用せず、薬剤名を含む本文を引用し、服用者のsubjectを確認してください。")
                     continue
-                assertion = self.assertion(item, (item["name"],))
+                assertion = self.assertion(item, (item["name"],), medication=True)
                 if assertion is None:
                     for key in ("dose", "freq", "route", "prn"):
                         if item.get(key) is not None:
@@ -536,6 +567,16 @@ class Validator:
                     item["unverified"] = True
                 else:
                     self.identity_attributes(item, assertion)
+                    continuation = self.medication_continuation(item, assertion)
+                    if continuation is not None:
+                        for key, supported in continuation.items():
+                            value = m.get(key) if key == "prn" else item.get(key)
+                            matches = type(value) is type(supported) and (
+                                flat_text(value).casefold() == supported if isinstance(value, str) else value == supported)
+                            if value is not None and not matches:
+                                self.uncertain(item, key, nullable=key == "dose")
+                        meds.append({**item, "normalized": clinical_values.medication_surface(item["name"])})
+                        continue
                     for key in ("dose", "freq", "route", "prn"):
                         if item.get(key) is not None and not clinical_values.medication_attribute_supported(
                                 key, item[key], assertion[0]):
@@ -543,6 +584,10 @@ class Validator:
                     if m.get("prn") is False and not clinical_values.medication_attribute_supported(
                             "prn", False, assertion[0]):
                         item["unverified"] = True
+                    if (self.body[assertion[3]:].lstrip().startswith(("、", ","))
+                            and clinical_scope.source_polarity(self.body, assertion[1], assertion[3],
+                                target_end=assertion[2], medication=True) is None):
+                        self.uncertain(item, "negated")
             item["normalized"] = clinical_values.medication_surface(item["name"])
             meds.append(item)
         out["meds"] = meds

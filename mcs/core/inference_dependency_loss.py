@@ -10,6 +10,8 @@ from mcs_util import loads_dict
 
 KIND = 'inference_dependency_loss'
 SCHEMA = 'dependency-loss/v1'
+_SOURCE_FIELDS = ('content_hash', 'body_text', 'body_state', 'parent_id', 'sender_id', 'sender_name',
+                  'sender_type', 'profession', 'organization', 'posted_at', 'posted_at_ts')
 _SOURCE_KINDS = ('extract_v1', 'extract_llm', 'canonical_projection', 'semantic_facts_v4',
                  'patient_context_scan_chunk_v1')
 
@@ -43,8 +45,7 @@ def source_binding(db, pid, mid, *, source_key=None):
             return None
         return _digest(['karte-source/v1', pid, raw_id, _digest(loads_dict(raw['content']) or {}),
                         (loads_dict(raw['meta']) or {}).get('karte_id')])
-    row = db.execute('SELECT content_hash,body_text,body_state,parent_id,sender_id,sender_name,sender_type,'
-                     'profession,organization,posted_at FROM messages WHERE project_id=? AND message_id=?',
+    row = db.execute('SELECT ' + ','.join(_SOURCE_FIELDS) + ' FROM messages WHERE project_id=? AND message_id=?',
                      (pid, mid)).fetchone()
     if row is None:
         return None
@@ -88,9 +89,7 @@ def bind_facts(db, facts):
         for row in db.execute('SELECT * FROM messages WHERE message_id IN (SELECT value FROM json_each(?))', (json.dumps(sorted(mids)),)):
             source = dict(row)
             revision = revisions.get(source['message_id'], 1)
-            fields = ('content_hash', 'body_text', 'body_state', 'parent_id', 'sender_id', 'sender_name',
-                      'sender_type', 'profession', 'organization', 'posted_at')
-            binding = _digest([[source.get(field) for field in fields], revision])
+            binding = _digest([[source.get(field) for field in _SOURCE_FIELDS], revision])
             sources[(source['project_id'], source['message_id'])] = (source, revision, binding)
     if karte_ids:
         for row in db.execute("SELECT * FROM artifacts WHERE kind='karte_summary' AND artifact_id IN "

@@ -366,16 +366,17 @@ def test_changed_source_resets_exhausted_retries(runtime, monkeypatch):
     clock.wall += 86400
     step(runtime)
     assert document(led, context_refresh.PROGRESS)['attempts'] == 5
-    # changed answer checks earn one more try; the same checks stay exhausted
+    # Changed semantic checks create a fresh source/contract generation; unchanged checks stay exhausted.
     monkeypatch.setattr(context_refresh, '_CHECKS', 'synthetic-changed-checks')
     clock.wall += 86400
-    # stored scans reopen with the same checks change; lane A gets its one try after them
+    # Stored scans reopen before lane A gets its first attempt under the new checks.
     results = [step(runtime) for _ in range(3)]
     assert [r['status'] for r in results if r.get('lane') == 'A'] == ['failed']
-    assert document(led, context_refresh.PROGRESS)['attempts'] == 6
+    assert document(led, context_refresh.PROGRESS)['attempts'] == 1
     clock.wall += 86400
-    step(runtime)
-    assert document(led, context_refresh.PROGRESS)['attempts'] == 6
+    results = [step(runtime) for _ in range(3)]
+    assert [r['status'] for r in results if r.get('lane') == 'A'] == ['failed']
+    assert document(led, context_refresh.PROGRESS)['attempts'] == 2
     seed(led, body='生活環境: 更新された合成の背景。')
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', original)
     assert step(runtime)['status'] == 'progressed'
@@ -477,11 +478,23 @@ def test_quote_keeps_preceding_family_plan_and_negation_paragraph(runtime, monke
     assert view['facts'][0]['quote'] == paragraph
 
 
-def test_unknown_body_state_is_not_counted_as_analyzed(runtime):
+def test_legacy_null_body_state_is_analyzed_as_full(runtime):
     led, _, calls = runtime
     seed(led)
     led.db.execute('UPDATE messages SET body_state=NULL WHERE message_id=1')
     led.db.commit()
+    finish(runtime)
+    coverage = document(led)['coverage']
+    assert coverage['fetched'] == 1 and coverage['incomplete'] == 0
+    assert coverage['analyzed'] == 1 and calls
+
+
+@pytest.mark.parametrize('state', ['unknown', 'missing', 'snippet'])
+def test_incomplete_body_states_are_not_counted_as_analyzed(runtime, state):
+    led, _, calls = runtime
+    seed(led)
+    with led.db:
+        led.db.execute('UPDATE messages SET body_state=? WHERE message_id=1', (state,))
     finish(runtime)
     coverage = document(led)['coverage']
     assert coverage['fetched'] == 1 and coverage['incomplete'] == 1
@@ -576,9 +589,16 @@ def test_new_backfill_evidence_rearms_exhausted_summary(runtime, monkeypatch):
     for attempt in range(5):
         clock.wall = stamp('2026-10-17T23:00:00') + attempt * 86400
         assert step(runtime)['status'] == 'failed'
-    monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', original)
+    def known_assertion(owner, text, **kwargs):
+        payload = json.loads(text)
+        if payload.get('source') == '生活環境: 合成の既知の記録。':
+            return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps({'patient_context': [
+                {'category': 'living', 'text': '合成の既知の記録。',
+                 'evidence': '生活環境: 合成の既知の記録。', 'subject': 'unspecified', 'details': []}]})}
+        return original(owner, text, **kwargs)
+    monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', known_assertion)
     assert step(runtime)['lane'] == 'B'
-    assert document(led, context_refresh.PROGRESS)['attempts'] == 5  # already known evidence
+    assert document(led, context_refresh.PROGRESS)['attempts'] == 5  # The identical known assertion adds no input.
     assert step(runtime)['lane'] == 'B'
     assert document(led, context_refresh.PROGRESS)['attempts'] == 0  # genuinely new input
     finish(runtime)
@@ -643,7 +663,7 @@ def test_revalidation_rejects_changed_posted_date_text(runtime):
     source = next(context_refresh._sources(led.db, 1))
     facts = document(led)["facts"]
     facts[0]["posted_at"] = "2099-01-01T00:00:00+09:00"
-    assert context_refresh._validated_facts(source, facts) == []
+    assert context_refresh._validated_facts(source, facts) == facts[1:]
 
 
 def test_fully_quoted_lines_still_scan_and_keep_distinct_summary_assertions(runtime):
@@ -761,7 +781,9 @@ def test_status_counts_only_patients_the_worker_would_work_on(runtime, reason):
     led.db.commit()
     assert context_refresh.status(led.db, CFG)['initial_pending'] == 2
     finish(runtime)
-    assert {p['project_id'] for p in calls if 'source' in p} <= {1, 3}
+    assert calls
+    assert {r[0] for r in led.db.execute('SELECT DISTINCT project_id FROM artifacts WHERE kind=?',
+                                       (context_refresh.SCAN,))} == {1, 3}
     assert document(led, pid=2) is None
     counts = context_refresh.status(led.db, CFG)
     assert counts['initial_pending'] == 0 and counts['complete'] == 2

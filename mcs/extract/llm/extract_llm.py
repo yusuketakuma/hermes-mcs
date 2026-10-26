@@ -1035,6 +1035,8 @@ def _hint_coverage(value, hints, body, *, state=None):
     if state is None:
         state = ("dispatch_unknown" if not isinstance(hints, dict) or not isinstance(value, dict)
                  else "unresolved" if remaining else "hint_gaps_resolved")
+    if not isinstance(hints, dict) or not isinstance(value, dict):
+        state = "dispatch_unknown"
     if state == "hint_gaps_resolved" and isinstance(value, dict) and any(
             value.get(key) for key in ("_items_dropped", "_evidence_dropped")):
         state = "unresolved"
@@ -2667,7 +2669,7 @@ _GREETING_RE = re.compile(r"[\s、。，,.！？!?]*(?:おはようございま�
 # treats it as "nothing found", while meta.prefilter keeps the
 # distinction auditable.
 _PREFILTER_CONTENT = ('{"meds":[],"symptoms":[],"events":[],'
-                      '"requests":[],"vitals":{},"summary":"",'
+                      '"requests":[],"vitals":{},'
                       '"points":[],"urgency":"routine"}')
 
 

@@ -5,6 +5,7 @@ import pytest
 
 import clinical_scope
 import extract_validation as validation
+import extract_quality
 
 
 def _med(body, **changes):
@@ -88,6 +89,23 @@ def test_medication_frequency_count_and_prn_allow_source_supported_normalization
     assert good["prn"] is True and good["dose"] == "1錠" and not good.get("unverified")
 
 
+@pytest.mark.parametrize("word", ["頓服", "頓用", "必要時"])
+@pytest.mark.parametrize("denial", ["ではありません", "ではなく定期使用です", "せず定期使用です", "しません"])
+def test_as_needed_medication_preserves_positive_and_negative_source(word, denial):
+    body = f"本人は合成薬Aを{word}で1錠服用しています。"
+    good = _clean("meds", _med(body, dose="1錠", prn=True), body)
+    assert good["prn"] is True and not good.get("unverified")
+    body = f"本人の合成薬Aは{word}{denial}。"
+    wrong = _clean("meds", _med(body, prn=True), body)
+    assert "prn" not in wrong and wrong["unverified"]
+
+
+def test_as_needed_day_periods_are_not_a_regular_daily_frequency():
+    body = "本人は合成薬Aを朝か夕に頓服で1錠服用しています。"
+    wrong = _clean("meds", _med(body, freq="1日2回", prn=True), body)
+    assert "freq" not in wrong and wrong["prn"] is True and wrong["unverified"]
+
+
 def test_product_strength_and_count_are_not_multiplied_into_an_unreported_dose():
     body = "本人は合成薬Aの5mg錠を2錠内服しています。"
     for dose in ("10mg", "5mg"):
@@ -147,6 +165,19 @@ def test_relative_due_is_preserved_without_resolving_it_from_the_execution_date(
     body = "薬剤師へ明日までに合成資料Xを確認してください。"
     item = _clean("requests", _request(body, due="2026-10-06", due_text="明日まで"), body)
     assert item["due_text"] == "明日まで" and "due" not in item and item["unverified"]
+
+
+def test_repair_can_ground_a_missing_attribute_without_changing_known_assertions():
+    body = "本人は合成薬Aを5mg内服しています。"
+    before = validation.validate({"meds": [_med(body, dose="10mg")]}, body)
+    after = validation.validate({"meds": [_med(body, dose="5mg")]}, body)
+    assert before["meds"][0]["dose"] is None and before["meds"][0]["unverified"]
+    assert after["meds"][0]["dose"] == "5mg" and not after["meds"][0].get("unverified")
+    assert extract_quality.improves(after, before)
+    for key, value in (("negated", True), ("subject", "family"), ("name", "合成薬B")):
+        wrong = copy.deepcopy(after)
+        wrong["meds"][0][key] = value
+        assert not extract_quality.improves(wrong, before)
 
 
 def test_a_reporter_is_not_automatically_the_request_recipient():
@@ -209,3 +240,183 @@ def test_self_plan_actor_is_kept_without_becoming_the_recipient():
     item = _clean("requests", _request(body, to=None, kind="self_plan", **{"from": "合成担当A"}), body)
     assert item["from"] == "合成担当A" and item["to"] is None
     assert item["kind"] == "self_plan" and not item.get("unverified")
+
+
+def test_repair_cannot_merge_independent_partial_medication_reports_into_one():
+    dose = "本人は合成薬Aを5mg内服しています。"
+    frequency = "本人は合成薬Aを就寝前に内服しています。"
+    combined = "本人は合成薬Aを5mg、就寝前に内服しています。"
+    body = dose + frequency + combined
+    prior = {"meds": [_clean("meds", _med(dose, dose="5mg"), body),
+                      _clean("meds", _med(frequency, dose=None, freq="就寝前"), body)]}
+    candidate = {"meds": [_clean("meds", _med(combined, dose="5mg", freq="就寝前"), body)]}
+    assert all(not item.get("unverified") for item in prior["meds"] + candidate["meds"])
+    assert len(extract_quality.facts(prior)) == 2 and len(extract_quality.facts(candidate)) == 1
+    assert not extract_quality.improves(candidate, prior)
+
+
+def test_repair_retains_independent_reports_even_when_their_semantic_fact_set_is_equal():
+    first = "本人は合成薬Aを5mg内服しています。"
+    second = "本人は現在合成薬Aを内服しています。"
+    body = first + second
+    prior = {"meds": [_clean("meds", _med(first, dose=None), body),
+                      _clean("meds", _med(second, dose=None), body)]}
+    candidate = {"meds": [_clean("meds", _med(first, dose="5mg"), body)]}
+    assert len(extract_quality.facts(prior)) == len(extract_quality.facts(candidate)) == 1
+    assert not extract_quality.improves(candidate, prior)
+
+
+@pytest.mark.parametrize("reverse_prior", [False, True])
+@pytest.mark.parametrize("reverse_candidate", [False, True])
+def test_repair_finds_a_complete_assignment_after_an_ambiguous_first_match(reverse_prior, reverse_candidate):
+    ten = "本人は合成薬Aを10mg内服しています。"
+    five = "本人は合成薬Aを5mg内服しています。"
+    body = ten + five
+    prior_items = [_clean("meds", _med(ten, dose=None), body),
+                   _clean("meds", _med(five, dose="5mg"), body)]
+    # The first prior item can use either candidate. Greedy matching would
+    # consume the only candidate that retains the second item's known dose.
+    candidate_items = [_clean("meds", _med(five, dose="5mg"), body),
+                       _clean("meds", _med(ten, dose="10mg"), body)]
+    if reverse_prior:
+        prior_items.reverse()
+    if reverse_candidate:
+        candidate_items.reverse()
+    before, after = {"meds": prior_items}, {"meds": candidate_items}
+    saved = copy.deepcopy((before, after))
+    assert extract_quality.improves(after, before)
+    assert (before, after) == saved
+
+
+@pytest.mark.parametrize("field,attribute,value", [
+    ("meds", "subject", "patient"), ("meds", "negated", False),
+    ("meds", "dose", "10mg"), ("meds", "status", "current"),
+    ("requests", "condition", None), ("requests", "to", "看護師"),
+])
+def test_repair_matching_never_trades_known_assertions_for_a_lower_drop_count(field, attribute, value):
+    medication = {"name": "合成薬A", "dose": "5mg", "subject": "family", "negated": True, "status": "past",
+                  "evidence": "母は以前合成薬A5mgを服用していませんでした。"}
+    request = {"to": "医師", "action": "連絡", "condition": "熱が出たら",
+               "evidence": "熱が出たら医師へ連絡してください。"}
+    before = {field: [medication if field == "meds" else request], "_evidence_dropped": 1}
+    after = copy.deepcopy(before)
+    after["_evidence_dropped"] = 0
+    after[field][0][attribute] = value
+    assert not extract_quality.improves(after, before)
+
+
+@pytest.mark.parametrize("context", [False, True])
+@pytest.mark.parametrize("comma", ["、", ","])
+@pytest.mark.parametrize("left,right,attrs", [
+    ("5mg頓服で", "1日3回まで内服しています", {"dose": "5mg", "freq": "1日3回まで", "route": "oral", "prn": True}),
+    ("5mg", "就寝前に内服しています", {"dose": "5mg", "freq": "就寝前", "route": "oral"}),
+])
+def test_one_complete_medication_continuation_retains_its_original_quote(context, comma, left, right, attrs):
+    body = f"本人は合成薬Aを{left}{comma}{right}。"
+    item = _clean("meds", _med(body, **attrs), body, context=context)
+    assert item["evidence"] == body and not item.get("unverified")
+    assert item["subject"] == "patient" and item["status"] == "current" and item["negated"] is False
+    for key, value in attrs.items():
+        assert item[key] == value
+
+
+@pytest.mark.parametrize("key,value", [("dose", "10mg"), ("freq", "1日3回"), ("route", "injection"),
+    ("prn", False), ("subject", "family"), ("status", "past"), ("status", "planned"), ("negated", True)])
+def test_continuation_rejects_each_contradicting_attribute(key, value):
+    body = "本人は合成薬Aを5mg頓服で、1日3回まで内服しています。"
+    attrs = {"dose": "5mg", "freq": "1日3回まで", "route": "oral", "prn": True, key: value}
+    item = _clean("meds", _med(body, **attrs), body)
+    assert item["name"] == "合成薬A" and item["evidence"] == body and item["unverified"]
+    if key == "dose":
+        assert item["dose"] is None
+    else:
+        assert key not in item
+
+
+def test_only_a_fresh_complete_quote_can_ground_continuation_attributes():
+    body = "本人は合成薬Aを5mg、就寝前に内服しています。"
+    attrs = {"dose": "5mg", "freq": "就寝前", "route": "oral"}
+    before = validation.validate({"meds": [_med("本人は合成薬Aを5mg", **attrs)]}, body)
+    item = before["meds"][0]
+    assert item["dose"] == "5mg" and "freq" not in item and "route" not in item and item["unverified"]
+    after = validation.validate({"meds": [_med(body, **attrs)]}, body)
+    assert after["meds"][0]["freq"] == "就寝前" and not after["meds"][0].get("unverified")
+    assert extract_quality.improves(after, before)
+
+
+@pytest.mark.parametrize("body", [
+    "本人は合成薬Aを5mgと合成薬Aを10mg内服しています。",
+    "本人は合成薬Aを5mgと合成薬Ａを10mg内服しています。",
+    "本人は合成薬Aを5mg、合成薬Aを10mg内服しています。",
+    "本人は合成薬Aを5mg、母は合成薬Aを10mg注射しています。",
+])
+def test_ambiguous_repeated_medication_anchor_cannot_confirm_attributes(body):
+    item = _clean("meds", _med(body, dose="10mg", route="injection"), body)
+    assert item["name"] == "合成薬A" and item["evidence"] == body and item["unverified"]
+    assert item["dose"] is None and "route" not in item
+
+
+@pytest.mark.parametrize("body,quote", [
+    ("本人は合成薬Aを5mg、本人は合成薬Bを1日3回内服しています。", None),
+    ("本人は合成薬Aを5mg、母は1日3回内服しています。", None),
+    ("本人は合成薬Bと合成薬Aを5mg、1日3回内服しています。", None),
+    ("本人は合成薬Bと合成薬Aを5mg、1日3回内服しています。", "合成薬Aを5mg、1日3回内服しています"),
+    ("本人は合成薬Aを5mg、1日3回内服していますが、これは母の話です。", "本人は合成薬Aを5mg、1日3回内服しています"),
+    ("本人は合成薬Aを5mg、1日3回内服していません。", None),
+    ("本人は合成薬Aを5mg、明日から1日3回内服する予定です。", None),
+    ("本人は合成薬Aを5mg頓服で、1日3回まで内服可能です。", None),
+    ("本人は合成薬Aを5mg、1日3回ではなく1日2回内服しています。", None),
+    ("本人は合成薬Aを5mg、内服せず注射しています。", None),
+    ("本人は合成薬Aを5mg、1日3回内服しています？", None),
+    ("本人は合成薬Aを5mg。1日3回内服しています。", None),
+    ("本人は合成薬Aを5mg\n1日3回内服しています。", None),
+])
+def test_unproved_continuation_never_borrows_attributes_from_the_next_clause(body, quote):
+    item = _clean("meds", _med(quote or body, freq="1日3回", route="oral"), body)
+    assert item["evidence"] == (quote or body) and item["name"] == "合成薬A"
+    assert "freq" not in item and "route" not in item and item["unverified"]
+    if "していません" in body:
+        assert "negated" not in item
+
+
+def test_continuation_width_normalization_keeps_raw_original_and_separate_reports():
+    quote = "本人は合成薬Aを５ｍｇ頓服で、１日３回まで内服しています。"
+    body = "母は合成薬Aを10mg注射しています。" + quote
+    item = _clean("meds", _med(quote, dose="5mg", freq="1日3回まで", route="oral", prn=True), body)
+    assert item["evidence"] == quote and item["dose"] == "5mg" and item["freq"] == "1日3回まで"
+    assert not item.get("unverified")
+    duplicate = _clean("meds", _med(quote, freq="1日3回まで", route="oral"), quote + quote)
+    assert "evidence" not in duplicate and duplicate["unverified"]
+
+
+@pytest.mark.parametrize("body,attrs,missing", [
+    ("本人は合成薬Aを1日3回まで内服しています。", {"freq": "1日3回"}, "freq"),
+    ("本人は合成薬Aを内服せず注射しています。", {"route": "oral"}, "route"),
+    ("本人は合成薬Aを1日3回ではなく1日2回内服しています。", {"freq": "1日3回"}, "freq"),
+    ("本人は合成薬Aを5mgではなく10mg内服しています。", {"dose": "5mg"}, "dose"),
+    ("本人は合成薬Aを毎日3回まで内服しています。", {"freq": "1日3回"}, "freq"),
+    ("本人は合成薬Aを各1錠ではなく各2錠内服しています。", {"dose": "1回1錠"}, "dose"),
+])
+def test_explicit_denial_or_upper_limit_never_supports_the_contradicting_attribute(body, attrs, missing):
+    item = _clean("meds", _med(body, **attrs), body)
+    assert item["unverified"]
+    if missing == "dose":
+        assert item[missing] is None
+    else:
+        assert missing not in item
+
+
+def test_duplicating_a_merged_candidate_cannot_buy_retention_of_independent_reports():
+    dose_quote = "本人は合成薬Aを5mg服用しています。"
+    time_quote = "本人は合成薬Aを就寝前に服用しています。"
+    merged_quote = "本人は合成薬Aを5mg、就寝前に内服しています。"
+    prior = {"meds": [_med(dose_quote, dose="5mg"), _med(time_quote, freq="就寝前")], "_items_dropped": 1}
+    merged = _med(merged_quote, dose="5mg", freq="就寝前")
+    assert not extract_quality.improves({"meds": [merged, copy.deepcopy(merged)]}, prior)
+
+
+def test_identical_copies_do_not_create_additional_source_reports():
+    quote = "本人は合成薬Aを5mg服用しています。"
+    item = _med(quote, dose="5mg")
+    prior = {"meds": [item, copy.deepcopy(item)], "_items_dropped": 1}
+    assert extract_quality.improves({"meds": [copy.deepcopy(item)]}, prior)

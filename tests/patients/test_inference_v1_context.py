@@ -212,6 +212,8 @@ def test_more_than_128_facts_resume_as_bounded_chunks_without_cumulative_loss(ru
     lines = [f'合成記録{i:03d}では別々の生活環境を確認しました。\n' for i in range(129)]
     body = ''.join(lines)
     seed(led,body=body)
+    stored_body = led.db.execute('SELECT body_text FROM messages WHERE message_id=1').fetchone()[0]
+    expected_lines = stored_body.splitlines(keepends=True)
     # One source unit per synthetic fact; this is an independent expected count,
     # not an increase of the production fact or prompt limits.
     monkeypatch.setattr(refresh.context_plan,'plan_chunks',lambda text,size=3000:text.splitlines(keepends=True))
@@ -226,7 +228,7 @@ def test_more_than_128_facts_resume_as_bounded_chunks_without_cumulative_loss(ru
     clock.wall += 86400
     finish(runtime,limit=150)
     after_calls = [p['source'] for p in calls if 'source' in p]
-    assert after_calls[:64] == before_calls and after_calls == lines
+    assert after_calls[:64] == before_calls and after_calls == expected_lines
     chunks = [json.loads(row[0]) for row in led.db.execute('SELECT content FROM artifacts WHERE kind=?',(refresh.CHUNK,))]
     assert len(chunks) == 129 and all(len(part['facts']) <= refresh.context_plan.MAX_SOURCE_FACTS for part in chunks)
     assert sum(len(part['facts']) for part in chunks) == 129
@@ -250,6 +252,9 @@ def test_one_unit_with_129_facts_is_sharded_without_truncating_and_requires_all_
     led, _, _ = runtime
     lines = [f'合成確認{i:03d}。' for i in range(129)]
     seed(led, body=''.join(lines))
+    assert len(''.join(lines)) < refresh.context_plan.SCAN_CHUNK
+    # Isolate storage sharding from the independently bounded density planner.
+    monkeypatch.setattr(refresh.context_plan, 'plan_chunks', lambda text, size=3000: [text])
     original = refresh.local_llm.admitted_chat
     def chat(owner, prompt, **kwargs):
         payload = json.loads(prompt)
@@ -294,7 +299,8 @@ def test_sticky_invalidated_context_never_reenters_scan_or_published_fact_reader
     snapshot, _, pending = refresh._pending(led.db,1,CFG)
     scans = refresh._current_scans(led.db,1,snapshot['sources'],snapshot['contract'])
     assert pending['B'] and not scans.get(1,{}).get('complete')
-    facts, total = refresh._all_facts(led.db,1,snapshot,'synthetic')
+    hydrated = refresh._snapshot(led.db,1,CFG)
+    facts, total = refresh._all_facts(led.db,1,hydrated,'synthetic')
     assert facts==[] and total==0
     assert not refresh.inference_coverage(led.db,1,CFG)['complete']
     assert refresh.context_view_input(led.db,1,cfg=CFG) is None
@@ -413,8 +419,10 @@ def test_durable_loss_is_negative_use_only_and_fresh_independent_source_can_reco
     _clinical_source(led,3,'本人は本日薬剤Aを10mg服用中です。','2026-10-03',dose='10mg')
     finish(runtime)
     view = refresh.context_view_input(led.db,1,cfg=CFG)
-    assert any(f['message_id']==3 and f['view_bucket']=='current' for f in view['facts'])
-    assert not any(f['message_id']==1 and f['view_bucket']=='current' for f in view['facts'])
+    assert any(f['message_id']==3 and f['view_bucket']=='current'
+               and any(d['key']=='drug_name' for d in f['details']) for f in view['facts'])
+    assert not any(f['message_id']==1 and f['view_bucket']=='current'
+                   and any(d['key']=='drug_name' for d in f['details']) for f in view['facts'])
 
 
 def test_unknown_dependency_gap_blocks_patient_completion_without_inventing_a_clinical_absence(runtime):

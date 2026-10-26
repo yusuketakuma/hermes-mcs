@@ -136,7 +136,10 @@ def get_response_observation_list(
         "p.fetch_state,r.content_hash revision_hash,r.observed_at revision_at "
         "FROM messages m JOIN patients p ON p.project_id=m.project_id "
         "LEFT JOIN message_revisions r ON r.message_id=m.message_id "
-        "AND r.seq=(SELECT MAX(v.seq) FROM message_revisions v WHERE v.message_id=m.message_id) "
+        "AND r.seq=(SELECT MAX(v.seq) FROM message_revisions v WHERE v.message_id=m.message_id "
+        "AND v.prev_content_hash IS NOT NULL AND (v.content_hash IS NOT v.prev_content_hash OR "
+        "v.body_state IS NOT (SELECT p.body_state FROM message_revisions p WHERE p.message_id=v.message_id "
+        "AND p.seq<v.seq ORDER BY p.seq DESC LIMIT 1))) "
         "WHERE COALESCE(p.is_archived,0)=0 AND m.body_state IS NOT 'deleted'")
     params = []
     if scope is not None:

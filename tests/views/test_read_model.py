@@ -9,6 +9,7 @@ import pytest
 
 import ledger as _ledger_mod
 import read_model
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_projection import PROJECTION_VERSION
 from semantic_testkit import _ledger, _message, _patient
 
@@ -23,7 +24,10 @@ def _db(tmp_path, mids=(1, 2, 3)):
     return db
 
 
-def _artifact(db, kind, mid, content, meta):
+def _artifact(db, kind, mid, content, meta, *, public_version=CURRENT_VERSION):
+    """Build a current read fixture; retained public generations are explicit inputs."""
+    if isinstance(meta, dict) and public_version is not None:
+        meta = {VERSION_KEY: public_version, **meta}
     if kind in ("canonical_projection", "semantic_facts_v4") and isinstance(meta, dict):
         meta = {"projection_version": PROJECTION_VERSION, **meta}
     db.db.execute(

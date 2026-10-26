@@ -15,6 +15,7 @@ import uuid
 
 import cloud_policy as policy
 import mcs_util
+from mcs_queries import json_or_null, source_extract_pred
 import semantic_jev as jev
 
 READ_SECONDS = 5.0
@@ -188,14 +189,17 @@ def _route_counts(db, cfg, settings, deadline):
                 continue
             # Same source-bound prior as the worker, projecting metadata only.
             prior = db.execute("SELECT a.meta FROM artifacts a JOIN messages m ON a.message_id=m.message_id "
-                f"WHERE a.kind=? AND m.message_id=? AND m.project_id=? AND m.content_hash=? {extract.current_extract_pred()} "
+                f"WHERE a.kind=? AND m.message_id=? AND m.project_id=? AND m.content_hash=? {source_extract_pred()} "
+                "AND (m.body_state IS NULL OR m.body_state='full') AND length(m.body_text)>0 "
+                f"AND COALESCE(json_extract({json_or_null('a.content')},'$._error'),0)=0 "
                 "ORDER BY a.artifact_id DESC LIMIT 1", (extract.KIND, row["message_id"], row["project_id"], row["content_hash"])).fetchone()
             meta = mcs_util.loads_dict(prior[0]) if prior else None
             if not meta or type(meta.get("extract_version")) is not int:
                 continue
             released = db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? "
                 f"AND EXISTS ({extract._hold_sql(released=True)})", (row["message_id"],)).fetchone()
-            if meta["extract_version"] >= extract.EXTRACT_VERSION and not released:
+            if (meta["extract_version"] >= extract.EXTRACT_VERSION
+                    and extract.inference.is_current(meta, target=extract._INFERENCE_VERSION) and not released):
                 continue
             item = out["reextract"]
             item["targets"] += 1

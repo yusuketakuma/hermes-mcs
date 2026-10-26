@@ -328,13 +328,14 @@ def test_summary_comparison_resolves_source_and_reported_subject(runtime):
 def test_shadow_scan_does_not_count_local_prefix_as_cloud_work(runtime, cloud, monkeypatch):
     led, _, _ = runtime
     cloud[1][0] = "shadow"
-    seed(led, body="生活環境: 完全合成の前半記録。\n\n" + "完全合成の後半記録です。" * 400)
+    seed(led, body="生活環境: 完全合成の前半記録。\n\n【補足記録】\n" + "完全合成の後半記録です。" * 400)
     snapshot = context_refresh._snapshot(led.db, 1, CFG)
     source = snapshot["sources"][0]
     prefix = context_refresh._facts(source, source["items"], night_id="synthetic", discovery="new_report")
     assert prefix
     chunks = context_refresh.context_plan.scan_plan(source, {})[0]
     assert len(chunks) > 1
+    assert all(f["evidence_span"][1] <= len(chunks[0]) for f in prefix)
     saved = {"cursor": 1, "chunks": len(chunks), "complete": False, "audited": False, "facts": prefix}
     binding = {"source_sig": context_refresh._source_sig(source), "source_key": 1,
                "contract": snapshot["contract"], "model": "synthetic"}

@@ -9,6 +9,9 @@ import pytest
 
 import cloud_policy
 import extract_llm as worker
+import inference_dependency_loss as dependency_loss
+import inference_version as inference
+import mcs_queries
 from extract_testkit import _hash, _ledger, _message
 
 
@@ -71,18 +74,41 @@ def old(led, mid=1, pid=1):
         meta={"hash": _hash(led, mid), "extract_version": worker.EXTRACT_VERSION - 1})
 
 
+def _current_artifacts(led):
+    return led.db.execute("SELECT a.* FROM artifacts a JOIN messages m ON a.message_id=m.message_id "
+        "WHERE a.kind=? " + mcs_queries.current_extract_pred()
+        + " AND json_extract(a.meta,'$.extract_version')=? ORDER BY a.artifact_id",
+        (worker.KIND, worker.EXTRACT_VERSION)).fetchall()
+
+
+def _bound_source(led):
+    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
+    return row
+
+
+def _assert_legacy_retained(led, before):
+    after = {row["artifact_id"]: dict(row) for row in led.artifacts(worker.KIND)}
+    assert before and all(after[row["artifact_id"]] == row for row in before)
+    assert all(inference.read_version(json.loads(row["meta"])) == inference.LEGACY_VERSION for row in before)
+
+
 @pytest.mark.parametrize("local_circuit", [0, 60])
 def test_parallel_http_hooks_stay_on_ledger_owner(routed, monkeypatch, local_circuit):
     led, cfg, calls, reserves, results = routed
     old(led, 1)
     old(led, 2)
+    prior = [dict(row) for row in led.artifacts(worker.KIND)]
     monkeypatch.setattr(worker, "circuit_open_s", lambda db: local_circuit)
     monkeypatch.setattr(worker, "_probe_format", lambda **kw: pytest.fail("cloud probed local GPU"))
     report = worker.run_pending(led, budget_s=180, workers=1, batch_k=4)
     assert report["done"] == 2 and report["failed"] == 0
     assert len(calls) == len(reserves) == len(results) == 2
     assert {r["identity"]["unit_key"] for r in reserves} == {"1", "2"}
-    for artifact in led.artifacts(worker.KIND):
+    current = _current_artifacts(led)
+    assert len(current) == 2
+    _assert_legacy_retained(led, prior)
+    for artifact in current:
         meta = json.loads(artifact["meta"])
         assert meta["backend"] == "anthropic"
         assert meta["actual_model"] == cloud_policy.cloud_config(cfg)[0]["model"]
@@ -254,7 +280,7 @@ def test_commit_rechecks_cloud_permission_after_writer_transaction_starts(routed
     led, *_ = routed
     old(led)
     before = [dict(row) for row in led.artifacts(worker.KIND)]
-    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row = _bound_source(led)
     checked = []
     def revoked():
         assert led.db.in_transaction
@@ -295,6 +321,7 @@ def test_paid_cloud_carry_survives_deadline_and_lease_renewal_but_not_revocation
         routed, monkeypatch, tmp_path, revoke):
     led, cfg, calls, *_ = routed
     old(led)
+    prior = [dict(row) for row in led.artifacts(worker.KIND)]
     blocked = [False]
     def acquire():
         return None if blocked[0] else os.open(tmp_path / "writer", os.O_CREAT | os.O_RDWR)
@@ -326,9 +353,12 @@ def test_paid_cloud_carry_survives_deadline_and_lease_renewal_but_not_revocation
     worker._settle_carry(led, carry)
     assert not carry and len(calls) == 1
     artifacts = led.artifacts(worker.KIND)
-    assert len(artifacts) == 1
-    assert json.loads(artifacts[0]["meta"])["extract_version"] == (
-        worker.EXTRACT_VERSION if revoke == "none" else worker.EXTRACT_VERSION - 1)
+    _assert_legacy_retained(led, prior)
+    current = _current_artifacts(led)
+    assert len(current) == (1 if revoke == "none" else 0)
+    assert len(artifacts) == len(prior) + len(current)
+    if current:
+        assert json.loads(current[0]["meta"])["backend"] == "anthropic"
 
 
 def test_dryrun_counts_committed_post_once_after_lock_carry(routed, monkeypatch, tmp_path):
@@ -359,7 +389,7 @@ def test_dryrun_estimate_is_atomic_with_successful_extraction(routed, monkeypatc
     cfg["cloud_llm"]["mode"] = "dry_run"
     old(led)
     prior = [dict(row) for row in led.artifacts(worker.KIND)]
-    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row = _bound_source(led)
     row["_cloud_mode"] = "dry_run"
     record = cloud_policy.dryrun_tx
     def estimate(*args, **kwargs):
@@ -377,7 +407,9 @@ def test_dryrun_estimate_is_atomic_with_successful_extraction(routed, monkeypatc
     else:
         assert worker._replace_current(led, row, "{}")
         assert len(led.artifacts("cloud_usage_dryrun")) == 1
-        assert json.loads(led.artifacts(worker.KIND)[0]["meta"])["extract_version"] == worker.EXTRACT_VERSION
+        current = _current_artifacts(led)
+        assert len(current) == 1 and json.loads(current[0]["meta"])["extract_version"] == worker.EXTRACT_VERSION
+        _assert_legacy_retained(led, prior)
     assert not led.db.in_transaction
 
 
@@ -388,6 +420,7 @@ def test_validated_cloud_unit_does_not_expire_before_commit(routed, monkeypatch,
     old(led)
     if parallel:
         old(led, 2)
+    prior = [dict(row) for row in led.artifacts(worker.KIND)]
     original = worker.llm_extract
     clock = time.monotonic
     ready = threading.Barrier(2) if parallel else None
@@ -403,7 +436,10 @@ def test_validated_cloud_unit_does_not_expire_before_commit(routed, monkeypatch,
     report = worker.run_pending(led, budget_s=180)
     count = 2 if parallel else 1
     assert report["done"] == count and len(calls) == count
-    assert all(json.loads(item["meta"])["backend"] == "anthropic" for item in led.artifacts(worker.KIND))
+    current = _current_artifacts(led)
+    assert len(current) == count
+    assert all(json.loads(item["meta"])["backend"] == "anthropic" for item in current)
+    _assert_legacy_retained(led, prior)
 
 
 
@@ -747,21 +783,23 @@ def test_shadow_pending_row_commits_with_the_local_result_or_not_at_all(routed, 
     led, cfg, *_ = routed
     cfg["cloud_llm"]["mode"] = "shadow"
     old(led)
-    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row = _bound_source(led)
     row.update(_cloud_mode="shadow", content_hash=_hash(led, 1))
     if fail:
         def boom(*a, **k):
             raise RuntimeError("synthetic failure inside the commit transaction")
         monkeypatch.setattr(worker, "_comparison_extract", boom)
-    before = led.artifacts(worker.KIND)
-    try:
-        worker._replace_current(led, row, json.dumps({"medications": []}))
-    except RuntimeError:
-        assert fail
+    before = [dict(row) for row in led.artifacts(worker.KIND)]
+    if fail:
+        with pytest.raises(RuntimeError, match="synthetic failure inside the commit transaction"):
+            worker._replace_current(led, row, json.dumps({"medications": []}))
+    else:
+        assert worker._replace_current(led, row, json.dumps({"medications": []}))
     pending = led.artifacts("cloud_compare_v1")
-    current = [a for a in led.artifacts(worker.KIND) if json.loads(a["meta"]).get("extract_version") == worker.EXTRACT_VERSION]
+    current = _current_artifacts(led)
     if fail:
         assert not pending and not current and len(led.artifacts(worker.KIND)) == len(before)
     else:
         assert len(current) == 1 and len(pending) == 1
+        _assert_legacy_retained(led, before)
         assert json.loads(pending[0]["meta"])["uncompared"] == "pending" and row["_shadow_unit"]

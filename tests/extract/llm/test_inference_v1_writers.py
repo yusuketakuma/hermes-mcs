@@ -327,7 +327,9 @@ def test_partial_chunk_never_has_a_completed_coverage_denominator(source, monkey
         ({"summary": "合成"} if len(calls) == 1 else None))
     meta = {}
     assert llm.llm_extract(body, meta_out=meta) is None
-    assert len(meta["completeness"]) == 1 and "completeness_chunks" not in meta
+    assert meta["completeness"]["0"]["state"] == "hint_gaps_resolved"
+    assert meta["completeness"]["1"]["state"] == "dispatch_unknown"
+    assert "completeness_chunks" not in meta
     assert not llm.extract_quality.completeness_resolved({inference.VERSION_KEY: inference.CURRENT_VERSION,
         "integrity": meta})
 
@@ -543,7 +545,9 @@ def test_a_prepared_frame_cannot_publish_after_its_other_source_reference_change
     led.artifact_add(llm.KIND,json.dumps({'patient_context':[context(body)]}),project_id=1,message_id=2,
         model='synthetic',meta={inference.VERSION_KEY:inference.CURRENT_VERSION,'hash':refhash,
         'extract_version':llm.EXTRACT_VERSION,'actual_model':'synthetic',
-        'integrity':{'validation':{'items_dropped':0,'evidence_dropped':0}}})
+        'integrity':{'validation':{'items_dropped':0,'evidence_dropped':0},
+                     'completeness_chunks':1,
+                     'completeness':{'0':{'state':'hint_gaps_resolved','remaining_hint_candidates':0}}}})
     frame = patient_state_context.prepare(led,target,model='synthetic',contract=llm._context_contract(),
         attempt={'human':None,'qc':None,'thin':None},enabled=True,base_context=None,version=llm.EXTRACT_VERSION)
     assert len(frame['refs'])==1 and frame['refs']['S1']['value']=='3錠'

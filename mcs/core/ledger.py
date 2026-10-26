@@ -29,7 +29,7 @@ import uuid
 from pathlib import Path
 from contextlib import suppress
 
-from mcs_util import RETRY_LATER_4XX, html_to_text, loads_dict
+from mcs_util import RETRY_LATER_4XX, html_to_text, loads_dict, valid_hash
 
 
 import ledger_schema
@@ -988,11 +988,14 @@ class Ledger:
         possible_change = existing is not None and (
             m.body_state in TERMINAL_BODY_STATES and (existing['content_hash'] != chash or existing['body_state'] != m.body_state
                 or m.body_state == 'full' and existing['body_text'] != body_text)
+            or m.body_state not in TERMINAL_BODY_STATES and existing['body_state'] not in TERMINAL_BODY_STATES
+                and (existing['content_hash'] != chash or existing['body_state'] != m.body_state or existing['body_text'] != body_text)
             or m.parent_id is not None and m.parent_id != existing['parent_id']
             or m.sender_id is not None and m.sender_id != existing['sender_id']
             or any(getattr(m, field) and getattr(m, field) != existing[field]
                    for field in ('sender_name', 'sender_type', 'profession', 'organization'))
-            or posted_epoch(m.posted_at) is not None and m.posted_at != existing['posted_at'])
+            or posted_epoch(m.posted_at) is not None and (m.posted_at != existing['posted_at']
+                or posted_epoch(m.posted_at) != existing['posted_at_ts']))
         old_binding = dependency_loss.source_binding(self.db, m.project_id, m.message_id) if possible_change else None
         identity_changed = existing is not None and (
             existing['sender_id'] is not None and m.sender_id is not None and m.sender_id != existing['sender_id']
@@ -1007,31 +1010,13 @@ class Ledger:
         old_origin = ({'message_id': m.message_id, 'source_key': m.message_id,
             'content_hash': existing['content_hash'], 'binding': old_binding,
             'revision': self.db.execute('SELECT COALESCE(MAX(seq),1) FROM message_revisions WHERE message_id=?',
-                                       (m.message_id,)).fetchone()[0]} if possible_change else None)
+                                       (m.message_id,)).fetchone()[0]} if possible_change and valid_hash(existing['content_hash']) else None)
         old_dependencies = (dependency_loss.capture_tx(self.db, m.project_id, m.message_id)
-                            if support_possible else None)
+                            if support_possible and old_origin is not None else None)
         edited = (existing is not None and existing["content_hash"] is not None
                   and existing["body_state"] in TERMINAL_BODY_STATES
                   and m.body_state in TERMINAL_BODY_STATES
                   and existing["content_hash"] != chash)
-        if edited:
-            # seed seq 1 once, then chain off the latest revision inside the
-            # INSERT itself: seq and prev_content_hash come from the row
-            # read under the write lock, and an edit an overlapping writer
-            # already recorded is skipped instead of logged twice.
-            self.db.execute("""
-              INSERT OR IGNORE INTO message_revisions
-                (message_id,seq,content_hash,prev_content_hash,body_state,observed_at)
-              VALUES(?,1,?,NULL,?,?)
-            """, (m.message_id, existing["content_hash"],
-                  existing["body_state"], existing["first_seen"] or now))
-            self.db.execute("""
-              INSERT INTO message_revisions
-                (message_id,seq,content_hash,prev_content_hash,body_state,observed_at)
-              SELECT message_id,seq+1,?,content_hash,?,? FROM message_revisions
-              WHERE message_id=? AND content_hash != ? AND seq=(
-                SELECT MAX(seq) FROM message_revisions WHERE message_id=?)
-            """, (chash, m.body_state, now, m.message_id, chash, m.message_id))
         # unparseable posted_at -> NULL so COALESCE keeps the stored epoch
         # instead of overwriting a valid value with 0 (Oracle T31)
         posted_ts = posted_epoch(m.posted_at)
@@ -1094,10 +1079,33 @@ class Ledger:
               now, now))
         self._save_message_metadata(m, source="capture", now=now,
                                     body_changed=edited)
-        if old_origin is not None and old_binding != dependency_loss.source_binding(self.db, m.project_id, m.message_id):
+        source_changed = possible_change and old_binding != dependency_loss.source_binding(self.db, m.project_id, m.message_id)
+        if source_changed:
+            # Only adopted source inputs advance the occurrence; a retained snippet,
+            # unread flag or unchanged capture is not a new source generation.
+            # Seed real prior content only: legacy NULL hashes never identify a body.
+            current = self.db.execute("SELECT content_hash,body_state,body_text FROM messages WHERE message_id=?",
+                                      (m.message_id,)).fetchone()
+            # A retained legacy full body may still lack its hash after a snippet.
+            # It cannot support a valid reference; wait for real full hydration.
+            if valid_hash(current['content_hash']):
+                if valid_hash(existing['content_hash']):
+                    self.db.execute("INSERT OR IGNORE INTO message_revisions "
+                        "(message_id,seq,content_hash,prev_content_hash,body_state,observed_at) VALUES(?,1,?,NULL,?,?)",
+                        (m.message_id, existing['content_hash'], existing['body_state'] or ('full' if existing['body_text'] else 'unknown'),
+                         existing['first_seen'] or now))
+                previous = self.db.execute("SELECT seq,content_hash FROM message_revisions WHERE message_id=? "
+                                           "ORDER BY seq DESC LIMIT 1", (m.message_id,)).fetchone()
+                self.db.execute("INSERT INTO message_revisions "
+                    "(message_id,seq,content_hash,prev_content_hash,body_state,observed_at) VALUES(?,?,?,?,?,?)",
+                    (m.message_id, previous['seq'] + 1 if previous else 1, current['content_hash'],
+                     previous['content_hash'] if previous else None, current['body_state'] or ('full' if current['body_text'] else 'unknown'), now))
             if old_dependencies is not None and (identity_changed or old_support != dependency_loss.support_binding(self.db, m.project_id, m.message_id)):
+                if not any(old_dependencies.get(field) for field in ('records', 'gaps', 'observed')):
+                    # No earlier clinical body exists to lose (empty/deleted source).
+                    old_dependencies['observed'] = [{**old_origin, 'kind': 'empty_source', 'artifact_id': None}]
                 dependency_loss.record_tx(self.db, old_dependencies)
-            else:
+            elif old_origin is not None:
                 dependency_loss.equivalent_tx(self.db, m.project_id, m.message_id, old_origin)
             self.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true')) "
                 "WHERE message_id=? AND (project_id=? OR project_id IS NULL) AND kind IN "
