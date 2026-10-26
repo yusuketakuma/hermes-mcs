@@ -154,13 +154,16 @@ def _token_for(spec, action):
                 for b in row if b["id"] == action)
 
 
-def _extract(led, mid, content, kind="extract_v1", stale=False):
+def _extract(led, mid, content, kind="extract_v1", stale=False, *, version=True):
     """An extraction artifact bound to the message's current body
     revision — the same meta.hash gate the text notify_flush enforces."""
     h = led.db.execute(
         "SELECT content_hash FROM messages WHERE message_id=?",
         (mid,)).fetchone()["content_hash"]
     meta = {"hash": "0" * 64} if stale else {"hash": h}
+    if version:
+        from inference_version import CURRENT_VERSION, VERSION_KEY
+        meta[VERSION_KEY] = CURRENT_VERSION
     body = (json.dumps(content, ensure_ascii=False)
             if content is not None else "{bad json")
     led.db.execute(

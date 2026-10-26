@@ -56,6 +56,61 @@ def test_current_stop_supersedes_using_but_keeps_original_fact_in_history():
     assert result['groups']['current'] == ['b'] and result['groups']['history'] == ['a']
 
 
+@pytest.mark.parametrize('action,tail', [('開始', 'し服用しています。'), ('再開', 'して内服している。'),
+                                      ('継続', 'し使用中です。')])
+def test_direct_current_use_continuation_proves_as_of_without_inventing_start_date(action, tail):
+    fact = temporal_fact('use', '本人は薬剤Aを' + action + tail, '2026-10-01')
+    temporal = fact['temporal']
+    assert temporal['use_state'] == 'using' and temporal['negated'] is False
+    assert temporal['as_of_day'] == '2026-10-01' and temporal['event_day'] is None
+    assert state.project([fact])['groups']['current'] == ['use']
+
+
+@pytest.mark.parametrize('body', [
+    '本人は薬剤Aを開始し服用していません。',
+    '本人は薬剤Aを開始し服用していますか。',
+    '本人は薬剤Aを開始し服用していますという報告はありません。',
+    '本人は薬剤Aを開始し家族が服用しています。',
+    '本人は薬剤Aを開始し薬剤Bを服用しています。',
+    '本人の薬剤Aについて家族は開始し服用しています。',
+])
+def test_unproven_medication_continuation_does_not_supply_current_use_or_date(body):
+    fact = temporal_fact('unknown', body, '2026-10-01')
+    assert fact['temporal']['use_state'] is None and fact['temporal']['as_of_day'] is None
+    assert not state.project([fact])['groups']['current']
+
+
+def test_current_use_continuation_does_not_override_family_or_future_scope():
+    family = temporal_fact('family', '家族は薬剤Aを開始し服用しています。', '2026-10-01')
+    plan = temporal_fact('plan', '本人は明日薬剤Aを開始し服用しています。', '2026-10-01')
+    result = state.project([family, plan])
+    assert result['groups']['history'] == ['family'] and result['groups']['plan'] == ['plan']
+    assert not result['groups']['current']
+
+
+def test_written_start_date_does_not_hide_direct_current_use_or_replace_its_event_date():
+    fact = temporal_fact('use', '本人は2026年9月1日に薬剤Aを開始し服用しています。', '2026-10-01')
+    assert fact['temporal']['event_day'] == '2026-09-01'
+    assert fact['temporal']['as_of_day'] == fact['temporal']['state_day'] == '2026-10-01'
+    assert fact['temporal']['ongoing'] is True
+    assert state.project([fact])['groups']['current'] == ['use']
+
+
+@pytest.mark.parametrize('tail,resolved', [('解消しました。', True), ('解消していません。', False),
+    ('解消する予定です。', None), ('解消したかもしれません。', None),
+    ('解消しました、という報告はありません。', None), ('消失しましたとの記載なし。', None)])
+def test_explicit_symptom_resolution_keeps_direct_negative_and_uncertain_boundaries(tail, resolved):
+    fact = temporal_fact('resolution', '本人の発熱は' + tail, '2026-10-02', name='発熱', category='symptoms')
+    assert fact['temporal']['resolution'] is resolved
+
+
+def test_same_day_symptom_resolution_remains_conflicting_without_event_order_evidence():
+    present = temporal_fact('present', '本人は発熱があります。', '2026-10-02', name='発熱', category='symptoms')
+    resolved = temporal_fact('resolved', '本人の発熱は解消しました。', '2026-10-02', name='発熱', category='symptoms')
+    result = state.project([present, resolved])
+    assert result['groups']['conflict'] == ['present', 'resolved'] and not result['groups']['current']
+
+
 def test_deleted_stop_allows_attested_new_revision_and_independent_restart():
     import hashlib
     a = temporal_fact('a', '本人は本日薬剤Aを5mg服用中です。', '2026-10-01', dose='5mg', mid=1)

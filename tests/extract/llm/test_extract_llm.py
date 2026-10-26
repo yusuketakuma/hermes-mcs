@@ -609,15 +609,20 @@ def test_rollup_excludes_negated_family_past_meds(tmp_path):
 def test_rollup_resolved_symptom_cancels_positive(tmp_path):
     db = _ledger(tmp_path)
     db.ensure_patient(1)
-    db.save_messages([_message(mid=1, body="発熱があります")])
-    _llm_artifact(db, 1, {"symptoms": [{"text": "発熱"}]}, _hash(db, 1))
-    db.save_messages([_message(mid=2, body="発熱は解消しました")])
-    _llm_artifact(db, 2, {"symptoms": [{"text": "発熱", "status":
-                                        "resolved"}]}, _hash(db, 2))
+    first, later = "本人は発熱があります。", "本人の発熱は解消しました。"
+    db.save_messages([_message(mid=1, body=first, posted_at="2026-10-01T12:00:00+09:00")])
+    _llm_artifact(db, 1, {"symptoms": [{"text": "発熱", "subject": "patient", "status": "ongoing",
+        "negated": False, "evidence": first}]}, _hash(db, 1))
+    db.save_messages([_message(mid=2, body=later, posted_at="2026-10-02T12:00:00+09:00")])
+    _llm_artifact(db, 2, {"symptoms": [{"text": "発熱", "subject": "patient", "status": "resolved",
+        "negated": False, "evidence": later}]}, _hash(db, 2))
 
     names = [s["symptom"] for s in
              rollup.build_rollup(db.db, 1).get("recent_symptoms", [])]
     assert names == []
+    state = rollup.build_rollup(db.db, 1)["clinical_state"]
+    assert len(state["facts"]) == 2
+    assert len(state["groups"]["history"]) == len(state["groups"]["current"]) == 1
     db.close()
 
 

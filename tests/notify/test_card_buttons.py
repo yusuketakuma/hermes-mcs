@@ -1,6 +1,7 @@
 """Card buttons as state toggles, member names, tasks, summary, ⚠
 report and ⏰ reminders — runner side. Synthetic temp ledger only."""
 from __future__ import annotations
+from inference_version import CURRENT_VERSION, VERSION_KEY
 import self_identity
 
 import notify_scope
@@ -539,7 +540,7 @@ def test_report_mark_clears_when_v4_becomes_current(led, tmp_path):
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES('semantic_facts_v4',1,101,'{}','v4',?,?)",
         (json.dumps({"hash": f"{101:064x}", "engine_version": 4,
-                     "projection_version": PROJECTION_VERSION}), NOW))
+                     "projection_version": PROJECTION_VERSION, VERSION_KEY: CURRENT_VERSION}), NOW))
     led.db.commit()
     assert not notify_render.feedback_pending(led.db, card)
     assert extract_feedback(led.db, 1)[0]["current"] == 0
@@ -775,7 +776,7 @@ def test_urgency_badge_names_its_source(led):
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES('extract_v1',1,101,?,'rules',?,?)",
-        (json.dumps({"urgency": "high"}), json.dumps({"hash": h}), NOW))
+        (json.dumps({"urgency": "high"}), json.dumps({"hash": h, VERSION_KEY: CURRENT_VERSION}), NOW))
     led.db.commit()
     assert clinical_urgency.message_urgency(led.db, 100) == "llm"
     assert clinical_urgency.message_urgency(led.db, 101) == "rule"
@@ -802,7 +803,7 @@ def test_urgency_reads_the_same_artifact_as_the_body(led):
         "meta,created_at) VALUES('semantic_facts_v4',1,100,?,'v4',?,?)",
         (json.dumps({"summary": "新"}),
          json.dumps({"hash": f"{100:064x}", "engine_version": 4,
-                     "projection_version": PROJECTION_VERSION}), NOW))
+                     "projection_version": PROJECTION_VERSION, VERSION_KEY: CURRENT_VERSION}), NOW))
     led.db.commit()
     assert mcs_queries.current_message_facts(led.db, 100)["summary"] \
         == "新"

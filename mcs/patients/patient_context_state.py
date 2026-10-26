@@ -6,7 +6,8 @@ import json
 
 from mcs_util import locate_quote_span
 
-from clinical_scope import CURRENT_MARK, source_axes, source_polarity, source_resolution, source_assertion_span
+from clinical_scope import (CURRENT_MARK, current_medication_continuation, source_axes,
+                            source_polarity, source_resolution, source_assertion_span)
 from clinical_values import written_day
 
 _JST = timezone(timedelta(hours=9))
@@ -55,7 +56,14 @@ def annotate(fact, body):
     event_day = next(iter(dates)).isoformat() if len(dates) == 1 else None
     action = actions[0].group() if len(actions) == 1 else None
     polarity = source_polarity(body, start, end, target_end=start + actions[0].end()) if action else None
-    present, resolution = False, None
+    present, resolution, use_continuation = False, None, False
+    if (action in ("開始", "継続", "再開") and any(d["key"] == "drug_name" for d in details)
+            and len(names) == 1 and quote.count(names[0]) == 1
+            and quote.index(names[0]) < actions[0].start()
+            and re.fullmatch(r"(?:を|の(?:服用|内服|使用|投与)を)",
+                             quote[quote.index(names[0]) + len(names[0]):actions[0].start()].strip())
+            and current_medication_continuation(quote[actions[0].end():])):
+        present, polarity, use_continuation = True, False, True
     if action is None and len(names) == 1 and quote.count(names[0]) == 1:
         target_end = start + quote.index(names[0]) + len(names[0])
         medication = any(d["key"] == "drug_name" for d in details)
@@ -65,7 +73,7 @@ def annotate(fact, body):
         tail = body[target_end:end]
         present = polarity is not None and bool(re.search(r"中|あり|ある|あります|なし|ない|ありません|しています|している", tail))
     current_cue = bool(CURRENT_MARK.search(quote) or present or resolution is not None)
-    ongoing = bool(re.search(r"続いて|持続|継続中|今も|(?:昨日|先週|先月)(?:から|より)", quote))
+    ongoing = use_continuation or bool(re.search(r"続いて|持続|継続中|今も|(?:昨日|先週|先月)(?:から|より)", quote))
     symptom_state = ("resolved" if resolution is True else "not_resolved" if resolution is False
                      else "absent" if polarity is True else "present" if polarity is False else None)
     if not any(d["key"] == "symptom" for d in details):

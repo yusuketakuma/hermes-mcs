@@ -2,7 +2,7 @@
 import json
 import re
 
-from clinical_scope import source_axes, source_polarity
+from clinical_scope import REPORTED_ABSENCE, source_axes, source_polarity
 from mcs_util import locate_quote_span
 
 EVENT_KINDS = ('visit', 'exam', 'admission', 'discharge', 'transfer', 'fall',
@@ -29,9 +29,8 @@ _DIRECT = {kind: re.compile(pattern) for kind, pattern in _DIRECT.items()}
 _BREAK = re.compile(r'[。！？!?;；\n、,]')
 _UNCERTAIN = re.compile(r'否定でき|かもしれ|疑い|不明|未確認|未確定|未定|可能性|ない(?:こと|わけ|訳)はない')
 _NEGATED = re.compile(r'^(?:では(?:ありません|ない|なく)|じゃない|(?:の)?(?:予定|計画)(?:は|が|も)?(?:なし|ない|ありません))')
-_REPORTED_ABSENCE = r'(?:という|との)(?:報告|記録|記載|連絡)(?:は|が|も)?(?:ない|ありません|なし|未確認)'
 _QUESTION = re.compile(r'(?:か|でしょうか)[。！？!?\s]*$|[?？][。！？!?\s]*$|かどうか|'
-                       r'とは[^。！？!?\n]{0,80}(?:記載なし|書かれていません|報告されていません)|' + _REPORTED_ABSENCE)
+                       r'とは[^。！？!?\n]{0,80}(?:記載なし|書かれていません|報告されていません)|' + REPORTED_ABSENCE)
 _AFFIRMED = re.compile(r'^(?:は|が|を)?(?:現在|今は)?(?:しました|した|しています|している|し(?=[、,]|$)|中|済み|です|となり|となった|となりました|されました|された|を受けました|を実施しました)')
 
 
@@ -58,7 +57,7 @@ def _polarity(body, start, end, target_end, status):
     value = source_polarity(body, start, end, target_end=target_end)
     tail = body[target_end:end]
     if (_UNCERTAIN.search(tail) or _QUESTION.search(tail)
-            or tail.rstrip().endswith(('、', ',')) and re.match(r'\s*' + _REPORTED_ABSENCE, body[end:])):
+            or tail.rstrip().endswith(('、', ',')) and re.match(r'\s*' + REPORTED_ABSENCE, body[end:])):
         return None
     if _NEGATED.search(tail):
         return True

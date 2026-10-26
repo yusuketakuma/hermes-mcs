@@ -1,6 +1,9 @@
 """Rollup dictionary currency is fenced, stable across bounded cursor progress."""
 from copy import deepcopy
 import json
+import sqlite3
+
+import pytest
 
 import drug_map
 import rollup
@@ -40,13 +43,18 @@ def test_generation_change_before_build_stays_dirty_then_settles(store, tmp_path
     document['dict_id'] = 'fictional-replacement'
     replacement = _dictionary(tmp_path, document)
     before = drug_map.generation_signature(store.db)
+    initial_id = rollup.rebuild(store, 1)
+    initial_cache = _cached(store)
     build = rollup.build_rollup
     def changed_before_build(ledger, pid):
         drug_map.derive(store, replacement, deadline=0)
         return build(ledger, pid)
     monkeypatch.setattr(rollup, 'build_rollup', changed_before_build)
-    rollup.rebuild(store, 1)
+    with pytest.raises(sqlite3.OperationalError, match="^inference_rollup_source_changed$"):
+        rollup.rebuild(store, 1)
     _, meta = _cached(store)
+    assert _cached(store) == initial_cache
+    assert store.db.execute("SELECT artifact_id FROM artifacts WHERE kind=?", (rollup.KIND,)).fetchone()[0] == initial_id
     assert meta['med_ref_generation'] == before
     assert rollup.dirty_projects(store) == [1]
     monkeypatch.setattr(rollup, 'build_rollup', build)

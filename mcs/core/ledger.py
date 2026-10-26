@@ -1107,12 +1107,17 @@ class Ledger:
                 dependency_loss.record_tx(self.db, old_dependencies)
             elif old_origin is not None:
                 dependency_loss.equivalent_tx(self.db, m.project_id, m.message_id, old_origin)
-            self.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true')) "
-                "WHERE message_id=? AND (project_id=? OR project_id IS NULL) AND kind IN "
+            invalidation_scope = ("WHERE message_id=? AND (project_id=? OR project_id IS NULL) AND kind IN "
                 "('extract_v1','extract_llm','extract_llm_chunk','semantic_source_manifest',"
                 "'semantic_extraction_chunk','patient_context_scan_v1','patient_context_scan_chunk_v1') "
-                "AND CASE WHEN json_valid(meta) THEN json_type(meta)='object' END",
-                (m.message_id, m.project_id))
+                "AND CASE WHEN json_valid(meta) THEN json_type(meta)='object' "
+                "AND json_extract(meta,'$.invalidated') IS NOT 1 END")
+            # Intake often has only thread projections. Avoid a no-op UPDATE
+            # of the artifact store for every member of those same threads.
+            if self.db.execute("SELECT 1 FROM artifacts " + invalidation_scope + " LIMIT 1",
+                               (m.message_id, m.project_id)).fetchone():
+                self.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true')) "
+                                + invalidation_scope, (m.message_id, m.project_id))
         if existing is not None and (edited or m.body_state in TERMINAL_BODY_STATES and existing["body_state"] != m.body_state):
             initial_import_state.dirty_source_tx(self.db, m.project_id, m.message_id, now)
         return 0 if existing is not None else 1

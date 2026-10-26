@@ -5,6 +5,8 @@ import re
 
 from mcs_util import locate_quote_span
 
+REPORTED_ABSENCE = r'(?:という|との)(?:報告|記録|記載|連絡)(?:は|が|も)?(?:ない|ありません|なし|未確認)'
+
 FAMILY_PERSON = (r"ご家族|家族|ご主人|主人|旦那(?:さん|様)?|奥(?:さん|様)|お?嫁(?:さん)?|配偶者|"
                  r"お母(?:さん|様)|お父(?:さん|様)|母親|父親|祖母|祖父|義母|義父|(?<!分)母|父|"
                  r"(?:長男|長女|次男|次女)(?:さん|様)?|娘(?:さん|様)?|息子(?:さん|様)?|(?<![丈工])夫|妻|"
@@ -278,17 +280,25 @@ def source_resolution(body, start, end, *, target_end=None):
             or not 0 <= start < target_end <= end <= len(body)):
         return None
     tail = body[target_end:end]
+    if (re.search(REPORTED_ABSENCE, tail)
+            or re.match(r"[、,]?\s*" + REPORTED_ABSENCE, body[end:])):
+        return None
     if re.search(r"[?？]|かどうか|(?:か|でしょうか)[。\s]*$|予定|計画|見込み|なら|場合|たら|とき|れば|"
                  r"かもしれ|疑い|不明|未確認|ではない|じゃない|ない(?:こと|わけ|訳)はない", tail):
         return None
     lead = r"^(?:は|が|も|を)?(?:現在|今は|本日|今日|まだ|既に|すでに)?\s*"
-    not_resolved = (r"(?:(?:消失|消退)(?:して(?:いない|いません|おらず|いなかった)|し(?:ない|ません)|"
+    not_resolved = (r"(?:(?:消失|消退|解消)(?:して(?:いない|いません|おらず|いなかった)|し(?:ない|ません)|"
                     r"(?:を|は|が|も)?認め(?:ず|ない|ません))|治ま(?:って(?:いない|いません|おらず)|らない|りません))")
     if re.search(lead + not_resolved, tail):
         return False
-    resolved = (r"(?:(?:消失|消退)(?:しました|した|しています|している|済み|を認めました|を認めた)|"
+    resolved = (r"(?:(?:消失|消退|解消)(?:しました|した|しています|している|済み|を認めました|を認めた)|"
                 r"治ま(?:りました|った|っています|っている))(?=$|[。．！!、,\s])")
     return True if re.search(lead + resolved, tail) else None
+
+
+def current_medication_continuation(tail):
+    """Recognize a complete affirmative current-use continuation after a medication action."""
+    return re.fullmatch(r"し(?:て)?(?:服用|内服|使用|投与)(?:しています|している|中(?:です)?)[。．\s]*", tail) is not None
 
 
 def source_polarity(body, start, end, *, target_end=None, medication=False):

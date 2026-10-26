@@ -9,6 +9,7 @@ import notify_flush
 import notify_render
 import structured_view
 from medications_testkit import DOCUMENT, _dictionary, _seed, store as store
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 def _facts(store, names=('キラナ',), **fields):
@@ -52,10 +53,15 @@ def test_filtered_medications_never_return_through_dictionary_or_rule_fallback(s
     _facts(store, **excluded)
     source = store.db.execute('SELECT content_hash FROM messages WHERE message_id=1').fetchone()[0]
     store.artifact_add('extract_v1', json.dumps({'medications': [{'name': 'キラナ', 'dose': '5mg'}]}),
-                       project_id=1, message_id=1, meta={'hash': source})
+                       project_id=1, message_id=1, meta={'hash': source, VERSION_KEY: CURRENT_VERSION})
     drug_map.derive(store, _dictionary(tmp_path))
     assert drug_map.current_refs(store.db, 1)
-    for text in ('\n'.join(structured_view.structured_lines(store.db, 1)), _text_notice(store)):
+    notice = _text_notice(store)
+    summary, separator, original = notice.partition('\n📄 本文\n')
+    assert separator and original == store.db.execute(
+        'SELECT body_text FROM messages WHERE message_id=1').fetchone()[0]
+    assert 'キラナ' in original
+    for text in ('\n'.join(structured_view.structured_lines(store.db, 1)), summary):
         assert 'キラナ' not in text and '架空成分甲' not in text
 
 

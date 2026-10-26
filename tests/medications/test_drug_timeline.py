@@ -9,18 +9,25 @@ import drug_timeline
 import extract_llm
 import ledger
 import mcs_view
+from inference_dependency_loss import source_binding
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from medications_testkit import _seed
 
 
 def current(store, mid, meds):
     _seed(store, mid=mid)
     message = dict(store.db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone())
+    message["_source_binding"] = source_binding(store.db, 1, mid)
     context = extract_llm._thread_context(store.db, message)
-    meta = {"hash": message["content_hash"], "extract_version": extract_llm.EXTRACT_VERSION,
+    meta = {"hash": message["content_hash"], VERSION_KEY: CURRENT_VERSION,
+            "source_binding": message["_source_binding"],
+            "extract_version": extract_llm.EXTRACT_VERSION,
             "plan_version": extract_llm.PLAN_VERSION,
             "patient_context_version": extract_llm.PATIENT_CONTEXT_VERSION,
             "actual_model": extract_llm.MODEL,
-            "context_binding": extract_llm._chunk_context(message, context)}
+            "context_binding": extract_llm._chunk_context(message, context),
+            "integrity": {"completeness_chunks": 1, "completeness": {
+                "0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}}
     store.artifact_add("extract_llm", json.dumps({"meds": meds}), project_id=1,
                        message_id=mid, model=extract_llm.MODEL, meta=meta)
 
@@ -71,13 +78,15 @@ def test_stale_plan_rule_fallback_deleted_and_partial_not_absence(corpus):
 
 
 @pytest.mark.parametrize("integrity,complete", [
-    ({}, True), (None, False), ([], False),
-    ({"completeness": {}}, True), ({"completeness": None}, False),
-    ({"completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}, True),
-    ({"completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": False}}}, False),
-    ({"completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0.0}}}, False),
-    ({"completeness": {"0": {"state": "hint_gaps_resolved"}}}, False),
-    ({"completeness": {"0": {"state": "unresolved", "remaining_hint_candidates": 0}}}, False),
+    ({}, False), (None, False), ([], False),
+    ({"completeness": {}}, False), ({"completeness": None}, False),
+    ({"completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}, False),
+    ({"completeness_chunks": 1, "completeness": {
+        "0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}, True),
+    ({"completeness_chunks": 1, "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": False}}}, False),
+    ({"completeness_chunks": 1, "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0.0}}}, False),
+    ({"completeness_chunks": 1, "completeness": {"0": {"state": "hint_gaps_resolved"}}}, False),
+    ({"completeness_chunks": 1, "completeness": {"0": {"state": "unresolved", "remaining_hint_candidates": 0}}}, False),
 ])
 def test_completeness_keeps_unresolved_mentions_out_of_timeline(corpus, integrity, complete):
     current(corpus, 1, [{"name": "キラナ", "subject": "patient"}])
@@ -103,6 +112,7 @@ def test_frozen_context_frame_and_digest_are_required(corpus):
     import patient_state_context
     current(corpus, 1, [{"name": "キラナ", "subject": "unknown"}])
     message = dict(corpus.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    message["_source_binding"] = source_binding(corpus.db, 1, 1)
     frame = patient_state_context.prepare(corpus, message, model=extract_llm.MODEL,
         contract=extract_llm._context_contract(), attempt={}, enabled=True,
         base_context=None, version=extract_llm.EXTRACT_VERSION)
@@ -114,6 +124,17 @@ def test_frozen_context_frame_and_digest_are_required(corpus):
     corpus.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), row[0]))
     assert drug_timeline.timeline(view_of(corpus), 1)["items"]
     corpus.db.execute("UPDATE artifacts SET content=json_set(content,'$.digest',?) WHERE artifact_id=?", ("f" * 64, frame["artifact_id"]))
+    report = drug_timeline.timeline(view_of(corpus), 1)
+    assert report["items"] == [] and report["coverage"]["no_current_extraction"] == 1
+
+
+@pytest.mark.parametrize("binding", [None, "f" * 64])
+def test_timeline_requires_the_prepared_source_binding(corpus, binding):
+    current(corpus, 1, [{"name": "キラナ", "subject": "patient"}])
+    assert drug_timeline.timeline(view_of(corpus), 1)["items"]
+    aid = corpus.db.execute("SELECT MAX(artifact_id) FROM artifacts WHERE kind='extract_llm'").fetchone()[0]
+    corpus.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.source_binding',?) WHERE artifact_id=?",
+                      (binding, aid))
     report = drug_timeline.timeline(view_of(corpus), 1)
     assert report["items"] == [] and report["coverage"]["no_current_extraction"] == 1
 
@@ -179,7 +200,7 @@ def canonical_source(store, monkeypatch, *, name="キラナ錠5mg", grounded=Tru
                 {"key": "drug_name", "value": value, "evidence": quote}
                 for value in ([name, *extra_names] if grounded else [])]}}
     doc = {"facts": [fact], "evidence": [{"evidence_id": "e1", "quote": quote}]}
-    monkeypatch.setattr("drug_map._source", lambda *a: (row[0], "semantic_facts_v4", "{}", "synthetic", 1))
+    monkeypatch.setattr("drug_map._source", lambda *a, **k: (row[0], "semantic_facts_v4", "{}", "synthetic", 1))
     monkeypatch.setattr("semantic_v4.reproject_doc", lambda *a: (doc, None))
     monkeypatch.setattr("semantic_store.thread_bundle", lambda *a, **k: {"source_fingerprint": "synthetic"})
     monkeypatch.setattr("semantic_policy.semantic_config", lambda *a: ({}, []))

@@ -32,7 +32,7 @@ def test_upsert_reads_current_message_under_writer_lock_and_keeps_rollback(
                     return getattr(conn, name)
 
                 def execute(self, sql, *args):
-                    if "SELECT project_id,body_state,content_hash,first_seen" in sql:
+                    if " ".join(sql.upper().split()) == "SELECT * FROM MESSAGES WHERE MESSAGE_ID=?":
                         with pytest.raises(sqlite3.OperationalError, match="locked"):
                             other.execute("UPDATE messages SET body_html='synthetic competitor' "
                                           "WHERE message_id=1")
@@ -58,6 +58,7 @@ def test_upsert_reads_current_message_under_writer_lock_and_keeps_rollback(
                 conn.rollback()
             assert conn.execute("SELECT body_html FROM messages").fetchone()[0] == "synthetic original"
             assert conn.execute("SELECT COUNT(*) FROM message_revisions").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM artifacts WHERE kind='inference_dependency_loss'").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("project_id", [1, 2])

@@ -60,7 +60,11 @@ def test_valid_thin_retry_replaces_unreadable_prior_result(tmp_path, monkeypatch
         ledger.db.commit()
         monkeypatch.setattr(extract_llm, "llm_extract", lambda *args, **kwargs: {"summary": "SYNTH-new"})
         assert extract_llm.run_pending(ledger, budget_s=180)["done"] == 1
-        assert json.loads(ledger.artifacts(extract_llm.KIND)[-1]["content"])["summary"] == "SYNTH-new"
+        adopted = ledger.artifacts(extract_llm.KIND)[-1]
+        assert json.loads(adopted["content"])["summary"] == "SYNTH-new"
+        assert json.loads(adopted["meta"])[VERSION_KEY] == CURRENT_VERSION
+        assert ledger.db.execute("SELECT 1 FROM artifacts WHERE artifact_id=?", (aid,)).fetchone() is None
+        assert not ledger.db.in_transaction
     finally:
         ledger.close()
 

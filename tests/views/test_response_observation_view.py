@@ -485,3 +485,25 @@ def test_metadata_occurrence_does_not_rebind_or_hide_true_body_revision(store, t
         assert result['unknown_reasons'] == {'source_binding_unknown': 1}
     finally:
         view.close()
+
+
+def test_same_clock_hydration_and_metadata_do_not_create_a_body_edit_freshness_fence(store, tmp_path):
+    from dataclasses import replace
+    from datetime import datetime, timezone
+    ledger, _ = store
+    message = replace(_norm_message({'id': 1, 'comment': 'SYNTHETIC-SNIPPET', 'user': {'id': 22}}, 1),
+                      posted_at=datetime.fromtimestamp(NOW - 100, timezone.utc).isoformat())
+    ledger.save_messages([replace(message, body_state='snippet')], project_id=1, notify=False)
+    full = replace(message, body_html='SYNTHETIC-FULL-BODY', body_state='full')
+    ledger.save_messages([full], project_id=1, notify=False)
+    ledger.save_messages([replace(full, sender_name='合成表示名')], project_id=1, notify=False)
+    _meta(ledger)
+    assert ledger.db.execute('SELECT MAX(seq) FROM message_revisions WHERE message_id=1').fetchone()[0] == 3
+    view = _view(store, tmp_path)
+    try:
+        before = view.db.total_changes
+        result = _read(view)
+        assert result['state'] == 'complete' and result['counts']['self_target'] == 1
+        assert result['unknown_reasons'] == {} and view.db.total_changes == before
+    finally:
+        view.close()

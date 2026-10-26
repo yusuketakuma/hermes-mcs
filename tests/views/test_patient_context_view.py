@@ -327,3 +327,46 @@ def test_changes_excludes_metadata_occurrences_but_preserves_last_body_transitio
     assert result['deleted'] == ([{'message_id': 1, 'observed_at': 200.0}] if deleted else [])
     later = changes(db.db, ev, 250)['by_discovery']
     assert later['edited'] == [] and later['deleted'] == []
+
+
+@pytest.mark.parametrize('terminal', ['snippet', 'full'])
+def test_hydration_occurrences_are_not_body_edits_or_deletions(context_db, monkeypatch, terminal):
+    from dataclasses import replace
+    from patient_context_view import changes
+    db = context_db
+    clock = [100.0]
+    monkeypatch.setattr(ledger.time, 'time', lambda: clock[0])
+    original = replace(_message(9, body='合成の部分情報A'), body_state='snippet')
+    db.save_messages([original], project_id=1)
+    clock[0] = 200.0
+    changed = replace(original, body_html='合成の部分情報B', body_state=terminal)
+    db.save_messages([changed], project_id=1)
+    clock[0] = 300.0
+    db.save_messages([replace(changed, sender_name='合成表示名')], project_id=1)
+    assert db.db.execute('SELECT MAX(seq) FROM message_revisions WHERE message_id=9').fetchone()[0] == 3
+    ev = {'project_id': 1, 'items': [{'message_id': 9, 'discovery': 'initial'}], 'as_of': 400, 'coverage': {}}
+    result = changes(db.db, ev, 150)['by_discovery']
+    assert result['edited'] == [] and result['deleted'] == []
+
+
+@pytest.mark.parametrize('bodies,states,expected', [
+    (['', ''], ['full', 'deleted'], 'deleted'),
+    (['合成本文A', '合成本文B', '合成本文A'], ['full', 'full', 'full'], 'edited'),
+])
+def test_terminal_state_and_body_aba_remain_visible_after_metadata(context_db, monkeypatch, bodies, states, expected):
+    from dataclasses import replace
+    from patient_context_view import changes
+    db = context_db
+    clock = [100.0]
+    monkeypatch.setattr(ledger.time, 'time', lambda: clock[0])
+    original = _message(9, body='')
+    for n, (body, state) in enumerate(zip(bodies, states), 1):
+        clock[0] = n * 100.0
+        current = replace(original, body_html=body, body_state=state)
+        db.save_messages([current], project_id=1)
+    clock[0] += 100
+    db.save_messages([replace(current, sender_name='合成表示名')], project_id=1)
+    ev = {'project_id': 1, 'items': [{'message_id': 9, 'discovery': 'initial'}], 'as_of': 500, 'coverage': {}}
+    result = changes(db.db, ev, 150)['by_discovery']
+    assert result['edited'] == ev['items']
+    assert result['deleted'] == ([{'message_id': 9, 'observed_at': 200.0}] if expected == 'deleted' else [])

@@ -51,15 +51,17 @@ def test_legacy_unstamped_cache_requires_current_source_only_with_marker(store, 
     _summary_cache(store, tmp_path)
     store.db.execute("UPDATE artifacts SET meta='{}' WHERE kind=?", (rollup.KIND,))
     store.db.commit()
+    historical = store.db.execute("SELECT content,meta FROM artifacts WHERE kind=?", (rollup.KIND,)).fetchone()
     assert '架空成分甲' in notify_views.patient_summary_text(store.db, 1)[1]
-    # Legacy cache has no generation stamp; active-source validation still
-    # rejects a candidate after its source binding changes.
+    # An old cache cannot authorize a candidate after its raw source changes,
+    # even when the dictionary-generation marker is later absent.
     store.db.execute("UPDATE messages SET content_hash=?", ('b' * 64,))
     store.db.commit()
     assert '架空成分甲' not in notify_views.patient_summary_text(store.db, 1)[1]
     store.db.execute("DELETE FROM artifacts WHERE kind=?", (drug_map.PROGRESS_KIND,))
     store.db.commit()
-    assert '架空成分甲' in notify_views.patient_summary_text(store.db, 1)[1]
+    assert '架空成分甲' not in notify_views.patient_summary_text(store.db, 1)[1]
+    assert tuple(store.db.execute("SELECT content,meta FROM artifacts WHERE kind=?", (rollup.KIND,)).fetchone()) == tuple(historical)
 
 
 def test_corrupt_cached_ref_cannot_hide_raw_medication(store, tmp_path):

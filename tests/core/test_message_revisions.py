@@ -17,8 +17,8 @@ def message(body, state="full"):
 
 
 @pytest.mark.parametrize(("states", "bodies", "expected"), [
-    (["snippet", "snippet"], ["A", "B"], []),
-    (["snippet", "full"], ["A", "B"], []),
+    (["snippet", "snippet"], ["A", "B"], ["A", "B"]),
+    (["snippet", "full"], ["A", "B"], ["A", "B"]),
     (["full", "full"], ["A", "A"], []),
     (["full", "snippet"], ["A", "B"], []),
     (["full", "full"], ["A", "B"], ["A", "B"]),
@@ -37,7 +37,11 @@ def test_terminal_transition_chain_is_observed_without_replays(tmp_path, monkeyp
         rows = db.db.execute(
             "SELECT * FROM message_revisions ORDER BY seq").fetchall()
         hashes = [hashlib.sha256(body.encode()).hexdigest() for body in expected]
+        # The history now binds every adopted source occurrence, including
+        # snippets and hydration. A snippet remains explicitly untrusted state.
         assert [row["content_hash"] for row in rows] == hashes
+        if states[0] == 'snippet':
+            assert [row['body_state'] for row in rows] == states
         assert [row["seq"] for row in rows] == list(range(1, len(expected) + 1))
         assert [row["prev_content_hash"] for row in rows] == (
             [None, *hashes[:-1]] if hashes else [])
@@ -64,7 +68,11 @@ def test_legacy_null_hash_and_missing_table_remain_ingestable(tmp_path):
     reopened = Ledger(path)
     try:
         reopened.save_messages([message("SYNTHETIC NEW BODY")])
-        assert reopened.db.execute("SELECT COUNT(*) FROM message_revisions").fetchone()[0] == 0
+        rows = reopened.db.execute("SELECT seq,content_hash,prev_content_hash,body_state FROM message_revisions").fetchall()
+        # Hydration attests the newly observed body, never inventing the NULL-hash predecessor.
+        assert [tuple(row) for row in rows] == [(1, hashlib.sha256(b"SYNTHETIC NEW BODY").hexdigest(), None, 'full')]
+        reopened.save_messages([message("SYNTHETIC LATER BODY")])
+        assert reopened.db.execute("SELECT MAX(seq) FROM message_revisions").fetchone()[0] == 2
     finally:
         reopened.close()
 
@@ -154,16 +162,14 @@ def test_overlapping_writer_same_edit_is_not_recorded_twice(tmp_path):
     db = _ledger(tmp_path)
     path = db.db.execute("PRAGMA database_list").fetchone()[2]
     other = Ledger(path)
-    c_hash = hashlib.sha256(b"SYNTHETIC C").hexdigest()
     try:
         db.save_messages([message("SYNTHETIC A")])
         db.save_messages([message("SYNTHETIC B")])
 
         def other_writer():
-            with other.db:
-                other.db.execute(
-                    "INSERT INTO message_revisions VALUES(1,3,?,'y','full',9)",
-                    (c_hash,))
+            # A real overlapping writer adopts both the source row and its
+            # occurrence in one transaction before this writer's reserved read.
+            other.save_messages([message("SYNTHETIC C")])
 
         db.db = _RacingConnection(db.db, other_writer)
         db.save_messages([message("SYNTHETIC C")])

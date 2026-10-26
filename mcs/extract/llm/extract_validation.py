@@ -584,7 +584,8 @@ class Validator:
                     if m.get("prn") is False and not clinical_values.medication_attribute_supported(
                             "prn", False, assertion[0]):
                         item["unverified"] = True
-                    supported_plan = item.get("status") == "planned" and re.search(r"予定|計画|検討|提案", assertion[0])
+                    supported_plan = item.get("status") == "planned" and re.search(
+                        r"予定|計画|検討|提案|(?:処方医|主治医|医師)(?:に|へ)相談(?:しました|した)(?=$|[が。．\s])", assertion[0])
                     if (not supported_plan and self.body[assertion[3]:].lstrip().startswith(("、", ","))
                             and clinical_scope.source_polarity(self.body, assertion[1], assertion[3],
                                 target_end=assertion[2], medication=True) is None):

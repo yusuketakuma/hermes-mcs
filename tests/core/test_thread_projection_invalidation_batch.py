@@ -122,3 +122,24 @@ def test_postqueue_failure_rolls_back_source_projection_notice_and_seed(
     assert _invalidated(store, own) == [False] * len(own)
     assert _invalidated(store, foreign) == [False] * len(foreign)
     assert not store.db.in_transaction
+
+
+def test_changed_source_invalidates_only_present_bound_extractions_once(world):
+    store, messages, _, _ = world
+    mids = (messages[0].message_id, messages[-1].message_id)
+    extracted, untouched = [], []
+    with store.db:
+        for mid in mids:
+            extracted.append(store.artifact_add_tx('extract_llm', '{}', project_id=1,
+                message_id=mid, meta={'invalidated': False}))
+        untouched.append(store.artifact_add_tx('extract_llm', '{}', project_id=2,
+            message_id=101, meta={'invalidated': False}))
+    changed = _changed(messages, 1)
+    # Two actual source artifacts, plus two distinct thread invalidations.
+    assert _save_invalidation_count(store, 'messages', changed, False) == len(mids) + len(ROOTS)
+    assert _invalidated(store, extracted) == [True, True]
+    assert _invalidated(store, untouched) == [False]
+    # Replayed input neither advances a source occurrence nor writes invalidation again.
+    revisions = [tuple(r) for r in store.db.execute('SELECT * FROM message_revisions ORDER BY message_id,seq')]
+    assert _save_invalidation_count(store, 'messages', changed, False) == 0
+    assert [tuple(r) for r in store.db.execute('SELECT * FROM message_revisions ORDER BY message_id,seq')] == revisions

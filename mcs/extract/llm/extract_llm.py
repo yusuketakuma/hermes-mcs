@@ -1886,9 +1886,15 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
                 "AND a.project_id=? " + current_extract_pred()
                 + " ORDER BY a.artifact_id DESC LIMIT 1",
                 (KIND, r["message_id"], r["project_id"])).fetchone()
-            changed = previous is None or mcs_queries.extraction_input_signature(
-                previous["content"], previous["meta"], previous["model"]) != mcs_queries.extraction_input_signature(
-                    content, meta, actual_model)
+            current_signature = mcs_queries.extraction_input_signature(content, meta, actual_model)
+            try:
+                previous_signature = mcs_queries.extraction_input_signature(
+                    previous["content"], previous["meta"], previous["model"]) if previous else None
+            except ValueError:
+                # Unreadable stored history cannot veto a validated replacement.
+                # Its unknown meaning still invalidates derived analysis proofs.
+                previous_signature = None
+            changed = previous_signature != current_signature
             # Keep the INSERT fence even though the prior check owns the write lock.
             cur = ledger.db.execute(
                 "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "

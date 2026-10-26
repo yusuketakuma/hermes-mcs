@@ -7,6 +7,8 @@ import json
 import pytest
 
 import extract_llm
+import inference_dependency_loss as dependency_loss
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from mcs_util import text_chunks
 from patient_context import DETAIL_KEYS
 from test_extraction_review import _message, db
@@ -17,6 +19,7 @@ __all__ = ["db"]
 def _framed_source(db, row):
     """Inspect or seed the durable frame required by current-generation checkpoints."""
     source = dict(row)
+    source["_source_binding"] = dependency_loss.source_binding(db.db, source["project_id"], source["message_id"])
     saved = db.db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? "
         "ORDER BY artifact_id DESC LIMIT 1", (extract_llm.patient_state_context.KIND, source["message_id"])).fetchone()
     if saved is None:
@@ -249,8 +252,13 @@ def test_old_generation_valid_failed_and_checkpointed_rows_reenter_normal_pendin
     monkeypatch.setattr(extract_llm, "llm_extract", infer)
     result = extract_llm.run_pending(db, limit=3, budget_s=200)
     assert result["done"] == 2 and len(calls) == 2
-    assert all(json.loads(row[0])["extract_version"] == extract_llm.EXTRACT_VERSION for row in db.db.execute(
-        "SELECT meta FROM artifacts WHERE kind='extract_llm'"))
+    metadata = [json.loads(row[0]) for row in db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm'")]
+    current = [meta for meta in metadata if meta.get(VERSION_KEY) == CURRENT_VERSION]
+    retained = [meta for meta in metadata if VERSION_KEY not in meta]
+    assert len(current) == len(retained) == 2
+    assert all(meta["extract_version"] == extract_llm.EXTRACT_VERSION for meta in current)
+    assert all(meta["extract_version"] == 5 for meta in retained)
+    assert next(meta for meta in retained if meta.get("error"))["attempts"] == 5
 
 
 def test_detail_grammar_uses_shared_whitelist_and_keeps_token_budget():
@@ -323,8 +331,8 @@ def test_parallel_dense_rows_keep_independent_source_bound_layouts(db, monkeypat
                                   {"chunk_size": 0}, {"chunk_size": True}, {"chunk": -1.0}])
 def test_adaptive_layout_cannot_cross_generation_context_or_shape(db, bad):
     db.save_messages([_message(body="独居です。")])
-    row = db.db.execute("SELECT * FROM messages").fetchone()
-    meta = {"hash": row["content_hash"], "ver": extract_llm.EXTRACT_VERSION, "context": extract_llm._chunk_context(row, None, checkpoint=True),
+    row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
+    meta = {VERSION_KEY: CURRENT_VERSION, "hash": row["content_hash"], "ver": extract_llm.EXTRACT_VERSION, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": -1, "chunk_size": 10, **bad}
     db.artifact_add("extract_llm_chunk", '{}', project_id=1, message_id=1, meta=meta)
     assert extract_llm._saved_chunk_size(db.db, row) == extract_llm._CHUNK_SIZE
@@ -335,11 +343,11 @@ def test_late_nested_split_does_not_repeat_completed_original_chunk(db, monkeypa
     monkeypatch.setattr(extract_llm, "_CHUNK_SIZE", 120)
     body = "初回完了の合成区間" + "A" * 110 + "後半密な合成区間" + "B" * 170
     db.save_messages([_message(body=body)])
-    row = db.db.execute("SELECT * FROM messages").fetchone()
+    row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
     roots = text_chunks(body, 120)
     if cached_empty:
         row = _framed_source(db, row)
-        extract_llm._persist_chunks(db, row, {0: {}})
+        assert extract_llm._persist_chunks(db, row, {0: {}})
         assert extract_llm._saved_chunk_state(db.db, row)[1][0] == {}
     seen = []
     target = roots[1]
@@ -450,8 +458,8 @@ def test_repair_length_stop_splits_pending_piece_and_preserves_completed_sibling
 def test_newest_broken_leaf_suppresses_older_completion(db):
     body = "合成本文です。"
     db.save_messages([_message(body=body)])
-    row = db.db.execute("SELECT * FROM messages").fetchone()
-    extract_llm._persist_chunks(db, row, {0: {}})
+    row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
+    assert extract_llm._persist_chunks(db, row, {0: {}})
     old = db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0]
     db.artifact_add("extract_llm_chunk", '{broken', project_id=1, message_id=1, meta=json.loads(old))
     assert extract_llm._saved_chunk_state(db.db, row)[1] == {}
@@ -463,11 +471,11 @@ def test_newest_broken_leaf_suppresses_older_completion(db):
 def test_adversarial_local_split_records_cannot_authorize_cached_children(db, fault):
     body = "完全合成区間です。" * 10
     db.save_messages([_message(body=body)])
-    row = db.db.execute("SELECT * FROM messages").fetchone()
+    row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
     size = len(body) // 2
-    extract_llm._persist_chunks(db, row, {0: {}}, split_size=size)
+    assert extract_llm._persist_chunks(db, row, {0: {}}, split_size=size)
     splits = {0: size}
-    extract_llm._persist_chunks(db, row, {"0:0": {}}, splits=splits)
+    assert extract_llm._persist_chunks(db, row, {"0:0": {}}, splits=splits)
     meta = json.loads(db.db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' ORDER BY artifact_id LIMIT 1").fetchone()[0])
     meta.update(fault)
     db.artifact_add("extract_llm_chunk", '{}', project_id=1, message_id=1, meta=meta)
@@ -502,9 +510,9 @@ def test_processing_revision_invalidates_old_global_hints_checkpoint(db, revisio
 def test_root_split_requires_explicit_piece_hash_but_legacy_empty_root_remains_valid(db):
     body = "合成の本文です。" * 12
     db.save_messages([_message(body=body)])
-    row = db.db.execute("SELECT * FROM messages").fetchone()
-    # Legacy complete index 0 may have no piece hash; it still proves coverage.
-    meta = {"hash": row["content_hash"], "ver": extract_llm.EXTRACT_VERSION, "context": extract_llm._chunk_context(row, None, checkpoint=True),
+    row = _framed_source(db, db.db.execute("SELECT * FROM messages").fetchone())
+    # Current-generation index 0 may use the older complete-node shape without a piece hash.
+    meta = {VERSION_KEY: CURRENT_VERSION, "hash": row["content_hash"], "ver": extract_llm.EXTRACT_VERSION, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": 0, "chunk_size": 3000}
     db.artifact_add("extract_llm_chunk", '{}', project_id=1, message_id=1, meta=meta)
     assert extract_llm._saved_chunk_state(db.db, row)[1] == {0: {}}
@@ -529,8 +537,10 @@ def test_verified_completed_results_survive_local_hint_checkpoint_revision(db, m
     meta = json.loads(final["meta"])
     context = extract_llm._thread_context(db.db, row)
     old_binding = hashlib.sha256(json.dumps([
+        CURRENT_VERSION, extract_llm._LOADED_SOURCE_DIGESTS["inference_version"],
         row["posted_at"], context, final["model"], extract_llm._PROMPT_HEAD,
-        extract_schema.SCHEMA, "clinical-plan/v3", extract_llm.PLAN_VERSION, row["_frame"]["digest"]],
+        extract_schema.SCHEMA, "clinical-plan/v3", extract_llm.PLAN_VERSION,
+        row["_source_binding"], row["_frame"]["digest"]],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     assert meta["context_binding"] == old_binding
     db.artifact_add("extract_llm_chunk", final["content"], project_id=1, message_id=1,

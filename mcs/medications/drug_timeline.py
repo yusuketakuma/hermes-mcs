@@ -28,6 +28,13 @@ def mentions(reader, mid, *, cfg=None):
                 or row[1] != resolved_model(cfg or {})):
             return None
         message = dict(db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone())
+        from inference_dependency_loss import source_binding
+        if not isinstance(meta.get("source_binding"), str):
+            return None
+        binding = source_binding(db, message["project_id"], mid)
+        if binding is None or binding != meta.get("source_binding"):
+            return None
+        message["_source_binding"] = binding
         message["_target"] = ("", resolved_model(cfg or {}))
         review = db.execute(f"SELECT ({_thin_pending_sql()}) OR ({_qc_flagged_sql()}) OR ({_human_flagged_sql()}) FROM messages m WHERE message_id=?", (mid,)).fetchone()
         if (review and review[0]) or any(isinstance(meta.get(k), dict) and meta[k].get("applied") is False for k in ("qc_fix", "human_fix")):

@@ -7,6 +7,7 @@ import pytest
 import drug_map
 from extract_testkit import _message
 from medications_testkit import DOCUMENT, _dictionary, _seed, store  # noqa: F401
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 def _after(tmp_path):
@@ -31,7 +32,7 @@ def _corpus(store):  # noqa: F811
     store.artifact_add("extract_llm", json.dumps({"meds": "x"}), project_id=1,
                        message_id=4, meta={"hash": store.db.execute(
                            "SELECT content_hash FROM messages WHERE message_id=4").fetchone()[0],
-                           "engine_version": 4})
+                           "engine_version": 4, VERSION_KEY: CURRENT_VERSION})
     _seed(store, 5, ("キラナ",), kind="extract_v1")
 
 

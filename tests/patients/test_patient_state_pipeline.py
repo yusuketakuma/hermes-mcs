@@ -7,6 +7,7 @@ import pytest
 
 import extract_llm as llm
 import patient_state_context as state
+import inference_dependency_loss as dependency_loss
 from test_patient_state_context import seed, target
 from test_pharmacy_state import context
 from extract_testkit import _ledger, _message
@@ -30,6 +31,7 @@ def test_known_reference_resolves_but_never_replaces_body_only_values(tmp_path):
     try:
         seed(led)
         row = target(led)
+        row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
         frame = refs(led, row)
         out = extract_validation.validate(document(), BODY, ctx=True, references=frame["refs"])
         detail = out["patient_context"][0]["details"][-1]
@@ -48,6 +50,7 @@ def test_unknown_or_malformed_reference_is_counted_without_losing_its_grounded_v
     try:
         seed(led)
         row = target(led)
+        row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
         out = extract_validation.validate(document(reference=bad), BODY, references=refs(led, row)["refs"])
         detail = out["patient_context"][0]["details"][-1]
         assert detail["value"] == "2錠" and "refers_to" not in detail
@@ -61,6 +64,7 @@ def test_other_drug_or_subject_cannot_borrow_a_known_reference(tmp_path):
     try:
         seed(led)
         row = target(led)
+        row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
         mapping = refs(led, row)["refs"]
         for body, names, subject in [(BODY.replace("合成薬A", "合成薬B"), ("合成薬B",), "patient"),
                                      (BODY, ("合成薬A",), "family")]:
@@ -76,6 +80,7 @@ def test_forged_resolved_object_and_unsupplied_reference_are_rejected(tmp_path):
     try:
         seed(led)
         row = target(led)
+        row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
         mapping = refs(led, row)["refs"]
         forged = {**mapping["S1"], "token": "S1", "project_id": 2}
         for doc, supplied in [(document(reference=forged), mapping), (document(), None)]:
@@ -91,14 +96,16 @@ def test_resolved_reference_survives_piece_merge_and_durable_checkpoint(tmp_path
     try:
         seed(led)
         row = target(led)
+        row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
         led.save_messages([_message(mid=999, body=BODY, posted_at=row["posted_at"])])
         row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=999").fetchone())
+        row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
         frame = refs(led, row)
         row.update(_frame=frame, _target=("", llm.MODEL))
         out = extract_validation.validate_piece(document(), BODY, BODY, references=frame["refs"])
         merged = extract_validation.merge([out])
         assert merged["patient_context"][0]["details"][-1]["refers_to"]["token"] == "S1"
-        llm._persist_chunks(led, row, {0: out}, frame["text"])
+        assert llm._persist_chunks(led, row, {0: out}, frame["text"])
         _, saved = llm._saved_chunk_state(led.db, row, frame["text"])
         assert saved[0]["patient_context"][0]["details"][-1]["refers_to"]["token"] == "S1"
         changed = {**row, "_frame": {**frame, "digest": "f" * 64}}
@@ -112,8 +119,10 @@ def test_worker_saves_frame_before_call_and_completed_progress_ignores_backgroun
     try:
         seed(led)
         row = target(led)
+        row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
         led.save_messages([_message(mid=999, body=BODY, posted_at=row["posted_at"])])
         row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=999").fetchone())
+        row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
         monkeypatch.setattr(llm, "load_config", lambda: {"extract": {"patient_state_context": True}})
         seen = []
 
@@ -121,6 +130,8 @@ def test_worker_saves_frame_before_call_and_completed_progress_ignores_backgroun
             frames = led.artifacts(state.KIND, message_id=999)
             assert len(frames) == 1 and kwargs["references"]["S1"]["value"] == "3錠"
             seen.append(copy.deepcopy(kwargs["references"]))
+            kwargs["meta_out"].update(completeness_chunks=1,
+                completeness={"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}})
             return extract_validation.validate(document(), body, references=kwargs["references"])
 
         monkeypatch.setattr(llm, "llm_extract", infer)
@@ -161,6 +172,7 @@ def test_interrupted_worker_resumes_the_first_snapshot_after_history_changes(tmp
     try:
         seed(led)
         row = target(led)
+        row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
         led.save_messages([_message(mid=999, body=BODY, posted_at=row["posted_at"])])
         monkeypatch.setattr(llm, "load_config", lambda: {"extract": {"patient_state_context": True}})
         calls = []
@@ -186,11 +198,14 @@ def test_failed_same_generation_feedback_retains_the_prior_model_and_context_ori
     try:
         seed(led)
         row = target(led)
+        row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
         first = refs(led, row)
         r = {**row, "_frame": first, "_context": first["text"], "_target": ("", llm.MODEL)}
         content = json.dumps({"summary": "合成の元結果"})
         assert llm._replace_current(led, r, content,
-                                  integrity={"validation": {"items_dropped": 0, "evidence_dropped": 0}})
+                                  integrity={"validation": {"items_dropped": 0, "evidence_dropped": 0},
+                                             "completeness_chunks": 1,
+                                             "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}})
         second = state.prepare(led, row, model=llm.MODEL, contract="synthetic/2", attempt={},
                                enabled=False, base_context=None, version=llm.EXTRACT_VERSION)
         r = {**row, "_frame": second, "_context": None, "_target": ("", llm.MODEL)}
