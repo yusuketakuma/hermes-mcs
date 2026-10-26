@@ -6,7 +6,7 @@ import json
 
 from mcs_util import locate_quote_span
 
-from clinical_scope import (CURRENT_MARK, current_medication_continuation, source_axes,
+from clinical_scope import (CURRENT_MARK, FAMILY_PERSON, OTHER_PERSON, current_medication_continuation, source_axes,
                             source_polarity, source_resolution, source_assertion_span)
 from clinical_values import written_day
 
@@ -29,6 +29,11 @@ _WEEKDAY_TOKEN = re.compile(r"(?P<word>[月火水木金土日]曜(?:日)?)|[（(
 _CORRECTION = re.compile(r"(?:投稿|記録)#(?P<mid>[1-9][0-9]*)の[「『](?P<quote>[^」』]{1,3000})[」』]を(?P<kind>訂正|撤回)")
 _PRIOR_CORRECTION = re.compile(r"前回の[「『](?P<quote>[^」』]{1,3000})[」』](?:を(?P<kind>訂正|撤回)|は誤り)")
 _CORRECTION_CUE = re.compile(r"訂正|撤回|誤り")
+_INDIRECT_PERSON = re.compile(rf"(?:{FAMILY_PERSON}|{OTHER_PERSON})(?:さん|様)?(?:に|の)")
+_MISSING_REPORT = re.compile(
+    r"(?:記録|報告|記載|情報|連絡)(?:は|が|も)?\s*(?:現在|今は|本日|今日)?\s*"
+    r"(?:ない|ありません|なし|未確認)"
+)
 _VALUE_KEYS = {"actual_dose", "actual_frequency", "residual_quantity", "medication_manager", "supporter",
                "storage_place", "value", "self_management", "swallowing", "food_texture"}
 
@@ -118,6 +123,12 @@ def annotate(fact, body):
     subjects, periods = {a[0] for a in axes}, {a[1] for a in axes}
     subject = next(iter(subjects)) if len(subjects) == 1 else "unknown"
     period = next(iter(periods)) if len(periods) == 1 else "unknown"
+    if fact.get("category") not in ("medications", "symptoms") and subject == "patient":
+        # These particles can identify a recipient, a source, or the owner.
+        # They do not prove that a later assertion belongs to the patient.
+        sentence_start = max(body.rfind(mark, 0, start) for mark in "。！？!?;；\n") + 1
+        if _INDIRECT_PERSON.search(body[sentence_start:end]):
+            subject = "unknown"
     dates = [written_day(d["value"]) for d in details if d["key"] in _DATES]
     written = written_day(quote)
     if written:
@@ -178,7 +189,7 @@ def annotate(fact, body):
                                               target_end=start + match.end()) is False
                     or pattern is _PRIOR_CORRECTION and re.match(r"(?:でした|です)[。！？!?\s]*$", quote[match.end():]) is not None)})
     reference_unknown = bool(re.search(r"同じ|同薬|その薬|これを", quote) and not any(quote.count(name) == 1 for name in names))
-    unknown = bool(corrections or re.search(r"不明|未確認|未確定|かもしれ|疑い|どちら", quote) or reference_unknown or paired_conflict or relative_overflow or (len(dates) > 1) or len(actions) > 1
+    unknown = bool(corrections or _MISSING_REPORT.search(quote) or re.search(r"不明|未確認|未確定|かもしれ|疑い|どちら", quote) or reference_unknown or paired_conflict or relative_overflow or (len(dates) > 1) or len(actions) > 1
                    or _CORRECTION_CUE.search(quote) and not corrections)
     if fact.get("reported_subject") in ("patient", "family", "other") and fact["reported_subject"] != subject:
         unknown = True
@@ -352,6 +363,23 @@ def project(facts, *, dependency_losses=()):
                 relation.update(type="unresolved", target_fact_id=None)
                 buckets[fact["id"]] = "unknown"
             relations.append(relation)
+    # Without a bound entity, two separate reports in the same category may
+    # refer to the same state or to unrelated things. Neither reading permits
+    # selecting a current state merely from their posting order.
+    unbound = {}
+    for fact in facts:
+        if (fact["id"] in replaced or fact["category"] in ("medications", "symptoms")
+                or _entity(fact) is not None or buckets[fact["id"]] not in ("current", "unknown")):
+            continue
+        key = (fact["project_id"], fact["category"])
+        unbound.setdefault(key, []).append(fact)
+    for rows in unbound.values():
+        identities = {(f.get("message_id"), f.get("content_hash"),
+                       tuple(f.get("evidence_span") or ()), f.get("evidence")) for f in rows}
+        if len(identities) > 1:
+            for fact in rows:
+                if buckets[fact["id"]] == "current":
+                    buckets[fact["id"]] = "unknown"
     initial_buckets = dict(buckets)
     groups = {}
     for fact in facts:
@@ -409,6 +437,8 @@ def clinical_state_fact(message, item, category, source="extract_llm"):
     """Adapt a stored DTO to the common temporal schema, preserving its original fields."""
     from mcs_queries import item_unverified
 
+    if category not in ("medications", "symptoms"):
+        raise ValueError("clinical state mentions must be medications or symptoms")
     message = dict(message)
     name = item.get("name" if category == "medications" else "text")
     if not isinstance(name, str) or not name.strip() or name in ("処方薬", "薬"):
