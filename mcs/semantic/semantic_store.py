@@ -185,8 +185,11 @@ def jev_usage_today(ledger) -> int:
     every external call (primary, detail, claim-audit, loop-relation,
     failed) is counted exactly once."""
     day = _jst_day_start(time.time())
-    # Rows are append-only (AUTOINCREMENT ids): resume from the last row
-    # already summed instead of re-parsing the whole day on every call.
+    # Committed rows are append-only (AUTOINCREMENT never reuses a committed
+    # id): resume from the last row already summed instead of re-parsing the
+    # whole day on every call. Inside a transaction the sum may include this
+    # connection's uncommitted rows, whose ids a rollback hands out again, so
+    # only a read outside one moves the cache.
     cache = getattr(ledger, "_jev_usage_cache", None)
     cached_day, last_id, total = cache if cache and cache[0] == day else (day, 0, 0)
     for r in ledger.db.execute(
@@ -200,5 +203,6 @@ def jev_usage_today(ledger) -> int:
             raise ValueError("semantic_usage_invalid")
         total += count
         last_id = r["artifact_id"]
-    ledger._jev_usage_cache = [cached_day, last_id, total]
+    if not ledger.db.in_transaction:
+        ledger._jev_usage_cache = [cached_day, last_id, total]
     return total

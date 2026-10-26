@@ -123,6 +123,20 @@ def test_usage_count_resumes_after_the_last_summed_row(tmp_path, monkeypatch):
         db.close()
 
 
+def test_a_rolled_back_usage_row_never_freezes_the_cached_count(tmp_path):
+    db = _seeded(tmp_path)
+    try:
+        db.db.execute("BEGIN IMMEDIATE")
+        db.artifact_add_tx('semantic_usage', '{}', meta={'jev_requests': 1})
+        assert semantic_store.jev_usage_today(db) == 1   # the own uncommitted row counts
+        db.db.rollback()
+        # the rollback hands the same id out again, to a different row
+        db.artifact_add('semantic_usage', '{}', meta={'jev_requests': 10})
+        assert semantic_store.jev_usage_today(db) == 10
+    finally:
+        db.close()
+
+
 def test_corrupt_usage_row_is_caught_after_the_count_is_warm(tmp_path):
     db = _seeded(tmp_path)
     try:
