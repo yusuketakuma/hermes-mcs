@@ -595,3 +595,38 @@ def verify_release_attestation(value, *, trust, expected, now_ms):
     _release_require(record['not_before'] <= payload['issued_at'] and payload['expires_at'] <= record['expires_at'] and record['not_before'] <= now_ms < record['expires_at'], 'RELEASE_SIGNATURE_KEY_DENIED')
     _release_require(_release_valid(entry, key))
     return payload
+
+
+REGISTRATION_PURPOSES = frozenset({'release-apply-registration-current'})
+
+
+def validate_registration_pins(pins, *, now_ms):
+    """Keep registration pins separate from all execution signing purposes."""
+    try:
+        pinned = parse_canonical(canonical(pins, max_bytes=16384), max_bytes=16384)
+        return _validate_pins(pinned, purpose='release-apply-registration-current', now_ms=now_ms, purposes=REGISTRATION_PURPOSES)
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError, UnicodeError):
+        raise SignatureError() from None
+
+
+def verify_registration_envelope(raw, *, pins, expected, now_ms):
+    """Verify a fresh challenge and independent device bindings, never issue a grant."""
+    try:
+        from adapters.sdc.release_registration_contract import EXPECTED, PURPOSE, validate_proof
+        _require(type(pins) is list and type(expected) is dict)
+        bindings = parse_canonical(canonical(expected), max_bytes=8192)
+        pinned = parse_canonical(canonical(pins, max_bytes=16384), max_bytes=16384)
+        _pin_set(pinned, REGISTRATION_PURPOSES)
+        _require(set(EXPECTED) <= set(bindings))
+
+        def validate(payload):
+            value = validate_proof(payload, now_ms=now_ms)
+            _require(all(k in value and canonical(v) == canonical(value[k]) for k, v in bindings.items()))
+            return value
+
+        return _verify_envelope(raw, purpose=PURPOSE, pins=pinned, now_ms=now_ms,
+                                purposes=REGISTRATION_PURPOSES, payload_validator=validate, cover_lifetime=True)
+    except SignatureError:
+        raise
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError, UnicodeError, ImportError):
+        raise SignatureError() from None

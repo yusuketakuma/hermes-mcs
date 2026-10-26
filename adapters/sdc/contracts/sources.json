@@ -29,7 +29,9 @@
     "releases/signature-vectors.json": "6c33fb6823f2c784f126b6b6f3be6ab3dd3e9c17882fba100ba22a08f1b31379",
     "releases/apply.schema.json": "1f10723acabb3defa2639e81aaf1cd8cb4c4f4a48e7959cc7c9ba806215416a0",
     "releases/apply-api.schema.json": "a7f68f5cdc8c69b32b3803c03556106e67b464337b5def9089e1d8532d80b082",
-    "releases/apply-vectors.json": "0ed3564a62d7e24f18170ad25e882ca1f63feac0d1164bab73fc26fd168329a3"
+    "releases/apply-vectors.json": "0ed3564a62d7e24f18170ad25e882ca1f63feac0d1164bab73fc26fd168329a3",
+    "releases/registration.schema.json": "1be14db4bb3979ed3cfdfa063d1ebcdb629f58b2283aefb3351ad0957eeaca2d",
+    "releases/registration-vectors.json": "25438bf8b2fbb1db8f26fb637c4b08d2366c71cb1b44debf9f90e1aabb20648a"
   },
   "status": "contract_snapshot_only",
   "central_integration": "provided_central_synthetic_427_passed_pregrant_status_real_acceptance_pending",

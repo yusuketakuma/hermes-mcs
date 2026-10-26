@@ -52,10 +52,12 @@ def test_central_copies_and_existing_shared_contracts_keep_their_frozen_bytes():
         'releases/release.schema.json': 'ba6161cb73cc2e77409412e74b4c09ca91bef90504d5b5eca9cf9315a37d763f',
         'releases/signature-vectors.json': '6c33fb6823f2c784f126b6b6f3be6ab3dd3e9c17882fba100ba22a08f1b31379',
     }
-    assert len(sources['files']) == 26
+    registration_files = {'releases/registration.schema.json': '1be14db4bb3979ed3cfdfa063d1ebcdb629f58b2283aefb3351ad0957eeaca2d', 'releases/registration-vectors.json': '25438bf8b2fbb1db8f26fb637c4b08d2366c71cb1b44debf9f90e1aabb20648a'}
+    assert len(sources['files']) == 28
+    assert {path: sources['files'][path] for path in registration_files} == registration_files
     assert {path: sources['files'][path] for path in release_files} == release_files
     assert set(sources['release_apply_component']['files']) == release_files.keys()
-    original = {path: digest for path, digest in sources['files'].items() if path not in release_files}
+    original = {path: digest for path, digest in sources['files'].items() if path not in release_files and path not in registration_files}
     # Pin the original 20 entries as well as the six byte-identical central release contracts.
     assert len(original) == 20
     assert hashlib.sha256(raw(original)).hexdigest() == '63dcc9080cc19d99e57faed6d159944fa5c88d8d43bb1198a63a75adf0f46c98'

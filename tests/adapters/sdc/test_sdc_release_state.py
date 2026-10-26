@@ -533,3 +533,29 @@ def test_entry_lock_replacement_never_rebases_existing_owner(store):
     path.touch(mode=0o600)
     with pytest.raises(ValueError, match='ENTRY_LOCK_MISMATCH'):
         state.status(store)
+
+
+def test_release_bootstrap_storage_is_separate_metadata_without_credential_or_activation(store, monkeypatch):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail('bootstrap metadata reached credentials or monitor projection')
+    monkeypatch.setattr(store, '_marker', forbidden)
+    monkeypatch.setattr(store, 'monitor_endpoint', forbidden)
+    assert store.read('release-bootstrap.json') is None
+    # The storage layer is not the bootstrap validator or an initialization permit.
+    saved = {'schema_version': 'mcs.release-bootstrap.v1', 'synthetic_metadata': True}
+    store.write('release-bootstrap.json', saved)
+    assert store.read('release-bootstrap.json') == saved
+    assert store.read(state.NAME) is None and store.read(state.ACTIVATION) is None
+    assert not state.legacy_blocked(store)
+    assert not (store.root / 'credential').exists()
+    assert not (store.root / 'support-bootstrap.json').exists()
+
+
+def test_oversized_release_bootstrap_keeps_previous_record(store):
+    from adapters.sdc.storage import LIMITS
+    assert LIMITS['release-bootstrap.json'] == 2 * 16384 + 4096
+    store.write('release-bootstrap.json', {'synthetic': True})
+    before = (store.root / 'release-bootstrap.json').read_bytes()
+    with pytest.raises(ValueError):
+        store.write('release-bootstrap.json', {'synthetic': 'x' * LIMITS['release-bootstrap.json']})
+    assert (store.root / 'release-bootstrap.json').read_bytes() == before

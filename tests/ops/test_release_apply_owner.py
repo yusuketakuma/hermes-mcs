@@ -595,3 +595,115 @@ def test_preupdate_copy_deadline_aborts_and_removes_its_staging_file(tmp_path, m
     with pytest.raises(maintenance.MaintenanceError, match='^backup_deadline_exceeded$'):
         maintenance.preupdate_backup(str(source), deadline=120.0)
     assert list(backups.iterdir()) == []
+
+
+def test_registration_request_owns_fresh_challenge_hmac_and_deadline_without_authority():
+    from adapters.sdc import release_registration_contract as contract
+    gold = __import__('json').loads((Path(__file__).resolve().parents[2] / 'adapters/sdc/contracts/releases/registration-vectors.json').read_text())
+    current = release_apply_owner._ReleaseCurrentness(
+        bootstrap={'release_endpoint': {'origin': 'https://synthetic.invalid', 'audience': gold['expected']['audience'], 'environment': 'synthetic'}, 'registration_pins': gold['pins']},
+        binding={'owner_evidence_sha256': 'd' * 64, 'device_epoch': 1, 'bootstrap_sha256': '1' * 64,
+                 'monitor_binding': {'synthetic': True}, 'support_snapshot_sha256': '2' * 64, 'monitor_snapshot_sha256': '3' * 64},
+        scope={k: v for k, v in gold['expected'].items() if k in contract.SCOPE},
+        identity={k: gold['expected'][k] for k in ('claim_id', 'device_id', 'key_id')}, secret='a1' * 32)
+    first = release_apply_owner._prepare_registration_read(current, expected_registration_id=None, now_ms=gold['now'], deadline=time.monotonic() + 10)
+    second = release_apply_owner._prepare_registration_read(current, expected_registration_id=None, now_ms=gold['now'], deadline=time.monotonic() + 10)
+    assert first.path == contract.PATH and first.body != second.body
+    assert dict(first.headers)['X-SDC-Nonce'] != dict(second.headers)['X-SDC-Nonce']
+    assert current.secret not in repr(current) + repr(first)
+    assert first.device_evidence_sha256 != '0' * 64
+    with pytest.raises(release_apply_owner.ReleaseApplyError, match='REGISTRATION_HOLD'):
+        release_apply_owner._prepare_registration_read(current, expected_registration_id=None, now_ms=gold['now'], deadline=time.monotonic() - 1)
+
+
+def test_registration_response_compares_signed_source_evidence_and_never_yields_an_effect_capability():
+    # Explicit public metadata fixture exercises only the reader, not a live factory issuer.
+    from adapters.sdc import release_registration_contract as contract
+    from adapters.sdc.support_contract import canonical
+    gold = __import__('json').loads((Path(__file__).resolve().parents[2] / 'adapters/sdc/contracts/releases/registration-vectors.json').read_text())
+    prepared = release_apply_owner._PreparedRegistrationRead('https://synthetic.invalid', contract.PATH, b'', (),
+        canonical(gold['expected']).encode(), canonical(gold['pins']).encode(), 'd' * 64, 'c' * 64, time.monotonic() + 10)
+    raw = canonical(dict(schema_version=contract.RESPONSE_VERSION, request_id='00000009-0000-4000-8000-000000000001', proof=gold['envelopes']['registered'])).encode()
+    value = release_apply_owner._verify_registration_read(prepared, raw, now_ms=gold['now'])
+    assert value['status'] == 'registered' and type(value) is dict
+    for changed in (replace(prepared, owner_evidence_sha256='e' * 64), replace(prepared, device_evidence_sha256='f' * 64), replace(prepared, deadline=time.monotonic() - 1)):
+        with pytest.raises(release_apply_owner.ReleaseApplyError, match='REGISTRATION_HOLD'):
+            release_apply_owner._verify_registration_read(changed, raw, now_ms=gold['now'])
+
+
+from test_sdc_provision import world as world  # noqa: E402,F401 - actual synthetic provision store
+from test_sdc_provision_profiles import registered as registered  # noqa: E402,F401 - actual synthetic registration
+
+
+@pytest.fixture
+def current_release(registered, tmp_path, monkeypatch):
+    from adapters.sdc import provision, release_contract, release_state
+    from test_sdc_provision import NOW
+    from test_sdc_provision_profiles import install
+    from test_sdc_release_state import baseline, APPLY
+    import json
+    install(registered, 'support')
+    monkeypatch.setenv('HOME', str(tmp_path))
+    home = tmp_path / 'runtime'
+    with release_apply_owner._control_store(home) as control:
+        monitor = provision.profile_snapshot(registered, profile='monitor', now_ms=NOW)
+        support = provision.profile_snapshot(registered, profile='support', now_ms=NOW)
+        state = registered.read('state.json')
+        supplied = baseline()
+        supplied['trust']['environment'] = monitor['bundle']['environment']
+        supplied['state'].update({k: monitor['bundle'][k] for k in ('tenant', 'installation', 'environment', 'realm_epoch')})
+        supplied['state'].update(device_id=state['device_id'], trust_digest=release_contract.hash_release_trust(supplied['trust']))
+        with control.release_entry_lock():
+            release_state._bootstrap_verified(control, **supplied)
+        enrollment = registered.enrollment_binding()
+        binding = {k: enrollment[k] for k in ('root_fingerprint', 'endpoint_hash')}
+        binding.update({k: state[k] for k in ('claim_id', 'device_id', 'key_id')})
+        binding.update({k: monitor['bundle'][k] for k in ('tenant', 'installation', 'environment', 'realm_epoch')})
+        gold = json.loads((Path(__file__).resolve().parents[2] / 'adapters/sdc/contracts/releases/registration-vectors.json').read_text())
+        config = dict(schema_version='mcs.release-bootstrap.v1', control_root_fingerprint=control.root_fingerprint(),
+            monitor_binding=binding, support_snapshot_sha256=registered._fingerprint(support),
+            release_endpoint={'origin': 'https://release.invalid', 'audience': 'synthetic-sdc', 'environment': binding['environment']},
+            operation_pins=APPLY['pins'], registration_pins=gold['pins'], initial_trust_sha256=release_contract.hash_release_trust(supplied['trust']))
+        control.write('release-bootstrap.json', config)
+        yield control, registered, home, NOW, config
+
+
+def test_currentness_reads_actual_profiles_credentials_and_owner_under_authority_locks(current_release):
+    control, monitor, home, now, config = current_release
+    with control.release_authority_lock(), monitor.lock():
+        value = release_apply_owner._load_release_currentness(control, monitor, runtime_home=home, now_ms=now, deadline=time.monotonic() + 10)
+    assert value.bootstrap == config and value.secret == 'a' * 64
+    assert value.scope['claim_id'] == monitor.read('state.json')['claim_id']
+    assert value.binding['owner_evidence_sha256'] == 'f' * 64
+    assert value.secret not in repr(value)
+    with pytest.raises(release_apply_owner.ReleaseApplyError, match='CURRENTNESS_HOLD'):
+        release_apply_owner._load_release_currentness(control, monitor, runtime_home=home, now_ms=now, deadline=time.monotonic() + 10)
+
+
+@pytest.mark.parametrize('change', ['root', 'support', 'identity', 'rotation', 'disabled', 'anchor', 'pins', 'deadline'])
+def test_currentness_rejects_changed_actual_identity_authority_or_expired_budget(current_release, change):
+    control, monitor, home, now, config = current_release
+    deadline = time.monotonic() + 10
+    if change == 'root':
+        config['control_root_fingerprint'] = '0' * 64
+    elif change == 'support':
+        config['support_snapshot_sha256'] = '0' * 64
+    elif change == 'anchor':
+        config['initial_trust_sha256'] = '0' * 64
+    elif change == 'pins':
+        config['registration_pins'] = config['operation_pins']
+    elif change == 'deadline':
+        deadline = time.monotonic() + 1
+    with control.release_authority_lock(), monitor.lock():
+        control.write('release-bootstrap.json', config)
+        state = monitor.read('state.json')
+        if change == 'identity':
+            state['key_id'] = '00000009-0000-4000-8000-000000000001'
+        elif change == 'rotation':
+            state['rotation_id'] = '00000009-0000-4000-8000-000000000001'
+        elif change == 'disabled':
+            state['enabled'] = False
+        if change in ('identity', 'rotation', 'disabled'):
+            monitor.write('state.json', state)
+        with pytest.raises(release_apply_owner.ReleaseApplyError, match='CURRENTNESS_HOLD'):
+            release_apply_owner._load_release_currentness(control, monitor, runtime_home=home, now_ms=now, deadline=deadline)

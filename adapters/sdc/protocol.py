@@ -188,3 +188,12 @@ def observation(facts, sequence, event_id, observed_at, dropped):
             'installed': {'mcs_commit': facts.get('mcs_commit'), 'python_version': facts.get('python_version'), 'macos_version': facts.get('macos_version')},
             'runtime': {'mode': facts.get('mode', 'unknown'), 'mcs_process': facts.get('mcs_process', 'unknown'), 'loaded_commit': facts.get('loaded_commit')},
             'clock_status': facts.get('clock_status', 'unknown'), 'dropped_events': dropped}
+
+
+def sign_release_registration(config, path, raw, state, key, *, now, nonce):
+    """Sign only the dedicated registration read; old request families stay closed."""
+    from .release_registration_contract import PATH, validate_request
+    if path != PATH or type(raw) is not bytes:
+        raise ValueError('SDC_REQUEST_INVALID')
+    validate_request(raw)
+    return _sign_support_request(config, path, raw, state, key, now=now, nonce=nonce)

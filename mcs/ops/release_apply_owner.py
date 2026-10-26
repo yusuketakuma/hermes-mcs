@@ -56,6 +56,184 @@ _EFFECT_CLAIMED = set()
 _EFFECT_RUNNING = set()
 
 
+@dataclass(frozen=True, repr=False)
+class _ReleaseCurrentness:
+    bootstrap: dict
+    binding: dict
+    scope: dict
+    identity: dict
+    secret: str
+
+
+def _load_release_currentness(control, monitor, *, runtime_home, now_ms, deadline):
+    """Read dedicated public bootstrap and actual identity; never issue consent or a capability."""
+    from adapters.sdc import provision, release_contract, release_state
+    from adapters.sdc.connector import Connector
+    from adapters.sdc.protocol import endpoint
+    from sdc_support_signatures import APPLY_PURPOSES, validate_apply_pins, validate_registration_pins
+    try:
+        if (control._release_authority_fd is None
+                or control._release_authority_thread != threading.get_ident()
+                or monitor._tick_fd is None or monitor._tick_thread != threading.get_ident()
+                or control.root != _control_root(runtime_home)
+                or not release_contract.integer(now_ms)
+                or type(deadline) not in (int, float) or not math.isfinite(deadline)
+                or time.monotonic() + 5 > deadline
+                or getattr(control, '_release_owner_uncertain', False)):
+            raise ReleaseApplyError('CURRENTNESS_HOLD')
+        # The two independently bounded pin sets exceed the single-wire 16 KiB helper limit.
+        raw_bootstrap = json.dumps(control.read('release-bootstrap.json'), ensure_ascii=True, allow_nan=False, separators=(',', ':')).encode('ascii')
+        if len(raw_bootstrap) > 2 * 16384 + 4096:
+            raise ReleaseApplyError('CURRENTNESS_HOLD')
+        value = json.loads(raw_bootstrap)
+        release_contract.fields(value, ('schema_version', 'control_root_fingerprint', 'monitor_binding',
+            'support_snapshot_sha256', 'release_endpoint', 'operation_pins', 'registration_pins', 'initial_trust_sha256'))
+        bound = value['monitor_binding']
+        identity_fields = ('claim_id', 'device_id', 'key_id')
+        profile_fields = ('tenant', 'installation', 'environment', 'realm_epoch')
+        release_contract.fields(bound, ('root_fingerprint', 'endpoint_hash', *identity_fields, *profile_fields))
+        if (value['schema_version'] != 'mcs.release-bootstrap.v1'
+                or value['control_root_fingerprint'] != control.root_fingerprint()
+                or not all(release_contract.hex64(v) for v in (
+                    value['support_snapshot_sha256'], value['initial_trust_sha256'],
+                    bound['root_fingerprint'], bound['endpoint_hash']))
+                or not all(release_contract.uuid(bound[k]) for k in identity_fields)):
+            raise ReleaseApplyError('CURRENTNESS_HOLD')
+        enrollment = monitor.enrollment_binding()
+        current_monitor = provision.profile_snapshot(monitor, profile='monitor', now_ms=now_ms)
+        support = provision.profile_snapshot(monitor, profile='support', now_ms=now_ms)
+        if (any(bound[k] != enrollment[k] for k in ('root_fingerprint', 'endpoint_hash'))
+                or monitor._fingerprint(support) != value['support_snapshot_sha256']
+                or any(bound[k] != current_monitor['bundle'][k] for k in profile_fields)
+                or current_monitor['root_fingerprint'] != bound['root_fingerprint']
+                or support['root_fingerprint'] != bound['root_fingerprint']):
+            raise ReleaseApplyError('CURRENTNESS_HOLD')
+        state = monitor.read('state.json')
+        if (type(state) is not dict or state.get('state') != 'active' or state.get('enabled') is not True
+                or any(state.get(k) for k in ('disconnected', 'central_suspended', 'enrollment_hold'))
+                or 'rotation_id' in state or any(state.get(k) != bound[k] for k in identity_fields)
+                or any(support['bundle'][k] != bound[k] for k in ('claim_id', 'device_id'))):
+            raise ReleaseApplyError('CURRENTNESS_HOLD')
+        monitor.guard_credential()
+        credential = monitor.read('credential')
+        if (type(credential) is not dict
+                or any(k in credential for k in ('next_key', 'next_key_id', 'rotation_id'))
+                or credential.get('key_id') != bound['key_id']):
+            raise ReleaseApplyError('CURRENTNESS_HOLD')
+        secret = Connector(monitor, None).secret(state, credential)
+        if not release_contract.hex64(secret):
+            raise ReleaseApplyError('CURRENTNESS_HOLD')
+        release_endpoint = endpoint(value['release_endpoint'])
+        if release_endpoint['environment'] != bound['environment']:
+            raise ReleaseApplyError('CURRENTNESS_HOLD')
+        for purpose in APPLY_PURPOSES:
+            validate_apply_pins(value['operation_pins'], purpose=purpose, now_ms=now_ms)
+        validate_registration_pins(value['registration_pins'], now_ms=now_ms)
+        # Actual credential I/O finishes before the short control-store lock.
+        with control.release_owner_lock():
+            owner = release_state._read(control)
+            activation = control.read(release_state.ACTIVATION)
+            if (activation['initial_trust_sha256'] != value['initial_trust_sha256']
+                    or any(owner['state'][k] != bound[k] for k in (*profile_fields, 'device_id'))):
+                raise ReleaseApplyError('CURRENTNESS_HOLD')
+        monitor.guard_credential()
+        if (control.read('release-bootstrap.json') != value
+                or monitor.enrollment_binding() != enrollment
+                or provision.profile_snapshot(monitor, profile='monitor', now_ms=now_ms) != current_monitor
+                or provision.profile_snapshot(monitor, profile='support', now_ms=now_ms) != support
+                or monitor.read('state.json') != state or time.monotonic() >= deadline):
+            raise ReleaseApplyError('CURRENTNESS_HOLD')
+        binding = {'bootstrap_sha256': control._fingerprint(value),
+            'monitor_binding': bound, 'support_snapshot_sha256': value['support_snapshot_sha256'],
+            'monitor_snapshot_sha256': monitor._fingerprint(current_monitor),
+            'credential_sha256': monitor._fingerprint(credential),
+            'owner_evidence_sha256': owner['owner_evidence_sha256'],
+            'device_epoch': support['bundle']['device_epoch']}
+        scope = {k: owner['state'][k] for k in (*release_contract.EXPECTED_FIELDS,
+                                              'tenant', 'installation', 'device_id', 'realm_epoch')}
+        scope.update(audience=release_endpoint['audience'], claim_id=bound['claim_id'], key_id=bound['key_id'])
+        return _ReleaseCurrentness(value, binding, scope, {k: bound[k] for k in identity_fields}, secret)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        raise ReleaseApplyError('CURRENTNESS_HOLD') from None
+
+
+
+@dataclass(frozen=True, repr=False)
+class _PreparedRegistrationRead:
+    endpoint: str
+    path: str
+    body: bytes
+    headers: tuple
+    expected: bytes
+    pins: bytes
+    owner_evidence_sha256: str
+    device_evidence_sha256: str
+    deadline: float
+
+
+def _prepare_registration_read(current, *, expected_registration_id, now_ms, deadline):
+    """The owner creates the challenge and immutable wire bytes before untrusted transport."""
+    from adapters.sdc import protocol, release_contract
+    from adapters.sdc import release_registration_contract as registration
+    from adapters.sdc.support_contract import canonical
+    try:
+        if (type(current) is not _ReleaseCurrentness or not release_contract.integer(now_ms)
+                or type(deadline) not in (int, float) or not math.isfinite(deadline)
+                or time.monotonic() >= deadline):
+            raise ValueError
+        import uuid
+        body = dict(schema_version=registration.REQUEST_VERSION, request_id=str(uuid.uuid4()),
+                    expected_registration_id=expected_registration_id)
+        registration.validate_request(body)
+        encoded = canonical(body).encode('ascii')
+        endpoint = current.bootstrap['release_endpoint']
+        expected = {k: current.scope[k] for k in registration.SCOPE if k not in ('policy_epoch', 'device_epoch')}
+        # This release capability is restricted to the self tenant's fixed policy epoch.
+        if expected['tenant'] != 'self':
+            raise ValueError
+        expected.update(policy_epoch=1, device_epoch=current.binding['device_epoch'],
+                        request_id=body['request_id'], expected_registration_id=expected_registration_id)
+        owner_hash = current.binding['owner_evidence_sha256']
+        if not release_contract.hex64(owner_hash) or owner_hash == '0' * 64:
+            raise ValueError
+        device_hash = hashlib.sha256(canonical(dict(
+            schema_version='mcs.release.registration-evidence.v1',
+            bootstrap_sha256=current.binding['bootstrap_sha256'],
+            monitor_binding=current.binding['monitor_binding'],
+            support_snapshot_sha256=current.binding['support_snapshot_sha256'],
+            monitor_snapshot_sha256=current.binding['monitor_snapshot_sha256'],
+            owner_evidence_sha256=owner_hash, device_epoch=current.binding['device_epoch'])).encode('ascii')).hexdigest()
+        headers = protocol.sign_release_registration(endpoint, registration.PATH, encoded,
+            current.identity, current.secret, now=now_ms / 1000, nonce=secrets.token_hex(16))
+        return _PreparedRegistrationRead(endpoint['origin'], registration.PATH, encoded,
+            tuple(sorted(headers.items())), canonical(expected).encode('ascii'),
+            canonical(current.bootstrap['registration_pins'], max_bytes=16384).encode('ascii'),
+            owner_hash, device_hash, float(deadline))
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError):
+        raise ReleaseApplyError('REGISTRATION_HOLD') from None
+
+
+def _verify_registration_read(prepared, raw, *, now_ms):
+    """Only verified current registered bytes with independently accepted evidence may pass."""
+    from adapters.sdc import release_registration_contract as registration
+    from adapters.sdc.support_contract import canonical
+    from sdc_support_signatures import verify_registration_envelope
+    try:
+        if (type(prepared) is not _PreparedRegistrationRead or type(raw) is not bytes
+                or time.monotonic() >= prepared.deadline):
+            raise ValueError
+        response = registration.validate_response(raw)
+        value = verify_registration_envelope(canonical(response['proof']).encode('ascii'),
+            pins=json.loads(prepared.pins), expected=json.loads(prepared.expected), now_ms=now_ms)
+        if (value['status'] != 'registered'
+                or value['owner']['owner_evidence_sha256'] != prepared.owner_evidence_sha256
+                or value['registration']['device_evidence_sha256'] != prepared.device_evidence_sha256
+                or time.monotonic() >= prepared.deadline):
+            raise ValueError
+        return value
+    except (ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError):
+        raise ReleaseApplyError('REGISTRATION_HOLD') from None
+
 def _effect_fd_identity(fd):
     if type(fd) is not int or fd < 0:
         raise ReleaseApplyError('EFFECT_HOLD')
