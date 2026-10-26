@@ -262,7 +262,7 @@
   ],
   "fragment_sha256": {
     "attachment-preflight-batch-recovery": "cdbd79069bb04914a4120e1cb68c773b67513c0d691db00f5d00ca29fc895c13",
-    "collection-error-guidance": "a0be14b8351975bd967957b8ec0f371296050df324ae57f559c27ec75b121567",
+    "collection-error-guidance": "62365ccc36890e4849bdb66c878414857a31068b18112ca0e9c8fc432da18a65",
     "csdc-cold-recovery": "e2e105e6429044a8bbc6a754f9fab3933a022ca4ca5d02463db3ac6f3e58904d",
     "db-capacity-observability": "ca3ebd925d46cae099914d354ddeace9d75bde4b1ebb8066d042be2c0b521665",
     "docs-s7-docstring-corrections": "f22f78514d3cc2bfe4351f68f5d196f249c0ae12651e713fa0b5f8e383d7704c",
