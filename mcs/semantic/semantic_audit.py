@@ -367,7 +367,8 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
         # facts covering them) are a deterministic blocker: the audited
         # facts may all be supported, yet the doc is not complete
         findings.append({"code": "canonical_coverage_incomplete"})
-    if jev_client is None:
+    # an invalid batch size must not skip every fact (range() runs empty)
+    if jev_client is None or type(per_request) is not int or not 1 <= per_request <= 48:
         findings.append({"code": "fact_audit_unevaluated"})
         return {"status": "INCOMPLETE", "evaluated": False,
                 "findings": findings, "fact_verdicts": {}}
@@ -397,13 +398,18 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
     # source copy) per fact.
     for start in range(0, len(pending), per_request):
         chunk = pending[start:start + per_request]
+        # context ids are code-owned aliases: an evidence id may itself be
+        # "source" (or collide with another fact's alias), so quotes never
+        # share the id space of the one source context
         ctx = {"source": {"id": "source", "role": "evidence_context", "text": source_text}}
+        aliases = {}
         questions = {}
         for fact, quotes in chunk:
             cited = []
             for ref, quote in quotes:
-                ctx[ref] = {"id": ref, "role": "evidence_quote", "text": quote}
-                cited.append(ref)
+                alias = aliases.setdefault(ref, f"quote_{len(aliases) + 1}")
+                ctx[alias] = {"id": alias, "role": "evidence_quote", "text": quote}
+                cited.append(alias)
             questions[fact["fact_id"]] = jev.choice_question(
                 _FACT_QUESTION.format(fact=fact["fact_id"], entries=", ".join(cited) or "none"),
                 FACT_SUPPORT_OPTIONS)

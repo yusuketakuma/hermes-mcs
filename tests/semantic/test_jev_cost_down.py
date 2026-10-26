@@ -2,6 +2,8 @@
 import json
 import time
 
+import pytest
+
 import semantic_audit
 import semantic_drain
 import semantic_jev as jev
@@ -62,3 +64,36 @@ def test_fact_audit_batches_facts_and_sends_the_source_once():
     for state, _q in audits:
         assert sum(item["id"] == "source" for item in state["context"]) == 1
     assert set(result["fact_verdicts"]) == {f["fact_id"] for f in facts}
+
+
+@pytest.mark.parametrize("size", [0, -1, 49, True, 1.0])
+def test_an_invalid_fact_batch_size_never_skips_the_audit(size):
+    calls = []
+
+    class Capture(_Jev):
+        def evaluate(self, state, questions, deadline):
+            calls.append(questions)
+            return super().evaluate(state, questions, deadline)
+
+    result = semantic_audit.audit_facts_v2(Capture(), v2_doc([_fact("fact_a")], [EV]), "原文。",
+                                           deadline=10 ** 9, per_request=size)
+    assert not result["evaluated"] and result["status"] == "INCOMPLETE" and not calls
+    assert {"code": "fact_audit_unevaluated"} in result["findings"]
+
+
+def test_an_evidence_id_named_source_keeps_the_full_source_context():
+    evidence = {**EV, "evidence_id": "source"}
+    doc = v2_doc([_fact("fact_a", evidence_ids=["source"])], [evidence])
+    seen = []
+
+    class Capture(_Jev):
+        def evaluate(self, state, questions, deadline):
+            seen.append(state)
+            return super().evaluate(state, questions, deadline)
+
+    source_text = "完全合成の原文全体。" + EV["quote"] + "続きの文。"
+    semantic_audit.audit_facts_v2(Capture(), doc, source_text, deadline=10 ** 9)
+    [state] = [s for s in seen if s["target"]["id"] == "facts"]
+    by_id = {c["id"]: c for c in state["context"]}
+    assert by_id["source"]["text"] == source_text and by_id["source"]["role"] == "evidence_context"
+    assert [c["role"] for c in state["context"]].count("evidence_quote") == 1
