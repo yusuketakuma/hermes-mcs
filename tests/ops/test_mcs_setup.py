@@ -870,7 +870,7 @@ def test_wizard_defaults_and_gates(monkeypatch, tmp_path):
     assert not errors
     assert effective["mode"] == "off"
     assert effective["project_ids"] == []
-    assert effective["daily_request_budget"] == 500
+    assert effective["daily_request_budget"] == 10000
 
 
 def test_wizard_discord_scope_and_answers(monkeypatch, tmp_path):
