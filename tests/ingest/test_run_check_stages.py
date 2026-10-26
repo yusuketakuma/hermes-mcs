@@ -168,7 +168,8 @@ def test_tick_real_storage_snapshot_and_replay(tmp_path, monkeypatch, capsys):
     capsys.readouterr()
     db = ledger.LedgerReader(str(data / "snapshots" / "ledger-snapshot.db"))
     assert db.db.execute("SELECT count(*) FROM messages").fetchone()[0] == 1
-    assert db.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0] == 1
+    # the newly discovered patient also gets its initial-history progress rows
+    assert db.db.execute("SELECT count(*) FROM notify_outbox WHERE kind!='patient_history'").fetchone()[0] == 1
     assert db.db.execute("SELECT count(*) FROM read_marks").fetchone()[0] == 0
     assert db.db.execute("SELECT count(*) FROM artifacts WHERE kind='karte_summary'").fetchone()[0] == 1
     assert db.db.execute("SELECT count(*) FROM requests").fetchone()[0] == 1
@@ -297,8 +298,9 @@ def test_unread_commit_boundary_preserves_work_before_ack(tmp_path, monkeypatch,
     db.close()
     db = ledger.Ledger(path)
     expected = int(stop == "after_commit")
-    for table in ("messages", "notify_outbox"):
-        assert db.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == expected
+    for table, where in (("messages", ""), ("notify_outbox", " WHERE kind='new_messages'"),
+                         ("notify_outbox", " WHERE kind='patient_history'")):
+        assert db.db.execute(f"SELECT count(*) FROM {table}{where}").fetchone()[0] == expected
     assert db.db.execute(
         "SELECT count(*) FROM fetch_jobs WHERE kind='semantic'"
     ).fetchone()[0] == expected
@@ -306,8 +308,8 @@ def test_unread_commit_boundary_preserves_work_before_ack(tmp_path, monkeypatch,
 
     run()
     assert marks == [(1, 123)]
-    for table in ("messages", "notify_outbox"):
-        assert db.db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 1
+    for table, where in (("messages", ""), ("notify_outbox", " WHERE kind='new_messages'")):
+        assert db.db.execute(f"SELECT count(*) FROM {table}{where}").fetchone()[0] == 1
     assert db.db.execute(
         "SELECT count(*) FROM fetch_jobs WHERE kind='semantic'"
     ).fetchone()[0] == 1
