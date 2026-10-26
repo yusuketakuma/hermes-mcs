@@ -65,11 +65,22 @@ def test_discord_answer_tokens_land_while_gate_closes(tmp_path):
     assert action._reg.token(token)['synthetic'] is True
 
 
-def test_lost_reap_child_is_not_busy():
+@pytest.mark.parametrize('reaper', ['echild', 'unexpected_pid'])
+def test_lost_reap_child_stays_busy_until_exit_is_observed(monkeypatch, reaper):
     carrier = object.__new__(restart_credential.CredentialCarrier)
     carrier._spawning = carrier._request = carrier._response = None
     carrier._child = SimpleNamespace(pid=2 ** 22, returncode=None)
-    carrier._lost_reap = False
+    carrier._lost_reap = carrier._failed = False
     assert carrier.busy
-    carrier._lost_reap = True  # ECHILD: someone else reaped it, it can never report a code
+
+    def unknown_child(*_args):
+        if reaper == 'echild':
+            raise ChildProcessError
+        return carrier._child.pid + 1, 0
+
+    monkeypatch.setattr(restart_credential.os, 'waitpid', unknown_child)
+    carrier._poll()
+    assert carrier._lost_reap and carrier._failed and carrier._child.returncode is None
+    assert carrier.busy
+    carrier._child.returncode = 0
     assert not carrier.busy

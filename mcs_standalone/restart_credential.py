@@ -85,7 +85,7 @@ class CredentialCarrier:
     @property
     def busy(self):
         return (self._spawning is not None
-                or self._child is not None and self._child.returncode is None and not self._lost_reap
+                or self._child is not None and self._child.returncode is None
                 or any(p is not None and not p.closed for p in (self._request, self._response)))
 
     @property
