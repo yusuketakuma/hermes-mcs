@@ -17,7 +17,8 @@ from adapters.common.spec import post_scoped, reply_card_key, token_map
 from adapters.common.worker import WorkspaceDeliveryWorker as _BaseWorker
 
 from .cards import render, validate
-from .presentation import has_header_part, is_header_part, mention_ids, thread_part_blocks
+from adapters.common.announce import new_reply_announced
+from .presentation import mention_ids, thread_part_blocks
 from .paths import notify_dirs
 
 _TS = re.compile(r"^[0-9]+\.[0-9]{6}$")
@@ -135,18 +136,6 @@ async def call_native(fn, *, retry_allowed=None, **kwargs):
 # first chunk of one MCS post in a thread card (notify_parts._body_groups):
 # its summary/stamps header when the post is header/body-split, else
 # its first source-text chunk
-_NEW_POST = re.compile(r"(m:[1-9][0-9]{0,18})#1")
-
-
-def _announces(spec, part) -> bool:
-    """The one chunk of a post that may broadcast to the channel."""
-    if part.get("broadcast") is False:
-        return False
-    name = str(part.get("name") or "")
-    if is_header_part(name):
-        return True
-    found = _NEW_POST.fullmatch(name)
-    return bool(found) and not has_header_part(spec, found.group(1))
 # chat.update rejections that prove the prior reply cannot be edited
 _REPOST_ON_UPDATE = frozenset({"message_not_found", "cant_update_message",
                                "edit_window_closed"})
@@ -535,12 +524,7 @@ class DeliveryWorker(_BaseWorker):
         # channel: an edit of the old card notifies nobody, so a late
         # reply would otherwise reach only the thread's followers
         broadcast = ({"reply_broadcast": True}
-                     if spec["op"] == "update" and part is not None
-                     and spec["delivery"].get("intent_event_ids")
-                     and part.get("kind") == "body_part"
-                     and not part.get("prior_remote_id")
-                     and _announces(spec, part)
-                     else {})
+                     if new_reply_announced(spec, part) else {})
         try:
             response = await self._blocks_call(
                 sender.chat_postMessage, blocks,

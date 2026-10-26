@@ -1,0 +1,20 @@
+{
+  "category": "added",
+  "title": "Discordでもスレッドへの新しい返信をチャンネルに知らせる",
+  "summary": "Discordで、すでに届いている会話カードのスレッドに新しい返信が加わったとき、チャンネルにも短い告知を投稿します。告知には返信の見出し行と、スレッドの投稿へのリンクが入ります。これまでSlackだけが、こうした返信をチャンネルにも表示していました。",
+  "upgrade": "設定変更は不要です。Hermes経由はgateway、独立実行はDiscordアダプターの再起動後に有効です。更新前の通知workerは、この告知を含む配送指示を受け付けずに保留します。",
+  "details": [
+    "対象は、返信を1件ずつのカードにしない会話カード（layout 3）のスレッドで、Slackのreply_broadcastと同じ条件です。返信カード（layout 4）はSlack・Discordとも従来どおりスレッド内だけに表示します。",
+    "告知は返信をスレッドへ投稿できた後に1回だけ送ります。告知の送信に失敗しても返信の配送は完了扱いのままで、告知は再送しません。メンションは無効です。",
+    "どの返信を告知するかの判定を、SlackとDiscordで共通の部品にまとめました。LINE WORKSは投稿がもともとトークルームに出るため対象外です。"
+  ],
+  "refs": [
+    "adapters/common/announce.py",
+    "adapters/discord/delivery.py",
+    "adapters/slack/delivery.py",
+    "adapters/slack/presentation.py",
+    "adapters/common/spec.py",
+    "mcs/notify/notify_parts.py",
+    "tests/adapters/discord/test_discord_reply_announce.py"
+  ]
+}

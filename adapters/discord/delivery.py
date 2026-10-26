@@ -17,6 +17,7 @@ import io
 from functools import partial
 
 from adapters.common import paths, registry, worker
+from adapters.common.announce import new_reply_announced
 from adapters.common.spec import post_scoped
 from . import cards
 
@@ -353,7 +354,27 @@ class DeliveryWorker(worker.DeliveryWorker):
             # identity — honest unknown, never a bare 'delivered'
             return {"result": "unknown",
                     "error_code": "missing_remote_id"}
+        if new_reply_announced(spec, part):
+            await self._announce_reply(spec, body, sent)
         return {"result": "delivered", "remote_id": str(rid)}
+
+    async def _announce_reply(self, spec: dict, body: str, sent) -> None:
+        """Discord has no reply_broadcast: a late reply gets one short channel
+        notice linking the thread post. Best effort and never retried — the
+        thread post is already delivered and must not be resent for it."""
+        link = getattr(sent, "jump_url", None)
+        if not isinstance(link, str) or not link.startswith("https://"):
+            return
+        head = body.split("\n", 1)[0][:200]
+        try:
+            channel = await self._channel(spec["delivery"]["channel_id"])
+            await single_post(self._bot, partial(
+                channel.send, f"↳ スレッドに新しい返信: {head}\n{link}",
+                allowed_mentions=cards.no_pings()))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._log("reply_announce_failed", error=type(exc).__name__)
 
     async def _thread_part(self, claim: dict, part: dict,
                            ctx: dict) -> dict:

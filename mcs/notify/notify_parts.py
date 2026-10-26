@@ -21,6 +21,8 @@ _TRUNCATED_PART = "（配送上限のため更新を保留 — 原本を参照�
 _THREAD_BODY_COLLECTED = "（この区画の内容は更新済みの本文に集約しました）"
 
 # a body part's post key: m:<message_id>[:header]#<part>; group 1 is the message id
+# transports whose late thread replies also reach the parent channel
+ANNOUNCE_TRANSPORTS = ("slack", "discord")
 BODY_POST_KEY = re.compile(r"m:([1-9][0-9]*)(?::header)?#[1-9][0-9]*")
 
 def late_attachment_thread(cfg: dict) -> bool:
@@ -641,10 +643,11 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                            wire_size=present.thread_part_wire_size)
                     if hasattr(present, "THREAD_PART_WIRE_LIMIT") else split_body_chunks)
     editable = present.EDITABLE
-    slack_thread = card["transport"] == "slack" and card["kind"] == "thread"
+    # Slack posts the reply with reply_broadcast; Discord adds a channel notice
+    announce_thread = card["transport"] in ANNOUNCE_TRANSPORTS and card["kind"] == "thread"
     announced = (_announced_ids(db, card, event_ids=set(spec["delivery"]["intent_event_ids"]),
                                body_only=True)
-                 if update and slack_thread else set())
+                 if update and announce_thread else set())
     if hasattr(present, "overflow"):
         keyed.extend(present.overflow(parts, split_chunks))
     for key, mids in _body_groups(db, card, planned, posts):
@@ -720,7 +723,7 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 # another same-text post can never stand in for it.
                 entry["prior_remote_id"] = proven[0]
                 entry["edit_only"] = True
-        if slack_thread:
+        if announce_thread:
             post = BODY_POST_KEY.fullmatch(key)
             # An edit/page move can create a first thread part beside a new
             # intent. Only that intent's source posts may notify the channel.

@@ -105,7 +105,7 @@ def test_broadcast_rejects_unsealed_or_unsupported_targets(fault):
     if fault in ("int", "null", "string"):
         part["broadcast"] = {"int": 1, "null": None, "string": "true"}[fault]
     elif fault == "transport":
-        value["delivery"]["transport"] = "discord"
+        value["delivery"]["transport"] = "lineworks"
     elif fault == "card":
         part.pop("broadcast")
         value["parts"]["manifest"][0]["broadcast"] = True

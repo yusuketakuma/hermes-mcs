@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from html import escape
 
+from adapters.common.announce import has_header_part, is_header_part  # noqa: F401 - re-exported for Slack callers
 from adapters.common.context_view import context_entries, safe_url  # noqa: F401 - safe_url re-exported for cards
 
 SECTION_MAX = 3000
@@ -12,7 +13,6 @@ CONTEXT_MAX = 2000
 BLOCK_MAX = 50
 _CONTAINER_MAX = 10
 _ANSWER_BLOCKS = BLOCK_MAX - 1
-_HEADER_PART = re.compile(r"^(m:[1-9][0-9]{0,18}):header#1$")
 _BODY_PART = re.compile(r"^(m:[1-9][0-9]{0,18})#[1-9][0-9]{0,4}$")
 _STAMP_LINE = "スタンプ "
 _DIVIDER = {"type": "divider"}
@@ -72,17 +72,6 @@ def thread_part_blocks(spec, part, text):
     if len(sections) > _CONTAINER_MAX:
         return None                      # longer than one container holds
     return [_folded_original(text)]
-
-def is_header_part(name) -> bool:
-    """The summary/stamps header chunk of one post (``m:<id>:header#1``)."""
-    return _HEADER_PART.fullmatch(name) is not None
-
-
-def has_header_part(spec, post) -> bool:
-    """Whether the manifest splits post ``m:<id>`` into a header and its body chunks."""
-    return f"{post}:header#1" in {
-        str(p.get("name") or "") for p in spec["parts"].get("manifest") or []}
-
 
 def _folded_original(text):
     """The post's original as one collapsed 「原文（N字）」 container."""

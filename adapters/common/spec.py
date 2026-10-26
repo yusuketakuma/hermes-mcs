@@ -438,7 +438,7 @@ def _validate_manifest(manifest, *, spec=None) -> None:
         if "broadcast" in p:
             if (type(p["broadcast"]) is not bool or kind != "body_part"
                     or spec is None or spec.get("kind") != "thread"
-                    or spec.get("delivery", {}).get("transport") != "slack"
+                    or spec.get("delivery", {}).get("transport", "discord") not in ("slack", "discord")
                     or (p["broadcast"] and (spec.get("op") != "update"
                         or not spec["delivery"].get("intent_event_ids")
                         or p.get("prior_remote_id") or p.get("edit_only")))):
