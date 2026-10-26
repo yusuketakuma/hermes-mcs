@@ -14,6 +14,7 @@
     "mcs/core/initial_import_state.py",
     "mcs/core/ledger.py",
     "mcs/core/ledger_schema.py",
+    "mcs/views/mcs_view.py",
     "mcs/ingest/collection_stages.py",
     "mcs/ingest/job_ops.py"
   ]

@@ -7,6 +7,29 @@ import pytest
 import mcs_view
 
 
+@pytest.mark.parametrize("version,accepted", [(9, True), (10, True), (11, False)])
+def test_snapshot_schema_generation_is_explicit_and_readonly(tmp_path, version, accepted):
+    path = tmp_path / "synthetic-snapshot.db"
+    db = sqlite3.connect(path)
+    try:
+        db.executescript(f"PRAGMA user_version={version};"
+                        "CREATE TABLE snapshot_meta(singleton INTEGER,generation_id,generated_at);"
+                        "INSERT INTO snapshot_meta VALUES(1,'synthetic-generation',100);")
+    finally:
+        db.close()
+    if not accepted:
+        with pytest.raises(ValueError, match="snapshot_upgrade_required"):
+            mcs_view.View(path)
+        return
+    view = mcs_view.View(path)
+    try:
+        assert view.meta == {"generation_id": "synthetic-generation", "generated_at": 100}
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            view.db.execute("DELETE FROM snapshot_meta")
+    finally:
+        view.close()
+
+
 @pytest.mark.parametrize("generation,timestamp", [
     ("", 100), ("  ", 100), (b"synthetic", 100),
     ("synthetic", None), ("synthetic", "invalid"), ("synthetic", -1),
