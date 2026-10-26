@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "抽出の事前判定・ディスク下限・LLM受付制御をconfig.jsonで設定",
+  "summary": "これまで環境変数でだけ切り替えていた3つの設定を、config.jsonの extract.prefilter・local_llm.disk_guard_mb・local_llm.admission で設定できるようにしました。mcs_setup.py settings で表示・設定でき、CodexやClaude Codeからも実行できます。",
+  "upgrade": "設定の変更は不要です。config.jsonに値がない間は、従来の環境変数（MCS_EXTRACT_PREFILTER・MCS_DISK_GUARD_MB・MCS_LLM_ADMISSION）を読みます。両方に値がある場合はconfig.jsonを優先します。反映には定期処理と常駐処理の再起動が必要です。",
+  "details": [
+    "既定値は従来と同じです（事前判定はon、ディスク下限は512MB、受付制御はoff）。",
+    "設定ファイルを読み取れない場合や値が不正な場合、コマンドは保存しません。保存前に設定検査を通し、権限0600で書き込みます。",
+    "Anthropicの予算コマンド（cloud-llm budget）も同じ保存処理を使います。"
+  ],
+  "refs": [
+    "mcs/ops/config_edit.py",
+    "mcs/core/mcs_config.py",
+    "mcs/extract/llm/extract_llm.py",
+    "mcs/llm/llm_availability.py",
+    "mcs/llm/local_llm.py"
+  ]
+}

@@ -72,6 +72,7 @@ def semantic_config(cfg: dict, *, key_present=False) -> tuple[dict, list]:
     if block is None:
         block = {}
     if not isinstance(block, dict):
+        out["daily_request_budget"] = 0
         return out, ["config: semantic_not_object"]
     if "mode" in block:
         out["daily_request_budget"] = 0

@@ -1591,6 +1591,8 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_doctor, yes=True)
     import cloud_cli
     cloud_cli.add_parsers(sub)
+    import config_edit
+    config_edit.add_parsers(sub)
     args = ap.parse_args(argv)
     try:
         return args.fn(args)

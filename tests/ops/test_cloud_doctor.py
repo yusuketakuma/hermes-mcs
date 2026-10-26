@@ -88,6 +88,21 @@ def test_doctor_without_data_probe_does_not_read_any_ledger(local, monkeypatch):
     assert report["anthropic"]["dry_run"] is None and report["anthropic"]["accounting"] is None
 
 
+def test_daily_cost_stop_is_visible_in_readonly_diagnostics_and_forecast(local, monkeypatch):
+    root, ledger, _ = local
+    monkeypatch.setattr(cloud_policy, "api_key", lambda root=None: "synthetic-key")
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1],
+                         "daily_cost_limit_usd": 0, "monthly_cost_limit_usd": 40}}
+    before = [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+    provider = cloud_cli.diagnostics(cfg, root=str(root), probe=True)["anthropic"]
+    assert provider["daily_cost_limit_usd"] == 0 and provider["monthly_cost_limit_usd"] == 40
+    assert provider["status"] == "blocked" and provider["block_reason"] == "daily_cost_cap"
+    forecast = cloud_cli.observe(cfg, root=str(root))
+    assert forecast["daily_cost_limit_usd"] == 0 and forecast["monthly_cost_limit_usd"] == 40
+    assert forecast["send_decision"] == "daily_cost_cap"
+    assert [tuple(row) for row in ledger.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
+
+
 @pytest.mark.parametrize("failure", ["future_time", "row_limit"])
 def test_incomplete_dryrun_observation_remains_unknown(local, monkeypatch, failure):
     root, ledger, now = local

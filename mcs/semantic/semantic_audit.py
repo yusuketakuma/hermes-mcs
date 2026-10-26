@@ -85,6 +85,18 @@ _CLAIM_QUESTION = (
     "different drug/dose does not match (AT-024/025/028).")
 
 
+_FACT_QUESTION = (
+    "Does the fact with id {fact} in state.target.facts follow from its own "
+    "evidence_quote entries ({entries}) read within the evidence_context source "
+    "text (id source)? Judge only this fact and only against those quotes; the "
+    "other facts and quotes in this request are not its evidence. The fact text "
+    "ends with structured fields in brackets (kind/polarity/epistemic/workflow/"
+    "event_time/valid_time/subject[/action]/optional patient_context category/"
+    "text/details) — judge statement AND fields together: a quote negated, "
+    "attributed to another subject, or placed at a different time does NOT "
+    "support the fact.")
+
+
 def audit_claims(jev_client, bundle: dict, summary: dict,
                  deadline: float, match_threshold: float = jev.MATCH_THRESHOLD,
                  per_request: int = 12) -> tuple[list, bool]:
@@ -323,7 +335,8 @@ def published_quantity_findings(doc: dict) -> list:
 
 def audit_facts_v2(jev_client, doc: dict, source_text: str,
                    deadline: float, *,
-                   match_threshold: float = jev.MATCH_THRESHOLD) -> dict:
+                   match_threshold: float = jev.MATCH_THRESHOLD,
+                   per_request: int = 12) -> dict:
     """Bidirectional post-generation audit of a semantic-facts/v2 doc.
 
     fact -> evidence: every verified fact must be supported by its own
@@ -354,75 +367,86 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
         # facts covering them) are a deterministic blocker: the audited
         # facts may all be supported, yet the doc is not complete
         findings.append({"code": "canonical_coverage_incomplete"})
-    if jev_client is None:
+    # an invalid batch size must not skip every fact (range() runs empty)
+    if jev_client is None or type(per_request) is not int or not 1 <= per_request <= 48:
         findings.append({"code": "fact_audit_unevaluated"})
         return {"status": "INCOMPLETE", "evaluated": False,
                 "findings": findings, "fact_verdicts": {}}
 
     from semantic_runtime import RuntimeGuardError
     verdicts = {}
+    pending = []
     for fact in facts:
         if fact.get("validation_status") != "verified":
             continue
         fid = fact["fact_id"]
-        ctx = []
+        quotes = []
         for ref in fact.get("evidence_ids", []):
             ev = evidence.get(ref)
-            if ev is None or not isinstance(ev.get("quote"), str):
-                continue
-            ctx.append({"id": ref, "role": "evidence_quote",
-                        "text": ev["quote"]})
-            ctx.append({"id": f"{ref}_ctx", "role": "evidence_context",
-                        "text": source_text})
+            if ev is not None and isinstance(ev.get("quote"), str):
+                quotes.append((ref, ev["quote"]))
         if "patient_context" in fact:
             from semantic_facts import ContractError, validate_patient_context
             try:
-                validate_patient_context(fact, [item["text"] for item in ctx
-                                                if item["role"] == "evidence_quote"])
+                validate_patient_context(fact, [q for _, q in quotes])
             except ContractError:
                 findings.append({"code": "fact_patient_context_invalid", "fact": fid})
                 continue
-        question = jev.choice_question(
-            "Does the claim in state.target.text follow from the "
-            "evidence_quote entries within the evidence_context source "
-            "text? The target ends with structured fields in brackets "
-            "(kind/polarity/epistemic/workflow/event_time/valid_time/subject[/"
-            "action]/optional patient_context category/text/details) — judge statement AND fields together: a quote "
-            "negated, attributed to another subject, or placed at a "
-            "different time does NOT support the claim.",
-            FACT_SUPPORT_OPTIONS)
-        state = {"target": {"id": fid, "text": _fact_audit_target(fact)},
-                 "context": ctx}
+        pending.append((fact, quotes))
+    # Facts share one source: up to per_request facts ride in one request and
+    # the source text is sent once, instead of one request (and one full
+    # source copy) per fact.
+    for start in range(0, len(pending), per_request):
+        chunk = pending[start:start + per_request]
+        # context ids are code-owned aliases: an evidence id may itself be
+        # "source" (or collide with another fact's alias), so quotes never
+        # share the id space of the one source context
+        ctx = {"source": {"id": "source", "role": "evidence_context", "text": source_text}}
+        aliases = {}
+        questions = {}
+        for fact, quotes in chunk:
+            cited = []
+            for ref, quote in quotes:
+                alias = aliases.setdefault(ref, f"quote_{len(aliases) + 1}")
+                ctx[alias] = {"id": alias, "role": "evidence_quote", "text": quote}
+                cited.append(alias)
+            questions[fact["fact_id"]] = jev.choice_question(
+                _FACT_QUESTION.format(fact=fact["fact_id"], entries=", ".join(cited) or "none"),
+                FACT_SUPPORT_OPTIONS)
+        state = {"target": {"id": "facts", "facts": [
+                     {"id": fact["fact_id"], "text": _fact_audit_target(fact)} for fact, _ in chunk]},
+                 "context": list(ctx.values())}
         try:
-            out = jev.evaluate_once_more(jev_client, state, {fid: question},
-                                         deadline)
+            out = jev.evaluate_once_more(jev_client, state, questions, deadline)
         except RuntimeGuardError:
             raise
         except Exception as error:
             with suppress(Exception):
                 jev_client.last_error = error
             findings.append({"code": "fact_audit_unevaluated",
-                             "fact": fid})
+                             "fact": chunk[0][0]["fact_id"]})
             return {"status": "INCOMPLETE", "evaluated": False,
                     "findings": findings, "fact_verdicts": verdicts}
         answers = out.get("answers") if isinstance(out, dict) else None
-        answer = answers.get(fid) if isinstance(answers, dict) else None
-        choice = answer.get("choice") if isinstance(answer, dict) else None
-        confidence = answer.get("confidence") \
-            if isinstance(answer, dict) else None
-        if (not isinstance(choice, str) or choice not in FACT_SUPPORT_OPTIONS
-                or not _probability(confidence)):
-            findings.append({"code": "fact_audit_unevaluated",
-                             "fact": fid})
-            return {"status": "INCOMPLETE", "evaluated": False,
-                    "findings": findings, "fact_verdicts": verdicts}
-        verdicts[fid] = {"choice": choice, "confidence": confidence}
-        if confidence < match_threshold:
-            findings.append({"code": "fact_low_confidence", "fact": fid})
-        if choice in ("contradicts", "not_supported"):
-            findings.append({"code": f"fact_{choice}", "fact": fid})
-        elif choice == "ambiguous":
-            findings.append({"code": "fact_ambiguous", "fact": fid})
+        for fact, _ in chunk:
+            fid = fact["fact_id"]
+            answer = answers.get(fid) if isinstance(answers, dict) else None
+            choice = answer.get("choice") if isinstance(answer, dict) else None
+            confidence = answer.get("confidence") \
+                if isinstance(answer, dict) else None
+            if (not isinstance(choice, str) or choice not in FACT_SUPPORT_OPTIONS
+                    or not _probability(confidence)):
+                findings.append({"code": "fact_audit_unevaluated",
+                                 "fact": fid})
+                return {"status": "INCOMPLETE", "evaluated": False,
+                        "findings": findings, "fact_verdicts": verdicts}
+            verdicts[fid] = {"choice": choice, "confidence": confidence}
+            if confidence < match_threshold:
+                findings.append({"code": "fact_low_confidence", "fact": fid})
+            if choice in ("contradicts", "not_supported"):
+                findings.append({"code": f"fact_{choice}", "fact": fid})
+            elif choice == "ambiguous":
+                findings.append({"code": "fact_ambiguous", "fact": fid})
 
     # source -> facts coverage (shared Choice, identical semantics to
     # the legacy audit path).

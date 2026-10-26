@@ -253,14 +253,16 @@ class _RejectFactOnceJev(_FakeJev):
         self.rejected = set()
 
     def evaluate(self, state, questions, deadline):
-        target = (state.get("target") or {}).get("id")
-        text = (state.get("target") or {}).get("text") or ""
-        if target in questions and target not in self.rejected \
-                and self.only in text:
-            self.rejected.add(target)
-            self.choice_map[target] = "not_supported"
-        elif target in questions:
-            self.choice_map[target] = "supports"
+        target = state.get("target") or {}
+        # fact audits batch several facts per request (target id "facts")
+        entries = target.get("facts") or [{"id": target.get("id"), "text": target.get("text") or ""}]
+        for entry in entries:
+            fid, text = entry.get("id"), entry.get("text") or ""
+            if fid in questions and fid not in self.rejected and self.only in text:
+                self.rejected.add(fid)
+                self.choice_map[fid] = "not_supported"
+            elif fid in questions:
+                self.choice_map[fid] = "supports"
         return super().evaluate(state, questions, deadline)
 
 

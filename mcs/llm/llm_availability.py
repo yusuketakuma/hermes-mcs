@@ -8,6 +8,7 @@ from contextlib import contextmanager, suppress
 
 import safe_io
 from mcs_util import load_config
+from stats_math import finite_number
 
 # ---------- LLM lane stability gates ----------
 # Shared by extract_llm and semantic_drain so both lanes defer under the
@@ -190,7 +191,12 @@ def disk_free_mb(db) -> float | None:
 
 
 def disk_floor_mb() -> float:
-    """MiB floor under which the LLM lane defers; 0 disables the guard."""
+    """MiB floor under which the LLM lane defers; 0 disables the guard.
+    config.json local_llm.disk_guard_mb, else the legacy MCS_DISK_GUARD_MB."""
+    ll = load_config().get("local_llm")
+    configured = ll.get("disk_guard_mb") if isinstance(ll, dict) else None
+    if finite_number(configured) and configured >= 0:
+        return float(configured)
     try:
         value = float(os.environ.get("MCS_DISK_GUARD_MB", "512"))
         return value if math.isfinite(value) and value >= 0 else 512.0

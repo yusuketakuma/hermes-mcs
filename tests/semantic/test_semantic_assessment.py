@@ -66,10 +66,8 @@ class _EventJev:
         self.calls = []
 
     def evaluate(self, state, questions, _deadline):
-        dimension = next(iter(questions))
-        self.calls.append((state, dimension))
-        if dimension == self.fail_dimension:
-            raise jev.JevError("transport", "synthetic", retryable=True)
+        # all of an event's uncached dimensions arrive in one request
+        self.calls.append((state, list(questions)))
         fact_id = state["target"]["fact_id"]
         choices = {
             "f-start": {"change_kind": "start", "status": "planned",
@@ -77,11 +75,14 @@ class _EventJev:
             "f-stop": {"change_kind": "stop", "status": "cancelled",
                        "polarity": "negated", "speaker_basis": "clinician_report"},
         }
-        choice = choices[fact_id][dimension]
-        confidence = (0.6 if fact_id == "f-stop"
-                      and dimension == "polarity" else self.confidence)
-        return {"answers": {dimension: {
-            "choice": choice, "confidence": confidence}}}
+        answers = {}
+        for dimension in questions:
+            confidence = (0.6 if fact_id == "f-stop"
+                          and dimension == "polarity" else self.confidence)
+            # a defective answer for one dimension leaves the others usable
+            choice = None if dimension == self.fail_dimension else choices[fact_id][dimension]
+            answers[dimension] = {"choice": choice, "confidence": confidence}
+        return {"answers": answers}
 
 
 def test_each_medication_event_has_own_detail_target_and_review_finding(tmp_path):
@@ -100,7 +101,8 @@ def test_each_medication_event_has_own_detail_target_and_review_finding(tmp_path
             == {"f-stop"}
         assert result["findings"][0]["code"] == \
             "medication_detail_low_confidence"
-        assert len(client.calls) == len(jev.MED_DETAIL_QUESTIONS) * 2
+        assert len(client.calls) == 2      # one request per event, not per dimension
+        assert all(dims == list(jev.MED_DETAIL_QUESTIONS) for _state, dims in client.calls)
         for state, _dimension in client.calls:
             assert state["target"]["fact_id"] in {"f-start", "f-stop"}
             assert state["target"]["drug"] in {"amlodipine", "warfarin"}
@@ -155,8 +157,8 @@ def test_failed_dimension_resumes_without_repeating_completed_detail(tmp_path):
         assert not first["complete"]
         assert first["failure_reason"] == "technical"
         assert first["details"]["f-start"] == {"change_kind": "start"}
-        assert [dimension for _state, dimension in first_client.calls] \
-            == ["change_kind", "status"]
+        assert [dims for _state, dims in first_client.calls] \
+            == [list(jev.MED_DETAIL_QUESTIONS)]
         assert len(db.artifacts(assessment.KIND_ASSESS,
                                 project_id=1, message_id=10)) == 1
 
@@ -165,8 +167,8 @@ def test_failed_dimension_resumes_without_repeating_completed_detail(tmp_path):
             db, bundle, 10, one_fact, second_client, SCFG,
             time.monotonic() + 30)
         assert second["complete"]
-        assert [dimension for _state, dimension in second_client.calls] \
-            == ["status", "polarity", "speaker_basis"]
+        assert [dims for _state, dims in second_client.calls] \
+            == [["status", "polarity", "speaker_basis"]]
         assert len(db.artifacts(assessment.KIND_ASSESS,
                                 project_id=1, message_id=10)) \
             == len(jev.MED_DETAIL_QUESTIONS)

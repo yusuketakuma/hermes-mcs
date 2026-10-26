@@ -155,6 +155,10 @@ def test_explicit_import_restarts_stopped_initial_walk_without_losing_scope_or_s
             return
         assert store.job_state('history',1) == 'pending'
         assert store.job_pending('history',1)['attempts'] == 0
+        assert not store.db.in_transaction
+        with closing(sqlite3.connect((tmp_path/'synthetic-initial.db').as_uri()+'?mode=ro',uri=True)) as reopened:
+            assert reopened.execute('SELECT state,attempts,reason_code FROM fetch_jobs WHERE job_id=?',
+                                    (job['job_id'],)).fetchone() == ('pending',0,None)
         assert current['since'] == 0 and current['page'] == 1 and current['stalls'] == 0 and 'walk' not in current
         assert [tuple(row) for row in store.db.execute('SELECT * FROM messages ORDER BY message_id')] == before
         assert store.history_floor(1) == floor

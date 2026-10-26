@@ -129,9 +129,12 @@ def test_detail_values_enter_the_same_audit_target_and_document_hash():
             return super().evaluate(state, questions, deadline)
 
     semantic_audit.audit_facts_v2(Capture(), doc, BODY, deadline=10 ** 9)
-    targets = [state["target"]["text"] for state in calls if state["target"]["id"] != "source"]
+    targets = [fact["text"] for state in calls if state["target"]["id"] == "facts"
+               for fact in state["target"]["facts"]]
     assert any('"actual_dose"' in target and '"1袋"' in target for target in targets)
-    assert len(calls) == sum(f["validation_status"] == "verified" for f in doc["facts"]) + 1
+    verified = sum(f["validation_status"] == "verified" for f in doc["facts"])
+    # verified facts share one request per 12, plus the coverage request
+    assert len(calls) == -(-verified // 12) + 1 and len(targets) == verified
     changed = copy.deepcopy(doc)
     changed["facts"][0]["patient_context"]["details"] = CONTEXT["details"][:1]
     assert semantic_facts.doc_hash(changed) != semantic_facts.doc_hash(doc)

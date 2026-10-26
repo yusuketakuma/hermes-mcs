@@ -1095,14 +1095,13 @@ class Ledger:
 
     def patient_fetch_failed(self, project_id: int, reason: str):
         with self.db:
+            # A failed registration leaves no patient. Creating a stub here
+            # would make the next successful observation look pre-existing
+            # and bypass its atomic initial-history registration.
             self.db.execute("""
-              INSERT INTO patients(project_id,fetch_state,fetch_reason,
-                last_seen,created_at) VALUES(?,?,?,?,?)
-              ON CONFLICT(project_id) DO UPDATE SET
-                fetch_state='incomplete', fetch_reason=excluded.fetch_reason,
-                last_seen=excluded.last_seen
-            """, (project_id, "incomplete", reason[:200],
-                  time.time(), time.time()))
+              UPDATE patients SET fetch_state='incomplete',fetch_reason=?,last_seen=?
+              WHERE project_id=?
+            """, (reason[:200], time.time(), project_id))
 
     def known_patients(self) -> list:
         return self.db.execute(

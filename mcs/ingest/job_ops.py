@@ -273,10 +273,10 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                     pl["trickle"] = False
                     if existing["state"] == "failed":
                         ledger.db.execute("UPDATE fetch_jobs SET state='pending' WHERE job_id=?", (existing["job_id"],))
-                    ledger.job_defer(existing["job_id"], 0, payload=pl)
                     if restart_initial:
                         ledger.db.execute("UPDATE fetch_jobs SET attempts=0,reason_code=NULL WHERE job_id=?",
                                           (existing["job_id"],))
+                    ledger.job_defer(existing["job_id"], 0, payload=pl)
                 else:
                     ledger.job_add("history", req["project_id"], payload={
                         "since": since, "page": 1,
