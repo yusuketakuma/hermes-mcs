@@ -2528,7 +2528,21 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                 meta.update(quality_pass=extract_quality._QUALITY_CHECKPOINT, quality_status=quality["state"],
                             quality_remaining=quality["remaining_hint_candidates"])
                 value = {key: item for key, item in value.items() if key != "_quality_result"}
-            ledger.artifact_add_tx("extract_llm_chunk", json.dumps(value, ensure_ascii=False),
+            content = json.dumps(value, ensure_ascii=False)
+            if (split_size is None and quality_status is None
+                    and meta.get("quality_status") == "hint_gaps_resolved"):
+                # Only the newest row for this message can prove that the
+                # reader will see the same checkpoint. Do not look past a
+                # later row, including an invalid or differently scoped one.
+                latest = ledger.db.execute(
+                    "SELECT project_id,content,model,meta FROM artifacts "
+                    "WHERE kind=? AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
+                    ("extract_llm_chunk", r["message_id"])).fetchone()
+                if (latest is not None and latest["project_id"] == r["project_id"]
+                        and latest["model"] == meta["actual_model"] and latest["content"] == content
+                        and latest["meta"] == json.dumps(meta, ensure_ascii=False)):
+                    continue
+            ledger.artifact_add_tx("extract_llm_chunk", content,
                                    project_id=r["project_id"], message_id=r["message_id"],
                                    model=meta["actual_model"], meta=meta)
     _rerender_cards(ledger, r["project_id"], r["message_id"])
