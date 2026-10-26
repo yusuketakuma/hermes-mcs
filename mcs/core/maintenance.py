@@ -974,7 +974,8 @@ def prune_history(con, now: float | None = None) -> dict:
             (now - USAGE_KEEP_S,))
         out["cloud_usage_receipts"] = _delete_batched(
             con, "artifacts", "kind IN ('cloud_usage_reserve','cloud_usage_result',"
-            "'cloud_usage_dryrun','cloud_compare_v1') AND created_at < ?", (now - CLOUD_USAGE_KEEP_S,))
+            "'cloud_usage_dryrun','cloud_compare_v1','cloud_usage_disposition') AND created_at < ?",
+            (now - CLOUD_USAGE_KEEP_S,))
     return out
 
 

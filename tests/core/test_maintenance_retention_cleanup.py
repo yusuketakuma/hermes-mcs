@@ -326,13 +326,15 @@ def test_failed_backup_removes_tmp(tmp_path, monkeypatch, fn):
 def test_cloud_retention_is_62_days_and_jev_stays_seven(tmp_path):
     db = _ledger(tmp_path)
     now = time.time()
-    for kind in ("semantic_usage", "cloud_usage_reserve", "cloud_usage_result", "cloud_usage_dryrun"):
+    for kind in ("semantic_usage", "cloud_usage_reserve", "cloud_usage_result", "cloud_usage_dryrun",
+                 "cloud_compare_v1", "cloud_usage_disposition"):
         for days in (6, 8, 61, 63):
             rid = db.artifact_add(kind, "{}")
             db.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id=?", (now - days * 86400, rid))
     db.db.commit()
     maintenance.prune_history(db.db, now=now)
     assert len(db.artifacts("semantic_usage")) == 1
-    for kind in ("cloud_usage_reserve", "cloud_usage_result", "cloud_usage_dryrun"):
+    for kind in ("cloud_usage_reserve", "cloud_usage_result", "cloud_usage_dryrun",
+                 "cloud_compare_v1", "cloud_usage_disposition"):
         assert len(db.artifacts(kind)) == 3
     db.close()

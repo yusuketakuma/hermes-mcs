@@ -4,6 +4,9 @@ import math
 import re
 import uuid
 
+import history_walk
+from mcs_util import loads_dict
+
 META_KEY = "_initial_import"
 _FIELDS = frozenset({"version", "cohort_id", "boundary_ts", "boundary_source",
                      "started_at", "capture_phase", "saved_count", "updated_at"})
@@ -16,13 +19,16 @@ def load(db, project_id):
         return None
     try:
         state = json.loads(row[0])
-        if (not isinstance(state, dict) or state.keys() != _FIELDS
+        if (not isinstance(state, dict) or state.keys() - {"notification_cancelled", "capture_proof"} != _FIELDS
+                or "notification_cancelled" in state and state["notification_cancelled"] is not True
                 or type(state["version"]) is not int or state["version"] != 1
                 or not isinstance(state["cohort_id"], str)
                 or not re.fullmatch(r"[0-9a-f]{32}", state["cohort_id"])
                 or type(state["boundary_ts"]) is not int or state["boundary_ts"] <= 0
                 or state["boundary_source"] not in ("server", "local")
                 or state["capture_phase"] not in ("capturing", "complete", "held")
+                or "capture_proof" in state and not history_walk.capture_proof(
+                    state["capture_proof"], project_id, state["cohort_id"])
                 or type(state["saved_count"]) is not int or state["saved_count"] < 0
                 or any(type(state[k]) not in (int, float) or not math.isfinite(state[k])
                        or state[k] < 0 for k in ("started_at", "updated_at"))):
@@ -39,9 +45,22 @@ def _write(db, project_id, state):
 
 def emit_tx(ledger, project_id, state, ids=()):
     """Reserve an aggregate intent, never an individual delivered receipt."""
+    current = load(ledger.db, project_id)
+    if state.get("notification_cancelled") is True or current and current.get("notification_cancelled") is True:
+        return None
     return ledger._outbox_insert("patient_history", project_id, {
         "source": "initial_history", "cohort_id": state["cohort_id"],
         "message_ids": list(ids)}, route="interactive")
+
+
+def cancel_notifications_tx(db, project_id, cohort_id):
+    """Stop one matching cohort's future notifications without stopping capture or analysis."""
+    state = load(db, project_id)
+    if state is None or state["cohort_id"] != cohort_id:
+        return False
+    state["notification_cancelled"] = True
+    _write(db, project_id, state)
+    return True
 
 
 def start_tx(ledger, project_id, boundary_ts, now, *, boundary_source):
@@ -100,6 +119,7 @@ def classify_tx(ledger, project_id, ids, now):
         state["saved_count"] += added
         state["updated_at"] = now
         _write(ledger.db, project_id, state)
+        dirty_source_tx(ledger.db, project_id, next(iter(history)), now, new_member=True)
     return history
 
 
@@ -130,16 +150,23 @@ def progress(db, project_id):
 def refresh_capture_tx(ledger, project_id, now):
     """Publish capture completion only after verified history and all fetch work settle."""
     state = load(ledger.db, project_id)
-    if state is None:
+    if state is None or (state["capture_phase"] == "complete" and history_walk.capture_proof(
+            state.get("capture_proof"), project_id, state["cohort_id"])):
         return
     join, where = history_predicate()
     jobs = ledger.db.execute(
-        "SELECT j.kind,j.state,j.reason_code FROM fetch_jobs j WHERE j.project_id=? "
+        "SELECT j.kind,j.state,j.reason_code,j.payload FROM fetch_jobs j WHERE j.project_id=? "
         "AND (j.kind='history' OR (j.kind IN ('reply','thread') AND j.message_id IN ("
         f"SELECT m.message_id FROM messages m {join} WHERE m.project_id=? AND {where})))",
         (project_id, project_id, state["cohort_id"])).fetchall()
-    complete = (ledger.history_floor(project_id) == -1
-                and any(r["kind"] == "history" and r["state"] == "done" for r in jobs))
+    proof = next((loads_dict(r["payload"]) for r in jobs if r["kind"] == "history" and r["state"] == "done"
+                  and history_walk.accepted(loads_dict(r["payload"]) or {}, project_id, state["cohort_id"])), None)
+    if (state["capture_phase"] == "complete" and proof is None
+            and not any(r["kind"] == "history" and r["state"] != "done" for r in jobs)):
+        # This feature is unshipped: an earlier candidate's completion is not new evidence.
+        ledger.job_add_tx("history", project_id, payload={"since": 0, "page": 1, "pages": 3,
+                          "trickle": False, "notify": True, "notify_source": "discovery"}, reset_pending=True)
+    complete = ledger.history_floor(project_id) == -1 and proof is not None
     blocked = any(r["state"] == "failed" for r in jobs)
     pending = any(r["state"] != "done" for r in jobs)
     incomplete = ledger.db.execute(
@@ -149,5 +176,22 @@ def refresh_capture_tx(ledger, project_id, now):
     phase = "held" if blocked else "complete" if complete and not pending and not incomplete else "capturing"
     if state["capture_phase"] != phase:
         state.update(capture_phase=phase, updated_at=now)
+        if phase == "complete":
+            state["capture_proof"] = {k: proof["walk"][k] for k in ("v", "scope", "digest")}
         _write(ledger.db, project_id, state)
         emit_tx(ledger, project_id, state)
+
+
+def dirty_source_tx(db, project_id, message_id, now, *, new_member=False):
+    """Mark edited history for adoption without rescanning its cohort in the save TX."""
+    row = db.execute("SELECT content FROM message_metadata WHERE message_id=? AND source='capture'", (message_id,)).fetchone()
+    content = json.loads(row[0]) if row else {}
+    if (content.get(META_KEY) or {}).get("role") != "history":
+        return
+    for card in db.execute("SELECT card_id,ui_state FROM notification_cards WHERE kind='patient_history' "
+                           "AND project_id=? AND delivery_state!='revoked'", (project_id,)).fetchall():
+        ui = json.loads(card["ui_state"]) if card["ui_state"] else {}
+        ui.setdefault("history_dirty_since", now)
+        if not new_member or (ui.get("history_latest") or {}).get("phase") == "complete":
+            ui["history_source_dirty"] = True
+        db.execute("UPDATE notification_cards SET ui_state=? WHERE card_id=?", (json.dumps(ui), card["card_id"]))

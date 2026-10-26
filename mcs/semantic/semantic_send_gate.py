@@ -101,17 +101,21 @@ def _source_event(db, project_id: int, event_id: int):
     return row, source if isinstance(source, dict) else None
 
 
-def _has_initial_history(db, project_id, ids):
+def initial_history_ids(db, project_id, ids):
+    history = set()
     for offset in range(0, len(ids), 900):
         group = ids[offset:offset + 900]
-        if db.execute(
-                "SELECT 1 FROM messages m JOIN message_metadata d ON d.message_id=m.message_id "
+        history.update(row[0] for row in db.execute(
+                "SELECT m.message_id FROM messages m JOIN message_metadata d ON d.message_id=m.message_id "
                 "AND d.source='capture' WHERE m.project_id=? AND m.message_id IN ("
                 + ','.join('?' * len(group)) + ") AND CASE WHEN json_valid(d.content) "
-                "THEN json_extract(d.content,'$._initial_import.role')='history' ELSE 0 END LIMIT 1",
-                (project_id, *group)).fetchone() is not None:
-            return True
-    return False
+                "THEN json_extract(d.content,'$._initial_import.role')='history' ELSE 0 END",
+                (project_id, *group)))
+    return history
+
+
+def _has_initial_history(db, project_id, ids):
+    return bool(initial_history_ids(db, project_id, ids))
 
 
 def semantic_gate(db, ev, payload: dict, cfg: dict,

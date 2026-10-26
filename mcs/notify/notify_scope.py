@@ -260,26 +260,35 @@ def pending_breakdown(db, now: float, *, checkpoint=lambda: None) -> dict:
         "      FROM notification_renders WHERE card_id=ic.card_id) "
         "    AND ((p.kind IN ('body_part','attachment_part') "
         "          AND p.state IN ('pending','unknown')) "
-        "      OR (p.kind='thread' AND p.state='unknown'))) "
+        "      OR (p.kind='thread' AND p.state='unknown'))), "
+        " (SELECT json_extract(c.ui_state,'$.history_latest.phase') FROM notification_intent_cards i "
+        "  JOIN notification_cards c ON c.card_id=i.card_id WHERE i.event_id=o.event_id "
+        "  AND i.state='pending' AND c.kind='patient_history' AND c.delivery_state='delivered' "
+        "  AND json_valid(c.ui_state) AND NOT EXISTS(SELECT 1 FROM notification_renders r "
+        "  WHERE r.card_id=c.card_id AND r.state IN ('queued','sending','unknown','held')) LIMIT 1) "
         f"FROM notify_outbox o WHERE {OUTBOX_PENDING_WHERE}", (now,))
     total = 0
     by_reason: dict = {}
     oldest = None
     attention = 0
-    for created_at, updated_at, progress, delivery_unknown, parts in rows:
+    for created_at, updated_at, progress, delivery_unknown, parts, history_phase in rows:
         checkpoint()
         total += 1
         reason = _pending_reason(progress, updated_at, bool(delivery_unknown),
                                  parts if isinstance(parts, int) else 0)
+        if reason in ("unrecorded", "stale", "intent_cards_issued", "intent_cards_unsettled") and history_phase in ("capturing", "analyzing"):
+            reason = "initial_history_" + ("capture" if history_phase == "capturing" else "analysis")
+        processing = reason in ("initial_history_capture", "initial_history_analysis")
         created = _finite(created_at)
         age = max(0.0, now - created) if created is not None else None
         slot = by_reason.setdefault(reason, {"count": 0, "oldest_age_s": None})
         slot["count"] += 1
         if age is not None:
             slot["oldest_age_s"] = max(slot["oldest_age_s"] or 0.0, age)
-            oldest = max(oldest or 0.0, age)
+            if not processing:
+                oldest = max(oldest or 0.0, age)
         if (reason in _ATTENTION_REASONS or reason.startswith("hold_reason:")
-                or (age is not None and age >= PENDING_ATTENTION_S)):
+                or (not processing and age is not None and age >= PENDING_ATTENTION_S)):
             attention += 1
     checkpoint()
     return {"total": total, "oldest_age_s": oldest,

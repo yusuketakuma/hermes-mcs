@@ -195,6 +195,8 @@ def test_control_cli_refuses_ledger_open_without_current_exclusive_owner(world, 
     root, _, _ = world
     lock_path = str(root / "data" / "run.lock")
     fd = writer_lock.acquire_run_lock(lock_path) if obstacle == "busy" else None
+    if obstacle == "busy":
+        monkeypatch.setattr(writer_lock, "wait_run_lock", lambda *a, **k: None)
     if obstacle == "updating":
         (root / "data" / "update_in_progress.marker").write_text("synthetic")
     if obstacle == "code_changed":
@@ -207,6 +209,27 @@ def test_control_cli_refuses_ledger_open_without_current_exclusive_owner(world, 
         if fd is not None:
             os.close(fd)
     fd = writer_lock.acquire_run_lock(lock_path)
+    assert fd is not None
+    os.close(fd)
+
+
+def test_control_cli_waits_boundedly_for_owner_and_rechecks_code(world, monkeypatch):
+    import writer_lock
+    root, _, _ = world
+    acquire = writer_lock.acquire_run_lock
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda _: None)
+    monkeypatch.setattr(writer_lock, "code_stamp", lambda: 123)
+    waits = []
+
+    def wait(path, **options):
+        waits.append(options)
+        return acquire(path)
+
+    monkeypatch.setattr(writer_lock, "wait_run_lock", wait)
+    assert mcs_setup.main(["cloud-llm", "stop", "--confirm-human", "--reason", "synthetic"]) == 0
+    assert waits == [{"wait_s": 5.0, "expected_code_stamp": 123,
+                      "marker_path": str(root / "data" / "update_in_progress.marker")}]
+    fd = acquire(str(root / "data" / "run.lock"))
     assert fd is not None
     os.close(fd)
 
@@ -262,3 +285,137 @@ def test_resume_refuses_unreadable_or_schema_invalid_config_at_mutation_owner(wo
         assert receipt["outcome"] == "rejected" and receipt["error"] == "cloud_config_invalid"
         assert not db.artifacts("cloud_control") and not db.artifacts("cloud_circuit")
         assert db.db.execute("SELECT COUNT(*) FROM command_receipts").fetchone()[0] == 1
+
+
+def _complete_context(db, config):
+    import patient_context_refresh as context
+    settings = cloud_policy.cloud_config(config, key_present=True)[0]
+    contract = context._contract({**config, "cloud_llm": {"mode": "off"}})
+    contract["provider"] = extract_llm._cloud_contract({"cloud_llm": settings})
+    snapshot = context._snapshot(db.db, 1, config, hydrate=False, contract=contract)
+    for source in snapshot["sources"]:
+        db.artifact_add(context.SCAN, json.dumps({"complete": True, "audited": True, "facts": []}),
+            project_id=1, message_id=source["message_id"],
+            meta={"source_sig": context._source_sig(source), "contract": contract,
+                  "provider": contract["provider"], "model": cloud_policy.MODEL})
+    db.artifact_add(context.KIND, '{"facts":[],"summary":[]}', project_id=1,
+        meta={"source_sig": snapshot["source_sig"], "contract": contract,
+              "provider": contract["provider"], "model": cloud_policy.MODEL,
+              "published": context.options(config)["publication"]})
+
+
+@pytest.mark.parametrize("change", ["code", "extraction", "karte"])
+def test_current_context_targets_follow_runtime_signatures_without_message_timestamp_change(world, monkeypatch, change):
+    root, path, config = world
+    with closing(Ledger(str(path))) as db:
+        _complete_context(db, config)
+        timestamps = tuple(db.db.execute("SELECT first_seen,updated_seen,posted_at_ts FROM messages WHERE message_id=1").fetchone())
+    assert cli.observe(config, root=str(root))["routes"]["patient_context"]["targets"] == 0
+    if change == "code":
+        monkeypatch.setattr(extract_llm, "_upgrade_contract", lambda: "f" * 64)
+    else:
+        with closing(Ledger(str(path))) as db:
+            if change == "extraction":
+                db.artifact_add("extract_v1", "{}", project_id=1, message_id=1, meta={"version": "synthetic-change"})
+            else:
+                db.db.execute("UPDATE patients SET karte_id=10 WHERE project_id=1")
+                db.db.commit()
+                db.artifact_add("karte_summary", '{"comment":"完全合成の追加背景。"}',
+                                project_id=1, meta={"karte_id": 10})
+            assert tuple(db.db.execute("SELECT first_seen,updated_seen,posted_at_ts FROM messages WHERE message_id=1").fetchone()) == timestamps
+    report = cli.observe(config, root=str(root))
+    assert report["routes"]["patient_context"]["targets"] == 1
+    assert report["patient_context_basis"] == "runtime_pending_source_contract"
+    assert report["recurring_basis"] == "stored_message_timestamp_proxy"
+
+
+def test_current_context_planning_never_reads_an_implicit_installation_key(world, monkeypatch):
+    root, _, config = world
+    original = cloud_policy.api_key
+    def key(path=None):
+        assert path == str(root), "planning must not inspect a different installation"
+        return original(path)
+    monkeypatch.setattr(cloud_policy, "api_key", key)
+    assert cli.observe(config, root=str(root))["routes"]["patient_context"]["targets"] == 1
+
+
+def test_estimate_separates_chunk_repair_and_shadow_without_fabricating_output_usage(world):
+    root, path, config = world
+    config["cloud_llm"]["mode"] = "shadow"
+    with closing(Ledger(str(path))) as db:
+        db.save_messages([_message(1, body="合成文。" * 3000, project_id=1,
+                                   posted_at="2026-10-26T10:00:00+09:00")])
+        db.artifact_add("extract_llm", "{}", project_id=1, message_id=1,
+            meta={"hash": _hash(db, 1), "extract_version": extract_llm.EXTRACT_VERSION - 1})
+    report = cli.observe(config, root=str(root))
+    parts = report["estimate_components"]
+    assert parts["current_backlog"]["reextract"]["basic_requests_estimate"] == 1
+    assert parts["chunk_repair_retry_additions"]["chunk_requests_current"] > 0
+    assert parts["chunk_repair_retry_additions"]["repair_requests_estimate"] is None
+    assert parts["chunk_repair_retry_additions"]["retry_requests_estimate"] is None
+    assert parts["shadow_additions"]["enabled"]
+    assert parts["shadow_additions"]["cloud_work_current"] == report["routes"]
+    assert report["usage_calibration"]["status"] == "unmeasured"
+    assert report["routes"]["reextract"]["estimated_output_tokens"] is None
+    assert report["routes"]["reextract"]["output_token_request_ceiling"] > 0
+    assert report["cost_basis"] == "reference_range_not_budget_reservation_or_invoice"
+
+
+def test_usage_calibration_reports_its_measured_denominator_and_output_mean(world):
+    root, path, config = world
+    with closing(Ledger(str(path))) as db:
+        body = {"model": cloud_policy.MODEL, "system": "s" * 12,
+                "messages": [{"role": "user", "content": "c" * 18}], "max_tokens": 1600}
+        reserve = cloud_policy.usage_reserver(db, config, route="reextract", project_id=1,
+            unit_key="synthetic", message_id=1)(body, 1)
+        cloud_policy.record_result(db, reserve, {"model": cloud_policy.MODEL,
+            "request_fp": reserve["request_fp"], "usage": {"input_tokens": 60, "output_tokens": 10},
+            "http_class": "http_200", "request_id": "req_synthetic", "error_kind": None})
+    report = cli.observe(config, root=str(root))
+    calibration = report["usage_calibration"]
+    assert calibration["status"] == "measured"
+    assert calibration["settled_requests_with_characters"] == 1
+    assert calibration["input_chars"] == 30 and calibration["input_tokens"] == 60
+    assert Decimal(calibration["tokens_per_character"]) == 2
+    assert Decimal(calibration["output_tokens_per_request"]) == 10
+    for item in report["routes"].values():
+        assert item["estimated_input_tokens"] == 2 * item["input_chars"]
+        assert item["estimated_output_tokens"] == 10 * item["requests_estimate"]
+
+
+def test_shadow_rates_keep_failure_and_legacy_unknowns_out_of_measured_denominators(world):
+    root, path, config = world
+    with closing(Ledger(str(path))) as db:
+        for values in ({"version": 2, "units": 1, "local_facts": 3, "cloud_facts": 2,
+            "matched": 1, "validated": 2, "validated_units": 1, "rejected": 4,
+            "rejected_units": 1, "rejection_observations": 1, "held": 0, "held_observations": 1,
+            "repairs": 2, "repaired_units": 1, "repair_observations": 1},
+            {"version": 2, "units": 1, "local_facts": 3, "cloud_facts": None,
+             "matched": None, "validated": None, "validated_units": 0, "rejected": None,
+             "rejected_units": None, "rejection_observations": 0, "held": None,
+             "held_observations": 0, "repairs": None, "repaired_units": None, "repair_observations": 0},
+            {"local_facts": 2, "cloud_facts": 2, "matched": 2, "held": 0, "repairs": 0}):
+            db.artifact_add("cloud_compare_v1", "{}", meta={"route": "reextract", **values})
+    report = cli.observe(config, root=str(root))["shadow_comparison"]
+    assert report["units"] == 2 and report["unvalidated_units"] == 1
+    assert report["legacy_records_without_unit_denominators"] == 1
+    assert report["rate_denominators"] == {"rejection": 1, "held": 1, "repair": 1}
+    assert report["rejection_rate"] == report["repair_rate"] == 1
+    assert report["held_rate"] == 0
+    assert report["local_recall"] == 3 / 5
+    unknown = cli._comparison_report([])
+    assert unknown["rejected"] is unknown["rejection_rate"] is unknown["repair_rate"] is None
+
+
+def test_disposition_receipt_is_auditable_without_double_count_or_identity_leak(world):
+    root, path, config = world
+    with closing(Ledger(str(path))) as db:
+        db.artifact_add("cloud_usage_disposition", "{}", project_id=1, message_id=1,
+            meta={"route": "reextract", "disposition": "discarded_scope", "reservation_id": "private-id",
+                  "request_id": "private-request", "unit_key": "private-unit"})
+    report = cli.observe(config, root=str(root), project=1)
+    receipt = next(row for row in report["log"] if row["kind"] == "cloud_usage_disposition")
+    assert receipt["disposition"] == "discarded_scope"
+    assert report["accounting"]["daily_requests"] == 0
+    assert Decimal(report["accounting"]["monthly_cost_usd"]) == 0
+    assert "private-" not in json.dumps(receipt)

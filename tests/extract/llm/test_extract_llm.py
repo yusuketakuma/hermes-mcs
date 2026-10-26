@@ -2852,9 +2852,9 @@ def test_human_report_thin_result_is_not_thin_retried(tmp_path,
 
 
 
-def test_nightly_revive_reopens_exhausted_extract_errors(tmp_path):
-    """An error row at the 5-attempt ceiling gets one more attempt per
-    night (attempts back to 4), capped per body hash; a refail keeps the
+def test_periodic_revive_reopens_exhausted_extract_errors(tmp_path):
+    """An error row at the 5-attempt ceiling gets one more attempt after
+    the cooldown (attempts back to 4), capped per body hash; a refail keeps the
     count so the cap holds; a new body starts fresh."""
     from ledger import Ledger
     db = Ledger(str(tmp_path / "revive.db"))
@@ -2866,11 +2866,11 @@ def test_nightly_revive_reopens_exhausted_extract_errors(tmp_path):
         with db.db:
             db.db.execute("UPDATE artifacts SET created_at=? WHERE kind='extract_llm'",
                           (now - extract_llm.REVIVE_COOLDOWN_S - 1,))
-        for night in range(1, extract_llm.REVIVE_PER_INPUT + 1):
+        for revival in range(1, extract_llm.REVIVE_PER_INPUT + 1):
             assert extract_llm.revive_failed(db, now)["revived"] == 1
             meta = json.loads(db.db.execute(
                 "SELECT meta FROM artifacts WHERE kind='extract_llm'").fetchone()[0])
-            assert meta["attempts"] == 4 and meta["auto_retry"] == night
+            assert meta["attempts"] == 4 and meta["auto_retry"] == revival
             extract_llm._fail(db, r, 4)                   # the extra try fails
             with db.db:
                 db.db.execute("UPDATE artifacts SET created_at=? WHERE kind='extract_llm'",
@@ -2885,7 +2885,7 @@ def test_nightly_revive_reopens_exhausted_extract_errors(tmp_path):
         db.close()
 
 
-def test_nightly_revive_refail_through_run_pending_keeps_cap(tmp_path, monkeypatch):
+def test_periodic_revive_refail_through_run_pending_keeps_cap(tmp_path, monkeypatch):
     """The production refail path (run_pending with a failing model)
     carries auto_retry forward, so REVIVE_PER_INPUT still stops a body
     that always fails."""
@@ -2903,13 +2903,13 @@ def test_nightly_revive_refail_through_run_pending_keeps_cap(tmp_path, monkeypat
                 db.db.execute("UPDATE artifacts SET created_at=? WHERE kind='extract_llm'",
                               (now - extract_llm.REVIVE_COOLDOWN_S - 1,))
         age()
-        for night in range(1, extract_llm.REVIVE_PER_INPUT + 1):
+        for revival in range(1, extract_llm.REVIVE_PER_INPUT + 1):
             assert extract_llm.revive_failed(db, now)["revived"] == 1
             assert extract_llm.run_pending(db, limit=10, budget_s=30)["failed"] == 1
             metas = [json.loads(x["meta"]) for x in db.artifacts("extract_llm", message_id=1)]
             assert len(metas) == 1
             assert metas[0]["error"] and metas[0]["attempts"] == 5
-            assert metas[0]["auto_retry"] == night
+            assert metas[0]["auto_retry"] == revival
             age()
         assert extract_llm.revive_failed(db, now) == {"revived": 0, "skipped_cap": 1}
     finally:

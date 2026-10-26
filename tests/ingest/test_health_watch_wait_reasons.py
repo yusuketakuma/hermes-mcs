@@ -126,3 +126,13 @@ def test_wait_actions_do_not_promise_delivery(mode, reason, wait, expected):
     rows = '\n'.join(health_watch._reason_rows(report, [reason]))
     assert expected in rows
     assert '次回の収集で送信されます' not in rows
+
+
+@pytest.mark.parametrize("phase,label", [("capture", "初回履歴を取得中"), ("analysis", "初回履歴を解析中")])
+def test_history_processing_has_a_distinct_wait_label(tmp_path, phase, label):
+    report = _health(tmp_path, notify={"pending": 1, "oldest_age_s": None, "pending_by_reason": {
+        "total": 1, "attention": 0, "oldest_age_s": None, "by_reason": {
+            "initial_history_" + phase: {"count": 1, "oldest_age_s": 7200.0}}}})
+    text = "\n".join(health_watch._alert_lines({**report, "alert": True, "disk_alert": False}))
+    assert label in text
+    assert "待ちの理由が未記録" not in text

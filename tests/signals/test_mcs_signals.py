@@ -2274,3 +2274,16 @@ def test_adherence_meds_respect_unverified(led, flag, opens):
     _extract_doc(led.db, 1, "h1", meds=[med])
     _ev(led)
     assert ("adherence_concern" in _open_types(led.db)) is opens
+
+
+def test_initial_history_classification_preserves_existing_signal_candidates(led):
+    import initial_import_state
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
+    assert _ev(led)["open"] == 1
+    before = mcs_signals.current_open(led.db)["items"]
+    with led.db:
+        initial_import_state.start_tx(led, 1, int(NOW), NOW, boundary_source="server")
+        assert initial_import_state.classify_tx(led, 1, [1], NOW) == {1}
+    assert _ev(led)["open"] == 1
+    assert mcs_signals.current_open(led.db)["items"] == before

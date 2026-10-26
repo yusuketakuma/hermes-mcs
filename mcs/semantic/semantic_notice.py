@@ -15,7 +15,7 @@ import semantic_render
 import semantic_store
 import semantic_transport
 from semantic_policy import KIND_PLAN, POLICY_VERSION
-from semantic_send_gate import enforce_block_reason
+from semantic_send_gate import enforce_block_reason, initial_history_ids
 
 
 def outbox_has_delivery(db, delivery_key: str) -> bool:
@@ -118,6 +118,10 @@ def emit_degraded(ledger, scfg: dict) -> int:
             continue
         ids = ids[:500]      # a malformed fat payload must not wedge the scan
         pid = ev["project_id"]
+        history = initial_history_ids(ledger.db, pid, ids)
+        ids = [mid for mid in ids if mid not in history]
+        if not ids:
+            continue
         if enforce_block_reason(ledger.db, scfg, pid) is not None:
             continue
         marks = ",".join("?" * len(ids)) or "NULL"

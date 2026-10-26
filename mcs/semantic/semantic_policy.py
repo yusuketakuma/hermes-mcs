@@ -73,6 +73,8 @@ def semantic_config(cfg: dict, *, key_present=False) -> tuple[dict, list]:
         block = {}
     if not isinstance(block, dict):
         return out, ["config: semantic_not_object"]
+    if "mode" in block:
+        out["daily_request_budget"] = 0
     if block.keys() - out.keys():
         errors.append("config: semantic_unknown_field")
     mode = block.get("mode", "assist" if key_present is True else "off")

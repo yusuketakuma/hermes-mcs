@@ -620,7 +620,7 @@ class Ledger:
             if notify_new and flag == 0 and row is None:
                 self._start_initial_import_tx(p.project_id, observation_ts, now,
                                               observation_source=observation_source)
-            if notify_new and flag == 0 and (row is None or prev):
+            if notify_new and flag == 0 and prev:
                 # Registration and its first notifying walk must survive together.
                 self.job_add_tx("history", p.project_id, payload={
                     "since": 0, "page": 1, "pages": 3, "trickle": False,
@@ -985,6 +985,8 @@ class Ledger:
               now, now))
         self._save_message_metadata(m, source="capture", now=now,
                                     body_changed=edited)
+        if existing is not None and (edited or m.body_state in TERMINAL_BODY_STATES and existing["body_state"] != m.body_state):
+            initial_import_state.dirty_source_tx(self.db, m.project_id, m.message_id, now)
         return 0 if existing is not None else 1
 
     def _save_message_metadata(self, m, *, source, now, body_changed=False):
@@ -1384,7 +1386,13 @@ class Ledger:
         try:
             row = self.db.execute("SELECT project_id,kind FROM fetch_jobs WHERE job_id=?", (job_id,)).fetchone()
             if row is not None and row["kind"] in ("history", "reply", "thread"):
-                initial_import_state.refresh_capture_tx(self, row[0], time.time())
+                try:
+                    initial_import_state.refresh_capture_tx(self, row[0], time.time())
+                except ValueError as exc:
+                    if str(exc) != "initial_import_invalid":
+                        raise
+                    self.db.execute("UPDATE fetch_jobs SET state='failed',reason_code='schema_error' WHERE job_id=?",
+                                    (job_id,))
             self.db.commit()
         except BaseException:
             self.db.rollback()

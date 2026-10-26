@@ -14,6 +14,15 @@ import semantic_store
 from semantic_testkit import _FakeJev, _seeded
 
 
+@pytest.mark.parametrize("mode", ["off", "shadow", "assist"])
+def test_explicit_mode_without_budget_keeps_zero_requests(mode):
+    resolved, errors = semantic_policy.semantic_config(
+        {"semantic": {"mode": mode, "project_ids": [1]}}, key_present=True)
+    assert not errors
+    assert resolved["mode"] == mode
+    assert resolved["daily_request_budget"] == 0
+
+
 def test_key_auto_runs_real_assessment_without_promoting_notifications(tmp_path, monkeypatch):
     monkeypatch.setattr(jev, "api_key", lambda root=None: "synthetic-unused-key")
     db = _seeded(tmp_path)

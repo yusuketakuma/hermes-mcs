@@ -348,10 +348,40 @@ def urgent_notice():
     return s.finish()
 
 
+def initial_history():
+    # Only the adopted count formatter runs: no source histories or private DB.
+    from contextlib import closing
+    import sqlite3
+    sys.path.insert(0, str(ROOT / "mcs"))
+    import _mcs_path  # noqa: F401
+    import notify_history
+    with closing(sqlite3.connect(":memory:")) as db:
+        db.execute("CREATE TABLE patients(project_id INTEGER PRIMARY KEY,patient_name TEXT)")
+        db.execute("INSERT INTO patients VALUES(1,'山田 花子')")
+        card = {"project_id": 1,
+                "anchor_key": json.dumps({"source": "initial_history", "cohort_id": "0" * 32}),
+                "ui_state": json.dumps({"history_snapshot": {
+                    "phase": "analyzing", "capture_phase": "complete", "saved": 120,
+                    "analyzed": 84, "processing": 28, "held": 6, "unknown": 2,
+                    "high": 3, "attachments": 7}})}
+        parts = notify_history.content(db, card)
+        link = notify_history.actions(card)[0][0]
+    s = Screen(9, "初回の履歴は、患者ごとのまとめで。",
+               "保存と解析の状態を区別。同じ患者の進捗を1枚のカードで更新します。", 1100)
+    x, y = s.app()
+    for part in parts["containers"]:
+        heading = part["type"] == "heading"
+        y = s.paragraph(x, y, part["text"], 760, 23 if heading else 21, INK, heading)
+        y += 24
+    s.text(x, y + 12, link["label"], 20, "#1264a3")
+    return s.finish()
+
+
 SCREENS = {"01-overview": overview, "02-notification": notification,
            "03-actions": menu, "04-task-form": task_form,
            "05-task-preview": task_preview, "06-task-list": task_list,
-           "07-patient-summary": patient_summary, "08-urgent-notice": urgent_notice}
+           "07-patient-summary": patient_summary, "08-urgent-notice": urgent_notice,
+           "09-initial-history": initial_history}
 
 
 def verify_png(path, svg):

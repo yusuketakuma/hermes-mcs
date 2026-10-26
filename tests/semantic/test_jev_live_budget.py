@@ -62,6 +62,17 @@ def test_lower_explicit_budget_zero_is_respected_without_mode_or_scope_gate(home
     assert _used(home) == 0
 
 
+@pytest.mark.parametrize("mode", ["off", "shadow", "assist", "enforce"])
+def test_explicit_mode_without_budget_preserves_zero_default(home, mode):
+    (home / "config.json").write_text(json.dumps({"semantic": {"mode": mode}}))
+    assert jev._live_request_budget(home) == 0
+    with jev.live_client("synthetic", operation="jev_value", root=str(home),
+                         post_fn=lambda *a: pytest.fail("omitted explicit budget must not send")) as client:
+        with pytest.raises(jev.JevError, match="budget_exceeded"):
+            _evaluate(client)
+    assert _used(home) == 0
+
+
 def test_retries_reserve_each_http_and_preserve_unknown_attempt(home):
     (home / "config.json").write_text(json.dumps({"semantic": {"daily_request_budget": 2}}))
     sent = []

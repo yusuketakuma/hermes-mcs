@@ -116,8 +116,29 @@ def fingerprint(db, card):
     return payload_hash([key, tuple(patient) if patient else None, state["boundary_ts"], sources, high])
 
 
+def refresh_needed(db, card, now):
+    """Cheap adoption gate; send-time fingerprinting still checks actual source rows."""
+    ui = loads_dict(card["ui_state"]) or {}
+    latest = ui.get("history_latest") or {}
+    state = initial_import_state.load(db, card["project_id"])
+    patient = db.execute("SELECT patient_name,is_archived FROM patients WHERE project_id=?", (card["project_id"],)).fetchone()
+    identity = list(patient) if patient else None
+    in_flight = db.execute("SELECT 1 FROM notification_renders WHERE card_id=? "
+                          "AND state IN ('sending','unknown') LIMIT 1", (card["card_id"],)).fetchone()
+    if (state is None or not latest or ui.get("history_source_dirty") and not in_flight
+            or state["capture_phase"] != latest.get("capture_phase")
+            or identity != ui.get("history_patient_identity")):
+        return True
+    if (latest.get("phase") == "complete" and card["delivery_state"] == "delivered"
+            and ui.get("history_dirty_since") is None):
+        return False
+    return now - ui.get("history_checked_at", 0) >= UPDATE_SECONDS
+
+
 def refresh(db, card, cfg, now, *, force=False):
     """Refresh small latest counts; only an idle delivery may adopt them."""
+    if not force and not refresh_needed(db, card, now):
+        return dict(card)
     ui = loads_dict(card["ui_state"]) or {}
     state = initial_import_state.load(db, card["project_id"])
     if state is None:
@@ -130,12 +151,14 @@ def refresh(db, card, cfg, now, *, force=False):
     if source_changed:
         ui.setdefault("history_dirty_since", now)
     changed_phase = state["capture_phase"] != latest.get("capture_phase")
-    if force or source_changed or not latest or changed_phase or now - ui.get("history_checked_at", 0) >= UPDATE_SECONDS:
+    if force or source_changed or ui.get("history_source_dirty") or not latest or changed_phase or now - ui.get("history_checked_at", 0) >= UPDATE_SECONDS:
         current = snapshot(db, card, cfg, now)
         if {k: v for k, v in current.items() if k not in ("observed_at", "artifact_cutoff")} != {
                 k: v for k, v in latest.items() if k not in ("observed_at", "artifact_cutoff")}:
             ui.setdefault("history_dirty_since", now)
-        ui.update(history_latest=current, history_checked_at=now, history_analysis_changes=0)
+        patient = db.execute("SELECT patient_name,is_archived FROM patients WHERE project_id=?", (card["project_id"],)).fetchone()
+        ui.update(history_latest=current, history_checked_at=now, history_analysis_changes=0,
+                  history_patient_identity=list(patient) if patient else None)
         latest = current
     adopted = ui.get("history_snapshot") or {}
     live = db.execute("SELECT state FROM notification_renders WHERE card_id=? "
@@ -144,12 +167,13 @@ def refresh(db, card, cfg, now, *, force=False):
     # LINE WORKS emits only its two immutable phase posts.
     can_adopt = (not live or source_changed and live[0] in ("queued", "held")) and (
         card["transport"] != "lineworks" or not adopted or card["message_id"] is None)
-    due = (source_changed or not adopted or latest.get("phase") != adopted.get("phase")
+    due = (source_changed or ui.get("history_source_dirty") or not adopted or latest.get("phase") != adopted.get("phase")
            or now - ui.get("history_rendered_at", 0) >= UPDATE_SECONDS)
     if can_adopt and due and ui.get("history_dirty_since") is not None:
         ui["history_snapshot"] = {**latest, **({"phase": "capturing"} if phase == "start" else {})}
         ui["history_rendered_at"] = now
         ui.pop("history_dirty_since", None)
+        ui.pop("history_source_dirty", None)
     if not adopted and "history_snapshot" not in ui:
         ui["history_snapshot"] = {**latest, **({"phase": "capturing"} if phase == "start" else {})}
     if ui.get("history_snapshot") != adopted or "history_source_fp" not in ui:
@@ -208,15 +232,14 @@ def coalesce_tx(db, card, scope, epoch, now):
 
 
 def analysis_changed(db, card, cfg, now):
-    """Count completed source changes between bounded aggregate refreshes."""
+    """Mark one changed source; aggregate work belongs to the bounded sweep."""
     ui = loads_dict(card["ui_state"]) or {}
-    changes = ui.get("history_analysis_changes", 0) + 1
-    ui["history_analysis_changes"] = changes
+    ui["history_analysis_changes"] = ui.get("history_analysis_changes", 0) + 1
+    ui.setdefault("history_dirty_since", now)
+    if (ui.get("history_latest") or {}).get("phase") == "complete":
+        ui["history_source_dirty"] = True
     db.execute("UPDATE notification_cards SET ui_state=? WHERE card_id=?", (json.dumps(ui), card["card_id"]))
-    card = {**dict(card), "ui_state": json.dumps(ui)}
-    latest = ui.get("history_latest") or {}
-    final_candidate = latest.get("analyzed", 0) + latest.get("deleted", 0) + changes >= latest.get("saved", 0)
-    return refresh(db, card, cfg, now, force=final_candidate)
+    return {**dict(card), "ui_state": json.dumps(ui)}
 
 
 def emit_completion_tx(ledger, card, now):

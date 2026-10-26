@@ -201,7 +201,7 @@ WIZARD = [
         ("semantic.extract_qc", "choice:off,annotate", "off",
          "抽出結果への Jev 監査注記", _semantic_on),
         ("semantic.daily_request_budget", "int", None,
-         "Jev要求の1日上限（再試行込み、空欄=500、最大500、0=送信停止）", _semantic_on),
+         "Jev要求の1日上限（再試行込み、空欄=auto時500・手動mode時0、最大500、0=送信停止）", _semantic_on),
     ]),
 ]
 
@@ -407,6 +407,8 @@ def wizard(cfg: dict):
         for key, kind, default, desc, when in items:
             if when is not None and not when(cfg):
                 continue
+            if key == "semantic.project_ids" and get_key(cfg, "semantic.mode") in ("shadow", "assist", "enforce"):
+                kind = "reqintlist"
             if not detailed and key not in basic and not kind.startswith("req") \
                     and not key.endswith(("project_ids", "project_ids_auto", "allowed_role_ids")):
                 if not has_key(cfg, key) and default is not None:
@@ -573,7 +575,7 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
     features = ("mode", "summary_mode", "loop_mode", "extract_qc")
     if any(semantic[key] != "off" for key in features) and semantic["daily_request_budget"] > 0:
         print(f"  外部Jev追加解析: 対象プロジェクト {project_scope} の投稿本文を、"
-              "機能ごとの許可条件がそろった場合にJev APIへ送ります。")
+              "機能ごとの許可条件がそろった場合にJev APIへ送ります。患者名を含む本文は匿名化しません。")
     else:
         print("  外部Jev追加解析: 無効（有効な機能と送信予算が必要です）")
     print("  Jev設定: " + ", ".join(f"{key}={shown(semantic[key])}" for key in features)
@@ -581,7 +583,9 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
     cloud_scope = "全対象" if cloud["project_ids"] is None else shown(cloud["project_ids"])
     if cloud["mode"] in ("on", "shadow") and cloud_key:
         print(f"  Anthropic追加処理: {cloud['mode']} / 対象 {cloud_scope}。患者コンテキストと対象の再抽出で、"
-              "投稿本文・参考文脈をAnthropic APIへ送信します。通常のAPI保持条件が適用されます。")
+              "患者名を含む投稿本文・参考文脈を匿名化せずAnthropic APIへ送信します。通常のAPI保持条件が適用されます。"
+              "キー登録だけではZDRやHIPAAに関する契約は確認できません。保持条件と契約を利用者側で確認してください。"
+              "詳細: docs/guides/ANTHROPIC.md")
     else:
         print(f"  Anthropic追加処理: {cloud['mode']} / キー未登録・off・dry_runの場合は外部送信しません。")
     print("  公開薬情報の照会: 同梱公開マスターで照合した薬品名・一般疾患名・公式URLを"

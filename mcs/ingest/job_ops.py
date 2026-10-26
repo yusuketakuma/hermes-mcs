@@ -22,6 +22,9 @@ Responsibilities:
   job drains; missing bodies/failed threads become durable reply jobs.
 """
 import os
+import json
+
+import history_walk
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -240,6 +243,7 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                     if since < pl["since"]:
                         pl["page"] = 1
                         pl["stalls"] = 0
+                        pl.pop("walk", None)
                     pl["since"] = min(since, pl.get("since", since))
                     pl["pages"] = max(pl.get("pages", 10),
                                       req.get("pages", 10))
@@ -497,6 +501,35 @@ def run_reply_jobs(adapter, ledger, result, deadline,
                              reason_code="replies_missing")
 
 
+def _settle_initial_history(ledger, job, payload, cohort):
+    """Publish an accepted walk and its capture boundary in one transaction."""
+    import initial_import_state
+    db, pid = ledger.db, job["project_id"]
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        state = initial_import_state.load(db, pid)
+        if state is None or state["cohort_id"] != cohort or not history_walk.accepted(payload, pid, cohort):
+            raise ValueError("initial_history_walk_invalid")
+        join, where = initial_import_state.history_predicate()
+        jobs = db.execute("SELECT j.state FROM fetch_jobs j WHERE j.project_id=? AND j.kind IN ('reply','thread') "
+                          "AND (j.state='pending' OR (j.state='failed' AND j.message_id IN ("
+                          f"SELECT m.message_id FROM messages m {join} WHERE m.project_id=? AND {where})))",
+                          (pid,pid,cohort)).fetchall()
+        incomplete = db.execute(f"SELECT 1 FROM messages m {join} WHERE m.project_id=? AND {where} "
+                                "AND (m.body_state IS NULL OR m.body_state NOT IN ('full','deleted')) LIMIT 1", (pid,cohort)).fetchone()
+        failed = any(r[0] == "failed" for r in jobs)
+        ready = not jobs and not incomplete
+        reason = "replies_missing" if failed else "window_stalled" if incomplete else "waiting_replies"
+        db.execute("UPDATE fetch_jobs SET payload=?,state=?,reason_code=?,next_try=?,updated_at=? WHERE job_id=?",
+                   (json.dumps(payload), "done" if ready else "failed" if failed or incomplete else "pending",
+                    None if ready else reason, time.time()+300, time.time(),job["job_id"]))
+        if ready:
+            db.execute("UPDATE patients SET history_floor=-1,coverage_ts=MAX(COALESCE(coverage_ts,0),?) WHERE project_id=?",
+                       (ledger.high_watermark(pid),pid))
+        initial_import_state.refresh_capture_tx(ledger, pid, time.time())
+    return ready
+
+
 def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                      trickle_pages: int = TRICKLE_PAGES,
                      max_jobs: int | None = None,
@@ -532,8 +565,39 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
         if time.monotonic() > deadline - budget:
             break
         pid = job["project_id"]
+        import initial_import_state
+        try:
+            initial_state = initial_import_state.load(ledger.db, pid)
+        except ValueError:
+            ledger.job_fail(job["job_id"], reason_code="schema_error")
+            result["errors"].append(f"import {pid}: initial_import_invalid")
+            continue
         since = pl["since"]
         pages = trickle_pages if trickle else pl.get("pages", 10)
+        initial = (job["kind"] == "history" and since == 0 and initial_state is not None
+                   and not (initial_state["capture_phase"] == "complete" and history_walk.capture_proof(
+                       initial_state.get("capture_proof"), pid, initial_state["cohort_id"])))
+        if initial:
+            try:
+                if "walk" not in pl:
+                    pl["page"] = 1
+                    pl["walk"] = history_walk.start(pid, initial_state["cohort_id"])
+                walk = history_walk.validate(pl, pid, initial_state["cohort_id"])
+            except ValueError:
+                ledger.job_fail(job["job_id"], reason_code="invalid_payload")
+                result["errors"].append(f"import {pid}: initial_history_walk_invalid")
+                done_n += 1
+                if done_n >= limit:
+                    break
+                continue
+            if walk["phase"] == "accepted":
+                floored = _settle_initial_history(ledger, job, pl, initial_state["cohort_id"])
+                result.setdefault("trickle_imports" if trickle else "cmd_imports", []).append(
+                    {"pid": pid, "new": 0, "floored": floored})
+                done_n += 1
+                if done_n >= limit:
+                    break
+                continue
         cursor = pl.get("page", 1)
         sp = cursor if pages <= 1 else max(1, cursor - 1)
         try:
@@ -566,7 +630,19 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
         else:
             new_ids = ledger.save_messages(hist, project_id=pid,
                                            semantic=semantic)
-        if batch.pages and merged.checkpoint_safe:
+        action = None
+        invalid_observations = False
+        if initial:
+            try:
+                action = history_walk.advance(pl, batch, pid, initial_state["cohort_id"], sp, pages,
+                                              checkpoint_safe=merged.checkpoint_safe)
+            except ValueError:
+                invalid_observations = True
+            if action in ("progress", "accepted", "rescan", "mismatch"):
+                pl["stalls"] = 0
+            elif not batch.error and not merged.deadline and merged.error is None:
+                pl["stalls"] = pl.get("stalls", 0)+1
+        elif batch.pages and merged.checkpoint_safe:
             pl["page"] = sp + batch.pages
             pl["stalls"] = 0
         elif not batch.error and not merged.deadline and merged.error is None:
@@ -578,7 +654,17 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
             pl["stalls"] = pl.get("stalls", 0) + 1
         floored = False
         is_head = job["kind"] == "history_head"
-        if batch.reached and not batch.error and merged.checkpoint_safe \
+        if initial and invalid_observations:
+            ledger.job_fail(job["job_id"], reason_code="schema_error")
+            result["errors"].append(f"import {pid}: initial_history_observations_invalid")
+        elif initial and action in ("rescan", "mismatch"):
+            ledger.job_defer(job["job_id"], 0 if action == "rescan" and not pl["walk"]["mismatches"] else 300,
+                             payload=pl, reason_code="window_stalled" if pl["walk"]["mismatches"] else None)
+            if pl["walk"]["mismatches"] >= HISTORY_STALL_LIMIT:
+                ledger.job_fail(job["job_id"], reason_code="window_stalled")
+        elif initial and action == "accepted":
+            floored = _settle_initial_history(ledger, job, pl, initial_state["cohort_id"])
+        elif not initial and batch.reached and not batch.error and merged.checkpoint_safe \
                 and ledger.pending_reply_jobs(pid) == 0:
             # floor only when the root walk AND all required reply bodies
             # completed (Oracle B08); non-terminal parent bodies already
@@ -610,7 +696,7 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
             # work: it is bounded by consecutive no-progress cuts (stalls,
             # reset on progress) instead of attempts, which never reset.
             if batch.error.kind == "deadline_exceeded":
-                if not (batch.pages and merged.checkpoint_safe):
+                if not (action == "progress" if initial else batch.pages and merged.checkpoint_safe):
                     pl["stalls"] = pl.get("stalls", 0) + 1
                 if pl["stalls"] >= HISTORY_STALL_LIMIT:
                     ledger.job_fail(job["job_id"],

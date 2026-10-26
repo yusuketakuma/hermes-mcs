@@ -27,7 +27,6 @@ LEDGER_WRITERS = {
     "run_check.py", "semantic.py", "semantic_drain.py", "mcs_update.py",
     "project_metadata.py",
     "cross_lists.py",
-    "cloud_cli.py", "semantic_jev.py",  # Short, run-lock-protected controls and live usage reservations.
 }
 
 _LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin", "adapters", "lineworks_adapter", "mcs_standalone"}
@@ -353,12 +352,21 @@ def gate_snapshot_readonly() -> list[str]:
         if path.is_relative_to(MCS) \
                 and path.name in LEDGER_WRITERS | {"ledger.py"}:
             continue
+        tree = ast.parse(text)
+        ledger_write_lines = {
+            node.lineno for fn in tree.body
+            if isinstance(fn, ast.FunctionDef) and (
+                (path == MCS / "ops/cloud_cli.py" and fn.name == "command")
+                or (path == MCS / "semantic/semantic_jev.py" and fn.name == "_reserve_live_usage"))
+            for node in ast.walk(fn)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "Ledger"}
         for m in re.finditer(r"\bLedger\s*\(", text):
             line = text.count("\n", 0, m.start()) + 1
-            bad.append(f"{path.name}:{line} write-mode Ledger(")
+            if line not in ledger_write_lines:
+                bad.append(f"{path.name}:{line} write-mode Ledger(")
         if path.name in _SQLITE_RW_OK:
             continue
-        tree = ast.parse(text)
         # Only the locked apply function may write; the cancellation plan
         # remains subject to the same read-only checks as every other view.
         operator_writes = {node for fn in tree.body

@@ -151,6 +151,23 @@ def test_snapshot_gate_checks_the_uri_argument(monkeypatch, tmp_path, call, allo
     assert bool(gates.gate_snapshot_readonly()) is not allowed
 
 
+@pytest.mark.parametrize("relative,function", [
+    ("semantic/semantic_jev.py", "_reserve_live_usage"),
+    ("ops/cloud_cli.py", "command"),
+])
+def test_cloud_writer_exemption_stays_inside_locked_function(monkeypatch, tmp_path, relative, function):
+    gates = _load("ci_cloud_writer", "ci/gates.py")
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    path.write_text(f"def {function}():\n return Ledger('synthetic.db')\n")
+    monkeypatch.setattr(gates, "MCS", tmp_path)
+    monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
+    assert not gates.gate_snapshot_readonly()
+    with path.open("a") as out:
+        out.write("def unrelated():\n return Ledger('synthetic.db')\n")
+    assert len(gates.gate_snapshot_readonly()) == 1
+
+
 def test_platform_gates_distinguish_provisioning_and_uri_encoding(monkeypatch, tmp_path):
     gates = _load("ci_platform", "ci/gates.py")
     mcs = tmp_path / "mcs"

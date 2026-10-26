@@ -1766,3 +1766,27 @@ def test_ws_refuses_non_loopback_before_connecting(monkeypatch, url):
                         lambda *a, **k: pytest.fail("must not connect"))
     with pytest.raises(mcs_contract.BootstrapError, match="cdp_ws_url_invalid"):
         mcs_cdp._WSConn(url, 5)
+
+
+def test_history_page_observations_precede_filter_and_preserve_empty_page_and_order():
+    import history_walk
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self,path,params=None,extend_session=True):
+            return {'messages': [{'id':9,'comment':'old','created_at':'2020-01-01T00:00:00+09:00'},
+                                  {'id':2,'comment':'old','created_at':'2020-01-01T00:00:00+09:00'}]
+                    if params['page'] == 1 else [],
+                    'paginate':{'has_next':params['page'] == 1}}
+    batch = Adapter().fetch_history(1,_CUTOFF,max_pages=3)
+    assert batch.messages == [] and batch.pages == 2 and batch.reached
+    assert batch.page_observations == [history_walk.observation(1,_CUTOFF,1,10,True,[9,2]),
+                                       history_walk.observation(1,_CUTOFF,2,10,False,[])]
+
+
+def test_history_failed_half_page_never_publishes_partial_observation():
+    class Adapter(mcs_adapter.MCSAdapter):
+        def _get(self,path,params=None,extend_session=True):
+            return {'messages':[{'id':1,'comment':'synthetic'}, {'id':None}],
+                    'paginate':{'has_next':False}}
+    batch = Adapter().fetch_history(1,0,max_pages=3)
+    assert batch.messages == [] and batch.pages == 0 and batch.page_observations == []
+    assert batch.error.kind == 'schema_error' and not batch.reached

@@ -15,6 +15,8 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _mcs_path  # noqa: F401,E402
 
+import initial_import_state
+
 from mcs_util import valid_text  # noqa: E402
 from mcs_requests import canonical, payload_hash, valid_uuid  # noqa: E402
 from writer_lock import acquire_run_lock
@@ -41,14 +43,19 @@ def _target(db, event_id):
     attempts = [dict(r) for r in db.execute(
         "SELECT a.* FROM notification_delivery_attempts a JOIN notification_renders r "
         "USING(delivery_id) WHERE r.intent_event_id=? ORDER BY attempt_id", (event_id,))]
-    if row["kind"] == "new_messages":
+    unsealed_history = None
+    if row["kind"] == "patient_history" and not coverage:
+        unsealed_history = _unsealed_history(db, row, renders, attempts, progress)
+    elif row["kind"] in ("new_messages", "patient_history"):
         if (row["state"] != "pending" or row["next_try"] is None or renders
                 or len(coverage) != 1 or coverage[0]["state"] != "pending"
                 or coverage[0]["delivery_id"] is not None
                 or coverage[0]["required_render_rev"] != 0 or "hold_reason" in progress):
             raise ValueError("notification_already_issued")
-        card = db.execute("SELECT transport FROM notification_cards WHERE card_id=?",
+        card = db.execute("SELECT transport,message_id,desired_render_rev FROM notification_cards WHERE card_id=?",
                           (coverage[0]["card_id"],)).fetchone()
+        if row["kind"] == "patient_history" and (card is None or card["message_id"] is not None or card["desired_render_rev"] != 0):
+            raise ValueError("notification_already_issued")
         if card is None or card[0] not in TRANSPORTS:
             raise ValueError("unsupported_transport")
     elif row["kind"] == "daily_digest":
@@ -64,9 +71,55 @@ def _target(db, event_id):
         raise ValueError("unsupported_event")
     # Only hashes leave the DB: payloads and destination identifiers remain private.
     state = {"outbox": dict(row), "coverage": coverage, "renders": renders, "attempts": attempts}
-    return {"event_id": event_id, "kind": row["kind"],
-            "state_sha256": hashlib.sha256(canonical(state)).hexdigest(),
-            "notice_specs": [r["delivery_id"] for r in renders]}
+    target = {"event_id": event_id, "kind": row["kind"],
+              "state_sha256": hashlib.sha256(canonical(state)).hexdigest(),
+              "notice_specs": [r["delivery_id"] for r in renders]}
+    if unsealed_history is not None:
+        target["unsealed_history"] = unsealed_history
+    return target
+
+
+def _unsealed_history(db, row, renders, attempts, progress):
+    if (row["state"] != "pending" or row["next_try"] is None or row["attempts"] != 0
+            or renders or attempts or "hold_reason" in progress):
+        raise ValueError("notification_already_issued")
+    payload = json.loads(row["payload"])
+    state = initial_import_state.load(db, row["project_id"])
+    if (state is None or not isinstance(payload, dict) or payload.get("source") != "initial_history"
+            or payload.get("cohort_id") != state["cohort_id"]
+            or state.get("notification_cancelled")):
+        raise ValueError("initial_history_source_changed")
+    siblings = db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' AND project_id=? "
+                          "AND json_valid(payload) AND json_extract(payload,'$.source')='initial_history' "
+                          "AND json_extract(payload,'$.cohort_id')=? ORDER BY event_id LIMIT 21",
+                          (row["project_id"], state["cohort_id"])).fetchall()
+    if len(siblings) > 20:
+        raise ValueError("history_cancel_scope_too_large")
+    for sibling in siblings:
+        eid = sibling["event_id"]
+        raw = json.loads(sibling["progress"] or "{}")
+        if (sibling["route"] != "interactive" or sibling["state"] != "pending"
+                or sibling["next_try"] is None or sibling["attempts"] != 0
+                or not isinstance(raw, dict) or raw.keys() - {"wait"}
+                or db.execute("SELECT 1 FROM notification_intent_batches WHERE event_id=?", (eid,)).fetchone()
+                or db.execute("SELECT 1 FROM notification_intent_cards WHERE event_id=?", (eid,)).fetchone()
+                or db.execute("SELECT 1 FROM notification_renders WHERE intent_event_id=?", (eid,)).fetchone()):
+            raise ValueError("notification_already_issued")
+    if db.execute("SELECT 1 FROM notification_cards WHERE kind='patient_history' AND project_id=?",
+                  (row["project_id"],)).fetchone():
+        raise ValueError("notification_already_issued")
+    return {"project_id": row["project_id"], "cohort_id": state["cohort_id"],
+            "event_ids": [r["event_id"] for r in siblings],
+            "state_sha256": payload_hash({"cohort": state, "events": [dict(r) for r in siblings]})}
+
+
+def _cancel_history_tx(db, event_id):
+    row = db.execute("SELECT project_id,payload FROM notify_outbox WHERE event_id=? AND kind='patient_history'", (event_id,)).fetchone()
+    if row is None:
+        return
+    payload = json.loads(row["payload"])
+    if isinstance(payload, dict) and payload.get("source") == "initial_history":
+        initial_import_state.cancel_notifications_tx(db, row["project_id"], payload.get("cohort_id"))
 
 
 def build_plan(db, event_ids):
@@ -74,7 +127,11 @@ def build_plan(db, event_ids):
     if (not event_ids or len(event_ids) > 20 or len(set(event_ids)) != len(event_ids)
             or any(type(i) is not int or i <= 0 for i in event_ids)):
         raise ValueError("bad_event_ids")
-    return {"version": 1, "events": [_target(db, i) for i in sorted(event_ids)]}
+    targets = [_target(db, i) for i in sorted(event_ids)]
+    expanded = set(event_ids).union(*(e.get("unsealed_history", {}).get("event_ids", []) for e in targets))
+    if len(expanded) > 20:
+        raise ValueError("history_cancel_scope_too_large")
+    return {"version": 1, "events": targets}
 
 
 def _transports(db, event_ids):
@@ -192,7 +249,9 @@ def apply(root, request):
                 if prior["payload_hash"] != digest:
                     raise ValueError("command_id_conflict")
                 receipt = json.loads(prior["receipt_json"])
-                _workers_stopped(data, _transports(db, receipt["event_ids"]), locks)
+                transports = _transports(db, receipt["event_ids"])
+                if transports:
+                    _workers_stopped(data, transports, locks)
             else:
                 plan = request["plan"]
                 try:
@@ -204,7 +263,10 @@ def apply(root, request):
                 if build_plan(db, ids) != plan:
                     raise ValueError("stale_plan")
                 transports = _transports(db, ids)
-                _workers_stopped(data, transports, locks)
+                # An unsealed cohort has no destination, spec or HTTP-capable worker.
+                # The run lock excludes every writer that could seal it meanwhile.
+                if transports:
+                    _workers_stopped(data, transports, locks)
                 if db.execute("SELECT 1 FROM notification_restore_holds "
                               "WHERE released_at IS NULL LIMIT 1").fetchone():
                     raise ValueError("restore_delivery_held")
@@ -221,17 +283,25 @@ def apply(root, request):
                 db.execute("BEGIN IMMEDIATE")
                 if build_plan(db, ids) != plan:
                     raise ValueError("stale_plan")
-                _workers_stopped(data, transports)
+                if transports:
+                    _workers_stopped(data, transports)
+                cancel_ids = sorted(set(ids).union(*(e.get("unsealed_history", {}).get("event_ids", []) for e in plan["events"])))
                 now = time.time()
-                for event_id in ids:
+                for event_id in cancel_ids:
+                    _cancel_history_tx(db, event_id)
                     db.execute("UPDATE notification_intent_cards SET state='suppressed' "
                                "WHERE event_id=? AND state='pending'", (event_id,))
                     db.execute("UPDATE notify_outbox SET state='suppressed',next_try=NULL,updated_at=? "
                                "WHERE event_id=?", (now, event_id))
+                    db.execute("UPDATE notification_cards SET delivery_state='revoked',revoked_at=?,updated_at=? "
+                               "WHERE kind='patient_history' AND message_id IS NULL AND desired_render_rev=0 "
+                               "AND card_id IN (SELECT card_id FROM notification_intent_cards WHERE event_id=?) "
+                               "AND NOT EXISTS(SELECT 1 FROM notification_intent_cards i WHERE i.card_id=notification_cards.card_id "
+                               "AND i.state='pending')", (now, now, event_id))
                 receipt = {"kind": "ops.notification_cancel_unissued", "outcome": "applied",
                            "command_id": request["command_id"], "actor": request["actor"],
                            "reason": request["reason"], "processed_at": now,
-                           "event_ids": ids, "backup": str(backup), "plan": plan,
+                           "event_ids": cancel_ids, "backup": str(backup), "plan": plan,
                            "notice_specs": [s for e in plan["events"] for s in e["notice_specs"]],
                            "remote_operations": 0}
                 db.execute("INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",

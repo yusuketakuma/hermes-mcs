@@ -100,6 +100,62 @@ def test_conflicting_result_restores_max_and_requires_explicit_resume(tmp_path, 
         assert c.block_reason(db, _cfg(), "reextract", 1) == "pricing_unverified"
 
 
+@pytest.mark.parametrize("settled", [False, True])
+def test_discard_receipt_preserves_billing_and_result_idempotence(tmp_path, now, settled):
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        reservation = _reserve(db)
+        if settled:
+            c.record_result(db, reservation, _result(reservation))
+        before = c.usage_report(db)
+        results = [dict(row) for row in db.artifacts("cloud_usage_result")]
+        with pytest.raises(RuntimeError, match="transaction_required"):
+            c.record_disposition_tx(db, reservation, "discarded_scope")
+        db.db.execute("BEGIN IMMEDIATE")
+        receipt = c.record_disposition_tx(db, reservation, "discarded_scope")
+        assert c.record_disposition_tx(db, reservation, "discarded_scope") == receipt
+        db.db.commit()
+        assert c.usage_report(db) == before
+        assert [dict(row) for row in db.artifacts("cloud_usage_result")] == results
+        if settled:
+            c.record_result(db, reservation, _result(reservation))
+            assert c.usage_report(db) == before
+        assert len(db.artifacts("cloud_usage_disposition")) == 1
+
+
+@pytest.mark.parametrize("change", ["project_id", "request_fp", "unit_key", "disposition"])
+def test_discard_receipt_rejects_changed_identity_or_reason(tmp_path, now, change):
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        reservation = _reserve(db)
+        db.db.execute("BEGIN IMMEDIATE")
+        c.record_disposition_tx(db, reservation, "discarded_scope")
+        db.db.commit()
+        edited = dict(reservation)
+        reason = "discarded_scope"
+        if change == "disposition":
+            reason = "discarded_workday"
+        else:
+            edited[change] = 2 if change == "project_id" else "different"
+        db.db.execute("BEGIN IMMEDIATE")
+        with pytest.raises(AnthropicError):
+            c.record_disposition_tx(db, edited, reason)
+        db.db.rollback()
+        assert len(db.artifacts("cloud_usage_disposition")) == 1
+        db.db.execute("BEGIN IMMEDIATE")
+        with pytest.raises(ValueError, match="disposition_invalid"):
+            c.record_disposition_tx(db, reservation, "free-form-error")
+        db.db.rollback()
+
+
+def test_discard_receipt_rolls_back_with_owner_transaction(tmp_path, now):
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        reservation = _reserve(db)
+        db.db.execute("BEGIN IMMEDIATE")
+        c.record_disposition_tx(db, reservation, "discarded_workday")
+        db.db.rollback()
+        assert db.artifacts("cloud_usage_disposition") == []
+        assert c.usage_report(db)["unresolved_requests"] == 1
+
+
 def test_maximum_budget_boundary_and_no_refund(tmp_path, now):
     limit = float(c.max_cost(100))
     with closing(Ledger(str(tmp_path / "l.db"))) as db:
@@ -155,7 +211,9 @@ def test_cache_prices_and_long_threshold():
 
 def test_expired_prices_stop_and_dryrun_is_scope_free(tmp_path, now, monkeypatch):
     with closing(Ledger(str(tmp_path / "l.db"))) as db:
-        c.dryrun(db, route="reextract", project_id=1, unit_key="private-id", input_chars=123)
+        with db.db:
+            db.db.execute("BEGIN")
+            c.dryrun_tx(db, route="reextract", project_id=1, unit_key="private-id", input_chars=123)
         row = db.artifacts("cloud_usage_dryrun")[0]
         assert row["project_id"] is None and row["message_id"] is None
         assert "private-id" not in json.dumps(dict(row))
@@ -164,6 +222,19 @@ def test_expired_prices_stop_and_dryrun_is_scope_free(tmp_path, now, monkeypatch
         with pytest.raises(AnthropicError, match="pricing_unverified"):
             _reserve(db)
         assert c.block_reason(db, _cfg(), "reextract", 1) == "pricing_unverified"
+
+
+def test_dryrun_requires_success_transaction_and_rolls_back_with_it(tmp_path):
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        with pytest.raises(RuntimeError, match="cloud_dryrun_transaction_required"):
+            c.dryrun_tx(db, route="reextract", project_id=1, unit_key="synthetic")
+        with pytest.raises(ValueError, match="synthetic publish failure"):
+            with db.db:
+                db.artifact_add_tx("synthetic_success", "{}")
+                c.dryrun_tx(db, route="reextract", project_id=1, unit_key="synthetic")
+                raise ValueError("synthetic publish failure")
+        assert db.artifacts("synthetic_success") == []
+        assert db.artifacts("cloud_usage_dryrun") == []
 
 
 @pytest.mark.parametrize("kind", ["auth_error", "payment_required", "pricing_unverified"])
@@ -265,3 +336,114 @@ def test_discarded_result_still_settles_actual_usage(tmp_path, now, disposition)
         meta = json.loads(db.artifacts("cloud_usage_result")[0]["meta"])
         assert meta["disposition"] == disposition
         assert Decimal(c.usage_report(db)["monthly_cost_usd"]) == Decimal("0.000002")
+
+
+def test_matching_rows_filters_in_sql_and_keeps_all_retained_duplicates(tmp_path, now, monkeypatch):
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        reservation = _reserve(db)
+        target = reservation["reservation_id"]
+        boundary = now - 62 * 86400
+        duplicate = db.artifact_add("cloud_usage_reserve", "{}", project_id=1, model=MODEL,
+                                    meta={**reservation, "unit_key": "conflicting-binding"})
+        db.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id=?", (boundary, duplicate))
+        expired = db.artifact_add("cloud_usage_reserve", "{}", project_id=1, model=MODEL, meta=reservation)
+        db.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id=?", (boundary - 1, expired))
+        db.db.executemany("INSERT INTO artifacts(kind,meta,created_at) VALUES('cloud_usage_reserve',?,?)",
+                          [(json.dumps({"reservation_id": f"{i:032x}"}), now) for i in range(200)])
+        db.db.commit()
+        statements = []
+        db.db.set_trace_callback(statements.append)
+        rows = c._matching_rows(db, "cloud_usage_reserve", target)
+        assert len(rows) == 2 and expired not in {row["artifact_id"] for row in rows}
+        assert {json.loads(row["meta"])["unit_key"] for row in rows} == {"u", "conflicting-binding"}
+        selects = [sql for sql in statements if sql.startswith("SELECT")]
+        assert len(selects) == 2
+        assert all("created_at>=" in sql and "json_valid(meta)" in sql for sql in selects)
+        assert "json_extract(meta,'$.reservation_id')" in selects[1]
+        assert all("SELECT *" not in sql for sql in selects)
+
+
+def _late_results(db, count, reserve_at, result_at):
+    reservation = _reserve(db)
+    db.db.execute("DELETE FROM artifacts WHERE kind='cloud_usage_reserve'")
+    for index in range(count):
+        prior = {**reservation, "reservation_id": f"{index + 10000:032x}", "unit_key": str(index)}
+        reserve_id = db.artifact_add_tx("cloud_usage_reserve", "{}", project_id=1, model=MODEL, meta=prior)
+        result = {key: prior.get(key) for key in ("reservation_id", "request_fp", "route", "project_id",
+                  "unit_key", "message_id", "model", "price_version")}
+        result.update(usage=None, cost_usd=prior["max_cost_usd"], http_class="transport", error_kind="transport")
+        result_id = db.artifact_add_tx("cloud_usage_result", "{}", project_id=1, model=MODEL, meta=result)
+        db.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id=?", (reserve_at, reserve_id))
+        db.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id=?", (result_at, result_id))
+    db.db.commit()
+
+
+@pytest.mark.parametrize("count", [40, 400, 901])
+def test_month_crossing_bindings_use_batched_queries_and_linear_python_decoding(tmp_path, now, monkeypatch, count):
+    current = datetime(2026, 11, 1, 0, 1, tzinfo=c.JST).timestamp()
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        _late_results(db, count, current - 120, current - 30)
+        # Unrelated retained history must not be parsed once for every late result.
+        db.db.executemany("INSERT INTO artifacts(kind,meta,created_at) VALUES('cloud_usage_reserve',?,?)",
+            [(json.dumps({"reservation_id": f"{index:032x}"}), current - 86400) for index in range(1000)])
+        db.db.commit()
+        original = c._loads
+        decoded = []
+
+        def tracked(raw):
+            decoded.append(1)
+            return original(raw)
+
+        monkeypatch.setattr(c, "_loads", tracked)
+        statements = []
+        db.db.set_trace_callback(statements.append)
+        report = c.usage_report(db, now=current)
+        assert not report["pricing_unverified"] and report["daily_requests"] == 0
+        assert Decimal(report["monthly_cost_usd"]) == 0  # All reservations belong to October.
+        selects = [sql for sql in statements if sql.startswith("SELECT")]
+        assert len(selects) == 2 + (count + 899) // 900
+        assert len(decoded) == 2 * count
+        assert all("created_at>=" in sql for sql in selects)
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_month_crossing_binding_at_retention_boundary_is_not_lost(tmp_path, now, duplicate):
+    current = datetime(2026, 11, 1, 0, 1, tzinfo=c.JST).timestamp()
+    boundary = current - 62 * 86400
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        _late_results(db, 1, boundary, current - 30)
+        if duplicate:
+            row = db.artifacts("cloud_usage_reserve")[0]
+            meta = json.loads(row["meta"])
+            conflicting = db.artifact_add("cloud_usage_reserve", "{}", project_id=1, model=MODEL,
+                                           meta={**meta, "unit_key": "conflict"})
+            db.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id=?", (boundary, conflicting))
+            db.db.commit()
+        report = c.usage_report(db, now=current)
+        assert report["pricing_unverified"] is duplicate
+        if not duplicate:
+            db.db.execute("UPDATE artifacts SET created_at=? WHERE kind='cloud_usage_reserve'", (boundary - 1,))
+            db.db.commit()
+            assert c.usage_report(db, now=current)["pricing_unverified"]
+
+
+def test_result_without_any_reservation_still_fails_closed(tmp_path, now):
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        reservation = _reserve(db)
+        c.record_result(db, reservation, _result(reservation))
+        db.db.execute("DELETE FROM artifacts WHERE kind='cloud_usage_reserve'")
+        db.db.commit()
+        assert c.usage_report(db)["pricing_unverified"]
+
+
+@pytest.mark.parametrize("invalid_meta", ["{invalid", "[]", "null", "1", None])
+def test_retained_corrupt_prior_reservation_stops_cross_month_usage(tmp_path, now, invalid_meta):
+    current = datetime(2026, 11, 1, 0, 1, tzinfo=c.JST).timestamp()
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        _late_results(db, 1, current - 120, current - 30)
+        db.db.execute("INSERT INTO artifacts(kind,meta,created_at) VALUES('cloud_usage_reserve',?,?)",
+                      (invalid_meta, current - 86400))
+        db.db.commit()
+        assert c.usage_report(db, now=current)["pricing_unverified"]
+        with pytest.raises(AnthropicError, match="pricing_unverified"):
+            c._matching_rows_many(db, "cloud_usage_reserve", [f"{10000:032x}"], now=current)

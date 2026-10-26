@@ -492,3 +492,94 @@ def test_operator_sqlite_gate_exception_is_scoped_and_requires_the_run_lock(
     monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
     assert bool(gates.gate_snapshot_readonly()) is snapshot_bad
     assert bool(gates.gate_writer_lock()) is writer_bad
+
+
+def test_never_issued_history_cancel_revokes_only_local_card_and_has_no_remote_operation(case):
+    case.led.db.execute("INSERT INTO notification_cards(card_key,kind,project_id,anchor_key,transport,profile,team_id,channel_id,created_at,updated_at) "
+                        "VALUES('history-unissued','patient_history',1,'{}','slack',?,?,?, ?,?)",
+                        (SCOPE["profile"], SCOPE["team_id"], SCOPE["channel_id"], NOW, NOW))
+    cid = case.led.db.execute("SELECT card_id FROM notification_cards WHERE card_key='history-unissued'").fetchone()[0]
+    eid = _event(case.led, "patient_history", 1, {"source": "initial_history", "cohort_id": "a"*32})
+    case.led.db.execute("INSERT INTO notification_intent_cards(event_id,card_id,coverage) VALUES(?,?,?)", (eid,cid,json.dumps(["a"*32])))
+    case.led.db.commit()
+    case.events = [eid]
+    receipt = cancel.apply(case.root, _request(case))
+    assert receipt["remote_operations"] == 0
+    assert case.led.db.execute("SELECT state FROM notify_outbox WHERE event_id=?", (eid,)).fetchone()[0] == "suppressed"
+    assert case.led.db.execute("SELECT delivery_state FROM notification_cards WHERE card_id=?", (cid,)).fetchone()[0] == "revoked"
+    assert not case.led.db.execute("SELECT 1 FROM notification_renders WHERE card_id=?", (cid,)).fetchone()
+    assert all(case.led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?", (render["delivery_id"],)).fetchone()[0] == "unknown" for render,_ in case.old_renders)
+
+
+def _unsealed_cohort(case):
+    import initial_import_state
+    with case.led.db:
+        initial_import_state.start_tx(case.led, 1, int(NOW), NOW, boundary_source="server")
+        state = initial_import_state.load(case.led.db, 1)
+        initial_import_state.emit_tx(case.led, 1, state, [100])
+    case.events = [case.led.db.execute("SELECT event_id FROM notify_outbox WHERE kind='patient_history' ORDER BY event_id LIMIT 1").fetchone()[0]]
+    return state
+
+
+def test_unsealed_history_cancel_covers_explicit_cohort_without_worker_or_remote_scope(case, monkeypatch):
+    import initial_import_state
+    state = _unsealed_cohort(case)
+    monkeypatch.setattr(cancel, "_workers_stopped", lambda *a, **kw: pytest.fail("unsealed history has no transport"))
+    request = _request(case)
+    planned = request["plan"]["events"][0]["unsealed_history"]
+    assert planned["cohort_id"] == state["cohort_id"] and len(planned["event_ids"]) == 2
+    before = _snapshot(case.led.db)
+    receipt = cancel.apply(case.root, request)
+    assert receipt["event_ids"] == planned["event_ids"] and receipt["remote_operations"] == 0
+    assert case.led.db.execute("SELECT COUNT(*) FROM notify_outbox WHERE kind='patient_history' AND state='suppressed'").fetchone()[0] == 2
+    stale_state = state
+    state = initial_import_state.load(case.led.db, 1)
+    assert state["notification_cancelled"] is True and state["capture_phase"] == "capturing"
+    with case.led.db:
+        assert initial_import_state.emit_tx(case.led, 1, stale_state, [100]) is None
+    assert cancel.apply(case.root, request) == receipt
+    after = _snapshot(case.led.db)
+    for table in ("messages", "artifacts", "notification_cards", "notification_renders", "notification_render_parts", "notification_delivery_attempts"):
+        assert after[table] == before[table]
+
+
+@pytest.mark.parametrize("change", ["new_intent", "cohort_identity", "seal"])
+def test_unsealed_history_cancel_revalidates_cohort_and_same_transaction_emits(case, monkeypatch, change):
+    import initial_import_state
+    state = _unsealed_cohort(case)
+    request = _request(case)
+    original = cancel._transports
+    injected = []
+    def mutate(db, ids):
+        if not injected:
+            injected.append(True)
+            with case.led.db:
+                if change == "new_intent":
+                    initial_import_state.emit_tx(case.led, 1, state, [200])
+                elif change == "cohort_identity":
+                    changed = dict(state, cohort_id="b"*32)
+                    initial_import_state._write(case.led.db, 1, changed)
+                else:
+                    case.led.db.execute("INSERT INTO notification_intent_batches(event_id,frozen_payload,payload_hash,route_epoch,sealed_at,transport) VALUES(?,'{}',?,1,?,'slack')", (case.events[0],"a"*64,NOW))
+        return original(db, ids)
+    monkeypatch.setattr(cancel, "_transports", mutate)
+    with pytest.raises(ValueError):
+        cancel.apply(case.root, request)
+    assert not initial_import_state.load(case.led.db, 1).get("notification_cancelled")
+    assert case.led.db.execute("SELECT state FROM notify_outbox WHERE event_id=?", (case.events[0],)).fetchone()[0] == "pending"
+    assert not case.led.db.execute("SELECT 1 FROM command_receipts WHERE command_id=?", (request["command_id"],)).fetchone()
+
+
+@pytest.mark.parametrize("anchor", ["{broken", "{}", '{"cohort_id":null}', '{"cohort_id":"other"}'])
+def test_unsealed_cancel_refuses_any_existing_history_card_even_with_unreadable_cohort(case, anchor):
+    import initial_import_state
+    _unsealed_cohort(case)
+    with case.led.db:
+        case.led.db.execute("INSERT INTO notification_cards(card_key,kind,project_id,anchor_key,transport,delivery_state,created_at,updated_at) "
+                            "VALUES('unreadable-history','patient_history',1,?,'slack','delivery_unknown',?,?)", (anchor,NOW,NOW))
+    before = _snapshot(case.led.db)
+    with pytest.raises(ValueError, match="notification_already_issued"):
+        _request(case)
+    assert _snapshot(case.led.db) == before
+    assert not initial_import_state.load(case.led.db, 1).get("notification_cancelled")
+    assert all(case.led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?", (render["delivery_id"],)).fetchone()[0] == "unknown" for render,_ in case.old_renders)

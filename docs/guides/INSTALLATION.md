@@ -134,7 +134,7 @@ B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場�
 | 6. MCSスタンプ | MCS本人ID・1人の操作者・対話通知が揃うと省略時ON。`stamps.enabled=false`で無効。押下者取得は既定OFF | 投稿を指定した本人操作と承認記録で送信・取消 | 今回のカード確認を実MCSへの送信確認としない | 実送信・取消・未読保持・本人照合は別受入。[スタンプ契約](../specs/stamp-management.md) |
 | 7. ローカルAIの抽出・要約 | ローカルLLMを使う。`--no-llm`では別途準備が必要。未解析・処理待ち・失敗を表示。共有brokerは別の明示opt-in（`MCS_LLM_ADMISSION`）で既定OFF | ルール抽出とローカルLLM抽出・要約を両方式で提供 | モデルファイル整合と対象制御の合成確認 | 実モデルの速度・メモリ・生成品質は未測定。医療判断の確定ではない。[抽出の範囲](USER_GUIDE.md) |
 | 8. 患者コンテキスト・原記録の閲覧 | `patient_context_nightly`の生成・限定閲覧は省略時ON。不正設定は停止。新着抽出への`patient_state_context`は別設定で既定OFF。登録薬剤・検査GETの`clinical_metadata`も既定OFF | 現行世代で全投稿を解析済みの患者を対象に作成。取得範囲・原文根拠とともに本人向け表示 | 設定・表示条件の対象合成確認 | 実生成・長期負荷・人手品質は未受入。未取得を記録なしとしない。[患者情報](USER_GUIDE.md#患者コンテキスト作成既定は有効) |
-| 9. Jev追加解析・canonical | `mode`・`summary_mode`・`loop_mode`・`extract_qc`は既定OFF、要求予算0。本文の外部送信には機能・対象・予算等の条件が必要 | 任意の追加解析経路あり。Jev非採用でもローカル抽出・患者コンテキストは残る | 今回の設定表示確認をJev実行や品質評価としない | canonical昇格・過去参照は未評価のまま有効化しない。brokerの送信制御とは別に判定する。[評価・公開条件](../specs/semantic-facts-v2-rollout.md) |
+| 9. Jev追加解析・canonical | キーがありmode未指定ならassist・1日500要求。明示modeで予算省略時は0。`summary_mode`・`loop_mode`・`extract_qc`は既定OFF。本文の外部送信には対象・予算等の条件が必要 | 任意の追加解析経路あり。Jev非採用でもローカル抽出・患者コンテキストは残る | 今回の設定表示確認をJev実行や品質評価としない | canonical昇格・過去参照は未評価のまま有効化しない。brokerの送信制御とは別に判定する。[評価・公開条件](../specs/semantic-facts-v2-rollout.md) |
 | 10. 医薬品照合・公開薬情報 | 辞書は出所・SHA・承認へ束縛。公開マスターの薬品名・一般疾患だけを照会。TinyFishトークンなし時のみExa | 辞書照合・照会と限定Web経路を提供。患者本文や私有辞書をWebへ送らない | Exa限定実接続で1品名のPMDA本文と1疾患のMinds検索を確認。3要求、医学的評価は`unreviewed` | 全品目・医学的品質・鮮度は未受入。強制再取得不可時の定期確認は未取得。[薬情報の条件](USER_GUIDE.md#公開医薬品情報の照会添付文書ガイドライン) |
 | 11. ローカル診断・共有表示 | `mcs doctor`の既定では追加probeなし。`--share`は固定項目の表示と手動コピー | 通常doctorを維持し、設定値・患者件数・生例外等を除く共有JSONを追加 | 共有射影・不正入力・未知状態・既存終了コードの対象合成確認 | 手動コピーは自動送信や遠隔grantではない。`check`も選択方式の必須条件検査で、実配送の証明ではない。[診断共有](COLLECTION_DIAGNOSTICS.md#サポートへ共有する診断) |
 | 12. CSDCの接続監視 | 1.1.0では有効化・接続しない（コード同梱、新規導入は無効）。未登録・未同意は無効。監視は専用同意と登録が必要 | MCSはR1自社監視とR2/R3顧客鍵保管・公開パッケージinventoryの候補実装。heartbeatは送信専用で命令受信なし | R3固定候補の合成416件と独立再現5件が合格。実顧客接続の確認とは別 | 初回自動接続・中央顧客分離の受入・専用実機受入は未完。[R1の境界](SDC_SELF_MONITORING.md) |
@@ -159,7 +159,10 @@ B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場�
 | Google Chrome | MCS にログインしたプロファイルで CDP ポート `:9333` を使う |
 | ディスク | `--preflight`の導入前閾値は通常12 GB、`--no-llm`またはモデルファイルが既存なら6 GB。モデル約5.7 GBは固定版を別途取得する。閾値は長期運用の必要容量ではなく、DB・添付・ログ・バックアップは利用量に応じた余裕が必要 |
 | MCS アカウント | ログイン ID とパスワード（自動再ログイン `auto_login` で使用） |
-| TYPESAFE_API_KEY | semantic/Jev 連携を使う場合のみ（`~/.mcs/.env` に保存） |
+| TYPESAFE_API_KEY | Jev用。MCSの `.env`（0600）に登録しmode未指定ならassistで自動使用 |
+| MCS_ANTHROPIC_API_KEY | Anthropic用。MCSの `.env`（0600）に登録しmode未指定なら患者文脈更新・旧版投稿の再抽出に自動使用 |
+
+Jev・Anthropicには患者名を含み得る本文・文脈を匿名化せず送ります。キー登録前に[対象・予算・保持条件](ANTHROPIC.md)を確認してください。明示したOFFと低い予算は維持します。
 | 通知先アプリ | Slack app・Discord botは両形態で作成・権限設定（付録A/B）。Path Bでは[独立モード](STANDALONE.md#slackとdiscordの接続準備)へ認証情報を登録する。LINE WORKS Botは両形態で[独立接続](LINEWORKS.md)を設定 |
 
 導入時の取得物と運用中の通信は別です。基本ツールはHomebrew、Python依存はPyPI、Hermes連携本体はGitHub、モデルはHugging Faceから必要に応じて取得します。モデル・Chrome・通知SDKはこのリポジトリへ同梱していません。`--no-llm`はモデル取得とAI常駐の設定を省略しますが、AIの処理が利用可能になったことを意味しません。
@@ -591,10 +594,10 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `vital_urgency.thresholds` | object | SpO2≤90 / SBP≤90 / SBP≥180 / BS≤70 | 閾値の上書き（`spo2_lte` / `sbp_lte` / `sbp_gte` / `bs_lte`） |
 | `local_llm.url` | str | `http://127.0.0.1:8080/v1/chat/completions` | ローカルLLMのエンドポイント（loopback http のみ — それ以外は `check` が拒否。別ポートの自前サーバを指せる） |
 | `local_llm.model` | str | `Qwen3.5-9B` | モデル名（OpenAI 互換 API の `model` フィールド） |
-| `semantic.mode` | choice | `off` | `off`以外は本文を外部 Jev API へ送信。`shadow`=記録のみ / `enforce`=判定に使用 |
-| `semantic.project_ids` | list[int] | — | 対象プロジェクトID（mode が off 以外では必須） |
+| `semantic.mode` | choice | キーありなら`assist`、なしなら`off` | `off`以外は本文を外部Jev APIへ送信。明示OFFを維持。`shadow`=記録のみ、`assist`=既存の支援経路、`enforce`=評価・承認を満たした判定への使用 |
+| `semantic.project_ids` | list[int] / null | 自動有効化で対象も省略なら全対象 | 対象プロジェクトID。手動でmodeを有効にする場合は明示必須。`null`=全対象、`[]`=対象なし |
 | `semantic.extract_qc` | choice | `off` | `annotate`=抽出結果への Jev 監査注記 |
-| `semantic.daily_request_budget` | int | 既定 | Jev 呼出の1日上限 |
+| `semantic.daily_request_budget` | int | 自動modeは500、明示modeは0 | 日本時間の1日あたりHTTP要求数。再試行も加算。0は停止、500超でも実効上限500 |
 | `semantic.job_budget_seconds` | num | 既定 | 意味解析の1ジョブの時間予算・秒（5〜1260）。バックログでは1220以上で、通信後に実行ロックを取り直す余裕540秒を全量確保 |
 | `update.mode` | choice | `off` | `off`/`notify`/`auto` — 自己更新ポリシー |
 | `update.auto_delay_h` | num | — | auto 時の適用遅延（0=検出次第即適用） |
@@ -606,7 +609,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | 場所 | 内容 | 備考 |
 |---|---|---|
 | Keychain `mcs-adapter` | MCS パスワード | `auto_login` がフォーム投入時に読む |
-| `~/.mcs/.env` (0600) | `MCS_PASSWORD`（Keychain ロック中のフォールバック）・`TYPESAFE_API_KEY`。`runtime_mode=standalone` の互換トークン入力。`init`は私有JSONへ取り込み、run/sendはJSONを優先する | 平文 — FileVault/物理セキュリティ前提 |
+| `~/.mcs/.env` (0600) | `MCS_PASSWORD`（Keychain ロック中のフォールバック）・`TYPESAFE_API_KEY`・`MCS_ANTHROPIC_API_KEY`。`runtime_mode=standalone` の互換トークン入力。`init`は私有JSONへ取り込み、run/sendはJSONを優先する | 平文 — FileVault/物理セキュリティ前提 |
 | `~/.mcs/data/{slack,discord}-credentials.json` (0600) | 独立Slack/DiscordのBot/App token。`mcs_standalone init`が非表示入力または既存の私有 `.env`から登録 | run/sendが優先して検証。秘密値の環境自動取得なし |
 | hermes profile `.env`（Path A のみ） | `DISCORD_BOT_TOKEN` / `SLACK_BOT_TOKEN`+`SLACK_APP_TOKEN` | `init` または `hermes config set --stdin` で書込み（argv に載せない） |
 

@@ -646,11 +646,15 @@ def _migrate(db, *, schema_version: int, fts: bool, fts_created: bool = False):
     if not db.in_transaction:
         db.execute("BEGIN IMMEDIATE")
     try:
-        _migrate_body(db, cols, old_version)
+        rebuilt_cards = _migrate_body(db, cols, old_version)
         if old_version < schema_version or fts_created:
             backfill_v3(db, fts=fts)
-        if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
-            raise MigrationError("foreign key violation during migration")
+        if rebuilt_cards:
+            for row in db.execute("SELECT name FROM sqlite_schema WHERE type='table'").fetchall():
+                name = row[0].replace('"', '""')
+                if any(fk[2] == "notification_cards" for fk in db.execute(f'PRAGMA foreign_key_list("{name}")')):
+                    if db.execute(f'PRAGMA foreign_key_check("{name}")').fetchone() is not None:
+                        raise MigrationError("notification card foreign key violation during migration")
         db.execute(f"PRAGMA user_version={schema_version}")
         db.commit()
     except Exception:
@@ -884,7 +888,7 @@ def _migrate_body(db, cols, old_version: int):
         db.execute(
             "ALTER TABLE notification_cards ADD COLUMN layout INTEGER "
                 "NOT NULL DEFAULT 1")
-    _expand_card_kinds(db)
+    rebuilt_cards = _expand_card_kinds(db)
     # Durable per-part rollup (T7): 'none' marks renders planned
     # before the part ledger existed.
     if "parts_state" not in cols("notification_renders"):
@@ -903,12 +907,14 @@ def _migrate_body(db, cols, old_version: int):
             "ALTER TABLE notification_acknowledgements "
                 "ADD COLUMN withdrawn_at REAL")
 
+    return rebuilt_cards
+
 
 def _expand_card_kinds(db):
     """Rebuild the card parent without renaming it out from under child FKs."""
     sql = db.execute("SELECT sql FROM sqlite_schema WHERE name='notification_cards'").fetchone()[0]
     if "'patient_history'" in sql:
-        return
+        return False
     if db.execute("PRAGMA foreign_keys").fetchone()[0]:
         raise MigrationError("card migration requires owner FK isolation")
     updated, count = re.subn(
@@ -933,6 +939,7 @@ def _expand_card_kinds(db):
         db.execute(statement)
     if seq is not None:
         db.execute("UPDATE sqlite_sequence SET seq=max(seq,?) WHERE name='notification_cards'", (seq[0],))
+    return True
 
 
 def backfill_v3(db, *, fts: bool):

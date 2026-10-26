@@ -199,9 +199,29 @@ def _reserve_valid(meta, row):
     return maximum
 
 
+def _matching_rows_many(ledger, kind, reservation_ids, *, now=None):
+    """Select retained reservation identities in SQL, preserving every duplicate match."""
+    ids = list(dict.fromkeys(reservation_ids))
+    cutoff = (time.time() if now is None else now) - 62 * 86400
+    rows = []
+    if ids and ledger.db.execute(
+            "SELECT 1 FROM artifacts WHERE kind=? AND created_at>=? AND "
+            "CASE WHEN json_valid(meta) THEN json_type(meta)!='object' ELSE 1 END LIMIT 1",
+            (kind, cutoff)).fetchone():
+        raise AnthropicError("pricing_unverified", "usage_invalid")
+    for offset in range(0, len(ids), 900):
+        group = ids[offset:offset + 900]
+        rows.extend(ledger.db.execute(
+            "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
+            "WHERE kind=? AND created_at>=? AND CASE WHEN json_valid(meta) "
+            "THEN json_extract(meta,'$.reservation_id') END IN ("
+            + ','.join('?' for _ in group) + ') ORDER BY artifact_id',
+            (kind, cutoff, *group)))
+    return rows
+
+
 def _matching_rows(ledger, kind, reservation_id):
-    return [row for row in ledger.db.execute("SELECT * FROM artifacts WHERE kind=?", (kind,))
-            if _loads(row["meta"]).get("reservation_id") == reservation_id]
+    return _matching_rows_many(ledger, kind, [reservation_id])
 
 
 def usage_report(ledger, *, now=None):
@@ -209,7 +229,8 @@ def usage_report(ledger, *, now=None):
     now = time.time() if now is None else now
     day, month = _periods(now)
     rows = list(ledger.db.execute(
-        "SELECT * FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') "
+        "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
+        "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') "
         "AND created_at>=? ORDER BY artifact_id", (month,)))
     reserves, results = {}, {}
     daily, invalid = 0, False
@@ -256,12 +277,18 @@ def usage_report(ledger, *, now=None):
                 settled += cost
             else:
                 unknown += 1
-        for rid, matching in results.items():
-            if rid not in reserves:
-                previous = _matching_rows(ledger, KINDS[0], rid)
-                if (len(matching) != 1 or len(previous) != 1
-                        or _binding(_loads(previous[0]["meta"])) != _binding(matching[0][0])):
-                    invalid = True
+        # Late results belong to the reservation's month; fetch their prior-month
+        # bindings once per bounded ID group, rather than once per result.
+        previous = {}
+        orphan_ids = results.keys() - reserves.keys()
+        for row in _matching_rows_many(ledger, KINDS[0], orphan_ids, now=now):
+            meta = _loads(row["meta"])
+            previous.setdefault(meta.get("reservation_id"), []).append(meta)
+        for rid in orphan_ids:
+            matching, prior = results[rid], previous.get(rid, [])
+            if (len(matching) != 1 or len(prior) != 1
+                    or _binding(prior[0]) != _binding(matching[0][0])):
+                invalid = True
         return {"daily_requests": daily, "monthly_cost_usd": str(total),
                 "settled_cost_usd": str(settled), "max_reserved_cost_usd": str(total - settled),
                 "unresolved_requests": unknown, "pricing_unverified": invalid}
@@ -428,13 +455,45 @@ def record_result(ledger, reservation, metadata):
         raise AnthropicError("pricing_unverified", "usage_unknown")
 
 
-def dryrun(ledger, *, route, project_id, unit_key, input_chars=0, max_tokens=8192, requests=1):
-    """Record aggregate estimates only, without source, patient IDs or content hashes."""
+def record_disposition_tx(ledger, reservation, disposition):
+    """Record a discarded unit in its owner's transaction without changing billing."""
+    if not ledger.db.in_transaction:
+        raise RuntimeError("cloud_disposition_transaction_required")
+    if disposition not in ("discarded_scope", "discarded_workday"):
+        raise ValueError("cloud_disposition_invalid")
+    rows = _matching_rows(ledger, KINDS[0], reservation.get("reservation_id"))
+    if len(rows) != 1:
+        raise AnthropicError("pricing_unverified", "reservation_missing")
+    stored = _loads(rows[0]["meta"])
+    _reserve_valid(stored, rows[0])
+    if stored != reservation:
+        raise AnthropicError("pricing_unverified", "reservation_mismatch")
+    meta = {key: reservation.get(key) for key in (
+        "reservation_id", "request_fp", "route", "project_id", "unit_key",
+        "message_id", "model", "price_version")}
+    meta["disposition"] = disposition
+    existing = _matching_rows(ledger, "cloud_usage_disposition", reservation["reservation_id"])
+    if existing:
+        if (len(existing) != 1 or _loads(existing[0]["meta"]) != meta
+                or existing[0]["project_id"] != reservation["project_id"]
+                or existing[0]["message_id"] != reservation.get("message_id")
+                or existing[0]["model"] != MODEL):
+            raise AnthropicError("pricing_unverified", "disposition_conflict")
+        return existing[0]["artifact_id"]
+    return ledger.artifact_add_tx("cloud_usage_disposition", "{}",
+        project_id=reservation["project_id"], message_id=reservation.get("message_id"),
+        model=MODEL, meta=meta)
+
+
+def dryrun_tx(ledger, *, route, project_id, unit_key, input_chars=0, max_tokens=8192, requests=1):
+    """Record aggregate estimates in the caller's active success transaction."""
+    if not ledger.db.in_transaction:
+        raise RuntimeError("cloud_dryrun_transaction_required")
     if (route not in ROUTES or type(input_chars) is not int or input_chars < 0
             or type(requests) is not int or requests < 0
             or type(max_tokens) is not int or not 1 <= max_tokens <= MAX_TOKENS):
         raise ValueError("dryrun_invalid")
-    ledger.artifact_add(KINDS[2], "{}", model=MODEL,
+    return ledger.artifact_add_tx(KINDS[2], "{}", model=MODEL,
                         meta={"route": route, "requests": requests, "input_chars": input_chars,
                               "estimated_input_tokens": (input_chars + 2) // 3,
                               "estimated_output_tokens": max_tokens * requests,

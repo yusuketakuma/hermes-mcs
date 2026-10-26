@@ -20,6 +20,7 @@ from ingest_testkit import _message, _unread_patient
 from slack_testkit import SLACK
 from notify_lineworks_testkit import LINEWORKS
 from notify_testkit import CFG
+from test_initial_history_capture import _Pages
 
 db = ledger_fixture(data_dir=True, name="db")
 
@@ -59,11 +60,11 @@ def test_read_new_room_aggregates_initial_history_and_later_posts_reach_chat_spe
     if pre_stored:
         db.save_messages([recent, old], project_id=1)
         assert _events(db) == []
-    adapter = SimpleNamespace(fetch_history=lambda *a, **kw: mcs_contract.MessageBatch(
-        [recent, old], pages=1, reached=True))
+    adapter = _Pages([[recent, old]])
     result = {"errors": []}
-    job_ops.run_history_jobs(adapter, db, result, time.monotonic() + 60,
-                             notify_max_age_s=86400)
+    for _ in range(2):
+        job_ops.run_history_jobs(adapter, db, result, time.monotonic() + 60,
+                                 notify_max_age_s=86400)
     assert result["errors"] == []
     assert db.db.execute("SELECT count(*) FROM messages").fetchone()[0] == 4
     assert _events(db) == []
@@ -128,15 +129,11 @@ def test_daily_inventory_never_starts_a_competing_quiet_import(db):
 def test_initial_walk_resumes_without_duplicate_notification(db):
     _capture(db, [_unread_patient(1)])
     message = _posted(10, 60)
-    calls = []
-    def fetch(*args, **kwargs):
-        calls.append(kwargs["start_page"])
-        return mcs_contract.MessageBatch([message], pages=3, reached=len(calls) > 1)
-    adapter = SimpleNamespace(fetch_history=fetch)
-    for _ in range(2):
+    adapter = _Pages([[message]]*4)
+    for _ in range(4):
         job_ops.run_history_jobs(adapter, db, {"errors": []}, time.monotonic() + 60,
                                  notify_max_age_s=86400)
-    assert calls == [1, 3]
+    assert [call[1] for call in adapter.calls] == [1,3,1,3]
     assert db.job_state("history", 1) == "done"
     assert _events(db) == []
     assert initial_import_state.progress(db.db, 1)["saved_count"] == 1
@@ -145,21 +142,15 @@ def test_initial_walk_resumes_without_duplicate_notification(db):
 @pytest.mark.parametrize("age_limit", [None, 3600])
 def test_initial_walk_aggregates_all_ages_without_hiding_later_pinned_pages(db, age_limit):
     _capture(db, [_unread_patient(1)])
-    pages = iter([[_posted(10, 30 * 86400)], [_posted(20, 7200), _posted(30, 300)]])
-    calls = []
-    def fetch(*args, **kwargs):
-        calls.append(kwargs["start_page"])
-        return mcs_contract.MessageBatch(next(pages), pages=3, reached=len(calls) > 1)
-    adapter = SimpleNamespace(fetch_history=fetch)
-    job_ops.run_history_jobs(adapter, db, {"errors": []}, time.monotonic() + 60,
-                             notify_max_age_s=age_limit)
-    assert _events(db) == []
-    job_ops.run_history_jobs(adapter, db, {"errors": []}, time.monotonic() + 60,
-                             notify_max_age_s=age_limit)
-    assert _events(db) == []
+    old = _posted(10,30*86400)
+    adapter = _Pages([[old],[old],[old],[_posted(20,7200),_posted(30,300)]])
+    for _ in range(4):
+        job_ops.run_history_jobs(adapter, db, {"errors": []}, time.monotonic() + 60,
+                                 notify_max_age_s=age_limit)
+        assert _events(db) == []
     assert initial_import_state.message_ids(db.db, 1) == [10, 20, 30]
     assert initial_import_state.progress(db.db, 1)["saved_count"] == 3
-    assert calls == [1, 3] and db.job_state("history", 1) == "done"
+    assert [call[1] for call in adapter.calls] == [1,3,1,3] and db.job_state("history", 1) == "done"
     assert db.db.execute("SELECT count(*) FROM messages").fetchone()[0] == 3
 
 

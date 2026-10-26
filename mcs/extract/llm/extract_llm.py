@@ -624,38 +624,71 @@ class _CloudProvider:
         updater = writer_lock.updater_state()
         key = cloud_policy.api_key(HOME)
         self.dispatch = dispatch
+        self.generation = generation
+        self.completed_reservations = []
+        self.discard_reason = discard_reason
+        self.ledger = ledger
+        self.deadline = deadline
+        self.discarded = False
+        self.final_disposition = None
 
-        def guard():
-            if (time.monotonic() >= deadline or writer_lock.updater_state() != updater
+        def guard(*, inference=True):
+            if ((inference and time.monotonic() >= deadline) or writer_lock.updater_state() != updater
                     or updater[0] or cloud_policy.api_key(HOME) != key
                     or cloud_policy.config_generation({"cloud_llm": _cloud_settings(load_config())}) != generation
                     or cloud_policy.block_reason(ledger, _cloud_settings(load_config()), route, project_id)
                     or not current()):
                 raise CloudFallback("cloud_unit_changed")
         self.guard = lambda: dispatch(guard)
+        self.commit_guard = lambda: dispatch(lambda: guard(inference=False), result=True)
         reserve = cloud_policy.usage_reserver(ledger, cfg, route=route,
             project_id=project_id, unit_key=unit_key, message_id=message_id, owner=owner)
         self.reserve = lambda body, timeout: dispatch(lambda: reserve(body, timeout))
         def record(reservation, metadata):
             def write():
                 try:
-                    guard()
+                    guard(inference=False)
                 except CloudFallback:
                     outcome = {**metadata, "disposition": discard_reason() if discard_reason else "discarded_scope"}
                 else:
                     outcome = dict(metadata)
-                return cloud_policy.record_result(ledger, reservation, outcome)
+                if "disposition" in outcome and self.final_disposition is None:
+                    self.final_disposition = outcome["disposition"]
+                value = cloud_policy.record_result(ledger, reservation, outcome)
+                self.completed_reservations.append(reservation)
+                return value
             return dispatch(write, result=True)
         self.result = record
         self.client = anthropic_client.AnthropicClient(key)
 
+    def discard(self):
+        """Append the unit's final disposition without mutating financial results."""
+        if not self.completed_reservations or self.discarded:
+            return
+        def write():
+            if self.ledger.db.in_transaction:
+                raise RuntimeError("cloud_disposition_owner_transaction_active")
+            with self.ledger.db:
+                self.ledger.db.execute("BEGIN IMMEDIATE")
+                reason = self.final_disposition or (self.discard_reason() if self.discard_reason else "discarded_scope")
+                for reservation in self.completed_reservations:
+                    cloud_policy.record_disposition_tx(self.ledger, reservation, reason)
+            self.final_disposition = reason
+            self.discarded = True
+        return self.dispatch(write, result=True)
+
     def __call__(self, prompt, *, deadline, max_tokens, **unused):
         try:
-            answer = self.client.complete(prompt, deadline=deadline, max_tokens=max_tokens,
+            http_deadline = min(self.deadline, deadline) - patient_context_refresh.COMMIT_MARGIN
+            if time.monotonic() >= http_deadline:
+                raise CloudFallback("cloud_unit_deadline")
+            answer = self.client.complete(prompt, deadline=http_deadline, max_tokens=max_tokens,
                 before_attempt=self.guard, reserve_fn=self.reserve, after_result=self.result)
-            self.guard()
+            self.commit_guard()
             return answer
-        except CloudFallback:
+        except CloudFallback as error:
+            if str(error) == "cloud_unit_changed":
+                self.discard()
             raise
         except Exception as exc:
             # Client errors contain fixed categories; no remote body enters local errors.
@@ -672,7 +705,6 @@ def _cloud_settings(cfg):
 def _cloud_contract(cfg):
     settings = _cloud_settings(cfg)
     return {"backend": "anthropic", "model": settings["model"],
-            "config_generation": cloud_policy.config_generation(settings),
             "code_contract": _upgrade_contract()}
 
 
@@ -687,14 +719,47 @@ def _cloud_mode(ledger, cfg, route, project_id):
     return mode
 
 
-def _cloud_compare(ledger, *, route, project_id, local_facts, cloud_facts,
-                   rejected=0, held=0, repairs=0):
-    left, right = set(local_facts), set(cloud_facts)
+def _comparison_fact(source, kind, assertion, evidence=None):
+    """Normalize one validated assertion with its source and grounded quote span."""
+    body = source.get("body_text")
+    span = (mcs_util.locate_quote_span(body, evidence)
+            if isinstance(body, str) and isinstance(evidence, str) and evidence else None)
+    return json.dumps({"source": [source.get(key) for key in
+        ("source", "project_id", "message_id", "content_hash")],
+        "kind": kind, "assertion": assertion, "span": span}, sort_keys=True, ensure_ascii=False)
+
+
+def _comparison_extract(source, document):
+    result = set()
+    for key in extract_quality._FACT_LIST_FIELDS:
+        for item in document.get(key) or []:
+            quote = item.get("evidence", item.get("text")) if isinstance(item, dict) else None
+            for fact in extract_quality.facts({key: [item]}):
+                result.add(_comparison_fact(source, key, fact, quote))
+    for fact in extract_quality.facts({key: document.get(key) for key in ("vitals", "reply")}):
+        result.add(_comparison_fact(source, fact[0], fact))
+    return result
+
+
+def _cloud_compare(ledger, *, route, project_id, local_facts, cloud_facts=None,
+                   rejected=None, held=None, repairs=None):
+    """Record measured comparison units; absent measurements remain unknown."""
+    left = set(local_facts)
+    right = None if cloud_facts is None else set(cloud_facts)
+    for value in (rejected, held, repairs):
+        if value is not None and (type(value) is not int or value < 0):
+            raise ValueError("cloud_comparison_invalid")
     with ledger.db:
         ledger.artifact_add_tx("cloud_compare_v1", "{}", project_id=project_id,
-            meta={"route": route, "local_facts": len(left), "cloud_facts": len(right),
-                  "matched": len(left & right), "rejected": rejected,
-                  "held": held, "repairs": repairs})
+            meta={"version": 2, "route": route, "units": 1,
+                  "local_facts": len(left), "cloud_facts": None if right is None else len(right),
+                  "matched": None if right is None else len(left & right),
+                  "validated": None if right is None else len(right), "validated_units": int(right is not None),
+                  "rejected": rejected, "rejected_units": None if rejected is None else int(rejected > 0),
+                  "rejection_observations": int(rejected is not None),
+                  "held": held, "held_observations": int(held is not None),
+                  "repairs": repairs, "repaired_units": None if repairs is None else int(repairs > 0),
+                  "repair_observations": int(repairs is not None)})
 
 
 def _cloud_reextract(ledger, row):
@@ -742,7 +807,6 @@ def _llm_call(prompt: str, deadline: float | None = None,
             return _DEFERRED
         response = provider(prompt, deadline=deadline, max_tokens=max_tokens,
                             need_s=need_s, kind=kind)
-        _integrity_note(response, kind)
         if local_llm.acceptance_error(response) is not None:
             raise CloudFallback("cloud_incomplete_response")
         answer = json_object(response.get("text"))
@@ -924,7 +988,7 @@ def llm_extract(body: str, *, context: str | None = None,
             prompt += (_FEEDBACK_HEAD
                        + "\n".join("- " + x for x in flines) + "\n\n")
     thead = _target_head(posted_at)
-    notes = _note_list()
+    notes = [] if provider is not None else _note_list()
     notes.clear()
 
     def bump(key, n=1):
@@ -1588,6 +1652,8 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
     meta.update(_frame_meta(r))
     if isinstance(r, dict) and r.get("_provider_contract"):
         meta.update(r["_provider_contract"])
+        if r.get("_cloud_generation"):
+            meta["config_generation"] = r["_cloud_generation"]
     if ctx:
         meta["ctx"] = True
     if integrity:
@@ -1604,6 +1670,9 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
             try:
                 r["_cloud_guard"]()
             except CloudFallback:
+                ledger.db.rollback()
+                if r.get("_cloud_discard"):
+                    r["_cloud_discard"]()
                 return False
         source = ledger.db.execute(
             "SELECT project_id,body_text FROM messages m WHERE message_id=? AND content_hash=? AND project_id=? "
@@ -1656,6 +1725,10 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
                 "DELETE FROM artifacts WHERE kind=? AND message_id=? "
                 "AND json_valid(meta) AND artifact_id != ?",
                 (KIND, r["message_id"], cur.lastrowid))
+            if isinstance(r, dict) and r.get("_cloud_mode") == "dry_run":
+                cloud_policy.dryrun_tx(ledger, route="reextract", project_id=r["project_id"],
+                    unit_key=str(r["message_id"]), input_chars=len(r["body_text"] or ""),
+                    max_tokens=MAX_TOKENS)
         project_id = source["project_id"]
     _rerender_cards(ledger, project_id, r["message_id"])
     return not held_prior
@@ -2051,6 +2124,8 @@ def _renew(ledger, r, lease: float) -> float | None:
         "AND m.project_id=fetch_jobs.project_id AND m.content_hash=?)",
         (new, now, r["project_id"], r["message_id"], lease, r["content_hash"]))
     ledger.db.commit()
+    if cur.rowcount > 0 and isinstance(r, dict) and "_cloud_lease" in r:
+        r["_cloud_lease"] = new
     return new if cur.rowcount > 0 else None
 
 
@@ -2718,11 +2793,8 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True) ->
         r["_cloud_mode"] = mode
         if mode in ("on", "shadow"):
             r["_cloud_settings"] = _cloud_settings(cfg)
-        if mode == "dry_run":
-            cloud_policy.dryrun(ledger, route="reextract", project_id=r["project_id"],
-                unit_key=str(r["message_id"]), input_chars=len(r["body_text"] or ""), max_tokens=MAX_TOKENS)
         if mode == "on":
-            r["_provider_contract"] = {"backend": "anthropic", "model": _cloud_settings(cfg)["model"]}
+            r["_provider_contract"] = _cloud_contract(cfg)
             r["_target"] = (target[0], r["_provider_contract"]["model"])
         qc = _qc_feedback(ledger, r["qc_src"]) if r["qc_src"] else None
         if r["qc_src"] and qc is None:
@@ -3067,25 +3139,32 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     def _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out):
         provider = None
         if r.get("_cloud_mode") == "on":
+            r["_cloud_lease"] = leases[index]
             provider = _owner_call(lambda: _CloudProvider(ledger, {"cloud_llm": r["_cloud_settings"]}, route="reextract",
                 project_id=r["project_id"], message_id=r["message_id"],
                 unit_key=str(r["message_id"]), deadline=deadline,
-                current=lambda: _owns_current_source(ledger, r, leases[index]),
+                current=lambda: _owns_current_source(ledger, r, r["_cloud_lease"]),
                 dispatch=_owner_call, owner={"lease": leases[index]}))
         if provider is not None:
             try:
                 with cloud_slots:
                     result = _infer(r, ctx, saved, hints, qc, index, meta, chunks_out, provider)
-                    provider.guard()
-                    r["_cloud_guard"] = provider.guard
+                    provider.commit_guard()
+                    r["_cloud_guard"] = provider.commit_guard
+                    r["_cloud_discard"] = provider.discard
+                    r["_cloud_generation"] = provider.generation
                     if result is None:
                         raise CloudFallback("cloud_validation_failed")
                     return result
-            except CloudFallback:
+            except CloudFallback as error:
+                if str(error) == "cloud_unit_changed":
+                    provider.discard()
                 # A posting is the provider unit: partial cloud chunks never seed local work.
                 def reset_local():
                     r.pop("_provider_contract", None)
                     r.pop("_cloud_guard", None)
+                    r.pop("_cloud_discard", None)
+                    r.pop("_cloud_generation", None)
                     r["_cloud_mode"] = "off"
                     r["_target"] = target
                     fresh, _, _ = _prepare_jobs(ledger, [r], target, False, allow_cloud=False)
@@ -3132,6 +3211,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             try:
                 r["_cloud_guard"]()
             except CloudFallback:
+                if r.get("_cloud_discard"):
+                    r["_cloud_discard"]()
                 deferred += 1
                 return False
         # QC-flagged/thin/human-reported rows already hold a current
@@ -3186,6 +3267,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         keep_lease = False
         try:
             if not _owns_current_source(ledger, r, lease):
+                if r.get("_cloud_discard"):
+                    r["_cloud_discard"]()
                 deferred += 1
                 return
             transport = r.get("_transport")
@@ -3497,6 +3580,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         _release(ledger, r, lease)
                         carried += 1
                     elif held or lease <= time.time() + _CARRY_MARGIN_S:
+                        if r.get("_cloud_discard") and not _owns_current_source(ledger, r, lease):
+                            r["_cloud_discard"]()
                         # the source moved / lease lapsed, or no time
                         # left to wait: stays pending, no attempt burned
                         _release(ledger, r, lease)
@@ -3504,6 +3589,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     else:
                         renewed = _renew(ledger, r, lease)
                         if renewed is None:
+                            if r.get("_cloud_discard"):
+                                r["_cloud_discard"]()
                             # body changed or lease lost: our old claim
                             # must not keep hiding the new body
                             _release(ledger, r, lease)
@@ -3526,6 +3613,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             _commit, r, d, ctx, integrity, qc)))
                         keep_claims.add(id(r))
                     else:
+                        if r.get("_cloud_discard") and not _owns_current_source(ledger, r, lease):
+                            r["_cloud_discard"]()
                         deferred += 1
     finally:
         try:
@@ -3537,26 +3626,32 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     for r, local_result, ctx in shadow_tasks:
         if deadline - time.monotonic() < _MIN_CALL_S:
             break
+        comparison_meta = {}
+        cloud_result = None
+        provider = None
         try:
             provider = _CloudProvider(ledger, {"cloud_llm": r["_cloud_settings"]}, route="reextract", project_id=r["project_id"],
                 message_id=r["message_id"], unit_key=str(r["message_id"]), deadline=deadline,
                 current=lambda r=r: _current(ledger, r["message_id"], r["content_hash"]),
                 dispatch=lambda fn, **kw: fn(), owner={"after_commit": True})
-            comparison_meta = {}
             cloud_result = llm_extract(r["body_text"], context=ctx, hints=_rule_hints(r),
                 deadline=deadline, meta_out=comparison_meta, posted_at=r["posted_at"],
                 vital_policy=vital_policy, provider=provider,
                 **({"references": _frame_refs(r)} if _frame_refs(r) else {}))
-            provider.guard()
-            if isinstance(cloud_result, dict):
-                _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
-                    local_facts=extract_quality.facts(local_result),
-                    cloud_facts=extract_quality.facts(cloud_result),
-                    rejected=sum(cloud_result.get(k, 0) for k in ("_items_dropped", "_evidence_dropped")),
-                    held=int(bool(extract_quality.protected_lost(local_result, cloud_result, r["body_text"]))),
-                    repairs=comparison_meta.get("repairs", 0))
-        except (CloudFallback, ValueError):
-            pass
+            provider.commit_guard()
+        except CloudFallback as error:
+            if provider is not None and str(error) == "cloud_unit_changed":
+                provider.discard()
+            cloud_result = None
+        except ValueError:
+            cloud_result = None
+        valid = isinstance(cloud_result, dict)
+        _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
+            local_facts=_comparison_extract(r, local_result),
+            cloud_facts=_comparison_extract(r, cloud_result) if valid else None,
+            rejected=sum(cloud_result.get(k, 0) for k in ("_items_dropped", "_evidence_dropped")) if valid else None,
+            held=int(bool(extract_quality.protected_lost(local_result, cloud_result, r["body_text"]))) if valid else None,
+            repairs=comparison_meta.get("repairs", 0 if valid else None))
     left, age_min, age_max, estimate = _backlog_report(
         ledger, len(rows), limit, done + skipped + held_prior)
     now_ts = time.time()
@@ -3783,10 +3878,14 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
                 commit(settled=settled)
                 _release(ledger, r, lease)
             elif final or held or lease <= time.time() + _CARRY_MARGIN_S:
+                if r.get("_cloud_discard") and (not write or not _owns_current_source(ledger, r, lease)):
+                    r["_cloud_discard"]()
                 _release(ledger, r, lease)
             else:
                 renewed = _renew(ledger, r, lease)
                 if renewed is None:
+                    if r.get("_cloud_discard"):
+                        r["_cloud_discard"]()
                     _release(ledger, r, lease)
                 else:
                     # written back at once: a transient sqlite error on a
@@ -3820,9 +3919,7 @@ def _background_context_refresh(ledger, initial_state, stop=None):
     def admit():
         # Unknown capacity is not idle: memory, disk, breaker, updater
         # and an unchanged config all have to be proven.
-        if (time.monotonic() >= deadline
-                or writer_lock.updater_state() != initial_state
-                or initial_state[0]):
+        if (writer_lock.updater_state() != initial_state or initial_state[0]):
             return False
         if load_config() != cfg:
             return False
@@ -3835,7 +3932,7 @@ def _background_context_refresh(ledger, initial_state, stop=None):
     try:
         cloud_cfg = _cloud_settings(cfg)
         cloud_enabled = cloud_cfg["mode"] != "off"
-        if not (admit() if cloud_enabled else local_admit()):
+        if time.monotonic() >= deadline or not (admit() if cloud_enabled else local_admit()):
             result = {"status": "deferred", "done": 0}
         else:
             with local_llm.pinned_slot(local_llm.LANES[3]):

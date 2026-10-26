@@ -5,6 +5,7 @@ import pytest
 
 from adapters.common import envelopes
 import initial_import_state
+import history_walk
 import notify_cards
 import notify_history
 import notify_render
@@ -32,6 +33,7 @@ def seed(led, count=3):
 def captured(led):
     state = initial_import_state.load(led.db, 1)
     state["capture_phase"] = "complete"
+    state["capture_proof"] = {"v":1,"scope":history_walk.scope(1,state["cohort_id"]),"digest":"a"*64}
     led.db.execute("UPDATE patients SET initial_import=? WHERE project_id=1", (json.dumps(state),))
     led.db.commit()
 
@@ -233,7 +235,8 @@ def test_existing_urgency_contract_rejects_duplicates_stale_family_and_rule_over
     _dispatch(led, event)
     assert json.loads(_card(led)["ui_state"])["history_snapshot"]["high"] == 1
     _llm_extract(led, 1, {"urgency": "routine"})
-    notify_cards.sweep(led, CFG, now=NOW + 1)
+    assert notify_render.source_fingerprint(led.db, _card(led)) != json.loads(_card(led)["ui_state"])["history_source_fp"]
+    notify_cards.sweep(led, CFG, now=NOW + 301)
     assert json.loads(_card(led)["ui_state"])["history_snapshot"]["high"] == 0
 
 
@@ -250,3 +253,125 @@ def test_live_reply_to_history_root_creates_canonical_root_only_when_needed(led)
     assert len(cards) == 2 and all(card["kind"] == "thread" for card in cards)
     assert {card["root_message_id"] for card in cards} == {1}
     assert json.loads(cards[1]["anchor_key"])["source"] == 10
+
+
+def test_extraction_callbacks_only_mark_dirty_until_one_bounded_adoption(led, monkeypatch):
+    event = seed(led, 100)
+    ready(monkeypatch, False)
+    _dispatch(led, event)
+    before = _latest_render(led)
+    with monkeypatch.context() as patch:
+        patch.setattr(notify_history, '_members', lambda *a, **kw: pytest.fail('callback rescanned cohort'))
+        patch.setattr(notify_history, 'fingerprint', lambda *a, **kw: pytest.fail('callback fingerprinted cohort'))
+        for mid in range(1, 101):
+            notify_cards.rerender_message_cards(led, CFG, 1, mid, now=NOW + 1)
+        notify_cards.sweep(led, CFG, now=NOW + 299)
+    assert _latest_render(led)['delivery_id'] == before['delivery_id']
+    captured(led)
+    ready(monkeypatch)
+    notify_cards.sweep(led, CFG, now=NOW + 300)
+    assert json.loads(_card(led)['ui_state'])['history_latest']['phase'] == 'complete'
+
+
+def test_completed_delivered_cohort_skips_scans_but_real_source_edit_invalidates(led, monkeypatch):
+    from ingest_testkit import _message
+    event = seed(led, 1)
+    captured(led)
+    ready(monkeypatch)
+    _dispatch(led, event)
+    render = _latest_render(led)
+    _begin(led, render)
+    _receipt(led, render, '0000000000000001', message_id='stable')
+    with monkeypatch.context() as patch:
+        patch.setattr(notify_history, '_members', lambda *a, **kw: pytest.fail('stable completed cohort rescanned'))
+        notify_cards.sweep(led, CFG, now=NOW + 10000)
+    led.save_messages([_message(mid=1, body='合成の訂正本文', posted_at='2026-09-24T09:00:00+09:00')], project_id=1)
+    assert json.loads(_card(led)['ui_state'])['history_source_dirty'] is True
+    notify_cards.sweep(led, CFG, now=NOW + 10001)
+    assert _latest_render(led)['render_rev'] > render['render_rev']
+
+
+def test_initial_history_high_has_counts_but_no_individual_urgent_delivery_proof(led, monkeypatch):
+    import notify_urgent
+    from notify_testkit import _llm_extract
+    event = seed(led, 1)
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text='本人が急変し至急確認が必要です。' WHERE message_id=1")
+    _llm_extract(led, 1, {'urgency': 'high', 'urgency_evidence': ['本人が急変し至急確認が必要です。']})
+    ready(monkeypatch)
+    _dispatch(led, event)
+    cfg = {**CFG, 'urgency_escalation': {'mode': 'on', 'source': 'llm', 'room_cooldown_min': 1}}
+    candidate, reason = notify_urgent._eligible(led, cfg, notify_urgent.settings(cfg), 1, NOW)
+    assert candidate is None and reason == 'initial_delivery_unproven'
+    assert json.loads(_card(led)['ui_state'])['history_snapshot']['high'] == 1
+    assert not led.db.execute("SELECT 1 FROM notify_outbox WHERE kind IN ('new_messages','urgent_notice')").fetchone()
+
+
+def test_late_history_member_reopens_completed_summary_without_reopening_capture(led, monkeypatch):
+    from semantic_testkit import _message
+    event = seed(led, 1)
+    captured(led)
+    ready(monkeypatch)
+    _dispatch(led, event)
+    render = _latest_render(led)
+    assert _begin(led, render)["granted"]
+    _receipt(led, render, f"{1:016x}")
+    led.save_messages([_message(2)], project_id=1)
+    assert initial_import_state.load(led.db, 1)["capture_phase"] == "complete"
+    assert json.loads(_card(led)["ui_state"])["history_source_dirty"]
+    notify_cards.sweep(led, CFG, now=NOW + 1)
+    assert json.loads(_card(led)["ui_state"])["history_snapshot"]["saved"] == 2
+
+
+def test_sweep_reserves_live_due_capacity_and_rotates_history_updates(led, monkeypatch):
+    ready(monkeypatch, False)
+    for pid in range(1, 4):
+        _patient(led, pid=pid)
+        led.db.execute("INSERT INTO messages(message_id,project_id,posted_at_ts,body_text,content_hash,body_state,first_seen) "
+                       "VALUES(?,?,?,'合成履歴',?,'full',?)", (pid, pid, int(NOW)-1, f"{pid:064x}", NOW-10))
+        with led.db:
+            initial_import_state.start_tx(led, pid, int(NOW), NOW-20, boundary_source="server")
+            initial_import_state.classify_tx(led, pid, [pid], NOW)
+        event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' AND project_id=? ORDER BY event_id LIMIT 1", (pid,)).fetchone()
+        _dispatch(led, event)
+        render = _latest_render(led, pid)
+        assert _begin(led, render, n=pid)["granted"]
+        _receipt(led, render, f"{pid:016x}", n=pid+10, message_id=f"m-{pid}")
+        state = initial_import_state.load(led.db, pid)
+        state["capture_phase"] = "complete"
+        state["capture_proof"] = {"v":1,"scope":history_walk.scope(pid,state["cohort_id"]),"digest":"a"*64}
+        led.db.execute("UPDATE patients SET initial_import=? WHERE project_id=?", (json.dumps(state), pid))
+        led.db.commit()
+    led.outbox_add("new_messages", 99, {"message_ids": [99]})
+    ready(monkeypatch)
+    notify_cards.sweep(led, CFG, now=NOW+301)
+    assert led.db.execute("SELECT COUNT(*) FROM notification_renders WHERE render_rev=2").fetchone()[0] == 2
+    notify_cards.sweep(led, CFG, now=NOW+302)
+    assert led.db.execute("SELECT COUNT(*) FROM notification_renders WHERE render_rev=2").fetchone()[0] == 3
+
+
+@pytest.mark.parametrize("wait", [None, "intent_cards_issued", "intent_cards_unsettled", "stale"])
+def test_delivered_history_analysis_wait_is_processing_but_unknown_is_attention(led, monkeypatch, wait):
+    import notify_scope
+    event = seed(led, 1)
+    captured(led)
+    ready(monkeypatch, False)
+    _dispatch(led, event)
+    render = _latest_render(led)
+    assert _begin(led, render)["granted"]
+    _receipt(led, render, f"{1:016x}")
+    # A new progress intent binds to the already-delivered cohort identity.
+    eid = led.outbox_add("patient_history", 1, {"source": "initial_history"})
+    progress = {} if wait is None else {"wait": {"reason": "intent_cards_issued" if wait == "stale" else wait,
+                                               "at": NOW-1 if wait == "stale" else NOW}}
+    led.db.execute("UPDATE notify_outbox SET created_at=?,updated_at=?,progress=? WHERE event_id=?",
+                   (NOW-30000, NOW, json.dumps(progress), eid))
+    led.db.execute("INSERT INTO notification_intent_cards(event_id,card_id,coverage) VALUES(?,1,?)", (eid, json.dumps([initial_import_state.load(led.db,1)["cohort_id"]])))
+    led.db.commit()
+    status = notify_scope.pending_breakdown(led.db, NOW)
+    assert status["by_reason"]["initial_history_analysis"]["count"] == 1
+    assert status["attention"] == 0 and status["oldest_age_s"] is None
+    led.db.execute("UPDATE notification_cards SET delivery_state='delivery_unknown' WHERE card_id=1")
+    status = notify_scope.pending_breakdown(led.db, NOW)
+    assert status["attention"] == 1
+    assert "initial_history_analysis" not in status["by_reason"]

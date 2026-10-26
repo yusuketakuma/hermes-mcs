@@ -82,3 +82,23 @@ def test_fresh_and_migrated_card_constraints_and_patient_columns_match():
         with pytest.raises(sqlite3.IntegrityError):
             db.execute("INSERT INTO notification_cards(card_key,kind,anchor_key,created_at,updated_at) VALUES('bad','invalid','x',1,1)")
         db.close()
+
+
+def test_current_open_skips_fk_audit_and_card_upgrade_checks_only_referencing_children(tmp_path):
+    path = str(tmp_path / 'current.db')
+    writer = ledger.Ledger(path)
+    writer.close()
+    db = sqlite3.connect(path)
+    traced = []
+    db.set_trace_callback(traced.append)
+    ledger_schema.initialize(db, schema_version=ledger.SCHEMA_VERSION)
+    assert not any('foreign_key_check' in statement.lower() for statement in traced)
+    db.close()
+    db = _old()
+    traced = []
+    db.set_trace_callback(traced.append)
+    ledger_schema.initialize(db, schema_version=ledger.SCHEMA_VERSION)
+    checks = [s for s in traced if 'foreign_key_check' in s.lower()]
+    assert checks and all('(' in statement for statement in checks)
+    assert not any('foreign_key_check("message_metadata")' in statement for statement in checks)
+    db.close()

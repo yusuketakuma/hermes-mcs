@@ -186,8 +186,8 @@ def test_foreign_artifacts_do_not_count_as_progress(tmp_path):
         db.close()
 
 
-def test_nightly_revive_gives_failed_jobs_one_bounded_attempt(tmp_path):
-    """Exhausted failed jobs get one more attempt per night, at most
+def test_periodic_revive_gives_failed_jobs_one_bounded_attempt(tmp_path):
+    """Exhausted failed jobs get one more attempt after the cooldown, at most
     REVIVE_PER_INPUT times for the same input, only after the
     cooldown; the revived job is picked up by run_due."""
     import semantic_drain
@@ -199,12 +199,12 @@ def test_nightly_revive_gives_failed_jobs_one_bounded_attempt(tmp_path):
                           "updated_at=? WHERE kind='semantic'", (now - 10,))
         assert semantic_drain.revive_failed(db, now)["revived"] == 0   # cooldown
         later = now + semantic_drain.REVIVE_COOLDOWN_S
-        for night in range(1, semantic_drain.REVIVE_PER_INPUT + 1):
+        for revival in range(1, semantic_drain.REVIVE_PER_INPUT + 1):
             assert semantic_drain.revive_failed(db, later)["revived"] == 1
             row = db.db.execute("SELECT state,attempts,payload FROM fetch_jobs "
                                 "WHERE kind='semantic'").fetchone()
             pl = json.loads(row["payload"])
-            assert row["state"] == "pending" and pl["auto_retry"] == night
+            assert row["state"] == "pending" and pl["auto_retry"] == revival
             assert semantic_runtime.attempt_limit(pl) == row["attempts"] + 1
             with db.db:     # the extra attempt is used up and fails again
                 db.db.execute("UPDATE fetch_jobs SET state='failed',"

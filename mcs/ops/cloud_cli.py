@@ -98,12 +98,6 @@ def diagnostics(cfg, *, root=None, probe=False):
     return out
 
 
-def _scope(settings, pid, route):
-    return (route in settings["routes"] and type(pid) is int and pid > 0
-            and (settings["project_ids"] is None or pid in settings["project_ids"])
-            and pid not in settings["exclude_project_ids"])
-
-
 def _source_scope(settings, alias="m"):
     sql, params = "", []
     for key, exclude in (("project_ids", False), ("exclude_project_ids", True)):
@@ -118,25 +112,30 @@ def _source_scope(settings, alias="m"):
 
 
 def _route_counts(db, cfg, settings, deadline):
-    out = {route: {"targets": 0, "requests_estimate": 0, "input_chars": 0} for route in policy.ROUTES}
-    # A timestamp proxy avoids reading private source/summary bodies into the CLI.
+    out = {route: {"targets": 0, "requests_estimate": 0, "input_chars": 0,
+                   "basic_requests_estimate": 0, "chunk_extra_requests_estimate": 0}
+           for route in policy.ROUTES}
     if "patient_context" in settings["routes"]:
+        import patient_context_refresh as context
+        import extract_llm as extract
+        # Resolve the semantic contract without consulting installation credentials.
+        contract = context._contract({**cfg, "cloud_llm": {"mode": "off"}})
+        if settings["mode"] == "on":
+            contract["provider"] = extract._cloud_contract({"cloud_llm": settings})
         scope, params = _source_scope(settings, "p")
-        rows = db.execute("SELECT p.project_id,COUNT(m.message_id) AS sources,"
-            "COALESCE(SUM(length(m.body_text)),0) AS chars,"
-            "COALESCE(SUM(MAX(1,(length(m.body_text)+2999)/3000)),0) AS scan_requests "
-            "FROM patients p JOIN messages m ON m.project_id=p.project_id "
-            "WHERE COALESCE(p.is_archived,0)=0 AND m.body_state='full' AND length(m.body_text)>0 "
-            "AND (NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.kind='patient_context_nightly_v1' "
-            "AND a.project_id=p.project_id) OR COALESCE(m.updated_seen,m.first_seen,m.posted_at_ts,0)>"
-            "COALESCE((SELECT MAX(a.created_at) FROM artifacts a WHERE a.kind='patient_context_nightly_v1' "
-            "AND a.project_id=p.project_id),0))" + scope + " GROUP BY p.project_id", params)
+        rows = db.execute("SELECT p.project_id FROM patients p WHERE COALESCE(p.is_archived,0)=0"
+                          + scope + " ORDER BY p.project_id", params)
         for count, row in enumerate(rows, 1):
             _checkpoint(deadline, count)
+            pending = context.pending_estimate(db, row["project_id"], cfg, now=time.time(), contract=contract)
             item = out["patient_context"]
-            item["targets"] += 1
-            item["input_chars"] += row["chars"]
-            item["requests_estimate"] += row["scan_requests"] + 1
+            item["targets"] += pending["targets"]
+            item["input_chars"] += pending["input_chars"]
+            basic = pending["summary_units"] + pending["scan_sources"]
+            chunks = pending["scan_chunks_estimate"]
+            item["basic_requests_estimate"] += basic
+            item["chunk_extra_requests_estimate"] += max(0, chunks - pending["scan_sources"])
+            item["requests_estimate"] += pending["summary_units"] + chunks
     if "reextract" in settings["routes"]:
         import extract_llm as extract
         scope, params = _source_scope(settings)
@@ -166,12 +165,15 @@ def _route_counts(db, cfg, settings, deadline):
             item = out["reextract"]
             item["targets"] += 1
             item["input_chars"] += row["body_length"] or 0
-            item["requests_estimate"] += max(1, math.ceil((row["body_length"] or 0) / extract._CHUNK_SIZE))
+            requests = max(1, math.ceil((row["body_length"] or 0) / extract._CHUNK_SIZE))
+            item["basic_requests_estimate"] += 1
+            item["chunk_extra_requests_estimate"] += requests - 1
+            item["requests_estimate"] += requests
     return out
 
 
 def _calibration(db, since):
-    total_chars, total_tokens = 0, 0
+    total_chars, total_tokens, output_tokens, samples = 0, 0, 0, 0
     reserves, seen = {}, set()
     for n, row in enumerate(db.execute("SELECT kind,meta,model,project_id,message_id FROM artifacts WHERE kind IN "
             "('cloud_usage_reserve','cloud_usage_result') AND created_at>=? ORDER BY artifact_id LIMIT ?",
@@ -207,15 +209,25 @@ def _calibration(db, since):
             if type(chars) is int and 0 < chars <= 2**53:
                 total_chars += chars
                 total_tokens += usage["input_tokens"] + usage["cache_creation_input_tokens"] + usage["cache_read_input_tokens"]
-    return Decimal(total_tokens) / total_chars if total_chars else None
+                output_tokens += usage["output_tokens"]
+                samples += 1
+    return {"settled_requests_with_characters": samples, "input_chars": total_chars,
+            "input_tokens": total_tokens, "output_tokens": output_tokens,
+            "tokens_per_char": Decimal(total_tokens) / total_chars if total_chars else None,
+            "output_tokens_per_request": Decimal(output_tokens) / samples if samples else None}
 
 
-def _costs(item, ratio, fx=None):
+def _costs(item, ratio, fx=None, *, output_limit=1600, output_per_request=None):
     tokens = int((Decimal(item["input_chars"]) * ratio).to_integral_value(rounding="ROUND_CEILING"))
-    output = item["requests_estimate"] * 1600
+    ceiling = item["requests_estimate"] * output_limit
+    output = (min(ceiling, math.ceil(item["requests_estimate"] * output_per_request))
+              if output_per_request is not None else None)
+    low_output, high_output = (output, output) if output is not None else (0, ceiling)
     item.update(estimated_input_tokens=tokens, estimated_output_tokens=output,
-        estimated_cost_low_usd=str((tokens * Decimal(policy.PRICES["input"]) + output * Decimal(policy.PRICES["output"])) / 1000000),
-        estimated_cost_high_usd=str((tokens * Decimal(policy.PRICES["long_input"]) + output * Decimal(policy.PRICES["long_output"])) / 1000000))
+        output_token_request_ceiling=ceiling,
+        output_estimate_basis="observed_usage_mean" if output is not None else "unmeasured",
+        estimated_cost_low_usd=str((tokens * Decimal(policy.PRICES["input"]) + low_output * Decimal(policy.PRICES["output"])) / 1000000),
+        estimated_cost_high_usd=str((tokens * Decimal(policy.PRICES["long_input"]) + high_output * Decimal(policy.PRICES["long_output"])) / 1000000))
     if fx is not None:
         for bound in ("low", "high"):
             item[f"estimated_cost_{bound}_jpy"] = str(Decimal(item[f"estimated_cost_{bound}_usd"]) * Decimal(str(fx)))
@@ -224,6 +236,10 @@ def _costs(item, ratio, fx=None):
 
 def _safe_log(row, meta):
     result = {"kind": row["kind"], "at": row["created_at"]}
+    if row["kind"] == "cloud_usage_disposition":
+        if meta.get("disposition") in ("discarded_scope", "discarded_workday"):
+            result["disposition"] = meta["disposition"]
+        return result
     for key, allowed in (("route", policy.ROUTES), ("model", (policy.MODEL,)),
                          ("disposition", ("discarded_scope", "discarded_workday"))):
         if meta.get(key) in allowed:
@@ -242,11 +258,61 @@ def _safe_log(row, meta):
     if isinstance(meta.get("usage"), dict):
         result["usage"] = policy.validate_usage(meta["usage"])
     for key in ("requests", "input_chars", "estimated_input_tokens", "estimated_output_tokens",
-                "local_facts", "cloud_facts", "matched", "rejected", "held", "repairs"):
+                "local_facts", "cloud_facts", "matched", "rejected", "held", "repairs",
+                "version", "units", "validated", "validated_units", "rejected_units",
+                "rejection_observations", "held_observations", "repaired_units", "repair_observations"):
         value = meta.get(key)
         if type(value) is int and 0 <= value <= 2**53:
             result[key] = value
     return result
+
+
+def _comparison_report(log):
+    fields = ("local_facts", "cloud_facts", "matched", "validated", "rejected", "held", "repairs")
+    totals = dict.fromkeys(fields, 0)
+    observed = dict.fromkeys(fields, 0)
+    units = validated_units = legacy = matched_local = matched_cloud = matched_total = 0
+    rates = {key: [0, 0] for key in ("rejection", "held", "repair")}
+    for row in log:
+        if row["kind"] != "cloud_compare_v1":
+            continue
+        for key in fields:
+            if key in row:
+                totals[key] += row[key]
+                observed[key] += 1
+        if all(key in row for key in ("local_facts", "cloud_facts", "matched")):
+            if row["matched"] > min(row["local_facts"], row["cloud_facts"]):
+                raise ValueError("comparison_invalid")
+            matched_local += row["local_facts"]
+            matched_cloud += row["cloud_facts"]
+            matched_total += row["matched"]
+        if row.get("version") != 2:
+            legacy += 1
+            continue
+        if row.get("units") != 1 or row.get("validated_units") not in (0, 1):
+            raise ValueError("comparison_invalid")
+        units += 1
+        validated_units += row["validated_units"]
+        for label, numerator, denominator in (("rejection", "rejected_units", "rejection_observations"),
+                ("held", "held", "held_observations"), ("repair", "repaired_units", "repair_observations")):
+            count = row.get(denominator)
+            value = row.get(numerator)
+            if count not in (0, 1) or (count and value not in (0, 1)):
+                raise ValueError("comparison_invalid")
+            rates[label][1] += count
+            if count:
+                rates[label][0] += value
+    return {**{key: totals[key] if observed[key] else None for key in fields},
+            "units": units, "validated_units": validated_units, "unvalidated_units": units - validated_units,
+            "legacy_records_without_unit_denominators": legacy,
+            "metric_records_observed": observed,
+            "local_recall": matched_total / matched_local if matched_local else None,
+            "local_recall_fact_denominator": matched_local,
+            "cloud_only": matched_cloud - matched_total if observed["matched"] else None,
+            **{label + "_rate": numerator / denominator if denominator else None
+               for label, (numerator, denominator) in rates.items()},
+            "rate_denominators": {label: pair[1] for label, pair in rates.items()},
+            "rate_numerators": {label: pair[0] for label, pair in rates.items()}}
 
 
 def observe(cfg, *, root=None, days=14, since=None, project=None):
@@ -269,7 +335,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None):
         borrowed = SimpleNamespace(db=db)
         accounting = policy.usage_report(borrowed)
         reason = policy.global_block_reason(borrowed) or policy.budget_block_reason(borrowed, settings)
-        ratio = _calibration(db, now - 62 * 86400) if not accounting["pricing_unverified"] else None
+        calibration = _calibration(db, now - 62 * 86400) if not accounting["pricing_unverified"] else None
         routes = _route_counts(db, cfg, planning, deadline)
         counts = {}
         scope, params = _source_scope(planning)
@@ -286,7 +352,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None):
             sql += " AND project_id=?"
             args.append(project)
         for n, row in enumerate(db.execute("SELECT kind,created_at,meta FROM artifacts WHERE kind IN "
-                "('cloud_usage_reserve','cloud_usage_result','cloud_usage_dryrun','cloud_compare_v1') AND "
+                "('cloud_usage_reserve','cloud_usage_result','cloud_usage_dryrun','cloud_usage_disposition','cloud_compare_v1') AND "
                 + sql + " ORDER BY artifact_id LIMIT ?", (*args, READ_ROWS + 1)), 1):
             _checkpoint(deadline, n)
             meta = mcs_util.loads_dict(row["meta"])
@@ -295,18 +361,26 @@ def observe(cfg, *, root=None, days=14, since=None, project=None):
             # Explicit projection: IDs, hashes, owner data and content never leave this query.
             log.append(_safe_log(row, meta))
         _checkpoint(deadline)
-    calibrated = ratio is not None
-    ratio = ratio if calibrated else Decimal(1) / 3
-    for item in routes.values():
-        _costs(item, ratio, settings["usd_jpy"])
+    calibrated = bool(calibration and calibration["tokens_per_char"] is not None)
+    ratio = calibration["tokens_per_char"] if calibrated else Decimal(1) / 3
+    output_mean = calibration["output_tokens_per_request"] if calibration else None
+    import extract_llm as extract
+    for route, item in routes.items():
+        _costs(item, ratio, settings["usd_jpy"], output_limit=extract.MAX_TOKENS if route == "reextract" else 1600,
+               output_per_request=output_mean)
     total_chars = sum(row["chars"] for row in counts.values())
     total_requests = sum(row["patients"] + row["scan_requests"] for row in counts.values())
+    total_basic = sum(row["patients"] + row["posts"] for row in counts.values())
     if "patient_context" not in planning["routes"]:
-        total_chars, total_requests = 0, 0
+        total_chars, total_requests, total_basic = 0, 0, 0
     recurring = {}
     for label, multiplier in (("daily", Decimal(1) / days), ("monthly_30_days", Decimal(30) / days)):
         recurring[label] = _costs({"input_chars": math.ceil(total_chars * multiplier),
-            "requests_estimate": math.ceil(total_requests * multiplier)}, ratio, settings["usd_jpy"])
+            "requests_estimate": math.ceil(total_requests * multiplier),
+            "basic_requests_estimate": math.ceil(total_basic * multiplier),
+            "chunk_extra_requests_estimate": math.ceil(total_requests * multiplier) - math.ceil(total_basic * multiplier)},
+            ratio, settings["usd_jpy"],
+            output_per_request=output_mean)
     peak = max(max((row["patients"] + row["scan_requests"] for row in counts.values()), default=0),
                routes["reextract"]["requests_estimate"])
     decision = ("off" if settings["mode"] == "off" else "dry_run" if settings["mode"] == "dry_run"
@@ -324,7 +398,34 @@ def observe(cfg, *, root=None, days=14, since=None, project=None):
         "monthly_patient_context_requests_estimate": sum(row["patients"] for row in counts.values()) * 30 / days,
         "recommended_daily_request_budget": math.ceil(peak * 1.2),
         "input_estimate_basis": "usage_calibrated_character_proxy" if calibrated else "character_proxy",
-        "patient_context_basis": "stored_message_timestamp_proxy",
+        "patient_context_basis": "runtime_pending_source_contract",
+        "recurring_basis": "stored_message_timestamp_proxy",
+        "historical_collection_coverage": "unverified",
+        "historical_average_denominator_days": days,
+        "input_character_unit": "unicode_characters_not_tokens",
+        "usage_calibration": {**{key: value for key, value in (calibration or {}).items()
+            if key not in ("tokens_per_char", "output_tokens_per_request")},
+            "status": "measured" if calibrated else "unmeasured",
+            "scope": "pooled_routes_last_62_days",
+            "tokens_per_character": str(ratio) if calibrated else None,
+            "output_tokens_per_request": str(output_mean) if output_mean is not None else None},
+        "shadow_comparison": _comparison_report(log),
+        "estimate_components": {
+            "current_backlog": routes,
+            "recurring": recurring,
+            "chunk_repair_retry_additions": {
+                "chunk_requests_current": sum(item["chunk_extra_requests_estimate"] for item in routes.values()),
+                "chunk_requests_recurring": {period: item["chunk_extra_requests_estimate"]
+                                             for period, item in recurring.items()},
+                "chunk_counts_included_in_current_and_recurring": True,
+                "repair_requests_estimate": None, "retry_requests_estimate": None,
+                "basis": "chunk_character_proxy_repair_retry_unmeasured"},
+            "shadow_additions": {"enabled": settings["mode"] == "shadow",
+                "cloud_work_current": routes if settings["mode"] == "shadow" else None,
+                "cloud_work_recurring": recurring if settings["mode"] == "shadow" else None,
+                "basis": "additional_to_local_execution" if settings["mode"] == "shadow" else "disabled"}},
+        "estimate_excludes": ["unmeasured_repair_retry", "prompt_overhead_and_added_context"],
+        "cost_basis": "reference_range_not_budget_reservation_or_invoice",
         "reservation_input_upper_bound_tokens": policy.INPUT_RESERVATION_BOUND,
         "price_version": policy.PRICE_VERSION, "price_checked_on": policy.PRICE_CHECKED_ON,
         "price_valid_until": policy.PRICE_VALID_UNTIL, "price_valid": policy.pricing_valid(),
@@ -371,7 +472,7 @@ def command(args):
     cfg = mcs_util.load_config()
     try:
         if action in ("stop", "resume"):
-            from writer_lock import acquire_run_lock, code_stamp
+            from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
             expected_code = code_stamp()
             if not args.confirm_human or not mcs_util.valid_text(args.reason, 2000):
                 print("--confirm-human と --reason による人の確認が必要です")
@@ -391,6 +492,10 @@ def command(args):
                 raise ValueError("ledger_unavailable")
             lock_fd = acquire_run_lock(str(path.parent / "run.lock"))
             if lock_fd is None:
+                lock_fd = wait_run_lock(str(path.parent / "run.lock"), wait_s=5.0,
+                    expected_code_stamp=expected_code,
+                    marker_path=str(path.parent / "update_in_progress.marker"))
+            if lock_fd is None:
                 print("クラウド操作: ほかの保存処理が終わってから再試行してください")
                 return 3
             try:
@@ -406,18 +511,7 @@ def command(args):
         if action == "log":
             result = {"entries": report["log"]}
         elif action == "compare":
-            totals = {k: 0 for k in ("local_facts", "cloud_facts", "matched", "rejected", "held", "repairs")}
-            for row in report["log"]:
-                if row["kind"] == "cloud_compare_v1":
-                    for key in totals:
-                        value = row.get(key, 0)
-                        if type(value) is not int or value < 0:
-                            raise ValueError("comparison_invalid")
-                        totals[key] += value
-            if totals["matched"] > min(totals["local_facts"], totals["cloud_facts"]):
-                raise ValueError("comparison_invalid")
-            result = {**totals, "local_recall": totals["matched"] / totals["local_facts"] if totals["local_facts"] else None,
-                      "cloud_only": totals["cloud_facts"] - totals["matched"]}
+            result = _comparison_report(report["log"])
         else:
             result = {k: v for k, v in report.items() if k != "log"}
         print(json.dumps(result, ensure_ascii=False, indent=2))

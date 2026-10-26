@@ -21,4 +21,20 @@ def test_save_preview_discloses_auto_jev_scope_and_cap(monkeypatch, capsys):
     text = capsys.readouterr().out
     assert "Jev" in text and "500" in text and "assist" in text
     assert "全対象" in text and "投稿本文" in text
+    assert "患者名" in text and "匿名化しません" in text
     assert "synthetic-private-value" not in text
+
+
+def test_wizard_explicit_mode_reprompts_missing_scope(monkeypatch, capsys):
+    group = next(group for group in setup_wizard.WIZARD
+                 if any(item[0] == "semantic.mode" for item in group[1]))
+    monkeypatch.setattr(setup_wizard, "WIZARD", [group])
+    answers = iter(["2", "assist", "", "7", "", ""])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    cfg = {}
+    setup_wizard.wizard(cfg)
+    effective, errors = semantic_policy.semantic_config(cfg, key_present=True)
+    assert not errors
+    assert effective["mode"] == "assist" and effective["project_ids"] == [7]
+    assert effective["daily_request_budget"] == 0
+    assert "必須項目です" in capsys.readouterr().out

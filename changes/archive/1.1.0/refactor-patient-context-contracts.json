@@ -8,5 +8,5 @@
     "夜間要約の作業件数の集計では、稼働中のデータベースを読むため、初回か差分かの判定は従来どおりその場で読み直します。",
     "参照ハッシュの検証関数は、意味チェック候補の対象として患者文脈側に残しています。"
   ],
-  "refs": ["mcs/patients/patient_context.py", "mcs/patients/patient_state_context.py", "mcs/patients/patient_nightly.py"]
+  "refs": ["mcs/patients/patient_context.py", "mcs/patients/patient_state_context.py", "mcs/patients/patient_context_refresh.py"]
 }

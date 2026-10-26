@@ -94,7 +94,8 @@ def _live_request_budget(home):
         semantic = cfg.get("semantic", {})
         if not isinstance(semantic, dict):
             raise ValueError
-        limit = semantic.get("daily_request_budget", DAILY_REQUEST_LIMIT)
+        limit = semantic.get("daily_request_budget",
+                             0 if "mode" in semantic else DAILY_REQUEST_LIMIT)
         if type(limit) is not int or limit < 0:
             raise ValueError
     except (OSError, ValueError, UnicodeError, RecursionError):

@@ -2025,13 +2025,9 @@ def rerender_message_cards(ledger, cfg, project_id, message_id,
         membership = db.execute("SELECT content FROM message_metadata WHERE message_id=? AND source='capture'", (message_id,)).fetchone()
         role = ((loads_dict(membership[0]) or {}).get("_initial_import") or {}) if membership else {}
         if role.get("role") == "history":
-            from notify_render import progress_state
-            if (progress_state(db, message_id, cfg) or {}).get("state") == "complete":
-                for history in db.execute("SELECT * FROM notification_cards WHERE kind='patient_history' AND project_id=? "
-                        "AND delivery_state!='revoked'", (project_id,)).fetchall():
-                    notify_history.analysis_changed(db, history, cfg, now)
-                    issue_render(db, history["card_id"], cfg, now, specs)
-                    notify_history.emit_completion_tx(ledger, notify_scope.card_row(db, history["card_id"]), now)
+            for history in db.execute("SELECT * FROM notification_cards WHERE kind='patient_history' AND project_id=? "
+                    "AND delivery_state!='revoked'", (project_id,)).fetchall():
+                notify_history.analysis_changed(db, history, cfg, now)
         for r in db.execute(
                 "SELECT card_id FROM notification_cards WHERE kind='thread' "
                 "AND project_id=? AND root_message_id=? "
@@ -2260,7 +2256,8 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
             before = (card["source_generation"],
                       card["presentation_generation"],
                       card["desired_render_rev"])
-            if card["kind"] != "patient_history" or not normal_due or history_issued < 2:
+            history_due = card["kind"] == "patient_history" and notify_history.refresh_needed(db, card, now)
+            if card["kind"] != "patient_history" or history_due and (not normal_due or history_issued < 2):
                 before_specs = len(specs)
                 issue_render(db, card["card_id"], cfg, now, specs)
                 if card["kind"] == "patient_history":

@@ -120,6 +120,8 @@ class MessageBatch:
     # rows than paginate.total_entries — older unread rows exist that this
     # walk could not see, so the patient must not be acknowledged yet
     capped: bool = False
+    # History-only, bounded page observations made before since filtering.
+    page_observations: list[dict] | None = None
 
 
 

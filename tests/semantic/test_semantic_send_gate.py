@@ -326,3 +326,29 @@ def test_degraded_mixed_thread_blocks_history_but_allows_live_reply(tmp_path):
         semantic_send_gate.semantic_gate(db.db, event, dict(payload, target_message_ids=[2]), cfg)
     finally:
         db.close()
+
+
+def test_degraded_producer_keeps_live_reply_from_mixed_history_origin(tmp_path, monkeypatch):
+    import semantic_notice
+    db = _delivery_db(tmp_path, [_message(), _message(mid=2, parent=1)])
+    try:
+        cfg = _cfg("enforce")
+        scfg = semantic_policy.semantic_config(cfg)[0]
+        # Existing bootstrap intents would otherwise produce another notice.
+        db.db.execute("UPDATE notify_outbox SET state='suppressed'")
+        source = db.outbox_add("new_messages", 1, {"message_ids": [1,2]})
+        db.db.execute("UPDATE notify_outbox SET created_at=0 WHERE event_id=?", (source,))
+        db.db.execute("INSERT INTO message_metadata(message_id,source,content,checked_at) VALUES(1,'capture',?,0) "
+                      "ON CONFLICT(message_id,source) DO UPDATE SET content=excluded.content",
+                      (json.dumps({"_initial_import": {"role":"history", "cohort_id":"a"*32}}),))
+        db.db.commit()
+        monkeypatch.setattr(semantic_notice.semantic_transport, "llm_model", lambda: None)
+        assert semantic_notice.emit_degraded(db, scfg) == 1
+        event = db.db.execute("SELECT * FROM notify_outbox WHERE kind='semantic_notice'").fetchone()
+        payload = json.loads(event["payload"])
+        assert payload["target_message_ids"] == [2]
+        assert payload["src_event_id"] == source
+        semantic_send_gate.semantic_gate(db.db, event, payload, cfg)
+        assert json.loads(db.db.execute("SELECT payload FROM notify_outbox WHERE event_id=?", (source,)).fetchone()[0])["message_ids"] == [1,2]
+    finally:
+        db.close()

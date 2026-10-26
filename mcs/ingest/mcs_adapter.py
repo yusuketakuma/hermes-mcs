@@ -1646,6 +1646,7 @@ class MCSAdapter:
         reached = False
         pages = 0
         error = None
+        observations = []
         for page in range(start_page, start_page + max_pages):
             try:
                 r = self._get(f"/projects/{project_id}/messages", {
@@ -1658,8 +1659,10 @@ class MCSAdapter:
                     raise SchemaError(f"history[{project_id}]: page invalid")
                 has_next = page_has_next(pag, f"history[{project_id}]")
                 page_messages = []
+                root_ids = []
                 for m in items:
                     nm = normalize_root(m, project_id, f"history[{project_id}]")
+                    root_ids.append(nm.message_id)
                     if since_ts and nm.posted_at:
                         try:
                             parent_ts = datetime.fromisoformat(
@@ -1692,11 +1695,13 @@ class MCSAdapter:
                 error = e
                 break
             out.extend(page_messages)
+            import history_walk
+            observations.append(history_walk.observation(project_id, since_ts, page, per_page, has_next, root_ids))
             pages += 1
             if not has_next:
                 reached = True
                 break
-        return MessageBatch(out, pages, reached, error)
+        return MessageBatch(out, pages, reached, error, page_observations=observations)
 
     def fetch_latest(self, project_id: int) -> dict:
         """Latest-activity probe for one project — sees posts the unread

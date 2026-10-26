@@ -688,11 +688,11 @@ _REASON_JA = {
     "semantic_jev_auth_error": ("TypeSafe Jev の認証に失敗しました",
                                 "TYPESAFE_API_KEY の値と有効期限を確認"),
     "cloud_llm_auth_error": ("Anthropic の認証に失敗し、外部AI処理を停止しました",
-                              "MCS_ANTHROPIC_API_KEY を確認し、cloud-llm resume で再開。処理はローカルLLMへ戻ります"),
+                              "MCS_ANTHROPIC_API_KEY を確認し、cloud-llm resume --confirm-human --reason '確認理由' で再開。処理はローカルLLMへ戻ります"),
     "cloud_llm_payment_required": ("Anthropic の支払い条件を確認するため、外部AI処理を停止しました",
-                                    "契約・残高を確認し、cloud-llm resume で再開。処理はローカルLLMへ戻ります"),
+                                    "契約・残高を確認し、cloud-llm resume --confirm-human --reason '確認理由' で再開。処理はローカルLLMへ戻ります"),
     "cloud_llm_pricing_unverified": ("Anthropic の料金または使用量を確認できず、外部AI処理を停止しました",
-                                     "doctor で料金表の期限と使用量を確認し、問題を解消してから cloud-llm resume で再開"),
+                                     "doctor で料金表の期限と使用量を確認し、問題を解消してから cloud-llm resume --confirm-human --reason '確認理由' で再開"),
     "cloud_llm_circuit_open": ("Anthropic への要求が続けて失敗し、外部AI処理を一時停止しています",
                                 "doctor で停止理由を確認。処理はローカルLLMへ戻り、待機期間後に再確認します"),
     "unread_collection_unknown": ("未読収集の状況が記録されていません",
@@ -786,6 +786,8 @@ _WAIT_JA = {
     "unknown": "状態を読めない記録",
     "stale": "最後の記録以降に状態が変化",
     "unrecorded": "待ちの理由が未記録",
+    "initial_history_capture": "初回履歴を取得中",
+    "initial_history_analysis": "初回履歴を解析中",
 }
 _INTERRUPT_JA = {
     "watchdog_exit": "制限時間超過で打ち切り",
