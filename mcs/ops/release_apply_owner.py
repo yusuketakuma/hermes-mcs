@@ -441,7 +441,7 @@ def _open_release_gate(runtime_home):
 
 @contextmanager
 def _legacy_scope(runtime_home):
-    """Stdlib-only so a target-tag bootstrap never imports adapter/SDK code."""
+    """Stdlib-only so a target-tag bootstrap never imports adapter or SDK code."""
     fd = _open_release_gate(runtime_home)
     try:
         yield fd
