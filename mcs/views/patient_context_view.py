@@ -8,13 +8,14 @@ right; authorization stays with the caller and ``role_order`` only
 reorders sections.
 """
 from datetime import timedelta
+import hashlib
 import json
 import math
 import re
 
 from clinical_scope import source_axes, source_polarity
 from patient_context import LABELS, extract_context
-from mcs_util import locate_quote_span
+from mcs_util import html_to_text, locate_quote_span
 from read_model import _records_coverage
 from snapshot_access import snapshot_meta
 
@@ -391,6 +392,42 @@ def timeline(ev, categories=None) -> dict:
         rows.append(row)
     return {"view": "timeline", "items": rows, "order_basis": "posting_time",
             "coverage": ev.get("coverage")}
+
+
+def observations(db, ev, *, source_limit=50) -> dict:
+    """Project a bounded set of current source-bound observation records."""
+    from observation_series import observation_series
+
+    project_id = ev.get("project_id")
+    if type(project_id) is not int or project_id <= 0 or type(source_limit) is not int or not 1 <= source_limit <= 200:
+        raise ValueError("observation_scope_invalid")
+    keys, seen = [], set()
+    for item in ev.get("items") or []:
+        if (item.get("category") != "observations" or item.get("source") != "chat"
+                or type(item.get("message_id")) is not int or not isinstance(item.get("content_hash"), str)):
+            continue
+        key = (item["message_id"], item["content_hash"])
+        if key not in seen:
+            keys.append(key)
+            seen.add(key)
+    selected = keys[:source_limit]
+    ids = sorted({mid for mid, _ in selected})
+    originals = {}
+    if ids:
+        rows = db.execute("SELECT message_id,content_hash,body_text,body_html FROM messages "
+                          "WHERE project_id=? AND body_state='full' AND message_id IN "
+                          "(SELECT value FROM json_each(?)) AND length(body_text)<=20000 "
+                          "AND length(body_html)<=80000", (project_id, json.dumps(ids)))
+        wanted = set(selected)
+        for mid, digest, body, html in rows:
+            key = (mid, digest)
+            if (key in wanted and isinstance(body, str) and isinstance(html, str)
+                    and hashlib.sha256(html.encode()).hexdigest() == digest and html_to_text(html) == body):
+                originals[key] = body
+    result = observation_series(ev, source_bodies=originals)
+    result["source_checks"] = {"eligible": len(keys), "selected": len(selected), "verified": len(originals),
+                               "unavailable": len(selected) - len(originals), "limited": len(keys) > source_limit}
+    return result
 
 
 def discrepancies(ev, posters=None) -> dict:

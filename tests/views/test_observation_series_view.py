@@ -1,0 +1,91 @@
+"""Synthetic end-to-end observation views on the caller's DB snapshot."""
+from dataclasses import replace
+from types import SimpleNamespace
+
+import pytest
+
+import ledger
+import mcs_view
+import notify_views
+import patient_context_refresh as refresh
+import patient_context_view as views
+from semantic_testkit import _message
+from test_read_model import _artifact, _db, _hash_of
+
+
+def seed(db, mid, body, evidence=None):
+    msg = replace(_message(mid, body=body), posted_at="2026-10-03T09:00:00+09:00")
+    db.save_messages([msg], project_id=1)
+    quote = evidence or body
+    details = [{"key": key, "value": value, "evidence": quote} for key, value in (
+        ("observation_name", "Cr"), ("value", "1.0"), ("unit", "mg/dL"),
+        ("condition", "空腹"), ("measured_on", "2026-10-01"))]
+    item = {"category": "observations", "subject": "patient", "text": quote,
+            "evidence": quote, "details": details}
+    _artifact(db, "extract_llm", mid, {"patient_context": [item]}, {"hash": _hash_of(db, mid)})
+
+
+@pytest.fixture
+def ctx(tmp_path, monkeypatch):
+    db = _db(tmp_path, ())
+    monkeypatch.setattr(refresh, "context_view_input", lambda *a, **k: None)
+    monkeypatch.setattr(refresh, "inference_coverage", lambda *a, **k: {"complete": False,
+        "status": "scan_pending", "sources": {"pending": 1}})
+    monkeypatch.setattr("mcs_util.load_config", lambda: {})
+    yield db
+    db.close()
+
+
+def test_cli_and_notification_use_the_same_verified_original(ctx):
+    body = "本人は2026-10-01の空腹時の採血 Cr 1.0 mg/dL。"
+    seed(ctx, 1, body)
+    view = SimpleNamespace(db=ctx.db, meta={"generated_at": 1_790_000_000})
+    got = mcs_view.View._patient_context(view, 1, "observations", None, None, "")
+    assert len(got["series"]) == 1 and got["series"][0]["event_date_kind"] == "measured_on"
+    assert got["source_checks"] == {"eligible": 1, "selected": 1, "verified": 1,
+                                     "unavailable": 0, "limited": False}
+    display = notify_views.patient_context_list(ctx.db, 1, "observations", cfg={}, since=0, now=1_790_000_000)
+    assert any(body in row["text"] for row in display["items"])
+    assert any("原文照合: 1 / 1投稿" in line for line in display["head"])
+    assert mcs_view._parser().parse_args(["patient_context", "--project", "1", "--view", "observations"]).view == "observations"
+
+
+def test_observation_view_borrows_published_snapshot_through_source_revision(ctx, tmp_path):
+    original = "本人は2026-10-01の空腹時の採血 Cr 1.0 mg/dL。"
+    seed(ctx, 1, original)
+    snapshot = ledger.publish_snapshot(str(tmp_path / "ledger.db"), str(tmp_path / "snapshot"))
+    view = mcs_view.View(snapshot)
+    try:
+        ctx.save_messages([replace(_message(1, body="訂正後の合成本文"),
+                                   posted_at="2026-10-03T09:00:00+09:00")], project_id=1)
+        result = view.read("patient_context", project=1, view="observations")
+        assert view.db.in_transaction
+        assert result["series"][0]["records"][0]["items"][0]["quote"] == original
+        assert result["source_checks"]["verified"] == 1
+    finally:
+        view.close()
+
+
+def test_full_original_context_is_required_and_partial_quote_is_not_shown(ctx):
+    quote = "本人は2026-10-01の空腹時の採血 Cr 1.0 mg/dL。"
+    seed(ctx, 1, "家族の話です。" + quote, evidence=quote)
+    ev = views.evidence(ctx.db, 1, cfg={})
+    result = views.observations(ctx.db, ev)
+    assert result["series"] == [] and result["unconfirmed"]
+    assert quote not in str(result)
+    display = notify_views.patient_context_list(ctx.db, 1, "observations", cfg={}, since=0, now=1_790_000_000)
+    assert quote not in str(display)
+    assert any("対応未確認" in row["text"] for row in display["items"])
+
+
+def test_changed_original_and_limited_source_checks_remain_unconfirmed(ctx):
+    seed(ctx, 1, "本人は2026-10-01の空腹時の採血 Cr 1.0 mg/dL。")
+    seed(ctx, 2, "本人は2026-10-01の空腹時の採血 Cr 1.0 mg/dL。")
+    ev = views.evidence(ctx.db, 1, cfg={})
+    limited = views.observations(ctx.db, ev, source_limit=1)
+    assert limited["source_checks"]["limited"] is True
+    assert len(limited["unconfirmed"]) >= 1
+    ctx.db.execute("UPDATE messages SET body_html=? WHERE project_id=1 AND message_id=2", ("<p>変更済み</p>",))
+    changed = views.observations(ctx.db, ev)
+    assert changed["source_checks"]["unavailable"] == 1
+    assert all(record["items"][0]["message_id"] != 2 for series in changed["series"] for record in series["records"])

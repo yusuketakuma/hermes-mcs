@@ -631,6 +631,7 @@ class View:
             "changes": lambda: pcv.changes(self.db, ev, since if since is not None else now - 7 * 86400),
             "previsit": lambda: pcv.previsit(self.db, ev, now),
             "timeline": lambda: pcv.timeline(ev),
+            "observations": lambda: pcv.observations(self.db, ev),
             "discrepancies": lambda: pcv.discrepancies(ev, posters=pcv.participants(self.db, pid)["items"]),
             "handoff": lambda: pcv.handoff(self.db, ev),
             "transition_course": lambda: pcv.transition_course(ev),
@@ -922,7 +923,7 @@ def _parser():
             sub.add_argument("--query", required=True)
         if kind == "patient_context":
             sub.add_argument("--view", required=True, choices=(
-                "background", "changes", "replies", "previsit", "timeline", "discrepancies",
+                "background", "changes", "replies", "previsit", "timeline", "observations", "discrepancies",
                 "handoff", "search", "transition_course", "participants"))
             sub.add_argument("--since", type=int, help="changes: inclusive epoch seconds (default: 7 days)")
             sub.add_argument("--query", help="search: whitespace-separated terms")

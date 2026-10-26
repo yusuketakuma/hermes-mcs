@@ -774,7 +774,7 @@ def drug_search_view(db, cfg, project_id, query) -> dict:
 CONTEXT_SECTIONS = {
     "background": "患者さんの全体像", "changes": "前回から変わったこと",
     "replies": "連絡・返答の確認", "previsit": "訪問前の確認ノート",
-    "timeline": "経過タイムライン", "discrepancies": "記録の食い違い",
+    "timeline": "経過タイムライン", "observations": "検査・観測の記録", "discrepancies": "記録の食い違い",
     "handoff": "引継ぎ用の記録", "transition_course": "退院・移行時の経過",
 }
 from patient_context_view import ROLE_LABELS as CONTEXT_ROLES  # noqa: E402 - one role source
@@ -977,6 +977,22 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
                 head.append("介入の記載: 対象範囲を確認できません")
         if view.get("next_planned"):
             head.append("記録上の予定: " + view["next_planned"])
+    elif section == "observations":
+        view = views.observations(db, ev)
+        head.append("原文に記載された検査・観測値を項目ごとに投稿順で表示")
+        checks = view["source_checks"]
+        head.append(f"原文照合: {checks['verified']} / {checks['eligible']}投稿（1回最大50投稿）")
+        if checks["limited"] or checks["unavailable"]:
+            head.append("原文の照合は一部のみ完了")
+        for series in view["series"]:
+            date_label = {"measured_on": "測定日", "observed_on": "観察日"}[series["event_date_kind"]]
+            group = f"{series['name']} · {series['unit']} · {series['condition']} · {date_label}の記載"
+            for record in series["records"]:
+                add([{**item, "event_date_kind": record["event_date_kind"],
+                      "event_date_text": record["event_date_text"]} for item in record["items"]], group)
+        for record in view["unconfirmed"]:
+            add([{**ref, "text": "検査・観測の記載あり（対応未確認）"}
+                 for ref in record["references"]], "対応未確認の記録")
     elif section == "discrepancies":
         view = views.discrepancies(ev, posters=views.participants(db, project_id)["items"])
         for group in view["items"]:

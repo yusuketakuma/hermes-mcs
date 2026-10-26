@@ -38,7 +38,7 @@ def test_all_sections_reachable_and_actor_bound(led):
     spec = _delivered_card(led)
     token = click(led, _token_for(spec, "summary"))["navigation"][0]["token"]
     sections = list(notify_views.CONTEXT_SECTIONS)
-    assert len(sections) == 8
+    assert len(sections) == 9
     for index, section in enumerate(sections):
         result = click(led, token, now=NOW + index)
         assert result["action"] == "list"
