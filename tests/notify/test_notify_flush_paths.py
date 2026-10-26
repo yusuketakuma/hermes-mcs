@@ -4,6 +4,7 @@ never invoked; delivery is stubbed."""
 
 import semantic_send_gate
 import hashlib
+import sqlite3
 import json
 import os
 import sys
@@ -13,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import notify_cards
 import notify_flush
 import notify_sender
 import mcs_util
@@ -74,6 +76,8 @@ def test_missing_notification_channel_stays_retryable(monkeypatch):
     marked = []
 
     class Outbox:
+        db = sqlite3.connect(":memory:")   # flush wakes parked replies first
+
         def outbox_due(self, limit):
             return [{"event_id": 1, "kind": "new_messages", "project_id": 1,
                      "payload": "{}", "attempts": 0, "progress": None}]
@@ -90,6 +94,7 @@ def test_missing_notification_channel_stays_retryable(monkeypatch):
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda *a: "/bin/sh")
     monkeypatch.setattr(notify_sender, 'target', lambda cfg, kind: None)
+    monkeypatch.setattr(notify_cards, "wake_ready_reply_holds", lambda db, now: 0)
 
     assert notify_flush.flush(Outbox()) == {"sent": 0, "failed": 1,
                                         "skipped": 0, "suppressed": 0,
@@ -584,6 +589,8 @@ def test_card_routed_events_dispatch_without_exe_or_text_destination(monkeypatch
         ev.update(project_id=1, payload="{}", attempts=0, progress=None)
 
     class Outbox:
+        db = sqlite3.connect(":memory:")   # flush wakes parked replies first
+
         def outbox_due(self, limit):
             return events
 
@@ -595,6 +602,7 @@ def test_card_routed_events_dispatch_without_exe_or_text_destination(monkeypatch
 
     dispatched = []
     monkeypatch.setattr(notify_flush, "_config", lambda: {})
+    monkeypatch.setattr(notify_cards, "wake_ready_reply_holds", lambda db, now: 0)
     monkeypatch.setattr(mcs_util, "hermes_exe", lambda *a: "/nonexistent/synthetic-hermes")
     monkeypatch.setattr(notify_sender, "target", lambda cfg, kind: None)
     monkeypatch.setattr(notify_parts, "late_attachment_thread", lambda cfg: True)
