@@ -107,7 +107,7 @@ def test_doctor_resolves_auto_without_exposing_keys(world):
     root, _, _ = world
     _key(root)
     report = cli.diagnostics({}, root=str(root))
-    assert report["jev"]["mode"] == "assist" and report["jev"]["daily_request_budget"] == 500
+    assert report["jev"]["mode"] == "assist" and report["jev"]["daily_request_budget"] == 10000
     assert report["anthropic"]["mode"] == "on"
     assert report["jev"]["scope"] == "all" and report["anthropic"]["scope"] == "all"
     assert "synthetic-secret-key" not in json.dumps(report)
