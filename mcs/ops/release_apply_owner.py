@@ -833,12 +833,9 @@ def _run_native_release(control, monitor, *, runtime_home, repository, operation
                 raise ValueError
             current = context['current']
             now = int(time.time() * 1000)
-            registration_request = _prepare_registration_read(current,
-                expected_registration_id=expected_registration_id, now_ms=now, deadline=deadline)
             poll_request = _prepare_apply_control(current, 'poll', dict(schema_version=apply.VERSIONS['control'],
                 poll_id=str(uuid.uuid4()), case_id=context['expected']['case_id']), now_ms=now, deadline=deadline)
         # The carrier supplies untrusted bytes only; no callback supplies observations or authority.
-        registration = _verify_registration_read(registration_request, carrier(registration_request), now_ms=int(time.time() * 1000))
         polled = _apply_response(carrier(poll_request), 'poll', ('context',))['context']
         release.fields(polled, ('intent', 'approval', 'acceptance', 'operation', 'admission'))
         if polled['admission'] is not None or not apply.same(polled['acceptance'], change['acceptance']):
@@ -851,8 +848,7 @@ def _run_native_release(control, monitor, *, runtime_home, repository, operation
             now_ms=now, allow_expired=True)
         authorization = dict(operation=operation, approval=polled['approval'], preview=preview,
             local_receipt=change['local_receipt'], acceptance=change['acceptance'],
-            registration=registration['registration'], expected=change['expected'])
-        apply.validate_apply_authorization(**authorization, now_ms=now)
+            expected=change['expected'])
         frozen = context['record']
         plan = json.loads(frozen['raw'])['plan']
         if (not apply.same(polled['intent'], preview['intent']) or not apply.same(polled['approval'], preview['approval'])
@@ -876,7 +872,9 @@ def _run_native_release(control, monitor, *, runtime_home, repository, operation
             lifetime.callback(os.close, update_fd)
             journal_path = Path(runtime_home) / 'data/update_state.json'
             journal = update_journal.load_state(journal_path)
-            if (journal.get('_corrupt') or journal.get('applying') or journal.get('stages')
+            stages = journal.get('stages', [])
+            if (journal.get('_corrupt') or journal.get('applying')
+                    or (stages and stages[-1].get('stage') != 'done')
                     or 'release_ref' in journal or any('release_ref' in row for row in journal.get('applied', []))):
                 raise ValueError
             while True:
@@ -895,6 +893,16 @@ def _run_native_release(control, monitor, *, runtime_home, repository, operation
             preflight = _native_preflight(control, runtime_home=runtime_home, repository=repository, deadline=bounded)
             if mcs_update.precheck_local(preflight['configuration'], deadline=bounded):
                 raise ValueError
+            with control.release_authority_lock():
+                fresh, same_change = _current_change(control, monitor, runtime_home=runtime_home,
+                    repository=repository, operation_id=operation_id, deadline=bounded)
+                if same_change != change:
+                    raise ValueError
+                registration_request = _prepare_registration_read(fresh['current'],
+                    expected_registration_id=expected_registration_id, now_ms=int(time.time() * 1000), deadline=bounded)
+            registration = _verify_registration_read(registration_request, carrier(registration_request), now_ms=int(time.time() * 1000))
+            authorization['registration'] = registration['registration']
+            apply.validate_apply_authorization(**authorization, now_ms=int(time.time() * 1000))
             with control.release_authority_lock():
                 fresh, same_change = _current_change(control, monitor, runtime_home=runtime_home,
                     repository=repository, operation_id=operation_id, deadline=bounded)
@@ -990,7 +998,7 @@ def _run_native_release(control, monitor, *, runtime_home, repository, operation
                     plan_sha256=operation['plan_hash'], release_id=operation['release_id'], target_code_seq=operation['target_code_seq'],
                     target_commit=core['commit'], artifact_sha256=core['artifact']['sha256'], lock_sha256=core['lock_sha256'],
                     target_schema=core['schema']['target'], start_receipt_id=start_receipt_id, started_at=now)
-                journal = {**journal, 'release_ref': reference}
+                journal = {**journal, 'release_ref': reference, 'stages': []}
                 update_journal.save_state(journal_path, journal)
                 if update_journal.load_state(journal_path) != journal:
                     raise ValueError
@@ -1467,6 +1475,21 @@ def _repository_fingerprint(repository):
         os.close(descriptor)
 
 
+def _check_git_metadata(repository, *, deadline):
+    """Reject local attribute/graft overrides before any working-tree Git command."""
+    import mcs_update
+    import owned_process
+    try:
+        for name in ('info/attributes', 'info/grafts'):
+            result = owned_process.run_owned(['/usr/bin/git', '-C', str(repository), 'rev-parse', '--git-path', name],
+                mcs_update._bounded_timeout(10, deadline), mcs_update._release_git_environment(), deadline=deadline)
+            path = result.stdout.strip()
+            if result.returncode != 0 or not path or os.path.lexists(Path(repository) / path):
+                raise ReleaseApplyError('GIT_METADATA_HOLD')
+    except (OSError, subprocess.SubprocessError):
+        raise ReleaseApplyError('GIT_METADATA_HOLD') from None
+
+
 def _observe_installed(repository, *, python, venv, runtime_mode, platform, ledger_path,
                        deadline, host_source=None):
     """現在の導入物だけを読む。計画・署名認可・基線認定を生成しない。"""
@@ -1519,6 +1542,7 @@ def _observe_installed(repository, *, python, venv, runtime_mode, platform, ledg
             raise ReleaseApplyError('PLATFORM_MISMATCH')
         platform = {**platform, 'python': list(platform['python'])}
         repository_id = _repository_fingerprint(repository)
+        _check_git_metadata(repository, deadline=deadline)
         head, clean = dependencies._git_observation(repository, deadline=deadline)
         venv_fd = os.open(venv, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         fcntl.flock(venv_fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
@@ -1570,6 +1594,7 @@ def _initial_provider_source(control, repository, *, deadline):
             if (saved['state']['unresolved'] is not None
                     or saved['repo_fingerprint'] != _repository_fingerprint(repository)):
                 raise ReleaseApplyError('PROVIDER_HOLD')
+        _check_git_metadata(repository, deadline=deadline)
         raw, _ = source._read(repository, source.MANIFEST_PATH, deadline)
         result = source.verify_checkout(repository, raw, deadline=deadline, current=True)
         if result['sha256'] != saved['owner_evidence_sha256']:

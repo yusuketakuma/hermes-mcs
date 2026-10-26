@@ -3040,3 +3040,35 @@ def test_release_static_schema_must_match_the_authenticated_core(updater, tmp_pa
     errors, _ = updater._precheck_target_tree('a' * 40, False, deadline=time.monotonic() + 3,
         installed_schema=8, expected_target_schema=8)
     assert 'release_schema_target_mismatch' in errors
+
+
+def test_release_git_scope_uses_fixed_binary_and_environment_after_quiesce(tmp_path, monkeypatch):
+    import os
+    import shlex
+    import subprocess
+    import mcs_update as updater
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    subprocess.run(['/usr/bin/git', '-C', str(repo), 'init', '-q'], check=True)
+    (repo / 'tracked').write_text('synthetic\n')
+    subprocess.run(['/usr/bin/git', '-C', str(repo), 'add', '.'], check=True)
+    subprocess.run(['/usr/bin/git', '-C', str(repo), '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid',
+        'commit', '-qm', 'synthetic'], check=True)
+    expected = subprocess.check_output(['/usr/bin/git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+    subprocess.run(['/usr/bin/git', '-C', str(repo), 'config', 'core.worktree', str(tmp_path / 'foreign')], check=True)
+    marker = tmp_path / 'untrusted-git-ran'
+    fake = tmp_path / 'bin'
+    fake.mkdir()
+    executable = fake / 'git'
+    executable.write_text('#!/bin/sh\nprintf invoked > ' + shlex.quote(str(marker)) + '\nexit 77\n')
+    executable.chmod(0o700)
+    monkeypatch.setenv('PATH', str(fake))
+    monkeypatch.setenv('GIT_DIR', str(tmp_path / 'foreign.git'))
+    monkeypatch.setenv('GIT_WORK_TREE', str(tmp_path / 'foreign'))
+    monkeypatch.setattr(updater, 'REPO', str(repo))
+    with updater._release_git_scope():
+        assert updater._head_sha() == expected
+        assert updater._tree_clean()
+    assert not marker.exists()
+    assert os.environ['PATH'] == str(fake)
+    assert updater._RELEASE_GIT_SCOPE.get() is False

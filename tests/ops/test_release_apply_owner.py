@@ -1239,8 +1239,8 @@ def test_apply_control_signing_rejects_admin_registration_cross_kind_and_unknown
         assert 'SYNTHETIC_CANARY' not in str(error.value)
 
 
-@pytest.mark.parametrize('failure', [None, 'signature', 'artifact', 'disabled', 'uncertain_write',
-    'run-registration', 'run-operation', 'run-grant', 'run-cancel', 'run-epoch', 'run-fsync-expiry', 'run-fsync-rollback', 'run-start-uncertain'])
+@pytest.mark.parametrize('failure', [None, 'global-hook', 'signature', 'artifact', 'disabled', 'uncertain_write',
+    'run-registration', 'run-operation', 'run-grant', 'run-cancel', 'run-epoch', 'run-fsync-expiry', 'run-fsync-rollback', 'run-start-uncertain', 'run-unfinished-journal', 'run-git-attributes', 'run-git-grafts'])
 def test_native_plan_freezes_independent_report_after_real_tty_signature_and_artifact_checks(native_product, registered, tmp_path, failure):
     # Development-only accepted root and synthetic credentials; no authorization or crypto is mocked.
     import base64
@@ -1390,7 +1390,7 @@ if pid==0:
     assert not owner._EFFECT_CAPS
     assert not (home/'data/update.lock').exists() and not (home/'data/run.lock').exists()
     os._exit(0)
-   assert failure is None or failure.startswith('run-')
+   assert failure in (None,'global-hook') or failure.startswith('run-')
    assert owner._read_frozen_plan(control)==record
    body=json.loads(prepared.body)
    assert prepared.path=='/v2/releases/apply/plans/report'
@@ -1525,6 +1525,20 @@ if pid==0:
      print('synthetic native child boundary',diagnostic.get('stages'),(diagnostic.get('applying') or {}).get('release_child'),flush=True)
      raise
    owner._run_effect_post_merge=observed_child
+   import shlex
+   hook_marker=home/'data/hook-must-not-run'
+   hook=(repo/'.git/hooks/post-merge') if failure!='global-hook' else home/'global-hooks/post-merge'
+   hook.parent.mkdir(exist_ok=True)
+   hook.write_text('#!/bin/sh\nprintf invoked > '+shlex.quote(str(hook_marker))+'\n');hook.chmod(0o700)
+   if failure=='global-hook':
+    global_config=home/'synthetic-global.gitconfig'
+    global_config.write_text('[core]\n hooksPath = '+str(hook.parent)+'\n')
+    os.environ['GIT_CONFIG_GLOBAL']=str(global_config)
+   if failure in ('run-git-attributes','run-git-grafts'):
+    (repo/'.git/info'/('attributes' if failure.endswith('attributes') else 'grafts')).write_text('')
+   previous=dict(update_journal.default_state(),stages=[dict(stage='local_checks',at=packet['now']/1000),dict(stage='done',at=packet['now']/1000)],applied=[dict(sha=supplied['baseline']['commit'],tag='synthetic-previous')])
+   if failure=='run-unfinished-journal':previous['stages'].pop()
+   update_journal.save_state(home/'data/update_state.json',previous)
    assert not (local_problems:=mcs_update.precheck_local(mcs_update.mcs_util.load_config(),deadline=time.monotonic()+30)),local_problems
    if failure in ('run-fsync-expiry','run-fsync-rollback','run-start-uncertain'):
     write=control.write
@@ -1552,6 +1566,7 @@ if pid==0:
      assert update_journal.load_state(home/'data/update_state.json').get('applying') is None
      assert not owner._EFFECT_CAPS and not owner._EFFECT_PARENTS and not owner._LIVE_CONTINUATIONS
      assert control.read('release-successor.json') is None
+     assert not hook_marker.exists()
      os._exit(0)
     import traceback
     print('synthetic carrier stages',calls,flush=True)
@@ -1580,7 +1595,9 @@ if pid==0:
    assert final_journal['applied'][-1]['release_ref']==final_journal['release_ref']
    report=json.loads(final['outbox'][-1]['raw'])
    assert report['state']=='unknown' and report['result']['verified_at'] is None and report['result']['start_receipt_id']==final['spent'][0]['start_receipt_id']
-   assert calls==[registration_contract.PATH,'/v2/releases/apply/requests/poll','/v2/releases/apply/operations/admit','/v2/releases/apply/operations/grant']
+   assert final_journal['applied'][0]==previous['applied'][0]
+   assert not hook_marker.exists()
+   assert calls==['/v2/releases/apply/requests/poll',registration_contract.PATH,'/v2/releases/apply/operations/admit','/v2/releases/apply/operations/grant']
    assert not owner._EFFECT_CAPS and not owner._EFFECT_PARENTS and not owner._EFFECT_ARTIFACTS
    state_before=release_state.status(control)
    with monitor.lock():

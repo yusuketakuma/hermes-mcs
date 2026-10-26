@@ -44,7 +44,7 @@ import time
 from pathlib import Path
 import unicodedata
 import urllib.request
-from contextlib import ExitStack, suppress
+from contextlib import ExitStack, contextmanager, suppress
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
@@ -280,9 +280,9 @@ def _release_git_environment():
     env = {'PATH': '/usr/bin:/bin', 'HOME': os.path.expanduser('~'), 'LC_ALL': 'C',
         'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_SYSTEM': '/dev/null', 'GIT_CONFIG_GLOBAL': '/dev/null',
         'GIT_TERMINAL_PROMPT': '0', 'GIT_ATTR_NOSYSTEM': '1', 'GIT_NO_REPLACE_OBJECTS': '1',
-        'GIT_NO_LAZY_FETCH': '1', 'GIT_OPTIONAL_LOCKS': '0', 'GIT_CONFIG_COUNT': '4'}
+        'GIT_NO_LAZY_FETCH': '1', 'GIT_OPTIONAL_LOCKS': '0', 'GIT_CONFIG_COUNT': '5'}
     for i, (key, value) in enumerate((('core.fsmonitor', 'false'), ('core.hooksPath', '/dev/null'),
-                                     ('credential.helper', ''), ('protocol.allow', 'never'))):
+                                     ('credential.helper', ''), ('protocol.allow', 'never'), ('core.attributesFile', '/dev/null'))):
         env[f'GIT_CONFIG_KEY_{i}'], env[f'GIT_CONFIG_VALUE_{i}'] = key, value
     return env
 
@@ -324,8 +324,38 @@ def _acquire_run_lock_wait(tries: int = RUN_LOCK_TRIES) -> int | None:
 # ------------------------------------------------------------------ git
 
 
+_RELEASE_GIT_SCOPE = ContextVar('mcs_release_git_scope', default=False)
+
+
+@contextmanager
+def _release_git_scope():
+    token = _RELEASE_GIT_SCOPE.set(True)
+    try:
+        yield
+    finally:
+        _RELEASE_GIT_SCOPE.reset(token)
+
+
+def _release_git(args, timeout, *, deadline=None):
+    budget = _bounded_timeout(timeout, deadline)
+    # This per-command deadline keeps exact child retirement after quiesce without extending the pre-quiesce budget.
+    stop_at = min(deadline, time.monotonic() + budget) if deadline is not None else time.monotonic() + budget
+    try:
+        result = owned_process.run_owned(['/usr/bin/git', '-C', REPO, '--work-tree', REPO, *args], budget,
+            _release_git_environment(), deadline=stop_at)
+        if result.returncode != 0:
+            result.stderr = f'exit={result.returncode}'
+        return result
+    except subprocess.TimeoutExpired:
+        raise UpdateError('git_timeout: ' + ' '.join(args[:1])) from None
+    except OSError:
+        raise UpdateError('git_spawn_failed') from None
+
+
 def _git(args: list[str], timeout: int = update_discovery.LOCAL_TIMEOUT_S,
          *, deadline=None) -> subprocess.CompletedProcess:
+    if deadline is not None or _RELEASE_GIT_SCOPE.get():
+        return _release_git(args, timeout, deadline=deadline)
     try:
         result = update_discovery.git(args, _bounded_timeout(timeout, deadline), checkout=REPO,
             environment=os.environ if deadline is None else _release_git_environment())
@@ -2029,6 +2059,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             runtime_home=HOME, repository=REPO, journal_path=STATE_PATH)
     try:
         if borrowed is not None:
+            lifetime.enter_context(_release_git_scope())
             lifetime.enter_context(owned_process.lifetime_fds(borrowed.locks))
         if borrowed is None:
             rc = _apply_validate_args(tag, sha, command_id, reinstall, install_args,
@@ -2311,6 +2342,8 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             quiesced = True
             quiesce()
 
+            if borrowed is not None:
+                release_apply_owner._check_git_metadata(REPO, deadline=time.monotonic() + 10)
             journal(state, "merge")
             r = _git(["merge", "--ff-only", target_ref],
                      timeout=T_MERGE)
@@ -3651,7 +3684,7 @@ def cmd_post_merge() -> int:
                                       locks=tuple(locks), deadline=time.monotonic() + 2)
         except (OSError, ValueError, ImportError):
             return 2
-        with owned_process.lifetime_fds(tuple(locks)):
+        with owned_process.lifetime_fds(tuple(locks)), _release_git_scope():
             return _post_merge(state)
     return _call_legacy(_post_merge, state)
 
