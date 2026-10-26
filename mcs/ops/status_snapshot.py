@@ -12,11 +12,14 @@ import subprocess
 import sys
 import time
 import urllib.request
+from urllib.parse import urljoin
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _mcs_path  # noqa: F401
 
 import mcs_util
+import local_llm
+from bounded_http import loopback_endpoint_allowed
 from safe_io import atomic_write
 
 SCHEMA = "mcs-status/1"
@@ -75,7 +78,6 @@ def _source(root, source):
 
 
 JOB_PREFIXES = ("ai.mcs.", "local.mcs", "org.mcs.", "ai.hermes.")
-LLM_URL = "http://127.0.0.1:8080"
 
 
 def _run(argv):
@@ -105,11 +107,13 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _llm_get(path):
+def _llm_get(path, *, endpoint):
     """GET the loopback llama-server without proxies or redirects (64 KiB cap)."""
+    if not loopback_endpoint_allowed(endpoint):
+        return None
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect)
     try:
-        with opener.open(LLM_URL + path, timeout=2) as response:
+        with opener.open(urljoin(endpoint, path), timeout=2) as response:
             if response.status != 200:
                 return None
             return json.loads(response.read(65537)[:65536])
@@ -154,8 +158,9 @@ def host_status(root) -> dict:
     boot = re.search(r"sec = (\d+)", _sysctl("kern.boottime") or "")
     swap = re.findall(r"(total|used) = ([0-9.]+)M", _sysctl("vm.swapusage") or "")
     usage = shutil.disk_usage(root) if os.path.isdir(root) else None
-    slots = _llm_get("/slots")
-    health = _llm_get("/health")
+    endpoint, _model = local_llm.resolve(mcs_util.load_config())
+    slots = _llm_get("/slots", endpoint=endpoint)
+    health = _llm_get("/health", endpoint=endpoint)
     busy = ([s for s in slots if isinstance(s, dict)] if isinstance(slots, list) else None)
     return {
         "cpu": {"count": os.cpu_count(), "load1": load[0], "load5": load[1], "load15": load[2]},

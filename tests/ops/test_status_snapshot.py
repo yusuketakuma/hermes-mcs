@@ -107,7 +107,7 @@ def test_host_status_reads_only_numbers_and_codes(tmp_path, monkeypatch):
                                     "-\t3\tlocal.mcs-int\n-\t0\tlocal.mcs-cmd\n-\t1\tcom.other.job\n"),
     }
     monkeypatch.setattr(status_snapshot, "_run", lambda argv: replies.get(tuple(argv)))
-    monkeypatch.setattr(status_snapshot, "_llm_get", lambda path: (
+    monkeypatch.setattr(status_snapshot, "_llm_get", lambda path, **kwargs: (
         {"status": "ok"} if path == "/health"
         else [{"is_processing": True}, {"is_processing": False}]))
     monkeypatch.setattr(status_snapshot.time, "time", lambda: 1100.0)
@@ -126,8 +126,51 @@ def test_host_status_reads_only_numbers_and_codes(tmp_path, monkeypatch):
 
 def test_host_status_marks_unreachable_llm_and_unknown_values(tmp_path, monkeypatch):
     monkeypatch.setattr(status_snapshot, "_run", lambda argv: None)
-    monkeypatch.setattr(status_snapshot, "_llm_get", lambda path: None)
+    monkeypatch.setattr(status_snapshot, "_llm_get", lambda path, **kwargs: None)
     host = status_snapshot.host_status(str(tmp_path))
     assert host["llm"] == {"health": "down", "slots_total": None, "slots_busy": None}
     assert host["memory"]["free_pct"] is None and host["uptime_s"] is None
     assert host["network"] == {"default_route": False, "interface": None}
+
+
+def test_host_probes_the_configured_llm_port(tmp_path, monkeypatch):
+    import io
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(status_snapshot, "_run", lambda argv: None)
+    monkeypatch.setattr(status_snapshot.mcs_util, "load_config", lambda: {
+        "local_llm": {"url": "http://127.0.0.1:18080/v1/chat/completions"}})
+    seen = []
+
+    def open_url(url, *, timeout):
+        seen.append(url)
+        raw = b'[{"is_processing":true}]' if url.endswith('/slots') else b'{"status":"ok"}'
+        response = io.BytesIO(raw)
+        response.status = 200
+        return response
+
+    monkeypatch.setattr(status_snapshot.urllib.request, "build_opener",
+                        lambda *args: SimpleNamespace(open=open_url))
+    host = status_snapshot.host_status(str(tmp_path))
+    assert seen == ["http://127.0.0.1:18080/slots", "http://127.0.0.1:18080/health"]
+    assert host["llm"] == {"health": "ok", "slots_total": 1, "slots_busy": 1}
+
+
+@pytest.mark.parametrize("endpoint", [
+    "https://example.org/v1/chat/completions", "http://127.0.0.1:bad/v1/chat/completions",
+    "http://user:secret@127.0.0.1:18080/v1/chat/completions",
+])
+def test_llm_probe_refuses_unsafe_configuration_before_io(monkeypatch, endpoint):
+    monkeypatch.setattr(status_snapshot.urllib.request, "build_opener",
+                        lambda *args: pytest.fail("unsafe endpoint reached HTTP"))
+    assert status_snapshot._llm_get("/health", endpoint=endpoint) is None
+
+
+@pytest.mark.parametrize("overshoot", [0, 1.125])
+def test_shipped_snapshot_contract_preserves_run_overshoot(tmp_path, overshoot):
+    spec = status_snapshot.load_fields()
+    spec["fields"] = [field for field in spec["fields"] if field["name"] == "run_overshoot_s"]
+    (tmp_path / "health.json").write_text(json.dumps({"run": {"overshoot_s": overshoot}}))
+    out = status_snapshot.snapshot(str(tmp_path), spec)
+    assert out["fields"] == {"run_overshoot_s": overshoot}
+    assert out["unavailable"] == []

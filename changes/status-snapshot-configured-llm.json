@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "稼働状況の書き出しで設定済みAI接続先と制限時間の超過秒数を正しく扱う",
+  "summary": "ローカルAIを別ポートで動かしている環境でも、設定した接続先の稼働状態を確認します。制限時間を超えた秒数が小数の場合に、書き出しから欠落する問題も修正しました。",
+  "upgrade": "追加設定や既定値の変更はありません。更新後のstatus_snapshotの実行から反映されます。収集・解析・通知の処理内容やCSDCの有効状態は変更しません。",
+  "details": [
+    "通常のAI処理と同じlocal_llm設定を読み、許可されたloopback HTTPだけに接続します。proxyとredirectの拒否は維持します。",
+    "run_overshoot_sは整数・小数の数値を受け付け、元の精度を保持します。"
+  ],
+  "refs": ["mcs/ops/status_snapshot.py", "mcs/ops/status_fields.json"]
+}

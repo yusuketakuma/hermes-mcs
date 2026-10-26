@@ -33,7 +33,7 @@
     {"name": "disk_low", "source": "health", "path": "disk_low", "type": "bool"},
     {"name": "coverage_lagging_count", "source": "health", "path": "coverage_lagging.count", "type": "int"},
     {"name": "coverage_max_lag_s", "source": "health", "path": "coverage_lagging.max_lag_s", "type": "int"},
-    {"name": "run_overshoot_s", "source": "health", "path": "run.overshoot_s", "type": "int"},
+    {"name": "run_overshoot_s", "source": "health", "path": "run.overshoot_s", "type": "number"},
     {"name": "run_interrupts_24h", "source": "health", "path": "run.last_interrupt.count_24h", "type": "int"},
     {"name": "llm_down_since", "source": "health", "path": "stall_marks.llm_down_since", "type": "number", "nullable": true},
     {"name": "semantic_due_since", "source": "health", "path": "stall_marks.semantic_due_since", "type": "number", "nullable": true},
