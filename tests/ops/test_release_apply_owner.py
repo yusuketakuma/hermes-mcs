@@ -1098,6 +1098,14 @@ def native_product(product, tmp_path):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, target)
         target.chmod(path.stat().st_mode & 0o777)
+    shutil.copyfile(root / '.gitignore', repo / '.gitignore')
+    # Only service/SDK boundaries are synthetic; authorization, locks, bundle and updater stay actual.
+    (repo / 'mcs/ops/mcs_setup.py').write_text('import sys\nassert sys.argv[1:] == ["services"]\n')
+    (repo / 'mcs_standalone/service.py').write_text('from pathlib import Path\nimport os\n'
+        'def status(root, *, now=None):\n'
+        ' stopped=(Path(root)/"data/update_in_progress.marker").exists()\n'
+        ' return {"update_in_progress":stopped,"children":{} if stopped else {k:{"kind":"background","pid":os.getpid()} for k in ("extract-0","extract-2")}}\n'
+        'def request_restart(root): return "synthetic-service-boundary"\n')
     home = tmp_path / 'native-runtime'
     home.mkdir(mode=0o700)
     venv, _ = runtime(home)
@@ -1111,7 +1119,7 @@ def native_product(product, tmp_path):
     backups.mkdir(mode=0o700)
     shutil.copyfile(data / 'ledger.db', backups / 'ledger-20261026.db')
     (backups / 'ledger-20261026.db').chmod(0o600)
-    (home / 'config.json').write_text(json.dumps({'runtime_mode': 'standalone'}))
+    (home / 'config.json').write_text(json.dumps({'runtime_mode': 'standalone', 'mcs_login_id': 'synthetic', 'notify_target': 'local'}))
     def git(*args):
         return subprocess.check_output(['/usr/bin/git', '-C', str(repo), *args], text=True).strip()
     git('init', '-q')
@@ -1231,7 +1239,8 @@ def test_apply_control_signing_rejects_admin_registration_cross_kind_and_unknown
         assert 'SYNTHETIC_CANARY' not in str(error.value)
 
 
-@pytest.mark.parametrize('failure', [None, 'signature', 'artifact', 'disabled', 'uncertain_write'])
+@pytest.mark.parametrize('failure', [None, 'signature', 'artifact', 'disabled', 'uncertain_write',
+    'run-registration', 'run-operation', 'run-grant', 'run-cancel', 'run-epoch', 'run-fsync-expiry', 'run-fsync-rollback', 'run-start-uncertain'])
 def test_native_plan_freezes_independent_report_after_real_tty_signature_and_artifact_checks(native_product, registered, tmp_path, failure):
     # Development-only accepted root and synthetic credentials; no authorization or crypto is mocked.
     import base64
@@ -1272,6 +1281,12 @@ def test_native_plan_freezes_independent_report_after_real_tty_signature_and_art
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
     operator_public = subprocess.check_output([signatures.OPENSSL, 'pkey', '-in', str(operator_private), '-pubout', '-outform', 'DER'], stderr=subprocess.DEVNULL, timeout=10)
     operation_pins = [dict(kid='synthetic-operator', spki=b64(operator_public), purposes=APPLY['pins'][0]['purposes'], not_before=NOW - 1000, expires_at=NOW + 600000)]
+    registration_private = signing / 'test-only-registration.pem'
+    registration_private.touch(mode=0o600)
+    subprocess.run([signatures.OPENSSL, 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:3072', '-out', str(registration_private)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
+    registration_public = subprocess.check_output([signatures.OPENSSL, 'pkey', '-in', str(registration_private), '-pubout', '-outform', 'DER'], stderr=subprocess.DEVNULL, timeout=10)
+    registration_pins = [dict(kid='synthetic-registration', spki=b64(registration_public), purposes=['release-apply-registration-current'], not_before=NOW - 1000, expires_at=NOW + 600000)]
     spki = b64(public)
     kid = signatures.release_key_fingerprint(spki)
     supplied['trust']['release_keys'] = [dict(kid=kid, spki=spki, not_before=NOW - 1000, expires_at=NOW + 600000)]
@@ -1308,8 +1323,8 @@ def test_native_plan_freezes_independent_report_after_real_tty_signature_and_art
     envelope = dict(alg='PS256', kid=kid, purpose='release-attestation', payload=b64(payload), signature=b64(result.stdout))
     # The child opens these existing synthetic profile files, never a real Keychain account.
     packet = dict(supplied=supplied, platform=platform, now=NOW, envelope=envelope, expected_release_id=attestation['release_id'], failure=failure, parent_consent=parent_consent,
-        expected_target_source_sha256=source.digest(target_manifest), pins=operation_pins, operator_private=str(operator_private),
-        registration_pins=json.loads((Path(__file__).resolve().parents[2] / 'adapters/sdc/contracts/releases/registration-vectors.json').read_text())['pins'])
+        expected_target_source_sha256=source.digest(target_manifest), pins=operation_pins, operator_private=str(operator_private), target_commit=core['commit'],
+        registration_pins=registration_pins, registration_private=str(registration_private))
     program = r'''import errno,hashlib,hmac,json,os,pathlib,pty,select,signal,sys,time
 repo,home,monitor_root,bundle=map(pathlib.Path,sys.argv[1:5])
 packet=json.loads(sys.stdin.read())
@@ -1365,7 +1380,7 @@ if pid==0:
    try:
     record,prepared=owner._prepare_native_plan(control,monitor,runtime_home=home,repository=repo,case_id=consent['case_id'],attestation_envelope=packet['envelope'],artifact_source=bundle,deadline=time.monotonic()+120)
    except owner.ReleaseApplyError:
-    assert failure is not None
+    assert failure in ('signature','artifact','disabled','uncertain_write')
     assert (control.read('release-plan.json') is not None)==(failure=='uncertain_write')
     saved=release_state.status(control)
     assert saved['spent']==[] and saved['state']['unresolved'] is None
@@ -1375,7 +1390,7 @@ if pid==0:
     assert not owner._EFFECT_CAPS
     assert not (home/'data/update.lock').exists() and not (home/'data/run.lock').exists()
     os._exit(0)
-   assert failure is None
+   assert failure is None or failure.startswith('run-')
    assert owner._read_frozen_plan(control)==record
    body=json.loads(prepared.body)
    assert prepared.path=='/v2/releases/apply/plans/report'
@@ -1411,6 +1426,12 @@ if pid==0:
    assert change['preview_raw'].encode()==preview_request.body
    assert change['expected']['case_epoch']==packet['parent_consent']['case_epoch']
    assert change['local_receipt'] is None and change['accept_raw'] is None
+   def signed_payload(value,purpose,*,registration=False):
+    raw=canonical(value).encode('ascii');kid='synthetic-registration' if registration else 'synthetic-operator'
+    key=packet['registration_private'] if registration else packet['operator_private']
+    signature=subprocess.check_output(['/usr/bin/openssl','dgst','-sha256','-sign',key,'-sigopt','rsa_padding_mode:pss','-sigopt','rsa_pss_saltlen:32','-sigopt','rsa_mgf1_md:sha256'],input=b'SDC-SIGNED-v1\n'+purpose.encode()+b'\n'+kid.encode()+b'\n'+raw,stderr=subprocess.DEVNULL,timeout=10)
+    b64=lambda raw:base64.urlsafe_b64encode(raw).rstrip(b'=').decode('ascii')
+    return dict(alg='PS256',kid=kid,purpose=purpose,payload=b64(raw),signature=b64(signature))
    def signed_preview(*,foreign_plan=False):
     now=packet['now'];common={k:change['expected'][k] for k in apply.COMMON if k!='product'};common['product']='hermes-mcs'
     intent=dict(schema_version=apply.VERSIONS['intent'],**common,operation_id=operation_id,type='release.apply',purpose_code=case['purpose_code'],requested_by='a'*64,plan_report_id=body['report_id'],plan_report_hash=record['body_sha256'],window=body['plan']['window'],canary_stage='self_test',completion_timeout_ms=apply.COMPLETION_TIMEOUT_MS,issued_at=now,not_before=now,expires_at=body['plan']['expires_at'])
@@ -1420,10 +1441,7 @@ if pid==0:
     approval['approval_hash']=apply.hash_apply_approval(approval)
     preview=dict(schema_version=apply.VERSIONS['preview'],**common,operation_id=operation_id,preview_id=change['expected']['preview_id'],intent=intent,approval=approval,intent_hash=intent_hash,change_consent_id='00000000-0000-4000-8000-000000000053',change_binding_hash=apply.ZERO,issued_at=now,not_before=now,expires_at=intent['expires_at'])
     preview['change_binding_hash']=apply.hash_apply_change_binding(preview)
-    raw=canonical(preview).encode('ascii');purpose=apply.PURPOSES[0];kid='synthetic-operator'
-    signature=subprocess.check_output(['/usr/bin/openssl','dgst','-sha256','-sign',packet['operator_private'],'-sigopt','rsa_padding_mode:pss','-sigopt','rsa_pss_saltlen:32','-sigopt','rsa_mgf1_md:sha256'],input=b'SDC-SIGNED-v1\n'+purpose.encode()+b'\n'+kid.encode()+b'\n'+raw,stderr=subprocess.DEVNULL,timeout=10)
-    b64=lambda raw:base64.urlsafe_b64encode(raw).rstrip(b'=').decode('ascii')
-    return dict(schema_version='sdc.release.apply-preview-response.v1',intent=intent,approval=approval,preview=dict(alg='PS256',kid=kid,purpose=purpose,payload=b64(raw),signature=b64(signature)))
+    return dict(schema_version='sdc.release.apply-preview-response.v1',intent=intent,approval=approval,preview=signed_payload(preview,apply.PURPOSES[0]))
    response=signed_preview()
    invalid=copy.deepcopy(response);invalid['preview']['signature']=invalid['preview']['signature'][::-1]
    foreign=signed_preview(foreign_plan=True)
@@ -1446,6 +1464,123 @@ if pid==0:
    else:raise AssertionError('foreign ACK accepted')
    accepted=owner._accept_native_change(control,monitor,runtime_home=home,repository=repo,operation_id=operation_id,acceptance_response=canonical(dict(schema_version='sdc.release.apply-accept-response.v1',acceptance=ack)).encode('ascii'),deadline=time.monotonic()+30)
    assert accepted['acceptance']==ack
+   from adapters.sdc import release_registration_contract as registration_contract
+   import mcs_update,update_journal
+   operation=dict(response['intent']);operation.update(schema_version=apply.VERSIONS['operation'],intent_hash=receipt['intent_hash'],approval_id=response['approval']['approval_id'],approval_hash=receipt['approval_hash'],approved_by=response['approval']['approved_by'],**{k:receipt[k] for k in ('change_consent_id','change_binding_hash','local_change_receipt_id','change_accept_id','preview_id','preview_payload_hash')},local_change_receipt_hash=receipt['receipt_hash'],payload_hash=apply.ZERO)
+   operation['payload_hash']=apply.hash_apply_payload(operation)
+   operation_envelope=signed_payload(operation,apply.PURPOSES[1])
+   if failure=='run-operation':operation_envelope['signature']=operation_envelope['signature'][::-1]
+   calls=[];admission_box={}
+   def carrier(frame):
+    admission=admission_box.get("value")
+    request=json.loads(frame.body);calls.append(frame.path)
+    assert not owner._EFFECT_CAPS
+    assert release_state.status(control)['spent']==[]
+    assert update_journal.load_state(home/'data/update_state.json').get('applying') is None
+    headers=dict(frame.headers)
+    message='\n'.join(('SDC-HMAC-v1','synthetic-release','POST',frame.path,identity['device_id'],identity['key_id'],str(packet['now']//1000),headers['X-SDC-Nonce'],hashlib.sha256(frame.body).hexdigest()))
+    assert headers['X-SDC-Signature']==hmac.new(bytes.fromhex('a'*64),message.encode(),hashlib.sha256).hexdigest()
+    if frame.path==registration_contract.PATH:
+     expected=json.loads(frame.expected)
+     reg={k:expected[k] for k in registration_contract.SCOPE if k!='audience'}
+     reg.update(registration_id='00000000-0000-4000-8000-000000000054',owner_id='mcs.updater',owner_revision=1,capability_revision=apply.CAPABILITY_REVISION,verified_result_supported=False,device_evidence_sha256=frame.device_evidence_sha256,not_before=packet['now']-1000,expires_at=packet['now']+60000)
+     proof=dict(schema_version=registration_contract.PROOF_VERSION,**expected,authority_revision=1,authority_sha256='d'*64,status='registered',owner=dict(product='hermes-mcs',owner_id='mcs.updater',owner_revision=1,owner_evidence_sha256=frame.owner_evidence_sha256),registration=reg,issued_at=packet['now'],not_before=packet['now'],expires_at=packet['now']+30000)
+     value=dict(schema_version=registration_contract.RESPONSE_VERSION,request_id=request['request_id'],proof=signed_payload(proof,registration_contract.PURPOSE,registration=True))
+    elif frame.path.endswith('/poll'):
+     value=dict(schema_version='sdc.release.apply-poll-response.v1',context=dict(intent=response['intent'],approval=response['approval'],acceptance=ack,operation=operation_envelope,admission=None))
+    else:
+     assert frame.path.endswith(('/admit','/grant'))
+     for lock_path in (control.root/'release-entry.lock',home/'data/update.lock',home/'data/run.lock'):
+      descriptor=os.open(lock_path,os.O_RDONLY)
+      try:
+       import fcntl
+       try:fcntl.flock(descriptor,fcntl.LOCK_SH|fcntl.LOCK_NB)
+       except BlockingIOError:pass
+       else:raise AssertionError('grant before G/U/R')
+      finally:os.close(descriptor)
+     if frame.path.endswith('/admit'):
+      admission={**request,'schema_version':apply.VERSIONS['admission'],'admitted_at':packet['now']}
+      admission_box['value']=admission
+      value=dict(schema_version='sdc.release.apply-admit-response.v1',admission=admission)
+     else:
+      assert admission is not None
+      assert request['state']['unresolved'] is None
+      grant=dict(schema_version=apply.VERSIONS['grant'],**{k:operation[k] for k in (*apply.COMMON,*apply.BOUND)},grant_id='00000000-0000-4000-8000-000000000055',grant_request_id=request['grant_request_id'],**{k:admission[k] for k in ('receipt_id','admission_id','owner_generation')},preflight_sha256=contract.hash_release_preconditions(request['preconditions']),state_sha256=apply.hash_apply_state(request['state']),issued_at=packet['now'],not_before=packet['now'],expires_at=packet['now']+30000)
+      value=dict(schema_version='sdc.release.apply-grant-response.v1',admission=admission,grant=signed_payload(grant,apply.PURPOSES[2]))
+    if failure=='run-registration' and frame.path==registration_contract.PATH:value['proof']['signature']=value['proof']['signature'][::-1]
+    if frame.path.endswith('/grant'):
+     if failure=='run-grant':value['grant']['signature']=value['grant']['signature'][::-1]
+     elif failure=='run-cancel':owner._cancel_native_change(control,runtime_home=home,operation_id=operation_id)
+     elif failure=='run-epoch':support_state.disable(monitor,now_ms=packet['now'])
+    return json.dumps(value,ensure_ascii=True).encode('ascii')
+   original_child=owner._run_effect_post_merge
+   def observed_child(*args,**kwargs):
+    try:return original_child(*args,**kwargs)
+    except BaseException:
+     import traceback
+     traceback.print_exc()
+     print('synthetic native child tree',subprocess.check_output(['/usr/bin/git','-C',str(repo),'status','--porcelain=v1','--untracked-files=all'],text=True),flush=True)
+     diagnostic=update_journal.load_state(home/'data/update_state.json')
+     print('synthetic native child boundary',diagnostic.get('stages'),(diagnostic.get('applying') or {}).get('release_child'),flush=True)
+     raise
+   owner._run_effect_post_merge=observed_child
+   assert not (local_problems:=mcs_update.precheck_local(mcs_update.mcs_util.load_config(),deadline=time.monotonic()+30)),local_problems
+   if failure in ('run-fsync-expiry','run-fsync-rollback','run-start-uncertain'):
+    write=control.write
+    def after_start(name,value,**kwargs):
+     write(name,value,**kwargs)
+     if name==release_state.NAME and value.get('spent'):
+      if failure=='run-start-uncertain':raise OSError('synthetic start publish uncertainty')
+      time.time=lambda:(packet['now']+(-1000 if failure=='run-fsync-rollback' else 31000))/1000
+    control.write=after_start
+   try:
+    result=owner._run_native_release(control,monitor,runtime_home=home,repository=repo,operation_id=operation_id,expected_registration_id=None,artifact_source=bundle,carrier=carrier,deadline=time.monotonic()+120)
+   except owner.ReleaseApplyError as error:
+    if failure is not None and failure.startswith('run-'):
+     final=release_state.status(control)
+     started=failure in ('run-fsync-expiry','run-fsync-rollback','run-start-uncertain')
+     assert len(final['spent'])==int(started)
+     assert (final['state']['unresolved'] is not None)==started
+     assert final['uncertain']==(failure=='run-start-uncertain')
+     assert len(final['outbox'])==int(failure=='run-fsync-expiry')
+     if final['outbox']:
+      report=json.loads(final['outbox'][0]['raw'])
+      assert report['state']=='unknown' and report['result']['start_receipt_id']==final['spent'][0]['start_receipt_id']
+     assert subprocess.check_output(['/usr/bin/git','-C',str(repo),'rev-parse','HEAD'],text=True).strip()==supplied['baseline']['commit']
+     assert subprocess.run(['/usr/bin/git','-C',str(repo),'cat-file','-e',packet['target_commit']],capture_output=True).returncode!=0
+     assert update_journal.load_state(home/'data/update_state.json').get('applying') is None
+     assert not owner._EFFECT_CAPS and not owner._EFFECT_PARENTS and not owner._LIVE_CONTINUATIONS
+     assert control.read('release-successor.json') is None
+     os._exit(0)
+    import traceback
+    print('synthetic carrier stages',calls,flush=True)
+    cause=error.__context__
+    while cause is not None:
+     traceback.print_exception(type(cause),cause,cause.__traceback__,chain=False)
+     cause=cause.__context__
+    raise
+   if result['pipeline_returncode']!=0:
+    diagnostic=update_journal.load_state(home/'data/update_state.json')
+    print('synthetic pipeline journal',diagnostic.get('attempts'),diagnostic.get('stages'),flush=True)
+   assert result['started'] and result['readiness']=='unknown' and result['pipeline_returncode']==0,result
+   final=release_state.status(control)
+   assert len(final['spent'])==1 and final['state']['unresolved']['operation_id']==operation_id
+   assert final['state']['installed']['release_id']==packet['expected_release_id'],final['state']
+   successor=control.read('release-successor.json')
+   assert successor['phase']=='pending' and successor['target_source_sha256']==record['target_source_sha256']
+   assert successor['initial_source_sha256']==successor['parent_source_sha256']==supplied['owner_evidence_sha256']
+   assert successor['state']['unresolved'] is not None
+   assert final['owner_evidence_sha256']==supplied['owner_evidence_sha256']
+   try:owner._run_native_release(control,monitor,runtime_home=home,repository=repo,operation_id=operation_id,expected_registration_id=None,artifact_source=bundle,carrier=lambda frame:(_ for _ in ()).throw(AssertionError('stored grant replayed')),deadline=time.monotonic()+120)
+   except owner.ReleaseApplyError:pass
+   else:raise AssertionError('unknown state resumed an effect')
+   final_journal=update_journal.load_state(home/'data/update_state.json')
+   assert final_journal['applying'] is None and final_journal['applied'][-1]['release_child']['phase']=='consumed'
+   assert final_journal['applied'][-1]['release_ref']==final_journal['release_ref']
+   report=json.loads(final['outbox'][-1]['raw'])
+   assert report['state']=='unknown' and report['result']['verified_at'] is None and report['result']['start_receipt_id']==final['spent'][0]['start_receipt_id']
+   assert calls==[registration_contract.PATH,'/v2/releases/apply/requests/poll','/v2/releases/apply/operations/admit','/v2/releases/apply/operations/grant']
+   assert not owner._EFFECT_CAPS and not owner._EFFECT_PARENTS and not owner._EFFECT_ARTIFACTS
    state_before=release_state.status(control)
    with monitor.lock():
     cancelled=owner._cancel_native_change(control,runtime_home=home,operation_id=operation_id)

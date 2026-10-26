@@ -98,6 +98,15 @@ def test_literal_declaration_cannot_inflate_or_coerce_the_verified_profile(repos
         source.declarations(raw, value)
 
 
+@pytest.mark.parametrize('extra', ['PROVIDER_PROFILE: tuple = (9, 0, 0)', 'OWNER_REVISION += 1',
+    'if True: OWNER_REVISION = 2', 'del OWNER_ID', 'import os as OWNER_ID', 'def OWNER_ID(): pass'])
+def test_source_declarations_cannot_be_shadowed_by_another_binding(repository, extra):
+    value = manifest(repository)
+    raw = (repository / 'mcs/ops/release_owner_source.py').read_bytes() + ('\n' + extra + '\n').encode()
+    with pytest.raises(source.SourceError):
+        source.declarations(raw, value)
+
+
 def test_staged_target_manifest_is_checked_without_running_candidate(repository):
     value = manifest(repository)
     path = repository / source.MANIFEST_PATH

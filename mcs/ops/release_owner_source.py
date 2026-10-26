@@ -105,15 +105,24 @@ def declarations(raw, manifest):
                 'SOURCE_ROOTS': SOURCE_ROOTS, 'SOURCE_FILES': SOURCE_FILES, 'SOURCE_SUFFIXES': SOURCE_SUFFIXES,
                 'MANIFEST_PATH': MANIFEST_PATH, 'MANIFEST_VERSION': MANIFEST_VERSION,
                 'PROVIDER_PROFILE': tuple(manifest['provider_profile']), 'REQUIRED': REQUIRED}
-    found = {}
+    found, allowed = {}, set()
     try:
-        for node in ast.parse(raw).body:
+        tree = ast.parse(raw)
+        for node in tree.body:
             if not isinstance(node, ast.Assign):
                 continue
             for target in node.targets:
                 if isinstance(target, ast.Name) and target.id in expected:
                     check(target.id not in found)
                     found[target.id] = ast.literal_eval(node.value)
+                    allowed.add(target)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and node.id in expected and isinstance(node.ctx, (ast.Store, ast.Del)):
+                check(node in allowed)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                check(node.name not in expected)
+            if isinstance(node, ast.alias):
+                check((node.asname or node.name.split('.')[0]) not in expected)
         check(set(found) == set(expected))
         for key, value in expected.items():
             actual = found[key]
