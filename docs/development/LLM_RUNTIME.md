@@ -13,7 +13,7 @@
 |---|---|---|
 | 投稿の構造化抽出 | [extract_llm](../../mcs/extract/llm/extract_llm.py)が原文、ルールのヒント、必要な参考文脈を構成 | [extract_validation](../../mcs/extract/llm/extract_validation.py)がschemaと原文根拠を検証し、[extract_quality](../../mcs/extract/llm/extract_quality.py)が修復・置換の可否を判断。claim・carry・checkpoint・artifact保存はextract_llm |
 | 意味解析・修復 | [semantic_extraction](../../mcs/semantic/semantic_extraction.py)等が入力を構成し、[semantic_transport](../../mcs/semantic/semantic_transport.py)が形式probeと通信状態を所有 | [semantic_drain](../../mcs/semantic/semantic_drain.py)がjobのclaim・予算・保存・公開を統括。QCと候補承認は別の契約 |
-| 患者コンテキスト作成 | [patient_nightly](../../mcs/patients/patient_nightly.py)が一患者の根拠と差分を選択 | 同moduleがsource/config/scanの現行性を保存直前に再確認し、患者単位のartifactを原子的に置換 |
+| 患者コンテキスト作成 | [patient_context_refresh](../../mcs/patients/patient_context_refresh.py)が一患者の根拠と差分を選択 | 同moduleがsource/config/scanの現行性を保存直前に再確認し、患者単位のartifactを原子的に置換 |
 | 任意の意味チェック・抽出監査 | [semantic_jev](../../mcs/semantic/semantic_jev.py)が固定Jevモデルの通信・応答契約を所有 | drainのscope・予算・pause・回路と、各評価/QCの根拠検証を通して結果を保存 |
 
 共通のローカル通信は[local_llm](../../mcs/llm/local_llm.py)、
@@ -40,7 +40,7 @@
 |---|---|---|---|
 | 投稿抽出の単発 | 300秒 | 1600 tokens | `extract_llm.TIMEOUT / MAX_TOKENS` |
 | semanticの通常呼出し | 600秒 | 4096 tokens | `semantic_transport.LLM_TIMEOUT / LLM_MAX_TOKENS` |
-| 患者コンテキストの一呼出し | 300秒 | 1600 tokens | `patient_nightly.CALL_SECONDS`と呼出し引数 |
+| 患者コンテキストの一呼出し | 300秒 | 1600 tokens | `patient_context_refresh.CALL_SECONDS`と呼出し引数 |
 
 モデル・endpointは呼出元の設定と`local_llm.resolve()`から解決します。
 `temperature=0`だけで実生成が完全に決定的になるとは扱いません。
@@ -63,7 +63,9 @@ schemaの正本は[extract_schema](../../mcs/extract/llm/extract_schema.py)で�
 モデルは`jev-1.13.0`へ固定し、応答モデル不一致を拒否します。
 429/5xx/transportのretryはjobの残予算内、401/403はretryしません。
 
-評価CLIには、通常のmode・予算とは別に実LLM/Jevを呼ぶ入口もあります。
+評価CLIには、通常のmodeとは別に実LLM/Jevを呼ぶ入口もあります。
+Jevの実通信は手動評価・モデル一覧の取得・再試行も同じ日次上限へ数えます。
+キーによる自動有効化と上限の設定は[Jev・Anthropicの設定](../guides/ANTHROPIC.md)を参照してください。
 `eval/`や`local_only`という名前だけでofflineとは判断せず、引数と呼出先を確認してください。
 `extract_bench --mock-ok`はfixtureとvalidatorの整合検査であり、実生成の精度や速度の証明ではありません。
 通常テストは[隔離runner](DEVELOPMENT.md#検証)で合成DB・通信スタブを使います。

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MCS semantic layer — Jev-assisted meaning evaluation (Phase J).
 
-Feature-gated by config.json "semantic" (default OFF):
+Jev is enabled from this MCS dotenv when mode is omitted; explicit modes remain authoritative:
 
 - off:     no job seeding, no drain, no external communication — pending
            state and raw data are preserved untouched (INV-22, AT-053)
@@ -61,7 +61,7 @@ def seed(ledger, message_id: int, origin: str = "replay",
          cfg_path: str = CONF_PATH) -> int | None:
     """Explicit finite replay/retry seed — notification-free. OFF blocks
     even this (no new job generation, AT-053)."""
-    cfg, _ = semantic_policy.semantic_config(load_config(cfg_path))
+    cfg, _ = semantic_policy.runtime_config(load_config(cfg_path), root=os.path.dirname(cfg_path))
     if cfg["mode"] == "off":
         return None
     row = ledger.db.execute(
@@ -99,7 +99,7 @@ def _canonical_readiness(ledger, cfg: dict | None) -> dict:
     if cfg is None:
         out["available"] = False
         return out
-    scfg, errors = semantic_policy.semantic_config(cfg)
+    scfg, errors = semantic_policy.runtime_config(cfg)
     if errors:
         out.update(available=False, reason="config_invalid")
         return out

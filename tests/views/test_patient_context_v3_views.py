@@ -27,12 +27,12 @@ def ctx(tmp_path, monkeypatch):
         db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=?", (T0 + mid * DAY, mid))
         body = db.db.execute("SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()[0]
         _artifact(db, "extract_v1", mid, {"patient_context": extract_context(body)}, {"hash": _hash_of(db, mid)})
-    nightly = {"value": None}
-    import patient_nightly
-    monkeypatch.setitem(sys.modules, "patient_nightly", SimpleNamespace(
-        nightly_view_input=lambda conn, pid, cfg=None: nightly["value"],
-        night_window=patient_nightly.night_window))
-    yield SimpleNamespace(db=db, nightly=nightly)
+    context_refresh = {"value": None}
+    import patient_context_refresh
+    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(
+        context_view_input=lambda conn, pid, cfg=None: context_refresh["value"],
+        workday_window=patient_context_refresh.workday_window))
+    yield SimpleNamespace(db=db, context_refresh=context_refresh)
     db.close()
 
 
@@ -53,7 +53,7 @@ def test_edited_or_deleted_source_drops_its_items(ctx):
 
 
 def test_changes_separate_new_reports_from_older_records_found_at_night(ctx):
-    ctx.nightly["value"] = {"as_of": T0 + 9 * DAY, "summary": [{"text": "s", "fact_ids": ["f1"]}],
+    ctx.context_refresh["value"] = {"as_of": T0 + 9 * DAY, "summary": [{"text": "s", "fact_ids": ["f1"]}],
                             "coverage": {"analyzed": 6}, "facts": [
         {"id": "f1", "category": "living", "text": "家族が服薬支援", "quote": "家族が服薬支援",
          "subject": "family", "message_id": 1, "content_hash": "h", "posted_at_ts": T0 + DAY,
@@ -82,7 +82,7 @@ def test_changes_classify_by_observation_record(ctx):
     ctx.db.db.execute("INSERT INTO message_revisions VALUES(3,1,'h3','h2','deleted',?)", (since + 30,))
     ctx.db.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=3")
     ctx.db.db.commit()
-    ctx.nightly["value"] = {"as_of": T0, "facts": [
+    ctx.context_refresh["value"] = {"as_of": T0, "facts": [
         {"category": "living", "text": "架空発見", "quote": "架空発見", "message_id": 4, "posted_at_ts": T0,
          "discovery": "backfill_found", "found_at": since + 40},
         {"category": "living", "text": "架空旧発見", "quote": "架空旧発見", "message_id": 4, "posted_at_ts": T0,
@@ -100,8 +100,8 @@ def test_changes_classify_by_observation_record(ctx):
     assert "残薬" not in json.dumps(got["deleted"], ensure_ascii=False)
 
 
-def test_unpublished_nightly_adds_nothing(ctx):
-    ctx.nightly["value"] = None
+def test_unpublished_context_refresh_adds_nothing(ctx):
+    ctx.context_refresh["value"] = None
     ev = pcv.evidence(ctx.db.db, 1)
     assert all(i["discovery"] is None for i in ev["items"]) and ev["coverage"]["nightly"] is None
     assert ev["nightly_facts"] == [] and ev["summary"] == []
@@ -170,9 +170,9 @@ OBS = "検査・観測値\n検査項目: {}\n測定値: {}\n単位: {}\n測定�
     ([("血糖", "120", "mg/dL", "10月1日"), ("体重", "45", "kg", "10月1日")], None),
     ([("血糖", "120", "mg/dL", "10月1日"), ("血糖", "6.5", "%", "10月1日")], None)])
 def test_observations_compare_only_the_same_named_item_and_unit_by_written_date(tmp_path, monkeypatch, posts, kind):
-    import patient_nightly
-    monkeypatch.setitem(sys.modules, "patient_nightly", SimpleNamespace(
-        nightly_view_input=lambda *a, **k: None, night_window=patient_nightly.night_window))
+    import patient_context_refresh
+    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(
+        context_view_input=lambda *a, **k: None, workday_window=patient_context_refresh.workday_window))
     db = _db(tmp_path, ())
     db.save_messages([_message(n + 1, body=OBS.format(*p)) for n, p in enumerate(posts)], project_id=1)
     for mid in (1, 2):
@@ -183,9 +183,9 @@ def test_observations_compare_only_the_same_named_item_and_unit_by_written_date(
     db.close()
 
 
-def test_every_matching_item_receives_nightly_attributes(ctx):
+def test_every_matching_item_receives_context_refresh_attributes(ctx):
     line = "対象薬: 架空薬"
-    ctx.nightly["value"] = {"as_of": T0, "facts": [
+    ctx.context_refresh["value"] = {"as_of": T0, "facts": [
         {"category": "medication_management", "text": line + "\n残薬: 3日分", "quote": line + "\n残薬: 3日分",
          "message_id": 2, "discovery": "backfill_found", "found_night_id": "2026-10-18"}]}
     items = [i for i in pcv.evidence(ctx.db.db, 1)["items"] if i["message_id"] == 2]
@@ -237,10 +237,10 @@ def test_role_order_only_reorders(ctx):
     assert sorted(map(json.dumps, ordered["sections"])) == sorted(map(json.dumps, view["sections"]))
 
 
-def test_cli_passes_current_settings_to_the_nightly_gate(ctx, monkeypatch):
+def test_cli_passes_current_settings_to_the_context_refresh_gate(ctx, monkeypatch):
     seen = []
-    monkeypatch.setitem(sys.modules, "patient_nightly", SimpleNamespace(
-        nightly_view_input=lambda conn, pid, cfg=None: seen.append(cfg)))
+    monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(
+        context_view_input=lambda conn, pid, cfg=None: seen.append(cfg)))
     monkeypatch.setattr("mcs_util.load_config", lambda *a, **k: {"extract": {"patient_context_nightly": {
         "enabled": True, "publication": False}}})
     mcs_view.View._patient_context(SimpleNamespace(db=ctx.db.db, meta={"generated_at": T0}), 1,
@@ -276,8 +276,8 @@ def test_patient_context_search_accepts_valid_query_and_length_boundary(ctx, que
     assert got["notes"]
 
 
-def test_real_nightly_helper_without_artifact_falls_back_to_chat_items(tmp_path, monkeypatch):
-    monkeypatch.delitem(sys.modules, "patient_nightly", raising=False)
+def test_real_context_refresh_helper_without_artifact_falls_back_to_chat_items(tmp_path, monkeypatch):
+    monkeypatch.delitem(sys.modules, "patient_context_refresh", raising=False)
     db = _db(tmp_path, ())
     db.save_messages([_message(1, body=BODIES[1])], project_id=1)
     body = db.db.execute("SELECT body_text FROM messages WHERE message_id=1").fetchone()[0]

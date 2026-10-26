@@ -271,7 +271,7 @@ def test_prior_is_read_after_the_write_lock_including_a_concurrent_correction(tm
         db.close()
 
 
-@pytest.mark.parametrize("module_name", ["clinical_urgency", "extract_schema", "extract_validation", "extract_quality", "clinical_scope", "patient_context", "mcs_queries", "semantic_assembly", "semantic_facts", "llm_availability", "self_identity", "safe_io", "writer_lock", "semantic_store", "semantic_v4", "semantic_v4_cohort", "clinical_values", "semantic_audit", "semantic_projection", "semantic_runtime", "semantic_jev", "patient_nightly_plan", "semantic_assessment", "semantic_loops", "semantic_transport", "semantic_quantities", "clinical_chunking", "semantic_notice", "semantic_render", "semantic_send_gate"])
+@pytest.mark.parametrize("module_name", ["clinical_urgency", "extract_schema", "extract_validation", "extract_quality", "clinical_scope", "patient_context", "mcs_queries", "semantic_assembly", "semantic_facts", "llm_availability", "self_identity", "safe_io", "writer_lock", "semantic_store", "semantic_v4", "semantic_v4_cohort", "clinical_values", "semantic_audit", "semantic_projection", "semantic_runtime", "semantic_jev", "patient_context_plan", "semantic_assessment", "semantic_loops", "semantic_transport", "semantic_quantities", "clinical_chunking", "semantic_notice", "semantic_render", "semantic_send_gate"])
 def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(tmp_path, monkeypatch, module_name):
     import semantic_candidate
     db, aid, row = seed(tmp_path)
@@ -335,9 +335,9 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
     ("semantic_v4_cohort", "hold_unbounded_job"),
     ("semantic_v4_cohort", "cohort_document"),
     ("semantic_v4_cohort", "_valid_cohort"),
-    ("patient_nightly_plan", "select_facts"),
-    ("patient_nightly_plan", "scan_items"),
-    ("patient_nightly_plan", "summary_selection"),
+    ("patient_context_plan", "select_facts"),
+    ("patient_context_plan", "scan_items"),
+    ("patient_context_plan", "summary_selection"),
     ("mcs_queries", "source_patient_context"),
     ("mcs_queries", "extraction_kind_map"),
     ("mcs_queries", "_kind_state"),

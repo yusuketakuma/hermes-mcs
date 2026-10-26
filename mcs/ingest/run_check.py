@@ -391,7 +391,7 @@ def _semantic_enabled(ledger, cfg, result) -> bool:
     a clean "no work" tick."""
     try:
         from semantic_v4 import invalidate_projections
-        scfg, errors = semantic_policy.semantic_config(cfg)
+        scfg, errors = semantic_policy.runtime_config(cfg)
         # an invalid block also closes legacy extraction admission
         # (extract_llm.legacy_admissions) — surface it every tick
         for e in errors:
@@ -634,7 +634,7 @@ SEMANTIC_TAIL_RESERVE_S = 60
 
 
 def _semantic_skipped(cfg, reason: str, **extra) -> dict:
-    mode = semantic_policy.semantic_config(cfg)[0]["mode"]
+    mode = semantic_policy.runtime_config(cfg)[0]["mode"]
     return {"mode": mode, "skipped": reason, "done": 0, "deferred": 0,
             "failed": 0, "elapsed_s": 0.0, "job_metrics": [],
             "oldest_pending_job_age_s": None, **extra}

@@ -4,8 +4,8 @@ import sqlite3
 
 import pytest
 
-import patient_nightly as nightly
-from test_patient_nightly import document, runtime, seed, step
+import patient_context_refresh as context_refresh
+from test_patient_context_refresh import document, runtime, seed, step
 
 __all__ = ["runtime"]   # the shared fixture is used by name below
 
@@ -24,8 +24,8 @@ def contended_lock(monkeypatch, clock, *, grant_after, on_try=None):
     def sleep(seconds):
         clock.mono += seconds
         clock.wall += seconds
-    monkeypatch.setattr(nightly, 'acquire_run_lock', acquire)
-    monkeypatch.setattr(nightly.time, 'sleep', sleep, raising=False)
+    monkeypatch.setattr(context_refresh, 'acquire_run_lock', acquire)
+    monkeypatch.setattr(context_refresh.time, 'sleep', sleep, raising=False)
     return tries
 
 
@@ -55,7 +55,7 @@ def test_scan_row_inserted_during_lock_wait_is_not_published(runtime, monkeypatc
     def insert(n):
         if n == 3:
             other.execute('INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) '
-                          "VALUES (?,1,1,'{}','','{}',0)", (nightly.SCAN,))
+                          "VALUES (?,1,1,'{}','','{}',0)", (context_refresh.SCAN,))
             other.commit()
     contended_lock(monkeypatch, clock, grant_after=3, on_try=insert)
     assert step(runtime)['status'] == 'source_changed'
@@ -72,13 +72,13 @@ def test_context_published_by_another_process_during_lock_wait_is_not_overwritte
     def publish(n):
         if n == 3:
             other.execute('INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) '
-                          "VALUES (?,1,NULL,'{\"version\": 1}','','{}',0)", (nightly.KIND,))
+                          "VALUES (?,1,NULL,'{\"version\": 1}','','{}',0)", (context_refresh.KIND,))
             other.commit()
     contended_lock(monkeypatch, clock, grant_after=3, on_try=publish)
     assert step(runtime)['status'] == 'source_changed'
     assert len(calls) == 1
     rows = led.db.execute('SELECT content FROM artifacts WHERE kind=? AND project_id=1',
-                          (nightly.KIND,)).fetchall()
+                          (context_refresh.KIND,)).fetchall()
     assert [r[0] for r in rows] == ['{"version": 1}']
 
 
@@ -97,8 +97,8 @@ def test_run_lock_is_first_requested_after_inference(runtime, monkeypatch):
     led, clock, _ = runtime
     seed(led)
     events = []
-    chat = nightly.local_llm.admitted_chat
-    monkeypatch.setattr(nightly.local_llm, 'admitted_chat',
+    chat = context_refresh.local_llm.admitted_chat
+    monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat',
                         lambda *a, **k: (events.append('chat'), chat(*a, **k))[1])
     contended_lock(monkeypatch, clock, grant_after=0, on_try=lambda n: events.append('lock'))
     assert step(runtime)['status'] == 'progressed'
@@ -108,17 +108,17 @@ def test_run_lock_is_first_requested_after_inference(runtime, monkeypatch):
 def test_lock_wait_stays_inside_the_unit_deadline(runtime, monkeypatch):
     led, clock, _ = runtime
     seed(led)
-    chat = nightly.local_llm.admitted_chat
+    chat = context_refresh.local_llm.admitted_chat
     def slow(*a, **k):
         clock.mono += 580
         return chat(*a, **k)
-    monkeypatch.setattr(nightly.local_llm, 'admitted_chat', slow)
+    monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', slow)
     contended_lock(monkeypatch, clock, grant_after=99)
     before = clock.mono + 580
     result = step(runtime, seconds=600)
     assert result['status'] == 'deferred' and result['reason'] == 'run_lock'
     # the deadline, not the 60 s cap, ended the wait
-    assert clock.mono - 1 - before <= 20 and result['lock_wait_s'] == 20 - nightly.COMMIT_MARGIN
+    assert clock.mono - 1 - before <= 20 and result['lock_wait_s'] == 20 - context_refresh.COMMIT_MARGIN
     assert document(led) is None
 
 
@@ -131,7 +131,7 @@ def test_lane_b_cursor_survives_short_contention(runtime, monkeypatch):
     result = step(runtime)
     assert result['status'] == 'progressed' and result['lane'] == 'B'
     assert result['lock_wait_s'] == 3 and len(calls) == 1
-    assert document(led, nightly.SCAN)['cursor'] == 1
+    assert document(led, context_refresh.SCAN)['cursor'] == 1
     first = calls[0]['source']
     assert step(runtime)['lane'] == 'B' and calls[-1]['source'] != first
 
@@ -144,12 +144,12 @@ def test_lane_b_result_lost_past_the_cap_is_counted_and_redone(runtime, monkeypa
     contended_lock(monkeypatch, clock, grant_after=999)
     result = step(runtime)
     assert result == {'status': 'deferred', 'done': 0, 'reason': 'run_lock', 'lock_wait_s': 60}
-    assert document(led, nightly.SCAN) is None and len(calls) == 1
+    assert document(led, context_refresh.SCAN) is None and len(calls) == 1
     # the measured loss: a free lock on the next unit re-sends chunk 0
-    monkeypatch.setattr(nightly, 'acquire_run_lock', lambda: os.open(os.devnull, os.O_RDONLY))
+    monkeypatch.setattr(context_refresh, 'acquire_run_lock', lambda: os.open(os.devnull, os.O_RDONLY))
     assert step(runtime)['lane'] == 'B'
     assert len(calls) == 2 and calls[1]['source'] == calls[0]['source']
-    assert document(led, nightly.SCAN)['cursor'] == 1
+    assert document(led, context_refresh.SCAN)['cursor'] == 1
 
 
 def test_progressed_result_reports_zero_wait_when_lock_is_free(runtime):

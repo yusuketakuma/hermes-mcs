@@ -5,8 +5,8 @@ from test_read_model import _artifact, _db, _hash_of
 
 
 def test_background_medication_row_does_not_repeat_the_post_per_mention(tmp_path, monkeypatch):
-    import patient_nightly
-    monkeypatch.setattr(patient_nightly, "nightly_view_input", lambda *a, **k: None)
+    import patient_context_refresh
+    monkeypatch.setattr(patient_context_refresh, "context_view_input", lambda *a, **k: None)
     store = _db(tmp_path, ())
     try:
         store.save_messages([_message(1, body="架空薬A、架空薬B、架空薬Cを継続")], project_id=1)

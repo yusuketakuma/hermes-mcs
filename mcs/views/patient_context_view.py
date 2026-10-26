@@ -2,7 +2,7 @@
 
 All views are thin projections of one evidence list (``evidence``): the
 current, source-bound ``patient_context`` items of ``read_model`` plus the
-published nightly facts of ``patient_nightly``. Nothing here decides a
+published context facts of ``patient_context_refresh``. Nothing here decides a
 current clinical state, a formal completion or which of two records is
 right; authorization stays with the caller and ``role_order`` only
 reorders sections.
@@ -81,7 +81,7 @@ def evidence(db, project_id, *, cfg=None) -> dict:
     Chat items are read_model's current, source-checked context (edited,
     deleted, foreign or unmatched quotes never appear). Nightly facts are
     added only when the core helper returns a published, still-valid row."""
-    import patient_nightly
+    import patient_context_refresh
     records, coverage, _ = _records_coverage(db, "detail", project_id, None)
     senders = {r[0]: (r[1], r[2]) for r in db.execute(
         "SELECT message_id, sender_name, profession FROM messages WHERE project_id=?", (project_id,))}
@@ -98,9 +98,9 @@ def evidence(db, project_id, *, cfg=None) -> dict:
                      "temporality": None, "discovery": None, "source": "chat"}
             items.append(entry)
     items.extend(_mentions(db, project_id, senders))
-    nightly = patient_nightly.nightly_view_input(db, project_id, cfg=cfg)
-    for fact in (nightly or {}).get("facts") or []:
-        # nightly quotes the whole source line; the same grounded item is read_model's quote inside it
+    context_refresh = patient_context_refresh.context_view_input(db, project_id, cfg=cfg)
+    for fact in (context_refresh or {}).get("facts") or []:
+        # context refresh quotes the whole source line; the same grounded item is read_model's quote inside it
         matches = [i for i in items if i["source"] == "chat" and i["message_id"] == fact.get("message_id")
                    and i["category"] == fact.get("category") and i["quote"] in (fact.get("quote") or "")]
         extra = {"temporality": fact.get("temporality"), "discovery": fact.get("discovery"),
@@ -117,11 +117,11 @@ def evidence(db, project_id, *, cfg=None) -> dict:
                       "source": fact.get("source", "chat"), **extra})
     items.sort(key=lambda i: (i["posted_at_ts"] or 0, i["message_id"] or 0), reverse=True)
     return {"project_id": project_id, "snapshot": snapshot_meta(db), "items": items,
-            "summary": (nightly or {}).get("summary") or [],
+            "summary": (context_refresh or {}).get("summary") or [],
             # summary fact_ids resolve here; empty when unpublished or no longer valid
-            "nightly_facts": (nightly or {}).get("facts") or [],
-            "as_of": (nightly or {}).get("as_of"),
-            "coverage": {"read_model": coverage, "nightly": (nightly or {}).get("coverage")}}
+            "nightly_facts": (context_refresh or {}).get("facts") or [],
+            "as_of": (context_refresh or {}).get("as_of"),
+            "coverage": {"read_model": coverage, "nightly": (context_refresh or {}).get("coverage")}}
 
 
 def background(ev) -> dict:
@@ -172,7 +172,7 @@ def changes(db, ev, since_ts) -> dict:
     message_revisions) so edits and deletions not yet reflected at night still show:
     new_report = first seen and posted since; retrospective = first seen since but posted
     earlier; edited / deleted = a revision observed since (a deleted post returns its id and
-    observation time only); backfill_found = a nightly fact found since in an older record."""
+    observation time only); backfill_found = a context fact found since in an older record."""
     seen = {r[0]: (r[1], r[2]) for r in db.execute(
         "SELECT message_id, first_seen, posted_at_ts FROM messages WHERE project_id=?", (ev["project_id"],))}
     revised = {}
@@ -184,7 +184,7 @@ def changes(db, ev, since_ts) -> dict:
 
     def kind(item):
         # the reader's own observation decides first: a post first seen since is new (or
-        # retrospective) even when the nightly scan also tagged it backfill_found
+        # retrospective) even when the context refresh scan also tagged it backfill_found
         first, posted = seen.get(item["message_id"], (None, None))
         if isinstance(first, (int, float)) and first >= since_ts:  # unseen before: new to the reader
             return "new_report" if isinstance(posted, (int, float)) and posted >= since_ts else "retrospective"

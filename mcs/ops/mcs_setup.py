@@ -507,7 +507,10 @@ def _init_apply_section_flags(cfg: dict, args) -> None:
     """Apply the semantic/signals flags and the manual self-identity override."""
     if args.semantic_mode:
         sem = _reset_section(cfg, "semantic", "意味解析設定")
-        sem["mode"] = args.semantic_mode
+        if args.semantic_mode == "auto":
+            sem.pop("mode", None)
+        else:
+            sem["mode"] = args.semantic_mode
         if args.project_ids is not None:
             sem["project_ids"] = args.project_ids
     if args.signals_notify is not None:
@@ -594,16 +597,20 @@ def _init_store_secrets(args, login_id) -> int | None:
         else:
             print(f"Keychain: '{KEYCHAIN_SERVICE}' を登録しました")
 
-    ts_key = os.environ.get("TYPESAFE_API_KEY")
-    if ts_key:
-        updates["TYPESAFE_API_KEY"] = ts_key
+    for name in ("TYPESAFE_API_KEY", "MCS_ANTHROPIC_API_KEY"):
+        key = os.environ.get(name)
+        if key:
+            if any(char.isspace() or ord(char) < 33 or ord(char) == 127 for char in key):
+                print(".env: APIキーの形式が正しくありません。既存のファイルを保持しました")
+                return 1
+            updates[name] = key
     if updates:
         try:
             lifecycle_io.write_env(ENV_PATH, updates)
         except ValueError:
             print(".env: 認証情報の形式が正しくありません。既存のファイルを保持しました")
             return 1
-        print(f".env: {sorted(updates)} を {ENV_PATH} に保存しました（本人のみ読書き可能）")
+        print(f".env: {sorted(updates)} を保存しました（本人のみ読書き可能）")
     if keychain_failed:
         return 1
     return None
@@ -732,7 +739,9 @@ def cmd_init(args) -> int:
         interactive = (cfg.get("notify") or {}).get("interactive")
         if not mcs_runtime.standalone(cfg) and interactive in ("slack", "discord"):
             args.plugin_profile = _plugin_profile(args, interactive)
-        if not setup_wizard.confirm_save(cfg, plugin_profile=getattr(args, "plugin_profile", None)):
+        import cloud_cli
+        if not setup_wizard.confirm_save(cfg, plugin_profile=getattr(args, "plugin_profile", None),
+                                         key_presence=cloud_cli.pending_key_presence(HOME)):
             print("設定を中止しました。設定ファイル・辞書・認証情報は保存していません。")
             return 130
         setup_wizard.wizard_drug_map(cfg, wizard_step or 1, home=HOME)
@@ -966,16 +975,18 @@ def cmd_jev_value(args) -> int:
         print("追加解析の評価: 配布されている完全合成の評価ケースを使用してください")
         return 1
     cfg = mcs_util.load_config()
+    from contextlib import nullcontext
     scfg = cfg.get("semantic") or {}
-    jev_client = None
-    api_key = env_value("TYPESAFE_API_KEY")
-    if api_key:
-        jev_client = jev.JevClient(
-            api_key=api_key,
-            model=scfg.get("model") or jev.JEV_MODEL)
-    report = semantic_evaluation.evaluate_jev_incremental(
-        cases, semantic_transport.llm_chat, jev_client,
-        deadline_s=args.deadline)
+    key = jev.api_key(HOME)
+    context = (jev.live_client(key, operation="jev_value", root=HOME,
+                              model=scfg.get("model") or jev.JEV_MODEL) if key else nullcontext(None))
+    try:
+        with context as jev_client:
+            report = semantic_evaluation.evaluate_jev_incremental(
+                cases, semantic_transport.llm_chat, jev_client, deadline_s=args.deadline)
+    except jev.JevError as error:
+        print("追加解析の評価: Jevの利用条件を確認してください（" + error.kind + "）")
+        return 2
     report["cases_source"] = os.path.basename(args.cases)
     report["label_provenance"] = {"human": 0,
                                   "synthetic": len(cases)}
@@ -1077,7 +1088,8 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
         with closing(sqlite3.connect(
                 Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as db:
             now = time.time()
-            sem = (cfg or {}).get("semantic") or {}
+            from semantic_policy import runtime_config
+            sem = runtime_config(cfg or {}, root=HOME)[0]
             out.extend(_semantic_queue_warnings(db, sem, now))
             out.extend(_extract_queue_warnings(db))
             out.extend(_fact_pipeline_warnings(db, sem))
@@ -1133,14 +1145,14 @@ def _doctor_check(errors: list[str], warnings: list[str]) -> DoctorCheck:
 
 
 
-_NIGHTLY_COUNTS = ("initial_pending", "delta_pending", "history_pending",
+_CONTEXT_REFRESH_COUNTS = ("initial_pending", "delta_pending", "history_pending",
                    "audit_pending", "failed", "complete")
-_NIGHTLY_LANE_CODES = ("length_stop", "unsupported", "other_failure", "split", "repair")
+_CONTEXT_REFRESH_LANE_CODES = ("length_stop", "unsupported", "other_failure", "split", "repair")
 
 
-def _doctor_nightly(cfg: dict, *, probe: bool) -> dict:
+def _doctor_context_refresh(cfg: dict, *, probe: bool) -> dict:
     """患者コンテキスト作成を、明示診断時だけ読取り専用で件数確認する。"""
-    from patient_nightly import options
+    from patient_context_refresh import options
     result = {"status": "not_checked", **options(cfg), "counts": None}
     if not probe:
         return result
@@ -1151,22 +1163,22 @@ def _doctor_nightly(cfg: dict, *, probe: bool) -> dict:
             return result
         with closing(sqlite3.connect(ledger.resolve().as_uri() + "?mode=ro", uri=True,
                                      timeout=1)) as db:
-            from patient_nightly import status
+            from patient_context_refresh import status
             db.row_factory = sqlite3.Row
             deadline = time.monotonic() + 1
             db.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
             raw = status(db, cfg)
         if not isinstance(raw, dict) or any(
-                type(raw.get(key)) is not int or raw[key] < 0 for key in _NIGHTLY_COUNTS):
+                type(raw.get(key)) is not int or raw[key] < 0 for key in _CONTEXT_REFRESH_COUNTS):
             return result
-        result["counts"] = {key: raw[key] for key in _NIGHTLY_COUNTS}
+        result["counts"] = {key: raw[key] for key in _CONTEXT_REFRESH_COUNTS}
         lanes = raw.get("lanes")
         # fixed lane codes and counts only; a malformed block stays unknown, not zero
-        result["lanes"] = {lane: {code: lanes[lane][code] for code in _NIGHTLY_LANE_CODES}
+        result["lanes"] = {lane: {code: lanes[lane][code] for code in _CONTEXT_REFRESH_LANE_CODES}
                            for lane in "ABC"} if isinstance(lanes, dict) and all(
             isinstance(lanes.get(lane), dict) and all(
                 type(lanes[lane].get(code)) is int and lanes[lane][code] >= 0
-                for code in _NIGHTLY_LANE_CODES) for lane in "ABC") else None
+                for code in _CONTEXT_REFRESH_LANE_CODES) for lane in "ABC") else None
         result["status"] = "warning" if raw["failed"] else "healthy"
     except (OSError, ValueError, TypeError, sqlite3.Error):
         pass
@@ -1271,6 +1283,8 @@ def cmd_doctor(args) -> int:
     config_errors, config_warnings = validate_config(cfg)
     if _config_problem():
         config_errors.append("configuration unreadable")
+    import cloud_cli
+    providers = cloud_cli.diagnostics(cfg, root=HOME, probe="data" in set(getattr(args, "probe", None) or []))
     checks: dict[str, DoctorCheck] = {
         "configuration": _doctor_check(config_errors, config_warnings),
         "interpreter": _doctor_check(
@@ -1345,13 +1359,13 @@ def cmd_doctor(args) -> int:
     checks['restore_delivery'] = _doctor_check([],
         ['restore_delivery_unverified'] if worker['restore_delivery_held'] is None else
         ['restore_delivery_held'] if worker['restore_delivery_held'] else [])
-    nightly = _doctor_nightly(cfg, probe="data" in probes and not config_errors)
+    context_refresh_result = _doctor_context_refresh(cfg, probe="data" in probes and not config_errors)
     collection = _doctor_collection(cfg, probe="data" in probes and not config_errors)
     report = {"optional_features": _doctor_optional_features(cfg), "mode": mode, "python": sys.version.split()[0],
               "sqlite": sqlite3.sqlite_version, "checks": checks,
               "runtimes": runtimes,
               "operations": operations, "card_worker": worker,
-              "patient_context_nightly": nightly, "collection": collection,
+              "patient_context_nightly": context_refresh_result, "collection": collection, "providers": providers,
               "source": environment_diagnostics.source_status(cfg, probe="services" in probes and not config_errors, paths=_service_paths()),
               "recovery_selection": {"explicit": "recovery_python" in cfg,
                                      "matches_deployed": matches}}
@@ -1400,13 +1414,16 @@ def cmd_doctor(args) -> int:
             print("  復元後の保留: 収集のみ継続し、配送は保留しています")
         elif worker['restore_delivery_held'] is None:
             print("  復元後の保留: 状態を確認できません")
-        print(f"  患者コンテキスト作成: {labels.get(nightly['status'], '未確認')}、"
-              f"生成={'有効' if nightly['enabled'] else '無効'}、"
-              f"限定閲覧={'有効' if nightly['publication'] else '無効'}")
-        if nightly["counts"] is not None:
+        for name, provider in providers.items():
+            print(f"  {name}: mode={provider['mode']}、キー={'登録済み' if provider['key_present'] else '未登録'}、"
+                  f"状態={provider['status']}")
+        print(f"  患者コンテキスト作成: {labels.get(context_refresh_result['status'], '未確認')}、"
+              f"生成={'有効' if context_refresh_result['enabled'] else '無効'}、"
+              f"限定閲覧={'有効' if context_refresh_result['publication'] else '無効'}")
+        if context_refresh_result["counts"] is not None:
             names = ("初回未生成", "差分待ち", "過去走査待ち", "根拠点検待ち", "失敗", "完了")
-            print("    " + "、".join(f"{name}{nightly['counts'][key]}件"
-                                    for key, name in zip(_NIGHTLY_COUNTS, names)))
+            print("    " + "、".join(f"{name}{context_refresh_result['counts'][key]}件"
+                                    for key, name in zip(_CONTEXT_REFRESH_COUNTS, names)))
         for name, feature in report["optional_features"].items():
             choice = ("既定に従う" if feature["choice"] == "default" else "明示の選択")
             print(f"  任意機能の案内（{name}）: {choice}、現在は案内を"
@@ -1512,8 +1529,8 @@ def main(argv: list[str] | None = None) -> int:
                    help='通知先（例: slack:C0CHANNELID、discord:1234）')
     p.add_argument("--set", action="append", metavar="KEY=JSON",
                    help='設定キーとJSON値を指定します（繰り返し可能）。例: --set self_posts=true。文字列値には引用符が必要です')
-    p.add_argument("--semantic-mode", choices=["off", "shadow", "enforce"],
-                   help="外部の意味解析: off=無効、shadow=比較、enforce=反映（有効時は本文を外部送信）")
+    p.add_argument("--semantic-mode", choices=["auto", "off", "shadow", "assist", "enforce"],
+                   help="外部の意味解析: auto=キーで自動、off=無効、shadow=比較、assist=支援、enforce=反映（有効時は本文を外部送信）")
     p.add_argument("--project-ids", type=int, nargs="*", help="意味解析の対象プロジェクトID（空白区切り）")
     p.add_argument("--signals-notify", action=argparse.BooleanOptionalAction, help="アラートを通知します（--no-signals-notifyで無効）")
     p.add_argument("--self-org", dest="self_orgs", action="append",
@@ -1566,6 +1583,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--probe", action="append", choices=("llm", "services", "data"),
                    help='追加で確認する範囲（llm=AI、services=常駐処理、data=保存データ）。複数指定可能')
     p.set_defaults(fn=cmd_doctor, yes=True)
+    import cloud_cli
+    cloud_cli.add_parsers(sub)
     args = ap.parse_args(argv)
     try:
         return args.fn(args)

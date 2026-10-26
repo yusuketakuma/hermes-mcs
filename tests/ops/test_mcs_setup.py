@@ -863,8 +863,14 @@ def test_wizard_defaults_and_gates(monkeypatch, tmp_path):
     assert cfg["notify"] == {"interactive": "off"}
     # signals.notify off -> digest items gated out
     assert cfg["signals"] == {"notify": False}
-    # semantic.mode off -> detail keys gated out
-    assert cfg["semantic"] == {"mode": "off"}
+    # Auto keeps mode/scope unspecified; without a key the effective mode stays off.
+    assert cfg["semantic"] == {"extract_qc": "off"}
+    from semantic_policy import semantic_config
+    effective, errors = semantic_config(cfg)
+    assert not errors
+    assert effective["mode"] == "off"
+    assert effective["project_ids"] == []
+    assert effective["daily_request_budget"] == 500
 
 
 def test_wizard_discord_scope_and_answers(monkeypatch, tmp_path):

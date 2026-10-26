@@ -21,7 +21,7 @@
 | `mcs/extract/clinical/` | `clinical_scope`の本人/家族/時点、`clinical_values`の値・原文根拠・バイタル適格性、分割・薬局の共通判断 | scopeのbounded cacheは同moduleが所有。rule統括へ呼び戻さない |
 | `mcs/extract/clinical/clinical_urgency.py` | 本人の根拠に基づく緊急度・QCの共通判断 | `mcs_queries`の現行原文/artifact読取を使い、通知・統計・rulesが表示moduleを経由せず利用。借用connectionを開閉・commitしない |
 | `mcs/extract/llm/` | `extract_schema`、`extract_validation`、`extract_quality`、`extract_llm`の推論/再抽出/保存統括 | schemaと検証は推論I/Oから分離。薬剤tokenの文法は`extract_schema`に一元化し、rules/qualityが直接利用。claim/carry/checkpointと保存は統括側 |
-| `mcs/patients/` | `patient_context`の患者背景/薬局参照項目、状態参照・一患者一件の集約、`patient_nightly_plan`の純粋な選択/予算計画 | `patient_nightly`が時刻・推論・再試行・保存と公開を所有。読取は同じconnectionを借用し、公開前に原文/世代/scanを再照合 |
+| `mcs/patients/` | `patient_context`の患者背景/薬局参照項目、状態参照・一患者一件の集約、`patient_context_plan`の純粋な選択/予算計画 | `patient_context_refresh`が時刻・推論・再試行・保存と公開を所有。読取は同じconnectionを借用し、公開前に原文/世代/scanを再照合 |
 | `mcs/medications/` | 辞書照合・別名承認・薬剤履歴・登録情報との比較 | 公開master原本、私有辞書、患者の注記と人承認receiptを区別 |
 | `mcs/semantic/` | claim/QC/公開、`semantic_v4`の公開transaction処理、`semantic_store`の読取、`semantic_transport`の推論状態 | `semantic_drain`が実行順・予算・jobを所有。`semantic_runtime`が明示されたjob判定/送信hookを扱い、`semantic`のCLI facadeへ戻らない |
 | `mcs/semantic/semantic_v4_cohort.py` | 変換manifest・予約・receipt・実行前の適格性 | runtimeと操作CLIが同じ実体を利用し、評価専用領域を経由しない。読取は借用接続、予約/receipt/job更新は呼出元writerの同一transaction |

@@ -4,8 +4,8 @@ import sqlite3
 
 import pytest
 
-import patient_nightly as nightly
-from test_patient_nightly import document, finish, runtime, seed, step
+import patient_context_refresh as context_refresh
+from test_patient_context_refresh import document, finish, runtime, seed, step
 
 __all__ = ["runtime"]   # the shared fixture is used by name below
 
@@ -14,11 +14,11 @@ def counted(monkeypatch, led):
     """Count _snapshot/_pending calls and whole-patient messages reads."""
     counts = {'_snapshot': 0, '_pending': 0, 'messages': 0}
     for name in ('_snapshot', '_pending'):
-        original = getattr(nightly, name)
+        original = getattr(context_refresh, name)
         def wrapper(*args, _name=name, _original=original, **kwargs):
             counts[_name] += 1
             return _original(*args, **kwargs)
-        monkeypatch.setattr(nightly, name, wrapper)
+        monkeypatch.setattr(context_refresh, name, wrapper)
     def trace(sql):
         if 'FROM messages m WHERE project_id=' in sql and 'AND message_id=' not in sql:
             counts['messages'] += 1
@@ -51,7 +51,7 @@ def test_lane_b_reuses_selection_snapshot(runtime, monkeypatch):
     led.db.set_trace_callback(None)
     assert result['status'] == 'progressed' and result['lane'] == 'B'
     assert counts == {'_pending': 3, '_snapshot': 4, 'messages': 4}
-    assert led.db.execute('SELECT count(*) FROM artifacts WHERE kind=?', (nightly.SCAN,)).fetchone()[0] == 1
+    assert led.db.execute('SELECT count(*) FROM artifacts WHERE kind=?', (context_refresh.SCAN,)).fetchone()[0] == 1
 
 
 @pytest.mark.parametrize('lane', ['A', 'B'])
@@ -62,21 +62,21 @@ def test_source_edit_during_selection_is_rejected(runtime, monkeypatch, lane):
         for _ in range(3):
             assert step(runtime)['lane'] == 'A'
         del calls[:]
-    original = nightly._latest
+    original = context_refresh._latest
     edited = []
     def latest(db, kind, pid, mid=None):
-        if (kind, pid) == (nightly.PROGRESS, 0) and not edited:
+        if (kind, pid) == (context_refresh.PROGRESS, 0) and not edited:
             edited.append(1)
             db.execute("UPDATE messages SET content_hash='edited' WHERE message_id=1")
             db.commit()
         return original(db, kind, pid, mid)
-    monkeypatch.setattr(nightly, '_latest', latest)
+    monkeypatch.setattr(context_refresh, '_latest', latest)
     result = step(runtime)
     assert result['status'] == 'source_changed' and not led.db.in_transaction
     if lane == 'A':
         assert calls == [] and document(led) is None
     else:
-        assert document(led, nightly.SCAN) is None
+        assert document(led, context_refresh.SCAN) is None
     assert step(runtime)['status'] == 'progressed'
 
 
@@ -98,7 +98,7 @@ def test_progress_published_during_selection_is_preserved(runtime, monkeypatch, 
     seed(led)
     newest = {'attempts': 5, 'next_try': clock.wall + 3600,
               'failure': 'TimeoutError', 'last_attempt': clock.wall,
-              'source_sig': nightly._snapshot(led.db, 1, {})['source_sig']}
+              'source_sig': context_refresh._snapshot(led.db, 1, {})['source_sig']}
     conn = sqlite3.connect(led.db.execute('PRAGMA database_list').fetchone()[2])
     inserted = []
 
@@ -107,10 +107,10 @@ def test_progress_published_during_selection_is_preserved(runtime, monkeypatch, 
             inserted.append(True)
             conn.execute('INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) '
                          "VALUES (?,1,NULL,?,'','{}',?)",
-                         (nightly.PROGRESS, json.dumps(newest), clock.wall))
+                         (context_refresh.PROGRESS, json.dumps(newest), clock.wall))
             conn.commit()
 
-    pending, latest = nightly._pending, nightly._latest
+    pending, latest = context_refresh._pending, context_refresh._latest
 
     def racing_pending(*args, **kwargs):
         result = pending(*args, **kwargs)
@@ -119,19 +119,19 @@ def test_progress_published_during_selection_is_preserved(runtime, monkeypatch, 
         return result
 
     def racing_latest(db, kind, pid, mid=None):
-        if not during_pending and (kind, pid) == (nightly.PROGRESS, 0):
+        if not during_pending and (kind, pid) == (context_refresh.PROGRESS, 0):
             publish()
         return latest(db, kind, pid, mid)
 
     def fail_summary(*args):
         raise TimeoutError('synthetic')
 
-    monkeypatch.setattr(nightly, '_pending', racing_pending)
-    monkeypatch.setattr(nightly, '_latest', racing_latest)
-    monkeypatch.setattr(nightly, '_summary', fail_summary)
+    monkeypatch.setattr(context_refresh, '_pending', racing_pending)
+    monkeypatch.setattr(context_refresh, '_latest', racing_latest)
+    monkeypatch.setattr(context_refresh, '_summary', fail_summary)
     try:
         assert step(runtime)['status'] == 'source_changed'
-        assert document(led, nightly.PROGRESS) == newest
+        assert document(led, context_refresh.PROGRESS) == newest
         assert not led.db.in_transaction
     finally:
         conn.close()

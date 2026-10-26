@@ -14,7 +14,8 @@ the real Jev client to measure detection capability.
 
 The corpus file freezes checked-in evaluation sources. `run` refuses
 legacy or unbound corpus text before accessing models or API credentials.
-It never writes artifacts — pure function calls only.
+Offline corpus/analysis paths never write usage; explicit live audit calls
+reserve their HTTP attempts in the shared MCS ledger.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from contextlib import closing
+from contextlib import closing, nullcontext
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every subdir holding .py files (any depth) as an import root
@@ -37,7 +38,6 @@ import semantic_transport
 from ledger import LedgerReader
 import mcs_util
 from safe_io import atomic_write
-from mcs_util import env_value
 import semantic_jev as jev
 from semantic_audit import audit_claims, audit_code
 from semantic_llm import summarize
@@ -168,11 +168,8 @@ def _aggregate(results: list[dict]) -> dict:
 def cmd_run(args) -> int:
     """Run the frozen corpus through the local pipeline.
 
-    ``--jev`` spends real API requests through an explicit operator
-    action — it deliberately bypasses the durable daily budget,
-    circuit state, and semantic-mode gates that the scheduled drain
-    enforces (S-5). Use sparingly and only when a live check is
-    intended."""
+    ``--jev`` is an explicit live action outside semantic mode/scope;
+    every HTTP attempt still consumes the shared MCS daily budget."""
     try:
         corpus = json.loads(Path(args.corpus).read_text(encoding="utf-8"))
         allowed = {case["case_id"]: case for case in _synthetic_cases()}
@@ -186,27 +183,27 @@ def cmd_run(args) -> int:
     except (OSError, ValueError, KeyError, TypeError):
         print("synthetic_corpus_required", file=sys.stderr)
         return 2
-    jev_client = None
-    if args.jev:
-        jev_client = jev.JevClient(api_key=env_value("TYPESAFE_API_KEY"),
-                                 job_budget=args.job_budget)
-    results = []
-    for case in corpus["cases"]:
-        # per-case deadline — the job budget applies to each case, not
-        # the whole run (drain parity)
-        deadline = time.monotonic() + args.job_budget
-        try:
-            r = _run_case(case, semantic_transport.llm_chat, jev_client, deadline)
-        except LLMNotSent:
-            # the local model never received the request — a deferred
-            # case, not a model failure
-            r = {"case_id": case["case_id"], "deferred": True,
-                 "error": "llm_not_sent", "n_claims": 0,
-                 "findings": [], "claims": []}
-        results.append(r)
-        print(f"  {r['case_id']}: facts={r.get('n_facts')} "
-              f"claims={r.get('n_claims')} findings={r.get('findings')}",
-              flush=True)
+    key = jev.api_key() if args.jev else None
+    context = (jev.live_client(key, operation="semantic_bench", job_budget=args.job_budget)
+               if args.jev and key else nullcontext(None))
+    with context as jev_client:
+        results = []
+        for case in corpus["cases"]:
+            # per-case deadline — the job budget applies to each case, not
+            # the whole run (drain parity)
+            deadline = time.monotonic() + args.job_budget
+            try:
+                r = _run_case(case, semantic_transport.llm_chat, jev_client, deadline)
+            except LLMNotSent:
+                # the local model never received the request — a deferred
+                # case, not a model failure
+                r = {"case_id": case["case_id"], "deferred": True,
+                     "error": "llm_not_sent", "n_claims": 0,
+                     "findings": [], "claims": []}
+            results.append(r)
+            print(f"  {r['case_id']}: facts={r.get('n_facts')} "
+                  f"claims={r.get('n_claims')} findings={r.get('findings')}",
+                  flush=True)
     out = {"tag": args.tag, "created_at": int(time.time()),
            "aggregate": _aggregate(results), "results": results}
     _write_json_private(args.out, out)
@@ -355,39 +352,37 @@ _PROBES = [
 
 
 def cmd_detect(args) -> int:
-    """Fixed probe set through the real Jev audit path. Like ``--jev``
-    this is an explicit operator action outside the durable budget and
-    mode gates — the requests do not appear in semantic_usage (S-5)."""
-    key = env_value("TYPESAFE_API_KEY")
+    """Run fixed live probes under the shared MCS per-HTTP budget."""
+    key = jev.api_key()
     if not key:
         print("TYPESAFE_API_KEY not found", file=sys.stderr)
         return 2
-    client = jev.JevClient(api_key=key, job_budget=120)
-    tp = fp = fn = tn = unevaluated = 0
-    for p in _PROBES:
-        findings, evaluated = audit_claims(
-            client, p["bundle"], p["summary"], time.monotonic() + 60)
-        rejected = any(f["code"] in ("claim_contradicts",
-                                     "claim_not_supported",
-                                     "claim_ambiguous",
-                                     "claim_low_confidence")
-                       for f in findings)
-        ok = rejected == p["expect_reject"] if evaluated else None
-        if evaluated:
-            if p["expect_reject"] and rejected:
-                tp += 1
-            elif p["expect_reject"]:
-                fn += 1
-            elif rejected:
-                fp += 1
+    with jev.live_client(key, operation="semantic_detect", job_budget=120) as client:
+        tp = fp = fn = tn = unevaluated = 0
+        for p in _PROBES:
+            findings, evaluated = audit_claims(
+                client, p["bundle"], p["summary"], time.monotonic() + 60)
+            rejected = any(f["code"] in ("claim_contradicts",
+                                         "claim_not_supported",
+                                         "claim_ambiguous",
+                                         "claim_low_confidence")
+                           for f in findings)
+            ok = rejected == p["expect_reject"] if evaluated else None
+            if evaluated:
+                if p["expect_reject"] and rejected:
+                    tp += 1
+                elif p["expect_reject"]:
+                    fn += 1
+                elif rejected:
+                    fp += 1
+                else:
+                    tn += 1
             else:
-                tn += 1
-        else:
-            unevaluated += 1
-        print(f"  {p['name']:20s} expect_reject={p['expect_reject']} "
-              f"-> {'REJECT' if rejected else 'pass'} "
-              f"({[f['code'] for f in findings]}) "
-              f"{'OK' if ok else 'MISS' if ok is False else 'UNEVAL'}")
+                unevaluated += 1
+            print(f"  {p['name']:20s} expect_reject={p['expect_reject']} "
+                  f"-> {'REJECT' if rejected else 'pass'} "
+                  f"({[f['code'] for f in findings]}) "
+                  f"{'OK' if ok else 'MISS' if ok is False else 'UNEVAL'}")
     print(f"detection: TP={tp} FP={fp} FN={fn} TN={tn} unevaluated={unevaluated} "
           f"(requests used: {client.requests_made})")
     return 0 if fn == 0 and fp == 0 and unevaluated == 0 else 1

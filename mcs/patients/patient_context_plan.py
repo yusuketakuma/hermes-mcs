@@ -1,4 +1,4 @@
-"""Plan bounded nightly source scans and validate verbatim selections without I/O."""
+"""Plan bounded patient-context source scans and validate verbatim selections without I/O."""
 import json
 from itertools import accumulate
 

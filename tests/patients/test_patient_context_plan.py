@@ -1,7 +1,7 @@
-"""Synthetic independent invariants for nightly selection and source validation."""
+"""Synthetic independent invariants for context selection and source validation."""
 import copy
 import pytest
-import patient_nightly_plan as plan
+import patient_context_plan as plan
 
 
 def fact(identity, category, text, stamp):

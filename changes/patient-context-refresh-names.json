@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "患者コンテキストの処理名を終日更新の動作に統一",
+  "summary": "患者コンテキストを終日更新する実際の動作に合わせ、実装モジュールをpatient_context_refreshとpatient_context_planへ改名しました。作業日の境界を返す内部関数もworkday_windowへ変更しています。処理時刻や03:30の作業日境界は変わりません。",
+  "upgrade": "設定変更や保存データの移行は不要です。旧モジュール名でのimportは提供しないため、独自のスクリプトで旧名を使っている場合は新名へ変更してください。既存のartifact種別、設定キー、処理契約の文字列、診断JSONとログのキー、night_idなどの保存項目、失敗コードは互換性のため維持します。",
+  "details": [
+    "呼出元、テスト、現行の開発文書、生成表、読み込んだソースのdigestと候補fingerprintの対象を新しい名前へそろえました。",
+    "過去のリリース文書と変更履歴には、その時点の実装名を残します。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/patients/patient_context_plan.py",
+    "mcs/extract/llm/extract_llm.py",
+    "docs/specs/patient-context.md"
+  ]
+}

@@ -102,6 +102,16 @@ def _v_pause_resume(req: dict, base: set) -> str | None:
     return None
 
 
+def _v_cloud_control(req: dict, base: set) -> str | None:
+    if req.get("project_id") is not None:
+        return "bad_project_id"
+    if req.keys() - (base | {"reason"}):
+        return "unknown_field"
+    if not valid_text(req.get("reason"), 2000):
+        return "bad_reason"
+    return None
+
+
 def _v_adopt_summary(req: dict, base: set) -> str | None:
     allowed = base | {"message_id", "summary_artifact_id",
                       "comparison_hash", "reason"}
@@ -247,6 +257,8 @@ def _v_drug_alias(req, base):
 _OPS_VALIDATORS = {
     "ops.drug_alias_apply": _v_drug_alias,
     "ops.drug_alias_rollback": _v_drug_alias,
+    "ops.cloud_stop": _v_cloud_control,
+    "ops.cloud_resume": _v_cloud_control,
     "ops.scan": _v_scan,
     "ops.retry": _v_retry,
     "ops.pause": _v_pause_resume,

@@ -6,7 +6,7 @@ import math
 import sqlite3
 
 from mcs_util import loads_dict
-from semantic_policy import JOB_KIND, QC_JOB_KIND, KIND_DRAIN_RUN, semantic_config
+from semantic_policy import JOB_KIND, QC_JOB_KIND, KIND_DRAIN_RUN, runtime_config
 from semantic_runtime import config_generation, payload_generation
 
 RATE_WINDOW_S = 3600
@@ -151,7 +151,7 @@ def pipeline_progress(db, cfg, *, now, checkpoint=lambda: None,
         raise ValueError("observation_time_invalid")
     if not isinstance(cfg, dict):
         return {"status": "unavailable", "reason": "config_not_supplied", "observed_at": now}
-    policy, errors = semantic_config(cfg)
+    policy, errors = runtime_config(cfg)
     if errors:
         return {"status": "unavailable", "reason": "config_invalid", "observed_at": now}
     projects = policy["project_ids"]

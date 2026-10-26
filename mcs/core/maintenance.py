@@ -60,6 +60,7 @@ DB_MAINT_MIN_S = 30.0        # time left needed to start the daily pass
 FTS_OPTIMIZE_MIN_S = 90.0    # ... and the weekly FTS merge
 RETENTION_S = 90 * 86400     # runs / read_marks / finished system alerts
 DRAIN_RUN_KEEP_S = 30 * 86400   # semantic_observe aggregates 14 days
+CLOUD_USAGE_KEEP_S = 62 * 86400
 USAGE_KEEP_S = 7 * 86400        # jev_usage_today reads the JST day only
 RETENTION_BATCH = 5000
 # finished system alerts only: every other outbox kind doubles as dedupe
@@ -971,6 +972,9 @@ def prune_history(con, now: float | None = None) -> dict:
         out["usage_receipts"] = _delete_batched(
             con, "artifacts", "kind='semantic_usage' AND created_at < ?",
             (now - USAGE_KEEP_S,))
+        out["cloud_usage_receipts"] = _delete_batched(
+            con, "artifacts", "kind IN ('cloud_usage_reserve','cloud_usage_result',"
+            "'cloud_usage_dryrun','cloud_compare_v1') AND created_at < ?", (now - CLOUD_USAGE_KEEP_S,))
     return out
 
 

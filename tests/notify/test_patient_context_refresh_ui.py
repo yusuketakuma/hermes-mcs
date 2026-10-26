@@ -165,7 +165,7 @@ def test_resend_of_a_later_reopening_keeps_that_openings_baseline(led, later):
     assert json.loads(row[0])["at"] == NOW + later
 
 
-def test_nightly_summary_uses_fact_id_not_same_text_source(led, monkeypatch):
+def test_context_refresh_summary_uses_fact_id_not_same_text_source(led, monkeypatch):
     import patient_context_view
     spec = _delivered_card(led)
     original = patient_context_view.evidence
@@ -203,17 +203,17 @@ def test_first_click_keeps_existing_summary_text(led):
             "background", "changes", "previsit", "replies", "discrepancies")]
 
 
-def test_broken_nightly_view_falls_back_to_existing_summary(led, monkeypatch):
+def test_broken_context_refresh_view_falls_back_to_existing_summary(led, monkeypatch):
     import patient_context_view
     spec = _delivered_card(led)
     entry = click(led, _token_for(spec, "summary"))["navigation"][0]["token"]
     def broken(*a, **k):
-        raise RuntimeError("synthetic nightly failure")
+        raise RuntimeError("synthetic context refresh failure")
     monkeypatch.setattr(patient_context_view, "evidence", broken)
     result = click(led, entry, now=NOW + 1)
     assert result["action"] == "summary" and result["body"]
     assert result["body"].startswith("患者の記録まとめを読み込めなかったため")
-    assert "synthetic nightly failure" not in result["body"]
+    assert "synthetic context refresh failure" not in result["body"]
 
 
 def test_later_click_by_same_user_on_same_card_advances_checkpoint(led):

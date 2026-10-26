@@ -6,6 +6,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import sys
 import unicodedata
 import urllib.request
@@ -98,6 +99,35 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
                     # value in a later dotenv file
                     break
     return None
+
+
+def private_env_value(key: str, root=None) -> str | None:
+    """Read a provider key from an owner-only regular MCS dotenv, never the environment."""
+    from safe_io import fdopen_owned
+    try:
+        fd = os.open(os.path.join(root or HOME, ".env"),
+                     os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with fdopen_owned(fd, "rb") as stream:
+            st = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) != 0o600
+                    or st.st_uid != os.getuid() or st.st_size > DOTENV_MAX_BYTES):
+                return None
+            raw = stream.read(DOTENV_MAX_BYTES + 1)
+        if len(raw) > DOTENV_MAX_BYTES:
+            return None
+        matches = [line.split("=", 1)[1] for line in raw.decode("utf-8").splitlines()
+                   if line.startswith(key + "=")]
+        if len(matches) != 1:
+            return None
+        value = matches[0]
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = json.loads(value) if value[0] == '"' else value[1:-1]
+        if (not isinstance(value, str) or not value
+                or any(c.isspace() or ord(c) < 33 or ord(c) == 127 for c in value)):
+            return None
+        return value
+    except (OSError, ValueError, UnicodeError):
+        return None
 
 
 # 4xx statuses that mean "try again later", not a permanent refusal

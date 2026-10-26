@@ -1,5 +1,6 @@
 """Jev value evaluation dispatches only checked-in synthetic cases."""
 import mcs_util
+from contextlib import nullcontext
 from copy import deepcopy
 import json
 import os
@@ -21,8 +22,8 @@ def _case(name="extract_cases.json"):
 def _isolate(monkeypatch):
     calls = []
     monkeypatch.setattr(mcs_util, 'load_config', lambda: calls.append("config") or {})
-    monkeypatch.setattr(mcs_setup, "env_value", lambda name: calls.append("credentials") or "synthetic-key")
-    monkeypatch.setattr(semantic_jev, "JevClient", lambda **kw: calls.append("client") or object())
+    monkeypatch.setattr(semantic_jev, "api_key", lambda root=None: calls.append("credentials") or "synthetic-key")
+    monkeypatch.setattr(semantic_jev, "live_client", lambda *a, **kw: calls.append("client") or nullcontext(object()))
     def evaluate(cases, llm_fn, client, **kw):
         calls.append(("evaluate", cases, kw))
         return {"cases": len(cases), "evaluated": True,

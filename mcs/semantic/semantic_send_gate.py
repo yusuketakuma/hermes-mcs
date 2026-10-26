@@ -106,7 +106,7 @@ def semantic_gate(db, ev, payload: dict, cfg: dict,
     """Recheck a semantic intent immediately before every external post."""
     if not isinstance(payload, dict):
         raise ValueError("payload_invalid")
-    scfg, _ = semantic_policy.semantic_config(cfg)
+    scfg, _ = semantic_policy.runtime_config(cfg)
     project_id = ev["project_id"]
     reason = enforce_block_reason(db, scfg, project_id)
     if reason == "payload_invalid":
@@ -183,7 +183,7 @@ def semantic_gate(db, ev, payload: dict, cfg: dict,
 
 def semantic_render_state(db, ev, cfg: dict) -> tuple:
     """Current identities of audited summaries attached to a raw notice."""
-    scfg, _ = semantic_policy.semantic_config(cfg)
+    scfg, _ = semantic_policy.runtime_config(cfg)
     project_id = ev["project_id"]
     if enforce_block_reason(db, scfg, project_id) is not None:
         return ()
@@ -221,7 +221,7 @@ def semantic_render_gate(db, ev, initial: tuple, cfg: dict,
     or changed since ``initial`` was snapshotted."""
     if not initial:
         return
-    scfg, _ = semantic_policy.semantic_config(cfg)
+    scfg, _ = semantic_policy.runtime_config(cfg)
     # the cheap policy check runs before the thread_bundle-heavy snapshot
     reason = enforce_block_reason(db, scfg, ev["project_id"])
     if reason is not None:

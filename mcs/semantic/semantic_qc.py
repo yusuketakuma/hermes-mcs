@@ -16,7 +16,7 @@ from mcs_util import load_config
 from mcs_queries import current_qc_pred, qc_source_id
 import semantic_jev as jev
 import semantic_runtime as runtime
-from semantic_policy import QC_ARTIFACT, QC_JOB_KIND, semantic_config
+from semantic_policy import QC_ARTIFACT, QC_JOB_KIND, runtime_config
 
 QC_MAX_ITEMS = 16
 _QC_SECTIONS = ("vitals", "meds", "symptoms", "labs", "events")
@@ -235,7 +235,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
             ledger, token, deadline=deadline,
             expected_config_generation=config_generation,
             expected_mode=scfg["mode"], cfg_path=cfg_path,
-            load_cfg=load_config, parse_cfg=semantic_config,
+            load_cfg=load_config, parse_cfg=runtime_config,
             source_fingerprint=f"{art[1]}:{art[2]}", current_source=current_source,
             stage=stage)
 

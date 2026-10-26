@@ -438,7 +438,7 @@ def test_context_lane_checks_update_fence_before_settling_carry(tmp_path, monkey
         monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 124))
         return {"done": 0, "failed": 0, "left": 1, "selected": 1, "carry": carry}
     monkeypatch.setattr(extract_llm, "run_pending", run)
-    monkeypatch.setattr(extract_llm, "_background_nightly",
+    monkeypatch.setattr(extract_llm, "_background_context_refresh",
                         lambda *a: {"status": "deferred", "done": 0})
     assert extract_llm.main() == 0
     assert db.artifacts("extract_llm", message_id=1) == []
@@ -479,11 +479,11 @@ def test_lane3_rechecks_update_after_acquiring_settlement_lock(tmp_path, monkeyp
         return {"done": 0, "failed": 0, "left": 1, "selected": 1, "carry": carry}
     monkeypatch.setattr(extract_llm, "run_pending", run)
 
-    def nightly(ledger, initial, stop):
+    def context_refresh(ledger, initial, stop):
         return {"status": "off", "done": 0, **(
             {"run_lock_lost": "updated"}
             if writer_lock.updater_state() != initial else {})}
-    monkeypatch.setattr(extract_llm, "_background_nightly", nightly)
+    monkeypatch.setattr(extract_llm, "_background_context_refresh", context_refresh)
     try:
         assert extract_llm.main() == 0
         assert lock_attempts[:2] == [
@@ -531,7 +531,7 @@ def test_lane3_survives_transient_settle_error(monkeypatch, capsys):
         "extract_llm", "--all", "--lane", "3", "--stop-after", "100"])
     monkeypatch.setattr(extract_llm, "Ledger",
                         lambda *a: type("DB", (), {"close": lambda self: None})())
-    monkeypatch.setattr(extract_llm, "_background_nightly",
+    monkeypatch.setattr(extract_llm, "_background_context_refresh",
                         lambda *a: {"status": "off", "done": 0})
     settles = []
 

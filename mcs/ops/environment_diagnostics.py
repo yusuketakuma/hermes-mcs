@@ -187,13 +187,14 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
                     d + "/" for d in mcs_runtime.GATEWAY_SOURCE_DIRS)
                 + "）が稼働中のサービスより新しくなっています。"
                 "`hermes gateway restart`で新しいプログラムを読み込んでください")
-    sem = cfg.get("semantic")
-    if isinstance(sem, dict) and sem.get("mode", "off") != "off" \
-            and env_value("TYPESAFE_API_KEY", paths=credential_paths) is None:
+    from semantic_policy import semantic_config
+    jev_key_present = bool(mcs_util.private_env_value("TYPESAFE_API_KEY", paths.root))
+    sem, _ = semantic_config(cfg, key_present=jev_key_present)
+    if sem["mode"] != "off" and not jev_key_present:
         errors.append("意味解析は有効ですが、TYPESAFE_API_KEYを"
                       "取得できません。外部解析の認証情報を設定してください。エラーコード: "
                       "no_api_key")
-    elif env_value("TYPESAFE_API_KEY", paths=credential_paths) is None:
+    elif not jev_key_present:
         warnings.append("TYPESAFE_API_KEYは未設定です。"
                         "外部の意味解析を有効にする場合に必要です")
     if paths.platform == "darwin" and cfg.get("runtime_mode") != "standalone":

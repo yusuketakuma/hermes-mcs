@@ -4,7 +4,7 @@ import semantic_transport
 
 from mcs_util import loads_dict
 from semantic_policy import (KIND_AUDIT, KIND_SUMMARY, policy_fingerprint,
-                             semantic_config)
+                             runtime_config)
 from semantic_store import current_artifact, thread_bundle
 
 
@@ -44,7 +44,7 @@ def current_quality(ledger, cfg: dict | None, *, checkpoint=lambda: None) -> dic
     """
     if cfg is None:
         return {"available": False, "reason": "config_not_supplied"}
-    scfg, errors = semantic_config(cfg)
+    scfg, errors = runtime_config(cfg)
     if errors:
         return {"available": False, "reason": "config_invalid"}
     project_ids = scfg["project_ids"]
