@@ -20,7 +20,7 @@ from .envelopes import canonical
 
 SCHEMA = "mcs-card-render/v1"
 OPS = ("create", "update", "revoke", "notice")
-KINDS = ("thread", "signal", "digest")
+KINDS = ("thread", "signal", "digest", "patient_history")
 
 # v1 display budgets (pinned from Components V2 / discord.py 2.7
 # enforced limits) — a spec over budget is rejected whole, never
@@ -380,6 +380,12 @@ def validate(spec) -> dict:
     if name is not None and not _text(name, MAX_THREAD_NAME):
         _err("bad_thread_name")
     _validate_part_plan(spec)
+    if spec.get("kind") == "patient_history":
+        if (any(p.get("kind") != "card" for p in parts.get("manifest", []))
+                or any(b.get("ui") != "link" or b.get("id") != "link"
+                       for row in parts.get("action_rows", []) for b in row)
+                or any(k in parts for k in ("thread_name", "thread_body_parts", "source_thread", "post_source_id"))):
+            _err("bad_patient_history_parts")
     if "thread_notice" in parts and (
             parts["thread_notice"] is not True or spec["op"] != "notice"
             or spec["delivery"].get("transport", "discord") not in ("slack", "discord")

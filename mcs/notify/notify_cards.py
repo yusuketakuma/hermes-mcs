@@ -38,6 +38,7 @@ Config (config.json):
 from __future__ import annotations
 import notify_scope
 import notify_spool
+import notify_history
 
 import hashlib
 import json
@@ -90,7 +91,7 @@ MAX_POST_ACTIONS = 5          # spec.MAX_POST_ACTIONS
 # the root post only and each later reply gets its own card in the root's
 # thread. CARD_LAYOUT is the newest layout this code can write, so the
 # updater refuses a rollback to code that would misread a layout-4 card.
-CARD_LAYOUT = 4
+CARD_LAYOUT = 5
 FACE_LAYOUT = 3               # every card that is not a reply-card thread
 
 
@@ -237,7 +238,7 @@ def _card_for(db, target, scope, now) -> int:
          scope.get("guild_id"), scope.get("channel_id"),
          scope.get("transport", "discord"), scope.get("team_id"),
          "{}", now, now,
-         CARD_LAYOUT if target.get("reply_layout") else min(CARD_LAYOUT, FACE_LAYOUT)))
+         CARD_LAYOUT if target.get("reply_layout") or target["kind"] == "patient_history" else min(CARD_LAYOUT, FACE_LAYOUT)))
     return cur.lastrowid
 
 
@@ -336,6 +337,8 @@ def _action_rows(db, card, content, now, context=None,
     """Button rows for a render; every button carries a fresh token.
     Buttons whose modal flow cannot pin a source (no context) are not
     emitted — a button that can never succeed is worse than none."""
+    if card["kind"] == "patient_history":
+        return notify_history.actions(card) if card["delivery_state"] != "revoked" else []
     if card["delivery_state"] == "revoked":
         return []                          # ⛔ 取り下げ済み: nothing to press
     kind = card["kind"]
@@ -573,6 +576,9 @@ def _render_needed(db, card, latest, gens, cfg, now, force, waiting=frozenset())
                  and latest is not None
                  and latest["route_epoch"] == notify_scope.route_epoch(cfg))
     unbound_intent = bool(_ready_intent_ids(db, card, unbound=True, waiting=waiting))
+    if (card["kind"] == "patient_history" and latest is not None
+            and now - latest["created_at"] < notify_history.UPDATE_SECONDS):
+        unbound_intent = False  # New pages wait; adopted phase/source drift still renders immediately.
     needed = force or bool(gens) or latest is None \
         or (not suspended and (unbound_intent or epoch_changed
                                or latest["state"] in ("not_sent", "cancelled")))
@@ -656,14 +662,14 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     for k in ("message_id", "thread_id"):
         if card[k]:
             spec["delivery"][k] = card[k]
-    context = action_context.render_context(db, card)
+    context = {} if card["kind"] == "patient_history" else action_context.render_context(db, card)
     # failed/deleted threads can never carry the body — those cards
     # keep the 📄 button so the full text stays reachable. Slack honors
     # the same card_thread switch: its posted ts is the thread root, so
     # the body lands as channel-visible replies (T9), not an ephemeral
     # answer only the clicker can see.
     present = presenter(card["transport"])
-    thread_on = (notify_scope.notify_cfg(cfg).get("card_thread") is True
+    thread_on = card["kind"] != "patient_history" and (notify_scope.notify_cfg(cfg).get("card_thread") is True
                  or present.ALWAYS_THREAD)
     # a logical-grouping "thread" (LINE WORKS) has no failed state, so
     # a failed thread part never stops its body/overflow parts
@@ -876,6 +882,17 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
         return None      # delete already landed — _render_needed would
                          # say no regardless of drift, so skip content
     waiting = frozenset()
+    if card["kind"] == "patient_history":
+        card = notify_history.refresh(db, card, cfg, now)
+        if card["transport"] == "lineworks" and card["message_id"] is not None:
+            # Later count updates owe no third room post. Only unresolved
+            # intents with no delivery binding may be suppressed here.
+            for pending in db.execute("SELECT event_id FROM notification_intent_cards WHERE card_id=? "
+                    "AND state='pending' AND delivery_id IS NULL", (card_id,)).fetchall():
+                db.execute("UPDATE notification_intent_cards SET state='suppressed' WHERE event_id=? AND card_id=?",
+                           (pending[0], card_id))
+                complete_intent(db, pending[0], now)
+            return None
     content = card_content(db, card, cfg=cfg)
     if (card["transport"] == "lineworks" and card["kind"] == "thread"
             and not content.get("urgent")):
@@ -1051,9 +1068,11 @@ def complete_intent(db, event_id, now) -> str | None:
 
 # ---------- dispatch (intent -> cards -> renders) ----------
 
-def _resolve_targets(db, ev, payload) -> list:
+def _resolve_targets(db, ev, payload, *, cfg=None) -> list:
     """Frozen intent -> [(card_key, coverage, anchor)] fan-out."""
     kind = ev["kind"]
+    if kind == "patient_history":
+        return notify_history.targets(db, ev["project_id"], payload, notify_scope.active_transport(cfg), scope=notify_scope.delivery_scope(cfg))
     if kind == "attachment_followup":
         aid, mid = payload.get("attachment_id"), payload.get("message_id")
         if not positive(aid) or not positive(mid) or not positive(ev["project_id"]):
@@ -1108,6 +1127,10 @@ def _resolve_targets(db, ev, payload) -> list:
             if row is None or not positive(row["project_id"]) \
                     or (ev["project_id"] is not None
                         and row["project_id"] != ev["project_id"]):
+                continue
+            membership = db.execute("SELECT content FROM message_metadata WHERE message_id=? AND source='capture'", (mid,)).fetchone()
+            role = ((loads_dict(membership[0]) or {}).get("_initial_import") or {}) if membership else {}
+            if role.get("role") == "history":
                 continue
             pid = row["project_id"]
             roots.setdefault((pid, _thread_root(db, mid, pid)), []).append(mid)
@@ -1840,7 +1863,7 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                 return {"error": "scope_mismatch"}
             # A held signal resumes after its original source thread becomes
             # deliverable; no fresh event or new patient room is necessary.
-            if row["kind"] == "signal":
+            if row["kind"] in ("signal", "patient_history"):
                 for pending in db.execute("SELECT card_id FROM notification_intent_cards WHERE event_id=? AND state='pending'", (event_id,)).fetchall():
                     issue_render(db, pending[0], cfg, now, specs)
                 outcome["dispatched"] = bool(specs)
@@ -1898,7 +1921,7 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                     "WHERE event_id=?",
                     ("payload_invalid", now, event_id))
                 return {"error": "payload_invalid"}
-            targets = _resolve_targets(db, row, frozen)
+            targets = _resolve_targets(db, row, frozen, cfg=cfg)
             if row["kind"] == "new_messages":
                 targets = _split_reply_targets(db, targets, scope, cfg)
             if row["kind"] == "attachment_followup":
@@ -1940,6 +1963,8 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
                 card_ids.append(cid)
                 covered.update(target["coverage"])
             if card_ids:
+                if row["kind"] == "patient_history":
+                    notify_history.coalesce_tx(db, notify_scope.card_row(db, card_ids[0]), scope, epoch, now)
                 for cid in card_ids:
                     issue_render(db, cid, cfg, now, specs,
                                   force=row["kind"] == "attachment_followup")
@@ -1974,7 +1999,7 @@ def revert_to_text(ledger, event_id, now=None) -> bool:
     with db:
         cur = db.execute(
             """UPDATE notify_outbox SET route='text',updated_at=?
-               WHERE event_id=? AND route='interactive'
+               WHERE event_id=? AND route='interactive' AND kind!='patient_history'
                  AND NOT EXISTS(SELECT 1 FROM notification_intent_batches b
                                 WHERE b.event_id=notify_outbox.event_id)""",
             (now, event_id))
@@ -1997,6 +2022,16 @@ def rerender_message_cards(ledger, cfg, project_id, message_id,
     with db:
         db.execute("BEGIN IMMEDIATE")
         root = _thread_root(db, message_id, project_id)
+        membership = db.execute("SELECT content FROM message_metadata WHERE message_id=? AND source='capture'", (message_id,)).fetchone()
+        role = ((loads_dict(membership[0]) or {}).get("_initial_import") or {}) if membership else {}
+        if role.get("role") == "history":
+            from notify_render import progress_state
+            if (progress_state(db, message_id, cfg) or {}).get("state") == "complete":
+                for history in db.execute("SELECT * FROM notification_cards WHERE kind='patient_history' AND project_id=? "
+                        "AND delivery_state!='revoked'", (project_id,)).fetchall():
+                    notify_history.analysis_changed(db, history, cfg, now)
+                    issue_render(db, history["card_id"], cfg, now, specs)
+                    notify_history.emit_completion_tx(ledger, notify_scope.card_row(db, history["card_id"]), now)
         for r in db.execute(
                 "SELECT card_id FROM notification_cards WHERE kind='thread' "
                 "AND project_id=? AND root_message_id=? "
@@ -2191,6 +2226,9 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
     specs = []
     withdrawn = []
     scanned = updated = 0
+    history_issued = 0
+    normal_due = db.execute("SELECT 1 FROM notify_outbox WHERE kind!='patient_history' "
+        "AND state IN ('pending','failed') AND next_try<=? LIMIT 1", (now,)).fetchone()
     with db:
         db.execute("BEGIN IMMEDIATE")
         cards = db.execute(
@@ -2222,7 +2260,12 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
             before = (card["source_generation"],
                       card["presentation_generation"],
                       card["desired_render_rev"])
-            issue_render(db, card["card_id"], cfg, now, specs)
+            if card["kind"] != "patient_history" or not normal_due or history_issued < 2:
+                before_specs = len(specs)
+                issue_render(db, card["card_id"], cfg, now, specs)
+                if card["kind"] == "patient_history":
+                    history_issued += len(specs) - before_specs
+                    notify_history.emit_completion_tx(ledger, notify_scope.card_row(db, card["card_id"]), now)
             after = notify_scope.card_row(db, card["card_id"])
             if (after["source_generation"], after["presentation_generation"],
                     after["desired_render_rev"]) != before:

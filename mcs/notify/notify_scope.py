@@ -8,7 +8,7 @@ from mcs_requests import positive
 
 TRANSPORT_VERSIONS = {"discord": 1, "slack": 2, "lineworks": 3}
 SUPPORTED_TRANSPORTS = tuple(TRANSPORT_VERSIONS)
-INTERACTIVE_KINDS = frozenset({"new_messages", "signal", "daily_digest", "urgent_notice"})
+INTERACTIVE_KINDS = frozenset({"new_messages", "signal", "daily_digest", "urgent_notice", "patient_history"})
 
 def scope_fields(transport: str) -> tuple[str, ...]:
     return ("profile", "application_id",

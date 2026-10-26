@@ -101,6 +101,19 @@ def _source_event(db, project_id: int, event_id: int):
     return row, source if isinstance(source, dict) else None
 
 
+def _has_initial_history(db, project_id, ids):
+    for offset in range(0, len(ids), 900):
+        group = ids[offset:offset + 900]
+        if db.execute(
+                "SELECT 1 FROM messages m JOIN message_metadata d ON d.message_id=m.message_id "
+                "AND d.source='capture' WHERE m.project_id=? AND m.message_id IN ("
+                + ','.join('?' * len(group)) + ") AND CASE WHEN json_valid(d.content) "
+                "THEN json_extract(d.content,'$._initial_import.role')='history' ELSE 0 END LIMIT 1",
+                (project_id, *group)).fetchone() is not None:
+            return True
+    return False
+
+
 def semantic_gate(db, ev, payload: dict, cfg: dict,
                   in_progress: bool = False):
     """Recheck a semantic intent immediately before every external post."""
@@ -150,6 +163,8 @@ def semantic_gate(db, ev, payload: dict, cfg: dict,
                 or len(set(target_ids)) != len(target_ids)
                 or not set(target_ids).issubset(source_ids)):
             raise ValueError("payload_invalid")
+        if _has_initial_history(db, project_id, target_ids):
+            _stale("initial_history", in_progress)
         progress = loads_dict(source_row["progress"] or "{}")
         if (source_row["state"] == "accepted"
                 or source_row["attempts"] > 0
@@ -169,6 +184,8 @@ def semantic_gate(db, ev, payload: dict, cfg: dict,
                 or not isinstance(target_revision, str) or not target_revision
                 or target not in source_ids):
             raise ValueError("payload_invalid")
+        if _has_initial_history(db, project_id, [target]):
+            _stale("initial_history", in_progress)
         bundle = semantic_store.thread_bundle(db, project_id, root)
         if bundle is None or bundle["source_fingerprint"] != fp:
             _stale("stale_generation", in_progress)

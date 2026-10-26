@@ -1,0 +1,174 @@
+"""Synthetic cohorts keep history membership, semantic origins and receipts distinct."""
+import json
+import itertools
+from datetime import datetime, timezone
+
+import pytest
+
+import initial_import_state as state
+from common_testkit import make_ledger
+from ingest_testkit import _message, _unread_patient
+
+BOUNDARY = 1800000000
+
+
+def _post(mid, seconds, **kwargs):
+    return _message(mid=mid, posted_at=datetime.fromtimestamp(seconds, timezone.utc).isoformat(), **kwargs)
+
+
+@pytest.fixture
+def store(tmp_path, monkeypatch):
+    ticks = itertools.count()
+    monkeypatch.setattr("ledger.time.time", lambda: BOUNDARY + next(ticks) / 1000000)
+    store = make_ledger(tmp_path)
+    store.upsert_patient_info(_unread_patient(1), is_archived=False, notify_new=True,
+                              observation_ts=BOUNDARY)
+    yield store
+    store.close()
+
+
+def _events(store, kind):
+    return [json.loads(r[0]) for r in store.db.execute(
+        "SELECT payload FROM notify_outbox WHERE kind=? ORDER BY event_id", (kind,))]
+
+
+def test_new_cohort_is_immutable_and_existing_patients_are_not_reclassified(store):
+    first = state.load(store.db, 1)
+    store.upsert_patient_info(_unread_patient(1), is_archived=True)
+    store.upsert_patient_info(_unread_patient(1), is_archived=False, notify_new=True,
+                              observation_ts=BOUNDARY + 100)
+    assert state.load(store.db, 1) == first
+    store.upsert_patient_info(_unread_patient(2))
+    store.upsert_patient_info(_unread_patient(2), is_archived=False, notify_new=True)
+    assert state.load(store.db, 2) is None
+
+
+def test_common_save_boundary_aggregates_all_old_history_and_keeps_live_reply_individual(store, monkeypatch):
+    origins = []
+    monkeypatch.setattr(store, 'semantic_seed_tx', lambda pid, mids, origin, **kw: origins.append((set(mids), origin)))
+    old = _post(1, BOUNDARY - 1000000, unread=True)
+    old.replies = [_post(2, BOUNDARY + 1, parent_id=1, unread=True)]
+    store.save_messages([old], project_id=1, notify={'source': 'discovery'},
+                         semantic=True, notify_all_new=True, notify_max_age_s=1)
+    assert state.message_ids(store.db, 1) == [1]
+    assert state.progress(store.db, 1)['saved_count'] == 1
+    assert _events(store, 'patient_history')[-1]['message_ids'] == [1]
+    assert _events(store, 'new_messages')[-1]['message_ids'] == [2]
+    assert next(origin for ids, origin in origins if ids == {1})['notification_free'] is True
+    assert next(origin for ids, origin in origins if ids == {2})['source'] == 'discovery'
+    assert store.db.execute('SELECT count(*) FROM notification_renders').fetchone()[0] == 0
+    assert all(r[0] is not None for r in store.db.execute('SELECT notified_at FROM messages'))
+
+
+def test_silent_import_and_body_timestamp_correction_preserve_first_role(store):
+    old = _post(1, BOUNDARY - 1)
+    store.save_messages([old], project_id=1)
+    before = state.progress(store.db, 1)
+    edited = _post(1, BOUNDARY + 10, body='synthetic correction')
+    edited.metadata = {'reaction_count': 2, state.META_KEY: {'cohort_id': 'untrusted', 'role': 'live'}}
+    store.save_messages([edited], project_id=1, notify={'source': 'unread'})
+    assert state.message_ids(store.db, 1) == [1]
+    assert state.progress(store.db, 1)['saved_count'] == before['saved_count'] == 1
+    assert _events(store, 'new_messages') == []
+    assert len(store.db.execute('SELECT * FROM message_metadata').fetchall()) == 1
+
+
+@pytest.mark.parametrize('seconds', [BOUNDARY, BOUNDARY + 1, None])
+def test_boundary_same_second_new_and_missing_times_are_individual(store, seconds):
+    post = _post(1, seconds, unread=True) if seconds is not None else _message(mid=1, posted_at='', unread=True)
+    store.save_thread_replies([post], 1, notify={'source': 'unread'})
+    assert state.message_ids(store.db, 1) == []
+    assert _events(store, 'new_messages')[-1]['message_ids'] == [1]
+
+
+def test_registration_failure_rolls_back_patient_cohort_job_and_intent(tmp_path, monkeypatch):
+    store = make_ledger(tmp_path)
+    def fail(*args, **kwargs):
+        raise RuntimeError('synthetic write failure')
+    monkeypatch.setattr(store, 'job_add_tx', fail)
+    with pytest.raises(RuntimeError):
+        store.upsert_patient_info(_unread_patient(1), is_archived=False, notify_new=True)
+    for table in ('patients', 'fetch_jobs', 'notify_outbox'):
+        assert store.db.execute(f'SELECT count(*) FROM {table}').fetchone()[0] == 0
+    store.close()
+
+
+def test_invalid_cohort_fails_closed_without_individual_fallback(store):
+    with store.db:
+        store.db.execute("UPDATE patients SET initial_import='{}'")
+    with pytest.raises(ValueError, match='initial_import_invalid'):
+        store.save_messages([_post(1, BOUNDARY - 1)], project_id=1, notify={'source': 'unread'})
+    assert store.db.execute('SELECT count(*) FROM messages').fetchone()[0] == 0
+    assert _events(store, 'new_messages') == []
+
+
+def test_capture_never_counts_failed_or_unfetched_bodies_as_complete(store):
+    store.save_messages([_post(1, BOUNDARY - 1, state='snippet')], project_id=1)
+    store.set_history_floor(1, 0)
+    job = store.job_pending('history', 1)
+    store.job_done(job['job_id'])
+    assert state.progress(store.db, 1)['capture_phase'] == 'capturing'
+    store.save_messages([_post(1, BOUNDARY - 1)], project_id=1)
+    assert state.progress(store.db, 1)['capture_phase'] == 'complete'
+    store.job_add('reply', 1, 1)
+    job = store.job_pending('reply', 1, 1)
+    store.job_fail(job['job_id'], reason_code='fetch_error')
+    assert state.progress(store.db, 1)['capture_phase'] == 'held'
+
+
+def test_opt_in_fair_selection_preserves_default_fifo_and_never_starves_live(store):
+    for i in range(20):
+        store.outbox_add('patient_history', i + 10, {'cohort_id': 'synthetic'})
+    for i in range(15):
+        store.outbox_add('new_messages', 100 + i, {'message_ids': [i]})
+    assert all(r['kind'] == 'patient_history' for r in store.outbox_due(10))
+    fair = store.outbox_due(10, history_fair=True)
+    assert sum(r['kind'] == 'patient_history' for r in fair) == 2
+    assert sum(r['kind'] == 'new_messages' for r in fair) == 8
+    assert store.outbox_due(1, history_fair=True)[0]['event_id'] == store.outbox_due(1)[0]['event_id']
+
+
+@pytest.mark.parametrize("semantic", [False, True])
+def test_mixed_project_silent_init_save_classifies_history_without_individual_notifications(store, semantic):
+    store.upsert_patient_info(_unread_patient(2), is_archived=False, notify_new=True,
+                              observation_ts=BOUNDARY)
+    store.upsert_patient_info(_unread_patient(3))
+    old = _post(10, BOUNDARY - 100, unread=True)
+    old.replies = [_post(11, BOUNDARY + 1, parent_id=10, unread=True)]
+    second = _post(20, BOUNDARY - 200, project_id=2, unread=True)
+    legacy = _post(30, BOUNDARY - 300, project_id=3, unread=True)
+    store.save_messages([old, second, legacy], semantic=semantic)
+    assert state.message_ids(store.db, 1) == [10]
+    assert state.message_ids(store.db, 2) == [20]
+    assert state.progress(store.db, 1)["saved_count"] == state.progress(store.db, 2)["saved_count"] == 1
+    assert state.load(store.db, 3) is None
+    assert _events(store, "new_messages") == []
+    history = _events(store, "patient_history")
+    assert {mid for event in history for mid in event["message_ids"]} == {10, 20}
+    # Replaying init_data's overlapping page cannot increment counts or reserve another aggregate.
+    store.save_messages([old, second, legacy], semantic=semantic)
+    assert _events(store, "patient_history") == history
+    assert store.db.execute("SELECT notified_at FROM messages WHERE message_id=11").fetchone()[0] is None
+    assert store.db.execute("SELECT notified_at FROM messages WHERE message_id=30").fetchone()[0] is None
+
+
+@pytest.mark.parametrize("path", ["messages", "mixed", "replies"])
+def test_full_body_save_retires_failed_reply_and_unholds_capture_without_manual_refresh(store, path):
+    snippet = _post(1, BOUNDARY - 1, state="snippet", parent_id=100)
+    store.save_messages([snippet], project_id=1)
+    store.set_history_floor(1, 0)
+    store.job_add("reply", 1, 1, parent_id=100)
+    failed = store.job_pending("reply", 1, 1)
+    store.job_fail(failed["job_id"], reason_code="fetch_error")
+    history = store.job_pending("history", 1)
+    store.job_done(history["job_id"])
+    assert state.progress(store.db, 1)["capture_phase"] == "held"
+    full = _post(1, BOUNDARY - 1, parent_id=100)
+    if path == "replies":
+        store.save_thread_replies([full], 1)
+    else:
+        store.save_messages([full], project_id=1 if path == "messages" else None)
+    assert store.job_state("reply", 1, 1) == "done"
+    assert state.progress(store.db, 1)["capture_phase"] == "complete"
+    assert _events(store, "patient_history")[-1]["message_ids"] == []
+    assert _events(store, "new_messages") == []

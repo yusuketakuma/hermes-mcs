@@ -621,6 +621,10 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
     text_mode = (not notify_scope.interactive_enabled(cfg)
                  or (ev["kind"] == "attachment_followup"
                      and not notify_parts.late_attachment_thread(cfg)))
+    if ev["kind"] == "patient_history" and text_mode:
+        ledger.outbox_defer(ev["event_id"], RERENDER_RETRY_S)
+        res["parked"] += 1
+        return True
     if not sealed and ev["kind"] not in ("urgent_notice", "signal") and text_mode:
         if ev["kind"] == "attachment_followup" and not _send_never_began(ev):
             hold_event(ledger, ev, cfg, reason="thread_route_after_partial", rescue=False)
@@ -891,7 +895,7 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
         woken = notify_cards.wake_ready_reply_holds(ledger.db, time.time())
     if woken:
         res["reply_woken"] = woken
-    due = ledger.outbox_due(limit)
+    due = ledger.outbox_due(limit, history_fair=True)
     import notify_parts
     thread_attachments = notify_parts.late_attachment_thread(cfg)
 

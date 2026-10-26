@@ -284,3 +284,45 @@ def test_deep_source_progress_preserves_degraded_send_hold(
         assert list(db.db.iterdump()) == before
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("in_progress", [False, True])
+def test_initial_history_never_inherits_live_origin_notice(tmp_path, in_progress):
+    db = _delivery_db(tmp_path, [_message()])
+    try:
+        event = _semantic_event(db)
+        payload = json.loads(event["payload"])
+        db.db.execute("INSERT INTO message_metadata(message_id,source,content,checked_at) "
+                      "VALUES(1,'capture',?,0) ON CONFLICT(message_id,source) DO UPDATE SET content=excluded.content",
+                      (json.dumps({"_initial_import": {"role": "history", "cohort_id": "a" * 32}}),))
+        db.db.commit()
+        error = semantic_send_gate.FreezeSend if in_progress else semantic_send_gate.StaleSend
+        with pytest.raises(error, match="initial_history"):
+            semantic_send_gate.semantic_gate(db.db, event, payload, _cfg("enforce"), in_progress=in_progress)
+        assert dict(db.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                                  (event["event_id"],)).fetchone()) == dict(event)
+    finally:
+        db.close()
+
+
+def test_degraded_mixed_thread_blocks_history_but_allows_live_reply(tmp_path):
+    db = _delivery_db(tmp_path, [_message(), _message(mid=2, parent=1)])
+    try:
+        cfg = _cfg("enforce")
+        source_id = db.outbox_add("new_messages", 1, {"message_ids": [1, 2]})
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
+        payload = {"root_id": 1, "src_event_id": source_id,
+                   "fingerprint": bundle["source_fingerprint"],
+                   "policy_fingerprint": semantic_policy.policy_fingerprint(semantic_policy.semantic_config(cfg)[0]),
+                   "target_message_ids": [1, 2], "degraded": True,
+                   "policy_version": semantic_policy.POLICY_VERSION}
+        db.db.execute("INSERT INTO message_metadata(message_id,source,content,checked_at) "
+                      "VALUES(1,'capture',?,0) ON CONFLICT(message_id,source) DO UPDATE SET content=excluded.content",
+                      (json.dumps({"_initial_import": {"role": "history", "cohort_id": "a" * 32}}),))
+        db.db.commit()
+        event = {"project_id": 1}
+        with pytest.raises(semantic_send_gate.StaleSend, match="initial_history"):
+            semantic_send_gate.semantic_gate(db.db, event, payload, cfg)
+        semantic_send_gate.semantic_gate(db.db, event, dict(payload, target_message_ids=[2]), cfg)
+    finally:
+        db.close()

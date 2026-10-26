@@ -6,6 +6,7 @@ The caller supplies the supported version, whose static literal remains in ledge
 """
 
 import sqlite3
+import re
 import time
 from contextlib import suppress
 
@@ -78,7 +79,7 @@ NOTIFICATION_SCHEMA = """
 CREATE TABLE IF NOT EXISTS notification_cards(
   card_id INTEGER PRIMARY KEY AUTOINCREMENT,
   card_key TEXT NOT NULL UNIQUE,
-  kind TEXT NOT NULL CHECK(kind IN ('thread','signal','digest')),
+  kind TEXT NOT NULL CHECK(kind IN ('thread','signal','digest','patient_history')),
   project_id INTEGER,
   root_message_id INTEGER,
   anchor_key TEXT NOT NULL,
@@ -265,6 +266,26 @@ def preflight(db, tables: set[str], *, version: int, schema_version: int):
 
 
 def initialize(db, *, schema_version: int) -> bool:
+    """Migrate owned connections, restoring FK settings even after rollback."""
+    row = db.execute("SELECT sql FROM sqlite_schema WHERE name='notification_cards'").fetchone()
+    rebuild = row is not None and "'patient_history'" not in row[0]
+    foreign_keys = db.execute("PRAGMA foreign_keys").fetchone()[0]
+    legacy = db.execute("PRAGMA legacy_alter_table").fetchone()[0]
+    if db.in_transaction:
+        raise MigrationError("schema migration requires an idle connection")
+    try:
+        if rebuild:
+            db.execute("PRAGMA foreign_keys=OFF")
+            db.execute("PRAGMA legacy_alter_table=OFF")
+        return _initialize(db, schema_version=schema_version)
+    finally:
+        if db.in_transaction:
+            db.rollback()
+        db.execute(f"PRAGMA foreign_keys={foreign_keys}")
+        db.execute(f"PRAGMA legacy_alter_table={legacy}")
+
+
+def _initialize(db, *, schema_version: int) -> bool:
     db.executescript("""
         CREATE TABLE IF NOT EXISTS runs(
           run_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -628,6 +649,8 @@ def _migrate(db, *, schema_version: int, fts: bool, fts_created: bool = False):
         _migrate_body(db, cols, old_version)
         if old_version < schema_version or fts_created:
             backfill_v3(db, fts=fts)
+        if db.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise MigrationError("foreign key violation during migration")
         db.execute(f"PRAGMA user_version={schema_version}")
         db.commit()
     except Exception:
@@ -636,6 +659,8 @@ def _migrate(db, *, schema_version: int, fts: bool, fts_created: bool = False):
 
 
 def _migrate_body(db, cols, old_version: int):
+    if "initial_import" not in cols("patients"):
+        db.execute("ALTER TABLE patients ADD COLUMN initial_import TEXT")
     db.execute("""
           CREATE TABLE IF NOT EXISTS message_revisions(
             message_id INTEGER NOT NULL, seq INTEGER NOT NULL,
@@ -859,6 +884,7 @@ def _migrate_body(db, cols, old_version: int):
         db.execute(
             "ALTER TABLE notification_cards ADD COLUMN layout INTEGER "
                 "NOT NULL DEFAULT 1")
+    _expand_card_kinds(db)
     # Durable per-part rollup (T7): 'none' marks renders planned
     # before the part ledger existed.
     if "parts_state" not in cols("notification_renders"):
@@ -876,6 +902,37 @@ def _migrate_body(db, cols, old_version: int):
         db.execute(
             "ALTER TABLE notification_acknowledgements "
                 "ADD COLUMN withdrawn_at REAL")
+
+
+def _expand_card_kinds(db):
+    """Rebuild the card parent without renaming it out from under child FKs."""
+    sql = db.execute("SELECT sql FROM sqlite_schema WHERE name='notification_cards'").fetchone()[0]
+    if "'patient_history'" in sql:
+        return
+    if db.execute("PRAGMA foreign_keys").fetchone()[0]:
+        raise MigrationError("card migration requires owner FK isolation")
+    updated, count = re.subn(
+        r"CHECK\s*\(\s*kind\s+IN\s*\(\s*'thread'\s*,\s*'signal'\s*,\s*'digest'\s*\)\s*\)",
+        "CHECK(kind IN ('thread','signal','digest','patient_history'))", sql, flags=re.I)
+    if count != 1:
+        raise MigrationError("unsupported notification card constraint")
+    objects = [r[0] for r in db.execute(
+        "SELECT sql FROM sqlite_schema WHERE tbl_name='notification_cards' "
+        "AND type IN ('index','trigger') AND sql IS NOT NULL")]
+    seq = db.execute("SELECT seq FROM sqlite_sequence WHERE name='notification_cards'").fetchone()
+    columns = ','.join('"' + r[1].replace('"', '""') + '"'
+                       for r in db.execute("PRAGMA table_info(notification_cards)"))
+    # sqlite_schema's CREATE prefix may quote the original name.
+    updated = re.sub(r'(?i)^(CREATE TABLE\s+)(?:"notification_cards"|notification_cards)',
+                     r'\1notification_cards_new', updated, count=1)
+    db.execute(updated)
+    db.execute(f"INSERT INTO notification_cards_new({columns}) SELECT {columns} FROM notification_cards")
+    db.execute("DROP TABLE notification_cards")
+    db.execute("ALTER TABLE notification_cards_new RENAME TO notification_cards")
+    for statement in objects:
+        db.execute(statement)
+    if seq is not None:
+        db.execute("UPDATE sqlite_sequence SET seq=max(seq,?) WHERE name='notification_cards'", (seq[0],))
 
 
 def backfill_v3(db, *, fts: bool):
@@ -989,6 +1046,9 @@ def static_contract_ok(db: sqlite3.Connection, *, schema_version: int) -> bool:
         "SELECT name FROM sqlite_master WHERE type='table'")}
     if ({"attachments_v1", "read_marks_v1"} & tables
             or not static_required_tables(version) <= tables):
+        return False
+    if version >= 10 and "initial_import" not in {
+            r[1] for r in db.execute("PRAGMA table_info(patients)")}:
         return False
     for table in (*STATIC_SOURCE_COLUMNS, *STATIC_BASE_COLUMNS):
         if table not in tables:
