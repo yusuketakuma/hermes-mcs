@@ -885,6 +885,12 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
     cfg = _config()
     res = {"sent": 0, "failed": 0, "skipped": 0, "suppressed": 0,
            "parked": 0}
+    # a reply parked on its parent's thread resumes once that thread exists
+    import notify_cards
+    with ledger.db:
+        woken = notify_cards.wake_ready_reply_holds(ledger.db, time.time())
+    if woken:
+        res["reply_woken"] = woken
     due = ledger.outbox_due(limit)
     import notify_parts
     thread_attachments = notify_parts.late_attachment_thread(cfg)
