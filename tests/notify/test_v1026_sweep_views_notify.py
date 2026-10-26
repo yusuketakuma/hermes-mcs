@@ -9,7 +9,7 @@ from mcs_contract import project_url
 from notify_testkit import NOW as CARD_NOW, _delivered_card, led, pinned_clock  # noqa: F401
 from notify_views import CONTEXT_PAGE_SIZE, patient_context_list
 from patient_context import extract_context
-from mcs_util import JST
+from mcs_queries import JST
 from semantic_testkit import _message
 from test_patient_context_v3_views import DAY, T0, ctx  # noqa: F401 - shared synthetic fixture
 from test_read_model import _artifact, _hash_of
