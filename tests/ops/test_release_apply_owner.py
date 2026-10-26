@@ -1446,8 +1446,9 @@ if pid==0:
    invalid=copy.deepcopy(response);invalid['preview']['signature']=invalid['preview']['signature'][::-1]
    foreign=signed_preview(foreign_plan=True)
    outer=copy.deepcopy(response);outer['approval']['approved_by']='c'*64
-   for denied in (invalid,foreign,outer):
-    try:owner._consent_native_change(control,monitor,runtime_home=home,repository=repo,operation_id=operation_id,preview_response=canonical(denied,max_bytes=16384).encode('ascii'),deadline=time.monotonic()+30)
+   typed_outer=copy.deepcopy(response);typed_outer['intent']['policy_epoch']=float(typed_outer['intent']['policy_epoch'])
+   for denied in (invalid,foreign,outer,typed_outer):
+    try:owner._consent_native_change(control,monitor,runtime_home=home,repository=repo,operation_id=operation_id,preview_response=json.dumps(denied,ensure_ascii=True).encode('ascii'),deadline=time.monotonic()+30)
     except owner.ReleaseApplyError:pass
     else:raise AssertionError('invalid preview accepted')
     assert owner._read_change(control)==change

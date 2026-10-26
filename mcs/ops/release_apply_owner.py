@@ -707,7 +707,7 @@ def _consent_native_change(control, monitor, *, runtime_home, repository, operat
             purpose=apply.PURPOSES[0], pins=context['current'].bootstrap['operation_pins'],
             expected=before['expected'], now_ms=now)
         plan = json.loads(context['record']['raw'])
-        if (response['intent'] != preview['intent'] or response['approval'] != preview['approval']
+        if (not apply.same(response['intent'], preview['intent']) or not apply.same(response['approval'], preview['approval'])
                 or preview['intent']['plan_report_id'] != plan['report_id']
                 or preview['intent']['plan_report_hash'] != context['record']['body_sha256']
                 or preview['intent']['purpose_code'] != context['purpose_code']):
@@ -841,7 +841,7 @@ def _run_native_release(control, monitor, *, runtime_home, repository, operation
         registration = _verify_registration_read(registration_request, carrier(registration_request), now_ms=int(time.time() * 1000))
         polled = _apply_response(carrier(poll_request), 'poll', ('context',))['context']
         release.fields(polled, ('intent', 'approval', 'acceptance', 'operation', 'admission'))
-        if polled['admission'] is not None or polled['acceptance'] != change['acceptance']:
+        if polled['admission'] is not None or not apply.same(polled['acceptance'], change['acceptance']):
             raise ValueError
         now = int(time.time() * 1000)
         operation = verify_apply_envelope(canonical(polled['operation'], max_bytes=16384).encode('ascii'),
@@ -855,7 +855,7 @@ def _run_native_release(control, monitor, *, runtime_home, repository, operation
         apply.validate_apply_authorization(**authorization, now_ms=now)
         frozen = context['record']
         plan = json.loads(frozen['raw'])['plan']
-        if (polled['intent'] != preview['intent'] or polled['approval'] != preview['approval']
+        if (not apply.same(polled['intent'], preview['intent']) or not apply.same(polled['approval'], preview['approval'])
                 or preview['intent']['plan_report_id'] != json.loads(frozen['raw'])['report_id']
                 or preview['intent']['plan_report_hash'] != frozen['body_sha256']):
             raise ValueError
@@ -927,7 +927,7 @@ def _run_native_release(control, monitor, *, runtime_home, repository, operation
                 'grant_request_id': grant_body['grant_request_id'], **witness_hashes}
             grant = verify_apply_envelope(grant_raw, purpose=apply.PURPOSES[2], pins=current.bootstrap['operation_pins'],
                 expected=grant_expected, now_ms=int(time.time() * 1000))
-            if grant_response['admission'] != admission:
+            if not apply.same(grant_response['admission'], admission):
                 raise ValueError
             apply.validate_apply_authorization(**authorization, grant=grant, admission=admission, now_ms=int(time.time() * 1000))
             continuation = object()
