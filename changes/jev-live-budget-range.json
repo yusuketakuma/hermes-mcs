@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "手動のJev評価ツールが設定の範囲外の予算を拒否する",
+  "summary": "semantic.daily_request_budgetに100000を超える値を書くと、定期処理は設定エラーとして送信を止める一方、wire_smoke・jev-value・benchなどの手動ツールは10000に丸めて送信していました。手動ツールも同じ範囲（0〜100000）で判定し、範囲外の値ではbudget_exceededとして送信しません。",
+  "upgrade": "追加操作は不要です。0〜100000の範囲内の予算、明示したoff、0の指定は従来どおり有効です。範囲外の値を書いている場合は、手動ツールも送信しなくなるので設定を直してください。",
+  "details": [
+    "上限の定数を1か所にまとめ、設定の検証と手動ツールが同じ値を読む。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_jev.py",
+    "mcs/semantic/semantic_policy.py"
+  ]
+}

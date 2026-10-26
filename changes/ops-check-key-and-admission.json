@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "checkのJevキー未取得を警告にし、受付制御の検査を設定値に合わせる",
+  "summary": "`mcs_setup.py check` は、意味解析のmodeを明示しているのにTYPESAFE_API_KEYをこのMCSの `.env`（0600・1行）から取得できない場合を、エラーではなく警告として表示します。更新後の検査でこの状態が新しいエラーになり、更新が失敗・巻き戻しになることを防ぎます。また、ローカルAIの受付制御の検査は、環境変数 MCS_LLM_ADMISSION だけでなく config.json の `local_llm.admission` を優先して判定します。",
+  "upgrade": "追加操作は不要です。Jevを使う場合は、キーをこのMCSの `.env` へ0600・1行で登録してください。警告が残る間、Jevは送信しません。",
+  "details": [
+    "受付制御の不足を示す文言は「受付制御（local_llm.admission または MCS_LLM_ADMISSION）が有効な間」に変わります。更新時の比較対訳も同じ文言です。",
+    "config.jsonで受付制御を無効にし環境変数だけが残る端末では、使われない受付制御を検査しなくなります。"
+  ],
+  "refs": [
+    "mcs/ops/environment_diagnostics.py",
+    "mcs/ops/update_policy.py",
+    "mcs/llm/llm_admission.py"
+  ]
+}

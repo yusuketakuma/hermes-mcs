@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "Anthropicへの再抽出要求で固定の指示部をprompt cacheに載せる",
+  "summary": "再抽出の要求は、投稿ごとに同じ長い指示部（単発用・一括用）で始まります。この指示部を独立したテキストブロックとしてcache_control（5分）付きで送り、短時間に続く要求ではキャッシュ読取り（入力価格の1割）で済むようにします。最初の要求はキャッシュ書込み（入力価格の1.25倍）になります。shadowモードでも同じ送り方になります。患者コンテキストの要求と修復要求は短いので対象外です。",
+  "upgrade": "追加操作は不要です。反映には gateway（独立実行ではSlack/Discordアダプター）の再起動が必要です。収集は10分間隔なので、再抽出の山がない平常時は要求ごとに書込み分の割増しだけになります（指示部の2〜3万バイト分）。費用見積り（cloud-llm estimate）はキャッシュの割引を見ないため、実費より高めに出ます。",
+  "details": [
+    "AnthropicClient.complete に cache_prefix を追加し、本文を[前置部（cache_control）, 残り]の2ブロックで送る。前置部で本文が終わる場合は1ブロック。",
+    "予約額の見積りはブロック形式の本文も同じバイト数で数える。",
+    "結果のusageに含まれる cache_creation_input_tokens / cache_read_input_tokens は従来どおり価格表の倍率で費用に入れる。"
+  ],
+  "refs": [
+    "mcs/llm/anthropic_client.py",
+    "mcs/extract/llm/extract_llm.py"
+  ]
+}

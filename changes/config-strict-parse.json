@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "config.jsonの重複キー・NaNをすべての読取りで同じく不正として扱う",
+  "summary": "config.jsonに同じキーが2回ある場合やNaN・Infinityがある場合、一部の処理は読めるものとして既定値へ黙って戻り、別の処理は読めない扱いでした。すべての読取りで不正な設定として扱い、`mcs_setup.py check` が理由を表示します。`settings`・`cloud-llm budget` は設定ファイルがない場合と読み取れない場合を区別して案内し、`doctor`・`cloud-llm` は設定を読み取れない間Anthropicを `off` として表示します。",
+  "upgrade": "追加操作は不要です。重複キーやNaNを含むconfig.jsonは `check` で検出されるので、指摘された箇所を修正してください。",
+  "details": [
+    "設定ファイルがない場合は `mcs_setup.py init` を、読み取れない場合は `mcs_setup.py check` を案内します。",
+    "`doctor`・`cloud-llm` の表示は、設定ファイルを読み取れない間はキーがあってもAnthropicを自動有効と表示せず、実行時と同じく送信しない前提で示します。",
+    "load_config・mcs_setup check・settings・cloud-llm budget・cloud-llm resume が同じ厳格な解析（mcs_util.parse_config）を共有します。"
+  ],
+  "refs": [
+    "mcs/core/mcs_util.py",
+    "mcs/ops/config_edit.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/cloud_cli.py"
+  ]
+}

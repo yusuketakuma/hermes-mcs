@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "壊れた抽出metaが1行あるとJev評価ジョブが失敗する問題を修正",
+  "summary": "同じ投稿にJSONとして読めない抽出結果の行が残っていると、ローカルの無信号判定（prefilter）を調べる問い合わせがSQLiteの実行計画によっては例外になり、その投稿のJev評価ジョブが再試行を使い切って失敗することがありました。読めない行は無視して判定を続けます。",
+  "upgrade": "追加操作は不要です。既に失敗したジョブは、既存の復帰処理で再開します。",
+  "details": [
+    "json_validで守られていないjson_extractを、他の問い合わせと同じjson_or_null経由に揃えた。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_drain.py"
+  ]
+}

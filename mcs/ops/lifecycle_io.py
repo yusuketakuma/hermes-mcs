@@ -34,7 +34,8 @@ def run_bounded(argv: list, *, timeout: int = 60, input_text: str | None = None,
 # ---- .env merge ------------------------------------------------------
 
 def write_env(path: str, updates: dict[str, str]):
-    """Merge KEY=value lines — existing keys preserved unless updated."""
+    """Merge KEY=value lines — existing keys preserved unless updated; a
+    repeated key collapses to one line (last value wins, first position)."""
     encoded = {}
     for key, value in updates.items():
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) \
@@ -44,21 +45,16 @@ def write_env(path: str, updates: dict[str, str]):
                         if value != value.strip() or any(c in value for c in "\"'\\")
                         else value)
     updates = encoded
-    lines, seen = [], set()
+    lines = []
     with suppress(FileNotFoundError), open(path, encoding="utf-8") as stream:
         lines = stream.read().splitlines()
-    out = []
-    for line in lines:
-        key = line.split("=", 1)[0]
-        if key in updates:
-            out.append(f"{key}={updates[key]}")
-            seen.add(key)
-        else:
-            out.append(line)
+    # KEY=value lines keyed by KEY (private_env_value rejects a repeated key), others by index
+    kept: dict = {}
+    for i, line in enumerate(lines):
+        kept[line.split("=", 1)[0] if "=" in line else i] = line
     for key, val in updates.items():
-        if key not in seen:
-            out.append(f"{key}={val}")
-    atomic_write(path, lambda stream: stream.write("\n".join(out) + "\n"),
+        kept[key] = f"{key}={val}"
+    atomic_write(path, lambda stream: stream.write("\n".join(kept.values()) + "\n"),
                  0o600, tmp_prefix=".svc.")
 
 

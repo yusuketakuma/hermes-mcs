@@ -53,10 +53,11 @@ def _read_local(path: str, limit: int) -> bytes:
 
 
 def load_config(path: str = CONF_PATH) -> dict:
-    """config.json -> dict; a missing/malformed file means {} so every
-    caller falls back to its documented per-key defaults + validation."""
+    """config.json -> dict; a missing/malformed file (a repeated key or
+    NaN counts as malformed, like every other config reader) means {} so
+    every caller falls back to its documented per-key defaults + validation."""
     try:
-        raw = json.loads(_read_local(path, CONFIG_MAX_BYTES).decode("utf-8"))
+        raw = parse_config(_read_local(path, CONFIG_MAX_BYTES))
         return raw if isinstance(raw, dict) else {}
     except (OSError, ValueError, RecursionError):
         return {}
@@ -234,6 +235,13 @@ def unique_pairs(items):
 def reject_constant(_):
     """``parse_constant`` hook that rejects NaN/Infinity as ``invalid_number``."""
     raise ValueError("invalid_number")
+
+
+def parse_config(raw: bytes):
+    """The one strict config.json parse every reader shares: a repeated key
+    or NaN/Infinity is a ValueError, never a silently kept value."""
+    return json.loads(raw.decode("utf-8"), object_pairs_hook=unique_pairs,
+                      parse_constant=reject_constant)
 
 
 def strict_json(raw):

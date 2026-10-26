@@ -37,7 +37,7 @@ COMMIT_MARGIN = 5
 
 
 class Deferred(Exception):
-    """Admission or remaining time is unavailable; no model attempt was made."""
+    """Admission or remaining time is unavailable; no attempt is charged to the unit."""
 
 
 def _digest(value):
@@ -120,7 +120,7 @@ def _contract(cfg, pid=None):
         settings = extract_llm._cloud_settings(cfg)
         if (settings["mode"] == "on" and extract_llm.cloud_policy.api_key(extract_llm.HOME)
                 and extract_llm.cloud_policy.eligible(settings, "patient_context", pid)):
-            contract["provider"] = extract_llm._cloud_contract({"cloud_llm": settings})
+            contract["provider"] = extract_llm._cloud_contract()
     return contract
 
 
@@ -519,25 +519,23 @@ def context_view_input(db, pid, *, cfg=None):
     as_of = doc.get("as_of")
     if type(as_of) not in (float, int) or not math.isfinite(as_of):
         return None
+    stored = _route_contract(meta)
+    if stored is None:
+        return None
     # A snapshot reader uses the generation's pinned contract; live callers
-    # supply cfg and additionally reject a changed model/configuration.
-    pinned = None
+    # supply cfg and reject a changed rule version or local model. The stored
+    # backend stays acceptable while its request shape is current: a cloud
+    # mode or key switch alone must not hide a published context.
+    pinned = _contract(cfg or {})
     if cfg is None:
-        pinned = _contract({})
-        stored = _route_contract(meta)
-        if stored is None:
-            return None
         pinned["model"] = stored.get("model")
-        if "provider" in stored:
-            import extract_llm
-            provider = stored["provider"]
-            if (not isinstance(provider, dict) or provider.get("backend") != "anthropic"
-                    or provider.get("model") != extract_llm.anthropic_client.MODEL
-                    or provider != extract_llm._cloud_contract({"cloud_llm": {"mode": "on", "model": provider.get("model")}})):
-                return None
-            pinned["provider"] = provider
+    if "provider" in stored:
+        import extract_llm
+        if stored["provider"] != extract_llm._cloud_contract():
+            return None
+        pinned["provider"] = stored["provider"]
     current = _snapshot(db, pid, cfg or {}, hydrate=False, contract=pinned)
-    if _route_contract(meta) != current["contract"]:
+    if stored != current["contract"]:
         return None
     if current["source_sig"] != meta.get("source_sig"):
         return None
@@ -994,6 +992,15 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             except extract_llm.CloudFallback:
                 provider.discard()
 
+    def local_route():
+        # the unit's record is written under the local backend; a cloud route
+        # contract is kept beside it so the selection still recognises the row
+        meta.pop("provider", None)
+        if "provider" in snapshot["contract"]:
+            meta["route_contract"] = snapshot["contract"]
+            meta["contract"] = {key: value for key, value in snapshot["contract"].items() if key != "provider"}
+        meta["model"] = local_llm.resolve(cfg)[1]
+
     def infer(fn, *, unit_key, mid=None, saved=None):
         nonlocal provider, shadow_call, estimated_unit
         # A source's persisted chunk progress pins its backend until complete.
@@ -1007,16 +1014,28 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 meta["model"] = provider.model
                 return value
             except (extract_llm.CloudFallback, ValueError) as error:
-                if (isinstance(error, extract_llm.CloudFallback) and str(error) == "cloud_unit_changed") or time.time() >= end:
+                changed = isinstance(error, extract_llm.CloudFallback) and str(error) == "cloud_unit_changed"
+                if changed or time.time() >= end:
                     provider.discard()
+                paid = bool(getattr(provider, "completed_reservations", None)) and not changed
                 provider = None
+                if paid and not local_admit():
+                    # a paid attempt failed and local cannot take over now: record
+                    # the retry instead of re-sending the same unit every tick.
+                    # Partial cloud progress keeps its cloud pin (a local record
+                    # would resume the cloud cursor locally); a fresh unit is
+                    # recorded under the local route, where selection finds it.
+                    if saved and saved.get("_provider_contract"):
+                        meta["provider"] = saved["_provider_contract"]
+                        meta["model"] = saved["_provider_contract"]["model"]
+                    else:
+                        local_route()
+                    if isinstance(error, ValueError):
+                        raise
+                    raise ValueError("nightly_cloud_failed") from error
         if not local_admit():
             raise Deferred("nightly_local_capacity")
-        meta.pop("provider", None)
-        if "provider" in snapshot["contract"]:
-            meta["route_contract"] = snapshot["contract"]
-            meta["contract"] = {key: value for key, value in snapshot["contract"].items() if key != "provider"}
-        meta["model"] = local_llm.resolve(cfg)[1]
+        local_route()
         reset = bool(saved and saved.get("_provider_contract"))
         if reset:
             saved.clear()
@@ -1125,12 +1144,6 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         if not admit():
             discard_if_changed()
             return {"status": "deferred", "done": 0}
-        if provider is not None:
-            try:
-                provider.commit_guard()
-            except extract_llm.CloudFallback:
-                provider.discard()
-                return {"status": "deferred", "done": 0}
         # BEGIN IMMEDIATE seals the signature check and writes in one brief
         # transaction; no inference is performed while holding a DB/run lock.
         ledger.db.execute("BEGIN IMMEDIATE")
@@ -1146,17 +1159,15 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 # An unrelated writer does not invalidate completed inference.
                 fresh = _snapshot(ledger.db, pid, cfg, hydrate=False)
                 scans_now = _scan_sig(ledger.db, pid)
-            if (fresh["source_sig"] != snapshot["source_sig"] or scans_now != frozen_scan_sig
-                    or _published_version(ledger.db, pid) != frozen_ver
-                    or snapshot["contract"].get(VERSION_KEY) != CURRENT_VERSION
-                    or time.monotonic() >= deadline or time.time() >= end):
+            moved = (fresh["source_sig"] != snapshot["source_sig"] or scans_now != frozen_scan_sig
+                     or _published_version(ledger.db, pid) != frozen_ver
+                     or snapshot["contract"].get(VERSION_KEY) != CURRENT_VERSION)
+            if moved or time.monotonic() >= deadline or time.time() >= end:
                 # another publisher (a second lane-3 process) wrote this
                 # patient's context or progress since selection: our
                 # inputs are stale, the next unit re-selects
                 ledger.db.rollback()
-                if provider is not None and (fresh["source_sig"] != snapshot["source_sig"]
-                        or scans_now != frozen_scan_sig or _published_version(ledger.db, pid) != frozen_ver
-                        or time.time() >= end):
+                if provider is not None and (moved or time.time() >= end):
                     provider.discard()
                 return {"status": "source_changed", "done": 0}
             prior = progress if lane == "A" else saved
