@@ -19,6 +19,9 @@ import mcs_util
 from ingest_testkit import _ledger, _message, _unread_patient
 from ledger import Ledger
 import mcs_queries
+from common_testkit import ledger_fixture
+
+flush_ledger = ledger_fixture(name="flush_ledger")
 
 
 def test_attachment_collection_has_cumulative_real_size_limit(tmp_path, monkeypatch):
@@ -70,11 +73,13 @@ def test_changed_partial_notification_is_quarantined(monkeypatch, tmp_path):
         db.close()
 
 
-def test_missing_notification_channel_stays_retryable(monkeypatch):
+def test_missing_notification_channel_stays_retryable(monkeypatch, flush_ledger):
     marked = []
 
     class Outbox:
-        def outbox_due(self, limit):
+        db = flush_ledger.db
+
+        def outbox_due(self, limit, **kwargs):
             return [{"event_id": 1, "kind": "new_messages", "project_id": 1,
                      "payload": "{}", "attempts": 0, "progress": None}]
 
@@ -570,7 +575,7 @@ def test_attachment_followup_keeps_text_file_delivery_without_card_thread(
         db.close()
 
 
-def test_card_routed_events_dispatch_without_exe_or_text_destination(monkeypatch):
+def test_card_routed_events_dispatch_without_exe_or_text_destination(monkeypatch, flush_ledger):
     import notify_parts
     import notify_spool
     events = [
@@ -584,7 +589,9 @@ def test_card_routed_events_dispatch_without_exe_or_text_destination(monkeypatch
         ev.update(project_id=1, payload="{}", attempts=0, progress=None)
 
     class Outbox:
-        def outbox_due(self, limit):
+        db = flush_ledger.db
+
+        def outbox_due(self, limit, **kwargs):
             return events
 
         def is_archived(self, project_id):

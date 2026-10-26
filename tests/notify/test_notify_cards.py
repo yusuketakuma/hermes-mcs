@@ -306,8 +306,8 @@ def test_unknown_blocks_resend_until_resolved(led, tmp_path):
 
 def _delivered_card(led, tmp_path, cfg=CFG):
     render = _deliverable(led, tmp_path, cfg=cfg)
-    _begin(led, render)
-    _receipt(led, render, "0" * 15 + "1", message_id="m-9")
+    _begin(led, render, cfg=cfg)
+    _receipt(led, render, "0" * 15 + "1", message_id="m-9", cfg=cfg)
     _settle_bodies(led, render)
     spec = json.loads(
         (tmp_path / "data" / "discord_render"

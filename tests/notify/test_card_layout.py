@@ -85,7 +85,7 @@ def test_footer_is_one_state_item_and_revoked_card_has_no_buttons(led):
     _dispatch(led, _intent(led))
     footer = [f for f in _spec(led)["parts"]["footer"] if f["type"] == "text"]
     assert len(footer) == 1
-    assert footer[0]["text"].splitlines()[0].startswith("📝 タスク 1件（期限切れ 1） · ")
+    assert footer[0]["text"].splitlines()[0] == "📝 タスク 1件（期限切れ 1）"
     assert "⚠ 履歴取得未完了" in footer[0]["text"]
     card = _card(led) | {"delivery_state": "revoked"}
     content = notify_render.card_content(led.db, card)

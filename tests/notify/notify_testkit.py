@@ -118,7 +118,7 @@ def _settle_bodies(led, render):
 
 
 def _receipt(led, render, attempt_id, result="delivered",
-             message_id="m-1", error_code=None, n=9):
+             message_id="m-1", error_code=None, n=9, cfg=CFG):
     req = {"version": 1, "op": "transport_receipt", "command_id": _uuid(n),
            "attempt_id": attempt_id, "delivery_id": render["delivery_id"],
            "render_rev": render["render_rev"],
@@ -127,7 +127,7 @@ def _receipt(led, render, attempt_id, result="delivered",
            "result": result, "message_id": message_id}
     if error_code is not None:
         req["error_code"] = error_code
-    return notify_transport.apply_transport_receipt(led, req, CFG, now=NOW)
+    return notify_transport.apply_transport_receipt(led, req, cfg, now=NOW)
 
 
 def _signal_row(led, key, pid=1, state="open", stype="med_followup",

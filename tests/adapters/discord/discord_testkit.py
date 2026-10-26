@@ -398,6 +398,7 @@ def discord_world(tmp_path, monkeypatch):
     led = _ledger.Ledger(str(data / "ledger.db"))
     notify_spool.ensure_dirs(str(data))
     notify_spool.publish_flags(CFG, str(data))
+    current_cfg = CFG
     logs = []
 
     def _seed(mids=(100, 101), pid=1):
@@ -428,6 +429,9 @@ def discord_world(tmp_path, monkeypatch):
 
     def _dispatch(kind="new_messages", pid=1,
                   payload=None, cfg=CFG):
+        nonlocal current_cfg
+        current_cfg = cfg
+        notify_spool.publish_flags(cfg, str(data))
         eid = led.outbox_add(
             kind, pid, payload or {"message_ids": [100, 101]})
         ev = dict(led.db.execute(
@@ -436,7 +440,7 @@ def discord_world(tmp_path, monkeypatch):
         return notify_cards.dispatch_intent(led, ev, cfg, now=NOW)
 
     def _drain():
-        return notify_cmds.drain_int_commands(led, {}, CFG, str(data))
+        return notify_cmds.drain_int_commands(led, {}, current_cfg, str(data))
 
     def _mkworker(worker_id=None, bot=None):
         reg = registry.Registry(str(data / "discord_state"))
