@@ -1,6 +1,7 @@
 """署名済みreleaseのTrust・基線・全sequence bindingを私有領域へ保存する。"""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -247,15 +248,28 @@ def status(store):
         return {**value, 'uncertain': bool(getattr(store, '_release_owner_uncertain', False))}
 
 
-def observe(store, envelope, *, now_ms):
-    """署名済みAttestationのbinding/Hを、後続preflightの成否と独立して保存する。"""
-    from sdc_support_signatures import verify_release_attestation
+@contextmanager
+def _verified_snapshot(store, verifier):
+    # Crypto may own a child; do not hold the short state lock while it waits.
+    with store.release_owner_lock():
+        _check(not getattr(store, '_release_owner_uncertain', False), 'UNCERTAIN')
+        snapshot = _read(store)
+    verified = verifier(snapshot)
     with store.release_owner_lock():
         _check(not getattr(store, '_release_owner_uncertain', False), 'UNCERTAIN')
         value = _read(store)
+        _check(value == snapshot, 'STATE_CHANGED')
+        yield value, verified
+
+
+def observe(store, envelope, *, now_ms):
+    """署名済みAttestationのbinding/Hを、後続preflightの成否と独立して保存する。"""
+    from sdc_support_signatures import verify_release_attestation
+    def verify(value):
+        expected = {key: value['state'][key] for key in contract.EXPECTED_FIELDS}
+        return verify_release_attestation(envelope, trust=value['trust'], expected=expected, now_ms=now_ms)
+    with _verified_snapshot(store, verify) as (value, attestation):
         state = value['state']
-        expected = {key: state[key] for key in contract.EXPECTED_FIELDS}
-        attestation = verify_release_attestation(envelope, trust=value['trust'], expected=expected, now_ms=now_ms)
         seq = attestation['core']['code_seq']
         existing = next((binding for binding in value['bindings'] if binding['code_seq'] == seq), None)
         observed = contract.observe_release(state, attestation, trust=value['trust'], existing_binding=existing, now_ms=now_ms)
@@ -272,11 +286,10 @@ def observe(store, envelope, *, now_ms):
 def update_trust(store, proofs, *, now_ms):
     """旧・新thresholdを検証したchainだけを採用し、realm/floor/bindingを保持する。"""
     from sdc_support_signatures import verify_release_root_chain
-    with store.release_owner_lock():
-        _check(not getattr(store, '_release_owner_uncertain', False), 'UNCERTAIN')
-        value = _read(store)
+    def verify(value):
         expected = {key: value['state'][key] for key in contract.EXPECTED_FIELDS}
-        trust = verify_release_root_chain(proofs, trusted=value['trust'], expected=expected, now_ms=now_ms)
+        return verify_release_root_chain(proofs, trusted=value['trust'], expected=expected, now_ms=now_ms)
+    with _verified_snapshot(store, verify) as (value, trust):
         if trust != value['trust']:
             value['trust'] = trust
             value['state'].update(trust_digest=contract.hash_release_trust(trust),
@@ -414,12 +427,11 @@ def _observe_installed(store, envelope, *, observed, now_ms):
     """
     from sdc_support_signatures import verify_release_attestation
     _fields(observed, ('commit', 'lock_sha256', 'schema', 'profile_id', 'profile_sha256', 'runtime_fingerprint'))
-    with store.release_owner_lock():
-        _check(not getattr(store, '_release_owner_uncertain', False), 'UNCERTAIN')
-        value = _read(store)
+    def verify(value):
         _check(value['spent'] and value['state']['unresolved'] is not None, 'SPENT_MISSING')
         expected = {key: value['state'][key] for key in contract.EXPECTED_FIELDS}
-        attestation = verify_release_attestation(envelope, trust=value['trust'], expected=expected, now_ms=now_ms)
+        return verify_release_attestation(envelope, trust=value['trust'], expected=expected, now_ms=now_ms)
+    with _verified_snapshot(store, verify) as (value, attestation):
         core = attestation['core']
         operation = value['spent'][-1]['operation']
         _check(attestation['release_id'] == operation['release_id']

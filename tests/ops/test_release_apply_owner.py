@@ -1025,3 +1025,135 @@ else: raise AssertionError('stdin approved')
     result = subprocess.run([sys.executable, '-I', '-B', '-c', program, str(root)],
         input='1\nsynthetic reason\n', capture_output=True, text=True, start_new_session=True, timeout=5)
     assert result.returncode == 0 and result.stdout == 'held\n'
+
+
+@pytest.mark.parametrize('failure', [None, 'missing', 'malformed', 'symlink', 'hardlink', 'mode', 'sidecar', 'changed', 'expired'])
+def test_existing_backup_observation_only_reads_a_verified_unchanged_static_file(tmp_path, monkeypatch, failure):
+    import hashlib
+    directory = tmp_path / 'backups'
+    directory.mkdir(mode=0o700)
+    backup = directory / 'ledger-20261026.db'
+    ledger.Ledger(str(backup)).close()
+    backup.chmod(0o600)
+    raw = backup.read_bytes()
+    if failure == 'missing':
+        backup.unlink()
+    elif failure == 'malformed':
+        backup.write_bytes(b'synthetic malformed backup')
+    elif failure == 'symlink':
+        other = tmp_path / 'original.db'
+        backup.rename(other)
+        backup.symlink_to(other)
+    elif failure == 'hardlink':
+        os.link(backup, tmp_path / 'other.db')
+    elif failure == 'mode':
+        backup.chmod(0o644)
+    elif failure == 'sidecar':
+        Path(str(backup) + '-wal').write_bytes(b'synthetic WAL')
+    elif failure == 'changed':
+        valid = maintenance._valid
+        def change_after_validation(path, deadline):
+            result = valid(path, deadline)
+            backup.write_bytes(backup.read_bytes() + b'synthetic changed bytes')
+            return result
+        monkeypatch.setattr(maintenance, '_valid', change_after_validation)
+    deadline = time.monotonic() + (-1 if failure == 'expired' else 10)
+    if failure is None:
+        before = backup.stat()
+        observed = release_apply_owner._observe_existing_backup(directory, deadline=deadline)
+        assert observed == {'backup_verified': True, 'backup_sha256': hashlib.sha256(raw).hexdigest()}
+        assert backup.read_bytes() == raw and backup.stat().st_mtime_ns == before.st_mtime_ns
+        assert list(directory.iterdir()) == [backup]
+        assert str(directory) not in str(observed)
+    else:
+        with pytest.raises(release_apply_owner.ReleaseApplyError, match='BACKUP_UNVERIFIED'):
+            release_apply_owner._observe_existing_backup(directory, deadline=deadline)
+        assert not Path(str(backup) + '.ok').exists()
+
+
+def test_native_preflight_in_a_fresh_synthetic_product_process(product, tmp_path):
+    # Synthetic accepted initial baseline only; not a live factory or deployment acceptance.
+    import json
+    import shutil
+    import platform as host_platform
+    import release_dependency_lock as dependencies
+    import release_owner_source as source
+    from test_sdc_release_state import baseline
+    root = Path(__file__).resolve().parents[2]
+    repo, value, platform = product
+    platform['cpu'] = {'aarch64': 'arm64'}.get(host_platform.machine().lower(), host_platform.machine().lower())
+    value['profiles'][0]['platform'] = platform
+    (repo / dependencies.LOCK_PATH).write_bytes(dependencies.encoded(value))
+    # Copy development source only. Existing synthetic lock/wheels/requirements stay synthetic.
+    for prefix in source.SOURCE_ROOTS:
+        for path in (root / prefix).rglob('*'):
+            if not path.is_file() or '__pycache__' in path.parts:
+                continue
+            target = repo / path.relative_to(root)
+            if target.exists():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, target)
+            target.chmod(path.stat().st_mode & 0o777)
+    for name in source.SOURCE_FILES:
+        if not (repo / name).exists():
+            shutil.copyfile(root / name, repo / name)
+    home = tmp_path / 'native-runtime'
+    home.mkdir(mode=0o700)
+    venv, _ = runtime(home)
+    venv.rename(home / 'venv')
+    python = home / 'venv/bin/python3'
+    dependencies.install_locked(repo, python=python, venv=home / 'venv', runtime_mode='standalone', platform=platform)
+    data = home / 'data'
+    data.mkdir(mode=0o700)
+    ledger.Ledger(str(data / 'ledger.db')).close()
+    backups = data / 'backups'
+    backups.mkdir(mode=0o700)
+    shutil.copyfile(data / 'ledger.db', backups / 'ledger-20261026.db')
+    (backups / 'ledger-20261026.db').chmod(0o600)
+    (home / 'config.json').write_text(json.dumps({'runtime_mode': 'standalone'}))
+    def git(*args):
+        return subprocess.check_output(['/usr/bin/git', '-C', str(repo), *args], text=True).strip()
+    git('init', '-q')
+    git('add', '.')
+    manifest = source.build_manifest(repo, deadline=time.monotonic() + 30)
+    (repo / source.MANIFEST_PATH).write_bytes(source.canonical(manifest))
+    git('add', source.MANIFEST_PATH)
+    git('-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', 'commit', '-qm', 'synthetic native source')
+    supplied = baseline()
+    supplied['owner_evidence_sha256'] = source.digest(manifest)
+    program = r'''import json,os,pathlib,sys,time
+repo,home=map(pathlib.Path,sys.argv[1:3])
+sys.path[:0]=[str(repo/'mcs'),str(repo)]
+import _mcs_path
+import release_apply_owner as owner
+import release_dependency_lock as dependencies
+from adapters.sdc import release_state
+supplied=json.loads(sys.stdin.read())
+platform=supplied.pop('synthetic_platform')
+observed=owner._observe_installed(repo,python=home/'venv/bin/python3',venv=home/'venv',runtime_mode='standalone',platform=platform,ledger_path=home/'data/ledger.db',deadline=time.monotonic()+30)
+supplied['repo_fingerprint']=observed['repo_fingerprint']
+supplied['baseline'].update({k:observed[k] for k in ('commit','lock_sha256','schema','profile_id','profile_sha256','runtime_fingerprint')})
+with owner._control_store(home) as control:
+ with control.release_entry_lock(): release_state._bootstrap_verified(control,**supplied)
+ result=owner._native_preflight(control,runtime_home=home,repository=repo,deadline=time.monotonic()+30)
+ assert result['preconditions']['updater']==[1,0,0]
+ assert result['preconditions']['backup_verified'] is True
+ assert result['preconditions']['installed_schema']==9
+ assert result['preconditions']['hand_edited'] is False
+ assert result['source_sha256']==supplied['owner_evidence_sha256']
+ assert control.read(release_state.NAME)['spent']==[]
+ assert not (home/'data/update.lock').exists() and not (home/'data/run.lock').exists()
+ path=repo/'mcs/ops/release_apply_owner.py'
+ path.write_bytes(path.read_bytes()+b'\n# synthetic changed source\n')
+ try: owner._native_preflight(control,runtime_home=home,repository=repo,deadline=time.monotonic()+30)
+ except owner.ReleaseApplyError: pass
+ else: raise AssertionError('changed provider accepted')
+print('synthetic native preflight checked')
+'''
+    environment = dict(os.environ, HOME=str(tmp_path), MCS_ROOT=str(home), MCS_UPDATE_REPO=str(repo))
+    result = subprocess.run([sys.executable, '-I', '-B', '-c', program, str(repo), str(home)],
+        input=json.dumps({**supplied, 'synthetic_platform': platform}), capture_output=True, text=True,
+        env=environment, timeout=80)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.endswith('synthetic native preflight checked\n')

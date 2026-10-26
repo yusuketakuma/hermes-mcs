@@ -165,7 +165,7 @@ def _git(repository, args, deadline):
            'GIT_CONFIG_SYSTEM': '/dev/null', 'GIT_CONFIG_GLOBAL': '/dev/null', 'GIT_TERMINAL_PROMPT': '0',
            'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_NO_LAZY_FETCH': '1', 'GIT_OPTIONAL_LOCKS': '0'}
     result = owned_process.run_owned(['/usr/bin/git', '-c', 'core.fsmonitor=false', '-c', 'protocol.allow=never',
-        '-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null', '-C', str(repository), *args], min(30, budget(deadline)), env)
+        '-c', 'credential.helper=', '-c', 'core.hooksPath=/dev/null', '-C', str(repository), *args], min(30, budget(deadline)), env, deadline=deadline)
     budget(deadline)
     check(result.returncode == 0)
     return result.stdout

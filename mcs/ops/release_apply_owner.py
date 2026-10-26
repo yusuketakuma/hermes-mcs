@@ -818,6 +818,144 @@ def _observe_installed(repository, *, python, venv, runtime_mode, platform, ledg
             os.close(venv_fd)
 
 
+def _initial_provider_source(control, repository, *, deadline):
+    """Match actual initial source bytes to an independently accepted root, never self-initialize."""
+    import release_owner_source as source
+    from adapters.sdc import release_state
+    try:
+        if (Path(__file__).resolve() != Path(repository).resolve() / 'mcs/ops/release_apply_owner.py'
+                or Path(source.__file__).resolve() != Path(repository).resolve() / 'mcs/ops/release_owner_source.py'):
+            raise ReleaseApplyError('PROVIDER_HOLD')
+        with control.release_owner_lock():
+            saved = release_state._read(control)
+            if (saved['state']['unresolved'] is not None
+                    or saved['repo_fingerprint'] != _repository_fingerprint(repository)):
+                raise ReleaseApplyError('PROVIDER_HOLD')
+        raw, _ = source._read(repository, source.MANIFEST_PATH, deadline)
+        result = source.verify_checkout(repository, raw, deadline=deadline, current=True)
+        if result['sha256'] != saved['owner_evidence_sha256']:
+            raise ReleaseApplyError('PROVIDER_HOLD')
+        with control.release_owner_lock():
+            if release_state._read(control) != saved:
+                raise ReleaseApplyError('PROVIDER_HOLD')
+        return result
+    except (OSError, ValueError, TypeError, KeyError):
+        raise ReleaseApplyError('PROVIDER_HOLD') from None
+
+
+def _observe_existing_backup(directory, *, deadline):
+    """Verify and hash an existing static backup without creating or repairing one."""
+    import maintenance
+    import mcs_update
+    directory_fd = descriptor = None
+    try:
+        mcs_update._bounded_timeout(None, deadline)
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        info = os.fstat(directory_fd)
+        if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise ReleaseApplyError('BACKUP_UNVERIFIED')
+        latest = None
+        with os.scandir(directory_fd) as entries:
+            for count, entry in enumerate(entries):
+                mcs_update._bounded_timeout(None, deadline)
+                if count >= maintenance.LOCAL_STATUS_SCAN_MAX:
+                    raise ReleaseApplyError('BACKUP_UNVERIFIED')
+                if not (entry.name.startswith('ledger-') and entry.name.endswith('.db')):
+                    continue
+                current = entry.stat(follow_symlinks=False)
+                if not stat.S_ISREG(current.st_mode):
+                    raise ReleaseApplyError('BACKUP_UNVERIFIED')
+                if latest is None or (current.st_mtime_ns, entry.name) > (latest[1].st_mtime_ns, latest[0]):
+                    latest = (entry.name, current)
+        if latest is None:
+            raise ReleaseApplyError('BACKUP_UNVERIFIED')
+        name, selected = latest
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+        before = os.fstat(descriptor)
+        def identity(value):
+            return tuple(getattr(value, k) for k in ('st_dev', 'st_ino', 'st_uid', 'st_nlink', 'st_mode', 'st_size', 'st_mtime_ns'))
+        if (identity(before) != identity(selected) or before.st_uid != os.getuid()
+                or before.st_nlink != 1 or stat.S_IMODE(before.st_mode) != 0o600):
+            raise ReleaseApplyError('BACKUP_UNVERIFIED')
+        for suffix in ('-wal', '-shm', '-journal'):
+            try:
+                os.stat(name + suffix, dir_fd=directory_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            raise ReleaseApplyError('BACKUP_UNVERIFIED')
+        path = str(Path(directory) / name)
+        if not maintenance._valid(path, deadline):
+            raise ReleaseApplyError('BACKUP_UNVERIFIED')
+        digest = hashlib.sha256()
+        while part := os.read(descriptor, 65536):
+            mcs_update._bounded_timeout(None, deadline)
+            digest.update(part)
+        if (identity(before) != identity(os.fstat(descriptor))
+                or identity(before) != identity(os.stat(name, dir_fd=directory_fd, follow_symlinks=False))
+                or identity(info) != identity(os.stat(directory, follow_symlinks=False))):
+            raise ReleaseApplyError('BACKUP_UNVERIFIED')
+        mcs_update._bounded_timeout(None, deadline)
+        return {'backup_verified': True, 'backup_sha256': digest.hexdigest()}
+    except (OSError, ValueError, TypeError, KeyError, mcs_update.UpdateError):
+        raise ReleaseApplyError('BACKUP_UNVERIFIED') from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def _native_preflight(control, *, runtime_home, repository, deadline):
+    """Build preconditions from actual current code, SDK, schema, space and existing backup."""
+    import platform as host_platform
+    import maintenance
+    import mcs_update
+    import mcs_runtime
+    import runtime_inspection
+    from adapters.sdc import release_apply_contract, release_state
+    if (os.path.realpath(runtime_home) != os.path.realpath(mcs_update.HOME)
+            or os.path.realpath(repository) != os.path.realpath(mcs_update.REPO)
+            or Path(mcs_update.__file__).resolve() != Path(repository).resolve() / 'mcs/ops/mcs_update.py'
+            or control.root != _control_root(runtime_home)
+            or os.path.realpath(maintenance.BACKUP_DIR) != os.path.realpath(Path(runtime_home) / 'data/backups')):
+        raise ReleaseApplyError('PREFLIGHT_HOLD')
+    observed_at = int(time.time() * 1000)
+    provider = _initial_provider_source(control, repository, deadline=deadline)
+    configuration = mcs_update.mcs_util.load_config()
+    python = mcs_runtime.python_executable(configuration, root=runtime_home)
+    facts = runtime_inspection.probe_python(python, deadline=deadline)
+    if facts is None:
+        raise ReleaseApplyError('PREFLIGHT_HOLD')
+    try:
+        platform = {'os': {'darwin': 'macos', 'linux': 'linux'}[sys.platform],
+            'cpu': {'aarch64': 'arm64', 'arm64': 'arm64', 'x86_64': 'x86_64'}[host_platform.machine().lower()],
+            'python': [int(n) for n in facts['python'].split('.')[:2]]}
+        venv, host = mcs_update._runtime_venv(configuration)
+        observed = _observe_installed(repository, python=python, venv=venv, runtime_mode=mcs_runtime.mode(configuration),
+            platform=platform, ledger_path=mcs_update.LEDGER, deadline=deadline, host_source=host)
+        backup = _observe_existing_backup(maintenance.BACKUP_DIR, deadline=deadline)
+        filesystem = os.statvfs(runtime_home)
+        preconditions = dict(current_commit=observed['commit'], hand_edited=observed['hand_edited'],
+            installed_lock_sha256=observed['lock_sha256'], free_bytes=filesystem.f_bavail * filesystem.f_frsize,
+            platform=observed['platform'], updater=list(provider['provider_profile']), installed_schema=observed['schema'],
+            **backup, observed_at=observed_at)
+        with control.release_owner_lock():
+            owner = release_state._read(control)
+            baseline = owner['baseline']
+            if (owner['state']['unresolved'] is not None or owner['repo_fingerprint'] != observed['repo_fingerprint']
+                    or any(baseline[k] != observed[key] for k, key in (
+                        ('commit', 'commit'), ('lock_sha256', 'lock_sha256'), ('schema', 'schema'),
+                        ('profile_id', 'profile_id'), ('profile_sha256', 'profile_sha256'), ('runtime_fingerprint', 'runtime_fingerprint')))):
+                raise ReleaseApplyError('PREFLIGHT_HOLD')
+        if mcs_update.mcs_util.load_config() != configuration:
+            raise ReleaseApplyError('PREFLIGHT_HOLD')
+        mcs_update._bounded_timeout(None, deadline)
+        return {'preconditions': release_apply_contract.validate_apply_preconditions(preconditions),
+            'observed': observed, 'configuration': configuration, 'source_sha256': provider['sha256']}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, mcs_update.UpdateError):
+        raise ReleaseApplyError('PREFLIGHT_HOLD') from None
+
+
 def _adopt_post_merge(runtime_home, repository, *, ticket_fd, locks, deadline):
     """Consume only an already-issued native continuation; never mint a release owner."""
     import update_journal

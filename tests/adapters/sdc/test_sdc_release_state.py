@@ -559,3 +559,51 @@ def test_oversized_release_bootstrap_keeps_previous_record(store):
     with pytest.raises(ValueError):
         store.write('release-bootstrap.json', {'synthetic': 'x' * LIMITS['release-bootstrap.json']})
     assert (store.root / 'release-bootstrap.json').read_bytes() == before
+
+
+@pytest.mark.parametrize('kind', ['observe', 'trust', 'installed'])
+@pytest.mark.parametrize('changed', [False, True])
+def test_crypto_releases_short_state_lock_and_rejects_a_changed_snapshot(store, monkeypatch, kind, changed):
+    import sdc_support_signatures as signatures
+    if kind == 'installed':
+        # Typed installation fixture only; real signed attestations are covered by observe/trust.
+        bootstrap(store, **spend_baseline())
+        state._consume_and_start(store, **spend())
+        original = lambda *_a, **_k: copy.deepcopy(VECTORS['Attestation'])  # noqa: E731
+        method = 'verify_release_attestation'
+        def action():
+            return state._observe_installed(store, {}, observed=installed_observation(), now_ms=APPLY['now'] + 20000)
+    elif kind == 'trust':
+        bootstrap(store, **baseline())
+        method = 'verify_release_root_chain'
+        original = getattr(signatures, method)
+        def action():
+            return state.update_trust(store, [SIGNATURES['proofs']['recovery']], now_ms=SIGNATURES['now'])
+    else:
+        bootstrap(store, **baseline())
+        method = 'verify_release_attestation'
+        original = getattr(signatures, method)
+        def action():
+            return state.observe(store, SIGNATURES['attestations']['current']['envelope'], now_ms=SIGNATURES['now'])
+    concurrent = []
+    calls = []
+    def verify(*args, **kwargs):
+        # A fresh OFD cannot acquire this nonblocking flock if the caller still holds S.
+        with store.release_owner_lock():
+            calls.append('S is free')
+        result = original(*args, **kwargs)
+        if changed:
+            with store.release_owner_lock():
+                value = store.read(state.NAME)
+                value['revision'] += 1
+                store.write(state.NAME, value)
+                concurrent.append(copy.deepcopy(value))
+        return result
+    monkeypatch.setattr(signatures, method, verify)
+    if changed:
+        with pytest.raises(ValueError, match='RELEASE_OWNER_STATE_CHANGED'):
+            action()
+        assert store.read(state.NAME) == concurrent[0]
+    else:
+        action()
+    assert calls == ['S is free']
