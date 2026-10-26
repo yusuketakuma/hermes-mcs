@@ -100,7 +100,8 @@ def _valid_history_payload(pl) -> bool:
             and ("trickle" not in pl or type(pl["trickle"]) is bool)
             and ("stalls" not in pl
                  or (type(pl["stalls"]) is int and pl["stalls"] >= 0))
-            and ("notify" not in pl or type(pl["notify"]) is bool))
+            and ("notify" not in pl or type(pl["notify"]) is bool)
+            and ("notify_source" not in pl or pl["notify_source"] == "discovery"))
 
 
 def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
@@ -556,7 +557,7 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
         if pl.get("notify"):
             new_ids = ledger.save_messages(
                 hist, project_id=pid, semantic=semantic,
-                notify={"source": "history"},
+                notify={"source": pl.get("notify_source", "history")},
                 notify_max_age_s=notify_max_age_s, notify_all_new=True)
         else:
             new_ids = ledger.save_messages(hist, project_id=pid,
@@ -810,7 +811,7 @@ def run_discovery(adapter, ledger, result, deadline,
     active_ids = {p.project_id for p in projects}
     for p in projects:
         try:
-            created, _ = ledger.upsert_patient_info(p, is_archived=False)
+            created, _ = ledger.upsert_patient_info(p, is_archived=False, notify_new=True)
             new_n += created
         except Exception as e:
             write_failed = write_failed or type(e).__name__

@@ -144,6 +144,7 @@ def test_list_unread_filters_read_projects_and_uses_earliest_ts():
     assert snap.timestamp == 100
     assert adapter.calls == [1, 2]
     assert [p.project_id for p in snap.patients] == [11, 13]
+    assert [p.project_id for p in snap.listed_patients] == [11, 12, 13]
 
 
 def test_list_unread_fails_when_pagination_sticks():
