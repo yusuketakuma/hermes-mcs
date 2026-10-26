@@ -720,3 +720,28 @@ def test_shadow_audit_rows_are_never_written_without_the_run_lock(routed, monkey
     # result could not be written without the lock, so the unit stays uncompared
     [row] = [json.loads(a["meta"]) for a in led.artifacts("cloud_compare_v1")]
     assert row["uncompared"] == "pending" and row["units"] == 1 and row["validated_units"] == 0
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_shadow_pending_row_commits_with_the_local_result_or_not_at_all(routed, monkeypatch, fail):
+    led, cfg, *_ = routed
+    cfg["cloud_llm"]["mode"] = "shadow"
+    old(led)
+    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row.update(_cloud_mode="shadow", content_hash=_hash(led, 1))
+    if fail:
+        def boom(*a, **k):
+            raise RuntimeError("synthetic failure inside the commit transaction")
+        monkeypatch.setattr(worker, "_comparison_extract", boom)
+    before = led.artifacts(worker.KIND)
+    try:
+        worker._replace_current(led, row, json.dumps({"medications": []}))
+    except RuntimeError:
+        assert fail
+    pending = led.artifacts("cloud_compare_v1")
+    current = [a for a in led.artifacts(worker.KIND) if json.loads(a["meta"]).get("extract_version") == worker.EXTRACT_VERSION]
+    if fail:
+        assert not pending and not current and len(led.artifacts(worker.KIND)) == len(before)
+    else:
+        assert len(current) == 1 and len(pending) == 1
+        assert json.loads(pending[0]["meta"])["uncompared"] == "pending" and row["_shadow_unit"]

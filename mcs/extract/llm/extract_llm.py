@@ -777,25 +777,32 @@ def _cloud_compare(ledger, *, route, project_id, local_facts, cloud_facts=None,
         if value is not None and (type(value) is not int or value < 0):
             raise ValueError("cloud_comparison_invalid")
     with ledger.db:
-        if unit is not None and not pending:
-            gone = ledger.db.execute(
-                "DELETE FROM artifacts WHERE kind='cloud_compare_v1' AND project_id=? AND "
-                "json_valid(meta) AND json_extract(meta,'$.unit')=? AND "
-                "json_extract(meta,'$.uncompared')='pending'", (project_id, unit)).rowcount
-            if not gone:       # already measured (or never committed): never count twice
-                return
-        ledger.artifact_add_tx("cloud_compare_v1", "{}", project_id=project_id,
-            meta={"version": 2, "route": route, "units": 1,
-                  "local_facts": len(left), "cloud_facts": None if right is None else len(right),
-                  "matched": None if right is None else len(left & right),
-                  "validated": None if right is None else len(right), "validated_units": int(right is not None),
-                  "rejected": rejected, "rejected_units": None if rejected is None else int(rejected > 0),
-                  "rejection_observations": int(rejected is not None),
-                  "held": held, "held_observations": int(held is not None),
-                  "repairs": repairs, "repaired_units": None if repairs is None else int(repairs > 0),
-                  "repair_observations": int(repairs is not None),
-                  **({"unit": unit} if unit else {}),
-                  **({"uncompared": "pending"} if pending else {})})
+        _cloud_compare_tx(ledger, route=route, project_id=project_id, left=left, right=right,
+                          rejected=rejected, held=held, repairs=repairs, unit=unit, pending=pending)
+
+
+def _cloud_compare_tx(ledger, *, route, project_id, left, right, rejected, held, repairs,
+                      unit, pending):
+    """The comparison write inside the caller's transaction (no commit here)."""
+    if unit is not None and not pending:
+        gone = ledger.db.execute(
+            "DELETE FROM artifacts WHERE kind='cloud_compare_v1' AND project_id=? AND "
+            "json_valid(meta) AND json_extract(meta,'$.unit')=? AND "
+            "json_extract(meta,'$.uncompared')='pending'", (project_id, unit)).rowcount
+        if not gone:       # already measured (or never committed): never count twice
+            return
+    ledger.artifact_add_tx("cloud_compare_v1", "{}", project_id=project_id,
+        meta={"version": 2, "route": route, "units": 1,
+              "local_facts": len(left), "cloud_facts": None if right is None else len(right),
+              "matched": None if right is None else len(left & right),
+              "validated": None if right is None else len(right), "validated_units": int(right is not None),
+              "rejected": rejected, "rejected_units": None if rejected is None else int(rejected > 0),
+              "rejection_observations": int(rejected is not None),
+              "held": held, "held_observations": int(held is not None),
+              "repairs": repairs, "repaired_units": None if repairs is None else int(repairs > 0),
+              "repair_observations": int(repairs is not None),
+              **({"unit": unit} if unit else {}),
+              **({"uncompared": "pending"} if pending else {})})
 
 
 def _cloud_reextract(ledger, row):
@@ -1765,6 +1772,12 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
                 cloud_policy.dryrun_tx(ledger, route="reextract", project_id=r["project_id"],
                     unit_key=str(r["message_id"]), input_chars=len(r["body_text"] or ""),
                     max_tokens=MAX_TOKENS)
+            if isinstance(r, dict) and r.get("_cloud_mode") == "shadow":
+                # the comparison unit commits (pending) with the local result or not at all
+                r["_shadow_unit"] = os.urandom(16).hex()
+                _cloud_compare_tx(ledger, route="reextract", project_id=r["project_id"],
+                    left=set(_comparison_extract(r, loads_dict(content))), right=None,
+                    rejected=None, held=None, repairs=None, unit=r["_shadow_unit"], pending=True)
         project_id = source["project_id"]
     _rerender_cards(ledger, project_id, r["message_id"])
     return not held_prior
@@ -3295,11 +3308,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             settled["done"] += 1
         done_pids.add(r["project_id"])
         if r.get("_cloud_mode") == "shadow":
-            unit = os.urandom(16).hex()
-            _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
-                           local_facts=_comparison_extract(r, d), unit=unit, pending=True)
-            # a carried commit reports into the pass that finally commits it
-            (shadow_tasks if shadow is None else shadow).append((r, d, ctx, unit))
+            unit = r.pop("_shadow_unit", None)
+            if unit:   # its pending row committed with the local result (_replace_current)
+                # a carried commit reports into the pass that finally commits it
+                (shadow_tasks if shadow is None else shadow).append((r, d, ctx, unit))
         return True
 
     def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
