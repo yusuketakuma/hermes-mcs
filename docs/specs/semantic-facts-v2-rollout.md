@@ -175,7 +175,7 @@ If `semantic.mode` is explicitly configured, also set a positive
 zero-request limit, including for manual `wire_smoke`, `jev-value`, and
 live benchmark calls. These tools share the daily budget with normal work;
 every HTTP attempt, retry and model-list GET counts toward a maximum of
-500 requests per JST day. A lower configured limit remains effective.
+10000 requests per JST day. A lower configured limit remains effective.
 Manual live tools may bypass semantic mode and project selection, so only
 run them with explicitly authorized input and API access.
 

@@ -99,7 +99,7 @@ from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, V4_PROJECTION_
                          current_v4_id, json_or_null, qc_source_id)
 from mcs_util import CONF_PATH, HOME, json_object, load_config, loads_dict  # noqa: F401
 from writer_lock import acquire_run_lock
-from llm_availability import circuit_failure, circuit_open_s, circuit_streak, circuit_success, disk_floor_mb, disk_free_mb  # noqa: F401 — historical helper re-export  # noqa: F401 — historical helper re-export
+from llm_availability import circuit_failure, circuit_open_s, circuit_streak, circuit_success, disk_floor_mb, disk_free_mb  # noqa: F401 — historical helper re-export
 
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "extract_llm"
@@ -659,7 +659,7 @@ class _CloudProvider:
                  current, dispatch, message_id=None, owner=None, discard_reason=None):
         cfg = {**cfg, "cloud_llm": _cloud_settings(cfg)}
         self.model = cfg["cloud_llm"]["model"]
-        self.contract = _cloud_contract(cfg)
+        self.contract = _cloud_contract()
         generation = cloud_policy.config_generation(cfg)
         scope = cloud_policy.scope_generation(cfg)
         updater = writer_lock.updater_state()
@@ -686,11 +686,12 @@ class _CloudProvider:
                        for k in now)
 
         def guard(*, inference=True):
-            if ((inference and (time.monotonic() >= deadline or tightened(caps(_cloud_settings(load_config())))))
+            now = _cloud_settings(load_config())   # one read: every check judges the same settings
+            if ((inference and (time.monotonic() >= deadline or tightened(caps(now))))
                     or writer_lock.updater_state() != updater
                     or updater[0] or cloud_policy.api_key(HOME) != key
-                    or cloud_policy.scope_generation({"cloud_llm": _cloud_settings(load_config())}) != scope
-                    or cloud_policy.block_reason(ledger, _cloud_settings(load_config()), route, project_id)
+                    or cloud_policy.scope_generation({"cloud_llm": now}) != scope
+                    or cloud_policy.block_reason(ledger, now, route, project_id)
                     or not current()):
                 raise CloudFallback("cloud_unit_changed")
         self.guard = lambda: dispatch(guard)
@@ -742,8 +743,11 @@ class _CloudProvider:
             http_deadline = min(self.deadline, deadline) - patient_context_refresh.COMMIT_MARGIN
             if time.monotonic() >= http_deadline:
                 raise CloudFallback("cloud_unit_deadline")
+            # the fixed extraction heads are long enough to cache; the small repair head is not
+            prefix = next((head for head in (_PROMPT_HEAD, _BATCH_HEAD) if prompt.startswith(head)), None)
             answer = self.client.complete(prompt, deadline=http_deadline, max_tokens=max_tokens,
-                before_attempt=self.guard, reserve_fn=self.reserve, after_result=self.result)
+                before_attempt=self.guard, reserve_fn=self.reserve, after_result=self.result,
+                cache_prefix=prefix)
             self.commit_guard()
             return answer
         except CloudFallback as error:
@@ -756,20 +760,26 @@ class _CloudProvider:
 
 
 def _cloud_settings(cfg):
+    if not cfg:
+        # an unreadable config (load_config's {}) never auto-enables the paid
+        # route: a real config always carries mcs_login_id, so {} means unread
+        return cloud_policy.cloud_config({})[0]
     block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
     if isinstance(block, dict) and "mode" in block:
         return cloud_policy.cloud_config(cfg)[0]
     return cloud_policy.cloud_config(cfg, key_present=bool(cloud_policy.api_key(HOME)))[0]
 
 
-def _cloud_contract(cfg):
-    settings = _cloud_settings(cfg)
-    # Reuse key: the provider and its fixed request shape. The inference rule
-    # versions live in each caller's own contract (EXTRACT_VERSION, the context
-    # CONTRACT/plan/rule), so a rule change rebuilds every patient while code
-    # releases that leave the rules alone do not re-send or hide results.
-    return {"backend": "anthropic", "model": settings["model"],
-            "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": "low"})[:16]}
+# Reuse key: the provider and its fixed request shape. The inference rule
+# versions live in each caller's own contract (EXTRACT_VERSION, the context
+# CONTRACT/plan/rule), so a rule change rebuilds every patient while code
+# releases that leave the rules alone do not re-send or hide results.
+_CLOUD_CONTRACT = {"backend": "anthropic", "model": anthropic_client.MODEL,
+                   "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": "low"})[:16]}
+
+
+def _cloud_contract():
+    return dict(_CLOUD_CONTRACT)   # a copy: callers store it in metadata they may edit
 
 
 def _cloud_mode(ledger, cfg, route, project_id):
@@ -778,8 +788,9 @@ def _cloud_mode(ledger, cfg, route, project_id):
         return "off"
     mode = settings["mode"]
     if mode in ("on", "shadow") and (not cloud_policy.api_key(HOME)
-            or cloud_policy.block_reason(ledger, settings, route, project_id)):
-        return "off"
+            or cloud_policy.block_reason(ledger, settings, route, project_id)
+            or cloud_policy.budget_block_reason(ledger, settings)):
+        return "off"   # a reached cap keeps the rows in the local batches
     return mode
 
 
@@ -818,9 +829,10 @@ def _comparison_extract(source, document):
 def _cloud_compare(ledger, *, route, project_id, local_facts, cloud_facts=None,
                    rejected=None, held=None, repairs=None, unit=None, pending=False):
     """Record measured comparison units; absent measurements remain unknown.
-    A shadow unit is first written ``pending`` with its local commit (so it is
-    always in the denominator); its measured result later replaces that row
-    in one transaction, so each unit is counted exactly once."""
+    A shadow unit with a ``unit`` key is first written ``pending`` with its
+    local commit (so it is always in the denominator); its measured result
+    later replaces that row in one transaction, so each unit is counted
+    exactly once. Without a unit key the measurement is written as it is."""
     left = None if local_facts is None else set(local_facts)
     right = None if cloud_facts is None else set(cloud_facts)
     for value in (rejected, held, repairs):
@@ -3257,7 +3269,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True) ->
         if mode in ("on", "shadow"):
             r["_cloud_settings"] = _cloud_settings(cfg)
         if mode == "on":
-            r["_provider_contract"] = _cloud_contract(cfg)
+            r["_provider_contract"] = _cloud_contract()
             r["_target"] = (target[0], r["_provider_contract"]["model"])
         qc = _qc_feedback(ledger, r["qc_src"]) if r["qc_src"] else None
         if r["qc_src"] and qc is None:
@@ -3626,6 +3638,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             except CloudFallback as error:
                 if str(error) == "cloud_unit_changed":
                     provider.discard()
+                # a paid attempt that failed marks the row: if local cannot finish it
+                # now, _handle records the retry so the next pass does not re-send it
+                r["_cloud_failed"] = bool(provider.completed_reservations) and str(error) != "cloud_unit_changed"
                 # A posting is the provider unit: partial cloud chunks never seed local work.
                 def reset_local():
                     r.pop("_provider_contract", None)
@@ -3746,8 +3761,17 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 return
             transport = r.get("_transport")
             at = r.get("_transport_at")
+
+            def cloud_retry():
+                # the paid cloud attempt failed and local produced nothing: the
+                # retry backoff keeps the next pass from re-sending the same body
+                with _write_lock(per_write_lock) as held:
+                    if held and not _current(ledger, r["message_id"], r["content_hash"]):
+                        _fail(ledger, r, r["attempts"])
             if d is _DEFERRED:
                 deferred += 1
+                if r.get("_cloud_failed"):
+                    cloud_retry()
                 # answered then deferred (no time left to repair) is still
                 # a live endpoint; refused / 503 ran nothing, so no attempt
                 # is charged, but the outage must reach the breaker and
@@ -3769,6 +3793,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     # counted once per outage, not once per queued row.
                     _feed_breaker()
                     endpoint_down = True
+                    if r.get("_cloud_failed"):
+                        cloud_retry()
                     return
                 if transport == "transport":
                     # /v1/models answers but the call timed out or was
@@ -3782,6 +3808,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     _observe(transport, at)
                     if circuit_streak(ledger.db) > 0:
                         slow_deferred += 1
+                        if r.get("_cloud_failed"):
+                            cloud_retry()
                         return
                 if qc is not None:
                     # A QC-flagged row that failed its feedback re-

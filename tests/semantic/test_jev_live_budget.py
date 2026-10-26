@@ -37,7 +37,7 @@ def _used(home):
 
 
 @pytest.mark.parametrize("cap", [None, 20000])
-def test_manual_post_and_models_get_cannot_exceed_shared_500(home, monkeypatch, cap):
+def test_manual_post_and_models_get_cannot_exceed_shared_10000(home, monkeypatch, cap):
     if cap is not None:
         (home / "config.json").write_text(json.dumps({"semantic": {"daily_request_budget": cap}}))
     with closing(Ledger(str(home / "data" / "ledger.db"))) as db:
@@ -70,6 +70,16 @@ def test_explicit_mode_without_budget_preserves_zero_default(home, mode):
                          post_fn=lambda *a: pytest.fail("omitted explicit budget must not send")) as client:
         with pytest.raises(jev.JevError, match="budget_exceeded"):
             _evaluate(client)
+    assert _used(home) == 0
+
+
+def test_budget_above_the_config_range_is_rejected_by_live_tools_too(home):
+    (home / "config.json").write_text(json.dumps({"semantic": {
+        "daily_request_budget": jev.DAILY_REQUEST_BUDGET_MAX + 1}}))
+    with pytest.raises(jev.JevError, match="budget_exceeded"):
+        with jev.live_client("synthetic", operation="jev_value", root=str(home),
+                             post_fn=lambda *a: pytest.fail("out-of-range budget must not send")):
+            pass
     assert _used(home) == 0
 
 

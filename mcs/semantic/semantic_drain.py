@@ -569,11 +569,12 @@ def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
 
 def _prefiltered(ledger, mid) -> bool:
     """The message's current extraction is the local no-signal prefilter marker."""
-    from mcs_queries import current_extract_pred
+    from mcs_queries import current_extract_pred, json_or_null
     return ledger.db.execute(
         "SELECT 1 FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
         f"WHERE a.kind='extract_llm' AND a.message_id=? {current_extract_pred()} "
-        "AND json_extract(a.meta,'$.prefilter')='no_signal' LIMIT 1", (mid,)).fetchone() is not None
+        f"AND json_extract({json_or_null('a.meta')},'$.prefilter')='no_signal' LIMIT 1",
+        (mid,)).fetchone() is not None
 
 
 def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
@@ -1880,6 +1881,9 @@ RUN_LOCK_REACQUIRE_S = 660.0
 # stops early enough for a result to wait out a tick and still be
 # written before the job deadline.
 BACKLOG_COMMIT_RESERVE_S = 540.0
+# share of the daily Jev budget the backlog lane leaves to the realtime
+# lane, so a rules-version rebuild cannot stall new arrivals until JST midnight
+BACKLOG_BUDGET_RESERVE = 0.10
 # what a resumed pass may spend before its first (long-output) call
 _LONG_START_S = 60.0
 
@@ -2498,15 +2502,18 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 else:
                     out["deferred"] += 1
                 continue
+            lane_cap = scfg["daily_request_budget"]
+            if lane == "backlog":
+                lane_cap -= math.ceil(lane_cap * BACKLOG_BUDGET_RESERVE)
             if jev_client is not None:
                 # the daily cap binds at REQUEST granularity, not just job
                 # granularity — one job's claim-audit + loop-relation calls
                 # must not overshoot it mid-flight (§13.5)
-                remaining = (scfg["daily_request_budget"]
-                             - jev_usage_today(ledger))
+                remaining = lane_cap - jev_usage_today(ledger)
                 if remaining <= 0:
                     result["errors"].append(
-                        "semantic: daily_budget_exhausted")
+                        "semantic: backlog_budget_reserved" if lane == "backlog"
+                        else "semantic: daily_budget_exhausted")
                     out["budget_exhausted"] = True
                     break
                 jev_client.request_cap = (jev_client.requests_made
@@ -2521,7 +2528,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 reserve_fn = runtime.usage_reserver(
                     ledger, token, kind=KIND_USAGE, model=jev.JEV_MODEL,
                     project_id=job["project_id"], message_id=job["message_id"],
-                    daily_request_budget=scfg["daily_request_budget"])
+                    daily_request_budget=lane_cap)
             # only now has the job cleared every gate — the persisted
             # fairness counters count jobs that were actually served, not
             # selections lost to circuit/budget/pause breaks (T14)
@@ -2602,9 +2609,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     out["long_output_capped"] = \
                         out.get("long_output_capped", 0) + 1
                     status = "retry"
-            # durable per-attempt request delta — the daily budget ledger
-            # (jev_usage_today) is exact and covers claim-audit and loop
-            # calls, not just the primary assessment
+            # requests this attempt made — real clients already reserved one
+            # usage row per request before POST; the delta row below is only
+            # for fake clients without attempt hooks (jev_usage_today)
             used = (jev_client.requests_made - req0) \
                 if jev_client is not None else 0
             usage_after = getattr(jev_client, "usage_totals", {})

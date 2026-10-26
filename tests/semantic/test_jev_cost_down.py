@@ -9,6 +9,7 @@ import semantic_assessment
 import semantic_drain
 import semantic_jev as jev
 import semantic_runtime
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _FakeJev, _llm, _seeded
 from test_mcs_semantic import _cfg
 from semantic_testkit import v2_doc
@@ -19,7 +20,7 @@ from test_semantic_assessment import _bundle_and_facts, _EventJev, _ledger, SCFG
 def _prefilter(db, mid):
     content_hash = db.db.execute("SELECT content_hash FROM messages WHERE message_id=?", (mid,)).fetchone()[0]
     db.artifact_add("extract_llm", "{}", project_id=1, message_id=mid,
-                    meta={"hash": content_hash, "prefilter": "no_signal"})
+                    meta={"hash": content_hash, "prefilter": "no_signal", VERSION_KEY: CURRENT_VERSION})
 
 
 def test_a_prefiltered_post_is_not_assessed_by_jev(tmp_path):
@@ -37,6 +38,21 @@ def test_a_prefiltered_post_is_not_assessed_by_jev(tmp_path):
                 if "verdicts" in json.loads(a["content"])]
         assert rows and all(m.get("skipped") == "prefilter_no_signal" and m["jev_requests"] == 0 for m in rows)
         assert not any(set(call) & set(jev.PROPOSITIONS) for call in client.calls)
+    finally:
+        db.close()
+
+
+def test_prefilter_lookup_survives_an_unparseable_extract_meta_row(tmp_path):
+    db = _seeded(tmp_path)
+    try:
+        for mid in (1, 2):
+            db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                          "VALUES('extract_llm',1,?,'{}','{broken',?)", (mid, time.time()))
+        db.db.commit()
+        _prefilter(db, 1)
+        db.db.execute("ANALYZE")  # the plan that read the poison row first needed statistics
+        assert semantic_drain._prefiltered(db, 1)
+        assert not semantic_drain._prefiltered(db, 2)
     finally:
         db.close()
 

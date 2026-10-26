@@ -74,7 +74,7 @@ def test_removed_key_closes_auto_mode_at_side_effect_guard(tmp_path, monkeypatch
         db.close()
 
 
-def test_retry_cannot_exceed_hard_daily_500_cap(tmp_path, monkeypatch):
+def test_retry_cannot_exceed_hard_daily_10000_cap(tmp_path, monkeypatch):
     db = _seeded(tmp_path)
     posts = []
     monkeypatch.setattr(jev.time, "sleep", lambda _: None)

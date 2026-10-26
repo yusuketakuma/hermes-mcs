@@ -36,6 +36,8 @@ def _unpriced(key, value):
         return isinstance(value, str) and value in _UNPRICED_USAGE[key]
     if key == "server_tool_use":    # tools are never requested: every count must be zero
         return isinstance(value, dict) and all(type(v) is int and v == 0 for v in value.values())
+    if key == "output_tokens_details":    # a breakdown of output_tokens, priced there
+        return isinstance(value, dict) and all(type(v) is int and v >= 0 for v in value.values())
     return False
 
 
@@ -89,8 +91,10 @@ class AnthropicClient:
             deadline=deadline, allowed_endpoints=(ENDPOINT,), auth="anthropic")
 
     def complete(self, prompt, *, deadline, max_tokens=8192, before_attempt=None,
-                 reserve_fn=None, after_result=None, transport=None):
-        """Return the shared chat envelope; every attempted HTTP reports safe metadata."""
+                 reserve_fn=None, after_result=None, cache_prefix=None):
+        """Return the shared chat envelope; every attempted HTTP reports safe metadata.
+        ``cache_prefix`` (a fixed leading part of ``prompt``) is sent as its own
+        cached text block so repeated prompts share it."""
         if not isinstance(prompt, str) or not prompt:
             raise ValueError("prompt_invalid")
         if type(max_tokens) is not int or not 1 <= max_tokens <= MAX_TOKENS:
@@ -99,9 +103,16 @@ class AnthropicClient:
             raise ValueError("deadline_invalid")
         if not isinstance(self.api_key, str) or not self.api_key:
             raise AnthropicError("no_api_key")
+        content = prompt
+        if cache_prefix:
+            if not isinstance(cache_prefix, str) or not prompt.startswith(cache_prefix):
+                raise ValueError("cache_prefix_invalid")
+            content = [{"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}}]
+            if prompt[len(cache_prefix):]:
+                content.append({"type": "text", "text": prompt[len(cache_prefix):]})
         body = {"model": MODEL, "max_tokens": max_tokens, "system": SYSTEM,
                 "output_config": {"effort": "low"},
-                "messages": [{"role": "user", "content": prompt}]}
+                "messages": [{"role": "user", "content": content}]}
         last = AnthropicError("budget_exceeded", "deadline", retryable=True)
         for attempt in range(self.max_attempts):
             remaining = deadline - time.monotonic()
@@ -111,16 +122,21 @@ class AnthropicClient:
             if before_attempt:
                 before_attempt()
             reservation = reserve_fn(body, timeout) if reserve_fn else None
-            if before_attempt:
-                before_attempt()
-            # A rejected second guard deliberately leaves the reservation intact.
-            remaining = deadline - time.monotonic()
             meta = {"usage": None, "http_class": "transport", "request_id": None,
                     "model": MODEL, "request_fp": payload_hash(body), "error_kind": None}
+            unsent = {**meta, "http_class": "not_sent", "error_kind": "budget_exceeded"}
+            try:
+                if before_attempt:
+                    before_attempt()
+            except BaseException:
+                if after_result:   # the scope changed during the DB wait: settle as unsent
+                    after_result(reservation, unsent)
+                raise
+            remaining = deadline - time.monotonic()
             if remaining <= 0:
                 last = AnthropicError("budget_exceeded", "deadline", retryable=True)
                 if after_result:   # nothing was sent: settle the reservation as unsent
-                    after_result(reservation, {**meta, "http_class": "not_sent", "error_kind": last.kind})
+                    after_result(reservation, unsent)
                 raise last
             timeout = min(timeout, remaining)
             result = None
@@ -128,8 +144,6 @@ class AnthropicClient:
             try:
                 if self._post_fn:
                     status, headers, raw = self._post_fn(body, timeout)
-                elif transport:
-                    status, headers, raw = transport(self.request, "POST", body, timeout, deadline=deadline)
                 else:
                     status, headers, raw = self.request("POST", body, timeout, deadline=deadline)
                 if type(status) is not int or not 100 <= status <= 599:
@@ -160,10 +174,14 @@ class AnthropicClient:
                         text.append(block["text"])
                     elif block.get("type") not in ("thinking", "redacted_thinking"):
                         raise AnthropicError("protocol_error", "content_invalid")
-                if obj.get("stop_reason") != "end_turn" or not text:
+                stop = obj.get("stop_reason")
+                if stop not in ("end_turn", "max_tokens") or not text:
                     raise AnthropicError("contract_error", "incomplete_response")
-                # a validated answer stays usable past the HTTP deadline; the caller's commit guard decides
-                result = {"status": 200, "text": "".join(text), "finish_reason": "stop",
+                # a validated answer stays usable past the HTTP deadline; the caller's commit
+                # guard decides. An answer cut at max_tokens is a paid "length" stop the
+                # caller re-plans (split), not a failure the breaker counts.
+                result = {"status": 200, "text": "".join(text),
+                          "finish_reason": "length" if stop == "max_tokens" else "stop",
                           "model": MODEL, "usage": meta["usage"]}
             except OSError as error:
                 last = AnthropicError("timeout" if isinstance(error, TimeoutError) else "transport",
