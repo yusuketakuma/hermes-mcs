@@ -249,7 +249,7 @@ def test_lift_guard_drops_context_detail_keeps_body_detail(monkeypatch):
     out = extract_llm.llm_extract(body, context="[看護師] アムロジピン10mg 朝1回")
     kal, aml = out["meds"]
     assert kal["dose"] == "5mg" and kal["freq"] == "1日3回"
-    assert "dose" not in aml and "freq" not in aml
+    assert aml["dose"] is None and "freq" not in aml and aml["unverified"] is True
     assert aml["name"] == "アムロジピン"                     # med kept
     sym = out["symptoms"][0]
     assert "onset" not in sym and sym["duration"] == "続く"
