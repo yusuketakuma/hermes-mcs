@@ -13,6 +13,19 @@ from clinical_values import written_day
 _JST = timezone(timedelta(hours=9))
 _DATES = ("measured_on", "observed_on", "onset", "last_confirmed_on")
 _ACTION = re.compile(r"開始|継続|変更|中止|保留|再開")
+_PAIRED_DATE = re.compile(r"(?<!\d)(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?)(?!\d)\s*[（(]\s*(本日|今日|昨日|明日|翌日)\s*[）)]")
+_WEEKDAY_PAIR = re.compile(
+    r"(?<!\d)(\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?)(?!\d)\s*"
+    r"[（(]\s*([月火水木金土日])(?:曜(?:日)?)?\s*[）)]"
+)
+_RELATIVE_WEEKDAY_PAIR = re.compile(
+    r"(本日|今日|昨日|明日|翌日)\s*[（(]\s*([月火水木金土日])(?:曜(?:日)?)?\s*[）)]"
+)
+_WRITTEN_DATE_MARKER = re.compile(
+    r"(?<!\d)(?:\d{4}[-/年]\d{1,2}[-/月]\d{1,2}|\d{1,2}[/月]\d{1,2})日?(?!\d)"
+)
+_RELATIVE_DATE_MARKER = re.compile(r"本日|今日|昨日|明日|翌日")
+_WEEKDAY_TOKEN = re.compile(r"(?P<word>[月火水木金土日]曜(?:日)?)|[（(]\s*(?P<single>[月火水木金土日])\s*[）)]")
 _CORRECTION = re.compile(r"(?:投稿|記録)#(?P<mid>[1-9][0-9]*)の[「『](?P<quote>[^」』]{1,3000})[」』]を(?P<kind>訂正|撤回)")
 _PRIOR_CORRECTION = re.compile(r"前回の[「『](?P<quote>[^」』]{1,3000})[」』](?:を(?P<kind>訂正|撤回)|は誤り)")
 _CORRECTION_CUE = re.compile(r"訂正|撤回|誤り")
@@ -25,6 +38,70 @@ def _day(posted):
         return datetime.fromtimestamp(posted, _JST).date() if type(posted) in (int, float) else None
     except (ValueError, OverflowError, OSError):
         return None
+
+
+def paired_date_conflict(quote, posted_at_ts):
+    """Detect contradictory or unbound weekday and relative-date references."""
+    posted_day = _day(posted_at_ts)
+    # "翌日" refers to an earlier event, not necessarily to the posting day.
+    if "翌日" in quote:
+        return True
+    date_markers = list(_WRITTEN_DATE_MARKER.finditer(quote))
+    relative_markers = list(_RELATIVE_DATE_MARKER.finditer(quote))
+    paired_dates = list(_PAIRED_DATE.finditer(quote))
+    if date_markers and relative_markers and not (
+            len(date_markers) == len(relative_markers) == len(paired_dates) == 1
+            and date_markers[0].start() == paired_dates[0].start(1)
+            and relative_markers[0].start() == paired_dates[0].start(2)):
+        return True
+    for match in paired_dates:
+        absolute = written_day(match.group(1))
+        delta = -1 if match.group(2) == "昨日" else 1 if match.group(2) in ("明日", "翌日") else 0
+        try:
+            relative_day = posted_day + timedelta(days=delta) if posted_day is not None else None
+        except OverflowError:
+            relative_day = None
+        if absolute is None or absolute[0] != "ymd" or absolute[1] != relative_day:
+            return True
+    pairs = list(_WEEKDAY_PAIR.finditer(quote))
+    for match in pairs:
+        day = written_day(match.group(1))
+        if not day or day[0] != "ymd" or day[1].weekday() != "月火水木金土日".index(match.group(2)):
+            return True
+    relative_pairs = list(_RELATIVE_WEEKDAY_PAIR.finditer(quote))
+    if relative_pairs and (_WRITTEN_DATE_MARKER.search(quote)
+                           or len(_RELATIVE_DATE_MARKER.findall(quote)) != 1):
+        return True  # Another written time may refer to a different assertion.
+    for match in relative_pairs:
+        delta = -1 if match.group(1) == "昨日" else 1 if match.group(1) in ("明日", "翌日") else 0
+        try:
+            day = posted_day + timedelta(days=delta) if posted_day is not None else None
+        except OverflowError:
+            day = None
+        if day is None or day.weekday() != "月火水木金土日".index(match.group(2)):
+            return True
+    # An unpaired weekday alongside a date may refer to another event. A
+    # standalone recurring weekday does not by itself identify any event date.
+    if any(not any(token.start("word" if token.group("word") else "single") == pair.start(2)
+                   and token.end() <= pair.end() for pair in (*pairs, *relative_pairs))
+           for token in _WEEKDAY_TOKEN.finditer(quote)) and (
+                   _WRITTEN_DATE_MARKER.search(quote) or _RELATIVE_DATE_MARKER.search(quote)):
+        return True
+    return False
+
+
+def _dated_start_then_yesterday_continuation(quote, names, posted_day):
+    """Recognize only the written start and later ongoing use of one drug."""
+    if len(names) != 1 or posted_day is None:
+        return False
+    match = re.fullmatch(
+        r"本人は(?P<day>\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?)に"
+        + re.escape(names[0]) + r"を開始し[、,]昨日から服用しています[。]?", quote)
+    day = written_day(match.group("day")) if match else None
+    try:
+        return bool(day and day[0] == "ymd" and day[1] <= posted_day - timedelta(days=1))
+    except OverflowError:
+        return False
 
 
 def annotate(fact, body):
@@ -48,12 +125,21 @@ def annotate(fact, body):
     dates = {d[1] for d in dates if d and d[0] == "ymd"}
     posted_day = _day(fact.get("posted_at_ts"))
     relative = set(re.findall(r"本日|今日|昨日|明日|翌日", quote))
+    paired_conflict = paired_date_conflict(quote, fact.get("posted_at_ts"))
+    if (paired_conflict and any(d["key"] == "drug_name" for d in details)
+            and _dated_start_then_yesterday_continuation(quote, names, posted_day)):
+        paired_conflict = False
+    relative_overflow = False
     if not dates and posted_day is not None and len(relative) == 1:
         word = next(iter(relative))
-        dates.add(posted_day + timedelta(days=-1 if word == "昨日" else 1 if word in ("明日", "翌日") else 0))
-    if relative in ({"明日"}, {"翌日"}) and period == "current":
+        try:
+            if word != "翌日":
+                dates.add(posted_day + timedelta(days=-1 if word == "昨日" else 1 if word == "明日" else 0))
+        except OverflowError:
+            relative_overflow = True
+    if relative == {"明日"} and period == "current":
         period = "planned"
-    event_day = next(iter(dates)).isoformat() if len(dates) == 1 else None
+    event_day = next(iter(dates)).isoformat() if len(dates) == 1 and not paired_conflict else None
     action = actions[0].group() if len(actions) == 1 else None
     polarity = source_polarity(body, start, end, target_end=start + actions[0].end()) if action else None
     present, resolution, use_continuation = False, None, False
@@ -92,15 +178,17 @@ def annotate(fact, body):
                                               target_end=start + match.end()) is False
                     or pattern is _PRIOR_CORRECTION and re.match(r"(?:でした|です)[。！？!?\s]*$", quote[match.end():]) is not None)})
     reference_unknown = bool(re.search(r"同じ|同薬|その薬|これを", quote) and not any(quote.count(name) == 1 for name in names))
-    unknown = bool(corrections or re.search(r"不明|未確認|未確定|かもしれ|疑い|どちら", quote) or reference_unknown or (len(dates) > 1) or len(actions) > 1
+    unknown = bool(corrections or re.search(r"不明|未確認|未確定|かもしれ|疑い|どちら", quote) or reference_unknown or paired_conflict or relative_overflow or (len(dates) > 1) or len(actions) > 1
                    or _CORRECTION_CUE.search(quote) and not corrections)
     if fact.get("reported_subject") in ("patient", "family", "other") and fact["reported_subject"] != subject:
         unknown = True
     return {"subject": subject, "period": period, "event_day": event_day,
             "posted_day": posted_day.isoformat() if posted_day else None,
-            "as_of_day": posted_day.isoformat() if posted_day and current_cue and period == "current" else None,
+            "as_of_day": (posted_day.isoformat() if posted_day and current_cue and period == "current"
+                          and not (paired_conflict or relative_overflow) else None),
             "ongoing": ongoing,
-            "state_day": (posted_day.isoformat() if posted_day and current_cue and period == "current" and ongoing else event_day),
+            "state_day": (posted_day.isoformat() if posted_day and current_cue and period == "current" and ongoing
+                          and not (paired_conflict or relative_overflow) else event_day),
             "posted_at_ts": fact.get("posted_at_ts"), "action": action, "negated": polarity,
             "resolution": resolution, "symptom_state": symptom_state,
             "use_state": use_state, "current_cue": current_cue, "unknown": unknown, "corrections": corrections}
@@ -264,6 +352,7 @@ def project(facts, *, dependency_losses=()):
                 relation.update(type="unresolved", target_fact_id=None)
                 buckets[fact["id"]] = "unknown"
             relations.append(relation)
+    initial_buckets = dict(buckets)
     groups = {}
     for fact in facts:
         entity = _entity(fact)
@@ -274,6 +363,20 @@ def project(facts, *, dependency_losses=()):
     for rows in groups.values():
         values = {value for _, value in rows}
         if len(values) < 2:
+            continue
+        if any(initial_buckets[f["id"]] == "unknown" for f, _ in rows):
+            known = [(f, value) for f, value in rows if initial_buckets[f["id"]] != "unknown"]
+            by_known_day = {}
+            for fact, value in known:
+                temporal = fact.get("temporal") or {}
+                day = temporal.get("state_day") or temporal.get("event_day") or temporal.get("as_of_day")
+                if day is not None:
+                    by_known_day.setdefault(day, set()).add(value)
+            if any(len(values) > 1 for values in by_known_day.values()):
+                disputed.update(f["id"] for f, _ in known)
+            else:
+                for fact, _ in known:
+                    buckets[fact["id"]] = "unknown"
             continue
         days = [(f.get("temporal") or {}).get("state_day") or (f.get("temporal") or {}).get("event_day")
                 or (f.get("temporal") or {}).get("as_of_day") for f, _ in rows]
