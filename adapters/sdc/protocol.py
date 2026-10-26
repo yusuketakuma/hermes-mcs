@@ -205,14 +205,28 @@ RELEASE_APPLY_PATHS = {f'/v2/releases/apply/{path}': kind for path, kind in (
     ('operations/report', 'report'), ('operations/status', 'status'))}
 
 
+def _release_apply_body(kind, value, *, now_ms):
+    from . import release_apply_contract as apply, release_contract as release
+    if kind != 'accept':
+        return apply.validate_apply_control(kind, value, now_ms=now_ms)
+    value = release.input_record(value, 16384, plain_integers=False)
+    release.fields(value, ('control', 'receipt'))
+    control = apply.validate_apply_control('accept', value['control'], now_ms=now_ms)
+    receipt = apply.validate_apply_local_receipt(value['receipt'], now_ms=now_ms)
+    apply.conflict(control['accept_id'] == receipt['change_accept_id']
+        and control['local_change_receipt_hash'] == receipt['receipt_hash'] == apply.hash_apply_local_receipt(receipt)
+        and all(control[k] == receipt[k] for k in ('preview_id', 'change_consent_id', 'change_binding_hash',
+            'local_change_receipt_id', 'preview_payload_hash')))
+    return dict(control=control, receipt=receipt)
+
+
 def sign_release_apply(config, path, raw, state, key, *, now, nonce):
     """Sign only the eight closed device controls, never registration or admin mutations."""
-    from .release_apply_contract import validate_apply_control
     try:
         if (type(path) is not str or path not in RELEASE_APPLY_PATHS or type(raw) is not bytes
                 or type(now) not in (int, float) or not math.isfinite(now)):
             raise ValueError
-        validate_apply_control(RELEASE_APPLY_PATHS[path], raw, now_ms=int(now * 1000))
+        _release_apply_body(RELEASE_APPLY_PATHS[path], raw, now_ms=int(now * 1000))
         return _sign_support_request(config, path, raw, state, key, now=now, nonce=nonce)
     except (ValueError, TypeError, KeyError, OverflowError):
         raise ValueError('SDC_REQUEST_INVALID') from None

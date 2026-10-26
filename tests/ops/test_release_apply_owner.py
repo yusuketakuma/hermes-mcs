@@ -1181,7 +1181,7 @@ def test_fixed_apply_controls_use_fresh_device_hmac_and_immutable_request_bytes(
         bootstrap={'release_endpoint': {'origin': 'https://synthetic.invalid', 'audience': APPLY['expected']['audience'], 'environment': scope['environment']}},
         binding={'synthetic': True}, scope=scope,
         identity={key: APPLY['expected'][key] for key in ('claim_id', 'device_id', 'key_id')}, secret='a1' * 32)
-    body = copy.deepcopy(APPLY['controls'][kind])
+    body = copy.deepcopy((dict(control=APPLY['controls']['accept'], receipt=APPLY['localReceipt']) if kind == 'accept' else APPLY['controls'][kind]))
     first = release_apply_owner._prepare_apply_control(current, kind, body, now_ms=now, deadline=time.monotonic() + 10)
     second = release_apply_owner._prepare_apply_control(current, kind, body, now_ms=now, deadline=time.monotonic() + 10)
     assert protocol.RELEASE_APPLY_PATHS[first.path] == kind
@@ -1194,7 +1194,14 @@ def test_fixed_apply_controls_use_fresh_device_hmac_and_immutable_request_bytes(
     body['synthetic_changed_after_prepare'] = True
     assert 'synthetic_changed_after_prepare' not in json.loads(first.body)
     assert current.secret not in repr(current) + repr(first)
-    assert contract.validate_apply_control(kind, first.body, now_ms=now)
+    assert protocol._release_apply_body(kind, first.body, now_ms=now)
+    if kind == 'accept':
+        with pytest.raises(ValueError):
+            protocol.sign_release_apply(current.bootstrap['release_endpoint'], first.path, canonical(APPLY['controls']['accept']).encode('ascii'), current.identity, current.secret, now=now / 1000, nonce='b2' * 16)
+        invalid = json.loads(first.body)
+        invalid['receipt']['receipt_hash'] = contract.ZERO
+        with pytest.raises(ValueError):
+            protocol.sign_release_apply(current.bootstrap['release_endpoint'], first.path, canonical(invalid).encode('ascii'), current.identity, current.secret, now=now / 1000, nonce='b2' * 16)
     for suffix in ('/', '?other=1'):
         with pytest.raises(ValueError):
             protocol.sign_release_apply(current.bootstrap['release_endpoint'], first.path + suffix, first.body,
@@ -1236,6 +1243,7 @@ def test_native_plan_freezes_independent_report_after_real_tty_signature_and_art
     from adapters.sdc.support_contract import canonical
     from test_sdc_provision import NOW
     from test_sdc_provision_profiles import install
+    from test_sdc_support_state import preview as support_preview
     from test_sdc_release_state import APPLY, VECTORS
     repo, home, platform, supplied = native_product
     install(registered, 'support')
@@ -1245,6 +1253,10 @@ def test_native_plan_freezes_independent_report_after_real_tty_signature_and_art
     supplied['trust']['environment'] = snapshot['bundle']['environment']
     supplied['state'].update({key: snapshot['bundle'][key] for key in ('tenant', 'installation', 'environment', 'realm_epoch')})
     supplied['state']['device_id'] = identity['device_id']
+    parent_consent = support_preview(now=NOW,
+        **{key: snapshot['bundle'][key] for key in ('tenant', 'installation', 'environment', 'realm_epoch')},
+        **{key: identity[key] for key in ('claim_id', 'device_id', 'key_id')},
+        audience='sdc:support', case_id='00000000-0000-4000-8000-000000000009')
     signing = tmp_path / 'synthetic-signing'
     signing.mkdir(mode=0o700)
     private = signing / 'test-only-key.pem'
@@ -1254,6 +1266,12 @@ def test_native_plan_freezes_independent_report_after_real_tty_signature_and_art
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
     public = subprocess.check_output([signatures.OPENSSL, 'pkey', '-in', str(private), '-pubout', '-outform', 'DER'], stderr=subprocess.DEVNULL, timeout=10)
     b64 = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b'=').decode('ascii')  # noqa: E731
+    operator_private = signing / 'test-only-operator.pem'
+    operator_private.touch(mode=0o600)
+    subprocess.run([signatures.OPENSSL, 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:3072', '-out', str(operator_private)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
+    operator_public = subprocess.check_output([signatures.OPENSSL, 'pkey', '-in', str(operator_private), '-pubout', '-outform', 'DER'], stderr=subprocess.DEVNULL, timeout=10)
+    operation_pins = [dict(kid='synthetic-operator', spki=b64(operator_public), purposes=APPLY['pins'][0]['purposes'], not_before=NOW - 1000, expires_at=NOW + 600000)]
     spki = b64(public)
     kid = signatures.release_key_fingerprint(spki)
     supplied['trust']['release_keys'] = [dict(kid=kid, spki=spki, not_before=NOW - 1000, expires_at=NOW + 600000)]
@@ -1289,8 +1307,8 @@ def test_native_plan_freezes_independent_report_after_real_tty_signature_and_art
         input=message, capture_output=True, check=True, timeout=10)
     envelope = dict(alg='PS256', kid=kid, purpose='release-attestation', payload=b64(payload), signature=b64(result.stdout))
     # The child opens these existing synthetic profile files, never a real Keychain account.
-    packet = dict(supplied=supplied, platform=platform, now=NOW, envelope=envelope, expected_release_id=attestation['release_id'], failure=failure,
-        expected_target_source_sha256=source.digest(target_manifest), pins=APPLY['pins'],
+    packet = dict(supplied=supplied, platform=platform, now=NOW, envelope=envelope, expected_release_id=attestation['release_id'], failure=failure, parent_consent=parent_consent,
+        expected_target_source_sha256=source.digest(target_manifest), pins=operation_pins, operator_private=str(operator_private),
         registration_pins=json.loads((Path(__file__).resolve().parents[2] / 'adapters/sdc/contracts/releases/registration-vectors.json').read_text())['pins'])
     program = r'''import errno,hashlib,hmac,json,os,pathlib,pty,select,signal,sys,time
 repo,home,monitor_root,bundle=map(pathlib.Path,sys.argv[1:5])
@@ -1375,6 +1393,70 @@ if pid==0:
    assert release_state.status(control)['state']['unresolved'] is None
    assert not owner._EFFECT_CAPS
    assert not (home/'data/update.lock').exists() and not (home/'data/run.lock').exists()
+   from adapters.sdc import support_client,support_state
+   endpoint={k:support_snapshot['bundle'][k] for k in ('origin','audience','environment')}
+   binding=dict(root_fingerprint=monitor.root_fingerprint(),monitor_endpoint_hash=monitor.enrollment_binding()['endpoint_hash'],support_endpoint_hash=monitor._fingerprint(endpoint),pins_sha256=support_client._hash(support_snapshot['bundle']['pins']),secret_sha256=hashlib.sha256(bytes.fromhex('a'*64)).hexdigest(),key_id=identity['key_id'],profile=support_client._profile_binding(support_snapshot,now_ms=packet['now']))
+   before=support_state.prepare(monitor,binding_supplier=lambda:binding,now_ms=packet['now'])
+   support_state.confirm_consent(monitor,packet['parent_consent'],expected_owner_generation=before['owner_generation'],expected_binding=binding,binding_supplier=lambda:binding,now_ms=packet['now'],confirm_human=True)
+   case=owner._capture_release_case(control,monitor,runtime_home=home,repository=repo,deadline=time.monotonic()+30)
+   for k in ('case_id','case_epoch','local_consent_epoch','device_epoch','policy_epoch'):
+    assert case['expected'][k]==packet['parent_consent'][k]
+   assert case['expected']['plan_hash']==contract.hash_release_plan(body['plan'])
+   from adapters.sdc import release_apply_contract as apply
+   from adapters.sdc.support_contract import canonical
+   import base64,copy,subprocess
+   operation_id='00000000-0000-4000-8000-000000000051'
+   change,preview_request=owner._begin_native_change(control,monitor,runtime_home=home,repository=repo,operation_id=operation_id,deadline=time.monotonic()+30)
+   assert owner._read_change(control)==change
+   assert change['preview_raw'].encode()==preview_request.body
+   assert change['expected']['case_epoch']==packet['parent_consent']['case_epoch']
+   assert change['local_receipt'] is None and change['accept_raw'] is None
+   def signed_preview(*,foreign_plan=False):
+    now=packet['now'];common={k:change['expected'][k] for k in apply.COMMON if k!='product'};common['product']='hermes-mcs'
+    intent=dict(schema_version=apply.VERSIONS['intent'],**common,operation_id=operation_id,type='release.apply',purpose_code=case['purpose_code'],requested_by='a'*64,plan_report_id=body['report_id'],plan_report_hash=record['body_sha256'],window=body['plan']['window'],canary_stage='self_test',completion_timeout_ms=apply.COMPLETION_TIMEOUT_MS,issued_at=now,not_before=now,expires_at=body['plan']['expires_at'])
+    if foreign_plan:intent['plan_report_hash']='f'*64
+    intent_hash=apply.hash_apply_intent(intent)
+    approval=dict(schema_version=apply.VERSIONS['approval'],**common,approval_id='00000000-0000-4000-8000-000000000052',intent_hash=intent_hash,approved_by='b'*64,approval_kind='individual',issued_at=now,not_before=now,expires_at=intent['expires_at'],approval_hash=apply.ZERO)
+    approval['approval_hash']=apply.hash_apply_approval(approval)
+    preview=dict(schema_version=apply.VERSIONS['preview'],**common,operation_id=operation_id,preview_id=change['expected']['preview_id'],intent=intent,approval=approval,intent_hash=intent_hash,change_consent_id='00000000-0000-4000-8000-000000000053',change_binding_hash=apply.ZERO,issued_at=now,not_before=now,expires_at=intent['expires_at'])
+    preview['change_binding_hash']=apply.hash_apply_change_binding(preview)
+    raw=canonical(preview).encode('ascii');purpose=apply.PURPOSES[0];kid='synthetic-operator'
+    signature=subprocess.check_output(['/usr/bin/openssl','dgst','-sha256','-sign',packet['operator_private'],'-sigopt','rsa_padding_mode:pss','-sigopt','rsa_pss_saltlen:32','-sigopt','rsa_mgf1_md:sha256'],input=b'SDC-SIGNED-v1\n'+purpose.encode()+b'\n'+kid.encode()+b'\n'+raw,stderr=subprocess.DEVNULL,timeout=10)
+    b64=lambda raw:base64.urlsafe_b64encode(raw).rstrip(b'=').decode('ascii')
+    return dict(schema_version='sdc.release.apply-preview-response.v1',intent=intent,approval=approval,preview=dict(alg='PS256',kid=kid,purpose=purpose,payload=b64(raw),signature=b64(signature)))
+   response=signed_preview()
+   invalid=copy.deepcopy(response);invalid['preview']['signature']=invalid['preview']['signature'][::-1]
+   foreign=signed_preview(foreign_plan=True)
+   outer=copy.deepcopy(response);outer['approval']['approved_by']='c'*64
+   for denied in (invalid,foreign,outer):
+    try:owner._consent_native_change(control,monitor,runtime_home=home,repository=repo,operation_id=operation_id,preview_response=canonical(denied,max_bytes=16384).encode('ascii'),deadline=time.monotonic()+30)
+    except owner.ReleaseApplyError:pass
+    else:raise AssertionError('invalid preview accepted')
+    assert owner._read_change(control)==change
+   saved,accept_request=owner._consent_native_change(control,monitor,runtime_home=home,repository=repo,operation_id=operation_id,preview_response=json.dumps(response,ensure_ascii=True).encode('ascii'),deadline=time.monotonic()+30)
+   assert saved['accept_raw'].encode()==accept_request.body
+   receipt=saved['local_receipt'];accept_body=json.loads(accept_request.body)
+   assert accept_body['receipt']==receipt and accept_body['control']['accept_id']==receipt['change_accept_id']
+   assert receipt['receipt_hash']==apply.hash_apply_local_receipt(receipt)
+   assert saved['reason_sha256']==hashlib.sha256(b'synthetic independent plan').hexdigest()
+   ack=dict(schema_version=apply.VERSIONS['acceptance'],accept_id=receipt['change_accept_id'],**{k:receipt[k] for k in ('preview_id','operation_id','change_consent_id','change_binding_hash','local_change_receipt_id','preview_payload_hash')},local_change_receipt_hash=receipt['receipt_hash'],state='accepted',accepted_at=packet['now'],expires_at=receipt['expires_at'])
+   bad_ack={**ack,'local_change_receipt_hash':'e'*64}
+   try:owner._accept_native_change(control,monitor,runtime_home=home,repository=repo,operation_id=operation_id,acceptance_response=canonical(dict(schema_version='sdc.release.apply-accept-response.v1',acceptance=bad_ack)).encode('ascii'),deadline=time.monotonic()+30)
+   except owner.ReleaseApplyError:pass
+   else:raise AssertionError('foreign ACK accepted')
+   accepted=owner._accept_native_change(control,monitor,runtime_home=home,repository=repo,operation_id=operation_id,acceptance_response=canonical(dict(schema_version='sdc.release.apply-accept-response.v1',acceptance=ack)).encode('ascii'),deadline=time.monotonic()+30)
+   assert accepted['acceptance']==ack
+   state_before=release_state.status(control)
+   with monitor.lock():
+    cancelled=owner._cancel_native_change(control,runtime_home=home,operation_id=operation_id)
+    assert cancelled['revoked']
+    assert owner._cancel_native_change(control,runtime_home=home,operation_id=operation_id)==cancelled
+   assert release_state.status(control)==state_before
+   assert not owner._EFFECT_CAPS
+   support_state.disable(monitor,now_ms=packet['now'])
+   try:owner._capture_release_case(control,monitor,runtime_home=home,repository=repo,deadline=time.monotonic()+30)
+   except owner.ReleaseApplyError:pass
+   else:raise AssertionError('disabled parent case accepted')
    changed=dict(record);changed['target_source_sha256']='0'*64
    control.write('release-plan.json',changed)
    try:owner._read_frozen_plan(control)
@@ -1383,7 +1465,7 @@ if pid==0:
  except BaseException:
   import traceback;traceback.print_exc();os._exit(4)
  os._exit(0)
-reaped=False;received=b'';answered=False;reason_sent=False
+reaped=False;received=b'';answered=0;reason_sent=0
 try:
  until=time.monotonic()+180
  while time.monotonic()<until:
@@ -1391,10 +1473,10 @@ try:
    try:received+=os.read(master,65536)
    except OSError as error:
     if error.errno!=errno.EIO:raise
-  if not answered and '番号: '.encode() in received:
-   answered=True;os.write(master,b'1\n')
-  if not reason_sent and '理由'.encode() in received:
-   reason_sent=True;os.write(master,b'synthetic independent plan\n')
+  if received.count('番号: '.encode())>answered:
+   answered+=1;os.write(master,b'1\n')
+  if received.count('半角の理由'.encode())>reason_sent:
+   reason_sent+=1;os.write(master,b'synthetic independent plan\n')
   child,status=os.waitpid(pid,os.WNOHANG)
   if child:
    reaped=True

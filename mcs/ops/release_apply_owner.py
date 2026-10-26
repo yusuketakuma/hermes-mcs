@@ -34,8 +34,15 @@ class _EffectCapability:
 def _tty_planning_confirmation(installation, *, deadline):
     """Read the controlling terminal directly; stdin and caller booleans cannot approve."""
     from adapters.sdc import release_contract
-    if (not release_contract.slug(installation) or type(deadline) not in (int, float)
-            or not math.isfinite(deadline) or time.monotonic() >= deadline):
+    if not release_contract.slug(installation):
+        raise ReleaseApplyError('CONSENT_HOLD')
+    return _tty_confirmation('端末 ' + installation + ' の更新計画を確認します。\n'
+        '中央の対象版と承認状態を取得し、現在の実装・容量・既存backupを検査します。\n'
+        '1: 計画の確認を許可する\n2: 中止する（既定）\n番号: ', deadline=deadline)
+
+
+def _tty_confirmation(prompt, *, deadline):
+    if (type(deadline) not in (int, float) or not math.isfinite(deadline) or time.monotonic() >= deadline):
         raise ReleaseApplyError('CONSENT_HOLD')
     descriptor = None
     try:
@@ -55,9 +62,7 @@ def _tty_planning_confirmation(installation, *, deadline):
                     return bytes(data)
                 data.extend(part)
             raise ReleaseApplyError('CONSENT_HOLD')
-        os.write(descriptor, ('端末 ' + installation + ' の更新計画を確認します。\n'
-            '中央の対象版と承認状態を取得し、現在の実装・容量・既存backupを検査します。\n'
-            '1: 計画の確認を許可する\n2: 中止する（既定）\n番号: ').encode())
+        os.write(descriptor, prompt.encode())
         if line() != b'1':
             return None
         os.write(descriptor, '秘密や個人情報を含まない半角の理由（1〜128文字）: '.encode())
@@ -393,7 +398,7 @@ def _prepare_apply_control(current, kind, body, *, now_ms, deadline):
                 or time.monotonic() >= deadline):
             raise ValueError
         path = next(path for path, value in protocol.RELEASE_APPLY_PATHS.items() if value == kind)
-        value = release_apply_contract.validate_apply_control(kind, body, now_ms=now_ms)
+        value = protocol._release_apply_body(kind, body, now_ms=now_ms)
         if kind in ('plan_report', 'grant'):
             for key in (*release_contract.EXPECTED_FIELDS, 'tenant', 'installation', 'device_id', 'realm_epoch'):
                 if value['state'][key] != current.scope[key]:
@@ -521,6 +526,272 @@ def _prepare_native_plan(control, monitor, *, runtime_home, repository, case_id,
             return record, prepared
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, mcs_update.UpdateError):
         raise ReleaseApplyError('PLAN_HOLD') from None
+
+
+def _capture_release_case(control, monitor, *, runtime_home, repository, deadline):
+    with control.release_authority_lock():
+        return _case_under_authority(control, monitor, runtime_home=runtime_home, repository=repository, deadline=deadline)
+
+
+def _case_under_authority(control, monitor, *, runtime_home, repository, deadline):
+    """Read independent R4 case epochs while the caller owns the actual same-thread authority lock."""
+    from adapters.sdc import provision, release_apply_contract as apply, release_contract as release
+    from adapters.sdc import release_state, support_client, support_state
+    captured = {}
+    try:
+        if control._release_authority_fd is None or control._release_authority_thread != threading.get_ident():
+            raise ValueError
+        now = int(time.time() * 1000)
+        def binding_supplier():
+            current = _load_release_currentness(control, monitor, runtime_home=runtime_home, now_ms=now, deadline=deadline)
+            profile = provision.profile_snapshot(monitor, profile='support', now_ms=now)
+            bundle = profile['bundle']
+            endpoint = {key: bundle[key] for key in ('origin', 'audience', 'environment')}
+            captured['current'] = current
+            return dict(root_fingerprint=current.binding['monitor_binding']['root_fingerprint'],
+                monitor_endpoint_hash=current.binding['monitor_binding']['endpoint_hash'],
+                support_endpoint_hash=monitor._fingerprint(endpoint), pins_sha256=support_client._hash(bundle['pins']),
+                secret_sha256=hashlib.sha256(bytes.fromhex(current.secret)).hexdigest(), key_id=current.identity['key_id'],
+                profile=support_client._profile_binding(profile, now_ms=now))
+        # R4 owns support-state -> tick order; never acquire support-state under an already-held tick.
+        support = support_state.prepare(monitor, binding_supplier=binding_supplier, now_ms=now)
+        if not support['enabled'] or support['receipt'] is None:
+            raise ValueError
+        current = captured['current']
+        record = _read_frozen_plan(control)
+        if (record is None or record['binding'] != current.binding
+                or record['repo_fingerprint'] != _repository_fingerprint(repository)):
+            raise ValueError
+        body = json.loads(record['raw'])
+        plan, consent = body['plan'], support['receipt']['preview']
+        if (now >= plan['expires_at'] or consent['case_id'] != body['case_id']
+                or consent['key_id'] != current.identity['key_id']
+                or consent['device_epoch'] != current.binding['device_epoch']):
+            raise ValueError
+        for key in ('tenant', 'installation', 'device_id', 'environment', 'realm_epoch'):
+            if consent[key] != current.scope[key]:
+                raise ValueError
+        with control.release_owner_lock():
+            owner = release_state._read(control)
+            if owner['state'] != body['state'] or owner['state']['unresolved'] is not None:
+                raise ValueError
+        expected = dict(current.scope)
+        expected.update({key: consent[key] for key in ('case_id', 'policy_epoch', 'device_epoch', 'case_epoch', 'local_consent_epoch')})
+        expected.update({key: plan[key] for key in ('trust_digest', 'root_version', 'metadata_epoch', 'release_id',
+            'manifest_digest', 'target_code_seq', 'plan_id')}, plan_hash=release.hash_release_plan(plan),
+            capability_revision=apply.CAPABILITY_REVISION, consent_revision=apply.CONSENT_REVISION)
+        if not set(apply.EXPECTED_FIELDS) <= set(expected) or time.monotonic() >= deadline:
+            raise ValueError
+        return {'current': current, 'record': record, 'expected': expected,
+            'support_sha256': monitor._fingerprint(support), 'purpose_code': consent['purpose_code'],
+            'expires_at': min(plan['expires_at'], consent['consent_expires_at'])}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        raise ReleaseApplyError('CASE_HOLD') from None
+
+
+def _read_change(control):
+    from adapters.sdc import release_contract as release
+    try:
+        value = control.read('release-change.json')
+        if value is None:
+            return None
+        release.fields(value, ('schema_version', 'root_fingerprint', 'repo_fingerprint', 'binding',
+            'plan_record_sha256', 'support_sha256', 'expected', 'operation_id', 'preview_raw', 'preview',
+            'local_receipt', 'accept_raw', 'acceptance', 'reason_sha256', 'revoked', 'record_sha256'))
+        if (value['schema_version'] != 'mcs.release-change.v1'
+                or value['root_fingerprint'] != control.root_fingerprint()
+                or not all(release.hex64(value[key]) for key in ('root_fingerprint', 'repo_fingerprint',
+                    'plan_record_sha256', 'support_sha256', 'record_sha256'))
+                or not release.uuid(value['operation_id']) or type(value['revoked']) is not bool
+                or control._fingerprint({key: item for key, item in value.items() if key != 'record_sha256'}) != value['record_sha256']):
+            raise ValueError
+        return value
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        raise ReleaseApplyError('CHANGE_HOLD') from None
+
+
+def _save_change(control, value):
+    if control._release_authority_fd is None or control._release_authority_thread != threading.get_ident():
+        raise ReleaseApplyError('CHANGE_HOLD')
+    value = json.loads(json.dumps(value, ensure_ascii=True, allow_nan=False))
+    value.pop('record_sha256', None)
+    value['record_sha256'] = control._fingerprint(value)
+    try:
+        control.write('release-change.json', value)
+        if _read_change(control) != value:
+            raise ReleaseApplyError('CHANGE_HOLD')
+    except BaseException:
+        control._release_owner_uncertain = True
+        raise
+    return value
+
+
+def _begin_native_change(control, monitor, *, runtime_home, repository, operation_id, deadline):
+    """Fix the preview request and its independent case/plan expectations before HTTP."""
+    from adapters.sdc import release_contract as release, release_apply_contract as apply
+    try:
+        if not release.uuid(operation_id):
+            raise ValueError
+        with control.release_authority_lock():
+            context = _case_under_authority(control, monitor, runtime_home=runtime_home, repository=repository, deadline=deadline)
+            previous = _read_change(control)
+            if previous is not None and (not previous['revoked'] or previous['operation_id'] == operation_id):
+                raise ValueError
+            now = int(time.time() * 1000)
+            request = dict(schema_version=apply.VERSIONS['control'], preview_id=str(uuid.uuid4()), operation_id=operation_id)
+            prepared = _prepare_apply_control(context['current'], 'preview', request, now_ms=now, deadline=deadline)
+            expected = {**context['expected'], 'operation_id': operation_id, 'preview_id': request['preview_id']}
+            record = dict(schema_version='mcs.release-change.v1', root_fingerprint=control.root_fingerprint(),
+                repo_fingerprint=context['record']['repo_fingerprint'], binding=context['current'].binding,
+                plan_record_sha256=context['record']['record_sha256'], support_sha256=context['support_sha256'],
+                expected=expected, operation_id=operation_id, preview_raw=prepared.body.decode('ascii'),
+                preview=None, local_receipt=None, accept_raw=None, acceptance=None, reason_sha256=None, revoked=False)
+            record = _save_change(control, record)
+            if time.monotonic() >= deadline:
+                raise ValueError
+            return record, prepared
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        raise ReleaseApplyError('CHANGE_HOLD') from None
+
+
+def _current_change(control, monitor, *, runtime_home, repository, operation_id, deadline):
+    context = _case_under_authority(control, monitor, runtime_home=runtime_home, repository=repository, deadline=deadline)
+    record = _read_change(control)
+    if (record is None or record['revoked'] or record['operation_id'] != operation_id
+            or record['binding'] != context['current'].binding
+            or record['plan_record_sha256'] != context['record']['record_sha256']
+            or record['repo_fingerprint'] != context['record']['repo_fingerprint']
+            or record['support_sha256'] != context['support_sha256']
+            or {key: record['expected'][key] for key in context['expected']} != context['expected']):
+        raise ReleaseApplyError('CHANGE_HOLD')
+    return context, record
+
+
+def _apply_response(raw, kind, names):
+    from adapters.sdc import release_contract
+    from adapters.sdc.protocol import strict_json
+    if type(raw) is not bytes or not 0 < len(raw) <= 16384 or not raw.isascii():
+        raise ReleaseApplyError('CHANGE_HOLD')
+    value = strict_json(raw)
+    release_contract.fields(value, ('schema_version', *names))
+    if value['schema_version'] != 'sdc.release.apply-' + kind + '-response.v1':
+        raise ReleaseApplyError('CHANGE_HOLD')
+    return value
+
+
+def _consent_native_change(control, monitor, *, runtime_home, repository, operation_id, preview_response, deadline):
+    """Verify independent approval, ask the real TTY, then freeze the receipt before accept HTTP."""
+    from adapters.sdc import release_apply_contract as apply
+    from adapters.sdc.support_contract import canonical
+    from sdc_support_signatures import verify_apply_envelope
+    try:
+        with control.release_authority_lock():
+            context, before = _current_change(control, monitor, runtime_home=runtime_home, repository=repository,
+                operation_id=operation_id, deadline=deadline)
+            if before['preview'] is not None or before['local_receipt'] is not None:
+                raise ValueError
+        now = int(time.time() * 1000)
+        response = _apply_response(preview_response, 'preview', ('intent', 'approval', 'preview'))
+        preview = verify_apply_envelope(canonical(response['preview'], max_bytes=16384).encode('ascii'),
+            purpose=apply.PURPOSES[0], pins=context['current'].bootstrap['operation_pins'],
+            expected=before['expected'], now_ms=now)
+        plan = json.loads(context['record']['raw'])
+        if (response['intent'] != preview['intent'] or response['approval'] != preview['approval']
+                or preview['intent']['plan_report_id'] != plan['report_id']
+                or preview['intent']['plan_report_hash'] != context['record']['body_sha256']
+                or preview['intent']['purpose_code'] != context['purpose_code']):
+            raise ValueError
+        window = preview['intent']['window']
+        expires = min(preview['expires_at'], context['expires_at'], window['ends_at'])
+        if now >= expires or time.monotonic() >= deadline:
+            raise ValueError
+        prompt = ('端末 ' + preview['installation'] + ' の個別更新を確認します。\n'
+            '対象版: ' + preview['release_id'] + '（順序 ' + str(preview['target_code_seq']) + '）\n'
+            '実施窓（Unixミリ秒）: ' + str(window['starts_at']) + '〜' + str(window['ends_at']) + '\n'
+            '署名済み版の取込み、既存backup、処理の一時停止、更新と再起動を実行します。\n'
+            '中央の個別承認を検証済みです。端末での変更同意を記録します。\n'
+            '1: この個別更新に同意する\n2: 中止する（既定）\n番号: ')
+        reason = _tty_confirmation(prompt, deadline=min(deadline, time.monotonic() + (expires - now) / 1000))
+        if reason is None:
+            _cancel_native_change(control, runtime_home=runtime_home, operation_id=operation_id)
+            return None
+        with control.release_authority_lock():
+            after_context, after = _current_change(control, monitor, runtime_home=runtime_home, repository=repository,
+                operation_id=operation_id, deadline=deadline)
+            now = int(time.time() * 1000)
+            if after != before or now >= expires or time.monotonic() >= deadline:
+                raise ValueError
+            local = dict(schema_version=apply.VERSIONS['receipt'], **{key: preview[key] for key in apply.COMMON},
+                **{key: preview[key] for key in ('operation_id', 'intent_hash', 'change_consent_id', 'change_binding_hash', 'preview_id')},
+                approval_hash=preview['approval']['approval_hash'], preview_payload_hash=apply.hash_apply_preview(preview),
+                local_change_receipt_id=str(uuid.uuid4()), change_accept_id=str(uuid.uuid4()),
+                confirmed_at=now, expires_at=min(preview['intent']['expires_at'], preview['approval']['expires_at'],
+                    after_context['expires_at']), receipt_hash=apply.ZERO)
+            local['receipt_hash'] = apply.hash_apply_local_receipt(local)
+            apply.validate_apply_local_receipt(local, now_ms=now)
+            accept = dict(schema_version=apply.VERSIONS['control'], accept_id=local['change_accept_id'],
+                **{key: local[key] for key in ('preview_id', 'change_consent_id', 'change_binding_hash',
+                    'local_change_receipt_id', 'preview_payload_hash')}, local_change_receipt_hash=local['receipt_hash'])
+            prepared = _prepare_apply_control(after_context['current'], 'accept', dict(control=accept, receipt=local),
+                now_ms=now, deadline=deadline)
+            after.update(preview=response, local_receipt=local, reason_sha256=reason, accept_raw=prepared.body.decode('ascii'))
+            saved = _save_change(control, after)
+            if time.monotonic() >= deadline:
+                raise ValueError
+            return saved, prepared
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
+        raise ReleaseApplyError('CHANGE_HOLD') from None
+
+
+def _accept_native_change(control, monitor, *, runtime_home, repository, operation_id, acceptance_response, deadline):
+    from adapters.sdc import release_apply_contract as apply
+    from adapters.sdc.support_contract import canonical
+    from sdc_support_signatures import verify_apply_envelope
+    try:
+        response = _apply_response(acceptance_response, 'accept', ('acceptance',))
+        with control.release_authority_lock():
+            context, before = _current_change(control, monitor, runtime_home=runtime_home, repository=repository,
+                operation_id=operation_id, deadline=deadline)
+            if before['acceptance'] is not None or before['preview'] is None:
+                raise ValueError
+        payload = verify_apply_envelope(canonical(before['preview']['preview'], max_bytes=16384).encode('ascii'),
+            purpose=apply.PURPOSES[0], pins=context['current'].bootstrap['operation_pins'],
+            expected=before['expected'], now_ms=int(time.time() * 1000), allow_expired=True)
+        with control.release_authority_lock():
+            _, record = _current_change(control, monitor, runtime_home=runtime_home, repository=repository,
+                operation_id=operation_id, deadline=deadline)
+            now = int(time.time() * 1000)
+            ack = apply.validate_apply_acceptance(response['acceptance'], now_ms=now)
+            local = apply.validate_apply_local_receipt(record['local_receipt'], now_ms=now)
+            if (record != before or ack['accept_id'] != local['change_accept_id']
+                    or not ack['local_change_receipt_hash'] == local['receipt_hash'] == apply.hash_apply_local_receipt(local)
+                    or any(ack[key] != local[key] for key in ('preview_id', 'operation_id', 'change_consent_id',
+                        'change_binding_hash', 'local_change_receipt_id', 'preview_payload_hash'))
+                    or not local['confirmed_at'] <= ack['accepted_at'] < payload['expires_at']
+                    or ack['expires_at'] > local['expires_at'] or time.monotonic() >= deadline):
+                raise ValueError
+            record['acceptance'] = ack
+            saved = _save_change(control, record)
+            if time.monotonic() >= deadline:
+                raise ValueError
+            return saved
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
+        raise ReleaseApplyError('CHANGE_HOLD') from None
+
+
+def _cancel_native_change(control, *, runtime_home, operation_id):
+    """Revoke local permission with A alone; never clear STARTED, J or SPENT."""
+    from adapters.sdc import release_contract
+    if control.root != _control_root(runtime_home) or not release_contract.uuid(operation_id):
+        raise ReleaseApplyError('CHANGE_HOLD')
+    with control.release_authority_lock():
+        record = _read_change(control)
+        if record is None or record['operation_id'] != operation_id:
+            raise ReleaseApplyError('CHANGE_HOLD')
+        if not record['revoked']:
+            record['revoked'] = True
+            record = _save_change(control, record)
+        return record
 
 
 @dataclass(frozen=True, repr=False)
