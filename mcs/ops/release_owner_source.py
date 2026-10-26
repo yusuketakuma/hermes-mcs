@@ -16,7 +16,7 @@ OWNER_REVISION = 1
 PROVIDER_PROFILE = (1, 0, 0)
 SOURCE_POLICY = 'mcs-release-owner-source-v1'
 SOURCE_ROOTS = ('mcs/', 'adapters/', 'mcs_standalone/', 'hermes_plugin/', 'lineworks_adapter/', 'deployment/', 'scripts/', 'resources/')
-SOURCE_FILES = ('install.sh', 'pyproject.toml')
+SOURCE_FILES = ('install.sh', 'pyproject.toml', 'scripts/mcs')
 SOURCE_SUFFIXES = ('.py', '.sh', '.json', '.toml', '.yaml', '.yml', '.plist', '.sql', '.txt', '.lock')
 MANIFEST_PATH = 'deployment/sdc-release-owner.json'
 MANIFEST_VERSION = 'mcs.release-owner-source.v1'
@@ -86,7 +86,8 @@ def validate_manifest(value):
             check(row['mode'] in ('100644', '100755') and type(row['sha256']) is str and len(row['sha256']) == 64
                   and all(c in '0123456789abcdef' for c in row['sha256']))
             names.append(row['path'])
-        check(names == sorted(set(names)) and len({n.casefold() for n in names}) == len(names) and set(REQUIRED) <= set(names))
+        check(names == sorted(set(names)) and len({n.casefold() for n in names}) == len(names)
+              and set((*REQUIRED, *SOURCE_FILES)) <= set(names))
         return json.loads(canonical(value))
     except SourceError:
         raise

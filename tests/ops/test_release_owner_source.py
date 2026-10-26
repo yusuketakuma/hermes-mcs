@@ -126,3 +126,20 @@ def test_development_writer_outputs_only_review_material_and_check_rejects_tampe
     target.write_bytes(target.read_bytes() + b'\n# synthetic changed source\n')
     assert source.main(['--check']) == 2
     assert capsys.readouterr().out.strip() == 'RELEASE_PROVIDER_SOURCE_HOLD'
+
+
+def test_native_launcher_without_a_suffix_is_part_of_the_source_closure(repository):
+    value = manifest(repository)
+    assert 'scripts/mcs' in [row['path'] for row in value['files']]
+    launcher = repository / 'scripts/mcs'
+    launcher.write_bytes(launcher.read_bytes() + b'\n# synthetic launcher change\n')
+    with pytest.raises(source.SourceError):
+        source.verify_checkout(repository, value, deadline=time.monotonic() + 10, current=True)
+
+
+@pytest.mark.parametrize('name', source.SOURCE_FILES)
+def test_source_manifest_cannot_omit_a_mandatory_entry_file(repository, name):
+    value = manifest(repository)
+    value['files'] = [row for row in value['files'] if row['path'] != name]
+    with pytest.raises(source.SourceError):
+        source.validate_manifest(value)

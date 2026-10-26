@@ -863,7 +863,8 @@ def test_started_artifact_imports_fixed_bundle_without_selecting_its_advertised_
     manifest = {'schema_version': release_owner_source.MANIFEST_VERSION,
         'owner_id': release_owner_source.OWNER_ID, 'owner_revision': 1, 'provider_profile': [1, 0, 0],
         'source_policy': release_owner_source.SOURCE_POLICY,
-        'files': [dict(path=name, mode='100644', sha256='1' * 64) for name in sorted(release_owner_source.REQUIRED)]}
+        'files': [dict(path=name, mode='100644', sha256='1' * 64)
+            for name in sorted((*release_owner_source.REQUIRED, *release_owner_source.SOURCE_FILES))]}
     # Adjust only the explicit unit fixture, after claim; no production issuer uses these writes.
     old = entry
     spent = copy.deepcopy(entry.spent)
@@ -1085,19 +1086,17 @@ def test_native_preflight_in_a_fresh_synthetic_product_process(product, tmp_path
     value['profiles'][0]['platform'] = platform
     (repo / dependencies.LOCK_PATH).write_bytes(dependencies.encoded(value))
     # Copy development source only. Existing synthetic lock/wheels/requirements stay synthetic.
-    for prefix in source.SOURCE_ROOTS:
-        for path in (root / prefix).rglob('*'):
-            if not path.is_file() or '__pycache__' in path.parts:
-                continue
-            target = repo / path.relative_to(root)
-            if target.exists():
-                continue
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, target)
-            target.chmod(path.stat().st_mode & 0o777)
-    for name in source.SOURCE_FILES:
-        if not (repo / name).exists():
-            shutil.copyfile(root / name, repo / name)
+    tracked = subprocess.check_output(['/usr/bin/git', '-C', str(root), 'ls-files', '-z']).decode().split('\0')
+    for name in tracked:
+        if not source.source_path(name):
+            continue
+        path, target = root / name, repo / name
+        assert path.is_file() and not path.is_symlink()
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+        target.chmod(path.stat().st_mode & 0o777)
     home = tmp_path / 'native-runtime'
     home.mkdir(mode=0o700)
     venv, _ = runtime(home)
