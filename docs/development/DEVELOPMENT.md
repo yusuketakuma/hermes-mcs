@@ -147,7 +147,7 @@
 | `mcs/ops/mcs_restore.py` | Human consent for adopting a new-terminal backup, with all delivery held. |
 | `mcs/ops/mcs_setup.py` | MCSの初期設定・動作確認・常駐サービスの設定。 |
 | `mcs/ops/mcs_update.py` | MCSの更新 — 新しい版の確認・適用・元の版への復帰・中断した更新の復旧。 |
-| `mcs/ops/notification_cancel.py` | 未発行のSlack通知と未送信が確定した集計通知を、履歴を残して取り消す。 |
+| `mcs/ops/notification_cancel.py` | 未発行のSlack・Discord・LINE WORKS通知と未送信が確定した集計通知を、履歴を残して取り消す。 |
 | `mcs/ops/operation_contract.py` | Validate human operation payloads and retry decisions without mutating the ledger. |
 | `mcs/ops/owned_process.py` | Own command sessions through interruption, termination and bounded reaping. |
 | `mcs/ops/release_apply_owner.py` | 既存updater内でreleaseの子processと一回実行境界を所有する。 |

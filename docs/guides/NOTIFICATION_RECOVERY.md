@@ -130,12 +130,25 @@ CLIが既存契約に従ってDiscord=1・Slack=2・LINE WORKS=3の版を付け�
 復元でrenderやattemptが失われた場合も、適用時に既存の復元保留・保存scope・journalを照合します。
 受付できたことは、保留の解除や証拠の成立を意味しません。
 
-## 4. 未発行のSlack通知を送らず取り消す
+## 4. 未発行の通知を送らず取り消す（Slack・Discord・LINE WORKS）
 
 送信しないことを運用者が決めた場合は、`mcs/ops/notification_cancel.py`で対象の通知IDを指定します。
 対象は、まだrenderへ発行していない更新通知（未発行の対応行が1件だけ）と、全送信試行が
 `not_sent`で再送上限に達した集計通知に限ります。既に発行した通知、本文の部分送信記録がある通知、
 配送結果不明の通知自体は拒否します。過去の別通知に結果不明の部品があっても、その記録は変更しません。
+Slack・Discord・LINE WORKSの通知を扱い、それ以外の送信先は`unsupported_transport`で拒否します。
+
+適用前に、対象通知の送信先ごとに配送側を停止します。停止の確認方法は送信先で異なります。
+
+| 送信先 | 停止するもの | 適用時に確認する停止証跡 |
+| --- | --- | --- |
+| Slack・Discord | Hermes gatewayの通知ワーカー | `data/worker_status/<送信先>-*.json`の全起動記録が現行版で、記録されたプロセスが終了済み |
+| LINE WORKS | 独立アダプター（例: `launchctl bootout "gui/$(id -u)/ai.mcs.lineworks"`、Linuxは`systemctl --user stop hermes-mcs-lineworks.service`） | `data/lineworks_state/send-*.lock`の全送信ロックを取得できる |
+
+LINE WORKSアダプターは起動中ずっと送信ロックを持つため、ロックを取れれば停止済みです。
+適用はそのロックを終了まで持ち続けるので、途中でアダプターが起動しても送信を始めません。
+送信ロックが1つも無い（一度も起動していない）場合は`worker_stop_unverified`で拒否します。
+複数の送信先を含む計画は、すべての送信先の停止証跡が必要です。
 
 ```sh
 (umask 077
@@ -152,4 +165,4 @@ python3 mcs/ops/notification_cancel.py --root /absolute/path/to/mcs apply \
 配送済み・未送信という事実の認定は行いません。集計の終端specは削除せず退避し、
 DBと`data/notification_cancellations/COMMAND_UUID/receipt.json`に理由・結果を残します。
 同じ計画とcommand IDでの再実行は同じreceiptを返し、途中で止まったspec退避だけを再開します。
-退避完了を確認してからワーカーを戻します。原投稿・配送記録・設定は保持します。
+退避完了を確認してからワーカー（LINE WORKSはアダプター）を戻します。原投稿・配送記録・設定は保持します。

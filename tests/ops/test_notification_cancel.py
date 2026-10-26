@@ -346,7 +346,7 @@ def test_issued_or_uncertain_delivery_is_never_cancellable(case, boundary):
         db.execute("UPDATE notification_renders SET state=? WHERE delivery_id=?",
                    ("queued" if boundary == "own_issued" else "unknown", delivery))
     elif boundary == "other_transport":
-        db.execute("UPDATE notification_cards SET transport='discord' WHERE card_id=1")
+        db.execute("UPDATE notification_cards SET transport='synthetic-other' WHERE card_id=1")
     elif boundary == "text_progress":
         db.execute("UPDATE notify_outbox SET progress=? WHERE event_id=?",
                    (json.dumps({"slack": {"sent": True}}), event))

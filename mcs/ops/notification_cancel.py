@@ -1,4 +1,4 @@
-"""未発行のSlack通知と未送信が確定した集計通知を、履歴を残して取り消す。"""
+"""未発行のSlack・Discord・LINE WORKS通知と未送信が確定した集計通知を、履歴を残して取り消す。"""
 from __future__ import annotations
 
 import argparse
@@ -20,7 +20,8 @@ from mcs_requests import canonical, payload_hash, valid_uuid  # noqa: E402
 from writer_lock import acquire_run_lock
 from safe_io import atomic_write, fsync_dir  # noqa: E402  # noqa: E402
 from notify_cards import mark_snapshot_dirty  # noqa: E402
-from card_worker_status import REASONS, VERSION  # noqa: E402
+from card_worker_status import REASONS, TRANSPORTS, VERSION  # noqa: E402
+from notify_spool import notify_dirs  # noqa: E402
 from safe_io import read_regular_nofollow  # noqa: E402
 
 
@@ -48,13 +49,14 @@ def _target(db, event_id):
             raise ValueError("notification_already_issued")
         card = db.execute("SELECT transport FROM notification_cards WHERE card_id=?",
                           (coverage[0]["card_id"],)).fetchone()
-        if card is None or card[0] != "slack":
+        if card is None or card[0] not in TRANSPORTS:
             raise ValueError("unsupported_transport")
     elif row["kind"] == "daily_digest":
         if (row["state"] != "failed" or row["next_try"] is not None or coverage
                 or progress.get("hold_reason") != "resend_exhausted" or not renders
+                or len({r["transport"] for r in renders}) != 1
                 or any(r["card_id"] is not None or r["op"] != "notice"
-                       or r["transport"] != "slack" or r["state"] != "not_sent" for r in renders)
+                       or r["transport"] not in TRANSPORTS or r["state"] != "not_sent" for r in renders)
                 or any(a["state"] != "not_sent" for a in attempts)
                 or {r["delivery_id"] for r in renders} != {a["delivery_id"] for a in attempts}):
             raise ValueError("notice_delivery_not_proven_unsent")
@@ -75,8 +77,48 @@ def build_plan(db, event_ids):
     return {"version": 1, "events": [_target(db, i) for i in sorted(event_ids)]}
 
 
-def _workers_stopped(data):
-    witnesses = list((data / "worker_status").glob("slack-*.json"))
+def _transports(db, event_ids):
+    """Transports an event's card or notices go through; valid after cancellation too."""
+    found = set()
+    for event_id in event_ids:
+        found.update(r[0] for r in db.execute(
+            "SELECT c.transport FROM notification_intent_cards i JOIN notification_cards c "
+            "USING(card_id) WHERE i.event_id=? UNION SELECT transport FROM notification_renders "
+            "WHERE intent_event_id=?", (event_id, event_id)))
+    return found
+
+
+def _hold_adapter_locks(data, locks):
+    """The LINE WORKS adapter holds its send scope lock for its whole life and writes no
+    worker_status; holding every one until apply returns also keeps it from starting."""
+    state = Path(notify_dirs(str(data))["lineworks_state"])
+    if state.is_symlink():
+        raise ValueError("unsafe_data_path")
+    held = sorted(state.glob("send-*.lock"))
+    if not held:
+        raise ValueError("worker_stop_unverified")
+    for path in held:
+        if path.is_symlink():
+            raise ValueError("unsafe_data_path")
+        fd = acquire_run_lock(str(path))
+        if fd is None:
+            raise ValueError("worker_not_stopped")
+        locks.append(fd)
+
+
+def _workers_stopped(data, transports, locks=None):
+    if not transports or not transports <= set(TRANSPORTS):
+        raise ValueError("worker_stop_unverified")
+    for transport in sorted(transports):
+        if transport == "lineworks":
+            if locks is not None:  # a recheck runs while the first call's locks are held
+                _hold_adapter_locks(data, locks)
+            continue
+        _witnesses_stopped(data, transport)
+
+
+def _witnesses_stopped(data, transport):
+    witnesses = list((data / "worker_status").glob(f"{transport}-*.json"))
     if not witnesses:
         raise ValueError("worker_stop_unverified")
     for path in witnesses:
@@ -94,21 +136,25 @@ def _workers_stopped(data):
 
 def _withdraw(data, receipt):
     archive = data / "notification_cancellations" / receipt["command_id"]
-    if archive.parent.is_symlink() or archive.is_symlink() or (data / "slack_render").is_symlink():
+    dirs = notify_dirs(str(data))
+    spools = [Path(dirs[t + "_render"]) for t in TRANSPORTS]
+    if archive.parent.is_symlink() or archive.is_symlink() or any(s.is_symlink() for s in spools):
         raise ValueError("unsafe_spec_path")
     archive.mkdir(mode=0o700, parents=True, exist_ok=True)
     for delivery in receipt["notice_specs"]:
         if not valid_uuid(delivery):
             raise ValueError("invalid_delivery_id")
-        source, target = data / "slack_render" / (delivery + ".json"), archive / (delivery + ".json")
-        if source.is_symlink() or target.is_symlink():
-            raise ValueError("unsafe_spec_path")
-        if source.exists():
-            if target.exists():
-                raise ValueError("spec_archive_conflict")
-            source.rename(target)
-            fsync_dir(str(source.parent))
-            fsync_dir(str(archive))
+        # A delivery id is a UUID issued to one transport, so it lives in one spool only.
+        for spool in spools:
+            source, target = spool / (delivery + ".json"), archive / (delivery + ".json")
+            if source.is_symlink() or target.is_symlink():
+                raise ValueError("unsafe_spec_path")
+            if source.exists():
+                if target.exists():
+                    raise ValueError("spec_archive_conflict")
+                source.rename(target)
+                fsync_dir(str(source.parent))
+                fsync_dir(str(archive))
     atomic_write(str(archive / "receipt.json"),
                  lambda f: json.dump(receipt, f, ensure_ascii=False, indent=2), mode=0o600)
 
@@ -136,7 +182,6 @@ def apply(root, request):
         for marker in ("update_in_progress.marker", "restore_pending.json"):
             if os.path.lexists(data / marker):
                 raise ValueError("lifecycle_operation_pending")
-        _workers_stopped(data)
         with closing(sqlite3.connect((data / "ledger.db").resolve().as_uri() + "?mode=rw",
                                      uri=True, timeout=1)) as db, db:
             db.row_factory = sqlite3.Row
@@ -147,6 +192,7 @@ def apply(root, request):
                 if prior["payload_hash"] != digest:
                     raise ValueError("command_id_conflict")
                 receipt = json.loads(prior["receipt_json"])
+                _workers_stopped(data, _transports(db, receipt["event_ids"]), locks)
             else:
                 plan = request["plan"]
                 try:
@@ -157,6 +203,8 @@ def apply(root, request):
                     raise ValueError("bad_plan") from None
                 if build_plan(db, ids) != plan:
                     raise ValueError("stale_plan")
+                transports = _transports(db, ids)
+                _workers_stopped(data, transports, locks)
                 if db.execute("SELECT 1 FROM notification_restore_holds "
                               "WHERE released_at IS NULL LIMIT 1").fetchone():
                     raise ValueError("restore_delivery_held")
@@ -173,7 +221,7 @@ def apply(root, request):
                 db.execute("BEGIN IMMEDIATE")
                 if build_plan(db, ids) != plan:
                     raise ValueError("stale_plan")
-                _workers_stopped(data)
+                _workers_stopped(data, transports)
                 now = time.time()
                 for event_id in ids:
                     db.execute("UPDATE notification_intent_cards SET state='suppressed' "
