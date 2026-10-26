@@ -217,6 +217,8 @@ def test_hermes_checkout_with_source_edits_is_not_runnable(tmp_path, dirty):
     (hermes / ".venv/bin").mkdir(parents=True)
     (hermes / ".venv/bin/python").write_text("#!/bin/sh\n")
     (hermes / ".venv/bin/python").chmod(0o755)
+    (hermes / ".venv/launcher manifest.xml").write_text("synthetic dependency asset\n")
+    (hermes / ".venv/.gitignore").write_text("*\n")
     (hermes / "setup.py").write_text("\n")
     _git(hermes, "init", "-q")
     _git(hermes, "add", "setup.py")

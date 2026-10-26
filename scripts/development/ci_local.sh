@@ -165,7 +165,7 @@ prereq_hermes_integration() {
     [ "$(git -C "$hermes" rev-parse HEAD 2>/dev/null)" = "$hermes_ref" ] ||
         { reason="hermes-agent が ci.yml の ref $hermes_ref ではない"; return 1; }
     # Only the dependency venv may be untracked; imported source must match the pin.
-    hermes_status=$(git -C "$hermes" status --porcelain --untracked-files=all --ignored 2>/dev/null) ||
+    hermes_status=$(git -C "$hermes" status --porcelain --untracked-files=normal --ignored 2>/dev/null) ||
         { reason="hermes-agent checkout の変更を確認できない"; return 1; }
     [ -z "$(printf '%s\n' "$hermes_status" | sed '/^?? \.venv\//d; /^!! \.venv\//d')" ] ||
         { reason="hermes-agent checkout に未commit の変更がある"; return 1; }
