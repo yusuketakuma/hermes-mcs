@@ -405,7 +405,8 @@ def test_connector_requires_sdk_and_supervisor_readiness_and_drains_cleanup(
             monkeypatch.setattr(module, "_verify_channel", lambda *a: None)
             monkeypatch.setattr(module, "_sdk", lambda: (SimpleNamespace(app_commands=SimpleNamespace(
                 Command=lambda **kw: SimpleNamespace(to_dict=lambda tree: {}))), None))
-            monkeypatch.setattr(module, "_Commands", lambda *a: SimpleNamespace(slash=noop, message=noop, error=noop))
+            monkeypatch.setattr(module, "_Commands", lambda *a: SimpleNamespace(
+                slash=noop, summary=noop, message=noop, error=noop))
             monkeypatch.setattr(module, "_Scope", lambda *a, **kw: SimpleNamespace(
                 current=lambda: True, monitor=lambda: asyncio.Event().wait(), close=noop))
 

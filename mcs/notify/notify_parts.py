@@ -552,8 +552,8 @@ def face_posts(db, card, parts, content, present) -> tuple:
     and the face stays within one message. A post that does not fit, and
     every post after it, keeps its thread post (no text is dropped).
     A transport without ``BODY_ON_FACE`` (``FACE_STAMPS`` only) gets each
-    post's non-empty stamp rows and no message ids: its thread keeps
-    every body, and its adapter drops the rows over budget."""
+    post's non-empty stamp rows and no message ids, while the face stays
+    within its text budget: its thread keeps every body and stamp row."""
     import notify_render
     whole = getattr(present, "BODY_ON_FACE", False)
     rules = [i for i, c in enumerate(parts["containers"])
@@ -573,7 +573,10 @@ def face_posts(db, card, parts, content, present) -> tuple:
             rows = [ln for ln in notify_render.thread_stamp_row(
                 db, mid, m["sender_id"]).split("\n") if ln]
             if rows:
-                posts.append({"at": at, "stamps": rows})
+                post = {"at": at, "stamps": rows}
+                if present.face_text_cost(parts, [*posts, post]) > present.FACE_TEXT_MAX:
+                    break
+                posts.append(post)
             continue
         original = m["body_text"] or ("（本文なし）" if m["body_state"] in (None, "full")
                                       else "（本文未取得）")

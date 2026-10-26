@@ -69,4 +69,22 @@ ACCENT_URGENT = True          # red container edge on an urgent card
 # face would exceed its component/text budget; the thread keeps them.
 BODY_ON_FACE = False
 FACE_STAMPS = True
-STAMP_DETAILS = True          # per-post stamp rows replace the footer aggregate
+# Rows that do not fit the face remain on their post in the companion thread.
+STAMP_DETAILS = True
+FACE_TEXT_MAX = 4000          # adapters/common/spec.py MAX_TOTAL_TEXT
+
+
+def face_text_cost(parts, face_posts=()) -> int:
+    """The text adapters/common/spec.validate charges for this face:
+    the same per-item costs, plus each face stamp line (twin of its
+    _containers_cost/_footer_cost text half; tests pin the two equal)."""
+    n = sum(len(ln) + 4 for c in parts.get("footer") or [] if c["type"] == "text"
+            for ln in c["text"].splitlines())
+    for c in parts["containers"]:
+        if c["type"] == "quote":
+            n += sum(len(line) + 3 for line in c["text"].splitlines())
+        elif c["type"] in ("heading", "text"):
+            n += len(c["text"]) + 4
+        elif c["type"] == "field":
+            n += len(c["name"]) + len(c["value"]) + 6
+    return n + sum(len(ln) + 4 for p in face_posts for ln in p["stamps"])

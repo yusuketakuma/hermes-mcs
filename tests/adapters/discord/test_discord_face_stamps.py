@@ -76,9 +76,13 @@ def test_card_without_face_posts_is_unchanged():
         cards.message_payload(spec)["embed"].description.replace(f"\n-# {STAMP}", "")
 
 
-def test_worst_case_rows_over_budget_fall_back_without_rejecting():
-    # eight posts, four maximal rows each: far over 4000 characters
-    spec = validate(_card(spec_mod.MAX_FACE_POSTS, stamps=["合" * MAX_TEXT] * 4))
+def test_worst_case_rows_over_budget_are_rejected_and_the_adapter_still_falls_back():
+    # eight posts, four maximal rows each: far over 4000 characters. The
+    # validator charges the rows (the producer stops before this); the
+    # adapter's own fallback still keeps such a face within Discord's limits
+    spec = _card(spec_mod.MAX_FACE_POSTS, stamps=["合" * MAX_TEXT] * 4)
+    with pytest.raises(ValueError, match="text_budget"):
+        validate(spec)
     view = cards.build_view(spec)
     texts = _view_texts(view)
     assert not any("合合合" in t for t in texts)
@@ -140,3 +144,15 @@ def test_slack_face_post_shape_is_unchanged():
     for bad in ({"at": 0, "stamps": [STAMP]}, {"at": 0, "stamps": [STAMP], "original": ""}):
         with pytest.raises(ValueError):
             spec_mod._validate_face_posts(spec, parts, [bad], "slack")
+
+
+def test_producer_bound_matches_the_validator_charge():
+    import present_discord
+    spec = _card(3)
+    spec["parts"]["footer"] = [{"type": "text", "text": "✅ 確認: 合成\n📝 タスク 1件"}]
+    _, est = spec_mod._containers_cost(spec["parts"]["containers"])
+    est += spec_mod._footer_cost(spec["parts"]["footer"])[1]
+    stamps = sum(len(ln) + 4 for p in spec["parts"]["discord"]["face_posts"] for ln in p["stamps"])
+    assert present_discord.face_text_cost(spec["parts"], spec["parts"]["discord"]["face_posts"]) \
+        == est + stamps
+    assert present_discord.FACE_TEXT_MAX == MAX_TOTAL_TEXT

@@ -739,6 +739,9 @@ def test_worst_case_footer_stays_under_the_text_budget(led, tmp_path,
     spec_mod.validate(spec)
     _, est = spec_mod._containers_cost(spec["parts"]["containers"])
     est += spec_mod._footer_cost(spec["parts"]["footer"])[1]
+    est += sum(len(line) + 4
+               for post in spec["parts"].get("discord", {}).get("face_posts", [])
+               for line in post["stamps"])
     monkeypatch.setitem(sys.modules, "discord", _fake_discord())
     view = discord_cards.build_view(spec)
     real = sum(len(c.content) for c in view.items[0].children
@@ -747,6 +750,21 @@ def test_worst_case_footer_stays_under_the_text_budget(led, tmp_path,
 
 
 # ---------- urgency badge -------------------------------------------------
+
+
+def test_discord_face_budget_keeps_stamps_and_original_in_thread(led, monkeypatch):
+    import present_discord
+    stamp = "スタンプ 👀2 合成担当"
+    monkeypatch.setattr(present_discord, "FACE_TEXT_MAX", 0)
+    monkeypatch.setattr(notify_render, "thread_stamp_row", lambda *a, **kw: stamp)
+    _seed_thread(led, mids=(100,))
+    original = led.db.execute("SELECT body_text FROM messages WHERE message_id=100").fetchone()[0]
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    spec = _spec(led)
+    assert not spec["parts"].get("discord", {}).get("face_posts")
+    thread = "\n".join(spec["parts"]["thread_body_parts"])
+    assert stamp in thread and original in thread
+
 
 def test_urgency_badge_names_its_source(led):
     _seed_thread(led, mids=(100, 101, 102))

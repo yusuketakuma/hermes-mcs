@@ -315,9 +315,9 @@ def build_view(spec: dict):
     # stay within the validator's budget); still too many parts: post
     # buttons fall back to text lines (the 💊 menu entry reaches every post)
     levels += [(zones, False), (one(zones), False), ([_zone_text(one(zones)[0])], False)]
-    for groups, face in levels:
+    for groups, checked in levels:
         children = layout(groups)
-        if not (too_big(children) or face and text_len(children) > MAX_TOTAL_TEXT):
+        if not (too_big(children) or checked and text_len(children) > MAX_TOTAL_TEXT):
             break
     if not children:
         children.append(discord.ui.TextDisplay("—"))

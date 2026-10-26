@@ -364,6 +364,12 @@ def validate(spec) -> dict:
     slots, text = _footer_cost(parts.get("footer") or [])
     budget -= slots
     text_budget -= text
+    # Discord draws face stamp rows as "-# " subtext lines on the card
+    own = parts.get("discord")
+    if isinstance(own, dict) and isinstance(own.get("face_posts"), list):
+        text_budget -= sum(len(ln) + 4 for p in own["face_posts"] if isinstance(p, dict)
+                           and isinstance(p.get("stamps"), list)
+                           for ln in p["stamps"] if isinstance(ln, str))
     if text_budget < 0:
         _err("text_budget")
     budget -= _action_rows_cost(parts.get("action_rows") or [])

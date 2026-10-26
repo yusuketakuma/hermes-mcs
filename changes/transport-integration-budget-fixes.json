@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "Discordのカード描画と文字数の検査を修正",
+  "summary": "Discordのカードを描画できない問題を修正しました。投稿ごとのスタンプ表示を文字数の上限に含め、カードに収まらない行は原文とともにスレッドへ残します。",
+  "upgrade": "対応する版のコードを適用した後、Hermesではgateway、standaloneでは通知サービスを再起動してください。LINE WORKSでは独立アダプターの再起動が必要です。設定や送信先の変更は不要です。",
+  "details": [
+    "Discordの描画関数と重なっていた変数名を変更。",
+    "スタンプ行の文字数を生成側と検証側の両方で計上し、カードの上限を超える行をスレッドへ残す。",
+    "新設された概要コマンドを起動テストの合成SDKにも反映し、起動と終了の検証を維持。"
+  ],
+  "refs": [
+    "adapters/discord/cards.py",
+    "adapters/common/spec.py",
+    "mcs/notify/notify_parts.py",
+    "mcs/notify/presentation/present_discord.py"
+  ]
+}

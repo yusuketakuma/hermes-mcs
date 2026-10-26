@@ -5,7 +5,7 @@ import mcs_setup
 import notify_cards
 import notify_render
 import notify_transport
-from adapters.common import envelopes, spec as display_spec
+from adapters.common import envelopes
 from adapters.lineworks import cards as lineworks_cards
 from notify_testkit import NOW
 from notify_urgent_testkit import _alert, _events, led, world
@@ -47,8 +47,7 @@ def test_lineworks_notice_is_a_room_post_headed_with_the_patient(world):
     assert "thread_hold" not in (_events(store)[0]["progress"] or "")
     [render] = notify_cards._notice_renders(store.db, event["event_id"])
     spec = json.loads(render["spec_json"])
-    display_spec.validate(spec)
-    lineworks_cards.validate(spec)
+    lineworks_cards.validate(spec)   # also runs the shared display checks
     assert "thread_notice" not in spec["parts"]
     assert spec["delivery"]["transport"] == "lineworks"
     assert "thread_id" not in spec["delivery"] and "message_id" not in spec["delivery"]
