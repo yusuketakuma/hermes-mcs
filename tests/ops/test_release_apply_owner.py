@@ -10,6 +10,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from dataclasses import replace
 
 import pytest
 
@@ -19,6 +20,144 @@ import update_journal
 import owned_process
 import release_apply_owner
 from test_release_dependency_lock import product as product, runtime  # noqa: F401 - shared synthetic fixture
+from test_sdc_release_state import native_child as native_child, store as store  # noqa: F401 - synthetic Store/locks
+
+
+@pytest.fixture
+def registered_effect(native_child, store, monkeypatch):
+    # Test-only registration is not a live factory or signature integration acceptance.
+    from adapters.sdc import release_state
+    child = native_child
+    ref = copy.deepcopy(child['journal']['release_ref'])
+    journal = {**update_journal.default_state(), 'release_ref': ref}
+    update_journal.save_state(child['path'], journal)
+    saved = store.read(release_state.NAME)
+    locks = child['parameters']['locks']
+    entry = release_apply_owner._StartedEffect(
+        owner=object(), process_id=os.getpid(), store=store, locks=locks,
+        lock_identities=tuple(release_apply_owner._effect_fd_identity(fd) for fd in locks),
+        runtime_home=str(child['home']), repository=str(child['repo']), reference=ref,
+        spent=copy.deepcopy(saved['spent'][-1]), published_revision=saved['revision'],
+        journal=copy.deepcopy(journal), configuration={}, start_deadline=time.monotonic() + 30,
+        prequiesce_deadline=time.monotonic() + 120)
+    cap = release_apply_owner._EffectCapability()
+    monkeypatch.setattr(release_apply_owner, '_EFFECT_CAPS', {cap: entry})
+    monkeypatch.setattr(release_apply_owner, '_EFFECT_PARENTS', {entry.owner: entry})
+    monkeypatch.setattr(release_apply_owner, '_EFFECT_CLAIMED', set())
+    monkeypatch.setattr(release_apply_owner, '_EFFECT_RUNNING', set())
+    args = (None, ref['target_commit'], None, entry.spent['preconditions']['current_commit'], False, (), None, False, None)
+    return cap, entry, dict(arguments=args, runtime_home=entry.runtime_home,
+                           repository=entry.repository, journal_path=child['path'])
+
+
+def test_registered_effect_is_same_object_single_entry_without_fd_transfer(registered_effect):
+    cap, entry, parameters = registered_effect
+    with pytest.raises(release_apply_owner.ReleaseApplyError, match='EFFECT_HOLD'):
+        release_apply_owner._claim_effect_entry(copy.copy(cap), **parameters)
+    assert release_apply_owner._claim_effect_entry(cap, **parameters) is entry
+    for fd, identity in zip(entry.locks, entry.lock_identities):
+        assert release_apply_owner._effect_fd_identity(fd) == identity
+    release_apply_owner._finish_effect_entry(entry)
+    second = release_apply_owner._EffectCapability()
+    release_apply_owner._EFFECT_CAPS[second] = entry
+    for candidate in (cap, second):
+        with pytest.raises(release_apply_owner.ReleaseApplyError, match='EFFECT_HOLD'):
+            release_apply_owner._claim_effect_entry(candidate, **parameters)
+
+
+def test_concurrent_effect_claim_has_only_one_winner(registered_effect):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    cap, entry, parameters = registered_effect
+    barrier = threading.Barrier(2)
+    def claim():
+        barrier.wait(timeout=5)
+        try:
+            return release_apply_owner._claim_effect_entry(cap, **parameters)
+        except release_apply_owner.ReleaseApplyError:
+            return None
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: claim(), range(2)))
+    assert sum(result is entry for result in results) == 1
+    release_apply_owner._finish_effect_entry(entry)
+
+
+def test_fork_copy_is_rejected_before_inherited_locked_mutex():
+    root = Path(__file__).resolve().parents[2]
+    program = r'''import os, pathlib, signal, sys, time
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / 'mcs'))
+import _mcs_path
+import release_apply_owner as owner
+cap = owner._EffectCapability()
+with owner._EFFECT_MUTEX:
+    child = os.fork()
+    if child == 0:
+        try:
+            owner._claim_effect_entry(cap, arguments=(), runtime_home='', repository='', journal_path='')
+        except owner.ReleaseApplyError:
+            os._exit(0)
+        except BaseException:
+            os._exit(3)
+        os._exit(4)
+reaped = False
+try:
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        pid, status = os.waitpid(child, os.WNOHANG)
+        if pid:
+            reaped = True
+            assert os.waitstatus_to_exitcode(status) == 0
+            break
+        time.sleep(0.01)
+    assert reaped, 'fork copy waited on the inherited mutex'
+finally:
+    if not reaped:
+        os.kill(child, signal.SIGKILL)
+        os.waitpid(child, 0)
+print('fork rejected')
+'''
+    result = subprocess.run([sys.executable, '-I', '-B', '-c', program, str(root)],
+                            capture_output=True, text=True, timeout=8, check=False)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == 'fork rejected\n'
+    assert 'DeprecationWarning' not in result.stderr
+
+
+@pytest.mark.parametrize('failure', ['pid', 'expired', 'nan', 'target', 'parent', 'journal', 'spent', 'expires_during_read'])
+def test_registered_effect_rejects_changed_start_without_mutations(registered_effect, failure, monkeypatch):
+    from adapters.sdc import release_state
+    cap, entry, parameters = registered_effect
+    if failure in ('pid', 'expired', 'nan'):
+        entry = replace(entry, **({'process_id': os.getpid() + 1} if failure == 'pid' else
+                                  {'start_deadline': float('nan') if failure == 'nan' else 0}))
+        release_apply_owner._EFFECT_CAPS[cap] = entry
+        release_apply_owner._EFFECT_PARENTS[entry.owner] = entry
+    elif failure == 'target':
+        parameters['arguments'] = (*parameters['arguments'][:1], '0' * 40, *parameters['arguments'][2:])
+    elif failure == 'parent':
+        release_apply_owner._EFFECT_PARENTS.clear()
+    elif failure == 'journal':
+        changed = copy.deepcopy(entry.journal)
+        changed['applying'] = {'sha': 'other'}
+        update_journal.save_state(parameters['journal_path'], changed)
+    elif failure == 'expires_during_read':
+        original = release_state._read
+        def expire_after_read(store):
+            value = original(store)
+            monkeypatch.setattr(release_apply_owner.time, 'monotonic', lambda: entry.start_deadline)
+            return value
+        monkeypatch.setattr(release_state, '_read', expire_after_read)
+    else:
+        saved = entry.store.read(release_state.NAME)
+        saved['revision'] += 1
+        entry.store.write(release_state.NAME, saved)
+    before = Path(parameters['journal_path']).read_bytes(), (entry.store.root / release_state.NAME).read_bytes()
+    with pytest.raises(release_apply_owner.ReleaseApplyError, match='EFFECT_HOLD'):
+        release_apply_owner._claim_effect_entry(cap, **parameters)
+    assert (Path(parameters['journal_path']).read_bytes(), (entry.store.root / release_state.NAME).read_bytes()) == before
+    assert release_apply_owner._EFFECT_RUNNING == set()
+    for fd, identity in zip(entry.locks, entry.lock_identities):
+        assert release_apply_owner._effect_fd_identity(fd) == identity
 
 
 @pytest.fixture

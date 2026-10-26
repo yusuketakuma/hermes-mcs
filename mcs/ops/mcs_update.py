@@ -1927,7 +1927,7 @@ def apply(tag: str | None, sha: str | None, command_id: str | None,
 def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
           base_sha: str | None = None, reinstall: bool = False,
           install_args: tuple = (), *, candidate_sha: str | None = None,
-          confirm_human: bool = False, reason: str | None = None) -> int:
+          confirm_human: bool = False, reason: str | None = None, _release_cap=None) -> int:
     """The staged apply pipeline (④).
 
     Lock discipline: update.lock is acquired BEFORE the first journal
@@ -1936,6 +1936,16 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
     reliably means the writer died. run.lock is taken second (after
     the long pre-checks) — run.lock holders (drainer ticks) never
     block on update.lock, so no lock-order inversion exists."""
+    if _release_cap is not None:
+        import release_apply_owner
+        borrowed = release_apply_owner._claim_effect_entry(_release_cap,
+            arguments=(tag, sha, command_id, base_sha, reinstall, install_args, candidate_sha, confirm_human, reason),
+            runtime_home=HOME, repository=REPO, journal_path=STATE_PATH)
+        try:
+            # shortcut: no live parent issuer is connected; keep effects closed until borrowed-core wiring is complete.
+            raise release_apply_owner.ReleaseApplyError('EFFECT_NOT_CONNECTED')
+        finally:
+            release_apply_owner._finish_effect_entry(borrowed)
     rc = _apply_validate_args(tag, sha, command_id, reinstall, install_args,
                               candidate_sha=candidate_sha, base_sha=base_sha,
                               confirm_human=confirm_human, reason=reason)

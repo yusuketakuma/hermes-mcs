@@ -13,6 +13,7 @@ import service_management
 import owned_process
 import update_discovery
 import release_apply_owner
+
 import runtime_inspection
 import json
 import os
@@ -29,6 +30,20 @@ import mcs_update
 import mcs_util
 from ops_testkit import (_FakeLaunchd, _git, _make_repo, _mk_schema, _receipts_db,
                          _seed_consent)
+
+@pytest.mark.parametrize('authority', [False, True, 7, 'serialized-token', {}, 'unregistered'])
+def test_private_release_capability_refusal_precedes_all_legacy_effects(updater, monkeypatch, authority):
+    if authority == 'unregistered':
+        authority = release_apply_owner._EffectCapability()
+    def forbidden(*_args, **_kwargs):
+        pytest.fail('release refusal reached legacy state, locks or cleanup')
+    for name in ('acquire_update_lock', '_acquire_run_lock_wait', 'recover_interrupted',
+                 '_remove_marker', '_enqueue_notice', '_report', '_apply_runtime_gate_errors'):
+        monkeypatch.setattr(updater, name, forbidden)
+    monkeypatch.setattr(updater.journal_store, 'load_state', forbidden)
+    monkeypatch.setattr(updater.mcs_util, 'load_config', forbidden)
+    with pytest.raises(release_apply_owner.ReleaseApplyError, match='EFFECT_HOLD'):
+        updater._apply_pipeline(None, '1' * 40, None, _release_cap=authority)
 
 
 @pytest.mark.parametrize('native', [False, True])
