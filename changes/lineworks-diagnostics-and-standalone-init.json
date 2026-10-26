@@ -2,7 +2,7 @@
   "category": "changed",
   "title": "LINE WORKSアダプターの起動記録・常駐診断と、独立動作での認証設定に対応",
   "summary": "LINE WORKSアダプターが起動の成否を記録し、doctorの通知配送処理の行にLINE WORKSアダプターの状態と対処を表示します。Hermes経由でLINE WORKSを使うmacOSでは、checkとdoctorがai.mcs.lineworksの未導入・未読み込み・更新後の再起動待ちを報告します。独立動作の初期設定では、LINE WORKSの認証情報もSlack・Discordと同じ流れで登録します。",
-  "upgrade": "設定変更は不要です。起動記録を残すため、更新後にLINE WORKSアダプターを再起動してください（macOS: launchctl kickstart -k gui/$(id -u)/ai.mcs.lineworks）。再起動するまで、doctorは配送処理の起動を確認できないと表示します。Hermes経由でLINE WORKSを使う環境でai.mcs.lineworksを導入済みなのに読み込まれていない場合、checkはエラーとして報告します。Slack・Discordの診断は変わりません。",
+  "upgrade": "設定変更は不要です。起動記録を残すため、更新後にLINE WORKSアダプターを再起動してください（macOS: launchctl kickstart -k gui/$(id -u)/ai.mcs.lineworks）。再起動するまで、doctorは配送処理の起動を確認できないと表示します。Hermes経由でLINE WORKSを使う環境でai.mcs.lineworksを導入済みなのに読み込まれていない場合、checkは警告として報告します。警告だけの場合、checkの終了コードは0です。Slack・Discordの診断は変わりません。",
   "details": [
     "LINE WORKSアダプターは起動完了時にworker_started、設定・認証情報の読込みに失敗した時にworker_start_failedを記録します。記録に失敗しても配送は続け、固定コードworker_status_failedだけをログに残します。別のアダプターが稼働中で起動しなかった場合は、稼働中のアダプターの記録を上書きしません。",
     "ai.mcs.lineworksは、LINE WORKSアダプター自身のservice手順で生成・導入するため、mcs_setup.py servicesの導入対象には加えず、check・doctorの確認対象にだけ加えます。未導入時はLINE WORKS接続ガイドを、未読み込み時はlaunchctl bootstrapを案内します。",

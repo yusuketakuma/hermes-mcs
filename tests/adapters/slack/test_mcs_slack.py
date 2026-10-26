@@ -733,11 +733,11 @@ def test_slack_private_medication_pages_and_post_navigation_roundtrip(led):
             assert not result["errors"]
             await actions.sweep_followups()
             sent = w.client.ephemeral_calls[before:]
-            assert sent and "スレッドに表示しました" in sent[-1]["text"]
-            sent = [message for message in sent if message.get("thread_ts")]
-            assert sent
-            assert all(message["thread_ts"] == root_ts
-                       and message["user"] == "U_SYNTHETIC" for message in sent)
+            # the face carries the original and its thread has no reply: the
+            # private answer lands in the channel, with no thread pointer
+            assert sent and all("thread_ts" not in message
+                                and "スレッドに表示しました" not in message["text"]
+                                and message["user"] == "U_SYNTHETIC" for message in sent)
             buttons = {button["text"]["text"]: button["value"]
                        for block in sent[0].get("blocks") or []
                        if block["type"] == "actions" for button in block["elements"]}
@@ -763,7 +763,7 @@ def test_slack_private_medication_pages_and_post_navigation_roundtrip(led):
         assert "新しい投稿" in buttons
         text, buttons = await click_answer(buttons["新しい投稿"])
         assert names[0] in text and names[5] not in text
-        # The original is on the card; only the clicker's private answer uses the thread.
+        # The original is on the card; the clicker's private answers never touch the thread.
         assert w.client.thread_posts == []
         assert len(w.client.calls) == shared_calls
         actions.unload()

@@ -1215,6 +1215,7 @@ class Ledger:
 
     def patient_fetch_failed(self, project_id: int, reason: str):
         with self.db:
+            # Never create a stub: it would bypass atomic initial-history registration.
             previous = self.db.execute('SELECT fetch_reason FROM patients WHERE project_id=?', (project_id,)).fetchone()
             self.db.execute("""
               UPDATE patients SET fetch_state='incomplete',fetch_reason=?,last_seen=? WHERE project_id=?

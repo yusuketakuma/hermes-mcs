@@ -365,7 +365,8 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
             fact_audit = audit_facts_v2(
                 jev_client, v2_doc, member["body_original"],
                 deadline - 5,
-                match_threshold=scfg["match_threshold"])
+                match_threshold=scfg["match_threshold"],
+                per_request=scfg.get("max_questions_per_request", 12))
             stored = {"status": fact_audit["status"],
                       "evaluated": fact_audit["evaluated"],
                       "findings": fact_audit["findings"],
@@ -566,6 +567,15 @@ def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
 
 
 
+def _prefiltered(ledger, mid) -> bool:
+    """The message's current extraction is the local no-signal prefilter marker."""
+    from mcs_queries import current_extract_pred
+    return ledger.db.execute(
+        "SELECT 1 FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+        f"WHERE a.kind='extract_llm' AND a.message_id=? {current_extract_pred()} "
+        "AND json_extract(a.meta,'$.prefilter')='no_signal' LIMIT 1", (mid,)).fetchone() is not None
+
+
 def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
                    prev, deadline, *, diagnostics: dict):
     """Primary Jev proposition assessment of one target, durably recorded.
@@ -580,6 +590,17 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
                  "schema": SCHEMA_VERSION}
     answers = None
     req0 = jev_client.requests_made if jev_client else 0
+    if jev_client is not None and state is not None and _prefiltered(ledger, mid):
+        # the local prefilter already settled this body as carrying no clinical
+        # signal (a lone greeting): asking twelve clinical propositions about it
+        # spends a request for a known answer
+        ledger.artifact_add(
+            KIND_ASSESS,
+            json.dumps({"target_message_id": mid, "verdicts": {}, "detail": {}}, ensure_ascii=False),
+            project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+            meta={**meta_base, "technical_status": "complete", "jev_requests": 0,
+                  "skipped": "prefilter_no_signal"})
+        return {}, flag
     if jev_client is not None and state is not None:
         qs = {k: jev.noul_question(p["instructions"], p["true"],
                                    p["false"])

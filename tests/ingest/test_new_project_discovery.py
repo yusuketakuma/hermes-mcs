@@ -43,6 +43,76 @@ def _events(db):
     return db.db.execute("SELECT * FROM notify_outbox WHERE kind='new_messages'").fetchall()
 
 
+def test_failed_first_registration_retry_starts_exactly_one_initial_history_and_progress_card(db, monkeypatch):
+    boundary = int(time.time())
+    post = _posted(10, 3 * 86400)
+    marked = []
+    patient = _unread_patient(1)
+    adapter = SimpleNamespace(
+        list_unread=lambda: mcs_contract.UnreadSnapshot(boundary, [patient], listed_patients=[patient]),
+        fetch_unread_messages=lambda pid, stamp: mcs_contract.MessageBatch([post], 1, True),
+        fetch_unread_replies=lambda message: mcs_contract.ReplyBatch([], []),
+        mark_patient_read=lambda pid, stamp, **kw: marked.append((pid, stamp)),
+        fetch_latest=lambda pid: {'message_id': 10})
+    original = db.job_add_tx
+    failed = []
+    def fail_registration(*args, **kwargs):
+        if args and args[0] == 'history':
+            failed.append(args)
+            raise RuntimeError('synthetic registration failure before commit')
+        return original(*args, **kwargs)
+    monkeypatch.setattr(db, 'job_add_tx', fail_registration)
+    def capture():
+        result = {'errors': [], 'messages': 0, 'new_messages': 0, 'incomplete': [], 'marked_read': []}
+        collection_stages.stage_unread(adapter, db, result, time.monotonic() + 60,
+                                      db.begin_run(None), mark_read=True)
+        return result
+    first = capture()
+    assert len(failed) == 2  # discovery and unread SAVE each roll back independently
+    assert first['errors'] == ['project 1: db_write_failed', 'project 1: db_write_failed']
+    assert marked == []
+    for table in ('patients', 'messages', 'fetch_jobs', 'notify_outbox', 'read_marks'):
+        assert db.db.execute(f'SELECT count(*) FROM {table}').fetchone()[0] == 0
+    monkeypatch.setattr(db, 'job_add_tx', original)
+    retried = capture()
+    assert retried['errors'] == []
+    cohort = initial_import_state.load(db.db, 1)
+    assert cohort is not None and cohort['boundary_ts'] == boundary
+    assert initial_import_state.message_ids(db.db, 1) == [10]
+    assert marked == [(1, boundary)]
+    assert db.db.execute("SELECT count(*) FROM fetch_jobs WHERE kind='history'").fetchone()[0] == 1
+    assert _events(db) == []
+    assert capture()['errors'] == []
+    assert initial_import_state.load(db.db, 1)['cohort_id'] == cohort['cohort_id']
+    assert db.db.execute('SELECT count(*) FROM messages').fetchone()[0] == 1
+    history = db.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' ORDER BY event_id").fetchall()
+    assert history and {mid for event in history for mid in json.loads(event['payload'])['message_ids']} == {10}
+    notify_cards.dispatch_intent(db, dict(history[-1]), SLACK, now=time.time() + 300)
+    assert db.db.execute("SELECT count(*) FROM notification_cards WHERE kind='patient_history'").fetchone()[0] == 1
+    specs = db.db.execute('SELECT spec_json FROM notification_renders').fetchall()
+    assert specs
+    for spec in specs:
+        assert validate_slack(json.loads(spec[0]))
+
+
+@pytest.mark.parametrize('has_cohort', [False, True])
+def test_failure_for_existing_patient_preserves_identity_cohort_and_notification_history(db, has_cohort):
+    db.upsert_patient_info(_unread_patient(1), is_archived=False, notify_new=has_cohort,
+                           observation_ts=int(time.time()))
+    cohort = initial_import_state.load(db.db, 1)
+    before = db.db.execute('SELECT patient_name,created_at,initial_import FROM patients WHERE project_id=1').fetchone()
+    jobs = [tuple(row) for row in db.db.execute('SELECT * FROM fetch_jobs')]
+    intents = [tuple(row) for row in db.db.execute('SELECT * FROM notify_outbox')]
+    db.patient_fetch_failed(1, 'synthetic_failure')
+    assert tuple(db.db.execute('SELECT patient_name,created_at,initial_import FROM patients WHERE project_id=1').fetchone()) == tuple(before)
+    assert tuple(db.db.execute('SELECT fetch_state,fetch_reason FROM patients WHERE project_id=1').fetchone()) == ('incomplete', 'synthetic_failure')
+    assert [tuple(row) for row in db.db.execute('SELECT * FROM fetch_jobs')] == jobs
+    assert [tuple(row) for row in db.db.execute('SELECT * FROM notify_outbox')] == intents
+    db.upsert_patient_info(_unread_patient(1), is_archived=False, notify_new=True,
+                           observation_ts=int(time.time()))
+    assert initial_import_state.load(db.db, 1) == cohort
+
+
 @pytest.mark.parametrize("config,validate,transport", [
     (SLACK, validate_slack, "slack"), (CFG, validate_discord, "discord"),
     (LINEWORKS, validate_lineworks, "lineworks"),

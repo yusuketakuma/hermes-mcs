@@ -8,6 +8,7 @@ import re
 from backup_config import validate_backup_config as _backup_config
 import bounded_http
 from mcs_util import REPO
+from stats_math import finite_number
 
 # ---- typesafe config rules ------------------------------------------
 # name -> (required, check) — check(v) -> error string | None
@@ -189,6 +190,11 @@ def _validate_llm(ll: dict) -> list[str]:
         if key in ll and (not isinstance(ll[key], str)
                           or not ll[key].strip()):
             errors.append(f"local_llm.{key}: 空でない文字列を指定してください")
+    if "admission" in ll and type(ll["admission"]) is not bool:
+        errors.append("local_llm.admission: true（有効）かfalse（無効）を指定してください")
+    guard = ll.get("disk_guard_mb")
+    if "disk_guard_mb" in ll and (not finite_number(guard) or guard < 0):
+        errors.append("local_llm.disk_guard_mb: 0以上の数（MB）を指定してください。0で無効です")
     url = ll.get("url")
     if isinstance(url, str) and url.strip():
         try:
@@ -350,6 +356,8 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
                         for key in sorted(set(features) - set(OPTIONAL_FEATURE_DEFAULTS)))
     sig = cfg.get("signals")
     ext = cfg.get("extract")
+    if isinstance(ext, dict) and "prefilter" in ext and type(ext["prefilter"]) is not bool:
+        errors.append("extract.prefilter: true（有効）かfalse（無効）を指定してください")
     if isinstance(ext, dict) and "patient_state_context" in ext and type(ext["patient_state_context"]) is not bool:
         errors.append("extract.patient_state_context: true（有効）かfalse（無効）を指定してください")
     if isinstance(ext, dict) and "patient_context_nightly" in ext:

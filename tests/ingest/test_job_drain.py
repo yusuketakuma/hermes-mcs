@@ -41,6 +41,9 @@ from ledger import Ledger
 from mcs_util import DB
 store = Ledger(DB)
 try:
+    # Routing is tested for an already registered synthetic patient. Unknown
+    # import requests must not manufacture a registration stub (C16).
+    store.ensure_patient(700001)
     result = {'errors': []}
     job_ops.drain_commands(store, result)
     print(json.dumps({'projects': [row[0] for row in store.db.execute(

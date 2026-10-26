@@ -970,6 +970,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     cloud_settings = extract_llm._cloud_settings(cfg) if mode in ("on", "shadow") else None
     estimated_unit = False
     shadow_call = None
+    shadow_unit = None
 
     def current():
         return (time.time() < end and admit()

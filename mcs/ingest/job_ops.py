@@ -8,8 +8,8 @@ Responsibilities:
   retried on the next drain, never consumed (Oracle B12).
 - fetch_jobs drains: 'reply' refetches (bodies the thread API missed) and
   'history' walks. History jobs carry their own page cursor so an
-  unfinished deepen resumes where it stopped; a job only restarts at
-  page 1 when it is NEW (Oracle B09). One page of overlap on resume
+  unfinished deepen resumes where it stopped; page 1 is reserved for
+  NEW jobs or an explicitly retried failed full-history import (Oracle B09). One page of overlap on resume
   absorbs forward-shifting page numbering.
 - trickle mode: jobs whose payload sets "trickle": true get a small
   page budget per run and only execute while ample deadline remains —
@@ -28,7 +28,7 @@ import history_walk
 import sqlite3
 import time
 from dataclasses import dataclass
-from contextlib import suppress
+from contextlib import nullcontext, suppress
 
 from mcs_contract import MCSError, SessionExpired
 from mcs_adapter import thread_page_budget
@@ -106,6 +106,29 @@ def _valid_history_payload(pl) -> bool:
                  or (type(pl["stalls"]) is int and pl["stalls"] >= 0))
             and ("notify" not in pl or type(pl["notify"]) is bool)
             and ("notify_source" not in pl or pl["notify_source"] == "discovery"))
+
+
+
+def _restart_import(ledger, req, now):
+    """Validate and restart failed full-history imports in one short owner transaction."""
+    import initial_import_state
+    if ledger.db.in_transaction:
+        raise RuntimeError("import_command_transaction_active")
+    with ledger.db:
+        ledger.db.execute("UPDATE fetch_jobs SET job_id=job_id WHERE 0")
+        if ledger.db.execute("SELECT 1 FROM patients WHERE project_id=?", (req["project_id"],)).fetchone() is None:
+            return "project_not_found"
+        job = ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind='history' AND project_id=? "
+                                "AND message_id=0 AND state='failed'", (req["project_id"],)).fetchone()
+        try:
+            payload = initial_import_state.failed_history_restart(ledger.db, req["project_id"], job)
+        except ValueError:
+            return "invalid_payload"
+        if payload is None:
+            return None
+        payload["pages"] = max(payload.get("pages", 10), req.get("pages", 10))
+        initial_import_state.restart_history_tx(ledger.db, req["project_id"], job["job_id"], payload, now)
+        return "restarted"
 
 
 def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
@@ -220,37 +243,21 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
             result[bucket] = result.get(bucket, 0) + 1
             continue
         ok, reason = _valid_cmd(req)
+        restarted = False
         if ok:
-            ledger.ensure_patient(req["project_id"])
+            outcome = _restart_import(ledger, req, time.time())
+            restarted = outcome == "restarted"
+            if outcome is not None and not restarted:
+                ok, reason = False, outcome
+        if ok and not restarted:
             since = int(time.time() - req.get("days", 14) * 86400)
-            stopped = ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind='history' AND project_id=? "
-                                        "AND message_id=0 AND state='failed'",
-                                        (req["project_id"],)).fetchone()
-            restart_initial = invalid_walk = False
-            if stopped is not None:
-                candidate = loads_dict(stopped["payload"] or "{}")
-                if isinstance(candidate, dict) and candidate.get("since") == 0:
-                    import initial_import_state
-                    try:
-                        cohort = initial_import_state.load(ledger.db, req["project_id"])
-                        if (not _valid_history_payload(candidate) or cohort is None
-                                or "walk" not in candidate):
-                            raise ValueError
-                        history_walk.validate(candidate, req["project_id"], cohort["cohort_id"])
-                        restart_initial = True
-                    except ValueError:
-                        invalid_walk = True
             floor = ledger.history_floor(req["project_id"])
-            if invalid_walk:
-                ok, reason = False, "invalid_payload"
-            elif floor and floor <= since and not restart_initial:
+            if floor and floor <= since:
                 ok, reason = False, "already_floored"
             else:
                 # A deeper request must revisit the old cutoff page: rows
                 # below that cutoff were filtered out before persistence.
                 existing = ledger.history_job(req["project_id"])
-                if existing is None and restart_initial:
-                    existing = dict(stopped)
                 if existing:
                     try:
                         pl = loads_dict(existing["payload"] or "{}")
@@ -261,8 +268,6 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                                         reason_code="invalid_payload")
                         existing = None
                 if existing:
-                    if restart_initial:
-                        history_walk.restart_failed(pl)
                     if since < pl["since"]:
                         pl["page"] = 1
                         pl["stalls"] = 0
@@ -274,9 +279,6 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                     if existing["state"] == "failed":
                         ledger.db.execute("UPDATE fetch_jobs SET state='pending' WHERE job_id=?", (existing["job_id"],))
                     ledger.job_defer(existing["job_id"], 0, payload=pl)
-                    if restart_initial:
-                        ledger.db.execute("UPDATE fetch_jobs SET attempts=0,reason_code=NULL WHERE job_id=?",
-                                          (existing["job_id"],))
                 else:
                     ledger.job_add("history", req["project_id"], payload={
                         "since": since, "page": 1,
@@ -292,6 +294,18 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
 
 
 # ---------- thread merge (shared with init_data) ----------
+
+
+def _retire_verified_thread(ledger, parent, *, replies=None):
+    if ledger is None or ledger.db.execute(
+            "SELECT 1 FROM fetch_jobs WHERE kind='thread' AND project_id=? AND message_id=? AND state='failed'",
+            (parent.project_id, parent.message_id)).fetchone() is None:
+        return
+    import initial_import_state
+    with (nullcontext() if ledger.db.in_transaction else ledger.db):
+        ledger.db.execute("UPDATE fetch_jobs SET job_id=job_id WHERE 0")
+        initial_import_state.retire_verified_thread_tx(ledger.db, parent, time.time(), replies=replies)
+
 
 def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
     """Fill full bodies for every message that has thread replies.
@@ -329,6 +343,7 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
                 and all(t.body_state in TERMINAL_BODY_STATES
                         for t in m.replies)
                 and len({t.message_id for t in m.replies}) >= m.reply_count):
+            _retire_verified_thread(ledger, m)
             continue
         try:
             full = adapter.fetch_thread(m.project_id, m.message_id,
@@ -386,6 +401,8 @@ def merge_full_replies(adapter, msgs, delay, deadline, stats, ledger=None):
                     result.reply_jobs += 1
                 elif t.message_id not in got:
                     result.checkpoint_safe = False
+        if len(got) >= m.reply_count:
+            _retire_verified_thread(ledger, m, replies=full)
         stats["threads"] += 1
         time.sleep(delay)
     return result

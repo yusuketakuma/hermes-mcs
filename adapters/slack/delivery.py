@@ -410,6 +410,7 @@ class DeliveryWorker(_BaseWorker):
                                                    and reply_card_key(spec.get("card_key"))))
                        and bool((spec["parts"].get("slack") or {}).get("face_posts"))
                        and self._ours(spec["delivery"]))
+        proven = replied = False
         for part in spec["parts"].get("manifest") or []:
             face_part = face_thread and part.get("kind") == "thread"
             if part.get("kind") != "body_part" and not face_part:
@@ -424,20 +425,26 @@ class DeliveryWorker(_BaseWorker):
                    and _TS.fullmatch(row["remote_id"])
                    and (row["remote_id"] == root if face_part
                         else row["remote_id"] not in (root, message_id)) for row in rows):
-                pins = {}
-                for token in token_map(spec):
-                    current = self._reg.token(token)
-                    if (current and current.get("action") in ("meds", "drugsearch")
-                            and current.get("message_id") == message_id
-                            and current.get("team_id") == self._settings["team_id"]
-                            and current.get("channel_id") == self._settings["channel_id"]):
-                        pins[token] = {key: value for key, value in current.items()
-                                       if key != "at"}
-                        pins[token]["verified_thread_id"] = root
-                        pins[token]["verified_card_message_id"] = message_id
-                if pins:
-                    self._reg.put_tokens(pins, durable=True)
-                return
+                proven = True
+                replied = replied or not face_part
+        if not proven:
+            return
+        # Slack shows a threaded ephemeral only inside an active thread: a card
+        # face with no reply under it gets its drug answers in the channel instead
+        thread = root if replied or root != message_id else None
+        pins = {}
+        for token in token_map(spec):
+            current = self._reg.token(token)
+            if (current and current.get("action") in ("meds", "drugsearch")
+                    and current.get("message_id") == message_id
+                    and current.get("team_id") == self._settings["team_id"]
+                    and current.get("channel_id") == self._settings["channel_id"]):
+                pins[token] = {key: value for key, value in current.items()
+                               if key != "at"}
+                pins[token]["verified_thread_id"] = thread
+                pins[token]["verified_card_message_id"] = message_id
+        if pins:
+            self._reg.put_tokens(pins, durable=True)
 
     async def _drive_parts(self, claim, manifest, ctx, records):
         # Settled replies bypass _perform_part on crash-resume.

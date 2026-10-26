@@ -101,21 +101,23 @@ def create_exclusive(path, mode: int = 0o600, *, dir_fd: int | None = None,
 
 
 def read_regular_nofollow(path, limit: int, error, *,
-                          check_size: bool = True) -> bytes:
+                          check_size: bool = True, with_stat: bool = False):
     """Read at most ``limit + 1`` bytes of a regular file, never following
     a symlink or blocking on a FIFO.
 
     Opens ``O_RDONLY | O_NOFOLLOW | O_NONBLOCK`` and raises ``error()``
     unless fstat shows a regular file (and, with ``check_size``, a size
     within ``limit``).  The caller rejects a result longer than ``limit``
-    with its own error, since the file may grow after the fstat."""
+    with its own error, since the file may grow after the fstat.
+    ``with_stat=True`` also returns that same opened descriptor's stat."""
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     stream = fdopen_owned(fd, "rb")
     with stream:
         st = os.fstat(stream.fileno())
         if not stat.S_ISREG(st.st_mode) or (check_size and st.st_size > limit):
             raise error()
-        return stream.read(limit + 1)
+        raw = stream.read(limit + 1)
+        return (raw, st) if with_stat else raw
 
 
 def publish_new_bytes(path, raw):

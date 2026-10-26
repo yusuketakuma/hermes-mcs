@@ -84,7 +84,9 @@ def test_face_drug_thread_binding_requires_proven_same_card_and_thread(led, faul
     tokens = [t for t, c in token_map(spec).items() if c["action"] in ("meds", "drugsearch")]
     assert tokens
     root = "1790000000.000001"
-    assert all(w.reg.token(t).get("verified_thread_id") == root for t in tokens)
+    # a face with no reply under it: proven card, no thread for the answers
+    assert all(w.reg.token(t).get("verified_card_message_id") == root for t in tokens)
+    assert all(w.reg.token(t).get("verified_thread_id") is None for t in tokens)
     restored = registry.Registry(w.dirs["state"], scope=SCOPE)
     for token in tokens:
         restored._data["tokens"][token].pop("verified_thread_id", None)
@@ -106,5 +108,6 @@ def test_face_drug_thread_binding_requires_proven_same_card_and_thread(led, faul
     worker = DeliveryWorker(sender=w.sender, settings=SCOPE, root=str(w.root), reg=restored,
                             worker_id=registry.new_worker_id(), log=lambda *_a, **_k: None)
     asyncio.run(worker._resume_parts(spec, records))
-    assert all(restored.token(t).get("verified_thread_id") == (root if fault is None else None) for t in tokens)
+    assert all(restored.token(t).get("verified_card_message_id") == (root if fault is None else None) for t in tokens)
+    assert all(restored.token(t).get("verified_thread_id") is None for t in tokens)
     assert not w.client.thread_posts

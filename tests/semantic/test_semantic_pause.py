@@ -30,13 +30,14 @@ def test_pause_preserves_source_jobs_and_receipts_and_resume_is_explicit(tmp_pat
         token = runtime.JobToken.from_row(job)
         _control(db, 'pause')
         assert not runtime.job_matches(db, token)
-        db.save_messages([_message(3)], notify={'source': 'unread'}, semantic=True)
+        db.save_messages([_message(3)], project_id=1, notify={'source': 'unread'}, semantic=True)
         assert db.db.execute('SELECT count(*) FROM messages').fetchone()[0] == 3
-        assert db.db.execute("SELECT count(*) FROM fetch_jobs WHERE kind='semantic'").fetchone()[0] == 1
+        # pause holds execution, not durable intake: the new root gets its own job
+        assert db.db.execute("SELECT count(*) FROM fetch_jobs WHERE kind='semantic'").fetchone()[0] == 2
         client = _FakeJev()
         held = semantic_drain.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 300,
                                 jev_client=client, llm_fn=_llm)
-        assert held['deferred'] == 1 and client.requests_made == 0
+        assert held['deferred'] == 2 and client.requests_made == 0
         assert semantic.status_report(db)['semantic_paused_projects'] == [1]
         _control(db, 'resume')
         assert not runtime.job_matches(db, token)  # pause/resume cannot revive an old worker
@@ -46,8 +47,8 @@ def test_pause_preserves_source_jobs_and_receipts_and_resume_is_explicit(tmp_pat
             db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
         resumed = semantic_drain.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 300,
                                    jev_client=client, llm_fn=_llm)
-        assert resumed['done'] == 1 and client.requests_made > 0
-        assert db.db.execute("SELECT count(*) FROM fetch_jobs WHERE kind='semantic'").fetchone()[0] == 1
+        assert resumed['done'] == 2 and client.requests_made > 0
+        assert db.db.execute("SELECT count(*) FROM fetch_jobs WHERE kind='semantic'").fetchone()[0] == 2
         event = _semantic_event(db)
         payload = json.loads(event['payload'])
         monkeypatch.setattr(notify_flush, '_config', lambda: _cfg('enforce'))

@@ -87,10 +87,11 @@ MAX_POST_ACTIONS = 5          # spec.MAX_POST_ACTIONS
 # Card face layout stamped at creation: existing cards keep layout 1/2 (no
 # fingerprint change, no mass re-render / LINE WORKS re-post); cards
 # created from now on use the current one (owner decision 2026-10-08).
-# Layout 4 = Slack reply cards (notify.reply_cards): the root card shows
+# Layout 4 introduced reply cards (notify.reply_cards): the root card shows
 # the root post only and each later reply gets its own card in the root's
-# thread. CARD_LAYOUT is the newest layout this code can write, so the
-# updater refuses a rollback to code that would misread a layout-4 card.
+# thread. Layout 5 retains that format and adds initial-history summaries.
+# CARD_LAYOUT is the newest layout this code can write; rollback checks the
+# stored layout on the DB selected by the updater's schema/backup contract.
 CARD_LAYOUT = 5
 FACE_LAYOUT = 3               # every card that is not a reply-card thread
 

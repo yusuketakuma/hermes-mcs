@@ -389,17 +389,17 @@ def test_small_reservation_primitive_needs_no_semantic_job(tmp_path):
     db.close()
 
 
-def test_jev_key_based_auto_assist_defaults_to_all_and_500_but_preserves_explicit_off():
+def test_jev_key_based_auto_assist_defaults_to_all_and_hard_cap_but_preserves_explicit_off():
     cfg, errors = semantic_policy.semantic_config({}, key_present=True)
     assert not errors and cfg["mode"] == "assist"
-    assert cfg["daily_request_budget"] == 500 and cfg["project_ids"] is None
+    assert cfg["daily_request_budget"] == jev.DAILY_REQUEST_LIMIT == 10000 and cfg["project_ids"] is None
     cfg, errors = semantic_policy.semantic_config({"semantic": {
         "mode": "off", "project_ids": [1], "daily_request_budget": 0}}, key_present=True)
     assert not errors and cfg["mode"] == "off" and cfg["daily_request_budget"] == 0
 
 
-def test_jev_explicit_budget_never_exceeds_user_500_cap():
-    for budget, expected in ((0, 0), (200, 200), (500, 500), (1000, 500)):
+def test_jev_explicit_budget_never_exceeds_the_user_hard_cap():
+    for budget, expected in ((0, 0), (500, 500), (10000, 10000), (20000, 10000)):
         cfg, errors = semantic_policy.semantic_config({"semantic": {
             "daily_request_budget": budget, "project_ids": []}}, key_present=True)
         assert not errors and cfg["daily_request_budget"] == expected and cfg["project_ids"] == []

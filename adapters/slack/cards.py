@@ -12,6 +12,7 @@ SCHEMA = "mcs-card-render/v2"
 LINK_ACTION = "mcs:link"
 MENU_ACTION = "mcs:menu"
 STAMP_MENU_ACTION = "mcs:stamps-menu"
+OWN_STAMP_VALUE = "mcs:own-stamp"   # menu initial_option for the stamp already pressed in MCS
 STAMP_PAIR_PREFIX = "mcs:stamp-pair:"
 
 
@@ -49,14 +50,23 @@ def render(spec, names=None):
         if stamp_form:
             options.append({"text": {"type": "plain_text", "text": "🗂 " + STAMP_PICKER_LABEL},
                             "value": stamp_form["token"]})
+        menu_element = {"type": "static_select", "action_id": STAMP_MENU_ACTION,
+                        "placeholder": {"type": "plain_text", "text": "スタンプを押す…"},
+                        "options": options}
+        own = next((b for b in stamps if b.get("style") == "primary"), None)
+        if own:
+            # Display-only, not a token (the receiver ignores it), so the
+            # （取消） option stays selectable instead of being the current choice.
+            shown = {"text": {"type": "plain_text", "text": own["label"] + "（押印済み）"},
+                     "value": OWN_STAMP_VALUE}
+            options.insert(0, shown)
+            menu_element["initial_option"] = shown
         if any(len(o["text"]["text"]) > 75 for o in options):
             raise ValueError("slack_button_label")
         stamp_control = {
             "type": "actions",
             "block_id": f"mcs:stamps:{spec['delivery_id']}:{spec['render_rev']}",
-            "elements": [{"type": "static_select", "action_id": STAMP_MENU_ACTION,
-                          "placeholder": {"type": "plain_text", "text": "スタンプを押す…"},
-                          "options": options}]}
+            "elements": [menu_element]}
     blocks = render_parts(spec["parts"], names,
                           spec["parts"].get("mentions") == "silent",
                           card_kind=spec.get("kind"), stamp_control=stamp_control)

@@ -80,11 +80,11 @@ def test_retry_cannot_exceed_hard_daily_500_cap(tmp_path, monkeypatch):
     monkeypatch.setattr(jev.time, "sleep", lambda _: None)
     try:
         db.artifact_add("semantic_usage", "{}", model=jev.JEV_MODEL,
-                        meta={"jev_requests": 499})
+                        meta={"jev_requests": jev.DAILY_REQUEST_LIMIT - 1})
         row = db.db.execute("SELECT * FROM fetch_jobs WHERE kind='semantic'").fetchone()
         reserve = runtime.usage_reserver(
             db, runtime.JobToken.from_row(row), kind="semantic_usage", model=jev.JEV_MODEL,
-            project_id=1, message_id=1, daily_request_budget=9999)
+            project_id=1, message_id=1, daily_request_budget=jev.DAILY_REQUEST_LIMIT + 1)
         def post(body, timeout):
             posts.append(body)
             return 429, {"Retry-After": "0"}, b"{}"
@@ -95,6 +95,6 @@ def test_retry_cannot_exceed_hard_daily_500_cap(tmp_path, monkeypatch):
                 {"target": {"text": "synthetic"}}, question, time.monotonic() + 30)
         assert failure.value.kind == "budget_exceeded"
         assert len(posts) == 1
-        assert semantic_store.jev_usage_today(db) == 500
+        assert semantic_store.jev_usage_today(db) == jev.DAILY_REQUEST_LIMIT
     finally:
         db.close()

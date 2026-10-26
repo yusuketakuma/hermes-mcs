@@ -20,7 +20,7 @@ def test_discord_reply_card_waits_for_and_then_uses_the_root_thread(led, monkeyp
     _seed_thread(led, mids=(100,))
     assert _dispatch(led, _intent(led), REPLY, now=clock[0])["dispatched"]
     (root,) = _cards(led)
-    assert root["layout"] == 4
+    assert root["layout"] == notify_cards.CARD_LAYOUT
 
     clock[0] += 60
     _msg(led, 202, parent=100, body="合成の返信", ts=int(clock[0]))

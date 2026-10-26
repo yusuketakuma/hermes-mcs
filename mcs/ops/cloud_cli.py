@@ -107,6 +107,7 @@ def diagnostics(cfg, *, root=None, probe=False):
         "anthropic": {"mode": cloud["mode"], "key_present": key,
                 "status": "invalid" if errors else "local" if not key or cloud["mode"] in ("off", "dry_run") else "configured",
                 "daily_request_budget": cloud["daily_request_budget"],
+                "daily_cost_limit_usd": cloud["daily_cost_limit_usd"],
                 "monthly_cost_limit_usd": cloud["monthly_cost_limit_usd"],
                 "scope": "all" if cloud["project_ids"] is None else "none" if not cloud["project_ids"] else "selected",
                 "price_version": policy.PRICE_VERSION, "price_valid": policy.pricing_valid(),
@@ -424,7 +425,9 @@ def observe(cfg, *, root=None, days=14, since=None, project=None):
         "patient_context_recurring_estimate": recurring, "reextract_backlog_once": routes["reextract"],
         "new_posts_daily_estimate": sum(row["posts"] for row in counts.values()) / days,
         "additional_runtime_checks": "source_claim_deadline_and_current_config",
-        "daily_request_budget": settings["daily_request_budget"], "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
+        "daily_request_budget": settings["daily_request_budget"],
+        "daily_cost_limit_usd": settings["daily_cost_limit_usd"],
+        "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
         "max_concurrency_per_process": settings["max_concurrency"], "accounting": accounting,
         "days": days, "history_days_observed": len(counts),
         "new_posts": sum(row["posts"] for row in counts.values()),
@@ -556,6 +559,59 @@ def command(args):
         return 1
 
 
+_BUDGET_KEYS = {"daily_usd": "daily_cost_limit_usd", "monthly_usd": "monthly_cost_limit_usd"}
+
+
+def _budget_value(text):
+    """A dollar amount >= 0, or none/off to remove that cap."""
+    if text.strip().lower() in ("none", "off", "null"):
+        return None
+    value = float(text)
+    if not math.isfinite(value) or value < 0:
+        raise ValueError
+    return value
+
+
+def budget_command(args):
+    """Show or set the Anthropic daily/monthly cost caps in config.json."""
+    try:
+        changes = {}
+        for option, key in _BUDGET_KEYS.items():
+            text = getattr(args, option, None)
+            if text is not None:
+                changes[key] = _budget_value(text)
+    except ValueError:
+        print("予算: 金額はドル単位の0以上の数値、または none で指定してください")
+        return 1
+    import config_edit
+    try:
+        if changes:
+            cfg, cloud_errors = config_edit.apply({"cloud_llm." + k: v for k, v in changes.items()}, "cloud_llm")
+            if cloud_errors:
+                print("設定に誤りがあるため予算を保存していません。mcs_setup.py check で確認してください")
+                return 1
+        else:
+            cfg = config_edit.read_strict()
+            from mcs_config import validate_config
+            if validate_config(cfg)[0]:
+                print("設定に誤りがあるため予算を表示していません。mcs_setup.py check で確認してください")
+                return 1
+    except config_edit.ConfigConflict:
+        print("予算: ほかの設定保存と競合したため変更していません。設定を再確認して再試行してください")
+        return 1
+    except (OSError, ValueError, RecursionError):
+        print("予算: 設定ファイルを読み取れないため変更していません（先に mcs_setup.py init で設定してください）")
+        return 1
+    settings, errors = policy.cloud_config(cfg)
+    if errors:
+        print("設定に誤りがあるため予算を表示していません。mcs_setup.py check で確認してください")
+        return 1
+    print(json.dumps({"daily_cost_limit_usd": settings["daily_cost_limit_usd"],
+                      "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
+                      "saved": bool(changes)}, ensure_ascii=False))
+    return 0
+
+
 def add_parsers(sub):
     p = sub.add_parser("cloud-llm", help="外部AIの件数・費用を送信せずに試算、照会します")
     actions = p.add_subparsers(dest="cloud_action", required=True)
@@ -566,6 +622,10 @@ def add_parsers(sub):
         if action == "log":
             q.add_argument("--project", type=int)
         q.set_defaults(fn=command)
+    q = actions.add_parser("budget", help="Anthropicの1日・1か月の費用上限（ドル）を表示・設定します")
+    q.add_argument("--daily-usd", dest="daily_usd", help="1日の上限（ドル）。none で解除")
+    q.add_argument("--monthly-usd", dest="monthly_usd", help="1か月の上限（ドル）。none で解除")
+    q.set_defaults(fn=budget_command, cloud_action="budget")
     for action in ("stop", "resume"):
         q = actions.add_parser(action, help="人の確認と記録を伴うクラウド処理の" + ("停止" if action == "stop" else "再開"))
         q.add_argument("--confirm-human", action="store_true")

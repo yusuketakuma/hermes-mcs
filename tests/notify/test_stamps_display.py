@@ -70,12 +70,26 @@ def test_own_post_text_counts_others_and_keeps_unfetched_distinct(led):
         return thread_stamp_line(get_message_metadata(led.db, 100) | {"own_post": True})
     assert own() == "スタンプ 未取得"
     _meta(led, 100, reactions=[_r("viewed", 3, True), _r("accepted", 1), _r("good", 0)])
-    assert own().startswith("スタンプ 👀2 🙆1 · 自分 👀 · ") and own().endswith("時点")
+    assert own().startswith("スタンプ 👀2 🙆1 · ") and own().endswith("時点")
     assert "👍" not in own()
     _meta(led, 100, reactions=[_r("viewed", 1, True)])
-    assert own().startswith("スタンプ なし · 自分 👀 · ")      # only one's own stamp
+    assert own().startswith("スタンプ なし · ")      # only one's own stamp
     _meta(led, 100, reactions=[])
     assert own().startswith("スタンプ なし · ") and "自分" not in own()
+
+
+@pytest.mark.parametrize("sender_id", [SELF, OTHER])
+def test_own_stamp_is_not_listed_and_alone_shows_no_row(led, sender_id):
+    """The stamp menu already shows one's own stamp (owner 2026-10-26)."""
+    _patient(led)
+    _self_known(led)
+    _msg(led, 100)
+    _meta(led, 100, reactions=[_r("viewed", 1, True)])
+    assert notify_render.thread_stamp_row(led.db, 100, sender_id) == ""
+    _meta(led, 100, reactions=[_r("viewed", 2, True), _r("thanked", 1)])
+    row = notify_render.thread_stamp_row(led.db, 100, sender_id)
+    count = 1 if sender_id == SELF else 2
+    assert row.startswith(f"スタンプ 👀{count} 🙏1 · ") and "自分" not in row
 
 
 def test_card_footer_uses_sender_id_not_same_name(led):
@@ -93,7 +107,7 @@ def test_card_footer_uses_sender_id_not_same_name(led):
     body = notify_render.card_body_text(
         led.db, _card(led), {"shown": "[100, 101]"}, max_chars=None)[1]
     own, other = body.split("\n\n")
-    assert "スタンプ 👀1 · 自分 👀 · " in own and "スタンプ 👀2 · 自分 👀 · " in other
+    assert "スタンプ 👀1 · " in own and "スタンプ 👀2 · " in other
 
 
 def test_unreacted_own_posts_section_only_when_published(led):
@@ -350,7 +364,7 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
     body = notify_render.card_body_text(
         led.db, _card(led), {"shown": "[100, 101]"}, max_chars=None)[1]
     for post, mid, stamps in zip(body.split("\n\n"), (100, 101),
-                                 ("スタンプ 🙆2 👍1 · 自分 🙆 · ",
+                                 ("スタンプ 🙆2 👍1 · ",
                                   "スタンプ 未取得")):
         lines = post.split("\n")
         assert lines[1] == f"・要約{mid}"
@@ -385,16 +399,16 @@ def test_thread_post_names_who_pressed(led, monkeypatch):
     def stamp():
         return next(ln for ln in body().split("\n") if ln.startswith("スタンプ "))
     # never walked yet: counts only, one line
-    assert stamp() == "スタンプ 👀2 · 自分 🙆 · 09-21 23:12時点"
+    assert stamp() == "スタンプ 👀2 · 09-21 23:12時点"
     led.save_reaction_actors(100, [
         {"actor_id": OTHER, "reaction_type": "viewed", "name": "合成 一郎", "profession": "医師"},
         {"actor_id": 9, "reaction_type": "viewed", "name": "合成 花子"},
         {"actor_id": SELF, "reaction_type": "accepted", "name": "合成 自分"}], True, now=NOW - 50)
     monkeypatch.setattr(ledger.time, "time", lambda: NOW + 86400)
-    assert stamp() == ("スタンプ 👀2 合成 一郎・合成 花子 · 自分 🙆 · 押した人 古い情報"
+    assert stamp() == ("スタンプ 👀2 合成 一郎・合成 花子 · 押した人 古い情報"
                        " · 09-21 23:12時点")       # pinned clock: 24h past
     monkeypatch.setattr(ledger.time, "time", lambda: NOW)
-    assert stamp() == "スタンプ 👀2 合成 一郎・合成 花子 · 自分 🙆 · 09-21 23:12時点"
+    assert stamp() == "スタンプ 👀2 合成 一郎・合成 花子 · 09-21 23:12時点"
     footer = "\n".join(x["text"] for x in notify_render.card_content(led.db, _card(led))["footer"])
     assert "合成 一郎" not in footer
 
@@ -570,9 +584,9 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
         assert f"合成本人{201 - mid}" not in post
         if mid == 100:
             # one's own post counts and names others only
-            assert "スタンプ 👀1 合成他者100＜＠UFAKE＞ · 自分 👀" in post
+            assert "スタンプ 👀1 合成他者100＜＠UFAKE＞" in post
         else:
-            assert "スタンプ 👀2 合成本人101・合成他者101＜＠UFAKE＞ · 自分 👀" in post
+            assert "スタンプ 👀2 合成本人101・合成他者101＜＠UFAKE＞" in post
         assert ("投稿時点" in post) is (platform == "lineworks")
         assert "時点" in post
     for _, kwargs in calls:

@@ -19,7 +19,7 @@ def test_save_preview_discloses_auto_jev_scope_and_cap(monkeypatch, capsys):
     monkeypatch.setattr("builtins.input", lambda _: "2")
     assert not setup_wizard.confirm_save({}, plugin_profile=None)
     text = capsys.readouterr().out
-    assert "Jev" in text and "500" in text and "assist" in text
+    assert "Jev" in text and "10000" in text and "assist" in text
     assert "全対象" in text and "投稿本文" in text
     assert "患者名" in text and "匿名化しません" in text
     assert "synthetic-private-value" not in text

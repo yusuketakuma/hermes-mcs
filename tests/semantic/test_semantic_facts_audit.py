@@ -116,7 +116,7 @@ def test_audit_target_carries_structured_fields():
     class Spy(_Jev):
         def evaluate(self, state, questions, deadline):
             if "source_fact_coverage" not in questions:
-                seen["target"] = state["target"]["text"]
+                seen["target"] = " ".join(f["text"] for f in state["target"]["facts"])
                 seen["ctx_roles"] = [c["role"]
                                      for c in state["context"]]
             return super().evaluate(state, questions, deadline)

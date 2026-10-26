@@ -287,54 +287,62 @@ def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
             _append_finding(findings, state_error, fact_id)
             return _result(details, findings, False, "invalid")
         details.setdefault(fact_id, {})
-        for dimension, (instructions, options) in \
-                jev.MED_DETAIL_QUESTIONS.items():
-            cached = cache.get((fact_id, dimension))
-            if cached is not None:
-                choice = cached["choice"]
-                confidence = cached["confidence"]
-            else:
-                if deadline is not None and time.monotonic() > deadline:
-                    _append_finding(findings, "medication_detail_deadline",
-                                    fact_id, dimension)
-                    return _result(details, findings, False, "deadline")
-                try:
-                    question = jev.choice_question(
-                        instructions + " Determine this from the original evidence "
-                        "quote and same-thread context. The target statement and "
-                        "its status/polarity are unverified extraction candidates, "
-                        "not authoritative source facts.", options)
-                    response = jev.evaluate_once_more(
-                        jev_client, state, {dimension: question}, deadline)
-                except RuntimeGuardError:
-                    raise
-                except Exception as error:
-                    finding = {"code": "medication_detail_technical_error",
-                               "fact_id": fact_id, "dimension": dimension}
-                    if isinstance(error, jev.JevError):
-                        finding["kind"] = error.kind
-                    findings.append(finding)
+        # Keep the event's state and question order, respecting the same
+        # configured request bound as proposition and fact audits. Persist
+        # each successful chunk before asking the next one.
+        missing = {dimension: jev.choice_question(
+                       instructions + " Determine this from the original evidence "
+                       "quote and same-thread context. The target statement and "
+                       "its status/polarity are unverified extraction candidates, "
+                       "not authoritative source facts.", options)
+                   for dimension, (instructions, options) in jev.MED_DETAIL_QUESTIONS.items()
+                   if cache.get((fact_id, dimension)) is None}
+        limit = scfg.get("max_questions_per_request", 12)
+        if type(limit) is not int or not 1 <= limit <= 48:
+            _append_finding(findings, "medication_detail_input_invalid", fact_id)
+            return _result(details, findings, False, "invalid")
+        answers = {}
+        details[fact_id].update({dimension: cache[(fact_id, dimension)]["choice"]
+                                for dimension in jev.MED_DETAIL_QUESTIONS
+                                if (fact_id, dimension) in cache})
+        keys = list(missing)
+        for start in range(0, len(keys), limit):
+            part = {dimension: missing[dimension] for dimension in keys[start:start + limit]}
+            if deadline is not None and time.monotonic() > deadline:
+                _append_finding(findings, "medication_detail_deadline", fact_id, next(iter(part)))
+                return _result(details, findings, False, "deadline")
+            try:
+                response = jev.evaluate_once_more(jev_client, state, part, deadline)
+            except RuntimeGuardError:
+                raise
+            except Exception as error:
+                finding = {"code": "medication_detail_technical_error",
+                           "fact_id": fact_id, "dimension": next(iter(part))}
+                if isinstance(error, jev.JevError):
+                    finding["kind"] = error.kind
+                findings.append(finding)
+                return _result(details, findings, False, "technical")
+            if deadline is not None and time.monotonic() > deadline:
+                _append_finding(findings, "medication_detail_deadline", fact_id, next(iter(part)))
+                return _result(details, findings, False, "deadline")
+            received = response.get("answers") if isinstance(response, dict) else None
+            received = received if isinstance(received, dict) else {}
+            for dimension in part:
+                answer = received.get(dimension)
+                options = jev.MED_DETAIL_QUESTIONS[dimension][1]
+                choice = answer.get("choice") if isinstance(answer, dict) else None
+                confidence = _finite_confidence(answer.get("confidence")) if isinstance(answer, dict) else None
+                if not isinstance(choice, str) or choice not in options or confidence is None:
+                    _append_finding(findings, "medication_detail_technical_error", fact_id, dimension,
+                                    kind="protocol_error")
                     return _result(details, findings, False, "technical")
-                if deadline is not None and time.monotonic() > deadline:
-                    _append_finding(findings, "medication_detail_deadline",
-                                    fact_id, dimension)
-                    return _result(details, findings, False, "deadline")
-                try:
-                    answer = response["answers"][dimension]
-                    choice = answer["choice"]
-                    confidence = _finite_confidence(answer["confidence"])
-                except (KeyError, TypeError):
-                    choice, confidence = None, None
-                if (not isinstance(choice, str) or choice not in options
-                        or confidence is None):
-                    _append_finding(findings,
-                                    "medication_detail_technical_error",
-                                    fact_id, dimension, kind="protocol_error")
-                    return _result(details, findings, False, "technical")
-                _persist_detail(ledger, project_id, target_id, source_fp,
-                                policy_fp, fact_id, dimension, choice,
-                                confidence)
-
+                _persist_detail(ledger, project_id, target_id, source_fp, policy_fp,
+                                fact_id, dimension, choice, confidence)
+                answers[dimension] = {"choice": choice, "confidence": confidence}
+                details[fact_id][dimension] = choice
+        for dimension in jev.MED_DETAIL_QUESTIONS:
+            answer = cache.get((fact_id, dimension)) or answers[dimension]
+            choice, confidence = answer["choice"], answer["confidence"]
             details[fact_id][dimension] = choice
             if (confidence >= threshold and dimension in ("status", "polarity")
                     and fact.get(dimension) != choice):
