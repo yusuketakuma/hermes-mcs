@@ -54,3 +54,47 @@ def test_future_plans_are_sorted_by_event_day_then_written_role_without_dropping
     assert any("別投稿による変更は未照合" in line for line in first["head"])
     assert any("本文を確認できない投稿" in line for line in first["head"])
     assert any("履歴の取得完了は未確認" in line for line in first["head"])
+
+
+def test_cancel_notice_is_a_scoped_unconfirmed_cue_across_pages(ctx):
+    plans = [
+        "看護師が2026年11月3日に本人を訪問する予定です。",
+        "看護師が2026年11月3日に本人を看護する予定です。",
+        "看護師が2026年11月4日に本人を訪問する予定です。",
+        "医師が2026年11月3日に本人を往診する予定です。",
+        "薬剤師が2026年11月3日に本人を服薬指導する予定です。",
+    ] + [f"介護職員が2026年11月{day}日に本人を介護する予定です。" for day in range(5, 12)]
+    cancellations = [
+        "看護師が2026年11月3日の本人への訪問を中止しました。",
+        "看護師が2026年11月3日に本人を訪問する予定を取消しました。",
+        "医師が2026年11月4日の本人への往診を中止しました。",
+        "薬剤師が2026年10月19日に本人への服薬指導を中止しました。",
+    ]
+    unknown = "予定を確認します。看護師が2026年11月3日に本人を訪問する予定です。"
+    messages = [_message(100 + index, body=body) for index, body in enumerate(plans + cancellations + [unknown])]
+    ctx.db.save_messages(messages, project_id=1)
+    ctx.db.ensure_patient(2)
+    foreign = "薬剤師が2026年11月3日の本人への服薬指導を中止しました。"
+    ctx.db.save_messages([_message(900, pid=2, body=foreign)], project_id=2)
+    posted = datetime.fromisoformat("2026-10-20T09:00:00+09:00").timestamp()
+    ctx.db.db.execute("UPDATE messages SET posted_at_ts=? WHERE project_id=1 AND message_id BETWEEN 100 AND 200", (posted,))
+    ctx.db.db.execute("UPDATE patients SET fetch_state='incomplete' WHERE project_id=1")
+    now = datetime.fromisoformat("2026-10-20T12:00:00+09:00").timestamp()
+    first = notify_views.patient_context_list(ctx.db.db, 1, "previsit", cfg={}, since=T0, now=now)
+    rows = list(first["items"])
+    for page in range(1, first["pages"]):
+        view = notify_views.patient_context_list(ctx.db.db, 1, "previsit", cfg={}, since=T0, now=now, page=page)
+        rows.extend(view["items"])
+    assert first["pages"] > 1 and all(row["project_id"] == 1 for row in rows)
+    future = {row["quotes"][0]: row for row in rows
+              if row["group"].startswith("今後の介入予定の記載（変更未照合）") and row["quotes"]}
+    assert set(future) == set(plans)
+    cue = "同じ職種・同じ日の取消記録あり（対応未確認）"
+    assert all(future[body]["quotes"].count(cue) == 1 for body in plans[:2])
+    assert all(cue not in future[body]["quotes"] for body in plans[2:])
+    rendered = "\n".join(row["text"] for row in rows)
+    assert all(body in rendered for body in cancellations)
+    assert "介入に関する記載あり（内容未確認）" in rendered
+    assert unknown not in rendered and foreign not in rendered
+    assert any("履歴の取得完了は未確認" in line for line in first["head"])
+    assert all("取消済み" not in row["text"] for row in future.values())

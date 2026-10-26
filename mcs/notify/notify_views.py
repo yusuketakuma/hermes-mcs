@@ -953,6 +953,12 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
                 today = datetime.fromtimestamp(now, JST).date().isoformat()
             except (TypeError, ValueError, OverflowError, OSError):
                 today = None
+            cancellation_days = {(record.get("role"), record.get("target_day")) for record in records
+                                 if record.get("project_id") == project_id
+                                 and record.get("state") == "cancelled"
+                                 and record.get("date_basis") == "cancelled_intervention"
+                                 and isinstance(record.get("role"), str)
+                                 and isinstance(record.get("target_day"), str)}
             groups = {"future": [], "other": [], "unknown": []}
             for record in records:
                 day = record.get("event_day")
@@ -962,6 +968,10 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
                 if key == "unknown":
                     # A partial quote could omit a preceding negation or correction.
                     row.update(quote=None, text="介入に関する記載あり（内容未確認）")
+                elif (key == "future" and record.get("project_id") == project_id
+                      and (record.get("role"), day) in cancellation_days):
+                    # Same role/day is a cue for review, not a link or a cancellation of this plan.
+                    row["reply"] = "同じ職種・同じ日の取消記録あり（対応未確認）"
                 groups[key].append(row)
             # A source id is only a stable tie-break, not proof of event order.
             groups["future"].sort(key=lambda row: (row["event_day"], row.get("role_text") or "",
