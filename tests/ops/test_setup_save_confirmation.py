@@ -61,15 +61,14 @@ def test_stamp_availability_reuses_existing_gate(monkeypatch, capsys):
     assert "設定上は利用可能。操作者の個別操作と承認記録" in capsys.readouterr().out
 
 
-def test_lineworks_does_not_claim_credential_initialization(monkeypatch, capsys):
+def test_lineworks_credentials_are_initialized_like_other_connectors(monkeypatch, capsys):
     cfg = {"runtime_mode": "standalone", "notify_target": "lineworks:synthetic-room",
            "notify": {"interactive": "lineworks"}}
     monkeypatch.setattr("builtins.input", lambda prompt: "2")
     setup_wizard.confirm_save(cfg, plugin_profile=None)
     output = capsys.readouterr().out
-    assert "LINE WORKSの認証情報はこの手順では保存・初期化しません" in output
-    assert "LINE WORKS接続ガイドの別手順が必要" in output
-    assert "Slack・Discordの認証情報と接続設定" in output
+    assert "この手順では保存・初期化しません" not in output
+    assert "Slack・Discord・LINE WORKSの認証情報と接続設定" in output
 
 
 @pytest.mark.parametrize("budget,expected", [(0, "外部Jev追加解析: 無効"), (1, "機能ごとの許可条件がそろった場合")])

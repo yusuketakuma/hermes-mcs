@@ -23,7 +23,7 @@ def _slack_on(cfg):
 
 
 def _lineworks_on(cfg):
-    return (cfg.get("notify") or {}).get("interactive") == "lineworks"
+    return transport_enabled(cfg, "lineworks")
 
 
 def _cards_on(cfg):
@@ -583,8 +583,7 @@ def confirm_save(cfg: dict, *, plugin_profile) -> bool:
         print(f"  Hermesへの接続設定・認証情報の保存先: {shown(profile)}"
               "。利用条件がそろった場合は通知gateway設定も反映します。")
     elif mode == "standalone":
-        print("  独立接続: Slack・Discordの認証情報と接続設定は、利用する接続について本人用の保存先へ保存します。"
-              "LINE WORKSの認証情報はこの手順では保存・初期化しません。LINE WORKS接続ガイドの別手順が必要です。")
+        print("  独立接続: Slack・Discord・LINE WORKSの認証情報と接続設定は、利用する接続について本人用の保存先へ保存します。")
     print("  保存後に接続設定を中断した場合、保存済みの内容は残り、同じ手順で再開できます。"
           "\n  この確認は個別のスタンプ操作の承認や、別サービスへの登録同意を作成しません。"
           "\n  空欄のまま進むと中止します。保存する場合だけ「はい」または1を選んでください。")

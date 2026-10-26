@@ -34,8 +34,19 @@ from .server import CallbackInbox, callback_result, callback_server
 _log = eventlog.make_logger("mcs.lineworks")
 
 
+def _worker_witness(data_root, reason):
+    """Best-effort start evidence for doctor; a status write never stops delivery."""
+    try:
+        import card_worker_status
+        # LINE WORKS has no Hermes profile; card_worker_status.diagnose reads 'default'.
+        card_worker_status.record(data_root, "lineworks", "default", reason)
+    except (ImportError, OSError, ValueError):
+        _log("worker_status_failed")
+
+
 def initialize(root):
-    scope = settings(root)
+    # Text-only LINE WORKS targets also send with these credentials (see check/send).
+    scope = settings(root, require_interactive=False)
     path = credentials_path(root)
     if path.exists():
         print("既存の認証設定を保持します。checkで確認してください。")
@@ -82,8 +93,12 @@ def check(root):
 
 
 async def serve(root, port):
-    scope = settings(root)
-    client, bot_secret = load_credentials(root, scope)
+    try:
+        scope = settings(root)
+        client, bot_secret = load_credentials(root, scope)
+    except (ClientError, OSError, ValueError):
+        _worker_witness(str(Path(root).expanduser().resolve() / "data"), "worker_start_failed")
+        raise
     dirs = paths.ensure_dirs(scope["data_root"], notify_dirs(scope["data_root"]))
     reg = registry.Registry(dirs["state"], scope=scope)
     sender = Sender(client, scope, scope["data_root"])
@@ -112,6 +127,7 @@ async def serve(root, port):
         thread.start()
         server_started = True
         _log("adapter_ready")
+        _worker_witness(scope["data_root"], "worker_started")
         while not stopping.is_set():
             try:
                 # Reconfiguration must never leave an old authorized sender alive.
