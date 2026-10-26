@@ -657,10 +657,9 @@ def _ls_tree_paths(tag: str, subdir: str | None = None
     return records
 
 
-def precheck_tag(tag: str) -> list[str]:
-    """Candidate-tree content gates — all work on fetched objects."""
+def _precheck_target_tree(tag: str, standalone: bool) -> tuple[list[str], list]:
+    """Inspect fixed target objects without importing any candidate code."""
     errors: list[str] = []
-    standalone = mcs_runtime.standalone(mcs_util.load_config())
     if standalone and not _standalone_target_supported(tag):
         errors.append("standalone_runtime_missing_in_target")
     paths = []
@@ -726,6 +725,31 @@ def precheck_tag(tag: str) -> list[str]:
                 errors.append(f"schema_bump:{cur_ver}->{new_ver}")
     except UpdateError:
         errors.append("schema_version_unreadable")
+    return errors, entries
+
+
+def _precheck_target_runtime_files(tag: str, standalone: bool) -> list[str]:
+    """Retain the existing installer, lock and SDK change refusals."""
+    errors = []
+    if _git(["diff", "--quiet", "HEAD", tag, "--", "install.sh"]
+            ).returncode != 0:
+        errors.append("install_sh_changed")
+    if _git(["diff", "--quiet", "HEAD", tag, "--",
+             "deployment/sdc-release-lock.json", "deployment/sdc-wheels/"]
+            ).returncode != 0:
+        errors.append("release_dependency_lock_changed")
+    # standalone SDK pins live in ~/.mcs/venv, which only install.sh updates
+    if standalone and _git(
+            ["diff", "--quiet", "HEAD", tag, "--",
+             "deployment/requirements-standalone.txt"]).returncode != 0:
+        errors.append("standalone_requirements_changed")
+    return errors
+
+
+def precheck_tag(tag: str) -> list[str]:
+    """Candidate-tree gates; legacy apply retains its existing candidate probe."""
+    standalone = mcs_runtime.standalone(mcs_util.load_config())
+    errors, entries = _precheck_target_tree(tag, standalone)
     # candidate preflight: exact blobs, not git archive (S3)
     tmp = tempfile.mkdtemp(prefix="mcs_preflight_")
     try:
@@ -771,18 +795,7 @@ def precheck_tag(tag: str) -> list[str]:
         errors.append(f"preflight_failed: {e}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    if _git(["diff", "--quiet", "HEAD", tag, "--", "install.sh"]
-            ).returncode != 0:
-        errors.append("install_sh_changed")
-    if _git(["diff", "--quiet", "HEAD", tag, "--",
-             "deployment/sdc-release-lock.json", "deployment/sdc-wheels/"]
-            ).returncode != 0:
-        errors.append("release_dependency_lock_changed")
-    # standalone SDK pins live in ~/.mcs/venv, which only install.sh updates
-    if standalone and _git(
-            ["diff", "--quiet", "HEAD", tag, "--",
-             "deployment/requirements-standalone.txt"]).returncode != 0:
-        errors.append("standalone_requirements_changed")
+    errors.extend(_precheck_target_runtime_files(tag, standalone))
     return errors
 
 

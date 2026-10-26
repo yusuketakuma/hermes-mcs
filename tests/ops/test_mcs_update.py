@@ -2996,3 +2996,38 @@ def test_post_merge_native_issuer_refuses_unregistered_entry_without_launch(upda
     monkeypatch.setattr(updater.subprocess, 'Popen', lambda *_a, **_k: pytest.fail('native refusal spawned a child'))
     with pytest.raises(release_apply_owner.ReleaseApplyError, match='CHILD_HOLD'):
         updater._run_post_merge('a' * 40, run_lock_fd=10, _release_entry=entry)
+
+
+def test_static_release_target_checks_keep_tree_and_runtime_refusals_without_running_candidate(updater, tmp_path, monkeypatch):
+    repo, _ = _make_repo(tmp_path)
+    work = tmp_path / 'remote-work'
+    (work / 'mcs/core').mkdir(parents=True)
+    (work / 'mcs/core/ledger.py').write_text('SCHEMA_VERSION = 8\n')
+    marker = tmp_path / 'candidate-was-executed'
+    (work / 'mcs/mcs_setup.py').write_text(f'from pathlib import Path\nPath({str(marker)!r}).write_text("executed")\n')
+    (work / 'data').mkdir()
+    (work / 'data/synthetic').write_text('synthetic')
+    (work / 'link.sh').symlink_to('f.txt')
+    (work / 'install.sh').write_text('# synthetic installer\n')
+    (work / 'deployment').mkdir()
+    (work / 'deployment/sdc-release-lock.json').write_text('{}')
+    (work / 'deployment/requirements-standalone.txt').write_text('synthetic')
+    _git(work, 'add', '.')
+    _git(work, 'commit', '-qm', 'synthetic target')
+    target = _git(work, 'rev-parse', 'HEAD').stdout.strip()
+    _git(work, 'push', '-q', str(tmp_path / 'remote.git'), 'main')
+    _git(repo, 'fetch', '-q', 'origin')
+    _mk_schema(tmp_path / 'ledger.db', 8)
+    monkeypatch.setattr(updater, 'REPO', str(repo))
+    monkeypatch.setattr(updater, 'LEDGER', str(tmp_path / 'ledger.db'))
+    run = updater._run_with_lifetime
+    def only_git(argv, **kwargs):
+        assert argv[0] == 'git', 'static target checks ran candidate code'
+        return run(argv, **kwargs)
+    monkeypatch.setattr(updater, '_run_with_lifetime', only_git)
+    errors, entries = updater._precheck_target_tree(target, False)
+    assert entries and any(e.startswith('protected_path:') for e in errors)
+    assert any(e.startswith('bad_entry_type:') for e in errors)
+    assert updater._precheck_target_runtime_files(target, True) == [
+        'install_sh_changed', 'release_dependency_lock_changed', 'standalone_requirements_changed']
+    assert not marker.exists()
