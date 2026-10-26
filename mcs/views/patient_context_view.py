@@ -7,11 +7,12 @@ current clinical state, a formal completion or which of two records is
 right; authorization stays with the caller and ``role_order`` only
 reorders sections.
 """
-from datetime import timedelta
+from datetime import datetime, timedelta
 import hashlib
 import json
 import math
 import re
+import sqlite3
 
 from clinical_scope import source_axes, source_polarity
 from patient_context import LABELS, extract_context
@@ -238,6 +239,112 @@ def background(ev) -> dict:
     return {"view": "background", "summary": ev["summary"], "as_of": ev["as_of"],
             "sections": [{"category": c, "items": rows} for c, rows in sections.items()],
             "coverage": ev["coverage"]}
+
+
+def _allergy_correction(text, target):
+    return (isinstance(text, str) and re.search(r"訂正|撤回|誤り|誤記|修正|間違い", text)
+            and ("アレルギー" in text or target in text
+                 or re.search(r"前回|先日|先ほど|先程|その件|投稿\s*[#＃]|"
+                              r"(?:^|[:：])\s*(?:本人(?:は|の))?(?:記録|記載|情報|内容)(?:を|は|が)", text)
+                 or re.fullmatch(r"\s*(?:それ|こちら|本件)?(?:は|が)?間違い(?:でした|です)?[。\s]*", text)))
+
+
+def allergy_posted_records(db, ev):
+    """Keep a directly written allergy report separate from current clinical state."""
+    import patient_context_refresh
+    import patient_context_state
+    from mcs_queries import JST
+
+    pid = ev.get("project_id")
+    coverage = ev.get("coverage") or {}
+    inference = coverage.get("inference") or {}
+    nightly = coverage.get("nightly") or {}
+    attachments = nightly.get("attachments") or {}
+    karte = nightly.get("karte_records") or {}
+    facts = ev.get("nightly_facts") or []
+    if (not db.in_transaction or type(pid) is not int or pid <= 0 or inference.get("complete") is not True
+            or inference.get("publication_eligible") is not True or attachments.get("count") != 0
+            or karte.get("stored") != 0
+            or nightly.get("unreflected") != 0 or nightly.get("incomplete") != 0
+            or nightly.get("unscanned") != 0 or not isinstance(facts, list)):
+        return []
+    candidates = [f for f in facts if isinstance(f, dict) and f.get("category") == "allergies"
+                  and (f.get("temporal") or {}).get("subject") not in ("family", "other")]
+    # Another allergy assertion may refer to the same substance, even with a different spelling.
+    if len(candidates) != 1:
+        return []
+    fact = candidates[0]
+    temporal = fact.get("temporal") or {}
+    if (fact.get("project_id") != pid or fact.get("source") != "chat" or fact.get("historical")
+            or fact.get("view_bucket") != "unknown" or temporal.get("subject") != "patient"
+            or temporal.get("period") != "current" or temporal.get("unknown") is not False
+            or temporal.get("negated") is True or temporal.get("corrections")
+            or fact.get("relations") or patient_context_state._unbound_target(fact) is None
+            or type(fact.get("message_id")) is not int
+            or type(fact.get("posted_at_ts")) not in (int, float)):
+        return []
+    try:
+        if not math.isfinite(fact["posted_at_ts"]):
+            return []
+        datetime.fromtimestamp(fact["posted_at_ts"], JST)
+    except (ValueError, OverflowError, OSError):
+        return []
+    target = patient_context_state._unbound_target(fact)
+    family_sources = {(f.get("message_id"), f.get("content_hash"), quote)
+                      for f in facts if isinstance(f, dict) and f.get("category") == "allergies"
+                      and (f.get("temporal") or {}).get("subject") in ("family", "other")
+                      for quote in (f.get("quote"), f.get("evidence")) if isinstance(quote, str)}
+    for other in [*facts, *(ev.get("items") or [])]:
+        if not isinstance(other, dict):
+            continue
+        text = other.get("evidence") or other.get("quote") or ""
+        same_source = (other.get("message_id"), other.get("content_hash")) == (
+            fact.get("message_id"), fact.get("content_hash"))
+        if other.get("id") == fact.get("id") or same_source and text == fact.get("evidence"):
+            continue
+        if _allergy_correction(text, target):
+            return []
+        if (other.get("category") == "allergies"
+                and (other.get("message_id"), other.get("content_hash"), text) not in family_sources):
+            return []
+    body = fact.get("evidence")
+    if (not isinstance(body, str) or len(body) > 300 or fact.get("quote") != body
+            or fact.get("evidence_span") != [0, len(body)]
+            or not re.fullmatch(r"\s*(?:アレルギー\s*[:：]\s*)?"
+                                r"(?:ご本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?)(?:は|に|が)\s*"
+                                r"[一-龯々ァ-ヶーA-Za-z0-9]{1,30}(?:の)?アレルギー(?:が|は)"
+                                r"(?:ある|あります)(?:[。]\s*)?", body)):
+        return []
+    source = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=? AND body_state='full'",
+                        (pid, fact["message_id"])).fetchone()
+    if source is None:
+        return []
+    source = {**dict(source), "source": "chat"}
+    html = source.get("body_html")
+    if (source.get("content_hash") != fact.get("content_hash") or source.get("body_text") != body
+            or source.get("posted_at_ts") != fact["posted_at_ts"] or not isinstance(html, str)
+            or hashlib.sha256(html.encode()).hexdigest() != fact["content_hash"] or html_to_text(html) != body
+            or not patient_context_refresh._validated_facts(source, [fact])):
+        return []
+    try:
+        rows = db.execute("SELECT message_id,body_state,content_hash,"
+                          "CASE WHEN length(body_text)<=3000 THEN body_text END AS body_text,"
+                          "CASE WHEN length(body_html)<=12000 THEN body_html END AS body_html "
+                          "FROM messages WHERE project_id=? LIMIT 201", (pid,)).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    if not rows or len(rows) > 200:
+        return []
+    for row in rows:
+        text, html = row["body_text"], row["body_html"]
+        if (row["body_state"] != "full" or not isinstance(text, str) or not isinstance(html, str)
+                or hashlib.sha256(html.encode()).hexdigest() != row["content_hash"] or html_to_text(html) != text
+                or row["message_id"] != fact["message_id"] and _allergy_correction(text, target)):
+            return []
+        if (row["message_id"] != fact["message_id"] and ("アレルギー" in text or target in text)
+                and (row["message_id"], row["content_hash"], text) not in family_sources):
+            return []
+    return [fact]
 
 
 def participants(db, project_id) -> dict:

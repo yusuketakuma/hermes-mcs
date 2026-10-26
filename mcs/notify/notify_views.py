@@ -819,7 +819,10 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
     def posted_at(item):   # the post time from posted_at_ts, else from an ISO 'at'; None when neither
         ts = item.get("posted_at_ts")
         if isinstance(ts, (int, float)):
-            return datetime.fromtimestamp(ts, JST)
+            try:
+                return datetime.fromtimestamp(ts, JST)
+            except (ValueError, OverflowError, OSError):
+                return None
         try:
             at = datetime.fromisoformat(str(item.get("at")))
         except ValueError:     # e.g. 「削除を確認 …」 passes through unchanged
@@ -897,6 +900,7 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
     if section == "background":
         view = views.role_order(views.background(ev), role)
         facts = {fact["id"]: fact for fact in ev.get("nightly_facts", [])}
+        add(views.allergy_posted_records(db, ev), "アレルギー · 投稿時点の記載", "allergies")
         for sentence in view["summary"]:
             add([facts[key] for key in sentence["fact_ids"] if key in facts], "患者コンテキスト")
         for group in view["sections"]:
