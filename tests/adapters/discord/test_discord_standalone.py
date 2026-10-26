@@ -475,7 +475,7 @@ def test_run_owns_one_supervisor_and_recovers_every_task_on_stop(tmp_path, monke
         await asyncio.wait_for(task, 1)
         assert len(supervisors) == 1 and bot.connect_calls == 1
         assert not supervisors[0].host.tasks and supervisors[0]._task.cancelled()
-        assert bot.closed and registered == [(1, {"name": "mcs"})]
+        assert bot.closed and registered == [(1, {"name": "mcs"}), (1, {"name": "mcs-summary"})]
     asyncio.run(exercise())
 
 

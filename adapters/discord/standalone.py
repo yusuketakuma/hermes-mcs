@@ -9,7 +9,8 @@ from pathlib import Path
 import re
 from urllib.parse import urlsplit
 
-from adapters.common import commands as native_commands, eventlog, paths, text as display_text, worker
+from adapters.common import (commands as native_commands, eventlog, paths, projects,
+                             summary, text as display_text, worker)
 from adapters.common.access import CONTEXT_FLAGS
 from adapters.common.dispatch import make_handler
 from . import cards, delivery
@@ -253,6 +254,42 @@ class _Commands:
             except Exception:
                 pass
 
+    async def summary(self, interaction, text: str = ""):
+        """``/mcs-summary <scope> [name:名前]`` — the invoker-only 📊 overview
+        with patient names, as Slack ``/mcs-summary``; same gates as /mcs."""
+        if not await self.scope.invoke(self._summary, interaction, text):
+            await interaction.response.send_message(
+                "接続状態が変更されました。再起動・再接続後にもう一度操作してください。",
+                ephemeral=True, allowed_mentions=cards.no_pings())
+
+    async def _summary(self, interaction, raw):
+        try:
+            identity = _native_context(interaction, self.settings, slash=True)
+            await interaction.response.defer(ephemeral=True, thinking=True)
+            raw = str(raw or "")[:300]
+            if identity is None:
+                answer = '{"ok":false,"error":"native_context_rejected"}'
+            else:
+                name = ""
+                if {"mine", "担当"} & set(raw.lower().split()):
+                    name = str(getattr(interaction.user, "display_name", "") or "")
+                got = await native_commands.run_native(
+                    summary.answer, self.settings["snapshot"], raw, name=name,
+                    allowed=projects.summary_scope(self.settings), dialect="discord",
+                    admission=self.native_admission)
+                answer = (got.get("text") or got["error"]) if self.scope.current() \
+                    else "接続状態が変更されました。再起動・再接続後にもう一度操作してください。"
+            for chunk in display_text.split_body(answer, max_chunks=None):
+                await interaction.followup.send(
+                    chunk, ephemeral=True, allowed_mentions=cards.no_pings())
+        except native_commands.NativeAdmissionClosed:
+            try:
+                await interaction.followup.send(
+                    native_commands.NATIVE_ADMISSION_CLOSED_TEXT, ephemeral=True,
+                    allowed_mentions=cards.no_pings())
+            except Exception:
+                pass
+
     async def message(self, message):
         try:
             await self.scope.invoke(self._message, message)
@@ -324,7 +361,10 @@ async def run(root, stopping=None, *, native_admission=None,
     discord, _ = _sdk()
     command = discord.app_commands.Command(
         name="mcs", description="MCSの閲覧・依頼の確認と確定", callback=commands.slash)
+    summary_command = discord.app_commands.Command(
+        name="mcs-summary", description="MCSの概要（自分だけに表示）", callback=commands.summary)
     bot.tree.add_command(command)
+    bot.tree.add_command(summary_command)
     bot.tree.on_error = commands.error
     bot.add_listener(commands.message, "on_message")
 
@@ -360,8 +400,9 @@ async def run(root, stopping=None, *, native_admission=None,
             raise ValueError("discord_scope_changed")
         # Single-command upsert preserves unrelated commands owned by this
         # application; tree.sync() would replace the entire command list.
-        await bot.http.upsert_global_command(
-            int(settings["application_id"]), command.to_dict(bot.tree))
+        for registered in (command, summary_command):
+            await bot.http.upsert_global_command(
+                int(settings["application_id"]), registered.to_dict(bot.tree))
         supervisor = Supervisor(ctx=host, bot=bot, settings=settings, log=_event)
         original_interaction = supervisor._actions.on_interaction
 

@@ -22,8 +22,10 @@ import time
 from typing import Any
 
 from adapters.common import projects
+from adapters.common.spec import MAX_BUTTONS
 from adapters.common import commands, confirm, envelopes, paths, registry, forms, text
-from .cards import ACTION_PREFIX, MENU_ID, no_pings, thread_drug_view
+from .cards import ACTION_PREFIX, MENU_ID, _button_items, no_pings, thread_drug_view
+from . import views
 
 MODAL_PREFIX = "mcs:m:"
 CONFIRM_PREFIX = "mcs:c:"
@@ -63,6 +65,38 @@ def _answer_view(tasks, result: dict, index: int):
     if index == 0 and result.get("navigation"):
         return thread_drug_view({"parts": {"action_rows": [result["navigation"]]}}, private=True)
     return None
+
+
+def context_layout(result: dict, allowed):
+    """A private patient-context answer as one Components V2 card
+    (views.context_texts), or None to keep the text answer."""
+    texts = views.context_texts(result, allowed)
+    if texts is None:
+        return None
+    import discord
+
+    def separator():
+        return discord.ui.Separator(visible=True, spacing=discord.SeparatorSpacing.small)
+
+    children = []
+    for content in texts:
+        if children:
+            children.append(separator())
+        children.append(discord.ui.TextDisplay(content))
+    buttons, _ = _button_items({"parts": {"action_rows": [views.navigation(result)]}},
+                               views.NAVIGATION)
+    if buttons:
+        children.append(separator())
+    for i in range(0, len(buttons), MAX_BUTTONS):
+        row = discord.ui.ActionRow()
+        for button in buttons[i:i + MAX_BUTTONS]:
+            row.add_item(button)
+        children.append(row)
+    view = discord.ui.LayoutView(timeout=None)
+    view.add_item(discord.ui.Container(*children))
+    # dispatch runs through the bot-wide on_interaction listener (cards.message_payload)
+    view.stop()
+    return view
 
 
 def _authorizing_channel(interaction) -> tuple[str, str | None]:
@@ -782,6 +816,14 @@ class Actions:
                 # its text (generic text.ja would only say 反映しました),
                 # and private control tokens must land before their buttons
                 await self._register_tokens(result)
+                layout = context_layout(result, self._allowed_pid)
+                if layout is not None:
+                    try:
+                        await send(view=layout, ephemeral=True)
+                        continue
+                    except Exception as e:
+                        # the text answer below still reaches the clicker
+                        self._log("followup_failed", error=type(e).__name__)
                 for index, (msg, tasks) in enumerate(answer):
                     # an all-done list has no buttons: _task_view → None,
                     # and an explicit view=None is a TypeError
@@ -803,10 +845,21 @@ class Actions:
 
     async def _send_answer(self, interaction, answer: list,
                            result: dict) -> None:
-        """A view answer (text.view_answer) as ephemeral followups —
-        text stays ephemeral (unlike a file attachment, whose CDN URL is
+        """A view answer (text.view_answer) as ephemeral followups — a
+        patient context as one Components V2 card when it fits. Text
+        stays ephemeral (unlike a file attachment, whose CDN URL is
         reachable by link alone); private task/medication controls ride their text."""
         await self._register_tokens(result)
+        layout = context_layout(result, self._allowed_pid)
+        if layout is not None:
+            try:
+                # Components V2 carries no content: the patient context as one card
+                await interaction.followup.send(view=layout, ephemeral=True,
+                                                allowed_mentions=no_pings())
+                return
+            except Exception as e:
+                # a rejected layout still owes the clicker the text answer
+                self._log("followup_failed", error=type(e).__name__)
         for index, (msg, tasks) in enumerate(answer):
             await self._followup(interaction, msg,
                                  view=_answer_view(tasks, result, index))

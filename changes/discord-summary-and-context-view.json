@@ -1,0 +1,16 @@
+{
+  "category": "added",
+  "title": "Discordに /mcs-summary を追加し、患者の記録をカード形式で表示",
+  "summary": "Discordを独立実行で使う環境では、/mcs-summary で概要を患者名つきで確認できるようになりました。結果は実行した本人にだけ表示されます。Slackの /mcs-summary と同じく、mine（担当）を付けると Discord の表示名で担当分を絞り込みます。📊で開く患者の記録は、見出し・グループ・引用・出典日付のカードで表示します。出典日付は、安全なURLがあるときだけMCSへのリンクになります。カードがDiscordの上限（部品40個・4000字）に収まらないときは、従来どおり文章で表示します。",
+  "upgrade": "Discordを独立実行で使う環境では、Discordアダプターを再起動すると /mcs-summary が登録され、カード表示も有効になります。設定の変更は不要です。Hermes経由のDiscordでは、返答が本人だけに表示されることを確認できないため、/mcs の summary は従来どおり患者名を出しません。Hermes側の変更もありません。患者の記録のカード表示は、gatewayを再起動すると反映されます。",
+  "details": [
+    "/mcs-summary の認可・受付停止中の拒否・接続範囲の確認は /mcs と同じです。表示範囲は設定したプロジェクトだけです。",
+    "患者の記録のカードは、Slackの表示と同じ共通部品（adapters/common/context_view.py）から作ります。範囲外のプロジェクトの行は表示しません。引用などの本文はDiscordの書式として解釈せず、そのまま表示します。"
+  ],
+  "refs": [
+    "adapters/discord/standalone.py",
+    "adapters/discord/actions.py",
+    "adapters/discord/views.py",
+    "tests/adapters/discord/test_discord_summary_and_context_view.py"
+  ]
+}
