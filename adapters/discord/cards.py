@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import BinaryIO
 
-from adapters.common.spec import MAX_BUTTONS, MAX_COMPONENTS, MAX_TEXT
+from adapters.common.spec import MAX_BUTTONS, MAX_COMPONENTS, MAX_TEXT, MAX_TOTAL_TEXT
 from adapters.common.card_controls import (MENU_LABEL, STAMP_PICKER_LABEL,
                                            plan_controls, stamp_label)
 from adapters.common.text import escape_md, notification_preview
@@ -58,21 +58,28 @@ def _text_chunks(lines, limit=MAX_TEXT):
 
 
 _CONTAINER_MAX = 10               # children of one Container
+_EMBED_MAX = 4096                 # embed description
 
 
-def _zones(spec: dict, esc) -> tuple:
+def _zones(spec: dict, esc, *, face=False) -> tuple:
     """Card face as text zones: a container with ``rule`` and the footer
-    each start a new zone (a Separator is drawn between zones)."""
-    zones, cur = [], []
+    each start a new zone (a Separator is drawn between zones). With
+    ``face``, a post's stamp rows (parts["discord"]["face_posts"]) close
+    the zone its post line opened, as subtext under its summary."""
+    zones, cur, rows = [], [], []
     own = spec["parts"].get("discord") or {}
     actions = {a["at"]: a["button"] for a in own.get("post_actions") or []}
+    stamps = {p["at"]: p["stamps"] for p in own.get("face_posts") or []} if face else {}
     for index, c in enumerate(spec["parts"]["containers"]):
         t = c["type"]
         if t == "meta":
             continue                       # correlation — not displayed
         if c.get("rule") and cur:
-            zones.append(cur)
+            zones.append(cur + rows)
             cur = []
+        if c.get("rule"):
+            rows = [f"-# {esc(ln)}" for row in stamps.get(index, ())
+                    for ln in row.splitlines()]
         if index in actions:
             # (subtext line, button): a Section with the post's 💊 accessory
             cur.append(("-# " + esc(c["text"]).replace("\n", " "), actions[index]))
@@ -92,7 +99,7 @@ def _zones(spec: dict, esc) -> tuple:
         else:
             cur.append(esc(c["text"]))
     if cur:
-        zones.append(cur)
+        zones.append(cur + rows)
     # every footer line gets the subtext prefix — one footer item may
     # hold several lines (the open-task list)
     footer = [f"-# {esc(ln)}"
@@ -175,14 +182,21 @@ def message_payload(spec, *, components_v2=False):
         # discord.py from retaining one persistent View for every card.
         view.stop()
         return {"view": view}
-    zones, footer = _zones(spec, escape_md)
+    def describe(with_stamps):
+        zones, footer = _zones(spec, escape_md, face=with_stamps)
+        posts = [ln for zone in zones for ln in zone if not isinstance(ln, str)]
+        zones = [_zone_text(zone) for zone in zones]
+        return posts, "\n\n".join(["\n".join(zone) for zone in zones]
+                                  + ["\n".join(footer)]).strip() or "—"
+
     # the legacy embed has no sections: a post action's line stays text
     # and its 💊 becomes a button in a row of its own, labelled with the
-    # post's time when more than one post has one
-    posts = [ln for zone in zones for ln in zone if not isinstance(ln, str)]
-    zones = [_zone_text(zone) for zone in zones]
-    face = "\n\n".join(["\n".join(zone) for zone in zones] + ["\n".join(footer)]).strip() or "—"
-    if len(face) > 4096:
+    # post's time when more than one post has one. Face stamp rows are
+    # the first thing to go over budget (the thread still has them).
+    posts, face = describe(True)
+    if len(face) > _EMBED_MAX:
+        posts, face = describe(False)
+    if len(face) > _EMBED_MAX:
         raise ValueError("discord_embed_budget")
     view = discord.ui.View(timeout=None)
     # the Slack order: 操作を選ぶ…, the stamp row, 別の投稿 + MCSで開く, then per-post 💊
@@ -220,6 +234,7 @@ def build_view(spec: dict):
     import discord  # SDK required only inside the handler boundary
 
     zones, footer = _zones(spec, escape_md)
+    face_zones, _ = _zones(spec, escape_md, face=True)
 
     def separator():
         return discord.ui.Separator(
@@ -285,15 +300,25 @@ def build_view(spec: dict):
         return len(children) > _CONTAINER_MAX or 1 + len(children) + nested + sum(
             len(r.children) for r in rows) > MAX_COMPONENTS
 
-    children = layout(zones)
-    if too_big(children):
-        # too many rule zones: one text zone (no rule lines — the text
-        # must stay within the validator's budget)
-        children = layout([[ln for z in zones for ln in z]])
-    if too_big(children):
-        # still too many parts: post buttons fall back to text lines
-        # (the card's 💊 menu entry still reaches every post)
-        children = layout([_zone_text([ln for z in zones for ln in z])])
+    def text_len(children):
+        return sum(len(getattr(t, "content", None) or "")
+                   for c in children for t in (c, *getattr(c, "children", ())))
+
+    # first fit wins: face stamp rows outlast the rule zones but go before
+    # the post buttons (the thread still has the rows); the last level is
+    # used as is. Only face levels are text-checked: the validator already
+    # bounds the rest, and the stamp rows add text, not components.
+    def one(groups):
+        return [[ln for z in groups for ln in z]]
+    levels = [(face_zones, True), (one(face_zones), True)] if face_zones != zones else []
+    # too many rule zones: one text zone (no rule lines — the text must
+    # stay within the validator's budget); still too many parts: post
+    # buttons fall back to text lines (the 💊 menu entry reaches every post)
+    levels += [(zones, False), (one(zones), False), ([_zone_text(one(zones)[0])], False)]
+    for groups, face in levels:
+        children = layout(groups)
+        if not (too_big(children) or face and text_len(children) > MAX_TOTAL_TEXT):
+            break
     if not children:
         children.append(discord.ui.TextDisplay("—"))
     view = discord.ui.LayoutView(timeout=None)

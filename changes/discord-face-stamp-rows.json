@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "Discord のカードに投稿ごとのスタンプ行を表示",
+  "summary": "Discord のスレッドカード（card_thread 有効）は、Slack と同じく投稿ごとのスタンプ行をカード上の各投稿の要約の下に表示し、フッターのスタンプ合計行を出さなくなります。原文の折りたたみ表示は Slack だけで、Discord の原文は従来どおりスレッドに残ります。カードの文字数・部品数の上限を超える場合は、カード上のスタンプ行を省いて送信します（各投稿のスタンプ行はスレッドで確認できます）。",
+  "upgrade": "設定変更は不要です。反映には Hermes gateway、または standalone の Discord アダプターの再起動が必要です。再起動前の古い worker は新しいカード指定を保留し、再起動後に処理します。表示内容が変わるため、card_thread 有効の既存 Discord スレッドカードは次の更新時に1回だけ再描画されることがあります。card_thread 無効のカードと LINE WORKS は変わりません。",
+  "details": [
+    "フッター合計を省く判定を送信先名ではなく表示モジュールの STAMP_DETAILS 属性で行います。Slack の表示は変わりません。",
+    "カード指定の parts.discord.face_posts は投稿位置とスタンプ行だけを持ち、原文を含む形や空のスタンプ行は検証で拒否します。",
+    "スレッドの作成に失敗・削除済みのカード、取り下げたカードは従来どおりフッターにスタンプ合計を表示します。"
+  ],
+  "refs": [
+    "mcs/notify/notify_render.py",
+    "mcs/notify/presentation/present_discord.py",
+    "mcs/notify/presentation/present_slack.py",
+    "adapters/common/spec.py",
+    "adapters/discord/cards.py"
+  ]
+}

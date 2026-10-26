@@ -62,3 +62,11 @@ def owner_label(owner: str, member_names) -> str:
 
 POST_ACTIONS = True           # 💊 button beside each medication post
 ACCENT_URGENT = True          # red container edge on an urgent card
+
+# Thread cards show each shown post's stamp row under its summary on the
+# card face; the original stays in the thread (Components V2 has no
+# collapsible block). adapters/discord/cards.py drops the rows when the
+# face would exceed its component/text budget; the thread keeps them.
+BODY_ON_FACE = False
+FACE_STAMPS = True
+STAMP_DETAILS = True          # per-post stamp rows replace the footer aggregate

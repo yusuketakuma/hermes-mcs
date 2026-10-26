@@ -959,7 +959,8 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
     budget = PAGE_TEXT_BUDGET
     pages_idx = _pack_pages([_blocks_len(b) for b in rendered], max_count)
     stamp_details = (kind == "thread" and layout >= 3
-                     and "transport" in card.keys() and card["transport"] == "slack"
+                     and "transport" in card.keys()
+                     and getattr(presenter(card["transport"]), "STAMP_DETAILS", False)
                      and notify_cfg(cfg).get("card_thread") is True
                      and card["thread_state"] not in ("failed", "deleted")
                      and card["delivery_state"] != "revoked")

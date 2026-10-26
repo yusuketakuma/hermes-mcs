@@ -467,7 +467,7 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
     assert _dispatch(led, _intent(led), cfg)["dispatched"]
     spec = json.loads(_latest_render(led)["spec_json"])
     footer = "\n".join(item["text"] for item in spec["parts"]["footer"] if item["type"] == "text")
-    assert ("スタンプ 👀3 · 自分 2投稿" in footer) == (platform != "slack")
+    assert ("スタンプ 👀3 · 自分 2投稿" in footer) == (platform == "lineworks")
     assert "MCS 👀" not in footer
     assert "合成本人" not in footer and "合成他者" not in footer
     if platform == "slack":
@@ -499,8 +499,13 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
         assert "再取得失敗" in stamp_context[1]["text"]
     elif platform == "discord":
         view = discord_cards.build_view(spec)
-        assert any("-# スタンプ 👀3" in getattr(child, "content", "")
-                   for container in view.items for child in container.children)
+        texts = [getattr(child, "content", "") for container in view.items
+                 for child in container.children]
+        # per-post rows on the face (no folded original); the total is hidden
+        assert [p.keys() for p in spec["parts"]["discord"]["face_posts"]] == [{"at", "stamps"}] * 2
+        assert not any("スタンプ 👀3" in t for t in texts)
+        assert sum(t.count("-# スタンプ 👀") for t in texts) == 2
+        assert "合成他者100" in "\n".join(texts) and "再取得失敗" in "\n".join(texts)
     else:
         shown = lineworks_cards.render(spec)
         visible = (shown["contents"]["body"]["contents"][0]["text"]
