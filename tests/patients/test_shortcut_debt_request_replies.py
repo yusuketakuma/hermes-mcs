@@ -73,9 +73,13 @@ def seed_loop_replies(store):
                                        message_id=trigger["message_id"], meta=meta)
 
 
-def _setup(tmp_path, relation="completion_report"):
+def _setup(tmp_path, relation="completion_report", *, extra=(), times=None):
     db = _seeded(tmp_path)
+    if extra:
+        db.save_messages([_message(mid, parent=1, body=f"合成返信{mid}") for mid in extra], project_id=1)
     db.db.execute("UPDATE messages SET sender_id=message_id,posted_at_ts=100+message_id")
+    for mid, at in (times or {}).items():
+        db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=?", (at, mid))
     bundle = semantic_store.thread_bundle(db.db, 1, 1)
     config, _ = semantic_policy.semantic_config(_cfg())
     policy = semantic_policy.policy_fingerprint(config)
@@ -94,7 +98,7 @@ def _setup(tmp_path, relation="completion_report"):
 
 @pytest.mark.parametrize("fault", [None, "no_event", "stale", "same_sender", "unknown_sender",
                                  "future", "other_request", "duplicate", "other_patient", "policy",
-                                 "invalid_confidence", "deleted", "unrelated"])
+                                 "invalid_confidence", "deleted", "unrelated", "mismatched_relation"])
 def test_only_current_relation_to_unique_request_counts(tmp_path, fault):
     db, event, meta, row = _setup(tmp_path)
     try:
@@ -104,6 +108,8 @@ def test_only_current_relation_to_unique_request_counts(tmp_path, fault):
             meta["policy_fingerprint"] = "old-policy"
         if fault == "invalid_confidence":
             event["confidence"] = True
+        if fault == "mismatched_relation":
+            event["reported_relation"] = "acknowledges"
         if fault == "unrelated":
             event["relation"] = event["reported_relation"] = "unrelated"
         if fault == "other_patient":
@@ -132,25 +138,72 @@ def test_only_current_relation_to_unique_request_counts(tmp_path, fault):
         rollup._match_request_replies(db.db, 1, [(r, 1, 101, 1) for r in requests],
                                       requests, messages, 101.5 if fault == "future" else 1000)
         assert row.get("reply_state") == ("done" if fault is None else None)
+        if fault is None:
+            [reply] = row["reply_events"]
+            assert reply["message_id"] == 2 and reply["revision"] == event["trigger_revision"]
+            assert reply["loop_artifact_id"] == event["loop_artifact_id"]
+            assert reply["relation"] == "completion_report" and reply["reply_state"] == "done"
+            assert reply["posted_at_ts"] == 102 and reply["same_time_unordered"] is False
+        else:
+            assert "reply_events" not in row
         assert "reply_state" not in requests[1]
         assert db.db.total_changes == before
     finally:
         db.close()
 
 
-def test_legacy_reply_kind_cannot_answer_multiple_requests_without_relations(tmp_path):
+def test_reply_events_keep_all_accepted_sources_and_do_not_order_equal_times(tmp_path):
+    db, event, meta, row = _setup(tmp_path, extra=(3, 4, 5), times={3: 103, 4: 103, 5: 104})
+    try:
+        revisions = {m["message_id"]: m["content_hash"] for m in db.db.execute(
+            "SELECT message_id,content_hash FROM messages WHERE project_id=1")}
+        for mid, relation in ((5, "completion_report"), (4, "progress_report"),
+                              (3, "cancellation_report"), (2, "acknowledges")):
+            db.artifact_add("loop_event", json.dumps({**event, "trigger_message_id": mid,
+                "trigger_revision": revisions[mid], "relation": relation,
+                "reported_relation": relation}), project_id=1, message_id=mid, meta=meta)
+        messages = list(db.db.execute("SELECT * FROM messages WHERE project_id=1"))
+        before = db.db.total_changes
+        rollup._match_request_replies(db.db, 1, [(row, 1, 101, 1)], [row], messages, 1000)
+        events = row["reply_events"]
+        assert [item["message_id"] for item in events] == [2, 3, 4, 5]
+        assert [item["reply_state"] for item in events] == ["ack", "cancel", "progress", "done"]
+        assert [item["same_time_unordered"] for item in events] == [False, True, True, False]
+        assert [item["revision"] for item in events] == [revisions[mid] for mid in (2, 3, 4, 5)]
+        assert all(item["loop_artifact_id"] == event["loop_artifact_id"] for item in events)
+        assert row["reply_state"] == "cancel"  # legacy highest-stage view
+        assert row["reply_conflict"] is True  # cancellation does not prove or erase later completion
+        assert db.db.total_changes == before
+    finally:
+        db.close()
+
+
+def test_legacy_reply_kind_cannot_answer_multiple_requests_without_relations(tmp_path, monkeypatch):
+    import extract_llm
+    from inference_dependency_loss import source_binding
+
     db = _seeded(tmp_path)
     try:
+        db.save_messages([
+            _message(1, body="本人の架空依頼Aと架空依頼Bの確認をお願いします。"),
+            _message(2, parent=1, body="両方の確認が完了しました。"),
+        ], project_id=1)
         db.db.execute("UPDATE messages SET sender_id=message_id,posted_at_ts=100+message_id")
-        hashes = dict(db.db.execute("SELECT message_id,content_hash FROM messages"))
-        db.artifact_add("extract_llm", json.dumps({"requests": [
-            {"action": "架空依頼A"}, {"action": "架空依頼B"}]}),
-            project_id=1, message_id=1, meta={"hash": hashes[1]})
-        db.artifact_add("extract_llm", json.dumps({"reply": {"kind": "done"}}),
-                        project_id=1, message_id=2, meta={"hash": hashes[2]})
+        monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
+        monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+        monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *args, **kwargs: None)
+        for mid, document in ((1, {"requests": [
+                {"action": "架空依頼A", "evidence": "架空依頼A"},
+                {"action": "架空依頼B", "evidence": "架空依頼B"}]}),
+                (2, {"reply": {"kind": "done"}})):
+            row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone())
+            row["_source_binding"] = source_binding(db.db, 1, mid)
+            assert extract_llm._replace_current(db, row, json.dumps(document))
         result = rollup.build_rollup(db.db, 1)
         assert len(result["recent_requests"]) == 2
+        assert {row["ctx"] for row in result["recent_requests"]} == {"架空依頼A", "架空依頼B"}
         assert all("reply_state" not in row for row in result["recent_requests"])
+        assert all("reply_events" not in row for row in result["recent_requests"])
     finally:
         db.close()
 

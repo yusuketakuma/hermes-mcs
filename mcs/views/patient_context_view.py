@@ -47,6 +47,10 @@ _COMPARED = ("actual_dose", "actual_frequency", "residual_quantity", "medication
              "storage_place", "value", "self_management", "swallowing", "food_texture")
 _PER_DRUG = ("actual_dose", "actual_frequency", "residual_quantity")
 _EVENT_KEYS = ("measured_on", "observed_on", "onset", "last_confirmed_on")
+_TIMELINE_CONTEXT = frozenset(("living", "adl", "care_level", "care_services", "services_provided",
+                               "nutrition", "skin_wound", "oral_health", "medication_management",
+                               "allergies", "adverse_events", "devices", "cognition", "excretion",
+                               "incidents", "plan_goals", "followup", "observations", "course", "symptoms"))
 _TRANSITION = re.compile(r"入院|退院|転院|入所|退所")
 _WINDOW = timedelta(days=14).total_seconds()
 # a recorded profession word -> the role whose display order fits it (first match wins; a hint only)
@@ -161,7 +165,21 @@ def evidence(db, project_id, *, cfg=None) -> dict:
             items.append(entry)
     items.extend(_mentions(db, project_id, senders))
     context_refresh = patient_context_refresh.context_view_input(db, project_id, cfg=cfg)
-    for fact in (context_refresh or {}).get("facts") or []:
+    facts = (context_refresh or {}).get("facts") or []
+    scoped_facts = [fact for fact in facts if fact.get("project_id") is None
+                    or type(fact["project_id"]) is int and fact["project_id"] == project_id]
+    summary = (context_refresh or {}).get("summary") or []
+    if len(scoped_facts) != len(facts):
+        ids = {fact.get("id") for fact in scoped_facts if isinstance(fact.get("id"), str)}
+        foreign_ids = {fact.get("id") for fact in facts if fact.get("project_id") is not None
+                       and (type(fact["project_id"]) is not int or fact["project_id"] != project_id)
+                       and isinstance(fact.get("id"), str)}
+        ids -= foreign_ids
+        summary = [sentence for sentence in summary if isinstance(sentence, dict)
+                   and isinstance(sentence.get("fact_ids"), list) and sentence["fact_ids"]
+                   and all(fact_id in ids for fact_id in sentence["fact_ids"])]
+    bodies = {}
+    for fact in scoped_facts:
         extra = {"temporality": fact.get("temporality"), "discovery": fact.get("discovery"),
                  **{key: fact.get(key) for key in ("evidence", "evidence_span", "reference_context", "assertion", "temporal", "view_bucket", "relations")},
                  "found_night_id": fact.get("found_night_id"), "found_at": fact.get("found_at")}
@@ -175,16 +193,36 @@ def evidence(db, project_id, *, cfg=None) -> dict:
         # Only identical source-bound meaning receives the discovery annotation.
         matches = [i for i in items if entry["content_hash"] and entry["source"]
                    and _assertion_key(i) == _assertion_key(entry)]
+        if (not matches and fact.get("project_id") == project_id and entry["source"] == "chat"
+                and entry["message_id"] and entry["content_hash"]):
+            source_key = (entry["message_id"], entry["content_hash"])
+            if source_key not in bodies:
+                raw = db.execute("SELECT body_text FROM messages WHERE project_id=? AND message_id=? "
+                                 "AND content_hash=? AND body_state='full'", (project_id, *source_key)).fetchone()
+                bodies[source_key] = raw[0] if raw and isinstance(raw[0], str) else None
+            body = bodies[source_key]
+            quote = entry.get("quote")
+            span = locate_quote_span(body, quote) if body and isinstance(quote, str) else None
+            if span and body[span[0]:span[1]] == quote == entry.get("evidence"):
+                for item in items:
+                    if item.get("evidence_span") is not None or item.get("reported_subject") is not None:
+                        continue
+                    candidate = {**item, "subject": "unspecified", "reported_subject": item.get("subject"),
+                                 "evidence_span": list(span)}
+                    if _assertion_key(candidate) == _assertion_key(entry):
+                        matches.append(item)
         for match in matches:
             match.update(extra)
+            match["subject"] = entry["subject"]
+            match["reported_subject"] = entry["reported_subject"]
         if matches:
             continue
         items.append(entry)
     items.sort(key=lambda i: (i["posted_at_ts"] or 0, i["message_id"] or 0), reverse=True)
     return {"project_id": project_id, "snapshot": snapshot_meta(db), "items": items,
-            "summary": (context_refresh or {}).get("summary") or [],
+            "summary": summary,
             # summary fact_ids resolve here; empty when unpublished or no longer valid
-            "nightly_facts": (context_refresh or {}).get("facts") or [],
+            "nightly_facts": scoped_facts,
             "as_of": (context_refresh or {}).get("as_of"),
             "coverage": {"read_model": coverage, "nightly": (context_refresh or {}).get("coverage"),
                          "inference": patient_context_refresh.inference_coverage(db, project_id, cfg or {})}}
@@ -303,7 +341,9 @@ def replies(db, project_id) -> dict:
     return {"view": "replies", "items": [
         {"message_id": r.get("mid"), "at": r.get("at"), "text": r.get("ctx"), "sender": asked_by(r.get("mid")),
          "reply_state": r.get("reply_state"), "unverified": item_unverified(r),
-         "reply": (f"返信あり（{REPLY_LABELS[r['reply_state']]}・記録上）"
+         "reply_events": [dict(event) for event in r.get("reply_events", [])],
+         "reply": ("返信あり（完了と取消の記録あり）" if r.get("reply_conflict") is True else
+                   f"返信あり（{REPLY_LABELS[r['reply_state']]}・記録上）"
                    if r.get("reply_state") in REPLY_LABELS else "返答が見つからない"),
          "reply_conflict": r.get("reply_conflict") is True} for r in rows],
         "next_planned": roll.get("next_planned")}
@@ -313,7 +353,10 @@ def previsit(db, ev, now, *, days=7) -> dict:
     """訪問前の確認ノート: recent changes, then every written item to check — written
     follow-ups first, then requests with no reply found; distinct assertions of one post remain.
     Only quotes what was written — no new clinical instruction is made."""
+    from intervention_schedule import read_source_schedule
+
     talk = replies(db, ev["project_id"])
+    interventions = read_source_schedule(db, ev["project_id"])
     picked = {"written_checks": [], "unanswered": []}
     for group, rows in (("written_checks", [i for i in ev["items"] if i["category"] == "followup"]),
                         # an unverified request candidate is not a written request awaiting a reply
@@ -326,15 +369,28 @@ def previsit(db, ev, now, *, days=7) -> dict:
                 seen.add(identity)
                 picked[group].append(row)
     return {"view": "previsit", "recent": changes(db, ev, now - days * 86400)["by_discovery"], **picked,
-            "next_planned": talk["next_planned"], "as_of": ev["as_of"], "coverage": ev["coverage"]}
+            "next_planned": talk["next_planned"], "interventions": interventions,
+            "as_of": ev["as_of"], "coverage": ev["coverage"]}
 
 
 def timeline(ev, categories=None) -> dict:
     """経過タイムライン: oldest first; the written event date stays apart from the posting time
     and adjacent entries carry no causal link."""
-    rows = [{**i, "event_date_text": next((d["value"] for d in i["details"] if d.get("key") in _EVENT_KEYS), None)}
-            for i in reversed(ev["items"]) if categories is None or i["category"] in categories]
-    return {"view": "timeline", "items": rows}
+    rows = []
+    for item in reversed(ev["items"]):
+        if categories is not None and item["category"] not in categories:
+            continue
+        dates = {(detail["key"], detail["value"]) for detail in item.get("details") or []
+                 if isinstance(detail, dict) and detail.get("key") in _EVENT_KEYS
+                 and isinstance(detail.get("value"), str) and detail["value"]}
+        date_kind, date_text = next(iter(dates)) if len(dates) == 1 else (None, None)
+        row = {**item, "event_date_text": date_text, "event_date_kind": date_kind}
+        # A source quote alone does not establish current state or a relationship.
+        if item["category"] in _TIMELINE_CONTEXT and not item.get("view_bucket"):
+            row["view_bucket"] = "unknown"
+        rows.append(row)
+    return {"view": "timeline", "items": rows, "order_basis": "posting_time",
+            "coverage": ev.get("coverage")}
 
 
 def discrepancies(ev, posters=None) -> dict:
@@ -374,9 +430,12 @@ def discrepancies(ev, posters=None) -> dict:
                 continue  # which observation or drug the value belongs to is not written unambiguously
             source = next(i for i in report["items"]
                           if any(d.get("key") == key and d.get("value") == value for d in i["details"]))
+            date_keys = [k for k in _EVENT_KEYS if attrs.get(k)]
+            date_kind = date_keys[0] if len(date_keys) == 1 and one(attrs, date_keys[0]) else None
             groups.setdefault((category, subject, key, identity), []).append(
                 {**source, "value": value,
-                 "event_date_text": next((one(attrs, k) for k in _EVENT_KEYS if one(attrs, k)), None)})
+                 "event_date_kind": date_kind,
+                 "event_date_text": one(attrs, date_kind) if date_kind else None})
     out = []
     for (category, subject, key, identity), rows in groups.items():
         if len({r["value"] for r in rows}) < 2:
@@ -388,6 +447,7 @@ def discrepancies(ev, posters=None) -> dict:
         for day, r in zip(dates, rows):
             same_day.setdefault(day, set()).add(r["value"])
         kind = ("time_unknown" if None in dates or len({d[0] for d in dates}) > 1
+                or len({r["event_date_kind"] for r in rows}) > 1
                 else "differing_records" if any(len(v) > 1 for v in same_day.values()) else "change_over_time")
         out.append({"category": category, "subject": subject, "key": key, "identity": list(identity),
                     "kind": kind, "records": rows})

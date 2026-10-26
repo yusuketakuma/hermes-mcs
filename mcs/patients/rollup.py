@@ -55,9 +55,10 @@ STALE_DAYS = 21          # message unseen this long while siblings refresh
 # without per-read rebuilds, and dirty_projects() rebuilds every row stamped
 # with another version (10: source-bound pharmacy reports; 11: vital owners
 # written without a particle and oxygen flows are not patient readings;
-# 12: per-request, current Loop evidence replaces thread-wide reply inference).
+# 12: per-request, current Loop evidence replaces thread-wide reply inference;
+# 13: retain every accepted reply relation and its source in posting-time order).
 # Rebuilds rewrite artifacts; automatic card rendering does not read patient_rollup.
-PERIOD_CHECK_VERSION = 12
+PERIOD_CHECK_VERSION = 13
 # Pre-9 rollup keys; readers map them to the current names until rebuilt.
 _LEGACY_KEYS = {"current_med_period": "med_period_candidate",
                 "possibly_deleted": "unrefreshed_message_ids"}
@@ -152,6 +153,7 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now):
         if sender is None or counts[key] != 1 or len(matched) != 1:
             continue
         seen = []
+        reply_events = []
         for event in matched[0]["relation_events"]:
             relation = event.get("relation")
             kind = kinds.get(relation) if isinstance(relation, str) else None
@@ -160,9 +162,12 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now):
             if (not kind or event.get("stale") or not trigger
                     or type(event.get("loop_artifact_id")) is not int
                     or event["loop_artifact_id"] != matched[0]["artifact_id"]
+                    or not isinstance(event.get("trigger_revision"), str)
+                    or not event["trigger_revision"]
                     or confidence is None or not 0 <= confidence <= 1
                     or not isinstance(event.get("reported_relation"), str)
                     or event["reported_relation"] not in jev.LOOP_RELATION_OPTIONS
+                    or event["reported_relation"] != relation
                     or trigger["body_state"] not in (None, "full")
                     or (trigger["parent_id"] or trigger["message_id"]) != root):
                 continue
@@ -170,10 +175,22 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now):
             at = trigger["posted_at_ts"]
             if other is not None and other != sender and at is not None and 0 < ts < at <= now:
                 seen.append((at, kind))
+                reply_events.append({"message_id": trigger["message_id"],
+                                     "revision": event["trigger_revision"],
+                                     "loop_artifact_id": event["loop_artifact_id"],
+                                     "posted_at": trigger["posted_at"],
+                                     "posted_at_ts": at, "relation": relation,
+                                     "reply_state": kind})
         if seen:
+            reply_events.sort(key=lambda event: (event["posted_at_ts"], event["message_id"], event["relation"]))
+            times = {}
+            for event in reply_events:
+                times[event["posted_at_ts"]] = times.get(event["posted_at_ts"], 0) + 1
+            for event in reply_events:
+                event["same_time_unordered"] = times[event["posted_at_ts"]] > 1
+            row["reply_events"] = reply_events
             row["reply_state"] = max((kind for _, kind in seen), key=_REPLY_STAGE.get)
-            done = [at for at, kind in seen if kind == "done"]
-            if done and any(kind == "cancel" and at > min(done) for at, kind in seen):
+            if {kind for _, kind in seen} >= {"done", "cancel"}:
                 row["reply_conflict"] = True
 
 

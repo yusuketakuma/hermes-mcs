@@ -2,6 +2,7 @@
 import mcs_contract
 import json
 import sys
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -147,6 +148,37 @@ def test_replies_never_claim_untreated_or_formal_completion(ctx):
     assert [i["text"] for i in note["written_checks"]] == ["架空薬の残数"]
 
 
+def test_replies_view_displays_source_bound_reply_history(ctx):
+    _requests(ctx, [(3, "架空依頼")])
+    _reply(ctx, 30, 3, "ack")
+    _reply(ctx, 31, 3, "done")
+    view = pcv.replies(ctx.db.db, 1)
+    assert len(view["items"][0]["reply_events"]) == 2
+    rendered = notify_views.patient_context_list(ctx.db.db, 1, "replies", cfg={}, since=T0, now=T0 + 7 * DAY)
+    text = "\n".join(row["text"] for row in rendered["items"])
+    assert "返信の記録:" in text and "了解" in text and "完了" in text
+    assert "未対応" not in text
+
+
+def test_replies_display_recent_events_and_announce_omitted_older_ones(ctx, monkeypatch):
+    events = [{"posted_at_ts": T0 + 60 * max(0, n - 1), "reply_state": "ack" if n == 0 else
+               "done" if n == 20 else "progress", "same_time_unordered": n < 2} for n in range(21)]
+    monkeypatch.setattr(pcv, "replies", lambda *a: {"items": [{"message_id": 1, "at": None,
+        "text": "架空依頼", "reply": None, "reply_events": events}], "next_planned": None})
+    result = notify_views.patient_context_list(ctx.db.db, 1, "replies", cfg={}, since=T0, now=T0 + DAY)
+    text = "\n".join(row["text"] for row in result["items"])
+    assert "了解" not in text and "完了" in text and "他1件" in text and "同時刻" in text
+
+
+def test_replies_conflict_does_not_choose_one_result(ctx):
+    _requests(ctx, [(3, "架空依頼")])
+    _reply(ctx, 30, 3, "done")
+    _reply(ctx, 31, 3, "cancel")
+    item = pcv.replies(ctx.db.db, 1)["items"][0]
+    assert item["reply_conflict"] is True
+    assert item["reply"] == "返信あり（完了と取消の記録あり）"
+
+
 def test_previsit_lists_every_distinct_check_of_one_post_without_fixed_cap(ctx):
     _requests(ctx, [(5, "架空依頼A"), (2, "架空依頼B"), (3, "架空依頼C"), (4, "架空依頼D")])
     note = pcv.previsit(ctx.db.db, pcv.evidence(ctx.db.db, 1), T0 + 7 * DAY)
@@ -159,6 +191,29 @@ def test_previsit_carries_coverage_like_handoff(ctx):
     """A missing reply is only 返答が見つからない within what was fetched; previsit says how much that is."""
     ev = pcv.evidence(ctx.db.db, 1)
     assert pcv.previsit(ctx.db.db, ev, T0 + 7 * DAY)["coverage"] == ev["coverage"] == pcv.handoff(ctx.db.db, ev)["coverage"]
+
+
+def test_previsit_shows_written_future_interventions_without_claiming_current_state(ctx):
+    future = "看護師が2026年11月3日に本人を訪問する予定です。"
+    past = "薬剤師が2026年10月3日に本人を訪問する予定です。"
+    disputed = "次の記載は誤りです。看護師が2026年11月4日に本人を訪問する予定です。"
+    ctx.db.save_messages([_message(40, body=future), _message(41, body=past),
+                          _message(42, body=disputed)], project_id=1)
+    posted = datetime.fromisoformat("2026-10-01T09:00:00+09:00").timestamp()
+    ctx.db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id IN (40,41,42)", (posted,))
+    now = datetime.fromisoformat("2026-10-20T09:00:00+09:00").timestamp()
+    output = notify_views.patient_context_list(ctx.db.db, 1, "previsit", cfg={}, since=T0, now=now)
+    while output["page"] < output["pages"] - 1:
+        following = notify_views.patient_context_list(ctx.db.db, 1, "previsit", cfg={}, since=T0,
+                                                      now=now, page=output["page"] + 1)
+        output["items"] += following["items"]
+        output["page"] = following["page"]
+    groups = {row["quotes"][0]: row["group"] for row in output["items"] if row.get("quotes")}
+    assert groups[future] == "今後の介入予定の記載（変更未照合）"
+    assert groups[past] == "介入に関する記載（変更未照合）"
+    assert groups["介入に関する記載あり（内容未確認）"] == "介入に関する記載（内容未確認）"
+    assert "看護師が2026年11月4日に本人を訪問する予定です。" not in groups
+    assert any("別投稿による変更は未照合" in line for line in output["head"])
 
 
 def test_residual_values_without_written_dates_are_not_assumed_simultaneous(ctx):
@@ -235,11 +290,137 @@ def test_timeline_includes_medication_and_symptom_mentions_as_written(ctx):
 
 def test_timeline_is_oldest_first_and_transition_lists_missing_records(ctx):
     ev = pcv.evidence(ctx.db.db, 1)
-    assert list(dict.fromkeys(i["message_id"] for i in pcv.timeline(ev)["items"])) == [1, 2, 3, 4, 5, 6]
+    timeline = pcv.timeline(ev)
+    assert list(dict.fromkeys(i["message_id"] for i in timeline["items"])) == [1, 2, 3, 4, 5, 6]
+    assert timeline["order_basis"] == "posting_time"
+    assert timeline["coverage"] == ev["coverage"]
     course = pcv.transition_course(ev)["items"]
     assert len(course) == 1 and course[0]["anchor"]["message_id"] == 6
     assert course[0]["anchor_kind"] == "reported"  # Nominal wording does not establish actual patient discharge.
     assert course[0]["nearby"] == [] and course[0]["no_record"] == []
+
+
+def test_observations_course_and_symptoms_keep_unknown_time_without_overriding_published_state():
+    items = [{"category": category, "subject": "family", "quote": "合成の否定や予定の記載",
+              "details": []} for category in ("observations", "course", "symptoms")]
+    items.append({**items[0], "view_bucket": "plan"})
+    result = pcv.timeline({"items": items, "coverage": {"source_complete": False}})
+    assert result["items"][0]["view_bucket"] == "plan"
+    assert all(item["view_bucket"] == "unknown" for item in result["items"][1:])
+    assert all(item["subject"] == "family" and item["quote"] == "合成の否定や予定の記載"
+               for item in result["items"])
+    assert result["coverage"]["source_complete"] is False
+
+
+def test_living_care_and_safety_history_keep_written_subjects_and_uncertainty(ctx):
+    bodies = {
+        7: "生活環境: 家族と同居しています。",
+        8: "利用サービス: 来週から訪問介護を利用する予定です。",
+        9: "アレルギー: 家族は架空薬で発疹の疑いがあります。",
+        10: "副作用: 本人は発疹が副作用か未確認です。",
+        11: "アレルギー: 本人に既知のアレルギーはありません。",
+    }
+    for mid, body in bodies.items():
+        ctx.db.save_messages([_message(mid, body=body)], project_id=1)
+        ctx.db.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=?", (T0 + mid * DAY, mid))
+        _artifact(ctx.db, "extract_v1", mid, {"patient_context": extract_context(body)},
+                  {"hash": _hash_of(ctx.db, mid)})
+    before = ctx.db.db.total_changes
+    ev = pcv.evidence(ctx.db.db, 1)
+    result = pcv.timeline(ev)
+    selected = [item for item in result["items"] if item["message_id"] in bodies]
+    assert [item["message_id"] for item in selected] == list(bodies)
+    assert {item["message_id"]: item["quote"] for item in selected} == bodies
+    assert {item["category"] for item in selected} == {"living", "care_services", "allergies", "adverse_events"}
+    assert all(item["subject"] == "unspecified" and item["view_bucket"] == "unknown" for item in selected)
+    assert all(item["event_date_text"] is None for item in selected)
+    assert result["order_basis"] == "posting_time" and result["coverage"] == ev["coverage"]
+    first = notify_views.patient_context_list(ctx.db.db, 1, "timeline", cfg={}, since=T0, now=T0 + 12 * DAY)
+    pages = [first] + [notify_views.patient_context_list(ctx.db.db, 1, "timeline", cfg={}, since=T0,
+                    now=T0 + 12 * DAY, page=page) for page in range(1, first["pages"])]
+    displayed = [row for page in pages for row in page["items"]]
+    text = "\n".join(quote for row in displayed for quote in row["quotes"])
+    assert all(body in text for body in bodies.values())
+    assert any(row["group"].startswith("時点・関係未確認") for row in displayed)
+    assert ctx.db.db.total_changes == before
+
+
+def test_timeline_keeps_reported_axes_and_refuses_to_choose_between_different_dates():
+    item = {"category": "adverse_events", "text": "架空の記載", "quote": "架空の記載",
+            "subject": "family", "reported_subject": "family", "unverified": True,
+            "temporal": {"subject": "family", "negated": True, "period": "past", "unknown": True},
+            "details": [{"key": "onset", "value": "2026-09-01"},
+                        {"key": "last_confirmed_on", "value": "2026-10-01"}],
+            "message_id": 1, "posted_at_ts": None}
+    result = pcv.timeline({"items": [item], "coverage": {"source_complete": False}})
+    row, = result["items"]
+    assert row["subject"] == row["reported_subject"] == "family"
+    assert row["unverified"] is True and row["temporal"] == item["temporal"]
+    assert row["view_bucket"] == "unknown" and row["event_date_text"] is None
+    assert row["details"] == item["details"] and item.get("view_bucket") is None
+    assert result["coverage"] == {"source_complete": False}
+
+
+def test_timeline_keeps_confirmation_date_distinct_from_event_date(ctx, monkeypatch):
+    item = {"category": "followup", "text": "次回の確認予定", "quote": "次回の確認予定",
+            "subject": "patient", "details": [{"key": "last_confirmed_on", "value": "2026-10-06"}],
+            "message_id": 2, "posted_at_ts": T0}
+    ev = {"items": [item], "coverage": {"source_complete": False}}
+    row, = pcv.timeline(ev)["items"]
+    assert row["event_date_text"] == "2026-10-06"
+    assert row["event_date_kind"] == "last_confirmed_on"
+    monkeypatch.setattr(pcv, "evidence", lambda *args, **kwargs: ev)
+    output = notify_views.patient_context_list(ctx.db.db, 1, "timeline", cfg={}, since=T0, now=T0 + DAY)
+    assert "最終確認日の記載: 2026-10-06" in output["items"][0]["source_rest"]
+    assert "出来事の記載" not in output["items"][0]["source_rest"]
+    item["details"].append({"key": "onset", "value": "2026-10-06"})
+    assert pcv.timeline(ev)["items"][0]["event_date_text"] is None
+
+
+def test_different_date_axes_do_not_prove_a_change_over_time():
+    def item(mid, value, date_key, day):
+        return {"source": "chat", "message_id": mid, "content_hash": str(mid),
+                "category": "observations", "subject": "patient", "text": "合成検査値",
+                "details": [{"key": "observation_name", "value": "架空値"},
+                            {"key": "unit", "value": "mg/dL"},
+                            {"key": "value", "value": value},
+                            {"key": date_key, "value": day}]}
+    ev = {"items": [item(1, "1", "measured_on", "2026-10-01"),
+                    item(2, "2", "last_confirmed_on", "2026-10-02")]}
+    result, = pcv.discrepancies(ev)["items"]
+    assert result["kind"] == "time_unknown"
+    assert {row["event_date_kind"] for row in result["records"]} == {"measured_on", "last_confirmed_on"}
+
+
+def test_safety_timeline_retains_a_grounded_family_denial_without_cross_patient_data(ctx):
+    import inference_version as inference
+
+    body = "家族は架空薬にアレルギーはありません。"
+    item = {"category": "allergies", "text": body, "evidence": body,
+            "subject": "family", "details": []}
+    ctx.db.save_messages([_message(12, body=body)], project_id=1)
+    _artifact(ctx.db, "extract_llm", 12, {"patient_context": [item]}, {"hash": _hash_of(ctx.db, 12)})
+    ctx.db.ensure_patient(2)
+    foreign = "別患者にだけ書かれた合成副作用。"
+    ctx.db.save_messages([_message(13, pid=2, body=foreign)], project_id=2)
+    ctx.db.artifact_add("extract_llm", json.dumps({"patient_context": [{"category": "adverse_events",
+        "text": foreign, "evidence": foreign, "subject": "patient"}]}), project_id=2, message_id=13,
+        meta={"hash": _hash_of(ctx.db, 13), inference.VERSION_KEY: inference.CURRENT_VERSION})
+    rows = pcv.timeline(pcv.evidence(ctx.db.db, 1))["items"]
+    [row] = [row for row in rows if row["message_id"] == 12 and row["category"] == "allergies"]
+    assert row["subject"] == "family" and row["quote"] == body
+    assert row["view_bucket"] == "unknown"
+    assert foreign not in json.dumps(rows, ensure_ascii=False)
+
+
+def test_reply_view_keeps_the_source_of_the_recorded_reply(ctx):
+    _requests(ctx, [(2, "架空依頼A")])
+    _reply(ctx, 110, 2, "done")
+    item = next(row for row in pcv.replies(ctx.db.db, 1)["items"] if row["message_id"] == 2)
+    event = item["reply_events"][0]
+    assert event["message_id"] == 110
+    assert event["revision"] == _hash_of(ctx.db, 110)
+    assert event["reply_state"] == "done" and event["relation"] == "completion_report"
 
 
 def test_transition_chat_labels_distinguish_patient_execution_from_family_report(ctx):

@@ -284,11 +284,11 @@ def _request_reply_lines(db, project_id, roll) -> list:
     lines = ["■ 依頼候補の返信状況" + ("" if reqs else ": なし")]
     for r in reqs:
         state = REPLY_LABELS.get(r.get("reply_state"))
+        if r.get("reply_conflict") is True:
+            state = "完了と取消の記録あり"
         line = (f"・{mmdd(r.get('at'))} "
                 f"{inline_text(r.get('ctx'), 40) or '内容不明'} — 返信: "
                 + (state or "記録なし"))
-        if r.get("reply_conflict") is True:
-            line += "（完了後に取消の記録あり）"
         mid = r.get("mid")
         # only a candidate of the message's current revision counts —
         # the mcs_view / semantic_loops currency rule
@@ -847,7 +847,10 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
         where = "連携サマリー" if karte else f"#{item.get('message_id', '?')}"
         rest = " ".join(v for v in (str(item.get("profession") or item.get("sender") or ""), where) if v)
         if item.get("event_date_text"):
-            rest += f" · 出来事の記載: {item['event_date_text']}"
+            label = {"measured_on": "測定日の記載", "observed_on": "観察日の記載",
+                     "onset": "発症日の記載", "last_confirmed_on": "最終確認日の記載"}.get(
+                         item.get("event_date_kind"), "時点の記載")
+            rest += f" · {label}: {item['event_date_text']}"
         dated = posted_at(item) is not None
         return when(item), rest, (room if dated and not karte else None)
 
@@ -860,6 +863,20 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
             if category:
                 quote = _bare_quote(quote, category)
             quotes = [q for q in (quote, item.get("reply")) if q]
+            events = item.get("reply_events") or []
+            if events:
+                labels = []
+                for event in events[-20:]:
+                    try:
+                        event_time = posted_at(event)
+                    except (TypeError, ValueError, OverflowError, OSError):
+                        event_time = None
+                    label = REPLY_LABELS.get(event.get("reply_state"), "内容未確認")
+                    labels.append(f"{stamp_time(event_time) if event_time else '日時未確認'} {label}"
+                                  + ("（同時刻）" if event.get("same_time_unordered") else ""))
+                if len(events) > 20:
+                    labels.append(f"他{len(events) - 20}件")
+                quotes.append("返信の記録: " + " / ".join(labels))
             date, rest, link = source_of(item)
             source = f"{date} {rest}".strip()
             last = rows[-1] if rows else None
@@ -921,6 +938,43 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
         add(view["written_checks"], "原文に書かれた確認事項")
         # the heading already says 返答が見つからない; each row need not repeat it
         add([{**r, "reply": None} for r in view["unanswered"]], "返答が見つからない記録")
+        if section == "previsit":
+            schedule = view["interventions"]
+            records = schedule["records"]
+            ids = [record["message_id"] for record in records if record.get("message_id") is not None]
+            times = {row[0]: row[1] for row in db.execute(
+                "SELECT message_id,posted_at_ts FROM messages WHERE project_id=? "
+                "AND message_id IN (SELECT value FROM json_each(?))", (project_id, json.dumps(ids)))}
+            try:
+                today = datetime.fromtimestamp(now, JST).date().isoformat()
+            except (TypeError, ValueError, OverflowError, OSError):
+                today = None
+            groups = {"future": [], "other": [], "unknown": []}
+            for record in records:
+                day = record.get("event_day")
+                key = ("unknown" if record["state"] == "unknown" or today is None else
+                       "future" if record["state"] == "planned" and day and day >= today else "other")
+                row = {**record, "posted_at_ts": times.get(record.get("message_id"))}
+                if key == "unknown":
+                    # A partial quote could omit a preceding negation or correction.
+                    row.update(quote=None, text="介入に関する記載あり（内容未確認）")
+                groups[key].append(row)
+            add(groups["future"], "今後の介入予定の記載（変更未照合）")
+            add(groups["other"], "介入に関する記載（変更未照合）")
+            add(groups["unknown"], "介入に関する記載（内容未確認）")
+            coverage = schedule["coverage"]
+            if coverage["state"] == "observed":
+                head.append(f"介入の記載: 最近の投稿{coverage['messages_examined']}件を確認。"
+                            "定型の記載のみ対象、別投稿による変更は未照合")
+                incomplete = coverage["incomplete"] + coverage["invalid_source"] + coverage["oversize"]
+                if incomplete:
+                    head.append(f"介入の記載: 本文を確認できない投稿 {incomplete}件")
+                if coverage["truncated"] or coverage["records_truncated"]:
+                    head.append("介入の記載: 表示対象を一部に限定")
+                if coverage["fetch_state"] != "complete":
+                    head.append("介入の記載: 履歴の取得完了は未確認")
+            else:
+                head.append("介入の記載: 対象範囲を確認できません")
         if view.get("next_planned"):
             head.append("記録上の予定: " + view["next_planned"])
     elif section == "discrepancies":

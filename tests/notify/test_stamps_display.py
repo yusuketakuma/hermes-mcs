@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import inference_version as inference
 import ledger
 import mcs_view
 import notify_digest
@@ -315,17 +316,32 @@ def test_patient_summary_request_reply_states(led):
     # Exercise rendering of an already validated current rollup, not legacy migration.
     led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
                    "created_at) VALUES('patient_rollup',1,NULL,?,'t',?,?)",
-                   (json.dumps({"recent_requests": reqs}),
-                    json.dumps({"period_check_version": rollup.PERIOD_CHECK_VERSION}), NOW))
+                   (json.dumps({inference.VERSION_KEY: inference.CURRENT_VERSION, "recent_requests": reqs}),
+                    json.dumps({inference.VERSION_KEY: inference.CURRENT_VERSION,
+                                "period_check_version": rollup.PERIOD_CHECK_VERSION}), NOW))
     led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
                    "created_at) VALUES('loop_candidate',1,101,?,'t','{}',?)",
                    (json.dumps({"origin": {"revision": f"{101:064x}"}}), NOW))
     _, text = notify_views.patient_summary_text(led.db, 1)
     sec = text.split("■ 依頼候補の返信状況", 1)[1].split("\n■ ", 1)[0]
-    assert "・09-30 残薬確認 — 返信: 完了（完了後に取消の記録あり）" in sec
+    assert "・09-30 残薬確認 — 返信: 完了と取消の記録あり" in sec
     assert "・09-29 処方変更 — 返信: 記録なし・Loop候補（semantic shadow）あり" in sec
     assert sec.count("\n・") == 5
     assert "返信記録が見つからないことは対応がなかったことを意味しません" not in sec
+
+
+@pytest.mark.parametrize("events", [
+    [("done", 100), ("cancel", 200)],
+    [("cancel", 100), ("done", 200)],
+    [("done", 100), ("cancel", 100)],
+])
+def test_request_reply_conflict_never_invents_event_order(led, events):
+    req = {"ctx": "合成依頼", "mid": 100, "at": "2026-09-30T09:00",
+           "reply_state": "cancel", "reply_conflict": True,
+           "reply_events": [{"reply_state": state, "posted_at_ts": at} for state, at in events]}
+    lines = notify_views._request_reply_lines(led.db, 1, {"recent_requests": [req]})
+    assert lines[1] == "・09-30 合成依頼 — 返信: 完了と取消の記録あり"
+    assert "完了後" not in lines[1] and "取消後" not in lines[1]
 
 
 def test_evidence_shows_actor_counts_for_own_posts_only(led, tmp_path):
