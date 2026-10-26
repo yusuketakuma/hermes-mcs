@@ -803,6 +803,7 @@ def run_discovery(adapter, ledger, result, deadline,
         return 0
     if time.monotonic() > deadline - 60:
         return 0
+    observed_at = int(time.time())
     try:
         projects = adapter.list_projects()
     except SessionExpired:
@@ -816,7 +817,8 @@ def run_discovery(adapter, ledger, result, deadline,
     active_ids = {p.project_id for p in projects}
     for p in projects:
         try:
-            created, _ = ledger.upsert_patient_info(p, is_archived=False, notify_new=True)
+            created, _ = ledger.upsert_patient_info(p, is_archived=False, notify_new=True,
+                                                       observation_ts=observed_at, observation_source="local")
             new_n += created
         except Exception as e:
             write_failed = write_failed or type(e).__name__

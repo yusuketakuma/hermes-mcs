@@ -590,6 +590,9 @@ def source_fingerprint(db, card) -> str:
     bumps source_generation."""
     card = dict(card)
     kind = card["kind"]
+    if kind == "patient_history":
+        import notify_history
+        return notify_history.fingerprint(db, card)
     if kind == "thread":
         own = own_post(card)
         msgs = db.execute(
@@ -845,6 +848,9 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
     containers + footer + shown-set + pages. Tokens/buttons are added
     per-render and are NOT part of the content fingerprint."""
     kind = card["kind"]
+    if kind == "patient_history":
+        import notify_history
+        return notify_history.content(db, card)
     ui = card["ui_state"]
     progress_by_mid = None
     urgent = False

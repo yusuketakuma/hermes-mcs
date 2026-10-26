@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 import collection_stages
+import initial_import_state
 import job_ops
 import mcs_contract
 import notify_cards
@@ -46,7 +47,7 @@ def _events(db):
     (LINEWORKS, validate_lineworks, "lineworks"),
 ])
 @pytest.mark.parametrize("pre_stored", [False, True])
-def test_read_new_room_is_registered_and_recent_posts_reach_chat_spec(
+def test_read_new_room_aggregates_initial_history_and_later_posts_reach_chat_spec(
         db, config, validate, transport, pre_stored):
     assert _capture(db, [_unread_patient(1)])["errors"] == []
     assert db.job_pending("history", 1) is not None
@@ -65,11 +66,11 @@ def test_read_new_room_is_registered_and_recent_posts_reach_chat_spec(
                              notify_max_age_s=86400)
     assert result["errors"] == []
     assert db.db.execute("SELECT count(*) FROM messages").fetchone()[0] == 4
-    events = _events(db)
-    assert len(events) == 1
-    assert set(json.loads(events[0]["payload"])["message_ids"]) == {10, 11}
-    assert json.loads(events[0]["payload"])["source"] == "discovery"
-    notify_cards.dispatch_intent(db, dict(events[0]), config, now=time.time() + 300)
+    assert _events(db) == []
+    assert initial_import_state.progress(db.db, 1)["saved_count"] == 4
+    history = db.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' ORDER BY event_id").fetchall()
+    assert {mid for event in history for mid in json.loads(event["payload"])["message_ids"]} == {10, 11, 20, 21}
+    notify_cards.dispatch_intent(db, dict(history[-1]), config, now=time.time() + 300)
     renders = db.db.execute("SELECT spec_json FROM notification_renders").fetchall()
     assert renders
     for row in renders:
@@ -78,7 +79,13 @@ def test_read_new_room_is_registered_and_recent_posts_reach_chat_spec(
         assert spec["delivery"].get("transport", "discord") == transport
     _capture(db, [_unread_patient(1)])
     assert db.job_state("history", 1) == "done"
-    assert len(_events(db)) == 1
+    assert _events(db) == []
+    assert db.db.execute("SELECT count(*) FROM notify_outbox WHERE kind='patient_history'").fetchone()[0] == len(history)
+    # A later reply to a history root remains an individual live arrival.
+    live = _posted(30, -1, parent=10)
+    db.save_thread_replies([live], 1, notify={"source": "unread"}, notify_max_age_s=86400)
+    [event] = _events(db)
+    assert json.loads(event["payload"])["message_ids"] == [30]
 
 
 def test_patient_and_initial_walk_roll_back_together(db, monkeypatch):
@@ -131,11 +138,12 @@ def test_initial_walk_resumes_without_duplicate_notification(db):
                                  notify_max_age_s=86400)
     assert calls == [1, 3]
     assert db.job_state("history", 1) == "done"
-    assert len(_events(db)) == 1
+    assert _events(db) == []
+    assert initial_import_state.progress(db.db, 1)["saved_count"] == 1
 
 
-@pytest.mark.parametrize("age_limit,expected", [(None, {20, 30}), (3600, {30})])
-def test_initial_walk_is_age_bounded_without_hiding_later_pinned_pages(db, age_limit, expected):
+@pytest.mark.parametrize("age_limit", [None, 3600])
+def test_initial_walk_aggregates_all_ages_without_hiding_later_pinned_pages(db, age_limit):
     _capture(db, [_unread_patient(1)])
     pages = iter([[_posted(10, 30 * 86400)], [_posted(20, 7200), _posted(30, 300)]])
     calls = []
@@ -148,7 +156,9 @@ def test_initial_walk_is_age_bounded_without_hiding_later_pinned_pages(db, age_l
     assert _events(db) == []
     job_ops.run_history_jobs(adapter, db, {"errors": []}, time.monotonic() + 60,
                              notify_max_age_s=age_limit)
-    assert set(json.loads(_events(db)[0]["payload"])["message_ids"]) == expected
+    assert _events(db) == []
+    assert initial_import_state.message_ids(db.db, 1) == [10, 20, 30]
+    assert initial_import_state.progress(db.db, 1)["saved_count"] == 3
     assert calls == [1, 3] and db.job_state("history", 1) == "done"
     assert db.db.execute("SELECT count(*) FROM messages").fetchone()[0] == 3
 

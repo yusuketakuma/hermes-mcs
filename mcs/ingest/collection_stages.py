@@ -321,7 +321,8 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
             result["errors"].append("deadline_exceeded")
             break
         try:
-            ledger.upsert_patient_info(p, is_archived=False, notify_new=True)
+            ledger.upsert_patient_info(p, is_archived=False, notify_new=True,
+                                       observation_ts=snap.timestamp)
             known.add(p.project_id)
         except Exception:
             result["errors"].append(f"project {p.project_id}: db_write_failed")
@@ -429,6 +430,7 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
             new_ids = ledger.save_patient(p, notify={
                 "run_id": run_id, "source": "unread",
                 "snapshot_ts": snap.timestamp}, semantic=semantic,
+                observation_ts=snap.timestamp,
                 notify_max_age_s=notify_max_age_s)
         except Exception as e:
             ledger.patient_fetch_failed(p.project_id, type(e).__name__)

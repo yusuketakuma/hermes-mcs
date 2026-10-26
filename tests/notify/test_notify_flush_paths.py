@@ -74,7 +74,7 @@ def test_missing_notification_channel_stays_retryable(monkeypatch):
     marked = []
 
     class Outbox:
-        def outbox_due(self, limit):
+        def outbox_due(self, limit, **kwargs):
             return [{"event_id": 1, "kind": "new_messages", "project_id": 1,
                      "payload": "{}", "attempts": 0, "progress": None}]
 
@@ -584,7 +584,7 @@ def test_card_routed_events_dispatch_without_exe_or_text_destination(monkeypatch
         ev.update(project_id=1, payload="{}", attempts=0, progress=None)
 
     class Outbox:
-        def outbox_due(self, limit):
+        def outbox_due(self, limit, **kwargs):
             return events
 
         def is_archived(self, project_id):

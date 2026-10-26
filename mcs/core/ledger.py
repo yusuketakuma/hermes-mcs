@@ -1,6 +1,6 @@
 """SQLite ledger for MCS unread capture + history archive.
 
-Schema v9 (reuse-oriented):
+Schema v10 (reuse-oriented):
   runs          : one row per check run (kind: tick | init)
   patients      : per-project fetch state + history_floor (deepest completed
                   cutoff) + history_page (resume cursor for deep imports)
@@ -33,12 +33,13 @@ from mcs_util import RETRY_LATER_4XX, html_to_text, loads_dict
 
 
 import ledger_schema
+import initial_import_state
 from ledger_schema import MigrationError  # noqa: F401 - retained construction exception API
 from mcs_queries import iter_artifacts, karte_summary_current, karte_summary_row, posted_epoch
 from snapshots import publish_snapshot  # noqa: F401 - retained public ledger API
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 JOB_REASON_CODES = frozenset({
     "invalid_payload", "schema_error", "fetch_error", "network_error",
     "worker_error", "worker_timeout", "deadline_exceeded", "session_expired",
@@ -365,7 +366,8 @@ class Ledger:
 
     def save_patient(self, p, notify: dict | None = None,
                      semantic: bool = False,
-                     notify_max_age_s: float | None = None) -> list:
+                     notify_max_age_s: float | None = None,
+                     observation_ts: int | None = None) -> list:
         """Whole patient block + optional notify intent in ONE transaction —
         a crash between message save and outbox insert must not be able to
         lose the notification (Oracle B11). notify is a payload template;
@@ -385,6 +387,7 @@ class Ledger:
                            if semantic or self._has_canonical_projections() else {})
         invalidated_roots = set()
         with self.db:  # commit on success, rollback on exception
+            first = self.db.execute("SELECT 1 FROM patients WHERE project_id=?", (p.project_id,)).fetchone() is None
             self.db.execute("""
               INSERT INTO patients(project_id,project_type,patient_name,disease,
                 station_name,url,karte_id,fetch_state,fetch_reason,
@@ -410,6 +413,8 @@ class Ledger:
                   p.fetch_state, p.fetch_reason,
                   now if p.fetch_state == "complete" else None,
                   now, now))
+            if first and notify and observation_ts is not None:
+                self._start_initial_import_tx(p.project_id, observation_ts, now)
             for m in p.messages:
                 self._save_tree(m, new_ids, now, p.project_id)
             changed_semantic = (self._semantic_changed_ids(
@@ -436,6 +441,16 @@ class Ledger:
                                   notify_max_age_s, invalidated_roots: set | None = None):
         """Keep notification eligibility and semantic coverage in the save
         transaction for unread, backfill and reply arrivals alike."""
+        history = initial_import_state.classify_tx(
+            self, project_id, [*new_ids, *changed_ids, *notify_ids], now)
+        history_updates = sorted(history & (set(new_ids) | set(changed_ids)
+                                            | set(self._unnotified(notify_ids))))
+        if history_updates:
+            initial_import_state.emit_tx(
+                self, project_id, initial_import_state.load(self.db, project_id), history_updates)
+            self._mark_notified(history_updates, now)
+        initial_import_state.refresh_capture_tx(self, project_id, now)
+        notify_ids = [mid for mid in notify_ids if mid not in history]
         if not (notify or semantic):
             return
         if self.is_archived(project_id):
@@ -458,7 +473,7 @@ class Ledger:
                     + ") AND posted_at_ts >= ?",
                     [*new_ids, now - notify_max_age_s]).fetchall()
                 notify_ids = list(dict.fromkeys(
-                    notify_ids + self._unnotified([r[0] for r in recent])))
+                    notify_ids + self._unnotified([r[0] for r in recent if r[0] not in history])))
             # Opted-in realtime notification paths cover every new
             # reply. Discovery still age-filters old replies on the first import.
             reply_ids = []
@@ -469,7 +484,7 @@ class Ledger:
                     + ",".join("?" * len(new_ids))
                     + ") AND parent_id IS NOT NULL AND parent_id != 0",
                     new_ids).fetchall()
-                reply_ids = self._unnotified([r[0] for r in replies])
+                reply_ids = self._unnotified([r[0] for r in replies if r[0] not in history])
             unbounded = set(reply_ids)
             notify_ids = self._filter_notify_age(
                 [mid for mid in notify_ids if mid not in unbounded],
@@ -485,8 +500,14 @@ class Ledger:
             # already-read and age-filtered arrivals. Notification
             # eligibility is separately derived from the origin event.
             seed_ids = sorted(set(new_ids) | set(notify_ids) | set(changed_ids))
-            if seed_ids:
-                self.semantic_seed_tx(project_id, seed_ids, origin,
+            history_seed = [mid for mid in seed_ids if mid in history]
+            live_seed = [mid for mid in seed_ids if mid not in history]
+            if history_seed:
+                history_origin = {"source": "initial_history", "notification_free": True}
+                self.semantic_seed_tx(project_id, history_seed, history_origin,
+                                      invalidated_roots=invalidated_roots)
+            if live_seed:
+                self.semantic_seed_tx(project_id, live_seed, origin,
                                       invalidated_roots=invalidated_roots)
 
     def _filter_notify_age(self, ids: list, now: float,
@@ -536,7 +557,8 @@ class Ledger:
             (project_id,)).fetchone()
         return bool(r and r["a"])
 
-    def upsert_patient_info(self, p, is_archived=None, *, notify_new=False):
+    def upsert_patient_info(self, p, is_archived=None, *, notify_new=False,
+                            observation_ts: int | None = None, observation_source="server"):
         """Identity fields only — for history imports; does NOT touch
         fetch_state/fetch_reason/last_complete_fetch.
 
@@ -544,7 +566,8 @@ class Ledger:
         the SAME upsert statement, so archive state can never be
         half-registered by a crash between two commits (Oracle F1).
         notify_new reserves a notifying history walk for a new/reappearing
-        live project in that same transaction; initial history stays age-bound.
+        live project in that same transaction. New cohorts aggregate initial
+        history; older patients retain the existing age-bound intent behavior.
 
         Returns (created, archive_transitioned): archive_transitioned is
         True when the row ends up archived and was not before — covers
@@ -594,6 +617,9 @@ class Ledger:
                 self.job_add_tx("history_head", p.project_id, payload={
                     "since": since, "page": 1, "trickle": True},
                     reset_pending=True)
+            if notify_new and flag == 0 and row is None:
+                self._start_initial_import_tx(p.project_id, observation_ts, now,
+                                              observation_source=observation_source)
             if notify_new and flag == 0 and (row is None or prev):
                 # Registration and its first notifying walk must survive together.
                 self.job_add_tx("history", p.project_id, payload={
@@ -601,6 +627,14 @@ class Ledger:
                     "notify": True, "notify_source": "discovery"},
                     reset_pending=prev)
         return (row is None, bool(flag) and not prev)
+
+    def _start_initial_import_tx(self, project_id, observation_ts, now, *, observation_source="server"):
+        initial_import_state.start_tx(
+            self, project_id, observation_ts if observation_ts is not None else int(now), now,
+            boundary_source=observation_source if observation_ts is not None else "local")
+        self.job_add_tx("history", project_id, payload={
+            "since": 0, "page": 1, "pages": 3, "trickle": False,
+            "notify": True, "notify_source": "discovery"})
 
     def archive_head_since(self, project_id: int) -> int:
         """Anchor for an archived patient's final head reconciliation.
@@ -786,6 +820,19 @@ class Ledger:
                     notify_ids, notify=notify, semantic=semantic, now=now,
                     notify_max_age_s=notify_max_age_s,
                     invalidated_roots=invalidated_roots)
+            else:
+                # init_data saves mixed projects without requesting individual notifications.
+                grouped = {}
+                for message in msgs:
+                    for row in [message, *message.replies]:
+                        grouped.setdefault(row.project_id, []).append(row.message_id)
+                for pid, ids in grouped.items():
+                    touched = set(ids)
+                    self._queue_saved_messages_tx(
+                        pid, [mid for mid in new_ids if mid in touched], changed_semantic.get(pid, []),
+                        ids, notify=None, semantic=semantic, now=now,
+                        notify_max_age_s=notify_max_age_s,
+                        invalidated_roots=invalidated_roots)
         return new_ids
 
     def save_thread_replies(self, replies: list, project_id: int,
@@ -941,7 +988,8 @@ class Ledger:
         return 0 if existing is not None else 1
 
     def _save_message_metadata(self, m, *, source, now, body_changed=False):
-        metadata = getattr(m, "metadata", {})
+        metadata = {k: v for k, v in getattr(m, "metadata", {}).items()
+                    if k != initial_import_state.META_KEY}
         errors = getattr(m, "metadata_errors", [])
         if (not metadata and not errors and source == "capture"
                 and not body_changed):
@@ -950,10 +998,17 @@ class Ledger:
             "SELECT content FROM message_metadata WHERE message_id=? AND source=?",
             (m.message_id, source)).fetchone()
         content = (loads_dict(row["content"]) or {}) if row else {}
+        if row and source == "capture" and loads_dict(row["content"]) is None:
+            active = self.db.execute(
+                "SELECT 1 FROM patients p JOIN messages m ON m.project_id=p.project_id "
+                "WHERE m.message_id=? AND p.initial_import IS NOT NULL", (m.message_id,)).fetchone()
+            if active:
+                raise ValueError("initial_import_membership_invalid")
         if body_changed:
             # a field this capture did not re-observe belongs to the earlier
             # body; keeping it under the new checked_at would re-bind it
-            content = {k: v for k, v in content.items() if k in metadata}
+            content = {k: v for k, v in content.items()
+                       if k in metadata or k == initial_import_state.META_KEY}
         # observed_at marks when this value was first seen: unread posts
         # are re-captured every tick, and refreshing an unchanged value
         # would re-render cards and recount digests each time.
@@ -1325,11 +1380,21 @@ class Ledger:
                         (json.dumps(pl), row["job_id"]))
         self.db.commit()
 
+    def _commit_job_update(self, job_id):
+        try:
+            row = self.db.execute("SELECT project_id,kind FROM fetch_jobs WHERE job_id=?", (job_id,)).fetchone()
+            if row is not None and row["kind"] in ("history", "reply", "thread"):
+                initial_import_state.refresh_capture_tx(self, row[0], time.time())
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
+
     def job_done(self, job_id: int):
         self.db.execute(
             "UPDATE fetch_jobs SET state='done',reason_code=NULL,updated_at=? WHERE job_id=?",
             (time.time(), job_id))
-        self.db.commit()
+        self._commit_job_update(job_id)
 
     def job_defer(self, job_id: int, retry_in: float,
                   payload: dict | None = None, *, reason_code: str | None = None,
@@ -1353,7 +1418,7 @@ class Ledger:
                 "UPDATE fetch_jobs SET next_try=?,updated_at=?,reason_code=? "
                 "WHERE job_id=?", (time.time() + retry_in,
                                   time.time(), reason_code, job_id))
-        self.db.commit()
+        self._commit_job_update(job_id)
 
     def job_retry(self, job_id: int, retry_in: float = 300,
                   max_attempts: int = 8, *, payload: dict | None = None,
@@ -1377,7 +1442,7 @@ class Ledger:
             "UPDATE fetch_jobs SET state='failed' "
             "WHERE job_id=? AND (attempts>=? OR ?)",
             (job_id, max_attempts, permanent))
-        self.db.commit()
+        self._commit_job_update(job_id)
 
     def job_fail(self, job_id: int, *, reason_code: str | None = None):
         if reason_code is not None and job_reason_code(reason_code) is None:
@@ -1385,7 +1450,7 @@ class Ledger:
         self.db.execute(
             "UPDATE fetch_jobs SET state='failed',updated_at=?,reason_code=? WHERE job_id=?",
             (time.time(), reason_code, job_id))
-        self.db.commit()
+        self._commit_job_update(job_id)
 
     def history_jobs_due(self) -> list:
         """All due history jobs, least-recently-touched first. Every
@@ -1790,13 +1855,20 @@ class Ledger:
         self.db.commit()
         return rid
 
-    def outbox_due(self, limit: int = 20) -> list:
-        return self.db.execute("""
-          SELECT event_id,kind,project_id,payload,attempts,progress,route
-          FROM notify_outbox
-          WHERE state IN ('pending','failed') AND next_try <= ?
-          ORDER BY event_id LIMIT ?
-        """, (time.time(), limit)).fetchall()
+    def outbox_due(self, limit: int = 20, *, history_fair: bool = False) -> list:
+        now = time.time()
+        sql = ("SELECT event_id,kind,project_id,payload,attempts,progress,route "
+               "FROM notify_outbox WHERE state IN ('pending','failed') AND next_try <= ? ")
+        if not history_fair or limit <= 1:
+            return self.db.execute(sql + "ORDER BY event_id LIMIT ?", (now, limit)).fetchall()
+        live_sql = sql + "AND kind!='patient_history' ORDER BY event_id LIMIT ?"
+        live = self.db.execute(live_sql, (now, max(1, limit - 2))).fetchall()
+        history = self.db.execute(
+            sql + "AND kind='patient_history' ORDER BY event_id LIMIT ?",
+            (now, limit - len(live))).fetchall()
+        if len(history) + len(live) < limit:
+            live = self.db.execute(live_sql, (now, limit - len(history))).fetchall()
+        return sorted([*live, *history], key=lambda row: row["event_id"])
 
     def outbox_progress(self, event_id: int, next_chunk: int,
                         sent_ids: list, fingerprint: str,
