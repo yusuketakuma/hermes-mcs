@@ -353,15 +353,15 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
     if isinstance(ext, dict) and "patient_state_context" in ext and type(ext["patient_state_context"]) is not bool:
         errors.append("extract.patient_state_context: true（有効）かfalse（無効）を指定してください")
     if isinstance(ext, dict) and "patient_context_nightly" in ext:
-        nightly = ext["patient_context_nightly"]
+        context_settings = ext["patient_context_nightly"]
         prefix = "extract.patient_context_nightly"
-        if not isinstance(nightly, dict):
+        if not isinstance(context_settings, dict):
             errors.append(f"{prefix}: JSONオブジェクト（キーと値の組）を指定してください")
         else:
-            if set(nightly) - {"enabled", "publication"}:
+            if set(context_settings) - {"enabled", "publication"}:
                 errors.append(f"{prefix}: enabledとpublication以外の設定項目は使えません")
             for key in ("enabled", "publication"):
-                if key in nightly and type(nightly[key]) is not bool:
+                if key in context_settings and type(context_settings[key]) is not bool:
                     errors.append(f"{prefix}.{key}: true（有効）かfalse（無効）を指定してください")
     if isinstance(sig, dict) and "notify" in sig and type(sig["notify"]) is not bool:
         errors.append("signals.notify: true（有効）かfalse（無効）を指定してください")

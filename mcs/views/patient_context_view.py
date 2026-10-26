@@ -79,7 +79,7 @@ def evidence(db, project_id, *, cfg=None) -> dict:
     """The shared evidence list every view projects from.
 
     Chat items are read_model's current, source-checked context (edited,
-    deleted, foreign or unmatched quotes never appear). Nightly facts are
+    deleted, foreign or unmatched quotes never appear). Published context facts are
     added only when the core helper returns a published, still-valid row."""
     import patient_context_refresh
     records, coverage, _ = _records_coverage(db, "detail", project_id, None)

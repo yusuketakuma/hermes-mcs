@@ -1348,7 +1348,7 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
             _record_hold_tx(ledger, r, prior, "attempts_exhausted")
 
 
-# Nightly automatic retry of permanently failed extractions (owner
+# Periodic automatic retry of permanently failed extractions (owner
 # request 2026-09-30): an error row that reached the 5-attempt ceiling
 # gets ONE more attempt per maintenance pass, at most REVIVE_PER_INPUT times for
 # the same body hash and REVIVE_MAX rows per pass, only after
@@ -1419,7 +1419,7 @@ def _fail(ledger, r, attempts: int):
 
 
 def _error_auto_retry(ledger, mid: int, content_hash) -> int:
-    """Nightly revivals already spent on this body hash under the CURRENT
+    """Periodic revivals already spent on this body hash under the CURRENT
     extract version (0 for a new body or version) — carried so a refail
     keeps the per-input cap without an older version's spent revivals
     blocking the current version's budget."""
@@ -3844,7 +3844,7 @@ def _background_context_refresh(ledger, initial_state, stop=None):
                     **({"local_admit": local_admit} if cloud_enabled else {}),
                     complete=functools.partial(patient_extraction_complete, ledger))
     except Exception as exc:
-        # Nightly failures must not interrupt collection or normal extraction.
+        # Context refresh failures must not interrupt collection or normal extraction.
         result = {"status": "error", "done": 0, "error": type(exc).__name__}
     if writer_lock.updater_state() != initial_state:
         result["run_lock_lost"] = "updated"

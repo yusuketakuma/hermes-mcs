@@ -935,17 +935,17 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
         tail = f"（{row['source']}）"
         row["text"] = ("\n".join(row["quotes"][:-1] + [row["quotes"][-1] + "　" + tail])
                        if row["quotes"] else tail)
-    nightly = ev["coverage"].get("nightly") or {}
+    context_coverage = ev["coverage"].get("nightly") or {}
     status = []   # how complete the record is: kept, but below the records instead of above them
     if ev.get("as_of"):
         status.append("患者コンテキストの反映時点: " + stamp_time(datetime.fromtimestamp(ev["as_of"], JST)))
     status.append(_coverage_line(db, project_id))
-    if nightly:
-        status.append(f"取込済み {nightly.get('fetched', 0)}件 / 点検済み {nightly.get('analyzed', 0)}件 / 未点検 {nightly.get('unscanned', 0)}件 / 本文未取得・不完全 {nightly.get('incomplete', 0)}件")
-        status.append(f"原文に対応する引用 {nightly.get('evidence_supported', 0)} / {nightly.get('evidence_total', 0)}件")
-        status.append(f"まとめ未反映 {nightly.get('unreflected', 0)}件")
-        if (nightly.get("attachments") or {}).get("count"):
-            status.append(f"添付 {nightly['attachments']['count']}件（内容は未解析）")
+    if context_coverage:
+        status.append(f"取込済み {context_coverage.get('fetched', 0)}件 / 点検済み {context_coverage.get('analyzed', 0)}件 / 未点検 {context_coverage.get('unscanned', 0)}件 / 本文未取得・不完全 {context_coverage.get('incomplete', 0)}件")
+        status.append(f"原文に対応する引用 {context_coverage.get('evidence_supported', 0)} / {context_coverage.get('evidence_total', 0)}件")
+        status.append(f"まとめ未反映 {context_coverage.get('unreflected', 0)}件")
+        if (context_coverage.get("attachments") or {}).get("count"):
+            status.append(f"添付 {context_coverage['attachments']['count']}件（内容は未解析）")
     pages = max(1, -(-len(rows) // CONTEXT_PAGE_SIZE))
     page = min(page, pages - 1)
     name = patient_label(db, project_id)
