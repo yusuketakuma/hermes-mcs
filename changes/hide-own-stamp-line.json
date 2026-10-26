@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "投稿ごとのスタンプ行から自分のスタンプ表示を外す",
+  "summary": "カードやスレッドの投稿ごとのスタンプ行に出していた「自分 🙏」のような自分のスタンプ表示をやめました。自分が押したスタンプは、スタンプのメニュー（Slackは選択済みの項目、Discord・LINE WORKSは✓の付いたボタン）で確認できます。自分だけが押した投稿では、スタンプ行そのものを出しません。",
+  "upgrade": "設定変更は不要です。Hermes経由はgateway、独立実行は各アダプターの再起動後に、新しく送るカードと次に更新されるカードから反映します。",
+  "details": [
+    "Slack・Discord・LINE WORKSの投稿ごとの行が対象です。件数・押した人の氏名・観測日時の表示は変えていません。",
+    "複数投稿をまとめた集計行の「自分 N投稿」は従来どおり表示します。"
+  ],
+  "refs": [
+    "mcs/stamps/stamp_format.py",
+    "mcs/notify/notify_render.py",
+    "docs/guides/USER_GUIDE.md",
+    "tests/notify/test_stamps_display.py"
+  ]
+}

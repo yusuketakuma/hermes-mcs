@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "Slackの原文の折りたたみを表示幅いっぱいに広げる",
+  "summary": "SlackのPCアプリで、カードやスレッドに付く「原文（N字）」の折りたたみが、画面の幅に関係なく狭い固定幅で表示されていた問題を修正しました。開いた原文がメッセージ欄の幅いっぱいに表示されます。",
+  "upgrade": "設定変更は不要です。Hermes経由はgateway、独立実行はSlackアダプターの再起動後に送る投稿から有効です。",
+  "details": [
+    "Slackの折りたたみブロック（container）の幅指定を、既定の固定幅（standard）から表示幅に合わせる指定（full）に変えました。",
+    "折りたたみの既定状態・見出し・原文の内容は変更していません。Discord・LINE WORKSの表示は対象外です。"
+  ],
+  "refs": [
+    "adapters/slack/presentation.py",
+    "tests/adapters/slack/test_slack_thread_blocks.py"
+  ]
+}

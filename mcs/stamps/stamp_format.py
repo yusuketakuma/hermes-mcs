@@ -101,10 +101,8 @@ def thread_stamp_line(metadata, summary=None, *, observed_time=True) -> str:
             part += " " + "・".join(take) + (
                 f" 他{len(who) - len(take)}名" if len(who) > len(take) else "")
         parts.append(part)
-    mine = self_stamps(metadata)
+    # one's own stamp is not listed (owner 2026-10-26): the stamp menu shows it
     text = "スタンプ " + ((" / " if shown else " ").join(parts) or "なし")
-    if mine:
-        text += f" · 自分 {mine}"
     state = summary.get("state")
     if counts and (state == "failed" or (state == "stale" and observed_time)):
         text += " · 押した人 " + ("取得失敗" if state == "failed" else "古い情報")

@@ -39,12 +39,29 @@ def test_stamp_controls_expand_one_menu_with_six_distinct_names():
     assert menu["type"] == "static_select"
     assert menu["placeholder"]["text"] == "スタンプを押す…"
     assert [o["text"]["text"] for o in menu["options"]] == [
-        "👀見ました", "🙆承知 ✓（取消）", "🙏感謝", "👍いいね", "✅完了", "🗂 別の投稿"]
+        "🙆承知 ✓（押印済み）", "👀見ました", "🙆承知 ✓（取消）", "🙏感謝", "👍いいね", "✅完了",
+        "🗂 別の投稿"]
     assert all(o["text"]["type"] == "plain_text" for o in menu["options"])
-    assert "initial_option" not in menu
+    # the stamp already pressed (also from MCS itself) shows as the menu's selection
+    assert menu["initial_option"] == menu["options"][0]
+    assert menu["initial_option"]["value"] == cards.OWN_STAMP_VALUE
     assert not any(b["type"] == "context_actions" for b in blocks)
     assert not any(e["type"] == "button" for b in blocks if b["type"] == "actions"
                    for e in b["elements"])
+
+
+def test_stamp_menu_without_an_own_stamp_has_no_selection():
+    spec = _stamps_spec()
+    for b in spec["parts"]["action_rows"][-1]:
+        b["style"], b["label"] = "secondary", b["label"].replace(" ✓", "")
+    menu = _stamp_control(render(spec)[1])["elements"][0]
+    assert "initial_option" not in menu and len(menu["options"]) == 6
+
+
+def test_selecting_the_display_only_own_stamp_option_sends_nothing():
+    body, _ = click()
+    assert _origin(body, {"type": "static_select", "action_id": "mcs:stamps-menu",
+                          "selected_option": {"value": cards.OWN_STAMP_VALUE}}) is None
 
 
 def _pair_action(token=TOKEN, *, second=False):
@@ -68,9 +85,10 @@ def test_compact_controls_preserve_all_tokens_and_observed_own_state():
     assert [o["value"] for o in select["options"]] == ["b" * 32, "c" * 32]
     control = _stamp_control(blocks)
     menu = control["elements"][0]
-    assert [o["value"] for o in menu["options"]] == [f"{i:032x}" for i in range(1, 6)] + ["d" * 32]
+    assert [o["value"] for o in menu["options"]] == [
+        cards.OWN_STAMP_VALUE, *(f"{i:032x}" for i in range(1, 6)), "d" * 32]
     body, _ = click()
-    for option in menu["options"]:
+    for option in menu["options"][1:]:
         origin = _origin(body, {**menu, "selected_option": option})
         assert origin and origin["token"] == option["value"]
     assert blocks.index(control) < blocks.index(ordinary)
@@ -111,7 +129,8 @@ def test_incomplete_older_specs_keep_every_action(without):
     _, blocks = render(spec)
     assert not any(b["type"] == "context_actions" for b in blocks)
     controls = [e for b in blocks for e in (b.get("elements", []) if b["type"] == "actions" else [b["accessory"]] if "accessory" in b else [])]
-    actual = [o["value"] for e in controls if e["type"] == "static_select" for o in e["options"]]
+    actual = [o["value"] for e in controls if e["type"] == "static_select" for o in e["options"]
+              if o["value"] != cards.OWN_STAMP_VALUE]
     actual += [e["value"] for e in controls if e["type"] == "button"]
     expected = [e["token"] for row in spec["parts"]["action_rows"] for e in row]
     assert sorted(actual) == sorted(expected)
@@ -231,8 +250,9 @@ def test_visible_controls_keep_the_target_and_never_fallback(op, thread, rejecte
     menu, = ordinary["elements"]
     assert [o["value"] for o in menu["options"]] == ["b" * 32, "c" * 32]
     stamps = _stamp_control(payload["blocks"])["elements"][0]["options"]
-    assert [o["value"] for o in stamps] == [f"{i:032x}" for i in range(1, 6)] + ["d" * 32]
-    assert "取消" in stamps[1]["text"]["text"]
+    assert [o["value"] for o in stamps] == [
+        cards.OWN_STAMP_VALUE, *(f"{i:032x}" for i in range(1, 6)), "d" * 32]
+    assert "取消" in stamps[2]["text"]["text"] and "押印済み" in stamps[0]["text"]["text"]
     assert payload["blocks"] == render(_stamps_spec())[1]
     if op == "update":
         assert payload["ts"] == "1790000000.000001"

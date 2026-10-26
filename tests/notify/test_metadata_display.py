@@ -90,7 +90,7 @@ def test_footer_is_read_only_and_unknown_labels_cannot_mention(led):
     def strip(t):
         return [ln for ln in t.split("\n") if not ln.startswith("スタンプ ")]
     assert strip(after_body) == strip(before_body)
-    assert "スタンプ ✅1 ❔1 · 自分 ✅❔ · " in after_body
+    assert "スタンプ ✅1 ❔1 · " in after_body
     assert led.db.execute("SELECT count(*) FROM notification_acknowledgements").fetchone()[0] == 0
 
 
