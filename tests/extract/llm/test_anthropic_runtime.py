@@ -684,21 +684,17 @@ def test_operating_limits_alone_do_not_discard_a_waiting_context_unit():
     assert not worker._same_but_operating_limits({**base, "extract": {"x": 2}}, base)
 
 
-def test_carried_shadow_commits_settled_outside_a_pass_stay_counted_as_uncompared(routed, monkeypatch):
-    import contextlib
+def test_a_shadow_unit_is_pending_until_measured_and_counted_once(routed):
     led, *_ = routed
-    row = {"project_id": 1, "message_id": 1}
-    monkeypatch.setattr(worker, "_write_lock", lambda *a, **kw: contextlib.nullcontext(True))
-    monkeypatch.setattr(worker, "_owns_current_source", lambda *a: True)
-    monkeypatch.setattr(worker, "_release", lambda *a: None)
-    monkeypatch.setattr(worker, "_comparison_extract", lambda r, doc: {"synthetic-fact"})
-    def commit(*, settled, shadow):
-        settled["done"] += 1
-        shadow.append((row, {}, None))
-    worker._settle_carry(led, [(row, 1e12, commit)])
-    [compare] = [json.loads(a["meta"]) for a in led.artifacts("cloud_compare_v1")]
-    assert compare["uncompared"] == "carried_commit" and compare["units"] == 1
-    assert compare["validated_units"] == 0 and compare["cloud_facts"] is None
+    def meta():
+        return [json.loads(a["meta"]) for a in led.artifacts("cloud_compare_v1")]
+    worker._cloud_compare(led, route="reextract", project_id=1, local_facts={"a"}, unit="u1", pending=True)
+    assert [(m["uncompared"], m["units"], m["validated_units"]) for m in meta()] == [("pending", 1, 0)]
+    worker._cloud_compare(led, route="reextract", project_id=1, local_facts={"a"}, cloud_facts={"a"}, unit="u1")
+    assert [("uncompared" in m, m["units"], m["validated_units"], m["matched"]) for m in meta()] == [(False, 1, 1, 1)]
+    # a late duplicate (retry, carried pass) never adds a second unit
+    worker._cloud_compare(led, route="reextract", project_id=1, local_facts={"a"}, cloud_facts=set(), unit="u1")
+    assert len(meta()) == 1 and meta()[0]["matched"] == 1
 
 
 def test_shadow_audit_rows_are_never_written_without_the_run_lock(routed, monkeypatch):
@@ -720,4 +716,7 @@ def test_shadow_audit_rows_are_never_written_without_the_run_lock(routed, monkey
     monkeypatch.setattr(worker, "llm_extract", extract)
     report = worker.run_pending(led, budget_s=180, per_write_lock=True)
     assert report["done"] == 1 and len(calls) == 1
-    assert not led.artifacts("cloud_compare_v1")
+    # the pending row was written with the commit, under its lock; the measured
+    # result could not be written without the lock, so the unit stays uncompared
+    [row] = [json.loads(a["meta"]) for a in led.artifacts("cloud_compare_v1")]
+    assert row["uncompared"] == "pending" and row["units"] == 1 and row["validated_units"] == 0

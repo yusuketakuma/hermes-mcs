@@ -766,16 +766,24 @@ def _comparison_extract(source, document):
 
 
 def _cloud_compare(ledger, *, route, project_id, local_facts, cloud_facts=None,
-                   rejected=None, held=None, repairs=None, uncompared=None):
+                   rejected=None, held=None, repairs=None, unit=None, pending=False):
     """Record measured comparison units; absent measurements remain unknown.
-    ``uncompared`` names why a committed shadow unit was never sent: it stays in
-    the unit count but never in the validated/matched figures."""
+    A shadow unit is first written ``pending`` with its local commit (so it is
+    always in the denominator); its measured result later replaces that row
+    in one transaction, so each unit is counted exactly once."""
     left = set(local_facts)
     right = None if cloud_facts is None else set(cloud_facts)
     for value in (rejected, held, repairs):
         if value is not None and (type(value) is not int or value < 0):
             raise ValueError("cloud_comparison_invalid")
     with ledger.db:
+        if unit is not None and not pending:
+            gone = ledger.db.execute(
+                "DELETE FROM artifacts WHERE kind='cloud_compare_v1' AND project_id=? AND "
+                "json_valid(meta) AND json_extract(meta,'$.unit')=? AND "
+                "json_extract(meta,'$.uncompared')='pending'", (project_id, unit)).rowcount
+            if not gone:       # already measured (or never committed): never count twice
+                return
         ledger.artifact_add_tx("cloud_compare_v1", "{}", project_id=project_id,
             meta={"version": 2, "route": route, "units": 1,
                   "local_facts": len(left), "cloud_facts": None if right is None else len(right),
@@ -786,7 +794,8 @@ def _cloud_compare(ledger, *, route, project_id, local_facts, cloud_facts=None,
                   "held": held, "held_observations": int(held is not None),
                   "repairs": repairs, "repaired_units": None if repairs is None else int(repairs > 0),
                   "repair_observations": int(repairs is not None),
-                  **({"uncompared": uncompared} if uncompared else {})})
+                  **({"unit": unit} if unit else {}),
+                  **({"uncompared": "pending"} if pending else {})})
 
 
 def _cloud_reextract(ledger, row):
@@ -3286,8 +3295,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             settled["done"] += 1
         done_pids.add(r["project_id"])
         if r.get("_cloud_mode") == "shadow":
+            unit = os.urandom(16).hex()
+            _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
+                           local_facts=_comparison_extract(r, d), unit=unit, pending=True)
             # a carried commit reports into the pass that finally commits it
-            (shadow_tasks if shadow is None else shadow).append((r, d, ctx))
+            (shadow_tasks if shadow is None else shadow).append((r, d, ctx, unit))
         return True
 
     def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
@@ -3654,13 +3666,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                 if id(r) not in keep_claims:
                     _release(ledger, r, lease)
-    for r, local_result, ctx in shadow_tasks:
+    for r, local_result, ctx, unit in shadow_tasks:
         if deadline - time.monotonic() < _MIN_CALL_S:
-            with lock(per_write_lock) as held:
-                if held:
-                    _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
-                                   local_facts=_comparison_extract(r, local_result), uncompared="deadline")
-            continue
+            continue       # its pending row (written with the commit) stays uncompared
         comparison_meta = {}
         cloud_result = None
         provider = None
@@ -3684,7 +3692,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         with lock(per_write_lock) as held:
             if not held:     # the audit row is a write: never without the run lock
                 continue
-            _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
+            _cloud_compare(ledger, route="reextract", project_id=r["project_id"], unit=unit,
                 local_facts=_comparison_extract(r, local_result),
                 cloud_facts=_comparison_extract(r, cloud_result) if valid else None,
                 rejected=sum(cloud_result.get(k, 0) for k in ("_items_dropped", "_evidence_dropped")) if valid else None,
@@ -3932,11 +3940,8 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
                     # whose owner fence must match the renewed DB lease
                     carry[i] = (r, renewed, commit)
                     keep.append((r, renewed, commit))
-        # no comparison budget outside run_pending: these units stay visible as
-        # uncompared, written under the lock their commits were made under
-        for r, local_result, _ctx in shadow:
-            _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
-                           local_facts=_comparison_extract(r, local_result), uncompared="carried_commit")
+        # no comparison budget outside run_pending: these units keep the pending
+        # row their commit wrote
     carry[:] = keep
     if any(settled.values()):
         print(json.dumps({"carry_settled": settled, "ts": time.time()}), flush=True)
