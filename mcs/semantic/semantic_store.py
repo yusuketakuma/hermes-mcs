@@ -12,6 +12,7 @@ import time
 
 from mcs_util import payload_hash
 from mcs_util import loads_dict
+from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
 import semantic_jev as jev
 from semantic_policy import (KIND_ASSESS, KIND_USAGE,
                              POLICY_VERSION, SCHEMA_VERSION)
@@ -23,6 +24,7 @@ def _member(row) -> dict:
         "message_id": row["message_id"],
         "parent_id": row["parent_id"],
         "revision": row["content_hash"] or "",
+        "source_occurrence": row["source_occurrence"] if "source_occurrence" in row.keys() else 1,
         "posted_at": row["posted_at"] or "",
         "occurred_at": None,      # event time is a fact-level field
         "sender": {"id": row["sender_id"], "type": row["sender_type"] or "",
@@ -30,7 +32,7 @@ def _member(row) -> dict:
         "source_metadata": {"sender_name": row["sender_name"] or "",
                             "organization": row["organization"] or ""},
         "body_original": row["body_text"] or "",
-        "body_state": row["body_state"] or "unknown",
+        "body_state": 'full' if row["body_state"] is None and row["body_text"] else row["body_state"] or "unknown",
         "reply_count": row["reply_count"],
     }
 
@@ -47,6 +49,7 @@ def bundle_fingerprint(members: list, model: str = jev.JEV_MODEL,
     if local_model is None:
         local_model = semantic_transport.llm_model()
     return payload_hash({
+        VERSION_KEY: CURRENT_VERSION,
         # Target roles are selection metadata; artifacts are selected per
         # target ID. Everything used to interpret the source is versioned.
         "members": sorted(({k: v for k, v in m.items() if k != "role"}
@@ -69,6 +72,7 @@ def thread_bundle(db, project_id: int, root_id: int,
     """One post + its same-thread stored replies — the atomic analysis
     unit (§12.3). A message whose row vanished makes the bundle
     unbuildable (None), never silently re-scoped (AT-019)."""
+    has_revisions = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='message_revisions'").fetchone()
     rows = db.execute("""
       SELECT project_id,message_id,parent_id,sender_id,sender_name,organization,
              sender_type,profession,posted_at,
@@ -76,6 +80,11 @@ def thread_bundle(db, project_id: int, root_id: int,
       FROM messages WHERE project_id=? AND (message_id=? OR parent_id=?)
       ORDER BY posted_at_ts, message_id
     """, (project_id, root_id, root_id)).fetchall()
+    occurrences = ({row[0]: row[1] for row in db.execute(
+        'SELECT message_id,MAX(seq) FROM message_revisions WHERE message_id IN '
+        '(SELECT message_id FROM messages WHERE project_id=? AND (message_id=? OR parent_id=?)) '
+        'GROUP BY message_id', (project_id, root_id, root_id))} if has_revisions else {})
+    rows = [{**dict(row), 'source_occurrence': occurrences.get(row['message_id'], 1)} for row in rows]
     root = [r for r in rows if r["message_id"] == root_id]
     if not root:
         return None
@@ -151,7 +160,7 @@ def current_artifact(db, kind: str, message_id: int, fp: str, policy=None):
             "AND message_id=? ORDER BY artifact_id DESC",
             (kind, message_id)):
         meta = loads_dict(r["meta"])
-        if meta is None:
+        if meta is None or not is_current(meta):
             continue
         if kind == KIND_ASSESS and meta.get("fact_id") is not None:
             continue
@@ -166,6 +175,19 @@ def current_artifact(db, kind: str, message_id: int, fp: str, policy=None):
                 return None
             return {"content": content, "meta": meta}
     return None
+
+
+def refresh_cards_allowed(db, project_id, message_id):
+    """Replay-only extraction does not adopt old external card deliveries."""
+    if db is None or getattr(db, 'in_transaction', True):
+        return True  # the existing refresh callback already skips borrowed transactions
+    row = db.execute(
+        "SELECT j.payload FROM messages m JOIN fetch_jobs j ON j.kind='semantic' "
+        'AND j.project_id=m.project_id AND j.message_id=COALESCE(m.parent_id,m.message_id) '
+        'WHERE m.project_id=? AND m.message_id=?', (project_id, message_id)).fetchone()
+    payload = loads_dict(row[0]) if row is not None else {}
+    return not (isinstance(payload, dict) and payload.get('reprocess_only') is True
+                and payload.get('notification_free') is True)
 
 
 

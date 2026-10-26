@@ -24,6 +24,8 @@ mints that single self-correcting pipeline as engine v4:
   manifest; a conversion receipt never authorizes payload deletion.
 """
 from __future__ import annotations
+
+from inference_version import CURRENT_VERSION, VERSION_KEY, is_current, current_meta_pred
 import semantic_facts
 import semantic_store
 import semantic_transport
@@ -62,6 +64,7 @@ def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
     meta_doc = json_object_or_null("meta")
     prev = ledger.db.execute(
         "SELECT content FROM artifacts WHERE kind=? AND message_id=? "
+        f"AND {current_meta_pred('meta')} "
         f"AND json_extract({meta_doc},'$.stage')=? "
         f"AND json_extract({meta_doc},'$.fingerprint')=? "
         f"AND json_extract({meta_doc},'$.policy_fingerprint')=? "
@@ -80,7 +83,7 @@ def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
                     "ts": time.time(), **detail},
                    ensure_ascii=False, allow_nan=False),
         project_id=pid, message_id=mid,
-        meta={"fingerprint": fp, "policy_fingerprint": policy,
+        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
               "stage": stage, "engine_version": ENGINE_VERSION})
 
 
@@ -94,7 +97,7 @@ def stage_ledger(ledger, mid: int, fp: str) -> list:
             "AND message_id=? ORDER BY artifact_id",
             (KIND_V4_STAGE, mid)):
         meta, content = loads_dict(r["meta"]), loads_dict(r["content"])
-        if isinstance(meta, dict) and isinstance(content, dict) \
+        if isinstance(meta, dict) and is_current(meta) and isinstance(content, dict) \
                 and meta.get("fingerprint") == fp:
             out.append({"stage": meta.get("stage"), **content})
     return out
@@ -208,17 +211,24 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
     if existing is not None and projection_current(existing["meta"], doc_hash):
         return existing["artifact_id"]
     content = project_v2_doc_legacy(v2_doc)
-    return ledger.artifact_add_tx(
+    from inference_dependency_loss import source_binding, capture_tx, record_tx
+    ledger.db.execute('UPDATE artifacts SET artifact_id=artifact_id WHERE 0')
+    footprint = capture_tx(ledger.db, pid, mid, artifact_ids=[existing['artifact_id']] if existing else [])
+    artifact_id = ledger.artifact_add_tx(
         KIND_V4, json.dumps(content, ensure_ascii=False,
                             allow_nan=False),
         project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-        meta={"fingerprint": fp, "policy_fingerprint": policy,
+        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
+              "source_binding": source_binding(ledger.db, pid, mid),
               "schema": 2, "hash": member["revision"],
               "extract_version": ENGINE_VERSION,
               "engine_version": ENGINE_VERSION,
               "fact_source": "canonical",
               "doc_hash": doc_hash,
               "projection_version": PROJECTION_VERSION})
+    record_tx(ledger.db, footprint, replacement_id=artifact_id)
+    ledger.bump_inference_analysis_epoch_tx(pid)
+    return artifact_id
 
 
 # Rows re-projected per tick — the pass is a pure function of stored
@@ -335,16 +345,16 @@ def reproject_stale(ledger, scfg: dict,
             new_meta.pop("reproject_skipped", None)
             new_meta["projection_version"] = PROJECTION_VERSION
             new_meta["reprojected_from"] = row["artifact_id"]
-            ledger.artifact_add_tx(
+            import inference_dependency_loss as dependency_loss
+            ledger.db.execute('UPDATE artifacts SET artifact_id=artifact_id WHERE 0')
+            footprint = dependency_loss.capture_tx(ledger.db, row['project_id'], row['message_id'], artifact_ids=[row['artifact_id']])
+            new_id = ledger.artifact_add_tx(
                 row["kind"], content,
                 project_id=row["project_id"],
                 message_id=row["message_id"], model=row["model"] or "",
                 meta=new_meta)
-            # same rollup contract as invalidate_projections: the
-            # patient's rollup is rebuilt from the new current row
-            ledger.db.execute(
-                "DELETE FROM artifacts WHERE kind='patient_rollup' "
-                "AND project_id=?", (row["project_id"],))
+            dependency_loss.record_tx(ledger.db, footprint, replacement_id=new_id)
+            ledger.bump_inference_analysis_epoch_tx(row['project_id'])
         out["reprojected"] += 1
         if doc is not None:
             reinterpreted.setdefault(
@@ -414,6 +424,19 @@ def _hold_derivatives(ledger, pid: int, mid: int, fp: str,
     # to the held document: readers pick the newest non-invalidated row, so
     # an older document's row of the same generation would otherwise become
     # current again. Other generations, messages and patients stay as they are.
+    ledger.db.execute('UPDATE artifacts SET artifact_id=artifact_id WHERE 0')
+    adopted = ledger.db.execute(
+        "SELECT 1 FROM artifacts WHERE project_id=? AND message_id=? "
+        "AND kind IN (?,?) AND " + current_meta_pred("meta") +
+        " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.fingerprint')=? "
+        "AND json_extract(meta,'$.invalidated') IS NOT 1 END LIMIT 1",
+        (pid, mid, KIND_FACT_PROJ, KIND_V4, fp)).fetchone()
+    import inference_dependency_loss as dependency_loss
+    old_ids = [row[0] for row in ledger.db.execute(
+        "SELECT artifact_id FROM artifacts WHERE project_id=? AND message_id=? AND kind IN (?,?) "
+        "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.fingerprint')=? "
+        "AND json_extract(meta,'$.invalidated') IS NOT 1 END", (pid, mid, KIND_FACT_PROJ, KIND_V4, fp))]
+    footprint = dependency_loss.capture_tx(ledger.db, pid, mid, artifact_ids=old_ids)
     ledger.db.execute(
         "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'),"
         "'$.invalidated_reason',?) WHERE project_id=? AND message_id=? "
@@ -421,6 +444,9 @@ def _hold_derivatives(ledger, pid: int, mid: int, fp: str,
         "AND json_type(meta)='object' THEN json_extract(meta,'$.fingerprint')=? "
         "AND json_extract(meta,'$.invalidated') IS NOT 1 END",
         (reason, pid, mid, KIND_FACT_PROJ, KIND_V4, fp))
+    if adopted:
+        dependency_loss.record_tx(ledger.db, footprint)
+        ledger.bump_inference_analysis_epoch_tx(pid)
     held = ("WHERE project_id=? AND message_id=? AND kind IN ({}) "
             "AND CASE WHEN json_valid(meta) AND json_type(meta)='object' "
             "THEN json_extract(meta,'$.fingerprint')=? "
@@ -433,9 +459,6 @@ def _hold_derivatives(ledger, pid: int, mid: int, fp: str,
         "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'),"
         "'$.invalidated_reason',?) " + held.format(",".join("?" * len(_HELD_KINDS))),
         (reason, pid, mid, *_HELD_KINDS, fp))
-    ledger.db.execute(
-        "DELETE FROM artifacts WHERE kind='patient_rollup' AND project_id=?",
-        (pid,))
 
 
 def _seed_rebuild(ledger, scfg, pid: int, mid: int, meta: dict):
@@ -720,7 +743,7 @@ def diagnostic(ledger, pid: int, mid: int, fp: str, policy: str,
                     "target_message_id": mid, "doc_hash": doc_hash},
                    ensure_ascii=False, allow_nan=False),
         project_id=pid, message_id=mid,
-        meta={"fingerprint": fp, "policy_fingerprint": policy,
+        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
               "engine_version": ENGINE_VERSION, "audit_status": status,
               "diagnostic": True})
 
@@ -765,7 +788,7 @@ def invalidate_projections(db, scfg: dict) -> int:
             AND a.artifact_id=CASE WHEN a.kind='canonical_projection'
                 THEN {current_projection_id(require_version=False)} ELSE {current_v4_id(require_version=False)} END
         """)}
-    bundles, expired, revived, projects = {}, [], [], set()
+    bundles, expired, revived, adopted_projects = {}, [], [], set()
     local_model = None
     for row, meta in zip(rows, metas):
         key = (row["project_id"], row["parent_id"] or row["message_id"])
@@ -795,9 +818,16 @@ def invalidate_projections(db, scfg: dict) -> int:
             revived.append((row["artifact_id"],))
         else:
             expired.append((reason, row["artifact_id"]))
-        projects.add(row["project_id"])
+        if is_current(meta):
+            adopted_projects.add(row['project_id'])
     if expired or revived:
         with db:
+            if not db.in_transaction:
+                db.execute('BEGIN IMMEDIATE')
+            import inference_dependency_loss as dependency_loss
+            expiring = {artifact_id for _, artifact_id in expired}
+            footprints = [dependency_loss.capture_tx(db, row['project_id'], row['message_id'], artifact_ids=[row['artifact_id']])
+                          for row in rows if row['artifact_id'] in expiring]
             db.executemany(
                 "UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'),"
                 "'$.invalidated_reason',?) "
@@ -805,9 +835,11 @@ def invalidate_projections(db, scfg: dict) -> int:
             db.executemany(
                 "UPDATE artifacts SET meta=json_remove(meta,'$.invalidated',"
                 "'$.invalidated_reason') WHERE artifact_id=?", revived)
-            db.executemany(
-                "DELETE FROM artifacts WHERE kind='patient_rollup' AND project_id=?",
-                [(pid,) for pid in projects])
+            for footprint in footprints:
+                dependency_loss.record_tx(db, footprint)
+            from ledger import bump_inference_analysis_epoch_tx
+            for pid in adopted_projects:
+                bump_inference_analysis_epoch_tx(db, pid)
     return len(expired)
 
 
@@ -833,18 +865,31 @@ def publish_fact_projection(ledger, member, pid, mid, fp, policy,
         record_stage(ledger, pid, mid, fp, policy,
                         "s5_projection", "done",
                         doc_hash=doc_hash)
-        ledger.artifact_add(
-            KIND_FACT_PROJ,
-            json.dumps(project_v2_doc_legacy(v2_doc),
-                       ensure_ascii=False, allow_nan=False),
-            project_id=pid, message_id=mid,
-            model=semantic_transport.llm_model(),
-            meta={"fingerprint": fp,
-                  "policy_fingerprint": policy,
-                  "schema": SCHEMA_VERSION,
-                  "hash": member["revision"],
-                  "doc_hash": doc_hash,
-                  "projection_version": PROJECTION_VERSION})
+        with ledger.db:
+            from inference_dependency_loss import source_binding, capture_tx, record_tx
+            ledger.db.execute('UPDATE artifacts SET artifact_id=artifact_id WHERE 0')
+            prior_ids = [row[0] for row in ledger.db.execute(
+                'SELECT artifact_id FROM artifacts WHERE kind=? AND project_id=? AND message_id=? AND '
+                + current_meta_pred('meta') + " AND CASE WHEN json_valid(meta) THEN "
+                "json_extract(meta,'$.fingerprint')=? AND json_extract(meta,'$.policy_fingerprint')=? "
+                "AND json_extract(meta,'$.invalidated') IS NOT 1 END ORDER BY artifact_id DESC LIMIT 1",
+                (KIND_FACT_PROJ, pid, mid, fp, policy))] if prev_proj else []
+            footprint = capture_tx(ledger.db, pid, mid, artifact_ids=prior_ids)
+            new_id = ledger.artifact_add_tx(
+                KIND_FACT_PROJ,
+                json.dumps(project_v2_doc_legacy(v2_doc),
+                           ensure_ascii=False, allow_nan=False),
+                project_id=pid, message_id=mid,
+                model=semantic_transport.llm_model(),
+                meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
+                      "policy_fingerprint": policy,
+                      "source_binding": source_binding(ledger.db, pid, mid),
+                      "schema": SCHEMA_VERSION,
+                      "hash": member["revision"],
+                      "doc_hash": doc_hash,
+                      "projection_version": PROJECTION_VERSION})
+            record_tx(ledger.db, footprint, replacement_id=new_id)
+            ledger.bump_inference_analysis_epoch_tx(pid)
     else:
         record_stage(ledger, pid, mid, fp, policy,
                         "s5_projection", "reused",

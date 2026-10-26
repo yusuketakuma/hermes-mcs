@@ -58,7 +58,8 @@ def test_changes_separate_new_reports_from_older_records_found_at_night(ctx):
         {"id": "f1", "category": "living", "text": "家族が服薬支援", "quote": "家族が服薬支援",
          "subject": "family", "message_id": 1, "content_hash": "h", "posted_at_ts": T0 + DAY,
          "discovery": "backfill_found", "found_night_id": "2026-10-18"},
-        {"id": "f2", "category": "diagnoses", "text": "病名: 架空病B", "quote": "病名: 架空病B", "message_id": 4,
+        {"id": "f2", "category": "diagnoses", "text": "架空病B", "quote": "病名: 架空病B", "message_id": 4,
+         "subject": "unspecified", "content_hash": _hash_of(ctx.db,4),
          "discovery": "new_report", "temporality": "current"}]}
     ev = pcv.evidence(ctx.db.db, 1)
     by_id = {f["id"]: f for f in ev["nightly_facts"]}
@@ -142,11 +143,12 @@ def test_replies_never_claim_untreated_or_formal_completion(ctx):
     assert [i["text"] for i in note["written_checks"]] == ["架空薬の残数"]
 
 
-def test_previsit_lists_every_check_once_per_post_without_fixed_cap(ctx):
+def test_previsit_lists_every_distinct_check_of_one_post_without_fixed_cap(ctx):
     _requests(ctx, [(5, "架空依頼A"), (2, "架空依頼B"), (3, "架空依頼C"), (4, "架空依頼D")])
     note = pcv.previsit(ctx.db.db, pcv.evidence(ctx.db.db, 1), T0 + 7 * DAY)
     assert [i["message_id"] for i in note["written_checks"]] == [5]  # written follow-up first
-    assert [r["message_id"] for r in note["unanswered"]] == [4, 3, 2]  # newest first; post 5 not repeated; no cap
+    assert [r["message_id"] for r in note["unanswered"]] == [5, 4, 3, 2]  # Post 5's different request also remains.
+    assert note["unanswered"][0]["text"] == "架空依頼A"
 
 
 def test_previsit_carries_coverage_like_handoff(ctx):
@@ -183,13 +185,16 @@ def test_observations_compare_only_the_same_named_item_and_unit_by_written_date(
     db.close()
 
 
-def test_every_matching_item_receives_context_refresh_attributes(ctx):
+def test_enclosing_quote_does_not_absorb_distinct_assertions(ctx):
     line = "対象薬: 架空薬"
     ctx.context_refresh["value"] = {"as_of": T0, "facts": [
         {"category": "medication_management", "text": line + "\n残薬: 3日分", "quote": line + "\n残薬: 3日分",
          "message_id": 2, "discovery": "backfill_found", "found_night_id": "2026-10-18"}]}
     items = [i for i in pcv.evidence(ctx.db.db, 1)["items"] if i["message_id"] == 2]
-    assert len(items) == 2 and all(i["discovery"] == "backfill_found" for i in items)
+    assert len(items) == 3
+    assert sum(i["discovery"] == "backfill_found" for i in items) == 1
+    assert {i["text"] for i in items if i["discovery"] is None} == {"架空薬", "3日分"}
+    assert next(i for i in items if i["discovery"] == "backfill_found")["quote"] == line + "\n残薬: 3日分"
 
 
 def test_replies_drop_requests_whose_post_is_gone(ctx):
@@ -222,7 +227,23 @@ def test_timeline_is_oldest_first_and_transition_lists_missing_records(ctx):
     assert list(dict.fromkeys(i["message_id"] for i in pcv.timeline(ev)["items"])) == [1, 2, 3, 4, 5, 6]
     course = pcv.transition_course(ev)["items"]
     assert len(course) == 1 and course[0]["anchor"]["message_id"] == 6
-    assert "adl" in course[0]["no_record"]
+    assert course[0]["anchor_kind"] == "reported"  # Nominal wording does not establish actual patient discharge.
+    assert course[0]["nearby"] == [] and course[0]["no_record"] == []
+
+
+def test_transition_chat_labels_distinguish_patient_execution_from_family_report(ctx):
+    bodies = {6:'経過: 本人は本日退院しました。',4:'経過: 家族は本日入院しました。'}
+    for mid,body in bodies.items():
+        ctx.db.save_messages([_message(mid,body=body)],project_id=1)
+        ctx.db.db.execute('UPDATE messages SET posted_at_ts=? WHERE message_id=?',(T0+mid*DAY,mid))
+        _artifact(ctx.db,'extract_v1',mid,{'patient_context':extract_context(body)}, {'hash':_hash_of(ctx.db,mid)})
+    result = notify_views.patient_context_list(ctx.db.db,1,'transition_course',cfg={},since=T0,now=T0+7*DAY)
+    rows = list(result['items'])
+    for page in range(1,result['pages']):
+        rows.extend(notify_views.patient_context_list(ctx.db.db,1,'transition_course',cfg={},since=T0,now=T0+7*DAY,page=page)['items'])
+    assert any(r['group'] == '本人の移行実施の記録' and '本人は本日退院しました。' in r['text'] for r in rows)
+    assert any(r['group'] == '移行に関する記載' and '家族は本日入院しました。' in r['text'] for r in rows)
+    assert not any(r['group'] == '本人の移行実施の記録' and '家族は本日入院しました。' in r['text'] for r in rows)
 
 
 def test_role_order_names_existing_categories():

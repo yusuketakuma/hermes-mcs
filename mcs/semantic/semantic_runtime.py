@@ -105,6 +105,18 @@ def config_generation(cfg: dict) -> str:
     return payload_hash(cfg if isinstance(cfg, dict) else {})
 
 
+def execution_generation(scfg: dict) -> str:
+    """Interpretation identity, independent of runtime budgets, scope and mode."""
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+    from semantic_policy import policy_fingerprint, SCHEMA_VERSION
+    from semantic_extraction import v2_generation
+    # Candidate approval still fences execution/publication separately. A code
+    # approval or operational cap change is not a fresh retry budget.
+    policy = {**scfg, 'candidate_fingerprint': None}
+    return payload_hash({VERSION_KEY: CURRENT_VERSION, 'schema': SCHEMA_VERSION,
+                         'policy': policy_fingerprint(policy), 'extraction': v2_generation()})
+
+
 @dataclass(frozen=True)
 class JobToken:
     job_id: int
@@ -144,6 +156,9 @@ class JobToken:
 
 def job_matches(ledger, token: JobToken) -> bool:
     """Check the complete identity captured before external work."""
+    from inference_version import is_current
+    if not is_current(parse_payload({'payload': token.payload_raw})):
+        return False
     row = ledger.db.execute(
         "SELECT job_id,kind,project_id,message_id,state,attempts,payload "
         "FROM fetch_jobs WHERE job_id=?", (token.job_id,)).fetchone()
@@ -185,6 +200,9 @@ def transition_tx(ledger, token: JobToken, action: str,
     Callers may use this inside the same transaction as result artifacts.
     ``False`` means another generation owns the row; no write is made.
     """
+    from inference_version import is_current
+    if not is_current(parse_payload({'payload': token.payload_raw})):
+        return False
     now = time.time()
     args = _where_args(token)
     if action == "done":
@@ -217,6 +235,12 @@ def transition_tx(ledger, token: JobToken, action: str,
             (now, *args))
     else:
         raise ValueError(f"unknown semantic transition: {action}")
+    if cur.rowcount == 1:
+        new_state = ('done' if action == 'done' else 'failed' if action == 'failed'
+                     or action == 'retry' and token.attempts + 1 >= max(1, int(max_attempts)) else token.state)
+        if new_state != token.state:
+            from ledger import bump_semantic_job_state_epoch_tx
+            bump_semantic_job_state_epoch_tx(ledger.db)
     return cur.rowcount == 1
 
 
@@ -592,18 +616,29 @@ def guard(ledger, token: JobToken, *, deadline: float,
           expected_mode: str, cfg_path: str | None = None,
           load_cfg=None, parse_cfg=None,
           source_fingerprint: str | None = None,
-          current_source=None, stage: str = ""):
+          current_source=None, stage: str = "", expected_execution_generation=None):
     """Re-read all mutable execution identity immediately before a side effect."""
     if time.monotonic() >= deadline:
         raise RuntimeBudget(stage)
     from mcs_queries import paused
     if paused(ledger.db, token.project_id):
         raise RuntimeOff(stage)
+    execution = parse_payload({'payload': token.payload_raw}).get('execution_generation')
+    if (execution is not None and expected_execution_generation is not None
+            and execution != expected_execution_generation):
+        raise RuntimeStale(stage + ':execution')
+    scope = ledger.db.execute('SELECT fetch_reason FROM patients WHERE project_id=?',
+                              (token.project_id,)).fetchone()
+    if scope is not None and scope[0] in ('forbidden', 'permission_denied', 'access_revoked'):
+        raise RuntimeOff(stage + ':permission')
     if cfg_path is not None and load_cfg is not None and parse_cfg is not None:
         current_cfg = load_cfg(cfg_path)
         current_scfg, _ = parse_cfg(current_cfg)
         if current_scfg.get("mode") == "off":
             raise RuntimeOff(stage)
+        projects = current_scfg.get('project_ids')
+        if projects is not None and token.project_id not in projects:
+            raise RuntimeOff(stage + ':scope')
         if (expected_config_generation is not None
                 and config_generation(current_cfg)
                 != expected_config_generation):
@@ -626,7 +661,7 @@ __all__ = [
     "RuntimeBudgetShort",
     "RuntimeGuardError",
     "RuntimeOff",
-    "RuntimeStale", "JevEvaluation", "bind_jev", "config_generation",
+    "RuntimeStale", "JevEvaluation", "bind_jev", "config_generation", "execution_generation",
     "circuit_open", "record_circuit_result",
     "guard", "guarded_llm", "job_deadline", "job_matches", "llm_call",
     "parse_payload", "attempt_limit", "payload_generation", "transition",

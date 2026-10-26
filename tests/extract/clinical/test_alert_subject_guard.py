@@ -59,8 +59,13 @@ def test_rule_vitals_do_not_promote_family_values_and_keep_original_mentions():
 def test_family_events_remain_mentions_without_becoming_patient_events():
     document = extract.extract_message("母が退院。母の処方を変更。本人は診察しました。", "2026-10-07")
     assert document["events"] == ["exam"]
-    assert {item["event"] for item in document["event_mentions"]} == {"admission", "medication"}
-    assert extract.extract_message("本人の過去の入院を確認。", "2026-10-07")["events"] == ["admission"]
+    assert {item["event"] for item in document["event_mentions"]} == {"discharge", "medication"}
+    discharge, = [record for record in document["event_records"] if record["kind"] == "discharge"]
+    assert discharge["subject"] == "family" and discharge["evidence"] == "母が退院。"
+    past = extract.extract_message("本人の過去の入院を確認。", "2026-10-07")
+    assert "admission" not in past.get("events", [])
+    admission, = past["event_records"]
+    assert admission["subject"] == "patient" and admission["status"] == "past"
 
 
 @pytest.mark.parametrize("body,source", [

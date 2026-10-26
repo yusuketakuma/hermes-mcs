@@ -61,32 +61,28 @@ def test_thread_context_fetches_only_existing_selection(target_is_root):
         db.close()
 
 
-def test_medication_merge_preserves_last_occurrence_with_linear_work():
-    reads = []
+def test_medication_merge_preserves_distinct_records_with_linear_work():
+    comparisons = []
 
     class Medication(dict):
-        def __getitem__(self, key):
-            if key == "name":
-                reads.append(key)
-            return super().__getitem__(key)
+        def __eq__(self, other):
+            comparisons.append(1)
+            return super().__eq__(other)
 
     meds = [Medication(name=f"SYNTH-{i}", subject="patient", action="start", dose=str(i))
             for i in range(120)]
     meds.extend([Medication(name="SYNTH-0", subject="patient", action="stop"),
                  Medication(name="SYNTH-0", subject="patient", action="start", dose="new"),
                  Medication(name="SYNTH-1", subject="family", action="start")])
+    meds.extend([Medication(meds[0]), Medication(meds[-2])])  # exact overlaps only
     original = copy.deepcopy(meds)
-    expected = []
-    for med in original:
-        key = (med["name"], med.get("subject"), med.get("action"))
-        expected = [old for old in expected if (
-            old["name"], old.get("subject"), old.get("action")) != key]
-        expected.append(med)
-    reads.clear()
+    expected = original[:123]  # 120 originals + stop + new dose + family report
+    comparisons.clear()
     result = extract_validation.merge([{"meds": meds[:80]}, {"meds": meds[80:]}])
+    # A list scan against every prior record would be quadratic here.
+    assert len(comparisons) <= 2 * len(meds)
     assert result["meds"] == expected
     assert meds == original
-    assert len(reads) == len(meds)
 
 
 def test_parallel_drain_releases_handled_future_results(tmp_path, monkeypatch):

@@ -105,6 +105,45 @@ _ATTACH_PERMANENT = frozenset({
 JOURNAL_SIZE_LIMIT = 64 * 1024 * 1024
 
 
+def _bump_inference_epoch_tx(db, field):
+    if field not in ('source_epoch', 'analysis_epoch', 'job_state_epoch'):
+        raise ValueError('inference_epoch_field_invalid')
+    if not db.in_transaction:
+        raise ValueError(f'inference_{field}_transaction_required')
+    row = db.execute("SELECT payload FROM fetch_jobs WHERE kind='semantic_sched' "
+                     'AND project_id=0 AND message_id=0').fetchone()
+    if row is None:
+        return
+    state = loads_dict(row[0]) or {}
+    if field == 'job_state_epoch':
+        from inference_version import is_current
+        progress = state.get('inference_reprocess')
+        if (not is_current(progress) or progress.get('phase') not in
+                ('seed', 'verify', 'verify_patients', 'waiting', 'complete')):
+            return
+    value = state.get(field, 0)
+    if type(value) is not int or not 0 <= value < 2**63 - 1:
+        db.execute(f"UPDATE fetch_jobs SET payload=json_set(payload,'$.{field}_invalid',json('true')) "
+                   "WHERE kind='semantic_sched' AND project_id=0 AND message_id=0 AND json_valid(payload)")
+        return
+    db.execute(f"UPDATE fetch_jobs SET payload=json_set(payload,'$.{field}',?) "
+               "WHERE kind='semantic_sched' AND project_id=0 AND message_id=0 AND json_valid(payload)", (value + 1,))
+
+
+def bump_inference_analysis_epoch_tx(db, project_id=None):
+    """Update the adopted-input witness on a borrowed active transaction, without committing or closing it."""
+    from inference_version import current_meta_pred
+    _bump_inference_epoch_tx(db, 'analysis_epoch')
+    if project_id is not None:
+        db.execute("DELETE FROM artifacts WHERE kind='patient_rollup' AND project_id=? AND "
+                   + current_meta_pred('meta'), (project_id,))
+
+
+def bump_semantic_job_state_epoch_tx(db):
+    """Bookmark real job state transitions for an existing replay, without changing its input budget."""
+    _bump_inference_epoch_tx(db, 'job_state_epoch')
+
+
 class Ledger:
     def __init__(self, path: str, *, notify_all_replies: bool = False):
         self.notify_all_replies = notify_all_replies is True
@@ -269,29 +308,50 @@ class Ledger:
             )
         return snapshot
 
-    def _has_canonical_projections(self) -> bool:
+    def _needs_semantic_source_tracking(self) -> bool:
         return self.db.execute(
             "SELECT 1 FROM artifacts WHERE kind IN "
-            "('canonical_projection','semantic_facts_v4') LIMIT 1"
+            "('canonical_projection','semantic_facts_v4','extract_v1','extract_llm',"
+            "'patient_context_scan_chunk_v1','inference_dependency_loss') LIMIT 1"
+        ).fetchone() is not None or self.db.execute(
+            "SELECT 1 FROM fetch_jobs WHERE kind='semantic_sched' AND project_id=0 "
+            "AND message_id=0 AND CASE WHEN json_valid(payload) THEN "
+            "json_type(payload,'$.inference_reprocess')='object' END LIMIT 1"
         ).fetchone() is not None
 
+    def bump_inference_source_epoch_tx(self):
+        """Record a real original/scope input change in the caller's active transaction."""
+        _bump_inference_epoch_tx(self.db, 'source_epoch')
+
+    def bump_inference_analysis_epoch_tx(self, project_id=None):
+        """Record an adopted extraction change and expire only the current rollup in the same transaction."""
+        bump_inference_analysis_epoch_tx(self.db, project_id)
+
     def _invalidate_thread_projections(self, project_id: int, root: int,
-                                       *, invalidated_roots: set | None = None):
+                                       *, invalidated_roots: set | None = None, source_changed=True):
+        from inference_version import current_meta_pred
         key = (project_id, root)
-        if invalidated_roots is not None and key in invalidated_roots:
-            return
-        changed = self.db.execute("""
-          UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'))
-          WHERE kind IN ('canonical_projection','semantic_facts_v4')
-            AND project_id=?
-            AND json_valid(meta)
-            AND json_extract(meta,'$.invalidated') IS NOT 1
-            AND message_id IN (SELECT message_id FROM messages
-              WHERE project_id=? AND (message_id=? OR parent_id=?))
-        """, (project_id, project_id, root, root)).rowcount
-        if changed:
+        source_key = ('source', project_id, root)
+        source_dirty = source_changed and (invalidated_roots is None or source_key not in invalidated_roots)
+        changed = 0
+        if invalidated_roots is None or key not in invalidated_roots:
+            changed = self.db.execute("""
+              UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true'))
+              WHERE kind IN ('canonical_projection','semantic_facts_v4')
+                AND project_id=?
+                AND json_valid(meta)
+                AND json_extract(meta,'$.invalidated') IS NOT 1
+                AND message_id IN (SELECT message_id FROM messages
+                  WHERE project_id=? AND (message_id=? OR parent_id=?))
+            """, (project_id, project_id, root, root)).rowcount
+        if source_dirty:
+            self.bump_inference_source_epoch_tx()
+            if invalidated_roots is not None:
+                invalidated_roots.add(source_key)
+        if changed or source_dirty:
             self.db.execute(
-                "DELETE FROM artifacts WHERE kind='patient_rollup' AND project_id=?",
+                "DELETE FROM artifacts WHERE kind='patient_rollup' AND project_id=? AND "
+                + current_meta_pred('meta'),
                 (project_id,))
         if invalidated_roots is not None:
             invalidated_roots.add(key)
@@ -384,10 +444,16 @@ class Ledger:
         now = time.time()
         new_ids = []
         before_semantic = (self._semantic_generation_snapshot(p.messages)
-                           if semantic or self._has_canonical_projections() else {})
+                           if semantic or self._needs_semantic_source_tracking() else {})
         invalidated_roots = set()
         with self.db:  # commit on success, rollback on exception
-            first = self.db.execute("SELECT 1 FROM patients WHERE project_id=?", (p.project_id,)).fetchone() is None
+            self.db.execute('UPDATE patients SET project_id=project_id WHERE 0')
+            previous = self.db.execute("SELECT fetch_reason,project_type,karte_id,is_archived FROM patients WHERE project_id=?", (p.project_id,)).fetchone()
+            first = previous is None
+            import inference_dependency_loss as dependency_loss
+            old_karte = (dependency_loss.capture_current_karte_tx(self.db, p.project_id)
+                if previous is not None and getattr(p, 'karte_id', None) is not None
+                and previous['karte_id'] != p.karte_id else None)
             self.db.execute("""
               INSERT INTO patients(project_id,project_type,patient_name,disease,
                 station_name,url,karte_id,fetch_state,fetch_reason,
@@ -413,6 +479,12 @@ class Ledger:
                   p.fetch_state, p.fetch_reason,
                   now if p.fetch_state == "complete" else None,
                   now, now))
+            if old_karte is not None:
+                dependency_loss.record_tx(self.db, old_karte)
+            if (previous is None or (previous[0] == 'forbidden') != (p.fetch_reason == 'forbidden')
+                    or previous[1] != p.project_type or previous[3]
+                    or getattr(p, 'karte_id', None) is not None and previous[2] != p.karte_id):
+                self.bump_inference_source_epoch_tx()
             if first and notify and observation_ts is not None:
                 self._start_initial_import_tx(p.project_id, observation_ts, now)
             for m in p.messages:
@@ -576,10 +648,15 @@ class Ledger:
         flag = None if is_archived is None else int(bool(is_archived))
         now = time.time()
         with self.db:
+            self.db.execute('UPDATE patients SET project_id=project_id WHERE 0')
             row = self.db.execute(
-                "SELECT is_archived a FROM patients WHERE project_id=?",
+                "SELECT is_archived a,project_type,karte_id FROM patients WHERE project_id=?",
                 (p.project_id,)).fetchone()
             prev = bool(row["a"]) if row else False
+            import inference_dependency_loss as dependency_loss
+            old_karte = (dependency_loss.capture_current_karte_tx(self.db, p.project_id)
+                if row is not None and getattr(p, 'karte_id', None) is not None
+                and row['karte_id'] != p.karte_id else None)
             # VALUES gets COALESCE(flag,0) for the NOT NULL column on
             # fresh inserts; the UPDATE side re-binds the raw flag so
             # NULL means "preserve" rather than "clear" (COALESCE against
@@ -600,6 +677,12 @@ class Ledger:
             """, (p.project_id, p.project_type, p.patient_name, p.disease,
                   p.station_name, p.url, getattr(p, "karte_id", None),
                   flag, now, now, flag))
+            if old_karte is not None:
+                dependency_loss.record_tx(self.db, old_karte)
+            if (row is None or flag is not None and bool(flag) != prev
+                    or row['project_type'] != p.project_type
+                    or getattr(p, 'karte_id', None) is not None and row['karte_id'] != p.karte_id):
+                self.bump_inference_source_epoch_tx()
             if flag == 1 and not prev:
                 # live -> archived transition: the final head-sync
                 # reservation must be durable in the SAME commit —
@@ -785,7 +868,7 @@ class Ledger:
         new_ids = []
         now = time.time()
         before_semantic = (self._semantic_generation_snapshot(msgs)
-                           if semantic or self._has_canonical_projections() else {})
+                           if semantic or self._needs_semantic_source_tracking() else {})
         invalidated_roots = set()
         with self.db:
             for m in msgs:
@@ -852,7 +935,7 @@ class Ledger:
         new_ids = []
         now = time.time()
         before_semantic = (self._semantic_generation_snapshot(replies)
-                           if semantic or self._has_canonical_projections() else {})
+                           if semantic or self._needs_semantic_source_tracking() else {})
         invalidated_roots = set()
         with self.db:
             for m in replies:
@@ -896,10 +979,37 @@ class Ledger:
         # A zero-row write reserves the writer without committing caller work.
         self.db.execute("UPDATE messages SET message_id=message_id WHERE 0")
         existing = self.db.execute(
-            "SELECT project_id,body_state,content_hash,first_seen FROM messages WHERE message_id=?",
+            "SELECT * FROM messages WHERE message_id=?",
             (m.message_id,)).fetchone()
         if existing is not None and existing["project_id"] != m.project_id:
             raise ValueError("message_project_mismatch")
+        import inference_dependency_loss as dependency_loss
+        body_text = html_to_text(m.body_html)
+        possible_change = existing is not None and (
+            m.body_state in TERMINAL_BODY_STATES and (existing['content_hash'] != chash or existing['body_state'] != m.body_state
+                or m.body_state == 'full' and existing['body_text'] != body_text)
+            or m.parent_id is not None and m.parent_id != existing['parent_id']
+            or m.sender_id is not None and m.sender_id != existing['sender_id']
+            or any(getattr(m, field) and getattr(m, field) != existing[field]
+                   for field in ('sender_name', 'sender_type', 'profession', 'organization'))
+            or posted_epoch(m.posted_at) is not None and m.posted_at != existing['posted_at'])
+        old_binding = dependency_loss.source_binding(self.db, m.project_id, m.message_id) if possible_change else None
+        identity_changed = existing is not None and (
+            existing['sender_id'] is not None and m.sender_id is not None and m.sender_id != existing['sender_id']
+            or existing['sender_type'] and m.sender_type and m.sender_type != existing['sender_type'])
+        support_possible = existing is not None and (
+            m.body_state in TERMINAL_BODY_STATES and (existing['body_text'] != ('' if m.body_state == 'deleted' else body_text)
+                or m.body_state == 'deleted' and existing['body_state'] != 'deleted')
+            or m.parent_id is not None and m.parent_id != existing['parent_id']
+            or identity_changed
+            or posted_epoch(m.posted_at) is not None and posted_epoch(m.posted_at) != existing['posted_at_ts'])
+        old_support = dependency_loss.support_binding(self.db, m.project_id, m.message_id) if support_possible else None
+        old_origin = ({'message_id': m.message_id, 'source_key': m.message_id,
+            'content_hash': existing['content_hash'], 'binding': old_binding,
+            'revision': self.db.execute('SELECT COALESCE(MAX(seq),1) FROM message_revisions WHERE message_id=?',
+                                       (m.message_id,)).fetchone()[0]} if possible_change else None)
+        old_dependencies = (dependency_loss.capture_tx(self.db, m.project_id, m.message_id)
+                            if support_possible else None)
         edited = (existing is not None and existing["content_hash"] is not None
                   and existing["body_state"] in TERMINAL_BODY_STATES
                   and m.body_state in TERMINAL_BODY_STATES
@@ -922,7 +1032,6 @@ class Ledger:
               WHERE message_id=? AND content_hash != ? AND seq=(
                 SELECT MAX(seq) FROM message_revisions WHERE message_id=?)
             """, (chash, m.body_state, now, m.message_id, chash, m.message_id))
-        body_text = html_to_text(m.body_html)
         # unparseable posted_at -> NULL so COALESCE keeps the stored epoch
         # instead of overwriting a valid value with 0 (Oracle T31)
         posted_ts = posted_epoch(m.posted_at)
@@ -985,6 +1094,17 @@ class Ledger:
               now, now))
         self._save_message_metadata(m, source="capture", now=now,
                                     body_changed=edited)
+        if old_origin is not None and old_binding != dependency_loss.source_binding(self.db, m.project_id, m.message_id):
+            if old_dependencies is not None and (identity_changed or old_support != dependency_loss.support_binding(self.db, m.project_id, m.message_id)):
+                dependency_loss.record_tx(self.db, old_dependencies)
+            else:
+                dependency_loss.equivalent_tx(self.db, m.project_id, m.message_id, old_origin)
+            self.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.invalidated',json('true')) "
+                "WHERE message_id=? AND (project_id=? OR project_id IS NULL) AND kind IN "
+                "('extract_v1','extract_llm','extract_llm_chunk','semantic_source_manifest',"
+                "'semantic_extraction_chunk','patient_context_scan_v1','patient_context_scan_chunk_v1') "
+                "AND CASE WHEN json_valid(meta) THEN json_type(meta)='object' END",
+                (m.message_id, m.project_id))
         if existing is not None and (edited or m.body_state in TERMINAL_BODY_STATES and existing["body_state"] != m.body_state):
             initial_import_state.dirty_source_tx(self.db, m.project_id, m.message_id, now)
         return 0 if existing is not None else 1
@@ -1095,14 +1215,12 @@ class Ledger:
 
     def patient_fetch_failed(self, project_id: int, reason: str):
         with self.db:
+            previous = self.db.execute('SELECT fetch_reason FROM patients WHERE project_id=?', (project_id,)).fetchone()
             self.db.execute("""
-              INSERT INTO patients(project_id,fetch_state,fetch_reason,
-                last_seen,created_at) VALUES(?,?,?,?,?)
-              ON CONFLICT(project_id) DO UPDATE SET
-                fetch_state='incomplete', fetch_reason=excluded.fetch_reason,
-                last_seen=excluded.last_seen
-            """, (project_id, "incomplete", reason[:200],
-                  time.time(), time.time()))
+              UPDATE patients SET fetch_state='incomplete',fetch_reason=?,last_seen=? WHERE project_id=?
+            """, (reason[:200], time.time(), project_id))
+            if previous is not None and (previous[0] == 'forbidden') != (reason[:200] == 'forbidden'):
+                self.bump_inference_source_epoch_tx()
 
     def known_patients(self) -> list:
         return self.db.execute(
@@ -1181,14 +1299,14 @@ class Ledger:
                     unchanged = (json.dumps(meta, ensure_ascii=False), row["artifact_id"])
         if unchanged is not None:
             self._karte_summary_write(project_id, lambda: self.db.execute(
-                "UPDATE artifacts SET meta=? WHERE artifact_id=?", unchanged))
+                "UPDATE artifacts SET meta=? WHERE artifact_id=?", unchanged), source_changed=False)
             return False
         meta = {"karte_id": karte_id, "fetched_at": now, "sha256": sha}
         self._karte_summary_write(project_id, lambda: self.artifact_add_tx(
             "karte_summary", text, project_id=project_id, meta=meta))
         return True
 
-    def _karte_summary_write(self, project_id: int, write) -> None:
+    def _karte_summary_write(self, project_id: int, write, *, source_changed=True) -> None:
         """Run write() and the due clear as one unit, then commit as before.
 
         A caller's already-open transaction is committed with it on success
@@ -1198,8 +1316,16 @@ class Ledger:
         if savepoint:
             self.db.execute(f"SAVEPOINT {savepoint}")    # fails before anything is written
         try:
+            if not self.db.in_transaction:
+                self.db.execute('BEGIN IMMEDIATE')
+            import inference_dependency_loss as dependency_loss
+            footprint = dependency_loss.capture_current_karte_tx(self.db, project_id) if source_changed else None
             write()
+            if footprint is not None:
+                dependency_loss.record_tx(self.db, footprint)
             self._clear_karte_summary_due(project_id)
+            if source_changed:
+                self.bump_inference_source_epoch_tx()
             self.db.commit()
         except BaseException:
             if self.db.in_transaction:                    # SQLite may already have rolled back
@@ -1530,6 +1656,8 @@ class Ledger:
             "parent_id": row["parent_id"],
             "revision": row["content_hash"]
                         or hashlib.sha256(body.encode()).hexdigest(),
+            "body_digest": hashlib.sha256(body.encode()).hexdigest(),
+            "source_occurrence": row["source_occurrence"] if "source_occurrence" in row.keys() else 1,
             "body_state": row["body_state"] or "unknown",
             "reply_count": row["reply_count"] or 0,
             "sender_id": row["sender_id"],
@@ -1574,9 +1702,12 @@ class Ledger:
             item = dict(row)
             message_id = item.pop("message_id")
             attachments.setdefault(message_id, []).append(item)
-        members = [self._semantic_member(first, attachments.get(first["message_id"], []))]
-        members.extend(self._semantic_member(row, attachments.get(row["message_id"], []))
-                       for row in rows)
+        occurrences = {row[0]: row[1] for row in self.db.execute(
+            'SELECT message_id,MAX(seq) FROM message_revisions WHERE message_id IN '
+            '(SELECT message_id FROM messages WHERE project_id=? AND (message_id=? OR parent_id=?)) '
+            'GROUP BY message_id', (project_id, root, root))}
+        members = [self._semantic_member({**dict(row), 'source_occurrence': occurrences.get(row['message_id'], 1)},
+                                        attachments.get(row['message_id'], [])) for row in [first, *rows]]
         return self._semantic_digest(members)
 
     def _semantic_message_fingerprint(self, project_id: int,
@@ -1585,7 +1716,8 @@ class Ledger:
         row = self.db.execute(
             "SELECT message_id,parent_id,content_hash,body_state,body_text,"
             "reply_count,sender_id,sender_name,sender_type,profession,"
-            "organization,posted_at FROM messages "
+            "organization,posted_at,(SELECT COALESCE(MAX(r.seq),1) FROM message_revisions r "
+            "WHERE r.message_id=messages.message_id) AS source_occurrence FROM messages "
             "WHERE project_id=? AND message_id=?",
             (project_id, message_id)).fetchone()
         if row is None:
@@ -1593,12 +1725,14 @@ class Ledger:
         return self._semantic_digest(self._semantic_member(row))
 
     def semantic_seed_tx(self, project_id: int, message_ids: list,
-                          origin: dict, *, invalidated_roots: set | None = None):
+                          origin: dict, *, invalidated_roots: set | None = None,
+                          _source_generation: str | None = None):
         """Durable semantic-eval seeding — caller holds `with self.db` so
         job creation commits (or rolls back) with the message and notify
         intent that triggered it (INV-06, spec §18.1). Keyed by thread
         ROOT so one job covers a post plus its replies; a new arrival on
         an evaluated thread revives the job as a new input generation."""
+        from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
         # Pause holds execution, not durable intake; OFF callers do not seed.
         if not message_ids:
             return
@@ -1618,8 +1752,11 @@ class Ledger:
                 and origin.get("event_id") is not None
             notification_free = isinstance(origin, dict) \
                 and origin.get("notification_free") is True
-            source_generation = self._semantic_source_generation(
-                project_id, root)
+            execution = (origin.get('inference_generation')
+                         if isinstance(origin, dict)
+                         and origin.get('source') == 'inference_reprocess' else None)
+            source_generation = (_source_generation if _source_generation is not None
+                                 else self._semantic_source_generation(project_id, root))
             if existing is not None:
                 old_pl = loads_dict(existing["payload"] or "{}") or {}
                 stored_targets = old_pl.get("targets")
@@ -1629,6 +1766,14 @@ class Ledger:
                 old_eligible = bool(old_pl.get("eligible"))
                 old_notification_free = bool(old_pl.get(
                     "notification_free"))
+                arrival = origin.get('arrival_event_id') if isinstance(origin, dict) else None
+                preserve_live = (execution is not None
+                                 and existing['state'] == 'pending'
+                                 and old_eligible and not old_notification_free
+                                 and type(arrival) is int and self.db.execute(
+                                     "SELECT 1 FROM notify_outbox WHERE event_id=? AND project_id=? "
+                                     "AND kind='new_messages' AND state!='suppressed'",
+                                     (arrival, project_id)).fetchone() is not None)
                 pl = dict(old_pl)
                 pl["targets"] = sorted(old_targets | set(ids))
                 # once a job descends from a notify intent it keeps that
@@ -1647,15 +1792,32 @@ class Ledger:
                     # notification.  It supersedes a replay's suppression
                     # marker, even when the old origin is being replaced.
                     pl.pop("notification_free", None)
-                elif notification_free:
+                    pl.pop('reprocess_only', None)
+                    pl.pop('execution_generation', None)
+                    pl.pop('execution_contract', None)
+                elif notification_free and not preserve_live:
                     # Keep this marker at the payload level as well as in
                     # the incoming origin: a prior eligible origin may be
                     # retained for provenance, but this seed must still be
                     # ineligible for notification generation.
                     pl["notification_free"] = True
-                input_changed = (old_targets != set(pl["targets"])
-                                 or pl.get("source_generation")
-                                 != source_generation)
+                source_changed = (old_targets != set(pl['targets'])
+                                  or pl.get('source_generation') != source_generation)
+                input_changed = (not is_current(old_pl)
+                                 or (execution is not None
+                                     and old_pl.get('execution_contract') == 1
+                                     and old_pl.get('execution_generation') != execution)
+                                 or source_changed)
+                if execution is not None and existing['state'] == 'done' and not input_changed:
+                    # Enumeration is not a request to obtain a different
+                    # answer from this already evaluated input generation.
+                    continue
+                pl[VERSION_KEY] = CURRENT_VERSION
+                if execution is not None:
+                    pl['execution_generation'] = execution
+                    pl['execution_contract'] = 1
+                    if not preserve_live:
+                        pl['reprocess_only'] = True
                 payload_changed = (input_changed
                                    or old_origin != pl.get("origin")
                                    or old_eligible != bool(pl.get("eligible"))
@@ -1672,7 +1834,8 @@ class Ledger:
                              else int(existing["attempts"] or 0))
                 if input_changed:
                     self._invalidate_thread_projections(
-                        project_id, root, invalidated_roots=invalidated_roots)
+                        project_id, root, invalidated_roots=invalidated_roots,
+                        source_changed=source_changed and execution is None)
                     # A source edit is a new budget and may not inherit a
                     # human retry extension or the command token that
                     # invalidated the prior worker.
@@ -1694,9 +1857,14 @@ class Ledger:
                      attempts, now, now, existing["job_id"]))
             else:
                 payload = {"targets": sorted(set(ids)),
+                           VERSION_KEY: CURRENT_VERSION,
                            "origin": origin,
                            "generation": uuid.uuid4().hex,
                            "source_generation": source_generation}
+                if execution is not None:
+                    payload['execution_generation'] = execution
+                    payload['execution_contract'] = 1
+                    payload['reprocess_only'] = True
                 if eligible:
                     payload["eligible"] = True
                 elif notification_free:
@@ -1754,7 +1922,7 @@ class Ledger:
                 (attachment_id,)).fetchone()
             before = (self._semantic_message_fingerprint(
                 row["project_id"], row["message_id"])
-                if row and (semantic or self._has_canonical_projections()) else None)
+                if row and (semantic or self._needs_semantic_source_tracking()) else None)
             now = time.time()
             self.db.execute("""
               UPDATE attachments SET local_path=?,bytes=?,sha256=?,
@@ -1792,7 +1960,7 @@ class Ledger:
                 "COALESCE(m.parent_id,m.message_id) root FROM attachments a "
                 "JOIN messages m ON m.message_id=a.message_id WHERE attachment_id=?",
                 (attachment_id,)).fetchone() if (
-                    semantic or self._has_canonical_projections()) else None
+                    semantic or self._needs_semantic_source_tracking()) else None
             self.db.execute("""
               UPDATE attachments SET attempts=attempts+1,next_try=?,error=?,
                 state=CASE WHEN ? OR attempts+1>=? THEN 'failed'

@@ -24,6 +24,10 @@ Matching is deliberately loose: meds key on (name, action), symptoms on
 text containment, events/urgency exact. `expect` entries must appear;
 `forbid` entries must not. Items the model dropped count as FN; extra
 items matching nothing count as FP.
+Explicit medication, symptom and lab attributes must match; a null label
+pins absence rather than a wildcard. Unverified medication/symptom output
+cannot satisfy an expected confirmed fact. Optional event_records labels
+also score the event's subject, polarity, time and source span.
 
 Requests key on action containment; any other key a label carries
 (to/from/kind/condition/due/due_text/evidence) must match exactly, and
@@ -84,7 +88,7 @@ DEFAULT_CASES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 # safety-bearing med attributes — when a case SPECIFIES one it is part
 # of the match, not silently ignored (F23)
-_MED_ATTRS = ("dose", "status", "subject", "negated", "evidence")
+_MED_ATTRS = ("dose", "status", "subject", "negated", "evidence", "route", "freq", "prn")
 
 
 def _med_name_hit(expected: dict, m) -> bool:
@@ -96,7 +100,8 @@ def _med_name_hit(expected: dict, m) -> bool:
 
 def _match_med(expected: dict, got: list) -> bool:
     return any(_med_name_hit(expected, m)
-               and all(expected.get(k) in (None, m.get(k))
+               and not m.get("unverified")
+               and all(k not in expected or expected[k] == m.get(k)
                        for k in _MED_ATTRS)
                for m in got)
 
@@ -105,10 +110,19 @@ def _match_symptom(expected: dict, got: list) -> bool:
     want = expected.get("text", "")
     return any(type(s) is dict
                and want and want in str(s.get("text", ""))
+               and not s.get("unverified")
                and s.get("negated") == expected.get("negated", False)
-               and all(expected.get(k) in (None, s.get(k))
-                       for k in ("subject", "status", "evidence"))
+               and all(k not in expected or expected[k] == s.get(k)
+                       for k in ("subject", "status", "evidence", "severity", "onset", "duration"))
                for s in got)
+
+
+def _match_event(expected: dict, got: list) -> bool:
+    return any(isinstance(item, dict) and not item.get("unverified")
+               and item.get("kind") == expected.get("kind")
+               and all(key not in expected or expected[key] == item.get(key)
+                       for key in ("subject", "status", "negated", "evidence", "span"))
+               for item in got)
 
 
 _REQ_KEYS = ("to", "from", "kind", "condition", "due", "due_text",
@@ -152,6 +166,8 @@ def _match_lab(expected: dict, got: list) -> bool:
                and ("measured_on" not in expected
                     or expected["measured_on"]
                     == (item.get("normalized") or {}).get("measured_on"))
+               and all(key not in expected or expected[key] == item.get(key)
+                       for key in ("subject", "status", "condition", "evidence"))
                and ("unverified" not in expected
                     or bool(expected["unverified"])
                     == bool(item.get("unverified")))
@@ -255,6 +271,8 @@ def _score_case(case: dict, out: dict | None) -> dict:
             fields["vitals"] = {"tp": 0, "fp": 0, "fn": len(exp["vitals"])}
         if "labs" in exp:
             fields["labs"] = {"tp": 0, "fp": 0, "fn": len(exp["labs"])}
+        if "event_records" in exp:
+            fields["event_records"] = {"tp": 0, "fp": 0, "fn": len(exp["event_records"])}
         if "patient_context" in exp:
             fields["patient_context"] = {"tp": 0, "fp": 0, "fn": len(exp["patient_context"])}
             for label in exp["patient_context"]:
@@ -267,7 +285,7 @@ def _score_case(case: dict, out: dict | None) -> dict:
             fields["reply"] = {"tp": 0, "fp": 0,
                                "fn": int(exp["reply"] is not None)}
         for key in _MED_ATTRS:
-            expected = sum(m.get(key) is not None for m in exp.get("meds", []))
+            expected = sum(key in m for m in exp.get("meds", []))
             if expected:
                 fields[f"med_{key}"] = {"tp": 0, "fp": 0, "fn": expected}
         return {"id": case["id"], "error": "extract_failed",
@@ -321,10 +339,11 @@ def _score_case(case: dict, out: dict | None) -> dict:
     # value — a wrong status/subject/negated is a miss with its own
     # per-attribute error rate, not an invisible pass
     for k in _MED_ATTRS:
-        expected = [e for e in exp.get("meds", []) if e.get(k) is not None]
+        expected = [e for e in exp.get("meds", []) if k in e]
         tp = len(_match_pairs(
             expected, got_meds,
             lambda e, items, k=k: _med_name_hit(e, items[0])
+            and not items[0].get("unverified")
             and items[0].get(k) == e[k]))
         fn = len(expected) - tp
         if tp + fn:
@@ -339,6 +358,11 @@ def _score_case(case: dict, out: dict | None) -> dict:
                       if fe in got_events]
     violations.extend(f"events:{fe}" for fe in matched_events)
     fields["events"]["fp"] += len(matched_events)
+    if "event_records" in exp or "event_records" in forbid:
+        records = out.get("event_records") or []
+        fields["event_records"] = _field_pr(exp.get("event_records", []), records, _match_event)
+        violations.extend(f"event_records:{event.get('kind')}" for event in
+                          forbid.get("event_records", []) if _match_event(event, records))
     violations.extend(f"requests:{request.get('action')}"
                       for request in forbid.get("requests", [])
                       if _match_request(request, got_requests))
@@ -369,6 +393,8 @@ def _score_case(case: dict, out: dict | None) -> dict:
     score["raw"]["reply"] = got_reply
     if "labs" in exp:
         score["raw"]["labs"] = got_labs
+    if "event_records" in exp or "event_records" in forbid:
+        score["raw"]["event_records"] = out.get("event_records") or []
     if "patient_context" in exp or "patient_context" in forbid:
         score["raw"]["patient_context"] = got_context
     if "reply" in exp:

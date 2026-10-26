@@ -18,6 +18,8 @@ def routed(tmp_path, monkeypatch):
     cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 2}}
     monkeypatch.setattr(worker, "load_config", lambda: cfg)
     monkeypatch.setattr(worker.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(worker, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(worker.extract, "_WRITER_STATE", (False, 1))
     monkeypatch.setattr(cloud_policy, "api_key", lambda *a: "synthetic-key")
     monkeypatch.setattr(cloud_policy, "block_reason", lambda led, cfg, route, pid:
                         None if cloud_policy.eligible(cfg, route, pid) else "scope")
@@ -689,12 +691,30 @@ def test_a_shadow_unit_is_pending_until_measured_and_counted_once(routed):
     def meta():
         return [json.loads(a["meta"]) for a in led.artifacts("cloud_compare_v1")]
     worker._cloud_compare(led, route="reextract", project_id=1, local_facts={"a"}, unit="u1", pending=True)
+    worker._cloud_compare(led, route="reextract", project_id=1, local_facts={"a"}, unit="u1", pending=True)
     assert [(m["uncompared"], m["units"], m["validated_units"]) for m in meta()] == [("pending", 1, 0)]
     worker._cloud_compare(led, route="reextract", project_id=1, local_facts={"a"}, cloud_facts={"a"}, unit="u1")
     assert [("uncompared" in m, m["units"], m["validated_units"], m["matched"]) for m in meta()] == [(False, 1, 1, 1)]
     # a late duplicate (retry, carried pass) never adds a second unit
     worker._cloud_compare(led, route="reextract", project_id=1, local_facts={"a"}, cloud_facts=set(), unit="u1")
     assert len(meta()) == 1 and meta()[0]["matched"] == 1
+    worker._cloud_compare(led, route="reextract", project_id=1, local_facts={"a"}, unit="u1", pending=True)
+    assert len(meta()) == 1 and meta()[0]["matched"] == 1
+
+
+@pytest.mark.parametrize("cloud_facts", [None, set(), {"synthetic"}])
+def test_uncomparable_local_source_stays_in_the_shadow_unit_denominator(routed, cloud_facts):
+    led, *_ = routed
+    worker._cloud_compare(led, route="patient_context", project_id=1,
+                          local_facts=None, unit="unknown-span", pending=True)
+    worker._cloud_compare(led, route="patient_context", project_id=1,
+                          local_facts=None, cloud_facts=cloud_facts, unit="unknown-span")
+    [artifact] = led.artifacts("cloud_compare_v1")
+    meta = json.loads(artifact["meta"])
+    assert meta["units"] == 1 and meta["local_facts"] is None and meta["matched"] is None
+    assert meta["cloud_facts"] == (None if cloud_facts is None else len(cloud_facts))
+    assert meta["validated_units"] == int(cloud_facts is not None)
+    assert "uncompared" not in meta
 
 
 def test_shadow_audit_rows_are_never_written_without_the_run_lock(routed, monkeypatch):

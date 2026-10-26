@@ -172,11 +172,11 @@ def _scope_events(body, patient_name, provider_fields):
             events.append((match.start(), person_scope(match["person"], patient_name), None))
     return tuple(sorted(events, key=lambda event: event[0]))
 
-def patient_source_scope(body, start, end, *, patient_name=None, default="patient", provider_fields=False,
+def _source_scope_axes(body, start, end, *, patient_name=None, default="patient", provider_fields=False,
                          measurement=False):
-    """Resolve an original span's reported person and explicit noncurrent scope, never from a keyword mask."""
+    """Parse the existing person and period axes without collapsing either one."""
     if not isinstance(body, str) or not 0 <= start < end <= len(body):
-        return "unknown"
+        return "unknown", "unknown"
     # Non-str names never match (_person_scope), so None keeps the cache key hashable.
     events = list(_scope_events(body, patient_name if isinstance(patient_name, str) else None,
                                 bool(provider_fields)))  # already sorted by position
@@ -193,8 +193,6 @@ def patient_source_scope(body, start, end, *, patient_name=None, default="patien
             scope = subject
         if phase is not None:
             period = phase
-    if scope != "patient":
-        return scope
     # Qualifiers are evaluated in the span's own source clause, not from an
     # unrelated patient's/history sentence elsewhere in the same message.
     marks = bisect.bisect_left(puncts, start)
@@ -203,9 +201,9 @@ def patient_source_scope(body, start, end, *, patient_name=None, default="patien
     right = _SCOPE_BREAK.search(body, end)
     clause = body[left:right.start() if right else len(body)]
     if _CONDITIONAL_MARK.search(clause):
-        return "conditional"
+        return scope, "conditional"
     if period != "current" and not CURRENT_MARK.search(clause):
-        return period
+        return scope, period
     sentence = max(body.rfind(c, 0, start) for c in "。！？!?\n") + 1
     if measurement and CURRENT_MARK.search(clause) and (
             _NONCURRENT_MARK.search(clause) or _MEASURED_PAST_MARK.search(clause)):
@@ -216,15 +214,105 @@ def patient_source_scope(body, start, end, *, patient_name=None, default="patien
                        for m in rx.finditer(before)]
                       + [(m.end(), "current") for m in CURRENT_MARK.finditer(before)], default=None)
         if nearest is not None:
-            return "past" if nearest[1] == "past" else scope
+            return scope, nearest[1]
     if (_NONCURRENT_MARK.search(clause)
             or (measurement and (_MEASURED_PAST_MARK.search(clause)
                                  or _SENTENCE_PAST_LEAD.match(body, sentence, start)))) \
             and not (CURRENT_MARK.search(clause) or URGENT_REQUEST.search(clause)):
-        return "past"
+        return scope, "past"
     if re.search(r"(?:予定|目標|参考|基準)(?:の|は|値|:|：)", clause) and not CURRENT_MARK.search(clause):
-        return "planned"
-    return scope
+        return scope, "planned"
+    return scope, "current"
+
+def patient_source_scope(body, start, end, *, patient_name=None, default="patient", provider_fields=False,
+                         measurement=False):
+    """Preserve the legacy scope projection for existing current-state consumers."""
+    subject, period = _source_scope_axes(body, start, end, patient_name=patient_name, default=default,
+                                        provider_fields=provider_fields, measurement=measurement)
+    return subject if subject != "patient" or period == "current" else period
+
+
+def source_axes(body, start, end, *, default="patient"):
+    """Return independent reported person and period axes for a grounded assertion."""
+    subject, period = _source_scope_axes(body, start, end, default=default)
+    if period in ("conditional", "unknown"):
+        return subject, period
+    left = max(body.rfind(mark, 0, start) for mark in "。！？!?;；\n") + 1
+    # A later explicit owner begins a new assertion, not the earlier person's time.
+    owners = list(_PERSON.finditer(body, left, start))
+    if owners:
+        left = owners[-1].start()
+    before = body[left:start]
+    if _CONDITIONAL_MARK.search(before):
+        return subject, "conditional"
+    times = [(m.end(), "current") for m in CURRENT_MARK.finditer(before)]
+    times += [(m.end(), "past") for rx in (_NONCURRENT_MARK, _MEASURED_PAST_MARK)
+              for m in rx.finditer(before)]
+    times += [(m.end(), "planned") for m in re.finditer(r"明日|翌日|来週|来月|予定|計画", before)]
+    if times:
+        period = max(times)[1]
+    stop = _SCOPE_BREAK.search(body, end)
+    tail = body[start:stop.start() if stop else len(body)]
+    if re.search(r"予定|計画|検討中|見込み", tail) and not CURRENT_MARK.search(tail):
+        period = "planned"
+    return subject, period
+
+
+def source_assertion_span(body, surface):
+    """Locate one unique target and its existing source-clause boundaries."""
+    span = locate_quote_span(body, surface) if isinstance(body, str) and isinstance(surface, str) else None
+    if span is None:
+        return None
+    start, end = span
+    marks = _scope_puncts(body)
+    before = bisect.bisect_left(marks, start)
+    left = marks[before - 1] + 1 if before else 0
+    left = max((m.end() for m in _SCOPE_BREAK.finditer(body, left, start)), default=left)
+    right = _SCOPE_BREAK.search(body, end)
+    return left, right.start() if right else len(body)
+
+
+def source_resolution(body, start, end, *, target_end=None):
+    """Read explicit target-bound symptom resolution independently of negation and time."""
+    if (not isinstance(body, str) or any(type(v) is not int for v in (start, end, target_end))
+            or not 0 <= start < target_end <= end <= len(body)):
+        return None
+    tail = body[target_end:end]
+    if re.search(r"[?？]|かどうか|(?:か|でしょうか)[。\s]*$|予定|計画|見込み|なら|場合|たら|とき|れば|"
+                 r"かもしれ|疑い|不明|未確認|ではない|じゃない|ない(?:こと|わけ|訳)はない", tail):
+        return None
+    lead = r"^(?:は|が|も|を)?(?:現在|今は|本日|今日|まだ|既に|すでに)?\s*"
+    not_resolved = (r"(?:(?:消失|消退)(?:して(?:いない|いません|おらず|いなかった)|し(?:ない|ません)|"
+                    r"(?:を|は|が|も)?認め(?:ず|ない|ません))|治ま(?:って(?:いない|いません|おらず)|らない|りません))")
+    if re.search(lead + not_resolved, tail):
+        return False
+    resolved = (r"(?:(?:消失|消退)(?:しました|した|しています|している|済み|を認めました|を認めた)|"
+                r"治ま(?:りました|った|っています|っている))(?=$|[。．！!、,\s])")
+    return True if re.search(lead + resolved, tail) else None
+
+
+def source_polarity(body, start, end, *, target_end=None, medication=False):
+    """Return direct target-bound negation, affirmation or unknown without defaulting omitted polarity."""
+    if (not isinstance(body, str) or type(target_end) is not int
+            or not 0 <= start < target_end <= end <= len(body)):
+        return None
+    tail = body[target_end:end]
+    if re.search(r"ではない|じゃない|ない(?:こと|わけ|訳)はない|かもしれ|不明|疑い", tail):
+        return None
+    lead = r"^(?:は|が|も|を)?(?:現在|今は|特に|全く)?"
+    negative = r"(?:なし|無し|ない|なく|ありません|認めず|認めません|認められない|見られない|みられません|して(?:いない|いません)|されて(?:いない|いません)|しない|しません|せず)"
+    positive = r"(?:あり|有り|ある|出現|持続|続いて|認める|しています|している|しました|した(?!い|ら|場合|とき|予定|つもり)|済み)"
+    if medication:
+        from extract_schema import RX_DOSE, RX_PARTICLE
+        lead = "^" + RX_PARTICLE + RX_DOSE + RX_PARTICLE + r"(?:で)?"
+        negative = r"(?:(?:服用|内服|使用|投与)(?:は|を|も)?(?:して(?:いない|いません)|せず|しない|しません)|飲(?:んで(?:いない|いません)|まず|まない|みません)|使(?:わず|わない|って(?:いない|いません)))"
+        positive = r"(?:服用|内服|使用|投与)(?:中|しています|している|した|しました)"
+    if re.search(lead + negative, tail):
+        return True
+    if re.search(lead + positive, tail):
+        return False
+    return None
+
 
 def patient_urgency_quotes(body, quotes, *, patient_name=None, default="patient"):
     """Keep only source-located patient quotes; another person's urgency remains in the original record."""

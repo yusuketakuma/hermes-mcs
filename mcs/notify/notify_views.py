@@ -59,7 +59,16 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
         period = roll.get("med_period_candidate")
         meds = [m for m in roll.get("medications") or []
                 if isinstance(m, dict) and m.get("name")]
-        lines.append("■ 薬")
+        clinical = roll.get("clinical_state")
+        dependencies = clinical.get("dependencies", {}) if isinstance(clinical, dict) else {}
+        if not isinstance(dependencies, dict):
+            dependencies = {"complete": False}
+        source_gap = dependencies.get("complete") is False
+        lines.append("■ 薬（現在の状態は未確定）" if source_gap else "■ 薬")
+        if source_gap:
+            gaps = dependencies.get("gaps")
+            lines.append(f"変更前の根拠が未確認: {gaps}件" if type(gaps) is int and gaps > 0
+                         else "変更前の根拠を確認できません")
         if isinstance(period, dict) and period.get("start"):
             lines.append(f"処方期間の候補: {period.get('start')}"
                          f"〜{period.get('end') or '?'}")
@@ -70,7 +79,12 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
                      + (" — " + note if (note := candidate_note(m.get("ref"))) else "")
                      for m in meds[:15])
         if not meds:
-            lines.append("・抽出された薬なし")
+            lines.append("・現在使用中の薬剤: 未確認")
+        for key, label in (("planned_medications", "予定"), ("unverified_medications", "確認待ち")):
+            candidates = [m for m in roll.get(key) or [] if isinstance(m, dict) and m.get("name")]
+            if candidates:
+                lines.append(f"・{label}: " + " / ".join(" ".join(str(m[k]) for k in
+                    ("name", "dose", "freq", "route") if m.get(k)) for m in candidates[:5]))
         vit = roll.get("latest_vitals")
         vline = (vital_line({"vitals": vit}, {})
                  if isinstance(vit, dict) else None)
@@ -839,6 +853,9 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
 
     def add(items, group, category=None):
         for item in items:
+            bucket = {"current": "現在の記録", "history": "履歴", "plan": "予定・条件",
+                      "conflict": "記録の不一致", "unknown": "時点・関係未確認"}.get(item.get("view_bucket"))
+            item_group = f"{group} · {bucket}" if group and bucket else bucket or group
             quote = str(item.get("quote") or item.get("text") or "")
             if category:
                 quote = _bare_quote(quote, category)
@@ -846,13 +863,13 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
             date, rest, link = source_of(item)
             source = f"{date} {rest}".strip()
             last = rows[-1] if rows else None
-            if (last and last["group"] == group and last.get("message_id") == item.get("message_id")
+            if (last and last["group"] == item_group and last.get("message_id") == item.get("message_id")
                     and last["source"] == source and quotes and not item.get("reply")):
                 # same post, same group: one source line; each mention of one
                 # post carries the same body, so keep each quote once
                 last["quotes"] += [q for q in quotes if q not in last["quotes"]]
             else:
-                rows.append({"group": group, "project_id": project_id, "message_id": item.get("message_id"),
+                rows.append({"group": item_group, "project_id": project_id, "message_id": item.get("message_id"),
                              "quotes": quotes, "source": source, "date": date, "source_rest": rest,
                              **({"url": link} if link else {})})
 
@@ -920,7 +937,9 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
         view = views.transition_course(ev)
         for group in view["items"]:
             day = when(group["anchor"])
-            add(group.get("anchors") or [group["anchor"]], "入退院・移行の記録")
+            label = ("本人の移行実施の記録" if group["anchor_kind"] == "patient_current"
+                     else "移行に関する記載")
+            add(group.get("anchors") or [group["anchor"]], label)
             add(group["nearby"], f"{day}の前後14日の記録")
             if group["no_record"]:
                 head.append(f"{day}の前後14日で記載なし: "
@@ -940,6 +959,13 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
     if ev.get("as_of"):
         status.append("患者コンテキストの反映時点: " + stamp_time(datetime.fromtimestamp(ev["as_of"], JST)))
     status.append(_coverage_line(db, project_id))
+    inference = ev["coverage"].get("inference") or {}
+    if inference and not inference.get("complete"):
+        sources = inference.get("sources") or {}
+        status.append(f"解析未完了: 未解析 {sources.get('pending', 0)}件 / 保留 {sources.get('held', 0)}件 / "
+                      f"解析失敗 {sources.get('failed', 0)}件 / 本文不完全 {sources.get('incomplete', 0)}件")
+        if inference.get("status") == "unacquired":
+            status.append("原文の取得完了を未確認")
     if context_coverage:
         status.append(f"取込済み {context_coverage.get('fetched', 0)}件 / 点検済み {context_coverage.get('analyzed', 0)}件 / 未点検 {context_coverage.get('unscanned', 0)}件 / 本文未取得・不完全 {context_coverage.get('incomplete', 0)}件")
         status.append(f"原文に対応する引用 {context_coverage.get('evidence_supported', 0)} / {context_coverage.get('evidence_total', 0)}件")
@@ -961,5 +987,7 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
                  for row in shown]
     return {"title": title, "layout": "patient_context", "head": head,
             "items": shown,
-            "notes": list(view.get("notes", [])) + status, "empty": "この範囲で該当する記録は見つかりません",
+            "notes": list(view.get("notes", [])) + status,
+            "empty": ("解析が完了していないため、該当する記録の有無は未確認です"
+                      if inference and not inference.get("complete") else "この範囲で該当する記録は見つかりません"),
             "page": page, "pages": pages}

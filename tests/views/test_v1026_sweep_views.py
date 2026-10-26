@@ -24,16 +24,22 @@ def test_mention_groups_have_japanese_headings_and_a_fixed_rank():
 
 
 def test_transition_anchors_once_per_post():
-    ev = {"items": [_item(6, "course", "架空病院から退院"), _item(6, "followup", "退院後の架空薬の残数"),
+    ev = {"items": [_item(6, "course", "本人は本日退院しました。"),
+                    _item(6, "course", "架空病院から退院"), _item(6, "followup", "退院後の架空薬の残数"),
                     _item(5, "adl", "歩行は介助"), _item(1, "diagnoses", "架空病A")]}
     course = pcv.transition_course(ev)["items"]
-    assert len(course) == 1
+    assert len(course) == 2
     group = course[0]
-    assert group["anchor"]["text"] == "架空病院から退院"
-    assert [a["text"] for a in group["anchors"]] == ["架空病院から退院", "退院後の架空薬の残数"]
-    assert sorted(i["message_id"] for i in group["nearby"]) == [1, 5]
+    assert group['anchor_kind'] == 'patient_current'
+    assert group["anchor"]["text"] == "本人は本日退院しました。"
+    assert [a["text"] for a in group["anchors"]] == ["本人は本日退院しました。"]
+    assert sorted(i["message_id"] for i in group["nearby"]) == [1, 5, 6, 6]
     # the anchor post's own followup counts as written in the window
     assert group["no_record"] == ["care_services", "medication_management"]
+    reported = course[1]
+    assert reported['anchor_kind'] == 'reported'
+    assert [a['text'] for a in reported['anchors']] == ['架空病院から退院','退院後の架空薬の残数']
+    assert reported['nearby'] == reported['no_record'] == []
 
 
 def test_provider_not_posting_checks_each_written_provider():

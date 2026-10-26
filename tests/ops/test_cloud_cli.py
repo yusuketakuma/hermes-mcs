@@ -410,6 +410,21 @@ def test_shadow_rates_keep_failure_and_legacy_unknowns_out_of_measured_denominat
     assert unknown["rejected"] is unknown["rejection_rate"] is unknown["repair_rate"] is None
 
 
+def test_unknown_local_grounding_is_not_an_empty_measured_comparison(world):
+    root, path, config = world
+    with closing(Ledger(str(path))) as db:
+        extract_llm._cloud_compare(db, route="patient_context", project_id=1,
+                                  local_facts=None, cloud_facts={"synthetic"})
+        extract_llm._cloud_compare(db, route="patient_context", project_id=1,
+                                  local_facts={"synthetic"}, cloud_facts=None)
+    report = cli.observe(config, root=str(root))["shadow_comparison"]
+    assert report["units"] == 2 and report["validated_units"] == report["unvalidated_units"] == 1
+    assert report["local_facts"] == report["cloud_facts"] == 1
+    assert report["matched"] is report["local_recall"] is report["cloud_only"] is None
+    assert report["local_recall_fact_denominator"] == 0
+    assert report["metric_records_observed"]["matched"] == 0
+
+
 def test_disposition_receipt_is_auditable_without_double_count_or_identity_leak(world):
     root, path, config = world
     with closing(Ledger(str(path))) as db:

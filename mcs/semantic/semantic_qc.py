@@ -7,6 +7,8 @@ mutates the extraction artifact and never suppresses an item.
 """
 from __future__ import annotations
 
+from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
+
 import json
 import time
 from collections import deque
@@ -63,6 +65,7 @@ def _qc_seed(ledger, now: float, limit: int = 32) -> int:
             payload,state,next_try,created_at,updated_at)
           SELECT ?, m.project_id, a.message_id, NULL,
             json_object('hash', json_extract(a.meta,'$.hash'),
+                        '{VERSION_KEY}', '{CURRENT_VERSION}',
                         'ver', json_extract(a.meta,'$.extract_version'),
                         'source_artifact_id', a.artifact_id),
             'pending', ?, ?, ?
@@ -82,6 +85,7 @@ def _qc_seed(ledger, now: float, limit: int = 32) -> int:
                                    =a.artifact_id
                                AND json_extract(j.payload,'$.hash')=m.content_hash
                                AND json_extract(j.payload,'$.ver')={version}
+                               AND json_extract(j.payload,'$.{VERSION_KEY}')='{CURRENT_VERSION}'
                              ELSE 0 END)
           ORDER BY a.artifact_id DESC LIMIT ?
           ON CONFLICT(kind,project_id,message_id) DO UPDATE SET
@@ -95,6 +99,7 @@ def _qc_seed(ledger, now: float, limit: int = 32) -> int:
                 !=json_extract(excluded.payload,'$.hash')
               OR coalesce(json_extract(fetch_jobs.payload,'$.ver'),0)
                 !=json_extract(excluded.payload,'$.ver')
+              OR json_extract(fetch_jobs.payload,'$.{VERSION_KEY}') IS NOT '{CURRENT_VERSION}'
             ELSE 1 END
         """, (QC_JOB_KIND, now, now, now, *scope_params,
               QC_ARTIFACT, QC_JOB_KIND, limit))
@@ -205,7 +210,7 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
         return done()
     art = (source["content"], source["hash"], source["artifact_id"])
     payload = runtime.parse_payload(job)
-    if payload.get("source_artifact_id") != art[2] \
+    if not is_current(payload) or payload.get("source_artifact_id") != art[2] \
             or payload.get("hash") != art[1] \
             or payload.get("ver") != extract_llm.EXTRACT_VERSION:
         return done()  # the seed pass will queue the new extraction
@@ -244,11 +249,12 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
         # the job transition lands here too so the row is never left
         # claimable after its result
         with ledger.db:
+            guard('qc:write')
             _drop_stale_qc(ledger, mid, art[1])
             ledger.artifact_add_tx(
                 QC_ARTIFACT, json.dumps(content, ensure_ascii=False),
                 project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-                meta={"hash": art[1],
+                meta={VERSION_KEY: CURRENT_VERSION, "hash": art[1],
                       "extract_version": extract_llm.EXTRACT_VERSION,
                       "source_artifact_id": art[2],
                       "qc": qc, **(extra or {})})

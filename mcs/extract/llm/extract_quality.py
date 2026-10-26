@@ -7,6 +7,7 @@ import clinical_values
 import extract
 import extract_schema
 import extract_validation
+import inference_version as inference
 from mcs_queries import med_is_patient_current
 from mcs_util import locate_quote_span
 
@@ -24,7 +25,7 @@ def drop_total(v: dict | None) -> float:
             + sum(bool(lab.get("unverified")) for lab in v.get("labs") or []))
 
 
-_FACT_LIST_FIELDS = ("meds", "symptoms", "labs", "events", "requests", "patient_context")
+_FACT_LIST_FIELDS = ("meds", "symptoms", "labs", "events", "event_records", "requests", "patient_context")
 
 
 def facts(v: dict | None, split_conditions: bool = False) -> set:
@@ -36,6 +37,8 @@ def facts(v: dict | None, split_conditions: bool = False) -> set:
     """
     facts = set()
     for key in _FACT_LIST_FIELDS:
+        if key == "events" and (v or {}).get("event_records"):
+            continue  # The enum is the compatibility projection of these records.
         for item in (v or {}).get(key) or []:
             if isinstance(item, dict):
                 item = {k: x for k, x in item.items()
@@ -128,9 +131,17 @@ _QUALITY_CHECKPOINT = "completeness-v1"
 
 
 def completeness_resolved(meta: dict) -> bool:
-    """Accept legacy absence or fully resolved hint counts, never malformed quality records."""
+    """Require explicit per-leaf checks for current inference; only legacy may omit them."""
+    version = inference.read_version(meta)
+    if version not in (inference.LEGACY_VERSION, inference.CURRENT_VERSION):
+        return False
     integrity = meta.get("integrity", {})
     quality = integrity.get("completeness", {}) if isinstance(integrity, dict) else None
+    if version == inference.CURRENT_VERSION:
+        chunks = integrity.get("completeness_chunks") if isinstance(integrity, dict) else None
+        if (type(chunks) is not int or chunks < 1 or not isinstance(quality, dict)
+                or len(quality) != chunks):
+            return False
     return isinstance(quality, dict) and all(
         isinstance(entry, dict) and entry.get("state") == "hint_gaps_resolved"
         # bool/float zero and missing counts cannot establish resolution.
@@ -1007,7 +1018,7 @@ def quality_improves(candidate, prior, body, hints=None):
 def retains_assertion(prior, candidate):
     if isinstance(prior, dict):
         return isinstance(candidate, dict) and all(
-            key in ("evidence", "normalized", "unverified") or key.startswith("_")
+            key in ("evidence", "normalized", "unverified") or (isinstance(key, str) and key.startswith("_"))
             or value is None or retains_assertion(value, candidate.get(key))
             for key, value in prior.items())
     if isinstance(prior, list):
@@ -1018,12 +1029,22 @@ def retains_assertion(prior, candidate):
 
 def protected_lost(prior, candidate, body):
     """Count grounded negation/nonpatient assertions lost by an automatic replacement."""
-    old, new = extract_validation.validate(prior, body) or {}, extract_validation.validate(candidate or {}, body) or {}
+    # The stored assertion is the protection baseline, not a new candidate:
+    # stricter validation must not erase an old protected assertion before
+    # comparison. The caller binds that artifact to this exact source.
+    old = prior if isinstance(prior, dict) else {}
     lost = {}
+    if not isinstance(body, str):
+        return lost
+    new = extract_validation.validate(candidate if isinstance(candidate, dict) else {}, body) or {}
     for field in _FACT_LIST_FIELDS:
-        for item in old.get(field) or []:
+        items = old.get(field)
+        if not isinstance(items, list):
+            continue
+        for item in items:
             if (not isinstance(item, dict)
                     or not (item.get("negated") is True or item.get("subject") in ("family", "other"))
+                    or not isinstance(item.get("evidence"), str)
                     or locate_quote_span(body, item.get("evidence")) is None):
                 continue
             if not any(retains_assertion(item, other) for other in new.get(field) or []):

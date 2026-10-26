@@ -8,9 +8,13 @@ right; authorization stays with the caller and ``role_order`` only
 reorders sections.
 """
 from datetime import timedelta
+import json
+import math
 import re
 
-from patient_context import LABELS
+from clinical_scope import source_axes, source_polarity
+from patient_context import LABELS, extract_context
+from mcs_util import locate_quote_span
 from read_model import _records_coverage
 from snapshot_access import snapshot_meta
 
@@ -62,18 +66,63 @@ for _c, _labels in LABELS.items():
 _ORG_WORD = re.compile(r"事業所|ステーション|クリニック|薬局|病院|医院|診療所|センター|施設|居宅|訪問看護|訪問介護|デイ")
 
 
+def _assertion_key(item):
+    """One written assertion, including its source revision and grounded attributes."""
+    values = {key: item.get(key) for key in (
+        "source", "message_id", "content_hash", "category", "subject", "reported_subject", "text", "quote", "evidence_span")}
+    values["details"] = sorted(json.dumps(d, sort_keys=True, ensure_ascii=False)
+                               for d in item.get("details") or [])
+    return json.dumps(values, sort_keys=True, ensure_ascii=False)
+
+
+def _heading_groups(body):
+    """Bind adjacent explicit attribute headings to their own written owner only."""
+    groups, owner, previous = {}, None, None
+    for item in extract_context(body):
+        span = locate_quote_span(body, item["evidence"])
+        if span is None:
+            owner, previous = None, None
+            continue
+        keys = {d["key"] for d in item.get("details") or []}
+        if (previous is None or previous["category"] != item["category"]
+                or body[previous["end"]:span[0]].strip()
+                or re.search(r"\r?\n[ \t　]*\r?\n", body[previous["end"]:span[0]])):
+            owner = None
+        if keys & {"drug_name", "observation_name"}:
+            owner = span[0]
+        if owner is not None:
+            groups[(item["category"], item["text"], item["evidence"], item["subject"],
+                    json.dumps(item.get("details") or [], sort_keys=True, ensure_ascii=False))] = owner
+        previous = {"category": item["category"], "end": span[1]}
+    return groups
+
+
 def _mentions(db, project_id, senders):
     """Decorate raw source mentions with the already-read sender display fields."""
     from mcs_queries import source_patient_mentions
+    from patient_context_state import clinical_state_fact
 
-    return [{"category": item["category"], "text": item["text"], "quote": item["quote"],
+    entries = []
+    for item in source_patient_mentions(db, project_id):
+        raw = {**item["mention"], "name" if item["category"] == "medications" else "text": item["text"],
+               "subject": item["subject"], "evidence": item["evidence"], "evidence_span": item["evidence_span"]}
+        fact = clinical_state_fact({**item, "project_id": project_id, "body_state": "full",
+                                    "body_text": item["reference_context"]["text"]}, raw, item["category"], "source_mentions")
+        entry = {"category": item["category"], "text": item["text"], "quote": item["quote"],
              "subject": item["subject"], "details": [], "mention": item["mention"],
              "message_id": item["message_id"], "content_hash": item["content_hash"],
-             "posted_at_ts": item["posted_at_ts"],
+             "posted_at_ts": item["posted_at_ts"], "evidence": item["evidence"],
+             "evidence_span": item["evidence_span"], "reference_context": item["reference_context"],
              "sender": senders.get(item["message_id"], (None, None))[0],
              "profession": senders.get(item["message_id"], (None, None))[1],
              "temporality": None, "discovery": None, "source": "chat"}
-            for item in source_patient_mentions(db, project_id)]
+        if fact is not None:
+            entry["temporal"] = fact["temporal"]
+            entry["assertion"] = fact["reported"]
+        # Raw mentions remain as-written mentions. Only the complete context
+        # or rollup projection can establish a cross-source current state.
+        entries.append(entry)
+    return entries
 
 def evidence(db, project_id, *, cfg=None) -> dict:
     """The shared evidence list every view projects from.
@@ -86,6 +135,7 @@ def evidence(db, project_id, *, cfg=None) -> dict:
     senders = {r[0]: (r[1], r[2]) for r in db.execute(
         "SELECT message_id, sender_name, profession FROM messages WHERE project_id=?", (project_id,))}
     items = []
+    heading_groups = {}
     for record in records:
         for item in record["patient_context"]:
             source = item["source"]
@@ -96,32 +146,48 @@ def evidence(db, project_id, *, cfg=None) -> dict:
                      "sender": senders.get(source["message_id"], (None, None))[0],
                      "profession": senders.get(source["message_id"], (None, None))[1],
                      "temporality": None, "discovery": None, "source": "chat"}
+            if item.get("origin") == "explicit_heading":
+                source_key = (source["message_id"], source["content_hash"])
+                if source_key not in heading_groups:
+                    raw = db.execute("SELECT body_text FROM messages WHERE project_id=? AND message_id=? "
+                                     "AND content_hash=? AND body_state IS NOT 'deleted'",
+                                     (project_id, *source_key)).fetchone()
+                    heading_groups[source_key] = _heading_groups(raw[0]) if raw and isinstance(raw[0], str) else {}
+                group_key = (item["category"], item["text"], item["evidence"], item["subject"],
+                             json.dumps(item.get("details") or [], sort_keys=True, ensure_ascii=False))
+                group = heading_groups[source_key].get(group_key)
+                if group is not None:
+                    entry["_heading_group"] = group
             items.append(entry)
     items.extend(_mentions(db, project_id, senders))
     context_refresh = patient_context_refresh.context_view_input(db, project_id, cfg=cfg)
     for fact in (context_refresh or {}).get("facts") or []:
-        # context refresh quotes the whole source line; the same grounded item is read_model's quote inside it
-        matches = [i for i in items if i["source"] == "chat" and i["message_id"] == fact.get("message_id")
-                   and i["category"] == fact.get("category") and i["quote"] in (fact.get("quote") or "")]
         extra = {"temporality": fact.get("temporality"), "discovery": fact.get("discovery"),
+                 **{key: fact.get(key) for key in ("evidence", "evidence_span", "reference_context", "assertion", "temporal", "view_bucket", "relations")},
                  "found_night_id": fact.get("found_night_id"), "found_at": fact.get("found_at")}
+        entry = {"category": fact.get("category"), "text": fact.get("text"),
+                 "quote": fact.get("quote"), "subject": fact.get("subject"),
+                 "reported_subject": fact.get("reported_subject"), "details": fact.get("details") or [],
+                 "message_id": fact.get("message_id"), "content_hash": fact.get("content_hash"),
+                 "posted_at_ts": fact.get("posted_at_ts"), "sender": fact.get("sender"),
+                 "source": fact.get("source", "chat"), **extra}
+        # A larger quote can contain different assertions, people or attributes.
+        # Only identical source-bound meaning receives the discovery annotation.
+        matches = [i for i in items if entry["content_hash"] and entry["source"]
+                   and _assertion_key(i) == _assertion_key(entry)]
         for match in matches:
             match.update(extra)
         if matches:
             continue
-        items.append({"category": fact.get("category"), "text": fact.get("text"),
-                      "quote": fact.get("quote"), "subject": fact.get("subject"),
-                      "reported_subject": fact.get("reported_subject"), "details": fact.get("details") or [],
-                      "message_id": fact.get("message_id"), "content_hash": fact.get("content_hash"),
-                      "posted_at_ts": fact.get("posted_at_ts"), "sender": fact.get("sender"),
-                      "source": fact.get("source", "chat"), **extra})
+        items.append(entry)
     items.sort(key=lambda i: (i["posted_at_ts"] or 0, i["message_id"] or 0), reverse=True)
     return {"project_id": project_id, "snapshot": snapshot_meta(db), "items": items,
             "summary": (context_refresh or {}).get("summary") or [],
             # summary fact_ids resolve here; empty when unpublished or no longer valid
             "nightly_facts": (context_refresh or {}).get("facts") or [],
             "as_of": (context_refresh or {}).get("as_of"),
-            "coverage": {"read_model": coverage, "nightly": (context_refresh or {}).get("coverage")}}
+            "coverage": {"read_model": coverage, "nightly": (context_refresh or {}).get("coverage"),
+                         "inference": patient_context_refresh.inference_coverage(db, project_id, cfg or {})}}
 
 
 def background(ev) -> dict:
@@ -240,17 +306,19 @@ def replies(db, project_id) -> dict:
 
 def previsit(db, ev, now, *, days=7) -> dict:
     """訪問前の確認ノート: recent changes, then every written item to check — written
-    follow-ups first, then requests with no reply found, one entry per post (owner: no fixed cap).
+    follow-ups first, then requests with no reply found; distinct assertions of one post remain.
     Only quotes what was written — no new clinical instruction is made."""
     talk = replies(db, ev["project_id"])
-    picked, posts = {"written_checks": [], "unanswered": []}, set()
+    picked = {"written_checks": [], "unanswered": []}
     for group, rows in (("written_checks", [i for i in ev["items"] if i["category"] == "followup"]),
                         # an unverified request candidate is not a written request awaiting a reply
                         ("unanswered", [r for r in talk["items"] if r["reply_state"] is None
                                         and not r["unverified"]])):
+        seen = set()
         for row in rows:
-            if row["message_id"] not in posts:
-                posts.add(row["message_id"])
+            identity = _assertion_key(row)
+            if identity not in seen:
+                seen.add(identity)
                 picked[group].append(row)
     return {"view": "previsit", "recent": changes(db, ev, now - days * 86400)["by_discovery"], **picked,
             "next_planned": talk["next_planned"], "as_of": ev["as_of"], "coverage": ev["coverage"]}
@@ -270,19 +338,27 @@ def discrepancies(ev, posters=None) -> dict:
     event dates decide timing (unknown dates are never assumed equal) and nothing is decided.
     With posters, a written provider whose organization has not posted here is listed as a
     candidate too (no post is not no involvement)."""
-    # rule extraction splits one written observation into sibling items of the same post
+    # Only source-verified adjacent explicit headings share an owner block.
+    # Other assertions, even inside one post/category/person, stay separate.
     written = {}
     for item in ev["items"]:
+        group = (item.get("source"), item.get("message_id"), item.get("content_hash"),
+                 item["category"], item["subject"],
+                 ("heading", item["_heading_group"]) if "_heading_group" in item
+                 else ("assertion", _assertion_key(item)))
+        report = written.setdefault(group, {"attrs": {}, "items": []})
+        report["items"].append(item)
         for d in item["details"]:
-            written.setdefault((item["message_id"], item["category"], item["subject"]), {}) \
-                .setdefault(d.get("key"), set()).add(d.get("value"))
+            report["attrs"].setdefault(d.get("key"), set()).add(d.get("value"))
 
     def one(attrs, key):  # a single written value, or None when absent or ambiguous
         values = attrs.get(key) or set()
         return next(iter(values)) if len(values) == 1 else None
 
     groups = {}
-    for (mid, category, subject), attrs in written.items():
+    for group, report in written.items():
+        category, subject = group[3:5]
+        attrs = report["attrs"]
         for key in _COMPARED:
             value = one(attrs, key)
             if value is None:
@@ -291,9 +367,8 @@ def discrepancies(ev, posters=None) -> dict:
                         if key == "value" else (one(attrs, "drug_name"),) if key in _PER_DRUG else ())
             if identity[:1] == (None,):
                 continue  # which observation or drug the value belongs to is not written unambiguously
-            source = next(i for i in ev["items"] if i["message_id"] == mid and i["category"] == category
-                          and i["subject"] == subject
-                          and any(d.get("key") == key for d in i["details"]))
+            source = next(i for i in report["items"]
+                          if any(d.get("key") == key and d.get("value") == value for d in i["details"]))
             groups.setdefault((category, subject, key, identity), []).append(
                 {**source, "value": value,
                  "event_date_text": next((one(attrs, k) for k in _EVENT_KEYS if one(attrs, k)), None)})
@@ -341,21 +416,42 @@ def search(db, project_id, query) -> dict:
 
 
 def transition_course(ev) -> dict:
-    """退院・移行時の経過: items within 14 days of a written admission/discharge and the
-    categories with no record in that window (absence of a record, not of care)."""
-    by_post = {}  # one group per post: its matching items share one window and one no_record line
+    """退院・移行時の経過: retain every transition report; only explicitly affirmed,
+    current patient transitions open a posting-time window, never family/plans/unknowns."""
+    by_post = {}
     for i in ev["items"]:
-        if _TRANSITION.search(i["text"] or "") and isinstance(i["posted_at_ts"], (int, float)):
-            by_post.setdefault(i["message_id"] if i["message_id"] is not None else id(i), []).append(i)
+        quote = i.get("quote") or i.get("text") or ""
+        scopes = []
+        for match in _TRANSITION.finditer(quote):
+            left = max(quote.rfind(mark, 0, match.start()) for mark in "。！？!?;；\n") + 1
+            stop = re.search(r"[。！？!?;；\n]", quote[match.end():])
+            right = match.end() + stop.start() if stop else len(quote)
+            subject, period = source_axes(quote, match.start(), match.end())
+            scopes.append({"subject": subject, "period": period,
+                           "negated": source_polarity(quote, left, right, target_end=match.end()),
+                           "span": [match.start(), match.end()]})
+        if not scopes:
+            continue
+        ts = i.get("posted_at_ts")
+        current = (type(ts) in (int, float) and math.isfinite(ts)
+                   and all(s["subject"] == "patient" and s["period"] == "current"
+                           and s["negated"] is False for s in scopes))
+        kind = "patient_current" if current else "reported"
+        key = (i.get("source"), i.get("message_id") if i.get("message_id") is not None else id(i),
+               i.get("content_hash"), kind)
+        by_post.setdefault(key, []).append((i, scopes))
     out = []
-    for anchors in by_post.values():
+    for key, reports in by_post.items():
+        anchors = [{**item, "transition_scope": scopes} for item, scopes in reports]
         anchor = anchors[0]
-        near = [i for i in ev["items"] if isinstance(i["posted_at_ts"], (int, float))
+        current = key[-1] == "patient_current"
+        near = [i for i in ev["items"] if current and type(i.get("posted_at_ts")) in (int, float)
+                and math.isfinite(i["posted_at_ts"])
                 and abs(i["posted_at_ts"] - anchor["posted_at_ts"]) <= _WINDOW
-                and not any(i is a for a in anchors)]
-        out.append({"anchor": anchor, "anchors": anchors, "nearby": near,
+                and not any(i is original for original, _ in reports)]
+        out.append({"anchor": anchor, "anchors": anchors, "anchor_kind": key[-1], "nearby": near,
                     "no_record": sorted({"medication_management", "adl", "care_services", "followup"}
-                                        - {i["category"] for i in near + anchors})})
+                                        - {i["category"] for i in near + anchors}) if current else []})
     return {"view": "transition_course", "items": out}
 
 

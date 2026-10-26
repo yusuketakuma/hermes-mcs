@@ -20,7 +20,8 @@ PROJECTION_VERSION = 5
 
 def projection_current(meta: dict, doc_hash: str) -> bool:
     """A projection row is reusable only for the same document and version."""
-    return (meta.get("doc_hash") == doc_hash
+    from inference_version import is_current
+    return (is_current(meta) and meta.get("doc_hash") == doc_hash
             and meta.get("projection_version") == PROJECTION_VERSION)
 
 # ---------------------------------------------------------------------
@@ -180,7 +181,9 @@ _CARE_EVENT_KEYWORDS = [
 ]
 
 
-def _v2_med_status(fact: dict) -> str:
+def _v2_med_status(fact: dict, quote=None) -> str | None:
+    import re
+    from clinical_scope import source_axes, CURRENT_MARK
     action = fact.get("action")
     workflow = fact.get("workflow_status")
     if workflow == "cancelled" \
@@ -190,7 +193,36 @@ def _v2_med_status(fact: dict) -> str:
     if workflow in ("considering", "planned", "ordered", "pending",
                     "on_hold"):
         return "planned"
-    return "current"
+    if not isinstance(quote, str) or not quote:
+        return None
+    name = _v2_drug_ref(fact.get('statement') or '')
+    if not name or quote.count(name) != 1:
+        return None
+    start = quote.index(name)
+    subject, status = source_axes(quote, start, start + len(name), default=_v2_llm_subject(fact.get('subject')))
+    if subject != _v2_llm_subject(fact.get('subject')):
+        return None
+    left = max(quote.rfind(mark, 0, start) for mark in '。！？!?;；\n') + 1
+    ends = [quote.find(mark, start) for mark in '。！？!?;；\n']
+    right = min((end for end in ends if end >= 0), default=len(quote))
+    assertion = quote[left:right]
+    for use in re.finditer(r'(?:服用|内服|使用|投与|継続)(?:中|しています|している)', assertion):
+        use_start = left + use.start()
+        between = quote[min(start + len(name), use_start):max(start + len(name), use_start)]
+        # Do not borrow another named medication's present use from a broad quote.
+        if re.search(r'[ァ-ヶー]{2,}', between):
+            continue
+        owner, period = source_axes(quote, use_start, left + use.end(),
+                                    default=_v2_llm_subject(fact.get('subject')))
+        if owner == _v2_llm_subject(fact.get('subject')) and period == 'current':
+            return 'current'
+    if status in ('past', 'planned'):
+        return status
+    if status != 'current':
+        return None
+    if CURRENT_MARK.search(assertion) and re.search(r'(?:開始|再開)(?:しました|した|済み)', assertion):
+        return 'current'
+    return None
 
 
 _CONTEXT_CATEGORY = {
@@ -282,10 +314,14 @@ def project_v2_doc_legacy(doc: dict, *, request_details: bool = False) -> dict:
                     and quantity != "unknown" else None,
                     "action": _V2_TO_LLM_ACTION.get(fact.get("action"),
                                                    "none"),
-                    "status": _v2_med_status(fact),
+                    "status": _v2_med_status(fact, quote),
                     "subject": _v2_llm_subject(fact.get("subject")),
                     "negated": negated}
-            if uncertain:
+            valid_time = fact.get('valid_time')
+            if valid_time in ('current', 'past', 'planned', 'conditional') and valid_time != item['status']:
+                item['status'] = None
+                uncertain = True
+            if uncertain or item['status'] is None:
                 item["unverified"] = True
             if quote:
                 item["evidence"] = quote
@@ -303,21 +339,17 @@ def project_v2_doc_legacy(doc: dict, *, request_details: bool = False) -> dict:
                 item["evidence"] = quote
             out.setdefault("symptoms", []).append(item)
         elif kind == "care_event":
-            # Legacy events have no subject, uncertainty, or plan fields.
-            # Their consumers count completed patient care transitions.
-            if fact.get("polarity") != "affirmed" \
-                    or fact.get("epistemic") not in ("asserted", "reported") \
-                    or _v2_llm_subject(fact.get("subject")) != "patient" \
-                    or fact.get("workflow_status") not in ("performed", "done") \
-                    or fact.get("fact_id") in disputed or not quote:
-                continue
-            statement = fact.get("statement") or ""
-            for event, needles in _CARE_EVENT_KEYWORDS:
-                if any(n in statement for n in needles):
-                    out.setdefault("events", [])
-                    if event not in out["events"]:
-                        out["events"].append(event)
-                    break
+            from clinical_events import canonical_record
+            references = [evidence_by_id[ref] for ref in fact.get('evidence_ids', []) if ref in evidence_by_id]
+            for evidence in references or [None]:
+                record = canonical_record(fact, evidence, disputed=fact.get('fact_id') in disputed)
+                if record not in out.setdefault('event_records', []):
+                    out['event_records'].append(record)
+                if (record['subject'] == 'patient' and record['status'] == 'current'
+                        and record['negated'] is False and not record.get('unverified')
+                        and fact.get('workflow_status') in ('performed', 'done')):
+                    if record['kind'] not in out.setdefault('events', []):
+                        out['events'].append(record['kind'])
         elif kind == "request_pending":
             from clinical_values import absolute_date
             event_time = fact.get("event_time")
@@ -386,6 +418,7 @@ def _carry_canonical(doc: dict, out: dict, evidence_by_id: dict) -> None:
             "epistemic": fact.get("epistemic"),
             "workflow_status": fact.get("workflow_status"),
             "event_time": fact.get("event_time"),
+            "valid_time": fact.get("valid_time"),
             "importance": fact.get("importance"),
             "evidence_ids": bound,
             "evidence_quote": quote})
@@ -409,7 +442,8 @@ def _carry_canonical(doc: dict, out: dict, evidence_by_id: dict) -> None:
 def projection_transition(meta, *, off: bool, enabled: bool, policy: str,
                           source_fingerprint: str | None, revivable: bool) -> tuple[str, str | None]:
     """Plan expiry/revival after source and audited-document observations, without I/O."""
-    if meta is None:
+    from inference_version import is_current
+    if meta is None or not is_current(meta):
         return "expire", "off" if off else "metadata"
     # OFF is permanent revocation; only fact_source-marked rows enter a
     # prospective revival scan, and the I/O owner proves current PASS lineage.

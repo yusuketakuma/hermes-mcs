@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""MCS patient rollup — one consolidated artifact per patient.
+"""MCS patient rollup — one current artifact per patient and inference generation.
 
 Aggregates extract_v1 + extract_llm artifacts + raw message metadata into
-kind='patient_rollup' (one current row per patient — old rollups are
-replaced, not stacked):
+kind='patient_rollup' (same-generation rows are replaced; previous inference
+generations remain comparison history):
 
   last_activity, msg counts, latest vitals (with date), a rule-extracted
   med period candidate, meds seen recently, recent symptoms, open requests
@@ -34,9 +34,12 @@ import _mcs_path  # noqa: F401
 from ledger import Ledger
 from clinical_values import fold_surface, lab_analyte, lab_candidate, patient_item_scope, patient_current_vitals
 import patient_context
+import patient_context_state as context_state
+import inference_version as inference
+import inference_dependency_loss as dependency_loss
 from patient_context import context_items, extract_context, merged_context
 from mcs_queries import (current_extraction_blobs, decode_current_extractions, JST, karte_summary_current, karte_summary_block,
-                         med_is_patient_current, item_unverified)
+                         item_unverified, current_extract_pred, current_fact_pred)
 from mcs_util import HOME
 from writer_lock import acquire_run_lock
 from semantic_projection import PROJECTION_VERSION
@@ -186,6 +189,7 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15) -> dict
       FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC, message_id DESC
     """, (project_id,)).fetchall()
     out: dict = {"project_id": project_id, "generated_at": time.time(),
+                 inference.VERSION_KEY: inference.CURRENT_VERSION,
                  "msg_count": len(msgs),
                  "reply_count": sum(1 for m in msgs if m["parent_id"])}
     # 連携サマリー (#21): the newest karte_summary artifact, or None when
@@ -212,6 +216,7 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15) -> dict
     out["last_activity_ts"] = newest["posted_at_ts"]
 
     arts = current_extraction_blobs(db, project_id)
+    artifact_refs = _clinical_artifact_refs(db, project_id, arts)
     ref_mids = {r[0] for r in db.execute(
         "SELECT DISTINCT a.message_id FROM artifacts a JOIN messages m "
         "ON m.message_id=a.message_id WHERE a.kind=? AND m.project_id=?",
@@ -222,14 +227,8 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15) -> dict
     med_period = None
     as_of = datetime.fromtimestamp(out["generated_at"], JST).date()
     next_period_check = None
-    # name -> (bucket, item, posted_at): every med name resolves ONCE,
-    # on its newest mention — a stop/negation/past report newer than a
-    # 'current' mention suppresses it; an item missing status/subject
-    # and a rule-extracted name are candidates, never silently current
-    # (F06/F08)
     med_state = {}
-    sym_pos = {}   # term -> latest positive ts (msgs iterated newest-first)
-    sym_neg = {}   # term -> latest negated ts
+    symptom_facts = {}
     # fact_id -> carried canonical fact: newest generation wins per id
     # (msgs iterate newest-first), evidence/statement/kind ride along so
     # slot-less canonical categories stay enumerable in the read model.
@@ -240,10 +239,8 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15) -> dict
     next_planned = None
     senders = {}
     summary = None
-    posted_by_ts = {}
     for m in msgs:
         ts = m["posted_at_ts"] or 0
-        posted_by_ts.setdefault(ts, m["posted_at"] or f"msg:{m['message_id']}")
         sender_id = normalize_sender_id(m["sender_id"])
         senders[m["sender_name"] or "?"] = \
             senders.get(m["sender_name"] or "?", 0) + 1
@@ -325,8 +322,12 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15) -> dict
                     and isinstance(meds[i], dict)
                     and meds[i].get("name") == ref["name"]):
                 meds[i] = {**meds[i], "ref": ref}
-        _med_states(m, v1, lm, med_state, patient_name=patient_name)
-        _symptom_ts(m, v1, lm, ts, sym_pos, sym_neg, patient_name=patient_name)
+        source_kind = next((kind for kind in ("semantic_facts_v4", "canonical_projection", "extract_llm")
+                            if kind in blobs), "extract_llm")
+        _med_states(m, v1, lm, med_state, patient_name=patient_name,
+                    source_kind=source_kind, artifact_refs=artifact_refs)
+        _symptom_ts(m, v1, lm, symptom_facts, patient_name=patient_name,
+                    source_kind=source_kind, artifact_refs=artifact_refs)
         root = m["parent_id"] or m["message_id"]
         _collect_requests(m, v1, lm, root, ts, sender_id, requests, req_thread, request_limit)
         for f in _dicts(lm.get("canonical_facts")):
@@ -343,14 +344,12 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15) -> dict
                 and v1["next_planned"]:
             next_planned = v1["next_planned"]
 
-    # resolve: a positive symptom stands only if no matching negation is
-    # newer (substring match covers 「浮腫」 vs 「浮腫あり」等)
-    symptoms = {}
-    for t, pts in sym_pos.items():
-        overridden = any(nts >= pts and (nt in t or t in nt)
-                         for nt, nts in sym_neg.items())
-        if not overridden:
-            symptoms[t] = posted_by_ts.get(pts, str(pts))
+    clinical_facts = dependency_loss.bind_facts(db, [*med_state.values(), *symptom_facts.values()])
+    dependencies = dependency_loss.read(db, project_id)
+    clinical = context_state.project(clinical_facts, dependency_losses=dependencies["losses"])
+    out["clinical_state"] = {**clinical, "facts": [_clinical_reference(fact) for fact in clinical_facts],
+        "dependencies": {key: dependencies[key] for key in ("complete", "gaps", "signature", "coverage")}}
+    groups = {fid: group for group, ids in clinical["groups"].items() for fid in ids}
     if latest_vitals:
         out["latest_vitals"] = latest_vitals
     latest_labs = {k: v for k, v in latest_labs.items() if v}
@@ -363,15 +362,18 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15) -> dict
     for bucket, key, cap in (("current", "medications", 20),
                              ("unverified", "unverified_medications", 20),
                              ("planned", "planned_medications", 10)):
-        rows = [{"name": k, "dose": v[1].get("dose"), "last": v[2],
-                 **{f: v[1][f] for f in ("route", "freq", "prn", "ref")
-                    if f in v[1]}}
-                for k, v in med_state.items() if v[0] == bucket][:cap]
+        rows = [{"name": fact["reported"]["name"], "dose": fact["reported"].get("dose"),
+                 "last": fact["posted_at"],
+                 **{f: fact["reported"][f] for f in ("route", "freq", "prn", "ref") if f in fact["reported"]}}
+                for fact in med_state.values() if _med_bucket(fact, groups[fact["id"]]) == bucket][:cap]
         if rows:
             out[key] = rows
+    symptoms = [{"symptom": fact["reported"]["text"], "last": fact["posted_at"]}
+                for fact in symptom_facts.values() if groups[fact["id"]] == "current"
+                and not fact["temporal"].get("unknown")
+                and fact["temporal"].get("symptom_state") == "present"]
     if symptoms:
-        out["recent_symptoms"] = [{"symptom": k, "last": v}
-                                  for k, v in list(symptoms.items())[:20]]
+        out["recent_symptoms"] = symptoms[:20]
     _match_request_replies(db, project_id, req_thread, requests, msgs, out["generated_at"])
     if requests:
         out["recent_requests"] = requests[:request_limit]
@@ -436,84 +438,88 @@ def _period_candidates(m, v1: dict, as_of, *, patient_name=None):
     return best, earliest
 
 
-def _med_states(m, v1: dict, lm: dict, med_state: dict, *, patient_name=None):
-    """name -> (bucket, item, posted_at): every med name resolves ONCE,
-    on its newest mention — a stop/negation/past report newer than a
-    'current' mention suppresses it; an item missing status/subject
-    and a rule-extracted name are candidates, never silently current
-    (F06/F08)."""
-    has_source = "body_text" in m.keys()
-    mentioned_meds = {x.get("name") for x in _dicts(lm.get("meds"))
-                      if isinstance(x.get("name"), str)}
-    # Chunk merging retains source order. The last mention within a
-    # post wins; another person's mention never changes this patient's state.
-    for x in reversed(_dicts(lm.get("meds"))):
-        name = x.get("name")
-        if not isinstance(name, str) or name in ("", "処方薬", "薬"):
-            continue
-        if x.get("subject") in ("family", "other"):
-            continue
-        scope = (patient_item_scope(x, m["body_text"], patient_name=patient_name, surface=name)
-                 if has_source else "patient")
-        if scope in ("family", "other", "unknown"):
-            continue
-        if name in med_state:
-            continue  # newest mention already decided this name
-        if item_unverified(x):
-            med_state[name] = ("unverified", x, m["posted_at"])
-        elif x.get("action") == "stop" or x.get("negated") \
-                or x.get("status") == "past":
-            med_state[name] = ("suppressed", x, m["posted_at"])
-        elif scope == "patient" and med_is_patient_current(x) \
-                and x.get("status", "current") == "current":
-            med_state[name] = ("current", x, m["posted_at"])
-        elif not x.get("negated") \
-                and x.get("subject", "patient") == "patient" \
-                and x.get("status") == "planned":
-            med_state[name] = ("planned", x, m["posted_at"])
-        else:
-            # stop/past/negated/other-person — suppresses any older
-            # 'current' mention of the same name
-            med_state[name] = ("suppressed", x, m["posted_at"])
-    for x in _dicts(v1.get("medications")):
-        name = x.get("name")
-        if has_source and patient_item_scope(
-                x, m["body_text"], patient_name=patient_name, surface=name) != "patient":
-            continue
-        if isinstance(name, str) and name and name not in med_state \
-                and name not in mentioned_meds:
-            med_state[name] = ("unverified", x, m["posted_at"])
+def _med_states(m, v1: dict, lm: dict, med_state: dict, *, patient_name=None,
+                source_kind="extract_llm", artifact_refs=None):
+    """Collect every distinct medication report for the common source-time projection."""
+    for source, field, values in ((source_kind, "meds", lm.get("meds")), ("extract_v1", "medications", v1.get("medications"))):
+        for index, item in enumerate(values if isinstance(values, list) else []):
+            if not isinstance(item, dict):
+                continue
+            fact = context_state.clinical_state_fact(m, item, "medications", source)
+            if fact is not None:
+                fact["source_ref"] = {"kind": source, "field": field, "index": index,
+                    "artifact_id": (artifact_refs or {}).get((m["message_id"], source)) if "message_id" in m.keys() else None}
+                if artifact_refs is not None and fact["source_ref"]["artifact_id"] is None:
+                    fact["temporal"]["unknown"] = True
+                med_state.setdefault(fact["id"], fact)
 
 
-def _symptom_ts(m, v1: dict, lm: dict, ts,
-                sym_pos: dict, sym_neg: dict, *, patient_name=None):
-    """term -> latest positive/negated ts (msgs iterated newest-first)."""
-    for s in v1.get("symptoms") \
-            if isinstance(v1.get("symptoms"), list) else []:
-        if not isinstance(s, str) or not s:
+def _symptom_ts(m, v1: dict, lm: dict, facts: dict, *, patient_name=None,
+                source_kind="extract_llm", artifact_refs=None):
+    """Collect symptom reports without turning posting order into resolution evidence."""
+    for index, s in enumerate(v1.get("symptoms") if isinstance(v1.get("symptoms"), list) else []):
+        if isinstance(s, str) and s:
+            fact = context_state.clinical_state_fact(m, {"text": s}, "symptoms", "extract_v1")
+            if fact is not None:
+                fact["source_ref"] = {"kind": "extract_v1", "field": "symptoms", "index": index,
+                    "artifact_id": (artifact_refs or {}).get((m["message_id"], "extract_v1")) if "message_id" in m.keys() else None}
+                if artifact_refs is not None and fact["source_ref"]["artifact_id"] is None:
+                    fact["temporal"]["unknown"] = True
+                facts.setdefault(fact["id"], fact)
+    for index, item in enumerate(lm.get("symptoms") if isinstance(lm.get("symptoms"), list) else []):
+        if not isinstance(item, dict):
             continue
-        if patient_item_scope({}, m["body_text"], patient_name=patient_name, surface=s) != "patient":
-            continue
-        if any(x.get("text") == s for x in _dicts(lm.get("symptoms"))):
-            continue
-        sym_pos.setdefault(s, ts)
-    for s in _dicts(lm.get("symptoms")):
-        t = s.get("text")
-        if not isinstance(t, str) or not t:
-            continue
-        if s.get("subject") in ("family", "other") \
-                or item_unverified(s):
-            continue
-        if patient_item_scope(s, m["body_text"], patient_name=patient_name, surface=t) != "patient":
-            continue
-        # LLM polarity: a negation newer than a positive mention
-        # RESOLVES the symptom — it must cancel v1/rule positives,
-        # not just be skipped (Oracle B24). resolved/past statuses
-        # resolve the same way — they are not ongoing symptoms.
-        if s.get("negated") or s.get("status") in ("resolved", "past"):
-            sym_neg.setdefault(t, ts)
-        else:
-            sym_pos.setdefault(t, ts)
+        fact = context_state.clinical_state_fact(m, item, "symptoms", source_kind)
+        if fact is not None:
+            fact["source_ref"] = {"kind": source_kind, "field": "symptoms", "index": index,
+                "artifact_id": (artifact_refs or {}).get((m["message_id"], source_kind)) if "message_id" in m.keys() else None}
+            if artifact_refs is not None and fact["source_ref"]["artifact_id"] is None:
+                fact["temporal"]["unknown"] = True
+            facts.setdefault(fact["id"], fact)
+
+
+def _med_bucket(fact, group):
+    temporal = fact["temporal"]
+    if temporal.get("subject") in ("family", "other") or group == "history":
+        return "history"
+    if temporal.get("unknown") or group in ("unknown", "conflict"):
+        return "unverified"
+    if group == "plan":
+        return "planned"
+    if group == "current" and temporal.get("use_state") == "using":
+        return "current"
+    if group == "current" and temporal.get("use_state") in ("stopped", "held"):
+        return "suppressed"
+    return "unverified"
+
+
+def _clinical_axes(fact):
+    temporal = fact.get("temporal") or {}
+    return {**{key: fact.get(key) for key in ("id", "project_id", "message_id", "content_hash", "category", "source_ref", "dependency_origin")},
+        "details": [{"key": d["key"], "value": d["value"]} for d in fact.get("details", [])
+                    if isinstance(d, dict) and d.get("key") in ("drug_name", "symptom", "unit", "condition", "body_site", "actual_dose", "actual_frequency")
+                    and isinstance(d.get("value"), str)],
+        "temporal": {key: temporal.get(key) for key in
+                     ("subject", "period", "event_day", "as_of_day", "state_day", "posted_day", "posted_at_ts", "ongoing", "use_state", "symptom_state",
+                      "action", "negated", "resolution", "unknown", "current_cue")}}
+
+
+def _clinical_reference(fact):
+    """Persist compact source references and normalized values, not another copy of the quote."""
+    return {**_clinical_axes(fact), "posted_at": fact.get("posted_at"),
+            "attributes": {key: fact["reported"][key] for key in
+                ("name", "text", "dose", "freq", "route", "prn", "subject", "status", "action", "negated", "unverified", "onset", "duration")
+                if key in fact["reported"]}}
+
+
+def _clinical_artifact_refs(db, project_id, blobs):
+    """Read current source identities once for the same borrowed snapshot as the DTO blobs."""
+    return {(row["message_id"], row["kind"]): row["artifact_id"] for row in db.execute(f"""
+        SELECT a.artifact_id,a.message_id,a.kind,a.content FROM artifacts a JOIN messages m ON m.message_id=a.message_id
+        WHERE m.project_id=? AND a.kind IN ('extract_v1','extract_llm','canonical_projection','semantic_facts_v4')
+        {current_extract_pred()}
+        AND (a.kind IN ('extract_v1','extract_llm') OR (1=1 {current_fact_pred()}))
+        ORDER BY a.artifact_id""", (project_id,)) if row["content"] == blobs.get(row["message_id"], {}).get(row["kind"])}
 
 
 
@@ -538,6 +544,9 @@ def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
             meta = json.loads(meta)
         except (ValueError, TypeError, RecursionError):
             meta = None
+    if not inference.is_current(meta) or not inference.is_current(roll):
+        # Borrow the caller's snapshot; old cached clinical claims are never current.
+        return build_rollup(db, project_id)
     stamped = meta.get("med_ref_generation") if isinstance(meta, dict) else None
     marker = db.execute("SELECT 1 FROM artifacts WHERE kind=? LIMIT 1",
                         (PROGRESS_KIND,)).fetchone() is not None
@@ -628,7 +637,7 @@ def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
                 raise  # a failed current read cannot prove that requests are absent
             current = {}  # a legacy snapshot cannot prove scoped current fields
         clinical_keys = (("latest_vitals", "recent_labs", "med_period_candidate", "medications",
-                          "unverified_medications", "planned_medications", "recent_symptoms")
+                          "unverified_medications", "planned_medications", "recent_symptoms", "clinical_state")
                          if scoped or projection_stale else ("latest_vitals",) if clinical_stale else ())
         if request_stale:
             clinical_keys += ("recent_requests",)
@@ -640,9 +649,9 @@ def current_cached_refs(db, project_id: int, roll: dict, meta) -> dict:
     return out
 
 
-def _newest_source_ts(ledger, project_id: int) -> float:
+def _newest_source_ts(db, project_id: int) -> float:
     """Newest source stamp dirty_projects compares to generated_at."""
-    return ledger.db.execute(
+    return db.execute(
         "SELECT MAX(IFNULL((SELECT MAX(created_at) FROM artifacts"
         " WHERE (project_id=:p AND kind IN ('extract_v1','extract_llm',"
         "'canonical_projection','semantic_facts_v4','karte_summary','project_metadata_v1',"
@@ -669,8 +678,53 @@ def _message_source_signature(db, project_id, now):
     payload = (tuple(patient) if patient else None, [tuple(a) for a in context],
                registered_data(db, "aggregate", project_id, None),
                [tuple(r[:-1]) for r in rows],
-               _unrefreshed_ids([(r[0], r[-1]) for r in rows], now))
+               _unrefreshed_ids([(r[0], r[-1]) for r in rows], now),
+               dependency_loss.read(db, project_id)["signature"])
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
+
+
+def inference_coverage(db, project_id: int, *, now=None) -> dict:
+    """Verify the saved rollup against current inputs on the caller's connection."""
+    now = time.time() if now is None else now
+    dependencies = dependency_loss.read(db, project_id)
+    result = {inference.VERSION_KEY: inference.CURRENT_VERSION,
+              "current": False, "status": "missing", "source_sig": None,
+              "dependencies": {key: dependencies[key] for key in ("complete", "gaps", "signature", "coverage")}}
+    if not dependencies["complete"]:
+        result["status"] = "source_gap"
+        return result
+    rows = db.execute(
+        "SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? AND "
+        + inference.current_meta_pred("meta"), (KIND, project_id)).fetchall()
+    if not rows:
+        return result
+    result["status"] = "stale"
+    if len(rows) != 1:
+        return result
+    try:
+        content, meta = (json.loads(rows[0][key]) for key in ("content", "meta"))
+    except (TypeError, ValueError, RecursionError):
+        return result
+    if not inference.is_current(content) or not inference.is_current(meta):
+        return result
+    generated = meta.get("generated_at")
+    next_check = meta.get("next_med_period_check")
+    if (type(generated) not in (int, float) or not 0 <= generated <= now < 1e12
+            or meta.get("period_check_version") != PERIOD_CHECK_VERSION
+            or next_check is not None and (
+                type(next_check) not in (int, float) or not now < next_check < 1e12)
+            or _has_projection(db, project_id)
+            and meta.get("projection_version") != PROJECTION_VERSION):
+        return result
+    source_sig = _message_source_signature(db, project_id, now)
+    result["source_sig"] = source_sig
+    ref_sig = db.execute(_REF_SIG_SQL.format(pid="?"), (REF_KIND, project_id)).fetchone()[0]
+    if (meta.get("message_sig") == source_sig
+            and meta.get("med_ref_sig") == ref_sig
+            and meta.get("med_ref_generation") == generation_signature(db)
+            and _newest_source_ts(db, project_id) <= generated):
+        result.update(current=True, status="current")
+    return result
 
 
 def rebuild(ledger, project_id: int) -> int:
@@ -678,7 +732,9 @@ def rebuild(ledger, project_id: int) -> int:
     a patient with NO rollup (Oracle B22). An unchanged rebuild (all
     but generated_at equal) keeps the content and id; it only advances
     meta.generated_at when a newer source would otherwise keep it dirty."""
-    # sign before building: a rewrite racing the build stays dirty (M5)
+    # Guard all inputs, including withdrawal witnesses, without holding a writer during aggregation.
+    data_version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
+    changes = ledger.db.total_changes
     ref_generation = generation_signature(ledger.db)
     message_sig = _message_source_signature(ledger.db, project_id, time.time())
     has_projection = _has_projection(ledger.db, project_id)
@@ -689,11 +745,15 @@ def rebuild(ledger, project_id: int) -> int:
     new = json.loads(json.dumps(d, ensure_ascii=False))
     new.pop("generated_at", None)
     with ledger.db:
-        # read + decide inside the write txn: a concurrent DELETE
-        # (semantic_store / ledger / semantic_v4) just means no match → INSERT
+        if not ledger.db.in_transaction:
+            ledger.db.execute("BEGIN IMMEDIATE")
+        if (ledger.db.total_changes != changes
+                or ledger.db.execute("PRAGMA data_version").fetchone()[0] != data_version):
+            raise sqlite3.OperationalError("inference_rollup_source_changed")
         old = ledger.db.execute(
             "SELECT artifact_id, content, meta FROM artifacts"
-            " WHERE kind=? AND project_id=?", (KIND, project_id)).fetchall()
+            " WHERE kind=? AND project_id=? AND " + inference.current_meta_pred("meta"),
+            (KIND, project_id)).fetchall()
         if len(old) == 1:
             try:
                 oc, om = json.loads(old[0]["content"]), json.loads(
@@ -716,23 +776,26 @@ def rebuild(ledger, project_id: int) -> int:
                     # stays dirty
                     g = om.get("generated_at")
                     if type(g) not in (int, float) or not 0 <= g < 1e12 \
-                            or _newest_source_ts(ledger, project_id) > g \
+                            or _newest_source_ts(ledger.db, project_id) > g \
                             or om.get("message_sig") != message_sig:
                         om["generated_at"] = d["generated_at"]
                         om["message_sig"] = message_sig
                         ledger.db.execute(
                             "UPDATE artifacts SET meta=? WHERE artifact_id=?",
                             (json.dumps(om), old[0]["artifact_id"]))
+                        ledger.bump_inference_analysis_epoch_tx()
                     return old[0]["artifact_id"]
         ledger.db.execute(
-            "DELETE FROM artifacts WHERE kind=? AND project_id=?",
+            "DELETE FROM artifacts WHERE kind=? AND project_id=? AND "
+            + inference.current_meta_pred("meta"),
             (KIND, project_id))
         cur = ledger.db.execute(
             "INSERT INTO artifacts(kind,project_id,message_id,content,"
             "model,meta,created_at) VALUES(?,?,?,?,?,?,?)",
             (KIND, project_id, None,
              json.dumps(d, ensure_ascii=False), "rules-v1",
-             json.dumps({"generated_at": d["generated_at"],
+             json.dumps({inference.VERSION_KEY: inference.CURRENT_VERSION,
+                         "generated_at": d["generated_at"],
                          "message_sig": message_sig,
                          "period_check_version": PERIOD_CHECK_VERSION,
                          "projection_version": PROJECTION_VERSION,
@@ -740,6 +803,7 @@ def rebuild(ledger, project_id: int) -> int:
                          d.get("_next_med_period_check"),
                          "med_ref_sig": ref_sig,
                          "med_ref_generation": ref_generation}), time.time()))
+        ledger.bump_inference_analysis_epoch_tx()
     return cur.lastrowid
 
 
@@ -782,11 +846,12 @@ def dirty_projects(ledger, *, now=None) -> list:
                    MAX(CASE WHEN json_valid(meta)
                             THEN json_extract(meta,'$.projection_version')
                             END) projection_version
-                 FROM artifacts WHERE kind=?
+                 FROM artifacts WHERE kind=? AND {inference_current}
                  GROUP BY project_id) r ON r.project_id=p.project_id
       WHERE EXISTS (SELECT 1 FROM messages m3
                     WHERE m3.project_id=p.project_id)
-    """.replace("{sig}", _REF_SIG_SQL.format(pid="p.project_id")),
+    """.replace("{sig}", _REF_SIG_SQL.format(pid="p.project_id"))
+       .replace("{inference_current}", inference.current_meta_pred("meta")),
         (REF_KIND, KIND)).fetchall()
     now = time.time() if now is None else now
     ref_generation = generation_signature(ledger.db)

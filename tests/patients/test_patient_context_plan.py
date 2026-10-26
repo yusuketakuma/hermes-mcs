@@ -43,7 +43,7 @@ def test_scan_cursor_and_complete_quoted_unit_do_not_mutate_inputs():
     original = copy.deepcopy((source, saved))
     chunks, cursor, reusable, items, covered = plan.scan_plan(source, saved)
     assert chunks == [item["text"]] and cursor == 0 and reusable == {}
-    assert items == [item] and covered is True
+    assert items == [item] and covered is False  # A complete quote does not prove complete extraction.
     assert plan.scan_items({"patient_context": [item]}, chunks[0]) == [item]
     with pytest.raises(ValueError, match="nightly_unsupported_items"):
         plan.scan_items({"patient_context": [{**item, "text": "家族は転居を希望しています。"}]}, chunks[0])

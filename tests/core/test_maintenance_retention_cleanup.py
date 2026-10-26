@@ -338,3 +338,20 @@ def test_cloud_retention_is_62_days_and_jev_stays_seven(tmp_path):
                  "cloud_compare_v1", "cloud_usage_disposition"):
         assert len(db.artifacts(kind)) == 3
     db.close()
+
+
+def test_context_scan_generations_and_all_fact_chunks_survive_history_retention(tmp_path):
+    db = _ledger(tmp_path)
+    now = time.time()
+    ids = []
+    for kind, version in (('patient_context_scan_v1', '0.1'), ('patient_context_scan_v1', '1.0'),
+                          ('patient_context_scan_chunk_v1', '1.0'), ('canonical_projection', '1.0')):
+        rid = db.artifact_add(kind, '{"facts":[]}', meta={'inference_engine_version': version})
+        ids.append(rid)
+        db.db.execute('UPDATE artifacts SET created_at=? WHERE artifact_id=?', (now-400*86400, rid))
+    db.db.commit()
+    before = [tuple(row) for row in db.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    maintenance.prune_history(db.db, now=now)
+    assert [tuple(row) for row in db.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
+    assert [row[0] for row in db.db.execute('SELECT artifact_id FROM artifacts ORDER BY artifact_id')] == ids
+    db.close()

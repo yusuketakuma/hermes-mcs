@@ -1,5 +1,6 @@
 """Validate source-grounded extraction fields and merge document chunks without I/O."""
 import clinical_scope
+import clinical_events
 import json
 import math
 import re
@@ -7,7 +8,6 @@ import unicodedata
 
 import clinical_values
 import extract
-import extract_schema
 import patient_context
 from patient_context import CATEGORIES, context_items
 from mcs_util import locate_quote_span
@@ -65,6 +65,8 @@ def apply_vital_policy(out: dict, body: str | None,
 # fragments or slips into another language's output — structural
 # characters never belong in a Japanese one-liner.
 _BAD_TEXT = re.compile(r'[{}\[\]"\n\r\t]')
+SUMMARY_MAX_CHARS = 60
+POINT_MAX_CHARS = 40
 
 
 def _cap(v, maxlen: int):
@@ -74,14 +76,13 @@ def _cap(v, maxlen: int):
 
 
 def _clean_text(v, maxlen: int) -> str | None:
-    """Strip a free-text field; reject JSON-structural fragments and
-    cap length. None means the value is not a usable string."""
+    """Reject invalid or overlength free text without cutting off its qualifiers."""
     if not isinstance(v, str):
         return None
     s = v.strip()
-    if not s or _BAD_TEXT.search(s):
+    if not s or len(s) > maxlen or _BAD_TEXT.search(s):
         return None
-    return s[:maxlen]
+    return s
 
 
 _RX_ACTS = {"start", "stop", "change", "decrease", "increase", "none", None}
@@ -252,6 +253,89 @@ class Validator:
                 if item.get(k) and not self.grounded(item[k]):
                     del item[k]
 
+    def uncertain(self, item, key, *, nullable=False):
+        value = item.get(key)
+        if value is not None:
+            self.miss(value)
+        if nullable:
+            item[key] = None
+        else:
+            item.pop(key, None)
+        item["unverified"] = True
+
+    def assertion(self, item, surfaces=(), *, request=False, sender=None):
+        """Locate one target assertion inside its exact evidence, never another item's clause."""
+        quote = item.get("evidence")
+        span = locate_quote_span(self.body, quote) if isinstance(quote, str) and self.body is not None else None
+        if span is None:
+            return None
+        normalize = clinical_values.request_action_key if request else flat_text
+        segments = [(m.start(), m.end(), m[0]) for m in re.finditer(r"[^。！？!?;；\n]+", quote) if m[0].strip()]
+        if not request:
+            segments = [(left + m.start(), left + m.end(), m[0])
+                        for left, _, text in segments for m in re.finditer(r"[^、,]+", text) if m[0].strip()]
+        elif sum(bool(re.search(r"確認|連絡|報告|中止|開始|教え|送付|調べ", text))
+                 for text in re.split(r"[、,]", quote)) > 1:
+            segments = [(left + m.start(), left + m.end(), m[0])
+                        for left, _, text in segments for m in re.finditer(r"[^、,]+", text) if m[0].strip()]
+        def supports(term, text):
+            wanted, source = normalize(term), normalize(text)
+            if not request:
+                return wanted in source
+            # A suffix inside a different object name is not the same request.
+            for match in re.finditer(re.escape(wanted), source):
+                prefix = source[:match.start()]
+                if not prefix or re.search(r"へ$|に$|を$|から$|より$|[:：]$", prefix):
+                    return True
+                if sender and re.search(re.escape(normalize(sender)) + r"(?:は|が)$", prefix):
+                    return True
+            return False
+        hits = [(left, right, text, term) for left, right, text in segments
+                for term in surfaces if isinstance(term, str) and normalize(term) and supports(term, text)]
+        selected = {(left, right): (text, term) for left, right, text, term in hits}
+        if len(selected) != 1:
+            if selected or len(segments) != 1 or request:
+                return None
+            left, right, text = segments[0]
+            term = None
+            item["unverified"] = True  # Keep an unresolved paraphrase; do not invent a semantic match.
+        else:
+            (left, right), (text, term) = next(iter(selected.items()))
+        inner = locate_quote_span(text, term) if term is not None else None
+        start = span[0] + left + (inner[0] if inner else 0)
+        end = span[0] + left + (inner[1] if inner else len(text))
+        return text, start, end, span[0] + right
+
+    def identity_attributes(self, item, assertion, *, symptom=False):
+        text, start, end, assertion_end = assertion
+        subject, period = clinical_scope.source_axes(self.body, start, end)
+        if (item.get("subject") is not None and subject in _MED_SUBJECTS
+                and item["subject"] != subject):
+            self.uncertain(item, "subject")
+        elif subject == "unknown":
+            self.uncertain(item, "subject")
+        status = item.get("status")
+        incompatible = ((period == "past" and status not in (None, "past", "resolved"))
+                        or period in ("planned", "conditional") and status is not None
+                        and (symptom or status != "planned"))
+        if incompatible:
+            self.uncertain(item, "status")
+        tail = self.body[end:assertion_end]
+        # The same source-bound polarity helper is also used by context views.
+        polarity = clinical_scope.source_polarity(self.body, start, assertion_end,
+                                                  target_end=end, medication=not symptom)
+        if polarity is not None and item.get("negated") is not None and item["negated"] != polarity:
+            self.uncertain(item, "negated")
+        elif re.search(r"かもしれ|不明|疑い|ではない|ない(?:こと|わけ|訳)はない", tail):
+            self.uncertain(item, "negated")
+        if symptom:
+            resolved = clinical_scope.source_resolution(self.body, start, assertion_end, target_end=end)
+            continuing = re.search(r"持続|続いて|残って", tail)
+            if status in ("new", "ongoing") and resolved is True:
+                self.uncertain(item, "status")
+            elif status == "resolved" and (continuing or resolved is not True):
+                self.uncertain(item, "status")
+
     def miss(self, q):
         """Count an unlocated quote so the repair pass re-asks for it."""
         self.ev_dropped += 1
@@ -272,6 +356,8 @@ class Validator:
                     reasons.append(reason)
 
     def ev(self, item: dict, source: dict):
+        if source.get("unverified") is True:
+            item["unverified"] = True
         q = source.get("evidence")
         if q is None:
             # no evidence key at all — the claim is real input but
@@ -409,7 +495,6 @@ class Validator:
                 item["status"] = st
             if sj:
                 item["subject"] = sj
-            self.unlift(item, ("dose", "freq"))
             if st is None or sj is None or "negated" not in m:
                 item["unverified"] = True
             self.ev(item, m)
@@ -434,31 +519,30 @@ class Validator:
                     if scopes:
                         wrong_person = any(s in _MED_SUBJECTS and s != sj for s in scopes)
                 if wrong_person:
-                    self.drop_item("meds", f"meds[{index}].subjectと引用の対象者が一致しません。"
-                                   "薬剤名を含む本文の引用と服用者を対応させて再抽出してください。")
-                    continue
+                    self.uncertain(item, "subject")
                 if missing_name and re.search(r"同薬|同剤|当該薬|その薬|あの薬|上記", quote):
                     # Preserve a possible stop/reference, without confirming an unproved identity.
-                    self.miss(item.pop("evidence"))
+                    self.miss(quote)
                     item["unverified"] = True
                 elif missing_name:
                     self.drop_item("meds", f"meds[{index}].evidenceにnameが含まれていません。"
                                    "別の文を流用せず、薬剤名を含む本文を引用し、服用者のsubjectを確認してください。")
                     continue
-                # Only the named drug's direct non-use contradicts its current affirmation.
-                if (st == "current" and m.get("negated") is False
-                        and scope not in ("past", "planned", "conditional")
-                        and flat_text(quote).count(flat_text(item["name"])) == 1 and re.search(
-                        re.escape(flat_text(item["name"])) + extract_schema.RX_DOSE + extract_schema.RX_PARTICLE
-                        + r"(?:(?:服用|内服|使用|投与)(?:は|を|も)?"
-                          r"(?:して(?:いない|いません)|せず|しない|しません)"
-                          r"|飲(?:んで(?:いない|いません)|まず|まない|みません)"
-                          r"|使(?:わず|わない|って(?:いない|いません)))"
-                          r"(?!こと|事|わけ|訳|場合|とき|時|なら|と|か|が|けど|けれど|ものの"
-                          r"|で|だ|ほう|方|よう|予定|つもり|日|回)", flat_text(quote))):
-                    self.drop_item("meds", f"meds[{index}]のcurrent・negated:falseが引用の不使用と矛盾します。"
-                                   "本文の服用状況を再確認し、否定と時点を保持してください。")
-                    continue
+                assertion = self.assertion(item, (item["name"],))
+                if assertion is None:
+                    for key in ("dose", "freq", "route", "prn"):
+                        if item.get(key) is not None:
+                            self.uncertain(item, key, nullable=key == "dose")
+                    item["unverified"] = True
+                else:
+                    self.identity_attributes(item, assertion)
+                    for key in ("dose", "freq", "route", "prn"):
+                        if item.get(key) is not None and not clinical_values.medication_attribute_supported(
+                                key, item[key], assertion[0]):
+                            self.uncertain(item, key, nullable=key == "dose")
+                    if m.get("prn") is False and not clinical_values.medication_attribute_supported(
+                            "prn", False, assertion[0]):
+                        item["unverified"] = True
             item["normalized"] = clinical_values.medication_surface(item["name"])
             meds.append(item)
         out["meds"] = meds
@@ -504,6 +588,16 @@ class Validator:
             if st is None or sj is None or "negated" not in s:
                 item["unverified"] = True
             self.ev(item, s)
+            terms = [term for term in (*clinical_scope.SYMPTOMS, "頭痛", "腹痛", "胸痛", "腰痛")
+                     if term in item["text"]]
+            for aliases in (("吐き気", "嘔気"), ("むくみ", "浮腫")):
+                if any(term in item["text"] for term in aliases):
+                    terms.extend(aliases)
+            assertion = self.assertion(item, terms or (item["text"],))
+            if assertion is not None:
+                self.identity_attributes(item, assertion, symptom=True)
+            elif item.get("evidence"):
+                item["unverified"] = True
             syms.append(item)
         out["symptoms"] = syms
 
@@ -574,26 +668,14 @@ class Validator:
         out["labs"] = labs
 
     def events(self, d: dict, out: dict):
-        if "events" not in d:
+        if 'events' not in d and 'event_records' not in d:
             return
-        if not isinstance(d["events"], list):
-            self.drop_item("events")
-            return
-        evs = []
-        for e in d["events"]:
-            if not isinstance(e, str) or e not in _EVENTS:
-                continue
-            cue = EVENT_CUES.get(e)
-            if cue is not None and self.body is not None \
-                    and not cue.search(self.body):
-                self.items_dropped += 1
-                if self.drops is not None:
-                    lst = self.drops.setdefault("events", [])
-                    if len(lst) < 5 and e not in lst:
-                        lst.append(e)
-                continue
-            evs.append(e)
-        out["events"] = evs
+        events, records, dropped = clinical_events.normalize_events(
+            d.get('events'), d.get('event_records'), self.body, cues=EVENT_CUES)
+        for _ in range(dropped):
+            self.drop_item('event_records')
+        out['events'] = events
+        out['event_records'] = records
 
     def requests(self, d: dict, out: dict):
         if "requests" not in d:
@@ -617,40 +699,54 @@ class Validator:
             # injected string must not ride through unbounded).
             item = {"to": _cap(r.get("to"), 30),
                     "action": _cap(r.get("action"), 60)}
-            # from/due_text are kept only when the body states them
-            if isinstance(r.get("from"), str) \
-                    and self.grounded(r["from"].strip()[:30]):
-                item["from"] = r["from"].strip()[:30]
             kind = self.enum(r, "kind", _REQ_KINDS)
             if kind:
                 item["kind"] = kind
-            # a condition is a quote: stored only as the body's own
-            # span, never as the model's rendering (no fabricated 〜なら).
-            # An unlocated one is a counted miss (repair re-asks) and the
-            # request stays only as an unverified candidate — never an
-            # unconditional instruction.
-            cond = _clean_text(r.get("condition"), 60)
-            span = locate_quote_span(self.body, cond) \
-                if cond and self.body is not None else None
-            if span is not None:
-                item["condition"] = self.body[span[0]:span[1]]
-            elif cond:
-                self.miss(cond)
-                item["unverified"] = True
-            elif r.get("unverified") is True:
-                item["unverified"] = True   # re-validated checkpoint
-            if isinstance(r.get("due"), str) \
-                    and _valid_date(r["due"].strip()):
-                item["due"] = r["due"].strip()
-            # F09: relative phrasing ('明日まで') is preserved
-            # verbatim — never coerced into a guessed ISO date
-            if isinstance(r.get("due_text"), str) \
-                    and r["due_text"].strip():
-                if self.grounded(r["due_text"].strip()[:60]):
-                    item["due_text"] = r["due_text"].strip()[:60]
-                else:
-                    item.pop("due", None)   # derived from an unlocated text
             self.ev(item, r)
+            assertion = self.assertion(item, (item.get("action"),), request=True, sender=r.get("from"))
+            if assertion is None:
+                item["unverified"] = True
+                if item.get("evidence"):
+                    self.uncertain(item, "action", nullable=True)
+                    self.uncertain(item, "to", nullable=True)
+            else:
+                quote = assertion[0]
+                recipient = item.get("to")
+                if recipient and not re.search(re.escape(recipient) + r"(?:さん|様)?(?:へ|に|宛|まで|[、,])", quote):
+                    self.uncertain(item, "to", nullable=True)
+                sender = _clean_text(r.get("from"), 30)
+                if sender:
+                    if re.search(re.escape(sender) + r"(?:さん|様)?(?:から|より|が|は)", quote):
+                        item["from"] = sender
+                    else:
+                        item["unverified"] = True
+                cond = _clean_text(r.get("condition"), 60)
+                inner = locate_quote_span(quote, cond) if cond else None
+                if inner is not None:
+                    item["condition"] = quote[inner[0]:inner[1]]
+                elif cond:
+                    self.miss(cond)
+                    item["unverified"] = True
+                elif clinical_scope.source_axes(self.body, assertion[1], assertion[2])[1] == "conditional":
+                    item["unverified"] = True
+                due_text = _clean_text(r.get("due_text"), 60)
+                if due_text and locate_quote_span(quote, due_text) is not None:
+                    item["due_text"] = due_text
+                elif due_text:
+                    item["unverified"] = True
+                due = _clean_text(r.get("due"), 10)
+                if due and _valid_date(due):
+                    normalized = unicodedata.normalize("NFKC", quote)
+                    dates = {clinical_values.absolute_date(m[0]) for m in re.finditer(
+                        r"[0-9]{4}[-/年][0-9]{1,2}[-/月][0-9]{1,2}(?![0-9])", normalized)
+                        if re.match(r"日?(?:まで|を期限|が期限|を締切|に(?:は)?[^、,。]{0,60}(?:確認|連絡|送付|提出|教え))",
+                                    normalized[m.end():])
+                        or re.search(r"(?:期限|締切|期日)(?:は|が|[:：])?\s*$", normalized[:m.start()])}
+                    if due in dates:
+                        item["due"] = due
+                    else:
+                        self.miss(due)
+                        item["unverified"] = True
             reqs.append(item)
         out["requests"] = reqs
 
@@ -704,12 +800,13 @@ class Validator:
 
     def scalars(self, d: dict, out: dict):
         if "summary" in d:
-            s = _clean_text(d["summary"], 60)
+            s = _clean_text(d["summary"], SUMMARY_MAX_CHARS)
             if s:
                 if self.current_prose(s, "summary"):
                     out["summary"] = s
             else:
-                self.drop_item("summary")
+                self.drop_item("summary", f"summaryは{SUMMARY_MAX_CHARS}字以内の全文で返してください。"
+                               "否定・条件・主体を途中で切らず、根拠となる事実は各明細に保持してください。")
         if "urgency" in d:
             if d["urgency"] in ("high", "routine", "unclear"):
                 out["urgency"] = d["urgency"]
@@ -739,9 +836,15 @@ class Validator:
             out["urgency"] = "unclear"
         if "points" in d:
             if isinstance(d["points"], list):
-                out["points"] = [p for p in
-                                 (_clean_text(x, 40) for x in d["points"])
-                                 if p and self.current_prose(p, "points")][:3]
+                points = []
+                for raw in d["points"]:
+                    point = _clean_text(raw, POINT_MAX_CHARS)
+                    if point is None:
+                        self.drop_item("points", f"pointsは各{POINT_MAX_CHARS}字以内の全文で返してください。"
+                                       "否定・条件・主体を途中で切らず、根拠となる事実は各明細に保持してください。")
+                    elif self.current_prose(point, "points") and point not in points:
+                        points.append(point)
+                out["points"] = points
             else:
                 self.drop_item("points")
 
@@ -756,11 +859,10 @@ def merge(outs: list[dict]) -> dict:
     """Deterministic merge of per-chunk validated outputs, in document
     order.
 
-    Identity keys preserve in-message progression rather than collapsing
-    it: meds dedupe on (name, subject, action) so a past stop and a
-    planned restart coexist; symptoms keep the LAST status per text —
-    a later "resolved" must overwrite an earlier "new" or downstream
-    resolvers never fire; vitals keep the latest reading per key,
+    Exact duplicate medication/symptom records coalesce; distinct evidence,
+    attributes and times survive in source order. Current-state reducers
+    decide their relationship without erasing the reported history.
+    Vitals keep the latest reading per key,
     with blood-pressure sides kept together from one chunk;
     labs retain distinct explicit sampling dates and confirmation groups;
     requests dedupe on (to, from, action, due, condition, due_text).
@@ -774,24 +876,21 @@ def merge(outs: list[dict]) -> dict:
     out: dict = {}
     seen_requests: set = set()
     seen_context: dict = {}
-    med_order: dict = {}
-    sym_idx: dict = {}
+    seen_meds: set = set()
+    seen_symptoms: set = set()
     seen_labs: set = set()
+    seen_events: set = set()
     for d in outs:
         for m in d.get("meds") or []:
-            k = (m["name"], m.get("subject"), m.get("action"))
-            # Retain the latest occurrence in source order: start -> stop
-            # -> start must end at the restart, including its new dose.
-            out.setdefault("meds", [])
-            med_order.pop(k, None)
-            med_order[k] = m
+            key = json.dumps(m, sort_keys=True, ensure_ascii=False)
+            if key not in seen_meds:
+                seen_meds.add(key)
+                out.setdefault("meds", []).append(m)
         for s in d.get("symptoms") or []:
-            key = (s["text"], s.get("subject"))
-            if key in sym_idx:
-                out["symptoms"][sym_idx[key]] = s
-            else:
-                sym_idx[key] = len(out.setdefault("symptoms", []))
-                out["symptoms"].append(s)
+            key = json.dumps(s, sort_keys=True, ensure_ascii=False)
+            if key not in seen_symptoms:
+                seen_symptoms.add(key)
+                out.setdefault("symptoms", []).append(s)
         for lab in d.get("labs") or []:
             # Different readings or quotations are not a last-wins update.
             key = json.dumps(lab, sort_keys=True, ensure_ascii=False)
@@ -824,9 +923,13 @@ def merge(outs: list[dict]) -> dict:
         for e in d.get("events") or []:
             if e not in out.setdefault("events", []):
                 out["events"].append(e)
+        for record in d.get('event_records') or []:
+            key = json.dumps(record, sort_keys=True, ensure_ascii=False)
+            if key not in seen_events:
+                seen_events.add(key)
+                out.setdefault('event_records', []).append(record)
         for p in d.get("points") or []:
-            if len(out.setdefault("points", [])) < 3 \
-                    and p not in out["points"]:
+            if p not in out.setdefault("points", []):
                 out["points"].append(p)
         vitals = d.get("vitals") or {}
         if "sbp" in vitals or "dbp" in vitals:
@@ -844,8 +947,6 @@ def merge(outs: list[dict]) -> dict:
         for k in ("_items_dropped", "_evidence_dropped"):
             if d.get(k):
                 out[k] = out.get(k, 0) + d[k]
-    if med_order:
-        out["meds"] = list(med_order.values())
     # Unclear beats routine in the merge: a chunk that could not ground
     # an urgency call leaves residual uncertainty — folding it to
     # routine would silence the v1 lexical net downstream for no gain.
@@ -858,11 +959,14 @@ def merge(outs: list[dict]) -> dict:
             out["urgency"] = "routine"
     return out
 
-def validate_piece(document, piece, body, drops=None, ctx=False, references=None):
+def validate_piece(document, piece, body, drops=None, ctx=False, references=None, *, source_offset=None):
     """Evidence must first belong to the core, and remain unique in the whole source."""
     scoped = validate(document, piece, drops, ctx, references=references)
     if scoped is None or piece == body:
         return scoped
+    if scoped.get('event_records'):
+        scoped['event_records'] = clinical_events.project_piece_records(
+            document, scoped['event_records'], piece, body, source_offset)
     repeated = drops is not None and bool(piece) and body.count(piece) > 1
     global_drops = {} if repeated else drops
     validated = validate(scoped, body, global_drops, ctx, references=references)

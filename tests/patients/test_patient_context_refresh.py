@@ -63,9 +63,9 @@ def step(runtime, *, cfg=CFG, admit=lambda: True, seconds=600, **kw):
     return result
 
 
-def finish(runtime, limit=60):
+def finish(runtime, limit=60, *, cfg=CFG):
     for _ in range(limit):
-        result = step(runtime)
+        result = step(runtime, cfg=cfg)
         if result['status'] == 'complete':
             return
         assert result['status'] == 'progressed', result
@@ -104,6 +104,8 @@ def test_default_enables_generation_and_private_reading(runtime):
     led, _, _ = runtime
     seed(led)
     assert step(runtime, cfg={})['status'] == 'progressed'
+    assert context_refresh.context_view_input(led.db, 1, cfg={}) is None
+    finish(runtime, cfg={})
     assert context_refresh.context_view_input(led.db, 1, cfg={}) is not None
 
 
@@ -179,7 +181,7 @@ def test_source_change_during_inference_prevents_publish(runtime, monkeypatch):
 def test_changed_deleted_or_remapped_sources_hide_previous_summary(runtime, mutation):
     led, _, _ = runtime
     seed(led)
-    assert step(runtime)['status'] == 'progressed'
+    finish(runtime)
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
     led.db.execute(mutation)
     led.db.commit()
@@ -235,7 +237,10 @@ def test_patients_take_turns_and_incomplete_records_not_counted_analyzed(runtime
     assert step(runtime)['lane'] == 'A'
     assert document(led, pid=2)
     finish(runtime)
-    cov = context_refresh.context_view_input(led.db, 1, cfg=CFG)['coverage']
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    proof = context_refresh.inference_coverage(led.db, 1, CFG)
+    assert not proof['complete'] and proof['sources']['incomplete'] == 1
+    cov = document(led)['coverage']
     assert cov['fetched'] == 2 and cov['analyzed'] == 1 and cov['incomplete'] == 1
     assert cov['human_accuracy'] is None
     assert cov['attachments']['analysis'] == 'not_assessed'
@@ -319,13 +324,15 @@ def test_old_unlabelled_report_is_discovered_without_new_message(runtime):
 def test_new_addition_is_unreflected_not_silently_part_of_old_summary(runtime):
     led, clock, _ = runtime
     seed(led)
-    step(runtime)
+    finish(runtime)
+    stored = document(led)
     seed(led, mid=2, body='生活環境: 合成の新着報告。')
     led.db.execute('UPDATE messages SET first_seen=? WHERE message_id=2', (clock.wall,))
     led.db.commit()
     view = context_refresh.context_view_input(led.db, 1, cfg=CFG)
-    assert view is not None and view['coverage']['unreflected'] == 1
-    assert {f['message_id'] for f in view['facts']} == {1}
+    assert view is None
+    assert context_refresh.inference_coverage(led.db, 1, CFG)['sources']['pending'] == 1
+    assert document(led) == stored  # Previous generation remains stored, never passed off as current.
 
 
 def test_model_timeout_is_checkpointed_so_other_patients_can_advance(runtime, monkeypatch):
@@ -395,6 +402,8 @@ def test_view_reads_only_quoted_bodies_without_reextracting_history(runtime, mon
     for mid in range(2, 12):
         seed(led, mid=mid, body=f'合成の未分類記録その{mid}。')
     assert step(runtime)['status'] == 'progressed'
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    finish(runtime)
     before = len(calls)
     monkeypatch.setattr(context_refresh, 'source_patient_context',
                         lambda *a: pytest.fail('view re-extracted saved history'))
@@ -406,10 +415,10 @@ def test_view_reads_only_quoted_bodies_without_reextracting_history(runtime, mon
         view = context_refresh.context_view_input(led.db, 1, cfg=CFG)
     finally:
         led.db.set_trace_callback(None)
-    assert view is not None and {f['message_id'] for f in view['facts']} == {1}
+    assert view is not None and {f['message_id'] for f in view['facts']} == set(range(1, 12))
     assert len(calls) == before
     body_reads = [q for q in queries if q.startswith('SELECT body_text FROM messages')]
-    assert len(body_reads) == 1 and 'message_id=1' in body_reads[0]
+    assert len(body_reads) == 11  # Every displayed source is validated once; no history re-extraction.
     assert not any('SELECT m.*' in q for q in queries)
     extraction_reads = [q for q in queries if 'FROM artifacts a JOIN messages m' in q]
     assert len(extraction_reads) == 1, 'metadata aggregation must not query each source separately'
@@ -419,7 +428,7 @@ def test_shadow_can_be_published_without_repeating_inference(runtime):
     led, _, calls = runtime
     seed(led)
     shadow = {'extract': {'patient_context_nightly': {'enabled': True, 'publication': False}}}
-    assert step(runtime, cfg=shadow)['lane'] == 'A'
+    finish(runtime, cfg=shadow)
     generated = document(led)
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
     before = len(calls)
@@ -584,7 +593,8 @@ def test_summary_budget_preserves_complete_source_reports_in_detail(runtime, mon
     finish(runtime)
     stored = document(led)
     selected = {f['message_id'] for f in stored['facts']}
-    assert len(selected) == 2 and len(stored['summary']) <= 2
+    assert len(stored['facts']) == 2 and 1 <= len(selected) <= 2 and len(stored['summary']) <= 2
+    assert len({fact['id'] for fact in stored['facts']}) == 2  # The cap counts atomic assertions, not posts.
     view = context_refresh.context_view_input(led.db, 1, cfg=CFG)
     assert {f['message_id'] for f in view['facts']} == {1, 2, 3, 4}
     assert view['summary'] == stored['summary']
@@ -598,8 +608,9 @@ def test_summary_budget_preserves_complete_source_reports_in_detail(runtime, mon
                        (json.dumps(invalid_content), json.dumps(invalid_meta), row['artifact_id']))
         led.db.commit()
         current = context_refresh.context_view_input(led.db, 1, cfg=CFG)
-        assert {f['message_id'] for f in current['facts']} == {1, 2, 3, 4} - {omitted}
-        assert current['summary'] == stored['summary']
+        assert current is None
+        assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+        assert document(led)['summary'] == stored['summary']
 
 
 def test_linked_summary_checkpoint_has_no_fake_message_reference(runtime):
@@ -635,14 +646,18 @@ def test_revalidation_rejects_changed_posted_date_text(runtime):
     assert context_refresh._validated_facts(source, facts) == []
 
 
-def test_fully_extracted_lines_skip_extra_scan_and_duplicate_summary(runtime):
+def test_fully_quoted_lines_still_scan_and_keep_distinct_summary_assertions(runtime):
     led, _, calls = runtime
     seed(led, body="生活環境: 合成の住宅。\nADL: 合成の歩行記録。")
     finish(runtime)
-    assert all("reports" in call for call in calls)
+    assert sum('source' in call for call in calls) == 1
     summary = document(led)["summary"]
-    assert len(summary) == 1
+    assert len(summary) >= 2
+    assert len({s['fact_ids'][0] for s in summary}) == len(summary)
     assert len(document(led)["facts"]) >= 2
+    count = len(calls)
+    finish(runtime)
+    assert len(calls) == count
 
 
 @pytest.mark.parametrize("source_changed", [False, True])
@@ -687,7 +702,9 @@ def test_source_checkpoint_reads_are_batched(runtime):
     finally:
         led.db.set_trace_callback(None)
     assert total == 24 and coverage["fetched"] == 24
-    assert sum(s.startswith("SELECT") for s in statements) <= 6
+    # Checkpoints, chunk proofs and current raw-source attestation are batched
+    # for all 24 sources (two additional SELECTs, never per-fact lookups).
+    assert sum(s.startswith("SELECT") for s in statements) <= 8
 
 
 @pytest.mark.parametrize("body", [" \t\n", "&nbsp;<br>", "\u3000\u00a0\n"])

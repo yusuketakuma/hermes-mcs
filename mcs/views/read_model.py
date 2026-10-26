@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 import math
 from datetime import datetime
+from inference_version import CURRENT_VERSION
 from mcs_queries import ELIGIBLE_MESSAGE, JST, EXTRACTION_KINDS
 from mcs_queries import (_LEGACY_UNSCOPED_KINDS, _context_inputs, extraction_kind_map,
                          source_patient_context)
@@ -50,7 +51,7 @@ _KINDS_IN = ",".join("?" * len(EXTRACTION_KINDS))
 
 
 
-def _message_records(db, project_id):
+def _message_records(db, project_id, *, inference_target: str = CURRENT_VERSION):
     """One provenance record per message — the derived-row view — as
     (record, by_kind, art_rows); facts/relations are filled by the
     caller only for the records it returns (a `limit` page)."""
@@ -85,7 +86,8 @@ def _message_records(db, project_id):
         for msg in rows:
             mid = msg["message_id"]
             art_rows = arts_by_mid.get(mid, [])
-            by_kind = extraction_kind_map(art_rows, msg["content_hash"])
+            by_kind = extraction_kind_map(art_rows, msg["content_hash"],
+                                           inference_target=inference_target)
             if msg["body_state"] == "deleted":
                 for entry in by_kind.values():
                     if entry["state"] == "current":

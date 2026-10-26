@@ -52,13 +52,20 @@ def test_person_guard_keeps_unknown_products_and_separate_drug_mentions(name, bo
     "飲んでいない", "飲んでいません", "飲まずに", "飲まない", "飲みません",
 ])
 def test_explicit_nonuse_cannot_become_a_current_medication(wording):
+    from datetime import datetime
+    import patient_context_state
     body = f"本人の解熱剤は{wording}、経過観察としました。"
     drops = {}
     out = extract_validation.validate({"summary": "合成要約", "meds": [medication("解熱剤", body)]}, body, drops)
     states = {}
-    rollup._med_states({"body_text": body, "posted_at": "2032-06-01"}, {}, out, states)
-    assert not out.get("meds") and not states
-    assert any("不使用" in issue for issue in extract_quality.repair_issues(drops, out))
+    rollup._med_states({"project_id": 1, "message_id": 1, "body_state": "full", "content_hash": "synthetic",
+        "body_text": body, "posted_at": "2032-06-01", "posted_at_ts": datetime.fromisoformat("2032-06-01T00:00:00+09:00").timestamp()}, {}, out, states)
+    assert out["meds"][0]["name"] == "解熱剤" and out["meds"][0]["unverified"] is True
+    assert "negated" not in out["meds"][0] and out["meds"][0]["evidence"] == body
+    assert extract_quality.repair_issues(drops, out)
+    projected = patient_context_state.project(list(states.values()))
+    assert not projected["groups"]["current"]
+    assert len(states) == len(projected["groups"]["unknown"]) == 1
 
 
 @pytest.mark.parametrize("wording", [
@@ -80,12 +87,18 @@ def test_a_quote_with_old_nonuse_and_a_later_use_is_not_reinterpreted():
 
 @pytest.mark.parametrize("flags", [{"negated": True}, {"action": "stop", "status": "past"}])
 def test_correct_nonuse_or_past_stop_remains_suppressed(flags):
+    from datetime import datetime
+    import patient_context_state
     body = "本人の合成薬Mは使用していません。"
     out = extract_validation.validate({"meds": [{**medication("合成薬M", body), **flags}]}, body)
     states = {}
-    rollup._med_states({"body_text": body, "posted_at": "2032-06-01"}, {}, out, states)
+    rollup._med_states({"project_id": 1, "message_id": 1, "body_state": "full", "content_hash": "synthetic",
+        "body_text": body, "posted_at": "2032-06-01", "posted_at_ts": datetime.fromisoformat("2032-06-01T00:00:00+09:00").timestamp()}, {}, out, states)
     assert out["meds"][0]["name"] == "合成薬M"
-    assert states["合成薬M"][0] == "suppressed"
+    assert len(states) == 1
+    projected = patient_context_state.project(list(states.values()))
+    groups = {fid: group for group, ids in projected["groups"].items() for fid in ids}
+    assert all(rollup._med_bucket(fact, groups[fid]) != "current" for fid, fact in states.items())
 
 
 @pytest.mark.parametrize("name", ["薬", "お薬", "内服薬", "処方薬", "本人の薬", "同居の夫の薬"])

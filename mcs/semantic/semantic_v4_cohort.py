@@ -8,6 +8,8 @@ and retain one transaction for decisions, jobs and receipt reservations.
 """
 from __future__ import annotations
 
+from inference_version import CURRENT_VERSION, VERSION_KEY
+
 import json
 import time
 
@@ -218,7 +220,7 @@ def run_cohort(ledger, cohort: str, now: float | None = None) -> dict:
                 continue
             ledger.job_add_tx(
                 JOB_KIND, item["project_id"], mid,
-                payload={"targets": [mid], "notification_free": True,
+                payload={VERSION_KEY: CURRENT_VERSION, "targets": [mid], "notification_free": True,
                          "source_generation": item["source_fingerprint"],
                          "origin": {"source": "v4_cohort", "cohort": cohort}})
             _item_receipt(ledger, cohort, mid, "scheduled")

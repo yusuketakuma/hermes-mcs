@@ -54,6 +54,22 @@ SCHEMA = {
                 "enum": ["visit", "exam", "admission", "discharge",
                          "transfer", "fall", "eol", "care",
                          "family_contact", "prescription_inquiry", "other"]}},
+            "event_records": {"type": "array", "items": {
+                "type": "object", "properties": {
+                    "kind": {"type": "string", "enum": [
+                        "visit", "exam", "admission", "discharge", "transfer", "fall",
+                        "eol", "care", "family_contact", "prescription_inquiry", "other"]},
+                    "subject": {"type": "string", "enum": ["patient", "family", "other", "unknown"]},
+                    "status": {"type": "string", "enum": ["current", "past", "planned", "conditional", "unknown"]},
+                    "negated": {"type": ["boolean", "null"]},
+                    "evidence": {"type": "string"},
+                    "span": {"type": ["object", "null"], "properties": {
+                        "start": {"type": "integer", "minimum": 0},
+                        "end": {"type": "integer", "minimum": 1}},
+                        "required": ["start", "end"], "additionalProperties": False},
+                    "unverified": {"type": "boolean"}},
+                "required": ["kind", "subject", "status", "negated", "evidence"],
+                "additionalProperties": False}},
             "requests": {"type": "array", "items": {
                 "type": "object",
                 "properties": {

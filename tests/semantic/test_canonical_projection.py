@@ -303,11 +303,19 @@ def test_projection_preserves_subject_and_uncertainty():
 
 
 def _med_bucket(med):
-    from rollup import _med_states
-    state = {}
-    _med_states({"posted_at": "2026-09-01T00:00:00+09:00"}, {},
-                {"meds": [dict(med, name="アムロジピン")]}, state)
-    return state["アムロジピン"][0]
+    from datetime import datetime
+    import patient_context_state
+    import rollup
+    facts = {}
+    posted = "2026-09-01T00:00:00+09:00"
+    rollup._med_states({"project_id": 1, "message_id": 1, "body_state": "full",
+        "content_hash": "synthetic", "body_text": med.get("evidence") or "", "posted_at": posted,
+        "posted_at_ts": datetime.fromisoformat(posted).timestamp()}, {},
+        {"meds": [dict(med, name="アムロジピン")]}, facts)
+    projected = patient_context_state.project(list(facts.values()))
+    fact = next(iter(facts.values()))
+    group = next(group for group, ids in projected["groups"].items() if fact["id"] in ids)
+    return rollup._med_bucket(fact, group)
 
 
 def _disputed_doc(rel_type):
@@ -365,7 +373,11 @@ def test_projection_adherence_and_cancel_semantics():
 
 def test_projection_confirmed_medication_stays_current():
     from mcs_queries import med_is_patient_current
-    med = projection.project_v2_doc_legacy(_doc([_fact("f1")]))["meds"][0]
+    quote = '本人は現在アムロジピンを継続しています。'
+    doc = _doc([_fact('f1', valid_time='current')])
+    doc['source']['body_codepoints'] = len(quote)
+    doc['evidence'] = [{**EV, 'quote': quote, 'start': 0, 'end': len(quote)}]
+    med = projection.project_v2_doc_legacy(doc)["meds"][0]
     assert med_is_patient_current(med) and _med_bucket(med) == "current"
 
 

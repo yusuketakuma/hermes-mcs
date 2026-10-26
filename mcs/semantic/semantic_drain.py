@@ -6,6 +6,8 @@ and audit decisions are consumed from their defining modules. This worker
 owns claims, guarded stage commits and job outcomes."""
 from __future__ import annotations
 
+from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
+
 import os
 import sys
 
@@ -29,6 +31,7 @@ import math
 import time
 
 from mcs_util import load_config, loads_dict
+from inference_version import current_meta_pred, read_version, LEGACY_VERSION
 import semantic_jev as jev
 import semantic_runtime as runtime
 import semantic_v4 as v4
@@ -113,7 +116,7 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
         KIND_SUMMARY,
         json.dumps(summary, ensure_ascii=False),
         project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-        meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
               "audit_status": final_status, "publication_mode": publication_mode,
               "stale": final_status == "STALE",
               "target_revision": members[mid]["revision"],
@@ -127,7 +130,7 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
                     "findings": r["findings"],
                     "target_message_id": mid}, ensure_ascii=False),
         project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-        meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
               "audit_status": final_status, "publication_mode": publication_mode,
               "repair_count": 1 if r["repaired"] else 0,
               "jev_requests": r.get("jev_requests", 0),
@@ -150,7 +153,7 @@ def _park_needs_review(ledger, pid, mid, fp, policy, v2_doc,
         json.dumps({"status": "NEEDS_REVIEW", "findings": findings,
                     "target_message_id": mid}, ensure_ascii=False),
         project_id=pid, message_id=mid,
-        meta={"fingerprint": fp, "policy_fingerprint": policy,
+        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
               "audit_status": "NEEDS_REVIEW",
               "technical_status": "needs_review"})
     return {"outcome": "hard_fail", "v2_doc": v2_doc,
@@ -283,14 +286,14 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
                                     v2_result["chunks_total"]}),
                     project_id=pid, message_id=mid,
                     model=semantic_transport.llm_model(),
-                    meta={"fingerprint": fp,
+                    meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
                           "policy_fingerprint": policy,
                           "generation": v2_generation()})
         else:
             v2_doc = v2_result["doc"]
             from semantic_extraction import FACTS_V2_BUILD
             doc_build = FACTS_V2_BUILD
-            meta = {"fingerprint": fp,
+            meta = {VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
                     "policy_fingerprint": policy,
                     "schema": SCHEMA_VERSION,
                     "fact_source": fact_source,
@@ -379,7 +382,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                                allow_nan=False),
                     project_id=pid, message_id=mid,
                     model=jev.JEV_MODEL,
-                    meta={"fingerprint": fp,
+                    meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
                           "policy_fingerprint": policy,
                           "schema": SCHEMA_VERSION,
                           "doc_hash": doc_hash,
@@ -428,7 +431,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                            ensure_ascii=False),
                 project_id=pid, message_id=mid,
                 model=semantic_transport.llm_model(),
-                meta={"fingerprint": fp,
+                meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
                       "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION,
                       "doc_hash": doc_hash})
@@ -484,7 +487,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                            ensure_ascii=False, allow_nan=False),
                 project_id=pid, message_id=mid,
                 model=semantic_transport.llm_model(),
-                meta={"fingerprint": fp,
+                meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
                       "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION,
                       "doc_hash": doc_hash,
@@ -497,7 +500,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                                allow_nan=False),
                     project_id=pid, message_id=mid,
                     model=semantic_transport.llm_model(),
-                    meta={"fingerprint": fp,
+                    meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
                           "policy_fingerprint": policy,
                           "schema": SCHEMA_VERSION,
                           "fact_source": fact_source,
@@ -554,7 +557,7 @@ def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
                                      if f.get("_evidence")}},
                        ensure_ascii=False),
             project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-            meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+            meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
                   "chunks_total": len(mcs_util.text_chunks(
                       member["body_original"])),
                   "dropped_by_cap": f_dropped})
@@ -572,7 +575,7 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
     _jev_fail_flag of a raised JevError, else None."""
     flag = None
     state = jev_state(bundle, mid)
-    meta_base = {"fingerprint": fp, "policy_fingerprint": policy, "model": jev.JEV_MODEL,
+    meta_base = {VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "model": jev.JEV_MODEL,
                  "registry": jev.REGISTRY_VERSION,
                  "schema": SCHEMA_VERSION}
     answers = None
@@ -670,7 +673,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
                         json.dumps({"target_message_id": mid}),
                         project_id=pid, message_id=mid,
                         model=semantic_transport.llm_model(),
-                        meta={"fingerprint": fp, "policy_fingerprint": policy,
+                        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
                               "repair_count": 1})
                     summary, summary_reason = summarize(
                         llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
@@ -758,7 +761,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     transport_deadline = deadline - (_backlog_commit_reserve(scfg)
                                      if lane == "backlog" else 0.0)
     pl = loads_dict(job["payload"])
-    if pl is None:
+    if pl is None or not is_current(pl):
         return "failed"
     targets = pl.get("targets", [root])
     if targets is None:
@@ -784,6 +787,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             runtime.guard(
                 ledger, token, deadline=deadline,
                 expected_config_generation=config_generation,
+                expected_execution_generation=runtime.execution_generation(scfg),
                 expected_mode=scfg["mode"], cfg_path=cfg_path,
                 load_cfg=load_config, parse_cfg=runtime_config,
                 source_fingerprint=fp, current_source=current_source_fp,
@@ -799,7 +803,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                 "target_message_id": root},
                                ensure_ascii=False),
                     project_id=pid, message_id=root, model=jev.JEV_MODEL,
-                    meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+                    meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
                           "audit_status": "STALE",
                           "technical_status": "stale"})
             raise
@@ -836,9 +840,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         ledger.artifact_add(
             KIND_BUNDLE, json.dumps(bundle, ensure_ascii=False),
             project_id=pid, message_id=root, model=jev.JEV_MODEL,
-            meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION})
+            meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION})
     all_targets = [t for t in (targets or [root])
                    if any(m["message_id"] == t
+                          and m['body_state'] == 'full' and m['body_original']
                           for m in bundle["members"])]
     members = {m["message_id"]: m for m in bundle["members"]}
     fact_source = scfg.get("fact_source", "legacy")
@@ -933,7 +938,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     ledger.artifact_add(
                         KIND_COVERAGE, json.dumps(coverage, ensure_ascii=False),
                         project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-                        meta={"fingerprint": fp, "policy_fingerprint": policy,
+                        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
                               "technical_status": "complete" if coverage["evaluated"] else "pending"})
             coverage_by_target[mid] = coverage["findings"]
             if not coverage["evaluated"]:
@@ -1012,7 +1017,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                 "target_message_id": mid},
                                ensure_ascii=False),
                     project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-                    meta={"fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+                    meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
                           "technical_status": "pending"})
             incomplete = True
             if not_sent is not None:
@@ -1029,7 +1034,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             ledger.artifact_add(
                 KIND_CANDIDATE, json.dumps(summary, ensure_ascii=False),
                 project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-                meta={"fingerprint": fp, "policy_fingerprint": policy,
+                meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION, "stage": "pre_audit",
                       "publication_mode": scfg["summary_mode"],
                       "target_revision": members[mid]["revision"]})
@@ -1079,7 +1084,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 repair_id = ledger.artifact_add(
                     KIND_REPAIR, json.dumps({"target_message_id": mid}),
                     project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-                    meta={"fingerprint": fp, "policy_fingerprint": policy, "repair_count": 1})
+                    meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "repair_count": 1})
                 repaired = True
                 try:
                     summary2 = summarize(
@@ -1143,6 +1148,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             # AND silently reset the one-shot repair budget, whose
             # counter lives on these artifacts (INV-10, §18.2)
             with ledger.db:
+                if not ledger.db.in_transaction:
+                    ledger.db.execute('BEGIN IMMEDIATE')
+                guard('partial_publish_tx')
                 for mid, r in results.items():
                     if r["fresh"]:
                         _write_result(ledger, pid, mid, r, fp, members,
@@ -1190,6 +1198,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     # per target below: a covering new_messages intent must exist for
     # the message a notice reports on.
     with ledger.db:
+        if not ledger.db.in_transaction:
+            ledger.db.execute('BEGIN IMMEDIATE')
+        if not stale:
+            guard('publish_tx')
         for mid, r in results.items():
             final_status = "STALE" if stale else r["status"]
             if r["fresh"]:
@@ -1273,9 +1285,14 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
             reserve_fn=reserve_fn, lane=lane, diagnostics=diagnostics, shadow_stats=shadow_stats,
             jev_transport=jev_transport, jev_timing=jev_timing)
         from extraction_refresh import refresh_extraction_cards
-        refresh_extraction_cards(ledger, job["project_id"], job["message_id"])
+        if semantic_store.refresh_cards_allowed(ledger.db, job['project_id'], job['message_id']):
+            refresh_extraction_cards(ledger, job["project_id"], job["message_id"])
         return status
-    except (runtime.RuntimeStale, runtime.RuntimeOff):
+    except runtime.RuntimeOff as error:
+        _why(diagnostics, 'permission_refused' if error.stage.endswith(':permission') else 'off_or_scope')
+        return "stale"
+    except runtime.RuntimeStale as error:
+        _why(diagnostics, 'source_changed' if error.stage.endswith(':source') else 'generation_changed')
         return "stale"
     except runtime.LLMNotSent as e:
         diagnostics["not_sent"] = getattr(e, "stage", None)
@@ -1376,7 +1393,7 @@ def _sched_state(ledger) -> dict:
     return (loads_dict(row["payload"]) or {}) if row else {}
 
 
-def _sched_write(ledger, state: dict) -> None:
+def _sched_write(ledger, state: dict, *, commit=True) -> None:
     now = time.time()
     ledger.db.execute("""
       INSERT INTO fetch_jobs(kind,project_id,message_id,parent_id,
@@ -1385,7 +1402,283 @@ def _sched_write(ledger, state: dict) -> None:
       ON CONFLICT(kind,project_id,message_id) DO UPDATE SET
         payload=excluded.payload,updated_at=excluded.updated_at
     """, (SCHED_KIND, json.dumps(state, sort_keys=True), now, now))
-    ledger.db.commit()
+    if commit:
+        ledger.db.commit()
+
+
+@contextmanager
+def _sched_update(ledger):
+    """Serialize a short scheduler read/modify/write against concurrent owners."""
+    if ledger.db.in_transaction:
+        raise ValueError('semantic_scheduler_transaction_active')
+    ledger.db.execute('BEGIN IMMEDIATE')
+    with ledger.db:
+        state = _sched_state(ledger)
+        yield state
+        _sched_write(ledger, state, commit=False)
+
+
+def _reprocess_target_state(ledger, row, scfg):
+    """Observe one stored source without mistaking job completion for coverage."""
+    from mcs_queries import current_v4_id, paused
+    pid, mid = row['project_id'], row['message_id']
+    if row['fetch_reason'] in ('forbidden', 'permission_denied', 'access_revoked'):
+        return 'permission'
+    if pid is None or row['patient_id'] is None:
+        return 'scope'
+    if scfg['project_ids'] is not None and pid not in scfg['project_ids']:
+        return 'scope'
+    if paused(ledger.db, pid):
+        return 'paused'
+    if row['body_state'] == 'deleted':
+        return 'deleted'
+    if row['body_state'] not in (None, 'full') or not row['body_text']:
+        return 'body_unavailable'
+    root = row['parent_id'] or mid
+    bundle = semantic_store.thread_bundle(ledger.db, pid, root, [mid])
+    if bundle is None:
+        return 'held'
+    fp, policy = bundle['source_fingerprint'], policy_fingerprint(scfg)
+    audit = current_artifact(ledger.db, KIND_AUDIT, mid, fp, policy)
+    summary = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy)
+    if audit and summary and audit['content'].get('status') == 'PASS':
+        if scfg.get('fact_source') != 'canonical':
+            if current_artifact(ledger.db, KIND_FACTS, mid, fp) is not None:
+                return 'current'
+        vid = ledger.db.execute(f'SELECT {current_v4_id()} FROM messages m '
+                                'WHERE m.message_id=?', (mid,)).fetchone()[0]
+        published = ledger.db.execute('SELECT meta FROM artifacts WHERE artifact_id=?',
+                                       (vid,)).fetchone() if vid is not None else None
+        meta = loads_dict(published[0]) if published is not None else {}
+        if (meta and meta.get('fingerprint') == fp
+                and meta.get('policy_fingerprint') == policy):
+            doc, _ = v4.reproject_doc(ledger.db, mid, meta)
+            if doc is not None:
+                return 'current'
+    job = ledger.db.execute("SELECT state,payload FROM fetch_jobs WHERE kind=? "
+                            'AND project_id=? AND message_id=?',
+                            (JOB_KIND, pid, root)).fetchone()
+    if job is not None and is_current(loads_dict(job['payload'])):
+        if job['state'] == 'failed':
+            return 'failed'
+        if audit and audit['content'].get('status') == 'NEEDS_REVIEW':
+            return 'held'
+        if job['state'] == 'done':
+            return 'repair_required'
+        return 'pending'
+    return 'pending'
+
+
+def _reprocess_patient_state(ledger, row, cfg, scfg):
+    """Join the source/audit/summary proof with the current rollup, outside a transaction."""
+    import patient_context_refresh
+    import rollup
+    from mcs_queries import paused
+    pid = row['project_id']
+    if (scfg['project_ids'] is not None and pid not in scfg['project_ids']
+            or row['fetch_reason'] in ('forbidden', 'permission_denied', 'access_revoked')):
+        return 'excluded'
+    if paused(ledger.db, pid):
+        return 'paused'
+    proof = patient_context_refresh.inference_coverage(ledger.db, pid, cfg)
+    if not is_current(proof):
+        return 'pending'
+    if not proof['complete']:
+        dependency = proof.get('dependencies', {}).get('coverage', {})
+        if dependency.get('terminal', 0):
+            return 'terminal_gap'
+        if dependency.get('repairable', 0):
+            return 'repair_pending'
+        counts = proof['sources']
+        if counts['failed']:
+            return 'failed'
+        if counts['held'] or proof['status'] == 'off':
+            return 'held'
+        if counts['incomplete'] or proof['status'] in ('unacquired', 'dependency_gap'):
+            return 'incomplete'
+        return 'pending'
+    roll = rollup.inference_coverage(ledger.db, pid)
+    if not is_current(roll) or not roll['current']:
+        rollup.rebuild(ledger, pid)
+    roll = rollup.inference_coverage(ledger.db, pid)
+    return 'current' if is_current(roll) and roll['current'] else 'pending'
+
+
+def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
+    """Advance a finite keyset pass; input races never erase its accepted cursor."""
+    if type(limit) is not int or not 1 <= limit <= 128:
+        raise ValueError('inference_reprocess_limit')
+    if ledger.db.in_transaction:
+        raise ValueError('inference_reprocess_transaction_active')
+    scfg, errors = runtime_config(cfg)
+    if errors or scfg['mode'] == 'off':
+        return {'status': 'off', 'complete': False}
+    generation = runtime.execution_generation(scfg)
+    scope_generation = mcs_util.payload_hash(scfg['project_ids'])
+    version = ledger.db.execute('PRAGMA data_version').fetchone()[0]
+    changes = ledger.db.total_changes
+    original = _sched_state(ledger)
+    old_progress = original.get('inference_reprocess')
+    fields = ('source_epoch', 'analysis_epoch', 'job_state_epoch')
+    epochs = {field: original.get(field, 0) for field in fields}
+    if any(original.get(field + '_invalid') or type(value) is not int
+           or not 0 <= value < 2**63 for field, value in epochs.items()):
+        return {'status': 'invalid_source_epoch', 'complete': False}
+    progress = old_progress
+    live_upper = ledger.db.execute('SELECT COALESCE(MAX(message_id),0) FROM messages').fetchone()[0]
+    if (not isinstance(progress, dict) or not is_current(progress)
+            or progress.get('execution_generation') != generation
+            or progress.get('scope_generation') != scope_generation):
+        progress = {VERSION_KEY: CURRENT_VERSION, 'execution_generation': generation,
+                    'scope_generation': scope_generation, **epochs,
+                    'upper': live_upper,
+                    'cursor': 0, 'seed_cursor': 0, 'phase': 'seed', 'counts': {}}
+    counters = {'current', 'pending', 'repair_required', 'held', 'failed', 'permission',
+                'scope', 'paused', 'deleted', 'body_unavailable'}
+    if (progress.get('phase') not in ('seed', 'verify', 'verify_patients', 'waiting', 'complete')
+            or any(type(progress.get(key)) is not int or not 0 <= progress[key] < 2**63
+                   for key in ('cursor', 'upper'))
+            or progress['cursor'] > progress['upper']
+            or not isinstance(progress.get('counts'), dict)
+            or any(key not in counters or type(value) is not int or not 0 <= value < 2**63
+                   for key, value in progress['counts'].items())):
+        return {'status': 'invalid_progress', 'complete': False}
+    progress = {**progress, 'counts': dict(progress['counts'])}
+    progress.setdefault('seed_cursor', progress['cursor'] if progress['phase'] == 'seed' else progress['upper'])
+    if type(progress['seed_cursor']) is not int or not 0 <= progress['seed_cursor'] < 2**63:
+        return {'status': 'invalid_progress', 'complete': False}
+    changed = any(progress.get(field, 0) != value for field, value in epochs.items())
+    progress.update(future_upper=live_upper, tail_pending=live_upper > progress['seed_cursor'])
+    progress.update(epochs)
+    if changed:
+        progress.update(dirty=True, complete=False)
+    # Finished/waiting rounds are bookmarks, not an instruction to seed the
+    # corpus again. Only a real source, adopted proof or job-state change wakes
+    # a new bounded round. Operational settings grant no fresh attempt budget.
+    if progress['phase'] in ('waiting', 'complete'):
+        if not changed and not progress['tail_pending']:
+            return {'status': progress['phase'], 'processed': 0, **progress}
+        upper = ledger.db.execute('SELECT COALESCE(MAX(message_id),0) FROM messages').fetchone()[0]
+        tail = upper > progress['seed_cursor']
+        progress.update(phase='seed' if tail else 'verify',
+                        cursor=progress['seed_cursor'] if tail else 0, upper=upper,
+                        counts={}, dirty=False, verify_epochs=dict(epochs), complete=False)
+    if progress['phase'] == 'verify_patients':
+        states = {'current', 'pending', 'held', 'paused', 'failed', 'incomplete', 'excluded',
+                  'terminal_gap', 'repair_pending'}
+        if (any(type(progress.get(key)) is not int or progress[key] < 0
+                for key in ('patient_cursor', 'patient_upper'))
+                or not isinstance(progress.get('patient_counts'), dict)
+                or any(key not in states or type(value) is not int or value < 0
+                       for key, value in progress['patient_counts'].items())):
+            return {'status': 'invalid_progress', 'complete': False}
+        rows = ledger.db.execute('SELECT project_id,fetch_reason FROM patients '
+                                 'WHERE project_id>? AND project_id<=? ORDER BY project_id LIMIT ?',
+                                 (progress['patient_cursor'], progress['patient_upper'], limit)).fetchall()
+        counts = dict(progress['patient_counts'])
+        processed = 0
+        for row in rows:
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            state = _reprocess_patient_state(ledger, row, cfg, scfg)
+            counts[state] = counts.get(state, 0) + 1
+            progress['patient_cursor'] = row['project_id']
+            processed += 1
+        with _sched_update(ledger) as sched:
+            # This owner may have adopted a rollup proof while planning. Seal
+            # against external writers/source changes, retaining this batch's
+            # cursor while marking a changed proof for the next finite round.
+            if (sched.get('inference_reprocess') != old_progress
+                    or sched.get('source_epoch', 0) != epochs['source_epoch']
+                    or ledger.db.execute('PRAGMA data_version').fetchone()[0] != version):
+                return {'status': 'source_changed', 'complete': False, 'processed': 0}
+            actual = {field: sched.get(field, 0) for field in fields}
+            if any(sched.get(field + '_invalid') or type(value) is not int or not 0 <= value < 2**63
+                   for field, value in actual.items()):
+                return {'status': 'invalid_source_epoch', 'complete': False, 'processed': 0}
+            progress['dirty'] = progress.get('dirty', False) or actual != epochs
+            progress.update(actual)
+            progress['patient_counts'] = counts
+            if processed == len(rows) and (len(rows) < limit or progress['patient_cursor'] >= progress['patient_upper']):
+                messages = progress.get('coverage', {}).get('counts', {})
+                blocked_messages = {key: value for key, value in messages.items()
+                    if value and key in ('pending', 'repair_required', 'held', 'failed', 'paused', 'body_unavailable')}
+                blocked_patients = {key: value for key, value in counts.items() if value and key not in ('current', 'excluded')}
+                upper = ledger.db.execute('SELECT COALESCE(MAX(message_id),0) FROM messages').fetchone()[0]
+                tail = upper > progress['seed_cursor']
+                progress.update(future_upper=upper, tail_pending=tail)
+                dirty = progress.get('dirty', False) or progress.get('verify_epochs', actual) != actual
+                progress['complete'] = not (blocked_messages or blocked_patients or tail or dirty)
+                progress['waiting_reasons'] = {'messages': blocked_messages, 'patients': blocked_patients}
+                progress['remaining_stages'] = [] if progress['complete'] else ['source_or_patient_proof']
+                progress['verified_at'] = time.time()
+                if tail or dirty:
+                    progress.update(phase='seed' if tail else 'verify',
+                        cursor=progress['seed_cursor'] if tail else 0, upper=upper,
+                        counts={}, dirty=False, verify_epochs=dict(actual))
+                else:
+                    progress['phase'] = 'complete' if progress['complete'] else 'waiting'
+            sched['inference_reprocess'] = progress
+        return {'status': progress['phase'], 'processed': processed, **progress}
+    rows = ledger.db.execute(
+        'SELECT m.message_id,m.project_id,m.parent_id,m.body_state,m.body_text,'
+        'p.project_id AS patient_id,p.fetch_reason FROM messages m '
+        'LEFT JOIN patients p ON p.project_id=m.project_id '
+        'WHERE m.message_id>? AND m.message_id<=? ORDER BY m.message_id LIMIT ?',
+        (progress['cursor'], progress['upper'], limit)).fetchall()
+    planned, sources = [], {}
+    for row in rows:
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        state = _reprocess_target_state(ledger, row, scfg)
+        replay = None
+        if state in ('pending', 'repair_required', 'held', 'failed'):
+            root = row['parent_id'] or row['message_id']
+            key = (row['project_id'], root)
+            if key not in sources:
+                sources[key] = ledger._semantic_source_generation(*key)
+            old = ledger.db.execute('SELECT payload,state FROM fetch_jobs WHERE kind=? '
+                                    'AND project_id=? AND message_id=?', (JOB_KIND, *key)).fetchone()
+            pl = loads_dict(old[0]) if old is not None else {}
+            if (not is_current(pl)
+                    or pl.get('execution_contract') == 1 and pl.get('execution_generation') != generation
+                    or pl.get('source_generation') != sources[key]
+                    or not isinstance(pl.get('targets'), list) or row['message_id'] not in pl['targets']):
+                arrival = (semantic_notice.origin_event_id(ledger.db, row['project_id'], [row['message_id']])
+                           if old is not None and old['state'] == 'pending' and pl.get('eligible')
+                           and not pl.get('notification_free') else None)
+                replay = (sources[key], arrival)
+        planned.append((row, state, replay))
+    with _sched_update(ledger) as sched:
+        if (sched.get('inference_reprocess') != old_progress
+                or any(sched.get(field, 0) != value for field, value in epochs.items())
+                or ledger.db.execute('PRAGMA data_version').fetchone()[0] != version
+                or ledger.db.total_changes != changes):
+            return {'status': 'source_changed', 'complete': False, 'processed': 0}
+        for row, state, replay in planned:
+            if replay is not None:
+                ledger.semantic_seed_tx(row['project_id'], [row['message_id']],
+                    {'source': 'inference_reprocess', 'notification_free': True,
+                     'inference_generation': generation, 'arrival_event_id': replay[1]},
+                    _source_generation=replay[0])
+            progress['counts'][state] = progress['counts'].get(state, 0) + 1
+            progress['cursor'] = row['message_id']
+            if progress['phase'] == 'seed':
+                progress['seed_cursor'] = row['message_id']
+        if len(planned) == len(rows) and (len(rows) < limit or progress['cursor'] >= progress['upper']):
+            if progress['phase'] == 'seed':
+                progress['seed_cursor'] = max(progress['seed_cursor'], progress['upper'])
+                progress.update(phase='verify', cursor=0, counts={}, dirty=False, verify_epochs=dict(epochs))
+            else:
+                progress['coverage'] = {'counts': progress['counts'], 'observed_at': time.time(),
+                                       'upper': progress['upper'], **epochs}
+                progress.update(phase='verify_patients', counts={}, patient_cursor=0, patient_counts={},
+                    patient_upper=ledger.db.execute('SELECT COALESCE(MAX(project_id),0) FROM patients').fetchone()[0])
+        progress['complete'] = False
+        progress['tail_pending'] = progress['future_upper'] > progress['seed_cursor']
+        progress['remaining_stages'] = ['patient_context', 'rollup', 'karte']
+        sched['inference_reprocess'] = progress
+    return {'status': progress['phase'], 'processed': len(planned), **progress}
 
 
 _REALTIME_ORDER = ("CASE WHEN next_try<=updated_at THEN updated_at "
@@ -1443,8 +1736,42 @@ _ELIGIBLE_SQL = "json_valid(payload) AND COALESCE(json_extract(payload,'$.eligib
 def _class_scope(archived: bool, excluded) -> tuple[str, str]:
     """(patient-class + excluded-job SQL predicate, its json_each parameter)."""
     scope = (("" if archived else "NOT ") + _ARCHIVED_JOB
+             + ' AND (' + current_meta_pred('fetch_jobs.payload')
+             + ' OR (' + current_meta_pred('fetch_jobs.payload', target=LEGACY_VERSION)
+             + " AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.eligible')=1 END))"
              + " AND job_id NOT IN (SELECT value FROM json_each(?))")
     return scope, json.dumps(sorted(excluded))
+
+
+def _adopt_pending_arrival(ledger, job):
+    """Upgrade a selected legacy arrival from its actual unconsumed intent, without a corpus scan."""
+    payload = runtime.parse_payload(job)
+    if is_current(payload):
+        return job
+    if (read_version(payload) != LEGACY_VERSION or job['state'] != 'pending'
+            or not payload.get('eligible') or payload.get('notification_free')):
+        return None
+    targets = payload.get('targets', [job['message_id']])
+    if not isinstance(targets, list) or not targets or any(type(mid) is not int for mid in targets):
+        return None
+    version = ledger.db.execute('PRAGMA data_version').fetchone()[0]
+    source = ledger._semantic_source_generation(job['project_id'], job['message_id'])
+    origin = semantic_notice.origin_event_id(ledger.db, job['project_id'], targets)
+    if ledger.db.in_transaction:
+        raise ValueError('semantic_arrival_adoption_transaction_active')
+    ledger.db.execute('BEGIN IMMEDIATE')
+    with ledger.db:
+        current = ledger.db.execute('SELECT * FROM fetch_jobs WHERE job_id=?', (job['job_id'],)).fetchone()
+        if (current is None or current['payload'] != job['payload'] or current['state'] != 'pending'
+                or ledger.db.execute('PRAGMA data_version').fetchone()[0] != version):
+            return None
+        if origin is None:
+            ledger.db.execute('UPDATE fetch_jobs SET next_try=? WHERE job_id=?',
+                              (time.time() + 300, job['job_id']))
+            return None
+        ledger.semantic_seed_tx(job['project_id'], targets,
+            {'source': 'unread', 'event_id': origin}, _source_generation=source)
+    return ledger.db.execute('SELECT * FROM fetch_jobs WHERE job_id=?', (job['job_id'],)).fetchone()
 
 
 def _due_lanes(ledger, kinds: tuple, max_jobs: int,
@@ -1573,6 +1900,20 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
                 max_jobs: int, long_defers: dict | None = None, *,
                 excluded=(), turns=None) -> tuple:
     """Select active patients first, retaining each cohort's bounded fairness."""
+    if lane == 'backlog':
+        # Two resident lanes share this durable turn. Realtime arrivals keep
+        # their existing active-first policy; an archive backlog cannot starve.
+        with _sched_update(ledger) as state:
+            archive_first = bool(state.get('reprocess_archive_turn'))
+            state['reprocess_archive_turn'] = not archive_first
+        first = _select_due_class(ledger, lane, kinds, qc_active, max_jobs,
+                                  long_defers, archive_first,
+                                  excluded=excluded, turns=turns)
+        if first[0]:
+            return first
+        return _select_due_class(ledger, lane, kinds, qc_active,
+                                 max_jobs, long_defers, not archive_first,
+                                 excluded=excluded, turns=turns)
     active = _select_due_class(
         ledger, lane, kinds, qc_active, max_jobs, long_defers, False,
         excluded=excluded, turns=turns)
@@ -1810,23 +2151,22 @@ def _persist_drain_accounting(ledger, scfg, out: dict, result: dict,
     # persisted fairness accounting — survives restarts, feeds
     # semantic_observe's scheduler section (T14)
     try:
-        sched = _sched_state(ledger)
-        for cohort in ("arrival", "backfill"):
-            sched[cohort + "_selected"] = \
-                sched.get(cohort + "_selected", 0) + selected[cohort]
-        if qc_active:
-            sched["qc_selected"] = \
-                sched.get("qc_selected", 0) + selected["qc"]
-        if selected["backfill"]:
-            sched["backfill_last_served_at"] = time.time()
-        if selected["qc"]:
-            sched["qc_last_served_at"] = time.time()
-        if sched_mut.get("turn") and sched_mut.get("turn_consumed"):
-            sched[sched_mut.get("turn_key", "turn")] = sched_mut["turn"]
-        sched.update(sched_mut.get("consumed_turns", {}))
-        if long_seen or long_defers:
-            _merge_long_defers(ledger, sched, long_seen or {})
-        _sched_write(ledger, sched)
+        with _sched_update(ledger) as sched:
+            for cohort in ("arrival", "backfill"):
+                sched[cohort + "_selected"] = \
+                    sched.get(cohort + "_selected", 0) + selected[cohort]
+            if qc_active:
+                sched["qc_selected"] = \
+                    sched.get("qc_selected", 0) + selected["qc"]
+            if selected["backfill"]:
+                sched["backfill_last_served_at"] = time.time()
+            if selected["qc"]:
+                sched["qc_last_served_at"] = time.time()
+            if sched_mut.get("turn") and sched_mut.get("turn_consumed"):
+                sched[sched_mut.get("turn_key", "turn")] = sched_mut["turn"]
+            sched.update(sched_mut.get("consumed_turns", {}))
+            if long_seen or long_defers:
+                _merge_long_defers(ledger, sched, long_seen or {})
     except Exception:
         # accounting must never break the drain itself
         result["errors"].append("semantic: sched_persist_failed")
@@ -1894,6 +2234,11 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         _invalidated_at = time.monotonic()
     if scfg["mode"] == "off":
         return out
+    try:
+        out['inference_reprocess'] = reprocess_step(ledger, cfg, deadline=deadline)
+    except Exception as error:
+        out['inference_reprocess'] = {'status': 'error', 'complete': False}
+        result['errors'].append(f'semantic_reprocess: {type(error).__name__}')
     # Stability guards shared with the extract lane: a nearly-full
     # volume turns per-job artifact writes into an I/O error storm, and
     # an open endpoint breaker means every llm_fn call pays a dead
@@ -2064,6 +2409,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 out["lock_skipped"][job["kind"]] = \
                     out["lock_skipped"].get(job["kind"], 0) + 1
                 continue
+            if job['kind'] == JOB_KIND and not is_current(runtime.parse_payload(job)):
+                job = _adopt_pending_arrival(ledger, job)
+                if job is None:
+                    continue
             token = runtime.JobToken.from_row(job)
             payload = runtime.parse_payload(job)
             limit = runtime.attempt_limit(payload)

@@ -191,6 +191,7 @@ def record_notice_plan_tx(ledger, pid, root, mid, fp, policy,
     # (fingerprint, audit_status), the outbox row on its
     # delivery_key — a plan written by an earlier PENDING/shadow
     # run must not block a now-PASS enforce enqueue.
+    from inference_version import CURRENT_VERSION, VERSION_KEY
     summary_clean = {k: v for k, v in summary.items()
                      if not k.startswith("_")}
     text = semantic_render.render_notice(ledger.db, pid, root, summary_clean,
@@ -225,7 +226,7 @@ def record_notice_plan_tx(ledger, pid, root, mid, fp, policy,
                 "policy_fingerprint": policy})
             enqueued = True
     if not plan_exists(ledger.db, mid, fp, final_status, policy):
-        plan_meta = {"fingerprint": fp, "policy_fingerprint": policy,
+        plan_meta = {VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
                      "audit_status": final_status, "publication_mode": summary_mode,
                      "mode": mode,
                      "origin": origin}

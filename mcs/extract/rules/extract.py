@@ -28,17 +28,23 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401
 import clinical_scope
+import clinical_events
 import clinical_urgency
 import clinical_values
 import extract_schema
+import inference_version as inference
+import writer_lock
 from patient_context import extract_context
 from ledger import Ledger, LedgerReader
-from mcs_queries import ELIGIBLE_MESSAGE
+from mcs_queries import ELIGIBLE_MESSAGE, current_extract_pred, json_or_null
 from mcs_util import HOME, loads_dict
 from writer_lock import acquire_run_lock
 
 DB = os.path.join(HOME, "data", "ledger.db")
 KIND = "extract_v1"
+_INFERENCE_VERSION = inference.CURRENT_VERSION
+_WRITER_STATE = writer_lock.updater_state()
+_INFERENCE_SOURCE_STAT = os.stat(inference.__file__).st_mtime_ns
 
 # ---------- patterns ----------
 
@@ -82,10 +88,8 @@ _MED_PERIOD = re.compile(
     r"(?<![\d/])(?:(\d{4})/)?(\d{1,2}/\d{1,2})"
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
 # Facility/provider names and service explanations are not encounter evidence.
-ENCOUNTER_CUE = (r"(?:診察|往診|診療)(?!医|所|科|機関|方針|報酬|体制|契約|情報|録|券|室|"
-                 r"の(?:説明|方針|契約|案内|資料)|について(?:の)?(?:説明|案内|資料)|"
-                 r"に関する(?:説明|案内|資料))|診て(?:くれ|いただ|もら)")
-RULE_VERSION = 24
+ENCOUNTER_CUE = clinical_events.ENCOUNTER_CUE
+RULE_VERSION = 25
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問(?:診療)?|診察|往診)")
@@ -188,7 +192,7 @@ def _period_dates(a, b, start_year, end_year, posted, context):
 
 
 def extract_message(body: str, posted_at: str) -> dict:
-    """Structured view of one message. Missing fields are simply absent."""
+    """Extract source-bound clinical events and legacy rule classification tags."""
     out: dict = {"v": 1}
     year = None
     posted = None
@@ -199,28 +203,37 @@ def extract_message(body: str, posted_at: str) -> dict:
         pass
 
     # --- events ---
-    ev = set()
     event_patterns = {
         "visit": r"訪問(?:し|した|時|実施|致し)", "exam": ENCOUNTER_CUE,
-        "admission": r"入院|退院|搬送|急性期",
-        "eol": r"看取り|緩和|終末期|ACP|オピオイド|モルヒネ|逝去|お亡くなり|亡くなっ|死亡確認|息を引き取|心肺停止",
+        "admission": r"入院", "discharge": r"退院|出院|退所|退館",
+        "eol": r"看取り|終末期|逝去|お亡くなり|亡くなっ|死亡|臨終|永眠",
         "care": r"デイ|ショートステイ|ケアプラン|要介護|介護度",
-        "adherence": r"残薬|服薬|服用|一包化", "medication": r"処方|変更|開始|中止|減量|増量",
     }
-    event_mentions = []
-    for event, pattern in event_patterns.items():
+    cues = {kind: re.compile(pattern) for kind, pattern in event_patterns.items()}
+    nominated = [kind for kind, cue in cues.items() if cue.search(body)]
+    events, records, _ = clinical_events.normalize_events(nominated, None, body, cues=cues)
+    if records:
+        out["event_records"] = records
+    event_mentions = [{"event": record["kind"], "scope": record["subject"],
+                       "evidence": record["evidence"]}
+                      for record in records if record["subject"] in ("family", "other", "unknown")]
+    # These rule-only classification tags are separate from clinical occurrences.
+    tags = set()
+    for tag, pattern in {
+        "adherence": r"残薬|服薬|服用|一包化", "medication": r"処方|変更|開始|中止|減量|増量",
+    }.items():
         for match in re.finditer(pattern, body):
             scope = clinical_scope.patient_source_scope(body, match.start(), match.end())
             if scope in ("family", "other", "unknown"):
-                event_mentions.append({"event": event, "scope": scope, "evidence": match[0]})
+                event_mentions.append({"event": tag, "scope": scope, "evidence": match[0]})
             else:
-                ev.add(event)  # patient historical/planned mentions remain mentions
+                tags.add(tag)
     if event_mentions:
         out["event_mentions"] = event_mentions
     if re.search(r"写真|画像|添付", body):
-        ev.add("media_ref")
-    if ev:
-        out["events"] = sorted(ev)
+        tags.add("media_ref")
+    if events or tags:
+        out["events"] = sorted(set(events) | tags)
 
     # --- visit date (first M/D preceding 訪問/診察) — a past event ---
     # A planned mention (次回10/5訪問予定) is not a visit that happened:
@@ -365,33 +378,31 @@ def extract_message(body: str, posted_at: str) -> dict:
     return out
 
 
-_STALE = """CASE WHEN json_valid(a.meta) THEN
-        json_extract(a.meta,'$.hash') IS NULL
-        OR json_extract(a.meta,'$.hash') != m.content_hash
-        OR COALESCE(json_extract(a.meta,'$.rule_version'),0) != ?
-      ELSE 1 END"""
-
-
 def _delete_stale(ledger) -> set:
-    """Find extract_v1 artifacts whose pinned hash no longer matches the
-    live body (content_hash drift — MCS allows edits) or whose rule
-    version is old. NULL meta hashes (legacy CLI artifacts) count as stale
-    — a missing hash must never shield a changed body (Oracle B19).
-    Stale rows whose body can no longer be extracted are dropped here; the
-    rest are returned and kept until _extract_rows replaces them, so a
-    deadline cut never leaves a message without extract_v1."""
-    stale = ledger.db.execute(f"""
-      SELECT DISTINCT a.message_id, {ELIGIBLE_MESSAGE} AS ok FROM artifacts a
-      JOIN messages m ON m.message_id=a.message_id
-      WHERE a.kind=? AND {_STALE}
-    """, (KIND, RULE_VERSION)).fetchall()
+    """Drop only current-generation stale rows whose source is no longer eligible."""
+    if (_WRITER_STATE[0] or os.stat(inference.__file__).st_mtime_ns != _INFERENCE_SOURCE_STAT
+            or inference.CURRENT_VERSION != _INFERENCE_VERSION):
+        return set()
+    import inference_dependency_loss as dependency_loss
     with ledger.db:
-        for r in stale:
-            if not r["ok"]:
-                ledger.db.execute(
-                    "DELETE FROM artifacts WHERE kind=? AND message_id=?",
-                    (KIND, r["message_id"]))
-    return {r["message_id"] for r in stale if r["ok"]}
+        if not ledger.db.in_transaction:
+            ledger.db.execute('BEGIN IMMEDIATE')
+        rows = ledger.db.execute(f"""
+            SELECT a.artifact_id,COALESCE(a.project_id,m.project_id) AS project_id,a.message_id,{ELIGIBLE_MESSAGE} AS ok
+            FROM artifacts a JOIN messages m ON m.message_id=a.message_id
+            WHERE a.kind=? AND {inference.current_meta_pred('a.meta', target=_INFERENCE_VERSION)}
+              AND (json_extract({json_or_null('a.meta')},'$.hash') IS NOT m.content_hash
+                   OR COALESCE(json_extract({json_or_null('a.meta')},'$.rule_version'),0)!=?)
+            """, (KIND, RULE_VERSION)).fetchall()
+        for row in rows:
+            if not row['ok']:
+                footprint = dependency_loss.capture_tx(ledger.db, row['project_id'], row['message_id'],
+                                                      artifact_ids=[row['artifact_id']])
+                added = dependency_loss.record_tx(ledger.db, footprint)
+                ledger.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (row['artifact_id'],))
+                if added:
+                    ledger.bump_inference_analysis_epoch_tx(row['project_id'])
+    return {r['message_id'] for r in rows if r['ok']}
 
 
 def run_pending(ledger, *, deadline: float | None = None) -> dict:
@@ -407,15 +418,14 @@ def run_pending(ledger, *, deadline: float | None = None) -> dict:
              m.content_hash
       FROM messages m
       WHERE {ELIGIBLE_MESSAGE}
-        AND (m.message_id NOT IN (SELECT message_id FROM artifacts
-                                  WHERE kind=? AND message_id IS NOT NULL)
-             OR EXISTS (SELECT 1 FROM artifacts a
-                        WHERE a.kind=? AND a.message_id=m.message_id
-                          AND {_STALE}))
+        AND NOT EXISTS (SELECT 1 FROM artifacts a
+          WHERE a.kind=? AND a.message_id=m.message_id
+          {current_extract_pred(error_check=False)}
+          AND json_extract(a.meta,'$.rule_version')=?)
       ORDER BY EXISTS (SELECT 1 FROM patients p
                        WHERE p.project_id=m.project_id AND p.is_archived),
                m.posted_at_ts DESC
-    """, (KIND, KIND, RULE_VERSION)).fetchall()
+    """, (KIND, RULE_VERSION)).fetchall()
     done, pids = _extract_rows(ledger, rows, deadline=deadline)
     return {"done": done, "pids": sorted(pids)}
 
@@ -431,19 +441,47 @@ def _extract_rows(ledger, rows, *, deadline: float | None = None) -> tuple[int, 
     pids = set()
     done = 0
     for i in range(0, len(rows), _CHUNK):
+        if (writer_lock.updater_state() != _WRITER_STATE or _WRITER_STATE[0]
+                or inference.CURRENT_VERSION != _INFERENCE_VERSION):
+            return done, pids
         with ledger.db:
             for r in rows[i:i + _CHUNK]:
                 if deadline is not None and time.monotonic() >= deadline:
                     return done, pids
                 d = extract_message(r["body_text"], r["posted_at"])
-                ledger.db.execute(
-                    "DELETE FROM artifacts WHERE kind=? AND message_id=?",
-                    (KIND, r["message_id"]))
-                ledger.artifact_add_tx(
+                if not ledger.db.in_transaction:
+                    ledger.db.execute("BEGIN IMMEDIATE")
+                source = ledger.db.execute(
+                    f"SELECT 1 FROM messages m WHERE m.message_id=? AND m.project_id=? "
+                    f"AND m.content_hash=? AND {ELIGIBLE_MESSAGE}",
+                    (r["message_id"], r["project_id"], r["content_hash"])).fetchone()
+                if source is None:
+                    continue
+                previous = ledger.db.execute(
+                    "SELECT content,meta FROM artifacts WHERE kind=? AND message_id=? AND "
+                    + inference.current_meta_pred("meta", target=_INFERENCE_VERSION)
+                    + " ORDER BY artifact_id DESC LIMIT 1", (KIND, r["message_id"])).fetchone()
+                previous_meta = loads_dict(previous["meta"]) if previous is not None else {}
+                changed = (previous is None or loads_dict(previous["content"]) != d
+                           or previous_meta.get("hash") != r["content_hash"]
+                           or previous_meta.get("rule_version") != RULE_VERSION)
+                import inference_dependency_loss as dependency_loss
+                replaced_ids = [old[0] for old in ledger.db.execute(
+                    'SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? AND '
+                    + inference.current_meta_pred('meta', target=_INFERENCE_VERSION), (KIND, r['message_id']))]
+                footprint = dependency_loss.capture_tx(ledger.db, r['project_id'], r['message_id'], artifact_ids=replaced_ids)
+                new_id = ledger.artifact_add_tx(
                     KIND, json.dumps(d, ensure_ascii=False),
-                    project_id=r["project_id"], message_id=r["message_id"],
-                    model="rules-v1", meta={"hash": r["content_hash"],
-                                            "rule_version": RULE_VERSION})
+                    project_id=r['project_id'], message_id=r['message_id'],
+                    model='rules-v1', meta={inference.VERSION_KEY: _INFERENCE_VERSION, 'hash': r['content_hash'],
+                        'source_binding': dependency_loss.source_binding(ledger.db, r['project_id'], r['message_id']),
+                        'rule_version': RULE_VERSION})
+                dependency_loss.record_tx(ledger.db, footprint, replacement_id=new_id)
+                ledger.db.execute('DELETE FROM artifacts WHERE kind=? AND message_id=? AND '
+                    + inference.current_meta_pred('meta', target=_INFERENCE_VERSION) + ' AND artifact_id!=?',
+                    (KIND, r['message_id'], new_id))
+                if changed:
+                    ledger.bump_inference_analysis_epoch_tx(r["project_id"])
                 pids.add(r["project_id"])
                 done += 1
     return done, pids

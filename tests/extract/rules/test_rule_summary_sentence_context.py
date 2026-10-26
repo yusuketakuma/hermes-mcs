@@ -44,20 +44,69 @@ def test_one_sentence_matching_confirm_and_request_is_not_duplicated():
 ])
 def test_administrative_encounter_words_do_not_become_exams(body):
     assert "exam" not in extract.extract_message(body, POSTED).get("events", [])
-    assert extract_validation.validate({"events": ["exam"]}, body) is None
+    result = extract_validation.validate({"events": ["exam"]}, body)
+    assert result is None or (result["events"] == []
+                              and all(record["unverified"] for record in result["event_records"]))
+
+
+@pytest.mark.parametrize("body,status,confirmed", [
+    ("本日、本人は診察を受けました。", "current", True),
+    ("昨日、本人の往診を実施しました。", "past", False),
+    ("来週、本人の診療を予約しました。", "planned", False),
+    ("本人の訪問診療を予定しています。", "planned", False),
+    ("明日の診察について相談しました。", "planned", False),
+    ("往診医が来て診てくれました。", "current", False),
+])
+def test_actual_and_planned_encounters_remain_mentions(body, status, confirmed):
+    for result in (extract.extract_message(body, POSTED),
+                   extract_validation.validate({"events": ["exam"]}, body)):
+        assert ("exam" in result.get("events", [])) is confirmed
+        records = [record for record in result["event_records"] if record["kind"] == "exam"]
+        assert records and all(record["status"] == status for record in records)
+        for record in records:
+            span = record["span"]
+            assert body[span["start"]:span["end"]] == record["evidence"]
+
+
+@pytest.mark.parametrize("body,kind,subject,status,negated,confirmed", [
+    ("本人は現在、入院しました。", "admission", "patient", "current", False, True),
+    ("本人は過去に入院しました。", "admission", "patient", "past", False, False),
+    ("本人は明日入院予定です。", "admission", "patient", "planned", False, False),
+    ("本人が入院した場合は連絡してください。", "admission", "patient", "conditional", False, False),
+    ("本人は入院はありません。", "admission", "patient", "current", True, False),
+    ("母は現在、入院しました。", "admission", "family", "current", False, False),
+    ("他者は現在、入院しました。", "admission", "other", "current", False, False),
+    ("本人は本日退院しました。", "discharge", "patient", "current", False, True),
+])
+def test_rule_event_records_keep_person_period_and_polarity(body, kind, subject, status, negated, confirmed):
+    result = extract.extract_message(body, POSTED)
+    record, = [record for record in result["event_records"] if record["kind"] == kind]
+    assert (record["subject"], record["status"], record["negated"]) == (subject, status, negated)
+    assert not record.get("unverified")
+    assert (kind in result.get("events", [])) is confirmed
+    assert body[record["span"]["start"]:record["span"]["end"]] == record["evidence"]
+    if kind == "discharge":
+        assert "admission" not in result.get("events", [])
 
 
 @pytest.mark.parametrize("body", [
-    "本日、本人は診察を受けました。",
-    "昨日、本人の往診を実施しました。",
-    "来週、本人の診療を予約しました。",
-    "本人の訪問診療を予定しています。",
-    "明日の診察について相談しました。",
-    "往診医が来て診てくれました。",
+    "本人は救急搬送されました。", "本人は急性期病棟で過ごしました。",
+    "本人はオピオイドを使用しています。", "本人はモルヒネを使用しています。",
+    "本人はACPについて相談しました。",
 ])
-def test_actual_and_planned_encounters_remain_mentions(body):
-    assert "exam" in extract.extract_message(body, POSTED)["events"]
-    assert extract_validation.validate({"events": ["exam"]}, body)["events"] == ["exam"]
+def test_rule_keyword_does_not_invent_admission_or_eol(body):
+    result = extract.extract_message(body, POSTED)
+    assert not {"admission", "eol"}.intersection(result.get("events", []))
+    assert not any(record["kind"] in ("admission", "eol") for record in result.get("event_records", []))
+
+
+def test_rule_only_classification_tags_and_event_types_keep_their_contract():
+    body = "本人は服薬しています。処方を確認しました。写真を添付します。本人は現在入院しました。"
+    result = extract.extract_message(body, POSTED)
+    assert {"adherence", "medication", "media_ref", "admission"}.issubset(result["events"])
+    assert all(isinstance(event, str) for event in result["events"])
+    assert all(record["kind"] in ("admission",) for record in result["event_records"])
+    assert all(type(record["negated"]) is bool for record in result["event_records"])
 
 
 def test_stale_rules_rebuild_and_render_without_unrelated_sentences(tmp_path):

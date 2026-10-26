@@ -1,4 +1,6 @@
 """Revision-bound advisory candidates; formal requests remain human-owned."""
+
+from inference_version import CURRENT_VERSION, VERSION_KEY, is_current as inference_current
 import semantic_policy
 import json
 import time
@@ -30,7 +32,7 @@ def rejected_relation_pair(receipt: dict, meta: dict, policy: str, scope: str):
     else None — a damaged row is kept as history but never trusted."""
     ids = (receipt.get("loop_artifact_id"), receipt.get("trigger_message_id"))
     revision, code = receipt.get("trigger_revision"), receipt.get("code")
-    if (meta.get("policy_fingerprint") != policy
+    if (not inference_current(meta) or meta.get("policy_fingerprint") != policy
             or meta.get("retry_scope") != scope
             or meta.get("registry") != jev.REGISTRY_VERSION
             or meta.get("invalidated")
@@ -65,7 +67,7 @@ def _candidate_identity(candidate: dict) -> str:
 
 
 def _current_meta(meta: dict, fingerprint: str, policy: str) -> bool:
-    return (meta.get("fingerprint") == fingerprint
+    return (inference_current(meta) and meta.get("fingerprint") == fingerprint
             and meta.get("policy_fingerprint") == policy
             and not meta.get("invalidated"))
 
@@ -132,7 +134,7 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
         own = {}
         for row in rows_by_mid.get(mid, ()):
             meta = _object(row["meta"])
-            if meta.get("fingerprint") == fp \
+            if inference_current(meta) and meta.get("fingerprint") == fp \
                     and meta.get("policy_fingerprint") == policy:
                 own.setdefault(_candidate_identity(_object(row["content"])),
                                []).append((row["artifact_id"], meta))
@@ -179,7 +181,7 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
             ledger.artifact_add(
                 KIND_LOOP, json.dumps(candidate, ensure_ascii=False),
                 project_id=project_id, message_id=mid, model=jev.JEV_MODEL,
-                meta={"fingerprint": fp, "candidate_fp": key,
+                meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "candidate_fp": key,
                       "policy_fingerprint": policy,
                       "registry": jev.REGISTRY_VERSION})
             seen_candidates.add(key)
@@ -209,6 +211,8 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
     }
     for row in candidate_rows:
         meta = _object(row["meta"])
+        if not inference_current(meta):
+            continue  # prior-engine candidates remain history until source re-evaluation
         # a reinterpreted-away row is history, never a fork source
         if meta.get("invalidated") or _current_meta(meta, fp, policy):
             continue
@@ -250,7 +254,7 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
             KIND_LOOP, json.dumps(current, ensure_ascii=False),
             project_id=project_id, message_id=row["message_id"],
             model=jev.JEV_MODEL,
-            meta={"fingerprint": fp, "candidate_fp": key,
+            meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "candidate_fp": key,
                   "policy_fingerprint": policy,
                   "registry": jev.REGISTRY_VERSION})
         seen_candidates.add(key)
@@ -375,7 +379,7 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                          "code": code}),
                     project_id=project_id, message_id=target["message_id"],
                     model=jev.JEV_MODEL,
-                    meta={"fingerprint": fp, "policy_fingerprint": policy,
+                    meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
                           "registry": jev.REGISTRY_VERSION,
                           "retry_scope": retry_scope, "jev_requests": 2})
                 rejections.append({"code": code, "cached": False})
@@ -403,7 +407,7 @@ def update_loops(ledger, project_id, bundle, facts_by_target, jev_client,
                 KIND_LOOP_EVENT, json.dumps(event, ensure_ascii=False),
                 project_id=project_id, message_id=target["message_id"],
                 model=jev.JEV_MODEL,
-                meta={"fingerprint": fp, "policy_fingerprint": policy,
+                meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
                       "registry": jev.REGISTRY_VERSION,
                       "jev_requests": asked + 1})
             seen_pairs.add(key)

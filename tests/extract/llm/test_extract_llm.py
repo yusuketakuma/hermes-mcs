@@ -18,6 +18,8 @@ import urllib.request
 import pytest
 
 import extract_llm
+import inference_dependency_loss as dependency_loss
+from inference_version import CURRENT_VERSION, VERSION_KEY
 import mcs_signals
 import mcs_stats
 import structured_view
@@ -709,15 +711,15 @@ def test_replace_current_rerenders_card_once_written(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "load_config", lambda: {"notify": {"interactive": "slack"}})
     db = _ledger(tmp_path)
     db.save_messages([_message()])
-    pid, chash = db.db.execute(
-        "SELECT project_id,content_hash FROM messages WHERE message_id=1").fetchone()
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row['_source_binding'] = dependency_loss.source_binding(db.db,row['project_id'],row['message_id'])
+    pid = row['project_id']
     calls = []
     monkeypatch.setattr(notify_cards, "rerender_message_cards",
                         lambda ledger, cfg, p, mid: calls.append((p, mid)))
     assert extract_llm._replace_current(
-        db, {"message_id": 1, "content_hash": "stale"}, "{}") is False
+        db, {**row, "content_hash": "stale"}, "{}") is False
     assert calls == []
-    row = {"message_id": 1, "content_hash": chash}
     assert extract_llm._replace_current(db, row, '{"summary":"合成"}') is True
     assert calls == [(pid, 1)]
 
@@ -1344,10 +1346,10 @@ def test_chunked_full_coverage_and_merge(monkeypatch):
     # (name, subject, action) key — a stop AND a later start coexist
     assert [(m["name"], m["action"]) for m in out["meds"]] == [
         ("薬A", "stop"), ("薬A", "start"), ("薬B", None)]
-    # last status wins: the resolved marker must survive
-    assert out["symptoms"] == [{"text": "発熱", "negated": False,
-                                "status": "resolved",
-                                "unverified": True}]
+    # Both reported states survive; source order alone must not erase history.
+    assert out["symptoms"] == [
+        {"text": "発熱", "negated": False, "status": "new", "unverified": True},
+        {"text": "発熱", "negated": False, "status": "resolved", "unverified": True}]
     assert out["vitals"] == {"hr": 90.0, "spo2": 95.0}
     assert out["urgency"] == "high"
     # a part-summary must not masquerade as the whole message's gist
@@ -1520,24 +1522,33 @@ def test_transport_error_still_fails(tmp_path, monkeypatch):
 
 # ---------- F06/F07/F08/F09 regression ----------
 
-def test_rollup_newer_stop_suppresses_older_current(tmp_path):
-    """F06: a stop report newer than a 'current' mention resolves the
-    name OUT of the current-meds list."""
+def test_rollup_later_historical_stop_does_not_erase_a_current_use_report(tmp_path):
+    """Posting order cannot turn an explicit historical stop into a current stop."""
+    import inference_version
     db = _ledger(tmp_path)
     db.ensure_patient(1)
+    current = "本人は現在合成薬A5mgを服用中です。"
+    historical = "本人は以前合成薬Aを中止していました。"
     db.save_messages([_message(
-        mid=1, body="ロキソニン内服中",
+        mid=1, body=current,
         posted_at="2026-09-19T00:00:00+09:00")])
-    _llm_artifact(db, 1, {"meds": [
-        {"name": "ロキソニン", "action": "none", "status": "current",
-         "subject": "patient"}]}, _hash(db, 1))
+    db.artifact_add("extract_llm", json.dumps({"meds": [
+        {"name": "合成薬A", "dose": "5mg", "action": "none", "status": "current",
+         "subject": "patient", "negated": False, "evidence": current}]}), project_id=1, message_id=1,
+        meta={"hash": _hash(db, 1), inference_version.VERSION_KEY: inference_version.CURRENT_VERSION})
+    assert rollup.build_rollup(db.db, 1)["medications"] == [
+        {"name": "合成薬A", "dose": "5mg", "last": "2026-09-19T00:00:00+09:00"}]
     db.save_messages([_message(
-        mid=2, body="ロキソニンは中止しました",
+        mid=2, body=historical,
         posted_at="2026-09-20T00:00:00+09:00")])
-    _llm_artifact(db, 2, {"meds": [
-        {"name": "ロキソニン", "action": "stop", "status": "past",
-         "subject": "patient"}]}, _hash(db, 2))
-    assert rollup.build_rollup(db.db, 1).get("medications", []) == []
+    db.artifact_add("extract_llm", json.dumps({"meds": [
+        {"name": "合成薬A", "action": "stop", "status": "past", "negated": False,
+         "subject": "patient", "evidence": historical}]}), project_id=1, message_id=2,
+        meta={"hash": _hash(db, 2), inference_version.VERSION_KEY: inference_version.CURRENT_VERSION})
+    view = rollup.build_rollup(db.db, 1)
+    assert view["medications"] == [{"name": "合成薬A", "dose": "5mg", "last": "2026-09-19T00:00:00+09:00"}]
+    assert len(view["clinical_state"]["groups"]["history"]) == 1
+    assert len(view["clinical_state"]["facts"]) == 2
     db.close()
 
 
@@ -1682,8 +1693,9 @@ def test_extract_claim_is_exclusive_and_releases(tmp_path):
     """F14: only one worker can hold a row's lease; release frees it."""
     db = _ledger(tmp_path)
     db.save_messages([_message()])
-    row = db.db.execute(
-        "SELECT * FROM messages WHERE message_id=1").fetchone()
+    row = dict(db.db.execute(
+        "SELECT * FROM messages WHERE message_id=1").fetchone())
+    row['_source_binding'] = dependency_loss.source_binding(db.db,row['project_id'],row['message_id'])
     lease = extract_llm._claim(db, row)
     assert lease is not None
     assert extract_llm._claim(db, row) is None
@@ -1696,8 +1708,9 @@ def test_extract_claim_expired_lease_is_stealable(tmp_path):
     """A crashed worker's claim self-expires — no permanent stall."""
     db = _ledger(tmp_path)
     db.save_messages([_message()])
-    row = db.db.execute(
-        "SELECT * FROM messages WHERE message_id=1").fetchone()
+    row = dict(db.db.execute(
+        "SELECT * FROM messages WHERE message_id=1").fetchone())
+    row['_source_binding'] = dependency_loss.source_binding(db.db,row['project_id'],row['message_id'])
     extract_llm._claim(db, row)
     db.db.execute(
         "UPDATE fetch_jobs SET next_try=? WHERE kind='extract_claim'",
@@ -2418,21 +2431,24 @@ def test_stale_error_row_does_not_gate_fresh_body(tmp_path, monkeypatch):
     db.close()
 
 
-def test_malformed_llm_retry_metadata_is_held(tmp_path, monkeypatch):
+def test_malformed_old_metadata_is_preserved_without_poisoning_current_retry(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
-    db.save_messages([_message()])
+    db.save_messages([_message(body="完全合成の記録です")])
     with db.db:
         db.db.execute(
             "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
             "VALUES('extract_llm',1,1,'{}','{broken')")
-    monkeypatch.setattr(
-        extract_llm, "llm_extract", lambda body, **_: pytest.fail("must not retry"))
+    calls = []
+    monkeypatch.setattr(extract_llm, "llm_extract", lambda body, **_: calls.append(body) or {})
 
     result = extract_llm.run_pending(db, limit=1, budget_s=5)
 
-    assert result["done"] == 0
-    assert result["left"] == 1
-    assert len(db.artifacts("extract_llm", message_id=1)) == 1
+    assert calls == ["完全合成の記録です"]
+    assert result["done"] == 1 and result["left"] == 0
+    rows = db.artifacts("extract_llm", message_id=1)
+    assert len(rows) == 2 and sum(row["meta"] == "{broken" for row in rows) == 1
+    current = [row for row in rows if row["meta"] != "{broken"]
+    assert len(current) == 1 and json.loads(current[0]["meta"])[VERSION_KEY] == CURRENT_VERSION
     db.close()
 
 
@@ -2602,8 +2618,9 @@ def test_invalid_item_never_discards_valid_sibling(bad):
 def test_invalid_chunk_checkpoint_is_reinferred(tmp_path, monkeypatch, bad):
     db = _ledger(tmp_path)
     db.save_messages([_message(body="合成薬を確認")])
-    row = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
-    extract_llm._persist_chunks(db, row, {0: {"summary": "旧要約"}})
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row['_source_binding'] = dependency_loss.source_binding(db.db,row['project_id'],row['message_id'])
+    assert extract_llm._persist_chunks(db, row, {0: {"summary": "旧要約"}})
     if bad == "meta_scalar":
         db.db.execute("UPDATE artifacts SET meta='[]' WHERE kind='extract_llm_chunk'")
     elif bad == "content_scalar":
@@ -2625,9 +2642,12 @@ def test_invalid_chunk_checkpoint_is_reinferred(tmp_path, monkeypatch, bad):
 def test_delayed_rule_write_preserves_new_source_artifact(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message(body="旧本文")])
-    stale = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    stale = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    stale['_source_binding'] = dependency_loss.source_binding(db.db,stale['project_id'],stale['message_id'])
     db.save_messages([_message(body="改訂本文")])
-    current = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    current = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    current['_source_binding'] = dependency_loss.source_binding(db.db,current['project_id'],current['message_id'])
+    assert stale['_source_binding'] != current['_source_binding']
     extract_llm._ensure_v1(db, current, {"v": 1, "summary": "改訂"})
     extract_llm._ensure_v1(db, stale, {"v": 1, "summary": "旧版"})
     rows = db.artifacts("extract_v1")
@@ -2650,7 +2670,8 @@ def test_newer_clean_qc_supersedes_older_flag(tmp_path, monkeypatch):
 def test_v4_publication_between_prepare_and_insert_fences_legacy(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message(body="合成本文")])
-    row = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row['_source_binding'] = dependency_loss.source_binding(db.db,row['project_id'],row['message_id'])
     other = _ledger(tmp_path)
     published = []
 
@@ -2659,7 +2680,7 @@ def test_v4_publication_between_prepare_and_insert_fences_legacy(tmp_path):
         if not published and sql == "BEGIN IMMEDIATE":
             other.artifact_add("semantic_facts_v4", '{"meds":[]}',
                                project_id=1, message_id=1,
-                               meta={"hash": row["content_hash"], "engine_version": 4,
+                               meta={"hash": row["content_hash"], "engine_version": 4, VERSION_KEY: CURRENT_VERSION,
                                      "projection_version": PROJECTION_VERSION})
             published.append(True)
 

@@ -212,11 +212,17 @@ def test_patient_mentions_use_raw_current_owner_and_preserve_written_qualifiers(
     import patient_context_view as pcv
 
     store = context_db
+    med_quote = '家族は架空薬Aを5mg、1日2回、経口で頓用する予定はありません。'
+    symptom_quote = '本人は以前架空症状がありました。'
+    body = med_quote + '\n' + symptom_quote + '\n架空規則薬と架空規則症状の記載。'
+    store.save_messages([_message(1, body=body)], project_id=1)
     rule = {"medications": [{"name": "架空薬A"}, {"name": "架空規則薬"}],
             "symptoms": ["架空症状", "架空規則症状"]}
-    fact = {"meds": [{"name": "架空薬A", "subject": "family", "dose": "5mg",
-                      "status": "planned", "negated": True}],
-            "symptoms": [{"text": "架空症状", "subject": "patient", "status": "past"}]}
+    fact = {"meds": [{"name": "架空薬A", "subject": "family", "dose": "5mg", "freq": "1日2回",
+                      "route": "経口", "prn": True, "status": "planned", "negated": True,
+                      "evidence": med_quote, "evidence_span": [0, len(med_quote)]}],
+            "symptoms": [{"text": "架空症状", "subject": "patient", "status": "past",
+                          "evidence": symptom_quote, "evidence_span": [len(med_quote)+1, len(med_quote)+1+len(symptom_quote)]}]}
     _artifact(store, "extract_v1", 1, rule, {"hash": _hash_of(store, 1)})
     _artifact(store, "extract_llm", 1, {"meds": [{"name": "旧世代薬"}]},
               {"hash": _hash_of(store, 1)})
@@ -228,14 +234,19 @@ def test_patient_mentions_use_raw_current_owner_and_preserve_written_qualifiers(
     try:
         raw = mcs_queries.source_patient_mentions(store.db, 1)
         assert [(r["category"], r["text"], r["subject"], r["mention"]) for r in raw] == [
-            ("medications", "架空薬A", "family", {"dose": "5mg", "status": "planned", "negated": True}),
+            ("medications", "架空薬A", "family", {"dose": "5mg", "freq": "1日2回", "route": "経口", "prn": True, "status": "planned", "negated": True}),
             ("symptoms", "架空症状", "patient", {"status": "past"}),
             ("medications", "架空規則薬", "unspecified", {"unverified": True}),
             ("symptoms", "架空規則症状", "unspecified", {"unverified": True})]
         assert all(r["message_id"] == 1 and r["content_hash"] == _hash_of(store, 1)
-                   and r["quote"] == BODY and "source" not in r for r in raw)
+                   and r["reference_context"]["text"] == body and "source" not in r for r in raw)
+        assert [r['quote'] for r in raw[:2]] == [med_quote, symptom_quote]
+        assert all(body[slice(*r['evidence_span'])] == r['evidence'] for r in raw)
+        assert all(r['quote'] != body for r in raw)
         decorated = pcv._mentions(store.db, 1, {1: ("架空投稿者", "架空職種")})
         assert [r["text"] for r in decorated] == [r["text"] for r in raw]
+        assert [(r['evidence'], r['evidence_span'], r['reference_context'], r['mention']) for r in decorated] == [
+            (r['evidence'], r['evidence_span'], r['reference_context'], r['mention']) for r in raw]
         assert all(r["sender"] == "架空投稿者" and r["profession"] == "架空職種"
                    and r["source"] == "chat" and r["details"] == [] for r in decorated)
         assert mcs_queries.source_patient_mentions(store.db, 2) == []
@@ -257,3 +268,35 @@ def test_patient_mentions_read_failure_is_not_an_empty_observation():
     with pytest.raises(sqlite3.OperationalError) as raised:
         source_patient_mentions(RefusingDB(), 1)
     assert raised.value is fault
+
+
+@pytest.mark.parametrize('span', [[True, 2], [-1, 2], [0, 9999], [1, 4], None])
+def test_patient_mentions_never_guess_an_invalid_or_ambiguous_assertion_span(context_db, span):
+    import mcs_queries
+    text = '架空薬Aを5mg服用中です。'
+    body = text+'別の合成記録。'+text
+    context_db.save_messages([_message(1, body=body)], project_id=1)
+    fact = {'name':'架空薬A', 'dose':'5mg', 'freq':'1日2回', 'route':'経口', 'prn':True, 'evidence':text}
+    if span is not None:
+        fact['evidence_span'] = span
+    _artifact(context_db, 'extract_llm', 1, {'meds':[fact]}, {'hash':_hash_of(context_db,1)})
+    row = mcs_queries.source_patient_mentions(context_db.db, 1)[0]
+    assert row['evidence_span'] is None and row['quote'] == row['evidence'] == ''
+    assert row['reference_context']['text'] == body
+    assert row['mention'] == {'dose':'5mg', 'freq':'1日2回', 'route':'経口', 'prn':True, 'unverified':True}
+
+
+def test_patient_mentions_accept_known_repeated_occurrence_with_null_full_body(context_db):
+    import mcs_queries
+    text = '架空薬Aを5mg服用中です。'
+    prefix = text+'別の合成記録。'
+    body = prefix+text
+    context_db.save_messages([_message(1, body=body)], project_id=1)
+    with context_db.db:
+        context_db.db.execute('UPDATE messages SET body_state=NULL WHERE message_id=1')
+    _artifact(context_db, 'extract_llm', 1, {'meds':[{
+        'name':'架空薬A', 'dose':'5mg', 'evidence':text, 'evidence_span':[len(prefix),len(body)]}]},
+        {'hash':_hash_of(context_db,1)})
+    row = mcs_queries.source_patient_mentions(context_db.db,1)[0]
+    assert row['evidence'] == text and row['evidence_span'] == [len(prefix),len(body)]
+    assert 'unverified' not in row['mention']

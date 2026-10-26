@@ -7,6 +7,8 @@ source text is used only to build model input and verify codepoint spans; no
 network client is created here.
 """
 from __future__ import annotations
+
+from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
 import clinical_values
 from mcs_queries import iter_artifacts
 import mcs_util
@@ -31,7 +33,7 @@ SCHEMA_VERSION = "semantic-extraction/v1"
 
 def _chunk_generation(model: str, prompt_template: str, *, chunk_size: int = 3000) -> str:
     """Return the model + prompt identity a cached chunk must match."""
-    return f"{model}|{sf.text_sha256(prompt_template)[:16]}|plan:{clinical_chunking.PLAN_VERSION}|size:{chunk_size}"
+    return f"inference:{CURRENT_VERSION}|{model}|{sf.text_sha256(prompt_template)[:16]}|plan:{clinical_chunking.PLAN_VERSION}|size:{chunk_size}"
 
 
 def v2_generation() -> str:
@@ -70,7 +72,7 @@ def _persist_manifest(ledger, project_id, message_id, model, source_fp,
                                 message_id=message_id)
     for row in reversed(existing or []):
         meta = loads_dict(row["meta"])
-        if meta is not None \
+        if meta is not None and is_current(meta) \
                 and meta.get("source_fingerprint") == source_fp \
                 and meta.get("version") == assembly.MANIFEST_VERSION:
             if loads_dict(row["content"]) == doc:
@@ -80,13 +82,15 @@ def _persist_manifest(ledger, project_id, message_id, model, source_fp,
         KIND_MANIFEST,
         json.dumps(doc, ensure_ascii=False, allow_nan=False),
         project_id=project_id, message_id=message_id, model=model,
-        meta={"version": assembly.MANIFEST_VERSION,
+        meta={VERSION_KEY: CURRENT_VERSION, "version": assembly.MANIFEST_VERSION,
               "source_fingerprint": source_fp,
               "body_codepoints": body_len,
               "atoms": len(manifest["atoms"]),
               "chunks": len(manifest["chunks"])})
     from extraction_refresh import refresh_extraction_cards
-    refresh_extraction_cards(ledger, project_id, message_id)
+    from semantic_store import refresh_cards_allowed
+    if refresh_cards_allowed(getattr(ledger, 'db', None), project_id, message_id):
+        refresh_extraction_cards(ledger, project_id, message_id)
 
 
 def _json_object(response):
@@ -166,7 +170,7 @@ def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
                 continue
             index = meta["chunk_index"]
             spec = wanted[index]
-            if (meta.get("schema") != schema
+            if (not is_current(meta) or meta.get("schema") != schema
                     or meta.get("generation") != generation
                     or meta.get("status") != "complete"
                     or meta.get("source_fingerprint") != source_fp
@@ -328,7 +332,7 @@ def progress_for_message(db, row, *, model, policy_fingerprint, chunk_size=3000)
         if not meta and publication["model"] == model:
             publication_blocked = True
             break
-        if (not meta or publication["model"] != model or meta.get("hash") != row["content_hash"]
+        if (not meta or not is_current(meta) or publication["model"] != model or meta.get("hash") != row["content_hash"]
                 or meta.get("fingerprint") != fp or meta.get("policy_fingerprint") != policy_fingerprint):
             continue
         publication_blocked = True
@@ -378,6 +382,7 @@ def _persist_chunk(ledger, project_id, message_id, model, source_fp,
     if extra_content:
         content.update(extra_content)
     meta = {
+        VERSION_KEY: CURRENT_VERSION,
         "schema": schema,
         "status": "complete",
         "source_fingerprint": source_fp,
@@ -395,7 +400,9 @@ def _persist_chunk(ledger, project_id, message_id, model, source_fp,
         kind, json.dumps(content, ensure_ascii=False, allow_nan=False),
         project_id=project_id, message_id=message_id, model=model, meta=meta)
     from extraction_refresh import refresh_extraction_cards
-    refresh_extraction_cards(ledger, project_id, message_id)
+    from semantic_store import refresh_cards_allowed
+    if refresh_cards_allowed(getattr(ledger, 'db', None), project_id, message_id):
+        refresh_extraction_cards(ledger, project_id, message_id)
 
 
 def extract_facts_resumable(llm_fn, member: dict,
@@ -791,13 +798,15 @@ def extract_facts_v2(llm_fn, member: dict,
 def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
                             project_id, stored_doc: dict, stored_meta: dict):
     """Assemble stored chunks without model/preflight dispatch, writes or transaction ownership."""
+    if not is_current(stored_meta):
+        return None, 'inference_version_changed'
     source, message_id, project_id, revision, source_fp, body_hash = \
         _member_source(member, project_id, source_fingerprint)
     manifest = assembly.build_manifest(source, source_fp, 3000)
     expected = assembly.manifest_content(manifest, len(source))
     for row in iter_artifacts(db, KIND_MANIFEST, project_id, message_id, descending=True):
         meta = loads_dict(row["meta"])
-        if (meta is not None and meta.get("source_fingerprint") == source_fp
+        if (meta is not None and is_current(meta) and meta.get("source_fingerprint") == source_fp
                 and meta.get("version") == assembly.MANIFEST_VERSION):
             if loads_dict(row["content"]) != expected:
                 return None, "manifest_changed"

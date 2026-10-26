@@ -15,7 +15,8 @@ import sqlite3
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from mcs_util import loads_dict, search_fold
+from mcs_util import loads_dict, payload_hash, search_fold
+from inference_version import CURRENT_VERSION, current_meta_pred, is_current, read_version, valid_meta_pred
 from patient_context import merged_context
 from semantic_projection import PROJECTION_VERSION
 
@@ -61,11 +62,12 @@ def json_object_or_null(col: str) -> str:
             f"THEN {col} END")
 
 
-def current_extract_pred(art: str = "a", msg: str = "m", *,
-                         content: bool = True,
-                         error_check: bool = True) -> str:
-    """AND-fragment: the artifact row is the message's current valid
-    extraction. json_valid MUST gate every json_extract — one malformed
+def source_extract_pred(art: str = "a", msg: str = "m", *,
+                        content: bool = True,
+                        error_check: bool = True) -> str:
+    """Match a valid source-bound extraction without a public version constraint.
+
+    json_valid MUST gate every json_extract — one malformed
     meta/content row would otherwise raise and kill the whole query.
 
     `content=False` is for the "parsed" definition in data_quality:
@@ -79,6 +81,7 @@ def current_extract_pred(art: str = "a", msg: str = "m", *,
         parts.append(f"json_type({art}.content)='object'")
     if error_check:
         parts.append(f"COALESCE(json_extract({art}.meta,'$.error'),0)=0")
+    parts.append(f"COALESCE(json_extract({art}.meta,'$.invalidated'),0)=0")
     parts.append(f"json_extract({art}.meta,'$.hash')={msg}.content_hash")
     # Legacy message artifacts may omit project_id (the public ledger API
     # permits it); their globally unique message_id supplies the scope.
@@ -86,7 +89,16 @@ def current_extract_pred(art: str = "a", msg: str = "m", *,
     return (f" AND ({art}.project_id IS NULL OR {art}.project_id={msg}.project_id)"
             f" AND {msg}.body_state IS NOT 'deleted'"
             " AND CASE WHEN " + " AND ".join(guards)
-            + " THEN " + " AND ".join(parts) + " ELSE 0 END")
+            + " THEN " + " AND ".join(parts) + " ELSE 0 END"
+            + " AND " + valid_meta_pred(f"{art}.meta"))
+
+
+def current_extract_pred(art: str = "a", msg: str = "m", *,
+                         content: bool = True, error_check: bool = True,
+                         inference_target: str = CURRENT_VERSION) -> str:
+    """Require the exact public inference version as well as source validity."""
+    return (source_extract_pred(art, msg, content=content, error_check=error_check)
+            + " AND " + current_meta_pred(f"{art}.meta", target=inference_target))
 
 
 CANONICAL_PROJECTION_KIND = "canonical_projection"
@@ -125,12 +137,14 @@ def current_qc_pred(art: str = "a", msg: str = "m", *, version: int) -> str:
 
 def _projection_pred(art: str, hash_ref: str, *,
                      engine_version: int | None = None,
-                     require_version: bool = True) -> str:
+                     require_version: bool = True,
+                     inference_target: str = CURRENT_VERSION) -> str:
     """Build the shared current-row predicate for both projection kinds."""
     col = f"{art}." if art else ""
     return (f"CASE WHEN json_valid({col}content) AND json_valid({col}meta) "
             f"THEN json_type({col}content)='object' "
             f"AND json_type({col}meta)='object' "
+            f"AND {current_meta_pred(f'{col}meta', target=inference_target)} "
             f"AND COALESCE(json_extract({col}content,'$._error'),0)=0 "
             f"AND COALESCE(json_extract({col}meta,'$.error'),0)=0 "
             f"AND json_extract({col}meta,'$.hash')={hash_ref} "
@@ -143,16 +157,19 @@ def _projection_pred(art: str, hash_ref: str, *,
 
 
 def current_projection_pred(art: str = "c", hash_ref: str = "?", *,
-                            require_version: bool = True) -> str:
+                            require_version: bool = True,
+                            inference_target: str = CURRENT_VERSION) -> str:
     """Predicate: a canonical_projection row is usable right now —
     valid payloads, no error, hash-current to the source message, and not
     superseded by a later source save (meta.invalidated), using the
     current projection version. Only bounded maintenance may omit the
     version check. Shared by current_projection_id and candidates."""
-    return _projection_pred(art, hash_ref, require_version=require_version)
+    return _projection_pred(art, hash_ref, require_version=require_version,
+                            inference_target=inference_target)
 
 
-def current_projection_id(msg: str = "m", *, require_version: bool = True) -> str:
+def current_projection_id(msg: str = "m", *, require_version: bool = True,
+                          inference_target: str = CURRENT_VERSION) -> str:
     """Subquery: THE current canonical-projection row for a message —
     the newest valid artifact_id among hash-current, unexpired projections.
     The writer expires source/context/policy generations explicitly; a
@@ -160,7 +177,8 @@ def current_projection_id(msg: str = "m", *, require_version: bool = True) -> st
     EMPTY projection legitimately replaces an old non-empty one (C06).
     Returns the artifact_id or NULL."""
     pred = current_projection_pred("c", f"{msg}.content_hash",
-                                   require_version=require_version)
+                                   require_version=require_version,
+                                   inference_target=inference_target)
     return (f"(SELECT MAX(c.artifact_id) FROM artifacts c"
             f" WHERE c.kind='{CANONICAL_PROJECTION_KIND}'"
             f" AND c.message_id={msg}.message_id"
@@ -169,17 +187,21 @@ def current_projection_id(msg: str = "m", *, require_version: bool = True) -> st
 
 
 def current_v4_pred(art: str = "v", hash_ref: str = "?", *,
-                    require_version: bool = True) -> str:
+                    require_version: bool = True,
+                    inference_target: str = CURRENT_VERSION) -> str:
     """Predicate: a semantic_facts_v4 row is usable — same contract as
     current_projection_pred plus the engine version pin."""
     return _projection_pred(art, hash_ref, engine_version=4,
-                            require_version=require_version)
+                            require_version=require_version,
+                            inference_target=inference_target)
 
 
-def current_v4_id(msg: str = "m", *, require_version: bool = True) -> str:
+def current_v4_id(msg: str = "m", *, require_version: bool = True,
+                  inference_target: str = CURRENT_VERSION) -> str:
     """Subquery: THE current v4 read-model row for a message."""
     pred = current_v4_pred("v", f"{msg}.content_hash",
-                          require_version=require_version)
+                          require_version=require_version,
+                          inference_target=inference_target)
     return (f"(SELECT MAX(v.artifact_id) FROM artifacts v"
             f" WHERE v.kind='{V4_PROJECTION_KIND}'"
             f" AND v.message_id={msg}.message_id"
@@ -189,7 +211,8 @@ def current_v4_id(msg: str = "m", *, require_version: bool = True) -> str:
 
 def current_fact_pred(art: str = "a", msg: str = "m", *,
                       content: bool = True,
-                      error_check: bool = True) -> str:
+                      error_check: bool = True,
+                      inference_target: str = CURRENT_VERSION) -> str:
     """AND-fragment for fact-extraction reads: v4 PASS outranks the
     canonical projection, which outranks a legacy ``extract_llm`` row;
     each must satisfy current_extract_pred. A delayed v3 writer can
@@ -197,16 +220,19 @@ def current_fact_pred(art: str = "a", msg: str = "m", *,
     generation. The caller's FROM clause must admit all three kinds —
     ``<art>.kind IN ('extract_llm','canonical_projection',
     'semantic_facts_v4')``."""
+    v4 = current_v4_id(msg, inference_target=inference_target)
+    projection = current_projection_id(msg, inference_target=inference_target)
     return (current_extract_pred(art, msg, content=content,
-                                 error_check=error_check)
+                                 error_check=error_check,
+                                 inference_target=inference_target)
             + f" AND CASE WHEN {art}.kind='{V4_PROJECTION_KIND}'"
-              f" THEN {art}.artifact_id={current_v4_id(msg)}"
+              f" THEN {art}.artifact_id={v4}"
               f" WHEN {art}.kind='{CANONICAL_PROJECTION_KIND}'"
               f" THEN {art}.artifact_id="
-              f"{current_projection_id(msg)}"
-              f" AND {current_v4_id(msg)} IS NULL"
-              f" ELSE {current_projection_id(msg)} IS NULL"
-              f" AND {current_v4_id(msg)} IS NULL END")
+              f"{projection}"
+              f" AND {v4} IS NULL"
+              f" ELSE {projection} IS NULL"
+              f" AND {v4} IS NULL END")
 
 
 def med_period_artifacts(db):
@@ -353,6 +379,29 @@ def karte_summary_row(db, project_id: int):
         "WHERE kind='karte_summary' AND project_id=? "
         "ORDER BY artifact_id DESC LIMIT 1", (project_id,)).fetchone()
 
+
+
+def karte_source_record(row, project_id, *, historical=False):
+    """Shape one immutable Karte original and anchor only timezone-aware source timestamps."""
+    content = loads_dict(row['content']) or {}
+    body = content.get('comment')
+    posted = content.get('updated_at')
+    timestamp = None
+    if isinstance(posted, str):
+        try:
+            parsed = datetime.fromisoformat(posted.replace('Z', '+00:00'))
+            if parsed.tzinfo is not None and parsed.utcoffset() is not None:
+                timestamp = parsed.timestamp()
+        except (ValueError, OverflowError, OSError):
+            pass
+    return {'message_id': 0, 'source_key': 'karte:' + str(row['artifact_id']),
+            'source_artifact_id': row['artifact_id'], 'historical': historical,
+            'project_id': project_id, 'body_text': body if isinstance(body, str) else '',
+            'body_state': 'full' if isinstance(body, str) or content.get('empty') is True else 'partial',
+            'empty': content.get('empty') is True, 'content_hash': payload_hash(content),
+            'source': 'karte_summary', 'body_length': len(body) if isinstance(body, str) else 0,
+            'posted_at': posted, 'posted_at_ts': timestamp, 'first_seen': 0,
+            'sender_name': (content.get('updater') or {}).get('name')}
 
 def karte_summary_current(db, project_id: int) -> dict | None:
     """Newest stored 連携サマリー content plus fetched_at; None if never fetched."""
@@ -632,11 +681,11 @@ def _canonical_shape(content: dict) -> bool:
 
 
 def _kind_state(rows, content_hash: str, *, engine_version=None,
-                canonical=False) -> dict:
+                canonical=False, inference_target: str = CURRENT_VERSION) -> dict:
     """Classify one message's artifacts of one extraction kind.
     `rows` = artifact rows (newest-first) as mappings; the first valid
-    hash-current non-invalidated row wins — an older row matching the
-    current hash legitimately becomes current again on an A→B→A edit.
+    hash-current non-invalidated row wins. Source invalidation is sticky:
+    matching an earlier hash again never restores an invalidated result.
     Returns {"state", "artifact_id", "last_error"}."""
     saw_rows = saw_stale = saw_error = False
     current_id = None
@@ -653,6 +702,14 @@ def _kind_state(rows, content_hash: str, *, engine_version=None,
         if not isinstance(meta, dict) or not isinstance(content, dict):
             continue
         if canonical and not _canonical_shape(content):
+            continue
+        if meta.get("invalidated") not in (None, False, 0):
+            saw_stale = True
+            continue
+        if read_version(meta) is None:
+            continue
+        if not is_current(meta, target=inference_target):
+            saw_stale = True
             continue
         if (meta.get("error") not in (None, False, 0)
                 or content.get("_error") not in (None, False, 0)):
@@ -686,11 +743,13 @@ def _kind_state(rows, content_hash: str, *, engine_version=None,
 
 
 
-def extraction_kind_map(art_rows, content_hash) -> dict:
+def extraction_kind_map(art_rows, content_hash, *,
+                        inference_target: str = CURRENT_VERSION) -> dict:
     by_kind: dict = {}
     for kind in EXTRACTION_KINDS:
         kind_rows = [r for r in art_rows if r["kind"] == kind]
         st = _kind_state(kind_rows, content_hash,
+                         inference_target=inference_target,
                          engine_version=4 if kind == "semantic_facts_v4" else None,
                          canonical=kind in ("canonical_projection", "semantic_facts_v4"))
         entry = {"state": st["state"],
@@ -754,6 +813,18 @@ def source_patient_context(db, message, *, by_kind=None, art_rows=None):
     return items
 
 
+def extraction_input_signature(content, meta, model="") -> str:
+    """Bind adopted content and its contract without retry or observation bookkeeping."""
+    document = loads_dict(content) if isinstance(content, str) else content
+    metadata = loads_dict(meta) if isinstance(meta, str) else meta
+    if not isinstance(document, dict) or not isinstance(metadata, dict):
+        raise ValueError("extraction_input_invalid")
+    volatile = {"attempts", "auto_retry", "next_try", "config_generation",
+                "generated_at", "fetched_at", "upgrade", "reprojected_from"}
+    return payload_hash([document, model,
+                         {key: value for key, value in metadata.items() if key not in volatile}])
+
+
 def current_extraction_blobs(db, project_id: int) -> dict:
     """Read all current per-message extraction blobs for one project on borrowed db.
 
@@ -815,9 +886,10 @@ def source_patient_mentions(db, project_id: int) -> list[dict]:
     supplement names absent from the chosen fact generation and stay unverified;
     an empty result proves no clinical absence or acquisition completeness.
     """
+    from mcs_util import locate_quote_span
     arts = current_extraction_blobs(db, project_id)
     posts = {r[0]: (r[1], r[2], r[3]) for r in db.execute(
-        "SELECT message_id, posted_at_ts, content_hash, body_text FROM messages WHERE project_id=? AND body_state='full'",
+        "SELECT message_id, posted_at_ts, content_hash, body_text FROM messages WHERE project_id=? AND (body_state IS NULL OR body_state='full')",
         (project_id,))}
 
     def dicts(value):
@@ -836,12 +908,37 @@ def source_patient_mentions(db, project_id: int) -> list[dict]:
                  for x in dicts(v1.get("medications")) if x.get("name") not in named]
         rows += [("symptoms", x, {"unverified": True}) for x in v1.get("symptoms") or []
                  if isinstance(x, str) and x not in named]
-        out.extend({"category": category, "text": text, "quote": posts[mid][2],
-                    "subject": item.get("subject") or "unspecified",
-                    "mention": {k: item[k] for k in ("dose", "action", "status", "negated", "unverified")
-                                if k in item},
-                    "message_id": mid, "content_hash": posts[mid][1], "posted_at_ts": posts[mid][0]}
-                   for category, text, item in rows if isinstance(text, str) and text)
+        for category, text, item in rows:
+            if not isinstance(text, str) or not text:
+                continue
+            body = posts[mid][2] or ""
+            quote = item.get("evidence")
+            span = item.get("evidence_span")
+            if isinstance(item.get("span"), dict):
+                span = [item["span"].get("start"), item["span"].get("end")]
+            explicit = span is not None
+            if explicit:
+                if (not isinstance(span, (tuple, list)) or len(span) != 2
+                        or any(type(n) is not int for n in span) or not isinstance(quote, str)
+                        or not 0 <= span[0] < span[1] <= len(body) or body[span[0]:span[1]] != quote):
+                    span = None
+            elif isinstance(quote, str) and quote:
+                span = locate_quote_span(body, quote)
+            else:
+                # A name mention is not proof of dose/status. Keep the
+                # candidate and source context, without borrowing the body
+                # as evidence for every different fact in the post.
+                quote = text
+                span = locate_quote_span(body, text)
+            mention = {k: item[k] for k in ("dose", "freq", "route", "prn", "action", "status", "negated",
+                        "unverified", "onset", "duration", "severity", "time_text", "measured_on", "condition", "refers_to") if k in item}
+            if span is None or not isinstance(item.get("evidence"), str):
+                mention["unverified"] = True
+            out.append({"category": category, "text": text, "quote": quote if span is not None else "",
+                        "evidence": quote if span is not None else "", "evidence_span": list(span) if span is not None else None,
+                        "reference_context": {"text": body, "span": [0, len(body)]},
+                        "subject": item.get("subject") or "unspecified", "mention": mention,
+                        "message_id": mid, "content_hash": posts[mid][1], "posted_at_ts": posts[mid][0]})
     return out
 
 
