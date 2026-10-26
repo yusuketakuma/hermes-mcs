@@ -56,6 +56,9 @@ _EFFECT_PARENTS = {}
 _EFFECT_CLAIMED = set()
 _EFFECT_RUNNING = set()
 _EFFECT_CHILDREN = set()
+_EFFECT_ARTIFACTS = {}
+_EFFECT_IMPORTED = set()
+_EFFECT_COMPLETED = {}
 
 
 @dataclass(frozen=True, repr=False)
@@ -235,6 +238,93 @@ def _verify_registration_read(prepared, raw, *, now_ms):
         return value
     except (ValueError, TypeError, KeyError, AttributeError, OverflowError, RecursionError):
         raise ReleaseApplyError('REGISTRATION_HOLD') from None
+
+
+@dataclass(frozen=True, repr=False)
+class _StartedArtifact:
+    descriptor: int
+    descriptor_identity: tuple
+    attestation: bytes
+    source_manifest: bytes
+    source_sha256: str
+
+
+def _effect_artifact(entry):
+    from adapters.sdc import release_contract
+    import release_owner_source
+    if type(entry) is not _StartedEffect:
+        raise ReleaseApplyError('ARTIFACT_HOLD')
+    with _EFFECT_MUTEX:
+        if (_EFFECT_PARENTS.get(entry.owner) is not entry or entry not in _EFFECT_RUNNING
+                or entry.process_id != os.getpid()):
+            raise ReleaseApplyError('ARTIFACT_HOLD')
+        frame = _EFFECT_ARTIFACTS.get(entry.owner)
+    try:
+        if (type(frame) is not _StartedArtifact or type(frame.attestation) is not bytes
+                or type(frame.source_manifest) is not bytes
+                or _effect_fd_identity(frame.descriptor) != frame.descriptor_identity):
+            raise ValueError
+        attestation = release_contract.input_record(frame.attestation)
+        core, reference = attestation['core'], entry.reference
+        if (release_contract.hash_release_manifest(attestation) != entry.spent['operation']['manifest_digest']
+                or attestation['release_id'] != reference['release_id']
+                or any(core[key] != reference[ref] for key, ref in (
+                    ('commit', 'target_commit'), ('code_seq', 'target_code_seq'), ('lock_sha256', 'lock_sha256')))
+                or core['artifact']['sha256'] != reference['artifact_sha256']
+                or core['schema']['target'] != reference['target_schema']
+                or release_owner_source.digest(frame.source_manifest) != frame.source_sha256):
+            raise ValueError
+        return frame, attestation
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        raise ReleaseApplyError('ARTIFACT_HOLD') from None
+
+
+def _import_started_artifact(entry):
+    """Import fixed authenticated bundle bytes only after this live entry published STARTED."""
+    import mcs_update
+    frame, attestation = _effect_artifact(entry)
+    with _EFFECT_MUTEX:
+        if entry in _EFFECT_IMPORTED:
+            raise ReleaseApplyError('ARTIFACT_HOLD')
+        _EFFECT_IMPORTED.add(entry)
+    core, deadline = attestation['core'], entry.prequiesce_deadline
+    mcs_update._bounded_timeout(None, deadline)
+    before = os.fstat(frame.descriptor)
+    if not stat.S_ISREG(before.st_mode) or before.st_size != core['artifact']['size']:
+        raise ReleaseApplyError('ARTIFACT_HOLD')
+    digest, offset = hashlib.sha256(), 0
+    while offset < before.st_size:
+        mcs_update._bounded_timeout(None, deadline)
+        part = os.pread(frame.descriptor, min(65536, before.st_size - offset), offset)
+        if not part:
+            raise ReleaseApplyError('ARTIFACT_HOLD')
+        digest.update(part)
+        offset += len(part)
+    after = os.fstat(frame.descriptor)
+    if (digest.hexdigest() != core['artifact']['sha256'] or before.st_mtime_ns != after.st_mtime_ns
+            or before.st_size != after.st_size or _effect_fd_identity(frame.descriptor) != frame.descriptor_identity):
+        raise ReleaseApplyError('ARTIFACT_HOLD')
+    with os.fdopen(os.dup(frame.descriptor), 'rb') as bundle:
+        bundle.seek(0)
+        result = mcs_update._run_with_lifetime(['/usr/bin/git', '-C', entry.repository, 'bundle', 'unbundle', '-'],
+            stdin=bundle, capture_output=True, timeout=30, deadline=deadline, env=mcs_update._release_git_environment())
+    if (result.returncode != 0
+            or mcs_update._git_out(['cat-file', '-t', core['commit']], deadline=deadline).strip() != 'commit'
+            or mcs_update._git_out(['rev-parse', '--verify', core['commit'] + '^{commit}'], deadline=deadline).strip() != core['commit']):
+        raise ReleaseApplyError('ARTIFACT_HOLD')
+
+
+def _verify_merged_source(entry):
+    """The running parent keeps its own closure; verify the target before starting its child."""
+    import release_owner_source
+    frame, _ = _effect_artifact(entry)
+    with _EFFECT_MUTEX:
+        if entry not in _EFFECT_IMPORTED:
+            raise ReleaseApplyError('ARTIFACT_HOLD')
+    result = release_owner_source.verify_checkout(entry.repository, frame.source_manifest,
+        deadline=time.monotonic() + 30, current=False)
+    if result['sha256'] != frame.source_sha256:
+        raise ReleaseApplyError('ARTIFACT_HOLD')
 
 def _effect_fd_identity(fd):
     if type(fd) is not int or fd < 0:
@@ -429,6 +519,9 @@ def _run_effect_post_merge(entry, *, environment, timeout):
                 or applied.get('sha') != reference['target_commit'] or applied.get('release_ref') != reference
                 or applied.get('release_child') != consumed):
             raise ReleaseApplyError('CHILD_HOLD')
+        with _EFFECT_MUTEX:
+            _EFFECT_COMPLETED[entry] = {'reference': dict(reference), 'receipt': consumed,
+                'child_returncode': child.returncode, 'process_id': os.getpid()}
     finally:
         # Interruption of Popen's caller must not release the borrowed leases beside a live child.
         if child is not None and child.returncode is None:

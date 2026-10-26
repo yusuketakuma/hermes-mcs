@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from contextlib import suppress
 import json
+import math
+import time
 import os
 import stat
 import re
@@ -13,17 +15,27 @@ from safe_io import atomic_write, fdopen_owned
 KEYCHAIN_SERVICE = "mcs-adapter"
 
 def run_bounded(argv: list, *, timeout: int = 60, input_text: str | None = None,
-         cwd: str | None = None, env: dict | None = None):
+         cwd: str | None = None, env: dict | None = None, deadline: float | None = None):
     """subprocess.run bounded by `timeout` — a wedged launchd, a keychain
     prompt this context cannot show, or a stuck gateway must fail the
     check, not hang the session. Timeout yields a returncode=124 result
     (mirroring timeout(1)); a binary that cannot start yields 127. Both
     degrade through the caller's normal failure handling instead of
     raising."""
+    if deadline is not None:
+        if type(deadline) not in (int, float) or not math.isfinite(deadline):
+            raise ValueError('lifecycle_deadline_invalid')
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return subprocess.CompletedProcess(argv, 124, "", "deadline elapsed")
+        timeout = min(timeout, left)
     try:
-        return subprocess.run(argv, input=input_text, capture_output=True,
+        result = subprocess.run(argv, input=input_text, capture_output=True,
                               text=True, timeout=timeout, **({"cwd": cwd} if cwd else {}),
                               **({"env": env} if env is not None else {}))
+        if deadline is not None and time.monotonic() >= deadline:
+            return subprocess.CompletedProcess(argv, 124, "", "deadline elapsed")
+        return result
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
             argv, 124, "", f"timed out after {timeout}s")

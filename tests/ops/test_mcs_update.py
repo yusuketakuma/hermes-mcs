@@ -3031,3 +3031,12 @@ def test_static_release_target_checks_keep_tree_and_runtime_refusals_without_run
     assert updater._precheck_target_runtime_files(target, True) == [
         'install_sh_changed', 'release_dependency_lock_changed', 'standalone_requirements_changed']
     assert not marker.exists()
+
+
+def test_release_static_schema_must_match_the_authenticated_core(updater, tmp_path, monkeypatch):
+    monkeypatch.setattr(updater, '_ls_tree_paths', lambda *_a, **_k: [])
+    monkeypatch.setattr(updater, '_git', lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, '', ''))
+    monkeypatch.setattr(updater, '_git_out', lambda argv, **kwargs: 'SCHEMA_VERSION = 9' if argv[0] == 'show' else '')
+    errors, _ = updater._precheck_target_tree('a' * 40, False, deadline=time.monotonic() + 3,
+        installed_schema=8, expected_target_schema=8)
+    assert 'release_schema_target_mismatch' in errors

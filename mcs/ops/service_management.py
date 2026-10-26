@@ -78,12 +78,14 @@ def service_substitutions(cfg, *, paths):
         hermes_python=paths.hermes_python)
 
 
-def hermes_cli(exe: str, profile: str, *argv: str, input_text: str | None=None):
+def hermes_cli(exe: str, profile: str, *argv: str, input_text: str | None=None, deadline=None):
     """Public hermes CLI against a named profile ("" = launch/default).
     Returns the CompletedProcess, or None when the call can't run."""
     cmd = [exe] + (['-p', profile] if profile else []) + list(argv)
     if os.environ.get('MCS_TEST_SANDBOX') == '1' and argv[:1] == ('gateway',) and argv[1:2] and (argv[1] in contract.GATEWAY_LIFECYCLE_VERBS) and (os.path.exists(exe) or shutil.which(exe)):
         return subprocess.CompletedProcess(cmd, 126, '', 'refused under MCS_TEST_SANDBOX: gateway lifecycle')
+    if deadline is not None:
+        return lifecycle_io.run_bounded(cmd, timeout=30, input_text=input_text, deadline=deadline)
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=30, input=input_text)
     except (OSError, subprocess.TimeoutExpired):
@@ -114,26 +116,27 @@ def recovery_owned(*, paths: ServicePaths) -> bool:
     except (OSError, ValueError, TypeError, RuntimeError):
         return False
 
-def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None, allow_runtime_migration=False, paths: ServicePaths) -> list[str]:
+def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None, allow_runtime_migration=False, paths: ServicePaths, deadline=None) -> list[str]:
     """Refuse mutations on unsafe selected or explicitly deployed runtimes."""
     errors = []
+    probe_args = {} if deadline is None else {"deadline": deadline}
     try:
         python = service_substitutions(cfg, paths=paths)['PYTHON']
     except ValueError as e:
         errors.append(f'config: {e}')
     else:
-        why = mcs_runtime.runtime_problem(runtime_inspection.probe_python(python), allow_runtime_migration=allow_runtime_migration)
+        why = mcs_runtime.runtime_problem(runtime_inspection.probe_python(python, **probe_args), allow_runtime_migration=allow_runtime_migration)
         if why:
             errors.append('selected_runtime: ' + why)
     explicit = 'recovery_python' in cfg
     desired = runtime_inspection.recovery_python(cfg)
     desired_problem = None
     if explicit:
-        desired_problem = recovery_python_problem(desired, update_repo, checkout=paths.checkout) or mcs_runtime.runtime_problem(runtime_inspection.probe_python(desired), recovery=True)
+        desired_problem = recovery_python_problem(desired, update_repo, checkout=paths.checkout) or mcs_runtime.runtime_problem(runtime_inspection.probe_python(desired, **probe_args), recovery=True)
         if desired_problem:
             errors.append('desired_recovery_runtime: ' + desired_problem)
     if os.path.lexists(os.path.join(paths.agents_dir, f'{contract.RECOVERY_LABEL}.plist')):
-        why = mcs_runtime.runtime_problem(runtime_inspection.recovery_runtime(os.path.join(paths.agents_dir, f'{contract.RECOVERY_LABEL}.plist'), checkout=paths.checkout), recovery=True)
+        why = mcs_runtime.runtime_problem(runtime_inspection.recovery_runtime(os.path.join(paths.agents_dir, f'{contract.RECOVERY_LABEL}.plist'), checkout=paths.checkout, **probe_args), recovery=True)
         try:
             with open(os.path.join(paths.agents_dir, f'{contract.RECOVERY_LABEL}.plist'), 'rb') as stream:
                 actual = runtime_inspection.recovery_executable(plistlib.load(stream))
@@ -350,11 +353,11 @@ def inspect_cron(hermes: str) -> list[dict] | None:
     return contract.parse_cron_listing(result.stdout, result.returncode)
 
 
-def agent_loaded(label: str, *, paths: ServicePaths) -> bool | None:
+def agent_loaded(label: str, *, paths: ServicePaths, deadline=None) -> bool | None:
     """Whether launchd has `label` loaded; None when the probe timed out or
     could not start (124/127) — unknown is falsy but never proof of a stop."""
     uid = paths.uid
-    r = lifecycle_io.run_bounded(['launchctl', 'print', f'gui/{uid}/{label}'])
+    r = lifecycle_io.run_bounded(['launchctl', 'print', f'gui/{uid}/{label}'], **({} if deadline is None else {'deadline': deadline}))
     if r.returncode in (124, 127):
         return None
     return r.returncode == 0
