@@ -67,6 +67,42 @@ def test_planned_completed_and_cancelled_records_are_distinct(body, expected):
     assert row["span"] == [0, len(body)]
 
 
+@pytest.mark.parametrize("body", [
+    "看護師が2026年10月3日の本人への訪問を中止しました。",
+    "看護師が2026年10月3日に本人を訪問する予定を中止しました。",
+    "看護師が2026年10月3日の本人への訪問を取り消しました。",
+    "看護師が2026年10月3日の本人への訪問を取消しました。",
+])
+def test_explicit_future_target_cancellation_does_not_invent_cancellation_day(body):
+    row, = schedule.project(1, [item(body)])["records"]
+    assert row["state"] == "cancelled"
+    assert row["role"] == "nurse" and row["action"] == "訪問"
+    assert row["target_day"] == "2026-10-03" and row["event_day"] is None
+    assert row["date_basis"] == "cancelled_intervention" and row["quote"] == body
+    assert "relation" not in row
+
+
+def test_ambiguous_past_cancellation_date_is_not_presented_as_an_event_date():
+    body = "薬剤師が2026年9月30日に本人への服薬指導を中止しました。"
+    row, = schedule.project(1, [item(body)])["records"]
+    assert row["state"] == "cancelled" and row["event_day"] is None
+    assert row["date_text"] == "2026年9月30日"
+    assert row["date_basis"] == "cancellation_or_intervention_unclear"
+
+
+@pytest.mark.parametrize("body", [
+    "看護師が2026年10月3日の家族への訪問を中止しました。",
+    "看護師が2026年10月3日の本人への訪問を中止していません。",
+    "看護師が2026年10月3日の本人への訪問を中止ました。",
+    "看護師が2026年10月3日の本人への訪問を中止する予定です。",
+    "看護師が2026年10月3日（昨日）の本人への訪問を中止しました。",
+])
+def test_unbound_or_conditional_future_cancellation_is_not_confirmed(body):
+    row, = schedule.project(1, [item(body)])["records"]
+    assert row["state"] == "unknown" and row["event_day"] is None
+    assert "target_day" not in row and row["quote"] is None
+
+
 def test_foreign_deleted_and_unbound_sources_never_expose_original_text():
     body = "看護師が2026年10月3日に本人を訪問する予定です。"
     result = schedule.project(1, [item(body, project_id=2), item(body, body_state="deleted"),
@@ -133,6 +169,38 @@ def put_source(db, mid, project_id, html, *, state="full", digest=None):
     db.execute("INSERT OR REPLACE INTO messages VALUES(?,?,?,?,?,?,?)",
                (mid, project_id, html, html_to_text(html), state, digest, POSTED))
     db.commit()
+
+
+@pytest.mark.parametrize("body", [
+    "看護師です。", "訪問看護師から連絡がありました。", "介護職員からの連絡です。",
+    "介護支援専門員です。", "相談員から連絡がありました。",
+])
+def test_profession_name_alone_is_not_an_intervention_candidate(source_db, body):
+    put_source(source_db, 1, 1, body)
+    result = schedule.read_source_schedule(source_db, 1)
+    assert result["records"] == [] and result["coverage"]["candidates"] == 0
+
+
+@pytest.mark.parametrize("role,action", [("看護師", "看護"), ("介護職員", "介護"),
+                                         ("訪問看護師", "訪問")])
+def test_action_outside_profession_name_remains_a_candidate(source_db, role, action):
+    body = f"{role}が2026年10月3日に本人を{action}する予定です。"
+    put_source(source_db, 1, 1, body)
+    result = schedule.read_source_schedule(source_db, 1)
+    assert result["coverage"]["candidates"] == 1
+    assert result["records"][0]["state"] == "planned"
+    assert result["records"][0]["action"] == action
+
+
+def test_future_target_cancellation_and_plan_remain_separate_source_records(source_db):
+    plan = "看護師が2026年10月3日に本人を訪問する予定です。"
+    cancel = "看護師が2026年10月3日の本人への訪問を中止しました。"
+    put_source(source_db, 1, 1, plan)
+    put_source(source_db, 2, 1, cancel)
+    records = schedule.read_source_schedule(source_db, 1)["records"]
+    assert [row["state"] for row in records] == ["cancelled", "planned"]
+    assert records[0]["target_day"] == "2026-10-03" and records[0]["event_day"] is None
+    assert all("relation" not in row for row in records)
 
 
 def test_source_reader_uses_patient_scoped_verified_single_sentences(source_db):
