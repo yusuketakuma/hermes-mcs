@@ -80,8 +80,11 @@ def test_changes_classify_by_observation_record(ctx):
     for mid in BODIES:
         _observe(ctx.db, mid, T0 + mid * DAY + 60)
     _observe(ctx.db, 2, since + 10)  # posted day 2, first fetched after since: late fetch
-    ctx.db.db.execute("INSERT INTO message_revisions VALUES(1,1,'h2','h1','full',?)", (since + 20,))
-    ctx.db.db.execute("INSERT INTO message_revisions VALUES(3,1,'h3','h2','deleted',?)", (since + 30,))
+    # Both supported writers seed the old terminal state before recording a change.
+    ctx.db.db.executemany("INSERT INTO message_revisions VALUES(?,1,?,NULL,'full',?)",
+                         [(1, 'h1', T0), (3, 'h2', T0)])
+    ctx.db.db.execute("INSERT INTO message_revisions VALUES(1,2,'h2','h1','full',?)", (since + 20,))
+    ctx.db.db.execute("INSERT INTO message_revisions VALUES(3,2,'h3','h2','deleted',?)", (since + 30,))
     ctx.db.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=3")
     ctx.db.db.commit()
     ctx.context_refresh["value"] = {"as_of": T0, "facts": [
@@ -321,7 +324,8 @@ def test_real_context_refresh_helper_without_artifact_falls_back_to_chat_items(t
 def test_deleted_record_is_labelled_with_observation_time_in_private_views(ctx, section):
     from notify_views import patient_context_list
     observed = T0 + 5 * DAY
-    ctx.db.db.execute("INSERT INTO message_revisions VALUES(3,1,'h3','h2','deleted',?)", (observed,))
+    ctx.db.db.execute("INSERT INTO message_revisions VALUES(3,1,'h2',NULL,'full',?)", (T0,))
+    ctx.db.db.execute("INSERT INTO message_revisions VALUES(3,2,'h3','h2','deleted',?)", (observed,))
     ctx.db.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=3")
     ctx.db.db.commit()
     result = patient_context_list(ctx.db.db, 1, section, cfg={}, since=T0,
