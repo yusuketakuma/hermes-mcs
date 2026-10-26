@@ -817,11 +817,13 @@ class Actions:
                                    {**origin, "actor": rec["actor"]}, rec["actor"])
                 thread_ts = None
                 if pin and pin.get("action") in ("meds", "drugsearch"):
+                    # verified_thread_id None: a proven card face whose thread has
+                    # no reply (Slack shows a threaded ephemeral only inside an
+                    # active thread), so the answer goes to the channel instead
                     thread_ts = pin.get("verified_thread_id")
-                    if (not isinstance(thread_ts, str)
-                            or not _TS.fullmatch(thread_ts)
-                            or pin.get("verified_card_message_id", thread_ts)
-                            != pin.get("message_id")):
+                    if (pin.get("verified_card_message_id", thread_ts) != pin.get("message_id")
+                            or (thread_ts is not None and (not isinstance(thread_ts, str)
+                                                           or not _TS.fullmatch(thread_ts)))):
                         await self._say(origin["channel_id"], rec["user"],
                                         "薬剤詳細を表示するスレッドの本文配信が確認できません。"
                                         "配信完了を待つか、管理者にスレッド配信の状態確認を依頼してください。")
@@ -829,7 +831,7 @@ class Actions:
                 # 📋 transition tokens must land before their buttons
                 token_ctx = result.get("token_ctx") or {}
                 navigation = []
-                if thread_ts or (pin and pin.get("action") in ("summary", "search")):
+                if pin and pin.get("action") in ("meds", "drugsearch", "summary", "search"):
                     token_ctx = {
                         token: {**context, "verified_thread_id": thread_ts,
                                 "verified_card_message_id": pin["message_id"]}
@@ -857,7 +859,7 @@ class Actions:
                 if token_ctx:
                     # the followup is already consumed: its tokens must land even while closing
                     await commands.run_native(self._reg.put_tokens, token_ctx,
-                                              durable=bool(thread_ts),
+                                              durable=bool(pin) and pin.get("action") in ("meds", "drugsearch"),
                                               admission=self._native_admission, admitted=True)
                 cards = ((_parts_blocks(result) or (
                     context_list_blocks(result.get("list"), self._allowed_pid)
