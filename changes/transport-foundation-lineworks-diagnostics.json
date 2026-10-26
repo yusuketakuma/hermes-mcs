@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "LINE WORKSの配送停滞の警告に、アダプター向けの対処を表示",
+  "summary": "Hermes経由でLINE WORKSを使う環境で、カードの配送が止まったときなどの警告の対処欄に、Hermes gatewayの再起動ではなく、LINE WORKS独立アダプターの再起動と確認の手順を表示します。アダプターが起動の記録を残す版では、通知workerの稼働診断もLINE WORKSを対象にします。",
+  "upgrade": "設定変更は不要です。LINE WORKSアダプターを再起動すると、起動の記録が残り、診断に反映されます。Slack・Discordの警告文と診断は変わりません。",
+  "details": [
+    "患者文脈の回答を、チャットツールに依存しない並び（見出し・グループ・引用・出典・注記）に変換する共通部品を追加し、SlackのBlock Kit表示もこの部品から作るようにしました。表示内容は変わりません。",
+    "通知workerの稼働記録と診断の対象にLINE WORKSを加え、プロファイル名を持たないため既定の名前で記録します。独立実行では従来どおり対象外です。",
+    "health監視の対処文を、独立実行・LINE WORKS・Hermes gatewayの順に選ぶ表にしました。"
+  ],
+  "refs": [
+    "adapters/common/context_view.py",
+    "adapters/slack/presentation.py",
+    "mcs/views/card_worker_status.py",
+    "mcs/ingest/health_watch.py",
+    "tests/adapters/common/test_transport_foundation.py"
+  ]
+}

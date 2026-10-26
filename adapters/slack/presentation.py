@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import re
 from html import escape
-from urllib.parse import urlsplit
+
+from adapters.common.context_view import context_entries, safe_url  # noqa: F401 - safe_url re-exported for cards
 
 SECTION_MAX = 3000
 HEADER_MAX = 150
@@ -105,64 +106,39 @@ def _post_buttons(parts) -> dict:
                       "value": a["button"]["token"]}
             for a in own.get("post_actions") or []}
 
-def safe_url(url) -> bool:
-    """True only for an https URL with a host that cannot break out of a
-    mrkdwn <url|label> link: no whitespace, control characters or <>|."""
-    if not isinstance(url, str) or not url:
-        return False
-    try:
-        parsed = urlsplit(url)
-        return bool(parsed.scheme == "https" and parsed.netloc and parsed.hostname
-                    and not any(c.isspace() or ord(c) < 32 or c in "<>|" for c in url))
-    except ValueError:                 # e.g. an unbalanced IPv6 bracket
-        return False
-
 def context_list_blocks(view: dict, allowed) -> list | None:
     """Block Kit for a private patient-context view: title header, the
     status/participants lines as context, a bold heading per group, each
     row's original quotes as plain text and its source as a small context
-    line. Rows outside this deployment's scope are dropped exactly like the
-    text form. None (keep the text answer) for any other list or when the
-    page would not fit one message."""
-    if not isinstance(view, dict) or view.get("layout") != "patient_context":
+    line. None (keep the text answer) for any other list or when the page
+    would not fit one message."""
+    entries = context_entries(view, allowed)
+    if entries is None:
         return None
-    items = [i for i in view.get("items") or []
-             if isinstance(i, dict) and allowed(i.get("project_id"))]
-    blocks = [{"type": "header", "text": {"type": "plain_text",
-                                          "text": str(view.get("title") or "患者の記録")[:HEADER_MAX]}}]
-    head = "\n".join(str(x) for x in view.get("head") or [] if x)
-    if head:
-        blocks += contexts(head)
-    group = None
-    for item in items:
-        if item.get("group") != group:
-            if group is not None:
-                blocks.append({"type": "divider"})
-            group = item.get("group")
-            if group:   # an untitled group (timeline, replies) has no heading of its own
-                blocks.append({"type": "section", "text": {
-                    "type": "mrkdwn", "text": f"*{escape(str(group), quote=False)}*"}})
-        quotes = "\n".join(str(q) for q in item.get("quotes") or [] if q)
-        if quotes:
-            blocks += text_sections(quotes)
-        if item.get("date") and safe_url(item.get("url")):
+    blocks = []
+    for e in entries:
+        kind = e["kind"]
+        if kind == "title":
+            blocks.append({"type": "header", "text": {"type": "plain_text",
+                                                      "text": e["text"][:HEADER_MAX]}})
+        elif kind in ("head", "notes"):
+            blocks += contexts(e["text"])
+        elif kind == "divider":
+            blocks.append({"type": "divider"})
+        elif kind == "group":
+            blocks.append({"type": "section", "text": {
+                "type": "mrkdwn", "text": f"*{escape(e['text'], quote=False)}*"}})
+        elif kind in ("quotes", "empty"):
+            blocks += text_sections(e["text"])
+        elif e["url"]:
             # the date opens the MCS room; the rest is plain_text so * _ ~ ` stay literal
-            link = item["url"]
-            text = f"<{escape(link, quote=False)}|{escape(str(item['date']), quote=False)}>"
-            rest = contexts(str(item.get("source_rest") or ""))
+            text = f"<{escape(e['url'], quote=False)}|{escape(e['date'], quote=False)}>"
+            rest = contexts(e["rest"])
             elements = [{"type": "mrkdwn", "text": text[:CONTEXT_MAX]}]
             blocks.append({"type": "context", "elements": elements + (rest[0]["elements"] if rest else [])})
             blocks += rest[1:]
-        elif item.get("source") or item.get("date"):
-            # no link for an unsafe URL: the date stays readable as plain text
-            blocks += contexts(str(item.get("source") or item["date"]))
-    if not items:
-        blocks += text_sections(str(view.get("empty") or "該当なし"))
-    notes = "\n".join(str(x) for x in view.get("notes") or [] if x)
-    if notes:
-        if items:
-            blocks.append({"type": "divider"})   # status notes are not a source line of the last group
-        blocks += contexts(notes)
+        else:
+            blocks += contexts(e["rest"])
     return blocks if len(blocks) <= _ANSWER_BLOCKS else None
 
 def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=None) -> list:

@@ -15,10 +15,11 @@ VERSION = '2026-10-17.1'
 REASONS = frozenset({'worker_started', 'profile_mismatch', 'owner_unverified',
                      'application_mismatch', 'standalone_owned', 'worker_start_failed',
                      'route_flags_unready'})
+TRANSPORTS = ('slack', 'discord', 'lineworks')
 
 
 def _path(root, transport, profile):
-    if transport not in ('slack', 'discord'):
+    if transport not in TRANSPORTS:
         raise ValueError('worker_transport_invalid')
     key = hashlib.sha256(str(profile).encode()).hexdigest()[:24]
     return Path(root) / 'worker_status' / f'{transport}-{key}.json'
@@ -61,19 +62,21 @@ def status(root, transport, profile):
 
 
 def diagnose(root, cfg, *, probe_data=False):
-    """Report the configured Hermes owner and restore hold without changing either."""
+    """Report the configured delivery worker (Hermes profile or LINE WORKS adapter) and restore hold."""
     notify = cfg.get('notify')
     notify = {} if notify is None else notify
     transport = notify.get('interactive') if isinstance(notify, dict) else None
-    scope = notify.get(transport) if transport in ('slack', 'discord') else None
+    scope = notify.get(transport) if transport in TRANSPORTS else None
     scope = {} if scope is None else scope
     if not isinstance(notify, dict) or not isinstance(scope, dict):
         # a malformed block cannot name the owner: unverified, never "not ours"
         result = {'state': 'unknown', 'reason': 'worker_start_unverified'}
-    elif cfg.get('runtime_mode') == 'standalone' or transport not in ('slack', 'discord'):
+    elif cfg.get('runtime_mode') == 'standalone' or transport not in TRANSPORTS:
         result = {'state': 'not_applicable', 'reason': 'worker_not_hermes_owned'}
     else:
-        result = status(root, transport, scope.get('profile') or 'default')
+        # LINE WORKS has its own adapter process (not a Hermes profile); it records under 'default'.
+        profile = 'default' if transport == 'lineworks' else scope.get('profile') or 'default'
+        result = status(root, transport, profile)
     try:
         os.lstat(Path(root) / 'restore_pending.json')
         hold = True

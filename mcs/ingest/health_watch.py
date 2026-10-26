@@ -403,6 +403,9 @@ def evaluate(home: str = HOME, now: float | None = None,
     status_path = os.path.join(home, STATUS_REL)
 
     obs = classify_health(health_path, now, deadline)
+    notify = cfg.get("notify") if isinstance(cfg, dict) else None
+    if isinstance(notify, dict) and notify.get("interactive") == "lineworks":
+        obs["notify_transport"] = "lineworks"
     if isinstance(cfg, dict) and cfg.get("runtime_mode") == "standalone":
         _apply_standalone(obs, home, now, cfg)
     state = load_config(state_path)
@@ -708,6 +711,16 @@ _STANDALONE_ACTION = {
     "card_delivery_stalled": _STANDALONE_RESTART,
     "extract_backlog_stalled": f"llama-server の稼働と {_STANDALONE_STATUS} の extract-0・extract-2 を確認",
 }
+# notify.interactive=lineworks (Hermes mode): the separate LINE WORKS adapter
+# delivers, so the gateway/profile hints do not apply
+_LW_RESTART = ("launchctl kickstart -k gui/$(id -u)/ai.mcs.lineworks で独立アダプターを再起動し、"
+               "python3 -m lineworks_adapter check と data/lineworks_state/service.stderr.log を確認")
+_LINEWORKS_ACTION = {
+    "worker_start_unverified": "LINE WORKSアダプターの起動記録を確認。止まっていれば " + _LW_RESTART,
+    "worker_start_failed": "data/lineworks_state/service.stderr.log で起動失敗を確認し、" + _LW_RESTART,
+    "worker_restart_required": "更新後のコードで動かすため " + _LW_RESTART,
+    "card_delivery_stalled": "LINE WORKSアダプターの稼働を確認。止まっていれば " + _LW_RESTART,
+}
 _AREA_JA = (("semantic", "意味チェック（任意機能）"), ("extract_backlog", "要約の抽出"),
             ("local_llm", "要約の抽出"), ("llm_endpoint", "要約の抽出"),
             ("notification", "通知"), ("card_delivery", "通知"),
@@ -823,6 +836,8 @@ def _reason_rows(report: dict, reasons) -> list[str]:
         meaning, action = _REASON_JA.get(base, (code, f"{_CHECK} で確認"))
         if standalone:
             action = _STANDALONE_ACTION.get(base, action)
+        elif report.get("notify_transport") == "lineworks":
+            action = _LINEWORKS_ACTION.get(base, action)
         if isinstance(host.get(base), str) and host[base]:
             meaning += f"（{host[base]}）"
         if base == "backup_not_verified":
