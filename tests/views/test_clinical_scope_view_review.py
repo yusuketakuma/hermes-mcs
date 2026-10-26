@@ -6,10 +6,13 @@ import time
 import pytest
 
 import extract_llm
+import inference_dependency_loss
+import inference_version
+import mcs_queries
 import mcs_signals
 import rollup
 import structured_view
-from extract_testkit import _hash, _message
+from extract_testkit import _message
 from common_testkit import ledger_fixture
 import clinical_urgency
 
@@ -22,8 +25,25 @@ def seed(store, body, doc, *, age_days=0):
     with store.db:
         store.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=1",
                          (time.time() - age_days * 86400,))
-    store.artifact_add("extract_llm", json.dumps(doc), project_id=1, message_id=1,
-                       meta={"hash": _hash(store), "extract_version": extract_llm.EXTRACT_VERSION})
+    row = dict(store.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row["_source_binding"] = inference_dependency_loss.source_binding(store.db, 1, 1)
+    integrity = {"validation": {"items_dropped": 0, "evidence_dropped": 0},
+                 "completeness_chunks": 1,
+                 "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}
+    assert extract_llm._replace_current(store, row, json.dumps(doc, ensure_ascii=False), integrity=integrity)
+
+
+def test_legacy_urgency_artifact_is_not_current_in_v1(store):
+    body = "本人の現在の強い胸痛があります。"
+    seed(store, body, {"urgency": "high", "urgency_evidence": [body]})
+    with store.db:
+        store.db.execute("UPDATE artifacts SET meta=json_set(meta, ?, ?) "
+                         "WHERE kind='extract_llm' AND message_id=1",
+                         ("$." + inference_version.VERSION_KEY, inference_version.LEGACY_VERSION))
+    assert mcs_queries.current_message_extract(store.db, "extract_llm", 1) is None
+    detail = clinical_urgency.message_urgency_details(store.db, 1)
+    assert detail["source"] is None and detail["raw_verdict"] is None
+    assert store.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_llm' AND message_id=1").fetchone()
 
 
 @pytest.mark.parametrize("body,high", [
