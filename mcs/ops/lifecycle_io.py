@@ -30,9 +30,14 @@ def run_bounded(argv: list, *, timeout: int = 60, input_text: str | None = None,
             return subprocess.CompletedProcess(argv, 124, "", "deadline elapsed")
         timeout = min(timeout, left)
     try:
-        result = subprocess.run(argv, input=input_text, capture_output=True,
-                              text=True, timeout=timeout, **({"cwd": cwd} if cwd else {}),
-                              **({"env": env} if env is not None else {}))
+        if deadline is None:
+            result = subprocess.run(argv, input=input_text, capture_output=True,
+                                  text=True, timeout=timeout, **({"cwd": cwd} if cwd else {}),
+                                  **({"env": env} if env is not None else {}))
+        else:
+            import owned_process
+            result = owned_process.run_owned(argv, timeout, dict(os.environ) if env is None else env,
+                deadline=deadline, input_text=input_text, cwd=cwd)
         if deadline is not None and time.monotonic() >= deadline:
             return subprocess.CompletedProcess(argv, 124, "", "deadline elapsed")
         return result

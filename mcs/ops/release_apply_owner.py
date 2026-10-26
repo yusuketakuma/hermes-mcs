@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import threading
+import uuid
 
 CHILD_FDS_ENV = 'MCS_RELEASE_CHILD_FDS'
 
@@ -28,6 +29,137 @@ class ReleaseApplyError(ValueError):
 
 class _EffectCapability:
     __slots__ = ()
+
+
+def _tty_planning_confirmation(installation, *, deadline):
+    """Read the controlling terminal directly; stdin and caller booleans cannot approve."""
+    from adapters.sdc import release_contract
+    if (not release_contract.slug(installation) or type(deadline) not in (int, float)
+            or not math.isfinite(deadline) or time.monotonic() >= deadline):
+        raise ReleaseApplyError('CONSENT_HOLD')
+    descriptor = None
+    try:
+        descriptor = os.open('/dev/tty', os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        if not os.isatty(descriptor) or os.tcgetpgrp(descriptor) != os.getpgrp():
+            raise ReleaseApplyError('CONSENT_HOLD')
+        def line():
+            data = bytearray()
+            while len(data) <= 128:
+                left = deadline - time.monotonic()
+                if left <= 0 or not select.select([descriptor], [], [], left)[0]:
+                    raise ReleaseApplyError('CONSENT_HOLD')
+                part = os.read(descriptor, 1)
+                if not part:
+                    return None
+                if part == b'\n':
+                    return bytes(data)
+                data.extend(part)
+            raise ReleaseApplyError('CONSENT_HOLD')
+        os.write(descriptor, ('端末 ' + installation + ' の更新計画を確認します。\n'
+            '中央の対象版と承認状態を取得し、現在の実装・容量・既存backupを検査します。\n'
+            '1: 計画の確認を許可する\n2: 中止する（既定）\n番号: ').encode())
+        if line() != b'1':
+            return None
+        os.write(descriptor, '秘密や個人情報を含まない半角の理由（1〜128文字）: '.encode())
+        reason = line()
+        if (not reason or not reason.strip() or any(c < 32 or c > 126 for c in reason)
+                or time.monotonic() >= deadline):
+            raise ReleaseApplyError('CONSENT_HOLD')
+        return hashlib.sha256(reason).hexdigest()
+    except (OSError, ValueError):
+        raise ReleaseApplyError('CONSENT_HOLD') from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _planning_snapshot(control, monitor, *, runtime_home, repository, deadline):
+    from adapters.sdc import release_apply_contract, release_state
+    current = _load_release_currentness(control, monitor, runtime_home=runtime_home,
+        now_ms=int(time.time() * 1000), deadline=deadline)
+    with control.release_owner_lock():
+        owner = release_state._read(control)
+        repository_fingerprint = _repository_fingerprint(repository)
+        if owner['state']['unresolved'] is not None or owner['repo_fingerprint'] != repository_fingerprint:
+            raise ReleaseApplyError('CONSENT_HOLD')
+        return dict(binding=current.binding, root_fingerprint=control.root_fingerprint(),
+            repo_fingerprint=repository_fingerprint, owner_state_revision=owner['revision'],
+            state_sha256=release_apply_contract.hash_apply_state(owner['state']),
+            installation=current.scope['installation'])
+
+
+def _validate_planning_consent(value):
+    from adapters.sdc import release_contract as contract
+    try:
+        value = contract.input_record(value, 16384)
+        contract.fields(value, ('schema_version', 'binding', 'root_fingerprint', 'repo_fingerprint',
+            'owner_state_revision', 'state_sha256', 'installation', 'case_id', 'planning_consent_id',
+            'confirmed_at', 'expires_at', 'reason_sha256'))
+        contract.fields(value['binding'], ('bootstrap_sha256', 'monitor_binding', 'support_snapshot_sha256',
+            'monitor_snapshot_sha256', 'credential_sha256', 'owner_evidence_sha256', 'device_epoch'))
+        bound = value['binding']['monitor_binding']
+        contract.fields(bound, ('root_fingerprint', 'endpoint_hash', 'claim_id', 'device_id', 'key_id',
+            'tenant', 'installation', 'environment', 'realm_epoch'))
+        if (value['schema_version'] != 'mcs.release-planning-consent.v1'
+                or not all(contract.hex64(value[k]) for k in ('root_fingerprint', 'repo_fingerprint', 'state_sha256', 'reason_sha256'))
+                or not contract.positive(value['owner_state_revision']) or not contract.slug(value['installation'])
+                or not all(contract.uuid(value[k]) for k in ('case_id', 'planning_consent_id'))
+                or not all(contract.integer(value[k]) for k in ('confirmed_at', 'expires_at'))
+                or value['expires_at'] - value['confirmed_at'] != 300000
+                or not all(contract.hex64(value['binding'][k]) for k in ('bootstrap_sha256',
+                    'support_snapshot_sha256', 'monitor_snapshot_sha256', 'credential_sha256', 'owner_evidence_sha256'))
+                or not contract.positive(value['binding']['device_epoch'])
+                or not all(contract.hex64(bound[k]) for k in ('root_fingerprint', 'endpoint_hash'))
+                or not all(contract.uuid(bound[k]) for k in ('claim_id', 'device_id', 'key_id'))
+                or not all(contract.slug(bound[k]) for k in ('tenant', 'installation', 'environment'))
+                or not contract.realm(bound['realm_epoch']) or bound['installation'] != value['installation']):
+            raise ValueError
+        return value
+    except (ValueError, TypeError, KeyError):
+        raise ReleaseApplyError('CONSENT_HOLD') from None
+
+
+def _issue_planning_consent(control, monitor, *, runtime_home, repository, case_id, deadline):
+    """Issue a local planning receipt before any operation or change consent exists."""
+    from adapters.sdc import release_contract, release_apply_contract, release_state
+    if not release_contract.uuid(case_id) or control._release_entry_fd is not None:
+        raise ReleaseApplyError('CONSENT_HOLD')
+    with control.release_authority_lock(), monitor.lock():
+        before = _planning_snapshot(control, monitor, runtime_home=runtime_home,
+            repository=repository, deadline=deadline)
+    reason = _tty_planning_confirmation(before['installation'], deadline=deadline)
+    if reason is None:
+        return None
+    with control.release_authority_lock(), monitor.lock():
+        after = _planning_snapshot(control, monitor, runtime_home=runtime_home,
+            repository=repository, deadline=deadline)
+        if before != after:
+            raise ReleaseApplyError('CONSENT_HOLD')
+        now = int(time.time() * 1000)
+        record = _validate_planning_consent(dict(schema_version='mcs.release-planning-consent.v1', **after,
+            case_id=case_id, planning_consent_id=str(uuid.uuid4()), confirmed_at=now,
+            expires_at=now + 300000, reason_sha256=reason))
+        with control.release_owner_lock():
+            owner = release_state._read(control)
+            if (owner['revision'] != after['owner_state_revision']
+                    or release_apply_contract.hash_apply_state(owner['state']) != after['state_sha256']):
+                raise ReleaseApplyError('CONSENT_HOLD')
+            previous = control.read('release-planning.json')
+            if previous is not None:
+                previous = _validate_planning_consent(previous)
+                if (previous['root_fingerprint'] != record['root_fingerprint']
+                        or previous['repo_fingerprint'] != record['repo_fingerprint'] or previous['expires_at'] > now):
+                    raise ReleaseApplyError('CONSENT_HOLD')
+            try:
+                if time.monotonic() >= deadline:
+                    raise ReleaseApplyError('CONSENT_HOLD')
+                control.write('release-planning.json', record)
+                if control.read('release-planning.json') != record or time.monotonic() >= deadline:
+                    raise ReleaseApplyError('CONSENT_HOLD')
+            except BaseException:
+                control._release_owner_uncertain = True
+                raise
+        return record
 
 
 @dataclass(frozen=True, eq=False, repr=False)
@@ -282,6 +414,7 @@ def _effect_artifact(entry):
 def _import_started_artifact(entry):
     """Import fixed authenticated bundle bytes only after this live entry published STARTED."""
     import mcs_update
+    import owned_process
     frame, attestation = _effect_artifact(entry)
     with _EFFECT_MUTEX:
         if entry in _EFFECT_IMPORTED:
@@ -304,10 +437,10 @@ def _import_started_artifact(entry):
     if (digest.hexdigest() != core['artifact']['sha256'] or before.st_mtime_ns != after.st_mtime_ns
             or before.st_size != after.st_size or _effect_fd_identity(frame.descriptor) != frame.descriptor_identity):
         raise ReleaseApplyError('ARTIFACT_HOLD')
-    with os.fdopen(os.dup(frame.descriptor), 'rb') as bundle:
+    with os.fdopen(os.dup(frame.descriptor), 'rb') as bundle, owned_process.lifetime_fds(entry.locks):
         bundle.seek(0)
-        result = mcs_update._run_with_lifetime(['/usr/bin/git', '-C', entry.repository, 'bundle', 'unbundle', '-'],
-            stdin=bundle, capture_output=True, timeout=30, deadline=deadline, env=mcs_update._release_git_environment())
+        result = owned_process.run_owned(['/usr/bin/git', '-C', entry.repository, 'bundle', 'unbundle', '-'],
+            30, mcs_update._release_git_environment(), stdin=bundle, deadline=deadline)
     if (result.returncode != 0
             or mcs_update._git_out(['cat-file', '-t', core['commit']], deadline=deadline).strip() != 'commit'
             or mcs_update._git_out(['rev-parse', '--verify', core['commit'] + '^{commit}'], deadline=deadline).strip() != core['commit']):
@@ -410,38 +543,11 @@ def _finish_effect_entry(entry):
 
 
 def _wait_effect_child(child, *, timeout):
-    """Keep the caller's leases until an exact waitpid result; lost reap never permits a signal."""
-    until = time.monotonic() + timeout
-    lost_reap, failed, interrupted = False, False, None
-    signaled = False
-    while child.returncode is None:
-        try:
-            if not lost_reap:
-                try:
-                    pid, status = os.waitpid(child.pid, os.WNOHANG)
-                except InterruptedError:
-                    raise
-                except OSError:
-                    lost_reap = failed = True
-                else:
-                    if pid == child.pid:
-                        child.returncode = os.waitstatus_to_exitcode(status)
-                    elif pid:
-                        lost_reap = failed = True
-            if child.returncode is None:
-                if not lost_reap and not signaled and (interrupted is not None or time.monotonic() >= until):
-                    signaled = failed = True
-                    try:
-                        os.killpg(child.pid, signal.SIGKILL)
-                    except OSError:
-                        pass
-                time.sleep(0.02)
-        except (KeyboardInterrupt, InterruptedError) as error:
-            interrupted = error
-    if interrupted is not None:
-        raise interrupted
-    if failed:
-        raise ReleaseApplyError('CHILD_HOLD')
+    import owned_process
+    try:
+        return owned_process._wait_retired(child, timeout=timeout)
+    except owned_process.ChildRetirementError:
+        raise ReleaseApplyError('CHILD_HOLD') from None
 
 
 def _run_effect_post_merge(entry, *, environment, timeout):

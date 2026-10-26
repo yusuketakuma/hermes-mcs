@@ -9,11 +9,15 @@
     "更新子のticketを同じ生存ownerから一度だけ発行する部品を追加しました。子の消費・同じ操作の完了・終了確認を照合し、HEAD差や手編集があれば起動しません。",
     "一回消費済みの実行枠から、hashと固定commitを照合したGit bundleだけを取り込む内部接続を追加しました。通常の更新は従来の経路を保ちます。",
     "更新前の検査とbackupに期限を渡す部品、実装ソースとmanifestを照合する開発用の部品を追加しました。manifestの自己生成だけでは実行を許可しません。",
+    "開発用の計画同意部品は、端末上の番号選択と理由入力を記録し、有効期間を5分に限定します。記録前に端末・鍵・許可の現在性を読み直します。計画同意だけでは更新を許可しません。",
+    "期限付き診断も既存の子プロセス管理を使い、借用したlockを継承します。終了確認が失われた場合は、期限を超えてもlockを解放せず停止状態を保ちます。",
     "P2全体の更新factory・子プロセス発行への接続は未完了です。"
   ],
   "refs": [
     "mcs/ops/release_apply_owner.py",
     "adapters/sdc/release_registration_contract.py",
-    "mcs/ops/sdc_support_signatures.py"
+    "mcs/ops/sdc_support_signatures.py",
+    "mcs/ops/owned_process.py",
+    "mcs/ops/release_owner_source.py"
   ]
 }

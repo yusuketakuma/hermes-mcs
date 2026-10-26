@@ -645,11 +645,13 @@ def current_release(registered, tmp_path, monkeypatch):
     install(registered, 'support')
     monkeypatch.setenv('HOME', str(tmp_path))
     home = tmp_path / 'runtime'
+    home.mkdir()
     with release_apply_owner._control_store(home) as control:
         monitor = provision.profile_snapshot(registered, profile='monitor', now_ms=NOW)
         support = provision.profile_snapshot(registered, profile='support', now_ms=NOW)
         state = registered.read('state.json')
         supplied = baseline()
+        supplied['repo_fingerprint'] = release_apply_owner._repository_fingerprint(home)
         supplied['trust']['environment'] = monitor['bundle']['environment']
         supplied['state'].update({k: monitor['bundle'][k] for k in ('tenant', 'installation', 'environment', 'realm_epoch')})
         supplied['state'].update(device_id=state['device_id'], trust_digest=release_contract.hash_release_trust(supplied['trust']))
@@ -898,3 +900,128 @@ def test_started_artifact_imports_fixed_bundle_without_selecting_its_advertised_
     finally:
         release_apply_owner._finish_effect_entry(entry)
         os.close(descriptor)
+
+
+@pytest.mark.parametrize('decision', ['confirm', 'cancel', 'disabled', 'revision', 'corrupt', 'write_error'])
+def test_planning_receipt_rechecks_real_currentness_after_the_prompt(current_release, monkeypatch, decision):
+    # Prompt outcome is injected only for store/CAS component tests, never factory acceptance.
+    import hashlib
+    from adapters.sdc import release_state
+    control, monitor, home, now, _ = current_release
+    monkeypatch.setattr(release_apply_owner.time, 'time', lambda: now / 1000)
+    owner_before = copy.deepcopy(control.read(release_state.NAME))
+    def prompt(*_a, **_k):
+        assert control._release_authority_fd is None and monitor._tick_fd is None
+        assert control._release_entry_fd is None
+        if decision == 'cancel':
+            return None
+        if decision == 'disabled':
+            with monitor.lock():
+                value = monitor.read('state.json')
+                value['enabled'] = False
+                monitor.write('state.json', value)
+        elif decision == 'revision':
+            with control.release_owner_lock():
+                value = control.read(release_state.NAME)
+                value['revision'] += 1
+                control.write(release_state.NAME, value)
+        elif decision == 'corrupt':
+            control.write('release-planning.json', {'schema_version': 'corrupt'})
+        elif decision == 'write_error':
+            original = control.write
+            def fail(name, value, **kwargs):
+                if name == 'release-planning.json':
+                    raise OSError('synthetic write failure')
+                return original(name, value, **kwargs)
+            monkeypatch.setattr(control, 'write', fail)
+        return hashlib.sha256(b'synthetic reason').hexdigest()
+    monkeypatch.setattr(release_apply_owner, '_tty_planning_confirmation', prompt)
+    def call():
+        return release_apply_owner._issue_planning_consent(control, monitor, runtime_home=home,
+            repository=home, case_id='00000000-0000-4000-8000-000000000009', deadline=time.monotonic() + 10)
+    if decision in ('confirm', 'cancel'):
+        result = call()
+        if decision == 'cancel':
+            assert result is None and control.read('release-planning.json') is None
+        else:
+            assert release_apply_owner._validate_planning_consent(result) == result
+            assert control.read('release-planning.json') == result
+            assert 'synthetic reason' not in str(result)
+            with pytest.raises(release_apply_owner.ReleaseApplyError, match='CONSENT_HOLD'):
+                call()
+            assert control.read('release-planning.json') == result
+        assert control.read(release_state.NAME) == owner_before
+    else:
+        with pytest.raises(OSError if decision == 'write_error' else release_apply_owner.ReleaseApplyError):
+            call()
+        assert control.read('release-planning.json') == ({'schema_version': 'corrupt'} if decision == 'corrupt' else None)
+        if decision == 'write_error':
+            assert control._release_owner_uncertain
+
+
+@pytest.mark.parametrize('decision', ['confirm', 'default', 'other', 'blank_reason', 'oversized_reason', 'timeout'])
+def test_planning_confirmation_reads_a_real_controlling_terminal_only(decision):
+    root = Path(__file__).resolve().parents[2]
+    program = r'''import errno, hashlib, os, pathlib, pty, select, signal, sys, time
+sys.path.insert(0,str(pathlib.Path(sys.argv[1])/'mcs'))
+sys.path.insert(0,str(pathlib.Path(sys.argv[1])))
+import _mcs_path
+import release_apply_owner as owner
+mode=sys.argv[2]
+pid,master=pty.fork()
+if pid==0:
+ try:
+  result=owner._tty_planning_confirmation('synthetic',deadline=time.monotonic()+2)
+  expected=hashlib.sha256(b'synthetic reason').hexdigest() if mode=='confirm' else None
+  os._exit(0 if result==expected and mode not in ('blank_reason','oversized_reason','timeout') else 3)
+ except owner.ReleaseApplyError:
+  os._exit(0 if mode in ('blank_reason','oversized_reason','timeout') else 4)
+reaped=False
+try:
+ received=b''; answered=False; reason_sent=False; until=time.monotonic()+6
+ while time.monotonic()<until:
+  if select.select([master],[],[],.05)[0]:
+   try: data=os.read(master,4096)
+   except OSError as error:
+    if error.errno!=errno.EIO: raise
+    data=b''
+   received+=data
+  if not answered and '番号: '.encode() in received:
+   answered=True
+   if mode!='timeout': os.write(master,b'\n' if mode=='default' else b'2\n' if mode=='other' else b'1\n')
+  if not reason_sent and '理由'.encode() in received:
+   reason_sent=True
+   os.write(master,b'\n' if mode=='blank_reason' else b'x'*129+b'\n' if mode=='oversized_reason' else b'synthetic reason\n')
+  child,status=os.waitpid(pid,os.WNOHANG)
+  if child:
+   reaped=True
+   assert os.waitstatus_to_exitcode(status)==0,(mode,status)
+   break
+ assert reaped and answered
+finally:
+ if not reaped:
+  os.killpg(pid,signal.SIGKILL)
+  os.waitpid(pid,0)
+ os.close(master)
+print('synthetic tty checked')
+'''
+    result = subprocess.run([sys.executable, '-I', '-B', '-c', program, str(root), decision],
+        capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == 'synthetic tty checked\n'
+
+
+def test_stdin_cannot_approve_without_a_controlling_terminal():
+    root = Path(__file__).resolve().parents[2]
+    program = '''import pathlib,sys,time
+sys.path.insert(0,str(pathlib.Path(sys.argv[1])/'mcs'))
+sys.path.insert(0,str(pathlib.Path(sys.argv[1])))
+import _mcs_path
+import release_apply_owner as owner
+try: owner._tty_planning_confirmation('synthetic',deadline=time.monotonic()+1)
+except owner.ReleaseApplyError: print('held')
+else: raise AssertionError('stdin approved')
+'''
+    result = subprocess.run([sys.executable, '-I', '-B', '-c', program, str(root)],
+        input='1\nsynthetic reason\n', capture_output=True, text=True, start_new_session=True, timeout=5)
+    assert result.returncode == 0 and result.stdout == 'held\n'

@@ -1,5 +1,7 @@
 """Synthetic deadline propagation; never invokes services, credentials or network."""
 import json
+import os
+import fcntl
 import sqlite3
 import subprocess
 import sys
@@ -12,6 +14,7 @@ import environment_diagnostics
 import lifecycle_io
 import maintenance
 import mcs_update
+import owned_process
 import runtime_inspection
 import service_management
 
@@ -112,3 +115,61 @@ def test_busy_backup_stops_within_budget_and_does_not_publish_a_partial_file(tmp
     finally:
         connection.rollback()
         connection.close()
+
+
+def test_deadline_probe_inherits_only_duplicates_of_the_callers_lock(tmp_path):
+    path = tmp_path / 'synthetic.lock'
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        info = os.fstat(descriptor)
+        program = 'import os,sys; expected=(int(sys.argv[1]),int(sys.argv[2])); found=[]\nfor fd in range(3,256):\n try:\n  s=os.fstat(fd)\n  if (s.st_dev,s.st_ino)==expected: found.append(fd)\n except OSError: pass\nassert len(found)==1,found\nprint("inherited")'
+        with owned_process.lifetime_fds((descriptor,)):
+            result = lifecycle_io.run_bounded([sys.executable, '-I', '-c', program, str(info.st_dev), str(info.st_ino)], deadline=time.monotonic() + 5)
+        assert result.returncode == 0 and result.stdout == 'inherited\n'
+        assert os.fstat(descriptor).st_ino == info.st_ino
+    finally:
+        os.close(descriptor)
+
+
+def test_owned_deadline_preserves_text_input_working_directory_and_capacity(tmp_path):
+    result = owned_process.run_owned([sys.executable, '-I', '-c', 'import os,sys; print(os.getcwd()); print(sys.stdin.read().upper())'],
+        5, dict(os.environ), deadline=time.monotonic() + 5, input_text='synthetic', cwd=tmp_path)
+    assert result.returncode == 0 and result.stdout.splitlines() == [str(tmp_path), 'SYNTHETIC']
+    for value in (b'synthetic', 'x' * 16385, True):
+        with pytest.raises(ValueError, match='owned_input_invalid'):
+            owned_process.run_owned(['synthetic-never-spawn'], 5, {}, deadline=time.monotonic() + 5, input_text=value)
+
+
+def test_owned_expiry_during_fd_preparation_starts_no_child(monkeypatch):
+    from contextlib import contextmanager
+    now = [100.0]
+    monkeypatch.setattr(owned_process.time, 'monotonic', lambda: now[0])
+    @contextmanager
+    def prepare(*_):
+        now[0] = 102
+        yield {}
+    monkeypatch.setattr(owned_process, '_inherited_fds', prepare)
+    monkeypatch.setattr(owned_process.subprocess, 'Popen', lambda *_a, **_k: pytest.fail('expired child spawned'))
+    with pytest.raises(subprocess.TimeoutExpired):
+        owned_process.run_owned(['synthetic'], 5, {}, deadline=101)
+
+
+def test_expired_probe_stops_its_actual_helper_group_and_reaps_the_leader(tmp_path, monkeypatch):
+    from test_git_timeout_cleanup import _group_gone
+    helper_pid = tmp_path / 'helper.pid'
+    program = ('import pathlib,subprocess,sys,time; '
+        'child=subprocess.Popen([sys.executable,"-I","-c","import time; time.sleep(30)"]); '
+        'pathlib.Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(30)')
+    children = []
+    original = owned_process.subprocess.Popen
+    def popen(*args, **kwargs):
+        child = original(*args, **kwargs)
+        children.append(child)
+        return child
+    monkeypatch.setattr(owned_process.subprocess, 'Popen', popen)
+    result = lifecycle_io.run_bounded([sys.executable, '-I', '-c', program, str(helper_pid)], deadline=time.monotonic() + 1)
+    monkeypatch.setattr(owned_process.subprocess, 'Popen', original)
+    assert result.returncode == 124 and helper_pid.exists()
+    assert len(children) == 1 and children[0].returncode is not None
+    assert _group_gone(children[0].pid)

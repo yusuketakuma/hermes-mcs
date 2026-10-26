@@ -32,8 +32,8 @@ LIMITS['provision-state.json'] = 1024 * 1024  # File-read ceiling; the provision
 LIMITS.update({'diagnostic-state.json': 1024 * 1024, 'diagnostic-anchor.json': 4096,
                'diagnostic-state.lock': 0})
 LIMITS['credential-store.json'] = mutation_contract.MAX_MARKER
-NAMES = NAMES | {'release-owner.json', 'release-owner.lock', 'release-owner-activation.json', 'release-entry.lock', 'release-bootstrap.json', 'release-authority.lock'}
-LIMITS.update({'release-owner.json': MAX_FILE, 'release-owner.lock': 0,
+NAMES = NAMES | {'release-owner.json', 'release-owner.lock', 'release-owner-activation.json', 'release-entry.lock', 'release-bootstrap.json', 'release-authority.lock', 'release-planning.json'}
+LIMITS.update({'release-planning.json': 16384, 'release-owner.json': MAX_FILE, 'release-owner.lock': 0,
                'release-owner-activation.json': 16384, 'release-entry.lock': 0, 'release-bootstrap.json': 2 * 16384 + 4096, 'release-authority.lock': 0})
 _IDS = ('claim_id', 'device_id', 'key_id', 'rotation_id')
 _STOP = ('state', 'enabled', 'disconnected', 'central_suspended', 'enrollment_hold')
