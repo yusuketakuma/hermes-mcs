@@ -9,6 +9,7 @@ import semantic_assessment
 import semantic_drain
 import semantic_jev as jev
 import semantic_runtime
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _FakeJev, _llm, _seeded
 from test_mcs_semantic import _cfg
 from semantic_testkit import v2_doc
@@ -19,7 +20,7 @@ from test_semantic_assessment import _bundle_and_facts, _EventJev, _ledger, SCFG
 def _prefilter(db, mid):
     content_hash = db.db.execute("SELECT content_hash FROM messages WHERE message_id=?", (mid,)).fetchone()[0]
     db.artifact_add("extract_llm", "{}", project_id=1, message_id=mid,
-                    meta={"hash": content_hash, "prefilter": "no_signal"})
+                    meta={"hash": content_hash, "prefilter": "no_signal", VERSION_KEY: CURRENT_VERSION})
 
 
 def test_a_prefiltered_post_is_not_assessed_by_jev(tmp_path):
