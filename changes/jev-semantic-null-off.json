@@ -1,0 +1,12 @@
+{
+  "category": "security",
+  "title": "config.jsonのsemanticがnullのときJevを自動有効化しない",
+  "summary": "config.jsonに\"semantic\": nullと書くと、設定検査ではエラーなのに、実行時はブロック未指定と同じ扱いになり、.envにキーがあれば全患者を対象にJevへ送信していました。nullは不正な値として扱い、mode=off・予算0にして設定エラー（semantic_not_object）を記録します。",
+  "upgrade": "追加操作は不要です。semanticブロックを消してキーによる自動有効化を使う場合は、nullではなくキーごと削除してください。semanticをnullにしている環境では、更新後の定期処理からJevの送信が止まります。",
+  "details": [
+    "手動の評価ツールは以前からnullを拒否しており、定期処理と判定が揃う。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_policy.py"
+  ]
+}

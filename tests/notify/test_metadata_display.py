@@ -78,7 +78,8 @@ def test_footer_is_read_only_and_unknown_labels_cannot_mention(led):
               error="reaction_error")
     content = notify_render.card_content(led.db, card)
     footer = "\n".join(item["text"] for item in content["footer"])
-    assert "スタンプ ✅1 ❔1 · 自分 1投稿" in footer
+    # one's own stamps are never counted (owner 2026-10-26): only the post count remains
+    assert "スタンプ 自分 1投稿" in footer and "✅" not in footer
     assert "再取得失敗" in footer and "@" not in footer
     assert content["toggles"] == {"acked": False, "has_tasks": False, "assigned": False}
     assert (content["pages"], content["shown"]) == (
@@ -90,7 +91,7 @@ def test_footer_is_read_only_and_unknown_labels_cannot_mention(led):
     def strip(t):
         return [ln for ln in t.split("\n") if not ln.startswith("スタンプ ")]
     assert strip(after_body) == strip(before_body)
-    assert "スタンプ ✅1 ❔1 · " in after_body
+    assert "スタンプ なし · " in after_body and "✅" not in after_body
     assert led.db.execute("SELECT count(*) FROM notification_acknowledgements").fetchone()[0] == 0
 
 
@@ -206,7 +207,8 @@ def test_stamps_and_busy_footer_fit_card_budget(
     mids = list(range(100, 100 + count))
     for mid in mids:
         _msg(led, mid, parent=None if mid == 100 else 100, body=f"合成本文{mid}")
-        _metadata(led, mid, [_react(kind) for kind in (
+        # count 2: one's own stamp is excluded, one other keeps every emoji on the row
+        _metadata(led, mid, [_react(kind) | {"count": 2} for kind in (
             "viewed", "accepted", "thanked", "good", "completed", "future")],
                   error="reaction_error")
     _dispatch(led, _intent(led, payload={"message_ids": mids}))
@@ -262,7 +264,8 @@ def test_unacked_remains_unacked_and_partitions_within_patient(led, pinned_clock
                             "MCSで本人反応あり 1件"]
     assert view["notes"] == ["※ 本人反応があるカードは同患者内の末尾に表示します。"]
     assert "🙆" not in view["items"][0]["text"]
-    assert "スタンプ 🙆1 · 自分 1投稿" in view["items"][1]["text"]
+    assert "スタンプ 自分 1投稿" in view["items"][1]["text"]
+    assert "🙆" not in view["items"][1]["text"]
     assert "🧵 投稿" in view["items"][1]["text"]
     assert led.db.execute("SELECT count(*) FROM notification_acknowledgements").fetchone()[0] == 0
 

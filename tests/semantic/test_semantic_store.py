@@ -104,3 +104,36 @@ def test_invalid_usage_cannot_refill_daily_budget(tmp_path, metadata):
             semantic_store.jev_usage_today(db)
     finally:
         db.close()
+
+
+def test_usage_count_resumes_after_the_last_summed_row(tmp_path, monkeypatch):
+    db = _seeded(tmp_path)
+    try:
+        parsed = []
+        original = semantic_store.loads_dict
+        monkeypatch.setattr(semantic_store, 'loads_dict',
+                            lambda raw: parsed.append(raw) or original(raw))
+        for _ in range(3):
+            db.artifact_add('semantic_usage', '{}', meta={'jev_requests': 2})
+        assert semantic_store.jev_usage_today(db) == 6 and len(parsed) == 3
+        assert semantic_store.jev_usage_today(db) == 6 and len(parsed) == 3
+        db.artifact_add('semantic_usage', '{}', meta={'jev_requests': 1})
+        assert semantic_store.jev_usage_today(db) == 7 and len(parsed) == 4
+    finally:
+        db.close()
+
+
+def test_corrupt_usage_row_is_caught_after_the_count_is_warm(tmp_path):
+    db = _seeded(tmp_path)
+    try:
+        db.artifact_add('semantic_usage', '{}', meta={'jev_requests': 5})
+        assert semantic_store.jev_usage_today(db) == 5
+        with db.db:
+            db.db.execute("INSERT INTO artifacts(kind,content,meta,created_at) "
+                          "VALUES('semantic_usage','{}','{broken',?)", (time.time(),))
+        db.artifact_add('semantic_usage', '{}', meta={'jev_requests': 1})
+        for _ in range(2):
+            with pytest.raises(ValueError, match='semantic_usage_invalid'):
+                semantic_store.jev_usage_today(db)
+    finally:
+        db.close()

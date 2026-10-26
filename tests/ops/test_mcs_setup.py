@@ -206,6 +206,53 @@ def test_env_write_merges_and_preserves(tmp_path):
     assert oct(p.stat().st_mode & 0o777) == "0o600"
 
 
+def test_env_write_collapses_repeated_keys_to_the_last_value(tmp_path):
+    """private_env_value rejects a repeated key, so init must repair, not preserve, duplicates."""
+    p = tmp_path / ".env"
+    p.write_text("# synthetic\nTYPESAFE_API_KEY=\nDUP=first\nKEEP=1\nTYPESAFE_API_KEY=k1\nDUP=last\n",
+                 encoding="utf-8")
+    lifecycle_io.write_env(str(p), {"TYPESAFE_API_KEY": "k2"})
+    assert p.read_text(encoding="utf-8").splitlines() == [
+        "# synthetic", "TYPESAFE_API_KEY=k2", "DUP=last", "KEEP=1"]
+    assert mcs_util.private_env_value("TYPESAFE_API_KEY", str(tmp_path)) == "k2"
+
+
+def _linux_probe(monkeypatch):
+    """Stub the machine probes so check_environment runs outside macOS/Hermes."""
+    monkeypatch.setattr(environment_diagnostics.sys, "platform", "linux")
+    monkeypatch.setattr(environment_diagnostics.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(local_llm, "bounded_request", lambda *a, **k: (200, {}, b"{}"))
+    monkeypatch.setattr(mcs_util.shutil, "which", lambda *a: "/usr/bin/hermes")
+    monkeypatch.setattr(environment_diagnostics.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(environment_diagnostics.os, "access", lambda p, m: True)
+
+
+@pytest.mark.parametrize("configured,env,probed", [
+    (True, None, True), (False, "1", False), (None, "1", True), (None, None, False)])
+def test_check_admission_probe_follows_config_then_env(monkeypatch, configured, env, probed):
+    _linux_probe(monkeypatch)
+    cfg = {"notify_target": "slack"}
+    if configured is not None:
+        cfg["local_llm"] = {"admission": configured}
+    monkeypatch.setattr(mcs_util, "load_config", lambda *a, **k: cfg)
+    if env is None:
+        monkeypatch.delenv("MCS_LLM_ADMISSION", raising=False)
+    else:
+        monkeypatch.setenv("MCS_LLM_ADMISSION", env)
+    monkeypatch.setattr(local_llm, "_broker", lambda: SimpleNamespace(routes={}, is_open=lambda: True))
+    errors, _ = mcs_setup.check_environment(cfg)
+    assert any("mcs.semantic, mcs.extract" in e and "local_llm.admission" in e for e in errors) is probed
+
+
+def test_check_explicit_jev_mode_without_private_key_is_a_warning(monkeypatch):
+    _linux_probe(monkeypatch)
+    monkeypatch.setattr(mcs_util, "private_env_value", lambda *a, **k: None)
+    errors, warnings = mcs_setup.check_environment(
+        {"notify_target": "slack", "semantic": {"mode": "shadow", "project_ids": [1]}})
+    assert any("no_api_key" in w for w in warnings)
+    assert not any("no_api_key" in e for e in errors)
+
+
 def test_check_environment_resolves_hermes_binary(monkeypatch,
                                                   tmp_path):
     """check must resolve the hermes CLI the way mcs_util.hermes_exe
@@ -2068,6 +2115,17 @@ def test_check_flags_invalid_config_file(monkeypatch, tmp_path, capsys):
     conf.write_text("{")
     assert mcs_setup.cmd_check(None) == 1
     assert "読み取れないか、形式が不正" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("raw", ['{"a": 1, "a": 2}', '{"local_llm": {"disk_guard_mb": NaN}}'])
+def test_check_flags_duplicate_key_and_nan_like_every_reader(monkeypatch, tmp_path, capsys, raw):
+    _check_only(monkeypatch)
+    conf = tmp_path / "c.json"
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(conf))
+    conf.write_text(raw)
+    assert mcs_setup.cmd_check(None) == 1
+    assert "読み取れないか、形式が不正" in capsys.readouterr().out
+    assert mcs_util.load_config(str(conf)) == {}
 
 
 def test_check_prints_prioritized_blocker_summary(monkeypatch, capsys):

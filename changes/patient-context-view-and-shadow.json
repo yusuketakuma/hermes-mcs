@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "Anthropicの切替えや鍵の削除で患者コンテキストが非表示にならない",
+  "summary": "cloud_llm.modeの切替え（shadow→on、on→off）や.envの鍵の削除で、公開済みの患者コンテキストが作り直しが終わるまで表示から消えていました。表示は、作成時の推論先が現在の要求形式と一致していれば受け入れ、ルール版やローカルモデルの変更だけで非表示にします。作り直し自体は従来どおり行います。有料の試行が失敗しローカルが受け付けられない単位は、再試行として記録して次の周回で再送しません。",
+  "upgrade": "追加操作は不要です。反映には gateway（独立実行ではSlack/Discordアダプター）の再起動が必要です。",
+  "details": [
+    "context_view_input は保存された provider 契約が extract_llm._cloud_contract() と一致する限り、現在のmodeに関係なく受け入れる。",
+    "有料のAnthropic試行が失敗し、ローカルLLMの受入れがない単位は、失敗（nightly_cloud_failed、または応答の検証エラー）と次回時刻を保存する。途中までAnthropicで走査した単位はAnthropicの記録のまま残し、走査位置をローカルへ引き継がない。それ以外の単位はローカル経路の記録として保存する。",
+    "確定前の stale 判定を1回の計算にまとめ、BEGIN前の重複した確認を削除した（記録される破棄理由は変わらない）。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/extract/llm/extract_llm.py"
+  ]
+}

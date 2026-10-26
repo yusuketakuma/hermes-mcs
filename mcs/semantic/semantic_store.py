@@ -178,20 +178,27 @@ def _jst_day_start(now: float) -> float:
 
 def jev_usage_today(ledger) -> int:
     """Durable daily Jev request count — shadow traffic spends real API
-    budget too, so it is never unbounded (§13.5, AT-067). Counts the
-    per-attempt semantic_usage rows written by run_due — one row per job
-    attempt carrying that attempt's request DELTA, so every external
-    call (primary, detail, claim-audit, loop-relation, failed) is
-    counted exactly once."""
+    budget too, so it is never unbounded (§13.5, AT-067). Sums the
+    jev_requests of today's semantic_usage rows: real Jev clients reserve
+    one row per request before POST (usage_reserver / manual_usage_reserver),
+    while injected fake clients get one post-job delta row from run_due, so
+    every external call (primary, detail, claim-audit, loop-relation,
+    failed) is counted exactly once."""
     day = _jst_day_start(time.time())
-    total = 0
+    # Rows are append-only (AUTOINCREMENT ids): resume from the last row
+    # already summed instead of re-parsing the whole day on every call.
+    cache = getattr(ledger, "_jev_usage_cache", None)
+    cached_day, last_id, total = cache if cache and cache[0] == day else (day, 0, 0)
     for r in ledger.db.execute(
-            "SELECT meta FROM artifacts WHERE kind=? AND created_at>=?",
-            (KIND_USAGE, day)):
+            "SELECT artifact_id, meta FROM artifacts WHERE kind=? AND created_at>=? "
+            "AND artifact_id>? ORDER BY artifact_id", (KIND_USAGE, day, last_id)):
         meta = loads_dict(r["meta"])
         count = meta.get("jev_requests") if isinstance(meta, dict) else None
         if type(count) is not int or count < 0:
-            # Unknown/corrupt usage cannot replenish a spending budget.
+            # Unknown/corrupt usage cannot replenish a spending budget;
+            # the cache stays before this row so every call re-hits it.
             raise ValueError("semantic_usage_invalid")
         total += count
+        last_id = r["artifact_id"]
+    ledger._jev_usage_cache = [cached_day, last_id, total]
     return total

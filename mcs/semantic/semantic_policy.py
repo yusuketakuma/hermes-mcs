@@ -68,9 +68,7 @@ def semantic_config(cfg: dict, *, key_present=False) -> tuple[dict, list]:
            "nomatch_threshold": jev.NOMATCH_THRESHOLD,
            "delayed_notice_seconds": 900,
            "project_ids": []}
-    block = cfg.get("semantic")
-    if block is None:
-        block = {}
+    block = cfg.get("semantic", {})
     if not isinstance(block, dict):
         out["daily_request_budget"] = 0
         return out, ["config: semantic_not_object"]
@@ -133,7 +131,7 @@ def semantic_config(cfg: dict, *, key_present=False) -> tuple[dict, list]:
             errors.append("config: semantic_model_invalid")
             out["mode"] = "off"
         out["model"] = jev.JEV_MODEL
-    for key, lo, hi in (("daily_request_budget", 0, 100000),
+    for key, lo, hi in (("daily_request_budget", 0, jev.DAILY_REQUEST_BUDGET_MAX),
                         ("max_questions_per_request", 1, 48),
                         ("max_attempts_per_try", 1, 3),
                         ("delayed_notice_seconds", 60, 86400)):

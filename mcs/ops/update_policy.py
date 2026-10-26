@@ -186,8 +186,8 @@ ENV_DIAGNOSTIC_TRANSLATIONS = (
     ),
     (
         'admission broker route table lacks {} — those callers are rejected permanently while '
-        'MCS_LLM_ADMISSION is set',
-        'AIの実行枠の登録に不足があります: {} — MCS_LLM_ADMISSIONが有効な間、これらの処理は受け付けられません。実行枠の登録を確認してください',
+        'admission (local_llm.admission or MCS_LLM_ADMISSION) is enabled',
+        'AIの実行枠の登録に不足があります: {} — 受付制御（local_llm.admission または MCS_LLM_ADMISSION）が有効な間、これらの処理は受け付けられません。実行枠の登録を確認してください',
     ),
     (
         'admission broker unusable: {}',

@@ -285,7 +285,8 @@ def cloud_stop_reason(db, cfg) -> str | None:
     from types import SimpleNamespace
     import cloud_policy
     key_present = bool(cloud_policy.api_key())
-    settings, errors = cloud_policy.cloud_config(cfg, key_present=key_present)
+    # an unreadable config ({}) keeps the route off (extract_llm._cloud_settings)
+    settings, errors = cloud_policy.cloud_config(cfg, key_present=key_present and bool(cfg))
     if (errors or settings["mode"] not in ("on", "shadow")
             or not settings["routes"] or settings["project_ids"] is not None
             and not set(settings["project_ids"]) - set(settings["exclude_project_ids"])):

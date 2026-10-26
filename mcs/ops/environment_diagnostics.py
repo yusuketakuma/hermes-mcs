@@ -191,9 +191,10 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
     jev_key_present = bool(mcs_util.private_env_value("TYPESAFE_API_KEY", paths.root))
     sem, _ = semantic_config(cfg, key_present=jev_key_present)
     if sem["mode"] != "off" and not jev_key_present:
-        errors.append("意味解析は有効ですが、TYPESAFE_API_KEYを"
-                      "取得できません。外部解析の認証情報を設定してください。エラーコード: "
-                      "no_api_key")
+        # newly diagnosed private-dotenv rule: a warning, so an older updater baseline never sees a new error
+        warnings.append("意味解析は有効ですが、TYPESAFE_API_KEYを"
+                        "取得できません。外部解析の認証情報を設定してください。エラーコード: "
+                        "no_api_key")
     elif not jev_key_present:
         warnings.append("TYPESAFE_API_KEYは未設定です。"
                         "外部の意味解析を有効にする場合に必要です")
@@ -245,9 +246,9 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
     # T20: with the admission boundary enabled, every MCS LLM route
     # must be registered — a missing route fails closed FOREVER, so a
     # misconfigured broker is a blocked-startup error, not a stall.
-    if os.environ.get("MCS_LLM_ADMISSION") not in (None, "", "0"):
+    import local_llm
+    if local_llm.admission_enabled():   # config local_llm.admission first, then the env
         try:
-            import local_llm
             broker = local_llm._broker()
             missing = [r for r in ("mcs.semantic", "mcs.extract")
                        if broker.routes.get(r) != "BACKLOG"]
@@ -255,7 +256,7 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
                 errors.append(
                     "AIの実行枠の登録に不足があります: "
                     + ", ".join(missing)
-                    + " — MCS_LLM_ADMISSIONが有効な間、"
+                    + " — 受付制御（local_llm.admission または MCS_LLM_ADMISSION）が有効な間、"
                       "これらの処理は受け付けられません。実行枠の登録を確認してください")
             elif not broker.is_open():
                 warnings.append(

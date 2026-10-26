@@ -51,7 +51,8 @@ def routed(tmp_path, monkeypatch):
     class Client:
         def __init__(self, key):
             assert key == "synthetic-key"
-        def complete(self, prompt, *, deadline, max_tokens, before_attempt, reserve_fn, after_result):
+        def complete(self, prompt, *, deadline, max_tokens, before_attempt, reserve_fn, after_result,
+                     cache_prefix=None):
             before_attempt()
             reservation = reserve_fn({"prompt": prompt, "max_tokens": max_tokens}, 1)
             before_attempt()
@@ -84,7 +85,7 @@ def test_parallel_http_hooks_stay_on_ledger_owner(routed, monkeypatch, local_cir
         meta = json.loads(artifact["meta"])
         assert meta["backend"] == "anthropic"
         assert meta["actual_model"] == cloud_policy.cloud_config(cfg)[0]["model"]
-        assert meta["prompt"] == worker._cloud_contract(cfg)["prompt"] and "code_contract" not in meta
+        assert meta["prompt"] == worker._cloud_contract()["prompt"] and "code_contract" not in meta
         assert meta["config_generation"] == cloud_policy.config_generation({"cloud_llm": worker._cloud_settings(cfg)})
     assert not led.artifacts("extract_llm_chunk")
 
@@ -265,14 +266,13 @@ def test_commit_rechecks_cloud_permission_after_writer_transaction_starts(routed
     assert not led.db.in_transaction
 
 
-@pytest.mark.parametrize("change", [{"monthly_cost_limit_usd": 9}, {"usd_jpy": 140},
-    {"daily_request_budget": 10}, {"max_concurrency": 3}, {"exclude_project_ids": [2]}])
-def test_operating_limits_do_not_change_saved_provider_contract(routed, change):
-    _, cfg, *_ = routed
-    before = worker._cloud_contract(cfg)
-    cfg["cloud_llm"].update(change)
-    assert worker._cloud_contract(cfg) == before
-    assert "prompt" in before and "code_contract" not in before and "config_generation" not in before
+def test_saved_provider_contract_is_the_fixed_request_shape_and_a_fresh_copy():
+    # operating limits, rule versions and code releases are not part of it
+    before = worker._cloud_contract()
+    assert before == {"backend": "anthropic", "model": worker.anthropic_client.MODEL, "prompt": before["prompt"]}
+    assert len(before["prompt"]) == 16 and "code_contract" not in before and "config_generation" not in before
+    before["model"] = "edited"
+    assert worker._cloud_contract()["model"] == worker.anthropic_client.MODEL
 
 
 def test_cloud_and_shadow_leave_legacy_integrity_notes_untouched(routed):
@@ -409,7 +409,8 @@ def test_completed_http_uses_result_dispatch_and_never_labels_only_deadline_as_s
     led, cfg, calls, _, _ = routed
     clock = time.monotonic
     outcomes, dispatches = [], []
-    def complete(self, prompt, *, deadline, max_tokens, before_attempt, reserve_fn, after_result):
+    def complete(self, prompt, *, deadline, max_tokens, before_attempt, reserve_fn, after_result,
+                 cache_prefix=None):
         before_attempt()
         reservation = reserve_fn({"model": cloud_policy.MODEL, "max_tokens": max_tokens}, 1)
         before_attempt()
@@ -634,12 +635,6 @@ def test_pending_write_loss_records_discard_but_lock_wait_does_not(routed, monke
     assert json.loads(led.artifacts(worker.KIND)[0]["meta"])["extract_version"] < worker.EXTRACT_VERSION
 
 
-def test_cloud_contract_follows_rule_versions_not_code_releases(routed, monkeypatch):
-    _, cfg, *_ = routed
-    before = worker._cloud_contract(cfg)
-    monkeypatch.setattr(worker, "_upgrade_contract", lambda: "synthetic-release")
-    assert worker._cloud_contract(cfg) == before
-
 
 def test_operating_limit_change_while_reserving_still_sends_the_paid_unit(routed, monkeypatch):
     led, cfg, calls, reserves, _ = routed
@@ -745,3 +740,31 @@ def test_shadow_pending_row_commits_with_the_local_result_or_not_at_all(routed, 
     else:
         assert len(current) == 1 and len(pending) == 1
         assert json.loads(pending[0]["meta"])["uncompared"] == "pending" and row["_shadow_unit"]
+
+
+def test_unreadable_config_never_auto_enables_the_paid_route(routed):
+    # load_config() answers {} when config.json cannot be read; with a key in
+    # .env the absent-block default would be "on", so {} must read as off
+    led, *_ = routed
+    assert worker._cloud_settings({})["mode"] == "off"
+    assert worker._cloud_mode(led, {}, "reextract", 1) == "off"
+    assert worker._cloud_settings({"mcs_login_id": "synthetic"})["mode"] == "on"
+
+
+def test_paid_cloud_failure_with_the_local_breaker_open_records_the_retry(routed, monkeypatch):
+    led, cfg, calls, reserves, results = routed
+    old(led)
+    monkeypatch.setattr(worker, "circuit_open_s", lambda db: 60)
+    original = worker.llm_extract
+    def extract(body, **kwargs):
+        if kwargs.get("provider"):
+            original(body, **kwargs)      # the paid attempt is sent and settled
+            raise worker.CloudFallback("cloud_incomplete_response")
+        pytest.fail("local must not run while its breaker is open")
+    monkeypatch.setattr(worker, "llm_extract", extract)
+    report = worker.run_pending(led, budget_s=180)
+    assert report["deferred"] == 1 and report["done"] == 0 and len(calls) == len(results) == 1
+    [error] = [json.loads(a["meta"]) for a in led.artifacts(worker.KIND) if json.loads(a["meta"]).get("error")]
+    assert error["attempts"] == 1 and error["next_try"] > time.time()
+    # the retry backoff keeps the next pass from re-sending the same body
+    assert worker.run_pending(led, budget_s=180)["done"] == 0 and len(calls) == 1

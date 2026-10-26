@@ -48,6 +48,7 @@ Design contract:
   delays backlog and ``status()`` exposes the oldest backlog age as a
   capacity signal — backlog progress is never claimed unconditionally.
 - **Default off** — MCS call paths route through the broker only when
+  config.json ``local_llm.admission`` is true or, with that key unset,
   ``MCS_LLM_ADMISSION`` is set. Until a staged rollout proves
   direct-connection rejection on the deployed topology, the legacy
   slot-pinning path stays the default.

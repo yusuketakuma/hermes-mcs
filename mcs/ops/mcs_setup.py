@@ -418,8 +418,8 @@ def _config_problem() -> str | None:
     every setting). Reads through load_config's own reader, so a symlink,
     non-regular or oversized file is a problem here, not an empty config."""
     try:
-        raw = json.loads(mcs_util._read_local(
-            CONF_PATH, mcs_util.CONFIG_MAX_BYTES).decode("utf-8"))
+        raw = mcs_util.parse_config(mcs_util._read_local(
+            CONF_PATH, mcs_util.CONFIG_MAX_BYTES))
     except FileNotFoundError:
         return None
     except (OSError, ValueError, RecursionError) as e:

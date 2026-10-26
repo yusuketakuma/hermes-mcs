@@ -30,7 +30,8 @@ def pending_key_presence(root=None):
 
 def _settings(cfg, root=None):
     key = bool(policy.api_key(root))
-    settings, errors = policy.cloud_config(cfg, key_present=key)
+    # an unreadable config arrives as {}: fail closed like the runtime, never auto-enable
+    settings, errors = policy.cloud_config(cfg, key_present=key and bool(cfg))
     return settings, errors, key
 
 
@@ -156,7 +157,7 @@ def _route_counts(db, cfg, settings, deadline):
         # Resolve the semantic contract without consulting installation credentials.
         contract = context._contract({**cfg, "cloud_llm": {"mode": "off"}})
         if settings["mode"] == "on":
-            contract["provider"] = extract._cloud_contract({"cloud_llm": settings})
+            contract["provider"] = extract._cloud_contract()
         scope, params = _source_scope(settings, "p")
         rows = db.execute("SELECT p.project_id FROM patients p WHERE COALESCE(p.is_archived,0)=0"
                           + scope + " ORDER BY p.project_id", params)
@@ -478,8 +479,7 @@ def apply_control_tx(db, req, now):
             raw = read_regular_nofollow(Path(mcs_util.HOME) / "config.json", mcs_util.CONFIG_MAX_BYTES, ValueError)
             if len(raw) > mcs_util.CONFIG_MAX_BYTES:
                 raise ValueError
-            cfg = json.loads(raw.decode("utf-8"), object_pairs_hook=mcs_util.unique_pairs,
-                             parse_constant=mcs_util.reject_constant)
+            cfg = mcs_util.parse_config(raw)
             if not isinstance(cfg, dict):
                 raise ValueError
             errors, _ = validate_config(cfg)
@@ -586,7 +586,7 @@ def budget_command(args):
     import config_edit
     try:
         if changes:
-            cfg, cloud_errors = config_edit.apply({"cloud_llm." + k: v for k, v in changes.items()}, "cloud_llm")
+            cfg, cloud_errors = config_edit.apply({"cloud_llm." + k: v for k, v in changes.items()})
             if cloud_errors:
                 print("設定に誤りがあるため予算を保存していません。mcs_setup.py check で確認してください")
                 return 1
@@ -599,8 +599,11 @@ def budget_command(args):
     except config_edit.ConfigConflict:
         print("予算: ほかの設定保存と競合したため変更していません。設定を再確認して再試行してください")
         return 1
+    except FileNotFoundError:
+        print("予算: 設定ファイルがないため変更していません（先に mcs_setup.py init で設定してください）")
+        return 1
     except (OSError, ValueError, RecursionError):
-        print("予算: 設定ファイルを読み取れないため変更していません（先に mcs_setup.py init で設定してください）")
+        print("予算: 設定ファイルを読み取れないため変更していません。mcs_setup.py check で確認してください")
         return 1
     settings, errors = policy.cloud_config(cfg)
     if errors:

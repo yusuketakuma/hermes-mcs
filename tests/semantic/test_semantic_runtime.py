@@ -398,6 +398,12 @@ def test_jev_key_based_auto_assist_defaults_to_all_and_hard_cap_but_preserves_ex
     assert not errors and cfg["mode"] == "off" and cfg["daily_request_budget"] == 0
 
 
+def test_jev_null_block_fails_closed_instead_of_auto_enabling():
+    cfg, errors = semantic_policy.semantic_config({"semantic": None}, key_present=True)
+    assert errors == ["config: semantic_not_object"]
+    assert cfg["mode"] == "off" and cfg["daily_request_budget"] == 0
+
+
 def test_jev_explicit_budget_never_exceeds_the_user_hard_cap():
     for budget, expected in ((0, 0), (500, 500), (10000, 10000), (20000, 10000)):
         cfg, errors = semantic_policy.semantic_config({"semantic": {

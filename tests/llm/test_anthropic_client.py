@@ -38,7 +38,7 @@ def test_fixed_body_and_shared_chat_envelope():
     assert result["finish_reason"] == "stop" and result["status"] == 200
 
 
-@pytest.mark.parametrize("stop", ["max_tokens", "stop_sequence", "refusal", None])
+@pytest.mark.parametrize("stop", ["stop_sequence", "refusal", None])
 def test_only_end_turn_is_accepted_but_usage_is_reported(stop):
     results = []
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
@@ -47,6 +47,34 @@ def test_only_end_turn_is_accepted_but_usage_is_reported(stop):
         client.complete("synthetic", deadline=time.monotonic() + 10,
                         after_result=lambda r, meta: results.append(meta))
     assert len(results) == 1 and results[0]["usage"]["input_tokens"] == 10
+
+
+def test_a_max_tokens_stop_is_a_paid_length_answer_not_a_failure():
+    results = []
+    client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
+        200, {}, json.dumps(_reply(stop_reason="max_tokens")).encode()))
+    result = client.complete("synthetic", deadline=time.monotonic() + 10,
+                             after_result=lambda r, meta: results.append(meta))
+    assert result["finish_reason"] == "length" and result["status"] == 200
+    assert results[0]["error_kind"] is None and results[0]["usage"]["output_tokens"] == 5
+    client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
+        200, {}, json.dumps(_reply(stop_reason="max_tokens", content=[])).encode()))
+    with pytest.raises(a.AnthropicError, match="contract_error"):
+        client.complete("synthetic", deadline=time.monotonic() + 10)
+
+
+def test_a_cache_prefix_becomes_the_first_cached_text_block():
+    seen = []
+    client = a.AnthropicClient("synthetic", post_fn=lambda body, timeout: (
+        seen.append(body) or 200, {}, json.dumps(_reply()).encode()))
+    client.complete("HEAD\n\nbody", deadline=time.monotonic() + 10, cache_prefix="HEAD\n\n")
+    assert seen[0]["messages"] == [{"role": "user", "content": [
+        {"type": "text", "text": "HEAD\n\n", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "body"}]}]
+    client.complete("HEAD", deadline=time.monotonic() + 10, cache_prefix="HEAD")
+    assert len(seen[1]["messages"][0]["content"]) == 1   # never an empty text block
+    with pytest.raises(ValueError, match="cache_prefix_invalid"):
+        client.complete("body", deadline=time.monotonic() + 10, cache_prefix="HEAD")
 
 
 @pytest.mark.parametrize("usage", [None, {}, {"input_tokens": True, "output_tokens": 1},
@@ -59,7 +87,7 @@ def test_unknown_usage_is_never_a_zero_cost_success(usage):
         client.complete("synthetic", deadline=time.monotonic() + 10)
 
 
-def test_second_guard_rejection_never_dispatches_and_keeps_reservation():
+def test_second_guard_rejection_never_dispatches_and_settles_the_reservation_as_unsent():
     events = []
 
     def guard():
@@ -70,8 +98,11 @@ def test_second_guard_rejection_never_dispatches_and_keeps_reservation():
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: pytest.fail("not sent"))
     with pytest.raises(RuntimeError):
         client.complete("synthetic", deadline=time.monotonic() + 10, before_attempt=guard,
-                        reserve_fn=lambda *args: events.append("reserve"))
-    assert events == ["guard", "reserve", "guard"]
+                        reserve_fn=lambda *args: events.append("reserve") or {"r": 1},
+                        after_result=lambda r, meta: events.append((r, meta)))
+    assert events[:3] == ["guard", "reserve", "guard"]
+    assert events[3][0] == {"r": 1} and events[3][1]["http_class"] == "not_sent"
+    assert events[3][1]["usage"] is None and events[3][1]["error_kind"] == "budget_exceeded"
 
 
 def test_each_retry_reserves_and_accounts_transport_failures(monkeypatch):
@@ -125,13 +156,15 @@ def test_request_id_has_only_the_bounded_provider_contract(request_id, expected)
 
 def test_only_known_unpriced_usage_metadata_is_accepted():
     usage = {"input_tokens": 10, "output_tokens": 5, "service_tier": "standard",
-             "inference_geo": "global", "server_tool_use": {"web_search_requests": 0}}
+             "inference_geo": "global", "server_tool_use": {"web_search_requests": 0},
+             "output_tokens_details": {"thinking_tokens": 2}}
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
         200, {}, json.dumps(_reply(usage=usage)).encode()))
     assert client.complete("synthetic", deadline=time.monotonic() + 10)["usage"]["input_tokens"] == 10
     for extra in ({"service_tier": "priority"}, {"inference_geo": "us"}, {"new_charge_usd": "10"},
                   {"service_tier": {"tier": "standard"}}, {"inference_geo": ["global"]}, {"service_tier": True},
-                  {"server_tool_use": {"web_search_requests": 1}}, {"unknown_flag": None}):
+                  {"server_tool_use": {"web_search_requests": 1}}, {"unknown_flag": None},
+                  {"output_tokens_details": {"thinking_tokens": -1}}, {"output_tokens_details": 3}):
         client = a.AnthropicClient("synthetic", post_fn=lambda *args, e=extra: (
             200, {}, json.dumps(_reply(usage={"input_tokens": 1, "output_tokens": 1, **e})).encode()))
         with pytest.raises(a.AnthropicError, match="pricing_unverified"):

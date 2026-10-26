@@ -517,6 +517,18 @@ def reserve_artifact(ledger, check, write):
         return write()
 
 
+def _daily_cap_check(ledger, limit: int, retryable: bool = False):
+    """Refuse a reservation once today's durable count reaches `limit`."""
+    from semantic_jev import JevError
+    from semantic_store import jev_usage_today
+    try:
+        used = jev_usage_today(ledger)
+    except ValueError:
+        raise JevError("budget_exceeded", "semantic_usage_invalid", retryable=retryable) from None
+    if used >= limit:
+        raise JevError("budget_exceeded", "daily_cap", retryable=retryable)
+
+
 def usage_reserver(ledger, token: JobToken, *, kind: str,
                    model: str, project_id: int, message_id: int,
                    daily_request_budget: int | None = None):
@@ -531,15 +543,7 @@ def usage_reserver(ledger, token: JobToken, *, kind: str,
     def reserve(body: dict, timeout: float):
         request_fp = payload_hash(body)
         def check():
-            if daily_request_budget is not None:
-                from semantic_jev import JevError
-                from semantic_store import jev_usage_today
-                try:
-                    used = jev_usage_today(ledger)
-                except ValueError:
-                    raise JevError("budget_exceeded", "semantic_usage_invalid", retryable=True) from None
-                if used >= daily_request_budget:
-                    raise JevError("budget_exceeded", "daily_cap", retryable=True)
+            _daily_cap_check(ledger, daily_request_budget, retryable=True)
         def write():
             return ledger.artifact_add_tx(
                 kind,
@@ -568,13 +572,7 @@ def manual_usage_reserver(ledger, *, operation: str, daily_request_budget=None):
 
     def reserve(body, timeout):
         def check():
-            from semantic_store import jev_usage_today
-            try:
-                used = jev_usage_today(ledger)
-            except ValueError:
-                raise JevError("budget_exceeded", "semantic_usage_invalid") from None
-            if used >= limit:
-                raise JevError("budget_exceeded", "daily_cap")
+            _daily_cap_check(ledger, limit)
 
         def write():
             return ledger.artifact_add_tx("semantic_usage", "{}", model=JEV_MODEL,

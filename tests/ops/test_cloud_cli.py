@@ -106,9 +106,11 @@ def test_log_filter_never_displays_ids_or_untrusted_metadata(world):
 def test_doctor_resolves_auto_without_exposing_keys(world):
     root, _, _ = world
     _key(root)
-    report = cli.diagnostics({}, root=str(root))
+    report = cli.diagnostics({"mcs_login_id": "synthetic"}, root=str(root))
     assert report["jev"]["mode"] == "assist" and report["jev"]["daily_request_budget"] == 10000
     assert report["anthropic"]["mode"] == "on"
+    # an unreadable config reaches the CLI as {}: shown off, like the runtime
+    assert cli.diagnostics({}, root=str(root))["anthropic"]["mode"] == "off"
     assert report["jev"]["scope"] == "all" and report["anthropic"]["scope"] == "all"
     assert "synthetic-secret-key" not in json.dumps(report)
     assert str(root) not in json.dumps(report)
@@ -289,9 +291,8 @@ def test_resume_refuses_unreadable_or_schema_invalid_config_at_mutation_owner(wo
 
 def _complete_context(db, config):
     import patient_context_refresh as context
-    settings = cloud_policy.cloud_config(config, key_present=True)[0]
     contract = context._contract({**config, "cloud_llm": {"mode": "off"}})
-    contract["provider"] = extract_llm._cloud_contract({"cloud_llm": settings})
+    contract["provider"] = extract_llm._cloud_contract()
     snapshot = context._snapshot(db.db, 1, config, hydrate=False, contract=contract)
     for source in snapshot["sources"]:
         db.artifact_add(context.SCAN, json.dumps({"complete": True, "audited": True, "facts": []}),
