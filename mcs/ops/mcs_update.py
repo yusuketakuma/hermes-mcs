@@ -1778,12 +1778,19 @@ def _hold_rollback_for_consent(state, e, tag, command_id,
     return 2
 
 
-def _run_post_merge(sha: str, *, run_lock_fd: int | None) -> None:
+def _run_post_merge(sha: str, *, run_lock_fd: int | None, _release_entry=None) -> None:
     """Spawn the post-merge child under the NEW code while the parent
     keeps both locks held — start_new_session so a timeout can killpg()
     grandchildren too. Raises UpdateError unless the child either exits
     cleanly or proves it already wrote 'done' (H5)."""
     env = update_launch.launch_environment(os.environ, detached=False)
+    if _release_entry is not None:
+        import release_apply_owner
+        if (type(_release_entry) is not release_apply_owner._StartedEffect
+                or sha != _release_entry.reference.get('target_commit')
+                or len(_release_entry.locks) != 3 or run_lock_fd != _release_entry.locks[2]):
+            raise release_apply_owner.ReleaseApplyError('CHILD_HOLD')
+        return release_apply_owner._run_effect_post_merge(_release_entry, environment=env, timeout=T_POST_MERGE)
     env[_UPDATE_PM_ENV] = sha       # child handshake token (L17)
     env.pop(RUN_LOCK_FD_ENV, None)
     run_fd = run_lock_fd

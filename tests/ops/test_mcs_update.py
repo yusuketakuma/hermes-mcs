@@ -2987,3 +2987,12 @@ def test_fixed_release_fence_survives_lost_sdc_config(updater, monkeypatch):
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(updater, '_apply_pipeline', lambda *_a, **_k: pytest.fail('legacy pipeline after config loss'))
     assert updater.apply('v1.1.0', 'a' * 40, None) == 2
+
+
+@pytest.mark.parametrize('entry', [False, True, 'saved-receipt', {}, None])
+def test_post_merge_native_issuer_refuses_unregistered_entry_without_launch(updater, monkeypatch, entry):
+    if entry is None:
+        entry = release_apply_owner._EffectCapability()
+    monkeypatch.setattr(updater.subprocess, 'Popen', lambda *_a, **_k: pytest.fail('native refusal spawned a child'))
+    with pytest.raises(release_apply_owner.ReleaseApplyError, match='CHILD_HOLD'):
+        updater._run_post_merge('a' * 40, run_lock_fd=10, _release_entry=entry)

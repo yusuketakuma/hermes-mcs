@@ -707,3 +707,106 @@ def test_currentness_rejects_changed_actual_identity_authority_or_expired_budget
             monitor.write('state.json', state)
         with pytest.raises(release_apply_owner.ReleaseApplyError, match='CURRENTNESS_HOLD'):
             release_apply_owner._load_release_currentness(control, monitor, runtime_home=home, now_ms=now, deadline=deadline)
+
+
+@pytest.mark.parametrize('mode', ['success', 'timeout', 'lost_reap', 'wait_error', 'wrong_pid', 'interrupt'])
+def test_native_wait_requires_exact_reap_and_never_signals_after_reap_is_lost(monkeypatch, mode):
+    from types import SimpleNamespace
+    child = SimpleNamespace(pid=424242, returncode=None)
+    calls, signals = [], []
+    def waitpid(pid, flags):
+        calls.append((pid, flags))
+        if mode == 'lost_reap':
+            raise ChildProcessError
+        if mode == 'wait_error':
+            raise OSError('synthetic wait failure')
+        if mode == 'wrong_pid':
+            return pid + 1, 0
+        if mode == 'interrupt' and len(calls) == 1:
+            raise KeyboardInterrupt
+        return (0, 0) if len(calls) == 1 else (pid, 0)
+    def sleep(_):
+        if mode in ('lost_reap', 'wait_error', 'wrong_pid'):
+            # An independent actual observation eventually resolves the safety hold.
+            child.returncode = 9
+    monkeypatch.setattr(release_apply_owner.os, 'waitpid', waitpid)
+    monkeypatch.setattr(release_apply_owner.os, 'killpg', lambda pid, sig: signals.append((pid, sig)))
+    monkeypatch.setattr(release_apply_owner.time, 'sleep', sleep)
+    if mode == 'success':
+        release_apply_owner._wait_effect_child(child, timeout=10)
+        assert child.returncode == 0 and not signals
+    else:
+        error = KeyboardInterrupt if mode == 'interrupt' else release_apply_owner.ReleaseApplyError
+        with pytest.raises(error):
+            release_apply_owner._wait_effect_child(child, timeout=0 if mode == 'timeout' else 10)
+        if mode in ('lost_reap', 'wait_error', 'wrong_pid'):
+            assert not signals and len(calls) == 1
+        elif mode == 'timeout':
+            assert len(signals) == 1
+
+
+@pytest.mark.parametrize('mode', ['success', 'nonzero_causal', 'zero_no_consumption', 'foreign_done', 'wrong_head', 'dirty_target'])
+def test_native_parent_issues_exactly_one_ticket_and_reaps_actual_child_before_return(registered_effect, mode):
+    import json
+    cap, entry, parameters = registered_effect
+    source = Path(release_apply_owner.__file__).resolve().parents[2]
+    script = Path(entry.repository) / 'mcs/ops/mcs_update.py'
+    script.parent.mkdir(parents=True)
+    error_path = Path(entry.repository) / 'native-error.txt'
+    script.write_text(f'''import json,os,sys,time
+sys.stderr=open({str(Path(entry.repository) / 'native-error.txt')!r}, 'w')
+from pathlib import Path
+sys.path.insert(0,{str(source)!r})
+sys.path.insert(0,{str(source / 'mcs')!r})
+import _mcs_path
+import release_apply_owner as owner
+import update_journal
+owner._control_root=lambda _:Path({str(entry.store.root)!r})
+fd,*locks=map(int,os.environ[owner.CHILD_FDS_ENV].split(':'))
+if {mode!r} == 'zero_no_consumption':sys.exit(0)
+state=owner._adopt_post_merge({entry.runtime_home!r},{entry.repository!r},ticket_fd=fd,locks=tuple(locks),deadline=time.monotonic()+2)
+applying=state['applying']
+state['applied']=[dict(sha=applying['sha'],release_ref=applying['release_ref'],release_child=applying['release_child'])]
+if {mode!r} == 'foreign_done':state['applied']=[dict(sha=applying['sha'])]
+state['applying']=None
+state['stages']=[dict(stage='done',at=1)]
+update_journal.save_state({str(Path(entry.runtime_home) / 'data/update_state.json')!r},state)
+if {mode!r} == 'nonzero_causal':sys.exit(3)
+''')
+    subprocess.run(['/usr/bin/git', 'init', '-q', entry.repository], check=True)
+    subprocess.run(['/usr/bin/git', '-C', entry.repository, 'add', 'mcs/ops/mcs_update.py'], check=True)
+    subprocess.run(['/usr/bin/git', '-C', entry.repository, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', 'commit', '-qm', 'synthetic child'], check=True)
+    target = subprocess.check_output(['/usr/bin/git', '-C', entry.repository, 'rev-parse', 'HEAD'], text=True).strip()
+    entry.reference['target_commit'] = target
+    entry.journal['release_ref']['target_commit'] = target
+    parameters['arguments'] = (None, target, *parameters['arguments'][2:])
+    update_journal.save_state(parameters['journal_path'], entry.journal)
+    release_apply_owner._claim_effect_entry(cap, **parameters)
+    state = copy.deepcopy(entry.journal)
+    state['applying'] = dict(sha=entry.reference['target_commit'], release_ref=entry.reference)
+    update_journal.save_state(parameters['journal_path'], state)
+    if mode == 'wrong_head':
+        subprocess.run(['/usr/bin/git', '-C', entry.repository, '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid', 'commit', '--allow-empty', '-qm', 'other synthetic commit'], check=True)
+    elif mode == 'dirty_target':
+        script.write_text(script.read_text() + '\n# synthetic mutation\n')
+    try:
+        if mode in ('zero_no_consumption', 'foreign_done', 'wrong_head', 'dirty_target'):
+            with pytest.raises(release_apply_owner.ReleaseApplyError, match='CHILD_HOLD'):
+                release_apply_owner._run_effect_post_merge(entry, environment={'PATH': '/usr/bin:/bin'}, timeout=10)
+        else:
+            try:
+                release_apply_owner._run_effect_post_merge(entry, environment={'PATH': '/usr/bin:/bin'}, timeout=10)
+            except release_apply_owner.ReleaseApplyError:
+                pytest.fail(error_path.read_text())
+        actual = update_journal.load_state(parameters['journal_path'])
+        if mode in ('success', 'nonzero_causal'):
+            assert actual['applied'][-1]['release_child']['phase'] == 'consumed'
+        assert 'nonce' not in json.dumps(actual)
+        for fd in entry.locks:
+            os.fstat(fd)
+        before = Path(parameters['journal_path']).read_bytes()
+        with pytest.raises(release_apply_owner.ReleaseApplyError, match='CHILD_HOLD'):
+            release_apply_owner._run_effect_post_merge(entry, environment={}, timeout=10)
+        assert Path(parameters['journal_path']).read_bytes() == before
+    finally:
+        release_apply_owner._finish_effect_entry(entry)

@@ -12,6 +12,7 @@ import secrets
 import select
 import stat
 import subprocess
+import sys
 import time
 import threading
 
@@ -54,6 +55,7 @@ _EFFECT_CAPS = {}
 _EFFECT_PARENTS = {}
 _EFFECT_CLAIMED = set()
 _EFFECT_RUNNING = set()
+_EFFECT_CHILDREN = set()
 
 
 @dataclass(frozen=True, repr=False)
@@ -315,6 +317,125 @@ def _finish_effect_entry(entry):
     with _EFFECT_MUTEX:
         _EFFECT_RUNNING.discard(entry)
 
+
+
+def _wait_effect_child(child, *, timeout):
+    """Keep the caller's leases until an exact waitpid result; lost reap never permits a signal."""
+    until = time.monotonic() + timeout
+    lost_reap, failed, interrupted = False, False, None
+    signaled = False
+    while child.returncode is None:
+        try:
+            if not lost_reap:
+                try:
+                    pid, status = os.waitpid(child.pid, os.WNOHANG)
+                except InterruptedError:
+                    raise
+                except OSError:
+                    lost_reap = failed = True
+                else:
+                    if pid == child.pid:
+                        child.returncode = os.waitstatus_to_exitcode(status)
+                    elif pid:
+                        lost_reap = failed = True
+            if child.returncode is None:
+                if not lost_reap and not signaled and (interrupted is not None or time.monotonic() >= until):
+                    signaled = failed = True
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                time.sleep(0.02)
+        except (KeyboardInterrupt, InterruptedError) as error:
+            interrupted = error
+    if interrupted is not None:
+        raise interrupted
+    if failed:
+        raise ReleaseApplyError('CHILD_HOLD')
+
+
+def _run_effect_post_merge(entry, *, environment, timeout):
+    """Issue one RAM-only native ticket and retain G/U/R through actual child retirement."""
+    import owned_process
+    import update_journal
+    from adapters.sdc import release_state
+    if (type(entry) is not _StartedEffect or entry.process_id != os.getpid()
+            or type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0
+            or type(environment) is not dict):
+        raise ReleaseApplyError('CHILD_HOLD')
+    with _EFFECT_MUTEX:
+        if (_EFFECT_PARENTS.get(entry.owner) is not entry or entry not in _EFFECT_RUNNING
+                or entry in _EFFECT_CHILDREN):
+            raise ReleaseApplyError('CHILD_HOLD')
+        _EFFECT_CHILDREN.add(entry)
+    reference = entry.reference
+    if (len(entry.locks) != 3 or len(entry.lock_identities) != 3
+            or entry.store._release_entry_thread != threading.get_ident()
+            or entry.store._release_entry_fd != entry.locks[0] or entry.store._release_entry_shared is not False
+            or any(_effect_fd_identity(fd) != identity for fd, identity in zip(entry.locks, entry.lock_identities))):
+        raise ReleaseApplyError('CHILD_HOLD')
+    data = Path(entry.runtime_home) / 'data'
+    for fd, path in zip(entry.locks, (entry.store.root / 'release-entry.lock', data / 'update.lock', data / 'run.lock')):
+        _verify_inherited_lock(fd, path)
+    git_environment = {'PATH': '/usr/bin:/bin', 'HOME': entry.runtime_home, 'LC_ALL': 'C',
+        'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_SYSTEM': '/dev/null', 'GIT_CONFIG_GLOBAL': '/dev/null',
+        'GIT_TERMINAL_PROMPT': '0', 'GIT_ATTR_NOSYSTEM': '1', 'GIT_NO_REPLACE_OBJECTS': '1', 'GIT_OPTIONAL_LOCKS': '0'}
+    git = ['/usr/bin/git', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
+           '-c', 'credential.helper=', '-C', entry.repository]
+    with owned_process.lifetime_fds(entry.locks):
+        head = owned_process.run_owned(git + ['rev-parse', '--verify', 'HEAD'], 10, git_environment)
+        clean = owned_process.run_owned(git + ['status', '--porcelain=v1', '--untracked-files=all'], 10, git_environment)
+    if head.returncode != 0 or head.stdout.strip() != reference['target_commit'] or clean.returncode != 0 or clean.stdout:
+        raise ReleaseApplyError('CHILD_HOLD')
+    path = data / 'update_state.json'
+    state = update_journal.load_state(path)
+    applying = state.get('applying') or {}
+    if (state.get('_corrupt') or state.get('release_ref') != reference
+            or applying.get('release_ref') != reference or applying.get('sha') != reference['target_commit']
+            or applying.get('reinstall') or applying.get('runtime_migration') or 'release_child' in applying
+            or reference['repo_fingerprint'] != _repository_fingerprint(entry.repository)):
+        raise ReleaseApplyError('CHILD_HOLD')
+    with entry.store.release_owner_lock():
+        owner = release_state._read(entry.store)
+        unresolved = owner['state']['unresolved']
+        if (not owner['spent'] or owner['spent'][-1] != entry.spent or unresolved is None
+                or unresolved['operation_id'] != reference['operation_id']
+                or unresolved['plan_sha256'] != reference['plan_sha256']):
+            raise ReleaseApplyError('CHILD_HOLD')
+    raw, receipt = _child_ticket(reference)
+    applying['release_child'] = receipt
+    update_journal.save_state(path, state)
+    reader, writer = os.pipe()
+    child = None
+    try:
+        if os.write(writer, raw) != len(raw):
+            raise ReleaseApplyError('CHILD_HOLD')
+        os.close(writer)
+        writer = None
+        env = dict(environment)
+        env['_MCS_UPDATE_PM'] = reference['target_commit']
+        with owned_process._inherited_fds((reader, *entry.locks)) as inherited:
+            env[CHILD_FDS_ENV] = ':'.join(str(inherited[fd]) for fd in (reader, *entry.locks))
+            env['MCS_UPDATE_RUN_LOCK_FD'] = str(inherited[entry.locks[2]])
+            child = subprocess.Popen([sys.executable, str(Path(entry.repository) / 'mcs/ops/mcs_update.py'), '--post-merge'],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                env=env, pass_fds=tuple(inherited.values()), close_fds=True, start_new_session=True)
+        _wait_effect_child(child, timeout=timeout)
+        current = update_journal.load_state(path)
+        applied = (current.get('applied') or [{}])[-1]
+        consumed = {**receipt, 'phase': 'consumed'}
+        if (current.get('_corrupt') or current.get('release_ref') != reference or current.get('applying') is not None
+                or 'done' not in [row.get('stage') for row in current.get('stages', [])]
+                or applied.get('sha') != reference['target_commit'] or applied.get('release_ref') != reference
+                or applied.get('release_child') != consumed):
+            raise ReleaseApplyError('CHILD_HOLD')
+    finally:
+        # Interruption of Popen's caller must not release the borrowed leases beside a live child.
+        if child is not None and child.returncode is None:
+            _wait_effect_child(child, timeout=0)
+        for fd in (reader, writer):
+            if fd is not None:
+                os.close(fd)
 
 def _child_ticket(reference):
     """Only bytes for the native continuation; the live owner must issue them once."""
