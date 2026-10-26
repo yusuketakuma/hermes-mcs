@@ -137,16 +137,21 @@ def test_a_clearly_unrelated_correction_does_not_hide_the_source(ctx):
     assert _records(ctx) == [fact]
 
 
-@pytest.mark.parametrize("body", ["先ほどの件は間違いでした。", "アレルギーの記録を訂正しました。"])
+@pytest.mark.parametrize("body", [
+    "先ほどの件は間違いでした。", "アレルギーの記録を訂正しました。",
+    "先ほどの件は違います。", "先ほどの件は違いました。",
+    "前回の投稿は取り消します。", "その件はなしで。", "さっきの話は誤解でした。",
+])
 def test_unclassified_source_correction_blocks_the_posted_notice(ctx, body):
     _seed(ctx, 1, "アレルギー: 本人はペニシリンのアレルギーがある。")
     ctx[0].save_messages([_message(2, body=body)], project_id=1)
     assert _records(ctx) == []
 
 
-def test_unrelated_unclassified_source_does_not_block_the_notice(ctx):
+@pytest.mark.parametrize("body", ["本日は晴れでした。", "本人は食事を食べていません。", "歩行の補助はなしでした。"])
+def test_unrelated_unclassified_source_does_not_block_the_notice(ctx, body):
     fact = _seed(ctx, 1, "アレルギー: 本人はペニシリンのアレルギーがある。")
-    ctx[0].save_messages([_message(2, body="本日は晴れでした。")], project_id=1)
+    ctx[0].save_messages([_message(2, body=body)], project_id=1)
     assert _records(ctx) == [fact]
 
 
