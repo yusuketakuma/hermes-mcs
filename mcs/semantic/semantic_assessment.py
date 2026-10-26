@@ -287,6 +287,39 @@ def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
             _append_finding(findings, state_error, fact_id)
             return _result(details, findings, False, "invalid")
         details.setdefault(fact_id, {})
+        # every uncached dimension of this event rides in ONE request (the
+        # state is per event); evaluate_once_more re-asks only defective answers
+        missing = {dimension: jev.choice_question(
+                       instructions + " Determine this from the original evidence "
+                       "quote and same-thread context. The target statement and "
+                       "its status/polarity are unverified extraction candidates, "
+                       "not authoritative source facts.", options)
+                   for dimension, (instructions, options) in jev.MED_DETAIL_QUESTIONS.items()
+                   if cache.get((fact_id, dimension)) is None}
+        answers = {}
+        if missing:
+            if deadline is not None and time.monotonic() > deadline:
+                _append_finding(findings, "medication_detail_deadline",
+                                fact_id, next(iter(missing)))
+                return _result(details, findings, False, "deadline")
+            try:
+                response = jev.evaluate_once_more(jev_client, state, missing, deadline)
+            except RuntimeGuardError:
+                raise
+            except Exception as error:
+                finding = {"code": "medication_detail_technical_error",
+                           "fact_id": fact_id, "dimension": next(iter(missing))}
+                if isinstance(error, jev.JevError):
+                    finding["kind"] = error.kind
+                findings.append(finding)
+                return _result(details, findings, False, "technical")
+            if deadline is not None and time.monotonic() > deadline:
+                _append_finding(findings, "medication_detail_deadline",
+                                fact_id, next(iter(missing)))
+                return _result(details, findings, False, "deadline")
+            answers = response.get("answers") if isinstance(response, dict) else None
+            if not isinstance(answers, dict):
+                answers = {}
         for dimension, (instructions, options) in \
                 jev.MED_DETAIL_QUESTIONS.items():
             cached = cache.get((fact_id, dimension))
@@ -294,33 +327,8 @@ def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
                 choice = cached["choice"]
                 confidence = cached["confidence"]
             else:
-                if deadline is not None and time.monotonic() > deadline:
-                    _append_finding(findings, "medication_detail_deadline",
-                                    fact_id, dimension)
-                    return _result(details, findings, False, "deadline")
                 try:
-                    question = jev.choice_question(
-                        instructions + " Determine this from the original evidence "
-                        "quote and same-thread context. The target statement and "
-                        "its status/polarity are unverified extraction candidates, "
-                        "not authoritative source facts.", options)
-                    response = jev.evaluate_once_more(
-                        jev_client, state, {dimension: question}, deadline)
-                except RuntimeGuardError:
-                    raise
-                except Exception as error:
-                    finding = {"code": "medication_detail_technical_error",
-                               "fact_id": fact_id, "dimension": dimension}
-                    if isinstance(error, jev.JevError):
-                        finding["kind"] = error.kind
-                    findings.append(finding)
-                    return _result(details, findings, False, "technical")
-                if deadline is not None and time.monotonic() > deadline:
-                    _append_finding(findings, "medication_detail_deadline",
-                                    fact_id, dimension)
-                    return _result(details, findings, False, "deadline")
-                try:
-                    answer = response["answers"][dimension]
+                    answer = answers[dimension]
                     choice = answer["choice"]
                     confidence = _finite_confidence(answer["confidence"])
                 except (KeyError, TypeError):
