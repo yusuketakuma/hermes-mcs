@@ -449,10 +449,9 @@ def test_retained_corrupt_prior_reservation_stops_cross_month_usage(tmp_path, no
             c._matching_rows_many(db, "cloud_usage_reserve", [f"{10000:032x}"], now=current)
 
 
-@pytest.mark.parametrize("http_class,billed", [("http_429", False), ("http_400", False),
-    ("http_529", False), ("not_sent", False), ("http_500", True), ("http_504", True),
-    ("transport", True), ("timeout", True)])
-def test_refused_attempts_settle_at_zero_and_ambiguous_ones_keep_the_maximum(tmp_path, now, http_class, billed):
+@pytest.mark.parametrize("http_class,billed", [("not_sent", False), ("http_429", True),
+    ("http_400", True), ("http_529", True), ("http_500", True), ("transport", True), ("timeout", True)])
+def test_only_a_proven_unsent_attempt_settles_at_zero(tmp_path, now, http_class, billed):
     with closing(Ledger(str(tmp_path / "l.db"))) as db:
         r = _reserve(db)
         c.record_result(db, r, _result(r, usage=None, http_class=http_class, error_kind="rate_limited"))
@@ -460,6 +459,19 @@ def test_refused_attempts_settle_at_zero_and_ambiguous_ones_keep_the_maximum(tmp
         assert not report["pricing_unverified"]
         assert Decimal(report["monthly_cost_usd"]) == (c.max_cost(100) if billed else 0)
         assert report["unresolved_requests"] == int(billed)
+
+
+@pytest.mark.parametrize("bad", [{"usage": {"input_tokens": -1, "output_tokens": 2}, "cost_usd": "0"},
+                                 {"usage": None, "cost_usd": "0", "http_class": 123}])
+def test_todays_result_of_yesterdays_reservation_is_validated_in_full(tmp_path, now, monkeypatch, bad):
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        r = _reserve(db)                       # reserved today; the result lands tomorrow
+        monkeypatch.setattr(c.time, "time", lambda: now + 86400)
+        db.artifact_add("cloud_usage_result", "{}", project_id=1, model=MODEL,
+                        meta={**{k: r[k] for k in ("reservation_id", "request_fp", "route", "project_id",
+                              "unit_key", "message_id", "model", "price_version")}, "error_kind": None,
+                              "request_id": None, "http_class": "http_200", **bad})
+        assert c.usage_report(db, period="day", now=now + 86400)["pricing_unverified"]
 
 
 def test_uncapped_reservations_decode_only_today_but_still_catch_corruption(tmp_path, now, monkeypatch):

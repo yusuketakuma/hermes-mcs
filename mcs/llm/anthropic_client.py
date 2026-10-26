@@ -25,26 +25,25 @@ class AnthropicError(Exception):
         self.retryable, self.status = retryable, status
 
 
-def _counted(value):
-    """True when an unpriced usage field could carry a billed quantity."""
-    if isinstance(value, bool) or value is None or isinstance(value, str):
-        return False
-    if isinstance(value, (int, float)):
-        return value != 0
-    if isinstance(value, dict):
-        return any(_counted(v) for v in value.values())
-    if isinstance(value, list):
-        return any(_counted(v) for v in value)
-    return True
+# Usage metadata known not to change the price at its listed values; any other
+# field or value (a priority tier, a regional inference multiplier, a new
+# counter) may be billed differently and stops the route as pricing_unverified.
+_UNPRICED_USAGE = {"service_tier": {"standard"}, "inference_geo": {"global", "not_available"}}
+
+
+def _unpriced(key, value):
+    if key in _UNPRICED_USAGE:
+        return value in _UNPRICED_USAGE[key]
+    if key == "server_tool_use":    # tools are never requested: every count must be zero
+        return isinstance(value, dict) and all(type(v) is int and v == 0 for v in value.values())
+    return False
 
 
 def validate_usage(value):
     """Reject unpriced or malformed usage rather than charging zero."""
     allowed = {"input_tokens", "output_tokens", "cache_creation_input_tokens",
                "cache_read_input_tokens", "cache_creation"}
-    if not isinstance(value, dict) or any(_counted(value[k]) for k in value.keys() - allowed):
-        # Descriptive fields (service_tier, inference_geo, ...) are ignored;
-        # an unknown field that carries a nonzero count may be billed.
+    if not isinstance(value, dict) or not all(_unpriced(k, value[k]) for k in value.keys() - allowed):
         raise AnthropicError("pricing_unverified", "usage_unknown")
     out = {}
     for key in allowed - {"cache_creation"}:
@@ -149,8 +148,7 @@ class AnthropicClient:
                     obj = json.loads(raw.decode("utf-8"))
                 except (ValueError, UnicodeError, RecursionError):
                     raise AnthropicError("protocol_error", "not_json") from None
-                if not isinstance(obj, dict) or not isinstance(obj.get("model"), str) \
-                        or not re.fullmatch(re.escape(MODEL) + r"(-\d{8})?", obj["model"]):
+                if not isinstance(obj, dict) or obj.get("model") != MODEL:
                     raise AnthropicError("model_mismatch")
                 meta["usage"] = validate_usage(obj.get("usage"))
                 content = obj.get("content")

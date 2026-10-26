@@ -166,13 +166,10 @@ def usage_cost(usage):
 
 
 def _unbilled(http_class):
-    """Attempts the API refused before any generation: never sent, or a 4xx/529
-    rejection. 500/504 and transport/timeout keep the reserved maximum, since the
-    published error list does not say whether processing had begun."""
-    if http_class == "not_sent":
-        return True
-    m = re.fullmatch(r"http_(\d{3})", http_class or "")
-    return bool(m) and (400 <= int(m.group(1)) <= 429 or m.group(1) == "529")
+    """Only an attempt proven never sent settles at zero. Every HTTP outcome keeps
+    the reserved maximum: the published error list does not state which statuses
+    are unbilled."""
+    return http_class == "not_sent"
 
 
 def _periods(now):
@@ -241,6 +238,26 @@ def _matching_rows(ledger, kind, reservation_id):
     return _matching_rows_many(ledger, kind, [reservation_id])
 
 
+def _settled(m, maximum, matching):
+    """(cost, settled?) of one reservation's single bound result; raises when
+    the result is duplicated, unbound or its usage/cost disagrees."""
+    if len(matching) != 1:
+        raise ValueError
+    r, row = matching[0]
+    if (_binding(m) != _binding(r) or row["project_id"] != m["project_id"]
+            or row["message_id"] != m["message_id"] or row["model"] != MODEL):
+        raise ValueError
+    reported = _decimal(r.get("cost_usd"))
+    if r.get("usage") is None:
+        if reported != (Decimal(0) if _unbilled(r.get("http_class")) else maximum):
+            raise ValueError
+        return reported, _unbilled(r.get("http_class"))
+    if (reported != usage_cost(r["usage"]) or reported > maximum
+            or r["usage"].get("output_tokens", 0) > m["max_tokens"]):
+        raise ValueError
+    return reported, True
+
+
 def usage_report(ledger, *, now=None, period="month"):
     """Aggregate JST attempts; ambiguous results retain the full reserved amount.
     ``period="day"`` validates and counts only today's rows (any newly written
@@ -269,29 +286,11 @@ def usage_report(ledger, *, now=None, period="month"):
                     raise AnthropicError("pricing_unverified", "result_invalid")
                 results.setdefault(rid, []).append((m, row))
         for rid, (m, maximum) in reserves.items():
-            cost = maximum
-            valid_usage = False
-            matching = results.get(rid, [])
-            if matching:
+            cost, valid_usage = maximum, False
+            if results.get(rid):
                 try:
-                    if len(matching) != 1:
-                        raise ValueError
-                    r, row = matching[0]
-                    if (_binding(m) != _binding(r) or row["project_id"] != m["project_id"]
-                            or row["message_id"] != m["message_id"] or row["model"] != MODEL):
-                        raise ValueError
-                    reported = _decimal(r.get("cost_usd"))
-                    if r.get("usage") is None:
-                        if reported != (Decimal(0) if _unbilled(r.get("http_class")) else maximum):
-                            raise ValueError
-                        if _unbilled(r.get("http_class")):
-                            cost, valid_usage = reported, True
-                    elif (reported != usage_cost(r["usage"]) or reported > maximum
-                          or r["usage"].get("output_tokens", 0) > m["max_tokens"]):
-                        raise ValueError
-                    else:
-                        cost, valid_usage = reported, True
-                except (AnthropicError, ValueError, InvalidOperation):
+                    cost, valid_usage = _settled(m, maximum, results[rid])
+                except (AnthropicError, ValueError, InvalidOperation, TypeError):
                     invalid = True
             total += cost
             if valid_usage:
@@ -304,11 +303,15 @@ def usage_report(ledger, *, now=None, period="month"):
         orphan_ids = results.keys() - reserves.keys()
         for row in _matching_rows_many(ledger, KINDS[0], orphan_ids, now=now):
             meta = _loads(row["meta"])
-            previous.setdefault(meta.get("reservation_id"), []).append(meta)
+            previous.setdefault(meta.get("reservation_id"), []).append((meta, row))
         for rid in orphan_ids:
-            matching, prior = results[rid], previous.get(rid, [])
-            if (len(matching) != 1 or len(prior) != 1
-                    or _binding(prior[0]) != _binding(matching[0][0])):
+            prior = previous.get(rid, [])
+            try:
+                if len(prior) != 1:
+                    raise ValueError
+                # validated like an in-period result; its cost stays in its own period
+                _settled(prior[0][0], _reserve_valid(*prior[0]), results[rid])
+            except (AnthropicError, ValueError, InvalidOperation, TypeError):
                 invalid = True
         return {"daily_requests": daily, "monthly_cost_usd": str(total),
                 "settled_cost_usd": str(settled), "max_reserved_cost_usd": str(total - settled),

@@ -123,18 +123,25 @@ def test_request_id_has_only_the_bounded_provider_contract(request_id, expected)
     assert observed[0]["request_id"] == expected
 
 
-def test_descriptive_usage_fields_and_dated_model_ids_are_accepted():
+def test_only_known_unpriced_usage_metadata_is_accepted():
     usage = {"input_tokens": 10, "output_tokens": 5, "service_tier": "standard",
              "inference_geo": "global", "server_tool_use": {"web_search_requests": 0}}
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
-        200, {}, json.dumps(_reply(usage=usage, model=a.MODEL + "-20261001")).encode()))
-    result = client.complete("synthetic", deadline=time.monotonic() + 10)
-    assert result["usage"]["input_tokens"] == 10 and result["model"] == a.MODEL
-    for model in ("claude-haiku-5", a.MODEL + "-latest"):
-        client = a.AnthropicClient("synthetic", post_fn=lambda *args, m=model: (
-            200, {}, json.dumps(_reply(model=m)).encode()))
-        with pytest.raises(a.AnthropicError, match="model_mismatch"):
+        200, {}, json.dumps(_reply(usage=usage)).encode()))
+    assert client.complete("synthetic", deadline=time.monotonic() + 10)["usage"]["input_tokens"] == 10
+    for extra in ({"service_tier": "priority"}, {"inference_geo": "us"}, {"new_charge_usd": "10"},
+                  {"server_tool_use": {"web_search_requests": 1}}, {"unknown_flag": None}):
+        client = a.AnthropicClient("synthetic", post_fn=lambda *args, e=extra: (
+            200, {}, json.dumps(_reply(usage={"input_tokens": 1, "output_tokens": 1, **e})).encode()))
+        with pytest.raises(a.AnthropicError, match="pricing_unverified"):
             client.complete("synthetic", deadline=time.monotonic() + 10)
+
+
+def test_a_dated_model_id_is_not_assumed_to_share_the_price():
+    client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
+        200, {}, json.dumps(_reply(model=a.MODEL + "-20261001")).encode()))
+    with pytest.raises(a.AnthropicError, match="model_mismatch"):
+        client.complete("synthetic", deadline=time.monotonic() + 10)
 
 
 def test_retry_after_alone_paces_retries(monkeypatch):

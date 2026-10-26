@@ -642,8 +642,12 @@ class _CloudProvider:
                 raise CloudFallback("cloud_unit_changed")
         self.guard = lambda: dispatch(guard)
         self.commit_guard = lambda: dispatch(lambda: guard(inference=False), result=True)
-        reserve = cloud_policy.usage_reserver(ledger, cfg, route=route,
-            project_id=project_id, unit_key=unit_key, message_id=message_id, owner=owner)
+        def reserve(body, timeout):
+            # every new attempt (retry, repair, next chunk) is judged against the
+            # budget in force now, not the one the unit started under
+            current_cfg = {"cloud_llm": _cloud_settings(load_config())}
+            return cloud_policy.usage_reserver(ledger, current_cfg, route=route, project_id=project_id,
+                unit_key=unit_key, message_id=message_id, owner=owner)(body, timeout)
         self.reserve = lambda body, timeout: dispatch(lambda: reserve(body, timeout))
         def record(reservation, metadata):
             def write():
@@ -747,8 +751,10 @@ def _comparison_extract(source, document):
 
 
 def _cloud_compare(ledger, *, route, project_id, local_facts, cloud_facts=None,
-                   rejected=None, held=None, repairs=None):
-    """Record measured comparison units; absent measurements remain unknown."""
+                   rejected=None, held=None, repairs=None, uncompared=None):
+    """Record measured comparison units; absent measurements remain unknown.
+    ``uncompared`` names why a committed shadow unit was never sent: it stays in
+    the unit count but never in the validated/matched figures."""
     left = set(local_facts)
     right = None if cloud_facts is None else set(cloud_facts)
     for value in (rejected, held, repairs):
@@ -764,7 +770,8 @@ def _cloud_compare(ledger, *, route, project_id, local_facts, cloud_facts=None,
                   "rejection_observations": int(rejected is not None),
                   "held": held, "held_observations": int(held is not None),
                   "repairs": repairs, "repaired_units": None if repairs is None else int(repairs > 0),
-                  "repair_observations": int(repairs is not None)})
+                  "repair_observations": int(repairs is not None),
+                  **({"uncompared": uncompared} if uncompared else {})})
 
 
 def _cloud_reextract(ledger, row):
@@ -3634,7 +3641,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     _release(ledger, r, lease)
     for r, local_result, ctx in shadow_tasks:
         if deadline - time.monotonic() < _MIN_CALL_S:
-            break
+            _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
+                           local_facts=_comparison_extract(r, local_result), uncompared="deadline")
+            continue
         comparison_meta = {}
         cloud_result = None
         provider = None
@@ -3878,13 +3887,14 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
     if not carry:
         return
     keep = []
+    shadow = []
     settled = dict.fromkeys(("done", "held_prior", "deferred"), 0)
     with _write_lock(True, wait_s=60 if final else _RESIDENT_WRITE_WAIT_S) as held:
         if held and fence is not None:
             write = write and writer_lock.updater_state() == fence
         for i, (r, lease, commit) in enumerate(carry):
             if held and write and _owns_current_source(ledger, r, lease):
-                commit(settled=settled)
+                commit(settled=settled, shadow=shadow)
                 _release(ledger, r, lease)
             elif final or held or lease <= time.time() + _CARRY_MARGIN_S:
                 if r.get("_cloud_discard") and (not write or not _owns_current_source(ledger, r, lease)):
@@ -3903,8 +3913,26 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
                     carry[i] = (r, renewed, commit)
                     keep.append((r, renewed, commit))
     carry[:] = keep
+    # no comparison budget outside run_pending: keep these units visible as uncompared
+    for r, local_result, _ctx in shadow:
+        _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
+                       local_facts=_comparison_extract(r, local_result), uncompared="carried_commit")
     if any(settled.values()):
         print(json.dumps({"carry_settled": settled, "ts": time.time()}), flush=True)
+
+
+_CLOUD_OPERATING_LIMITS = ("daily_request_budget", "monthly_cost_limit_usd", "max_concurrency", "usd_jpy")
+
+
+def _same_but_operating_limits(current, cfg):
+    """A cloud budget, rate or concurrency edit must not discard a context unit
+    that is waiting for its write; the next HTTP attempt re-reads them anyway."""
+    def strip(c):
+        c = dict(c) if isinstance(c, dict) else c
+        if isinstance(c, dict) and isinstance(c.get("cloud_llm"), dict):
+            c["cloud_llm"] = {k: v for k, v in c["cloud_llm"].items() if k not in _CLOUD_OPERATING_LIMITS}
+        return c
+    return strip(current) == strip(cfg)
 
 
 def _background_context_refresh(ledger, initial_state, stop=None):
@@ -3930,7 +3958,7 @@ def _background_context_refresh(ledger, initial_state, stop=None):
         # and an unchanged config all have to be proven.
         if (writer_lock.updater_state() != initial_state or initial_state[0]):
             return False
-        if load_config() != cfg:
+        if not _same_but_operating_limits(load_config(), cfg):
             return False
         free = disk_free_mb(ledger.db)
         return free is not None and free >= disk_floor_mb()

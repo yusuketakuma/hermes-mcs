@@ -272,6 +272,10 @@ def test_saved_cloud_context_survives_budget_changes_but_not_code_change(runtime
     assert step(runtime)["status"] == "complete"
     monkeypatch.setattr(worker, "_upgrade_contract", lambda: "f" * 64)
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) == before
+    monkeypatch.setattr(worker, "PATIENT_CONTEXT_VERSION", worker.PATIENT_CONTEXT_VERSION + 1)
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None   # this version alone rebuilds
+    monkeypatch.setattr(worker, "PATIENT_CONTEXT_VERSION", worker.PATIENT_CONTEXT_VERSION - 1)
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) == before
     monkeypatch.setattr(worker, "EXTRACT_VERSION", worker.EXTRACT_VERSION + 1)
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
 

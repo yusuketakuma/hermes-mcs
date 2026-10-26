@@ -655,3 +655,43 @@ def test_operating_limit_change_while_reserving_still_sends_the_paid_unit(routed
     monkeypatch.setattr(worker, "llm_extract", extract)
     worker.run_pending(led, budget_s=180)
     assert len(calls) == 1 and len(reserves) == 1
+
+
+def test_each_new_reservation_reads_the_budget_in_force_now(routed, monkeypatch):
+    led, cfg, *_ = routed
+    seen = []
+    monkeypatch.setattr(cloud_policy, "usage_reserver",
+                        lambda ledger, config, **identity: lambda body, timeout: seen.append(
+                            config["cloud_llm"]["daily_request_budget"]))
+    provider = worker._CloudProvider(led, cfg, route="reextract", project_id=1, unit_key="1",
+        deadline=time.monotonic() + 60, current=lambda: True, dispatch=lambda fn, **kw: fn())
+    provider.reserve({"model": "x", "max_tokens": 1}, 1)
+    cfg["cloud_llm"]["daily_request_budget"] = 0       # lowered while the unit is running
+    provider.reserve({"model": "x", "max_tokens": 1}, 1)
+    assert seen == [None, 0]
+
+
+def test_operating_limits_alone_do_not_discard_a_waiting_context_unit():
+    base = {"extract": {"x": 1}, "cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 2}}
+    edited = {**base, "cloud_llm": {**base["cloud_llm"], "max_concurrency": 4,
+                                    "monthly_cost_limit_usd": 5, "usd_jpy": 150, "daily_request_budget": 9}}
+    assert worker._same_but_operating_limits(edited, base)
+    assert not worker._same_but_operating_limits({**base, "cloud_llm": {**base["cloud_llm"], "project_ids": [2]}}, base)
+    assert not worker._same_but_operating_limits({**base, "extract": {"x": 2}}, base)
+
+
+def test_carried_shadow_commits_settled_outside_a_pass_stay_counted_as_uncompared(routed, monkeypatch):
+    import contextlib
+    led, *_ = routed
+    row = {"project_id": 1, "message_id": 1}
+    monkeypatch.setattr(worker, "_write_lock", lambda *a, **kw: contextlib.nullcontext(True))
+    monkeypatch.setattr(worker, "_owns_current_source", lambda *a: True)
+    monkeypatch.setattr(worker, "_release", lambda *a: None)
+    monkeypatch.setattr(worker, "_comparison_extract", lambda r, doc: {"synthetic-fact"})
+    def commit(*, settled, shadow):
+        settled["done"] += 1
+        shadow.append((row, {}, None))
+    worker._settle_carry(led, [(row, 1e12, commit)])
+    [compare] = [json.loads(a["meta"]) for a in led.artifacts("cloud_compare_v1")]
+    assert compare["uncompared"] == "carried_commit" and compare["units"] == 1
+    assert compare["validated_units"] == 0 and compare["cloud_facts"] is None
