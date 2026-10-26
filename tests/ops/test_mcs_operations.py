@@ -105,7 +105,8 @@ def test_ops_scan_deepens_existing_history_without_resetting_cursor(tmp_path):
 @pytest.mark.parametrize("state,reason,restart", [
     ("failed", "window_stalled", True),
     ("pending", "window_stalled", False),
-    ("failed", "network_error", False),
+    ("failed", "network_error", True),
+    ("failed", "replies_missing", True),
     ("failed", "invalid_scope", False),
     ("failed", "invalid_cohort", False),
 ])
@@ -146,7 +147,8 @@ def test_scan_restarts_only_an_explicitly_failed_initial_walk(tmp_path, state, r
             assert current == old and row["attempts"] == 2 and row["state"] == state
             return
         assert receipt["outcome"] == "applied" and receipt["job_id"] == job
-        assert row["state"] == "pending" and row["attempts"] == 2
+        assert row["state"] == "pending" and row["attempts"] == (0 if restart else 2)
+        assert row["reason_code"] is None if restart else row["reason_code"] == "window_stalled"
         assert current["since"] == 0 and current["trickle"] is False
         assert current["page"] == (1 if restart else 3)
         assert current["stalls"] == (0 if restart else 8)

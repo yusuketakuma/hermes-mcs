@@ -145,7 +145,7 @@ def test_explicit_import_restarts_stopped_initial_walk_without_losing_scope_or_s
         result = {'errors':[]}
         job_ops.drain_commands(store,result,str(commands))
         current = store.job_payload('history',1)
-        if invalid:
+        if invalid == 'scope':
             assert result['errors'] == ['cmd_invalid: invalid_payload']
             assert store.job_state('history',1) == 'failed' and current == payload
             assert store.history_floor(1) == floor

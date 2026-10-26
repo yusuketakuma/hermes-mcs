@@ -120,14 +120,10 @@ _LOADED_SOURCES = None
 
 def _cloud_contract(cfg):
     import cloud_policy
-    block = cfg.get("cloud_llm")
-    automatic = block is None or isinstance(block, dict) and "mode" not in block
-    settings, errors = cloud_policy.cloud_config(cfg, key_present=automatic)
-    if errors:
+    settings, errors = cloud_policy.cloud_config(cfg, key_present=True)
+    if errors or settings["mode"] in ("off", "dry_run"):
         return None
-    if automatic:
-        settings["mode"] = "auto"
-    elif settings["mode"] in ("off", "dry_run"):
+    if not cloud_policy.api_key():
         return None
     return {key: settings[key] for key in ("mode", "routes", "project_ids", "exclude_project_ids", "model")}
 

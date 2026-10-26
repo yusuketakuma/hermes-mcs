@@ -29,8 +29,9 @@
 - semantic抽出・監査・描画・projection・設定・合否判定と、実効緊急表示 `structured_view` のロードされたコード・定数。
 - `local_llm.resolve(cfg)` のendpoint/model、local_llm設定、semanticのJev model、`POLICY_VERSION`。
 - semanticの閾値・calibration・fact_source等の解釈設定、extract設定（`patient_state_context` は未指定とfalseを同一視）、実効 `vital_urgency` 方針。
+- Anthropicを利用できる場合のモデル、mode、許可route、患者範囲。自動有効化でも、私有設定から読めるキーの有無で利用経路を区別する。キーの値は指紋に含めない。
 
-昇格証拠そのもの、承認参照、retry/時間budget、通知までの待機時間、mode、summary/loop mode、project scopeは指紋から除く。承認日付だけで解釈cacheを変えない。legacyの既存policy hashを維持し、canonical/shadowのpolicy hashには候補指紋を含める。
+昇格証拠そのもの、承認参照、retry/時間budget、通知までの待機時間、semanticのmode、summary/loop mode、semanticのproject scopeは指紋から除く。承認日付だけで解釈cacheを変えない。Anthropicのキー登録・削除で利用経路が変わる場合や、利用中のmode・患者範囲を変える場合は、canonicalの旧承認を再利用しない。必要な再評価・再承認が済むまで、既存の候補不一致の診断と停止条件を保つ。キーを別の値へ交換しても、利用経路とモデル・範囲が同じならキーの値だけで候補を変えない。legacyの既存policy hashを維持し、canonical/shadowのpolicy hashには候補指紋を含める。
 
 定数は配列・辞書・集合・正規表現・タイムゾーンを含め、型と値を安定した形式で束ねる。実行中の表示cacheや失敗回数など、明示した可変状態は除く。未知の定数型を黙って省略しない。この識別範囲の修正前に作成した候補の証拠・承認は流用せず、現候補で再評価・再承認する。
 

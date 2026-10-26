@@ -38,6 +38,90 @@ def load(db, project_id):
     return state
 
 
+def failed_history_restart(db, project_id, job):
+    """Plan an explicit failed full-history retry without inventing a cohort."""
+    if job is None or job["state"] != "failed":
+        return None
+    payload = loads_dict(job["payload"] or "{}")
+    if not isinstance(payload, dict) or type(payload.get("since")) is not int or payload["since"] != 0:
+        return None
+    if (type(payload.get("page", 1)) is not int
+            or payload.get("page", 1) < 1
+            or type(payload.get("pages", 10)) is not int or not 1 <= payload.get("pages", 10) <= 40
+            or type(payload.get("stalls", 0)) is not int or payload.get("stalls", 0) < 0
+            or any(key in payload and type(payload[key]) is not bool for key in ("trickle", "notify"))
+            or "notify_source" in payload and payload["notify_source"] != "discovery"):
+        raise ValueError("invalid_history_payload")
+    try:
+        json.dumps(payload, allow_nan=False)
+    except (ValueError, TypeError, RecursionError):
+        raise ValueError("invalid_history_payload") from None
+    floor = db.execute("SELECT history_floor FROM patients WHERE project_id=?", (project_id,)).fetchone()
+    value = floor[0] if floor and floor[0] is not None else 0
+    if type(value) not in (int, float) or not math.isfinite(value) or value < 0 and value != -1:
+        raise ValueError("invalid_history_floor")
+    state = load(db, project_id)
+    if state is not None and "walk" in payload:
+        history_walk.validate(payload, project_id, state["cohort_id"])
+    # A legacy patient has no cohort; a first fetch can fail before saving a
+    # walk. Neither case manufactures a cohort or invalidates saved messages.
+    payload.pop("walk", None)
+    payload.update(page=1, stalls=0, trickle=False)
+    return payload
+
+
+def restart_history_tx(db, project_id, job_id, payload, now):
+    """Restart one failed history row and its cohort's blocked fetches in the caller TX."""
+    if not db.in_transaction:
+        raise RuntimeError("history_restart_transaction_required")
+    changed = db.execute(
+        "UPDATE fetch_jobs SET state='pending',attempts=0,reason_code=NULL,payload=?,next_try=?,updated_at=? "
+        "WHERE job_id=? AND project_id=? AND kind='history' AND message_id=0 AND state='failed'",
+        (json.dumps(payload, ensure_ascii=False, allow_nan=False), now, now, job_id, project_id)).rowcount
+    if not changed:
+        raise ValueError("history_restart_changed")
+    state = load(db, project_id)
+    if state is not None:
+        join, where = history_predicate()
+        members = f"SELECT m.message_id FROM messages m {join} WHERE m.project_id=? AND {where}"
+        db.execute("UPDATE fetch_jobs SET state='pending',attempts=0,reason_code=NULL,next_try=?,updated_at=? "
+                   "WHERE project_id=? AND kind IN ('reply','thread') AND state='failed' "
+                   f"AND (message_id IN ({members}) OR parent_id IN ({members}))",
+                   (now, now, project_id, project_id, state["cohort_id"], project_id, state["cohort_id"]))
+        state.update(capture_phase="capturing", updated_at=now)
+        state.pop("capture_proof", None)
+        _write(db, project_id, state)
+
+
+def retire_verified_thread_tx(db, parent, now, *, replies=None):
+    """Retire a failed thread only when fresh full replies match already durable source rows."""
+    if not db.in_transaction:
+        raise RuntimeError("thread_retire_transaction_required")
+    replies = parent.replies if replies is None else replies
+    if (parent.body_state != "full" or type(parent.reply_count) is not int or parent.reply_count <= 0
+            or len(replies) < parent.reply_count or len({r.message_id for r in replies}) != len(replies)
+            or parent.message_id in {r.message_id for r in replies}
+            or any(r.body_state != "full" or r.project_id != parent.project_id
+                   or r.parent_id != parent.message_id for r in replies)):
+        return False
+    # A successful fetch is not yet a successful save. Check the exact raw
+    # content and parent binding under the writer reservation before retiring.
+    for message in [parent, *replies]:
+        row = db.execute("SELECT project_id,parent_id,body_state,body_html,reply_count FROM messages WHERE message_id=?",
+                         (message.message_id,)).fetchone()
+        if (row is None or row["project_id"] != parent.project_id or row["body_state"] != "full"
+                or row["body_html"] != message.body_html
+                or row["parent_id"] != message.parent_id
+                or message is parent and row["reply_count"] != parent.reply_count):
+            return False
+    if db.execute("SELECT 1 FROM messages WHERE project_id=? AND parent_id=? AND body_state IS NOT 'full' LIMIT 1",
+                  (parent.project_id, parent.message_id)).fetchone():
+        return False
+    return bool(db.execute("UPDATE fetch_jobs SET state='done',reason_code=NULL,updated_at=? "
+                           "WHERE kind='thread' AND state='failed' AND project_id=? AND message_id=? AND parent_id=?",
+                           (now, parent.project_id, parent.message_id, parent.message_id)).rowcount)
+
+
 def _write(db, project_id, state):
     db.execute("UPDATE patients SET initial_import=? WHERE project_id=?",
                (json.dumps(state, ensure_ascii=False), project_id))

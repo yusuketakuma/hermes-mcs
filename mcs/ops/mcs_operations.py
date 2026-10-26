@@ -11,7 +11,6 @@ from __future__ import annotations
 from contextlib import contextmanager, suppress
 import hashlib
 import json
-import history_walk
 import math
 import os
 import stat
@@ -83,18 +82,12 @@ def _apply_scan_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
         "ORDER BY job_id DESC LIMIT 1", (_HISTORY_JOB, project_id)
     ).fetchone()
     payload = _history_payload(existing["payload"]) if existing is not None else None
-    restart = (existing is not None and existing["state"] == "failed"
-               and existing["reason_code"] == "window_stalled"
-               and payload is not None and payload["since"] == 0 and "walk" in payload)
-    if restart:
-        import initial_import_state
-        try:
-            cohort = initial_import_state.load(db, project_id)
-            if cohort is None:
-                raise ValueError
-            history_walk.validate(payload, project_id, cohort["cohort_id"])
-        except ValueError:
-            return "invalid_history_payload", {}
+    import initial_import_state
+    try:
+        restart_payload = initial_import_state.failed_history_restart(db, project_id, existing)
+    except ValueError:
+        return "invalid_history_payload", {}
+    restart = restart_payload is not None
     # Old complete cohorts can retain a floor while their proof is rechecked.
     if floor and floor <= since and not restart:
         return "already_floored", {}
@@ -111,7 +104,9 @@ def _apply_scan_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     if payload is None:
         return "invalid_history_payload", {}
     if restart:
-        history_walk.restart_failed(payload)
+        restart_payload["pages"] = max(pages, restart_payload.get("pages", 10))
+        initial_import_state.restart_history_tx(db, project_id, existing["job_id"], restart_payload, now)
+        return None, {"job_id": existing["job_id"], "since": 0, "page": 1}
     payload["since"] = min(since, payload["since"])
     payload["page"] = max(1, payload.get("page", 1))
     payload["pages"] = max(pages, payload.get("pages", 10))

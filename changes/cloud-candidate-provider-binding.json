@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "外部推論の利用開始時に旧候補の承認を再利用しない",
+  "summary": "Anthropicのキーが後から登録されて利用経路が変わった場合、自動有効化でもローカル推論だけを前提としたcanonicalの旧承認を再利用しないようにしました。指紋へキーの値は含めません。",
+  "upgrade": "canonicalを利用する場合、キー登録・削除による利用経路の変更や、利用中のmode・対象患者・route・モデルの変更後は、現候補での再評価・再承認が必要です。候補が一致しない間は既存の診断と解析の停止条件が働き、Anthropicの設定だけで停止条件を迂回しません。既存のキーを別の値へ交換しても利用経路が同じなら、キーの値だけでは再承認を要求しません。明示OFFとdry_runではキーを読みません。",
+  "details": [
+    "自動設定と明示ON・shadowの利用経路を、私有dotenvからキーが読めるかどうかへ結び付ける。",
+    "同じ利用経路のキーの値や秘密情報を候補指紋・ログ・変更記録に含めない。",
+    "ローカルだけの合成承認後にキーを追加する対照で、候補不一致となり元の承認receiptを書き換えないことを検証する。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_candidate.py",
+    "tests/semantic/test_anthropic_candidate_contract.py",
+    "docs/specs/SEALED_CANDIDATE_EVALUATION.md"
+  ]
+}
