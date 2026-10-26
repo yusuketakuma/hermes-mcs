@@ -963,6 +963,11 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
                     # A partial quote could omit a preceding negation or correction.
                     row.update(quote=None, text="介入に関する記載あり（内容未確認）")
                 groups[key].append(row)
+            # A source id is only a stable tie-break, not proof of event order.
+            groups["future"].sort(key=lambda row: (row["event_day"], row.get("role_text") or "",
+                                                   -row["message_id"]))
+            if groups["future"]:
+                head.append("介入予定の記載: 日付順（同日は職種順、同じ職種は投稿番号の降順）")
             add(groups["future"], "今後の介入予定の記載（変更未照合）")
             add(groups["other"], "介入に関する記載（変更未照合）")
             add(groups["unknown"], "介入に関する記載（内容未確認）")
