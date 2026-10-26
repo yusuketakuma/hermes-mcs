@@ -92,6 +92,7 @@ def _contract(cfg, pid=None):
     import extract
     contract = {"version": CONTRACT, "chunks": PLAN_VERSION,
             "rule": extract.RULE_VERSION, "llm": extract_llm.EXTRACT_VERSION,
+            "context": extract_llm.PATIENT_CONTEXT_VERSION,
             "model": local_llm.resolve(cfg)[1]}
     if pid is not None:
         settings = extract_llm._cloud_settings(cfg)

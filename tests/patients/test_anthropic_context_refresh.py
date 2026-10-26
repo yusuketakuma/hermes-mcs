@@ -160,13 +160,13 @@ def test_cloud_completed_data_is_not_reused_after_route_change(runtime, cloud, m
         assert "provider" not in json.loads(row[0])
 
 
-def test_partial_cloud_scan_requires_same_code_and_provider_contract(runtime, cloud, monkeypatch):
+def test_partial_cloud_scan_requires_same_rules_and_provider_contract(runtime, cloud, monkeypatch):
     led, _, _ = runtime
     seed(led)
     snapshot = context_refresh._snapshot(led.db, 1, CFG)
     source = snapshot["sources"][0]
     meta = {"source_sig": context_refresh._source_sig(source), "contract": snapshot["contract"],
-            "provider": {**snapshot["contract"]["provider"], "code_contract": "0" * 64}}
+            "provider": {**snapshot["contract"]["provider"], "prompt": "0" * 16}}
     with led.db:
         context_refresh._replace(led, context_refresh.SCAN, 1, {"cursor": 1, "complete": False, "facts": []}, meta, 1)
     assert not context_refresh._current_scans(led.db, 1, snapshot["sources"], snapshot["contract"])
@@ -174,9 +174,13 @@ def test_partial_cloud_scan_requires_same_code_and_provider_contract(runtime, cl
     with led.db:
         context_refresh._replace(led, context_refresh.SCAN, 1, {"cursor": 1, "complete": False, "facts": []}, meta, 1)
     assert context_refresh._current_scans(led.db, 1, snapshot["sources"], snapshot["contract"])[1]["cursor"] == 1
+    # a code release that leaves the inference rules alone keeps the scan
     monkeypatch.setattr(worker, "_upgrade_contract", lambda: "f" * 64)
+    assert context_refresh._snapshot(led.db, 1, CFG)["contract"] == snapshot["contract"]
+    # an inference rule version change rebuilds it
+    monkeypatch.setattr(worker, "EXTRACT_VERSION", worker.EXTRACT_VERSION + 1)
     changed, _, pending = context_refresh._pending(led.db, 1, CFG)
-    assert pending["B"] and changed["source_sig"] != snapshot["source_sig"]
+    assert pending["B"] and changed["contract"] != snapshot["contract"]
     assert not context_refresh._current_scans(led.db, 1, changed["sources"], changed["contract"])
 
 
@@ -267,6 +271,12 @@ def test_saved_cloud_context_survives_budget_changes_but_not_code_change(runtime
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) == before
     assert step(runtime)["status"] == "complete"
     monkeypatch.setattr(worker, "_upgrade_contract", lambda: "f" * 64)
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) == before
+    monkeypatch.setattr(worker, "PATIENT_CONTEXT_VERSION", worker.PATIENT_CONTEXT_VERSION + 1)
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None   # this version alone rebuilds
+    monkeypatch.setattr(worker, "PATIENT_CONTEXT_VERSION", worker.PATIENT_CONTEXT_VERSION - 1)
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) == before
+    monkeypatch.setattr(worker, "EXTRACT_VERSION", worker.EXTRACT_VERSION + 1)
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
 
 
