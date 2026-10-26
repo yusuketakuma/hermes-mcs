@@ -1592,6 +1592,44 @@ def reply_thread_matches(db, card, spec) -> bool:
             and notify_scope.scope_matches(card, delivery))
 
 
+def wake_ready_reply_holds(db, now, limit: int = 200) -> int:
+    """Re-arm reply-card intents parked on their parent's thread once that
+    thread is proven (delivered card, created thread, same root/scope).
+
+    A held reply waits RESEAT_S; without this the parent's receipt would
+    leave it parked for up to an hour. Only never-issued children qualify
+    (no live render, no remote identity); dispatch re-checks every gate.
+    """
+    rows = db.execute(
+        "SELECT DISTINCT o.event_id, c.card_id FROM notify_outbox o "
+        "JOIN notification_intent_cards ic ON ic.event_id=o.event_id AND ic.state='pending' "
+        "JOIN notification_cards c ON c.card_id=ic.card_id "
+        "WHERE o.state='pending' AND o.next_try > ? AND json_valid(o.progress) "
+        "AND json_extract(o.progress,'$.thread_hold')='source_thread_not_ready' "
+        "AND instr(c.card_key,'|reply:') > 0 AND c.message_id IS NULL "
+        "AND c.delivery_state!='revoked' AND ic.delivery_id IS NULL "
+        # narrow to parents already proven before the LIMIT, so an older
+        # unready backlog can never starve a ready reply behind it
+        "AND EXISTS (SELECT 1 FROM notification_cards p "
+        "WHERE p.card_key=substr(c.card_key,1,instr(c.card_key,'|reply:')-1) "
+        "AND p.kind='thread' AND p.project_id=c.project_id AND p.transport=c.transport "
+        "AND p.delivery_state IN ('delivered','update_failed') AND p.message_id IS NOT NULL "
+        "AND p.thread_state='created' AND p.thread_id IS NOT NULL) "
+        "AND NOT EXISTS (SELECT 1 FROM notification_renders r WHERE r.card_id=c.card_id "
+        "AND r.state IN (" + ",".join("?" * len(LIVE_RENDER)) + ")) "
+        "ORDER BY o.event_id LIMIT ?", (now, *LIVE_RENDER, limit)).fetchall()
+    woken = set()
+    for event_id, card_id in rows:
+        if event_id in woken:
+            continue
+        card = notify_scope.card_row(db, card_id)
+        if card is not None and reply_thread_target(db, card) is not None:
+            db.execute("UPDATE notify_outbox SET next_try=? WHERE event_id=? AND state='pending'",
+                       (now, event_id))
+            woken.add(event_id)
+    return len(woken)
+
+
 def _hold_pending_for_thread(db, card_id, now) -> None:
     """Defer the card's pending intents until its source thread is ready."""
     for event in db.execute("SELECT event_id FROM notification_intent_cards WHERE card_id=? "
