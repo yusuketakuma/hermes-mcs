@@ -134,6 +134,25 @@ def test_initial_walk_resumes_without_duplicate_notification(db):
     assert len(_events(db)) == 1
 
 
+@pytest.mark.parametrize("age_limit,expected", [(None, {20, 30}), (3600, {30})])
+def test_initial_walk_is_age_bounded_without_hiding_later_pinned_pages(db, age_limit, expected):
+    _capture(db, [_unread_patient(1)])
+    pages = iter([[_posted(10, 30 * 86400)], [_posted(20, 7200), _posted(30, 300)]])
+    calls = []
+    def fetch(*args, **kwargs):
+        calls.append(kwargs["start_page"])
+        return mcs_contract.MessageBatch(next(pages), pages=3, reached=len(calls) > 1)
+    adapter = SimpleNamespace(fetch_history=fetch)
+    job_ops.run_history_jobs(adapter, db, {"errors": []}, time.monotonic() + 60,
+                             notify_max_age_s=age_limit)
+    assert _events(db) == []
+    job_ops.run_history_jobs(adapter, db, {"errors": []}, time.monotonic() + 60,
+                             notify_max_age_s=age_limit)
+    assert set(json.loads(_events(db)[0]["payload"])["message_ids"]) == expected
+    assert calls == [1, 3] and db.job_state("history", 1) == "done"
+    assert db.db.execute("SELECT count(*) FROM messages").fetchone()[0] == 3
+
+
 @pytest.mark.parametrize("source", [None, False, 1, "unread"])
 def test_initial_notification_source_is_validated(db, source):
     db.ensure_patient(1)
