@@ -2484,6 +2484,10 @@ _PREFILTER_CONTENT = ('{"meds":[],"symptoms":[],"events":[],'
 
 
 def _prefilter_enabled() -> bool:
+    """config.json extract.prefilter, else the legacy MCS_EXTRACT_PREFILTER, else on."""
+    ext = load_config().get("extract")
+    if isinstance(ext, dict) and type(ext.get("prefilter")) is bool:
+        return ext["prefilter"]
     return os.environ.get("MCS_EXTRACT_PREFILTER", "on") \
         not in ("0", "off", "false")
 

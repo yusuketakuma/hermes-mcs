@@ -537,8 +537,6 @@ def _budget_value(text):
 
 def budget_command(args):
     """Show or set the Anthropic daily/monthly cost caps in config.json."""
-    from mcs_config import validate_config
-    import service_management
     try:
         changes = {}
         for option, key in _BUDGET_KEYS.items():
@@ -548,33 +546,18 @@ def budget_command(args):
     except ValueError:
         print("予算: 金額はドル単位の0以上の数値、または none で指定してください")
         return 1
-    # load_config() turns a missing or unreadable file into {}; writing that back
-    # would erase every other setting, so read the file strictly here.
+    import config_edit
     try:
-        path = Path(mcs_util.CONF_PATH)
-        if path.is_symlink() or path.stat().st_size > mcs_util.CONFIG_MAX_BYTES:
-            raise ValueError
-        cfg = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(cfg, dict):
-            raise ValueError
+        if changes:
+            cfg, cloud_errors = config_edit.apply({"cloud_llm." + k: v for k, v in changes.items()}, "cloud_llm")
+            if cloud_errors:
+                print("予算の設定に誤りがあるため保存していません: " + "; ".join(cloud_errors))
+                return 1
+        else:
+            cfg = config_edit.read_strict()
     except (OSError, ValueError, RecursionError):
         print("予算: 設定ファイルを読み取れないため変更していません（先に mcs_setup.py init で設定してください）")
         return 1
-    if changes:
-        block = dict(cfg.get("cloud_llm") or {})
-        for key, value in changes.items():
-            if value is None:
-                block.pop(key, None)
-            else:
-                block[key] = value
-        cfg = {**cfg, "cloud_llm": block}
-        errors, _ = validate_config(cfg)
-        cloud_errors = [e for e in errors if "cloud_llm" in e]
-        if cloud_errors:   # never write a config the runtime validator rejects
-            print("予算の設定に誤りがあるため保存していません: " + "; ".join(cloud_errors))
-            return 1
-        service_management.write_service_file(
-            mcs_util.CONF_PATH, json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True) + "\n", 0o600)
     settings = policy.cloud_config(cfg)[0]
     print(json.dumps({"daily_cost_limit_usd": settings["daily_cost_limit_usd"],
                       "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],

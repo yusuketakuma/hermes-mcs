@@ -179,12 +179,25 @@ def admission_enabled() -> bool:
     staged rollout proves direct-connection rejection on the deployed
     topology. ``MCS_LLM_ADMISSION`` carries the broker SQLite path (or
     ``1`` for the default location)."""
+    configured = _configured_admission()
+    if configured is not None:
+        return configured
     v = os.environ.get("MCS_LLM_ADMISSION")
     return bool(v and v != "0")
 
 
+def _configured_admission() -> bool | None:
+    """config.json local_llm.admission (bool) when set; it overrides the legacy env."""
+    from mcs_util import load_config
+    ll = load_config().get("local_llm")
+    value = ll.get("admission") if isinstance(ll, dict) else None
+    return value if type(value) is bool else None
+
+
 def _admission_db_path() -> str:
     v = os.environ.get("MCS_LLM_ADMISSION") or ""
+    if _configured_admission() is True and v in ("", "0"):
+        v = "1"            # config enabled it: the default broker location
     if v == "1":
         from mcs_util import HOME
         return os.path.join(HOME, "data",
