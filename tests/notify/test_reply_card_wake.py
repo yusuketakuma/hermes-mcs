@@ -2,7 +2,7 @@
 is proven, not an hour later; never-issued children only (synthetic ledgers)."""
 import notify_cards
 import notify_scope
-from notify_testkit import NOW, _dispatch, _latest_render
+from notify_testkit import NOW, _dispatch, _intent, _latest_render, _seed_thread
 from test_reply_card_binding_hotfix import _cards, _deliver_root, _scene, cfg, led  # noqa: F401
 
 __all__ = ["led", "cfg"]
@@ -43,3 +43,20 @@ def test_a_reply_with_a_live_render_or_remote_identity_is_not_woken(led, cfg):
                    (reply["card_id"],))
     with led.db:
         assert notify_cards.wake_ready_reply_holds(led.db, NOW + 4) == 0
+
+
+def test_a_ready_reply_is_found_behind_older_unready_ones(led, cfg):
+    # two older parked replies whose parents are not delivered yet
+    for pid, root in ((2, 200), (3, 300)):
+        _seed_thread(led, pid=pid, root=root, mids=(root, root + 1))
+        older = _intent(led, pid=pid, payload={"message_ids": [root, root + 1]})
+        _dispatch(led, older, cfg)
+        assert _next_try(led, older) > NOW + 60
+    _seed_thread(led)                        # the newest intent: its parent becomes ready
+    event = _intent(led)
+    _dispatch(led, event, cfg)
+    root = next(c for c in _cards(led) if c["project_id"] == 1 and "|reply:" not in c["card_key"])
+    _deliver_root(led, root, cfg)
+    with led.db:   # a LIMIT spent on the unready rows first would wake nothing
+        assert notify_cards.wake_ready_reply_holds(led.db, NOW + 4, limit=2) == 1
+    assert _next_try(led, event) <= NOW + 4

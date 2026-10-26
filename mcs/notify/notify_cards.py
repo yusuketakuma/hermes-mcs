@@ -1608,6 +1608,13 @@ def wake_ready_reply_holds(db, now, limit: int = 200) -> int:
         "AND json_extract(o.progress,'$.thread_hold')='source_thread_not_ready' "
         "AND instr(c.card_key,'|reply:') > 0 AND c.message_id IS NULL "
         "AND c.delivery_state!='revoked' AND ic.delivery_id IS NULL "
+        # narrow to parents already proven before the LIMIT, so an older
+        # unready backlog can never starve a ready reply behind it
+        "AND EXISTS (SELECT 1 FROM notification_cards p "
+        "WHERE p.card_key=substr(c.card_key,1,instr(c.card_key,'|reply:')-1) "
+        "AND p.kind='thread' AND p.project_id=c.project_id AND p.transport=c.transport "
+        "AND p.delivery_state IN ('delivered','update_failed') AND p.message_id IS NOT NULL "
+        "AND p.thread_state='created' AND p.thread_id IS NOT NULL) "
         "AND NOT EXISTS (SELECT 1 FROM notification_renders r WHERE r.card_id=c.card_id "
         "AND r.state IN (" + ",".join("?" * len(LIVE_RENDER)) + ")) "
         "ORDER BY o.event_id LIMIT ?", (now, *LIVE_RENDER, limit)).fetchall()
