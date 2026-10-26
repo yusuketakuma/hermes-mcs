@@ -2549,8 +2549,8 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
     return True
 
 
-def progress_for_message(db, row, *, model: str | None) -> dict:
-    """Read only current bound leaf counts; no source text, endpoint or payload leaves."""
+def _progress_steps(db, row, *, model: str | None):
+    """Apply the shared progress decision, yielding only independent SQL probes."""
     out = {"state": "attention", "completed": 0, "total": 0, "backend": "legacy"}
     if not isinstance(model, str) or not model or not row or row["body_state"] != "full":
         return out
@@ -2601,12 +2601,11 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
 
     counts = [count(i, piece) for i, piece in enumerate(roots)]
     out.update(completed=sum(part[0] for part in counts), total=sum(part[1] for part in counts))
-    queued = db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? AND m.project_id=? "
-                  f"AND ({pending_pred()}) AND ({_retry_budget_sql()})",
-                  (r["message_id"], r["project_id"])).fetchone()
-    if not queued and db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? AND EXISTS ({_hold_sql()})",
-                  (r["message_id"],)).fetchone():
-        return out
+    queued = yield ("queued", r["project_id"], r["message_id"])
+    if not queued:
+        held = yield ("held", r["project_id"], r["message_id"])
+        if held:
+            return out
     binding = _chunk_context(r, context)
     if final:
         try:
@@ -2624,10 +2623,8 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
                 key: meta.get(key) for key in ("context_snapshot", "context_digest", "patient_state_context")}:
             return out
         valid = extract_validation.validate(document, r["body_text"], references=_frame_refs(r)) if isinstance(document, dict) else None
-        review = db.execute(
-            f"SELECT ({_thin_pending_sql()}) OR ({_qc_flagged_sql()}) OR ({_human_flagged_sql()}) "
-            "FROM messages m WHERE m.message_id=? AND m.project_id=?", (r["message_id"], r["project_id"])).fetchone()
-        if (bound and (review and review[0] or any(
+        review = yield ("review", r["project_id"], r["message_id"])
+        if (bound and (review or any(
                 isinstance(meta.get(key), dict) and meta[key].get("applied") is False
                 for key in ("qc_fix", "human_fix")))):
             return out
@@ -2653,6 +2650,178 @@ def progress_for_message(db, row, *, model: str | None) -> dict:
     elif queued:
         out["state"] = "processing"
     return out
+
+
+def _progress_probe(db, probe):
+    """Evaluate one original predicate without changing its query boundary."""
+    kind, project_id, message_id = probe
+    if kind == "queued":
+        row = db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? AND m.project_id=? "
+                         f"AND ({pending_pred()}) AND ({_retry_budget_sql()})",
+                         (message_id, project_id)).fetchone()
+        return bool(row)
+    if kind == "held":
+        row = db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? AND EXISTS ({_hold_sql()})",
+                         (message_id,)).fetchone()
+        return bool(row)
+    if kind == "review":
+        row = db.execute(f"SELECT ({_thin_pending_sql()}) OR ({_qc_flagged_sql()}) OR ({_human_flagged_sql()}) "
+                         "FROM messages m WHERE m.message_id=? AND m.project_id=?",
+                         (message_id, project_id)).fetchone()
+        return bool(row and row[0])
+    raise ValueError("invalid_progress_probe")
+
+
+def _finish_progress(db, iterator, probe=None):
+    """Drive one decision, preserving the original probe order and errors."""
+    try:
+        probe = next(iterator) if probe is None else probe
+        while True:
+            probe = iterator.send(_progress_probe(db, probe))
+    except StopIteration as done:
+        return done.value
+
+
+def progress_for_message(db, row, *, model: str | None) -> dict:
+    """Read current bound leaf counts; no source text or payload leaves."""
+    return _finish_progress(db, _progress_steps(db, row, model=model))
+
+
+def _batch_progress_probes(db, probes):
+    """Evaluate one shared probe stage for at most one bounded input page."""
+    kind = probes[0][0]
+    # Non-integer/oversize SQLite parameters retain the original single-query
+    # behavior (including binding errors), not JSON's coercion semantics.
+    if any(type(value) is not int or not -(2**63) <= value < 2**63
+           for _, project_id, message_id in probes for value in (project_id, message_id)):
+        return [_progress_probe(db, probe) for probe in probes]
+    pairs = sorted({(project_id, message_id) for _, project_id, message_id in probes})
+    requested = json.dumps(pairs, separators=(",", ":"))
+    join = ("JOIN json_each(?) j ON m.project_id=json_extract(j.value,'$[0]') "
+            "AND m.message_id=json_extract(j.value,'$[1]') ")
+    if kind == "queued":
+        condition = f"({pending_pred()}) AND ({_retry_budget_sql()})"
+        matches = {(row[0], row[1]) for row in db.execute(
+            "SELECT m.project_id,m.message_id FROM messages m " + join + "WHERE " + condition, (requested,))}
+        return [(project_id, message_id) in matches for _, project_id, message_id in probes]
+    if kind == "held":
+        mids = json.dumps(sorted({message_id for _, _, message_id in probes}), separators=(",", ":"))
+        matches = {row[0] for row in db.execute(
+            "SELECT m.message_id FROM messages m JOIN json_each(?) j ON m.message_id=j.value "
+            f"WHERE EXISTS ({_hold_sql()})", (mids,))}
+        return [message_id in matches for _, _, message_id in probes]
+    if kind == "review":
+        condition = f"({_thin_pending_sql()}) OR ({_qc_flagged_sql()}) OR ({_human_flagged_sql()})"
+        matches = {(row[0], row[1]) for row in db.execute(
+            "SELECT m.project_id,m.message_id FROM messages m " + join + "WHERE " + condition, (requested,))}
+        return [(project_id, message_id) in matches for _, project_id, message_id in probes]
+    raise ValueError("invalid_progress_probe")
+
+
+def _progress_interrupted(error):
+    """Do not replay a cancelled, busy or lock-waiting SQLite operation."""
+    code = getattr(error, "sqlite_errorcode", None)
+    return (isinstance(error, sqlite3.OperationalError) and type(code) is int
+            and code & 0xff in (sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED))
+
+
+def _progress_page(db, rows, model):
+    """Advance each decision only to its next probe; never prefetch later stages."""
+    iterators, pending, result = [], {}, [None] * len(rows)
+
+    def finish_earlier(index):
+        # If a later preparation fails, preserve an earlier row's exception
+        # precedence by finishing its pending decision in original order.
+        for earlier in sorted(i for i in pending if i < index):
+            _finish_progress(db, iterators[earlier], pending.pop(earlier))
+
+    for index, row in enumerate(rows):
+        iterator = _progress_steps(db, row, model=model)
+        iterators.append(iterator)
+        try:
+            pending[index] = next(iterator)
+        except StopIteration as done:
+            result[index] = done.value
+        except Exception as error:
+            if _progress_interrupted(error):
+                raise
+            finish_earlier(index)
+            raise
+    while pending:
+        first = min(pending)
+        kind = pending[first][0]
+        indexes = [index for index in sorted(pending) if pending[index][0] == kind]
+        probes = [pending[index] for index in indexes]
+        try:
+            answers = _batch_progress_probes(db, probes)
+        except Exception as error:
+            # Never retry a cancelled/interrupted or lock-waiting read. For a
+            # deterministic batch failure, replay only the unfinished decisions
+            # in input order so an earlier single-row failure takes precedence.
+            if _progress_interrupted(error):
+                raise
+            for index in sorted(pending):
+                _finish_progress(db, iterators[index], pending[index])
+            raise
+        for index, answer in zip(indexes, answers):
+            pending.pop(index)
+            try:
+                pending[index] = iterators[index].send(answer)
+            except StopIteration as done:
+                result[index] = done.value
+            except Exception as error:
+                if _progress_interrupted(error):
+                    raise
+                finish_earlier(index)
+                raise
+    return result
+
+
+def _copy_progress_value(value, depth=0):
+    """Freeze ordinary SQLite/JSON values without invoking caller callbacks."""
+    if depth > 16:
+        raise TypeError("progress_batch_row_invalid")
+    if value is None or type(value) in (str, int, float, bool, bytes):
+        return value
+    if type(value) is dict and all(type(key) is str for key in value):
+        return {key: _copy_progress_value(item, depth + 1) for key, item in value.items()}
+    if type(value) in (list, tuple):
+        copied = [_copy_progress_value(item, depth + 1) for item in value]
+        return copied if type(value) is list else tuple(copied)
+    raise TypeError("progress_batch_row_invalid")
+
+
+def progress_for_messages(db, rows, *, model: str | None):
+    """Read ordered, pre-materialized SQLite rows on one borrowed snapshot.
+
+    Only built-in lists or tuples of at most 64 sqlite3.Row or plain dict
+    values are accepted. Model must be an exact string or None. All input is
+    validated before any SQL; unsupported values and callbacks are rejected
+    before opening a savepoint. Valid rows retain their order and decisions.
+    """
+    if model is not None and type(model) is not str:
+        raise TypeError("progress_batch_model_invalid")
+    if type(rows) not in (list, tuple):
+        raise TypeError("progress_batch_rows_invalid")
+    if len(rows) > 64:
+        raise ValueError("progress_batch_limit")
+    prepared = []
+    for row in rows:
+        if type(row) is sqlite3.Row:
+            row = dict(row)
+        if type(row) is not dict:
+            raise TypeError("progress_batch_row_invalid")
+        prepared.append(_copy_progress_value(row))
+    if not prepared:
+        return []
+    result = []
+    db.execute("SAVEPOINT extract_progress_batch")
+    try:
+        for offset in range(0, len(prepared), 64):
+            result.extend(_progress_page(db, prepared[offset:offset + 64], model))
+    finally:
+        db.execute("RELEASE extract_progress_batch")
+    return result
 
 
 def _owns_current_source(ledger, r, lease: float) -> bool:
