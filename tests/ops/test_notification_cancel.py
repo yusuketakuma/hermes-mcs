@@ -583,3 +583,62 @@ def test_unsealed_cancel_refuses_any_existing_history_card_even_with_unreadable_
     assert _snapshot(case.led.db) == before
     assert not initial_import_state.load(case.led.db, 1).get("notification_cancelled")
     assert all(case.led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?", (render["delivery_id"],)).fetchone()[0] == "unknown" for render,_ in case.old_renders)
+
+
+def _bound_history_event(case):
+    case.led.db.execute("INSERT INTO notification_cards(card_key,kind,project_id,anchor_key,transport,profile,team_id,channel_id,created_at,updated_at) "
+                        "VALUES('history-shared','patient_history',1,'{}','slack',?,?,?, ?,?)",
+                        (SCOPE["profile"], SCOPE["team_id"], SCOPE["channel_id"], NOW, NOW))
+    card = case.led.db.execute("SELECT card_id FROM notification_cards WHERE card_key='history-shared'").fetchone()[0]
+    event = _event(case.led, "patient_history", 1, {"source": "initial_history", "cohort_id": "a"*32})
+    case.led.db.execute("INSERT INTO notification_intent_cards(event_id,card_id,coverage) VALUES(?,?,?)",
+                        (event, card, json.dumps(["a"*32])))
+    case.led.db.commit()
+    case.events = [event]
+    return card
+
+
+def _bind_history_sibling(case, card, state="pending"):
+    sibling = _event(case.led, "patient_history", 1,
+                     {"source": "initial_history", "cohort_id": "a"*32, "message_ids": [100]})
+    case.led.db.execute("INSERT INTO notification_intent_cards(event_id,card_id,coverage,state) VALUES(?,?,?,?)",
+                        (sibling, card, json.dumps(["a"*32]), state))
+    case.led.db.commit()
+
+
+@pytest.mark.parametrize("stage", ["plan", "apply", "reentrant"])
+def test_bound_history_shared_card_rejects_pending_sibling_without_mutating_queue(case, monkeypatch, stage):
+    card = _bound_history_event(case)
+    request = None if stage == "plan" else _request(case)
+    before = []
+    if stage == "reentrant":
+        original = cancel._transports
+        def transports(db, ids):
+            value = original(db, ids)
+            _bind_history_sibling(case, card)
+            before.append(_snapshot(case.led.db))
+            return value
+        monkeypatch.setattr(cancel, "_transports", transports)
+    else:
+        _bind_history_sibling(case, card)
+        before.append(_snapshot(case.led.db))
+    with pytest.raises(ValueError, match="history_card_has_other_pending_intents"):
+        if stage == "plan":
+            cancel.build_plan(case.led.db, case.events)
+        else:
+            cancel.apply(case.root, request)
+    assert len(before) == 1 and _snapshot(case.led.db) == before[0]
+    assert case.led.db.execute("SELECT delivery_state FROM notification_cards WHERE card_id=?", (card,)).fetchone()[0] != "revoked"
+    assert not case.led.db.execute("SELECT 1 FROM notification_renders WHERE card_id=?", (card,)).fetchone()
+    assert all(case.led.db.execute("SELECT state FROM notification_renders WHERE delivery_id=?", (render["delivery_id"],)).fetchone()[0] == "unknown"
+               for render, _ in case.old_renders)
+    if stage != "reentrant":
+        assert not (case.data / "notification_cancellations").exists()
+
+
+def test_bound_history_shared_card_terminal_sibling_does_not_block_cancellation(case):
+    card = _bound_history_event(case)
+    _bind_history_sibling(case, card, state="suppressed")
+    receipt = cancel.apply(case.root, _request(case))
+    assert receipt["outcome"] == "applied" and receipt["remote_operations"] == 0
+    assert case.led.db.execute("SELECT delivery_state FROM notification_cards WHERE card_id=?", (card,)).fetchone()[0] == "revoked"

@@ -171,7 +171,7 @@ def refresh_capture_tx(ledger, project_id, now):
     pending = any(r["state"] != "done" for r in jobs)
     incomplete = ledger.db.execute(
         f"SELECT 1 FROM messages m {join} WHERE m.project_id=? AND {where} "
-        "AND (m.body_state IS NULL OR m.body_state NOT IN ('full','deleted')) LIMIT 1",
+        "AND (m.body_state IS NULL OR (m.body_state NOT IN ('full','deleted') AND (m.body_state!='unknown' OR COALESCE(m.parent_id,0)!=0))) LIMIT 1",
         (project_id, state["cohort_id"])).fetchone()
     phase = "held" if blocked else "complete" if complete and not pending and not incomplete else "capturing"
     if state["capture_phase"] != phase:

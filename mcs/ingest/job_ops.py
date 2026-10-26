@@ -223,13 +223,33 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
         if ok:
             ledger.ensure_patient(req["project_id"])
             since = int(time.time() - req.get("days", 14) * 86400)
+            stopped = ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind='history' AND project_id=? "
+                                        "AND message_id=0 AND state='failed' AND reason_code='window_stalled'",
+                                        (req["project_id"],)).fetchone()
+            restart_initial = invalid_walk = False
+            if stopped is not None:
+                candidate = loads_dict(stopped["payload"] or "{}")
+                if isinstance(candidate, dict) and candidate.get("since") == 0 and "walk" in candidate:
+                    import initial_import_state
+                    try:
+                        cohort = initial_import_state.load(ledger.db, req["project_id"])
+                        if not _valid_history_payload(candidate) or cohort is None:
+                            raise ValueError
+                        history_walk.validate(candidate, req["project_id"], cohort["cohort_id"])
+                        restart_initial = True
+                    except ValueError:
+                        invalid_walk = True
             floor = ledger.history_floor(req["project_id"])
-            if floor and floor <= since:
+            if invalid_walk:
+                ok, reason = False, "invalid_payload"
+            elif floor and floor <= since and not restart_initial:
                 ok, reason = False, "already_floored"
             else:
                 # A deeper request must revisit the old cutoff page: rows
                 # below that cutoff were filtered out before persistence.
                 existing = ledger.history_job(req["project_id"])
+                if existing is None:
+                    existing = dict(stopped) if stopped is not None else None
                 if existing:
                     try:
                         pl = loads_dict(existing["payload"] or "{}")
@@ -240,6 +260,8 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                                         reason_code="invalid_payload")
                         existing = None
                 if existing:
+                    if existing["state"] == "failed" and existing["reason_code"] == "window_stalled":
+                        history_walk.restart_failed(pl)
                     if since < pl["since"]:
                         pl["page"] = 1
                         pl["stalls"] = 0
@@ -248,6 +270,8 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                     pl["pages"] = max(pl.get("pages", 10),
                                       req.get("pages", 10))
                     pl["trickle"] = False
+                    if existing["state"] == "failed":
+                        ledger.db.execute("UPDATE fetch_jobs SET state='pending' WHERE job_id=?", (existing["job_id"],))
                     ledger.job_defer(existing["job_id"], 0, payload=pl)
                 else:
                     ledger.job_add("history", req["project_id"], payload={
@@ -516,7 +540,7 @@ def _settle_initial_history(ledger, job, payload, cohort):
                           f"SELECT m.message_id FROM messages m {join} WHERE m.project_id=? AND {where})))",
                           (pid,pid,cohort)).fetchall()
         incomplete = db.execute(f"SELECT 1 FROM messages m {join} WHERE m.project_id=? AND {where} "
-                                "AND (m.body_state IS NULL OR m.body_state NOT IN ('full','deleted')) LIMIT 1", (pid,cohort)).fetchone()
+                                "AND (m.body_state IS NULL OR (m.body_state NOT IN ('full','deleted') AND (m.body_state!='unknown' OR COALESCE(m.parent_id,0)!=0))) LIMIT 1", (pid,cohort)).fetchone()
         failed = any(r[0] == "failed" for r in jobs)
         ready = not jobs and not incomplete
         reason = "replies_missing" if failed else "window_stalled" if incomplete else "waiting_replies"
@@ -662,6 +686,7 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                              payload=pl, reason_code="window_stalled" if pl["walk"]["mismatches"] else None)
             if pl["walk"]["mismatches"] >= HISTORY_STALL_LIMIT:
                 ledger.job_fail(job["job_id"], reason_code="window_stalled")
+                result["errors"].append(f"import {pid}: window_stalled")
         elif initial and action == "accepted":
             floored = _settle_initial_history(ledger, job, pl, initial_state["cohort_id"])
         elif not initial and batch.reached and not batch.error and merged.checkpoint_safe \

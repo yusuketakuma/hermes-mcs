@@ -2222,9 +2222,7 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
     specs = []
     withdrawn = []
     scanned = updated = 0
-    history_issued = 0
-    normal_due = db.execute("SELECT 1 FROM notify_outbox WHERE kind!='patient_history' "
-        "AND state IN ('pending','failed') AND next_try<=? LIMIT 1", (now,)).fetchone()
+    history_refreshes = 0
     with db:
         db.execute("BEGIN IMMEDIATE")
         cards = db.execute(
@@ -2257,20 +2255,22 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
                       card["presentation_generation"],
                       card["desired_render_rev"])
             history_due = card["kind"] == "patient_history" and notify_history.refresh_needed(db, card, now)
-            if card["kind"] != "patient_history" or history_due and (not normal_due or history_issued < 2):
-                before_specs = len(specs)
-                issue_render(db, card["card_id"], cfg, now, specs)
+            history_deferred = history_due and history_refreshes >= 2
+            if card["kind"] != "patient_history" or history_due and not history_deferred:
                 if card["kind"] == "patient_history":
-                    history_issued += len(specs) - before_specs
-                    notify_history.emit_completion_tx(ledger, notify_scope.card_row(db, card["card_id"]), now)
+                    history_refreshes += 1
+                issue_render(db, card["card_id"], cfg, now, specs)
+            if card["kind"] == "patient_history" and not history_deferred:
+                notify_history.emit_completion_tx(ledger, notify_scope.card_row(db, card["card_id"]), now)
             after = notify_scope.card_row(db, card["card_id"])
             if (after["source_generation"], after["presentation_generation"],
                     after["desired_render_rev"]) != before:
                 updated += 1
-            # Rotate unchanged and in-flight cards too. Otherwise the first
-            # limit stable cards permanently starve every newer card.
-            db.execute("UPDATE notification_cards SET updated_at=? WHERE card_id=?",
-                       (now, card["card_id"]))
+            # Quota-deferred work stays older than attempted work for the next tick.
+            # Other unchanged/in-flight cards rotate so they cannot block newer cards.
+            if not history_deferred:
+                db.execute("UPDATE notification_cards SET updated_at=? WHERE card_id=?",
+                           (now, card["card_id"]))
         # watchdog: live renders whose spec never published (or whose
         # file vanished) get their stored bytes republished
         specs.extend(

@@ -58,12 +58,13 @@ class _Pages:
         return mcs_contract.MessageBatch(messages,len(observations),tail,page_observations=observations)
 
 
-def _run(store, adapter, **kwargs):
+def _run(store, adapter, *, expected_errors=(), **kwargs):
     store.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE state='pending'")
     store.db.commit()
     result = {'errors': []}
     job_ops.run_history_jobs(adapter, store, result, time.monotonic() + 300, **kwargs)
-    assert result['errors'] == []
+    assert result['errors'] == list(expected_errors)
+    return result
 
 
 def test_5000_history_posts_are_saved_once_across_overlap_and_live_reply(store):
@@ -205,8 +206,8 @@ def test_real_adapter_stable_walk_budget_and_complete_proof(store,pages):
     assert store.job_payload('history',1)['walk']['phase'] == 'accepted'
 
 
-@pytest.mark.parametrize('body,expected',[('', 'complete'),(None,'held')])
-def test_empty_full_parent_completes_but_missing_body_unknown_is_held(store,body,expected):
+@pytest.mark.parametrize('body,expected',[('', 'complete'),(None,'complete')])
+def test_empty_full_and_body_unprovided_root_complete_without_converting_unknown(store,body,expected):
     row = {'id':1,'created_at':'2026-09-01T00:00:00+09:00'}
     if body is not None:
         row['comment'] = body
@@ -214,7 +215,7 @@ def test_empty_full_parent_completes_but_missing_body_unknown_is_held(store,body
     for _ in range(2):
         _run(store,adapter)
     assert state.load(store.db,1)['capture_phase'] == expected
-    assert store.job_state('history',1) == ('done' if body is not None else 'failed')
+    assert store.job_state('history',1) == 'done'
     assert store.db.execute('SELECT body_state FROM messages').fetchone()[0] == ('full' if body is not None else 'unknown')
 
 
@@ -291,8 +292,28 @@ def test_repeated_full_pass_disagreement_is_finite_and_never_publishes_floor(sto
     adapter = _Pages([[_post(1)]])
     for i in range(job_ops.HISTORY_STALL_LIMIT+1):
         adapter.pages = [[_post(i+1)]]
-        _run(store,adapter)
+        result = _run(store,adapter,expected_errors=['import 1: window_stalled'] if i == job_ops.HISTORY_STALL_LIMIT else [])
+    import collection_diagnostics
+    assert collection_diagnostics.classify(result['errors'][0]) == 'incomplete'
     assert store.job_state('history',1) == 'failed'
     assert store.job_payload('history',1)['walk']['mismatches'] == job_ops.HISTORY_STALL_LIMIT
     assert state.load(store.db,1)['capture_phase'] == 'held'
     assert store.history_floor(1) != -1
+
+
+def test_unknown_reply_remains_nonterminal_and_is_not_parent_no_body(store):
+    root = _post(1)
+    root.replies = [_post(2,parent_id=1,state='unknown')]
+    root.reply_count = 1
+    adapter = _Pages([[root]])
+    def unavailable(*a,**kw):
+        raise mcs_contract.MCSError('network_error')
+    adapter.fetch_thread = unavailable
+    for _ in range(job_ops.HISTORY_STALL_LIMIT):
+        store.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='history' AND state='pending'")
+        store.db.commit()
+        job_ops.run_history_jobs(adapter,store,{'errors':[]},time.monotonic()+300)
+    assert store.job_state('history',1) == 'failed'
+    assert store.job_state('reply',1,2) == 'pending'
+    assert state.load(store.db,1)['capture_phase'] == 'held'
+    assert not state.load(store.db,1).get('capture_proof')

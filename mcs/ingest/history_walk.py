@@ -31,6 +31,13 @@ def start(project_id, cohort_id, *, mismatches=0, prior=None):
             "prior": prior, "last": None, "mismatches": mismatches}
 
 
+def restart_failed(payload):
+    """Reset only an initial walk explicitly retried after a recorded stall."""
+    if payload.get("since") == 0 and "walk" in payload:
+        payload.update(page=1, stalls=0)
+        payload.pop("walk")
+
+
 def validate(payload, project_id, cohort_id):
     value = payload.get("walk")
     page = payload.get("page", 1)

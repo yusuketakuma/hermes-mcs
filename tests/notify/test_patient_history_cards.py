@@ -375,3 +375,125 @@ def test_delivered_history_analysis_wait_is_processing_but_unknown_is_attention(
     status = notify_scope.pending_breakdown(led.db, NOW)
     assert status["attention"] == 1
     assert "initial_history_analysis" not in status["by_reason"]
+
+
+@pytest.mark.parametrize('cfg',[CFG,SLACK])
+def test_unprovided_root_body_is_explicitly_not_analyzed_but_can_finish(led,monkeypatch,cfg):
+    event = seed(led,1)
+    led.db.execute("UPDATE messages SET body_state='unknown',body_text='',content_hash=? WHERE message_id=1", ('a'*64,))
+    led.db.commit()
+    captured(led)
+    monkeypatch.setattr(notify_history.extraction_progress,'message_progress',lambda *a,**kw: pytest.fail('unprovided root was sent to analysis progress'))
+    _dispatch(led,event,cfg)
+    snapshot = json.loads(_card(led)['ui_state'])['history_snapshot']
+    assert snapshot['no_body'] == 1 and snapshot['analyzed'] == 0 and snapshot['unknown'] == 0
+    assert snapshot['phase'] == 'complete'
+    text = json.dumps(spec(led),ensure_ascii=False)
+    assert '本文未提供の親投稿 1件（解析対象外）' in text
+    assert '初回履歴の取込み完了' in text and '保存・解析完了' not in text
+
+
+def test_unknown_reply_and_snippet_are_never_no_body_or_analyzed(led,monkeypatch):
+    event = seed(led)
+    with led.db:
+        led.db.execute("UPDATE messages SET body_state='unknown',parent_id=1 WHERE message_id=2")
+        led.db.execute("UPDATE messages SET body_state='snippet' WHERE message_id=3")
+    captured(led)
+    seen = []
+    monkeypatch.setattr(notify_history.extraction_progress,'message_progress',lambda db,row,**kw: seen.append(row['message_id']) or None)
+    _dispatch(led,event)
+    snapshot = json.loads(_card(led)['ui_state'])['history_snapshot']
+    assert snapshot['no_body'] == 0 and snapshot['analyzed'] == 0 and snapshot['unknown'] == 3
+    assert snapshot['phase'] == 'analyzing' and seen == [1,2,3]
+
+
+def test_later_full_body_reopens_no_body_summary_and_invalidates_queued_completion(led,monkeypatch):
+    from ingest_testkit import _message
+    event = seed(led,1)
+    with led.db:
+        led.db.execute("UPDATE messages SET body_state='unknown',body_text='',content_hash=? WHERE message_id=1", ('a'*64,))
+    captured(led)
+    ready(monkeypatch,False)
+    _dispatch(led,event)
+    original = _latest_render(led)
+    assert json.loads(_card(led)['ui_state'])['history_snapshot']['phase'] == 'complete'
+    led.save_messages([_message(mid=1,body='合成の後着本文',posted_at='2026-09-24T09:00:00+09:00')],project_id=1)
+    assert json.loads(_card(led)['ui_state'])['history_source_dirty']
+    assert not _begin(led,original)['granted']
+    current = json.loads(_card(led)['ui_state'])['history_snapshot']
+    assert current['no_body'] == 0 and current['analyzed'] == 0 and current['phase'] == 'analyzing'
+    ready(monkeypatch)
+    notify_cards.sweep(led,CFG,now=NOW+301)
+    assert json.loads(_card(led)['ui_state'])['history_latest']['phase'] == 'complete'
+
+
+def test_lineworks_no_body_completion_remains_two_posts_after_later_full_body(led,monkeypatch):
+    from ingest_testkit import _message
+    event = seed(led,1)
+    with led.db:
+        led.db.execute("UPDATE messages SET body_state='unknown',body_text='',content_hash=? WHERE message_id=1", ('a'*64,))
+    captured(led)
+    ready(monkeypatch,False)
+    _dispatch(led,event,LINEWORKS)
+    _deliver(led,_latest_render(led))
+    notify_cards.sweep(led,LINEWORKS,now=NOW+301)
+    complete = led.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' AND state='pending' ORDER BY event_id DESC LIMIT 1").fetchone()
+    assert complete is not None
+    _dispatch(led,complete,LINEWORKS,now=NOW+301)
+    final_render = _latest_render(led,2)
+    claim = _claim(final_render,attempt='c'*16)
+    assert _apply(led,envelopes.transport_begin(claim))['granted']
+    assert _apply(led,envelopes.transport_receipt(claim,'delivered',message_id='lw:'+'d'*32))['applied']
+    final_snapshot = json.loads(_card(led,2)['ui_state'])['history_snapshot']
+    assert final_snapshot['no_body'] == 1 and final_snapshot['analyzed'] == 0
+    led.save_messages([_message(mid=1,body='合成の後着本文',posted_at='2026-09-24T09:00:00+09:00')],project_id=1)
+    notify_cards.sweep(led,LINEWORKS,now=NOW+302)
+    assert json.loads(_card(led,2)['ui_state'])['history_latest']['phase'] == 'analyzing'
+    ready(monkeypatch)
+    notify_cards.rerender_message_cards(led,LINEWORKS,1,1,now=NOW+303)
+    notify_cards.sweep(led,LINEWORKS,now=NOW+603)
+    for card in led.db.execute("SELECT * FROM notification_cards WHERE kind='patient_history'"):
+        ui = json.loads(card['ui_state'])
+        assert ui['history_latest']['no_body'] == 0 and ui['history_latest']['phase'] == 'complete'
+        assert not notify_history.refresh_needed(led.db,card,NOW+604)
+    assert led.db.execute("SELECT COUNT(*) FROM notification_cards WHERE kind='patient_history'").fetchone()[0] == 2
+    assert led.db.execute("SELECT COUNT(*) FROM notification_renders").fetchone()[0] == 2
+    assert json.loads(_card(led,2)['ui_state'])['history_snapshot'] == final_snapshot
+
+
+@pytest.mark.parametrize('normal_due',[False,True])
+@pytest.mark.parametrize('held',[False,True])
+def test_sweep_limits_heavy_refresh_attempts_even_when_no_spec_is_issued_and_rotates_due_cards(led,monkeypatch,normal_due,held):
+    ready(monkeypatch,False)
+    for pid in range(1,6):
+        _patient(led,pid=pid)
+        led.db.execute("INSERT INTO messages(message_id,project_id,posted_at_ts,body_text,content_hash,body_state,first_seen) VALUES(?,?,?,'合成履歴',?,'full',?)",
+                       (pid,pid,int(NOW)-1,f'{pid:064x}',NOW-10))
+        with led.db:
+            initial_import_state.start_tx(led,pid,int(NOW),NOW-20,boundary_source='server')
+            initial_import_state.classify_tx(led,pid,[pid],NOW)
+        event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' AND project_id=? ORDER BY event_id LIMIT 1", (pid,)).fetchone()
+        _dispatch(led,event)
+        render = _latest_render(led,pid)
+        if held:
+            led.db.execute("UPDATE notification_renders SET state='held' WHERE delivery_id=?", (render['delivery_id'],))
+            led.db.commit()
+        else:
+            assert _begin(led,render,n=pid)['granted']
+            assert _receipt(led,render,f'{pid:016x}',n=pid+10,message_id=f'm-{pid}')['applied']
+    if normal_due:
+        led.outbox_add('new_messages',99,{'message_ids':[99]})
+    observed = []
+    original = notify_history.snapshot
+    def counted(db,card,cfg,now):
+        observed.append(card['card_id'])
+        return original(db,card,cfg,now)
+    monkeypatch.setattr(notify_history,'snapshot',counted)
+    notify_cards.sweep(led,CFG,now=NOW+301)
+    assert observed == [1,2]
+    assert _card(led,3)['updated_at'] < _card(led,1)['updated_at']
+    notify_cards.sweep(led,CFG,now=NOW+602)
+    assert observed == [1,2,3,4]
+    notify_cards.sweep(led,CFG,now=NOW+903)
+    assert observed == [1,2,3,4,5,1]
+    assert led.db.execute('SELECT COUNT(*) FROM notification_renders').fetchone()[0] == 5

@@ -12,6 +12,7 @@ from ledger import Ledger
 from mcs_contract import MessageBatch
 from extract_testkit import _message
 import mcs_adapter
+import pytest
 
 
 def test_deeper_single_page_command_restarts_and_imports_old_cutoff_gap(tmp_path, monkeypatch):
@@ -84,3 +85,69 @@ def test_deeper_since_fetches_gap_before_floor(monkeypatch, tmp_path):
         assert c.execute("select count(*) from messages").fetchone()[0] == 50
         floor = c.execute("select history_floor from patients").fetchone()[0]
         assert floor <= NOW - 59 * 86400
+
+
+@pytest.mark.parametrize("floor,invalid", [(0,None),(-1,None),(-1,"scope"),(-1,"missing")])
+def test_explicit_import_restarts_stopped_initial_walk_without_losing_scope_or_saved_data(tmp_path,monkeypatch,floor,invalid):
+    import history_walk
+    import initial_import_state
+    from ingest_testkit import _unread_patient
+    monkeypatch.setattr(notify_spool,'restore_awaiting_consent',lambda path:None)
+    store = Ledger(str(tmp_path/'synthetic-initial.db'))
+    try:
+        boundary = int(time.time())
+        store.upsert_patient_info(_unread_patient(1),is_archived=False,notify_new=True,observation_ts=boundary)
+        original = initial_import_state.load(store.db,1)
+        store.save_messages([_message(mid=10,body='synthetic',posted_at='2026-09-01T00:00:00+09:00')],project_id=1)
+        payload = store.job_payload('history',1)
+        payload.update(page=2,stalls=8,walk=history_walk.start(1,original['cohort_id'],mismatches=8))
+        payload['walk']['last'] = 'b'*64
+        payload['walk']['digest'] = 'c'*64
+        if invalid == 'scope':
+            payload['walk']['scope'] = 'd'*64
+        elif invalid == 'missing':
+            payload.pop('walk')
+        job = store.job_pending('history',1)
+        store.job_defer(job['job_id'],0,payload=payload)
+        store.job_fail(job['job_id'],reason_code='window_stalled')
+        with store.db:
+            store.db.execute('UPDATE fetch_jobs SET attempts=2 WHERE job_id=?',(job['job_id'],))
+            store.db.execute('UPDATE patients SET history_floor=? WHERE project_id=1',(floor,))
+        before = [tuple(row) for row in store.db.execute('SELECT * FROM messages ORDER BY message_id')]
+        commands = tmp_path/'cmd'
+        commands.mkdir()
+        (commands/'restart.json').write_text(json.dumps({'cmd':'import','project_id':1,'days':14,'pages':1}))
+        result = {'errors':[]}
+        job_ops.drain_commands(store,result,str(commands))
+        current = store.job_payload('history',1)
+        if invalid:
+            assert result['errors'] == ['cmd_invalid: '+('invalid_payload' if invalid == 'scope' else 'already_floored')]
+            assert store.job_state('history',1) == 'failed' and current == payload
+            assert store.history_floor(1) == floor
+            assert store.db.execute('SELECT attempts FROM fetch_jobs WHERE job_id=?',(job['job_id'],)).fetchone()[0] == 2
+            assert [tuple(row) for row in store.db.execute('SELECT * FROM messages ORDER BY message_id')] == before
+            assert initial_import_state.load(store.db,1)['cohort_id'] == original['cohort_id']
+            return
+        assert store.job_state('history',1) == 'pending'
+        assert store.job_pending('history',1)['attempts'] == 2
+        assert current['since'] == 0 and current['page'] == 1 and current['stalls'] == 0 and 'walk' not in current
+        assert [tuple(row) for row in store.db.execute('SELECT * FROM messages ORDER BY message_id')] == before
+        assert store.history_floor(1) == floor
+        assert initial_import_state.load(store.db,1)['cohort_id'] == original['cohort_id']
+        assert initial_import_state.load(store.db,1)['boundary_ts'] == original['boundary_ts']
+        assert 'capture_proof' not in initial_import_state.load(store.db,1)
+        # The consumed command cannot repeatedly clear later scan progress.
+        job_ops.drain_commands(store,result,str(commands))
+        assert store.job_payload('history',1) == current
+        class Adapter(mcs_adapter.MCSAdapter):
+            def _get(self,path,params=None,extend_session=True):
+                return {'messages':[{'id':10,'comment':'synthetic','created_at':'2026-09-01T00:00:00+09:00'}],
+                        'paginate':{'has_next':False}}
+        for _ in range(2):
+            job_ops.run_history_jobs(Adapter(),store,result,time.monotonic()+120)
+        assert result['errors'] == []
+        assert store.job_state('history',1) == 'done'
+        assert store.db.execute('SELECT attempts FROM fetch_jobs WHERE job_id=?',(job['job_id'],)).fetchone()[0] == 2
+        assert initial_import_state.load(store.db,1)['capture_phase'] == 'complete'
+    finally:
+        store.close()

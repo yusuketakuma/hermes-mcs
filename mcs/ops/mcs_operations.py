@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import contextmanager, suppress
 import hashlib
 import json
+import history_walk
 import math
 import os
 import stat
@@ -76,14 +77,27 @@ def _apply_scan_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     if (type(floor) not in (int, float) or not math.isfinite(floor)
             or floor < 0 and floor != -1):
         return "invalid_history_floor", {}
-    if floor and floor <= since:
-        return "already_floored", {}
-
     existing = db.execute(
-        "SELECT job_id,state,attempts,payload FROM fetch_jobs "
+        "SELECT job_id,state,attempts,payload,reason_code FROM fetch_jobs "
         "WHERE kind=? AND project_id=? AND message_id=0 "
         "ORDER BY job_id DESC LIMIT 1", (_HISTORY_JOB, project_id)
     ).fetchone()
+    payload = _history_payload(existing["payload"]) if existing is not None else None
+    restart = (existing is not None and existing["state"] == "failed"
+               and existing["reason_code"] == "window_stalled"
+               and payload is not None and payload["since"] == 0 and "walk" in payload)
+    if restart:
+        import initial_import_state
+        try:
+            cohort = initial_import_state.load(db, project_id)
+            if cohort is None:
+                raise ValueError
+            history_walk.validate(payload, project_id, cohort["cohort_id"])
+        except ValueError:
+            return "invalid_history_payload", {}
+    # Old complete cohorts can retain a floor while their proof is rechecked.
+    if floor and floor <= since and not restart:
+        return "already_floored", {}
     if existing is None:
         payload = {"since": since, "page": 1, "pages": pages,
                    "trickle": False}
@@ -94,9 +108,10 @@ def _apply_scan_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
             (_HISTORY_JOB, project_id, canonical(payload).decode("utf-8"), now, now, now))
         return None, {"job_id": cur.lastrowid, "since": since, "page": 1}
 
-    payload = _history_payload(existing["payload"])
     if payload is None:
         return "invalid_history_payload", {}
+    if restart:
+        history_walk.restart_failed(payload)
     payload["since"] = min(since, payload["since"])
     payload["page"] = max(1, payload.get("page", 1))
     payload["pages"] = max(pages, payload.get("pages", 10))

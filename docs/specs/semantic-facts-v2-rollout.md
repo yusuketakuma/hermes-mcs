@@ -167,6 +167,18 @@ Per target message, inside the shared drain queue:
 
 ## Evaluating Jev's incremental value
 
+These are live API operations, separate from the isolated test runner.
+Register `TYPESAFE_API_KEY` in this MCS installation's owner-only `.env`
+(mode `0600`); process environment variables or Hermes' `.env` are not used.
+If `semantic.mode` is explicitly configured, also set a positive
+`semantic.daily_request_budget`: omitting the budget retains the previous
+zero-request limit, including for manual `wire_smoke`, `jev-value`, and
+live benchmark calls. These tools share the daily budget with normal work;
+every HTTP attempt, retry and model-list GET counts toward a maximum of
+500 requests per JST day. A lower configured limit remains effective.
+Manual live tools may bypass semantic mode and project selection, so only
+run them with explicitly authorized input and API access.
+
 ```sh
 python3 mcs/ops/mcs_setup.py jev-value \
   --cases evaluation/semantic_completeness_cases.json \

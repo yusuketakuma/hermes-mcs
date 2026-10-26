@@ -76,6 +76,21 @@ def test_zero_is_a_verified_healthy_observation(evidence):
     assert mcs_setup._doctor_collection({}, probe=True)['status'] == 'healthy'
 
 
+def test_stalled_history_guidance_uses_the_existing_human_recovery_path(evidence):
+    path, block = evidence
+    block['errors'] = collection_diagnostics.error_counts(['import 7: window_stalled'])
+    value = json.loads(path.read_text())
+    value['collection_diagnostics'] = block
+    path.write_text(json.dumps(value))
+    observed = mcs_setup._doctor_collection({}, probe=True)
+    assert observed['status'] == 'warning'
+    rows = collection_diagnostics.guidance(observed['counts'])
+    assert len(rows) == 1 and rows[0][:2] == ('取得未完了', 1)
+    assert 'window_stalled' in rows[0][3] and '管理者' in rows[0][3]
+    assert 'docs/guides/USER_GUIDE.md' in rows[0][3]
+    assert 'import 7' not in str(rows)
+
+
 def test_doctor_cli_preserves_probe_and_invalid_config_boundaries(evidence, tmp_path, monkeypatch, capsys):
     import mcs_util
     import runtime_inspection

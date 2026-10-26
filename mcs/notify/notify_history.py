@@ -57,11 +57,14 @@ def snapshot(db, card, cfg, now):
     if state is None or state["cohort_id"] != key.get("cohort_id"):
         raise ValueError("initial_history_source_changed")
     counts = {"saved": 0, "analyzed": 0, "processing": 0, "held": 0, "unknown": 0,
-              "deleted": 0, "high": 0, "attachments": 0}
+              "deleted": 0, "no_body": 0, "high": 0, "attachments": 0}
     for row in _members(db, card["project_id"], state["cohort_id"]):
         counts["saved"] += 1
         if row["body_state"] == "deleted":
             counts["deleted"] += 1
+            continue
+        if row["body_state"] == "unknown" and not row["parent_id"]:
+            counts["no_body"] += 1
             continue
         progress = extraction_progress.message_progress(db, row, cfg=cfg)
         status = progress["state"] if progress else "unknown"
@@ -80,7 +83,7 @@ def snapshot(db, card, cfg, now):
         f"{join} WHERE m.project_id=? AND {where}", (card["project_id"], state["cohort_id"])).fetchone()[0]
     counts["unknown"] += max(0, state["saved_count"] - counts["saved"])
     counts["saved"] = max(counts["saved"], state["saved_count"])
-    complete = state["capture_phase"] == "complete" and counts["saved"] == counts["analyzed"] + counts["deleted"]
+    complete = state["capture_phase"] == "complete" and counts["saved"] == counts["analyzed"] + counts["deleted"] + counts["no_body"]
     phase = "complete" if complete else "held" if state["capture_phase"] == "held" else (
         "analyzing" if state["capture_phase"] == "complete" else "capturing")
     return {**counts, "phase": phase, "capture_phase": state["capture_phase"],
@@ -151,6 +154,7 @@ def refresh(db, card, cfg, now, *, force=False):
     if source_changed:
         ui.setdefault("history_dirty_since", now)
     changed_phase = state["capture_phase"] != latest.get("capture_phase")
+    refreshed = False
     if force or source_changed or ui.get("history_source_dirty") or not latest or changed_phase or now - ui.get("history_checked_at", 0) >= UPDATE_SECONDS:
         current = snapshot(db, card, cfg, now)
         if {k: v for k, v in current.items() if k not in ("observed_at", "artifact_cutoff")} != {
@@ -160,6 +164,7 @@ def refresh(db, card, cfg, now, *, force=False):
         ui.update(history_latest=current, history_checked_at=now, history_analysis_changes=0,
                   history_patient_identity=list(patient) if patient else None)
         latest = current
+        refreshed = True
     adopted = ui.get("history_snapshot") or {}
     live = db.execute("SELECT state FROM notification_renders WHERE card_id=? "
         "AND state IN ('queued','sending','unknown','held') ORDER BY render_rev DESC LIMIT 1", (card["card_id"],)).fetchone()
@@ -172,6 +177,10 @@ def refresh(db, card, cfg, now, *, force=False):
     if can_adopt and due and ui.get("history_dirty_since") is not None:
         ui["history_snapshot"] = {**latest, **({"phase": "capturing"} if phase == "start" else {})}
         ui["history_rendered_at"] = now
+        ui.pop("history_dirty_since", None)
+        ui.pop("history_source_dirty", None)
+    if refreshed and card["transport"] == "lineworks" and card["message_id"] is not None and not live:
+        # This phase's delivered post is immutable; its latest counts were consumed locally.
         ui.pop("history_dirty_since", None)
         ui.pop("history_source_dirty", None)
     if not adopted and "history_snapshot" not in ui:
@@ -189,10 +198,14 @@ def content(db, card):
     name = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (card["project_id"],)).fetchone()
     title = {"capturing": "初回履歴の取込み開始", "analyzing": "履歴の保存完了・解析中",
              "complete": "初回履歴の保存・解析完了", "held": "初回履歴の取込みを確認中"}.get(snap.get("phase"), "初回履歴を取得中")
+    if snap.get("phase") == "complete" and snap.get("no_body"):
+        title = "初回履歴の取込み完了"
     text = [f"保存済み {snap.get('saved', 0)}件・解析済み {snap.get('analyzed', 0)}件"]
     for key, label in (("processing", "解析中"), ("held", "再試行・保留"), ("unknown", "解析状況未取得")):
         if snap.get(key):
             text.append(f"{label} {snap[key]}件")
+    if snap.get("no_body"):
+        text.append(f"本文未提供の親投稿 {snap['no_body']}件（解析対象外）")
     text.append(f"現行抽出で緊急度が高い投稿 {snap.get('high', 0)}件（MCSで確認）")
     if snap.get("attachments"):
         text.append(f"添付 {snap['attachments']}件（MCSで確認）")

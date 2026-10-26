@@ -102,6 +102,62 @@ def test_ops_scan_deepens_existing_history_without_resetting_cursor(tmp_path):
     db.close()
 
 
+@pytest.mark.parametrize("state,reason,restart", [
+    ("failed", "window_stalled", True),
+    ("pending", "window_stalled", False),
+    ("failed", "network_error", False),
+    ("failed", "invalid_scope", False),
+    ("failed", "invalid_cohort", False),
+])
+@pytest.mark.parametrize("floor", [0, -1])
+def test_scan_restarts_only_an_explicitly_failed_initial_walk(tmp_path, state, reason, restart, floor):
+    import history_walk
+    import initial_import_state
+
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.ensure_patient(1)
+        initial_import_state.start_tx(db, 1, int(time.time()), time.time(), boundary_source="server")
+        cohort = initial_import_state.load(db.db, 1)
+        walk = history_walk.start(1, cohort["cohort_id"], mismatches=8)
+        walk.update(last="b" * 64, digest="c" * 64)
+        if reason == "invalid_scope":
+            walk["scope"] = "d" * 64
+        old = {"since": 0, "page": 3, "pages": 2, "stalls": 8,
+               "trickle": True, "walk": walk}
+        job = db.job_add("history", 1, payload=old)
+        db.db.execute("UPDATE fetch_jobs SET state=?,reason_code=?,attempts=2 WHERE job_id=?",
+                      (state, "window_stalled" if reason.startswith("invalid_") else reason, job))
+        db.db.execute("UPDATE patients SET history_floor=? WHERE project_id=1", (floor,))
+        if reason == "invalid_cohort":
+            db.db.execute("UPDATE patients SET initial_import='{}' WHERE project_id=1")
+        db.db.commit()
+        command = _command("ops.scan", days=14, pages=2)
+        receipt = mcs_requests.apply_command(db, command)
+        row = _job(db, job)
+        current = json.loads(row["payload"])
+        if reason.startswith("invalid_"):
+            assert receipt["outcome"] == "rejected" and receipt["error"] == "invalid_history_payload"
+            assert current == old and row["attempts"] == 2 and row["state"] == state
+            assert db.history_floor(1) == floor
+            return
+        if floor == -1 and not restart:
+            assert receipt["outcome"] == "rejected" and receipt["error"] == "already_floored"
+            assert current == old and row["attempts"] == 2 and row["state"] == state
+            return
+        assert receipt["outcome"] == "applied" and receipt["job_id"] == job
+        assert row["state"] == "pending" and row["attempts"] == 2
+        assert current["since"] == 0 and current["trickle"] is False
+        assert current["page"] == (1 if restart else 3)
+        assert current["stalls"] == (0 if restart else 8)
+        assert ("walk" not in current) if restart else current["walk"] == walk
+        assert db.history_floor(1) == floor
+        assert mcs_requests.apply_command(db, command) == receipt
+        assert json.loads(_job(db, job)["payload"]) == current
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("cmd", ["ops.scan", "ops.retry", "ops.pause", "ops.resume"])
 def test_deep_stored_job_payload_is_receipted_without_rewriting_job(tmp_path, cmd):
     db = Ledger(str(tmp_path / "ledger.db"))

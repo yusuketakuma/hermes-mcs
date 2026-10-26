@@ -56,6 +56,11 @@ def _target(db, event_id):
                           (coverage[0]["card_id"],)).fetchone()
         if row["kind"] == "patient_history" and (card is None or card["message_id"] is not None or card["desired_render_rev"] != 0):
             raise ValueError("notification_already_issued")
+        if row["kind"] == "patient_history" and db.execute(
+                "SELECT 1 FROM notification_intent_cards WHERE card_id=? "
+                "AND event_id!=? AND state='pending' LIMIT 1",
+                (coverage[0]["card_id"], event_id)).fetchone():
+            raise ValueError("history_card_has_other_pending_intents")
         if card is None or card[0] not in TRANSPORTS:
             raise ValueError("unsupported_transport")
     elif row["kind"] == "daily_digest":
