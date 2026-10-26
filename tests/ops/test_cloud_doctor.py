@@ -114,7 +114,7 @@ def test_explicit_cloud_scope_without_key_is_a_fixed_warning(local, mode):
     root, _, _ = local
     report = cloud_cli.diagnostics({"cloud_llm": {"mode": mode, "project_ids": [1]}}, root=str(root))
     provider = report["anthropic"]
-    assert provider["mode"] == mode and provider["status"] == "warning"
+    assert provider["mode"] == mode and provider["status"] == "local"
     assert provider["block_reason"] == "no_api_key" and provider["key_present"] is False
 
 

@@ -2213,7 +2213,8 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
     """Tick-side change detection over live cards: edited/deleted
     thread messages, signal state transitions, archive revokes,
     defer_until arrival, and renders stuck unpublished. Bounded per
-    call: at most limit ordinary cards plus min(2, limit) history cards.
+    call: at most limit ordinary cards and limit history checks, with
+    at most two history renders.
     Each group rotates independently; cards with an unsettled attempt
     are left to the settle path."""
     db = connection(ledger)
@@ -2238,8 +2239,9 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
                WHERE kind='patient_history' AND delivery_state IN ('pending','delivered',
                                         'update_failed','delivery_unknown',
                                         'message_deleted','revoked')
-               ORDER BY updated_at,card_id LIMIT ?""", (min(2, max(0, limit)),)).fetchall()
+               ORDER BY updated_at,card_id LIMIT ?""", (max(0, limit),)).fetchall()
         scanned = len(cards)
+        history_renders = 0
         for row in cards:
             card = notify_scope.card_row(db, row["card_id"])
             if card is None:
@@ -2262,18 +2264,21 @@ def sweep(ledger, cfg, limit=100, now=None) -> dict:
                       card["presentation_generation"],
                       card["desired_render_rev"])
             history_due = card["kind"] == "patient_history" and notify_history.refresh_needed(db, card, now)
-            if card["kind"] != "patient_history" or history_due:
+            history_deferred = history_due and history_renders >= 2
+            if card["kind"] != "patient_history" or history_due and not history_deferred:
                 issue_render(db, card["card_id"], cfg, now, specs)
+                history_renders += card["kind"] == "patient_history"
             if card["kind"] == "patient_history":
                 notify_history.emit_completion_tx(ledger, notify_scope.card_row(db, card["card_id"]), now)
             after = notify_scope.card_row(db, card["card_id"])
             if (after["source_generation"], after["presentation_generation"],
                     after["desired_render_rev"]) != before:
                 updated += 1
-            # Rotate every selected card inside its own bounded group, even
-            # when unchanged/in-flight, so older cards cannot occupy its window.
-            db.execute("UPDATE notification_cards SET updated_at=? WHERE card_id=?",
-                       (now, card["card_id"]))
+            # Rotate inert history too; quota-deferred work keeps its place
+            # ahead of the two renders just processed in this separate window.
+            if not history_deferred:
+                db.execute("UPDATE notification_cards SET updated_at=? WHERE card_id=?",
+                           (now, card["card_id"]))
         # watchdog: live renders whose spec never published (or whose
         # file vanished) get their stored bytes republished
         specs.extend(

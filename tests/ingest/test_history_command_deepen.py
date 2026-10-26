@@ -111,8 +111,9 @@ def test_deeper_since_fetches_gap_before_floor(monkeypatch, tmp_path):
         assert floor <= NOW - 59 * 86400
 
 
-@pytest.mark.parametrize("floor,invalid", [(0,None),(-1,None),(-1,"scope"),(-1,"missing")])
-def test_explicit_import_restarts_stopped_initial_walk_without_losing_scope_or_saved_data(tmp_path,monkeypatch,floor,invalid):
+@pytest.mark.parametrize("floor,invalid", [(0,None),(-1,None),(-1,"scope"),(-1,"missing"),(0,"missing")])
+@pytest.mark.parametrize("failure_reason", ["window_stalled", "replies_missing"])
+def test_explicit_import_restarts_stopped_initial_walk_without_losing_scope_or_saved_data(tmp_path,monkeypatch,floor,invalid,failure_reason):
     import history_walk
     import initial_import_state
     from ingest_testkit import _unread_patient
@@ -133,7 +134,7 @@ def test_explicit_import_restarts_stopped_initial_walk_without_losing_scope_or_s
             payload.pop('walk')
         job = store.job_pending('history',1)
         store.job_defer(job['job_id'],0,payload=payload)
-        store.job_fail(job['job_id'],reason_code='window_stalled')
+        store.job_fail(job['job_id'],reason_code=failure_reason)
         with store.db:
             store.db.execute('UPDATE fetch_jobs SET attempts=2 WHERE job_id=?',(job['job_id'],))
             store.db.execute('UPDATE patients SET history_floor=? WHERE project_id=1',(floor,))
@@ -145,7 +146,7 @@ def test_explicit_import_restarts_stopped_initial_walk_without_losing_scope_or_s
         job_ops.drain_commands(store,result,str(commands))
         current = store.job_payload('history',1)
         if invalid:
-            assert result['errors'] == ['cmd_invalid: '+('invalid_payload' if invalid == 'scope' else 'already_floored')]
+            assert result['errors'] == ['cmd_invalid: invalid_payload']
             assert store.job_state('history',1) == 'failed' and current == payload
             assert store.history_floor(1) == floor
             assert store.db.execute('SELECT attempts FROM fetch_jobs WHERE job_id=?',(job['job_id'],)).fetchone()[0] == 2
@@ -153,7 +154,7 @@ def test_explicit_import_restarts_stopped_initial_walk_without_losing_scope_or_s
             assert initial_import_state.load(store.db,1)['cohort_id'] == original['cohort_id']
             return
         assert store.job_state('history',1) == 'pending'
-        assert store.job_pending('history',1)['attempts'] == 2
+        assert store.job_pending('history',1)['attempts'] == 0
         assert current['since'] == 0 and current['page'] == 1 and current['stalls'] == 0 and 'walk' not in current
         assert [tuple(row) for row in store.db.execute('SELECT * FROM messages ORDER BY message_id')] == before
         assert store.history_floor(1) == floor
@@ -171,7 +172,7 @@ def test_explicit_import_restarts_stopped_initial_walk_without_losing_scope_or_s
             job_ops.run_history_jobs(Adapter(),store,result,time.monotonic()+120)
         assert result['errors'] == []
         assert store.job_state('history',1) == 'done'
-        assert store.db.execute('SELECT attempts FROM fetch_jobs WHERE job_id=?',(job['job_id'],)).fetchone()[0] == 2
+        assert store.db.execute('SELECT attempts FROM fetch_jobs WHERE job_id=?',(job['job_id'],)).fetchone()[0] == 0
         assert initial_import_state.load(store.db,1)['capture_phase'] == 'complete'
     finally:
         store.close()

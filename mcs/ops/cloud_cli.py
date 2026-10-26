@@ -114,7 +114,8 @@ def diagnostics(cfg, *, root=None, probe=False):
     eligible_scope = cloud["project_ids"] is None or bool(set(cloud["project_ids"]) - set(cloud["exclude_project_ids"]))
     if (not errors and not key and cloud["mode"] in ("on", "shadow")
             and cloud["routes"] and eligible_scope):
-        out["anthropic"].update(status="warning", block_reason="no_api_key")
+        # A plain doctor cannot observe the persisted pause without opening DB.
+        out["anthropic"].update(status="warning" if probe else "local", block_reason="no_api_key")
     if probe:
         try:
             with _reader(root) as (db, deadline):

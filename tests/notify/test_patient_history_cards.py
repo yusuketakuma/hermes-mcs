@@ -526,12 +526,12 @@ def test_sweep_expired_normal_defer_is_not_starved_by_four_due_history_cards(led
     monkeypatch.setattr(notify_history,'snapshot',counted)
     monkeypatch.setattr(notify_history,'refresh_needed',lambda *args:True)
     first = notify_cards.sweep(led,CFG,limit=3,now=NOW+301)
-    assert first['scanned'] == 3  # One ordinary card plus two independently bounded history cards.
+    assert first['scanned'] == 4  # One ordinary card plus three cheap history checks.
     assert observed == [1,2]
     triage = led.db.execute('SELECT state,revision FROM notification_triage WHERE card_id=?', (normal,)).fetchone()
     assert tuple(triage) == ('open',1)
     second = notify_cards.sweep(led,CFG,limit=3,now=NOW+602)
-    assert second['scanned'] == 3 and observed == [1,2,3,4]
+    assert second['scanned'] == 4 and observed == [1,2,3,4]
     assert led.db.execute('SELECT revision FROM notification_triage WHERE card_id=?', (normal,)).fetchone()[0] == 1
 
 
@@ -600,3 +600,39 @@ def test_history_high_count_excludes_deleted_foreign_and_unreadable_artifacts(le
     rendered = json.dumps(spec(led),ensure_ascii=False)
     assert '現行抽出で緊急度が高い投稿 1件（MCSで確認）' in rendered
     assert '現行抽出で緊急度が高い投稿 2件' not in rendered
+
+
+def test_completed_history_checks_do_not_consume_the_two_render_slots(led, monkeypatch):
+    ready(monkeypatch)
+    for pid in range(1,5):
+        _patient(led,pid=pid)
+        led.db.execute("INSERT INTO messages(message_id,project_id,posted_at_ts,body_text,content_hash,body_state,first_seen) VALUES(?,?,?,'合成履歴',?,'full',?)",
+                       (pid,pid,int(NOW)-1,f'{pid:064x}',NOW-10))
+        with led.db:
+            initial_import_state.start_tx(led,pid,int(NOW),NOW-20,boundary_source='server')
+            initial_import_state.classify_tx(led,pid,[pid],NOW)
+            state = initial_import_state.load(led.db,pid)
+            state.update(capture_phase='complete',capture_proof={
+                'v':1,'scope':history_walk.scope(pid,state['cohort_id']),'digest':'a'*64})
+            led.db.execute('UPDATE patients SET initial_import=? WHERE project_id=?',(json.dumps(state),pid))
+        event = led.db.execute("SELECT * FROM notify_outbox WHERE kind='patient_history' AND project_id=? ORDER BY event_id LIMIT 1",(pid,)).fetchone()
+        _dispatch(led,event)
+        render = _latest_render(led,pid)
+        assert _begin(led,render,n=pid)['granted']
+        _receipt(led,render,f'{pid:016x}',n=pid+10,message_id=f'm-{pid}')
+    # The first three have complete, settled history and truly need no refresh.
+    for pid in range(1,4):
+        assert not notify_history.refresh_needed(led.db,_card(led,pid),NOW+301)
+    with led.db:
+        ui=json.loads(_card(led,4)['ui_state'])
+        ui['history_dirty_since']=NOW
+        led.db.execute('UPDATE notification_cards SET ui_state=? WHERE card_id=4',(json.dumps(ui),))
+    observed=[]
+    original=notify_history.snapshot
+    def counted(db,card,cfg,now):
+        observed.append(card['card_id'])
+        return original(db,card,cfg,now)
+    monkeypatch.setattr(notify_history,'snapshot',counted)
+    notify_cards.sweep(led,CFG,limit=4,now=NOW+301)
+    assert observed == [4]
+    assert notify_history.refresh_needed(led.db,_card(led,4),NOW+302) is False

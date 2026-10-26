@@ -224,16 +224,17 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
             ledger.ensure_patient(req["project_id"])
             since = int(time.time() - req.get("days", 14) * 86400)
             stopped = ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind='history' AND project_id=? "
-                                        "AND message_id=0 AND state='failed' AND reason_code='window_stalled'",
+                                        "AND message_id=0 AND state='failed'",
                                         (req["project_id"],)).fetchone()
             restart_initial = invalid_walk = False
             if stopped is not None:
                 candidate = loads_dict(stopped["payload"] or "{}")
-                if isinstance(candidate, dict) and candidate.get("since") == 0 and "walk" in candidate:
+                if isinstance(candidate, dict) and candidate.get("since") == 0:
                     import initial_import_state
                     try:
                         cohort = initial_import_state.load(ledger.db, req["project_id"])
-                        if not _valid_history_payload(candidate) or cohort is None:
+                        if (not _valid_history_payload(candidate) or cohort is None
+                                or "walk" not in candidate):
                             raise ValueError
                         history_walk.validate(candidate, req["project_id"], cohort["cohort_id"])
                         restart_initial = True
@@ -273,6 +274,9 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                     if existing["state"] == "failed":
                         ledger.db.execute("UPDATE fetch_jobs SET state='pending' WHERE job_id=?", (existing["job_id"],))
                     ledger.job_defer(existing["job_id"], 0, payload=pl)
+                    if restart_initial:
+                        ledger.db.execute("UPDATE fetch_jobs SET attempts=0,reason_code=NULL WHERE job_id=?",
+                                          (existing["job_id"],))
                 else:
                     ledger.job_add("history", req["project_id"], payload={
                         "since": since, "page": 1,
