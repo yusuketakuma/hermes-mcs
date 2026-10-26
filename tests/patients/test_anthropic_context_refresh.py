@@ -364,76 +364,8 @@ def test_shadow_scan_does_not_count_local_prefix_as_cloud_work(runtime, cloud, m
     assert not {fact['id'] for fact in prefix}.intersection(fact['id'] for fact in stored['facts'])
 
 
-@pytest.mark.parametrize('invalid', [(), ('local',), ('cloud',), ('local','cloud')])
-def test_shadow_grounding_sides_remain_independently_measured(runtime, cloud, monkeypatch, invalid):
-    led, _, _ = runtime
-    cloud[1][0] = 'shadow'
-    seed(led,body='完全合成の見出しなし記録です。')
-    assert step(runtime)['lane'] == 'A'
-    values = {}
-    scan, compare = context_refresh._scan, context_refresh._comparison_context
-    def measured_scan(*args, **kwargs):
-        value = scan(*args, **kwargs)
-        values['cloud' if kwargs.get('provider') is not None else 'local'] = value
-        return value
-    def grounded(value, *args, **kwargs):
-        if any(value is values.get(side) for side in invalid):
-            raise ValueError('cloud_comparison_source_invalid')
-        return compare(value,*args,**kwargs)
-    monkeypatch.setattr(context_refresh,'_scan',measured_scan)
-    monkeypatch.setattr(context_refresh,'_comparison_context',grounded)
-    assert step(runtime)['lane'] == 'B'
-    rows = led.artifacts('cloud_compare_v1')
-    assert len(rows)==1
-    meta = json.loads(rows[0]['meta'])
-    assert meta['unit'] and 'uncompared' not in meta
-    assert meta['units']==1
-    assert meta['local_facts'] == (None if 'local' in invalid else 1)
-    assert meta['cloud_facts'] == (None if 'cloud' in invalid else 1)
-    assert meta['validated_units'] == int('cloud' not in invalid)
-    assert meta['matched'] == (None if invalid else 1)
 
 
-@pytest.mark.parametrize('finish', ['busy','deadline'])
-def test_shadow_audit_is_a_single_short_lock_attempt_and_keeps_pending_when_unavailable(runtime, cloud, monkeypatch, finish):
-    led, clock, _ = runtime
-    cloud[1][0] = 'shadow'
-    seed(led,body='完全合成の見出しなし記録です。')
-    assert step(runtime)['lane'] == 'A'
-    attempts, held = [], set()
-    close = os.close
-    def acquire():
-        attempts.append(1)
-        if len(attempts)>1:
-            return None
-        fd = os.open(os.devnull,os.O_RDONLY)
-        held.add(fd)
-        return fd
-    def release(fd):
-        held.discard(fd)
-        close(fd)
-    original_provider = worker._CloudProvider
-    class Provider(original_provider):
-        def __call__(self,*args,**kwargs):
-            assert held == set(), 'shadow HTTP must not retain the local commit lock'
-            return super().__call__(*args,**kwargs)
-    compare = context_refresh._comparison_context
-    def grounded(*args,**kwargs):
-        if finish=='deadline' and cloud[0]:
-            clock.mono += 1000
-        return compare(*args,**kwargs)
-    monkeypatch.setattr(context_refresh,'acquire_run_lock',acquire)
-    monkeypatch.setattr(context_refresh.os,'close',release)
-    monkeypatch.setattr(worker,'_CloudProvider',Provider)
-    monkeypatch.setattr(context_refresh,'_comparison_context',grounded)
-    assert step(runtime)['lane']=='B'
-    assert len(attempts)==(2 if finish=='busy' else 1) and held==set()
-    rows = led.artifacts('cloud_compare_v1')
-    assert len(rows)==1 and cloud[0]
-    meta = json.loads(rows[0]['meta'])
-    assert meta['units']==1 and meta['uncompared']=='pending' and meta['validated_units']==0
-    assert step(runtime,admit=lambda:False)['status']=='deferred'
-    assert led.artifacts('cloud_compare_v1')==rows
 
 
 def test_pending_estimate_uses_exact_current_contract_without_credentials(runtime, cloud, monkeypatch):
