@@ -621,6 +621,7 @@ class _CloudProvider:
         self.model = cfg["cloud_llm"]["model"]
         self.contract = _cloud_contract(cfg)
         generation = cloud_policy.config_generation(cfg)
+        scope = cloud_policy.scope_generation(cfg)
         updater = writer_lock.updater_state()
         key = cloud_policy.api_key(HOME)
         self.dispatch = dispatch
@@ -632,17 +633,36 @@ class _CloudProvider:
         self.discarded = False
         self.final_disposition = None
 
+        reserved_caps = {}
+
+        def caps(settings):
+            return {k: settings[k] for k in ("daily_request_budget", "monthly_cost_limit_usd")}
+
+        def tightened(now):
+            # a cap set or lowered after this attempt's reservation stops the send it
+            # has not made yet; the reservation itself stays counted at its maximum
+            return any(reserved_caps.get(k, now[k]) is None and now[k] is not None
+                       or None not in (reserved_caps.get(k), now[k]) and now[k] < reserved_caps[k]
+                       for k in now)
+
         def guard(*, inference=True):
-            if ((inference and time.monotonic() >= deadline) or writer_lock.updater_state() != updater
+            if ((inference and (time.monotonic() >= deadline or tightened(caps(_cloud_settings(load_config())))))
+                    or writer_lock.updater_state() != updater
                     or updater[0] or cloud_policy.api_key(HOME) != key
-                    or cloud_policy.config_generation({"cloud_llm": _cloud_settings(load_config())}) != generation
+                    or cloud_policy.scope_generation({"cloud_llm": _cloud_settings(load_config())}) != scope
                     or cloud_policy.block_reason(ledger, _cloud_settings(load_config()), route, project_id)
                     or not current()):
                 raise CloudFallback("cloud_unit_changed")
         self.guard = lambda: dispatch(guard)
         self.commit_guard = lambda: dispatch(lambda: guard(inference=False), result=True)
-        reserve = cloud_policy.usage_reserver(ledger, cfg, route=route,
-            project_id=project_id, unit_key=unit_key, message_id=message_id, owner=owner)
+        def reserve(body, timeout):
+            # every new attempt (retry, repair, next chunk) is judged against the
+            # budget in force now, not the one the unit started under
+            current_cfg = {"cloud_llm": _cloud_settings(load_config())}
+            reserved_caps.clear()
+            reserved_caps.update(caps(current_cfg["cloud_llm"]))
+            return cloud_policy.usage_reserver(ledger, current_cfg, route=route, project_id=project_id,
+                unit_key=unit_key, message_id=message_id, owner=owner)(body, timeout)
         self.reserve = lambda body, timeout: dispatch(lambda: reserve(body, timeout))
         def record(reservation, metadata):
             def write():
@@ -704,8 +724,12 @@ def _cloud_settings(cfg):
 
 def _cloud_contract(cfg):
     settings = _cloud_settings(cfg)
+    # Reuse key: the provider and its fixed request shape. The inference rule
+    # versions live in each caller's own contract (EXTRACT_VERSION, the context
+    # CONTRACT/plan/rule), so a rule change rebuilds every patient while code
+    # releases that leave the rules alone do not re-send or hide results.
     return {"backend": "anthropic", "model": settings["model"],
-            "code_contract": _upgrade_contract()}
+            "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": "low"})[:16]}
 
 
 def _cloud_mode(ledger, cfg, route, project_id):
@@ -742,24 +766,43 @@ def _comparison_extract(source, document):
 
 
 def _cloud_compare(ledger, *, route, project_id, local_facts, cloud_facts=None,
-                   rejected=None, held=None, repairs=None):
-    """Record measured comparison units; absent measurements remain unknown."""
+                   rejected=None, held=None, repairs=None, unit=None, pending=False):
+    """Record measured comparison units; absent measurements remain unknown.
+    A shadow unit is first written ``pending`` with its local commit (so it is
+    always in the denominator); its measured result later replaces that row
+    in one transaction, so each unit is counted exactly once."""
     left = set(local_facts)
     right = None if cloud_facts is None else set(cloud_facts)
     for value in (rejected, held, repairs):
         if value is not None and (type(value) is not int or value < 0):
             raise ValueError("cloud_comparison_invalid")
     with ledger.db:
-        ledger.artifact_add_tx("cloud_compare_v1", "{}", project_id=project_id,
-            meta={"version": 2, "route": route, "units": 1,
-                  "local_facts": len(left), "cloud_facts": None if right is None else len(right),
-                  "matched": None if right is None else len(left & right),
-                  "validated": None if right is None else len(right), "validated_units": int(right is not None),
-                  "rejected": rejected, "rejected_units": None if rejected is None else int(rejected > 0),
-                  "rejection_observations": int(rejected is not None),
-                  "held": held, "held_observations": int(held is not None),
-                  "repairs": repairs, "repaired_units": None if repairs is None else int(repairs > 0),
-                  "repair_observations": int(repairs is not None)})
+        _cloud_compare_tx(ledger, route=route, project_id=project_id, left=left, right=right,
+                          rejected=rejected, held=held, repairs=repairs, unit=unit, pending=pending)
+
+
+def _cloud_compare_tx(ledger, *, route, project_id, left, right, rejected, held, repairs,
+                      unit, pending):
+    """The comparison write inside the caller's transaction (no commit here)."""
+    if unit is not None and not pending:
+        gone = ledger.db.execute(
+            "DELETE FROM artifacts WHERE kind='cloud_compare_v1' AND project_id=? AND "
+            "json_valid(meta) AND json_extract(meta,'$.unit')=? AND "
+            "json_extract(meta,'$.uncompared')='pending'", (project_id, unit)).rowcount
+        if not gone:       # already measured (or never committed): never count twice
+            return
+    ledger.artifact_add_tx("cloud_compare_v1", "{}", project_id=project_id,
+        meta={"version": 2, "route": route, "units": 1,
+              "local_facts": len(left), "cloud_facts": None if right is None else len(right),
+              "matched": None if right is None else len(left & right),
+              "validated": None if right is None else len(right), "validated_units": int(right is not None),
+              "rejected": rejected, "rejected_units": None if rejected is None else int(rejected > 0),
+              "rejection_observations": int(rejected is not None),
+              "held": held, "held_observations": int(held is not None),
+              "repairs": repairs, "repaired_units": None if repairs is None else int(repairs > 0),
+              "repair_observations": int(repairs is not None),
+              **({"unit": unit} if unit else {}),
+              **({"uncompared": "pending"} if pending else {})})
 
 
 def _cloud_reextract(ledger, row):
@@ -1729,6 +1772,12 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
                 cloud_policy.dryrun_tx(ledger, route="reextract", project_id=r["project_id"],
                     unit_key=str(r["message_id"]), input_chars=len(r["body_text"] or ""),
                     max_tokens=MAX_TOKENS)
+            if isinstance(r, dict) and r.get("_cloud_mode") == "shadow":
+                # the comparison unit commits (pending) with the local result or not at all
+                r["_shadow_unit"] = os.urandom(16).hex()
+                _cloud_compare_tx(ledger, route="reextract", project_id=r["project_id"],
+                    left=set(_comparison_extract(r, loads_dict(content))), right=None,
+                    rejected=None, held=None, repairs=None, unit=r["_shadow_unit"], pending=True)
         project_id = source["project_id"]
     _rerender_cards(ledger, project_id, r["message_id"])
     return not held_prior
@@ -3059,9 +3108,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             if (isinstance(value, dict) and value.get("_quality_status") == "started"
                     and (checkpoint_stopped.is_set() or time.monotonic() >= deadline)):
                 return False
-            if r.get("_cloud_mode") == "on":
-                saved = True
-                return True
+            # cloud chunks persist too, bound to their provider contract
+            # (_chunk_context), so a deferred post resumes instead of re-paying
             if _owns_current_source(ledger, r, leases[index]):
                 if split:
                     r["_splits"][chunk] = value
@@ -3178,7 +3226,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 chunks_out.clear()
                 meta.clear()
         with local_slots:
-            if _owner_call(lambda: bool(circuit_open_s(ledger.db))):
+            # A plain local row was admitted under this run's breaker check; only
+            # a cloud fallback re-reads it (a pure local row must not wait on the
+            # owner thread for every call).
+            if provider is not None and _owner_call(lambda: bool(circuit_open_s(ledger.db))):
                 return _DEFERRED
             return _infer(r, ctx, saved, hints, qc, index, meta, chunks_out)
 
@@ -3202,7 +3253,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            if parallel else
                            (lambda i, v: _checkpoint(index, i, v)))
 
-    def _commit(r, d, ctx, integrity, qc, *, settled=None) -> bool:
+    def _commit(r, d, ctx, integrity, qc, *, settled=None, shadow=None) -> bool:
         """Persist one validated result — the caller holds the lock.
         True when the artifact was written (a carried commit from an
         earlier pass counts it in the pass that finally wrote it)."""
@@ -3257,7 +3308,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             settled["done"] += 1
         done_pids.add(r["project_id"])
         if r.get("_cloud_mode") == "shadow":
-            shadow_tasks.append((r, d, ctx))
+            unit = r.pop("_shadow_unit", None)
+            if unit:   # its pending row committed with the local result (_replace_current)
+                # a carried commit reports into the pass that finally commits it
+                (shadow_tasks if shadow is None else shadow).append((r, d, ctx, unit))
         return True
 
     def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
@@ -3438,7 +3492,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
 
     def _exec_batch(tups):
         _CALL_NOTES.transport = _CALL_NOTES.transport_at = None
-        out = _run_batch_call(tups, target, deadline, vital_policy)
+        with local_slots:   # cloud workers widen the pool, never the local backend
+            out = _run_batch_call(tups, target, deadline, vital_policy)
         return (*out, getattr(_CALL_NOTES, "transport", None),
                 getattr(_CALL_NOTES, "transport_at", None))
 
@@ -3570,7 +3625,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 for i, (r, lease, commit) in enumerate(carry or ()):
                     if held and _owns_current_source(ledger, r, lease):
                         settled = dict.fromkeys(("done", "held_prior", "deferred"), 0)
-                        commit(settled=settled)
+                        commit(settled=settled, shadow=shadow_tasks)
                         # The thunk closes over its original pass's counters.
                         done += settled["done"]
                         held_prior += settled["held_prior"]
@@ -3623,9 +3678,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
                 if id(r) not in keep_claims:
                     _release(ledger, r, lease)
-    for r, local_result, ctx in shadow_tasks:
+    for r, local_result, ctx, unit in shadow_tasks:
         if deadline - time.monotonic() < _MIN_CALL_S:
-            break
+            continue       # its pending row (written with the commit) stays uncompared
         comparison_meta = {}
         cloud_result = None
         provider = None
@@ -3646,12 +3701,15 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         except ValueError:
             cloud_result = None
         valid = isinstance(cloud_result, dict)
-        _cloud_compare(ledger, route="reextract", project_id=r["project_id"],
-            local_facts=_comparison_extract(r, local_result),
-            cloud_facts=_comparison_extract(r, cloud_result) if valid else None,
-            rejected=sum(cloud_result.get(k, 0) for k in ("_items_dropped", "_evidence_dropped")) if valid else None,
-            held=int(bool(extract_quality.protected_lost(local_result, cloud_result, r["body_text"]))) if valid else None,
-            repairs=comparison_meta.get("repairs", 0 if valid else None))
+        with lock(per_write_lock) as held:
+            if not held:     # the audit row is a write: never without the run lock
+                continue
+            _cloud_compare(ledger, route="reextract", project_id=r["project_id"], unit=unit,
+                local_facts=_comparison_extract(r, local_result),
+                cloud_facts=_comparison_extract(r, cloud_result) if valid else None,
+                rejected=sum(cloud_result.get(k, 0) for k in ("_items_dropped", "_evidence_dropped")) if valid else None,
+                held=int(bool(extract_quality.protected_lost(local_result, cloud_result, r["body_text"]))) if valid else None,
+                repairs=comparison_meta.get("repairs", 0 if valid else None))
     left, age_min, age_max, estimate = _backlog_report(
         ledger, len(rows), limit, done + skipped + held_prior)
     now_ts = time.time()
@@ -3869,13 +3927,14 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
     if not carry:
         return
     keep = []
+    shadow = []
     settled = dict.fromkeys(("done", "held_prior", "deferred"), 0)
     with _write_lock(True, wait_s=60 if final else _RESIDENT_WRITE_WAIT_S) as held:
         if held and fence is not None:
             write = write and writer_lock.updater_state() == fence
         for i, (r, lease, commit) in enumerate(carry):
             if held and write and _owns_current_source(ledger, r, lease):
-                commit(settled=settled)
+                commit(settled=settled, shadow=shadow)
                 _release(ledger, r, lease)
             elif final or held or lease <= time.time() + _CARRY_MARGIN_S:
                 if r.get("_cloud_discard") and (not write or not _owns_current_source(ledger, r, lease)):
@@ -3893,9 +3952,25 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
                     # whose owner fence must match the renewed DB lease
                     carry[i] = (r, renewed, commit)
                     keep.append((r, renewed, commit))
+        # no comparison budget outside run_pending: these units keep the pending
+        # row their commit wrote
     carry[:] = keep
     if any(settled.values()):
         print(json.dumps({"carry_settled": settled, "ts": time.time()}), flush=True)
+
+
+_CLOUD_OPERATING_LIMITS = ("daily_request_budget", "monthly_cost_limit_usd", "max_concurrency", "usd_jpy")
+
+
+def _same_but_operating_limits(current, cfg):
+    """A cloud budget, rate or concurrency edit must not discard a context unit
+    that is waiting for its write; the next HTTP attempt re-reads them anyway."""
+    def strip(c):
+        c = dict(c) if isinstance(c, dict) else c
+        if isinstance(c, dict) and isinstance(c.get("cloud_llm"), dict):
+            c["cloud_llm"] = {k: v for k, v in c["cloud_llm"].items() if k not in _CLOUD_OPERATING_LIMITS}
+        return c
+    return strip(current) == strip(cfg)
 
 
 def _background_context_refresh(ledger, initial_state, stop=None):
@@ -3921,7 +3996,7 @@ def _background_context_refresh(ledger, initial_state, stop=None):
         # and an unchanged config all have to be proven.
         if (writer_lock.updater_state() != initial_state or initial_state[0]):
             return False
-        if load_config() != cfg:
+        if not _same_but_operating_limits(load_config(), cfg):
             return False
         free = disk_free_mb(ledger.db)
         return free is not None and free >= disk_floor_mb()

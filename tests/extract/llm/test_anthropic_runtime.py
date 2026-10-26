@@ -84,7 +84,7 @@ def test_parallel_http_hooks_stay_on_ledger_owner(routed, monkeypatch, local_cir
         meta = json.loads(artifact["meta"])
         assert meta["backend"] == "anthropic"
         assert meta["actual_model"] == cloud_policy.cloud_config(cfg)[0]["model"]
-        assert meta["code_contract"] == worker._upgrade_contract()
+        assert meta["prompt"] == worker._cloud_contract(cfg)["prompt"] and "code_contract" not in meta
         assert meta["config_generation"] == cloud_policy.config_generation({"cloud_llm": worker._cloud_settings(cfg)})
     assert not led.artifacts("extract_llm_chunk")
 
@@ -117,7 +117,7 @@ def test_new_post_and_edited_body_are_not_version_reextract(routed):
     assert not worker._cloud_reextract(led, row)
 
 
-@pytest.mark.parametrize("change", ["scope", "stop", "config_generation"])
+@pytest.mark.parametrize("change", ["scope", "stop", "mode", "daily_cap", "monthly_cap"])
 def test_scope_change_while_reserving_never_starts_http(routed, monkeypatch, change):
     led, cfg, calls, reserves, _ = routed
     old(led)
@@ -130,8 +130,12 @@ def test_scope_change_while_reserving_never_starts_http(routed, monkeypatch, cha
                 cfg["cloud_llm"]["exclude_project_ids"] = [1]
             elif change == "stop":
                 monkeypatch.setattr(cloud_policy, "block_reason", lambda *args: "paused")
+            elif change == "daily_cap":      # lowered between reservation and the send
+                cfg["cloud_llm"]["daily_request_budget"] = 0
+            elif change == "monthly_cap":
+                cfg["cloud_llm"]["monthly_cost_limit_usd"] = 0
             else:
-                cfg["cloud_llm"]["max_concurrency"] = 3
+                cfg["cloud_llm"]["mode"] = "shadow"
             return result
         return changed
     monkeypatch.setattr(cloud_policy, "usage_reserver", factory)
@@ -268,7 +272,7 @@ def test_operating_limits_do_not_change_saved_provider_contract(routed, change):
     before = worker._cloud_contract(cfg)
     cfg["cloud_llm"].update(change)
     assert worker._cloud_contract(cfg) == before
-    assert "code_contract" in before and "config_generation" not in before
+    assert "prompt" in before and "code_contract" not in before and "config_generation" not in before
 
 
 def test_cloud_and_shadow_leave_legacy_integrity_notes_untouched(routed):
@@ -628,3 +632,116 @@ def test_pending_write_loss_records_discard_but_lock_wait_does_not(routed, monke
         worker._settle_carry(led, report["carry"], final=True)
         assert not report["carry"] and not led.artifacts("cloud_usage_disposition")
     assert json.loads(led.artifacts(worker.KIND)[0]["meta"])["extract_version"] < worker.EXTRACT_VERSION
+
+
+def test_cloud_contract_follows_rule_versions_not_code_releases(routed, monkeypatch):
+    _, cfg, *_ = routed
+    before = worker._cloud_contract(cfg)
+    monkeypatch.setattr(worker, "_upgrade_contract", lambda: "synthetic-release")
+    assert worker._cloud_contract(cfg) == before
+
+
+def test_operating_limit_change_while_reserving_still_sends_the_paid_unit(routed, monkeypatch):
+    led, cfg, calls, reserves, _ = routed
+    old(led)
+    original = cloud_policy.usage_reserver
+    def factory(*args, **kwargs):
+        reserve = original(*args, **kwargs)
+        def changed(body, timeout):
+            result = reserve(body, timeout)
+            cfg["cloud_llm"].update(max_concurrency=3, usd_jpy=140)
+            return result
+        return changed
+    monkeypatch.setattr(cloud_policy, "usage_reserver", factory)
+    def extract(body, **kwargs):
+        kwargs["provider"]("synthetic", deadline=kwargs["deadline"], max_tokens=100)
+        return {}
+    monkeypatch.setattr(worker, "llm_extract", extract)
+    worker.run_pending(led, budget_s=180)
+    assert len(calls) == 1 and len(reserves) == 1
+
+
+def test_each_new_reservation_reads_the_budget_in_force_now(routed, monkeypatch):
+    led, cfg, *_ = routed
+    seen = []
+    monkeypatch.setattr(cloud_policy, "usage_reserver",
+                        lambda ledger, config, **identity: lambda body, timeout: seen.append(
+                            config["cloud_llm"]["daily_request_budget"]))
+    provider = worker._CloudProvider(led, cfg, route="reextract", project_id=1, unit_key="1",
+        deadline=time.monotonic() + 60, current=lambda: True, dispatch=lambda fn, **kw: fn())
+    provider.reserve({"model": "x", "max_tokens": 1}, 1)
+    cfg["cloud_llm"]["daily_request_budget"] = 0       # lowered while the unit is running
+    provider.reserve({"model": "x", "max_tokens": 1}, 1)
+    assert seen == [None, 0]
+
+
+def test_operating_limits_alone_do_not_discard_a_waiting_context_unit():
+    base = {"extract": {"x": 1}, "cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 2}}
+    edited = {**base, "cloud_llm": {**base["cloud_llm"], "max_concurrency": 4,
+                                    "monthly_cost_limit_usd": 5, "usd_jpy": 150, "daily_request_budget": 9}}
+    assert worker._same_but_operating_limits(edited, base)
+    assert not worker._same_but_operating_limits({**base, "cloud_llm": {**base["cloud_llm"], "project_ids": [2]}}, base)
+    assert not worker._same_but_operating_limits({**base, "extract": {"x": 2}}, base)
+
+
+def test_a_shadow_unit_is_pending_until_measured_and_counted_once(routed):
+    led, *_ = routed
+    def meta():
+        return [json.loads(a["meta"]) for a in led.artifacts("cloud_compare_v1")]
+    worker._cloud_compare(led, route="reextract", project_id=1, local_facts={"a"}, unit="u1", pending=True)
+    assert [(m["uncompared"], m["units"], m["validated_units"]) for m in meta()] == [("pending", 1, 0)]
+    worker._cloud_compare(led, route="reextract", project_id=1, local_facts={"a"}, cloud_facts={"a"}, unit="u1")
+    assert [("uncompared" in m, m["units"], m["validated_units"], m["matched"]) for m in meta()] == [(False, 1, 1, 1)]
+    # a late duplicate (retry, carried pass) never adds a second unit
+    worker._cloud_compare(led, route="reextract", project_id=1, local_facts={"a"}, cloud_facts=set(), unit="u1")
+    assert len(meta()) == 1 and meta()[0]["matched"] == 1
+
+
+def test_shadow_audit_rows_are_never_written_without_the_run_lock(routed, monkeypatch):
+    led, cfg, calls, *_ = routed
+    cfg["cloud_llm"]["mode"] = "shadow"
+    old(led)
+    def committed():
+        return any(json.loads(a["meta"]).get("extract_version") == worker.EXTRACT_VERSION
+                   for a in led.artifacts(worker.KIND))
+    @contextmanager
+    def lock(enabled, wait_s=60):
+        # the result commit gets the lock; the later shadow audit does not
+        yield not committed() or not enabled
+    monkeypatch.setattr(worker, "_write_lock", lock)
+    def extract(body, **kwargs):
+        if kwargs.get("provider"):
+            kwargs["provider"]("synthetic", deadline=kwargs["deadline"], max_tokens=100)
+        return {}
+    monkeypatch.setattr(worker, "llm_extract", extract)
+    report = worker.run_pending(led, budget_s=180, per_write_lock=True)
+    assert report["done"] == 1 and len(calls) == 1
+    # the pending row was written with the commit, under its lock; the measured
+    # result could not be written without the lock, so the unit stays uncompared
+    [row] = [json.loads(a["meta"]) for a in led.artifacts("cloud_compare_v1")]
+    assert row["uncompared"] == "pending" and row["units"] == 1 and row["validated_units"] == 0
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_shadow_pending_row_commits_with_the_local_result_or_not_at_all(routed, monkeypatch, fail):
+    led, cfg, *_ = routed
+    cfg["cloud_llm"]["mode"] = "shadow"
+    old(led)
+    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row.update(_cloud_mode="shadow", content_hash=_hash(led, 1))
+    if fail:
+        def boom(*a, **k):
+            raise RuntimeError("synthetic failure inside the commit transaction")
+        monkeypatch.setattr(worker, "_comparison_extract", boom)
+    before = led.artifacts(worker.KIND)
+    try:
+        worker._replace_current(led, row, json.dumps({"medications": []}))
+    except RuntimeError:
+        assert fail
+    pending = led.artifacts("cloud_compare_v1")
+    current = [a for a in led.artifacts(worker.KIND) if json.loads(a["meta"]).get("extract_version") == worker.EXTRACT_VERSION]
+    if fail:
+        assert not pending and not current and len(led.artifacts(worker.KIND)) == len(before)
+    else:
+        assert len(current) == 1 and len(pending) == 1
+        assert json.loads(pending[0]["meta"])["uncompared"] == "pending" and row["_shadow_unit"]

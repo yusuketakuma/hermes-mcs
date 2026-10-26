@@ -304,15 +304,18 @@ def _complete_context(db, config):
               "published": context.options(config)["publication"]})
 
 
-@pytest.mark.parametrize("change", ["code", "extraction", "karte"])
+@pytest.mark.parametrize("change", ["rule_version", "extraction", "karte"])
 def test_current_context_targets_follow_runtime_signatures_without_message_timestamp_change(world, monkeypatch, change):
     root, path, config = world
     with closing(Ledger(str(path))) as db:
         _complete_context(db, config)
         timestamps = tuple(db.db.execute("SELECT first_seen,updated_seen,posted_at_ts FROM messages WHERE message_id=1").fetchone())
     assert cli.observe(config, root=str(root))["routes"]["patient_context"]["targets"] == 0
-    if change == "code":
+    if change == "rule_version":
+        # a code release alone keeps cloud contexts current; a rule version rebuilds them
         monkeypatch.setattr(extract_llm, "_upgrade_contract", lambda: "f" * 64)
+        assert cli.observe(config, root=str(root))["routes"]["patient_context"]["targets"] == 0
+        monkeypatch.setattr(extract_llm, "EXTRACT_VERSION", extract_llm.EXTRACT_VERSION + 1)
     else:
         with closing(Ledger(str(path))) as db:
             if change == "extraction":

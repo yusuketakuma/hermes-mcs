@@ -121,3 +121,71 @@ def test_request_id_has_only_the_bounded_provider_contract(request_id, expected)
     client.complete("synthetic", deadline=time.monotonic() + 10,
                     after_result=lambda reservation, metadata: observed.append(metadata))
     assert observed[0]["request_id"] == expected
+
+
+def test_only_known_unpriced_usage_metadata_is_accepted():
+    usage = {"input_tokens": 10, "output_tokens": 5, "service_tier": "standard",
+             "inference_geo": "global", "server_tool_use": {"web_search_requests": 0}}
+    client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
+        200, {}, json.dumps(_reply(usage=usage)).encode()))
+    assert client.complete("synthetic", deadline=time.monotonic() + 10)["usage"]["input_tokens"] == 10
+    for extra in ({"service_tier": "priority"}, {"inference_geo": "us"}, {"new_charge_usd": "10"},
+                  {"service_tier": {"tier": "standard"}}, {"inference_geo": ["global"]}, {"service_tier": True},
+                  {"server_tool_use": {"web_search_requests": 1}}, {"unknown_flag": None}):
+        client = a.AnthropicClient("synthetic", post_fn=lambda *args, e=extra: (
+            200, {}, json.dumps(_reply(usage={"input_tokens": 1, "output_tokens": 1, **e})).encode()))
+        with pytest.raises(a.AnthropicError, match="pricing_unverified"):
+            client.complete("synthetic", deadline=time.monotonic() + 10)
+
+
+def test_a_dated_model_id_is_not_assumed_to_share_the_price():
+    client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
+        200, {}, json.dumps(_reply(model=a.MODEL + "-20261001")).encode()))
+    with pytest.raises(a.AnthropicError, match="model_mismatch"):
+        client.complete("synthetic", deadline=time.monotonic() + 10)
+
+
+def test_retry_after_alone_paces_retries(monkeypatch):
+    slept = []
+    monkeypatch.setattr(a.time, "sleep", slept.append)
+    client = a.AnthropicClient("synthetic", post_fn=lambda *args: (429, {"Retry-After": "2"}, b""))
+    with pytest.raises(a.AnthropicError, match="rate_limited"):
+        client.complete("synthetic", deadline=time.monotonic() + 60)
+    assert slept == [2, 2]
+
+
+def test_a_deadline_after_the_reservation_settles_it_as_unsent(monkeypatch):
+    results, now = [], [0.0]
+    monkeypatch.setattr(a.time, "monotonic", lambda: now[0])
+
+    def reserve(*args):
+        now[0] = 20.0          # the DB wait outlived the call's deadline
+        return {"r": 1}
+    client = a.AnthropicClient("synthetic", post_fn=lambda *args: pytest.fail("not sent"))
+    with pytest.raises(a.AnthropicError, match="budget_exceeded"):
+        client.complete("synthetic", deadline=10.0, reserve_fn=reserve,
+                        after_result=lambda r, meta: results.append((r, meta)))
+    assert results == [({"r": 1}, {**results[0][1], "http_class": "not_sent"})]
+
+
+def test_a_validated_answer_arriving_at_the_deadline_is_kept(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(a.time, "monotonic", lambda: now[0])
+
+    def post(*args):
+        now[0] = 11.0          # paid and validated just past the HTTP deadline
+        return 200, {}, json.dumps(_reply()).encode()
+    result = a.AnthropicClient("synthetic", post_fn=post).complete("synthetic", deadline=10.0)
+    assert result["status"] == 200
+
+
+def test_an_unexpected_transport_exception_still_reports_its_result():
+    results = []
+
+    def post(*args):
+        raise ValueError("synthetic worker failure")
+    with pytest.raises(a.AnthropicError, match="transport"):
+        a.AnthropicClient("synthetic", post_fn=post, max_attempts=1).complete(
+            "synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: {"r": 1},
+            after_result=lambda r, meta: results.append(meta))
+    assert results[0]["error_kind"] == "transport" and results[0]["usage"] is None

@@ -25,11 +25,25 @@ class AnthropicError(Exception):
         self.retryable, self.status = retryable, status
 
 
+# Usage metadata known not to change the price at its listed values; any other
+# field or value (a priority tier, a regional inference multiplier, a new
+# counter) may be billed differently and stops the route as pricing_unverified.
+_UNPRICED_USAGE = {"service_tier": {"standard"}, "inference_geo": {"global", "not_available"}}
+
+
+def _unpriced(key, value):
+    if key in _UNPRICED_USAGE:
+        return isinstance(value, str) and value in _UNPRICED_USAGE[key]
+    if key == "server_tool_use":    # tools are never requested: every count must be zero
+        return isinstance(value, dict) and all(type(v) is int and v == 0 for v in value.values())
+    return False
+
+
 def validate_usage(value):
     """Reject unpriced or malformed usage rather than charging zero."""
     allowed = {"input_tokens", "output_tokens", "cache_creation_input_tokens",
                "cache_read_input_tokens", "cache_creation"}
-    if not isinstance(value, dict) or value.keys() - allowed:
+    if not isinstance(value, dict) or not all(_unpriced(k, value[k]) for k in value.keys() - allowed):
         raise AnthropicError("pricing_unverified", "usage_unknown")
     out = {}
     for key in allowed - {"cache_creation"}:
@@ -101,11 +115,14 @@ class AnthropicClient:
                 before_attempt()
             # A rejected second guard deliberately leaves the reservation intact.
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise AnthropicError("budget_exceeded", "deadline", retryable=True)
-            timeout = min(timeout, remaining)
             meta = {"usage": None, "http_class": "transport", "request_id": None,
                     "model": MODEL, "request_fp": payload_hash(body), "error_kind": None}
+            if remaining <= 0:
+                last = AnthropicError("budget_exceeded", "deadline", retryable=True)
+                if after_result:   # nothing was sent: settle the reservation as unsent
+                    after_result(reservation, {**meta, "http_class": "not_sent", "error_kind": last.kind})
+                raise last
+            timeout = min(timeout, remaining)
             result = None
             wait = None
             try:
@@ -145,8 +162,7 @@ class AnthropicClient:
                         raise AnthropicError("protocol_error", "content_invalid")
                 if obj.get("stop_reason") != "end_turn" or not text:
                     raise AnthropicError("contract_error", "incomplete_response")
-                if time.monotonic() >= deadline:
-                    raise AnthropicError("timeout", "deadline", retryable=True)
+                # a validated answer stays usable past the HTTP deadline; the caller's commit guard decides
                 result = {"status": 200, "text": "".join(text), "finish_reason": "stop",
                           "model": MODEL, "usage": meta["usage"]}
             except OSError as error:
@@ -154,6 +170,8 @@ class AnthropicClient:
                                       type(error).__name__, retryable=True)
             except AnthropicError as error:
                 last = error
+            except Exception as error:   # never leave a reserved attempt without its result row
+                last = AnthropicError("transport", type(error).__name__)
             if result is None:
                 meta["error_kind"] = last.kind
             if after_result:
@@ -163,11 +181,9 @@ class AnthropicClient:
             if not last.retryable:
                 raise last
             if attempt + 1 < self.max_attempts:
-                if wait is not None:
-                    delay = min(wait, max(0.0, deadline - time.monotonic()))
-                    if delay:
-                        time.sleep(delay)
-                delay = min(2**attempt + random.uniform(0, 0.5), max(0.0, deadline - time.monotonic()))
+                # Retry-After alone when given (as Jev), else bounded exponential backoff
+                delay = min(wait if wait is not None else 2**attempt + random.uniform(0, 0.5),
+                            max(0.0, deadline - time.monotonic()))
                 if delay:
                     time.sleep(delay)
         raise last

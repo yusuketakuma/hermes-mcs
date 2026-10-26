@@ -117,6 +117,13 @@ def config_generation(cfg):
     return payload_hash(_cfg(cfg))
 
 
+def scope_generation(cfg):
+    """The settings that decide whether a unit may use the cloud at all; caps,
+    rate and currency changes must not discard an in-flight paid result."""
+    c = _cfg(cfg)
+    return payload_hash({k: c[k] for k in ("mode", "routes", "project_ids", "exclude_project_ids", "model")})
+
+
 def api_key(root=None):
     """Read only this MCS installation's dotenv, never process or Hermes keys."""
     return private_env_value("MCS_ANTHROPIC_API_KEY", root)
@@ -156,6 +163,13 @@ def usage_cost(usage):
             + cache.get("ephemeral_1h_input_tokens", 0) * input_price * Decimal(PRICES["cache_write_1h_multiplier"])
             + u["cache_read_input_tokens"] * input_price * Decimal(PRICES["cache_read_multiplier"]))
     return cost / Decimal(1000000)
+
+
+def _unbilled(http_class):
+    """Only an attempt proven never sent settles at zero. Every HTTP outcome keeps
+    the reserved maximum: the published error list does not state which statuses
+    are unbilled."""
+    return http_class == "not_sent"
 
 
 def _periods(now):
@@ -224,14 +238,36 @@ def _matching_rows(ledger, kind, reservation_id):
     return _matching_rows_many(ledger, kind, [reservation_id])
 
 
-def usage_report(ledger, *, now=None):
-    """Aggregate JST attempts; ambiguous results retain the full reserved amount."""
+def _settled(m, maximum, matching):
+    """(cost, settled?) of one reservation's single bound result; raises when
+    the result is duplicated, unbound or its usage/cost disagrees."""
+    if len(matching) != 1:
+        raise ValueError
+    r, row = matching[0]
+    if (_binding(m) != _binding(r) or row["project_id"] != m["project_id"]
+            or row["message_id"] != m["message_id"] or row["model"] != MODEL):
+        raise ValueError
+    reported = _decimal(r.get("cost_usd"))
+    if r.get("usage") is None:
+        if reported != (Decimal(0) if _unbilled(r.get("http_class")) else maximum):
+            raise ValueError
+        return reported, _unbilled(r.get("http_class"))
+    if (reported != usage_cost(r["usage"]) or reported > maximum
+            or r["usage"].get("output_tokens", 0) > m["max_tokens"]):
+        raise ValueError
+    return reported, True
+
+
+def usage_report(ledger, *, now=None, period="month"):
+    """Aggregate JST attempts; ambiguous results retain the full reserved amount.
+    ``period="day"`` validates and counts only today's rows (any newly written
+    result is today's); its cost fields then cover today only."""
     now = time.time() if now is None else now
     day, month = _periods(now)
     rows = list(ledger.db.execute(
         "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
         "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') "
-        "AND created_at>=? ORDER BY artifact_id", (month,)))
+        "AND created_at>=? ORDER BY artifact_id", (day if period == "day" else month,)))
     reserves, results = {}, {}
     daily, invalid = 0, False
     total, settled, unknown = Decimal(0), Decimal(0), 0
@@ -250,27 +286,11 @@ def usage_report(ledger, *, now=None):
                     raise AnthropicError("pricing_unverified", "result_invalid")
                 results.setdefault(rid, []).append((m, row))
         for rid, (m, maximum) in reserves.items():
-            cost = maximum
-            valid_usage = False
-            matching = results.get(rid, [])
-            if matching:
+            cost, valid_usage = maximum, False
+            if results.get(rid):
                 try:
-                    if len(matching) != 1:
-                        raise ValueError
-                    r, row = matching[0]
-                    if (_binding(m) != _binding(r) or row["project_id"] != m["project_id"]
-                            or row["message_id"] != m["message_id"] or row["model"] != MODEL):
-                        raise ValueError
-                    reported = _decimal(r.get("cost_usd"))
-                    if r.get("usage") is None:
-                        if reported != maximum:
-                            raise ValueError
-                    elif (reported != usage_cost(r["usage"]) or reported > maximum
-                          or r["usage"].get("output_tokens", 0) > m["max_tokens"]):
-                        raise ValueError
-                    else:
-                        cost, valid_usage = reported, True
-                except (AnthropicError, ValueError, InvalidOperation):
+                    cost, valid_usage = _settled(m, maximum, results[rid])
+                except (AnthropicError, ValueError, InvalidOperation, TypeError):
                     invalid = True
             total += cost
             if valid_usage:
@@ -283,11 +303,15 @@ def usage_report(ledger, *, now=None):
         orphan_ids = results.keys() - reserves.keys()
         for row in _matching_rows_many(ledger, KINDS[0], orphan_ids, now=now):
             meta = _loads(row["meta"])
-            previous.setdefault(meta.get("reservation_id"), []).append(meta)
+            previous.setdefault(meta.get("reservation_id"), []).append((meta, row))
         for rid in orphan_ids:
-            matching, prior = results[rid], previous.get(rid, [])
-            if (len(matching) != 1 or len(prior) != 1
-                    or _binding(prior[0]) != _binding(matching[0][0])):
+            prior = previous.get(rid, [])
+            try:
+                if len(prior) != 1:
+                    raise ValueError
+                # validated like an in-period result; its cost stays in its own period
+                _settled(prior[0][0], _reserve_valid(*prior[0]), results[rid])
+            except (AnthropicError, ValueError, InvalidOperation, TypeError):
                 invalid = True
         return {"daily_requests": daily, "monthly_cost_usd": str(total),
                 "settled_cost_usd": str(settled), "max_reserved_cost_usd": str(total - settled),
@@ -327,12 +351,16 @@ def global_block_reason(ledger):
 def budget_block_reason(ledger, cfg, *, max_tokens=1600):
     """Read the exact current JST reservation totals without spending or changing state."""
     c = _cfg(cfg)
-    report = usage_report(ledger)
-    if report["pricing_unverified"] or not pricing_valid():
+    if not pricing_valid():
+        return "pricing_unverified"
+    limit = c["monthly_cost_limit_usd"]
+    # Without a monthly cap only today's rows need decoding under the write lock:
+    # every newly written result row is today's, so corruption is still caught.
+    report = usage_report(ledger, period="month" if limit is not None else "day")
+    if report["pricing_unverified"]:
         return "pricing_unverified"
     if c["daily_request_budget"] is not None and report["daily_requests"] >= c["daily_request_budget"]:
         return "daily_cap"
-    limit = c["monthly_cost_limit_usd"]
     if limit is not None and _decimal(report["monthly_cost_usd"]) + max_cost(max_tokens) > _decimal(limit):
         return "monthly_cap"
     return None
@@ -407,7 +435,8 @@ def record_result(ledger, reservation, metadata):
             raise AnthropicError("pricing_unverified", "result_mismatch")
         usage = validate_usage(metadata["usage"]) if metadata.get("usage") is not None else None
         maximum = _decimal(reservation["max_cost_usd"])
-        cost = usage_cost(usage) if usage is not None else maximum
+        cost = (usage_cost(usage) if usage is not None
+                else Decimal(0) if _unbilled(metadata.get("http_class")) else maximum)
         if cost > maximum or (usage is not None and usage["output_tokens"] > reservation["max_tokens"]):
             raise AnthropicError("pricing_unverified", "cost_exceeds_reserve")
         result = {k: reservation.get(k) for k in ("reservation_id", "request_fp", "route", "project_id",
