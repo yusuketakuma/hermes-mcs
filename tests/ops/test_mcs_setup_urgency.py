@@ -29,15 +29,18 @@ SLACK_THREADS = {"interactive": "slack", "card_thread": True,
                            "team_id": "T1234567890", "channel_id": "C1234567890"}}
 
 
-def test_mode_on_needs_card_threads_on_slack_or_discord():
+def test_mode_on_needs_card_threads_on_slack_or_discord_but_not_lineworks():
     policy = {"mode": "on", "room_cooldown_min": 60}
     assert mcs_setup.validate_config(
         {**BASE, "urgency_escalation": policy, "notify": SLACK_THREADS}) == ([], [])
+    # LINE WORKS posts the notice to the talk room, so no card thread is needed
+    lineworks = {"interactive": "lineworks",
+                 "lineworks": {"profile": "default", "application_id": "A1234567890",
+                               "team_id": "T1234567890", "channel_id": "C1234567890"}}
+    errors, _ = mcs_setup.validate_config({**BASE, "urgency_escalation": policy, "notify": lineworks})
+    assert not any(e.startswith('urgency_escalation.mode "on": 再確認通知には') for e in errors)
     for notify in ({**SLACK_THREADS, "card_thread": False},
-                   {**SLACK_THREADS, "interactive": "off"},
-                   {"interactive": "lineworks", "card_thread": True,
-                    "lineworks": {"profile": "default", "application_id": "A1234567890",
-                                  "team_id": "T1234567890", "channel_id": "C1234567890"}}):
+                   {**SLACK_THREADS, "interactive": "off"}):
         errors, _ = mcs_setup.validate_config(
             {**BASE, "urgency_escalation": policy, "notify": notify})
         assert any(e.startswith('urgency_escalation.mode "on": 再確認通知には') for e in errors), notify

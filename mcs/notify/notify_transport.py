@@ -393,7 +393,9 @@ def _begin_check(db, req, cfg) -> str | None:
                 spec = json.loads(render["spec_json"])
             except (ValueError, TypeError):
                 return "urgent_spec_invalid"
-            if (target is None or spec["parts"].get("thread_notice") is not True
+            # thread transports seal thread_notice; LINE WORKS posts to the room
+            in_thread = cards.presenter(render["transport"]).SOURCE_THREAD
+            if (target is None or (spec["parts"].get("thread_notice") is True) != in_thread
                     or any(spec["delivery"].get(key) != value for key, value in target.items())):
                 return "urgent_thread_changed"
     return None

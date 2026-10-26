@@ -95,7 +95,8 @@ class Actions:
             origin = {key: self.settings[key] for key in SCOPE_KEYS}
             origin["message_id"] = context["message_id"]
             kind = context["action"]
-            if kind == "mytasks":
+            name = self._own_name(user)
+            if kind == "mytasks" and not name:
                 session = {"action": kind, "actor": actor, "user": user,
                            "token": token, "origin": origin, "fields": {}, "index": 0,
                            "definitions": [{"id": "name", "label": "担当者名を入力してください。",
@@ -104,7 +105,7 @@ class Actions:
                 await self._prompt(user, session)
                 return
             env = envelopes.notification(token, actor, origin,
-                                         projects.view_inputs(self.settings, kind, ""))
+                                         projects.view_inputs(self.settings, kind, name))
             # A retry of the same token/actor reuses the existing followup's request id
             # and click time; a record from before clicked_at existed sends none.
             previous = self.reg.followup(env["command_id"])
@@ -129,6 +130,12 @@ class Actions:
         if match and source.get("channelId") is None:
             await self._confirm(match[1], bool(match[2]), user, actor)
 
+    def _own_name(self, user) -> str:
+        """The clicker's display name from notify.lineworks.user_names
+        (validated non-blank, ≤40 chars) — LINE WORKS's stand-in for the
+        Slack users.info / Discord display name; "" when unset."""
+        return (self.settings.get("user_names") or {}).get(user, "").strip()
+
     async def _more(self, user, context):
         """「操作を選ぶ…」: the card's menu operations, privately in the 1:1 talk."""
         actions = [{"type": "message", "label": item["label"], "postback": "mcs:a:" + item["token"]}
@@ -151,6 +158,7 @@ class Actions:
             return
         got = await asyncio.to_thread(
             summary.answer, snapshot, rest[:300],
+            name=self._own_name(user),
             allowed=projects.summary_scope(self.settings), dialect="plain")
         for chunk in text.split_body(got.get("text") or got["error"]):
             await self._say(user, chunk)
@@ -222,7 +230,7 @@ class Actions:
         if session["action"] in (*forms.VIEW_FORMS, "mytasks"):
             if session["action"] == "digest":
                 inputs = {**(projects.view_inputs(self.settings, "digest", "") or {}),
-                          **forms.digest_inputs(session["fields"])}
+                          **forms.digest_inputs(session["fields"], self._own_name(user))}
             elif session["action"] in forms.QUERY_FORMS:
                 inputs = {"query": forms.search_query(session["fields"])}
                 if not inputs["query"]:
@@ -340,7 +348,7 @@ class Actions:
                 await self._say(user, text.STAMP_FORM_PENDING)
                 return
             session = {**rec, "params": result.get("params") or {}, "fields": {}, "index": 0,
-                       "definitions": forms.modal_fields(rec["action"], form, ""),
+                       "definitions": forms.modal_fields(rec["action"], form, self._own_name(user)),
                        **({"form": form} if rec["action"] == "stamp" else {})}
             self.reg.put_modal("lw-form-" + envelopes.actor_hash(rec["actor"]), session)
             await self._prompt(user, session)

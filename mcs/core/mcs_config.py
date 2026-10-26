@@ -363,14 +363,15 @@ def validate_config(cfg: dict) -> tuple[list[str], list[str]]:
         errors.append('signals.notify: アラートは通知カードで届くため、notify.interactiveを'
                       '"slack"、"discord"、"lineworks"のいずれかに設定してください')
     esc = cfg.get("urgency_escalation")
-    if isinstance(esc, dict) and esc.get("mode") == "on" and (
+    if isinstance(esc, dict) and esc.get("mode") == "on" \
+            and ntf.get("interactive") != "lineworks" and (
             ntf.get("card_thread") is not True
             or ntf.get("interactive") not in ("slack", "discord")):
-        # the re-check notice posts only in the source thread, which
-        # needs card threads on Slack/Discord; anywhere else it waits
-        # out its hold and is dropped
-        errors.append('urgency_escalation.mode "on": 再確認通知にはnotify.card_threadを'
-                      'true、notify.interactiveを"slack"か"discord"に設定してください')
+        # Slack/Discord post the re-check notice only in the source
+        # thread, which needs card threads; LINE WORKS posts it in the
+        # room itself; anywhere else it waits out its hold and is dropped
+        errors.append('urgency_escalation.mode "on": 再確認通知にはnotify.interactiveを"lineworks"にするか、'
+                      'notify.card_threadをtrue、notify.interactiveを"slack"か"discord"に設定してください')
     if isinstance(sig, dict):
         for key in ("self_organizations", "self_professions",
                     "request_targets", "med_exclude_names"):
