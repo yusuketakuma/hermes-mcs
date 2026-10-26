@@ -29,9 +29,32 @@ def _reserve(db, cfg=None, unit="u", **kw):
                             unit_key=unit, **kw)({"model": MODEL, "max_tokens": 100}, 2)
 
 
+def _max():
+    """The maximum one _reserve request may cost: its own size (no messages) plus the margin."""
+    return c.max_cost(100, input_bound=c.input_bound({"model": MODEL, "max_tokens": 100}))
+
+
 def _result(r, **kw):
     return {"model": MODEL, "request_fp": r["request_fp"], "usage": {"input_tokens": 10, "output_tokens": 2},
             "http_class": "http_200", "request_id": "req_synthetic", "error_kind": None, **kw}
+
+
+def test_reservation_covers_the_costliest_accepted_usage_for_the_request():
+    body = {"model": MODEL, "max_tokens": 100,
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "a" * 120000, "cache_control": {"type": "ephemeral"}}]}]}
+    bound = c.input_bound(body)
+    assert bound > c.LONG_INPUT_THRESHOLD   # long-context prices, where the write premium bites
+    worst = [{"input_tokens": 0, "cache_creation_input_tokens": bound, "output_tokens": 100,
+              "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": bound}},
+             {"input_tokens": 0, "cache_creation_input_tokens": bound, "output_tokens": 100}]  # unknown TTL
+    assert all(c.usage_cost(u) <= c.max_cost(100, input_bound=bound) for u in worst)
+
+
+def test_null_cloud_block_is_a_config_error_not_an_omission():
+    settings, errors = c.cloud_config({"cloud_llm": None}, key_present=True)
+    assert errors == ["config: cloud_llm_not_object"] and settings["mode"] == "off"
+    assert c.cloud_config({}, key_present=True)[0]["mode"] == "on"
 
 
 @pytest.mark.parametrize("scope,allowed", [(None,True), ([],False), ([1],True), ([2],False)])
@@ -71,7 +94,7 @@ def test_unknown_result_never_refunds_and_retry_is_another_request(tmp_path, now
         _reserve(db, unit="retry")
         report = c.usage_report(db)
         assert report["daily_requests"] == 2 and report["unresolved_requests"] == 2
-        assert Decimal(report["monthly_cost_usd"]) == 2 * c.max_cost(100)
+        assert Decimal(report["monthly_cost_usd"]) == 2 * _max()
 
 
 def test_usage_settlement_and_duplicate_delivery_are_exact(tmp_path, now):
@@ -93,7 +116,7 @@ def test_conflicting_result_restores_max_and_requires_explicit_resume(tmp_path, 
             c.record_result(db, r, _result(r, usage={"input_tokens": 11, "output_tokens": 2}))
         report = c.usage_report(db)
         assert report["pricing_unverified"]
-        assert Decimal(report["monthly_cost_usd"]) == c.max_cost(100)
+        assert Decimal(report["monthly_cost_usd"]) == _max()
         assert c.block_reason(db, _cfg(), "reextract", 1) == "pricing_unverified"
         # Later success must not reset a terminal circuit.
         c._circuit_result(db, None)
@@ -157,7 +180,7 @@ def test_discard_receipt_rolls_back_with_owner_transaction(tmp_path, now):
 
 
 def test_maximum_budget_boundary_and_no_refund(tmp_path, now):
-    limit = float(c.max_cost(100))
+    limit = float(_max())
     with closing(Ledger(str(tmp_path / "l.db"))) as db:
         r = _reserve(db, _cfg(monthly_cost_limit_usd=limit))
         with pytest.raises(AnthropicError, match="budget_exceeded"):
@@ -178,7 +201,7 @@ def test_daily_zero_and_null_have_distinct_meaning(tmp_path, now):
 def test_simultaneous_connections_cannot_overspend(tmp_path, now):
     path = str(tmp_path / "l.db")
     Ledger(path).close()
-    cfg = _cfg(monthly_cost_limit_usd=float(c.max_cost(100)))
+    cfg = _cfg(monthly_cost_limit_usd=float(_max()))
 
     def attempt(i):
         with closing(Ledger(path)) as db:
@@ -199,7 +222,7 @@ def test_jst_day_changes_without_month_refund(tmp_path, now, monkeypatch):
         next_day = datetime(2026, 10, 27, tzinfo=c.JST).timestamp()
         report = c.usage_report(db, now=next_day)
         assert report["daily_requests"] == 0
-        assert Decimal(report["monthly_cost_usd"]) == c.max_cost(100)
+        assert Decimal(report["monthly_cost_usd"]) == _max()
 
 
 def test_cache_prices_and_long_threshold():
@@ -273,7 +296,7 @@ def test_corrupt_usage_result_never_reduces_reserve(tmp_path, now):
         db.artifact_add("cloud_usage_result", "{}", project_id=1, model=MODEL, meta=metadata)
         report = c.usage_report(db)
         assert report["pricing_unverified"]
-        assert Decimal(report["monthly_cost_usd"]) == c.max_cost(100)
+        assert Decimal(report["monthly_cost_usd"]) == _max()
         with pytest.raises(AnthropicError, match="pricing_unverified"):
             _reserve(db, unit="blocked")
 
@@ -283,7 +306,7 @@ def test_successful_http_without_usage_stops_and_retains_maximum(tmp_path, now):
         r = _reserve(db)
         with pytest.raises(AnthropicError, match="pricing_unverified"):
             c.record_result(db, r, _result(r, usage=None))
-        assert Decimal(c.usage_report(db)["monthly_cost_usd"]) == c.max_cost(100)
+        assert Decimal(c.usage_report(db)["monthly_cost_usd"]) == _max()
         assert c.block_reason(db, _cfg(), "reextract", 1) == "pricing_unverified"
 
 
@@ -316,7 +339,7 @@ def test_unrequested_output_tokens_are_unpriced(tmp_path, now):
         r = _reserve(db)
         with pytest.raises(AnthropicError, match="pricing_unverified"):
             c.record_result(db, r, _result(r, usage={"input_tokens": 1, "output_tokens": 101}))
-        assert Decimal(c.usage_report(db)["monthly_cost_usd"]) == c.max_cost(100)
+        assert Decimal(c.usage_report(db)["monthly_cost_usd"]) == _max()
 
 
 def test_broken_reservation_amount_never_creates_budget(tmp_path, now):
@@ -326,6 +349,20 @@ def test_broken_reservation_amount_never_creates_budget(tmp_path, now):
         db.db.execute("UPDATE artifacts SET meta=? WHERE kind='cloud_usage_reserve'", (json.dumps(changed),))
         db.db.commit()
         assert c.usage_report(db)["pricing_unverified"]
+        # the reservation gate's incremental tally notices the edited row too
+        with pytest.raises(AnthropicError, match="pricing_unverified"):
+            _reserve(db, unit="after_edit")
+
+
+def test_a_reservation_stored_before_input_bound_keeps_its_plain_input_amount(tmp_path, now):
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        r = _reserve(db)
+        legacy = {k: v for k, v in r.items() if k != "input_bound"}
+        legacy["max_cost_usd"] = str(c._reservation_cost(c.INPUT_RESERVATION_BOUND, 100, legacy=True))
+        db.db.execute("UPDATE artifacts SET meta=? WHERE kind='cloud_usage_reserve'", (json.dumps(legacy),))
+        db.db.commit()
+        assert not c.usage_report(db)["pricing_unverified"]
+        assert Decimal(c.usage_report(db)["monthly_cost_usd"]) == Decimal(legacy["max_cost_usd"])
 
 
 @pytest.mark.parametrize("disposition", ["discarded_scope", "discarded_workday"])
@@ -457,7 +494,7 @@ def test_only_a_proven_unsent_attempt_settles_at_zero(tmp_path, now, http_class,
         c.record_result(db, r, _result(r, usage=None, http_class=http_class, error_kind="rate_limited"))
         report = c.usage_report(db)
         assert not report["pricing_unverified"]
-        assert Decimal(report["monthly_cost_usd"]) == (c.max_cost(100) if billed else 0)
+        assert Decimal(report["monthly_cost_usd"]) == (_max() if billed else 0)
         assert report["unresolved_requests"] == int(billed)
 
 
@@ -474,20 +511,26 @@ def test_todays_result_of_yesterdays_reservation_is_validated_in_full(tmp_path, 
         assert c.usage_report(db, period="day", now=now + 86400)["pricing_unverified"]
 
 
-def test_uncapped_reservations_decode_only_today_but_still_catch_corruption(tmp_path, now, monkeypatch):
+def test_reservation_gate_decodes_each_usage_row_once_but_still_catches_corruption(tmp_path, now, monkeypatch):
     with closing(Ledger(str(tmp_path / "l.db"))) as db:
         r = _reserve(db)
         c.record_result(db, r, _result(r))
-        periods = []
-        real = c.usage_report
-        monkeypatch.setattr(c, "usage_report", lambda *a, **kw: periods.append(kw.get("period")) or real(*a, **kw))
-        _reserve(db, unit="uncapped")
+        original = c._loads
+        decoded = []
+        monkeypatch.setattr(c, "_loads", lambda raw: decoded.append(1) or original(raw))
+        _reserve(db, unit="second")
+        seen = len(decoded)
+        assert seen >= 2
         _reserve(db, _cfg(monthly_cost_limit_usd=10), unit="capped")
-        assert periods == ["day", "month"]
+        # only the rows written since the previous gate are decoded again
+        assert len(decoded) - seen <= 2
+        assert c.usage_report(db)["daily_requests"] == 3
         db.artifact_add("cloud_usage_result", "{}", project_id=1, model=MODEL,
                         meta={**r, "usage": {"input_tokens": -1, "output_tokens": 2}, "cost_usd": "0"})
         with pytest.raises(AnthropicError, match="pricing_unverified"):
             _reserve(db, unit="after_corruption")
+        with pytest.raises(AnthropicError, match="pricing_unverified"):
+            _reserve(db, unit="still_blocked")
 
 
 def test_scope_generation_ignores_caps_rate_and_currency():
@@ -499,7 +542,7 @@ def test_scope_generation_ignores_caps_rate_and_currency():
 
 
 def test_daily_cost_cap_stops_reservations_once_reached(tmp_path, now):
-    one = float(c.max_cost(100))
+    one = float(_max())
     with closing(Ledger(str(tmp_path / "l.db"))) as db:
         _reserve(db, _cfg(daily_cost_limit_usd=one))
         with pytest.raises(AnthropicError, match="budget_exceeded"):

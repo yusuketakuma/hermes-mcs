@@ -34,12 +34,8 @@ def _snapshot():
     return raw, (_identity(info), hashlib.sha256(raw).digest())
 
 
-def _reject_constant(_value):
-    raise ValueError("config_nonfinite")
-
-
 def _parse(raw):
-    cfg = json.loads(raw.decode("utf-8"), parse_constant=_reject_constant)
+    cfg = mcs_util.parse_config(raw)
     if not isinstance(cfg, dict):
         raise ValueError("config_unreadable")
     return cfg
@@ -74,11 +70,11 @@ def _edit_lock():
         os.close(fd)
 
 
-def apply(changes: dict, prefix: str) -> tuple[dict | None, list[str]]:
+def apply(changes: dict) -> tuple[dict | None, list[str]]:
     """Validate the whole edited config and atomically save against its locked base.
 
-    ``prefix`` is retained for caller compatibility; every known schema error
-    blocks publication, including errors outside the edited section.
+    Every known schema error blocks publication, including errors outside
+    the edited section.
     """
     from mcs_config import validate_config
     with _edit_lock():
@@ -136,7 +132,7 @@ def settings_command(args) -> int:
         return 1
     try:
         if changes:
-            _, errors = apply(changes, "extract.prefilter|local_llm")
+            _, errors = apply(changes)
             if errors:
                 print("設定に誤りがあるため保存していません。mcs_setup.py check で確認してください")
                 return 1
@@ -148,8 +144,11 @@ def settings_command(args) -> int:
     except ConfigConflict:
         print("設定: ほかの設定保存と競合したため変更していません。設定を再確認して再試行してください")
         return 1
+    except FileNotFoundError:
+        print("設定: 設定ファイルがないため変更していません（先に mcs_setup.py init で設定してください）")
+        return 1
     except (OSError, ValueError, RecursionError):
-        print("設定: 設定ファイルを読み取れないため変更していません（先に mcs_setup.py init で設定してください）")
+        print("設定: 設定ファイルを読み取れないため変更していません。mcs_setup.py check で確認してください")
         return 1
     import llm_availability
     import local_llm

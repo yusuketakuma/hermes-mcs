@@ -161,9 +161,9 @@ B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場�
 | MCS アカウント | ログイン ID とパスワード（自動再ログイン `auto_login` で使用） |
 | TYPESAFE_API_KEY | Jev用。MCSの `.env`（0600）に登録しmode未指定ならassistで自動使用 |
 | MCS_ANTHROPIC_API_KEY | Anthropic用。MCSの `.env`（0600）に登録しmode未指定なら患者文脈更新・旧版投稿の再抽出に自動使用 |
+| 通知先アプリ | Slack app・Discord botは両形態で作成・権限設定（付録A/B）。Path Bでは[独立モード](STANDALONE.md#slackとdiscordの接続準備)へ認証情報を登録する。LINE WORKS Botは両形態で[独立接続](LINEWORKS.md)を設定 |
 
 Jev・Anthropicには患者名を含み得る本文・文脈を匿名化せず送ります。キー登録前に[対象・予算・保持条件](ANTHROPIC.md)を確認してください。明示したOFFと低い予算は維持します。
-| 通知先アプリ | Slack app・Discord botは両形態で作成・権限設定（付録A/B）。Path Bでは[独立モード](STANDALONE.md#slackとdiscordの接続準備)へ認証情報を登録する。LINE WORKS Botは両形態で[独立接続](LINEWORKS.md)を設定 |
 
 導入時の取得物と運用中の通信は別です。基本ツールはHomebrew、Python依存はPyPI、Hermes連携本体はGitHub、モデルはHugging Faceから必要に応じて取得します。モデル・Chrome・通知SDKはこのリポジトリへ同梱していません。`--no-llm`はモデル取得とAI常駐の設定を省略しますが、AIの処理が利用可能になったことを意味しません。
 
@@ -597,7 +597,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | `semantic.mode` | choice | キーありなら`assist`、なしなら`off` | `off`以外は本文を外部Jev APIへ送信。明示OFFを維持。`shadow`=記録のみ、`assist`=既存の支援経路、`enforce`=評価・承認を満たした判定への使用 |
 | `semantic.project_ids` | list[int] / null | 自動有効化で対象も省略なら全対象 | 対象プロジェクトID。手動でmodeを有効にする場合は明示必須。`null`=全対象、`[]`=対象なし |
 | `semantic.extract_qc` | choice | `off` | `annotate`=抽出結果への Jev 監査注記 |
-| `semantic.daily_request_budget` | int | 自動modeは500、明示modeは0 | 日本時間の1日あたりHTTP要求数。再試行も加算。0は停止、500超でも実効上限500 |
+| `semantic.daily_request_budget` | int | 自動modeは10000、明示modeは0 | 日本時間の1日あたりHTTP要求数。再試行も加算。0は停止、10000超でも実効上限10000 |
 | `semantic.job_budget_seconds` | num | 既定 | 意味解析の1ジョブの時間予算・秒（5〜1260）。バックログでは1220以上で、通信後に実行ロックを取り直す余裕540秒を全量確保 |
 | `update.mode` | choice | `off` | `off`/`notify`/`auto` — 自己更新ポリシー |
 | `update.auto_delay_h` | num | — | auto 時の適用遅延（0=検出次第即適用） |

@@ -41,6 +41,21 @@ def test_a_prefiltered_post_is_not_assessed_by_jev(tmp_path):
         db.close()
 
 
+def test_prefilter_lookup_survives_an_unparseable_extract_meta_row(tmp_path):
+    db = _seeded(tmp_path)
+    try:
+        for mid in (1, 2):
+            db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
+                          "VALUES('extract_llm',1,?,'{}','{broken',?)", (mid, time.time()))
+        db.db.commit()
+        _prefilter(db, 1)
+        db.db.execute("ANALYZE")  # the plan that read the poison row first needed statistics
+        assert semantic_drain._prefiltered(db, 1)
+        assert not semantic_drain._prefiltered(db, 2)
+    finally:
+        db.close()
+
+
 def test_a_changed_body_is_assessed_again(tmp_path):
     db = _seeded(tmp_path)
     try:

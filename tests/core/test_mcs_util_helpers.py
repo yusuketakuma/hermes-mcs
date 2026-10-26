@@ -30,6 +30,15 @@ def test_reject_constant_rejects_nonfinite(raw):
         json.loads(raw, parse_constant=util.reject_constant)
 
 
+@pytest.mark.parametrize("raw", ['{"a": 1, "a": 2}', '{"x": NaN}'])
+def test_load_config_treats_duplicate_key_and_nan_as_malformed(tmp_path, raw):
+    with pytest.raises(ValueError):
+        util.parse_config(raw.encode("utf-8"))
+    path = tmp_path / "config.json"
+    path.write_text(raw)
+    assert util.load_config(str(path)) == {}
+
+
 def test_text_sha256_matches_hashlib():
     text = "合成テキスト sample"
     assert util.text_sha256(text) == hashlib.sha256(text.encode("utf-8")).hexdigest()

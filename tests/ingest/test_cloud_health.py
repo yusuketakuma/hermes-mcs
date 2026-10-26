@@ -12,6 +12,7 @@ from anthropic_client import AnthropicError
 from common_testkit import ledger_fixture
 
 db = ledger_fixture(name="db")
+CFG = {"cloud_llm": {}}   # a readable config without a cloud block: on with a key
 
 
 @pytest.mark.parametrize("kind", ["auth_error", "payment_required", "pricing_unverified"])
@@ -20,12 +21,13 @@ def test_cloud_stop_is_visible_and_human_reset_clears_it(db, monkeypatch, kind):
     monkeypatch.setattr(cloud_policy, "pricing_valid", lambda now=None: True)
     semantic_runtime.record_circuit_result(db, AnthropicError(kind), kind="cloud_circuit")
     reason = "cloud_llm_" + kind
-    assert health_report.backlog_stalls(db.db, {}, time.time()) == [reason]
+    assert health_report.backlog_stalls(db.db, CFG, time.time()) == [reason]
     assert all(health_watch._REASON_JA[reason])
     semantic_runtime.record_circuit_result(db, None, kind="cloud_circuit")
-    assert health_report.cloud_stop_reason(db.db, {}) == kind
+    assert health_report.cloud_stop_reason(db.db, CFG) == kind
+    assert health_report.cloud_stop_reason(db.db, {}) is None   # unreadable config: the route is off
     cloud_policy.resume(db)
-    assert health_report.cloud_stop_reason(db.db, {}) is None
+    assert health_report.cloud_stop_reason(db.db, CFG) is None
 
 
 def test_disabled_scope_and_intentional_pause_do_not_raise_alarm(db, monkeypatch):
@@ -47,9 +49,9 @@ def test_repeated_failure_is_bounded_and_error_text_never_enters_reason(db, monk
     for _ in range(3):
         semantic_runtime.record_circuit_result(db, AnthropicError("timeout", "synthetic-private-detail", retryable=True),
                                               kind="cloud_circuit")
-    assert health_report.cloud_stop_reason(db.db, {}) == "circuit_open"
+    assert health_report.cloud_stop_reason(db.db, CFG) == "circuit_open"
     db.artifact_add("cloud_circuit", json.dumps({"failure_class": "synthetic-private-detail"}))
-    assert health_report.cloud_stop_reason(db.db, {}) == "pricing_unverified"
+    assert health_report.cloud_stop_reason(db.db, CFG) == "pricing_unverified"
 
 
 @pytest.mark.parametrize("mode", ["on", "shadow"])

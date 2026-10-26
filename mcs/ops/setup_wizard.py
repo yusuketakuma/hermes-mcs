@@ -201,7 +201,7 @@ WIZARD = [
         ("semantic.extract_qc", "choice:off,annotate", "off",
          "抽出結果への Jev 監査注記", _semantic_on),
         ("semantic.daily_request_budget", "int", None,
-         "Jev要求の1日上限（再試行込み、空欄=auto時500・手動mode時0、最大500、0=送信停止）", _semantic_on),
+         "Jev要求の1日上限（再試行込み、空欄=auto時10000・手動mode時0、最大10000、0=送信停止）", _semantic_on),
     ]),
 ]
 

@@ -1,0 +1,15 @@
+{
+  "category": "security",
+  "title": "config.jsonが読めないとき・cloud_llmがnullのときにAnthropicを自動有効化しない",
+  "summary": "config.jsonが構文エラーなどで読めないと、設定を空とみなし、.envに鍵があれば全患者・上限なしでAnthropicへ送信していました（明示したoffや費用上限も無視）。読めない設定ではmode=offとして送信しません。\"cloud_llm\": nullも設定エラー（cloud_llm_not_object）としてoffにします。日次・月次の上限に達した後は、再抽出の対象行をローカル推論の一括処理に戻します（これまでは上限到達後も各行がAnthropic向けに選ばれ、予約失敗を経てから1件ずつローカルで処理されていました）。",
+  "upgrade": "追加操作は不要です。反映には gateway（独立実行ではSlack/Discordアダプター）の再起動が必要です。cloud_llmブロックを消して鍵による自動有効化を使う場合は、nullではなくキーごと削除してください。設定が読めない間はAnthropicで作った患者コンテキストもローカル契約で作り直されます（設定が戻ると再びAnthropicで作り直します）。",
+  "details": [
+    "正常なconfig.jsonは必ずmcs_login_idを持つため、空の設定は「読めない」と判断する。送信直前の確認も同じ判定を通る。",
+    "送信可否の判定（_cloud_mode）が費用・件数上限（budget_block_reason）も見る。",
+    "送信前の確認は設定を1回だけ読み、同じ設定で全ての判定を行う。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm.py",
+    "mcs/llm/cloud_policy.py"
+  ]
+}

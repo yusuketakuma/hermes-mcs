@@ -29,7 +29,7 @@ def cloud(runtime, monkeypatch):
             assert ledger is led
             self.current = kwargs["current"]
             self.discard_reason = kwargs.get("discard_reason")
-            self.contract = worker._cloud_contract(cfg)
+            self.contract = worker._cloud_contract()
         def guard(self):
             if not self.current():
                 raise worker.CloudFallback("synthetic_stale")
@@ -74,7 +74,7 @@ def test_daytime_cloud_needs_no_local_gpu_capacity(runtime, cloud):
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
     scan = led.db.execute("SELECT meta FROM artifacts WHERE kind=?", (context_refresh.SCAN,)).fetchone()
     meta = json.loads(scan[0])
-    assert meta["provider"] == worker._cloud_contract(CFG)
+    assert meta["provider"] == worker._cloud_contract()
     assert meta["model"] == "claude-haiku-5-5"
     assert meta["contract"] == context_refresh._contract(CFG, 1)
 
@@ -151,7 +151,9 @@ def test_cloud_completed_data_is_not_reused_after_route_change(runtime, cloud, m
     drain(runtime)
     assert not local_calls
     cloud[1][0] = mode
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    # the published context stays readable while its backend's request shape is
+    # current; only the rebuild under the new route is due
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
     snapshot, _, pending = context_refresh._pending(led.db, 1, CFG)
     assert pending["A"] and pending["B"]
     assert not context_refresh._current_scans(led.db, 1, snapshot["sources"], snapshot["contract"])
@@ -539,3 +541,86 @@ def test_shadow_pending_is_atomic_with_local_success_and_replay_does_not_duplica
         local_facts=None, cloud_facts=None, unit=meta["unit"])
     assert {r["artifact_id"] for r in led.artifacts("cloud_compare_v1")} == prior_ids | {row["artifact_id"]}
     assert [r for r in led.artifacts("cloud_compare_v1") if r["artifact_id"] in prior_ids] == prior_rows
+
+
+def test_paid_cloud_failure_without_local_capacity_records_the_retry(runtime, cloud, monkeypatch):
+    led, _, local_calls = runtime
+    seed(led, body="見出しのない完全合成の居住記録。")
+    sent = []
+    original = worker._CloudProvider
+    class Paid(original):
+        def __call__(self, prompt, **kwargs):
+            sent.append(prompt)
+            self.completed_reservations = [object()]   # the attempt was billed
+            raise worker.CloudFallback("synthetic_failure")
+    monkeypatch.setattr(worker, "_CloudProvider", Paid)
+    for _ in range(3):   # the rotation reaches the scan (lane B) after the fact-less summary
+        result = step(runtime, local_admit=lambda: False)
+        if result["status"] == "failed":
+            break
+    assert result["status"] == "failed" and result["reason"] == "nightly_cloud_failed" and result["lane"] == "B"
+    assert not local_calls and len(sent) == 1
+    stored = document(led, context_refresh.SCAN)
+    assert stored["failure"] == "nightly_cloud_failed" and stored["attempts"] == 1 and stored["next_try"] > 0
+    # the retry is recorded under the local route, where the next selection finds it
+    meta = json.loads(led.db.execute("SELECT meta FROM artifacts WHERE kind=?", (context_refresh.SCAN,)).fetchone()[0])
+    assert "provider" not in meta and meta["model"] == "synthetic"
+    assert meta["route_contract"] == context_refresh._contract(CFG, 1) and "provider" not in meta["contract"]
+    # the backoff keeps the next tick from re-sending the same unit
+    assert step(runtime, local_admit=lambda: False)["status"] != "failed" and len(sent) == 1
+
+
+def test_paid_failure_of_a_partial_cloud_scan_keeps_its_cloud_pin(runtime, cloud, monkeypatch):
+    led, _, local_calls = runtime
+    seed(led, body="見出しのない完全合成の居住記録。")
+    snapshot = context_refresh._snapshot(led.db, 1, CFG)
+    meta = {"source_sig": context_refresh._source_sig(snapshot["sources"][0]),
+            "contract": snapshot["contract"], "provider": snapshot["contract"]["provider"]}
+    with led.db:
+        context_refresh._replace(led, context_refresh.SCAN, 1,
+                                 {"cursor": 1, "chunks": 2, "complete": False, "facts": []}, meta, 1)
+    sent = []
+    original = worker._CloudProvider
+    class Paid(original):
+        def __call__(self, prompt, **kwargs):
+            sent.append(prompt)
+            self.completed_reservations = [object()]   # the attempt was billed
+            raise worker.CloudFallback("synthetic_failure")
+    monkeypatch.setattr(worker, "_CloudProvider", Paid)
+    for _ in range(3):
+        result = step(runtime, local_admit=lambda: False)
+        if result["status"] == "failed":
+            break
+    assert result["status"] == "failed" and result["reason"] == "nightly_cloud_failed"
+    assert not local_calls and len(sent) == 1
+    # the retry stays on the cloud backend: no local record of a cloud cursor
+    scan = context_refresh._current_scans(led.db, 1, snapshot["sources"], snapshot["contract"])[1]
+    assert scan["_provider_contract"] == snapshot["contract"]["provider"]
+    assert scan["failure"] == "nightly_cloud_failed" and scan["next_try"] > 0
+
+
+def test_shadow_unit_stays_pending_when_the_run_lock_is_busy_after_measuring(runtime, cloud, monkeypatch):
+    led, clock, local_calls = runtime
+    seed(led, body="見出しのない完全合成の居住記録。")
+    cloud[1][0] = "shadow"
+    measured = [False]
+    original = worker._CloudProvider
+    class Measured(original):
+        def __call__(self, prompt, **kwargs):
+            value = super().__call__(prompt, **kwargs)
+            measured[0] = True
+            clock.mono += 600          # the lock wait runs into the unit deadline
+            return value
+    monkeypatch.setattr(worker, "_CloudProvider", Measured)
+    monkeypatch.setattr(context_refresh, "acquire_run_lock",
+                        lambda: None if measured[0] else os.open(os.devnull, os.O_RDONLY))
+    for _ in range(3):   # the rotation reaches the scan (lane B) after the fact-less summary
+        result = step(runtime)
+        if measured[0]:
+            break
+    assert result["status"] == "progressed" and local_calls and measured[0]
+    # the pending row was written with the local commit; the measured result
+    # could not be written under the run lock, so the unit stays uncompared
+    rows = [json.loads(a["meta"]) for a in led.artifacts("cloud_compare_v1")]
+    [row] = [r for r in rows if r.get("uncompared") == "pending"]
+    assert row["units"] == 1 and row["validated_units"] == 0

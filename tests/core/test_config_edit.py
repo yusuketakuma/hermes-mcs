@@ -48,7 +48,7 @@ def test_symlink_is_rejected_without_rewriting_target(conf):
     conf.rename(target)
     conf.symlink_to(target)
     with pytest.raises(OSError):
-        config_edit.apply({"extract.prefilter": False}, "extract.prefilter")
+        config_edit.apply({"extract.prefilter": False})
     assert target.read_bytes() == raw and conf.is_symlink()
 
 
@@ -87,7 +87,7 @@ def test_nonstandard_nonfinite_json_is_never_rewritten(conf, constant):
     raw = ('{"extension": {"number": ' + constant + '}}').encode()
     conf.write_bytes(raw)
     with pytest.raises(ValueError):
-        config_edit.apply({"extract.prefilter": False}, "extract.prefilter")
+        config_edit.apply({"extract.prefilter": False})
     assert conf.read_bytes() == raw
 
 
@@ -106,7 +106,7 @@ def test_external_base_change_during_validation_is_not_overwritten(conf, monkeyp
         return validate(cfg)
     monkeypatch.setattr(mcs_config, "validate_config", edited)
     with pytest.raises(config_edit.ConfigConflict):
-        config_edit.apply({"extract.prefilter": False}, "extract.prefilter")
+        config_edit.apply({"extract.prefilter": False})
     assert conf.read_bytes() == raw
     assert not list(conf.parent.glob(".svc.*"))
 
@@ -115,7 +115,7 @@ def test_oversize_serialized_update_is_not_published(conf, monkeypatch):
     before = conf.read_bytes()
     monkeypatch.setattr(mcs_util, "CONFIG_MAX_BYTES", len(before) + 1)
     with pytest.raises(ValueError):
-        config_edit.apply({"extract.prefilter": False}, "extract.prefilter")
+        config_edit.apply({"extract.prefilter": False})
     assert conf.read_bytes() == before
 
 
@@ -169,5 +169,23 @@ def test_invalid_edit_lock_is_not_used_or_removed(conf, kind):
         path.chmod(0o644 if kind == "loose" else 0o600)
     before = conf.read_bytes()
     with pytest.raises((OSError, ValueError)):
-        config_edit.apply({"extract.prefilter": False}, "extract.prefilter")
+        config_edit.apply({"extract.prefilter": False})
     assert conf.read_bytes() == before and path.exists()
+
+
+@pytest.mark.parametrize("command", ["settings", "budget"])
+@pytest.mark.parametrize("raw", ['{"mcs_login_id": "a", "mcs_login_id": "b"}', '{"local_llm": {"disk_guard_mb": NaN}}'])
+def test_unreadable_config_is_not_reported_as_missing(conf, capsys, command, raw):
+    def run():
+        if command == "settings":
+            return config_edit.settings_command(SimpleNamespace(prefilter="off", admission=None, disk_guard_mb=None))
+        return cloud_cli.budget_command(SimpleNamespace(daily_usd="1", monthly_usd=None))
+    conf.write_text(raw)
+    before = conf.read_bytes()
+    assert run() == 1
+    out = capsys.readouterr().out
+    assert "読み取れない" in out and "check" in out and "init" not in out
+    assert conf.read_bytes() == before
+    conf.unlink()
+    assert run() == 1
+    assert "init" in capsys.readouterr().out

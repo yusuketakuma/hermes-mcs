@@ -9,6 +9,7 @@ import time
 import uuid
 
 from anthropic_client import AnthropicError, MODEL, MAX_TOKENS, validate_usage
+from llm_retry import http_error
 from mcs_util import private_env_value, payload_hash
 
 PRICE_VERSION = "anthropic-haiku-5-5-2026-10-26"
@@ -23,6 +24,10 @@ PRICE_SOURCES = (
 # Conservative bound covering decimal/binary interpretations of the public 1M label.
 # This is a reservation bound, not an advertised accepted input capacity.
 INPUT_RESERVATION_BOUND = 1048576
+# A byte-pair token never covers less than one UTF-8 byte, so a request's text
+# bytes plus the framing tokens bound its billable input; a reservation at the
+# 1M ceiling would hold ~$0.53 per attempt against a daily/monthly cap.
+INPUT_RESERVATION_MARGIN = 256
 PRICES = {"input": "0.1", "output": "0.5", "long_input": "0.5", "long_output": "2.5",
           "cache_write_5m_multiplier": "1.25", "cache_write_1h_multiplier": "2",
           "cache_read_multiplier": "0.1"}
@@ -30,6 +35,8 @@ LONG_INPUT_THRESHOLD = 100000
 JST = timezone(timedelta(hours=9))
 KINDS = ("cloud_usage_reserve", "cloud_usage_result", "cloud_usage_dryrun")
 ROUTES = ("patient_context", "reextract")
+_BINDING_KEYS = ("reservation_id", "request_fp", "route", "project_id",
+                 "unit_key", "message_id", "model", "price_version")
 
 
 def _decimal(value):
@@ -51,9 +58,8 @@ def cloud_config(cfg, *, key_present=False):
            "max_concurrency": 4, "daily_cost_limit_usd": None, "monthly_cost_limit_usd": None,
            "usd_jpy": None}
     errors = []
-    block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
-    if block is None:
-        block = {}
+    # an absent block means "unset"; an explicit null is a config error, not an omission
+    block = cfg.get("cloud_llm", {}) if isinstance(cfg, dict) else {}
     if not isinstance(block, dict):
         return out, ["config: cloud_llm_not_object"]
     if block.keys() - out.keys():
@@ -144,11 +150,40 @@ def pricing_valid(now=None):
     return PRICE_CHECKED_ON <= day <= PRICE_VALID_UNTIL
 
 
-def max_cost(max_tokens, *, now=None):
-    if not pricing_valid(now) or type(max_tokens) is not int or not 1 <= max_tokens <= MAX_TOKENS:
-        raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
-    return (Decimal(INPUT_RESERVATION_BOUND) * Decimal(PRICES["long_input"])
+def _texts(body):
+    """The request's text parts: the system prompt and each message's string or text blocks."""
+    yield str(body.get("system", ""))
+    for message in body.get("messages", []) if isinstance(body.get("messages"), list) else []:
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str):
+            yield content
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    yield block["text"]
+
+
+def input_bound(body):
+    """Input tokens to reserve for one request (never above the 1M ceiling)."""
+    return min(INPUT_RESERVATION_BOUND,
+               sum(len(text.encode("utf-8")) for text in _texts(body)) + INPUT_RESERVATION_MARGIN)
+
+
+def _reservation_cost(input_bound, max_tokens, *, legacy=False):
+    # usage_cost accepts cache writes up to the one-hour rate (an unknown TTL is
+    # priced there too), so reserved input carries that rate to stay an upper
+    # bound. legacy: rows reserved before input_bound was stored used plain input.
+    rate = Decimal(PRICES["long_input"]) * (1 if legacy else max(
+        Decimal(1), Decimal(PRICES["cache_write_5m_multiplier"]), Decimal(PRICES["cache_write_1h_multiplier"])))
+    return (Decimal(input_bound) * rate
             + Decimal(max_tokens) * Decimal(PRICES["long_output"])) / Decimal(1000000)
+
+
+def max_cost(max_tokens, *, input_bound=INPUT_RESERVATION_BOUND, now=None):
+    if (not pricing_valid(now) or type(max_tokens) is not int or not 1 <= max_tokens <= MAX_TOKENS
+            or type(input_bound) is not int or not 1 <= input_bound <= INPUT_RESERVATION_BOUND):
+        raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
+    return _reservation_cost(input_bound, max_tokens)
 
 
 def usage_cost(usage):
@@ -190,8 +225,7 @@ def _loads(value):
 
 
 def _binding(meta):
-    return tuple(meta.get(k) for k in ("reservation_id", "request_fp", "route", "project_id",
-                                      "unit_key", "message_id", "model", "price_version"))
+    return tuple(meta.get(k) for k in _BINDING_KEYS)
 
 
 def _reserve_valid(meta, row):
@@ -206,12 +240,25 @@ def _reserve_valid(meta, row):
             or not isinstance(meta.get("unit_key"), str) or not meta["unit_key"]):
         raise AnthropicError("pricing_unverified", "reservation_invalid")
     tokens = meta.get("max_tokens")
+    bound = meta.get("input_bound", INPUT_RESERVATION_BOUND)   # rows before the request-sized bound
     maximum = _decimal(meta.get("max_cost_usd"))
     if (type(tokens) is not int or not 1 <= tokens <= MAX_TOKENS
-            or maximum != (Decimal(INPUT_RESERVATION_BOUND) * Decimal(PRICES["long_input"])
-                           + Decimal(tokens) * Decimal(PRICES["long_output"])) / Decimal(1000000)):
+            or type(bound) is not int or not 1 <= bound <= INPUT_RESERVATION_BOUND
+            or maximum != _reservation_cost(bound, tokens, legacy="input_bound" not in meta)):
         raise AnthropicError("pricing_unverified", "reservation_bound_invalid")
     return maximum
+
+
+def _stored_reservation(ledger, reservation):
+    """The one retained reservation row matching ``reservation``, validated."""
+    rows = _matching_rows(ledger, KINDS[0], reservation.get("reservation_id"))
+    if len(rows) != 1:
+        raise AnthropicError("pricing_unverified", "reservation_missing")
+    stored = _loads(rows[0]["meta"])
+    _reserve_valid(stored, rows[0])
+    if stored != reservation:
+        raise AnthropicError("pricing_unverified", "reservation_mismatch")
+    return stored
 
 
 def _matching_rows_many(ledger, kind, reservation_ids, *, now=None):
@@ -349,26 +396,116 @@ def global_block_reason(ledger):
     return None
 
 
-def budget_block_reason(ledger, cfg, *, max_tokens=1600):
-    """Read the exact current JST reservation totals without spending or changing state."""
+class _Tally:
+    """usage_report's month totals kept incrementally for the reservation gate:
+    every usage row is decoded once per process instead of once per reservation
+    (the gate runs under the write lock). Rows are append-only within a month;
+    an unreadable row stops the gate and is read again next time."""
+
+    def __init__(self, month):
+        self.month = month
+        self.last_id = 0
+        self.prefix = None   # fingerprint of the rows already tallied
+        self.open = {}       # rid -> (meta, maximum, day): reserved, no result yet
+        self.closed = {}     # rid -> (maximum, cost, settled, day): one result seen
+        self.orphans = {}    # rid -> (prior-month reservation rows, results)
+        self.days = {}       # day -> [requests, cost]
+        self.total = Decimal(0)
+        self.invalid = False
+
+    def _add(self, day, cost):
+        self.days.setdefault(day, [0, Decimal(0)])[1] += cost
+        self.total += cost
+
+    def fingerprint(self, ledger):
+        """Cheap check that the tallied rows are still there unchanged (the
+        runtime only appends; a same-length in-place edit is not detected)."""
+        return tuple(ledger.db.execute(
+            "SELECT count(*), total(length(meta)), total(created_at) FROM artifacts "
+            "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
+            "AND artifact_id<=?", (self.month, self.last_id)).fetchone())
+
+    def update(self, ledger, now):
+        rows = ledger.db.execute(
+            "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
+            "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
+            "AND artifact_id>? ORDER BY artifact_id", (self.month, self.last_id)).fetchall()
+        for row in rows:
+            m = _loads(row["meta"])
+            rid = m.get("reservation_id")
+            if row["kind"] == "cloud_usage_reserve":
+                maximum = _reserve_valid(m, row)
+                if rid in self.open or rid in self.closed:
+                    raise AnthropicError("pricing_unverified", "duplicate_reservation")
+                day = _periods(row["created_at"])[0]
+                self.open[rid] = (m, maximum, day)
+                self.days.setdefault(day, [0, Decimal(0)])[0] += 1
+                self._add(day, maximum)
+            elif not isinstance(rid, str):
+                raise AnthropicError("pricing_unverified", "result_invalid")
+            elif rid in self.open:
+                meta, maximum, day = self.open.pop(rid)
+                try:
+                    cost, settled = _settled(meta, maximum, [(m, row)])
+                except (AnthropicError, ValueError, InvalidOperation, TypeError):
+                    self.invalid = True
+                    cost, settled = maximum, False
+                self._add(day, cost - maximum)
+                self.closed[rid] = (maximum, cost, settled, day)
+            elif rid in self.closed:
+                # a second result row: the pair no longer settles (usage_report's _settled)
+                maximum, cost, settled, day = self.closed[rid]
+                self.invalid = True
+                self._add(day, maximum - cost)
+                self.closed[rid] = (maximum, maximum, False, day)
+            else:
+                entry = self.orphans.get(rid)
+                if entry is None:
+                    prior = [(_loads(r["meta"]), r) for r in _matching_rows_many(ledger, KINDS[0], [rid], now=now)]
+                    entry = self.orphans[rid] = (prior, [])
+                entry[1].append((m, row))
+                try:
+                    if len(entry[0]) != 1:
+                        raise ValueError
+                    _settled(entry[0][0][0], _reserve_valid(*entry[0][0]), entry[1])
+                except (AnthropicError, ValueError, InvalidOperation, TypeError):
+                    self.invalid = True
+            self.last_id = row["artifact_id"]
+        self.prefix = self.fingerprint(ledger)
+
+
+def _tally(ledger, now=None):
+    now = time.time() if now is None else now
+    month = _periods(now)[1]
+    tally = getattr(ledger, "_cloud_usage_tally", None)
+    if (tally is None or tally.month != month
+            or (tally.prefix is not None and tally.prefix != tally.fingerprint(ledger))):
+        tally = ledger._cloud_usage_tally = _Tally(month)
+    tally.update(ledger, now)
+    return tally
+
+
+def budget_block_reason(ledger, cfg, *, max_tokens=1600, input_bound=INPUT_RESERVATION_MARGIN):
+    """Read the exact current JST reservation totals without spending or changing state.
+    ``input_bound`` is the next request's reserved input (the margin alone for a
+    pre-check without a request)."""
     c = _cfg(cfg)
     if not pricing_valid():
         return "pricing_unverified"
-    limit = c["monthly_cost_limit_usd"]
-    # Without a monthly cap only today's rows need decoding under the write lock:
-    # every newly written result row is today's, so corruption is still caught.
-    report = usage_report(ledger, period="month" if limit is not None else "day")
-    if report["pricing_unverified"]:
+    try:
+        tally = _tally(ledger)
+    except (AnthropicError, ValueError, InvalidOperation):
         return "pricing_unverified"
-    if c["daily_request_budget"] is not None and report["daily_requests"] >= c["daily_request_budget"]:
+    if tally.invalid:
+        return "pricing_unverified"
+    today = tally.days.get(_periods(time.time())[0], [0, Decimal(0)])
+    if c["daily_request_budget"] is not None and today[0] >= c["daily_request_budget"]:
         return "daily_cap"
-    if c["daily_cost_limit_usd"] is not None:
-        today = report if limit is None else usage_report(ledger, period="day")
-        if today["pricing_unverified"]:
-            return "pricing_unverified"
-        if _decimal(today["monthly_cost_usd"]) + max_cost(max_tokens) > _decimal(c["daily_cost_limit_usd"]):
-            return "daily_cost_cap"
-    if limit is not None and _decimal(report["monthly_cost_usd"]) + max_cost(max_tokens) > _decimal(limit):
+    cost = max_cost(max_tokens, input_bound=input_bound)
+    if c["daily_cost_limit_usd"] is not None and today[1] + cost > _decimal(c["daily_cost_limit_usd"]):
+        return "daily_cost_cap"
+    limit = c["monthly_cost_limit_usd"]
+    if limit is not None and tally.total + cost > _decimal(limit):
         return "monthly_cap"
     return None
 
@@ -392,18 +529,17 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
             raise AnthropicError("contract_error", "model_not_allowed")
         if ledger.db.in_transaction:
             raise AnthropicError("budget_exceeded", "owner_transaction_active")
+        bound = input_bound(body)
         try:
-            maximum = max_cost(body.get("max_tokens"))
+            maximum = max_cost(body.get("max_tokens"), input_bound=bound)
         except AnthropicError as error:
             _circuit_result(ledger, error)
             raise
         meta = {"reservation_id": uuid.uuid4().hex, "route": route, "project_id": project_id,
                 "unit_key": str(unit_key), "message_id": message_id, "model": MODEL,
                 "price_version": PRICE_VERSION, "request_fp": payload_hash(body),
-                "max_cost_usd": str(maximum), "max_tokens": body["max_tokens"],
-                "input_chars": len(body.get("system", "")) + sum(
-                    len(message.get("content", "")) for message in body.get("messages", [])
-                    if isinstance(message, dict) and isinstance(message.get("content"), str)),
+                "max_cost_usd": str(maximum), "max_tokens": body["max_tokens"], "input_bound": bound,
+                "input_chars": sum(len(text) for text in _texts(body)),
                 "timeout_seconds": float(timeout),
                 "owner": owner or {}}
 
@@ -411,10 +547,9 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
             reason = block_reason(ledger, c, route, project_id)
             if reason:
                 raise AnthropicError(reason if reason == "pricing_unverified" else "budget_exceeded", reason)
-            reason = budget_block_reason(ledger, c, max_tokens=body["max_tokens"])
+            reason = budget_block_reason(ledger, c, max_tokens=body["max_tokens"], input_bound=bound)
             if reason:
                 raise AnthropicError("pricing_unverified" if reason == "pricing_unverified" else "budget_exceeded", reason)
-
 
         def write():
             ledger.artifact_add_tx(KINDS[0], "{}", project_id=project_id, message_id=message_id,
@@ -433,9 +568,17 @@ def record_result(ledger, reservation, metadata):
     """Settle only a matching, validated result; repeat delivery is idempotent."""
     from semantic_runtime import reserve_artifact
     error_kind = metadata.get("error_kind")
-    if metadata.get("http_class") == "http_200" and metadata.get("usage") is None:
+    http_class = metadata.get("http_class")
+    if http_class == "http_200" and metadata.get("usage") is None:
         error_kind = "pricing_unverified"
-    error = AnthropicError(error_kind) if error_kind else None
+    error = None
+    if error_kind:
+        # Rebuild the attempt's failure with its retry class: the breaker counts
+        # only retryable (429/5xx/transport/timeout) failures (semantic_runtime).
+        status = int(http_class[5:]) if isinstance(http_class, str) and http_class[5:].isdigit() else 0
+        retryable = (http_error(status)[1] if status and status != 200
+                     else error_kind in ("transport", "timeout"))
+        error = AnthropicError(error_kind, retryable=retryable, status=status)
     try:
         if (metadata.get("model") != MODEL or metadata.get("request_fp") != reservation["request_fp"]
                 or not pricing_valid()):
@@ -446,8 +589,7 @@ def record_result(ledger, reservation, metadata):
                 else Decimal(0) if _unbilled(metadata.get("http_class")) else maximum)
         if cost > maximum or (usage is not None and usage["output_tokens"] > reservation["max_tokens"]):
             raise AnthropicError("pricing_unverified", "cost_exceeds_reserve")
-        result = {k: reservation.get(k) for k in ("reservation_id", "request_fp", "route", "project_id",
-                  "unit_key", "message_id", "model", "price_version")}
+        result = {k: reservation.get(k) for k in _BINDING_KEYS}
         request_id = metadata.get("request_id")
         if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", request_id):
             request_id = None
@@ -459,13 +601,7 @@ def record_result(ledger, reservation, metadata):
             result["disposition"] = metadata["disposition"]
 
         def check():
-            rows = _matching_rows(ledger, KINDS[0], reservation["reservation_id"])
-            if len(rows) != 1:
-                raise AnthropicError("pricing_unverified", "reservation_missing")
-            meta = _loads(rows[0]["meta"])
-            _reserve_valid(meta, rows[0])
-            if meta != reservation:
-                raise AnthropicError("pricing_unverified", "reservation_mismatch")
+            _stored_reservation(ledger, reservation)
 
         def write():
             rows = _matching_rows(ledger, KINDS[1], reservation["reservation_id"])
@@ -497,16 +633,8 @@ def record_disposition_tx(ledger, reservation, disposition):
         raise RuntimeError("cloud_disposition_transaction_required")
     if disposition not in ("discarded_scope", "discarded_workday"):
         raise ValueError("cloud_disposition_invalid")
-    rows = _matching_rows(ledger, KINDS[0], reservation.get("reservation_id"))
-    if len(rows) != 1:
-        raise AnthropicError("pricing_unverified", "reservation_missing")
-    stored = _loads(rows[0]["meta"])
-    _reserve_valid(stored, rows[0])
-    if stored != reservation:
-        raise AnthropicError("pricing_unverified", "reservation_mismatch")
-    meta = {key: reservation.get(key) for key in (
-        "reservation_id", "request_fp", "route", "project_id", "unit_key",
-        "message_id", "model", "price_version")}
+    _stored_reservation(ledger, reservation)
+    meta = {key: reservation.get(key) for key in _BINDING_KEYS}
     meta["disposition"] = disposition
     existing = _matching_rows(ledger, "cloud_usage_disposition", reservation["reservation_id"])
     if existing:

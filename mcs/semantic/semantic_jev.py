@@ -58,6 +58,9 @@ from bounded_http import MAX_RESPONSE_BYTES
 JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone"
 JEV_MODEL = "jev-1.13.0"
 DAILY_REQUEST_LIMIT = 10000
+# upper bound of a configured daily_request_budget; config and the live
+# tools must reject the same values, so both read it from here
+DAILY_REQUEST_BUDGET_MAX = 100000
 JEV_MODELS_URL = "https://api.typesafe.ai/v1/models"
 JEV_ALLOWED_ENDPOINTS = frozenset({JEV_ENDPOINT})
 REGISTRY_VERSION = "2026-09-20"
@@ -96,7 +99,7 @@ def _live_request_budget(home):
             raise ValueError
         limit = semantic.get("daily_request_budget",
                              0 if "mode" in semantic else DAILY_REQUEST_LIMIT)
-        if type(limit) is not int or limit < 0:
+        if type(limit) is not int or not 0 <= limit <= DAILY_REQUEST_BUDGET_MAX:
             raise ValueError
     except (OSError, ValueError, UnicodeError, RecursionError):
         raise JevError("budget_exceeded", "semantic_daily_budget_invalid") from None
@@ -739,6 +742,21 @@ def wire_smoke(api_key: str, timeout: float = 30.0) -> dict:
         return result
 
 
+def evaluate_chunked(jev_client, state: dict, questions: dict,
+                  deadline: float, limit: int) -> dict:
+    """evaluate() with the question set split into
+    max_questions_per_request-sized chunks — the configured bound is
+    enforced, not just validated (§13.4)."""
+    keys = list(questions)
+    merged = {"answers": {}}
+    step = max(1, limit)
+    for i in range(0, len(keys), step):
+        part = {k: questions[k] for k in keys[i:i + step]}
+        out = evaluate_once_more(jev_client, state, part, deadline)
+        merged["answers"].update(out["answers"])
+    return merged
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="TypeSafe Jev client — wire-contract smoke check")
@@ -772,17 +790,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-def evaluate_chunked(jev_client, state: dict, questions: dict,
-                  deadline: float, limit: int) -> dict:
-    """evaluate() with the question set split into
-    max_questions_per_request-sized chunks — the configured bound is
-    enforced, not just validated (§13.4)."""
-    keys = list(questions)
-    merged = {"answers": {}}
-    for i in range(0, len(keys), max(1, limit)):
-        part = {k: questions[k] for k in keys[i:i + limit]}
-        out = evaluate_once_more(jev_client, state, part, deadline)
-        merged["answers"].update(out["answers"])
-    return merged

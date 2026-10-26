@@ -9,7 +9,7 @@ import semantic_drain
 import semantic_jev as jev
 import semantic_runtime as runtime
 import semantic_store
-from semantic_testkit import _cfg, _ledger, _message, _patient, _seeded
+from semantic_testkit import _FakeJev, _cfg, _ledger, _llm, _message, _patient, _seeded
 
 
 def _reserver(db, limit):
@@ -24,7 +24,8 @@ def test_interleaved_clients_stop_at_the_durable_cap_without_charging_an_attempt
     person = _patient(db)
     person.messages = [_message(1, body="synthetic source alpha"), _message(3, body="synthetic source beta")]
     db.save_patient(person, notify={"source": "unread"}, semantic=True)
-    config = _cfg("shadow", budget=2, job_budget_seconds=450)
+    # backlog lane: 3 - ceil(3 * 0.1) = 2 durable requests for this lane
+    config = _cfg("shadow", budget=3, job_budget_seconds=450)
     deadline = time.monotonic() + 480
     calls, nesting = [], [False]
     monkeypatch.setattr(semantic_drain, "_invalidated_at", None)
@@ -145,5 +146,26 @@ def test_unknown_usage_fails_closed_before_reservation(tmp_path, bad):
         assert error.value.kind == "budget_exceeded" and error.value.detail == "semantic_usage_invalid"
         assert len(db.artifacts("semantic_usage")) == before
         assert not db.db.in_transaction
+    finally:
+        db.close()
+
+
+def test_backlog_lane_leaves_a_tenth_of_the_budget_to_realtime(tmp_path):
+    db = _seeded(tmp_path)
+    try:
+        db.artifact_add("semantic_usage", "{}", meta={"jev_requests": 9})
+        config = _cfg("shadow", budget=10)
+        fake = _FakeJev()
+        res = {"errors": []}
+        out = semantic_drain.run_due(db, config, res, time.monotonic() + 300, lane="backlog",
+                                     jev_client=fake, llm_fn=_llm)
+        assert out["budget_exhausted"] is True and fake.requests_made == 0
+        assert "semantic: backlog_budget_reserved" in res["errors"]
+        fake = _FakeJev()
+        res = {"errors": []}
+        out = semantic_drain.run_due(db, config, res, time.monotonic() + 300, lane="realtime",
+                                     jev_client=fake, llm_fn=_llm)
+        assert out["budget_exhausted"] is False and fake.requests_made >= 1
+        assert "semantic: daily_budget_exhausted" not in res["errors"]
     finally:
         db.close()

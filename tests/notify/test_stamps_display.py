@@ -78,18 +78,20 @@ def test_own_post_text_counts_others_and_keeps_unfetched_distinct(led):
     assert own().startswith("スタンプ なし · ") and "自分" not in own()
 
 
-@pytest.mark.parametrize("sender_id", [SELF, OTHER])
-def test_own_stamp_is_not_listed_and_alone_shows_no_row(led, sender_id):
-    """The stamp menu already shows one's own stamp (owner 2026-10-26)."""
+def test_own_stamp_is_not_listed_and_alone_shows_a_row_only_on_others_posts(led):
+    """The stamp menu already shows one's own stamp (owner 2026-10-26); on
+    another's post it still counts, even alone (owner 2026-10-27)."""
     _patient(led)
     _self_known(led)
     _msg(led, 100)
     _meta(led, 100, reactions=[_r("viewed", 1, True)])
-    assert notify_render.thread_stamp_row(led.db, 100, sender_id) == ""
+    assert notify_render.thread_stamp_row(led.db, 100, SELF) == ""
+    alone = notify_render.thread_stamp_row(led.db, 100, OTHER)
+    assert alone.startswith("スタンプ 👀1 · ") and "自分" not in alone
     _meta(led, 100, reactions=[_r("viewed", 2, True), _r("thanked", 1)])
-    row = notify_render.thread_stamp_row(led.db, 100, sender_id)
-    count = 1 if sender_id == SELF else 2
-    assert row.startswith(f"スタンプ 👀{count} 🙏1 · ") and "自分" not in row
+    for sender_id, count in ((SELF, 1), (OTHER, 2)):
+        row = notify_render.thread_stamp_row(led.db, 100, sender_id)
+        assert row.startswith(f"スタンプ 👀{count} 🙏1 · ") and "自分" not in row
 
 
 def test_card_footer_uses_sender_id_not_same_name(led):
