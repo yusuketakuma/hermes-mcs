@@ -662,9 +662,10 @@ def seed_reconcile(ledger):
     """Ensure one durable reconcile job per floored patient. Only a
     completed deep import gets a re-walk — mid-import patients are
     still covered by their own history cursor."""
+    # Release the read snapshot before per-patient commits admit another writer.
     for r in ledger.db.execute(
             "SELECT project_id FROM patients"
-            " WHERE history_floor IS NOT NULL AND history_floor != 0"):
+            " WHERE history_floor IS NOT NULL AND history_floor != 0").fetchall():
         pid = r["project_id"]
         if not ledger.job_pending("reconcile", pid):
             # stagger first runs so a fleet doesn't refetch together
