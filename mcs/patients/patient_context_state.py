@@ -30,6 +30,17 @@ _CORRECTION = re.compile(r"(?:投稿|記録)#(?P<mid>[1-9][0-9]*)の[「『](?P<
 _PRIOR_CORRECTION = re.compile(r"前回の[「『](?P<quote>[^」』]{1,3000})[」』](?:を(?P<kind>訂正|撤回)|は誤り)")
 _CORRECTION_CUE = re.compile(r"訂正|撤回|誤り")
 _INDIRECT_PERSON = re.compile(rf"(?:{FAMILY_PERSON}|{OTHER_PERSON})(?:さん|様)?(?:に|の)")
+_PATIENT_SUBJECT = re.compile(r"(?:ご本人|本人|患者(?:本人|さん|様)?|利用者(?:本人|さん|様)?)(?:は|が|の|に|も)")
+_GENERAL_ALLERGY = re.compile(
+    r"(?:^|[\s:：、,。]|(?:ご本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?)(?:は|に|の))"
+    r"(?:本日|今日|現在)?(?:全ての|すべての|食物|食品|薬剤)?アレルギー"
+    r"(?:の)?(?:記録|有無|情報)?(?:は|が|も|を)?(?:本日|今日|現在)?\s*"
+    r"(?:ない|ありません|なし|無し|認めず|不明|未確認|未確定|訂正|撤回|誤り)"
+)
+_ALLERGY_UNCERTAIN = re.compile(
+    r"ない|なし|無し|ありません|認めず|否定|不明|不詳|未確認|未確定|未把握|未調査|不確か|"
+    r"疑い|かもしれ|確認でき(?:ない|ず|ていない|ていません)|訂正|撤回|誤り|誤記"
+)
 _MISSING_REPORT = re.compile(
     r"(?:記録|報告|記載|情報|連絡)(?:は|が|も)?\s*(?:現在|今は|本日|今日)?\s*"
     r"(?:ない|ありません|なし|未確認)"
@@ -124,10 +135,15 @@ def annotate(fact, body):
     subject = next(iter(subjects)) if len(subjects) == 1 else "unknown"
     period = next(iter(periods)) if len(periods) == 1 else "unknown"
     if fact.get("category") not in ("medications", "symptoms") and subject == "patient":
-        # These particles can identify a recipient, a source, or the owner.
-        # They do not prove that a later assertion belongs to the patient.
         sentence_start = max(body.rfind(mark, 0, start) for mark in "。！？!?;；\n") + 1
-        if _INDIRECT_PERSON.search(body[sentence_start:end]):
+        context = body[sentence_start:end]
+        patient = _PATIENT_SUBJECT.search(context)
+        indirect = list(_INDIRECT_PERSON.finditer(context))
+        if any(not (patient and (re.match(r"(?:介助|支援|協力)(?:で|を|により|のもと)", context[m.end():])
+                                or m[0].endswith("に") and patient.start() < m.start()
+                                and re.search(r"報告|連絡|相談", context[m.end():])
+                                and (fact.get("category") != "allergies"
+                                     or _PATIENT_SUBJECT.search(context, m.end())))) for m in indirect):
             subject = "unknown"
     dates = [written_day(d["value"]) for d in details if d["key"] in _DATES]
     written = written_day(quote)
@@ -225,6 +241,65 @@ def _values(fact):
     if any(d["key"] == "symptom" for d in fact.get("details", [])) and temporal.get("symptom_state"):
         values.append(("symptom_presence", "absent" if temporal["symptom_state"] in ("resolved", "absent") else "present"))
     return values
+
+
+def _unbound_target(fact):
+    """Identify only one explicitly patient-bound allergy target from its source."""
+    if fact.get("category") != "allergies":
+        return None
+    quote = fact.get("evidence")
+    if not isinstance(quote, str):
+        return None
+    text = re.sub(r"^\s*(?:アレルギー|アレルギー歴|薬剤アレルギー)\s*[:：]\s*", "", quote)
+    if text.count("アレルギー") != 1:
+        return None
+    match = re.search(r"(?:ご本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?)(?:に|は|の)"
+                      r"(?:本日|今日|現在)?\s*([一-龯々ァ-ヶーA-Za-z0-9]{1,30})(?:の)?アレルギー", text)
+    target = match[1] if match else None
+    # shortcut: unrecognized names remain unbound, expand only with source-grounded identity rules.
+    if (not target or not re.fullmatch(r"[一-龯々ァ-ヶーA-Za-z0-9]+", target)
+            or target in ("食物", "食品", "薬剤", "薬", "不明", "その他")):
+        return None
+    return target
+
+
+def _other_allergy(fact):
+    """Exclude an explicit other person's report, not an unowned report."""
+    subject = (fact.get("temporal") or {}).get("subject")
+    quote = fact.get("evidence") or ""
+    return (subject in ("family", "other") or not _PATIENT_SUBJECT.search(quote)
+            and re.search(rf"(?:{FAMILY_PERSON}|{OTHER_PERSON})(?:さん|様)?(?:に|は|が|の)"
+                          r"(?:は)?(?:本日|今日|現在)?(?:(?:食物|食品|薬剤)?アレルギー|"
+                          r"ありません|なし|不明|未確認)", quote) is not None)
+
+
+def _general_allergy(fact):
+    quote = fact.get("evidence") or ""
+    if _GENERAL_ALLERGY.search(quote):
+        return True
+    return re.fullmatch(
+        r"\s*(?:アレルギー|アレルギー歴|薬剤アレルギー)\s*[:：]\s*"
+        r"(?:(?:ご本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?)(?:に|は|の)(?:は)?)?"
+        r"(?:本日|今日|現在)?\s*(?:ない|ありません|なし|無し|認めず|不明|未確認|未確定|訂正|撤回|誤り)"
+        r"(?:です|でした|しました)?[。\s]*", quote) is not None
+
+
+def _uncertain_allergy(fact):
+    if _general_allergy(fact):
+        return True
+    if _unbound_target(fact) is not None:
+        return False
+    quote = re.sub(r"^\s*(?:アレルギー|アレルギー歴|薬剤アレルギー)\s*[:：]\s*", "", fact.get("evidence") or "")
+    clauses = re.split(r"[。！？!?;；、,\n]", quote)
+    return any(_ALLERGY_UNCERTAIN.search(clause) and ("アレルギー" in clause
+               or re.search(r"詳細|有無|種類|対象|内容|原因|記録|情報", clause)
+               or len(clauses) <= 2 and not any("アレルギー" in part for part in clauses))
+               for clause in clauses)
+
+
+def _allergy_day(fact):
+    temporal = fact.get("temporal") or {}
+    return temporal.get("event_day") or temporal.get("state_day") or temporal.get("as_of_day")
 
 
 
@@ -371,7 +446,7 @@ def project(facts, *, dependency_losses=()):
         if (fact["id"] in replaced or fact["category"] in ("medications", "symptoms")
                 or _entity(fact) is not None or buckets[fact["id"]] not in ("current", "unknown")):
             continue
-        key = (fact["project_id"], fact["category"])
+        key = (fact["project_id"], fact["category"], _unbound_target(fact))
         unbound.setdefault(key, []).append(fact)
     for rows in unbound.values():
         identities = {(f.get("message_id"), f.get("content_hash"),
@@ -380,6 +455,23 @@ def project(facts, *, dependency_losses=()):
             for fact in rows:
                 if buckets[fact["id"]] == "current":
                     buckets[fact["id"]] = "unknown"
+    allergies = {}
+    for fact in facts:
+        if (fact["category"] == "allergies" and fact["id"] not in replaced
+                and buckets[fact["id"]] in ("current", "unknown") and not _other_allergy(fact)):
+            allergies.setdefault(fact["project_id"], []).append(fact)
+    for rows in allergies.values():
+        broad = [f for f in rows if _uncertain_allergy(f)]
+        broad_ids = {f["id"] for f in broad}
+        specific = [f for f in rows if f["id"] not in broad_ids]
+        broad_days = {_allergy_day(f) for f in broad}
+        specific_days = {_allergy_day(f) for f in specific}
+        for fact in rows:
+            other_days = specific_days if fact["id"] in broad_ids else broad_days
+            day = _allergy_day(fact)
+            if (buckets[fact["id"]] == "current" and other_days
+                    and (day is None or None in other_days or day in other_days)):
+                buckets[fact["id"]] = "unknown"
     initial_buckets = dict(buckets)
     groups = {}
     for fact in facts:
