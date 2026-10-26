@@ -35,6 +35,7 @@ def test_body_chunk_folds_behind_collapsed_container_only_with_a_header_part():
     spec = _split_spec("m:100:header#1", "m:100#1")
     (block,) = thread_part_blocks(spec, {"name": "m:100#1"}, BODY)
     assert block["type"] == "container" and block["is_collapsible"] and block["default_collapsed"]
+    assert block["width"] == "full"   # fills the message pane instead of the fixed standard width
     assert block["title"]["text"] == f"原文（{len(BODY)}字）"
     assert "".join(c["text"]["text"] for c in block["child_blocks"]) == BODY
     # legacy chunks (summary and body in one text) and unnamed parts stay plain text

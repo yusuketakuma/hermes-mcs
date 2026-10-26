@@ -86,6 +86,7 @@ def has_header_part(spec, post) -> bool:
 def _folded_original(text):
     """The post's original as one collapsed 「原文（N字）」 container."""
     return {"type": "container", "is_collapsible": True, "default_collapsed": True,
+            "width": "full",   # standard is a fixed narrow width on desktop
             "title": {"type": "plain_text", "text": f"原文（{len(text)}字）"},
             "child_blocks": text_sections(text)}
 
