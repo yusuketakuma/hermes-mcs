@@ -175,7 +175,9 @@ OBS = "検査・観測値\n検査項目: {}\n測定値: {}\n単位: {}\n測定�
 def test_observations_compare_only_the_same_named_item_and_unit_by_written_date(tmp_path, monkeypatch, posts, kind):
     import patient_context_refresh
     monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(
-        context_view_input=lambda *a, **k: None, workday_window=patient_context_refresh.workday_window))
+        context_view_input=lambda *a, **k: None,
+        inference_coverage=lambda *a, **k: {"complete": False, "status": "scan_pending", "sources": {"pending": len(posts)}},
+        workday_window=patient_context_refresh.workday_window))
     db = _db(tmp_path, ())
     db.save_messages([_message(n + 1, body=OBS.format(*p)) for n, p in enumerate(posts)], project_id=1)
     for mid in (1, 2):
@@ -213,14 +215,19 @@ def test_oldest_long_term_item_survives_long_history(ctx):
 
 
 def test_timeline_includes_medication_and_symptom_mentions_as_written(ctx):
+    plan = "本人は明日、架空錠を1錠服用予定です。"
+    absence = "本人の架空のむくみはありません。"
+    ctx.db.save_messages([_message(4, body=plan + absence)], project_id=1)
     _artifact(ctx.db, "extract_llm", 4, {"meds": [{"name": "架空錠", "dose": "1錠", "status": "planned",
-                                                  "subject": "patient"}],
-                                         "symptoms": [{"text": "架空のむくみ", "negated": True}]},
+                                                  "subject": "patient", "negated": False, "evidence": plan}],
+                                         "symptoms": [{"text": "架空のむくみ", "subject": "patient",
+                                                       "negated": True, "evidence": absence}]},
               {"hash": _hash_of(ctx.db, 4), "extract_version": 1})
     rows = [i for i in pcv.timeline(pcv.evidence(ctx.db.db, 1))["items"] if i["category"] in ("medications", "symptoms")]
     assert sorted((r["text"], json.dumps(r["mention"], sort_keys=True)) for r in rows) == sorted([
-        ("架空錠", json.dumps({"dose": "1錠", "status": "planned"}, sort_keys=True)),
+        ("架空錠", json.dumps({"dose": "1錠", "status": "planned", "negated": False}, sort_keys=True)),
         ("架空のむくみ", json.dumps({"negated": True}))])
+    assert {r["evidence"] for r in rows} == {plan, absence}
 
 
 def test_timeline_is_oldest_first_and_transition_lists_missing_records(ctx):
@@ -262,7 +269,8 @@ def test_role_order_only_reorders(ctx):
 def test_cli_passes_current_settings_to_the_context_refresh_gate(ctx, monkeypatch):
     seen = []
     monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(
-        context_view_input=lambda conn, pid, cfg=None: seen.append(cfg)))
+        context_view_input=lambda conn, pid, cfg=None: seen.append(cfg),
+        inference_coverage=lambda *a, **k: {"complete": False, "status": "scan_pending", "sources": {"pending": 6}}))
     monkeypatch.setattr("mcs_util.load_config", lambda *a, **k: {"extract": {"patient_context_nightly": {
         "enabled": True, "publication": False}}})
     mcs_view.View._patient_context(SimpleNamespace(db=ctx.db.db, meta={"generated_at": T0}), 1,
@@ -329,21 +337,41 @@ def test_deleted_record_is_labelled_with_observation_time_in_private_views(ctx, 
 @pytest.mark.parametrize("section", ["background", "timeline", "previsit", "transition_course"])
 def test_private_views_keep_negation_plan_and_family_in_mentions(ctx, section):
     from notify_views import patient_context_list
-    body = "退院後の連絡。家族の架空錠は中止を検討中。本人の架空のむくみはありません。"
+    transition = "退院後の連絡。"
+    plan = "家族の架空錠は中止を検討中。"
+    absence = "本人の架空のむくみはありません。"
+    body = transition + plan + absence
     ctx.db.save_messages([_message(4, body=body)], project_id=1)
     ctx.db.db.execute("UPDATE messages SET posted_at_ts=?,first_seen=? WHERE message_id=4", (T0, T0))
     ctx.db.db.commit()
-    _artifact(ctx.db, "extract_llm", 4, {"meds": [{"name": "架空錠", "status": "planned", "subject": "family"}],
-                                         "symptoms": [{"text": "架空のむくみ", "negated": True}]},
-              {"hash": _hash_of(ctx.db, 4), "extract_version": 1})
+    _artifact(ctx.db, "extract_llm", 4, {
+        "patient_context": [{"category": "care_services", "text": transition,
+                             "evidence": transition, "subject": "unspecified"}],
+        "meds": [{"name": "架空錠", "status": "planned", "subject": "family",
+                  "negated": False, "evidence": plan}],
+        "symptoms": [{"text": "架空のむくみ", "subject": "patient", "negated": True, "evidence": absence}]},
+        {"hash": _hash_of(ctx.db, 4), "extract_version": 1})
+    ev = pcv.evidence(ctx.db.db, 1)
+    source_mentions = [i for i in ev["items"] if i.get("mention") and i["message_id"] == 4]
+    assert {i["evidence"] for i in source_mentions} == {plan, absence}
+    assert next(i for i in source_mentions if i["text"] == "架空錠")["subject"] == "family"
+    assert next(i for i in source_mentions if i["text"] == "架空のむくみ")["mention"]["negated"] is True
     rendered = []
     first = patient_context_list(ctx.db.db, 1, section, cfg={}, since=T0 - 1, now=T0 + DAY)
     for page in range(first["pages"]):
         rendered.extend(patient_context_list(ctx.db.db, 1, section, cfg={}, since=T0 - 1,
                                             now=T0 + DAY, page=page)["items"])
     mentions = [r for r in rendered if "架空錠" in r["text"] or "架空のむくみ" in r["text"]]
-    assert mentions
-    assert all(body in row["text"] for row in mentions)
+    if section == "transition_course":
+        # A nominal historical transition cannot open a patient execution window.
+        group = next(g for g in pcv.transition_course(ev)["items"] if g["anchor"]["message_id"] == 4)
+        assert group["anchor_kind"] == "reported" and group["nearby"] == group["no_record"] == []
+        assert any(transition in r["text"] and r["group"] == "移行に関する記載" for r in rendered)
+        assert not mentions
+    else:
+        assert mentions
+        assert any(plan in row["text"] for row in mentions)
+        assert any(absence in row["text"] for row in mentions)
 
 
 def test_replies_follow_the_current_posts_not_a_cached_rollup(ctx):

@@ -139,10 +139,12 @@ def medication_attribute_supported(key, value, assertion):
     if not isinstance(value, str) or not value.strip():
         return False
     wanted = re.sub(r"\s+", "", unicodedata.normalize("NFKC", value).casefold())
-    matches = list(re.finditer(r"(?<![0-9.])" + re.escape(wanted) + r"(?![0-9.])", source))
+    boundary = r"(?![0-9.])" if wanted[-1].isdigit() or wanted[-1] == '.' else r"(?![a-zμµ/%])"
+    qualifier = r"まで|以上|以下|未満|以内|程度|前後|ほど|くらい|ぐらい"
+    matches = list(re.finditer(r"(?<![0-9.])" + re.escape(wanted) + boundary, source))
     for match in matches:
         if (re.match(denied, source[match.end():])
-                or key == "freq" and source[match.end():].startswith("まで") and not wanted.endswith("まで")):
+                or re.match(qualifier, source[match.end():])):
             continue
         if key == "dose":
             prefix, suffix = source[:match.start()], source[match.end():]
@@ -166,7 +168,7 @@ def medication_attribute_supported(key, value, assertion):
             return False
         explicit = re.search(r"(?:1日|毎日)([1-6])回|([1-6])回/日|分([1-6])(?![0-9])", source)
         if explicit:
-            return (not re.match(denied + r"|まで", source[explicit.end():])
+            return (not re.match(denied + r"|" + qualifier, source[explicit.end():])
                     and str(next(v for v in explicit.groups() if v)) == match[1])
         if re.search(r"隔日|週|月|日おき|頓用|頓服|必要|明朝|今朝|昨日|明日|本日|当日", source):
             return False

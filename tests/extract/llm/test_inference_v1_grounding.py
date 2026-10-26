@@ -420,3 +420,43 @@ def test_identical_copies_do_not_create_additional_source_reports():
     item = _med(quote, dose="5mg")
     prior = {"meds": [item, copy.deepcopy(item)], "_items_dropped": 1}
     assert extract_quality.improves({"meds": [copy.deepcopy(item)]}, prior)
+
+
+def test_a_unit_boundary_separates_dose_from_the_next_numeric_frequency():
+    body = '本人は合成薬Aを５ｍｇ 1日3回内服しています。'
+    item = _clean('meds', _med(body, dose='5mg', freq='1日3回', route='oral'), body)
+    assert item['dose'] == '5mg' and item['freq'] == '1日3回'
+    assert not item.get('unverified')
+
+
+@pytest.mark.parametrize('qualifier', ['まで', '以下', '未満', '程度'])
+@pytest.mark.parametrize('surface', ['1日3回', '毎日3回'])
+def test_frequency_normalization_retains_qualifiers_in_both_spelling_routes(qualifier, surface):
+    body = f'本人は合成薬Aを{surface}{qualifier}内服しています。'
+    item = _clean('meds', _med(body, freq='1日3回'), body)
+    assert 'freq' not in item and item['unverified']
+
+
+@pytest.mark.parametrize('dose', ['5mg以下', '5mg程度', '5mg/日', '5mg/mL'])
+def test_an_incomplete_dose_unit_or_qualifier_is_not_a_complete_administered_dose(dose):
+    body = f'本人は合成薬Aを{dose}内服しています。'
+    item = _clean('meds', _med(body, dose='5mg'), body)
+    assert item['dose'] is None and item['unverified']
+
+
+def test_an_uncertain_event_only_does_not_buy_repair_but_cannot_erase_grounded_detail():
+    body = '疑義照会しました。本人の薬の保管場所は冷蔵庫です。'
+    prior = validation.validate({'summary': '合成要約'}, body)
+    nomination = validation.validate({'events': ['prescription_inquiry']}, body)
+    assert nomination['events'] == [] and nomination['event_records'][0]['unverified']
+    assert not extract_quality.quality_improves(nomination, prior, body)
+    assert not extract_quality.quality_improves(nomination, {**prior, '_items_dropped': 1}, body)
+    supplied = {'events': ['prescription_inquiry'], 'patient_context': [{
+        'category': 'medication_management', 'subject': 'patient',
+        'text': '本人の薬の保管場所は冷蔵庫です。', 'evidence': '本人の薬の保管場所は冷蔵庫です。',
+        'details': [{'key': 'storage_place', 'value': '冷蔵庫', 'evidence': '本人の薬の保管場所は冷蔵庫です。'}]}]}
+    candidate = validation.validate(supplied, body)
+    assert candidate['event_records'][0]['unverified'] and candidate['events'] == []
+    assert extract_quality.quality_improves(candidate, prior, body)
+    unsupported = validation.validate({**supplied, 'events': ['admission']}, body)
+    assert not extract_quality.quality_improves(unsupported, prior, body)

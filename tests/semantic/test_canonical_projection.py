@@ -748,14 +748,19 @@ def test_run_due_switch_hides_then_revives_only_current_projections(
                 "'semantic_facts_v4')" + current_fact_pred()
                 + " ORDER BY a.message_id")]
 
+        # Projection maintenance runs ahead of endpoint circuit admission.
+        # A real source change may requeue work; this test does no inference.
+        monkeypatch.setattr(semantic_drain.llm_availability, "circuit_open_s", lambda db: 1)
+
         def no_processing(*args, **kwargs):
-            raise AssertionError("configuration switches must not reprocess")
+            raise AssertionError("the open circuit must prevent inference")
 
         def tick():
             result = {"errors": []}
             out = semantic_drain.run_due(db, cfg, result, float("inf"),
                                    llm_fn=no_processing, jev_client=_PassJev())
             assert result["errors"] == []
+            assert out["circuit_open_s"] == 1
             assert out["done"] == out["failed"] == out["deferred"] == 0
             return out
 

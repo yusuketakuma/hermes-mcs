@@ -252,3 +252,43 @@ def test_quote_period_conflicting_with_valid_time_remains_unverified(kind, quote
         assert med['status'] is None and med['unverified'] is True
         assert not med_is_patient_current(med)
     assert output['canonical_facts'][0]['valid_time'] == valid_time
+
+
+@pytest.mark.parametrize('body,confirmed', [
+    ('本日ご本人がお亡くなりになりました。', True),
+    ('本人は亡くなりました。', True),
+    ('本人は亡くなった。', True),
+    ('母がお亡くなりになりました。', False),
+    ('本人は昨日、お亡くなりになりました。', False),
+    ('本人がお亡くなりになる可能性があります。', False),
+    ('本人がお亡くなりになったら連絡してください。', False),
+    ('本人がお亡くなりになっていません。', False),
+    ('本人がお亡くなりになりました？', False),
+    ('本日、本人が亡くなったという報告はありません。', False),
+    ('本日ご本人がお亡くなりになったとの記録はありません。', False),
+    ('本日、本人が亡くなった、という報告はありません。', False),
+])
+def test_direct_eol_wording_keeps_person_time_and_uncertainty(body, confirmed):
+    result = _validate(body, events=['eol'])
+    assert result['events'] == (['eol'] if confirmed else [])
+    assert result['event_records']
+    for record in result['event_records']:
+        assert body[record['span']['start']:record['span']['end']] == record['evidence']
+
+
+@pytest.mark.parametrize('mark', ['?', '？'])
+def test_a_question_mark_cannot_turn_an_event_into_confirmed_occurrence(mark):
+    body = '本人は入院しました' + mark
+    result = _validate(body, events=['admission'])
+    assert result['events'] == []
+    assert result['event_records'][0]['negated'] is None
+    assert result['event_records'][0]['unverified']
+
+
+@pytest.mark.parametrize('comma', ['', '、', ','])
+def test_absence_of_an_admission_report_is_not_an_affirmed_or_denied_admission(comma):
+    body = '本人は入院した' + comma + 'という報告はありません。'
+    result = _validate(body, events=['admission'])
+    assert result['events'] == []
+    assert result['event_records'][0]['negated'] is None
+    assert result['event_records'][0]['unverified']

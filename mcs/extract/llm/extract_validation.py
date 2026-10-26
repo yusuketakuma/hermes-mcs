@@ -559,7 +559,7 @@ class Validator:
                     self.drop_item("meds", f"meds[{index}].evidenceにnameが含まれていません。"
                                    "別の文を流用せず、薬剤名を含む本文を引用し、服用者のsubjectを確認してください。")
                     continue
-                assertion = self.assertion(item, (item["name"],), medication=True)
+                assertion = None if missing_name else self.assertion(item, (item["name"],), medication=True)
                 if assertion is None:
                     for key in ("dose", "freq", "route", "prn"):
                         if item.get(key) is not None:
@@ -584,7 +584,8 @@ class Validator:
                     if m.get("prn") is False and not clinical_values.medication_attribute_supported(
                             "prn", False, assertion[0]):
                         item["unverified"] = True
-                    if (self.body[assertion[3]:].lstrip().startswith(("、", ","))
+                    supported_plan = item.get("status") == "planned" and re.search(r"予定|計画|検討|提案", assertion[0])
+                    if (not supported_plan and self.body[assertion[3]:].lstrip().startswith(("、", ","))
                             and clinical_scope.source_polarity(self.body, assertion[1], assertion[3],
                                 target_end=assertion[2], medication=True) is None):
                         self.uncertain(item, "negated")

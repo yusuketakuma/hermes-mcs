@@ -1,5 +1,6 @@
 """Source-bound completeness, repair acceptance and protected-assertion decisions."""
 import clinical_scope
+import clinical_events
 import json
 import re
 
@@ -290,7 +291,12 @@ def _pharmacy_gaps(v, body):
                 if key == "interaction_check" and not re.search(r"確認|チェック|照合|点検|調べ", text):
                     continue
                 if key == "inquiry_result":
-                    if "prescription_inquiry" not in (v.get("events") or []):
+                    if "prescription_inquiry" not in (v.get("events") or []) and not any(
+                            (span := clinical_events.candidate_span(record, body)) is not None
+                            and record.get('kind') == 'prescription_inquiry'
+                            and span[0] <= sentence.start() + cue.start()
+                            and sentence.start() + cue.end() <= span[1]
+                            for record in v.get('event_records') or []):
                         issues.append("本文の薬剤の疑義照会・処方提案がeventsに未収載です。原文で再確認してください")
                     if not re.search(r"回答|返答|了承|了解|承認|見送|変更なし|結果|未確認", text):
                         continue
@@ -1049,6 +1055,14 @@ def quality_improves(candidate, prior, body, hints=None):
 
         return owned_med_quotes(prior) < owned_med_quotes(candidate)
     protected = facts(prior, split_conditions=True)
+    def verified(document):
+        document = document or {}
+        return {**document, **{field: [item for item in document.get(field) or []
+                                      if not isinstance(item, dict) or not item.get('unverified')]
+                               for field in _FACT_LIST_FIELDS}}
+    verified_candidate, verified_prior = verified(candidate), verified(prior)
+    verified_gain = (improves(verified_candidate, verified_prior)
+                     and facts(verified_candidate, split_conditions=True) != facts(verified_prior, split_conditions=True))
     action_names = _rx_action_names(_rx_names(candidate, hints if isinstance(hints, dict) else {}), hints, body)
     # with the rule hints, an added action must rest on a change the source states,
     # as the completeness check requires (only where the source has change words)
@@ -1060,7 +1074,10 @@ def quality_improves(candidate, prior, body, hints=None):
     for key in _FACT_LIST_FIELDS:
         for item in candidate.get(key) or []:
             if isinstance(item, dict) and not facts({key: [item]}, split_conditions=True) <= protected:
-                if item.get("unverified") or locate_quote_span(body, item.get("evidence")) is None:
+                if item.get("unverified") and not (key == 'event_records' and verified_gain
+                        and clinical_events.candidate_span(item, body) is not None):
+                    return False
+                if locate_quote_span(body, item.get("evidence")) is None:
                     return False
                 if (key == "meds" and med_is_patient_current(item)
                         and item.get("action") in (None, "none", "no_change")

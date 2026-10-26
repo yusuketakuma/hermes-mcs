@@ -294,6 +294,19 @@ def test_missing_pharmacy_details_use_one_existing_repair(monkeypatch, body, key
     out = extract_llm.llm_extract(body, hints=hints(body) if use_hints else None, meta_out=meta)
     assert len(calls) == 2
     assert out["patient_context"][0]["details"][0]["value"] == value
+    reported = out["patient_context"][0]
+    assert reported["subject"] == "patient" and reported["evidence"] == body
+    assert reported["details"][0]["evidence"] == body
+    if key == "inquiry_result":
+        event, = out["event_records"]
+        assert event["kind"] == "prescription_inquiry"
+        assert event["subject"] not in ("family", "other")
+        assert body[event["span"]["start"]:event["span"]["end"]] == event["evidence"]
+        assert "疑義照会" in event["evidence"] or "処方提案" in event["evidence"]
+        if "の減量を処方提案" in body:
+            proposed, = out["meds"]
+            assert proposed["name"] == "合成薬E" and proposed["evidence"] == body
+            assert proposed["action"] == "decrease" and proposed["status"] == "planned"
     assert not extract_quality.completeness_issues(out, hints(body), body)
     assert meta["repairs"] == 1
 

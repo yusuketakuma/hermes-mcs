@@ -535,7 +535,8 @@ def test_effective_source_change_never_revives_an_old_result_or_checkpoint(sourc
     assert [json.loads(r[0]) for r in current]==[{}]
 
 
-def test_a_prepared_frame_cannot_publish_after_its_other_source_reference_changes(source):
+@pytest.mark.parametrize('change', ['body', 'sender_aba', 'unrelated'])
+def test_a_prepared_frame_cannot_publish_after_its_other_source_reference_changes(source, change):
     import patient_state_context
     from test_pharmacy_state import context
     led, target = source
@@ -551,13 +552,26 @@ def test_a_prepared_frame_cannot_publish_after_its_other_source_reference_change
     frame = patient_state_context.prepare(led,target,model='synthetic',contract=llm._context_contract(),
         attempt={'human':None,'qc':None,'thin':None},enabled=True,base_context=None,version=llm.EXTRACT_VERSION)
     assert len(frame['refs'])==1 and frame['refs']['S1']['value']=='3錠'
+    # Frozen storage carries the reference token as its map key, not in its value.
+    assert 'token' not in frame['refs']['S1']
     prepared = {**target,'_frame':frame,'_context':frame['text'],'_input_context':None,'_target':('synthetic','synthetic')}
     assert llm._replace_current(led,prepared,'{"summary":"合成の初回結果"}')
-    led.save_messages([_message(mid=2,body='本人の合成薬Aの残薬は4錠。',posted_at='2026-09-01T10:00:00+09:00')])
+    if change == 'body':
+        led.save_messages([_message(mid=2,body='本人の合成薬Aの残薬は4錠。',posted_at='2026-09-01T10:00:00+09:00')])
+    elif change == 'sender_aba':
+        from dataclasses import replace
+        antecedent = _message(mid=2,body=body,posted_at='2026-09-01T10:00:00+09:00')
+        led.save_messages([replace(antecedent, sender_name='合成別投稿者')])
+        led.save_messages([antecedent])
+    else:
+        led.save_messages([_message(mid=3,body='無関係な合成の記録です。')])
     assert dependency_loss.source_binding(led.db,1,1)==target['_source_binding']
     before = [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
-    assert not llm._replace_current(led,prepared,'{"summary":"変更前の参照を使った候補"}')
-    assert [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]==before
+    if change == 'unrelated':
+        assert llm._replace_current(led,prepared,'{"summary":"依然有効な参照を使った候補"}')
+    else:
+        assert not llm._replace_current(led,prepared,'{"summary":"変更前の参照を使った候補"}')
+        assert [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]==before
 
 
 @pytest.mark.parametrize('noise', ['invalidated','old_version','old_hash','wrong_project','malformed','null_version','nonobject'])

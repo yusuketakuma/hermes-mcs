@@ -1846,8 +1846,9 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
         if frame is not None:
             current_frame = patient_state_context.load(ledger.db, frame.get("artifact_id"), dict(source))
             if (current_frame is None or current_frame["digest"] != frame.get("digest")
-                    or any(not patient_state_context.reference_current(ledger.db, dict(source), reference,
-                        version=EXTRACT_VERSION) for reference in current_frame["refs"].values())):
+                    or any(not patient_state_context.reference_current(ledger.db, dict(source),
+                        {**reference, "token": token} if isinstance(reference, dict) else None,
+                        version=EXTRACT_VERSION) for token, reference in current_frame["refs"].items())):
                 return False
         meta['source_binding'] = r['_source_binding']
         prior = _prior_extract(ledger.db, r)
