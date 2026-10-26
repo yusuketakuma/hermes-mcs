@@ -20,7 +20,7 @@ from mcs_requests import payload_hash, positive
 from mcs_util import valid_hash
 from message_observations import get_message_metadata
 from message_metadata import is_self_sender, mentions_self
-from stamp_format import self_stamps, stamp_counts, thread_stamp_line, actor_line
+from stamp_format import self_stamps, stamp_counts, others_reaction_count, thread_stamp_line, actor_line
 import structured_view
 from notify_scope import latest_signals, notify_cfg
 import clinical_urgency
@@ -284,7 +284,7 @@ def thread_stamp_row(db, mid, sender_id, *, observed_time=True) -> str:
     unfetched and failed still show."""
     meta = get_message_metadata(db, mid)
     meta["own_post"] = is_self_sender(db, sender_id)
-    if stamp_counts(meta) == {} and not meta["last_error"]:
+    if others_reaction_count(meta) == 0 and not meta["last_error"]:
         return ""
     return thread_stamp_line(meta, reaction_actor_summary(db, mid), observed_time=observed_time)
 
@@ -1011,7 +1011,7 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
             reactions.append((mid, actor_line(actors)))
         else:
             stamp = (thread_stamp_line(meta, actors, observed_time=stamp_time)
-                     if stamp_counts(meta) != {} or meta["last_error"] else "")
+                     if others_reaction_count(meta) != 0 or meta["last_error"] else "")
             reactions.append((mid, actor_line(actors) if stamp_time else "", stamp))
     actor_fp = payload_hash(reactions)
     content = {"containers": containers, "footer": footer,

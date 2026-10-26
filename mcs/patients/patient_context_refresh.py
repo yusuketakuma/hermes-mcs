@@ -700,6 +700,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     cloud_settings = extract_llm._cloud_settings(cfg) if mode in ("on", "shadow") else None
     estimated_unit = False
     shadow_call = None
+    shadow_unit = None
 
     def current():
         return (time.time() < end and admit()
@@ -904,6 +905,16 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 extract_llm.cloud_policy.dryrun_tx(ledger, route="patient_context", project_id=pid,
                     unit_key=lane, input_chars=sum(source.get("body_length", 0) for source in snapshot["sources"]),
                     max_tokens=1600)
+            if not failure and shadow_call is not None:
+                shadow_unit = os.urandom(16).hex()
+                comparison_sources = [source] if lane != "A" else snapshot["sources"]
+                try:
+                    left = _comparison_context(shadow_call[3], comparison_sources,
+                        facts=facts if lane == "A" else None, prefix_ids=shadow_call[4])
+                except ValueError:
+                    left = None
+                extract_llm._cloud_compare_tx(ledger, route="patient_context", project_id=pid,
+                    left=left, right=None, rejected=None, held=None, repairs=None, unit=shadow_unit, pending=True)
             ledger.db.commit()
         except BaseException:
             ledger.db.rollback()
@@ -926,11 +937,25 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         except (ValueError, Deferred):
             cloud_value = None
         sources = [source] if lane != "A" else snapshot["sources"]
-        extract_llm._cloud_compare(ledger, route="patient_context", project_id=pid,
-            local_facts=_comparison_context(local_value, sources, facts=facts if lane == "A" else None,
-                                            prefix_ids=prefix_ids),
-            cloud_facts=None if cloud_value is None else _comparison_context(
-                cloud_value, sources, facts=facts if lane == "A" else None),
-            rejected=measured.get("rejected"), repairs=measured.get("repairs"))
+        try:
+            local_comparison = _comparison_context(local_value, sources, facts=facts if lane == "A" else None,
+                                                   prefix_ids=prefix_ids)
+        except ValueError:
+            local_comparison = None
+        try:
+            cloud_comparison = None if cloud_value is None else _comparison_context(
+                cloud_value, sources, facts=facts if lane == "A" else None)
+        except ValueError:
+            cloud_comparison = None
+        if time.monotonic() < deadline and time.time() < end:
+            audit_fd = acquire_run_lock()
+            if audit_fd is not None:
+                try:
+                    if time.monotonic() < deadline and time.time() < end:
+                        extract_llm._cloud_compare(ledger, route="patient_context", project_id=pid,
+                            local_facts=local_comparison, cloud_facts=cloud_comparison, unit=shadow_unit,
+                            rejected=measured.get("rejected"), repairs=measured.get("repairs"))
+                finally:
+                    os.close(audit_fd)
     return {"status": "failed" if failure else "progressed", "done": int(not failure), "lane": lane,
             **({"reason": failure} if failure else {}), "lock_wait_s": waited, **stats}

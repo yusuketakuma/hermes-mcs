@@ -771,7 +771,7 @@ def _cloud_compare(ledger, *, route, project_id, local_facts, cloud_facts=None,
     A shadow unit is first written ``pending`` with its local commit (so it is
     always in the denominator); its measured result later replaces that row
     in one transaction, so each unit is counted exactly once."""
-    left = set(local_facts)
+    left = None if local_facts is None else set(local_facts)
     right = None if cloud_facts is None else set(cloud_facts)
     for value in (rejected, held, repairs):
         if value is not None and (type(value) is not int or value < 0):
@@ -784,6 +784,10 @@ def _cloud_compare(ledger, *, route, project_id, local_facts, cloud_facts=None,
 def _cloud_compare_tx(ledger, *, route, project_id, left, right, rejected, held, repairs,
                       unit, pending):
     """The comparison write inside the caller's transaction (no commit here)."""
+    if unit is not None and pending and ledger.db.execute(
+            "SELECT 1 FROM artifacts WHERE kind='cloud_compare_v1' AND project_id=? AND "
+            "json_valid(meta) AND json_extract(meta,'$.unit')=?", (project_id, unit)).fetchone():
+        return
     if unit is not None and not pending:
         gone = ledger.db.execute(
             "DELETE FROM artifacts WHERE kind='cloud_compare_v1' AND project_id=? AND "
@@ -793,8 +797,9 @@ def _cloud_compare_tx(ledger, *, route, project_id, left, right, rejected, held,
             return
     ledger.artifact_add_tx("cloud_compare_v1", "{}", project_id=project_id,
         meta={"version": 2, "route": route, "units": 1,
-              "local_facts": len(left), "cloud_facts": None if right is None else len(right),
-              "matched": None if right is None else len(left & right),
+              "local_facts": None if left is None else len(left),
+              "cloud_facts": None if right is None else len(right),
+              "matched": None if left is None or right is None else len(left & right),
               "validated": None if right is None else len(right), "validated_units": int(right is not None),
               "rejected": rejected, "rejected_units": None if rejected is None else int(rejected > 0),
               "rejection_observations": int(rejected is not None),
