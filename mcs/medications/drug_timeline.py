@@ -140,17 +140,24 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
     if name is not None and (not isinstance(name, str) or not 1 <= len(name) <= 120):
         raise ValueError("bad_name")
     sql = "SELECT m.message_id,m.project_id,m.posted_at,m.posted_at_ts,m.body_state,m.content_hash FROM messages m WHERE m.project_id=? AND m.body_state IS NOT 'deleted'"
+    deleted_sql = "SELECT COUNT(*) FROM messages m WHERE m.project_id=? AND m.body_state='deleted'"
     params = [project_id]
     for value, operator in ((since, ">="), (until, "<=")):
         if value is not None:
             if type(value) is not int or value < 0:
                 raise ValueError("bad_period")
             sql += f" AND m.posted_at_ts {operator} ?"
+            deleted_sql += f" AND m.posted_at_ts {operator} ?"
             params.append(value)
     if since is not None and until is not None and since > until:
         raise ValueError("bad_period")
     all_rows = view.db.execute(sql, params).fetchall()
     incomplete = sum(r["body_state"] != "full" for r in all_rows)
+    withdrawn = view.db.execute(deleted_sql, params).fetchone()[0]
+    # Unknown times are included in withdrawn only when no period is requested.
+    withdrawn_time_unknown = view.db.execute(
+        "SELECT COUNT(*) FROM messages WHERE project_id=? AND body_state='deleted' "
+        "AND posted_at_ts IS NULL", (project_id,)).fetchone()[0]
     patient = view.db.execute("SELECT fetch_state,history_floor FROM patients WHERE project_id=?",
                               (project_id,)).fetchone()
     if patient is None:
@@ -225,6 +232,8 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
     replies = incomplete_reply_roots(view.db, project_id)
     coverage = {"period": {"since": since, "until": until},
                 "stored_posts": len(all_rows), "incomplete_bodies": incomplete,
+                "withdrawn_posts": withdrawn,
+                "withdrawn_time_unknown": withdrawn_time_unknown,
                 "incomplete_reply_roots": replies, "no_current_extraction": missing,
                 "failed_fetch_jobs": failed, "history_complete": patient[1] == -1,
                 "attachments": "excluded_ocr_not_performed", "dictionary": dictionary,
@@ -234,6 +243,10 @@ def timeline(view, project_id, *, name=None, since=None, until=None, limit=50, c
                 "matching_pending_on_page": matching_pending,
                 "snapshot": view.meta, "gapless_verified": False}
     states = []
+    if withdrawn:
+        states.append("削除された投稿あり")
+    if withdrawn_time_unknown:
+        states.append("削除された投稿の時刻不明")
     if incomplete or replies or patient[1] != -1:
         states.append("未取得")
     if missing:

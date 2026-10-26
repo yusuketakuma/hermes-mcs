@@ -96,5 +96,7 @@ def reconcile(view, project_id, *, since=None, until=None, limit=50, cursor=None
                            "prescription_authority": False, "missing_names": unknown_names},
             "dictionary_state": dictionary_state, "candidate_only": True, "read_only": True,
             "absence_confirmed": False, "current_use_confirmed": False,
-            "explanation": "薬歴と投稿の照合候補（情報時点・対象者・予定/過去と取得範囲を併記）",
+            "explanation": ("薬歴と投稿の照合候補（情報時点・対象者・予定/過去と取得範囲を併記）"
+                            + ("・削除された投稿あり" if timeline["coverage"]["withdrawn_posts"] else "")
+                            + ("・削除された投稿の時刻不明" if timeline["coverage"]["withdrawn_time_unknown"] else "")),
             "comparison_scope": "stored_post_page", "clinical_equivalence_confirmed": False}

@@ -73,7 +73,9 @@ def test_stale_plan_rule_fallback_deleted_and_partial_not_absence(corpus):
     assert report["items"] == []
     assert report["coverage"]["no_current_extraction"] == 2
     assert report["coverage"]["incomplete_bodies"] == 1
+    assert report["coverage"]["withdrawn_posts"] == 1
     assert "未抽出" in report["explanation"] and "未取得" in report["explanation"]
+    assert "削除された投稿あり" in report["explanation"]
     assert "なし" not in report["explanation"]
 
 
@@ -106,6 +108,57 @@ def test_paging_scope_and_generation_bound(corpus):
     assert first["items"][0]["message_id"] != second["items"][0]["message_id"]
     with pytest.raises(ValueError):
         drug_timeline.timeline(view, 1, name="キラナ", cursor=first["next_cursor"])
+
+
+def test_withdrawn_coverage_is_patient_period_wide_and_does_not_change_page(corpus):
+    from extract_testkit import _message
+
+    for mid in (1, 2):
+        current(corpus, mid, [{"name": "キラナ", "subject": "patient"}])
+    _seed(corpus, mid=7)
+    corpus.db.execute("UPDATE messages SET body_state='snippet' WHERE message_id=7")
+    ts = corpus.db.execute("SELECT posted_at_ts FROM messages WHERE message_id=1").fetchone()[0]
+    view = view_of(corpus)
+    kwargs = {"name": "キラナ", "since": ts - 5, "until": ts + 5, "limit": 1}
+    before = drug_timeline.timeline(view, 1, **kwargs)
+    before_next = drug_timeline.timeline(view, 1, cursor=before["next_cursor"], **kwargs)
+
+    for mid, value in ((3, ts), (4, ts - 100), (5, None)):
+        _seed(corpus, mid=mid, names=("合成非表示の薬",))
+        corpus.db.execute("UPDATE messages SET body_state='deleted', posted_at_ts=? WHERE message_id=?",
+                          (value, mid))
+    corpus.ensure_patient(2)
+    corpus.save_messages([_message(mid=6, project_id=2, body="別患者の合成本文")])
+    corpus.db.execute("UPDATE messages SET body_state='deleted', posted_at_ts=? WHERE message_id=6", (ts,))
+    corpus.save_messages([_message(mid=8, project_id=2, body="別患者の時刻不明")])
+    corpus.db.execute("UPDATE messages SET body_state='deleted', posted_at_ts=NULL WHERE message_id=8")
+    corpus.db.commit()
+    first = drug_timeline.timeline(view, 1, **kwargs)
+    second = drug_timeline.timeline(view, 1, cursor=first["next_cursor"], **kwargs)
+    assert first["items"] == before["items"] and second["items"] == before_next["items"]
+    assert first["next_cursor"] == before["next_cursor"]
+    assert first["coverage"]["stored_posts"] == 3
+    assert first["coverage"]["incomplete_bodies"] == 1
+    assert first["coverage"]["withdrawn_posts"] == second["coverage"]["withdrawn_posts"] == 1
+    assert first["coverage"]["withdrawn_time_unknown"] == second["coverage"]["withdrawn_time_unknown"] == 1
+    unbounded = drug_timeline.timeline(view, 1)
+    assert unbounded["coverage"]["withdrawn_posts"] == 3
+    assert unbounded["coverage"]["withdrawn_time_unknown"] == 1
+    assert "削除された投稿あり" in first["explanation"]
+    assert "削除された投稿の時刻不明" in first["explanation"]
+    assert "合成非表示の薬" not in json.dumps(first, ensure_ascii=False)
+    assert first["candidate_only"] is True
+    assert all(item["change"]["current_use_confirmed"] is False for item in first["items"])
+
+
+def test_only_unknown_time_deleted_still_warns_with_period_filter(corpus):
+    _seed(corpus, mid=1, names=("合成非表示の薬",))
+    corpus.db.execute("UPDATE messages SET body_state='deleted', posted_at_ts=NULL WHERE message_id=1")
+    report = drug_timeline.timeline(view_of(corpus), 1, since=1, until=2)
+    assert report["coverage"]["withdrawn_posts"] == 0
+    assert report["coverage"]["withdrawn_time_unknown"] == 1
+    assert "削除された投稿の時刻不明" in report["explanation"]
+    assert "合成非表示の薬" not in json.dumps(report, ensure_ascii=False)
 
 
 def test_frozen_context_frame_and_digest_are_required(corpus):

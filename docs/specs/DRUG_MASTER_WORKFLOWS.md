@@ -56,6 +56,8 @@ python3 mcs/ops/mcs_drug.py timeline --project 1 --name '架空製品錠5mg' --l
 
 [drug_timeline.timeline](../../mcs/medications/drug_timeline.py) は保存済み投稿のページを返す。`--since/--until` は投稿日時のUnix秒、`--cursor` は同じsnapshot・検索条件の次ページ、`--snapshot` は明示するローカルsnapshot。薬剤のイベント日時を投稿日時から補作しない。
 
+`coverage.withdrawn_posts` は対象患者の削除投稿数で、薬剤との関係は示さない。期間を指定した場合は投稿時刻が範囲内の件数に限る。`coverage.withdrawn_time_unknown` は同じ患者の投稿時刻が不明な削除投稿数で、期間を指定しない場合は `withdrawn_posts` の内数。期間を指定した場合は範囲内か判断できないため別に示し、0件とみなさない。薬剤名による検索条件はどちらの件数にも適用しない。
+
 各itemに原抽出の `mention`、投稿・artifact参照、`change` を持たせる。
 
 | 欄 | 意味 |

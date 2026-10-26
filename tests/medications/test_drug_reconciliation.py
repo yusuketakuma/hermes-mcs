@@ -148,6 +148,34 @@ def test_reconciliation_preserves_page_cursor_and_is_read_only(corpus, monkeypat
     assert first["comparison_scope"] == "stored_post_page"
 
 
+def test_reconciliation_reports_deleted_posts_without_disclosing_their_contents(corpus):
+    current(corpus, 1, [med()])
+    timeline_kit._seed(corpus, mid=2, names=("合成非表示の薬",))
+    corpus.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=2")
+    corpus.db.commit()
+    view = view_of(corpus)
+    before = corpus.db.total_changes
+    timeline = drug_timeline.timeline(view, 1)
+    report = drug_reconciliation.reconcile(view, 1)
+    assert report["coverage"] == timeline["coverage"]
+    assert report["coverage"]["withdrawn_posts"] == 1
+    assert "削除された投稿あり" in report["explanation"]
+    assert "合成非表示の薬" not in json.dumps(report, ensure_ascii=False)
+    assert report["candidate_only"] is True and report["current_use_confirmed"] is False
+    assert report["absence_confirmed"] is False
+    assert corpus.db.total_changes == before
+
+
+def test_reconciliation_warns_for_deleted_unknown_time_with_period(corpus):
+    timeline_kit._seed(corpus, mid=1, names=("合成非表示の薬",))
+    corpus.db.execute("UPDATE messages SET body_state='deleted', posted_at_ts=NULL WHERE message_id=1")
+    report = drug_reconciliation.reconcile(view_of(corpus), 1, since=1, until=2)
+    assert report["coverage"]["withdrawn_posts"] == 0
+    assert report["coverage"]["withdrawn_time_unknown"] == 1
+    assert "削除された投稿の時刻不明" in report["explanation"]
+    assert "合成非表示の薬" not in json.dumps(report, ensure_ascii=False)
+
+
 def test_legacy_ingredient_alias_does_not_expand_official_identity(corpus, tmp_path):
     current(corpus, 1, [med("キラナ"), med("別キラナ")])
     dictionary = _dictionary(tmp_path)
