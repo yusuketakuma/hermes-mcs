@@ -460,9 +460,10 @@ class Ledger:
                 notify_ids = list(dict.fromkeys(
                     notify_ids + self._unnotified([r[0] for r in recent])))
             # Opted-in realtime notification paths cover every new
-            # reply. Bulk imports have no notify template and stay quiet.
+            # reply. Discovery still age-filters old replies on the first import.
             reply_ids = []
-            if self.notify_all_replies and new_ids:
+            if (self.notify_all_replies and new_ids
+                    and notify.get("source") != "discovery"):
                 replies = self.db.execute(
                     "SELECT message_id FROM messages WHERE message_id IN ("
                     + ",".join("?" * len(new_ids))
@@ -535,13 +536,15 @@ class Ledger:
             (project_id,)).fetchone()
         return bool(r and r["a"])
 
-    def upsert_patient_info(self, p, is_archived=None):
+    def upsert_patient_info(self, p, is_archived=None, *, notify_new=False):
         """Identity fields only — for history imports; does NOT touch
         fetch_state/fetch_reason/last_complete_fetch.
 
         is_archived=None preserves the flag; True/False writes it inside
         the SAME upsert statement, so archive state can never be
         half-registered by a crash between two commits (Oracle F1).
+        notify_new reserves a notifying history walk for a new/reappearing
+        live project in that same transaction; initial history stays age-bound.
 
         Returns (created, archive_transitioned): archive_transitioned is
         True when the row ends up archived and was not before — covers
@@ -591,6 +594,12 @@ class Ledger:
                 self.job_add_tx("history_head", p.project_id, payload={
                     "since": since, "page": 1, "trickle": True},
                     reset_pending=True)
+            if notify_new and flag == 0 and (row is None or prev):
+                # Registration and its first notifying walk must survive together.
+                self.job_add_tx("history", p.project_id, payload={
+                    "since": 0, "page": 1, "pages": 3, "trickle": False,
+                    "notify": True, "notify_source": "discovery"},
+                    reset_pending=prev)
         return (row is None, bool(flag) and not prev)
 
     def archive_head_since(self, project_id: int) -> int:
@@ -757,6 +766,10 @@ class Ledger:
                                 if m.is_unread] + [
                     t.message_id for m in msgs for t in m.replies
                     if t.is_unread]
+                if notify and notify.get("source") == "discovery":
+                    # A quiet import may have stored these before the first notify walk.
+                    fresh_unread = [m.message_id for m in msgs] + [
+                        t.message_id for m in msgs for t in m.replies]
                 if notify_all_new:
                     fresh_unread = list(dict.fromkeys(
                         fresh_unread + new_ids))

@@ -106,6 +106,7 @@ class UnreadPatient:
 class UnreadSnapshot:
     timestamp: int
     patients: list[UnreadPatient]
+    listed_patients: list[UnreadPatient] = field(default_factory=list)
 
 
 

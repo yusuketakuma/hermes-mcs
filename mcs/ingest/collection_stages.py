@@ -312,6 +312,20 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
     result["projects"] = len(snap.patients)
     result["snapshot_ts"] = snap.timestamp
 
+    # /projects already lists read rooms too; new invitations need no extra scan.
+    known = {r["project_id"] for r in ledger.frontier_patients()}
+    for p in snap.listed_patients:
+        if p.project_id in known:
+            continue
+        if time.monotonic() > deadline:
+            result["errors"].append("deadline_exceeded")
+            break
+        try:
+            ledger.upsert_patient_info(p, is_archived=False, notify_new=True)
+            known.add(p.project_id)
+        except Exception:
+            result["errors"].append(f"project {p.project_id}: db_write_failed")
+
     for index, p in enumerate(snap.patients):
         if time.monotonic() > deadline:
             result["errors"].append("deadline_exceeded")

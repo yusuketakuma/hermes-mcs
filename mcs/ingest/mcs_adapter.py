@@ -1348,6 +1348,7 @@ class MCSAdapter:
         then can never cover a message posted after the walk began — such a
         message stays unread for the next tick."""
         patients: list[UnreadPatient] = []
+        listed_patients: list[UnreadPatient] = []
         ts = None
         prev_page_ids: set[int] | None = None
         for page in range(1, max_pages + 1):
@@ -1371,9 +1372,11 @@ class MCSAdapter:
                 ids.add(p["id"])
                 if type(p.get("is_unread")) is not bool:
                     raise SchemaError("unread: is_unread missing/invalid")
+                patient = unread_patient(p, "unread")
+                listed_patients.append(patient)
                 if not p["is_unread"]:
                     continue
-                patients.append(unread_patient(p, "unread"))
+                patients.append(patient)
             if prev_page_ids is not None and ids and ids <= prev_page_ids:
                 raise SchemaError("unread: pagination not advancing")
             prev_page_ids = ids
@@ -1382,7 +1385,8 @@ class MCSAdapter:
         else:
             raise MCSError("pages_exceeded", "unread list > 50 pages",
                            retryable=True)
-        return UnreadSnapshot(timestamp=ts, patients=patients)
+        return UnreadSnapshot(timestamp=ts, patients=patients,
+                              listed_patients=listed_patients)
 
     def fetch_unread_messages(self, project_id: int, timestamp: int,
                               per_page: int = 10,

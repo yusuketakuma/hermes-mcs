@@ -41,6 +41,7 @@ TRICKLE_PAGES = 3        # timeline pages per patient per run
 TRICKLE_PATIENTS = 3     # patients advanced per run
 TRICKLE_MIN_S = 90       # only run trickle with this much budget left
 DISCOVERY_INTERVAL_S = 24 * 3600
+DISCOVERY_NOTIFY_MAX_AGE_S = 24 * 3600
 # failed discovery retries on a bounded backoff — the job must stay
 # pending forever, never accumulate attempts into a terminal 'failed'
 DISCOVERY_RETRY_S = 1800
@@ -100,7 +101,8 @@ def _valid_history_payload(pl) -> bool:
             and ("trickle" not in pl or type(pl["trickle"]) is bool)
             and ("stalls" not in pl
                  or (type(pl["stalls"]) is int and pl["stalls"] >= 0))
-            and ("notify" not in pl or type(pl["notify"]) is bool))
+            and ("notify" not in pl or type(pl["notify"]) is bool)
+            and ("notify_source" not in pl or pl["notify_source"] == "discovery"))
 
 
 def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
@@ -554,10 +556,13 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                 f"import {pid} replies: {type(e).__name__}")
             merged = MergeResult(checkpoint_safe=False)
         if pl.get("notify"):
+            max_age_s = notify_max_age_s
+            if pl.get("notify_source") == "discovery" and max_age_s is None:
+                max_age_s = DISCOVERY_NOTIFY_MAX_AGE_S
             new_ids = ledger.save_messages(
                 hist, project_id=pid, semantic=semantic,
-                notify={"source": "history"},
-                notify_max_age_s=notify_max_age_s, notify_all_new=True)
+                notify={"source": pl.get("notify_source", "history")},
+                notify_max_age_s=max_age_s, notify_all_new=True)
         else:
             new_ids = ledger.save_messages(hist, project_id=pid,
                                            semantic=semantic)
@@ -657,9 +662,10 @@ def seed_reconcile(ledger):
     """Ensure one durable reconcile job per floored patient. Only a
     completed deep import gets a re-walk — mid-import patients are
     still covered by their own history cursor."""
+    # Release the read snapshot before per-patient commits admit another writer.
     for r in ledger.db.execute(
             "SELECT project_id FROM patients"
-            " WHERE history_floor IS NOT NULL AND history_floor != 0"):
+            " WHERE history_floor IS NOT NULL AND history_floor != 0").fetchall():
         pid = r["project_id"]
         if not ledger.job_pending("reconcile", pid):
             # stagger first runs so a fleet doesn't refetch together
@@ -810,7 +816,7 @@ def run_discovery(adapter, ledger, result, deadline,
     active_ids = {p.project_id for p in projects}
     for p in projects:
         try:
-            created, _ = ledger.upsert_patient_info(p, is_archived=False)
+            created, _ = ledger.upsert_patient_info(p, is_archived=False, notify_new=True)
             new_n += created
         except Exception as e:
             write_failed = write_failed or type(e).__name__

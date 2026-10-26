@@ -15,7 +15,7 @@ def test_discovery_write_failure_records_first_exception_type(tmp_path, monkeypa
     job_ops.seed_discovery(db)
     failures = iter([TypeError("synthetic"), KeyError("synthetic")])
 
-    def upsert(p, is_archived=False):
+    def upsert(p, is_archived=False, *, notify_new=False):
         raise next(failures)
     monkeypatch.setattr(db, "upsert_patient_info", upsert)
     result = {"errors": []}
