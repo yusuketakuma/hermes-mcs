@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "未発行通知の取消をDiscord・LINE WORKSにも対応",
+  "summary": "運用者が未発行の通知を送らず取り消す mcs/ops/notification_cancel.py が、Slackに加えてDiscordとLINE WORKSの通知も扱えるようになりました。人の承認・停止証跡・計画との一致・DB退避・receiptの条件は従来どおりで、Slackの計画とreceiptの形式は変わりません。",
+  "upgrade": "設定変更は不要です。Discordは従来のSlackと同じく通知ワーカーを停止してから適用します。LINE WORKSは独立アダプターを停止してから適用し、取消は data/lineworks_state/send-*.lock の送信ロックを取得できた場合だけ進みます。送信ロックが無い環境（アダプター未起動）は worker_stop_unverified で拒否します。",
+  "details": [
+    "取消対象の送信先ごとに停止証跡を確認します。Slack・Discordは data/worker_status 内の送信先ごとの記録 の起動記録とプロセスの終了、LINE WORKSはアダプターが起動中ずっと持つ送信ロックです。",
+    "LINE WORKSの送信ロックは適用の終了まで保持するため、取消の途中でアダプターが起動しても送信を始めません。",
+    "複数の送信先を含む計画は、すべての送信先の停止証跡が必要です。別の送信先の停止記録では代用しません。",
+    "停止証跡の確認を、計画と現在状態の照合の直後へ移しました。複数の拒否条件が同時に当てはまる場合、先に返る拒否理由が変わることがあります。",
+    "再送上限に達した集計通知の終端specは、送信先ごとの render フォルダから削除せず退避します。"
+  ],
+  "refs": [
+    "mcs/ops/notification_cancel.py",
+    "docs/guides/NOTIFICATION_RECOVERY.md",
+    "tests/ops/test_notification_cancel_transports.py"
+  ]
+}
