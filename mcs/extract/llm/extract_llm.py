@@ -621,6 +621,7 @@ class _CloudProvider:
         self.model = cfg["cloud_llm"]["model"]
         self.contract = _cloud_contract(cfg)
         generation = cloud_policy.config_generation(cfg)
+        scope = cloud_policy.scope_generation(cfg)
         updater = writer_lock.updater_state()
         key = cloud_policy.api_key(HOME)
         self.dispatch = dispatch
@@ -635,7 +636,7 @@ class _CloudProvider:
         def guard(*, inference=True):
             if ((inference and time.monotonic() >= deadline) or writer_lock.updater_state() != updater
                     or updater[0] or cloud_policy.api_key(HOME) != key
-                    or cloud_policy.config_generation({"cloud_llm": _cloud_settings(load_config())}) != generation
+                    or cloud_policy.scope_generation({"cloud_llm": _cloud_settings(load_config())}) != scope
                     or cloud_policy.block_reason(ledger, _cloud_settings(load_config()), route, project_id)
                     or not current()):
                 raise CloudFallback("cloud_unit_changed")
@@ -704,8 +705,12 @@ def _cloud_settings(cfg):
 
 def _cloud_contract(cfg):
     settings = _cloud_settings(cfg)
+    # Reuse key: the provider and its fixed request shape. The inference rule
+    # versions live in each caller's own contract (EXTRACT_VERSION, the context
+    # CONTRACT/plan/rule), so a rule change rebuilds every patient while code
+    # releases that leave the rules alone do not re-send or hide results.
     return {"backend": "anthropic", "model": settings["model"],
-            "code_contract": _upgrade_contract()}
+            "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": "low"})[:16]}
 
 
 def _cloud_mode(ledger, cfg, route, project_id):
@@ -3059,9 +3064,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             if (isinstance(value, dict) and value.get("_quality_status") == "started"
                     and (checkpoint_stopped.is_set() or time.monotonic() >= deadline)):
                 return False
-            if r.get("_cloud_mode") == "on":
-                saved = True
-                return True
+            # cloud chunks persist too, bound to their provider contract
+            # (_chunk_context), so a deferred post resumes instead of re-paying
             if _owns_current_source(ledger, r, leases[index]):
                 if split:
                     r["_splits"][chunk] = value
@@ -3178,7 +3182,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 chunks_out.clear()
                 meta.clear()
         with local_slots:
-            if _owner_call(lambda: bool(circuit_open_s(ledger.db))):
+            # A plain local row was admitted under this run's breaker check; only
+            # a cloud fallback re-reads it (a pure local row must not wait on the
+            # owner thread for every call).
+            if provider is not None and _owner_call(lambda: bool(circuit_open_s(ledger.db))):
                 return _DEFERRED
             return _infer(r, ctx, saved, hints, qc, index, meta, chunks_out)
 
@@ -3202,7 +3209,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            if parallel else
                            (lambda i, v: _checkpoint(index, i, v)))
 
-    def _commit(r, d, ctx, integrity, qc, *, settled=None) -> bool:
+    def _commit(r, d, ctx, integrity, qc, *, settled=None, shadow=None) -> bool:
         """Persist one validated result — the caller holds the lock.
         True when the artifact was written (a carried commit from an
         earlier pass counts it in the pass that finally wrote it)."""
@@ -3257,7 +3264,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             settled["done"] += 1
         done_pids.add(r["project_id"])
         if r.get("_cloud_mode") == "shadow":
-            shadow_tasks.append((r, d, ctx))
+            # a carried commit reports into the pass that finally commits it
+            (shadow_tasks if shadow is None else shadow).append((r, d, ctx))
         return True
 
     def _handle(r, ctx, d, integrity, lease, chunks_out, qc=None):
@@ -3438,7 +3446,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
 
     def _exec_batch(tups):
         _CALL_NOTES.transport = _CALL_NOTES.transport_at = None
-        out = _run_batch_call(tups, target, deadline, vital_policy)
+        with local_slots:   # cloud workers widen the pool, never the local backend
+            out = _run_batch_call(tups, target, deadline, vital_policy)
         return (*out, getattr(_CALL_NOTES, "transport", None),
                 getattr(_CALL_NOTES, "transport_at", None))
 
@@ -3570,7 +3579,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 for i, (r, lease, commit) in enumerate(carry or ()):
                     if held and _owns_current_source(ledger, r, lease):
                         settled = dict.fromkeys(("done", "held_prior", "deferred"), 0)
-                        commit(settled=settled)
+                        commit(settled=settled, shadow=shadow_tasks)
                         # The thunk closes over its original pass's counters.
                         done += settled["done"]
                         held_prior += settled["held_prior"]

@@ -447,3 +447,40 @@ def test_retained_corrupt_prior_reservation_stops_cross_month_usage(tmp_path, no
         assert c.usage_report(db, now=current)["pricing_unverified"]
         with pytest.raises(AnthropicError, match="pricing_unverified"):
             c._matching_rows_many(db, "cloud_usage_reserve", [f"{10000:032x}"], now=current)
+
+
+@pytest.mark.parametrize("http_class,billed", [("http_429", False), ("http_400", False),
+    ("http_529", False), ("not_sent", False), ("http_500", True), ("http_504", True),
+    ("transport", True), ("timeout", True)])
+def test_refused_attempts_settle_at_zero_and_ambiguous_ones_keep_the_maximum(tmp_path, now, http_class, billed):
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        r = _reserve(db)
+        c.record_result(db, r, _result(r, usage=None, http_class=http_class, error_kind="rate_limited"))
+        report = c.usage_report(db)
+        assert not report["pricing_unverified"]
+        assert Decimal(report["monthly_cost_usd"]) == (c.max_cost(100) if billed else 0)
+        assert report["unresolved_requests"] == int(billed)
+
+
+def test_uncapped_reservations_decode_only_today_but_still_catch_corruption(tmp_path, now, monkeypatch):
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        r = _reserve(db)
+        c.record_result(db, r, _result(r))
+        periods = []
+        real = c.usage_report
+        monkeypatch.setattr(c, "usage_report", lambda *a, **kw: periods.append(kw.get("period")) or real(*a, **kw))
+        _reserve(db, unit="uncapped")
+        _reserve(db, _cfg(monthly_cost_limit_usd=10), unit="capped")
+        assert periods == ["day", "month"]
+        db.artifact_add("cloud_usage_result", "{}", project_id=1, model=MODEL,
+                        meta={**r, "usage": {"input_tokens": -1, "output_tokens": 2}, "cost_usd": "0"})
+        with pytest.raises(AnthropicError, match="pricing_unverified"):
+            _reserve(db, unit="after_corruption")
+
+
+def test_scope_generation_ignores_caps_rate_and_currency():
+    base = c.scope_generation(_cfg())
+    assert base == c.scope_generation(_cfg(monthly_cost_limit_usd=5, daily_request_budget=3,
+                                           max_concurrency=2, usd_jpy=150))
+    assert base != c.scope_generation(_cfg(exclude_project_ids=[1]))
+    assert base != c.scope_generation(_cfg(mode="shadow"))

@@ -84,7 +84,7 @@ def test_parallel_http_hooks_stay_on_ledger_owner(routed, monkeypatch, local_cir
         meta = json.loads(artifact["meta"])
         assert meta["backend"] == "anthropic"
         assert meta["actual_model"] == cloud_policy.cloud_config(cfg)[0]["model"]
-        assert meta["code_contract"] == worker._upgrade_contract()
+        assert meta["prompt"] == worker._cloud_contract(cfg)["prompt"] and "code_contract" not in meta
         assert meta["config_generation"] == cloud_policy.config_generation({"cloud_llm": worker._cloud_settings(cfg)})
     assert not led.artifacts("extract_llm_chunk")
 
@@ -117,7 +117,7 @@ def test_new_post_and_edited_body_are_not_version_reextract(routed):
     assert not worker._cloud_reextract(led, row)
 
 
-@pytest.mark.parametrize("change", ["scope", "stop", "config_generation"])
+@pytest.mark.parametrize("change", ["scope", "stop", "mode"])
 def test_scope_change_while_reserving_never_starts_http(routed, monkeypatch, change):
     led, cfg, calls, reserves, _ = routed
     old(led)
@@ -131,7 +131,7 @@ def test_scope_change_while_reserving_never_starts_http(routed, monkeypatch, cha
             elif change == "stop":
                 monkeypatch.setattr(cloud_policy, "block_reason", lambda *args: "paused")
             else:
-                cfg["cloud_llm"]["max_concurrency"] = 3
+                cfg["cloud_llm"]["mode"] = "shadow"
             return result
         return changed
     monkeypatch.setattr(cloud_policy, "usage_reserver", factory)
@@ -268,7 +268,7 @@ def test_operating_limits_do_not_change_saved_provider_contract(routed, change):
     before = worker._cloud_contract(cfg)
     cfg["cloud_llm"].update(change)
     assert worker._cloud_contract(cfg) == before
-    assert "code_contract" in before and "config_generation" not in before
+    assert "prompt" in before and "code_contract" not in before and "config_generation" not in before
 
 
 def test_cloud_and_shadow_leave_legacy_integrity_notes_untouched(routed):
@@ -628,3 +628,30 @@ def test_pending_write_loss_records_discard_but_lock_wait_does_not(routed, monke
         worker._settle_carry(led, report["carry"], final=True)
         assert not report["carry"] and not led.artifacts("cloud_usage_disposition")
     assert json.loads(led.artifacts(worker.KIND)[0]["meta"])["extract_version"] < worker.EXTRACT_VERSION
+
+
+def test_cloud_contract_follows_rule_versions_not_code_releases(routed, monkeypatch):
+    _, cfg, *_ = routed
+    before = worker._cloud_contract(cfg)
+    monkeypatch.setattr(worker, "_upgrade_contract", lambda: "synthetic-release")
+    assert worker._cloud_contract(cfg) == before
+
+
+def test_operating_limit_change_while_reserving_still_sends_the_paid_unit(routed, monkeypatch):
+    led, cfg, calls, reserves, _ = routed
+    old(led)
+    original = cloud_policy.usage_reserver
+    def factory(*args, **kwargs):
+        reserve = original(*args, **kwargs)
+        def changed(body, timeout):
+            result = reserve(body, timeout)
+            cfg["cloud_llm"].update(max_concurrency=3, monthly_cost_limit_usd=50, usd_jpy=140)
+            return result
+        return changed
+    monkeypatch.setattr(cloud_policy, "usage_reserver", factory)
+    def extract(body, **kwargs):
+        kwargs["provider"]("synthetic", deadline=kwargs["deadline"], max_tokens=100)
+        return {}
+    monkeypatch.setattr(worker, "llm_extract", extract)
+    worker.run_pending(led, budget_s=180)
+    assert len(calls) == 1 and len(reserves) == 1
