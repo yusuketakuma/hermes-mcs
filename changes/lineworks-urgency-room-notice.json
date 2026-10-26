@@ -1,0 +1,15 @@
+{
+  "category": "changed",
+  "title": "LINE WORKSでも緊急度高の再確認通知を受け取れるように変更",
+  "summary": "urgency_escalation.mode を \"on\" にすると、LINE WORKSでも緊急度高・再確認候補の通知が届きます。LINE WORKSにはカードのスレッドがないため、通知はトークルームへの単独投稿になり、先頭の見出しに患者名（施設）を表示し、次の行に「🚨 緊急度高・再確認候補」を表示します。送信前の再検査（緊急度・原文の変更・対応中の確認）、重複防止、再送上限はSlack・Discordと共通です。SlackとDiscordは従来どおり元投稿のスレッドだけに投稿し、スレッドが用意できないときは最大6時間待ってから破棄します。",
+  "upgrade": "既定は無効のままで、操作は不要です。LINE WORKSで有効にするには、config.json の urgency_escalation を {\"mode\": \"on\", \"room_cooldown_min\": 60} のように設定します（notify.interactive が \"lineworks\" なら notify.card_thread は不要）。変更は収集・通知処理側だけで、更新後の次回の通知処理から適用されます（LINE WORKSアダプターのコードは変わりません）。これまでLINE WORKSでは mode=\"on\" が設定検査で拒否されていたため、既存の導入に移行作業はありません。",
+  "details": [
+    "設定検査: notify.interactive が \"lineworks\" の場合は urgency_escalation.mode=\"on\" を受け付ける。Slack・Discordでは引き続き notify.card_thread=true が必要。",
+    "LINE WORKS向けの再確認通知は lineworks_thread_unsupported で保留せず、配信先のトークルームへ通知として封をする。"
+  ],
+  "refs": [
+    "mcs/core/mcs_config.py",
+    "mcs/notify/notify_cards.py",
+    "mcs/notify/presentation/present_lineworks.py"
+  ]
+}

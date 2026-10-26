@@ -98,16 +98,14 @@ def test_unknown_legacy_channel_send_is_held_and_never_duplicates_as_thread_post
     assert _events(store)[0]["next_try"] is None
 
 
-def test_lineworks_has_explicit_hold_instead_of_pseudo_thread_or_channel_fallback(world):
+def test_lineworks_is_no_longer_held_as_thread_unsupported(world):
+    # LINE WORKS now posts the notice to the talk room (tests/notify/test_lineworks_urgency_room.py)
     store, cfg, event, _ = _alert(world)
     lw = {**cfg, "notify": {"interactive": "lineworks", "route_epoch": 1,
           "lineworks": {"profile": "mcs", "application_id": "123", "team_id": "456", "channel_id": "789"}}}
     outcome = notify_cards.dispatch_intent(store, dict(event), lw)
-    assert outcome == {"held": "lineworks_thread_unsupported"}
-    held = _events(store)[0]
-    assert held["state"] == "failed" and held["next_try"] is None
-    assert "lineworks_thread_unsupported" in held["progress"]
-    assert not world[3]
+    assert outcome != {"held": "lineworks_thread_unsupported"}
+    assert "lineworks_thread_unsupported" not in (_events(store)[0]["progress"] or "")
 
 
 def test_parked_alert_waits_minutely_then_hourly_and_is_dropped_after_the_hold(world):

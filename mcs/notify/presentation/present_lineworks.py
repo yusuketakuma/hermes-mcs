@@ -79,6 +79,15 @@ def owner_label(owner: str, member_names) -> str:
     import notify_render
     return notify_render.lineworks_member_names(owner, member_names)
 
+
+def urgent_room_head(parts) -> dict:
+    """The urgency re-check notice lands in the room, not under the
+    patient's card: alert_view's patient line becomes the 【】 heading
+    and the 🚨 heading drops to the next line, so nothing repeats."""
+    head, patient, *rest = parts["containers"]
+    return {**parts, "containers": [{"type": "heading", "text": patient["text"]},
+                                    {"type": "text", "text": head["text"]}, *rest]}
+
 POST_ACTIONS = False          # one text bubble: no per-post controls
 ACCENT_URGENT = False
 

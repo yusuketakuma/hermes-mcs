@@ -1434,9 +1434,16 @@ def _dispatch_notice(ledger, ev, cfg, now) -> dict:
 
 
 def urgent_thread_target(ledger, ev, cfg):
-    """Return only this source's delivered companion-thread binding in the current scope."""
+    """Return only this source's delivered companion-thread binding in the current scope.
+
+    Without source threads (LINE WORKS) the notice is a room post headed
+    with the patient, so its target is the delivery scope itself."""
     scope = notify_scope.delivery_scope(cfg)
-    if not notify_scope.interactive_enabled(cfg) or scope is None or notify_scope.active_transport(cfg) not in ("slack", "discord"):
+    if not notify_scope.interactive_enabled(cfg) or scope is None:
+        return None
+    if not presenter(notify_scope.active_transport(cfg)).SOURCE_THREAD:
+        return scope
+    if notify_scope.active_transport(cfg) not in ("slack", "discord"):
         return None
     try:
         payload = json.loads(ev["payload"])
@@ -1693,11 +1700,8 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
         if scope is not None:
             _clear_thread_hold(db, "event_id=?", event_id)
         if scope is None:
-            reason = "lineworks_thread_unsupported" if notify_scope.active_transport(cfg) == "lineworks" else "source_thread_not_ready"
-            if reason == "lineworks_thread_unsupported":
-                db.execute("UPDATE notify_outbox SET state='failed',next_try=NULL," + HOLD_PROGRESS_SET +
-                           ",updated_at=? WHERE event_id=?", (reason, now, event_id))
-                return {"held": reason}
+            # only Slack/Discord reach here: a room transport's target is its scope
+            reason = "source_thread_not_ready"
             age = now - (row["created_at"] or now)
             if age > SIGNAL_SOURCE_HOLD_MAX_S:
                 # the thread never came (card_thread off, the post's card
@@ -1726,8 +1730,12 @@ def _dispatch_urgent_notice(ledger, ev, cfg, now):
             return {"error": "resend_exhausted"}
         else:
             parts = alert_view.render_parts(checked, db)
+            present = presenter(notify_scope.active_transport(cfg))
+            if not present.SOURCE_THREAD:
+                parts = present.urgent_room_head(parts)
             spec = _notice_spec(event_id, parts, cfg, scope, len(renders) + 1, notify_scope.active_transport(cfg))
-            spec["parts"]["thread_notice"] = True
+            if present.SOURCE_THREAD:
+                spec["parts"]["thread_notice"] = True
             payload = json.loads(row["payload"])
             db.execute("INSERT OR IGNORE INTO notification_intent_batches("
                        "event_id,frozen_payload,payload_hash,route_epoch,sealed_at,transport,scope_json) "
