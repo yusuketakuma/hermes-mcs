@@ -723,7 +723,8 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     # leave the thread (attachments and the rest stay there).
     face_posts, face_mids = [], frozenset()
     if (in_thread_body and op != "revoke" and card["kind"] == "thread"
-            and card["layout"] >= 3 and getattr(present, "BODY_ON_FACE", False)):
+            and card["layout"] >= 3 and (getattr(present, "BODY_ON_FACE", False)
+                                         or getattr(present, "FACE_STAMPS", False))):
         face_posts, face_mids = notify_parts.face_posts(db, card, spec["parts"], content, present)
     spec["parts"], budget_hold = notify_parts.build_manifest(
         db, card, spec, content, in_thread_body, cfg=cfg, face_mids=face_mids, waiting=waiting)

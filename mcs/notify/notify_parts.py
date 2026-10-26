@@ -550,8 +550,12 @@ def face_posts(db, card, parts, content, present) -> tuple:
     post's stamp rows (the same row its thread post had) and its
     original, in page order, while the original fits one folded block
     and the face stays within one message. A post that does not fit, and
-    every post after it, keeps its thread post (no text is dropped)."""
+    every post after it, keeps its thread post (no text is dropped).
+    A transport without ``BODY_ON_FACE`` (``FACE_STAMPS`` only) gets each
+    post's non-empty stamp rows and no message ids: its thread keeps
+    every body, and its adapter drops the rows over budget."""
     import notify_render
+    whole = getattr(present, "BODY_ON_FACE", False)
     rules = [i for i, c in enumerate(parts["containers"])
              if c.get("rule") and c.get("type") == "text"]
     posts, mids = [], set()
@@ -562,7 +566,14 @@ def face_posts(db, card, parts, content, present) -> tuple:
         if m is None:
             break
         if m["body_state"] == "deleted":
-            mids.add(mid)                  # the face's deletion line is the whole post
+            if whole:
+                mids.add(mid)              # the face's deletion line is the whole post
+            continue
+        if not whole:
+            rows = [ln for ln in notify_render.thread_stamp_row(
+                db, mid, m["sender_id"]).split("\n") if ln]
+            if rows:
+                posts.append({"at": at, "stamps": rows})
             continue
         original = m["body_text"] or ("（本文なし）" if m["body_state"] in (None, "full")
                                       else "（本文未取得）")

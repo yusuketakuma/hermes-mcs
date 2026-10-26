@@ -88,7 +88,7 @@ PARTS_KEYS = frozenset({
     "slack", "discord", "lineworks"})
 # what each transport namespace may hold
 TRANSPORT_PART_KEYS = {"slack": frozenset({"post_actions", "face_posts"}),
-                       "discord": frozenset({"post_actions", "accent"}),
+                       "discord": frozenset({"post_actions", "accent", "face_posts"}),
                        "lineworks": frozenset()}
 POST_ACTION_IDS = frozenset({"meds"})   # read-only, clicker-scoped views
 MAX_POST_ACTIONS = 5
@@ -266,9 +266,12 @@ FACE_ORIGINAL_MAX = 30000      # one collapsible container: 10 sections of 3000
 MAX_FACE_POSTS = 8             # one thread-card page (notify_render.PAGE_THREAD)
 
 
-def _validate_face_posts(spec, parts, posts) -> None:
-    """Slack thread-card posts shown whole on the card: under the post line
-    at ``at``, its stamp rows and its folded original (plain text)."""
+def _validate_face_posts(spec, parts, posts, transport) -> None:
+    """Thread-card posts on the card face, under the post line at ``at``:
+    Slack shows its stamp rows and its folded original (plain text);
+    Discord only its (non-empty) stamp rows — no collapsible block."""
+    keys = ({"at", "stamps", "original"} if transport == "slack"
+            else {"at", "stamps"})
     rules = {i for i, c in enumerate(parts["containers"])
              if c.get("rule") and c.get("type") == "text"}
     if spec.get("kind") != "thread" or not isinstance(posts, list) \
@@ -276,12 +279,13 @@ def _validate_face_posts(spec, parts, posts) -> None:
         _err("bad_face_posts")
     seen = set()
     for post in posts:
-        if not isinstance(post, dict) or post.keys() != {"at", "stamps", "original"} \
+        if not isinstance(post, dict) or post.keys() != keys \
                 or type(post["at"]) is not int or post["at"] not in rules \
                 or post["at"] in seen or not isinstance(post["stamps"], list) \
                 or len(post["stamps"]) > 4 \
+                or not (post["stamps"] or transport == "slack") \
                 or not all(_text(x, MAX_TEXT) for x in post["stamps"]) \
-                or not _text(post["original"], FACE_ORIGINAL_MAX):
+                or (transport == "slack" and not _text(post["original"], FACE_ORIGINAL_MAX)):
             _err("bad_face_post")
         seen.add(post["at"])
 
@@ -302,7 +306,7 @@ def _transport_parts_cost(spec, parts) -> int:
         if "accent" in own and own["accent"] != "urgent":
             _err("bad_accent")
         if "face_posts" in own:
-            _validate_face_posts(spec, parts, own["face_posts"])
+            _validate_face_posts(spec, parts, own["face_posts"], name)
         actions = own.get("post_actions")
         if actions is None:
             continue
