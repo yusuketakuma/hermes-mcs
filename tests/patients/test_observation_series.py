@@ -76,6 +76,101 @@ def test_source_bound_vital_with_unrecorded_condition_is_visible(name, value, un
     assert result["unconfirmed"] == []
 
 
+def test_same_explicit_measurement_lists_distinct_vitals_without_inventing_conditions():
+    quote = "本人は2026-10-01に測定した体温36.5℃、SpO2 96%、脈拍72回/分。"
+    items = [_single(1, name, value, unit, quote) for name, value, unit in (
+        ("体温", "36.5", "℃"), ("SpO2", "96", "%"), ("脈拍", "72", "回/分"))]
+    for item in items:
+        item.pop("_heading_group")
+    result = _view(items)
+    assert {row["name"] for row in result["series"]} == {"体温", "SpO2", "脈拍"}
+    assert all(row["condition"] is None and row["event_date_kind"] == "measured_on"
+               and len(row["records"]) == 1
+               and row["records"][0]["event_date_text"] == "2026-10-01"
+               and row["records"][0]["event_date_kind"] == "measured_on"
+               for row in result["series"])
+    assert result["unconfirmed"] == []
+
+
+def test_oxygen_flow_is_bound_only_to_its_spo2_observation():
+    quote = "本人は2026-10-01に測定した体温36.5℃、酸素2L/分投与下のSpO2 96%。"
+    temperature = _single(1, "体温", "36.5", "℃", quote)
+    oxygen = _single(1, "SpO2", "96", "%", quote, condition="酸素2L/分投与下")
+    for item in (temperature, oxygen):
+        item.pop("_heading_group")
+    result = _view([temperature, oxygen])
+    by_name = {row["name"]: row for row in result["series"]}
+    assert by_name["体温"]["condition"] is None
+    assert by_name["SpO2"]["condition"] == "酸素2L/分投与下"
+    assert result["unconfirmed"] == []
+    wrong_flow_as_reading = _single(2, "SpO2", "2", "%", quote, condition="酸素2L/分投与下")
+    assert _view([wrong_flow_as_reading])["series"] == []
+
+
+@pytest.mark.parametrize("quote", [
+    "本人は2026-10-01に測定した体温36.5℃、翌日のSpO2 96%。",
+    "本人は2026-10-01に測定した体温36.5℃、2026-10-02にSpO2 96%。",
+    "本人は2026-10-01に測定した体温36.5℃、家族のSpO2 96%。",
+    "本人は2026-10-01に測定した体温36.5℃、その後SpO2 96%を測定。",
+    "本人は2026-10-01に測定した体温36.5℃、SpO2 96℃。",
+    "本人は2026-10-01に測定した体温36.5℃、SpO2 96%、SpO2 97%。",
+    "本人は2026-10-01に測定した体温36.5℃、SpO2 96%ではありません。",
+    "本人は2026-10-01に測定した体温36.5℃、酸素2L/分投与下のSpO2 96%、酸素3L/分投与下の脈拍72回/分。",
+    "本人は2026-10-01に測定した体温36.5℃、SpO2 96%。" + "合成" * 501,
+])
+def test_vital_list_rejects_ambiguous_source_scope_or_values(quote):
+    item = _single(1, "SpO2", "96", "%", quote)
+    result = _view([item])
+    assert result["series"] == [] and result["unconfirmed"]
+    assert quote not in str(result)
+
+
+def test_oxygen_condition_must_include_the_written_flow_and_remain_target_bound():
+    quote = "本人は2026-10-01に測定した酸素2L/分投与下のSpO2 96%。"
+    for condition in (None, "酸素投与下", "酸素3L/分投与下"):
+        item = _single(1, "SpO2", "96", "%", quote, condition=condition)
+        result = _view([item])
+        assert result["series"] == [] and result["unconfirmed"]
+    item = _single(2, "SpO2", "96", "%", quote, condition="酸素2L/分投与下")
+    result = _view([item])
+    assert len(result["series"]) == 1
+    assert result["series"][0]["condition"] == "酸素2L/分投与下"
+
+
+def test_oxygen_flows_are_distinct_written_conditions():
+    items = []
+    for mid, flow in ((1, 2), (2, 3)):
+        condition = f"酸素{flow}L/分投与下"
+        quote = f"本人は2026-10-01に測定した{condition}のSpO2 96%。"
+        items.append(_single(mid, "SpO2", "96", "%", quote, condition=condition))
+    result = _view(items)
+    assert {series["condition"] for series in result["series"]} == {
+        "酸素2L/分投与下", "酸素3L/分投与下"}
+
+
+def test_listed_vitals_follow_current_extraction_and_context_evidence(tmp_path, monkeypatch):
+    body = "本人は2026-10-01に測定した体温36.5℃、SpO2 96%。"
+    with closing(_db(tmp_path, ())) as db:
+        db.save_messages([replace(_message(1, body=body), posted_at="2026-10-03T09:00:00+09:00")], project_id=1)
+        items = []
+        for name, value, unit in (("体温", "36.5", "℃"), ("SpO2", "96", "%")):
+            details = [{"key": key, "value": val, "evidence": body} for key, val in (
+                ("observation_name", name), ("value", value), ("unit", unit), ("measured_on", "2026-10-01"))]
+            items.append({"category": "observations", "subject": "patient", "text": name,
+                          "evidence": body, "details": details})
+        _artifact(db, "extract_llm", 1, {"patient_context": items}, {"hash": _hash_of(db, 1)})
+        source = {**dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()), "source": "chat"}
+        facts = patient_context_refresh._facts(source, items, night_id="2026-10-03", discovery="new_report")
+        assert facts and patient_context_refresh._validated_facts(source, facts) == facts
+        monkeypatch.setattr(patient_context_refresh, "context_view_input", lambda *a, **k: {
+            "facts": facts, "as_of": source["posted_at_ts"], "summary": [], "coverage": {}})
+        monkeypatch.setattr(patient_context_refresh, "inference_coverage", lambda *a, **k: {"complete": False})
+        ev = patient_context_view.evidence(db.db, 1)
+        result = observation_series.observation_series(ev, source_bodies={(1, source["content_hash"]): body})
+        assert {row["name"] for row in result["series"]} == {"体温", "SpO2"}
+        assert result["unconfirmed"] == []
+
+
 @pytest.mark.parametrize("quote", [
     "本人は2026-10-01に受診し、その後に測定した体温36.5℃。",
     "本人は2026-10-01に測定した脈拍72回/分、その後に体温36.5℃を測定。",

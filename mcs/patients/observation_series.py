@@ -18,6 +18,12 @@ _VITAL_NAMES = {"体温": "bt", "bt": "bt", "spo2": "spo2", "酸素飽和度": "
                 "脈拍": "hr", "心拍": "hr", "hr": "hr", "呼吸数": "rr", "rr": "rr"}
 _VITAL_UNITS = {"bt": ("℃",), "spo2": ("%", "％"), "hr": ("回/分", "回／分"),
                 "rr": ("回/分", "回／分")}
+_VITAL_LIST_ITEM = re.compile(
+    r"(?:(?P<condition>酸素\s*\d{1,3}(?:[.．]\d{1,2})?\s*[LＬ]"
+    r"(?:\s*[/／]\s*分)?\s*投与下)の)?"
+    r"(?P<name>体温|BT|SpO2|酸素飽和度|脈拍|心拍|HR|呼吸数|RR)"
+    r"\s*(?:は|が|[:：])?\s*(?P<value>\d{1,3}(?:[.．]\d{1,2})?)\s*"
+    r"(?P<unit>℃|%|％|回/分|回／分)", re.I)
 
 
 def _subject(item):
@@ -51,6 +57,54 @@ def _day(value):
         return None
 
 
+def _supported_vital_list(quote, wanted, condition, date_kind):
+    """Accept only an explicit patient/date/measurement and a bounded vital list."""
+    key = _VITAL_NAMES.get(wanted["observation_name"].casefold())
+    if key is None or date_kind != "measured_on":
+        return None
+    if len(quote) > 1000:
+        return False
+    prefix = re.match(r"\s*(?:ご本人|本人|患者本人|患者さん|患者様|利用者本人|利用者さん|利用者様)"
+                      r"(?:は|が)\s*" + re.escape(wanted[date_kind])
+                      + r"\s*(?:に|の)\s*(?:測定|計測)(?:した|の)\s*", quote)
+    if prefix is None:
+        return None
+    items, seen, offset = [], set(), prefix.end()
+    while len(items) < 6:
+        match = _VITAL_LIST_ITEM.match(quote, offset)
+        if match is None:
+            return False
+        name = match["name"]
+        item_key = _VITAL_NAMES.get(name.casefold())
+        if (item_key is None or item_key in seen or match["unit"] not in _VITAL_UNITS[item_key]
+                or match["condition"] is not None and item_key != "spo2"):
+            return False
+        seen.add(item_key)
+        items.append(match)
+        offset = match.end()
+        ending = re.match(r"\s*[。．]?\s*$", quote[offset:])
+        if ending:
+            break
+        separator = re.match(r"\s*[、，,]\s*", quote[offset:])
+        if separator is None:
+            return False
+        offset += separator.end()
+    else:
+        return False
+    if len(items) < 2 and not items[0]["condition"]:
+        return None
+    target = next((m for m in items if _VITAL_NAMES[m["name"].casefold()] == key), None)
+    if (target is None or target["name"].casefold() != wanted["observation_name"].casefold()
+            or target["value"] != wanted["value"] or target["unit"] != wanted["unit"]
+            or target["condition"] != condition):
+        return False
+    value = float(target["value"].replace("．", "."))
+    hits = [m for m in _vital_numbers(quote) if _nearest_vital_label(quote, *m.span()) == key
+            and not _FLOW_AFTER.match(quote, m.end())]
+    return (len(hits) == 1 and float(hits[0][0].replace("．", ".")) == value
+            and grounded_vitals(quote, {key: value}) == {key: value})
+
+
 def _supported_item(item, values, date_kind):
     """Require one source quote to bind the person, name, value, unit and time."""
     quote = item.get("quote")
@@ -60,12 +114,15 @@ def _supported_item(item, values, date_kind):
     condition = next(iter(values["condition"])) if values["condition"] else None
     if condition is not None:
         wanted["condition"] = condition
-    elif _CONDITION_CUE.search(quote):
-        return False
     details = item.get("details") or []
     if any(not any(isinstance(d, dict) and d.get("key") == key and d.get("value") == value
                        and isinstance(d.get("evidence"), str) and d["evidence"] in quote
                        for d in details) for key, value in wanted.items()):
+        return False
+    listed = _supported_vital_list(quote, wanted, condition, date_kind)
+    if listed is not None:
+        return listed
+    if condition is None and _CONDITION_CUE.search(quote):
         return False
     person = _PATIENT.search(quote)
     at = quote.find(wanted["observation_name"])
