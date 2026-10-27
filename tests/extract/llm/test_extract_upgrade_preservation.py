@@ -4,6 +4,8 @@ import json
 import pytest
 
 import extract_llm as llm
+import inference_dependency_loss
+from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY
 from extract_testkit import _hash, _ledger, _message, _qc_artifact
 
 BODY = "本人に息切れはありません。家族には軽い発熱があります。"
@@ -12,12 +14,20 @@ PRIOR = {"summary": "合成の報告", "symptoms": [
     {"text": "発熱", "negated": False, "status": "ongoing", "subject": "family", "evidence": "家族には軽い発熱があります。"}]}
 
 
+def _bound_row(db):
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row["_source_binding"] = inference_dependency_loss.source_binding(db.db, row["project_id"], row["message_id"])
+    return row
+
+
 def seed(tmp_path, *, version=None, body=BODY):
     db = _ledger(tmp_path)
     db.save_messages([_message(body=body)])
+    row = _bound_row(db)
     aid = db.artifact_add("extract_llm", json.dumps(PRIOR, ensure_ascii=False), project_id=1, message_id=1,
-        meta={"hash": _hash(db), "extract_version": llm.EXTRACT_VERSION - 1 if version is None else version})
-    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+        meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(db),
+              "source_binding": row["_source_binding"],
+              "extract_version": llm.EXTRACT_VERSION - 1 if version is None else version})
     return db, aid, row
 
 
@@ -28,11 +38,13 @@ def test_automatic_replacements_preserve_the_original_artifact_and_stop_repeatin
         if route == "thin":
             # One assertion on a long body qualifies for the actual thin retry.
             db.save_messages([_message(body=BODY + "合成の経過報告です。" * 40)])
-            row = dict(db.db.execute("SELECT * FROM messages").fetchone())
+            row = _bound_row(db)
             with db.db:
                 db.db.execute("UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?",
                     (json.dumps({"symptoms": PRIOR["symptoms"][:1]}), json.dumps({
-                        "hash": row["content_hash"], "extract_version": llm.EXTRACT_VERSION}), aid))
+                        VERSION_KEY: CURRENT_VERSION, "hash": row["content_hash"],
+                        "source_binding": row["_source_binding"],
+                        "extract_version": llm.EXTRACT_VERSION}), aid))
         if route == "qc":
             _qc_artifact(db, 1, aid, row["content_hash"], {"qc": "done", "items": [{
                 "section": "symptoms", "verdict": "NO_MATCH", "item": PRIOR["symptoms"][0]}]})
@@ -69,9 +81,39 @@ def test_an_edited_body_does_not_inherit_a_prior_hashs_protection(tmp_path):
     db, _, _ = seed(tmp_path)
     try:
         db.save_messages([_message(body="本人の息切れが改善しました。")])
-        row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+        row = _bound_row(db)
         assert llm._replace_current(db, row, json.dumps({"summary": "合成の新しい報告"})) is True
         assert not db.artifacts("extract_upgrade_v1")
+    finally:
+        db.close()
+
+
+def test_replacement_rejects_the_old_source_occurrence_after_body_aba(tmp_path):
+    db, aid, stale_row = seed(tmp_path)
+    try:
+        db.save_messages([_message(body="本人の息切れが改善しました。")])
+        db.save_messages([_message(body=BODY)])
+        original = dict(db.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone())
+        assert _bound_row(db)["_source_binding"] != stale_row["_source_binding"]
+        assert llm._replace_current(db, stale_row, '{"summary":"合成の候補"}') is False
+        assert dict(db.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()) == original
+        assert not db.artifacts(llm.UPGRADE_KIND)
+    finally:
+        db.close()
+
+
+def test_legacy_inference_generation_still_protects_original_assertions(tmp_path):
+    db, aid, row = seed(tmp_path)
+    try:
+        meta = json.loads(db.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()[0])
+        meta[VERSION_KEY] = LEGACY_VERSION
+        with db.db:
+            db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), aid))
+        original = dict(db.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone())
+        assert llm._replace_current(db, row, '{"summary":"合成の候補"}') is False
+        assert dict(db.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()) == original
+        receipt = json.loads(db.artifacts(llm.UPGRADE_KIND)[0]["content"])
+        assert receipt["state"] == "held_prior" and receipt["prior_artifact_id"] == aid
     finally:
         db.close()
 
@@ -104,7 +146,7 @@ def test_human_confirmed_feedback_can_correct_an_old_wrong_flag(tmp_path, monkey
     import mcs_requests
     db, aid, _ = seed(tmp_path)
     try:
-        row = dict(db.db.execute("SELECT * FROM messages").fetchone())
+        row = _bound_row(db)
         assert llm._replace_current(db, row, '{"summary":"合成の弱い自動候補"}') is False
         request = envelopes.extract_feedback("synthetic-operator", {"project_id": 1, "extract_ref": {
             "message_id": 1, "artifact_id": aid}}, "symptoms", "合成の確認結果")
@@ -257,7 +299,9 @@ def test_prior_is_read_after_the_write_lock_including_a_concurrent_correction(tm
     def publish_before_lock(sql):
         if not published and sql == "BEGIN IMMEDIATE":
             published.append(other.artifact_add(llm.KIND, json.dumps(PRIOR), project_id=1, message_id=1,
-                meta={"hash": row["content_hash"], "extract_version": llm.EXTRACT_VERSION - 1}))
+                meta={VERSION_KEY: CURRENT_VERSION, "hash": row["content_hash"],
+                      "source_binding": row["_source_binding"],
+                      "extract_version": llm.EXTRACT_VERSION - 1}))
     db.db.set_trace_callback(publish_before_lock)
     try:
         assert llm._replace_current(db, row, '{"summary":"合成の弱い候補"}') is False

@@ -25,6 +25,7 @@ separate generation-crossing engine.
 """
 import argparse
 import contextlib
+import copy
 from datetime import datetime
 import hashlib
 import json
@@ -1066,7 +1067,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 chunks_in: dict | None = None,
                 chunks_out: dict | None = None,
                 feedback: list | None = None,
-                on_chunk=None,
+                on_chunk=None, on_chunk_replay=None,
                 vital_policy: dict | None = None,
                 chunk_size: int | None = None, on_split=None, splits_in: dict | None = None,
                 references: dict | None = None, provider=None
@@ -1190,7 +1191,8 @@ def llm_extract(body: str, *, context: str | None = None,
                 record = {**record, "state": "unresolved"}
             if quality_status is None:
                 sizes.append(len(piece))
-                return finish_piece(key, result, record)
+                replayed = isinstance(cached.get("_quality_result"), dict) and record == cached["_quality_result"]
+                return finish_piece(key, result, record, replayed=replayed)
         if key in splits:
             return children(key, piece, start, remaining)
         sizes.append(len(piece))
@@ -1328,15 +1330,18 @@ def llm_extract(body: str, *, context: str | None = None,
             return None
         return finish_piece(key, v, quality_record)
 
-    def finish_piece(key, v, quality_record, *, pending=False):
+    def finish_piece(key, v, quality_record, *, pending=False, replayed=False):
         if meta_out is not None:
             meta_out.setdefault("completeness", {})[str(key)] = quality_record
         checkpoint = {**v, "_quality_status": "pending"} if pending else (
             {**v, "_quality_result": quality_record} if quality_record is not None else v)
         if chunks_out is not None:
             chunks_out[key] = checkpoint
-        if on_chunk is not None:
-            on_chunk(key, checkpoint)
+        callback = on_chunk_replay if replayed and on_chunk_replay is not None else on_chunk
+        if callback is not None:
+            accepted = callback(key, checkpoint)
+            if replayed and on_chunk_replay is not None and accepted is False:
+                return _DEFERRED
         return [v]
 
     with pin_target(_resolved_llm()):
@@ -1518,7 +1523,7 @@ def _llm_up(deadline: float | None = None) -> bool:
 # lease/fail bookkeeping per claimed row.
 
 
-def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
+def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0, *, scoped_cleanup=False):
     """In-transaction error artifact insert — caller holds `with
     ledger.db` AND has already cleared prior error rows in the same tx.
     extract_version is stamped so a prior schema version's permanent
@@ -1553,7 +1558,9 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0):
         prior = _prior_extract(ledger.db, r)
         if prior and (loads_dict(prior["meta"]).get("extract_version") != EXTRACT_VERSION
                       or not inference.is_current(loads_dict(prior["meta"]), target=_INFERENCE_VERSION)):
-            _record_hold_tx(ledger, r, prior, "attempts_exhausted")
+            _record_hold_tx(ledger, r, prior, "attempts_exhausted", remove_chunks=not scoped_cleanup)
+            return True
+    return False
 
 
 # Periodic automatic retry of permanently failed extractions (owner
@@ -1618,20 +1625,32 @@ def revive_failed(ledger, now: float | None = None) -> dict:
     return out
 
 
-def _fail(ledger, r, attempts: int):
+def _fail(ledger, r, attempts: int, *, lease=None):
     """Record an error artifact with retry metadata — a transient failure
     must retry later, a permanent one must stop (Oracle B21). Prior
     error rows are folded in, not stacked."""
+    if ledger.db.in_transaction:
+        return
     with ledger.db:
         if not ledger.db.in_transaction:
             ledger.db.execute("BEGIN IMMEDIATE")
         if not _source_writable(ledger.db, r):
             return
+        if lease is not None and not _owns_current_source(ledger, r, lease):
+            return
+        if lease is not None:
+            size, layout, identities = _checkpoint_identity(
+                ledger.db, r, r.get("_context"), r["_chunk_size"])
+            if (size != r["_chunk_size"] or layout != r.get("_checkpoint_layout")
+                    or identities != r.get("_checkpoint_identity") or r.get("_checkpoint_conflict")):
+                return
         prev = _error_attempts(ledger, r["message_id"], r["content_hash"])
         revived = _error_auto_retry(ledger, r["message_id"],
                                     r["content_hash"])
         _clear_error_tx(ledger, r["message_id"])
-        _fail_tx(ledger, r, max(attempts, prev), revived)
+        held = _fail_tx(ledger, r, max(attempts, prev), revived, scoped_cleanup=lease is not None)
+        if held and lease is not None:
+            _delete_checkpoint_keys_tx(ledger.db, r, r.get("_context"), identities.keys())
 
 
 def _error_auto_retry(ledger, mid: int, content_hash) -> int:
@@ -1742,6 +1761,10 @@ def _prior_extract(db, r):
         (KIND, r["message_id"], r["project_id"], r["content_hash"])).fetchone()
 
 
+def _prior_identity(prior):
+    return tuple(prior[key] for key in ("artifact_id", "project_id", "message_id", "content", "model", "meta"))
+
+
 def _hold_sql(*, human=False, released=False):
     """Source-bound private receipts; a fresh human report bypasses automatic holds.
     ``released`` matches the same receipt minted under an older code contract."""
@@ -1769,7 +1792,7 @@ def _hold_sql(*, human=False, released=False):
             AND {reason} ELSE 0 END"""
 
 
-def _record_hold_tx(ledger, r, prior, reason, *, lost=None, feedback_id=None):
+def _record_hold_tx(ledger, r, prior, reason, *, lost=None, feedback_id=None, remove_chunks=True):
     receipt = {inference.VERSION_KEY: _INFERENCE_VERSION, "state": "held_prior", "reason": reason, "hash": r["content_hash"],
         "prior_artifact_id": prior["artifact_id"], "target_version": EXTRACT_VERSION,
         "contract": _upgrade_contract()}
@@ -1784,9 +1807,11 @@ def _record_hold_tx(ledger, r, prior, reason, *, lost=None, feedback_id=None):
         ledger.artifact_add_tx(UPGRADE_KIND, raw, project_id=r["project_id"], message_id=r["message_id"],
             meta={inference.VERSION_KEY: _INFERENCE_VERSION, "hash": r["content_hash"], "contract": receipt["contract"]})
     # Settled rejected chunks must never become a fresh human correction's input.
-    ledger.db.execute("DELETE FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=? AND "
-                      + inference.current_meta_pred("meta", target=_INFERENCE_VERSION),
-                      (r["message_id"],))
+    if remove_chunks:
+        ledger.db.execute("DELETE FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=? "
+                          "AND (project_id=? OR project_id IS NULL) AND "
+                          + inference.current_meta_pred("meta", target=_INFERENCE_VERSION),
+                          (r["message_id"], r["project_id"]))
 
 def _replace_current(ledger, r, content: str, ctx: bool = False,
                      integrity: dict | None = None,
@@ -1801,8 +1826,34 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
     `ctx` records whether thread context was supplied: the content hash
     covers only the body, so without the flag a context-free
     extraction is indistinguishable from a context-aware one."""
-    if not isinstance(r, dict) or not isinstance(r.get("_source_binding"), str):
+    if (ledger.db.in_transaction or not isinstance(r, dict)
+            or not isinstance(r.get("_source_binding"), str)):
         return False
+    try:
+        with ledger.db:
+            if not ledger.db.in_transaction:
+                ledger.db.execute("BEGIN IMMEDIATE")
+            outcome = _replace_current_tx(ledger, r, content, ctx, integrity, qc_fix, extra_meta)
+    except CloudFallback:
+        if isinstance(r, dict) and r.get("_cloud_discard"):
+            r["_cloud_discard"]()
+        return False
+    if outcome != "rejected":
+        project_id = r.get("project_id")
+        if project_id is None:
+            row = ledger.db.execute("SELECT project_id FROM messages WHERE message_id=?",
+                                    (r["message_id"],)).fetchone()
+            project_id = row[0] if row else None
+        _rerender_cards(ledger, project_id, r["message_id"])
+    return outcome == "written"
+
+
+def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
+                     integrity: dict | None = None,
+                     qc_fix: dict | None = None,
+                     extra_meta: dict | None = None, *, scoped_cleanup=False):
+    if not isinstance(r, dict) or not isinstance(r.get("_source_binding"), str):
+        return "rejected"
     meta = {inference.VERSION_KEY: _INFERENCE_VERSION, "hash": r["content_hash"],
             "extract_version": EXTRACT_VERSION,
             "patient_context_version": PATIENT_CONTEXT_VERSION}
@@ -1811,7 +1862,7 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
             "SELECT * FROM messages m WHERE message_id=? AND content_hash=? "
             f"AND {current_v4_id()} IS NULL", (r["message_id"], r["content_hash"])).fetchone()
         if source is None:
-            return False                # fence before any missing-row context read
+            return "rejected"                # fence before any missing-row context read
         r = {**dict(source), **dict(r)}
     actual_model = _actual_model(r)
     bound_context = r["_context"] if "_context" in r.keys() else _thread_context(ledger.db, r)
@@ -1834,119 +1885,112 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
     if isinstance(r, dict) and r.get('_source_binding') is not None:
         meta['source_binding'] = r['_source_binding']
     held_prior = False
-    with ledger.db:
-        if not ledger.db.in_transaction:
-            ledger.db.execute("BEGIN IMMEDIATE")
-        if not _source_writable(ledger.db, r):
-            return False
-        if isinstance(r, dict) and r.get("_cloud_guard"):
-            try:
-                r["_cloud_guard"]()
-            except CloudFallback:
-                ledger.db.rollback()
-                if r.get("_cloud_discard"):
-                    r["_cloud_discard"]()
-                return False
-        source = ledger.db.execute(
-            "SELECT m.* FROM messages m WHERE message_id=? AND content_hash=? AND project_id=? "
+    if not _source_writable(ledger.db, r):
+        return "rejected"
+    if isinstance(r, dict) and r.get("_cloud_guard"):
+        try:
+            r["_cloud_guard"]()
+        except CloudFallback:
+            raise
+    source = ledger.db.execute(
+        "SELECT m.* FROM messages m WHERE message_id=? AND content_hash=? AND project_id=? "
+        "AND (body_state IS NULL OR body_state='full') "
+        f"AND {current_v4_id()} IS NULL",
+        (r["message_id"], r["content_hash"], r["project_id"])).fetchone()
+    if source is None:
+        return "rejected"
+    if "_input_context" in r and _thread_context(ledger.db, r,
+            budget=r.get("_input_context_budget", _CTX_TOTAL_MAX)) != r["_input_context"]:
+        return "rejected"
+    frame = r.get("_frame")
+    if frame is not None:
+        current_frame = patient_state_context.load(ledger.db, frame.get("artifact_id"), dict(source))
+        if (current_frame is None or current_frame["digest"] != frame.get("digest")
+                or any(not patient_state_context.reference_current(ledger.db, dict(source),
+                    {**reference, "token": token} if isinstance(reference, dict) else None,
+                    version=EXTRACT_VERSION) for token, reference in current_frame["refs"].items())):
+            return "rejected"
+    meta['source_binding'] = r['_source_binding']
+    prior = _prior_extract(ledger.db, r)
+    human = extra_meta.get("human_fix") if isinstance(extra_meta, dict) else None
+    old = loads_dict(prior["content"]) if prior else None
+    lost = extract_quality.protected_lost(old, loads_dict(content), source["body_text"]) if old else {}
+    prior_meta = loads_dict(prior["meta"]) if prior else None
+    human_failed = isinstance(human, dict) and human.get("applied") is False
+    qc_failed = isinstance(qc_fix, dict) and qc_fix.get("applied") is False
+    old_carry = (prior_meta and (prior_meta.get("extract_version") != EXTRACT_VERSION or not inference.is_current(prior_meta, target=_INFERENCE_VERSION))
+                 and (human_failed or qc_failed))
+    if old_carry or (lost and not (isinstance(human, dict) and human.get("applied") is True)):
+        reason = ("human_failed" if human_failed else "qc_failed") if old_carry else "protected_loss"
+        _record_hold_tx(ledger, r, prior, reason,
+                        lost=lost, feedback_id=human.get("feedback_id") if human else None,
+                        remove_chunks=not scoped_cleanup)
+        held_prior = True
+    else:
+        if prior_meta and (human_failed or qc_failed or
+                           (isinstance(r, dict) and r.get("_kept_prior"))):
+            for key in ("actual_model", "plan_version", "context_binding", "context_snapshot",
+                        "context_digest", "patient_state_context", "ctx", "patient_context_version", "integrity"):
+                if key in prior_meta:
+                    meta[key] = prior_meta[key]
+                else:
+                    meta.pop(key, None)
+            actual_model = prior["model"]
+        if prior_meta and (prior_meta.get("extract_version") != EXTRACT_VERSION or not inference.is_current(prior_meta, target=_INFERENCE_VERSION)):
+            meta["upgrade"] = {"prior_artifact_id": prior["artifact_id"],
+                "prior_version": prior_meta.get("extract_version"),
+                "facts_lost": len(extract_quality.facts(extract_validation.validate(old, source["body_text"]) or {})
+                                  - extract_quality.facts(extract_validation.validate(loads_dict(content) or {}, source["body_text"]) or {}))}
+        previous = ledger.db.execute(
+            "SELECT a.content,a.meta,a.model FROM artifacts a JOIN messages m "
+            "ON m.message_id=a.message_id WHERE a.kind=? AND a.message_id=? "
+            "AND a.project_id=? " + current_extract_pred()
+            + " ORDER BY a.artifact_id DESC LIMIT 1",
+            (KIND, r["message_id"], r["project_id"])).fetchone()
+        current_signature = mcs_queries.extraction_input_signature(content, meta, actual_model)
+        try:
+            previous_signature = mcs_queries.extraction_input_signature(
+                previous["content"], previous["meta"], previous["model"]) if previous else None
+        except ValueError:
+            # Unreadable stored history cannot veto a validated replacement.
+            # Its unknown meaning still invalidates derived analysis proofs.
+            previous_signature = None
+        changed = previous_signature != current_signature
+        # Keep the INSERT fence even though the prior check owns the write lock.
+        cur = ledger.db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+            "SELECT ?,project_id,message_id,?,?,?,? FROM messages m "
+            "WHERE message_id=? AND content_hash=? "
             "AND (body_state IS NULL OR body_state='full') "
             f"AND {current_v4_id()} IS NULL",
-            (r["message_id"], r["content_hash"], r["project_id"])).fetchone()
-        if source is None:
-            return False
-        if "_input_context" in r and _thread_context(ledger.db, r,
-                budget=r.get("_input_context_budget", _CTX_TOTAL_MAX)) != r["_input_context"]:
-            return False
-        frame = r.get("_frame")
-        if frame is not None:
-            current_frame = patient_state_context.load(ledger.db, frame.get("artifact_id"), dict(source))
-            if (current_frame is None or current_frame["digest"] != frame.get("digest")
-                    or any(not patient_state_context.reference_current(ledger.db, dict(source),
-                        {**reference, "token": token} if isinstance(reference, dict) else None,
-                        version=EXTRACT_VERSION) for token, reference in current_frame["refs"].items())):
-                return False
-        meta['source_binding'] = r['_source_binding']
-        prior = _prior_extract(ledger.db, r)
-        human = extra_meta.get("human_fix") if isinstance(extra_meta, dict) else None
-        old = loads_dict(prior["content"]) if prior else None
-        lost = extract_quality.protected_lost(old, loads_dict(content), source["body_text"]) if old else {}
-        prior_meta = loads_dict(prior["meta"]) if prior else None
-        human_failed = isinstance(human, dict) and human.get("applied") is False
-        qc_failed = isinstance(qc_fix, dict) and qc_fix.get("applied") is False
-        old_carry = (prior_meta and (prior_meta.get("extract_version") != EXTRACT_VERSION or not inference.is_current(prior_meta, target=_INFERENCE_VERSION))
-                     and (human_failed or qc_failed))
-        if old_carry or (lost and not (isinstance(human, dict) and human.get("applied") is True)):
-            reason = ("human_failed" if human_failed else "qc_failed") if old_carry else "protected_loss"
-            _record_hold_tx(ledger, r, prior, reason,
-                            lost=lost, feedback_id=human.get("feedback_id") if human else None)
-            held_prior = True
-        else:
-            if prior_meta and (human_failed or qc_failed or
-                               (isinstance(r, dict) and r.get("_kept_prior"))):
-                for key in ("actual_model", "plan_version", "context_binding", "context_snapshot",
-                            "context_digest", "patient_state_context", "ctx", "patient_context_version", "integrity"):
-                    if key in prior_meta:
-                        meta[key] = prior_meta[key]
-                    else:
-                        meta.pop(key, None)
-                actual_model = prior["model"]
-            if prior_meta and (prior_meta.get("extract_version") != EXTRACT_VERSION or not inference.is_current(prior_meta, target=_INFERENCE_VERSION)):
-                meta["upgrade"] = {"prior_artifact_id": prior["artifact_id"],
-                    "prior_version": prior_meta.get("extract_version"),
-                    "facts_lost": len(extract_quality.facts(extract_validation.validate(old, source["body_text"]) or {})
-                                      - extract_quality.facts(extract_validation.validate(loads_dict(content) or {}, source["body_text"]) or {}))}
-            previous = ledger.db.execute(
-                "SELECT a.content,a.meta,a.model FROM artifacts a JOIN messages m "
-                "ON m.message_id=a.message_id WHERE a.kind=? AND a.message_id=? "
-                "AND a.project_id=? " + current_extract_pred()
-                + " ORDER BY a.artifact_id DESC LIMIT 1",
-                (KIND, r["message_id"], r["project_id"])).fetchone()
-            current_signature = mcs_queries.extraction_input_signature(content, meta, actual_model)
-            try:
-                previous_signature = mcs_queries.extraction_input_signature(
-                    previous["content"], previous["meta"], previous["model"]) if previous else None
-            except ValueError:
-                # Unreadable stored history cannot veto a validated replacement.
-                # Its unknown meaning still invalidates derived analysis proofs.
-                previous_signature = None
-            changed = previous_signature != current_signature
-            # Keep the INSERT fence even though the prior check owns the write lock.
-            cur = ledger.db.execute(
-                "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
-                "SELECT ?,project_id,message_id,?,?,?,? FROM messages m "
-                "WHERE message_id=? AND content_hash=? "
-                "AND (body_state IS NULL OR body_state='full') "
-                f"AND {current_v4_id()} IS NULL",
-                (KIND, content, actual_model, json.dumps(meta), time.time(),
-                 r["message_id"], r["content_hash"]))
-            if not cur.rowcount:
-                return False
-            import inference_dependency_loss as dependency_loss
-            replaced_ids = [row[0] for row in ledger.db.execute(
-                "SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? AND "
-                + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND artifact_id != ?",
-                (KIND, r['message_id'], cur.lastrowid))]
-            footprint = dependency_loss.capture_tx(ledger.db, r['project_id'], r['message_id'], artifact_ids=replaced_ids)
-            dependency_loss.record_tx(ledger.db, footprint, replacement_id=cur.lastrowid)
-            ledger.db.execute(
-                "DELETE FROM artifacts WHERE kind=? AND message_id=? "
-                "AND " + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND artifact_id != ?",
-                (KIND, r["message_id"], cur.lastrowid))
-            if changed:
-                ledger.bump_inference_analysis_epoch_tx(r["project_id"])
-            if isinstance(r, dict) and r.get("_cloud_mode") == "dry_run":
-                cloud_policy.dryrun_tx(ledger, route="reextract", project_id=r["project_id"],
-                    unit_key=str(r["message_id"]), input_chars=len(r["body_text"] or ""),
-                    max_tokens=MAX_TOKENS)
-            if isinstance(r, dict) and r.get("_cloud_mode") == "shadow":
-                # the comparison unit commits (pending) with the local result or not at all
-                r["_shadow_unit"] = os.urandom(16).hex()
-                _cloud_compare_tx(ledger, route="reextract", project_id=r["project_id"],
-                    left=set(_comparison_extract(r, loads_dict(content))), right=None,
-                    rejected=None, held=None, repairs=None, unit=r["_shadow_unit"], pending=True)
-        project_id = source["project_id"]
-    _rerender_cards(ledger, project_id, r["message_id"])
-    return not held_prior
+            (KIND, content, actual_model, json.dumps(meta), time.time(),
+             r["message_id"], r["content_hash"]))
+        if not cur.rowcount:
+            return "rejected"
+        import inference_dependency_loss as dependency_loss
+        replaced_ids = [row[0] for row in ledger.db.execute(
+            "SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? AND "
+            + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND artifact_id != ?",
+            (KIND, r['message_id'], cur.lastrowid))]
+        footprint = dependency_loss.capture_tx(ledger.db, r['project_id'], r['message_id'], artifact_ids=replaced_ids)
+        dependency_loss.record_tx(ledger.db, footprint, replacement_id=cur.lastrowid)
+        ledger.db.execute(
+            "DELETE FROM artifacts WHERE kind=? AND message_id=? "
+            "AND " + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND artifact_id != ?",
+            (KIND, r["message_id"], cur.lastrowid))
+        if changed:
+            ledger.bump_inference_analysis_epoch_tx(r["project_id"])
+        if isinstance(r, dict) and r.get("_cloud_mode") == "dry_run":
+            cloud_policy.dryrun_tx(ledger, route="reextract", project_id=r["project_id"],
+                unit_key=str(r["message_id"]), input_chars=len(r["body_text"] or ""),
+                max_tokens=MAX_TOKENS)
+        if isinstance(r, dict) and r.get("_cloud_mode") == "shadow":
+            # the comparison unit commits (pending) with the local result or not at all
+            r["_shadow_unit"] = os.urandom(16).hex()
+            _cloud_compare_tx(ledger, route="reextract", project_id=r["project_id"],
+                left=set(_comparison_extract(r, loads_dict(content))), right=None,
+                rejected=None, held=None, repairs=None, unit=r["_shadow_unit"], pending=True)
+    return "held" if held_prior else "written"
 
 
 def _rerender_cards(ledger, project_id, message_id) -> None:
@@ -2305,17 +2349,20 @@ def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S) -> float | None:
     worker's live lease already covers the row — the ON CONFLICT
     conditional update is a single statement, so the check-and-set is
     race-free."""
-    if not ledger.db.in_transaction:
-        ledger.db.execute("BEGIN IMMEDIATE")
-    if not _source_writable(ledger.db, r):
-        ledger.db.commit()
+    if ledger.db.in_transaction:
         return None
-    if isinstance(r, dict):
-        from inference_dependency_loss import source_binding
-        r['_source_binding'] = source_binding(ledger.db, r['project_id'], r['message_id'])
-    now = time.time()
-    lease = now + lease_s
-    cur = ledger.db.execute("""
+    ledger.db.execute("BEGIN IMMEDIATE")
+    try:
+        if not _source_writable(ledger.db, r):
+            ledger.db.commit()
+            return None
+        if isinstance(r, dict):
+            from inference_dependency_loss import source_binding
+            r['_source_binding'] = source_binding(ledger.db, r['project_id'], r['message_id'])
+        now = time.time()
+        lease = now + lease_s
+        token = os.urandom(16).hex() if isinstance(r, dict) else None
+        cur = ledger.db.execute("""
       INSERT INTO fetch_jobs(kind,project_id,message_id,
         parent_id,payload,state,next_try,created_at,updated_at)
       VALUES('extract_claim',?,?,NULL,?,'pending',?,?,?)
@@ -2323,23 +2370,34 @@ def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S) -> float | None:
         payload=excluded.payload,state='pending',
         next_try=excluded.next_try,updated_at=excluded.updated_at
       WHERE fetch_jobs.next_try <= ?
-    """, (r["project_id"], r["message_id"],
-          json.dumps({inference.VERSION_KEY: _INFERENCE_VERSION, "hash": r["content_hash"],
-                      "ver": EXTRACT_VERSION}),
-          lease, now, now, now))
-    ledger.db.commit()
+        """, (r["project_id"], r["message_id"],
+              json.dumps({inference.VERSION_KEY: _INFERENCE_VERSION, "hash": r["content_hash"],
+                          "ver": EXTRACT_VERSION, "owner_token": token}),
+              lease, now, now, now))
+        ledger.db.commit()
+    except BaseException:
+        try:
+            ledger.db.rollback()
+        except sqlite3.Error:
+            pass
+        raise
+    if cur.rowcount > 0 and isinstance(r, dict):
+        r["_claim_token"] = token
+        r["_current_lease"] = lease
     return lease if cur.rowcount > 0 else None
 
 
 def _release(ledger, r, lease: float | None):
     """Drop OUR lease — the next_try equality guard keeps a replacement
     claim (taken after our lease lapsed) alive."""
-    if lease is None:
+    if lease is None or ledger.db.in_transaction:
         return
+    token = r.get("_claim_token") if isinstance(r, dict) else None
     ledger.db.execute(
         "DELETE FROM fetch_jobs WHERE kind='extract_claim' "
-        "AND project_id=? AND message_id=? AND next_try=?",
-        (r["project_id"], r["message_id"], lease))
+        "AND project_id=? AND message_id=? AND next_try=? "
+        "AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.owner_token') END IS ?",
+        (r["project_id"], r["message_id"], lease, token))
     ledger.db.commit()
 
 
@@ -2349,20 +2407,27 @@ def _renew(ledger, r, lease: float) -> float | None:
     lost (lapsed and re-claimed) or the body changed underneath — the
     result is then dropped so the live claim stops hiding the new body
     from selection."""
+    if ledger.db.in_transaction:
+        return None
     now = time.time()
     # must outlast one 900 s context unit plus _CARRY_MARGIN_S, or the
     # next settle drops it; same length as a fresh claim
     new = max(lease, now + _EXTRACT_LEASE_S + TIMEOUT + 30)
+    token = r.get("_claim_token") if isinstance(r, dict) else None
     cur = ledger.db.execute(
         "UPDATE fetch_jobs SET next_try=?, updated_at=? "
         "WHERE kind='extract_claim' AND project_id=? AND message_id=? "
-        "AND next_try=? AND EXISTS (SELECT 1 FROM messages m "
+        "AND next_try=? AND next_try>? "
+        "AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.owner_token') END IS ? "
+        "AND EXISTS (SELECT 1 FROM messages m "
         "WHERE m.message_id=fetch_jobs.message_id "
         "AND m.project_id=fetch_jobs.project_id AND m.content_hash=?)",
-        (new, now, r["project_id"], r["message_id"], lease, r["content_hash"]))
+        (new, now, r["project_id"], r["message_id"], lease, now, token, r["content_hash"]))
     ledger.db.commit()
-    if cur.rowcount > 0 and isinstance(r, dict) and "_cloud_lease" in r:
-        r["_cloud_lease"] = new
+    if cur.rowcount > 0 and isinstance(r, dict):
+        r["_current_lease"] = new
+        if "_cloud_lease" in r:
+            r["_cloud_lease"] = new
     return new if cur.rowcount > 0 else None
 
 
@@ -2404,17 +2469,17 @@ def _context_contract():
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 
-def _saved_chunk_size(db, r, context: str | None = None) -> int:
+def _saved_chunk_size(db, r, context: str | None = None, *, identity=None) -> int:
     """An actual length stop's source-bound layout, reused after interruption."""
     if "_source_binding" not in r.keys():
         r = {**dict(r), "_source_binding": inference_dependency_loss.source_binding(db, r["project_id"], r["message_id"])}
     rows = db.execute(
-        "SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=? "
+        "SELECT artifact_id,project_id,content,model,meta FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=? "
         "AND (project_id IS NULL OR project_id=?) ORDER BY artifact_id DESC",
         (r["message_id"], r["project_id"]))
     for row in rows:
         try:
-            meta = json.loads(row[0])
+            meta = json.loads(row["meta"])
         except (ValueError, TypeError, RecursionError):
             continue
         if (isinstance(meta, dict) and type(meta.get("chunk")) is int and meta["chunk"] == -1
@@ -2423,6 +2488,8 @@ def _saved_chunk_size(db, r, context: str | None = None) -> int:
                 and inference.is_current(meta, target=_INFERENCE_VERSION)
                 and meta.get("ver") == EXTRACT_VERSION
                 and meta.get("context") == _chunk_context(r, context, checkpoint=True)):
+            if identity is not None:
+                identity["layout"] = tuple(row)
             size = meta.get("chunk_size")
             return size if type(size) is int and 1 <= size <= _CHUNK_SIZE else _CHUNK_SIZE
     return _CHUNK_SIZE
@@ -2454,7 +2521,8 @@ def _chunk_piece(body, chunk_size, key, splits):
     return piece
 
 
-def _saved_chunk_state(db, r, context=None, *, chunk_size=None):
+def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
+                       identity_only=False):
     """Newest bound node records; invalid parents cannot authorize child coverage."""
     if "_source_binding" not in r.keys():
         r = {**dict(r), "_source_binding": inference_dependency_loss.source_binding(db, r["project_id"], r["message_id"])}
@@ -2475,7 +2543,12 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None):
             continue
         key = meta.get("chunk")
         if type(key) is int and key >= 0 or isinstance(key, str):
-            records[key] = (meta, a["content"])
+            if not identity_only:
+                records[key] = (meta, a["content"])
+            if identities is not None:
+                identities[key] = (a["artifact_id"], a["project_id"], a["content"], a["model"], a["meta"])
+    if identity_only:
+        return {}, {}
     saved, splits = {}, {}
     for key in sorted(records, key=lambda key: (str(key).count(":"), str(key))):
         meta, content = records[key]
@@ -2512,18 +2585,204 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None):
     return splits, saved
 
 
+@contextlib.contextmanager
+def _checkpoint_write(db, *, replay):
+    if not replay or not db.in_transaction:
+        with db:
+            yield
+        return
+    # A replay may be checked while the caller owns uncommitted work.
+    db.execute("SAVEPOINT extract_checkpoint_replay")
+    try:
+        yield
+    except BaseException:
+        try:
+            db.execute("ROLLBACK TO extract_checkpoint_replay")
+            db.execute("RELEASE extract_checkpoint_replay")
+        except sqlite3.Error:
+            pass  # SQLite may already have rolled back the savepoint.
+        raise
+    else:
+        db.execute("RELEASE extract_checkpoint_replay")
+
+
+def _checkpoint_identity(db, r, context, chunk_size):
+    layout = {}
+    actual_size = _saved_chunk_size(db, r, context, identity=layout)
+    identities = {}
+    _saved_chunk_state(db, r, context, chunk_size=chunk_size, identities=identities,
+                       identity_only=True)
+    return actual_size, layout.get("layout"), identities
+
+
+def _capture_checkpoint_state(db, r, context):
+    db.execute("SAVEPOINT extract_checkpoint_snapshot")
+    try:
+        layout = {}
+        size = _saved_chunk_size(db, r, context, identity=layout)
+        identities = {}
+        splits, saved = _saved_chunk_state(db, r, context, chunk_size=size, identities=identities)
+    except BaseException:
+        try:
+            db.execute("RELEASE extract_checkpoint_snapshot")
+        except sqlite3.Error:
+            pass  # SQLite may already have rolled back the savepoint.
+        raise
+    else:
+        db.execute("RELEASE extract_checkpoint_snapshot")
+    r["_chunk_size"] = size
+    r["_splits"] = splits
+    r["_checkpoint_layout"] = layout.get("layout")
+    r["_checkpoint_identity"] = identities
+    r["_checkpoint_replay_snapshot"] = {
+        "saved": copy.deepcopy(saved), "splits": dict(splits), "identities": dict(identities),
+        "layout": layout.get("layout"), "size": size, "body": r["body_text"],
+        "context": _chunk_context(r, context, checkpoint=True), "refs": copy.deepcopy(_frame_refs(r)),
+    }
+    r["_checkpoint_guard"] = object()
+    r["_checkpoint_conflict"] = False
+    return saved
+
+
+def _checkpoint_keys(key):
+    if not (type(key) is int and key >= 0 or type(key) is str and
+            re.fullmatch(r"(?:0|[1-9][0-9]*)(?::(?:0|[1-9][0-9]*))+", key)):
+        return []
+    path = str(key).split(":")
+    return [int(path[0]) if depth == 1 else ":".join(path[:depth])
+            for depth in range(1, len(path) + 1)]
+
+
+def _checkpoint_matches(db, r, context, keys):
+    expected = r.get("_checkpoint_identity")
+    if expected is None:
+        return False
+    size, layout, current = _checkpoint_identity(db, r, context, r["_chunk_size"])
+    if size != r["_chunk_size"] or layout != r.get("_checkpoint_layout"):
+        return False
+    return all(current.get(part) == expected.get(part)
+               for key in keys for part in _checkpoint_keys(key))
+
+
+def _delete_checkpoint_keys_tx(db, r, context, keys):
+    selected = {part for key in keys for part in _checkpoint_keys(key)}
+    binding = _chunk_context(r, context, checkpoint=True)
+    deleted = []
+    for row in mcs_queries.iter_artifacts(db, "extract_llm_chunk", message_id=r["message_id"]):
+        try:
+            meta = json.loads(row["meta"] or "{}")
+        except (ValueError, TypeError, RecursionError):
+            continue
+        if (row["project_id"] not in (None, r["project_id"]) or not isinstance(meta, dict)
+                or meta.get("invalidated") not in (None, False, 0)
+                or not inference.is_current(meta, target=_INFERENCE_VERSION)
+                or meta.get("hash") != r["content_hash"] or meta.get("ver") != EXTRACT_VERSION
+                or meta.get("context") != binding or meta.get("chunk_size") != r["_chunk_size"]):
+            continue
+        key = meta.get("chunk")
+        if (type(key) is int or type(key) is str) and key in selected:
+            deleted.append((row["artifact_id"],))
+    db.executemany("DELETE FROM artifacts WHERE artifact_id=?", deleted)
+
+
+class _CheckpointChanged(Exception):
+    pass
+
+
+def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, extra_meta,
+                              used_keys, *, check_current, mark_context=None, expected_prior=None):
+    if ledger.db.in_transaction:
+        return "rejected"
+    try:
+        with ledger.db:
+            ledger.db.execute("BEGIN IMMEDIATE")
+            if (r.get("_checkpoint_conflict") or not _source_writable(ledger.db, r)
+                    or not _owns_current_source(ledger, r, r.get("_current_lease"))
+                    or not _checkpoint_matches(ledger.db, r, context, used_keys)):
+                return "rejected"
+            if check_current and _current(ledger, r["message_id"], r["content_hash"]):
+                return "current"
+            if expected_prior is not None:
+                prior = _prior_extract(ledger.db, r)
+                if prior is None or _prior_identity(prior) != expected_prior:
+                    return "rejected"
+            _, _, current = _checkpoint_identity(ledger.db, r, context, r["_chunk_size"])
+            outcome = _replace_current_tx(ledger, r, content,
+                                          ctx=context is not None if mark_context is None else mark_context,
+                                          integrity=integrity, qc_fix=qc_fix,
+                                          extra_meta=extra_meta, scoped_cleanup=True)
+            if outcome == "held":
+                if current != r["_checkpoint_identity"]:
+                    raise _CheckpointChanged()
+                _delete_checkpoint_keys_tx(ledger.db, r, context, current.keys())
+            elif outcome == "written":
+                _delete_checkpoint_keys_tx(ledger.db, r, context, used_keys)
+    except _CheckpointChanged:
+        return "rejected"
+    except CloudFallback:
+        if r.get("_cloud_discard"):
+            r["_cloud_discard"]()
+        return "rejected"
+    if outcome != "rejected":
+        _rerender_cards(ledger, r["project_id"], r["message_id"])
+    return outcome
+
+
 def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
-                    chunk_size: int | None = None, splits=None, split_size=None):
+                    chunk_size: int | None = None, splits=None, split_size=None,
+                    replay=False, lease=None, guard=None):
     """Durable root/leaf checkpoints and local split plans, written by the caller."""
+    if len(chunks_out) != 1:
+        return False
     if "_source_binding" not in r.keys() or not isinstance(r["_source_binding"], str) or not r["_source_binding"]:
         return False
+    if not replay and ledger.db.in_transaction:
+        return False
     chunk_size = _CHUNK_SIZE if chunk_size is None else chunk_size
-    with ledger.db:
+    with _checkpoint_write(ledger.db, replay=replay):
         if not ledger.db.in_transaction:
             ledger.db.execute("BEGIN IMMEDIATE")
         if not _source_writable(ledger.db, r):
             return False
+        if (replay and lease is None) or (lease is not None and not _owns_current_source(ledger, r, lease)):
+            return False
         for key, value in chunks_out.items():
+            guarded = guard is not None and guard is r.get("_checkpoint_guard")
+            if guarded:
+                snapshot = r.get("_checkpoint_replay_snapshot")
+                if (not isinstance(snapshot, dict) or chunk_size != r["_chunk_size"]
+                        or snapshot["context"] != _chunk_context(r, context, checkpoint=True)):
+                    r["_checkpoint_conflict"] = True
+                    return False
+            if guarded and not _checkpoint_matches(ledger.db, r, context, [key]):
+                r["_checkpoint_conflict"] = True
+                return False
+            if replay:
+                # Use the reader's own selection rules; an unrelated newer
+                # chunk is not evidence that this key changed.
+                if not (type(key) is int and key >= 0 or type(key) is str and
+                        re.fullmatch(r"(?:0|[1-9][0-9]*)(?::(?:0|[1-9][0-9]*))+", key)):
+                    return False
+                path = str(key).split(":")
+                parents = [int(path[0]) if depth == 1 else ":".join(path[:depth])
+                           for depth in range(1, len(path))]
+                snapshot = r.get("_checkpoint_replay_snapshot") if guarded else None
+                fast = (isinstance(snapshot, dict) and snapshot["size"] == chunk_size
+                        and snapshot["layout"] == r.get("_checkpoint_layout")
+                        and snapshot["body"] == r["body_text"]
+                        and snapshot["context"] == _chunk_context(r, context, checkpoint=True)
+                        and snapshot["refs"] == _frame_refs(r)
+                        and snapshot["saved"].get(key) == value
+                        and all(snapshot["splits"].get(parent) == (splits or {}).get(parent)
+                                for parent in parents)
+                        and all(snapshot["identities"].get(part) == r["_checkpoint_identity"].get(part)
+                                for part in _checkpoint_keys(key)))
+                if not fast:
+                    current_splits, current_saved = _saved_chunk_state(ledger.db, r, context, chunk_size=chunk_size)
+                    if (current_saved.get(key) != value or
+                            any((splits or {}).get(parent) != current_splits.get(parent) for parent in parents)):
+                        return False
+                continue
             piece = _chunk_piece(r["body_text"], chunk_size, key, splits or {})
             if piece is None:
                 raise ValueError("extract_checkpoint_path_invalid")
@@ -2557,9 +2816,30 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                         and latest["model"] == meta["actual_model"] and latest["content"] == content
                         and latest["meta"] == json.dumps(meta, ensure_ascii=False)):
                     continue
-            ledger.artifact_add_tx("extract_llm_chunk", content,
-                                   project_id=r["project_id"], message_id=r["message_id"],
-                                   model=meta["actual_model"], meta=meta)
+            inserted_id = ledger.artifact_add_tx("extract_llm_chunk", content,
+                                                project_id=r["project_id"], message_id=r["message_id"],
+                                                model=meta["actual_model"], meta=meta)
+            if ledger.db.execute("SELECT changes()").fetchone()[0] != 1:
+                ledger.db.rollback()
+                if guarded:
+                    r["_checkpoint_conflict"] = True
+                return False
+            if guarded:
+                latest = ledger.db.execute(
+                    "SELECT artifact_id,project_id,content,model,meta FROM artifacts "
+                    "WHERE kind='extract_llm_chunk' AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
+                    (r["message_id"],)).fetchone()
+                inserted = (inserted_id, r["project_id"], content, meta["actual_model"],
+                            json.dumps(meta, ensure_ascii=False))
+                if latest is not None and tuple(latest) == inserted:
+                    r["_checkpoint_identity"][key] = inserted
+                else:
+                    _, _, identities = _checkpoint_identity(ledger.db, r, context, chunk_size)
+                    if identities.get(key) != inserted:
+                        ledger.db.rollback()
+                        r["_checkpoint_conflict"] = True
+                        return False
+                    r["_checkpoint_identity"][key] = inserted
     _rerender_cards(ledger, r["project_id"], r["message_id"])
     return True
 
@@ -2748,10 +3028,8 @@ def _batch_progress_probes(db, probes):
 
 
 def _progress_interrupted(error):
-    """Do not replay a cancelled, busy, locked or unclassified SQLite operation."""
-    code = getattr(error, "sqlite_errorcode", None)
-    return (isinstance(error, sqlite3.OperationalError) and (type(code) is not int
-            or code & 0xff in (sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)))
+    """Do not replay a cancelled, failed or unclassified SQLite operation."""
+    return inference_dependency_loss.fatal_read_error(error)
 
 
 def _progress_page(db, rows, model):
@@ -2848,19 +3126,27 @@ def progress_for_messages(db, rows, *, model: str | None):
     try:
         for offset in range(0, len(prepared), 64):
             result.extend(_progress_page(db, prepared[offset:offset + 64], model))
-    finally:
+    except BaseException:
+        try:
+            db.execute("RELEASE extract_progress_batch")
+        except sqlite3.Error:
+            pass  # SQLite may already have rolled back the savepoint.
+        raise
+    else:
         db.execute("RELEASE extract_progress_batch")
     return result
 
 
 def _owns_current_source(ledger, r, lease: float) -> bool:
+    token = r.get("_claim_token") if isinstance(r, dict) else None
     return ledger.db.execute(
         "SELECT 1 FROM messages m JOIN fetch_jobs j "
         "ON j.message_id=m.message_id AND j.project_id=m.project_id "
         "WHERE m.message_id=? AND m.content_hash=? "
         "AND (m.body_state IS NULL OR m.body_state='full') "
-        "AND j.kind='extract_claim' AND j.next_try=?",
-        (r["message_id"], r["content_hash"], lease)).fetchone() is not None
+        "AND j.kind='extract_claim' AND j.next_try=? AND j.next_try>? "
+        "AND CASE WHEN json_valid(j.payload) THEN json_extract(j.payload,'$.owner_token') END IS ?",
+        (r["message_id"], r["content_hash"], lease, time.time(), token)).fetchone() is not None
 
 
 def _rule_hints(r):
@@ -3476,6 +3762,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     _BATCH_K, itself 0 since batching measured net negative; --batch K
     remains for explicit use."""
     _validate_run_args(limit, budget_s)
+    if ledger.db.in_transaction:
+        return {"done": 0, "failed": 0, "left": None, "deferred": 0,
+                "pids": [], "transaction_active": True, "carry": carry or []}
     if not _writer_current(full=True):
         return {"done": 0, "failed": 0, "left": None, "deferred": 0,
                 "pids": [], "updated": True}
@@ -3548,7 +3837,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     owner_thread = threading.get_ident()
     leases = {}
 
-    def _checkpoint(index, chunk, value, split=False, receipt=None):
+    def _checkpoint(index, chunk, value, split=False, receipt=None, replay=False):
         r, ctx = jobs[index][0], jobs[index][1]
         saved = False
         try:
@@ -3564,19 +3853,23 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     r["_splits"][chunk] = value
                 saved = _persist_chunks(ledger, r, {chunk: {} if split else value}, ctx,
                                 chunk_size=r["_chunk_size"], splits=r["_splits"],
-                                split_size=value if split else None)
+                                split_size=value if split else None, lease=leases[index],
+                                guard=r.get("_checkpoint_guard"),
+                                **({"replay": True} if replay else {}))
+            if not saved:
+                r["_checkpoint_conflict"] = True
             return saved
         finally:
             if receipt is not None:
                 receipt["saved"] = saved
                 receipt["event"].set()
 
-    def _queue_checkpoint(index, chunk, value, split=False):
-        if split or "_quality_status" not in value:
-            checkpoints.put((index, chunk, value, split))
+    def _queue_checkpoint(index, chunk, value, split=False, replay=False):
+        if not replay and (split or "_quality_status" not in value):
+            checkpoints.put((index, chunk, value, split, None, replay))
             return None
         receipt = {"event": threading.Event(), "saved": False}
-        checkpoints.put((index, chunk, value, False, receipt))
+        checkpoints.put((index, chunk, value, False, receipt, replay))
         while not receipt["event"].is_set():
             if checkpoint_stopped.is_set() or time.monotonic() >= deadline:
                 return False
@@ -3671,6 +3964,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         raise CloudFallback("cloud_local_context_unavailable")
                     local_r, local_ctx, local_saved, _, _ = fresh[0]
                     r.update(local_r)
+                    local_saved = _capture_checkpoint_state(ledger.db, r, local_ctx)
                     jobs[index] = (r, local_ctx, local_saved, hints, qc)
                     return local_ctx, local_saved
                 ctx, saved = _owner_call(reset_local)
@@ -3702,9 +3996,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                            feedback=qc["notes"] if qc else None,
                            on_chunk=(lambda i, v: _queue_checkpoint(index, i, v))
                            if parallel else
-                           (lambda i, v: _checkpoint(index, i, v)))
+                           (lambda i, v: _checkpoint(index, i, v)),
+                           on_chunk_replay=(lambda i, v: _queue_checkpoint(index, i, v, replay=True))
+                           if parallel else
+                           (lambda i, v: _checkpoint(index, i, v, replay=True)))
 
-    def _commit(r, d, ctx, integrity, qc, *, settled=None, shadow=None) -> bool:
+    def _commit(r, d, ctx, integrity, qc, used_keys=(), *, settled=None, shadow=None) -> bool:
         """Persist one validated result — the caller holds the lock.
         True when the artifact was written (a carried commit from an
         earlier pass counts it in the pass that finally wrote it)."""
@@ -3719,9 +4016,6 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 return False
         # QC-flagged/thin/human-reported rows already hold a current
         # artifact — replacing it is the point of the feedback pass.
-        if qc is None and not r["thin_src"] and not r["human_src"] \
-                and _current(ledger, r["message_id"], r["content_hash"]):
-            return False
         extra = {"thin_retried": True} if r["thin_src"] else {}
         if r["human_src"]:
             extra["human_fix"] = {"feedback_id": r["human_src"],
@@ -3729,31 +4023,22 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if not r.get("_kept_prior"):
             integrity = {**(integrity or {}), "validation": {
                 key[1:]: d.get(key, 0) for key in ("_items_dropped", "_evidence_dropped")}}
-        if not _replace_current(ledger, r,
-                                json.dumps(d, ensure_ascii=False),
-                                ctx=ctx is not None,
-                                integrity=integrity,
-                                qc_fix=({"qc": qc["qc"],
-                                         "applied": True}
-                                        if qc else None),
-                                extra_meta=extra or None):
-            if ledger.db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? "
-                                 f"AND EXISTS ({_hold_sql()})", (r["message_id"],)).fetchone():
+        outcome = _commit_extraction_atomic(
+            ledger, r, json.dumps(d, ensure_ascii=False), ctx, integrity,
+            {"qc": qc["qc"], "applied": True} if qc else None,
+            extra or None, used_keys,
+            check_current=qc is None and not r["thin_src"] and not r["human_src"],
+            expected_prior=r.get("_expected_prior"))
+        if outcome != "written":
+            if outcome == "held":
                 held_prior += 1
                 if settled is not None:
                     settled["held_prior"] += 1
-            else:
+            elif outcome != "current":
                 deferred += 1
                 if settled is not None:
                     settled["deferred"] += 1
             return False
-        # the whole body is now covered — checkpoints for
-        # it are dead weight (F14)
-        ledger.db.execute(
-            "DELETE FROM artifacts"
-            " WHERE kind='extract_llm_chunk'"
-            " AND message_id=? AND " + inference.current_meta_pred("meta", target=_INFERENCE_VERSION), (r["message_id"],))
-        ledger.db.commit()
         done += 1
         if settled is not None:
             settled["done"] += 1
@@ -3784,7 +4069,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 # retry backoff keeps the next pass from re-sending the same body
                 with _write_lock(per_write_lock) as held:
                     if held and not _current(ledger, r["message_id"], r["content_hash"]):
-                        _fail(ledger, r, r["attempts"])
+                        _fail(ledger, r, r["attempts"], lease=lease)
             if d is _DEFERRED:
                 deferred += 1
                 if r.get("_cloud_failed"):
@@ -3836,36 +4121,43 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     src = ledger.db.execute(
                         "SELECT content FROM artifacts WHERE artifact_id=?",
                         (qc["src"],)).fetchone()
-                    if src is not None:
+                    prior = _prior_extract(ledger.db, r)
+                    if (src is not None and prior is not None and prior["artifact_id"] == qc["src"]
+                            and prior["content"] == src["content"]):
                         # these writes are never carried: a skipped one
                         # re-selects the row for another paid call, so
                         # wait out the tick (default 60 s), not write_wait_s
                         with _write_lock(per_write_lock) as held:
                             if held:
-                                _replace_current(
-                                    ledger, r, src["content"],
-                                    qc_fix={"qc": qc["qc"],
-                                            "applied": False})
+                                _commit_extraction_atomic(
+                                    ledger, r, src["content"], ctx, None,
+                                    {"qc": qc["qc"], "applied": False}, None, (),
+                                    check_current=False, mark_context=False,
+                                    expected_prior=_prior_identity(prior))
                     return
                 if r["human_src"]:
                     # A failed report re-extract settles like the thin
                     # retry: re-mint the reported content with
                     # human_fix.applied=false — one attempt per report.
                     src = ledger.db.execute(
-                        "SELECT c.content FROM artifacts h JOIN artifacts c"
+                        "SELECT c.artifact_id,c.content FROM artifacts h JOIN artifacts c"
                         " ON c.artifact_id=json_extract(h.content,"
                         "'$.artifact_id') WHERE h.artifact_id=?"
                         " AND json_valid(h.content) AND c.kind=?"
                         " AND c.message_id=?",
                         (r["human_src"], KIND, r["message_id"])).fetchone()
-                    if src is not None:
+                    prior = _prior_extract(ledger.db, r)
+                    if (src is not None and prior is not None
+                            and prior["artifact_id"] == src["artifact_id"]
+                            and prior["content"] == src["content"]):
                         with _write_lock(per_write_lock) as held:
                             if held:
-                                _replace_current(
-                                    ledger, r, src["content"],
-                                    extra_meta={"human_fix": {
-                                        "feedback_id": r["human_src"],
-                                        "applied": False}})
+                                _commit_extraction_atomic(
+                                    ledger, r, src["content"], ctx, None, None,
+                                    {"human_fix": {"feedback_id": r["human_src"],
+                                                   "applied": False}}, (),
+                                    check_current=False, mark_context=False,
+                                    expected_prior=_prior_identity(prior))
                     return
                 if r["thin_src"]:
                     # A thin retry that failed still settles: re-mint
@@ -3874,20 +4166,24 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     # never burn an LLM call every cycle on a row the
                     # model cannot enrich).
                     content = _thin_retry_content(ledger, r)
-                    if content is not None:
+                    prior = _prior_extract(ledger.db, r)
+                    if (content is not None and prior is not None and prior["artifact_id"] == r["thin_src"]
+                            and prior["content"] == content):
                         r["_kept_prior"] = True
                         with _write_lock(per_write_lock) as held:
                             if held:
-                                _replace_current(
-                                    ledger, r, content,
-                                    extra_meta={"thin_retried": True})
+                                _commit_extraction_atomic(
+                                    ledger, r, content, ctx, None, None,
+                                    {"thin_retried": True}, (),
+                                    check_current=False, mark_context=False,
+                                    expected_prior=_prior_identity(prior))
                     return
                 with _write_lock(per_write_lock) as held:
                     if held and not _current(ledger, r["message_id"],
                                              r["content_hash"]):
                         # _fail carries auto_retry so a revived refail
                         # keeps the REVIVE_PER_INPUT cap
-                        _fail(ledger, r, r["attempts"])
+                        _fail(ledger, r, r["attempts"], lease=lease)
                 return
             # a usable result whose last call (an optional repair) failed
             # still saw an outage; no call note at all means an answer
@@ -3898,6 +4194,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if content is None:
                     deferred += 1
                     return
+                prior_row = _prior_extract(ledger.db, r)
+                if (prior_row is None or prior_row["artifact_id"] != r["thin_src"]
+                        or prior_row["content"] != content):
+                    deferred += 1
+                    return
                 try:
                     prior = json.loads(content)
                 except (ValueError, TypeError, RecursionError):
@@ -3905,17 +4206,18 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if not extract_quality.improves(d, prior) and not extract_quality.protected_lost(prior or {}, d, r["body_text"]):
                     d = prior
                     r["_kept_prior"] = True
+                    r["_expected_prior"] = _prior_identity(prior_row)
             if not r.get("_kept_prior"):
                 d["_model"] = _actual_model(r)
             with lock(per_write_lock) as held:
                 if held:
-                    _commit(r, d, ctx, integrity, qc)
+                    _commit(r, d, ctx, integrity, qc, tuple(chunks_out))
                     return
             # never discard a paid-for result: keep it (and its lease)
             # for one more lock attempt before run_pending returns
             lock_lost += 1
             keep_lease = True
-            pending_writes.append((r, d, ctx, integrity, qc, lease))
+            pending_writes.append((r, d, ctx, integrity, qc, lease, tuple(chunks_out)))
         finally:
             if not keep_lease:
                 _release(ledger, r, lease)
@@ -3943,6 +4245,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             if lease is not None:
                 leases[index] = lease
                 claimed.append((index, r, ctx, saved, hints, qc, lease))
+                # Preparation precedes the claim. Another owner may have
+                # advanced a checkpoint in that interval, so read again only
+                # after this worker owns the lease.
+                saved = _capture_checkpoint_state(ledger.db, r, ctx)
+                jobs[index] = (r, ctx, saved, hints, qc)
+                claimed[-1] = (index, r, ctx, saved, hints, qc, lease)
                 # the v3 pass performs the v1/v2 (rule) work simultaneously —
                 # claimed rows mint/refresh their extract_v1 artifact here so
                 # speed-lane readers never wait on the LLM queue
@@ -4121,17 +4429,17 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             # below: its lease must match the DB now
                             carry[i] = (r, renewed, commit)
                             carry_out.append((r, renewed, commit))
-                for r, d, ctx, integrity, qc, lease in pending_writes:
+                for r, d, ctx, integrity, qc, lease, used_keys in pending_writes:
                     # still lock-bound, or the body changed/lease lapsed
                     # while we waited: the row stays pending for the
                     # next run — deferred, no attempt burned
                     if held and _owns_current_source(ledger, r, lease):
-                        _commit(r, d, ctx, integrity, qc)
+                        _commit(r, d, ctx, integrity, qc, used_keys)
                     elif carry is not None and not held \
                             and lease > time.time() + _CARRY_MARGIN_S \
                             and (renewed := _renew(ledger, r, lease)):
                         carry_out.append((r, renewed, functools.partial(
-                            _commit, r, d, ctx, integrity, qc)))
+                            _commit, r, d, ctx, integrity, qc, used_keys)))
                         keep_claims.add(id(r))
                     else:
                         if r.get("_cloud_discard") and not _owns_current_source(ledger, r, lease):

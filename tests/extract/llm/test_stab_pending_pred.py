@@ -1,12 +1,14 @@
-"""M5/M12: the guarded pending predicate and the streamed two-pass
-selection pick exactly the rows the former unguarded predicate and
-grouped query picked; only the order changes (never-extracted first).
+"""M5/M12: compare two-pass selection with a grouped reference query.
+
+The v1 reference retains invalid old metadata without blocking re-extraction.
 
 Synthetic fixtures + temp DB only."""
 import json
 import time
 
 import extract_llm
+from inference_version import CURRENT_VERSION, VERSION_KEY
+from semantic_projection import PROJECTION_VERSION
 from extract_llm import (EXTRACT_VERSION, KIND, _human_flagged_sql,
                          _qc_flagged_sql, _thin_pending_sql)
 from extract_testkit import _hash, _ledger, _message
@@ -33,7 +35,7 @@ def _reference_pending_pred() -> str:
 
 
 def _reference_selection(db, now, limit=10_000):
-    """The grouped selection query before M5 (no admission, no shard)."""
+    """Grouped query with the current malformed-metadata rule."""
     return [r["message_id"] for r in db.db.execute(f"""
       SELECT m.message_id,
              MAX(COALESCE(json_extract(e.meta,'$.attempts'),0)) AS attempts
@@ -50,15 +52,12 @@ def _reference_selection(db, now, limit=10_000):
                           AND claim.project_id=m.project_id
                           AND claim.message_id=m.message_id
                           AND claim.next_try > ?)
-        AND NOT EXISTS (SELECT 1 FROM artifacts bad
-                        WHERE bad.kind=? AND bad.message_id=m.message_id
-                          AND NOT json_valid(bad.meta))
         AND {_reference_pending_pred()}
       GROUP BY m.message_id
       HAVING attempts < 5
          AND COALESCE(MAX(json_extract(e.meta,'$.next_try')),0) <= ?
       ORDER BY m.posted_at_ts DESC LIMIT ?""",
-        (KIND, EXTRACT_VERSION, now, KIND, now, limit)).fetchall()]
+        (KIND, EXTRACT_VERSION, now, now, limit)).fetchall()]
 
 
 def _new_selection(db, now, fresh, limit=10_000):
@@ -72,7 +71,7 @@ _LONG = "体温は37度です。" + "経過観察を継続します。" * 40   #
 
 
 def _add(db, mid, meta=None, content=None, kind=KIND, raw_meta=None):
-    meta = {"hash": _hash(db, mid), "extract_version": EXTRACT_VERSION,
+    meta = {VERSION_KEY: CURRENT_VERSION, "hash": _hash(db, mid), "extract_version": EXTRACT_VERSION,
             **(meta or {})}
     content = {"summary": "s", "symptoms": [{"text": "a"}, {"text": "b"}]} \
         if content is None else content
@@ -127,9 +126,9 @@ def _corpus(tmp_path):
     _add(db, 18, kind="extract_feedback_v1", content={"artifact_id": cur})
     _add(db, 19, raw_meta="{not json")                       # bad meta
     _add(db, 20, kind=V4_PROJECTION_KIND, content={"facts": []}, meta={
-        "engine_version": 4, "projection_version": 5})       # current v4
+        "engine_version": 4, "projection_version": PROJECTION_VERSION})       # current v4
     _add(db, 21, kind=V4_PROJECTION_KIND, content={"facts": []}, meta={
-        "engine_version": 4, "projection_version": 5, "invalidated": True})
+        "engine_version": 4, "projection_version": PROJECTION_VERSION, "invalidated": True})
     _add(db, 22, {"hash": "stale-body"})                     # other body
     with db.db:                                              # live claim
         db.db.execute(
@@ -168,7 +167,7 @@ def test_two_pass_selection_equals_grouped_query(tmp_path):
                               and not db.db.execute(
                                   "SELECT 1 FROM artifacts WHERE kind=? AND message_id=?",
                                   (KIND, m)).fetchone()}
-        assert 9 not in ref and 8 not in ref and 23 not in ref and 19 not in ref
+        assert 9 not in ref and 8 not in ref and 23 not in ref and 19 in ref
     finally:
         db.close()
 

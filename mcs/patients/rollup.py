@@ -162,7 +162,7 @@ def _measurement_source_bound(db, m, kind, cfg, *, artifact_ref=_no_artifact_fen
                 and source is not None
                 and extract_llm.progress_for_message(db, source, model=model).get("state") == "complete")
     except sqlite3.OperationalError as error:
-        if extract_llm._progress_interrupted(error):
+        if dependency_loss.fatal_read_error(error):
             raise
         return False
 
@@ -182,7 +182,7 @@ def _measurement_sources_bound(db, messages, kinds, refs, cfg):
         try:
             page_result = _measurement_source_page(db, page, page_kinds, refs, expected_model)
         except Exception as error:
-            if extract_llm._progress_interrupted(error):
+            if dependency_loss.fatal_read_error(error):
                 raise
             # A batch error may belong to a later row. Replay the page in
             # original order so an earlier single-row error is not hidden.
@@ -410,9 +410,16 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=Non
     # Releasing a nested savepoint leaves the caller's transaction untouched.
     db.execute('SAVEPOINT rollup_build_read')
     try:
-        return _build_rollup(db, project_id, request_limit=request_limit, cfg=cfg)
-    finally:
+        result = _build_rollup(db, project_id, request_limit=request_limit, cfg=cfg)
+    except BaseException:
+        try:
+            db.execute('RELEASE rollup_build_read')
+        except sqlite3.Error:
+            pass  # SQLite may already have rolled back the savepoint.
+        raise
+    else:
         db.execute('RELEASE rollup_build_read')
+        return result
 
 
 def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=None) -> dict:
@@ -441,8 +448,7 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
             elif capture and capture.get("capture_phase") in ("capturing", "held"):
                 history_status = capture["capture_phase"]
         except sqlite3.OperationalError as error:
-            import extract_llm
-            if extract_llm._progress_interrupted(error):
+            if dependency_loss.fatal_read_error(error):
                 raise
             measurement_complete = False
         except (ValueError, KeyError, TypeError):
@@ -905,9 +911,16 @@ def current_cached_refs(db, project_id: int, roll: dict, meta, *, cfg=None) -> d
     # leaves an existing transaction owned by its caller; no DB writes occur.
     db.execute("SAVEPOINT rollup_cache_read")
     try:
-        return _current_cached_refs(db, project_id, roll, meta, cfg=copy.deepcopy(cfg))
-    finally:
+        result = _current_cached_refs(db, project_id, roll, meta, cfg=copy.deepcopy(cfg))
+    except BaseException:
+        try:
+            db.execute("RELEASE rollup_cache_read")
+        except sqlite3.Error:
+            pass  # SQLite may already have rolled back the savepoint.
+        raise
+    else:
         db.execute("RELEASE rollup_cache_read")
+        return result
 
 
 def _current_cached_refs(db, project_id: int, roll: dict, meta, *, cfg=None) -> dict:
@@ -971,10 +984,11 @@ def _current_cached_refs(db, project_id: int, roll: dict, meta, *, cfg=None) -> 
                         for row in mids:
                             sources[last].extend(current_refs(db, row[0]))
                     except sqlite3.OperationalError as error:
-                        import extract_llm
-                        if extract_llm._progress_interrupted(error):
+                        if dependency_loss.fatal_read_error(error):
                             raise
-                    except sqlite3.DatabaseError:
+                    except sqlite3.DatabaseError as error:
+                        if dependency_loss.fatal_read_error(error):
+                            raise
                         pass  # old/incomplete schema cannot prove a dictionary annotation
                 valid = ref.get("name") == item.get("name") and ref in sources[last]
             if not valid:
@@ -1008,8 +1022,7 @@ def _current_cached_refs(db, project_id: int, roll: dict, meta, *, cfg=None) -> 
         try:
             current = build_rollup(db, project_id, cfg=cfg)
         except sqlite3.OperationalError as error:
-            import extract_llm
-            if extract_llm._progress_interrupted(error):
+            if dependency_loss.fatal_read_error(error):
                 raise
             if request_stale:
                 raise  # a failed current read cannot prove that requests are absent
@@ -1033,8 +1046,7 @@ def _current_cached_refs(db, project_id: int, roll: dict, meta, *, cfg=None) -> 
             try:
                 current = build_rollup(db, project_id, cfg=cfg)
             except sqlite3.OperationalError as error:
-                import extract_llm
-                if extract_llm._progress_interrupted(error):
+                if dependency_loss.fatal_read_error(error):
                     raise
                 current = {}
         for key in ("latest_vitals", "recent_labs", "measurement_reports", "measurement_coverage"):

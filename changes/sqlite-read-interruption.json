@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "集約中の保存領域や読取りの障害を正しく伝える",
+  "summary": "患者情報の集約や抽出進捗の確認中にSQLiteの処理が中断された場合、後片付けのエラーで元の障害を隠さず、再試行できると判別できない処理を自動で繰り返しません。",
+  "upgrade": "追加操作は不要です。呼出元が所有するトランザクションは明示的に確定しません。",
+  "details": ["エラー種別を取得できないSQLiteでは、安全側に倒して元のエラーを伝えます。"],
+  "refs": ["mcs/core/inference_dependency_loss.py", "mcs/patients/rollup.py", "mcs/extract/llm/extract_llm.py"]
+}

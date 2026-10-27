@@ -435,6 +435,91 @@ def test_batch_only_error_is_not_hidden_when_single_replay_succeeds(ledger, monk
         llm.progress_for_messages(ledger.db, rows, model=MODEL)
 
 
+def test_progress_cleanup_keeps_borrowed_transaction_on_success_and_failure(ledger, monkeypatch):
+    row = source(ledger, 1)
+    ledger.db.execute("UPDATE patients SET fetch_reason='synthetic-pending' WHERE project_id=1")
+    monkeypatch.setattr(llm, "_progress_page", lambda *_: [{"state": "attention"}])
+    assert llm.progress_for_messages(ledger.db, [row], model=MODEL) == [{"state": "attention"}]
+    error = ValueError("synthetic progress failure")
+
+    def fail(*_args):
+        raise error
+
+    monkeypatch.setattr(llm, "_progress_page", fail)
+    with pytest.raises(ValueError) as caught:
+        llm.progress_for_messages(ledger.db, [row], model=MODEL)
+    assert caught.value is error and ledger.db.in_transaction
+    assert ledger.db.execute("SELECT fetch_reason FROM patients WHERE project_id=1").fetchone()[0] == "synthetic-pending"
+    ledger.db.rollback()
+    assert ledger.db.execute("SELECT fetch_reason FROM patients WHERE project_id=1").fetchone()[0] is None
+
+
+def test_progress_success_does_not_hide_release_failure(ledger, monkeypatch):
+    row = source(ledger, 1)
+    monkeypatch.setattr(llm, "_progress_page", lambda *_: [{"state": "attention"}])
+    ledger.db.set_authorizer(lambda action, arg1, arg2, *_: sqlite3.SQLITE_DENY
+                             if action == sqlite3.SQLITE_SAVEPOINT and arg1 == "RELEASE"
+                             and arg2 == "extract_progress_batch" else sqlite3.SQLITE_OK)
+    try:
+        with pytest.raises(sqlite3.DatabaseError):
+            llm.progress_for_messages(ledger.db, [row], model=MODEL)
+    finally:
+        ledger.db.set_authorizer(None)
+        ledger.db.rollback()
+
+
+@pytest.mark.parametrize("code", [None, sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_FULL,
+                                  sqlite3.SQLITE_IOERR | (3 << 8)])
+@pytest.mark.parametrize("error_type", [sqlite3.OperationalError, sqlite3.DatabaseError])
+def test_progress_auto_rollback_preserves_error_and_does_not_replay(ledger, monkeypatch, code, error_type):
+    rows = [source(ledger, 1), source(ledger, 2)]
+    ledger.db.execute("UPDATE patients SET fetch_reason='synthetic-pending' WHERE project_id=1")
+    error = error_type("synthetic SQLite failure")
+    if code is not None:
+        error.sqlite_errorcode = code
+    replay = []
+
+    def failed_batch(db, _probes):
+        db.rollback()  # Simulate SQLite discarding the entire transaction.
+        raise error
+
+    monkeypatch.setattr(llm, "_batch_progress_probes", failed_batch)
+    monkeypatch.setattr(llm, "_progress_probe", lambda *_: replay.append(True))
+    with pytest.raises(error_type) as caught:
+        llm.progress_for_messages(ledger.db, rows, model=MODEL)
+    assert caught.value is error and getattr(caught.value, "sqlite_errorcode", None) == code
+    assert not replay and not ledger.db.in_transaction
+    assert ledger.db.execute("SELECT fetch_reason FROM patients WHERE project_id=1").fetchone()[0] is None
+
+
+def test_classified_sql_error_keeps_original_ordered_single_fallback(ledger, monkeypatch):
+    rows = [source(ledger, 1), source(ledger, 2), source(ledger, 3)]
+    grouped = sqlite3.OperationalError("synthetic grouped SQL error")
+    grouped.sqlite_errorcode = sqlite3.SQLITE_ERROR
+    earlier = ValueError("synthetic earlier ordered error")
+    visited = []
+
+    def steps(_db, row, *, model):
+        yield ("binding", row["project_id"], row["message_id"])
+        return {"state": "attention"}
+
+    def failed_batch(*_args):
+        raise grouped
+
+    def probe(_db, item):
+        visited.append(item[2])
+        if item[2] == 2:
+            raise earlier
+        return "synthetic binding"
+
+    monkeypatch.setattr(llm, "_progress_steps", steps)
+    monkeypatch.setattr(llm, "_batch_progress_probes", failed_batch)
+    monkeypatch.setattr(llm, "_progress_probe", probe)
+    with pytest.raises(ValueError) as caught:
+        llm.progress_for_messages(ledger.db, rows, model=MODEL)
+    assert caught.value is earlier and visited == [1, 2]
+
+
 @pytest.mark.parametrize("code", [None, sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED])
 def test_interrupted_batch_is_not_replayed(ledger, monkeypatch, code):
     rows = [source(ledger, 1), source(ledger, 2)]

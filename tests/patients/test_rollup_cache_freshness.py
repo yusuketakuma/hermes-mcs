@@ -202,8 +202,7 @@ def test_dictionary_revalidation_interruption_preserves_borrowed_transaction(led
 def test_dictionary_revalidation_other_db_failure_strips_only_annotation(ledger, monkeypatch, operational):
     content, meta = _synthetic_dictionary_cache(ledger)
     error = sqlite3.OperationalError('synthetic schema failure') if operational else sqlite3.DatabaseError('synthetic schema failure')
-    if operational:
-        error.sqlite_errorcode = sqlite3.SQLITE_ERROR
+    error.sqlite_errorcode = sqlite3.SQLITE_ERROR
     calls = []
 
     def unavailable(db, mid):
@@ -215,6 +214,23 @@ def test_dictionary_revalidation_other_db_failure_strips_only_annotation(ledger,
     assert calls == [1]
     assert result['medications'][0]['name'] == '合成薬'
     assert 'ref' not in result['medications'][0]
+    assert content['medications'][0]['ref']['name'] == '合成薬'
+
+
+@pytest.mark.parametrize('error_type', [sqlite3.DatabaseError, sqlite3.OperationalError])
+def test_dictionary_revalidation_unknown_sqlite_error_is_not_retried(ledger, monkeypatch, error_type):
+    content, meta = _synthetic_dictionary_cache(ledger)
+    error = error_type('synthetic unclassified failure')
+    calls = []
+
+    def unavailable(db, mid):
+        calls.append(mid)
+        raise error
+
+    monkeypatch.setattr(rollup, 'current_refs', unavailable)
+    with pytest.raises(error_type) as caught:
+        rollup.current_cached_refs(ledger.db, 1, content, meta, cfg=None)
+    assert caught.value is error and calls == [1]
     assert content['medications'][0]['ref']['name'] == '合成薬'
 
 

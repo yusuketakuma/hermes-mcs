@@ -54,6 +54,17 @@ def source_binding(db, pid, mid, *, source_key=None):
     return _digest([list(row), revision])
 
 
+def fatal_read_error(error):
+    """Do not replay cancelled, locked or resource-failed SQLite reads."""
+    if not isinstance(error, sqlite3.Error):
+        return False
+    code = getattr(error, 'sqlite_errorcode', None)
+    if type(code) is not int:
+        return True
+    # Only a classified generic SQL error can enter the ordered fallback.
+    return code & 0xff != sqlite3.SQLITE_ERROR
+
+
 
 def source_bindings(db, pairs):
     """Read up to 64 ordered message occurrence fences on one borrowed snapshot.
@@ -77,19 +88,21 @@ def source_bindings(db, pairs):
     db.execute('SAVEPOINT source_bindings_read')
     try:
         try:
-            return _source_bindings_page(db, prepared)
+            result = _source_bindings_page(db, prepared)
         except Exception as error:
-            code = getattr(error, 'sqlite_errorcode', None)
-            if isinstance(error, sqlite3.OperationalError):
-                # Older Python/adapter errors may not expose a SQLite code;
-                # without it, a retry could replay an interruption or lock wait.
-                if type(code) is not int or code & 0xff in (
-                        sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
-                    raise
+            if fatal_read_error(error):
+                raise
             # Replay singles in order if a grouped query fails on a later row.
-            return [source_binding(db, pid, mid) for pid, mid in prepared]
-    finally:
+            result = [source_binding(db, pid, mid) for pid, mid in prepared]
+    except BaseException:
+        try:
+            db.execute('RELEASE source_bindings_read')
+        except sqlite3.Error:
+            pass  # SQLite may already have rolled back the savepoint.
+        raise
+    else:
         db.execute('RELEASE source_bindings_read')
+        return result
 
 
 def _source_bindings_page(db, pairs):
