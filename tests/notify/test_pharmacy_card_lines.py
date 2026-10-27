@@ -4,6 +4,9 @@ import json
 import pytest
 
 import structured_view
+from inference_version import CURRENT_VERSION, VERSION_KEY
+from mcs_queries import current_projection_id
+from semantic_projection import PROJECTION_VERSION
 from notify_lineworks_testkit import LINEWORKS
 from notify_testkit import CFG, NOW, _dispatch, _intent, _latest_render, _msg, _patient, led as led
 from slack_testkit import SLACK
@@ -19,7 +22,7 @@ def _extract(led, mid, context, *, events=None, kind="extract_llm"):
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) VALUES(?,1,?,?,?,?)",
         (kind, mid, json.dumps(document, ensure_ascii=False),
-         json.dumps({"hash": content_hash, "extract_version": 7}), NOW))
+         json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": content_hash, "extract_version": 7}), NOW))
     led.db.commit()
 
 
@@ -90,11 +93,14 @@ def test_the_inquiry_event_label_does_not_claim_completion(led):
 def test_a_canonical_projection_still_shows_the_extraction_detail(led):
     _seed(led, [_storage()])
     content_hash = led.db.execute("SELECT content_hash FROM messages WHERE message_id=100").fetchone()[0]
-    led.db.execute(
+    inserted = led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) VALUES(?,1,100,?,?,?)",
         ("canonical_projection", json.dumps({"summary": "合成の投影", "facts": []}),
-         json.dumps({"hash": content_hash, "projection_version": 5}), NOW))
+         json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": content_hash,
+                     "projection_version": PROJECTION_VERSION}), NOW)).lastrowid
     led.db.commit()
+    selected = led.db.execute(f"SELECT {current_projection_id()} FROM messages m WHERE m.message_id=100").fetchone()[0]
+    assert selected == inserted
     assert "服薬管理（保管状況）: 「冷蔵保管」" in structured_view.structured_lines(led.db, 100)
 
 

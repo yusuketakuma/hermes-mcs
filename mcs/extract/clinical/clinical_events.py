@@ -13,6 +13,7 @@ STATUSES = ('current', 'past', 'planned', 'conditional', 'unknown')
 ENCOUNTER_CUE = (r"(?:診察|往診|診療)(?!医|所|科|機関|方針|報酬|体制|契約|情報|録|券|室|"
                  r"の(?:説明|方針|契約|案内|資料)|について(?:の)?(?:説明|案内|資料)|"
                  r"に関する(?:説明|案内|資料))|診て(?:くれ|いただ|もら)")
+OUTPATIENT_CUE = r'外来(?:に|へ)行(?:ってきました|きました)'
 
 # Broad recall cues supplied by the caller may nominate a candidate. These
 # direct event cues alone can establish the kind; medication is never EOL proof.
@@ -21,7 +22,7 @@ _DIRECT = {
     'transfer': r'転院|転棟|転所', 'fall': r'転倒|転落|滑落',
     'eol': r'看取り|逝去|死去|永眠|お亡くなり|亡くな(?:っ|り)|死亡|終末期|臨終',
     'visit': r'訪問|往診|来訪',
-    'exam': ENCOUNTER_CUE + r'|受診|検査|採血|レントゲン|エコー|心電図|CT|MRI',
+    'exam': ENCOUNTER_CUE + r'|受診|検査|採血|レントゲン|エコー|心電図|CT|MRI|' + OUTPATIENT_CUE,
     'prescription_inquiry': r'疑義照会|処方提案',
     'care': r'介助|ケア|処置', 'family_contact': r'家族(?:に|へ|と)(?:連絡|相談)|家族連絡',
 }
@@ -153,6 +154,9 @@ def validate_record(item, body):
     _, clause_end = _clause(body, anchor, target_end)
     actual_subject, actual_status = source_axes(body, anchor, target_end, default='unknown')
     actual_negated = _polarity(body, anchor, clause_end, target_end, actual_status)
+    if item['kind'] == 'exam' and re.fullmatch(OUTPATIENT_CUE, match.group()):
+        # Arrival alone does not prove that an examination took place.
+        unresolved = True
     correction, ambiguous_subject = _ambiguous_context(body, anchor, target_end, actual_subject)
     if correction:
         actual_status, actual_negated, unresolved = 'unknown', None, True
@@ -261,13 +265,17 @@ def canonical_record(fact, evidence, *, disputed=False):
     status = 'planned' if workflow in ('planned', 'ordered', 'pending', 'considering', 'on_hold') else 'unknown'
     cue = _DIRECT.get(kind)
     match = cue.search(quote) if cue is not None else None
-    mismatch = False
+    # A different cue in the quote cannot establish examination for an
+    # arrival-only statement.
+    mismatch = kind == 'exam' and bool(re.search(OUTPATIENT_CUE, statement))
     if match is not None:
+        if kind == 'exam' and re.fullmatch(OUTPATIENT_CUE, match.group()):
+            mismatch = True
         source_subject, source_status = source_axes(quote, match.start(), match.end(), default=subject)
         if source_subject != subject:
             subject = 'unknown'
         source_negated = _polarity(quote, match.start(), len(quote), match.end(), source_status)
-        mismatch = source_negated is None or source_negated != negated
+        mismatch = mismatch or source_negated is None or source_negated != negated
         if status == 'planned' and source_status != 'planned':
             mismatch = True
         elif source_status in ('past', 'planned', 'conditional'):

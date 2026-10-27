@@ -89,7 +89,7 @@ _MED_PERIOD = re.compile(
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
 # Facility/provider names and service explanations are not encounter evidence.
 ENCOUNTER_CUE = clinical_events.ENCOUNTER_CUE
-RULE_VERSION = 25
+RULE_VERSION = 26
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問(?:診療)?|診察|往診)")
@@ -204,7 +204,8 @@ def extract_message(body: str, posted_at: str) -> dict:
 
     # --- events ---
     event_patterns = {
-        "visit": r"訪問(?:し|した|時|実施|致し)", "exam": ENCOUNTER_CUE,
+        "visit": r"訪問(?:し|した|時|実施|致し)",
+        "exam": ENCOUNTER_CUE + "|" + clinical_events.OUTPATIENT_CUE,
         "admission": r"入院", "discharge": r"退院|出院|退所|退館",
         "eol": r"看取り|終末期|逝去|お亡くなり|亡くなっ|死亡|臨終|永眠",
         "care": r"デイ|ショートステイ|ケアプラン|要介護|介護度",
