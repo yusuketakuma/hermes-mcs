@@ -208,6 +208,8 @@ def with_relogin(adapter, ledger, result, where: str, fn, *args,
     try:
         return fn(*args, **kwargs)
     except SessionExpired as e:
+        if getattr(ledger.db, "in_transaction", False):
+            raise
         if "auto_login=" in (e.detail or ""):
             raise
         state = attempt_relogin(adapter, ledger, result, where, e)

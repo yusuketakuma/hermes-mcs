@@ -88,16 +88,20 @@ def _write_health(ledger, result: dict, status: str,
     is queued so the gap is itself visible (GAP-1)."""
     try:
         health = health_report.build_health(ledger.db, result, status, run_id=run_id, cfg=cfg)
+        if ledger.db.in_transaction:
+            result["errors"].append("tick: transaction_open")
+            return
         result["health"] = health
         safe_io.atomic_publish_text(
             health_report.HEALTH_FILE, json.dumps(health, ensure_ascii=False))
     except Exception as e:
         result["errors"].append(
             f"health_write_failed: {type(e).__name__}")
-        with suppress(Exception):
-            ledger.outbox_add("health_write_failed", None,
-                              {"detail": type(e).__name__,
-                               "run_id": run_id})
+        if not ledger.db.in_transaction:
+            with suppress(Exception):
+                ledger.outbox_add("health_write_failed", None,
+                                  {"detail": type(e).__name__,
+                                   "run_id": run_id})
 LOCK_WAIT_S = 150
 
 
@@ -146,6 +150,27 @@ def _run_metadata_shadow(adapter, ledger, result, deadline, cfg, *, manual=False
                           publish=cfg.get("metadata_refresh_publish") is True,
                           actors=cfg.get("metadata_actors") is True, cfg=cfg)
 
+class TickTransactionOpen(RuntimeError):
+    """A tick stage left a transaction open that later stages must not commit."""
+
+
+def _require_closed_transaction(ledger, result):
+    if ledger.db.in_transaction:
+        if "tick: transaction_open" not in result["errors"]:
+            result["errors"].append("tick: transaction_open")
+        raise TickTransactionOpen("tick_transaction_open")
+
+
+def _report_open_transaction(ledger, result):
+    if not ledger.db.in_transaction:
+        return False
+    if "tick: transaction_open" not in result["errors"]:
+        result["errors"].append("tick: transaction_open")
+    result["ok"] = False
+    print(json.dumps(result, ensure_ascii=False))
+    return True
+
+
 def stage_derive(ledger, result, deadline, cfg=None,
                  llm_budget_cap: float = 90):
     """extract_v1 (instant rules) -> extract_llm (v4) -> rollups.
@@ -156,14 +181,21 @@ def stage_derive(ledger, result, deadline, cfg=None,
     (mcs/extract/llm, extract_llm.EXTRACT_VERSION) then folds the same rule output
     in as prompt hints and mints the extract_v1 artifact itself when
     the rule pass has not."""
+    def transaction_pending():
+        _require_closed_transaction(ledger, result)
+
+    transaction_pending()
     try:
         import extract
         ex = extract.run_pending(ledger, deadline=deadline - 45)
         result["extracted"] = ex["done"]
         result["extracted_pids"] = ex["pids"]
+        if ex.get("reconcile_error") is not None:
+            result["errors"].append("intervention_reconcile_failed")
     except Exception as e:
         result["errors"].append(f"extract: {type(e).__name__}")
 
+    transaction_pending()
     try:
         import extract_llm
         remain = (deadline - time.monotonic()) - 45
@@ -202,6 +234,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
     except Exception as e:
         result["errors"].append(f"extract_llm: {type(e).__name__}")
 
+    transaction_pending()
     try:
         import drug_map
         dictionary, error = drug_map.configured(cfg)
@@ -217,6 +250,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
     except Exception as e:
         result["errors"].append(f"drug_map: {type(e).__name__}")
 
+    transaction_pending()
     # rebuild rollups for patients whose underlying data changed —
     # union of touched-this-run + dirty detection (Oracle B23)
     try:
@@ -232,6 +266,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
     except Exception as e:
         result["errors"].append(f"rollup: {type(e).__name__}")
 
+    transaction_pending()
     # prospective review candidates — lifecycle-persisted signal_v1
     # artifacts; notify intents only when config signals.notify is set
     try:
@@ -242,6 +277,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
             f"signals: {e}" for e in result["signals"].get("errors") or [])
     except Exception as e:
         result["errors"].append(f"signals: {type(e).__name__}")
+    transaction_pending()
 
 
 # ---------- main ----------
@@ -418,6 +454,7 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
                   collection_stages.stage_unread, adapter, ledger, result, deadline,
                   run_id, mark_read=args.mark_read, semantic=sem_on,
                   notify_max_age_s=notify_max_age_s)
+    _require_closed_transaction(ledger, result)
     self_posts = cfg.get("self_posts", False)
     if type(self_posts) is not bool:
         result["errors"].append("config: self_posts_invalid")
@@ -430,6 +467,7 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
                       collection_stages.stage_self_probe, adapter, ledger, result,
                       deadline, run_id, semantic=sem_on,
                       notify_max_age_s=notify_max_age_s)
+        _require_closed_transaction(ledger, result)
     probe_after = result.pop("self_probe_after", None)
     if args.no_backfill:
         # no backfill to finish the probe's walk this run
@@ -442,6 +480,7 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
                       notify_max_age_s=notify_max_age_s,
                       notify_all_new=outage_since is not None,
                       notify_after=probe_after)
+        _require_closed_transaction(ledger, result)
     if outage_since is not None:
         collection_stages.seed_outage_catchup(ledger, result, outage_since)
 
@@ -453,6 +492,7 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
     # cmd ingest first so requests are due THIS run; discovery and
     # trickle seeding only enqueue — the drains below execute them.
     job_ops.drain_commands(ledger, result)
+    _require_closed_transaction(ledger, result)
     try:
         # interactive-notification command channel: plugin receipts
         # and card actions apply mid-tick, not just via the watcher
@@ -467,11 +507,15 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
             rep = notify_reconcile.reconcile_after_restore(
                 ledger, cfg)
             result["restore_reconcile"] = rep["counts"]
+            _require_closed_transaction(ledger, result)
         notify_cmds.drain_int_commands(
             ledger, result, cfg, os.path.join(HOME, "data"),
             deadline=deadline)
+    except TickTransactionOpen:
+        raise
     except Exception as e:
         result["errors"].append(f"cmd_int: {type(e).__name__}")
+    _require_closed_transaction(ledger, result)
     # Human intent was committed above; external mutations never run in that TX.
     try:
         import stamp_write
@@ -480,7 +524,9 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
                 ledger, adapter, cfg, os.path.join(HOME, "data"), deadline)
     except Exception as e:
         result["errors"].append(f"stamps: {type(e).__name__}")
+    _require_closed_transaction(ledger, result)
     job_ops.seed_discovery(ledger)
+    _require_closed_transaction(ledger, result)
     discover_archived = cfg.get("discover_archived", False)
     if type(discover_archived) is not bool:
         result["errors"].append("config: discover_archived_invalid")
@@ -488,23 +534,28 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
     collection_stages.with_relogin(adapter, ledger, result, "discovery",
                   job_ops.run_discovery, adapter, ledger, result,
                   deadline, include_archived=discover_archived)
+    _require_closed_transaction(ledger, result)
     collection_stages.with_relogin(adapter, ledger, result, "reply_jobs",
                   job_ops.run_reply_jobs, adapter, ledger, result,
                   deadline, semantic=sem_on,
                   notify_max_age_s=notify_max_age_s)
+    _require_closed_transaction(ledger, result)
     collection_stages.with_relogin(adapter, ledger, result, "history_jobs",
                   job_ops.run_history_jobs, adapter, ledger, result,
                   deadline, trickle=False, semantic=sem_on,
                   notify_max_age_s=notify_max_age_s)
+    _require_closed_transaction(ledger, result)
     if getattr(args, "mark_read", False):
         # after every import path of this tick has stored its replies
         collection_stages.with_relogin(adapter, ledger, result, "thread_read",
                       collection_stages.stage_thread_read, adapter, ledger, result, deadline)
+        _require_closed_transaction(ledger, result)
 
     if args.download_files:
         collection_stages.with_relogin(adapter, ledger, result, "attachments",
                       collection_stages.stage_attachments, adapter, ledger, result, deadline,
                       semantic=sem_on)
+        _require_closed_transaction(ledger, result)
 
     # -- idle-capacity deep history (trickle) ----------------------
     deep_history = cfg.get("deep_history", True)
@@ -521,6 +572,7 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
     # a switch stops new work, never abandons committed work.
     if deep_history:
         seeded = job_ops.seed_trickle(ledger)
+        _require_closed_transaction(ledger, result)
         if seeded:
             result["trickle_seeded"] = seeded
     # --jobs-only runs exist FOR this work: bigger slice of the
@@ -532,11 +584,13 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
                   max_jobs=8 if args.jobs_only else None,
                   min_margin=30 if args.jobs_only else None,
                   semantic=sem_on)
+    _require_closed_transaction(ledger, result)
 
     # -- post-import reconcile: edits/deletions below the cutoff ---
     collection_stages.with_relogin(adapter, ledger, result, "reconcile",
                   job_ops.run_reconcile_jobs, adapter, ledger, result,
                   deadline, semantic=sem_on)
+    _require_closed_transaction(ledger, result)
 
     # own identity: name/professions/stations from MCS, persisted
     # as the signal engine's default self (config overrides). Never
@@ -548,12 +602,17 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
         if args.jobs_only \
                 or not self_identity.latest_self_profile(ledger.db):
             prof = adapter.self_profile()
+            _require_closed_transaction(ledger, result)
             with ledger.db:
                 if self_identity.record_self_profile(ledger.db, prof):
                     result["self_profile"] = "updated"
+            _require_closed_transaction(ledger, result)
             _refresh_station_staff(adapter, ledger, prof, result)
+    except TickTransactionOpen:
+        raise
     except Exception as e:
         result["errors"].append(f"self_profile: {type(e).__name__}")
+    _require_closed_transaction(ledger, result)
 
 
 def _refresh_station_staff(adapter, ledger, prof, result):
@@ -564,10 +623,13 @@ def _refresh_station_staff(adapter, ledger, prof, result):
     import self_identity
     try:
         staff = adapter.station_staffs(prof.get("stations") or [])
+        _require_closed_transaction(ledger, result)
         if staff:
             with ledger.db:
                 if self_identity.record_station_staff(ledger.db, staff):
                     result["station_staff"] = "updated"
+    except TickTransactionOpen:
+        raise
     except Exception as e:
         result["station_staff"] = f"failed: {type(e).__name__}"
 
@@ -598,11 +660,13 @@ def _deliver(ledger, args, cfg, result, deadline):
             result["daily_digest"] = 1
     except Exception as e:
         result["errors"].append(f"daily_digest: {type(e).__name__}")
+    _require_closed_transaction(ledger, result)
     try:
         import notify_urgent
         result["urgency_followups"] = notify_urgent.maybe_enqueue(ledger, cfg)
     except Exception as e:
         result["errors"].append(f"urgency_followups: {type(e).__name__}")
+    _require_closed_transaction(ledger, result)
     if not args.no_notify:
         try:
             # ⏰ due/overdue task reminders join this tick's flush
@@ -611,10 +675,12 @@ def _deliver(ledger, args, cfg, result, deadline):
                 result["task_reminders"] = n
         except Exception as e:
             result["errors"].append(f"task_reminders: {type(e).__name__}")
+        _require_closed_transaction(ledger, result)
         try:
             result["notify"] = notify_flush.flush(ledger, deadline=deadline)
         except Exception as e:
             result["errors"].append(f"notify: {type(e).__name__}")
+        _require_closed_transaction(ledger, result)
     try:
         # live-card sweep: edits/deletes, signal resolves, archive
         # revokes, deferral expiry, stuck spec repair — bounded
@@ -622,11 +688,13 @@ def _deliver(ledger, args, cfg, result, deadline):
             ledger, cfg, limit=50)
     except Exception as e:
         result["errors"].append(f"card_sweep: {type(e).__name__}")
+    _require_closed_transaction(ledger, result)
     try:
         # expired tokens + settled spec payloads — bounded per tick
         result["card_gc"] = notify_cards.gc(ledger, cfg)
     except Exception as e:
         result["errors"].append(f"card_gc: {type(e).__name__}")
+    _require_closed_transaction(ledger, result)
 
 
 # Realtime never waits for background slots or pauses on a night schedule.
@@ -754,9 +822,13 @@ def _finish_run(ledger, cfg, result, run_id, deadline) -> str:
         notify_cmds.drain_int_commands(
             ledger, result, cfg, os.path.join(HOME, "data"),
             deadline=deadline, limit=16)
+        _require_closed_transaction(ledger, result)
         notify_spool.publish_flags(cfg, os.path.join(HOME, "data"))
+    except TickTransactionOpen:
+        raise
     except Exception as e:
         result["errors"].append(f"cmd_int_tail: {type(e).__name__}")
+    _require_closed_transaction(ledger, result)
     # Tail command failures must be included in the recorded run
     # before its read-only snapshot is published.
     status = "ok" if not result["errors"] and not result["incomplete"] \
@@ -798,12 +870,18 @@ def _fail_run(ledger, args, result, run_id, status, detail,
         ledger.finish_run(run_id, status, detail)
     except Exception as e:  # health + exit code must still report the failure
         result["errors"].append(f"run_record_failed: {type(e).__name__}")
+        if ledger.db.in_transaction:
+            return
+    if ledger.db.in_transaction:
+        return
     try:  # operational alert — silent death is worse than noise
         if alert == "session":
             collection_stages.queue_session_expired(ledger, run_id, detail)
         elif alert:
             # an unthrottled run_failed could alert every 10-minute tick
             collection_stages.queue_run_alert(ledger, "run_failed", run_id, detail)
+        if ledger.db.in_transaction:
+            return
         # alert=None: the session_recovered notice was already queued by
         # the relogin attempt — the flush below still delivers it
         if not args.no_notify:  # --no-notify suppresses ALL sends;
@@ -942,9 +1020,11 @@ def _main() -> int:
         _run_stage(result, "fetch", deadline, _stage_fetch,
                    adapter, ledger, args, cfg, result, deadline,
                    run_id, sem_on, notify_max_age_s)
+        _require_closed_transaction(ledger, result)
         _run_stage(result, "jobs", deadline, _run_jobs,
                    adapter, ledger, args, cfg, result, deadline, sem_on,
                    notify_max_age_s)
+        _require_closed_transaction(ledger, result)
 
         # -- derived data ----------------------------------------------
         # jobs-only runs give the realtime LLM slice no budget: the
@@ -953,9 +1033,11 @@ def _main() -> int:
             _run_stage(result, "derive", deadline, stage_derive,
                        ledger, result, deadline, cfg,
                        llm_budget_cap=0 if args.jobs_only else 90)
+        _require_closed_transaction(ledger, result)
 
         _run_stage(result, "deliver", deadline, _deliver,
                    ledger, args, cfg, result, deadline)
+        _require_closed_transaction(ledger, result)
         # 連携サマリー GETs sit behind unread collection and notify (spec:
         # 取得段は unread 収集・通知の後) so a late tick spends its tail
         # on sends, not on summaries
@@ -963,17 +1045,21 @@ def _main() -> int:
                    adapter, ledger, result, "karte_summary",
                    collection_stages.stage_karte_summary, adapter, ledger, result,
                    deadline, jobs_only=args.jobs_only)
+        _require_closed_transaction(ledger, result)
         if not _code_changed(result):
             _run_stage(result, "semantic", deadline, _run_semantic,
                        ledger, args, cfg, result, deadline, sem_on,
                        run_lock_fd=lock_fd)
+        _require_closed_transaction(ledger, result)
         _run_stage(result, "metadata_shadow", deadline, _run_metadata_shadow,
                    adapter, ledger, result, deadline, cfg,
                    manual=args.metadata_shadow)
+        _require_closed_transaction(ledger, result)
         if args.jobs_only and cfg.get("clinical_metadata") is True and not _code_changed(result):
             import project_metadata
             result["clinical_metadata"] = project_metadata.sync_clinical_metadata(
                 ledger, adapter, enabled=True, deadline=deadline)
+        _require_closed_transaction(ledger, result)
         # optional, but a slow MCS can spend every tick's budget on unread
         # — once the daily backup is overdue it runs past the deadline
         _rotate_logs(result)
@@ -982,8 +1068,12 @@ def _main() -> int:
         status = _run_stage(result, "finish", deadline, _finish_run,
                             ledger, cfg, result, run_id, deadline, required=True)
         assert isinstance(status, str)
+        _require_closed_transaction(ledger, result)
         _write_health(ledger, result, status, run_id=run_id, cfg=cfg)
+        _require_closed_transaction(ledger, result)
     except RunLockLost as e:
+        if _report_open_transaction(ledger, result):
+            return 1
         # An updater won the lock during semantic transport. Held: record
         # the run as partial and stop — no further stage runs old code.
         # Not held: no DB write at all; the 'running' row is closed as
@@ -996,10 +1086,22 @@ def _main() -> int:
             except Exception as record_error:
                 result["errors"].append(
                     f"run_record_failed: {type(record_error).__name__}")
+            if _report_open_transaction(ledger, result):
+                return 1
             _write_health(ledger, result, "partial", run_id=run_id, cfg=cfg)
+            if _report_open_transaction(ledger, result):
+                return 1
+        print(json.dumps(result, ensure_ascii=False))
+        return 1
+    except TickTransactionOpen:
+        # The tick owns this connection; close will roll back the open work.
+        # Do not record a run or send an alert using the uncommitted connection.
+        result["ok"] = False
         print(json.dumps(result, ensure_ascii=False))
         return 1
     except SessionExpired as e:
+        if _report_open_transaction(ledger, result):
+            return 1
         detail = describe_error(e)
         recovered = False
         if "auto_login=" not in detail:
@@ -1015,27 +1117,43 @@ def _main() -> int:
         _fail_run(ledger, args, result, run_id, "session_expired",
                   detail, deadline,
                   alert=None if recovered else "session")
+        if _report_open_transaction(ledger, result):
+            return 1
         _overdue_housekeeping(result)
         _write_health(ledger, result, "session_expired", run_id=run_id, cfg=cfg)
+        if _report_open_transaction(ledger, result):
+            return 1
         print(json.dumps(result, ensure_ascii=False))
         return 2
     except MCSError as e:
+        if _report_open_transaction(ledger, result):
+            return 1
         _fail_run(ledger, args, result, run_id, "failed", describe_error(e),
                   deadline, alert="run_failed")
+        if _report_open_transaction(ledger, result):
+            return 1
         _overdue_housekeeping(result)
         _write_health(ledger, result, "failed", run_id=run_id, cfg=cfg)
+        if _report_open_transaction(ledger, result):
+            return 1
         print(json.dumps(result, ensure_ascii=False))
         return 1
     except Exception as e:
+        if _report_open_transaction(ledger, result):
+            return 1
         # outermost boundary — non-MCSError crashes (AttributeError, sqlite,
         # ...) must still record a failed run and alert, not die silently
         with suppress(Exception):
             _fail_run(ledger, args, result, run_id, "failed",
                       f"crash: {type(e).__name__}", deadline,
                       alert="run_failed")
+        if _report_open_transaction(ledger, result):
+            return 1
         result["errors"].append(f"crash_site: {_crash_site(e)}")
         _overdue_housekeeping(result)
         _write_health(ledger, result, "failed", run_id=run_id, cfg=cfg)
+        if _report_open_transaction(ledger, result):
+            return 1
         print(json.dumps(result, ensure_ascii=False))
         return 1
     finally:
