@@ -12,7 +12,7 @@ import mcs_signals
 import notify_views
 import rollup
 import run_check
-from ingest_testkit import _ledger, _message
+from ingest_testkit import _ledger
 from medications_testkit import _dictionary, _fail_dictionary_io, _seed, store as store
 
 
@@ -42,11 +42,7 @@ def test_dictionary_candidates_are_derived_before_rollup_and_retired_when_disabl
     monkeypatch.setattr(rollup, "rebuild_many", rebuild)
     db = _ledger(tmp_path)
     try:
-        db.save_messages([_message(1)])
-        source_hash = db.db.execute("SELECT content_hash FROM messages").fetchone()[0]
-        db.artifact_add("extract_llm", json.dumps({"meds": [{"name": "架空薬"}]}),
-                        project_id=1, message_id=1,
-                        meta={"hash": source_hash, "engine_version": 4})
+        _seed(db, names=("架空薬",))
         result = {"errors": []}
         run_check.stage_derive(db, result, 100, config, llm_budget_cap=0)
         assert result["errors"] == []
