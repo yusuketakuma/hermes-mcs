@@ -111,6 +111,7 @@ def _http_worker_main() -> int:
         allowed = envelope.get("allowed_endpoints") or []
         public_mcp = envelope.get("public_mcp", False)
         auth = envelope.get("auth", "bearer")
+        reservation_day = envelope.get("reservation_day")
         if (not isinstance(endpoint, str)
                 or not isinstance(allowed, list)
                 or not all(isinstance(e, str) for e in allowed)
@@ -124,6 +125,7 @@ def _http_worker_main() -> int:
                 or (auth == "anthropic" and (endpoint != ANTHROPIC_ENDPOINT
                     or method != "POST" or not api_key or public_mcp))
                 or not isinstance(public_mcp, bool)
+                or (reservation_day is not None and not _valid_reservation_day(reservation_day))
                 or (public_mcp and not _public_mcp_allowed(endpoint, method, api_key, allowed))
                 or (not public_mcp and api_key is None
                     and not loopback_endpoint_allowed(endpoint))):
@@ -144,6 +146,12 @@ def _http_worker_main() -> int:
         request = urllib.request.Request(endpoint, data=raw, method=method,
                                          headers=headers)
         opener = no_proxy_opener(NoRedirect)
+        # This bounds the start of opener.open, not later socket writes or
+        # the remote server's receipt time.
+        if reservation_day is not None and _jst_day(time.time()) != reservation_day:
+            sys.stdout.write('{"ok":false,"error":"reservation_day_changed"}')
+            sys.stdout.flush()
+            return 0
         try:
             response = opener.open(request, timeout=float(timeout))
         except urllib.error.HTTPError as error:
@@ -185,10 +193,23 @@ class NotSentTimeout(TimeoutError):
     """Deadline expired before the request body reached the worker."""
 
 
+class ReservationDayChanged(RuntimeError):
+    """The worker refused the request before opening a connection."""
+
+
+def _jst_day(timestamp):
+    return math.floor((timestamp + 9 * 3600) / 86400) * 86400 - 9 * 3600
+
+
+def _valid_reservation_day(day):
+    return type(day) is int and abs(day) <= 2**53 and (day + 9 * 3600) % 86400 == 0
+
+
 def bounded_http_request(endpoint: str, method: str, body,
                          timeout: float, api_key: str | None = None,
                          deadline: float | None = None,
-                         allowed_endpoints=(), _public_mcp=False, auth="bearer"):
+                         allowed_endpoints=(), _public_mcp=False, auth="bearer",
+                         reservation_day=None):
     """Make one bounded request through a short-lived, reaped worker.
 
     An ``api_key`` request must target ``allowed_endpoints`` — the
@@ -201,6 +222,8 @@ def bounded_http_request(endpoint: str, method: str, body,
     """
     if not isinstance(endpoint, str) or method not in ("GET", "POST"):
         raise ValueError("request_invalid")
+    if reservation_day is not None and not _valid_reservation_day(reservation_day):
+        raise ValueError("reservation_day_invalid")
     allowed = {e for e in allowed_endpoints if isinstance(e, str)}
     if (auth not in ("bearer", "anthropic")
             or (auth == "anthropic" and (endpoint != ANTHROPIC_ENDPOINT
@@ -240,6 +263,7 @@ def bounded_http_request(endpoint: str, method: str, body,
         "allowed_endpoints": sorted(allowed),
         "public_mcp": _public_mcp,
         "auth": auth,
+        "reservation_day": reservation_day,
     }
     payload = json.dumps(envelope, ensure_ascii=False,
                          allow_nan=False).encode("utf-8")
@@ -273,6 +297,9 @@ def bounded_http_request(endpoint: str, method: str, body,
     except (UnicodeDecodeError, ValueError) as error:
         raise OSError("http worker protocol failed") from error
     if not isinstance(result, dict) or not result.get("ok"):
+        if (reservation_day is not None and isinstance(result, dict)
+                and result.get("error") == "reservation_day_changed"):
+            raise ReservationDayChanged("reservation day changed")
         if isinstance(result, dict) and result.get("error") == "timeout":
             raise TimeoutError("http worker timeout")
         if isinstance(result, dict) and result.get("error") == "connection_refused":

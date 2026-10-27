@@ -132,6 +132,49 @@ def test_previous_jst_day_does_not_spend_today_and_declined_reservations_stay_ab
         db.close()
 
 
+@pytest.mark.parametrize("manual", [False, True])
+def test_day_change_during_reservation_rolls_back_before_any_send(tmp_path, monkeypatch, manual):
+    # Forward rollover alone does not prove an over-cap: the existing lower-bound
+    # sum for the old day already contains every row from the new day. This
+    # conservative rollback guarantees a receipt has one unambiguous day.
+    db = _seeded(tmp_path)
+    day = 1_800_000_000
+    clock = [semantic_store._jst_day_start(day) + 86399]
+    monkeypatch.setattr(runtime.time, "time", lambda: clock[0])
+    original = db.artifact_add_tx
+    def add(*args, **kwargs):
+        clock[0] += 2
+        return original(*args, **kwargs)
+    monkeypatch.setattr(db, "artifact_add_tx", add)
+    try:
+        reserve = (runtime.manual_usage_reserver(db, operation="jev_value", daily_request_budget=1)
+                   if manual else _reserver(db, 1))
+        with pytest.raises(jev.JevError) as error:
+            reserve({}, 1)
+        assert error.value.detail == "reservation_day_changed"
+        assert not db.artifacts("semantic_usage")
+        assert not db.db.in_transaction
+    finally:
+        db.close()
+
+
+def test_old_day_usage_includes_rows_in_the_following_day(tmp_path, monkeypatch):
+    db = _seeded(tmp_path)
+    start = semantic_store._jst_day_start(1_800_000_000)
+    clock = [start + 86399]
+    monkeypatch.setattr(runtime.time, 'time', lambda: clock[0])
+    try:
+        artifact_id = db.artifact_add('semantic_usage', '{}', meta={'jev_requests': 1})
+        with db.db:
+            db.db.execute('UPDATE artifacts SET created_at=? WHERE artifact_id=?',
+                          (start + 86401, artifact_id))
+        assert semantic_store.jev_usage_today(db) == 1
+        clock[0] = start + 86401
+        assert semantic_store.jev_usage_today(db) == 1
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("bad", ["{}", '{"jev_requests":true}', '{"jev_requests":-1}',
                                  '{"jev_requests":1.5}', "{broken", "[" * 1100 + "0" + "]" * 1100])
 def test_unknown_usage_fails_closed_before_reservation(tmp_path, bad):

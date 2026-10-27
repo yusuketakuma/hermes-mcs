@@ -24,6 +24,13 @@ DEFAULT_ATTEMPT_LIMIT = 6
 MAX_SQL_INTEGER = 2**63 - 1
 
 
+@dataclass(frozen=True)
+class JevReservation:
+    """The accounting day and artifact of one committed Jev reservation."""
+    artifact_id: int
+    jst_day: int
+
+
 class RuntimeGuardError(RuntimeError):
     """An execution boundary is no longer valid for this worker."""
 
@@ -553,6 +560,17 @@ def _daily_cap_check(ledger, limit: int, retryable: bool = False):
         raise JevError("budget_exceeded", "daily_cap", retryable=retryable)
 
 
+def _check_reservation_day(ledger, artifact_id, day):
+    """Reject a reservation whose check and durable timestamp span JST days."""
+    from semantic_jev import JevError
+    from semantic_store import _jst_day_start
+    row = ledger.db.execute("SELECT created_at FROM artifacts WHERE artifact_id=?",
+                            (artifact_id,)).fetchone()
+    if (row is None or int(_jst_day_start(row["created_at"])) != day
+            or int(_jst_day_start(time.time())) != day):
+        raise JevError("budget_exceeded", "reservation_day_changed", retryable=True)
+
+
 def usage_reserver(ledger, token: JobToken, *, kind: str,
                    model: str, project_id: int, message_id: int,
                    daily_request_budget: int | None = None):
@@ -566,10 +584,17 @@ def usage_reserver(ledger, token: JobToken, *, kind: str,
 
     def reserve(body: dict, timeout: float):
         request_fp = payload_hash(body)
+        from semantic_store import _jst_day_start
+        day = None
         def check():
+            nonlocal day
+            day = int(_jst_day_start(time.time()))
             _daily_cap_check(ledger, daily_request_budget, retryable=True)
+            if int(_jst_day_start(time.time())) != day:
+                from semantic_jev import JevError
+                raise JevError("budget_exceeded", "reservation_day_changed", retryable=True)
         def write():
-            return ledger.artifact_add_tx(
+            artifact_id = ledger.artifact_add_tx(
                 kind,
                 json.dumps({"job_id": token.job_id, "reserved": True},
                            ensure_ascii=False),
@@ -579,6 +604,8 @@ def usage_reserver(ledger, token: JobToken, *, kind: str,
                       "request_fp": request_fp,
                       "timeout_seconds": float(timeout),
                       "reservation_id": uuid.uuid4().hex})
+            _check_reservation_day(ledger, artifact_id, day)
+            return JevReservation(artifact_id, day)
         return reserve_artifact(ledger, check, write)
     return reserve
 
@@ -595,14 +622,22 @@ def manual_usage_reserver(ledger, *, operation: str, daily_request_budget=None):
     limit = min(daily_request_budget, DAILY_REQUEST_LIMIT)
 
     def reserve(body, timeout):
+        from semantic_store import _jst_day_start
+        day = None
         def check():
+            nonlocal day
+            day = int(_jst_day_start(time.time()))
             _daily_cap_check(ledger, limit)
+            if int(_jst_day_start(time.time())) != day:
+                raise JevError("budget_exceeded", "reservation_day_changed", retryable=True)
 
         def write():
-            return ledger.artifact_add_tx("semantic_usage", "{}", model=JEV_MODEL,
+            artifact_id = ledger.artifact_add_tx("semantic_usage", "{}", model=JEV_MODEL,
                 meta={"jev_requests": 1, "reserved": True, "operation": operation,
                       "request_fp": payload_hash(body), "timeout_seconds": float(timeout),
                       "reservation_id": uuid.uuid4().hex})
+            _check_reservation_day(ledger, artifact_id, day)
+            return JevReservation(artifact_id, day)
         if ledger.db.in_transaction:
             raise RuntimeError("manual_jev_transaction_active")
         return reserve_artifact(ledger, check, write)
@@ -676,6 +711,29 @@ def llm_request_was_dispatched(error: RuntimeGuardError) -> bool:
     return not (isinstance(error, LLMNotSent) or error.stage in PRE_DISPATCH_STAGES)
 
 
+def _accepts_explicit_keyword(fn, keyword):
+    """An old **kwargs hook must explicitly promise the guarded protocol."""
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    param = params.get(keyword)
+    if param is not None and param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                                             inspect.Parameter.KEYWORD_ONLY):
+        return True
+    declared = getattr(fn, "__mcs_guarded_keywords__", ())
+    return (isinstance(declared, (tuple, frozenset)) and keyword in declared
+            and any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()))
+
+
+def _can_bind_call(fn, *args, **kwargs):
+    try:
+        inspect.signature(fn).bind(*args, **kwargs)
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 class JevEvaluation:
     """Bind one job's evaluation guards, reservation and timing without client mutation."""
     def __init__(self, client, guard, reserve, cutoff, transport, timing):
@@ -703,9 +761,20 @@ class JevEvaluation:
         self._client.last_error = error
 
     def models(self, timeout=10.0):
-        self._guard("jev_attempt")
-        _jev_cutoff(self._cutoff, timeout)
-        result = self._client.models(timeout, reserve_fn=self._reserve)
+        def before_attempt():
+            self._guard("jev_attempt")
+            _jev_cutoff(self._cutoff, timeout)
+        before_attempt()
+        models = self._client.models
+        if (_accepts_explicit_keyword(models, "before_attempt")
+                and _can_bind_call(models, timeout, reserve_fn=self._reserve,
+                                   before_attempt=before_attempt)):
+            result = models(timeout, reserve_fn=self._reserve, before_attempt=before_attempt)
+        else:
+            if self._reserve is not None:
+                from semantic_jev import JevError
+                raise JevError("budget_exceeded", "models_guard_unsupported", retryable=True)
+            result = models(timeout, reserve_fn=self._reserve)
         self._guard("jev_result")
         return result
 

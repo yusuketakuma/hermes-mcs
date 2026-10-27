@@ -154,6 +154,26 @@ def live_client(key, *, operation, root=None, **options):
     yield bind_jev(JevClient(api_key=key, **options), lambda stage: None, reserve)
 
 
+def _reservation_day(reservation):
+    # Fake clients/hooks may return None; only real ledger reservers return
+    # the typed per-attempt receipt, never mutable client-global state.
+    from semantic_runtime import JevReservation
+    return reservation.jst_day if isinstance(reservation, JevReservation) else None
+
+
+def _check_reservation_day(day):
+    if day is not None and bounded_http._jst_day(time.time()) != day:
+        raise JevError("budget_exceeded", "reservation_day_changed", retryable=True)
+
+
+def _check_request_day_capability(request, day, *args, **kwargs):
+    if day is not None:
+        from semantic_runtime import _accepts_explicit_keyword, _can_bind_call
+        if (not _accepts_explicit_keyword(request, "reservation_day")
+                or not _can_bind_call(request, *args, reservation_day=day, **kwargs)):
+            raise JevError("budget_exceeded", "request_day_guard_unsupported", retryable=True)
+
+
 class JevError(Exception):
     """kind: transport|timeout|rate_limited|auth_error|contract_error|
     protocol_error|model_mismatch|budget_exceeded|no_api_key|payment_required.
@@ -405,12 +425,14 @@ class JevClient:
         return True
 
     def request(self, method: str, body, timeout: float,
-                endpoint: str | None = None, *, deadline: float | None = None):
+                endpoint: str | None = None, *, deadline: float | None = None,
+                reservation_day=None):
         return bounded_http.bounded_http_request(
             endpoint or self.endpoint, method, body, timeout,
             api_key=self.api_key if isinstance(self.api_key, str) else "",
             deadline=deadline,
-            allowed_endpoints=(JEV_ALLOWED_ENDPOINTS | {JEV_ENDPOINT, JEV_MODELS_URL}))
+            allowed_endpoints=(JEV_ALLOWED_ENDPOINTS | {JEV_ENDPOINT, JEV_MODELS_URL}),
+            **({"reservation_day": reservation_day} if reservation_day is not None else {}))
 
     def _retry_after(self, headers: dict) -> float | None:
         from llm_retry import retry_after
@@ -442,17 +464,44 @@ class JevClient:
             timeout = min(self.attempt_timeout, remaining)
             if before_attempt is not None:
                 before_attempt()
-            if reserve_fn is not None:
-                reserve_fn(body, timeout)
+            reservation = reserve_fn(body, timeout) if reserve_fn is not None else None
+            # Reservation can wait for a writer: recheck the caller's source,
+            # authorization and deadline before dispatch. A reservation already
+            # recorded remains counted even when this guard rejects the send.
+            if reserve_fn is not None and before_attempt is not None:
+                before_attempt()
+            reservation_day = _reservation_day(reservation)
+            _check_reservation_day(reservation_day)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                error = JevError("budget_exceeded", "job_budget", retryable=True)
+                self.last_error = error
+                raise error
+            if self.request_cap is not None and self.requests_made >= self.request_cap:
+                error = JevError("budget_exceeded", "daily_cap", retryable=True)
+                self.last_error = error
+                raise error
+            timeout = min(timeout, remaining)
+            request = self.request
+            post_fn = self._post_fn
+            if post_fn is None:
+                _check_request_day_capability(request, reservation_day,
+                                              "POST", body, timeout, deadline=deadline)
+            _check_reservation_day(reservation_day)
             self.requests_made += 1
             try:
-                if self._post_fn is not None:
+                if post_fn is not None:
                     # Original isolated post_fn contract is still body+timeout.
-                    status, headers, raw = self._post_fn(body, timeout)
+                    status, headers, raw = post_fn(body, timeout)
                 elif transport is None:
-                    status, headers, raw = self.request("POST", body, timeout, deadline=deadline)
+                    status, headers, raw = request("POST", body, timeout, deadline=deadline,
+                        **({"reservation_day": reservation_day} if reservation_day is not None else {}))
                 else:
-                    status, headers, raw = transport(self.request, "POST", body, timeout, deadline=deadline)
+                    status, headers, raw = transport(request, "POST", body, timeout, deadline=deadline,
+                        **({"reservation_day": reservation_day} if reservation_day is not None else {}))
+            except bounded_http.ReservationDayChanged:
+                self.requests_made -= 1
+                raise JevError("budget_exceeded", "reservation_day_changed", retryable=True) from None
             except OSError as e:     # URLError and TimeoutError included
                 kind = "timeout" if isinstance(e, TimeoutError) else "transport"
                 last = JevError(kind, type(e).__name__,
@@ -512,16 +561,26 @@ class JevClient:
         self.last_error = error
         raise error
 
-    def models(self, timeout: float = 10.0, *, reserve_fn=None) -> list:
+    def models(self, timeout: float = 10.0, *, reserve_fn=None, before_attempt=None) -> list:
         """GET /v1/models — alias listing only. A fixed version id absent
         from this list is NOT proof of unsupport; confirm with an
         explicitly approved synthetic-input smoke call and the response's
         model field instead of auto-switching to latest (AT-064)."""
-        if reserve_fn is not None:
-            reserve_fn({"method": "GET", "endpoint": JEV_MODELS_URL}, timeout)
+        reservation = (reserve_fn({"method": "GET", "endpoint": JEV_MODELS_URL}, timeout)
+                       if reserve_fn is not None else None)
+        if reserve_fn is not None and before_attempt is not None:
+            before_attempt()
+        reservation_day = _reservation_day(reservation)
+        _check_reservation_day(reservation_day)
+        request = self.request
+        _check_request_day_capability(request, reservation_day,
+                                      "GET", None, timeout, endpoint=JEV_MODELS_URL)
         try:
-            status, _headers, raw = self.request(
-                "GET", None, timeout, endpoint=JEV_MODELS_URL)
+            status, _headers, raw = request(
+                "GET", None, timeout, endpoint=JEV_MODELS_URL,
+                **({"reservation_day": reservation_day} if reservation_day is not None else {}))
+        except bounded_http.ReservationDayChanged:
+            raise JevError("budget_exceeded", "reservation_day_changed", retryable=True) from None
         except OSError as e:     # URLError and TimeoutError included
             # surface transport failure as JevError like evaluate() does —
             # the smoke harness only catches JevError

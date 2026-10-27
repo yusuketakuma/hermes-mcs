@@ -99,8 +99,10 @@ def test_retries_reserve_each_http_and_preserve_unknown_attempt(home):
 
 def test_models_get_consumes_same_shared_reservation(home, monkeypatch):
     with jev.live_client("synthetic", operation="wire_smoke", root=str(home)) as client:
-        monkeypatch.setattr(client._client, "request", lambda *a, **k:
-            (200, {}, json.dumps({"data": [{"id": jev.JEV_MODEL}]}).encode()))
+        def request(*a, reservation_day=None, **k):
+            assert reservation_day is not None
+            return 200, {}, json.dumps({"data": [{"id": jev.JEV_MODEL}]}).encode()
+        monkeypatch.setattr(client._client, "request", request)
         assert client.models() == [jev.JEV_MODEL]
     assert _used(home) == 1
 
@@ -210,7 +212,8 @@ def test_live_scope_has_no_writer_or_run_lock_during_http(home, monkeypatch):
     with jev.live_client("synthetic", operation="wire_smoke", root=str(home), post_fn=post) as client:
         assert not opened
         _evaluate(client)
-        def get(*args, **kwargs):
+        def get(*args, reservation_day=None, **kwargs):
+            assert reservation_day is not None
             transport_unlocked()
             return 200, {}, json.dumps({"data": [{"id": jev.JEV_MODEL}]}).encode()
         monkeypatch.setattr(client._client, "request", get)

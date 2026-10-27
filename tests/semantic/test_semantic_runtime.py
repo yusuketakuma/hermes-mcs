@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from ledger import Ledger
 import semantic
 import semantic_jev as jev
@@ -19,7 +20,7 @@ from semantic_testkit import _cfg, _llm, _message, _seeded, _FakeJev, _seeded_tw
 def _job(tmp_path):
     db = Ledger(str(tmp_path / "ledger.db"))
     db.job_add("semantic", 1, 1, payload={
-        "targets": [1], "generation": "g1", "source_generation": "s1"})
+        VERSION_KEY: CURRENT_VERSION, "targets": [1], "generation": "g1", "source_generation": "s1"})
     row = db.db.execute(
         "SELECT * FROM fetch_jobs WHERE kind='semantic'").fetchone()
     return db, dict(row)
@@ -28,13 +29,16 @@ def _job(tmp_path):
 def test_old_worker_cannot_transition_reused_job_id(tmp_path):
     db, row = _job(tmp_path)
     token = runtime.JobToken.from_row(row)
+    assert runtime.job_matches(db, token)
     db.db.execute(
         "UPDATE fetch_jobs SET payload=? WHERE job_id=?",
-        (json.dumps({"targets": [1], "generation": "g2",
+        (json.dumps({VERSION_KEY: CURRENT_VERSION, "targets": [1], "generation": "g2",
                      "source_generation": "s2"}), token.job_id))
     db.db.commit()
 
     assert not runtime.job_matches(db, token)
+    new_row = db.db.execute("SELECT * FROM fetch_jobs WHERE job_id=?", (token.job_id,)).fetchone()
+    assert runtime.job_matches(db, runtime.JobToken.from_row(new_row))
     assert not runtime.transition(db, token, "retry", max_attempts=2)
     current = db.db.execute(
         "SELECT state,attempts FROM fetch_jobs WHERE job_id=?",

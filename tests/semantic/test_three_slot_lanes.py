@@ -1,4 +1,7 @@
 """Fixed lanes let ingestion run during inference without duplicate jobs."""
+from json import dumps
+
+from inference_version import CURRENT_VERSION, VERSION_KEY
 import writer_lock
 import semantic_qc
 import os
@@ -102,7 +105,8 @@ def test_jev_receipt_is_committed_before_unlocked_transport(tmp_path, monkeypatc
     calls = []
     client = semantic_jev.JevClient(api_key='synthetic')
 
-    def http(*args, **kwargs):
+    def http(*args, reservation_day=None, **kwargs):
+        assert reservation_day is not None
         assert not db.db.in_transaction
         other = writer_lock.acquire_run_lock(path)
         assert other is not None
@@ -132,7 +136,8 @@ def test_backlog_alternates_so_reseeded_qc_cannot_starve_semantic(tmp_path, monk
     db.db.execute(
         "INSERT INTO fetch_jobs(job_id,kind,project_id,message_id,payload,"
         "state,attempts,next_try,created_at,updated_at) "
-        "VALUES (5,'extract_qc',1,1,'{}','pending',0,0,0,0)")
+        "VALUES (5,'extract_qc',1,1,?,'pending',0,0,0,0)",
+        (dumps({VERSION_KEY: CURRENT_VERSION}),))
     db.db.commit()
     seen = []
     monkeypatch.setattr(semantic_drain, '_BACKLOG_TURN', {'kind': None})
@@ -162,8 +167,8 @@ def test_reseeded_old_qc_cannot_overtake_a_waiting_qc(tmp_path, monkeypatch):
         db.db.execute(
             "INSERT INTO fetch_jobs(job_id,kind,project_id,message_id,payload,"
             "state,attempts,next_try,created_at,updated_at) "
-            "VALUES (?,'extract_qc',1,?,'{}','pending',0,?,0,0)",
-            (job_id, mid, clock[0] - 10))
+            "VALUES (?,'extract_qc',1,?,?,'pending',0,?,0,0)",
+            (job_id, mid, dumps({VERSION_KEY: CURRENT_VERSION}), clock[0] - 10))
     db.db.commit()
     seen = []
     monkeypatch.setattr(semantic_drain.time, 'time', lambda: clock[0])

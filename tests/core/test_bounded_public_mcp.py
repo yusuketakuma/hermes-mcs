@@ -112,3 +112,58 @@ def test_parent_propagates_mcp_mode_allowlist_and_deadline(monkeypatch):
     assert envelope["public_mcp"] is True and envelope["api_key"] is None
     assert envelope["allowed_endpoints"] == [URL]
     assert timeout == envelope["timeout"] == 2
+
+
+@pytest.mark.parametrize('method', ['POST', 'GET'])
+def test_worker_refuses_day_change_before_opener_open(monkeypatch, method):
+    day = bounded_http._jst_day(1_800_000_000)
+    monkeypatch.setattr(bounded_http.time, 'time', lambda: day + 86400)
+    class Opener:
+        def open(self, *args, **kwargs):
+            pytest.fail('day change reached opener.open')
+    result = _worker(monkeypatch, {'endpoint': URL, 'method': method, 'api_key': 'synthetic',
+        'allowed_endpoints': [URL], 'timeout': 3, 'body': {} if method == 'POST' else None,
+        'reservation_day': day}, lambda redirect: Opener())
+    assert result == {'ok': False, 'error': 'reservation_day_changed'}
+
+
+def test_worker_only_checks_start_not_later_socket_or_server_time(monkeypatch):
+    day = bounded_http._jst_day(1_800_000_000)
+    clock = [day + 86399]
+    monkeypatch.setattr(bounded_http.time, 'time', lambda: clock[0])
+    class Response:
+        status = 200
+        headers = {}
+        def read(self, count):
+            return b'ok'
+        def close(self):
+            pass
+    class Opener:
+        def open(self, request, timeout):
+            clock[0] += 2  # Simulate time passing after the start check.
+            return Response()
+    result = _worker(monkeypatch, {'endpoint': URL, 'method': 'POST', 'api_key': 'synthetic',
+        'allowed_endpoints': [URL], 'timeout': 3, 'body': {}, 'reservation_day': day},
+        lambda redirect: Opener())
+    assert result['ok'] and base64.b64decode(result['body']) == b'ok'
+
+
+@pytest.mark.parametrize('day', [True, 1, 2**60, 'tomorrow'])
+def test_invalid_reservation_day_is_rejected_before_spawn(monkeypatch, day):
+    monkeypatch.setattr(bounded_http.subprocess, 'Popen', lambda *a, **k: pytest.fail('spawn'))
+    with pytest.raises(ValueError, match='reservation_day_invalid'):
+        bounded_http.bounded_http_request(URL, 'POST', {}, 1, api_key='synthetic',
+            allowed_endpoints=(URL,), reservation_day=day)
+
+
+def test_parent_forwards_reservation_day_and_distinguishes_worker_refusal(monkeypatch):
+    day = bounded_http._jst_day(1_800_000_000)
+    class Process:
+        returncode = 0
+        def communicate(self, input, timeout):
+            assert json.loads(input)['reservation_day'] == day
+            return b'{"ok":false,"error":"reservation_day_changed"}', b''
+    monkeypatch.setattr(bounded_http.subprocess, 'Popen', lambda *a, **k: Process())
+    with pytest.raises(bounded_http.ReservationDayChanged):
+        bounded_http.bounded_http_request(URL, 'POST', {}, 1, api_key='synthetic',
+            allowed_endpoints=(URL,), reservation_day=day)
