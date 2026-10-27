@@ -11,9 +11,10 @@ import pytest
 
 import mcs_signals
 from semantic_projection import PROJECTION_VERSION
+from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY
 from ops_testkit import DAY, NOW, _extract_v1, _msg
 from common_testkit import ledger_fixture
-from views_testkit import _extract as _extract_llm
+from views_testkit import _extract as _views_extract
 import message_observations
 import signal_policy
 
@@ -65,13 +66,22 @@ def test_corrupt_latest_roster_never_revives_prior_membership(led, raw):
 led = ledger_fixture()
 
 
+def _extract_llm(db, mid, chash, meds, events=None):
+    """Seed a current extraction without changing the shared view fixture."""
+    _views_extract(db, mid, chash, meds, events=events)
+    db.execute("UPDATE artifacts SET meta=json_set(meta, ?, ?) "
+               "WHERE artifact_id=last_insert_rowid()",
+               (f"$.{VERSION_KEY}", CURRENT_VERSION))
+
+
 def _extract_doc(db, mid, chash, **fields):
     """extract_llm artifact with an arbitrary v2 document — requests,
     symptoms, urgency, events, meds."""
     db.execute(
         "INSERT INTO artifacts(kind,message_id,content,meta) "
         "VALUES ('extract_llm',?,?,?)",
-        (mid, json.dumps(fields), json.dumps({"hash": chash})))
+        (mid, json.dumps(fields),
+         json.dumps({"hash": chash, VERSION_KEY: CURRENT_VERSION})))
 
 
 def _req(db, status, due=None, src_mid=1, created=NOW):
@@ -123,6 +133,51 @@ def test_med_change_no_followup(led):
     assert sig["evidence"]["message_ids"] == [1]
     assert "確認できませんでした" in sig["note"]
     assert "対応の有無を示すものではありません" not in sig["note"]
+
+
+@pytest.mark.parametrize("case", ["current", "missing", "legacy", "null",
+                                  "malformed_meta", "malformed_content",
+                                  "stale_hash", "deleted"])
+def test_signal_extraction_generation_and_source_boundaries(led, case):
+    _msg(led.db, 1, ts=NOW - 30 * DAY, body="本人の合成薬Aを中止しました。")
+    _extract_doc(led.db, 1, "h1", meds=[{"name": "合成薬A", "action": "stop"}])
+    if case in {"missing", "legacy", "null", "malformed_meta", "stale_hash"}:
+        meta = {"hash": "h1", VERSION_KEY: CURRENT_VERSION}
+        if case == "missing":
+            del meta[VERSION_KEY]
+        elif case == "legacy":
+            meta[VERSION_KEY] = LEGACY_VERSION
+        elif case == "null":
+            meta[VERSION_KEY] = None
+        elif case == "stale_hash":
+            meta["hash"] = "old-hash"
+        raw = "{bad" if case == "malformed_meta" else json.dumps(meta)
+        led.db.execute("UPDATE artifacts SET meta=? WHERE kind='extract_llm' "
+                       "AND message_id=1", (raw,))
+    elif case == "malformed_content":
+        led.db.execute("UPDATE artifacts SET content=? WHERE kind='extract_llm' "
+                       "AND message_id=1", ("{bad",))
+    elif case == "deleted":
+        led.db.execute("UPDATE messages SET body_state='deleted', body_text='' "
+                       "WHERE message_id=1")
+    res = _ev(led)
+    assert res["errors"] == []
+    meds = [s for s in mcs_signals.current_open(led.db)["items"]
+            if s["type"] == "med_change_no_followup"]
+    assert [(s["project_id"], s["evidence"]["med"]) for s in meds] == (
+        [(1, "合成薬A")] if case == "current" else [])
+
+
+def test_current_signal_fact_is_scoped_to_its_own_patient(led):
+    _msg(led.db, 1, pid=1, ts=NOW - 30 * DAY, body="通常の連絡")
+    _msg(led.db, 2, pid=2, ts=NOW - 30 * DAY, chash="h2",
+         body="本人の合成薬Bを中止しました。")
+    _extract_doc(led.db, 2, "h2", meds=[{"name": "合成薬B", "action": "stop"}])
+    assert _ev(led)["errors"] == []
+    meds = [s for s in mcs_signals.current_open(led.db)["items"]
+            if s["type"] == "med_change_no_followup"]
+    assert [(s["project_id"], s["evidence"]["med"]) for s in meds] == [
+        (2, "合成薬B")]
 
 
 def test_med_episode_groups_same_med(led):
@@ -224,7 +279,8 @@ def _projection(db, mid, chash, content, pid=1):
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
         "VALUES ('canonical_projection',?,?,?,?)",
         (pid, mid, json.dumps(content),
-         json.dumps({"hash": chash, "projection_version": PROJECTION_VERSION})))
+         json.dumps({"hash": chash, "projection_version": PROJECTION_VERSION,
+                     VERSION_KEY: CURRENT_VERSION})))
 
 
 def test_med_change_detected_from_canonical_projection(led):
@@ -271,6 +327,22 @@ def test_stale_projection_falls_back_to_extract_llm_in_signals(led):
     _ev(led)
     meds = [s["evidence"]["med"]
             for s in mcs_signals.current_open(led.db)["items"]
+            if s["type"] == "med_change_no_followup"]
+    assert meds == ["現行薬"]
+
+
+@pytest.mark.parametrize("version", ["missing", LEGACY_VERSION, None])
+def test_old_projection_does_not_shadow_current_extract_in_signals(led, version):
+    _msg(led.db, 1, ts=NOW - 30 * DAY)
+    _extract_llm(led.db, 1, "h1", [{"name": "現行薬", "action": "stop"}])
+    _projection(led.db, 1, "h1", {"meds": [{"name": "旧薬", "action": "stop"}]})
+    meta = {"hash": "h1", "projection_version": PROJECTION_VERSION}
+    if version != "missing":
+        meta[VERSION_KEY] = version
+    led.db.execute("UPDATE artifacts SET meta=? WHERE kind='canonical_projection' "
+                   "AND message_id=1", (json.dumps(meta),))
+    assert _ev(led)["errors"] == []
+    meds = [s["evidence"]["med"] for s in mcs_signals.current_open(led.db)["items"]
             if s["type"] == "med_change_no_followup"]
     assert meds == ["現行薬"]
 
@@ -1733,7 +1805,8 @@ def test_urgency_high_from_extract_v1_escalates(led):
     led.db.execute(
         "INSERT INTO artifacts(kind,message_id,content,meta) "
         "VALUES ('extract_v1',?,?,?)",
-        (1, json.dumps({"urgency": "high"}), json.dumps({"hash": "h1"})))
+        (1, json.dumps({"urgency": "high"}),
+         json.dumps({"hash": "h1", VERSION_KEY: CURRENT_VERSION})))
     res = _ev(led, cfg={"signals": {"notify": True}})
     assert res["notify_enqueued"] == 1
     pl = _outbox_payloads(led)[0]
@@ -1746,7 +1819,8 @@ def test_stale_high_urgency_does_not_escalate_current_signal(led, kind):
     _extract_llm(led.db, 1, "h1", [{"name": "薬A", "action": "stop"}])
     led.db.execute(
         "INSERT INTO artifacts(kind,message_id,content,meta) VALUES(?,1,?,?)",
-        (kind, json.dumps({"urgency": "high"}), json.dumps({"hash": "old-body"})))
+        (kind, json.dumps({"urgency": "high"}),
+         json.dumps({"hash": "old-body", VERSION_KEY: CURRENT_VERSION})))
     res = _ev(led, cfg={"signals": {"notify": True}})
     assert res["notify_enqueued"] == 1
     pl = _outbox_payloads(led)[0]
@@ -2182,7 +2256,8 @@ def _extract_llm_meds(db, mid, chash, meds):
     db.execute(
         "INSERT INTO artifacts(kind,message_id,content,meta) "
         "VALUES ('extract_llm',?,?,?)",
-        (mid, json.dumps({"meds": meds}), json.dumps({"hash": chash})))
+        (mid, json.dumps({"meds": meds}),
+         json.dumps({"hash": chash, VERSION_KEY: CURRENT_VERSION})))
 
 
 def test_eleven_mentions_keep_latest_in_evidence(led):
@@ -2213,7 +2288,8 @@ def test_rx_period_expiry_high_urgency_escalates(led):
         "VALUES ('extract_v1',1,?,?)",
         (json.dumps({"urgency": "high", "med_periods": [
             {"start": "2026-09-01", "end": "2026-09-24",
-             "raw": "9/1-9/24"}]}), json.dumps({"hash": "h1"})))
+             "raw": "9/1-9/24"}]}),
+         json.dumps({"hash": "h1", VERSION_KEY: CURRENT_VERSION})))
     mcs_signals.evaluate(led, {"signals": {"notify": True}}, now=NOW)
     items = mcs_signals.current_open(led.db)["items"]
     assert [s["type"] for s in items] == ["rx_period_expiry"]
