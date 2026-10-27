@@ -1,7 +1,10 @@
 """Synthetic per-unit context routing; no keys, GPU, HTTP or source data."""
 import json
 import os
+import sqlite3
 import time
+from contextlib import closing
+from pathlib import Path
 
 import pytest
 
@@ -306,6 +309,131 @@ def test_source_quality_identical_text_in_distinct_posts_retains_distinct_facts(
         assert actual[0]['identity']['input_key'] != actual[1]['identity']['input_key']
     finally:
         led.db.rollback()
+
+
+def test_scan_quality_proof_reuses_one_snapshot_enumeration(runtime, cloud):
+    led, _, _ = runtime
+    for mid in (1, 2, 3):
+        seed(led, mid=mid, body=f'見出しのない完全合成の居住記録{mid}。')
+    drain(runtime)
+    led.db.execute('BEGIN')
+    try:
+        snapshot = context_refresh._snapshot(led.db, 1, CFG, hydrate=False)
+        statements = []
+        led.db.set_trace_callback(statements.append)
+        try:
+            actual = context_refresh._current_scans(led.db, 1, snapshot['sources'],
+                                                     snapshot['contract'], cfg=CFG)
+        finally:
+            led.db.set_trace_callback(None)
+        assert led.db.in_transaction and all(actual[mid]['audited'] for mid in (1, 2, 3))
+        assert sum(sql.startswith('SELECT message_id,content,meta FROM artifacts') for sql in statements) == 1
+        assert sum(sql.startswith('SELECT meta, CASE WHEN json_valid(content)') for sql in statements) == 1
+        assert sum(sql.startswith('SELECT artifact_id,meta,CASE WHEN json_valid(meta)') for sql in statements) == 1
+        expected = context_refresh._current_scans(led.db, 1, snapshot['sources'],
+                                                   snapshot['contract'], check_quality=False)
+        for source in snapshot['sources']:
+            key = context_refresh._source_key(source)
+            if expected[key].get('audited') and not context_refresh._source_quality_verified(
+                    led.db, 1, source, snapshot['contract'], CFG, expected[key]):
+                expected[key]['audited'] = False
+        assert actual == expected
+    finally:
+        led.db.rollback()
+
+
+def test_scan_quality_proof_never_leaves_a_borrowed_snapshot(runtime, cloud):
+    led, _, _ = runtime
+    seed(led, body='見出しのない完全合成の居住記録。')
+    drain(runtime)
+    path = Path(led.db.execute('PRAGMA database_list').fetchone()[2])
+    led.db.execute('BEGIN')
+    try:
+        snapshot = context_refresh._snapshot(led.db, 1, CFG, hydrate=False)
+        before = context_refresh._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+        assert before[1]['audited'] and led.db.in_transaction
+        with closing(sqlite3.connect(path)) as writer:
+            writer.execute("UPDATE messages SET body_text=body_text || '変更' WHERE message_id=1")
+            writer.commit()
+        same_snapshot = context_refresh._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+        assert same_snapshot == before and led.db.in_transaction
+    finally:
+        led.db.rollback()
+    fresh = context_refresh._snapshot(led.db, 1, CFG, hydrate=False)
+    after = context_refresh._current_scans(led.db, 1, fresh['sources'], fresh['contract'], cfg=CFG)
+    assert not after.get(1, {}).get('audited')
+    assert not led.db.in_transaction
+
+
+def test_scan_proof_keeps_hydration_rows_with_conflicting_invalidation_keys(runtime, cloud, monkeypatch):
+    led, _, _ = runtime
+    seed(led, mid=1, body='見出しのない完全合成の居住記録1。')
+    seed(led, mid=2, body='見出しのない完全合成の居住記録2。')
+    drain(runtime)
+    original = led.db.execute("SELECT * FROM artifacts WHERE kind=? AND message_id=1", (context_refresh.CHUNK,)).fetchone()
+    # SQL sees the first invalidated key (excluded from scan proof), while
+    # Python sees the final key (included in the original hydration reader).
+    meta = '{"invalidated":1,' + original['meta'][1:-1] + ',"invalidated":0}'
+    with led.db:
+        extra = led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                               "VALUES(?,?,?,?,?,?,?)", (context_refresh.CHUNK, 1, 2, original['content'],
+                                                          original['model'], meta, original['created_at'])).lastrowid
+    seen = []
+    verified = context_refresh._source_quality_verified
+    def compare(db, pid, source, contract, cfg, scan, *, scan_proof=None):
+        assert scan_proof is not None
+        old = list(context_refresh._source_chunks(db, pid, source, contract, scan))
+        new = list(context_refresh._source_chunks(db, pid, source, contract, scan, artifact_ids=scan_proof[-1]))
+        assert new == old
+        if context_refresh._source_key(source) == 1:
+            assert extra in [chunk['_artifact_id'] for chunk in new]
+        actual = verified(db, pid, source, contract, cfg, scan, scan_proof=scan_proof)
+        assert actual == verified(db, pid, source, contract, cfg, scan)
+        seen.append(context_refresh._source_key(source))
+        return actual
+    monkeypatch.setattr(context_refresh, '_source_quality_verified', compare)
+    snapshot = context_refresh._snapshot(led.db, 1, CFG, hydrate=False)
+    out = context_refresh._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+    assert seen == [1, 2] and all(out[mid]['audited'] for mid in (1, 2))
+
+
+def test_scan_proof_keeps_sql_and_python_source_key_membership_distinct(runtime, cloud, monkeypatch):
+    led, _, _ = runtime
+    seed(led, mid=1, body='見出しのない完全合成の居住記録1。')
+    seed(led, mid=2, body='見出しのない完全合成の居住記録2。')
+    drain(runtime)
+    original = led.db.execute("SELECT * FROM artifacts WHERE kind=? AND message_id=1", (context_refresh.CHUNK,)).fetchone()
+    changed = json.loads(original['meta'])
+    changed.update(unit_key='synthetic-other-unit', chunk_key='synthetic-other-chunk')
+    # The SQL reader sees 2; the Python proof reader sees 1. The physical
+    # message is 2 as well, which cannot narrow the patient proof scan.
+    meta = '{"source_key":2,' + json.dumps(changed)[1:]
+    with led.db:
+        extra = led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                               "VALUES(?,?,?,?,?,?,?)", (context_refresh.CHUNK, 1, 2, original['content'],
+                                                          original['model'], meta, original['created_at'])).lastrowid
+    snapshot = context_refresh._snapshot(led.db, 1, CFG, hydrate=False)
+    proof = context_refresh._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], check_quality=False)[1]
+    assert proof['complete'] and not proof['audited']
+    scan = led.db.execute("SELECT artifact_id,content FROM artifacts WHERE kind=? AND message_id=1", (context_refresh.SCAN,)).fetchone()
+    scan_doc = json.loads(scan['content'])
+    scan_doc['audited_chunks_sig'] = proof['_chunks_sig']
+    with led.db:
+        led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(scan_doc), scan['artifact_id']))
+    seen = []
+    verified = context_refresh._source_quality_verified
+    def compare(db, pid, source, contract, cfg, scan, *, scan_proof=None):
+        assert scan_proof is not None
+        old = list(context_refresh._source_chunks(db, pid, source, contract, scan))
+        new = list(context_refresh._source_chunks(db, pid, source, contract, scan, artifact_ids=scan_proof[-1]))
+        assert new == old and extra not in [chunk['_artifact_id'] for chunk in new]
+        actual = verified(db, pid, source, contract, cfg, scan, scan_proof=scan_proof)
+        assert actual == verified(db, pid, source, contract, cfg, scan)
+        seen.append(context_refresh._source_key(source))
+        return actual
+    monkeypatch.setattr(context_refresh, '_source_quality_verified', compare)
+    out = context_refresh._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+    assert seen == [1, 2] and not out[1]['audited'] and out[2]['audited']
 
 
 def test_requested_cloud_failure_stays_private_and_recovers_without_local_fallback(runtime, cloud):

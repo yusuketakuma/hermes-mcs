@@ -1,4 +1,5 @@
 """患者コンテキストを原文の根拠から作り、調査の続きと公開条件を保持する。"""
+from contextlib import closing
 from datetime import datetime, timedelta
 import hashlib
 import json
@@ -6,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import re
+import sqlite3
 import time
 
 import local_llm
@@ -347,15 +349,32 @@ def _route_contract(meta):
 
 
 def _current_scans(db, pid, sources, contract, *, cfg=None, check_quality=True):
+    # Proofs are shared only inside this read snapshot, never across calls.
+    db.execute('SAVEPOINT context_scan_read')
+    try:
+        result = _current_scans_snapshot(db, pid, sources, contract, cfg=cfg, check_quality=check_quality)
+    except BaseException:
+        try:
+            db.execute('RELEASE context_scan_read')
+        except sqlite3.Error:
+            pass  # SQLite may have rolled back the savepoint on interruption.
+        raise
+    db.execute('RELEASE context_scan_read')
+    return result
+
+
+def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quality=True):
+    changes = db.total_changes
     stored = {}
-    for row in db.execute("SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? AND "
+    with closing(db.execute("SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? AND "
                           + current_meta_pred("meta", target=CURRENT_VERSION)
-                          + " AND COALESCE(json_extract(CASE WHEN json_valid(meta) THEN meta END,'$.invalidated'),0)=0 ORDER BY artifact_id", (SCAN, pid)):
-        doc, meta = loads_dict(row[1]) or {}, loads_dict(row[2]) or {}
-        key = meta.get("source_key", row[0] if row[0] is not None else 0)
-        if type(key) not in (int, str):
-            continue
-        stored[key] = (doc, meta)
+                          + " AND COALESCE(json_extract(CASE WHEN json_valid(meta) THEN meta END,'$.invalidated'),0)=0 ORDER BY artifact_id", (SCAN, pid))) as rows:
+        for row in rows:
+            doc, meta = loads_dict(row[1]) or {}, loads_dict(row[2]) or {}
+            key = meta.get("source_key", row[0] if row[0] is not None else 0)
+            if type(key) not in (int, str):
+                continue
+            stored[key] = (doc, meta)
     result = {}
     by_key = {_source_key(source): source for source in sources}
     for key, source in by_key.items():
@@ -363,10 +382,10 @@ def _current_scans(db, pid, sources, contract, *, cfg=None, check_quality=True):
         if meta.get("source_sig") == _source_sig(source) and _route_contract(meta) == contract:
             result[key] = {**doc, "_binding": {k: meta.get(k) for k in ("contract", "provider")},
                            **({"_provider_contract": meta["provider"]} if meta.get("provider") else {})}
-    # Metadata-only coverage is batched; full fact bodies are hydrated only
-    # when the caller actually consumes a completed source.
+    # Coverage and content digests are batched; fact JSON is decoded only
+    # when the caller consumes a completed source.
     ranges, units, proofs = {}, {}, {}
-    for row in db.execute("SELECT meta, CASE WHEN json_valid(content) THEN json_extract(content,'$.chunk_span') END, "
+    with closing(db.execute("SELECT meta, CASE WHEN json_valid(content) THEN json_extract(content,'$.chunk_span') END, "
                           "CASE WHEN json_valid(content) THEN CASE WHEN json_type(content,'$.facts')='array' "
                           "THEN json_array_length(content,'$.facts') END END, "
                           "CASE WHEN json_valid(content) THEN json_extract(content,'$.part') END, "
@@ -374,32 +393,53 @@ def _current_scans(db, pid, sources, contract, *, cfg=None, check_quality=True):
                           "CASE WHEN json_valid(content) THEN json_type(content,'$.part') END, "
                           "CASE WHEN json_valid(content) THEN json_type(content,'$.parts') END FROM artifacts "
                           "WHERE kind=? AND project_id=? AND " + current_meta_pred("meta", target=CURRENT_VERSION)
-                          + " AND COALESCE(json_extract(CASE WHEN json_valid(meta) THEN meta END,'$.invalidated'),0)=0", (CHUNK, pid)):
-        meta = loads_dict(row[0]) or {}
-        key = meta.get("source_key")
-        if type(key) not in (int, str):
-            continue
-        source, scan = by_key.get(key), result.get(key, {})
-        if (source and meta.get("source_sig") == _source_sig(source) and _route_contract(meta) == contract
-                and {k: meta.get(k) for k in ("contract", "provider")} == scan.get("_binding")):
-            proofs.setdefault(key, []).append(_digest([meta.get("chunk_key"), row[5]]))
-            try:
-                span = json.loads(row[1]) if isinstance(row[1], str) else None
-            except ValueError:
-                span = None
-            valid_size = type(row[2]) is int and row[2] <= context_plan.MAX_SOURCE_FACTS
-            part, count = row[3], row[4]
-            unit_key = meta.get("unit_key")
-            if (not isinstance(unit_key, str) or type(part) is not int or type(count) is not int
-                    or row[6] != "integer" or row[7] != "integer"
-                    or not 0 <= part < count <= max(1, source.get("body_length", 0))):
-                ranges.setdefault(key, []).append(None)
+                          + " AND COALESCE(json_extract(CASE WHEN json_valid(meta) THEN meta END,'$.invalidated'),0)=0", (CHUNK, pid))) as rows:
+        for row in rows:
+            meta = loads_dict(row[0]) or {}
+            key = meta.get("source_key")
+            if type(key) not in (int, str):
                 continue
-            unit = units.setdefault((key, unit_key), {"span": span, "count": count, "seen": set(), "valid": True})
-            unit["valid"] &= valid_size and unit["span"] == span and unit["count"] == count and part not in unit["seen"]
-            unit["seen"].add(part)
+            source, scan = by_key.get(key), result.get(key, {})
+            if (source and meta.get("source_sig") == _source_sig(source) and _route_contract(meta) == contract
+                    and {k: meta.get(k) for k in ("contract", "provider")} == scan.get("_binding")):
+                proofs.setdefault(key, []).append(_digest([meta.get("chunk_key"), row[5]]))
+                try:
+                    span = json.loads(row[1]) if isinstance(row[1], str) else None
+                except ValueError:
+                    span = None
+                valid_size = type(row[2]) is int and row[2] <= context_plan.MAX_SOURCE_FACTS
+                part, count = row[3], row[4]
+                unit_key = meta.get("unit_key")
+                if (not isinstance(unit_key, str) or type(part) is not int or type(count) is not int
+                        or row[6] != "integer" or row[7] != "integer"
+                        or not 0 <= part < count <= max(1, source.get("body_length", 0))):
+                    ranges.setdefault(key, []).append(None)
+                    continue
+                unit = units.setdefault((key, unit_key), {"span": span, "count": count, "seen": set(), "valid": True})
+                unit["valid"] &= valid_size and unit["span"] == span and unit["count"] == count and part not in unit["seen"]
+                unit["seen"].add(part)
     for (key, _), unit in units.items():
         ranges.setdefault(key, []).append(unit["span"] if unit["valid"] and len(unit["seen"]) == unit["count"] else None)
+    # The hydration query has a different invalidation/JSON predicate from
+    # the proof query. Preserve its membership, including physical-message
+    # mismatches and duplicate JSON keys, without reading chunk bodies here.
+    hydrate_ids = {}
+    if (check_quality and contract.get("provider") and cfg is not None
+            and any(scan.get("audited") for scan in result.values())):
+        with closing(db.execute("SELECT artifact_id,meta,CASE WHEN json_valid(meta) "
+                              "THEN json_extract(meta,'$.source_key') END FROM artifacts "
+                              "WHERE kind=? AND project_id=? AND " + current_meta_pred("meta", target=CURRENT_VERSION)
+                              + " ORDER BY artifact_id", (CHUNK, pid))) as rows:
+            for row in rows:
+                meta = loads_dict(row[1]) or {}
+                key = row[2]
+                source, scan = by_key.get(key), result.get(key, {})
+                if (source and meta.get("invalidated") in (None, False, 0)
+                        and meta.get("source_key") == _source_key(source)
+                        and meta.get("source_sig") == _source_sig(source)
+                        and _route_contract(meta) == contract
+                        and {k: meta.get(k) for k in ("contract", "provider")} == scan.get("_binding")):
+                    hydrate_ids.setdefault(_source_key(source), []).append(row[0])
     for key, scan in result.items():
         scan["_chunks_sig"] = _digest(sorted(proofs.get(key, [])))
         if scan.get("audited_chunks_sig") != scan["_chunks_sig"]:
@@ -409,17 +449,29 @@ def _current_scans(db, pid, sources, contract, *, cfg=None, check_quality=True):
             if any(span is None for span in ranges.get(key, [])):
                 scan.update(held=True, failure="nightly_chunk_proof_invalid")
         if (check_quality and contract.get("provider") and scan.get("audited")
-                and (cfg is None or not _source_quality_verified(db, pid, by_key[key], contract, cfg, scan))):
+                and (cfg is None or not _source_quality_verified(db, pid, by_key[key], contract, cfg, scan,
+                    scan_proof=(db, pid, _source_sig(by_key[key]), contract, changes, scan, hydrate_ids.get(key, []))))):
             scan["audited"] = False
     return result
 
 
-def _source_chunks(db, pid, source, contract, scan):
+def _source_chunks(db, pid, source, contract, scan, *, artifact_ids=None):
     """Read each accepted source-bound chunk under its checkpoint's actual backend."""
-    for row in db.execute("SELECT content,meta,artifact_id FROM artifacts WHERE kind=? AND project_id=? AND "
+    query = ("SELECT content,meta,artifact_id FROM artifacts WHERE kind=? AND project_id=? AND "
                           + current_meta_pred("meta", target=CURRENT_VERSION)
-                          + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.source_key') END=?"
-                          + " ORDER BY artifact_id", (CHUNK, pid, _source_key(source))):
+                          + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.source_key') END=?")
+    pages = [None] if artifact_ids is None else (artifact_ids[i:i + 64] for i in range(0, len(artifact_ids), 64))
+    for page in pages:
+        sql = query + (" AND artifact_id IN (" + ','.join('?' for _ in page) + ")" if page is not None else "")
+        cursor = db.execute(sql + " ORDER BY artifact_id", (CHUNK, pid, _source_key(source), *(page or ())))
+        try:
+            yield from _source_chunk_rows(cursor, source, contract, scan)
+        finally:
+            cursor.close()
+
+
+def _source_chunk_rows(rows, source, contract, scan):
+    for row in rows:
         doc, meta = loads_dict(row[0]) or {}, loads_dict(row[1]) or {}
         if (meta.get("invalidated") in (None, False, 0)
                 and meta.get("source_key") == _source_key(source) and meta.get("source_sig") == _source_sig(source)
@@ -845,7 +897,7 @@ def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, displ
     return {"identity": identity, "sources": snapshot["sources"], "facts": facts, "state": state}
 
 
-def _source_quality_capture(db, pid, cfg, source_key, assessment, *, contract=None):
+def _source_quality_capture(db, pid, cfg, source_key, assessment, *, contract=None, scan_proof=None):
     """Capture one original and its complete accepted chunks in the caller's snapshot."""
     import semantic_audit
     if not db.in_transaction:
@@ -874,20 +926,28 @@ def _source_quality_capture(db, pid, cfg, source_key, assessment, *, contract=No
         if revision is not None and (type(revision) is not int or revision < 1):
             raise ValueError("patient_source_quality_source")
     contract = _contract(cfg, pid) if contract is None else contract
-    scan = _current_scans(db, pid, sources, contract, check_quality=False).get(source_key, {})
+    artifact_ids = None
+    if scan_proof is None:
+        scan = _current_scans(db, pid, sources, contract, check_quality=False).get(source_key, {})
+    else:
+        proof_db, proof_pid, proof_sig, proof_contract, changes, scan, artifact_ids = scan_proof
+        if (proof_db is not db or proof_pid != pid or proof_sig != _source_sig(source)
+                or proof_contract != contract or changes != db.total_changes):
+            raise ValueError("patient_source_quality_source_changed")
     if not scan.get("complete") or scan.get("failure"):
         raise ValueError("patient_source_quality_incomplete")
     facts_by_id = {}
-    for chunk in _source_chunks(db, pid, source, contract, scan):
-        values = chunk.get("facts")
-        if not isinstance(values, list) or len(_validated_facts(source, values)) != len(values):
-            raise ValueError("patient_source_quality_fact")
-        for fact in values:
-            fid = fact["id"]
-            previous = facts_by_id.get(fid)
-            if previous is not None and _facts_sig([previous]) != _facts_sig([fact]):
+    with closing(_source_chunks(db, pid, source, contract, scan, artifact_ids=artifact_ids)) as chunks:
+        for chunk in chunks:
+            values = chunk.get("facts")
+            if not isinstance(values, list) or len(_validated_facts(source, values)) != len(values):
                 raise ValueError("patient_source_quality_fact")
-            facts_by_id.setdefault(fid, fact)
+            for fact in values:
+                fid = fact["id"]
+                previous = facts_by_id.get(fid)
+                if previous is not None and _facts_sig([previous]) != _facts_sig([fact]):
+                    raise ValueError("patient_source_quality_fact")
+                facts_by_id.setdefault(fid, fact)
     facts = list(facts_by_id.values())
     pages = list(semantic_audit.patient_source_quality_pages(source, facts))
     ids = [fid for page in pages for fid in page["fact_ids"]]
@@ -909,7 +969,7 @@ def _source_quality_capture(db, pid, cfg, source_key, assessment, *, contract=No
             "chunks_sig": scan["_chunks_sig"]}
 
 
-def _source_quality_verified(db, pid, source, contract, cfg, scan):
+def _source_quality_verified(db, pid, source, contract, cfg, scan, *, scan_proof=None):
     import semantic_policy
     import semantic_runtime
     try:
@@ -919,7 +979,7 @@ def _source_quality_verified(db, pid, source, contract, cfg, scan):
         db.execute("SAVEPOINT source_quality_read")
         try:
             captured = _source_quality_capture(db, pid, cfg, _source_key(source),
-                                               _quality_assessment(policy), contract=contract)
+                                               _quality_assessment(policy), contract=contract, scan_proof=scan_proof)
             identity = captured["identity"]
             if (_source_sig(captured["sources"][0]) != _source_sig(source)
                     or captured["chunks_sig"] != scan.get("_chunks_sig")
