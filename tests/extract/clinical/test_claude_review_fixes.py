@@ -2,6 +2,7 @@
 
 import pytest
 
+import clinical_events
 import clinical_scope
 import extract_validation
 import intervention_schedule
@@ -30,6 +31,8 @@ def test_additive_mo_and_causal_kara_are_not_condition_or_question(body, target,
     ("もしも熱が出たら受診します。", "受診", "conditional"),
     ("退院しましたか？", "退院", "unknown"),
     ("退院したかどうか不明です。", "退院", "unknown"),
+    ("本人は退院したか確認してください。", "退院", "unknown"),
+    ("本人は退院したかご確認ください。", "退院", "unknown"),
 ])
 def test_real_conditions_and_questions_are_kept(body, target, period):
     assert _axes(body, target)[1] == period
@@ -72,3 +75,18 @@ def test_reports_and_other_actions_are_not_this_request(body):
 ])
 def test_bare_confirmation_note_is_not_a_schedule_mention(text, shown):
     assert bool(intervention_schedule._valid_schedule_mention(text)) is shown
+
+
+@pytest.mark.parametrize("body, quote, status", [
+    ("本人は退院したか確認してください。", "退院した", "unknown"),
+    ("本人は退院しましたか教えてください。", "退院しました", "unknown"),
+    ("本人は退院したから面会を再開しました。", "退院した", None),
+])
+def test_indirect_question_never_becomes_a_completed_event(body, quote, status):
+    start = body.index(quote)
+    record = clinical_events.validate_record({"kind": "discharge", "evidence": quote,
+        "span": {"start": start, "end": start + len(quote)}}, body)
+    if status is None:   # a causal から is a statement, not a held question
+        assert record["status"] != "unknown" and not record.get("unverified")
+    else:
+        assert record["status"] == status and record["unverified"] is True

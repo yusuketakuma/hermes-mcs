@@ -101,9 +101,9 @@ _UNCERTAIN_ADDITIVE = re.compile(
     r"なくては(?:ならない|いけない|だめ|ダメ|駄目)|ないと(?:ならない|いけない|だめ|ダメ|駄目)|"
     r"ま(?:した|す|せん(?:でした)?)(?:か|でしょうか))")
 
-# The particle か ends a question only at a boundary; から/かった/かも are not questions.
+# Causal から is not a question; indirect questions (したか確認) still are.
 _QUESTION = re.compile(r"(?:しました|した|します|していました|している|しています|しません|しませんでした|です|でした)"
-                       r"(?:か|でしょうか)(?=$|[。！？!?、,\s」』）)]|と|どうか)|かどうか")
+                       r"(?:か|でしょうか)(?!ら)|かどうか")
 
 _SCOPE_BREAK = re.compile(r"[。！？!?;；\n、,]|しかし|ただし|だが|けれど(?:も)?|(?<![一-龥ぁ-んァ-ヶ])一方(?:で)?(?=$|[、, \t　])")
 
