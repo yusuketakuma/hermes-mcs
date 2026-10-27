@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "投稿の変更中に古い内容を抽出結果へ保存する問題を修正",
+  "summary": "投稿の選択後に本文、日時や投稿者の情報が変わった場合は、その抽出結果の保存を見送り、次回に再処理します。",
+  "upgrade": "適用時は抽出workerの再起動が必要です。候補の識別値が変わるため、保留中の承認は再評価が必要になる場合があります。旧コンテキストは要確認になっても自動で再処理されない場合があります。",
+  "details": ["選択した投稿とその更新世代を同じ読み取り結果に含め、保存直前に照合します。借用中のデータベース取引は抽出処理から確定しません。"],
+  "refs": ["mcs/core/inference_dependency_loss.py", "mcs/extract/rules/extract.py", "mcs/extract/llm/extract_llm.py", "mcs/patients/patient_state_context.py"]
+}

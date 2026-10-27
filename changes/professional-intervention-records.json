@@ -1,0 +1,8 @@
+{
+  "category": "added",
+  "title": "職種ごとの次回介入を投稿に結び付けて保存",
+  "summary": "職種と予定日が原文に明記された介入を、元投稿の位置とともに抽出結果へ保存します。",
+  "upgrade": "抽出workerの再起動後、保存済みの対象投稿は新しいルール版で順次再処理されます。未取得や判定できない投稿は未確認のまま残ります。候補の識別値が変わるため、保留中の承認は再評価が必要になる場合があります。",
+  "details": ["本文を複製せず、職種・行為・日付・状態と根拠の位置を保存します。履歴全体の取得や再処理の完了は、この記録だけでは判断しません。"],
+  "refs": ["mcs/patients/intervention_schedule.py", "mcs/extract/rules/extract.py", "mcs/extract/llm/extract_llm.py"]
+}

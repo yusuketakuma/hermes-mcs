@@ -50,11 +50,17 @@ _MAX_HTML_CHARS = 80000
 
 def _has_independent_action(quote):
     """Do not count an action word that is only part of a profession name."""
-    roles = [(match.start() - 2 if quote[max(0, match.start() - 2):match.start()] == "訪問"
-              else match.start(), match.end()) for match in _ROLE_MENTION.finditer(quote)]
-    return bool(roles and any(not any(start < action.end() and action.start() < end
-                                      for start, end in roles)
-                              for action in _ACTION_MENTION.finditer(quote)))
+    roles = iter((match.start() - 2 if quote[max(0, match.start() - 2):match.start()] == "訪問"
+                  else match.start(), match.end()) for match in _ROLE_MENTION.finditer(quote))
+    current = next(roles, None)
+    if current is None:
+        return False
+    for action in _ACTION_MENTION.finditer(quote):
+        while current is not None and current[1] <= action.start():
+            current = next(roles, None)
+        if current is None or current[0] >= action.end():
+            return True
+    return False
 
 
 def _posted_day(value):
@@ -170,6 +176,68 @@ def project(project_id, items, *, coverage=None):
                          "source_validation": "caller_required"}}
 
 
+def _source_items(project_id, mid, digest, body, posted, remaining):
+    """Build the same conservative sentence assertions for both readers."""
+    sentences = [match for match in _SENTENCE.finditer(body) if match.group().strip()]
+    items = []
+    truncated = False
+    for match in sentences:
+        quote = match.group()
+        if not _has_independent_action(quote):
+            continue
+        if len(items) >= remaining:
+            truncated = True
+            break
+        explicit = (len(sentences) == 1 and (_RECORD.fullmatch(quote.strip()) is not None
+                    or _TARGET_CANCEL.fullmatch(quote.strip()) is not None
+                    or _UNRESOLVED_PLAN.fullmatch(quote.strip()) is not None))
+        items.append({"project_id": project_id, "message_id": mid, "content_hash": digest,
+                      "category": "followup", "subject": "patient" if explicit else "unspecified",
+                      "body_state": "full", "source": "chat", "source_body": body,
+                      "posted_at_ts": posted, "quote": quote,
+                      "evidence_span": [match.start(), match.end()], "unverified": not explicit})
+    return items, truncated
+
+
+def compact_source_record(project_id, message_id, content_hash, body, posted_at_ts, *,
+                          body_state="full", max_records=200):
+    """Build compact assertions for one caller-validated source; never prove currentness.
+
+    Spans index the supplied normalized body. The caller must validate scope,
+    source binding, currentness and the body-to-hash relationship before saving
+    or using these records. No source text is returned or persisted by this API.
+    """
+    if (type(project_id) is not int or project_id <= 0 or type(message_id) is not int
+            or message_id <= 0 or not valid_hash(content_hash) or type(max_records) is not int
+            or not 1 <= max_records <= 1000):
+        raise ValueError("invalid_intervention_input")
+    coverage = {"state": "unknown", "records_truncated": False, "candidates": 0,
+                "unknown": 0, "source_complete": None, "source_validation": "caller_required"}
+    result = {"records": [], "coverage": coverage}
+    if body_state == "deleted":
+        coverage["state"] = "deleted"
+        return result
+    if body_state != "full":
+        coverage["state"] = "incomplete"
+        return result
+    if not isinstance(body, str) or "\x00" in body:
+        coverage["state"] = "invalid_source"
+        return result
+    if len(body) > _MAX_BODY_CHARS:
+        coverage["state"] = "oversize"
+        return result
+    items, truncated = _source_items(project_id, message_id, content_hash, body, posted_at_ts, max_records)
+    projected = project(project_id, items)
+    # All quotes and written-role/date strings are recoverable from the span.
+    # Dates are only emitted when the shared classifier resolved them safely.
+    fields = ("span", "role", "action", "event_day", "target_day", "date_basis", "state")
+    result["records"] = [{key: row[key] for key in fields if key in row}
+                         for row in projected["records"]]
+    coverage.update(state="observed", records_truncated=truncated,
+                    candidates=projected["coverage"]["candidates"], unknown=projected["coverage"]["unknown"])
+    return result
+
+
 def read_source_schedule(db, project_id, *, limit=200, max_records=200):
     """Read a bounded set of original chat assertions on the caller's snapshot.
 
@@ -243,25 +311,9 @@ def read_source_schedule(db, project_id, *, limit=200, max_records=200):
                 or hashlib.sha256(html.encode()).hexdigest() != digest or html_to_text(html) != body):
             coverage["invalid_source"] += 1
             continue
-        sentences = [match for match in _SENTENCE.finditer(body) if match.group().strip()]
-        for match in sentences:
-            quote = match.group()
-            if not _has_independent_action(quote):
-                continue
-            if len(items) >= max_records:
-                coverage["records_truncated"] = True
-                break
-            # A neighbouring sentence may retract, quote, condition or change
-            # the subject of this one. Sentence boundaries alone do not prove
-            # independence, so only an isolated assertion can be classified.
-            explicit = (len(sentences) == 1 and (_RECORD.fullmatch(quote.strip()) is not None
-                        or _TARGET_CANCEL.fullmatch(quote.strip()) is not None
-                        or _UNRESOLVED_PLAN.fullmatch(quote.strip()) is not None))
-            items.append({"project_id": project_id, "message_id": mid, "content_hash": digest,
-                          "category": "followup", "subject": "patient" if explicit else "unspecified",
-                          "body_state": "full", "source": "chat", "source_body": body,
-                          "posted_at_ts": posted, "quote": quote,
-                          "evidence_span": [match.start(), match.end()], "unverified": not explicit})
+        source_items, truncated = _source_items(project_id, mid, digest, body, posted, max_records - len(items))
+        items.extend(source_items)
+        coverage["records_truncated"] = truncated
         if coverage["records_truncated"]:
             break
     projected = project(project_id, items)

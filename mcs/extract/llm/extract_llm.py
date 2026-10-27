@@ -83,6 +83,7 @@ import extract_quality
 import clinical_chunking
 import extraction_refresh
 import extract
+import intervention_schedule
 from clinical_chunking import PLAN_VERSION, plan_chunks
 import local_llm
 import patient_context
@@ -157,6 +158,7 @@ _LOADED_SOURCE_DIGESTS = {
                        ("self_identity", self_identity.__file__),
                        ("safe_io", safe_io.__file__),
                        ("extract", extract.__file__),
+                       ("intervention_schedule", intervention_schedule.__file__),
                        ("clinical_values", clinical_values.__file__),
                        ("clinical_urgency", clinical_urgency.__file__),
                        ("clinical_scope", clinical_scope.__file__),
@@ -3211,6 +3213,28 @@ def _mark_prefiltered(ledger, r) -> bool:
         extra_meta={"prefilter": "no_signal"})
 
 
+@contextlib.contextmanager
+def _v1_write_transaction(db):
+    """Reserve a writer transaction, or borrow an existing one via savepoint."""
+    if not db.in_transaction:
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            yield
+        return
+    db.execute("SAVEPOINT extract_v1_write")
+    try:
+        yield
+    except BaseException:
+        try:
+            db.execute("ROLLBACK TO extract_v1_write")
+            db.execute("RELEASE extract_v1_write")
+        except sqlite3.Error:
+            pass  # SQLite may already have rolled back the transaction.
+        raise
+    else:
+        db.execute("RELEASE extract_v1_write")
+
+
 def _ensure_v1(ledger, r, hints) -> None:
     """extract_v1 artifact for this body, written inside the v3 pass —
     v1+v2 work happens simultaneously with v3, keeping instant-analysis
@@ -3220,11 +3244,27 @@ def _ensure_v1(ledger, r, hints) -> None:
     if hints is None:
         return
     import extract
-    with ledger.db:
-        if not ledger.db.in_transaction:
-            ledger.db.execute("BEGIN IMMEDIATE")
+    with _v1_write_transaction(ledger.db):
         if not _source_writable(ledger.db, r):
             return
+        # Distinguish a real existing current artifact from an INSERT ignored
+        # by a trigger; an ignored replacement must never authorize deletion.
+        existing = ledger.db.execute(
+            "SELECT 1 FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+            "WHERE a.kind='extract_v1' AND m.message_id=? AND m.project_id=? "
+            + current_extract_pred() +
+            f" AND json_extract({json_or_null('a.meta')},'$.rule_version')=? LIMIT 1",
+            (r["message_id"], r["project_id"], extract.RULE_VERSION)).fetchone()
+        if existing:
+            return
+        intervention = extract.intervention_source_payload_tx(ledger.db, r, r["_source_binding"])
+        saved_hints = {**hints, "intervention_schedule": intervention} if intervention is not None else hints
+        saved_meta = {inference.VERSION_KEY: _INFERENCE_VERSION, "hash": r["content_hash"],
+                      "rule_version": extract.RULE_VERSION, "source_binding": r["_source_binding"]}
+        if intervention is None:
+            saved_meta["intervention_zero"] = 1
+        content_json = json.dumps(saved_hints, ensure_ascii=False)
+        meta_json = json.dumps(saved_meta, ensure_ascii=False)
         cur = ledger.db.execute(
             "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
             "SELECT 'extract_v1',m.project_id,m.message_id,?,'rules-v1',?,? "
@@ -3234,16 +3274,24 @@ def _ensure_v1(ledger, r, hints) -> None:
             "WHERE a.kind='extract_v1' AND a.message_id=m.message_id "
             f"{current_extract_pred()} "
             f"AND json_extract({json_or_null('a.meta')},'$.rule_version')=?)",
-            (json.dumps(hints, ensure_ascii=False),
-             json.dumps({inference.VERSION_KEY: _INFERENCE_VERSION, "hash": r["content_hash"],
-                         "rule_version": extract.RULE_VERSION,
-                         "source_binding": r["_source_binding"]}), time.time(),
+            (content_json, meta_json, time.time(),
              r["message_id"], r["content_hash"], extract.RULE_VERSION))
+        extract.verify_v1_insert_tx(ledger.db, r, cur.lastrowid, cur.rowcount, content_json, meta_json)
         if cur.rowcount:
+            old_ids = [row[0] for row in ledger.db.execute(
+                "SELECT artifact_id FROM artifacts WHERE kind='extract_v1' AND message_id=? "
+                "AND (project_id IS NULL OR project_id=?) AND "
+                + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND artifact_id!=?",
+                (r["message_id"], r["project_id"], cur.lastrowid))]
+            footprint = inference_dependency_loss.capture_tx(
+                ledger.db, r["project_id"], r["message_id"], artifact_ids=old_ids)
+            inference_dependency_loss.record_tx(ledger.db, footprint, replacement_id=cur.lastrowid)
             ledger.db.execute(
                 "DELETE FROM artifacts WHERE kind='extract_v1' "
-                "AND message_id=? AND " + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND artifact_id!=?",
-                (r["message_id"], cur.lastrowid))
+                "AND message_id=? AND (project_id IS NULL OR project_id=?) AND "
+                + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND artifact_id!=?",
+                (r["message_id"], r["project_id"], cur.lastrowid))
+            ledger.bump_inference_analysis_epoch_tx(r["project_id"])
 
 
 # Per-process pending estimate for full selections, keyed by DB file.
@@ -3354,8 +3402,7 @@ def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None,
                         + "EXISTS (SELECT 1 FROM patients p WHERE p.project_id=m.project_id"
                           " AND COALESCE(p.is_archived,0)!=0)")
     return f"""
-      SELECT m.message_id, m.project_id, m.body_text, m.content_hash,
-             m.parent_id, m.posted_at, m.posted_at_ts,
+      SELECT m.message_id, m.project_id, {inference_dependency_loss.SOURCE_BINDING_COLUMNS},
              ({_qc_flagged_sql()}) AS qc_src,
              ({_thin_pending_sql()}) AS thin_src,
              ({_human_flagged_sql()}) AS human_src,
@@ -3566,8 +3613,13 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True) ->
     enabled = isinstance(extract_cfg, dict) and extract_cfg.get("patient_state_context") is True
     for r in rows:
         r = dict(r)
-        from inference_dependency_loss import source_binding
-        r['_source_binding'] = source_binding(ledger.db, r['project_id'], r['message_id'])
+        binding = inference_dependency_loss.source_binding_from_row(r)
+        if (not isinstance(binding, str) or not binding
+                or r.get('_source_binding', binding) != binding
+                or inference_dependency_loss.source_binding(ledger.db, r['project_id'], r['message_id']) != binding):
+            blocked += 1
+            continue
+        r['_source_binding'] = binding
         r["_target"] = target
         mode = _cloud_mode(ledger, cfg, "reextract", r["project_id"]) if allow_cloud and _cloud_reextract(ledger, r) else "off"
         r["_cloud_mode"] = mode

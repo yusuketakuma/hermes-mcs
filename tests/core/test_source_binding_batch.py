@@ -78,6 +78,17 @@ def test_source_aba_is_distinct_but_unrelated_source_unchanged(ledger):
     assert first[1] == second[1] == third[1]
 
 
+def test_selected_occurrence_binding_is_snapshot_bound_and_incomplete_row_rejected(ledger):
+    row = ledger.db.execute('SELECT m.message_id,m.project_id,' + loss.SOURCE_BINDING_COLUMNS
+                            + ' FROM messages m WHERE m.message_id=1').fetchone()
+    original = loss.source_binding_from_row(row)
+    assert original == loss.source_binding(ledger.db, 1, 1)
+    assert loss.source_binding_from_row({'body_text': row['body_text']}) is None
+    ledger.save_messages([_message(mid=1, project_id=1, body='別の完全合成投稿です。')])
+    assert loss.source_binding_from_row(row) == original
+    assert loss.source_binding(ledger.db, 1, 1) != original
+
+
 def test_uncommitted_change_is_seen_and_caller_rollback_remains_owned(ledger):
     before = loss.source_binding(ledger.db, 1, 1)
     ledger.db.execute("UPDATE messages SET body_text='変更された合成本文' WHERE message_id=1")

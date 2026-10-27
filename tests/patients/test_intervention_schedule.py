@@ -473,3 +473,87 @@ def test_source_reader_uses_caller_snapshot_during_concurrent_revision(tmp_path)
     finally:
         reader.close()
         writer.close()
+
+
+@pytest.mark.parametrize("body", [
+    "看護師が2026年10月3日に本人を訪問する予定です。",
+    "看護師が2026年9月30日に本人を訪問しました。",
+    "看護師が2026年10月3日の本人への訪問を中止しました。",
+    "看護師が明日本人を訪問する予定です。",
+    "看護師が2026年10月3日に家族を訪問する予定です。",
+    "次の記載は誤りです。看護師が2026年10月3日に本人を訪問する予定です。",
+    "看護師が2026年10月3日に本人を訪問する予定です。という記載を取り消しました。",
+    "介護士です。",
+])
+def test_compact_source_uses_same_classification_and_spans_as_reader(source_db, body):
+    put_source(source_db, 1, 1, body)
+    digest = hashlib.sha256(body.encode()).hexdigest()
+    compact = schedule.compact_source_record(1, 1, digest, body, POSTED)
+    observed = schedule.read_source_schedule(source_db, 1)
+    fields = ("span", "role", "action", "event_day", "target_day", "date_basis", "state")
+    expected = [{key: row[key] for key in fields if key in row} for row in observed["records"]]
+    assert compact["records"] == expected
+    assert compact["coverage"]["candidates"] == observed["coverage"]["candidates"]
+    assert compact["coverage"]["unknown"] == observed["coverage"]["unknown"]
+    assert compact["coverage"]["source_complete"] is None
+    assert compact["coverage"]["source_validation"] == "caller_required"
+    assert body not in str(compact)
+    assert all("quote" not in row and "role_text" not in row and "date_text" not in row
+               for row in compact["records"])
+
+
+def test_compact_source_marks_record_limit_and_does_not_drop_uncertainty(source_db):
+    sentence = "看護師が2026年10月3日に本人を訪問する予定です。"
+    body = sentence * 2
+    put_source(source_db, 1, 1, body)
+    result = schedule.compact_source_record(1, 1, hashlib.sha256(body.encode()).hexdigest(),
+                                            body, POSTED, max_records=1)
+    reader = schedule.read_source_schedule(source_db, 1, max_records=1)
+    assert result["coverage"]["records_truncated"] is True
+    assert result["coverage"]["unknown"] == 1
+    assert result["records"][0]["state"] == "unknown"
+    assert result["records"][0]["span"] == reader["records"][0]["span"]
+    assert reader["coverage"]["records_truncated"] is True
+
+
+@pytest.mark.parametrize("body,state,expected", [
+    ("本文", "deleted", "deleted"), ("本文", "snippet", "incomplete"),
+    (None, "full", "invalid_source"), ("x\0y", "full", "invalid_source"),
+    ("x" * (schedule._MAX_BODY_CHARS + 1), "full", "oversize"),
+])
+def test_compact_source_reports_missing_or_rejected_input_without_content(body, state, expected):
+    result = schedule.compact_source_record(1, 1, "a" * 64, body, POSTED, body_state=state)
+    assert result["coverage"]["state"] == expected
+    assert result["coverage"]["source_complete"] is None
+    assert result["records"] == []
+
+
+def test_profession_names_do_not_hide_an_independent_action():
+    roles = "訪問看護師" * 1000
+    assert not schedule._has_independent_action(roles)
+    assert schedule._has_independent_action(roles + "が本人を訪問")
+    assert schedule._has_independent_action("訪問後に" + roles)
+
+
+def test_profession_action_scan_preserves_original_overlap_rules():
+    import random
+
+    randomizer = random.Random(4521)
+    tokens = ["訪問", "訪問看護師", "看護師", "介護士", "介護", "医師", "本人", "予定", "。"]
+    for _ in range(500):
+        body = "".join(randomizer.choice(tokens) for _ in range(randomizer.randrange(1, 25)))
+        intervals = [(m.start() - 2 if body[max(0, m.start() - 2):m.start()] == "訪問"
+                      else m.start(), m.end()) for m in schedule._ROLE_MENTION.finditer(body)]
+        expected = bool(intervals and any(
+            not any(start < action.end() and action.start() < end for start, end in intervals)
+            for action in schedule._ACTION_MENTION.finditer(body)))
+        assert schedule._has_independent_action(body) is expected
+
+
+@pytest.mark.parametrize("project_id,message_id,digest,limit", [
+    (True, 1, "a" * 64, 1), (1, False, "a" * 64, 1), (1, 1, "bad", 1),
+    (1, 1, "a" * 64, 0), (1, 1, "a" * 64, 1001),
+])
+def test_compact_source_rejects_invalid_scope_or_limits(project_id, message_id, digest, limit):
+    with pytest.raises(ValueError, match="invalid_intervention_input"):
+        schedule.compact_source_record(project_id, message_id, digest, "本文", POSTED, max_records=limit)

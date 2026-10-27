@@ -31,7 +31,9 @@ def seed(led, mid=1, *, body="本人の合成薬Aの残薬は3錠。", value="3�
 def target(led):
     led.save_messages([_message(mid=999, body="残薬は2錠になりました。",
                                posted_at="2026-10-03T10:00:00+09:00")])
-    return dict(led.db.execute("SELECT * FROM messages WHERE message_id=999").fetchone())
+    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=999").fetchone())
+    row["_source_binding"] = source_binding(led.db, row["project_id"], row["message_id"])
+    return row
 
 
 def frame(led, row, **kwargs):

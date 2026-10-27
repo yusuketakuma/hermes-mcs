@@ -4,6 +4,7 @@ import json
 import re
 
 import extract_quality
+import inference_dependency_loss
 from clinical_values import patient_item_scope
 from mcs_queries import (ELIGIBLE_MESSAGE, FACT_KINDS_SQL, JST, current_fact_pred, current_v4_id,
                          json_or_null)
@@ -213,6 +214,7 @@ def format_state(reports, *, budget=STATE_MAX):
 
 def _binding(target, model, contract, attempt, enabled):
     return _digest({"target": _source(target),
+        "source_binding": target.get("_source_binding"),
         "model": model, "contract": contract, "attempt": attempt, "enabled": enabled})
 
 
@@ -220,12 +222,19 @@ def load(db, artifact_id, target):
     """Read an intact frozen frame without consulting today's flag or background."""
     if type(artifact_id) is not int:
         return None
-    row = db.execute("SELECT * FROM artifacts WHERE artifact_id=? AND kind=? AND project_id=? "
-                     "AND message_id=?", (artifact_id, KIND, target["project_id"], target["message_id"])).fetchone()
+    row = db.execute("SELECT a.*, " + inference_dependency_loss.SOURCE_BINDING_COLUMNS
+                     + " FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+                     "AND m.project_id=a.project_id WHERE a.artifact_id=? AND a.kind=? "
+                     "AND a.project_id=? AND a.message_id=?",
+                     (artifact_id, KIND, target["project_id"], target["message_id"])).fetchone()
     if row is None:
         return None
     doc, meta = loads_dict(row["content"]), loads_dict(row["meta"])
     if not isinstance(doc, dict) or not isinstance(meta, dict):
+        return None
+    current_binding = inference_dependency_loss.source_binding_from_row(row)
+    if (not isinstance(current_binding, str) or meta.get("source_binding") != current_binding
+            or target.get("_source_binding", current_binding) != current_binding):
         return None
     payload = {key: doc.get(key) for key in ("binding", "source", "text", "refs", "enabled")}
     if (meta.get("hash") != target["content_hash"] or not patient_context.valid_reference_hash(doc.get("binding"))
@@ -248,10 +257,13 @@ def _source(target):
 
 def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, version):
     """Persist the full attempt frame before inference; retries reuse it byte for byte."""
+    if ledger.db.in_transaction:
+        raise ValueError("context_transaction_owned")
     target = dict(target)
     if (type(enabled) is not bool or not isinstance(base_context, (str, type(None)))
             or not isinstance(model, str) or not model or not isinstance(contract, str) or not contract
             or not isinstance(attempt, dict) or not patient_context.valid_reference_hash(target.get("content_hash"))
+            or not patient_context.valid_reference_hash(target.get("_source_binding"))
             or any(type(target.get(key)) is not int or target[key] <= 0
                    for key in ("project_id", "message_id"))):
         raise ValueError("invalid_context_options")
@@ -262,6 +274,8 @@ def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, 
     with ledger.db:
         if not ledger.db.in_transaction:
             ledger.db.execute("BEGIN IMMEDIATE")
+        if inference_dependency_loss.source_binding(ledger.db, target["project_id"], target["message_id"]) != target["_source_binding"]:
+            raise ValueError("context_source_changed")
         source = ledger.db.execute("SELECT * FROM messages m WHERE project_id=? AND message_id=? "
                                    f"AND {current_v4_id()} IS NULL",
                                    (target["project_id"], target["message_id"])).fetchone()
@@ -301,5 +315,6 @@ def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, 
         doc = {**payload, "digest": _digest(payload)}
         aid = ledger.artifact_add_tx(KIND, json.dumps(doc, ensure_ascii=False),
                                     project_id=target["project_id"], message_id=target["message_id"],
-                                    model=model, meta={"hash": target["content_hash"]})
+                                    model=model, meta={"hash": target["content_hash"],
+                                                       "source_binding": target["_source_binding"]})
     return {**doc, "artifact_id": aid}

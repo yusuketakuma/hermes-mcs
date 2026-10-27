@@ -23,6 +23,8 @@ def source(tmp_path, monkeypatch):
     monkeypatch.setattr(extract, "_WRITER_STATE", (False, 1))
     monkeypatch.setattr(llm, "_rerender_cards", lambda *a, **k: None)
     row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row['_source_revision'] = led.db.execute(
+        "SELECT COALESCE(MAX(seq),1) FROM message_revisions WHERE message_id=1").fetchone()[0]
     row['_source_binding'] = dependency_loss.source_binding(led.db,row['project_id'],row['message_id'])
     try:
         yield led, row
@@ -179,6 +181,32 @@ def test_rule_source_change_during_extraction_does_not_commit(source, monkeypatc
     monkeypatch.setattr(extract, "extract_message", infer)
     assert extract._extract_rows(led, [row]) == (0, set())
     assert not led.artifacts("extract_v1")
+
+
+@pytest.mark.parametrize('change', ['posted_at', 'body_aba', 'metadata'])
+def test_rule_run_rechecks_selected_occurrence_before_writing(source, monkeypatch, change):
+    led, row = source
+    original = _message(body=row['body_text'], posted_at=row['posted_at'])
+    real_extract = extract.extract_message
+
+    def infer(*args):
+        if change == 'posted_at':
+            led.save_messages([_message(body=row['body_text'], posted_at='2026-09-20T00:00:00+09:00')])
+        elif change == 'body_aba':
+            led.save_messages([_message(body='別の完全合成投稿です。')])
+            led.save_messages([original])
+        else:
+            with led.db:
+                led.db.execute("UPDATE messages SET sender_name='別の合成投稿者' WHERE message_id=1")
+        return real_extract(*args)
+
+    monkeypatch.setattr(extract, 'extract_message', infer)
+    assert extract.run_pending(led)['done'] == 0
+    assert not led.artifacts('extract_v1')
+    monkeypatch.setattr(extract, 'extract_message', real_extract)
+    assert extract.run_pending(led)['done'] == 1
+    meta = json.loads(led.artifacts('extract_v1')[0]['meta'])
+    assert meta['source_binding'] == dependency_loss.source_binding(led.db, row['project_id'], row['message_id'])
 
 
 def test_run_lock_reacquire_rejects_loaded_worker_after_update(source, monkeypatch):
@@ -364,6 +392,110 @@ def test_prefilter_completes_only_an_explicitly_checked_greeting(source):
     assert llm.progress_for_message(led.db, row, model=llm.MODEL)["state"] == "complete"
 
 
+@pytest.mark.parametrize("mutation", ["posting_time", "sender_aba"])
+def test_selection_fence_rejects_stale_prefilter_input(source, monkeypatch, mutation):
+    from dataclasses import replace
+
+    led, _ = source
+    original = _message(body="こんにちは。")
+    led.save_messages([original])
+    rows, _ = llm._select_pending(led, 1, {1}, None, False)
+    assert len(rows) == 1
+    selected = rows[0]
+    binding = dependency_loss.source_binding_from_row(selected)
+    assert binding == dependency_loss.source_binding(led.db, 1, 1)
+    if mutation == "posting_time":
+        led.save_messages([replace(original, posted_at="2026-09-20T00:00:00+09:00")])
+    else:
+        led.save_messages([replace(original, sender_name="別の合成投稿者")])
+        led.save_messages([original])
+    assert selected["content_hash"] == led.db.execute(
+        "SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
+    assert binding != dependency_loss.source_binding(led.db, 1, 1)
+    monkeypatch.setattr(llm, "load_config", lambda: {})
+    monkeypatch.setattr(llm, "_ensure_v1", lambda *_args: pytest.fail("stale rule write"))
+    monkeypatch.setattr(llm, "_mark_prefiltered", lambda *_args: pytest.fail("stale prefilter write"))
+    jobs, skipped, blocked = llm._prepare_jobs(led, rows, llm._resolved_llm(), True)
+    assert jobs == [] and skipped == 0 and blocked == 1
+
+
+def test_unbound_old_frame_is_not_reused_for_current_attempt(source):
+    import patient_state_context
+
+    led, row = source
+    args = dict(model="synthetic", contract="synthetic-contract", attempt={},
+                enabled=False, base_context=None, version=llm.EXTRACT_VERSION)
+    first = patient_state_context.prepare(led, row, **args)
+    stored = led.db.execute("SELECT content,meta FROM artifacts WHERE artifact_id=?",
+                            (first["artifact_id"],)).fetchone()
+    meta = json.loads(stored["meta"])
+    meta.pop("source_binding")
+    document = json.loads(stored["content"])
+    document["binding"] = patient_state_context._digest({
+        "target": patient_state_context._source(row), "model": args["model"],
+        "contract": args["contract"], "attempt": args["attempt"], "enabled": args["enabled"]})
+    document["digest"] = patient_state_context._digest({key: document[key] for key in (
+        "binding", "source", "text", "refs", "enabled")})
+    with led.db:
+        led.db.execute("UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?",
+                       (json.dumps(document), json.dumps(meta), first["artifact_id"]))
+    assert patient_state_context.load(led.db, first["artifact_id"], row) is None
+    second = patient_state_context.prepare(led, row, **args)
+    assert second["artifact_id"] != first["artifact_id"]
+    assert patient_state_context.load(led.db, second["artifact_id"], row) == second
+
+
+def test_context_prepare_rejects_target_occurrence_aba(source):
+    from dataclasses import replace
+    import patient_state_context
+
+    led, row = source
+    original = _message(body=row["body_text"])
+    led.save_messages([replace(original, sender_name="別の合成投稿者")])
+    led.save_messages([original])
+    with pytest.raises(ValueError, match="context_source_changed"):
+        patient_state_context.prepare(led, row, model="synthetic", contract="synthetic-contract",
+            attempt={}, enabled=False, base_context=None, version=llm.EXTRACT_VERSION)
+    assert led.artifacts(patient_state_context.KIND) == []
+
+
+def test_context_load_rejects_frame_after_target_occurrence_aba(source):
+    from dataclasses import replace
+    import patient_state_context
+
+    led, row = source
+    first = patient_state_context.prepare(led, row, model="synthetic", contract="synthetic-contract",
+        attempt={}, enabled=False, base_context=None, version=llm.EXTRACT_VERSION)
+    original = _message(body=row["body_text"])
+    led.save_messages([replace(original, sender_name="別の合成投稿者")])
+    led.save_messages([original])
+    current = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    assert current["content_hash"] == row["content_hash"]
+    assert patient_state_context.load(led.db, first["artifact_id"], current) is None
+
+
+def test_context_prepare_does_not_finish_a_borrowed_transaction(source):
+    import patient_state_context
+
+    led, row = source
+    args = dict(model="synthetic", contract="synthetic-contract", attempt={},
+                enabled=False, base_context=None, version=llm.EXTRACT_VERSION)
+    first = patient_state_context.prepare(led, row, **args)
+    old_unread = led.db.execute("SELECT is_unread FROM messages WHERE message_id=1").fetchone()[0]
+    pending_unread = 0 if old_unread else 1
+    led.db.execute("BEGIN")
+    try:
+        led.db.execute("UPDATE messages SET is_unread=? WHERE message_id=1", (pending_unread,))
+        assert patient_state_context.load(led.db, first["artifact_id"], row) == first
+        with pytest.raises(ValueError, match="context_transaction_owned"):
+            patient_state_context.prepare(led, row, **args)
+        assert led.db.in_transaction
+        assert led.db.execute("SELECT is_unread FROM messages WHERE message_id=1").fetchone()[0] == pending_unread
+    finally:
+        led.db.rollback()
+    assert led.db.execute("SELECT is_unread FROM messages WHERE message_id=1").fetchone()[0] == old_unread
+
+
 def test_event_record_and_legacy_projection_count_as_one_thin_fact(source):
     led, _ = source
     led.save_messages([_message(body="本人は退院しました。" + "合成の経過共有です。" * 40)])
@@ -437,9 +569,13 @@ def test_json_format_and_operational_generation_do_not_reopen_adopted_input_but_
                             meta={inference.VERSION_KEY:inference.CURRENT_VERSION})
     kind = llm.KIND if writer == 'llm' else extract.KIND
     current = led.db.execute('SELECT artifact_id,meta FROM artifacts WHERE kind=? ORDER BY artifact_id DESC LIMIT 1', (kind,)).fetchone()
+    # Rules now persist a separately validated intervention coverage field; retain
+    # it while changing only JSON formatting and operational metadata.
+    stored_doc = json.loads(led.db.execute('SELECT content FROM artifacts WHERE artifact_id=?',
+                                           (current['artifact_id'],)).fetchone()[0])
     with led.db:
         led.db.execute('UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?',
-            (json.dumps(dict(reversed(list(doc.items()))), ensure_ascii=True, indent=3),
+            (json.dumps(dict(reversed(list(stored_doc.items()))), ensure_ascii=True, indent=3),
              json.dumps({**json.loads(current['meta']), 'config_generation':'operator-changed'}), current['artifact_id']))
     _write_adopted(led, row, writer, doc, monkeypatch, compact=True, config_generation='next')
     assert _scheduler_payload(led.db)['analysis_epoch'] == 1
@@ -637,3 +773,353 @@ def test_unknown_or_lost_source_cannot_be_reassigned_as_a_protection_baseline(so
     assert llm._replace_current(led,row,'{}')
     assert not led.artifacts(llm.UPGRADE_KIND)
     assert led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?',(aid,)).fetchone()
+
+
+def _intervention_row(led):
+    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row['_source_revision'] = led.db.execute(
+        'SELECT COALESCE(MAX(seq),1) FROM message_revisions WHERE message_id=1').fetchone()[0]
+    row['_source_binding'] = dependency_loss.source_binding(led.db, row['project_id'], row['message_id'])
+    return row
+
+
+def _write_intervention_v1(led, row, writer):
+    if writer == 'rules':
+        assert extract._extract_rows(led, [row]) == (1, {row['project_id']})
+    else:
+        hints = llm._rule_hints(row)
+        assert hints is not None and 'intervention_schedule' not in hints
+        llm._ensure_v1(led, row, hints)
+    stored = led.db.execute("SELECT content,meta FROM artifacts WHERE kind='extract_v1' "
+                            "AND message_id=1 ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    assert stored is not None
+    content, meta = map(json.loads, stored)
+    assert meta['rule_version'] == extract.RULE_VERSION
+    assert meta['source_binding'] == row['_source_binding']
+    if 'intervention_schedule' in content:
+        assert content['intervention_schedule']['version'] == 1
+        assert 'intervention_zero' not in meta
+    return content.get('intervention_schedule')
+
+
+@pytest.mark.parametrize('writer', ['rules', 'llm'])
+@pytest.mark.parametrize('body,state', [
+    ('看護師が2026年9月21日に本人を訪問する予定です。', 'planned'),
+    ('看護師が明日本人を訪問する予定です。', 'planned_date_unknown'),
+    ('看護師が2026年9月21日の本人への訪問を中止しました。', 'cancelled'),
+    ('家族の話です。看護師が2026年9月21日に本人を訪問する予定です。', 'unknown'),
+])
+def test_both_v1_writers_store_compact_source_bound_interventions(source, writer, body, state):
+    led, _ = source
+    led.save_messages([_message(body=body)])
+    row = _intervention_row(led)
+    result = _write_intervention_v1(led, row, writer)
+    [record] = result['records']
+    assert record['state'] == state
+    start, end = record['span']
+    assert row['body_text'][start:end] in body
+    assert 'quote' not in record and 'date_text' not in record and 'role_text' not in record
+    assert result['coverage']['state'] == 'observed'
+    assert result['coverage']['source_validation'] == 'verified'
+    assert result['coverage']['source_complete'] is None
+    assert result['coverage']['unknown'] == int(state == 'unknown')
+    assert body not in json.dumps(result, ensure_ascii=False)
+
+
+@pytest.mark.parametrize('writer', ['rules', 'llm'])
+def test_v1_zero_intervention_candidates_is_observed_without_claiming_full_history(source, writer):
+    led, row = source
+    result = _write_intervention_v1(led, row, writer)
+    # A compact marker distinguishes verified zero from an absent key on an
+    # unprocessed, legacy, incomplete or damaged artifact.
+    assert result is None
+    stored = led.db.execute("SELECT content,meta FROM artifacts WHERE kind='extract_v1' "
+                            "AND message_id=1 ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    assert 'intervention_schedule' not in json.loads(stored['content'])
+    meta = json.loads(stored['meta'])
+    assert meta['rule_version'] == extract.RULE_VERSION
+    assert meta['intervention_zero'] == 1
+    assert meta['source_binding'] == dependency_loss.source_binding(led.db, 1, 1)
+
+
+@pytest.mark.parametrize('writer', ['rules', 'llm'])
+@pytest.mark.parametrize('fault, expected', [
+    ('html_hash', 'invalid_source'), ('text_mismatch', 'invalid_source'),
+    ('html_nul', 'invalid_source'), ('body_missing', 'incomplete'),
+    ('body_large', 'oversize'), ('html_large', 'oversize'),
+])
+def test_v1_intervention_input_failure_remains_explicitly_unverified(source, writer, fault, expected):
+    led, _ = source
+    body = '看護師が2026年9月21日に本人を訪問する予定です。'
+    led.save_messages([_message(body=body)])
+    with led.db:
+        if fault == 'html_hash':
+            led.db.execute("UPDATE messages SET body_html='別の合成HTML' WHERE message_id=1")
+        elif fault == 'text_mismatch':
+            led.db.execute("UPDATE messages SET body_text='別の合成本文' WHERE message_id=1")
+        elif fault == 'html_nul':
+            led.db.execute('UPDATE messages SET body_html=? WHERE message_id=1', ('x\0y',))
+        elif fault == 'body_missing':
+            led.db.execute('UPDATE messages SET body_state=NULL WHERE message_id=1')
+        elif fault == 'body_large':
+            led.db.execute('UPDATE messages SET body_text=? WHERE message_id=1', ('x' * 20001,))
+        else:
+            led.db.execute('UPDATE messages SET body_html=? WHERE message_id=1', ('x' * 80001,))
+    row = _intervention_row(led)
+    result = _write_intervention_v1(led, row, writer)
+    assert result['records'] == []
+    assert result['coverage']['state'] == expected
+    assert result['coverage']['source_validation'] == 'unverified'
+    assert result['coverage']['source_complete'] is None
+
+
+@pytest.mark.parametrize('writer', ['rules', 'llm'])
+def test_v1_intervention_candidate_limit_is_explicit_and_preserves_unknown(source, writer):
+    led, _ = source
+    sentence = '看護師が2026年9月21日に本人を訪問する予定です。'
+    led.save_messages([_message(body=sentence * 201)])
+    row = _intervention_row(led)
+    result = _write_intervention_v1(led, row, writer)
+    assert len(result['records']) == 200
+    assert result['coverage']['records_truncated'] is True
+    assert result['coverage']['unknown'] == 200
+    assert all(record['state'] == 'unknown' for record in result['records'])
+    assert result['coverage']['source_complete'] is None
+
+
+def test_rule_version_reprocessing_replaces_current_old_rule_without_touching_legacy(source):
+    led, row = source
+    old_legacy = add(led, row, kind=extract.KIND, version='0.1', content={'old': True},
+                     rule_version=extract.RULE_VERSION - 1)
+    old_current = add(led, row, kind=extract.KIND, version=inference.CURRENT_VERSION,
+                      content={'old': True}, rule_version=extract.RULE_VERSION - 1)
+    assert extract.run_pending(led)['done'] == 1
+    rows = led.db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind='extract_v1'").fetchall()
+    assert old_legacy in {record['artifact_id'] for record in rows}
+    assert old_current not in {record['artifact_id'] for record in rows}
+    current = [record for record in rows if record['artifact_id'] != old_legacy]
+    assert len(current) == 1
+    assert json.loads(current[0]['meta'])['rule_version'] == extract.RULE_VERSION
+    assert 'intervention_schedule' not in json.loads(current[0]['content'])
+    assert json.loads(current[0]['meta'])['source_binding'] == row['_source_binding']
+    assert json.loads(current[0]['meta'])['intervention_zero'] == 1
+    assert 'intervention_zero' not in json.loads(next(r['meta'] for r in rows if r['artifact_id'] == old_legacy))
+
+
+def test_ensure_v1_captures_replaced_dependencies_and_invalidates_current_patient_cache(source, monkeypatch):
+    led, row = source
+    _adoption_witness(led)
+    prior = add(led, row, kind=extract.KIND, version=inference.CURRENT_VERSION,
+                rule_version=extract.RULE_VERSION - 1, content={'v': extract.RULE_VERSION - 1})
+    cache = led.artifact_add('patient_rollup', '{"proof":"synthetic"}', project_id=1,
+                             meta={inference.VERSION_KEY: inference.CURRENT_VERSION})
+    captured = []
+    original = dependency_loss.capture_tx
+
+    def observe(db, pid, mid, **kwargs):
+        assert db.in_transaction
+        captured.append(kwargs.get('artifact_ids'))
+        return original(db, pid, mid, **kwargs)
+
+    monkeypatch.setattr(dependency_loss, 'capture_tx', observe)
+    llm._ensure_v1(led, row, llm._rule_hints(row))
+    assert [prior] in captured
+    assert not led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (prior,)).fetchone()
+    assert not led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (cache,)).fetchone()
+    assert _scheduler_payload(led.db)['analysis_epoch'] == 1
+    captured.clear()
+    llm._ensure_v1(led, row, llm._rule_hints(row))
+    assert captured == [] and _scheduler_payload(led.db)['analysis_epoch'] == 1
+
+
+def test_ensure_v1_dependency_failure_rolls_back_replacement_epoch_and_cache(source, monkeypatch):
+    led, row = source
+    _adoption_witness(led)
+    add(led, row, kind=extract.KIND, version=inference.CURRENT_VERSION,
+        rule_version=extract.RULE_VERSION - 1, content={'v': extract.RULE_VERSION - 1})
+    before = [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    jobs = [tuple(r) for r in led.db.execute('SELECT * FROM fetch_jobs ORDER BY job_id')]
+
+    def fail(db, footprint, **kwargs):
+        assert db.in_transaction and kwargs['replacement_id'] is not None
+        raise RuntimeError('synthetic_dependency_write_failed')
+
+    monkeypatch.setattr(dependency_loss, 'record_tx', fail)
+    with pytest.raises(RuntimeError, match='synthetic_dependency_write_failed'):
+        llm._ensure_v1(led, row, llm._rule_hints(row))
+    assert not led.db.in_transaction
+    assert [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
+    assert [tuple(r) for r in led.db.execute('SELECT * FROM fetch_jobs ORDER BY job_id')] == jobs
+
+
+def test_ensure_v1_borrows_transaction_without_committing_caller_changes(source):
+    led, row = source
+    old = led.db.execute('SELECT is_unread FROM messages WHERE message_id=1').fetchone()[0]
+    new = 0 if old else 1
+    led.db.execute('BEGIN')
+    try:
+        led.db.execute('UPDATE messages SET is_unread=? WHERE message_id=1', (new,))
+        llm._ensure_v1(led, row, llm._rule_hints(row))
+        assert led.db.in_transaction
+        assert led.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_v1'").fetchone()
+        assert led.db.execute('SELECT is_unread FROM messages WHERE message_id=1').fetchone()[0] == new
+    finally:
+        led.db.rollback()
+    assert not led.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_v1'").fetchone()
+    assert led.db.execute('SELECT is_unread FROM messages WHERE message_id=1').fetchone()[0] == old
+
+
+def test_ensure_v1_savepoint_failure_preserves_caller_transaction(source, monkeypatch):
+    led, row = source
+    old = led.db.execute('SELECT is_unread FROM messages WHERE message_id=1').fetchone()[0]
+    new = 0 if old else 1
+    def fail(*args, **kwargs):
+        raise RuntimeError('synthetic_v1_failure')
+    monkeypatch.setattr(dependency_loss, 'record_tx', fail)
+    led.db.execute('BEGIN')
+    try:
+        led.db.execute('UPDATE messages SET is_unread=? WHERE message_id=1', (new,))
+        with pytest.raises(RuntimeError, match='synthetic_v1_failure'):
+            llm._ensure_v1(led, row, llm._rule_hints(row))
+        assert led.db.in_transaction
+        assert not led.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_v1'").fetchone()
+        assert led.db.execute('SELECT is_unread FROM messages WHERE message_id=1').fetchone()[0] == new
+    finally:
+        led.db.rollback()
+
+
+@pytest.mark.parametrize('pid,mid', [(0, 2), (1, 0), (1, -1)])
+def test_invalid_legacy_identity_does_not_block_following_rule_source(source, pid, mid):
+    led, _ = source
+    with led.db:
+        if pid == 0:
+            led.db.execute("INSERT OR IGNORE INTO patients(project_id,patient_name) VALUES(0,'synthetic')")
+        led.db.execute('INSERT INTO messages(message_id,project_id,body_html,body_text,body_state,'
+                       'content_hash,posted_at,posted_at_ts) '
+                       'SELECT ?,?,body_html,body_text,body_state,content_hash,posted_at,posted_at_ts '
+                       'FROM messages WHERE message_id=1', (mid, pid))
+    rows = led.db.execute('SELECT m.message_id,m.project_id,' + dependency_loss.SOURCE_BINDING_COLUMNS +
+                          ' FROM messages m WHERE m.message_id IN (?,1) ORDER BY m.message_id', (mid,)).fetchall()
+    assert extract._extract_rows(led, rows) == (2, {pid, 1})
+    artifacts = led.db.execute("SELECT message_id,content FROM artifacts WHERE kind='extract_v1'").fetchall()
+    contents = {r['message_id']: json.loads(r['content']) for r in artifacts}
+    invalid = contents[mid]['intervention_schedule']
+    assert invalid['records'] == [] and invalid['coverage']['state'] == 'invalid_source'
+    assert invalid['coverage']['source_validation'] == 'unverified'
+    assert 'intervention_schedule' not in contents[1]
+
+
+@pytest.mark.parametrize('writer', ['rules', 'llm'])
+def test_v1_replacement_preserves_foreign_corrupt_row_and_replaces_null_scope(source, writer, monkeypatch):
+    led, row = source
+    metadata = {'hash': row['content_hash'], inference.VERSION_KEY: inference.CURRENT_VERSION,
+                'source_binding': row['_source_binding'], 'rule_version': extract.RULE_VERSION - 1}
+    null_id = led.artifact_add(extract.KIND, '{"legacy":"synthetic"}', project_id=None,
+                               message_id=1, meta=metadata)
+    foreign = add(led, row, kind=extract.KIND, version=inference.CURRENT_VERSION,
+                  rule_version=extract.RULE_VERSION, source_binding=row['_source_binding'],
+                  content={'foreign': 'synthetic'})
+    with led.db:
+        # Simulate a corrupted legacy DB, without weakening the relation guard.
+        led.db.execute('DROP TRIGGER g1_artifacts_msg_upd')
+        led.db.execute('UPDATE artifacts SET project_id=2 WHERE artifact_id=?', (foreign,))
+    foreign_before = tuple(led.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (foreign,)).fetchone())
+    captured = []
+    original = dependency_loss.capture_tx
+
+    def observe(db, pid, mid, **kwargs):
+        if kwargs.get('artifact_ids') is not None:
+            captured.append(list(kwargs['artifact_ids']))
+        return original(db, pid, mid, **kwargs)
+
+    monkeypatch.setattr(dependency_loss, 'capture_tx', observe)
+    if writer == 'rules':
+        # Same-version foreign row must not stop the normal pending selection.
+        assert extract.run_pending(led)['done'] == 1
+    else:
+        llm._ensure_v1(led, row, llm._rule_hints(row))
+    assert tuple(led.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (foreign,)).fetchone()) == foreign_before
+    assert not led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (null_id,)).fetchone()
+    assert [null_id] in captured and all(foreign not in ids for ids in captured)
+    current = led.db.execute("SELECT a.artifact_id,a.project_id FROM artifacts a JOIN messages m USING(message_id) "
+                             "WHERE a.kind=? " + mcs_queries.current_extract_pred(), (extract.KIND,)).fetchall()
+    assert len(current) == 1 and current[0]['project_id'] == row['project_id']
+    if writer == 'llm':
+        before = [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+        llm._ensure_v1(led, row, llm._rule_hints(row))
+        assert [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
+
+
+def test_stale_ineligible_cleanup_does_not_delete_foreign_corrupt_artifact(source):
+    led, row = source
+    local = add(led, row, kind=extract.KIND, version=inference.CURRENT_VERSION,
+                rule_version=extract.RULE_VERSION - 1)
+    foreign = add(led, row, kind=extract.KIND, version=inference.CURRENT_VERSION,
+                  rule_version=extract.RULE_VERSION - 1)
+    with led.db:
+        led.db.execute('DROP TRIGGER g1_artifacts_msg_upd')
+        led.db.execute('UPDATE artifacts SET project_id=2 WHERE artifact_id=?', (foreign,))
+        led.db.execute("UPDATE messages SET body_state='snippet' WHERE message_id=1")
+    before = tuple(led.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (foreign,)).fetchone())
+    extract._delete_stale(led)
+    assert tuple(led.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (foreign,)).fetchone()) == before
+    assert not led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (local,)).fetchone()
+
+
+@pytest.mark.parametrize('writer', ['rules', 'llm'])
+@pytest.mark.parametrize('fault', ['ignore', 'content', 'meta', 'remove'])
+@pytest.mark.parametrize('borrowed', [False, True])
+def test_v1_insert_must_survive_trigger_before_superseding_prior(source, writer, fault, borrowed):
+    led, row = source
+    _adoption_witness(led)
+    prior = add(led, row, kind=extract.KIND, version=inference.CURRENT_VERSION,
+                rule_version=extract.RULE_VERSION - 1, content={'old': 'synthetic'})
+    if fault == 'ignore':
+        trigger = ("CREATE TRIGGER synthetic_v1_insert_fault BEFORE INSERT ON artifacts "
+                   "WHEN NEW.kind='extract_v1' BEGIN SELECT RAISE(IGNORE); END")
+    else:
+        mutation = {'content': "UPDATE artifacts SET content='{}' WHERE artifact_id=NEW.artifact_id;",
+                    'meta': "UPDATE artifacts SET meta='{}' WHERE artifact_id=NEW.artifact_id;",
+                    'remove': 'DELETE FROM artifacts WHERE artifact_id=NEW.artifact_id;'}[fault]
+        trigger = ("CREATE TRIGGER synthetic_v1_insert_fault AFTER INSERT ON artifacts "
+                   "WHEN NEW.kind='extract_v1' BEGIN " + mutation + ' END')
+    led.db.execute(trigger)
+    led.db.commit()
+    artifacts_before = [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    jobs_before = [tuple(r) for r in led.db.execute('SELECT * FROM fetch_jobs ORDER BY job_id')]
+    old_unread = led.db.execute('SELECT is_unread FROM messages WHERE message_id=1').fetchone()[0]
+    changed_unread = 0 if old_unread else 1
+    if borrowed:
+        led.db.execute('BEGIN')
+        led.db.execute('UPDATE messages SET is_unread=? WHERE message_id=1', (changed_unread,))
+    try:
+        if writer == 'rules' and borrowed:
+            # The rule writer explicitly rejects a caller-owned transaction.
+            with pytest.raises(ValueError, match='extract_transaction_owned'):
+                extract._extract_rows(led, [row])
+        else:
+            with pytest.raises(RuntimeError, match='extract_v1_insert_unverified'):
+                if writer == 'rules':
+                    extract._extract_rows(led, [row])
+                else:
+                    llm._ensure_v1(led, row, llm._rule_hints(row))
+        assert led.db.in_transaction is borrowed
+        assert [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == artifacts_before
+        assert [tuple(r) for r in led.db.execute('SELECT * FROM fetch_jobs ORDER BY job_id')] == jobs_before
+        assert led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (prior,)).fetchone()
+        assert led.db.execute('SELECT is_unread FROM messages WHERE message_id=1').fetchone()[0] == (
+            changed_unread if borrowed else old_unread)
+    finally:
+        if borrowed:
+            led.db.rollback()
+
+
+def test_v1_same_current_artifact_remains_noop_when_insert_would_be_ignored(source):
+    led, row = source
+    _write_intervention_v1(led, row, 'llm')
+    before = [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    led.db.execute("CREATE TRIGGER synthetic_ignore_v1 BEFORE INSERT ON artifacts "
+                   "WHEN NEW.kind='extract_v1' BEGIN SELECT RAISE(IGNORE); END")
+    led.db.commit()
+    llm._ensure_v1(led, row, llm._rule_hints(row))
+    assert [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before

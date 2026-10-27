@@ -13,6 +13,9 @@ KIND = 'inference_dependency_loss'
 SCHEMA = 'dependency-loss/v1'
 _SOURCE_FIELDS = ('content_hash', 'body_text', 'body_state', 'parent_id', 'sender_id', 'sender_name',
                   'sender_type', 'profession', 'organization', 'posted_at', 'posted_at_ts')
+SOURCE_BINDING_COLUMNS = (','.join('m.' + field for field in _SOURCE_FIELDS)
+                          + ',(SELECT COALESCE(MAX(seq),1) FROM message_revisions '
+                            'WHERE message_id=m.message_id) AS _source_revision')
 _SOURCE_KINDS = ('extract_v1', 'extract_llm', 'canonical_projection', 'semantic_facts_v4',
                  'patient_context_scan_chunk_v1')
 
@@ -35,6 +38,18 @@ def _karte_id(source_key):
     if raw_id >= 2**63:
         raise ValueError('dependency_loss_source_key_invalid')
     return raw_id
+
+def source_binding_from_row(row):
+    """Bind selected message fields and revision read in the same snapshot."""
+    try:
+        values = [row[field] for field in _SOURCE_FIELDS]
+        revision = row['_source_revision']
+    except (KeyError, IndexError, TypeError):
+        return None
+    if type(revision) is not int:
+        return None
+    return _digest([values, revision])
+
 
 def source_binding(db, pid, mid, *, source_key=None):
     """Read the occurrence fence, distinct from body hash (including observed ABA)."""

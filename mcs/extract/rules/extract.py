@@ -15,6 +15,7 @@ Usage:
   python3 extract.py --stats            # aggregate stats only
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -32,12 +33,14 @@ import clinical_events
 import clinical_urgency
 import clinical_values
 import extract_schema
+import inference_dependency_loss as dependency_loss
 import inference_version as inference
+import intervention_schedule
 import writer_lock
 from patient_context import extract_context
 from ledger import Ledger, LedgerReader
 from mcs_queries import ELIGIBLE_MESSAGE, current_extract_pred, json_or_null
-from mcs_util import HOME, loads_dict
+from mcs_util import HOME, html_to_text, loads_dict
 from writer_lock import acquire_run_lock
 
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -89,7 +92,7 @@ _MED_PERIOD = re.compile(
     r"\s*[-–~〜]\s*(?:(\d{4})/)?(\d{1,2}/\d{1,2})(?!\d)")
 # Facility/provider names and service explanations are not encounter evidence.
 ENCOUNTER_CUE = clinical_events.ENCOUNTER_CUE
-RULE_VERSION = 27
+RULE_VERSION = 28
 _VISIT_DATE = re.compile(
     r"(?:(\d{4})[-/年])?(\d{1,2})[/月](\d{1,2})日?[　\s]*(?:\(|（)?[月火水木金土日]?"
     r"(?:\)|）)?[　\s]*(?:訪問(?:診療)?|診察|往診)")
@@ -381,6 +384,8 @@ def extract_message(body: str, posted_at: str) -> dict:
 
 def _delete_stale(ledger) -> set:
     """Drop only current-generation stale rows whose source is no longer eligible."""
+    if ledger.db.in_transaction:
+        raise ValueError("extract_transaction_owned")
     if (_WRITER_STATE[0] or os.stat(inference.__file__).st_mtime_ns != _INFERENCE_SOURCE_STAT
             or inference.CURRENT_VERSION != _INFERENCE_VERSION):
         return set()
@@ -391,7 +396,8 @@ def _delete_stale(ledger) -> set:
         rows = ledger.db.execute(f"""
             SELECT a.artifact_id,COALESCE(a.project_id,m.project_id) AS project_id,a.message_id,{ELIGIBLE_MESSAGE} AS ok
             FROM artifacts a JOIN messages m ON m.message_id=a.message_id
-            WHERE a.kind=? AND {inference.current_meta_pred('a.meta', target=_INFERENCE_VERSION)}
+            WHERE a.kind=? AND (a.project_id IS NULL OR a.project_id=m.project_id)
+              AND {inference.current_meta_pred('a.meta', target=_INFERENCE_VERSION)}
               AND (json_extract({json_or_null('a.meta')},'$.hash') IS NOT m.content_hash
                    OR COALESCE(json_extract({json_or_null('a.meta')},'$.rule_version'),0)!=?)
             """, (KIND, RULE_VERSION)).fetchall()
@@ -413,10 +419,11 @@ def run_pending(ledger, *, deadline: float | None = None) -> dict:
     patients."""
     if deadline is not None and time.monotonic() >= deadline:
         return {"done": 0, "pids": []}
+    if ledger.db.in_transaction:
+        raise ValueError("extract_transaction_owned")
     _delete_stale(ledger)
     rows = ledger.db.execute(f"""
-      SELECT m.message_id, m.project_id, m.body_text, m.posted_at,
-             m.content_hash
+      SELECT m.message_id, m.project_id, {dependency_loss.SOURCE_BINDING_COLUMNS}
       FROM messages m
       WHERE {ELIGIBLE_MESSAGE}
         AND NOT EXISTS (SELECT 1 FROM artifacts a
@@ -434,11 +441,79 @@ def run_pending(ledger, *, deadline: float | None = None) -> dict:
 _CHUNK = 200   # rows per commit; keep each writer lock hold bounded
 
 
+def intervention_source_payload_tx(db, row, binding):
+    """Classify one source in the caller-owned transaction without committing.
+
+    ``row`` is a selected occurrence with project, message, body, hash and
+    posted timestamp; ``binding`` is that occurrence's selected source fence.
+    Return None for a verified zero-candidate source, otherwise a compact
+    versioned payload with records or an explicit incomplete coverage state.
+    The caller must preserve the binding in the artifact and add the zero marker
+    only for None. This function neither commits nor owns the connection.
+    """
+    if not db.in_transaction:
+        raise ValueError("intervention_transaction_required")
+    coverage = {"state": "invalid_source", "records_truncated": False,
+                "candidates": 0, "unknown": 0, "source_complete": None,
+                "source_validation": "unverified"}
+    payload = {"version": 1, "records": [], "coverage": coverage}
+    if (type(row["project_id"]) is not int or row["project_id"] <= 0
+            or type(row["message_id"]) is not int or row["message_id"] <= 0):
+        return payload
+    # Limit and NUL checks happen in SQLite before fetching potentially large HTML.
+    source = db.execute(
+        "SELECT body_state,length(body_html),instr(body_html,char(0)),"
+        "CASE WHEN length(body_html)<=? AND instr(body_html,char(0))=0 "
+        "THEN body_html END FROM messages WHERE project_id=? AND message_id=?",
+        (intervention_schedule._MAX_HTML_CHARS, row["project_id"], row["message_id"])).fetchone()
+    if source is None or dependency_loss.source_binding(db, row["project_id"], row["message_id"]) != binding:
+        return payload
+    state, html_length, nul, html = source
+    if state != "full":
+        coverage["state"] = "deleted" if state == "deleted" else "incomplete"
+        return payload
+    body = row["body_text"]
+    if isinstance(body, str) and len(body) > intervention_schedule._MAX_BODY_CHARS:
+        coverage["state"] = "oversize"
+        return payload
+    if type(html_length) is int and html_length > intervention_schedule._MAX_HTML_CHARS and not nul:
+        coverage["state"] = "oversize"
+        return payload
+    if (not isinstance(body, str) or "\x00" in body or nul or not isinstance(html, str)
+            or hashlib.sha256(html.encode()).hexdigest() != row["content_hash"]
+            or html_to_text(html) != body):
+        return payload
+    compact = intervention_schedule.compact_source_record(
+        row["project_id"], row["message_id"], row["content_hash"], body, row["posted_at_ts"])
+    compact["coverage"]["source_validation"] = "verified"
+    # The writer stores an explicit meta marker for a verified zero; a missing
+    # content key by itself is never evidence of a completed scan.
+    if (compact["coverage"]["state"] == "observed"
+            and compact["coverage"]["candidates"] == 0
+            and not compact["coverage"]["records_truncated"]):
+        return None
+    return {"version": 1, **compact}
+
+
+def verify_v1_insert_tx(db, row, artifact_id, affected, content, meta):
+    """Verify the inserted rule artifact on the caller-owned transaction."""
+    if not db.in_transaction or affected != 1 or type(artifact_id) is not int:
+        raise RuntimeError("extract_v1_insert_unverified")
+    stored = db.execute(
+        "SELECT kind,project_id,message_id,content,model,meta FROM artifacts WHERE artifact_id=?",
+        (artifact_id,)).fetchone()
+    expected = (KIND, row["project_id"], row["message_id"], content, "rules-v1", meta)
+    if stored is None or tuple(stored) != expected:
+        raise RuntimeError("extract_v1_insert_unverified")
+
+
 def _extract_rows(ledger, rows, *, deadline: float | None = None) -> tuple[int, set[int]]:
     """Replace each row's extract_v1 artifact (delete + insert in the same
     transaction), committing every _CHUNK rows; a crash keeps committed
     chunks and the rest keeps its old artifact until the next pass.
     Returns the touched project ids."""
+    if ledger.db.in_transaction:
+        raise ValueError("extract_transaction_owned")
     pids = set()
     done = 0
     for i in range(0, len(rows), _CHUNK):
@@ -449,6 +524,9 @@ def _extract_rows(ledger, rows, *, deadline: float | None = None) -> tuple[int, 
             for r in rows[i:i + _CHUNK]:
                 if deadline is not None and time.monotonic() >= deadline:
                     return done, pids
+                selected_binding = dependency_loss.source_binding_from_row(r)
+                if not isinstance(selected_binding, str) or not selected_binding:
+                    continue
                 d = extract_message(r["body_text"], r["posted_at"])
                 if not ledger.db.in_transaction:
                     ledger.db.execute("BEGIN IMMEDIATE")
@@ -458,29 +536,42 @@ def _extract_rows(ledger, rows, *, deadline: float | None = None) -> tuple[int, 
                     (r["message_id"], r["project_id"], r["content_hash"])).fetchone()
                 if source is None:
                     continue
+                if dependency_loss.source_binding(ledger.db, r['project_id'], r['message_id']) != selected_binding:
+                    continue
+                intervention = intervention_source_payload_tx(ledger.db, r, selected_binding)
+                if intervention is not None:
+                    d["intervention_schedule"] = intervention
                 previous = ledger.db.execute(
-                    "SELECT content,meta FROM artifacts WHERE kind=? AND message_id=? AND "
+                    "SELECT content,meta FROM artifacts WHERE kind=? AND message_id=? "
+                    "AND (project_id IS NULL OR project_id=?) AND "
                     + inference.current_meta_pred("meta", target=_INFERENCE_VERSION)
-                    + " ORDER BY artifact_id DESC LIMIT 1", (KIND, r["message_id"])).fetchone()
+                    + " ORDER BY artifact_id DESC LIMIT 1", (KIND, r["message_id"], r["project_id"])).fetchone()
                 previous_meta = loads_dict(previous["meta"]) if previous is not None else {}
                 changed = (previous is None or loads_dict(previous["content"]) != d
                            or previous_meta.get("hash") != r["content_hash"]
                            or previous_meta.get("rule_version") != RULE_VERSION)
-                import inference_dependency_loss as dependency_loss
                 replaced_ids = [old[0] for old in ledger.db.execute(
-                    'SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? AND '
-                    + inference.current_meta_pred('meta', target=_INFERENCE_VERSION), (KIND, r['message_id']))]
+                    'SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? '
+                    'AND (project_id IS NULL OR project_id=?) AND '
+                    + inference.current_meta_pred('meta', target=_INFERENCE_VERSION),
+                    (KIND, r['message_id'], r['project_id']))]
                 footprint = dependency_loss.capture_tx(ledger.db, r['project_id'], r['message_id'], artifact_ids=replaced_ids)
+                meta = {inference.VERSION_KEY: _INFERENCE_VERSION, 'hash': r['content_hash'],
+                        'source_binding': selected_binding, 'rule_version': RULE_VERSION}
+                if intervention is None:
+                    meta['intervention_zero'] = 1
+                content_json = json.dumps(d, ensure_ascii=False)
+                meta_json = json.dumps(meta, ensure_ascii=False)
                 new_id = ledger.artifact_add_tx(
-                    KIND, json.dumps(d, ensure_ascii=False),
-                    project_id=r['project_id'], message_id=r['message_id'],
-                    model='rules-v1', meta={inference.VERSION_KEY: _INFERENCE_VERSION, 'hash': r['content_hash'],
-                        'source_binding': dependency_loss.source_binding(ledger.db, r['project_id'], r['message_id']),
-                        'rule_version': RULE_VERSION})
+                    KIND, content_json, project_id=r['project_id'], message_id=r['message_id'],
+                    model='rules-v1', meta=meta)
+                affected = ledger.db.execute('SELECT changes()').fetchone()[0]
+                verify_v1_insert_tx(ledger.db, r, new_id, affected, content_json, meta_json)
                 dependency_loss.record_tx(ledger.db, footprint, replacement_id=new_id)
-                ledger.db.execute('DELETE FROM artifacts WHERE kind=? AND message_id=? AND '
+                ledger.db.execute('DELETE FROM artifacts WHERE kind=? AND message_id=? '
+                    'AND (project_id IS NULL OR project_id=?) AND '
                     + inference.current_meta_pred('meta', target=_INFERENCE_VERSION) + ' AND artifact_id!=?',
-                    (KIND, r['message_id'], new_id))
+                    (KIND, r['message_id'], r['project_id'], new_id))
                 if changed:
                     ledger.bump_inference_analysis_epoch_tx(r["project_id"])
                 pids.add(r["project_id"])
@@ -508,8 +599,7 @@ def main() -> int:
     try:
         led = LedgerReader(DB) if args.stats else Ledger(DB)
         try:
-            q = f"""SELECT m.message_id, m.project_id, m.body_text, m.posted_at,
-                  m.content_hash
+            q = f"""SELECT m.message_id, m.project_id, {dependency_loss.SOURCE_BINDING_COLUMNS}
            FROM messages m WHERE {ELIGIBLE_MESSAGE}"""
             params: list = []
             if args.project:
@@ -530,8 +620,7 @@ def main() -> int:
             if args.limit:
                 todo = todo[:args.limit]
 
-            _extract_rows(led, todo)
-            n = len(todo)
+            n, _ = _extract_rows(led, todo)
             print(json.dumps({"extracted": n, "skipped_existing": len(done),
                               "total_msgs": len(rows)}, ensure_ascii=False))
 
