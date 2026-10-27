@@ -15,6 +15,7 @@ import pytest
 
 import brain_export
 from inference_version import CURRENT_VERSION, VERSION_KEY
+from semantic_projection import PROJECTION_VERSION
 
 SNAP_TS = time.time()
 
@@ -819,9 +820,50 @@ def test_legacy_snapshot_without_refresh_column_rechecks_old_reply_annotations(e
     assert cached["recent_requests"][0]["reply_state"] == "done"  # caller input not mutated
 
 
+def test_current_generation_old_period_rechecks_reply_annotations(env):
+    import rollup
+    snap, _ = env
+    with closing(sqlite3.connect(snap)) as db:
+        cached = json.loads(db.execute(
+            "SELECT content FROM artifacts WHERE kind='patient_rollup'").fetchone()[0])
+    assert cached[VERSION_KEY] == CURRENT_VERSION
+    cached["recent_requests"][0]["reply_state"] = "done"
+    before = snap.read_bytes()
+    with closing(sqlite3.connect(snap.as_uri() + "?mode=ro", uri=True)) as db:
+        db.row_factory = sqlite3.Row
+        result = rollup.current_cached_refs(db, 1, cached, {
+            VERSION_KEY: CURRENT_VERSION, "period_check_version": rollup.PERIOD_CHECK_VERSION - 1})
+        assert not result.get("recent_requests")  # no source request/relation in this snapshot
+        assert db.total_changes == 0
+    assert snap.read_bytes() == before
+    assert cached["recent_requests"][0]["reply_state"] == "done"  # caller input not mutated
+
+
+def _set_rollup_period(snap: Path, *, current: bool) -> None:
+    import rollup
+    with closing(sqlite3.connect(snap)) as db:
+        if current:
+            db.execute("UPDATE artifacts SET meta=json_set(meta, '$.period_check_version', ?, "
+                       "'$.projection_version', ?) WHERE kind='patient_rollup'",
+                       (rollup.PERIOD_CHECK_VERSION, PROJECTION_VERSION))
+        else:
+            db.execute("UPDATE artifacts SET meta=json_remove(meta, '$.period_check_version') "
+                       "WHERE kind='patient_rollup'")
+        db.commit()
+
+
+def _cached_requests(snap: Path) -> list:
+    with closing(sqlite3.connect(snap)) as db:
+        return json.loads(db.execute(
+            "SELECT content FROM artifacts WHERE kind='patient_rollup'").fetchone()[0])["recent_requests"]
+
+
 def test_legacy_request_without_reply_inference_needs_no_rebuild(env, monkeypatch):
     import rollup
     snap, out = env
+    _set_rollup_period(snap, current=True)
+    requests = _cached_requests(snap)
+    assert requests and all("reply_state" not in row and "reply_conflict" not in row for row in requests)
 
     def unexpected(*args, **kwargs):
         pytest.fail("an unannotated request does not need reply-state migration")
@@ -829,4 +871,22 @@ def test_legacy_request_without_reply_inference_needs_no_rebuild(env, monkeypatc
     monkeypatch.setattr(rollup, "build_rollup", unexpected)
     before = snap.read_bytes()
     assert brain_export.run(out, snap)["ok"]
+    assert snap.read_bytes() == before
+
+
+def test_old_period_rebuilds_clinical_fields_without_writing_the_snapshot(env, monkeypatch):
+    import rollup
+    snap, out = env
+    _set_rollup_period(snap, current=False)
+    calls = []
+    original = rollup.build_rollup
+
+    def spy(*args, **kwargs):
+        calls.append(args[1])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(rollup, "build_rollup", spy)
+    before = snap.read_bytes()
+    assert brain_export.run(out, snap)["ok"]
+    assert calls == [1]
     assert snap.read_bytes() == before
