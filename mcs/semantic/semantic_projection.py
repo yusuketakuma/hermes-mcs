@@ -235,6 +235,16 @@ def _v2_med_status(fact: dict, quote=None) -> str | None:
         owner, period = source_axes(quote, use_start, left + use.end(), default='unknown')
         if owner == _v2_llm_subject(fact.get('subject')) and period == 'current':
             return 'current'
+    # One named prior start can own an explicit present continuation in the same sentence.
+    continued = re.search(direct + r'(?:開始|再開)(?:しました|した)が[、,]?'
+                          + r'(?:' + CURRENT_MARK.pattern + r')(?:も|は)?'
+                          r'(?P<use>服用|内服|使用|投与|継続)(?:しています|している|中(?:です)?)(?=$|[。．])',
+                          assertion, re.I)
+    if (continued is not None and fact.get('polarity') == 'affirmed'
+            and not re.search(r'訂正|誤り|誤記|撤回|取消|取り消', assertion)):
+        owner, period = source_axes(quote, left + continued.start('use'), left + continued.end(), default='unknown')
+        if owner == subject and period == 'current':
+            return 'current'
     if status in ('past', 'planned'):
         return status
     if status != 'current':

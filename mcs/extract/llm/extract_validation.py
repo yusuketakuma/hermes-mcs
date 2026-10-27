@@ -181,13 +181,14 @@ def _med_name_spans(text, name):
                         r"抗精神病|抗うつ|抗不安|抗てんかん|抗アレルギー|糖尿病|整腸|制吐)(?:薬|剤))$", prefix)):
                 continue
         after = right
-        if after < len(folded) and re.match(r"[A-Za-z0-9ァ-ヶー一-龥々]", folded[after]):
-            dose = re.match(RX_DOSE_ONE, folded[after:], re.I)
-            if not dose:
-                continue
+        dose = re.match(RX_DOSE_ONE, folded[after:], re.I)
+        if dose:
             after += dose.end()
-            if after < len(folded) and re.match(r"[A-Za-z0-9ァ-ヶー一-龥々]", folded[after]):
-                continue
+        if after < len(folded) and re.match(r"[A-Za-z0-9ァ-ヶー一-龥々]", folded[after]) and not re.match(
+                r"(?:(?:開始|中止|再開|変更|追加|減量|増量|停止|終了)(?:しました|した|済み|予定(?:です)?)?"
+                r"|(?:継続|服用|内服|使用|投与)(?:中(?:です)?|しています|している))(?=$|[。．！？!?;；、,])",
+                folded[after:]):
+            continue
         if after < len(folded) and re.match(r"[ぁ-ゖ]", folded[after]):
             particle = re.match(r"(?:から|より|を|は|が|も|の|に|へ|と|で|や)", folded[after:])
             if not particle:
@@ -378,9 +379,11 @@ def _request_expression_covers(body, assertion, action, kind):
         "self_plan": r"(?:する予定です|する予定|します|いたします)",
     }
     wanted = clinical_values.request_action_key(action)
-    if not wanted or kind not in markers:
+    if not wanted:
         return False
-    for marker in re.finditer(markers[kind] + r"(?![一-龥々ぁ-んァ-ヶーA-Za-z0-9])", sentence):
+    # The optional kind describes the request; only an explicit kind permits self-plan wording.
+    pattern = markers[kind] if kind in markers else "(?:" + markers["request"] + "|" + markers["question"] + ")"
+    for marker in re.finditer(pattern + r"(?![一-龥々ぁ-んァ-ヶーA-Za-z0-9])", sentence):
         if marker.start() < start - left:
             continue
         # A request form that is itself denied or quoted as absent is no request.
@@ -996,7 +999,7 @@ class Validator:
                     item["unverified"] = True
                 if not _request_expression_covers(self.body, assertion, item.get("action"), kind):
                     item["unverified"] = True
-                if kind == "request" and _adjacent_request_cancellation(self.body, assertion):
+                if (kind == "request" or kind not in _REQ_KINDS) and _adjacent_request_cancellation(self.body, assertion):
                     item["unverified"] = True
                 recipient = item.get("to")
                 if recipient not in (None, "", "不明") and not re.search(

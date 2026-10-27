@@ -280,6 +280,7 @@ def test_canonical_event_without_coordinates_does_not_invent_a_source_span():
 @pytest.mark.parametrize('quote,workflow,action,event_time,expected', [
     ('本人は現在アムロジピンを継続しています。', 'reported', 'continue', 'unknown', 'current'),
     ('本人は以前アムロジピンを開始しましたが現在も継続しています。', 'reported', 'start', '2020-01-01', 'current'),
+    ('本人は以前アムロジピンを再開しましたが現在も服用しています。', 'reported', 'start', '2020-01-01', 'current'),
     ('本人は以前アムロジピンを開始しました。', 'reported', 'start', '2020-01-01', 'past'),
     ('アムロジピンという薬剤名の記載です。', 'reported', 'continue', '2020-01-01', None),
     ('本人は明日アムロジピンを中止予定です。', 'planned', 'stop', 'unknown', 'planned'),
@@ -298,6 +299,28 @@ def test_medication_currentness_requires_source_use_not_reported_workflow(quote,
     if expected is None:
         assert med['unverified'] is True and not med_is_patient_current(med)
     assert output['canonical_facts'][0]['event_time'] == event_time
+
+
+@pytest.mark.parametrize('quote', [
+    '本人は以前アムロジピンを開始しましたが現在もカロナールを継続しています。',
+    '本人は以前アムロジピンを開始しましたが家族は現在も継続しています。',
+    '本人は以前アムロジピンを開始しましたが現在も継続していません。',
+    '本人は以前アムロジピンを開始しましたが現在も継続していますか。',
+    '訂正: 本人は以前アムロジピンを開始しましたが現在も継続しています。',
+])
+def test_prior_start_does_not_borrow_an_unproven_present_continuation(quote):
+    from semantic_projection import project_v2_doc_legacy
+    from semantic_testkit import v2_doc, v2_fact
+    from mcs_queries import med_is_patient_current
+
+    evidence = {'evidence_id': 'med-evidence', 'message_id': 'm1', 'revision': 'r1',
+                'start': 0, 'end': len(quote), 'quote': quote, 'atom_id': 'a1'}
+    fact = v2_fact('med', statement='アムロジピン継続', workflow_status='reported',
+                   action='start', event_time='2020-01-01', evidence_ids=['med-evidence'])
+    output = project_v2_doc_legacy(v2_doc([fact], [evidence]))
+    med, = output['meds']
+    assert med['status'] != 'current' and not med_is_patient_current(med)
+    assert output['canonical_facts'][0]['event_time'] == '2020-01-01'
 
 
 @pytest.mark.parametrize('kind,quote,valid_time', [

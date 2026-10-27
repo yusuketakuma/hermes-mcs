@@ -105,6 +105,32 @@ def test_validate_rejects_blank_clinical_identifiers(section, field, value):
     assert out["_items_dropped"] == 1
 
 
+@pytest.mark.parametrize("body,name,action,status", [
+    ("ロキソプロフェン中止", "ロキソプロフェン", "stop", "past"),
+    ("カロナール服用中", "カロナール", "none", "current"),
+    ("合成薬A5mg開始しました。", "合成薬A", "start", "current"),
+])
+def test_direct_medication_action_is_a_name_boundary(body, name, action, status):
+    assert extract_validation._med_name_spans(body, name) == [(0, len(name))]
+    med, = extract_validation.validate({"meds": [{"name": name, "action": action,
+        "subject": "patient", "status": status, "negated": False, "evidence": body}]}, body)["meds"]
+    assert med["name"] == name and med["evidence"] == body
+    assert med["action"] == action and not med.get("unverified")
+
+
+@pytest.mark.parametrize("body,name", [
+    ("ロキソプロフェンナトリウム中止", "ロキソプロフェン"),
+    ("カロナール服用補助剤", "カロナール"),
+    ("合成薬A中止薬", "合成薬A"),
+    ("合成薬A中止しません。", "合成薬A"),
+])
+def test_medication_boundary_does_not_accept_product_suffix_or_denied_action(body, name):
+    assert extract_validation._med_name_spans(body, name) == []
+    med, = extract_validation.validate({"meds": [{"name": name, "action": "stop", "status": "past",
+        "subject": "patient", "negated": False, "evidence": body}]}, body)["meds"]
+    assert med.get("unverified") is True and med["evidence"] == body
+
+
 def test_validate_symptom_status_preserved():
     out = extract_validation.validate({"symptoms": [
         {"text": "発熱", "negated": False, "status": "resolved"},
@@ -177,6 +203,23 @@ def test_validate_request_condition_must_locate_in_body():
     nobody = extract_validation.validate({"requests": [
         {"to": "看護師", "action": "連絡", "condition": "熱が出たら"}]})
     assert "condition" not in nobody["requests"][0]
+
+
+@pytest.mark.parametrize("kind_field", [{}, {"kind": None}, {"kind": "unknown"}])
+@pytest.mark.parametrize("body,verified", [
+    ("医師へ連絡をお願いします。", True),
+    ("医師へ連絡できますか。", True),
+    ("医師へ連絡しました。", False),
+    ("医師へ連絡します。", False),
+    ("医師へ連絡をお願いしたい、という依頼ではありません。", False),
+    ("医師へ連絡をお願いします。その依頼を取り消しました。", False),
+])
+def test_descriptive_request_kind_needs_only_explicit_source_request_proof(kind_field, body, verified):
+    quote = body.split("。")[0] + "。"
+    item, = extract_validation.validate({"requests": [{"to": "医師", "action": "医師へ連絡",
+        "evidence": quote, **kind_field}]}, body)["requests"]
+    assert "kind" not in item and item["evidence"] == quote
+    assert (item.get("unverified") is not True) is verified
 
 
 def test_unlocated_condition_triggers_repair_and_stays_unverified(monkeypatch):
