@@ -7,6 +7,7 @@ import pytest
 import patient_context
 import rollup
 from extract_testkit import _hash, _ledger, _message
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 def context(quote, *, subject="patient", names=("合成薬A",), values=("3錠",), key="residual_quantity"):
@@ -17,9 +18,10 @@ def context(quote, *, subject="patient", names=("合成薬A",), values=("3錠",)
 
 
 def save(led, mid, body, items, *, pid=1):
+    led.ensure_patient(pid)
     led.save_messages([_message(mid=mid, project_id=pid, body=body)])
     return led.artifact_add("extract_llm", json.dumps({"patient_context": items}), project_id=pid,
-                            message_id=mid, meta={"hash": _hash(led, mid)})
+                            message_id=mid, meta={"hash": _hash(led, mid), VERSION_KEY: CURRENT_VERSION})
 
 
 def test_multiple_drugs_subjects_values_and_parents_are_never_collapsed(tmp_path):
@@ -106,6 +108,26 @@ def test_stale_deleted_or_foreign_sources_do_not_supply_reports(tmp_path, change
         led.close()
 
 
+@pytest.mark.parametrize("version", [None, "0.1", "2.0"])
+def test_noncurrent_extraction_never_supplies_pharmacy_report(tmp_path, version):
+    led = _ledger(tmp_path)
+    quote = "合成薬Aの残薬3錠。"
+    try:
+        artifact_id = save(led, 1, quote, [context(quote)])
+        row = led.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()
+        meta = json.loads(row[0])
+        if version is None:
+            del meta[VERSION_KEY]
+        else:
+            meta[VERSION_KEY] = version
+        with led.db:
+            led.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), artifact_id))
+        assert rollup.build_rollup(led.db, 1)["pharmacy_state"]["items"] == []
+        assert led.db.execute("SELECT COUNT(*) FROM artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()[0] == 1
+    finally:
+        led.close()
+
+
 def test_old_results_and_unfetched_context_do_not_invent_pharmacy_values(tmp_path):
     led = _ledger(tmp_path)
     try:
@@ -113,7 +135,12 @@ def test_old_results_and_unfetched_context_do_not_invent_pharmacy_values(tmp_pat
         result = rollup.build_rollup(led.db, 1)
         assert result["patient_context"] == {"memo": {}, "chat": {}}
         assert result["pharmacy_state"]["items"] == []
-        assert rollup.PERIOD_CHECK_VERSION == 12
+        assert rollup.PERIOD_CHECK_VERSION > 12
+        rollup.rebuild(led, 1)
+        with led.db:
+            led.db.execute("UPDATE artifacts SET meta=json_set(meta, '$.period_check_version', 12) "
+                           "WHERE kind='patient_rollup' AND project_id=1")
+        assert 1 in rollup.dirty_projects(led)
         rollup.rebuild(led, 1)
         rollup.rebuild(led, 1)
         artifacts = led.artifacts("patient_rollup", project_id=1)
@@ -173,7 +200,8 @@ def test_disputed_canonical_medications_stay_reported_and_never_become_current(t
         projection = project_v2_doc_legacy(document)
         assert len(projection["meds"]) == 2
         led.artifact_add("canonical_projection", json.dumps(projection), project_id=1, message_id=1,
-                         meta={"hash": _hash(led), "projection_version": PROJECTION_VERSION})
+                         meta={"hash": _hash(led), "projection_version": PROJECTION_VERSION,
+                               VERSION_KEY: CURRENT_VERSION})
         out = rollup.build_rollup(led.db, 1)
         assert not out.get("medications")
         assert {m["name"] for m in out["unverified_medications"]} == set(drugs)

@@ -57,18 +57,28 @@ def test_words_containing_a_family_kanji_and_counts_keep_the_patients_value(body
     assert clinical_values.grounded_vitals(body, dict(vitals)) == vitals
 
 
-def test_a_family_value_saved_before_the_fix_leaves_existing_rollups(tmp_path):
+def test_a_family_value_saved_before_the_fix_leaves_existing_rollups(tmp_path, monkeypatch):
     import json
 
+    import extract_llm
+    import inference_dependency_loss
     import rollup
     from extract_testkit import _hash, _ledger, _message
+
+    monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *a, **k: None)
     store = _ledger(tmp_path)
     store.ensure_patient(1)
     try:
-        store.save_messages([_message(body="BT36.5、ご家族P80")])
-        # what the old writer guard accepted and stored
-        store.artifact_add("extract_llm", json.dumps({"vitals": {"bt": 36.5, "hr": 80}}),
-                           project_id=1, message_id=1, meta={"hash": _hash(store)})
+        body = "本人の2026-09-18測定で体温36.5℃でした。ご家族P80"
+        store.save_messages([_message(body=body)])
+        with store.db:
+            store.db.execute("UPDATE patients SET fetch_state='complete',history_floor=-1 WHERE project_id=1")
+        # Simulate the old writer output and retain it as the previous generation.
+        legacy = store.artifact_add("extract_llm", json.dumps({"vitals": {"bt": 36.5, "hr": 80}}),
+                                    project_id=1, message_id=1, meta={"hash": _hash(store)})
+        assert clinical_values.patient_current_vitals({"bt": 36.5, "hr": 80}, body) == {"bt": 36.5}
         rollup.rebuild(store, 1)
         row = store.db.execute("SELECT artifact_id,content,meta FROM artifacts "
                                "WHERE kind='patient_rollup' AND project_id=1").fetchone()
@@ -79,11 +89,27 @@ def test_a_family_value_saved_before_the_fix_leaves_existing_rollups(tmp_path):
                          (json.dumps(old), json.dumps(meta), row["artifact_id"]))
         store.db.commit()
         # a cache from the previous version is read through the current guard ...
-        current = rollup.current_cached_refs(store.db, 1, old, meta)
+        current = rollup.current_cached_refs(store.db, 1, old, meta, cfg={})
         assert "hr" not in (current.get("latest_vitals") or {})
-        # ... and is queued for rebuild, which drops the family value for good
+        assert not current.get("latest_vitals")  # old extraction cannot prove the current generation
+        # The stale cache is queued; rebuilding alone must not promote the old output.
         assert 1 in rollup.dirty_projects(store)
-        rollup.rebuild(store, 1)
+        rollup.rebuild(store, 1, cfg={})
+        pending = json.loads(store.db.execute(
+            "SELECT content FROM artifacts WHERE kind='patient_rollup' AND project_id=1 "
+            "ORDER BY artifact_id DESC LIMIT 1").fetchone()[0])
+        assert not pending.get("latest_vitals")
+
+        # A current, source-bound extraction can recover the patient's reading.
+        row = dict(store.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+        row["_source_binding"] = inference_dependency_loss.source_binding(store.db, 1, 1)
+        row["_target"] = ("", extract_llm.resolved_model({}))
+        quality = {"validation": {"items_dropped": 0, "evidence_dropped": 0},
+                   "completeness_chunks": 1,
+                   "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}
+        assert extract_llm._replace_current(store, row, json.dumps({"vitals": {"bt": 36.5}}), integrity=quality)
+        assert store.db.execute("SELECT content FROM artifacts WHERE artifact_id=?", (legacy,)).fetchone() is not None
+        rollup.rebuild(store, 1, cfg={})
         rebuilt = json.loads(store.db.execute(
             "SELECT content FROM artifacts WHERE kind='patient_rollup' AND project_id=1 "
             "ORDER BY artifact_id DESC LIMIT 1").fetchone()[0])
