@@ -297,7 +297,8 @@ def sync_cross_list(ledger, adapter, dataset: str, *, enabled: bool = False,
                "complete": result.complete, "reason": result.reason,
                "http_status": result.http_status, "timestamp": result.timestamp,
                "pages": result.pages, "rows": rows}
-    aid = ledger.artifact_add(ARTIFACT_KIND, json.dumps(payload, ensure_ascii=False, allow_nan=False))
+    aid = ledger.artifact_add(ARTIFACT_KIND, json.dumps(
+        payload, ensure_ascii=False, allow_nan=False, separators=(',', ':')))
     return {"state": "complete" if result.complete else "failed",
             "reason": result.reason, "artifact_id": aid}
 

@@ -277,6 +277,36 @@ def test_capture_never_changes_ordinary_collection_or_metadata_current(store, re
     assert calls[0][1]["keep_read_status"] == ["1"]
 
 
+@pytest.mark.parametrize("count", [0, 1, 20])
+def test_compact_capture_preserves_old_json_and_historical_view(store, replay, count):
+    from cross_lists_view import get_cross_list
+
+    rows = [message(mid=MID + i, is_unread=bool(i % 2), reactions=[],
+                    is_bookmarked=True) for i in range(count)]
+    client, pending, _ = replay([page(rows)])
+    assert sync_cross_list(store, client, "mentioned", enabled=True, now=100)["state"] == "complete"
+    assert not pending
+    client, pending, _ = replay([503])
+    assert sync_cross_list(store, client, "mentioned", enabled=True, now=110)["state"] == "failed"
+    assert not pending
+    records = list(store.db.execute(
+        "SELECT artifact_id,content FROM artifacts WHERE kind='cross_list_v1' ORDER BY artifact_id"))
+    assert len(records) == 2
+    compact_view = get_cross_list(store.db, "mentioned", enabled=True, now=120)
+    assert compact_view["state"] == "failed" and compact_view["historical"]
+    assert len(compact_view["rows"]) == count
+    legacy = []
+    for record in records:
+        parsed = json.loads(record["content"])
+        old = json.dumps(parsed, ensure_ascii=False, allow_nan=False)
+        assert json.loads(old) == parsed
+        assert len(record["content"].encode("utf-8")) < len(old.encode("utf-8"))
+        legacy.append((old, record["artifact_id"]))
+    store.db.executemany("UPDATE artifacts SET content=? WHERE artifact_id=?", legacy)
+    store.db.commit()
+    assert get_cross_list(store.db, "mentioned", enabled=True, now=120) == compact_view
+
+
 @pytest.mark.parametrize("extra", [
     {"pid": PID + 1}, {"parent_message": {"id": MID + 20}},
 ])
