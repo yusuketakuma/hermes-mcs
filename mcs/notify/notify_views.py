@@ -959,10 +959,11 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
                                  and record.get("date_basis") == "cancelled_intervention"
                                  and isinstance(record.get("role"), str)
                                  and isinstance(record.get("target_day"), str)}
-            groups = {"future": [], "other": [], "unknown": []}
+            groups = {"future": [], "date_unknown": [], "other": [], "unknown": []}
             for record in records:
                 day = record.get("event_day")
-                key = ("unknown" if record["state"] == "unknown" or today is None else
+                key = ("date_unknown" if record["state"] == "planned_date_unknown" else
+                       "unknown" if record["state"] == "unknown" or today is None else
                        "future" if record["state"] == "planned" and day and day >= today else "other")
                 row = {**record, "posted_at_ts": times.get(record.get("message_id"))}
                 if key == "unknown":
@@ -979,18 +980,21 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
             if groups["future"]:
                 head.append("介入予定の記載: 日付順（同日は職種順、同じ職種は投稿番号の降順）")
             add(groups["future"], "今後の介入予定の記載（変更未照合）")
+            add(groups["date_unknown"], "介入予定の記載（日付未確認・変更未照合）")
             add(groups["other"], "介入に関する記載（変更未照合）")
             add(groups["unknown"], "介入に関する記載（内容未確認）")
             coverage = schedule["coverage"]
             if coverage["state"] == "observed":
-                head.append(f"介入の記載: 最近の投稿{coverage['messages_examined']}件を確認。"
+                head.append(f"介入の記載: 投稿番号の降順で{coverage['messages_examined']}件を対象に走査。"
                             "定型の記載のみ対象、別投稿による変更は未照合")
                 incomplete = coverage["incomplete"] + coverage["invalid_source"] + coverage["oversize"]
                 if incomplete:
                     head.append(f"介入の記載: 本文を確認できない投稿 {incomplete}件")
+                if coverage["deleted"]:
+                    head.append(f"介入の記載: 削除済みの投稿 {coverage['deleted']}件")
                 if coverage["truncated"] or coverage["records_truncated"]:
                     head.append("介入の記載: 表示対象を一部に限定")
-                if coverage["fetch_state"] != "complete":
+                if coverage["fetch_state"] != "complete" or coverage["source_complete"] is not True:
                     head.append("介入の記載: 履歴の取得完了は未確認")
             else:
                 head.append("介入の記載: 対象範囲を確認できません")

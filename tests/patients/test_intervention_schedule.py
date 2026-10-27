@@ -148,6 +148,48 @@ def test_missing_unverified_flag_never_becomes_a_verified_intervention():
     assert schedule.project(1, [source])["records"][0]["state"] == "unknown"
 
 
+@pytest.mark.parametrize("written", ["明日", "今日", "本日", "1月1日", "12/31", "2月29日"])
+@pytest.mark.parametrize("posted", [None, 0,
+    datetime.fromisoformat("2026-12-31T14:59:59+00:00").timestamp(),
+    datetime.fromisoformat("2026-12-31T15:00:00+00:00").timestamp()])
+def test_unresolved_plan_preserves_written_date_without_deriving_event_day(written, posted):
+    body = f"看護師が{written}に本人を訪問する予定です。"
+    row, = schedule.project(1, [item(body, posted_at_ts=posted)])["records"]
+    assert row["state"] == "planned_date_unknown"
+    assert row["date_text"] == written and row["event_day"] is None
+    assert row["role"] == "nurse" and row["role_text"] == "看護師" and row["action"] == "訪問"
+    assert row["quote"] == body and row["span"] == [0, len(body)]
+    assert "target_day" not in row and "relation" not in row
+
+
+@pytest.mark.parametrize("body", [
+    "看護師が明日本人を訪問する予定ではありません。",
+    "看護師が明日本人を訪問するかもしれません。",
+    "看護師が明日家族を訪問する予定です。",
+    "看護師が翌日本人を訪問する予定です。",
+    "看護師が来週本人を訪問する予定です。",
+    "看護師が2月30日に本人を訪問する予定です。",
+    "看護師が明日と明後日本人を訪問する予定です。",
+    "看護師が明日本人を訪問する予定を中止しました。",
+    "看護師が明日本人を訪問する予定ですか。",
+    "「看護師が明日本人を訪問する予定です。」と聞きました。",
+])
+def test_unresolved_plan_does_not_confirm_ambiguous_or_other_subject(body):
+    row, = schedule.project(1, [item(body)])["records"]
+    assert row["state"] == "unknown" and row["event_day"] is None and row["quote"] is None
+
+
+@pytest.mark.parametrize("prefix,suffix", [
+    ("家族の話です。", ""), ("次の記載は誤りです。", ""),
+    ("", "記載を取り消します。"), ("予定が確定した場合。", ""),
+])
+def test_unresolved_plan_never_promotes_a_fragment_of_multiple_sentences(prefix, suffix):
+    quote = "看護師が明日本人を訪問する予定です。"
+    body = prefix + quote + suffix
+    row, = schedule.project(1, [item(body, quote=quote, evidence_span=[len(prefix), len(prefix) + len(quote)])])["records"]
+    assert row["state"] == "unknown" and row["event_day"] is None and row["quote"] is None
+
+
 @pytest.fixture
 def source_db():
     db = sqlite3.connect(":memory:")
@@ -169,6 +211,22 @@ def put_source(db, mid, project_id, html, *, state="full", digest=None):
     db.execute("INSERT OR REPLACE INTO messages VALUES(?,?,?,?,?,?,?)",
                (mid, project_id, html, html_to_text(html), state, digest, POSTED))
     db.commit()
+
+
+def test_unresolved_plan_source_scope_and_revision_never_supply_a_calendar_day(source_db):
+    original = "看護師が明日本人を訪問する予定です。"
+    revised = "薬剤師が2月29日に本人を服薬指導する予定です。"
+    put_source(source_db, 1, 1, original)
+    put_source(source_db, 2, 2, original)
+    before = schedule.read_source_schedule(source_db, 1)["records"]
+    assert len(before) == 1 and before[0]["date_text"] == "明日" and before[0]["event_day"] is None
+    put_source(source_db, 1, 1, revised)
+    source_db.execute("UPDATE messages SET posted_at_ts=NULL WHERE message_id=1")
+    after = schedule.read_source_schedule(source_db, 1)["records"]
+    assert len(after) == 1 and after[0]["project_id"] == 1 and after[0]["quote"] == revised
+    assert after[0]["state"] == "planned_date_unknown" and after[0]["date_text"] == "2月29日"
+    assert after[0]["event_day"] is None and "target_day" not in after[0]
+    assert after[0]["content_hash"] != before[0]["content_hash"]
 
 
 @pytest.mark.parametrize("body", [

@@ -2,10 +2,94 @@
 from datetime import datetime
 
 import notify_views
+import pytest
 from semantic_testkit import _message
 from test_patient_context_v3_views import T0, ctx  # noqa: F401
 
 __all__ = ["ctx"]
+
+
+def test_unresolved_intervention_date_keeps_written_word_and_patient_scope(ctx):
+    ctx.db.save_messages([_message(2001, body="看護師が明日本人を訪問する予定です。"),
+                          _message(2002, body="薬剤師が11月3日に本人を服薬指導する予定です。")], project_id=1)
+    ctx.db.ensure_patient(2)
+    ctx.db.save_messages([_message(2003, pid=2, body="医師が本日本人を往診する予定です。")], project_id=2)
+    result = notify_views.patient_context_list(ctx.db.db, 1, "previsit", cfg={}, since=T0, now=T0)
+    items = list(result["items"])
+    for page in range(1, result["pages"]):
+        items.extend(notify_views.patient_context_list(ctx.db.db, 1, "previsit", cfg={}, since=T0, now=T0,
+                                                       page=page)["items"])
+    rows = [row for row in items if row["group"].startswith("介入予定の記載（日付未確認・変更未照合）")]
+    assert {row["source_rest"] for row in rows} == {"#2001", "#2002"}
+    assert all(row["project_id"] == 1 for row in rows)
+    assert {quote for row in rows for quote in row["quotes"]} == {
+        "看護師が明日本人を訪問する予定です。", "薬剤師が11月3日に本人を服薬指導する予定です。"}
+    assert not any("#2001" in row["source_rest"] or "#2002" in row["source_rest"]
+                   for row in items if row["group"].startswith("今後の介入予定の記載（変更未照合）"))
+
+
+@pytest.mark.parametrize("fetch_state", ["complete", "incomplete", "pending"])
+def test_empty_patient_history_remains_unconfirmed_without_completion_proof(ctx, fetch_state):
+    ctx.db.ensure_patient(2)
+    ctx.db.db.execute("UPDATE patients SET fetch_state=? WHERE project_id=2", (fetch_state,))
+    result = notify_views.patient_context_list(ctx.db.db, 2, "previsit", cfg={}, since=T0, now=T0)
+    assert "介入の記載: 投稿番号の降順で0件を対象に走査。定型の記載のみ対象、別投稿による変更は未照合" in result["head"]
+    assert "介入の記載: 履歴の取得完了は未確認" in result["head"]
+    assert all(row["project_id"] == 2 for row in result["items"])
+
+
+@pytest.mark.parametrize("fetch_state,source_complete,warning", [
+    ("complete", True, False), ("complete", None, True),
+    ("complete", False, True), ("incomplete", True, True),
+    ("unknown", None, True),
+])
+def test_history_warning_requires_both_fetch_and_source_completion(ctx, monkeypatch,
+                                                                   fetch_state, source_complete, warning):
+    import intervention_schedule
+
+    ctx.db.ensure_patient(2)
+    def source_schedule(_db, project_id):
+        assert project_id == 2
+        return {"project_id": project_id, "records": [], "coverage": {
+            "state": "observed", "messages_examined": 0, "fetch_state": fetch_state,
+            "source_complete": source_complete, "incomplete": 0, "deleted": 0, "invalid_source": 0,
+            "oversize": 0, "truncated": False, "records_truncated": False}}
+    monkeypatch.setattr(intervention_schedule, "read_source_schedule", source_schedule)
+    result = notify_views.patient_context_list(ctx.db.db, 2, "previsit", cfg={}, since=T0, now=T0)
+    assert ("介入の記載: 履歴の取得完了は未確認" in result["head"]) is warning
+
+
+def test_scan_limit_does_not_hide_unconfirmed_history_or_cross_patient(ctx):
+    ctx.db.ensure_patient(2)
+    ctx.db.db.execute("UPDATE patients SET fetch_state='complete' WHERE project_id=1")
+    ctx.db.save_messages([_message(mid, body="合成の一般連絡")
+                          for mid in range(1000, 1201)], project_id=1)
+    ctx.db.save_messages([_message(9999, pid=2, body="医師が2026年11月1日に本人を往診する予定です。")],
+                         project_id=2)
+    result = notify_views.patient_context_list(ctx.db.db, 1, "previsit", cfg={}, since=T0, now=T0)
+    assert "介入の記載: 履歴の取得完了は未確認" in result["head"]
+    assert "介入の記載: 表示対象を一部に限定" in result["head"]
+    assert all(row["project_id"] == 1 for row in result["items"])
+    assert all("往診する予定" not in row["text"] for row in result["items"])
+
+
+def test_deleted_and_incomplete_posts_are_counted_separately_within_patient_scope(ctx):
+    ctx.db.ensure_patient(2)
+    ctx.db.save_messages([_message(110, pid=2, body="削除された合成投稿"),
+                          _message(111, pid=2, body="未取得の合成投稿"),
+                          _message(112, pid=2, body="合成の一般連絡")], project_id=2)
+    ctx.db.ensure_patient(3)
+    ctx.db.save_messages([_message(900, pid=3, body="別患者の削除済み投稿")], project_id=3)
+    ctx.db.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id IN (110, 900)")
+    ctx.db.db.execute("UPDATE messages SET body_state='snippet' WHERE message_id=111")
+    ctx.db.db.execute("UPDATE patients SET fetch_state='complete' WHERE project_id=2")
+
+    result = notify_views.patient_context_list(ctx.db.db, 2, "previsit", cfg={}, since=T0, now=T0)
+    assert "介入の記載: 投稿番号の降順で3件を対象に走査。定型の記載のみ対象、別投稿による変更は未照合" in result["head"]
+    assert "介入の記載: 本文を確認できない投稿 1件" in result["head"]
+    assert "介入の記載: 削除済みの投稿 1件" in result["head"]
+    assert "介入の記載: 履歴の取得完了は未確認" in result["head"]
+    assert all(row["project_id"] == 2 for row in result["items"])
 
 
 def test_future_plans_are_sorted_by_event_day_then_written_role_without_dropping_rows(ctx):

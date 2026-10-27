@@ -27,6 +27,13 @@ _RECORD = re.compile(
     r"(?P<result>する予定です|する予定|を予定しています|予定です|"
     r"を中止しました|を取消しました|を取り消しました|を実施しました|"
     r"を完了しました|しました|を行いました)[。]?")
+_UNRESOLVED_DATE_PATTERN = r"(?:[0-9]{1,2}月[0-9]{1,2}日|[0-9]{1,2}/[0-9]{1,2}|明日|今日|本日)"
+_UNRESOLVED_PLAN = re.compile(
+    rf"(?P<role>{_ROLE_PATTERN})(?:さん)?(?:が|は)[ \t　]*"
+    rf"(?:(?P<date_first>{_UNRESOLVED_DATE_PATTERN})(?:に)?[ \t　]*{_TARGET_PATTERN}|"
+    rf"{_TARGET_PATTERN}[ \t　]*(?P<date_last>{_UNRESOLVED_DATE_PATTERN})(?:に)?)[ \t　]*"
+    r"(?P<action>訪問|往診|診察|診療|看護|介護|リハビリ|服薬指導|薬剤確認|栄養指導|口腔ケア|相談|確認|検査|採血)"
+    r"(?:する予定です|する予定|を予定しています|予定です)[。]?")
 _TARGET_CANCEL = re.compile(
     rf"(?P<role>{_ROLE_PATTERN})(?:さん)?(?:が|は)[ \t　]*"
     rf"(?P<target_date>{_DATE_PATTERN})(?P<date_particle>の|に)[ \t　]*{_TARGET_PATTERN}[ \t　]*"
@@ -115,6 +122,7 @@ def project(project_id, items, *, coverage=None):
                     or target_cancel.group("date_particle") == "の"):
                 target_cancel = None
             match = _RECORD.fullmatch(quote.strip())
+            unresolved = _UNRESOLVED_PLAN.fullmatch(quote.strip())
             date_text = (match.group("date_first") or match.group("date_last")) if match else None
             day = written_day(date_text)
             posted = _posted_day(item.get("posted_at_ts"))
@@ -141,6 +149,14 @@ def project(project_id, items, *, coverage=None):
                                   event_day=None if state == "cancelled" else day[1].isoformat(), state=state)
                     if state == "cancelled":
                         record["date_basis"] = "cancellation_or_intervention_unclear"
+            elif (unresolved and item.get("subject") == "patient" and item.get("unverified") is False
+                  and item["source_body"].strip() == quote.strip()):
+                date_text = unresolved.group("date_first") or unresolved.group("date_last")
+                written = written_day(date_text)
+                if date_text in ("明日", "今日", "本日") or (written and written[0] == "md"):
+                    role = unresolved.group("role")
+                    record.update(role=_ROLES[role], role_text=role, action=unresolved.group("action"),
+                                  date_text=date_text, state="planned_date_unknown")
         if record["state"] == "unknown":
             counts["unknown"] += 1
             # A fragment can omit a negation or subject in its context.
@@ -237,7 +253,8 @@ def read_source_schedule(db, project_id, *, limit=200, max_records=200):
             # the subject of this one. Sentence boundaries alone do not prove
             # independence, so only an isolated assertion can be classified.
             explicit = (len(sentences) == 1 and (_RECORD.fullmatch(quote.strip()) is not None
-                        or _TARGET_CANCEL.fullmatch(quote.strip()) is not None))
+                        or _TARGET_CANCEL.fullmatch(quote.strip()) is not None
+                        or _UNRESOLVED_PLAN.fullmatch(quote.strip()) is not None))
             items.append({"project_id": project_id, "message_id": mid, "content_hash": digest,
                           "category": "followup", "subject": "patient" if explicit else "unspecified",
                           "body_state": "full", "source": "chat", "source_body": body,
