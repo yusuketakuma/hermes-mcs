@@ -242,12 +242,16 @@ def background(ev) -> dict:
 
 
 def _allergy_correction(text, target):
-    return (isinstance(text, str) and re.search(r"訂正|撤回|誤り|誤記|誤解|修正|間違い|取(?:り)?消|取消|"
+    return (isinstance(text, str) and (re.search(
+                r"(?:先ほどの|先程の|前回の|その|この)(?:記載|記録|情報|内容)(?:は|が)"
+                r"(?:正しく(?:ない|ありません|なかった|ありませんでした)|"
+                r"誤り(?!では(?:ない|ありません|なかった|ありませんでした)))", text)
+            or re.search(r"訂正|撤回|誤り|誤記|誤解|修正|間違い|取(?:り)?消|取消|"
                                                 r"違(?:う|います|いました|った)|異な(?:る|ります|りました)|(?:なし|無し)で", text)
             and ("アレルギー" in text or target in text
                  or re.search(r"前回|先日|先ほど|先程|さっき|その件|その話|この件|投稿\s*[#＃]|"
                               r"(?:^|[:：])\s*(?:本人(?:は|の))?(?:記録|記載|情報|内容)(?:を|は|が)", text)
-                 or re.fullmatch(r"\s*(?:それ|こちら|本件)?(?:は|が)?間違い(?:でした|です)?[。\s]*", text)))
+                 or re.fullmatch(r"\s*(?:それ|こちら|本件)?(?:は|が)?間違い(?:でした|です)?[。\s]*", text))))
 
 
 def allergy_posted_records(db, ev):

@@ -149,6 +149,36 @@ def test_unclassified_source_correction_blocks_the_posted_notice(ctx, body):
     assert _records(ctx) == []
 
 
+@pytest.mark.parametrize("correction", [
+    "本人の合成薬のアレルギーの記載は正しくありません。",
+    "先ほどの記載は正しくありません。",
+    "その記載は誤りです。",
+])
+def test_later_explicit_or_ambiguous_correction_does_not_promote_allergy(ctx, correction):
+    original = "アレルギー: 本人は合成薬のアレルギーがある。"
+    _seed(ctx, 1, original)
+    later = replace(_message(2, body=correction), posted_at="2026-10-03T09:10:00+09:00")
+    ctx[0].save_messages([later], project_id=1)
+    assert _records(ctx) == []  # An ambiguous reference is held, not paired as a proven correction.
+    rows = ctx[0].db.execute("SELECT message_id,body_text,body_state FROM messages "
+                             "WHERE project_id=1 ORDER BY message_id").fetchall()
+    assert [(row["message_id"], row["body_text"], row["body_state"]) for row in rows] == [
+        (1, original, "full"), (2, correction, "full")]
+
+
+@pytest.mark.parametrize("other", [
+    "本日の体重の記載は正しくありません。",
+    "先ほど測った体重の値は正しくありません。",
+    "食事の量は正しくありません。",
+    "その記載は誤りではありません。",
+])
+def test_later_unrelated_inaccuracy_does_not_hide_allergy(ctx, other):
+    fact = _seed(ctx, 1, "アレルギー: 本人は合成薬のアレルギーがある。")
+    later = replace(_message(2, body=other), posted_at="2026-10-03T09:10:00+09:00")
+    ctx[0].save_messages([later], project_id=1)
+    assert _records(ctx) == [fact]
+
+
 @pytest.mark.parametrize("body", ["本日は晴れでした。", "本人は食事を食べていません。", "歩行の補助はなしでした。"])
 def test_unrelated_unclassified_source_does_not_block_the_notice(ctx, body):
     fact = _seed(ctx, 1, "アレルギー: 本人はペニシリンのアレルギーがある。")
