@@ -4,6 +4,7 @@ import sqlite3
 
 import pytest
 
+from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY
 from mcs_queries import (FACT_KINDS_SQL, current_fact_pred,
                          current_projection_id, current_v4_id)
 from semantic_projection import PROJECTION_VERSION
@@ -28,7 +29,7 @@ def db():
 
 def _add(db, kind, *, version=PROJECTION_VERSION, content=None, meta=None,
          project_id=10):
-    binding = {"hash": "synthetic-source-hash", "engine_version": 4}
+    binding = {"hash": "synthetic-source-hash", "engine_version": 4, VERSION_KEY: CURRENT_VERSION}
     if version is not None:
         binding["projection_version"] = version
     binding.update(meta or {})
@@ -61,6 +62,31 @@ def test_newest_current_empty_projection_supersedes_older_content(db, kind):
     empty = _add(db, kind, content={})
     _add(db, kind, version=PROJECTION_VERSION - 1, content={"meds": [{"dose": "50mg"}]})
     assert _selected(db, kind) == empty
+
+
+@pytest.mark.parametrize("kind", ["canonical_projection", "semantic_facts_v4"])
+@pytest.mark.parametrize("generation", ["missing", "legacy", "null", "malformed", "number", "future"])
+def test_projection_maintenance_never_bypasses_inference_generation(db, kind, generation):
+    def add_other_generation():
+        row = _add(db, kind)
+        raw = db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (row,)).fetchone()[0]
+        meta = json.loads(raw)
+        if generation == "missing":
+            del meta[VERSION_KEY]
+        else:
+            meta[VERSION_KEY] = {"legacy": LEGACY_VERSION, "null": None, "malformed": "1..0",
+                                 "number": 1, "future": "999.0"}[generation]
+        db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), row))
+        return row
+
+    add_other_generation()
+    assert _selected(db, kind) is None
+    assert _selected(db, kind, require_version=False) is None
+    current = _add(db, kind)
+    add_other_generation()
+    assert _selected(db, kind) == current
+    assert _selected(db, kind, require_version=False) == current
+    assert db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0] == 3
 
 
 @pytest.mark.parametrize("kind", ["canonical_projection", "semantic_facts_v4"])
