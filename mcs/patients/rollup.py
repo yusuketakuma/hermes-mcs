@@ -970,6 +970,10 @@ def _current_cached_refs(db, project_id: int, roll: dict, meta, *, cfg=None) -> 
                             (project_id, last, REF_KIND))
                         for row in mids:
                             sources[last].extend(current_refs(db, row[0]))
+                    except sqlite3.OperationalError as error:
+                        import extract_llm
+                        if extract_llm._progress_interrupted(error):
+                            raise
                     except sqlite3.DatabaseError:
                         pass  # old/incomplete schema cannot prove a dictionary annotation
                 valid = ref.get("name") == item.get("name") and ref in sources[last]
@@ -988,8 +992,7 @@ def _current_cached_refs(db, project_id: int, roll: dict, meta, *, cfg=None) -> 
     # fields on the same read-only connection; preserve profiles and metadata.
     patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
     name = patient[0] if patient else None
-    # A current-version cache was built by build_rollup with these guards;
-    # source changes reach it through dirty_projects, not per-read rebuilds.
+    # The measurement fields are checked again below when configuration is available.
     legacy = not isinstance(meta, dict) or meta.get("period_check_version") != PERIOD_CHECK_VERSION
     scoped = legacy and any(patient_item_scope({}, row[0], patient_name=name) != "patient"
                             for row in db.execute("SELECT body_text FROM messages WHERE project_id=? "

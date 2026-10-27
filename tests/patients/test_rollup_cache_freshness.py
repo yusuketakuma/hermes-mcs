@@ -160,6 +160,64 @@ def test_acquisition_interruption_propagates_without_owning_transaction(ledger, 
         ledger.db.rollback()
 
 
+def _synthetic_dictionary_cache(ledger):
+    ledger.artifact_add(rollup.REF_KIND, '{}', project_id=1, message_id=1)
+    ledger.artifact_add(rollup.PROGRESS_KIND, '{}')
+    ref = {'name': '合成薬', 'status': 'unresolved', 'dict_id': 'synthetic',
+           'dict_sha256': 'a' * 64, 'cands': []}
+    content = {inference_version.VERSION_KEY: inference_version.CURRENT_VERSION,
+               'project_id': 1, 'medications': [{'name': '合成薬', 'last': POSTED, 'ref': ref}]}
+    meta = {inference_version.VERSION_KEY: inference_version.CURRENT_VERSION,
+            'period_check_version': rollup.PERIOD_CHECK_VERSION}
+    return content, meta
+
+
+@pytest.mark.parametrize('code', [None, sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED])
+def test_dictionary_revalidation_interruption_preserves_borrowed_transaction(ledger, monkeypatch, code):
+    content, meta = _synthetic_dictionary_cache(ledger)
+    error = sqlite3.OperationalError('synthetic dictionary interruption')
+    if code is not None:
+        error.sqlite_errorcode = code
+    calls = []
+
+    def interrupted(db, mid):
+        calls.append(mid)
+        raise error
+
+    monkeypatch.setattr(rollup, 'current_refs', interrupted)
+    ledger.db.execute("UPDATE patients SET fetch_reason='synthetic-change' WHERE project_id=1")
+    try:
+        with pytest.raises(sqlite3.OperationalError) as caught:
+            rollup.current_cached_refs(ledger.db, 1, content, meta, cfg=None)
+        assert caught.value is error and calls == [1]
+        assert ledger.db.in_transaction
+        assert ledger.db.execute('SELECT fetch_reason FROM patients WHERE project_id=1').fetchone()[0] == 'synthetic-change'
+        assert content['medications'][0]['ref']['name'] == '合成薬'
+    finally:
+        ledger.db.rollback()
+    assert ledger.db.execute('SELECT fetch_reason FROM patients WHERE project_id=1').fetchone()[0] is None
+
+
+@pytest.mark.parametrize('operational', [False, True])
+def test_dictionary_revalidation_other_db_failure_strips_only_annotation(ledger, monkeypatch, operational):
+    content, meta = _synthetic_dictionary_cache(ledger)
+    error = sqlite3.OperationalError('synthetic schema failure') if operational else sqlite3.DatabaseError('synthetic schema failure')
+    if operational:
+        error.sqlite_errorcode = sqlite3.SQLITE_ERROR
+    calls = []
+
+    def unavailable(db, mid):
+        calls.append(mid)
+        raise error
+
+    monkeypatch.setattr(rollup, 'current_refs', unavailable)
+    result = rollup.current_cached_refs(ledger.db, 1, content, meta, cfg=None)
+    assert calls == [1]
+    assert result['medications'][0]['name'] == '合成薬'
+    assert 'ref' not in result['medications'][0]
+    assert content['medications'][0]['ref']['name'] == '合成薬'
+
+
 def test_same_body_after_edit_is_not_the_original_occurrence(ledger):
     old_binding = inference_dependency_loss.source_binding(ledger.db, 1, 1)
     old_hash = ledger.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
