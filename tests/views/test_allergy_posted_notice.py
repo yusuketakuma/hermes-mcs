@@ -1,5 +1,6 @@
 """Synthetic posted-time allergy excerpts on a borrowed patient snapshot."""
 from dataclasses import replace
+import sqlite3
 
 import pytest
 
@@ -165,6 +166,135 @@ def test_source_scan_limit_and_oversized_original_fail_closed(ctx):
     _seed(ctx, 1, "アレルギー: 本人はペニシリンのアレルギーがある。")
     ctx[0].save_messages([_message(2, body="合成" * 1501)], project_id=1)
     assert _records(ctx) == []
+
+
+@pytest.mark.parametrize('position', ['target', 'other'])
+@pytest.mark.parametrize('field', ['body_text', 'body_html'])
+@pytest.mark.parametrize('embedded_nul', [False, True])
+def test_oversized_or_nul_original_never_crosses_sql_into_python(ctx, position, field, embedded_nul):
+    _seed(ctx, 1, 'アレルギー: 本人は合成薬のアレルギーがある。')
+    ledger = ctx[0]
+    if position == 'other':
+        ledger.save_messages([_message(2, body='通常の合成連絡です。')], project_id=1)
+    ev = views.evidence(ledger.db, 1, cfg={})
+    mid = 1 if position == 'target' else 2
+    huge = ('x\0' if embedded_nul else '') + 'A' * (12001 if field == 'body_html' else 3001)
+    ledger.db.execute(f'UPDATE messages SET {field}=? WHERE project_id=1 AND message_id=?', (huge, mid))
+    returned = []
+
+    def inspect(cursor, values):
+        names = tuple(col[0] for col in cursor.description or ())
+        if 'body_text' in names and 'body_html' in names and 'message_id' in names:
+            if values[names.index('message_id')] == mid:
+                returned.append(values[names.index(field)])
+        return sqlite3.Row(cursor, values)
+
+    ledger.db.row_factory = inspect
+    try:
+        assert views.allergy_posted_records(ledger.db, ev) == []
+        assert ledger.db.in_transaction
+    finally:
+        ledger.db.row_factory = sqlite3.Row
+        ledger.db.rollback()
+    assert returned == ([] if position == 'target' else [None])
+
+
+def test_foreign_oversized_source_does_not_hide_valid_patient_record(ctx):
+    fact = _seed(ctx, 1, 'アレルギー: 本人は合成薬のアレルギーがある。')
+    ledger = ctx[0]
+    ledger.ensure_patient(2)
+    ledger.save_messages([_message(2, pid=2, body='別患者の合成連絡です。')], project_id=2)
+    ev = views.evidence(ledger.db, 1, cfg={})
+    huge = 'x\0' + 'A' * 100_000
+    ledger.db.execute('UPDATE messages SET body_text=?,body_html=? WHERE project_id=2 AND message_id=2', (huge, huge))
+    assert views.allergy_posted_records(ledger.db, ev) == [fact]
+    assert ledger.db.in_transaction
+    ledger.db.rollback()
+
+
+@pytest.mark.parametrize('code', [None, sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED])
+def test_allergy_source_scan_propagates_interruption_without_committing(ctx, code):
+    _seed(ctx, 1, 'アレルギー: 本人は合成薬のアレルギーがある。')
+    db = ctx[0].db
+    ev = views.evidence(db, 1, cfg={})
+    db.execute("UPDATE patients SET disease='合成変更' WHERE project_id=1")
+    error = sqlite3.OperationalError('synthetic scan interruption')
+    if code is not None:
+        error.sqlite_errorcode = code
+    calls = []
+
+    class FaultDB:
+        @property
+        def in_transaction(self):
+            return db.in_transaction
+
+        def execute(self, sql, params=()):
+            if 'FROM messages WHERE project_id=? LIMIT 201' in sql:
+                calls.append(1)
+                raise error
+            return db.execute(sql, params)
+
+    try:
+        with pytest.raises(sqlite3.OperationalError) as caught:
+            views.allergy_posted_records(FaultDB(), ev)
+        assert caught.value is error and calls == [1]
+        assert db.in_transaction
+        assert db.execute('SELECT disease FROM patients WHERE project_id=1').fetchone()[0] == '合成変更'
+    finally:
+        db.rollback()
+    assert db.execute('SELECT disease FROM patients WHERE project_id=1').fetchone()[0] != '合成変更'
+
+
+def test_allergy_source_scan_known_schema_error_stays_unconfirmed(ctx):
+    _seed(ctx, 1, 'アレルギー: 本人は合成薬のアレルギーがある。')
+    db = ctx[0].db
+    ev = views.evidence(db, 1, cfg={})
+    db.execute('BEGIN')
+    error = sqlite3.OperationalError('synthetic missing schema')
+    error.sqlite_errorcode = sqlite3.SQLITE_ERROR
+    calls = []
+
+    class FaultDB:
+        @property
+        def in_transaction(self):
+            return db.in_transaction
+
+        def execute(self, sql, params=()):
+            if 'FROM messages WHERE project_id=? LIMIT 201' in sql:
+                calls.append(1)
+                raise error
+            return db.execute(sql, params)
+
+    try:
+        assert views.allergy_posted_records(FaultDB(), ev) == []
+        assert calls == [1] and db.in_transaction
+    finally:
+        db.rollback()
+
+
+def test_allergy_source_missing_column_stays_unconfirmed_before_source_read(ctx):
+    _seed(ctx, 1, 'アレルギー: 本人は合成薬のアレルギーがある。')
+    db = ctx[0].db
+    ev = views.evidence(db, 1, cfg={})
+    db.execute('BEGIN')
+    source_reads = []
+
+    class OldSchemaDB:
+        @property
+        def in_transaction(self):
+            return db.in_transaction
+
+        def execute(self, sql, params=()):
+            if sql == 'PRAGMA table_info(messages)':
+                return [row for row in db.execute(sql, params) if row[1] != 'body_html']
+            source_reads.append(sql)
+            return db.execute(sql, params)
+
+    try:
+        assert views.allergy_posted_records(OldSchemaDB(), ev) == []
+        assert not source_reads and db.in_transaction
+    finally:
+        db.rollback()
 
 
 def test_source_count_above_limit_fails_closed(ctx):

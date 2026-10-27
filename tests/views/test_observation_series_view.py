@@ -1,5 +1,6 @@
 """Synthetic end-to-end observation views on the caller's DB snapshot."""
 from dataclasses import replace
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -89,6 +90,45 @@ def test_changed_original_and_limited_source_checks_remain_unconfirmed(ctx):
     changed = views.observations(ctx.db, ev)
     assert changed["source_checks"]["unavailable"] == 1
     assert all(record["items"][0]["message_id"] != 2 for series in changed["series"] for record in series["records"])
+
+
+def test_embedded_nul_never_returns_large_original_and_preserves_scope_and_limits(ctx):
+    body = '本人は2026-10-01の空腹時の採血 Cr 1.0 mg/dL。'
+    for mid in (1, 2, 3):
+        seed(ctx, mid, body)
+    ev = views.evidence(ctx.db, 1, cfg={})
+    items = [item for item in ev['items'] if item.get('category') == 'observations'
+             and item.get('message_id') in (1, 2, 3)]
+    assert len(items) == 3
+    items.sort(key=lambda item: item['message_id'])
+    ctx.ensure_patient(2)
+    ctx.save_messages([_message(4, pid=2, body=body)], project_id=2)
+    foreign_hash = _hash_of(ctx, 4)
+    ev['items'] = items + [{**items[0], 'message_id': 4, 'content_hash': foreign_hash}]
+    huge = 'x\0' + 'A' * 100_000
+    ctx.db.execute('UPDATE messages SET body_text=? WHERE project_id=1 AND message_id=2', (huge,))
+    ctx.db.execute('UPDATE messages SET body_html=? WHERE project_id=1 AND message_id=3', (huge,))
+    returned = []
+
+    def inspect(cursor, values):
+        names = tuple(col[0] for col in cursor.description or ())
+        if names == ('message_id', 'content_hash', 'body_text', 'body_html'):
+            returned.append(values[0])
+        return sqlite3.Row(cursor, values)
+
+    ctx.db.row_factory = inspect
+    try:
+        result = views.observations(ctx.db, ev)
+        limited = views.observations(ctx.db, ev, source_limit=2)
+    finally:
+        ctx.db.row_factory = sqlite3.Row
+    assert returned == [1, 1]
+    assert result['source_checks'] == {'eligible': 4, 'selected': 4, 'verified': 1,
+                                       'unavailable': 3, 'limited': False}
+    assert limited['source_checks'] == {'eligible': 4, 'selected': 2, 'verified': 1,
+                                        'unavailable': 1, 'limited': True}
+    assert len(result['series']) == 1
+    assert all(record['items'][0]['message_id'] == 1 for series in result['series'] for record in series['records'])
 
 
 @pytest.mark.parametrize("body,name,value,unit", [

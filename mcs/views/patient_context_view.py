@@ -316,7 +316,15 @@ def allergy_posted_records(db, ev):
                                 r"[一-龯々ァ-ヶーA-Za-z0-9]{1,30}(?:の)?アレルギー(?:が|は)"
                                 r"(?:ある|あります)(?:[。]\s*)?", body)):
         return []
-    source = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=? AND body_state='full'",
+    columns = {row[1] for row in db.execute('PRAGMA table_info(messages)')}
+    if not {'project_id', 'message_id', 'content_hash', 'posted_at', 'posted_at_ts', 'sender_name',
+            'body_state', 'body_text', 'body_html'} <= columns:
+        return []
+    source = db.execute("SELECT project_id,message_id,content_hash,posted_at,posted_at_ts,sender_name,"
+                        "body_state,body_text,body_html FROM messages "
+                        "WHERE project_id=? AND message_id=? AND body_state='full' "
+                        "AND length(body_text)<=3000 AND length(body_html)<=12000 "
+                        "AND instr(body_text,char(0))=0 AND instr(body_html,char(0))=0",
                         (pid, fact["message_id"])).fetchone()
     if source is None:
         return []
@@ -329,10 +337,16 @@ def allergy_posted_records(db, ev):
         return []
     try:
         rows = db.execute("SELECT message_id,body_state,content_hash,"
-                          "CASE WHEN length(body_text)<=3000 THEN body_text END AS body_text,"
-                          "CASE WHEN length(body_html)<=12000 THEN body_html END AS body_html "
+                          "CASE WHEN length(body_text)<=3000 AND instr(body_text,char(0))=0 "
+                          "THEN body_text END AS body_text,"
+                          "CASE WHEN length(body_html)<=12000 AND instr(body_html,char(0))=0 "
+                          "THEN body_html END AS body_html "
                           "FROM messages WHERE project_id=? LIMIT 201", (pid,)).fetchall()
-    except sqlite3.OperationalError:
+    except sqlite3.OperationalError as error:
+        code = getattr(error, 'sqlite_errorcode', None)
+        if type(code) is not int or code & 0xff in (
+                sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+            raise
         return []
     if not rows or len(rows) > 200:
         return []
@@ -525,7 +539,8 @@ def observations(db, ev, *, source_limit=50) -> dict:
         rows = db.execute("SELECT message_id,content_hash,body_text,body_html FROM messages "
                           "WHERE project_id=? AND body_state='full' AND message_id IN "
                           "(SELECT value FROM json_each(?)) AND length(body_text)<=20000 "
-                          "AND length(body_html)<=80000", (project_id, json.dumps(ids)))
+                          "AND length(body_html)<=80000 AND instr(body_text,char(0))=0 "
+                          "AND instr(body_html,char(0))=0", (project_id, json.dumps(ids)))
         wanted = set(selected)
         for mid, digest, body, html in rows:
             key = (mid, digest)
