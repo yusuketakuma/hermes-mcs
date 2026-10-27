@@ -1920,7 +1920,19 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
         with ledger.db:
             if not ledger.db.in_transaction:
                 ledger.db.execute("BEGIN IMMEDIATE")
-            outcome = _replace_current_tx(ledger, r, content, ctx, integrity, qc_fix, extra_meta)
+            witness = []
+            outcome = _replace_current_tx(ledger, r, content, ctx, integrity, qc_fix, extra_meta,
+                                          result_witness=witness)
+            if outcome in ("held", "written"):
+                if any(key not in r for key in ("project_id", "parent_id", "posted_at", "posted_at_ts")):
+                    source = ledger.db.execute("SELECT * FROM messages WHERE message_id=?", (r["message_id"],)).fetchone()
+                    if source is None:
+                        raise RuntimeError("extract_source_changed_during_write")
+                    r = {**dict(source), **r}
+                extraction_refresh.mark_history_change_tx(ledger.db, r["project_id"], r["message_id"])
+                _verify_atomic_witness(ledger.db, r, witness)
+                if outcome == "written":
+                    _verify_unique_llm_current(ledger.db, r, witness[0]['artifact_id'])
     except CloudFallback:
         if isinstance(r, dict) and r.get("_cloud_discard"):
             r["_cloud_discard"]()
@@ -2118,14 +2130,15 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
 
 def _rerender_cards(ledger, project_id, message_id) -> None:
     """Queue the current extraction or progress on its existing source-bound card."""
+    db = getattr(ledger, "db", None)
     try:
-        allowed = semantic_store.refresh_cards_allowed(getattr(ledger, "db", None), project_id, message_id)
-    except sqlite3.Error:
-        return  # presentation failure cannot turn a committed result into a failed extraction
-    if not allowed:
-        return
-    extraction_refresh.refresh_extraction_cards(ledger, project_id, message_id,
-                                                cfg=load_config())
+        if semantic_store.refresh_cards_allowed(db, project_id, message_id):
+            extraction_refresh.refresh_extraction_cards(ledger, project_id, message_id, cfg=load_config())
+    except Exception as error:
+        if db is None or getattr(db, "in_transaction", True):
+            raise
+        # The extraction is committed and the card sweep retries its presentation.
+        print(json.dumps({"event": "card_rerender_failed", "error": type(error).__name__}), file=sys.stderr)
 
 
 def _thin_pending_sql() -> str:
@@ -2863,6 +2876,11 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                 _delete_checkpoint_keys_tx(ledger.db, r, context, used_keys)
                 _verify_atomic_witness(ledger.db, r, witness)
                 _verify_unique_llm_current(ledger.db, r, witness[0]['artifact_id'])
+            if outcome in ("held", "written"):
+                extraction_refresh.mark_history_change_tx(ledger.db, r["project_id"], r["message_id"])
+                _verify_atomic_witness(ledger.db, r, witness)
+                if outcome == "written":
+                    _verify_unique_llm_current(ledger.db, r, witness[0]['artifact_id'])
     except _CheckpointChanged:
         return "rejected"
     except CloudFallback:
@@ -2885,6 +2903,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
     if not replay and ledger.db.in_transaction:
         return False
     chunk_size = _CHUNK_SIZE if chunk_size is None else chunk_size
+    inserted_witness = None
     with _checkpoint_write(ledger.db, replay=replay):
         if not ledger.db.in_transaction:
             ledger.db.execute("BEGIN IMMEDIATE")
@@ -2972,6 +2991,14 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                 if guarded:
                     r["_checkpoint_conflict"] = True
                 return False
+            inserted_row = ledger.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (inserted_id,)).fetchone()
+            if (inserted_row is None or inserted_row['kind'] != 'extract_llm_chunk'
+                    or inserted_row['project_id'] != r['project_id']
+                    or inserted_row['message_id'] != r['message_id']
+                    or inserted_row['content'] != content or inserted_row['model'] != meta['actual_model']
+                    or inserted_row['meta'] != json.dumps(meta, ensure_ascii=False)):
+                raise RuntimeError('extract_insert_unverified')
+            inserted_witness = dict(inserted_row)
             if guarded:
                 latest = ledger.db.execute(
                     "SELECT artifact_id,project_id,content,model,meta FROM artifacts "
@@ -2988,6 +3015,11 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                         r["_checkpoint_conflict"] = True
                         return False
                     r["_checkpoint_identity"][key] = inserted
+        if inserted_witness is not None:
+            extraction_refresh.mark_history_change_tx(ledger.db, r['project_id'], r['message_id'])
+            _verify_atomic_witness(ledger.db, r, [inserted_witness])
+            if lease is not None and not _owns_current_source(ledger, r, lease):
+                raise RuntimeError('extract_source_changed_during_write')
     _rerender_cards(ledger, r["project_id"], r["message_id"])
     return True
 

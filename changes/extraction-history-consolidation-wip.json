@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "抽出後の履歴通知の更新予定を保存",
+  "summary": "抽出結果と同じトランザクションで初回履歴カードの更新予定を記録する修正を保存しました。統合後の障害・再開試験は未完了です。",
+  "upgrade": "本番への適用は行っていません。適用には受入と通知workerの更新が必要です。コード変更により抽出候補の再評価が必要になる場合があります。",
+  "details": [
+    "更新予定を書いた後の整合性を照合し、通知の表示だけが失敗した場合は既存の再試行経路へ残します。"
+  ],
+  "refs": [
+    "mcs/notify/extraction_refresh.py",
+    "mcs/extract/llm/extract_llm.py",
+    "tests/notify/test_extraction_history_durable.py"
+  ]
+}
