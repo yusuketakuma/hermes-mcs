@@ -16,7 +16,7 @@
 
 | 場面 | これまで | この版 |
 |---|---|---|
-| 収集エラーの警報が出た | 「その他・原因未分類」が多く、すぐ回復する時間切れや通信の失敗でも1回で警報が出る | 18分類ごとに何が起きたかと対処を表示し、自然に回復しやすい異常は同じ異常が3回続いたときに通知 |
+| 収集エラーの警報が出た | 原因の分類は9種で対処の案内がなく、すぐ回復する時間切れや通信の失敗でも1回で警報が出る | 18分類ごとに何が起きたかと対処を表示し、自然に回復しやすい異常は同じ異常が3回続いたときに通知 |
 | DBやバックアップの容量が気になる | health.jsonでは容量の内訳と保守の遅れが分からない | DB本体の使用量・空きページ量、バックアップの種類別容量、日次・週次保守の経過時間を確認でき、日次保守が2日以上完了しないと警告 |
 | 返信カードの本文・操作を使う | 同じ内容の返信が別の投稿の本文を再利用することがある | 本文・薬剤詳細・タスク・スタンプなどを、そのカードの投稿に合わせる |
 
@@ -921,6 +921,12 @@
 - 4000バイトは公式の4000文字より保守的な制限として採用する。実配送ではこの上限内でも長さ超過が再発しており、原因は未確定。合成試験の合格を、全件の実配送完了とは扱わない。
 - 根拠: mcs/notify/notify_parts.py、mcs/notify/presentation/present_slack.py、mcs/notify/notify_cards.py、adapters/slack/delivery.py、tests/adapters/slack/test_slack_body_limits_hotfix.py
 
+#### 遠隔再起動用の資格情報の子プロセスは終了を確認できるまで待つ
+
+- 再利用された可能性のあるPIDへシグナルを送らない既存の停止条件を保ちます。
+- 開発中に一度加えた、終了を確認できない子プロセスを処理中から外す変更は、公開前に取り消しました。受付済みの閲覧操作への回答に関する修正は維持します。
+- 根拠: mcs_standalone/restart_credential.py、mcs/ops/release_apply_owner.py、tests/adapters/standalone/test_delivery_runtime_review_fixes.py
+
 #### 独立実行の再接続・停止時に配送処理の完了を待つ
 
 - 実際のSDK接続と配送Supervisorの準備完了を両方確認してから、新しい配送処理を許可します。
@@ -928,14 +934,12 @@
 - 予約が閉じた後も開始済み配送のjournalとreceiptを確定し、次の本文・添付の送信は開始しません。結果不明の配送を成功扱いしたり、自動再送したりしません。
 - 根拠: mcs_standalone/host.py、adapters/common/worker.py、adapters/slack/tasks.py、adapters/discord/tasks.py、adapters/slack/standalone.py、adapters/discord/standalone.py
 
-#### 独立実行の受付停止中の閲覧回答と資格情報の終了処理を修正
+#### 独立実行の受付停止中の閲覧回答を修正
 
 - 受付ゲートに、受付済みの処理だけを通す呼出しを追加しました。この呼出しはゲートが閉じていても拒否されず、終了待ちの件数には数えられます。
 - この呼出しは、Slackの結果通知の再送処理と、Discordの回答用トークン登録に使います。Discordでは、受付が閉じる途中に完成した即時回答も、受付停止の案内ではなく回答として届きます。
 - 新しい操作は、これまでどおり受付停止中は拒否します。
-- 資格情報の子プロセスが別の処理に回収されると、その終了コードは得られません。この場合も終了処理を完了させます。
-- 資格情報の受け渡しは、これまでどおり失敗として拒否します。発生経路は確認されていないため、予防のための修正です。
-- 根拠: adapters/common/commands.py、adapters/slack/actions.py、adapters/discord/actions.py、mcs_standalone/restart_credential.py
+- 根拠: adapters/common/commands.py、adapters/slack/actions.py、adapters/discord/actions.py
 
 #### 独立実行の操作受付と終了待ちを実処理に一致
 
