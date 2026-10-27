@@ -176,14 +176,17 @@ def project(project_id, items, *, coverage=None):
                          "source_validation": "caller_required"}}
 
 
-def _source_items(project_id, mid, digest, body, posted, remaining):
+def _source_items(project_id, mid, digest, body, posted, remaining, *, start_offset=0):
     """Build the same conservative sentence assertions for both readers."""
     sentences = [match for match in _SENTENCE.finditer(body) if match.group().strip()]
+    if start_offset and not any(match.end() == start_offset and _has_independent_action(match.group())
+                                for match in sentences):
+        raise ValueError("invalid_intervention_cursor")
     items = []
     truncated = False
     for match in sentences:
         quote = match.group()
-        if not _has_independent_action(quote):
+        if match.start() < start_offset or not _has_independent_action(quote):
             continue
         if len(items) >= remaining:
             truncated = True
@@ -236,6 +239,24 @@ def compact_source_record(project_id, message_id, content_hash, body, posted_at_
     coverage.update(state="observed", records_truncated=truncated,
                     candidates=projected["coverage"]["candidates"], unknown=projected["coverage"]["unknown"])
     return result
+
+
+def _source_problem(mid, body_state, digest, body_len, html_len, body_nul, html_nul, body, html):
+    """Classify a source without returning original content on rejection."""
+    if body_state == "deleted":
+        return "deleted"
+    if body_state != "full":
+        return "incomplete"
+    if body_nul or html_nul:
+        return "invalid_source"
+    if ((type(body_len) is int and body_len > _MAX_BODY_CHARS)
+            or (type(html_len) is int and html_len > _MAX_HTML_CHARS)):
+        return "oversize"
+    if (type(mid) is not int or mid <= 0 or not valid_hash(digest)
+            or not isinstance(body, str) or not isinstance(html, str)
+            or hashlib.sha256(html.encode()).hexdigest() != digest or html_to_text(html) != body):
+        return "invalid_source"
+    return None
 
 
 def read_source_schedule(db, project_id, *, limit=200, max_records=200):
@@ -293,23 +314,9 @@ def read_source_schedule(db, project_id, *, limit=200, max_records=200):
         if mid is None:
             continue
         coverage["messages_examined"] += 1
-        if body_state == "deleted":
-            coverage["deleted"] += 1
-            continue
-        if body_state != "full":
-            coverage["incomplete"] += 1
-            continue
-        if body_nul or html_nul:
-            coverage["invalid_source"] += 1
-            continue
-        if ((type(body_len) is int and body_len > _MAX_BODY_CHARS)
-                or (type(html_len) is int and html_len > _MAX_HTML_CHARS)):
-            coverage["oversize"] += 1
-            continue
-        if (type(mid) is not int or mid <= 0 or not valid_hash(digest)
-                or not isinstance(body, str) or not isinstance(html, str)
-                or hashlib.sha256(html.encode()).hexdigest() != digest or html_to_text(html) != body):
-            coverage["invalid_source"] += 1
+        problem = _source_problem(mid, body_state, digest, body_len, html_len, body_nul, html_nul, body, html)
+        if problem:
+            coverage[problem] += 1
             continue
         source_items, truncated = _source_items(project_id, mid, digest, body, posted, max_records - len(items))
         items.extend(source_items)
@@ -320,4 +327,152 @@ def read_source_schedule(db, project_id, *, limit=200, max_records=200):
     result["records"] = [{**record, "assertion_only": True} for record in projected["records"]]
     coverage["candidates"] = projected["coverage"]["candidates"]
     coverage["unknown"] = projected["coverage"]["unknown"]
+    return result
+
+
+def _source_cursor_fingerprint(db, mid, digest, posted):
+    """Bind a partial position to body, posting time and source occurrence."""
+    columns = {row[1]: row for row in db.execute("PRAGMA table_info(message_revisions)")}
+    if (not {"message_id", "seq"} <= columns.keys()
+            or any(str(columns[name][2]).upper() != "INTEGER" or columns[name][3] != 1
+                   or columns[name][5] != position
+                   for name, position in (("message_id", 1), ("seq", 2)))):
+        raise ValueError("intervention_cursor_revision_unavailable")
+    # The ledger uses implicit occurrence 1 for a source with no revision row.
+    revision = db.execute("SELECT COALESCE(MAX(seq),1) FROM message_revisions WHERE message_id=?",
+                          (mid,)).fetchone()[0]
+    if type(revision) is not int or not 0 < revision < 2**63:
+        raise ValueError("intervention_cursor_revision_unavailable")
+    return hashlib.sha256((digest + '\0' + repr(posted) + '\0' + str(revision)).encode()).hexdigest()
+
+
+def _page_cursor(project_id, mid, *, consistency, offset=0, source_fp=None):
+    return {"version": 1, "project_id": project_id, "message_id": mid,
+            "offset": offset, "source_fp": source_fp, "consistency": consistency}
+
+
+def read_source_schedule_page(db, project_id, *, cursor=None, limit=200, max_records=200,
+                              consistency="snapshot"):
+    """Read one patient-scoped page on the caller-owned, authorized snapshot.
+
+    In ``snapshot`` mode the caller must retain the same snapshot and bind its
+    generation to every page. In ``page`` mode each click may use a new snapshot;
+    changes between pages are not checked and traversal is not a point-in-time
+    history. In both modes the caller reauthorizes each page, the cursor is a
+    position rather than authorization, and partial-message continuation checks
+    the source, posting time and revision occurrence. Per-page messages_examined
+    includes a partially resumed message again; adding these counts across pages
+    does not produce a distinct-message total. No result proves fetch or
+    extraction completeness.
+    """
+    if not db.in_transaction:
+        raise ValueError("intervention_snapshot_required")
+    if (type(project_id) is not int or project_id <= 0 or type(limit) is not int
+            or not 1 <= limit <= 1000 or type(max_records) is not int
+            or not 1 <= max_records <= 1000 or consistency not in ("snapshot", "page")):
+        raise ValueError("invalid_intervention_input")
+    if cursor is not None:
+        if (not isinstance(cursor, dict)
+                or set(cursor) != {"version", "project_id", "message_id", "offset", "source_fp", "consistency"}
+                or cursor["consistency"] != consistency
+                or type(cursor["version"]) is not int or cursor["version"] != 1
+                or type(cursor["project_id"]) is not int or cursor["project_id"] != project_id
+                or type(cursor["message_id"]) is not int or not -(2**63) <= cursor["message_id"] < 2**63
+                or type(cursor["offset"]) is not int or not 0 <= cursor["offset"] <= _MAX_BODY_CHARS
+                or cursor["source_fp"] is not None and not valid_hash(cursor["source_fp"])
+                or cursor["source_fp"] is None and cursor["offset"] != 0):
+            raise ValueError("invalid_intervention_cursor")
+    coverage = {"state": "unknown", "fetch_state": "unknown", "messages_examined": 0,
+                "incomplete": 0, "deleted": 0, "invalid_source": 0, "oversize": 0,
+                "records_truncated": False, "tail_reached": None,
+                "source_complete": None, "extraction": "not_assessed",
+                "relations": "not_assessed", "recognition": "exact_sentences_only",
+                "snapshot_consistency": ("caller_same_snapshot_required" if consistency == "snapshot"
+                                         else "page_only_changes_unverified")}
+    result = {"project_id": project_id, "records": [], "next_cursor": None, "coverage": coverage}
+    needed = {"patients": {"project_id", "fetch_state", "fetch_reason", "is_archived"},
+              "messages": {"project_id", "message_id", "body_html", "body_text", "body_state",
+                           "content_hash", "posted_at_ts"}}
+    for table, required in needed.items():
+        columns = {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+        if not required <= columns:
+            coverage["state"] = "schema_unknown"
+            return result
+    patient = db.execute("SELECT fetch_state,fetch_reason,is_archived FROM patients WHERE project_id=?",
+                         (project_id,)).fetchone()
+    if patient is None:
+        coverage["state"] = "scope_unknown"
+        return result
+    fetch_state, reason, archived = patient
+    if archived != 0 or reason in ("forbidden", "permission_denied", "access_revoked") or fetch_state == "forbidden":
+        coverage["state"] = "scope_unavailable"
+        return result
+    if fetch_state in ("complete", "incomplete", "failed", "pending"):
+        coverage["fetch_state"] = fetch_state
+    coverage["state"] = "observed"
+    resume = cursor is not None and cursor["source_fp"] is not None
+    predicate = (" AND m.message_id<=?" if resume else " AND m.message_id<?") if cursor is not None else ""
+    params = [_MAX_BODY_CHARS, _MAX_HTML_CHARS, _MAX_BODY_CHARS, _MAX_HTML_CHARS, project_id]
+    if cursor is not None:
+        params.append(cursor["message_id"])
+    params.append(limit + 1)
+    source_cursor = db.execute(
+        "SELECT m.message_id,m.body_state,m.content_hash,m.posted_at_ts,length(m.body_text),length(m.body_html),"
+        "instr(m.body_text,char(0)),instr(m.body_html,char(0)),"
+        "CASE WHEN length(m.body_text)<=? AND length(m.body_html)<=? "
+        "AND instr(m.body_text,char(0))=0 AND instr(m.body_html,char(0))=0 THEN m.body_text END,"
+        "CASE WHEN length(m.body_text)<=? AND length(m.body_html)<=? "
+        "AND instr(m.body_text,char(0))=0 AND instr(m.body_html,char(0))=0 THEN m.body_html END "
+        "FROM messages m WHERE m.project_id=?" + predicate + " ORDER BY m.message_id DESC LIMIT ?",
+        params)
+    next_cursor, processed, last_mid = None, 0, None
+    coverage["candidates"] = coverage["unknown"] = 0
+    try:
+        while processed < limit:
+            row = source_cursor.fetchone()
+            if row is None:
+                if resume and processed == 0:
+                    raise ValueError("intervention_cursor_source_changed")
+                break
+            mid, body_state, digest, posted, body_len, html_len, body_nul, html_nul, body, html = row
+            if resume and processed == 0 and mid != cursor["message_id"]:
+                raise ValueError("intervention_cursor_source_changed")
+            coverage["messages_examined"] += 1
+            processed += 1
+            last_mid = mid
+            problem = _source_problem(mid, body_state, digest, body_len, html_len, body_nul, html_nul, body, html)
+            if resume and processed == 1:
+                if problem or _source_cursor_fingerprint(db, mid, digest, posted) != cursor["source_fp"]:
+                    raise ValueError("intervention_cursor_source_changed")
+                offset = cursor["offset"]
+            else:
+                offset = 0
+            if problem:
+                coverage[problem] += 1
+                continue
+            page_items, truncated = _source_items(project_id, mid, digest, body, posted,
+                                                   max_records - len(result["records"]), start_offset=offset)
+            if page_items:
+                projected = project(project_id, page_items)
+                result["records"].extend({**record, "assertion_only": True} for record in projected["records"])
+                coverage["candidates"] += projected["coverage"]["candidates"]
+                coverage["unknown"] += projected["coverage"]["unknown"]
+            if truncated:
+                coverage["records_truncated"] = True
+                next_offset = page_items[-1]["evidence_span"][1] if page_items else offset
+                next_cursor = _page_cursor(project_id, mid, consistency=consistency, offset=next_offset,
+                                           source_fp=_source_cursor_fingerprint(db, mid, digest, posted))
+                break
+            if len(result["records"]) == max_records:
+                if source_cursor.fetchone() is not None:
+                    coverage["records_truncated"] = True
+                    next_cursor = _page_cursor(project_id, mid, consistency=consistency)
+                break
+        else:
+            if source_cursor.fetchone() is not None:
+                next_cursor = _page_cursor(project_id, last_mid, consistency=consistency)
+    finally:
+        source_cursor.close()
+    coverage["tail_reached"] = next_cursor is None
+    result["next_cursor"] = next_cursor
     return result

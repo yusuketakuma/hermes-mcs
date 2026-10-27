@@ -800,7 +800,8 @@ def _bare_quote(text: str, category) -> str:
     return text
 
 
-def patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0):
+def patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0,
+                         intervention_history=False, intervention_cursor=None):
     """Private patient-context views as source-bound rows: each row keeps the original
     quotes and one compact source line (when · who · which post); consecutive items of
     one post in one group share that line. Every row carries project_id so the
@@ -931,7 +932,12 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
         # a deleted post shows only when its deletion was observed, never its old text
         add_deleted(view["by_discovery"]["deleted"])
     elif section in ("previsit", "handoff"):
-        view = views.previsit(db, ev, now) if section == "previsit" else views.handoff(db, ev)
+        if section == "previsit":
+            view = (views.previsit(db, ev, now, intervention_history=True,
+                                   intervention_cursor=intervention_cursor)
+                    if intervention_history else views.previsit(db, ev, now))
+        else:
+            view = views.handoff(db, ev)
         recent = view.get("recent", {})
         labels = dict(DISCOVERY_LABELS)
         for kind, items in recent.items():
@@ -978,7 +984,8 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
             groups["future"].sort(key=lambda row: (row["event_day"], row.get("role_text") or "",
                                                    -row["message_id"]))
             if groups["future"]:
-                head.append("介入予定の記載: 日付順（同日は職種順、同じ職種は投稿番号の降順）")
+                head.append(("介入予定の記載: この範囲を日付順" if intervention_history
+                             else "介入予定の記載: 日付順") + "（同日は職種順、同じ職種は投稿番号の降順）")
             add(groups["future"], "今後の介入予定の記載（変更未照合）")
             add(groups["date_unknown"], "介入予定の記載（日付未確認・変更未照合）")
             add(groups["other"], "介入に関する記載（変更未照合）")
@@ -992,10 +999,12 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
                     head.append(f"介入の記載: 本文を確認できない投稿 {incomplete}件")
                 if coverage["deleted"]:
                     head.append(f"介入の記載: 削除済みの投稿 {coverage['deleted']}件")
-                if coverage["truncated"] or coverage["records_truncated"]:
+                if coverage.get("truncated") or coverage["records_truncated"]:
                     head.append("介入の記載: 表示対象を一部に限定")
                 if coverage["fetch_state"] != "complete" or coverage["source_complete"] is not True:
                     head.append("介入の記載: 履歴の取得完了は未確認")
+                if intervention_history:
+                    head.append("介入の履歴: ページごとに原文を確認。ページ間の変更は未照合")
             else:
                 head.append("介入の記載: 対象範囲を確認できません")
         if view.get("next_planned"):
@@ -1082,6 +1091,10 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
     return {"title": title, "layout": "patient_context", "head": head,
             "items": shown,
             "notes": list(view.get("notes", [])) + status,
-            "empty": ("解析が完了していないため、該当する記録の有無は未確認です"
+            "empty": ("介入の記載の有無は確認できません"
+                      if intervention_history
+                      else "解析が完了していないため、該当する記録の有無は未確認です"
                       if inference and not inference.get("complete") else "この範囲で該当する記録は見つかりません"),
-            "page": page, "pages": pages}
+            "page": page, "pages": pages,
+            **({"intervention_next_cursor": view["interventions"]["next_cursor"]}
+               if section == "previsit" and intervention_history else {})}

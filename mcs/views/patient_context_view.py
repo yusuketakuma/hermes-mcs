@@ -476,14 +476,16 @@ def replies(db, project_id) -> dict:
         "next_planned": roll.get("next_planned")}
 
 
-def previsit(db, ev, now, *, days=7) -> dict:
+def previsit(db, ev, now, *, days=7, intervention_history=False, intervention_cursor=None) -> dict:
     """訪問前の確認ノート: recent changes, then every written item to check — written
     follow-ups first, then requests with no reply found; distinct assertions of one post remain.
     Only quotes what was written — no new clinical instruction is made."""
-    from intervention_schedule import read_source_schedule
+    from intervention_schedule import read_source_schedule, read_source_schedule_page
 
     talk = replies(db, ev["project_id"])
-    interventions = read_source_schedule(db, ev["project_id"])
+    interventions = (read_source_schedule_page(db, ev["project_id"], cursor=intervention_cursor,
+                                               consistency="page") if intervention_history
+                     else read_source_schedule(db, ev["project_id"]))
     picked = {"written_checks": [], "unanswered": []}
     for group, rows in (("written_checks", [i for i in ev["items"] if i["category"] == "followup"]),
                         # an unverified request candidate is not a written request awaiting a reply

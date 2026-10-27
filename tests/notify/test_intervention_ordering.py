@@ -38,6 +38,36 @@ def test_empty_patient_history_remains_unconfirmed_without_completion_proof(ctx,
     assert all(row["project_id"] == 2 for row in result["items"])
 
 
+def test_intervention_history_unavailable_does_not_claim_absent_records(ctx, monkeypatch):
+    import intervention_schedule
+
+    def unavailable(_db, project_id, **kwargs):
+        return {"project_id": project_id, "records": [], "next_cursor": None,
+                "coverage": {"state": "scope_unavailable"}}
+    monkeypatch.setattr(intervention_schedule, "read_source_schedule_page", unavailable)
+    result = notify_views.patient_context_list(ctx.db.db, 1, "previsit", cfg={}, since=T0, now=T0,
+                                               intervention_history=True)
+    assert result["empty"] == "介入の記載の有無は確認できません"
+    assert "介入の記載: 対象範囲を確認できません" in result["head"]
+
+
+@pytest.mark.parametrize("problem", ["incomplete", "invalid_source", "oversize"])
+def test_intervention_history_missing_source_does_not_claim_absent_records(ctx, monkeypatch, problem):
+    import intervention_schedule
+
+    def missing(_db, project_id, **kwargs):
+        coverage = {"state": "observed", "messages_examined": 1, "fetch_state": "complete",
+                    "source_complete": None, "incomplete": 0, "deleted": 0, "invalid_source": 0,
+                    "oversize": 0, "records_truncated": False}
+        coverage[problem] = 1
+        return {"project_id": project_id, "records": [], "next_cursor": None, "coverage": coverage}
+    monkeypatch.setattr(intervention_schedule, "read_source_schedule_page", missing)
+    result = notify_views.patient_context_list(ctx.db.db, 1, "previsit", cfg={}, since=T0, now=T0,
+                                               intervention_history=True)
+    assert result["empty"] == "介入の記載の有無は確認できません"
+    assert "介入の記載: 本文を確認できない投稿 1件" in result["head"]
+
+
 @pytest.mark.parametrize("fetch_state,source_complete,warning", [
     ("complete", True, False), ("complete", None, True),
     ("complete", False, True), ("incomplete", True, True),

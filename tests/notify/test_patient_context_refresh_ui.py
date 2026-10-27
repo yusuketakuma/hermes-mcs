@@ -6,6 +6,7 @@ import pytest
 import notify_actions
 import notify_views
 from notify_testkit import CFG, NOW, ORIGIN, _delivered_card, _token_for, led, pinned_clock
+from semantic_testkit import _message
 
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
@@ -123,6 +124,49 @@ def test_pagination_preserves_quotes_and_sources(led, monkeypatch):
     assert len(second["list"]["items"]) == 3
     assert "#9）" in second["list"]["items"][1]["text"]
     assert second["list"]["items"][2]["group"] == "関係者・事業者（投稿者から取得）"
+
+
+def test_intervention_history_reaches_older_posts_without_crossing_patient_scope(led):
+    spec = _delivered_card(led)
+    older = "看護師が2026年11月3日に本人を訪問する予定です。"
+    led.save_messages([_message(1000, body=older)] +
+                      [_message(mid, body=(f"看護師が2026年11月{mid - 1189}日に本人を訪問する予定です。"
+                                           if mid >= 1190 else "完全合成の一般連絡です。"))
+                       for mid in range(1001, 1202)],
+                      project_id=1)
+    led.ensure_patient(2)
+    led.save_messages([_message(2000, pid=2, body="医師が2026年11月3日に本人を往診する予定です。")], project_id=2)
+    previsit = open_section(led, spec, entry=2)
+    start = next(button for button in previsit["navigation"] if button["label"] == "介入の履歴を見る")
+    history = click(led, start["token"], now=NOW + 1)
+    assert "ページ間の変更は未照合" in str(history["list"]["head"])
+    step = 2
+    while any(button["label"] == "次の8件" for button in history["navigation"]):
+        assert len(history["navigation"]) <= 5
+        assert not any(button["label"] == "さらに古い投稿を確認" for button in history["navigation"])
+        next_page = next(button for button in history["navigation"] if button["label"] == "次の8件")
+        history = click(led, next_page["token"], now=NOW + step)
+        step += 1
+    button = next(button for button in history["navigation"] if button["label"] == "さらに古い投稿を確認")
+    assert len(history["navigation"]) <= 5
+    assert click(led, button["token"], actor="discord:2002", now=NOW + 2)["error"] == "actor_mismatch"
+    older_page = click(led, button["token"], now=NOW + step)
+    assert older in str(older_page["list"]["items"])
+    assert "医師が2026年11月3日に本人を往診する予定です。" not in str(older_page["list"]["items"])
+    assert "履歴の取得完了は未確認" in str(older_page["list"]["head"])
+
+
+def test_intervention_cursor_from_another_patient_is_rejected(led):
+    spec = _delivered_card(led)
+    previsit = open_section(led, spec, entry=2)
+    token = next(button["token"] for button in previsit["navigation"] if button["label"] == "介入の履歴を見る")
+    row = led.db.execute("SELECT params FROM notification_action_tokens WHERE token=?", (token,)).fetchone()
+    params = json.loads(row[0])
+    params["intervention_cursor"] = {"version": 1, "project_id": 2, "message_id": 1,
+                                     "offset": 0, "source_fp": None, "consistency": "page"}
+    led.db.execute("UPDATE notification_action_tokens SET params=? WHERE token=?", (json.dumps(params), token))
+    led.db.commit()
+    assert click(led, token, now=NOW + 1)["error"] == "intervention_cursor_changed"
 
 
 @pytest.mark.parametrize("change", [{"section": []}, {"role": {}}, {"page": -1}, {"page": True}, {"since": float("inf")}])

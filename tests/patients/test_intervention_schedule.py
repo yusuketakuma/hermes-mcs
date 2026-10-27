@@ -199,6 +199,8 @@ def source_db():
         CREATE TABLE messages(message_id INTEGER PRIMARY KEY, project_id INTEGER,
                               body_html TEXT, body_text TEXT, body_state TEXT,
                               content_hash TEXT, posted_at_ts REAL);
+        CREATE TABLE message_revisions(message_id INTEGER NOT NULL, seq INTEGER NOT NULL,
+                                       PRIMARY KEY(message_id,seq));
         INSERT INTO patients VALUES(1, 'complete', NULL, 0);
         INSERT INTO patients VALUES(2, 'complete', NULL, 0);
     """)
@@ -457,6 +459,8 @@ def test_source_reader_uses_caller_snapshot_during_concurrent_revision(tmp_path)
             CREATE TABLE messages(message_id INTEGER PRIMARY KEY, project_id INTEGER,
                                   body_html TEXT, body_text TEXT, body_state TEXT,
                                   content_hash TEXT, posted_at_ts REAL);
+            CREATE TABLE message_revisions(message_id INTEGER NOT NULL, seq INTEGER NOT NULL,
+                                           PRIMARY KEY(message_id,seq));
             INSERT INTO patients VALUES(1, 'complete', NULL, 0);
         """)
         planned = "看護師が2026年10月3日に本人を訪問する予定です。"
@@ -557,3 +561,298 @@ def test_profession_action_scan_preserves_original_overlap_rules():
 def test_compact_source_rejects_invalid_scope_or_limits(project_id, message_id, digest, limit):
     with pytest.raises(ValueError, match="invalid_intervention_input"):
         schedule.compact_source_record(project_id, message_id, digest, "本文", POSTED, max_records=limit)
+
+
+def _source_schedule_test_page(db, *args, **kwargs):
+    if not db.in_transaction:
+        db.execute("BEGIN")
+    return schedule.read_source_schedule_page(db, *args, **kwargs)
+
+
+def test_source_schedule_pages_require_the_callers_snapshot(source_db):
+    assert not source_db.in_transaction
+    with pytest.raises(ValueError, match='intervention_snapshot_required'):
+        schedule.read_source_schedule_page(source_db, 1)
+
+
+def test_source_schedule_pages_cover_over_200_posts_with_scope_and_gaps(source_db):
+    body = "看護師が2026年10月3日に本人を訪問する予定です。"
+    for mid in range(1, 206):
+        put_source(source_db, mid, 1, body)
+    put_source(source_db, 206, 2, body)
+    put_source(source_db, 40, 1, body, state="snippet")
+    put_source(source_db, 41, 1, body, state="deleted")
+    put_source(source_db, 42, 1, body, digest="0" * 64)
+    source_db.execute("UPDATE patients SET fetch_state='incomplete' WHERE project_id=1")
+    cursor, records, coverage_rows = None, [], []
+    for _ in range(100):
+        page = _source_schedule_test_page(source_db, 1, cursor=cursor, limit=17, max_records=9)
+        records.extend(page['records'])
+        coverage_rows.append(page['coverage'])
+        cursor = page['next_cursor']
+        if cursor is None:
+            break
+    else:
+        pytest.fail('pagination did not reach the end')
+    ids = [record['message_id'] for record in records]
+    assert ids == [mid for mid in range(205, 0, -1) if mid not in (40, 41, 42)]
+    assert all(record['project_id'] == 1 and record['quote'] == body for record in records)
+    assert sum(row['messages_examined'] for row in coverage_rows) == 205
+    assert sum(row['incomplete'] for row in coverage_rows) == 1
+    assert sum(row['deleted'] for row in coverage_rows) == 1
+    assert sum(row['invalid_source'] for row in coverage_rows) == 1
+    assert coverage_rows[-1]['tail_reached'] is True
+    assert all(row['source_complete'] is None and row['extraction'] == 'not_assessed'
+               and row['fetch_state'] == 'incomplete' for row in coverage_rows)
+
+
+def test_source_schedule_pages_resume_inside_one_message_without_loss(source_db):
+    sentence = "看護師が2026年10月3日に本人を訪問する予定です。"
+    body = sentence * 7
+    put_source(source_db, 1, 1, body)
+    put_source(source_db, 2, 1, body)
+    cursor, records = None, []
+    for _ in range(20):
+        page = _source_schedule_test_page(source_db, 1, cursor=cursor, limit=1, max_records=2)
+        records.extend(page['records'])
+        cursor = page['next_cursor']
+        if cursor is None:
+            break
+    else:
+        pytest.fail('pagination did not reach the end')
+    assert [(r['message_id'], r['span']) for r in records] == [
+        (mid, [index * len(sentence), (index + 1) * len(sentence)])
+        for mid in (2, 1) for index in range(7)]
+    assert all(record['state'] == 'unknown' and record['quote'] is None for record in records)
+    assert page['coverage']['tail_reached'] is True and page['coverage']['source_complete'] is None
+
+
+@pytest.mark.parametrize('change', ['body', 'posted', 'deleted', 'other_project'])
+def test_source_schedule_partial_cursor_rejects_changed_source(source_db, change):
+    body = "看護師が2026年10月3日に本人を訪問する予定です。" * 3
+    put_source(source_db, 2, 1, body)
+    first = _source_schedule_test_page(source_db, 1, limit=5, max_records=1)
+    assert first['next_cursor']['source_fp'] is not None
+    if change == 'body':
+        put_source(source_db, 2, 1, body + "改訂。")
+    elif change == 'posted':
+        source_db.execute('UPDATE messages SET posted_at_ts=posted_at_ts+86400 WHERE message_id=2')
+    elif change == 'deleted':
+        source_db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=2")
+    else:
+        source_db.execute('UPDATE messages SET project_id=2 WHERE message_id=2')
+    with pytest.raises(ValueError, match='intervention_cursor_source_changed'):
+        _source_schedule_test_page(source_db, 1, cursor=first['next_cursor'])
+
+
+def test_source_schedule_cursor_cannot_cross_patient_or_skip_into_sentence(source_db):
+    body = "看護師が2026年10月3日に本人を訪問する予定です。" * 3
+    put_source(source_db, 2, 1, body)
+    first = _source_schedule_test_page(source_db, 1, max_records=1)
+    cursor = first['next_cursor']
+    with pytest.raises(ValueError, match='invalid_intervention_cursor'):
+        _source_schedule_test_page(source_db, 2, cursor=cursor)
+    with pytest.raises(ValueError, match='invalid_intervention_cursor'):
+        _source_schedule_test_page(source_db, 1, cursor={**cursor, 'offset': 2})
+    with pytest.raises(ValueError, match='invalid_intervention_cursor'):
+        _source_schedule_test_page(source_db, 1, cursor={**cursor, 'offset': True})
+
+
+@pytest.mark.parametrize('state,reason,archived', [
+    ('forbidden', None, 0), ('complete', 'access_revoked', 0), ('complete', None, 1),
+])
+def test_source_schedule_pages_fail_closed_for_inaccessible_patient(source_db, state, reason, archived):
+    put_source(source_db, 1, 1, "看護師が2026年10月3日に本人を訪問する予定です。")
+    source_db.execute('UPDATE patients SET fetch_state=?,fetch_reason=?,is_archived=? WHERE project_id=1',
+                      (state, reason, archived))
+    result = _source_schedule_test_page(source_db, 1)
+    assert result['records'] == [] and result['next_cursor'] is None
+    assert result['coverage']['state'] == 'scope_unavailable'
+    assert result['coverage']['tail_reached'] is None
+
+
+def test_source_schedule_pages_empty_tail_is_not_history_or_analysis_completion(source_db):
+    source_db.execute("UPDATE patients SET fetch_state='complete' WHERE project_id=1")
+    page = _source_schedule_test_page(source_db, 1)
+    assert page['records'] == [] and page['next_cursor'] is None
+    assert page['coverage']['tail_reached'] is True
+    assert page['coverage']['source_complete'] is None
+    assert page['coverage']['extraction'] == 'not_assessed'
+    assert page['coverage']['relations'] == 'not_assessed'
+
+
+def test_source_schedule_pages_match_existing_reader_on_a_single_page(source_db):
+    planned = "看護師が2026年10月3日に本人を訪問する予定です。"
+    ambiguous = "家族の話です。看護師が2026年10月3日に本人を訪問する予定です。"
+    put_source(source_db, 3, 1, planned)
+    put_source(source_db, 2, 1, ambiguous)
+    put_source(source_db, 1, 1, planned, state='deleted')
+    old = schedule.read_source_schedule(source_db, 1)
+    page = _source_schedule_test_page(source_db, 1)
+    assert page['records'] == old['records']
+    for key in ('fetch_state', 'messages_examined', 'incomplete', 'deleted', 'invalid_source',
+                'oversize', 'candidates', 'unknown', 'source_complete'):
+        assert page['coverage'][key] == old['coverage'][key]
+    assert page['coverage']['tail_reached'] is True
+
+
+def test_source_schedule_paging_borrows_one_snapshot_across_revision(tmp_path):
+    path = tmp_path / 'synthetic-paged-snapshot.db'
+    writer = sqlite3.connect(path)
+    reader = sqlite3.connect(path)
+    try:
+        writer.execute('PRAGMA journal_mode=WAL')
+        writer.executescript('''
+            CREATE TABLE patients(project_id INTEGER PRIMARY KEY, fetch_state TEXT,
+                                  fetch_reason TEXT, is_archived INTEGER);
+            CREATE TABLE messages(message_id INTEGER PRIMARY KEY, project_id INTEGER,
+                                  body_html TEXT, body_text TEXT, body_state TEXT,
+                                  content_hash TEXT, posted_at_ts REAL);
+            CREATE TABLE message_revisions(message_id INTEGER NOT NULL, seq INTEGER NOT NULL,
+                                           PRIMARY KEY(message_id,seq));
+            INSERT INTO patients VALUES(1, 'complete', NULL, 0);
+        ''')
+        original = '看護師が2026年10月3日に本人を訪問する予定です。' * 3
+        put_source(writer, 1, 1, original)
+        reader.execute('BEGIN')
+        first = schedule.read_source_schedule_page(reader, 1, max_records=1)
+        assert reader.in_transaction and first['next_cursor']['source_fp'] is not None
+        put_source(writer, 1, 1, '看護師が2026年9月30日に本人を訪問しました。')
+        second = schedule.read_source_schedule_page(reader, 1, cursor=first['next_cursor'], max_records=1)
+        assert reader.in_transaction
+        assert second['records'][0]['span'][0] == len(original) // 3
+        reader.execute('COMMIT')
+        reader.execute('BEGIN')
+        with pytest.raises(ValueError, match='intervention_cursor_source_changed'):
+            schedule.read_source_schedule_page(reader, 1, cursor=first['next_cursor'], max_records=1)
+    finally:
+        reader.close()
+        writer.close()
+
+
+def test_source_schedule_live_pages_explicitly_do_not_claim_one_snapshot(source_db):
+    body = '看護師が2026年10月3日に本人を訪問する予定です。'
+    put_source(source_db, 2, 1, body)
+    put_source(source_db, 1, 1, body)
+    first = _source_schedule_test_page(source_db, 1, consistency='page', limit=1)
+    assert first['records'][0]['message_id'] == 2
+    assert first['coverage']['snapshot_consistency'] == 'page_only_changes_unverified'
+    assert first['next_cursor']['consistency'] == 'page'
+    source_db.commit()
+    revised = '薬剤師が2026年10月3日に本人を訪問する予定です。'
+    put_source(source_db, 1, 1, revised)
+    second = _source_schedule_test_page(source_db, 1, cursor=first['next_cursor'],
+                                        consistency='page', limit=1)
+    assert second['records'][0]['quote'] == revised
+    assert second['coverage']['tail_reached'] is True
+    assert second['coverage']['snapshot_consistency'] == 'page_only_changes_unverified'
+    assert second['coverage']['source_complete'] is None
+    with pytest.raises(ValueError, match='invalid_intervention_cursor'):
+        _source_schedule_test_page(source_db, 1, cursor=first['next_cursor'], consistency='snapshot')
+
+
+def test_source_schedule_live_partial_cursor_rejects_changed_source(source_db):
+    body = '看護師が2026年10月3日に本人を訪問する予定です。' * 3
+    put_source(source_db, 1, 1, body)
+    first = _source_schedule_test_page(source_db, 1, consistency='page', max_records=1)
+    source_db.commit()
+    put_source(source_db, 1, 1, body + '訂正。')
+    with pytest.raises(ValueError, match='intervention_cursor_source_changed'):
+        _source_schedule_test_page(source_db, 1, consistency='page', cursor=first['next_cursor'])
+
+
+def test_source_schedule_snapshot_mode_still_requires_caller_binding(source_db):
+    put_source(source_db, 1, 1, '看護師が2026年10月3日に本人を訪問する予定です。')
+    page = _source_schedule_test_page(source_db, 1, consistency='snapshot')
+    assert page['coverage']['snapshot_consistency'] == 'caller_same_snapshot_required'
+    assert page['coverage']['source_complete'] is None
+    with pytest.raises(ValueError, match='invalid_intervention_input'):
+        _source_schedule_test_page(source_db, 1, consistency='unrecognized')
+
+
+@pytest.mark.parametrize('middle_state', ['full', 'deleted'])
+def test_source_schedule_partial_cursor_rejects_aba_occurrence(source_db, middle_state):
+    body = '看護師が2026年10月3日に本人を訪問する予定です。' * 3
+    put_source(source_db, 1, 1, body)
+    first = _source_schedule_test_page(source_db, 1, consistency='page', max_records=1)
+    source_db.commit()
+    middle = '薬剤師が2026年10月3日に本人を訪問する予定です。' if middle_state == 'full' else ''
+    put_source(source_db, 1, 1, middle, state=middle_state)
+    put_source(source_db, 1, 1, body)
+    source_db.execute('INSERT INTO message_revisions VALUES(1,1)')
+    source_db.execute('INSERT INTO message_revisions VALUES(1,2)')
+    source_db.execute('INSERT INTO message_revisions VALUES(1,3)')
+    with pytest.raises(ValueError, match='intervention_cursor_source_changed'):
+        _source_schedule_test_page(source_db, 1, consistency='page', cursor=first['next_cursor'])
+
+
+@pytest.mark.parametrize('problem', ['missing_table', 'invalid_seq'])
+def test_source_schedule_partial_cursor_rejects_unknown_occurrence(source_db, problem):
+    body = '看護師が2026年10月3日に本人を訪問する予定です。' * 3
+    put_source(source_db, 1, 1, body)
+    if problem == 'missing_table':
+        source_db.execute('DROP TABLE message_revisions')
+    else:
+        source_db.execute("INSERT INTO message_revisions VALUES(1,'not-an-integer')")
+    with pytest.raises(ValueError, match='intervention_cursor_revision_unavailable'):
+        _source_schedule_test_page(source_db, 1, max_records=1)
+
+
+def test_source_schedule_page_fetches_only_needed_rows_and_one_lookahead(source_db):
+    body = '看護師が2026年10月3日に本人を訪問する予定です。'
+    for mid in range(1, 206):
+        put_source(source_db, mid, 1, body)
+    fetched = []
+    original_factory = source_db.row_factory
+    def observe(cursor, row):
+        if cursor.description and [column[0] for column in cursor.description[:2]] == ['message_id', 'body_state']:
+            fetched.append(row[0])
+        return row
+    source_db.row_factory = observe
+    try:
+        page = _source_schedule_test_page(source_db, 1, limit=200, max_records=1)
+    finally:
+        source_db.row_factory = original_factory
+    assert [record['message_id'] for record in page['records']] == [205]
+    assert fetched == [205, 204]
+    assert page['coverage']['messages_examined'] == 1
+    assert page['next_cursor']['message_id'] == 205
+
+
+@pytest.mark.parametrize('middle_state', ['full', 'deleted'])
+def test_partial_cursor_rejects_aba_with_real_ledger_writer(tmp_path, middle_state):
+    from extract_testkit import _ledger, _message
+
+    ledger = _ledger(tmp_path)
+    try:
+        ledger.ensure_patient(1)
+        body = '看護師が2026年10月3日に本人を訪問する予定です。' * 3
+        original = _message(mid=1, body=body)
+        ledger.save_messages([original], project_id=1)
+        first_source = ledger.db.execute(
+            'SELECT content_hash,body_html,body_text,body_state,posted_at_ts FROM messages WHERE message_id=1'
+        ).fetchone()
+        before = tuple(first_source)
+        before_seq = ledger.db.execute(
+            'SELECT COALESCE(MAX(seq),1) FROM message_revisions WHERE message_id=1').fetchone()[0]
+        ledger.db.execute('BEGIN')
+        first = schedule.read_source_schedule_page(ledger.db, 1, consistency='page', max_records=1)
+        assert first['next_cursor']['source_fp'] is not None
+        ledger.db.commit()
+        middle = (_message(mid=1, body='薬剤師が2026年10月3日に本人を訪問する予定です。')
+                  if middle_state == 'full' else _message(mid=1, body='', state='deleted'))
+        ledger.save_messages([middle], project_id=1)
+        ledger.save_messages([original], project_id=1)
+        after = tuple(ledger.db.execute(
+            'SELECT content_hash,body_html,body_text,body_state,posted_at_ts FROM messages WHERE message_id=1'
+        ).fetchone())
+        after_seq = ledger.db.execute(
+            'SELECT COALESCE(MAX(seq),1) FROM message_revisions WHERE message_id=1').fetchone()[0]
+        assert after == before and after_seq >= before_seq + 2
+        ledger.db.execute('BEGIN')
+        with pytest.raises(ValueError, match='intervention_cursor_source_changed'):
+            schedule.read_source_schedule_page(ledger.db, 1, consistency='page', cursor=first['next_cursor'])
+        assert ledger.db.in_transaction  # the reader does not finish the borrowed snapshot
+        ledger.db.rollback()
+    finally:
+        ledger.close()

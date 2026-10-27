@@ -398,9 +398,13 @@ def _private_button(db, base, card, now, navigation, token_ctx, action, label, p
 def _context_navigation(db, base, card, params, cfg, now, legacy):
     from notify_views import CONTEXT_ROLES, CONTEXT_SECTIONS, patient_context_list
     section, role, page = params.get("section", "background"), params.get("role", ""), params.get("page", 0)
+    history = params.get("intervention_history", False)
+    cursor = params.get("intervention_cursor")
     if (not isinstance(section, str) or section not in CONTEXT_SECTIONS
             or not isinstance(role, str) or role not in CONTEXT_ROLES
-            or type(page) is not int or not 0 <= page <= 100000):
+            or type(page) is not int or not 0 <= page <= 100000
+            or type(history) is not bool or history and section != "previsit"
+            or cursor is not None and (not history or not isinstance(cursor, dict))):
         return {**base, "outcome": "rejected", "error": "action_not_applicable"}
     identity = hashlib.sha256(canonical([base["actor"], card["transport"],
         card["channel_id"], card["team_id"]])).hexdigest()
@@ -428,12 +432,23 @@ def _context_navigation(db, base, card, params, cfg, now, legacy):
                             CONTEXT_SECTIONS[target], {"section": target, "page": 0, "role": "", "since": since})
         _context_checkpoint(db, card, identity, row, params, now, since, base.get("command_id"))
         return {**result, "context_since": since, "navigation": navigation, "token_ctx": token_ctx}
-    view = patient_context_list(db, card["project_id"], section, cfg=cfg,
-                               since=since, now=now, role=role, page=page)
+    try:
+        view = patient_context_list(db, card["project_id"], section, cfg=cfg,
+                                   since=since, now=now, role=role, page=page,
+                                   **({"intervention_history": True, "intervention_cursor": cursor}
+                                      if history else {}))
+    except ValueError as error:
+        if history and str(error) in ("invalid_intervention_cursor", "intervention_cursor_source_changed",
+                                      "intervention_cursor_revision_unavailable"):
+            return {**base, "outcome": "rejected", "error": "intervention_cursor_changed"}
+        raise
 
-    def navigate(label, target=section, target_page=0, target_role=role, action="summary"):
+    def navigate(label, target=section, target_page=0, target_role=role, action="summary",
+                 target_history=False, target_cursor=None):
         _private_button(db, base, card, now, navigation, token_ctx, action, label,
-                        {"section": target, "page": target_page, "role": target_role, "since": since})
+                        {"section": target, "page": target_page, "role": target_role, "since": since,
+                         **({"intervention_history": True, "intervention_cursor": target_cursor}
+                            if target_history else {})})
 
     sections = list(CONTEXT_SECTIONS)
     index = sections.index(section)
@@ -444,12 +459,21 @@ def _context_navigation(db, base, card, params, cfg, now, legacy):
         roles = list(CONTEXT_ROLES)
         target = roles[(roles.index(role) + 1) % len(roles)]
         navigate("表示順: " + CONTEXT_ROLES[target], target_role=target)
-    else:
+    elif not (section == "previsit"
+              and not history
+              and view["page"] > 0 and view["page"] + 1 < view["pages"]):
         navigate("原文を検索", action="search")
     if view["page"]:
-        navigate("前の8件", target_page=view["page"] - 1)
+        navigate("前の8件", target_page=view["page"] - 1, target_history=history, target_cursor=cursor)
     if view["page"] + 1 < view["pages"]:
-        navigate("次の8件", target_page=view["page"] + 1)
+        navigate("次の8件", target_page=view["page"] + 1, target_history=history, target_cursor=cursor)
+    if section == "previsit":
+        if not history:
+            navigate("介入の履歴を見る", target_history=True)
+        elif (view["page"] + 1 == view["pages"]
+              and view.get("intervention_next_cursor") is not None):
+            navigate("さらに古い投稿を確認", target_history=True,
+                     target_cursor=view["intervention_next_cursor"])
     _context_checkpoint(db, card, identity, row, params, now)
     return {**base, "outcome": "applied", "action": "list", "list": view,
             "context_since": since, "navigation": navigation, "token_ctx": token_ctx}
