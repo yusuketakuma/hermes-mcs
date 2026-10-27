@@ -280,7 +280,11 @@ def safe_error_code(exc) -> str:
 def html_to_text(h: str) -> str:
     h = re.sub(r"<br\s*/?>", "\n", h or "")
     h = re.sub(r"</(p|div|li)>", "\n", h)
-    return html.unescape(re.sub(r"<[^>]+>", "", h)).strip()
+    # An unmatched trailing '<' can never match the original tag pattern.
+    # Excluding that suffix avoids retrying the regex from every '<' in it.
+    last_close = h.rfind(">")
+    prefix, suffix = h[:last_close + 1], h[last_close + 1:]
+    return html.unescape(re.sub(r"<[^>]+>", "", prefix) + suffix).strip()
 
 
 def _combines(ch: str) -> bool:
