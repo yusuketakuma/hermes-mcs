@@ -30,6 +30,25 @@ _CORRECTION = re.compile(r"(?:投稿|記録)#(?P<mid>[1-9][0-9]*)の[「『](?P<
 _PRIOR_CORRECTION = re.compile(r"前回の[「『](?P<quote>[^」』]{1,3000})[」』](?:を(?P<kind>訂正|撤回)|は誤り)")
 _CORRECTION_CUE = re.compile(r"訂正|撤回|誤り")
 _INDIRECT_PERSON = re.compile(rf"(?:{FAMILY_PERSON}|{OTHER_PERSON})(?:さん|様)?(?:に|の)")
+_DIRECT_SYMPTOM_OWNER = re.compile(
+    rf"(?P<family>{FAMILY_PERSON})(?:さん|様)?(?:には|に|は|が|の|も)[ \t　]*$"
+    rf"|(?P<other>{OTHER_PERSON})(?:さん|様)?(?:には|に|は|が|の|も)[ \t　]*$")
+_DIRECT_SYMPTOM_STATE = re.compile(
+    r"(?:が|は|も)[ \t　]*(?:(?:現在|本日|今日|今は|特に|全く)[ \t　]*)?"
+    r"(?:あります|ありません|ある|ない|なし|ないです)[ \t　]*[。]?")
+_FOLLOWING_RETRACTION = re.compile(
+    r"^[ \t　\n]*(?:この|その|先ほどの|先程の|上記の|前記の|直前の|前の)"
+    r"(?:記載|投稿|報告|内容|記録)[ \t　]*"
+    r"(?:(?:は|が|も)[ \t　]*(?:(?:誤り|間違い|誤記)(?:です|でした|である)"
+    r"|(?:撤回|訂正|取消|取り消し)(?:されました|されています))"
+    r"|を[ \t　]*(?:撤回|訂正|取消|取り消し)(?:しました|します|いたします))"
+    r"(?=[。！!、,\s]|$)")
+_QUOTED_RETRACTION = re.compile(
+    r"^[ \t　]*[」』][ \t　]*(?:(?:(?:との|という|の)(?:記載|投稿|報告|内容|記録))?"
+    r"(?:は|が)[ \t　]*(?:(?:誤り|間違い|誤記)(?:です|でした|である)"
+    r"|(?:撤回|訂正|取消|取り消し)(?:されました|されています))"
+    r"|を[ \t　]*(?:撤回|訂正|取消|取り消し)(?:しました|します|いたします))"
+    r"(?=[。！!、,\s]|$)")
 _PATIENT_SUBJECT = re.compile(r"(?:ご本人|本人|患者(?:本人|さん|様)?|利用者(?:本人|さん|様)?)(?:は|が|の|に|も)")
 _GENERAL_ALLERGY = re.compile(
     r"(?:^|[\s:：、,。]|(?:ご本人|本人|患者(?:さん|様)?|利用者(?:さん|様)?)(?:は|に|の))"
@@ -134,6 +153,35 @@ def annotate(fact, body):
     subjects, periods = {a[0] for a in axes}, {a[1] for a in axes}
     subject = next(iter(subjects)) if len(subjects) == 1 else "unknown"
     period = next(iter(periods)) if len(periods) == 1 else "unknown"
+    subject_ambiguous = False
+    if (fact.get("category") == "symptoms"
+            and len(names) == 1 and quote.count(names[0]) == 1):
+        at = start + quote.index(names[0])
+        sentence_start = max(body.rfind(mark, 0, at) for mark in "。！？!?;；\n、,") + 1
+        prefix = body[sentence_start:at]
+        owner = _DIRECT_SYMPTOM_OWNER.search(prefix)
+        if owner:
+            tail_start = at + len(names[0])
+            sentence_tail = re.match(r"[^。！？!?;；\n]*[。]?", body[tail_start:])
+            tail = sentence_tail.group() if sentence_tail else ""
+            suffix = body[tail_start + len(tail):]
+            quoted_report = (re.match(r"[ \t　]*[」』]", suffix)
+                             or re.match(r"[）)]?[ \t　]*(?:と|って|との|という)", suffix))
+            if (_PATIENT_SUBJECT.search(prefix) or quoted_report
+                    or not _DIRECT_SYMPTOM_STATE.fullmatch(body[tail_start:end])
+                    or not _DIRECT_SYMPTOM_STATE.fullmatch(tail)):
+                subject, subject_ambiguous = "unknown", True
+            else:
+                subject = "family" if owner.group("family") else "other"
+    if fact.get("category") == "symptoms":
+        if body[end - 1] in "。！？!?;；\n":
+            next_sentence = body[end:]
+        else:
+            boundary = re.search(r"[。！？!?;；\n]", body[end:])
+            next_sentence = body[end + boundary.end():] if boundary else ""
+        if (_QUOTED_RETRACTION.match(body[end:])
+                or _FOLLOWING_RETRACTION.match(next_sentence)):
+            subject, subject_ambiguous = "unknown", True
     if fact.get("category") not in ("medications", "symptoms") and subject == "patient":
         sentence_start = max(body.rfind(mark, 0, start) for mark in "。！？!?;；\n") + 1
         context = body[sentence_start:end]
@@ -205,7 +253,7 @@ def annotate(fact, body):
                                               target_end=start + match.end()) is False
                     or pattern is _PRIOR_CORRECTION and re.match(r"(?:でした|です)[。！？!?\s]*$", quote[match.end():]) is not None)})
     reference_unknown = bool(re.search(r"同じ|同薬|その薬|これを", quote) and not any(quote.count(name) == 1 for name in names))
-    unknown = bool(corrections or _MISSING_REPORT.search(quote) or re.search(r"不明|未確認|未確定|かもしれ|疑い|どちら", quote) or reference_unknown or paired_conflict or relative_overflow or (len(dates) > 1) or len(actions) > 1
+    unknown = bool(subject_ambiguous or corrections or _MISSING_REPORT.search(quote) or re.search(r"不明|未確認|未確定|かもしれ|疑い|どちら", quote) or reference_unknown or paired_conflict or relative_overflow or (len(dates) > 1) or len(actions) > 1
                    or _CORRECTION_CUE.search(quote) and not corrections)
     if fact.get("reported_subject") in ("patient", "family", "other") and fact["reported_subject"] != subject:
         unknown = True
