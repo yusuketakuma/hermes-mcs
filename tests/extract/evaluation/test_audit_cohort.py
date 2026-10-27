@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+from fractions import Fraction
 
 import pytest
 
@@ -22,7 +23,8 @@ def row(mid, *, version=7, reader="reader_extract", captured=False, code="storag
             "reader": reader, "reason": "none", "extract_version": version,
             "classes": {code: captured} if code else {},
             "output_digest": digest(output or f"{mid}:{version}:{captured}"),
-            "quality": quality, "held_prior": held, "profession": "pharmacist",
+            "quality": quality, "held_prior": held, "hold_unknown": False,
+            "newer_artifact_unknown": False, "profession": "pharmacist",
             "length": "len_s", "month": "month_202610", **extra}
 
 
@@ -120,6 +122,87 @@ def test_pin_keeps_only_allowlisted_fields_and_skips_cue_free_posts():
         pin_of([row(1, code="unknown_cue")])
 
 
+@pytest.mark.parametrize('uncertain', [
+    {'hold_unknown': True}, {'newer_artifact_unknown': True},
+    {'held_prior': True}, {'quality': 'attention'},
+    {'reader': 'no_output', 'version': None, 'reason': 'unknown'},
+])
+def test_uncertain_baseline_refuses_entire_pin_without_dropping_cases(uncertain):
+    with pytest.raises(ac.CohortError, match='baseline_uncertain'):
+        pin_of([row(1), row(2, **uncertain)])
+
+
+def test_pin_requires_uncertainty_signals_but_preserves_known_inventory():
+    incomplete = row(1)
+    incomplete.pop('newer_artifact_unknown')
+    with pytest.raises(ac.CohortError, match='bad_audit_row'):
+        pin_of([incomplete])
+    pinned = pin_of([row(1), row(2, version=4, quality='attention'),
+                     row(3, reader='no_output', version=None, reason='missing')])
+    assert [item['set'] for item in pinned['rows']] == ['acceptance', 'inventory', 'inventory']
+    # New checks do not alter the schema or matching of an existing pinned row.
+    ac._check_pin_rows(pinned['rows'], CODES)
+
+
+def test_cohort_definition_binds_baseline_selection(monkeypatch):
+    before = ac._cohort_definition(DEFINITION)
+    def changed_pin(*args):
+        return None
+    monkeypatch.setattr(ac, 'build_pin', changed_pin)
+    assert ac._cohort_definition(DEFINITION) != before
+
+
+@pytest.mark.parametrize('name', ['_gate', '_overall', '_retained', '_wilson', '_semantic',
+                                  '_check_pin_rows', '_pinned_scope', '_audit_rows'])
+def test_cohort_definition_rejects_changed_comparison_helpers(monkeypatch, name):
+    before = ac._cohort_definition(DEFINITION)
+    pinned = ac.build_pin([row(1)], before, CODES, {'since': None, 'until': None},
+                          {'generation_id': 'g', 'generated_at': 1})
+    def changed(*args, **kwargs):
+        return None
+    monkeypatch.setattr(ac, name, changed)
+    after = ac._cohort_definition(DEFINITION)
+    assert before != after
+    with pytest.raises(ac.CohortError, match='definition_changed'):
+        ac.compare(pinned, [row(1, version=8)], after, CODES)
+
+
+@pytest.mark.parametrize('name,value', [
+    ('LABEL_SAMPLE', 51), ('LABEL_SOURCES', frozenset({'human'})),
+    ('MIN_RETENTION', Fraction(3, 4)),
+    ('EXCLUSIONS', ('deleted',)), ('READERS', frozenset({'reader_extract'})),
+    ('QUALITIES', frozenset({'complete'})),
+])
+def test_cohort_definition_rejects_changed_acceptance_constants(monkeypatch, name, value):
+    before = ac._cohort_definition(DEFINITION)
+    monkeypatch.setattr(ac, name, value)
+    assert ac._cohort_definition(DEFINITION) != before
+
+
+def test_cohort_definition_binds_wilson_implementation(monkeypatch):
+    import stats_math
+    before = ac._cohort_definition(DEFINITION)
+    def different_interval(successes, denominator, z=1.96):
+        return {'low': None, 'high': None}
+    monkeypatch.setattr(stats_math, 'wilson_interval', different_interval)
+    assert ac._cohort_definition(DEFINITION) != before
+
+
+def test_pin_rejects_changed_input_json_validation(monkeypatch):
+    import extraction_audit
+    options = {'target_version': 8, 'inference_target': '0.1', 'hold_mode': 'historical'}
+    before = ac._cohort_definition(extraction_audit.definition_fingerprint(**options))
+    pinned = ac.build_pin([row(1)], before, CODES, {'since': None, 'until': None},
+                          {'generation_id': 'g', 'generated_at': 1})
+    def different_json(raw):
+        return {}
+    monkeypatch.setattr(extraction_audit, 'strict_json', different_json)
+    after = ac._cohort_definition(extraction_audit.definition_fingerprint(**options))
+    assert after != before
+    with pytest.raises(ac.CohortError, match='definition_changed'):
+        ac.compare(pinned, [row(1, version=8)], after, CODES)
+
+
 def _big_fix(n=60, fixed=50):
     pinned = pin_of([row(i) for i in range(n)])
     after = [row(i, version=8, captured=i < fixed) for i in range(n)]
@@ -142,6 +225,67 @@ def test_a_proxy_improvement_alone_never_passes_the_quality_gate():
     assert report["lexical_gate"] == "pass"
     assert report["semantic_gate"]["gate"] == "not_evaluable"
     assert report["quality_gate"] == "not_evaluable"
+
+
+@pytest.mark.parametrize('uncertainty', ['hold_unknown', 'newer_artifact_unknown'])
+def test_unverified_projection_cannot_be_excluded_to_pass_a_fixed_cohort(uncertainty):
+    pinned, after = _big_fix()
+    after[-1] = row(59, version=8, reader='reader_projection', captured=True,
+                    quality='attention', **{uncertainty: True})
+    report = compare(pinned, after, _labels(pinned, after))
+    assert report['same_cohort']['n'] == 60 and report['excluded']['reader_changed'] == 0
+    assert report['same_cohort']['after_failures']['attention'] == 1
+    assert report['same_cohort']['after_missed'] == 10
+    assert report['lexical_gate'] == report['quality_gate'] == 'not_evaluable'
+
+
+def test_known_projection_remains_a_reader_change_and_unknown_inventory_is_failure():
+    pinned = pin_of([row(1), row(2, version=4), row(3)])
+    after = [row(1, version=8, reader='reader_projection'),
+             row(2, version=8, reader='reader_projection', newer_artifact_unknown=True),
+             row(3, version=8)]
+    report = compare(pinned, after)
+    assert report['excluded']['reader_changed'] == 1
+    assert report['inventory']['reanalysis_failed'] == 1 and report['inventory']['projection'] == 0
+    assert report['inventory']['after_missed'] == 1
+
+
+def test_unknown_flags_do_not_override_a_real_source_change():
+    pinned = pin_of([row(1)])
+    report = compare(pinned, [row(1, content='different', reader='reader_projection', hold_unknown=True)])
+    assert report['excluded']['hash_changed'] == 1 and report['same_cohort']['n'] == 0
+
+
+def test_unknown_no_output_cannot_pass_even_when_most_of_cohort_improves():
+    pinned, after = _big_fix()
+    after[-1] = row(59, version=None, reader='no_output', reason='unknown')
+    report = compare(pinned, after, _labels(pinned, after))
+    assert report['same_cohort']['n'] == 60 and report['excluded']['reader_changed'] == 0
+    assert report['same_cohort']['after_failures']['no_output'] == 1
+    assert report['same_cohort']['after_missed'] == 10
+    assert report['lexical_gate'] == report['quality_gate'] == 'not_evaluable'
+
+
+def test_known_no_output_remains_a_failure_without_becoming_unknown():
+    pinned, after = _big_fix()
+    after[-1] = row(59, version=None, reader='no_output', reason='failed')
+    report = compare(pinned, after)
+    assert report['same_cohort']['after_failures']['no_output'] == 1
+    assert report['lexical_gate'] == 'pass'  # known failure counts as a miss, not unknown
+
+
+def test_comparison_requires_explicit_uncertainty_flags():
+    current = row(1, version=8)
+    current.pop('hold_unknown')
+    with pytest.raises(ac.CohortError, match='bad_audit_row'):
+        compare(pin_of([row(1)]), [current])
+
+
+def test_comparison_requires_an_explicit_output_reason():
+    current = row(1, version=None, reader='no_output')
+    current.pop('reason')
+    with pytest.raises(ac.CohortError, match='bad_audit_row'):
+        compare(pin_of([row(1)]), [current])
 
 
 def test_bound_paired_labels_complete_the_quality_gate():
@@ -294,25 +438,31 @@ def _cli(*args, root):
                           text=True, timeout=60, env={**os.environ, "MCS_ROOT": str(root)})
 
 
-def test_cli_pins_and_compares_a_published_synthetic_snapshot(tmp_path, data_root):
+@pytest.mark.parametrize('public_version', ['0.1', '1.0'])
+def test_cli_pins_and_compares_a_published_synthetic_snapshot(tmp_path, data_root, public_version):
     import time
 
     import ledger
     from extract_testkit import _ledger, _message
+    from inference_version import LEGACY_VERSION, VERSION_KEY
 
     body = "本人の薬は合成ボックスで保管しています。"
     (tmp_path / "live").mkdir()
     db = _ledger(tmp_path / "live")
     db.save_messages([_message(1, body=body), _message(2, body="本日は訪問のみでした。")], project_id=1)
     content_hash = db.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
-    complete = {"integrity": {"completeness": {}}}
+    # Keep two independent synthetic corpora. Missing version is historical
+    # 0.1; a current public-generation corpus is explicitly stamped.
+    complete = {"integrity": {"completeness_chunks": 1, "completeness": {
+        "0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}}
 
     def extract(version, document):
         db.db.execute(
             "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) "
             "VALUES('extract_llm',1,1,?,?,?)",
             (json.dumps(document, ensure_ascii=False),
-             json.dumps({"hash": content_hash, "extract_version": version, **complete}), time.time()))
+             json.dumps({**({} if public_version == LEGACY_VERSION else {VERSION_KEY: public_version}), "hash": content_hash,
+                         "extract_version": version, **complete}), time.time()))
         db.db.commit()
 
     def publish(name):
@@ -321,7 +471,8 @@ def test_cli_pins_and_compares_a_published_synthetic_snapshot(tmp_path, data_roo
     extract(7, {"summary": "合成の要約"})
     first = publish("snap1")
     pin = data_root / "cohort.jsonl"
-    result = _cli("pin", "--snapshot", first, "--out", pin, root=data_root.parent)
+    result = _cli("pin", "--snapshot", first, "--out", pin,
+                  "--inference-version", public_version, root=data_root.parent)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["pinned"] == {"acceptance": 1, "inventory": 0}
     assert pin.stat().st_mode & 0o777 == 0o600 and "保管" not in pin.read_text()
@@ -330,7 +481,8 @@ def test_cli_pins_and_compares_a_published_synthetic_snapshot(tmp_path, data_roo
         "category": "medication_management", "text": "合成ボックスで保管しています",
         "evidence": "本人の薬は合成ボックスで保管しています。", "subject": "patient"}]})
     second = publish("snap2")
-    result = _cli("compare", "--snapshot", second, "--pin", pin, root=data_root.parent)
+    result = _cli("compare", "--snapshot", second, "--pin", pin,
+                  "--inference-version", public_version, root=data_root.parent)
     assert result.returncode == 1  # labels missing: never a quality pass
     report = json.loads(result.stdout)
     assert (report["same_cohort"]["n"], report["same_cohort"]["before_missed"],
@@ -338,9 +490,40 @@ def test_cli_pins_and_compares_a_published_synthetic_snapshot(tmp_path, data_roo
     assert report["quality_gate"] == "not_evaluable"
     assert result.stdout.isascii() and result.stderr == ""
 
+    other = '1.0' if public_version == '0.1' else '0.1'
+    mismatch = _cli('compare', '--snapshot', second, '--pin', pin,
+                    '--inference-version', other, root=data_root.parent)
+    assert mismatch.returncode == 2 and 'definition_changed' in mismatch.stderr
+
     outside = _cli("pin", "--snapshot", first, "--out", tmp_path / "outside.jsonl", root=data_root.parent)
     assert outside.returncode == 2 and outside.stdout == ""
     assert "path_outside_data" in outside.stderr and not (tmp_path / "outside.jsonl").exists()
+
+
+def test_cli_does_not_publish_pin_for_newer_unverified_artifact(tmp_path, data_root):
+    import ledger
+    from extract_testkit import _ledger, _message
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+
+    (tmp_path / 'live').mkdir()
+    db = _ledger(tmp_path / 'live')
+    try:
+        db.save_messages([_message(1, body='本人の薬は合成ボックスで保管しています。')], project_id=1)
+        digest = db.db.execute('SELECT content_hash FROM messages WHERE message_id=1').fetchone()[0]
+        meta = {VERSION_KEY: CURRENT_VERSION, 'hash': digest, 'extract_version': 7,
+                'integrity': {'completeness_chunks': 1, 'completeness': {
+                    '0': {'state': 'hint_gaps_resolved', 'remaining_hint_candidates': 0}}}}
+        db.artifact_add('extract_llm', '{"summary":"合成の要約"}', project_id=1, message_id=1, meta=meta)
+        db.artifact_add('extract_llm', '{}', project_id=1, message_id=1, meta=meta)
+        db.db.execute("UPDATE artifacts SET meta='{bad' WHERE artifact_id=(SELECT MAX(artifact_id) FROM artifacts)")
+        db.db.commit()
+        snapshot = ledger.publish_snapshot(str(tmp_path / 'live' / 'ledger.db'), str(tmp_path / 'snap'))
+        pin = data_root / 'uncertain.jsonl'
+        result = _cli('pin', '--snapshot', snapshot, '--out', pin, root=data_root.parent)
+        assert result.returncode == 2 and 'baseline_uncertain' in result.stderr
+        assert not pin.exists()
+    finally:
+        db.close()
 
 
 def test_a_rare_class_excluded_entirely_keeps_its_baseline_and_is_not_evaluable():
@@ -378,7 +561,7 @@ def test_compare_replays_the_pinned_scope_and_drops_row_content(data_root, monke
 
     import extraction_audit
     import mcs_view
-    pinned = ac.build_pin([row(1)], DEFINITION, CODES,
+    pinned = ac.build_pin([row(1)], ac._cohort_definition(DEFINITION), CODES,
                           {"since": 100, "until": 200, "as_of": 200, "project_id": 1},
                           {"generation_id": "old", "generated_at": 200})
     path = data_root / "pin.jsonl"
@@ -395,12 +578,17 @@ def test_compare_replays_the_pinned_scope_and_drops_row_content(data_root, monke
         def close(self):
             pass
 
-    def rows(db, scope):
+    def rows(db, scope, *, target_version, inference_target, hold_mode):
+        assert target_version == ac.TARGET_VERSION
+        assert inference_target == '1.0' and hold_mode == 'historical'
         seen.append(dict(scope))
         yield row(1, version=8, captured=True, _body="合成本文", _document={}, _meta={})
     monkeypatch.setattr(mcs_view, "View", View)
     monkeypatch.setattr(extraction_audit, "iter_audit_rows", rows)
-    monkeypatch.setattr(extraction_audit, "definition_fingerprint", lambda: DEFINITION)
+    def definition(*, target_version, inference_target, hold_mode):
+        assert target_version == ac.TARGET_VERSION and inference_target == '1.0' and hold_mode == 'historical'
+        return DEFINITION
+    monkeypatch.setattr(extraction_audit, "definition_fingerprint", definition)
     monkeypatch.setattr(extraction_audit, "CUE_CODES", CODES)
     args = argparse.Namespace(pin=path, labels=None, snapshot=data_root / "s.db")
     report = ac.cmd_compare(args)

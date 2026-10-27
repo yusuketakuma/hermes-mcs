@@ -15,6 +15,8 @@ proxy improvement alone never passes.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import inspect
 import json
 import os
 import re
@@ -28,6 +30,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 import _mcs_path  # noqa: F401,E402
+import inference_version  # noqa: E402
 from safe_io import atomic_write, read_regular_nofollow  # noqa: E402
 
 SCHEMA = "mcs-audit-cohort/v1"
@@ -82,6 +85,18 @@ def build_pin(rows, definition: str, cue_codes, scope: dict, snapshot: dict) -> 
         kept = _pin_row(row, cue_codes)
         if kept is None:
             continue
+        held, quality = row.get('held_prior'), row.get('quality')
+        unknown_hold, unknown_newer = row.get('hold_unknown'), row.get('newer_artifact_unknown')
+        if (type(held) is not bool or quality not in QUALITIES
+                or type(unknown_hold) is not bool or type(unknown_newer) is not bool):
+            raise CohortError('bad_audit_row')
+        if (unknown_hold or unknown_newer
+                or kept['reader'] == 'no_output' and row.get('reason') == 'unknown'
+                or kept['reader'] == 'reader_extract' and kept['extract_version'] == BASELINE_VERSION
+                   and (held or quality != 'complete')):
+            # Do not drop a hard case from the fixed population or turn it
+            # into a successful baseline. No pin is written on this path.
+            raise CohortError('baseline_uncertain')
         if kept["message_id"] in seen:
             raise CohortError("duplicate_message")
         seen.add(kept["message_id"])
@@ -101,10 +116,14 @@ def _now_rows(rows, cue_codes) -> dict:
         kept = _pin_row(row, frozenset(cue_codes))
         if kept is None:
             continue
-        held, quality = row.get("held_prior"), row.get("quality")
-        if type(held) is not bool or quality not in QUALITIES:
+        held, quality, reason = row.get("held_prior"), row.get("quality"), row.get("reason")
+        unknown_hold, unknown_newer = row.get('hold_unknown'), row.get('newer_artifact_unknown')
+        if (type(held) is not bool or quality not in QUALITIES
+                or not isinstance(reason, str)
+                or type(unknown_hold) is not bool or type(unknown_newer) is not bool):
             raise CohortError("bad_audit_row")
-        kept.update(held_prior=held, quality=quality)
+        kept.update(held_prior=held, quality=quality, reason=reason,
+                    hold_unknown=unknown_hold, newer_artifact_unknown=unknown_newer)
         if kept["message_id"] in now:
             raise CohortError("duplicate_message")
         now[kept["message_id"]] = kept
@@ -217,12 +236,17 @@ def compare(pin: dict, rows, definition: str, cue_codes, labels=None) -> dict:
     inventory = {"reanalysed": 0, "reanalysis_failed": 0, "not_reanalysed": 0, "projection": 0,
                  "changed": 0, "after_missed": 0}
     cohort, pinned = [], {"acceptance": 0, "inventory": 0}
+    unverified_members = 0
     for row in pin["rows"]:
         pinned[row["set"]] += 1
         cur = now.get(row["message_id"])
         if row["set"] == "inventory":
             if cur is None or cur["content_hash"] != row["content_hash"]:
                 inventory["changed"] += 1
+            elif (cur['hold_unknown'] or cur['newer_artifact_unknown']
+                  or cur['reader'] == 'no_output' and cur['reason'] == 'unknown'):
+                inventory['reanalysis_failed'] += 1
+                inventory['after_missed'] += len(row['classes'])
             elif cur["reader"] == "reader_projection":
                 inventory["projection"] += 1
             elif cur["reader"] == "no_output" or cur["held_prior"] or (
@@ -241,6 +265,11 @@ def compare(pin: dict, rows, definition: str, cue_codes, labels=None) -> dict:
             excluded["deleted"] += 1
         elif cur["content_hash"] != row["content_hash"]:
             excluded["hash_changed"] += 1
+        elif (cur['hold_unknown'] or cur['newer_artifact_unknown']
+              or cur['reader'] == 'no_output' and cur['reason'] == 'unknown'):
+            failures['no_output' if cur['reader'] == 'no_output' else 'attention'] += 1
+            unverified_members += 1
+            cohort.append((row, None))
         elif cur["reader"] == "reader_projection":
             excluded["reader_changed"] += 1
         elif cur["reader"] == "no_output":
@@ -277,7 +306,7 @@ def compare(pin: dict, rows, definition: str, cue_codes, labels=None) -> dict:
     n = len(cohort)
     retention = round(n / pinned["acceptance"], 3) if pinned["acceptance"] else None
     lexical = _overall(c["gate"] for c in classes.values())
-    if not _retained(n, pinned["acceptance"]):
+    if unverified_members or not _retained(n, pinned["acceptance"]):
         lexical = "not_evaluable"
     semantic = _semantic(cohort, labels, LABEL_SAMPLE, baseline)
     quality = ("not_evaluable" if "not_evaluable" in (lexical, semantic["gate"])
@@ -362,7 +391,31 @@ def read_pin(path: Path) -> dict:
 
 # Only these leave the audit iterator; its body/document/meta are dropped per row.
 _ROW_KEYS = ("message_id", "project_id", "content_hash", "reader", "extract_version",
-             "classes", "output_digest", "quality", "held_prior")
+             "classes", "output_digest", "quality", "held_prior", "reason", "hold_unknown",
+             "newer_artifact_unknown")
+
+
+def _cohort_definition(audit_definition):
+    from stats_math import wilson_interval
+    functions = (_pin_row, build_pin, _now_rows, _gate, _overall, _retained,
+                 _wilson, wilson_interval, _semantic, _check_pin_rows, compare,
+                 _pinned_scope, _audit_rows)
+    contract = {
+        'audit_definition': audit_definition,
+        'functions': [(fn.__name__, inspect.getsource(fn)) for fn in functions],
+        'schema': SCHEMA,
+        'baseline_version': BASELINE_VERSION,
+        'target_version': TARGET_VERSION,
+        'readers': sorted(READERS),
+        'qualities': sorted(QUALITIES),
+        'label_sources': sorted(LABEL_SOURCES),
+        'label_sample': LABEL_SAMPLE,
+        'min_retention': [MIN_RETENTION.numerator, MIN_RETENTION.denominator],
+        'exclusions': list(EXCLUSIONS),
+        'digest_pattern': [_DIGEST.pattern, _DIGEST.flags],
+        'row_keys': list(_ROW_KEYS),
+    }
+    return hashlib.sha256(json.dumps(contract, ensure_ascii=True, separators=(',', ':')).encode()).hexdigest()
 
 
 def _pinned_scope(header: dict) -> dict:
@@ -391,9 +444,12 @@ def _audit_rows(snapshot: Path, args: argparse.Namespace, scope: dict | None = N
                                      view.meta["generated_at"])
         elif scope["as_of"] > view.meta["generated_at"]:
             raise CohortError("snapshot_older_than_pin")
+        public_version = getattr(args, 'inference_version', inference_version.CURRENT_VERSION)
+        options = {'target_version': TARGET_VERSION, 'inference_target': public_version,
+                   'hold_mode': 'historical'}
         rows = [{key: row.get(key) for key in _ROW_KEYS}
-                for row in extraction_audit.iter_audit_rows(view.db, scope)]
-        return (rows, extraction_audit.definition_fingerprint(),
+                for row in extraction_audit.iter_audit_rows(view.db, scope, **options)]
+        return (rows, _cohort_definition(extraction_audit.definition_fingerprint(**options)),
                 extraction_audit.CUE_CODES, scope, view.meta)
     finally:
         view.close()
@@ -431,11 +487,15 @@ def main(argv: list[str] | None = None) -> int:
     pin.add_argument("--since")
     pin.add_argument("--until")
     pin.add_argument("--project", type=int)
+    pin.add_argument("--inference-version", choices=(inference_version.LEGACY_VERSION,
+                     inference_version.CURRENT_VERSION), default=inference_version.CURRENT_VERSION)
     pin.set_defaults(fn=cmd_pin)
     cmp_ = sub.add_parser("compare")
     cmp_.add_argument("--snapshot", type=Path, required=True)
     cmp_.add_argument("--pin", type=Path, required=True)
     cmp_.add_argument("--labels", type=Path)
+    cmp_.add_argument("--inference-version", choices=(inference_version.LEGACY_VERSION,
+                      inference_version.CURRENT_VERSION), default=inference_version.CURRENT_VERSION)
     cmp_.set_defaults(fn=cmd_compare)
     try:
         args = parser.parse_args(argv)

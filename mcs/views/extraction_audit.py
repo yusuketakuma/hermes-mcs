@@ -11,8 +11,9 @@ import re
 import unicodedata
 
 import extract_quality
+import inference_version as inference
 from mcs_queries import ELIGIBLE_MESSAGE, FACT_KINDS_SQL, JST, current_fact_pred
-from mcs_util import loads_dict
+from mcs_util import loads_dict, strict_json, valid_hash
 from pharmacy_cues import CUE_CLASSES
 from semantic_facts import KIND_CATEGORY
 from stats_math import wilson_interval
@@ -32,7 +33,24 @@ _STRATA = ("class", "reader", "reason", "version", "length", "profession", "mont
 _BATCH = 200
 
 
-def definition_fingerprint() -> str:
+def _target_version(value):
+    if value is None:
+        value = inference.LLM_EXTRACT_VERSION
+    if type(value) is not int or value < 1:
+        raise ValueError("audit_target_version_invalid")
+    return value
+
+
+def _audit_mode(inference_target, hold_mode):
+    if inference_target not in (inference.CURRENT_VERSION, inference.LEGACY_VERSION):
+        raise ValueError('audit_inference_target_invalid')
+    if hold_mode not in ('current', 'historical'):
+        raise ValueError('audit_hold_mode_invalid')
+    return inference_target, hold_mode
+
+
+def definition_fingerprint(*, target_version=None, inference_target=inference.CURRENT_VERSION,
+                           hold_mode='current') -> str:
     """Pin the cue, audit, scope and reader contracts used on both sides of a cohort."""
     import mcs_queries
     import pharmacy_cues
@@ -43,8 +61,18 @@ def definition_fingerprint() -> str:
         (file.name, hashlib.sha256(file.read_bytes()).hexdigest()) for file in files
     ] + [(function.__name__, inspect.getsource(function))
          for function in (stats_contract.message_scope_sql, stats_contract.resolve_scope,
-                          stats_contract.parse_timestamp, extract_quality.completeness_resolved)]
-    contracts.extend((("stats_detail_limit", stats_contract.DETAIL_LIMIT),
+                          stats_contract.parse_timestamp, extract_quality.completeness_resolved,
+                          inference.read_version, inference._valid_version, inference._target_version,
+                          mcs_queries.current_meta_pred, mcs_queries.valid_meta_pred,
+                          strict_json, valid_hash)]
+    contracts.extend((("audit_target_version", _target_version(target_version)),
+                      ("audit_mode", _audit_mode(inference_target, hold_mode)),
+                      ("inference_contract", (inference.VERSION_KEY, inference.LEGACY_VERSION,
+                                              inference.CURRENT_VERSION, inference.LLM_EXTRACT_VERSION,
+                                              inference._MAX_VERSION_LENGTH,
+                                              inference._VERSION.pattern, inference._VERSION.flags,
+                                              inference._COLUMN.pattern, inference._COLUMN.flags)),
+                      ("stats_detail_limit", stats_contract.DETAIL_LIMIT),
                       ("semantic_categories", KIND_CATEGORY), ("projection_version", PROJECTION_VERSION)))
     return hashlib.sha256(json.dumps(contracts, sort_keys=True,
         separators=(",", ":")).encode()).hexdigest()
@@ -100,8 +128,62 @@ def _projection_captured(cue, document, body, spans):
     return False
 
 
-def iter_audit_rows(db, scope: dict):
+def _strict_object(raw):
+    try:
+        result = strict_json(raw)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    return result if isinstance(result, dict) else None
+
+
+def _hold_may_affect_current(row, message, target_version, *, allow_unscoped=False):
+    if row['project_id'] != message['project_id'] and not (allow_unscoped and row['project_id'] is None):
+        return False
+    receipt = _strict_object(row['content'])
+    if receipt is None:
+        return True
+    digest, source = receipt.get('hash'), message['content_hash']
+    # Only two valid, unequal hashes conclusively prove a different source.
+    if valid_hash(digest) and valid_hash(source) and digest != source:
+        return False
+    version = receipt.get('target_version')
+    if type(version) is int and version > 0 and version != target_version:
+        return False
+    # The writer defines no alternative state for this receipt kind.
+    # An unrecognized value is not proof that a hold is absent.
+    return True
+
+
+def _newer_artifact_unverified(rows, selected, message, inference_target):
+    priority = {'semantic_facts_v4': 0, 'canonical_projection': 1, 'extract_llm': 2}
+    for row in rows:
+        if (row['artifact_id'] <= selected['artifact_id']
+                or priority[row['kind']] > priority[selected['kind']]):
+            continue
+        meta = _strict_object(row['meta'])
+        if meta is None:
+            return True
+        version = inference.read_version(meta)
+        if version is not None and version != inference_target:
+            continue
+        if version is None:
+            return True
+        if meta.get('invalidated') is True or type(meta.get('invalidated')) is int and meta['invalidated'] == 1:
+            continue
+        digest, source = meta.get('hash'), message['content_hash']
+        if valid_hash(digest) and valid_hash(source) and digest != source:
+            continue
+        # A newer candidate of equal or higher reader precedence was not
+        # selected by the current predicate; its impact is unverified.
+        return True
+    return False
+
+
+def iter_audit_rows(db, scope: dict, *, target_version=None,
+                    inference_target=inference.CURRENT_VERSION, hold_mode='current'):
     """Yield private source identities and lexical coverage; never serialize body or documents."""
+    target_version = _target_version(target_version)
+    _audit_mode(inference_target, hold_mode)
     where, params = stats_contract.message_scope_sql(scope)
     cursor = db.execute(
         "SELECT m.message_id,m.project_id,m.content_hash,m.body_text,m.posted_at_ts,"
@@ -115,7 +197,7 @@ def iter_audit_rows(db, scope: dict):
         for row in db.execute(
                 "SELECT a.* FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
                 f"WHERE a.message_id IN ({marks}) AND a.kind IN ({FACT_KINDS_SQL})"
-                + current_fact_pred() + " ORDER BY a.artifact_id DESC", ids):
+                + current_fact_pred(inference_target=inference_target) + " ORDER BY a.artifact_id DESC", ids):
             selected.setdefault(row["message_id"], dict(row))
         attempts = defaultdict(list)
         held = defaultdict(list)
@@ -132,28 +214,61 @@ def iter_audit_rows(db, scope: dict):
         for message in messages:
             mid, body = message["message_id"], message["body_text"]
             artifact = selected.get(mid)
-            document = loads_dict(artifact["content"]) if artifact else None
-            meta = loads_dict(artifact["meta"]) if artifact else None
+            document = _strict_object(artifact["content"]) if artifact else None
+            meta = _strict_object(artifact["meta"]) if artifact else None
+            selected_uncertain = bool(artifact and (document is None or meta is None
+                                      or inference.read_version(meta) != inference_target))
             artifact = artifact if document is not None and meta is not None else None
+            if selected_uncertain:
+                artifact = None
             if artifact is None:
                 document, meta = {}, {}
-                existing = attempts[mid]
-                source_meta = [loads_dict(row["meta"]) for row in existing]
-                reason = ("missing" if not existing else "failed" if any(
-                    value is None or value.get("hash") == message["content_hash"]
+                # Other known public generations cannot establish an attempt
+                # in this one. Keep unreadable metadata as unknown/failed.
+                source_meta = [value for row in attempts[mid]
+                               if (value := _strict_object(row['meta'])) is None
+                               or inference.read_version(value) in (None, inference_target)]
+                existing = source_meta
+                reason = ("unknown" if selected_uncertain else "missing" if not existing else "unknown" if any(
+                    value is None or inference.read_version(value) is None for value in source_meta)
+                    else "failed" if any(value.get("hash") == message["content_hash"]
                     for value in source_meta) else "stale")
                 reader, quality = "no_output", "no_output"
             else:
                 reason = "none"
                 reader = "reader_extract" if artifact["kind"] == "extract_llm" else "reader_projection"
                 quality = _quality(meta, document)
-            held_prior = bool(artifact and any(
-                receipt and receipt.get("state") == "held_prior"
-                and receipt.get("hash") == message["content_hash"]
-                and receipt.get("prior_artifact_id") == artifact["artifact_id"]
-                and receipt.get("target_version") == 8
-                for row in held[mid] if (receipt := loads_dict(row["content"])) is not None))
-            if held_prior:
+            newer_unknown = bool(artifact and _newer_artifact_unverified(
+                attempts[mid], artifact, message, inference_target))
+            matched_receipts = [row for row in held[mid] if artifact and
+                (hold_mode == 'historical' or row['project_id'] == message['project_id']) and
+                inference.read_version(_strict_object(row['meta'])) == inference_target and
+                (receipt := _strict_object(row['content'])) is not None
+                and receipt.get('state') == 'held_prior'
+                and valid_hash(message['content_hash'])
+                and valid_hash(receipt.get('hash'))
+                and receipt.get('hash') == message['content_hash']
+                and type(receipt.get('prior_artifact_id')) is int
+                and receipt['prior_artifact_id'] == artifact['artifact_id']
+                and type(receipt.get('target_version')) is int
+                and receipt['target_version'] == target_version]
+            # A historical receipt's public generation must match the chosen
+            # evaluation; an absent version key identifies generation 0.1.
+            held_prior = bool(hold_mode == 'historical' and matched_receipts)
+            # A matching receipt alone cannot establish which code generation
+            # a running worker owns, even when its contract equals disk bytes.
+            hold_unknown = bool(any(
+                _hold_may_affect_current(row, message, target_version,
+                                         allow_unscoped=hold_mode == 'historical')
+                and (hold_mode == 'current' or (
+                    inference.read_version(_strict_object(row['meta'])) in (None, inference_target)
+                    and row not in matched_receipts
+                    and (artifact is None or (receipt := _strict_object(row['content'])) is None
+                         or type(receipt.get('prior_artifact_id')) is not int
+                         or receipt['prior_artifact_id'] <= 0
+                         or receipt['prior_artifact_id'] == artifact['artifact_id'])))
+                for row in held[mid]))
+            if artifact and (held_prior or hold_unknown or newer_unknown):
                 quality = "attention"
             classes = {}
             for code, cue in CUE_CLASSES.items():
@@ -168,6 +283,8 @@ def iter_audit_rows(db, scope: dict):
                 "content_hash": message["content_hash"], "reader": reader, "reason": reason,
                 "extract_version": version if type(version) is int and version >= 0 else None,
                 "classes": classes, "quality": quality, "held_prior": held_prior,
+                "hold_unknown": hold_unknown,
+                "newer_artifact_unknown": newer_unknown,
                 "output_digest": hashlib.sha256(json.dumps(document, sort_keys=True,
                     ensure_ascii=False, separators=(",", ":")).encode()).hexdigest() if artifact else None,
                 "profession": _profession(message["profession"] or message["sender_type"]),
@@ -241,10 +358,12 @@ def collect(db, scope):
                 "WHERE a.kind='loop_candidate' AND a.project_id=m.project_id AND "
                 + ELIGIBLE_MESSAGE + where, params):
             loop_rows[row["message_id"]].append(row)
-    cue_posts = all_posts = unknown_validation = 0
+    cue_posts = all_posts = unknown_validation = hold_unknown = newer_unknown = 0
     loop_work = []
     for row in iter_audit_rows(db, scope):
         all_posts += 1
+        hold_unknown += int(row.get('hold_unknown') is True)
+        newer_unknown += int(row.get('newer_artifact_unknown') is True)
         attachments[(row["reader"], row["length"], row["message_id"] in attachment_ids)] += 1
         if not row["classes"]:
             continue
@@ -296,6 +415,7 @@ def collect(db, scope):
                 counter[state] += 1
                 counter["evaluation_unavailable"] += value["relation_evaluation_unavailable"]
     population = {"cue_posts": cue_posts, **readers, **{f"no_output_{k}": v for k, v in reasons.items()}}
+    uncertain_attempts = reasons.get('unknown', 0)
     omission_rows = _rows(omission)
     for item in omission_rows:
         item["missed_rate"] = item["missed_posts"] / item["cue_posts"]
@@ -321,7 +441,13 @@ def collect(db, scope):
                                 "with_attachments": attachments[(reader, length, True)]})
     return {
         "omission_proxy": result({"population": population, "by_class": by_class(omission),
-                                   "rows": packed(omission_rows)}),
+                                   "rows": packed(omission_rows), **({'hold_unknown_posts': hold_unknown}
+                                   if hold_unknown else {}), **({'newer_artifact_unknown_posts': newer_unknown}
+                                   if newer_unknown else {})},
+                                  status='partial' if hold_unknown or newer_unknown or uncertain_attempts else 'ok',
+                                  reason=('hold_status_unverified' if hold_unknown else
+                                          'newer_artifact_unverified' if newer_unknown else
+                                          'attempt_generation_unknown' if uncertain_attempts else None)),
         "validation_drops": result({"population": population, "by_class": by_class(validation),
                                       "rows": packed(_rows(validation))},
             status="partial" if unknown_validation else "ok",

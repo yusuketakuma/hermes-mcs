@@ -583,6 +583,19 @@ $PY mcs/ops/mcs_refstats.py verify --name nightly   # match/drift/regression/unv
   （`audit_definition`）を記録する。verify で定義の記録が無ければ
   `definition_missing`、現在の定義と違えば `definition_changed` とし、数値は比較
   しない（exit 2）。新しい定義で capture し直し、本人承認を取り直す。
+- 現行の抽出監査では、同じ患者・投稿・原文について対象版の保留記録がある場合や
+  保留記録を読めない場合、現行ワーカーの hold 契約を確認できない。保留を確定
+  せず、抽出結果がある投稿は `attention`、`omission_proxy` は `partial`・
+  `hold_status_unverified` とし、`hold_unknown_posts` に件数を記録する。抽出結果
+  がない投稿は `no_output` のままにする。
+- 版7から版8への固定評価は、`audit_cohort.py pin` と `compare` の両方に
+  `--inference-version 0.1` または `--inference-version 1.0` を指定する。
+  省略時は現在の公開推論世代を使う。指定した世代は計測定義に含まれ、異なる
+  世代の pin は比較できない。0.1 は旧公開世代を選ぶための指定であり、当時の
+  実環境で保存された snapshot の完全な再現は未検証。定義変更前の pin は保持し、
+  元の baseline を同じ条件で再現できなければ、作り直した比較を成功扱いしない。
+  固定評価の保留記録も選択した公開世代に限る。世代キーの欠落は 0.1 として扱い、
+  記録のメタデータが不正で世代を確認できない場合は要確認とする。
 - capture は `as_of` 未指定時に snapshot 生成時刻を query へ固定して
   保存するため、時間窓つき統計でもデータ不変の再 publish は `drift`
   にならない。
