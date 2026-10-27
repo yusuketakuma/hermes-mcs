@@ -80,13 +80,12 @@ def document(led, kind=context_refresh.KIND, pid=1):
 
 @pytest.mark.parametrize('at,day', [
     ('2026-10-17T12:00:00', '2026-10-17'), ('2026-10-17T22:59:59', '2026-10-17'),
-    ('2026-10-17T23:00:00', '2026-10-17'), ('2026-10-18T00:00:00', '2026-10-17'),
-    ('2026-10-18T03:29:59', '2026-10-17'), ('2026-10-18T03:30:00', '2026-10-18'),
+    ('2026-10-17T23:59:59', '2026-10-17'), ('2026-10-18T00:00:00', '2026-10-18'),
+    ('2026-10-18T03:29:59', '2026-10-18'), ('2026-10-18T03:30:00', '2026-10-18'),
     ('2026-10-18T04:00:00', '2026-10-18')])
 def test_workday_window(at, day):
-    """Patient context runs around the clock: every instant has a day
-    id, the id rolls at 03:30 JST and ends at the next 03:30."""
-    end = stamp('2026-10-18T03:30:00' if day == '2026-10-17' else '2026-10-19T03:30:00')
+    """The workday follows the JST calendar, including 00:00 and the old boundary."""
+    end = stamp('2026-10-18T00:00:00' if day == '2026-10-17' else '2026-10-19T00:00:00')
     assert context_refresh.workday_window(stamp(at)) == (day, end)
 
 
@@ -109,7 +108,7 @@ def test_default_enables_generation_and_private_reading(runtime):
     assert context_refresh.context_view_input(led.db, 1, cfg={}) is not None
 
 
-@pytest.mark.parametrize('at,seconds', [('2026-10-18T03:29:00', 600),
+@pytest.mark.parametrize('at,seconds', [('2026-10-17T23:59:30', 64),
                                       ('2026-10-17T23:00:00', 64)])
 def test_insufficient_time_never_starts_inference(runtime, at, seconds):
     led, clock, calls = runtime
@@ -142,6 +141,7 @@ def test_chunk_checkpoint_survives_next_night_without_repeating_prefix(runtime):
     led, clock, calls = runtime
     body = '合成記録の第一の区間。' * 240 + '\n' + '合成記録の第二の区間。' * 240
     seed(led, body=body)
+    clock.wall = stamp('2026-10-17T23:59:00')
     assert len(context_refresh.context_plan.plan_chunks(body)) > 1
     assert step(runtime)['lane'] == 'A'
     assert step(runtime)['lane'] == 'B'
@@ -149,12 +149,74 @@ def test_chunk_checkpoint_survives_next_night_without_repeating_prefix(runtime):
     assert saved['cursor'] == 1 and not saved['complete']
     assert document(led)['facts'] == [], 'partial scan must not be published'
     first_source = calls[-1]['source']
-    clock.wall = stamp('2026-10-18T23:00:00')
+    clock.wall = stamp('2026-10-18T00:00:00')
     assert step(runtime)['lane'] == 'B'
     assert document(led, context_refresh.SCAN)['cursor'] == 2
     assert calls[-1]['source'] != first_source
     finish(runtime)
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG)['facts']
+
+
+def test_legacy_0330_day_id_does_not_reset_an_existing_chunk_checkpoint(runtime):
+    led, clock, calls = runtime
+    body = '合成記録の第一の区間。' * 240 + '\n' + '合成記録の第二の区間。' * 240
+    seed(led, body=body)
+    clock.wall = stamp('2026-10-18T00:30:00')
+    assert step(runtime)['lane'] == 'A'
+    assert step(runtime)['lane'] == 'B'
+    assert document(led, context_refresh.SCAN)['cursor'] == 1
+    first_source = calls[-1]['source']
+    chunk_ids = [row[0] for row in led.db.execute('SELECT artifact_id FROM artifacts WHERE kind=?', (context_refresh.CHUNK,))]
+    assert chunk_ids
+    with led.db:
+        for row in led.db.execute('SELECT artifact_id,meta FROM artifacts WHERE kind IN (?,?,?)',
+                                  (context_refresh.KIND, context_refresh.SCAN, context_refresh.CHUNK)).fetchall():
+            meta = json.loads(row['meta'])
+            meta['night_id'] = '2026-10-17'
+            led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), row['artifact_id']))
+    assert step(runtime)['lane'] == 'B'
+    assert document(led, context_refresh.SCAN)['cursor'] == 2
+    assert calls[-1]['source'] != first_source
+    assert all(led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (artifact_id,)).fetchone()
+               for artifact_id in chunk_ids)
+
+
+@pytest.mark.parametrize('held', [False, True])
+def test_legacy_workday_progress_preserves_retry_and_hold_across_midnight(runtime, monkeypatch, held):
+    led, clock, _ = runtime
+    seed(led)
+    clock.wall = stamp('2026-10-17T23:59:30')
+    monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', lambda *_a, **_k: {
+        'status': 200, 'finish_reason': 'length', 'text': '{}'})
+    assert step(runtime)['status'] == 'failed'
+    row = led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=1',
+                         (context_refresh.PROGRESS,)).fetchone()
+    progress, meta = json.loads(row['content']), json.loads(row['meta'])
+    progress.update(night_id='2026-10-17', held=held)
+    meta['night_id'] = '2026-10-17'
+    with led.db:
+        led.db.execute('UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?',
+                       (json.dumps(progress), json.dumps(meta), row['artifact_id']))
+    clock.wall = stamp('2026-10-18T00:00:00')
+    _, saved, pending = context_refresh._pending(led.db, 1, CFG, now=clock.wall)
+    assert not pending['A'] and saved['held'] is held
+    assert saved['attempts'] == progress['attempts'] and saved['next_try'] == progress['next_try']
+    _, _, later = context_refresh._pending(led.db, 1, CFG, now=progress['next_try'] + 1)
+    assert later['A'] is (not held)
+
+
+def test_clock_rollback_and_same_day_restart_do_not_repeat_completed_work(runtime):
+    led, clock, calls = runtime
+    seed(led)
+    clock.wall = stamp('2026-10-18T01:00:00')
+    finish(runtime)
+    count = len(calls)
+    before = document(led)
+    clock.wall = stamp('2026-10-17T23:55:00')
+    assert step(runtime)['status'] == 'complete'
+    clock.wall = stamp('2026-10-18T01:05:00')
+    assert step(runtime)['status'] == 'complete'
+    assert len(calls) == count and document(led) == before
 
 
 def test_source_change_during_inference_prevents_publish(runtime, monkeypatch):
@@ -279,21 +341,73 @@ def test_failure_backoff_does_not_starve_other_patient(runtime, monkeypatch):
     assert calls
 
 
-def test_crossing_end_during_inference_discards_unfinished_publication(runtime, monkeypatch):
+def test_crossing_midnight_during_inference_commits_once_under_start_day(runtime, monkeypatch):
     led, clock, _ = runtime
     seed(led)
+    clock.wall = stamp('2026-10-17T23:59:30')
     original = context_refresh.local_llm.admitted_chat
     def cross_end(*args, **kwargs):
         response = original(*args, **kwargs)
-        clock.wall = stamp('2026-10-18T03:30:00')
+        clock.wall = stamp('2026-10-18T00:00:01')
+        clock.mono += 31
         return response
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', cross_end)
-    assert step(runtime)['status'] == 'deferred'
-    assert document(led) is None
-    monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', original)
-    clock.wall = stamp('2026-10-18T23:00:00')
     assert step(runtime)['status'] == 'progressed'
     assert document(led)
+    meta = led.db.execute('SELECT meta FROM artifacts WHERE kind=? AND project_id=1', (context_refresh.KIND,)).fetchone()
+    assert json.loads(meta[0])['night_id'] == '2026-10-17'
+    monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', original)
+    finish(runtime)
+    calls = len(runtime[2])
+    assert step(runtime)['status'] == 'complete'
+    assert len(runtime[2]) == calls
+
+
+@pytest.mark.parametrize('condition', ['source', 'deadline', 'admission'])
+def test_midnight_does_not_bypass_inflight_safety_guards(runtime, monkeypatch, condition):
+    led, clock, _ = runtime
+    seed(led)
+    clock.wall = stamp('2026-10-17T23:59:30')
+    original = context_refresh.local_llm.admitted_chat
+    allowed = [True]
+
+    def crossing(*args, **kwargs):
+        response = original(*args, **kwargs)
+        clock.wall = stamp('2026-10-18T00:00:01')
+        clock.mono += 31
+        if condition == 'source':
+            led.db.execute("UPDATE messages SET body_text='変更された合成本文', content_hash='changed' WHERE message_id=1")
+            led.db.commit()
+        elif condition == 'deadline':
+            clock.mono += 600
+        else:
+            allowed[0] = False
+        return response
+
+    monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', crossing)
+    result = step(runtime, admit=lambda: allowed[0])
+    assert result['status'] == ('source_changed' if condition == 'source' else 'deferred')
+    assert document(led) is None and not led.db.in_transaction
+
+
+def test_commit_lock_wait_can_cross_midnight_without_resending(runtime, monkeypatch):
+    led, clock, calls = runtime
+    seed(led)
+    clock.wall = stamp('2026-10-17T23:59:59')
+    tries = []
+
+    def acquire():
+        tries.append(1)
+        return None if len(tries) == 1 else os.open(os.devnull, os.O_RDONLY)
+
+    def sleep(seconds):
+        clock.wall += seconds
+        clock.mono += seconds
+
+    monkeypatch.setattr(context_refresh, 'acquire_run_lock', acquire)
+    monkeypatch.setattr(context_refresh.time, 'sleep', sleep, raising=False)
+    assert step(runtime)['status'] == 'progressed'
+    assert len(tries) == 2 and len(calls) == 1 and document(led)
 
 
 def test_ordinary_refetch_timestamp_does_not_regenerate(runtime):
@@ -763,8 +877,7 @@ def test_unbrokered_context_refresh_request_sends_pinned_slot(monkeypatch):
     monkeypatch.setattr(context_refresh.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(context_refresh.local_llm, "resolve", lambda cfg: ("http://127.0.0.1:8080", "synthetic"))
     with context_refresh.local_llm.pinned_slot(2):
-        assert context_refresh._ask({}, {}, context_refresh.time.monotonic() + 600, lambda: True,
-                            context_refresh.time.time() + 600) == {}
+        assert context_refresh._ask({}, {}, context_refresh.time.monotonic() + 600, lambda: True) == {}
     assert len(sent) == 1
     assert sent[0]["id_slot"] == 2
 
@@ -798,8 +911,7 @@ def test_turn_wait_expiry_defers_without_charging_the_patient(monkeypatch):
     monkeypatch.setattr(context_refresh.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(context_refresh.local_llm, "resolve", lambda cfg: ("http://127.0.0.1:8080", "synthetic"))
     with pytest.raises(context_refresh.Deferred, match="nightly_turn_busy"):
-        context_refresh._ask({}, {}, context_refresh.time.monotonic() + 600, lambda: True,
-                     context_refresh.time.time() + 600)
+        context_refresh._ask({}, {}, context_refresh.time.monotonic() + 600, lambda: True)
 
 
 def test_finished_inference_waits_briefly_for_the_run_lock(runtime, monkeypatch):

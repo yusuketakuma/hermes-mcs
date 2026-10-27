@@ -62,17 +62,11 @@ def options(cfg):
 
 
 def workday_window(now):
-    """Return the current work day's id and absolute end.
-
-    Patient context runs at any hour since 2026-10-18 (lane 3's first
-    priority); the day id still rolls at 03:30 JST so a night's work
-    keeps one id across midnight and progress keys stay comparable with
-    earlier night-only records."""
+    """Return the current JST calendar day's id and next midnight."""
     stamp = datetime.fromtimestamp(now, JST)
-    minute = stamp.hour * 60 + stamp.minute
-    start = stamp.date() if minute >= 210 else stamp.date() - timedelta(days=1)
+    start = stamp.date()
     end = datetime.combine(start + timedelta(days=1), datetime.min.time(), JST)
-    return start.isoformat(), (end + timedelta(hours=3, minutes=30)).timestamp()
+    return start.isoformat(), end.timestamp()
 
 
 def _latest(db, kind, pid, mid=None):
@@ -775,9 +769,8 @@ def status(db, cfg):
     return counts
 
 
-def _ask(cfg, payload, deadline, admit, end, *, provider=None):
-    if (not admit() or time.monotonic() + CALL_SECONDS + COMMIT_MARGIN > deadline
-            or time.time() + CALL_SECONDS + COMMIT_MARGIN > end):
+def _ask(cfg, payload, deadline, admit, *, provider=None):
+    if not admit() or time.monotonic() + CALL_SECONDS + COMMIT_MARGIN > deadline:
         raise Deferred("nightly_capacity_or_deadline")
     prompt = json.dumps(payload, ensure_ascii=False)
     if len(prompt) > context_plan.MAX_PROMPT_CHARS:
@@ -814,7 +807,7 @@ def _ask(cfg, payload, deadline, admit, end, *, provider=None):
     return answer
 
 
-def _summary(cfg, facts, deadline, admit, end, *, provider=None, metrics=None):
+def _summary(cfg, facts, deadline, admit, *, provider=None, metrics=None):
     if not facts:
         if metrics is not None:
             metrics.update(rejected=0, repairs=0)
@@ -824,14 +817,14 @@ def _summary(cfg, facts, deadline, admit, end, *, provider=None, metrics=None):
         "短く読める順に最大12件選んでください。診断・指示を作らず、別の人・否定・過去・予定を保持。"
         "view_bucketの現在/履歴/予定/不一致/未確認を区別し、履歴や予定を現在の実施として扱わない。"
         "JSON {\"fact_ids\":[入力id]}だけを返す。文章は生成せず原文単位を選ぶ。", "reports": reports},
-                  deadline, admit, end, **({"provider": provider} if provider else {}))
+                  deadline, admit, **({"provider": provider} if provider else {}))
     result = context_plan.summary_selection(answer, reports)
     if metrics is not None:
         metrics.update(rejected=0, repairs=0)
     return result
 
 
-def _scan(cfg, source, saved, night_id, deadline, admit, end, *, provider=None, metrics=None):
+def _scan(cfg, source, saved, night_id, deadline, admit, *, provider=None, metrics=None):
     chunks, cursor, saved, items, covered = context_plan.scan_plan(source, saved)
     chunk = chunks[cursor]
     split = saved.get("split", 0)
@@ -849,7 +842,7 @@ def _scan(cfg, source, saved, night_id, deadline, admit, end, *, provider=None, 
         def asked(body):
             """The answer, or the finer re-plan when it stopped at the answer budget."""
             try:
-                return _ask(cfg, body, deadline, admit, end, **({"provider": provider} if provider else {})), None
+                return _ask(cfg, body, deadline, admit, **({"provider": provider} if provider else {})), None
             except ValueError as exc:
                 finer = str(exc) == "nightly_length_stop" and context_plan.split_scan(source, saved, cursor)
                 if not finer:
@@ -913,8 +906,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     window = workday_window(now)
     if not options(cfg)["enabled"] or not window:
         return {"status": "off", "done": 0}
-    night_id, end = window
-    deadline = min(deadline, time.monotonic() + end - now)
+    night_id, _ = window
     if time.monotonic() + COMMIT_MARGIN >= deadline or not admit():
         return {"status": "deferred", "done": 0}
     started = time.monotonic()
@@ -971,7 +963,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     shadow_unit = None
 
     def current():
-        return (time.time() < end and admit()
+        return (admit()
                 and _snapshot(ledger.db, pid, cfg, hydrate=False)["source_sig"] == snapshot["source_sig"]
                 and _scan_sig(ledger.db, pid) == frozen_scan_sig
                 and _published_version(ledger.db, pid) == frozen_ver)
@@ -979,11 +971,10 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     def cloud_for(unit_key, mid=None, *, after_commit=False):
         return extract_llm._CloudProvider(ledger, {"cloud_llm": cloud_settings}, route="patient_context", project_id=pid,
             message_id=mid, unit_key=unit_key, deadline=deadline,
-            current=(lambda: time.time() < end and admit()
+            current=(lambda: admit()
                 and _snapshot(ledger.db, pid, cfg, hydrate=False)["source_sig"] == snapshot["source_sig"])
                 if after_commit else current,
-            dispatch=lambda fn, **kw: fn(), owner={"night_id": night_id, "source_sig": snapshot["source_sig"]},
-            discard_reason=lambda: "discarded_workday" if time.time() >= end else "discarded_scope")
+            dispatch=lambda fn, **kw: fn(), owner={"night_id": night_id, "source_sig": snapshot["source_sig"]})
 
     def discard_if_changed():
         if provider is not None:
@@ -1015,7 +1006,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 return value
             except (extract_llm.CloudFallback, ValueError) as error:
                 changed = isinstance(error, extract_llm.CloudFallback) and str(error) == "cloud_unit_changed"
-                if changed or time.time() >= end:
+                if changed:
                     provider.discard()
                 paid = bool(getattr(provider, "completed_reservations", None)) and not changed
                 provider = None
@@ -1059,7 +1050,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 meta["model"] = old_meta["provider"]["model"]
             summary = old["summary"] if same else infer(
                 lambda backend, reset, metrics=None, comparison=False: _summary(cfg, facts, deadline,
-                    admit if backend else local_admit, end, **({"provider": backend} if backend else {}),
+                    admit if backend else local_admit, **({"provider": backend} if backend else {}),
                     **({"metrics": metrics} if metrics is not None else {})),
                 unit_key="summary")
             meta["scan_backends"] = sorted({
@@ -1089,7 +1080,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     if lane == "B":
                         result = infer(lambda backend, reset, metrics=None, comparison=False: _scan(cfg, source,
                             {} if reset else {**saved, "facts": []} if comparison else saved, night_id, deadline,
-                            admit if backend else local_admit, end,
+                            admit if backend else local_admit,
                             **({"provider": backend} if backend else {}),
                             **({"metrics": metrics} if metrics is not None else {})),
                             unit_key="scan:" + str(_source_key(source)), mid=source["message_id"] or None, saved=saved)
@@ -1118,7 +1109,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         failure = code if type(exc) is ValueError and _FAILURE_CODE.fullmatch(code) else type(exc).__name__
     if result is None and failure is None:
         return {"status": "deferred", "done": 0}
-    if time.monotonic() >= deadline or time.time() >= end or not admit():
+    if time.monotonic() >= deadline or not admit():
         discard_if_changed()
         return {"status": "deferred", "done": 0}
     # Rebuild the source signature outside the write lock. A data-version
@@ -1131,10 +1122,9 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     # same prompt again on the next iteration.
     waited = 0
     while (fd := acquire_run_lock()) is None:
-        # the cap, the unit deadline, the day end and a withdrawn
+        # the cap, the unit deadline and a withdrawn
         # admission (updater, config, breaker, disk) all end the wait
-        if (waited >= 60 or time.monotonic() + COMMIT_MARGIN >= deadline
-                or time.time() + COMMIT_MARGIN >= end or not admit()):
+        if waited >= 60 or time.monotonic() + COMMIT_MARGIN >= deadline or not admit():
             discard_if_changed()
             return {"status": "deferred", "done": 0, "reason": "run_lock", "lock_wait_s": waited}
         time.sleep(1)
@@ -1162,12 +1152,12 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             moved = (fresh["source_sig"] != snapshot["source_sig"] or scans_now != frozen_scan_sig
                      or _published_version(ledger.db, pid) != frozen_ver
                      or snapshot["contract"].get(VERSION_KEY) != CURRENT_VERSION)
-            if moved or time.monotonic() >= deadline or time.time() >= end:
+            if moved or time.monotonic() >= deadline:
                 # another publisher (a second lane-3 process) wrote this
                 # patient's context or progress since selection: our
                 # inputs are stale, the next unit re-selects
                 ledger.db.rollback()
-                if provider is not None and (moved or time.time() >= end):
+                if provider is not None and moved:
                     provider.discard()
                 return {"status": "source_changed", "done": 0}
             prior = progress if lane == "A" else saved
@@ -1288,11 +1278,11 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 cloud_value, sources, facts=facts if lane == "A" else None)
         except ValueError:
             cloud_comparison = None
-        if time.monotonic() < deadline and time.time() < end:
+        if time.monotonic() < deadline:
             audit_fd = acquire_run_lock()
             if audit_fd is not None:
                 try:
-                    if time.monotonic() < deadline and time.time() < end:
+                    if time.monotonic() < deadline:
                         extract_llm._cloud_compare(ledger, route="patient_context", project_id=pid,
                             local_facts=local_comparison, cloud_facts=cloud_comparison, unit=shadow_unit,
                             rejected=measured.get("rejected"), repairs=measured.get("repairs"))

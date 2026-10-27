@@ -225,6 +225,26 @@ def test_jst_day_changes_without_month_refund(tmp_path, now, monkeypatch):
         assert Decimal(report["monthly_cost_usd"]) == _max()
 
 
+@pytest.mark.parametrize('start,finish,same_month', [
+    ((2026, 10, 26, 23, 59), (2026, 10, 27, 0, 0), True),
+    ((2026, 10, 31, 23, 59), (2026, 11, 1, 0, 0), False),
+])
+def test_cloud_result_across_midnight_stays_bound_to_reservation_period(tmp_path, monkeypatch, start, finish, same_month):
+    clock = [datetime(*start, tzinfo=c.JST).timestamp()]
+    monkeypatch.setattr(c.time, 'time', lambda: clock[0])
+    with closing(Ledger(str(tmp_path / 'l.db'))) as db:
+        reservation = _reserve(db)
+        assert c.usage_report(db)['daily_requests'] == 1
+        clock[0] = datetime(*finish, tzinfo=c.JST).timestamp()
+        c.record_result(db, reservation, _result(reservation))
+        report = c.usage_report(db)
+        assert not report['pricing_unverified'] and report['daily_requests'] == 0
+        assert Decimal(report['monthly_cost_usd']) == (Decimal('0.000002') if same_month else Decimal(0))
+        _reserve(db, unit='new-day')
+        assert c.usage_report(db)['daily_requests'] == 1
+        assert len(db.artifacts('cloud_usage_result')) == 1
+
+
 def test_cache_prices_and_long_threshold():
     assert c.usage_cost({"input_tokens": 100000, "output_tokens": 10}) == Decimal("0.010005")
     assert c.usage_cost({"input_tokens": 100001, "output_tokens": 10}) == Decimal("0.0500255")

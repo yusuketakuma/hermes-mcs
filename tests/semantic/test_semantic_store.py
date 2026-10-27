@@ -1,6 +1,7 @@
 """Synthetic contracts for current artifacts and thread-scoped attachments."""
 import semantic_policy
 import semantic_store
+import inference_version
 import json
 import time
 
@@ -64,9 +65,12 @@ def test_current_artifact_skips_non_object_metadata(tmp_path, malformed_meta):
     db = _seeded(tmp_path)
     try:
         valid = {'claims': []}
+        db.artifact_add(semantic_policy.KIND_SUMMARY, json.dumps({'claims': ['legacy']}),
+                        project_id=1, message_id=1, meta={'fingerprint': 'current'})
+        assert semantic_store.current_artifact(db.db, semantic_policy.KIND_SUMMARY, 1, 'current') is None
         db.artifact_add(semantic_policy.KIND_SUMMARY, json.dumps(valid),
                         project_id=1, message_id=1,
-                        meta={'fingerprint': 'current'})
+                        meta={'fingerprint': 'current', inference_version.VERSION_KEY: inference_version.CURRENT_VERSION})
         with db.db:
             db.db.execute(
                 'INSERT INTO artifacts(kind,project_id,message_id,content,meta) '
@@ -119,6 +123,28 @@ def test_usage_count_resumes_after_the_last_summed_row(tmp_path, monkeypatch):
         assert semantic_store.jev_usage_today(db) == 6 and len(parsed) == 3
         db.artifact_add('semantic_usage', '{}', meta={'jev_requests': 1})
         assert semantic_store.jev_usage_today(db) == 7 and len(parsed) == 4
+    finally:
+        db.close()
+
+
+def test_jev_daily_budget_uses_jst_midnight_without_deleting_prior_usage(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    jst = timezone(timedelta(hours=9))
+    clock = [datetime(2026, 10, 17, 23, 59, 59, tzinfo=jst).timestamp()]
+    db = _seeded(tmp_path)
+    try:
+        with db.db:
+            db.db.execute("INSERT INTO artifacts(kind,content,meta,created_at) VALUES(?,?,?,?)",
+                          ('semantic_usage', '{}', json.dumps({'jev_requests': 2}), clock[0]))
+        monkeypatch.setattr(semantic_store.time, 'time', lambda: clock[0])
+        assert semantic_store.jev_usage_today(db) == 2
+        clock[0] += 1
+        assert semantic_store.jev_usage_today(db) == 0
+        with db.db:
+            db.db.execute("INSERT INTO artifacts(kind,content,meta,created_at) VALUES(?,?,?,?)",
+                          ('semantic_usage', '{}', json.dumps({'jev_requests': 1}), clock[0]))
+        assert semantic_store.jev_usage_today(db) == 1
+        assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='semantic_usage'").fetchone()[0] == 2
     finally:
         db.close()
 

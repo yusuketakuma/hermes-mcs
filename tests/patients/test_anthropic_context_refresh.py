@@ -125,23 +125,31 @@ def test_shadow_runs_only_after_local_commit_and_never_publishes_cloud(runtime, 
         assert "provider" not in json.loads(row[0])
 
 
-def test_crossing_0330_rejects_cloud_publication(runtime, cloud, monkeypatch):
+def test_crossing_midnight_preserves_cloud_publication_and_progress(runtime, cloud, monkeypatch):
     led, clock, _ = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
-    clock.wall = stamp("2026-10-18T03:20:00")
+    clock.wall = stamp("2026-10-17T23:59:30")
     original = worker._CloudProvider
     class Crossing(original):
         def __call__(self, prompt, **kwargs):
             answer = super().__call__(prompt, **kwargs)
-            clock.wall = stamp("2026-10-18T03:30:00")
+            clock.wall = stamp("2026-10-18T00:00:01")
+            clock.mono += 31
             return answer
     monkeypatch.setattr(worker, "_CloudProvider", Crossing)
     # First unit publishes the empty deterministic selection; the scan sends next.
     step(runtime)
     result = step(runtime)
-    assert result["status"] == "deferred"
-    assert not led.artifacts(context_refresh.SCAN)
-    assert led.synthetic_cloud_dispositions == ["discarded_workday"]
+    assert result["status"] == "progressed"
+    assert led.artifacts(context_refresh.SCAN)
+    meta = led.db.execute("SELECT meta FROM artifacts WHERE kind=? AND project_id=1", (context_refresh.SCAN,)).fetchone()
+    assert json.loads(meta[0])["night_id"] == "2026-10-17"
+    assert not led.synthetic_cloud_dispositions
+    before = len(cloud[0])
+    drain(runtime)
+    after = len(cloud[0])
+    assert after >= before
+    assert step(runtime)["status"] == "complete" and len(cloud[0]) == after
 
 
 @pytest.mark.parametrize("mode", ["off", "shadow"])

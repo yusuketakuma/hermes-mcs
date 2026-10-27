@@ -73,15 +73,15 @@ def test_repair_prompt_without_reference_is_byte_stable():
 def test_context_refresh_prompts_lead_with_the_fixed_instruction(monkeypatch):
     payloads = []
 
-    def ask(cfg, payload, deadline, admit, end):
+    def ask(cfg, payload, deadline, admit):
         payloads.append(payload)
         raise patient_context_refresh.Deferred("captured")
     monkeypatch.setattr(patient_context_refresh, "_ask", ask)
     fact = {"id": "f1", "source": "s", "project_id": 1, "message_id": 1, "category": "living",
             "text": "合成の背景", "posted_at": POSTED, "subject": "patient"}
-    for fn, args in ((patient_context_refresh._summary, ({}, [fact], None, lambda: True, None)),
+    for fn, args in ((patient_context_refresh._summary, ({}, [fact], None, lambda: True)),
                      (patient_context_refresh._scan, ({}, {"body_text": "合成の本文", "items": []},
-                                              {}, "n1", None, lambda: True, None))):
+                                              {}, "n1", None, lambda: True))):
         try:
             fn(*args)
         except patient_context_refresh.Deferred:
