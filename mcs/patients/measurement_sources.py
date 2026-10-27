@@ -54,6 +54,77 @@ _CORRECTION = re.compile(
     r"誤っ(?:た|て(?:いました|いた|います|いる)))|"
     r"(?:実際(?:には|は)?|事実(?:は|としては)?)\s*(?:違(?:う|います|いました|った)|異な(?:る|ります|りました|った))")
 _OTHER_MEASUREMENT = re.compile(rf"(?:{FAMILY_PERSON}|{OTHER_PERSON})の(?:数値|値|結果|記録|測定|検査|採血)")
+_ADJACENT_UNCERTAIN = re.compile(
+    r"未確認|不明|未確定|未定|疑い|かもしれ|可能性|確認(?:中|が必要|します|する)|"
+    r"(?:です|ません|ない|でしょう)か(?:$|[、,。！？!?;；\n])|[?？]"
+)
+_FOLLOWUP_ITEM = r"(?:体温|脈拍|呼吸数|血圧|血糖|SpO2|酸素飽和度|酸素飽和|[A-Za-z]+)"
+_FUTURE_FOLLOWUP = re.compile(
+    rf"\s*(?:(?:明日|次回)(?:も|に)?\s*(?P<before>{_FOLLOWUP_ITEM})(?:を|の値を)"
+    rf"|(?P<after>{_FOLLOWUP_ITEM})(?:を|の値を)(?:明日|次回)(?:も|に)?)"
+    r"(?:確認します|確認する予定です)[。！!]?\s*", re.I
+)
+_STABLE_FOLLOWUP = re.compile(
+    rf"\s*(?P<item>{_FOLLOWUP_ITEM})(?:は|が)(?:安定している|安定した|安定しております)"
+    r"(?:ので|ため|ことから)経過を(?:確認|観察)(?:します|しています|する予定です)[。！!]?\s*", re.I
+)
+_INSTRUMENT_FAILURE = re.compile(
+    r"(?P<device>体温計|血圧計|血糖測定器|パルスオキシメーター|"
+    r"測定器|測定機器|測定機|センサー)"
+    r"[^。！？!?;；\n]{0,40}?(?P<failure>故障|不良|エラー|壊れ|壊れて)"
+)
+_DEVICE_CLASS = {"体温計": "bt", "血圧計": "bp", "血糖測定器": "bs",
+                 "パルスオキシメーター": "spo2"}
+
+
+def _clearly_separate_followup(sentence, target_label):
+    if target_label is None:
+        return False
+    for pattern in (_FUTURE_FOLLOWUP, _STABLE_FOLLOWUP):
+        match = pattern.fullmatch(sentence)
+        if match:
+            item = next(value for value in match.groupdict().values() if value is not None)
+            return target_label.fullmatch(item) is not None
+    return False
+
+
+def _family_fault_is_separate(sentence, match):
+    device = match.group("device")
+    before, separator, after = sentence.rpartition("、")
+    if not separator:
+        before, separator, after = sentence.rpartition(",")
+    if separator and not re.search(
+            r"本人|患者|利用者|私|自分|共有|共用|一緒|同じ|両方|二人|使用|使",
+            before[:match.start()] + before[match.start() + len(device):]):
+        owner_only = re.fullmatch(
+            rf"\s*(?:{FAMILY_PERSON})(?:だけ|のみ)(?:が|は)(?:その|同じ)?"
+            rf"{re.escape(device)}を(?:使いました|使用しました)[。！!]?\s*", after)
+        separate_device = re.fullmatch(
+            rf"\s*(?:本人|患者|利用者)(?:は|が)別の{re.escape(device)}(?:を(?:使いました|使用しました)"
+            r"|で測定しました)[。！!]?\s*", after)
+        if owner_only or separate_device:
+            return True
+    outside_device = sentence[:match.start()] + sentence[match.start() + len(device):]
+    return not re.search(
+        r"本人|患者|利用者|私|自分|共有|共用|一緒|同じ|両方|二人|それ|これ|使用|使|測定", outside_device)
+
+
+def _instrument_failure(sentence, target_class):
+    for match in _INSTRUMENT_FAILURE.finditer(sentence):
+        device = match.group('device')
+        device_class = _DEVICE_CLASS.get(device)
+        if device_class is not None and target_class is not None and device_class != target_class:
+            continue
+        subject, _ = source_axes(sentence, match.start(), match.start() + len(device), default="unknown")
+        if subject in ("family", "other") and _family_fault_is_separate(sentence, match):
+            continue
+        tail = sentence[match.end():]
+        negated = re.match(r"(?:し(?:て)?|て)?(?:いなかった|いない|いません|なかった|なく|ではなかった|ではない|ではありません|はない|はありません|なし)", tail)
+        remainder = tail[negated.end():] if negated else tail
+        if negated and re.fullmatch(r"(?:です|でした)?[。！!]?\s*", remainder):
+            continue
+        return True
+    return False
 
 
 def _correction_candidate(body):
@@ -95,16 +166,23 @@ def _adjacent_measurement_retraction(body, span, *, target=None):
               "spo2": "spo2", "酸素飽和度": "spo2", "酸素飽和": "spo2"}
     label = r"(?:体温|脈拍|呼吸数|血圧|血糖|SpO2|酸素飽和度|酸素飽和)"
     target_class = clinical_values._VITAL_CLASS.get(target)
+    if target_class is None and isinstance(target, str):
+        analyte = clinical_values.lab_analyte(target)
+        if analyte is not None:
+            target_class = "bs" if analyte == "blood_glucose" else "lab_other"
+    if _instrument_failure(sentence, target_class):
+        return True
     target_label = clinical_values._VITAL_LABELS.get(target_class)
     if target_label is None and isinstance(target, str) and 0 < len(target) <= 120:
         left = r"(?<![A-Za-z])" if target[0].isascii() and target[0].isalpha() else ""
         right = r"(?![A-Za-z])" if target[-1].isascii() and target[-1].isalpha() else ""
         target_label = re.compile(left + re.escape(target) + right, re.I)
+    if _clearly_separate_followup(sentence, target_label):
+        return False
     if target_label:
         for clause in re.split(r"[、,]", sentence):
-            candidate = (_correction_candidate(clause) or re.search(
-                r"未確認|不明|未確定|未定|疑い|かもしれ|可能性|確認(?:中|が必要|します|する)|"
-                r"(?:です|ません|ない|でしょう)か(?:$|[。！？!?;；\n])|[?？]", clause))
+            corrected = _correction_candidate(clause)
+            candidate = corrected or _ADJACENT_UNCERTAIN.search(clause)
             if not candidate:
                 continue
             matches = list(itertools.islice(target_label.finditer(clause), 65))
@@ -147,9 +225,7 @@ def _adjacent_measurement_retraction(body, span, *, target=None):
     if (distinct and re.fullmatch(r"(?:正しい(?:です|でした|ですが)|誤りでは(?:ない|ありません)(?:が)?|"
                                   r"間違って(?:いない|いません)(?:が)?)", first[reference.end():].strip())):
         sentence = first
-    return bool(_correction_candidate(sentence) or re.search(
-        r"未確認|不明|未確定|未定|疑い|かもしれ|可能性|確認(?:中|が必要|します|する)|"
-        r"(?:です|ません|ない|でしょう)か(?:$|[、,。！？!?;；\n])|[?？]", sentence))
+    return bool(_correction_candidate(sentence) or _ADJACENT_UNCERTAIN.search(sentence))
 
 
 def _source_record(message, ref, kind, key, value, unit, evidence, span, *, name=None,

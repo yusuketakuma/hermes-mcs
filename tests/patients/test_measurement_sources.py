@@ -109,6 +109,198 @@ def test_adjacent_unrelated_or_negated_correction_preserves_vital(suffix):
     assert invalid == 0 and record["verification"] == "quote_supported"
 
 
+@pytest.mark.parametrize(('target', 'first', 'following'), [
+    ('bt', '本人の体温36.8℃。', '明日も体温を確認します。'),
+    ('bt', '本人の体温36.8℃。', '体温の値を明日も確認します。'),
+    ('sbp', '本人の血圧132/80。', '血圧は安定しているので経過を確認します。'),
+    ('dbp', '本人の血圧132/80。', '血圧は安定しているので経過を確認します。'),
+    ('bt', '本人の体温36.8℃。', '体温が安定しているため経過を観察します。'),
+    ('sbp', '本人の血圧132/80。', '血圧は安定したことから経過を確認する予定です。'),
+    ('spo2', '本人のSpO2 92%。', 'SpO2は安定しておりますので経過を観察しています。'),
+    ('bs', '本人の血糖120。', '明日も血糖を確認します。'),
+    ('bt', '本人の体温36.8℃。', '体温計は故障していません。'),
+    ('bt', '本人の体温36.8℃。', '体温計は故障していないです。'),
+    ('bt', '本人の体温36.8℃。', '体温計は故障していなかった。'),
+    ('bt', '本人の体温36.8℃。', '家族の体温が正確に測れたか不明です。'),
+    ('bt', '本人の体温36.8℃。', '家族の体温計が故障しました。'),
+    ('bt', '本人の体温36.8℃。', '家族の体温計が故障しましたが、家族だけがその体温計を使用しました。'),
+    ('bt', '本人の体温36.8℃。', '家族の体温計が故障しましたが、本人は別の体温計を使用しました。'),
+    ('bt', '本人の体温36.8℃。', '血圧計が故障しました。'),
+])
+def test_followup_plan_or_diagnosis_does_not_retract_prior_measurement(target, first, following):
+    body = first + following
+    assert not measurement_sources._adjacent_measurement_retraction(body, (0, len(first)), target=target)
+
+
+@pytest.mark.parametrize(('target', 'first', 'following'), [
+    ('bt', '本人の体温36.8℃。', '体温の値は未確認です。'),
+    ('bt', '本人の体温36.8℃。', '体温が正確に測定できているか不明です。'),
+    ('bt', '本人の体温36.8℃。', '体温の値を明日も確認しますが、正確か不明です。'),
+    ('bt', '本人の体温36.8℃。', '体温が信頼できるか未確認です。'),
+    ('bt', '本人の体温36.8℃。', '体温を確認する必要があります。'),
+    ('bt', '本人の体温36.8℃。', '体温は正しいか確認中です。'),
+    ('bt', '本人の体温36.8℃。', '体温は正しいですか？'),
+    ('bt', '本人の体温36.8℃。', '体温は誤りではありませんか？'),
+    ('bt', '本人の体温36.8℃。', '体温は間違っていないかもしれません。'),
+    ('bt', '本人の体温36.8℃。', '体温計が故障していました。'),
+    ('bt', '本人の体温36.8℃。', '測定器が壊れていました。'),
+    ('bt', '本人の体温36.8℃。', '家族の体温計が故障しましたが、本人もその体温計を使用しました。'),
+    ('bt', '本人の体温36.8℃。', '家族の体温計が故障しましたが、それを使いました。'),
+    ('bt', '本人の体温36.8℃。', '家族の体温計が故障しましたが、私も使用しました。'),
+    ('bt', '本人の体温36.8℃。', '家族の体温計が故障しましたが、同じ体温計を使いました。'),
+    ('bt', '本人の体温36.8℃。', '体温計は故障していませんか？'),
+    ('bt', '本人の体温36.8℃。', '体温計は故障していないとは限りません。'),
+    ('bt', '本人の体温36.8℃。', '体温計は故障していないとは言えません。'),
+    ('bt', '本人の体温36.8℃。', '体温計は故障していない可能性があります。'),
+    ('bt', '本人の体温36.8℃。', '体温計は故障していなかったと思います。'),
+    ('bt', '本人の体温36.8℃。', '体温計は故障していないと確認中です。'),
+    ('bt', '本人の体温36.8℃。', '体温計は故障していなかったが、故障しました。'),
+    ('sbp', '本人の血圧132/80。', '血圧の数値は誤りです。'),
+    ('sbp', '本人の血圧132/80。', '血圧が正しく測れたか不明です。'),
+    ('dbp', '本人の血圧132/80。', '血圧が信頼できるか未確認です。'),
+    ('bs', '本人の血糖120。', 'その数値が間違っていました。'),
+    ('bs', '本人の血糖120。', '血糖の測定が正確か未確認です。'),
+    ('bs', '本人の血糖120。', '食後の血糖も確認が必要です。'),
+    ('spo2', '本人のSpO2 92%。', 'SpO2の値は誤りです。'),
+    ('spo2', '本人のSpO2 92%。', 'SpO2低下は肺炎の可能性があり受診予定です。'),
+    ('spo2', '本人のSpO2 92%。', 'SpO2低下は肺炎の可能性があり、測定値は不明です。'),
+    ('spo2', '本人のSpO2 92%。', 'SpO2低下は測定器不良の可能性があり受診予定です。'),
+    ('spo2', '本人のSpO2 92%。', 'SpO2低下は誤表示の可能性があり受診予定です。'),
+    ('spo2', '本人のSpO2 92%。', 'SpO2は安定しているので経過を確認しますが、値は不明です。'),
+    ('bt', '本人の体温36.8℃。', '体温が安定しているため経過を観察しますか？'),
+    ('Cr', '本人のCr 1.1mg/dL。', 'Crの測定が正確か未確認です。'),
+    ('未登録項目', '本人の未登録項目 1。', '体温計が故障していました。'),
+])
+def test_uncertain_reading_or_broken_instrument_still_holds(target, first, following):
+    body = first + following
+    assert measurement_sources._adjacent_measurement_retraction(body, (0, len(first)), target=target)
+
+
+@pytest.mark.parametrize(('target', 'value', 'following'), [
+    ('bt', 36.8, '明日も体温を確認します。'),
+    ('bt', 36.8, '体温計は故障していません。'),
+    ('bt', 36.8, '体温計は故障していなかった。'),
+    ('sbp', 132, '血圧は安定しているので経過を確認します。'),
+    ('dbp', 80, '血圧は安定しているので経過を確認します。'),
+    ('bs', 120, '明日も血糖を確認します。'),
+    ('spo2', 92, 'SpO2は安定しておりますので経過を観察しています。'),
+])
+def test_followup_plan_preserves_source_bound_vital(target, value, following):
+    first = {'bt': '本人の2026-10-02測定で体温36.8℃。',
+             'sbp': '本人の2026-10-02測定で血圧132/80。',
+             'dbp': '本人の2026-10-02測定で血圧132/80。',
+             'bs': '本人の2026-10-02測定で血糖120。',
+             'spo2': '本人の2026-10-02測定でSpO2 92%。'}[target]
+    message = {'project_id': 1, 'message_id': 1, 'content_hash': 'a' * 64,
+               'posted_at': '2026-10-03T09:00:00+09:00', 'body_text': first + following}
+    [record], invalid = measurement_sources._vitals(message, {'vitals': {target: value}}, 1, True)
+    assert invalid == 0 and record['verification'] == 'quote_supported'
+    assert record['evidence'] == first and record['value'] == value
+
+
+def test_followup_plan_preserves_source_bound_lab():
+    first = '本人の2026-10-02採血でCr 1.1mg/dLでした。'
+    message = {'project_id': 1, 'message_id': 1, 'content_hash': 'a' * 64,
+               'posted_at': '2026-10-03T09:00:00+09:00',
+               'body_text': first + '明日もCrを確認します。'}
+    [record], invalid = measurement_sources._labs(message, {'labs': [_lab(first, '1.1')]}, 1, None, True)
+    assert invalid == 0 and record['verification'] == 'quote_supported'
+    assert record['evidence'] == first and record['value'] == '1.1'
+
+
+@pytest.mark.parametrize('following', [
+    '体温が正確に測定できているか不明です。',
+    '体温の値を明日も確認しますが、正確か不明です。',
+    '体温が信頼できるか未確認です。',
+])
+def test_uncertain_measurement_quality_is_not_published_as_current(following):
+    first = '本人の2026-10-02測定で体温36.8℃でした。'
+    message = {'project_id': 1, 'message_id': 1, 'content_hash': 'a' * 64,
+               'posted_at': '2026-10-03T09:00:00+09:00', 'body_text': first + following}
+    [record], invalid = measurement_sources._vitals(message, {'vitals': {'bt': 36.8}}, 1, True)
+    assert invalid == 0 and record['verification'] == 'unverified'
+    [item] = measurement_timeline.project_measurements([record], source_complete=True)['items']
+    assert item['state'] == 'unknown' and item['value'] is None
+
+
+def test_uncertain_lab_measurement_quality_is_not_confirmed():
+    first = '本人の2026-10-02採血でCr 1.1mg/dLでした。'
+    message = {'project_id': 1, 'message_id': 1, 'content_hash': 'a' * 64,
+               'posted_at': '2026-10-03T09:00:00+09:00',
+               'body_text': first + 'Crの測定が正確か未確認です。'}
+    [record], invalid = measurement_sources._labs(message, {'labs': [_lab(first, '1.1')]}, 1, None, True)
+    assert invalid == 0 and record['verification'] == 'unverified'
+
+
+def test_unspecified_meal_time_stays_unverified():
+    first = '本人の2026-10-02測定で血糖120。'
+    message = {'project_id': 1, 'message_id': 1, 'content_hash': 'a' * 64,
+               'posted_at': '2026-10-03T09:00:00+09:00',
+               'body_text': first + '食後の血糖も確認が必要です。'}
+    [record], invalid = measurement_sources._vitals(message, {'vitals': {'bs': 120}}, 1, True)
+    assert invalid == 0 and record['verification'] == 'unverified'
+    [item] = measurement_timeline.project_measurements([record], source_complete=True)['items']
+    assert item['state'] == 'unknown' and item['value'] is None
+
+
+@pytest.mark.parametrize('following', [
+    'SpO2低下は肺炎の可能性があり受診予定です。',
+    'SpO2低下は肺炎の可能性があり、測定値は不明です。',
+    'SpO2低下は測定器不良の可能性があり受診予定です。',
+    'SpO2低下は誤表示の可能性があり受診予定です。',
+    'SpO2は安定しているので経過を確認しますが、値は不明です。',
+])
+def test_diagnostic_uncertainty_does_not_confirm_original_reading(following):
+    first = '本人の2026-10-02測定でSpO2 92%でした。'
+    message = {'project_id': 1, 'message_id': 1, 'content_hash': 'a' * 64,
+               'posted_at': '2026-10-03T09:00:00+09:00', 'body_text': first + following}
+    [record], invalid = measurement_sources._vitals(message, {'vitals': {'spo2': 92}}, 1, True)
+    assert invalid == 0 and record['verification'] == 'unverified'
+    [item] = measurement_timeline.project_measurements([record], source_complete=True)['items']
+    assert item['state'] == 'unknown' and item['value'] is None
+
+
+@pytest.mark.parametrize('name', ['血糖', 'BS', 'Glu'])
+@pytest.mark.parametrize(('following', 'verification'), [
+    ('血糖測定器が故障していました。', 'unverified'),
+    ('血糖測定器は故障していないとは限りません。', 'unverified'),
+    ('血糖測定器は故障していません。', 'quote_supported'),
+    ('血圧計が故障していました。', 'quote_supported'),
+    ('家族の血糖測定器が故障しました。', 'quote_supported'),
+    ('家族の血糖測定器が故障しましたが、それを使いました。', 'unverified'),
+    ('家族の血糖測定器が故障しましたが、私も使用しました。', 'unverified'),
+    ('家族の血糖測定器が故障しましたが、家族だけがその血糖測定器を使用しました。', 'quote_supported'),
+    ('家族の血糖測定器が故障しましたが、本人は別の血糖測定器を使用しました。', 'quote_supported'),
+    ('家族の血糖測定器が故障しましたが、本人もその血糖測定器を使用しました。', 'unverified'),
+])
+def test_lab_glucose_instrument_fault_uses_analyte_and_owner(name, following, verification):
+    first = f'本人の2026-10-02採血で{name} 120mg/dLでした。'
+    message = {'project_id': 1, 'message_id': 1, 'content_hash': 'a' * 64,
+               'posted_at': '2026-10-03T09:00:00+09:00', 'body_text': first + following}
+    lab = {**_lab(first, '120'), 'name': name}
+    [record], invalid = measurement_sources._labs(message, {'labs': [lab]}, 1, None, True)
+    assert invalid == 0 and record['verification'] == verification
+
+
+@pytest.mark.parametrize('following', [
+    '家族の体温計が故障しましたが、本人もその体温計を使用しました。',
+    '家族の体温計が故障しましたが、それを使いました。',
+    '家族の体温計が故障しましたが、私も使用しました。',
+    '体温計は故障していないとは限りません。',
+    '体温計は故障していないとは言えません。',
+    '体温計は故障していない可能性があります。',
+])
+def test_uncertain_or_shared_thermometer_holds_patient_vital(following):
+    first = '本人の2026-10-02測定で体温36.8℃でした。'
+    message = {'project_id': 1, 'message_id': 1, 'content_hash': 'a' * 64,
+               'posted_at': '2026-10-03T09:00:00+09:00',
+               'body_text': first + following}
+    [record], invalid = measurement_sources._vitals(message, {'vitals': {'bt': 36.8}}, 1, True)
+    assert invalid == 0 and record['verification'] == 'unverified'
+    [item] = measurement_timeline.project_measurements([record], source_complete=True)['items']
+    assert item['state'] == 'unknown' and item['value'] is None
+
+
 def test_named_spo2_correction_does_not_confirm_oxygen_saturation():
     body = "本人の2026-10-02測定でSpO2 97%でした。SpO2の値は誤りです。"
     message = {"project_id": 1, "message_id": 1, "content_hash": "a" * 64,
