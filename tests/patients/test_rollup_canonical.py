@@ -446,14 +446,22 @@ def test_rollup_reply_survives_canonical_projection_shadowing(db):
 
 def test_rollup_reply_work_is_bounded_by_returned_requests(db, monkeypatch):
     """Mixed rule/LLM requests keep their cap/order; old rows need no scan."""
-    requests = [{"to": "SYNTH", "action": f"合成依頼{i}"} for i in range(120)]
+    requests = [{"to": "SYNTH", "action": f"合成依頼{i:03d}"} for i in range(120)]
+    # Source sentences independently identify a single request per reply.
+    bodies = {1: "。".join([f"合成依頼{i:03d}をお願いします" for i in range(120)]
+                              + [f"合成ルール{i}をお願いします" for i in range(4)]) + "。"}
+    bodies.update({mid: f"合成依頼{mid - 2:03d}の確認を完了しました。合成本文" for mid in range(2, 22)})
+    replies = [(mid, 1, "SYNTH-B", "2026-09-19T01:00:00+09:00", _reply("done"))
+               for mid in range(2, 22)]
     _thread(db, [(1, None, "SYNTH-A", "2026-09-19T00:30:00+09:00",
-                 {"requests": requests}),
-                (2, 1, "SYNTH-B", "2026-09-19T01:00:00+09:00", _reply("done"))],
-            bodies={1: "。".join([f"合成依頼{i}をお願いします" for i in range(120)]
-                                    + [f"合成ルール{i}をお願いします" for i in range(4)]) + "。",
-                    2: "合成依頼0を確認しました。合成本文"})
-    _seed_relations(db, 1, "合成依頼0", [(2, "completion_report", "合成依頼0を確認しました")])
+                  {"requests": requests}), *replies], bodies=bodies)
+    # Independently specified relation table: each reply refers to one request.
+    pairs = [(0, 2), (1, 3), (2, 4), (3, 5), (4, 6), (5, 7), (6, 8), (7, 9),
+             (8, 10), (9, 11), (10, 12), (11, 13), (12, 14), (13, 15), (14, 16),
+             (15, 17), (16, 18), (17, 19), (18, 20), (19, 21)]
+    for index, mid in pairs:
+        _seed_relations(db, 1, f"合成依頼{index:03d}",
+                        [(mid, "completion_report", f"合成依頼{index:03d}の確認を完了しました")])
     db.artifact_add("extract_v1", json.dumps(
         {"requests": [{"kind": "rule", "ctx": f"合成ルール{i}"} for i in range(4)]}),
         project_id=1, message_id=1,
@@ -468,11 +476,17 @@ def test_rollup_reply_work_is_bounded_by_returned_requests(db, monkeypatch):
     monkeypatch.setattr(rollup, "_REPLY_STAGE", Stages(rollup._REPLY_STAGE))
     rows = rollup.build_rollup(db.db, 1)["recent_requests"]
     assert [row["ctx"] for row in rows] == (
-        [f"合成ルール{i}" for i in range(4)] + [f"合成依頼{i}" for i in range(11)])
-    # One source-bound relation applies only to its own request, not all 120.
-    assert rows[4]["reply_state"] == "done"
-    assert all("reply_state" not in row for row in rows[5:])
-    assert calls == ["done"]
+        [f"合成ルール{i}" for i in range(4)] + [f"合成依頼{i:03d}" for i in range(11)])
+    assert [row["reply_state"] for row in rows[4:]] == ["done"] * 11
+    assert calls == ["done"] * 11
+    # Removing the cap reaches all 20 annotated relations, and the next
+    # request has no relation despite sharing the same thread.
+    calls.clear()
+    full = rollup.build_rollup(db.db, 1, request_limit=None)["recent_requests"]
+    assert [row["ctx"] for row in full[4:25]] == [f"合成依頼{i:03d}" for i in range(21)]
+    assert [row["reply_state"] for row in full[4:24]] == ["done"] * 20
+    assert "reply_state" not in full[24]
+    assert calls == ["done"] * 20
 
 
 def test_rollup_sql_valid_shadowed_reply_at_python_depth_limit_is_safe(db):
