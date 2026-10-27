@@ -383,6 +383,10 @@ def _request_expression_covers(body, assertion, action, kind):
     for marker in re.finditer(markers[kind] + r"(?![一-龥々ぁ-んァ-ヶーA-Za-z0-9])", sentence):
         if marker.start() < start - left:
             continue
+        # A request form that is itself denied or quoted as absent is no request.
+        if re.match(r"[、,]?\s*(?:という|との)?(?:依頼|お願い|要望)(?:は|も)?(?:ありません|ない|ございません|なし)",
+                    sentence[marker.end():]):
+            continue
         phrase = sentence[:marker.end()]
         if _listed_request_covers(action, phrase):
             return True

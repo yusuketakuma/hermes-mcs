@@ -90,3 +90,28 @@ def test_indirect_question_never_becomes_a_completed_event(body, quote, status):
         assert record["status"] != "unknown" and not record.get("unverified")
     else:
         assert record["status"] == status and record["unverified"] is True
+
+
+def test_condition_consequent_after_a_comma_keeps_threshold_values_conditional():
+    import extract
+    body = "もし体温38.0℃、脈拍120であれば連絡してください。"
+    for target in ("体温38.0", "脈拍120"):
+        start = body.index(target)
+        assert clinical_scope.patient_source_scope(body, start, start + len(target), measurement=True) == "conditional"
+    assert not extract.extract_message(body, "2026-10-28T09:00:00+09:00").get("vitals")
+    # An additive もし elsewhere in the sentence does not hold a real reading.
+    observed = "本人の体温37.2℃、清拭もし、更衣も行いました。"
+    assert extract.extract_message(observed, "2026-10-28T09:00:00+09:00")["vitals"] == {"bt": 37.2}
+
+
+@pytest.mark.parametrize("body, verified", [
+    ("血圧の確認をお願いしたい、という依頼はありません。", False),
+    ("血圧の確認をお願いします、との依頼はありません。", False),
+    ("血圧の確認をお願いしたいです。残薬の依頼はありません。", True),
+])
+def test_denied_request_form_is_not_a_verified_request(body, verified):
+    assert _request(body, "血圧の確認") is verified
+    result = extract_validation.validate({"requests": [{"to": None, "kind": "request", "action": "血圧の確認",
+                                                         "evidence": body.split("。")[0] + "。"}]}, body)
+    requests = result.get("requests") or []
+    assert bool(requests and not requests[0].get("unverified")) is verified

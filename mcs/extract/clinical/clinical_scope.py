@@ -90,9 +90,7 @@ _CONDITIONAL_MARK = re.compile(
     r"もし(?!ま(?:した|す|せん|しょう)|"
     r"て(?:いる|います|いない|いません|いた|いました|おり|おら|もら|下さい|ください|頂|いただ|ほしい|欲しい|くれ|しま|(?=$|[。！？!?、,\s]))|"
     r"た(?:い|が|こと|ため|為|ので|後|と(?:報告|連絡|記載)|(?=$|[。！？!?、,\s]))|"
-    r"ない|なく(?!ても)|なかった|よう|ろ|もら(?:う|い|った)|らせ|らべ|っかり)"
-    # A bare もし is additive も＋し unless a consequent follows in the same sentence.
-    r"(?=[^。！？!?\n]{0,60}?(?:れば|ければ|たら|なら|ても|場合|とき|際))|"
+    r"ない|なく(?!ても)|なかった|よう|ろ|もら(?:う|い|った)|らせ|らべ|っかり)|"
     r"万一|万が一|(?:場合|とき|(?<![0-9０-９一二三四五六七八九十])(?<!採血)(?<!測定)(?<!検査)(?<!服用)(?<!投与)(?<!訪問)(?<!往診)時)(?:は|には|に)|"
     r"なら(?!ない|なく|なかった|れ|ず|ぬ)|たら(?!しい)|れば")
 
@@ -104,6 +102,18 @@ _UNCERTAIN_ADDITIVE = re.compile(
 # Causal から is not a question; indirect questions (したか確認) still are.
 _QUESTION = re.compile(r"(?:しました|した|します|していました|している|しています|しません|しませんでした|です|でした)"
                        r"(?:か|でしょうか)(?!ら)|かどうか")
+
+# A bare もし is additive も＋し unless a consequent follows later in the same
+# sentence, which may lie beyond the clause being judged.
+_CONSEQUENT = re.compile(r"[^。！？!?\n]{0,60}?(?:れば|ければ|たら|なら|ても|場合|とき|際)")
+
+
+def _has_condition(body, start, end):
+    for match in _CONDITIONAL_MARK.finditer(body, start, end):
+        if not match.group().startswith("もし") or _CONSEQUENT.match(body, match.end()):
+            return True
+    return False
+
 
 _SCOPE_BREAK = re.compile(r"[。！？!?;；\n、,]|しかし|ただし|だが|けれど(?:も)?|(?<![一-龥ぁ-んァ-ヶ])一方(?:で)?(?=$|[、, \t　])")
 
@@ -220,7 +230,7 @@ def _source_scope_axes(body, start, end, *, patient_name=None, default="patient"
     sentence = max(body.rfind(c, 0, start) for c in "。！？!?;；\n") + 1
     condition_start = max((m.end() for m in _SCOPE_BREAK.finditer(body, sentence, start)
                            if m.group() not in "、,"), default=sentence)
-    if _CONDITIONAL_MARK.search(body[condition_start:left] + clause):
+    if _has_condition(body, condition_start, right.start() if right else len(body)):
         return scope, "conditional"
     if (_QUESTION.search(clause) or right is not None and body[right.start()] in "？?"):
         return scope, "unknown"
@@ -269,7 +279,7 @@ def source_axes(body, start, end, *, default="patient"):
     if owners:
         left = owners[-1].start()
     before = body[left:start]
-    if _CONDITIONAL_MARK.search(before):
+    if _has_condition(body, left, start):
         return subject, "conditional"
     times = [(m.end(), "current") for m in CURRENT_MARK.finditer(before)]
     times += [(m.end(), "past") for rx in (_NONCURRENT_MARK, _MEASURED_PAST_MARK)
