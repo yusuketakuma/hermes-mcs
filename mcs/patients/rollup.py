@@ -1146,6 +1146,8 @@ def rebuild(ledger, project_id: int, *, cfg=None) -> int:
     a patient with NO rollup (Oracle B22). An unchanged rebuild (all
     but generated_at equal) keeps the content and id; it only advances
     meta.generated_at when a newer source would otherwise keep it dirty."""
+    if ledger.db.in_transaction:
+        raise sqlite3.OperationalError("inference_rollup_transaction_owned")
     # Guard all inputs, including withdrawal witnesses, without holding a writer during aggregation.
     data_version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
     changes = ledger.db.total_changes
