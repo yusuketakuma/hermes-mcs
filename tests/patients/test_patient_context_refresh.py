@@ -1095,3 +1095,17 @@ def test_health_counts_context_progress_without_patients(runtime, monkeypatch):
     monkeypatch.setattr(health_report, 'PATIENT_CONTEXT_S', 0)
     assert health_report.patient_context_health(led.db, None, 30.0, 'synthetic-source') == {
         'status': 'unknown', 'observed_at': 30.0, 'reason': 'observation_limit', 'publication': None}
+
+
+@pytest.mark.parametrize('at', [
+    '2026-10-17T00:00:00', '2026-10-17T12:00:00', '2026-10-17T23:59:59',
+])
+def test_initial_context_unit_can_start_at_any_hour(runtime, at):
+    led, clock, calls = runtime
+    seed(led)
+    clock.wall = stamp(at)
+    result = step(runtime)
+    assert result['status'] == 'progressed' and result['lane'] == 'A'
+    assert len(calls) == 1 and document(led) is not None
+    progress = document(led, context_refresh.PROGRESS)
+    assert progress['night_id'] == '2026-10-17'

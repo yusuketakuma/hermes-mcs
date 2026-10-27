@@ -856,3 +856,60 @@ def test_job_transition_never_creates_a_replay_or_epoch_without_an_active_bookma
     before = drain._sched_state(store)
     assert runtime.transition(store,runtime.JobToken.from_row(_job(store)),'done')
     assert drain._sched_state(store)==before
+
+
+@pytest.mark.parametrize('start_offset', [60, 12 * 3600, 86400 - 1])
+def test_initial_replay_resumes_across_midnight_with_budget_and_deadline(store, monkeypatch, start_offset):
+    """The first saved-source pass is resumable at any hour; this is not a daily barrier."""
+    from ledger import Ledger
+    from semantic_jev import JevError
+
+    for mid in (1, 2, 3):
+        _save(store, mid)
+    db_path = store.db.execute('PRAGMA database_list').fetchone()[2]
+    start_day = semantic_store._jst_day_start(1_800_000_000)
+    clock = [start_day + start_offset]
+    monkeypatch.setattr(time, 'time', lambda: clock[0])
+    cfg = _cfg(loop_mode='off', budget=3000)
+
+    store.artifact_add('semantic_usage', '{}', meta={'jev_requests': 2999})
+    reserve = runtime.manual_usage_reserver(store, operation='jev_value', daily_request_budget=3000)
+    reserve({'synthetic': True}, 1)
+    assert semantic_store.jev_usage_today(store) == 3000
+    with pytest.raises(JevError) as error:
+        reserve({'synthetic': True}, 1)
+    assert error.value.kind == 'budget_exceeded' and error.value.detail == 'daily_cap'
+    old_usage = [tuple(row) for row in store.db.execute(
+        "SELECT artifact_id,meta,created_at FROM artifacts WHERE kind='semantic_usage' ORDER BY artifact_id")]
+
+    first = _replay(store, cfg, limit=1, deadline=time.monotonic() + 60)
+    assert first['phase'] == 'seed' and first['cursor'] == first['seed_cursor'] == 1
+    assert first['processed'] == 1 and first['complete'] is False
+    first_payload = _job(store, 1)['payload']
+    store.close()
+
+    clock[0] = start_day + 86400
+    reopened = Ledger(db_path)
+    try:
+        assert drain._sched_state(reopened)['inference_reprocess']['cursor'] == 1
+        paused = _replay(reopened, cfg, limit=1, deadline=time.monotonic() - 1)
+        assert paused['phase'] == 'seed' and paused['cursor'] == paused['seed_cursor'] == 1
+        assert paused['processed'] == 0 and paused['complete'] is False
+        assert _job(reopened, 1)['payload'] == first_payload and _job(reopened, 2) is None
+        assert semantic_store.jev_usage_today(reopened) == 0
+        assert ([tuple(row) for row in reopened.db.execute(
+            "SELECT artifact_id,meta,created_at FROM artifacts WHERE kind='semantic_usage' ORDER BY artifact_id")]
+            == old_usage)
+
+        resumed = _replay(reopened, cfg, limit=1, deadline=time.monotonic() + 60)
+        assert resumed['phase'] == 'seed' and resumed['cursor'] == resumed['seed_cursor'] == 2
+        assert resumed['processed'] == 1 and resumed['complete'] is False
+        assert _job(reopened, 1)['payload'] == first_payload and _job(reopened, 2) is not None
+        next_reserve = runtime.manual_usage_reserver(reopened, operation='jev_value', daily_request_budget=3000)
+        next_reserve({'synthetic': True}, 1)
+        assert semantic_store.jev_usage_today(reopened) == 1
+        assert ([tuple(row) for row in reopened.db.execute(
+            "SELECT artifact_id,meta,created_at FROM artifacts WHERE kind='semantic_usage' ORDER BY artifact_id")][:2]
+            == old_usage)
+    finally:
+        reopened.close()
