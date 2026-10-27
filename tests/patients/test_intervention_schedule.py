@@ -270,6 +270,38 @@ def test_source_reader_reports_both_scan_and_candidate_bounds(source_db):
     assert schedule.read_source_schedule(db, 1)["coverage"]["oversize"] == 1
 
 
+@pytest.mark.parametrize('nul_field', ['body', 'html', 'both'])
+def test_embedded_nul_rejects_source_before_sql_returns_large_text(source_db, nul_field):
+    db = source_db
+    valid = '看護師が2026年10月3日に本人を訪問する予定です。'
+    put_source(db, 1, 1, valid)
+    put_source(db, 2, 2, valid)
+    huge = 'x\0' + 'A' * 100_000
+    put_source(db, 3, 1, huge if nul_field in ('html', 'both') else 'x')
+    if nul_field == 'body':
+        db.execute('UPDATE messages SET body_text=? WHERE message_id=3', (huge,))
+    elif nul_field == 'html':
+        db.execute("UPDATE messages SET body_text='x' WHERE message_id=3")
+    seen = []
+
+    def inspect(cursor, row):
+        if cursor.description and any(column[0] == 'body_nul' for column in cursor.description):
+            if row[3] == 3:
+                seen.append((row[-2], row[-1]))
+        return row
+
+    db.row_factory = inspect
+    try:
+        result = schedule.read_source_schedule(db, 1)
+    finally:
+        db.row_factory = None
+    assert seen == [(None, None)]
+    assert result['coverage']['invalid_source'] == 1
+    assert result['coverage']['messages_examined'] == 2
+    assert [record['message_id'] for record in result['records']] == [1]
+    assert result['records'][0]['state'] == 'planned'
+
+
 def test_source_reader_does_not_link_cancellation_to_separate_plan(source_db):
     db = source_db
     put_source(db, 1, 1, "看護師が2026年10月3日に本人を訪問する予定です。")

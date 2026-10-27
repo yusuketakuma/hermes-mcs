@@ -180,8 +180,11 @@ def read_source_schedule(db, project_id, *, limit=200, max_records=200):
     rows = db.execute(
         "SELECT p.fetch_state,p.fetch_reason,p.is_archived,m.message_id,m.body_state,"
         "m.content_hash,m.posted_at_ts,length(m.body_text),length(m.body_html),"
-        "CASE WHEN length(m.body_text)<=? AND length(m.body_html)<=? THEN m.body_text END,"
-        "CASE WHEN length(m.body_text)<=? AND length(m.body_html)<=? THEN m.body_html END "
+        "instr(m.body_text,char(0)) AS body_nul,instr(m.body_html,char(0)) AS html_nul,"
+        "CASE WHEN length(m.body_text)<=? AND length(m.body_html)<=? "
+        "AND instr(m.body_text,char(0))=0 AND instr(m.body_html,char(0))=0 THEN m.body_text END,"
+        "CASE WHEN length(m.body_text)<=? AND length(m.body_html)<=? "
+        "AND instr(m.body_text,char(0))=0 AND instr(m.body_html,char(0))=0 THEN m.body_html END "
         "FROM patients p LEFT JOIN messages m ON m.project_id=p.project_id "
         "WHERE p.project_id=? ORDER BY m.message_id DESC LIMIT ?",
         (_MAX_BODY_CHARS, _MAX_HTML_CHARS, _MAX_BODY_CHARS, _MAX_HTML_CHARS, project_id, limit + 1)).fetchall()
@@ -200,7 +203,7 @@ def read_source_schedule(db, project_id, *, limit=200, max_records=200):
     coverage["state"] = "observed"
     coverage["truncated"] = len(rows) > limit
     items = []
-    for _, _, _, mid, body_state, digest, posted, body_len, html_len, body, html in rows[:limit]:
+    for _, _, _, mid, body_state, digest, posted, body_len, html_len, body_nul, html_nul, body, html in rows[:limit]:
         if mid is None:
             continue
         coverage["messages_examined"] += 1
@@ -209,6 +212,9 @@ def read_source_schedule(db, project_id, *, limit=200, max_records=200):
             continue
         if body_state != "full":
             coverage["incomplete"] += 1
+            continue
+        if body_nul or html_nul:
+            coverage["invalid_source"] += 1
             continue
         if ((type(body_len) is int and body_len > _MAX_BODY_CHARS)
                 or (type(html_len) is int and html_len > _MAX_HTML_CHARS)):
