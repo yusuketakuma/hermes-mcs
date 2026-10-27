@@ -6,6 +6,7 @@ import pytest
 
 import extract_llm as worker
 import patient_context_refresh as context_refresh
+from extract_testkit import _message
 from test_patient_context_refresh import CFG, document, runtime, seed, stamp, step
 
 __all__ = ["runtime"]
@@ -30,6 +31,8 @@ def cloud(runtime, monkeypatch):
             self.current = kwargs["current"]
             self.discard_reason = kwargs.get("discard_reason")
             self.contract = worker._cloud_contract()
+            self.final_disposition = None
+            self.possibly_sent = False
         def guard(self):
             if not self.current():
                 raise worker.CloudFallback("synthetic_stale")
@@ -44,6 +47,7 @@ def cloud(runtime, monkeypatch):
                 raise worker.CloudFallback("synthetic_failure")
             payload = json.loads(prompt)
             requests.append(payload)
+            self.possibly_sent = True
             if "reports" in payload:
                 result = {"fact_ids": [item["id"] for item in payload["reports"][:12]]}
             else:
@@ -559,7 +563,7 @@ def test_paid_cloud_failure_without_local_capacity_records_the_retry(runtime, cl
     class Paid(original):
         def __call__(self, prompt, **kwargs):
             sent.append(prompt)
-            self.completed_reservations = [object()]   # the attempt was billed
+            self.possibly_sent = True
             raise worker.CloudFallback("synthetic_failure")
     monkeypatch.setattr(worker, "_CloudProvider", Paid)
     for _ in range(3):   # the rotation reaches the scan (lane B) after the fact-less summary
@@ -578,6 +582,56 @@ def test_paid_cloud_failure_without_local_capacity_records_the_retry(runtime, cl
     assert step(runtime, local_admit=lambda: False)["status"] != "failed" and len(sent) == 1
 
 
+def test_unsettled_cloud_attempt_without_local_capacity_records_the_retry(runtime, cloud, monkeypatch):
+    led, _, local_calls = runtime
+    seed(led, body="見出しのない完全合成の居住記録。")
+    calls = []
+    original = worker._CloudProvider
+    class Unknown(original):
+        def __call__(self, prompt, **kwargs):
+            calls.append(True)
+            self.possibly_sent = True
+            raise worker.CloudFallback("cloud_unit_failed")
+    monkeypatch.setattr(worker, "_CloudProvider", Unknown)
+    for _ in range(3):
+        result = step(runtime, local_admit=lambda: False)
+        if result["status"] == "failed":
+            break
+    assert result["status"] == "failed" and result["reason"] == "nightly_cloud_failed"
+    scan = document(led, context_refresh.SCAN)
+    assert scan["attempts"] == 1 and scan["next_try"] > 0
+    assert calls == [True] and not local_calls
+    assert step(runtime, local_admit=lambda: False)["status"] != "failed" and calls == [True]
+
+
+@pytest.mark.parametrize('source_changed', [False, True])
+def test_scope_change_after_unknown_attempt_fences_retry_to_source(runtime, cloud, monkeypatch, source_changed):
+    led, _, local_calls = runtime
+    seed(led, body="見出しのない完全合成の居住記録。")
+    calls = []
+    original = worker._CloudProvider
+    class Changed(original):
+        def __call__(self, prompt, **kwargs):
+            self.possibly_sent = True
+            calls.append(True)
+            if source_changed:
+                led.save_messages([_message(1, "完全合成の別の新しい本文。", project_id=1)])
+            raise worker.CloudFallback("cloud_unit_changed")
+    monkeypatch.setattr(worker, "_CloudProvider", Changed)
+    for _ in range(3):
+        result = step(runtime, local_admit=lambda: False)
+        if calls:
+            break
+    assert calls == [True] and not local_calls
+    scan = document(led, context_refresh.SCAN)
+    if source_changed:
+        assert result["status"] == "source_changed" and scan is None
+    else:
+        assert result["status"] == "failed" and result["reason"] == "nightly_cloud_failed"
+        assert scan["attempts"] == 1 and scan["next_try"] > 0
+        assert step(runtime, local_admit=lambda: False)["status"] != "failed" and calls == [True]
+
+
 def test_paid_failure_of_a_partial_cloud_scan_keeps_its_cloud_pin(runtime, cloud, monkeypatch):
     led, _, local_calls = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
@@ -592,7 +646,7 @@ def test_paid_failure_of_a_partial_cloud_scan_keeps_its_cloud_pin(runtime, cloud
     class Paid(original):
         def __call__(self, prompt, **kwargs):
             sent.append(prompt)
-            self.completed_reservations = [object()]   # the attempt was billed
+            self.possibly_sent = True
             raise worker.CloudFallback("synthetic_failure")
     monkeypatch.setattr(worker, "_CloudProvider", Paid)
     for _ in range(3):

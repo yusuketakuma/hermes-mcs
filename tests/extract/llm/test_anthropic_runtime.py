@@ -649,21 +649,26 @@ def test_shadow_scope_change_during_validation_records_discard(routed, monkeypat
 def test_pending_write_loss_records_discard_but_lock_wait_does_not(routed, monkeypatch, loss, final_lock):
     led, _, calls, reserved, results = routed
     old(led)
-    locks = []
+    result_locks = []
     @contextmanager
     def locked(enabled, **kwargs):
-        locks.append(enabled)
-        if len(locks) == 3:
+        # GC may or may not run, depending on its process-wide cadence.
+        # Select result and flush lock attempts by the observed HTTP call.
+        if not calls:
+            yield True
+            return
+        result_locks.append(enabled)
+        if len(result_locks) == 2:
             if loss == "source":
                 led.db.execute("UPDATE messages SET content_hash='changed' WHERE message_id=1")
             elif loss == "lease":
                 led.db.execute("DELETE FROM fetch_jobs WHERE kind='extract_claim'")
             led.db.commit()
-        # GC acquires first; the result write waits, then the final flush rechecks.
-        yield len(locks) == 1 or len(locks) == 3 and final_lock
+        # The result write waits; the final flush rechecks after the mutation.
+        yield len(result_locks) == 2 and final_lock
     monkeypatch.setattr(worker, "_write_lock", locked)
     report = worker.run_pending(led, budget_s=180, per_write_lock=True, write_wait_s=1, carry=[])
-    assert report["done"] == 0 and len(locks) == 3
+    assert report["done"] == 0 and len(result_locks) == 2
     assert len(calls) == len(reserved) == len(results) == 1
     assert len(led.artifacts("cloud_usage_disposition")) == int(loss != "none")
     assert len(report["carry"]) == int(loss == "none")

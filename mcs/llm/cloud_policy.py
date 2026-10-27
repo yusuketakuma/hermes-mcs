@@ -566,6 +566,10 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
 
 def record_result(ledger, reservation, metadata):
     """Settle only a matching, validated result; repeat delivery is idempotent."""
+    # Accounting owns its transaction.  In particular, a result callback can
+    # run while a caller's transaction is open; do not commit or roll it back.
+    if ledger.db.in_transaction:
+        raise RuntimeError("cloud_result_owner_transaction_active")
     from semantic_runtime import reserve_artifact
     error_kind = metadata.get("error_kind")
     http_class = metadata.get("http_class")

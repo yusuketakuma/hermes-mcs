@@ -1008,7 +1008,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 changed = isinstance(error, extract_llm.CloudFallback) and str(error) == "cloud_unit_changed"
                 if changed:
                     provider.discard()
-                paid = bool(getattr(provider, "completed_reservations", None)) and not changed
+                paid = provider.possibly_sent
                 provider = None
                 if paid and not local_admit():
                     # a paid attempt failed and local cannot take over now: record

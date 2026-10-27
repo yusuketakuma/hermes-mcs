@@ -673,6 +673,7 @@ class _CloudProvider:
         self.dispatch = dispatch
         self.generation = generation
         self.completed_reservations = []
+        self.possibly_sent = False
         self.discard_reason = discard_reason
         self.ledger = ledger
         self.deadline = deadline
@@ -692,6 +693,10 @@ class _CloudProvider:
                        for k in now)
 
         def guard(*, inference=True):
+            # A denial observed after the response is sticky for this unit:
+            # restoring the old source/scope cannot make its response current.
+            if self.final_disposition is not None:
+                raise CloudFallback("cloud_unit_changed")
             now = _cloud_settings(load_config())   # one read: every check judges the same settings
             if ((inference and (time.monotonic() >= deadline or tightened(caps(now))))
                     or writer_lock.updater_state() != updater
@@ -712,15 +717,21 @@ class _CloudProvider:
                 unit_key=unit_key, message_id=message_id, owner=owner)(body, timeout)
         self.reserve = lambda body, timeout: dispatch(lambda: reserve(body, timeout))
         def record(reservation, metadata):
+            # The callback also settles a reservation rejected before sending.
+            # Capture the other cases before owner-thread dispatch: acquiring the
+            # owner or saving accounting can fail after the HTTP attempt.
+            not_sent = metadata.get("http_class") == "not_sent"
+            if not not_sent:
+                self.possibly_sent = True
             def write():
                 try:
                     guard(inference=False)
                 except CloudFallback:
-                    outcome = {**metadata, "disposition": discard_reason() if discard_reason else "discarded_scope"}
+                    if self.final_disposition is None:
+                        self.final_disposition = discard_reason() if discard_reason else "discarded_scope"
+                    outcome = {**metadata, "disposition": self.final_disposition}
                 else:
                     outcome = dict(metadata)
-                if "disposition" in outcome and self.final_disposition is None:
-                    self.final_disposition = outcome["disposition"]
                 value = cloud_policy.record_result(ledger, reservation, outcome)
                 self.completed_reservations.append(reservation)
                 return value
@@ -4263,7 +4274,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     provider.discard()
                 # a paid attempt that failed marks the row: if local cannot finish it
                 # now, _handle records the retry so the next pass does not re-send it
-                r["_cloud_failed"] = bool(provider.completed_reservations) and str(error) != "cloud_unit_changed"
+                r["_cloud_failed"] = provider.possibly_sent
                 # A posting is the provider unit: partial cloud chunks never seed local work.
                 def reset_local():
                     r.pop("_provider_contract", None)
