@@ -39,6 +39,32 @@ def test_unsent_receipt_is_not_an_attempt(routed):
     assert not provider.possibly_sent
 
 
+@pytest.mark.parametrize('max_attempts, expected', [(None, 3), (1, 1)])
+def test_unit_can_forbid_transport_retry_without_releasing_unknown_cost(
+        routed, monkeypatch, max_attempts, expected):
+    led, cfg, *_ = routed
+    sent = []
+    monkeypatch.setattr(cloud_policy, 'usage_reserver', _REAL_RESERVE)
+    monkeypatch.setattr(cloud_policy, 'record_result', _REAL_RESULT)
+    monkeypatch.setattr(worker.anthropic_client.time, 'sleep', lambda _: None)
+
+    def post(body, timeout):
+        sent.append(True)
+        raise TimeoutError('synthetic timeout')
+
+    monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
+                        lambda key, **kw: AnthropicClient(key, post_fn=post, **kw))
+    provider = worker._CloudProvider(led, cfg, route='patient_context', project_id=1,
+        unit_key='synthetic-summary-repair', deadline=time.monotonic() + 180,
+        current=lambda: True, dispatch=lambda fn, **kwargs: fn(), max_attempts=max_attempts)
+    with pytest.raises(worker.CloudFallback, match='cloud_unit_failed'):
+        provider('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
+    report = cloud_policy.usage_report(led)
+    assert len(sent) == expected
+    assert report['daily_requests'] == report['unresolved_requests'] == expected
+    assert provider.possibly_sent
+
+
 def test_post_reservation_guard_refusal_never_sends_or_burns_retry(routed, monkeypatch):
     led, cfg, *_ = routed
     old(led)

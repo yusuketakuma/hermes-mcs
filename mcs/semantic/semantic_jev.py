@@ -353,25 +353,45 @@ def failure_class(error) -> str:
 
 
 def evaluate_once_more(client, state: dict, questions: dict,
-                       deadline: float) -> dict:
-    """``client.evaluate()``, asking the same request once more after a
-    malformed answer — often transient (2026-10-10: medication-detail
-    rejections cleared on the job's retry), where retrying the job costs a
-    whole pass and an attempt. Any other failure, a second defect and the
-    runtime guards on the second send propagate as before. When the
-    response's other answers were valid, only the failed questions are
-    asked again and the valid answers are kept."""
+                       deadline: float, *, on_valid_answers=None) -> dict:
+    """Retry one malformed answer; persist validated answers before any retry.
+
+    An optional owner callback receives each validated answer subset. It must
+    raise or return False on persistence failure; such failures propagate without
+    another request. Callers without the callback retain the original behavior.
+    """
+    if on_valid_answers is not None and not callable(on_valid_answers):
+        raise ValueError("jev_answer_callback_invalid")
+
+    def persist(answers):
+        if on_valid_answers is not None and answers:
+            from copy import deepcopy
+            if on_valid_answers(deepcopy(answers)) is False:
+                raise RuntimeError("jev_answer_persistence_failed")
+
     try:
-        return client.evaluate(state, questions, deadline)
+        result = client.evaluate(state, questions, deadline)
     except JevError as error:
         if not is_answer_defect(error):
             raise
         kept = getattr(error, "answers", None)
         failed = getattr(error, "failed", None)
-    if not (kept and failed):
-        return client.evaluate(state, questions, deadline)
-    again = client.evaluate(state, {q: questions[q] for q in failed}, deadline)
-    return {**again, "answers": {**kept, **again["answers"]}}
+    else:
+        if on_valid_answers is not None:
+            persist(result.get("answers"))
+        return result
+    if kept:
+        persist(kept)
+    remaining = ({q: questions[q] for q in failed} if kept and failed else questions)
+    try:
+        again = client.evaluate(state, remaining, deadline)
+    except JevError as error:
+        if is_answer_defect(error):
+            persist(getattr(error, "answers", None))
+        raise
+    if on_valid_answers is not None:
+        persist(again.get("answers"))
+    return {**again, "answers": {**kept, **again["answers"]}} if kept and failed else again
 
 
 def verdict_for(noul: float, match: float = MATCH_THRESHOLD,

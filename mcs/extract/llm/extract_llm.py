@@ -662,7 +662,8 @@ class _CloudProvider:
     """Bind one unit's guarded HTTP attempts to the ledger's owning thread."""
 
     def __init__(self, ledger, cfg, *, route, project_id, unit_key, deadline,
-                 current, dispatch, message_id=None, owner=None, discard_reason=None):
+                 current, dispatch, message_id=None, owner=None, discard_reason=None,
+                 max_attempts=None):
         cfg = {**cfg, "cloud_llm": _cloud_settings(cfg)}
         self.model = cfg["cloud_llm"]["model"]
         self.contract = _cloud_contract()
@@ -737,7 +738,8 @@ class _CloudProvider:
                 return value
             return dispatch(write, result=True)
         self.result = record
-        self.client = anthropic_client.AnthropicClient(key)
+        self.client = (anthropic_client.AnthropicClient(key) if max_attempts is None
+                       else anthropic_client.AnthropicClient(key, max_attempts=max_attempts))
 
     def discard(self):
         """Append the unit's final disposition without mutating financial results."""

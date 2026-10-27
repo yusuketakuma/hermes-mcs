@@ -644,6 +644,43 @@ def manual_usage_reserver(ledger, *, operation: str, daily_request_budget=None):
     return reserve
 
 
+def patient_summary_usage_reserver(ledger, *, project_id, guard, daily_request_budget):
+    """Reserve one patient-summary Jev request under the shared daily budget."""
+    from semantic_jev import DAILY_REQUEST_LIMIT, JEV_MODEL, JevError
+    from semantic_policy import BACKLOG_BUDGET_RESERVE
+    if (type(project_id) is not int or project_id <= 0 or not callable(guard)
+            or type(daily_request_budget) is not int or daily_request_budget < 0):
+        raise ValueError("patient_summary_reservation_invalid")
+    limit = min(daily_request_budget, DAILY_REQUEST_LIMIT)
+    limit -= math.ceil(limit * BACKLOG_BUDGET_RESERVE)
+
+    def reserve(body, timeout):
+        if ledger.db.in_transaction:
+            raise RuntimeError("patient_summary_transaction_active")
+        if (not isinstance(body, dict) or type(timeout) not in (int, float)
+                or not math.isfinite(timeout) or timeout <= 0):
+            raise ValueError("patient_summary_reservation_invalid")
+        from semantic_store import _jst_day_start
+        day = None
+        def check():
+            nonlocal day
+            guard("jev_reserve")
+            day = int(_jst_day_start(time.time()))
+            _daily_cap_check(ledger, limit, retryable=True)
+            if int(_jst_day_start(time.time())) != day:
+                raise JevError("budget_exceeded", "reservation_day_changed", retryable=True)
+        def write():
+            artifact_id = ledger.artifact_add_tx("semantic_usage", "{}", project_id=project_id,
+                model=JEV_MODEL, meta={"jev_requests": 1, "reserved": True,
+                    "operation": "patient_summary_quality", "request_fp": payload_hash(body),
+                    "timeout_seconds": float(timeout), "reservation_id": uuid.uuid4().hex})
+            _check_reservation_day(ledger, artifact_id, day)
+            guard("jev_reserved")
+            return JevReservation(artifact_id, day)
+        return reserve_artifact(ledger, check, write)
+    return reserve
+
+
 def guard(ledger, token: JobToken, *, deadline: float,
           expected_config_generation: str | None,
           expected_mode: str, cfg_path: str | None = None,

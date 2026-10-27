@@ -39,7 +39,7 @@ import semantic_v4_cohort as cohort
 from semantic_audit import audit_code, audit_status_for
 from semantic_llm import summarize
 from semantic_loops import update_loops
-from semantic_policy import (JOB_KIND, KIND_ASSESS, KIND_AUDIT,
+from semantic_policy import (BACKLOG_BUDGET_RESERVE, JOB_KIND, KIND_ASSESS, KIND_AUDIT,
                              KIND_BUNDLE, KIND_CANDIDATE, KIND_COVERAGE,
                              KIND_DRAIN_RUN, KIND_FACT_AUDIT, KIND_FACT_PROJ,
                              KIND_FACT_REPAIR, KIND_FACTS, KIND_FACTS_V2,
@@ -1925,9 +1925,6 @@ RUN_LOCK_REACQUIRE_S = 660.0
 # stops early enough for a result to wait out a tick and still be
 # written before the job deadline.
 BACKLOG_COMMIT_RESERVE_S = 540.0
-# share of the daily Jev budget the backlog lane leaves to the realtime
-# lane, so a rules-version rebuild cannot stall new arrivals until JST midnight
-BACKLOG_BUDGET_RESERVE = 0.10
 # what a resumed pass may spend before its first (long-output) call
 _LONG_START_S = 60.0
 

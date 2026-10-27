@@ -9,6 +9,8 @@ import semantic_jev as jev
 
 SCHEMA_VERSION = "2026-09-20"
 POLICY_VERSION = "2026-10-16.1"
+# Background work leaves this share of the daily Jev budget for new arrivals.
+BACKLOG_BUDGET_RESERVE = 0.10
 JOB_KIND = "semantic"
 QC_JOB_KIND = "extract_qc"
 SCHED_KIND = "semantic_sched"
