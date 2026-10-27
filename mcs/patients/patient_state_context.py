@@ -102,10 +102,13 @@ def history(db, target, *, version):
         SELECT m.*,a.artifact_id,a.kind,a.content,a.meta,a.model,
           {_held_sql(version)} AS held,{occurrence} AS source_occurrence
         FROM earlier m
-        LEFT JOIN artifacts a ON a.message_id=m.message_id
-          AND a.kind IN ({FACT_KINDS_SQL})
-          {current_fact_pred()}
-        ORDER BY m.posted_at_ts DESC,m.message_id DESC,a.artifact_id DESC
+        LEFT JOIN artifacts a ON a.artifact_id=(
+          SELECT candidate.artifact_id FROM artifacts candidate
+          WHERE candidate.message_id=m.message_id
+            AND candidate.kind IN ({FACT_KINDS_SQL})
+            {current_fact_pred('candidate', 'm')}
+          ORDER BY candidate.artifact_id DESC LIMIT 1)
+        ORDER BY m.posted_at_ts DESC,m.message_id DESC
     """, (target["project_id"], target["message_id"], stamp))
     reports, seen = [], set()
     for raw in rows:

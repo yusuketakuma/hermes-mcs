@@ -546,3 +546,105 @@ def test_legitimate_metadata_aba_cannot_revive_old_reference_or_frame(tmp_path, 
         assert state.load(led.db, middle_frame['artifact_id'], target_row) == middle_frame
     finally:
         led.close()
+
+
+def _history_before_latest_join_change(db, source, *, version):
+    """Independent compatibility oracle: original ordered LEFT JOIN and first-row rule."""
+    from mcs_queries import ELIGIBLE_MESSAGE, FACT_KINDS_SQL, current_fact_pred
+    occurrence = state._source_occurrence_sql(db)
+    rows = db.execute(f'''
+        WITH earlier AS MATERIALIZED (
+          SELECT * FROM messages m WHERE m.project_id=? AND m.message_id!=?
+          AND {ELIGIBLE_MESSAGE} AND m.posted_at_ts < ?
+          AND m.posted_at_ts > -1e308 AND m.posted_at_ts < 1e308
+          ORDER BY m.posted_at_ts DESC,m.message_id DESC LIMIT 200)
+        SELECT m.*,a.artifact_id,a.kind,a.content,a.meta,a.model,
+          {state._held_sql(version)} AS held,{occurrence} AS source_occurrence
+        FROM earlier m
+        LEFT JOIN artifacts a ON a.message_id=m.message_id
+          AND a.kind IN ({FACT_KINDS_SQL})
+          {current_fact_pred()}
+        ORDER BY m.posted_at_ts DESC,m.message_id DESC,a.artifact_id DESC
+    ''', (source['project_id'], source['message_id'], source['posted_at_ts']))
+    reports, seen = [], set()
+    for raw in rows:
+        value = dict(raw)
+        if value['message_id'] in seen:
+            continue
+        seen.add(value['message_id'])
+        reports.extend(state._reports(value, version))
+    return reports
+
+
+@pytest.mark.parametrize('latest', ['ambiguous', 'empty', 'invalid_json', 'held', 'foreign'])
+def test_history_latest_join_preserves_original_current_and_ambiguity_contract(tmp_path, latest):
+    led = _ledger(tmp_path)
+    try:
+        old_id = seed(led)
+        source = target(led)
+        digest = _hash(led, 1)
+        meta = {VERSION_KEY: CURRENT_VERSION, 'hash': digest,
+                'extract_version': extract_llm.EXTRACT_VERSION,
+                'actual_model': 'synthetic-model', 'source_binding': source_binding(led.db, 1, 1)}
+        if latest == 'ambiguous':
+            newest = led.artifact_add('extract_llm', json.dumps({'patient_context': [
+                context('本人の合成薬Aの残薬は3錠。', subject='patient', names=('合成薬A',), values=('3錠',))]}),
+                project_id=1, message_id=1, model='synthetic-model', meta=meta)
+        elif latest == 'empty':
+            newest = led.artifact_add('extract_llm', '{}', project_id=1, message_id=1,
+                                      model='synthetic-model', meta=meta)
+        elif latest == 'invalid_json':
+            newest = led.artifact_add('extract_llm', '{bad', project_id=1, message_id=1,
+                                      model='synthetic-model', meta=meta)
+        elif latest == 'held':
+            newest = old_id
+            led.artifact_add('extract_upgrade_v1', json.dumps({'state': 'held_prior', 'hash': digest,
+                'prior_artifact_id': old_id, 'target_version': extract_llm.EXTRACT_VERSION}),
+                project_id=1, message_id=1)
+        else:
+            newest = led.artifact_add('extract_llm', '{}', project_id=1, message_id=1,
+                                      model='synthetic-model', meta=meta)
+            with led.db:
+                # Simulate a corrupt legacy row without weakening production guards.
+                led.db.execute('DROP TRIGGER g1_artifacts_msg_upd')
+                led.db.execute('UPDATE artifacts SET project_id=2 WHERE artifact_id=?', (newest,))
+        version = extract_llm.EXTRACT_VERSION
+        expected = _history_before_latest_join_change(led.db, source, version=version)
+        actual = state.history(led.db, source, version=version)
+        assert actual == expected
+        if latest in ('empty', 'ambiguous'):
+            assert state.format_state(actual)[1] == {}  # valid empty/unclean latest does not fall back
+        if latest in ('invalid_json', 'foreign'):
+            assert actual and actual[0]['reference_eligible'] is True  # rejected row was never eligible
+        if latest == 'held':
+            assert actual and actual[0]['reference_eligible'] is False
+    finally:
+        led.close()
+
+
+def test_history_does_not_materialize_large_older_artifacts_in_python(tmp_path):
+    led = _ledger(tmp_path)
+    try:
+        seed(led)
+        source = target(led)
+        huge = json.dumps({'synthetic_unused': 'x' * (1024 * 1024)})
+        meta = {VERSION_KEY: CURRENT_VERSION, 'hash': _hash(led, 1),
+                'extract_version': extract_llm.EXTRACT_VERSION, 'actual_model': 'synthetic-model',
+                'source_binding': source_binding(led.db, 1, 1)}
+        led.artifact_add('extract_llm', huge, project_id=1, message_id=1, model='synthetic-model', meta=meta)
+        seed(led)  # a newer eligible, source-bound artifact remains the only selected row
+        expected = _history_before_latest_join_change(led.db, source, version=extract_llm.EXTRACT_VERSION)
+        original_factory = led.db.row_factory
+        def observe(cursor, values):
+            columns = [column[0] for column in cursor.description]
+            if 'artifact_id' in columns and 'content' in columns:
+                assert values[columns.index('content')] != huge
+            return sqlite3.Row(cursor, values)
+        led.db.row_factory = observe
+        try:
+            actual = state.history(led.db, source, version=extract_llm.EXTRACT_VERSION)
+        finally:
+            led.db.row_factory = original_factory
+        assert actual == expected and actual[0]['reference_eligible'] is True
+    finally:
+        led.close()
