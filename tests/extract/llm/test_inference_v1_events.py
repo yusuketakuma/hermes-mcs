@@ -161,6 +161,7 @@ def test_invalid_piece_offset_never_silently_promotes_a_candidate():
     ('本人は退院しました。先ほどの件は誤りでした。', 'patient', 'unknown', None),
     ('本人は退院しましたが、その記載は誤りです。', 'patient', 'unknown', None),
     ('家族の話です。本人は退院しました。', 'unknown', 'current', False),
+    ('家族の情報です。本人は退院しました。', 'unknown', 'current', False),
 ])
 def test_adjacent_correction_or_ambiguous_referent_is_not_confirmed(body, subject, status, negated):
     quote = '本人は退院しました'
