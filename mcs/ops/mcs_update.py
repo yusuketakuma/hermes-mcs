@@ -27,6 +27,8 @@ import argparse
 from contextvars import ContextVar
 from functools import wraps
 import glob
+import copy
+import math
 import hashlib
 import json
 import os
@@ -42,7 +44,7 @@ import time
 from pathlib import Path
 import unicodedata
 import urllib.request
-from contextlib import ExitStack, suppress
+from contextlib import ExitStack, contextmanager, suppress
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
@@ -263,11 +265,38 @@ def _call_legacy(function, *args, **kwargs):
 
 
 
-def _run_with_lifetime(argv, **kwargs):
+def _bounded_timeout(timeout, deadline):
+    if deadline is None:
+        return timeout
+    if type(deadline) not in (int, float) or not math.isfinite(deadline):
+        raise UpdateError('release_prequiesce_timeout')
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise UpdateError('release_prequiesce_timeout')
+    return remaining if timeout is None else min(timeout, remaining)
+
+
+def _release_git_environment():
+    env = {'PATH': '/usr/bin:/bin', 'HOME': os.path.expanduser('~'), 'LC_ALL': 'C',
+        'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_SYSTEM': '/dev/null', 'GIT_CONFIG_GLOBAL': '/dev/null',
+        'GIT_TERMINAL_PROMPT': '0', 'GIT_ATTR_NOSYSTEM': '1', 'GIT_NO_REPLACE_OBJECTS': '1',
+        'GIT_NO_LAZY_FETCH': '1', 'GIT_OPTIONAL_LOCKS': '0', 'GIT_CONFIG_COUNT': '5'}
+    for i, (key, value) in enumerate((('core.fsmonitor', 'false'), ('core.hooksPath', '/dev/null'),
+                                     ('credential.helper', ''), ('protocol.allow', 'never'), ('core.attributesFile', '/dev/null'))):
+        env[f'GIT_CONFIG_KEY_{i}'], env[f'GIT_CONFIG_VALUE_{i}'] = key, value
+    return env
+
+
+def _run_with_lifetime(argv, *, deadline=None, **kwargs):
     with owned_process._inherited_fds(kwargs.pop('pass_fds', ())) as inherited:
         if inherited:
             kwargs['pass_fds'] = tuple(inherited.values())
-        return subprocess.run(argv, **kwargs)
+        if deadline is not None:
+            kwargs['timeout'] = _bounded_timeout(kwargs.get('timeout'), deadline)
+        result = subprocess.run(argv, **kwargs)
+        if deadline is not None:
+            _bounded_timeout(None, deadline)
+        return result
 
 
 def _legacy_entry(function):
@@ -295,18 +324,52 @@ def _acquire_run_lock_wait(tries: int = RUN_LOCK_TRIES) -> int | None:
 # ------------------------------------------------------------------ git
 
 
-def _git(args: list[str], timeout: int = update_discovery.LOCAL_TIMEOUT_S
-         ) -> subprocess.CompletedProcess:
+_RELEASE_GIT_SCOPE = ContextVar('mcs_release_git_scope', default=False)
+
+
+@contextmanager
+def _release_git_scope():
+    token = _RELEASE_GIT_SCOPE.set(True)
     try:
-        return update_discovery.git(args, timeout, checkout=REPO,
-                                    environment=os.environ)
+        yield
+    finally:
+        _RELEASE_GIT_SCOPE.reset(token)
+
+
+def _release_git(args, timeout, *, deadline=None):
+    budget = _bounded_timeout(timeout, deadline)
+    # This per-command deadline keeps exact child retirement after quiesce without extending the pre-quiesce budget.
+    stop_at = min(deadline, time.monotonic() + budget) if deadline is not None else time.monotonic() + budget
+    try:
+        result = owned_process.run_owned(['/usr/bin/git', '-C', REPO, '--work-tree', REPO, *args], budget,
+            _release_git_environment(), deadline=stop_at)
+        if result.returncode != 0:
+            result.stderr = f'exit={result.returncode}'
+        return result
+    except subprocess.TimeoutExpired:
+        raise UpdateError('git_timeout: ' + ' '.join(args[:1])) from None
+    except OSError:
+        raise UpdateError('git_spawn_failed') from None
+
+
+def _git(args: list[str], timeout: int = update_discovery.LOCAL_TIMEOUT_S,
+         *, deadline=None) -> subprocess.CompletedProcess:
+    if deadline is not None or _RELEASE_GIT_SCOPE.get():
+        return _release_git(args, timeout, deadline=deadline)
+    try:
+        result = update_discovery.git(args, _bounded_timeout(timeout, deadline), checkout=REPO,
+            environment=os.environ if deadline is None else _release_git_environment())
+        if deadline is not None:
+            _bounded_timeout(None, deadline)
+        return result
     except update_discovery.DiscoveryError as exc:
         raise UpdateError(str(exc)) from exc
 
-def _checkout_git(checkout: str, *args: str) -> subprocess.CompletedProcess:
+def _checkout_git(checkout: str, *args: str, deadline=None) -> subprocess.CompletedProcess:
     """A bounded Git read of another checkout (OSError/TimeoutExpired propagate)."""
     return _run_with_lifetime(["git", "-C", checkout, *args], capture_output=True,
-                              text=True, timeout=30)
+                              text=True, timeout=30, **({} if deadline is None else {
+                                  'deadline': deadline, 'env': _release_git_environment()}))
 
 
 def _index_has_flags(ls_files_v: str) -> bool:
@@ -339,20 +402,20 @@ def _current_version() -> tuple[str | None, str]:
         raise UpdateError(str(exc)) from exc
 
 
-def _git_out(args: list[str], timeout: int = update_discovery.LOCAL_TIMEOUT_S) -> str:
-    r = _git(args, timeout)
+def _git_out(args: list[str], timeout: int = update_discovery.LOCAL_TIMEOUT_S, *, deadline=None) -> str:
+    r = _git(args, timeout, **({} if deadline is None else {"deadline": deadline}))
     if r.returncode != 0:
         raise UpdateError("git_failed: " + " ".join(args[:1])
                           + f" (exit={r.returncode})")
     return r.stdout
 
 
-def _head_sha() -> str:
-    return _git_out(["rev-parse", "HEAD"]).strip()
+def _head_sha(*, deadline=None) -> str:
+    return _git_out(["rev-parse", "HEAD"], **({} if deadline is None else {"deadline": deadline})).strip()
 
 
-def _tree_clean() -> bool:
-    return _git_out(["status", "--porcelain", "-uno"]).strip() == ""
+def _tree_clean(*, deadline=None) -> bool:
+    return _git_out(["status", "--porcelain", "-uno"], **({} if deadline is None else {"deadline": deadline})).strip() == ""
 
 
 def _local_changes_outside(prev, target) -> list[str]:
@@ -517,10 +580,12 @@ def _service_paths():
         hermes_scripts_dir=SCRIPTS_DIR, agents_dir=AGENTS_DIR, manifest_path=MANIFEST_PATH)
 
 
-def precheck_local(cfg: dict) -> list[str]:
+def precheck_local(cfg: dict, *, deadline=None) -> list[str]:
     """Local-only gates (no tag objects needed yet)."""
     errors = []
-    if not _tree_clean():
+    if deadline is not None:
+        _bounded_timeout(None, deadline)
+    if not _tree_clean(**({} if deadline is None else {"deadline": deadline})):
         errors.append("tree_dirty")
     try:
         errs, _ = mcs_config.validate_config(cfg)
@@ -533,21 +598,22 @@ def precheck_local(cfg: dict) -> list[str]:
             errors.append("insufficient_disk")
     # an owned idle watchdog whose explicit selection drifted is repaired by
     # the post-merge `services`; anything else still blocks before merge
-    errors.extend(service_management.runtime_gate_errors(cfg, repair_recovery=True, update_repo=REPO, allow_runtime_migration=True, paths=_service_paths()))
+    errors.extend(service_management.runtime_gate_errors(cfg, repair_recovery=deadline is None, update_repo=REPO, allow_runtime_migration=deadline is None, paths=_service_paths(), **({} if deadline is None else {"deadline": deadline})))
     if cfg.get("runtime_mode") == "standalone":
-        if runtime_inspection.python_problem(mcs_runtime.python_executable(cfg, root=HOME)):
+        if runtime_inspection.python_problem(mcs_runtime.python_executable(cfg, root=HOME), **({} if deadline is None else {"deadline": deadline})):
             errors.append("standalone_interpreter_unavailable")
     else:
         hermes = mcs_util.hermes_exe(cfg)
         if not runtime_inspection.executable_available(hermes):
             errors.append("hermes_not_resolvable")
-    problem = _migration_checkout_problem(cfg)
+    problem = _migration_checkout_problem(cfg, **({} if deadline is None else {"deadline": deadline}))
     if problem:
         errors.append("runtime_migration: " + problem)
     return errors
 
 
-def _migration_checkout_problem(cfg: dict) -> str | None:
+
+def _migration_checkout_problem(cfg: dict, *, deadline=None) -> str | None:
     """Refuse before merge what install.sh would refuse mid-migration."""
     try:
         venv, checkout = _runtime_venv(cfg)
@@ -556,8 +622,8 @@ def _migration_checkout_problem(cfg: dict) -> str | None:
     if checkout is None:
         return None
     try:
-        head = _checkout_git(checkout, "rev-parse", "HEAD")
-        index = _checkout_git(checkout, "ls-files", "-v", "-z")
+        head = _checkout_git(checkout, "rev-parse", "HEAD", **({} if deadline is None else {"deadline": deadline}))
+        index = _checkout_git(checkout, "ls-files", "-v", "-z", **({} if deadline is None else {"deadline": deadline}))
     except (OSError, subprocess.TimeoutExpired):
         return "hermes_checkout_unreadable"
     if head.returncode != 0 or not update_discovery.COMMIT_SHA_RE.fullmatch(head.stdout.strip()) or index.returncode != 0:
@@ -565,11 +631,11 @@ def _migration_checkout_problem(cfg: dict) -> str | None:
     if _index_has_flags(index.stdout):
         return "hermes_checkout_branch_or_dirty"
     keep = os.environ.get(KEEP_CHECKOUT_ENV)
-    if not keep and not _needs_migration(venv) and not _refresh_runtime_pin(venv, head.stdout.strip()):
+    if not keep and not _needs_migration(venv, **({} if deadline is None else {"deadline": deadline})) and not _refresh_runtime_pin(venv, head.stdout.strip(), **({} if deadline is None else {"deadline": deadline})):
         return None
     try:
-        branch = _checkout_git(checkout, "symbolic-ref", "-q", "HEAD")
-        dirty = _checkout_git(checkout, "status", "--porcelain", "--untracked-files=no")
+        branch = _checkout_git(checkout, "symbolic-ref", "-q", "HEAD", **({} if deadline is None else {"deadline": deadline}))
+        dirty = _checkout_git(checkout, "status", "--porcelain", "--untracked-files=no", **({} if deadline is None else {"deadline": deadline}))
     except (OSError, subprocess.TimeoutExpired):
         return "hermes_checkout_unreadable"
     if dirty.returncode != 0 or branch.returncode not in (0, 1):
@@ -583,7 +649,7 @@ def _migration_checkout_problem(cfg: dict) -> str | None:
             return "keep_hermes_checkout_invalid"
         if head.stdout.strip() != keep:
             return "keep_hermes_checkout_mismatch"
-        if not _checkout_admits_python314(checkout):
+        if not _checkout_admits_python314(checkout, **({} if deadline is None else {"deadline": deadline})):
             return "keep_hermes_checkout_python_unsupported"
         return None
     if head.stdout.strip() in HERMES_PREVIOUS_PINS | {HERMES_PIN}:
@@ -592,7 +658,8 @@ def _migration_checkout_problem(cfg: dict) -> str | None:
     return "hermes_checkout_unknown_commit"
 
 
-def _python314() -> str | None:
+
+def _python314(*, deadline=None) -> str | None:
     """The interpreter install.sh's find_py would pick (3.14 <= v < 3.15)."""
     for name in ("python3.14", "python3"):
         exe = shutil.which(name)
@@ -601,7 +668,7 @@ def _python314() -> str | None:
         try:
             ok = _run_with_lifetime([exe, "-I", "-c", "import sys; sys.exit(not (3, 14) <= "
                                  "sys.version_info[:2] < (3, 15))"],
-                                capture_output=True, timeout=30).returncode == 0
+                                capture_output=True, timeout=30, **({} if deadline is None else {"deadline": deadline})).returncode == 0
         except (OSError, subprocess.TimeoutExpired):
             continue
         if ok:
@@ -609,17 +676,19 @@ def _python314() -> str | None:
     return None
 
 
-def _checkout_admits_python314(checkout: str) -> bool:
+
+def _checkout_admits_python314(checkout: str, *, deadline=None) -> bool:
     """[project].requires-python checked by that interpreter, same script as install.sh."""
-    python = _python314()
+    python = _python314(**({} if deadline is None else {"deadline": deadline}))
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requires_python_admits.py")
     if python is None:
         return False
     try:
         return _run_with_lifetime([python, "-I", script, os.path.join(checkout, "pyproject.toml")],
-                              capture_output=True, timeout=30).returncode == 0
+                              capture_output=True, timeout=30, **({} if deadline is None else {"deadline": deadline})).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
+
 
 
 def _norm(path: str) -> str:
@@ -636,17 +705,19 @@ def _safe_relpath(path: str) -> bool:
     return all(part not in ("", ".", "..") for part in path.split("/"))
 
 
-def _ls_tree_paths(tag: str, subdir: str | None = None
-                   ) -> list[tuple[str, str, str, str]]:
+def _ls_tree_paths(tag: str, subdir: str | None = None,
+                   *, deadline=None) -> list[tuple[str, str, str, str]]:
     """(mode, otype, sha, path) records via `ls-tree -rz` — NUL
     separation defeats core.quotepath quoting, which otherwise lets a
     crafted non-ASCII name slip past the protected-path check (S3/F2)."""
     args = ["ls-tree", "-rz", tag]
     if subdir:
         args += ["--", subdir]
-    out = _git_out(args)
+    out = _git_out(args, **({} if deadline is None else {"deadline": deadline}))
     records = []
     for rec in out.split("\0"):
+        if deadline is not None:
+            _bounded_timeout(None, deadline)
         if not rec:
             continue
         meta, _, path = rec.partition("\t")
@@ -657,15 +728,17 @@ def _ls_tree_paths(tag: str, subdir: str | None = None
     return records
 
 
-def precheck_tag(tag: str) -> list[str]:
-    """Candidate-tree content gates — all work on fetched objects."""
+
+def _precheck_target_tree(tag: str, standalone: bool, *, deadline=None, installed_schema=None, expected_target_schema=None) -> tuple[list[str], list]:
+    """Inspect fixed target objects without importing any candidate code."""
     errors: list[str] = []
-    standalone = mcs_runtime.standalone(mcs_util.load_config())
-    if standalone and not _standalone_target_supported(tag):
+    if standalone and not _standalone_target_supported(tag, **({} if deadline is None else {"deadline": deadline})):
         errors.append("standalone_runtime_missing_in_target")
     paths = []
-    entries = _ls_tree_paths(tag)
+    entries = _ls_tree_paths(tag, **({} if deadline is None else {"deadline": deadline}))
     for mode, otype, _sha, path in entries:
+        if deadline is not None:
+            _bounded_timeout(None, deadline)
         if mode not in ("100644", "100755", "040000") or \
                 otype not in ("blob", "tree"):
             errors.append(f"bad_entry_type: {mode} {path}")
@@ -674,6 +747,8 @@ def precheck_tag(tag: str) -> list[str]:
         paths.append(path)
     norm_protected = tuple(_norm(p) for p in PROTECTED)
     for path in paths:
+        if deadline is not None:
+            _bounded_timeout(None, deadline)
         np_ = _norm(path)
         if any(np_ == p or np_.startswith(p.rstrip("/") + "/")
                for p in norm_protected):
@@ -686,7 +761,7 @@ def precheck_tag(tag: str) -> list[str]:
                 ["git", "-C", REPO, "check-ignore", "-z", "--stdin",
                  "--no-index"],
                 input="\0".join(paths), capture_output=True, text=True,
-                timeout=update_discovery.LOCAL_TIMEOUT_S)
+                timeout=update_discovery.LOCAL_TIMEOUT_S, **({} if deadline is None else {"deadline": deadline, "env": _release_git_environment()}))
         except (OSError, subprocess.TimeoutExpired):
             errors.append("check_ignore_failed")
         else:
@@ -697,26 +772,29 @@ def precheck_tag(tag: str) -> list[str]:
                 errors.append("check_ignore_failed")
     # untracked collision: merge would refuse, but name the files first
     untracked = set(_git_out(
-        ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0"))
+        ["ls-files", "--others", "--exclude-standard", "-z"], **({} if deadline is None else {"deadline": deadline})).split("\0"))
     diff = set(_git_out(
-        ["diff", "--name-only", "-z", "HEAD", tag]).split("\0"))
+        ["diff", "--name-only", "-z", "HEAD", tag], **({} if deadline is None else {"deadline": deadline})).split("\0"))
     clash = (untracked & diff) - {""}
     if clash:
         errors.append("untracked_collision: " + ",".join(sorted(clash)[:10]))
     # fast-forward feasibility + ancestry must be provable BEFORE the
     # quiesce window, not discovered inside it (L3)
     if _git(["merge-base", "--is-ancestor", "HEAD", tag]
-            ).returncode != 0:
+            , **({} if deadline is None else {"deadline": deadline})).returncode != 0:
         errors.append("not_fast_forward: HEAD is not an ancestor of tag")
     # schema compat: candidate SCHEMA_VERSION vs live user_version
     try:
-        src = _git_out(["show", f"{tag}:mcs/core/ledger.py"])
+        src = _git_out(["show", f"{tag}:mcs/core/ledger.py"], **({} if deadline is None else {"deadline": deadline}))
         m = re.search(r"SCHEMA_VERSION\s*=\s*([0-9]+)", src)
         if not m:
             errors.append("schema_version_unparseable")
         else:
             new_ver = int(m.group(1))
-            cur_ver = restore_evidence.database_version(LEDGER)
+            if expected_target_schema is not None and (type(expected_target_schema) is not int or new_ver != expected_target_schema):
+                errors.append('release_schema_target_mismatch')
+            cur_ver = restore_evidence.database_version(LEDGER) if deadline is None else (
+                installed_schema if type(installed_schema) is int and installed_schema > 0 else None)
             if cur_ver is None:
                 # unknown is not zero: never report a bump from 0
                 errors.append("schema_version_unknown")
@@ -726,6 +804,33 @@ def precheck_tag(tag: str) -> list[str]:
                 errors.append(f"schema_bump:{cur_ver}->{new_ver}")
     except UpdateError:
         errors.append("schema_version_unreadable")
+    return errors, entries
+
+
+
+def _precheck_target_runtime_files(tag: str, standalone: bool, *, deadline=None) -> list[str]:
+    """Retain the existing installer, lock and SDK change refusals."""
+    errors = []
+    if _git(["diff", "--quiet", "HEAD", tag, "--", "install.sh"]
+            , **({} if deadline is None else {"deadline": deadline})).returncode != 0:
+        errors.append("install_sh_changed")
+    if _git(["diff", "--quiet", "HEAD", tag, "--",
+             "deployment/sdc-release-lock.json", "deployment/sdc-wheels/"]
+            , **({} if deadline is None else {"deadline": deadline})).returncode != 0:
+        errors.append("release_dependency_lock_changed")
+    # standalone SDK pins live in ~/.mcs/venv, which only install.sh updates
+    if standalone and _git(
+            ["diff", "--quiet", "HEAD", tag, "--",
+             "deployment/requirements-standalone.txt"], **({} if deadline is None else {"deadline": deadline})).returncode != 0:
+        errors.append("standalone_requirements_changed")
+    return errors
+
+
+
+def precheck_tag(tag: str) -> list[str]:
+    """Candidate-tree gates; legacy apply retains its existing candidate probe."""
+    standalone = mcs_runtime.standalone(mcs_util.load_config())
+    errors, entries = _precheck_target_tree(tag, standalone)
     # candidate preflight: exact blobs, not git archive (S3)
     tmp = tempfile.mkdtemp(prefix="mcs_preflight_")
     try:
@@ -771,26 +876,16 @@ def precheck_tag(tag: str) -> list[str]:
         errors.append(f"preflight_failed: {e}")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    if _git(["diff", "--quiet", "HEAD", tag, "--", "install.sh"]
-            ).returncode != 0:
-        errors.append("install_sh_changed")
-    if _git(["diff", "--quiet", "HEAD", tag, "--",
-             "deployment/sdc-release-lock.json", "deployment/sdc-wheels/"]
-            ).returncode != 0:
-        errors.append("release_dependency_lock_changed")
-    # standalone SDK pins live in ~/.mcs/venv, which only install.sh updates
-    if standalone and _git(
-            ["diff", "--quiet", "HEAD", tag, "--",
-             "deployment/requirements-standalone.txt"]).returncode != 0:
-        errors.append("standalone_requirements_changed")
+    errors.extend(_precheck_target_runtime_files(tag, standalone))
     return errors
 
 
-def _plugin_changed(tag: str, cfg: dict) -> bool:
+def _plugin_changed(tag: str, cfg: dict, *, deadline=None) -> bool:
     return bool(_git_out(
         ["diff", "--name-only", "-z", "HEAD", tag, "--",
          *mcs_runtime.GATEWAY_SOURCE_DIRS,
-         *(["mcs_standalone"] if mcs_runtime.standalone(cfg) else [])]).strip("\0"))
+         *(["mcs_standalone"] if mcs_runtime.standalone(cfg) else [])], **({} if deadline is None else {"deadline": deadline})).strip("\0"))
+
 
 
 def upgrade_notes(tag: str, cur_tag: str | None) -> list[dict]:
@@ -916,9 +1011,10 @@ def _recovery_notes(cfg, blockers, reinstall) -> list[str]:
     return notes
 
 
-def _standalone_target_supported(ref):
-    return all(_git(["cat-file", "-e", f"{ref}:{name}"]).returncode == 0
+def _standalone_target_supported(ref, *, deadline=None):
+    return all(_git(["cat-file", "-e", f"{ref}:{name}"], **({} if deadline is None else {"deadline": deadline})).returncode == 0
                for name in ("mcs_standalone/__main__.py", "mcs/core/mcs_runtime.py"))
+
 
 
 # ------------------------------------------------------------- services
@@ -1503,7 +1599,7 @@ def _free_sibling(path: str, suffix: str) -> str:
     return candidate
 
 
-def _runtime_version(venv: str) -> tuple[str, tuple[int, int]] | None:
+def _runtime_version(venv: str, *, deadline=None) -> tuple[str, tuple[int, int]] | None:
     """(interpreter, (major, minor)) reported by the venv, or None if unknown."""
     for name in ("python3", "python"):
         exe = os.path.join(venv, "bin", name)
@@ -1511,7 +1607,7 @@ def _runtime_version(venv: str) -> tuple[str, tuple[int, int]] | None:
             try:
                 out = _run_with_lifetime(
                     [exe, "-I", "-c", "import sys; print(*sys.version_info[:2])"],
-                    capture_output=True, text=True, timeout=30)
+                    capture_output=True, text=True, timeout=30, **({} if deadline is None else {"deadline": deadline}))
                 major, minor = map(int, out.stdout.split())
             except (OSError, subprocess.TimeoutExpired, ValueError):
                 return None
@@ -1519,18 +1615,21 @@ def _runtime_version(venv: str) -> tuple[str, tuple[int, int]] | None:
     return None
 
 
-def _needs_migration(venv: str) -> bool:
+
+def _needs_migration(venv: str, *, deadline=None) -> bool:
     """Only a runtime that runs and reports an older Python is migrated."""
-    found = _runtime_version(venv)
+    found = _runtime_version(venv, **({} if deadline is None else {"deadline": deadline}))
     return found is not None and found[1] < RUNTIME_MIN
 
 
-def _refresh_runtime_pin(venv: str, head: str | None) -> bool:
+
+def _refresh_runtime_pin(venv: str, head: str | None, *, deadline=None) -> bool:
     """Whether a supported runtime needs dependencies from the new Hermes pin."""
     if head not in HERMES_PREVIOUS_PINS or head == HERMES_PIN or os.environ.get(KEEP_CHECKOUT_ENV):
         return False
-    found = _runtime_version(venv)
+    found = _runtime_version(venv, **({} if deadline is None else {"deadline": deadline}))
     return found is not None and RUNTIME_MIN <= found[1] < (3, 15)
+
 
 
 def _runtime_python(venv: str) -> str | None:
@@ -1696,6 +1795,7 @@ def _post_merge(state: dict) -> int:
         **({"target_kind": "local_candidate", "human_confirmed": True,
             "reason": applying["reason"]}
            if applying.get("target_kind") == "local_candidate" else {}),
+        **({"target_kind": "release"} if applying.get('target_kind') == 'release' else {}),
         **({"release_ref": applying["release_ref"]} if "release_ref" in applying else {}),
         **({"release_child": applying["release_child"]} if "release_child" in applying else {}),
         "command_id": applying.get("command_id"), "at": time.time()})
@@ -1752,6 +1852,7 @@ def _rollback_applying(entry, prev_sha, command_id) -> dict:
         "manifest_snapshot": entry.get("manifest_snapshot"),
         **({"runtime_migration": entry["runtime_migration"]}
            if entry.get("runtime_migration") else {}),
+        **({"target_kind": "release"} if entry.get('target_kind') == 'release' else {}),
         **({"release_ref": entry["release_ref"]} if "release_ref" in entry else {}),
         "command_id": command_id,
         "at": time.time()}
@@ -1778,12 +1879,19 @@ def _hold_rollback_for_consent(state, e, tag, command_id,
     return 2
 
 
-def _run_post_merge(sha: str, *, run_lock_fd: int | None) -> None:
+def _run_post_merge(sha: str, *, run_lock_fd: int | None, _release_entry=None) -> None:
     """Spawn the post-merge child under the NEW code while the parent
     keeps both locks held — start_new_session so a timeout can killpg()
     grandchildren too. Raises UpdateError unless the child either exits
     cleanly or proves it already wrote 'done' (H5)."""
     env = update_launch.launch_environment(os.environ, detached=False)
+    if _release_entry is not None:
+        import release_apply_owner
+        if (type(_release_entry) is not release_apply_owner._StartedEffect
+                or sha != _release_entry.reference.get('target_commit')
+                or len(_release_entry.locks) != 3 or run_lock_fd != _release_entry.locks[2]):
+            raise release_apply_owner.ReleaseApplyError('CHILD_HOLD')
+        return release_apply_owner._run_effect_post_merge(_release_entry, environment=env, timeout=T_POST_MERGE)
     env[_UPDATE_PM_ENV] = sha       # child handshake token (L17)
     env.pop(RUN_LOCK_FD_ENV, None)
     run_fd = run_lock_fd
@@ -1888,14 +1996,19 @@ def _apply_tag_gate(tag: str, cfg: dict, command_id: str | None,
     return None, bump
 
 
-def _read_manifest_snapshot():
+def _read_manifest_snapshot(*, deadline=None):
     """Read the pre-update manifest snapshot, or None when unreadable."""
+    if deadline is not None:
+        _bounded_timeout(None, deadline)
     snap = None
     try:
         snap = journal_store.read_control_json(MANIFEST_PATH)
     except (OSError, ValueError, RecursionError):
         pass
+    if deadline is not None:
+        _bounded_timeout(None, deadline)
     return snap
+
 
 
 def _apply_record_success(tag: str, command_id: str | None) -> dict:
@@ -1935,307 +2048,376 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
     update_state.json is serialized and 'journal exists + lock free'
     reliably means the writer died. run.lock is taken second (after
     the long pre-checks) — run.lock holders (drainer ticks) never
-    block on update.lock, so no lock-order inversion exists."""
+    block on update.lock, so no lock-order inversion exists. A verified
+    release entry instead borrows its already-held gate/update/run locks."""
+    borrowed = None
+    lifetime = ExitStack()
     if _release_cap is not None:
         import release_apply_owner
         borrowed = release_apply_owner._claim_effect_entry(_release_cap,
             arguments=(tag, sha, command_id, base_sha, reinstall, install_args, candidate_sha, confirm_human, reason),
             runtime_home=HOME, repository=REPO, journal_path=STATE_PATH)
-        try:
-            # shortcut: no live parent issuer is connected; keep effects closed until borrowed-core wiring is complete.
-            raise release_apply_owner.ReleaseApplyError('EFFECT_NOT_CONNECTED')
-        finally:
-            release_apply_owner._finish_effect_entry(borrowed)
-    rc = _apply_validate_args(tag, sha, command_id, reinstall, install_args,
-                              candidate_sha=candidate_sha, base_sha=base_sha,
-                              confirm_human=confirm_human, reason=reason)
-    if rc is not None:
-        return rc
-    candidate = candidate_sha is not None
-    target_ref = candidate_sha if candidate else f"refs/tags/{tag}"
-    if candidate:
-        try:
-            _candidate_commit(candidate_sha)
-        except UpdateError:
-            print("未公開候補はローカルに存在するコミットだけを指定してください（変更はありません）")
-            return 2
-        tag = "candidate:" + candidate_sha
-        sha = candidate_sha
-    cfg = mcs_util.load_config()
-    runtime_errors = _apply_runtime_gate_errors(cfg, reinstall, install_args)
-    if runtime_errors:
-        # Even acquiring update.lock or writing local_checks is a mutation.
-        # Keep an existing interrupted journal untouched for safe recovery.
-        print("更新を開始できません。実行環境の問題を解消してください（変更はありません）: " + "; ".join(runtime_errors))
-        return 1
-    state = journal_store.load_state(STATE_PATH)
-    if state.get("_corrupt"):
-        print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
-        return 2
-    if state.get("applying") or state.get("stages"):
-        return recover_interrupted()
-
-    run_fd = upd_fd = None
-    quiesced = False
-    rollback_failed = False
-    consent_hold = False
-    delegated = False
-
-    def bail(reason: str) -> int:
-        nonlocal rollback_failed, consent_hold
-        transient = reason.split(":")[0] in _TRANSIENT_BAIL
-        stages = [s.get("stage") for s in state.get("stages", [])]
-        merged = "merge" in stages or "post_merge" in stages
-        if merged and state.get("applying"):
-            # the tree is already on the new code — a plain abort would
-            # leave the system running NEW code while claiming nothing
-            # happened; fall back to the surgical rollback path
-            entry = state["applying"]
-            try:
-                _check_runtime_restore(entry)
-            except UpdateError as e:
-                rollback_failed = True
-                _report("runtime_restore_blocked", str(e))
-                return 1               # retain the original journal and marker
-            if entry.get("schema_bump") and entry.get("backup_path"):
-                # journal rollback-shaped BEFORE the reset, like
-                # rollback(): a failed/interrupted DB restore must
-                # classify as head == target on the next recover pass
-                # and retry _restore_db — an apply-shaped record would
-                # read head == prev and 'finish' on the newer schema
-                state["applying"] = _rollback_applying(
-                    entry, entry.get("sha"),
-                    command_id or entry.get("command_id"))
-                journal(state, "rollback")
-            try:
-                # The post-merge child may have restarted writers before failing.
-                quiesce()
-                _rollback_tree(entry, lambda report: _consent_hold(
-                    state, RestoreConsentPending(report), entry["backup_path"]))
-                state.pop("restore_consent", None)
-                reason += " (rolled back)"
-            except RestoreConsentPending as e:
-                # the post-merge child may already have restarted the
-                # drainers (and removed the marker) — hold exactly like
-                # rollback(): writers stopped, marker kept until consent
-                # record the hold FIRST: a failing quiesce must never
-                # lose the consent record or let finally drop the marker
-                consent_hold = True
-                rc = _hold_rollback_for_consent(
-                    state, e, tag, command_id, reason)
-                try:
-                    quiesce()
-                except Exception as qe:
-                    # keep the consent report intact — the hold (and its
-                    # awaiting-consent freeze) already stands; log only
-                    print("復元の承認待ちは維持していますが、処理の一時停止に失敗しました。詳細:",
-                          f"{type(qe).__name__}: {qe}"[:200])
+    try:
+        if borrowed is not None:
+            lifetime.enter_context(_release_git_scope())
+            lifetime.enter_context(owned_process.lifetime_fds(borrowed.locks))
+        if borrowed is None:
+            rc = _apply_validate_args(tag, sha, command_id, reinstall, install_args,
+                                      candidate_sha=candidate_sha, base_sha=base_sha,
+                                      confirm_human=confirm_human, reason=reason)
+            if rc is not None:
                 return rc
-            except Exception as e:
-                if _restore_hold_active():
+            candidate = candidate_sha is not None
+            target_ref = candidate_sha if candidate else f"refs/tags/{tag}"
+            if candidate:
+                try:
+                    _candidate_commit(candidate_sha)
+                except UpdateError:
+                    print("未公開候補はローカルに存在するコミットだけを指定してください（変更はありません）")
+                    return 2
+                tag = "candidate:" + candidate_sha
+                sha = candidate_sha
+            cfg = mcs_util.load_config()
+            runtime_errors = _apply_runtime_gate_errors(cfg, reinstall, install_args)
+            if runtime_errors:
+                # Even acquiring update.lock or writing local_checks is a mutation.
+                # Keep an existing interrupted journal untouched for safe recovery.
+                print("更新を開始できません。実行環境の問題を解消してください（変更はありません）: " + "; ".join(runtime_errors))
+                return 1
+            state = journal_store.load_state(STATE_PATH)
+            if state.get("_corrupt"):
+                print("更新履歴を読み取れないため停止しました。update_state.jsonを削除せず、管理者に確認してください")
+                return 2
+            if state.get("applying") or state.get("stages"):
+                return recover_interrupted()
+
+        else:
+            deadline = borrowed.prequiesce_deadline
+            _bounded_timeout(None, deadline)
+            release_apply_owner._effect_artifact(borrowed)
+            cfg = mcs_util.load_config()
+            state = journal_store.load_state(STATE_PATH)
+            if cfg != borrowed.configuration or state != borrowed.journal:
+                raise release_apply_owner.ReleaseApplyError('EFFECT_HOLD')
+            _bounded_timeout(None, deadline)
+            state = copy.deepcopy(state)
+            candidate = False
+            target_ref = sha = borrowed.reference['target_commit']
+            base_sha = borrowed.spent['preconditions']['current_commit']
+            tag = 'release:' + str(borrowed.reference['target_code_seq'])
+        run_fd = borrowed.locks[2] if borrowed is not None else None
+        upd_fd = borrowed.locks[1] if borrowed is not None else None
+        before_args = {} if borrowed is None else {'deadline': borrowed.prequiesce_deadline}
+        quiesced = False
+        rollback_failed = False
+        consent_hold = False
+        delegated = False
+
+        def bail(reason: str) -> int:
+            nonlocal rollback_failed, consent_hold
+            transient = reason.split(":")[0] in _TRANSIENT_BAIL
+            stages = [s.get("stage") for s in state.get("stages", [])]
+            merged = "merge" in stages or "post_merge" in stages
+            if merged and state.get("applying"):
+                # the tree is already on the new code — a plain abort would
+                # leave the system running NEW code while claiming nothing
+                # happened; fall back to the surgical rollback path
+                entry = state["applying"]
+                try:
+                    _check_runtime_restore(entry)
+                except UpdateError as e:
+                    rollback_failed = True
+                    _report("runtime_restore_blocked", str(e))
+                    return 1               # retain the original journal and marker
+                if entry.get("schema_bump") and entry.get("backup_path"):
+                    # journal rollback-shaped BEFORE the reset, like
+                    # rollback(): a failed/interrupted DB restore must
+                    # classify as head == target on the next recover pass
+                    # and retry _restore_db — an apply-shaped record would
+                    # read head == prev and 'finish' on the newer schema
+                    state["applying"] = _rollback_applying(
+                        entry, entry.get("sha"),
+                        command_id or entry.get("command_id"))
+                    journal(state, "rollback")
+                try:
+                    # The post-merge child may have restarted writers before failing.
+                    quiesce()
+                    _rollback_tree(entry, lambda report: _consent_hold(
+                        state, RestoreConsentPending(report), entry["backup_path"]))
+                    state.pop("restore_consent", None)
+                    reason += " (rolled back)"
+                except RestoreConsentPending as e:
+                    # the post-merge child may already have restarted the
+                    # drainers (and removed the marker) — hold exactly like
+                    # rollback(): writers stopped, marker kept until consent
+                    # record the hold FIRST: a failing quiesce must never
+                    # lose the consent record or let finally drop the marker
                     consent_hold = True
-                    _report("restore_consent_blocked", str(e))
+                    rc = _hold_rollback_for_consent(
+                        state, e, tag, command_id, reason)
                     try:
                         quiesce()
                     except Exception as qe:
-                        _report("restore_consent_blocked",
-                                f"{e}; quiesce failed: {type(qe).__name__}")
-                    return 2
-                rollback_failed = True
-                reason += f" (rollback failed: {e} — escalate)"
-                if state["applying"].get("rollback"):
-                    # the tree may be on the old code while the DB keeps the
-                    # newer schema: recovery keeps writers stopped until the
-                    # restore completes (no consent report exists to hold on)
-                    state["applying"]["restore_incomplete"] = True
-        if not rollback_failed:
-            # keep remnants when the rollback itself failed — recovery
-            # must still be able to see and escalate the wedged state
-            state["applying"] = None
-            state["stages"] = []
-        if transient and not rollback_failed:
-            # never attempted: clean journal, leave the receipt
-            # pending, no attempt record, no notification — the next
-            # check retries
-            state["stages"] = []
-            journal_store.save_state(STATE_PATH, state)
-            return 2
-        if command_id:
-            _record_executed(state, command_id, "failed", reason)
-        _record_attempt(state, tag, "failed", reason)
-        journal_store.save_state(STATE_PATH, state)
-        if rollback_failed and state["applying"].get("restore_incomplete"):
-            # same report-only freeze as recover_interrupted's escalate: an
-            # outbox notice would write the newer-schema DB under the old
-            # code and join the later restore's loss report
-            _report("escalate", reason, writers_stopped=True)
-            return 1
-        if quiesced and not rollback_failed:
-            problems = restart_agents()
-            _remove_marker()
-            if problems:
-                reason += " restart:" + ",".join(problems)
-        _enqueue_notice(f"[MCS] 更新 {tag or ''} を中止しました: {reason}",
-                        use_run_lock=run_fd is None)
-        return 1
-
-    try:
-        # update.lock BEFORE the first journal write (F6/H2): from now
-        # on a free lock proves no updater is alive, and every state
-        # write below is serialized.
-        upd_fd = acquire_update_lock()
-        if upd_fd is None:
-            return 0                    # another updater is alive
-        state = journal_store.load_state(STATE_PATH)            # fresh view under the lock
-        if _release_legacy_hold(state):
-            return 2
-        if state.get("_corrupt"):
-            return 2
-        if state.get("applying") or state.get("stages"):
-            os.close(upd_fd)
-            upd_fd = None
-            # the journal is ANOTHER run's: whatever recover raises must
-            # propagate (as in rollback()), never reach bail() below,
-            # which would treat that journal as this apply's own and
-            # _rollback_tree it unlocked, then overwrite it
-            delegated = True
-            return recover_interrupted()
-
-        journal(state, "local_checks")
-        errors = precheck_local(cfg)
-        if errors:
-            return bail("precheck_local: " + ",".join(errors))
-
-        if candidate:
-            journal(state, "candidate_verify")
-            _candidate_commit(candidate_sha)
-            if _head_sha() != base_sha:
-                return bail("base_sha_mismatch: 承認時点と HEAD が異なる — 要再レビュー")
-        else:
-            journal(state, "remote_verify")
-            try:
-                remote = update_discovery.remote_tag_sha(tag, checkout=REPO, environment=os.environ)
-            except update_discovery.DiscoveryError as exc:
-                raise UpdateError(str(exc)) from exc
-            if sha is None:
-                sha = remote                # manual `apply --tag` convenience
-            if sha is None or remote != sha:
-                return bail("tag_moved: remote sha changed — 要再レビュー")
-
-            journal(state, "fetch")
-            _git(["fetch", "--tags", "origin"], timeout=T_FETCH)
-            local_sha = _git_out(
-                ["rev-parse", target_ref + "^{commit}"]).strip()
-            if local_sha != sha:
-                return bail("local_tag_sha_mismatch")
-
-        journal(state, "tag_checks")
-        gate_problem, bump = _apply_tag_gate(candidate_sha if candidate else tag,
-                                              cfg, command_id, reinstall)
-        if gate_problem:
-            return bail(gate_problem)
-
-        journal(state, "backup")
-        import maintenance
-        try:
-            bpath = maintenance.preupdate_backup(LEDGER)
-        except maintenance.MaintenanceError as e:
-            return bail(str(e))
-        snap = _read_manifest_snapshot()
-        state["baseline_check"] = _baseline_check(cfg)
-        journal_store.save_state(STATE_PATH, state)
-
-        journal(state, "lock")
-        run_fd = _acquire_run_lock_wait()
-        if run_fd is None:
-            return bail("run_lock_timeout")
-        # re-verify inside the locks (TOCTOU on state + tree, S11/S20)
-        if not _tree_clean():
-            return bail("tree_dirty_after_lock")
-        if base_sha and _head_sha() != base_sha:
-            return bail("base_sha_mismatch: 承認時点と HEAD が異なる"
-                        " — 要再レビュー")
-        if _head_sha() == sha:
-            # idempotent: already on the target — record and exit
-            state["stages"] = []
+                        # keep the consent report intact — the hold (and its
+                        # awaiting-consent freeze) already stands; log only
+                        print("復元の承認待ちは維持していますが、処理の一時停止に失敗しました。詳細:",
+                              f"{type(qe).__name__}: {qe}"[:200])
+                    return rc
+                except Exception as e:
+                    if _restore_hold_active():
+                        consent_hold = True
+                        _report("restore_consent_blocked", str(e))
+                        try:
+                            quiesce()
+                        except Exception as qe:
+                            _report("restore_consent_blocked",
+                                    f"{e}; quiesce failed: {type(qe).__name__}")
+                        return 2
+                    rollback_failed = True
+                    reason += f" (rollback failed: {e} — escalate)"
+                    if state["applying"].get("rollback"):
+                        # the tree may be on the old code while the DB keeps the
+                        # newer schema: recovery keeps writers stopped until the
+                        # restore completes (no consent report exists to hold on)
+                        state["applying"]["restore_incomplete"] = True
+            if not rollback_failed:
+                # keep remnants when the rollback itself failed — recovery
+                # must still be able to see and escalate the wedged state
+                state["applying"] = None
+                state["stages"] = []
+            if transient and not rollback_failed:
+                # never attempted: clean journal, leave the receipt
+                # pending, no attempt record, no notification — the next
+                # check retries
+                state["stages"] = []
+                journal_store.save_state(STATE_PATH, state)
+                return 2
             if command_id:
-                _record_executed(state, command_id, "already_applied")
+                _record_executed(state, command_id, "failed", reason)
+            _record_attempt(state, tag, "failed", reason)
             journal_store.save_state(STATE_PATH, state)
-            return 0
-        if command_id and state.get("executed", {}).get(command_id):
-            state["stages"] = []
+            if rollback_failed and state["applying"].get("restore_incomplete"):
+                # same report-only freeze as recover_interrupted's escalate: an
+                # outbox notice would write the newer-schema DB under the old
+                # code and join the later restore's loss report
+                _report("escalate", reason, writers_stopped=True)
+                return 1
+            if quiesced and not rollback_failed:
+                problems = restart_agents()
+                _remove_marker()
+                if problems:
+                    reason += " restart:" + ",".join(problems)
+            _enqueue_notice(f"[MCS] 更新 {tag or ''} を中止しました: {reason}",
+                            use_run_lock=run_fd is None)
+            return 1
+
+        try:
+            # update.lock BEFORE the first journal write (F6/H2): from now
+            # on a free lock proves no updater is alive, and every state
+            # write below is serialized.
+            if borrowed is None:
+                upd_fd = acquire_update_lock()
+                if upd_fd is None:
+                    return 0                    # another updater is alive
+                state = journal_store.load_state(STATE_PATH)            # fresh view under the lock
+                if _release_legacy_hold(state):
+                    return 2
+                if state.get("_corrupt"):
+                    return 2
+                if state.get("applying") or state.get("stages"):
+                    os.close(upd_fd)
+                    upd_fd = None
+                    # the journal is ANOTHER run's: whatever recover raises must
+                    # propagate (as in rollback()), never reach bail() below,
+                    # which would treat that journal as this apply's own and
+                    # _rollback_tree it unlocked, then overwrite it
+                    delegated = True
+                    return recover_interrupted()
+
+            journal(state, "local_checks")
+            errors = precheck_local(cfg, **before_args)
+            if errors:
+                return bail("precheck_local: " + ",".join(errors))
+
+            if borrowed is not None:
+                journal(state, 'release_verify')
+                release_apply_owner._import_started_artifact(borrowed)
+            elif candidate:
+                journal(state, "candidate_verify")
+                _candidate_commit(candidate_sha)
+                if _head_sha() != base_sha:
+                    return bail("base_sha_mismatch: 承認時点と HEAD が異なる — 要再レビュー")
+            else:
+                journal(state, "remote_verify")
+                try:
+                    remote = update_discovery.remote_tag_sha(tag, checkout=REPO, environment=os.environ)
+                except update_discovery.DiscoveryError as exc:
+                    raise UpdateError(str(exc)) from exc
+                if sha is None:
+                    sha = remote                # manual `apply --tag` convenience
+                if sha is None or remote != sha:
+                    return bail("tag_moved: remote sha changed — 要再レビュー")
+
+                journal(state, "fetch")
+                _git(["fetch", "--tags", "origin"], timeout=T_FETCH)
+                local_sha = _git_out(
+                    ["rev-parse", target_ref + "^{commit}"]).strip()
+                if local_sha != sha:
+                    return bail("local_tag_sha_mismatch")
+
+            journal(state, "tag_checks")
+            if borrowed is None:
+                gate_problem, bump = _apply_tag_gate(candidate_sha if candidate else tag,
+                                                      cfg, command_id, reinstall)
+                if gate_problem:
+                    return bail(gate_problem)
+
+            else:
+                standalone = mcs_runtime.standalone(cfg)
+                errors, _ = _precheck_target_tree(target_ref, standalone, **before_args,
+                    installed_schema=borrowed.spent['preconditions']['installed_schema'],
+                    expected_target_schema=borrowed.reference['target_schema'])
+                errors.extend(_precheck_target_runtime_files(target_ref, standalone, **before_args))
+                bump = [error for error in errors if error.startswith('schema_bump:')]
+                errors = [error for error in errors if not error.startswith('schema_bump:')]
+                if errors:
+                    return bail('tag_checks: ' + ','.join(errors))
+                # The live factory binds actual TTY change consent to this exact Core, including its schema.
+
+            journal(state, "backup")
+            import maintenance
+            try:
+                bpath = maintenance.preupdate_backup(LEDGER, **before_args)
+            except maintenance.MaintenanceError as e:
+                return bail(str(e))
+            snap = _read_manifest_snapshot(**before_args)
+            state["baseline_check"] = _baseline_check(cfg, **before_args)
             journal_store.save_state(STATE_PATH, state)
+
+            journal(state, "lock")
+            if borrowed is None:
+                run_fd = _acquire_run_lock_wait()
+                if run_fd is None:
+                    return bail("run_lock_timeout")
+            # re-verify inside the locks (TOCTOU on state + tree, S11/S20)
+            if not _tree_clean(**before_args):
+                return bail("tree_dirty_after_lock")
+            if base_sha and _head_sha(**before_args) != base_sha:
+                return bail("base_sha_mismatch: 承認時点と HEAD が異なる"
+                            " — 要再レビュー")
+            if _head_sha(**before_args) == sha:
+                # idempotent: already on the target — record and exit
+                state["stages"] = []
+                if command_id:
+                    _record_executed(state, command_id, "already_applied")
+                journal_store.save_state(STATE_PATH, state)
+                return 0
+            if command_id and state.get("executed", {}).get(command_id):
+                state["stages"] = []
+                journal_store.save_state(STATE_PATH, state)
+                return 0
+
+            state["applying"] = {
+                "tag": tag, "sha": sha, "prev_sha": _head_sha(**before_args),
+                "plugin_changed": _plugin_changed(target_ref if borrowed is not None else candidate_sha if candidate else tag, cfg, **before_args),
+                "schema_bump": bool(bump),
+                "reinstall": reinstall, "install_args": list(install_args),
+                "backup_path": bpath, "manifest_snapshot": snap,
+                "command_id": command_id, "at": time.time()}
+            if borrowed is not None:
+                state['applying'].update(target_kind='release', release_ref=copy.deepcopy(borrowed.reference))
+            elif candidate:
+                state["applying"].update(target_kind="local_candidate",
+                                         human_confirmed=True, reason=reason)
+            journal(state, "applying")
+
+            if borrowed is not None:
+                _bounded_timeout(None, borrowed.prequiesce_deadline)
+            journal(state, "quiesce")
+            if borrowed is not None:
+                _bounded_timeout(None, borrowed.prequiesce_deadline)
+            # mark BEFORE quiesce: a partial quiesce (one drainer stopped,
+            # then a stop failure) must still trigger restart in bail —
+            # restart_agents() is idempotent
+            quiesced = True
+            quiesce()
+
+            if borrowed is not None:
+                release_apply_owner._check_git_metadata(REPO, deadline=time.monotonic() + 10)
+            journal(state, "merge")
+            r = _git(["merge", "--ff-only", target_ref],
+                     timeout=T_MERGE)
+            if r.returncode != 0:
+                raise UpdateError("merge_failed: " + r.stderr.strip()[:200])
+            if _head_sha() != sha or not _tree_clean():
+                raise UpdateError("merge_verify_failed")
+
+            # post-merge under NEW code; parent keeps both locks held.
+            if borrowed is None:
+                _plan_runtime_migration(state, run_fd)
+            else:
+                release_apply_owner._verify_merged_source(borrowed)
+            journal(state, "post_merge")
+            if borrowed is None:
+                _run_post_merge(sha, run_lock_fd=run_fd)
+            else:
+                _run_post_merge(sha, run_lock_fd=run_fd, _release_entry=borrowed)
+
+            state = _apply_record_success(tag, command_id)
+            quiesced = False
+            # gateway restart is fire-and-forget AFTER applied is durable —
+            # a synchronous restart would deadlock when this updater is a
+            # gateway descendant (S12)
+            applied_entry = state.get("applied") or [{}]
+            restart_services(cfg, applied_entry[-1].get("plugin_changed"))
             return 0
+        except Exception as e:
+            if delegated:
+                raise
+            if borrowed is not None and isinstance(e, release_apply_owner.ReleaseApplyError):
+                return bail(e.code)
+            if isinstance(e, UpdateError):
+                return bail(str(e))
+            return bail(f"unexpected:{type(e).__name__}")
+        finally:
+            if quiesced and not consent_hold and not rollback_failed:
+                _remove_marker()
+            if borrowed is None:
+                for fd in (run_fd, upd_fd):
+                    if fd is not None:
+                        os.close(fd)
 
-        state["applying"] = {
-            "tag": tag, "sha": sha, "prev_sha": _head_sha(),
-            "plugin_changed": _plugin_changed(candidate_sha if candidate else tag, cfg),
-            "schema_bump": bool(bump),
-            "reinstall": reinstall, "install_args": list(install_args),
-            "backup_path": bpath, "manifest_snapshot": snap,
-            "command_id": command_id, "at": time.time()}
-        if candidate:
-            state["applying"].update(target_kind="local_candidate",
-                                     human_confirmed=True, reason=reason)
-        journal(state, "applying")
-
-        journal(state, "quiesce")
-        # mark BEFORE quiesce: a partial quiesce (one drainer stopped,
-        # then a stop failure) must still trigger restart in bail —
-        # restart_agents() is idempotent
-        quiesced = True
-        quiesce()
-
-        journal(state, "merge")
-        r = _git(["merge", "--ff-only", target_ref],
-                 timeout=T_MERGE)
-        if r.returncode != 0:
-            raise UpdateError("merge_failed: " + r.stderr.strip()[:200])
-        if _head_sha() != sha or not _tree_clean():
-            raise UpdateError("merge_verify_failed")
-
-        # post-merge under NEW code; parent keeps both locks held.
-        _plan_runtime_migration(state, run_fd)
-        journal(state, "post_merge")
-        _run_post_merge(sha, run_lock_fd=run_fd)
-
-        state = _apply_record_success(tag, command_id)
-        quiesced = False
-        # gateway restart is fire-and-forget AFTER applied is durable —
-        # a synchronous restart would deadlock when this updater is a
-        # gateway descendant (S12)
-        applied_entry = state.get("applied") or [{}]
-        restart_services(cfg, applied_entry[-1].get("plugin_changed"))
-        return 0
-    except Exception as e:
-        if delegated:
-            raise
-        if isinstance(e, UpdateError):
-            return bail(str(e))
-        return bail(f"unexpected:{type(e).__name__}")
     finally:
-        if quiesced and not consent_hold and not rollback_failed:
-            _remove_marker()
-        for fd in (run_fd, upd_fd):
-            if fd is not None:
-                os.close(fd)
+        try:
+            lifetime.close()
+        finally:
+            if borrowed is not None:
+                release_apply_owner._finish_effect_entry(borrowed)
 
 
-def _check_environment(cfg: dict):
+def _check_environment(cfg: dict, *, deadline=None):
     """environment_diagnostics.check_environment with the updater's paths."""
     return environment_diagnostics.check_environment(
         cfg, paths=_service_paths(), chrome_bin=mcs_util.CHROME_BIN,
         credential_paths=(os.path.join(mcs_util.HOME, ".env"),
                           os.path.expanduser("~/.hermes/.env")),
-        agents_dir=AGENTS_DIR)
+        agents_dir=AGENTS_DIR, **({} if deadline is None else {"deadline": deadline}))
 
 
-def _baseline_check(cfg: dict) -> list[str]:
+
+def _baseline_check(cfg: dict, *, deadline=None) -> list[str]:
+    if deadline is not None:
+        _bounded_timeout(None, deadline)
     try:
-        errs, _ = _check_environment(cfg)
+        errs, _ = _check_environment(cfg, **({} if deadline is None else {"deadline": deadline}))
+        if deadline is not None:
+            _bounded_timeout(None, deadline)
         return errs
     except Exception:
+        if deadline is not None:
+            _bounded_timeout(None, deadline)
         return []
+
 
 
 def _gateway_restart_if_needed(state: dict) -> None:
@@ -3503,7 +3685,7 @@ def cmd_post_merge() -> int:
                                       locks=tuple(locks), deadline=time.monotonic() + 2)
         except (OSError, ValueError, ImportError):
             return 2
-        with owned_process.lifetime_fds(tuple(locks)):
+        with owned_process.lifetime_fds(tuple(locks)), _release_git_scope():
             return _post_merge(state)
     return _call_legacy(_post_merge, state)
 

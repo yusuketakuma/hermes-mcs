@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+import runpy
 import sys
 from pathlib import Path
 
@@ -580,6 +581,18 @@ def gate_tick_no_ext() -> list[str]:
                 text = path.read_text(encoding="utf-8")
             except UnicodeDecodeError:
                 continue
+            if path == ROOT / "deployment" / "sdc-release-owner.json":
+                try:
+                    validator = runpy.run_path(str(Path(__file__).resolve().parents[1]
+                        / "mcs" / "ops" / "release_owner_source.py"))["validate_manifest"]
+                    inventory = validator(text)
+                    # The closed file table describes bytes; its path column is not an invocation.
+                    text = json.dumps({**inventory, "files": [
+                        {key: value for key, value in row.items() if key != "path"}
+                        for row in inventory["files"]]})
+                except (OSError, ValueError, TypeError, KeyError, RecursionError):
+                    bad.append(f"{path.name}: invalid release source inventory")
+                    continue
             for i, line in enumerate(text.splitlines(), 1):
                 if _EXT_REFERENCE.search(line):
                     bad.append(f"{path.name}:{i} references C1 export module")

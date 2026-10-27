@@ -533,3 +533,77 @@ def test_entry_lock_replacement_never_rebases_existing_owner(store):
     path.touch(mode=0o600)
     with pytest.raises(ValueError, match='ENTRY_LOCK_MISMATCH'):
         state.status(store)
+
+
+def test_release_bootstrap_storage_is_separate_metadata_without_credential_or_activation(store, monkeypatch):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail('bootstrap metadata reached credentials or monitor projection')
+    monkeypatch.setattr(store, '_marker', forbidden)
+    monkeypatch.setattr(store, 'monitor_endpoint', forbidden)
+    assert store.read('release-bootstrap.json') is None
+    # The storage layer is not the bootstrap validator or an initialization permit.
+    saved = {'schema_version': 'mcs.release-bootstrap.v1', 'synthetic_metadata': True}
+    store.write('release-bootstrap.json', saved)
+    assert store.read('release-bootstrap.json') == saved
+    assert store.read(state.NAME) is None and store.read(state.ACTIVATION) is None
+    assert not state.legacy_blocked(store)
+    assert not (store.root / 'credential').exists()
+    assert not (store.root / 'support-bootstrap.json').exists()
+
+
+def test_oversized_release_bootstrap_keeps_previous_record(store):
+    from adapters.sdc.storage import LIMITS
+    assert LIMITS['release-bootstrap.json'] == 2 * 16384 + 4096
+    store.write('release-bootstrap.json', {'synthetic': True})
+    before = (store.root / 'release-bootstrap.json').read_bytes()
+    with pytest.raises(ValueError):
+        store.write('release-bootstrap.json', {'synthetic': 'x' * LIMITS['release-bootstrap.json']})
+    assert (store.root / 'release-bootstrap.json').read_bytes() == before
+
+
+@pytest.mark.parametrize('kind', ['observe', 'trust', 'installed'])
+@pytest.mark.parametrize('changed', [False, True])
+def test_crypto_releases_short_state_lock_and_rejects_a_changed_snapshot(store, monkeypatch, kind, changed):
+    import sdc_support_signatures as signatures
+    if kind == 'installed':
+        # Typed installation fixture only; real signed attestations are covered by observe/trust.
+        bootstrap(store, **spend_baseline())
+        state._consume_and_start(store, **spend())
+        original = lambda *_a, **_k: copy.deepcopy(VECTORS['Attestation'])  # noqa: E731
+        method = 'verify_release_attestation'
+        def action():
+            return state._observe_installed(store, {}, observed=installed_observation(), now_ms=APPLY['now'] + 20000)
+    elif kind == 'trust':
+        bootstrap(store, **baseline())
+        method = 'verify_release_root_chain'
+        original = getattr(signatures, method)
+        def action():
+            return state.update_trust(store, [SIGNATURES['proofs']['recovery']], now_ms=SIGNATURES['now'])
+    else:
+        bootstrap(store, **baseline())
+        method = 'verify_release_attestation'
+        original = getattr(signatures, method)
+        def action():
+            return state.observe(store, SIGNATURES['attestations']['current']['envelope'], now_ms=SIGNATURES['now'])
+    concurrent = []
+    calls = []
+    def verify(*args, **kwargs):
+        # A fresh OFD cannot acquire this nonblocking flock if the caller still holds S.
+        with store.release_owner_lock():
+            calls.append('S is free')
+        result = original(*args, **kwargs)
+        if changed:
+            with store.release_owner_lock():
+                value = store.read(state.NAME)
+                value['revision'] += 1
+                store.write(state.NAME, value)
+                concurrent.append(copy.deepcopy(value))
+        return result
+    monkeypatch.setattr(signatures, method, verify)
+    if changed:
+        with pytest.raises(ValueError, match='RELEASE_OWNER_STATE_CHANGED'):
+            action()
+        assert store.read(state.NAME) == concurrent[0]
+    else:
+        action()
+    assert calls == ['S is free']

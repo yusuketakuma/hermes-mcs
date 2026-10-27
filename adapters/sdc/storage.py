@@ -32,9 +32,9 @@ LIMITS['provision-state.json'] = 1024 * 1024  # File-read ceiling; the provision
 LIMITS.update({'diagnostic-state.json': 1024 * 1024, 'diagnostic-anchor.json': 4096,
                'diagnostic-state.lock': 0})
 LIMITS['credential-store.json'] = mutation_contract.MAX_MARKER
-NAMES = NAMES | {'release-owner.json', 'release-owner.lock', 'release-owner-activation.json', 'release-entry.lock'}
-LIMITS.update({'release-owner.json': MAX_FILE, 'release-owner.lock': 0,
-               'release-owner-activation.json': 16384, 'release-entry.lock': 0})
+NAMES = NAMES | {'release-owner.json', 'release-owner.lock', 'release-owner-activation.json', 'release-entry.lock', 'release-bootstrap.json', 'release-authority.lock', 'release-planning.json', 'release-plan.json', 'release-change.json', 'release-successor.json'}
+LIMITS.update({'release-successor.json': 2 * 1024 * 1024 + 65536, 'release-change.json': 131072, 'release-plan.json': 65536, 'release-planning.json': 16384, 'release-owner.json': MAX_FILE, 'release-owner.lock': 0,
+               'release-owner-activation.json': 16384, 'release-entry.lock': 0, 'release-bootstrap.json': 2 * 16384 + 4096, 'release-authority.lock': 0})
 _IDS = ('claim_id', 'device_id', 'key_id', 'rotation_id')
 _STOP = ('state', 'enabled', 'disconnected', 'central_suspended', 'enrollment_hold')
 _OPERATIONS = {'connect': {'initial-key', 'claim-key-id', 'reenroll-key'},
@@ -79,6 +79,7 @@ class Store:
         self._release_entry_fd = None
         self._release_entry_thread = None
         self._release_entry_shared = None
+        self._release_authority_fd = self._release_authority_thread = None
         repo = Path(__file__).resolve().parents[2]
         if self.root.is_relative_to(repo) or '..' in self.root.parts:
             raise ValueError('SDC_PRIVATE_ROOT_REQUIRED')
@@ -282,7 +283,7 @@ class Store:
             from .provision import support_bootstrap
             value = self._managed_or_legacy(name, support_bootstrap(self))
             return default if value is None else value
-        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'diagnostic-anchor.json', 'release-owner.json', 'release-owner-activation.json'):
+        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'diagnostic-anchor.json', 'release-owner.json', 'release-owner-activation.json', 'release-bootstrap.json'):
             # Local consent/disable has its own root binding and needs no monitor endpoint.
             return self._read_file(name, default)
         marker = self._marker()
@@ -550,7 +551,7 @@ class Store:
             return
         if name in ('endpoint.json', 'support-bootstrap.json') and self._read_file('provision-state.json', _MISSING) is not _MISSING:
             raise ValueError('SDC_PROVISION_MANAGED_ROOT')
-        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'release-owner.json'):
+        if name in ('support-state.json', 'restart-state.json', 'restart-execution.json', 'restart-planning.json', 'provision-state.json', 'diagnostic-state.json', 'release-owner.json', 'release-bootstrap.json'):
             self._write_file(name, value)
             return
         if name == 'credential-store.json':
@@ -648,6 +649,18 @@ class Store:
         """Own one restart consent record independently of monitoring or diagnostic I/O."""
         with self._file_lock('restart-state.lock'):
             yield
+
+    @contextmanager
+    def release_authority_lock(self):
+        """Serialize release consent and bootstrap before monitor tick and short owner locks."""
+        if self._release_authority_fd is not None:
+            raise ValueError('SDC_RELEASE_AUTHORITY_LOCK_REENTRY')
+        with self._file_lock('release-authority.lock') as fd:
+            self._release_authority_fd, self._release_authority_thread = fd, threading.get_ident()
+            try:
+                yield fd
+            finally:
+                self._release_authority_fd = self._release_authority_thread = None
 
     @contextmanager
     def release_owner_lock(self):

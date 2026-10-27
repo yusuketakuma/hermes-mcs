@@ -1,5 +1,7 @@
 """Own command sessions through interruption, termination and bounded reaping."""
 import os
+import math
+import time
 import signal
 import subprocess
 from contextlib import suppress
@@ -52,20 +54,46 @@ def _inherited_fds(extra=()):
 
 
 def run_owned(argv: list[str], timeout: float, environment: dict,
-               stdin=None) -> subprocess.CompletedProcess:
+               stdin=None, *, deadline=None, input_text=None, cwd=None) -> subprocess.CompletedProcess:
     """subprocess.run(capture_output, text) for one command in its own
     session. On timeout or interruption that session is stopped by
-    stop_owned and the exception re-raised. Worst case: timeout +
-    TERM_GRACE_S + the bounded reap."""
+    stop_owned and the exception re-raised. Without deadline the bound is
+    timeout + TERM_GRACE_S + bounded reap. Deadline callers retain leases
+    until exact child retirement, including a safety hold on lost reap."""
+    if input_text is not None and (stdin is not None or type(input_text) is not str
+            or len(input_text.encode('utf-8')) > 16384):
+        raise ValueError('owned_input_invalid')
+    def remaining():
+        if type(deadline) not in (int, float) or not math.isfinite(deadline):
+            raise ValueError('owned_deadline_invalid')
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise subprocess.TimeoutExpired(argv, timeout)
+        return min(timeout, left)
+    if deadline is not None:
+        remaining()
     with _inherited_fds() as inherited:
-        child = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE,
+        if deadline is not None:
+            remaining()
+        child = subprocess.Popen(argv, stdin=subprocess.PIPE if input_text is not None else stdin, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE, text=True, env=environment,
-                                 start_new_session=True,
+                                 start_new_session=True, **({'cwd': cwd} if cwd is not None else {}),
                                  **({'pass_fds': tuple(inherited.values())} if inherited else {}))
     try:
-        out, err = child.communicate(timeout=timeout)
+        out, err = child.communicate(timeout=timeout if deadline is None else remaining(),
+            **({'input': input_text} if input_text is not None else {}))
+        if deadline is not None:
+            remaining()
     except BaseException:
-        stop_owned(child)
+        if deadline is not None:
+            try:
+                _wait_retired(child, timeout=0)
+            except ChildRetirementError:
+                pass
+            finally:
+                stop_owned(child)
+        else:
+            stop_owned(child)
         raise
     return subprocess.CompletedProcess(argv, child.returncode, out, err)
 
@@ -91,3 +119,42 @@ def stop_owned(child) -> None:
         if stream is not None:
             with suppress(OSError):
                 stream.close()   # an escaped holder must not leak our fds
+
+
+class ChildRetirementError(ValueError):
+    pass
+
+
+def _wait_retired(child, *, timeout):
+    """Keep the caller's leases until an exact waitpid result; lost reap never permits a signal."""
+    until = time.monotonic() + timeout
+    lost_reap, failed, interrupted = False, False, None
+    signaled = False
+    while child.returncode is None:
+        try:
+            if not lost_reap:
+                try:
+                    pid, status = os.waitpid(child.pid, os.WNOHANG)
+                except InterruptedError:
+                    raise
+                except OSError:
+                    lost_reap = failed = True
+                else:
+                    if pid == child.pid:
+                        child.returncode = os.waitstatus_to_exitcode(status)
+                    elif pid:
+                        lost_reap = failed = True
+            if child.returncode is None:
+                if not lost_reap and not signaled and (interrupted is not None or time.monotonic() >= until):
+                    signaled = failed = True
+                    try:
+                        os.killpg(child.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
+                time.sleep(0.02)
+        except (KeyboardInterrupt, InterruptedError) as error:
+            interrupted = error
+    if interrupted is not None:
+        raise interrupted
+    if failed:
+        raise ChildRetirementError('owned_child_retirement_hold')

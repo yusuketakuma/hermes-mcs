@@ -58,4 +58,10 @@ HTTP応答の `request_id` は要求の追跡値で、承認や実行証拠で�
 
 ## releases
 
-`releases/` はCSDCのR5a/R5b公開契約6ファイルの同一bytesです。出典とSHA-256は`sources.json`のrelease_apply_component/filesに記録します。完全合成の公開鍵・vectorだけを含み、秘密鍵・実設定は含みません。Pythonの契約・署名互換性だけを検証し、製品owner接続・実機の信頼基線・有効化・再接続成功は未受入です。中央の1062件は提供された中央合成検証の件数で、製品試験数ではありません。
+`releases/` の既存6ファイルは、CSDCのR5a/R5b公開契約と同一bytesです。出典とSHA-256は`sources.json`のrelease_apply_component/filesに記録します。完全合成の公開鍵・vectorだけを含み、秘密鍵・実設定は含みません。Pythonの契約・署名互換性だけを検証し、製品owner接続・実機の信頼基線・有効化・再接続成功は未受入です。中央の1062件は提供された中央合成検証の件数で、製品試験数ではありません。
+
+### release登録の現在証明
+
+`releases/registration.schema.json` と `registration-vectors.json` は、中央の追加契約を同じbytesで保持します。旧20契約と既存release用6契約のbytesは維持します。追加2契約の出典とhashは `sources.json` に記録します。
+
+専用経路 `POST /v2/releases/apply/registration/current` は、登録ID、受入済み実装hash、現在の失効・期限・変更状態を確認するためのものです。専用purpose `release-apply-registration-current` の署名、独立に保持した公開pins、毎回生成する照合IDと実端末scopeを検証します。有効期間は最大30秒です。`expired` は期限切れと未発効の両方を含みます。monitor profileの世代更新で登録証拠hashが変わった場合は、中央登録との再照合・再投入が必要です。失効状態を瞬時に検知できる保証や、更新の実行許可にはなりません。実登録、真正な鍵配布、有効化、更新factoryへの接続は未完了です。

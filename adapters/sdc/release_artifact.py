@@ -336,7 +336,7 @@ def _target_tree(objects, commit, *, max_entries, max_bytes, deadline):
                 blob = get(identity, 'blob')
                 expanded += blob['size']
                 _check(expanded <= max_bytes, 'TREE_EXPANDED_LIMIT')
-                files[path] = blob
+                files[path] = {**blob, 'mode': mode.decode('ascii')}
     return {'files': files, 'entries': entries, 'expanded_bytes': expanded}
 
 
@@ -383,7 +383,7 @@ def _inspect_verified(source, *, core, policy, profile_id, profile_sha256, deadl
             _time(deadline)
             prepared = True
             yield {'core': core, 'bundle': copy, 'pack': pack_path, 'pack_sha1': scanned['pack_sha1'],
-                   'lock_raw': lock_raw,
+                   'lock_raw': lock_raw, 'tree_files': tree['files'],
                    'profile_sources': {name: tree['files'].get(name) for name in (
                        'deployment/requirements-standalone.txt', 'install.sh')},
                    'entries': tree['entries'], 'expanded_bytes': tree['expanded_bytes'],

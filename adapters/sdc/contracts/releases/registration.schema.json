@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sdc.release.registration.schema.v1",
+  "$comment": "Additive current registration proof. Semantic scope/time/registry joins are enforced by registration.js. A client challenge is not an execution or idempotency receipt.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Request"
+    },
+    {
+      "$ref": "#/$defs/Proof"
+    },
+    {
+      "$ref": "#/$defs/Response"
+    }
+  ],
+  "$defs": {
+    "Request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "request_id",
+        "expected_registration_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.release.registration-request.v1"
+        },
+        "request_id": {
+          "$ref": "apply.schema.json#/$defs/UUID"
+        },
+        "expected_registration_id": {
+          "anyOf": [
+            {
+              "$ref": "apply.schema.json#/$defs/UUID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "Proof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "product",
+        "audience",
+        "tenant",
+        "installation",
+        "device_id",
+        "environment",
+        "claim_id",
+        "key_id",
+        "realm_epoch",
+        "policy_epoch",
+        "device_epoch",
+        "request_id",
+        "expected_registration_id",
+        "authority_revision",
+        "authority_sha256",
+        "status",
+        "owner",
+        "registration",
+        "issued_at",
+        "not_before",
+        "expires_at"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.release.registration-current.v1"
+        },
+        "product": {
+          "const": "hermes-mcs"
+        },
+        "audience": {
+          "$ref": "apply.schema.json#/$defs/Audience"
+        },
+        "tenant": {
+          "const": "self"
+        },
+        "installation": {
+          "$ref": "apply.schema.json#/$defs/Slug"
+        },
+        "device_id": {
+          "$ref": "apply.schema.json#/$defs/UUID"
+        },
+        "environment": {
+          "$ref": "apply.schema.json#/$defs/Environment"
+        },
+        "claim_id": {
+          "$ref": "apply.schema.json#/$defs/UUID"
+        },
+        "key_id": {
+          "$ref": "apply.schema.json#/$defs/UUID"
+        },
+        "realm_epoch": {
+          "$ref": "apply.schema.json#/$defs/Realm"
+        },
+        "policy_epoch": {
+          "$ref": "apply.schema.json#/$defs/Positive"
+        },
+        "device_epoch": {
+          "$ref": "apply.schema.json#/$defs/Positive"
+        },
+        "request_id": {
+          "$ref": "apply.schema.json#/$defs/UUID"
+        },
+        "expected_registration_id": {
+          "anyOf": [
+            {
+              "$ref": "apply.schema.json#/$defs/UUID"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "authority_revision": {
+          "$ref": "apply.schema.json#/$defs/Positive"
+        },
+        "authority_sha256": {
+          "$ref": "apply.schema.json#/$defs/Hex64"
+        },
+        "status": {
+          "enum": [
+            "registered",
+            "not_registered",
+            "revoked",
+            "expired",
+            "changed"
+          ]
+        },
+        "owner": {
+          "anyOf": [
+            {
+              "$ref": "apply.schema.json#/$defs/Owner"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "registration": {
+          "anyOf": [
+            {
+              "$ref": "apply.schema.json#/$defs/Registration"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "issued_at": {
+          "$ref": "apply.schema.json#/$defs/Time"
+        },
+        "not_before": {
+          "$ref": "apply.schema.json#/$defs/Time"
+        },
+        "expires_at": {
+          "$ref": "apply.schema.json#/$defs/Time"
+        }
+      }
+    },
+    "Envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "alg",
+        "kid",
+        "purpose",
+        "payload",
+        "signature"
+      ],
+      "properties": {
+        "alg": {
+          "const": "PS256"
+        },
+        "kid": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "purpose": {
+          "const": "release-apply-registration-current"
+        },
+        "payload": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 10923,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 512,
+          "maxLength": 512,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        }
+      }
+    },
+    "Response": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "proof",
+        "request_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.release.registration-response.v1"
+        },
+        "proof": {
+          "$ref": "#/$defs/Envelope"
+        },
+        "request_id": {
+          "$ref": "apply.schema.json#/$defs/UUID"
+        }
+      }
+    }
+  }
+}

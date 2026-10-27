@@ -94,6 +94,29 @@ def test_doctor_names_the_lineworks_adapter_and_its_remedy(local_config, monkeyp
     assert "ai.mcs.lineworks" in out and "service.stderr.log" in out
 
 
+def test_lineworks_update_diagnostic_keeps_one_deadline(monkeypatch):
+    _darwin(monkeypatch, exists=lambda p: True,
+            loaded=set(service_contract.AGENT_LABELS) | {LW})
+    calls = []
+    def record(name, result):
+        def probe(*args, **kwargs):
+            calls.append((name, args, kwargs))
+            return result
+        return probe
+    monkeypatch.setattr(service_management, 'agent_loaded', record('loaded', True))
+    monkeypatch.setattr(environment_diagnostics, 'launchd_pid', record('pid', 4242))
+    monkeypatch.setattr(environment_diagnostics, 'process_started_at', record('started', 1000))
+    monkeypatch.setattr(environment_diagnostics, 'gateway_sources_mtime', record('sources', 2000))
+    _, warnings = environment_diagnostics.check_environment(
+        deepcopy(config()), paths=mcs_setup._service_paths(), chrome_bin='/synthetic/chrome',
+        credential_paths=(), agents_dir='/synthetic/agents', deadline=101)
+    assert any('稼働中のアダプターより新しく' in warning for warning in warnings)
+    assert all(kwargs['deadline'] == 101 for _, _, kwargs in calls)
+    assert {name for name, _, _ in calls} == {'loaded', 'pid', 'started', 'sources'}
+    assert next(args[1] for name, args, _ in calls if name == 'sources') == \
+        environment_diagnostics.LINEWORKS_SOURCE_DIRS
+
+
 def test_doctor_keeps_not_hermes_owned_wording_when_not_applicable(local_config, monkeypatch, capsys):  # noqa: F811
     import card_worker_status
     # diagnose answers not_applicable for standalone; the doctor line must not name the adapter.

@@ -24,7 +24,7 @@ def executable_available(exe: str) -> bool:
     return os.path.isfile(exe) and os.access(exe, os.X_OK)
 
 
-def probe_python(exe: str) -> mcs_runtime.RuntimeFacts | None:
+def probe_python(exe: str, *, deadline=None) -> mcs_runtime.RuntimeFacts | None:
     """Inspect Python/SQLite/package metadata without importing SDK clients."""
     # Only stdlib and distribution metadata: never import SDK clients or MCS.
     if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
@@ -40,7 +40,7 @@ for name in ('discord.py', 'slack-bolt', 'slack-sdk'):
         packages[name] = None
 print(json.dumps({'python': '.'.join(map(str, sys.version_info[:3])),
                   'sqlite': sqlite3.sqlite_version, 'packages': packages}))
-"""], timeout=20)
+"""], timeout=20, **({} if deadline is None else {"deadline": deadline}))
     if r.returncode:
         return None
     try:
@@ -65,13 +65,13 @@ print(json.dumps({'python': '.'.join(map(str, sys.version_info[:3])),
             "packages": packages}
 
 
-def python_problem(exe: str) -> str | None:
+def python_problem(exe: str, *, deadline=None) -> str | None:
     """None when `exe` is an executable Python >= 3.14."""
     if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
         return f"Python（{exe}）が見つからないか、実行できません"
     r = run_bounded([exe, "-c",
               "import sys; sys.exit(sys.version_info < (3, 14))"],
-             timeout=20)
+             timeout=20, **({} if deadline is None else {"deadline": deadline}))
     if r.returncode != 0:
         return (f"Python（{exe}）を起動できないか、3.14未満です "
                 f"(rc={r.returncode})")
@@ -80,7 +80,7 @@ def python_problem(exe: str) -> str | None:
     # the child stays self-contained (no repo import); the policy lives in mcs_runtime only
     r = run_bounded([exe, "-c",
               "import sqlite3; print(*sqlite3.sqlite_version_info)"],
-             timeout=20)
+             timeout=20, **({} if deadline is None else {"deadline": deadline}))
     try:
         version = tuple(int(part) for part in (r.stdout or "").split())
     except ValueError:
@@ -114,7 +114,7 @@ def recovery_executable(plist) -> str | None:
     return exe if isinstance(exe, str) and os.path.isabs(exe) else None
 
 
-def recovery_runtime(plist_path: str | Path, *, checkout: str | Path) -> mcs_runtime.RuntimeFacts | None:
+def recovery_runtime(plist_path: str | Path, *, checkout: str | Path, deadline=None) -> mcs_runtime.RuntimeFacts | None:
     """Inspect the deployed command from the explicit plist and checkout."""
     # Inspect the deployed watchdog's command, not ambient /usr/bin/python3.
     try:
@@ -125,7 +125,7 @@ def recovery_runtime(plist_path: str | Path, *, checkout: str | Path) -> mcs_run
             return None
     except (OSError, ValueError, TypeError, AttributeError, plistlib.InvalidFileException):
         return None
-    return probe_python(exe)
+    return probe_python(exe, **({} if deadline is None else {"deadline": deadline}))
 
 
 def configured_recovery_problem(cfg, update_repo=None, *, checkout: str) -> str | None:

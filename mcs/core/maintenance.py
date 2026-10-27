@@ -111,18 +111,36 @@ def _publish_backup(db_path: str, tmp: str, dest: str,
     The copy is stepped so ``deadline`` abandons it mid-way instead of
     running past the watchdog."""
     def check_deadline(*_):
-        if deadline is not None and monotonic() >= deadline:
-            raise MaintenanceError("backup_deadline_exceeded")
+        if deadline is not None:
+            if monotonic() >= deadline:
+                raise MaintenanceError("backup_deadline_exceeded")
+            if _ and _[0] in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                time.sleep(min(0.01, max(0, deadline - monotonic())))
+                if monotonic() >= deadline:
+                    raise MaintenanceError("backup_deadline_exceeded")
+
+    def connection_budget(connection):
+        if deadline is not None:
+            check_deadline()
+            milliseconds = int(min(5.0, max(0, deadline - monotonic())) * 1000)
+            connection.execute(f"PRAGMA busy_timeout={milliseconds}")
+            connection.set_progress_handler(lambda: int(monotonic() >= deadline), 1000)
     try:
         check_deadline()
         with closing(sqlite3.connect(
-                Path(db_path).resolve().as_uri() + "?mode=ro", uri=True)) as src:
-            with closing(sqlite3.connect(tmp)) as dst:
+                Path(db_path).resolve().as_uri() + "?mode=ro", uri=True,
+                **({} if deadline is None else {'timeout': min(5.0, max(0, deadline - monotonic()))}))) as src:
+            with closing(sqlite3.connect(tmp, **({} if deadline is None else {'timeout': min(5.0, max(0, deadline - monotonic()))}))) as dst:
+                connection_budget(src)
+                connection_budget(dst)
                 # one read snapshot across the steps: a write by another
                 # connection would otherwise restart the copy every step
                 src.execute("BEGIN")
+                connection_budget(src)
                 src.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchall()
-                src.backup(dst, pages=BACKUP_STEP_PAGES, progress=check_deadline)
+                src.backup(dst, pages=BACKUP_STEP_PAGES, progress=check_deadline,
+                           **({} if deadline is None else {'sleep': 0.0}))
+                connection_budget(dst)
                 dst.execute("PRAGMA journal_mode=DELETE")
         if not _valid(tmp, deadline):
             if deadline is not None and monotonic() >= deadline:
@@ -130,9 +148,11 @@ def _publish_backup(db_path: str, tmp: str, dest: str,
             raise MaintenanceError("backup_verify_failed")
         check_deadline()
         publish_tmp(tmp, dest, mode=0o600)
-    except BaseException:
+    except BaseException as error:
         with suppress(OSError):
             os.unlink(tmp)
+        if deadline is not None and monotonic() >= deadline and isinstance(error, Exception):
+            raise MaintenanceError("backup_deadline_exceeded") from None
         raise
 
 

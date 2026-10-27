@@ -2990,3 +2990,88 @@ def test_fixed_release_fence_survives_lost_sdc_config(updater, monkeypatch):
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
     monkeypatch.setattr(updater, '_apply_pipeline', lambda *_a, **_k: pytest.fail('legacy pipeline after config loss'))
     assert updater.apply('v1.1.0', 'a' * 40, None) == 2
+
+
+@pytest.mark.parametrize('entry', [False, True, 'saved-receipt', {}, None])
+def test_post_merge_native_issuer_refuses_unregistered_entry_without_launch(updater, monkeypatch, entry):
+    if entry is None:
+        entry = release_apply_owner._EffectCapability()
+    monkeypatch.setattr(updater.subprocess, 'Popen', lambda *_a, **_k: pytest.fail('native refusal spawned a child'))
+    with pytest.raises(release_apply_owner.ReleaseApplyError, match='CHILD_HOLD'):
+        updater._run_post_merge('a' * 40, run_lock_fd=10, _release_entry=entry)
+
+
+def test_static_release_target_checks_keep_tree_and_runtime_refusals_without_running_candidate(updater, tmp_path, monkeypatch):
+    repo, _ = _make_repo(tmp_path)
+    work = tmp_path / 'remote-work'
+    (work / 'mcs/core').mkdir(parents=True)
+    (work / 'mcs/core/ledger.py').write_text('SCHEMA_VERSION = 8\n')
+    marker = tmp_path / 'candidate-was-executed'
+    (work / 'mcs/mcs_setup.py').write_text(f'from pathlib import Path\nPath({str(marker)!r}).write_text("executed")\n')
+    (work / 'data').mkdir()
+    (work / 'data/synthetic').write_text('synthetic')
+    (work / 'link.sh').symlink_to('f.txt')
+    (work / 'install.sh').write_text('# synthetic installer\n')
+    (work / 'deployment').mkdir()
+    (work / 'deployment/sdc-release-lock.json').write_text('{}')
+    (work / 'deployment/requirements-standalone.txt').write_text('synthetic')
+    _git(work, 'add', '.')
+    _git(work, 'commit', '-qm', 'synthetic target')
+    target = _git(work, 'rev-parse', 'HEAD').stdout.strip()
+    _git(work, 'push', '-q', str(tmp_path / 'remote.git'), 'main')
+    _git(repo, 'fetch', '-q', 'origin')
+    _mk_schema(tmp_path / 'ledger.db', 8)
+    monkeypatch.setattr(updater, 'REPO', str(repo))
+    monkeypatch.setattr(updater, 'LEDGER', str(tmp_path / 'ledger.db'))
+    run = updater._run_with_lifetime
+    def only_git(argv, **kwargs):
+        assert argv[0] == 'git', 'static target checks ran candidate code'
+        return run(argv, **kwargs)
+    monkeypatch.setattr(updater, '_run_with_lifetime', only_git)
+    errors, entries = updater._precheck_target_tree(target, False)
+    assert entries and any(e.startswith('protected_path:') for e in errors)
+    assert any(e.startswith('bad_entry_type:') for e in errors)
+    assert updater._precheck_target_runtime_files(target, True) == [
+        'install_sh_changed', 'release_dependency_lock_changed', 'standalone_requirements_changed']
+    assert not marker.exists()
+
+
+def test_release_static_schema_must_match_the_authenticated_core(updater, tmp_path, monkeypatch):
+    monkeypatch.setattr(updater, '_ls_tree_paths', lambda *_a, **_k: [])
+    monkeypatch.setattr(updater, '_git', lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, '', ''))
+    monkeypatch.setattr(updater, '_git_out', lambda argv, **kwargs: 'SCHEMA_VERSION = 9' if argv[0] == 'show' else '')
+    errors, _ = updater._precheck_target_tree('a' * 40, False, deadline=time.monotonic() + 3,
+        installed_schema=8, expected_target_schema=8)
+    assert 'release_schema_target_mismatch' in errors
+
+
+def test_release_git_scope_uses_fixed_binary_and_environment_after_quiesce(tmp_path, monkeypatch):
+    import os
+    import shlex
+    import subprocess
+    import mcs_update as updater
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    subprocess.run(['/usr/bin/git', '-C', str(repo), 'init', '-q'], check=True)
+    (repo / 'tracked').write_text('synthetic\n')
+    subprocess.run(['/usr/bin/git', '-C', str(repo), 'add', '.'], check=True)
+    subprocess.run(['/usr/bin/git', '-C', str(repo), '-c', 'user.name=Synthetic', '-c', 'user.email=synthetic@example.invalid',
+        'commit', '-qm', 'synthetic'], check=True)
+    expected = subprocess.check_output(['/usr/bin/git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+    subprocess.run(['/usr/bin/git', '-C', str(repo), 'config', 'core.worktree', str(tmp_path / 'foreign')], check=True)
+    marker = tmp_path / 'untrusted-git-ran'
+    fake = tmp_path / 'bin'
+    fake.mkdir()
+    executable = fake / 'git'
+    executable.write_text('#!/bin/sh\nprintf invoked > ' + shlex.quote(str(marker)) + '\nexit 77\n')
+    executable.chmod(0o700)
+    monkeypatch.setenv('PATH', str(fake))
+    monkeypatch.setenv('GIT_DIR', str(tmp_path / 'foreign.git'))
+    monkeypatch.setenv('GIT_WORK_TREE', str(tmp_path / 'foreign'))
+    monkeypatch.setattr(updater, 'REPO', str(repo))
+    with updater._release_git_scope():
+        assert updater._head_sha() == expected
+        assert updater._tree_clean()
+    assert not marker.exists()
+    assert os.environ['PATH'] == str(fake)
+    assert updater._RELEASE_GIT_SCOPE.get() is False
