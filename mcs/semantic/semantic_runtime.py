@@ -645,8 +645,17 @@ def manual_usage_reserver(ledger, *, operation: str, daily_request_budget=None):
 
 _QUALITY_ID_KEYS = ("input_key", "candidate_key", "failure_key", "audit_key")
 # Exact artifact kind owned by patient_context_refresh. The value is a storage contract.
-_QUALITY_ANSWER_KIND = "patient_context_summary_quality_v1"
+_QUALITY_PURPOSES = {
+    "summary": ("patient_summary_quality", "patient_context_summary_quality_v1"),
+    "source": ("patient_source_quality", "patient_context_source_quality_v1"),
+}
 _QUALITY_QIDS = frozenset(f"q{i}" for i in range(12))
+
+
+def _quality_purpose(purpose):
+    if not isinstance(purpose, str) or purpose not in _QUALITY_PURPOSES:
+        raise ValueError("patient_summary_purpose_invalid")
+    return _QUALITY_PURPOSES[purpose]
 
 
 def _quality_json(raw):
@@ -694,7 +703,7 @@ def _quality_request(identity, body):
 
 
 def _quality_bound(meta):
-    if (not isinstance(meta, dict) or meta.get("operation") != "patient_summary_quality"
+    if (not isinstance(meta, dict) or meta.get("operation") not in {v[0] for v in _QUALITY_PURPOSES.values()}
             or type(meta.get("jev_requests")) is not int or meta["jev_requests"] != 1
             or meta.get("reserved") is not True or not valid_hash(meta.get("request_fp"))
             or not isinstance(meta.get("reservation_id"), str) or len(meta["reservation_id"]) != 32
@@ -730,8 +739,11 @@ def _quality_result_parts(meta, request):
     return answers, invalid
 
 
-def _quality_answer_evidence(db, project_id, request, answers):
+def _quality_answer_evidence(db, project_id, request, answers, *, purpose="summary"):
     from inference_version import CURRENT_VERSION
+    _, answer_kind = _quality_purpose(purpose)
+    choices = {"supports", "contradicts", "not_supported", "ambiguous"}
+    choices |= {"omission_ok", "important_missing"} if purpose == "summary" else {"complete", "missing"}
     found = {}
     marks = ",".join("?" for _ in answers) or "NULL"
     # Include malformed or duplicate-key metadata even if its SQL keys do
@@ -744,7 +756,7 @@ def _quality_answer_evidence(db, project_id, request, answers):
              "abs(value)>1.7976931348623157e308) THEN 1 "
              "ELSE json_extract(meta,'$.input_key')=? AND json_extract(meta,'$.audit_key')=? "
              f"AND json_extract(meta,'$.fact_id') IN ({marks}) END")
-    for row in db.execute(query, (_QUALITY_ANSWER_KIND, project_id, request["input_key"],
+    for row in db.execute(query, (answer_kind, project_id, request["input_key"],
                                   request["audit_key"], *answers)):
         answer_meta = _quality_json(row[1])
         if answer_meta is None:
@@ -759,7 +771,7 @@ def _quality_answer_evidence(db, project_id, request, answers):
             return False
         confidence = value.get("confidence")
         if (not isinstance(value.get("choice"), str)
-                or value.get("choice") not in {"supports", "contradicts", "not_supported", "ambiguous", "omission_ok", "important_missing"}
+                or value.get("choice") not in choices
                 or type(confidence) not in (int, float) or not math.isfinite(confidence) or not 0 <= confidence <= 1
                 or (answers[fid] is not None and payload_hash(value) != answers[fid])):
             return False
@@ -769,7 +781,10 @@ def _quality_answer_evidence(db, project_id, request, answers):
 
 def _quality_result(db, project_id, meta, request):
     parts = _quality_result_parts(meta, request)
-    return bool(parts is not None and _quality_answer_evidence(db, project_id, request, parts[0]))
+    purpose = next((key for key, (operation, _) in _QUALITY_PURPOSES.items()
+                    if meta.get("operation") == operation), None)
+    return bool(purpose is not None and parts is not None
+                and _quality_answer_evidence(db, project_id, request, parts[0], purpose=purpose))
 
 
 def patient_summary_usage_resolved(db, project_id, meta):
@@ -784,18 +799,21 @@ def patient_summary_usage_prunable(db, project_id, raw):
     meta = _quality_json(raw)
     if meta is None:
         return False
-    if meta.get("operation") != "patient_summary_quality":
+    purpose = next((key for key, (operation, _) in _QUALITY_PURPOSES.items()
+                    if meta.get("operation") == operation), None)
+    if purpose is None:
         return not ("quality_request" in meta or "quality_result" in meta)
     request = _quality_bound(meta)
     if not request or not patient_summary_usage_resolved(db, project_id, meta):
         return False
     _, invalid = _quality_result_parts(meta, request)
-    return _quality_answer_evidence(db, project_id, request, dict.fromkeys(invalid))
+    return _quality_answer_evidence(db, project_id, request, dict.fromkeys(invalid), purpose=purpose)
 
 
-def patient_summary_request_problem(db, pid, identity, fact_ids):
+def patient_summary_request_problem(db, pid, identity, fact_ids, *, purpose="summary"):
     """Return a durable unknown or exhausted-invalid reason for logical questions."""
     keys = _quality_identity(identity)
+    operation, _ = _quality_purpose(purpose)
     if type(pid) is not int or pid <= 0 or not isinstance(fact_ids, (list, tuple, set, frozenset)) or any(not valid_hash(fid) for fid in fact_ids):
         raise ValueError("patient_summary_request_invalid")
     requested = set(fact_ids)
@@ -804,7 +822,7 @@ def patient_summary_request_problem(db, pid, identity, fact_ids):
         meta = _quality_json(row[0])
         if meta is None:
             return "patient_summary_request_unknown"
-        if meta.get("operation") != "patient_summary_quality":
+        if meta.get("operation") not in {v[0] for v in _QUALITY_PURPOSES.values()}:
             if "quality_request" in meta or "quality_result" in meta:
                 return "patient_summary_request_unknown"
             continue
@@ -814,6 +832,8 @@ def patient_summary_request_problem(db, pid, identity, fact_ids):
         resolved = "quality_result" in meta and patient_summary_usage_resolved(db, pid, meta)
         if "quality_result" in meta and not resolved:
             return "patient_summary_request_unknown"
+        if meta["operation"] != operation:
+            continue
         if (request["failure_key"] == keys["failure_key"] and requested.intersection(request["questions"].values())
                 and not resolved):
             return "patient_summary_request_unknown"
@@ -822,16 +842,17 @@ def patient_summary_request_problem(db, pid, identity, fact_ids):
                 if fid in invalid_counts:
                     invalid_counts[fid] += 1
     for fid, count in invalid_counts.items():
-        if count >= 2 and not _quality_answer_evidence(db, pid, keys, {fid: None}):
+        if count >= 2 and not _quality_answer_evidence(db, pid, keys, {fid: None}, purpose=purpose):
             return "patient_summary_invalid_exhausted"
     return None
 
 
-def patient_summary_resolve_request_tx(ledger, reservation, identity, answers, invalid_ids, *, project_id):
+def patient_summary_resolve_request_tx(ledger, reservation, identity, answers, invalid_ids, *, project_id, purpose="summary"):
     """Seal one request only with its already-persisted answer evidence."""
     if not ledger.db.in_transaction or not isinstance(reservation, JevReservation):
         raise RuntimeError("patient_summary_transaction_required")
     keys = _quality_identity(identity)
+    operation, _ = _quality_purpose(purpose)
     if not isinstance(answers, dict) or not isinstance(invalid_ids, set):
         raise ValueError("patient_summary_result_invalid")
     row = ledger.db.execute("SELECT project_id,meta FROM artifacts WHERE kind='semantic_usage' AND artifact_id=?",
@@ -840,7 +861,7 @@ def patient_summary_resolve_request_tx(ledger, reservation, identity, answers, i
     request = _quality_bound(meta)
     if (type(project_id) is not int or project_id <= 0 or not row or row[0] != project_id
             or not request or any(request[k] != keys[k] for k in _QUALITY_ID_KEYS)
-            or meta.get("operation") != "patient_summary_quality"):
+            or meta.get("operation") != operation):
         raise ValueError("patient_summary_request_invalid")
     try:
         result = {"answers": {fid: payload_hash(value) for fid, value in answers.items()}, "invalid": sorted(invalid_ids)}
@@ -861,7 +882,7 @@ def patient_summary_resolve_request_tx(ledger, reservation, identity, answers, i
     return updated
 
 
-def patient_summary_usage_reserver(ledger, *, project_id, guard, daily_request_budget, identity):
+def patient_summary_usage_reserver(ledger, *, project_id, guard, daily_request_budget, identity, purpose="summary"):
     """Reserve one patient-summary Jev request under the shared daily budget."""
     from semantic_jev import DAILY_REQUEST_LIMIT, JEV_MODEL, JevError
     from semantic_policy import BACKLOG_BUDGET_RESERVE
@@ -869,6 +890,7 @@ def patient_summary_usage_reserver(ledger, *, project_id, guard, daily_request_b
             or type(daily_request_budget) is not int or daily_request_budget < 0):
         raise ValueError("patient_summary_reservation_invalid")
     identity = _quality_identity(identity)
+    operation, _ = _quality_purpose(purpose)
     limit = min(daily_request_budget, DAILY_REQUEST_LIMIT)
     limit -= math.ceil(limit * BACKLOG_BUDGET_RESERVE)
 
@@ -884,7 +906,7 @@ def patient_summary_usage_reserver(ledger, *, project_id, guard, daily_request_b
         def check():
             nonlocal day
             guard("jev_reserve")
-            problem = patient_summary_request_problem(ledger.db, project_id, identity, list(request["questions"].values()))
+            problem = patient_summary_request_problem(ledger.db, project_id, identity, list(request["questions"].values()), purpose=purpose)
             if problem:
                 raise JevError("budget_exceeded", problem, retryable=problem == "patient_summary_request_unknown")
             day = int(_jst_day_start(time.time()))
@@ -894,7 +916,7 @@ def patient_summary_usage_reserver(ledger, *, project_id, guard, daily_request_b
         def write():
             artifact_id = ledger.artifact_add_tx("semantic_usage", "{}", project_id=project_id,
                 model=JEV_MODEL, meta={"jev_requests": 1, "reserved": True,
-                    "operation": "patient_summary_quality", "request_fp": payload_hash(body),
+                    "operation": operation, "request_fp": payload_hash(body),
                     "timeout_seconds": float(timeout), "reservation_id": uuid.uuid4().hex,
                     "quality_request": request})
             _check_reservation_day(ledger, artifact_id, day)

@@ -357,8 +357,10 @@ def _seed_history(db, now):
                       ("semantic_usage", 8 * DAY), ("semantic_usage", 60),
                       ("cloud_usage_result", 63 * DAY), ("cloud_usage_result", DAY),
                       ("semantic_bundle", 400 * DAY)):
-        db.db.execute("INSERT INTO artifacts(kind,content,created_at) "
-                      "VALUES(?,'{}',?)", (kind, now - age))
+        meta = json.dumps({"operation": "classification", "jev_requests": 1,
+                           "reserved": True}) if kind == "semantic_usage" else None
+        db.db.execute("INSERT INTO artifacts(kind,content,meta,created_at) "
+                      "VALUES(?,'{}',?,?)", (kind, meta, now - age))
     db.db.commit()
 
 
@@ -368,6 +370,8 @@ def test_prune_history_keeps_references_and_audit_rows(tmp_path):
     db.save_messages([_message(1, body="a")])
     db.save_messages([_message(1, body="edited")])   # message_revisions rows
     _seed_history(db, now)
+    unknown_usage = db.db.execute("INSERT INTO artifacts(kind,content,created_at) "
+                                  "VALUES('semantic_usage','{}',?)", (now - 100 * DAY,)).lastrowid
     referenced = db.db.execute(
         "SELECT event_id FROM notify_outbox WHERE kind='run_failed' "
         "AND state='accepted'").fetchone()[0]
@@ -396,6 +400,8 @@ def test_prune_history_keeps_references_and_audit_rows(tmp_path):
     )] == [now - DAY]
     assert db.db.execute("SELECT COUNT(*) FROM message_revisions"
                          ).fetchone()[0] == revisions > 0
+    assert db.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (unknown_usage,)).fetchone()[0] is None
+    assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='semantic_usage'").fetchone()[0] == 2
     db.close()
 
 

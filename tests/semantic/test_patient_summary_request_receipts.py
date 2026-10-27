@@ -24,14 +24,15 @@ def body(qids=("q0", "q1")):
         "questions": {qid: {} for qid in qids}}
 
 
-def reserve(db, pid=1, identity=IDENTITY, qids=("q0", "q1")):
+def reserve(db, pid=1, identity=IDENTITY, qids=("q0", "q1"), *, purpose="summary"):
     fn = runtime.patient_summary_usage_reserver(db, project_id=pid, guard=lambda _stage: None,
-                                                daily_request_budget=100, identity=identity)
+                                                daily_request_budget=100, identity=identity, purpose=purpose)
     return fn(body(qids), 10)
 
 
-def save_answer(db, fid=FACT0, value=ANSWER, identity=IDENTITY, pid=1):
-    return db.artifact_add_tx("patient_context_summary_quality_v1", json.dumps(value), project_id=pid,
+def save_answer(db, fid=FACT0, value=ANSWER, identity=IDENTITY, pid=1, *, purpose="summary"):
+    kind = {"summary": "patient_context_summary_quality_v1", "source": "patient_context_source_quality_v1"}[purpose]
+    return db.artifact_add_tx(kind, json.dumps(value), project_id=pid,
         meta={"inference_engine_version": inference_version.CURRENT_VERSION,
               "input_key": identity["input_key"], "audit_key": identity["audit_key"], "fact_id": fid})
 
@@ -211,5 +212,108 @@ def test_wire_question_ids_are_limited_to_the_protocol(qid, tmp_path):
                                                     daily_request_budget=100, identity=IDENTITY)
         with pytest.raises(ValueError):
             fn(data, 10)
+    finally:
+        db.close()
+
+
+def test_source_and_summary_receipts_are_separate_even_with_identical_identity(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        source = reserve(db, qids=("q0",), purpose="source")
+        assert runtime.patient_summary_request_problem(db.db, 1, IDENTITY, [FACT0], purpose="source") == "patient_summary_request_unknown"
+        assert runtime.patient_summary_request_problem(db.db, 1, IDENTITY, [FACT0]) is None
+        summary = reserve(db, qids=("q0",))
+        db.db.execute("BEGIN IMMEDIATE")
+        save_answer(db, value=ANSWER)
+        with pytest.raises(ValueError):
+            runtime.patient_summary_resolve_request_tx(db, source, IDENTITY, {FACT0: ANSWER}, set(), project_id=1, purpose="source")
+        with pytest.raises(ValueError):
+            runtime.patient_summary_resolve_request_tx(db, source, IDENTITY, {FACT0: ANSWER}, set(), project_id=1)
+        save_answer(db, value=ANSWER, purpose="source")
+        assert runtime.patient_summary_resolve_request_tx(db, source, IDENTITY, {FACT0: ANSWER}, set(), project_id=1, purpose="source") == 1
+        assert runtime.patient_summary_resolve_request_tx(db, summary, IDENTITY, {FACT0: ANSWER}, set(), project_id=1) == 1
+        db.db.commit()
+        assert runtime.patient_summary_request_problem(db.db, 1, IDENTITY, [FACT0], purpose="source") is None
+        assert runtime.patient_summary_request_problem(db.db, 1, IDENTITY, [FACT0]) is None
+        db.db.execute("DELETE FROM artifacts WHERE kind='patient_context_source_quality_v1'")
+        db.db.commit()
+        assert runtime.patient_summary_request_problem(db.db, 1, IDENTITY, [FACT0], purpose="source") == "patient_summary_request_unknown"
+        assert runtime.patient_summary_request_problem(db.db, 1, IDENTITY, [FACT0]) == "patient_summary_request_unknown"
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("choice", ["supports", "contradicts", "not_supported", "ambiguous", "complete", "missing"])
+def test_source_supported_answers_resolve_but_summary_choices_do_not(tmp_path, choice):
+    db = _ledger(tmp_path)
+    try:
+        ticket = reserve(db, qids=("q0",), purpose="source")
+        value = {"choice": choice, "confidence": 0.9}
+        db.db.execute("BEGIN IMMEDIATE")
+        save_answer(db, value=value, purpose="source")
+        assert runtime.patient_summary_resolve_request_tx(db, ticket, IDENTITY, {FACT0: value}, set(), project_id=1, purpose="source") == 1
+        db.db.commit()
+        assert runtime.patient_summary_request_problem(db.db, 1, IDENTITY, [FACT0], purpose="source") is None
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("purpose,choice", [("source", "omission_ok"), ("source", "important_missing"),
+                                           ("summary", "complete"), ("summary", "missing")])
+def test_other_purpose_answer_is_rejected(tmp_path, purpose, choice):
+    db = _ledger(tmp_path)
+    try:
+        ticket = reserve(db, qids=("q0",), purpose=purpose)
+        value = {"choice": choice, "confidence": 0.9}
+        db.db.execute("BEGIN IMMEDIATE")
+        save_answer(db, value=value, purpose=purpose)
+        with pytest.raises(ValueError):
+            runtime.patient_summary_resolve_request_tx(db, ticket, IDENTITY, {FACT0: value}, set(), project_id=1, purpose=purpose)
+        db.db.rollback()
+    finally:
+        db.close()
+
+
+def test_source_invalid_attempts_and_unknown_survive_cleanup(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        for _ in range(2):
+            ticket = reserve(db, qids=("q0",), purpose="source")
+            db.db.execute("BEGIN IMMEDIATE")
+            assert runtime.patient_summary_resolve_request_tx(db, ticket, IDENTITY, {}, {FACT0}, project_id=1, purpose="source") == 1
+            db.db.commit()
+        assert runtime.patient_summary_request_problem(db.db, 1, IDENTITY, [FACT0], purpose="source") == "patient_summary_invalid_exhausted"
+        assert runtime.patient_summary_request_problem(db.db, 1, IDENTITY, [FACT0]) is None
+        unknown = reserve(db, qids=("q1",), purpose="source")
+        db.db.execute("UPDATE artifacts SET created_at=? WHERE kind='semantic_usage'", (time.time() - 9 * 86400,))
+        db.db.commit()
+        maintenance.prune_history(db.db)
+        assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='semantic_usage'").fetchone()[0] == 3
+        assert runtime.patient_summary_request_problem(db.db, 1, IDENTITY, [FACT1], purpose="source") == "patient_summary_request_unknown"
+        db.db.execute("BEGIN IMMEDIATE")
+        save_answer(db, value={"choice": "complete", "confidence": 0.9}, purpose="source")
+        db.db.commit()
+        maintenance.prune_history(db.db)
+        assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE artifact_id=?", (unknown.artifact_id,)).fetchone()[0] == 1
+        assert runtime.patient_summary_request_problem(db.db, 1, IDENTITY, [FACT0], purpose="source") is None
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("purpose", ["source", "summary"])
+def test_corrupt_other_purpose_receipt_is_neither_ignored_nor_pruned(tmp_path, purpose):
+    db = _ledger(tmp_path)
+    try:
+        other = "summary" if purpose == "source" else "source"
+        ticket = reserve(db, qids=("q0",), purpose=other)
+        raw = db.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (ticket.artifact_id,)).fetchone()[0]
+        meta = json.loads(raw)
+        meta["quality_request"]["questions"] = {"q12": FACT0}
+        db.db.execute("UPDATE artifacts SET meta=?,created_at=? WHERE artifact_id=?",
+                      (json.dumps(meta), time.time() - 9 * 86400, ticket.artifact_id))
+        db.db.commit()
+        assert runtime.patient_summary_request_problem(db.db, 1, IDENTITY, [FACT0], purpose=purpose) == "patient_summary_request_unknown"
+        maintenance.prune_history(db.db)
+        assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE artifact_id=?", (ticket.artifact_id,)).fetchone()[0] == 1
     finally:
         db.close()

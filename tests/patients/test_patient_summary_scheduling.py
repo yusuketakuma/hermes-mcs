@@ -1,5 +1,6 @@
 """Synthetic regression cases for patient-context scheduling and source completeness."""
 import json
+import time
 
 import pytest
 
@@ -42,15 +43,41 @@ def cloud_schedule(runtime, monkeypatch):
 
 def test_cloud_draft_waits_for_two_source_scans_and_audits_before_quality(cloud_schedule, monkeypatch):
     rt, cfg = cloud_schedule
-    led, _, _ = rt
+    led, clock, _ = rt
+    import semantic_jev
+    import semantic_runtime
+
+    cfg = {**cfg, 'semantic': {'mode': 'assist', 'project_ids': [1, 2], 'daily_request_budget': 3000}}
+    clock.mono = time.monotonic()
+    monkeypatch.setattr(worker, 'load_config', lambda: cfg)
+    monkeypatch.setattr(worker, '_writer_current', lambda **_kwargs: True)
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: 'synthetic-jev-key')
+    monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *_: 'synthetic-anthropic-key')
+    real_client = semantic_jev.JevClient
+    requests = []
+    def post(body, timeout):
+        assert timeout > 0 and not led.db.in_transaction
+        requests.append(body)
+        answers = {}
+        for qid, question in body['questions'].items():
+            choices = question['criteria']
+            choice = 'supports' if 'supports' in choices else 'complete'
+            answers[qid] = {'type': 'choice', 'choice': choice, 'confidence': 1.0,
+                            'probabilities': {key: float(key == choice) for key in choices}}
+        return 200, {}, json.dumps({'model': semantic_jev.JEV_MODEL, 'answers': answers,
+                                    'usage': {'input_tokens': 1, 'output_tokens': 1}}).encode()
+    monkeypatch.setattr(semantic_jev, 'JevClient', lambda **kwargs: real_client(post_fn=post, **kwargs))
     seed(led, mid=1, body='生活環境: 合成の記録一。')
     seed(led, mid=2, body='生活環境: 合成の記録二。')
     led.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 WHERE project_id=1")
     led.db.commit()
     quality_inputs = []
+    original_quality = refresh._quality_step
     def quality(_ledger, pid, _cfg, night_id, doc, deadline, admit, **kwargs):
+        if kwargs.get('source') is not None:
+            return original_quality(_ledger, pid, _cfg, night_id, doc, deadline, admit, **kwargs)
         snapshot = refresh._snapshot(led.db, pid, cfg)
-        scans = refresh._current_scans(led.db, pid, snapshot['sources'], snapshot['contract'])
+        scans = refresh._current_scans(led.db, pid, snapshot['sources'], snapshot['contract'], cfg=cfg)
         quality_inputs.append({mid: (scans.get(mid, {}).get('complete'), scans.get(mid, {}).get('audited'))
                                for mid in (1, 2)})
         return 'pending', None
@@ -65,6 +92,16 @@ def test_cloud_draft_waits_for_two_source_scans_and_audits_before_quality(cloud_
     assert quality_inputs, 'finite source work must reach quality evaluation'
     assert quality_inputs[0] == {1: (True, True), 2: (True, True)}
     assert lanes.count('B') >= 2 and lanes.count('C') >= 2
+    assert [request['state']['target']['id'] for request in requests].count('source_facts') == 2
+    assert [request['state']['target']['id'] for request in requests].count('source_coverage') == 2
+    assert len(requests) == 4
+    scan_docs = [json.loads(row['content']) for row in led.artifacts(refresh.SCAN, project_id=1)]
+    audit_keys = {scan['source_quality_audit_key'] for scan in scan_docs}
+    assert len(audit_keys) == 2 and all(scan['audited'] for scan in scan_docs)
+    usage = [json.loads(row['meta']) for row in led.artifacts('semantic_usage', project_id=1)]
+    assert len(usage) == 4 and all(meta['operation'] == 'patient_source_quality' for meta in usage)
+    assert {meta['quality_request']['audit_key'] for meta in usage} == audit_keys
+    assert all(semantic_runtime.patient_summary_usage_resolved(led.db, 1, meta) for meta in usage)
     assert not led.artifacts(refresh.QUALITY_PASS, project_id=1)
 
 

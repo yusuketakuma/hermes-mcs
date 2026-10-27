@@ -1,9 +1,11 @@
 """Independent synthetic invariants for atomic context, bounded storage and generations."""
 import copy
+from contextlib import closing
 from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
+import sqlite3
 
 import pytest
 
@@ -387,7 +389,7 @@ def test_coverage_distinguishes_unacquired_empty_and_failed_without_publishing_o
     with led.db:
         led.db.execute("UPDATE patients SET fetch_state='failed' WHERE project_id=1")
     coverage = refresh.inference_coverage(led.db, 1, CFG)
-    assert coverage['complete'] and not coverage['publication_eligible']
+    assert not coverage['complete'] and not coverage['publication_eligible']
     assert coverage['status'] == 'acquisition_incomplete'
     assert refresh.context_view_input(led.db, 1, cfg=CFG) is None
 
@@ -402,7 +404,9 @@ def test_single_indivisible_oversized_value_is_explicitly_held_without_http_or_e
     for _ in range(2):
         result = step(runtime)
         assert result['status'] == 'failed' and result['reason'] == 'nightly_unsplittable_assertion'
-    assert step(runtime)['status'] == 'complete' and calls == []
+    waiting = step(runtime)
+    assert waiting['status'] == 'deferred' and waiting['reason'] == 'patient_context_waiting'
+    assert waiting['done'] == 0 and calls == []
     coverage = refresh.inference_coverage(led.db, 1, CFG)
     assert coverage['status'] == 'held' and not coverage['complete'] and coverage['sources']['held'] == 1
     assert refresh.context_view_input(led.db, 1, cfg=CFG) is None
@@ -413,11 +417,13 @@ def test_no_source_needs_explicit_acquisition_proof_even_after_an_empty_summary(
     seed(led, body='')
     with led.db:
         led.db.execute('DELETE FROM messages WHERE project_id=1')
+        led.db.execute("UPDATE patients SET fetch_state='pending',history_floor=NULL WHERE project_id=1")
     assert refresh.inference_coverage(led.db, 1, CFG)['status'] == 'unacquired'
-    finish(runtime)
+    finish(runtime, waiting=True)
     assert not refresh.inference_coverage(led.db, 1, CFG)['complete']
     with led.db:
-        led.db.execute("UPDATE patients SET fetch_state='complete' WHERE project_id=1")
+        led.db.execute("UPDATE patients SET fetch_state='complete',history_floor=-1 WHERE project_id=1")
+    finish(runtime)
     proof = refresh.inference_coverage(led.db, 1, CFG)
     assert proof['complete'] and proof['status'] == 'empty' and proof['sources']['total'] == 0
     assert calls == []
@@ -493,7 +499,7 @@ def test_unknown_dependency_gap_blocks_patient_completion_without_inventing_a_cl
     assert snapshot['dependencies']['losses'] == [] and snapshot['dependencies']['gaps'] == 1
     facts, _, _ = refresh._all_facts(led.db,1,snapshot,'synthetic',projected=True)
     assert any(f['view_bucket']=='current' for f in facts if any(d['key']=='drug_name' for d in f['details']))
-    finish(runtime)
+    finish(runtime, waiting=True)
     proof = refresh.inference_coverage(led.db,1,CFG)
     assert proof['status']=='dependency_gap' and not proof['complete'] and not proof['publication_eligible']
     assert proof['source_sig'] != before['source_sig'] and proof['dependencies']['gaps'] == 1
@@ -583,6 +589,7 @@ def test_chunk_replacement_captures_exact_old_unit_and_commits_or_rolls_back_all
     before = [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
     capture, record = loss.capture_tx, loss.record_tx
     seen = []
+    committed_at_failure = []
     def capture_unit(db, pid, mid, *, artifact_ids=None, source_key=None):
         assert source_key is None
         if seen:  # record_tx validates the newly inserted replacement set through the same reader.
@@ -600,6 +607,9 @@ def test_chunk_replacement_captures_exact_old_unit_and_commits_or_rolls_back_all
         seen.append('record')
         result = record(db,snapshot,replacement_ids=replacement_ids)
         if reject_record:
+            path = Path(db.execute('PRAGMA database_list').fetchone()[2])
+            with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as reader:
+                committed_at_failure.extend(reader.execute('SELECT * FROM artifacts ORDER BY artifact_id').fetchall())
             raise RuntimeError('synthetic_dependency_record_failed')
         return result
     monkeypatch.setattr(loss,'capture_tx',capture_unit)
@@ -607,7 +617,10 @@ def test_chunk_replacement_captures_exact_old_unit_and_commits_or_rolls_back_all
     if reject_record:
         with pytest.raises(RuntimeError,match='synthetic_dependency_record_failed'):
             step(runtime)
-        assert [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
+        after = [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+        assert after == committed_at_failure
+        assert [row for row in after if row[1] != refresh.PROGRESS] == [row for row in before if row[1] != refresh.PROGRESS]
+        assert len([row for row in after if row[1] == refresh.PROGRESS]) == 2
     else:
         assert step(runtime)['lane'] == 'B'
         assert not old_ids.intersection(r[0] for r in led.db.execute('SELECT artifact_id FROM artifacts WHERE kind=?',(refresh.CHUNK,)))
@@ -621,17 +634,24 @@ def test_chunk_and_checkpoint_commit_atomically(runtime,monkeypatch):
     assert step(runtime)['lane'] == 'A'
     before = [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
     original = led.artifact_add_tx
+    committed_at_failure = []
     def failed_checkpoint(kind,*args,**kwargs):
         if kind == refresh.SCAN:
             assert led.db.in_transaction
             assert led.db.execute('SELECT 1 FROM artifacts WHERE kind=?',(refresh.CHUNK,)).fetchone()
+            path = Path(led.db.execute('PRAGMA database_list').fetchone()[2])
+            with closing(sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)) as reader:
+                committed_at_failure.extend(reader.execute('SELECT * FROM artifacts ORDER BY artifact_id').fetchall())
             raise RuntimeError('synthetic_checkpoint_write_failure')
         return original(kind,*args,**kwargs)
     monkeypatch.setattr(led,'artifact_add_tx',failed_checkpoint)
     with pytest.raises(RuntimeError,match='synthetic_checkpoint_write_failure'):
         step(runtime)
     assert not led.db.in_transaction
-    assert [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
+    after = [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    assert after == committed_at_failure
+    assert [row for row in after if row[1] != refresh.PROGRESS] == [row for row in before if row[1] != refresh.PROGRESS]
+    assert len([row for row in after if row[1] == refresh.PROGRESS]) == 2
 
 
 def test_new_inference_generation_keeps_old_rows_and_never_reads_them_as_current(runtime,monkeypatch):

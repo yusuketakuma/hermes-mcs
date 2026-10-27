@@ -36,7 +36,8 @@ def cloud(runtime, monkeypatch):
         answers = {}
         for qid, question in body["questions"].items():
             options = question["criteria"]
-            choice = "supports" if "supports" in options else "omission_ok"
+            choice = ("supports" if "supports" in options else
+                      "complete" if "complete" in options else "omission_ok")
             assert choice in options
             answers[qid] = {"type": "choice", "choice": choice, "confidence": 1.0,
                             "probabilities": {option: float(option == choice) for option in options}}
@@ -94,7 +95,7 @@ def drain(runtime, *, local_admit=lambda: True):
         if result["status"] == "complete":
             return
         if result["status"] == "deferred":
-            assert result.get("reason") == "summary_quality_pending", result
+            assert result.get("reason") in ("summary_quality_pending", "source_quality_pending"), result
             continue
         assert result["status"] == "progressed", result
     pytest.fail("synthetic context did not finish")
@@ -119,6 +120,192 @@ def test_daytime_cloud_needs_no_local_gpu_capacity(runtime, cloud):
     assert meta["provider"] == worker._cloud_contract()
     assert meta["model"] == "claude-haiku-5-5"
     assert meta["contract"] == context_refresh._contract(CFG, 1)
+
+
+def test_source_quality_precedes_cloud_summary_and_missing_receipt_reopens_c(runtime, cloud):
+    led, _, _ = runtime
+    seed(led, body="見出しのない完全合成の居住記録。")
+    drain(runtime)
+    requests = led.synthetic_jev_requests
+    kinds = [request["state"]["target"]["id"] for request in requests]
+    assert "source_coverage" in kinds and "overview" in kinds
+    assert kinds.index("source_coverage") < kinds.index("overview")
+    source_answers = led.artifacts("patient_context_source_quality_v1", project_id=1)
+    assert source_answers and led.artifacts("patient_context_source_quality_pass_v1", project_id=1)
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    scan_calls = sum("source" in request for request in cloud[0])
+    led.db.execute("DELETE FROM artifacts WHERE artifact_id=?", (source_answers[0]["artifact_id"],))
+    led.db.commit()
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    _, _, pending = context_refresh._pending(led.db, 1, CFG)
+    assert pending["C"] and not pending["A"] and not pending["B"]
+    assert sum("source" in request for request in cloud[0]) == scan_calls
+
+
+def test_source_quality_negative_stays_held_without_resampling(runtime, cloud, monkeypatch):
+    import semantic_jev
+    led, clock, _ = runtime
+    seed(led, body="見出しのない完全合成の居住記録。")
+    client_factory = semantic_jev.JevClient
+    def negative_client(**kwargs):
+        client = client_factory(**kwargs)
+        post = client._post_fn
+        def negative(body, timeout):
+            status, headers, raw = post(body, timeout)
+            if body["state"]["target"]["id"] == "source_coverage":
+                response = json.loads(raw)
+                for value in response["answers"].values():
+                    value.update(choice="missing", probabilities={"complete": 0.0, "missing": 1.0, "ambiguous": 0.0})
+                raw = json.dumps(response).encode()
+            return status, headers, raw
+        client._post_fn = negative
+        return client
+    monkeypatch.setattr(semantic_jev, "JevClient", negative_client)
+    for _ in range(10):
+        result = step(runtime)
+        if result.get("reason") == "source_quality_held":
+            break
+    else:
+        pytest.fail("source negative did not become held")
+    before = len(led.synthetic_jev_requests)
+    clock.wall += 61
+    again = step(runtime)
+    assert again.get("reason") == "source_quality_held"
+    assert len(led.synthetic_jev_requests) == before
+    assert led.artifacts("patient_context_source_quality_fail_v1", project_id=1)
+    assert not led.artifacts("patient_context_source_quality_pass_v1", project_id=1)
+    assert not any("reports" in call for call in cloud[0])
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+
+
+@pytest.mark.parametrize("count", [0, 13, 257])
+def test_source_quality_capture_keeps_every_fact_and_coverage_question(runtime, cloud, count):
+    led, _, _ = runtime
+    statements = [f"合成の生活記録{i:04d}。" for i in range(count)]
+    body = "\n\n".join(statements) if statements else "合成の通常連絡。"
+    seed(led, body=body)
+    source = context_refresh._snapshot(led.db, 1, CFG)["sources"][0]
+    items = [{"category": "living", "text": text, "evidence": text,
+              "subject": "unspecified", "details": []} for text in statements]
+    facts = context_refresh._facts(source, items, night_id="synthetic", discovery="new_report")
+    assert len(facts) == count
+    contract = context_refresh._contract(CFG, 1)
+    meta = {"source_sig": context_refresh._source_sig(source), "source_key": 1,
+            "contract": contract, "provider": contract["provider"], "model": "synthetic"}
+    cap = context_refresh.context_plan.MAX_SOURCE_FACTS
+    parts = max(1, (len(facts) + cap - 1) // cap)
+    with led.db:
+        context_refresh._replace(led, context_refresh.SCAN, 1,
+            {"cursor": 1, "chunks": 1, "complete": True, "audited": False, "facts": []}, meta, 1)
+        for part in range(parts):
+            context_refresh._replace(led, context_refresh.CHUNK, 1,
+                {"chunk_span": [0, len(body)], "part": part, "parts": parts,
+                 "facts": facts[part * cap:(part + 1) * cap]},
+                {**meta, "chunk_key": f"synthetic-{part}", "unit_key": "synthetic-unit"}, 1)
+    led.db.execute("BEGIN")
+    try:
+        captured = context_refresh._source_quality_capture(led.db, 1, CFG, 1, {"code": "synthetic"})
+        identity = captured["identity"]
+        assert identity["source_fact_count"] == count
+        assert set(fact["id"] for fact in facts) < set(identity["fact_ids"])
+        assert len(identity["fact_ids"]) == count + 1
+        assert captured["pages"][-1]["passing_choices"][identity["fact_ids"][-1]] == "complete"
+        if facts:
+            assert facts[-1]["id"] in identity["fact_ids"]
+        changed_policy = context_refresh._source_quality_capture(led.db, 1, CFG, 1, {"code": "new-policy"})["identity"]
+        assert changed_policy["input_key"] == identity["input_key"]
+        assert changed_policy["failure_key"] != identity["failure_key"]
+        assert changed_policy["audit_key"] != identity["audit_key"]
+        led.db.execute("UPDATE messages SET body_html=body_html || '改変' WHERE message_id=1")
+        with pytest.raises(ValueError, match="patient_source_quality_source"):
+            context_refresh._source_quality_capture(led.db, 1, CFG, 1, {"code": "synthetic"})
+        led.db.execute("UPDATE patients SET fetch_reason='permission_denied' WHERE project_id=1")
+        with pytest.raises(ValueError, match="patient_source_quality_scope"):
+            context_refresh._source_quality_capture(led.db, 1, CFG, 1, {"code": "synthetic"})
+    finally:
+        led.db.rollback()
+
+
+def test_source_quality_overlapping_chunks_deduplicate_only_identical_occurrences(runtime, cloud):
+    led, _, _ = runtime
+    text = '合成の寝室情報です。'
+    body = '合成の前置きです。\n\n' + text + '\n\n補足を共有します。'
+    seed(led, body=body)
+    source = context_refresh._snapshot(led.db, 1, CFG)['sources'][0]
+    facts = context_refresh._facts(source, [{'category': 'living', 'text': text, 'evidence': text,
+                                            'subject': 'unspecified', 'details': []}],
+                                   night_id='synthetic', discovery='new_report')
+    assert len(facts) == 1
+    fact = facts[0]
+    start, end = fact['evidence_span']
+    assert 0 < start < end < len(body)
+    contract = context_refresh._contract(CFG, 1)
+    meta = {'source_sig': context_refresh._source_sig(source), 'source_key': 1,
+            'contract': contract, 'provider': contract['provider'], 'model': 'synthetic'}
+    repeated = {**fact, 'found_at': fact['found_at'] + 1, 'discovery': 'backfill_found',
+                'found_night_id': 'later-synthetic'}
+    with led.db:
+        context_refresh._replace(led, context_refresh.SCAN, 1,
+            {'cursor': 2, 'chunks': 2, 'complete': True, 'audited': False, 'facts': []}, meta, 1)
+        for name, span, value in (('prefix', [0, end + 1], fact),
+                                  ('suffix', [start - 1, len(body)], repeated)):
+            context_refresh._replace(led, context_refresh.CHUNK, 1,
+                {'chunk_span': span, 'part': 0, 'parts': 1, 'facts': [value]},
+                {**meta, 'chunk_key': name, 'unit_key': name}, 1)
+    led.db.execute('BEGIN')
+    try:
+        captured = context_refresh._source_quality_capture(led.db, 1, CFG, 1, {'code': 'synthetic'})
+        assert captured['identity']['source_fact_count'] == 1
+        assert captured['pages'][0]['fact_ids'] == [fact['id']]
+        assert captured['pages'][1]['passing_choices'][captured['pages'][1]['fact_ids'][0]] == 'complete'
+        row = led.db.execute("SELECT artifact_id,content FROM artifacts WHERE kind=? "
+                             "AND json_extract(meta,'$.chunk_key')='suffix'", (context_refresh.CHUNK,)).fetchone()
+        bad = json.loads(row['content'])
+        bad['facts'][0]['view_bucket'] = 'conflict'
+        led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(bad), row['artifact_id']))
+        with pytest.raises(ValueError, match='patient_source_quality_fact'):
+            context_refresh._source_quality_capture(led.db, 1, CFG, 1, {'code': 'synthetic'})
+        bad['facts'][0].pop('view_bucket')
+        bad['facts'][0]['project_id'] = 2
+        led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(bad), row['artifact_id']))
+        with pytest.raises(ValueError, match='patient_source_quality_fact'):
+            context_refresh._source_quality_capture(led.db, 1, CFG, 1, {'code': 'synthetic'})
+    finally:
+        led.db.rollback()
+
+
+def test_source_quality_identical_text_in_distinct_posts_retains_distinct_facts(runtime, cloud):
+    led, _, _ = runtime
+    text = '合成の寝室情報です。'
+    seed(led, mid=1, body=text)
+    seed(led, mid=2, body=text)
+    sources = context_refresh._snapshot(led.db, 1, CFG)['sources']
+    contract = context_refresh._contract(CFG, 1)
+    expected_ids = []
+    with led.db:
+        for source in sources:
+            mid = source['message_id']
+            facts = context_refresh._facts(source, [{'category': 'living', 'text': text, 'evidence': text,
+                                                     'subject': 'unspecified', 'details': []}],
+                                           night_id='synthetic', discovery='new_report')
+            assert len(facts) == 1
+            expected_ids.append(facts[0]['id'])
+            meta = {'source_sig': context_refresh._source_sig(source), 'source_key': mid,
+                    'contract': contract, 'provider': contract['provider'], 'model': 'synthetic'}
+            context_refresh._replace(led, context_refresh.SCAN, 1,
+                {'cursor': 1, 'chunks': 1, 'complete': True, 'audited': False, 'facts': []}, meta, mid)
+            context_refresh._replace(led, context_refresh.CHUNK, 1,
+                {'chunk_span': [0, len(text)], 'part': 0, 'parts': 1, 'facts': facts},
+                {**meta, 'chunk_key': f'chunk-{mid}', 'unit_key': f'unit-{mid}'}, mid)
+    assert len(set(expected_ids)) == 2
+    led.db.execute('BEGIN')
+    try:
+        actual = [context_refresh._source_quality_capture(led.db, 1, CFG, mid, {'code': 'synthetic'})
+                  for mid in (1, 2)]
+        assert [capture['pages'][0]['fact_ids'][0] for capture in actual] == expected_ids
+        assert actual[0]['identity']['input_key'] != actual[1]['identity']['input_key']
+    finally:
+        led.db.rollback()
 
 
 def test_requested_cloud_failure_stays_private_and_recovers_without_local_fallback(runtime, cloud):
@@ -448,6 +635,56 @@ def test_pending_estimate_completed_current_context_has_no_due_work(runtime, clo
     assert not any(context_refresh.pending_estimate(led.db, 1, CFG, contract=contract).values())
 
 
+@pytest.mark.parametrize('fact_source', ['shadow', 'canonical'])
+def test_pending_estimate_nonlegacy_does_not_read_provider_key(runtime, cloud, monkeypatch, tmp_path, fact_source):
+    import copy
+    import mcs_util
+    import semantic_candidate
+    import semantic_policy
+    from candidate_testkit import approved_config
+
+    led, _, _ = runtime
+    seed(led)
+    drain(runtime)
+    contract = context_refresh._contract(CFG, 1)
+    cfg = copy.deepcopy(CFG)
+    cfg['semantic']['fact_source'] = fact_source
+    monkeypatch.setattr(mcs_util, 'HOME', str(tmp_path))
+    monkeypatch.setattr(semantic_candidate, '_LOADED_SOURCES', None)
+    if fact_source == 'canonical':
+        cfg = approved_config(cfg)
+        assert not semantic_policy.semantic_config(cfg, key_present=True)[1]
+    with monkeypatch.context() as patch:
+        patch.setattr(worker.cloud_policy, 'api_key', lambda *_: pytest.fail('estimate read a credential'))
+        estimate = context_refresh.pending_estimate(led.db, 1, cfg, contract=contract)
+    assert estimate['targets'] == 1 and estimate['summary_units'] == 0
+    if fact_source == 'canonical':
+        cfg['semantic']['match_threshold'] = 0.99
+        assert semantic_policy.semantic_config(cfg, key_present=True)[1]
+        doc, meta = context_refresh._latest(led.db, context_refresh.KIND, 1)
+        assert not context_refresh._quality_publication_allowed(led.db, 1, cfg, doc, meta)
+
+
+def test_source_quality_unknown_clears_only_after_existing_pass_is_reverified(runtime, cloud):
+    led, _, _ = runtime
+    seed(led, body='見出しのない完全合成の居住記録。')
+    drain(runtime)
+    source_calls = sum(request['state']['target']['id'].startswith('source_')
+                       for request in led.synthetic_jev_requests)
+    scan = led.artifacts(context_refresh.SCAN, project_id=1)[0]
+    content = json.loads(scan['content'])
+    content.update(audited=False, quality_state='unknown', next_try=0)
+    led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(content), scan['artifact_id']))
+    led.db.commit()
+    assert context_refresh.inference_coverage(led.db, 1, CFG)['status'] == 'quality_unknown'
+    drain(runtime)
+    scan = json.loads(led.artifacts(context_refresh.SCAN, project_id=1)[0]['content'])
+    assert scan['audited'] is True and 'quality_state' not in scan
+    assert context_refresh.inference_coverage(led.db, 1, CFG)['status'] == 'complete'
+    assert sum(request['state']['target']['id'].startswith('source_')
+               for request in led.synthetic_jev_requests) == source_calls
+
+
 
 def test_scope_withdrawn_while_waiting_for_writer_records_disposition(runtime, cloud, monkeypatch):
     led, _, _ = runtime
@@ -740,17 +977,25 @@ def test_quality_policy_change_requeues_audit_without_resending_source_or_draft(
     led, _, _ = runtime
     seed(led, body='本人の生活環境: 完全合成の居住記録。')
     drain(runtime)
-    scan_ids = [row['artifact_id'] for row in led.artifacts(context_refresh.SCAN)]
-    generated = len(cloud[0])
+    chunks = [(row['artifact_id'], row['content'], row['meta'])
+              for row in led.artifacts(context_refresh.CHUNK)]
+    generated = list(cloud[0])
     judged = len(led.synthetic_jev_requests)
+    usage_count = len(led.artifacts('semantic_usage', project_id=1))
     monkeypatch.setitem(CFG['semantic'], 'match_threshold', 0.95)
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
     _, _, pending = context_refresh._pending(led.db, 1, CFG)
-    assert pending == {'A': True, 'B': False, 'C': False}
+    assert pending == {'A': False, 'B': False, 'C': True}
     drain(runtime)
-    assert len(led.synthetic_jev_requests) == judged + 1
-    assert len(cloud[0]) == generated
-    assert [row['artifact_id'] for row in led.artifacts(context_refresh.SCAN)] == scan_ids
+    requests = led.synthetic_jev_requests[judged:]
+    assert [request['state']['target']['id'] for request in requests] == [
+        'source_facts', 'source_coverage', 'overview']
+    usage = led.artifacts('semantic_usage', project_id=1)[usage_count:]
+    assert [json.loads(row['meta'])['operation'] for row in usage] == [
+        'patient_source_quality', 'patient_source_quality', 'patient_summary_quality']
+    assert cloud[0] == generated
+    assert [(row['artifact_id'], row['content'], row['meta'])
+            for row in led.artifacts(context_refresh.CHUNK)] == chunks
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
 
 

@@ -550,6 +550,235 @@ _PATIENT_SUMMARY_OMISSION_OPTIONS = {
 }
 
 
+def _patient_quality_sources(sources):
+    """Index exact source occurrences without granting publication or clinical validity."""
+    import re
+    from mcs_util import valid_hash
+
+    indexed, project_id = {}, None
+    for source in sources:
+        if not isinstance(source, dict):
+            raise ValueError("patient_quality_source_invalid")
+        pid, mid = source.get("project_id"), source.get("message_id")
+        kind, key, body = source.get("source"), source.get("source_key", mid), source.get("body_text")
+        if (type(pid) is not int or pid <= 0 or type(mid) is not int or mid < 0
+                or kind not in ("chat", "karte_summary")
+                or (kind == "chat" and (mid <= 0 or type(key) is not int or key != mid))
+                or (kind == "karte_summary" and (mid != 0 or not isinstance(key, str)
+                    or re.fullmatch(r"karte:[1-9][0-9]{0,18}", key) is None
+                    or int(key[6:]) >= 2**63))
+                or not valid_hash(source.get("content_hash"))
+                or source.get("body_state") not in (None, "full")
+                or not isinstance(body, str) or not body.strip() or "\x00" in body):
+            raise ValueError("patient_quality_source_invalid")
+        if project_id is None:
+            project_id = pid
+        if project_id != pid or (kind, key) in indexed:
+            raise ValueError("patient_quality_source_invalid")
+        indexed[(kind, key)] = source
+    return indexed
+
+
+def _patient_quality_facts(candidates, indexed):
+    """Bind every supplied fact and both quotations to its own source occurrence."""
+    from mcs_util import valid_hash
+
+    checked, seen = [], set()
+    for fact in candidates:
+        if not isinstance(fact, dict) or not valid_hash(fact.get("id")) or fact["id"] in seen:
+            raise ValueError("patient_quality_fact_invalid")
+        seen.add(fact["id"])
+        kind, key = fact.get("source"), fact.get("source_key")
+        if not isinstance(kind, str) or kind not in ("chat", "karte_summary") or type(key) not in (int, str):
+            raise ValueError("patient_quality_fact_invalid")
+        source = indexed.get((kind, key))
+        if (source is None or type(fact.get("project_id")) is not int
+                or fact.get("project_id") != source["project_id"]
+                or type(fact.get("message_id")) is not int or fact.get("message_id") != source["message_id"]
+                or fact.get("content_hash") != source["content_hash"]):
+            raise ValueError("patient_quality_fact_invalid")
+        body = source["body_text"]
+        for span_key, text_key in (("evidence_span", "evidence"), ("quote_span", "quote")):
+            span, text = fact.get(span_key), fact.get(text_key)
+            if (not isinstance(span, list) or len(span) != 2 or any(type(n) is not int for n in span)
+                    or not 0 <= span[0] < span[1] <= len(body) or not isinstance(text, str)
+                    or body[span[0]:span[1]] != text):
+                raise ValueError("patient_quality_fact_invalid")
+        checked.append((fact, source))
+    return checked
+
+
+def patient_source_quality_pages(source, facts):
+    """Plan all context-fact support pages and one whole-source coverage question."""
+    from copy import deepcopy
+    from mcs_util import canonical, payload_hash
+    from patient_context import CATEGORIES
+
+    if not isinstance(facts, list):
+        raise ValueError("patient_source_page_invalid")
+    indexed = _patient_quality_sources([source])
+    checked = _patient_quality_facts(facts, indexed)
+    # Discovery bookkeeping is not interpretation. Reordering or rescanning the
+    # same assertions must not give a normal negative answer a new logical ID.
+    candidates = sorted((deepcopy({k: v for k, v in fact.items()
+                                  if k not in ("found_at", "found_night_id", "discovery")})
+                         for fact, _ in checked), key=lambda fact: fact["id"])
+    source_ref = {k: source.get(k) for k in ("project_id", "message_id", "source", "content_hash",
+                  "body_state", "posted_at", "posted_at_ts", "sender_id", "sender_name", "parent_id")}
+    source_ref["source_key"] = source.get("source_key", source["message_id"])
+    source_ref["body_hash"] = payload_hash(source["body_text"])
+    context = [{"id": "s0", "role": "original_source", "text": source["body_text"], **source_ref}]
+    canonical({"context": context, "facts": candidates})
+    for start in range(0, len(candidates), _PATIENT_SUMMARY_CHUNK_LIMIT):
+        chunk = candidates[start:start + _PATIENT_SUMMARY_CHUNK_LIMIT]
+        targets, questions = [], {}
+        for index, fact in enumerate(chunk):
+            qid = f"q{index}"
+            targets.append({"id": qid, "source_id": "s0", "fact": fact})
+            questions[qid] = jev.choice_question(
+                f"Judge target.facts entry {qid} against only context source s0. "
+                "Does its exact evidence occurrence support the entire context assertion, category and details, "
+                "including subject, negation, uncertainty, conditions, past/current/planned time and relations? "
+                "Unknown or unspecified attributes must stay unknown; other sources are not evidence.",
+                FACT_SUPPORT_OPTIONS)
+        ids = [fact["id"] for fact in chunk]
+        yield {"purpose": "source", "state": {"target": {"id": "source_facts", "facts": targets},
+                "context": context}, "questions": questions, "fact_ids": ids,
+                "passing_choices": dict.fromkeys(ids, "supports")}
+    coverage_id = payload_hash(["patient_source_coverage", source_ref, candidates])
+    question = jev.choice_question(
+        "Do all candidate context facts in state.target.candidate_facts cover every important patient-context "
+        "assertion in the entire original source at context s0, across these context categories: "
+        + ", ".join(sorted(CATEGORIES)) + "? Judge the complete source and all candidates, including negation, "
+        "other people, uncertainty, past/current/planned time and changed states. Choose complete only when "
+        "no important context assertion is missing; zero candidates do not prove absence. This is context "
+        "extraction coverage, not canonical clinical-fact coverage or publication approval.", COVERAGE_OPTIONS)
+    yield {"purpose": "source", "state": {"target": {"id": "source_coverage",
+            "facts": [{"id": "q0", "fact": {"id": coverage_id, "kind": "source_coverage"}}],
+            "candidate_facts": candidates}, "context": context}, "questions": {"q0": question},
+            "fact_ids": [coverage_id], "passing_choices": {coverage_id: "complete"}}
+
+
+def audit_patient_quality_page(jev_client, page, deadline, threshold, *,
+                               prior_answers=None, on_valid_answers=None, on_attempt_result=None):
+    """Evaluate one owner-bound page, persisting answers before a finite malformed retry."""
+    import time
+    from mcs_util import canonical, valid_hash
+
+    purpose = page.get("purpose") if isinstance(page, dict) else None
+    prefix = "patient_summary" if purpose == "summary" else "patient_source"
+
+    def invalid(code=None):
+        code = code or prefix + ("_chunk_invalid" if purpose == "summary" else "_page_invalid")
+        return {"evaluated": False, "findings": [{"code": code}], "answers": {},
+                "failure_class": "resource" if code == prefix + "_audit_deadline" else "failed"}
+
+    if (purpose not in ("summary", "source") or jev_client is None
+            or (not callable(on_valid_answers) and not callable(on_attempt_result))
+            or (on_valid_answers is not None and on_attempt_result is not None)
+            or not _probability(threshold)
+            or type(deadline) not in (int, float) or not float('-inf') < deadline < float('inf')):
+        return invalid()
+    if time.monotonic() >= deadline:
+        return invalid(prefix + "_audit_deadline")
+    try:
+        state, questions, ids, passing = (page[k] for k in ("state", "questions", "fact_ids", "passing_choices"))
+        targets = state["target"]["facts"]
+        if (not isinstance(questions, dict) or not isinstance(ids, list)
+                or not 1 <= len(ids) <= _PATIENT_SUMMARY_CHUNK_LIMIT or len(set(ids)) != len(ids)
+                or any(not valid_hash(fid) for fid in ids) or not isinstance(targets, list)
+                or len(targets) != len(ids) or not isinstance(passing, dict) or set(passing) != set(ids)
+                or any(value not in ({"supports", "omission_ok"} if purpose == "summary"
+                                     else {"supports", "complete"}) for value in passing.values())):
+            return invalid()
+        facts_by_qid = {f"q{index}": fid for index, fid in enumerate(ids)}
+        if set(questions) != set(facts_by_qid) or any(
+                target["id"] != qid or target["fact"]["id"] != fid
+                or not isinstance(questions[qid]["criteria"], dict)
+                or passing[fid] not in questions[qid]["criteria"]
+                for target, (qid, fid) in zip(targets, facts_by_qid.items())):
+            return invalid()
+        canonical({"state": state, "questions": questions})
+    except (KeyError, TypeError, ValueError, UnicodeError, RecursionError, OverflowError):
+        return invalid()
+    questions_by_fact = {facts_by_qid[qid]: question for qid, question in questions.items()}
+    if prior_answers is None:
+        prior_answers = {}
+    if not isinstance(prior_answers, dict) or set(prior_answers) - set(questions_by_fact):
+        return invalid()
+
+    def normalize(fact_id, answer):
+        options = questions_by_fact[fact_id]["criteria"]
+        if (not isinstance(answer, dict) or not isinstance(answer.get("choice"), str)
+                or answer["choice"] not in options or not _probability(answer.get("confidence"))):
+            return None
+        return {"choice": answer["choice"], "confidence": answer["confidence"]}
+
+    saved = {}
+    for fact_id, answer in prior_answers.items():
+        normalized = normalize(fact_id, answer)
+        if normalized is None:
+            return invalid()
+        saved[fact_id] = normalized
+    pending = {qid: question for qid, question in questions.items() if facts_by_qid[qid] not in saved}
+    callback_failed = False
+
+    def persist(raw, invalid_ids=None):
+        nonlocal callback_failed
+        if not isinstance(raw, dict) or set(raw) - set(pending):
+            raise ValueError(prefix + "_answer_invalid")
+        mapped = {}
+        for qid, answer in raw.items():
+            fact_id = facts_by_qid[qid]
+            if fact_id in saved:
+                raise ValueError(prefix + "_answer_duplicate")
+            normalized = normalize(fact_id, answer)
+            if normalized is None:
+                raise ValueError(prefix + "_answer_invalid")
+            mapped[fact_id] = normalized
+        try:
+            from copy import deepcopy
+            if on_attempt_result is None:
+                result = on_valid_answers(deepcopy(mapped))
+            else:
+                if not isinstance(invalid_ids, set) or not invalid_ids <= set(pending):
+                    raise ValueError(prefix + "_answer_invalid")
+                result = on_attempt_result(deepcopy(mapped), {facts_by_qid[qid] for qid in invalid_ids})
+            if result is False:
+                raise RuntimeError(prefix + "_answer_persistence_failed")
+        except BaseException:
+            callback_failed = True
+            raise
+        saved.update(mapped)
+
+    failure = None
+    if pending:
+        try:
+            jev.evaluate_once_more(jev_client, state, pending, deadline,
+                **({"on_attempt_result": persist} if on_attempt_result is not None
+                   else {"on_valid_answers": persist}))
+        except jev.JevError as error:
+            if callback_failed:
+                raise
+            failure = jev.failure_class(error)
+    answers, findings = {}, []
+    for fact_id in ids:
+        answer = saved.get(fact_id)
+        if answer is None:
+            continue
+        choice, confidence = answer["choice"], answer["confidence"]
+        answers[fact_id] = answer
+        if confidence < threshold:
+            findings.append({"code": prefix + "_low_confidence", "fact_id": fact_id})
+        if choice != passing[fact_id]:
+            findings.append({"code": prefix + "_" + choice, "fact_id": fact_id})
+    complete = len(answers) == len(ids)
+    if not complete:
+        findings.append({"code": prefix + "_audit_unevaluated"})
+    return {"evaluated": complete, "findings": findings, "answers": answers,
+            **({"failure_class": failure} if failure is not None else {})}
+
+
 def audit_patient_summary_chunk(jev_client, summary, candidates, sources, deadline, threshold, *,
                                 prior_answers=None, on_valid_answers=None, on_attempt_result=None):
     """Judge one finite source-backed chunk; the owner proves scope and currentness.
@@ -562,20 +791,13 @@ def audit_patient_summary_chunk(jev_client, summary, candidates, sources, deadli
     only source identity and exact quote spans; it does not prove
     clinical attributes, whole-patient coverage or publication eligibility.
     """
-    import re
-    import time
-    from mcs_util import canonical, valid_hash
+    from mcs_util import valid_hash
 
-    def invalid(code="patient_summary_chunk_invalid"):
-        return {"evaluated": False, "findings": [{"code": code}], "answers": {},
-                "failure_class": "resource" if code == "patient_summary_audit_deadline" else "failed"}
+    def invalid():
+        return {"evaluated": False, "findings": [{"code": "patient_summary_chunk_invalid"}],
+                "answers": {}, "failure_class": "failed"}
 
-    if (jev_client is None
-            or (not callable(on_valid_answers) and not callable(on_attempt_result))
-            or (on_valid_answers is not None and on_attempt_result is not None)
-            or not _probability(threshold)
-            or type(deadline) not in (int, float) or not float('-inf') < deadline < float('inf')
-            or not isinstance(summary, list) or not 1 <= len(summary) <= 12
+    if (not isinstance(summary, list) or not 1 <= len(summary) <= 12
             or not isinstance(candidates, list) or not 1 <= len(candidates) <= _PATIENT_SUMMARY_CHUNK_LIMIT
             or not isinstance(sources, list) or not 1 <= len(sources) <= _PATIENT_SUMMARY_CHUNK_LIMIT):
         return invalid()
@@ -587,53 +809,13 @@ def audit_patient_summary_chunk(jev_client, summary, candidates, sources, deadli
                 or not valid_hash(item["fact_ids"][0]) or item["fact_ids"][0] in selected):
             return invalid()
         selected[item["fact_ids"][0]] = item["text"]
-    indexed, project_id = {}, None
-    for source in sources:
-        if not isinstance(source, dict):
-            return invalid()
-        pid, mid = source.get("project_id"), source.get("message_id")
-        kind, key, body = source.get("source"), source.get("source_key", mid), source.get("body_text")
-        if (type(pid) is not int or pid <= 0 or type(mid) is not int or mid < 0
-                or kind not in ("chat", "karte_summary")
-                or (kind == "chat" and (mid <= 0 or type(key) is not int or key != mid))
-                or (kind == "karte_summary" and (mid != 0 or not isinstance(key, str)
-                    or re.fullmatch(r"karte:[1-9][0-9]{0,18}", key) is None
-                    or int(key[6:]) >= 2**63))
-                or not valid_hash(source.get("content_hash"))
-                or source.get("body_state") not in (None, "full")
-                or not isinstance(body, str) or not body.strip() or "\x00" in body):
-            return invalid()
-        if project_id is None:
-            project_id = pid
-        if project_id != pid or (kind, key) in indexed:
-            return invalid()
-        indexed[(kind, key)] = source
-    checked, seen = [], set()
-    for fact in candidates:
-        if not isinstance(fact, dict) or not valid_hash(fact.get("id")) or fact["id"] in seen:
-            return invalid()
-        seen.add(fact["id"])
-        kind, key = fact.get("source"), fact.get("source_key")
-        if not isinstance(kind, str) or kind not in ("chat", "karte_summary") or type(key) not in (int, str):
-            return invalid()
-        source = indexed.get((kind, key))
-        if (source is None or type(fact.get("project_id")) is not int or fact.get("project_id") != project_id
-                or type(fact.get("message_id")) is not int or fact.get("message_id") != source["message_id"]
-                or fact.get("content_hash") != source["content_hash"]):
-            return invalid()
-        body = source["body_text"]
-        for span_key, text_key in (("evidence_span", "evidence"), ("quote_span", "quote")):
-            span, text = fact.get(span_key), fact.get(text_key)
-            if (not isinstance(span, list) or len(span) != 2 or any(type(n) is not int for n in span)
-                    or not 0 <= span[0] < span[1] <= len(body) or not isinstance(text, str)
-                    or body[span[0]:span[1]] != text):
-                return invalid()
-        if fact["id"] in selected and selected[fact["id"]] != (fact.get("quote") or fact.get("text")):
-            return invalid()
-        checked.append((fact, source))
-    if time.monotonic() >= deadline:
-        return invalid("patient_summary_audit_deadline")
-
+    try:
+        checked = _patient_quality_facts(candidates, _patient_quality_sources(sources))
+    except ValueError:
+        return invalid()
+    if any(fact["id"] in selected and selected[fact["id"]] != (fact.get("quote") or fact.get("text"))
+           for fact, _ in checked):
+        return invalid()
     source_ids, context, facts, questions = {}, [], [], {}
     for index, (fact, source) in enumerate(checked):
         source_key = (source["source"], source.get("source_key", source["message_id"]))
@@ -658,89 +840,9 @@ def audit_patient_summary_chunk(jev_client, summary, candidates, sources, deadli
                           "Consider current state, changes, important background, plans and unresolved issues."))
         options = jev.CLAIM_SUPPORT_OPTIONS if included else _PATIENT_SUMMARY_OMISSION_OPTIONS
         questions[qid] = jev.choice_question(instruction, options)
-    state = {"target": {"id": "overview", "summary": summary, "facts": facts}, "context": context}
-    # The existing HTTP transport has no request-size limit; validate its JSON
-    # serialization without inventing one or silently truncating source text.
-    try:
-        canonical({"state": state, "questions": questions})
-    except (TypeError, ValueError, UnicodeError, RecursionError, OverflowError):
-        return invalid()
-
-    facts_by_qid = {f"q{index}": fact["id"] for index, (fact, _source) in enumerate(checked)}
-    questions_by_fact = {facts_by_qid[qid]: question for qid, question in questions.items()}
-    if prior_answers is None:
-        prior_answers = {}
-    if not isinstance(prior_answers, dict) or set(prior_answers) - set(questions_by_fact):
-        return invalid()
-
-    def normalize(fact_id, answer):
-        options = questions_by_fact[fact_id]["criteria"]
-        if (not isinstance(answer, dict) or not isinstance(answer.get("choice"), str)
-                or answer["choice"] not in options or not _probability(answer.get("confidence"))):
-            return None
-        return {"choice": answer["choice"], "confidence": answer["confidence"]}
-
-    saved = {}
-    for fact_id, answer in prior_answers.items():
-        normalized = normalize(fact_id, answer)
-        if normalized is None:
-            return invalid()
-        saved[fact_id] = normalized
-    pending = {qid: question for qid, question in questions.items()
-               if facts_by_qid[qid] not in saved}
-    callback_failed = False
-
-    def persist(raw, invalid_ids=None):
-        nonlocal callback_failed
-        if not isinstance(raw, dict) or set(raw) - set(pending):
-            raise ValueError("patient_summary_answer_invalid")
-        mapped = {}
-        for qid, answer in raw.items():
-            fact_id = facts_by_qid[qid]
-            if fact_id in saved:
-                raise ValueError("patient_summary_answer_duplicate")
-            normalized = normalize(fact_id, answer)
-            if normalized is None:
-                raise ValueError("patient_summary_answer_invalid")
-            mapped[fact_id] = normalized
-        try:
-            from copy import deepcopy
-            if on_attempt_result is None:
-                result = on_valid_answers(deepcopy(mapped))
-            else:
-                if not isinstance(invalid_ids, set) or not invalid_ids <= set(pending):
-                    raise ValueError("patient_summary_answer_invalid")
-                result = on_attempt_result(deepcopy(mapped), {facts_by_qid[qid] for qid in invalid_ids})
-            if result is False:
-                raise RuntimeError("patient_summary_answer_persistence_failed")
-        except BaseException:
-            callback_failed = True
-            raise
-        saved.update(mapped)
-
-    failure = None
-    if pending:
-        try:
-            jev.evaluate_once_more(jev_client, state, pending, deadline,
-                **({"on_attempt_result": persist} if on_attempt_result is not None
-                   else {"on_valid_answers": persist}))
-        except jev.JevError as error:
-            if callback_failed:
-                raise
-            failure = jev.failure_class(error)
-    answers, findings = {}, []
-    for fact, _source in checked:
-        answer = saved.get(fact["id"])
-        if answer is None:
-            continue
-        choice, confidence = answer["choice"], answer["confidence"]
-        answers[fact["id"]] = answer
-        if confidence < threshold:
-            findings.append({"code": "patient_summary_low_confidence", "fact_id": fact["id"]})
-        if choice not in ("supports", "omission_ok"):
-            findings.append({"code": "patient_summary_" + choice, "fact_id": fact["id"]})
-    complete = len(answers) == len(checked)
-    if not complete:
-        findings.append({"code": "patient_summary_audit_unevaluated"})
-    return {"evaluated": complete, "findings": findings, "answers": answers,
-            **({"failure_class": failure} if failure is not None else {})}
+    ids = [fact["id"] for fact, _ in checked]
+    page = {"purpose": "summary", "state": {"target": {"id": "overview", "summary": summary, "facts": facts},
+            "context": context}, "questions": questions, "fact_ids": ids,
+            "passing_choices": {fid: "supports" if fid in selected else "omission_ok" for fid in ids}}
+    return audit_patient_quality_page(jev_client, page, deadline, threshold, prior_answers=prior_answers,
+        on_valid_answers=on_valid_answers, on_attempt_result=on_attempt_result)

@@ -44,6 +44,22 @@ _DEPENDENCY_CODE = hashlib.sha256(Path(dependency_loss.__file__).read_bytes()).h
 COMMIT_MARGIN = 5
 
 
+def _quality_kind(kind, identity):
+    """Select the existing receipt family for one explicitly bound purpose."""
+    purpose = identity.get("purpose", "summary")
+    if purpose == "summary":
+        return kind
+    if purpose == "source" and kind in (QUALITY, QUALITY_FAIL, QUALITY_PASS, QUALITY_RETRY):
+        return kind.replace("patient_context_summary_quality", "patient_context_source_quality", 1)
+    raise ValueError("patient_summary_quality_purpose_invalid")
+
+
+def _quality_expected(identity, fid, selected):
+    if identity.get("purpose", "summary") == "source":
+        return identity["passing_choices"][fid]
+    return "supports" if fid in selected else "omission_ok"
+
+
 class Deferred(Exception):
     """Admission or remaining time is unavailable; no attempt is charged to the unit."""
 
@@ -330,7 +346,7 @@ def _route_contract(meta):
     return actual
 
 
-def _current_scans(db, pid, sources, contract):
+def _current_scans(db, pid, sources, contract, *, cfg=None, check_quality=True):
     stored = {}
     for row in db.execute("SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? AND "
                           + current_meta_pred("meta", target=CURRENT_VERSION)
@@ -392,6 +408,9 @@ def _current_scans(db, pid, sources, contract):
             scan.update(complete=False, audited=False, cursor=0)
             if any(span is None for span in ranges.get(key, [])):
                 scan.update(held=True, failure="nightly_chunk_proof_invalid")
+        if (check_quality and contract.get("provider") and scan.get("audited")
+                and (cfg is None or not _source_quality_verified(db, pid, by_key[key], contract, cfg, scan))):
+            scan["audited"] = False
     return result
 
 
@@ -420,9 +439,9 @@ def _scan_facts(db, pid, source, contract, scan):
             yield {**fact, "historical": source.get("historical", False)}
 
 
-def _coverage(db, pid, sources, contract, facts):
+def _coverage(db, pid, sources, contract, facts, *, cfg=None):
     messages = [s for s in sources if s["source"] == "chat"]
-    scans = _current_scans(db, pid, sources, contract)
+    scans = _current_scans(db, pid, sources, contract, cfg=cfg)
     complete = sum(bool(scans.get(_source_key(s), {}).get("complete")) for s in messages if _usable(s))
     patient = db.execute("SELECT history_floor,coverage_ts,fetch_state,fetch_reason FROM patients "
                          "WHERE project_id=?", (pid,)).fetchone()
@@ -535,7 +554,7 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta):
 
 def _inference_coverage(db, pid, cfg, snapshot):
     sources = snapshot["sources"]
-    scans = _current_scans(db, pid, sources, snapshot["contract"])
+    scans = _current_scans(db, pid, sources, snapshot["contract"], cfg=cfg)
     counts = dict.fromkeys(("total", "eligible", "scanned", "audited", "pending", "held", "failed",
                            "incomplete", "excluded", "observed_empty"), 0)
     counts["total"] = len(sources)
@@ -552,7 +571,8 @@ def _inference_coverage(db, pid, cfg, snapshot):
             audited = bool(scan.get("complete") and scan.get("audited") and not scan.get("failure"))
             counts["audited"] += int(audited)
             if not audited:
-                counts["held" if scan.get("held") else "failed" if scan.get("failure") else "pending"] += 1
+                counts["held" if scan.get("held") or scan.get("quality_state") == "held"
+                       else "failed" if scan.get("failure") else "pending"] += 1
     doc, meta = _latest(db, KIND, pid)
     progress, _ = _latest(db, PROGRESS, pid)
     current = (meta.get("summary_checked") is True and meta.get("source_sig") == snapshot["source_sig"]
@@ -574,8 +594,10 @@ def _inference_coverage(db, pid, cfg, snapshot):
               else "dependency_gap" if not snapshot["dependencies"]["complete"]
               else "held" if counts["held"] or progress.get("held")
               else "failed" if counts["failed"] or progress.get("failure")
-              else "quality_unknown" if progress.get("source_sig") == snapshot["source_sig"]
+              else "quality_unknown" if (progress.get("source_sig") == snapshot["source_sig"]
                    and progress.get("quality_state") == "unknown"
+                   or any(scan.get("quality_state") == "unknown" and not scan.get("audited")
+                          for scan in scans.values()))
               else "quality_held" if progress.get("source_sig") == snapshot["source_sig"]
                    and progress.get("quality_state") == "held"
               else "unacquired" if not acquired_empty else "incomplete" if counts["incomplete"]
@@ -658,7 +680,7 @@ def context_view_input(db, pid, *, cfg=None):
     # current chunk remains available, while older original karte records are
     # returned explicitly as history, never substituted for the latest one.
     historical = {}
-    scans = _current_scans(db, pid, current["sources"], current["contract"])
+    scans = _current_scans(db, pid, current["sources"], current["contract"], cfg=cfg)
     for key, source in sources.items():
         if not scans.get(key, {}).get("complete"):
             continue
@@ -676,15 +698,15 @@ def context_view_input(db, pid, *, cfg=None):
         fact["view_bucket"] = buckets[fact["id"]]
     return {**doc, "facts": list(by_id.values()), "historical_facts": list(historical.values()),
             "temporal_view": projection,
-            "coverage": {**_coverage(db, pid, current["sources"], current["contract"], list(by_id.values())),
+            "coverage": {**_coverage(db, pid, current["sources"], current["contract"], list(by_id.values()), cfg=cfg),
             "unreflected_since": as_of,
             "unreflected": sum((s.get("first_seen") or 0) > as_of for s in sources.values())}}
 
 
-def _all_facts(db, pid, snapshot, night_id, *, projected=False, include_all=False):
+def _all_facts(db, pid, snapshot, night_id, *, projected=False, include_all=False, cfg=None):
     facts = {}
     historical = {}
-    scans = _current_scans(db, pid, snapshot["sources"], snapshot["contract"])
+    scans = _current_scans(db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
     for source in snapshot["sources"]:
         if not _usable(source) or (source.get("historical") and not include_all):
             continue
@@ -808,7 +830,7 @@ def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, displ
             or not snapshot["acquisition"]["complete"]
             or not snapshot["dependencies"]["complete"]):
         raise ValueError("patient_summary_quality_source_incomplete")
-    scans = _current_scans(db, pid, snapshot["sources"], snapshot["contract"])
+    scans = _current_scans(db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
     for source in snapshot["sources"]:
         if source.get("body_state") not in (None, "full", "deleted"):
             raise ValueError("patient_summary_quality_source_incomplete")
@@ -818,9 +840,105 @@ def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, displ
             scan = scans.get(_source_key(source), {})
             if not scan.get("complete") or not scan.get("audited") or scan.get("failure"):
                 raise ValueError("patient_summary_quality_source_incomplete")
-    _, _, _, facts, state = _all_facts(db, pid, snapshot, night_id, include_all=True)
+    _, _, _, facts, state = _all_facts(db, pid, snapshot, night_id, include_all=True, cfg=cfg)
     identity = _quality_input(db, pid, snapshot, facts, state, summary, assessment_contract, display_projection)
     return {"identity": identity, "sources": snapshot["sources"], "facts": facts, "state": state}
+
+
+def _source_quality_capture(db, pid, cfg, source_key, assessment, *, contract=None):
+    """Capture one original and its complete accepted chunks in the caller's snapshot."""
+    import semantic_audit
+    if not db.in_transaction:
+        raise RuntimeError("patient_summary_snapshot_required")
+    scope = _scope(db, pid)
+    if (not scope or scope.get("is_archived")
+            or scope.get("fetch_reason") in ("forbidden", "permission_denied", "access_revoked")):
+        raise ValueError("patient_source_quality_scope")
+    sources = list(_sources(db, pid, mid=source_key))
+    if len(sources) != 1:
+        raise ValueError("patient_source_quality_source")
+    source = sources[0]
+    body = source.get("body_text")
+    if source.get("project_id") != pid or not _usable(source) or not isinstance(body, str):
+        raise ValueError("patient_source_quality_source")
+    revision = None
+    if source.get("source") == "chat":
+        html = source.get("body_html")
+        mid = source.get("message_id")
+        if (type(mid) is not int or mid <= 0 or not isinstance(html, str)
+                or not valid_hash(source.get("content_hash"))
+                or hashlib.sha256(html.encode("utf-8")).hexdigest() != source["content_hash"]
+                or html_to_text(html) != body):
+            raise ValueError("patient_source_quality_source")
+        revision = db.execute("SELECT MAX(seq) FROM message_revisions WHERE message_id=?", (mid,)).fetchone()[0]
+        if revision is not None and (type(revision) is not int or revision < 1):
+            raise ValueError("patient_source_quality_source")
+    contract = _contract(cfg, pid) if contract is None else contract
+    scan = _current_scans(db, pid, sources, contract, check_quality=False).get(source_key, {})
+    if not scan.get("complete") or scan.get("failure"):
+        raise ValueError("patient_source_quality_incomplete")
+    facts_by_id = {}
+    for chunk in _source_chunks(db, pid, source, contract, scan):
+        values = chunk.get("facts")
+        if not isinstance(values, list) or len(_validated_facts(source, values)) != len(values):
+            raise ValueError("patient_source_quality_fact")
+        for fact in values:
+            fid = fact["id"]
+            previous = facts_by_id.get(fid)
+            if previous is not None and _facts_sig([previous]) != _facts_sig([fact]):
+                raise ValueError("patient_source_quality_fact")
+            facts_by_id.setdefault(fid, fact)
+    facts = list(facts_by_id.values())
+    pages = list(semantic_audit.patient_source_quality_pages(source, facts))
+    ids = [fid for page in pages for fid in page["fact_ids"]]
+    passing = {fid: choice for page in pages for fid, choice in page["passing_choices"].items()}
+    if not ids or len(ids) != len(set(ids)) or set(ids) != set(passing):
+        raise ValueError("patient_source_quality_questions")
+    input_key = _digest(["source", pid, {key: scope.get(key) for key in
+                         ("project_id", "project_type", "karte_id", "is_archived", "fetch_reason")},
+                         source_key, _source_sig(source), revision,
+                         hashlib.sha256(body.encode("utf-8")).hexdigest(), contract])
+    candidate_key = _digest(sorted(_facts_sig([fact]) for fact in facts))
+    audit_material = [[page["fact_ids"], page["state"], page["questions"], page["passing_choices"]] for page in pages]
+    failure_key = _digest(["source", input_key, candidate_key, assessment])
+    identity = {"purpose": "source", "input_key": input_key, "candidate_key": candidate_key,
+                "failure_key": failure_key, "audit_key": _digest([failure_key, scan["_chunks_sig"], audit_material]),
+                "fact_ids": ids, "passing_choices": passing, "source_fact_count": len(facts),
+                "assessment": assessment}
+    return {"identity": identity, "sources": sources, "facts": facts, "pages": pages,
+            "chunks_sig": scan["_chunks_sig"]}
+
+
+def _source_quality_verified(db, pid, source, contract, cfg, scan):
+    import semantic_policy
+    import semantic_runtime
+    try:
+        policy, errors = semantic_policy.semantic_config(cfg, key_present=True)
+        if errors or not _quality_scope_allowed(db, pid, policy):
+            return False
+        db.execute("SAVEPOINT source_quality_read")
+        try:
+            captured = _source_quality_capture(db, pid, cfg, _source_key(source),
+                                               _quality_assessment(policy), contract=contract)
+            identity = captured["identity"]
+            if (_source_sig(captured["sources"][0]) != _source_sig(source)
+                    or captured["chunks_sig"] != scan.get("_chunks_sig")
+                    or scan.get("source_quality_audit_key") != identity["audit_key"]
+                    or not _quality_scope_allowed(db, pid, policy, captured["sources"])
+                    or semantic_runtime.patient_summary_request_problem(db, pid, identity, identity["fact_ids"], purpose="source")
+                    or _quality_failed(db, pid, identity) or not _quality_passed(db, pid, identity)):
+                return False
+            for start in range(0, len(identity["fact_ids"]), 12):
+                ids = identity["fact_ids"][start:start + 12]
+                answers = _quality_answers(db, pid, identity["audit_key"], ids, purpose="source")
+                if set(answers) != set(ids) or any(answers[fid]["confidence"] < policy["match_threshold"]
+                        or answers[fid]["choice"] != identity["passing_choices"][fid] for fid in ids):
+                    return False
+            return True
+        finally:
+            db.execute("RELEASE source_quality_read")
+    except (ValueError, TypeError, KeyError, OSError, RuntimeError):
+        return False
 
 
 def _quality_code():
@@ -890,8 +1008,11 @@ def _quality_integrity(db, pid):
              QUALITY_RETRY: ("input_key", "audit_key", "page_key"),
              QUALITY_REPAIR: ("input_key", "candidate_key"),
              QUALITY_REPAIR_CANDIDATE: ("input_key", "candidate_key", "audit_key", "original_failure_key")}
+    kinds.update({_quality_kind(kind, {"purpose": "source"}): kinds[kind]
+                  for kind in (QUALITY, QUALITY_FAIL, QUALITY_PASS, QUALITY_RETRY)})
     for row in db.execute("SELECT kind,CASE WHEN typeof(meta)='text' AND length(meta)<=32768 "
-                          "THEN meta END FROM artifacts WHERE project_id=? AND kind IN (?,?,?,?,?,?)",
+                          "THEN meta END FROM artifacts WHERE project_id=? AND kind IN ("
+                          + ",".join("?" for _ in kinds) + ")",
                           (pid, *kinds)):
         meta = loads_dict(row[1])
         if (not isinstance(meta, dict) or VERSION_KEY not in meta or read_version(meta) is None
@@ -919,7 +1040,7 @@ def _quality_release(ledger, pid, input_key, claim):
         os.close(fd)
 
 
-def _quality_answers(db, pid, audit_key, fact_ids):
+def _quality_answers(db, pid, audit_key, fact_ids, *, purpose="summary"):
     """Read at most one immutable judgement for each requested fact."""
     if len(fact_ids) > 12 or len(set(fact_ids)) != len(fact_ids):
         raise ValueError("patient_summary_quality_answers_invalid")
@@ -929,14 +1050,14 @@ def _quality_answers(db, pid, audit_key, fact_ids):
                           + current_meta_pred("meta", target=CURRENT_VERSION)
                           + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.audit_key') END=? "
                           "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.fact_id') END=?",
-                          (QUALITY, pid, audit_key, fact_id)).fetchall()
+                          (_quality_kind(QUALITY, {"purpose": purpose}), pid, audit_key, fact_id)).fetchall()
         if len(rows) > 1:
             raise ValueError("patient_summary_quality_answers_ambiguous")
         if rows:
             answer = loads_dict(rows[0][0])
             if (not isinstance(answer, dict) or set(answer) != {"choice", "confidence"}
-                    or answer.get("choice") not in {"supports", "contradicts", "not_supported",
-                                                     "ambiguous", "omission_ok", "important_missing"}
+                    or answer.get("choice") not in ({"supports", "contradicts", "not_supported", "ambiguous"}
+                          | ({"complete", "missing"} if purpose == "source" else {"omission_ok", "important_missing"}))
                     or type(answer.get("confidence")) not in (int, float)
                     or not math.isfinite(answer["confidence"]) or not 0 <= answer["confidence"] <= 1):
                 raise ValueError("patient_summary_quality_answers_invalid")
@@ -948,14 +1069,14 @@ def _quality_failed(db, pid, identity):
     return db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND "
                       + current_meta_pred("meta", target=CURRENT_VERSION)
                       + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.failure_key') END=? LIMIT 1",
-                      (QUALITY_FAIL, pid, identity["failure_key"])).fetchone() is not None
+                      (_quality_kind(QUALITY_FAIL, identity), pid, identity["failure_key"])).fetchone() is not None
 
 
 def _quality_failure_allows_remainder(db, pid, identity):
     rows = db.execute("SELECT meta FROM artifacts WHERE kind=? AND project_id=? AND "
                       + current_meta_pred("meta", target=CURRENT_VERSION)
                       + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.failure_key') END=?",
-                      (QUALITY_FAIL, pid, identity["failure_key"])).fetchall()
+                      (_quality_kind(QUALITY_FAIL, identity), pid, identity["failure_key"])).fetchall()
     if not rows:
         return True
     if len(rows) != 1:
@@ -986,23 +1107,24 @@ def _quality_store_answers(ledger, pid, identity, claim, answers, current, thres
         try:
             if not _quality_owns(ledger.db, pid, identity["input_key"], claim) or not current():
                 raise ValueError("patient_summary_quality_source_changed")
-            old = _quality_answers(ledger.db, pid, identity["audit_key"], list(answers))
+            purpose = identity.get("purpose", "summary")
+            old = _quality_answers(ledger.db, pid, identity["audit_key"], list(answers), purpose=purpose)
             writes = 0
             for fact_id, answer in answers.items():
                 if fact_id in old:
                     if old[fact_id] != answer:
                         raise ValueError("patient_summary_quality_answers_conflict")
                     continue
-                ledger.artifact_add_tx(QUALITY, json.dumps(answer, separators=(",", ":")), project_id=pid,
+                ledger.artifact_add_tx(_quality_kind(QUALITY, identity), json.dumps(answer, separators=(",", ":")), project_id=pid,
                     meta={VERSION_KEY: CURRENT_VERSION, "input_key": identity["input_key"],
                           "audit_key": identity["audit_key"], "fact_id": fact_id})
                 writes += 1
-            if _quality_answers(ledger.db, pid, identity["audit_key"], list(answers)) != answers:
+            if _quality_answers(ledger.db, pid, identity["audit_key"], list(answers), purpose=purpose) != answers:
                 raise ValueError("patient_summary_quality_answers_unverified")
-            if (any(answer["choice"] != ("supports" if fid in selected_ids else "omission_ok")
+            if (any(answer["choice"] != _quality_expected(identity, fid, selected_ids)
                     or answer["confidence"] < threshold for fid, answer in answers.items())
                     and not _quality_failed(ledger.db, pid, identity)):
-                ledger.artifact_add_tx(QUALITY_FAIL, "{}", project_id=pid,
+                ledger.artifact_add_tx(_quality_kind(QUALITY_FAIL, identity), "{}", project_id=pid,
                     meta={VERSION_KEY: CURRENT_VERSION, "input_key": identity["input_key"],
                           "candidate_key": identity["candidate_key"], "failure_key": identity["failure_key"],
                           "audit_key": identity["audit_key"]})
@@ -1012,7 +1134,7 @@ def _quality_store_answers(ledger, pid, identity, claim, answers, current, thres
             if reservation is not None:
                 import semantic_runtime
                 writes += semantic_runtime.patient_summary_resolve_request_tx(
-                    ledger, reservation, identity, answers, invalid_ids, project_id=pid)
+                    ledger, reservation, identity, answers, invalid_ids, project_id=pid, purpose=purpose)
             if not _quality_owns(ledger.db, pid, identity["input_key"], claim) or not current(writes):
                 raise ValueError("patient_summary_quality_source_changed")
             ledger.db.commit()
@@ -1028,18 +1150,20 @@ def _quality_passed(db, pid, identity):
     rows = db.execute("SELECT content FROM artifacts WHERE kind=? AND project_id=? AND "
                       + current_meta_pred("meta", target=CURRENT_VERSION)
                       + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.audit_key') END=?",
-                      (QUALITY_PASS, pid, identity["audit_key"])).fetchall()
+                      (_quality_kind(QUALITY_PASS, identity), pid, identity["audit_key"])).fetchall()
     if len(rows) != 1:
         return False
-    return loads_dict(rows[0][0]) == {"fact_count": len(identity["fact_ids"]),
-                                    "zero_questions": not identity["fact_ids"]}
+    expected = ({"question_count": len(identity["fact_ids"]), "source_fact_count": identity["source_fact_count"]}
+                if identity.get("purpose", "summary") == "source" else
+                {"fact_count": len(identity["fact_ids"]), "zero_questions": not identity["fact_ids"]})
+    return loads_dict(rows[0][0]) == expected
 
 
 def _quality_pass_present(db, pid, identity):
     return db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND "
                       + current_meta_pred("meta", target=CURRENT_VERSION)
                       + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.audit_key') END=? LIMIT 1",
-                      (QUALITY_PASS, pid, identity["audit_key"])).fetchone() is not None
+                      (_quality_kind(QUALITY_PASS, identity), pid, identity["audit_key"])).fetchone() is not None
 
 
 def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, threshold):
@@ -1055,14 +1179,15 @@ def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, thre
     changes = ledger.db.total_changes
     ledger.db.execute("BEGIN")
     try:
-        if semantic_runtime.patient_summary_request_problem(ledger.db, pid, identity, identity["fact_ids"]):
+        purpose = identity.get("purpose", "summary")
+        if semantic_runtime.patient_summary_request_problem(ledger.db, pid, identity, identity["fact_ids"], purpose=purpose):
             raise ValueError("patient_summary_quality_unresolved_request")
         for start in range(0, len(identity["fact_ids"]), 12):
             ids = identity["fact_ids"][start:start + 12]
-            answers = _quality_answers(ledger.db, pid, identity["audit_key"], ids)
+            answers = _quality_answers(ledger.db, pid, identity["audit_key"], ids, purpose=purpose)
             if set(answers) != set(ids) or any(
                     answers[fid]["confidence"] < threshold
-                    or answers[fid]["choice"] != ("supports" if fid in selected_ids else "omission_ok")
+                    or answers[fid]["choice"] != _quality_expected(identity, fid, selected_ids)
                     for fid in ids):
                 raise ValueError("patient_summary_quality_incomplete")
     finally:
@@ -1080,9 +1205,11 @@ def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, thre
                 raise ValueError("patient_summary_quality_source_changed")
             writes = 0
             if not _quality_passed(ledger.db, pid, identity):
-                ledger.artifact_add_tx(QUALITY_PASS,
-                    json.dumps({"fact_count": len(identity["fact_ids"]),
-                                "zero_questions": not identity["fact_ids"]}, separators=(",", ":")),
+                pass_content = ({"question_count": len(identity["fact_ids"]), "source_fact_count": identity["source_fact_count"]}
+                                if purpose == "source" else {"fact_count": len(identity["fact_ids"]),
+                                                              "zero_questions": not identity["fact_ids"]})
+                ledger.artifact_add_tx(_quality_kind(QUALITY_PASS, identity),
+                    json.dumps(pass_content, separators=(",", ":")),
                     project_id=pid, meta={VERSION_KEY: CURRENT_VERSION, **{key: identity[key] for key in
                         ("input_key", "candidate_key", "audit_key")}})
                 writes = 1
@@ -1104,12 +1231,12 @@ def _quality_repair_spent(db, pid, input_key):
                       (QUALITY_REPAIR, pid, input_key)).fetchone() is not None
 
 
-def _quality_retry(db, pid, audit_key, page_key):
+def _quality_retry(db, pid, audit_key, page_key, *, purpose="summary"):
     row = db.execute("SELECT content FROM artifacts WHERE kind=? AND project_id=? AND "
                      + current_meta_pred("meta", target=CURRENT_VERSION)
                      + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.audit_key') END=? "
                      "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.page_key') END=? "
-                     "ORDER BY artifact_id DESC LIMIT 1", (QUALITY_RETRY, pid, audit_key, page_key)).fetchone()
+                     "ORDER BY artifact_id DESC LIMIT 1", (_quality_kind(QUALITY_RETRY, {"purpose": purpose}), pid, audit_key, page_key)).fetchone()
     if row is None:
         return {"attempts": 0, "next_try": 0, "held": False}
     value = loads_dict(row[0])
@@ -1134,14 +1261,15 @@ def _quality_record_failure(ledger, pid, identity, claim, page_key, failure_clas
         try:
             if not _quality_owns(ledger.db, pid, identity["input_key"], claim) or not current():
                 raise ValueError("patient_summary_quality_source_changed")
-            prior = _quality_retry(ledger.db, pid, identity["audit_key"], page_key)
+            purpose = identity.get("purpose", "summary")
+            prior = _quality_retry(ledger.db, pid, identity["audit_key"], page_key, purpose=purpose)
             attempts = min(6, prior["attempts"] + 1)
             value = {"attempts": attempts, "next_try": time.time() + min(3600, 300 * attempts),
                      "held": failure_class == "failed" or attempts >= 6}
-            ledger.artifact_add_tx(QUALITY_RETRY, json.dumps(value, separators=(",", ":")), project_id=pid,
+            ledger.artifact_add_tx(_quality_kind(QUALITY_RETRY, identity), json.dumps(value, separators=(",", ":")), project_id=pid,
                 meta={VERSION_KEY: CURRENT_VERSION, "input_key": identity["input_key"],
                       "audit_key": identity["audit_key"], "page_key": page_key})
-            if _quality_retry(ledger.db, pid, identity["audit_key"], page_key) != value or not current(1):
+            if _quality_retry(ledger.db, pid, identity["audit_key"], page_key, purpose=purpose) != value or not current(1):
                 raise ValueError("patient_summary_quality_source_changed")
             ledger.db.commit()
         except BaseException:
@@ -1375,7 +1503,7 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
         os.close(fd)
 
 
-def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=None, base_meta=None):
+def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=None, base_meta=None, source=None):
     """Audit one bounded page of the current candidate outside DB and run locks."""
     import extract_llm
     import semantic_audit
@@ -1402,7 +1530,9 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
     ledger.db.execute("BEGIN")
     try:
         _quality_integrity(ledger.db, pid)
-        initial = _quality_capture(ledger.db, pid, cfg, night_id, summary, assessment, display_projection)
+        initial = (_source_quality_capture(ledger.db, pid, cfg, _source_key(source), assessment)
+                   if source is not None else
+                   _quality_capture(ledger.db, pid, cfg, night_id, summary, assessment, display_projection))
         if not _quality_scope_allowed(ledger.db, pid, scfg, initial["sources"]):
             return "deferred", None
     finally:
@@ -1432,17 +1562,21 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                 denied = True
                 return False
             if owns_read:
-                latest, latest_meta = _latest(ledger.db, KIND, pid)
-                if (latest != base_doc if base_doc is not None else
-                        latest.get("summary") != summary or latest.get("temporal_view") != display_projection):
-                    denied = True
-                    return False
-                if base_meta is not None and latest_meta != base_meta:
-                    denied = True
-                    return False
+                if source is None:
+                    latest, latest_meta = _latest(ledger.db, KIND, pid)
+                    if (latest != base_doc if base_doc is not None else
+                            latest.get("summary") != summary or latest.get("temporal_view") != display_projection):
+                        denied = True
+                        return False
+                    if base_meta is not None and latest_meta != base_meta:
+                        denied = True
+                        return False
                 _quality_integrity(ledger.db, pid)
-                refreshed = _quality_capture(ledger.db, pid, live, night_id, summary, assessment, display_projection)
+                refreshed = (_source_quality_capture(ledger.db, pid, live, _source_key(source), assessment)
+                             if source is not None else
+                             _quality_capture(ledger.db, pid, live, night_id, summary, assessment, display_projection))
                 if (refreshed["identity"] != identity
+                        or source is not None and refreshed["chunks_sig"] != initial["chunks_sig"]
                         or not _quality_scope_allowed(ledger.db, pid, live_semantic, refreshed["sources"])):
                     denied = True
                     return False
@@ -1476,13 +1610,14 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
     try:
         if not _quality_failure_allows_remainder(ledger.db, pid, identity):
             return "failed", identity
-        selected = {row["fact_ids"][0] for row in summary}
+        purpose = identity.get("purpose", "summary")
+        selected = set() if source is not None else {row["fact_ids"][0] for row in summary}
         if _quality_pass_present(ledger.db, pid, identity):
             # A PASS marker cannot survive missing or altered answer evidence.
             _quality_mark_pass(ledger, pid, identity, claim, selected, current, scfg["match_threshold"])
             return "passed", {**identity, "_keys": (key, anthropic_key)}
         reserve = semantic_runtime.patient_summary_usage_reserver(
-            ledger, project_id=pid, guard=guard, daily_request_budget=scfg["daily_request_budget"], identity=identity)
+            ledger, project_id=pid, guard=guard, daily_request_budget=scfg["daily_request_budget"], identity=identity, purpose=purpose)
         reservation = [None]
 
         def reserve_locked(body, timeout):
@@ -1508,28 +1643,29 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
         client = semantic_runtime.bind_jev(client, guard, reserve_locked, deadline)
         by_id = {fact["id"]: fact for fact in initial["facts"]}
         by_source = {(source["source"], _source_key(source)): source for source in initial["sources"]}
-        for start in range(0, len(identity["fact_ids"]), 12):
-            ids = identity["fact_ids"][start:start + 12]
+        pages = initial["pages"] if source is not None else [None] * math.ceil(len(identity["fact_ids"]) / 12)
+        for page_index, page in enumerate(pages):
+            ids = page["fact_ids"] if page is not None else identity["fact_ids"][page_index * 12:page_index * 12 + 12]
             page_key = _digest(ids)
-            prior = _quality_answers(ledger.db, pid, identity["audit_key"], ids)
-            if any(answer["choice"] != ("supports" if fid in selected else "omission_ok")
+            prior = _quality_answers(ledger.db, pid, identity["audit_key"], ids, purpose=purpose)
+            if any(answer["choice"] != _quality_expected(identity, fid, selected)
                    or answer["confidence"] < scfg["match_threshold"] for fid, answer in prior.items()):
                 _quality_store_answers(ledger, pid, identity, claim, prior, current,
                                        scfg["match_threshold"], selected)
             if len(prior) == len(ids):
                 continue
-            problem = semantic_runtime.patient_summary_request_problem(ledger.db, pid, identity, ids)
+            problem = semantic_runtime.patient_summary_request_problem(ledger.db, pid, identity, ids, purpose=purpose)
             if problem == "patient_summary_invalid_exhausted":
                 _quality_record_failure(ledger, pid, identity, claim, page_key, "failed", current)
                 return "held", identity
             if problem:
                 return "unknown", identity
-            retry = _quality_retry(ledger.db, pid, identity["audit_key"], page_key)
+            retry = _quality_retry(ledger.db, pid, identity["audit_key"], page_key, purpose=purpose)
             if retry["held"] or retry["next_try"] > time.time():
                 return "deferred", identity
-            candidates = [by_id[fid] for fid in ids]
-            sources = { (fact["source"], fact["source_key"]): by_source[(fact["source"], fact["source_key"])]
-                        for fact in candidates }
+            candidates = [by_id[fid] for fid in ids] if page is None else None
+            sources = ({ (fact["source"], fact["source_key"]): by_source[(fact["source"], fact["source_key"])]
+                        for fact in candidates } if candidates is not None else None)
             def persist(answers, invalid_ids):
                 if reservation[0] is None:
                     raise ValueError("patient_summary_request_missing")
@@ -1537,9 +1673,11 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                                        scfg["match_threshold"], selected,
                                        reservation=reservation[0], invalid_ids=invalid_ids)
                 return True
-            outcome = semantic_audit.audit_patient_summary_chunk(client, summary, candidates,
-                list(sources.values()), deadline, scfg["match_threshold"], prior_answers=prior,
-                on_attempt_result=persist)
+            outcome = (semantic_audit.audit_patient_quality_page(client, page, deadline, scfg["match_threshold"],
+                       prior_answers=prior, on_attempt_result=persist) if page is not None else
+                       semantic_audit.audit_patient_summary_chunk(client, summary, candidates,
+                       list(sources.values()), deadline, scfg["match_threshold"], prior_answers=prior,
+                       on_attempt_result=persist))
             if not outcome["evaluated"]:
                 failure_class = outcome.get("failure_class", "failed")
                 if failure_class in ("retry", "failed"):
@@ -1547,6 +1685,8 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                 return "deferred", identity
             return "pending", identity  # one bounded page per tick
         if _quality_failed(ledger.db, pid, identity):
+            if purpose == "source":
+                return "held", identity
             if not current():
                 return "deferred", None
             repair_status, candidate = _quality_repair_candidate(
@@ -1568,7 +1708,7 @@ def _ready(progress, now):
                            and progress.get("next_try", 0) <= now)
 
 
-def _pending(db, pid, cfg, *, now=None, contract=None):
+def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False):
     snapshot = _snapshot(db, pid, cfg, hydrate=False, contract=contract)
     progress, _ = _latest(db, PROGRESS, pid)
     if progress.get("source_sig") != snapshot["source_sig"]:
@@ -1576,7 +1716,10 @@ def _pending(db, pid, cfg, *, now=None, contract=None):
                     "quality_state": None}
     old, meta = _latest(db, KIND, pid)
     snapshot["initial"] = not old
-    stored = _current_scans(db, pid, snapshot["sources"], snapshot["contract"])
+    block = cfg.get("semantic", {}) if isinstance(cfg, dict) else {}
+    estimate_cfg = (None if estimate and (not isinstance(block, dict)
+                    or block.get("fact_source", "legacy") != "legacy") else cfg)
+    stored = _current_scans(db, pid, snapshot["sources"], snapshot["contract"], cfg=estimate_cfg)
     scans = [stored.get(_source_key(source), {}) for source in snapshot["sources"] if _usable(source)]
     snapshot["source_failures"] = sum(bool(scan.get("failure")) for scan in scans)
     quality_changed = False
@@ -1606,14 +1749,16 @@ def _pending(db, pid, cfg, *, now=None, contract=None):
 
 
 def pending_estimate(db, pid, cfg, *, now=None, contract=None):
-    """Count current pending work without hydrating original chat bodies."""
+    """Estimate pending work on a borrowed connection without reserving external requests."""
     empty = dict.fromkeys(("targets", "summary_units", "scan_sources", "scan_chunks_estimate", "input_chars"), 0)
     if not options(cfg)["enabled"]:
         return empty
-    snapshot, _, pending = _pending(db, pid, cfg, now=now, contract=contract)
+    snapshot, _, pending = _pending(db, pid, cfg, now=now, contract=contract, estimate=True)
     if _out_of_scope(snapshot):
         return empty
-    scans = _current_scans(db, pid, snapshot["sources"], snapshot["contract"])
+    block = cfg.get("semantic", {}) if isinstance(cfg, dict) else {}
+    estimate_cfg = None if not isinstance(block, dict) or block.get("fact_source", "legacy") != "legacy" else cfg
+    scans = _current_scans(db, pid, snapshot["sources"], snapshot["contract"], cfg=estimate_cfg)
     totals = {**empty, "targets": int(any(pending.values())), "summary_units": int(pending["A"])}
     for source in snapshot["sources"]:
         if not _usable(source):
@@ -1958,6 +2103,8 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     shadow_unit = None
     quality_identity = None
     quality_keys = None
+    source_quality_identity = None
+    source_quality_keys = None
 
     def current():
         return (admit()
@@ -2046,7 +2193,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         return value
     try:
         if lane == "A":
-            facts, total, projected = _all_facts(ledger.db, pid, snapshot, night_id, projected=True)
+            facts, total, projected = _all_facts(ledger.db, pid, snapshot, night_id, projected=True, cfg=cfg)
             old, old_meta = _latest(ledger.db, KIND, pid)
             changed = _facts_sig(facts)
             same = (old.get("facts_sig") == changed and _route_contract(old_meta) == snapshot["contract"])
@@ -2105,15 +2252,15 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 unit_key="summary"))
             meta["scan_backends"] = sorted({
                 (scan.get("_provider_contract") or {}).get("backend", "local")
-                for scan in _current_scans(ledger.db, pid, snapshot["sources"], snapshot["contract"]).values()})
+                for scan in _current_scans(ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg).values()})
             result = {"version": 1, "facts": facts, "facts_sig": changed, "summary": summary,
                       "temporal_view": {key: projected[key] for key in ("groups", "relations")},
                       "facts_total": total, "truncated": total > len(facts),
                       "as_of": now, "generated_at": old.get("generated_at", now) if same else now,
                       "source_sig": snapshot["source_sig"],
-                      "coverage": _coverage(ledger.db, pid, snapshot["sources"], snapshot["contract"], facts)}
+                      "coverage": _coverage(ledger.db, pid, snapshot["sources"], snapshot["contract"], facts, cfg=cfg)}
         else:
-            scans = _current_scans(ledger.db, pid, snapshot["sources"], snapshot["contract"])
+            scans = _current_scans(ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
             for source in snapshot["sources"]:
                 if not _usable(source):
                     continue
@@ -2150,6 +2297,20 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                                 raise ValueError("nightly_audit_mismatch")
                             audited_ids.append(part["_artifact_id"])
                         result["_audited_chunk_ids"] = audited_ids
+                        if snapshot["contract"].get("provider"):
+                            try:
+                                quality_status, quality_result = _quality_step(
+                                    ledger, pid, cfg, night_id, {}, deadline, admit, source=source)
+                            except (Deferred, ValueError, RuntimeError):
+                                result = None
+                                raise Deferred("source_quality_unavailable") from None
+                            if quality_status != "passed":
+                                result = None
+                                raise Deferred("source_quality_" + quality_status)
+                            source_quality_keys = quality_result.pop("_keys")
+                            source_quality_identity = quality_result
+                            result["source_quality_audit_key"] = source_quality_identity["audit_key"]
+                            result.pop("quality_state", None)
                     break
     except Deferred as exc:
         discard_if_changed()
@@ -2165,6 +2326,17 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     # Rebuild the source signature outside the write lock. A data-version
     # fence seals the read against any concurrent writer before publication.
     quality_fence = None
+    if source_quality_identity is not None:
+        before = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
+        ledger.db.execute("BEGIN")
+        try:
+            if not _source_quality_verified(ledger.db, pid, source, snapshot["contract"], cfg, result):
+                return {"status": "source_changed", "done": 0}
+        finally:
+            ledger.db.rollback()
+        quality_fence = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
+        if quality_fence != before:
+            return {"status": "source_changed", "done": 0}
     if quality_identity is not None:
         before = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
         ledger.db.execute("BEGIN")
@@ -2207,7 +2379,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         # transaction; no inference is performed while holding a DB/run lock.
         ledger.db.execute("BEGIN IMMEDIATE")
         try:
-            if quality_identity is not None and (ledger.db.execute("PRAGMA data_version").fetchone()[0] != version
+            if (quality_identity is not None or source_quality_identity is not None) and (ledger.db.execute("PRAGMA data_version").fetchone()[0] != version
                                                  or ledger.db.total_changes != changes):
                 ledger.db.rollback()
                 return {"status": "source_changed", "done": 0}
@@ -2220,6 +2392,18 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                         or quality_identity["assessment"] != _quality_assessment(live_policy)
                         or not _quality_passed(ledger.db, pid, quality_identity)
                         or _quality_failed(ledger.db, pid, quality_identity)):
+                    ledger.db.rollback()
+                    return {"status": "source_changed", "done": 0}
+            if source_quality_identity is not None:
+                import semantic_policy
+                live_cfg = extract_llm.load_config()
+                live_policy, problems = semantic_policy.runtime_config(live_cfg)
+                import semantic_jev
+                if (problems or not _quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
+                        or source_quality_keys != (semantic_jev.api_key(), extract_llm.cloud_policy.api_key(extract_llm.HOME))
+                        or source_quality_identity["assessment"] != _quality_assessment(live_policy)
+                        or not _quality_passed(ledger.db, pid, source_quality_identity)
+                        or _quality_failed(ledger.db, pid, source_quality_identity)):
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0}
             if provider is not None:
@@ -2260,6 +2444,10 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 progress.pop("quality_state", None)
             if failure and lane != "A":
                 _replace(ledger, SCAN, pid, {**{k: v for k, v in saved.items() if not k.startswith("_")}, **retry}, meta, source["message_id"])
+            if lane == "C" and deferred_reason and deferred_reason.startswith("source_quality_"):
+                _replace(ledger, SCAN, pid, {**{k: v for k, v in saved.items() if not k.startswith("_")},
+                    "audited": False, "quality_state": deferred_reason[len("source_quality_"):],
+                    "next_try": now + (0 if deferred_reason == "source_quality_pending" else 60)}, meta, source["message_id"])
             if not failure and result is not None:
                 proof_changed = lane != "A"
                 if lane == "A":
@@ -2270,7 +2458,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                         or _route_contract(prior_meta) != snapshot["contract"]
                         or prior_doc.get("facts_sig") != result.get("facts_sig")
                         or prior_doc.get("summary") != result.get("summary"))
-                    saved_scans = _current_scans(ledger.db, pid, snapshot["sources"], snapshot["contract"])
+                    saved_scans = _current_scans(ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
                     audited = all(saved_scans.get(_source_key(s), {}).get("complete")
                                   and saved_scans.get(_source_key(s), {}).get("audited")
                                   and not saved_scans.get(_source_key(s), {}).get("failure")
