@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "次回介入の職種表記を追加",
+  "summary": "原文に本人・日付・行為が明記された定型の介入記録で、ケアマネ、介護士、ヘルパーの表記も職種別に表示します。",
+  "upgrade": "表示への反映には稼働中の該当通知workerの再起動が必要です。intervention_schedule.py を含む候補識別子が変わるため、既存の候補と承認記録は再検証が必要です。",
+  "details": ["相対日付や別投稿との対応は確定しません。"],
+  "refs": ["mcs/patients/intervention_schedule.py", "mcs/semantic/semantic_candidate.py"]
+}

@@ -250,6 +250,61 @@ def test_action_outside_profession_name_remains_a_candidate(source_db, role, act
     assert result["records"][0]["action"] == action
 
 
+@pytest.mark.parametrize("role,normalized", [("ケアマネ", "care_manager"), ("介護士", "care_worker"),
+                                            ("ヘルパー", "care_worker")])
+def test_existing_role_aliases_keep_written_role_and_source_for_explicit_visit(source_db, role, normalized):
+    body = f"{role}が2026年10月3日に本人を訪問する予定です。"
+    put_source(source_db, 1, 1, body)
+    result = schedule.read_source_schedule(source_db, 1)
+    [record] = result["records"]
+    assert record["state"] == "planned" and record["role"] == normalized
+    assert record["role_text"] == role and record["action"] == "訪問"
+    assert record["event_day"] == "2026-10-03" and record["quote"] == body
+    assert record["span"] == [0, len(body)] and record["project_id"] == 1
+
+
+@pytest.mark.parametrize("role", ["ケアマネ", "介護士", "ヘルパー"])
+@pytest.mark.parametrize("following", ["家族を訪問する予定です。", "本人を訪問する予定ですか。",
+                                         "本人を訪問する予定ではありません。",
+                                         "本人を訪問する予定を中止する予定です。"])
+def test_role_alias_does_not_promote_foreign_or_uncertain_visit(role, following):
+    body = f"{role}が2026年10月3日に{following}"
+    [record] = schedule.project(1, [item(body)])["records"]
+    assert record["state"] == "unknown" and record["role"] is None
+    assert record["event_day"] is None and record["quote"] is None
+
+
+@pytest.mark.parametrize("role,normalized", [("ケアマネ", "care_manager"), ("介護士", "care_worker"),
+                                            ("ヘルパー", "care_worker")])
+def test_role_alias_preserves_cancellation_and_unresolved_date(role, normalized):
+    cancelled = f"{role}が2026年10月3日の本人への訪問を中止しました。"
+    unresolved = f"{role}が明日本人を訪問する予定です。"
+    cancel, plan = schedule.project(1, [item(cancelled), item(unresolved, message_id=8)])["records"]
+    assert cancel["state"] == "cancelled" and cancel["role"] == normalized
+    assert cancel["role_text"] == role and cancel["target_day"] == "2026-10-03"
+    assert cancel["event_day"] is None and cancel["quote"] == cancelled
+    assert plan["state"] == "planned_date_unknown" and plan["role"] == normalized
+    assert plan["date_text"] == "明日" and plan["event_day"] is None
+    assert plan["quote"] == unresolved and "relation" not in cancel and "relation" not in plan
+
+
+@pytest.mark.parametrize("body", [
+    "ケアマネです。", "介護士です。", "ヘルパーです。", "訪問介護士です。", "訪問ヘルパーです。",
+])
+def test_role_alias_alone_does_not_supply_an_action(source_db, body):
+    put_source(source_db, 1, 1, body)
+    result = schedule.read_source_schedule(source_db, 1)
+    assert result["records"] == [] and result["coverage"]["candidates"] == 0
+
+
+@pytest.mark.parametrize("role", ["介護士長", "ケアマネージャー", "訪問ヘルパー"])
+def test_unapproved_or_compound_role_is_not_promoted_as_an_alias(role):
+    body = f"{role}が2026年10月3日に本人を訪問する予定です。"
+    [record] = schedule.project(1, [item(body)])["records"]
+    assert record["state"] == "unknown" and record["role"] is None
+    assert record["event_day"] is None and record["quote"] is None
+
+
 def test_future_target_cancellation_and_plan_remain_separate_source_records(source_db):
     plan = "看護師が2026年10月3日に本人を訪問する予定です。"
     cancel = "看護師が2026年10月3日の本人への訪問を中止しました。"

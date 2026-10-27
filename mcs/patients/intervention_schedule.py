@@ -13,8 +13,9 @@ _ROLES = {
     "薬剤師": "pharmacist", "歯科医師": "dentist", "歯科衛生士": "dental_hygienist",
     "理学療法士": "physical_therapist", "作業療法士": "occupational_therapist",
     "言語聴覚士": "speech_therapist", "管理栄養士": "dietitian",
-    "介護福祉士": "care_worker", "介護職員": "care_worker",
-    "介護支援専門員": "care_manager", "ケアマネジャー": "care_manager", "相談員": "social_worker",
+    "介護福祉士": "care_worker", "介護職員": "care_worker", "介護士": "care_worker", "ヘルパー": "care_worker",
+    "介護支援専門員": "care_manager", "ケアマネジャー": "care_manager", "ケアマネ": "care_manager",
+    "相談員": "social_worker",
 }
 _ROLE_PATTERN = "|".join(sorted(map(re.escape, _ROLES), key=len, reverse=True))
 _DATE_PATTERN = r"\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?"
@@ -49,7 +50,8 @@ _MAX_HTML_CHARS = 80000
 
 def _has_independent_action(quote):
     """Do not count an action word that is only part of a profession name."""
-    roles = [match.span() for match in _ROLE_MENTION.finditer(quote)]
+    roles = [(match.start() - 2 if quote[max(0, match.start() - 2):match.start()] == "訪問"
+              else match.start(), match.end()) for match in _ROLE_MENTION.finditer(quote)]
     return bool(roles and any(not any(start < action.end() and action.start() < end
                                       for start, end in roles)
                               for action in _ACTION_MENTION.finditer(quote)))
