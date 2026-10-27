@@ -3,6 +3,7 @@ import clinical_values
 import pytest
 
 import extract
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 CASES = [
@@ -56,13 +57,15 @@ def test_old_rollup_prefix_is_rechecked_readonly_without_erasing_profile(tmp_pat
         store.ensure_patient(1)
         store.save_messages([_message(body="本人の体温36.55℃")])
         store.artifact_add("extract_llm", json.dumps({"vitals": {"bt": 36.5}}),
-                           project_id=1, message_id=1, meta={"hash": _hash(store)})
-        cached = {"latest_vitals": {"at": "old", "bt": 36.5},
+                           project_id=1, message_id=1,
+                           meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(store)})
+        cached = {VERSION_KEY: CURRENT_VERSION, "latest_vitals": {"at": "old", "bt": 36.5},
                   "patient_context": {"memo": {"living": ["合成プロフィール"]}}}
         before = [tuple(row) for row in store.db.execute("SELECT * FROM artifacts")]
         store.db.execute("PRAGMA query_only=ON")
         result = rollup.current_cached_refs(store.db, 1, cached,
-            {"period_check_version": 7, "projection_version": rollup.PROJECTION_VERSION})
+            {VERSION_KEY: CURRENT_VERSION, "period_check_version": 7,
+             "projection_version": rollup.PROJECTION_VERSION})
         assert "latest_vitals" not in result
         assert result["patient_context"] == cached["patient_context"]
         assert [tuple(row) for row in store.db.execute("SELECT * FROM artifacts")] == before

@@ -6,6 +6,7 @@ import pytest
 
 import extract
 import extract_llm
+from inference_version import CURRENT_VERSION, VERSION_KEY
 import rollup
 import structured_view
 from extract_testkit import _hash, _ledger, _message
@@ -119,7 +120,8 @@ def test_rule_version_refresh_updates_old_schedule_artifact_and_current_consumer
         body = "本日の訪問報告です。次回の訪問診療予定日：2032/6/7。"
         store.save_messages([_message(body=body, posted_at="2032-06-01T09:00:00+09:00")])
         store.artifact_add("extract_v1", json.dumps({"v": 1}), project_id=1, message_id=1,
-                           meta={"hash": _hash(store), "rule_version": extract.RULE_VERSION - 1})
+                           meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(store),
+                                 "rule_version": extract.RULE_VERSION - 1})
         assert extract.run_pending(store) == {"done": 1, "pids": [1]}
         assert extract.run_pending(store) == {"done": 0, "pids": []}
         assert rollup.build_rollup(store.db, 1)["next_planned"] == "2032-06-07"

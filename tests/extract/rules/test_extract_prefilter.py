@@ -60,7 +60,7 @@ def test_no_signal_message_marked_without_llm(tmp_path, monkeypatch):
     assert meta["hash"] == _hash(db, 1)
     assert meta["extract_version"] == extract_llm.EXTRACT_VERSION
     content = json.loads(rows[0]["content"])   # honest empty shape
-    assert content["meds"] == [] and content["summary"] == ""
+    assert content["meds"] == [] and "summary" not in content
     db.close()
 
 

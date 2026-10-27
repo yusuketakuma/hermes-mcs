@@ -9,9 +9,12 @@ import pytest
 import extract
 import extract_bench
 import extract_llm
+from inference_dependency_loss import source_binding
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from mcs_contract import Message
 import rollup
 import clinical_urgency
+from semantic_projection import PROJECTION_VERSION
 from common_testkit import ledger_fixture
 
 
@@ -31,32 +34,44 @@ def artifact(db, mid, content):
     chash = db.db.execute("SELECT content_hash FROM messages WHERE message_id=?",
                          (mid,)).fetchone()[0]
     db.artifact_add("extract_llm", json.dumps(content), project_id=1,
-                    message_id=mid, meta={"hash": chash,
+                    message_id=mid, meta={VERSION_KEY: CURRENT_VERSION, "hash": chash,
                                          "extract_version": extract_llm.EXTRACT_VERSION})
 
 
 def test_family_mention_does_not_cancel_patient_medication(db):
-    db.save_messages([_message(1, day=19), _message(2, day=20)])
+    patient = "本人は合成薬Aを開始し服用しています。"
+    family = "家族は合成薬Aを中止しました。"
+    db.save_messages([_message(1, body=patient, day=19), _message(2, body=family, day=20)])
     artifact(db, 1, {"meds": [{"name": "合成薬A", "subject": "patient",
-                               "status": "current", "action": "start"}]})
+                               "status": "current", "action": "start", "evidence": patient}]})
     artifact(db, 2, {"meds": [{"name": "合成薬A", "subject": "family",
-                               "status": "past", "action": "stop"}]})
-    assert [m["name"] for m in rollup.build_rollup(db.db, 1)["medications"]] == ["合成薬A"]
+                               "status": "past", "action": "stop", "evidence": family}]})
+    result = rollup.build_rollup(db.db, 1)
+    assert [m["name"] for m in result["medications"]] == ["合成薬A"]
+    assert {fact["temporal"]["subject"] for fact in result["clinical_state"]["facts"]} == {"patient", "family"}
 
 
 def test_same_message_stop_supersedes_start_and_rule_candidate(db):
-    db.save_messages([_message()])
+    body = "本人は合成薬Aを開始しました。本人は合成薬Aを中止しました。"
+    db.save_messages([_message(body=body)])
     artifact(db, 1, {"meds": [
-        {"name": "合成薬A", "subject": "patient", "status": "current", "action": "start"},
-        {"name": "合成薬A", "subject": "patient", "status": "current", "action": "stop"}]})
-    assert not rollup.build_rollup(db.db, 1).get("medications")
+        {"name": "合成薬A", "subject": "patient", "status": "current", "action": "start",
+         "evidence": "本人は合成薬Aを開始しました。"},
+        {"name": "合成薬A", "subject": "patient", "status": "current", "action": "stop",
+         "evidence": "本人は合成薬Aを中止しました。"}]})
+    result = rollup.build_rollup(db.db, 1)
+    assert not result.get("medications")
+    assert {fact["attributes"]["action"] for fact in result["clinical_state"]["facts"]} == {"start", "stop"}
 
 
 def test_family_symptom_does_not_become_patient_state(db):
-    db.save_messages([_message()])
+    body = "家族に合成症状があります。"
+    db.save_messages([_message(body=body)])
     artifact(db, 1, {"symptoms": [{"text": "合成症状", "subject": "family",
-                                   "status": "ongoing", "negated": False}]})
-    assert not rollup.build_rollup(db.db, 1).get("recent_symptoms")
+                                   "status": "ongoing", "negated": False, "evidence": body}]})
+    result = rollup.build_rollup(db.db, 1)
+    assert not result.get("recent_symptoms")
+    assert result["clinical_state"]["facts"][0]["temporal"]["subject"] == "family", json.dumps(result["clinical_state"]["facts"], ensure_ascii=False)
 
 
 def test_schema_allows_subject_and_raw_relative_deadline():
@@ -87,7 +102,8 @@ def test_explicit_unknown_request_metadata_does_not_invent_roles_or_kind():
             "kind": None, "action": "確認", "evidence": body}],
         "summary": body, "urgency": "routine"}, body)
     assert out["symptoms"] == []
-    assert out["requests"] == [{"to": None, "action": "確認", "evidence": body}]
+    assert out["requests"] == [{"to": None, "action": "確認", "evidence": body,
+                                "unverified": True}]
 
 
 def test_negative_symptom_and_legacy_sparse_output_remain_valid():
@@ -190,7 +206,7 @@ def test_rule_change_reprocesses_unchanged_body(db):
     chash = db.db.execute("SELECT content_hash FROM messages").fetchone()[0]
     db.artifact_add("extract_v1", json.dumps({"med_periods": [
         {"start": "2025-09-24", "end": "2026-10-07"}]}),
-        project_id=1, message_id=1, meta={"hash": chash})
+        project_id=1, message_id=1, meta={VERSION_KEY: CURRENT_VERSION, "hash": chash})
     assert extract.run_pending(db)["done"] == 1
     period = json.loads(db.artifacts("extract_v1")[0]["content"])["med_periods"][0]
     assert period["start"] == "2026-09-24"
@@ -223,8 +239,9 @@ def test_resident_idle_wait_honors_stop_and_reports_loaded_generation(monkeypatc
 
 def test_chunk_checkpoint_requires_same_interpretation_context(db):
     db.save_messages([_message()])
-    row = db.db.execute("SELECT * FROM messages").fetchone()
-    extract_llm._persist_chunks(db, row, {0: {"summary": "合成"}}, "元の文脈")
+    row = dict(db.db.execute("SELECT * FROM messages").fetchone())
+    row["_source_binding"] = source_binding(db.db, row["project_id"], row["message_id"])
+    assert extract_llm._persist_chunks(db, row, {0: {"summary": "合成"}}, "元の文脈")
     assert extract_llm._saved_chunk_state(db.db, row, "元の文脈")[1]
     assert not extract_llm._saved_chunk_state(db.db, row, "変更後の文脈")[1]
 
@@ -263,7 +280,7 @@ def test_date_rule_revision_replaces_fabricated_year(db):
     content_hash = db.db.execute('SELECT content_hash FROM messages').fetchone()[0]
     db.artifact_add('extract_v1', json.dumps({'visit_date': '2024-02-29'}),
                     project_id=1, message_id=1,
-                    meta={'hash': content_hash,
+                    meta={VERSION_KEY: CURRENT_VERSION, 'hash': content_hash,
                           'rule_version': extract.RULE_VERSION - 1})
     assert extract.run_pending(db)['done'] == 1
     assert 'visit_date' not in json.loads(db.artifacts('extract_v1')[0]['content'])
@@ -347,7 +364,7 @@ def test_urgency_revision_replaces_old_rule_and_shared_display(db):
     content_hash = db.db.execute('SELECT content_hash FROM messages').fetchone()[0]
     db.artifact_add('extract_v1', json.dumps({'urgency': 'high'}),
                     project_id=1, message_id=1,
-                    meta={'hash': content_hash,
+                    meta={VERSION_KEY: CURRENT_VERSION, 'hash': content_hash,
                           'rule_version': extract.RULE_VERSION - 1})
     # Cached high is not displayed when the current original explicitly denies urgency.
     assert clinical_urgency.message_urgency(db.db, 1) is None
@@ -365,7 +382,7 @@ def _v1_urgent(db, mid=1):
                           'WHERE message_id=?', (mid,)).fetchone()[0]
     db.artifact_add('extract_v1', json.dumps({'urgency': 'high'}),
                     project_id=1, message_id=mid,
-                    meta={'hash': chash, 'rule_version': extract.RULE_VERSION})
+                    meta={VERSION_KEY: CURRENT_VERSION, 'hash': chash, 'rule_version': extract.RULE_VERSION})
     return chash
 
 
@@ -385,7 +402,7 @@ def test_message_urgency_llm_verdict_supersedes_rule(db, llm, llm_meta, expect):
     db.save_messages([_message(body=body)])
     chash = _v1_urgent(db)
     if llm is not None:
-        meta = {'hash': chash, 'extract_version': extract_llm.EXTRACT_VERSION}
+        meta = {VERSION_KEY: CURRENT_VERSION, 'hash': chash, 'extract_version': extract_llm.EXTRACT_VERSION}
         meta.update(llm_meta)
         db.artifact_add('extract_llm', json.dumps({'urgency': llm, 'urgency_evidence': [body]}),
                         project_id=1, message_id=1, meta=meta)
@@ -403,7 +420,7 @@ def test_stats_count_rule_high_suppressed_by_llm_routine(db):
         if llm:
             db.artifact_add('extract_llm', json.dumps({'urgency': llm, 'urgency_evidence': [body]}),
                             project_id=1, message_id=mid,
-                            meta={'hash': chash,
+                            meta={VERSION_KEY: CURRENT_VERSION, 'hash': chash,
                                   'extract_version': extract_llm.EXTRACT_VERSION})
     for field in ('urgency', 'meds'):
         db.artifact_add('extract_feedback_v1', json.dumps({'field': field}),
@@ -421,10 +438,11 @@ def test_message_urgency_llm_verdict_under_v4_read_model(db):
     chash = _v1_urgent(db)
     db.artifact_add('semantic_facts_v4', json.dumps({'summary': '合成要約'}),
                     project_id=1, message_id=1,
-                    meta={'hash': chash, 'engine_version': 4})
+                    meta={VERSION_KEY: CURRENT_VERSION, 'hash': chash, 'engine_version': 4,
+                          'projection_version': PROJECTION_VERSION})
     db.artifact_add('extract_llm', json.dumps({'urgency': 'routine'}),
                     project_id=1, message_id=1,
-                    meta={'hash': chash,
+                    meta={VERSION_KEY: CURRENT_VERSION, 'hash': chash,
                           'extract_version': extract_llm.EXTRACT_VERSION})
     assert clinical_urgency.message_urgency(db.db, 1) is None
 
@@ -436,7 +454,7 @@ def test_urgency_qc_disagreement_flags_only_the_current_artifact(db):
     chash = _v1_urgent(db)
     db.artifact_add('extract_llm', json.dumps({'urgency': 'high'}),
                     project_id=1, message_id=1,
-                    meta={'hash': chash,
+                    meta={VERSION_KEY: CURRENT_VERSION, 'hash': chash,
                           'extract_version': extract_llm.EXTRACT_VERSION})
     assert clinical_urgency.urgency_qc_disagreement(db.db, 1) is None
     src = db.db.execute("SELECT max(artifact_id) FROM artifacts"
@@ -446,14 +464,15 @@ def test_urgency_qc_disagreement_flags_only_the_current_artifact(db):
          'urgency': {'extracted': 'high', 'jev': 'routine',
                      'confidence': 0.9}}),
         project_id=1, message_id=1,
-        meta={'hash': chash, 'source_artifact_id': src})
+        meta={VERSION_KEY: CURRENT_VERSION, 'hash': chash, 'source_artifact_id': src,
+              'extract_version': extract_llm.EXTRACT_VERSION})
     d = clinical_urgency.urgency_qc_disagreement(db.db, 1)
     assert d['jev'] == 'routine' and d['extracted'] == 'high'
     assert urgency_qc_suffix(db.db, 1) == '（監査では通常判定）'
     # a QC verdict pinned to a superseded extraction must not annotate
     db.artifact_add('extract_llm', json.dumps({'urgency': 'high'}),
                     project_id=1, message_id=1,
-                    meta={'hash': chash,
+                    meta={VERSION_KEY: CURRENT_VERSION, 'hash': chash,
                           'extract_version': extract_llm.EXTRACT_VERSION})
     assert clinical_urgency.urgency_qc_disagreement(db.db, 1) is None
 
@@ -464,7 +483,7 @@ def test_rule_revision_cut_by_deadline_keeps_old_artifact(db, monkeypatch):
     for mid, h in db.db.execute('SELECT message_id, content_hash FROM messages'):
         db.artifact_add('extract_v1', json.dumps({'urgency': 'high'}),
                         project_id=1, message_id=mid,
-                        meta={'hash': h, 'rule_version': extract.RULE_VERSION - 1})
+                        meta={VERSION_KEY: CURRENT_VERSION, 'hash': h, 'rule_version': extract.RULE_VERSION - 1})
     clock = iter([0, 0, 10, 10, 10])
     monkeypatch.setattr(extract.time, 'monotonic', lambda: next(clock))
     assert extract.run_pending(db, deadline=5)['done'] == 1
@@ -528,10 +547,10 @@ def test_rollup_vitals_do_not_fall_back_to_v1_over_llm_row(db):
     db.artifact_add('extract_v1', json.dumps({'v': 1,
                                               'vitals': {'spo2': 10}}),
                     project_id=1, message_id=1,
-                    meta={'hash': h, 'rule_version': extract.RULE_VERSION})
+                    meta={VERSION_KEY: CURRENT_VERSION, 'hash': h, 'rule_version': extract.RULE_VERSION})
     db.artifact_add('extract_llm', json.dumps({'summary': '合成要約'}),
                     project_id=1, message_id=1,
-                    meta={'hash': h,
+                    meta={VERSION_KEY: CURRENT_VERSION, 'hash': h,
                           'extract_version': extract_llm.EXTRACT_VERSION})
     assert rollup.build_rollup(db.db, 1).get('latest_vitals') is None
 

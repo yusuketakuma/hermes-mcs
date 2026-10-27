@@ -4,6 +4,8 @@ import json
 import pytest
 
 import extract
+import inference_dependency_loss
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from extract_testkit import _hash, _ledger, _message
 
 
@@ -27,17 +29,26 @@ def test_invalid_rule_metadata_cannot_block_repair_or_retain_unavailable_body(tm
         source = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
         result = extract.run_pending(db)
         rows = db.artifacts("extract_v1", message_id=1)
+        # An unreadable generation is preserved: it cannot be proven to belong
+        # to the current generation and must not be silently deleted.
+        preserved = [row for row in rows if row["artifact_id"] == old]
+        assert len(preserved) == 1 and preserved[0]["meta"] == raw
         if state == "full":
             assert result == {"done": 1, "pids": [1]}
-            assert len(rows) == 1 and rows[0]["artifact_id"] != old
-            assert json.loads(rows[0]["content"]) == extract.extract_message(
+            current = [row for row in rows if row["artifact_id"] != old]
+            assert len(current) == 1
+            assert json.loads(current[0]["content"]) == extract.extract_message(
                 source["body_text"], source["posted_at"])
-            assert json.loads(rows[0]["meta"]) == {"hash": _hash(db),
-                                                   "rule_version": extract.RULE_VERSION}
+            assert json.loads(current[0]["meta"]) == {
+                VERSION_KEY: CURRENT_VERSION, "hash": _hash(db),
+                "rule_version": extract.RULE_VERSION,
+                "source_binding": inference_dependency_loss.source_binding(db.db, 1, 1),
+                "intervention_zero": 1,
+            }
             assert extract.run_pending(db) == {"done": 0, "pids": []}
         else:
             assert result == {"done": 0, "pids": []}
-            assert rows == []
+            assert len(rows) == 1
         assert dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()) == source
         assert db.db.execute("SELECT artifact_id FROM artifacts WHERE artifact_id=?", (other,)).fetchone()
     finally:
@@ -101,7 +112,7 @@ def test_previous_rule_generation_with_matching_hash_is_repaired_once(tmp_path):
     try:
         db.save_messages([_message(body=_BODY, posted_at="2026-01-02T00:30:00Z")])
         old = db.artifact_add("extract_v1", '{"v":1}', project_id=1, message_id=1,
-                              meta={"hash": _hash(db), "rule_version": 7})
+                              meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(db), "rule_version": 7})
         assert extract.run_pending(db) == {"done": 1, "pids": [1]}
         rows = db.artifacts("extract_v1", message_id=1)
         assert len(rows) == 1 and rows[0]["artifact_id"] != old
