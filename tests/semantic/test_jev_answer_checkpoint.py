@@ -129,3 +129,14 @@ def test_unknown_failed_ids_are_the_unvalidated_question_subset():
     assert client.calls == [["q0", "q1"], ["q1"]]
     assert seen[0] == ({"q0": {"choice": "no"}}, {"q1"})
     assert result["answers"] == {"q0": {"choice": "no"}, "q1": {"choice": "yes"}}
+
+
+def test_missing_answer_in_a_success_is_a_protocol_error_not_a_partial_checkpoint():
+    # The success-path checkpoint requires every requested answer; the client
+    # must reject an incomplete 200 before any answer is stored or re-asked.
+    post = Post({"q0": YES}, {"q1": NO})
+    seen = []
+    with pytest.raises(jev.JevError) as error:
+        run(post, lambda answers, invalid: seen.append((answers, invalid)))
+    assert error.value.kind == "protocol_error"
+    assert post.asked == [["q0", "q1"]] and seen == []

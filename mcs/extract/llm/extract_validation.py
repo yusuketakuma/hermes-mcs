@@ -371,8 +371,10 @@ def _request_expression_covers(body, assertion, action, kind):
     right = min((pos for mark in "。！？!?;；\n" if (pos := body.find(mark, end)) >= 0), default=len(body))
     sentence = body[left:right]
     markers = {
-        "request": r"(?:してください|して下さい|ください|下さい|お願いします|お願いいたします|してほしい)",
-        "question": r"(?:してください|して下さい|ください|下さい|お願いします|お願いいたします|できますか|しますか|ですか|でしょうか)",
+        "request": r"(?:してください|して下さい|ください|下さい|お願い(?:します|いたします|致します|したいです|したい|できますか|できませんか)|"
+                   r"してほしい|して欲しい|(?:して)?(?:いただけ|頂け|もらえ)(?:ますか|ませんか|ると(?:助かります|幸いです|ありがたいです)))",
+        "question": r"(?:してください|して下さい|ください|下さい|お願い(?:します|いたします|致します|できますか|できませんか)|"
+                    r"(?:して)?(?:いただけ|頂け|もらえ)(?:ますか|ませんか)|できますか|しますか|ですか|でしょうか)",
         "self_plan": r"(?:する予定です|する予定|します|いたします)",
     }
     wanted = clinical_values.request_action_key(action)
@@ -381,10 +383,17 @@ def _request_expression_covers(body, assertion, action, kind):
     for marker in re.finditer(markers[kind] + r"(?![一-龥々ぁ-んァ-ヶーA-Za-z0-9])", sentence):
         if marker.start() < start - left:
             continue
+        # A request form that is itself denied or quoted as absent is no request.
+        if re.match(r"[、,]?\s*(?:という|との)?(?:依頼|お願い|要望)(?:は|も|では|じゃ)?(?:ありません|ない|ございません|なし)",
+                    sentence[marker.end():]):
+            continue
         phrase = sentence[:marker.end()]
         if _listed_request_covers(action, phrase):
             return True
-        preceding = clinical_values.request_action_key(sentence[start - left:marker.start()]).rstrip("をの")
+        # Courtesy adverbs between the action and the request form name no other action.
+        between = re.sub(r"(?:(?:どうぞ)?(?:よろしく|宜しく)|至急|早めに|念のため|再度)$", "",
+                         sentence[start - left:marker.start()])
+        preceding = clinical_values.request_action_key(between).rstrip("をの")
         if preceding.endswith(wanted) and preceding.count(wanted) == 1:
             return True
     return False

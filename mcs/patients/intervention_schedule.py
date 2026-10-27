@@ -40,7 +40,9 @@ _UNRESOLVED_PLAN = re.compile(
 # patient. Preserve only the written mention; never turn it into an assigned
 # intervention, a date, or a completion.
 _SCHEDULE_DATE = rf"(?:明日|今日|本日|来週[月火水木金土日]曜日?|{_DATE_PATTERN}|[0-9]{{1,2}}/[0-9]{{1,2}}|[0-9]{{1,2}}月[0-9]{{1,2}}日)"
-_SCHEDULE_ACTION = rf"(?:介護ベッド(?:を)?設置|訪問調査|訪問診療|サービス担当者会議|担当者会議|{_INTERVENTION_ACTION})"
+# A bare 確認/相談 with a date is usually the writer's own task note, not a schedule.
+_SCHEDULE_ACTION = (r"(?:介護ベッド(?:を)?設置|訪問調査|訪問診療|サービス担当者会議|担当者会議|"
+                    r"訪問|往診|診察|診療|看護|介護|リハビリ|服薬指導|薬剤確認|栄養指導|口腔ケア|検査|採血)")
 _SCHEDULE_CUE_END = (
     r"(?:します|する予定です|する予定|を予定しています|を予定|の予定です|の予定|"
     r"予定です|予定|ですか|です|しません|かもしれません|"

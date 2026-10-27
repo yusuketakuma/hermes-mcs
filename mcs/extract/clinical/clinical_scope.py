@@ -99,7 +99,23 @@ _UNCERTAIN_ADDITIVE = re.compile(
     r"なくては(?:ならない|いけない|だめ|ダメ|駄目)|ないと(?:ならない|いけない|だめ|ダメ|駄目)|"
     r"ま(?:した|す|せん(?:でした)?)(?:か|でしょうか))")
 
-_QUESTION = re.compile(r"(?:しました|した|します|していました|している|しています|しません|しませんでした|です|でした)(?:か|でしょうか)|かどうか")
+# Causal から is not a question; indirect questions (したか確認) still are.
+_QUESTION = re.compile(r"(?:しました|した|します|していました|している|しています|しません|しませんでした|です|でした)"
+                       r"(?:か|でしょうか)(?!ら)|かどうか")
+
+# A bare もし stays conditional unless it is visibly additive も＋し after a noun
+# (清拭もし、 / 採血もしておき / もしくは) with no consequent anywhere later in the sentence.
+_ADDITIVE_MOSHI = re.compile(r"(?<=[一-龥々ァ-ヶーA-Za-z0-9])もし(?=[、,]|て|た|ま|くは|ながら|つつ)")
+_CONSEQUENT = re.compile(r"[^。！？!?\n]*?(?:れば|ければ|たら|なら|ても|場合|とき|際)")
+
+
+def _has_condition(body, start, end):
+    for match in _CONDITIONAL_MARK.finditer(body, start, end):
+        if (not match.group().startswith("もし") or not _ADDITIVE_MOSHI.match(body, match.start())
+                or _CONSEQUENT.match(body, match.end())):
+            return True
+    return False
+
 
 _SCOPE_BREAK = re.compile(r"[。！？!?;；\n、,]|しかし|ただし|だが|けれど(?:も)?|(?<![一-龥ぁ-んァ-ヶ])一方(?:で)?(?=$|[、, \t　])")
 
@@ -216,7 +232,7 @@ def _source_scope_axes(body, start, end, *, patient_name=None, default="patient"
     sentence = max(body.rfind(c, 0, start) for c in "。！？!?;；\n") + 1
     condition_start = max((m.end() for m in _SCOPE_BREAK.finditer(body, sentence, start)
                            if m.group() not in "、,"), default=sentence)
-    if _CONDITIONAL_MARK.search(body[condition_start:left] + clause):
+    if _has_condition(body, condition_start, right.start() if right else len(body)):
         return scope, "conditional"
     if (_QUESTION.search(clause) or right is not None and body[right.start()] in "？?"):
         return scope, "unknown"
@@ -265,7 +281,7 @@ def source_axes(body, start, end, *, default="patient"):
     if owners:
         left = owners[-1].start()
     before = body[left:start]
-    if _CONDITIONAL_MARK.search(before):
+    if _has_condition(body, left, start):
         return subject, "conditional"
     times = [(m.end(), "current") for m in CURRENT_MARK.finditer(before)]
     times += [(m.end(), "past") for rx in (_NONCURRENT_MARK, _MEASURED_PAST_MARK)

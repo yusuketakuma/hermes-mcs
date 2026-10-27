@@ -6,9 +6,14 @@
   "details": [
     "取得完了の正本をinitial_import_stateへ集約し、取得状態・履歴終端・初回取得証拠・未完了jobを同じ借用snapshotで確認します。患者コンテキストと予定表示が同じ判定を使います。",
     "モデルを呼ぶ前の短いtransactionで処理順を記録し、実際に選択したlaneの次へ進めます。時計が同時刻や逆行になっても、試行順の通し番号で患者を交代します。モデル呼出し中にtransactionやrun lockは保持しません。",
-    "実際のfact出典と設定済みの昇格条件を確認し、既存のlegacy・assistの品質判定を通知用enforce条件で一律に止める依存を解消します。未承認canonicalへの代替や昇格条件の緩和は行いません。",
+    "実際のfact出典と設定済みの昇格条件を確認し、既存のlegacy・assistの品質判定を通知用enforce条件で一律に止める依存を解消します。未承認canonicalへの代替や昇格条件の緩和は行いません。品質判定は通知のenforce設定と独立に行うため、assistなどの運用でもJevの要求が増える場合があります。",
     "Jevの回答を要求単位で保存するcallbackを追加し、全回答が不正でも保存の機会を設けます。保存に失敗したときは技術的不正回答の再問を止めます。未確定要求の永続的な再送防止への接続は後続の変更です。",
     "対象の合成回帰194件とJev回答checkpointの合成回帰25件が成功しました。全体suiteと実API通信は実行していません。"
   ],
-  "refs": ["mcs/core/initial_import_state.py", "mcs/patients/patient_context_refresh.py", "mcs/patients/patient_context_plan.py", "mcs/semantic/semantic_jev.py"]
+  "refs": [
+    "mcs/core/initial_import_state.py",
+    "mcs/patients/patient_context_refresh.py",
+    "mcs/patients/patient_context_plan.py",
+    "mcs/semantic/semantic_jev.py"
+  ]
 }
