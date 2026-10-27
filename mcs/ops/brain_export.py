@@ -228,7 +228,7 @@ def _signals_md(view, res: dict) -> str:
     return "".join(lines)
 
 
-def _patient_md(pid: int, name: str, info: dict, roll: dict) -> str:
+def _patient_md(pid: int, name: str, info: dict, roll: dict, *, measurement_config_unavailable=False) -> str:
     title = f"MCS {name}"
     lines = [_fm(title), f"# {name}\n\n"]
     lines.append(f"- project_id: {pid}\n")
@@ -246,6 +246,8 @@ def _patient_md(pid: int, name: str, info: dict, roll: dict) -> str:
         rows = {k: v for k, v in vit.items() if k != "at"}
         lines.append(f"\n## latest vitals ({vit.get('at')})\n\n"
                      + "\n".join(f"- {k}: {v}" for k, v in rows.items()) + "\n")
+    elif measurement_config_unavailable:
+        lines.append("\n## バイタル: 未確認\n\n設定と記録の現行性を確認できません。\n")
     if roll.get("med_period_candidate"):
         lines.append("\n## med period candidate（規則抽出・未確認）\n\n```json\n"
                      + json.dumps(roll["med_period_candidate"],
@@ -374,7 +376,8 @@ def run(out_dir: Path, snapshot: Path) -> dict:
             name = (info.get(pid) or {}).get("patient_name") or f"project-{pid}"
             try:
                 pages[f"p{pid}.md"] = (
-                    _patient_md(pid, name, info.get(pid) or {}, roll)
+                    _patient_md(pid, name, info.get(pid) or {}, roll,
+                                measurement_config_unavailable=True)
                     + "\n---\n\n" + banner)
             except (AttributeError, TypeError, ValueError, RecursionError):
                 raise ValueError("patient_rollup_invalid") from None
