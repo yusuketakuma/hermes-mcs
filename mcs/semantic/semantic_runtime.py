@@ -16,8 +16,7 @@ import time
 import uuid
 from contextlib import suppress
 
-from mcs_util import payload_hash
-from mcs_util import loads_dict
+from mcs_util import loads_dict, payload_hash, reject_constant, unique_pairs, valid_hash
 
 
 DEFAULT_ATTEMPT_LIMIT = 6
@@ -644,13 +643,232 @@ def manual_usage_reserver(ledger, *, operation: str, daily_request_budget=None):
     return reserve
 
 
-def patient_summary_usage_reserver(ledger, *, project_id, guard, daily_request_budget):
+_QUALITY_ID_KEYS = ("input_key", "candidate_key", "failure_key", "audit_key")
+# Exact artifact kind owned by patient_context_refresh. The value is a storage contract.
+_QUALITY_ANSWER_KIND = "patient_context_summary_quality_v1"
+_QUALITY_QIDS = frozenset(f"q{i}" for i in range(12))
+
+
+def _quality_json(raw):
+    if not isinstance(raw, str) or len(raw) > 32768:
+        return None
+    try:
+        def finite_float(text):
+            value = float(text)
+            if not math.isfinite(value):
+                raise ValueError("invalid_number")
+            return value
+        value = json.loads(raw, object_pairs_hook=unique_pairs, parse_constant=reject_constant,
+                           parse_float=finite_float)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _quality_identity(identity):
+    if not isinstance(identity, dict) or any(not valid_hash(identity.get(key)) for key in _QUALITY_ID_KEYS):
+        raise ValueError("patient_summary_identity_invalid")
+    return {key: identity[key] for key in _QUALITY_ID_KEYS}
+
+
+def _quality_request(identity, body):
+    keys = _quality_identity(identity)
+    try:
+        questions = body["questions"]
+        facts = body["state"]["target"]["facts"]
+        if (not isinstance(questions, dict) or not 1 <= len(questions) <= 12
+                or not isinstance(facts, list) or not 1 <= len(facts) <= 12):
+            raise ValueError
+        indexed = {}
+        for fact in facts:
+            qid, fid = fact["id"], fact["fact"]["id"]
+            if qid not in _QUALITY_QIDS or not valid_hash(fid) or qid in indexed:
+                raise ValueError
+            indexed[qid] = fid
+        mapping = {qid: indexed[qid] for qid in questions}
+        if len(set(mapping.values())) != len(mapping):
+            raise ValueError
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("patient_summary_request_invalid") from None
+    return {"v": 1, **keys, "questions": mapping}
+
+
+def _quality_bound(meta):
+    if (not isinstance(meta, dict) or meta.get("operation") != "patient_summary_quality"
+            or type(meta.get("jev_requests")) is not int or meta["jev_requests"] != 1
+            or meta.get("reserved") is not True or not valid_hash(meta.get("request_fp"))
+            or not isinstance(meta.get("reservation_id"), str) or len(meta["reservation_id"]) != 32
+            or any(c not in "0123456789abcdef" for c in meta["reservation_id"])
+            or type(meta.get("timeout_seconds")) not in (int, float)
+            or not math.isfinite(meta["timeout_seconds"]) or meta["timeout_seconds"] <= 0):
+        return None
+    request = meta.get("quality_request") if isinstance(meta, dict) else None
+    if not isinstance(request, dict) or set(request) != {"v", *_QUALITY_ID_KEYS, "questions"} or type(request["v"]) is not int or request["v"] != 1:
+        return None
+    try:
+        _quality_identity(request)
+        questions = request["questions"]
+        if (not isinstance(questions, dict) or not 1 <= len(questions) <= 12
+                or any(q not in _QUALITY_QIDS or not valid_hash(fid) for q, fid in questions.items())
+                or len(set(questions.values())) != len(questions)):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return request
+
+
+def _quality_result_parts(meta, request):
+    result = meta.get("quality_result")
+    if not isinstance(result, dict) or set(result) != {"answers", "invalid"}:
+        return None
+    answers, invalid = result["answers"], result["invalid"]
+    if (not isinstance(answers, dict) or not isinstance(invalid, list)
+            or any(not valid_hash(fid) for fid in invalid) or invalid != sorted(set(invalid))
+            or any(not valid_hash(fid) or not valid_hash(value) for fid, value in answers.items())
+            or set(answers) & set(invalid) or set(answers) | set(invalid) != set(request["questions"].values())):
+        return None
+    return answers, invalid
+
+
+def _quality_answer_evidence(db, project_id, request, answers):
+    from inference_version import CURRENT_VERSION
+    found = {}
+    marks = ",".join("?" for _ in answers) or "NULL"
+    # Include malformed or duplicate-key metadata even if its SQL keys do
+    # not match. Otherwise an ambiguous second key could hide a receipt.
+    query = ("SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? AND CASE "
+             "WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
+             "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE key IS NOT NULL "
+             "GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
+             "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE type='real' AND "
+             "abs(value)>1.7976931348623157e308) THEN 1 "
+             "ELSE json_extract(meta,'$.input_key')=? AND json_extract(meta,'$.audit_key')=? "
+             f"AND json_extract(meta,'$.fact_id') IN ({marks}) END")
+    for row in db.execute(query, (_QUALITY_ANSWER_KIND, project_id, request["input_key"],
+                                  request["audit_key"], *answers)):
+        answer_meta = _quality_json(row[1])
+        if answer_meta is None:
+            return False
+        fid = answer_meta.get("fact_id")
+        if (answer_meta.get("input_key") != request["input_key"]
+                or answer_meta.get("audit_key") != request["audit_key"]
+                or answer_meta.get("inference_engine_version") != CURRENT_VERSION or fid not in answers):
+            continue
+        value = _quality_json(row[0])
+        if fid in found or value is None or set(value) != {"choice", "confidence"}:
+            return False
+        confidence = value.get("confidence")
+        if (not isinstance(value.get("choice"), str)
+                or value.get("choice") not in {"supports", "contradicts", "not_supported", "ambiguous", "omission_ok", "important_missing"}
+                or type(confidence) not in (int, float) or not math.isfinite(confidence) or not 0 <= confidence <= 1
+                or (answers[fid] is not None and payload_hash(value) != answers[fid])):
+            return False
+        found[fid] = value
+    return set(found) == set(answers)
+
+
+def _quality_result(db, project_id, meta, request):
+    parts = _quality_result_parts(meta, request)
+    return bool(parts is not None and _quality_answer_evidence(db, project_id, request, parts[0]))
+
+
+def patient_summary_usage_resolved(db, project_id, meta):
+    """Check a bound request and its persisted answer receipts without changing the DB."""
+    request = _quality_bound(meta)
+    return bool(type(project_id) is int and project_id > 0 and request
+                and _quality_result(db, project_id, meta, request))
+
+
+def patient_summary_usage_prunable(db, project_id, raw):
+    """Keep unknown, malformed or unresolved quality and invalid-attempt evidence."""
+    meta = _quality_json(raw)
+    if meta is None:
+        return False
+    if meta.get("operation") != "patient_summary_quality":
+        return not ("quality_request" in meta or "quality_result" in meta)
+    request = _quality_bound(meta)
+    if not request or not patient_summary_usage_resolved(db, project_id, meta):
+        return False
+    _, invalid = _quality_result_parts(meta, request)
+    return _quality_answer_evidence(db, project_id, request, dict.fromkeys(invalid))
+
+
+def patient_summary_request_problem(db, pid, identity, fact_ids):
+    """Return a durable unknown or exhausted-invalid reason for logical questions."""
+    keys = _quality_identity(identity)
+    if type(pid) is not int or pid <= 0 or not isinstance(fact_ids, (list, tuple, set, frozenset)) or any(not valid_hash(fid) for fid in fact_ids):
+        raise ValueError("patient_summary_request_invalid")
+    requested = set(fact_ids)
+    invalid_counts = dict.fromkeys(requested, 0)
+    for row in db.execute("SELECT meta FROM artifacts WHERE kind='semantic_usage' AND project_id=?", (pid,)):
+        meta = _quality_json(row[0])
+        if meta is None:
+            return "patient_summary_request_unknown"
+        if meta.get("operation") != "patient_summary_quality":
+            if "quality_request" in meta or "quality_result" in meta:
+                return "patient_summary_request_unknown"
+            continue
+        request = _quality_bound(meta)
+        if request is None:
+            return "patient_summary_request_unknown"
+        resolved = "quality_result" in meta and patient_summary_usage_resolved(db, pid, meta)
+        if "quality_result" in meta and not resolved:
+            return "patient_summary_request_unknown"
+        if (request["failure_key"] == keys["failure_key"] and requested.intersection(request["questions"].values())
+                and not resolved):
+            return "patient_summary_request_unknown"
+        if request["failure_key"] == keys["failure_key"] and "quality_result" in meta:
+            for fid in _quality_result_parts(meta, request)[1]:
+                if fid in invalid_counts:
+                    invalid_counts[fid] += 1
+    for fid, count in invalid_counts.items():
+        if count >= 2 and not _quality_answer_evidence(db, pid, keys, {fid: None}):
+            return "patient_summary_invalid_exhausted"
+    return None
+
+
+def patient_summary_resolve_request_tx(ledger, reservation, identity, answers, invalid_ids, *, project_id):
+    """Seal one request only with its already-persisted answer evidence."""
+    if not ledger.db.in_transaction or not isinstance(reservation, JevReservation):
+        raise RuntimeError("patient_summary_transaction_required")
+    keys = _quality_identity(identity)
+    if not isinstance(answers, dict) or not isinstance(invalid_ids, set):
+        raise ValueError("patient_summary_result_invalid")
+    row = ledger.db.execute("SELECT project_id,meta FROM artifacts WHERE kind='semantic_usage' AND artifact_id=?",
+                            (reservation.artifact_id,)).fetchone()
+    meta = _quality_json(row[1]) if row else None
+    request = _quality_bound(meta)
+    if (type(project_id) is not int or project_id <= 0 or not row or row[0] != project_id
+            or not request or any(request[k] != keys[k] for k in _QUALITY_ID_KEYS)
+            or meta.get("operation") != "patient_summary_quality"):
+        raise ValueError("patient_summary_request_invalid")
+    try:
+        result = {"answers": {fid: payload_hash(value) for fid, value in answers.items()}, "invalid": sorted(invalid_ids)}
+    except (TypeError, ValueError, RecursionError):
+        raise ValueError("patient_summary_result_invalid") from None
+    candidate = {**meta, "quality_result": result}
+    if not _quality_result(ledger.db, row[0], candidate, request):
+        raise ValueError("patient_summary_result_invalid")
+    if "quality_result" in meta:
+        if meta["quality_result"] != result:
+            raise ValueError("patient_summary_result_conflict")
+        return 0
+    updated = ledger.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=? AND kind='semantic_usage' AND meta=?",
+                                (json.dumps(candidate, separators=(",", ":")), reservation.artifact_id, row[1])).rowcount
+    saved = ledger.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (reservation.artifact_id,)).fetchone()
+    if updated != 1 or not saved or _quality_json(saved[0]) != candidate:
+        raise ValueError("patient_summary_result_unverified")
+    return updated
+
+
+def patient_summary_usage_reserver(ledger, *, project_id, guard, daily_request_budget, identity):
     """Reserve one patient-summary Jev request under the shared daily budget."""
     from semantic_jev import DAILY_REQUEST_LIMIT, JEV_MODEL, JevError
     from semantic_policy import BACKLOG_BUDGET_RESERVE
     if (type(project_id) is not int or project_id <= 0 or not callable(guard)
             or type(daily_request_budget) is not int or daily_request_budget < 0):
         raise ValueError("patient_summary_reservation_invalid")
+    identity = _quality_identity(identity)
     limit = min(daily_request_budget, DAILY_REQUEST_LIMIT)
     limit -= math.ceil(limit * BACKLOG_BUDGET_RESERVE)
 
@@ -660,11 +878,15 @@ def patient_summary_usage_reserver(ledger, *, project_id, guard, daily_request_b
         if (not isinstance(body, dict) or type(timeout) not in (int, float)
                 or not math.isfinite(timeout) or timeout <= 0):
             raise ValueError("patient_summary_reservation_invalid")
+        request = _quality_request(identity, body)
         from semantic_store import _jst_day_start
         day = None
         def check():
             nonlocal day
             guard("jev_reserve")
+            problem = patient_summary_request_problem(ledger.db, project_id, identity, list(request["questions"].values()))
+            if problem:
+                raise JevError("budget_exceeded", problem, retryable=problem == "patient_summary_request_unknown")
             day = int(_jst_day_start(time.time()))
             _daily_cap_check(ledger, limit, retryable=True)
             if int(_jst_day_start(time.time())) != day:
@@ -673,7 +895,8 @@ def patient_summary_usage_reserver(ledger, *, project_id, guard, daily_request_b
             artifact_id = ledger.artifact_add_tx("semantic_usage", "{}", project_id=project_id,
                 model=JEV_MODEL, meta={"jev_requests": 1, "reserved": True,
                     "operation": "patient_summary_quality", "request_fp": payload_hash(body),
-                    "timeout_seconds": float(timeout), "reservation_id": uuid.uuid4().hex})
+                    "timeout_seconds": float(timeout), "reservation_id": uuid.uuid4().hex,
+                    "quality_request": request})
             _check_reservation_day(ledger, artifact_id, day)
             guard("jev_reserved")
             return JevReservation(artifact_id, day)

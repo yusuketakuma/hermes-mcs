@@ -405,7 +405,7 @@ def test_commit_lock_wait_can_cross_midnight_without_resending(runtime, monkeypa
 
     def acquire():
         tries.append(1)
-        return None if len(tries) == 2 else os.open(os.devnull, os.O_RDONLY)
+        return None if len(tries) == 1 else os.open(os.devnull, os.O_RDONLY)
 
     def sleep(seconds):
         clock.wall += seconds
@@ -414,7 +414,7 @@ def test_commit_lock_wait_can_cross_midnight_without_resending(runtime, monkeypa
     monkeypatch.setattr(context_refresh, 'acquire_run_lock', acquire)
     monkeypatch.setattr(context_refresh.time, 'sleep', sleep, raising=False)
     assert step(runtime)['status'] == 'progressed'
-    assert len(tries) == 3 and len(calls) == 1 and document(led)
+    assert len(tries) == 2 and len(calls) == 1 and document(led)
 
 
 def test_ordinary_refetch_timestamp_does_not_regenerate(runtime):
@@ -929,14 +929,14 @@ def test_finished_inference_waits_briefly_for_the_run_lock(runtime, monkeypatch)
     tries = []
     def contended():
         tries.append(1)
-        return os.open(os.devnull, os.O_RDONLY) if len(tries) == 1 or len(tries) > 4 else None
+        return os.open(os.devnull, os.O_RDONLY) if len(tries) > 3 else None
     def sleep(seconds):
         clock.mono += seconds
         clock.wall += seconds
     monkeypatch.setattr(context_refresh, 'acquire_run_lock', contended)
     monkeypatch.setattr(context_refresh.time, 'sleep', sleep, raising=False)
     assert step(runtime)['status'] == 'progressed'
-    assert len(calls) == 1 and len(tries) == 5 and document(led)
+    assert len(calls) == 1 and len(tries) == 4 and document(led)
     # a holder that never yields costs at most the short cap, not the unit deadline
     seed(led, mid=2, pid=2)
     monkeypatch.setattr(context_refresh, 'acquire_run_lock', lambda: None)

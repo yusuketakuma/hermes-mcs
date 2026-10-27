@@ -854,6 +854,31 @@ def _delete_batched(con, table: str, where: str, params=()) -> int:
             return total
 
 
+def _prune_semantic_usage(con, cutoff):
+    """Keep unresolved summary requests and receipts with missing evidence."""
+    from semantic_runtime import patient_summary_usage_prunable
+
+    total, last_id = 0, 0
+    while True:
+        with con:
+            if not con.in_transaction:
+                con.execute("BEGIN IMMEDIATE")
+            rows = con.execute("SELECT artifact_id,project_id,meta FROM artifacts "
+                               "WHERE kind='semantic_usage' AND created_at<? AND artifact_id>? "
+                               "ORDER BY artifact_id LIMIT ?", (cutoff, last_id, RETENTION_BATCH)).fetchall()
+            removable = []
+            for artifact_id, pid, raw in rows:
+                if not patient_summary_usage_prunable(con, pid, raw):
+                    continue
+                removable.append(artifact_id)
+            for artifact_id in removable:
+                total += con.execute("DELETE FROM artifacts WHERE artifact_id=? AND kind='semantic_usage'",
+                                     (artifact_id,)).rowcount
+        if len(rows) < RETENTION_BATCH:
+            return total
+        last_id = rows[-1][0]
+
+
 def _outbox_refs(con, tables: set) -> str:
     """NOT EXISTS guards for every column that can name an outbox event.
 
@@ -935,7 +960,7 @@ def prune_history(con, now: float | None = None) -> dict:
     - finished system alerts (RETAINED_ALERT_KINDS, accepted/suppressed)
       older than RETENTION_S that no table or restore hold references;
     - semantic_drain_run metrics older than DRAIN_RUN_KEEP_S and Jev usage
-      receipts older than USAGE_KEEP_S;
+      receipts older than USAGE_KEEP_S, retaining unresolved summary requests;
     - never-delivered renders older than RETENTION_S with their parts and
       attempts (_prune_unsent_renders), then view manifests older than
       RETENTION_S that are not their card's newest and that no render,
@@ -989,9 +1014,7 @@ def prune_history(con, now: float | None = None) -> dict:
         out["drain_runs"] = _delete_batched(
             con, "artifacts", "kind='semantic_drain_run' AND created_at < ?",
             (now - DRAIN_RUN_KEEP_S,))
-        out["usage_receipts"] = _delete_batched(
-            con, "artifacts", "kind='semantic_usage' AND created_at < ?",
-            (now - USAGE_KEEP_S,))
+        out["usage_receipts"] = _prune_semantic_usage(con, now - USAGE_KEEP_S)
         out["cloud_usage_receipts"] = _delete_batched(
             con, "artifacts", "kind IN ('cloud_usage_reserve','cloud_usage_result',"
             "'cloud_usage_dryrun','cloud_compare_v1','cloud_usage_disposition') AND created_at < ?",

@@ -14,6 +14,12 @@ from semantic_jev import JevError
 from extract_testkit import _ledger, _message
 
 
+REQUEST_IDENTITY = {'input_key': '1' * 64, 'candidate_key': '2' * 64,
+                    'failure_key': '3' * 64, 'audit_key': '4' * 64}
+REQUEST_BODY = {'state': {'target': {'facts': [{'id': 'q0', 'fact': {'id': 'a' * 64}}]}},
+                'questions': {'q0': {}}}
+
+
 def test_context_refuses_borrowed_transaction_without_touching_it(tmp_path):
     led = _ledger(tmp_path)
     try:
@@ -35,14 +41,16 @@ def test_patient_summary_usage_is_shared_bounded_and_owned(tmp_path):
     try:
         guards = []
         reserve = semantic_runtime.patient_summary_usage_reserver(led, project_id=1,
-            guard=lambda stage: guards.append((stage, led.db.in_transaction)), daily_request_budget=2)
-        reservation = reserve({'synthetic': True}, 2.0)
+            guard=lambda stage: guards.append((stage, led.db.in_transaction)), daily_request_budget=2, identity=REQUEST_IDENTITY)
+        reservation = reserve(REQUEST_BODY, 2.0)
         assert reservation is not None
         assert guards == [('jev_reserve', True), ('jev_reserved', True)]
         [row] = led.artifacts('semantic_usage')
         assert row['project_id'] == 1
+        other = semantic_runtime.patient_summary_usage_reserver(led, project_id=2, guard=lambda _: None,
+            daily_request_budget=2, identity=REQUEST_IDENTITY)
         with pytest.raises(JevError) as caught:
-            reserve({'synthetic': True}, 2.0)
+            other(REQUEST_BODY, 2.0)
         assert caught.value.kind == 'budget_exceeded' and caught.value.detail == 'daily_cap'
         assert len(led.artifacts('semantic_usage')) == 1
         assert not led.db.in_transaction
@@ -57,18 +65,18 @@ def test_patient_summary_usage_keeps_borrowed_transaction_and_rejects_changed_sc
         led.db.commit()
         led.db.execute("INSERT INTO synthetic_tx_marker VALUES('pending')")
         reserve = semantic_runtime.patient_summary_usage_reserver(led, project_id=1, guard=lambda _: None,
-                                                         daily_request_budget=3000)
+                                                         daily_request_budget=3000, identity=REQUEST_IDENTITY)
         with pytest.raises(RuntimeError, match='patient_summary_transaction_active'):
-            reserve({'synthetic': True}, 2.0)
+            reserve(REQUEST_BODY, 2.0)
         assert led.db.in_transaction and led.db.execute('SELECT count(*) FROM synthetic_tx_marker').fetchone()[0] == 1
         led.db.rollback()
         def revoked(stage):
             if stage == 'jev_reserved':
                 raise ValueError('synthetic_scope_changed')
         reserve = semantic_runtime.patient_summary_usage_reserver(led, project_id=1, guard=revoked,
-                                                         daily_request_budget=3000)
+                                                         daily_request_budget=3000, identity=REQUEST_IDENTITY)
         with pytest.raises(ValueError, match='synthetic_scope_changed'):
-            reserve({'synthetic': True}, 2.0)
+            reserve(REQUEST_BODY, 2.0)
         assert not led.artifacts('semantic_usage') and not led.db.in_transaction
     finally:
         led.close()
@@ -84,10 +92,12 @@ def test_quality_backlog_keeps_existing_realtime_reserve(tmp_path):
         cap = 3000 - math.ceil(3000 * BACKLOG_BUDGET_RESERVE)
         assert cap == 2700
         backlog = semantic_runtime.patient_summary_usage_reserver(led, project_id=1, guard=lambda _: None,
-                                                         daily_request_budget=3000)
-        backlog({'synthetic': True}, 2.0)
+                                                         daily_request_budget=3000, identity=REQUEST_IDENTITY)
+        backlog(REQUEST_BODY, 2.0)
+        other = semantic_runtime.patient_summary_usage_reserver(led, project_id=2, guard=lambda _: None,
+            daily_request_budget=3000, identity=REQUEST_IDENTITY)
         with pytest.raises(JevError) as refused:
-            backlog({'synthetic': True}, 2.0)
+            other(REQUEST_BODY, 2.0)
         assert refused.value.detail == 'daily_cap'
         realtime = semantic_runtime.manual_usage_reserver(led, operation='jev_value', daily_request_budget=3000)
         assert realtime({'synthetic': True}, 2.0) is not None
@@ -145,8 +155,14 @@ def test_quality_identity_includes_fact_outside_selection_cap(tmp_path):
             led.db, 1, snapshot, '2026-10-27', include_all=True)
         assert total == len(all_facts) == 257 and len(selected) == 256
         summary = [{'text': refresh.context_plan.summary_text(selected[0]), 'fact_ids': [selected[0]['id']]}]
-        identity = refresh._quality_input(led.db, 1, snapshot, all_facts, quality_state, summary,
-                                          {'model': 'synthetic'}, state)
+        queries = []
+        led.db.set_trace_callback(queries.append)
+        try:
+            identity = refresh._quality_input(led.db, 1, snapshot, all_facts, quality_state, summary,
+                                              {'model': 'synthetic'}, state)
+        finally:
+            led.db.set_trace_callback(None)
+        assert len([sql for sql in queries if 'message_revisions' in sql]) == 1
         omitted = {fact['id'] for fact in all_facts} - {fact['id'] for fact in selected}
         assert len(omitted) == 1 and omitted <= set(identity['fact_ids'])
         led.db.rollback()
@@ -302,7 +318,8 @@ def test_malformed_quality_receipt_never_looks_like_absent_work(tmp_path, kind):
         led.close()
 
 
-def test_quality_owner_calls_jev_once_and_rechecks_saved_pass(runtime, monkeypatch):
+@pytest.fixture
+def quality_owner(runtime, monkeypatch):
     import semantic_candidate
     import semantic_jev
     led, clock, _ = runtime
@@ -319,27 +336,34 @@ def test_quality_owner_calls_jev_once_and_rechecks_saved_pass(runtime, monkeypat
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: 'synthetic-jev-key')
     monkeypatch.setattr(semantic_candidate, 'candidate_fingerprint', lambda _: 'a' * 64)
     monkeypatch.setattr(semantic_candidate, '_LOADED_SOURCES', {'synthetic': 'b' * 64})
-    sends = []
-    class Client:
-        supports_attempt_hooks = True
-        requests_made = 0
-        usage_totals = {}
-        last_error = None
-        def __init__(self, **kwargs):
-            self.attempt_timeout = kwargs['attempt_timeout']
-        def evaluate(self, state, questions, deadline, *, before_attempt, after_result, reserve_fn, transport):
-            assert not led.db.in_transaction
-            before_attempt()
-            reserve_fn({'synthetic': True}, 1.0)
-            before_attempt()
-            sends.append(sorted(questions))
-            self.requests_made += 1
-            answers = {qid: {'choice': 'supports' if 'supports' in question['criteria'] else 'omission_ok',
-                             'confidence': 0.99}
-                       for qid, question in questions.items()}
-            after_result()
-            return {'answers': answers}
-    monkeypatch.setattr(semantic_jev, 'JevClient', Client)
+    sends, behavior = [], {}
+    client = semantic_jev.JevClient
+    def post(body, timeout):
+        assert not led.db.in_transaction and timeout > 0
+        sends.append(list(body['questions']))
+        if behavior.get('timeout') or behavior.get('partial') and len(sends) > 1:
+            raise TimeoutError('synthetic response lost')
+        answers = {}
+        for index, (qid, question) in enumerate(body['questions'].items()):
+            criteria = question['criteria']
+            choice = ('supports' if 'supports' in criteria else 'omission_ok')
+            if behavior.get('negative') or behavior.get('partial'):
+                choice = 'not_supported' if 'not_supported' in criteria else 'important_missing'
+            if behavior.get('partial') and index == 1:
+                choice = 'invalid'
+            answers[qid] = {'type': 'choice', 'choice': choice, 'confidence': 1.0,
+                'probabilities': {option: float(option == choice) for option in criteria}}
+        return 200, {}, json.dumps({'model': semantic_jev.JEV_MODEL, 'answers': answers,
+                                    'usage': {'input_tokens': 1, 'output_tokens': 1}}).encode()
+    def make_client(**kwargs):
+        assert kwargs['max_attempts'] == 1, 'a timeout cannot silently repeat a quality judgement'
+        return client(post_fn=post, **kwargs)
+    monkeypatch.setattr(semantic_jev, 'JevClient', make_client)
+    return led, clock, cfg, doc, sends, behavior
+
+
+def test_quality_owner_calls_jev_once_and_rechecks_saved_pass(quality_owner):
+    led, clock, cfg, doc, sends, _ = quality_owner
     status, identity = refresh._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
     assert status == 'pending' and len(sends) == 1
     assert len(led.artifacts('semantic_usage')) == 1
@@ -351,7 +375,7 @@ def test_quality_owner_calls_jev_once_and_rechecks_saved_pass(runtime, monkeypat
     answer = answers[0]
     led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (answer['artifact_id'],))
     led.db.commit()
-    with pytest.raises(ValueError, match='patient_summary_quality_incomplete'):
+    with pytest.raises(ValueError, match='patient_summary_quality_unresolved_request'):
         refresh._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
     assert len(sends) == 1
 
@@ -491,3 +515,43 @@ def test_corrupt_repair_receipt_does_not_grant_a_new_attempt(repair):
     led.db.commit()
     assert run() == ('held', None)
     assert not sent
+
+
+@pytest.mark.parametrize('fault', ['checkpoint', 'timeout', 'partial'])
+def test_unknown_quality_request_survives_later_tick_reopen_day_and_cleanup(quality_owner, monkeypatch, fault):
+    from contextlib import closing
+    import ledger
+    import maintenance
+    led, clock, cfg, doc, sends, behavior = quality_owner
+    if fault == 'checkpoint':
+        behavior['negative'] = True
+        original = refresh._quality_store_answers
+        def denied(*args, **kwargs):
+            with monkeypatch.context() as patch:
+                patch.setattr(refresh, 'acquire_run_lock', lambda: None)
+                return original(*args, **kwargs)
+        with monkeypatch.context() as patch:
+            patch.setattr(refresh, '_quality_store_answers', denied)
+            with pytest.raises(refresh.Deferred, match='patient_summary_quality_lock'):
+                refresh._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+        assert not led.artifacts(refresh.QUALITY) and not led.artifacts(refresh.QUALITY_FAIL)
+    else:
+        behavior[fault] = True
+        assert refresh._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600,
+                                     lambda: True)[0] == 'deferred'
+    count = 2 if fault == 'partial' else 1
+    assert len(sends) == count
+    if fault == 'partial':
+        assert len(led.artifacts(refresh.QUALITY)) == len(led.artifacts(refresh.QUALITY_FAIL)) == 1
+        assert sends[0] == ['q0', 'q1'] and sends[1] == ['q1']
+    clock.wall += 9 * 86400
+    maintenance.prune_history(led.db, now=time.time() + 9 * 86400)
+    # A resolved negative can be pruned from usage; its immutable QUALITY/FAIL remains.
+    assert len(led.artifacts('semantic_usage')) >= 1
+    path = led.db.execute('PRAGMA database_list').fetchone()[2]
+    with closing(ledger.Ledger(path)) as reopened:
+        status, _ = refresh._quality_step(reopened, 1, cfg, '2026-10-17', doc,
+                                           clock.mono + 600, lambda: True)
+        assert status == 'unknown'
+    assert len(sends) == count
+    assert not led.artifacts(refresh.QUALITY_PASS)

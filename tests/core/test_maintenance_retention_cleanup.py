@@ -340,6 +340,37 @@ def test_cloud_retention_is_62_days_and_jev_stays_seven(tmp_path):
     db.close()
 
 
+def test_prune_keeps_unknown_summary_usage_and_invalid_evidence(tmp_path):
+    from mcs_util import payload_hash
+
+    db = _ledger(tmp_path)
+    now = time.time()
+    key = {"input_key": "1" * 64, "candidate_key": "2" * 64,
+           "failure_key": "3" * 64, "audit_key": "4" * 64}
+    fact = "a" * 64
+    request = {"v": 1, **key, "questions": {"q0": fact}}
+    base = {"operation": "patient_summary_quality", "jev_requests": 1, "quality_request": request,
+            "reserved": True, "request_fp": "b" * 64, "reservation_id": "c" * 32, "timeout_seconds": 10}
+    ids = {}
+    for name, meta in (
+            ("unbound", {"operation": "patient_summary_quality", "jev_requests": 1}),
+            ("unknown", base),
+            ("resolved_invalid", {**base, "quality_result": {"answers": {}, "invalid": [fact]}}),
+            ("missing_answer", {**base, "quality_result": {"answers": {fact: payload_hash(
+                {"choice": "supports", "confidence": 0.9})}, "invalid": []}}),
+            ("other", {"jev_requests": 1})):
+        ids[name] = db.artifact_add("semantic_usage", "{}", project_id=1, meta=meta)
+    ids["corrupt"] = db.artifact_add("semantic_usage", "{}", project_id=1)
+    db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                  ('{"operation":"other","operation":"patient_summary_quality"}', ids["corrupt"]))
+    db.db.execute("UPDATE artifacts SET created_at=? WHERE kind='semantic_usage'", (now - 8 * 86400,))
+    db.db.commit()
+    maintenance.prune_history(db.db, now=now)
+    remaining = {row[0] for row in db.db.execute("SELECT artifact_id FROM artifacts WHERE kind='semantic_usage'")}
+    assert remaining == {ids[name] for name in ("unbound", "unknown", "resolved_invalid", "missing_answer", "corrupt")}
+    db.close()
+
+
 def test_context_scan_generations_and_all_fact_chunks_survive_history_retention(tmp_path):
     db = _ledger(tmp_path)
     now = time.time()

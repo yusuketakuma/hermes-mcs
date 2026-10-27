@@ -551,7 +551,7 @@ _PATIENT_SUMMARY_OMISSION_OPTIONS = {
 
 
 def audit_patient_summary_chunk(jev_client, summary, candidates, sources, deadline, threshold, *,
-                                prior_answers=None, on_valid_answers=None):
+                                prior_answers=None, on_valid_answers=None, on_attempt_result=None):
     """Judge one finite source-backed chunk; the owner proves scope and currentness.
 
     Before calling, the owner validates facts and source bodies on the same
@@ -570,7 +570,10 @@ def audit_patient_summary_chunk(jev_client, summary, candidates, sources, deadli
         return {"evaluated": False, "findings": [{"code": code}], "answers": {},
                 "failure_class": "resource" if code == "patient_summary_audit_deadline" else "failed"}
 
-    if (jev_client is None or not callable(on_valid_answers) or not _probability(threshold)
+    if (jev_client is None
+            or (not callable(on_valid_answers) and not callable(on_attempt_result))
+            or (on_valid_answers is not None and on_attempt_result is not None)
+            or not _probability(threshold)
             or type(deadline) not in (int, float) or not float('-inf') < deadline < float('inf')
             or not isinstance(summary, list) or not 1 <= len(summary) <= 12
             or not isinstance(candidates, list) or not 1 <= len(candidates) <= _PATIENT_SUMMARY_CHUNK_LIMIT
@@ -687,7 +690,7 @@ def audit_patient_summary_chunk(jev_client, summary, candidates, sources, deadli
                if facts_by_qid[qid] not in saved}
     callback_failed = False
 
-    def persist(raw):
+    def persist(raw, invalid_ids=None):
         nonlocal callback_failed
         if not isinstance(raw, dict) or set(raw) - set(pending):
             raise ValueError("patient_summary_answer_invalid")
@@ -702,7 +705,12 @@ def audit_patient_summary_chunk(jev_client, summary, candidates, sources, deadli
             mapped[fact_id] = normalized
         try:
             from copy import deepcopy
-            result = on_valid_answers(deepcopy(mapped))
+            if on_attempt_result is None:
+                result = on_valid_answers(deepcopy(mapped))
+            else:
+                if not isinstance(invalid_ids, set) or not invalid_ids <= set(pending):
+                    raise ValueError("patient_summary_answer_invalid")
+                result = on_attempt_result(deepcopy(mapped), {facts_by_qid[qid] for qid in invalid_ids})
             if result is False:
                 raise RuntimeError("patient_summary_answer_persistence_failed")
         except BaseException:
@@ -713,7 +721,9 @@ def audit_patient_summary_chunk(jev_client, summary, candidates, sources, deadli
     failure = None
     if pending:
         try:
-            jev.evaluate_once_more(jev_client, state, pending, deadline, on_valid_answers=persist)
+            jev.evaluate_once_more(jev_client, state, pending, deadline,
+                **({"on_attempt_result": persist} if on_attempt_result is not None
+                   else {"on_valid_answers": persist}))
         except jev.JevError as error:
             if callback_failed:
                 raise

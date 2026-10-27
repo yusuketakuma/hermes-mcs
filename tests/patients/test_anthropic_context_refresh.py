@@ -1,20 +1,49 @@
 """Synthetic per-unit context routing; no keys, GPU, HTTP or source data."""
 import json
 import os
+import time
 
 import pytest
 
 import extract_llm as worker
 import patient_context_refresh as context_refresh
 from extract_testkit import _message
-from test_patient_context_refresh import CFG, document, runtime, seed, stamp, step
+from test_patient_context_refresh import CFG as BASE_CFG, document, runtime, seed, stamp, step as base_step
 
 __all__ = ["runtime"]
+
+CFG = {**BASE_CFG, "semantic": {"mode": "assist", "project_ids": [1], "daily_request_budget": 3000}}
+
+
+def step(runtime, **kwargs):
+    return base_step(runtime, cfg=CFG, **kwargs)
 
 
 @pytest.fixture
 def cloud(runtime, monkeypatch):
     led, clock, local_calls = runtime
+    import semantic_jev
+    clock.mono = time.monotonic()
+    monkeypatch.setattr(worker, "load_config", lambda: CFG)
+    monkeypatch.setattr(worker, "_writer_current", lambda **_kwargs: True)
+    monkeypatch.setattr(semantic_jev, "api_key", lambda *_: "synthetic-jev-key")
+    jev_requests = []
+    original_jev_client = semantic_jev.JevClient
+    def post(body, timeout):
+        assert timeout > 0 and not led.db.in_transaction
+        assert body["state"]["target"]["facts"] and body["questions"]
+        jev_requests.append(body)
+        answers = {}
+        for qid, question in body["questions"].items():
+            options = question["criteria"]
+            choice = "supports" if "supports" in options else "omission_ok"
+            assert choice in options
+            answers[qid] = {"type": "choice", "choice": choice, "confidence": 1.0,
+                            "probabilities": {option: float(option == choice) for option in options}}
+        return 200, {}, json.dumps({"model": semantic_jev.JEV_MODEL, "answers": answers,
+                                    "usage": {"input_tokens": 1, "output_tokens": 1}}).encode()
+    monkeypatch.setattr(semantic_jev, "JevClient", lambda **kwargs: original_jev_client(post_fn=post, **kwargs))
+    led.synthetic_jev_requests = jev_requests
     requests = []
     mode = ["on"]
     failure = [False]
@@ -64,6 +93,9 @@ def drain(runtime, *, local_admit=lambda: True):
         result = step(runtime, local_admit=local_admit)
         if result["status"] == "complete":
             return
+        if result["status"] == "deferred":
+            assert result.get("reason") == "summary_quality_pending", result
+            continue
         assert result["status"] == "progressed", result
     pytest.fail("synthetic context did not finish")
 
@@ -75,6 +107,12 @@ def test_daytime_cloud_needs_no_local_gpu_capacity(runtime, cloud):
     assert led.db.execute("SELECT first_seen FROM messages WHERE message_id=1").fetchone()[0] <= clock.wall
     drain(runtime, local_admit=lambda: False)
     assert cloud[0] and not local_calls
+    import semantic_runtime
+    usage = led.artifacts('semantic_usage', project_id=1)
+    assert led.synthetic_jev_requests and len(usage) == len(led.synthetic_jev_requests)
+    assert all(semantic_runtime.patient_summary_usage_resolved(led.db, 1, json.loads(row['meta'])) for row in usage)
+    assert led.artifacts(context_refresh.QUALITY, project_id=1)
+    assert led.artifacts(context_refresh.QUALITY_PASS, project_id=1)
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
     scan = led.db.execute("SELECT meta FROM artifacts WHERE kind=?", (context_refresh.SCAN,)).fetchone()
     meta = json.loads(scan[0])
@@ -83,19 +121,18 @@ def test_daytime_cloud_needs_no_local_gpu_capacity(runtime, cloud):
     assert meta["contract"] == context_refresh._contract(CFG, 1)
 
 
-def test_failed_cloud_retries_local_with_its_model(runtime, cloud):
+def test_requested_cloud_failure_stays_private_and_recovers_without_local_fallback(runtime, cloud):
     led, _, local_calls = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
     cloud[2][0] = True
+    result = step(runtime)
+    assert result['status'] == 'deferred' and result.get('reason') == 'nightly_cloud_unavailable'
+    assert not local_calls and not cloud[0] and document(led) is None
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    cloud[2][0] = False
     drain(runtime)
-    assert local_calls and not cloud[0]
-    for row in led.db.execute("SELECT meta FROM artifacts WHERE kind IN (?,?)", (context_refresh.KIND, context_refresh.SCAN)):
-        meta = json.loads(row[0])
-        assert "provider" not in meta and meta["model"] == "synthetic"
-        assert "provider" not in meta["contract"]
-        assert meta["route_contract"] == context_refresh._contract(CFG, 1)
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
-    assert step(runtime)["status"] == "complete"
+    assert not local_calls and cloud[0] and context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    assert step(runtime)['status'] == 'complete'
 
 
 def test_failed_cloud_does_not_bypass_local_admission(runtime, cloud):
@@ -141,8 +178,7 @@ def test_crossing_midnight_preserves_cloud_publication_and_progress(runtime, clo
             clock.mono += 31
             return answer
     monkeypatch.setattr(worker, "_CloudProvider", Crossing)
-    # First unit publishes the empty deterministic selection; the scan sends next.
-    step(runtime)
+    # First cloud unit scans the original source before any summary is published.
     result = step(runtime)
     assert result["status"] == "progressed"
     assert led.artifacts(context_refresh.SCAN)
@@ -202,9 +238,7 @@ def test_partial_cloud_scan_requires_same_rules_and_provider_contract(runtime, c
 def test_scope_is_rechecked_after_writer_acquisition(runtime, cloud, monkeypatch):
     led, _, _ = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
-    # Publish the deterministic empty summary before revoking the next paid scan.
-    # Otherwise both steps reject the same unsent summary, never exercising HTTP.
-    assert step(runtime)["status"] == "progressed"
+    # The first selected cloud scan must be revoked after its HTTP response.
     assert not cloud[0] and not led.synthetic_cloud_dispositions
     original = worker._CloudProvider
     checked = []
@@ -226,22 +260,30 @@ def test_scope_is_rechecked_after_writer_acquisition(runtime, cloud, monkeypatch
 def test_fallback_reuse_requires_exact_local_and_route_contract(runtime, cloud, mutation):
     led, _, _ = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
-    cloud[2][0] = True
-    drain(runtime)
-    row = led.db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind=?", (context_refresh.SCAN,)).fetchone()
-    meta = json.loads(row["meta"])
-    if mutation == "actual_cloud_without_provider":
-        meta["contract"] = meta.pop("route_contract")
-    elif mutation == "local_model":
-        meta["contract"]["model"] = "unapproved-local-model"
-    elif mutation == "route_model":
-        meta["route_contract"]["provider"]["model"] = "unapproved-cloud-model"
-    else:
-        meta["model"] = "unapproved-actual-model"
-    led.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), row["artifact_id"]))
-    led.db.commit()
     snapshot = context_refresh._snapshot(led.db, 1, CFG)
-    assert not context_refresh._current_scans(led.db, 1, snapshot["sources"], snapshot["contract"])
+    contract = snapshot['contract']
+    # A previously saved local fallback is read-only compatibility evidence;
+    # current explicit cloud work no longer creates one on provider failure.
+    meta = {'source_sig': context_refresh._source_sig(snapshot['sources'][0]),
+            'contract': {key: value for key, value in contract.items() if key != 'provider'},
+            'route_contract': contract, 'model': 'synthetic'}
+    with led.db:
+        context_refresh._replace(led, context_refresh.SCAN, 1,
+                                 {'cursor': 1, 'complete': False, 'facts': []}, meta, 1)
+    assert 1 in context_refresh._current_scans(led.db, 1, snapshot['sources'], contract)
+    row = led.db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind=?", (context_refresh.SCAN,)).fetchone()
+    meta = json.loads(row['meta'])
+    if mutation == 'actual_cloud_without_provider':
+        meta['contract'] = meta.pop('route_contract')
+    elif mutation == 'local_model':
+        meta['contract']['model'] = 'unapproved-local-model'
+    elif mutation == 'route_model':
+        meta['route_contract']['provider']['model'] = 'unapproved-cloud-model'
+    else:
+        meta['model'] = 'unapproved-actual-model'
+    led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), row['artifact_id']))
+    led.db.commit()
+    assert not context_refresh._current_scans(led.db, 1, snapshot['sources'], contract)
 
 
 def test_dryrun_does_not_count_deferred_or_audit_and_stops_after_completion(runtime, cloud):
@@ -258,19 +300,18 @@ def test_dryrun_does_not_count_deferred_or_audit_and_stops_after_completion(runt
 
 
 
-def test_budget_fallback_saves_local_contract_and_remains_reusable(runtime, cloud, monkeypatch):
+def test_cloud_budget_wait_stays_private_and_resumes_when_capacity_returns(runtime, cloud, monkeypatch):
     led, _, local_calls = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
-    # The requested route remains cloud; admission blocks new paid work.
     monkeypatch.setattr(worker, "_cloud_mode", lambda *args: "off")
+    result = step(runtime)
+    assert result['status'] == 'deferred' and result.get('reason') == 'nightly_cloud_capacity'
+    assert not local_calls and not cloud[0] and document(led) is None
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    monkeypatch.setattr(worker, "_cloud_mode", lambda *args: cloud[1][0])
     drain(runtime)
-    assert local_calls and not cloud[0]
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
-    for row in led.db.execute("SELECT meta FROM artifacts WHERE kind IN (?,?)", (context_refresh.KIND, context_refresh.SCAN)):
-        meta = json.loads(row[0])
-        assert "provider" not in meta["contract"] and "provider" not in meta
-        assert meta["route_contract"] == context_refresh._contract(CFG, 1)
-    assert step(runtime)["status"] == "complete"
+    assert not local_calls and cloud[0] and context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    assert step(runtime)['status'] == 'complete'
 
 
 def test_saved_cloud_context_survives_budget_changes_but_not_code_change(runtime, cloud, monkeypatch):
@@ -311,8 +352,9 @@ def test_dryrun_estimate_is_atomic_with_context_and_progress(runtime, cloud, mon
     if abort:
         with pytest.raises(RuntimeError, match="synthetic_save_failure"):
             step(runtime)
-        for kind in (context_refresh.KIND, context_refresh.SCAN, context_refresh.PROGRESS, "cloud_usage_dryrun"):
+        for kind in (context_refresh.KIND, context_refresh.SCAN, "cloud_usage_dryrun"):
             assert not led.artifacts(kind)
+        assert led.artifacts(context_refresh.PROGRESS)  # Selection is a separate preclaim.
     else:
         assert step(runtime)["status"] == "progressed"
         assert led.artifacts(context_refresh.KIND) and led.artifacts(context_refresh.PROGRESS)
@@ -389,7 +431,8 @@ def test_pending_estimate_uses_exact_current_contract_without_credentials(runtim
     contract = context_refresh._contract(CFG, 1)
     monkeypatch.setattr(worker.cloud_policy, "api_key", lambda *args: pytest.fail("estimate read a credential"))
     estimate = context_refresh.pending_estimate(led.db, 1, CFG, contract=contract)
-    assert estimate["targets"] == estimate["summary_units"] == estimate["scan_sources"] == 1
+    assert estimate["targets"] == estimate["scan_sources"] == 1
+    assert estimate["summary_units"] == 0  # Cloud summary waits for source scans and audits.
     assert estimate["scan_chunks_estimate"] >= 1 and estimate["input_chars"] > 0
     cfg = {**CFG, "extract": {"patient_context_nightly": {"enabled": False}}}
     assert not any(context_refresh.pending_estimate(led.db, 1, cfg, contract=contract).values())
@@ -410,7 +453,9 @@ def test_scope_withdrawn_while_waiting_for_writer_records_disposition(runtime, c
     led, _, _ = runtime
     seed(led)
     allowed = [True]
+    attempts = []
     def locked():
+        attempts.append(1)
         allowed[0] = False
         return None
     monkeypatch.setattr(context_refresh, "acquire_run_lock", locked)
@@ -492,7 +537,7 @@ def test_shadow_audit_is_a_single_short_lock_attempt_and_keeps_pending_when_unav
     close = os.close
     def acquire():
         attempts.append(1)
-        if len(attempts)>1:
+        if len(attempts)>1:  # the local result commit
             return None
         fd = os.open(os.devnull,os.O_RDONLY)
         held.add(fd)
@@ -533,14 +578,14 @@ def test_shadow_pending_is_atomic_with_local_success_and_replay_does_not_duplica
     assert step(runtime)["lane"] == "A"
     prior_rows = led.artifacts("cloud_compare_v1")
     prior_ids = {row["artifact_id"] for row in prior_rows}
-    before = [dict(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+    before = [dict(row) for row in led.db.execute("SELECT * FROM artifacts WHERE kind!=? ORDER BY artifact_id", (context_refresh.PROGRESS,))]
     def fail(*args, **kwargs):
         raise ValueError("synthetic_pending_failure")
     with monkeypatch.context() as patch:
         patch.setattr(worker, "_cloud_compare_tx", fail)
         with pytest.raises(ValueError, match="synthetic_pending_failure"):
             step(runtime)
-    assert [dict(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == before
+    assert [dict(row) for row in led.db.execute("SELECT * FROM artifacts WHERE kind!=? ORDER BY artifact_id", (context_refresh.PROGRESS,))] == before
     assert not cloud[0]
     assert step(runtime)["lane"] == "B"
     row, = [row for row in led.artifacts("cloud_compare_v1") if row["artifact_id"] not in prior_ids]
@@ -574,10 +619,13 @@ def test_paid_cloud_failure_without_local_capacity_records_the_retry(runtime, cl
     assert not local_calls and len(sent) == 1
     stored = document(led, context_refresh.SCAN)
     assert stored["failure"] == "nightly_cloud_failed" and stored["attempts"] == 1 and stored["next_try"] > 0
-    # the retry is recorded under the local route, where the next selection finds it
+    # The failed attempt remains bound to the requested cloud route and source.
     meta = json.loads(led.db.execute("SELECT meta FROM artifacts WHERE kind=?", (context_refresh.SCAN,)).fetchone()[0])
-    assert "provider" not in meta and meta["model"] == "synthetic"
-    assert meta["route_contract"] == context_refresh._contract(CFG, 1) and "provider" not in meta["contract"]
+    contract = context_refresh._contract(CFG, 1)
+    assert meta["provider"] == contract["provider"] and meta["model"] == contract["provider"]["model"]
+    snapshot = context_refresh._snapshot(led.db, 1, CFG)
+    saved = context_refresh._current_scans(led.db, 1, snapshot["sources"], contract)[1]
+    assert saved["failure"] == "nightly_cloud_failed" and saved["attempts"] == 1 and saved["next_try"] > 0
     # the backoff keeps the next tick from re-sending the same unit
     assert step(runtime, local_admit=lambda: False)["status"] != "failed" and len(sent) == 1
 

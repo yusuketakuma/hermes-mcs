@@ -100,6 +100,21 @@ def test_unapproved_canonical_quality_never_spends_or_falls_back(runtime, monkey
     assert not led.artifacts('semantic_usage')
 
 
+def test_tick_run_lock_does_not_block_fenced_scheduling_or_mark_a_result_published(runtime, monkeypatch):
+    led, clock, calls = runtime
+    seed(led)
+    monkeypatch.setattr(refresh, 'acquire_run_lock', lambda: None)
+    def sleep(seconds):
+        clock.mono += seconds
+        clock.wall += seconds
+    monkeypatch.setattr(refresh.time, 'sleep', sleep, raising=False)
+    result = step(runtime)
+    assert result['status'] == 'deferred' and result['reason'] == 'run_lock'
+    assert document(led, refresh.PROGRESS)['last_attempt_unit'] == 1
+    assert document(led, refresh.PROGRESS, pid=0)['units'] == 1
+    assert calls and document(led) is None
+
+
 def test_quality_budget_wait_does_not_prevent_other_patient_progress(cloud_schedule, monkeypatch):
     rt, cfg = cloud_schedule
     led, _, _ = rt

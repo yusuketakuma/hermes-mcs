@@ -491,10 +491,12 @@ def _quality_scope_allowed(db, pid, policy, sources=None):
 def _quality_publication_allowed(db, pid, cfg, doc, meta):
     """Revalidate a cloud summary's receipt and current promotion boundary."""
     import semantic_policy
+    import semantic_runtime
     try:
         # Key availability controls new calls; cached evidence uses the configured scope.
         policy, errors = semantic_policy.semantic_config(cfg, key_present=True)
-        if errors or not _quality_scope_allowed(db, pid, policy):
+        contract = _publication_contract(cfg, meta)
+        if errors or contract is None or not _quality_scope_allowed(db, pid, policy):
             return False
         assessment = _quality_assessment(cfg, policy)
         owns_read = not db.in_transaction
@@ -506,11 +508,12 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta):
                 return False
             _quality_integrity(db, pid)
             captured = _quality_capture(db, pid, cfg, meta.get("night_id"), doc.get("summary"), assessment,
-                                        doc.get("temporal_view"))
+                                        doc.get("temporal_view"), contract=contract)
             if not _quality_scope_allowed(db, pid, policy, captured["sources"]):
                 return False
             identity = captured["identity"]
             if (meta.get("quality_audit_key") != identity["audit_key"]
+                    or semantic_runtime.patient_summary_request_problem(db, pid, identity, identity["fact_ids"])
                     or _quality_failed(db, pid, identity) or not _quality_passed(db, pid, identity)):
                 return False
             selected = {row["fact_ids"][0] for row in doc["summary"]}
@@ -585,16 +588,7 @@ def _inference_coverage(db, pid, cfg, snapshot):
             "source_sig": snapshot["source_sig"], "contract": snapshot["contract"]}
 
 
-def context_view_input(db, pid, *, cfg=None):
-    """Read published source-current prose; additions are shown as unreflected."""
-    doc, meta = _latest(db, KIND, pid)
-    if not doc or meta.get("published") is not True:
-        return None
-    if cfg is not None and not all(options(cfg).values()):
-        return None
-    as_of = doc.get("as_of")
-    if type(as_of) not in (float, int) or not math.isfinite(as_of):
-        return None
+def _publication_contract(cfg, meta):
     stored = _route_contract(meta)
     if stored is None:
         return None
@@ -610,9 +604,23 @@ def context_view_input(db, pid, *, cfg=None):
         if stored["provider"] != extract_llm._cloud_contract():
             return None
         pinned["provider"] = stored["provider"]
-    current = _snapshot(db, pid, cfg or {}, hydrate=False, contract=pinned)
-    if stored != current["contract"]:
+    return pinned if stored == pinned else None
+
+
+def context_view_input(db, pid, *, cfg=None):
+    """Read published source-current prose; additions are shown as unreflected."""
+    doc, meta = _latest(db, KIND, pid)
+    if not doc or meta.get("published") is not True:
         return None
+    if cfg is not None and not all(options(cfg).values()):
+        return None
+    as_of = doc.get("as_of")
+    if type(as_of) not in (float, int) or not math.isfinite(as_of):
+        return None
+    pinned = _publication_contract(cfg, meta)
+    if pinned is None:
+        return None
+    current = _snapshot(db, pid, cfg or {}, hydrate=False, contract=pinned)
     if current["source_sig"] != meta.get("source_sig"):
         return None
     if not _inference_coverage(db, pid, cfg or {}, current)["publication_eligible"]:
@@ -719,6 +727,9 @@ def _quality_input(db, pid, snapshot, all_facts, state, summary, assessment_cont
             or not isinstance(display_projection, dict)):
         raise ValueError("patient_summary_quality_invalid")
     sources = snapshot["sources"]
+    revisions = dict(db.execute("SELECT m.message_id,MAX(r.seq) FROM messages m "
+        "LEFT JOIN message_revisions r ON r.message_id=m.message_id WHERE m.project_id=? "
+        "GROUP BY m.message_id", (pid,)))
     bound = []
     indexed = {}
     for source in sources:
@@ -743,7 +754,7 @@ def _quality_input(db, pid, snapshot, all_facts, state, summary, assessment_cont
                         or hashlib.sha256(html.encode("utf-8")).hexdigest() != source["content_hash"]
                         or html_to_text(html) != body):
                     raise ValueError("patient_summary_quality_source")
-            revision = db.execute("SELECT MAX(seq) FROM message_revisions WHERE message_id=?", (mid,)).fetchone()[0]
+            revision = revisions.get(mid)
             if revision is not None and (type(revision) is not int or revision < 1):
                 raise ValueError("patient_summary_quality_source")
         else:
@@ -783,11 +794,11 @@ def _quality_input(db, pid, snapshot, all_facts, state, summary, assessment_cont
             "fact_ids": sorted(by_id), "assessment": assessment_contract}
 
 
-def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, display_projection):
+def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, display_projection, *, contract=None):
     """Read and validate quality inputs within an already-open SQLite snapshot."""
     if not db.in_transaction:
         raise RuntimeError("patient_summary_snapshot_required")
-    snapshot = _snapshot(db, pid, cfg, hydrate=True)
+    snapshot = _snapshot(db, pid, cfg, hydrate=True, contract=contract)
     scope = snapshot.get("scope") or {}
     if (_out_of_scope(snapshot) or scope.get("is_archived")
             or not snapshot["acquisition"]["complete"]
@@ -946,13 +957,17 @@ def _quality_failure_allows_remainder(db, pid, identity):
     return meta.get("audit_key") == identity["audit_key"]
 
 
-def _quality_store_answers(ledger, pid, identity, claim, answers, current, threshold, selected_ids):
+def _quality_store_answers(ledger, pid, identity, claim, answers, current, threshold, selected_ids, *,
+                           reservation=None, invalid_ids=None):
     """Persist a bounded callback before any next Jev request; refuse stale owners."""
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
     if (type(threshold) not in (int, float) or not math.isfinite(threshold) or not 0 <= threshold <= 1
             or not isinstance(answers, dict) or len(answers) > 12
             or any(key not in identity["fact_ids"] for key in answers)):
+        raise ValueError("patient_summary_quality_answers_invalid")
+    if invalid_ids is not None and (reservation is None or not isinstance(invalid_ids, set)
+            or not invalid_ids <= set(identity["fact_ids"]) or invalid_ids & set(answers)):
         raise ValueError("patient_summary_quality_answers_invalid")
     if not current():
         raise ValueError("patient_summary_quality_source_changed")
@@ -987,6 +1002,10 @@ def _quality_store_answers(ledger, pid, identity, claim, answers, current, thres
                 writes += 1
                 if not _quality_failed(ledger.db, pid, identity):
                     raise ValueError("patient_summary_quality_failure_unverified")
+            if reservation is not None:
+                import semantic_runtime
+                writes += semantic_runtime.patient_summary_resolve_request_tx(
+                    ledger, reservation, identity, answers, invalid_ids, project_id=pid)
             if not _quality_owns(ledger.db, pid, identity["input_key"], claim) or not current(writes):
                 raise ValueError("patient_summary_quality_source_changed")
             ledger.db.commit()
@@ -1017,6 +1036,7 @@ def _quality_pass_present(db, pid, identity):
 
 
 def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, threshold):
+    import semantic_runtime
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
     if not current():
@@ -1028,6 +1048,8 @@ def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, thre
     changes = ledger.db.total_changes
     ledger.db.execute("BEGIN")
     try:
+        if semantic_runtime.patient_summary_request_problem(ledger.db, pid, identity, identity["fact_ids"]):
+            raise ValueError("patient_summary_quality_unresolved_request")
         for start in range(0, len(identity["fact_ids"]), 12):
             ids = identity["fact_ids"][start:start + 12]
             answers = _quality_answers(ledger.db, pid, identity["audit_key"], ids)
@@ -1453,7 +1475,8 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
             _quality_mark_pass(ledger, pid, identity, claim, selected, current, scfg["match_threshold"])
             return "passed", {**identity, "_keys": (key, anthropic_key)}
         reserve = semantic_runtime.patient_summary_usage_reserver(
-            ledger, project_id=pid, guard=guard, daily_request_budget=scfg["daily_request_budget"])
+            ledger, project_id=pid, guard=guard, daily_request_budget=scfg["daily_request_budget"], identity=identity)
+        reservation = [None]
 
         def reserve_locked(body, timeout):
             if not current():
@@ -1465,13 +1488,14 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                 live_cfg, problems = semantic_policy.semantic_config(extract_llm.load_config(), key_present=bool(key))
                 if problems or live_cfg["daily_request_budget"] < scfg["daily_request_budget"]:
                     raise Deferred("patient_summary_quality_budget_changed")
-                return reserve(body, timeout)
+                reservation[0] = reserve(body, timeout)
+                return reservation[0]
             finally:
                 os.close(fd)
 
         client = semantic_jev.JevClient(api_key=key, model=scfg["model"],
             attempt_timeout=scfg["attempt_timeout_seconds"], job_budget=scfg["job_budget_seconds"],
-            max_attempts=scfg["max_attempts_per_try"])
+            max_attempts=1)
         if not getattr(client, "supports_attempt_hooks", False):
             return "deferred", None
         client = semantic_runtime.bind_jev(client, guard, reserve_locked, deadline)
@@ -1487,19 +1511,28 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                                        scfg["match_threshold"], selected)
             if len(prior) == len(ids):
                 continue
+            problem = semantic_runtime.patient_summary_request_problem(ledger.db, pid, identity, ids)
+            if problem == "patient_summary_invalid_exhausted":
+                _quality_record_failure(ledger, pid, identity, claim, page_key, "failed", current)
+                return "held", identity
+            if problem:
+                return "unknown", identity
             retry = _quality_retry(ledger.db, pid, identity["audit_key"], page_key)
             if retry["held"] or retry["next_try"] > time.time():
                 return "deferred", identity
             candidates = [by_id[fid] for fid in ids]
             sources = { (fact["source"], fact["source_key"]): by_source[(fact["source"], fact["source_key"])]
                         for fact in candidates }
-            def persist(answers):
+            def persist(answers, invalid_ids):
+                if reservation[0] is None:
+                    raise ValueError("patient_summary_request_missing")
                 _quality_store_answers(ledger, pid, identity, claim, answers, current,
-                                       scfg["match_threshold"], selected)
+                                       scfg["match_threshold"], selected,
+                                       reservation=reservation[0], invalid_ids=invalid_ids)
                 return True
             outcome = semantic_audit.audit_patient_summary_chunk(client, summary, candidates,
                 list(sources.values()), deadline, scfg["match_threshold"], prior_answers=prior,
-                on_valid_answers=persist)
+                on_attempt_result=persist)
             if not outcome["evaluated"]:
                 failure_class = outcome.get("failure_class", "failed")
                 if failure_class in ("retry", "failed"):
@@ -1866,30 +1899,29 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 **({"reason": "patient_context_waiting"} if waiting else {}), **stats}
     key, snapshot, progress, frozen_ver = best[lane]
     pid = key[-1]
-    selection_fd = acquire_run_lock()
-    if selection_fd is None:
-        return {"status": "deferred", "done": 0, "reason": "run_lock", **stats}
+    # Like extraction claims, scheduling is fenced by SQLite, not the tick's run lock.
+    ledger.db.execute("BEGIN IMMEDIATE")
     try:
-        ledger.db.execute("BEGIN IMMEDIATE")
-        try:
-            if (time.monotonic() + COMMIT_MARGIN >= deadline or not admit()
-                    or _published_version(ledger.db, pid) != frozen_ver
-                    or _latest(ledger.db, PROGRESS, 0)[0] != rotation):
-                ledger.db.rollback()
-                return {"status": "source_changed", "done": 0, **stats}
-            progress = {**progress, "last_attempt": now,
-                        "last_attempt_unit": rotation.get("units", 0) + 1,
-                        "night_id": night_id, "source_sig": snapshot["source_sig"]}
-            _replace(ledger, PROGRESS, pid, progress, {})
-            _replace(ledger, PROGRESS, 0, {"cursor": next_cursor, "units": rotation.get("units", 0) + 1}, {})
-            ledger.db.commit()
-            # Our scheduling write participates in the same publisher fence as later work.
-            frozen_ver = _published_version(ledger.db, pid)
-        except BaseException:
+        if (time.monotonic() + COMMIT_MARGIN >= deadline or not admit()
+                or not extract_llm._writer_current(full=True)
+                or _published_version(ledger.db, pid) != frozen_ver
+                or _latest(ledger.db, PROGRESS, 0)[0] != rotation):
             ledger.db.rollback()
-            raise
-    finally:
-        os.close(selection_fd)
+            return {"status": "source_changed", "done": 0, **stats}
+        progress = {**progress, "last_attempt": now,
+                    "last_attempt_unit": rotation.get("units", 0) + 1,
+                    "night_id": night_id, "source_sig": snapshot["source_sig"]}
+        _replace(ledger, PROGRESS, pid, progress, {})
+        _replace(ledger, PROGRESS, 0, {"cursor": next_cursor, "units": rotation.get("units", 0) + 1}, {})
+        if not extract_llm._writer_current(full=True):
+            ledger.db.rollback()
+            return {"status": "source_changed", "done": 0, **stats}
+        ledger.db.commit()
+        # Our scheduling write participates in the same publisher fence as later work.
+        frozen_ver = _published_version(ledger.db, pid)
+    except BaseException:
+        ledger.db.rollback()
+        raise
     if lane == "A":
         # Facts need hydrated items; the hydrated read must still match the
         # selection-time signature the reused progress reset came from.
@@ -1965,6 +1997,9 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 if changed:
                     provider.discard()
                 paid = provider.possibly_sent
+                if cloud_requested and paid:
+                    meta["provider"] = provider.contract
+                    meta["model"] = provider.model
                 provider = None
                 if cloud_requested:
                     if paid:
