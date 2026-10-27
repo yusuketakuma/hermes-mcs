@@ -10,7 +10,7 @@ import clinical_values
 import extract
 import patient_context
 from patient_context import CATEGORIES, context_items
-from mcs_util import locate_quote_span
+from mcs_util import fold_map, locate_quote_span
 
 _VITAL_KEYS = {"bt", "hr", "rr", "sbp", "dbp", "spo2", "bs"}
 
@@ -156,6 +156,94 @@ def flat_text(text: str) -> str:
     return "".join(unicodedata.normalize("NFKC", text).split())
 
 
+def _med_name_spans(text, name):
+    """Locate whole alphanumeric drug names while retaining original offsets."""
+    from extract_schema import RX_DOSE_ONE
+
+    folded, starts, ends = fold_map(text)
+    needle = flat_text(name)
+    if not needle:
+        return []
+    spans = []
+    for match in re.finditer(r"(?=" + re.escape(needle) + r")", folded):
+        left, right = match.start(), match.start() + len(needle)
+        if ((left and starts[left - 1] == starts[left])
+                or (right < len(starts) and starts[right] == starts[right - 1])):
+            continue
+        if left and not text[ends[left - 1]:starts[left]]:
+            prefix = folded[:left]
+            if (re.search(r"[\wァ-ヶー一-龥々]$", prefix)
+                    and not re.search(
+                        r"(?:は|が|も|の|を|に|と|へ|で|"
+                        r"(?:本日|今日|昨日|明日|明後日|今朝|現在|既に|すでに)(?:から|より|に)?|"
+                        r"(?:開始|中止|追加|再開|減量|増量)し|"
+                        r"(?:降圧|抗菌|抗生|睡眠|鎮痛|解熱鎮痛|解熱|抗凝固|抗血小板|利尿|緩下|"
+                        r"抗精神病|抗うつ|抗不安|抗てんかん|抗アレルギー|糖尿病|整腸|制吐)(?:薬|剤))$", prefix)):
+                continue
+        after = right
+        if after < len(folded) and re.match(r"[A-Za-z0-9ァ-ヶー一-龥々]", folded[after]):
+            dose = re.match(RX_DOSE_ONE, folded[after:], re.I)
+            if not dose:
+                continue
+            after += dose.end()
+            if after < len(folded) and re.match(r"[A-Za-z0-9ァ-ヶー一-龥々]", folded[after]):
+                continue
+        if after < len(folded) and re.match(r"[ぁ-ゖ]", folded[after]):
+            particle = re.match(r"(?:から|より|を|は|が|も|の|に|へ|と|で|や)", folded[after:])
+            if not particle:
+                continue
+            rest = folded[after + particle.end():]
+            # A following hiragana word must be an explicit assertion, not a
+            # product-name continuation such as のど飴 or はちみつ味.
+            if rest and re.match(r"[ぁ-ゖ]", rest):
+                if particle.group() == "の" or not re.match(
+                        r"(?:する|した|して|しない|しません|し|され|せず|ある|あり|ありません|"
+                        r"ない|なく|なし|います|いない|いる|いただ|ください|もら|"
+                        r"やめ(?:ました|ません|ます|た|る|ています|ている|て|ず|ない)|"
+                        r"の(?:み(?:ました|ます|ません)|んで(?:います|いる|いました|いない|いません)|む|まない|まず))", rest):
+                    continue
+        spans.append((starts[left], ends[right - 1]))
+    return spans
+
+
+def _compound_medication_action(body, item, start, end):
+    """Read the first action in a narrowly structured two-drug report."""
+    from extract_schema import RX_DOSE
+
+    if item.get("subject") != "patient" or item.get("negated") is not False:
+        return None
+    # A later correction, or another occurrence of the same drug elsewhere in
+    # the message, requires the ordinary conservative path rather than a guess.
+    if (len(body) > 20000 or len(_med_name_spans(body, item["name"])) != 1
+            or re.search(r"訂正|修正|撤回|取消|取り消|誤り|間違|同薬|同剤|当該薬|その薬|この薬|該当薬|前の薬", body)):
+        return None
+    left = max(body.rfind(mark, 0, start) for mark in "。！？!?;；\n") + 1
+    stop = re.search(r"[。！？!?;；\n]", body[end:])
+    right = end + stop.start() if stop else len(body)
+    if right - left > 512 or (right < len(body) and body[right] in "？?!！"):
+        return None
+    if clinical_scope.source_axes(body, start, end, default="unknown") != ("patient", "current"):
+        return None
+    sentence = flat_text(body[left:right])
+    name = flat_text(item["name"])
+    pattern = (r"本人(?:は|が|の)" + re.escape(name) + RX_DOSE
+               + r"(?:を|は|も)(?P<action>開始|中止)"
+               + r"し[、,](?P<other>[一-龥々ァ-ヶーA-Za-z0-9]{2,60}?)" + RX_DOSE
+               + r"(?:を|は|も)(?:開始|中止)(?:しました|した)")
+    match = re.fullmatch(pattern, sentence, re.I)
+    if not match or match["other"].casefold() == name.casefold():
+        return None
+    if not re.search(r"薬|剤|錠|[ァ-ヶー]{2,}", match["other"]):
+        return None
+    return {"開始": "start", "中止": "stop"}[match["action"]]
+
+
+def _compound_medication_done(body, item, start, end):
+    action = _compound_medication_action(body, item, start, end)
+    return (action is not None and action == item.get("action")
+            and item.get("status") == {"start": "current", "stop": "past"}[action])
+
+
 def nonspecific_med_name(name: str) -> bool:
     """Bare medication words and person-owned variants identify no particular drug."""
     generic = re.fullmatch(r"(?:(.+)の)?(?:薬|お薬|内服薬|処方薬|服用薬)", flat_text(name))
@@ -224,6 +312,128 @@ def validate(d: dict, body: str | None = None,
     return out
 
 
+def _listed_request_covers(action, text):
+    """Match explicitly requested confirmation/contact lists by full target names."""
+    if not isinstance(action, str) or not isinstance(text, str) or not re.search(
+            r"(?:お願い(?:します|いたします)?|(?:して)?ください|(?:して)?下さい)\s*$", text):
+        return False
+    source = clinical_values.request_action_key(text.replace("、", "と").replace(",", "と"))
+    source = re.sub(rf"^(?:{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON})"
+                    r"(?:が|は|から|より|の(?:依頼|報告)(?:で|を受け))"
+                    r"(?=(?:ご本人|本人|患者|利用者)の)", "", source)
+    source = re.sub(r"^(?:ご本人|本人|患者|利用者)の", "", source)
+    parts = re.split(r"(?<=確認)と|(?<=連絡)と", source)
+    if len(parts) < 2 or any(not re.fullmatch(
+            r"[一-龥々ぁ-んァ-ヶーA-Za-z0-9]{1,40}(?:確認|連絡)", part)
+            or re.search(r"終え|済み|完了|不要|しない|しません|中止|取消|撤回", part) for part in parts):
+        return False
+    aliases = {"血圧の記録": "血圧記録", "血糖の記録": "血糖記録"}
+    normalized = [aliases.get(part[:-2], part[:-2]) + part[-2:] for part in parts]
+    wanted = clinical_values.request_action_key(action)
+    if wanted.endswith(("確認", "連絡")):
+        wanted = aliases.get(wanted[:-2], wanted[:-2]) + wanted[-2:]
+    if wanted in normalized:
+        return True
+    if len({part[-2:] for part in normalized}) != 1:
+        return False
+    combined = "と".join([*(part[:-2] for part in normalized[:-1]), normalized[-1]])
+    return wanted == combined
+
+
+def _foreign_request_target(body, quote):
+    """Hold an explicit other-person target, including its earlier list owner."""
+    span = locate_quote_span(body, quote) if isinstance(body, str) and isinstance(quote, str) else None
+    if span is None:
+        return False
+    left = max(body.rfind(mark, 0, span[0]) for mark in "。！？!?;；\n") + 1
+    right = min((pos for mark in "。！？!?;；\n" if (pos := body.find(mark, span[1])) >= 0), default=len(body))
+    sentence = body[left:right]
+    owner = rf"(?:{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON})(?:さん|様)?の"
+    for match in re.finditer(owner, sentence):
+        rest = sentence[match.end():]
+        actor = re.match(r"(?:依頼|報告)(?:で|を受け)(?=(?:ご本人|本人|患者|利用者)の)", rest)
+        if not actor:
+            return True
+    recipient = rf"(?:{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON})(?:さん|様)?に"
+    for match in re.finditer(recipient, sentence):
+        rest = sentence[match.end():]
+        if not re.match(r"(?:ご本人|本人|患者|利用者)の|(?:連絡|報告|伝え)", rest):
+            return True
+    return False
+
+
+def _request_expression_covers(body, assertion, action, kind):
+    """Require an action-bound positive request, question or self-plan in its source sentence."""
+    if not isinstance(body, str) or not isinstance(action, str):
+        return False
+    start, end = assertion[1:3]
+    left = max(body.rfind(mark, 0, start) for mark in "。！？!?;；\n") + 1
+    right = min((pos for mark in "。！？!?;；\n" if (pos := body.find(mark, end)) >= 0), default=len(body))
+    sentence = body[left:right]
+    markers = {
+        "request": r"(?:してください|して下さい|ください|下さい|お願いします|お願いいたします|してほしい)",
+        "question": r"(?:してください|して下さい|ください|下さい|お願いします|お願いいたします|できますか|しますか|ですか|でしょうか)",
+        "self_plan": r"(?:する予定です|する予定|します|いたします)",
+    }
+    wanted = clinical_values.request_action_key(action)
+    if not wanted or kind not in markers:
+        return False
+    for marker in re.finditer(markers[kind] + r"(?![一-龥々ぁ-んァ-ヶーA-Za-z0-9])", sentence):
+        if marker.start() < start - left:
+            continue
+        phrase = sentence[:marker.end()]
+        if _listed_request_covers(action, phrase):
+            return True
+        preceding = clinical_values.request_action_key(sentence[start - left:marker.start()]).rstrip("をの")
+        if preceding.endswith(wanted) and preceding.count(wanted) == 1:
+            return True
+    return False
+
+
+def _adjacent_request_cancellation(body, assertion):
+    """Hold a request when its next sentence explicitly cancels that request."""
+    if not isinstance(body, str):
+        return False
+    start = assertion[1]
+    boundary = re.search(r"[。！？!?;；\n]", body[start:])
+    if boundary is None:
+        return False
+    following = body[start + boundary.end():].lstrip()
+    return bool(re.match(
+        r"(?:その依頼|上記の依頼|先ほどの依頼|そのお願い)(?:を|は)"
+        r"(?:取り消しました|取り消した|取消しました|取消した|撤回しました|撤回した|"
+        r"キャンセルしました|キャンセルした)(?=。|$)", following))
+
+
+def _direct_request_covers(action, text):
+    """Match a written positive request after a patient owner or unrelated reason."""
+    if not isinstance(action, str) or not isinstance(text, str):
+        return False
+    wanted = clinical_values.request_action_key(action)
+    if not wanted.endswith(("確認", "連絡")) or len(wanted) <= 2:
+        return False
+    target, verb = wanted[:-2], wanted[-2:]
+    aliases = {"血圧記録": "血圧の記録", "血糖記録": "血糖の記録",
+               "血圧の記録": "血圧記録", "血糖の記録": "血糖記録"}
+    variants = [target] + ([aliases[target]] if target in aliases else [])
+    pattern = (r"(?:" + "|".join(map(re.escape, variants)) + r")(?:の|を)?"
+               + verb + r"(?:を)?(?:して)?(?:お願いします|お願い|ください|下さい)"
+               r"(?![一-龥々ぁ-んァ-ヶーA-Za-z0-9])")
+    for match in re.finditer(pattern, text):
+        before = text[:match.start()].strip()
+        if re.fullmatch(rf"(?:(?:{clinical_scope.FAMILY_PERSON}|{clinical_scope.OTHER_PERSON})"
+                        r"(?:さん|様)?(?:に|へ))?(?:ご本人|本人|患者|利用者)の", before):
+            return True
+        if re.fullmatch(r"[^。！？!?;；\n]{1,40}(?:たら|場合は|ときは)(?:ご本人|本人|患者|利用者)の", before):
+            return True
+        if (re.fullmatch(r"(?:ご本人|本人|患者|利用者)は[^、,。！？!?;；\n]{1,60}(?:ので|ため)", before)
+                and not re.search(r"確認|連絡|教え|依頼|もし|場合|とき|たら|れば|なら|可能性|疑い|不明|未確認|予定|"
+                                  + clinical_scope.FAMILY_PERSON
+                                  + "|" + clinical_scope.OTHER_PERSON, before)):
+            return True
+    return False
+
+
 class Validator:
     """Per-field schema cleaning shared state: the evidence verifier +
     drop accounting used by every item validator in _validate."""
@@ -281,7 +491,9 @@ class Validator:
         def supports(term, text):
             wanted, source = normalize(term), normalize(text)
             if not request:
-                return wanted in source
+                return bool(_med_name_spans(text, term)) if medication else wanted in source
+            if _listed_request_covers(term, text) or _direct_request_covers(term, text):
+                return True
             # A suffix inside a different object name is not the same request.
             for match in re.finditer(re.escape(wanted), source):
                 prefix = source[:match.start()]
@@ -301,10 +513,13 @@ class Validator:
             item["unverified"] = True  # Keep an unresolved paraphrase; do not invent a semantic match.
         else:
             (left, right), (text, term) = next(iter(selected.items()))
-        inner = locate_quote_span(text, term) if term is not None else None
-        if medication and term is not None and (inner is None or len(list(re.finditer(
-                r"(?=" + re.escape(flat_text(term)) + r")", flat_text(quote)))) != 1):
-            return None
+        if medication and term is not None:
+            in_segment = _med_name_spans(text, term)
+            inner = in_segment[0] if len(in_segment) == 1 else None
+            if inner is None or len(_med_name_spans(quote, term)) != 1:
+                return None
+        else:
+            inner = locate_quote_span(text, term) if term is not None else None
         start = span[0] + left + (inner[0] if inner else 0)
         end = span[0] + left + (inner[1] if inner else len(text))
         return text, start, end, span[0] + right
@@ -345,6 +560,7 @@ class Validator:
             self.uncertain(item, "subject")
         status = item.get("status")
         incompatible = ((period == "past" and status not in (None, "past", "resolved"))
+                        or period == "unknown" and status is not None
                         or period in ("planned", "conditional") and status is not None
                         and (symptom or status != "planned"))
         if incompatible:
@@ -588,8 +804,17 @@ class Validator:
                         r"予定|計画|検討|提案|(?:処方医|主治医|医師)(?:に|へ)相談(?:しました|した)(?=$|[が。．\s])", assertion[0])
                     if (not supported_plan and self.body[assertion[3]:].lstrip().startswith(("、", ","))
                             and clinical_scope.source_polarity(self.body, assertion[1], assertion[3],
-                                target_end=assertion[2], medication=True) is None):
-                        self.uncertain(item, "negated")
+                                target_end=assertion[2], medication=True) is None
+                            and not _compound_medication_done(self.body, item, assertion[1], assertion[2])):
+                        source_action = _compound_medication_action(self.body, item, assertion[1], assertion[2])
+                        if source_action is not None and item.get("action") in ("start", "stop") \
+                                and item["action"] != source_action:
+                            # The target's affirmative source action is known, but
+                            # the model's different action remains unverified.
+                            self.miss(item["action"])
+                            item["unverified"] = True
+                        else:
+                            self.uncertain(item, "negated")
             item["normalized"] = clinical_values.medication_surface(item["name"])
             meds.append(item)
         out["meds"] = meds
@@ -758,8 +983,15 @@ class Validator:
                     self.uncertain(item, "to", nullable=True)
             else:
                 quote = assertion[0]
+                if _foreign_request_target(self.body, item.get("evidence")):
+                    item["unverified"] = True
+                if not _request_expression_covers(self.body, assertion, item.get("action"), kind):
+                    item["unverified"] = True
+                if kind == "request" and _adjacent_request_cancellation(self.body, assertion):
+                    item["unverified"] = True
                 recipient = item.get("to")
-                if recipient and not re.search(re.escape(recipient) + r"(?:さん|様)?(?:へ|に|宛|まで|[、,])", quote):
+                if recipient not in (None, "", "不明") and not re.search(
+                        re.escape(recipient) + r"(?:さん|様)?(?:へ|に|宛|まで|[、,])", quote):
                     self.uncertain(item, "to", nullable=True)
                 sender = _clean_text(r.get("from"), 30)
                 if sender:
@@ -769,12 +1001,15 @@ class Validator:
                         item["unverified"] = True
                 cond = _clean_text(r.get("condition"), 60)
                 inner = locate_quote_span(quote, cond) if cond else None
+                phase = clinical_scope.source_axes(self.body, assertion[1], assertion[2])[1]
                 if inner is not None:
                     item["condition"] = quote[inner[0]:inner[1]]
                 elif cond:
                     self.miss(cond)
                     item["unverified"] = True
-                elif clinical_scope.source_axes(self.body, assertion[1], assertion[2])[1] == "conditional":
+                elif phase == "conditional":
+                    item["unverified"] = True
+                if phase == "unknown":
                     item["unverified"] = True
                 due_text = _clean_text(r.get("due_text"), 60)
                 if due_text and locate_quote_span(quote, due_text) is not None:

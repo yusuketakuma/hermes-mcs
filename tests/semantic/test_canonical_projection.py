@@ -33,16 +33,18 @@ def _doc(facts, evidence=None):
 
 
 def test_projection_maps_verified_medication_fact():
+    quote = "本人はアムロジピン5mgを中止しました。"
     doc = _doc([_fact("f1", action="stop",
                       workflow_status="performed", quantity="5mg",
-                      statement="アムロジピン5mg中止")])
+                      statement="アムロジピン5mg中止")],
+               [{**EV, "quote": quote, "start": 0, "end": len(quote)}])
     out = projection.project_v2_doc_legacy(doc)
     assert len(out["meds"]) == 1
     med = out["meds"][0]
     assert med["action"] == "stop" and med["status"] == "past"
     assert med["subject"] == "patient" and not med["negated"]
     assert med["dose"] == "5mg"
-    assert med["evidence"] == "アムロジピン"
+    assert med["evidence"] == quote
 
 
 def test_projection_skips_unverified_and_unmappable():
@@ -371,8 +373,10 @@ def test_projection_adherence_and_cancel_semantics():
         _fact("adh", kind="adherence_administration")]))[0]["kind"] \
         == "observation"
     # operator precedence: a stop that is only planned is not past
+    quote = "本人はアムロジピンを中止する予定です。"
     planned_stop = projection.project_v2_doc_legacy(_doc([
-        _fact("f1", action="stop", workflow_status="planned")]))
+        _fact("f1", action="stop", workflow_status="planned")],
+        [{**EV, "quote": quote, "start": 0, "end": len(quote)}]))
     assert planned_stop["meds"][0]["status"] == "planned"
 
 

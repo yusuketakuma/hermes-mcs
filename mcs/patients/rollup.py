@@ -64,7 +64,7 @@ STALE_DAYS = 21          # message unseen this long while siblings refresh
 # 13: retain every accepted reply relation and its source in posting-time order;
 # 14: measurement order requires source-bound measurement time and coverage).
 # Rebuilds rewrite artifacts; automatic card rendering does not read patient_rollup.
-PERIOD_CHECK_VERSION = 14
+PERIOD_CHECK_VERSION = 15
 # Pre-9 rollup keys; readers map them to the current names until rebuilt.
 _LEGACY_KEYS = {"current_med_period": "med_period_candidate",
                 "possibly_deleted": "unrefreshed_message_ids"}

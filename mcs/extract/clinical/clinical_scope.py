@@ -87,10 +87,21 @@ _MEASURED_PAST_MARK = re.compile(rf"(?:{PAST_MARK})(?!から|より)")
 _SENTENCE_PAST_LEAD = re.compile(rf"[ \t　]*(?:{PAST_MARK})(?!から|より)(?:は|に|の|も)?[、,]")
 
 _CONDITIONAL_MARK = re.compile(
-    r"もし|万一|万が一|(?:場合|とき|(?<![0-9０-９一二三四五六七八九十])(?<!採血)(?<!測定)(?<!検査)(?<!服用)(?<!投与)(?<!訪問)(?<!往診)時)(?:は|には|に)|"
-    r"なら(?!ない|なく|なかった|れ|ず|ぬ)|たら(?!しい)|ければ")
+    r"もし(?!ま(?:した|す|せん|しょう)|"
+    r"て(?:いる|います|いない|いません|いた|いました|おり|おら|もら|下さい|ください|頂|いただ|ほしい|欲しい|くれ|しま|(?=$|[。！？!?、,\s]))|"
+    r"た(?:い|が|こと|ため|為|ので|後|と(?:報告|連絡|記載)|(?=$|[。！？!?、,\s]))|"
+    r"ない|なく(?!ても)|なかった|よう|ろ|もら(?:う|い|った)|らせ|らべ|っかり)|"
+    r"万一|万が一|(?:場合|とき|(?<![0-9０-９一二三四五六七八九十])(?<!採血)(?<!測定)(?<!検査)(?<!服用)(?<!投与)(?<!訪問)(?<!往診)時)(?:は|には|に)|"
+    r"なら(?!ない|なく|なかった|れ|ず|ぬ)|たら(?!しい)|れば")
 
-_SCOPE_BREAK = re.compile(r"[。！？!?;；\n、,]|しかし|ただし|だが|けれど(?:も)?|一方")
+_UNCERTAIN_ADDITIVE = re.compile(
+    r"もし(?:て(?:下さい|ください|頂|いただ|ほしい|欲しい|くれ)|たい|たこと|"
+    r"なくては(?:ならない|いけない|だめ|ダメ|駄目)|ないと(?:ならない|いけない|だめ|ダメ|駄目)|"
+    r"ま(?:した|す|せん(?:でした)?)(?:か|でしょうか))")
+
+_QUESTION = re.compile(r"(?:しました|した|します|していました|している|しています|しません|しませんでした|です|でした)(?:か|でしょうか)|かどうか")
+
+_SCOPE_BREAK = re.compile(r"[。！？!?;；\n、,]|しかし|ただし|だが|けれど(?:も)?|(?<![一-龥ぁ-んァ-ヶ])一方(?:で)?(?=$|[、, \t　])")
 
 _REASON_CUE = re.compile(r"至急|緊急|救急|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|[胸腹頭背腰]痛|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗|(?:BP|BS|Glu)\s*\d", re.I)
 
@@ -202,8 +213,15 @@ def _source_scope_axes(body, start, end, *, patient_name=None, default="patient"
     left = max((m.end() for m in _SCOPE_BREAK.finditer(body, left, start)), default=left)
     right = _SCOPE_BREAK.search(body, end)
     clause = body[left:right.start() if right else len(body)]
-    if _CONDITIONAL_MARK.search(clause):
+    sentence = max(body.rfind(c, 0, start) for c in "。！？!?;；\n") + 1
+    condition_start = max((m.end() for m in _SCOPE_BREAK.finditer(body, sentence, start)
+                           if m.group() not in "、,"), default=sentence)
+    if _CONDITIONAL_MARK.search(body[condition_start:left] + clause):
         return scope, "conditional"
+    if (_QUESTION.search(clause) or right is not None and body[right.start()] in "？?"):
+        return scope, "unknown"
+    if _UNCERTAIN_ADDITIVE.search(clause):
+        return scope, "unknown"
     if period != "current" and not CURRENT_MARK.search(clause):
         return scope, period
     sentence = max(body.rfind(c, 0, start) for c in "。！？!?\n") + 1
@@ -240,6 +258,8 @@ def source_axes(body, start, end, *, default="patient"):
     if period in ("conditional", "unknown"):
         return subject, period
     left = max(body.rfind(mark, 0, start) for mark in "。！？!?;；\n") + 1
+    left = max((m.end() for m in _SCOPE_BREAK.finditer(body, left, start)
+                if m.group() not in "、,"), default=left)
     # A later explicit owner begins a new assertion, not the earlier person's time.
     owners = list(_PERSON.finditer(body, left, start))
     if owners:
@@ -307,6 +327,14 @@ def source_polarity(body, start, end, *, target_end=None, medication=False):
             or not 0 <= start < target_end <= end <= len(body)):
         return None
     tail = body[target_end:end]
+    sentence_end = re.search(r"[。！？!?;；\n]", tail)
+    if sentence_end is not None:
+        end = target_end + sentence_end.start()
+        tail = body[target_end:end]
+    first_clause = re.split(r"[、,]", tail, maxsplit=1)[0]
+    if (_QUESTION.search(first_clause)
+            or "," not in tail and "、" not in tail and end < len(body) and body[end] in "？?"):
+        return None
     if re.search(r"ではない|じゃない|ない(?:こと|わけ|訳)はない|かもしれ|不明|疑い", tail):
         return None
     lead = r"^(?:は|が|も|を)?(?:現在|今は|特に|全く)?"
@@ -317,11 +345,27 @@ def source_polarity(body, start, end, *, target_end=None, medication=False):
         lead = "^" + RX_PARTICLE + RX_DOSE + RX_PARTICLE + r"(?:で)?"
         negative = r"(?:(?:服用|内服|使用|投与)(?:は|を|も)?(?:して(?:いない|いません)|せず|しない|しません)|飲(?:んで(?:いない|いません)|まず|まない|みません)|使(?:わず|わない|って(?:いない|いません)))"
         positive = r"(?:服用|内服|使用|投与)(?:中|しています|している|した|しました)"
-    if re.search(lead + negative, tail):
-        return True
-    if re.search(lead + positive, tail):
-        return False
-    return None
+    value = True if re.search(lead + negative, tail) else False if re.search(lead + positive, tail) else None
+    if value is None:
+        return None
+    # Only repeat statements about the same named clinical target can conflict.
+    target = re.search(rf"(?:{_CLINICAL_OWNER})$", body[start:target_end], re.I)
+    if target is not None:
+        original_owner = _source_scope_axes(body, start + target.start(), target_end)[0]
+        for index, occurrence in enumerate(re.finditer(re.escape(target.group()), tail, re.I)):
+            if index >= 64:
+                return None
+            other_start = target_end + occurrence.start()
+            other_end = target_end + occurrence.end()
+            other_owner = _source_scope_axes(body, other_start, other_end)[0]
+            if (original_owner in ("patient", "family", "other") and other_owner in ("patient", "family", "other")
+                    and original_owner != other_owner):
+                continue
+            later = tail[occurrence.end():]
+            other = True if re.search(lead + negative, later) else False if re.search(lead + positive, later) else None
+            if other is not None and other != value:
+                return None
+    return value
 
 
 def patient_urgency_quotes(body, quotes, *, patient_name=None, default="patient"):

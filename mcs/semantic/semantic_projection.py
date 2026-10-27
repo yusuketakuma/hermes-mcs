@@ -15,7 +15,7 @@ from __future__ import annotations
 # canonical document: writers store it in the row meta and reuse an
 # existing projection only when the version matches, so a reprocessed
 # message never keeps serving an older projection's clinical semantics.
-PROJECTION_VERSION = 6
+PROJECTION_VERSION = 7
 
 
 def projection_current(meta: dict, doc_hash: str) -> bool:
@@ -183,44 +183,63 @@ _CARE_EVENT_KEYWORDS = [
 
 def _v2_med_status(fact: dict, quote=None) -> str | None:
     import re
-    from clinical_scope import source_axes, CURRENT_MARK
+    from clinical_scope import source_axes, source_polarity, CURRENT_MARK
     action = fact.get("action")
     workflow = fact.get("workflow_status")
+    if isinstance(quote, str) and (re.search(r'[。！？!?;；\n]\s*\S', quote)
+            or re.search(r'(?:開始|中止|中断|服用|内服|使用|投与)(?:は|を|が|も)?'
+                         r'(?:して(?:いない|いません|いなかった|いませんでした)|'
+                         r'しない|しません|しなかった|しませんでした|せず)', quote)):
+        return None
     if workflow == "cancelled" \
             or (action in ("stop", "cancelled")
                 and workflow in ("performed", "done", "reported")):
-        return "past"
-    if workflow in ("considering", "planned", "ordered", "pending",
-                    "on_hold"):
-        return "planned"
+        name = _v2_drug_ref(fact.get('statement') or '')
+        if (action not in ('stop', 'cancelled') or not isinstance(quote, str)
+                or not name or quote.count(name) != 1
+                or re.search(r'[。！？!?;；\n]\s*\S', quote)):
+            return None
+        stop = re.search(re.escape(name) + r'(?:\s*[0-9０-９.]+(?:mg|μg|mcg|g|錠|包))?'
+                         r'(?:の(?:内服|服用|使用))?(?:を|は|も)?\s*'
+                         r'(?P<action>中止|中断)(?:しました|した|済み)(?=$|[。！？!?、,\s])', quote, re.I)
+        if stop is None:
+            return None
+        a, b = stop.span('action')
+        subject = _v2_llm_subject(fact.get('subject'))
+        owners = (source_axes(quote, stop.start(), stop.start() + len(name), default='unknown'),
+                  source_axes(quote, a, b, default='unknown'))
+        if (fact.get('polarity') != 'affirmed'
+                or any(owner != subject or phase not in ('current', 'past') for owner, phase in owners)
+                or re.search(r'[?？]|(?:でしょうか|ましたか|したか)|誤り|誤記|訂正|撤回|取消|取り消', quote)
+                or source_polarity(quote, a, len(quote), target_end=b) is not False):
+            return None
+        return 'past'
     if not isinstance(quote, str) or not quote:
         return None
     name = _v2_drug_ref(fact.get('statement') or '')
     if not name or quote.count(name) != 1:
         return None
     start = quote.index(name)
-    subject, status = source_axes(quote, start, start + len(name), default=_v2_llm_subject(fact.get('subject')))
+    subject, status = source_axes(quote, start, start + len(name), default='unknown')
     if subject != _v2_llm_subject(fact.get('subject')):
         return None
+    if workflow in ("considering", "planned", "ordered", "pending", "on_hold"):
+        return "planned" if status == "planned" else None
     left = max(quote.rfind(mark, 0, start) for mark in '。！？!?;；\n') + 1
     ends = [quote.find(mark, start) for mark in '。！？!?;；\n']
     right = min((end for end in ends if end >= 0), default=len(quote))
     assertion = quote[left:right]
-    for use in re.finditer(r'(?:服用|内服|使用|投与|継続)(?:中|しています|している)', assertion):
-        use_start = left + use.start()
-        between = quote[min(start + len(name), use_start):max(start + len(name), use_start)]
-        # Do not borrow another named medication's present use from a broad quote.
-        if re.search(r'[ァ-ヶー]{2,}', between):
-            continue
-        owner, period = source_axes(quote, use_start, left + use.end(),
-                                    default=_v2_llm_subject(fact.get('subject')))
+    direct = re.escape(name) + r'(?:\s*[0-9０-９.]+(?:mg|μg|mcg|g|錠|包))?(?:を|は|が|も)?\s*'
+    for use in re.finditer(direct + r'(?:服用|内服|使用|投与|継続)(?:中|しています|している)', assertion, re.I):
+        use_start = left + use.start() + len(name)
+        owner, period = source_axes(quote, use_start, left + use.end(), default='unknown')
         if owner == _v2_llm_subject(fact.get('subject')) and period == 'current':
             return 'current'
     if status in ('past', 'planned'):
         return status
     if status != 'current':
         return None
-    if CURRENT_MARK.search(assertion) and re.search(r'(?:開始|再開)(?:しました|した|済み)', assertion):
+    if CURRENT_MARK.search(assertion) and re.search(direct + r'(?:開始|再開)(?:しました|した|済み)', assertion, re.I):
         return 'current'
     return None
 

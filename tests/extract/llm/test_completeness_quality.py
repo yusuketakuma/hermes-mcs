@@ -29,9 +29,9 @@ def hints(body):
     ("本人は架空薬A5mgを内服中です。", {"meds": [{
         "name": "架空薬A", "dose": "5mg", "status": "current", "subject": "patient",
         "action": "none", "negated": False, "evidence": "架空薬A5mgを内服中"}]}),
-    ("本人の記録を確認をお願いします。", {"requests": [{
-        "to": "不明", "kind": "request", "action": "記録確認",
-        "evidence": "本人の記録を確認をお願いします"}]}),
+    ("記録確認をお願いします。", {"requests": [{
+        "to": None, "kind": "request", "action": "記録確認",
+        "evidence": "記録確認をお願いします"}]}),
 ])
 def test_clean_first_candidate_recovers_a_supported_missing_hint(monkeypatch, tail, addition):
     body = PREFIX + tail
@@ -46,7 +46,11 @@ def test_clean_first_candidate_recovers_a_supported_missing_hint(monkeypatch, ta
     assert len(calls) == 2
     assert extract_quality.facts(extract_validation.validate(OBSERVATIONS, body)) <= extract_quality.facts(result)
     assert set(addition) <= result.keys()
-    assert extract_llm.EXTRACT_VERSION == 9
+    if "requests" in addition:
+        [request] = result["requests"]
+        assert request["action"] == "記録確認" and request["evidence"] in body
+        assert request.get("unverified") is not True
+    assert extract_llm.EXTRACT_VERSION == 10
 
 
 @pytest.mark.parametrize("tail", [
@@ -324,9 +328,15 @@ def test_same_name_other_person_or_past_fact_cannot_hide_a_current_patient_omiss
     assert len(calls) == 2
     assert extract_quality.facts(extract_validation.validate(first, body)) <= extract_quality.facts(result)
     if subject == "patient" and status == "current":
-        # The invalid family-as-patient prior is rejected before the repair.
-        assert not extract_validation.validate(first, body).get("meds")
-        assert len(result["meds"]) == 1
+        # Keep the conflicting source quote as an unverified candidate, never
+        # as a confirmed patient-owned medication.
+        [unverified] = extract_validation.validate(first, body)["meds"]
+        assert unverified.get("unverified") is True and unverified.get("subject") != "patient"
+        assert unverified["evidence"] == earlier
+        family_candidates = [med for med in result["meds"] if med.get("evidence") == earlier]
+        assert len(family_candidates) == 1 and family_candidates[0].get("unverified") is True
+        assert family_candidates[0].get("subject") != "patient"
+        assert len(result["meds"]) == 2
     else:
         assert len(result["meds"]) == 2
     assert any(med["evidence"] == current and med["subject"] == "patient"
@@ -389,9 +399,13 @@ def test_same_budget_resumes_optional_work_without_repeating_or_blocking_later_i
         db.close()
 
 
-def test_source_digest_change_does_not_requeue_completed_legacy_checkpoints_or_final_results(tmp_path, monkeypatch):
+@pytest.mark.parametrize("body,needs_repair", [
+    ("本人は散歩しました。", False),
+    ("本人の血圧120/80です。", True),
+])
+def test_source_digest_change_reuses_legacy_checkpoint_and_only_repairs_missing_hints(
+        tmp_path, monkeypatch, body, needs_repair):
     db = _ledger(tmp_path)
-    body = "本人の血圧120/80です。"
     db.save_messages([_message(body=body)])
     source = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     try:
@@ -406,9 +420,20 @@ def test_source_digest_change_does_not_requeue_completed_legacy_checkpoints_or_f
             **extract_llm._LOADED_SOURCE_DIGESTS, "clinical_values": "0" * 64})
         assert extract_llm._chunk_context(source, None, checkpoint=True) == before_binding
         assert extract_llm._saved_chunk_state(db.db, source)[1] == {0: {}}
-        monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs:
-                            pytest.fail("old completed checkpoint was re-inferred"))
+        calls = []
+
+        def model(prompt, **kwargs):
+            calls.append((prompt, kwargs.get("kind")))
+            assert needs_repair and kwargs.get("kind") == "repair"
+            return {"vitals": {"sbp": 120, "dbp": 80}}
+
+        monkeypatch.setattr(extract_llm, "_llm_call", model)
         assert extract_llm.run_pending(db, budget_s=200)["done"] == 1
+        assert len(calls) == int(needs_repair)
+        if needs_repair:
+            assert "未収載" in calls[0][0]
+            result = json.loads(db.artifacts("extract_llm", message_id=1)[0]["content"])
+            assert result["vitals"] == {"sbp": 120.0, "dbp": 80.0}
         assert extract_llm._current(db, 1, _hash(db))
         assert db.db.execute("SELECT message_id FROM messages m WHERE " + extract_llm.pending_pred()).fetchall() == []
         assert extract_llm.run_pending(db, budget_s=200)["selected"] == 0
@@ -472,10 +497,13 @@ def test_non_object_final_metadata_remains_attention_read_only(tmp_path, meta):
             "VALUES(?,?,?,?,?,?,?)", (extract_llm.KIND, source["project_id"], 1,
                                      "{}", extract_llm.MODEL, json.dumps(meta), 1))
         db.db.commit()
+        original = tuple(db.db.execute("SELECT * FROM artifacts WHERE kind=?", (extract_llm.KIND,)).fetchone())
         db.db.execute("PRAGMA query_only=ON")
         result = extract_llm.progress_for_message(db.db, source, model=extract_llm.MODEL)
-        assert result["state"] == "attention"
+        assert result["state"] == "processing"  # Invalid metadata is not a current final result.
         assert result["completed"] == 0 and result["total"] == 1
+        assert db.db.execute("SELECT 1 FROM messages m WHERE " + extract_llm.pending_pred()).fetchone()
+        assert tuple(db.db.execute("SELECT * FROM artifacts WHERE kind=?", (extract_llm.KIND,)).fetchone()) == original
     finally:
         db.close()
 
@@ -527,17 +555,18 @@ def test_unsent_start_saved_past_the_deadline_is_released_for_the_next_run(tmp_p
         db.close()
 
 
-CONFIRM = {"to": "不明", "kind": "request", "action": "記録確認",
-           "evidence": "本人の記録を確認をお願いします"}
-CONTACT = {"to": "医師", "kind": "request", "action": "主治医へ連絡",
-           "evidence": "主治医への連絡をお願いします"}
+CONFIRM = {"to": None, "kind": "request", "action": "記録確認",
+           "evidence": "記録確認をお願いします"}
+CONTACT = {"to": None, "kind": "request", "action": "主治医へ連絡",
+           "evidence": "主治医へ連絡をお願いします"}
 BOTH = "本人の記録の確認と主治医への連絡をお願いします"
+BOTH_REVIEW = "記録確認、主治医へ連絡をお願いします"
 
 
 @pytest.mark.parametrize("tail,first,repaired", [
-    ("本人の記録を確認をお願いします。主治医への連絡をお願いします。", [CONFIRM], [CONFIRM, CONTACT]),
-    (BOTH + "。", [{**CONFIRM, "evidence": BOTH}],
-     [{**CONFIRM, "evidence": BOTH}, {**CONTACT, "evidence": BOTH}]),
+    ("記録確認をお願いします。主治医へ連絡をお願いします。", [CONFIRM], [CONFIRM, CONTACT]),
+    (BOTH_REVIEW + "。", [{**CONFIRM, "evidence": BOTH_REVIEW}],
+     [{**CONFIRM, "evidence": BOTH_REVIEW}, {**CONTACT, "evidence": BOTH_REVIEW}]),
 ], ids=["second_sentence_missing", "one_quote_two_requests"])
 def test_one_extracted_request_does_not_hide_another_missing_request(monkeypatch, tail, first, repaired):
     body = PREFIX + tail
@@ -551,14 +580,15 @@ def test_one_extracted_request_does_not_hide_another_missing_request(monkeypatch
     result = extract_llm.llm_extract(body, hints=hints(body))
     assert len(calls) == 2
     assert {item["action"] for item in result["requests"]} == {"記録確認", "主治医へ連絡"}
+    assert all(item["evidence"] in body and not item.get("unverified") for item in result["requests"])
 
 
 @pytest.mark.parametrize("requests", [
     [CONFIRM, CONTACT],
-    [{**CONFIRM, "action": "記録をチェック"}, CONTACT],     # paraphrase of a single-request quote
+    [{**CONFIRM, "action": "記録を確かめ"}, CONTACT],     # supported synonymous wording
 ], ids=["all_present", "paraphrased_single_request"])
 def test_covered_requests_do_not_add_a_call(monkeypatch, requests):
-    body = PREFIX + "本人の記録を確認をお願いします。主治医への連絡をお願いします。"
+    body = PREFIX + "記録確認をお願いします。主治医へ連絡をお願いします。"
     calls = []
 
     def model(prompt, **kwargs):
@@ -566,29 +596,31 @@ def test_covered_requests_do_not_add_a_call(monkeypatch, requests):
         return copy.deepcopy({**OBSERVATIONS, "requests": requests})
 
     monkeypatch.setattr(extract_llm, "_llm_call", model)
-    extract_llm.llm_extract(body, hints=hints(body))
+    result = extract_llm.llm_extract(body, hints=hints(body))
     assert len(calls) == 1
+    assert {item["action"] for item in result["requests"]} == {item["action"] for item in requests}
+    assert all(item["evidence"] in body and not item.get("unverified") for item in result["requests"])
 
 
-SECOND_CONFIRM = {"to": "不明", "kind": "request", "action": "検査値確認",
-                  "evidence": "本人の検査値も確認してください"}
+SECOND_CONFIRM = {"to": None, "kind": "request", "action": "検査値確認",
+                  "evidence": "検査値確認をお願いします"}
 
 
 @pytest.mark.parametrize("tail,first,repaired", [
     # the rule hints name only the contact of a two-request sentence
-    (BOTH + "。", [{**CONTACT, "evidence": BOTH}],
-     [{**CONFIRM, "evidence": BOTH}, {**CONTACT, "evidence": BOTH}]),
+    (BOTH_REVIEW + "。", [{**CONTACT, "evidence": BOTH_REVIEW}],
+     [{**CONFIRM, "evidence": BOTH_REVIEW}, {**CONTACT, "evidence": BOTH_REVIEW}]),
     # the rule hints keep one confirm; the second sentence's confirm is tracked too
-    ("本人の記録を確認をお願いします。本人の検査値も確認してください。", [CONFIRM],
+    ("記録確認をお願いします。検査値確認をお願いします。", [CONFIRM],
      [CONFIRM, SECOND_CONFIRM]),
     # the rule hints keep one ask; a second sentence's question is tracked too
-    ("本人の食事量を教えてください。本人の体温も教えてください。",
-     [{"to": "不明", "kind": "question", "action": "食事量の確認",
-       "evidence": "本人の食事量を教えてください"}],
-     [{"to": "不明", "kind": "question", "action": "食事量の確認",
-       "evidence": "本人の食事量を教えてください"},
-      {"to": "不明", "kind": "question", "action": "体温の確認",
-       "evidence": "本人の体温も教えてください"}]),
+    ("食事量を教えてください。体温を教えてください。",
+     [{"to": None, "kind": "question", "action": "食事量を教えて",
+       "evidence": "食事量を教えてください"}],
+     [{"to": None, "kind": "question", "action": "食事量を教えて",
+       "evidence": "食事量を教えてください"},
+      {"to": None, "kind": "question", "action": "体温を教えて",
+       "evidence": "体温を教えてください"}]),
 ], ids=["confirm_missing_beside_contact", "second_sentence_same_kind", "second_question"])
 def test_request_cues_cover_what_the_rule_hints_merge(monkeypatch, tail, first, repaired):
     body = PREFIX + tail
@@ -602,16 +634,17 @@ def test_request_cues_cover_what_the_rule_hints_merge(monkeypatch, tail, first, 
     result = extract_llm.llm_extract(body, hints=hints(body))
     assert len(calls) == 2
     assert {item["action"] for item in result["requests"]} == {item["action"] for item in repaired}
+    assert all(item["evidence"] in body and not item.get("unverified") for item in result["requests"])
 
 
 @pytest.mark.parametrize("tail", [
-    "本人の連絡記録を確認してください。",           # 連絡 inside a noun is not a contact request
+    "連絡記録確認をお願いします。",                 # 連絡 inside a noun is not a contact request
     "主治医から本人の件で連絡をいただきました。",   # a received contact is a report
 ])
 def test_request_word_inside_a_noun_or_report_adds_no_call(monkeypatch, tail):
     body = PREFIX + tail
-    confirm = [{"to": "不明", "kind": "request", "action": "連絡記録確認",
-                "evidence": "本人の連絡記録を確認してください"}] if "記録" in tail else []
+    confirm = [{"to": None, "kind": "request", "action": "連絡記録確認",
+                "evidence": "連絡記録確認をお願いします"}] if "記録" in tail else []
     calls = []
 
     def model(prompt, **kwargs):
@@ -619,20 +652,30 @@ def test_request_word_inside_a_noun_or_report_adds_no_call(monkeypatch, tail):
         return copy.deepcopy({**OBSERVATIONS, "requests": confirm})
 
     monkeypatch.setattr(extract_llm, "_llm_call", model)
-    extract_llm.llm_extract(body, hints=hints(body))
+    result = extract_llm.llm_extract(body, hints=hints(body))
     assert len(calls) == 1
+    if confirm:
+        [item] = result["requests"]
+        assert item["action"] == "連絡記録確認" and item["evidence"] in body
+        assert not item.get("unverified")
+    else:
+        assert not result.get("requests")
 
 
 LATER_QUESTION = {"to": "不明", "kind": "question", "action": "体温の確認",
                   "evidence": "本人の体温を教えてください"}
-LATER_CONTACT = {"to": "医師", "kind": "request", "action": "主治医へ連絡",
+LATER_CONTACT = {"to": "主治医", "kind": "request", "action": "主治医へ連絡",
                  "evidence": "主治医へ連絡してください"}
+REVIEW_QUESTION = {"to": None, "kind": "question", "action": "体温を教えて",
+                   "evidence": "体温を教えてください"}
+REVIEW_CONTACT = {"to": None, "kind": "request", "action": "主治医へ連絡",
+                  "evidence": "主治医へ連絡してください"}
 
 
 @pytest.mark.parametrize("tail,question", [
-    ("主治医から本人の件で連絡をいただきましたが、本人の体温を教えてください。", LATER_QUESTION),
-    ("確認と連絡を終えたので、本人の体温を教えてください。", LATER_QUESTION),
-    ("本人の記録の確認と記録係への連絡を終えたので、主治医へ連絡してください。", LATER_CONTACT),
+    ("主治医から本人の件で連絡をいただきましたが、本人の体温を教えてください。", REVIEW_QUESTION),
+    ("確認と連絡を終えたので、本人の体温を教えてください。", REVIEW_QUESTION),
+    ("本人の記録の確認と記録係への連絡を終えたので、主治医へ連絡してください。", REVIEW_CONTACT),
 ], ids=["received_contact_then_question", "finished_listing_then_question",
         "finished_listing_then_contact"])
 def test_a_later_request_ending_does_not_turn_a_report_into_a_request(monkeypatch, tail, question):
@@ -644,28 +687,36 @@ def test_a_later_request_ending_does_not_turn_a_report_into_a_request(monkeypatc
         return copy.deepcopy({**OBSERVATIONS, "requests": [question]})
 
     monkeypatch.setattr(extract_llm, "_llm_call", model)
-    extract_llm.llm_extract(body, hints=hints(body))
+    result = extract_llm.llm_extract(body, hints=hints(body))
     assert len(calls) == 1
+    [item] = result["requests"]
+    assert item["action"] == question["action"] and item["evidence"] == question["evidence"]
+    assert item["evidence"] in body and not item.get("unverified")
 
 
 TWO_CONFIRMS = "本人の記録の確認と検査値の確認をお願いします"
 RECORD = {"to": "不明", "kind": "request", "action": "記録確認", "evidence": TWO_CONFIRMS}
 LAB = {"to": "不明", "kind": "request", "action": "検査値確認", "evidence": TWO_CONFIRMS}
+REVIEW_TWO_CONFIRMS = "記録確認、検査値確認をお願いします"
+REVIEW_RECORD = {"to": None, "kind": "request", "action": "記録確認", "evidence": REVIEW_TWO_CONFIRMS}
+REVIEW_LAB = {"to": None, "kind": "request", "action": "検査値確認", "evidence": REVIEW_TWO_CONFIRMS}
 
 
-@pytest.mark.parametrize("first", [[RECORD], [LAB]], ids=["lab_missing", "record_missing"])
+@pytest.mark.parametrize("first", [[REVIEW_RECORD], [REVIEW_LAB]], ids=["lab_missing", "record_missing"])
 def test_one_quote_and_one_stem_do_not_cover_two_targets_of_one_kind(monkeypatch, first):
-    body = PREFIX + TWO_CONFIRMS + "。"
+    body = PREFIX + REVIEW_TWO_CONFIRMS + "。"
     calls = []
 
     def model(prompt, **kwargs):
         calls.append(prompt)
-        return copy.deepcopy({**OBSERVATIONS, "requests": first if len(calls) == 1 else [RECORD, LAB]})
+        return copy.deepcopy({**OBSERVATIONS, "requests": first if len(calls) == 1 else [REVIEW_RECORD, REVIEW_LAB]})
 
     monkeypatch.setattr(extract_llm, "_llm_call", model)
     result = extract_llm.llm_extract(body, hints=hints(body))
     assert len(calls) == 2
     assert {item["action"] for item in result["requests"]} == {"記録確認", "検査値確認"}
+    assert all(item["evidence"] == REVIEW_TWO_CONFIRMS and not item.get("unverified")
+               for item in result["requests"])
 
 
 @pytest.mark.parametrize("requests", [
@@ -805,12 +856,18 @@ def test_an_unrelated_negation_does_not_hide_a_request(monkeypatch):
     ("本人の記録を確認しないでください。", []),                        # the request itself is negated
     ("本人は転倒がないので記録を確認してください。",
      [_confirm("記録確認", "本人は転倒がないので記録を確認してください")]),
-    (BOTH + "。", [{"to": "医師", "kind": "request", "action": "記録をチェックして主治医に伝達",
-                    "evidence": BOTH}]),                                # one paraphrase names both targets
-], ids=["negated_request", "unrelated_negation_present", "paraphrase_names_both_targets"])
+    (BOTH + "。", [_confirm("記録確認", BOTH), _confirm("主治医への連絡", BOTH)]),
+], ids=["negated_request", "unrelated_negation_present", "source_names_both_targets"])
 def test_negated_or_target_named_requests_add_no_call(monkeypatch, tail, requests):
     calls, _ = _run(monkeypatch, PREFIX + tail, requests)
     assert len(calls) == 1
+
+
+def test_paraphrase_and_unnamed_recipient_do_not_become_grounded():
+    body = PREFIX + BOTH + "。"
+    [item] = extract_validation.validate({"requests": [{"to": "医師", "kind": "request",
+        "action": "記録をチェックして主治医に伝達", "evidence": BOTH}]}, body)["requests"]
+    assert item["evidence"] == BOTH and item["unverified"] is True
 
 
 def test_a_request_without_a_named_target_is_checked_without_failing(monkeypatch):
@@ -837,9 +894,9 @@ def test_one_of_the_extended_targets_missing_is_repaired(monkeypatch):
 CROSS = "本人の記録の確認と投薬を終えたので、主治医へ連絡をお願いします"
 RIGHT_NEG = "本人の記録を確認してください、転倒はありません"
 LEFT_DONE = "記録は確認済みですが、主治医へ連絡してください"
-CROSS_CONTACT = {"to": "医師", "kind": "request", "action": "主治医へ連絡",
+CROSS_CONTACT = {"to": "主治医", "kind": "request", "action": "主治医へ連絡",
                  "evidence": "主治医へ連絡をお願いします"}
-LEFT_CONTACT = {"to": "医師", "kind": "request", "action": "主治医へ連絡",
+LEFT_CONTACT = {"to": "主治医", "kind": "request", "action": "主治医へ連絡",
                 "evidence": "主治医へ連絡してください"}
 
 
@@ -934,15 +991,15 @@ def test_an_unrepaired_change_word_leaves_the_message_in_attention(tmp_path, mon
 
 
 @pytest.mark.parametrize("integrity,state", [
-    ("absent", "complete"), ({}, "complete"), (None, "attention"),
+    ("absent", "attention"), ({}, "attention"), (None, "attention"),
     # the writer always records the remaining count; resolved means exactly integer 0
-    ({"completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}, "complete"),
+    ({"completeness_chunks": 1, "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}, "complete"),
     ({"completeness": {"0": {"state": "hint_gaps_resolved"}}}, "attention"),
     ({"completeness": None}, "attention"), ({"completeness": []}, "attention"),
     ({"completeness": "hint_gaps_resolved"}, "attention"),
     ({"completeness": {"0": "hint_gaps_resolved"}}, "attention"),
     ([], "attention"), ("synthetic", "attention"),
-], ids=["absent_legacy", "legacy_empty", "integrity_null", "resolved", "resolved_without_count", "null", "list", "string",
+], ids=["current_absent", "current_empty", "integrity_null", "resolved", "resolved_without_count", "null", "list", "string",
         "string_entry", "integrity_list", "integrity_string"])
 def test_present_malformed_completeness_is_never_complete(tmp_path, monkeypatch, integrity, state):
     db = _ledger(tmp_path)
@@ -960,6 +1017,21 @@ def test_present_malformed_completeness_is_never_complete(tmp_path, monkeypatch,
         assert extract_llm.progress_for_message(db.db, source, model=extract_llm.MODEL)["state"] == state
     finally:
         db.close()
+
+
+def test_legacy_completeness_may_be_absent_but_current_requires_each_chunk():
+    import inference_version
+
+    legacy = {inference_version.VERSION_KEY: inference_version.LEGACY_VERSION}
+    current = {inference_version.VERSION_KEY: inference_version.CURRENT_VERSION}
+    assert extract_quality.completeness_resolved(legacy)
+    assert extract_quality.completeness_resolved({**legacy, "integrity": {}})
+    assert not extract_quality.completeness_resolved({**legacy, "integrity": {"completeness": None}})
+    assert not extract_quality.completeness_resolved(current)
+    assert not extract_quality.completeness_resolved({**current, "integrity": {}})
+    assert extract_quality.completeness_resolved({**current, "integrity": {
+        "completeness_chunks": 1,
+        "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}})
 
 
 @pytest.mark.parametrize("first,covered", [
@@ -1585,7 +1657,7 @@ def test_a_denied_plan_grounds_no_planned_change(text):
 
 @pytest.mark.parametrize("repaired,state", [
     ([_med("架空薬A", "本人の架空薬A5mgを中止しました", action="none", dose="5mg")], "unresolved"),
-    ([_med("架空薬A", "本人の架空薬A5mgを中止しました", action="stop", status="past", dose="5mg")], None)])
+    ([_med("架空薬A", "本人の架空薬A5mgを中止しました", action="stop", status="past", dose="5mg")], "hint_gaps_resolved")])
 def test_a_repair_after_an_invalid_answer_records_its_own_gaps(monkeypatch, repaired, state):
     body = PREFIX + "本人の架空薬A5mgを中止しました。"
     calls, meta = [], {}
@@ -1594,7 +1666,9 @@ def test_a_repair_after_an_invalid_answer_records_its_own_gaps(monkeypatch, repa
     extract_llm.llm_extract(body, hints=hints(body), meta_out=meta)
     assert len(calls) == 2
     states = {e["state"] for e in (meta.get("completeness") or {}).values()}
-    assert states == ({state} if state else set())
+    assert states == {state}
+    if state == "hint_gaps_resolved":
+        assert all(e["remaining_hint_candidates"] == 0 for e in meta["completeness"].values())
 
 
 @pytest.mark.parametrize("name", ["リハビリ", "マッサージ", "スイミング"])
@@ -1692,7 +1766,7 @@ def test_superseded_vital_hints_do_not_force_a_false_unresolved_repair(monkeypat
     assert result == answer
     assert len(calls) == 1
     assert not extract_quality.completeness_issues(result, hints(body), body)
-    assert not meta.get("completeness")
+    assert meta["completeness"] == {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}
 
 
 def test_constrained_batch_can_return_the_required_routing_index():
@@ -1708,3 +1782,252 @@ def test_question_request_survives_quality_module_move():
     assert len(cues) == 1
     assert cues[0]["kind"] == "ask"
     assert "訪問予定" in cues[0]["ctx"]
+
+
+@pytest.mark.parametrize("body,actions", [
+    ("本人の記録の確認と検査値の確認をお願いします。", ["記録確認", "検査値確認"]),
+    ("本人のかかとの確認と検査値の確認をお願いします。", ["かかと確認", "検査値確認"]),
+    ("本人の記録の確認と看護記録の確認をお願いします。", ["記録確認", "看護記録確認"]),
+    ("本人の記録の確認と看護記録の確認をお願いします。", ["記録と看護記録の確認"]),
+    ("血圧の記録の確認と血糖の記録の確認をお願いします。", ["血圧の記録確認", "血糖の記録確認"]),
+])
+def test_source_bound_listed_requests_keep_each_exact_target(body, actions):
+    quote = body.removesuffix("。")
+    proposed = [{"to": "不明", "kind": "request", "action": action, "evidence": quote}
+                for action in actions]
+    result = extract_validation.validate({"requests": proposed}, body)
+    assert [item["action"] for item in result["requests"]] == actions
+    assert all(item["evidence"] == quote and not item.get("unverified") for item in result["requests"])
+    assert all(item["to"] == "不明" for item in result["requests"])
+
+
+@pytest.mark.parametrize("body,action", [
+    ("本人の看護記録の確認と検査値の確認をお願いします。", "記録確認"),
+    ("本人のかかとの確認と検査値の確認をお願いします。", "かか確認"),
+    ("本人の記録の確認と検査値の確認を終えました。", "記録確認"),
+    ("本人の記録の確認と検査値の確認をしないでください。", "検査値確認"),
+    ("本人の記録の確認と検査値の確認を終えたので、主治医へ連絡してください。", "記録確認"),
+    ("母の記録の確認と検査値の確認をお願いします。", "記録確認"),
+])
+def test_a_suffix_or_completed_report_cannot_confirm_a_listed_request(body, action):
+    quote = body.removesuffix("。")
+    result = extract_validation.validate({"requests": [{"to": "不明", "kind": "request",
+        "action": action, "evidence": quote}]}, body)
+    [item] = result["requests"]
+    assert item["evidence"] == quote and item.get("unverified") is True
+    assert item.get("action") is None
+
+
+def test_listed_request_does_not_invent_an_unwritten_recipient():
+    body = "本人の記録の確認と検査値の確認をお願いします。"
+    result = extract_validation.validate({"requests": [{"to": "主治医", "kind": "request",
+        "action": "検査値確認", "evidence": body.removesuffix("。")}]}, body)
+    [item] = result["requests"]
+    assert item["action"] == "検査値確認" and item["to"] is None and item["unverified"] is True
+    assert item["evidence"] == body.removesuffix("。")
+
+
+def test_listed_request_keeps_no_inside_distinct_target_names():
+    body = "本人のきのこ確認と検査値確認をお願いします。"
+    quote = body.removesuffix("。")
+    proposed = [{"to": "不明", "kind": "request", "action": action, "evidence": quote}
+                for action in ("きのこ確認", "きこ確認")]
+    result = extract_validation.validate({"requests": proposed}, body)
+    present, different = result["requests"]
+    assert present["action"] == "きのこ確認" and not present.get("unverified")
+    assert present["evidence"] == quote
+    assert different["action"] is None and different["unverified"] is True
+    assert different["evidence"] == quote
+
+
+@pytest.mark.parametrize("body", [
+    "本人は転倒がないので記録を確認してください。",
+    "本人の記録を確認してください、転倒はありません。",
+])
+def test_direct_patient_request_survives_unrelated_denial(body):
+    quote = body.removesuffix("。")
+    result = extract_validation.validate({"requests": [{"to": "不明", "kind": "request",
+        "action": "記録確認", "evidence": quote}]}, body)
+    [item] = result["requests"]
+    assert item["action"] == "記録確認" and item["evidence"] == quote
+    assert item["to"] == "不明" and not item.get("unverified")
+
+
+@pytest.mark.parametrize("body,action", [
+    ("本人は転倒がないので記録を確認しないでください。", "記録確認"),
+    ("本人は転倒がないので記録を確認してくださいません。", "記録確認"),
+    ("母の記録を確認してください。", "記録確認"),
+    ("本人の看護記録を確認してください。", "記録確認"),
+    ("本人は発熱の可能性があるので記録を確認してください。", "記録確認"),
+])
+def test_direct_request_does_not_cross_denial_other_person_or_target(body, action):
+    quote = body.removesuffix("。")
+    result = extract_validation.validate({"requests": [{"to": "不明", "kind": "request",
+        "action": action, "evidence": quote}]}, body)
+    [item] = result["requests"]
+    assert item["evidence"] == quote and item.get("unverified") is True
+    assert item.get("action") is None
+
+
+def test_direct_request_does_not_confirm_an_unwritten_recipient():
+    body = "本人の記録を確認してください。"
+    result = extract_validation.validate({"requests": [{"to": "主治医", "kind": "request",
+        "action": "記録確認", "evidence": body.removesuffix("。")}]}, body)
+    [item] = result["requests"]
+    assert item["action"] == "記録確認" and item["to"] is None and item["unverified"] is True
+
+
+@pytest.mark.parametrize("body,quote,action", [
+    ("家族の体温の確認と脈拍の確認をお願いします。", "家族の体温の確認と脈拍の確認をお願いします", "脈拍確認"),
+    ("家族の体温の確認と脈拍の確認をお願いします。", "脈拍の確認をお願いします", "脈拍確認"),
+    ("他の患者の体温の確認と脈拍の確認をお願いします。", "脈拍の確認をお願いします", "脈拍確認"),
+    ("本人の体温の確認と家族の脈拍の確認をお願いします。", "本人の体温の確認と家族の脈拍の確認をお願いします", "体温確認"),
+])
+def test_foreign_or_mixed_request_target_is_not_confirmed(body, quote, action):
+    result = extract_validation.validate({"requests": [{"to": "不明", "kind": "request",
+        "action": action, "evidence": quote}]}, body)
+    [item] = result["requests"]
+    assert item["evidence"] == quote
+    assert item.get("unverified") is True
+
+
+@pytest.mark.parametrize("body", [
+    "家族が本人の体温の確認と脈拍の確認をお願いします。",
+    "家族の依頼で本人の体温の確認と脈拍の確認をお願いします。",
+])
+def test_family_actor_can_request_confirmation_of_patient_measurements(body):
+    quote = body.removesuffix("。")
+    proposed = [{"to": "不明", "kind": "request", "action": action, "evidence": quote}
+                for action in ("体温確認", "脈拍確認")]
+    result = extract_validation.validate({"requests": proposed}, body)
+    assert [item["action"] for item in result["requests"]] == ["体温確認", "脈拍確認"]
+    assert all(item["evidence"] == quote and not item.get("unverified") for item in result["requests"])
+
+
+def test_request_without_explicit_subject_keeps_existing_behavior():
+    body = "記録確認をお願いします。"
+    result = extract_validation.validate({"requests": [{"to": "不明", "kind": "request",
+        "action": "記録確認", "evidence": body.removesuffix("。")}]}, body)
+    [item] = result["requests"]
+    assert item["action"] == "記録確認" and not item.get("unverified")
+
+
+def test_foreign_target_uncertainty_reaches_rollup():
+    import rollup
+
+    body = "家族の体温の確認と脈拍の確認をお願いします。"
+    result = extract_validation.validate({"requests": [{"to": "不明", "kind": "request",
+        "action": "脈拍確認", "evidence": "脈拍の確認をお願いします"}]}, body)
+    rows, thread_rows = [], []
+    rollup._collect_requests({"posted_at": "2032-06-01", "message_id": 1}, {}, result,
+                             1, 0, 1, rows, thread_rows, None)
+    assert len(rows) == 1 and rows[0]["ctx"] == "脈拍確認" and rows[0]["unverified"] is True
+    assert len(thread_rows) == 1 and thread_rows[0][0] is rows[0]
+
+
+def test_family_recipient_is_distinct_from_explicit_patient_target():
+    body = "母に本人の血圧確認をお願いします。"
+    quote = body.removesuffix("。")
+    [item] = extract_validation.validate({"requests": [{"to": "母", "kind": "request",
+        "action": "血圧確認", "evidence": quote}]}, body)["requests"]
+    assert item["to"] == "母" and item["action"] == "血圧確認"
+    assert item["evidence"] == quote and not item.get("unverified")
+
+
+@pytest.mark.parametrize("body,recipient,action", [
+    ("母の血圧確認をお願いします。", "不明", "血圧確認"),
+    ("母に発熱の確認をお願いします。", "母", "発熱確認"),
+])
+def test_foreign_or_ambiguous_recipient_target_remains_unverified(body, recipient, action):
+    quote = body.removesuffix("。")
+    [item] = extract_validation.validate({"requests": [{"to": recipient, "kind": "request",
+        "action": action, "evidence": quote}]}, body)["requests"]
+    assert item["evidence"] == quote and item.get("unverified") is True
+
+
+@pytest.mark.parametrize("body,quote", [
+    ("血圧確認しました。", "血圧確認"),
+    ("血圧確認しません。", "血圧確認"),
+    ("血圧確認は不要です。", "血圧確認"),
+    ("血圧確認しました。記録確認をお願いします。", "血圧確認しました。記録確認をお願いします"),
+])
+def test_completed_or_denied_request_is_not_confirmed_even_when_quote_is_partial(body, quote):
+    [item] = extract_validation.validate({"requests": [{"to": "不明", "kind": "request",
+        "action": "血圧確認", "evidence": quote}]}, body)["requests"]
+    assert item["evidence"] == quote and item.get("unverified") is True
+
+
+def test_request_keeps_an_explicit_source_condition():
+    body = "発熱したら本人の血圧確認をお願いします。"
+    quote = body.removesuffix("。")
+    [item] = extract_validation.validate({"requests": [{"to": "不明", "kind": "request",
+        "action": "血圧確認", "condition": "発熱したら", "evidence": quote}]}, body)["requests"]
+    assert item["condition"] == "発熱したら" and item["evidence"] == quote
+    assert item["action"] == "血圧確認" and not item.get("unverified")
+
+
+@pytest.mark.parametrize("body,action,quote", [
+    ("記録確認を終えました。", "記録確認", "記録確認"),
+    ("記録を確認しなくていい。", "記録確認", "記録を確認"),
+    ("主治医へ連絡を取り消しました。", "主治医へ連絡", "主治医へ連絡"),
+    ("記録確認を終えました。検査値確認をお願いします。", "記録確認", "記録確認"),
+    ("記録確認を終えましたが記録確認をお願いします。", "記録確認", "記録確認を終えました"),
+])
+def test_request_must_have_its_own_positive_expression(body, action, quote):
+    [item] = extract_validation.validate({"requests": [{"to": "不明", "kind": "request",
+        "action": action, "evidence": quote}]}, body)["requests"]
+    assert item["evidence"] == quote and item.get("unverified") is True
+
+
+@pytest.mark.parametrize("body,action,kind", [
+    ("記録確認をお願いします。", "記録確認", "request"),
+    ("体温を教えてください。", "体温を教えて", "question"),
+    ("合成担当Aが合成資料Xを確認する予定です。", "合成資料Xを確認", "self_plan"),
+])
+def test_positive_request_question_and_self_plan_keep_their_kind(body, action, kind):
+    quote = body.removesuffix("。")
+    proposed = {"to": None, "kind": kind, "action": action, "evidence": quote}
+    if kind == "self_plan":
+        proposed["from"] = "合成担当A"
+    [item] = extract_validation.validate({"requests": [proposed]}, body)["requests"]
+    assert item["kind"] == kind and item["action"] == action
+    assert item["evidence"] == quote and not item.get("unverified")
+
+
+@pytest.mark.parametrize("reference", ["その依頼", "上記の依頼", "先ほどの依頼", "そのお願い"])
+@pytest.mark.parametrize("quote", ["本人の記録確認をお願いします。", "記録確認"])
+@pytest.mark.parametrize("end", ["。", ""])
+def test_adjacent_explicit_cancellation_holds_a_request(reference, quote, end):
+    body = "本人の記録確認をお願いします。" + reference + "を取り消しました" + end
+    [item] = extract_validation.validate({"requests": [{"to": "不明", "kind": "request",
+        "action": "記録確認", "evidence": quote}]}, body)["requests"]
+    assert item["evidence"] == quote and item.get("unverified") is True
+
+
+@pytest.mark.parametrize("following", [
+    "別の依頼を取り消しました。",
+    "他の患者のその依頼を取り消しました。",
+    "確認を受けました。その依頼を取り消しました。",
+    "その依頼を取り消しません。",
+    "その依頼の取消は不要です。",
+    "その依頼を取り消す予定です。",
+    "その依頼を取り消しましたか。",
+])
+def test_unrelated_or_unconfirmed_cancellation_does_not_change_a_request(following):
+    body = "本人の記録確認をお願いします。" + following
+    quote = "記録確認"
+    [item] = extract_validation.validate({"requests": [{"to": "不明", "kind": "request",
+        "action": "記録確認", "evidence": quote}]}, body)["requests"]
+    assert item["action"] == "記録確認" and item["evidence"] == quote
+    assert not item.get("unverified")
+
+
+def test_cancelled_request_does_not_hold_a_later_independent_patient_request():
+    body = ("本人の記録確認をお願いします。その依頼を取り消しました。"
+            "本人の血圧確認をお願いします。")
+    proposed = [{"to": "不明", "kind": "request", "action": action, "evidence": quote}
+                for action, quote in (("記録確認", "記録確認"), ("血圧確認", "血圧確認"))]
+    first, second = extract_validation.validate({"requests": proposed}, body)["requests"]
+    assert first["unverified"] is True and first["evidence"] == "記録確認"
+    assert second["action"] == "血圧確認" and not second.get("unverified")
+    assert second["evidence"] == "血圧確認"

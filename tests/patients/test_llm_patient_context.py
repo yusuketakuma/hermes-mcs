@@ -7,6 +7,8 @@ import json
 import pytest
 
 import extract_llm
+import inference_dependency_loss
+import inference_version
 from patient_context import CATEGORIES
 from test_extraction_review import _message, db
 
@@ -92,25 +94,40 @@ def test_patient_context_llm_single_and_chunks_remain_source_bound(monkeypatch):
     assert lifted is None
 
 
-def test_new_detail_contract_marks_results_and_repends_existing_v5(db):
+@pytest.mark.parametrize("generation", [inference_version.LEGACY_VERSION, inference_version.CURRENT_VERSION])
+def test_new_detail_contract_marks_results_and_repends_existing_v5(db, generation):
     db.save_messages([_message(body="独居です。")])
-    row = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row["_source_binding"] = inference_dependency_loss.source_binding(db.db, row["project_id"], row["message_id"])
     old = {"hash": row["content_hash"], "extract_version": 5}
-    db.artifact_add("extract_llm", json.dumps({"summary": "旧合成概要"}),
-                    project_id=1, message_id=1, meta=old)
-    assert extract_llm.EXTRACT_VERSION == 9
+    if generation == inference_version.CURRENT_VERSION:
+        old[inference_version.VERSION_KEY] = generation
+    old_content = {"summary": "旧合成概要"}
+    old_id = db.artifact_add("extract_llm", json.dumps(old_content), project_id=1, message_id=1, meta=old)
+    assert extract_llm.EXTRACT_VERSION == 10
     assert not extract_llm._current(db, 1, row["content_hash"])
     content = {"patient_context": [item()]}
     assert extract_llm._replace_current(db, row, json.dumps(content))
-    saved = db.db.execute("SELECT content,meta FROM artifacts WHERE kind='extract_llm'").fetchone()
-    assert json.loads(saved[0]) == content
-    assert json.loads(saved[1])["patient_context_version"] == extract_llm.PATIENT_CONTEXT_VERSION == 4
+    saved = db.artifacts("extract_llm", project_id=1, message_id=1)
+    current = [entry for entry in saved if inference_version.is_current(json.loads(entry["meta"]))]
+    assert len(current) == 1 and json.loads(current[0]["content"]) == content
+    new_meta = json.loads(current[0]["meta"])
+    assert new_meta["extract_version"] == extract_llm.EXTRACT_VERSION
+    assert new_meta["patient_context_version"] == extract_llm.PATIENT_CONTEXT_VERSION == 4
+    assert extract_llm._current(db, 1, row["content_hash"])
+    prior = [entry for entry in saved if entry["artifact_id"] == old_id]
+    if generation == inference_version.LEGACY_VERSION:
+        assert len(prior) == 1 and json.loads(prior[0]["content"]) == old_content
+        assert json.loads(prior[0]["meta"]) == old
+    else:
+        assert prior == []
 
 
 def test_patient_context_prompt_change_invalidates_saved_chunk(db, monkeypatch):
     db.save_messages([_message(body="独居です。")])
-    row = db.db.execute("SELECT * FROM messages").fetchone()
-    extract_llm._persist_chunks(db, row, {0: {"patient_context": [item()]}})
+    row = dict(db.db.execute("SELECT * FROM messages").fetchone())
+    row["_source_binding"] = inference_dependency_loss.source_binding(db.db, row["project_id"], row["message_id"])
+    assert extract_llm._persist_chunks(db, row, {0: {"patient_context": [item()]}})
     assert extract_llm._saved_chunk_state(db.db, row)[1]
     monkeypatch.setattr(extract_llm, "_PROMPT_HEAD", extract_llm._PROMPT_HEAD + "契約変更")
     assert not extract_llm._saved_chunk_state(db.db, row)[1]

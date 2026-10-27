@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 import semantic_policy
 import semantic_projection as projection
 import semantic_v4 as v4
@@ -11,15 +13,16 @@ from mcs_queries import current_projection_id, current_v4_id
 from semantic_testkit import _canonical_cfg, _drained_old_version, _kind_rows
 
 
-def test_version_five_is_reprojected_from_the_same_audited_document(tmp_path):
+@pytest.mark.parametrize("old_version", [5, 6])
+def test_older_version_is_reprojected_from_the_same_audited_document(tmp_path, old_version):
     db = _drained_old_version(tmp_path)
     try:
         kinds = ("canonical_projection", v4.KIND_V4)
-        db.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.projection_version',5) "
-                      "WHERE kind IN (?,?)", kinds)
+        db.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.projection_version',?) "
+                      "WHERE kind IN (?,?)", (old_version, *kinds))
         db.db.commit()
         old = {row["artifact_id"]: row for kind in kinds for row in _kind_rows(db, kind)}
-        assert len(old) == 4 and projection.PROJECTION_VERSION == 6
+        assert len(old) == 4 and projection.PROJECTION_VERSION == 7
         for mid in (1, 2):
             current = db.db.execute(
                 f"SELECT {current_projection_id()}, {current_v4_id()} FROM messages m "
@@ -37,7 +40,7 @@ def test_version_five_is_reprojected_from_the_same_audited_document(tmp_path):
                 meta = json.loads(row["meta"])
                 prior = old[meta["reprojected_from"]]
                 old_meta = json.loads(prior["meta"])
-                assert old_meta["projection_version"] == 5
+                assert old_meta["projection_version"] == old_version
                 assert meta["projection_version"] == projection.PROJECTION_VERSION
                 assert all(meta[key] == old_meta[key] for key in
                            ("doc_hash", "fingerprint", "policy_fingerprint", "hash"))

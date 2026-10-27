@@ -1,4 +1,5 @@
 """Preserve source-bound event axes and safely project the legacy event labels."""
+import itertools
 import json
 import re
 
@@ -27,6 +28,8 @@ _DIRECT = {
     'care': r'介助|ケア|処置', 'family_contact': r'家族(?:に|へ|と)(?:連絡|相談)|家族連絡',
 }
 _DIRECT = {kind: re.compile(pattern) for kind, pattern in _DIRECT.items()}
+_EVENT_IDENTITY = {'退院': '退院', '出院': '退院'}
+_EVENT_CANDIDATE_LIMIT = 64
 _BREAK = re.compile(r'[。！？!?;；\n、,]')
 _UNCERTAIN = re.compile(r'否定でき|かもしれ|疑い|不明|未確認|未確定|未定|可能性|ない(?:こと|わけ|訳)はない')
 _NEGATED = re.compile(r'^(?:では(?:ありません|ない|なく)|じゃない|(?:の)?(?:予定|計画)(?:は|が|も)?(?:なし|ない|ありません))')
@@ -79,11 +82,13 @@ def _polarity(body, start, end, target_end, status):
     if (_UNCERTAIN.search(tail) or _QUESTION.search(tail)
             or tail.rstrip().endswith(('、', ',')) and re.match(r'\s*' + REPORTED_ABSENCE, body[end:])):
         return None
+    cue = body[start:target_end]
+    if value is None and cue and cue in tail:
+        return None
     if _NEGATED.search(tail):
         return True
     if value is not None:
         return value
-    cue = body[start:target_end]
     if ((cue in ('お亡くなり', '亡くなり') and re.fullmatch(r'(?:になりました|になった|ました)[。;；\n\s]*', tail))
             or cue == '亡くなっ' and re.fullmatch(r'た[。;；\n\s]*', tail)):
         return False
@@ -112,6 +117,41 @@ def _ambiguous_context(body, anchor, target_end, subject):
     ambiguous_subject = (subject == 'patient' and _OTHER_TOPIC.search(previous)
                          and _EXPLICIT_PATIENT.search(body[left:anchor]))
     return bool(correction), bool(ambiguous_subject)
+
+
+def _contradictory_event(body, anchor, target_end, subject, kind):
+    """Hold opposing assertions in one sentence or an explicit adjacent contrast."""
+    if subject == 'unknown' or kind not in _DIRECT:
+        return False
+    left = max(body.rfind(mark, 0, anchor) for mark in _SENTENCE_ENDS) + 1
+    right = min((pos for mark in _SENTENCE_ENDS
+                 if (pos := body.find(mark, target_end)) >= 0), default=len(body))
+    contrast = r'\s*(?:しかし|ところが|だが|ただし|実際(?:には|は)?)'
+    if left and re.match(contrast, body[left:anchor]):
+        left = max(body.rfind(mark, 0, left - 1) for mark in _SENTENCE_ENDS) + 1
+    if right < len(body) and re.match(contrast, body[right + 1:]):
+        right = min((pos for mark in _SENTENCE_ENDS
+                     if (pos := body.find(mark, right + 1)) >= 0), default=len(body))
+    cue = body[anchor:target_end]
+    candidates = list(itertools.islice(_DIRECT[kind].finditer(body, left, right), _EVENT_CANDIDATE_LIMIT + 1))
+    if len(candidates) > _EVENT_CANDIDATE_LIMIT:
+        return True  # A bounded scan cannot establish absence of a contradiction.
+    identity = _EVENT_IDENTITY.get(cue, cue)
+    matches = [m for m in candidates if _EVENT_IDENTITY.get(m.group(), m.group()) == identity]
+    phases = {}
+    for index, match in enumerate(matches):
+        owner, phase = source_axes(body, match.start(), match.end(), default='unknown')
+        if owner != subject or phase not in ('current', 'past'):
+            continue
+        _, stop = _clause(body, match.start(), match.end())
+        if index + 1 < len(matches):
+            stop = min(stop, matches[index + 1].start())
+        polarity = _polarity(body, match.start(), stop, match.end(), phase)
+        if polarity is not None:
+            phases.setdefault(phase, set()).add(polarity)
+            if len(phases[phase]) > 1:
+                return True
+    return False
 
 
 def candidate_span(item, body):
@@ -158,7 +198,7 @@ def validate_record(item, body):
         # Arrival alone does not prove that an examination took place.
         unresolved = True
     correction, ambiguous_subject = _ambiguous_context(body, anchor, target_end, actual_subject)
-    if correction:
+    if correction or _contradictory_event(body, anchor, target_end, actual_subject, item['kind']):
         actual_status, actual_negated, unresolved = 'unknown', None, True
     if ambiguous_subject:
         actual_subject, unresolved = 'unknown', True
@@ -271,12 +311,16 @@ def canonical_record(fact, evidence, *, disputed=False):
     if match is not None:
         if kind == 'exam' and re.fullmatch(OUTPATIENT_CUE, match.group()):
             mismatch = True
-        source_subject, source_status = source_axes(quote, match.start(), match.end(), default=subject)
+        source_subject, source_status = source_axes(quote, match.start(), match.end(), default='unknown')
         if source_subject != subject:
             subject = 'unknown'
         source_negated = _polarity(quote, match.start(), len(quote), match.end(), source_status)
         mismatch = mismatch or source_negated is None or source_negated != negated
-        if status == 'planned' and source_status != 'planned':
+        if _contradictory_event(quote, match.start(), match.end(), source_subject, kind):
+            status, negated, mismatch = 'unknown', None, True
+        elif source_status == 'unknown':
+            status, mismatch = 'unknown', True
+        elif status == 'planned' and source_status != 'planned':
             mismatch = True
         elif source_status in ('past', 'planned', 'conditional'):
             status = source_status

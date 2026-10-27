@@ -6,6 +6,114 @@ import pytest
 import clinical_values
 
 
+@pytest.mark.parametrize("body,surface,period", [
+    ("本人は採血もしました。", "採血", "current"),
+    ("本人が訪問もしました。", "訪問", "current"),
+    ("本人は薬ももらいました。", "薬", "current"),
+    ("本人は採血もしていました。", "採血", "current"),
+    ("本人は採血もしたと報告しました。", "採血", "current"),
+    ("本人は採血もしたため経過を確認します。", "採血", "current"),
+    ("本人は採血もしたので経過を確認します。", "採血", "current"),
+    ("本人は採血もした後で帰宅しました。", "採血", "current"),
+    ("本人は服薬もしなかった。", "服薬", "current"),
+    ("本人は採血もして下さい。", "採血", "unknown"),
+    ("本人は採血もしたいです。", "採血", "unknown"),
+    ("本人は採血もしたことがあります。", "採血", "unknown"),
+    ("本人は採血もしなくてはならない。", "採血", "unknown"),
+    ("本人は採血もしないといけない。", "採血", "unknown"),
+    ("本人は採血もしないとだめ。", "採血", "unknown"),
+    ("本人は採血もしないとダメ。", "採血", "unknown"),
+    ("本人は採血もしないと駄目。", "採血", "unknown"),
+    ("本人は退院もしましたか？", "退院", "unknown"),
+    ("本人は退院もしませんか？", "退院", "unknown"),
+    ("本人は退院もしましたでしょうか？", "退院", "unknown"),
+    ("本人は退院もしますか？", "退院", "unknown"),
+    ("本人は退院もしませんでしたか？", "退院", "unknown"),
+    ("本人は退院もしました。", "退院", "current"),
+    ("本人は採血もしたが、結果は未確認です。", "採血", "current"),
+    ("本人は採血もしてもらった。", "採血", "current"),
+    ("本人は採血もしていません。", "採血", "current"),
+    ("本人は発熱もありません。", "発熱", "current"),
+    ("本人は採血もしなくてもよい。", "採血", "conditional"),
+    ("もし本人が発熱したら連絡します。", "発熱", "conditional"),
+    ("もし、本人に発熱があれば連絡します。", "発熱", "conditional"),
+    ("もし、家族に発熱があれば連絡します。", "発熱", "family"),
+    ("本人がもしもの時は合成薬Aを使用します。", "合成薬A", "conditional"),
+    ("本人は本日もし手足に発熱があれば連絡します。", "発熱", "conditional"),
+    ("万が一、本人が発熱したら連絡します。", "発熱", "conditional"),
+])
+def test_conditional_adverb_is_distinct_from_additive_completed_action(body, surface, period):
+    start = body.index(surface)
+    subject, phase = ("family", "conditional") if period == "family" else ("patient", period)
+    assert clinical_scope.source_axes(body, start, start + len(surface)) == (subject, phase)
+    assert clinical_scope.patient_source_scope(body, start, start + len(surface)) == (
+        subject if subject != "patient" or period == "current" else period)
+
+
+@pytest.mark.parametrize("body,surface", [
+    ("もし、本人に発熱があれば、本人は採血しました。", "採血"),
+    ("もし家族に発熱があれば、本人は受診します。", "受診"),
+    ("家族に発熱があれば、本人は受診します。", "受診"),
+    ("本人に発熱があったら、薬剤師が訪問します。", "訪問"),
+    ("もし本人に発熱があれば、本人の一方の手を採血します。", "採血"),
+    ("本人に発熱があれば、本人の一方的な希望で採血します。", "採血"),
+    ("もし本人に発熱があれば、右手を使い、もう一方で、看護師は採血します。", "採血"),
+])
+def test_conditional_effect_keeps_condition_across_comma_and_subject(body, surface):
+    start = body.index(surface)
+    assert clinical_scope.source_axes(body, start, start + len(surface))[1] == "conditional"
+
+
+@pytest.mark.parametrize("body,surface", [
+    ("もし、家族に発熱があれば連絡。本人は採血しました。", "採血"),
+    ("もし、本人に発熱があれば連絡します。しかし本人は採血しました。", "採血"),
+    ("本人に発熱があれば連絡、ただし本人は採血しました。", "採血"),
+    ("もし家族に発熱があれば連絡。一方、本人は採血しました。", "採血"),
+    ("もし家族に発熱があれば連絡、一方、本人は採血しました。", "採血"),
+    ("もし家族に発熱があれば連絡、一方で、本人は採血しました。", "採血"),
+])
+def test_conditional_marker_does_not_cross_independent_statement(body, surface):
+    start = body.index(surface)
+    assert clinical_scope.source_axes(body, start, start + len(surface)) == ("patient", "current")
+
+
+@pytest.mark.parametrize("body", [
+    "本人は退院しましたか？",
+    "本人は退院しましたか",
+    "本人は退院しました？",
+    "本人は退院しませんか？",
+    "本人は退院済みですか？",
+])
+def test_question_does_not_confirm_transition(body):
+    start = body.index("退院")
+    end = start + len("退院")
+    assert clinical_scope.source_axes(body, start, end) == ("patient", "unknown")
+    assert clinical_scope.patient_source_scope(body, start, end) == "unknown"
+    assert clinical_scope.source_polarity(body, 0, len(body), target_end=end) is None
+
+
+@pytest.mark.parametrize("body,expected", [
+    ("本人は退院しましたが退院していません。", None),
+    ("本人は退院していませんが退院しました。", None),
+    ("本人は退院しましたが入院していません。", False),
+    ("本人は退院しましたが家族は退院していません。", False),
+    ("本人は退院しました。本人は退院していません。", False),
+    ("本人は退院しました。", False),
+    ("本人は退院していません。", True),
+])
+def test_polarity_conflict_requires_same_subject_target_and_sentence(body, expected):
+    target_end = body.index("退院") + len("退院")
+    assert clinical_scope.source_polarity(body, 0, len(body), target_end=target_end) is expected
+
+
+def test_later_question_does_not_replace_a_different_completed_statement():
+    body = "本人は退院しましたか？本人は退院しました。"
+    first, last = body.index("退院"), body.rindex("退院")
+    assert clinical_scope.source_axes(body, first, first + 2) == ("patient", "unknown")
+    assert clinical_scope.source_axes(body, last, last + 2) == ("patient", "current")
+    assert clinical_scope.source_polarity(body, last, len(body), target_end=last + 2) is False
+
+
 @pytest.mark.parametrize("body,values,expected", [
     ("本人の血圧120/80を測定しました。", {"sbp": 180, "dbp": 80}, {"dbp": 80}),
     ("本人の血圧120/80を測定しました。", {"sbp": 120, "dbp": 80}, {"sbp": 120, "dbp": 80}),
@@ -88,7 +196,9 @@ def _meds(body, quote, subject):
 def test_an_honorific_family_medication_is_not_kept_as_the_patients():
     body = "ご家族から、お兄様が合成薬Aを飲み忘れたと相談がありました。患者本人の服薬状況に変更はありません。"
     quote = "お兄様が合成薬Aを飲み忘れたと相談がありました"
-    assert _meds(body, quote, "patient") == []
+    [unverified] = _meds(body, quote, "patient")
+    assert unverified["unverified"] is True and "subject" not in unverified
+    assert unverified["name"] == "合成薬A" and unverified["evidence"] == quote
     assert [med["subject"] for med in _meds(body, quote, "family")] == ["family"]
 
 
