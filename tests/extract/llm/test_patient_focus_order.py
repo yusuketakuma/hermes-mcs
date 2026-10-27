@@ -11,6 +11,7 @@ import pytest
 import extract_llm
 from extract_llm import EXTRACT_VERSION, KIND
 from extract_testkit import _hash, _ledger, _message
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 def _old(db, mid, pid):
@@ -103,7 +104,8 @@ def test_a_patient_whose_rest_is_in_backoff_is_not_focused(tmp_path, monkeypatch
     db = _corpus(tmp_path)
     db.artifact_add(KIND, json.dumps({}), project_id=2, message_id=1, meta={
         "error": True, "attempts": 1, "next_try": time.time() + 900,
-        "hash": _hash(db, 1), "extract_version": EXTRACT_VERSION})
+        "hash": _hash(db, 1), "extract_version": EXTRACT_VERSION,
+        VERSION_KEY: CURRENT_VERSION})
     assert extract_llm._focus_patients(db) == [1]
     assert _order(db)[0] == [4, 3, 2]
 
@@ -141,7 +143,8 @@ def test_progress_does_not_call_exhausted_or_waiting_extraction_complete(
     _old(db, 1, 1)
     db.artifact_add(KIND, "{}", project_id=1, message_id=1, meta={
         "error": True, "attempts": attempts, "next_try": time.time() + next_try if next_try else 0,
-        "hash": _hash(db, 1), "extract_version": EXTRACT_VERSION})
+        "hash": _hash(db, 1), "extract_version": EXTRACT_VERSION,
+        VERSION_KEY: CURRENT_VERSION})
     out = extract_llm.patient_progress_counts(db.db)
     assert out == {"active_patients": 1, "extraction_complete": 0,
                    "focus_eligible": focus, "focus_targets": focus}
