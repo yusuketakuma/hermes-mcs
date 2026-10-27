@@ -538,6 +538,9 @@ def _probe_format(deadline: float | None = None) -> str | None:
 
 
 _CHUNK_SIZE = 3000
+# Progress reads only: bound visited nodes independently of Python recursion.
+# Extraction and checkpoint resume retain their existing contracts.
+_PROGRESS_MAX_NODES = 16384
 
 
 def _opener_request(endpoint: str, method: str, body, timeout: float,
@@ -2603,16 +2606,25 @@ def _progress_steps(db, row, *, model: str | None):
     splits, saved = _saved_chunk_state(db, r, context, chunk_size=size)
     roots = plan_chunks(r["body_text"], size)
 
-    def count(key, piece):
+    if len(roots) > _PROGRESS_MAX_NODES:
+        return out
+    stack = list(reversed(list(enumerate(roots))))
+    completed = total = visited = 0
+    while stack:
+        key, piece = stack.pop()
+        visited += 1
         if key in saved:
-            return int("_quality_status" not in saved[key]), 1
-        if key in splits:
-            counts = [count(f"{key}:{i}", part) for i, part in enumerate(plan_chunks(piece, splits[key]))]
-            return sum(part[0] for part in counts), sum(part[1] for part in counts)
-        return 0, 1
-
-    counts = [count(i, piece) for i, piece in enumerate(roots)]
-    out.update(completed=sum(part[0] for part in counts), total=sum(part[1] for part in counts))
+            completed += int("_quality_status" not in saved[key])
+            total += 1
+        elif key in splits:
+            parts = plan_chunks(piece, splits[key])
+            if visited + len(stack) + len(parts) > _PROGRESS_MAX_NODES:
+                # Partial traversal cannot establish a final result or counts.
+                return out
+            stack.extend((f"{key}:{index}", part) for index, part in reversed(list(enumerate(parts))))
+        else:
+            total += 1
+    out.update(completed=completed, total=total)
     queued = yield ("queued", r["project_id"], r["message_id"])
     if not queued:
         held = yield ("held", r["project_id"], r["message_id"])

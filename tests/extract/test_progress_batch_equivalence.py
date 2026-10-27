@@ -141,6 +141,80 @@ def test_source_bound_checkpoint_counts_are_preserved(ledger):
     assert result[0]["state"] == "processing"
 
 
+def test_iterative_progress_counts_normal_split_tree_and_quality_pending(ledger, monkeypatch):
+    row = source(ledger, 1, body='ABCDEFGH')
+    splits = {0: 4, '0:0': 2}
+    saved = {'0:0:0': {}, '0:0:1': {'_quality_status': 'pending'}, '0:1': {}}
+    monkeypatch.setattr(llm, '_saved_chunk_state', lambda *a, **k: (splits, saved))
+    result = compare(ledger.db, [row, row])
+    assert all((r['completed'], r['total']) == (2, 3) for r in result)
+
+
+def test_multiple_roots_hold_only_above_exact_node_limit(ledger, monkeypatch):
+    row = source(ledger, 1, body='ABCDEFGH')
+    # Two four-character roots: root 0 and its two children, then root 1.
+    monkeypatch.setattr(llm, '_saved_chunk_size', lambda *a, **k: 4)
+    monkeypatch.setattr(llm, '_saved_chunk_state', lambda *a, **k: ({0: 2}, {}))
+    monkeypatch.setattr(llm, '_PROGRESS_MAX_NODES', 4)
+    within = compare(ledger.db, [row, row])
+    assert all((r['completed'], r['total']) == (0, 3) for r in within)
+    monkeypatch.setattr(llm, '_PROGRESS_MAX_NODES', 3)
+    held = compare(ledger.db, [row, row])
+    assert all(r['state'] == 'attention' and (r['completed'], r['total']) == (0, 0) for r in held)
+
+
+@pytest.mark.parametrize('saved,expected_completed', [({}, 1), ({'_quality_status': 'pending'}, 0)])
+def test_saved_parent_takes_precedence_over_split_for_progress(ledger, monkeypatch, saved, expected_completed):
+    row = source(ledger, 1, body='ABCDEFGH')
+    monkeypatch.setattr(llm, '_saved_chunk_state', lambda *a, **k: ({0: 4}, {0: saved}))
+    monkeypatch.setattr(llm, '_PROGRESS_MAX_NODES', 1)
+    result = compare(ledger.db, [row, row])
+    assert all((r['completed'], r['total']) == (expected_completed, 1) for r in result)
+
+
+def test_empty_body_does_not_create_a_completed_empty_root(ledger, monkeypatch):
+    row = source(ledger, 1, body='')
+    monkeypatch.setattr(llm, '_saved_chunk_state', lambda *a, **k: pytest.fail('empty source loaded chunks'))
+    result = compare(ledger.db, [row, row])
+    assert all(r['state'] == 'attention' and (r['completed'], r['total']) == (0, 0) for r in result)
+
+
+def test_deep_valid_split_path_counts_without_python_recursion(ledger, monkeypatch):
+    depth = 1050
+    body = 'A' * (depth + 1)
+    row = source(ledger, 1, body=body)
+    splits = {}
+    key = 0
+    for remaining in range(len(body) - 1, 0, -1):
+        splits[key] = remaining
+        key = f'{key}:0'
+    # This path corresponds to actual source-preserving subdivisions; no
+    # untrusted path bypasses the existing checkpoint loader in production.
+    assert llm._chunk_piece(body, llm._CHUNK_SIZE, key, splits) == 'A'
+    monkeypatch.setattr(llm, '_saved_chunk_state', lambda *a, **k: (splits, {}))
+    results = compare(ledger.db, [row, row])
+    assert all((r['completed'], r['total']) == (0, len(body)) for r in results)
+    assert all(r['state'] != 'complete' for r in results)
+
+
+def test_progress_node_limit_holds_even_a_valid_final_and_keeps_caller_transaction(ledger, monkeypatch):
+    row = source(ledger, 1, body='ABCDEFGH')
+    final(ledger, row)
+    monkeypatch.setattr(llm, '_saved_chunk_state', lambda *a, **k: ({0: 4}, {}))
+    ledger.db.execute("UPDATE patients SET fetch_reason='synthetic-change' WHERE project_id=1")
+    try:
+        monkeypatch.setattr(llm, '_PROGRESS_MAX_NODES', 3)
+        within = compare(ledger.db, [row, row])
+        assert all(r['state'] == 'complete' and r['total'] == 2 for r in within)
+        monkeypatch.setattr(llm, '_PROGRESS_MAX_NODES', 2)
+        held = compare(ledger.db, [row, row])
+        assert all(r['state'] == 'attention' and (r['completed'], r['total']) == (0, 0) for r in held)
+        assert ledger.db.in_transaction
+    finally:
+        ledger.db.rollback()
+    assert ledger.db.execute('SELECT fetch_reason FROM patients WHERE project_id=1').fetchone()[0] is None
+
+
 def test_thread_context_and_snapshot_match_for_ordered_replies(ledger):
     root = source(ledger, 1, body="本人の合成の前提です。")
     earlier = source(ledger, 2, body="本人の合成の先行返信です。", parent=1)
