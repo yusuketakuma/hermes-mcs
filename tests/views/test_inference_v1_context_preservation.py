@@ -29,9 +29,8 @@ def projection(monkeypatch):
     monkeypatch.setattr(views,"_records_coverage",lambda *a: (state['records'],{},None))
     monkeypatch.setattr(views,"_mentions",lambda *a: [])
     monkeypatch.setattr(views,"snapshot_meta",lambda *a: {})
-    monkeypatch.setattr(patient_context_refresh,"context_view_input",lambda *a,**k: {'facts':state['facts']})
-    monkeypatch.setattr(patient_context_refresh,"inference_coverage",lambda *a,**k: {
-        'complete': False, 'status': 'scan_pending', 'sources': {'pending': 1}})
+    monkeypatch.setattr(patient_context_refresh, "context_view_read", lambda *a, **k: ({'facts':state['facts']}, {
+        'complete': False, 'status': 'scan_pending', 'sources': {'pending': 1}}))
     yield db,state
     db.close()
 
@@ -154,11 +153,14 @@ def test_previsit_keeps_distinct_checks_and_requests_of_the_same_post(monkeypatc
                 for text in ('訪問日時の返答をお願いします。','連絡先の返答をお願いします。')]
     monkeypatch.setattr(views,'replies',lambda *a: {'items':requests+[requests[0]],'next_planned':None})
     monkeypatch.setattr(views,'changes',lambda *a: {'by_discovery':{}})
+    schedule = {'project_id':1,'records':[],'coverage':{'state':'unknown'}}
+    monkeypatch.setattr('intervention_schedule.read_source_schedule',lambda db,pid: schedule)
     ev = {'project_id':1,'items':checks+[checks[0]],'as_of':T0,'coverage':{}}
     before = copy.deepcopy(ev)
     note = views.previsit(None,ev,T0)
     assert [r['text'] for r in note['written_checks']] == ['残薬数を確認。','保管場所を確認。']
     assert [r['text'] for r in note['unanswered']] == [r['text'] for r in requests]
+    assert note['interventions'] == schedule
     assert ev == before
 
 

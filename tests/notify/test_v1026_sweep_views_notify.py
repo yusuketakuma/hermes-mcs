@@ -67,7 +67,8 @@ def test_previsit_marks_corrected_reports_and_does_not_repeat_the_heading(ctx, m
     item = {"message_id": 2, "quote": "残薬: 5日分", "posted_at_ts": T0 + 2 * DAY}
     monkeypatch.setattr(pcv, "previsit", lambda db, ev, now: {
         "recent": {"edited": [item], "deleted": []}, "written_checks": [],
-        "unanswered": [{"message_id": 7, "text": "合成依頼", "reply": "返答が見つからない", "posted_at_ts": T0}]})
+        "unanswered": [{"message_id": 7, "text": "合成依頼", "reply": "返答が見つからない", "posted_at_ts": T0}],
+        "interventions": {"project_id":1,"records":[],"coverage":{"state":"unknown"}}})
     rows = _view(ctx, "previsit")["items"]
     assert [r["group"] for r in rows] == ["訂正された報告", "返答が見つからない記録"]
     assert "返答が見つからない" not in rows[1]["text"]

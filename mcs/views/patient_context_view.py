@@ -188,6 +188,26 @@ def _historical_karte_items(db, project_id, context):
 
 
 def evidence(db, project_id, *, cfg=None) -> dict:
+    """Read source evidence, published context and coverage in one borrowed snapshot."""
+    db.execute("SAVEPOINT patient_context_evidence_read")
+    changes = db.total_changes
+    try:
+        result = _evidence(db, project_id, cfg=cfg)
+        if db.total_changes != changes:
+            raise RuntimeError("patient_context_read_changed")
+    except BaseException:
+        try:
+            db.execute("ROLLBACK TO patient_context_evidence_read")
+            db.execute("RELEASE patient_context_evidence_read")
+        except sqlite3.Error:
+            pass
+        raise
+    else:
+        db.execute("RELEASE patient_context_evidence_read")
+        return result
+
+
+def _evidence(db, project_id, *, cfg=None) -> dict:
     """The shared evidence list every view projects from.
 
     Chat items are read_model's current, source-checked context (edited,
@@ -223,7 +243,7 @@ def evidence(db, project_id, *, cfg=None) -> dict:
                     entry["_heading_group"] = group
             items.append(entry)
     items.extend(_mentions(db, project_id, senders))
-    context_refresh = patient_context_refresh.context_view_input(db, project_id, cfg=cfg)
+    context_refresh, inference = patient_context_refresh.context_view_read(db, project_id, cfg=cfg)
     facts = (context_refresh or {}).get("facts") or []
     scoped_facts = [fact for fact in facts if fact.get("project_id") is None
                     or type(fact["project_id"]) is int and fact["project_id"] == project_id]
@@ -285,7 +305,7 @@ def evidence(db, project_id, *, cfg=None) -> dict:
             "nightly_facts": scoped_facts,
             "as_of": (context_refresh or {}).get("as_of"),
             "coverage": {"read_model": coverage, "nightly": (context_refresh or {}).get("coverage"),
-                         "inference": patient_context_refresh.inference_coverage(db, project_id, cfg or {})}}
+                         "inference": inference}}
 
 
 def background(ev) -> dict:

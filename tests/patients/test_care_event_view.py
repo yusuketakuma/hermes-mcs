@@ -15,9 +15,8 @@ from test_care_event_sources import store as store
 @pytest.fixture(autouse=True)
 def context_stubs(monkeypatch):
     monkeypatch.setattr("mcs_util.load_config", lambda: {})
-    monkeypatch.setattr(patient_context_refresh, "context_view_input", lambda *a, **k: None)
-    monkeypatch.setattr(patient_context_refresh, "inference_coverage", lambda *a, **k: {
-        "complete": False, "status": "scan_pending", "sources": {"pending": 1}})
+    monkeypatch.setattr(patient_context_refresh, "context_view_read", lambda *a, **k: (None, {
+        "complete": False, "status": "scan_pending", "sources": {"pending": 1}}))
 
 
 def test_care_events_cli_and_chat_display_source_and_distinct_dates(store):

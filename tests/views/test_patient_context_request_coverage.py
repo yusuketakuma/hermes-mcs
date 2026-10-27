@@ -52,7 +52,7 @@ def test_explicit_full_request_read_keeps_old_request_and_its_reply(tmp_path, ol
         store.close()
 
 
-def _apply_relations(requests, replies, monkeypatch):
+def _apply_relations(requests, replies, monkeypatch, *, related=None):
     """Exercise per-request matching using explicit current synthetic Loop relations."""
     import request_loops
 
@@ -63,14 +63,16 @@ def _apply_relations(requests, replies, monkeypatch):
         events[root] = []
         for at, sender, kind in rows:
             mid = len(messages) + 10000
-            messages.append({"message_id": mid, "parent_id": root,
+            messages.append({"message_id": mid, "parent_id": root, "posted_at": f"synthetic-post-{mid}",
                              "posted_at_ts": at, "sender_id": sender, "body_state": "full"})
             relation = mapping[kind]
             events[root].append({"relation": relation, "reported_relation": relation,
-                                 "confidence": 1, "stale": False, "trigger_message_id": mid})
-    sources = [{"message_id": row["mid"], "artifact_id": i} for i, (row, *_) in enumerate(requests)]
-    loops = {i: {"adoption_eligible": True, "description": row["ctx"],
-                 "relation_events": events.get(root, [])}
+                                 "confidence": 1, "stale": False, "trigger_message_id": mid,
+                                 "trigger_revision": f"synthetic-revision-{mid}"})
+    sources = [{"message_id": row["mid"], "artifact_id": i + 1} for i, (row, *_) in enumerate(requests)]
+    loops = {i + 1: {"adoption_eligible": True, "description": row["ctx"],
+                 "relation_events": [event for index, event in enumerate(events.get(root, []))
+                                     if related is None or (i, index) in related]}
              for i, (row, root, *_rest) in enumerate(requests)}
     calls = []
 
@@ -104,28 +106,53 @@ def test_reply_relations_match_explicit_evidence_for_mixed_threads_and_times(mon
 
     rng = random.Random(1026)
     senders = [None, 1, 2, 3, 4]
-    kinds = tuple(k for k in rollup._REPLY_STAGE if k != "intent")
+    # The expected relation vocabulary and precedence are a fixed independent
+    # oracle, rather than copied from the implementation under test.
+    ranks = {kind: index for index, kind in enumerate(('ack', 'progress', 'answer', 'done', 'cancel'))}
+    relations = {'ack':'acknowledges','progress':'progress_report','answer':'answers_question',
+                 'done':'completion_report','cancel':'cancellation_report'}
+    kinds = tuple(ranks)
     for _ in range(100):
         replies = {root: [(rng.randrange(97, 108), rng.choice(senders), rng.choice(kinds))
                           for _ in range(40)] for root in range(1, 4)}
         requests = [({"mid": i, "ctx": f"架空依頼{i}"}, rng.randrange(1, 5),
                      rng.randrange(97, 108), rng.choice(senders)) for i in range(30)]
+        related = {(i, j) for i, (_, root, *_rest) in enumerate(requests)
+                   for j in range(len(replies.get(root, ()))) if rng.random() < .5}
+        reply_ids = {(root, j): mid + 10000 for mid, (root, j) in enumerate(
+            (root, j) for root, rows in replies.items() for j in range(len(rows)))}
         expected = []
-        for row, root, ts, sender in requests:
+        for i, (row, root, ts, sender) in enumerate(requests):
             row = dict(row)
-            seen = [(at, kind) for at, other, kind in replies.get(root, ())
-                    if at > ts and sender is not None and other is not None and other != sender]
+            seen = [(at, kind, reply_ids[root, j]) for j, (at, other, kind) in enumerate(replies.get(root, ()))
+                    if (i, j) in related and at > ts and sender is not None and other is not None and other != sender]
             if seen:
-                row["reply_state"] = max((kind for _, kind in seen), key=rollup._REPLY_STAGE.get)
-                done = [at for at, kind in seen if kind == "done"]
-                if done and any(kind == "cancel" and at > min(done) for at, kind in seen):
+                row["reply_state"] = max((kind for _, kind, _ in seen), key=ranks.get)
+                ordered = sorted(seen, key=lambda event: (event[0], event[2], relations[event[1]]))
+                row['reply_events'] = [{'message_id': mid, 'revision': f'synthetic-revision-{mid}',
+                    'loop_artifact_id': i + 1, 'posted_at': f'synthetic-post-{mid}', 'posted_at_ts': at,
+                    'relation': relations[kind], 'reply_state': kind,
+                    'same_time_unordered': sum(other_at == at for other_at, *_ in seen) > 1}
+                    for at, kind, mid in ordered]
+                # Conflicting reports remain a conflict regardless of which
+                # came first; this does not choose a final business status.
+                if {'done', 'cancel'} <= {kind for _, kind, _ in seen}:
                     row["reply_conflict"] = True
             expected.append(row)
         original = {root: list(rows) for root, rows in replies.items()}
-        calls = _apply_relations(requests, replies, monkeypatch)
+        calls = _apply_relations(requests, replies, monkeypatch, related=related)
         assert [row for row, *_ in requests] == expected
         assert replies == original
         assert len(calls) == len(requests)
+
+
+def test_thread_reply_does_not_answer_another_request_without_a_matching_relation(monkeypatch):
+    requests = [({'mid':1,'ctx':text}, 1, 100, 1) for text in ('訪問日を確認してください。', '連絡先を確認してください。')]
+    calls = _apply_relations(requests, {1:[(101, 2, 'done')]}, monkeypatch, related={(0, 0)})
+    assert requests[0][0]['reply_state'] == 'done'
+    assert len(requests[0][0]['reply_events']) == 1
+    assert 'reply_state' not in requests[1][0] and 'reply_events' not in requests[1][0]
+    assert len(calls) == len(set(calls)) == 2
 
 
 def test_full_reply_scan_reads_each_current_candidate_once(monkeypatch):

@@ -1,5 +1,5 @@
 """患者コンテキストを原文の根拠から作り、調査の続きと公開条件を保持する。"""
-from contextlib import closing
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta
 import hashlib
 import json
@@ -348,6 +348,62 @@ def _route_contract(meta):
     return actual
 
 
+def _scan_read_binding(sources, contract, cfg):
+    return _digest([contract, cfg, [(_source_key(source), _source_sig(source), bool(source.get("historical")))
+                                   for source in sources]])
+
+
+@contextmanager
+def _scan_read_owner(db, pid):
+    """Own lexical read-only proofs, retaining distinct pinned and runtime contracts."""
+    db.execute("SAVEPOINT context_read_scans")
+    active, proofs = [True], {}
+    changes = db.total_changes
+
+    def proof_for(snapshot, cfg):
+        if not active[0] or not db.in_transaction or db.total_changes != changes:
+            raise RuntimeError("patient_context_read_changed")
+        binding = _scan_read_binding(snapshot["sources"], snapshot["contract"], cfg)
+        code = _quality_code()
+        version = db.execute("PRAGMA data_version").fetchone()[0]
+        key = (binding, code, version)
+        if key not in proofs:
+            scans = _current_scans(db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
+            if db.total_changes != changes:
+                raise RuntimeError("patient_context_read_changed")
+            proofs[key] = (db, pid, binding, code, version, changes, active, scans)
+        return proofs[key]
+
+    try:
+        yield proof_for
+        if db.total_changes != changes:
+            raise RuntimeError("patient_context_read_changed")
+    except BaseException:
+        active[0] = False
+        proofs.clear()
+        try:
+            db.execute("ROLLBACK TO context_read_scans")
+            db.execute("RELEASE context_read_scans")
+        except sqlite3.Error:
+            pass  # SQLite can already have unwound its savepoints on interruption.
+        raise
+    else:
+        active[0] = False
+        proofs.clear()
+        db.execute("RELEASE context_read_scans")
+
+
+def _scans_from_read(db, pid, sources, contract, cfg, proof):
+    if proof is None:
+        return _current_scans(db, pid, sources, contract, cfg=cfg)
+    connection, patient, binding, code, version, changes, active, scans = proof
+    if (connection is not db or patient != pid or not active[0] or not db.in_transaction
+            or changes != db.total_changes or version != db.execute("PRAGMA data_version").fetchone()[0]
+            or code != _quality_code() or binding != _scan_read_binding(sources, contract, cfg)):
+        raise RuntimeError("patient_context_read_changed")
+    return scans
+
+
 def _current_scans(db, pid, sources, contract, *, cfg=None, check_quality=True):
     # Proofs are shared only inside this read snapshot, never across calls.
     db.execute('SAVEPOINT context_scan_read')
@@ -496,9 +552,9 @@ def _scan_facts(db, pid, source, contract, scan):
             yield {**fact, "historical": source.get("historical", False)}
 
 
-def _coverage(db, pid, sources, contract, facts, *, cfg=None):
+def _coverage(db, pid, sources, contract, facts, *, cfg=None, read_proof=None):
     messages = [s for s in sources if s["source"] == "chat"]
-    scans = _current_scans(db, pid, sources, contract, cfg=cfg)
+    scans = _scans_from_read(db, pid, sources, contract, cfg, read_proof)
     complete = sum(bool(scans.get(_source_key(s), {}).get("complete")) for s in messages if _usable(s))
     patient = db.execute("SELECT history_floor,coverage_ts,fetch_state,fetch_reason FROM patients "
                          "WHERE project_id=?", (pid,)).fetchone()
@@ -548,8 +604,9 @@ def _summary_valid(db, pid, doc, sources, *, allow_historical=False):
 
 def inference_coverage(db, pid, cfg):
     """Prove source scan, audit and current summary completion on a borrowed connection."""
-    snapshot = _snapshot(db, pid, cfg, hydrate=False)
-    return _inference_coverage(db, pid, cfg, snapshot)
+    with _scan_read_owner(db, pid) as proof_for:
+        snapshot = _snapshot(db, pid, cfg, hydrate=False)
+        return _inference_coverage(db, pid, cfg, snapshot, read_proof=proof_for(snapshot, cfg))
 
 
 def _quality_scope_allowed(db, pid, policy, sources=None):
@@ -564,7 +621,7 @@ def _quality_scope_allowed(db, pid, policy, sources=None):
                for source in sources if _usable(source) and source["source"] == "chat")
 
 
-def _quality_publication_allowed(db, pid, cfg, doc, meta):
+def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
     """Revalidate a cloud summary's receipt and current promotion boundary."""
     import semantic_policy
     import semantic_runtime
@@ -584,7 +641,7 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta):
                 return False
             _quality_integrity(db, pid)
             captured = _quality_capture(db, pid, cfg, meta.get("night_id"), doc.get("summary"), assessment,
-                                        doc.get("temporal_view"), contract=contract)
+                                        doc.get("temporal_view"), contract=contract, read_proof=read_proof)
             if not _quality_scope_allowed(db, pid, policy, captured["sources"]):
                 return False
             identity = captured["identity"]
@@ -609,9 +666,9 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta):
         return False
 
 
-def _inference_coverage(db, pid, cfg, snapshot):
+def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
     sources = snapshot["sources"]
-    scans = _current_scans(db, pid, sources, snapshot["contract"], cfg=cfg)
+    scans = _scans_from_read(db, pid, sources, snapshot["contract"], cfg, read_proof)
     counts = dict.fromkeys(("total", "eligible", "scanned", "audited", "pending", "held", "failed",
                            "incomplete", "excluded", "observed_empty"), 0)
     counts["total"] = len(sources)
@@ -638,7 +695,7 @@ def _inference_coverage(db, pid, cfg, snapshot):
                and _summary_valid(db, pid, doc, {_source_key(s): s for s in sources},
                                   allow_historical=bool(meta.get("provider") and meta.get("quality_audit_key")))
                and (not snapshot["contract"].get("provider")
-                    or bool(meta.get("provider") and _quality_publication_allowed(db, pid, cfg, doc, meta))))
+                    or bool(meta.get("provider") and _quality_publication_allowed(db, pid, cfg, doc, meta, read_proof=read_proof))))
     scope = snapshot.get("scope") or {}
     acquired_empty = bool(counts["total"] or scope.get("fetch_state") == "complete")
     complete = (not _out_of_scope(snapshot) and options(cfg)["enabled"] and acquired_empty
@@ -691,6 +748,22 @@ def _publication_contract(cfg, meta):
 
 
 def context_view_input(db, pid, *, cfg=None):
+    """Read published context without computing an unrelated runtime-route status."""
+    with _scan_read_owner(db, pid) as proof_for:
+        return _context_view_input(db, pid, cfg=cfg, proof_for=proof_for)
+
+
+def context_view_read(db, pid, *, cfg=None):
+    """Read published context and runtime coverage on one borrowed SQLite snapshot."""
+    with _scan_read_owner(db, pid) as proof_for:
+        context = _context_view_input(db, pid, cfg=cfg, proof_for=proof_for)
+        current = _snapshot(db, pid, cfg or {}, hydrate=False)
+        coverage = _inference_coverage(db, pid, cfg or {}, current,
+                                       read_proof=proof_for(current, cfg or {}))
+        return context, coverage
+
+
+def _context_view_input(db, pid, *, cfg, proof_for):
     """Read published source-current prose; additions are shown as unreflected."""
     doc, meta = _latest(db, KIND, pid)
     if not doc or meta.get("published") is not True:
@@ -706,7 +779,9 @@ def context_view_input(db, pid, *, cfg=None):
     current = _snapshot(db, pid, cfg or {}, hydrate=False, contract=pinned)
     if current["source_sig"] != meta.get("source_sig"):
         return None
-    if not _inference_coverage(db, pid, cfg or {}, current)["publication_eligible"]:
+    # The pinned publication contract can differ from the runtime route.
+    proof = proof_for(current, cfg or {})
+    if not _inference_coverage(db, pid, cfg or {}, current, read_proof=proof)["publication_eligible"]:
         return None
     if _out_of_scope(current) or current["scope"].get("is_archived"):
         return None
@@ -737,7 +812,7 @@ def context_view_input(db, pid, *, cfg=None):
     # current chunk remains available, while older original karte records are
     # returned explicitly as history, never substituted for the latest one.
     historical = {}
-    scans = _current_scans(db, pid, current["sources"], current["contract"], cfg=cfg)
+    scans = _scans_from_read(db, pid, current["sources"], current["contract"], cfg or {}, proof)
     for key, source in sources.items():
         if not scans.get(key, {}).get("complete"):
             continue
@@ -755,15 +830,16 @@ def context_view_input(db, pid, *, cfg=None):
         fact["view_bucket"] = buckets[fact["id"]]
     return {**doc, "facts": list(by_id.values()), "historical_facts": list(historical.values()),
             "temporal_view": projection,
-            "coverage": {**_coverage(db, pid, current["sources"], current["contract"], list(by_id.values()), cfg=cfg),
+            "coverage": {**_coverage(db, pid, current["sources"], current["contract"], list(by_id.values()),
+                cfg=cfg or {}, read_proof=proof),
             "unreflected_since": as_of,
             "unreflected": sum((s.get("first_seen") or 0) > as_of for s in sources.values())}}
 
 
-def _all_facts(db, pid, snapshot, night_id, *, projected=False, include_all=False, cfg=None):
+def _all_facts(db, pid, snapshot, night_id, *, projected=False, include_all=False, cfg=None, read_proof=None):
     facts = {}
     historical = {}
-    scans = _current_scans(db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
+    scans = _scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], cfg, read_proof)
     for source in snapshot["sources"]:
         if not _usable(source) or (source.get("historical") and not include_all):
             continue
@@ -877,7 +953,7 @@ def _quality_input(db, pid, snapshot, all_facts, state, summary, assessment_cont
             "fact_ids": sorted(by_id), "assessment": assessment_contract}
 
 
-def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, display_projection, *, contract=None):
+def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, display_projection, *, contract=None, read_proof=None):
     """Read and validate quality inputs within an already-open SQLite snapshot."""
     if not db.in_transaction:
         raise RuntimeError("patient_summary_snapshot_required")
@@ -887,7 +963,7 @@ def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, displ
             or not snapshot["acquisition"]["complete"]
             or not snapshot["dependencies"]["complete"]):
         raise ValueError("patient_summary_quality_source_incomplete")
-    scans = _current_scans(db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
+    scans = _scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], cfg, read_proof)
     for source in snapshot["sources"]:
         if source.get("body_state") not in (None, "full", "deleted"):
             raise ValueError("patient_summary_quality_source_incomplete")
@@ -897,7 +973,7 @@ def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, displ
             scan = scans.get(_source_key(source), {})
             if not scan.get("complete") or not scan.get("audited") or scan.get("failure"):
                 raise ValueError("patient_summary_quality_source_incomplete")
-    _, _, _, facts, state = _all_facts(db, pid, snapshot, night_id, include_all=True, cfg=cfg)
+    _, _, _, facts, state = _all_facts(db, pid, snapshot, night_id, include_all=True, cfg=cfg, read_proof=read_proof)
     identity = _quality_input(db, pid, snapshot, facts, state, summary, assessment_contract, display_projection)
     return {"identity": identity, "sources": snapshot["sources"], "facts": facts, "state": state}
 
@@ -984,7 +1060,6 @@ def _source_quality_capture(db, pid, cfg, source_key, assessment, *, contract=No
 
 def _source_quality_verified(db, pid, source, contract, cfg, scan, *, scan_proof=None):
     import semantic_policy
-    import semantic_runtime
     try:
         policy, errors = semantic_policy.semantic_config(cfg, key_present=True)
         if errors or not _quality_scope_allowed(db, pid, policy):
@@ -998,16 +1073,10 @@ def _source_quality_verified(db, pid, source, contract, cfg, scan, *, scan_proof
                     or captured["chunks_sig"] != scan.get("_chunks_sig")
                     or scan.get("source_quality_audit_key") != identity["audit_key"]
                     or not _quality_scope_allowed(db, pid, policy, captured["sources"])
-                    or semantic_runtime.patient_summary_request_problem(db, pid, identity, identity["fact_ids"], purpose="source")
-                    or _quality_failed(db, pid, identity) or not _quality_passed(db, pid, identity)):
+                    or _quality_failed(db, pid, identity)):
                 return False
-            for start in range(0, len(identity["fact_ids"]), 12):
-                ids = identity["fact_ids"][start:start + 12]
-                answers = _quality_answers(db, pid, identity["audit_key"], ids, purpose="source", identity=identity)
-                if set(answers) != set(ids) or any(answers[fid]["confidence"] < policy["match_threshold"]
-                        or answers[fid]["choice"] != identity["passing_choices"][fid] for fid in ids):
-                    return False
-            return True
+            content = _quality_pass_content(db, pid, identity, threshold=policy["match_threshold"])
+            return content is not None and _quality_passed(db, pid, identity, expected=content)
         finally:
             db.execute("RELEASE source_quality_read")
     except (ValueError, TypeError, KeyError, OSError, RuntimeError):
@@ -1251,7 +1320,7 @@ def _quality_store_answers(ledger, pid, identity, claim, answers, current, thres
         os.close(fd)
 
 
-def _quality_pass_content(db, pid, identity):
+def _quality_pass_content(db, pid, identity, *, threshold=None):
     if identity.get("purpose", "summary") != "source":
         return {"fact_count": len(identity["fact_ids"]), "zero_questions": not identity["fact_ids"]}
     import semantic_runtime
@@ -1260,6 +1329,10 @@ def _quality_pass_content(db, pid, identity):
         ids = identity["fact_ids"][start:start + 12]
         evidence = semantic_runtime.patient_source_question_evidence(db, pid, identity, ids)
         if evidence["problems"] or set(evidence["answers"]) != set(ids) or set(evidence["references"]) != set(ids):
+            return None
+        if threshold is not None and any(
+                evidence["answers"][fid]["confidence"] < threshold
+                or evidence["answers"][fid]["choice"] != identity["passing_choices"][fid] for fid in ids):
             return None
         for fid in ids:
             references.update(bytes.fromhex(_digest([fid, evidence["references"][fid]])))
@@ -1834,7 +1907,7 @@ def _ready(progress, now):
                            and progress.get("next_try", 0) <= now)
 
 
-def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False):
+def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for=None):
     snapshot = _snapshot(db, pid, cfg, hydrate=False, contract=contract)
     progress, _ = _latest(db, PROGRESS, pid)
     if progress.get("source_sig") != snapshot["source_sig"]:
@@ -1845,7 +1918,8 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False):
     block = cfg.get("semantic", {}) if isinstance(cfg, dict) else {}
     estimate_cfg = (None if estimate and (not isinstance(block, dict)
                     or block.get("fact_source", "legacy") != "legacy") else cfg)
-    stored = _current_scans(db, pid, snapshot["sources"], snapshot["contract"], cfg=estimate_cfg)
+    proof = proof_for(snapshot, estimate_cfg) if proof_for is not None else None
+    stored = _scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], estimate_cfg, proof)
     scans = [stored.get(_source_key(source), {}) for source in snapshot["sources"] if _usable(source)]
     snapshot["source_failures"] = sum(bool(scan.get("failure")) for scan in scans)
     quality_changed = False
@@ -1991,16 +2065,17 @@ def status(db, cfg):
                            "audit_pending", "failed", "complete"), 0)
     for row in db.execute("SELECT project_id FROM patients ORDER BY is_archived,project_id"):
         pid = row[0]
-        snapshot, progress, pending = _pending(db, pid, cfg)
-        if _out_of_scope(snapshot):
-            continue
-        old, _ = _latest(db, KIND, pid)
-        counts["initial_pending"] += int(not old)
-        counts["delta_pending"] += int(bool(old) and pending["A"])
-        counts["history_pending"] += int(pending["B"])
-        counts["audit_pending"] += int(pending["C"])
-        counts["failed"] += int(bool(progress.get("failure") or snapshot["source_failures"]))
-        counts["complete"] += int(_inference_coverage(db, pid, cfg, snapshot)["complete"])
+        with _scan_read_owner(db, pid) as proof_for:
+            snapshot, progress, pending = _pending(db, pid, cfg, proof_for=proof_for)
+            if _out_of_scope(snapshot):
+                continue
+            old, _ = _latest(db, KIND, pid)
+            counts["initial_pending"] += int(not old)
+            counts["delta_pending"] += int(bool(old) and pending["A"])
+            counts["history_pending"] += int(pending["B"])
+            counts["audit_pending"] += int(pending["C"])
+            counts["failed"] += int(bool(progress.get("failure") or snapshot["source_failures"]))
+            counts["complete"] += int(_inference_coverage(db, pid, cfg, snapshot, read_proof=proof_for(snapshot, cfg))["complete"])
     counts["lanes"] = lane_metrics(db)["lanes"]
     return counts
 

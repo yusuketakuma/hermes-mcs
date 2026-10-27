@@ -226,9 +226,8 @@ def test_listed_vitals_follow_current_extraction_and_context_evidence(tmp_path, 
         source = {**dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()), "source": "chat"}
         facts = patient_context_refresh._facts(source, items, night_id="2026-10-03", discovery="new_report")
         assert facts and patient_context_refresh._validated_facts(source, facts) == facts
-        monkeypatch.setattr(patient_context_refresh, "context_view_input", lambda *a, **k: {
-            "facts": facts, "as_of": source["posted_at_ts"], "summary": [], "coverage": {}})
-        monkeypatch.setattr(patient_context_refresh, "inference_coverage", lambda *a, **k: {"complete": False})
+        monkeypatch.setattr(patient_context_refresh, "context_view_read", lambda *a, **k: ({
+            "facts": facts, "as_of": source["posted_at_ts"], "summary": [], "coverage": {}}, {"complete": False}))
         ev = patient_context_view.evidence(db.db, 1)
         result = observation_series.observation_series(ev, source_bodies={(1, source["content_hash"]): body})
         assert {row["name"] for row in result["series"]} == {"体温", "SpO2"}
@@ -432,9 +431,8 @@ def test_actual_evidence_and_refresh_require_explicit_patient_bound_to_measureme
         source = {**dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()), "source": "chat"}
         facts = patient_context_refresh._facts(source, [item], night_id="2026-10-03", discovery="new_report")
         assert facts and patient_context_refresh._validated_facts(source, facts) == facts
-        monkeypatch.setattr(patient_context_refresh, "context_view_input", lambda *a, **k: {
-            "facts": facts, "as_of": source["posted_at_ts"], "summary": [], "coverage": {}})
-        monkeypatch.setattr(patient_context_refresh, "inference_coverage", lambda *a, **k: {"complete": False})
+        monkeypatch.setattr(patient_context_refresh, "context_view_read", lambda *a, **k: ({
+            "facts": facts, "as_of": source["posted_at_ts"], "summary": [], "coverage": {}}, {"complete": False}))
         ev = patient_context_view.evidence(db.db, 1)
         result = observation_series.observation_series(
             ev, source_bodies={(1, source["content_hash"]): body})
@@ -453,9 +451,8 @@ def test_actual_split_headings_do_not_transfer_a_prior_person_to_a_measurement(t
         source = {**dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()), "source": "chat"}
         facts = patient_context_refresh._facts(source, items, night_id="2026-10-03", discovery="new_report")
         assert facts and patient_context_refresh._validated_facts(source, facts) == facts
-        monkeypatch.setattr(patient_context_refresh, "context_view_input", lambda *a, **k: {
-            "facts": facts, "as_of": source["posted_at_ts"], "summary": [], "coverage": {}})
-        monkeypatch.setattr(patient_context_refresh, "inference_coverage", lambda *a, **k: {"complete": False})
+        monkeypatch.setattr(patient_context_refresh, "context_view_read", lambda *a, **k: ({
+            "facts": facts, "as_of": source["posted_at_ts"], "summary": [], "coverage": {}}, {"complete": False}))
         result = observation_series.observation_series(patient_context_view.evidence(db.db, 1),
             source_bodies={(1, source["content_hash"]): body})
         assert result["series"] == []
@@ -475,9 +472,8 @@ def test_real_evidence_cannot_strip_a_prior_family_sentence(tmp_path, monkeypatc
         source = {**dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()), "source": "chat"}
         facts = patient_context_refresh._facts(source, [item], night_id="2026-10-03", discovery="new_report")
         assert facts and patient_context_refresh._validated_facts(source, facts) == facts
-        monkeypatch.setattr(patient_context_refresh, "context_view_input", lambda *a, **k: {
-            "facts": facts, "as_of": source["posted_at_ts"], "summary": [], "coverage": {}})
-        monkeypatch.setattr(patient_context_refresh, "inference_coverage", lambda *a, **k: {"complete": False})
+        monkeypatch.setattr(patient_context_refresh, "context_view_read", lambda *a, **k: ({
+            "facts": facts, "as_of": source["posted_at_ts"], "summary": [], "coverage": {}}, {"complete": False}))
         ev = patient_context_view.evidence(db.db, 1)
         assert any(row.get("quote") == quote for row in ev["items"])
         result = observation_series.observation_series(ev, source_bodies={(1, source["content_hash"]): body})

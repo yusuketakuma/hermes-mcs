@@ -18,10 +18,9 @@ def ctx(tmp_path, monkeypatch):
     facts = []
     coverage = {"unreflected": 0, "unscanned": 0, "incomplete": 0, "attachments": {"count": 0},
                 "karte_records": {"stored": 0}}
-    monkeypatch.setattr(refresh, "context_view_input", lambda *a, **k: {
-        "facts": facts, "summary": [], "coverage": coverage, "as_of": 1_790_000_000})
     inference = {"publication_eligible": True, "complete": True}
-    monkeypatch.setattr(refresh, "inference_coverage", lambda *a, **k: inference)
+    monkeypatch.setattr(refresh, "context_view_read", lambda *a, **k: ({
+        "facts": facts, "summary": [], "coverage": coverage, "as_of": 1_790_000_000}, inference))
     yield ledger, facts, coverage, inference
     ledger.close()
 

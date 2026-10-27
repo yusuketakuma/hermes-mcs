@@ -30,10 +30,9 @@ def _seed(db, body, subject=None):
 
 
 def _publish(monkeypatch, facts):
-    monkeypatch.setattr(refresh, "context_view_input", lambda *a, **k: {
-        "as_of": 1_790_000_000, "facts": facts, "summary": [], "coverage": {"analyzed": 1}})
-    monkeypatch.setattr(refresh, "inference_coverage", lambda *a, **k: {
-        "complete": False, "status": "scan_pending", "sources": {"pending": 1}})
+    monkeypatch.setattr(refresh, "context_view_read", lambda *a, **k: ({
+        "as_of": 1_790_000_000, "facts": facts, "summary": [], "coverage": {"analyzed": 1}}, {
+        "complete": False, "status": "scan_pending", "sources": {"pending": 1}}))
 
 
 def test_identical_real_source_fact_has_one_visible_row_and_retains_annotations(tmp_path, monkeypatch):
@@ -90,9 +89,10 @@ def test_foreign_summary_or_colliding_fact_id_does_not_cross_patient_scope(tmp_p
         summaries = [{"text": "本人の合成要約", "fact_ids": [local["id"]]},
                      {"text": "別患者の合成要約", "fact_ids": [foreign["id"]]}]
         _publish(monkeypatch, [local, foreign])
-        monkeypatch.setattr(refresh, "context_view_input", lambda *a, **k: {
+        monkeypatch.setattr(refresh, "context_view_read", lambda *a, **k: ({
             "as_of": 1_790_000_000, "facts": [local, foreign], "summary": summaries,
-            "coverage": {"analyzed": 1}})
+            "coverage": {"analyzed": 1}},
+            {"complete": False, "status": "scan_pending", "sources": {"pending": 1}}))
         ev = views.evidence(db.db, 1)
         assert "別患者の合成要約" not in str(ev)
         assert [s["text"] for s in ev["summary"]] == ([] if same_id else ["本人の合成要約"])

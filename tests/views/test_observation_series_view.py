@@ -1,5 +1,6 @@
 """Synthetic end-to-end observation views on the caller's DB snapshot."""
 from dataclasses import replace
+import json
 import sqlite3
 from types import SimpleNamespace
 
@@ -29,9 +30,8 @@ def seed(db, mid, body, evidence=None, *, name="Cr", value="1.0", unit="mg/dL", 
 @pytest.fixture
 def ctx(tmp_path, monkeypatch):
     db = _db(tmp_path, ())
-    monkeypatch.setattr(refresh, "context_view_input", lambda *a, **k: None)
-    monkeypatch.setattr(refresh, "inference_coverage", lambda *a, **k: {"complete": False,
-        "status": "scan_pending", "sources": {"pending": 1}})
+    monkeypatch.setattr(refresh, "context_view_read", lambda *a, **k: (None, {"complete": False,
+        "status": "scan_pending", "sources": {"pending": 1}}))
     monkeypatch.setattr("mcs_util.load_config", lambda: {})
     yield db
     db.close()
@@ -144,4 +144,16 @@ def test_condition_absent_lab_and_vitals_are_displayed_as_written(ctx, body, nam
     assert result["series"][0]["condition"] is None
     display = notify_views.patient_context_list(ctx.db, 1, "observations", cfg={}, since=0, now=1_790_000_000)
     assert any(body in row["text"] and "条件の記載なし" in row["group"] for row in display["items"])
-    assert "None" not in str(display)
+    from adapters.common.text import list_messages
+    from adapters.discord.views import context_texts
+    from adapters.slack.presentation import context_list_blocks
+    result = {'outcome':'applied','action':'list','projects':[1],'list':display}
+    def allowed(pid):
+        return pid == 1
+    slack = context_list_blocks(display, allowed)
+    discord = context_texts(result, allowed)
+    lineworks = list_messages(result, allowed, plain=True)
+    assert slack and discord and lineworks
+    for rendered in (json.dumps(slack, ensure_ascii=False), '\n'.join(discord), '\n'.join(lineworks)):
+        assert body in rendered and '条件の記載なし' in rendered
+        assert 'None' not in rendered

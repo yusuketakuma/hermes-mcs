@@ -31,8 +31,8 @@ def ctx(tmp_path, monkeypatch):
     context_refresh = {"value": None}
     import patient_context_refresh
     monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(
-        context_view_input=lambda conn, pid, cfg=None: context_refresh["value"],
-        inference_coverage=lambda *args: {'complete':False,'status':'scan_pending','sources':{'pending':6}},
+        context_view_read=lambda conn, pid, cfg=None: (context_refresh["value"],
+            {'complete':False,'status':'scan_pending','sources':{'pending':6}}),
         workday_window=patient_context_refresh.workday_window))
     yield SimpleNamespace(db=db, context_refresh=context_refresh)
     db.close()
@@ -314,8 +314,8 @@ OBS = "検査・観測値\n検査項目: {}\n測定値: {}\n単位: {}\n測定�
 def test_observations_compare_only_the_same_named_item_and_unit_by_written_date(tmp_path, monkeypatch, posts, kind):
     import patient_context_refresh
     monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(
-        context_view_input=lambda *a, **k: None,
-        inference_coverage=lambda *a, **k: {"complete": False, "status": "scan_pending", "sources": {"pending": len(posts)}},
+        context_view_read=lambda *a, **k: (None,
+            {"complete": False, "status": "scan_pending", "sources": {"pending": len(posts)}}),
         workday_window=patient_context_refresh.workday_window))
     db = _db(tmp_path, ())
     db.save_messages([_message(n + 1, body=OBS.format(*p)) for n, p in enumerate(posts)], project_id=1)
@@ -534,8 +534,8 @@ def test_role_order_only_reorders(ctx):
 def test_cli_passes_current_settings_to_the_context_refresh_gate(ctx, monkeypatch):
     seen = []
     monkeypatch.setitem(sys.modules, "patient_context_refresh", SimpleNamespace(
-        context_view_input=lambda conn, pid, cfg=None: seen.append(cfg),
-        inference_coverage=lambda *a, **k: {"complete": False, "status": "scan_pending", "sources": {"pending": 6}}))
+        context_view_read=lambda conn, pid, cfg=None: (seen.append(cfg),
+            {"complete": False, "status": "scan_pending", "sources": {"pending": 6}})))
     monkeypatch.setattr("mcs_util.load_config", lambda *a, **k: {"extract": {"patient_context_nightly": {
         "enabled": True, "publication": False}}})
     mcs_view.View._patient_context(SimpleNamespace(db=ctx.db.db, meta={"generated_at": T0}), 1,

@@ -1287,13 +1287,13 @@ def test_source_pass_reference_validation_does_not_hold_the_sqlite_writer(runtim
     path = Path(led.db.execute('PRAGMA database_list').fetchone()[2])
     original = context_refresh._quality_pass_content
     checked = []
-    def capture(db, pid, identity):
+    def capture(db, pid, identity, **kwargs):
         if identity.get('purpose') == 'source':
             with closing(sqlite3.connect(path, timeout=0)) as competing:
                 competing.execute('BEGIN IMMEDIATE')
                 competing.rollback()
             checked.append(True)
-        return original(db, pid, identity)
+        return original(db, pid, identity, **kwargs)
     monkeypatch.setattr(context_refresh, '_quality_pass_content', capture)
     for _ in range(20):
         result = step(runtime)
@@ -1303,3 +1303,269 @@ def test_source_pass_reference_validation_does_not_hold_the_sqlite_writer(runtim
         pytest.fail('source C did not finish')
     assert checked and led.artifacts('patient_context_source_quality_pass_v1', project_id=1)
     assert not any('reports' in request for request in cloud[0])
+
+
+@pytest.mark.parametrize('reader', ['evidence', 'status'])
+def test_context_reader_shares_source_receipt_validation_within_one_snapshot(runtime, cloud, monkeypatch, reader):
+    import patient_context_view
+    led, _, _ = runtime
+    body = '見出しのない完全合成の居住記録。'
+    seed(led, body=body)
+    drain(runtime)
+    original = context_refresh._current_scans_snapshot
+    calls = []
+    def scans(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(context_refresh, '_current_scans_snapshot', scans)
+    before = len(cloud[0]), len(led.synthetic_jev_requests)
+    if reader == 'evidence':
+        result = patient_context_view.evidence(led.db, 1, cfg=CFG)
+        assert result['coverage']['inference']['complete'] and result['summary']
+        assert any(fact['evidence'] == body for fact in result['nightly_facts'])
+    else:
+        assert context_refresh.status(led.db, CFG)['complete'] == 1
+    assert calls == [True] and not led.db.in_transaction
+    assert (len(cloud[0]), len(led.synthetic_jev_requests)) == before
+
+
+@pytest.mark.parametrize('route', ['on', 'off', 'shadow', 'key_removed'])
+def test_paired_read_retains_distinct_pinned_and_current_contracts(runtime, cloud, monkeypatch, route):
+    led, _, _ = runtime
+    seed(led, body='見出しのない完全合成の居住記録。')
+    drain(runtime)
+    if route == 'key_removed':
+        monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *a, **k: None)
+        monkeypatch.setattr(worker, '_cloud_settings', lambda cfg: worker.cloud_policy.cloud_config(
+            cfg, key_present=bool(worker.cloud_policy.api_key()))[0])
+    else:
+        cloud[1][0] = route
+    expected = (context_refresh.context_view_input(led.db, 1, cfg=CFG),
+                context_refresh.inference_coverage(led.db, 1, CFG))
+    assert expected[0] and expected[1]['complete'] is (route == 'on')
+    original = context_refresh._current_scans_snapshot
+    contracts = []
+    def scans(db, pid, sources, contract, **kwargs):
+        contracts.append(contract)
+        return original(db, pid, sources, contract, **kwargs)
+    monkeypatch.setattr(context_refresh, '_current_scans_snapshot', scans)
+    assert context_refresh.context_view_read(led.db, 1, cfg=CFG) == expected
+    assert len(contracts) == (1 if route == 'on' else 2)
+    if route != 'on':
+        assert contracts[0].get('provider') and not contracts[1].get('provider')
+
+
+@pytest.mark.parametrize('early', ['missing', 'cfg_none', 'unpublished', 'disabled', 'publication_off'])
+def test_context_only_early_return_never_reads_a_runtime_route_or_credentials(runtime, cloud, monkeypatch, early):
+    import semantic_jev
+    led, _, _ = runtime
+    seed(led)
+    cfg = CFG
+    if early not in ('missing', 'cfg_none'):
+        drain(runtime)
+    if early == 'unpublished':
+        with led.db:
+            led.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.published',json('false')) WHERE kind=?",
+                           (context_refresh.KIND,))
+    elif early in ('disabled', 'publication_off'):
+        cfg = {**CFG, 'extract': {'patient_context_nightly': {
+            'enabled': early != 'disabled', 'publication': early != 'publication_off'}}}
+    elif early == 'cfg_none':
+        cfg = None
+    def forbidden(*args, **kwargs):
+        pytest.fail('context-only early return read credentials or a new runtime route')
+    monkeypatch.setattr(worker, '_cloud_settings', forbidden)
+    monkeypatch.setattr(worker, 'load_config', forbidden)
+    monkeypatch.setattr(worker.cloud_policy, 'api_key', forbidden)
+    monkeypatch.setattr(semantic_jev, 'api_key', forbidden)
+    assert context_refresh.context_view_input(led.db, 1, cfg=cfg) is None
+    assert not led.db.in_transaction
+
+
+def test_shared_scan_keeps_full_hydration_for_summary_quality(runtime, cloud, monkeypatch):
+    led, _, _ = runtime
+    body = '生活環境: 本人は合成の住居で生活しています。'
+    seed(led, body=body)
+    drain(runtime)
+    original = context_refresh._snapshot
+    hydrated = []
+    def snapshot(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if kwargs.get('hydrate', True):
+            hydrated.append(result['sources'])
+        return result
+    monkeypatch.setattr(context_refresh, '_snapshot', snapshot)
+    context, coverage = context_refresh.context_view_read(led.db, 1, cfg=CFG)
+    assert context and coverage['complete'] and hydrated
+    assert all(any(source['items'] for source in sources) for sources in hydrated)
+    assert any(fact['evidence'] in body for fact in context['facts'])
+
+
+@pytest.mark.parametrize('lookup_after_write', [False, True])
+@pytest.mark.parametrize('borrowed', [False, True])
+def test_read_owner_rolls_back_only_its_own_unexpected_write(runtime, cloud, lookup_after_write, borrowed):
+    led, _, _ = runtime
+    seed(led)
+    led.db.execute('CREATE TEMP TABLE context_read_sentinel(value TEXT)')
+    if borrowed:
+        led.db.execute('BEGIN')
+        led.db.execute("INSERT INTO context_read_sentinel VALUES ('prior')")
+    with pytest.raises(RuntimeError, match='patient_context_read_changed'):
+        with context_refresh._scan_read_owner(led.db, 1) as proof_for:
+            snapshot = context_refresh._snapshot(led.db, 1, CFG, hydrate=False)
+            proof = proof_for(snapshot, CFG)
+            led.db.execute("INSERT INTO context_read_sentinel VALUES ('inside')")
+            if lookup_after_write:
+                context_refresh._scans_from_read(led.db, 1, snapshot['sources'], snapshot['contract'], CFG, proof)
+    assert [row[0] for row in led.db.execute('SELECT value FROM context_read_sentinel')] == (['prior'] if borrowed else [])
+    assert led.db.in_transaction is borrowed
+    if borrowed:
+        led.db.rollback()
+
+
+def test_read_proof_cannot_outlive_its_owner_even_with_a_borrowed_transaction(runtime, cloud):
+    led, _, _ = runtime
+    seed(led)
+    drain(runtime)
+    led.db.execute('BEGIN')
+    try:
+        with context_refresh._scan_read_owner(led.db, 1) as proof_for:
+            snapshot = context_refresh._snapshot(led.db, 1, CFG, hydrate=False)
+            proof = proof_for(snapshot, CFG)
+            assert context_refresh._scans_from_read(led.db, 1, snapshot['sources'], snapshot['contract'], CFG, proof)[1]['audited']
+        assert led.db.in_transaction
+        with pytest.raises(RuntimeError, match='patient_context_read_changed'):
+            context_refresh._scans_from_read(led.db, 1, snapshot['sources'], snapshot['contract'], CFG, proof)
+    finally:
+        led.db.rollback()
+
+
+@pytest.mark.parametrize('abort', [False, True])
+@pytest.mark.parametrize('borrowed', [False, True])
+def test_evidence_rolls_back_its_unexpected_write_and_preserves_callers_work(runtime, cloud, monkeypatch, abort, borrowed):
+    import patient_context_view
+    led, _, _ = runtime
+    seed(led, body='見出しのない完全合成の居住記録。')
+    drain(runtime)
+    led.db.execute('CREATE TEMP TABLE context_read_sentinel(value TEXT)')
+    if borrowed:
+        led.db.execute('BEGIN')
+        led.db.execute("INSERT INTO context_read_sentinel VALUES ('prior')")
+    original = patient_context_view._records_coverage
+    def records(*args, **kwargs):
+        result = original(*args, **kwargs)
+        led.db.execute("INSERT INTO context_read_sentinel VALUES ('inside')")
+        if abort:
+            raise sqlite3.OperationalError('synthetic read interrupted')
+        return result
+    monkeypatch.setattr(patient_context_view, '_records_coverage', records)
+    error = sqlite3.OperationalError if abort else RuntimeError
+    message = 'synthetic read interrupted' if abort else 'patient_context_read_changed'
+    with pytest.raises(error, match=message):
+        patient_context_view.evidence(led.db, 1, cfg=CFG)
+    assert [row[0] for row in led.db.execute('SELECT value FROM context_read_sentinel')] == (['prior'] if borrowed else [])
+    assert led.db.in_transaction is borrowed
+    if borrowed:
+        led.db.rollback()
+
+
+@pytest.mark.parametrize('reader', ['evidence', 'status'])
+def test_read_owner_keeps_the_callers_successful_transaction_and_sentinel(runtime, cloud, reader):
+    import patient_context_view
+    led, _, _ = runtime
+    seed(led, body='見出しのない完全合成の居住記録。')
+    drain(runtime)
+    led.db.execute('CREATE TEMP TABLE context_read_sentinel(value TEXT)')
+    led.db.execute('BEGIN')
+    led.db.execute("INSERT INTO context_read_sentinel VALUES ('prior')")
+    changes = led.db.total_changes
+    try:
+        if reader == 'evidence':
+            assert patient_context_view.evidence(led.db, 1, cfg=CFG)['coverage']['inference']['complete']
+        else:
+            assert context_refresh.status(led.db, CFG)['complete'] == 1
+        assert led.db.in_transaction and led.db.total_changes == changes
+        assert [row[0] for row in led.db.execute('SELECT value FROM context_read_sentinel')] == ['prior']
+    finally:
+        led.db.rollback()
+
+
+@pytest.mark.parametrize('changed', ['source', 'receipt'])
+def test_paired_read_rechecks_originals_and_receipts_after_the_previous_read_ends(runtime, cloud, changed):
+    led, _, _ = runtime
+    seed(led, body='見出しのない完全合成の居住記録。')
+    drain(runtime)
+    first = context_refresh.context_view_read(led.db, 1, cfg=CFG)
+    assert first[0] and first[1]['complete']
+    with led.db:
+        if changed == 'source':
+            led.db.execute("UPDATE messages SET body_text=body_text || '訂正' WHERE message_id=1")
+        else:
+            row = led.db.execute("SELECT artifact_id FROM artifacts WHERE kind='patient_context_source_quality_v1' "
+                                 'ORDER BY artifact_id LIMIT 1').fetchone()
+            assert row
+            led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (row[0],))
+    second = context_refresh.context_view_read(led.db, 1, cfg=CFG)
+    assert second[0] is None and not second[1]['complete']
+
+
+def test_source_verified_reads_each_receipt_page_once_and_refuses_missing_evidence(runtime, cloud, monkeypatch):
+    import semantic_runtime
+    led, _, _ = runtime
+    seed(led, body='見出しのない完全合成の居住記録。')
+    drain(runtime)
+    snapshot = context_refresh._snapshot(led.db, 1, CFG, hydrate=False)
+    source = snapshot['sources'][0]
+    scan = context_refresh._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], check_quality=False)[1]
+    assert scan['audited']
+    calls = []
+    original = semantic_runtime.patient_source_question_evidence
+    def count(db, pid, identity, ids):
+        calls.append(tuple(ids))
+        return original(db, pid, identity, ids)
+    monkeypatch.setattr(semantic_runtime, 'patient_source_question_evidence', count)
+    led.db.execute('BEGIN')
+    try:
+        assert context_refresh._source_quality_verified(led.db, 1, source, snapshot['contract'], CFG, scan)
+        assert len(calls) == 1 and 1 <= len(calls[0]) <= 12
+        answer = led.db.execute("SELECT artifact_id FROM artifacts WHERE kind='patient_context_source_quality_v1' "
+                                "AND project_id=1 ORDER BY artifact_id LIMIT 1").fetchone()
+        assert answer
+        led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (answer[0],))
+        calls.clear()
+        assert not context_refresh._source_quality_verified(led.db, 1, source, snapshot['contract'], CFG, scan)
+        assert len(calls) == 1
+    finally:
+        led.db.rollback()
+
+
+@pytest.mark.parametrize('problem', ['none', 'unknown', 'invalid_exhausted', 'missing', 'negative', 'low'])
+def test_source_pass_content_checks_each_logical_page_once(monkeypatch, problem):
+    import semantic_runtime
+    ids = [format(number, '064x') for number in range(1, 26)]
+    identity = {'purpose': 'source', 'fact_ids': ids, 'source_fact_count': 24,
+                'passing_choices': {fid: ('complete' if fid == ids[-1] else 'supports') for fid in ids}}
+    calls = []
+    def evidence(_db, _pid, _identity, page):
+        calls.append(tuple(page))
+        answers = {fid: {'choice': identity['passing_choices'][fid], 'confidence': 1.0} for fid in page}
+        refs = {fid: {'answer_artifact_id': index + 1} for index, fid in enumerate(page)}
+        problems = {}
+        if ids[-1] in page:
+            if problem in ('unknown', 'invalid_exhausted'):
+                problems[ids[-1]] = problem
+            elif problem == 'missing':
+                refs.pop(ids[-1])
+            elif problem == 'negative':
+                answers[ids[-1]]['choice'] = 'missing'
+            elif problem == 'low':
+                answers[ids[-1]]['confidence'] = 0.1
+        return {'answers': answers, 'references': refs, 'problems': problems}
+    monkeypatch.setattr(semantic_runtime, 'patient_source_question_evidence', evidence)
+    result = context_refresh._quality_pass_content(None, 1, identity, threshold=0.8)
+    assert calls == [tuple(ids[:12]), tuple(ids[12:24]), tuple(ids[24:])]
+    if problem == 'none':
+        assert result['question_count'] == 25 and result['source_fact_count'] == 24
+        assert len(result['answer_refs_sig']) == 64
+    else:
+        assert result is None
