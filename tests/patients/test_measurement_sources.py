@@ -111,12 +111,13 @@ def test_family_topic_does_not_let_a_bare_vital_belong_to_the_patient():
 
 
 def test_legacy_snapshot_missing_capture_or_revision_schema_is_unknown():
-    for missing in ("initial_import", "message_revisions"):
+    for missing in ("initial_import", "message_revisions", "is_archived"):
         with closing(sqlite3.connect(":memory:")) as db:
             db.row_factory = sqlite3.Row
             capture = "" if missing == "initial_import" else ", initial_import TEXT"
+            archived = "" if missing == "is_archived" else ", is_archived INTEGER DEFAULT 0"
             db.execute("CREATE TABLE patients (project_id INTEGER, patient_name TEXT, "
-                       "fetch_state TEXT, history_floor INTEGER" + capture + ")")
+                       "fetch_state TEXT, fetch_reason TEXT, history_floor INTEGER" + capture + archived + ")")
             db.execute("INSERT INTO patients (project_id, patient_name, fetch_state, history_floor) "
                        "VALUES (1, '合成患者', 'complete', -1)")
             db.execute("CREATE TABLE messages (message_id INTEGER, project_id INTEGER, body_text TEXT, "
@@ -129,14 +130,18 @@ def test_legacy_snapshot_missing_capture_or_revision_schema_is_unknown():
                        "kind TEXT, content TEXT, meta TEXT, model TEXT)")
             if missing != "message_revisions":
                 db.execute("CREATE TABLE message_revisions (message_id INTEGER, seq INTEGER)")
+            db.execute("CREATE TABLE fetch_jobs (project_id INTEGER, kind TEXT, state TEXT)")
+            db.execute("CREATE TABLE attachments (message_id INTEGER)")
             db.execute("PRAGMA user_version=9")
             messages = db.execute("SELECT * FROM messages").fetchall()
             result = measurement_sources.collect_measurements(db, 1, messages, {}, {}, cfg={})
             coverage = result["coverage"]
             assert result["records"] == []
             assert coverage["source_complete"] is False
+            assert coverage["local_checks_complete"] is None
             assert coverage["source_schema_available"] is False
             assert coverage["history_basis"] == "schema_unavailable"
+            assert coverage["scope_state"] == "schema_unknown"
             assert coverage["stored"] is None and coverage["unprocessed"] is None
             assert db.in_transaction
             projected = measurement_timeline.project_measurements(result["records"],
@@ -150,11 +155,19 @@ def test_complete_borrowed_snapshot_projects_source_index_and_actual_measurement
         recent = "本人は2026-10-01の空腹時採血 Cr 1.5 mg/dL。"
         _save(ledger, 1, old, {"labs": [{**_lab(old, "1.0"), "condition": "空腹時"}]}, "2026-10-05T09:00:00+09:00")
         _save(ledger, 2, recent, {"labs": [{**_lab(recent, "1.5"), "condition": "空腹時"}]}, "2026-10-01T09:00:00+09:00")
+        ledger.db.execute("BEGIN")
         result = _collect(ledger)
-        assert result["coverage"]["source_complete"] is True
+        assert ledger.db.in_transaction
+        assert result["coverage"]["local_checks_complete"] is True
+        assert result["coverage"]["source_complete"] is False
         assert result["coverage"]["source_schema_available"] is True
         assert result["coverage"]["full"] == 2
         assert result["coverage"]["upstream_snapshot_proven"] is False
+        held = measurement_timeline.project_measurements(
+            result["records"], source_complete=result["coverage"]["source_complete"])
+        assert [item["state"] for item in held["items"]] == ["observed", "observed"]
+        # Projection's complete-input behavior is independently tested; this
+        # caller cannot prove that its earlier inputs shared the read snapshot.
         series = measurement_timeline.project_measurements(result["records"], source_complete=True)
         assert [item["state"] for item in series["items"]] == ["history", "current"]
         for item in series["items"]:
@@ -173,7 +186,8 @@ def test_complete_snapshot_without_written_conditions_keeps_observations_uncompa
         _save(ledger, 1, old, {"labs": [_lab(old, "1.0")]}, "2026-10-05T09:00:00+09:00")
         _save(ledger, 2, recent, {"labs": [_lab(recent, "1.5")]}, "2026-10-01T09:00:00+09:00")
         result = _collect(ledger)
-        assert result["coverage"]["source_complete"] is True
+        assert result["coverage"]["local_checks_complete"] is True
+        assert result["coverage"]["source_complete"] is False
         series = measurement_timeline.project_measurements(result["records"], source_complete=True)
         assert [(item["message_id"], item["state"], item["condition"], item["value"])
                 for item in series["items"]] == [(1, "observed", None, "1.0"),
@@ -190,6 +204,7 @@ def test_unparsed_partial_or_omitted_message_never_proves_coverage(tmp_path, mon
         result = _collect(ledger)
         assert result["coverage"]["source_complete"] is False
         assert result["coverage"]["unprocessed"] == 1
+        assert result["coverage"]["local_checks_complete"] is False
         series = measurement_timeline.project_measurements(result["records"], source_complete=False)
         assert all(item["state"] != "current" for item in series["items"])
         only_first = ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchall()
@@ -208,6 +223,7 @@ def test_canonical_measurement_is_counted_unprojected_without_legacy_fallback(tm
         result = _collect(ledger)
         assert result["records"] == []
         assert result["coverage"]["canonical_unverified"] == 1
+        assert result["coverage"]["local_checks_complete"] is False
         assert result["coverage"]["canonical_vital_unprojected"] == 1
         assert result["coverage"]["source_complete"] is False
 
@@ -219,6 +235,7 @@ def test_deleted_and_unacquired_are_counted_separately(tmp_path, monkeypatch):
             ledger.db.execute("UPDATE patients SET fetch_state='incomplete' WHERE project_id=1")
         result = _collect(ledger)
         assert result["coverage"]["deleted"] == 1
+        assert result["coverage"]["local_checks_complete"] is False
         assert result["coverage"]["acquisition_complete"] is False
         assert result["coverage"]["source_complete"] is False
 
@@ -273,13 +290,17 @@ def test_audited_canonical_measurement_uses_fact_and_exact_evidence_not_legacy(t
         series = measurement_timeline.project_measurements(result["records"],
                                                             source_complete=result["coverage"]["source_complete"])
         [row] = series["items"]
-        assert row["state"] == "current" and row["value"] == "1.0"
+        assert result["coverage"]["local_checks_complete"] is True
+        assert row["state"] == "observed" and row["value"] == "1.0"
+        [proved] = measurement_timeline.project_measurements(result["records"], source_complete=True)["items"]
+        assert proved["state"] == "current" and proved["value"] == "1.0"
         assert row["source_ref"]["artifact_id"] == source_id and row["source_ref"]["field"] == "facts"
         evidence_id = row["source_ref"]["evidence_id"]
         assert evidence_id in doc["facts"][row["source_ref"]["index"]]["evidence_ids"]
         evidence = next(e for e in doc["evidence"] if e["evidence_id"] == evidence_id)
         assert body[slice(*row["evidence_span"])] == evidence["quote"]
-        assert measurement_sources.collect_measurements(ledger.db, 1, messages, blobs, refs)["coverage"]["source_complete"] is False
+        unknown_cfg = measurement_sources.collect_measurements(ledger.db, 1, messages, blobs, refs)["coverage"]
+        assert unknown_cfg["source_complete"] is False and unknown_cfg["local_checks_complete"] is False
         original = _message(mid=1, body=body, posted_at="2026-10-01T09:00:00+09:00")
         ledger.save_messages([replace(original, sender_name="変更された合成投稿者")])
         ledger.save_messages([original])
@@ -288,6 +309,7 @@ def test_audited_canonical_measurement_uses_fact_and_exact_evidence_not_legacy(t
         refs = rollup._clinical_artifact_refs(ledger.db, 1, blobs)
         stale = measurement_sources.collect_measurements(ledger.db, 1, fresh, blobs, refs, cfg=cfg)
         assert stale["coverage"]["source_complete"] is False
+        assert stale["coverage"]["local_checks_complete"] is False
         assert stale["records"] == []
 
 
@@ -303,6 +325,7 @@ def test_tampered_source_binding_blocks_coverage_without_reviving_prior_value(tm
         result = _collect(ledger)
         assert result["coverage"]["source_complete"] is False
         assert result["coverage"]["analysis_attention"] == 1
+        assert result["coverage"]["local_checks_complete"] is False
         series = measurement_timeline.project_measurements(result["records"], source_complete=False)
         assert all(item["state"] == "unknown" for item in series["items"])
 
@@ -317,6 +340,7 @@ def test_unknown_config_cannot_be_treated_as_a_completed_model_contract(tmp_path
         result = measurement_sources.collect_measurements(ledger.db, 1, messages, blobs, refs)
         assert result["coverage"]["source_complete"] is False
         assert result["coverage"]["analysis_attention"] == 1
+        assert result["coverage"]["local_checks_complete"] is False
 
 
 def test_borrowed_input_row_cannot_forge_a_different_source_body(tmp_path, monkeypatch):
@@ -328,6 +352,7 @@ def test_borrowed_input_row_cannot_forge_a_different_source_body(tmp_path, monke
         result = _collect(ledger, msgs=[row])
         assert result["coverage"]["source_complete"] is False
         assert result["coverage"]["incomplete"] == 1
+        assert result["coverage"]["local_checks_complete"] is False
         assert result["records"] == []
 
 
@@ -343,11 +368,14 @@ def test_history_jobs_must_be_complete_for_current_measurements(tmp_path, monkey
             ledger.db.execute("INSERT INTO fetch_jobs(kind,project_id,message_id,state) VALUES('history',1,0,?)", (state,))
             ledger.db.execute("INSERT INTO fetch_jobs(kind,project_id,message_id,state) VALUES('history',2,0,NULL)")
         result = _collect(ledger)
-        assert result["coverage"]["source_complete"] is complete
+        assert result["coverage"]["local_checks_complete"] is complete
+        assert result["coverage"]["source_complete"] is False
         [item] = measurement_timeline.project_measurements(
             result["records"], source_complete=result["coverage"]["source_complete"])["items"]
-        assert item["state"] == ("current" if complete else "observed")
-        assert item["value"] == "1.0"
+        assert item["state"] == "observed" and item["value"] == "1.0"
+        [proved] = measurement_timeline.project_measurements(
+            result["records"], source_complete=complete)["items"]
+        assert proved["state"] == ("current" if complete else "observed")
 
 
 def test_first_seen_deleted_source_cannot_prove_current_measurements(tmp_path, monkeypatch):
@@ -358,6 +386,7 @@ def test_first_seen_deleted_source_cannot_prove_current_measurements(tmp_path, m
         ledger.save_messages([_message(mid=2, body="", state="deleted")])
         result = _collect(ledger)
         assert result["coverage"]["deleted"] == 1 and not result["coverage"]["source_complete"]
+        assert result["coverage"]["local_checks_complete"] is False
         [item] = measurement_timeline.project_measurements(result["records"], source_complete=False)["items"]
         assert item["state"] == "observed" and item["value"] == "1.0"
 
@@ -373,13 +402,15 @@ def test_unread_attachment_blocks_current_only_for_its_patient(tmp_path, monkeyp
             ledger.db.execute("INSERT INTO attachments(message_id,file_id,state) VALUES(2,'synthetic-other','pending')")
         other_only = _collect(ledger)
         assert other_only["coverage"]["attachment_count"] == 0
-        assert other_only["coverage"]["source_complete"]
+        assert other_only["coverage"]["local_checks_complete"]
+        assert not other_only["coverage"]["source_complete"]
         [current] = measurement_timeline.project_measurements(other_only["records"], source_complete=True)["items"]
         assert current["state"] == "current"
         with ledger.db:
             ledger.db.execute("INSERT INTO attachments(message_id,file_id,state) VALUES(1,'synthetic-own','pending')")
         own = _collect(ledger)
         assert own["coverage"]["attachment_count"] == 1 and not own["coverage"]["source_complete"]
+        assert own["coverage"]["local_checks_complete"] is False
         [observed] = measurement_timeline.project_measurements(own["records"], source_complete=False)["items"]
         assert observed["state"] == "observed" and observed["value"] == "1.0"
 
@@ -387,9 +418,10 @@ def test_unread_attachment_blocks_current_only_for_its_patient(tmp_path, monkeyp
 def test_fetch_failure_reason_blocks_acquisition_even_if_state_says_complete(tmp_path, monkeypatch):
     with closing(_setup(tmp_path, monkeypatch)) as ledger:
         with ledger.db:
-            ledger.db.execute("UPDATE patients SET fetch_reason='permission_denied' WHERE project_id=1")
+            ledger.db.execute("UPDATE patients SET fetch_reason='synthetic_fetch_error' WHERE project_id=1")
         result = _collect(ledger)
         assert not result["coverage"]["acquisition_complete"]
+        assert not result["coverage"]["local_checks_complete"]
         assert not result["coverage"]["source_complete"]
         assert result["coverage"]["history_basis"] == "incomplete"
 
@@ -404,6 +436,7 @@ def test_separate_correction_holds_current_even_if_extraction_has_no_measurement
         _save(ledger, 2, correction, {}, "2026-10-02T09:00:00+09:00")
         result = _collect(ledger)
         assert result["coverage"]["correction_candidates"] == 1
+        assert result["coverage"]["local_checks_complete"] is False
         assert not result["coverage"]["source_complete"]
         [item] = measurement_timeline.project_measurements(result["records"], source_complete=False)["items"]
         assert item["state"] == "observed" and item["value"] == "1.0"
@@ -418,7 +451,8 @@ def test_correction_unrelated_family_or_negated_does_not_block_current(tmp_path,
         _save(ledger, 3, "先ほどの数値は誤りではありません。", {}, "2026-10-03T09:00:00+09:00")
         result = _collect(ledger)
         assert result["coverage"]["correction_candidates"] == 0
-        assert result["coverage"]["source_complete"]
+        assert result["coverage"]["local_checks_complete"]
+        assert not result["coverage"]["source_complete"]
         [item] = measurement_timeline.project_measurements(result["records"], source_complete=True)["items"]
         assert item["state"] == "current"
 
@@ -568,10 +602,12 @@ def test_per_source_item_limit_cannot_report_complete(tmp_path, monkeypatch):
         _save(ledger, 1, body, {"labs": [{**_lab(body, "1.0"), "condition": "空腹時"}]},
               "2026-10-01T09:00:00+09:00")
         monkeypatch.setattr(measurement_sources, "_MAX_PER_SOURCE", 1)
-        assert _collect(ledger)["coverage"]["source_complete"]
+        complete = _collect(ledger)["coverage"]
+        assert complete["local_checks_complete"] and not complete["source_complete"]
         monkeypatch.setattr(measurement_sources, "_MAX_PER_SOURCE", 0)
         limited = _collect(ledger)
         assert limited["coverage"]["truncated"] and not limited["coverage"]["source_complete"]
+        assert limited["coverage"]["local_checks_complete"] is False
         assert limited["records"] == []
 
 
@@ -598,3 +634,99 @@ def test_custom_artifact_mapping_is_not_executed_inside_the_savepoint(tmp_path, 
         assert result["coverage"]["truncated"] and not result["coverage"]["source_complete"]
         assert not ledger.db.in_transaction
         assert ledger.db.execute("SELECT fetch_reason FROM patients WHERE project_id=1").fetchone()[0] is None
+
+
+@pytest.mark.parametrize("code", [sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_FULL,
+                                  sqlite3.SQLITE_IOERR | (3 << 8)])
+def test_auto_rollback_preserves_original_read_error(monkeypatch, code):
+    with closing(sqlite3.connect(":memory:")) as db:
+        db.execute("CREATE TABLE marker(value INTEGER)")
+        db.execute("INSERT INTO marker VALUES (7)")
+        error = sqlite3.OperationalError("synthetic SQLite failure")
+        error.sqlite_errorcode = code
+
+        def fail(connection, *_args, **_kwargs):
+            connection.rollback()
+            raise error
+
+        monkeypatch.setattr(measurement_sources, "_collect_measurements", fail)
+        with pytest.raises(sqlite3.OperationalError) as caught:
+            measurement_sources.collect_measurements(db, 1, [], {}, {})
+        assert caught.value is error and caught.value.sqlite_errorcode == code
+        assert not db.in_transaction and db.execute("SELECT COUNT(*) FROM marker").fetchone()[0] == 0
+
+
+def test_read_failure_keeps_borrowed_transaction_open(monkeypatch):
+    with closing(sqlite3.connect(":memory:")) as db:
+        db.execute("CREATE TABLE marker(value INTEGER)")
+        db.execute("INSERT INTO marker VALUES (7)")
+        error = ValueError("synthetic read failure")
+
+        def fail(*_args, **_kwargs):
+            raise error
+
+        monkeypatch.setattr(measurement_sources, "_collect_measurements", fail)
+        with pytest.raises(ValueError) as caught:
+            measurement_sources.collect_measurements(db, 1, [], {}, {})
+        assert caught.value is error and db.in_transaction
+        assert db.execute("SELECT value FROM marker").fetchall() == [(7,)]
+        db.rollback()
+        assert db.execute("SELECT COUNT(*) FROM marker").fetchone()[0] == 0
+
+
+def test_successful_read_does_not_hide_release_failure(monkeypatch):
+    with closing(sqlite3.connect(":memory:")) as db:
+        monkeypatch.setattr(measurement_sources, "_collect_measurements", lambda *_args, **_kwargs: {})
+        db.set_authorizer(lambda action, arg1, arg2, *_: sqlite3.SQLITE_DENY
+                          if action == sqlite3.SQLITE_SAVEPOINT and arg1 == "RELEASE"
+                          and arg2 == "measurement_sources_read" else sqlite3.SQLITE_OK)
+        try:
+            with pytest.raises(sqlite3.DatabaseError):
+                measurement_sources.collect_measurements(db, 1, [], {}, {})
+        finally:
+            db.set_authorizer(None)
+            db.rollback()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("is_archived", 1),
+    ("fetch_state", "forbidden"),
+    ("fetch_reason", "forbidden"),
+    ("fetch_reason", "permission_denied"),
+    ("fetch_reason", "access_revoked"),
+])
+def test_revoked_or_archived_patient_never_returns_prior_measurement(tmp_path, monkeypatch, field, value):
+    with closing(_setup(tmp_path, monkeypatch)) as ledger:
+        body = "本人は2026-10-01の空腹時採血 Cr 1.0 mg/dL。"
+        _save(ledger, 1, body, {"labs": [{**_lab(body, "1.0"), "condition": "空腹時"}]},
+              "2026-10-01T09:00:00+09:00")
+        before = _collect(ledger)
+        assert len(before["records"]) == 1
+        with ledger.db:
+            ledger.db.execute(f"UPDATE patients SET {field}=? WHERE project_id=1", (value,))
+        denied = _collect(ledger)
+        assert denied["records"] == []
+        assert denied["coverage"]["scope_state"] == "scope_unavailable"
+        assert denied["coverage"]["source_complete"] is False
+        assert denied["coverage"]["local_checks_complete"] is None
+        assert denied["coverage"]["stored"] is None
+        assert body not in json.dumps(denied, ensure_ascii=False)
+        assert measurement_timeline.project_measurements(
+            denied["records"], source_complete=denied["coverage"]["source_complete"])["items"] == []
+
+
+def test_other_patient_input_cannot_expose_measurement(tmp_path, monkeypatch):
+    with closing(_setup(tmp_path, monkeypatch)) as ledger:
+        body = "本人は2026-10-01の空腹時採血 Cr 1.0 mg/dL。"
+        _save(ledger, 1, body, {"labs": [{**_lab(body, "1.0"), "condition": "空腹時"}]},
+              "2026-10-01T09:00:00+09:00")
+        ledger.ensure_patient(2)
+        row = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+        blobs = mcs_queries.current_extraction_blobs(ledger.db, 1)
+        refs = rollup._clinical_artifact_refs(ledger.db, 1, blobs)
+        result = measurement_sources.collect_measurements(ledger.db, 2, [row], blobs, refs, cfg={})
+        assert result["records"] == []
+        assert result["coverage"]["scope_state"] == "observed"
+        assert result["coverage"]["source_complete"] is False
+        assert result["coverage"]["local_checks_complete"] is False
+        assert body not in json.dumps(result, ensure_ascii=False)

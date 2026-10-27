@@ -4,6 +4,7 @@ import itertools
 import json
 import math
 import re
+import sqlite3
 
 import clinical_values
 import extract_llm
@@ -290,7 +291,8 @@ def _canonical_measurements(db, message, projection_row, cfg, patient_name):
 def collect_measurements(db, project_id, msgs, arts, refs, *, cfg=None):
     """Bound received inputs; caller must separately bound any earlier SQL materialization.
 
-    Records contain transient raw bodies. A truncated input cannot prove complete coverage.
+    Records contain transient raw bodies. Caller-supplied inputs have no proven
+    common snapshot, so source_complete stays false even if local checks pass.
     """
     if type(project_id) is not int or not 0 < project_id < 2**63:
         raise ValueError("project_id_invalid")
@@ -337,14 +339,21 @@ def collect_measurements(db, project_id, msgs, arts, refs, *, cfg=None):
                     safe_refs[(mid, kind)] = ref
     db.execute("SAVEPOINT measurement_sources_read")
     try:
-        return _collect_measurements(db, project_id, messages, safe_arts, safe_refs, cfg=cfg, truncated=truncated)
-    finally:
+        result = _collect_measurements(db, project_id, messages, safe_arts, safe_refs, cfg=cfg, truncated=truncated)
+    except BaseException:
+        try:
+            db.execute("RELEASE measurement_sources_read")
+        except sqlite3.Error:
+            pass  # SQLite may already have rolled back the savepoint.
+        raise
+    else:
         db.execute("RELEASE measurement_sources_read")
+        return result
 
 
 def _collect_measurements(db, project_id, msgs, arts, refs, *, cfg=None, truncated=False):
     required = {
-        "patients": {"project_id", "patient_name", "fetch_state", "fetch_reason", "history_floor", "initial_import"},
+        "patients": {"project_id", "patient_name", "fetch_state", "fetch_reason", "history_floor", "initial_import", "is_archived"},
         "messages": {"message_id", "project_id", "body_text", "body_state", "content_hash", "posted_at",
                      "posted_at_ts", "parent_id", "sender_id", "sender_name", "sender_type", "profession",
                      "organization"},
@@ -364,15 +373,26 @@ def _collect_measurements(db, project_id, msgs, arts, refs, *, cfg=None, truncat
         counts = dict.fromkeys(("stored", "full", "empty", "deleted", "incomplete", "unprocessed",
                                 "analysis_attention", "canonical_unverified", "canonical_vital_unprojected",
                                 "invalid_items", "correction_candidates"))
-        return {"records": [], "coverage": {**counts, "source_complete": False,
+        return {"records": [], "coverage": {**counts, "source_complete": False, "local_checks_complete": None,
                 "ids_match": None, "acquisition_complete": False, "dependency_complete": False,
                 "dependency_gaps": None, "history_basis": "schema_unavailable",
                 "attachment_count": None, "truncated": truncated, "source_schema_available": False,
-                "upstream_snapshot_proven": False}}
-    patient = db.execute("SELECT patient_name,fetch_state,fetch_reason,history_floor FROM patients WHERE project_id=?",
+                "upstream_snapshot_proven": False, "scope_state": "schema_unknown"}}
+    patient = db.execute("SELECT patient_name,fetch_state,fetch_reason,history_floor,is_archived "
+                         "FROM patients WHERE project_id=?",
                          (project_id,)).fetchone()
     if patient is None:
         raise ValueError("unknown_project")
+    if (patient["is_archived"] != 0 or patient["fetch_state"] == "forbidden"
+            or patient["fetch_reason"] in ("forbidden", "permission_denied", "access_revoked")):
+        counts = dict.fromkeys(("stored", "full", "empty", "deleted", "incomplete", "unprocessed",
+                                "analysis_attention", "canonical_unverified", "canonical_vital_unprojected",
+                                "invalid_items", "correction_candidates"))
+        return {"records": [], "coverage": {**counts, "source_complete": False, "local_checks_complete": None,
+                "ids_match": None, "acquisition_complete": False, "dependency_complete": False,
+                "dependency_gaps": None, "history_basis": "scope_unavailable",
+                "attachment_count": None, "truncated": truncated, "source_schema_available": True,
+                "upstream_snapshot_proven": False, "scope_state": "scope_unavailable"}}
     messages = msgs
     supplied = {m.get("message_id") for m in messages if m.get("project_id") == project_id}
     fields = ("message_id", "project_id", "body_text", "body_state", "content_hash", "posted_at",
@@ -484,10 +504,10 @@ def _collect_measurements(db, project_id, msgs, arts, refs, *, cfg=None, truncat
     complete = bool(not truncated and ids_match and acquisition and not attachments and dependency["complete"] and not any(counts[key] for key in
         ("deleted", "incomplete", "unprocessed", "analysis_attention", "canonical_unverified",
          "canonical_vital_unprojected", "invalid_items", "correction_candidates")))
-    return {"records": records, "coverage": {**counts, "source_complete": complete,
+    return {"records": records, "coverage": {**counts, "source_complete": False, "local_checks_complete": complete,
             "ids_match": ids_match, "acquisition_complete": acquisition,
             "attachment_count": attachments,
             "truncated": truncated,
             "dependency_complete": dependency["complete"], "dependency_gaps": dependency["gaps"],
             "history_basis": "completed_cohort" if acquisition and cohort is not None else "legacy_floor" if acquisition else "incomplete",
-            "source_schema_available": True, "upstream_snapshot_proven": False}}
+            "source_schema_available": True, "upstream_snapshot_proven": False, "scope_state": "observed"}}
