@@ -1,0 +1,18 @@
+{
+  "category": "added",
+  "title": "出来事の記録を患者ごとに確認",
+  "summary": "患者の記録まとめに、入退院や訪問などの出来事を原文とともに確認する画面を追加します。",
+  "upgrade": "更新の反映にはHermes gateway、独立実行の場合は対象のSlack・Discord・LINE WORKSアダプターの再起動が必要です。CLIは更新後のコードを起動すると利用できます。",
+  "details": [
+    "原文と抽出結果を照合し、出来事の日付と投稿日時を分けて表示します。日付を確認できない記録は後に表示します。",
+    "投稿番号の降順で1回最大200投稿を確認し、最大400件の出来事を表示します。対象範囲外の古い投稿へ続けて確認する機能はありません。",
+    "未取得・未解析・添付や対象上限がある場合は全履歴の確認を完了とせず、別投稿との訂正・変更の対応も照合しません。"
+  ],
+  "refs": [
+    "mcs/patients/care_event_sources.py",
+    "mcs/patients/care_event_timeline.py",
+    "mcs/views/patient_context_view.py",
+    "mcs/views/mcs_view.py",
+    "mcs/notify/notify_views.py"
+  ]
+}

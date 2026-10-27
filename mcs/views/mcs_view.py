@@ -622,6 +622,8 @@ class View:
             return pcv.search(self.db, pid, query)
         if view == "replies":
             return pcv.replies(self.db, pid)
+        if view == "care_events":
+            return pcv.care_events(self.db, pid, cfg=load_config())
         # current publication settings gate the published context, not the flag stored at generation
         ev = pcv.evidence(self.db, pid, cfg=load_config())
         now = self.meta["generated_at"]
@@ -923,7 +925,7 @@ def _parser():
             sub.add_argument("--query", required=True)
         if kind == "patient_context":
             sub.add_argument("--view", required=True, choices=(
-                "background", "changes", "replies", "previsit", "timeline", "observations", "discrepancies",
+                "background", "changes", "replies", "previsit", "timeline", "care_events", "observations", "discrepancies",
                 "handoff", "search", "transition_course", "participants"))
             sub.add_argument("--since", type=int, help="changes: inclusive epoch seconds (default: 7 days)")
             sub.add_argument("--query", help="search: whitespace-separated terms")

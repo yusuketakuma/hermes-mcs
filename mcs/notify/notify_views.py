@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
 import time
 from datetime import datetime
 
@@ -774,7 +775,7 @@ def drug_search_view(db, cfg, project_id, query) -> dict:
 CONTEXT_SECTIONS = {
     "background": "患者さんの全体像", "changes": "前回から変わったこと",
     "replies": "連絡・返答の確認", "previsit": "訪問前の確認ノート",
-    "timeline": "経過タイムライン", "observations": "検査・観測の記録", "discrepancies": "記録の食い違い",
+    "timeline": "経過タイムライン", "care_events": "出来事の記録", "observations": "検査・観測の記録", "discrepancies": "記録の食い違い",
     "handoff": "引継ぎ用の記録", "transition_course": "退院・移行時の経過",
 }
 from patient_context_view import ROLE_LABELS as CONTEXT_ROLES  # noqa: E402 - one role source
@@ -784,6 +785,22 @@ CONTEXT_PAGE_SIZE = 8
 DISCOVERY_LABELS = (("new_report", "新しい報告"), ("edited", "訂正された報告"),
                     ("retrospective", "後から取得した記録"), ("backfill_found", "過去記録から追加発見"))
 _PARTICIPANTS_SHOWN = 4
+_CARE_EVENT_PATIENT_NAME_BYTES = 1024
+
+
+def _care_event_patient_label(db, project_id):
+    """Only materialize a bounded, valid text label from the authorized snapshot."""
+    if "patient_name" not in {row[1] for row in db.execute("PRAGMA table_info(patients)")}:
+        return "患者"
+    row = db.execute(
+        "SELECT CASE WHEN typeof(patient_name)!='text' THEN NULL "
+        "WHEN octet_length(patient_name)>? THEN NULL "
+        "WHEN instr(CAST(patient_name AS BLOB),x'00')>0 THEN NULL "
+        "ELSE patient_name END FROM patients WHERE project_id=?",
+        (_CARE_EVENT_PATIENT_NAME_BYTES, project_id)).fetchone()
+    if row is None or row[0] is None:
+        return "患者"
+    return inline_text(row[0].strip(), 30) or f"project {project_id}"
 
 
 def _bare_quote(text: str, category) -> str:
@@ -802,12 +819,35 @@ def _bare_quote(text: str, category) -> str:
 
 def patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0,
                          intervention_history=False, intervention_cursor=None):
+    if section != "care_events":
+        return _patient_context_list(db, project_id, section, cfg=cfg, since=since, now=now,
+                                     role=role, page=page, intervention_history=intervention_history,
+                                     intervention_cursor=intervention_cursor)
+    # Coverage, source references and the final rendered labels share the same snapshot.
+    db.execute("SAVEPOINT care_event_notification")
+    try:
+        result = _patient_context_list(db, project_id, section, cfg=cfg, since=since, now=now,
+                                       role=role, page=page, intervention_history=intervention_history,
+                                       intervention_cursor=intervention_cursor)
+    except BaseException:
+        try:
+            db.execute("RELEASE care_event_notification")
+        except sqlite3.Error:
+            pass
+        raise
+    else:
+        db.execute("RELEASE care_event_notification")
+        return result
+
+
+def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0,
+                          intervention_history=False, intervention_cursor=None):
     """Private patient-context views as source-bound rows: each row keeps the original
     quotes and one compact source line (when · who · which post); consecutive items of
     one post in one group share that line. Every row carries project_id so the
     transports' scope filter keeps them."""
     import patient_context_view as views
-    ev = views.evidence(db, project_id, cfg=cfg)
+    ev = {"coverage": {}} if section == "care_events" else views.evidence(db, project_id, cfg=cfg)
     rows, head = [], []
     year = datetime.fromtimestamp(now, JST).year if isinstance(now, (int, float)) else None
 
@@ -1009,6 +1049,23 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
                 head.append("介入の記載: 対象範囲を確認できません")
         if view.get("next_planned"):
             head.append("記録上の予定: " + view["next_planned"])
+    elif section == "care_events":
+        view = views.care_events(db, project_id, cfg=cfg)
+        coverage = view["coverage"]
+        head.append("出来事の日付順（日付未確認は後に表示）。投稿間の関係は未照合")
+        if coverage["state"] == "observed":
+            head.append(f"投稿番号の降順で{coverage['examined']}件を確認（1回最大{coverage['limit']}件）")
+            if not coverage["source_complete"]:
+                head.append("未取得・未解析・添付・対象上限などのため、全履歴の確認は未完了")
+            if coverage["truncated"] or coverage["event_truncated"]:
+                head.append("対象範囲を一部に限定しています")
+            if coverage["date_unknown"]:
+                head.append(f"出来事の日付未確認 {coverage['date_unknown']}件")
+        else:
+            head.append("出来事の対象範囲を確認できません")
+        for event in view["items"]:
+            day = (event.get("event_day") if not event.get("date_uncertain") else None) or "日付未確認"
+            add([{**event, "event_date_text": day}], "出来事の記録")
     elif section == "observations":
         view = views.observations(db, ev)
         head.append("原文に記載された検査・観測値を項目ごとに投稿順で表示")
@@ -1061,7 +1118,8 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
     status = []   # how complete the record is: kept, but below the records instead of above them
     if ev.get("as_of"):
         status.append("患者コンテキストの反映時点: " + stamp_time(datetime.fromtimestamp(ev["as_of"], JST)))
-    status.append(_coverage_line(db, project_id))
+    if section != "care_events":
+        status.append(_coverage_line(db, project_id))
     inference = ev["coverage"].get("inference") or {}
     if inference and not inference.get("complete"):
         sources = inference.get("sources") or {}
@@ -1077,7 +1135,11 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
             status.append(f"添付 {context_coverage['attachments']['count']}件（内容は未解析）")
     pages = max(1, -(-len(rows) // CONTEXT_PAGE_SIZE))
     page = min(page, pages - 1)
-    name = patient_label(db, project_id)
+    if section == "care_events":
+        name = (_care_event_patient_label(db, project_id)
+                if view["coverage"]["state"] == "observed" else "患者")
+    else:
+        name = patient_label(db, project_id)
     title = f"{name} — {CONTEXT_SECTIONS[section]}"
     start = page * CONTEXT_PAGE_SIZE
     shown = rows[start:start + CONTEXT_PAGE_SIZE]
@@ -1091,7 +1153,9 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
     return {"title": title, "layout": "patient_context", "head": head,
             "items": shown,
             "notes": list(view.get("notes", [])) + status,
-            "empty": ("介入の記載の有無は確認できません"
+            "empty": ("出来事の記載の有無は確認できません"
+                      if section == "care_events" and not view["coverage"].get("source_complete")
+                      else "介入の記載の有無は確認できません"
                       if intervention_history
                       else "解析が完了していないため、該当する記録の有無は未確認です"
                       if inference and not inference.get("complete") else "この範囲で該当する記録は見つかりません"),

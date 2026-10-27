@@ -522,6 +522,55 @@ def timeline(ev, categories=None) -> dict:
             "coverage": ev.get("coverage")}
 
 
+def care_events(db, project_id, *, cfg=None) -> dict:
+    """Read source-bound care-event references and quotes on one borrowed snapshot."""
+    from care_event_sources import collect
+
+    db.execute("SAVEPOINT care_event_view")
+    try:
+        projected = collect(db, project_id, cfg=cfg)
+        items = []
+        for event in projected["events"]:
+            row = db.execute(
+                "SELECT body_text,body_html,content_hash FROM messages "
+                "WHERE project_id=? AND message_id=? AND body_state='full'",
+                (project_id, event["message_id"])).fetchone()
+            span = event.get("span")
+            valid = (row is not None and isinstance(row[0], str) and isinstance(row[1], str)
+                     and row[2] == event["content_hash"]
+                     and hashlib.sha256(row[1].encode()).hexdigest() == row[2]
+                     and html_to_text(row[1]) == row[0]
+                     and isinstance(span, list) and len(span) == 2
+                     and all(type(value) is int for value in span)
+                     and 0 <= span[0] < span[1] <= len(row[0])
+                     and event.get("unverified") is False)
+            if not valid and event.get("unverified") is False:
+                projected["coverage"]["source_complete"] = False
+                projected["coverage"]["invalid_source"] += 1
+            item = {**event, "source": "chat",
+                    "quote": row[0][span[0]:span[1]] if valid else None,
+                    "text": None if valid else "出来事に関する記載あり（内容未確認）"}
+            if not valid:
+                item.update(subject="unknown", status="unknown", negated=None,
+                            event_day=None, date_uncertain=True, unverified=True)
+            items.append(item)
+        items.sort(key=lambda item: (not item.get("event_day") or item.get("date_uncertain"),
+                                     (item.get("event_day") or "") if not item.get("date_uncertain") else "",
+                                     item.get("posted_at_ts") is None, item.get("posted_at_ts") or 0,
+                                     item["message_id"], item["record_index"]))
+        result = {"view": "care_events", "items": items, "coverage": projected["coverage"],
+                  "order_basis": "event_day_then_posting_time"}
+    except BaseException:
+        try:
+            db.execute("RELEASE care_event_view")
+        except sqlite3.Error:
+            pass
+        raise
+    else:
+        db.execute("RELEASE care_event_view")
+        return result
+
+
 def observations(db, ev, *, source_limit=50) -> dict:
     """Project a bounded set of current source-bound observation records."""
     from observation_series import observation_series
