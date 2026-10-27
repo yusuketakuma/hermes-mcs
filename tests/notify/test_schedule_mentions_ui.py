@@ -34,3 +34,32 @@ def test_three_mentions_in_one_post_are_visible_in_same_unconfirmed_section(ctx)
     rows = [row for row in items if row['group'].startswith('予定に関する記載（対象・日付・担当未確認')]
     assert {quote for row in rows for quote in row['quotes']} == set(quotes)
     assert all(row['source_rest'] == '#2001' and row['project_id'] == 1 for row in rows)
+
+
+def test_unspecified_tomorrow_check_is_source_bound_without_assigning_intervention(ctx):
+    import intervention_schedule
+
+    quote = '明日確認します。'
+    ctx.db.save_messages([_message(2021, body=quote)], project_id=1)
+    ctx.db.ensure_patient(2)
+    ctx.db.save_messages([_message(2022, pid=2, body=quote)], project_id=2)
+
+    schedule = intervention_schedule.read_source_schedule(ctx.db.db, 1)
+    record, = [row for row in schedule['records'] if row['message_id'] == 2021]
+    assert record['project_id'] == 1 and record['quote'] == quote
+    assert record['state'] == 'schedule_mention_unconfirmed'
+    assert record['role'] is None and record['event_day'] is None
+    assert record['date_text'] == '明日'
+    assert all(row['message_id'] != 2022 for row in schedule['records'])
+
+    first = notify_views.patient_context_list(ctx.db.db, 1, 'previsit', cfg={}, since=T0, now=T0)
+    items = list(first['items'])
+    for page in range(1, first['pages']):
+        items.extend(notify_views.patient_context_list(ctx.db.db, 1, 'previsit', cfg={},
+                                                       since=T0, now=T0, page=page)['items'])
+    matching = [row for row in items if quote in row.get('quotes', [])]
+    assert len(matching) == 1
+    assert matching[0]['group'].startswith('予定に関する記載（対象・日付・担当未確認')
+    assert matching[0]['source_rest'] == '#2021' and matching[0]['project_id'] == 1
+    assert not any(row['group'].startswith(('今後の介入予定', '介入予定の記載（日付未確認'))
+                   and quote in row.get('quotes', []) for row in items)
