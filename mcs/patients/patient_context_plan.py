@@ -150,16 +150,18 @@ def scan_items(answer, chunk):
 def candidate_key(snapshot, progress, pid, lane):
     """Prioritize initial publication, then the least recently attempted patient."""
     return (bool(snapshot.get("scope", {}).get("is_archived")),
-            not snapshot["initial"] if lane == "A" else False, progress.get("last_attempt", 0), pid)
+            not snapshot["initial"] if lane == "A" else False,
+            progress.get("last_attempt_unit", 0), progress.get("last_attempt", 0), pid)
 
 
 def lane_rotation(best, rotation):
     """Choose the next available lane with the unchanged six/three/one schedule."""
     sequence = "AAAAAABBBC"
     index = rotation.get("cursor", 0) % len(sequence)
-    lane = next((sequence[(index + i) % len(sequence)] for i in range(len(sequence))
-                 if sequence[(index + i) % len(sequence)] in best), None)
-    return lane, index, (index + 1) % len(sequence)
+    selected = next(((index + i) % len(sequence) for i in range(len(sequence))
+                     if sequence[(index + i) % len(sequence)] in best), index)
+    lane = sequence[selected] if sequence[selected] in best else None
+    return lane, selected, (selected + 1) % len(sequence)
 
 
 def ranges_complete(ranges, size):

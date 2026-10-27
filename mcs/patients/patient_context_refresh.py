@@ -9,6 +9,7 @@ import re
 import time
 
 import local_llm
+import initial_import_state
 import inference_dependency_loss as dependency_loss
 from clinical_chunking import PLAN_VERSION
 from mcs_queries import EXTRACTION_KINDS_SQL, JST
@@ -163,7 +164,8 @@ def _sources(db, pid, *, hydrate=True, mid=None):
         # Explicit headings remain usable before the ordinary extractor runs.
         items = context_items({"patient_context": items + (extract_context(message.get("body_text")) if hydrate else [])},
                               message.get("body_text"))
-        yield {**message, "source": "chat", "items": items}
+        yield {**message, "source": "chat", "items": items,
+               "canonical_context": any(row[2] in ("canonical_projection", "semantic_facts_v4") for row in rows)}
     if mid not in (None, 0) and not (isinstance(mid, str) and mid.startswith("karte:")):
         return
     scope = _scope(db, pid)
@@ -189,28 +191,43 @@ def _source_key(source):
 def _source_sig(source):
     return _digest({k: source.get(k) for k in ("project_id", "message_id", "source", "content_hash",
                     "body_length", "body_state", "posted_at", "posted_at_ts", "sender_id",
-                    "sender_name", "parent_id", "extraction_sig", "source_key", "empty")})
+                    "sender_name", "parent_id", "extraction_sig", "canonical_context", "source_key", "empty")})
 
 
 def _snapshot(db, pid, cfg, *, cutoff=None, hydrate=True, contract=None):
-    scope = _scope(db, pid)
-    sources = list(_sources(db, pid, hydrate=hydrate)) if scope else []
-    signed = [(_source_key(s), _source_sig(s), bool(s.get("historical"))) for s in sources
-              if cutoff is None or (s.get("first_seen") or 0) <= cutoff]
-    contract = _contract(cfg, pid) if contract is None else contract
-    dependencies = dependency_loss.read(db, pid)
-    signed_scope = {key: scope.get(key) for key in ("project_id", "project_type", "karte_id", "is_archived")} if scope else None
-    if signed_scope is not None:
-        signed_scope["permission_refusal"] = scope.get("fetch_reason") if scope.get("fetch_reason") in (
-            "forbidden", "permission_denied", "access_revoked") else None
-    return {"scope": scope, "sources": sources, "contract": contract, "dependencies": dependencies,
-            "source_sig": _digest([signed_scope, contract, signed, dependencies["signature"]])}
+    owns_read = not db.in_transaction
+    if owns_read:
+        db.execute("BEGIN")
+    try:
+        scope = _scope(db, pid)
+        sources = list(_sources(db, pid, hydrate=hydrate)) if scope else []
+        signed = [(_source_key(s), _source_sig(s), bool(s.get("historical"))) for s in sources
+                  if cutoff is None or (s.get("first_seen") or 0) <= cutoff]
+        contract = _contract(cfg, pid) if contract is None else contract
+        dependencies = dependency_loss.read(db, pid)
+        acquisition = initial_import_state.acquisition_status(db, pid)
+        signed_scope = {key: scope.get(key) for key in ("project_id", "project_type", "karte_id", "is_archived")} if scope else None
+        if signed_scope is not None:
+            signed_scope["permission_refusal"] = scope.get("fetch_reason") if scope.get("fetch_reason") in (
+                "forbidden", "permission_denied", "access_revoked") else None
+        return {"scope": scope, "sources": sources, "contract": contract, "dependencies": dependencies,
+                "acquisition": acquisition,
+                "source_sig": _digest([signed_scope, contract, signed, dependencies["signature"], acquisition["signature"]])}
+    finally:
+        if owns_read:
+            db.rollback()
 
 
 def _usable(source):
     return (source.get("body_state") in (None, "full")
             and (bool(source["body_text"].strip()) if isinstance(source.get("body_text"), str)
                  else (source.get("body_length") or 0) > 0))
+
+
+def _sources_intact(sources):
+    return all(_usable(source) or source.get("body_state") == "deleted"
+               or source.get("body_state") in (None, "full") and source.get("body_length") == 0
+               for source in sources)
 
 
 def _facts(source, items, *, night_id, discovery, offset=0, chunk=None):
@@ -459,14 +476,25 @@ def inference_coverage(db, pid, cfg):
     return _inference_coverage(db, pid, cfg, snapshot)
 
 
+def _quality_scope_allowed(db, pid, policy, sources=None):
+    """Keep validated policy scope and canonical provenance separate from notification modes."""
+    from mcs_queries import paused
+    if paused(db, pid) or policy["project_ids"] is not None and pid not in policy["project_ids"]:
+        return False
+    if sources is None:
+        return True
+    canonical = policy["fact_source"] == "canonical"
+    return all(bool(source.get("canonical_context")) == canonical
+               for source in sources if _usable(source) and source["source"] == "chat")
+
+
 def _quality_publication_allowed(db, pid, cfg, doc, meta):
     """Revalidate a cloud summary's receipt and current promotion boundary."""
     import semantic_policy
-    import semantic_send_gate
     try:
-        policy, errors = semantic_policy.runtime_config(cfg)
-        if (errors or policy["fact_source"] != "canonical"
-                or semantic_send_gate.enforce_block_reason(db, policy, pid) is not None):
+        # Key availability controls new calls; cached evidence uses the configured scope.
+        policy, errors = semantic_policy.semantic_config(cfg, key_present=True)
+        if errors or not _quality_scope_allowed(db, pid, policy):
             return False
         assessment = _quality_assessment(cfg, policy)
         owns_read = not db.in_transaction
@@ -479,6 +507,8 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta):
             _quality_integrity(db, pid)
             captured = _quality_capture(db, pid, cfg, meta.get("night_id"), doc.get("summary"), assessment,
                                         doc.get("temporal_view"))
+            if not _quality_scope_allowed(db, pid, policy, captured["sources"]):
+                return False
             identity = captured["identity"]
             if (meta.get("quality_audit_key") != identity["audit_key"]
                     or _quality_failed(db, pid, identity) or not _quality_passed(db, pid, identity)):
@@ -534,17 +564,18 @@ def _inference_coverage(db, pid, cfg, snapshot):
     complete = (not _out_of_scope(snapshot) and options(cfg)["enabled"] and acquired_empty
                 and counts["eligible"] == counts["audited"] and not counts["incomplete"]
                 and not progress.get("held") and not progress.get("failure") and current
-                and snapshot["dependencies"]["complete"])
-    fetch_allowed = scope.get("fetch_state") not in ("incomplete", "failed", "forbidden")
+                and snapshot["dependencies"]["complete"] and snapshot["acquisition"]["complete"])
+    fetch_allowed = snapshot["acquisition"]["complete"]
     eligible = bool(complete and options(cfg)["publication"] and not scope.get("is_archived") and fetch_allowed)
     status = ("out_of_scope" if _out_of_scope(snapshot) else "off" if not options(cfg)["enabled"]
               else "dependency_gap" if not snapshot["dependencies"]["complete"]
               else "held" if counts["held"] or progress.get("held")
               else "failed" if counts["failed"] or progress.get("failure")
               else "unacquired" if not acquired_empty else "incomplete" if counts["incomplete"]
+              else "acquisition_incomplete" if not fetch_allowed
               else "scan_pending" if counts["scanned"] < counts["eligible"]
               else "audit_pending" if counts["audited"] < counts["eligible"]
-              else "summary_pending" if not complete else "acquisition_incomplete" if not fetch_allowed
+              else "summary_pending" if not complete
               else "excluded" if counts["eligible"] == 0 and counts["excluded"] else "empty" if counts["eligible"] == 0 else "complete")
     return {VERSION_KEY: CURRENT_VERSION, "complete": bool(complete), "publication_eligible": eligible,
             "status": status, "sources": counts, "summary": {"current": bool(current),
@@ -759,9 +790,7 @@ def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, displ
     snapshot = _snapshot(db, pid, cfg, hydrate=True)
     scope = snapshot.get("scope") or {}
     if (_out_of_scope(snapshot) or scope.get("is_archived")
-            or scope.get("fetch_state") in ("incomplete", "failed", "forbidden")
-            or (not any(_usable(source) for source in snapshot["sources"])
-                and scope.get("fetch_state") != "complete")
+            or not snapshot["acquisition"]["complete"]
             or not snapshot["dependencies"]["complete"]):
         raise ValueError("patient_summary_quality_source_incomplete")
     scans = _current_scans(db, pid, snapshot["sources"], snapshot["contract"])
@@ -1345,6 +1374,8 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
     try:
         _quality_integrity(ledger.db, pid)
         initial = _quality_capture(ledger.db, pid, cfg, night_id, summary, assessment, display_projection)
+        if not _quality_scope_allowed(ledger.db, pid, scfg, initial["sources"]):
+            return "deferred", None
     finally:
         ledger.db.rollback()
     identity = initial["identity"]
@@ -1382,7 +1413,8 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                     return False
                 _quality_integrity(ledger.db, pid)
                 refreshed = _quality_capture(ledger.db, pid, live, night_id, summary, assessment, display_projection)
-                if refreshed["identity"] != identity:
+                if (refreshed["identity"] != identity
+                        or not _quality_scope_allowed(ledger.db, pid, live_semantic, refreshed["sources"])):
                     denied = True
                     return False
                 ledger.db.rollback()
@@ -1506,11 +1538,20 @@ def _pending(db, pid, cfg, *, now=None, contract=None):
     stored = _current_scans(db, pid, snapshot["sources"], snapshot["contract"])
     scans = [stored.get(_source_key(source), {}) for source in snapshot["sources"] if _usable(source)]
     snapshot["source_failures"] = sum(bool(scan.get("failure")) for scan in scans)
-    pending = {"A": (not old or meta.get("source_sig") != snapshot["source_sig"]
+    summary_needed = (not old or meta.get("source_sig") != snapshot["source_sig"]
                     or meta.get("publication_requested", meta.get("published")) != options(cfg)["publication"]
                     or meta.get("summary_checked") is not True
                     or bool(snapshot["contract"].get("provider") and not meta.get("quality_audit_key"))
-                    or progress.get("summary_pending", False)) and _ready(progress, now),
+                    or progress.get("summary_pending", False))
+    cloud_ready = (not snapshot["contract"].get("provider")
+                   or snapshot["acquisition"]["complete"] and snapshot["dependencies"]["complete"]
+                   and _sources_intact(snapshot["sources"])
+                   and all(scan.get("complete") and scan.get("audited") and not scan.get("failure")
+                           for scan in scans))
+    snapshot["unfinished"] = bool(summary_needed or not snapshot["acquisition"]["complete"]
+        or not snapshot["dependencies"]["complete"] or not _sources_intact(snapshot["sources"])
+        or any(not scan.get("complete") or not scan.get("audited") or scan.get("failure") for scan in scans))
+    pending = {"A": summary_needed and cloud_ready and _ready(progress, now),
                "B": any(not scan.get("complete") and _ready(scan, now) for scan in scans),
                "C": any(scan.get("complete") and not scan.get("audited") and _ready(scan, now) for scan in scans)}
     return snapshot, progress, pending
@@ -1790,6 +1831,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         return {"status": "deferred", "done": 0}
     started = time.monotonic()
     scanned = 0
+    waiting = 0
     best, archived_best = {}, {}
     for row in ledger.db.execute("SELECT project_id FROM patients ORDER BY is_archived,project_id"):
         if time.monotonic() + COMMIT_MARGIN >= deadline:
@@ -1804,6 +1846,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         snapshot, progress, pending = _pending(ledger.db, pid, cfg, now=now)
         if _out_of_scope(snapshot):
             continue
+        waiting += int(snapshot["unfinished"])
         for lane, due in pending.items():
             # Only the leader's selection-time snapshot is kept, so the
             # chosen patient is not re-read after selection.
@@ -1819,9 +1862,34 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         best = archived_best
     lane, index, next_cursor = context_plan.lane_rotation(best, rotation)
     if lane is None:
-        return {"status": "complete", "done": 0, **stats}
+        return {"status": "deferred" if waiting else "complete", "done": 0,
+                **({"reason": "patient_context_waiting"} if waiting else {}), **stats}
     key, snapshot, progress, frozen_ver = best[lane]
     pid = key[-1]
+    selection_fd = acquire_run_lock()
+    if selection_fd is None:
+        return {"status": "deferred", "done": 0, "reason": "run_lock", **stats}
+    try:
+        ledger.db.execute("BEGIN IMMEDIATE")
+        try:
+            if (time.monotonic() + COMMIT_MARGIN >= deadline or not admit()
+                    or _published_version(ledger.db, pid) != frozen_ver
+                    or _latest(ledger.db, PROGRESS, 0)[0] != rotation):
+                ledger.db.rollback()
+                return {"status": "source_changed", "done": 0, **stats}
+            progress = {**progress, "last_attempt": now,
+                        "last_attempt_unit": rotation.get("units", 0) + 1,
+                        "night_id": night_id, "source_sig": snapshot["source_sig"]}
+            _replace(ledger, PROGRESS, pid, progress, {})
+            _replace(ledger, PROGRESS, 0, {"cursor": next_cursor, "units": rotation.get("units", 0) + 1}, {})
+            ledger.db.commit()
+            # Our scheduling write participates in the same publisher fence as later work.
+            frozen_ver = _published_version(ledger.db, pid)
+        except BaseException:
+            ledger.db.rollback()
+            raise
+    finally:
+        os.close(selection_fd)
     if lane == "A":
         # Facts need hydrated items; the hydrated read must still match the
         # selection-time signature the reused progress reset came from.
@@ -1834,6 +1902,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             "model": snapshot["contract"]["model"], "night_id": night_id}
     result = None
     failure = None
+    deferred_reason = None
     provider = None
     mode = extract_llm._cloud_mode(ledger, cfg, "patient_context", pid)
     cloud_requested = bool(snapshot["contract"].get("provider"))
@@ -1964,9 +2033,9 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                         quality_status, quality_result = _quality_step(
                             ledger, pid, cfg, night_id, repaired, deadline, admit, base_doc=old, base_meta=old_meta)
                 except (Deferred, ValueError, RuntimeError):
-                    return {"status": "deferred", "done": 0, "reason": "summary_quality_unavailable", **stats}
+                    raise Deferred("summary_quality_unavailable") from None
                 if quality_status != "passed":
-                    return {"status": "deferred", "done": 0, "reason": "summary_quality_" + quality_status, **stats}
+                    raise Deferred("summary_quality_" + quality_status)
                 quality_keys = quality_result.pop("_keys")
                 quality_identity = quality_result
                 if repaired is not None:
@@ -1974,11 +2043,9 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     changed = repaired["facts_sig"]
                     projected = repaired["temporal_view"]
                 import semantic_policy
-                import semantic_send_gate
                 quality_policy, problems = semantic_policy.runtime_config(cfg)
-                if (problems or quality_policy["fact_source"] != "canonical"
-                        or semantic_send_gate.enforce_block_reason(ledger.db, quality_policy, pid) is not None):
-                    return {"status": "deferred", "done": 0, "reason": "summary_quality_promotion", **stats}
+                if problems or not _quality_scope_allowed(ledger.db, pid, quality_policy, snapshot["sources"]):
+                    raise Deferred("summary_quality_promotion")
                 meta["quality_audit_key"] = quality_identity["audit_key"]
             summary = (repaired["summary"] if same and old_meta.get("provider") and repaired is not None
                        else old["summary"] if same else infer(
@@ -2034,13 +2101,13 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                             audited_ids.append(part["_artifact_id"])
                         result["_audited_chunk_ids"] = audited_ids
                     break
-    except Deferred:
+    except Deferred as exc:
         discard_if_changed()
-        return {"status": "deferred", "done": 0}
+        deferred_reason = str(exc) or "patient_context_waiting"
     except (ValueError, TypeError, KeyError, TimeoutError) as exc:
         code = str(exc)
         failure = code if type(exc) is ValueError and _FAILURE_CODE.fullmatch(code) else type(exc).__name__
-    if result is None and failure is None:
+    if result is None and failure is None and deferred_reason is None:
         return {"status": "deferred", "done": 0}
     if time.monotonic() >= deadline or not admit():
         discard_if_changed()
@@ -2098,9 +2165,8 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 live_cfg = extract_llm.load_config()
                 live_policy, problems = semantic_policy.runtime_config(live_cfg)
                 import semantic_jev
-                if (problems or live_policy["fact_source"] != "canonical"
+                if (problems or not _quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
                         or quality_keys != (semantic_jev.api_key(), extract_llm.cloud_policy.api_key(extract_llm.HOME))
-                        or semantic_send_gate.enforce_block_reason(ledger.db, live_policy, pid) is not None
                         or quality_identity["assessment"] != _quality_assessment(live_cfg, live_policy)
                         or not _quality_passed(ledger.db, pid, quality_identity)
                         or _quality_failed(ledger.db, pid, quality_identity)):
@@ -2133,8 +2199,11 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             retry = {"failure": failure, "held": failure == "nightly_unsplittable_assertion",
                      "attempts": attempts, "checks": _CHECKS,
                      "next_try": now + min(86400, 300 * 2 ** min(attempts, 8)) if failure else 0}
-            progress = {**progress, "last_attempt": now, "night_id": night_id,
-                        "source_sig": snapshot["source_sig"], **(retry if lane == "A" else {})}
+            progress = {**progress, "last_attempt": now, "last_attempt_unit": rotation.get("units", 0) + 1,
+                        "night_id": night_id, "source_sig": snapshot["source_sig"],
+                        **(retry if lane == "A" and deferred_reason is None else {})}
+            if lane == "A" and deferred_reason is not None:
+                progress["next_try"] = now if deferred_reason == "summary_quality_pending" else now + 60
             if failure and lane != "A":
                 _replace(ledger, SCAN, pid, {**{k: v for k, v in saved.items() if not k.startswith("_")}, **retry}, meta, source["message_id"])
             if not failure and result is not None:
@@ -2152,13 +2221,12 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                                   and saved_scans.get(_source_key(s), {}).get("audited")
                                   and not saved_scans.get(_source_key(s), {}).get("failure")
                                   for s in snapshot["sources"] if _usable(s))
-                    intact = all(_usable(s) or s.get("body_state") == "deleted"
-                                 or s.get("body_state") in (None, "full") and s.get("body_length") == 0
-                                 for s in snapshot["sources"])
+                    intact = _sources_intact(snapshot["sources"])
                     _replace(ledger, KIND, pid, result, {**meta, "summary_checked": True,
                         "scan_sig": frozen_scan_sig, "publication_requested": options(cfg)["publication"],
                         "published": bool(options(cfg)["publication"] and audited and intact
                                           and snapshot["dependencies"]["complete"]
+                                          and snapshot["acquisition"]["complete"]
                                           and (not cloud_requested or quality_identity is not None))})
                     progress["summary_pending"] = bool(cloud_requested and quality_identity is None)
                 else:
@@ -2200,7 +2268,6 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 if proof_changed:
                     ledger.bump_inference_analysis_epoch_tx()
             _replace(ledger, PROGRESS, pid, progress, {})
-            _replace(ledger, PROGRESS, 0, {"cursor": next_cursor, "units": rotation.get("units", 0) + 1}, {})
             if not failure and estimated_unit:
                 extract_llm.cloud_policy.dryrun_tx(ledger, route="patient_context", project_id=pid,
                     unit_key=lane, input_chars=sum(source.get("body_length", 0) for source in snapshot["sources"]),
@@ -2257,5 +2324,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                             rejected=measured.get("rejected"), repairs=measured.get("repairs"))
                 finally:
                     os.close(audit_fd)
-    return {"status": "failed" if failure else "progressed", "done": int(not failure), "lane": lane,
-            **({"reason": failure} if failure else {}), "lock_wait_s": waited, **stats}
+    return {"status": "failed" if failure else "deferred" if deferred_reason else "progressed",
+            "done": int(not failure and deferred_reason is None), "lane": lane,
+            **({"reason": failure or deferred_reason} if failure or deferred_reason else {}),
+            "lock_wait_s": waited, **stats}

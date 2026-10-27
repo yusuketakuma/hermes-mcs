@@ -88,6 +88,8 @@ from clinical_chunking import PLAN_VERSION, plan_chunks
 import local_llm
 import patient_context
 import patient_context_refresh
+import initial_import_state
+import history_walk
 import mcs_queries
 import inference_dependency_loss
 import mcs_util
@@ -151,6 +153,8 @@ _LOADED_SOURCE_DIGESTS = {
                        ("patient_context_plan", patient_context_plan.__file__),
                        ("patient_context_state", patient_context_state.__file__),
                        ("patient_context_refresh", patient_context_refresh.__file__),
+                       ("initial_import_state", initial_import_state.__file__),
+                       ("history_walk", history_walk.__file__),
                        ("semantic_transport", semantic_transport.__file__),
                        ("semantic_loops", semantic_loops.__file__),
                        ("semantic_assessment", semantic_assessment.__file__),

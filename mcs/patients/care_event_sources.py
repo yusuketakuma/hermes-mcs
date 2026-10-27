@@ -3,7 +3,6 @@ import hashlib
 import sqlite3
 import care_event_timeline
 import extract_llm
-import history_walk
 import inference_dependency_loss
 import initial_import_state
 from mcs_queries import FACT_KINDS_SQL, current_fact_pred
@@ -94,7 +93,7 @@ def collect(db, project_id, *, cfg=None, limit=_MAX_MESSAGES, event_limit=_MAX_E
                      "profession", "organization"},
         "artifacts": {"artifact_id", "project_id", "message_id", "kind", "content", "meta", "model"},
         "message_revisions": {"message_id", "seq", "content_hash"},
-        "fetch_jobs": {"project_id", "kind", "state", "payload"},
+        "fetch_jobs": {"job_id", "project_id", "kind", "state", "payload"},
         "attachments": {"message_id"},
     }
     if any(not columns <= {row[1] for row in db.execute("PRAGMA table_info(" + table + ")")}
@@ -128,12 +127,7 @@ def collect(db, project_id, *, cfg=None, limit=_MAX_MESSAGES, event_limit=_MAX_E
         return result
     coverage["fetch_state"] = fetch if fetch in ("complete", "incomplete", "pending", "failed") else "unknown"
     try:
-        capture = initial_import_state.progress(db, project_id)
-        capture_ok = capture is None or (capture.get("capture_phase") == "complete"
-            and history_walk.capture_proof(capture.get("capture_proof"), project_id, capture["cohort_id"]))
-        jobs = db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE project_id=? AND kind IN ('history','thread','reply') "
-                          "AND state IS NOT 'done'", (project_id,)).fetchone()[0]
-        coverage["history_complete"] = bool(fetch == "complete" and not reason and floor == -1 and capture_ok and not jobs)
+        coverage["history_complete"] = initial_import_state.acquisition_status(db, project_id)["complete"]
     except (ValueError, KeyError, TypeError):
         coverage["history_complete"] = False
     coverage["attachments"] = db.execute("SELECT COUNT(*) FROM attachments a JOIN messages m ON m.message_id=a.message_id "

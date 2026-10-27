@@ -353,15 +353,61 @@ def failure_class(error) -> str:
 
 
 def evaluate_once_more(client, state: dict, questions: dict,
-                       deadline: float, *, on_valid_answers=None) -> dict:
+                       deadline: float, *, on_valid_answers=None, on_attempt_result=None) -> dict:
     """Retry one malformed answer; persist validated answers before any retry.
 
-    An optional owner callback receives each validated answer subset. It must
-    raise or return False on persistence failure; such failures propagate without
-    another request. Callers without the callback retain the original behavior.
+    An optional owner callback receives each validated answer subset. Alternatively,
+    on_attempt_result receives valid answers and invalid IDs for every received
+    result, including an empty subset; transport errors do not call it. Either
+    callback must raise or return False on persistence failure, stopping reasks.
+    Callers without a callback retain the original behavior.
     """
-    if on_valid_answers is not None and not callable(on_valid_answers):
+    if (on_valid_answers is not None and on_attempt_result is not None
+            or on_valid_answers is not None and not callable(on_valid_answers)
+            or on_attempt_result is not None and not callable(on_attempt_result)):
         raise ValueError("jev_answer_callback_invalid")
+
+    if on_attempt_result is not None:
+        from copy import deepcopy
+
+        def checkpoint(answers, failed, requested):
+            answers = {} if answers is None else answers
+            if not isinstance(answers, dict) or not set(answers) <= set(requested):
+                raise ValueError("jev_attempt_answers_invalid")
+            if failed is None:
+                invalid = set(requested) - set(answers)
+            elif isinstance(failed, (list, tuple, set, frozenset)) and all(isinstance(q, str) for q in failed):
+                invalid = set(failed)
+            else:
+                raise ValueError("jev_attempt_answers_invalid")
+            if set(answers) & invalid or set(answers) | invalid != set(requested):
+                raise ValueError("jev_attempt_answers_invalid")
+            if on_attempt_result(deepcopy(answers), set(invalid)) is False:
+                raise RuntimeError("jev_answer_persistence_failed")
+            return invalid
+
+        try:
+            result = client.evaluate(state, questions, deadline)
+        except JevError as error:
+            if not is_answer_defect(error):
+                raise
+            kept = getattr(error, "answers", None)
+            invalid = checkpoint(kept, getattr(error, "failed", None), questions)
+            if not invalid:
+                raise ValueError("jev_attempt_answers_invalid")
+        else:
+            checkpoint(result.get("answers"), (), questions)
+            return result
+
+        remaining = {q: questions[q] for q in questions if q in invalid}
+        try:
+            again = client.evaluate(state, remaining, deadline)
+        except JevError as error:
+            if is_answer_defect(error):
+                checkpoint(getattr(error, "answers", None), getattr(error, "failed", None), remaining)
+            raise
+        checkpoint(again.get("answers"), (), remaining)
+        return {**again, "answers": {**(kept or {}), **again["answers"]}}
 
     def persist(answers):
         if on_valid_answers is not None and answers:

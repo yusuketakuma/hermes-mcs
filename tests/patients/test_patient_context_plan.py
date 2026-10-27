@@ -59,7 +59,7 @@ def test_lane_priority_and_rotation_keep_initial_then_oldest():
         plan.candidate_key({"initial": True}, {"last_attempt": 2}, 1, "B")
     lanes = [plan.lane_rotation({"A": 1, "B": 1, "C": 1}, {"cursor": i})[0] for i in range(10)]
     assert lanes == list("AAAAAABBBC")
-    assert plan.lane_rotation({"C": 1}, {"cursor": 0}) == ("C", 0, 1)
+    assert plan.lane_rotation({"C": 1}, {"cursor": 0}) == ("C", 9, 0)
     assert plan.lane_rotation({}, {"cursor": 9}) == (None, 9, 0)
 
 
@@ -107,3 +107,29 @@ def test_grounded_items_keep_only_what_passes_on_its_own():
     answer = {"patient_context": [good, {"category": "living", "text": "合成の別文",
                                          "evidence": "合成の別文", "subject": "unspecified"}]}
     assert plan.grounded_items(answer, chunk) == plan.context_items({"patient_context": [good]}, chunk)
+
+
+def test_rotation_advances_after_selected_slot_and_keeps_backlog_share():
+    # Start with A unavailable: selection jumps over A and must advance from B,
+    # rather than restarting the search from the original slot on each tick.
+    cursor = 0
+    observed = []
+    for _ in range(8):
+        lane, selected, cursor = plan.lane_rotation({'B': 1, 'C': 1}, {'cursor': cursor})
+        observed.append((lane, selected))
+    assert observed == [('B', 6), ('B', 7), ('B', 8), ('C', 9)] * 2
+    assert cursor == 0
+    assert plan.lane_rotation({'C': 1}, {'cursor': 7}) == ('C', 9, 0)
+
+
+@pytest.mark.parametrize('times', [(50.0, 50.0, 50.0), (50.0, 49.0, 48.0)])
+def test_logical_attempt_order_rotates_patients_even_when_clock_stalls_or_rewinds(times):
+    snapshot = {'initial': False, 'scope': {'is_archived': False}}
+    progress = {pid: {'last_attempt_unit': 0, 'last_attempt': 0} for pid in (1, 2, 3)}
+    selected = []
+    for unit, wall_time in enumerate(times, 1):
+        pid = min(progress, key=lambda candidate: plan.candidate_key(snapshot, progress[candidate], candidate, 'A'))
+        selected.append(pid)
+        progress[pid] = {'last_attempt_unit': unit, 'last_attempt': wall_time}
+    assert selected == [1, 2, 3]
+    assert min(progress, key=lambda pid: plan.candidate_key(snapshot, progress[pid], pid, 'A')) == 1

@@ -282,3 +282,112 @@ def test_capture_proof_scope_or_shape_cannot_be_borrowed_by_another_cohort(store
         state._write(store.db,1,current)
     with pytest.raises(ValueError,match='initial_import_invalid'):
         state.load(store.db,1)
+
+
+def _ready_acquisition(store, pid=1):
+    """Synthetic completed cohort and fetch journal, with no model or network."""
+    capture = state.load(store.db, pid)
+    capture['capture_phase'] = 'complete'
+    capture['capture_proof'] = {
+        'v': 1, 'scope': history_walk.scope(pid, capture['cohort_id']), 'digest': 'a' * 64}
+    with store.db:
+        state._write(store.db, pid, capture)
+        store.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 "
+                         "WHERE project_id=?", (pid,))
+        store.db.execute("UPDATE fetch_jobs SET state='done' WHERE project_id=?", (pid,))
+
+
+def test_acquisition_requires_borrowed_snapshot_and_preserves_caller_transaction(store):
+    _ready_acquisition(store)
+    assert not store.db.in_transaction
+    with pytest.raises(RuntimeError, match='history_snapshot_required'):
+        state.acquisition_status(store.db, 1)
+    assert not store.db.in_transaction
+    store.db.execute('BEGIN')
+    before = state.acquisition_status(store.db, 1)
+    assert before['complete'] is True
+    store.db.execute("UPDATE patients SET fetch_state='pending' WHERE project_id=1")
+    during = state.acquisition_status(store.db, 1)
+    assert during['complete'] is False and during['signature'] != before['signature']
+    assert store.db.in_transaction
+    store.db.rollback()
+    store.db.execute('BEGIN')
+    try:
+        assert state.acquisition_status(store.db, 1) == before
+    finally:
+        store.db.rollback()
+
+
+@pytest.mark.parametrize('case', [
+    'fetch_null', 'fetch_pending', 'fetch_failed', 'reason', 'floor_null', 'floor_partial',
+    'capture_pending', 'capture_proof_absent', 'capture_wrong_scope', 'capture_malformed', 'capture_oversized',
+    'history_pending', 'thread_pending', 'reply_failed',
+])
+def test_acquisition_never_treats_missing_or_unfinished_evidence_as_complete(store, case):
+    _ready_acquisition(store)
+    store.db.execute('BEGIN')
+    baseline = state.acquisition_status(store.db, 1)
+    assert baseline['complete'] is True
+    if case.startswith('fetch_'):
+        value = {'fetch_null': None, 'fetch_pending': 'pending', 'fetch_failed': 'failed'}[case]
+        store.db.execute('UPDATE patients SET fetch_state=? WHERE project_id=1', (value,))
+    elif case == 'reason':
+        store.db.execute("UPDATE patients SET fetch_reason='synthetic_failure' WHERE project_id=1")
+    elif case.startswith('floor_'):
+        store.db.execute('UPDATE patients SET history_floor=? WHERE project_id=1',
+                         (None if case == 'floor_null' else 0,))
+    elif case in ('capture_malformed', 'capture_oversized'):
+        store.db.execute('UPDATE patients SET initial_import=? WHERE project_id=1',
+                         ('{' if case == 'capture_malformed' else 'x' * 16385,))
+    elif case.startswith('capture_'):
+        capture = state.load(store.db, 1)
+        if case == 'capture_pending':
+            capture['capture_phase'] = 'capturing'
+        elif case == 'capture_proof_absent':
+            capture.pop('capture_proof')
+        else:
+            capture['capture_proof']['scope'] = history_walk.scope(2, capture['cohort_id'])
+        state._write(store.db, 1, capture)
+    else:
+        kind, job_state = case.split('_')
+        store.job_add_tx(kind, 1, 99)
+        store.db.execute('UPDATE fetch_jobs SET state=? WHERE project_id=1 AND kind=? AND message_id=99',
+                         (job_state, kind))
+    actual = state.acquisition_status(store.db, 1)
+    assert actual['complete'] is False and actual['signature'] != baseline['signature']
+    assert store.db.in_transaction
+    store.db.rollback()
+
+
+def test_acquisition_scope_and_other_patient_writes_do_not_change_evidence(store):
+    store.upsert_patient_info(_unread_patient(2), is_archived=False, notify_new=True,
+                              observation_ts=BOUNDARY)
+    _ready_acquisition(store, 1)
+    _ready_acquisition(store, 2)
+    store.db.execute('BEGIN')
+    before = state.acquisition_status(store.db, 1)
+    other = state.acquisition_status(store.db, 2)
+    assert before['complete'] and other['complete'] and before['signature'] != other['signature']
+    store.db.execute("UPDATE patients SET fetch_state='failed' WHERE project_id=2")
+    assert state.acquisition_status(store.db, 1) == before
+    assert not state.acquisition_status(store.db, 2)['complete']
+    assert not state.acquisition_status(store.db, 999)['complete']
+    with pytest.raises(ValueError, match='history_scope_invalid'):
+        state.acquisition_status(store.db, True)
+    assert store.db.in_transaction
+    store.db.rollback()
+
+
+def test_legacy_without_initial_import_requires_full_fetch_floor_and_jobs(store):
+    store.upsert_patient_info(_unread_patient(2))
+    with store.db:
+        store.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 "
+                         "WHERE project_id=2")
+    store.db.execute('BEGIN')
+    try:
+        assert state.load(store.db, 2) is None
+        assert state.acquisition_status(store.db, 2)['complete'] is True
+        store.job_add_tx('history', 2)
+        assert not state.acquisition_status(store.db, 2)['complete']
+    finally:
+        store.db.rollback()

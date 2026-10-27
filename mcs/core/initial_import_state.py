@@ -5,7 +5,7 @@ import re
 import uuid
 
 import history_walk
-from mcs_util import loads_dict
+from mcs_util import loads_dict, payload_hash
 
 META_KEY = "_initial_import"
 _FIELDS = frozenset({"version", "cohort_id", "boundary_ts", "boundary_source",
@@ -229,6 +229,39 @@ def message_ids(db, project_id):
 def progress(db, project_id):
     """Read the small capture snapshot; extraction completion is owned separately."""
     return load(db, project_id)
+
+
+def acquisition_status(db, project_id):
+    """Bind whole-history acquisition evidence to the caller's read snapshot."""
+    if not db.in_transaction:
+        raise RuntimeError("history_snapshot_required")
+    if type(project_id) is not int or project_id <= 0:
+        raise ValueError("history_scope_invalid")
+    row = db.execute("SELECT fetch_state,fetch_reason,history_floor,"
+                     "CASE WHEN length(CAST(initial_import AS BLOB))<=16384 THEN initial_import END,"
+                     "length(CAST(initial_import AS BLOB)) FROM patients WHERE project_id=?",
+                     (project_id,)).fetchone()
+    if row is None:
+        return {"complete": False, "signature": payload_hash([project_id, "missing"])}
+    fetch, reason, floor, raw, size = row
+    valid = size is None or type(size) is int and size <= 16384
+    capture = None
+    if valid:
+        try:
+            capture = load(db, project_id)
+        except (ValueError, TypeError, KeyError):
+            valid = False
+    jobs = list(db.execute("SELECT kind,COUNT(*),MAX(job_id),SUM(state IS NOT 'done') "
+                           "FROM fetch_jobs WHERE project_id=? AND kind IN ('history','thread','reply') "
+                           "GROUP BY kind ORDER BY kind", (project_id,)))
+    complete = bool(valid and fetch == "complete" and not reason and floor == -1
+                    and (capture is None or capture.get("capture_phase") == "complete"
+                         and history_walk.capture_proof(capture.get("capture_proof"), project_id,
+                                                        capture["cohort_id"]))
+                    and not any(row[3] for row in jobs))
+    return {"complete": complete,
+            "signature": payload_hash([project_id, fetch, reason, floor, raw, size, valid,
+                                       [list(row) for row in jobs]])}
 
 
 def refresh_capture_tx(ledger, project_id, now):

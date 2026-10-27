@@ -52,6 +52,9 @@ def seed(led, mid=1, pid=1, body='生活環境: 合成の居住記録。', state
     led.save_messages([_message(mid, body, state, project_id=pid)])
     led.db.execute('UPDATE messages SET first_seen=? WHERE message_id=?',
                    (stamp('2026-10-17T22:00:00'), mid))
+    # The normal synthetic fixture has exhausted history; partial acquisition is explicit.
+    led.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 WHERE project_id=?",
+                   (pid,))
     led.db.commit()
 
 
@@ -63,10 +66,14 @@ def step(runtime, *, cfg=CFG, admit=lambda: True, seconds=600, **kw):
     return result
 
 
-def finish(runtime, limit=60, *, cfg=CFG):
+def finish(runtime, limit=60, *, cfg=CFG, waiting=False):
     for _ in range(limit):
         result = step(runtime, cfg=cfg)
         if result['status'] == 'complete':
+            assert not waiting, 'unfinished evidence must not be reported complete'
+            return
+        if waiting and result['status'] == 'deferred' and result.get('reason') == 'patient_context_waiting':
+            assert result['done'] == 0
             return
         assert result['status'] == 'progressed', result
     pytest.fail('finite synthetic workload did not finish')
@@ -298,7 +305,7 @@ def test_patients_take_turns_and_incomplete_records_not_counted_analyzed(runtime
     assert document(led, pid=1) and document(led, pid=2) is None
     assert step(runtime)['lane'] == 'A'
     assert document(led, pid=2)
-    finish(runtime)
+    finish(runtime, waiting=True)
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
     proof = context_refresh.inference_coverage(led.db, 1, CFG)
     assert not proof['complete'] and proof['sources']['incomplete'] == 1
@@ -398,7 +405,7 @@ def test_commit_lock_wait_can_cross_midnight_without_resending(runtime, monkeypa
 
     def acquire():
         tries.append(1)
-        return None if len(tries) == 1 else os.open(os.devnull, os.O_RDONLY)
+        return None if len(tries) == 2 else os.open(os.devnull, os.O_RDONLY)
 
     def sleep(seconds):
         clock.wall += seconds
@@ -407,7 +414,7 @@ def test_commit_lock_wait_can_cross_midnight_without_resending(runtime, monkeypa
     monkeypatch.setattr(context_refresh, 'acquire_run_lock', acquire)
     monkeypatch.setattr(context_refresh.time, 'sleep', sleep, raising=False)
     assert step(runtime)['status'] == 'progressed'
-    assert len(tries) == 2 and len(calls) == 1 and document(led)
+    assert len(tries) == 3 and len(calls) == 1 and document(led)
 
 
 def test_ordinary_refetch_timestamp_does_not_regenerate(runtime):
@@ -495,8 +502,9 @@ def test_changed_source_resets_exhausted_retries(runtime, monkeypatch):
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', original)
     assert step(runtime)['status'] == 'progressed'
     assert document(led, context_refresh.PROGRESS)['attempts'] == 0
-    finish(runtime)
+    finish(runtime, waiting=True)
     assert document(led)
+    assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']
 
 
 def test_revoked_source_is_not_generated_or_displayed(runtime):
@@ -609,7 +617,7 @@ def test_incomplete_body_states_are_not_counted_as_analyzed(runtime, state):
     seed(led)
     with led.db:
         led.db.execute('UPDATE messages SET body_state=? WHERE message_id=1', (state,))
-    finish(runtime)
+    finish(runtime, waiting=True)
     coverage = document(led)['coverage']
     assert coverage['fetched'] == 1 and coverage['incomplete'] == 1
     assert coverage['analyzed'] == 0 and not calls
@@ -893,13 +901,14 @@ def test_status_counts_only_patients_the_worker_would_work_on(runtime, reason):
     led.db.execute("UPDATE patients SET fetch_reason='timeout' WHERE project_id=3")
     led.db.commit()
     assert context_refresh.status(led.db, CFG)['initial_pending'] == 2
-    finish(runtime)
+    finish(runtime, waiting=True)
     assert calls
     assert {r[0] for r in led.db.execute('SELECT DISTINCT project_id FROM artifacts WHERE kind=?',
                                        (context_refresh.SCAN,))} == {1, 3}
     assert document(led, pid=2) is None
     counts = context_refresh.status(led.db, CFG)
-    assert counts['initial_pending'] == 0 and counts['complete'] == 2
+    assert counts['initial_pending'] == 0 and counts['complete'] == 1
+    assert not context_refresh.inference_coverage(led.db, 3, CFG)['complete']
 
 
 def test_turn_wait_expiry_defers_without_charging_the_patient(monkeypatch):
@@ -920,14 +929,14 @@ def test_finished_inference_waits_briefly_for_the_run_lock(runtime, monkeypatch)
     tries = []
     def contended():
         tries.append(1)
-        return os.open(os.devnull, os.O_RDONLY) if len(tries) > 3 else None
+        return os.open(os.devnull, os.O_RDONLY) if len(tries) == 1 or len(tries) > 4 else None
     def sleep(seconds):
         clock.mono += seconds
         clock.wall += seconds
     monkeypatch.setattr(context_refresh, 'acquire_run_lock', contended)
     monkeypatch.setattr(context_refresh.time, 'sleep', sleep, raising=False)
     assert step(runtime)['status'] == 'progressed'
-    assert len(calls) == 1 and len(tries) == 4 and document(led)
+    assert len(calls) == 1 and len(tries) == 5 and document(led)
     # a holder that never yields costs at most the short cap, not the unit deadline
     seed(led, mid=2, pid=2)
     monkeypatch.setattr(context_refresh, 'acquire_run_lock', lambda: None)

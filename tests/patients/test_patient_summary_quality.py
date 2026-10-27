@@ -345,7 +345,10 @@ def test_quality_owner_calls_jev_once_and_rechecks_saved_pass(runtime, monkeypat
     assert len(led.artifacts('semantic_usage')) == 1
     status, identity = refresh._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
     assert status == 'passed' and len(sends) == 1 and refresh._quality_passed(led.db, 1, identity)
-    [answer] = led.artifacts(refresh.QUALITY)
+    answers = led.artifacts(refresh.QUALITY)
+    assert {json.loads(row['meta'])['fact_id'] for row in answers} == set(identity['fact_ids'])
+    assert len(answers) == len(identity['fact_ids']) == 2
+    answer = answers[0]
     led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (answer['artifact_id'],))
     led.db.commit()
     with pytest.raises(ValueError, match='patient_summary_quality_incomplete'):
