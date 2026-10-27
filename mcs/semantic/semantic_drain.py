@@ -860,7 +860,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     bundle["capture_origin"] = origin.get("source")
     if current_artifact(ledger.db, KIND_BUNDLE, root, fp, policy) is None:
         ledger.artifact_add(
-            KIND_BUNDLE, json.dumps(bundle, ensure_ascii=False),
+            KIND_BUNDLE, json.dumps(bundle, ensure_ascii=False, separators=(',', ':')),
             project_id=pid, message_id=root, model=jev.JEV_MODEL,
             meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION})
     all_targets = [t for t in (targets or [root])

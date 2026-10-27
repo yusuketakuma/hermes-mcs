@@ -499,6 +499,66 @@ def test_replay_dedup_current_fp(tmp_path):
     db.close()
 
 
+@pytest.mark.parametrize("legacy_content", [False, True])
+def test_bundle_compact_writer_and_existing_json_retry(tmp_path, legacy_content):
+    import pattern_cards
+
+    db = _ledger(tmp_path)
+    try:
+        patient = _patient(db)
+        body = BODY + ' 引用 "合成  空白"'
+        parent = _message(1, body=body)
+        parent.sender_name = "合成 職員"
+        parent.organization = "合成 施設"
+        parent.replies = [_message(2, parent=1)]
+        patient.messages = [parent]
+        db.save_patient(patient, notify={"source": "unread"}, semantic=True)
+        payload = json.loads(db.job_pending("semantic", 1, 1)["payload"])
+        expected = semantic_store.thread_bundle(db.db, 1, 1, payload["targets"])
+        origin = payload.get("origin") if isinstance(payload.get("origin"), dict) else {}
+        expected["origin_event_id"] = origin.get("event_id")
+        expected["capture_origin"] = origin.get("source")
+
+        result = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
+                                        time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)
+        assert result["done"] == 1
+        [row] = db.artifacts("semantic_bundle", message_id=1)
+        content = json.loads(row["content"])
+        meta = json.loads(row["meta"])
+        assert content == expected
+        assert row["content"] == json.dumps(expected, ensure_ascii=False, separators=(",", ":"))
+        assert content["members"][0]["body_original"] == body
+        assert meta["fingerprint"] == expected["source_fingerprint"]
+        assert semantic_store.bundle_fingerprint(expected["members"]) == expected["source_fingerprint"]
+
+        compact_names = pattern_cards._generic_names(db.db, {"artifacts"})
+        assert {"合成 職員", "合成 施設"} <= compact_names
+        old_json = json.dumps(expected, ensure_ascii=False)
+        assert old_json != row["content"] and json.loads(old_json) == content
+        db.db.execute("SAVEPOINT legacy_bundle")
+        db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (old_json, row["artifact_id"]))
+        assert pattern_cards._generic_names(db.db, {"artifacts"}) == compact_names
+        db.db.execute("ROLLBACK TO legacy_bundle")
+        db.db.execute("RELEASE legacy_bundle")
+
+        if legacy_content:
+            with db.db:
+                db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (old_json, row["artifact_id"]))
+        before = [tuple(r) for r in db.db.execute(
+            "SELECT artifact_id,content,meta FROM artifacts WHERE kind='semantic_bundle' ORDER BY artifact_id")]
+        db.semantic_seed(1, [1, 2], {"source": "replay", "notification_free": True})
+        assert db.job_pending("semantic", 1, 1)["state"] == "pending"
+        replay = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
+                                        time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)
+        assert replay["done"] == 1
+        after = [tuple(r) for r in db.db.execute(
+            "SELECT artifact_id,content,meta FROM artifacts WHERE kind='semantic_bundle' ORDER BY artifact_id")]
+        assert after == before and len(after) == 1
+        assert json.loads(after[0][1]) == expected
+    finally:
+        db.close()
+
+
 def test_loop_candidate_no_request_write(tmp_path):
     db = _seeded(tmp_path)
 
