@@ -4,21 +4,26 @@ import json
 import pytest
 
 import extract_llm
+import inference_dependency_loss
 from common_testkit import ledger_fixture
 from extract_testkit import _hash, _message
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 db = ledger_fixture(name="db")
 
 
-def _seed_thin(db, mid=2):
+def _seed_thin(db, mid=2, *, current=False):
     db.save_messages([_message(
         mid=mid, body='合成:発熱が持続しています。' * 30, project_id=2)])
+    meta = {'hash': _hash(db, mid), 'extract_version': extract_llm.EXTRACT_VERSION}
+    if current:
+        meta.update({VERSION_KEY: CURRENT_VERSION,
+                     'source_binding': inference_dependency_loss.source_binding(db.db, 2, mid)})
     db.artifact_add(
         'extract_llm', json.dumps({'urgency': 'routine'}),
         project_id=2, message_id=mid,
-        meta={'hash': _hash(db, mid),
-              'extract_version': extract_llm.EXTRACT_VERSION})
+        meta=meta)
 
 
 def _fail_extraction(monkeypatch):
@@ -119,7 +124,7 @@ def test_prose_only_change_is_not_quality_improvement():
 @pytest.mark.parametrize("result", [None, {}], ids=["failed", "unenriched"])
 def test_thin_retry_preserves_legacy_source_without_project(
         db, monkeypatch, result):
-    _seed_thin(db)
+    _seed_thin(db, current=True)
     db.db.execute("UPDATE artifacts SET project_id=NULL")
     db.db.commit()
     monkeypatch.setattr(extract_llm, "llm_extract",
@@ -132,6 +137,22 @@ def test_thin_retry_preserves_legacy_source_without_project(
     assert json.loads(rows[0]["content"])["urgency"] == "routine"
     assert json.loads(rows[0]["meta"])["thin_retried"] is True
     assert extract_llm.run_pending(db, budget_s=300)["selected"] == 0
+
+
+def test_failed_reprocessing_preserves_older_null_scoped_artifact(db, monkeypatch):
+    _seed_thin(db)
+    db.db.execute("UPDATE artifacts SET project_id=NULL")
+    db.db.commit()
+    old = db.artifacts("extract_llm", message_id=2)[0]
+    before, old_id, old_meta = tuple(old), old["artifact_id"], old["meta"]
+    _fail_extraction(monkeypatch)
+    result = extract_llm.run_pending(db, budget_s=300)
+    rows = db.artifacts("extract_llm", message_id=2)
+    assert result["failed"] == 1
+    assert tuple(next(row for row in rows if row["artifact_id"] == old_id)) == before
+    assert VERSION_KEY not in json.loads(old_meta)
+    current = [json.loads(row["meta"]) for row in rows if row["artifact_id"] != old_id]
+    assert current and all(meta.get("error") is True and meta.get(VERSION_KEY) == CURRENT_VERSION for meta in current)
 
 
 def test_configured_local_llm_is_used_for_every_extract_probe(monkeypatch):

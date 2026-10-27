@@ -1,5 +1,6 @@
 """Fully synthetic rule extraction repair and minimum-runtime date regressions."""
 import json
+from itertools import chain, repeat
 
 import pytest
 
@@ -66,11 +67,18 @@ def test_rule_metadata_repair_keeps_old_artifact_when_deadline_cuts_before_repla
         with db.db:
             db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (raw, old))
         before = db.artifacts("extract_v1", message_id=1)
-        clock = iter((0, 2))
+        clock = chain((0, 2), repeat(2))
         monkeypatch.setattr(extract.time, "monotonic", lambda: next(clock))
         assert extract.run_pending(db, deadline=1) == {"done": 0, "pids": []}
         assert db.artifacts("extract_v1", message_id=1) == before
         assert extract.run_pending(db) == {"done": 1, "pids": [1]}
+        rows = db.artifacts("extract_v1", message_id=1)
+        prior = next(row for row in rows if row["artifact_id"] == old)
+        assert tuple(prior) == tuple(before[0])
+        current = [row for row in rows if row["artifact_id"] != old]
+        assert len(current) == 1
+        assert json.loads(current[0]["meta"])["source_binding"] == inference_dependency_loss.source_binding(db.db, 1, 1)
+        assert json.loads(current[0]["meta"])[VERSION_KEY] == CURRENT_VERSION
     finally:
         db.close()
 

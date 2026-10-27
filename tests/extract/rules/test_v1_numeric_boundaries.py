@@ -47,28 +47,56 @@ def test_supported_complete_readings_remain_available(body, values):
     assert clinical_values.patient_vitals(values, body) == values
 
 
-def test_old_rollup_prefix_is_rechecked_readonly_without_erasing_profile(tmp_path):
+def test_old_rollup_prefix_is_rechecked_readonly_without_erasing_profile(tmp_path, monkeypatch):
     import json
+    import extract_llm
+    import inference_dependency_loss
     import rollup
-    from extract_testkit import _ledger, _message, _hash
+    from extract_testkit import _ledger, _message
 
+    monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *args, **kwargs: None)
     store = _ledger(tmp_path)
     try:
         store.ensure_patient(1)
+        with store.db:
+            store.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,"
+                             "history_floor=-1,karte_id=100 WHERE project_id=1")
+        store.karte_summary_store(1, 100, {"comment": "生活環境：合成プロフィール",
+                                         "updated_at": "2032-06-01T09:00:00+09:00"})
         store.save_messages([_message(body="本人の体温36.55℃")])
-        store.artifact_add("extract_llm", json.dumps({"vitals": {"bt": 36.5}}),
-                           project_id=1, message_id=1,
-                           meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(store)})
-        cached = {VERSION_KEY: CURRENT_VERSION, "latest_vitals": {"at": "old", "bt": 36.5},
-                  "patient_context": {"memo": {"living": ["合成プロフィール"]}}}
+        source = dict(store.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+        source["_source_binding"] = inference_dependency_loss.source_binding(store.db, 1, 1)
+        source["_target"] = ("", extract_llm.resolved_model({}))
+        integrity = {"validation": {"items_dropped": 0, "evidence_dropped": 0}, "completeness_chunks": 1,
+                     "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}
+        # Simulate a source-bound bad historic prefix even if a writer once
+        # marked the extraction complete: the reader must check the source.
+        assert extract_llm._replace_current(store, source, json.dumps({"vitals": {"bt": 36.5}}),
+                                            integrity=integrity)
+        cached = {VERSION_KEY: CURRENT_VERSION, "project_id": 1,
+                  "latest_vitals": {"at": "old", "bt": 36.5},
+                  "patient_context": {"memo": {"living": ["架空のキャッシュ値"]}}}
+        meta = {VERSION_KEY: CURRENT_VERSION, "period_check_version": 7,
+                "projection_version": rollup.PROJECTION_VERSION}
         before = [tuple(row) for row in store.db.execute("SELECT * FROM artifacts")]
         store.db.execute("PRAGMA query_only=ON")
-        result = rollup.current_cached_refs(store.db, 1, cached,
-            {VERSION_KEY: CURRENT_VERSION, "period_check_version": 7,
-             "projection_version": rollup.PROJECTION_VERSION})
-        assert "latest_vitals" not in result
-        assert result["patient_context"] == cached["patient_context"]
-        assert [tuple(row) for row in store.db.execute("SELECT * FROM artifacts")] == before
+        store.db.execute("BEGIN")
+        try:
+            result = rollup.current_cached_refs(store.db, 1, cached, meta, cfg={})
+            assert "latest_vitals" not in result
+            assert result["measurement_coverage"]["complete"] is True
+            assert result["patient_context"]["memo"]["living"][0]["text"] == "合成プロフィール"
+            assert "架空のキャッシュ値" not in json.dumps(result, ensure_ascii=False)
+            assert [tuple(row) for row in store.db.execute("SELECT * FROM artifacts")] == before
+            assert store.db.in_transaction
+            unknown = rollup.current_cached_refs(store.db, 1, cached, meta)
+            assert unknown["rollup_freshness"] == "unknown"
+            assert not unknown["measurement_coverage"]["complete"]
+            assert store.db.in_transaction
+        finally:
+            store.db.rollback()
     finally:
         store.close()
 

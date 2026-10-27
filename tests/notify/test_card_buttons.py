@@ -449,36 +449,95 @@ def test_summary_without_rollup_says_so(led, monkeypatch):
 
 
 def test_summary_with_rollup_and_coverage(led, monkeypatch):
+    import hashlib
+    import extract
+    import rollup
+
     monkeypatch.setitem(CFG, "extract", {"patient_context_nightly": {"enabled": False}})
     spec = _delivered_card(led)
     led.db.execute("UPDATE patients SET history_floor=-1,"
                    "fetch_state='incomplete',fetch_reason='network_error'")
     led.db.execute("UPDATE messages SET reply_count=3 WHERE message_id=100")
-    led.db.execute(
+    legacy = {"medications": [
+        {"name": "アムロジピン", "dose": "5mg", "freq": "1日1回",
+         "last": "2026-09-20"}],
+        "current_med_period": {"start": "2026-09-01", "end": "2026-09-28"},
+        "latest_vitals": {"at": "2026-09-22", "sbp": 128, "dbp": 70, "bt": 36.5},
+        "next_planned": "10/3 訪問"}
+    legacy_json = json.dumps(legacy, ensure_ascii=False)
+    old_id = led.db.execute(
         "INSERT INTO artifacts(kind,project_id,content,model,meta,"
         "created_at) VALUES('patient_rollup',1,?,'rules-v1','{}',?)",
-        (json.dumps({"medications": [
-            {"name": "アムロジピン", "dose": "5mg", "freq": "1日1回",
-             "last": "2026-09-20"}],
-            "current_med_period": {"start": "2026-09-01",
-                                   "end": "2026-09-28"},
-            "latest_vitals": {"at": "2026-09-22", "sbp": 128, "dbp": 70,
-                              "bt": 36.5},
-            "next_planned": "10/3 訪問"}, ensure_ascii=False), NOW))
+        (legacy_json, NOW)).lastrowid
     _add_request(led, title="血圧記録の確認", assignee="山田", due="2026-10-01")
     body = _click(led, spec, "summary")["body"]
     assert ("履歴取得: 完了記録あり · 直近の取得は未完了（通信エラー）"
             " · 返信未取得 1件") in body
-    assert "処方期間の候補: 2026-09-01〜2026-09-28" in body
-    assert "・アムロジピン 5mg 1日1回（最終言及 2026-09-20）" in body
-    assert "バイタル: BP 128/70  BT 36.5（2026-09-22）" in body
-    assert "■ 次回予定: 10/3 訪問" in body
+    # Legacy cache alone is no evidence of any of these observations.
+    assert "処方期間の候補: 2026-09-01〜2026-09-28" not in body
+    assert "アムロジピン" not in body
+    assert "BP 128/70" not in body and "BT 36.5" not in body
+    assert "■ 次回予定: 10/3 訪問" not in body
+    assert "■ バイタル: 未確認" in body
     assert "血圧記録の確認 — 担当 山田 — 期限 2026-10-01" in body
-    led.db.execute("UPDATE artifacts SET content=? WHERE kind='patient_rollup'",
-                   (json.dumps({"medications": []}),))
+    assert led.db.execute("SELECT content FROM artifacts WHERE artifact_id=?", (old_id,)).fetchone()[0] == legacy_json
+
+    # A real rule writer and rollup rebuild can recover source-bound dates;
+    # incomplete acquisition still must not promote stale vital values.
+    source = ("本人はアムロジピン5mgを内服中です。処方期間は9/1-9/28です。"
+              "処方内容についてスタッフ間で情報を共有しました。"
+              "次回10/3訪問予定です。")
+    _msg(led, 102, body=source)
+    led.db.execute("UPDATE messages SET body_html=?,content_hash=? WHERE message_id=102",
+                   (source, hashlib.sha256(source.encode()).hexdigest()))
     led.db.commit()
-    body = _click(led, _spec(led), "summary")["body"]
+    monkeypatch.setattr(extract.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(extract, "_WRITER_STATE", (False, 1))
+    assert extract.run_pending(led)["done"] >= 3
+    rule = led.db.execute("SELECT content,meta FROM artifacts WHERE kind='extract_v1' AND message_id=102").fetchone()
+    parsed = json.loads(rule["content"])
+    assert parsed["med_periods"][0]["start"] == "2026-09-01"
+    assert parsed["med_periods"][0]["end"] == "2026-09-28"
+    assert parsed["next_planned"] == "2026-10-03"
+    assert json.loads(rule["meta"])["source_binding"]
+    rollup.rebuild(led, 1, cfg=CFG)
+    body = _click(led, spec, "summary")["body"]
+    assert "処方期間の候補: 2026-09-01〜2026-09-28" in body
+    assert "アムロジピン 5mg" in body
+    assert "■ 次回予定: 2026-10-03" in body
+    assert "血圧記録の確認 — 担当 山田 — 期限 2026-10-01" in body
+    assert "直近の取得は未完了（通信エラー）" in body
     assert "■ バイタル: 未確認" in body and "記録なし" not in body
+    assert led.db.execute("SELECT content FROM artifacts WHERE artifact_id=?", (old_id,)).fetchone()[0] == legacy_json
+
+    # Complete acquisition and real source-bound LLM artifacts allow a
+    # dated patient measurement; unparsed posts do not prove coverage.
+    import inference_dependency_loss
+    vital_source = "本人の2026-09-20測定で血圧128/70、体温36.5℃でした。"
+    _msg(led, 103, body=vital_source)
+    led.db.execute("UPDATE messages SET body_html=?,content_hash=?,posted_at=? WHERE message_id=103",
+                   (vital_source, hashlib.sha256(vital_source.encode()).hexdigest(),
+                    "2026-09-21T23:15:00+09:00"))
+    led.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL WHERE project_id=1")
+    led.db.execute("UPDATE messages SET reply_count=1 WHERE message_id=100")
+    led.db.commit()
+    monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *args, **kwargs: None)
+    integrity = {"validation": {"items_dropped": 0, "evidence_dropped": 0},
+                 "completeness_chunks": 1,
+                 "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}
+    for mid in (100, 101, 102, 103):
+        row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone())
+        row["_source_binding"] = inference_dependency_loss.source_binding(led.db, 1, mid)
+        row["_target"] = ("", extract_llm.resolved_model(CFG))
+        content = {"vitals": {"sbp": 128, "dbp": 70, "bt": 36.5}} if mid == 103 else {}
+        assert extract_llm._replace_current(led, row, json.dumps(content), integrity=integrity)
+    rollup.rebuild(led, 1, cfg=CFG)
+    body = _click(led, spec, "summary")["body"]
+    assert "履歴取得: 完了記録あり" in body
+    assert "バイタル: BP 128/70  BT 36.5（2026-09-21T23:15:00+09:00）" in body
+    assert "血圧記録の確認 — 担当 山田 — 期限 2026-10-01" in body
+    assert led.db.execute("SELECT content FROM artifacts WHERE artifact_id=?", (old_id,)).fetchone()[0] == legacy_json
 
 
 @pytest.mark.parametrize("ks, line", [
@@ -515,7 +574,7 @@ def test_summary_karte_summary_line(led, ks, line):
 
 def _pending_ids(led):
     return {r[0] for r in led.db.execute(
-        f"SELECT m.message_id FROM messages m WHERE {extract_llm.pending_pred()}")}
+        f"SELECT m.message_id FROM messages m WHERE {extract_llm.pending_pred(led.db)}")}
 
 
 def _report(led, root, artifact_id, mid=101, field="meds", n=1):

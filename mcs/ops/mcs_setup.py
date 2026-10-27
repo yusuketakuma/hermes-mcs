@@ -1042,7 +1042,7 @@ def _extract_queue_warnings(db):
     """Yield extraction backlog warnings using the worker's shared predicate."""
     import extract_llm
     backlog = db.execute(
-        "SELECT COUNT(*) FROM messages m WHERE " + extract_llm.pending_pred()
+        "SELECT COUNT(*) FROM messages m WHERE " + extract_llm.pending_pred(db)
     ).fetchone()[0]
     if backlog > 500:
         yield (f"AI解析の待機は{backlog}件です。"

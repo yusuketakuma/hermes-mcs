@@ -7,7 +7,9 @@ import json
 import pytest
 
 import extract_llm
+import inference_dependency_loss
 from extract_testkit import _hash, _ledger, _message
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 # v4 vitals guard accepts a full-width decimal point (synthetic).
@@ -54,20 +56,42 @@ def test_pulse_not_relabelled_as_temperature():
 def test_reply_counts_as_fact_in_sql_thin_check(tmp_path, monkeypatch):
     db = _ledger(tmp_path)
     try:
-        body = '合成の長い本文です。' * 30
-        db.save_messages([_message(body=body)])
-        content = {'symptoms': [{'text': '咳'}],
-                   'reply': {'kind': 'ack', 'evidence': '合成'}}
+        body = '咳が続いています。承知しました。' + '背景を共有します。' * 35
+        root_body = '咳の状況をご連絡ください。'
+        db.save_messages([_message(mid=1, body=root_body),
+                          _message(mid=2, parent_id=1, body=body)])
+        content = extract_validation.validate(
+            {'symptoms': [{'text': '咳', 'status': 'ongoing', 'negated': False,
+                           'evidence': '咳が続いています'}],
+             'reply': {'kind': 'ack', 'evidence': '承知しました'}}, body, ctx=True)
+        assert content['symptoms'][0]['evidence'] == '咳が続いています'
+        assert content['symptoms'][0]['unverified'] is True
+        assert content['reply'] == {'kind': 'ack', 'evidence': '承知しました'}
+        assert len(extract_quality.facts(content)) == 2
         assert not extract_quality.is_thin(content, body)
-        db.artifact_add('extract_llm', json.dumps(content), project_id=1,
-                        message_id=1,
-                        meta={'hash': _hash(db),
-                              'extract_version': extract_llm.EXTRACT_VERSION})
+        db.artifact_add('extract_llm', json.dumps({'summary': root_body}), project_id=1, message_id=1,
+                        meta={VERSION_KEY: CURRENT_VERSION, 'hash': _hash(db, 1),
+                              'extract_version': extract_llm.EXTRACT_VERSION,
+                              'source_binding': inference_dependency_loss.source_binding(db.db, 1, 1)})
+        aid = db.artifact_add('extract_llm', json.dumps(content), project_id=1, message_id=2,
+                        meta={VERSION_KEY: CURRENT_VERSION, 'hash': _hash(db, 2), 'ctx': True,
+                              'extract_version': extract_llm.EXTRACT_VERSION,
+                              'source_binding': inference_dependency_loss.source_binding(db.db, 1, 2)})
+        sql = 'SELECT (' + extract_llm._thin_pending_sql(db.db) + ') FROM messages m WHERE m.message_id=2'
+        assert db.db.execute(sql).fetchone()[0] is None
+        without_reply = {key: value for key, value in content.items() if key != 'reply'}
+        assert extract_quality.is_thin(without_reply, body)
+        with db.db:
+            db.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(without_reply), aid))
+        assert db.db.execute(sql).fetchone()[0] == aid
+        with db.db:
+            db.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(content), aid))
         calls = []
         monkeypatch.setattr(extract_llm, 'llm_extract',
                             lambda *a, **kw: calls.append(1))
         monkeypatch.setattr(extract_llm, '_llm_up', lambda **kw: True)
         extract_llm.run_pending(db, limit=10, budget_s=30)
         assert calls == []
+        assert json.loads(db.db.execute('SELECT content FROM artifacts WHERE artifact_id=?', (aid,)).fetchone()[0]) == content
     finally:
         db.close()

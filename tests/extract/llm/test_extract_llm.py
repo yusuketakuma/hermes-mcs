@@ -2484,7 +2484,7 @@ def test_malformed_old_metadata_is_preserved_without_poisoning_current_retry(tmp
 
     assert calls == ["完全合成の記録です"]
     assert result["done"] == 1
-    assert db.db.execute("SELECT 1 FROM messages m WHERE " + extract_llm.pending_pred()).fetchone() is None
+    assert db.db.execute("SELECT 1 FROM messages m WHERE " + extract_llm.pending_pred(db.db)).fetchone() is None
     rows = db.artifacts("extract_llm", message_id=1)
     assert len(rows) == 2 and sum(row["meta"] == "{broken" for row in rows) == 1
     current = [row for row in rows if row["meta"] != "{broken"]

@@ -44,11 +44,11 @@ def test_same_internal_version_legacy_is_pending_and_preserved_after_success(sou
     led, row = source
     old = add(led, row)
     assert not llm._current(led, 1, row["content_hash"])
-    assert led.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+    assert led.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(led.db)).fetchone()
     assert llm._replace_current(led, row, '{"summary":"合成の経過報告"}')
     assert led.db.execute("SELECT 1 FROM artifacts WHERE artifact_id=?", (old,)).fetchone()
     assert llm._current(led, 1, row["content_hash"])
-    assert not led.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+    assert not led.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(led.db)).fetchone()
     current = led.db.execute("SELECT a.meta FROM artifacts a JOIN messages m USING(message_id) "
         "WHERE a.kind=? " + mcs_queries.current_extract_pred(), (llm.KIND,)).fetchall()
     assert len(current) == 1
@@ -87,7 +87,7 @@ def test_old_hold_receipt_does_not_hold_new_generation(source):
         "hash": row["content_hash"], "prior_artifact_id": prior, "target_version": llm.EXTRACT_VERSION,
         "contract": llm._upgrade_contract()})
     assert not led.db.execute("SELECT 1 FROM messages m WHERE EXISTS (" + llm._hold_sql() + ")").fetchone()
-    assert led.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+    assert led.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(led.db)).fetchone()
 
 
 def test_legacy_success_is_protection_baseline_but_never_current(source):
@@ -100,7 +100,7 @@ def test_legacy_success_is_protection_baseline_but_never_current(source):
     receipt = led.artifacts(llm.UPGRADE_KIND)[0]
     assert json.loads(receipt["meta"])[inference.VERSION_KEY] == inference.CURRENT_VERSION
     assert json.loads(receipt["content"])["prior_artifact_id"] == prior
-    assert not led.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+    assert not led.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(led.db)).fetchone()
 
 
 @pytest.mark.parametrize("invalid", ["project", "hash", "snippet", "empty", "error", "content_error", "malformed"])
@@ -504,7 +504,7 @@ def test_event_record_and_legacy_projection_count_as_one_thin_fact(source):
     aid = add(led, row, version=inference.CURRENT_VERSION, content={"events": ["discharge"],
         "event_records": [{"kind": "discharge", "subject": "patient", "status": "current",
             "negated": False, "evidence": "本人は退院しました。"}]})
-    assert led.db.execute("SELECT (" + llm._thin_pending_sql() + ") FROM messages m").fetchone()[0] == aid
+    assert led.db.execute("SELECT (" + llm._thin_pending_sql(led.db) + ") FROM messages m").fetchone()[0] == aid
 
 
 def _adoption_witness(led):
@@ -663,7 +663,7 @@ def test_effective_source_change_never_revives_an_old_result_or_checkpoint(sourc
     assert not llm._replace_current(led,row,'{}')
     assert not llm._persist_chunks(led,row,{0:{'summary':'古いoccurrenceの候補'}})
     assert llm.progress_for_message(led.db,fresh,model=llm.MODEL)['state']!='complete'
-    assert led.db.execute('SELECT 1 FROM messages m WHERE '+llm.pending_pred()).fetchone()
+    assert led.db.execute('SELECT 1 FROM messages m WHERE '+llm.pending_pred(led.db)).fetchone()
     assert old_ids <= {r[0] for r in led.db.execute('SELECT artifact_id FROM artifacts')}
     assert llm._replace_current(led,fresh,'{}')  # A new valid empty result stays empty; no old-result fallback.
     current = led.db.execute('SELECT a.content FROM artifacts a JOIN messages m USING(message_id) '

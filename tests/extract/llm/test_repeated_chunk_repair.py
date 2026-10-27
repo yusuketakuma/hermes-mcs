@@ -74,8 +74,12 @@ def test_a_unique_chunk_can_repair_with_a_longer_quote(monkeypatch):
     monkeypatch.setattr(extract_llm, "_llm_call", answer)
     out = extract_llm.llm_extract("".join(pieces), chunk_size=len(pieces[0]))
     assert len(calls) == 4
-    assert out["symptoms"][0]["evidence"] == pieces[-1]
-    assert not out["symptoms"][0].get("unverified")
+    symptoms = out["symptoms"]
+    assert [item["evidence"] for item in symptoms] == pieces
+    for piece, item in zip(pieces, symptoms, strict=True):
+        quote = item["evidence"]
+        assert quote == piece and "".join(pieces).count(quote) == 1
+        assert not item.get("unverified")
 
 
 def test_completeness_repair_is_preserved_for_repeated_chunks(monkeypatch):

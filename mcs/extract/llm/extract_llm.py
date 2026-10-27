@@ -2145,7 +2145,30 @@ def _rerender_cards(ledger, project_id, message_id) -> None:
         print(json.dumps({"event": "card_rerender_failed", "error": type(error).__name__}), file=sys.stderr)
 
 
-def _thin_pending_sql() -> str:
+def _thin_fact_count(raw):
+    """Count with the Python thinness rules; invalid shapes get one repair."""
+    document = loads_dict(raw)
+    if document is None:
+        return 0
+    try:
+        return extract_quality.thin_fact_count(document)
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError, RecursionError):
+        # Existing SQL treated invalid shapes as zero: request at most the
+        # existing single quality repair, never claim quality passed.
+        return 0
+
+
+def _register_thin_fact_count(db):
+    """Register once on a borrowed connection without changing its transaction."""
+    try:
+        db.execute("SELECT mcs_thin_fact_count(NULL)").fetchone()
+    except sqlite3.OperationalError as error:
+        if "no such function: mcs_thin_fact_count" not in str(error):
+            raise
+        db.create_function("mcs_thin_fact_count", 1, _thin_fact_count, deterministic=True)
+
+
+def _thin_pending_sql(db) -> str:
     """A current, valid, same-version artifact that is under-extracted
     (<2 clinical assertions on a >=300-char body) and not retried
     yet — re-pends for ONE quality re-extract. Thinness is recomputed
@@ -2153,22 +2176,8 @@ def _thin_pending_sql() -> str:
     qualify without a backfill. Prefilter markers are excluded: a
     no-signal row is honest, not thin. The new row carries
     meta.thin_retried so a still-thin retry settles permanently."""
-    # Use the same clinical fields as the in-memory completeness check.
-    content, meta = json_or_null("t.content"), json_or_null("t.meta")
-    counts = [(f"CASE WHEN COALESCE(json_array_length({content},'$.event_records'),0)>0 THEN 0 "
-               f"ELSE COALESCE(json_array_length({content},'$.events'),0) END") if field == "events" else
-              f"COALESCE(json_array_length({content},'$.{field}'),0)"
-              for field in extract_quality._FACT_LIST_FIELDS]
-    counts.append(f"(SELECT COUNT(*) FROM json_each({content},'$.vitals'))")
-    counts.append(f"(SELECT COALESCE(SUM(json_array_length({json_or_null('value')},'$.details')),0) "
-                  f"FROM json_each({content},'$.patient_context'))")
-    for key in ("subject", "status", "measured_on", "condition"):
-        counts.append(f"(SELECT COUNT(*) FROM json_each({content},'$.labs') "
-                      f"WHERE json_type({json_or_null('value')},'$.{key}') IS NOT NULL)")
-    # _facts also counts a reply classification (reply.kind truthy).
-    counts.append(f"(CASE WHEN json_type({content},'$.reply')='object' "
-                  f"AND COALESCE(json_extract({content},'$.reply.kind'),'') "
-                  f"NOT IN ('',0) THEN 1 ELSE 0 END)")
+    _register_thin_fact_count(db)
+    meta = json_or_null("t.meta")
     return f"""SELECT t.artifact_id FROM artifacts t
         WHERE t.kind='{KIND}' AND t.message_id=m.message_id
           {current_extract_pred('t')}
@@ -2177,7 +2186,7 @@ def _thin_pending_sql() -> str:
           AND json_extract({meta},'$.thin_retried') IS NULL
           AND json_extract({meta},'$.human_fix') IS NULL
           AND length(m.body_text) >= {extract_quality._THIN_BODY_MIN}
-          AND ({' + '.join(counts)}) < {extract_quality._THIN_FACTS_MIN}
+          AND mcs_thin_fact_count(t.content) < {extract_quality._THIN_FACTS_MIN}
           ORDER BY t.artifact_id DESC LIMIT 1"""
 
 
@@ -2220,7 +2229,7 @@ def _has_kind(kind: str, alias: str, project: bool = False) -> str:
             f" AND {alias}.message_id=m.message_id{scope})")
 
 
-def pending_pred() -> str:
+def pending_pred(db) -> str:
     """Shared body-current extraction and quality-retry eligibility.
 
     Evaluated per stored message, so the JSON-heavy subqueries sit behind
@@ -2240,7 +2249,7 @@ def pending_pred() -> str:
              OR ({_has_kind('extract_qc', 'q0')}
                  AND EXISTS ({_qc_flagged_sql(val="1")}))
              OR (length(m.body_text) >= {extract_quality._THIN_BODY_MIN}
-                 AND EXISTS ({_thin_pending_sql()})))
+                 AND EXISTS ({_thin_pending_sql(db)})))
         AND NOT EXISTS (SELECT 1 FROM artifacts f
                         WHERE f.kind='{KIND}' AND f.message_id=m.message_id
                           {current_extract_pred('f')}
@@ -2343,26 +2352,32 @@ def _qc_feedback(ledger, src_artifact_id):
 
 
 def _next_retry(ledger, *, after: float | None = None) -> float | None:
-    """Earliest next_try among retriable error artifacts, or None when
+    """Earliest per-message retry among retriable error artifacts, or None when
     nothing is retriable (all remaining are permanent failures). With
     `after`, only next_try later than it count: a past-due row that stays
     unselected (other shard, gate) must not hide a later due time."""
-    safe_meta = json_or_null("meta")
+    safe_meta = json_or_null("a.meta")
     timestamp = f"json_extract({safe_meta},'$.next_try')"
-    sql = (f"SELECT MIN({timestamp}) FROM artifacts "
-           "WHERE kind=? AND " + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND json_valid(meta) "
+    timestamp_type = f"json_type({safe_meta},'$.next_try')"
+    finite = f"{timestamp} BETWEEN -{sys.float_info.max!r} AND {sys.float_info.max!r}"
+    sql = (f"SELECT MIN(retry_at) FROM (SELECT MAX({timestamp}) AS retry_at "
+           "FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+           "WHERE a.kind=? AND " + inference.current_meta_pred("a.meta", target=_INFERENCE_VERSION) + " AND json_valid(a.meta) "
            f"AND json_extract({safe_meta},'$.error')=1 "
            f"AND COALESCE(json_extract({safe_meta},'$.invalidated'),0)=0 "
            f"AND COALESCE(json_extract({safe_meta},'$.extract_version'),0)={EXTRACT_VERSION} "
-           f"AND COALESCE(json_extract({safe_meta},'$.attempts'),0) < 5 "
-           f"AND json_type({safe_meta},'$.next_try') IN ('integer','real') "
-           f"AND {timestamp} BETWEEN -{sys.float_info.max!r} AND {sys.float_info.max!r} "
-           "AND EXISTS (SELECT 1 FROM messages m WHERE m.message_id=artifacts.message_id "
-           "AND (artifacts.project_id IS NULL OR artifacts.project_id=m.project_id) "
-           f"AND m.content_hash=json_extract({safe_meta},'$.hash') AND m.body_state IS NOT 'deleted')")
+           "AND (a.project_id IS NULL OR a.project_id=m.project_id) "
+           f"AND m.content_hash=json_extract({safe_meta},'$.hash') AND m.body_state IS NOT 'deleted' "
+           f"AND (json_type({safe_meta},'$.attempts') IS NULL OR "
+           f"(json_type({safe_meta},'$.attempts')='integer' AND json_extract({safe_meta},'$.attempts')>=0)) "
+           "GROUP BY m.message_id "
+           f"HAVING MAX(COALESCE(json_extract({safe_meta},'$.attempts'),0))<5 "
+           f"AND MAX(CASE WHEN {timestamp_type} IS NULL THEN 0 "
+           f"WHEN {timestamp_type} IN ('integer','real') AND {finite} THEN 0 ELSE 1 END)=0) "
+           "WHERE retry_at IS NOT NULL")
     params: list = [KIND]
     if after is not None:
-        sql += f" AND {timestamp} > ?"
+        sql += " AND retry_at > ?"
         params.append(after)
     row = ledger.db.execute(sql, params).fetchone()
     return row[0] if row and row[0] is not None else None
@@ -2427,7 +2442,7 @@ def patient_extraction_complete(ledger, project_id) -> bool:
     patient (2026-10-18 owner rule). Posts past the retry ceiling can
     never be selected, so they do not hold the patient back."""
     return ledger.db.execute(
-        f"SELECT 1 FROM messages m WHERE m.project_id=? AND {pending_pred()}"
+        f"SELECT 1 FROM messages m WHERE m.project_id=? AND {pending_pred(ledger.db)}"
         f" AND ({_retry_budget_sql()}) LIMIT 1",
         (project_id,)).fetchone() is None
 
@@ -3147,7 +3162,7 @@ def _progress_probe(db, probe):
         return inference_dependency_loss.source_binding(db, project_id, message_id)
     if kind == "queued":
         row = db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? AND m.project_id=? "
-                         f"AND ({pending_pred()}) AND ({_retry_budget_sql()})",
+                         f"AND ({pending_pred(db)}) AND ({_retry_budget_sql()})",
                          (message_id, project_id)).fetchone()
         return bool(row)
     if kind == "held":
@@ -3155,7 +3170,7 @@ def _progress_probe(db, probe):
                          (message_id,)).fetchone()
         return bool(row)
     if kind == "review":
-        row = db.execute(f"SELECT ({_thin_pending_sql()}) OR ({_qc_flagged_sql()}) OR ({_human_flagged_sql()}) "
+        row = db.execute(f"SELECT ({_thin_pending_sql(db)}) OR ({_qc_flagged_sql()}) OR ({_human_flagged_sql()}) "
                          "FROM messages m WHERE m.message_id=? AND m.project_id=?",
                          (message_id, project_id)).fetchone()
         return bool(row and row[0])
@@ -3193,7 +3208,7 @@ def _batch_progress_probes(db, probes):
     join = ("JOIN json_each(?) j ON m.project_id=json_extract(j.value,'$[0]') "
             "AND m.message_id=json_extract(j.value,'$[1]') ")
     if kind == "queued":
-        condition = f"({pending_pred()}) AND ({_retry_budget_sql()})"
+        condition = f"({pending_pred(db)}) AND ({_retry_budget_sql()})"
         matches = {(row[0], row[1]) for row in db.execute(
             "SELECT m.project_id,m.message_id FROM messages m " + join + "WHERE " + condition, (requested,))}
         return [(project_id, message_id) in matches for _, project_id, message_id in probes]
@@ -3204,7 +3219,7 @@ def _batch_progress_probes(db, probes):
             f"WHERE EXISTS ({_hold_sql()})", (mids,))}
         return [message_id in matches for _, _, message_id in probes]
     if kind == "review":
-        condition = f"({_thin_pending_sql()}) OR ({_qc_flagged_sql()}) OR ({_human_flagged_sql()})"
+        condition = f"({_thin_pending_sql(db)}) OR ({_qc_flagged_sql()}) OR ({_human_flagged_sql()})"
         matches = {(row[0], row[1]) for row in db.execute(
             "SELECT m.project_id,m.message_id FROM messages m " + join + "WHERE " + condition, (requested,))}
         return [(project_id, message_id) in matches for _, project_id, message_id in probes]
@@ -3548,7 +3563,7 @@ def upgrade_status(db, *, model: str | None) -> dict:
     rows = db.execute(f"""SELECT m.*, ({current_v4_id()}) AS projection,
         (SELECT a.meta FROM artifacts a WHERE a.kind='{KIND}' AND a.message_id=m.message_id
             {current_extract_pred()} ORDER BY a.artifact_id DESC LIMIT 1) AS latest_meta,
-        ({pending_pred()}) AS pending, ({_retry_budget_sql()}) AS retryable,
+        ({pending_pred(db)}) AS pending, ({_retry_budget_sql()}) AS retryable,
         EXISTS ({_hold_sql()}) AS held,
         EXISTS (SELECT 1 {_ERROR_ROWS_SQL}
             AND COALESCE(json_extract({json_or_null('e.meta')},'$.attempts'),0)>=5) AS failed
@@ -3568,7 +3583,7 @@ def upgrade_status(db, *, model: str | None) -> dict:
     return {"target_version": EXTRACT_VERSION, **out, "total": sum(out.values())}
 
 
-def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None,
+def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
                    archived: bool | None = None, rehold: bool | None = None) -> str:
     """run_pending's due-row selection.
 
@@ -3595,7 +3610,7 @@ def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None,
     return f"""
       SELECT m.message_id, m.project_id, {inference_dependency_loss.SOURCE_BINDING_COLUMNS},
              ({_qc_flagged_sql()}) AS qc_src,
-             ({_thin_pending_sql()}) AS thin_src,
+             ({_thin_pending_sql(db)}) AS thin_src,
              ({_human_flagged_sql()}) AS human_src,
              COALESCE((SELECT MAX(COALESCE(json_extract(e.meta,'$.attempts'),0))
                        {_ERROR_ROWS_SQL}), 0) AS attempts
@@ -3608,7 +3623,7 @@ def _selection_sql(order: str, adm_sql: str, fresh: bool | None = None,
                           AND claim.message_id=m.message_id
                           AND claim.next_try > ?)
         AND ({_retry_budget_sql()})
-        AND {pending_pred()}
+        AND {pending_pred(db)}
         AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try'))
                       {_ERROR_ROWS_SQL}), 0) <= ?
       ORDER BY m.posted_at_ts {order}, m.message_id {order}
@@ -3783,7 +3798,7 @@ def _focus_patients(ledger) -> list:
             "SELECT m.project_id FROM messages m WHERE m.project_id IS NOT NULL"
             " AND NOT EXISTS (SELECT 1 FROM patients p WHERE p.project_id=m.project_id"
             " AND COALESCE(p.is_archived,0)!=0)"
-            f" AND {pending_pred()} AND ({_retry_budget_sql()})"
+            f" AND {pending_pred(ledger.db)} AND ({_retry_budget_sql()})"
             f" AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) {_ERROR_ROWS_SQL}), 0) <= ?"
             # focus selects re-extraction only, so a patient whose rest is all
             # new arrivals would hold a place it cannot use
@@ -3804,7 +3819,7 @@ def patient_progress_counts(db) -> dict:
         f"SELECT SUM(CASE WHEN ({_retry_budget_sql()}) AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try')) "
         f"{_ERROR_ROWS_SQL}), 0) <= ? AND NOT {_FRESH_SQL} THEN 1 ELSE 0 END) "
         "FROM messages m JOIN patients p ON p.project_id=m.project_id "
-        f"WHERE COALESCE(p.is_archived,0)=0 AND {pending_pred()} "
+        f"WHERE COALESCE(p.is_archived,0)=0 AND {pending_pred(db)} "
         "GROUP BY m.project_id", (KIND, EXTRACT_VERSION, time.time())).fetchall()
     focus = sum(1 for r in rows if r[0])
     return {"active_patients": active, "extraction_complete": max(0, active - len(rows)),
@@ -3852,7 +3867,7 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
     def _select(fresh, n, archived, rehold=None, scope="", scope_params=()):
-        return ledger.db.execute(_selection_sql(order, adm_sql + scope, fresh, archived, rehold), (
+        return ledger.db.execute(_selection_sql(ledger.db, order, adm_sql + scope, fresh, archived, rehold), (
             KIND, EXTRACT_VERSION,
             *adm_params, *scope_params,
             shard[1] if shard else None,
@@ -4009,7 +4024,7 @@ def _backlog_report(ledger, selected: int, limit: int,
         # the corpus) is still visible in the log (M12).
         count, age_min, age_max = ledger.db.execute(
             "SELECT COUNT(*), MIN(m.posted_at_ts), MAX(m.posted_at_ts) "
-            f"FROM messages m WHERE {pending_pred()}").fetchone()
+            f"FROM messages m WHERE {pending_pred(ledger.db)}").fetchone()
         estimate = _LEFT_ESTIMATE[estimate_key] = {
             "at": time.monotonic(), "left": count, "done": 0}
         if selected < (limit or 20):

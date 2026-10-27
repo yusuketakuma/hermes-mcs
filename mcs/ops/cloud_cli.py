@@ -176,7 +176,7 @@ def _route_counts(db, cfg, settings, deadline):
     if "reextract" in settings["routes"]:
         import extract_llm as extract
         scope, params = _source_scope(settings)
-        query = extract._selection_sql("DESC", scope, fresh=False).replace(
+        query = extract._selection_sql(db, "DESC", scope, fresh=False).replace(
             "m.body_text,", "length(m.body_text) AS body_length,")
         now = time.time()
         rows = db.execute(query, (extract.KIND, extract.EXTRACT_VERSION, *params,

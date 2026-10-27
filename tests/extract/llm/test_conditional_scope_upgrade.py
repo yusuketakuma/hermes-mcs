@@ -39,7 +39,7 @@ def source(tmp_path, monkeypatch):
 
 
 def _pending(ledger):
-    return bool(ledger.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone())
+    return bool(ledger.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(ledger.db)).fetchone())
 
 
 def test_same_generation_version_nine_requeues_and_ignores_old_retry_budget(source):
@@ -54,7 +54,7 @@ def test_same_generation_version_nine_requeues_and_ignores_old_retry_budget(sour
         project_id=1, message_id=1, meta={VERSION_KEY: CURRENT_VERSION, "hash": row["content_hash"],
         "extract_version": 9, "source_artifact_id": prior})
     now = time.time()
-    selected = ledger.db.execute(llm._selection_sql("DESC", "", None),
+    selected = ledger.db.execute(llm._selection_sql(ledger.db, "DESC", "", None),
         (llm.KIND, 10, None, 1, 0, now, llm.KIND, 10, now, 10)).fetchall()
     assert len(selected) == 1 and selected[0]["message_id"] == 1
     assert selected[0]["attempts"] == 0 and selected[0]["qc_src"] is None

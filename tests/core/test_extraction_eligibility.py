@@ -13,6 +13,7 @@ import extract_llm
 import read_model
 from common_testkit import make_ledger
 from ledger import LedgerReader
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from mcs_queries import ELIGIBLE_MESSAGE
 
 
@@ -64,7 +65,7 @@ def _selected(db, predicate):
 def test_rule_llm_and_read_model_agree_on_stored_body_boundary(store):
     assert _selected(store.db, ELIGIBLE_MESSAGE) == _EXPECTED
     # No extraction artifacts: every eligible body is initially pending.
-    assert _selected(store.db, extract_llm.pending_pred()) == _EXPECTED
+    assert _selected(store.db, extract_llm.pending_pred(store.db)) == _EXPECTED
     model = read_model.read_model(store.db)
     assert {row["message_id"] for row in model["records"]
             if row["extraction_eligible"]} == _EXPECTED
@@ -74,16 +75,21 @@ def test_rule_llm_and_read_model_agree_on_stored_body_boundary(store):
     assert extract.run_pending(store) == {"done": 0, "pids": []}
 
 
-def test_stale_rule_cleanup_retains_only_extractable_sources(store):
+@pytest.mark.parametrize("generation", [CURRENT_VERSION, "0.1"])
+def test_stale_rule_cleanup_retains_only_extractable_sources(store, generation):
     for mid, (_, _, _, pid, _) in enumerate(_CASES, 1):
         store.artifact_add(
             extract.KIND, "{}", project_id=pid, message_id=mid,
-            meta={"hash": "synthetic-old", "rule_version": 0})
+            meta={VERSION_KEY: generation, "hash": "synthetic-old", "rule_version": 0})
+    prior = {row["artifact_id"]: tuple(row) for row in store.artifacts(extract.KIND)}
     assert extract.run_pending(store)["done"] == len(_EXPECTED)
     rows = store.artifacts(extract.KIND)
-    assert {row["message_id"] for row in rows} == _EXPECTED
+    current = [row for row in rows if row["artifact_id"] not in prior]
+    assert {row["message_id"] for row in current} == _EXPECTED
     assert all(json.loads(row["meta"])["rule_version"] == extract.RULE_VERSION
-               for row in rows)
+               and json.loads(row["meta"])[VERSION_KEY] == CURRENT_VERSION for row in current)
+    retained = {row["artifact_id"]: tuple(row) for row in rows if row["artifact_id"] in prior}
+    assert retained == (prior if generation != CURRENT_VERSION else {})
 
 
 def test_rule_cli_preserves_project_and_eligibility_filters(

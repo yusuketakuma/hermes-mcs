@@ -171,7 +171,7 @@ def _observe(c, cfg, days: int = 14, *, now: float | None = None,
     from extract_llm import EXTRACT_VERSION, pending_pred
     extract_left, oldest_msg = q(
         "SELECT COUNT(*), MIN(m.posted_at_ts) FROM messages m WHERE "
-        + pending_pred())[0]
+        + pending_pred(c))[0]
     from semantic_store import jev_usage_today
     try:
         usage = {"jev_requests_today": jev_usage_today(ledger)}

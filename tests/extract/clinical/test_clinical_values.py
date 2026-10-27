@@ -8,6 +8,7 @@ import pytest
 
 import clinical_values
 import extract_llm
+import inference_dependency_loss
 import structured_view
 from extract_testkit import _hash, _ledger, _message
 
@@ -145,24 +146,42 @@ def test_lab_value_when_supported_without_conversion(quote, value, unit):
         "text" if isinstance(value, str) else "decimal")
 
 
-def test_lab_display_when_old_artifact_has_unsupported_values(tmp_path):
-    # Given: a pre-normalization artifact, including a lying normalized field.
+def test_lab_display_when_old_artifact_has_unsupported_values(tmp_path, monkeypatch):
+    # An old-format JSON can be rendered defensively as a pure transformation;
+    # its missing inference version must not be relabelled as a current result.
     body = "2026-10-01採血Cr 1.2mg/dL。HbA1c 7.2%"
-    db = _ledger(tmp_path)
-    db.save_messages([_message(mid=1, body=body)])
-    db.artifact_add("extract_llm", json.dumps({"labs": [
+    old = {"labs": [
         {"name": "Cr", "value": 1.2, "unit": "mg/dL", "evidence": body.split("。")[0]},
         {"name": "HbA1c", "value": 8.2, "unit": "%", "evidence": "HbA1c 7.2%",
          "normalized": {"confirmation": "quote_supported"}},
-        {"name": "BNP", "value": 20}]}),
-        project_id=1, message_id=1,
-        meta={"hash": _hash(db, 1), "extract_version": extract_llm.EXTRACT_VERSION})
-    # When: the actual shared structured display reads the artifact.
-    lines = structured_view.structured_lines(db.db, 1)
-    db.close()
-    # Then: verified AI quotations and unconfirmed candidates are separate.
+        {"name": "BNP", "value": 20}]}
+    lines = structured_view._lab_lines(old, body)
     assert "検査: Cr 1.2mg/dL(測定日:2026-10-01)" in lines
     assert "検査候補（未確認）: HbA1c 8.2%・BNP 20" in lines
+
+    monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *args, **kwargs: None)
+    db = _ledger(tmp_path)
+    try:
+        db.save_messages([_message(mid=1, body=body), _message(mid=2, body=body)])
+        old_id = db.artifact_add("extract_llm", json.dumps(old), project_id=1, message_id=1,
+            meta={"hash": _hash(db, 1), "extract_version": extract_llm.EXTRACT_VERSION})
+        assert structured_view.structured_lines(db.db, 1) == []
+        # A separately reprocessed message uses the real validator and writer,
+        # including the source-binding and completed-chunk integrity evidence.
+        validated = extract_validation.validate({"labs": [old["labs"][0]]}, body)
+        source = dict(db.db.execute("SELECT * FROM messages WHERE message_id=2").fetchone())
+        source["_source_binding"] = inference_dependency_loss.source_binding(db.db, 1, 2)
+        source["_target"] = ("", extract_llm.resolved_model({}))
+        integrity = {"validation": {"items_dropped": 0, "evidence_dropped": 0}, "completeness_chunks": 1,
+                     "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}
+        assert extract_llm._replace_current(db, source, json.dumps(validated, ensure_ascii=False),
+                                            integrity=integrity)
+        assert "検査: Cr 1.2mg/dL(測定日:2026-10-01)" in structured_view.structured_lines(db.db, 2)
+        assert db.db.execute("SELECT 1 FROM artifacts WHERE artifact_id=?", (old_id,)).fetchone()
+    finally:
+        db.close()
 
 
 def test_lab_merge_when_dates_or_confirmation_differ():

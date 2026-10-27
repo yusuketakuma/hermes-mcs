@@ -53,7 +53,7 @@ def test_old_successful_merge_is_eligible_for_the_fixed_generation(tmp_path):
             project_id=1, message_id=1, meta={"hash": _hash(store), "extract_version": 6})
         source = dict(store.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
         assert store.db.execute("SELECT m.message_id FROM messages m WHERE "
-                               + extract_llm.pending_pred()).fetchone()[0] == 1
+                               + extract_llm.pending_pred(store.db)).fetchone()[0] == 1
         assert not extract_llm._current(store, 1, source["content_hash"])
         assert dict(store.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()) == source
     finally:

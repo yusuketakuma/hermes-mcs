@@ -48,7 +48,7 @@ def test_automatic_replacements_preserve_the_original_artifact_and_stop_repeatin
         if route == "qc":
             _qc_artifact(db, 1, aid, row["content_hash"], {"qc": "done", "items": [{
                 "section": "symptoms", "verdict": "NO_MATCH", "item": PRIOR["symptoms"][0]}]})
-        assert db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+        assert db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(db.db)).fetchone()
         original = dict(db.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (aid,)).fetchone())
         kwargs = {"extra_meta": {"thin_retried": True}} if route == "thin" else (
             {"qc_fix": {"qc": 123, "applied": True}} if route == "qc" else {})
@@ -60,7 +60,7 @@ def test_automatic_replacements_preserve_the_original_artifact_and_stop_repeatin
         receipt = json.loads(receipts[0]["content"])
         assert receipt["state"] == "held_prior" and receipt["prior_artifact_id"] == aid
         assert receipt["target_version"] == llm.EXTRACT_VERSION
-        assert not db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+        assert not db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(db.db)).fetchone()
     finally:
         db.close()
 
@@ -236,7 +236,7 @@ def test_a_hold_is_only_valid_for_its_exact_source_and_contract(tmp_path, change
             with db.db:
                 db.db.execute("UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?",
                               (json.dumps(receipt), json.dumps(meta), artifact["artifact_id"]))
-        assert db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+        assert db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(db.db)).fetchone()
     finally:
         db.close()
 
@@ -257,7 +257,7 @@ def test_failed_human_feedback_never_relabels_old_content_as_the_new_generation(
         assert json.loads(kept["meta"])["extract_version"] == llm.EXTRACT_VERSION - 1
         assert db.db.execute("SELECT (" + llm._human_flagged_sql() + ") FROM messages m").fetchone()[0] is None
         # A normal generation upgrade remains possible; only this report is consumed.
-        assert db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+        assert db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(db.db)).fetchone()
     finally:
         db.close()
 
@@ -322,7 +322,7 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
     try:
         weak = '{"summary":"合成の候補"}'
         assert not llm._replace_current(db, row, weak)
-        assert not db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+        assert not db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(db.db)).fetchone()
         contract = llm._upgrade_contract()
         fingerprint = semantic_candidate.candidate_fingerprint({})
         assert len(llm._LOADED_SOURCE_DIGESTS[module_name]) == 64
@@ -330,14 +330,14 @@ def test_moved_source_contract_reopens_hold_without_losing_protected_assertions(
             **llm._LOADED_SOURCE_DIGESTS, module_name: "synthetic-changed-loaded-source"})
         assert llm._upgrade_contract() != contract
         assert semantic_candidate.candidate_fingerprint({}) != fingerprint
-        assert db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+        assert db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(db.db)).fetchone()
         assert not llm._replace_current(db, row, weak)
         receipts = [json.loads(r["content"]) for r in db.artifacts(llm.UPGRADE_KIND)]
         assert len(receipts) == 2
         assert all(r["state"] == "held_prior" and r["prior_artifact_id"] == aid for r in receipts)
         assert receipts[-1]["contract"] == llm._upgrade_contract()
         assert db.db.execute("SELECT content FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()[0] == json.dumps(PRIOR, ensure_ascii=False)
-        assert not db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+        assert not db.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(db.db)).fetchone()
     finally:
         db.close()
 

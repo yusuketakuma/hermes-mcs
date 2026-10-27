@@ -7,7 +7,8 @@ import sqlite3
 import pytest
 
 import extract_llm
-from extract_testkit import _ledger
+from extract_testkit import _hash, _ledger, _message
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 def _seed_job(db, kind, next_try):
@@ -18,10 +19,16 @@ def _seed_job(db, kind, next_try):
 
 
 def _seed_artifact(db, kind, content=None, meta=None):
+    mid = None
+    if kind == "extract_llm":
+        mid = db.db.execute("SELECT COALESCE(MAX(message_id),0)+1 FROM messages").fetchone()[0]
+        db.save_messages([_message(mid=mid, body=f"synthetic retry {mid}")])
+        meta = {**(meta or {}), VERSION_KEY: CURRENT_VERSION, "hash": _hash(db, mid),
+                "extract_version": extract_llm.EXTRACT_VERSION}
     db.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at)"
-        " VALUES(?,1,NULL,?,?,0)",
-        (kind, json.dumps(content) if content is not None else None,
+        " VALUES(?,1,?,?,?,0)",
+        (kind, mid, json.dumps(content) if content is not None else None,
          json.dumps(meta) if meta is not None else None))
     db.db.commit()
 
@@ -111,7 +118,9 @@ def test_future_error_retry_shortens_the_empty_pass(tmp_path, monkeypatch):
     _seed_artifact(db, "extract_llm", meta=meta)
     assert _loop(db, monkeypatch, ["--lane", "2"])[0] == 40
     rows = db.db.execute("SELECT kind, meta FROM artifacts").fetchall()
-    assert [(r[0], json.loads(r[1])) for r in rows] == [("extract_llm", meta)]
+    expected = {**meta, VERSION_KEY: CURRENT_VERSION, "hash": _hash(db, 1),
+                "extract_version": extract_llm.EXTRACT_VERSION}
+    assert [(r[0], json.loads(r[1])) for r in rows] == [("extract_llm", expected)]
 
 
 def test_floor_is_five_seconds(tmp_path, monkeypatch):

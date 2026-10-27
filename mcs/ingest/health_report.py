@@ -391,7 +391,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
         # extract_llm's own pending predicate, minus exhausted rows
         import extract_llm
         return db.execute(
-            f"SELECT 1 FROM messages m WHERE {extract_llm.pending_pred()} "
+            f"SELECT 1 FROM messages m WHERE {extract_llm.pending_pred(db)} "
             "AND COALESCE((SELECT MAX(COALESCE(json_extract(e.meta,"
             f"'$.attempts'),0)) {extract_llm._ERROR_ROWS_SQL}), 0) < 5 "
             "LIMIT 1", (extract_llm.KIND, extract_llm.EXTRACT_VERSION)

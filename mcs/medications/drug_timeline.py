@@ -36,7 +36,7 @@ def mentions(reader, mid, *, cfg=None):
             return None
         message["_source_binding"] = binding
         message["_target"] = ("", resolved_model(cfg or {}))
-        review = db.execute(f"SELECT ({_thin_pending_sql()}) OR ({_qc_flagged_sql()}) OR ({_human_flagged_sql()}) FROM messages m WHERE message_id=?", (mid,)).fetchone()
+        review = db.execute(f"SELECT ({_thin_pending_sql(db)}) OR ({_qc_flagged_sql()}) OR ({_human_flagged_sql()}) FROM messages m WHERE message_id=?", (mid,)).fetchone()
         if (review and review[0]) or any(isinstance(meta.get(k), dict) and meta[k].get("applied") is False for k in ("qc_fix", "human_fix")):
             return None
         import patient_state_context

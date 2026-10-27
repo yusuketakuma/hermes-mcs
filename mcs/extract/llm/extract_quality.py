@@ -150,14 +150,28 @@ _THIN_BODY_MIN = 300
 _THIN_FACTS_MIN = 2
 
 
-def is_thin(v: dict | None, body: str | None) -> bool:
+def _thin_fact_view(v):
     # Repeated spans of the same event do not make a sparse result richer.
     if isinstance(v, dict) and v.get("event_records"):
         v = {**v, "event_records": [{k: value for k, value in item.items() if k != "span"}
                                    if isinstance(item, dict) else item for item in v["event_records"]]}
+    return v
+
+
+def thin_fact_count(v: dict) -> int:
+    """Count the same clinical facts used by the thinness decision."""
+    for field in _FACT_LIST_FIELDS:
+        items = v.get(field)
+        if items is not None and (not isinstance(items, list) or any(
+                not isinstance(item, str if field == "events" else dict) for item in items)):
+            return 0
+    return len(facts(_thin_fact_view(v)))
+
+
+def is_thin(v: dict | None, body: str | None) -> bool:
     return (v is not None and body is not None
             and len(body) >= _THIN_BODY_MIN
-            and len(facts(v)) < _THIN_FACTS_MIN)
+            and thin_fact_count(v) < _THIN_FACTS_MIN)
 
 
 # closed set of repair-trigger codes for the meta histogram: the drops

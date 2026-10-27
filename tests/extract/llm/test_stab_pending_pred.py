@@ -16,7 +16,7 @@ from mcs_queries import (ELIGIBLE_MESSAGE, V4_PROJECTION_KIND,
                          current_extract_pred, current_v4_id, json_or_null)
 
 
-def _reference_pending_pred() -> str:
+def _reference_pending_pred(db) -> str:
     """The composition before M5 (no guards, qc_fix tested first)."""
     return f"""{ELIGIBLE_MESSAGE}
         AND {current_v4_id()} IS NULL
@@ -30,7 +30,7 @@ def _reference_pending_pred() -> str:
                           {current_extract_pred()}
                           AND json_extract({json_or_null('a.meta')},'$.extract_version')={EXTRACT_VERSION})
              OR EXISTS ({_qc_flagged_sql(val="1")})
-             OR EXISTS ({_thin_pending_sql()})))
+             OR EXISTS ({_thin_pending_sql(db)})))
              OR EXISTS ({_human_flagged_sql(val="1")}))"""
 
 
@@ -52,7 +52,7 @@ def _reference_selection(db, now, limit=10_000):
                           AND claim.project_id=m.project_id
                           AND claim.message_id=m.message_id
                           AND claim.next_try > ?)
-        AND {_reference_pending_pred()}
+        AND {_reference_pending_pred(db.db)}
       GROUP BY m.message_id
       HAVING attempts < 5
          AND COALESCE(MAX(json_extract(e.meta,'$.next_try')),0) <= ?
@@ -62,7 +62,7 @@ def _reference_selection(db, now, limit=10_000):
 
 def _new_selection(db, now, fresh, limit=10_000):
     return [r["message_id"] for r in db.db.execute(
-        extract_llm._selection_sql("DESC", "", fresh),
+        extract_llm._selection_sql(db.db, "DESC", "", fresh),
         (KIND, EXTRACT_VERSION, None, 1, 0, now, KIND,
          EXTRACT_VERSION, now, limit)).fetchall()]
 
@@ -143,9 +143,9 @@ def test_guarded_pending_pred_matches_reference(tmp_path):
     db, _now = _corpus(tmp_path)
     try:
         new = {r[0] for r in db.db.execute(
-            f"SELECT m.message_id FROM messages m WHERE {extract_llm.pending_pred()}")}
+            f"SELECT m.message_id FROM messages m WHERE {extract_llm.pending_pred(db.db)}")}
         ref = {r[0] for r in db.db.execute(
-            f"SELECT m.message_id FROM messages m WHERE {_reference_pending_pred()}")}
+            f"SELECT m.message_id FROM messages m WHERE {_reference_pending_pred(db.db)}")}
         assert new == ref
         # the fixture exercises each branch, not an empty corpus
         assert {1, 6, 7, 10, 15, 18, 21}.issubset(ref)

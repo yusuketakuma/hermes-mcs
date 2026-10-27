@@ -161,7 +161,7 @@ def test_new_loaded_interpretation_reopens_old_hold_but_keeps_its_legacy_source_
         prior_row = tuple(ledger.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (prior,)).fetchone())
         weak = '{"summary":"合成の候補"}'
         assert not llm._replace_current(ledger, row, weak)
-        assert not ledger.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+        assert not ledger.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(ledger.db)).fetchone()
         before = llm._upgrade_contract()
         module = importlib.import_module(owner)
         copied = tmp_path / (owner + ".py")
@@ -171,7 +171,7 @@ def test_new_loaded_interpretation_reopens_old_hold_but_keeps_its_legacy_source_
         monkeypatch.setattr(llm, "_LOADED_SOURCE_DIGESTS", {**llm._LOADED_SOURCE_DIGESTS, owner: digest})
         assert llm._upgrade_contract() != before
         # A changed rule contract releases only the old hold's suppression, not the source protection.
-        assert ledger.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred()).fetchone()
+        assert ledger.db.execute("SELECT 1 FROM messages m WHERE " + llm.pending_pred(ledger.db)).fetchone()
         assert not llm._replace_current(ledger, row, weak)
         assert not llm._current(ledger, 1, row["content_hash"])
         receipts = [json.loads(r["content"]) for r in ledger.artifacts(llm.UPGRADE_KIND)]

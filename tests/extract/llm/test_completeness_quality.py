@@ -435,7 +435,7 @@ def test_source_digest_change_reuses_legacy_checkpoint_and_only_repairs_missing_
             result = json.loads(db.artifacts("extract_llm", message_id=1)[0]["content"])
             assert result["vitals"] == {"sbp": 120.0, "dbp": 80.0}
         assert extract_llm._current(db, 1, _hash(db))
-        assert db.db.execute("SELECT message_id FROM messages m WHERE " + extract_llm.pending_pred()).fetchall() == []
+        assert db.db.execute("SELECT message_id FROM messages m WHERE " + extract_llm.pending_pred(db.db)).fetchall() == []
         assert extract_llm.run_pending(db, budget_s=200)["selected"] == 0
     finally:
         db.close()
@@ -502,7 +502,7 @@ def test_non_object_final_metadata_remains_attention_read_only(tmp_path, meta):
         result = extract_llm.progress_for_message(db.db, source, model=extract_llm.MODEL)
         assert result["state"] == "processing"  # Invalid metadata is not a current final result.
         assert result["completed"] == 0 and result["total"] == 1
-        assert db.db.execute("SELECT 1 FROM messages m WHERE " + extract_llm.pending_pred()).fetchone()
+        assert db.db.execute("SELECT 1 FROM messages m WHERE " + extract_llm.pending_pred(db.db)).fetchone()
         assert tuple(db.db.execute("SELECT * FROM artifacts WHERE kind=?", (extract_llm.KIND,)).fetchone()) == original
     finally:
         db.close()
