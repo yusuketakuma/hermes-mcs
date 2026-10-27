@@ -45,7 +45,7 @@ import history_walk
 from patient_context import context_items, extract_context, merged_context
 from mcs_queries import (current_extraction_blobs, decode_current_extractions, JST, karte_summary_current, karte_summary_block,
                          item_unverified, current_extract_pred, current_fact_pred)
-from mcs_util import HOME, locate_quote_span, loads_dict
+from mcs_util import HOME, html_to_text, locate_quote_span, loads_dict
 from writer_lock import acquire_run_lock
 from semantic_projection import PROJECTION_VERSION
 from self_identity import normalize_sender_id
@@ -62,9 +62,11 @@ STALE_DAYS = 21          # message unseen this long while siblings refresh
 # written without a particle and oxygen flows are not patient readings;
 # 12: per-request, current Loop evidence replaces thread-wide reply inference;
 # 13: retain every accepted reply relation and its source in posting-time order;
-# 14: measurement order requires source-bound measurement time and coverage).
+# 14: measurement order requires source-bound measurement time and coverage;
+# 15: re-evaluate clinical assertions under the updated scope rules;
+# 16: attachment coverage and missing message bodies are checked).
 # Rebuilds rewrite artifacts; automatic card rendering does not read patient_rollup.
-PERIOD_CHECK_VERSION = 15
+PERIOD_CHECK_VERSION = 16
 # Pre-9 rollup keys; readers map them to the current names until rebuilt.
 _LEGACY_KEYS = {"current_med_period": "med_period_candidate",
                 "possibly_deleted": "unrefreshed_message_ids"}
@@ -75,6 +77,46 @@ _REPLY_STAGE = {k: i for i, k in enumerate(
 
 PHARMACY_STATE_LIMIT = 100
 MEASUREMENT_REPORT_LIMIT = 100
+_MAX_EMPTY_HTML_CHARS = 80000
+
+
+def _attachment_count(db, project_id):
+    """Return None when the attachment schema cannot establish coverage."""
+    columns = {row[1] for row in db.execute("PRAGMA table_info(attachments)")}
+    if "message_id" not in columns:
+        return None
+    return db.execute("SELECT COUNT(*) FROM attachments a JOIN messages m ON m.message_id=a.message_id "
+                      "WHERE m.project_id=?", (project_id,)).fetchone()[0]
+
+
+def _empty_body_proofs(db, project_id, *, html_available):
+    """Stream bounded empty-body HTML and retain only per-message proof results."""
+    if not html_available:
+        return {}
+    cursor = db.execute("SELECT message_id,content_hash,CASE WHEN typeof(body_html)='text' "
+                        "AND length(body_html)<=? AND instr(body_html,char(0))=0 THEN body_html END "
+                        "FROM messages WHERE project_id=? AND body_state='full' AND body_text=''",
+                        (_MAX_EMPTY_HTML_CHARS, project_id))
+    proofs = {}
+    try:
+        for mid, content_hash, source_html in cursor:
+            valid = False
+            if isinstance(source_html, str) and isinstance(content_hash, str):
+                try:
+                    valid = (hashlib.sha256(source_html.encode()).hexdigest() == content_hash
+                             and html_to_text(source_html) == "")
+                except (UnicodeError, ValueError):
+                    pass
+            proofs[mid] = valid
+    except BaseException:
+        try:
+            cursor.close()
+        except sqlite3.Error:
+            pass  # Preserve the original SQLite failure.
+        raise
+    else:
+        cursor.close()
+    return proofs
 
 
 def _dicts(value) -> list[dict]:
@@ -453,9 +495,12 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
             measurement_complete = False
         except (ValueError, KeyError, TypeError):
             measurement_complete = False
+    attachments = _attachment_count(db, project_id)
+    measurement_complete = measurement_complete and attachments == 0
     # Legacy read-only snapshots may lack observation time; NULL stays unknown.
-    refreshed = "updated_seen" if any(r[1] == "updated_seen" for r in db.execute(
-        "PRAGMA table_info(messages)")) else "NULL"
+    message_columns = {r[1] for r in db.execute("PRAGMA table_info(messages)")}
+    refreshed = "updated_seen" if "updated_seen" in message_columns else "NULL"
+    empty_proofs = _empty_body_proofs(db, project_id, html_available="body_html" in message_columns)
     msgs = db.execute(f"""
       SELECT message_id, project_id, posted_at, posted_at_ts, body_text, sender_id, sender_name, sender_type,
              parent_id, {refreshed} AS updated_seen, body_state, content_hash
@@ -486,6 +531,7 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
         out["measurement_coverage"] = {"complete": False, "fetch_state": fetch_status,
                                        "history_state": history_status, "pending_fetch_jobs": pending_jobs,
                                        "incomplete_sources": 0, "unbound_sources": 0, "unparsed_sources": 0,
+                                       "attachment_count": attachments,
                                        "undated_vital_panels": 0, "unverified_lab_reports": 0}
         out["measurement_reports"] = {"items": [], "total": 0, "truncated": False}
         return out
@@ -561,7 +607,10 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
             summary = {"text": lm["summary"], "at": m["posted_at"]}
         # A current artifact with an occurrence fence is required even when
         # no value was found; an unparsed source cannot establish an absence.
-        if m["body_state"] != "full":
+        if m["body_state"] != "full" or not isinstance(m["body_text"], str):
+            measurement_complete = False
+            incomplete_sources += 1
+        elif not m["body_text"] and not empty_proofs.get(m["message_id"], False):
             measurement_complete = False
             incomplete_sources += 1
         elif m["body_text"]:
@@ -702,6 +751,7 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
                                    "pending_fetch_jobs": pending_jobs,
                                    "incomplete_sources": incomplete_sources, "unbound_sources": unbound_sources,
                                    "unparsed_sources": unparsed_sources,
+                                   "attachment_count": attachments,
                                    "undated_vital_panels": sum(day is None for day, _ in vital_panels),
                                    "unverified_lab_reports": sum(report is None for reports in lab_reports.values()
                                                                  for report in reports)}
@@ -1086,12 +1136,18 @@ def _message_source_signature(db, project_id, now):
     rows = db.execute("""
       SELECT message_id, posted_at, posted_at_ts, content_hash,
         CASE WHEN content_hash IS NULL THEN body_text END,
-        sender_id, sender_name, sender_type, parent_id, body_state, updated_seen
+        sender_id, sender_name, sender_type, parent_id, body_state,
+        typeof(body_text), CASE WHEN body_text='' THEN 1 ELSE 0 END, updated_seen
       FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC, message_id DESC
     """, (project_id,)).fetchall()
+    html_available = any(row[1] == "body_html" for row in db.execute("PRAGMA table_info(messages)"))
+    empty_proofs = _empty_body_proofs(db, project_id, html_available=html_available)
+    empty_sources = [(r[0], empty_proofs.get(r[0], False))
+                     for r in rows if r[9] == "full" and r[11] == 1]
     payload = (tuple(patient) if patient else None, [tuple(a) for a in context],
                registered_data(db, "aggregate", project_id, None),
                [tuple(r[:-1]) for r in rows],
+               _attachment_count(db, project_id), empty_sources,
                _unrefreshed_ids([(r[0], r[-1]) for r in rows], now),
                dependency_loss.read(db, project_id)["signature"])
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()

@@ -610,6 +610,194 @@ def test_patient_summary_shows_selected_source_posting_time(store):
     assert "2026-10-05T09:00:00+09:00" not in line and "37.2" not in line
 
 
+@pytest.mark.parametrize("state", ["pending", "downloaded", "withdrawn"])
+def test_any_same_patient_attachment_holds_measurement_completeness(store, state):
+    observation = "本人の2026-10-02測定で体温36.4℃でした。"
+    _save(store, 1, "2026-10-03T09:00:00+09:00", observation, vitals={"bt": 36.4})
+    store.db.execute("INSERT INTO attachments(message_id,file_id,state) VALUES(1,'synthetic',?)", (state,))
+    assert store.db.in_transaction
+    out = rollup.build_rollup(store.db, 1, cfg={})
+    assert store.db.in_transaction  # The snapshot read must not commit its caller's write.
+    assert out["measurement_coverage"]["attachment_count"] == 1
+    assert not out["measurement_coverage"]["complete"]
+    assert not out.get("latest_vitals")
+    store.db.commit()
+    rollup.rebuild(store, 1, cfg={})
+    _, text = notify_views.patient_summary_text(store.db, 1, cfg={})
+    assert "■ バイタル: 未確認" in text
+
+
+def test_other_patient_attachment_does_not_hide_current_patient_measurements(store):
+    observation = "本人の2026-10-02測定で体温36.4℃でした。"
+    _save(store, 1, "2026-10-03T09:00:00+09:00", observation, vitals={"bt": 36.4})
+    store.ensure_patient(2)
+    store.save_messages([_message(mid=2, project_id=2, body="合成", posted_at="2026-10-04T09:00:00+09:00")])
+    store.db.execute("INSERT INTO attachments(message_id,file_id,state) VALUES(2,'synthetic','pending')")
+    out = rollup.build_rollup(store.db, 1, cfg={})
+    assert out["measurement_coverage"]["attachment_count"] == 0
+    assert out["latest_vitals"]["bt"] == 36.4
+
+
+@pytest.mark.parametrize("missing_column", [False, True])
+def test_legacy_attachment_schema_is_unknown_not_empty(store, missing_column):
+    observation = "本人の2026-10-02測定で体温36.4℃でした。"
+    _save(store, 1, "2026-10-03T09:00:00+09:00", observation, vitals={"bt": 36.4})
+    baseline = rollup._message_source_signature(store.db, 1, 1)
+    store.db.execute("DROP TABLE attachments")
+    if missing_column:
+        store.db.execute("CREATE TABLE attachments(attachment_id INTEGER)")
+    assert rollup._message_source_signature(store.db, 1, 1) != baseline
+    out = rollup.build_rollup(store.db, 1, cfg={})
+    assert out["measurement_coverage"]["attachment_count"] is None
+    assert not out["measurement_coverage"]["complete"]
+    assert not out.get("latest_vitals")
+
+
+@pytest.mark.parametrize("statement", ["PRAGMA table_info(attachments)", "SELECT COUNT(*) FROM attachments"])
+@pytest.mark.parametrize("code", [sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED])
+def test_attachment_schema_and_count_sql_errors_propagate(store, statement, code):
+    error = sqlite3.OperationalError("synthetic attachment read failure")
+    error.sqlite_errorcode = code
+
+    class FailingConnection:
+        def __getattr__(self, name):
+            return getattr(store.db, name)
+
+        def execute(self, sql, *args):
+            if sql.startswith(statement):
+                raise error
+            return store.db.execute(sql, *args)
+
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        rollup.build_rollup(FailingConnection(), 1, cfg={})
+    assert caught.value is error
+
+
+def test_null_body_is_incomplete_but_empty_body_is_not_missing(store):
+    _save(store, 1, "2026-10-03T09:00:00+09:00", "本人の2026-10-02測定で体温36.4℃でした。",
+          vitals={"bt": 36.4})
+    store.save_messages([_message(mid=2, project_id=1, body="", posted_at="2026-10-04T09:00:00+09:00")])
+    assert rollup.build_rollup(store.db, 1, cfg={})["measurement_coverage"]["complete"]
+    store.db.execute("UPDATE messages SET body_text=NULL WHERE message_id=2")
+    assert store.db.in_transaction
+    out = rollup.build_rollup(store.db, 1, cfg={})
+    assert store.db.in_transaction  # The snapshot read must not commit its caller's write.
+    assert out["measurement_coverage"]["incomplete_sources"] == 1
+    assert not out.get("latest_vitals")
+    store.db.commit()
+    rollup.rebuild(store, 1, cfg={})
+    _, text = notify_views.patient_summary_text(store.db, 1, cfg={})
+    assert "■ バイタル: 未確認" in text
+
+
+def test_signature_tracks_patient_attachment_presence_and_borrowed_rollback(store):
+    _save(store, 1, "2026-10-03T09:00:00+09:00", "本人の2026-10-02測定で体温36.4℃でした。",
+          vitals={"bt": 36.4})
+    store.ensure_patient(2)
+    store.save_messages([_message(mid=2, project_id=2, body="合成", posted_at="2026-10-04T09:00:00+09:00")])
+    rollup.rebuild(store, 1, cfg={})
+    assert 1 not in rollup.dirty_projects(store)
+    base = rollup._message_source_signature(store.db, 1, 1)
+    store.db.execute("INSERT INTO attachments(message_id,file_id,state) VALUES(2,'other','pending')")
+    assert rollup._message_source_signature(store.db, 1, 1) == base
+    store.db.execute("INSERT INTO attachments(message_id,file_id,state) VALUES(1,'own','pending')")
+    assert rollup._message_source_signature(store.db, 1, 1) != base
+    assert 1 in rollup.dirty_projects(store)
+    assert store.db.in_transaction
+    store.db.rollback()
+    assert rollup._message_source_signature(store.db, 1, 1) == base
+    assert 1 not in rollup.dirty_projects(store)
+
+
+def test_signature_tracks_missing_body_type_without_changing_content_hash(store):
+    _save(store, 1, "2026-10-03T09:00:00+09:00", "本人の2026-10-02測定で体温36.4℃でした。",
+          vitals={"bt": 36.4})
+    base = rollup._message_source_signature(store.db, 1, 1)
+    original_hash = store.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
+    store.db.execute("UPDATE messages SET body_text=NULL WHERE message_id=1")
+    assert rollup._message_source_signature(store.db, 1, 1) != base
+    assert store.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0] == original_hash
+    store.db.rollback()
+    assert rollup._message_source_signature(store.db, 1, 1) == base
+
+
+@pytest.mark.parametrize("empty_html", ["", "<p> </p>"])
+def test_empty_body_needs_matching_html_and_signature_tracks_in_place_mismatch(store, empty_html):
+    _save(store, 1, "2026-10-03T09:00:00+09:00", "本人の2026-10-02測定で体温36.4℃でした。",
+          vitals={"bt": 36.4})
+    store.save_messages([_message(mid=2, project_id=1, body=empty_html, posted_at="2026-10-04T09:00:00+09:00")])
+    base = rollup._message_source_signature(store.db, 1, 1)
+    assert rollup.build_rollup(store.db, 1, cfg={})["measurement_coverage"]["complete"]
+    store.db.execute("UPDATE messages SET body_html='合成の本文' WHERE message_id=2")
+    assert rollup._message_source_signature(store.db, 1, 1) != base
+    out = rollup.build_rollup(store.db, 1, cfg={})
+    assert out["measurement_coverage"]["incomplete_sources"] == 1
+    assert not out.get("latest_vitals")
+    store.db.rollback()
+    assert rollup._message_source_signature(store.db, 1, 1) == base
+
+
+def test_empty_proofs_isolate_patient_and_preserve_invalid_rows(store):
+    store.ensure_patient(2)
+    store.save_messages([_message(mid=mid, project_id=pid, body="", posted_at="2026-10-04T09:00:00+09:00")
+                         for mid, pid in ((1, 1), (2, 1), (3, 2))])
+    store.db.execute("UPDATE messages SET body_html='合成の本文' WHERE message_id IN (2,3)")
+    assert rollup._empty_body_proofs(store.db, 1, html_available=True) == {1: True, 2: False}
+    assert rollup._empty_body_proofs(store.db, 2, html_available=True) == {3: False}
+    store.db.rollback()
+
+
+def test_many_empty_messages_use_one_bounded_html_query_per_reader(store):
+    _save(store, 1, "2026-10-03T09:00:00+09:00", "本人の2026-10-02測定で体温36.4℃でした。",
+          vitals={"bt": 36.4})
+    store.save_messages([_message(mid=mid, project_id=1, body="", posted_at="2026-10-04T09:00:00+09:00")
+                         for mid in range(2, 12)])
+    statements = []
+    store.db.set_trace_callback(statements.append)
+    try:
+        out = rollup.build_rollup(store.db, 1, cfg={})
+        assert out["measurement_coverage"]["complete"]
+        assert sum("SELECT message_id,content_hash,CASE WHEN typeof(body_html)" in sql
+                   for sql in statements) == 1
+        statements.clear()
+        rollup._message_source_signature(store.db, 1, 1)
+        assert sum("SELECT message_id,content_hash,CASE WHEN typeof(body_html)" in sql
+                   for sql in statements) == 1
+    finally:
+        store.db.set_trace_callback(None)
+
+
+@pytest.mark.parametrize("yield_before_error", [False, True])
+def test_empty_body_stream_failure_closes_cursor_and_preserves_borrowed_transaction(store, yield_before_error):
+    store.db.execute("UPDATE patients SET fetch_state='complete' WHERE project_id=1")
+    error = sqlite3.OperationalError("synthetic stream interruption")
+    error.sqlite_errorcode = sqlite3.SQLITE_INTERRUPT
+
+    class InterruptedCursor:
+        closed = False
+
+        def __iter__(self):
+            if yield_before_error:
+                yield 1, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", ""
+            raise error
+
+        def close(self):
+            self.closed = True
+
+    cursor = InterruptedCursor()
+
+    class InterruptedConnection:
+        def execute(self, *_args):
+            return cursor
+
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        rollup._empty_body_proofs(InterruptedConnection(), 1, html_available=True)
+    assert caught.value is error
+    assert cursor.closed
+    assert store.db.in_transaction
+    store.db.rollback()
+
+
 @pytest.mark.parametrize('cfg', [None, {'local_llm': {'model': 'synthetic-other-model'}}])
 def test_patient_summary_with_unproven_model_does_not_show_cached_latest(store, cfg):
     _seed_out_of_order(store)
