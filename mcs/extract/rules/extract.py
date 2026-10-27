@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import sys
 import time
 from datetime import datetime
@@ -40,7 +41,7 @@ import writer_lock
 from patient_context import extract_context
 from ledger import Ledger, LedgerReader
 from mcs_queries import ELIGIBLE_MESSAGE, current_extract_pred, json_or_null
-from mcs_util import HOME, html_to_text, loads_dict
+from mcs_util import HOME, html_to_text, loads_dict, strict_json
 from writer_lock import acquire_run_lock
 
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -435,7 +436,11 @@ def run_pending(ledger, *, deadline: float | None = None) -> dict:
                m.posted_at_ts DESC
     """, (KIND, RULE_VERSION)).fetchall()
     done, pids = _extract_rows(ledger, rows, deadline=deadline)
-    return {"done": done, "pids": sorted(pids)}
+    reconciled, reconciled_pids, reconcile_error = _reconcile_intervention_page(ledger, deadline=deadline)
+    result = {"done": done + reconciled, "pids": sorted(pids | reconciled_pids)}
+    if reconcile_error:
+        result["reconcile_error"] = reconcile_error
+    return result
 
 
 _CHUNK = 200   # rows per commit; keep each writer lock hold bounded
@@ -505,6 +510,20 @@ def verify_v1_insert_tx(db, row, artifact_id, affected, content, meta):
     expected = (KIND, row["project_id"], row["message_id"], content, "rules-v1", meta)
     if stored is None or tuple(stored) != expected:
         raise RuntimeError("extract_v1_insert_unverified")
+
+
+def _bounded_reconcile_pred(*, require_binding=False):
+    """Guard all JSON evaluation in the same SQLite statement as size checks."""
+    binding = (f" AND json_extract({json_or_null('a.meta')},'$.source_binding')=?"
+               if require_binding else "")
+    return ("CASE WHEN typeof(a.content)='text' AND typeof(a.meta)='text' "
+            f"AND length(a.content)<={_RECONCILE_CONTENT_CHARS} "
+            f"AND length(a.meta)<={_RECONCILE_META_CHARS} "
+            "AND instr(a.content,char(0))=0 AND instr(a.meta,char(0))=0 "
+            "THEN CASE WHEN (1 " + current_extract_pred(error_check=False) + ") "
+            f"THEN (json_extract({json_or_null('a.meta')},'$.rule_version')=?" + binding +
+            f" AND json_extract({json_or_null('a.content')},'$.intervention_schedule.coverage.state') "
+            "IN ('invalid_source','oversize')) ELSE 0 END ELSE 0 END")
 
 
 def _extract_rows(ledger, rows, *, deadline: float | None = None) -> tuple[int, set[int]]:
@@ -577,6 +596,292 @@ def _extract_rows(ledger, rows, *, deadline: float | None = None) -> tuple[int, 
                 pids.add(r["project_id"])
                 done += 1
     return done, pids
+
+
+# A page bounds work even when almost none of the artifacts are rule results.
+# The durable job is a cursor, not a claim that any source has been processed.
+_RECONCILE_KIND = "intervention_source_reconcile"
+_RECONCILE_PAGE = 64
+_RECONCILE_CANDIDATES = 8
+_RECONCILE_SECONDS = 0.25
+_RECONCILE_CURSOR_RESERVE_SECONDS = 0.05
+_RECONCILE_IDLE_SECONDS = 60
+_RECONCILE_CONTENT_CHARS = 262144
+_RECONCILE_META_CHARS = 32768
+_RECONCILE_CURSOR_CHARS = 1024
+# These source fields participate in the occurrence digest. Refuse oversized
+# or malformed values instead of loading unbounded metadata into a repair.
+_RECONCILE_SOURCE_GUARD = "typeof(m.content_hash)='text' AND length(m.content_hash)=64 AND " + ' AND '.join(
+    f"(m.{name} IS NULL OR (typeof(m.{name})='text' AND length(m.{name})<=32768 "
+    f"AND instr(m.{name},char(0))=0))"
+    for name in ('sender_name', 'sender_type', 'profession', 'organization', 'posted_at'))
+# SQLite's dynamic typing permits blobs and infinity even in INTEGER columns.
+# Only JSON-serializable and bounded occurrence values may reach the digest.
+_RECONCILE_SOURCE_GUARD += ' AND ' + ' AND '.join(
+    f"(m.{name} IS NULL OR typeof(m.{name})='integer' "
+    f"OR (typeof(m.{name})='real' AND m.{name} BETWEEN -1.7976931348623157e308 AND 1.7976931348623157e308) "
+    f"OR (typeof(m.{name})='text' AND length(m.{name})<=32768 AND instr(m.{name},char(0))=0))"
+    for name in ('parent_id', 'sender_id', 'posted_at_ts'))
+
+
+def _reconcile_intervention_page(ledger, *, deadline=None):
+    """Preserve completed work and expose bounded reconciliation failures."""
+    progress = {'done': 0, 'pids': set()}
+    try:
+        _reconcile_intervention_work(ledger, progress, deadline=deadline)
+    except (ValueError, RuntimeError, sqlite3.Error):
+        if ledger.db.in_transaction:
+            raise  # Do not disguise a transaction whose owner could not unwind it.
+        return progress['done'], progress['pids'], 'intervention_reconcile_failed'
+    return progress['done'], progress['pids'], None
+
+
+def _strict_reconcile_object(raw):
+    """Reject ambiguous or malformed artifacts before changing any field."""
+    try:
+        parsed = strict_json(raw)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _reconcile_one(ledger, row, artifact_id, *, deadline=None):
+    """CAS only the intervention result on the reserved writer transaction.
+
+    Existing clinical fields, artifact identity, source occurrence and scope are
+    preserved. Caller owns neither this transaction nor any dependent resources.
+    """
+    db = ledger.db
+    if db.in_transaction:
+        raise ValueError("extract_transaction_owned")
+    selected_binding = dependency_loss.source_binding_from_row(row)
+    if not isinstance(selected_binding, str):
+        return False
+    if deadline is not None and time.monotonic() >= deadline:
+        return False
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        if (writer_lock.updater_state() != _WRITER_STATE or _WRITER_STATE[0]
+                or inference.CURRENT_VERSION != _INFERENCE_VERSION
+                or os.stat(inference.__file__).st_mtime_ns != _INFERENCE_SOURCE_STAT
+                or deadline is not None and time.monotonic() >= deadline):
+            return False
+        # LIMIT 2 protects against duplicate/foreign/legacy rows without parsing
+        # or materializing the entire artifact history. Ambiguity is deferred.
+        ids = db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? LIMIT 2",
+                         (KIND, row['message_id'])).fetchall()
+        if len(ids) != 1 or ids[0][0] != artifact_id:
+            return False
+        current = db.execute(
+            "SELECT a.kind,a.project_id,a.message_id,a.content,a.model,a.meta,a.created_at,"
+            "m.message_id AS source_mid,m.project_id AS source_pid," + dependency_loss.SOURCE_BINDING_COLUMNS + ","
+            "CASE WHEN typeof(m.body_html)='text' AND length(m.body_html)<=? "
+            "AND instr(m.body_html,char(0))=0 THEN m.body_html END AS source_html "
+            "FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+            "JOIN patients p ON p.project_id=m.project_id "
+            "WHERE a.artifact_id=? AND a.project_id=m.project_id AND a.kind=? "
+            "AND m.project_id=? AND m.message_id=? AND m.body_state='full' "
+            "AND typeof(m.body_text)='text' AND length(m.body_text)<=? AND instr(m.body_text,char(0))=0 "
+            "AND p.is_archived=0 AND p.fetch_state IS NOT 'forbidden' "
+            "AND COALESCE(p.fetch_reason,'') NOT IN ('forbidden','permission_denied','access_revoked') "
+            "AND " + _RECONCILE_SOURCE_GUARD + " AND " + _bounded_reconcile_pred(require_binding=True),
+            (intervention_schedule._MAX_HTML_CHARS, artifact_id, KIND, row['project_id'],
+             row['message_id'], intervention_schedule._MAX_BODY_CHARS, RULE_VERSION, selected_binding)).fetchone()
+        if (current is None or current['model'] != 'rules-v1'
+                or dependency_loss.source_binding_from_row(current) != selected_binding
+                or not isinstance(current['source_html'], str)):
+            return False
+        content = _strict_reconcile_object(current['content'])
+        meta = _strict_reconcile_object(current['meta'])
+        if (content is None or meta is None or 'intervention_zero' in meta
+                or not isinstance(content.get('intervention_schedule'), dict)
+                or not isinstance(content['intervention_schedule'].get('coverage'), dict)
+                or content['intervention_schedule']['coverage'].get('state') not in ('invalid_source', 'oversize')
+                or content['intervention_schedule']['coverage'].get('source_validation') != 'unverified'):
+            return False
+        intervention = intervention_source_payload_tx(db, current, selected_binding)
+        if intervention is not None and (intervention['coverage']['state'] != 'observed'
+                                         or intervention['coverage']['source_validation'] != 'verified'
+                                         or intervention['coverage']['records_truncated']
+                                         or intervention['coverage']['unknown'] != 0):
+            return False
+        if deadline is not None and time.monotonic() >= deadline:
+            return False
+        if intervention is None:
+            del content['intervention_schedule']
+            meta['intervention_zero'] = 1
+        else:
+            content['intervention_schedule'] = intervention
+        content_json = json.dumps(content, ensure_ascii=False, allow_nan=False)
+        meta_json = (json.dumps(meta, ensure_ascii=False, allow_nan=False)
+                     if intervention is None else current['meta'])
+        if len(content_json) > _RECONCILE_CONTENT_CHARS or len(meta_json) > _RECONCILE_META_CHARS:
+            return False
+        affected = db.execute(
+            "UPDATE artifacts SET content=?,meta=? WHERE artifact_id=? AND kind=? AND project_id=? "
+            "AND message_id=? AND content=? AND meta=? AND model IS ? AND created_at IS ?",
+            (content_json, meta_json, artifact_id, KIND, row['project_id'], row['message_id'],
+             current['content'], current['meta'], current['model'], current['created_at'])).rowcount
+        if affected != 1:
+            raise RuntimeError("intervention_update_unverified")
+        ledger.bump_inference_analysis_epoch_tx(row['project_id'])
+        # AFTER triggers, epoch invalidation and SQLite conflict handlers cannot
+        # silently substitute another artifact or a different source occurrence.
+        stored = db.execute("SELECT kind,project_id,message_id,content,model,meta,created_at "
+                            "FROM artifacts WHERE artifact_id=? AND typeof(content)='text' AND length(content)<=? "
+                            "AND typeof(meta)='text' AND length(meta)<=?",
+                            (artifact_id, _RECONCILE_CONTENT_CHARS, _RECONCILE_META_CHARS)).fetchone()
+        expected = (KIND, row['project_id'], row['message_id'], content_json,
+                    current['model'], meta_json, current['created_at'])
+        source = db.execute(
+            "SELECT m.body_html," + dependency_loss.SOURCE_BINDING_COLUMNS +
+            " FROM messages m JOIN patients p ON p.project_id=m.project_id "
+            "WHERE m.project_id=? AND m.message_id=? AND p.is_archived=0 "
+            "AND m.body_state='full' AND typeof(m.body_text)='text' AND length(m.body_text)<=? "
+            "AND instr(m.body_text,char(0))=0 AND typeof(m.body_html)='text' "
+            "AND length(m.body_html)<=? AND instr(m.body_html,char(0))=0 "
+            "AND p.fetch_state IS NOT 'forbidden' "
+            "AND COALESCE(p.fetch_reason,'') NOT IN ('forbidden','permission_denied','access_revoked') "
+            "AND " + _RECONCILE_SOURCE_GUARD,
+            (row['project_id'], row['message_id'], intervention_schedule._MAX_BODY_CHARS,
+             intervention_schedule._MAX_HTML_CHARS)).fetchone()
+        ids_after = db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? LIMIT 2",
+                               (KIND, row['message_id'])).fetchall()
+        if (stored is None or tuple(stored) != expected or source is None
+                or source['body_html'] != current['source_html']
+                or dependency_loss.source_binding_from_row(source) != selected_binding
+                or len(ids_after) != 1 or ids_after[0][0] != artifact_id
+                or writer_lock.updater_state() != _WRITER_STATE or _WRITER_STATE[0]
+                or inference.CURRENT_VERSION != _INFERENCE_VERSION
+                or os.stat(inference.__file__).st_mtime_ns != _INFERENCE_SOURCE_STAT):
+            raise RuntimeError("intervention_update_unverified")
+    return True
+
+
+def _reconcile_intervention_work(ledger, progress, *, deadline=None):
+    """Recheck bounded invalid sources without retry writes or scope expansion."""
+    if ledger.db.in_transaction:
+        raise ValueError("extract_transaction_owned")
+    if (writer_lock.updater_state() != _WRITER_STATE or _WRITER_STATE[0]
+            or inference.CURRENT_VERSION != _INFERENCE_VERSION
+            or os.stat(inference.__file__).st_mtime_ns != _INFERENCE_SOURCE_STAT
+            or deadline is not None and time.monotonic() >= deadline):
+        return 0, set()
+    now = time.monotonic()
+    local_deadline = now + _RECONCILE_SECONDS
+    deadline = min(deadline, local_deadline) if deadline is not None else local_deadline
+    remaining = deadline - now
+    if remaining <= 0:
+        return
+    # Reserve a fraction of the remaining budget for the cursor transaction.
+    # A blocking SQLite operation may still overrun it: in that case no late
+    # progress write occurs and the next pass safely retries the same prefix.
+    work_deadline = deadline - min(_RECONCILE_CURSOR_RESERVE_SECONDS, remaining / 4)
+    cursor_row = ledger.db.execute(
+        "SELECT CASE WHEN typeof(payload)='text' AND length(payload)<=? AND instr(payload,char(0))=0 "
+        "THEN payload END FROM fetch_jobs WHERE kind=? AND project_id=0 AND message_id=0",
+        (_RECONCILE_CURSOR_CHARS, _RECONCILE_KIND)).fetchone()
+    old_payload = cursor_row[0] if cursor_row is not None else None
+    if old_payload is None and cursor_row is None:
+        cursor, highwater, not_before = 0, 0, 0
+    else:
+        state = _strict_reconcile_object(old_payload)
+        if (not isinstance(state, dict)
+                or set(state) != {'version', 'cursor', 'highwater', 'not_before'}
+                or type(state['version']) is not int or state['version'] != 2
+                or type(state.get('cursor')) is not int or not 0 <= state['cursor'] < 2**63
+                or type(state.get('highwater')) is not int or not 0 <= state['highwater'] < 2**63
+                or state['cursor'] > state['highwater']
+                or type(state.get('not_before')) not in (int, float)
+                or not 0 <= state['not_before'] < 2**63
+                or state['highwater'] != 0 and state['not_before'] != 0):
+            raise ValueError("intervention_reconcile_cursor_invalid")
+        cursor, highwater, not_before = state['cursor'], state['highwater'], state['not_before']
+    if cursor == 0 and highwater == 0:
+        remaining = not_before - time.time()
+        if 0 < remaining <= _RECONCILE_IDLE_SECONDS:
+            return
+        # Capture a finite pass boundary; newer artifacts wait for the next pass.
+        highwater = ledger.db.execute("SELECT COALESCE(MAX(artifact_id),0) FROM artifacts").fetchone()[0]
+        if not highwater:
+            return
+    # Primary-key scan applies LIMIT before any expensive JSON filtering.
+    page = ledger.db.execute("SELECT artifact_id,kind FROM artifacts WHERE artifact_id>? AND artifact_id<=? "
+                             "ORDER BY artifact_id LIMIT ?", (cursor, highwater, _RECONCILE_PAGE)).fetchall()
+    processed, candidates = cursor, 0
+    exhausted = True
+    for artifact_id, kind in page:
+        if time.monotonic() >= work_deadline:
+            exhausted = False
+            break
+        if kind == KIND:
+            row = ledger.db.execute(
+                "SELECT m.message_id,m.project_id," + dependency_loss.SOURCE_BINDING_COLUMNS +
+                " FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+                "JOIN patients p ON p.project_id=m.project_id "
+                "WHERE a.artifact_id=? AND p.is_archived=0 AND p.fetch_state IS NOT 'forbidden' "
+                "AND typeof(m.body_text)='text' AND length(m.body_text)<=? AND instr(m.body_text,char(0))=0 "
+                "AND COALESCE(p.fetch_reason,'') NOT IN ('forbidden','permission_denied','access_revoked') "
+                "AND " + _RECONCILE_SOURCE_GUARD + " AND " + _bounded_reconcile_pred(),
+                (artifact_id, intervention_schedule._MAX_BODY_CHARS, RULE_VERSION)).fetchone()
+            if row is not None:
+                if time.monotonic() >= work_deadline:
+                    # Nothing has been mutated. Defer this source until the
+                    # next pass so a slow read cannot starve later artifacts.
+                    processed = artifact_id
+                    exhausted = False
+                    break
+                if candidates >= _RECONCILE_CANDIDATES:
+                    exhausted = False
+                    break
+                candidates += 1
+                updated = _reconcile_one(ledger, row, artifact_id, deadline=work_deadline)
+                progress['done'] += int(updated)
+                if updated:
+                    progress['pids'].add(row['project_id'])
+                if not updated and time.monotonic() >= work_deadline:
+                    # False means this transaction made no update. Leave the
+                    # source intact and revisit it in the next fixed pass.
+                    processed = artifact_id
+                    exhausted = False
+                    break
+        processed = artifact_id
+    completed = exhausted and (len(page) < _RECONCILE_PAGE or processed == highwater)
+    if completed:
+        next_cursor, next_highwater, next_not_before = 0, 0, time.time() + _RECONCILE_IDLE_SECONDS
+    else:
+        next_cursor, next_highwater, next_not_before = processed, highwater, 0
+    next_state = {'version': 2, 'cursor': next_cursor, 'highwater': next_highwater,
+                  'not_before': next_not_before}
+    # The old raw payload is the CAS witness; it may have a different key order.
+    payload = json.dumps(next_state, separators=(',', ':'))
+    if payload != old_payload:
+        _commit_reconcile_cursor(ledger.db, cursor_row is None, old_payload, payload, deadline=deadline)
+
+
+def _commit_reconcile_cursor(db, absent, old_payload, payload, *, deadline):
+    """Persist progress only when the same cursor and deadline still hold."""
+    if (deadline is not None and time.monotonic() >= deadline
+            or writer_lock.updater_state() != _WRITER_STATE or _WRITER_STATE[0]
+            or inference.CURRENT_VERSION != _INFERENCE_VERSION
+            or os.stat(inference.__file__).st_mtime_ns != _INFERENCE_SOURCE_STAT):
+        return
+    with db:
+        db.execute('BEGIN IMMEDIATE')
+        if (deadline is not None and time.monotonic() >= deadline
+                or writer_lock.updater_state() != _WRITER_STATE or _WRITER_STATE[0]
+                or inference.CURRENT_VERSION != _INFERENCE_VERSION
+                or os.stat(inference.__file__).st_mtime_ns != _INFERENCE_SOURCE_STAT):
+            return
+        now = time.time()
+        if absent:
+            db.execute(
+                "INSERT OR IGNORE INTO fetch_jobs(kind,project_id,message_id,payload,state,next_try,created_at,updated_at) "
+                "VALUES(?,0,0,?,'done',0,?,?)", (_RECONCILE_KIND, payload, now, now))
+        else:
+            db.execute("UPDATE fetch_jobs SET payload=?,updated_at=? "
+                       "WHERE kind=? AND project_id=0 AND message_id=0 AND payload=?",
+                       (payload, now, _RECONCILE_KIND, old_payload))
 
 
 def main() -> int:
