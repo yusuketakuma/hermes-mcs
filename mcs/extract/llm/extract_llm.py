@@ -3764,7 +3764,8 @@ def patient_progress_counts(db) -> dict:
 
 def _select_pending(ledger, limit: int, admitted_ids: set | None,
                     shard: tuple[int, int] | None,
-                    oldest_first: bool) -> tuple[list, int | None]:
+                    oldest_first: bool, *, archived_first: bool = False,
+                    fair_oldest: bool = False) -> tuple[list, int | None]:
     """Select the claimable pending rows for one run_pending pass ->
     (rows, how many of them are new arrivals; None for oldest_first)."""
     # pending = no current-version artifact, plus retriable CURRENT-
@@ -3819,11 +3820,11 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
     # NULL project rows must survive the exclusion (NULL NOT IN is NULL)
     rest = (" AND (m.project_id IS NULL OR m.project_id NOT IN ("
             + ",".join("?" * len(focus)) + "))") if focus else ""
-    # Active patients precede archived ones in both order modes. Each
-    # class keeps its former order: fresh then re-extraction for newest,
-    # chronological only for oldest, and within it update-released holds
-    # come last. Disjoint filters keep LIMIT streaming.
-    for archived in (False, True):
+    # Active patients normally precede archived ones; the resident's
+    # archive fairness turn reverses those classes. Each class keeps its
+    # usual fresh/re-extraction order, except that a fair oldest turn
+    # interleaves update-released holds by source time.
+    for archived in ((True, False) if archived_first else (False, True)):
         for fresh in ((None,) if oldest_first else (True, False)):
             if fresh is False and not archived:
                 # the patients nearest completion re-extract first, one by one;
@@ -3836,7 +3837,8 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
                         rows += _select(False, limit - len(rows), False, rehold,
                                         scope=" AND m.project_id=?", scope_params=(pid,))
             # a never-extracted body has no hold, so fresh needs no split
-            for rehold in ((None,) if fresh else (False, True)):
+            for rehold in ((None,) if fresh or (oldest_first and fair_oldest)
+                           else (False, True)):
                 if len(rows) >= limit:
                     return rows, fresh_selected
                 scoped = fresh is False and not archived and focus
@@ -4033,7 +4035,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 batch_k: int = 0,
                 vital_policy: dict | None = None,
                 write_wait_s: float = 60,
-                carry: list | None = None) -> dict:
+                carry: list | None = None,
+                archived_first: bool = False,
+                fair_oldest: bool = False) -> dict:
     """Extract up to `limit` pending/stale messages within budget_s.
     Returns {'done': n, 'left': n, 'failed': n}.
 
@@ -4080,7 +4084,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             raise
         gc_error = 'extract_stale_gc_failed'
     rows, fresh_selected = _select_pending(ledger, limit, admitted_ids,
-                                           shard, oldest_first)
+                                           shard, oldest_first,
+                                           archived_first=archived_first,
+                                           fair_oldest=fair_oldest)
     done = failed = deferred = lock_lost = held_prior = 0
     done_pids = set()
     endpoint_down = False
@@ -4933,11 +4939,11 @@ def _admission_closed(reasons) -> None:
               file=sys.stderr, flush=True)
 
 
-# Owner decision 2026-10-10: the semantic backlog goes before
-# re-extraction. For this long after the last pass that did semantic work,
-# a semantic resident extracts only recently notified arrivals; when no
-# such pass happens (none due, or only waiting), re-extraction resumes.
+# The semantic backlog goes before re-extraction, while recent arrivals
+# continue to be served. A periodic oldest-first turn gives old eligible
+# work an opportunity when semantic and recent arrivals are both continuous.
 SEMANTIC_FIRST_S = 1800.0
+_SEMANTIC_RECENT_TURNS = 3
 _ARRIVAL_CARRY_S = 86400      # = run_check.REALTIME_CARRY_S (pinned by a test)
 # run_due statuses of a pass that did semantic work or spent an attempt; a
 # job that only waited (deferred / deferred_backoff / stale) does not count
@@ -5254,6 +5260,11 @@ def _main() -> int:
             total = {"done": 0, "failed": 0, "left": 0}
             context_lane = _SLOT_OVERRIDE == local_llm.LANES[3]
             semantic_first_until = 0.0
+            # Start fairness only after a semantic pass has actually worked.
+            # Waiting or an expired priority window must not reset it.
+            semantic_has_worked = False
+            semantic_recent_turns = 0
+            semantic_archive_turn = False
             context_state = writer_lock.updater_state()
             carry: list = []   # finished results waiting for the run lock
 
@@ -5293,15 +5304,23 @@ def _main() -> int:
                         if budget <= 0:
                             total["stopped"] = "stop_after"
                             break
-                    # One newest extraction per lane before semantic/QC;
-                    # existing claim leases exclude the other worker's item.
+                    # One extraction per lane before semantic/QC; a bounded
+                    # oldest-first turn gives admitted history a selection
+                    # opportunity during continuous semantic and new work.
+                    # The existing admission and lease gates apply.
                     adm, vpol = _admitted()
-                    if args.semantic and time.monotonic() < semantic_first_until:
+                    semantic_priority = (args.semantic
+                                         and time.monotonic() < semantic_first_until)
+                    oldest_turn = (args.semantic and semantic_has_worked
+                                   and semantic_recent_turns >= _SEMANTIC_RECENT_TURNS)
+                    if semantic_priority and not oldest_turn:
                         recent = _recent_arrivals(led)
                         adm = recent if adm is None else adm & recent
                     r = run_pending(led, limit=1 if args.semantic else 8,
                                     budget_s=min(budget, 900),
-                                    oldest_first=False,
+                                    oldest_first=oldest_turn,
+                                    archived_first=oldest_turn and semantic_archive_turn,
+                                    fair_oldest=oldest_turn,
                                     per_write_lock=True,
                                     vital_policy=vpol,
                                     workers=max(1, min(args.workers, 8)),
@@ -5309,6 +5328,12 @@ def _main() -> int:
                                     admitted_ids=adm,
                                     write_wait_s=_RESIDENT_WRITE_WAIT_S,
                                     carry=carry)
+                    if oldest_turn:
+                        semantic_archive_turn = not semantic_archive_turn
+                    if oldest_turn:
+                        semantic_recent_turns = 0
+                    elif args.semantic and semantic_has_worked:
+                        semantic_recent_turns += 1
                     carry = r.pop("carry", None) or []  # internal; never logged
                     sem = None
                     ran_semantic = False
@@ -5322,6 +5347,7 @@ def _main() -> int:
                             and m.get("status") in _SEMANTIC_WORK
                             for m in sem.get("job_metrics") or [])
                         if ran_semantic:
+                            semantic_has_worked = True
                             semantic_first_until = (time.monotonic()
                                                     + SEMANTIC_FIRST_S)
                         if sem.get("run_lock_lost") in ("held", "updated"):

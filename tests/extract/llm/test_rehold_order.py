@@ -10,6 +10,7 @@ import pytest
 import extract_llm
 from extract_llm import EXTRACT_VERSION, KIND, UPGRADE_KIND
 from extract_testkit import _hash, _ledger, _message
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 def _corpus(tmp_path):
@@ -24,11 +25,15 @@ def _corpus(tmp_path):
     return db, priors
 
 
-def _hold(db, mid, prior, *, reason="protected_loss", invalidated=False, contract="older-code"):
+def _hold(db, mid, prior, *, reason="protected_loss", invalidated=False,
+          contract="older-code", current_inference=True):
+    meta = {VERSION_KEY: CURRENT_VERSION} if current_inference else {}
+    if invalidated:
+        meta["invalidated"] = 1
     db.artifact_add(UPGRADE_KIND, json.dumps({
         "state": "held_prior", "reason": reason, "hash": _hash(db, mid),
         "prior_artifact_id": prior, "target_version": EXTRACT_VERSION, "contract": contract}),
-        project_id=1, message_id=mid, meta={"invalidated": 1} if invalidated else {})
+        project_id=1, message_id=mid, meta=meta)
 
 
 def _order(db, limit=3):
@@ -48,6 +53,47 @@ def test_a_current_contract_hold_stays_out_of_the_backlog(tmp_path):
     db, priors = _corpus(tmp_path)
     _hold(db, 3, priors[3], contract=extract_llm._upgrade_contract())
     assert _order(db) == [2, 1]
+
+
+def test_a_previous_inference_generation_hold_does_not_block_current(tmp_path):
+    db, priors = _corpus(tmp_path)
+    try:
+        _hold(db, 3, priors[3], contract=extract_llm._upgrade_contract(),
+              current_inference=False)
+        assert _order(db) == [3, 2, 1]
+    finally:
+        db.close()
+
+
+def test_fair_oldest_turn_includes_released_holds_without_weakening_gates(
+        tmp_path, monkeypatch):
+    db, priors = _corpus(tmp_path)
+    try:
+        _hold(db, 1, priors[1])
+        _hold(db, 3, priors[3], contract=extract_llm._upgrade_contract())
+
+        # Ordinary newest and explicit oldest retain their existing order:
+        # released holds follow all other eligible rows.
+        assert _order(db) == [2, 1]
+        ordinary, _ = extract_llm._select_pending(db, 2, None, None, True)
+        assert [r["message_id"] for r in ordinary] == [2, 1]
+        fair, _ = extract_llm._select_pending(
+            db, 2, {1, 2, 3}, None, True, fair_oldest=True)
+        assert [r["message_id"] for r in fair] == [1, 2]
+
+        # Neither the admission filter nor a live claim is bypassed.
+        denied, _ = extract_llm._select_pending(
+            db, 2, {2, 3}, None, True, fair_oldest=True)
+        assert [r["message_id"] for r in denied] == [2]
+        monkeypatch.setattr(extract_llm, "_writer_current", lambda **kw: True)
+        row = dict(db.db.execute(
+            "SELECT * FROM messages WHERE message_id=1").fetchone())
+        assert extract_llm._claim(db, row, lease_s=3600) is not None
+        leased, _ = extract_llm._select_pending(
+            db, 2, {1, 2, 3}, None, True, fair_oldest=True)
+        assert [r["message_id"] for r in leased] == [2]
+    finally:
+        db.close()
 
 
 @pytest.mark.parametrize("hold", [{"invalidated": True}, {"reason": "human_failed"},

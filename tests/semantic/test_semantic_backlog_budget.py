@@ -491,6 +491,110 @@ def test_semantic_passes_that_only_wait_do_not_hold_re_extraction(monkeypatch):
     assert admitted == [None, {7}, {7}, None]
 
 
+@pytest.mark.parametrize("base", [None, {7, 9}, {9}, set()])
+@pytest.mark.parametrize("expire_window", [False, True])
+def test_continuous_semantic_fair_turn_keeps_admission_and_budget(
+        monkeypatch, base, expire_window):
+    clock = [1000.0]
+    runs = []
+    semantic_passes = []
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: clock[0])
+
+    def background(*_args):
+        if len(semantic_passes) == 9:
+            raise KeyboardInterrupt("synthetic stop")
+        semantic_passes.append(1)
+        clock[0] += (extract_llm.SEMANTIC_FIRST_S + 1 if expire_window
+                     else extract_llm.SEMANTIC_FIRST_S / 2 + 1)
+        return {"errors": [], "job_metrics": [
+            {"kind": "semantic", "status": "done"}]}
+
+    class DB:
+        def execute(self, sql, params=()):
+            assert "notified_at" in sql
+            return [(7,)]
+
+    def record(*_args, **kwargs):
+        runs.append((kwargs["admitted_ids"], kwargs["oldest_first"],
+                     kwargs.get("archived_first", False),
+                     kwargs.get("fair_oldest", False), kwargs["budget_s"]))
+        return {"done": 1, "failed": 0, "left": 1, "selected": 1}
+
+    _resident(monkeypatch, [], background, ("--stop-after", "100000"))
+    if expire_window:
+        # The semantic deadline is set *after* background returns. Advance
+        # through the resident's following pause, not inside background alone.
+        monkeypatch.setattr(extract_llm.time, "sleep", lambda _seconds:
+                            clock.__setitem__(0, clock[0] + extract_llm.SEMANTIC_FIRST_S + 1))
+    monkeypatch.setattr(extract_llm, "Ledger",
+                        lambda *a: type("L", (), {"db": DB(), "close": lambda self: None})())
+    monkeypatch.setattr(extract_llm, "legacy_admissions",
+                        lambda *a: None if base is None else set(base))
+    monkeypatch.setattr(extract_llm, "run_pending", record)
+    with pytest.raises(KeyboardInterrupt):
+        extract_llm.main()
+
+    narrowed = base if expire_window else ({7} if base is None else base & {7})
+    assert [(admission, oldest, archive, fair)
+            for admission, oldest, archive, fair, _ in runs] == [
+        (base, False, False, False), (narrowed, False, False, False),
+        (narrowed, False, False, False), (narrowed, False, False, False),
+        (base, True, False, True), (narrowed, False, False, False),
+        (narrowed, False, False, False), (narrowed, False, False, False),
+        (base, True, True, True), (narrowed, False, False, False)]
+    assert len(semantic_passes) == 9
+    assert all(0 < budget <= 900 for _, _, _, _, budget in runs)
+
+
+@pytest.mark.parametrize("did_work", [False, True])
+def test_semantic_fairness_starts_only_after_work_and_survives_waits(
+        monkeypatch, did_work):
+    clock = [1000.0]
+    runs = []
+    statuses = (["done"] if did_work else ["deferred"]) + ["deferred_backoff"] * 8
+    monkeypatch.setattr(extract_llm.time, "monotonic", lambda: clock[0])
+
+    def background(*_args):
+        if not statuses:
+            raise KeyboardInterrupt("synthetic stop")
+        return {"errors": [], "job_metrics": [
+            {"kind": "semantic", "status": statuses.pop(0)}]}
+
+    def record(*_args, **kwargs):
+        runs.append((kwargs["admitted_ids"], kwargs["oldest_first"]))
+        return {"done": 1, "failed": 0, "left": 1, "selected": 1}
+
+    _resident(monkeypatch, [], background, ("--stop-after", "100000"))
+    monkeypatch.setattr(extract_llm.time, "sleep", lambda _seconds:
+                        clock.__setitem__(0, clock[0] + extract_llm.SEMANTIC_FIRST_S + 1))
+    monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: {7, 9})
+    monkeypatch.setattr(extract_llm, "run_pending", record)
+    with pytest.raises(KeyboardInterrupt):
+        extract_llm.main()
+    assert len(runs) == 10
+    assert all(admitted == {7, 9} for admitted, _ in runs)
+    assert [i for i, (_, oldest) in enumerate(runs) if oldest] == (
+        [4, 8] if did_work else [])
+
+
+@pytest.mark.parametrize("admitted,expected", [({1, 2}, 2), ({1}, 1)])
+def test_archive_turn_respects_admission_and_falls_back_to_active(
+        tmp_path, admitted, expected):
+    from extract_testkit import _ledger, _message
+
+    db = _ledger(tmp_path)
+    try:
+        db.ensure_patient(2)
+        db.save_messages([_message(mid=1), _message(mid=2, project_id=2)])
+        with db.db:
+            db.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=2")
+        rows, _ = extract_llm._select_pending(
+            db, 1, admitted, None, True, archived_first=True)
+        assert [row["message_id"] for row in rows] == [expected]
+    finally:
+        db.close()
+
+
 def test_a_semantic_pass_does_not_idle_on_an_empty_extraction(monkeypatch):
     """While semantic goes first the restricted extraction usually selects
     nothing; a semantic pass that ended without progress must not then
@@ -515,3 +619,132 @@ def test_a_semantic_pass_does_not_idle_on_an_empty_extraction(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         extract_llm.main()
     assert sleeps and max(sleeps) <= 1
+
+
+def test_continuous_semantic_work_preserves_bounded_legacy_progress(
+        tmp_path, monkeypatch):
+    """Exercise the resident with real selection and claims on a synthetic ledger.
+
+    Each semantic pass represents completed work, not a waiting-only pass.
+    A new eligible post appears before each subsequent extraction. The initial
+    unrestricted pass is deliberately excluded from the old-post progress
+    assertion; otherwise it could hide starvation after semantic work begins.
+    Model execution and notification delivery are not part of this test.
+    """
+    import json
+
+    from extract_testkit import _hash, _ledger, _message, _v2_artifact
+
+    db = _ledger(tmp_path)
+    real_close = db.close
+    clock = [1000.0]
+    wall_now = time.time()
+    seen = []
+    selected_admissions = []
+    errors = []
+    pass_count = [0]
+    base = {7, 9, 10, 12, *range(100, 110)}
+    try:
+        db.save_messages([_message(mid=mid, body=f"合成本文 {mid}")
+                          for mid in (7, 9, 10, 11)])
+        db.ensure_patient(2)
+        db.save_messages([_message(mid=12, project_id=2, body="合成本文 12")])
+        with db.db:
+            db.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=2")
+        for mid in (9, 10, 11):
+            db.artifact_add(
+                extract_llm.KIND, json.dumps({"summary": "synthetic old"}),
+                project_id=1, message_id=mid,
+                meta={"hash": _hash(db, mid),
+                      "extract_version": extract_llm.EXTRACT_VERSION - 1})
+        db.artifact_add(
+            extract_llm.KIND, json.dumps({"summary": "synthetic old"}),
+            project_id=2, message_id=12,
+            meta={"hash": _hash(db, 12),
+                  "extract_version": extract_llm.EXTRACT_VERSION - 1})
+        with db.db:
+            db.db.execute("UPDATE messages SET notified_at=? WHERE message_id=7",
+                          (wall_now,))
+        event_id = db.outbox_add("new_messages", 1, {"message_ids": [7]})
+        outbox_before = tuple(db.db.execute(
+            "SELECT state, payload, route FROM notify_outbox WHERE event_id=?",
+            (event_id,)).fetchone())
+        monkeypatch.setattr(extract_llm, "_writer_current", lambda **kw: True,
+                            raising=False)
+        leased_row = dict(db.db.execute(
+            "SELECT * FROM messages WHERE message_id=10").fetchone())
+        lease = extract_llm._claim(db, leased_row, lease_s=3600)
+        assert lease is not None
+        claim_before = tuple(db.db.execute(
+            "SELECT payload, state, next_try FROM fetch_jobs "
+            "WHERE kind='extract_claim' AND message_id=10").fetchone())
+
+        monkeypatch.setattr(extract_llm.time, "monotonic", lambda: clock[0])
+
+        def background(*_args):
+            if pass_count[0] == 10:
+                raise KeyboardInterrupt("synthetic stop")
+            mid = 100 + pass_count[0]
+            db.save_messages([_message(mid=mid, body=f"合成本文 {mid}")])
+            with db.db:
+                db.db.execute("UPDATE messages SET notified_at=? WHERE message_id=?",
+                              (wall_now, mid))
+            pass_count[0] += 1
+            clock[0] += extract_llm.SEMANTIC_FIRST_S / 2 + 1
+            return {"errors": [], "job_metrics": [
+                {"kind": "semantic", "status": "done"}]}
+
+        def select_and_complete(ledger, **kwargs):
+            selected_admissions.append(kwargs["admitted_ids"])
+            try:
+                extra = {key: True for key in ("archived_first", "fair_oldest")
+                         if kwargs.get(key)}
+                rows, _ = extract_llm._select_pending(
+                    ledger, kwargs["limit"], kwargs["admitted_ids"],
+                    kwargs["shard"], kwargs["oldest_first"], **extra)
+                if rows:
+                    row = dict(rows[0])
+                    own_lease = extract_llm._claim(ledger, row)
+                    if own_lease is not None:
+                        mid = row["message_id"]
+                        _v2_artifact(ledger, mid, _hash(ledger, mid),
+                                     {"summary": "synthetic current"},
+                                     project_id=row["project_id"])
+                        extract_llm._release(ledger, row, own_lease)
+                        seen.append(mid)
+                return {"done": int(bool(rows)), "failed": 0,
+                        "left": 1, "selected": len(rows)}
+            except Exception as exc:
+                # The resident catches ordinary exceptions. Keep a harness
+                # error visible rather than counting it as scheduling proof.
+                errors.append(type(exc).__name__)
+                return {"done": 0, "failed": 1, "left": 1, "selected": 0}
+
+        _resident(monkeypatch, [], background, ("--stop-after", "100000"))
+        monkeypatch.setattr(db, "close", lambda: None)
+        monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
+        monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: set(base))
+        monkeypatch.setattr(extract_llm, "run_pending", select_and_complete)
+        with pytest.raises(KeyboardInterrupt):
+            extract_llm.main()
+
+        assert not errors
+        assert len(selected_admissions) == 11
+        assert selected_admissions[0] == base
+        assert all(admission <= base for admission in selected_admissions)
+        assert seen[0] == 7
+        assert any(mid in range(100, 110) for mid in seen[1:])
+        assert 10 not in seen  # another worker's lease was never acquired
+        assert 11 not in seen  # not in the configured admission set
+        assert tuple(db.db.execute(
+            "SELECT payload, state, next_try FROM fetch_jobs "
+            "WHERE kind='extract_claim' AND message_id=10").fetchone()) == claim_before
+        assert tuple(db.db.execute(
+            "SELECT state, payload, route FROM notify_outbox WHERE event_id=?",
+            (event_id,)).fetchone()) == outbox_before
+        # A bounded adversarial observation, not a claim that every workload
+        # meets this particular deadline. Initial selection does not count.
+        assert 9 in seen[1:], f"old eligible post did not progress: {seen!r}"
+        assert 12 in seen[1:], f"archived eligible post did not progress: {seen!r}"
+    finally:
+        real_close()
