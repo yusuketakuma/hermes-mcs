@@ -7,7 +7,16 @@ import sqlite3
 import pytest
 
 import mcs_stats
-from views_testkit import SCHEMA, SNAP_TS, _extract, _msg
+from views_testkit import SCHEMA, SNAP_TS, _msg
+from views_testkit import _extract as _shared_extract
+from inference_version import CURRENT_VERSION, VERSION_KEY
+
+
+def _extract(db, mid, chash, meds, events=None):
+    """Seed a current extraction without changing the shared view fixture."""
+    _shared_extract(db, mid, chash, meds, events=events)
+    db.execute("UPDATE artifacts SET meta=json_set(meta, ?, ?) WHERE artifact_id=last_insert_rowid()",
+               (f"$.{VERSION_KEY}", CURRENT_VERSION))
 
 
 # Regression: transition_reconciliation must not count med-change
@@ -94,7 +103,7 @@ def _period(db, mid, ts):
         "VALUES ('extract_v1',?,?,?)",
         (mid, json.dumps({"med_periods": [
             {"start": "2026-08-20", "end": "2026-08-30", "raw": "x"}]}),
-         json.dumps({"hash": f"h{mid}"})))
+         json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": f"h{mid}"})))
 
 
 def test_rx_expiry_excludes_period_posted_after_as_of(frozen_db):

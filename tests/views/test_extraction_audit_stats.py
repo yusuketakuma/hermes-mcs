@@ -10,6 +10,7 @@ import mcs_stats
 import stats_contract
 from semantic_projection import PROJECTION_VERSION
 from views_testkit import SCHEMA, SNAP_TS, _msg
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 @pytest.fixture
@@ -29,7 +30,7 @@ def message(db, mid, *, pid=1, state="full", body="本人の薬は合成ボッ�
 def artifact(db, mid, *, kind="extract_llm", content=None, meta=None, pid=1):
     db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) VALUES(?,?,?,?,?,?)",
         (kind, pid, mid, json.dumps(content if content is not None else {}),
-         json.dumps(meta if meta is not None else {"hash": f"h{mid}", "extract_version": 7}), SNAP_TS - 10))
+         json.dumps(meta if meta is not None else {VERSION_KEY: CURRENT_VERSION, "hash": f"h{mid}", "extract_version": 7}), SNAP_TS - 10))
 
 
 def stats(db, **args):
@@ -43,9 +44,9 @@ def test_source_population_reader_priority_and_no_output_reasons(db):
     artifact(db, 1)
     artifact(db, 2)
     artifact(db, 2, kind="canonical_projection", content={"canonical_facts": []},
-             meta={"hash": "h2", "projection_version": PROJECTION_VERSION})
-    artifact(db, 4, meta={"hash": "old-h4"})
-    artifact(db, 5, meta={"hash": "h5", "error": "synthetic"})
+             meta={VERSION_KEY: CURRENT_VERSION, "hash": "h2", "projection_version": PROJECTION_VERSION})
+    artifact(db, 4, meta={VERSION_KEY: CURRENT_VERSION, "hash": "old-h4"})
+    artifact(db, 5, meta={VERSION_KEY: CURRENT_VERSION, "hash": "h5", "error": "synthetic"})
     artifact(db, 6, pid=99)  # a different patient's output cannot become current
     artifact(db, 9)
     artifact(db, 9, kind="extract_upgrade_v1", content={"state": "held_prior", "hash": "h9",
@@ -76,9 +77,9 @@ def test_detail_cap_does_not_cut_the_population_or_class_summary(db):
 def test_validation_unknown_is_not_zero_and_retry_conflict_counts_are_scoped(db):
     for mid in (1, 2, 3):
         message(db, mid)
-    artifact(db, 1, meta={"hash": "h1", "prefilter": True, "thin_retried": True,
+    artifact(db, 1, meta={VERSION_KEY: CURRENT_VERSION, "hash": "h1", "prefilter": True, "thin_retried": True,
         "integrity": {"validation": {"items_dropped": 2, "evidence_dropped": 1}}})
-    artifact(db, 2, meta={"hash": "h2", "integrity": {"validation": {
+    artifact(db, 2, meta={VERSION_KEY: CURRENT_VERSION, "hash": "h2", "integrity": {"validation": {
         "items_dropped": 0, "evidence_dropped": 0}}})
     artifact(db, 3, content={"_items_dropped": True})
     result = stats(db)
@@ -96,7 +97,7 @@ def test_projection_category_and_verified_guard(db):
         artifact(db, mid, kind="canonical_projection", content={"canonical_facts": [{
             "kind": "adherence_administration" if mid != 3 else "symptom_state",
             "statement": "合成ボックスで保管", "validation_status": "verified" if mid != 2 else "unverified"}]},
-            meta={"hash": f"h{mid}", "projection_version": PROJECTION_VERSION})
+            meta={VERSION_KEY: CURRENT_VERSION, "hash": f"h{mid}", "projection_version": PROJECTION_VERSION})
     rows = list(audit.iter_audit_rows(db, stats_contract.resolve_scope({}, SNAP_TS)))
     assert [row["classes"]["storage"] for row in rows] == [True, False, False]
 
@@ -105,7 +106,7 @@ def test_projection_category_and_verified_guard(db):
     {"requests": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 1}}])
 def test_corrupt_or_unresolved_completeness_is_attention(db, completeness):
     message(db, 1)
-    artifact(db, 1, meta={"hash": "h1", "integrity": {"completeness": completeness}})
+    artifact(db, 1, meta={VERSION_KEY: CURRENT_VERSION, "hash": "h1", "integrity": {"completeness": completeness}})
     assert next(audit.iter_audit_rows(db, stats_contract.resolve_scope({}, SNAP_TS)))["quality"] == "attention"
 
 

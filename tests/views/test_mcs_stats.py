@@ -8,9 +8,18 @@ import pytest
 
 import mcs_stats
 from semantic_projection import PROJECTION_VERSION
-from views_testkit import SCHEMA, SNAP_TS, _extract, _msg
+from views_testkit import SCHEMA, SNAP_TS, _msg
+from views_testkit import _extract as _shared_extract
 import ledger
 from mcs_stats import run_stats
+from inference_version import CURRENT_VERSION, VERSION_KEY
+
+
+def _extract(db, mid, chash, meds, events=None):
+    """Seed a current extraction without changing the shared view fixture."""
+    _shared_extract(db, mid, chash, meds, events=events)
+    db.execute("UPDATE artifacts SET meta=json_set(meta, ?, ?) WHERE artifact_id=last_insert_rowid()",
+               (f"$.{VERSION_KEY}", CURRENT_VERSION))
 
 
 @pytest.fixture
@@ -101,12 +110,12 @@ def test_canonical_facts_stat(db):
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
         "VALUES ('canonical_projection',1,?,?,?)",
         (1, json.dumps({"canonical_facts": facts}),
-         json.dumps({"hash": "different-hash", "projection_version": PROJECTION_VERSION})))
+         json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "different-hash", "projection_version": PROJECTION_VERSION})))
     db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
         "VALUES ('canonical_projection',1,?,?,?)",
         (2, json.dumps({"canonical_facts": facts}),
-         json.dumps({"hash": "h1", "projection_version": PROJECTION_VERSION})))
+         json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "h1", "projection_version": PROJECTION_VERSION})))
     st = run(db, stat="canonical_facts")["canonical_facts"]
     assert st["status"] == "ok"
     assert st["total"] == 3                       # msg1 stale -> excluded
@@ -154,13 +163,13 @@ def test_med_change_followup_uses_signal_patient_scope(db):
     _msg(db, 1, chash="h1", ts=SNAP_TS - 30 * 86400)
     db.execute("UPDATE messages SET body_text=? WHERE message_id=1", ("母の状態：\n合成薬Aを開始。",))
     db.execute("INSERT INTO artifacts(kind,message_id,content,meta) VALUES ('extract_llm',1,?,?)", (json.dumps(
-        {"meds": [{"name": "合成薬A", "action": "start", "evidence": "合成薬Aを開始"}]}), json.dumps({"hash": "h1"})))
+        {"meds": [{"name": "合成薬A", "action": "start", "evidence": "合成薬Aを開始"}]}), json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "h1"})))
     _msg(db, 2, pid=2, chash="h2", ts=SNAP_TS - 30 * 86400)
     _extract(db, 2, "h2", [{"name": "薬B", "action": "stop"}])
     db.execute("INSERT INTO patients(project_id,is_archived) VALUES (2,1)")
     _msg(db, 3, pid=3, chash="h3", ts=SNAP_TS - 30 * 86400)
     db.execute("INSERT INTO artifacts(kind,message_id,content,meta) VALUES ('extract_llm',3,'{broken',?)",
-               (json.dumps({"hash": "h3"}),))
+               (json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "h3"}),))
     _msg(db, 4, pid=4, chash="h4", ts=SNAP_TS - 30 * 86400)
     _extract(db, 4, "h4", [{"name": "薬D", "action": "stop"}])
     st = run(db, stat="med_change_followup")["med_change_followup"]
@@ -221,7 +230,7 @@ def test_rx_expiry_window(db):
             {"start": "2026-09-01", "end": "2026-09-30", "raw": "9/1-30"},
             {"start": "2020-01-01", "end": "2020-02-01", "raw": "old"},
             {"start": "2026-09-01", "end": "2027-01-01", "raw": "far"}]}),
-         json.dumps({"hash": "h1"})))
+         json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "h1"})))
     st = run(db, stat="rx_expiry")["rx_expiry"]
     assert st["status"] == "ok"
     assert st["expiring_periods"]["total"] == 1
@@ -436,7 +445,7 @@ def test_parsed_counts_v4_current_message_without_extract_llm(db):
         "INSERT INTO artifacts(kind,project_id,message_id,content,meta) "
         "VALUES ('semantic_facts_v4',1,1,?,?)",
         (json.dumps({"meds": []}),
-         json.dumps({"hash": "h2", "engine_version": 4, "projection_version": PROJECTION_VERSION})))
+         json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "h2", "engine_version": 4, "projection_version": PROJECTION_VERSION})))
     st = run(db, stat="data_quality")["data_quality"]
     assert st["stages"]["parsed_current_revision"]["numerator"] == 1
     assert st["stale_parsed"] == 0

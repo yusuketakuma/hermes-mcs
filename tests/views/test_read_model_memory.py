@@ -4,6 +4,7 @@ import json
 import sqlite3
 import tracemalloc
 
+from inference_version import CURRENT_VERSION, VERSION_KEY
 import read_model
 
 
@@ -19,7 +20,7 @@ def _page_peak(messages):
         CREATE INDEX idx_artifacts_kind_msg ON artifacts(kind,message_id);
     ''')
     content = json.dumps({'summary': 'SYNTHETIC ' * 450})
-    meta = json.dumps({'hash': 'h'})
+    meta = json.dumps({'hash': 'h', VERSION_KEY: CURRENT_VERSION})
     db.executemany("INSERT INTO messages VALUES(?,1,NULL,1,'full','h','synthetic')",
                    ((mid,) for mid in range(messages)))
     db.executemany("INSERT INTO artifacts VALUES(?,?,1,'extract_llm',?,?)",

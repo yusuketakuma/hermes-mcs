@@ -3,6 +3,7 @@ import json
 
 import mcs_stats
 from extract_testkit import _ledger, _message, _hash
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 def test_rule_alert_stats_distinguish_actor_hold_and_urgent_request(tmp_path):
@@ -12,7 +13,7 @@ def test_rule_alert_stats_distinguish_actor_hold_and_urgent_request(tmp_path):
         for mid, body in enumerate(("母が救急搬送されました。", "至急ご確認をお願いします。"), 1):
             db.save_messages([_message(mid=mid, body=body)])
             db.artifact_add("extract_v1", json.dumps({"urgency": "high"}),
-                            project_id=1, message_id=mid, meta={"hash": _hash(db, mid)})
+                            project_id=1, message_id=mid, meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(db, mid)})
         result = mcs_stats._urgency_rule_outcomes(db.db, "", [])
         assert result["rule_high"] == 2
         assert result["request_only"] == 1

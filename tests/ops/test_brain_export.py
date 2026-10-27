@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 import brain_export
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 SNAP_TS = time.time()
 
@@ -79,6 +80,7 @@ def _snapshot(tmp_path: Path, gen: str = "gen-1") -> Path:
 def _rollup(db_path: Path, summary: str = "SYNTH summary v1") -> None:
     conn = sqlite3.connect(str(db_path))
     content = {
+        VERSION_KEY: CURRENT_VERSION,
         "project_id": 1, "generated_at": SNAP_TS,
         "msg_count": 3, "reply_count": 1,
         "last_activity": "2026-09-20T10:00:00+09:00",
@@ -97,9 +99,9 @@ def _rollup(db_path: Path, summary: str = "SYNTH summary v1") -> None:
     }
     conn.execute("DELETE FROM artifacts WHERE kind='patient_rollup'")
     conn.execute(
-        "INSERT INTO artifacts(kind,project_id,content,created_at) "
-        "VALUES ('patient_rollup',1,?,?)",
-        (json.dumps(content), SNAP_TS))
+        "INSERT INTO artifacts(kind,project_id,content,meta,created_at) "
+        "VALUES ('patient_rollup',1,?,?,?)",
+        (json.dumps(content), json.dumps({VERSION_KEY: CURRENT_VERSION}), SNAP_TS))
     conn.commit()
     conn.close()
 
@@ -132,10 +134,11 @@ def _all_text(out: Path) -> str:
     return "\n".join(p.read_text() for p in sorted(out.rglob("*.md")))
 
 
-@pytest.mark.parametrize("content", ["{broken", "[]", "7",
-                                   '{"summary":7}',
-                                   '{"medications":[7]}',
-                                   '{"top_senders":[["synthetic"]]}'])
+@pytest.mark.parametrize("content", ["{broken", "[]", "7", *(
+    pytest.param(json.dumps({VERSION_KEY: CURRENT_VERSION, **value}), id=label) for label, value in (
+        ('{"summary":7}', {"summary": 7}),
+        ('{"medications":[7]}', {"medications": [7]}),
+        ('{"top_senders":[["synthetic"]]}', {"top_senders": [["synthetic"]]})))])
 def test_invalid_rollup_preserves_existing_export(env, content, capsys):
     snap, out = env
     brain_export.run(out, snap)
@@ -426,7 +429,7 @@ def test_hostile_name_does_not_break_front_matter_or_tables(env):
                  ("evil: name\n---\ninjected: yes",))
     conn.execute(
         "UPDATE artifacts SET content=? WHERE kind='patient_rollup'",
-        (json.dumps({"project_id": 1, "generated_at": SNAP_TS,
+        (json.dumps({VERSION_KEY: CURRENT_VERSION, "project_id": 1, "generated_at": SNAP_TS,
                      "msg_count": 1, "last_activity": "2026-09-20",
                      "last_activity_ts": SNAP_TS, "summary": None,
                      "medications": [{"name": "a|b\nc", "dose": "x",
@@ -774,7 +777,7 @@ def test_period_candidate_and_unrefreshed_ids_are_labelled(env, period_key, ids_
     with sqlite3.connect(snap) as conn:
         conn.execute(
             "UPDATE artifacts SET content=? WHERE kind='patient_rollup'",
-            (json.dumps({"project_id": 1, "generated_at": SNAP_TS, "msg_count": 2,
+            (json.dumps({VERSION_KEY: CURRENT_VERSION, "project_id": 1, "generated_at": SNAP_TS, "msg_count": 2,
                          period_key: {"start": "2026-09-01", "end": "2026-09-30"},
                          ids_key: [7, 8]}),))
     assert brain_export.run(out, snap)["ok"]

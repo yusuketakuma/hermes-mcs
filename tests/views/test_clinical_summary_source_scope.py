@@ -8,6 +8,7 @@ import structured_view
 from extract_testkit import _message, _hash
 from common_testkit import ledger_fixture
 import mcs_queries
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 store = ledger_fixture(name="store", patients=(1,))
@@ -19,7 +20,7 @@ def seed(store, body, doc, *, name="患者A", group=False):
         store.db.execute("UPDATE patients SET patient_name=?,project_type=? WHERE project_id=1",
                          (name, "group" if group else "visiting"))
     store.artifact_add("extract_llm", json.dumps(doc), project_id=1, message_id=1,
-                       meta={"hash": _hash(store), "extract_version": extract_llm.EXTRACT_VERSION})
+                       meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(store), "extract_version": extract_llm.EXTRACT_VERSION})
 
 
 def clinical_doc():
@@ -69,7 +70,7 @@ def test_family_canonical_finding_corrects_mislabeled_subject_without_erasing_hi
 def test_family_rule_period_is_not_patients_period(store):
     seed(store, "母の状態：\n内服期間10/1-10/14。", {})
     store.artifact_add("extract_v1", json.dumps({"med_periods": [{"start": "2026-10-01", "end": "2026-10-14", "raw": "10/1-10/14"}]}),
-                       project_id=1, message_id=1, meta={"hash": _hash(store)})
+                       project_id=1, message_id=1, meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(store)})
     assert not any(line.startswith("服薬期間:") for line in structured_view.structured_lines(store.db, 1))
 
 
@@ -125,7 +126,7 @@ def test_patient_negation_still_suppresses_rule_positive(store):
     seed(store, "本人は発熱なし。", {"symptoms": [{"text": "発熱", "subject": "patient", "negated": True,
                                                  "evidence": "発熱なし"}]})
     store.artifact_add("extract_v1", json.dumps({"symptoms": ["発熱"]}), project_id=1, message_id=1,
-                       meta={"hash": _hash(store)})
+                       meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(store)})
     assert "症状: 発熱なし" in structured_view.structured_lines(store.db, 1)
 
 
@@ -185,7 +186,7 @@ def test_medication_presence_keeps_order_and_duplicates_across_bounded_batches(s
     store.save_messages([_message(mid=mid, body=body) for mid in range(1, 423)])
     for mid in (1, 2, 3, 421):
         store.artifact_add("extract_llm", json.dumps(doc), project_id=1, message_id=mid,
-                           meta={"hash": _hash(store, mid),
+                           meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(store, mid),
                                  "extract_version": extract_llm.EXTRACT_VERSION})
     ids = [3, 2, 3, 1, 999, *range(4, 423)]
     expected = [mid for mid in ids if any(structured_view.medication_entries(store.db, mid))]

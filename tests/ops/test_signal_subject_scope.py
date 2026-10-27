@@ -4,6 +4,7 @@ from extract_testkit import _message, _hash
 from common_testkit import ledger_fixture
 import mcs_signals
 import signal_policy
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 NOW = 1791000000
 
@@ -16,7 +17,7 @@ def seed(store, body, doc, *, mid=1, age=10):
     with store.db:
         store.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=?", (NOW - age * 86400, mid))
     store.artifact_add("extract_llm", json.dumps(doc), project_id=1, message_id=mid,
-                       meta={"hash": _hash(store, mid)})
+                       meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(store, mid)})
 
 
 def doc(med="合成薬A", symptom="発熱", *, negated=False):

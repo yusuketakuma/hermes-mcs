@@ -12,6 +12,7 @@ import mcs_signals
 import mcs_stats
 from ops_testkit import DAY, NOW, _msg
 import signal_policy
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 led = ledger_fixture()
@@ -20,7 +21,7 @@ led = ledger_fixture()
 def fact(db, mid, **fields):
     db.execute(
         "INSERT INTO artifacts(kind,message_id,content,meta) VALUES(?,?,?,?)",
-        ("extract_llm", mid, json.dumps(fields), json.dumps({"hash": f"h{mid}"})))
+        ("extract_llm", mid, json.dumps(fields), json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": f"h{mid}"})))
 
 
 def feedback(db, now=NOW):

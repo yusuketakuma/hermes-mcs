@@ -21,6 +21,7 @@ from test_ledger_audit import _database
 import drug_map
 import rollup
 import mcs_repair
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 NONCE = "00000000-0000-4000-8000-000000000013"
 OPERATOR = hashlib.sha256(b"synthetic-operator").hexdigest()
@@ -62,7 +63,7 @@ def world(tmp_path):
         db.row_factory = sqlite3.Row
         db.execute("INSERT INTO artifacts(kind,project_id,meta,created_at) "
                    "VALUES('patient_rollup',1,?,100)",
-                   (json.dumps({"generated_at": 100,
+                   (json.dumps({VERSION_KEY: CURRENT_VERSION, "generated_at": 100,
                                 "period_check_version": PERIOD_CHECK_VERSION,
                                 "med_ref_sig": "0:",
                                 "med_ref_generation": drug_map.generation_signature(db),
@@ -164,7 +165,7 @@ def test_plan_aggregates_evidenced_candidates_without_private_values(world):
                      "VALUES('reconcile',1,'pending','SYNTHETIC_PRIVATE_REASON','{}')")
     _change(snapshot, "INSERT INTO artifacts(kind,project_id,message_id,meta,created_at) "
                      "VALUES('extract_v1',1,101,?,200)",
-            (json.dumps({"hash": "old", "rule_version": RULE_VERSION}),))
+            (json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "old", "rule_version": RULE_VERSION}),))
     before = _hash(snapshot)
     # When.
     result = repair.plan(snapshot, nonce=NONCE)

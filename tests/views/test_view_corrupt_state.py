@@ -10,8 +10,17 @@ import mcs_stats
 import stats_contract
 import extract_llm
 from response_observation_view import get_response_observation_list
-from views_testkit import SCHEMA, SNAP_TS, _extract, _message, _msg
+from views_testkit import SCHEMA, SNAP_TS, _message, _msg
+from views_testkit import _extract as _shared_extract
 from semantic_projection import PROJECTION_VERSION
+from inference_version import CURRENT_VERSION, VERSION_KEY
+
+
+def _extract(db, mid, chash, meds, events=None):
+    """Seed a current extraction without changing the shared view fixture."""
+    _shared_extract(db, mid, chash, meds, events=events)
+    db.execute("UPDATE artifacts SET meta=json_set(meta, ?, ?) WHERE artifact_id=last_insert_rowid()",
+               (f"$.{VERSION_KEY}", CURRENT_VERSION))
 
 DEEP = "[" * 1500 + "0" + "]" * 1500
 BIGINT = '{"synthetic_unused":' + "9" * 5000 + "}"
@@ -40,7 +49,7 @@ def test_stats_integer_limit_is_unavailable_and_preserves_source(stat, kind):
         db.executescript(SCHEMA)
         _msg(db, 1)
         raw = '{"unused":' + '9' * 5000 + ',"canonical_facts":[{"fact_id":"synthetic-f1"}],"meds":[]}'
-        meta = json.dumps({"hash": "h1", "projection_version": PROJECTION_VERSION})
+        meta = json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "h1", "projection_version": PROJECTION_VERSION})
         db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta) VALUES(?,1,1,?,?)",
                    (kind, raw, meta))
         result = mcs_stats.run_stats(db, SNAP_TS, {"stat": stat})["stats"][stat]
@@ -143,7 +152,7 @@ def test_stats_newest_empty_legacy_extraction_suppresses_old_meds(content):
         _extract(db, 1, "h1", [{"name": "SYNTHETIC OLD", "action": "start"}])
         db.execute("INSERT INTO artifacts(kind,message_id,content,meta) "
                    "VALUES('extract_llm',1,?,?)",
-                   (json.dumps(content), '{"hash":"h1"}'))
+                   (json.dumps(content), json.dumps({"hash": "h1", VERSION_KEY: CURRENT_VERSION})))
         result = mcs_stats.run_stats(db, SNAP_TS, {"stat": "meds"})["stats"]["meds"]
         assert result["action_totals"] == {} and result["distinct_names"] == 0
     finally:
@@ -164,7 +173,7 @@ def test_stats_deep_sqlite_valid_extraction_has_stable_result():
                + "[" * 990 + "0" + "]" * 990 + "}")
         assert db.execute("SELECT json_valid(?)", (raw,)).fetchone()[0] == 1
         db.execute("INSERT INTO artifacts(kind,message_id,content,meta) "
-                   "VALUES('extract_llm',1,?,?)", (raw, '{"hash":"h1"}'))
+                   "VALUES('extract_llm',1,?,?)", (raw, json.dumps({"hash": "h1", VERSION_KEY: CURRENT_VERSION})))
         result = mcs_stats.run_stats(db, SNAP_TS, {"stat": "meds"})["stats"]["meds"]
         if result["status"] == "unavailable":
             assert result["reason"] == "data_error:RecursionError"
@@ -196,10 +205,10 @@ def test_qc_deep_annotation_cannot_break_listing(store, tmp_path, padding):
     store.save_messages([_message(1)], project_id=1, notify=False)
     revision = store.db.execute("SELECT content_hash FROM messages").fetchone()[0]
     source = store.artifact_add("extract_llm", "{}", project_id=1, message_id=1,
-                               meta={"hash": revision, "extract_version": extract_llm.EXTRACT_VERSION})
+                               meta={VERSION_KEY: CURRENT_VERSION, "hash": revision, "extract_version": extract_llm.EXTRACT_VERSION})
     raw = '{"qc":"unevaluated","padding":' + padding + "}"
     store.artifact_add("extract_qc", raw, project_id=1, message_id=1,
-                       meta={"hash": revision, "extract_version": extract_llm.EXTRACT_VERSION,
+                       meta={VERSION_KEY: CURRENT_VERSION, "hash": revision, "extract_version": extract_llm.EXTRACT_VERSION,
                              "source_artifact_id": source})
     view = _view(store, tmp_path)
     try:
