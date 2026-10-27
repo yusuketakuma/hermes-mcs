@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import hashlib
 from html import escape, unescape
+import json
 import os
 import re
 import time
+import uuid
 
 from adapters.common import projects
 from adapters.common import commands, confirm, envelopes, paths, registry
@@ -26,6 +29,20 @@ _ACTION = re.compile(r"^mcs:a:[0-9a-f]{32}$|" + _STAMP_PAIR.pattern)
 _CONFIRM = re.compile(r"^mcs:c:([0-9a-f]{16})(:cancel)?$")
 _TOKEN = re.compile(r"^[0-9a-f]{32}$")
 _EXPIRED = "この確認は期限切れです。もう一度操作してください。"
+
+
+def _measurement_digest(result):
+    """Bind a private view to its observed content without retaining that content."""
+    view = result.get("list")
+    if (result.get("outcome") != "applied" or result.get("action") != "list"
+            or result.get("measurement_view") is not True or not isinstance(view, dict)):
+        return None
+    try:
+        raw = json.dumps(view, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                         allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError, UnicodeError):
+        return None
+    return hashlib.sha256(raw).hexdigest()
 # block ids of modals opened by a worker that predates pending
 # field_ids — forms.task_attrs / dismiss_attrs still accept these keys
 _LEGACY_FIELDS = {"request": ("title", "reason", "assignee", "due_date"),
@@ -42,6 +59,8 @@ RESULT_POLL_S = 0.25
 # the 📝 modal waits this long for the runner's form (prefill + roster)
 # before opening — trigger_id lives ~3s; a slow drain opens without it
 MODAL_OPEN_WAIT_S = 1.5
+MEASUREMENT_GUARD_WAIT_S = 30
+MEASUREMENT_GUARD_RESULT_S = 5
 
 
 def _modal_blocks(fields):
@@ -225,6 +244,7 @@ class Actions:
 
     def __init__(self, app, settings, dirs, reg, sender, log, *, native_admission=None):
         self._native_admission = native_admission
+        self._measurement_instance = uuid.uuid4().hex
         self._app = app
         self._settings = settings
         self._origin_scope = {key: settings[key] for key in (
@@ -762,6 +782,12 @@ class Actions:
         for cid, rec in window:
             if self._reg.followup(cid) is None:
                 continue
+            if rec.get("kind") == "measurement_guard" and (
+                    rec.get("measurement_instance") != self._measurement_instance
+                    or type(rec.get("measurement_deadline")) not in (int, float)
+                    or time.monotonic() > rec["measurement_deadline"]):
+                self._reg.drop_followup(cid)
+                continue
             origin = rec["origin"]
             if (origin.get("transport") != "slack"
                     or any(origin.get(key) != self._settings[key]
@@ -811,6 +837,39 @@ class Actions:
                     await self._say(origin["channel_id"], rec["user"],
                                     ja(result))
                 continue
+            pin = self._pinned(rec["token"], {**origin, "actor": rec["actor"]}, rec["actor"])
+            measurement = bool(pin and pin.get("measurement_view") is True)
+            if measurement or result.get("measurement_view") is True or rec["kind"] == "measurement_guard":
+                digest = _measurement_digest(result)
+                if not measurement or digest is None or not self._native_command_current() \
+                        or not await self._interactive(require_epoch=True):
+                    continue
+                if rec["kind"] != "measurement_guard":
+                    env = envelopes.notification(
+                        rec["token"], rec["actor"], origin,
+                        projects.view_inputs(self._settings, pin["action"], ""))
+                    # Keep only a digest in the followup, never the private page.
+                    self._reg.put_followup("measurement:" + env["request_id"], {
+                        **rec, "kind": "measurement_guard", "request_id": env["request_id"],
+                        "measurement_digest": digest, "measurement_instance": self._measurement_instance,
+                        "measurement_deadline": time.monotonic() + MEASUREMENT_GUARD_WAIT_S})
+                    try:
+                        await self._publish(env)
+                    except (OSError, ValueError):
+                        # A publish may have succeeded before an error; do not resend it.
+                        pass
+                    continue
+                processed_at = result.get("processed_at")
+                if (rec.get("measurement_instance") != self._measurement_instance
+                        or type(rec.get("measurement_deadline")) not in (int, float)
+                        or time.monotonic() > rec["measurement_deadline"]
+                        or type(processed_at) not in (int, float)
+                        or not 0 <= time.time() - processed_at <= MEASUREMENT_GUARD_RESULT_S):
+                    continue
+                if digest != rec.get("measurement_digest"):
+                    await self._say(origin["channel_id"], rec["user"],
+                                    "記録が変更されました。もう一度開いてください。")
+                    continue
             answer = view_answer(result, self._allowed_pid, markdown=False, plain=True)
             if answer is not None:
                 pin = self._pinned(rec["token"],
@@ -869,11 +928,22 @@ class Actions:
                     # 📊 / patient context: one Block Kit message; the text is the fallback
                     answer = answer[:1]
                 for index, (message, tasks) in enumerate(answer):
+                    async def measurement_authorized():
+                        return (self._native_command_current()
+                                and rec.get("measurement_instance") == self._measurement_instance
+                                and time.monotonic() <= rec.get("measurement_deadline", 0)
+                                and 0 <= time.time() - processed_at <= MEASUREMENT_GUARD_RESULT_S
+                                and rec["user"] in self._settings["allowed_user_ids"]
+                                and bool(self._pinned(rec["token"],
+                                          {**origin, "actor": rec["actor"]}, rec["actor"]))
+                                and await self._interactive(require_epoch=True))
+
                     await self._say(origin["channel_id"], rec["user"],
                                     message, blocks=cards or (
                                         _task_blocks(tasks) if tasks else None),
                                     thread_ts=thread_ts,
-                                    navigation=navigation if index == 0 else None)
+                                    navigation=navigation if index == 0 else None,
+                                    authorized=measurement_authorized if measurement else None)
                 if thread_ts:
                     # a threaded ephemeral shows only inside the thread: a
                     # click on the card face would otherwise look ignored

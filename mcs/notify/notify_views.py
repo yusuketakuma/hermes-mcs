@@ -57,43 +57,46 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
         roll = {}
     else:
         roll = current_cached_refs(db, project_id, roll, row["meta"], cfg=cfg)
-        period = roll.get("med_period_candidate")
-        meds = [m for m in roll.get("medications") or []
-                if isinstance(m, dict) and m.get("name")]
-        clinical = roll.get("clinical_state")
-        dependencies = clinical.get("dependencies", {}) if isinstance(clinical, dict) else {}
-        if not isinstance(dependencies, dict):
-            dependencies = {"complete": False}
-        source_gap = dependencies.get("complete") is False
-        lines.append("■ 薬（現在の状態は未確定）" if source_gap else "■ 薬")
-        if source_gap:
-            gaps = dependencies.get("gaps")
-            lines.append(f"変更前の根拠が未確認: {gaps}件" if type(gaps) is int and gaps > 0
-                         else "変更前の根拠を確認できません")
-        if isinstance(period, dict) and period.get("start"):
-            lines.append(f"処方期間の候補: {period.get('start')}"
-                         f"〜{period.get('end') or '?'}")
-        lines.extend("・" + " ".join(str(m[k]) for k in
-                                     ("name", "dose", "freq", "route")
-                                     if m.get(k))
-                     + (f"（最終言及 {m['last']}）" if m.get("last") else "")
-                     + (" — " + note if (note := candidate_note(m.get("ref"))) else "")
-                     for m in meds[:15])
-        if not meds:
-            lines.append("・現在使用中の薬剤: 未確認")
-        for key, label in (("planned_medications", "予定"), ("unverified_medications", "確認待ち")):
-            candidates = [m for m in roll.get(key) or [] if isinstance(m, dict) and m.get("name")]
-            if candidates:
-                lines.append(f"・{label}: " + " / ".join(" ".join(str(m[k]) for k in
-                    ("name", "dose", "freq", "route") if m.get(k)) for m in candidates[:5]))
-        vit = roll.get("latest_vitals")
-        vline = (vital_line({"vitals": vit}, {})
-                 if isinstance(vit, dict) else None)
-        lines.append("■ " + (f"{vline}（{vit.get('at')}）" if vline
-                             else "バイタル: 未確認"))
-        if isinstance(roll.get("next_planned"), str) and roll["next_planned"]:
-            lines.append(f"■ 次回予定: {roll['next_planned']}")
-        lines.extend(_request_reply_lines(db, project_id, roll))
+        if roll.get("rollup_freshness") == "unknown":
+            lines.append("■ 薬・バイタル・予定: 集約の現行性を確認できません")
+        else:
+            period = roll.get("med_period_candidate")
+            meds = [m for m in roll.get("medications") or []
+                    if isinstance(m, dict) and m.get("name")]
+            clinical = roll.get("clinical_state")
+            dependencies = clinical.get("dependencies", {}) if isinstance(clinical, dict) else {}
+            if not isinstance(dependencies, dict):
+                dependencies = {"complete": False}
+            source_gap = dependencies.get("complete") is False
+            lines.append("■ 薬（現在の状態は未確定）" if source_gap else "■ 薬")
+            if source_gap:
+                gaps = dependencies.get("gaps")
+                lines.append(f"変更前の根拠が未確認: {gaps}件" if type(gaps) is int and gaps > 0
+                             else "変更前の根拠を確認できません")
+            if isinstance(period, dict) and period.get("start"):
+                lines.append(f"処方期間の候補: {period.get('start')}"
+                             f"〜{period.get('end') or '?'}")
+            lines.extend("・" + " ".join(str(m[k]) for k in
+                                         ("name", "dose", "freq", "route")
+                                         if m.get(k))
+                         + (f"（最終言及 {m['last']}）" if m.get("last") else "")
+                         + (" — " + note if (note := candidate_note(m.get("ref"))) else "")
+                         for m in meds[:15])
+            if not meds:
+                lines.append("・現在使用中の薬剤: 未確認")
+            for key, label in (("planned_medications", "予定"), ("unverified_medications", "確認待ち")):
+                candidates = [m for m in roll.get(key) or [] if isinstance(m, dict) and m.get("name")]
+                if candidates:
+                    lines.append(f"・{label}: " + " / ".join(" ".join(str(m[k]) for k in
+                        ("name", "dose", "freq", "route") if m.get(k)) for m in candidates[:5]))
+            vit = roll.get("latest_vitals")
+            vline = (vital_line({"vitals": vit}, {})
+                     if isinstance(vit, dict) else None)
+            lines.append("■ " + (f"{vline}（{vit.get('at')}）" if vline
+                                 else "バイタル: 未確認"))
+            if isinstance(roll.get("next_planned"), str) and roll["next_planned"]:
+                lines.append(f"■ 次回予定: {roll['next_planned']}")
+            lines.extend(_request_reply_lines(db, project_id, roll))
     # one current-summary read on this connection serves both sections
     summary = _karte_summary_from_artifact(db, project_id)
     lines.extend(_patient_context_lines(db, project_id, roll, summary))
@@ -775,7 +778,7 @@ def drug_search_view(db, cfg, project_id, query) -> dict:
 CONTEXT_SECTIONS = {
     "background": "患者さんの全体像", "changes": "前回から変わったこと",
     "replies": "連絡・返答の確認", "previsit": "訪問前の確認ノート",
-    "timeline": "経過タイムライン", "care_events": "出来事の記録", "observations": "検査・観測の記録", "discrepancies": "記録の食い違い",
+    "timeline": "経過タイムライン", "care_events": "出来事の記録", "observations": "検査・観測の記録", "measurements": "測定値の原文記録", "discrepancies": "記録の食い違い",
     "handoff": "引継ぎ用の記録", "transition_course": "退院・移行時の経過",
 }
 from patient_context_view import ROLE_LABELS as CONTEXT_ROLES  # noqa: E402 - one role source
@@ -818,7 +821,9 @@ def _bare_quote(text: str, category) -> str:
 
 
 def patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0,
-                         intervention_history=False, intervention_cursor=None):
+                         intervention_history=False, intervention_cursor=None, measurement=None):
+    if section == "measurements":
+        return _measurement_list(db, project_id, measurement)
     if section != "care_events":
         return _patient_context_list(db, project_id, section, cfg=cfg, since=since, now=now,
                                      role=role, page=page, intervention_history=intervention_history,
@@ -838,6 +843,43 @@ def patient_context_list(db, project_id, section, *, cfg, since, now, role="", p
     else:
         db.execute("RELEASE care_event_notification")
         return result
+
+
+def _measurement_list(db, project_id, measurement):
+    """Render only the prepared page; patient scope is still checked by the caller."""
+    import measurement_reader
+
+    if not measurement_reader.patient_scope_valid(db, project_id):
+        return {"title": "測定値の原文記録", "layout": "patient_context",
+                "head": [], "items": [], "notes": [],
+                "empty": "この記録を確認できません。", "page": 0, "pages": 1}
+    page = measurement if isinstance(measurement, dict) and measurement.get("project_id") == project_id else {}
+    rows = []
+    labels = {"bt": "体温", "hr": "脈拍", "rr": "呼吸数", "sbp": "収縮期血圧",
+              "dbp": "拡張期血圧", "spo2": "SpO₂", "bs": "血糖"}
+    for item in page.get("items") or []:
+        if not isinstance(item, dict) or item.get("project_id") != project_id:
+            continue
+        name = item.get("name") or labels.get(item.get("key"), item.get("key")) or "測定値"
+        value = str(item.get("value"))
+        unit = item.get("unit") or ""
+        condition = item.get("condition")
+        text = f"{name}: {value} {unit}".strip() + (f"（{condition}）" if condition else "")
+        day = item.get("measured_on") or "測定日未確認"
+        posted = item.get("posted_at") or "投稿日時未確認"
+        rows.append({"group": "原文の測定値", "project_id": project_id, "quotes": [text],
+                     "text": text, "source": f"測定日 {day} · 投稿 {posted}",
+                     "date": "", "source_rest": f"測定日 {day} · 投稿 {posted}"})
+    reasons = {"source_relation_unconfirmed": "この投稿の訂正・内容を確認できません。",
+               "source_unverified": "この投稿の原文を確認できません。",
+               "resource_limit": "この投稿は読取り上限のため確認できません。",
+               "unsupported_dependency": "この投稿の解析結果を確認できません。",
+               "source_changed": "記録が変更されました。もう一度開いてください。",
+               "observations_unavailable": "この投稿に表示できる測定値は確認できません。"}
+    note = reasons.get(page.get("reason"), "この投稿の測定値を確認できません。")
+    return {"title": f"{_care_event_patient_label(db, project_id)} — 測定値の原文記録",
+            "layout": "patient_context", "head": ["この投稿の記載。別投稿の訂正・最新性は未確認"],
+            "items": rows, "notes": [], "empty": note, "page": 0, "pages": 1}
 
 
 def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", page=0,

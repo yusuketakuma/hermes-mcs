@@ -879,7 +879,7 @@ def _parser():
     plan.add_argument("--part-id", required=True)
     plan.add_argument("--include-related", action="store_true",
                       help="Include every unresolved attachment in the same latest Slack update; never approve it")
-    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals", "read_model", "project_metadata", "cross_lists", "response_observations", "patient_context"):
+    for kind in ("status", "search", "timeline", "evidence", "thread", "attachments", "candidates", "receipt", "notification_receipt", "requests", "staff", "qc", "semantic", "comparison", "loops", "operations", "control", "stats", "signals", "read_model", "project_metadata", "cross_lists", "response_observations", "patient_context", "local_measurements"):
         sub = subs.add_parser(kind)
         if kind == "control":
             actions = sub.add_subparsers(dest="action", required=True)
@@ -917,7 +917,7 @@ def _parser():
                 # explicit --limit bounds honestly via 'truncated'
                 child.add_argument("--limit", type=int, default=None)
             elif kind not in ("evidence", "receipt", "notification_receipt", "project_metadata", "cross_lists",
-                            "control", "patient_context") and (kind != "requests" or index == 0):
+                            "control", "patient_context", "local_measurements") and (kind != "requests" or index == 0):
                 child.add_argument("--limit", type=int, default=50)
                 if kind != "signals":
                     child.add_argument("--cursor")
@@ -935,6 +935,8 @@ def _parser():
         if kind == "response_observations":
             sub.add_argument("--publication", action="store_true")
             sub.add_argument("--max-age-s", type=float)
+        if kind == "local_measurements":
+            sub.add_argument("--cursor")
         if kind in ("project_metadata", "cross_lists"):
             from project_metadata_contract import DATASETS
             sub.add_argument("--dataset", required=True, choices=(
@@ -983,6 +985,13 @@ def main(argv=None):
     confirmed = args.pop("confirm_human", False)
     view = None
     try:
+        if args["kind"] == "local_measurements":
+            # Local operator only; remote transports need separate actor and revocation checks.
+            from measurement_local_view import read_snapshot
+            from mcs_util import load_config_checked
+            result = read_snapshot(snapshot, args["project"], cfg=load_config_checked(), cursor=args["cursor"])
+            print(json.dumps(result, ensure_ascii=False, allow_nan=False))
+            return 1 if result["outcome"] == "unknown" else 0
         view = View(snapshot)  # Gate commands on an upgraded, published snapshot; never open the live writer DB.
         if args["kind"] == "card_part_plan":
             if (not requests.valid_uuid(args["delivery_id"])

@@ -1,0 +1,15 @@
+{
+  "category": "added",
+  "title": "測定値のローカル表示と患者まとめの導線を保存",
+  "summary": "患者の測定値をローカルで確認する読取り処理と、Slackの患者まとめの導線を追加しました。統合後の表示・認可の受入は未完了です。",
+  "upgrade": "開発中のため本番への適用は行っていません。遠隔の測定値表示を新たに許可する変更ではありません。",
+  "details": [
+    "測定値の読取りとローカル表示を分け、通知側の呼出元と合成テストを更新しました。"
+  ],
+  "refs": [
+    "mcs/patients/measurement_reader.py",
+    "mcs/views/measurement_local_view.py",
+    "mcs/notify/notify_views.py",
+    "adapters/slack/actions.py"
+  ]
+}

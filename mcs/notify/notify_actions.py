@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from pathlib import Path
+import sqlite3
 import time
 import uuid
 
@@ -29,6 +31,59 @@ LIVE_RESULT_S = 3600
 TASK_VIEW_LIMIT = 12          # 12 rows x <=2 buttons fit the 25-button ceiling
 
 
+def _prepare_measurement(db, req, cfg, now):
+    """Read the requested measurement page without holding the notification writer."""
+    row = db.execute("SELECT card_id,action,params,expires_at FROM notification_action_tokens WHERE token=?",
+                     (req.get("token"),)).fetchone()
+    params = loads_dict(row["params"]) if row is not None else None
+    if (row is None or row["action"] != "summary" or not isinstance(params, dict)
+            or params.get("section") != "measurements"):
+        return None
+    card = card_row(db, row["card_id"])
+    if (row["expires_at"] <= now or card is None or card["delivery_state"] == "revoked"
+            or not positive(card.get("project_id")) or not scope_matches(card, req.get("origin"))
+            or params.get("ephemeral") is not True or params.get("actor") != req.get("actor")):
+        return None
+    empty = {"project_id": card["project_id"], "outcome": "unknown", "reason": "measurement_unavailable",
+             "items": [], "next_cursor": None, "source_complete": False, "relations": "not_assessed"}
+    reader = None
+    try:
+        source = db.execute("PRAGMA database_list").fetchone()[2]
+        if not source:
+            return {"page": empty, "reader": None, "version": None}
+        path = Path(source).resolve()
+        stat = path.stat()
+        identity = (stat.st_dev, stat.st_ino)
+        reader = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.1)
+        reader.row_factory = sqlite3.Row
+        deadline = time.monotonic() + 2.0
+        reader.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+        version = reader.execute("PRAGMA data_version").fetchone()[0]
+        reader.execute("BEGIN")
+        reader.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+        import measurement_reader
+
+        def checkpoint():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("measurement_deadline")
+
+        page = measurement_reader.read_live_page(reader, card["project_id"], cfg=cfg,
+                                                 cursor=params.get("measurement_cursor"), checkpoint=checkpoint,
+                                                 now=now)
+        checkpoint()
+        stat = path.stat()
+        if (stat.st_dev, stat.st_ino) != identity:
+            raise ValueError("measurement_database_changed")
+        reader.rollback()
+        reader.set_progress_handler(None, 0)
+        return {"page": page, "reader": reader, "version": version,
+                "path": path, "identity": identity}
+    except (sqlite3.Error, OSError, ValueError, TypeError, OverflowError, RecursionError):
+        if reader is not None:
+            reader.close()
+        return {"page": empty, "reader": None, "version": None}
+
+
 def apply_notification(ledger, req, cfg, now=None) -> dict:
     """op='notification': a card action (page/ack/assign/defer). The
     token binds action+params+generations; the plugin's verified actor
@@ -41,39 +96,56 @@ def apply_notification(ledger, req, cfg, now=None) -> dict:
     command_id = req["command_id"]
     digest = payload_hash({k: v for k, v in req.items() if k not in ("request_id", "clicked_at")})
     specs = []
-    with db:
-        db.execute("BEGIN IMMEDIATE")
-        old = db.execute(
-            "SELECT payload_hash,receipt_json FROM command_receipts "
-            "WHERE command_id=?", (command_id,)).fetchone()
-        stored = None
-        if old:
-            stored = json.loads(old["receipt_json"])
-            if old["payload_hash"] != digest:
-                return {"outcome": "rejected", "error": "command_id_conflict"}
-        # Idempotent writes retain their original result, but authorization
-        # and view responses are checked against live state on every click.
-        receipt = _apply_notification_tx(db, req, cfg, now, specs, replay=stored)
-        if old is None:
-            # 📄 is view-only and every click recomputes the text live
-            # (replay skips "body"), so the durable audit row keeps the
-            # outcome but never a copy of the source text — a copy would
-            # outlive the source's deletion. The caller's result still
-            # carries the body for this one delivery.
-            # the 📝 form's prefill/staff list is the same kind of live
-            # view data — recomputed per click, never persisted
-            kept = {k: v for k, v in receipt.items()
-                    if k not in LIVE_RESULT_KEYS}
-            db.execute(
-                "INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
-                (command_id, digest, receipt.get("project_id"),
-                 None, receipt["outcome"], canonical(kept).decode(), now))
-        cards.mark_snapshot_dirty(db)
+    prepared = _prepare_measurement(db, req, cfg, now)
+    try:
+        with db:
+            db.execute("BEGIN IMMEDIATE")
+            if prepared and prepared["reader"] is not None:
+                try:
+                    stat = prepared["path"].stat()
+                    unchanged = ((stat.st_dev, stat.st_ino) == prepared["identity"]
+                                 and prepared["reader"].execute("PRAGMA data_version").fetchone()[0]
+                                 == prepared["version"])
+                except (OSError, sqlite3.Error):
+                    unchanged = False
+                if not unchanged:
+                    prepared["page"] = {**prepared["page"], "outcome": "unknown", "reason": "source_changed",
+                                        "items": [], "next_cursor": None}
+            old = db.execute(
+                "SELECT payload_hash,receipt_json FROM command_receipts "
+                "WHERE command_id=?", (command_id,)).fetchone()
+            stored = None
+            if old:
+                stored = json.loads(old["receipt_json"])
+                if old["payload_hash"] != digest:
+                    return {"outcome": "rejected", "error": "command_id_conflict"}
+            # Idempotent writes retain their original result, but authorization
+            # and view responses are checked against live state on every click.
+            receipt = _apply_notification_tx(db, req, cfg, now, specs, replay=stored,
+                                             measurement=prepared["page"] if prepared else None)
+            if old is None:
+                # 📄 is view-only and every click recomputes the text live
+                # (replay skips "body"), so the durable audit row keeps the
+                # outcome but never a copy of the source text — a copy would
+                # outlive the source's deletion. The caller's result still
+                # carries the body for this one delivery.
+                # the 📝 form's prefill/staff list is the same kind of live
+                # view data — recomputed per click, never persisted
+                kept = {k: v for k, v in receipt.items()
+                        if k not in LIVE_RESULT_KEYS}
+                db.execute(
+                    "INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
+                    (command_id, digest, receipt.get("project_id"),
+                     None, receipt["outcome"], canonical(kept).decode(), now))
+            cards.mark_snapshot_dirty(db)
+    finally:
+        if prepared and prepared["reader"] is not None:
+            prepared["reader"].close()
     notify_spool.publish_committed(ledger, db, specs, now)
     return receipt
 
 
-def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
+def _apply_notification_tx(db, req, cfg, now, specs, replay=None, measurement=None) -> dict:
     actor, token, origin = req["actor"], req["token"], req.get("origin")
     base = {"kind": "notification", "command_id": req["command_id"],
             "actor": actor, "origin": origin, "processed_at": now}
@@ -155,7 +227,7 @@ def _apply_notification_tx(db, req, cfg, now, specs, replay=None) -> dict:
                 and now - (replay.get("processed_at") or 0) <= LIVE_RESULT_S):
             tok_params = {**tok_params, "since": replay["context_since"], "_replay": True}
         return _act_view(db, base, card, action, req.get("input") or {}, now,
-                         cfg, tok_params)
+                         cfg, tok_params, measurement=measurement)
     if action == "tasks":
         # live view — requests anchored to the thread's messages, plus a
         # fresh transition token per reachable status minted in the same
@@ -281,7 +353,7 @@ def _stamp_command_id(click_command_id: str) -> str:
 
 
 def _act_view(db, base, card, action, inputs, now, cfg=None,
-              params=None) -> dict:
+              params=None, *, measurement=None) -> dict:
     """🧾 / 📋 / 🗂 / 🔎 / 📊 / 💊 — live clicker-scoped views (notify_views,
     notify_digest), recomputed per click; stored receipts drop their
     text. The 💊 target post comes from the token's render-time params,
@@ -319,7 +391,7 @@ def _act_view(db, base, card, action, inputs, now, cfg=None,
         try:
             db.execute("SAVEPOINT patient_context")
             opened = True
-            result = _context_navigation(db, base, card, params or {}, cfg, now, legacy)
+            result = _context_navigation(db, base, card, params or {}, cfg, now, legacy, measurement=measurement)
         except Exception:  # a broken context refresh view must never hide the existing summary
             if opened:
                 db.execute("ROLLBACK TO patient_context")
@@ -392,19 +464,23 @@ def _private_button(db, base, card, now, navigation, token_ctx, action, label, p
     token_ctx[token] = {"action": action, "card_key": card["card_key"],
         "kind": card["kind"], "project_id": card["project_id"],
         "channel_id": card["channel_id"], "team_id": card["team_id"],
-        "message_id": card["message_id"], "actor": base["actor"], "ephemeral": True}
+        "message_id": card["message_id"], "actor": base["actor"], "ephemeral": True,
+        **({"measurement_view": True} if params.get("section") == "measurements" else {})}
 
 
-def _context_navigation(db, base, card, params, cfg, now, legacy):
+def _context_navigation(db, base, card, params, cfg, now, legacy, *, measurement=None):
     from notify_views import CONTEXT_ROLES, CONTEXT_SECTIONS, patient_context_list
     section, role, page = params.get("section", "background"), params.get("role", ""), params.get("page", 0)
     history = params.get("intervention_history", False)
     cursor = params.get("intervention_cursor")
+    measurement_cursor = params.get("measurement_cursor")
     if (not isinstance(section, str) or section not in CONTEXT_SECTIONS
+            or section == "measurements" and card["transport"] != "slack"
             or not isinstance(role, str) or role not in CONTEXT_ROLES
             or type(page) is not int or not 0 <= page <= 100000
             or type(history) is not bool or history and section != "previsit"
-            or cursor is not None and (not history or not isinstance(cursor, dict))):
+            or cursor is not None and (not history or not isinstance(cursor, dict))
+            or measurement_cursor is not None and (section != "measurements" or not isinstance(measurement_cursor, dict))):
         return {**base, "outcome": "rejected", "error": "action_not_applicable"}
     identity = hashlib.sha256(canonical([base["actor"], card["transport"],
         card["channel_id"], card["team_id"]])).hexdigest()
@@ -435,6 +511,7 @@ def _context_navigation(db, base, card, params, cfg, now, legacy):
     try:
         view = patient_context_list(db, card["project_id"], section, cfg=cfg,
                                    since=since, now=now, role=role, page=page,
+                                   **({"measurement": measurement} if section == "measurements" else {}),
                                    **({"intervention_history": True, "intervention_cursor": cursor}
                                       if history else {}))
     except ValueError as error:
@@ -444,13 +521,15 @@ def _context_navigation(db, base, card, params, cfg, now, legacy):
         raise
 
     def navigate(label, target=section, target_page=0, target_role=role, action="summary",
-                 target_history=False, target_cursor=None):
+                 target_history=False, target_cursor=None, target_measurement_cursor=None):
         _private_button(db, base, card, now, navigation, token_ctx, action, label,
                         {"section": target, "page": target_page, "role": target_role, "since": since,
                          **({"intervention_history": True, "intervention_cursor": target_cursor}
-                            if target_history else {})})
+                            if target_history else {}),
+                         **({"measurement_cursor": target_measurement_cursor}
+                            if target_measurement_cursor is not None else {})})
 
-    sections = list(CONTEXT_SECTIONS)
+    sections = [name for name in CONTEXT_SECTIONS if name != "measurements" or card["transport"] == "slack"]
     index = sections.index(section)
     for offset, arrow in ((-1, "← "), (1, "→ ")):
         target = sections[(index + offset) % len(sections)]
@@ -474,9 +553,12 @@ def _context_navigation(db, base, card, params, cfg, now, legacy):
               and view.get("intervention_next_cursor") is not None):
             navigate("さらに古い投稿を確認", target_history=True,
                      target_cursor=view["intervention_next_cursor"])
+    if section == "measurements" and isinstance(measurement, dict) and measurement.get("next_cursor") is not None:
+        navigate("次の記載を確認", target_measurement_cursor=measurement["next_cursor"])
     _context_checkpoint(db, card, identity, row, params, now)
     return {**base, "outcome": "applied", "action": "list", "list": view,
-            "context_since": since, "navigation": navigation, "token_ctx": token_ctx}
+            "context_since": since, "navigation": navigation, "token_ctx": token_ctx,
+            **({"measurement_view": True} if section == "measurements" else {})}
 
 
 def _context_checkpoint(db, card, identity, row, params, now, since=None, command_id=None):
