@@ -8,11 +8,20 @@ import pytest
 
 import clinical_chunking
 import extract_llm
+import inference_dependency_loss
+from inference_version import LEGACY_VERSION, VERSION_KEY
 from mcs_util import text_chunks
 from patient_context import CATEGORIES
 from test_extraction_review import _message, db
 
 __all__ = ["db"]
+
+
+def _source_bound_row(db):
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row["_source_binding"] = inference_dependency_loss.source_binding(db.db, row["project_id"], row["message_id"])
+    assert isinstance(row["_source_binding"], str)
+    return row
 
 
 def test_shared_plan_contract_and_dense_short_corpus():
@@ -111,12 +120,12 @@ def test_actual_model_is_pinned_through_calls_and_final_stamp(db, monkeypatch):
 def test_progress_reads_only_bound_empty_checkpoints_and_final_binding(db, monkeypatch):
     body = "【家族】\n合成の長い記載です。" + "A" * 200
     db.save_messages([_message(body=body)])
-    row = dict(db.db.execute("SELECT * FROM messages").fetchone())
+    row = _source_bound_row(db)
     row["_target"] = ("", "synthetic")
     row["_context"] = extract_llm._thread_context(db.db, row)
     parts = clinical_chunking.plan_chunks(body, 100)
     monkeypatch.setattr(extract_llm, "_CHUNK_SIZE", 100)
-    extract_llm._persist_chunks(db, row, {0: {}}, row["_context"], chunk_size=100)
+    assert extract_llm._persist_chunks(db, row, {0: {}}, row["_context"], chunk_size=100)
     db.db.execute("PRAGMA query_only=ON")
     before = db.db.total_changes
     result = extract_llm.progress_for_message(db.db, row, model="synthetic")
@@ -193,7 +202,7 @@ def test_dense_planning_bypasses_batch_even_when_source_is_short(db, monkeypatch
 def test_pending_thin_confirmation_is_attention_even_with_bound_final(db):
     body = "未知の合成記載" * 50
     db.save_messages([_message(body=body)])
-    row = dict(db.db.execute("SELECT * FROM messages").fetchone())
+    row = _source_bound_row(db)
     row["_target"] = ("", "synthetic")
     row["_context"] = extract_llm._thread_context(db.db, row)
     assert extract_llm._replace_current(db, row, '{"summary":"合成概要"}', integrity={"thin": True})
@@ -223,14 +232,55 @@ def test_compact_hints_omit_empty_optional_keys_but_keep_false_semantics():
 
 def test_previous_plan_checkpoints_are_retained_but_not_reused(db, monkeypatch):
     db.save_messages([_message(body="独居です。")])
-    row = dict(db.db.execute("SELECT * FROM messages").fetchone())
+    row = _source_bound_row(db)
     row["_target"] = ("", "synthetic")
     with monkeypatch.context() as old:
         old.setattr(extract_llm, "PLAN_VERSION", 1)
-        extract_llm._persist_chunks(db, row, {0: {}}, chunk_size=100)
+        assert extract_llm._persist_chunks(db, row, {0: {}}, chunk_size=100)
         assert extract_llm._saved_chunk_state(db.db, row, chunk_size=100) == ({}, {0: {}})
     assert extract_llm.PLAN_VERSION == clinical_chunking.PLAN_VERSION == 2
     assert extract_llm._saved_chunk_state(db.db, row, chunk_size=100) == ({}, {})
     assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == 1
-    extract_llm._persist_chunks(db, row, {0: {}}, chunk_size=100)
+    assert extract_llm._persist_chunks(db, row, {0: {}}, chunk_size=100)
     assert extract_llm._saved_chunk_state(db.db, row, chunk_size=100) == ({}, {0: {}})
+
+
+@pytest.mark.parametrize("generation", ["missing", "legacy"])
+def test_old_generation_checkpoint_is_retained_but_never_reused(db, generation):
+    db.save_messages([_message(body="独居です。")])
+    row = _source_bound_row(db)
+    row["_target"] = ("", "synthetic")
+    assert extract_llm._persist_chunks(db, row, {0: {}}, chunk_size=100)
+    assert extract_llm._saved_chunk_state(db.db, row, chunk_size=100) == ({}, {0: {}})
+    artifact = db.db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()
+    meta = json.loads(artifact["meta"])
+    if generation == "missing":
+        del meta[VERSION_KEY]
+    else:
+        meta[VERSION_KEY] = LEGACY_VERSION
+    db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), artifact["artifact_id"]))
+    assert extract_llm._saved_chunk_state(db.db, row, chunk_size=100) == ({}, {})
+    assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == 1
+
+
+def test_missing_or_aba_source_binding_cannot_write_or_reuse_checkpoint(db):
+    body = "本人の合成記録です。"
+    db.save_messages([_message(body=body)])
+    row = _source_bound_row(db)
+    row["_target"] = ("", "synthetic")
+    without_binding = {key: value for key, value in row.items() if key != "_source_binding"}
+    assert not extract_llm._persist_chunks(db, without_binding, {0: {}}, chunk_size=100)
+    assert not extract_llm._replace_current(db, without_binding, '{}')
+    assert extract_llm._persist_chunks(db, row, {0: {}}, chunk_size=100)
+    assert extract_llm._saved_chunk_state(db.db, row, chunk_size=100) == ({}, {0: {}})
+    db.save_messages([_message(body="本人の別の合成記録です。")])
+    db.save_messages([_message(body=body)])
+    fresh = _source_bound_row(db)
+    fresh["_target"] = ("", "synthetic")
+    assert fresh["content_hash"] == row["content_hash"]
+    assert fresh["_source_binding"] != row["_source_binding"]
+    assert not extract_llm._persist_chunks(db, row, {0: {}}, chunk_size=100)
+    assert not extract_llm._replace_current(db, row, '{}')
+    assert extract_llm._saved_chunk_state(db.db, fresh, chunk_size=100) == ({}, {})
+    assert extract_llm._persist_chunks(db, fresh, {0: {}}, chunk_size=100)
+    assert extract_llm._saved_chunk_state(db.db, fresh, chunk_size=100) == ({}, {0: {}})
