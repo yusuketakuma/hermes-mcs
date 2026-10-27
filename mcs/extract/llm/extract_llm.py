@@ -2567,7 +2567,7 @@ def _progress_steps(db, row, *, model: str | None):
     if not isinstance(model, str) or not model or not row or row["body_state"] != "full":
         return out
     r = dict(row)
-    r["_source_binding"] = inference_dependency_loss.source_binding(db, r["project_id"], r["message_id"])
+    r["_source_binding"] = yield ("binding", r["project_id"], r["message_id"])
     if not isinstance(r.get("body_text"), str) or not r["body_text"]:
         return out
     r["_target"] = ("", model)
@@ -2667,6 +2667,8 @@ def _progress_steps(db, row, *, model: str | None):
 def _progress_probe(db, probe):
     """Evaluate one original predicate without changing its query boundary."""
     kind, project_id, message_id = probe
+    if kind == "binding":
+        return inference_dependency_loss.source_binding(db, project_id, message_id)
     if kind == "queued":
         row = db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? AND m.project_id=? "
                          f"AND ({pending_pred()}) AND ({_retry_budget_sql()})",
@@ -2707,6 +2709,9 @@ def _batch_progress_probes(db, probes):
     if any(type(value) is not int or not -(2**63) <= value < 2**63
            for _, project_id, message_id in probes for value in (project_id, message_id)):
         return [_progress_probe(db, probe) for probe in probes]
+    if kind == "binding":
+        return inference_dependency_loss.source_bindings(
+            db, [(project_id, message_id) for _, project_id, message_id in probes])
     pairs = sorted({(project_id, message_id) for _, project_id, message_id in probes})
     requested = json.dumps(pairs, separators=(",", ":"))
     join = ("JOIN json_each(?) j ON m.project_id=json_extract(j.value,'$[0]') "
@@ -2731,10 +2736,10 @@ def _batch_progress_probes(db, probes):
 
 
 def _progress_interrupted(error):
-    """Do not replay a cancelled, busy or lock-waiting SQLite operation."""
+    """Do not replay a cancelled, busy, locked or unclassified SQLite operation."""
     code = getattr(error, "sqlite_errorcode", None)
-    return (isinstance(error, sqlite3.OperationalError) and type(code) is int
-            and code & 0xff in (sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED))
+    return (isinstance(error, sqlite3.OperationalError) and (type(code) is not int
+            or code & 0xff in (sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)))
 
 
 def _progress_page(db, rows, model):

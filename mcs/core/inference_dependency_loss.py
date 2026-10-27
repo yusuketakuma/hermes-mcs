@@ -1,6 +1,7 @@
 """Retain compact negative-use dependencies before source or derivative destruction."""
 import hashlib
 import json
+import sqlite3
 import time
 from datetime import date
 import re
@@ -52,6 +53,60 @@ def source_binding(db, pid, mid, *, source_key=None):
     revision = db.execute('SELECT COALESCE(MAX(seq),1) FROM message_revisions WHERE message_id=?', (mid,)).fetchone()[0]
     return _digest([list(row), revision])
 
+
+
+def source_bindings(db, pairs):
+    """Read up to 64 ordered message occurrence fences on one borrowed snapshot.
+
+    Inputs must be a materialized list or tuple of exact integer pairs. The
+    returned list follows the input order, including duplicates and missing
+    or out-of-scope messages. Karte sources remain a separate single read.
+    """
+    if type(pairs) not in (list, tuple):
+        raise TypeError('dependency_loss_batch_pairs_invalid')
+    if len(pairs) > 64:
+        raise ValueError('dependency_loss_batch_limit')
+    prepared = []
+    for pair in pairs:
+        if (type(pair) not in (list, tuple) or len(pair) != 2
+                or any(type(value) is not int or not -(2**63) <= value < 2**63 for value in pair)):
+            raise TypeError('dependency_loss_batch_pair_invalid')
+        prepared.append((pair[0], pair[1]))
+    if not prepared:
+        return []
+    db.execute('SAVEPOINT source_bindings_read')
+    try:
+        try:
+            return _source_bindings_page(db, prepared)
+        except Exception as error:
+            code = getattr(error, 'sqlite_errorcode', None)
+            if isinstance(error, sqlite3.OperationalError):
+                # Older Python/adapter errors may not expose a SQLite code;
+                # without it, a retry could replay an interruption or lock wait.
+                if type(code) is not int or code & 0xff in (
+                        sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                    raise
+            # Replay singles in order if a grouped query fails on a later row.
+            return [source_binding(db, pid, mid) for pid, mid in prepared]
+    finally:
+        db.execute('RELEASE source_bindings_read')
+
+
+def _source_bindings_page(db, pairs):
+    unique = list(dict.fromkeys(pairs))
+    where = ' OR '.join('(m.project_id=? AND m.message_id=?)' for _ in unique)
+    params = [part for pair in unique for part in pair]
+    columns = ','.join('m.' + field for field in _SOURCE_FIELDS)
+    rows = {(row[0], row[1]): list(row[2:]) for row in db.execute(
+        'SELECT m.project_id,m.message_id,' + columns + ' FROM messages m WHERE ' + where, params)}
+    if not rows:
+        return [None] * len(pairs)
+    mids = sorted({mid for _, mid in rows})
+    marks = ','.join('?' for _ in mids)
+    revisions = {row[0]: row[1] for row in db.execute(
+        'SELECT message_id,COALESCE(MAX(seq),1) FROM message_revisions '
+        'WHERE message_id IN (' + marks + ') GROUP BY message_id', mids)}
+    return [_digest([rows[pair], revisions.get(pair[1], 1)]) if pair in rows else None for pair in pairs]
 
 
 def support_binding(db, pid, mid):

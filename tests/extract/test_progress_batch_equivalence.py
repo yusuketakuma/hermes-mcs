@@ -336,6 +336,8 @@ def test_failed_batch_preserves_earlier_single_decision_error(ledger, monkeypatc
 
     def original_order(_db, probe):
         kind, _project_id, message_id = probe
+        if message_id == 1 and kind == "binding":
+            return "synthetic-source-binding"
         if message_id == 1 and kind == "queued":
             return False
         if message_id == 1 and kind == "held":
@@ -359,10 +361,12 @@ def test_batch_only_error_is_not_hidden_when_single_replay_succeeds(ledger, monk
         llm.progress_for_messages(ledger.db, rows, model=MODEL)
 
 
-def test_interrupted_batch_is_not_replayed(ledger, monkeypatch):
+@pytest.mark.parametrize("code", [None, sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED])
+def test_interrupted_batch_is_not_replayed(ledger, monkeypatch, code):
     rows = [source(ledger, 1), source(ledger, 2)]
     error = sqlite3.OperationalError("synthetic-interrupted")
-    error.sqlite_errorcode = sqlite3.SQLITE_INTERRUPT
+    if code is not None:
+        error.sqlite_errorcode = code
     replay = []
 
     def failed_batch(_db, _probes):
