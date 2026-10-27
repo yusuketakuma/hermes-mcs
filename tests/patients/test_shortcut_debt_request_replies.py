@@ -189,6 +189,7 @@ def test_legacy_reply_kind_cannot_answer_multiple_requests_without_relations(tmp
             _message(2, parent=1, body="両方の確認が完了しました。"),
         ], project_id=1)
         db.db.execute("UPDATE messages SET sender_id=message_id,posted_at_ts=100+message_id")
+        db.db.commit()  # _replace_current owns its writer transaction.
         monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
         monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
         monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *args, **kwargs: None)
@@ -302,5 +303,35 @@ def test_origin_only_relations_do_not_answer_two_distinct_requests(tmp_path):
         match()
         assert first["reply_state"] == "done"
         assert "reply_state" not in second
+    finally:
+        db.close()
+
+
+def test_paged_rollup_preserves_cross_page_same_time_loop_relations(tmp_path):
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+    import extract_llm
+
+    db, event, meta, row = _setup(tmp_path, extra=(3, 4), times={3: 103, 4: 103})
+    try:
+        revisions = {m['message_id']: m['content_hash'] for m in db.db.execute(
+            'SELECT message_id,content_hash FROM messages WHERE project_id=1')}
+        db.artifact_add('extract_llm', json.dumps({'requests': [{'to': '合成担当', 'action': row['ctx']}]}),
+                        project_id=1, message_id=1, meta={VERSION_KEY: CURRENT_VERSION,
+                        'hash': revisions[1], 'extract_version': extract_llm.EXTRACT_VERSION})
+        for mid, relation in ((3, 'cancellation_report'), (4, 'completion_report')):
+            db.artifact_add('loop_event', json.dumps({**event, 'trigger_message_id': mid,
+                'trigger_revision': revisions[mid], 'relation': relation, 'reported_relation': relation}),
+                project_id=1, message_id=mid, meta=meta)
+        # These independent source rows place the request and replies on
+        # opposite sides of the 64-row page boundary.
+        db.save_messages([_message(mid, body=f'無関係な完全合成投稿{mid}') for mid in range(10, 80)], project_id=1)
+        db.db.execute('UPDATE messages SET posted_at_ts=102 WHERE message_id BETWEEN 10 AND 79')
+        db.db.commit()
+        result = rollup.build_rollup(db.db, 1, request_limit=None)
+        [request] = [item for item in result['recent_requests'] if item['mid'] == 1]
+        assert request['reply_state'] == 'cancel' and request['reply_conflict'] is True
+        assert [item['message_id'] for item in request['reply_events']] == [3, 4]
+        assert [item['reply_state'] for item in request['reply_events']] == ['cancel', 'done']
+        assert all(item['same_time_unordered'] for item in request['reply_events'])
     finally:
         db.close()

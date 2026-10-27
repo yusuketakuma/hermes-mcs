@@ -9,6 +9,7 @@ import inference_dependency_loss
 import inference_version as inference
 import history_walk
 import notify_views
+import mcs_queries
 import rollup
 from common_testkit import make_ledger
 from extract_testkit import _hash, _message
@@ -244,7 +245,7 @@ def test_source_batch_matches_single_and_preserves_duplicates_and_page_limit(sto
     body = '本人の2026-10-02測定で体温36.4℃でした。'
     _save(store, 1, '2026-10-03T09:00:00+09:00', body, vitals={'bt': 36.4})
     row = store.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
-    blobs = rollup.current_extraction_blobs(store.db, 1)
+    blobs = mcs_queries.current_extraction_blobs(store.db, 1)
     refs = rollup._clinical_artifact_refs(store.db, 1, blobs)
     expected = rollup._measurement_source_bound(store.db, row, 'extract_llm', {})
     assert expected
@@ -265,7 +266,7 @@ def test_source_batch_matches_single_for_scope_model_and_source_selection(store)
     _save(store, 1, '2026-10-03T09:00:00+09:00', body, vitals={'bt': 36.4})
     row = store.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
     other = {**dict(row), 'project_id': 2}
-    blobs = rollup.current_extraction_blobs(store.db, 1)
+    blobs = mcs_queries.current_extraction_blobs(store.db, 1)
     refs = rollup._clinical_artifact_refs(store.db, 1, blobs)
     rows = [row, other, row, row, row]
     kinds = ['extract_llm', 'extract_llm', 'canonical_projection', 'semantic_facts_v4', None]
@@ -287,7 +288,7 @@ def test_source_batch_matches_single_after_source_aba_and_missing_artifact(store
     store.save_messages([_message(mid=1, project_id=1, body=changed, posted_at=posted)])
     store.save_messages([_message(mid=1, project_id=1, body=original, posted_at=posted)])
     row = store.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
-    blobs = rollup.current_extraction_blobs(store.db, 1)
+    blobs = mcs_queries.current_extraction_blobs(store.db, 1)
     refs = rollup._clinical_artifact_refs(store.db, 1, blobs)
     expected = rollup._measurement_source_bound(store.db, row, 'extract_llm', {})
     assert not expected
@@ -309,7 +310,7 @@ def test_source_batch_matches_single_for_invalid_or_incomplete_artifact(store, f
     with store.db:
         store.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), artifact['artifact_id']))
     row = store.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
-    blobs = rollup.current_extraction_blobs(store.db, 1)
+    blobs = mcs_queries.current_extraction_blobs(store.db, 1)
     refs = rollup._clinical_artifact_refs(store.db, 1, blobs)
     assert not rollup._measurement_source_bound(store.db, row, 'extract_llm', {})
     assert rollup._measurement_sources_bound(store.db, [row], ['extract_llm'], refs, {}) == [False]
@@ -320,7 +321,7 @@ def test_source_batch_does_not_retry_interrupted_sql(store, monkeypatch, code):
     body = '本人の2026-10-02測定で体温36.4℃でした。'
     _save(store, 1, '2026-10-03T09:00:00+09:00', body, vitals={'bt': 36.4})
     row = store.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
-    blobs = rollup.current_extraction_blobs(store.db, 1)
+    blobs = mcs_queries.current_extraction_blobs(store.db, 1)
     refs = rollup._clinical_artifact_refs(store.db, 1, blobs)
     error = sqlite3.OperationalError('synthetic interruption')
     if code is not None:
@@ -342,7 +343,7 @@ def test_single_fallback_stops_on_interruption_after_noninterrupt_batch_failure(
     for mid in (1, 2):
         _save(store, mid, '2026-10-03T09:00:00+09:00', body, vitals={'bt': 36.4})
     rows = list(store.db.execute('SELECT * FROM messages WHERE project_id=1 ORDER BY message_id'))
-    blobs = rollup.current_extraction_blobs(store.db, 1)
+    blobs = mcs_queries.current_extraction_blobs(store.db, 1)
     refs = rollup._clinical_artifact_refs(store.db, 1, blobs)
     batch_error = sqlite3.OperationalError('synthetic noninterrupt failure')
     batch_error.sqlite_errorcode = sqlite3.SQLITE_ERROR
@@ -371,7 +372,7 @@ def test_single_fallback_keeps_other_operational_errors_unverified(store, monkey
     for mid in (1, 2):
         _save(store, mid, '2026-10-03T09:00:00+09:00', body, vitals={'bt': 36.4})
     rows = list(store.db.execute('SELECT * FROM messages WHERE project_id=1 ORDER BY message_id'))
-    blobs = rollup.current_extraction_blobs(store.db, 1)
+    blobs = mcs_queries.current_extraction_blobs(store.db, 1)
     refs = rollup._clinical_artifact_refs(store.db, 1, blobs)
     original = extract_llm.progress_for_message
     visited = []
@@ -401,7 +402,7 @@ def test_single_fallback_does_not_bypass_selected_artifact_reference(store, monk
     for mid in (1, 2):
         _save(store, mid, '2026-10-03T09:00:00+09:00', body, vitals={'bt': 36.4})
     rows = list(store.db.execute('SELECT * FROM messages WHERE project_id=1 ORDER BY message_id'))
-    blobs = rollup.current_extraction_blobs(store.db, 1)
+    blobs = mcs_queries.current_extraction_blobs(store.db, 1)
     refs = rollup._clinical_artifact_refs(store.db, 1, blobs)
     if reference == 'missing':
         del refs[(1, 'extract_llm')]
@@ -429,7 +430,7 @@ def test_source_batch_replays_in_order_if_later_source_check_raises(store, monke
     for mid in (1, 2):
         _save(store, mid, '2026-10-03T09:00:00+09:00', body, vitals={'bt': 36.4})
     rows = list(store.db.execute('SELECT * FROM messages WHERE project_id=1 ORDER BY message_id'))
-    blobs = rollup.current_extraction_blobs(store.db, 1)
+    blobs = mcs_queries.current_extraction_blobs(store.db, 1)
     refs = rollup._clinical_artifact_refs(store.db, 1, blobs)
     original = inference_dependency_loss.source_binding
 
