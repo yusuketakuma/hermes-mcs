@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "復元承認前に損失報告の範囲を案内",
+  "summary": "復元承認の前に、損失報告の件数だけでは確認できない変更を案内します。対象表の行数差では、本文の訂正や配送状態の変更、対象外のデータを把握できません。",
+  "upgrade": "独立した復旧ツールの案内は、既存の導入手順で配備済みのツールを更新すると反映されます。",
+  "refs": [
+    "mcs/ops/restore_evidence.py",
+    "adapters/common/human_commands.py",
+    "deployment/recovery/mcs_recover.py"
+  ],
+  "details": [
+    "承認プレビューと復旧保留の案内に、件数が表さない情報を示します。"
+  ]
+}

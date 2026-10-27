@@ -4,6 +4,7 @@ from adapters.common import dispatch as command_dispatch
 from adapters.common import human_commands
 import asyncio
 import json
+import inference_version
 from types import SimpleNamespace
 import uuid
 
@@ -49,7 +50,8 @@ def route(tmp_path, request):
                                    "reactions": {"value": [], "observed_at": 1800000000}}),
                        1800000000))
     eid = db.artifact_add("extract_llm", json.dumps({"summary": "完全合成の要約"}),
-                          project_id=1, message_id=1, meta={"hash": chash})
+                          project_id=1, message_id=1, meta={"hash": chash,
+                              inference_version.VERSION_KEY: inference_version.CURRENT_VERSION})
     db.artifact_add("semantic_policy", "c" * 64)
     bundle = semantic_store.thread_bundle(db.db, 1, 1)
     member = next(m for m in bundle["members"] if m["message_id"] == 1)
@@ -139,7 +141,8 @@ def route(tmp_path, request):
 
     yield SimpleNamespace(call=call, db=db, settings=settings, data=data, publish=publish,
         flag_path=flag_path, eid=eid, sid=sid, signal_id=signal_id, job=job,
-        delivery_id=delivery_id, mode=mode, transport=transport)
+        delivery_id=delivery_id, mode=mode, transport=transport, sent=sent,
+        handler=handler if transport == "discord" else None)
     db.close()
 
 
@@ -367,3 +370,90 @@ def test_discord_message_admission_refusal_is_private_only(monkeypatch, failure)
     calls.clear()
     asyncio.run(command._message(message))
     assert calls == []
+
+
+def test_restore_preview_notice_reaches_native_first_chunk_without_changing_confirmation(route, monkeypatch):
+    from adapters.common import text as display_text
+    from restore_evidence import RESTORE_LOSS_NOTICE
+
+    request = {'op': 'control', 'phase': 'preview', 'action': 'restore_approve',
+               'report_id': 'a' * 64, 'backup_sha256': 'b' * 64,
+               'backup_schema': 8, 'reason': '合' * 1900}
+    preview = route.call(request)
+    assert preview['ok'] and preview['notice'] == RESTORE_LOSS_NOTICE
+    assert preview['payload_hash'] == mcs_requests.payload_hash({
+        'payload': preview['payload'], 'origin': preview['origin']})
+    if route.transport != 'discord':
+        assert len(route.sent) > 1
+        assert RESTORE_LOSS_NOTICE in route.sent[0]['text']
+    else:
+        import adapters.discord.standalone as native
+
+        sent = []
+
+        async def defer(**_kwargs):
+            return None
+
+        async def send(value, **_kwargs):
+            sent.append(value)
+
+        command = native._Commands.__new__(native._Commands)
+        command.handler = route.handler
+        command.settings = route.settings
+        command.native_admission = None
+        identity = {'platform': 'discord', 'authorized': True, 'internal': False,
+                    'is_bot': False, 'via_upstream_relay': False, 'native_input': True,
+                    'user_id': 'operator', 'chat_id': '789', 'scope_id': '456',
+                    'profile': 'synthetic', 'message_id': None}
+        monkeypatch.setattr(native, '_native_context', lambda *_args, **_kwargs: identity)
+        monkeypatch.setattr(native.cards, 'no_pings', lambda: None)
+        interaction = SimpleNamespace(response=SimpleNamespace(defer=defer),
+                                      followup=SimpleNamespace(send=send))
+        asyncio.run(command._slash(interaction, json.dumps(request)))
+        assert len(sent) > 1 and RESTORE_LOSS_NOTICE in sent[0]
+        assert json.loads(''.join(sent))['notice'] == RESTORE_LOSS_NOTICE
+    assert len(display_text.split_body(json.dumps(preview, ensure_ascii=False), max_chunks=None)) > 1
+    assert confirm(route, preview, payload_hash='0' * 64)['error'] == 'payload_hash_mismatch'
+    result = confirm(route, preview)
+    assert result['ok']
+    queued = json.loads(next(p for p in (route.data / 'cmd').glob('*.json')
+                             if json.loads(p.read_text())['command_id'] == preview['payload']['command_id']).read_text())
+    assert queued == preview['payload']
+    assert 'notice' not in queued
+    assert not route.call(request, user='stranger')['ok']
+
+
+@pytest.mark.parametrize('mutation', ['source_hash', 'invalidated', 'old_generation'])
+def test_extract_feedback_rejects_stale_source_and_generation_at_confirmation(route, mutation):
+    request = {'op': 'control', 'phase': 'preview', 'action': 'extract_feedback',
+               'project_id': 1, 'message_id': 1, 'artifact_id': route.eid,
+               'field': 'summary', 'reason': '完全合成の本人確認'}
+    row = route.db.db.execute('SELECT content_hash FROM messages WHERE message_id=1').fetchone()
+    source_hash = row[0]
+    with route.db.db:
+        # An unstamped 0.1 artifact never claims to be the current 1.0 result.
+        route.db.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
+                            (json.dumps({'hash': source_hash}), route.eid))
+    route.publish()
+    assert route.call(request) == {'ok': False, 'error': 'extraction_changed'}
+    with route.db.db:
+        route.db.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
+                            (json.dumps({'hash': source_hash, inference_version.VERSION_KEY:
+                                         inference_version.CURRENT_VERSION}), route.eid))
+    route.publish()
+    preview = route.call(request)
+    assert preview['ok']
+    with route.db.db:
+        if mutation == 'source_hash':
+            route.db.db.execute('UPDATE messages SET content_hash=? WHERE message_id=1', ('f' * 64,))
+        else:
+            meta = {'hash': source_hash, inference_version.VERSION_KEY:
+                    inference_version.LEGACY_VERSION if mutation == 'old_generation'
+                    else inference_version.CURRENT_VERSION}
+            if mutation == 'invalidated':
+                meta['invalidated'] = True
+            route.db.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
+                                (json.dumps(meta), route.eid))
+    route.publish()
+    assert confirm(route, preview) == {'ok': False, 'error': 'extraction_changed'}
+    assert not list((route.data / 'cmd').glob('*.json'))

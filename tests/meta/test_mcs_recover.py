@@ -946,6 +946,10 @@ def test_recover_holds_at_restore_consent(rec, tmp_path, monkeypatch):
     rep = json.loads(Path(rec.REPORT_PATH).read_text())
     assert rep["result"] == "restore_consent_pending"
     assert rep["detail"].startswith("restore_consent_pending:")
+    import restore_evidence
+    assert rec.RESTORE_LOSS_NOTICE == restore_evidence.RESTORE_LOSS_NOTICE
+    assert rec.RESTORE_LOSS_NOTICE in rep["detail"]
+    assert rec.RESTORE_LOSS_NOTICE in rec._recovery_explanation(rep["detail"])
     # second pass is stable — still held, still no swap
     assert rec.recover() == 0
     assert live.read_bytes() == live_before

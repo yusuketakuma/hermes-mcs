@@ -1329,7 +1329,7 @@ def test_restore_measures_and_approves_exact_live_uri_path(
 
 
 def test_rollback_schema_bump_holds_for_consent(updater, tmp_path,
-                                                monkeypatch):
+                                                monkeypatch, capsys):
     """No bound receipt => the rollback stops before the DB replace:
     tree already reset, drainers down, BOTH markers up, loss report
     durable, live DB byte-identical (T13)."""
@@ -1338,6 +1338,9 @@ def test_rollback_schema_bump_holds_for_consent(updater, tmp_path,
     live_bytes = Path(live).read_bytes()
     rc = updater.rollback("cid-rb")
     assert rc == 2
+    assert restore_evidence.RESTORE_LOSS_NOTICE in capsys.readouterr().out
+    notice = json.loads(Path(updater.REPORT_PATH).read_text())
+    assert restore_evidence.RESTORE_LOSS_NOTICE in notice["detail"]
     assert Path(live).read_bytes() == live_bytes   # no unauthorized swap
     assert _live_version(live) == 8
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == before

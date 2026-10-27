@@ -17,6 +17,12 @@ from mcs_util import file_sha256
 from safe_io import atomic_write
 
 
+RESTORE_LOSS_NOTICE = (
+    "件数は対象表の行数差です。訂正、同数の追加と削除、配送状態の変更や対象外のデータは分かりません。"
+    "0件でも損失がないとは言えません。"
+)
+
+
 class RestoreEvidenceError(Exception):
     """A restore evidence observation or mandatory report publication failed."""
 

@@ -510,6 +510,10 @@ def build_control_preview(data: dict, settings: dict[str, Any],
                                    f"ops.{action}")
         except ValueError as e:
             return deny(str(e))
+        if action == "restore_approve":
+            # modules() above bootstraps the checkout-local flat namespace.
+            from restore_evidence import RESTORE_LOSS_NOTICE
+            return _preview(requests, identity, "control", payload, notice=RESTORE_LOSS_NOTICE)
         return _preview(requests, identity, "control", payload)
     project_id, error = authorize(settings, identity, data.get("project_id"))
     if error:

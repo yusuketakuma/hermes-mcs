@@ -1255,6 +1255,13 @@ def _mark_restored(backup_path, phase="restored", report_id=None):
 # Records the DB replace would silently erase — duplicated from
 # mcs_update so this script needs none of the repo's modules.
 _STORED_TABLES = ("messages", "attachments")
+# Kept equal to restore_evidence: this watchdog must run without the checkout.
+RESTORE_LOSS_NOTICE = (
+    "件数は対象表の行数差です。訂正、同数の追加と削除、配送状態の変更や対象外のデータは分かりません。"
+    "0件でも損失がないとは言えません。"
+)
+
+
 _EFFECT_TABLES = ("notification_cards", "notification_renders",
                   "notification_delivery_attempts",
                   "notification_render_parts", "notification_restore_holds",
@@ -1690,7 +1697,7 @@ def _recovery_explanation(detail):
         "live_db_unreadable": "現在のデータベースを読み取れません。復旧結果の記録とデータベースの状態を確認してください。",
         "restore_marker_failed:": "復元の保留記録を保存できません。保存先の権限と空き容量を確認してください。",
         "restore_report_failed:": "復元で失われるデータを確認できません。確認できるまで復元を進めないでください。",
-        "restore_consent_pending:": "データベースの復元は人の承認待ちです。失われるデータの報告を確認してください。",
+        "restore_consent_pending:": "データベースの復元は人の承認待ちです。損失報告を確認してください。" + RESTORE_LOSS_NOTICE,
         "restore_failed:": "データベースを復元できません。保留を維持して復旧結果の記録を確認してください。",
         "restore_verify_failed": "復元後のデータベースを確認できません。復旧結果の記録を確認してください。",
     }
@@ -1934,7 +1941,7 @@ def _recover_legacy(if_stale=False):
                     # markers stay up, 'applying' stays — each watchdog
                     # pass re-checks the consent receipt until a bound
                     # approval arrives.
-                    _report("restore_consent_pending", err)
+                    _report("restore_consent_pending", err + " — " + RESTORE_LOSS_NOTICE)
                     return 0
                 if err == "restore_reconcile_pending":
                     _report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation",

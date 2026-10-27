@@ -1734,7 +1734,7 @@ def _consent_hold(state, e, backup_path) -> str:
     journal_store.save_state(STATE_PATH, state)
     _report("restore_consent_pending",
             rid + " — restore_report.json を確認し "
-            "ops.restore_approve で承認")
+            "ops.restore_approve で承認。" + restore_evidence.RESTORE_LOSS_NOTICE)
     return rid
 
 
@@ -2484,6 +2484,7 @@ def rollback(command_id: str | None = None) -> int:
                 state = journal_store.load_state(STATE_PATH)
                 rid = _consent_hold(state, e, entry.get("backup_path"))
                 print("復元は承認待ちです。restore_report.jsonで影響を確認してください。確認番号:", rid)
+                print(restore_evidence.RESTORE_LOSS_NOTICE)
                 consent_hold = True
                 return 2
             except Exception as e:
