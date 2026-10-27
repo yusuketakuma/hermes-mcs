@@ -50,7 +50,8 @@ _CORRECTION = re.compile(
     r"間違(?!いでは(?:ない|ありません|なく)|って(?:いない|いません))|"
     r"訂正(?!は(?:不要|ありません)|し(?:ない|ません)|する必要はない)|撤回|取り消|取消|"
     r"(?:数値|値|結果|記録|記載|投稿|件|内容|測定|検査|採血)"
-    r"[^。！？!?;；\n]{0,60}(?:違(?:う|います|いました|った)|異な(?:る|ります|りました|った))|"
+    r"[^。！？!?;；\n]{0,60}(?:違(?:う|います|いました|った)|異な(?:る|ります|りました|った)|"
+    r"誤っ(?:た|て(?:いました|いた|います|いる)))|"
     r"(?:実際(?:には|は)?|事実(?:は|としては)?)\s*(?:違(?:う|います|いました|った)|異な(?:る|ります|りました|った))")
 _OTHER_MEASUREMENT = re.compile(rf"(?:{FAMILY_PERSON}|{OTHER_PERSON})の(?:数値|値|結果|記録|測定|検査|採血)")
 
@@ -63,12 +64,25 @@ def _correction_candidate(body):
         other = _OTHER_MEASUREMENT.search(sentence)
         if not matches:
             continue
-        if (len(matches) == 1 and other and other.end() <= matches[0].start()
-                and not re.search(r"本人|患者|利用者", sentence)
-                and not re.search(r"[、,]", sentence[other.end():matches[0].start()])):
+        if (len(matches) == 1 and other and other.start() <= matches[0].start()
+                and not re.search(r"本人|患者|利用者", sentence[:other.start()] + sentence[other.end():])
+                and not re.search(r"[、,]", sentence[other.end():matches[0].end()])):
             continue
         return True
     return False
+
+
+def _adjacent_measurement_retraction(body, span):
+    """Hold a measurement when the next sentence explicitly retracts that value."""
+    if not isinstance(body, str) or not span:
+        return False
+    boundary = _SENTENCE.search(body, span[0])
+    if boundary is None:
+        return False
+    following = body[boundary.end():].lstrip()
+    return bool(re.match(r"(?:先ほど|先程|上記|直前|その)(?:の)?(?:検査値|測定値|数値|結果)"
+                         r"(?:は|が)(?:誤っていました|誤っていた|誤りでした|間違っていました)"
+                         r"(?=。|$)", following))
 
 
 def _source_record(message, ref, kind, key, value, unit, evidence, span, *, name=None,
@@ -130,7 +144,8 @@ def _labs(message, doc, ref, patient_name, verified):
                          and subject == axes[0] == "patient" and period == axes[1]
                          and scope in ("patient", "past", "planned", "conditional")
                          and context and not _UNCERTAIN.search(context) and not ambiguous_patient_context(body, anchor)
-                         and not _correction_candidate(context) and condition_ok)
+                         and not _correction_candidate(context)
+                         and not _adjacent_measurement_retraction(body, span) and condition_ok)
         observed = clinical_values.written_day(actual) if planned else None
         measured_on = (observed[1].isoformat() if observed and observed[0] == "ymd" else
                        candidate["measured_on"])
@@ -171,6 +186,7 @@ def _vitals(message, doc, ref, verified):
             subject = period = "unknown"
         source_ok = bool(verified and match and subject == "patient" and period in ("current", "past")
                          and quote and not _UNCERTAIN.search(quote) and not _correction_candidate(quote)
+                         and not _adjacent_measurement_retraction(body, span)
                          and not ambiguous_patient_context(body, match.start()))
         out.append(_source_record(message, ref, "vital", key, value, unit, quote, span,
                                   measured_on=measured, status=period, subject=subject, verified=source_ok))
@@ -433,6 +449,16 @@ def _collect_measurements(db, project_id, msgs, arts, refs, *, cfg=None, truncat
                       + current_fact_pred('b', 'm') + "))) ",
                       (project_id, json.dumps(ref_ids))).fetchall()
     selected = {r["artifact_id"]: r for r in rows}
+    canonical_latest = {}
+    message_ids = sorted({m.get("message_id") for m in messages if m.get("project_id") == project_id})
+    for mid, kind, artifact_id in db.execute(
+            "SELECT message_id,kind,MAX(artifact_id) FROM artifacts "
+            "WHERE (project_id=? OR project_id IS NULL) AND message_id IN (SELECT value FROM json_each(?)) "
+            "AND kind IN ('canonical_projection','semantic_facts_v4') GROUP BY message_id,kind",
+            (project_id, json.dumps(message_ids))):
+        canonical_latest.setdefault(mid, {})[kind] = artifact_id
+    canonical_configured = (isinstance(cfg, dict) and isinstance(cfg.get("semantic"), dict)
+                            and cfg["semantic"].get("fact_source") == "canonical")
     counts = dict.fromkeys(("stored", "full", "empty", "deleted", "incomplete", "unprocessed",
                             "analysis_attention", "canonical_unverified", "canonical_vital_unprojected",
                             "invalid_items", "correction_candidates"), 0)
@@ -459,6 +485,12 @@ def _collect_measurements(db, project_id, msgs, arts, refs, *, cfg=None, truncat
         _v1, doc, _llm, has_fact = decode_current_extractions(blobs)
         kind = next((k for k in ("semantic_facts_v4", "canonical_projection", "extract_llm") if k in blobs), None)
         ref = refs.get((mid, kind)) if kind else None
+        latest = canonical_latest.get(mid, {})
+        authoritative = next((k for k in ("semantic_facts_v4", "canonical_projection") if k in latest), None)
+        if (canonical_configured or authoritative) and (
+                authoritative is None or kind != authoritative or ref != latest[authoritative]):
+            counts["canonical_unverified"] += 1
+            continue
         row = selected.get(ref)
         if not has_fact or row is None or row["message_id"] != mid or row["kind"] != kind or row["content"] != blobs.get(kind):
             counts["unprocessed"] += 1

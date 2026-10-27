@@ -730,3 +730,89 @@ def test_other_patient_input_cannot_expose_measurement(tmp_path, monkeypatch):
         assert result["coverage"]["source_complete"] is False
         assert result["coverage"]["local_checks_complete"] is False
         assert body not in json.dumps(result, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("stale", ["invalidated", "old_hash"])
+def test_canonical_policy_does_not_revive_local_measurement_when_projection_is_stale(tmp_path, monkeypatch, stale):
+    from semantic_testkit import _cfg
+
+    with closing(_setup(tmp_path, monkeypatch)) as ledger:
+        body = "本人は2026-10-01の空腹時採血 Cr 1.0 mg/dL。"
+        _save(ledger, 1, body, {"labs": [{**_lab(body, "1.0"), "condition": "空腹時"}]},
+              "2026-10-01T09:00:00+09:00")
+        digest = ledger.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
+        meta = {"hash": digest if stale == "invalidated" else "f" * 64,
+                "projection_version": PROJECTION_VERSION, inference_version.VERSION_KEY: inference_version.CURRENT_VERSION}
+        if stale == "invalidated":
+            meta["invalidated"] = True
+        ledger.artifact_add("canonical_projection", json.dumps({"canonical_facts": []}),
+                            project_id=1, message_id=1, meta=meta)
+        messages = ledger.db.execute("SELECT * FROM messages WHERE project_id=1").fetchall()
+        blobs = mcs_queries.current_extraction_blobs(ledger.db, 1)
+        refs = rollup._clinical_artifact_refs(ledger.db, 1, blobs)
+        assert "canonical_projection" not in blobs[1] and "extract_llm" in blobs[1]
+        cfg = _cfg("enforce", loop_mode="off", fact_source="canonical", fact_source_gate="g6-v1:test")
+        result = measurement_sources.collect_measurements(ledger.db, 1, messages, blobs, refs, cfg=cfg)
+        assert result["records"] == [] and result["coverage"]["canonical_unverified"] == 1
+        assert result["coverage"]["local_checks_complete"] is False
+
+
+def test_adjacent_written_correction_does_not_leave_a_supported_measurement(tmp_path, monkeypatch):
+    with closing(_setup(tmp_path, monkeypatch)) as ledger:
+        quote = "本人は2026-10-01の空腹時採血 Cr 1.0 mg/dL。"
+        body = quote + "先ほどの検査値は誤っていました。"
+        _save(ledger, 1, body, {"labs": [{**_lab(quote, "1.0"), "condition": "空腹時"}]},
+              "2026-10-01T09:00:00+09:00")
+        result = _collect(ledger)
+        assert result["coverage"]["correction_candidates"] == 1
+        assert result["coverage"]["local_checks_complete"] is False
+        [item] = measurement_timeline.project_measurements(result["records"], source_complete=False)["items"]
+        assert item["state"] == "unknown" and item["value"] is None
+
+
+@pytest.mark.parametrize("sentence", [
+    "先ほどの検査値は誤っていません。",
+    "家族の検査値は誤っていました。",
+    "他の患者の検査値は誤っていました。",
+    "先ほどの予定は誤っていました。",
+])
+def test_correction_of_unrelated_or_not_wrong_measurement_does_not_block_patient(sentence):
+    assert not measurement_sources._correction_candidate(sentence)
+
+
+@pytest.mark.parametrize("sentence", [
+    "家族の検査値は誤っていましたが、本人の数値も誤っていました。",
+    "他の患者の検査値について報告し、本人の値は誤っていました。",
+    "家族の検査を確認し、数値は誤っていました。",
+])
+def test_foreign_measurement_does_not_hide_a_patient_or_ambiguous_correction(sentence):
+    assert measurement_sources._correction_candidate(sentence)
+
+
+def test_canonical_policy_without_projection_does_not_fall_back_to_local(tmp_path, monkeypatch):
+    from semantic_testkit import _cfg
+
+    with closing(_setup(tmp_path, monkeypatch)) as ledger:
+        body = "本人は2026-10-01の空腹時採血 Cr 1.0 mg/dL。"
+        _save(ledger, 1, body, {"labs": [{**_lab(body, "1.0"), "condition": "空腹時"}]},
+              "2026-10-01T09:00:00+09:00")
+        messages = ledger.db.execute("SELECT * FROM messages WHERE project_id=1").fetchall()
+        blobs = mcs_queries.current_extraction_blobs(ledger.db, 1)
+        refs = rollup._clinical_artifact_refs(ledger.db, 1, blobs)
+        cfg = _cfg("enforce", loop_mode="off", fact_source="canonical", fact_source_gate="g6-v1:test")
+        result = measurement_sources.collect_measurements(ledger.db, 1, messages, blobs, refs, cfg=cfg)
+        assert not result["records"] and result["coverage"]["canonical_unverified"] == 1
+
+
+def test_other_patients_stale_projection_does_not_hold_local_measurement(tmp_path, monkeypatch):
+    with closing(_setup(tmp_path, monkeypatch)) as ledger:
+        body = "本人は2026-10-01の空腹時採血 Cr 1.0 mg/dL。"
+        _save(ledger, 1, body, {"labs": [{**_lab(body, "1.0"), "condition": "空腹時"}]},
+              "2026-10-01T09:00:00+09:00")
+        ledger.ensure_patient(2)
+        ledger.save_messages([_message(mid=2, project_id=2, body="本人の合成記録")], project_id=2)
+        ledger.artifact_add("canonical_projection", "{}", project_id=2, message_id=2,
+                            meta={"hash": "f" * 64, "invalidated": True})
+        result = _collect(ledger)
+        assert len(result["records"]) == 1 and result["coverage"]["canonical_unverified"] == 0
+        assert result["records"][0]["value"] == "1.0"
