@@ -8,6 +8,8 @@ import extract_llm
 import ledger as ledger_mod
 import mcs_signals
 import mcs_stats
+from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY
+from semantic_projection import PROJECTION_VERSION
 
 MALFORMED = ["{bad", "[1,2]", '"s"', "5", None]
 PLANNERS = ["default", "skewed"]
@@ -37,7 +39,9 @@ def _add_raw(conn, kind, mid, content, meta):
 def _bad_content_rows(conn, raw, mid=2, chash="h2"):
     for kind in ("extract_v1", "extract_llm", "canonical_projection",
                  "semantic_facts_v4"):
-        _add_raw(conn, kind, mid, raw, json.dumps({"hash": chash}))
+        _add_raw(conn, kind, mid, raw, json.dumps({
+            "hash": chash, VERSION_KEY: CURRENT_VERSION,
+            "projection_version": PROJECTION_VERSION, "engine_version": 4}))
 
 
 def _stats_db(bad, planner):
@@ -47,13 +51,18 @@ def _stats_db(bad, planner):
     conn.execute("INSERT INTO snapshot_meta VALUES (1,'g',?)", (SNAP_TS,))
     _msg(conn, 1, chash="h1", ts=1789000000)
     _msg(conn, 2, chash="h2", ts=1789000000)
+    conn.execute("UPDATE messages SET body_text=? WHERE message_id=1",
+                 ("本人は合成薬Aを開始。服薬期間は9/1-30。",))
     _extract(conn, 1, "h1", [{"name": "合成薬A", "action": "start"}])
+    conn.execute("UPDATE artifacts SET meta=json_set(meta, ?, ?) "
+                 "WHERE kind='extract_llm' AND message_id=1",
+                 (f"$.{VERSION_KEY}", CURRENT_VERSION))
     conn.execute(
         "INSERT INTO artifacts(kind,message_id,content,meta) "
         "VALUES ('extract_v1',1,?,?)",
         (json.dumps({"med_periods": [
             {"start": "2026-09-01", "end": "2026-09-30", "raw": "9/1-30"}]}),
-         json.dumps({"hash": "h1"})))
+         json.dumps({"hash": "h1", VERSION_KEY: CURRENT_VERSION})))
     if bad:
         for raw in MALFORMED:
             _bad_content_rows(conn, raw)
@@ -72,6 +81,12 @@ def test_med_stats_ignore_malformed_content(planner):
             want = mcs_stats.run_stats(clean, SNAP_TS, args)["stats"][name]
             got = mcs_stats.run_stats(dirty, SNAP_TS, args)["stats"][name]
             assert want["status"] != "unavailable", (name, want)
+            if name == "meds":
+                assert want["distinct_names"] == 1
+                assert want["action_totals"] == {"start": 1}
+            if name == "rx_expiry":
+                assert want["rooms_with_expiring"] == 1
+                assert want["expiring_periods"]["total"] == 1
             assert got == want, name
     finally:
         clean.close()
@@ -105,6 +120,31 @@ def test_rx_period_expiry_ignores_malformed_content(tmp_path, planner):
         lg.db.close()
 
 
+@pytest.mark.parametrize("planner", PLANNERS)
+def test_rx_period_current_generation_excludes_legacy_and_invalid_meta(planner):
+    from mcs_queries import med_period_artifacts
+    from views_testkit import SCHEMA, _msg
+
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.executescript(SCHEMA)
+        period = json.dumps({"med_periods": [{"start": "2026-09-01",
+                                               "end": "2026-09-30"}]})
+        # Missing is legacy, not current; explicit null and malformed are invalid.
+        metas = [json.dumps({"hash": "h1", VERSION_KEY: CURRENT_VERSION}),
+                 json.dumps({"hash": "h1"}),
+                 json.dumps({"hash": "h1", VERSION_KEY: LEGACY_VERSION}),
+                 json.dumps({"hash": "h1", VERSION_KEY: None}), "{bad"]
+        for mid, meta in enumerate(metas, 1):
+            _msg(conn, mid, chash="h1")
+            _add_raw(conn, "extract_v1", mid, period, meta)
+        if planner == "skewed":
+            _skew(conn)
+        assert [(row[0], row[1]) for row in med_period_artifacts(conn)] == [(1, 1)]
+    finally:
+        conn.close()
+
+
 @pytest.mark.parametrize("raw", MALFORMED)
 @pytest.mark.parametrize("column", ["meta", "content"])
 def test_qc_readers_ignore_malformed_rows_under_skewed_stats(
@@ -120,7 +160,8 @@ def test_qc_readers_ignore_malformed_rows_under_skewed_stats(
         assert want is not None and "裏付け" in want["notes"][0]
         good_meta = json.dumps({
             "hash": chash, "extract_version": extract_llm.EXTRACT_VERSION,
-            "source_artifact_id": src, "qc": "done"})
+            "source_artifact_id": src, "qc": "done",
+            VERSION_KEY: CURRENT_VERSION})
         for kind in ("extract_qc", "extract_llm"):
             for _ in range(3):
                 if column == "meta":
@@ -145,16 +186,23 @@ def test_qc_view_ignores_malformed_content_under_skewed_stats(tmp_path, raw):
             {"section": "meds", "index": 0, "item": {"name": "A"},
              "verdict": "NO_MATCH", "noul": 0.1}]})
         _qc(db, 2, {"qc": "unevaluated", "reason": "invalid_argument"})
+        db.db.execute("UPDATE artifacts SET meta=json_set(meta, ?, ?) "
+                      "WHERE kind IN ('extract_llm', 'extract_qc')",
+                      (f"$.{VERSION_KEY}", CURRENT_VERSION))
+        db.db.commit()
         _skew(db.db)
         view = _view(db, tmp_path)
         try:
             want = view.read("qc", project=1)
         finally:
             view.close()
+        assert want["summary"]["total"] == 2
+        assert len(want["items"]) == 2
         for mid in (3, 4):
             _qc(db, mid, {"qc": "done", "items": []})
-            db.db.execute("UPDATE artifacts SET content=? WHERE "
-                          "artifact_id=last_insert_rowid()", (raw,))
+            db.db.execute("UPDATE artifacts SET content=?, meta=json_set(meta, ?, ?) "
+                          "WHERE artifact_id=last_insert_rowid()",
+                          (raw, f"$.{VERSION_KEY}", CURRENT_VERSION))
         db.db.commit()
         _skew(db.db)
         view = _view(db, tmp_path)

@@ -21,6 +21,7 @@ import extract
 import ledger
 import mcs_update
 import mcs_view
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from mcs_contract import Attachment, Message
 
 
@@ -85,7 +86,7 @@ def _extract_v1(db, mid, chash, periods):
         "INSERT INTO artifacts(kind,message_id,content,meta) "
         "VALUES ('extract_v1',?,?,?)",
         (mid, json.dumps({"med_periods": periods}),
-         json.dumps({"hash": chash})))
+         json.dumps({"hash": chash, VERSION_KEY: CURRENT_VERSION})))
 
 
 def _git(repo, *args, check=True):
