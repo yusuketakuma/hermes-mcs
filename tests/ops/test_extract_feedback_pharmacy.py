@@ -8,6 +8,7 @@ from adapters.common import envelopes, forms
 import extract_llm
 from extract_testkit import _hash, _ledger, _message
 import mcs_requests
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 FIELDS = ("patient_context", "labs", "events")
@@ -19,7 +20,7 @@ def seed(db):
     return db.artifact_add(
         "extract_llm", json.dumps({"summary": "咳あり"}),
         project_id=1, message_id=1,
-        meta={"hash": _hash(db), "extract_version": extract_llm.EXTRACT_VERSION})
+        meta={VERSION_KEY: CURRENT_VERSION, "hash": _hash(db), "extract_version": extract_llm.EXTRACT_VERSION})
 
 
 def command(aid, field):

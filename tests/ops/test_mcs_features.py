@@ -21,6 +21,7 @@ import mcs_view
 from semantic_projection import PROJECTION_VERSION
 from mcs_contract import Message
 from ops_testkit import _create, _snapshot, _source
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 def test_snapshot_migration_readonly_and_generation(tmp_path):
@@ -173,17 +174,17 @@ def test_candidates_only_current_latest_valid_full_artifacts(tmp_path):
     msg = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
     assert requests.candidates(db.db, msg)
     db.artifact_add("extract_llm", '{"requests":[{"to":"看護師","action":"確認"}]}',
-                    project_id=1, message_id=1, meta={"hash": msg["content_hash"]})
+                    project_id=1, message_id=1, meta={VERSION_KEY: CURRENT_VERSION, "hash": msg["content_hash"]})
     assert {r["extraction_kind"] for r in requests.candidates(db.db, msg)} == {"extract_v1", "extract_llm"}
     db.artifact_add("extract_v1", '{"requests":[{"ctx":"old","kind":"ask"}]}',
-                    project_id=1, message_id=1, meta={"hash": "old"})
+                    project_id=1, message_id=1, meta={VERSION_KEY: CURRENT_VERSION, "hash": "old"})
     db.artifact_add("extract_llm", '[]', project_id=1, message_id=1,
-                    meta={"hash": msg["content_hash"]})
+                    meta={VERSION_KEY: CURRENT_VERSION, "hash": msg["content_hash"]})
     assert requests.candidates(db.db, msg) == []
     incomplete = db.db.execute("SELECT * FROM messages WHERE message_id=2").fetchone()
     assert requests.candidates(db.db, incomplete) == []
     db.artifact_add("extract_llm", '{"requests":[{"to":null,"action":"確認"}]}',
-                    project_id=1, message_id=1, meta={"hash": msg["content_hash"]})
+                    project_id=1, message_id=1, meta={VERSION_KEY: CURRENT_VERSION, "hash": msg["content_hash"]})
     assert requests.candidates(db.db, msg)[0]["suggested_kind_or_recipient"] is None
     with db.db:
         db.db.execute("UPDATE messages SET content_hash=NULL WHERE message_id=1")
@@ -203,13 +204,13 @@ def test_candidates_canonical_projection_shadows_extract_llm(tmp_path):
     db.artifact_add("extract_llm",
                     '{"requests":[{"to":"看護師","action":"legacy確認"}]}',
                     project_id=1, message_id=1,
-                    meta={"hash": msg["content_hash"]})
+                    meta={VERSION_KEY: CURRENT_VERSION, "hash": msg["content_hash"]})
     assert "extract_llm" in {r["extraction_kind"]
                              for r in requests.candidates(db.db, msg)}
     db.artifact_add("canonical_projection",
                     '{"requests":[{"to":"不明","action":"canonical依頼"}]}',
                     project_id=1, message_id=1,
-                    meta={"hash": msg["content_hash"], "projection_version": PROJECTION_VERSION})
+                    meta={VERSION_KEY: CURRENT_VERSION, "hash": msg["content_hash"], "projection_version": PROJECTION_VERSION})
     kinds = {r["extraction_kind"] for r in requests.candidates(db.db, msg)}
     assert "canonical_projection" in kinds and "extract_llm" not in kinds
     # stale projection (old hash) — extract_llm stays visible
@@ -217,11 +218,11 @@ def test_candidates_canonical_projection_shadows_extract_llm(tmp_path):
     db.artifact_add("extract_llm",
                     '{"requests":[{"to":"看護師","action":"確認4"}]}',
                     project_id=1, message_id=4,
-                    meta={"hash": msg2["content_hash"]})
+                    meta={VERSION_KEY: CURRENT_VERSION, "hash": msg2["content_hash"]})
     db.artifact_add("canonical_projection",
                     '{"requests":[{"to":"不明","action":"古い"}]}',
                     project_id=1, message_id=4,
-                    meta={"hash": "stale", "projection_version": PROJECTION_VERSION})
+                    meta={VERSION_KEY: CURRENT_VERSION, "hash": "stale", "projection_version": PROJECTION_VERSION})
     kinds2 = {r["extraction_kind"] for r in requests.candidates(db.db, msg2)}
     assert "extract_llm" in kinds2 and "canonical_projection" not in kinds2
     db.close()
@@ -439,7 +440,7 @@ def test_extract_all_reextracts_stale_artifacts(tmp_path, monkeypatch,
     db.save_messages([msg])
     db.artifact_add("extract_v1", json.dumps({"events": ["old"]}),
                     project_id=1, message_id=1, model="rules-v1",
-                    meta={"hash": "stale-hash"})
+                    meta={VERSION_KEY: CURRENT_VERSION, "hash": "stale-hash"})
     chash = db.db.execute(
         "SELECT content_hash FROM messages WHERE message_id=1"
     ).fetchone()[0]

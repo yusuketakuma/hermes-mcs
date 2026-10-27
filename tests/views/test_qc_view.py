@@ -10,7 +10,34 @@ import pytest
 
 import semantic_qc
 from extract_testkit import _ledger
-from views_testkit import _message, _qc, _seeded, _v2, _view
+from views_testkit import _message, _view
+from views_testkit import _qc as _shared_qc, _seeded as _shared_seeded, _v2 as _shared_v2
+from inference_version import CURRENT_VERSION, VERSION_KEY
+
+
+def _mark_current(db, kind, mid=None):
+    """Mark the newest shared-fixture rows current without changing the shared fixture."""
+    with db.db:
+        db.db.execute("UPDATE artifacts SET meta=json_set(meta, ?, ?) WHERE artifact_id IN ("
+                      "SELECT MAX(artifact_id) FROM artifacts WHERE kind=? "
+                      "AND (? IS NULL OR message_id=?) GROUP BY message_id)",
+                      (f"$.{VERSION_KEY}", CURRENT_VERSION, kind, mid, mid))
+
+
+def _seeded(tmp_path):
+    db = _shared_seeded(tmp_path)
+    _mark_current(db, "extract_llm")
+    return db
+
+
+def _v2(db, mid):
+    _shared_v2(db, mid)
+    _mark_current(db, "extract_llm", mid)
+
+
+def _qc(db, mid, content, chash=None):
+    _shared_qc(db, mid, content, chash)
+    _mark_current(db, "extract_qc", mid)
 
 
 def test_summary_and_flagged_list(tmp_path):

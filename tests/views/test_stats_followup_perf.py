@@ -4,7 +4,16 @@ import sqlite3
 import pytest
 
 import mcs_stats
-from views_testkit import SCHEMA, SNAP_TS, _extract, _msg
+from views_testkit import SCHEMA, SNAP_TS, _msg
+from views_testkit import _extract as _shared_extract
+from inference_version import CURRENT_VERSION, VERSION_KEY
+
+
+def _extract(db, mid, chash, meds, events=None):
+    """Seed a current extraction without changing the shared view fixture."""
+    _shared_extract(db, mid, chash, meds, events=events)
+    db.execute("UPDATE artifacts SET meta=json_set(meta, ?, ?) WHERE artifact_id=last_insert_rowid()",
+               (f"$.{VERSION_KEY}", CURRENT_VERSION))
 
 DAY = 86400
 

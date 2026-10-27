@@ -10,6 +10,7 @@ import ledger
 import mcs_view
 import semantic_jev as jev
 import semantic_loops
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _cfg, _pending_fact, _seeded
 
 
@@ -27,7 +28,8 @@ def _setup(tmp_path):
     receipt = {'status': 'INCOMPLETE', 'loop_artifact_id': candidate['artifact_id'],
                'trigger_message_id': 2, 'trigger_revision': trigger['revision'],
                'code': 'relation:probabilities_sum_off_ge_1e-3'}
-    meta = {'fingerprint': bundle['source_fingerprint'], 'policy_fingerprint': policy,
+    meta = {VERSION_KEY: CURRENT_VERSION,
+            'fingerprint': bundle['source_fingerprint'], 'policy_fingerprint': policy,
             'registry': jev.REGISTRY_VERSION, 'retry_scope': 'synthetic-old-approval'}
     return db, bundle, candidate, receipt, meta
 

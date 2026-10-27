@@ -8,6 +8,7 @@ from common_testkit import ledger_fixture
 import mcs_signals
 from ops_testkit import DAY, NOW, _msg
 import signal_policy
+from inference_version import CURRENT_VERSION, VERSION_KEY
 
 
 DETECTORS = (
@@ -32,7 +33,7 @@ def _mention(db, name, mid, *, body=None):
                "symptoms": [{"text": "発熱", "status": "new", "negated": False}]}
     db.execute("INSERT INTO artifacts(kind,message_id,content,meta) "
                "VALUES('extract_llm',?,?,?)",
-               (mid, json.dumps(doc), json.dumps({"hash": f"h{mid}"})))
+               (mid, json.dumps(doc), json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": f"h{mid}"})))
 
 
 def _registered(db, mid):
