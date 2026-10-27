@@ -99,6 +99,27 @@ def progress(db, pid=1):
     return json.loads(db.artifacts(metadata.CLINICAL_PROGRESS_KIND, project_id=pid)[0]["content"])
 
 
+def test_metadata_attempts_remain_distinct_and_readable_with_compact_json(world):
+    db, client, wire, clock = world
+    wire.items = 50
+    client._token = "synthetic-session"
+    first = metadata.sync_metadata(db, client, 1, "observation_items", enabled=True, per_page=50)
+    clock[0] += 1
+    second = metadata.sync_metadata(db, client, 1, "observation_items", enabled=True, per_page=50)
+    assert first["state"] == second["state"] == "complete"
+    assert first["artifact_id"] != second["artifact_id"]
+    attempts = db.artifacts(project_metadata_contract.ARTIFACT_KIND, project_id=1)
+    assert len(attempts) == 2
+    for attempt in attempts:
+        content = attempt["content"]
+        payload = json.loads(content)
+        legacy = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+        assert json.loads(legacy) == payload
+        assert len(content.encode()) < len(legacy.encode())
+    view = get_project_metadata(db.db, 1, "observation_items", now=clock[0])
+    assert view["state"] == "complete" and len(view["rows"]) == 50
+
+
 def test_all_250_items_for_each_live_patient_rotate_with_http_budget_and_pins(world):
     db, client, wire, clock = world
     for _ in range(50):

@@ -323,7 +323,8 @@ def sync_metadata(ledger, adapter, project_id: int, dataset: str, *,
             payload["definition"] = definition
     if dataset == "consultations":
         payload["project_type"] = "group"
-    aid = ledger.artifact_add(ARTIFACT_KIND, json.dumps(payload, ensure_ascii=False, allow_nan=False),
+    aid = ledger.artifact_add(ARTIFACT_KIND, json.dumps(payload, ensure_ascii=False, allow_nan=False,
+                                                       separators=(',', ':')),
                               project_id=project_id)
     return {"state": attempt_state(dataset, result["complete"], result["reason"]),
             "reason": result["reason"], "artifact_id": aid}
