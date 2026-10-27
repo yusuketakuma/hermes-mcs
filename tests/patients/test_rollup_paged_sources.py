@@ -228,7 +228,9 @@ def test_paged_rollup_pins_one_model_for_every_page_and_single_row_fallback(tmp_
         def bound_page(_db, page, _kinds, _refs, model):
             state['batch'].append(model)
             if fallback:
-                raise ValueError('synthetic recoverable batch failure')
+                error = sqlite3.OperationalError('too many SQL variables')
+                error.sqlite_errorcode = sqlite3.SQLITE_ERROR
+                raise error
             return [False] * len(page)
 
         def bound_one(_db, _row, _kind, _cfg, *, artifact_ref, expected_model):
@@ -269,7 +271,9 @@ def test_paged_rollup_checks_real_source_binding_and_progress_on_both_pages(tmp_
         def sometimes_fail(db, rows, kinds, refs, model):
             batch_calls.append(len(rows))
             if fallback and len(batch_calls) == 2:
-                raise ValueError('synthetic recoverable batch failure')
+                error = sqlite3.OperationalError('too many SQL variables')
+                error.sqlite_errorcode = sqlite3.SQLITE_ERROR
+                raise error
             return original_batch(db, rows, kinds, refs, model)
 
         def record_bound(db, rows, kinds, refs, cfg, *, expected_model):

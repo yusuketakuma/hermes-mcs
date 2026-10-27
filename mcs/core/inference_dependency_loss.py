@@ -80,6 +80,15 @@ def fatal_read_error(error):
     return code & 0xff != sqlite3.SQLITE_ERROR
 
 
+def retryable_batch_read_error(error):
+    """Recognize only known grouped-query compatibility failures for ordered replay."""
+    if not isinstance(error, sqlite3.OperationalError) or getattr(error, 'sqlite_errorcode', None) != sqlite3.SQLITE_ERROR:
+        return False
+    message = str(error)
+    return (message in ('too many SQL variables', 'no such table: message_revisions')
+            or re.fullmatch(r'Expression tree is too large \(maximum depth [0-9]+\)', message) is not None)
+
+
 
 def source_bindings(db, pairs):
     """Read up to 64 ordered message occurrence fences on one borrowed snapshot.
@@ -105,7 +114,7 @@ def source_bindings(db, pairs):
         try:
             result = _source_bindings_page(db, prepared)
         except Exception as error:
-            if fatal_read_error(error):
+            if not retryable_batch_read_error(error):
                 raise
             # Replay singles in order if a grouped query fails on a later row.
             result = [source_binding(db, pid, mid) for pid, mid in prepared]

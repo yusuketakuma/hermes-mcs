@@ -167,7 +167,7 @@ def test_interruption_never_replays_singles(ledger, monkeypatch, code):
 
 def test_noninterrupt_error_replays_singles_in_original_order(ledger, monkeypatch):
     def fail_page(*args):
-        error = sqlite3.OperationalError('synthetic grouped error')
+        error = sqlite3.OperationalError('too many SQL variables')
         error.sqlite_errorcode = sqlite3.SQLITE_ERROR
         raise error
     visited = []
@@ -181,3 +181,59 @@ def test_noninterrupt_error_replays_singles_in_original_order(ledger, monkeypatc
     with pytest.raises(ValueError, match='first ordered failure'):
         loss.source_bindings(ledger.db, [(1, 1), (1, 2), (1, 3)])
     assert visited == [(1, 1), (1, 2)]
+
+
+@pytest.mark.parametrize('kind', ['runtime', 'type', 'value', 'unknown_sql', 'unclassified_sql'])
+def test_unexpected_batch_error_never_becomes_a_successful_single_read(ledger, monkeypatch, kind):
+    errors = {'runtime': RuntimeError('synthetic runtime failure'),
+              'type': TypeError('synthetic type failure'),
+              'value': ValueError('synthetic value failure'),
+              'unknown_sql': sqlite3.OperationalError('synthetic unrecognized SQLite error'),
+              'unclassified_sql': sqlite3.OperationalError('too many SQL variables')}
+    errors['unknown_sql'].sqlite_errorcode = sqlite3.SQLITE_ERROR
+    error = errors[kind]
+    ledger.db.execute("UPDATE messages SET body_text='transaction-local synthetic text' WHERE message_id=1")
+    monkeypatch.setattr(loss, '_source_bindings_page', lambda *_: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(loss, 'source_binding', lambda *_: pytest.fail('unexpected single replay'))
+    with pytest.raises(type(error)) as caught:
+        loss.source_bindings(ledger.db, [(1, 1)])
+    assert caught.value is error and ledger.db.in_transaction
+    assert ledger.db.execute('SELECT body_text FROM messages WHERE message_id=1').fetchone()[0] == 'transaction-local synthetic text'
+    ledger.db.rollback()
+
+
+def test_real_sqlite_variable_limit_replays_ordered_singles(ledger):
+    pairs = [(1, 1), (1, 2), (2, 3)]
+    expected = [loss.source_binding(ledger.db, *pair) for pair in pairs]
+    ledger.db.execute("UPDATE messages SET body_text=body_text WHERE message_id=1")
+    old_limit = ledger.db.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 2)
+    try:
+        assert loss.source_bindings(ledger.db, pairs) == expected
+        assert ledger.db.in_transaction
+    finally:
+        ledger.db.setlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, old_limit)
+        ledger.db.rollback()
+
+
+@pytest.mark.parametrize('message', [
+    'Expression tree is too large (maximum depth 1000)',
+    'no such table: message_revisions',
+])
+def test_known_sqlite_compatibility_error_replays_ordered_singles(ledger, monkeypatch, message):
+    pairs = [(1, 2), (1, 1), (1, 99)]
+    expected = [loss.source_binding(ledger.db, *pair) for pair in pairs]
+    original = loss.source_binding
+    visited = []
+    error = sqlite3.OperationalError(message)
+    error.sqlite_errorcode = sqlite3.SQLITE_ERROR
+
+    def single(db, pid, mid):
+        visited.append((pid, mid))
+        return original(db, pid, mid)
+
+    ledger.db.execute("UPDATE messages SET body_text=body_text WHERE message_id=1")
+    monkeypatch.setattr(loss, '_source_bindings_page', lambda *_: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(loss, 'source_binding', single)
+    assert loss.source_bindings(ledger.db, pairs) == expected
+    assert visited == pairs and ledger.db.in_transaction
+    ledger.db.rollback()

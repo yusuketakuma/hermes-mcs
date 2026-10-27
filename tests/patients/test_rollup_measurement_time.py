@@ -345,7 +345,7 @@ def test_single_fallback_stops_on_interruption_after_noninterrupt_batch_failure(
     rows = list(store.db.execute('SELECT * FROM messages WHERE project_id=1 ORDER BY message_id'))
     blobs = mcs_queries.current_extraction_blobs(store.db, 1)
     refs = rollup._clinical_artifact_refs(store.db, 1, blobs)
-    batch_error = sqlite3.OperationalError('synthetic noninterrupt failure')
+    batch_error = sqlite3.OperationalError('too many SQL variables')
     batch_error.sqlite_errorcode = sqlite3.SQLITE_ERROR
     interrupted = sqlite3.OperationalError('synthetic interruption')
     if code is not None:
@@ -378,7 +378,7 @@ def test_single_fallback_keeps_other_operational_errors_unverified(store, monkey
     visited = []
 
     def fail_batch(*args, **kwargs):
-        error = sqlite3.OperationalError('synthetic noninterrupt failure')
+        error = sqlite3.OperationalError('too many SQL variables')
         error.sqlite_errorcode = sqlite3.SQLITE_ERROR
         raise error
 
@@ -417,7 +417,7 @@ def test_single_fallback_does_not_bypass_selected_artifact_reference(store, monk
     assert rollup._measurement_sources_bound(store.db, rows, kinds, refs, {}) == [False, True]
 
     def fail_batch(*args, **kwargs):
-        error = sqlite3.OperationalError('synthetic noninterrupt failure')
+        error = sqlite3.OperationalError('too many SQL variables')
         error.sqlite_errorcode = sqlite3.SQLITE_ERROR
         raise error
 
@@ -443,8 +443,12 @@ def test_source_batch_replays_in_order_if_later_source_check_raises(store, monke
         raise RuntimeError('earlier progress')
 
     monkeypatch.setattr(inference_dependency_loss, 'source_binding', binding)
-    monkeypatch.setattr(inference_dependency_loss, '_source_bindings_page',
-                        lambda *args: (_ for _ in ()).throw(ValueError('synthetic batch failure')))
+    def fail_batch(*args, **kwargs):
+        error = sqlite3.OperationalError('too many SQL variables')
+        error.sqlite_errorcode = sqlite3.SQLITE_ERROR
+        raise error
+
+    monkeypatch.setattr(extract_llm, 'progress_for_messages', fail_batch)
     monkeypatch.setattr(extract_llm, 'progress_for_message', earlier_progress)
     with pytest.raises(RuntimeError, match='earlier progress'):
         rollup._measurement_sources_bound(store.db, rows, ['extract_llm'] * 2, refs, {})

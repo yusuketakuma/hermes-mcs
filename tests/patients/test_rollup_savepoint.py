@@ -118,3 +118,46 @@ def test_resource_failure_never_replays_per_message(db, monkeypatch, code):
     with pytest.raises(sqlite3.DatabaseError) as caught:
         rollup._measurement_sources_bound(db, [{"message_id": 1}], ["extract_llm"], {}, {})
     assert caught.value is error and not replay
+
+
+@pytest.mark.parametrize('kind', ['runtime', 'type', 'value', 'unknown_sql', 'unclassified_sql'])
+def test_unexpected_measurement_batch_error_does_not_become_current(db, monkeypatch, kind):
+    errors = {'runtime': RuntimeError('synthetic runtime failure'),
+              'type': TypeError('synthetic type failure'),
+              'value': ValueError('synthetic value failure'),
+              'unknown_sql': sqlite3.OperationalError('synthetic unrecognized SQLite error'),
+              'unclassified_sql': sqlite3.OperationalError('too many SQL variables')}
+    errors['unknown_sql'].sqlite_errorcode = sqlite3.SQLITE_ERROR
+    error = errors[kind]
+    db.execute('INSERT INTO marker VALUES (7)')
+    monkeypatch.setattr(rollup, '_measurement_source_page', lambda *_: (_ for _ in ()).throw(error))
+    monkeypatch.setattr(rollup, '_measurement_source_bound', lambda *_args, **_kwargs: pytest.fail('unexpected single replay'))
+    with pytest.raises(type(error)) as caught:
+        rollup._measurement_sources_bound(db, [{'message_id': 1}], ['extract_llm'], {}, {}, expected_model='synthetic-model')
+    assert caught.value is error and db.in_transaction
+    assert db.execute('SELECT value FROM marker').fetchall() == [(7,)]
+    db.rollback()
+
+
+@pytest.mark.parametrize('message', [
+    'Expression tree is too large (maximum depth 1000)',
+    'no such table: message_revisions',
+])
+def test_known_measurement_batch_sqlite_error_replays_single(db, monkeypatch, message):
+    error = sqlite3.OperationalError(message)
+    error.sqlite_errorcode = sqlite3.SQLITE_ERROR
+    visited = []
+    db.execute('INSERT INTO marker VALUES (7)')
+    monkeypatch.setattr(rollup, '_measurement_source_page', lambda *_: (_ for _ in ()).throw(error))
+
+    def single(_db, row, _kind, _cfg, **kwargs):
+        visited.append((row['message_id'], kwargs['artifact_ref'], kwargs['expected_model']))
+        return True
+
+    monkeypatch.setattr(rollup, '_measurement_source_bound', single)
+    rows = [{'message_id': 1, 'body_state': 'full', 'body_text': '合成本文'}]
+    result = rollup._measurement_sources_bound(db, rows, ['extract_llm'], {(1, 'extract_llm'): 9}, {},
+                                                expected_model='synthetic-model')
+    assert result == [True] and visited == [(1, 9, 'synthetic-model')]
+    assert db.in_transaction and db.execute('SELECT value FROM marker').fetchall() == [(7,)]
+    db.rollback()

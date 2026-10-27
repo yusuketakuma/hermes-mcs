@@ -243,7 +243,7 @@ def _measurement_sources_bound(db, messages, kinds, refs, cfg, *, expected_model
         try:
             page_result = _measurement_source_page(db, page, page_kinds, refs, expected_model)
         except Exception as error:
-            if dependency_loss.fatal_read_error(error):
+            if not dependency_loss.retryable_batch_read_error(error):
                 raise
             # A batch error may belong to a later row. Replay the page in
             # original order so an earlier single-row error is not hidden.
