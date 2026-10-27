@@ -36,6 +36,8 @@ class _FakeLedger:
         self.db.row_factory = sqlite3.Row
         self.db.execute("CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY,kind TEXT,"
                         "project_id INTEGER,message_id TEXT,model TEXT,content TEXT,meta TEXT)")
+        self.db.execute("CREATE TABLE messages(message_id TEXT, project_id INTEGER, parent_id TEXT)")
+        self.db.execute("CREATE TABLE fetch_jobs(kind TEXT, project_id INTEGER, message_id TEXT, payload TEXT)")
 
     @property
     def rows(self):
@@ -49,6 +51,7 @@ class _FakeLedger:
         self.db.execute("INSERT INTO artifacts(kind,project_id,message_id,model,content,meta) "
                         "VALUES(?,?,?,?,?,?)", (kind, project_id, message_id, model,
                                                 content, json.dumps(meta or {})))
+        self.db.commit()
 
 
 def _obligations(doc, status=None):
@@ -556,6 +559,7 @@ def test_malformed_cache_rows_are_ignored_and_reextracted(request, field, bad):
     # Only these two parameterized columns are permitted; the malformed value is bound data.
     ledger.db.execute(f"UPDATE artifacts SET {field}=? WHERE kind=?",
                       (json.dumps(bad), extraction.KIND_CHUNK_V2))
+    ledger.db.commit()
     result = extraction.extract_facts_v2(_llm([]), member, ledger=ledger)
     assert result["complete"]
     assert result["reused_chunks"] == []

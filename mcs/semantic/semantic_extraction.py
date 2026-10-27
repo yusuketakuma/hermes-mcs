@@ -31,6 +31,12 @@ KIND_CHUNK = "semantic_extraction_chunk"
 SCHEMA_VERSION = "semantic-extraction/v1"
 
 
+def _require_idle_ledger(ledger):
+    """The checkpoint writer commits; never commit a caller's transaction."""
+    if ledger is not None and ledger.db.in_transaction:
+        raise RuntimeError("semantic_extraction_requires_idle_connection")
+
+
 def _chunk_generation(model: str, prompt_template: str, *, chunk_size: int = 3000) -> str:
     """Return the model + prompt identity a cached chunk must match."""
     return f"inference:{CURRENT_VERSION}|{model}|{sf.text_sha256(prompt_template)[:16]}|plan:{clinical_chunking.PLAN_VERSION}|size:{chunk_size}"
@@ -383,6 +389,7 @@ def _persist_chunk(ledger, project_id, message_id, model, source_fp,
                    extra_content=None, generation: str | None = None):
     if ledger is None:
         return
+    _require_idle_ledger(ledger)
     content = {
         "schema": schema,
         "chunk_index": spec["index"],
@@ -431,6 +438,7 @@ def extract_facts_resumable(llm_fn, member: dict,
     them out of a terminal/pass artifact until the pending chunks succeed.
     """
 
+    _require_idle_ledger(ledger)
     source, message_id, project_id, revision, source_fp, body_hash = \
         _member_prelude(member, llm_fn, project_id, source_fingerprint)
     manifest = assembly.build_manifest(source, source_fp, chunk_size)
@@ -665,6 +673,7 @@ def extract_facts_v2(llm_fn, member: dict,
     no obligation remains open/ambiguous/failed.  Completed chunks are
     persisted before the next model call so a restart reuses the prefix.
     """
+    _require_idle_ledger(ledger)
     import semantic_llm
 
     if type(request_following) is not bool:

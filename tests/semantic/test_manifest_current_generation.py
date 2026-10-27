@@ -242,6 +242,11 @@ def test_fake_ledger_keeps_existing_transaction_behavior(request, monkeypatch):
     import extraction_refresh
     monkeypatch.setattr(extraction_refresh, "refresh_extraction_cards", lambda *a: None)
     ledger = _FakeLedger(request)
+    def uncommitted_add(kind, content, project_id=None, message_id=None, model=None, meta=None):
+        ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,model,content,meta) "
+                          "VALUES(?,?,?,?,?,?)", (kind, project_id, message_id, model,
+                                                  content, json.dumps(meta or {})))
+    monkeypatch.setattr(ledger, "artifact_add", uncommitted_add)
     _persist(ledger, message_id="m1")
     assert ledger.db.in_transaction
     _persist(ledger, message_id="m1")
