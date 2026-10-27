@@ -161,10 +161,15 @@ def test_missing_old_schema_timestamp_keeps_legacy_json(tmp_path, monkeypatch):
     assert report['stored_since_backup']['attachments'] == 0
 
 
-@pytest.mark.parametrize('failed_sql', ['SELECT COUNT(*)', 'SELECT MAX(posted_at_ts)'])
+@pytest.mark.parametrize('failed_sql', ['SELECT COUNT(*)', 'SELECT MAX(posted_at_ts)',
+                                        'SELECT * FROM artifacts'])
 def test_count_or_watermark_read_failure_cannot_be_reported_as_zero(tmp_path, monkeypatch, failed_sql):
     from ops_testkit import _load
     live, backup = _synthetic_report_dbs(tmp_path)
+    if failed_sql == 'SELECT * FROM artifacts':
+        for path in (live, backup):
+            with closing(sqlite3.connect(path)) as con, con:
+                con.execute('CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY, content TEXT)')
     watchdog = _load()
     monkeypatch.setattr(watchdog, 'LEDGER', str(live))
     monkeypatch.setattr(watchdog, 'DATA', str(tmp_path))
@@ -191,7 +196,7 @@ def test_count_or_watermark_read_failure_cannot_be_reported_as_zero(tmp_path, mo
 
 
 
-def test_complete_report_keeps_legacy_content_and_receipt_binding(tmp_path, monkeypatch):
+def test_complete_report_keeps_fields_but_requires_consent_to_the_extended_digest(tmp_path, monkeypatch):
     import hashlib
     from ops_testkit import _load
 
@@ -202,10 +207,19 @@ def test_complete_report_keeps_legacy_content_and_receipt_binding(tmp_path, monk
               'notification_restore_holds', 'notification_view_manifests', 'notify_outbox')
     digest = hashlib.sha256()
     with closing(sqlite3.connect(live)) as con:
-        for table in tables:
+        for table in (*tables, 'artifacts'):
+            if table == 'artifacts':
+                legacy_digest = digest.copy().hexdigest()
             columns = con.execute(f'PRAGMA table_info({table})').fetchall()
             digest.update(json.dumps([table, columns], separators=(',', ':')).encode())
             if columns:
+                if table == 'artifacts':
+                    digest.update(b'artifacts-schema\0')
+                    for schema in con.execute("SELECT type,name,tbl_name,sql FROM sqlite_master "
+                                              "WHERE tbl_name='artifacts' AND type IN "
+                                              "('table','index','trigger') ORDER BY type,name"):
+                        encoded = json.dumps(schema, ensure_ascii=False, separators=(',', ':')).encode()
+                        digest.update(len(encoded).to_bytes(8, 'big') + encoded)
                 for row in con.execute(f'SELECT * FROM {table} ORDER BY rowid'):
                     encoded = json.dumps(row, ensure_ascii=False, separators=(',', ':'),
                                          default=lambda value: {'blob': value.hex()}).encode()
@@ -220,16 +234,75 @@ def test_complete_report_keeps_legacy_content_and_receipt_binding(tmp_path, monk
                                             ensure_ascii=False).encode('utf-8')).hexdigest()
     assert {key: value for key, value in report.items() if key not in ('computed_at', 'report_id')} == expected
     assert report['report_id'] == expected_id
+    legacy_report = {**expected, 'live_content_sha256': legacy_digest}
+    legacy_id = hashlib.sha256(json.dumps(legacy_report, sort_keys=True, separators=(',', ':'),
+                                          ensure_ascii=False).encode('utf-8')).hexdigest()
+    assert legacy_id != expected_id
     with closing(sqlite3.connect(live)) as con, con:
         con.execute('CREATE TABLE command_receipts(command_id TEXT, receipt_json TEXT, outcome TEXT, processed_at REAL)')
         receipt = {'cmd': 'ops.restore_approve', 'scheduled': True, 'command_id': 'synthetic-old',
-                   'report_id': expected_id, 'backup_sha256': expected['backup_sha256'],
+                   'report_id': legacy_id, 'backup_sha256': expected['backup_sha256'],
                    'backup_schema': expected['backup_schema']}
         con.execute("INSERT INTO command_receipts VALUES('synthetic-old',?,'applied',1)", (json.dumps(receipt),))
     watchdog = _load()
     monkeypatch.setattr(watchdog, 'LEDGER', str(live))
+    assert restore_evidence.find_restore_consent(report, live_path=str(live)) is None
+    assert watchdog._consent_for(report) is None
+    with closing(sqlite3.connect(live)) as con, con:
+        receipt['report_id'] = expected_id
+        con.execute("UPDATE command_receipts SET receipt_json=? WHERE command_id='synthetic-old'",
+                    (json.dumps(receipt),))
     assert restore_evidence.find_restore_consent(report, live_path=str(live)) == 'synthetic-old'
     assert watchdog._consent_for(report) == 'synthetic-old'
+
+
+@pytest.mark.parametrize('mutation', ['add', 'delete', 'replace', 'content', 'meta', 'index', 'trigger'])
+def test_artifact_change_invalidates_prior_consent_in_both_restore_paths(tmp_path, monkeypatch, mutation):
+    from ops_testkit import _load
+
+    live, backup = _synthetic_report_dbs(tmp_path)
+    for path in (live, backup):
+        with closing(sqlite3.connect(path)) as con, con:
+            con.execute('CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY, kind TEXT, content TEXT, meta TEXT)')
+            con.executemany('INSERT INTO artifacts VALUES(?,?,?,?)', [
+                (1, 'semantic_usage', '{}', '{"reserved":true}'),
+                (2, 'patient_context_summary_quality_fail_v1', '{"result":"negative"}', '{}'),
+                (3, 'patient_context_summary_quality_repair_v1', '{"spent":true}', '{}'),
+                (4, 'synthetic_other', 'SYNTHETIC_PRIVATE_CANARY', '{}'),
+            ])
+    baseline = _both_reports(tmp_path, monkeypatch, live, backup)
+    with closing(sqlite3.connect(live)) as con, con:
+        con.execute('CREATE TABLE command_receipts(command_id TEXT, receipt_json TEXT, outcome TEXT, processed_at REAL)')
+        receipt = {'cmd': 'ops.restore_approve', 'scheduled': True, 'command_id': 'synthetic-old',
+                   'report_id': baseline['report_id'], 'backup_sha256': baseline['backup_sha256'],
+                   'backup_schema': baseline['backup_schema']}
+        con.execute("INSERT INTO command_receipts VALUES('synthetic-old',?,'applied',1)", (json.dumps(receipt),))
+    watchdog = _load()
+    monkeypatch.setattr(watchdog, 'LEDGER', str(live))
+    assert restore_evidence.find_restore_consent(baseline, live_path=str(live)) == 'synthetic-old'
+    assert watchdog._consent_for(baseline) == 'synthetic-old'
+    with closing(sqlite3.connect(live)) as con, con:
+        sql = {
+            'add': "INSERT INTO artifacts VALUES(5,'synthetic_added','{}','{}')",
+            'delete': 'DELETE FROM artifacts WHERE artifact_id=4',
+            'replace': "UPDATE artifacts SET kind='synthetic_replacement',content='{}' WHERE artifact_id=3",
+            'content': "UPDATE artifacts SET content='{\"result\":\"changed\"}' WHERE artifact_id=2",
+            'meta': "UPDATE artifacts SET meta='{\"reserved\":false}' WHERE artifact_id=1",
+            'index': 'CREATE INDEX synthetic_artifacts_index ON artifacts(kind)',
+            'trigger': 'CREATE TRIGGER synthetic_artifacts_trigger AFTER INSERT ON artifacts BEGIN SELECT 1; END',
+        }[mutation]
+        con.execute(sql)
+    changed = _both_reports(tmp_path, monkeypatch, live, backup)
+    assert changed['report_id'] != baseline['report_id']
+    assert changed['live_content_sha256'] != baseline['live_content_sha256']
+    assert changed['backup_sha256'] == baseline['backup_sha256']
+    assert changed['backup_schema'] == baseline['backup_schema']
+    assert changed['stored_since_backup'] == baseline['stored_since_backup']
+    assert changed['external_effects'] == baseline['external_effects']
+    assert changed['external_effect_rows'] == baseline['external_effect_rows']
+    assert 'SYNTHETIC_PRIVATE_CANARY' not in json.dumps(changed)
+    assert restore_evidence.find_restore_consent(changed, live_path=str(live)) is None
+    assert watchdog._consent_for(changed) is None
 
 
 @pytest.mark.parametrize('entry', ['update', 'watchdog'])

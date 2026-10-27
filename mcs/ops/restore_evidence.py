@@ -20,6 +20,7 @@ from safe_io import atomic_write
 RESTORE_LOSS_NOTICE = (
     "件数は対象表の行数差です。訂正、同数の追加と削除、配送状態の変更や対象外のデータは分かりません。"
     "0件でも損失がないとは言えません。"
+    "復元で推論の使用履歴や費用の記録が失われる場合があります。復元への同意は外部推論の再開を意味しません。"
 )
 
 
@@ -64,13 +65,21 @@ def _watermark(con):
 
 
 def _restore_content_digest(con):
-    """Bind consent to the contents of the stored-data and delivery tables."""
+    """Bind consent to stored data, delivery and artifact history."""
     digest = hashlib.sha256()
-    for table in (*_STORED_TABLES, *_EFFECT_TABLES):
+    for table in (*_STORED_TABLES, *_EFFECT_TABLES, "artifacts"):
         columns = con.execute(f"PRAGMA table_info({table})").fetchall()
         digest.update(json.dumps([table, columns], separators=(",", ":")).encode())
         if not columns:
             continue
+        if table == "artifacts":
+            digest.update(b"artifacts-schema\0")
+            for schema in con.execute(
+                    "SELECT type,name,tbl_name,sql FROM sqlite_master "
+                    "WHERE tbl_name='artifacts' AND type IN ('table','index','trigger') ORDER BY type,name"):
+                encoded = json.dumps(schema, ensure_ascii=False, separators=(",", ":")).encode()
+                digest.update(len(encoded).to_bytes(8, "big"))
+                digest.update(encoded)
         for row in con.execute(f"SELECT * FROM {table} ORDER BY rowid"):
             encoded = json.dumps(
                 row, ensure_ascii=False, separators=(",", ":"),
@@ -82,8 +91,8 @@ def _restore_content_digest(con):
 
 def create_loss_report(*, live_path: str, backup_path: str, report_path: str) -> dict:
     """Loss report a human must approve before the live DB is replaced.
-    Binds backup bytes/schema, row deltas, and the contents of the stored-data
-    and delivery tables. Changes to an existing row invalidate stale consent."""
+    Binds backup bytes/schema, row deltas, and the contents of the stored-data,
+    delivery tables and artifact history. Changes to an existing row invalidate stale consent."""
     try:
         live = sqlite3.connect(
             Path(live_path).resolve().as_uri() + "?mode=ro", uri=True)
