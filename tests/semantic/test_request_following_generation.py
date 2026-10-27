@@ -9,6 +9,8 @@ import semantic_extraction as extraction
 import semantic_facts as facts
 import semantic_llm as prompts
 import semantic_v4 as v4
+import inference_dependency_loss
+from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY
 from semantic_testkit import _ledger, _message, _patient
 
 TEXT = "架空担当Aから薬剤師へ、必要な場合に架空資料Xを明日までに確認してください。"
@@ -49,10 +51,10 @@ def test_default_and_explicit_false_share_the_current_plan_generation(source):
     explicit = extract(source, lambda _: pytest.fail("default cache missed"), request_following=False)
     # Then: this is a machine cache identity, not a prose assertion.
     assert extraction._chunk_generation("fictional-model", prompts._FACT_V2_PROMPT) == \
-        "fictional-model|b7c2f15eb3182ceb|plan:2|size:3000"
+        "inference:1.0|fictional-model|b7c2f15eb3182ceb|plan:2|size:3000"
     db, _, _ = source
     meta = json.loads(db.artifacts(extraction.KIND_CHUNK_V2)[0]["meta"])
-    assert meta["generation"] == "fictional-model|b7c2f15eb3182ceb|plan:2|size:3000"
+    assert meta["generation"] == "inference:1.0|fictional-model|b7c2f15eb3182ceb|plan:2|size:3000"
     assert implicit["doc"] == explicit["doc"] and explicit["reused_chunks"] == [0]
     assert "generation" not in implicit and "generation" not in explicit
     assert extraction.SCHEMA_VERSION_V2 == "semantic-extraction/v2"
@@ -288,16 +290,19 @@ def test_shadow_compare_reads_staged_candidates_without_writes(tmp_path, source,
         Path(__file__).resolve().parents[2] / "evaluation" / "canonical_request_eval.py")
     report_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(report_module)
-    db, _, member = source
+    db, _, _ = source
     db.save_messages([_message(i, parent=1, body=TEXT) for i in range(2, 8)], project_id=1)
     bundle = semantic_store.thread_bundle(db.db, 1, 1)
     for mid in range(1, 8):
         v4.extract_request_following(lambda _: reply(details=DETAILS), db, bundle, mid,
                                      policy="fixture")
 
-    def legacy(mid, doc):
+    def legacy(mid, doc, *, version=CURRENT_VERSION):
+        row = db.db.execute("SELECT content_hash FROM messages WHERE project_id=1 AND message_id=?",
+                            (mid,)).fetchone()
         db.artifact_add("extract_llm", json.dumps(doc, ensure_ascii=False), project_id=1,
-                        message_id=mid, meta={"hash": member["revision"]})
+                        message_id=mid, meta={VERSION_KEY: version, "hash": row[0],
+                            "source_binding": inference_dependency_loss.source_binding(db.db, 1, mid)})
 
     # 1: paraphrased action paired by evidence, one unrelated row, one malformed row.
     legacy(1, {"requests": [
@@ -307,6 +312,9 @@ def test_shadow_compare_reads_staged_candidates_without_writes(tmp_path, source,
         {"to": "医師", "action": "別件", "evidence": "架空の別件"}, "bad"]})
     # 2: no extract_llm row (unknown).  3: no requests key (real zero).
     legacy(3, {})
+    # A newer artifact from the previous public generation must not replace
+    # the confirmed empty current extraction during the comparison.
+    legacy(3, {"requests": [{"action": "架空の旧依頼"}]}, version=LEGACY_VERSION)
     legacy(4, {"requests": "x"})  # non-list: unknown
     legacy(5, {"requests": [], "_items_dropped": 1})  # partial
     db.save_messages([_message(6, parent=1, body=TEXT + "架空追記。")], project_id=1)  # stale

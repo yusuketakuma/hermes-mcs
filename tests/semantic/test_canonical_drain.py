@@ -13,6 +13,7 @@ import time
 
 import semantic_extraction as extraction
 import semantic_facts as sf
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from mcs_requests import payload_hash
 from semantic_policy import (KIND_AUDIT, KIND_FACT_AUDIT, KIND_FACTS_V2,
                              KIND_SUMMARY)
@@ -63,7 +64,7 @@ def _seed_incomplete_v2(db, mid, fp, doc, *, retried=False):
     # binding and obligation owners; retry metadata does not waive validity.
     sf.validate_facts_doc(doc)
     assert doc["coverage"]["status"] == "incomplete"
-    meta = {"fingerprint": fp, "schema": "v2",
+    meta = {VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "schema": "v2",
             "fact_source": "canonical",
             "coverage_status": "incomplete"}
     if retried:
@@ -96,7 +97,9 @@ def test_incomplete_coverage_resumes_once_then_stops(tmp_path):
         assert incomplete["coverage"]["status"] == "incomplete"
         db.artifact_add(KIND_FACTS_V2, json.dumps(incomplete),
                         project_id=1, message_id=1,
-                        meta={"fingerprint": fp, "coverage_status": "incomplete"})
+                        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "coverage_status": "incomplete"})
+        seeded = semantic_store.current_artifact(db.db, KIND_FACTS_V2, 1, fp)
+        assert seeded is not None and seeded["meta"]["coverage_status"] == "incomplete"
 
         calls = []
 
@@ -115,6 +118,8 @@ def test_incomplete_coverage_resumes_once_then_stops(tmp_path):
         # parked for review: a doc already carrying the retry marker is
         # never re-extracted; the durable job stops for review.
         _seed_incomplete_v2(db, 1, fp, incomplete, retried=True)
+        seeded_retry = semantic_store.current_artifact(db.db, KIND_FACTS_V2, 1, fp)
+        assert seeded_retry is not None and seeded_retry["meta"]["coverage_retry"] is True
         calls.clear()
         db.db.execute(
             "UPDATE fetch_jobs SET state='pending', next_try=0 "
