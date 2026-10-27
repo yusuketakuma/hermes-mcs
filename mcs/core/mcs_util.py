@@ -52,15 +52,19 @@ def _read_local(path: str, limit: int) -> bytes:
     return raw
 
 
-def load_config(path: str = CONF_PATH) -> dict:
-    """config.json -> dict; a missing/malformed file (a repeated key or
-    NaN counts as malformed, like every other config reader) means {} so
-    every caller falls back to its documented per-key defaults + validation."""
+def load_config_checked(path: str = CONF_PATH) -> dict | None:
+    """Return the parsed config object, or None when it cannot be read or parsed."""
     try:
         raw = parse_config(_read_local(path, CONFIG_MAX_BYTES))
-        return raw if isinstance(raw, dict) else {}
+        return raw if isinstance(raw, dict) else None
     except (OSError, ValueError, RecursionError):
-        return {}
+        return None
+
+
+def load_config(path: str = CONF_PATH) -> dict:
+    """config.json -> dict; missing/malformed files fall back to defaults."""
+    config = load_config_checked(path)
+    return config if config is not None else {}
 
 
 def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
