@@ -2,6 +2,7 @@
 import json
 import time
 import sqlite3
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -162,8 +163,9 @@ def test_current_pass_with_empty_projection_is_counted_without_legacy_fallback(s
     assert report['complete'] is False and _job(store) is None
 
 
-@pytest.mark.parametrize('proof_version,wanted', [('1.0', True), ('0.1', False), (None, False)])
-def test_all_stage_join_accepts_only_matching_public_patient_proofs(store, monkeypatch, proof_version, wanted):
+@pytest.mark.parametrize('proof_version,patient_state', [
+    ('1.0', 'rollup_unverified'), ('0.1', 'pending'), (None, 'pending')])
+def test_all_stage_join_keeps_source_proofs_but_waits_for_rollup_witness(store, monkeypatch, proof_version, patient_state):
     import patient_context_refresh
     import rollup
     _save(store)
@@ -174,18 +176,18 @@ def test_all_stage_join_accepts_only_matching_public_patient_proofs(store, monke
         'publication_eligible': False, 'sources': {key: 0 for key in
             ('total', 'eligible', 'scanned', 'audited', 'pending', 'held', 'failed', 'incomplete', 'excluded')},
         'summary': {'current': True, 'published': False}, 'source_sig': 'synthetic', 'contract': {}})
-    monkeypatch.setattr(rollup, 'inference_coverage', lambda *args, **kw: {
-        VERSION_KEY: CURRENT_VERSION, 'current': True, 'status': 'current', 'source_sig': 'synthetic'})
+    monkeypatch.setattr(rollup, 'inference_coverage', lambda *args, **kw: pytest.fail('unproved rollup was used'))
+    monkeypatch.setattr(rollup, 'rebuild', lambda *args, **kw: pytest.fail('existing rollup was replaced'))
     for _ in range(3):
         report = _replay(store)
-    assert report['complete'] is wanted
-    if wanted:
-        assert report['remaining_stages'] == [] and report['phase'] == 'complete'
-        assert _replay(store)['complete'] is True
-        # A new backward-key source invalidates cached completion even without
-        # any published canonical projection or new notification intent.
-        store.save_messages([_message(1, body='完全合成の訂正です。')], project_id=1)
-        assert _replay(store)['complete'] is False
+    assert report['coverage']['counts'] == {'current': 1}
+    assert report['patient_counts'] == {patient_state: 1}
+    assert report['complete'] is False and report['phase'] == 'waiting'
+    assert 'rollup_freshness_witness' in report['remaining_stages']
+    assert _replay(store)['complete'] is False
+    # A new backward-key source still invalidates the cached observation.
+    store.save_messages([_message(1, body='完全合成の訂正です。')], project_id=1)
+    assert _replay(store)['complete'] is False
 
 
 @pytest.mark.parametrize('fault,wanted', [
@@ -558,6 +560,122 @@ def _waiting(store, cfg=None, *, limit=32):
         if report.get('phase') in ('waiting','complete'):
             return report
     pytest.fail('bounded synthetic replay did not reach its waiting/completed bookmark')
+
+
+def _saved_old_completion(store, *, phase='complete', malformed=False):
+    with drain._sched_update(store) as sched:
+        old = dict(sched['inference_reprocess'])
+        old.update(phase=phase, complete=phase == 'complete',
+                   patient_counts={'current': 'bad' if malformed else 1, 'held': 2},
+                   waiting_reasons={'messages': {'failed': 1}, 'patients': {'held': 2}},
+                   remaining_stages=['source_or_patient_proof'] if phase == 'waiting' else [])
+        old.pop('proof_status', None)
+        old.pop('proof_reason', None)
+        sched['inference_reprocess'] = old
+    return old
+
+
+@pytest.mark.parametrize('phase', ['complete', 'waiting'])
+def test_old_bookmark_waits_without_losing_results_or_reopening_jobs(store, monkeypatch, phase):
+    import patient_context_refresh
+    import rollup
+
+    _save(store)
+    store.semantic_seed(1, [1], {'source': 'synthetic-old'})
+    with store.db:
+        store.db.execute("UPDATE fetch_jobs SET state='failed', attempts=6 WHERE kind='semantic'")
+    store.artifact_add('patient_rollup', '{"synthetic":"preserve"}', project_id=1,
+                       meta={VERSION_KEY: CURRENT_VERSION})
+    monkeypatch.setattr(drain, '_reprocess_target_state', lambda *args: 'current')
+    monkeypatch.setattr(patient_context_refresh, 'inference_coverage', lambda *args: {
+        VERSION_KEY: CURRENT_VERSION, 'complete': True})
+    monkeypatch.setattr(rollup, 'rebuild', lambda *args, **kwargs: pytest.fail('rollup must stay unchanged'))
+    report = _waiting(store)
+    assert report['patient_counts'] == {'rollup_unverified': 1}
+    _saved_old_completion(store, phase=phase)
+    before_job = dict(_job(store))
+    before_rows = [tuple(row) for row in store.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    before_outbox = [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox ORDER BY event_id')]
+    report = _replay(store)
+    assert report['phase'] == 'waiting' and report['complete'] is False and report['processed'] == 0
+    assert report['patient_counts'] == {'rollup_unverified': 1, 'held': 2}
+    assert report['waiting_reasons'] == {'messages': {'failed': 1},
+        'patients': {'held': 2, 'rollup_unverified': 1}}
+    assert report['proof_status'] == 'rollup_freshness_unverified'
+    assert report['proof_reason'] == '患者集約の現行性を確認できません'
+    assert 'rollup_freshness_witness' in report['remaining_stages']
+    if phase == 'waiting':
+        assert 'source_or_patient_proof' in report['remaining_stages']
+    for _ in range(3):
+        again = _replay(store)
+        assert again['phase'] == 'waiting' and again['complete'] is False and again['processed'] == 0
+    assert dict(_job(store)) == before_job
+    assert [tuple(row) for row in store.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before_rows
+    assert [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox ORDER BY event_id')] == before_outbox
+
+
+def test_malformed_old_patient_count_is_not_promoted_or_rewritten(store):
+    _save(store)
+    _waiting(store)
+    before = _saved_old_completion(store, malformed=True)
+    result = _replay(store)
+    assert result == {'status': 'invalid_progress', 'complete': False}
+    assert drain._sched_state(store)['inference_reprocess'] == before
+
+
+def test_old_completion_downgrade_checks_concurrent_epoch(store, monkeypatch):
+    _save(store)
+    _waiting(store)
+    before = _saved_old_completion(store)
+    original = drain._sched_update
+
+    @contextmanager
+    def race(ledger):
+        with original(ledger) as sched:
+            sched['source_epoch'] = sched.get('source_epoch', 0) + 1
+        with original(ledger) as sched:
+            yield sched
+
+    monkeypatch.setattr(drain, '_sched_update', race)
+    result = _replay(store)
+    assert result == {'status': 'source_changed', 'complete': False, 'processed': 0}
+    assert drain._sched_state(store)['inference_reprocess'] == before
+
+
+def test_empty_scope_cannot_claim_unproved_rollup_completion(store):
+    with store.db:
+        store.db.execute('DELETE FROM patients')
+    report = _waiting(store)
+    assert report['phase'] == 'waiting' and report['complete'] is False
+    assert report['coverage']['counts'] == {} and report['patient_counts'] == {}
+    assert report['proof_status'] == 'rollup_freshness_unverified'
+
+
+def test_unverified_rollup_does_not_block_existing_semantic_job(store, monkeypatch):
+    from semantic_testkit import _FakeJev
+
+    _save(store)
+    store.semantic_seed(1, [1], {'source': 'synthetic-existing-job'})
+    report = _waiting(store)
+    assert report['proof_status'] == 'rollup_freshness_unverified'
+    before_attempts = _job(store)['attempts']
+    outbox = [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox ORDER BY event_id')]
+    processed = []
+
+    def existing(ledger, _scfg, job, *args, **kwargs):
+        processed.append(job['job_id'])
+        assert runtime.transition(ledger, runtime.JobToken.from_row(job), 'done')
+        return 'done'
+
+    monkeypatch.setattr(drain, '_process_job', existing)
+    result = {'errors': []}
+    output = drain.run_due(store, _cfg(loop_mode='off'), result, time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=lambda *a, **kw: None, max_jobs=1)
+    assert processed == [_job(store)['job_id']] and _job(store)['state'] == 'done'
+    assert _job(store)['attempts'] == before_attempts
+    assert output['inference_reprocess']['complete'] is False
+    assert output['inference_reprocess']['proof_status'] == 'rollup_freshness_unverified'
+    assert [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox ORDER BY event_id')] == outbox
 
 
 def test_continuous_arrivals_and_adoptions_do_not_starve_the_existing_keyset(store,monkeypatch):

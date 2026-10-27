@@ -1492,9 +1492,8 @@ def _reprocess_target_state(ledger, row, scfg):
 
 
 def _reprocess_patient_state(ledger, row, cfg, scfg):
-    """Join the source/audit/summary proof with the current rollup, outside a transaction."""
+    """Inspect patient proofs without replacing a rollup whose freshness is unproved."""
     import patient_context_refresh
-    import rollup
     from mcs_queries import paused
     pid = row['project_id']
     if (scfg['project_ids'] is not None and pid not in scfg['project_ids']
@@ -1519,11 +1518,9 @@ def _reprocess_patient_state(ledger, row, cfg, scfg):
         if counts['incomplete'] or proof['status'] in ('unacquired', 'dependency_gap'):
             return 'incomplete'
         return 'pending'
-    roll = rollup.inference_coverage(ledger.db, pid)
-    if not is_current(roll) or not roll['current']:
-        rollup.rebuild(ledger, pid)
-    roll = rollup.inference_coverage(ledger.db, pid)
-    return 'current' if is_current(roll) and roll['current'] else 'pending'
+    # The current cache test does not bind every input. Rebuilding here
+    # without a trusted config could also replace an existing richer rollup.
+    return 'rollup_unverified'
 
 
 def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
@@ -1579,6 +1576,49 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
     # a new bounded round. Operational settings grant no fresh attempt budget.
     if progress['phase'] in ('waiting', 'complete'):
         if not changed and not progress['tail_pending']:
+            counts = progress.get('patient_counts')
+            if counts is not None and (not isinstance(counts, dict) or any(
+                    not isinstance(key, str) or type(value) is not int or not 0 <= value < 2**63
+                    for key, value in counts.items())):
+                return {'status': 'invalid_progress', 'complete': False}
+            if isinstance(counts, dict) and counts.get('current', 0):
+                current, unverified = counts['current'], counts.get('rollup_unverified', 0)
+                if current + unverified >= 2**63:
+                    return {'status': 'invalid_progress', 'complete': False}
+                counts = dict(counts)
+                counts['rollup_unverified'] = current + unverified
+                counts.pop('current')
+                progress['patient_counts'] = counts
+            reasons = progress.get('waiting_reasons')
+            if reasons is not None and not isinstance(reasons, dict):
+                return {'status': 'invalid_progress', 'complete': False}
+            if isinstance(counts, dict) and counts.get('rollup_unverified', 0):
+                reasons = dict(reasons or {})
+                patients = reasons.get('patients')
+                if patients is not None and (not isinstance(patients, dict) or any(
+                        not isinstance(key, str) or type(value) is not int or not 0 <= value < 2**63
+                        for key, value in patients.items())):
+                    return {'status': 'invalid_progress', 'complete': False}
+                patients = dict(patients or {})
+                patients['rollup_unverified'] = counts['rollup_unverified']
+                reasons['patients'] = patients
+                progress['waiting_reasons'] = reasons
+            stages = progress.get('remaining_stages')
+            stages = list(stages) if isinstance(stages, list) else []
+            if 'rollup_freshness_witness' not in stages:
+                stages.append('rollup_freshness_witness')
+            progress.update(phase='waiting', complete=False,
+                            proof_status='rollup_freshness_unverified',
+                            proof_reason='患者集約の現行性を確認できません',
+                            remaining_stages=stages)
+            if progress != old_progress:
+                with _sched_update(ledger) as sched:
+                    if (sched.get('inference_reprocess') != old_progress
+                            or any(sched.get(field, 0) != value for field, value in epochs.items())
+                            or ledger.db.execute('PRAGMA data_version').fetchone()[0] != version
+                            or ledger.db.total_changes != changes):
+                        return {'status': 'source_changed', 'complete': False, 'processed': 0}
+                    sched['inference_reprocess'] = progress
             return {'status': progress['phase'], 'processed': 0, **progress}
         upper = ledger.db.execute('SELECT COALESCE(MAX(message_id),0) FROM messages').fetchone()[0]
         tail = upper > progress['seed_cursor']
@@ -1587,7 +1627,7 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
                         counts={}, dirty=False, verify_epochs=dict(epochs), complete=False)
     if progress['phase'] == 'verify_patients':
         states = {'current', 'pending', 'held', 'paused', 'failed', 'incomplete', 'excluded',
-                  'terminal_gap', 'repair_pending'}
+                  'terminal_gap', 'repair_pending', 'rollup_unverified'}
         if (any(type(progress.get(key)) is not int or progress[key] < 0
                 for key in ('patient_cursor', 'patient_upper'))
                 or not isinstance(progress.get('patient_counts'), dict)
@@ -1630,9 +1670,13 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
                 tail = upper > progress['seed_cursor']
                 progress.update(future_upper=upper, tail_pending=tail)
                 dirty = progress.get('dirty', False) or progress.get('verify_epochs', actual) != actual
-                progress['complete'] = not (blocked_messages or blocked_patients or tail or dirty)
+                progress['complete'] = False  # The rollup witness is not implemented yet.
                 progress['waiting_reasons'] = {'messages': blocked_messages, 'patients': blocked_patients}
-                progress['remaining_stages'] = [] if progress['complete'] else ['source_or_patient_proof']
+                progress['remaining_stages'] = (['source_or_patient_proof']
+                    if blocked_messages or blocked_patients or tail or dirty else [])
+                progress['proof_status'] = 'rollup_freshness_unverified'
+                progress['proof_reason'] = '患者集約の現行性を確認できません'
+                progress['remaining_stages'].append('rollup_freshness_witness')
                 progress['verified_at'] = time.time()
                 if tail or dirty:
                     progress.update(phase='seed' if tail else 'verify',

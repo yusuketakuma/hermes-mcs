@@ -53,6 +53,7 @@ def _reject_old_approval(approved):
     ("rollup", "inference_coverage"),
     ("measurement_sources", "_labs"),
     ("measurement_timeline", "project_measurements"),
+    ("semantic_drain", "_reprocess_patient_state"),
     ("patient_context_state", "project"),
     ("patient_state_context", "reference_current"),
     ("inference_dependency_loss", "read"),
