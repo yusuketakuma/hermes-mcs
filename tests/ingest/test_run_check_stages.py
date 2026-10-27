@@ -585,6 +585,19 @@ def _stub_llm_lane(monkeypatch, busy=False):
     return calls
 
 
+def test_stage_derive_reports_gc_error_without_losing_extraction_result(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    monkeypatch.setattr(extract_llm, "pinned_slot_busy", lambda deadline: False)
+    monkeypatch.setattr(extract_llm, "run_pending", lambda ledger, **kw: {
+        "done": 1, "failed": 0, "left": 0, "pids": [],
+        "gc_error": "extract_stale_gc_failed"})
+    result = {"errors": [], "realtime_ids": [1]}
+    run_check.stage_derive(db, result, time.monotonic() + 150, cfg={})
+    assert result["extract_llm"]["done"] == 1
+    assert "extract_llm: extract_stale_gc_failed" in result["errors"]
+    db.close()
+
+
 @pytest.mark.parametrize(("cap", "limit"), [(90, 1), (240, 3)])
 def test_stage_derive_limits_rows_to_budget(tmp_path, monkeypatch, cap, limit):
     db = _ledger(tmp_path)

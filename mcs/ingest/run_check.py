@@ -231,6 +231,8 @@ def stage_derive(ledger, result, deadline, cfg=None,
                 # Existing claim leases exclude in-flight work.
                 oldest_first=False, batch_k=extract_llm._BATCH_K,
                 vital_policy=extract_validation.vital_threshold_policy(cfg))
+            if result["extract_llm"].get("gc_error") == "extract_stale_gc_failed":
+                result["errors"].append("extract_llm: extract_stale_gc_failed")
     except Exception as e:
         result["errors"].append(f"extract_llm: {type(e).__name__}")
 

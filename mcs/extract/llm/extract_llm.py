@@ -99,7 +99,7 @@ from mcs_queries import (ELIGIBLE_MESSAGE, EXTRACT_FEEDBACK_KIND, V4_PROJECTION_
                          current_extract_pred,
                          current_qc_pred,
                          current_v4_id, json_or_null, qc_source_id)
-from mcs_util import CONF_PATH, HOME, json_object, load_config, loads_dict  # noqa: F401
+from mcs_util import CONF_PATH, HOME, json_object, load_config, loads_dict, strict_json  # noqa: F401
 from writer_lock import acquire_run_lock
 from llm_availability import circuit_failure, circuit_open_s, circuit_streak, circuit_success, disk_floor_mb, disk_free_mb  # noqa: F401 — historical helper re-export
 
@@ -123,7 +123,7 @@ TIMEOUT = 300
 # v6: source-bound clinical/context details re-enter the existing generation boundaries.
 # v7: reapply the single-reading BP merge contract to completed legacy outputs.
 # v8: v1.0.21 pharmacy details, person/time-scoped vitals and source-bound repair feedback.
-EXTRACT_VERSION = 10
+EXTRACT_VERSION = inference.LLM_EXTRACT_VERSION
 PATIENT_CONTEXT_VERSION = 4
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -1525,7 +1525,7 @@ def _llm_up(deadline: float | None = None) -> bool:
 # lease/fail bookkeeping per claimed row.
 
 
-def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0, *, scoped_cleanup=False):
+def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0, *, scoped_cleanup=False, result_witness=None):
     """In-transaction error artifact insert — caller holds `with
     ledger.db` AND has already cleared prior error rows in the same tx.
     extract_version is stamped so a prior schema version's permanent
@@ -1551,16 +1551,28 @@ def _fail_tx(ledger, r, attempts: int, auto_retry: int = 0, *, scoped_cleanup=Fa
     meta.update(_frame_meta(r))
     if auto_retry:
         meta["auto_retry"] = auto_retry
-    ledger.artifact_add_tx(
-        KIND, json.dumps({"_model": actual_model, "_error": True},
-                         ensure_ascii=False),
-        project_id=r["project_id"], message_id=r["message_id"],
-        model=actual_model, meta=meta)
+    content_json = json.dumps({"_model": actual_model, "_error": True}, ensure_ascii=False)
+    meta_json = json.dumps(meta, ensure_ascii=False)
+    created_at = time.time()
+    cur = ledger.db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (KIND, r['project_id'], r['message_id'], content_json, actual_model, meta_json, created_at))
+    if cur.rowcount != 1:
+        raise RuntimeError('extract_insert_unverified')
+    witness = {'artifact_id': cur.lastrowid, 'kind': KIND, 'project_id': r['project_id'],
+               'message_id': r['message_id'], 'content': content_json, 'model': actual_model,
+               'meta': meta_json, 'created_at': created_at}
+    _verify_atomic_witness(ledger.db, r, [witness])
+    if result_witness is not None:
+        result_witness.append(witness)
     if attempts + 1 >= 5:
         prior = _prior_extract(ledger.db, r)
         if prior and (loads_dict(prior["meta"]).get("extract_version") != EXTRACT_VERSION
                       or not inference.is_current(loads_dict(prior["meta"]), target=_INFERENCE_VERSION)):
-            _record_hold_tx(ledger, r, prior, "attempts_exhausted", remove_chunks=not scoped_cleanup)
+            hold_witness = _record_hold_tx(ledger, r, prior, "attempts_exhausted", remove_chunks=not scoped_cleanup)
+            if result_witness is not None:
+                result_witness.extend(hold_witness)
             return True
     return False
 
@@ -1587,7 +1599,11 @@ def revive_failed(ledger, now: float | None = None) -> dict:
     # capped rows are excluded BEFORE the LIMIT — selecting them first
     # let a capped prefix starve every eligible row behind it
     rows = ledger.db.execute(
-        "SELECT artifact_id,meta FROM artifacts WHERE kind=? "
+        "SELECT artifact_id,meta,kind,project_id,message_id,created_at,content,model FROM artifacts WHERE kind=? "
+        "AND EXISTS (SELECT 1 FROM messages m WHERE m.message_id=artifacts.message_id "
+        "AND (artifacts.project_id IS NULL OR artifacts.project_id=m.project_id)) "
+        "AND typeof(content)='text' AND length(content)<=262144 "
+        "AND (model IS NULL OR (typeof(model)='text' AND length(model)<=32768)) "
         "AND " + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND json_valid(meta) AND json_extract(meta,'$.error')=1 "
         "AND COALESCE(json_extract(meta,'$.invalidated'),0)=0 "
         "AND COALESCE(json_extract(meta,'$.extract_version'),0)=? "
@@ -1598,6 +1614,10 @@ def revive_failed(ledger, now: float | None = None) -> dict:
          REVIVE_PER_INPUT, REVIVE_MAX * 4)).fetchall()
     out["skipped_cap"] = ledger.db.execute(
         "SELECT COUNT(*) FROM artifacts WHERE kind=? "
+        "AND EXISTS (SELECT 1 FROM messages m WHERE m.message_id=artifacts.message_id "
+        "AND (artifacts.project_id IS NULL OR artifacts.project_id=m.project_id)) "
+        "AND typeof(content)='text' AND length(content)<=262144 "
+        "AND (model IS NULL OR (typeof(model)='text' AND length(model)<=32768)) "
         "AND " + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND json_valid(meta) AND json_extract(meta,'$.error')=1 "
         "AND COALESCE(json_extract(meta,'$.invalidated'),0)=0 "
         "AND COALESCE(json_extract(meta,'$.extract_version'),0)=? "
@@ -1618,10 +1638,23 @@ def revive_failed(ledger, now: float | None = None) -> dict:
             out["skipped_cap"] += 1
             continue
         meta.update({"attempts": 4, "next_try": now, "auto_retry": n + 1})
+        updated_meta = json.dumps(meta, ensure_ascii=False)
         with ledger.db:
             cur = ledger.db.execute(
-                "UPDATE artifacts SET meta=? WHERE artifact_id=? AND meta=?",
-                (json.dumps(meta, ensure_ascii=False), row["artifact_id"], row["meta"]))
+                "UPDATE artifacts SET meta=? WHERE artifact_id=? AND meta=? AND kind IS ? "
+                "AND project_id IS ? AND message_id IS ? AND created_at IS ? AND content IS ? AND model IS ? "
+                "AND EXISTS (SELECT 1 FROM messages m WHERE m.message_id=artifacts.message_id "
+                "AND (artifacts.project_id IS NULL OR artifacts.project_id=m.project_id))",
+                (updated_meta, row["artifact_id"], row["meta"], row["kind"], row["project_id"],
+                 row["message_id"], row["created_at"], row["content"], row["model"]))
+            if cur.rowcount and ledger.db.execute(
+                "SELECT 1 FROM artifacts WHERE artifact_id=? AND meta IS ? AND kind IS ? "
+                "AND project_id IS ? AND message_id IS ? AND created_at IS ? AND content IS ? AND model IS ? "
+                "AND EXISTS (SELECT 1 FROM messages m WHERE m.message_id=artifacts.message_id "
+                "AND (artifacts.project_id IS NULL OR artifacts.project_id=m.project_id))",
+                (row["artifact_id"], updated_meta, row["kind"], row["project_id"],
+                 row["message_id"], row["created_at"], row["content"], row["model"])).fetchone() is None:
+                raise RuntimeError("extract_revive_unverified")
         # Another drainer/revival may have changed or removed the snapshot.
         out["revived"] += cur.rowcount
     return out
@@ -1649,10 +1682,17 @@ def _fail(ledger, r, attempts: int, *, lease=None):
         prev = _error_attempts(ledger, r["message_id"], r["content_hash"])
         revived = _error_auto_retry(ledger, r["message_id"],
                                     r["content_hash"])
-        _clear_error_tx(ledger, r["message_id"])
-        held = _fail_tx(ledger, r, max(attempts, prev), revived, scoped_cleanup=lease is not None)
+        _clear_error_tx(ledger, r["message_id"], r["project_id"])
+        if not _source_writable(ledger.db, r):
+            raise RuntimeError("extract_source_changed_during_write")
+        witness = []
+        held = _fail_tx(ledger, r, max(attempts, prev), revived, scoped_cleanup=lease is not None,
+                        result_witness=witness)
         if held and lease is not None:
             _delete_checkpoint_keys_tx(ledger.db, r, r.get("_context"), identities.keys())
+        if not witness:
+            raise RuntimeError("extract_insert_unverified")
+        _verify_atomic_witness(ledger.db, r, witness)
 
 
 def _error_auto_retry(ledger, mid: int, content_hash) -> int:
@@ -1692,11 +1732,11 @@ def _error_attempts(ledger, mid: int, content_hash) -> int:
         (KIND, mid, EXTRACT_VERSION, content_hash)).fetchone()[0]
 
 
-def _clear_error_tx(ledger, mid: int):
+def _clear_error_tx(ledger, mid: int, project_id: int):
     ledger.db.execute(
-        "DELETE FROM artifacts WHERE kind=? AND message_id=? "
+        "DELETE FROM artifacts WHERE kind=? AND message_id=? AND (project_id IS NULL OR project_id=?) "
         "AND " + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND json_valid(meta) AND json_extract(meta,'$.error')=1",
-        (KIND, mid))
+        (KIND, mid, project_id))
 
 
 @contextlib.contextmanager
@@ -1795,6 +1835,20 @@ def _hold_sql(*, human=False, released=False):
 
 
 def _record_hold_tx(ledger, r, prior, reason, *, lost=None, feedback_id=None, remove_chunks=True):
+    if not ledger.db.in_transaction:
+        ledger.db.execute('BEGIN IMMEDIATE')
+    prior_row = ledger.db.execute(
+        "SELECT * FROM artifacts WHERE artifact_id=? AND kind=? AND message_id=? "
+        "AND (project_id IS NULL OR project_id=?)",
+        (prior['artifact_id'], KIND, r['message_id'], r['project_id'])).fetchone()
+    if prior_row is None:
+        raise RuntimeError('extract_hold_unverified')
+    # Some internal callers supply only the id; callers which already selected
+    # the complete row must retain the exact prior across this transaction.
+    if all(key in prior.keys() for key in ('kind', 'project_id', 'message_id', 'content', 'model', 'meta', 'created_at')):
+        if any(prior[key] != prior_row[key] for key in ('kind', 'project_id', 'message_id', 'content', 'model', 'meta', 'created_at')):
+            raise RuntimeError('extract_hold_unverified')
+    prior_witness = dict(prior_row)
     receipt = {inference.VERSION_KEY: _INFERENCE_VERSION, "state": "held_prior", "reason": reason, "hash": r["content_hash"],
         "prior_artifact_id": prior["artifact_id"], "target_version": EXTRACT_VERSION,
         "contract": _upgrade_contract()}
@@ -1803,17 +1857,35 @@ def _record_hold_tx(ledger, r, prior, reason, *, lost=None, feedback_id=None, re
     if feedback_id is not None:
         receipt["feedback_id"] = feedback_id
     raw = json.dumps(receipt, sort_keys=True)
-    if not ledger.db.execute(
-            "SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND message_id=? AND content=?",
-            (UPGRADE_KIND, r["project_id"], r["message_id"], raw)).fetchone():
-        ledger.artifact_add_tx(UPGRADE_KIND, raw, project_id=r["project_id"], message_id=r["message_id"],
-            meta={inference.VERSION_KEY: _INFERENCE_VERSION, "hash": r["content_hash"], "contract": receipt["contract"]})
+    receipt_meta = {inference.VERSION_KEY: _INFERENCE_VERSION, 'hash': r['content_hash'],
+                    'contract': receipt['contract']}
+    meta_json = json.dumps(receipt_meta, ensure_ascii=False)
+    saved = ledger.db.execute(
+        "SELECT * FROM artifacts WHERE kind=? AND project_id=? AND message_id=? AND content=? AND meta=? "
+        "ORDER BY artifact_id DESC LIMIT 1", (UPGRADE_KIND, r['project_id'], r['message_id'], raw, meta_json)).fetchone()
+    if saved is None:
+        created_at = time.time()
+        cur = ledger.db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) VALUES(?,?,?,?,?,?,?)",
+            (UPGRADE_KIND, r['project_id'], r['message_id'], raw, '', meta_json, created_at))
+        if cur.rowcount != 1:
+            raise RuntimeError('extract_hold_unverified')
+        receipt_witness = {'artifact_id': cur.lastrowid, 'kind': UPGRADE_KIND,
+            'project_id': r['project_id'], 'message_id': r['message_id'], 'content': raw,
+            'model': '', 'meta': meta_json, 'created_at': created_at}
+    else:
+        receipt_witness = dict(saved)
+    witnesses = [prior_witness, receipt_witness]
+    _verify_atomic_witness(ledger.db, r, witnesses)
     # Settled rejected chunks must never become a fresh human correction's input.
     if remove_chunks:
         ledger.db.execute("DELETE FROM artifacts WHERE kind='extract_llm_chunk' AND message_id=? "
                           "AND (project_id=? OR project_id IS NULL) AND "
                           + inference.current_meta_pred("meta", target=_INFERENCE_VERSION),
                           (r["message_id"], r["project_id"]))
+    _verify_atomic_witness(ledger.db, r, witnesses)
+    return witnesses
+
 
 def _replace_current(ledger, r, content: str, ctx: bool = False,
                      integrity: dict | None = None,
@@ -1850,10 +1922,20 @@ def _replace_current(ledger, r, content: str, ctx: bool = False,
     return outcome == "written"
 
 
+def _verify_created_artifact_tx(db, artifact_id, *, kind, project_id, message_id,
+                                content, model, meta, created_at):
+    """Verify the new row on the borrowed writer transaction after triggers."""
+    if (not db.in_transaction or type(artifact_id) is not int or db.execute(
+            "SELECT 1 FROM artifacts WHERE artifact_id=? AND kind IS ? AND project_id IS ? "
+            "AND message_id IS ? AND content IS ? AND model IS ? AND meta IS ? AND created_at IS ?",
+            (artifact_id, kind, project_id, message_id, content, model, meta, created_at)).fetchone() is None):
+        raise RuntimeError("extract_insert_unverified")
+
+
 def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
                      integrity: dict | None = None,
                      qc_fix: dict | None = None,
-                     extra_meta: dict | None = None, *, scoped_cleanup=False):
+                     extra_meta: dict | None = None, *, scoped_cleanup=False, result_witness=None):
     if not isinstance(r, dict) or not isinstance(r.get("_source_binding"), str):
         return "rejected"
     meta = {inference.VERSION_KEY: _INFERENCE_VERSION, "hash": r["content_hash"],
@@ -1924,7 +2006,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
                  and (human_failed or qc_failed))
     if old_carry or (lost and not (isinstance(human, dict) and human.get("applied") is True)):
         reason = ("human_failed" if human_failed else "qc_failed") if old_carry else "protected_loss"
-        _record_hold_tx(ledger, r, prior, reason,
+        hold_witness = _record_hold_tx(ledger, r, prior, reason,
                         lost=lost, feedback_id=human.get("feedback_id") if human else None,
                         remove_chunks=not scoped_cleanup)
         held_prior = True
@@ -1959,27 +2041,40 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
             previous_signature = None
         changed = previous_signature != current_signature
         # Keep the INSERT fence even though the prior check owns the write lock.
+        meta_json = json.dumps(meta)
+        created_at = time.time()
         cur = ledger.db.execute(
             "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
             "SELECT ?,project_id,message_id,?,?,?,? FROM messages m "
-            "WHERE message_id=? AND content_hash=? "
+            "WHERE message_id=? AND content_hash=? AND project_id=? "
             "AND (body_state IS NULL OR body_state='full') "
             f"AND {current_v4_id()} IS NULL",
-            (KIND, content, actual_model, json.dumps(meta), time.time(),
-             r["message_id"], r["content_hash"]))
+            (KIND, content, actual_model, meta_json, created_at,
+             r["message_id"], r["content_hash"], r["project_id"]))
         if not cur.rowcount:
             return "rejected"
+        # A trigger can change the occurrence even under our writer reservation.
+        # Returning normally here would commit the newly inserted stale result.
+        if not _source_writable(ledger.db, r):
+            raise RuntimeError("extract_source_changed_during_write")
+        _verify_created_artifact_tx(ledger.db, cur.lastrowid, kind=KIND,
+                                    project_id=r["project_id"], message_id=r["message_id"],
+                                    content=content, model=actual_model, meta=meta_json, created_at=created_at)
         import inference_dependency_loss as dependency_loss
         replaced_ids = [row[0] for row in ledger.db.execute(
-            "SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? AND "
+            "SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? "
+            "AND (project_id IS NULL OR project_id=?) AND "
             + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND artifact_id != ?",
-            (KIND, r['message_id'], cur.lastrowid))]
+            (KIND, r['message_id'], r['project_id'], cur.lastrowid))]
         footprint = dependency_loss.capture_tx(ledger.db, r['project_id'], r['message_id'], artifact_ids=replaced_ids)
         dependency_loss.record_tx(ledger.db, footprint, replacement_id=cur.lastrowid)
         ledger.db.execute(
             "DELETE FROM artifacts WHERE kind=? AND message_id=? "
-            "AND " + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND artifact_id != ?",
-            (KIND, r["message_id"], cur.lastrowid))
+            "AND (project_id IS NULL OR project_id=?) AND "
+            + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND artifact_id != ?",
+            (KIND, r["message_id"], r["project_id"], cur.lastrowid))
+        if not _source_writable(ledger.db, r):
+            raise RuntimeError("extract_source_changed_during_write")
         if changed:
             ledger.bump_inference_analysis_epoch_tx(r["project_id"])
         if isinstance(r, dict) and r.get("_cloud_mode") == "dry_run":
@@ -1992,6 +2087,19 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
             _cloud_compare_tx(ledger, route="reextract", project_id=r["project_id"],
                 left=set(_comparison_extract(r, loads_dict(content))), right=None,
                 rejected=None, held=None, repairs=None, unit=r["_shadow_unit"], pending=True)
+        if not _source_writable(ledger.db, r):
+            raise RuntimeError("extract_source_changed_during_write")
+        _verify_created_artifact_tx(ledger.db, cur.lastrowid, kind=KIND,
+                                    project_id=r["project_id"], message_id=r["message_id"],
+                                    content=content, model=actual_model, meta=meta_json, created_at=created_at)
+        _verify_unique_llm_current(ledger.db, r, cur.lastrowid)
+        if result_witness is not None:
+            result_witness.append({'artifact_id': cur.lastrowid, 'kind': KIND,
+                'project_id': r['project_id'], 'message_id': r['message_id'],
+                'content': content, 'model': actual_model, 'meta': meta_json, 'created_at': created_at})
+    if held_prior and result_witness is not None:
+        result_witness.extend(hold_witness)
+        _verify_atomic_witness(ledger.db, r, result_witness)
     return "held" if held_prior else "written"
 
 
@@ -2691,6 +2799,25 @@ class _CheckpointChanged(Exception):
     pass
 
 
+def _verify_unique_llm_current(db, r, artifact_id):
+    conflict = db.execute(
+        "SELECT 1 FROM artifacts WHERE kind=? AND message_id=? "
+        "AND (project_id IS NULL OR project_id=?) AND artifact_id!=? AND "
+        + inference.current_meta_pred('meta', target=_INFERENCE_VERSION) + " LIMIT 1",
+        (KIND, r['message_id'], r['project_id'], artifact_id)).fetchone()
+    if conflict is not None:
+        raise RuntimeError("extract_insert_unverified")
+
+
+def _verify_atomic_witness(db, r, witnesses):
+    if not _source_writable(db, r):
+        raise RuntimeError("extract_source_changed_during_write")
+    for item in witnesses:
+        _verify_created_artifact_tx(db, item['artifact_id'], kind=item['kind'],
+            project_id=item['project_id'], message_id=item['message_id'], content=item['content'],
+            model=item['model'], meta=item['meta'], created_at=item['created_at'])
+
+
 def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, extra_meta,
                               used_keys, *, check_current, mark_context=None, expected_prior=None):
     if ledger.db.in_transaction:
@@ -2709,16 +2836,20 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                 if prior is None or _prior_identity(prior) != expected_prior:
                     return "rejected"
             _, _, current = _checkpoint_identity(ledger.db, r, context, r["_chunk_size"])
+            witness = []
             outcome = _replace_current_tx(ledger, r, content,
                                           ctx=context is not None if mark_context is None else mark_context,
                                           integrity=integrity, qc_fix=qc_fix,
-                                          extra_meta=extra_meta, scoped_cleanup=True)
+                                          extra_meta=extra_meta, scoped_cleanup=True, result_witness=witness)
             if outcome == "held":
                 if current != r["_checkpoint_identity"]:
                     raise _CheckpointChanged()
                 _delete_checkpoint_keys_tx(ledger.db, r, context, current.keys())
+                _verify_atomic_witness(ledger.db, r, witness)
             elif outcome == "written":
                 _delete_checkpoint_keys_tx(ledger.db, r, context, used_keys)
+                _verify_atomic_witness(ledger.db, r, witness)
+                _verify_unique_llm_current(ledger.db, r, witness[0]['artifact_id'])
     except _CheckpointChanged:
         return "rejected"
     except CloudFallback:
@@ -3265,18 +3396,24 @@ def _ensure_v1(ledger, r, hints) -> None:
             saved_meta["intervention_zero"] = 1
         content_json = json.dumps(saved_hints, ensure_ascii=False)
         meta_json = json.dumps(saved_meta, ensure_ascii=False)
+        created_at = time.time()
         cur = ledger.db.execute(
             "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
             "SELECT 'extract_v1',m.project_id,m.message_id,?,'rules-v1',?,? "
-            "FROM messages m WHERE m.message_id=? AND m.content_hash=? "
+            "FROM messages m WHERE m.message_id=? AND m.content_hash=? AND m.project_id=? "
             "AND (m.body_state IS NULL OR m.body_state='full') "
             "AND NOT EXISTS (SELECT 1 FROM artifacts a "
             "WHERE a.kind='extract_v1' AND a.message_id=m.message_id "
             f"{current_extract_pred()} "
             f"AND json_extract({json_or_null('a.meta')},'$.rule_version')=?)",
-            (content_json, meta_json, time.time(),
-             r["message_id"], r["content_hash"], extract.RULE_VERSION))
+            (content_json, meta_json, created_at,
+             r["message_id"], r["content_hash"], r["project_id"], extract.RULE_VERSION))
         extract.verify_v1_insert_tx(ledger.db, r, cur.lastrowid, cur.rowcount, content_json, meta_json)
+        if not _source_writable(ledger.db, r):
+            raise RuntimeError("extract_source_changed_during_write")
+        _verify_created_artifact_tx(ledger.db, cur.lastrowid, kind='extract_v1',
+                                    project_id=r['project_id'], message_id=r['message_id'],
+                                    content=content_json, model='rules-v1', meta=meta_json, created_at=created_at)
         if cur.rowcount:
             old_ids = [row[0] for row in ledger.db.execute(
                 "SELECT artifact_id FROM artifacts WHERE kind='extract_v1' AND message_id=? "
@@ -3292,6 +3429,11 @@ def _ensure_v1(ledger, r, hints) -> None:
                 + inference.current_meta_pred("meta", target=_INFERENCE_VERSION) + " AND artifact_id!=?",
                 (r["message_id"], r["project_id"], cur.lastrowid))
             ledger.bump_inference_analysis_epoch_tx(r["project_id"])
+            if not _source_writable(ledger.db, r):
+                raise RuntimeError("extract_source_changed_during_write")
+            _verify_created_artifact_tx(ledger.db, cur.lastrowid, kind='extract_v1',
+                                        project_id=r['project_id'], message_id=r['message_id'],
+                                        content=content_json, model='rules-v1', meta=meta_json, created_at=created_at)
 
 
 # Per-process pending estimate for full selections, keyed by DB file.
@@ -3309,7 +3451,7 @@ def _left_estimate_key(ledger) -> str:
 # Never-extracted messages (no extract_llm row of any version or body)
 # — new arrivals. Index-only on (kind, message_id).
 _FRESH_SQL = ("NOT EXISTS (SELECT 1 FROM artifacts x WHERE x.kind='" + KIND
-              + "' AND x.message_id=m.message_id)")
+              + "' AND x.message_id=m.message_id AND (x.project_id IS NULL OR x.project_id=m.project_id))")
 
 
 def _rehold_sql() -> str:
@@ -3437,36 +3579,140 @@ def _validate_run_args(limit, budget_s) -> None:
         raise ValueError("extract_budget_invalid")
 
 
-def _gc_stale_artifacts(ledger, lock, per_write_lock: bool) -> None:
-    """Drop stale-body artifacts and leaked claims at most every _STALE_GC_S."""
+_STALE_GC_KIND = 'extract_stale_gc'
+_STALE_GC_PAGE = 64
+_STALE_GC_BUDGET_S = 0.25
+_STALE_GC_CURSOR_RESERVE_S = 0.05
+_STALE_GC_CLAIM_PAGE = 64
+
+
+class _StaleGCDeadline(Exception):
+    pass
+
+
+def _gc_stale_artifacts(ledger, lock, per_write_lock: bool, *, deadline=None) -> None:
+    """Reconcile a bounded stale-artifact page, resuming from durable progress."""
     global _stale_gc_at
-    with lock(per_write_lock) as held:
-        if held and _writer_current() and time.time() - _stale_gc_at >= _STALE_GC_S:
+    if ledger.db.in_transaction or time.time() - _stale_gc_at < _STALE_GC_S:
+        return
+    started = time.monotonic()
+    local_deadline = started + _STALE_GC_BUDGET_S
+    deadline = min(deadline, local_deadline) if deadline is not None else local_deadline
+    if started >= deadline:
+        return
+    work_deadline = deadline - min(_STALE_GC_CURSOR_RESERVE_S, (deadline - started) / 4)
+    completed = False
+    try:
+        with lock(per_write_lock) as held:
+            if not held or not _writer_current() or time.monotonic() >= deadline:
+                return
             with ledger.db:
-                if not ledger.db.in_transaction:
-                    ledger.db.execute('BEGIN IMMEDIATE')
-                if not _writer_current():
-                    return
+                ledger.db.execute('BEGIN IMMEDIATE')
+                if not _writer_current() or time.monotonic() >= deadline:
+                    raise _StaleGCDeadline()
+                state_row = ledger.db.execute(
+                    "SELECT CASE WHEN typeof(payload)='text' AND length(payload)<=1024 "
+                    "AND instr(payload,char(0))=0 THEN payload END FROM fetch_jobs "
+                    "WHERE kind=? AND project_id=0 AND message_id=0", (_STALE_GC_KIND,)).fetchone()
+                old_payload = state_row[0] if state_row is not None else None
+                if state_row is None:
+                    after, highwater = 0, 0
+                else:
+                    try:
+                        state = strict_json(old_payload)
+                    except (TypeError, ValueError, RecursionError) as exc:
+                        raise ValueError('extract_gc_cursor_invalid') from exc
+                    if (not isinstance(state, dict) or set(state) != {'version', 'cursor', 'highwater'}
+                            or type(state['version']) is not int or state['version'] != 1
+                            or type(state['cursor']) is not int or type(state['highwater']) is not int
+                            or not 0 <= state['cursor'] <= state['highwater'] < 2**63):
+                        raise ValueError('extract_gc_cursor_invalid')
+                    after, highwater = state['cursor'], state['highwater']
+                if highwater == 0:
+                    highwater = ledger.db.execute("SELECT COALESCE(MAX(artifact_id),0) FROM artifacts WHERE kind=?",
+                                                  (KIND,)).fetchone()[0]
                 import inference_dependency_loss as dependency_loss
-                rows = ledger.db.execute("SELECT a.artifact_id,COALESCE(a.project_id,m.project_id) AS project_id,a.message_id FROM artifacts a "
-                    "JOIN messages m ON m.message_id=a.message_id WHERE a.kind=? AND "
+                rows = ledger.db.execute(
+                    "SELECT a.artifact_id,a.project_id,a.message_id,a.content,a.model,a.meta,a.created_at,"
+                    "m.project_id AS source_project_id,m.content_hash AS source_hash FROM artifacts a "
+                    "JOIN messages m ON m.message_id=a.message_id WHERE a.kind=? "
+                    "AND a.artifact_id>? AND a.artifact_id<=? "
+                    "AND (a.project_id IS NULL OR a.project_id=m.project_id) "
+                    "AND typeof(a.content)='text' AND length(a.content)<=262144 "
+                    "AND (a.model IS NULL OR (typeof(a.model)='text' AND length(a.model)<=32768)) "
+                    "AND typeof(a.created_at) IN ('integer','real','null') "
+                    "AND (m.content_hash IS NULL OR (typeof(m.content_hash)='text' AND length(m.content_hash)<=256)) "
+                    "AND CASE WHEN typeof(a.meta)='text' AND length(a.meta)<=32768 THEN ("
                     + inference.current_meta_pred('a.meta', target=_INFERENCE_VERSION)
-                    + " AND CASE WHEN json_valid(a.meta) THEN json_extract(a.meta,'$.hash') IS NOT m.content_hash END",
-                    (KIND,)).fetchall()
+                    + " AND CASE WHEN json_valid(a.meta) THEN json_extract(a.meta,'$.hash') IS NOT m.content_hash END) "
+                    "ELSE 0 END ORDER BY a.artifact_id LIMIT ?", (KIND, after, highwater, _STALE_GC_PAGE)).fetchall()
+                exhausted = True
                 for row in rows:
-                    footprint = dependency_loss.capture_tx(ledger.db, row['project_id'], row['message_id'],
+                    after = row['artifact_id']
+                    if time.monotonic() >= work_deadline:
+                        # No mutation for this source: defer it for the next
+                        # fixed pass, while committing the completed prefix.
+                        exhausted = False
+                        break
+                    args = (row['artifact_id'], KIND, row['project_id'], row['message_id'], row['content'],
+                            row['model'], row['meta'], row['created_at'], row['source_project_id'], row['source_hash'])
+                    witness = ("artifact_id=? AND kind IS ? AND project_id IS ? AND message_id IS ? "
+                               "AND content IS ? AND model IS ? AND meta IS ? AND created_at IS ? "
+                               "AND EXISTS (SELECT 1 FROM messages m WHERE m.message_id=artifacts.message_id "
+                               "AND m.project_id IS ? AND m.content_hash IS ? "
+                               "AND (artifacts.project_id IS NULL OR artifacts.project_id=m.project_id))")
+                    if ledger.db.execute('SELECT 1 FROM artifacts WHERE ' + witness, args).fetchone() is None:
+                        continue
+                    ledger.db.execute('SAVEPOINT stale_gc_candidate')
+                    pid = row['source_project_id']
+                    binding = dependency_loss.source_binding(ledger.db, pid, row['message_id'])
+                    footprint = dependency_loss.capture_tx(ledger.db, pid, row['message_id'],
                                                           artifact_ids=[row['artifact_id']])
                     added = dependency_loss.record_tx(ledger.db, footprint)
-                    ledger.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (row['artifact_id'],))
+                    deleted = ledger.db.execute('DELETE FROM artifacts WHERE ' + witness, args).rowcount
+                    if (deleted != 1 or ledger.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?',
+                                                          (row['artifact_id'],)).fetchone() is not None
+                            or dependency_loss.source_binding(ledger.db, pid, row['message_id']) != binding):
+                        raise RuntimeError('extract_stale_gc_unverified')
                     if added:
-                        ledger.bump_inference_analysis_epoch_tx(row['project_id'])
-            # leaked extraction claims older than a day are garbage —
-            # live leases expire by next_try anyway
-            ledger.db.execute(
-                "DELETE FROM fetch_jobs WHERE kind='extract_claim'"
-                " AND next_try < ?", (time.time() - 86400,))
-            ledger.db.commit()
-            _stale_gc_at = time.time()
+                        ledger.bump_inference_analysis_epoch_tx(pid)
+                        if dependency_loss.source_binding(ledger.db, pid, row['message_id']) != binding:
+                            raise RuntimeError('extract_stale_gc_unverified')
+                    if time.monotonic() >= work_deadline:
+                        # A slow candidate must not block later ids. Restore its
+                        # own changes; the next full pass will revisit it.
+                        ledger.db.execute('ROLLBACK TO stale_gc_candidate')
+                        ledger.db.execute('RELEASE stale_gc_candidate')
+                        exhausted = False
+                        break
+                    ledger.db.execute('RELEASE stale_gc_candidate')
+                completed = exhausted and (len(rows) < _STALE_GC_PAGE or after == highwater)
+                next_payload = json.dumps({'version': 1, 'cursor': 0 if completed else after,
+                                           'highwater': 0 if completed else highwater}, separators=(',', ':'))
+                if time.monotonic() >= deadline or not _writer_current():
+                    raise _StaleGCDeadline()
+                if state_row is None:
+                    cur = ledger.db.execute(
+                        "INSERT OR IGNORE INTO fetch_jobs(kind,project_id,message_id,payload,state,next_try,created_at,updated_at) "
+                        "VALUES(?,0,0,?,'done',0,?,?)", (_STALE_GC_KIND, next_payload, time.time(), time.time()))
+                else:
+                    cur = ledger.db.execute('UPDATE fetch_jobs SET payload=?,updated_at=? '
+                        'WHERE kind=? AND project_id=0 AND message_id=0 AND payload=?',
+                        (next_payload, time.time(), _STALE_GC_KIND, old_payload))
+                if cur.rowcount != 1 or ledger.db.execute(
+                        'SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=0 AND message_id=0 AND payload=?',
+                        (_STALE_GC_KIND, next_payload)).fetchone() is None:
+                    raise RuntimeError('extract_gc_cursor_unverified')
+                if completed:
+                    ledger.db.execute("DELETE FROM fetch_jobs WHERE job_id IN (SELECT job_id FROM fetch_jobs "
+                                      "WHERE kind='extract_claim' AND next_try < ? LIMIT ?)",
+                                      (time.time() - 86400, _STALE_GC_CLAIM_PAGE))
+                if time.monotonic() >= deadline or not _writer_current():
+                    raise _StaleGCDeadline()
+    except _StaleGCDeadline:
+        return  # the context manager rolls back the whole page and cursor
+    if completed:
+        _stale_gc_at = time.time()
 
 
 # Patient context waits for a patient's last pending post (2026-10-18 owner
@@ -3824,8 +4070,15 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 "pids": [], "updated": True}
     deadline = time.monotonic() + budget_s
     lock = functools.partial(_write_lock, wait_s=write_wait_s)
-    # Any artifact for an older body is stale, including retry state.
-    _gc_stale_artifacts(ledger, lock, per_write_lock)
+    # A damaged maintenance cursor must not stop unrelated fresh extraction.
+    # Only continue if the GC transaction was fully unwound.
+    gc_error = None
+    try:
+        _gc_stale_artifacts(ledger, lock, per_write_lock, deadline=deadline)
+    except (ValueError, RuntimeError, sqlite3.Error):
+        if ledger.db.in_transaction:
+            raise
+        gc_error = 'extract_stale_gc_failed'
     rows, fresh_selected = _select_pending(ledger, limit, admitted_ids,
                                            shard, oldest_first)
     done = failed = deferred = lock_lost = held_prior = 0
@@ -4567,7 +4820,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                           else None,
                 "newest": (now_ts - age_max) if age_max is not None
                           else None},
-            "llm_calls": llm_calls}
+            "llm_calls": llm_calls, **({'gc_error': gc_error} if gc_error else {})}
 
 
 _COUNT_KEYS = ("calls", "first_calls", "repair_calls", "repair_wins",

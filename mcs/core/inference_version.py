@@ -5,6 +5,8 @@ VERSION_KEY = 'inference_engine_version'
 LEGACY_VERSION = '0.1'
 # Development target only; acceptance remains with the existing promotion owner.
 CURRENT_VERSION = '1.0'
+# LLM extraction's internal contract counter; independent of public generation.
+LLM_EXTRACT_VERSION = 10
 
 _MAX_VERSION_LENGTH = 32
 _VERSION = re.compile(r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)', re.ASCII)
