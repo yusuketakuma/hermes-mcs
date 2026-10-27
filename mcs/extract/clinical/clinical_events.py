@@ -32,6 +32,25 @@ _NEGATED = re.compile(r'^(?:では(?:ありません|ない|なく)|じゃない
 _QUESTION = re.compile(r'(?:か|でしょうか)[。！？!?\s]*$|[?？][。！？!?\s]*$|かどうか|'
                        r'とは[^。！？!?\n]{0,80}(?:記載なし|書かれていません|報告されていません)|' + REPORTED_ABSENCE)
 _AFFIRMED = re.compile(r'^(?:は|が|を)?(?:現在|今は)?(?:しました|した|しています|している|し(?=[、,]|$)|中|済み|です|となり|となった|となりました|されました|された|を受けました|を実施しました)')
+_SENTENCE_ENDS = '。！？!?;；\n'
+_CORRECTION_TAIL = (r'[^。！？!?;；\n]{0,24}(?:'
+                    r'(?:誤り|誤記)(?!では(?:ない|ありません|なく)|じゃない)|'
+                    r'間違(?!いでは(?:ない|ありません|なく)|って(?:いない|いません|ない|おらず))|'
+                    r'(?:訂正|撤回|取り消|取消)(?!\s*(?:し|す|され)?\s*(?:は|が|を)?\s*'
+                    r'(?:不要|必要(?:は|が)?(?:ない|ありません)|ない|ません))|'
+                    r'事実(?:ではない|ではありません|と異なる)|正しく(?:ない|ありません)|'
+                    r'違(?:います|いました|う|った)|異な(?:ります|りました|る|った)|'
+                    r'なしで(?!は(?:ない|ありません)))')
+_CORRECTED_FORWARD = re.compile(r'(?:次|下記|以下)(?:の)?(?:記載|内容|報告|文章|投稿|情報|件)' + _CORRECTION_TAIL)
+_CORRECTED_BACKWARD = re.compile(
+    r'(?:(?:上記|前記|前述|先ほど|その|この)(?:の)?|という|との)'
+    r'(?:記載|内容|報告|文章|投稿|情報|件)' + _CORRECTION_TAIL)
+_CONTRADICTED_EVENT = re.compile(r'(?:実際(?:には|は)?|事実(?:は|としては)?)\s*'
+                                 r'(?:違(?:います|いました|う|った)|異な(?:ります|りました|る|った))')
+_OTHER_TOPIC = re.compile(
+    r'(?:家族|ご家族|母|父|娘|息子|夫|妻|他者|他人|別の患者|別患者)'
+    r'(?:本人|自身)?(?:の(?:話|件|こと|記録|状態)|について)')
+_EXPLICIT_PATIENT = re.compile(r'(?:ご本人|患者本人|本人|患者(?:さん|様)?)')
 
 
 def _span(body, item):
@@ -70,6 +89,28 @@ def _polarity(body, start, end, target_end, status):
     if _AFFIRMED.search(tail) or status in ('planned', 'conditional'):
         return False
     return None
+
+
+def _ambiguous_context(body, anchor, target_end, subject):
+    """Find adjacent references that make an event or its subject uncertain."""
+    left = max(body.rfind(mark, 0, anchor) for mark in _SENTENCE_ENDS) + 1
+    right = min((position for mark in _SENTENCE_ENDS
+                 if (position := body.find(mark, target_end)) >= 0), default=len(body))
+    previous_end = left - 1 if left else 0
+    previous_left = max(body.rfind(mark, 0, previous_end) for mark in _SENTENCE_ENDS) + 1
+    following_start = right + 1 if right < len(body) else len(body)
+    following_end = min((position for mark in _SENTENCE_ENDS
+                         if (position := body.find(mark, following_start)) >= 0), default=len(body))
+    previous, sentence, following = body[previous_left:previous_end], body[left:right], body[following_start:following_end]
+    correction = (_CORRECTED_FORWARD.search(previous) or _CORRECTED_FORWARD.search(sentence)
+                  or _CORRECTED_BACKWARD.search(sentence) or _CORRECTED_BACKWARD.search(following)
+                  or _CONTRADICTED_EVENT.search(body[target_end:right]))
+    # A preceding topic such as "family's story" can make a subsequent bare
+    # "the person" refer to that person; a family member merely reporting
+    # about the patient does not establish such a conflicting topic.
+    ambiguous_subject = (subject == 'patient' and _OTHER_TOPIC.search(previous)
+                         and _EXPLICIT_PATIENT.search(body[left:anchor]))
+    return bool(correction), bool(ambiguous_subject)
 
 
 def candidate_span(item, body):
@@ -112,6 +153,11 @@ def validate_record(item, body):
     _, clause_end = _clause(body, anchor, target_end)
     actual_subject, actual_status = source_axes(body, anchor, target_end, default='unknown')
     actual_negated = _polarity(body, anchor, clause_end, target_end, actual_status)
+    correction, ambiguous_subject = _ambiguous_context(body, anchor, target_end, actual_subject)
+    if correction:
+        actual_status, actual_negated, unresolved = 'unknown', None, True
+    if ambiguous_subject:
+        actual_subject, unresolved = 'unknown', True
     # Explicit wrong attributes do not become verified facts on revalidation.
     if subject not in ('unknown', actual_subject):
         unresolved = True

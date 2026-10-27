@@ -151,6 +151,75 @@ def test_invalid_piece_offset_never_silently_promotes_a_candidate():
     assert result['event_records'][0]['unverified'] is True
 
 
+@pytest.mark.parametrize('body,subject,status,negated', [
+    ('次の記載は誤りです。本人は退院しました。', 'patient', 'unknown', None),
+    ('次の記載は事実ではありません。本人は退院しました。', 'patient', 'unknown', None),
+    ('次の記載は正しくありません。本人は退院しました。', 'patient', 'unknown', None),
+    ('本人は退院しました。その記載を訂正します。', 'patient', 'unknown', None),
+    ('本人は退院しました。その件は違います。', 'patient', 'unknown', None),
+    ('本人は退院しました。その件はなしで。', 'patient', 'unknown', None),
+    ('本人は退院しました。先ほどの件は誤りでした。', 'patient', 'unknown', None),
+    ('本人は退院しましたが、その記載は誤りです。', 'patient', 'unknown', None),
+    ('家族の話です。本人は退院しました。', 'unknown', 'current', False),
+])
+def test_adjacent_correction_or_ambiguous_referent_is_not_confirmed(body, subject, status, negated):
+    quote = '本人は退院しました'
+    start = body.index(quote)
+    proposed = _record(quote, kind='discharge', span={'start': start, 'end': start + len(quote)})
+    result = _validate(body, events=['discharge'], records=[proposed])
+    record, = result['event_records']
+    assert result['events'] == []
+    assert (record['subject'], record['status'], record['negated']) == (subject, status, negated)
+    assert record['unverified'] is True and record['evidence'] == quote
+    assert body[record['span']['start']:record['span']['end']] == quote
+    assert validation.validate(copy.deepcopy(result), body) == result
+
+
+@pytest.mark.parametrize('body', [
+    '家族から連絡がありました。本人は退院しました。',
+    '母は入院しました。本人は退院しました。',
+    '本人は退院しました。薬剤の記載を訂正します。',
+    '本人は薬を服用しています。その記載は誤りです。本人は退院しました。',
+    '次の記載は誤りではありません。本人は退院しました。',
+    '本人は退院しました。その記載の訂正は不要です。',
+    '本人は退院しました。その記載を訂正しません。',
+    '本人は退院しました。その件は違いません。',
+    '本人は退院しました。その記載は間違っていません。',
+])
+def test_unrelated_sentences_and_family_report_do_not_hide_patient_event(body):
+    result = _validate(body, events=['discharge'])
+    assert result['events'] == ['discharge']
+    record, = result['event_records']
+    assert record['subject'] == 'patient' and record['status'] == 'current'
+    assert record['negated'] is False and not record.get('unverified')
+
+
+def test_rules_and_full_body_chunk_revalidation_hold_correction():
+    import extract
+
+    body = '次の記載は誤りです。本人は退院しました。'
+    piece = '本人は退院しました。'
+    rules = extract.extract_message(body, '2026-10-03T09:00:00+09:00')
+    assert 'discharge' not in rules.get('events', [])
+    assert any(record['kind'] == 'discharge' and record['unverified']
+               for record in rules['event_records'])
+    result = validation.validate_piece({'events': ['discharge']}, piece, body,
+                                       source_offset=body.index(piece))
+    assert result['events'] == []
+    record, = result['event_records']
+    assert record['unverified'] is True
+    assert body[record['span']['start']:record['span']['end']] == record['evidence']
+
+
+def test_same_sentence_explicit_contradiction_is_not_an_affirmed_event():
+    body = '本人は2026年9月1日に退院しましたが、実際には違います。'
+    result = _validate(body, records=[_record(body, kind='discharge')])
+    assert result['events'] == []
+    record, = result['event_records']
+    assert record['unverified'] is True and record['status'] == 'unknown'
+    assert record['negated'] is None and record['evidence'] == body
+
+
 def test_empty_records_are_a_valid_empty_result_and_schema_preserves_old_enum_shape():
     output = _validate('合成の定期連絡です。', events=[], records=[])
     assert output['events'] == [] and output['event_records'] == []
