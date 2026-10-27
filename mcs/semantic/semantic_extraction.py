@@ -68,25 +68,37 @@ def _persist_manifest(ledger, project_id, message_id, model, source_fp,
     if ledger is None:
         return
     doc = assembly.manifest_content(manifest, body_len)
-    existing = ledger.artifacts(KIND_MANIFEST, project_id=project_id,
-                                message_id=message_id)
-    for row in reversed(existing or []):
-        meta = loads_dict(row["meta"])
-        if meta is not None and is_current(meta) \
-                and meta.get("source_fingerprint") == source_fp \
-                and meta.get("version") == assembly.MANIFEST_VERSION:
-            if loads_dict(row["content"]) == doc:
-                return
-            break
-    ledger.artifact_add(
-        KIND_MANIFEST,
-        json.dumps(doc, ensure_ascii=False, allow_nan=False),
-        project_id=project_id, message_id=message_id, model=model,
-        meta={VERSION_KEY: CURRENT_VERSION, "version": assembly.MANIFEST_VERSION,
-              "source_fingerprint": source_fp,
-              "body_codepoints": body_len,
-              "atoms": len(manifest["atoms"]),
-              "chunks": len(manifest["chunks"])})
+    content = json.dumps(doc, ensure_ascii=False, allow_nan=False)
+    meta = {VERSION_KEY: CURRENT_VERSION, "version": assembly.MANIFEST_VERSION,
+            "source_fingerprint": source_fp, "body_codepoints": body_len,
+            "atoms": len(manifest["atoms"]), "chunks": len(manifest["chunks"])}
+    def store(add):
+        latest = ledger.db.execute(
+            "SELECT content,meta,model FROM artifacts WHERE kind=? AND project_id IS ? "
+            "AND message_id IS ? ORDER BY artifact_id DESC LIMIT 1",
+            (KIND_MANIFEST, project_id, message_id)).fetchone()
+        if (latest is not None and latest["content"] == content
+                and latest["meta"] == json.dumps(meta, ensure_ascii=False)
+                and latest["model"] == model):
+            return False
+        add(KIND_MANIFEST, content, project_id=project_id, message_id=message_id,
+            model=model, meta=meta)
+        return True
+
+    add_tx = getattr(ledger, "artifact_add_tx", None)
+    if callable(add_tx):
+        if ledger.db.in_transaction:
+            # The caller owns both the write and any eventual rollback.
+            changed = store(add_tx)
+        else:
+            with ledger.db:
+                ledger.db.execute("BEGIN IMMEDIATE")
+                changed = store(add_tx)
+    else:
+        # Small test ledgers own their transaction and only expose artifact_add.
+        changed = store(ledger.artifact_add)
+    if not changed or ledger.db.in_transaction:
+        return
     from extraction_refresh import refresh_extraction_cards
     from semantic_store import refresh_cards_allowed
     if refresh_cards_allowed(getattr(ledger, 'db', None), project_id, message_id):
