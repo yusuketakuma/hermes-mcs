@@ -256,9 +256,9 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
         binding = source_binding(db, pid, 0, source_key=source_key)
         source['_binding'] = binding
         revision = raw_id
-        rows = db.execute("SELECT * FROM artifacts WHERE project_id=? AND kind='patient_context_scan_chunk_v1' "
-            "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.source_key')=? END ORDER BY artifact_id",
-            (pid, source_key)).fetchall()
+        condition = ("artifacts.project_id=? AND artifacts.kind='patient_context_scan_chunk_v1' "
+            "AND CASE WHEN json_valid(artifacts.meta) THEN json_extract(artifacts.meta,'$.source_key')=? END")
+        params = (pid, source_key)
     else:
         source_row = db.execute('SELECT * FROM messages WHERE project_id=? AND message_id=?', (pid, mid)).fetchone()
         if source_row is None:
@@ -267,12 +267,32 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
         binding = source_binding(db, pid, mid)
         source['_binding'] = binding
         revision = db.execute('SELECT COALESCE(MAX(seq),1) FROM message_revisions WHERE message_id=?', (mid,)).fetchone()[0]
-        rows = db.execute('SELECT * FROM artifacts WHERE (project_id=? OR project_id IS NULL) AND message_id=? AND kind IN ('
-                          + ','.join('?' for _ in _SOURCE_KINDS) + ') ORDER BY artifact_id',
-                          (pid, mid, *_SOURCE_KINDS)).fetchall()
-    if artifact_ids is not None:
+        condition = ('(artifacts.project_id=? OR artifacts.project_id IS NULL) AND artifacts.message_id=? '
+                     'AND artifacts.kind IN (' + ','.join('?' for _ in _SOURCE_KINDS) + ')')
+        params = (pid, mid, *_SOURCE_KINDS)
+    if artifact_ids is None:
+        rows = db.execute('SELECT artifacts.* FROM artifacts WHERE ' + condition
+                          + ' ORDER BY artifacts.artifact_id', params).fetchall()
+    else:
+        # Artifact IDs are integers; 1.0 matches 1, while '1' does not.
         wanted = set(artifact_ids)
-        rows = [row for row in rows if row['artifact_id'] in wanted]
+        selected = set()
+        for value in wanted:
+            try:
+                number = int(value.real if isinstance(value, complex) and value.imag == 0 else value)
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if -(2**63) <= number < 2**63 and number in wanted:
+                selected.add(number)
+        if selected:
+            # CROSS JOIN fixes selected IDs as the outer loop, so only those
+            # primary-key rows are materialized, regardless of other kinds.
+            rows = db.execute('SELECT artifacts.* FROM json_each(?) selected CROSS JOIN artifacts '
+                              'WHERE artifacts.artifact_id=selected.value AND ' + condition
+                              + ' ORDER BY artifacts.artifact_id',
+                              (json.dumps(sorted(selected)), *params)).fetchall()
+        else:
+            rows = []
     records, gaps, bound_facts, observed = [], [], {}, []
     analysed = False
     valid_chunk_sigs = set()

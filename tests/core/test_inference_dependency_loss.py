@@ -192,9 +192,13 @@ def test_resolved_correction_without_entity_preserves_target_dependency(store):
     fact['temporal'] = state.annotate(fact, source['body_text'])
     assert state.dependency_entity(fact) is None
     assert state.project([original, fact])['groups']['history'] == [original['id']]
-    store.artifact_add('patient_context_scan_chunk_v1', json.dumps({'facts': [fact]}, ensure_ascii=False),
+    correction_id = store.artifact_add('patient_context_scan_chunk_v1', json.dumps({'facts': [fact]}, ensure_ascii=False),
         project_id=1, message_id=2, meta={VERSION_KEY: CURRENT_VERSION,
             'source_binding': loss.source_binding(store.db, 1, 2)})
+    with store.db:
+        store.db.execute('UPDATE messages SET message_id=message_id WHERE 0')
+        selected = loss.capture_tx(store.db, 1, 2, artifact_ids=[correction_id])
+        assert any(record.get('target_origin', {}).get('message_id') == 1 for record in selected['records'])
     store.save_messages([replace(correction, body_html='', body_state='deleted')], project_id=1)
     proof = loss.read(store.db, 1)
     assert any(w.get('target_origin', {}).get('message_id') == 1 for w in proof['losses'])
@@ -218,6 +222,70 @@ def test_empty_deletion_set_and_valid_empty_chunk_replacement_are_not_missing_co
         assert loss.record_tx(store.db, footprint, replacement_ids=[new]) == 0
         store.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (old,))
     assert loss.read(store.db, 1)['complete']
+
+
+def test_capture_selected_ids_keeps_order_scope_and_python_set_semantics(store):
+    save(store, 1, '本人は本日、合成薬Aを服用しています。')
+    first, _ = publish(store, 1)
+    source = row(store, 1)
+    second = store.artifact_add('extract_v1', '{}', project_id=1, message_id=1,
+        meta={VERSION_KEY: CURRENT_VERSION, 'hash': source['content_hash'],
+              'source_binding': loss.source_binding(store.db, 1, 1)})
+    _patient(store, pid=2)
+    save(store, 2, '別患者の完全合成の連絡です。', pid=2)
+    foreign = store.artifact_add('extract_v1', '{}', project_id=2, message_id=2,
+        meta={VERSION_KEY: CURRENT_VERSION, 'hash': source['content_hash']})
+    with store.db:
+        store.db.execute('UPDATE messages SET message_id=message_id WHERE 0')
+        expected = loss.capture_tx(store.db, 1, 1, artifact_ids=[first, second])
+        assert loss.capture_tx(store.db, 1, 1,
+            artifact_ids=[second, first, first, float(first), foreign, -1, 2**63, str(second)]) == expected
+        empty = loss.capture_tx(store.db, 1, 1, artifact_ids=[])
+        assert loss.capture_tx(store.db, 1, 1, artifact_ids=[str(first), None, 2**63]) == empty
+        with pytest.raises(TypeError):
+            loss.capture_tx(store.db, 1, 1, artifact_ids=[[]])
+
+
+@pytest.mark.parametrize('source_kind', ['chat', 'karte'])
+def test_capture_selected_ids_never_materializes_unrelated_large_artifact(store, source_kind):
+    if source_kind == 'chat':
+        save(store, 1, '本人は本日、合成薬Aを服用しています。')
+        selected, _ = publish(store, 1)
+        scope = {'pid': 1, 'mid': 1}
+        extra = {'project_id': 1, 'message_id': 1}
+        meta = {VERSION_KEY: CURRENT_VERSION}
+    else:
+        with store.db:
+            store.db.execute('UPDATE patients SET karte_id=17 WHERE project_id=1')
+        store.karte_summary_store(1, 17, {'comment': '完全合成の原記録です。',
+                                         'updated_at': '2026-09-20T09:00:00+09:00'})
+        raw_id = store.db.execute("SELECT artifact_id FROM artifacts WHERE kind='karte_summary'").fetchone()[0]
+        source_key = f'karte:{raw_id}'
+        meta = {VERSION_KEY: CURRENT_VERSION, 'source_key': source_key}
+        selected = store.artifact_add('patient_context_scan_chunk_v1', '{"facts":[]}', project_id=1, meta=meta)
+        scope = {'pid': 1, 'mid': 0, 'source_key': source_key}
+        extra = {'project_id': 1}
+    with store.db:
+        store.db.execute('UPDATE messages SET message_id=message_id WHERE 0')
+        expected = loss.capture_tx(store.db, artifact_ids=[selected], **scope)
+    marker = 'SYNTHETIC_UNRELATED_PAYLOAD_' + 'x' * (1024 * 1024)
+    kind = 'extract_llm' if source_kind == 'chat' else 'patient_context_scan_chunk_v1'
+    store.artifact_add(kind, marker, meta=meta, **extra)
+    original_factory = store.db.row_factory
+
+    def reject_unrelated(cursor, values):
+        names = [col[0] for col in cursor.description]
+        if 'artifact_id' in names and 'content' in names:
+            assert values[names.index('content')] != marker
+        return sqlite3.Row(cursor, values)
+
+    store.db.row_factory = reject_unrelated
+    try:
+        with store.db:
+            store.db.execute('UPDATE messages SET message_id=message_id WHERE 0')
+            assert loss.capture_tx(store.db, artifact_ids=[selected], **scope) == expected
+    finally:
+        store.db.row_factory = original_factory
 
 
 def test_witness_read_is_readonly_and_corrupt_witness_is_not_a_clinical_wildcard(store):
