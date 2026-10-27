@@ -55,7 +55,7 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
         lines.append("■ 薬・バイタル・予定: 集約資料なし（未抽出・未集約）")
         roll = {}
     else:
-        roll = current_cached_refs(db, project_id, roll, row["meta"])
+        roll = current_cached_refs(db, project_id, roll, row["meta"], cfg=cfg)
         period = roll.get("med_period_candidate")
         meds = [m for m in roll.get("medications") or []
                 if isinstance(m, dict) and m.get("name")]
