@@ -164,6 +164,29 @@ def test_incomplete_acquisition_does_not_claim_latest_measurement(store):
     assert {r["message_id"] for r in out["measurement_reports"]["items"]} == {1, 2}
 
 
+def test_saved_rollup_freshness_changes_when_acquisition_becomes_incomplete(store):
+    _seed_out_of_order(store)
+    rollup.rebuild(store, 1, cfg={})
+    assert rollup.inference_coverage(store.db, 1)["current"] is True
+    with store.db:
+        store.db.execute("UPDATE patients SET fetch_state='incomplete' WHERE project_id=1")
+    assert rollup.inference_coverage(store.db, 1)["current"] is False
+
+
+def test_saved_rollup_freshness_changes_when_extraction_metadata_changes_in_place(store):
+    _seed_out_of_order(store)
+    rollup.rebuild(store, 1, cfg={})
+    assert rollup.inference_coverage(store.db, 1)["current"] is True
+    row = store.db.execute(
+        "SELECT artifact_id,meta FROM artifacts WHERE kind='extract_llm' AND message_id=1"
+    ).fetchone()
+    meta = json.loads(row["meta"])
+    meta["invalidated"] = True
+    with store.db:
+        store.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), row["artifact_id"]))
+    assert rollup.inference_coverage(store.db, 1)["current"] is False
+
+
 def test_legacy_history_floor_is_not_cohort_proof(store):
     _seed_out_of_order(store)
     store.db.execute("UPDATE patients SET initial_import=NULL WHERE project_id=1")
