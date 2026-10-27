@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import _mcs_path  # noqa: F401
 import extract_validation
+import inference_version
 
 from mcs_util import payload_hash, valid_hash
 from semantic_candidate import candidate_fingerprint, metrics_only, strict_json
@@ -59,7 +60,8 @@ def effective_ai_priority(bundle: dict, outputs: list) -> bool | None:
                        (index, message['body'], message.get('body_state', 'full'), digest))
             db.execute('INSERT INTO artifacts(message_id,project_id,kind,content,meta) '
                        "VALUES(?,1,'extract_llm',?,?)",
-                       (index, json.dumps(output), json.dumps({'hash': digest})))
+                       (index, json.dumps(output), json.dumps({
+                           'hash': digest, inference_version.VERSION_KEY: inference_version.CURRENT_VERSION})))
         return any(clinical_urgency.message_urgency_details(db, index)['source'] == 'llm'
                    for index in range(1, len(messages) + 1))
 

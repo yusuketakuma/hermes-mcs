@@ -2,6 +2,8 @@
 import semantic_transport
 import copy
 import json
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -222,6 +224,77 @@ def test_snapshot_ai_priority_is_production_guarded_badge(project_type, body, ex
     raw = {'urgency': 'high', 'urgency_evidence': [body]}
     assert snapshot.effective_ai_priority(bundle, [raw]) is expected
     assert snapshot.effective_ai_priority(bundle, [None]) is None
+
+
+@pytest.mark.parametrize('version,expected', [(None, False), ('0.1', False), ('current', True)])
+def test_priority_reader_requires_the_current_inference_generation(version, expected):
+    import clinical_urgency
+    import inference_version
+
+    body = '本人は意識がなく、呼吸が停止しています。'
+    digest = payload_hash(body)
+    metadata = {'hash': digest}
+    if version is not None:
+        metadata[inference_version.VERSION_KEY] = inference_version.CURRENT_VERSION if version == 'current' else version
+    with closing(sqlite3.connect(':memory:')) as db:
+        db.row_factory = sqlite3.Row
+        db.executescript('''
+            CREATE TABLE patients(project_id INTEGER, patient_name TEXT, project_type TEXT);
+            CREATE TABLE messages(message_id INTEGER, project_id INTEGER, body_text TEXT,
+                                  body_state TEXT, content_hash TEXT);
+            CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY, message_id INTEGER,
+                                   project_id INTEGER, kind TEXT, content TEXT, meta TEXT);
+        ''')
+        db.execute("INSERT INTO patients VALUES(1, NULL, 'medical')")
+        db.execute("INSERT INTO messages VALUES(1,1,?,'full',?)", (body, digest))
+        db.execute("INSERT INTO artifacts(message_id,project_id,kind,content,meta) "
+                   "VALUES(1,1,'extract_llm',?,?)",
+                   (json.dumps({'urgency': 'high', 'urgency_evidence': [body]}), json.dumps(metadata)))
+        assert (clinical_urgency.message_urgency_details(db, 1)['source'] == 'llm') is expected
+
+
+@pytest.mark.parametrize('body,expected', [
+    ('本人は意識がなく、呼吸が停止しています。', True),
+    ('家族は意識がなく、呼吸が停止しています。', False),
+])
+def test_generated_priority_is_scored_from_guarded_output(monkeypatch, body, expected):
+    import extract_llm
+    import local_llm
+    import semantic_extraction
+
+    record = _record()
+    label = record.pop('label')
+    record.pop('candidate')
+    record['data_origin'] = 'synthetic'
+    record['bundle'].update(project_type='medical', attachments=[],
+                            messages=[{'message_id': 'm1', 'body': body}])
+    manifest = {**MANIFEST, 'holdout_manifest_sha256': payload_hash(holdout.holdout_payload([record]))}
+    source = {'records': [record], 'manifest': manifest, 'data_origin': 'synthetic'}
+
+    monkeypatch.setattr(local_llm, 'admission_enabled', lambda: False)
+    monkeypatch.setattr(local_llm, 'resolve', lambda cfg: ('http://127.0.0.1', 'synthetic-model'))
+
+    def forbidden_chat(*args, **kwargs):
+        raise AssertionError('synthetic test must not call a model')
+
+    monkeypatch.setattr(local_llm, 'chat', forbidden_chat)
+    monkeypatch.setattr(extract_llm, 'llm_extract',
+                        lambda *args, **kwargs: {'urgency': 'high', 'urgency_evidence': [body]})
+    monkeypatch.setattr(semantic_extraction, 'extract_facts_v2',
+                        lambda *args, **kwargs: {'doc': {'facts': []}, 'extraction_complete': False})
+    monkeypatch.setattr(snapshot, 'candidate_fingerprint',
+                        lambda cfg: ('a' if cfg.get('extract', {}).get('patient_state_context') else 'b') * 64)
+
+    generated = snapshot.generate(source, {'semantic': {'fact_source': 'canonical'}})
+    reviewed = copy.deepcopy(generated['records'][0])
+    assert reviewed['candidate']['ai_priority'] is expected
+    reviewed['label'] = {**label, 'facts': [], 'relations': [], 'claims': [], 'loops': [],
+                         'ai_priority': expected}
+    metric = evaluation.evaluate_records([reviewed], manifest, CRITERIA)['metrics']['ai_priority_accuracy']
+    assert metric['rate'] == 1 and metric['denominator'] == 1
+    reviewed['label']['ai_priority'] = not expected
+    metric = evaluation.evaluate_records([reviewed], manifest, CRITERIA)['metrics']['ai_priority_accuracy']
+    assert metric['rate'] == 0 and metric['denominator'] == 1
 
 
 @pytest.mark.parametrize('side', ['candidate', 'label'])
