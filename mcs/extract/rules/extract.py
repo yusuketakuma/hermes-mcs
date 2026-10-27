@@ -645,6 +645,15 @@ def _strict_reconcile_object(raw):
     return parsed if isinstance(parsed, dict) else None
 
 
+def _reconcile_possible_current():
+    """Exclude known other generations, but keep uncertain metadata blocking."""
+    return ("CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR instr(meta,char(0))!=0 THEN 1 "
+            "WHEN NOT " + inference.valid_meta_pred('meta') + " THEN 1 "
+            "WHEN " + inference.current_meta_pred('meta', target=_INFERENCE_VERSION) + " THEN 1 "
+            "WHEN (SELECT COUNT(*) FROM json_each(meta) WHERE key='" + inference.VERSION_KEY + "')>1 THEN 1 "
+            "ELSE 0 END")
+
+
 def _reconcile_one(ledger, row, artifact_id, *, deadline=None):
     """CAS only the intervention result on the reserved writer transaction.
 
@@ -666,9 +675,10 @@ def _reconcile_one(ledger, row, artifact_id, *, deadline=None):
                 or os.stat(inference.__file__).st_mtime_ns != _INFERENCE_SOURCE_STAT
                 or deadline is not None and time.monotonic() >= deadline):
             return False
-        # LIMIT 2 protects against duplicate/foreign/legacy rows without parsing
-        # or materializing the entire artifact history. Ambiguity is deferred.
-        ids = db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? LIMIT 2",
+        # Known other generations stay intact; uncertain or duplicate current
+        # metadata still blocks replacement without materializing its content.
+        ids = db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? AND "
+                         + _reconcile_possible_current() + " LIMIT 2",
                          (KIND, row['message_id'])).fetchall()
         if len(ids) != 1 or ids[0][0] != artifact_id:
             return False
@@ -745,7 +755,8 @@ def _reconcile_one(ledger, row, artifact_id, *, deadline=None):
             "AND " + _RECONCILE_SOURCE_GUARD,
             (row['project_id'], row['message_id'], intervention_schedule._MAX_BODY_CHARS,
              intervention_schedule._MAX_HTML_CHARS)).fetchone()
-        ids_after = db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? LIMIT 2",
+        ids_after = db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND message_id=? AND "
+                               + _reconcile_possible_current() + " LIMIT 2",
                                (KIND, row['message_id'])).fetchall()
         if (stored is None or tuple(stored) != expected or source is None
                 or source['body_html'] != current['source_html']

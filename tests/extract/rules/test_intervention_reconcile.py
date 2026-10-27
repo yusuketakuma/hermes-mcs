@@ -333,6 +333,41 @@ def test_verified_zero_repair_only_sets_zero_marker(ledger):
     assert meta == {**old_meta, 'intervention_zero': 1}
 
 
+@pytest.mark.parametrize('other_meta', [{}, {'inference_engine_version': '0.1'},
+                                        {'inference_engine_version': '2.0'}])
+def test_reconcile_preserves_a_known_other_generation(ledger, other_meta):
+    body = _install_invalid(ledger, [1])
+    current_id, _, _ = _latest(ledger, 1)
+    with ledger.db:
+        old_id = ledger.db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta) "
+            "VALUES('extract_v1',1,1,'{}','rules-v1',?)", (json.dumps(other_meta),)).lastrowid
+    old = tuple(ledger.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (old_id,)).fetchone())
+    _repair_html(ledger, body)
+    assert extract._reconcile_intervention_page(ledger) == (1, {1}, None)
+    assert tuple(ledger.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (old_id,)).fetchone()) == old
+    row = ledger.db.execute('SELECT content FROM artifacts WHERE artifact_id=?', (current_id,)).fetchone()
+    assert json.loads(row[0])['intervention_schedule']['coverage']['state'] == 'observed'
+
+
+@pytest.mark.parametrize('other_meta', ['{bad', '{"inference_engine_version":null}',
+                                        '{"inference_engine_version":"0.1",'
+                                        '"inference_engine_version":"1.0"}'])
+def test_reconcile_defers_when_another_generation_is_ambiguous(ledger, other_meta):
+    body = _install_invalid(ledger, [1])
+    current_id, _, _ = _latest(ledger, 1)
+    with ledger.db:
+        ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta) "
+                          "VALUES('extract_v1',1,1,'{}','rules-v1',?)", (other_meta,))
+    before = [tuple(row) for row in ledger.db.execute(
+        "SELECT * FROM artifacts WHERE kind='extract_v1' ORDER BY artifact_id")]
+    _repair_html(ledger, body)
+    assert extract._reconcile_intervention_page(ledger) == (0, set(), None)
+    assert [tuple(row) for row in ledger.db.execute(
+        "SELECT * FROM artifacts WHERE kind='extract_v1' ORDER BY artifact_id")] == before
+    assert ledger.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (current_id,)).fetchone()
+
+
 @pytest.mark.parametrize('corruption', ['duplicate_key', 'overflow', 'marker', 'duplicate_artifact', 'foreign_scope'])
 def test_ambiguous_artifact_is_deferred_without_changes(ledger, corruption):
     body = _install_invalid(ledger, [1])
@@ -350,7 +385,7 @@ def test_ambiguous_artifact_is_deferred_without_changes(ledger, corruption):
             ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), old_id))
         elif corruption == 'duplicate_artifact':
             ledger.db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,model,meta) '
-                              "VALUES('extract_v1',1,1,'{}','rules-v1','{}')")
+                              "VALUES('extract_v1',1,1,'{}','rules-v1',?)", (json.dumps(meta),))
         else:
             ledger.db.execute('DROP TRIGGER g1_artifacts_msg_upd')  # Simulate a corrupt imported snapshot.
             ledger.db.execute('UPDATE artifacts SET project_id=2 WHERE artifact_id=?', (old_id,))
