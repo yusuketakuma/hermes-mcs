@@ -2,7 +2,7 @@
   "version": "1.1.0",
   "sections": {
     "features": {
-      "notes": "2026-10-26 1.1.0（release/v1.1.0、基点main a27efa15）: 変更記録131件を機能説明へ照合。収集エラーの18分類と、一時的な分類（10種）だけを3回連続で通知する判定を「できること」へ追記（collection_diagnostics.CATEGORIES、health_watch.TRANSIENT_REASONS・STREAK_ALERT=3）。health.jsonのDB容量・バックアップ種類別容量・保守経過時間とdb_maintenance_overdue（日次2日超）を追記（health_report.py、maintenance.py）。本文未取得時の「緊急度: 要確認」を追記。CSDCは任意支援の表にコードのみ同梱・1.1.0では有効化・接続しない・新規は sdc.enabled 未設定で専用ジョブなし・既存の明示設定は更新で変更しない・案内表示は mcs setup features と記載（v110-csdc-default-off、mcs_setup.cmd_features）。返信カードの既定・取得範囲・モデル・取得間隔は変更なし。内部整理（refactor-*）は利用者の機能説明に影響しないため本文は追加しない。",
+      "notes": "2026-10-26 1.1.0（release/v1.1.0、基点main a27efa15）: 変更記録132件を機能説明へ照合。収集エラーの18分類と、一時的な分類（10種）だけを3回連続で通知する判定を「できること」へ追記（collection_diagnostics.CATEGORIES、health_watch.TRANSIENT_REASONS・STREAK_ALERT=3）。health.jsonのDB容量・バックアップ種類別容量・保守経過時間とdb_maintenance_overdue（日次2日超）を追記（health_report.py、maintenance.py）。本文未取得時の「緊急度: 要確認」を追記。CSDCは任意支援の表にコードのみ同梱・1.1.0では有効化・接続しない・新規は sdc.enabled 未設定で専用ジョブなし・既存の明示設定は更新で変更しない・案内表示は mcs setup features と記載（v110-csdc-default-off、mcs_setup.cmd_features）。返信カードの既定・取得範囲・モデル・取得間隔は変更なし。内部整理（refactor-*）は利用者の機能説明に影響しないため本文は追加しない。",
       "sources": [
         "README.md",
         "CHANGELOG.md",

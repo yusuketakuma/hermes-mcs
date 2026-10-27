@@ -17,7 +17,7 @@ member `y_20261013.csv`（`6fa8f08c…18d1`、6,083,884 bytes）・件数が同�
 ## リリース文書
 
 - CHANGELOG 1.1.0：`release_notes.py build --version 1.1.0 --date 2026-10-26`で生成した後、
-  公開本文を利用者の目的ごとに17項目へまとめました。全131件の変更記録と項目の対応・hashは
+  公開本文を利用者の目的ごとに17項目へまとめました。全132件の変更記録と項目の対応・hashは
   [対応表](change-map.json)、各記録の詳細・根拠は技術詳細の折りたたみに残しています。
 - README：機能・画面例・導入・安全・導線の5項目を見直し、`docs/development/readme-review.json`を1.1.0へ更新しました。
 - 説明図：[collection-alerts](README.md)のSVG原稿とPNGを作成し、390px幅で文字の欠け・重なりがないことを確認しました。
