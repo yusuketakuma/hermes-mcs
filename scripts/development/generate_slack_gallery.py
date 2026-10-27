@@ -305,7 +305,7 @@ def patient_summary():
             s.button(left, y, label, width)
             left += width + 10
         y += 52
-    s.text(x, y + 20, "各画面の ←・→ から、経過・引継ぎ・退院時を含む8つの表示へ。", 17, MUTED)
+    s.text(x, y + 20, "各画面の ←・→ から、経過・検査・引継ぎ・退院時を含む9つの表示へ。", 17, MUTED)
     return s.finish()
 
 

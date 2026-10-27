@@ -41,7 +41,7 @@ PNGは日本語フォントやSVGの描画差に左右されず表示できるRE
 | `04-task-form` | `adapters/common/forms.py`の`modal_fields`、`adapters/slack/actions.py`の`_open_modal` |
 | `05-task-preview` | `adapters/common/text.py`の`preview_text`、`adapters/slack/actions.py`の`_preview`（本人向け、確定する／取消） |
 | `06-task-list` | `adapters/slack/actions.py`の`_task_blocks`・`_task_text`（本人向けの一覧。各タスクの直後にその状態操作） |
-| `07-patient-summary` | `mcs/notify/notify_views.py`の`patient_summary_text`（患者の記録まとめ。暫定集約・取得範囲・原本確認・背景／療養情報の本人向け抜粋）、`mcs/views/extraction_progress.py`（現在のsource/model/prompt/layoutへ束縛した処理中・完了・要確認と完了区間数。最新20投稿まで、履歴や臨床情報の完全性とは区別）、`notify_cards._context_navigation`（最初の5節・各節から8節への循環。終日の患者コンテキスト更新が有効な場合） |
+| `07-patient-summary` | `mcs/notify/notify_views.py`の`patient_summary_text`（患者の記録まとめ。暫定集約・取得範囲・原本確認・背景／療養情報の本人向け抜粋）、`mcs/views/extraction_progress.py`（現在のsource/model/prompt/layoutへ束縛した処理中・完了・要確認と完了区間数。最新20投稿まで、履歴や臨床情報の完全性とは区別）、`notify_actions._context_navigation`（最初の5節・各節から9節への循環。終日の患者コンテキスト更新が有効な場合） |
 | `08-urgent-notice` | `mcs/notify/alert_view.py`の`render_parts`を完全合成のメモリDBで実行（患者本人／対象未確認、同投稿の一意な原文引用、投稿日時と緊急度の判定時刻、原本確認、未対応を断定しない記録表示）。`notify_urgent.py`の配送前検証と既存通知スレッドへの追加配送は別の安全条件。 |
 | `09-initial-history` | `mcs/notify/notify_history.py`の`content`・`actions`を完全合成のメモリDBと件数で実行。履歴の保存は完了し、解析中・保留・解析状況未取得が残る例。本文・添付・スタンプの送信は描かず、現行抽出で緊急度が高い投稿と添付は件数とMCSへの案内を表示する。[新しく認識した患者の履歴](../../guides/USER_GUIDE.md#新しく認識した患者の履歴)に対応する。 |
 
