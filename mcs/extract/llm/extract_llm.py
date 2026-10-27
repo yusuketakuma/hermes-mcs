@@ -56,6 +56,7 @@ import semantic_jev
 import semantic_runtime
 import semantic_projection
 import semantic_audit
+import semantic_candidate
 import semantic_v4
 import semantic_v4_cohort
 import semantic_store
@@ -147,6 +148,7 @@ _LOADED_SOURCE_DIGESTS = {
                        ("semantic_v4", semantic_v4.__file__),
                        ("semantic_v4_cohort", semantic_v4_cohort.__file__),
                        ("semantic_audit", semantic_audit.__file__),
+                       ("semantic_candidate", semantic_candidate.__file__),
                        ("semantic_projection", semantic_projection.__file__),
                        ("semantic_runtime", semantic_runtime.__file__),
                        ("semantic_jev", semantic_jev.__file__),

@@ -498,7 +498,7 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta):
         contract = _publication_contract(cfg, meta)
         if errors or contract is None or not _quality_scope_allowed(db, pid, policy):
             return False
-        assessment = _quality_assessment(cfg, policy)
+        assessment = _quality_assessment(policy)
         owns_read = not db.in_transaction
         if owns_read:
             db.execute("BEGIN")
@@ -574,6 +574,10 @@ def _inference_coverage(db, pid, cfg, snapshot):
               else "dependency_gap" if not snapshot["dependencies"]["complete"]
               else "held" if counts["held"] or progress.get("held")
               else "failed" if counts["failed"] or progress.get("failure")
+              else "quality_unknown" if progress.get("source_sig") == snapshot["source_sig"]
+                   and progress.get("quality_state") == "unknown"
+              else "quality_held" if progress.get("source_sig") == snapshot["source_sig"]
+                   and progress.get("quality_state") == "held"
               else "unacquired" if not acquired_empty else "incomplete" if counts["incomplete"]
               else "acquisition_incomplete" if not fetch_allowed
               else "scan_pending" if counts["scanned"] < counts["eligible"]
@@ -819,14 +823,17 @@ def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, displ
     return {"identity": identity, "sources": snapshot["sources"], "facts": facts, "state": state}
 
 
-def _quality_assessment(cfg, scfg):
-    """Bind interpretation code and policy without spending or publication toggles."""
+def _quality_code():
+    """Read code identity without probing provider credentials."""
     import extract_llm
     import semantic_candidate
+    return _digest([extract_llm._LOADED_SOURCE_DIGESTS, semantic_candidate.loaded_source_contract()])
+
+
+def _quality_assessment(scfg):
+    """Bind interpretation code and policy without spending or publication toggles."""
     import semantic_policy
-    semantic_candidate.candidate_fingerprint(cfg)  # initialize the loaded-code witness
-    return {"code": _digest([extract_llm._LOADED_SOURCE_DIGESTS, semantic_candidate._LOADED_SOURCES]),
-            "policy": semantic_policy.policy_fingerprint(scfg)}
+    return {"code": _quality_code(), "policy": semantic_policy.policy_fingerprint(scfg)}
 
 
 def _quality_claim(ledger, pid, input_key, deadline, current):
@@ -1389,7 +1396,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
         scfg["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
     if lane_cap <= 0:
         return "deferred", None
-    assessment = _quality_assessment(cfg, scfg)
+    assessment = _quality_assessment(scfg)
     summary = doc.get("summary")
     display_projection = doc.get("temporal_view")
     ledger.db.execute("BEGIN")
@@ -1421,7 +1428,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                     or live_key != key or problems or live_semantic["mode"] == "off" or paused(ledger.db, pid)
                     or extract_llm.cloud_policy.api_key(extract_llm.HOME) != anthropic_key
                     or live_semantic["project_ids"] is not None and pid not in live_semantic["project_ids"]
-                    or _quality_assessment(live, live_semantic) != assessment):
+                    or _quality_assessment(live_semantic) != assessment):
                 denied = True
                 return False
             if owns_read:
@@ -1565,16 +1572,23 @@ def _pending(db, pid, cfg, *, now=None, contract=None):
     snapshot = _snapshot(db, pid, cfg, hydrate=False, contract=contract)
     progress, _ = _latest(db, PROGRESS, pid)
     if progress.get("source_sig") != snapshot["source_sig"]:
-        progress = {**progress, "attempts": 0, "next_try": 0, "failure": None, "held": False}
+        progress = {**progress, "attempts": 0, "next_try": 0, "failure": None, "held": False,
+                    "quality_state": None}
     old, meta = _latest(db, KIND, pid)
     snapshot["initial"] = not old
     stored = _current_scans(db, pid, snapshot["sources"], snapshot["contract"])
     scans = [stored.get(_source_key(source), {}) for source in snapshot["sources"] if _usable(source)]
     snapshot["source_failures"] = sum(bool(scan.get("failure")) for scan in scans)
+    quality_changed = False
+    if snapshot["contract"].get("provider") and meta.get("quality_audit_key"):
+        # Planning may conservatively recheck an unchanged PASS after config edits;
+        # execution still validates policy and reuses receipts before any request.
+        quality_changed = meta.get("quality_schedule_key") != _digest([cfg, _quality_code()])
     summary_needed = (not old or meta.get("source_sig") != snapshot["source_sig"]
                     or meta.get("publication_requested", meta.get("published")) != options(cfg)["publication"]
                     or meta.get("summary_checked") is not True
                     or bool(snapshot["contract"].get("provider") and not meta.get("quality_audit_key"))
+                    or quality_changed
                     or progress.get("summary_pending", False))
     cloud_ready = (not snapshot["contract"].get("provider")
                    or snapshot["acquisition"]["complete"] and snapshot["dependencies"]["complete"]
@@ -2082,6 +2096,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 if problems or not _quality_scope_allowed(ledger.db, pid, quality_policy, snapshot["sources"]):
                     raise Deferred("summary_quality_promotion")
                 meta["quality_audit_key"] = quality_identity["audit_key"]
+                meta["quality_schedule_key"] = _digest([cfg, quality_identity["assessment"]["code"]])
             summary = (repaired["summary"] if same and old_meta.get("provider") and repaired is not None
                        else old["summary"] if same else infer(
                 lambda backend, reset, metrics=None, comparison=False: _summary(cfg, facts, deadline,
@@ -2202,7 +2217,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 import semantic_jev
                 if (problems or not _quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
                         or quality_keys != (semantic_jev.api_key(), extract_llm.cloud_policy.api_key(extract_llm.HOME))
-                        or quality_identity["assessment"] != _quality_assessment(live_cfg, live_policy)
+                        or quality_identity["assessment"] != _quality_assessment(live_policy)
                         or not _quality_passed(ledger.db, pid, quality_identity)
                         or _quality_failed(ledger.db, pid, quality_identity)):
                     ledger.db.rollback()
@@ -2239,6 +2254,10 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                         **(retry if lane == "A" and deferred_reason is None else {})}
             if lane == "A" and deferred_reason is not None:
                 progress["next_try"] = now if deferred_reason == "summary_quality_pending" else now + 60
+                progress["quality_state"] = (deferred_reason[len("summary_quality_"):]
+                    if deferred_reason.startswith("summary_quality_") else None)
+            elif lane == "A":
+                progress.pop("quality_state", None)
             if failure and lane != "A":
                 _replace(ledger, SCAN, pid, {**{k: v for k, v in saved.items() if not k.startswith("_")}, **retry}, meta, source["message_id"])
             if not failure and result is not None:

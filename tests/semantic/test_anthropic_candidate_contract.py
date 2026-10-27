@@ -68,3 +68,19 @@ def test_adding_a_key_cannot_reuse_a_local_only_approval(tmp_path, monkeypatch):
     assert candidate.promotion_problem(cfg, report) == "candidate_mismatch"
     assert not candidate.approval_matches(cfg, report, identity)
     assert receipt.read_bytes() == before
+
+
+def test_loaded_code_contract_never_reads_credentials_and_does_not_lend_mutable_state(monkeypatch):
+    import semantic_jev
+    captures = []
+    def sources():
+        captures.append(True)
+        return {'synthetic_module': 'a' * 64}
+    monkeypatch.setattr(candidate, '_LOADED_SOURCES', None)
+    monkeypatch.setattr(candidate, '_sources', sources)
+    monkeypatch.setattr(cloud_policy, 'api_key', lambda *_: pytest.fail('code witness read a credential'))
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: pytest.fail('code witness read a credential'))
+    first = candidate.loaded_source_contract()
+    first.clear()
+    assert candidate.loaded_source_contract() == {'synthetic_module': 'a' * 64}
+    assert captures == [True]

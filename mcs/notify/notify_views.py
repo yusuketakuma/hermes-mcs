@@ -1176,6 +1176,8 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
                   "acquisition_incomplete": "履歴の取得は未完了",
                   "dependency_gap": "変更前の根拠が不足しています",
                   "summary_pending": "患者コンテキストの更新待ち",
+                  "quality_unknown": "要約の照合結果を確認できません",
+                  "quality_held": "要約の照合を保留しています",
                   "audit_pending": "原文の根拠照合待ち"}.get(inference.get("status"))
         if reason:
             status.append(reason)

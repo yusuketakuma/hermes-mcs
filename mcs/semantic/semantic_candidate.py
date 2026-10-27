@@ -120,6 +120,14 @@ def _sources():
 _LOADED_SOURCES = None
 
 
+def loaded_source_contract():
+    """Read the loaded code witness without inspecting configuration or credentials."""
+    global _LOADED_SOURCES
+    if _LOADED_SOURCES is None:
+        _LOADED_SOURCES = _sources()
+    return dict(_LOADED_SOURCES)
+
+
 def _cloud_contract(cfg):
     import cloud_policy
     settings, errors = cloud_policy.cloud_config(cfg, key_present=True)
@@ -137,9 +145,7 @@ def candidate_fingerprint(cfg: dict) -> str:
     import extract_validation
     import local_llm
     import semantic_policy
-    global _LOADED_SOURCES
-    if _LOADED_SOURCES is None:
-        _LOADED_SOURCES = _sources()
+    loaded_sources = loaded_source_contract()
     sem = dict(cfg.get('semantic') or {})
     # Explicit/default spelling must identify the same deployed candidate.
     defaults, _ = semantic_policy.semantic_config({})
@@ -158,7 +164,7 @@ def candidate_fingerprint(cfg: dict) -> str:
         'patient_context_version': extract_llm.PATIENT_CONTEXT_VERSION,
         'prompt_schema': payload_hash([extract_llm._PROMPT_HEAD, extract_schema.SCHEMA]),
         'loaded_extract': extract_llm._LOADED_SOURCE_DIGESTS,
-        'loaded_semantic': _LOADED_SOURCES,
+        'loaded_semantic': loaded_sources,
         'local_model': local_llm.resolve(cfg),
         'policy_version': semantic_policy.POLICY_VERSION,
         'semantic': defaults,

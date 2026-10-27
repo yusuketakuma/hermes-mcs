@@ -734,3 +734,45 @@ def test_shadow_unit_stays_pending_when_the_run_lock_is_busy_after_measuring(run
     rows = [json.loads(a["meta"]) for a in led.artifacts("cloud_compare_v1")]
     [row] = [r for r in rows if r.get("uncompared") == "pending"]
     assert row["units"] == 1 and row["validated_units"] == 0
+
+
+def test_quality_policy_change_requeues_audit_without_resending_source_or_draft(runtime, cloud, monkeypatch):
+    led, _, _ = runtime
+    seed(led, body='本人の生活環境: 完全合成の居住記録。')
+    drain(runtime)
+    scan_ids = [row['artifact_id'] for row in led.artifacts(context_refresh.SCAN)]
+    generated = len(cloud[0])
+    judged = len(led.synthetic_jev_requests)
+    monkeypatch.setitem(CFG['semantic'], 'match_threshold', 0.95)
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    _, _, pending = context_refresh._pending(led.db, 1, CFG)
+    assert pending == {'A': True, 'B': False, 'C': False}
+    drain(runtime)
+    assert len(led.synthetic_jev_requests) == judged + 1
+    assert len(cloud[0]) == generated
+    assert [row['artifact_id'] for row in led.artifacts(context_refresh.SCAN)] == scan_ids
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
+
+
+@pytest.mark.parametrize('state', ['unknown', 'held'])
+def test_quality_hold_reason_is_visible_and_clears_only_after_success(runtime, cloud, monkeypatch, state):
+    led, clock, _ = runtime
+    seed(led, body='本人の生活環境: 完全合成の居住記録。')
+    for _ in range(8):
+        step(runtime)
+        if document(led):
+            break
+    assert document(led) and not led.artifacts(context_refresh.QUALITY_PASS)
+    with monkeypatch.context() as patch:
+        patch.setattr(context_refresh, '_quality_step', lambda *a, **k: (state, None))
+        result = step(runtime)
+    assert result['status'] == 'deferred' and result['reason'] == 'summary_quality_' + state
+    assert document(led, context_refresh.PROGRESS)['quality_state'] == state
+    proof = context_refresh.inference_coverage(led.db, 1, CFG)
+    assert not proof['complete'] and proof['status'] == 'quality_' + state
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    clock.wall += 61
+    clock.mono += 61
+    drain(runtime)
+    assert 'quality_state' not in document(led, context_refresh.PROGRESS)
+    assert context_refresh.inference_coverage(led.db, 1, CFG)['complete']

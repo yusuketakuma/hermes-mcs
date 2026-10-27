@@ -63,6 +63,8 @@ def test_all_sections_reachable_and_actor_bound(led):
     ("dependency_gap", "変更前の根拠が不足しています"),
     ("summary_pending", "患者コンテキストの更新待ち"),
     ("audit_pending", "原文の根拠照合待ち"),
+    ("quality_unknown", "要約の照合結果を確認できません"),
+    ("quality_held", "要約の照合を保留しています"),
 ])
 def test_context_waiting_reason_survives_each_transport_without_pending_messages(led, monkeypatch, state, expected):
     import patient_context_view

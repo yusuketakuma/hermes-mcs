@@ -334,8 +334,7 @@ def quality_owner(runtime, monkeypatch):
     monkeypatch.setattr(worker, '_writer_current', lambda **kwargs: True)
     monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *_: 'synthetic-anthropic-key')
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: 'synthetic-jev-key')
-    monkeypatch.setattr(semantic_candidate, 'candidate_fingerprint', lambda _: 'a' * 64)
-    monkeypatch.setattr(semantic_candidate, '_LOADED_SOURCES', {'synthetic': 'b' * 64})
+    monkeypatch.setattr(semantic_candidate, 'loaded_source_contract', lambda: {'synthetic': 'b' * 64})
     sends, behavior = [], {}
     client = semantic_jev.JevClient
     def post(body, timeout):
