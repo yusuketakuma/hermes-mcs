@@ -29,6 +29,8 @@ STANDALONE_LABEL = "ai.mcs.standalone"
 
 STANDALONE_UNIT = "mcs-standalone.service"
 
+SDC_LABEL = "local.mcs-sdc"
+
 HEALTH_LABEL = "local.mcs-health"
 
 HEALTH_UNIT = "mcs-health.service"
@@ -46,8 +48,13 @@ def cron_label(script: str) -> str:
 def desired_agent_labels(cfg: dict) -> list[str]:
     """Every LaunchAgent `services` owns for the selected runtime."""
     if not mcs_runtime.standalone(cfg):
-        return list(AGENT_LABELS)
-    return [STANDALONE_LABEL, HEALTH_LABEL]
+        labels = list(AGENT_LABELS)
+    else:
+        labels = [STANDALONE_LABEL, HEALTH_LABEL]
+    sdc = cfg.get("sdc", {})
+    if not isinstance(sdc, dict) or type(sdc.get("enabled", False)) is not bool:
+        raise ValueError("sdc_config_invalid")
+    return labels + ([SDC_LABEL] if sdc.get("enabled", False) else [])
 
 def owns_agent(label: str) -> bool:
     """MCS's LaunchAgent naming space (never install.sh-owned labels)."""
@@ -117,6 +124,10 @@ def service_substitutions(cfg, *, root, checkout, standalone_runtime_home, herme
     if type(grace) is not int or not 0 <= grace <= 3600:
         raise ValueError("watchdog_grace_config_invalid")
     subs["WATCHDOG_GRACE"] = str(grace)
+    sdc_root = cfg.get("sdc", {}).get("state_root", os.path.expanduser("~/.mcs-security"))
+    if not isinstance(sdc_root, str) or not os.path.isabs(sdc_root) or any(ord(c) < 32 for c in sdc_root):
+        raise ValueError("sdc_root_invalid")
+    subs["SDC_ROOT"] = sdc_root
     return subs
 
 

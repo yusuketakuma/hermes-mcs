@@ -1,4 +1,4 @@
-"""MCSの導入・更新・初期設定・診断・医薬品マスター確認を行います。"""
+"""MCSの導入・更新・初期設定・診断・医薬品マスター確認・状態監視の接続を行います。"""
 from __future__ import annotations
 
 import json
@@ -22,7 +22,7 @@ from mcs_util import load_config  # noqa: E402
 def main(argv: list[str] | None = None) -> int:
     """Route arguments without shells, retaining downstream contracts."""
     ap = _JapaneseParser(description=__doc__)
-    ap.add_argument("command", choices=("install", "update", "setup", "doctor", "drug", "recover"), help="install: 導入 / update: 更新 / setup: 初期設定 / doctor: 診断 / drug: 医薬品マスター確認 / recover: 中断した更新の復旧")
+    ap.add_argument("command", choices=("install", "update", "setup", "doctor", "drug", "recover", "connect", "connection", "disconnect", "rotate-key"), help="install: 導入 / update: 更新 / setup: 初期設定 / doctor: 診断 / drug: 医薬品マスター確認 / recover: 中断した更新の復旧 / connect: 状態監視登録 / connection: 接続状態 / disconnect: 送信停止 / rotate-key: 鍵交換")
     forwarded = list(sys.argv[1:] if argv is None else argv)
     args = ap.parse_args(forwarded[:1])
     rest = forwarded[1:]
@@ -76,6 +76,9 @@ def main(argv: list[str] | None = None) -> int:
                                  args.command, *rest])
 
     match args.command:
+        case "connect" | "connection" | "disconnect" | "rotate-key":
+            import sdc_cli
+            return sdc_cli.main([args.command, *rest])
         case "drug":
             import mcs_drug
             return mcs_drug.main(rest)
