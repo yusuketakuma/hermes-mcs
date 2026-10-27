@@ -72,17 +72,84 @@ def _correction_candidate(body):
     return False
 
 
-def _adjacent_measurement_retraction(body, span):
-    """Hold a measurement when the next sentence explicitly retracts that value."""
+def _adjacent_measurement_retraction(body, span, *, target=None):
+    """Hold a measurement when the next sentence questions that value."""
     if not isinstance(body, str) or not span:
         return False
-    boundary = _SENTENCE.search(body, span[0])
+    boundary = _SENTENCE.search(body, span[0], min(len(body), span[0] + _MAX_BODY_BYTES + 1))
     if boundary is None:
+        return len(body) - span[0] > _MAX_BODY_BYTES
+    start = boundary.end()
+    while start < len(body) and body[start].isspace() and start - boundary.end() <= _MAX_BODY_BYTES:
+        start += 1
+    if start - boundary.end() > _MAX_BODY_BYTES:
+        return True
+    end = _SENTENCE.search(body, start, min(len(body), start + _MAX_BODY_BYTES + 1))
+    if end is None and len(body) - start > _MAX_BODY_BYTES:
+        return True
+    sentence = body[start:end.end() if end else len(body)]
+    if _bounded_text(sentence, _MAX_BODY_BYTES) is None:
+        return True
+    following = sentence
+    labels = {"体温": "bt", "脈拍": "hr", "呼吸数": "rr", "血圧": "bp", "血糖": "bs",
+              "spo2": "spo2", "酸素飽和度": "spo2", "酸素飽和": "spo2"}
+    label = r"(?:体温|脈拍|呼吸数|血圧|血糖|SpO2|酸素飽和度|酸素飽和)"
+    target_class = clinical_values._VITAL_CLASS.get(target)
+    target_label = clinical_values._VITAL_LABELS.get(target_class)
+    if target_label is None and isinstance(target, str) and 0 < len(target) <= 120:
+        left = r"(?<![A-Za-z])" if target[0].isascii() and target[0].isalpha() else ""
+        right = r"(?![A-Za-z])" if target[-1].isascii() and target[-1].isalpha() else ""
+        target_label = re.compile(left + re.escape(target) + right, re.I)
+    if target_label:
+        for clause in re.split(r"[、,]", sentence):
+            candidate = (_correction_candidate(clause) or re.search(
+                r"未確認|不明|未確定|未定|疑い|かもしれ|可能性|確認(?:中|が必要|します|する)|"
+                r"(?:です|ません|ない|でしょう)か(?:$|[。！？!?;；\n])|[?？]", clause))
+            if not candidate:
+                continue
+            matches = list(itertools.islice(target_label.finditer(clause), 65))
+            if len(matches) > 64:
+                return True
+            if (re.match(r"\s*別の日の", clause) and len(matches) == 1
+                    and not re.search(r"ではなく|ではない|ではありません|この(?:数値|値|結果)|同じ|"
+                                      r"本人|患者|利用者", clause)):
+                continue
+            for match in matches:
+                subject, _ = source_axes(clause, match.start(), match.end(), default="unknown")
+                if subject not in ("family", "other"):
+                    return True
+    named_vital = re.match(rf"(?:その|先ほどの|上記の|直前の)?({label}(?:と{label})*)"
+                           r"(?:の(?:測定値|数値|値|結果))?(?:は|が)", following, re.I)
+    named = named_vital
+    if named is None and isinstance(target, str) and 0 < len(target) <= 120:
+        named = re.match(rf"(?:その|先ほどの|上記の|直前の)?({re.escape(target)})"
+                         r"(?:の(?:測定値|数値|値|結果))?(?:は|が)", following, re.I)
+    if named_vital and target_class is not None:
+        classes = {labels[x.casefold()] for x in re.findall(label, named_vital.group(1), re.I)}
+        trailing = following[named_vital.end():]
+        if (target_class not in classes and target_label and not target_label.search(trailing)
+                and not re.search(r"本人|患者|利用者|その(?:数値|値|結果)", trailing)):
+            return False
+    reference = named or re.match(r"(?:先ほど|先程|上記|直前|その)(?:の)?(?:検査値|測定値|数値|値|結果)"
+                                  r"(?:は|が)", following)
+    if reference is None:
         return False
-    following = body[boundary.end():].lstrip()
-    return bool(re.match(r"(?:先ほど|先程|上記|直前|その)(?:の)?(?:検査値|測定値|数値|結果)"
-                         r"(?:は|が)(?:誤っていました|誤っていた|誤りでした|間違っていました)"
-                         r"(?=。|$)", following))
+    first, *rest = re.split(r"[、,]", sentence, maxsplit=1)
+    other = re.match(rf"\s*(家族|他者|他の患者|別の日|{label})", rest[0], re.I) if rest else None
+    other_name = other.group(1).casefold() if other else None
+    distinct = (other_name in ("家族", "他者", "他の患者", "別の日")
+                or other_name in labels and target_class is not None and labels[other_name] != target_class)
+    if other_name == "別の日" and re.search(r"ではなく|ではない|ではありません|この(?:数値|値|結果)|同じ", rest[0]):
+        distinct = False
+    if (distinct and other_name != "別の日" and
+            ((target_label and target_label.search(rest[0])) or re.search(r"本人|患者|利用者", rest[0]))):
+        distinct = False
+    if (distinct and re.fullmatch(r"(?:正しい(?:です|でした|ですが)|誤りでは(?:ない|ありません)(?:が)?|"
+                                  r"間違って(?:いない|いません)(?:が)?)", first[reference.end():].strip())):
+        sentence = first
+    return bool(_correction_candidate(sentence) or re.search(
+        r"未確認|不明|未確定|未定|疑い|かもしれ|可能性|確認(?:中|が必要|します|する)|"
+        r"(?:です|ません|ない|でしょう)か(?:$|[、,。！？!?;；\n])|[?？]", sentence))
 
 
 def _source_record(message, ref, kind, key, value, unit, evidence, span, *, name=None,
@@ -145,7 +212,7 @@ def _labs(message, doc, ref, patient_name, verified):
                          and scope in ("patient", "past", "planned", "conditional")
                          and context and not _UNCERTAIN.search(context) and not ambiguous_patient_context(body, anchor)
                          and not _correction_candidate(context)
-                         and not _adjacent_measurement_retraction(body, span) and condition_ok)
+                         and not _adjacent_measurement_retraction(body, span, target=name) and condition_ok)
         observed = clinical_values.written_day(actual) if planned else None
         measured_on = (observed[1].isoformat() if observed and observed[0] == "ymd" else
                        candidate["measured_on"])
@@ -186,7 +253,7 @@ def _vitals(message, doc, ref, verified):
             subject = period = "unknown"
         source_ok = bool(verified and match and subject == "patient" and period in ("current", "past")
                          and quote and not _UNCERTAIN.search(quote) and not _correction_candidate(quote)
-                         and not _adjacent_measurement_retraction(body, span)
+                         and not _adjacent_measurement_retraction(body, span, target=key)
                          and not ambiguous_patient_context(body, match.start()))
         out.append(_source_record(message, ref, "vital", key, value, unit, quote, span,
                                   measured_on=measured, status=period, subject=subject, verified=source_ok))

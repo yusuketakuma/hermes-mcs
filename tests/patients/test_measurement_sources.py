@@ -63,6 +63,97 @@ def test_lab_source_context_rejects_negation_or_uncertainty_outside_quote():
         assert projected["state"] == "unknown" and projected["value"] is None
 
 
+@pytest.mark.parametrize("suffix", [
+    "その数値は誤りです。", "その数値は間違っています。",
+    "その測定値は誤っていました！", "先ほどの結果は誤りです、正しくは未確認。",
+    "その数値は誤っていないと思っていたが誤りでした。",
+    "その数値は誤りではないかもしれません。", "その数値は未確認です。",
+    "その数値は正しいと思っていましたが、血圧の値は誤りです。",
+    "その数値は誤りではありませんか？",
+    "その数値は正しいですが、体温の値は誤りです。",
+    "その数値は正しいですか、血圧の値は誤りです。",
+    "その数値は正しいか確認中です。", "その数値は誤りではないか確認中です。",
+    "その体温の値は誤りです。",
+    "血圧の値は誤りです、体温の値も誤りです。",
+    "その数値は正しいですが、血圧と体温の値は誤りです。",
+    "その数値は正しいですが、家族の数値は誤りで、本人の体温も誤りです。",
+    "その数値は正しいでしょうか。", "その数値は誤りではないでしょうか。",
+    "その数値は正しいですが、別の日ではなくこの数値は誤りです。",
+    "本人の体温は誤りです。",
+    "家族の血圧は正しいが、本人の体温は誤りです。",
+    "別の日は正しいが本人の体温は誤りです。",
+])
+def test_adjacent_correction_never_confirms_a_vital(suffix):
+    body = "本人の2026-10-02測定で体温36.4℃でした。" + suffix
+    message = {"project_id": 1, "message_id": 1, "content_hash": "a" * 64,
+               "posted_at": "2026-10-03T09:00:00+09:00", "body_text": body}
+    [record], invalid = measurement_sources._vitals(message, {"vitals": {"bt": 36.4}}, 1, True)
+    assert invalid == 0 and record["verification"] == "unverified"
+    [item] = measurement_timeline.project_measurements([record], source_complete=True)["items"]
+    assert item["state"] == "unknown" and item["value"] is None
+
+
+@pytest.mark.parametrize("suffix", [
+    "その数値は誤りではありません。", "その数値は間違っていません。",
+    "家族の数値は誤りです。", "先ほどの予定は誤りです。",
+    "その数値は正しいですが、血圧の値は誤りです。",
+    "その数値は誤りではありませんが、別の日の体温は誤りです。",
+    "血圧の値は誤りです。",
+    "家族の体温は誤りです。",
+])
+def test_adjacent_unrelated_or_negated_correction_preserves_vital(suffix):
+    body = "本人の2026-10-02測定で体温36.4℃でした。" + suffix
+    message = {"project_id": 1, "message_id": 1, "content_hash": "a" * 64,
+               "posted_at": "2026-10-03T09:00:00+09:00", "body_text": body}
+    [record], invalid = measurement_sources._vitals(message, {"vitals": {"bt": 36.4}}, 1, True)
+    assert invalid == 0 and record["verification"] == "quote_supported"
+
+
+def test_named_spo2_correction_does_not_confirm_oxygen_saturation():
+    body = "本人の2026-10-02測定でSpO2 97%でした。SpO2の値は誤りです。"
+    message = {"project_id": 1, "message_id": 1, "content_hash": "a" * 64,
+               "posted_at": "2026-10-03T09:00:00+09:00", "body_text": body}
+    [record], invalid = measurement_sources._vitals(message, {"vitals": {"spo2": 97}}, 1, True)
+    assert invalid == 0 and record["verification"] == "unverified"
+
+
+def test_named_lab_correction_does_not_confirm_the_old_value():
+    quote = "本人の2026-10-02採血でCr 1.1mg/dLでした。"
+    body = quote + "Crの値は誤りです。"
+    message = {"project_id": 1, "message_id": 1, "content_hash": "a" * 64,
+               "posted_at": "2026-10-03T09:00:00+09:00", "body_text": body}
+    [record], invalid = measurement_sources._labs(message, {"labs": [_lab(quote, "1.1")]}, 1, None, True)
+    assert invalid == 0 and record["verification"] == "unverified"
+
+
+@pytest.mark.parametrize("name, other", [("Cr", "CRP"), ("CRP", "Cr"), ("cr", "cRp")])
+def test_different_lab_name_does_not_retract_a_measurement(name, other):
+    quote = f"本人の2026-10-02採血で{name} 1.1mg/dLでした。"
+    body = quote + f"{other}の値は誤りです。"
+    message = {"project_id": 1, "message_id": 1, "content_hash": "a" * 64,
+               "posted_at": "2026-10-03T09:00:00+09:00", "body_text": body}
+    lab = {**_lab(quote, "1.1"), "name": name}
+    [record], invalid = measurement_sources._labs(message, {"labs": [lab]}, 1, None, True)
+    assert invalid == 0 and record["verification"] == "quote_supported"
+
+
+def test_adjacent_correction_bounds_repeated_target_checks(monkeypatch):
+    first = "本人の採血Cr 1.1mg/dLでした。"
+    checked = []
+    monkeypatch.setattr(measurement_sources, "source_axes", lambda *_args, **_kwargs: checked.append(1))
+    ordinary = first + "Cr " * 2000 + "を記録しました。"
+    assert not measurement_sources._adjacent_measurement_retraction(ordinary, (0, len(first)), target="Cr")
+    assert checked == []
+    uncertain = first + "Cr " * 65 + "は誤りです。"
+    assert measurement_sources._adjacent_measurement_retraction(uncertain, (0, len(first)), target="Cr")
+    oversized = first + "測" * 20001
+    assert measurement_sources._adjacent_measurement_retraction(oversized, (0, len(first)), target="Cr")
+    assert measurement_sources._adjacent_measurement_retraction(
+        first + " " * 20001 + "未確認です。", (0, len(first)), target="Cr")
+    assert measurement_sources._adjacent_measurement_retraction("Cr" + "測" * 20001, (0, 2), target="Cr")
+    assert checked == []
+
+
 def test_lab_conditions_are_retained_only_when_bound_to_the_measurement():
     body = "本人は2026-10-01の空腹時採血 Cr 1.0 mg/dL。"
     message = {"project_id": 1, "message_id": 1, "content_hash": "a" * 64,
