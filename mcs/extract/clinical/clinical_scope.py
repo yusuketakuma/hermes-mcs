@@ -103,14 +103,16 @@ _UNCERTAIN_ADDITIVE = re.compile(
 _QUESTION = re.compile(r"(?:しました|した|します|していました|している|しています|しません|しませんでした|です|でした)"
                        r"(?:か|でしょうか)(?!ら)|かどうか")
 
-# A bare もし is additive も＋し unless a consequent follows later in the same
-# sentence, which may lie beyond the clause being judged.
-_CONSEQUENT = re.compile(r"[^。！？!?\n]{0,60}?(?:れば|ければ|たら|なら|ても|場合|とき|際)")
+# A bare もし stays conditional unless it is visibly additive も＋し after a noun
+# (清拭もし、 / 採血もしておき / もしくは) with no consequent anywhere later in the sentence.
+_ADDITIVE_MOSHI = re.compile(r"(?<=[一-龥々ァ-ヶーA-Za-z0-9])もし(?=[、,]|て|た|ま|くは|ながら|つつ)")
+_CONSEQUENT = re.compile(r"[^。！？!?\n]*?(?:れば|ければ|たら|なら|ても|場合|とき|際)")
 
 
 def _has_condition(body, start, end):
     for match in _CONDITIONAL_MARK.finditer(body, start, end):
-        if not match.group().startswith("もし") or _CONSEQUENT.match(body, match.end()):
+        if (not match.group().startswith("もし") or not _ADDITIVE_MOSHI.match(body, match.start())
+                or _CONSEQUENT.match(body, match.end())):
             return True
     return False
 

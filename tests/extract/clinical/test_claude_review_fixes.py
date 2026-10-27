@@ -29,6 +29,10 @@ def test_additive_mo_and_causal_kara_are_not_condition_or_question(body, target,
     ("もし発熱があれば受診してください。", "受診", "conditional"),
     ("もし熱が出た場合、受診してください。", "受診", "conditional"),
     ("もしも熱が出たら受診します。", "受診", "conditional"),
+    ("もし体温38.0℃", "体温", "conditional"),
+    ("もし体温38.0℃、" + "付帯説明" * 20 + "、脈拍120であれば連絡してください。", "体温", "conditional"),
+    ("本人がもし熱を出したら連絡します。", "連絡", "conditional"),
+    ("採血もしたら連絡します。", "連絡", "conditional"),
     ("退院しましたか？", "退院", "unknown"),
     ("退院したかどうか不明です。", "退院", "unknown"),
     ("本人は退院したか確認してください。", "退院", "unknown"),
@@ -107,6 +111,7 @@ def test_condition_consequent_after_a_comma_keeps_threshold_values_conditional()
 @pytest.mark.parametrize("body, verified", [
     ("血圧の確認をお願いしたい、という依頼はありません。", False),
     ("血圧の確認をお願いします、との依頼はありません。", False),
+    ("血圧の確認をお願いしたい、という依頼ではありません。", False),
     ("血圧の確認をお願いしたいです。残薬の依頼はありません。", True),
 ])
 def test_denied_request_form_is_not_a_verified_request(body, verified):
