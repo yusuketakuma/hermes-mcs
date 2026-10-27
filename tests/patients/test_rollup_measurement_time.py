@@ -748,7 +748,7 @@ def test_empty_proofs_isolate_patient_and_preserve_invalid_rows(store):
     store.db.rollback()
 
 
-def test_many_empty_messages_use_one_bounded_html_query_per_reader(store):
+def test_many_empty_messages_use_bounded_html_queries_per_reader(store):
     _save(store, 1, "2026-10-03T09:00:00+09:00", "本人の2026-10-02測定で体温36.4℃でした。",
           vitals={"bt": 36.4})
     store.save_messages([_message(mid=mid, project_id=1, body="", posted_at="2026-10-04T09:00:00+09:00")
@@ -758,8 +758,10 @@ def test_many_empty_messages_use_one_bounded_html_query_per_reader(store):
     try:
         out = rollup.build_rollup(store.db, 1, cfg={})
         assert out["measurement_coverage"]["complete"]
+        # One pass establishes the original as-of boundary; one ordered
+        # stream then supplies bounded per-message proofs on that snapshot.
         assert sum("SELECT message_id,content_hash,CASE WHEN typeof(body_html)" in sql
-                   for sql in statements) == 1
+                   for sql in statements) == 2
         statements.clear()
         rollup._message_source_signature(store.db, 1, 1)
         assert sum("SELECT message_id,content_hash,CASE WHEN typeof(body_html)" in sql

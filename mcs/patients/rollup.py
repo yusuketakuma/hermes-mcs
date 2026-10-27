@@ -92,16 +92,27 @@ def _attachment_count(db, project_id):
 
 def _empty_body_proofs(db, project_id, *, html_available, message_ids=None, discard=False):
     """Stream bounded empty-body HTML and retain only per-message proof results."""
+    proofs = {}
+    with contextlib.closing(_empty_body_proof_rows(
+            db, project_id, html_available=html_available, message_ids=message_ids)) as rows:
+        for mid, valid in rows:
+            if not discard:
+                proofs[mid] = valid
+    return proofs
+
+
+def _empty_body_proof_rows(db, project_id, *, html_available, message_ids=None, ordered=False):
+    """Yield bounded source proofs, optionally in the rollup message order."""
     if not html_available:
-        return {}
+        return
     scope = " AND message_id IN (SELECT value FROM json_each(?))" if message_ids is not None else ""
     params = (_MAX_EMPTY_HTML_CHARS, project_id, json.dumps(message_ids)) if message_ids is not None else (
         _MAX_EMPTY_HTML_CHARS, project_id)
     cursor = db.execute("SELECT message_id,content_hash,CASE WHEN typeof(body_html)='text' "
                         "AND length(body_html)<=? AND instr(body_html,char(0))=0 THEN body_html END "
-                        "FROM messages WHERE project_id=? AND body_state='full' AND body_text=''" + scope,
+                        "FROM messages WHERE project_id=? AND body_state='full' AND body_text=''" + scope
+                        + (" ORDER BY posted_at_ts DESC,message_id DESC" if ordered else ""),
                         params)
-    proofs = {}
     try:
         for mid, content_hash, source_html in cursor:
             valid = False
@@ -111,8 +122,7 @@ def _empty_body_proofs(db, project_id, *, html_available, message_ids=None, disc
                              and html_to_text(source_html) == "")
                 except (UnicodeError, ValueError):
                     pass
-            if not discard:
-                proofs[mid] = valid
+            yield mid, valid
     except BaseException:
         try:
             cursor.close()
@@ -121,7 +131,6 @@ def _empty_body_proofs(db, project_id, *, html_available, message_ids=None, disc
         raise
     else:
         cursor.close()
-    return proofs
 
 
 def _dicts(value) -> list[dict]:
@@ -287,19 +296,30 @@ def _rollup_source_pages(db, project_id, cursor, first_page, cfg, *, html_availa
     if isinstance(cfg, dict):
         import extract_llm
         expected_model = extract_llm.resolved_model(cfg)
-    page = first_page
-    while page:
-        ids = [row['message_id'] for row in page]
-        arts = _current_extraction_page(db, project_id, ids)
-        refs = _clinical_artifact_refs(db, project_id, arts, ids)
-        ref_mids = {row[0] for row in db.execute(
-            "SELECT DISTINCT a.message_id FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
-            "WHERE a.kind=? AND m.project_id=? AND m.message_id IN (SELECT value FROM json_each(?))",
-            (REF_KIND, project_id, json.dumps(ids)))}
-        empty_proofs = _empty_body_proofs(db, project_id, html_available=html_available, message_ids=ids)
-        for item in _rollup_inputs(db, page, arts, refs, cfg, expected_model=expected_model):
-            yield (*item, refs, ref_mids, empty_proofs)
-        page = cursor.fetchmany(64)
+    with contextlib.closing(_empty_body_proof_rows(
+            db, project_id, html_available=html_available, ordered=True)) as proof_rows:
+        page = first_page
+        while page:
+            ids = [row['message_id'] for row in page]
+            arts = _current_extraction_page(db, project_id, ids)
+            refs = _clinical_artifact_refs(db, project_id, arts, ids)
+            ref_mids = {row[0] for row in db.execute(
+                "SELECT DISTINCT a.message_id FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+                "WHERE a.kind=? AND m.project_id=? AND m.message_id IN (SELECT value FROM json_each(?))",
+                (REF_KIND, project_id, json.dumps(ids)))}
+            empty_proofs = {}
+            if html_available:
+                for row in page:
+                    if row['body_state'] == 'full' and row['body_text'] == '':
+                        proof = next(proof_rows, None)
+                        if proof is None or proof[0] != row['message_id']:
+                            raise sqlite3.OperationalError('rollup_empty_proof_order_changed')
+                        empty_proofs[proof[0]] = proof[1]
+            for item in _rollup_inputs(db, page, arts, refs, cfg, expected_model=expected_model):
+                yield (*item, refs, ref_mids, empty_proofs)
+            page = cursor.fetchmany(64)
+        if next(proof_rows, None) is not None:
+            raise sqlite3.OperationalError('rollup_empty_proof_order_changed')
 
 
 def _measurement_source_page(db, page, kinds, refs, expected_model):
