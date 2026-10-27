@@ -155,6 +155,155 @@ def test_invalid_rollup_preserves_existing_export(env, content, capsys):
             for p in out.rglob("*") if p.is_file()} == before
 
 
+@pytest.mark.parametrize("orphan_pid", [2, None])
+def test_orphan_rollup_preserves_existing_export(env, capsys, orphan_pid):
+    snap, out = env
+    brain_export.run(out, snap)
+    before = {str(p.relative_to(out)): p.read_bytes()
+              for p in out.rglob("*") if p.is_file()}
+    with sqlite3.connect(snap) as conn:
+        conn.execute(
+            "INSERT INTO artifacts(kind,project_id,content,meta,created_at) "
+            "SELECT kind,?,content,meta,created_at FROM artifacts "
+            "WHERE kind='patient_rollup' AND project_id=1", (orphan_pid,))
+        conn.execute("UPDATE snapshot_meta SET generation_id='synthetic-next'")
+    snap_before = snap.read_bytes()
+    assert brain_export.main(["--out", str(out), "--snapshot", str(snap)]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "patient_rollup_scope_invalid"
+    assert {str(p.relative_to(out)): p.read_bytes()
+            for p in out.rglob("*") if p.is_file()} == before
+    assert snap.read_bytes() == snap_before
+    assert not (out / "patients/p2.md").exists()
+
+
+@pytest.mark.parametrize(("table", "bad_pid"), [
+    ("artifacts", 0), ("artifacts", -1), ("artifacts", "../synthetic"),
+    ("patients", 0), ("patients", -1),
+])
+def test_invalid_patient_scope_preserves_every_export(env, capsys, table, bad_pid):
+    snap, out = env
+    brain_export.run(out, snap)
+    before = {str(p.relative_to(out)): p.read_bytes()
+              for p in out.rglob("*") if p.is_file()}
+    with sqlite3.connect(snap) as conn:
+        if table == "artifacts":
+            conn.execute("UPDATE artifacts SET project_id=? WHERE kind='patient_rollup'", (bad_pid,))
+        else:
+            conn.execute("UPDATE patients SET project_id=? WHERE project_id=1", (bad_pid,))
+        conn.execute("UPDATE snapshot_meta SET generation_id='synthetic-next'")
+    snap_before = snap.read_bytes()
+    assert brain_export.main(["--out", str(out), "--snapshot", str(snap)]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "patient_rollup_scope_invalid"
+    assert {str(p.relative_to(out)): p.read_bytes()
+            for p in out.rglob("*") if p.is_file()} == before
+    assert snap.read_bytes() == snap_before
+
+
+@pytest.mark.parametrize("content_pid", [None, False, True, "1", 0, -1, 2, "missing"])
+def test_rollup_content_scope_must_match_row(env, capsys, content_pid):
+    snap, out = env
+    brain_export.run(out, snap)
+    before = {str(p.relative_to(out)): p.read_bytes()
+              for p in out.rglob("*") if p.is_file()}
+    with sqlite3.connect(snap) as conn:
+        # Both patients exist: a content/row mismatch is an actual scope error,
+        # not merely a missing patient record.
+        conn.execute("INSERT INTO patients SELECT 2,project_type,?,disease,station_name,url,"
+                     "fetch_state,fetch_reason,last_complete_fetch,last_seen,is_archived,created_at "
+                     "FROM patients WHERE project_id=1", ("SYNTH second patient",))
+        row = conn.execute("SELECT content FROM artifacts WHERE kind='patient_rollup'").fetchone()
+        content = json.loads(row[0])
+        if content_pid == "missing":
+            del content["project_id"]
+        else:
+            content["project_id"] = content_pid
+        conn.execute("UPDATE artifacts SET content=? WHERE kind='patient_rollup'", (json.dumps(content),))
+        conn.execute("UPDATE snapshot_meta SET generation_id='synthetic-next'")
+    snap_before = snap.read_bytes()
+    assert brain_export.main(["--out", str(out), "--snapshot", str(snap)]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "patient_rollup_invalid"
+    assert {str(p.relative_to(out)): p.read_bytes()
+            for p in out.rglob("*") if p.is_file()} == before
+    assert snap.read_bytes() == snap_before
+
+
+def test_legacy_rollup_without_project_id_is_rebuilt_on_same_snapshot(env, monkeypatch):
+    snap, out = env
+    with sqlite3.connect(snap) as conn:
+        conn.execute("UPDATE artifacts SET content=?,meta=? WHERE kind='patient_rollup'",
+                     (json.dumps({"summary": {"text": "SYNTH untrusted legacy"}}), "{}"))
+    before = snap.read_bytes()
+    real_build = brain_export.rollup.build_rollup
+    calls = []
+
+    def build(db, pid, **kwargs):
+        calls.append((pid, db.execute("SELECT generation_id FROM snapshot_meta").fetchone()[0]))
+        return real_build(db, pid, **kwargs)
+
+    monkeypatch.setattr(brain_export.rollup, "build_rollup", build)
+    assert brain_export.run(out, snap)["ok"]
+    assert calls == [(1, "gen-1")]
+    assert "SYNTH untrusted legacy" not in (out / "patients/p1.md").read_text()
+    assert snap.read_bytes() == before
+
+
+def test_rebuilt_rollup_scope_is_checked_before_publication(env, monkeypatch, capsys):
+    snap, out = env
+    brain_export.run(out, snap)
+    before = {str(p.relative_to(out)): p.read_bytes()
+              for p in out.rglob("*") if p.is_file()}
+    monkeypatch.setattr(brain_export, "current_cached_refs", lambda *args, **kwargs: {"project_id": 2})
+    assert brain_export.main(["--out", str(out), "--snapshot", str(snap)]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "patient_rollup_invalid"
+    assert {str(p.relative_to(out)): p.read_bytes()
+            for p in out.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize("archived", [0, 1])
+def test_missing_rollup_preserves_all_exports_until_rebuilt(env, capsys, archived):
+    snap, out = env
+    brain_export.run(out, snap)
+    before = {str(p.relative_to(out)): p.read_bytes()
+              for p in out.rglob("*") if p.is_file()}
+    with sqlite3.connect(snap) as conn:
+        conn.execute("DELETE FROM artifacts WHERE kind='patient_rollup'")
+        conn.execute("UPDATE patients SET is_archived=? WHERE project_id=1", (archived,))
+        conn.execute("UPDATE snapshot_meta SET generation_id='synthetic-next'")
+    snap_before = snap.read_bytes()
+    assert brain_export.main(["--out", str(out), "--snapshot", str(snap)]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "patient_rollup_missing"
+    assert {str(p.relative_to(out)): p.read_bytes()
+            for p in out.rglob("*") if p.is_file()} == before
+    assert snap.read_bytes() == snap_before
+
+    _rollup(snap, summary="SYNTH rebuilt")
+    assert brain_export.run(out, snap)["ok"]
+    assert "SYNTH rebuilt" in (out / "patients/p1.md").read_text()
+
+
+def test_missing_rollup_with_messages_blocks_initial_export(env, capsys):
+    snap, out = env
+    with sqlite3.connect(snap) as conn:
+        conn.execute("DELETE FROM artifacts WHERE kind='patient_rollup'")
+    assert brain_export.main(["--out", str(out), "--snapshot", str(snap)]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "patient_rollup_missing"
+    assert not out.exists()
+
+
+def test_existing_page_for_patient_without_messages_is_not_pruned(env, capsys):
+    snap, out = env
+    brain_export.run(out, snap)
+    before = {str(p.relative_to(out)): p.read_bytes()
+              for p in out.rglob("*") if p.is_file()}
+    with sqlite3.connect(snap) as conn:
+        conn.execute("DELETE FROM artifacts WHERE kind='patient_rollup'")
+        conn.execute("DELETE FROM messages WHERE project_id=1")
+    assert brain_export.main(["--out", str(out), "--snapshot", str(snap)]) == 1
+    assert json.loads(capsys.readouterr().out)["error"] == "patient_rollup_missing"
+    assert {str(p.relative_to(out)): p.read_bytes()
+            for p in out.rglob("*") if p.is_file()} == before
+
+
 def test_layout_and_content(env):
     snap, out = env
     res = brain_export.run(out, snap)
@@ -298,6 +447,8 @@ def test_export_rechecks_directories_after_processing_starts(
     snap, out = env
     with sqlite3.connect(snap) as conn:
         conn.execute("DELETE FROM artifacts WHERE kind='patient_rollup'")
+        conn.execute("DELETE FROM messages WHERE project_id=1")
+        conn.execute("DELETE FROM patients WHERE project_id=1")
     foreign = tmp_path / "foreign"
     foreign.mkdir()
     asset = foreign / "p999.md"
@@ -476,6 +627,8 @@ def test_stale_patient_removed(env, tmp_path):
     assert (out / "patients" / "p1.md").exists()
     conn = sqlite3.connect(str(snap))
     conn.execute("DELETE FROM artifacts WHERE kind='patient_rollup'")
+    conn.execute("DELETE FROM messages WHERE project_id=1")
+    conn.execute("DELETE FROM patients WHERE project_id=1")
     conn.commit()
     conn.close()
     res = brain_export.run(out, snap)

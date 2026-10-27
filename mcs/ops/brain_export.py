@@ -21,7 +21,9 @@ import _mcs_path  # noqa: F401
 import mcs_stats
 import mcs_signals
 import mcs_view
+import inference_version
 import read_model
+import rollup
 from export_schema import project_record
 from mcs_queries import JST, item_unverified
 from drug_map import candidate_note
@@ -365,6 +367,34 @@ def run(out_dir: Path, snapshot: Path) -> dict:
         rolls = {r["project_id"]: (r["content"], r["meta"]) for r in view.db.execute(
             "SELECT project_id,content,meta FROM artifacts "
             "WHERE kind='patient_rollup' ORDER BY artifact_id")}
+        # A derived row cannot establish that its patient is in this snapshot.
+        # Reject the whole export before publication if the scope is unknown.
+        if (any(type(pid) is not int or pid <= 0 for pid in info)
+                or any(type(pid) is not int or pid <= 0 for pid in rolls)
+                or set(rolls) - set(info)):
+            raise ValueError("patient_rollup_scope_invalid")
+        # A missing derived row can be a temporary invalidation while the
+        # patient and its source still exist. It is not proof of withdrawal.
+        # Stop before writing any output rather than prune an existing page or
+        # publish a mixture of generations. Patients without source messages
+        # need no rollup unless an existing generated page would be removed.
+        missing = set(info) - set(rolls)
+        if missing:
+            if view.db.execute(
+                    "SELECT 1 FROM patients p WHERE EXISTS "
+                    "(SELECT 1 FROM messages m WHERE m.project_id=p.project_id) "
+                    "AND NOT EXISTS (SELECT 1 FROM artifacts a WHERE "
+                    "a.kind='patient_rollup' AND a.project_id=p.project_id) LIMIT 1"
+            ).fetchone():
+                raise ValueError("patient_rollup_missing")
+            pdir = out_dir / "patients"
+            if pdir.is_dir():
+                missing_names = {f"p{pid}.md" for pid in missing}
+                with _directory_fd(out_dir, "patients") as directory:
+                    for name in os.listdir(directory):
+                        if name in missing_names and S_ISREG(os.stat(
+                                name, dir_fd=directory, follow_symlinks=False).st_mode):
+                            raise ValueError("patient_rollup_missing")
         # Validate/render every latest rollup before replacing or pruning any
         # export. Corrupt input is not evidence that a patient disappeared.
         pages = {}
@@ -372,7 +402,20 @@ def run(out_dir: Path, snapshot: Path) -> dict:
             roll = loads_dict(content)
             if roll is None:
                 raise ValueError("patient_rollup_invalid")
-            roll = current_cached_refs(view.db, pid, roll, meta)
+            if "project_id" not in roll:
+                # A known legacy row may lack this field; none of its content
+                # is trusted. Rebuild explicitly on the same patient snapshot.
+                if (inference_version.read_version(roll) != inference_version.LEGACY_VERSION
+                        or inference_version.read_version(loads_dict(meta)) != inference_version.LEGACY_VERSION):
+                    raise ValueError("patient_rollup_invalid")
+                roll = rollup.build_rollup(view.db, pid)
+            else:
+                if type(roll["project_id"]) is not int or roll["project_id"] != pid:
+                    raise ValueError("patient_rollup_invalid")
+                roll = current_cached_refs(view.db, pid, roll, meta)
+            if (not isinstance(roll, dict) or type(roll.get("project_id")) is not int
+                    or roll["project_id"] != pid):
+                raise ValueError("patient_rollup_invalid")
             name = (info.get(pid) or {}).get("patient_name") or f"project-{pid}"
             try:
                 pages[f"p{pid}.md"] = (
