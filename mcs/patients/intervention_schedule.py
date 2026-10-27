@@ -20,11 +20,12 @@ _ROLES = {
 _ROLE_PATTERN = "|".join(sorted(map(re.escape, _ROLES), key=len, reverse=True))
 _DATE_PATTERN = r"\d{4}[-/年]\d{1,2}[-/月]\d{1,2}日?"
 _TARGET_PATTERN = r"(?:本人|患者|利用者)(?:への|を|に|へ)"
+_INTERVENTION_ACTION = r"(?:訪問|往診|診察|診療|看護|介護|リハビリ|服薬指導|薬剤確認|栄養指導|口腔ケア|相談|確認|検査|採血)"
 _RECORD = re.compile(
     rf"(?P<role>{_ROLE_PATTERN})(?:さん)?(?:が|は)[ \t　]*"
     rf"(?:(?P<date_first>{_DATE_PATTERN})に[ \t　]*{_TARGET_PATTERN}|"
     rf"{_TARGET_PATTERN}[ \t　]*(?P<date_last>{_DATE_PATTERN})に)[ \t　]*"
-    r"(?P<action>訪問|往診|診察|診療|看護|介護|リハビリ|服薬指導|薬剤確認|栄養指導|口腔ケア|相談|確認|検査|採血)"
+    rf"(?P<action>{_INTERVENTION_ACTION})"
     r"(?P<result>する予定です|する予定|を予定しています|予定です|"
     r"を中止しました|を取消しました|を取り消しました|を実施しました|"
     r"を完了しました|しました|を行いました)[。]?")
@@ -33,17 +34,35 @@ _UNRESOLVED_PLAN = re.compile(
     rf"(?P<role>{_ROLE_PATTERN})(?:さん)?(?:が|は)[ \t　]*"
     rf"(?:(?P<date_first>{_UNRESOLVED_DATE_PATTERN})(?:に)?[ \t　]*{_TARGET_PATTERN}|"
     rf"{_TARGET_PATTERN}[ \t　]*(?P<date_last>{_UNRESOLVED_DATE_PATTERN})(?:に)?)[ \t　]*"
-    r"(?P<action>訪問|往診|診察|診療|看護|介護|リハビリ|服薬指導|薬剤確認|栄養指導|口腔ケア|相談|確認|検査|採血)"
+    rf"(?P<action>{_INTERVENTION_ACTION})"
     r"(?:する予定です|する予定|を予定しています|予定です)[。]?")
+# A terse source may name a possible schedule without naming its actor or
+# patient. Preserve only the written mention; never turn it into an assigned
+# intervention, a date, or a completion.
+_SCHEDULE_DATE = rf"(?:明日|今日|本日|来週[月火水木金土日]曜日?|{_DATE_PATTERN}|[0-9]{{1,2}}/[0-9]{{1,2}}|[0-9]{{1,2}}月[0-9]{{1,2}}日)"
+_SCHEDULE_ACTION = rf"(?:介護ベッド(?:を)?設置|訪問調査|訪問診療|サービス担当者会議|担当者会議|{_INTERVENTION_ACTION})"
+_SCHEDULE_CUE_END = (
+    r"(?:します|する予定です|する予定|を予定しています|を予定|の予定です|の予定|"
+    r"予定です|予定|ですか|です|しません|かもしれません|"
+    r"(?:する)?予定(?:は|を)(?:中止(?:しました|する|です)?|取消(?:しました|する|です)?|取り消(?:しました|す|し))|"
+    r"(?:は|を)(?:中止(?:しました|する|です)?|取消(?:しました|する|です)?|取り消(?:しました|す|し)))?"
+    r"(?=[ \t　。！？!?\n]|$)"
+)
+_SCHEDULE_CUE = re.compile(
+    rf"{_SCHEDULE_DATE}(?:に)?[ \t　]*(?P<action>{_SCHEDULE_ACTION}){_SCHEDULE_CUE_END}")
+_SCHEDULE_MENTION = re.compile(
+    rf"(?P<date>{_SCHEDULE_DATE})(?:に)?[ \t　]*(?P<action>{_SCHEDULE_ACTION})"
+    r"(?:します|する予定です|する予定|を予定しています|を予定|の予定です|の予定|予定です|予定|です)?[。]?")
+_NEUTRAL_CONTEXT = re.compile(r"(?:連絡します|共有します|ご確認ください|ありがとうございます|以上です)[。！？!?]?")
 _TARGET_CANCEL = re.compile(
     rf"(?P<role>{_ROLE_PATTERN})(?:さん)?(?:が|は)[ \t　]*"
     rf"(?P<target_date>{_DATE_PATTERN})(?P<date_particle>の|に)[ \t　]*{_TARGET_PATTERN}[ \t　]*"
-    r"(?P<action>訪問|往診|診察|診療|看護|介護|リハビリ|服薬指導|薬剤確認|栄養指導|口腔ケア|相談|確認|検査|採血)"
+    rf"(?P<action>{_INTERVENTION_ACTION})"
     r"(?P<link>を|する予定を)(?:中止し|取消し|取り消し)ました[。]?")
 _CATEGORIES = frozenset(("followup", "plan_goals", "care_services", "orders_documents", "care_team"))
 _SENTENCE = re.compile(r"[^\n。！？!?]+[。！？!?]?")
 _ROLE_MENTION = re.compile(_ROLE_PATTERN)
-_ACTION_MENTION = re.compile(r"訪問|往診|診察|診療|看護|介護|リハビリ|服薬指導|薬剤確認|栄養指導|口腔ケア|相談|確認|検査|採血")
+_ACTION_MENTION = re.compile(_INTERVENTION_ACTION)
 _MAX_BODY_CHARS = 20000
 _MAX_HTML_CHARS = 80000
 
@@ -61,6 +80,45 @@ def _has_independent_action(quote):
         if current is None or current[0] >= action.end():
             return True
     return False
+
+
+def _has_schedule_cue(quote):
+    """Find adjacent date/action mentions, excluding words inside professions."""
+    roles = [(match.start(), match.end()) for match in _ROLE_MENTION.finditer(quote)]
+    for match in _SCHEDULE_CUE.finditer(quote):
+        start, end = match.span('action')
+        if not any(left < end and start < right for left, right in roles):
+            return True
+    return False
+
+
+def _valid_schedule_mention(text):
+    match = _SCHEDULE_MENTION.fullmatch(text.strip())
+    if not match:
+        return None
+    date = match.group('date')
+    if date.startswith(('明日', '今日', '本日', '来週')) or written_day(date) is not None:
+        return match
+    return None
+
+
+def _safe_mention_spans(body):
+    """Index full dated sentences only when all adjacent sentences are safe."""
+    spans = set()
+    for match in _SENTENCE.finditer(body):
+        text = match.group()
+        if not text.strip():
+            continue
+        if _valid_schedule_mention(text):
+            spans.add(match.span())
+            left = len(text) - len(text.lstrip())
+            right = len(text.rstrip())
+            spans.add((match.start() + left, match.start() + right))
+            if right > left and text[right - 1] == '。':
+                spans.add((match.start() + left, match.start() + right - 1))
+        elif not _NEUTRAL_CONTEXT.fullmatch(text.strip()):
+            return set()
+    return spans
 
 
 def _posted_day(value):
@@ -96,6 +154,7 @@ def project(project_id, items, *, coverage=None):
     if type(project_id) is not int or project_id <= 0 or not isinstance(items, (list, tuple)):
         raise ValueError("invalid_intervention_input")
     records = []
+    safe_spans_by_body = {}
     counts = {"candidates": 0, "unbound": 0, "foreign": 0, "deleted": 0, "unknown": 0}
     for item in items:
         if not isinstance(item, dict) or item.get("category") not in _CATEGORIES:
@@ -131,10 +190,18 @@ def project(project_id, items, *, coverage=None):
                 target_cancel = None
             match = _RECORD.fullmatch(quote.strip())
             unresolved = _UNRESOLVED_PLAN.fullmatch(quote.strip())
+            mention = _valid_schedule_mention(quote)
             date_text = (match.group("date_first") or match.group("date_last")) if match else None
             day = written_day(date_text)
             posted = _posted_day(item.get("posted_at_ts"))
-            if (target_cancel and item.get("subject") == "patient" and item.get("unverified") is False
+            source_body = item['source_body']
+            if mention and source_body not in safe_spans_by_body:
+                safe_spans_by_body[source_body] = _safe_mention_spans(source_body)
+            if (mention and item.get("subject") in (None, "unknown", "unspecified")
+                    and span in safe_spans_by_body[source_body]):
+                record.update(action=mention.group("action"), date_text=mention.group("date"),
+                              state="schedule_mention_unconfirmed")
+            elif (target_cancel and item.get("subject") == "patient" and item.get("unverified") is False
                     and posted is not None):
                 date_text = target_cancel.group("target_date")
                 target_day = written_day(date_text)
@@ -165,8 +232,9 @@ def project(project_id, items, *, coverage=None):
                     role = unresolved.group("role")
                     record.update(role=_ROLES[role], role_text=role, action=unresolved.group("action"),
                                   date_text=date_text, state="planned_date_unknown")
-        if record["state"] == "unknown":
+        if record["state"] in ("unknown", "schedule_mention_unconfirmed"):
             counts["unknown"] += 1
+        if record["state"] == "unknown":
             # A fragment can omit a negation or subject in its context.
             record["quote"] = None
         records.append(record)
@@ -179,14 +247,15 @@ def project(project_id, items, *, coverage=None):
 def _source_items(project_id, mid, digest, body, posted, remaining, *, start_offset=0):
     """Build the same conservative sentence assertions for both readers."""
     sentences = [match for match in _SENTENCE.finditer(body) if match.group().strip()]
-    if start_offset and not any(match.end() == start_offset and _has_independent_action(match.group())
+    if start_offset and not any(match.end() == start_offset and
+                                (_has_independent_action(match.group()) or _has_schedule_cue(match.group()))
                                 for match in sentences):
         raise ValueError("invalid_intervention_cursor")
     items = []
     truncated = False
     for match in sentences:
         quote = match.group()
-        if match.start() < start_offset or not _has_independent_action(quote):
+        if match.start() < start_offset or not (_has_independent_action(quote) or _has_schedule_cue(quote)):
             continue
         if len(items) >= remaining:
             truncated = True

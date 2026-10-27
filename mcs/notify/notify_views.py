@@ -1005,10 +1005,11 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
                                  and record.get("date_basis") == "cancelled_intervention"
                                  and isinstance(record.get("role"), str)
                                  and isinstance(record.get("target_day"), str)}
-            groups = {"future": [], "date_unknown": [], "other": [], "unknown": []}
+            groups = {"future": [], "date_unknown": [], "schedule_mention": [], "other": [], "unknown": []}
             for record in records:
                 day = record.get("event_day")
-                key = ("date_unknown" if record["state"] == "planned_date_unknown" else
+                key = ("schedule_mention" if record["state"] == "schedule_mention_unconfirmed" else
+                       "date_unknown" if record["state"] == "planned_date_unknown" else
                        "unknown" if record["state"] == "unknown" or today is None else
                        "future" if record["state"] == "planned" and day and day >= today else "other")
                 row = {**record, "posted_at_ts": times.get(record.get("message_id"))}
@@ -1028,6 +1029,7 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
                              else "介入予定の記載: 日付順") + "（同日は職種順、同じ職種は投稿番号の降順）")
             add(groups["future"], "今後の介入予定の記載（変更未照合）")
             add(groups["date_unknown"], "介入予定の記載（日付未確認・変更未照合）")
+            add(groups["schedule_mention"], "予定に関する記載（対象・日付・担当未確認、変更未照合）")
             add(groups["other"], "介入に関する記載（変更未照合）")
             add(groups["unknown"], "介入に関する記載（内容未確認）")
             coverage = schedule["coverage"]
