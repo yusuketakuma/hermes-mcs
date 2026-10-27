@@ -270,6 +270,200 @@ def test_own_pending_started_and_completed_transitions_are_accepted(prepared):
     assert _final(ledger, row, {"summary": value["summary"]}) == "written"
 
 
+def test_identical_owned_pending_checkpoint_reuses_only_latest_record(prepared):
+    ledger, row, _ = prepared
+    common = {"lease": row["_current_lease"], "guard": row["_checkpoint_guard"],
+              "chunk_size": row["_chunk_size"], "splits": row["_splits"]}
+    pending = {"summary": "合成A", "_quality_status": "pending"}
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    before = [tuple(item) for item in ledger.db.execute(
+        "SELECT artifact_id,content,meta FROM artifacts WHERE kind='extract_llm_chunk' ORDER BY artifact_id")]
+    identity = row["_checkpoint_identity"][0]
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    after = [tuple(item) for item in ledger.db.execute(
+        "SELECT artifact_id,content,meta FROM artifacts WHERE kind='extract_llm_chunk' ORDER BY artifact_id")]
+    assert after == before and row["_checkpoint_identity"][0] == identity
+    _, saved = llm._saved_chunk_state(ledger.db, row, chunk_size=row["_chunk_size"])
+    assert saved[0]["summary"] == "合成A" and saved[0]["_quality_status"] == "pending"
+
+
+def test_pending_release_after_started_is_recorded_then_identical_pending_is_reused(prepared):
+    ledger, row, _ = prepared
+    common = {"lease": row["_current_lease"], "guard": row["_checkpoint_guard"],
+              "chunk_size": row["_chunk_size"], "splits": row["_splits"]}
+    pending = {"summary": "合成A", "_quality_status": "pending"}
+    started = {"summary": "合成A", "_quality_status": "started"}
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    assert llm._persist_chunks(ledger, row, {0: started}, **common)
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    before = [r[0] for r in ledger.db.execute("SELECT json_extract(meta,'$.quality_status') FROM artifacts "
+                                              "WHERE kind='extract_llm_chunk' ORDER BY artifact_id")]
+    assert before[-3:] == ["pending", "started", "pending"]
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == len(before)
+
+
+def test_intervening_invalid_row_prevents_pending_reuse(prepared):
+    ledger, row, _ = prepared
+    common = {"lease": row["_current_lease"], "guard": row["_checkpoint_guard"],
+              "chunk_size": row["_chunk_size"], "splits": row["_splits"]}
+    pending = {"summary": "合成A", "_quality_status": "pending"}
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    previous = ledger.db.execute("SELECT content,model,meta FROM artifacts WHERE kind='extract_llm_chunk' "
+                                 "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    invalid_meta = {**json.loads(previous["meta"]), "invalidated": True}
+    ledger.artifact_add("extract_llm_chunk", previous["content"], project_id=1, message_id=1,
+                        model=previous["model"], meta=invalid_meta)
+    before = ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0]
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == before + 1
+
+
+def test_intervening_other_chunk_prevents_pending_reuse(prepared):
+    ledger, row, _ = prepared
+    common = {"lease": row["_current_lease"], "guard": row["_checkpoint_guard"],
+              "chunk_size": row["_chunk_size"], "splits": row["_splits"]}
+    pending = {"summary": "合成A", "_quality_status": "pending"}
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    previous = ledger.db.execute("SELECT content,model,meta FROM artifacts WHERE kind='extract_llm_chunk' "
+                                 "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    meta = json.loads(previous["meta"])
+    meta["chunk"] = 1
+    ledger.artifact_add("extract_llm_chunk", previous["content"],
+                        project_id=1,
+                        message_id=1, model=previous["model"], meta=meta)
+    before = ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0]
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == before + 1
+
+
+def test_foreign_project_artifact_is_rejected_and_owned_pending_is_reused(prepared):
+    ledger, row, _ = prepared
+    common = {"lease": row["_current_lease"], "guard": row["_checkpoint_guard"],
+              "chunk_size": row["_chunk_size"], "splits": row["_splits"]}
+    pending = {"summary": "合成A", "_quality_status": "pending"}
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    previous = ledger.db.execute("SELECT content,model,meta FROM artifacts WHERE kind='extract_llm_chunk' "
+                                 "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    ledger.ensure_patient(2)
+    before = [tuple(item) for item in ledger.db.execute(
+        "SELECT artifact_id,project_id,content,meta FROM artifacts WHERE kind='extract_llm_chunk' ORDER BY artifact_id")]
+    with pytest.raises(sqlite3.IntegrityError, match="g1: artifacts message relation"):
+        ledger.artifact_add("extract_llm_chunk", previous["content"], project_id=2, message_id=1,
+                            model=previous["model"], meta=json.loads(previous["meta"]))
+    ledger.db.rollback()
+    assert [tuple(item) for item in ledger.db.execute(
+        "SELECT artifact_id,project_id,content,meta FROM artifacts WHERE kind='extract_llm_chunk' ORDER BY artifact_id")] == before
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    assert [tuple(item) for item in ledger.db.execute(
+        "SELECT artifact_id,project_id,content,meta FROM artifacts WHERE kind='extract_llm_chunk' ORDER BY artifact_id")] == before
+
+
+def test_pending_reuse_rejects_expired_lease(prepared, monkeypatch):
+    ledger, row, _ = prepared
+    common = {"lease": row["_current_lease"], "guard": row["_checkpoint_guard"],
+              "chunk_size": row["_chunk_size"], "splits": row["_splits"]}
+    pending = {"summary": "合成A", "_quality_status": "pending"}
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    before = ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0]
+    monkeypatch.setattr(llm.time, "time", lambda: row["_current_lease"] + 1)
+    assert not llm._persist_chunks(ledger, row, {0: pending}, **common)
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == before
+
+
+def test_pending_reuse_still_rerenders_after_the_owned_transaction(prepared, monkeypatch):
+    ledger, row, _ = prepared
+    common = {"lease": row["_current_lease"], "guard": row["_checkpoint_guard"],
+              "chunk_size": row["_chunk_size"], "splits": row["_splits"]}
+    pending = {"summary": "合成A", "_quality_status": "pending"}
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    before = ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0]
+    renders = []
+    monkeypatch.setattr(llm, "_rerender_cards", lambda *_args: renders.append(ledger.db.in_transaction))
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == before
+    assert renders == [False]
+
+
+def test_pending_reuse_select_failure_is_not_suppressed(prepared, monkeypatch):
+    ledger, row, _ = prepared
+    common = {"lease": row["_current_lease"], "guard": row["_checkpoint_guard"],
+              "chunk_size": row["_chunk_size"], "splits": row["_splits"]}
+    pending = {"summary": "合成A", "_quality_status": "pending"}
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    before = ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0]
+    monkeypatch.setattr(llm, "_source_writable", lambda *_args: True)
+    monkeypatch.setattr(llm, "_owns_current_source", lambda *_args: True)
+    monkeypatch.setattr(llm, "_checkpoint_matches", lambda *_args: True)
+    ledger.db.set_authorizer(lambda action, table, *_args: sqlite3.SQLITE_DENY
+                             if action == sqlite3.SQLITE_READ and table == "artifacts" else sqlite3.SQLITE_OK)
+    try:
+        with pytest.raises(sqlite3.DatabaseError):
+            llm._persist_chunks(ledger, row, {0: pending}, **common)
+        assert not ledger.db.in_transaction
+    finally:
+        ledger.db.set_authorizer(None)
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == before
+
+
+def test_identical_pending_is_not_reused_after_claim_owner_changes(prepared):
+    ledger, row, _ = prepared
+    common = {"lease": row["_current_lease"], "guard": row["_checkpoint_guard"],
+              "chunk_size": row["_chunk_size"], "splits": row["_splits"]}
+    pending = {"summary": "合成A", "_quality_status": "pending"}
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    before = ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0]
+    raw = ledger.db.execute("SELECT payload FROM fetch_jobs WHERE kind='extract_claim'").fetchone()[0]
+    payload = {**json.loads(raw), "owner_token": "synthetic-other-owner"}
+    ledger.db.execute("UPDATE fetch_jobs SET payload=? WHERE kind='extract_claim'", (json.dumps(payload),))
+    ledger.db.commit()
+    assert not llm._persist_chunks(ledger, row, {0: pending}, **common)
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == before
+
+
+def test_identical_pending_is_not_reused_after_source_revision_aba(prepared):
+    ledger, row, _ = prepared
+    common = {"lease": row["_current_lease"], "guard": row["_checkpoint_guard"],
+              "chunk_size": row["_chunk_size"], "splits": row["_splits"]}
+    pending = {"summary": "合成A", "_quality_status": "pending"}
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    ledger.save_messages([_message(body="一時的な別の合成記録")])
+    ledger.save_messages([_message(body=row["body_text"])])
+    before = ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0]
+    assert not llm._persist_chunks(ledger, row, {0: pending}, **common)
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == before
+
+
+def test_started_checkpoint_is_not_reused_as_an_idempotent_pending(prepared):
+    ledger, row, _ = prepared
+    common = {"lease": row["_current_lease"], "guard": row["_checkpoint_guard"],
+              "chunk_size": row["_chunk_size"], "splits": row["_splits"]}
+    started = {"summary": "合成A", "_quality_status": "started"}
+    assert llm._persist_chunks(ledger, row, {0: started}, **common)
+    before = ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0]
+    assert llm._persist_chunks(ledger, row, {0: started}, **common)
+    assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == before + 1
+
+
+def test_changed_pending_insert_error_propagates_without_replacing_checkpoint(prepared, monkeypatch):
+    ledger, row, _ = prepared
+    common = {"lease": row["_current_lease"], "guard": row["_checkpoint_guard"],
+              "chunk_size": row["_chunk_size"], "splits": row["_splits"]}
+    pending = {"summary": "合成A", "_quality_status": "pending"}
+    assert llm._persist_chunks(ledger, row, {0: pending}, **common)
+    before = [tuple(item) for item in ledger.db.execute(
+        "SELECT artifact_id,content,meta FROM artifacts WHERE kind='extract_llm_chunk' ORDER BY artifact_id")]
+    error = sqlite3.OperationalError("synthetic insert failure")
+    def fail(*_args, **_kwargs):
+        raise error
+    monkeypatch.setattr(ledger, "artifact_add_tx", fail)
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        llm._persist_chunks(ledger, row, {0: {**pending, "summary": "合成B"}}, **common)
+    assert caught.value is error and not ledger.db.in_transaction
+    assert [tuple(item) for item in ledger.db.execute(
+        "SELECT artifact_id,content,meta FROM artifacts WHERE kind='extract_llm_chunk' ORDER BY artifact_id")] == before
+
+
 def test_unrelated_new_key_is_preserved(prepared):
     ledger, row, value = prepared
     # The body is shorter than the normal root size, so use a synthetically

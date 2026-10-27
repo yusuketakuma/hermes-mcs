@@ -2803,8 +2803,10 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                             quality_remaining=quality["remaining_hint_candidates"])
                 value = {key: item for key, item in value.items() if key != "_quality_result"}
             content = json.dumps(value, ensure_ascii=False)
-            if (split_size is None and quality_status is None
-                    and meta.get("quality_status") == "hint_gaps_resolved"):
+            if (split_size is None and (
+                    quality_status is None and meta.get("quality_status") == "hint_gaps_resolved"
+                    or quality_status == "pending" and meta.get("quality_status") == "pending"
+                    and lease is not None and guarded)):
                 # Only the newest row for this message can prove that the
                 # reader will see the same checkpoint. Do not look past a
                 # later row, including an invalid or differently scoped one.
