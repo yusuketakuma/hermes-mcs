@@ -548,6 +548,8 @@ _PATIENT_SUMMARY_OMISSION_OPTIONS = {
     "important_missing": "the omitted fact is important to current state, change, background, plans or unresolved issues",
     "ambiguous": "the importance of this omission cannot be decided from the supplied source and overview",
 }
+_PATIENT_SOURCE_CONTEXT_FIELDS = ("project_id", "message_id", "source", "content_hash",
+    "body_state", "posted_at", "posted_at_ts", "sender_id", "sender_name", "parent_id")
 
 
 def _patient_quality_sources(sources):
@@ -608,7 +610,86 @@ def _patient_quality_facts(candidates, indexed):
     return checked
 
 
-def patient_source_quality_pages(source, facts):
+def patient_source_question_keys(body, *, source_input_key, assessment):
+    """Bind requested source questions independently of candidate grouping and aliases."""
+    from mcs_util import canonical, payload_hash, valid_hash
+
+    if (not valid_hash(source_input_key) or not isinstance(assessment, dict)
+            or set(assessment) != {"code", "policy"}
+            or any(not valid_hash(value) for value in assessment.values())):
+        raise ValueError("patient_source_question_invalid")
+    try:
+        if not isinstance(body, dict) or body.get("model") != jev.JEV_MODEL:
+            raise ValueError
+        state, questions = body["state"], body["questions"]
+        contexts, target = state["context"], state["target"]
+        if (not isinstance(contexts, list) or len(contexts) != 1
+                or not isinstance(contexts[0], dict) or contexts[0].get("id") != "s0"
+                or contexts[0].get("role") != "original_source"
+                or not isinstance(questions, dict) or not 1 <= len(questions) <= 12
+                or any(qid not in {f"q{i}" for i in range(12)} for qid in questions)):
+            raise ValueError
+        source_context = contexts[0]
+        if set(source_context) != {"id", "role", "text", "source_key", "body_hash", *_PATIENT_SOURCE_CONTEXT_FIELDS}:
+            raise ValueError
+        source = {**source_context, "body_text": source_context["text"]}
+        if source.get("body_hash") != payload_hash(source["body_text"]):
+            raise ValueError
+        sources = _patient_quality_sources([source])
+        targets = target["facts"]
+        if not isinstance(targets, list) or not 1 <= len(targets) <= 12:
+            raise ValueError
+        indexed = {}
+        for entry in targets:
+            qid, fact = entry["id"], entry["fact"]
+            if qid not in {f"q{i}" for i in range(12)} or qid in indexed or not valid_hash(fact.get("id")):
+                raise ValueError
+            indexed[qid] = fact
+        if not set(questions) <= set(indexed):
+            raise ValueError
+        kind = target["id"]
+        if kind == "source_facts":
+            _patient_quality_facts(list(indexed.values()), sources)
+            passing = "supports"
+        elif kind == "source_coverage":
+            if len(indexed) != 1 or not isinstance(target.get("candidate_facts"), list):
+                raise ValueError
+            _patient_quality_facts(target["candidate_facts"], sources)
+            all_meaning = sorted(({key: value for key, value in item.items()
+                                   if key not in ("found_at", "found_night_id", "discovery")}
+                                  for item in target["candidate_facts"]), key=lambda item: item["id"])
+            source_ref = {key: value for key, value in source_context.items() if key not in ("id", "role", "text")}
+            [coverage] = indexed.values()
+            if coverage != {"id": payload_hash(["patient_source_coverage", source_ref, all_meaning]),
+                            "kind": "source_coverage"}:
+                raise ValueError
+            passing = "complete"
+        else:
+            raise ValueError
+        canonical(body)
+        output = {}
+        for qid, question in questions.items():
+            if (not isinstance(question, dict) or question.get("type") != "choice"
+                    or not isinstance(question.get("instructions"), str) or not question["instructions"].strip()
+                    or not isinstance(question.get("criteria"), dict) or passing not in question["criteria"]
+                    or any(not isinstance(option, str) or not isinstance(text, str)
+                           for option, text in question["criteria"].items())):
+                raise ValueError
+            fact = indexed[qid]
+            candidates = target["candidate_facts"] if kind == "source_coverage" else [fact]
+            meaning = sorted(({key: value for key, value in item.items()
+                               if key not in ("found_at", "found_night_id", "discovery")}
+                              for item in candidates), key=lambda item: item["id"])
+            output[fact["id"]] = payload_hash(["patient-source-question/v1", source_input_key,
+                source_context, kind, meaning, question, passing, assessment, body["model"]])
+        if len(output) != len(questions):
+            raise ValueError
+        return output
+    except (KeyError, TypeError, ValueError, UnicodeError, RecursionError, OverflowError):
+        raise ValueError("patient_source_question_invalid") from None
+
+
+def patient_source_quality_pages(source, facts, *, source_input_key, assessment):
     """Plan all context-fact support pages and one whole-source coverage question."""
     from copy import deepcopy
     from mcs_util import canonical, payload_hash
@@ -623,8 +704,7 @@ def patient_source_quality_pages(source, facts):
     candidates = sorted((deepcopy({k: v for k, v in fact.items()
                                   if k not in ("found_at", "found_night_id", "discovery")})
                          for fact, _ in checked), key=lambda fact: fact["id"])
-    source_ref = {k: source.get(k) for k in ("project_id", "message_id", "source", "content_hash",
-                  "body_state", "posted_at", "posted_at_ts", "sender_id", "sender_name", "parent_id")}
+    source_ref = {k: source.get(k) for k in _PATIENT_SOURCE_CONTEXT_FIELDS}
     source_ref["source_key"] = source.get("source_key", source["message_id"])
     source_ref["body_hash"] = payload_hash(source["body_text"])
     context = [{"id": "s0", "role": "original_source", "text": source["body_text"], **source_ref}]
@@ -636,15 +716,19 @@ def patient_source_quality_pages(source, facts):
             qid = f"q{index}"
             targets.append({"id": qid, "source_id": "s0", "fact": fact})
             questions[qid] = jev.choice_question(
-                f"Judge target.facts entry {qid} against only context source s0. "
+                f"Judge the context assertion with stable fact ID {fact['id']} against only context source s0. "
                 "Does its exact evidence occurrence support the entire context assertion, category and details, "
                 "including subject, negation, uncertainty, conditions, past/current/planned time and relations? "
                 "Unknown or unspecified attributes must stay unknown; other sources are not evidence.",
                 FACT_SUPPORT_OPTIONS)
         ids = [fact["id"] for fact in chunk]
-        yield {"purpose": "source", "state": {"target": {"id": "source_facts", "facts": targets},
+        page = {"purpose": "source", "state": {"target": {"id": "source_facts", "facts": targets},
                 "context": context}, "questions": questions, "fact_ids": ids,
                 "passing_choices": dict.fromkeys(ids, "supports")}
+        page["question_keys"] = patient_source_question_keys(
+            {"model": jev.JEV_MODEL, "state": page["state"], "questions": questions},
+            source_input_key=source_input_key, assessment=assessment)
+        yield page
     coverage_id = payload_hash(["patient_source_coverage", source_ref, candidates])
     question = jev.choice_question(
         "Do all candidate context facts in state.target.candidate_facts cover every important patient-context "
@@ -653,10 +737,14 @@ def patient_source_quality_pages(source, facts):
         "other people, uncertainty, past/current/planned time and changed states. Choose complete only when "
         "no important context assertion is missing; zero candidates do not prove absence. This is context "
         "extraction coverage, not canonical clinical-fact coverage or publication approval.", COVERAGE_OPTIONS)
-    yield {"purpose": "source", "state": {"target": {"id": "source_coverage",
+    page = {"purpose": "source", "state": {"target": {"id": "source_coverage",
             "facts": [{"id": "q0", "fact": {"id": coverage_id, "kind": "source_coverage"}}],
             "candidate_facts": candidates}, "context": context}, "questions": {"q0": question},
             "fact_ids": [coverage_id], "passing_choices": {coverage_id: "complete"}}
+    page["question_keys"] = patient_source_question_keys(
+        {"model": jev.JEV_MODEL, "state": page["state"], "questions": page["questions"]},
+        source_input_key=source_input_key, assessment=assessment)
+    yield page
 
 
 def audit_patient_quality_page(jev_client, page, deadline, threshold, *,

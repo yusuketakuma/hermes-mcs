@@ -448,6 +448,11 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
             scan.update(complete=False, audited=False, cursor=0)
             if any(span is None for span in ranges.get(key, [])):
                 scan.update(held=True, failure="nightly_chunk_proof_invalid")
+        if scan.get("quality_state") in ("held", "failed"):
+            scan["_quality_held"] = (cfg is None or scan.get("quality_hold_key") ==
+                _source_quality_hold_key(db, pid, cfg, by_key[key], scan["_chunks_sig"]))
+            if not scan["_quality_held"]:
+                scan["quality_state"] = None
         if (check_quality and contract.get("provider") and scan.get("audited")
                 and (cfg is None or not _source_quality_verified(db, pid, by_key[key], contract, cfg, scan,
                     scan_proof=(db, pid, _source_sig(by_key[key]), contract, changes, scan, hydrate_ids.get(key, []))))):
@@ -949,22 +954,30 @@ def _source_quality_capture(db, pid, cfg, source_key, assessment, *, contract=No
                     raise ValueError("patient_source_quality_fact")
                 facts_by_id.setdefault(fid, fact)
     facts = list(facts_by_id.values())
-    pages = list(semantic_audit.patient_source_quality_pages(source, facts))
+    binding = dependency_loss.source_binding(db, pid, source["message_id"],
+        **({"source_key": source_key} if source["source"] == "karte_summary" else {}))
+    if not isinstance(binding, str) or not valid_hash(binding):
+        raise ValueError("patient_source_quality_source")
+    # Derived extraction output must not renew an unchanged question's rights.
+    source_input_key = _digest(["patient-source-input/1", pid,
+        {key: scope.get(key) for key in ("project_id", "project_type", "karte_id", "is_archived")},
+        source_key, binding, source.get("first_seen"), source.get("content_hash"),
+        hashlib.sha256(body.encode("utf-8")).hexdigest(), contract])
+    pages = list(semantic_audit.patient_source_quality_pages(source, facts,
+        source_input_key=source_input_key, assessment=assessment))
     ids = [fid for page in pages for fid in page["fact_ids"]]
     passing = {fid: choice for page in pages for fid, choice in page["passing_choices"].items()}
-    if not ids or len(ids) != len(set(ids)) or set(ids) != set(passing):
+    question_keys = {fid: key for page in pages for fid, key in page["question_keys"].items()}
+    if not ids or len(ids) != len(set(ids)) or set(ids) != set(passing) or set(ids) != set(question_keys):
         raise ValueError("patient_source_quality_questions")
-    input_key = _digest(["source", pid, {key: scope.get(key) for key in
-                         ("project_id", "project_type", "karte_id", "is_archived", "fetch_reason")},
-                         source_key, _source_sig(source), revision,
-                         hashlib.sha256(body.encode("utf-8")).hexdigest(), contract])
+    input_key = _digest(["source", source_input_key])
     candidate_key = _digest(sorted(_facts_sig([fact]) for fact in facts))
     audit_material = [[page["fact_ids"], page["state"], page["questions"], page["passing_choices"]] for page in pages]
     failure_key = _digest(["source", input_key, candidate_key, assessment])
     identity = {"purpose": "source", "input_key": input_key, "candidate_key": candidate_key,
                 "failure_key": failure_key, "audit_key": _digest([failure_key, scan["_chunks_sig"], audit_material]),
                 "fact_ids": ids, "passing_choices": passing, "source_fact_count": len(facts),
-                "assessment": assessment}
+                "assessment": assessment, "source_input_key": source_input_key, "question_keys": question_keys}
     return {"identity": identity, "sources": sources, "facts": facts, "pages": pages,
             "chunks_sig": scan["_chunks_sig"]}
 
@@ -990,7 +1003,7 @@ def _source_quality_verified(db, pid, source, contract, cfg, scan, *, scan_proof
                 return False
             for start in range(0, len(identity["fact_ids"]), 12):
                 ids = identity["fact_ids"][start:start + 12]
-                answers = _quality_answers(db, pid, identity["audit_key"], ids, purpose="source")
+                answers = _quality_answers(db, pid, identity["audit_key"], ids, purpose="source", identity=identity)
                 if set(answers) != set(ids) or any(answers[fid]["confidence"] < policy["match_threshold"]
                         or answers[fid]["choice"] != identity["passing_choices"][fid] for fid in ids):
                     return False
@@ -1012,6 +1025,14 @@ def _quality_assessment(scfg):
     """Bind interpretation code and policy without spending or publication toggles."""
     import semantic_policy
     return {"code": _quality_code(), "policy": semantic_policy.policy_fingerprint(scfg)}
+
+
+def _source_quality_hold_key(db, pid, cfg, source, chunks_sig):
+    binding = dependency_loss.source_binding(db, pid, source["message_id"],
+        **({"source_key": _source_key(source)} if source["source"] == "karte_summary" else {}))
+    scope = _scope(db, pid)
+    return _digest([cfg, _quality_code(), scope, binding, source.get("first_seen"),
+                    _source_sig(source), chunks_sig])
 
 
 def _quality_claim(ledger, pid, input_key, deadline, current):
@@ -1100,7 +1121,16 @@ def _quality_release(ledger, pid, input_key, claim):
         os.close(fd)
 
 
-def _quality_answers(db, pid, audit_key, fact_ids, *, purpose="summary"):
+def _quality_answers(db, pid, audit_key, fact_ids, *, purpose="summary", identity=None):
+    if purpose == "source":
+        import semantic_runtime
+        if identity is None or identity.get("audit_key") != audit_key:
+            raise ValueError("patient_source_quality_identity_invalid")
+        return semantic_runtime.patient_source_question_evidence(db, pid, identity, fact_ids)["answers"]
+    return _stored_quality_answers(db, pid, audit_key, fact_ids, purpose=purpose)
+
+
+def _stored_quality_answers(db, pid, audit_key, fact_ids, *, purpose="summary"):
     """Read at most one immutable judgement for each requested fact."""
     if len(fact_ids) > 12 or len(set(fact_ids)) != len(fact_ids):
         raise ValueError("patient_summary_quality_answers_invalid")
@@ -1168,7 +1198,17 @@ def _quality_store_answers(ledger, pid, identity, claim, answers, current, thres
             if not _quality_owns(ledger.db, pid, identity["input_key"], claim) or not current():
                 raise ValueError("patient_summary_quality_source_changed")
             purpose = identity.get("purpose", "summary")
-            old = _quality_answers(ledger.db, pid, identity["audit_key"], list(answers), purpose=purpose)
+            reused = purpose == "source" and reservation is None
+            old = (_quality_answers(ledger.db, pid, identity["audit_key"], list(answers),
+                                    purpose=purpose, identity=identity) if reused else
+                   _stored_quality_answers(ledger.db, pid, identity["audit_key"], list(answers), purpose=purpose))
+            if reused and old != answers:
+                raise ValueError("patient_source_quality_receipt_missing")
+            bindings = {}
+            if purpose == "source" and reservation is not None:
+                import semantic_runtime
+                bindings = semantic_runtime.patient_source_answer_binding(
+                    ledger.db, pid, identity, reservation, list(answers))
             writes = 0
             for fact_id, answer in answers.items():
                 if fact_id in old:
@@ -1177,9 +1217,11 @@ def _quality_store_answers(ledger, pid, identity, claim, answers, current, thres
                     continue
                 ledger.artifact_add_tx(_quality_kind(QUALITY, identity), json.dumps(answer, separators=(",", ":")), project_id=pid,
                     meta={VERSION_KEY: CURRENT_VERSION, "input_key": identity["input_key"],
-                          "audit_key": identity["audit_key"], "fact_id": fact_id})
+                          "audit_key": identity["audit_key"], "fact_id": fact_id,
+                          **bindings.get(fact_id, {})})
                 writes += 1
-            if _quality_answers(ledger.db, pid, identity["audit_key"], list(answers), purpose=purpose) != answers:
+            if not reused and _stored_quality_answers(ledger.db, pid, identity["audit_key"],
+                                                      list(answers), purpose=purpose) != answers:
                 raise ValueError("patient_summary_quality_answers_unverified")
             if (any(answer["choice"] != _quality_expected(identity, fid, selected_ids)
                     or answer["confidence"] < threshold for fid, answer in answers.items())
@@ -1195,6 +1237,9 @@ def _quality_store_answers(ledger, pid, identity, claim, answers, current, thres
                 import semantic_runtime
                 writes += semantic_runtime.patient_summary_resolve_request_tx(
                     ledger, reservation, identity, answers, invalid_ids, project_id=pid, purpose=purpose)
+            if purpose == "source" and _quality_answers(ledger.db, pid, identity["audit_key"],
+                    list(answers), purpose=purpose, identity=identity) != answers:
+                raise ValueError("patient_source_quality_receipt_missing")
             if not _quality_owns(ledger.db, pid, identity["input_key"], claim) or not current(writes):
                 raise ValueError("patient_summary_quality_source_changed")
             ledger.db.commit()
@@ -1206,17 +1251,31 @@ def _quality_store_answers(ledger, pid, identity, claim, answers, current, thres
         os.close(fd)
 
 
-def _quality_passed(db, pid, identity):
+def _quality_pass_content(db, pid, identity):
+    if identity.get("purpose", "summary") != "source":
+        return {"fact_count": len(identity["fact_ids"]), "zero_questions": not identity["fact_ids"]}
+    import semantic_runtime
+    references = hashlib.sha256()
+    for start in range(0, len(identity["fact_ids"]), 12):
+        ids = identity["fact_ids"][start:start + 12]
+        evidence = semantic_runtime.patient_source_question_evidence(db, pid, identity, ids)
+        if evidence["problems"] or set(evidence["answers"]) != set(ids) or set(evidence["references"]) != set(ids):
+            return None
+        for fid in ids:
+            references.update(bytes.fromhex(_digest([fid, evidence["references"][fid]])))
+    return {"question_count": len(identity["fact_ids"]), "source_fact_count": identity["source_fact_count"],
+            "answer_refs_sig": references.hexdigest()}
+
+
+def _quality_passed(db, pid, identity, *, expected=None):
     rows = db.execute("SELECT content FROM artifacts WHERE kind=? AND project_id=? AND "
                       + current_meta_pred("meta", target=CURRENT_VERSION)
                       + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.audit_key') END=?",
                       (_quality_kind(QUALITY_PASS, identity), pid, identity["audit_key"])).fetchall()
     if len(rows) != 1:
         return False
-    expected = ({"question_count": len(identity["fact_ids"]), "source_fact_count": identity["source_fact_count"]}
-                if identity.get("purpose", "summary") == "source" else
-                {"fact_count": len(identity["fact_ids"]), "zero_questions": not identity["fact_ids"]})
-    return loads_dict(rows[0][0]) == expected
+    expected = _quality_pass_content(db, pid, identity) if expected is None else expected
+    return expected is not None and loads_dict(rows[0][0]) == expected
 
 
 def _quality_pass_present(db, pid, identity):
@@ -1244,12 +1303,15 @@ def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, thre
             raise ValueError("patient_summary_quality_unresolved_request")
         for start in range(0, len(identity["fact_ids"]), 12):
             ids = identity["fact_ids"][start:start + 12]
-            answers = _quality_answers(ledger.db, pid, identity["audit_key"], ids, purpose=purpose)
+            answers = _quality_answers(ledger.db, pid, identity["audit_key"], ids, purpose=purpose, identity=identity)
             if set(answers) != set(ids) or any(
                     answers[fid]["confidence"] < threshold
                     or answers[fid]["choice"] != _quality_expected(identity, fid, selected_ids)
                     for fid in ids):
                 raise ValueError("patient_summary_quality_incomplete")
+        pass_content = _quality_pass_content(ledger.db, pid, identity)
+        if pass_content is None:
+            raise ValueError("patient_source_quality_receipt_missing")
     finally:
         ledger.db.rollback()
     if ledger.db.execute("PRAGMA data_version").fetchone()[0] != version or ledger.db.total_changes != changes:
@@ -1261,19 +1323,18 @@ def _quality_mark_pass(ledger, pid, identity, claim, selected_ids, current, thre
         ledger.db.execute("BEGIN IMMEDIATE")
         try:
             if (not _quality_owns(ledger.db, pid, identity["input_key"], claim) or not current()
-                    or _quality_failed(ledger.db, pid, identity)):
+                    or _quality_failed(ledger.db, pid, identity)
+                    or ledger.db.execute("PRAGMA data_version").fetchone()[0] != version
+                    or ledger.db.total_changes != changes):
                 raise ValueError("patient_summary_quality_source_changed")
             writes = 0
-            if not _quality_passed(ledger.db, pid, identity):
-                pass_content = ({"question_count": len(identity["fact_ids"]), "source_fact_count": identity["source_fact_count"]}
-                                if purpose == "source" else {"fact_count": len(identity["fact_ids"]),
-                                                              "zero_questions": not identity["fact_ids"]})
+            if not _quality_passed(ledger.db, pid, identity, expected=pass_content):
                 ledger.artifact_add_tx(_quality_kind(QUALITY_PASS, identity),
                     json.dumps(pass_content, separators=(",", ":")),
                     project_id=pid, meta={VERSION_KEY: CURRENT_VERSION, **{key: identity[key] for key in
                         ("input_key", "candidate_key", "audit_key")}})
                 writes = 1
-            if not _quality_passed(ledger.db, pid, identity) or not current(writes):
+            if not _quality_passed(ledger.db, pid, identity, expected=pass_content) or not current(writes):
                 raise ValueError("patient_summary_quality_source_changed")
             ledger.db.commit()
             return True
@@ -1674,6 +1735,11 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
         selected = set() if source is not None else {row["fact_ids"][0] for row in summary}
         if _quality_pass_present(ledger.db, pid, identity):
             # A PASS marker cannot survive missing or altered answer evidence.
+            if purpose == "source":
+                problem = semantic_runtime.patient_summary_request_problem(
+                    ledger.db, pid, identity, identity["fact_ids"], purpose=purpose)
+                if problem:
+                    return ("held" if problem == "patient_summary_invalid_exhausted" else "unknown"), identity
             _quality_mark_pass(ledger, pid, identity, claim, selected, current, scfg["match_threshold"])
             return "passed", {**identity, "_keys": (key, anthropic_key)}
         reserve = semantic_runtime.patient_summary_usage_reserver(
@@ -1707,7 +1773,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
         for page_index, page in enumerate(pages):
             ids = page["fact_ids"] if page is not None else identity["fact_ids"][page_index * 12:page_index * 12 + 12]
             page_key = _digest(ids)
-            prior = _quality_answers(ledger.db, pid, identity["audit_key"], ids, purpose=purpose)
+            prior = _quality_answers(ledger.db, pid, identity["audit_key"], ids, purpose=purpose, identity=identity)
             if any(answer["choice"] != _quality_expected(identity, fid, selected)
                    or answer["confidence"] < scfg["match_threshold"] for fid, answer in prior.items()):
                 _quality_store_answers(ledger, pid, identity, claim, prior, current,
@@ -1762,7 +1828,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
 
 
 def _ready(progress, now):
-    if progress.get("held"):
+    if progress.get("held") or progress.get("_quality_held"):
         return False
     return now is None or ((progress.get("attempts", 0) < 5 or progress.get("checks") != _CHECKS)
                            and progress.get("next_try", 0) <= now)
@@ -2371,6 +2437,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                             source_quality_identity = quality_result
                             result["source_quality_audit_key"] = source_quality_identity["audit_key"]
                             result.pop("quality_state", None)
+                            result.pop("quality_hold_key", None)
                     break
     except Deferred as exc:
         discard_if_changed()
@@ -2386,11 +2453,15 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     # Rebuild the source signature outside the write lock. A data-version
     # fence seals the read against any concurrent writer before publication.
     quality_fence = None
+    source_pass_content = None
     if source_quality_identity is not None:
         before = (ledger.db.execute("PRAGMA data_version").fetchone()[0], ledger.db.total_changes)
         ledger.db.execute("BEGIN")
         try:
             if not _source_quality_verified(ledger.db, pid, source, snapshot["contract"], cfg, result):
+                return {"status": "source_changed", "done": 0}
+            source_pass_content = _quality_pass_content(ledger.db, pid, source_quality_identity)
+            if source_pass_content is None:
                 return {"status": "source_changed", "done": 0}
         finally:
             ledger.db.rollback()
@@ -2462,7 +2533,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 if (problems or not _quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
                         or source_quality_keys != (semantic_jev.api_key(), extract_llm.cloud_policy.api_key(extract_llm.HOME))
                         or source_quality_identity["assessment"] != _quality_assessment(live_policy)
-                        or not _quality_passed(ledger.db, pid, source_quality_identity)
+                        or not _quality_passed(ledger.db, pid, source_quality_identity, expected=source_pass_content)
                         or _quality_failed(ledger.db, pid, source_quality_identity)):
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0}
@@ -2507,6 +2578,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             if lane == "C" and deferred_reason and deferred_reason.startswith("source_quality_"):
                 _replace(ledger, SCAN, pid, {**{k: v for k, v in saved.items() if not k.startswith("_")},
                     "audited": False, "quality_state": deferred_reason[len("source_quality_"):],
+                    "quality_hold_key": _source_quality_hold_key(ledger.db, pid, cfg, source, saved["_chunks_sig"]),
                     "next_try": now + (0 if deferred_reason == "source_quality_pending" else 60)}, meta, source["message_id"])
             if not failure and result is not None:
                 proof_changed = lane != "A"

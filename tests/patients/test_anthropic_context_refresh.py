@@ -145,20 +145,23 @@ def test_source_quality_precedes_cloud_summary_and_missing_receipt_reopens_c(run
     assert sum("source" in request for request in cloud[0]) == scan_calls
 
 
-def test_source_quality_negative_stays_held_without_resampling(runtime, cloud, monkeypatch):
+@pytest.mark.parametrize("negative_target", ["source_coverage", "source_facts"])
+def test_source_quality_negative_stays_held_without_resampling(runtime, cloud, monkeypatch, negative_target):
     import semantic_jev
     led, clock, _ = runtime
-    seed(led, body="見出しのない完全合成の居住記録。")
+    seed(led, body="合成の居住記録です。介護ベッドを使用しています。")
     client_factory = semantic_jev.JevClient
     def negative_client(**kwargs):
         client = client_factory(**kwargs)
         post = client._post_fn
         def negative(body, timeout):
             status, headers, raw = post(body, timeout)
-            if body["state"]["target"]["id"] == "source_coverage":
+            if body["state"]["target"]["id"] == negative_target:
                 response = json.loads(raw)
-                for value in response["answers"].values():
-                    value.update(choice="missing", probabilities={"complete": 0.0, "missing": 1.0, "ambiguous": 0.0})
+                choice = "missing" if negative_target == "source_coverage" else "not_supported"
+                for qid, value in response["answers"].items():
+                    value.update(choice=choice, probabilities={option: float(option == choice)
+                                 for option in body["questions"][qid]["criteria"]})
                 raw = json.dumps(response).encode()
             return status, headers, raw
         client._post_fn = negative
@@ -171,14 +174,53 @@ def test_source_quality_negative_stays_held_without_resampling(runtime, cloud, m
     else:
         pytest.fail("source negative did not become held")
     before = len(led.synthetic_jev_requests)
-    clock.wall += 61
-    again = step(runtime)
-    assert again.get("reason") == "source_quality_held"
+    saved = [tuple(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")]
+    changes = led.db.total_changes
+    for _ in range(3):
+        clock.wall += 61
+        again = step(runtime)
+        assert again.get("reason") == "patient_context_waiting" and again["done"] == 0
+        assert led.db.total_changes == changes
+        assert [tuple(row) for row in led.db.execute("SELECT * FROM artifacts ORDER BY artifact_id")] == saved
     assert len(led.synthetic_jev_requests) == before
     assert led.artifacts("patient_context_source_quality_fail_v1", project_id=1)
     assert not led.artifacts("patient_context_source_quality_pass_v1", project_id=1)
     assert not any("reports" in call for call in cloud[0])
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+
+    if negative_target == "source_coverage":
+        revision = led.db.execute('SELECT COALESCE(MAX(seq),1) FROM message_revisions WHERE message_id=1').fetchone()[0]
+        source = led.db.execute('SELECT content_hash,body_state FROM messages WHERE message_id=1').fetchone()
+        with led.db:
+            led.db.execute('INSERT INTO message_revisions(message_id,seq,content_hash,prev_content_hash,body_state,observed_at) '
+                'VALUES(?,?,?,?,?,?)', (1, revision + 1, source['content_hash'], source['content_hash'], source['body_state'], clock.wall))
+        assert context_refresh._pending(led.db, 1, CFG)[2]['C']
+        for _ in range(10):
+            clock.wall += 61
+            if step(runtime).get('reason') == 'source_quality_held':
+                break
+        else:
+            pytest.fail('a new occurrence did not re-enter source QA')
+        assert len(led.synthetic_jev_requests) > before
+    if negative_target == "source_facts":
+        extra_id = _extend_source_candidate(led)
+        for _ in range(10):
+            clock.wall += 61
+            result = step(runtime)
+            if result.get("reason") == "source_quality_held":
+                break
+        else:
+            pytest.fail("changed candidate did not preserve the original negative")
+        requested = set()
+        for body in led.synthetic_jev_requests[before:]:
+            if body['state']['target']['id'] == 'source_facts':
+                entries = {fact['id']: fact['fact']['id'] for fact in body['state']['target']['facts']}
+                requested.update(entries[qid] for qid in body['questions'])
+        assert requested == {extra_id}
+        assert not any("reports" in call for call in cloud[0])
+        for old in saved:
+            if old[1] in ('semantic_usage', 'patient_context_source_quality_v1'):
+                assert tuple(led.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (old[0],)).fetchone()) == old
 
 
 @pytest.mark.parametrize("count", [0, 13, 257])
@@ -207,7 +249,7 @@ def test_source_quality_capture_keeps_every_fact_and_coverage_question(runtime, 
                 {**meta, "chunk_key": f"synthetic-{part}", "unit_key": "synthetic-unit"}, 1)
     led.db.execute("BEGIN")
     try:
-        captured = context_refresh._source_quality_capture(led.db, 1, CFG, 1, {"code": "synthetic"})
+        captured = context_refresh._source_quality_capture(led.db, 1, CFG, 1, {"code": "a" * 64, "policy": "b" * 64})
         identity = captured["identity"]
         assert identity["source_fact_count"] == count
         assert set(fact["id"] for fact in facts) < set(identity["fact_ids"])
@@ -215,16 +257,16 @@ def test_source_quality_capture_keeps_every_fact_and_coverage_question(runtime, 
         assert captured["pages"][-1]["passing_choices"][identity["fact_ids"][-1]] == "complete"
         if facts:
             assert facts[-1]["id"] in identity["fact_ids"]
-        changed_policy = context_refresh._source_quality_capture(led.db, 1, CFG, 1, {"code": "new-policy"})["identity"]
+        changed_policy = context_refresh._source_quality_capture(led.db, 1, CFG, 1, {"code": "a" * 64, "policy": "c" * 64})["identity"]
         assert changed_policy["input_key"] == identity["input_key"]
         assert changed_policy["failure_key"] != identity["failure_key"]
         assert changed_policy["audit_key"] != identity["audit_key"]
         led.db.execute("UPDATE messages SET body_html=body_html || '改変' WHERE message_id=1")
         with pytest.raises(ValueError, match="patient_source_quality_source"):
-            context_refresh._source_quality_capture(led.db, 1, CFG, 1, {"code": "synthetic"})
+            context_refresh._source_quality_capture(led.db, 1, CFG, 1, {"code": "a" * 64, "policy": "b" * 64})
         led.db.execute("UPDATE patients SET fetch_reason='permission_denied' WHERE project_id=1")
         with pytest.raises(ValueError, match="patient_source_quality_scope"):
-            context_refresh._source_quality_capture(led.db, 1, CFG, 1, {"code": "synthetic"})
+            context_refresh._source_quality_capture(led.db, 1, CFG, 1, {"code": "a" * 64, "policy": "b" * 64})
     finally:
         led.db.rollback()
 
@@ -257,7 +299,7 @@ def test_source_quality_overlapping_chunks_deduplicate_only_identical_occurrence
                 {**meta, 'chunk_key': name, 'unit_key': name}, 1)
     led.db.execute('BEGIN')
     try:
-        captured = context_refresh._source_quality_capture(led.db, 1, CFG, 1, {'code': 'synthetic'})
+        captured = context_refresh._source_quality_capture(led.db, 1, CFG, 1, {'code': 'a' * 64, 'policy': 'b' * 64})
         assert captured['identity']['source_fact_count'] == 1
         assert captured['pages'][0]['fact_ids'] == [fact['id']]
         assert captured['pages'][1]['passing_choices'][captured['pages'][1]['fact_ids'][0]] == 'complete'
@@ -267,12 +309,12 @@ def test_source_quality_overlapping_chunks_deduplicate_only_identical_occurrence
         bad['facts'][0]['view_bucket'] = 'conflict'
         led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(bad), row['artifact_id']))
         with pytest.raises(ValueError, match='patient_source_quality_fact'):
-            context_refresh._source_quality_capture(led.db, 1, CFG, 1, {'code': 'synthetic'})
+            context_refresh._source_quality_capture(led.db, 1, CFG, 1, {'code': 'a' * 64, 'policy': 'b' * 64})
         bad['facts'][0].pop('view_bucket')
         bad['facts'][0]['project_id'] = 2
         led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(bad), row['artifact_id']))
         with pytest.raises(ValueError, match='patient_source_quality_fact'):
-            context_refresh._source_quality_capture(led.db, 1, CFG, 1, {'code': 'synthetic'})
+            context_refresh._source_quality_capture(led.db, 1, CFG, 1, {'code': 'a' * 64, 'policy': 'b' * 64})
     finally:
         led.db.rollback()
 
@@ -303,7 +345,7 @@ def test_source_quality_identical_text_in_distinct_posts_retains_distinct_facts(
     assert len(set(expected_ids)) == 2
     led.db.execute('BEGIN')
     try:
-        actual = [context_refresh._source_quality_capture(led.db, 1, CFG, mid, {'code': 'synthetic'})
+        actual = [context_refresh._source_quality_capture(led.db, 1, CFG, mid, {'code': 'a' * 64, 'policy': 'b' * 64})
                   for mid in (1, 2)]
         assert [capture['pages'][0]['fact_ids'][0] for capture in actual] == expected_ids
         assert actual[0]['identity']['input_key'] != actual[1]['identity']['input_key']
@@ -1149,3 +1191,115 @@ def test_quality_hold_reason_is_visible_and_clears_only_after_success(runtime, c
     drain(runtime)
     assert 'quality_state' not in document(led, context_refresh.PROGRESS)
     assert context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+
+
+def _extend_source_candidate(led):
+    source = list(context_refresh._sources(led.db, 1, mid=1))[0]
+    text = '介護ベッドを使用しています。'
+    assert text in source['body_text']
+    extra = context_refresh._facts(source, [{'category': 'living', 'text': text,
+        'evidence': text, 'subject': 'unspecified', 'details': []}],
+        night_id='synthetic', discovery='backfill_found')
+    assert len(extra) == 1
+    row = led.db.execute('SELECT artifact_id,content FROM artifacts WHERE kind=? AND message_id=1 '
+                         'ORDER BY artifact_id LIMIT 1', (context_refresh.CHUNK,)).fetchone()
+    chunk = json.loads(row['content'])
+    assert extra[0]['id'] not in {fact['id'] for fact in chunk['facts']}
+    with led.db:
+        led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?',
+                       (json.dumps({**chunk, 'facts': chunk['facts'] + extra}), row['artifact_id']))
+    return extra[0]['id']
+
+
+def test_source_question_reuses_original_receipts_when_an_unrelated_fact_is_added(runtime, cloud):
+    import semantic_policy
+    led, _, _ = runtime
+    seed(led, body='合成の居住記録です。介護ベッドを使用しています。')
+    drain(runtime)
+    assessment = context_refresh._quality_assessment(semantic_policy.runtime_config(CFG)[0])
+    led.db.execute('BEGIN')
+    try:
+        initial = context_refresh._source_quality_capture(led.db, 1, CFG, 1, assessment)
+    finally:
+        led.db.rollback()
+    originals = [tuple(row) for row in led.db.execute('SELECT artifact_id,content,meta FROM artifacts '
+        'WHERE kind IN (?,?) ORDER BY artifact_id', ('patient_context_source_quality_v1', 'semantic_usage'))]
+    before = len(led.synthetic_jev_requests)
+    extra_id = _extend_source_candidate(led)
+    led.db.execute('BEGIN')
+    try:
+        changed = context_refresh._source_quality_capture(led.db, 1, CFG, 1, assessment)
+    finally:
+        led.db.rollback()
+    assert changed['identity']['source_input_key'] == initial['identity']['source_input_key']
+    for fid in initial['identity']['fact_ids'][:-1]:
+        assert changed['identity']['question_keys'][fid] == initial['identity']['question_keys'][fid]
+    drain(runtime)
+    requested = set()
+    for body in led.synthetic_jev_requests[before:]:
+        if body['state']['target']['id'] == 'source_facts':
+            entries = {fact['id']: fact['fact']['id'] for fact in body['state']['target']['facts']}
+            requested.update(entries[qid] for qid in body['questions'])
+    assert requested == {extra_id}
+    for artifact_id, content, meta in originals:
+        row = led.db.execute('SELECT content,meta FROM artifacts WHERE artifact_id=?', (artifact_id,)).fetchone()
+        assert tuple(row) == (content, meta)
+    assert context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
+
+
+def test_missing_original_source_reservation_cannot_become_an_unasked_question(runtime, cloud):
+    led, _, _ = runtime
+    seed(led, body='見出しのない完全合成の居住記録です。')
+    drain(runtime)
+    row = led.db.execute("SELECT artifact_id FROM artifacts WHERE kind='semantic_usage' "
+        "AND json_extract(meta,'$.operation')='patient_source_quality' ORDER BY artifact_id LIMIT 1").fetchone()
+    assert row
+    before = len(led.synthetic_jev_requests)
+    with led.db:
+        led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (row[0],))
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+    result = step(runtime)
+    assert result['status'] == 'deferred' and result.get('reason') == 'source_quality_unknown'
+    assert len(led.synthetic_jev_requests) == before
+
+
+@pytest.mark.parametrize('changed', ['first_seen', 'scope'])
+def test_source_quality_hold_key_includes_source_occurrence_and_patient_scope(runtime, cloud, changed):
+    led, _, _ = runtime
+    seed(led, body='合成の居住情報です。')
+    source = list(context_refresh._sources(led.db, 1, mid=1))[0]
+    before = context_refresh._source_quality_hold_key(led.db, 1, CFG, source, 'a' * 64)
+    with led.db:
+        if changed == 'first_seen':
+            led.db.execute('UPDATE messages SET first_seen=first_seen+1 WHERE message_id=1')
+        else:
+            led.db.execute('UPDATE patients SET karte_id=99 WHERE project_id=1')
+    fresh = list(context_refresh._sources(led.db, 1, mid=1))[0]
+    assert context_refresh._source_sig(source) == context_refresh._source_sig(fresh)
+    assert context_refresh._source_quality_hold_key(led.db, 1, CFG, fresh, 'a' * 64) != before
+
+
+def test_source_pass_reference_validation_does_not_hold_the_sqlite_writer(runtime, cloud, monkeypatch):
+    led, _, _ = runtime
+    seed(led, body='見出しのない合成の居住情報です。')
+    path = Path(led.db.execute('PRAGMA database_list').fetchone()[2])
+    original = context_refresh._quality_pass_content
+    checked = []
+    def capture(db, pid, identity):
+        if identity.get('purpose') == 'source':
+            with closing(sqlite3.connect(path, timeout=0)) as competing:
+                competing.execute('BEGIN IMMEDIATE')
+                competing.rollback()
+            checked.append(True)
+        return original(db, pid, identity)
+    monkeypatch.setattr(context_refresh, '_quality_pass_content', capture)
+    for _ in range(20):
+        result = step(runtime)
+        if result.get('lane') == 'C' and result['status'] == 'progressed':
+            break
+    else:
+        pytest.fail('source C did not finish')
+    assert checked and led.artifacts('patient_context_source_quality_pass_v1', project_id=1)
+    assert not any('reports' in request for request in cloud[0])

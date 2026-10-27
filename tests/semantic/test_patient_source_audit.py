@@ -10,9 +10,18 @@ from mcs_util import payload_hash
 from test_patient_summary_audit import FakeClient, answer, sample
 
 
+SOURCE_INPUT_KEY = 'd' * 64
+ASSESSMENT = {'code': 'e' * 64, 'policy': 'f' * 64}
+
+
+def plan(source, facts, *, source_input_key=SOURCE_INPUT_KEY, assessment=None):
+    return audit.patient_source_quality_pages(source, facts, source_input_key=source_input_key,
+        assessment=ASSESSMENT if assessment is None else assessment)
+
+
 def pages():
     _, facts, sources = sample()
-    return list(audit.patient_source_quality_pages(sources[0], facts))
+    return list(plan(sources[0], facts))
 
 
 def evaluate(client, page, **kwargs):
@@ -25,7 +34,7 @@ def test_all_257_facts_and_the_full_source_remain_in_the_coverage_denominator():
     source = sources[0]
     source['body_text'] += '末尾の完全合成記録。' * 3000
     facts = [{**original[0], 'id': payload_hash(['synthetic_fact', index])} for index in range(257)]
-    planned = list(audit.patient_source_quality_pages(source, facts))
+    planned = list(plan(source, facts))
     support, coverage = planned[:-1], planned[-1]
     assert len(support) == 22 and sum(len(page['fact_ids']) for page in support) == 257
     assert {fid for page in support for fid in page['fact_ids']} == {fact['id'] for fact in facts}
@@ -44,7 +53,7 @@ def test_all_257_facts_and_the_full_source_remain_in_the_coverage_denominator():
                                            ('ambiguous', ['patient_source_ambiguous'])])
 def test_zero_facts_still_require_a_whole_source_coverage_answer(choice, findings):
     _, _, sources = sample()
-    [page] = list(audit.patient_source_quality_pages(sources[0], []))
+    [page] = list(plan(sources[0], []))
     assert page['state']['target']['candidate_facts'] == []
     assert list(page['questions']) == ['q0'] and len(page['fact_ids']) == 1
     client = FakeClient([{'q0': answer(choice)}])
@@ -61,7 +70,7 @@ def test_support_and_coverage_preserve_subject_negation_unknown_time_and_all_att
         details=[{'key': 'synthetic_detail', 'value': 'unknown'}],
         relations=[{'kind': 'contradicts', 'target_fact_id': facts[1]['id']}],
         found_at=123, found_night_id='synthetic_day', discovery='new_report')
-    planned = list(audit.patient_source_quality_pages(sources[0], facts))
+    planned = list(plan(sources[0], facts))
     actual = planned[0]['state']['target']['facts'][0]['fact']
     expected = {key: value for key, value in facts[0].items()
                 if key not in ('found_at', 'found_night_id', 'discovery')}
@@ -76,12 +85,12 @@ def test_support_and_coverage_preserve_subject_negation_unknown_time_and_all_att
 
 def test_coverage_logical_id_ignores_only_discovery_bookkeeping_and_input_order():
     _, facts, sources = sample()
-    first = list(audit.patient_source_quality_pages(sources[0], facts))[-1]['fact_ids']
+    first = list(plan(sources[0], facts))[-1]['fact_ids']
     for fact in facts:
         fact.update(found_at=987, found_night_id='other_day', discovery='backfill_found')
-    assert list(audit.patient_source_quality_pages(sources[0], list(reversed(facts))))[-1]['fact_ids'] == first
+    assert list(plan(sources[0], list(reversed(facts))))[-1]['fact_ids'] == first
     facts[0]['temporal'] = {'status': 'past'}
-    assert list(audit.patient_source_quality_pages(sources[0], facts))[-1]['fact_ids'] != first
+    assert list(plan(sources[0], facts))[-1]['fact_ids'] != first
 
 
 @pytest.mark.parametrize('change', ['post', 'hash', 'posted_at', 'body', 'karte_occurrence'])
@@ -92,7 +101,7 @@ def test_coverage_logical_id_binds_the_actual_source_occurrence(change):
         source.update(source='karte_summary', message_id=0, source_key='karte:10')
         for fact in facts:
             fact.update(source='karte_summary', message_id=0, source_key='karte:10')
-    first = list(audit.patient_source_quality_pages(source, facts))[-1]['fact_ids']
+    first = list(plan(source, facts))[-1]['fact_ids']
     if change == 'post':
         source['message_id'] = 2
         for fact in facts:
@@ -109,7 +118,7 @@ def test_coverage_logical_id_binds_the_actual_source_occurrence(change):
         source['source_key'] = 'karte:11'
         for fact in facts:
             fact['source_key'] = source['source_key']
-    assert list(audit.patient_source_quality_pages(source, facts))[-1]['fact_ids'] != first
+    assert list(plan(source, facts))[-1]['fact_ids'] != first
 
 
 @pytest.mark.parametrize('problem', ['patient', 'message', 'source', 'hash', 'evidence', 'quote', 'duplicate',
@@ -143,7 +152,7 @@ def test_every_fact_is_validated_before_any_page_is_yielded(problem):
         facts = [{**facts[0], 'id': payload_hash(['synthetic_fact', index])} for index in range(13)]
         facts[-1]['project_id'] = 2
     with pytest.raises(ValueError):
-        next(audit.patient_source_quality_pages(source, facts))
+        next(plan(source, facts))
 
 
 def test_a_normal_negative_answer_is_reused_without_another_request():
@@ -240,3 +249,100 @@ def test_shared_executor_keeps_summary_attempt_callbacks_and_codes():
     assert saved == [({facts[0]['id']: answer('supports'), facts[1]['id']: answer('important_missing')}, set())]
     assert result['evaluated'] and result['findings'] == [
         {'code': 'patient_summary_important_missing', 'fact_id': facts[1]['id']}]
+
+
+def test_support_question_identity_survives_an_unrelated_fact_and_changed_wire_alias():
+    _, facts, sources = sample()
+    source = sources[0]
+    original = list(plan(source, [facts[1]]))
+    enlarged = list(plan(source, facts))
+    fid = facts[1]['id']
+    assert original[0]['state']['target']['facts'][0]['id'] == 'q0'
+    assert enlarged[0]['state']['target']['facts'][1]['id'] == 'q1'
+    assert original[0]['questions']['q0'] == enlarged[0]['questions']['q1']
+    assert original[0]['question_keys'][fid] == enlarged[0]['question_keys'][fid]
+    assert original[-1]['fact_ids'] != enlarged[-1]['fact_ids']
+    assert set(original[-1]['question_keys'].values()) != set(enlarged[-1]['question_keys'].values())
+
+
+def test_support_question_identity_survives_page_sharding_order_and_bookkeeping():
+    _, facts, sources = sample()
+    source = sources[0]
+    fact = {**facts[0], 'id': 'f' * 64}
+    original = list(plan(source, [fact]))[0]['question_keys'][fact['id']]
+    others = [{**facts[0], 'id': payload_hash(['synthetic_other', index])} for index in range(24)]
+    fact.update(found_at=123, found_night_id='another_day', discovery='backfill_found')
+    source.update(extraction_sig='new_generated_output', canonical_context=True)
+    new_pages = list(plan(source, [fact, *reversed(others)]))
+    [changed] = [page['question_keys'][fact['id']] for page in new_pages[:-1] if fact['id'] in page['question_keys']]
+    assert changed == original
+
+
+@pytest.mark.parametrize('change', ['source_revision', 'source_time', 'fact_subject', 'fact_polarity',
+                                    'fact_time', 'fact_details', 'question', 'options', 'policy', 'model'])
+def test_a_real_source_fact_or_exact_question_contract_change_is_a_new_question(change):
+    _, facts, sources = sample()
+    source = sources[0]
+    [support, _] = list(plan(source, facts[:1]))
+    fid = facts[0]['id']
+    original = support['question_keys'][fid]
+    body = {'model': jev.JEV_MODEL, 'state': deepcopy(support['state']), 'questions': deepcopy(support['questions'])}
+    assessment = dict(ASSESSMENT)
+    source_key = SOURCE_INPUT_KEY
+    if change == 'source_revision':
+        source_key = '9' * 64  # The raw occurrence/revision is assembled by the patient owner.
+    elif change == 'source_time':
+        body['state']['context'][0]['posted_at'] = '2026-10-02T10:00:00+09:00'
+    elif change == 'fact_subject':
+        body['state']['target']['facts'][0]['fact']['reported_subject'] = 'family'
+    elif change == 'fact_polarity':
+        body['state']['target']['facts'][0]['fact']['polarity'] = 'negated'
+    elif change == 'fact_time':
+        body['state']['target']['facts'][0]['fact']['temporal'] = {'event_time': 'unknown', 'status': 'past'}
+    elif change == 'fact_details':
+        body['state']['target']['facts'][0]['fact']['details'] = [{'key': 'synthetic', 'value': 'unknown'}]
+    elif change == 'question':
+        body['questions']['q0']['instructions'] += ' Preserve the reported interval.'
+    elif change == 'options':
+        body['questions']['q0']['criteria']['supports'] = 'a changed support meaning'
+    elif change == 'policy':
+        assessment['policy'] = '8' * 64
+    else:
+        body['model'] = 'unapproved_synthetic_model'
+        with pytest.raises(ValueError, match='patient_source_question_invalid'):
+            audit.patient_source_question_keys(body, source_input_key=source_key, assessment=assessment)
+        return
+    changed = audit.patient_source_question_keys(body, source_input_key=source_key, assessment=assessment)
+    assert changed[fid] != original
+
+
+def test_runtime_question_reconstruction_uses_only_the_actually_requested_alias_subset():
+    page = pages()[0]
+    fid = page['fact_ids'][1]
+    body = {'model': jev.JEV_MODEL, 'state': page['state'], 'questions': {'q1': page['questions']['q1']}}
+    assert audit.patient_source_question_keys(body, source_input_key=SOURCE_INPUT_KEY,
+        assessment=ASSESSMENT) == {fid: page['question_keys'][fid]}
+
+
+@pytest.mark.parametrize('change', ['foreign_source', 'foreign_fact', 'source_body', 'fact_span',
+                                    'duplicate_fact', 'unknown_alias', 'budget_in_assessment'])
+def test_actual_request_question_binding_rejects_malformed_or_foreign_material(change):
+    page = deepcopy(pages()[0])
+    body = {'model': jev.JEV_MODEL, 'state': page['state'], 'questions': page['questions']}
+    assessment = dict(ASSESSMENT)
+    if change == 'foreign_source':
+        body['state']['context'][0]['project_id'] = 2
+    elif change == 'foreign_fact':
+        body['state']['target']['facts'][0]['fact']['source_key'] = 2
+    elif change == 'source_body':
+        body['state']['context'][0]['text'] += ' altered synthetic source'
+    elif change == 'fact_span':
+        body['state']['target']['facts'][0]['fact']['evidence_span'] = [0, 1]
+    elif change == 'duplicate_fact':
+        body['state']['target']['facts'][1]['fact'] = body['state']['target']['facts'][0]['fact']
+    elif change == 'unknown_alias':
+        body['questions']['q12'] = body['questions']['q0']
+    else:
+        assessment['daily_request_budget'] = 3000
+    with pytest.raises(ValueError, match='patient_source_question_invalid'):
+        audit.patient_source_question_keys(body, source_input_key=SOURCE_INPUT_KEY, assessment=assessment)
