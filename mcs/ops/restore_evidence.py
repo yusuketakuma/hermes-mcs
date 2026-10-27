@@ -41,13 +41,20 @@ def database_version(path: str) -> int | None:
         return None
 
 
-def _table_count(con: sqlite3.Connection, table: str) -> int:
-    """COUNT(*) or 0 when the table is absent (older schema) — a missing
-    table can lose nothing."""
-    try:
-        return con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-    except sqlite3.Error:
+def _table_count(con, table):
+    """Return zero only when the table is absent; propagate read failures."""
+    columns = con.execute(f"PRAGMA table_info({table})").fetchall()
+    if not columns:
         return 0
+    return con.execute("SELECT COUNT(*) FROM " + table).fetchone()[0]
+
+
+def _watermark(con):
+    """An absent timestamp column is unknown; read failures must propagate."""
+    columns = con.execute("PRAGMA table_info(messages)").fetchall()
+    if not any(column[1] == "posted_at_ts" for column in columns):
+        return None
+    return con.execute("SELECT MAX(posted_at_ts) FROM messages").fetchone()[0]
 
 
 def _restore_content_digest(con):
@@ -86,17 +93,13 @@ def create_loss_report(*, live_path: str, backup_path: str, report_path: str) ->
         live.execute("BEGIN")
         back.execute("BEGIN")
         live_digest = _restore_content_digest(live)
-        try:
-            watermark = back.execute(
-                "SELECT MAX(posted_at_ts) FROM messages").fetchone()[0]
-        except sqlite3.Error:
-            watermark = None
+        watermark = _watermark(back)
         stored = {t: _table_count(live, t) - _table_count(back, t)
                   for t in _STORED_TABLES}
         effects = {t: _table_count(live, t) - _table_count(back, t)
                    for t in _EFFECT_TABLES}
-    except (sqlite3.Error, OSError) as e:
-        raise RestoreEvidenceError("restore_report_read_failed") from e
+    except (sqlite3.Error, OSError):
+        raise RestoreEvidenceError("restore_report_read_failed") from None
     finally:
         live.close()
         back.close()

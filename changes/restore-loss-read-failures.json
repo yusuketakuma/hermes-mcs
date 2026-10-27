@@ -1,0 +1,7 @@
+{
+  "category": "fixed",
+  "title": "復元時の損失報告で読取りエラーを検出します",
+  "summary": "復元前の件数や日時を読み取れない場合は復元を停止します。表や日時の列が存在しない旧版データでは従来どおり扱います。",
+  "upgrade": "独立した復旧ツールにも同じ修正を反映してください。配備済みの復旧ツールの更新には既存の導入手順が必要です。",
+  "refs": ["mcs/ops/restore_evidence.py", "deployment/recovery/mcs_recover.py"]
+}
