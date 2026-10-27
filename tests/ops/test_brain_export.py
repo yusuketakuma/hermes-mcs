@@ -19,6 +19,17 @@ from semantic_projection import PROJECTION_VERSION
 
 SNAP_TS = time.time()
 
+
+def test_unverified_rollup_does_not_claim_zero_records_or_old_clinical_values():
+    body = brain_export._patient_md(1, '合成患者', {}, {
+        'project_id': 1, 'rollup_freshness': 'unknown',
+        'medications': [{'name': '合成の古い薬'}], 'msg_count': 7},
+        measurement_config_unavailable=True)
+    assert '患者集約: 未確認' in body
+    assert 'messages: 0' not in body and 'messages: 7' not in body
+    assert '合成の古い薬' not in body
+
+
 SCHEMA = """
 CREATE TABLE snapshot_meta (singleton INTEGER PRIMARY KEY CHECK(singleton=1),
                             generation_id TEXT, generated_at REAL);
@@ -227,23 +238,16 @@ def test_rollup_content_scope_must_match_row(env, capsys, content_pid):
     assert snap.read_bytes() == snap_before
 
 
-def test_legacy_rollup_without_project_id_is_rebuilt_on_same_snapshot(env, monkeypatch):
+def test_legacy_rollup_without_project_id_is_unknown_without_config(env):
     snap, out = env
     with sqlite3.connect(snap) as conn:
         conn.execute("UPDATE artifacts SET content=?,meta=? WHERE kind='patient_rollup'",
                      (json.dumps({"summary": {"text": "SYNTH untrusted legacy"}}), "{}"))
     before = snap.read_bytes()
-    real_build = brain_export.rollup.build_rollup
-    calls = []
-
-    def build(db, pid, **kwargs):
-        calls.append((pid, db.execute("SELECT generation_id FROM snapshot_meta").fetchone()[0]))
-        return real_build(db, pid, **kwargs)
-
-    monkeypatch.setattr(brain_export.rollup, "build_rollup", build)
     assert brain_export.run(out, snap)["ok"]
-    assert calls == [(1, "gen-1")]
-    assert "SYNTH untrusted legacy" not in (out / "patients/p1.md").read_text()
+    page = (out / "patients/p1.md").read_text()
+    assert "患者集約: 未確認" in page
+    assert "SYNTH untrusted legacy" not in page and "messages: 0" not in page
     assert snap.read_bytes() == before
 
 

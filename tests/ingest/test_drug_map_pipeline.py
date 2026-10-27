@@ -33,7 +33,7 @@ def test_dictionary_candidates_are_derived_before_rollup_and_retired_when_disabl
     monkeypatch.setattr(run_check.time, "monotonic", lambda: 1)
     monkeypatch.setattr(extract, "run_pending", lambda *args, **kwargs: {"done": 0, "pids": []})
     monkeypatch.setattr(mcs_signals, "evaluate", lambda *args, **kwargs: {})
-    monkeypatch.setattr(rollup, "dirty_projects", lambda db: [])
+    monkeypatch.setattr(rollup, "scan_dirty_projects", lambda db: rollup.RollupScan((), (), False))
     observed = []
     def rebuild(db, pids, **kwargs):
         observed.append((set(pids), drug_map.current_refs(db.db, 1)))

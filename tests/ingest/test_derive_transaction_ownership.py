@@ -131,13 +131,60 @@ def test_derive_reports_reconcile_failure_without_echoing_its_contents(tmp_path,
             "done": 0, "pids": [], "reconcile_error": "PRIVATE_CANARY"})
         monkeypatch.setattr(drug_map, "configured", lambda cfg: (None, None))
         monkeypatch.setattr(drug_map, "derive", lambda *a, **k: {"pids": [], "status": "complete"})
-        monkeypatch.setattr(rollup, "dirty_projects", lambda ledger: [])
+        monkeypatch.setattr(rollup, "scan_dirty_projects", lambda ledger: rollup.RollupScan((), (), False))
         monkeypatch.setattr(rollup, "rebuild_many", lambda *a, **k: 0)
         monkeypatch.setattr(mcs_signals, "evaluate", lambda *a, **k: {"errors": []})
         result = {"errors": []}
         run_check.stage_derive(store, result, time.monotonic() + 600, {"synthetic": True}, llm_budget_cap=0)
         assert result["errors"] == ["intervention_reconcile_failed"]
         assert "PRIVATE_CANARY" not in str(result)
+    finally:
+        store.close()
+
+
+def test_derive_reports_unknown_without_rebuilding_unknown_candidates(tmp_path, monkeypatch):
+    store = _ledger(tmp_path)
+    try:
+        monkeypatch.setattr(extract, "run_pending", lambda *a, **k: {"done": 0, "pids": [2]})
+        monkeypatch.setattr(drug_map, "configured", lambda cfg: (None, None))
+        monkeypatch.setattr(drug_map, "derive", lambda *a, **k: {"pids": [], "status": "complete"})
+        monkeypatch.setattr(rollup, "scan_dirty_projects", lambda ledger: rollup.RollupScan((1,), (2,), True))
+        rebuilt = []
+        monkeypatch.setattr(rollup, "rebuild_many", lambda _db, pids, **kw: rebuilt.extend(pids) or len(pids))
+        monkeypatch.setattr(mcs_signals, "evaluate", lambda *a, **k: {"errors": []})
+        result = {"errors": []}
+        run_check.stage_derive(store, result, time.monotonic() + 600, {}, llm_budget_cap=0)
+        assert rebuilt == [1]
+        assert result["rollup_scan"] == {"state": "unknown", "unknown_observed": 1}
+        assert "rollup: scan_unknown" in result["errors"]
+    finally:
+        store.close()
+
+
+def test_derive_reports_source_changed_without_disclosing_patient_id(tmp_path, monkeypatch):
+    store = _ledger(tmp_path)
+    try:
+        monkeypatch.setattr(extract, 'run_pending', lambda *a, **k: {'done': 0, 'pids': []})
+        monkeypatch.setattr(drug_map, 'configured', lambda cfg: (None, None))
+        monkeypatch.setattr(drug_map, 'derive', lambda *a, **k: {'pids': [], 'status': 'complete'})
+        monkeypatch.setattr(rollup, 'scan_dirty_projects', lambda ledger: rollup.RollupScan((17, 18, 19), (), False))
+
+        def rebuild(_ledger, pids, *, deadline, source_changed, source_unknown):
+            assert set(pids) == {17, 18, 19}
+            source_changed.append(17)
+            source_unknown.append(18)
+            return 1
+
+        monkeypatch.setattr(rollup, 'rebuild_many', rebuild)
+        monkeypatch.setattr(mcs_signals, 'evaluate', lambda *a, **k: {'errors': []})
+        result = {'errors': []}
+        run_check.stage_derive(store, result, time.monotonic() + 600, {}, llm_budget_cap=0)
+        assert result['rollups'] == 1
+        assert result['rollup_source_changed'] == 1
+        assert result['rollup_source_unknown'] == 1
+        assert 'rollup: source_changed' in result['errors']
+        assert 'rollup: source_unknown' in result['errors']
+        assert '17' not in str(result['errors']) and '18' not in str(result['errors'])
     finally:
         store.close()
 

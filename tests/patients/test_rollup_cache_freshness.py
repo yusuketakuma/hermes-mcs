@@ -10,6 +10,7 @@ import time
 import pytest
 
 import extract_llm
+from drug_map import PROGRESS_KIND
 import history_walk
 import inference_dependency_loss
 import inference_version
@@ -73,6 +74,36 @@ def assert_no_latest(result):
 def test_model_change_cannot_reuse_previous_model_cache(ledger):
     assert read(ledger.db)["latest_vitals"]["bt"] == 36.4
     assert_no_latest(read(ledger.db, CFG_B))
+
+
+def test_configured_cache_read_rebuilds_all_sections_on_borrowed_snapshot(ledger):
+    old, meta = cached(ledger.db)
+    old['medications'] = [{'name': '合成の古い薬'}]
+    old['recent_requests'] = [{'ctx': '合成の古い依頼'}]
+    old['next_planned'] = '合成の古い予定'
+    old['summary'] = {'text': '合成の古い要約'}
+    before = json.dumps(old, ensure_ascii=False, sort_keys=True)
+    ledger.db.execute("UPDATE messages SET body_text='合成の別の本文' WHERE project_id=1 AND message_id=1")
+    try:
+        assert ledger.db.in_transaction
+        result = rollup.current_cached_refs(ledger.db, 1, old, meta, cfg=CFG_A)
+        rendered = json.dumps(result, ensure_ascii=False)
+        assert all(value not in rendered for value in (
+            '合成の古い薬', '合成の古い依頼', '合成の古い予定', '合成の古い要約'))
+        assert not result.get('latest_vitals')
+        assert ledger.db.in_transaction
+        assert json.dumps(old, ensure_ascii=False, sort_keys=True) == before
+    finally:
+        ledger.db.rollback()
+    assert read(ledger.db)['latest_vitals']['bt'] == 36.4
+
+
+def test_cache_without_config_is_unknown_not_an_empty_or_current_rollup(ledger):
+    old, meta = cached(ledger.db)
+    result = rollup.current_cached_refs(ledger.db, 1, old, meta)
+    assert result['project_id'] == 1 and result['rollup_freshness'] == 'unknown'
+    assert 'msg_count' not in result and 'medications' not in result
+    assert result['measurement_coverage']['complete'] is False
 
 
 def test_new_unparsed_source_invalidates_previous_latest(ledger):
@@ -162,7 +193,7 @@ def test_acquisition_interruption_propagates_without_owning_transaction(ledger, 
 
 def _synthetic_dictionary_cache(ledger):
     ledger.artifact_add(rollup.REF_KIND, '{}', project_id=1, message_id=1)
-    ledger.artifact_add(rollup.PROGRESS_KIND, '{}')
+    ledger.artifact_add(PROGRESS_KIND, '{}')
     ref = {'name': '合成薬', 'status': 'unresolved', 'dict_id': 'synthetic',
            'dict_sha256': 'a' * 64, 'cands': []}
     content = {inference_version.VERSION_KEY: inference_version.CURRENT_VERSION,

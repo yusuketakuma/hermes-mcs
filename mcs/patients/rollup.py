@@ -17,8 +17,10 @@ Usage: python3 rollup.py [--project <id>]   (--all is accepted; same as no --pro
 Called by run_check for patients that received new messages this tick.
 """
 import argparse
+import codecs
 import contextlib
 import copy
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import hashlib
 import json
@@ -50,7 +52,7 @@ from mcs_util import HOME, html_to_text, locate_quote_span, loads_dict
 from writer_lock import acquire_run_lock
 from semantic_projection import PROJECTION_VERSION
 from self_identity import normalize_sender_id
-from drug_map import (KIND as REF_KIND, PROGRESS_KIND, candidate_note, current_refs,
+from drug_map import (KIND as REF_KIND, current_refs,
                       generation_signature)
 
 DB = os.path.join(HOME, "data", "ledger.db")
@@ -65,9 +67,10 @@ STALE_DAYS = 21          # message unseen this long while siblings refresh
 # 13: retain every accepted reply relation and its source in posting-time order;
 # 14: measurement order requires source-bound measurement time and coverage;
 # 15: re-evaluate clinical assertions under the updated scope rules;
-# 16: attachment coverage and missing message bodies are checked).
+# 16: attachment coverage and missing message bodies are checked;
+# 17: adjacent source retractions cannot confirm a vital value).
 # Rebuilds rewrite artifacts; automatic card rendering does not read patient_rollup.
-PERIOD_CHECK_VERSION = 16
+PERIOD_CHECK_VERSION = 17
 # Pre-9 rollup keys; readers map them to the current names until rebuilt.
 _LEGACY_KEYS = {"current_med_period": "med_period_candidate",
                 "possibly_deleted": "unrefreshed_message_ids"}
@@ -79,6 +82,57 @@ _REPLY_STAGE = {k: i for i, k in enumerate(
 PHARMACY_STATE_LIMIT = 100
 MEASUREMENT_REPORT_LIMIT = 100
 _MAX_EMPTY_HTML_CHARS = 80000
+
+
+@contextlib.contextmanager
+def _freshness_snapshot(db):
+    """Borrow a consistent read snapshot without committing a caller transaction."""
+    db.execute("SAVEPOINT rollup_freshness_read")
+    try:
+        yield
+    except BaseException:
+        try:
+            db.execute("RELEASE rollup_freshness_read")
+        except sqlite3.Error:
+            pass  # Preserve the original read error if SQLite closed the savepoint.
+        raise
+    else:
+        db.execute("RELEASE rollup_freshness_read")
+
+
+def _acquisition_state(db, project_id):
+    """Compute exactly the acquisition evidence used by measurement coverage."""
+    columns = {row[1] for row in db.execute("PRAGMA table_info(patients)")}
+    required = {"fetch_state", "fetch_reason", "history_floor", "initial_import"}
+    patient = (db.execute("SELECT fetch_state,fetch_reason,history_floor FROM patients WHERE project_id=?",
+                          (project_id,)).fetchone() if required <= columns else None)
+    status = (patient[0] if patient and patient[0] in
+              ("complete", "incomplete", "failed", "pending", "forbidden") else "unknown")
+    history = "unknown"
+    pending = None
+    complete = bool(patient and patient[0] == "complete" and patient[1] in (None, "")
+                    and patient[2] == -1)
+    if complete:
+        try:
+            capture = initial_import_state.progress(db, project_id)
+            complete = bool(capture is None or capture.get("capture_phase") == "complete"
+                            and history_walk.capture_proof(capture.get("capture_proof"), project_id,
+                                                           capture["cohort_id"]))
+            if complete:
+                history = "legacy_floor" if capture is None else "complete_cohort"
+                pending = db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE project_id=? "
+                                     "AND kind IN ('history','thread','reply') AND state IS NOT 'done'",
+                                     (project_id,)).fetchone()[0]
+                complete = pending == 0
+            elif capture and capture.get("capture_phase") in ("capturing", "held"):
+                history = capture["capture_phase"]
+        except sqlite3.OperationalError as error:
+            if dependency_loss.fatal_read_error(error):
+                raise
+            complete = False
+        except (ValueError, KeyError, TypeError, OverflowError, RecursionError):
+            complete = False
+    return complete, status, history, pending
 
 
 def _attachment_count(db, project_id):
@@ -376,6 +430,8 @@ def _posted_measurement_day(m, value):
 
 def _dated_vitals(m, values, patient_name):
     """Return (source_bound, date) for a single panel; date may be unknown."""
+    from measurement_sources import _adjacent_measurement_retraction
+
     body = m["body_text"]
     if not isinstance(body, str) or not values:
         return False, None
@@ -396,7 +452,8 @@ def _dated_vitals(m, values, patient_name):
             return False, None
         left, right = assertion
         if (_VITAL_UNCERTAIN_PREFIX.search(body[left:matches[0].start()])
-                or _VITAL_UNCERTAIN_TAIL.search(body[matches[0].end():right])):
+                or _VITAL_UNCERTAIN_TAIL.search(body[matches[0].end():right])
+                or _adjacent_measurement_retraction(body, assertion, target=key)):
             return False, None
         spans.append(matches[0].span())
     start = max((body.rfind(mark, 0, min(s for s, _ in spans)) for mark in "。！？!?;；\n"), default=-1) + 1
@@ -550,11 +607,13 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=Non
     try:
         with contextlib.ExitStack() as resources:
             result = _build_rollup(db, project_id, request_limit=request_limit, cfg=cfg, resources=resources)
-    except BaseException:
+    except BaseException as error:
         try:
             db.execute('RELEASE rollup_build_read')
         except sqlite3.Error:
             pass  # SQLite may already have rolled back the savepoint.
+        if _invalid_sqlite_text(error):
+            raise RollupSourceUnverified('rollup_source_utf8_unverified') from None
         raise
     else:
         db.execute('RELEASE rollup_build_read')
@@ -562,36 +621,9 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=Non
 
 
 def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=None, resources) -> dict:
-    patient_columns = {row[1] for row in db.execute("PRAGMA table_info(patients)")}
-    acquisition_fields = {"fetch_state", "fetch_reason", "history_floor", "initial_import"} <= patient_columns
-    patient = db.execute("SELECT patient_name" + (",fetch_state,fetch_reason,history_floor" if acquisition_fields else "")
-                         + " FROM patients WHERE project_id=?", (project_id,)).fetchone()
+    patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
     patient_name = patient[0] if patient else None
-    fetch_status = (patient[1] if patient and acquisition_fields
-                    and patient[1] in ("complete", "incomplete", "failed", "pending", "forbidden") else "unknown")
-    history_status = "unknown"
-    pending_jobs = None
-    measurement_complete = bool(patient and acquisition_fields and patient[1] == "complete"
-                                and patient[2] in (None, "")
-                                and patient[3] == -1)
-    if measurement_complete:
-        try:
-            capture = initial_import_state.progress(db, project_id)
-            measurement_complete = bool(capture is None or capture.get("capture_phase") == "complete"
-                and history_walk.capture_proof(capture.get("capture_proof"), project_id, capture["cohort_id"]))
-            if measurement_complete:
-                history_status = "legacy_floor" if capture is None else "complete_cohort"
-                pending_jobs = db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE project_id=? "
-                    "AND kind IN ('history','thread','reply') AND state IS NOT 'done'", (project_id,)).fetchone()[0]
-                measurement_complete = pending_jobs == 0
-            elif capture and capture.get("capture_phase") in ("capturing", "held"):
-                history_status = capture["capture_phase"]
-        except sqlite3.OperationalError as error:
-            if dependency_loss.fatal_read_error(error):
-                raise
-            measurement_complete = False
-        except (ValueError, KeyError, TypeError):
-            measurement_complete = False
+    measurement_complete, fetch_status, history_status, pending_jobs = _acquisition_state(db, project_id)
     attachments = _attachment_count(db, project_id)
     measurement_complete = measurement_complete and attachments == 0
     # Legacy read-only snapshots may lack observation time; NULL stays unknown.
@@ -628,7 +660,7 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
         resources.callback(_close_rollup_cursor, cursor)
         first_page = cursor.fetchmany(64)
         if not first_page:
-            raise sqlite3.OperationalError('rollup_source_page_unavailable')
+            raise RollupSourceChanged('rollup_source_page_unavailable')
     else:
         first_page = []
     # 連携サマリー (#21): the newest karte_summary artifact, or None when
@@ -1088,143 +1120,22 @@ def current_cached_refs(db, project_id: int, roll: dict, meta, *, cfg=None) -> d
 
 
 def _current_cached_refs(db, project_id: int, roll: dict, meta, *, cfg=None) -> dict:
-    """Preserve cached context while recalculating unproven measurement fields."""
-    signature = generation_signature(db)
-    if isinstance(meta, str):
-        try:
-            meta = json.loads(meta)
-        except (ValueError, TypeError, RecursionError):
-            meta = None
-    if not inference.is_current(meta) or not inference.is_current(roll):
-        # Borrow the caller's snapshot; old cached clinical claims are never current.
-        return build_rollup(db, project_id, cfg=cfg)
-    stamped = meta.get("med_ref_generation") if isinstance(meta, dict) else None
-    marker = db.execute("SELECT 1 FROM artifacts WHERE kind=? LIMIT 1",
-                        (PROGRESS_KIND,)).fetchone() is not None
-    # True absence is the old-version compatibility path, not a disabled
-    # or damaged active-generation marker. New stamped rows still fence drift.
-    mismatch = stamped is not None and stamped != signature
-    out = dict(roll)
-    for old, new in _LEGACY_KEYS.items():
-        if old in out:
-            value = out.pop(old)
-            out.setdefault(new, value)
-    sources = {}
-    for key in ("medications", "unverified_medications", "planned_medications"):
-        if not isinstance(roll.get(key), list):
-            continue
-        items = []
-        for item in roll[key]:
-            if not isinstance(item, dict) or "ref" not in item:
-                items.append(item)
-                continue
-            item = dict(item)
-            ref, last = item["ref"], item.get("last")
-            valid = (not mismatch and isinstance(ref, dict)
-                     and ref.get("name") == item.get("name")
-                     and isinstance(ref.get("dict_id"), str) and bool(ref["dict_id"])
-                     and isinstance(ref.get("dict_sha256"), str)
-                     and re.fullmatch(r"[0-9a-f]{64}", ref["dict_sha256"]) is not None
-                     and isinstance(ref.get("cands"), list))
-            if valid:
-                try:
-                    valid = bool(candidate_note(ref))
-                except (AttributeError, KeyError, TypeError, ValueError, RecursionError):
-                    valid = False
-            if valid and marker:
-                valid = False
-                if not isinstance(last, str):
-                    item.pop("ref")
-                    items.append(item)
-                    continue
-                if last not in sources:
-                    sources[last] = []
-                    try:
-                        mids = db.execute(
-                            "SELECT DISTINCT m.message_id FROM messages m JOIN artifacts a "
-                            "ON a.message_id=m.message_id WHERE m.project_id=? "
-                            "AND m.posted_at=? AND a.kind=?",
-                            (project_id, last, REF_KIND))
-                        for row in mids:
-                            sources[last].extend(current_refs(db, row[0]))
-                    except sqlite3.OperationalError as error:
-                        if dependency_loss.fatal_read_error(error):
-                            raise
-                    except sqlite3.DatabaseError as error:
-                        if dependency_loss.fatal_read_error(error):
-                            raise
-                        pass  # old/incomplete schema cannot prove a dictionary annotation
-                valid = ref.get("name") == item.get("name") and ref in sources[last]
-            if not valid:
-                item.pop("ref")
-            items.append(item)
-        out[key] = items
-    # An active generation changed while the reader checked source bindings.
-    # Strip only annotations; vitals/raw medication rows remain available.
-    if generation_signature(db) != signature:
-        for key in ("medications", "unverified_medications", "planned_medications"):
-            if isinstance(out.get(key), list):
-                out[key] = [{k: v for k, v in item.items() if k != "ref"}
-                            if isinstance(item, dict) else item for item in out[key]]
-    # Old rollups can predate source-person guards. Recompute only clinical
-    # fields on the same read-only connection; preserve profiles and metadata.
-    patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
-    name = patient[0] if patient else None
-    # The measurement fields are checked again below when configuration is available.
-    legacy = not isinstance(meta, dict) or meta.get("period_check_version") != PERIOD_CHECK_VERSION
-    scoped = legacy and any(patient_item_scope({}, row[0], patient_name=name) != "patient"
-                            for row in db.execute("SELECT body_text FROM messages WHERE project_id=? "
-                                                  "AND body_state='full'", (project_id,)))
-    projection_stale = ((not isinstance(meta, dict) or meta.get("projection_version") != PROJECTION_VERSION)
-                        and _has_projection(db, project_id))
-    # A legacy cache cannot prove measurement time merely by posting order.
-    clinical_stale = not isinstance(meta, dict) or meta.get("period_check_version") != PERIOD_CHECK_VERSION
-    request_stale = legacy and any(
-        "reply_state" in row or "reply_conflict" in row for row in _dicts(out.get("recent_requests")))
-    current = None
-    if scoped or projection_stale or clinical_stale or request_stale:
-        try:
-            current = build_rollup(db, project_id, cfg=cfg)
-        except sqlite3.OperationalError as error:
-            if dependency_loss.fatal_read_error(error):
-                raise
-            if request_stale:
-                raise  # a failed current read cannot prove that requests are absent
-            current = {}  # a legacy snapshot cannot prove scoped current fields
-        clinical_keys = (("latest_vitals", "recent_labs", "measurement_reports", "measurement_coverage", "med_period_candidate", "medications",
-                          "unverified_medications", "planned_medications", "recent_symptoms", "clinical_state")
-                         if scoped or projection_stale else
-                         ("latest_vitals", "recent_labs", "measurement_reports", "measurement_coverage") if clinical_stale else ())
-        if request_stale:
-            clinical_keys += ("recent_requests",)
-        for key in clinical_keys:
-            if key in current:
-                out[key] = current[key]
-            else:
-                out.pop(key, None)
-    # The existing cache signature does not bind acquisition, jobs, model or
-    # extraction quality. Recheck measurements on this same snapshot rather
-    # than treating the cached stamp as proof. Other cached sections are kept.
-    if isinstance(cfg, dict):
-        if current is None:
-            try:
-                current = build_rollup(db, project_id, cfg=cfg)
-            except sqlite3.OperationalError as error:
-                if dependency_loss.fatal_read_error(error):
-                    raise
-                current = {}
-        for key in ("latest_vitals", "recent_labs", "measurement_reports", "measurement_coverage"):
-            if key in current:
-                out[key] = current[key]
-            else:
-                out.pop(key, None)
-        if "measurement_coverage" not in out:
-            out["measurement_coverage"] = {"complete": False, "reason": "measurement_read_failed"}
-    else:
-        for key in ("latest_vitals", "recent_labs", "measurement_reports"):
-            out.pop(key, None)
-        out["measurement_coverage"] = {"complete": False, "reason": "configuration_unavailable"}
-    return out
+    """Read current inputs on the borrowed snapshot or report an unverified cache."""
+    if not isinstance(cfg, dict):
+        metadata = loads_dict(meta) if isinstance(meta, str) else meta
+        if not inference.is_current(metadata) or not inference.is_current(roll):
+            # Preserve the existing legacy path: discard the old cache and
+            # rebuild from this same snapshot, without claiming measurements
+            # whose model configuration is unavailable.
+            return build_rollup(db, project_id, cfg=None)
+        # A metadata stamp alone does not bind all source and model inputs.
+        # Do not turn unavailable evidence into empty clinical findings.
+        return {"project_id": project_id, "rollup_freshness": "unknown",
+                "measurement_coverage": {"complete": False,
+                                         "reason": "configuration_unavailable"}}
+    # The former measurement refresh already built the whole rollup here.
+    # Reuse all of that same-snapshot result, not unverified cached sections.
+    return build_rollup(db, project_id, cfg=cfg)
 
 
 def _newest_source_ts(db, project_id: int) -> float:
@@ -1240,25 +1151,180 @@ def _newest_source_ts(db, project_id: int) -> float:
 
 def _message_source_signature(db, project_id, now):
     """Rollup inputs and deletion heuristic, excluding mere message observation time."""
+    with _freshness_snapshot(db):
+        try:
+            return _message_source_signature_snapshot(db, project_id, now)
+        except sqlite3.Error as error:
+            if _invalid_sqlite_text(error):
+                raise RollupSourceUnverified('rollup_source_utf8_unverified') from None
+            raise
+
+
+def _extraction_source_signature(db, project_id):
+    """Bind extraction rows without materializing large TEXT/BLOB columns."""
+    # Incremental blobs address SQLite rowids, so reject an unexpected schema
+    # rather than hash a different occurrence. Preserve the existing TEXT
+    # conversion contract for the supported sqlite3 text factories.
+    def schema_text(value):
+        try:
+            return value.decode('utf-8') if isinstance(value, bytes) else value
+        except UnicodeError:
+            raise RollupSourceUnverified('rollup_artifact_schema_unverified') from None
+
+    encoding = db.execute('PRAGMA encoding').fetchone()
+    if (not encoding or not isinstance(schema_text(encoding[0]), str)
+            or schema_text(encoding[0]).upper() != 'UTF-8'):
+        raise RollupSourceUnverified('rollup_encoding_unverified')
+    columns = {schema_text(row[1]): row for row in db.execute('PRAGMA table_info(artifacts)')}
+    if (not {'artifact_id', 'content', 'model', 'meta'} <= columns.keys() or '_rowid_' in columns
+            or schema_text(columns['artifact_id'][2]).upper() != 'INTEGER'
+            or columns['artifact_id'][5] != 1
+            or sum(bool(row[5]) for row in columns.values()) != 1):
+        raise RollupSourceUnverified('rollup_artifact_schema_unverified')
+    schema = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='artifacts'").fetchone()
+    definition = schema_text(schema[0]) if schema else None
+    if (not isinstance(definition, str)
+            or re.search(r'\bWITHOUT\s+ROWID\b', definition, re.IGNORECASE)):
+        raise RollupSourceUnverified('rollup_artifact_rowid_unverified')
+    if getattr(db, 'text_factory', str) not in (str, bytes):
+        raise RollupSourceUnverified('rollup_text_factory_unverified')
+    digest = hashlib.sha256()
+    fields = ('content', 'model', 'meta')
+    selected = ','.join(
+        f"typeof(a.{field}),octet_length(a.{field}),"
+        f"CASE WHEN typeof(a.{field}) NOT IN ('text','blob') THEN a.{field} END"
+        for field in fields)
+    for row in db.execute(f"""
+        SELECT a.artifact_id,a.message_id,a.project_id,a.kind,{selected},a._rowid_
+        FROM messages m JOIN artifacts a ON a.message_id=m.message_id
+        WHERE m.project_id=? AND a.kind IN
+          ('extract_v1','extract_llm','canonical_projection','semantic_facts_v4')
+        ORDER BY a.artifact_id
+    """, (project_id,)):
+        if type(row[0]) is not int or row[0] != row[-1]:
+            raise RollupSourceUnverified('rollup_artifact_rowid_unverified')
+        for value in row[:4]:
+            if value is None:
+                tag, encoded = b'n', b''
+            elif isinstance(value, bytes):
+                tag, encoded = b'b', value
+            elif isinstance(value, str):
+                tag, encoded = b's', value.encode('utf-8', 'surrogatepass')
+            else:
+                tag, encoded = b'v', repr(value).encode('ascii')
+            digest.update(tag)
+            digest.update(len(encoded).to_bytes(8, 'big'))
+            digest.update(encoded)
+        for offset, field in enumerate(fields):
+            kind, size, value = row[4 + 3 * offset:7 + 3 * offset]
+            if isinstance(kind, bytes):
+                kind = kind.decode('ascii')
+            if kind in ('text', 'blob'):
+                if (type(size) is not int or size < 0
+                        or not callable(getattr(db, 'blobopen', None))):
+                    raise RollupSourceUnverified('rollup_artifact_blob_unavailable')
+                tag = b'b' if kind == 'blob' or db.text_factory is bytes else b's'
+                digest.update(tag)
+                digest.update(size.to_bytes(8, 'big'))
+                decoder = codecs.getincrementaldecoder('utf-8')('strict') if tag == b's' else None
+                remaining = size
+                try:
+                    with db.blobopen('artifacts', field, row[0], readonly=True) as blob:
+                        while remaining:
+                            chunk = blob.read(min(32768, remaining))
+                            if not chunk or len(chunk) > remaining:
+                                raise RollupSourceUnverified('rollup_artifact_blob_truncated')
+                            if decoder is not None:
+                                decoder.decode(chunk, final=False)
+                            digest.update(chunk)
+                            remaining -= len(chunk)
+                        if decoder is not None:
+                            decoder.decode(b'', final=True)
+                except UnicodeError:
+                    raise RollupSourceUnverified('rollup_artifact_encoding_unverified') from None
+            else:
+                tag, encoded = ((b'n', b'') if value is None else
+                                (b'v', repr(value).encode('ascii')))
+                digest.update(tag)
+                digest.update(len(encoded).to_bytes(8, 'big'))
+                digest.update(encoded)
+    return digest.hexdigest()
+
+
+class RollupSourceUnverified(ValueError):
+    """A source cannot be safely read for a rollup freshness witness."""
+
+
+def _invalid_sqlite_text(error):
+    """Recognize only CPython SQLite's invalid TEXT decoding failure."""
+    return (isinstance(error, sqlite3.OperationalError)
+            and getattr(error, 'sqlite_errorcode', None) is None
+            and str(error).startswith('Could not decode to UTF-8 column '))
+
+
+def _body_source_fingerprint(db, rowid, body_type):
+    """Hash one SQLite body in bounded byte chunks on the borrowed snapshot."""
+    digest = hashlib.sha256()
+    if body_type == 'null':
+        digest.update(b'n')
+    elif body_type == 'text':
+        digest.update(b's')
+        if not callable(getattr(db, 'blobopen', None)):
+            raise RollupSourceUnverified('rollup_blob_read_unavailable')
+        decoder = codecs.getincrementaldecoder('utf-8')('strict')
+        try:
+            with db.blobopen('messages', 'body_text', rowid, readonly=True) as body:
+                while chunk := body.read(32768):
+                    decoder.decode(chunk, final=False)
+                    digest.update(chunk)
+                decoder.decode(b'', final=True)
+        except UnicodeError:
+            raise RollupSourceUnverified('rollup_body_encoding_unverified') from None
+    else:
+        raise RollupSourceUnverified('rollup_body_type_unverified')
+    return digest.hexdigest()
+
+
+def _message_source_signature_snapshot(db, project_id, now):
     from registered_data import registered_data
+    if db.execute('PRAGMA encoding').fetchone()[0].upper() != 'UTF-8':
+        raise RollupSourceUnverified('rollup_encoding_unverified')
+    message_columns = {row[1] for row in db.execute('PRAGMA table_info(messages)')}
+    revision_columns = {row[1] for row in db.execute('PRAGMA table_info(message_revisions)')}
+    required = {'message_id', 'project_id', 'posted_at', 'posted_at_ts', 'content_hash', 'body_text',
+                'sender_id', 'sender_name', 'sender_type', 'profession', 'organization', 'parent_id',
+                'body_state', 'updated_seen'}
+    if not required <= message_columns or not {'message_id', 'seq'} <= revision_columns:
+        raise RollupSourceUnverified('rollup_source_schema_unverified')
+    if '_rowid_' in message_columns:
+        raise RollupSourceUnverified('rollup_rowid_unverified')
+    schema = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='messages'").fetchone()
+    if (schema is None or not isinstance(schema[0], str)
+            or re.search(r'\bWITHOUT\s+ROWID\b', schema[0], re.IGNORECASE)):
+        raise RollupSourceUnverified('rollup_rowid_unverified')
     patient = db.execute("SELECT patient_name,karte_id,project_type FROM patients WHERE project_id=?",
                          (project_id,)).fetchone()
     context = db.execute("SELECT artifact_id,kind,meta FROM artifacts WHERE (project_id=? "
                          "AND kind IN ('karte_summary','project_metadata_v1','loop_candidate','loop_event')) "
                          "OR kind='semantic_policy' ORDER BY artifact_id",
                          (project_id,)).fetchall()
-    rows = db.execute("""
-      SELECT message_id, posted_at, posted_at_ts, content_hash,
-        CASE WHEN content_hash IS NULL THEN body_text END,
-        sender_id, sender_name, sender_type, parent_id, body_state,
-        typeof(body_text), CASE WHEN body_text='' THEN 1 ELSE 0 END, updated_seen
-      FROM messages WHERE project_id=? ORDER BY posted_at_ts DESC, message_id DESC
-    """, (project_id,)).fetchall()
+    rows = []
+    for row in db.execute("""
+      SELECT m.message_id, m.posted_at, m.posted_at_ts, m.content_hash, m._rowid_,
+        m.sender_id, m.sender_name, m.sender_type, m.profession, m.organization,
+        m.parent_id, m.body_state, typeof(m.body_text),
+        CASE WHEN m.body_text='' THEN 1 ELSE 0 END,
+        (SELECT COALESCE(MAX(r.seq),1) FROM message_revisions r WHERE r.message_id=m.message_id),
+        m.updated_seen
+      FROM messages m WHERE m.project_id=? ORDER BY m.posted_at_ts DESC, m.message_id DESC
+    """, (project_id,)):
+        rows.append((*row[:4], _body_source_fingerprint(db, row[4], row[12]), *row[5:]))
     html_available = any(row[1] == "body_html" for row in db.execute("PRAGMA table_info(messages)"))
     empty_proofs = _empty_body_proofs(db, project_id, html_available=html_available)
     empty_sources = [(r[0], empty_proofs.get(r[0], False))
-                     for r in rows if r[9] == "full" and r[11] == 1]
-    payload = (tuple(patient) if patient else None, [tuple(a) for a in context],
+                     for r in rows if r[11] == "full" and r[13] == 1]
+    payload = (tuple(patient) if patient else None, _acquisition_state(db, project_id), [tuple(a) for a in context],
+               _extraction_source_signature(db, project_id),
                registered_data(db, "aggregate", project_id, None),
                [tuple(r[:-1]) for r in rows],
                _attachment_count(db, project_id), empty_sources,
@@ -1269,6 +1335,11 @@ def _message_source_signature(db, project_id, now):
 
 def inference_coverage(db, project_id: int, *, now=None) -> dict:
     """Verify the saved rollup against current inputs on the caller's connection."""
+    with _freshness_snapshot(db):
+        return _inference_coverage_snapshot(db, project_id, now=now)
+
+
+def _inference_coverage_snapshot(db, project_id: int, *, now=None) -> dict:
     now = time.time() if now is None else now
     dependencies = dependency_loss.read(db, project_id)
     result = {inference.VERSION_KEY: inference.CURRENT_VERSION,
@@ -1311,6 +1382,10 @@ def inference_coverage(db, project_id: int, *, now=None) -> dict:
     return result
 
 
+class RollupSourceChanged(sqlite3.OperationalError):
+    """A rollup was discarded because its source changed while it was built."""
+
+
 def rebuild(ledger, project_id: int, *, cfg=None) -> int:
     """Atomic replace — a crash between delete and insert must not leave
     a patient with NO rollup (Oracle B22). An unchanged rebuild (all
@@ -1335,7 +1410,7 @@ def rebuild(ledger, project_id: int, *, cfg=None) -> int:
             ledger.db.execute("BEGIN IMMEDIATE")
         if (ledger.db.total_changes != changes
                 or ledger.db.execute("PRAGMA data_version").fetchone()[0] != data_version):
-            raise sqlite3.OperationalError("inference_rollup_source_changed")
+            raise RollupSourceChanged("inference_rollup_source_changed")
         old = ledger.db.execute(
             "SELECT artifact_id, content, meta FROM artifacts"
             " WHERE kind=? AND project_id=? AND " + inference.current_meta_pred("meta"),
@@ -1400,7 +1475,62 @@ def dirty_projects(ledger, *, now=None) -> list:
     med_ref rewrites/removals show as a changed signature, not via art_ts:
     derive rewrites every row on a dictionary change, and a rollup whose
     content is unchanged never advances generated_at (M5)."""
-    rows = ledger.db.execute("""
+    scan = scan_dirty_projects(ledger, now=now)
+    if scan.incomplete:
+        raise sqlite3.OperationalError("rollup_scan_unknown")
+    return list(scan.dirty)
+
+
+@dataclass(frozen=True)
+class RollupScan:
+    """Marker checks observed per patient, with explicit concurrent uncertainty."""
+    dirty: tuple[int, ...]
+    unknown: tuple[int, ...]
+    incomplete: bool
+
+
+def scan_dirty_projects(ledger, *, now=None) -> RollupScan:
+    """Check each patient's existing freshness markers on its own snapshot.
+
+    This reports marker differences, not a proof of every inference input.
+    """
+    db = ledger.db
+    version = db.execute("PRAGMA data_version").fetchone()[0]
+    changes = db.total_changes
+    ids = _rollup_patient_ids(db)
+    now = time.time() if now is None else now
+    dirty = []
+    unknown = []
+    for project_id in ids:
+        # Each patient is internally consistent; different patients may be
+        # observed at different times. A caller-owned TX remains caller-owned.
+        try:
+            with _freshness_snapshot(db):
+                if _dirty_project_snapshot(db, project_id, now):
+                    dirty.append(project_id)
+        except sqlite3.OperationalError as error:
+            if not _invalid_sqlite_text(error):
+                raise
+            unknown.append(project_id)
+        except RollupSourceUnverified:
+            unknown.append(project_id)
+    if db.total_changes != changes or db.execute("PRAGMA data_version").fetchone()[0] != version:
+        # A writer may have changed an already-examined patient or added a
+        # candidate. Do not present unexamined/possibly changed rows as clean.
+        candidates = dict.fromkeys([*ids, *_rollup_patient_ids(db)])
+        dirty_set = set(dirty)
+        return RollupScan(tuple(dirty), tuple(pid for pid in candidates if pid not in dirty_set), True)
+    return RollupScan(tuple(dirty), tuple(unknown), bool(unknown))
+
+
+def _rollup_patient_ids(db):
+    return [row[0] for row in db.execute(
+        "SELECT p.project_id FROM patients p WHERE EXISTS "
+        "(SELECT 1 FROM messages m WHERE m.project_id=p.project_id)")]
+
+
+def _dirty_project_snapshot(db, project_id, now):
+    x = db.execute("""
       SELECT p.project_id, r.g AS gen, r.period_version, r.next_check,
         r.projection_version, r.message_sig,
         EXISTS(SELECT 1 FROM artifacts a WHERE a.project_id=p.project_id
@@ -1432,17 +1562,17 @@ def dirty_projects(ledger, *, now=None) -> list:
                    MAX(CASE WHEN json_valid(meta)
                             THEN json_extract(meta,'$.projection_version')
                             END) projection_version
-                 FROM artifacts WHERE kind=? AND {inference_current}
+                 FROM artifacts WHERE kind=? AND project_id=? AND {inference_current}
                  GROUP BY project_id) r ON r.project_id=p.project_id
-      WHERE EXISTS (SELECT 1 FROM messages m3
+      WHERE p.project_id=? AND EXISTS (SELECT 1 FROM messages m3
                     WHERE m3.project_id=p.project_id)
     """.replace("{sig}", _REF_SIG_SQL.format(pid="p.project_id"))
        .replace("{inference_current}", inference.current_meta_pred("meta")),
-        (REF_KIND, KIND)).fetchall()
-    now = time.time() if now is None else now
-    ref_generation = generation_signature(ledger.db)
-    return [x["project_id"] for x in rows
-            if type(x["gen"]) not in (int, float)
+        (REF_KIND, KIND, project_id, project_id)).fetchone()
+    if x is None:
+        return False
+    ref_generation = generation_signature(db)
+    return (type(x["gen"]) not in (int, float)
             or not 0 <= x["gen"] < 1e12
             or x["period_version"] != PERIOD_CHECK_VERSION
             or (x["has_projection"] and x["projection_version"] != PROJECTION_VERSION)
@@ -1455,17 +1585,34 @@ def dirty_projects(ledger, *, now=None) -> list:
             or (x["art_ts"] or 0) > x["gen"]
             or not isinstance(x["message_sig"], str)
             or x["message_sig"] != _message_source_signature(
-                ledger.db, x["project_id"], now)]
+                db, project_id, now))
 
 
-def rebuild_many(ledger, project_ids, *, deadline: float | None = None) -> int:
+def rebuild_many(ledger, project_ids, *, deadline: float | None = None,
+                 source_changed: list | None = None, source_unknown: list | None = None) -> int:
+    """Rebuild patients, optionally reporting unverified inputs and races.
+
+    Without a collector, preserve the existing exception behavior. A collected
+    race or unverified source was not committed and remains eligible for a later scan.
+    """
     if deadline is not None and time.monotonic() >= deadline:
         return 0
     n = 0
     for pid in project_ids:
         if deadline is not None and time.monotonic() >= deadline:
             break
-        rebuild(ledger, pid)
+        try:
+            rebuild(ledger, pid)
+        except RollupSourceChanged:
+            if source_changed is None:
+                raise
+            source_changed.append(pid)
+            continue
+        except RollupSourceUnverified:
+            if source_unknown is None:
+                raise
+            source_unknown.append(pid)
+            continue
         n += 1
     return n
 

@@ -262,9 +262,24 @@ def stage_derive(ledger, result, deadline, cfg=None,
         touched |= set(result.get("drug_map", {}).get("pids", []))
         for k in ("cmd_imports", "trickle_imports"):
             touched |= {c["pid"] for c in result.get(k, [])}
-        touched |= set(rollup.dirty_projects(ledger))
+        scan = rollup.scan_dirty_projects(ledger)
+        touched |= set(scan.dirty)
+        touched.difference_update(scan.unknown)
+        result["rollup_scan"] = {"state": "unknown" if scan.incomplete else "checked",
+                                 "unknown_observed": len(scan.unknown)}
+        if scan.incomplete:
+            result["errors"].append("rollup: scan_unknown")
+        source_changed = []
+        source_unknown = []
         result["rollups"] = rollup.rebuild_many(
-            ledger, touched, deadline=deadline - 30)
+            ledger, touched, deadline=deadline - 30, source_changed=source_changed,
+            source_unknown=source_unknown)
+        if source_changed:
+            result["rollup_source_changed"] = len(source_changed)
+            result["errors"].append("rollup: source_changed")
+        if source_unknown:
+            result["rollup_source_unknown"] = len(source_unknown)
+            result["errors"].append("rollup: source_unknown")
     except Exception as e:
         result["errors"].append(f"rollup: {type(e).__name__}")
 

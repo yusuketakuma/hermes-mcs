@@ -174,6 +174,180 @@ def test_saved_rollup_freshness_changes_when_acquisition_becomes_incomplete(stor
     assert rollup.inference_coverage(store.db, 1)["current"] is False
 
 
+@pytest.mark.parametrize("column,value", [
+    ("fetch_state", None), ("fetch_state", "incomplete"),
+    ("fetch_reason", "synthetic_failure"), ("history_floor", None),
+    ("initial_import", "{"),
+])
+def test_acquisition_change_marks_dirty_and_recovers_without_rebuild_loop(store, column, value):
+    _seed_out_of_order(store)
+    rollup.rebuild(store, 1, cfg={})
+    before = rollup._message_source_signature(store.db, 1, 1)
+    assert rollup.inference_coverage(store.db, 1)["current"]
+    store.db.execute(f"UPDATE patients SET {column}=? WHERE project_id=1", (value,))
+    assert store.db.in_transaction
+    assert rollup._message_source_signature(store.db, 1, 1) != before
+    assert 1 in rollup.dirty_projects(store)
+    assert not rollup.inference_coverage(store.db, 1)["current"]
+    assert not rollup.build_rollup(store.db, 1, cfg={})["measurement_coverage"]["complete"]
+    assert store.db.in_transaction
+    store.db.rollback()
+    assert rollup._message_source_signature(store.db, 1, 1) == before
+    assert rollup.dirty_projects(store) == []
+    store.db.execute(f"UPDATE patients SET {column}=? WHERE project_id=1", (value,))
+    store.db.commit()
+    rollup.rebuild(store, 1, cfg={})
+    assert rollup.dirty_projects(store) == []
+    assert not rollup.build_rollup(store.db, 1, cfg={})["measurement_coverage"]["complete"]
+
+
+def test_same_acquisition_job_count_is_equivalent_across_replacement_and_rollback(store):
+    _seed_out_of_order(store)
+    store.db.execute("INSERT INTO fetch_jobs(kind,project_id,message_id,state) VALUES('reply',1,1,'pending')")
+    store.db.commit()
+    rollup.rebuild(store, 1, cfg={})
+    before = rollup._message_source_signature(store.db, 1, 1)
+    store.db.execute("DELETE FROM fetch_jobs WHERE kind='reply' AND project_id=1 AND message_id=1")
+    store.db.execute("INSERT INTO fetch_jobs(kind,project_id,message_id,state) VALUES('thread',1,2,NULL)")
+    assert store.db.in_transaction
+    assert rollup._message_source_signature(store.db, 1, 1) == before
+    assert rollup.dirty_projects(store) == []
+    assert rollup.inference_coverage(store.db, 1)["current"]
+    assert rollup.build_rollup(store.db, 1, cfg={})["measurement_coverage"]["pending_fetch_jobs"] == 1
+    store.db.rollback()
+    assert rollup._message_source_signature(store.db, 1, 1) == before
+    store.db.execute("UPDATE fetch_jobs SET state='done' WHERE kind='reply' AND project_id=1")
+    store.db.commit()
+    assert 1 in rollup.dirty_projects(store)
+    assert not rollup.inference_coverage(store.db, 1)["current"]
+    rollup.rebuild(store, 1, cfg={})
+    assert rollup.dirty_projects(store) == []
+
+
+def test_acquisition_signature_uses_one_borrowed_snapshot_during_other_writer(store, monkeypatch):
+    _seed_out_of_order(store)
+    baseline = rollup._message_source_signature(store.db, 1, 1)
+    path = store.db.execute("PRAGMA database_list").fetchone()[2]
+    other = sqlite3.connect(path)
+    original = rollup._acquisition_state
+    changed = False
+
+    def mutate_after_first_read(db, project_id):
+        nonlocal changed
+        if not changed:
+            other.execute("UPDATE patients SET fetch_state='incomplete' WHERE project_id=1")
+            other.commit()
+            changed = True
+        return original(db, project_id)
+
+    monkeypatch.setattr(rollup, "_acquisition_state", mutate_after_first_read)
+    try:
+        assert rollup._message_source_signature(store.db, 1, 1) == baseline
+        assert changed and not store.db.in_transaction
+        assert rollup._message_source_signature(store.db, 1, 1) != baseline
+    finally:
+        other.close()
+
+
+def test_dirty_scan_reports_concurrent_change_as_unknown_and_legacy_entry_fails_closed(store, monkeypatch):
+    _seed_out_of_order(store)
+    store.ensure_patient(2)
+    store.save_messages([_message(mid=3, project_id=2, body="合成の記録")])
+    rollup.rebuild(store, 1, cfg={})
+    rollup.rebuild(store, 2, cfg={})
+    assert rollup.dirty_projects(store) == []
+    other = sqlite3.connect(store.db.execute("PRAGMA database_list").fetchone()[2])
+    original = rollup._dirty_project_snapshot
+    updates = []
+
+    def mutate_after_read(db, project_id, now):
+        result = original(db, project_id, now)
+        if project_id == 1:
+            updates.append(len(updates))
+            other.execute("UPDATE patients SET fetch_state=? WHERE project_id=1",
+                          ("incomplete" if len(updates) % 2 else "complete",))
+            other.commit()
+        return result
+
+    monkeypatch.setattr(rollup, "_dirty_project_snapshot", mutate_after_read)
+    try:
+        scan = rollup.scan_dirty_projects(store)
+        assert scan.incomplete and scan.unknown == (1, 2)
+        assert not scan.dirty and not store.db.in_transaction
+        with pytest.raises(sqlite3.OperationalError, match="rollup_scan_unknown"):
+            rollup.dirty_projects(store)
+        monkeypatch.setattr(rollup, "_dirty_project_snapshot", original)
+        assert not rollup.scan_dirty_projects(store).incomplete
+    finally:
+        other.close()
+
+
+def test_dirty_scan_new_patient_during_scan_is_unknown(store, monkeypatch):
+    _seed_out_of_order(store)
+    rollup.rebuild(store, 1, cfg={})
+    other = sqlite3.connect(store.db.execute("PRAGMA database_list").fetchone()[2])
+    original = rollup._rollup_patient_ids
+    calls = []
+
+    def add_patient_after_list(db):
+        ids = original(db)
+        calls.append(1)
+        if len(calls) == 1:
+            other.execute("INSERT INTO patients(project_id) VALUES(3)")
+            other.execute("INSERT INTO messages(message_id,project_id,body_state) VALUES(3,3,'full')")
+            other.commit()
+        return ids
+
+    monkeypatch.setattr(rollup, "_rollup_patient_ids", add_patient_after_list)
+    try:
+        scan = rollup.scan_dirty_projects(store)
+        assert scan.incomplete and scan.dirty == () and scan.unknown == (1, 3)
+        assert not store.db.in_transaction
+    finally:
+        other.close()
+
+
+@pytest.mark.parametrize("corruption", ["large_integer", "deep_json"])
+def test_corrupt_acquisition_is_unknown_without_stopping_other_patients(store, corruption):
+    _seed_out_of_order(store)
+    store.ensure_patient(2)
+    store.save_messages([_message(mid=3, project_id=2, body="合成の記録")])
+    rollup.rebuild(store, 1, cfg={})
+    rollup.rebuild(store, 2, cfg={})
+    if corruption == "large_integer":
+        source = json.loads(store.db.execute("SELECT initial_import FROM patients WHERE project_id=1").fetchone()[0])
+        source["started_at"] = 10 ** 400
+        raw = json.dumps(source)
+    else:
+        raw = "[" * 1200 + "0" + "]" * 1200
+    store.db.execute("UPDATE patients SET initial_import=? WHERE project_id=1", (raw,))
+    store.db.commit()
+    coverage = rollup.build_rollup(store.db, 1, cfg={})["measurement_coverage"]
+    assert coverage["history_state"] == "unknown" and not coverage["complete"]
+    assert not rollup.inference_coverage(store.db, 1)["current"]
+    dirty = rollup.dirty_projects(store)
+    assert 1 in dirty and 2 not in dirty
+
+
+@pytest.mark.parametrize("code", [sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED])
+def test_acquisition_fatal_sql_errors_propagate(store, code):
+    error = sqlite3.OperationalError("synthetic acquisition read failure")
+    error.sqlite_errorcode = code
+
+    class FailingConnection:
+        def __getattr__(self, name):
+            return getattr(store.db, name)
+
+        def execute(self, sql, *args):
+            if sql.startswith("SELECT COUNT(*) FROM fetch_jobs"):
+                raise error
+            return store.db.execute(sql, *args)
+
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        rollup.build_rollup(FailingConnection(), 1, cfg={})
+    assert caught.value is error
+
+
 def test_saved_rollup_freshness_changes_when_extraction_metadata_changes_in_place(store):
     _seed_out_of_order(store)
     rollup.rebuild(store, 1, cfg={})
@@ -186,6 +360,29 @@ def test_saved_rollup_freshness_changes_when_extraction_metadata_changes_in_plac
     with store.db:
         store.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), row["artifact_id"]))
     assert rollup.inference_coverage(store.db, 1)["current"] is False
+    assert 1 in rollup.dirty_projects(store)
+
+
+def test_extraction_signature_detects_in_place_content_and_borrows_transaction(store):
+    _seed_out_of_order(store)
+    rollup.rebuild(store, 1, cfg={})
+    original = rollup._message_source_signature(store.db, 1, 1)
+    row = store.db.execute(
+        "SELECT artifact_id,content FROM artifacts WHERE kind='extract_llm' AND message_id=1"
+    ).fetchone()
+    content = json.loads(row["content"])
+    content["summary"] = "完全合成の訂正"
+    store.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                     (json.dumps(content, ensure_ascii=False), row["artifact_id"]))
+    assert store.db.in_transaction
+    assert rollup._message_source_signature(store.db, 1, 1) != original
+    assert not rollup.inference_coverage(store.db, 1)["current"]
+    assert 1 in rollup.dirty_projects(store)
+    assert store.db.in_transaction
+    store.db.rollback()
+    assert rollup._message_source_signature(store.db, 1, 1) == original
+    assert rollup.inference_coverage(store.db, 1)["current"]
+    assert 1 not in rollup.dirty_projects(store)
 
 
 def test_legacy_history_floor_is_not_cohort_proof(store):
@@ -521,6 +718,37 @@ def test_other_symptom_negation_does_not_negate_the_temperature(store, body):
     assert rollup._dated_vitals(message, {"bt": 36.4}, None) == (True, "2026-10-02")
     out = rollup.build_rollup(store.db, 1, cfg={})
     assert out["latest_vitals"]["bt"] == 36.4
+
+
+@pytest.mark.parametrize("suffix", [
+    "その数値は誤っていました。",
+    "先ほどの測定値は誤りでした。",
+    "直前の結果は間違っていました。",
+])
+def test_adjacent_retraction_cannot_confirm_vital(store, suffix):
+    body = "本人の2026-10-02測定で体温36.4℃でした。" + suffix
+    _save(store, 1, "2026-10-03T09:00:00+09:00", body, vitals={"bt": 36.4})
+    message = store.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    assert rollup._dated_vitals(message, {"bt": 36.4}, None) == (False, None)
+    out = rollup.build_rollup(store.db, 1, cfg={})
+    assert not out.get("latest_vitals")
+    assert not [item for item in out["measurement_reports"]["items"]
+                if item.get("kind") == "vitals" and item.get("values")]
+    assert message["body_text"] == body
+
+
+@pytest.mark.parametrize("suffix", [
+    "その数値は誤っていません。",
+    "家族の測定値は誤っていました。",
+    "他の患者の数値は誤っていました。",
+    "先ほどの予定は誤っていました。",
+    "本人は外出しました。",
+])
+def test_unrelated_or_negated_correction_does_not_retract_vital(store, suffix):
+    body = "本人の2026-10-02測定で体温36.4℃でした。" + suffix
+    _save(store, 1, "2026-10-03T09:00:00+09:00", body, vitals={"bt": 36.4})
+    message = store.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+    assert rollup._dated_vitals(message, {"bt": 36.4}, None) == (True, "2026-10-02")
 
 
 def test_lab_date_is_not_borrowed_across_a_comma(store):

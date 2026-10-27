@@ -153,6 +153,12 @@ def test_rollup_count_is_unknown_when_snapshot_lacks_input_columns(world):
     assert repair.plan(world['snapshot'], nonce=NONCE)['counts']['dirty_rollups'] is None
 
 
+def test_rollup_count_is_unknown_when_scan_cannot_establish_all_candidates(world, monkeypatch):
+    monkeypatch.setattr(rollup, "scan_dirty_projects",
+                        lambda *args, **kwargs: rollup.RollupScan((1,), (), True))
+    assert repair.plan(world['snapshot'], nonce=NONCE)['counts']['dirty_rollups'] is None
+
+
 def test_plan_aggregates_evidenced_candidates_without_private_values(world):
     # Given.
     snapshot = world["snapshot"]

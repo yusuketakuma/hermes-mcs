@@ -23,7 +23,6 @@ import mcs_signals
 import mcs_view
 import inference_version
 import read_model
-import rollup
 from export_schema import project_record
 from mcs_queries import JST, item_unverified
 from drug_map import candidate_note
@@ -237,6 +236,9 @@ def _patient_md(pid: int, name: str, info: dict, roll: dict, *, measurement_conf
     lines.extend(f"- {k}: {info[k]}\n"
                  for k in ("project_type", "disease", "station_name")
                  if info.get(k))
+    if roll.get("rollup_freshness") == "unknown":
+        lines.append("\n## 患者集約: 未確認\n\n記録の現行性を確認できません。\n")
+        return "".join(lines)
     lines.append(f"- last_activity: {roll.get('last_activity', '?')}\n"
                  f"- messages: {roll.get('msg_count', 0)} "
                  f"(replies {roll.get('reply_count', 0)})\n")
@@ -404,11 +406,11 @@ def run(out_dir: Path, snapshot: Path) -> dict:
                 raise ValueError("patient_rollup_invalid")
             if "project_id" not in roll:
                 # A known legacy row may lack this field; none of its content
-                # is trusted. Rebuild explicitly on the same patient snapshot.
+                # is trusted. The snapshot has no model configuration proof.
                 if (inference_version.read_version(roll) != inference_version.LEGACY_VERSION
                         or inference_version.read_version(loads_dict(meta)) != inference_version.LEGACY_VERSION):
                     raise ValueError("patient_rollup_invalid")
-                roll = rollup.build_rollup(view.db, pid)
+                roll = current_cached_refs(view.db, pid, roll, meta)
             else:
                 if type(roll["project_id"]) is not int or roll["project_id"] != pid:
                     raise ValueError("patient_rollup_invalid")
