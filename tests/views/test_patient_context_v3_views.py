@@ -113,6 +113,87 @@ def test_unpublished_context_refresh_adds_nothing(ctx):
     assert ev["nightly_facts"] == [] and ev["summary"] == []
 
 
+def _historical_karte(ctx, *, updated="2026-09-01T09:00:00+09:00", pid=1):
+    from mcs_queries import karte_source_record
+
+    ctx.db.ensure_patient(pid)
+    ctx.db.db.execute("UPDATE patients SET karte_id=10 WHERE project_id=?", (pid,))
+    content = {"comment": "生活環境: 合成の以前の居住記録です。", "updated_at": updated,
+               "updater": {"name": "合成記入者"}}
+    rid = ctx.db.artifact_add("karte_summary", json.dumps(content), project_id=pid, meta={"karte_id": 10})
+    row = ctx.db.db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE artifact_id=?", (rid,)).fetchone()
+    source = karte_source_record(row, pid, historical=True)
+    body = source["body_text"]
+    ctx.db.artifact_add("karte_summary", json.dumps({"comment": "生活環境: 合成の最新記録です。"}),
+                        project_id=pid, meta={"karte_id": 10})
+    return {**source, "category": "living", "text": body, "quote": body, "evidence": body,
+            "evidence_span": [0, len(body)], "quote_span": [0, len(body)],
+            "subject": "unspecified", "details": [], "view_bucket": "current"}
+
+
+def test_historical_karte_reaches_timeline_only_and_keeps_separate_source_occurrences(ctx):
+    first, second = _historical_karte(ctx), _historical_karte(ctx)
+    ctx.context_refresh["value"] = {"facts": [], "summary": [], "historical_facts": [first, second]}
+    before = ctx.db.db.total_changes
+    ctx.db.db.execute("BEGIN")
+    ev = pcv.evidence(ctx.db.db, 1)
+    history = [item for item in pcv.timeline(ev)["items"] if item.get("historical")]
+    assert len(history) == 2 and {item["source_key"] for item in history} == {first["source_key"], second["source_key"]}
+    assert all(item["view_bucket"] == "history" and item["quote"] == first["quote"] for item in history)
+    assert first["quote"] not in str(pcv.background(ev))
+    assert first["quote"] not in str(pcv.previsit(ctx.db.db, ev, T0 + DAY))
+    view = notify_views.patient_context_list(ctx.db.db, 1, "timeline", cfg={}, since=0, now=T0)
+    rows = [row for row in view["items"] if row.get("source_key") in {first["source_key"], second["source_key"]}]
+    assert len(rows) == 2 and all(row["group"] == "履歴" and "旧連携サマリー" in row["source"] for row in rows)
+    assert all(row["quotes"] == [first["quote"]] and "url" not in row for row in rows)
+    assert ctx.db.db.in_transaction and ctx.db.db.total_changes == before
+    ctx.db.db.rollback()
+
+
+@pytest.mark.parametrize("change", [
+    {"project_id": 2}, {"source": "chat"}, {"message_id": 1}, {"historical": False},
+    {"content_hash": "f" * 64}, {"source_key": "karte:0"}, {"source_key": "karte:" + "9" * 100},
+    {"source_key": "karte:9999999999999999999"},
+    {"evidence": "根拠にない合成文"}, {"evidence_span": [0, 1]}, {"quote_span": [0, 1]},
+    {"posted_at_ts": T0}, {"posted_at": "2026-09-02T09:00:00+09:00"},
+])
+def test_historical_karte_rejects_foreign_or_changed_source_bindings(ctx, change):
+    fact = {**_historical_karte(ctx), **change}
+    ctx.context_refresh["value"] = {"historical_facts": [fact]}
+    assert pcv.evidence(ctx.db.db, 1)["historical_items"] == []
+
+
+@pytest.mark.parametrize("mutation", [
+    "UPDATE patients SET karte_id=11 WHERE project_id=1",
+    "UPDATE patients SET fetch_reason='access_revoked' WHERE project_id=1",
+    "UPDATE patients SET is_archived=1 WHERE project_id=1",
+    "DELETE FROM artifacts WHERE artifact_id=(SELECT MIN(artifact_id) FROM artifacts WHERE kind='karte_summary')",
+    "DELETE FROM artifacts WHERE artifact_id=(SELECT MAX(artifact_id) FROM artifacts WHERE kind='karte_summary')",
+    "UPDATE artifacts SET content='{\"comment\":\"合成\",\"updater\":1}' WHERE artifact_id="
+    "(SELECT MIN(artifact_id) FROM artifacts WHERE kind='karte_summary')",
+])
+def test_historical_karte_rechecks_mapping_and_retained_original(ctx, mutation):
+    fact = _historical_karte(ctx)
+    ctx.context_refresh["value"] = {"historical_facts": [fact]}
+    assert pcv.evidence(ctx.db.db, 1)["historical_items"]
+    ctx.db.db.execute(mutation)
+    ctx.db.db.commit()
+    assert pcv.evidence(ctx.db.db, 1)["historical_items"] == []
+
+
+def test_historical_karte_without_aware_update_time_stays_undated(ctx):
+    fact = _historical_karte(ctx, updated="2026-09-01")
+    ctx.context_refresh["value"] = {"historical_facts": [fact]}
+    timeline = pcv.timeline(pcv.evidence(ctx.db.db, 1))
+    assert timeline["items"][-1]["source_key"] == fact["source_key"]
+    assert timeline["items"][-1]["posted_at_ts"] is None
+    view = notify_views.patient_context_list(ctx.db.db, 1, "timeline", cfg={}, since=0, now=T0)
+    last_page = notify_views.patient_context_list(ctx.db.db, 1, "timeline", cfg={}, since=0, now=T0,
+                                                page=view["pages"] - 1)
+    row = next(row for row in last_page["items"] if row.get("source_key") == fact["source_key"])
+    assert row["date"] == "更新日時未確認" and "url" not in row
+
+
 def _requests(ctx, rows, planned=None):
     """Hash-bound extractions carrying each post's request (LLM, so a thread reply can answer it)
     and the plan (rule extraction) as written."""

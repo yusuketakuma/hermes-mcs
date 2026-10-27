@@ -16,7 +16,7 @@ import sqlite3
 
 from clinical_scope import source_axes, source_polarity
 from patient_context import LABELS, extract_context
-from mcs_util import html_to_text, locate_quote_span
+from mcs_util import html_to_text, locate_quote_span, valid_hash
 from read_model import _records_coverage
 from snapshot_access import snapshot_meta
 
@@ -130,6 +130,63 @@ def _mentions(db, project_id, senders):
         entries.append(entry)
     return entries
 
+
+def _historical_karte_items(db, project_id, context):
+    """Recheck retained originals for timeline-only history, without current-state promotion."""
+    from mcs_queries import karte_source_record
+
+    records, sources = [], {}
+    for fact in (context or {}).get("historical_facts") or []:
+        if (not isinstance(fact, dict) or type(fact.get("project_id")) is not int
+                or fact["project_id"] != project_id or fact.get("source") != "karte_summary"
+                or fact.get("historical") is not True or type(fact.get("message_id")) is not int
+                or fact["message_id"] != 0 or not valid_hash(fact.get("content_hash"))
+                or not isinstance(fact.get("category"), str) or fact["category"] not in LABELS):
+            continue
+        key = fact.get("source_key")
+        if not isinstance(key, str) or len(key) > 25 or not re.fullmatch(r"karte:[1-9][0-9]*", key):
+            continue
+        artifact_id = int(key[6:])
+        if artifact_id > 2 ** 63 - 1:
+            continue
+        if key not in sources:
+            row = db.execute(
+                "SELECT a.artifact_id,a.content,a.meta FROM artifacts a "
+                "JOIN patients p ON p.project_id=a.project_id WHERE a.artifact_id=? "
+                "AND a.kind='karte_summary' AND a.project_id=? AND p.is_archived=0 "
+                "AND (p.fetch_reason IS NULL OR p.fetch_reason NOT IN "
+                "('forbidden','permission_denied','access_revoked')) "
+                "AND CASE WHEN json_valid(a.meta) THEN json_extract(a.meta,'$.karte_id')=p.karte_id END "
+                "AND EXISTS(SELECT 1 FROM artifacts n WHERE n.kind='karte_summary' "
+                "AND n.project_id=p.project_id AND n.artifact_id>a.artifact_id "
+                "AND CASE WHEN json_valid(n.meta) THEN json_extract(n.meta,'$.karte_id')=p.karte_id END)",
+                (artifact_id, project_id)).fetchone()
+            try:
+                sources[key] = karte_source_record(row, project_id, historical=True) if row else None
+            except (TypeError, ValueError, AttributeError):
+                sources[key] = None
+        source = sources[key]
+        if (not source or source["body_state"] != "full" or source["content_hash"] != fact["content_hash"]
+                or fact.get("posted_at") != source["posted_at"]
+                or fact.get("posted_at_ts") is not None and type(fact["posted_at_ts"]) not in (int, float)
+                or fact.get("posted_at_ts") != source["posted_at_ts"]):
+            continue
+        body = source["body_text"]
+        spans = [fact.get("evidence_span"), fact.get("quote_span")]
+        if any(not isinstance(span, list) or len(span) != 2 or any(type(n) is not int for n in span)
+               or not 0 <= span[0] < span[1] <= len(body) for span in spans):
+            continue
+        evidence, quote = spans
+        if (fact.get("evidence") != body[evidence[0]:evidence[1]]
+                or fact.get("quote") != body[quote[0]:quote[1]]
+                or not quote[0] <= evidence[0] < evidence[1] <= quote[1]
+                or not isinstance(fact.get("text"), str) or not fact["text"]
+                or fact["text"] not in fact["evidence"]):
+            continue
+        records.append({**fact, "sender": source["sender_name"], "view_bucket": "history"})
+    return records
+
+
 def evidence(db, project_id, *, cfg=None) -> dict:
     """The shared evidence list every view projects from.
 
@@ -222,6 +279,7 @@ def evidence(db, project_id, *, cfg=None) -> dict:
         items.append(entry)
     items.sort(key=lambda i: (i["posted_at_ts"] or 0, i["message_id"] or 0), reverse=True)
     return {"project_id": project_id, "snapshot": snapshot_meta(db), "items": items,
+            "historical_items": _historical_karte_items(db, project_id, context_refresh),
             "summary": summary,
             # summary fact_ids resolve here; empty when unpublished or no longer valid
             "nightly_facts": scoped_facts,
@@ -506,7 +564,12 @@ def timeline(ev, categories=None) -> dict:
     """経過タイムライン: oldest first; the written event date stays apart from the posting time
     and adjacent entries carry no causal link."""
     rows = []
-    for item in reversed(ev["items"]):
+    ordered = [*reversed(ev["items"]), *ev.get("historical_items", [])]
+    def order(item):
+        at = item.get("posted_at_ts")
+        known = type(at) in (int, float) and math.isfinite(at)
+        return not known, at if known else 0
+    for item in sorted(ordered, key=order):
         if categories is not None and item["category"] not in categories:
             continue
         dates = {(detail["key"], detail["value"]) for detail in item.get("details") or []

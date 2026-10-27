@@ -38,8 +38,8 @@ def test_explicitly_disabled_summary_unchanged(led):
 def test_all_sections_reachable_and_actor_bound(led):
     spec = _delivered_card(led)
     token = click(led, _token_for(spec, "summary"))["navigation"][0]["token"]
-    sections = list(notify_views.CONTEXT_SECTIONS)
-    assert len(sections) == 9
+    sections = [section for section in notify_views.CONTEXT_SECTIONS if section != "measurements"]
+    assert len(sections) == 10
     for index, section in enumerate(sections):
         result = click(led, token, now=NOW + index)
         assert result["action"] == "list"
@@ -55,6 +55,35 @@ def test_all_sections_reachable_and_actor_bound(led):
     receipts = led.db.execute("SELECT receipt_json FROM command_receipts").fetchall()
     assert receipts and all("navigation" not in json.loads(row[0]) and "list" not in json.loads(row[0])
                             for row in receipts)
+
+
+@pytest.mark.parametrize("state,expected", [
+    ("unacquired", "原文の取得完了を未確認"),
+    ("acquisition_incomplete", "履歴の取得は未完了"),
+    ("dependency_gap", "変更前の根拠が不足しています"),
+    ("summary_pending", "患者コンテキストの更新待ち"),
+    ("audit_pending", "原文の根拠照合待ち"),
+])
+def test_context_waiting_reason_survives_each_transport_without_pending_messages(led, monkeypatch, state, expected):
+    import patient_context_view
+    from adapters.common.text import list_messages
+    from adapters.discord.views import context_texts
+    from adapters.slack.presentation import context_list_blocks
+
+    _delivered_card(led)
+    monkeypatch.setattr(patient_context_view, "evidence", lambda *a, **k: {
+        "project_id": 1, "items": [], "summary": [], "nightly_facts": [], "as_of": None,
+        "coverage": {"nightly": None, "inference": {"complete": False, "status": state,
+                                                      "sources": {}}}})
+    view = notify_views.patient_context_list(led.db, 1, "background", cfg=ENABLED, since=0, now=NOW)
+    assert expected in view["notes"]
+    assert "未解析 0件 / 保留 0件 / 解析失敗 0件 / 本文不完全 0件" in "\n".join(view["notes"])
+    result = {"outcome": "applied", "action": "list", "projects": [1], "list": view}
+    def allowed(pid):
+        return pid == 1
+    assert expected in json.dumps(context_list_blocks(view, allowed), ensure_ascii=False)
+    assert expected in "\n".join(context_texts(result, allowed))
+    assert expected in "\n".join(list_messages(result, allowed, plain=True))
 
 
 def test_previous_time_preserved_in_navigation_and_per_actor(led):

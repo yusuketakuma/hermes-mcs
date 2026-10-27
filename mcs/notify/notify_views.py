@@ -930,7 +930,7 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         where the transport can show one), the profession (the name only when there is
         none; names are listed once in the 関係者 line) and the post number."""
         karte = item.get("source") == "karte_summary"
-        where = "連携サマリー" if karte else f"#{item.get('message_id', '?')}"
+        where = ("旧連携サマリー" if item.get("historical") else "連携サマリー") if karte else f"#{item.get('message_id', '?')}"
         rest = " ".join(v for v in (str(item.get("profession") or item.get("sender") or ""), where) if v)
         if item.get("event_date_text"):
             label = {"measured_on": "測定日の記載", "observed_on": "観察日の記載",
@@ -938,7 +938,8 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
                          item.get("event_date_kind"), "時点の記載")
             rest += f" · {label}: {item['event_date_text']}"
         dated = posted_at(item) is not None
-        return when(item), rest, (room if dated and not karte else None)
+        date = "更新日時未確認" if karte and not dated else when(item)
+        return date, rest, (room if dated and not karte else None)
 
     def add(items, group, category=None):
         for item in items:
@@ -967,12 +968,14 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
             source = f"{date} {rest}".strip()
             last = rows[-1] if rows else None
             if (last and last["group"] == item_group and last.get("message_id") == item.get("message_id")
+                    and last.get("source_key") == item.get("source_key")
                     and last["source"] == source and quotes and not item.get("reply")):
                 # same post, same group: one source line; each mention of one
                 # post carries the same body, so keep each quote once
                 last["quotes"] += [q for q in quotes if q not in last["quotes"]]
             else:
                 rows.append({"group": item_group, "project_id": project_id, "message_id": item.get("message_id"),
+                             "source_key": item.get("source_key"),
                              "quotes": quotes, "source": source, "date": date, "source_rest": rest,
                              **({"url": link} if link else {})})
 
@@ -1169,8 +1172,13 @@ def _patient_context_list(db, project_id, section, *, cfg, since, now, role="", 
         sources = inference.get("sources") or {}
         status.append(f"解析未完了: 未解析 {sources.get('pending', 0)}件 / 保留 {sources.get('held', 0)}件 / "
                       f"解析失敗 {sources.get('failed', 0)}件 / 本文不完全 {sources.get('incomplete', 0)}件")
-        if inference.get("status") == "unacquired":
-            status.append("原文の取得完了を未確認")
+        reason = {"unacquired": "原文の取得完了を未確認",
+                  "acquisition_incomplete": "履歴の取得は未完了",
+                  "dependency_gap": "変更前の根拠が不足しています",
+                  "summary_pending": "患者コンテキストの更新待ち",
+                  "audit_pending": "原文の根拠照合待ち"}.get(inference.get("status"))
+        if reason:
+            status.append(reason)
     if context_coverage:
         status.append(f"取込済み {context_coverage.get('fetched', 0)}件 / 点検済み {context_coverage.get('analyzed', 0)}件 / 未点検 {context_coverage.get('unscanned', 0)}件 / 本文未取得・不完全 {context_coverage.get('incomplete', 0)}件")
         status.append(f"原文に対応する引用 {context_coverage.get('evidence_supported', 0)} / {context_coverage.get('evidence_total', 0)}件")
