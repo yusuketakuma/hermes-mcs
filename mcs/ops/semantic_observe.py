@@ -167,8 +167,7 @@ def _observe(c, cfg, days: int = 14, *, now: float | None = None,
         "SELECT COUNT(*) FROM fetch_jobs WHERE kind=? "
         "AND state='pending' AND CASE WHEN json_valid(payload) THEN "
         "json_extract(payload,'$.eligible')=1 ELSE 0 END", (JOB_KIND,))[0][0]
-    # run_pending's own `left` predicate, so the backlog and its age
-    # drain exactly as the extractor works it (v4-current rows excluded)
+    # The pending predicate does not establish admission, lease or retry eligibility.
     from extract_llm import EXTRACT_VERSION, pending_pred
     extract_left, oldest_msg = q(
         "SELECT COUNT(*), MIN(m.posted_at_ts) FROM messages m WHERE "
