@@ -719,7 +719,10 @@ class _CloudProvider:
                     or writer_lock.updater_state() != updater
                     or updater[0] or cloud_policy.api_key(HOME) != key
                     or cloud_policy.scope_generation({"cloud_llm": now}) != scope
-                    or cloud_policy.block_reason(ledger, now, route, project_id)
+                    # A paid result that already arrived is kept while its scope holds: a stop,
+                    # an open circuit or expired pricing stops only new sends (owner decision 2026-10-28).
+                    or (cloud_policy.block_reason(ledger, now, route, project_id) if inference
+                        else not cloud_policy.eligible(now, route, project_id))
                     or not current()):
                 raise CloudFallback("cloud_unit_changed")
         self.guard = lambda: dispatch(guard)

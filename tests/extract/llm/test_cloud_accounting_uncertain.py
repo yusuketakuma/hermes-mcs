@@ -50,7 +50,7 @@ def test_unit_can_forbid_transport_retry_without_releasing_unknown_cost(
 
     def post(body, timeout):
         sent.append(True)
-        raise TimeoutError('synthetic timeout')
+        raise ConnectionRefusedError('synthetic refusal')   # the only retried transport failure
 
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
                         lambda key, **kw: AnthropicClient(key, post_fn=post, **kw))

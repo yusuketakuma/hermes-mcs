@@ -843,7 +843,7 @@ def test_paid_cloud_failure_with_the_local_breaker_open_records_the_retry(routed
     assert worker.run_pending(led, budget_s=180)["done"] == 0 and len(calls) == 1
 
 
-def test_run_window_end_stops_the_next_post_but_keeps_an_arrived_result(routed):
+def test_run_window_end_stops_the_next_post_but_keeps_an_arrived_result(routed, monkeypatch):
     led, cfg, calls, reserved, _ = routed
     provider = worker._CloudProvider(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 180,
@@ -853,6 +853,12 @@ def test_run_window_end_stops_the_next_post_but_keeps_an_arrived_result(routed):
     with pytest.raises(worker.CloudFallback):
         provider.guard()                               # every later attempt or retry is refused
     provider.commit_guard()                            # a response that already arrived is still saved
+    # A stop or expired pricing after the response stops new sends, not the paid result.
+    with monkeypatch.context() as patch:
+        patch.setattr(cloud_policy, "global_block_reason", lambda ledger: "paused")
+        with pytest.raises(worker.CloudFallback):
+            provider.guard()
+        provider.commit_guard()
     cfg["cloud_llm"]["until"] = "2999-01-01T00:00:00+00:00"
     cfg["cloud_llm"]["window_start"], cfg["cloud_llm"]["window_budget_usd"] = "2999-01-01T00:00:00+00:00", 1
     cfg["cloud_llm"]["until"] = "2999-01-02T00:00:00+00:00"

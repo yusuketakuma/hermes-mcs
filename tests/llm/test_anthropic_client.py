@@ -112,7 +112,7 @@ def test_each_retry_reserves_and_accounts_transport_failures(monkeypatch):
     def post(*args):
         calls.append(1)
         if len(calls) == 1:
-            raise OSError("private response must not appear")
+            raise ConnectionRefusedError("private response must not appear")   # provably never sent
         return 200, {}, json.dumps(_reply()).encode()
 
     def reserve(*args):
@@ -126,6 +126,23 @@ def test_each_retry_reserves_and_accounts_transport_failures(monkeypatch):
     assert results[0][1]["usage"] is None and results[0][1]["error_kind"] == "transport"
     assert results[1][1]["usage"]["output_tokens"] == 5
     assert "private response" not in json.dumps(results)
+
+
+@pytest.mark.parametrize("error", [TimeoutError("synthetic"), ConnectionResetError("synthetic"), OSError("synthetic")])
+def test_a_failure_that_may_have_been_sent_is_never_retried(monkeypatch, error):
+    monkeypatch.setattr(a.time, "sleep", lambda delay: None)
+    calls, results = [], []
+
+    def post(*args):
+        calls.append(1)
+        raise error
+
+    client = a.AnthropicClient("synthetic", post_fn=post)
+    with pytest.raises(a.AnthropicError):
+        client.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: {"r": 1},
+                        after_result=lambda r, meta: results.append(meta))
+    # one attempt only: its reservation stays counted as possibly billed, never as not_sent
+    assert len(calls) == 1 and results[0]["http_class"] != "not_sent"
 
 
 @pytest.mark.parametrize("status,kind,retries", [(401,"auth_error",1), (403,"auth_error",1),
