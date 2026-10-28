@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 import re
-import sqlite3
 
 from mcs_util import valid_text
 from mcs_util import positive, valid_hash
@@ -44,7 +43,7 @@ def read_retry_payload(db, row, *, max_bytes=_RETRY_PAYLOAD_MAX_BYTES):
                 return None
             raw = blob.read()
         return raw.decode("utf-8") or "{}"
-    except (sqlite3.Error, UnicodeError):
+    except UnicodeError:
         return None
 
 

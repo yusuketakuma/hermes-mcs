@@ -236,6 +236,13 @@ def test_retry_payload_limit_does_not_read_oversized_blob(tmp_path):
         row = db.db.execute("SELECT job_id,typeof(payload) AS payload_type "
                             "FROM fetch_jobs WHERE job_id=?", (job_id,)).fetchone()
         assert read_retry_payload(ConnectionSpy(db.db), row) is None
+
+        class BrokenConnection:
+            def blobopen(self, *args, **kwargs):
+                raise sqlite3.OperationalError("synthetic read failure")
+
+        with pytest.raises(sqlite3.OperationalError, match="synthetic read failure"):
+            read_retry_payload(BrokenConnection(), row)
     finally:
         db.close()
 
@@ -274,6 +281,35 @@ def test_retry_preview_reads_bounded_payload_from_readonly_snapshot(tmp_path):
                 None, "invalid_payload", None)
         finally:
             reader.close()
+    finally:
+        db.close()
+
+
+def test_retry_read_failure_keeps_command_retryable(tmp_path, monkeypatch):
+    import mcs_operations
+
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.ensure_patient(1)
+        payload = {VERSION_KEY: CURRENT_VERSION, "targets": [42]}
+        job_id = db.job_add("semantic", 1, 42, payload=payload)
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=2 WHERE job_id=?", (job_id,))
+        before = dict(_job(db, job_id))
+        request = _command("ops.retry", job_id=job_id,
+                           expected_payload_hash=mcs_requests.payload_hash(payload))
+        original = mcs_operations.read_retry_payload
+
+        def fail_read(*args, **kwargs):
+            raise sqlite3.OperationalError("synthetic read failure")
+
+        monkeypatch.setattr(mcs_operations, "read_retry_payload", fail_read)
+        with pytest.raises(sqlite3.OperationalError, match="synthetic read failure"):
+            mcs_requests.apply_command(db, request)
+        assert dict(_job(db, job_id)) == before
+        assert db.db.execute("SELECT COUNT(*) FROM command_receipts").fetchone()[0] == 0
+        monkeypatch.setattr(mcs_operations, "read_retry_payload", original)
+        assert mcs_requests.apply_command(db, request)["outcome"] == "applied"
     finally:
         db.close()
 
