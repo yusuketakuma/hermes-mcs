@@ -97,8 +97,9 @@ def test_noninteractive_existing_json_is_kept_without_question(tmp_path, monkeyp
 
 
 @pytest.mark.parametrize("transport,env", [
-    ("slack", "SLACK_BOT_TOKEN=xox" + "b-synthetic-bot\n"),
     ("slack", "SLACK_APP_TOKEN=xapp-synthetic-app\n"),
+    ("slack", "SLACK_BOT_TOKEN=xox" + "b-synthetic-bot\nSLACK_APP_TOKEN=\n"),
+    ("slack", "SLACK_BOT_TOKEN=xox" + "b-synthetic-one\nSLACK_BOT_TOKEN=xox" + "b-synthetic-two\n"),
     ("discord", "DISCORD_BOT_TOKEN=bad\n"),
     ("discord", "DISCORD_BOT_TOKEN=\n"),
 ])
@@ -137,15 +138,45 @@ def test_env_modified_during_input_cancels_publication(tmp_path, monkeypatch):
     assert list(data.iterdir()) == []
 
 
-def test_setup_does_not_complete_an_incomplete_env_implicitly(tmp_path, monkeypatch):
+def test_setup_defers_legacy_slack_bot_only_to_native_initializer(tmp_path, monkeypatch):
     env = "SLACK_BOT_TOKEN=xox" + "b-synthetic-bot\n"
     write_root(tmp_path, env=env)
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(tmp_path / ".env"))
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda _: pytest.fail("must not ask for a secret"))
-    assert not mcs_setup._apply_standalone_credentials(
+    assert mcs_setup._apply_standalone_credentials(
         SimpleNamespace(yes=False), {"slack"}, [("SLACK_APP_TOKEN", "app")])
     assert (tmp_path / ".env").read_text() == env
+
+
+def test_legacy_slack_bot_only_prompts_only_for_app_and_preserves_env(tmp_path, monkeypatch):
+    env = "SLACK_BOT_TOKEN=xox" + "b-synthetic-bot\nOTHER=synthetic-unrelated\n"
+    write_root(tmp_path, interactive="off", target="slack:C0123456789", env=env)
+    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+    prompts = []
+    monkeypatch.setattr(cli.getpass, "getpass", lambda label: prompts.append(label) or "xapp-synthetic-app")
+    assert cli.initialize(tmp_path, "slack") == 0
+    assert len(prompts) == 1 and "アプリトークン" in prompts[0]
+    assert (tmp_path / ".env").read_text() == env
+    value = json.loads((tmp_path / "data" / "slack-credentials.json").read_text())
+    assert value == {"bot_token": "xox" + "b-synthetic-bot", "app_token": "xapp-synthetic-app"}
+
+
+@pytest.mark.parametrize("mode", ["no_terminal", "yes", "invalid", "env_changed"])
+def test_legacy_slack_completion_keeps_original_when_unsafe(tmp_path, monkeypatch, mode):
+    env = "SLACK_BOT_TOKEN=xox" + "b-synthetic-bot\n"
+    write_root(tmp_path, interactive="off", target="slack:C0123456789", env=env)
+    monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: mode != "no_terminal"))
+    def answer(_):
+        if mode == "env_changed":
+            (tmp_path / ".env").write_text("SLACK_BOT_TOKEN=xox" + "b-other-synthetic\n")
+        return "invalid" if mode == "invalid" else "xapp-synthetic-app"
+    monkeypatch.setattr(cli.getpass, "getpass", answer)
+    with pytest.raises(config.ConfigError):
+        cli.initialize(tmp_path, "slack", yes=mode == "yes")
+    assert not (tmp_path / "data" / "slack-credentials.json").exists()
+    if mode != "env_changed":
+        assert (tmp_path / ".env").read_text() == env
 
 
 def test_setup_does_not_save_partially_entered_credentials(tmp_path, monkeypatch):

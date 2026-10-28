@@ -164,7 +164,8 @@ def _apply_standalone_credentials(args, used: set, wanted: list) -> bool:
     """Provision the wanted standalone tokens into the MCS .env."""
     # Credentials already provisioned by the native initializer need no dotenv copy.
     from mcs_standalone.config import credentials_path, load_credentials, validate_credentials
-    from mcs_standalone.__main__ import _credential_env_snapshot, _env_has_transport_key, _hidden_credential
+    from mcs_standalone.__main__ import (_credential_env_snapshot, _env_has_transport_key,
+                                         _hidden_credential, _slack_env_bot_only)
     transports = used & {"slack", "discord"}
     missing_json = set()
     for transport in transports:
@@ -182,13 +183,25 @@ def _apply_standalone_credentials(args, used: set, wanted: list) -> bool:
     except ValueError:
         print("独立接続: 既存の認証情報を確認できません。新しい情報を保存せず、管理担当者に確認してください。")
         return False
+    deferred_slack = False
     for transport in missing_json:
         try:
             load_credentials(HOME, transport)
         except ValueError as exc:
+            try:
+                partial = (transport == "slack" and str(exc) == "credentials_missing"
+                           and _slack_env_bot_only(HOME, existing) is not None)
+            except ValueError:
+                print("独立接続: 認証情報の状態が変わったため、設定を中止しました。")
+                return False
+            if partial:
+                deferred_slack = True
+                continue
             if str(exc) != "credentials_missing" or _env_has_transport_key(existing, transport):
                 print("独立接続: 既存の認証情報を確認できません。新しい情報を保存せず、管理担当者に確認してください。")
                 return False
+    if deferred_slack:
+        missing_json.remove("slack")
     wanted = [(key, desc) for key, desc in wanted
               if ("slack" if key.startswith("SLACK_") else "discord") in missing_json]
     updates, missing, resolved = {}, [], {}
