@@ -458,7 +458,7 @@ def _semantic_enabled(ledger, cfg, result) -> bool:
 
 
 def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
-                 sem_on, notify_max_age_s):
+                 sem_on, notify_max_age_s, ack_exclusions=None):
     """Priority fetch work — unread, optional self-post probes, then
     backfill — skipped entirely by --jobs-only runs."""
     if args.jobs_only:
@@ -470,7 +470,7 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
     collection_stages.with_relogin(adapter, ledger, result, "unread",
                   collection_stages.stage_unread, adapter, ledger, result, deadline,
                   run_id, mark_read=args.mark_read, semantic=sem_on,
-                  notify_max_age_s=notify_max_age_s)
+                  notify_max_age_s=notify_max_age_s, ack_exclusions=ack_exclusions)
     _require_closed_transaction(ledger, result)
     self_posts = cfg.get("self_posts", False)
     if type(self_posts) is not bool:
@@ -503,7 +503,7 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
 
 
 def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
-              notify_max_age_s):
+              notify_max_age_s, ack_exclusions=()):
     """Durable job machinery — command ingest, discovery, reply and
     history drains, trickle seeding, reconcile and self profile."""
     # cmd ingest first so requests are due THIS run; discovery and
@@ -565,7 +565,8 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
     if getattr(args, "mark_read", False):
         # after every import path of this tick has stored its replies
         collection_stages.with_relogin(adapter, ledger, result, "thread_read",
-                      collection_stages.stage_thread_read, adapter, ledger, result, deadline)
+                      collection_stages.stage_thread_read, adapter, ledger, result, deadline,
+                      exclude_projects=ack_exclusions)
         _require_closed_transaction(ledger, result)
 
     if args.download_files:
@@ -1034,13 +1035,14 @@ def _main() -> int:
         cfg = _config()
         sem_on = _semantic_enabled(ledger, cfg, result)
         notify_max_age_s = _notify_max_age_s(cfg, result)
+        ack_exclusions = set()
         _run_stage(result, "fetch", deadline, _stage_fetch,
                    adapter, ledger, args, cfg, result, deadline,
-                   run_id, sem_on, notify_max_age_s)
+                   run_id, sem_on, notify_max_age_s, ack_exclusions)
         _require_closed_transaction(ledger, result)
         _run_stage(result, "jobs", deadline, _run_jobs,
                    adapter, ledger, args, cfg, result, deadline, sem_on,
-                   notify_max_age_s)
+                   notify_max_age_s, ack_exclusions)
         _require_closed_transaction(ledger, result)
 
         # -- derived data ----------------------------------------------

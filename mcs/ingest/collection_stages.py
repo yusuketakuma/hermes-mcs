@@ -297,7 +297,7 @@ def _post_ack_gap(adapter, ledger, pid: int, result):
 
 def stage_unread(adapter, ledger, result, deadline, run_id, *,
                  mark_read: bool = False, semantic: bool = False,
-                 notify_max_age_s: float | None = None):
+                 notify_max_age_s: float | None = None, ack_exclusions=None):
     """list_unread -> per-patient unread fetch -> reply merge -> save
     (notify intent in the same tx) -> optional gated mark-read.
     notify_max_age_s: unread messages older than this are imported
@@ -435,6 +435,8 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
                 observation_ts=snap.timestamp,
                 notify_max_age_s=notify_max_age_s)
         except Exception as e:
+            if ack_exclusions is not None:
+                ack_exclusions.add(p.project_id)
             ledger.patient_fetch_failed(p.project_id, type(e).__name__)
             result["errors"].append(
                 f"project {p.project_id}: db_write_failed")
@@ -453,7 +455,8 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
         if isinstance(getattr(batch, "error", None), SessionExpired):
             raise batch.error
 
-        if mark_read and p.fetch_state == "complete":
+        if (mark_read and p.fetch_state == "complete"
+                and (ack_exclusions is None or p.project_id not in ack_exclusions)):
             if ledger.was_marked(p.project_id, snap.timestamp):
                 continue
             # record the intent BEFORE sending — a crash between send
@@ -473,11 +476,12 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
     return snap
 
 
-def stage_thread_read(adapter, ledger, result, deadline):
+def stage_thread_read(adapter, ledger, result, deadline, *, exclude_projects=()):
     """Acknowledge stored thread replies, queue gaps, and confirm read status."""
     done = result.setdefault("threads_marked_read", [])
     for pid, parent, last in ledger.thread_read_candidates(
-            time.time() - THREAD_READ_WINDOW_S, THREAD_READ_MAX):
+            time.time() - THREAD_READ_WINDOW_S, THREAD_READ_MAX,
+            exclude_projects=exclude_projects):
         if time.monotonic() > deadline - 30:
             result["errors"].append("deadline_exceeded")
             break
