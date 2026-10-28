@@ -692,8 +692,12 @@ class _CloudProvider:
         reserved_caps = {}
 
         def caps(settings):
-            return {k: settings[k] for k in ("daily_request_budget", "daily_cost_limit_usd",
-                                             "monthly_cost_limit_usd", "window_budget_usd")}
+            out = {k: settings[k] for k in ("daily_request_budget", "daily_cost_limit_usd",
+                                            "monthly_cost_limit_usd", "window_budget_usd")}
+            # an earlier period start counts more spending, like a lower cap
+            start = settings["window_start"]
+            out["window_start"] = None if start is None else mcs_util.until_epoch(start)
+            return out
 
         def tightened(now):
             # a cap set or lowered after this attempt's reservation stops the send it

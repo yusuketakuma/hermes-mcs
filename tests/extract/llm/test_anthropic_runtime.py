@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import time
+from datetime import datetime
 
 import pytest
 
@@ -146,10 +147,14 @@ def test_new_post_and_edited_body_are_not_version_reextract(routed):
     assert not worker._cloud_reextract(led, row)
 
 
-@pytest.mark.parametrize("change", ["scope", "stop", "mode", "daily_cap", "monthly_cap"])
+@pytest.mark.parametrize("change", ["scope", "stop", "mode", "daily_cap", "monthly_cap", "window_start"])
 def test_scope_change_while_reserving_never_starts_http(routed, monkeypatch, change):
     led, cfg, calls, reserves, _ = routed
     old(led)
+    def ago(days):
+        return datetime.fromtimestamp(time.time() - days * 86400, cloud_policy.JST).replace(microsecond=0).isoformat()
+    if change == "window_start":
+        cfg["cloud_llm"].update(window_start=ago(1), window_budget_usd=100)
     original = cloud_policy.usage_reserver
     def factory(*args, **kwargs):
         reserve = original(*args, **kwargs)
@@ -163,6 +168,8 @@ def test_scope_change_while_reserving_never_starts_http(routed, monkeypatch, cha
                 cfg["cloud_llm"]["daily_request_budget"] = 0
             elif change == "monthly_cap":
                 cfg["cloud_llm"]["monthly_cost_limit_usd"] = 0
+            elif change == "window_start":   # an earlier start counts more spending
+                cfg["cloud_llm"]["window_start"] = ago(30)
             else:
                 cfg["cloud_llm"]["mode"] = "shadow"
             return result

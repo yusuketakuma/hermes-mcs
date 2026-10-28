@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import json
+import math
 import re
 import sqlite3
 import time
@@ -150,14 +151,23 @@ def blocking_errors(errors):
     return [error for error in errors if error != COST_LIMIT_REQUIRED]
 
 
+# A period budget sums cloud_usage rows since window_start, and maintenance prunes
+# them after CLOUD_USAGE_KEEP_S (62 days); one day short of that keeps every counted row.
+WINDOW_HISTORY_S = 61 * 86400
+
+
 def setting_block_reason(settings, *, now=None):
-    """A stop decided by normalized settings alone: outside the configured run window."""
+    """A stop decided by normalized settings alone: outside the configured run window,
+    or a period older than the usage history its budget is counted from."""
     now = time.time() if now is None else now
     until, start = settings.get("until"), settings.get("window_start")
     if until is not None and now >= until_epoch(until):
         return "expired"
     if start is not None and now < until_epoch(start):
         return "not_started"
+    if (start is not None and settings.get("window_budget_usd") is not None
+            and now - until_epoch(start) > WINDOW_HISTORY_S):
+        return "window_history_unverified"
     return None
 
 
@@ -649,6 +659,23 @@ def _window_tally(ledger, start):
     return tally
 
 
+PRUNE_MARK_KIND = "cloud_usage_pruned_before"
+
+
+def window_history_pruned(ledger, cfg):
+    """True when maintenance has already deleted usage rows from inside the period
+    (judged by its durable cutoff, not the clock), or that mark is unreadable."""
+    marks = [row[0] for row in ledger.db.execute(
+        "SELECT content FROM artifacts WHERE kind=?", (PRUNE_MARK_KIND,))]
+    try:
+        cutoffs = [float(mark) for mark in marks]
+    except (TypeError, ValueError):
+        return True
+    if len(cutoffs) > 1 or not all(math.isfinite(cutoff) for cutoff in cutoffs):
+        return True   # maintenance stops advancing duplicates, so they cannot vouch for the period
+    return bool(cutoffs) and until_epoch(_cfg(cfg)["window_start"]) < cutoffs[0]
+
+
 def window_spend(ledger, cfg):
     """Spending reserved or settled since window_start (unsettled at their maximum), or None."""
     c = _cfg(cfg)
@@ -686,6 +713,8 @@ def budget_block_reason(ledger, cfg, *, max_tokens=1600, input_bound=INPUT_RESER
     if limit is not None and tally.total + cost > _decimal(limit):
         return "monthly_cap"
     if c["window_budget_usd"] is not None:
+        if window_history_pruned(ledger, c):
+            return "window_history_unverified"
         try:
             spent = window_spend(ledger, c)
         except (AnthropicError, ValueError, InvalidOperation):

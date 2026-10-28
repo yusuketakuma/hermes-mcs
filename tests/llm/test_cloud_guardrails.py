@@ -285,3 +285,127 @@ def test_reserved_jev_paths_check_the_window_with_the_reservation_not_after_it(t
         semantic_runtime.bind_jev(Hookless(), lambda stage: None, reserve=lambda body, timeout: None
                                   ).evaluate({}, {}, 0)
     assert raised.value.detail == "evaluate_guard_unsupported"
+
+
+def test_period_older_than_the_usage_history_stops_instead_of_undercounting(tmp_path, now):
+    import maintenance
+    # Maintenance prunes cloud_usage after 62 days; the period must end before any counted row could go.
+    assert c.WINDOW_HISTORY_S < maintenance.CLOUD_USAGE_KEEP_S
+    def started(days):
+        return datetime.fromtimestamp(NOW - days * 86400, c.JST).isoformat()
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        assert c.budget_block_reason(ledger, _period(window_start=started(60))) is None
+        assert c.budget_block_reason(ledger, _period(window_start=started(62))) == "window_history_unverified"
+    warnings = environment_diagnostics.cloud_setting_warnings(_period(window_start=started(62)), str(tmp_path))
+    assert any("window_history_unverified" in w for w in warnings)
+
+
+def test_budget_command_decides_a_new_period_start_under_the_edit_lock(tmp_path, monkeypatch):
+    import json
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    import cloud_cli
+    import config_edit
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"mcs_login_id": "synthetic-login", "notify_target": "synthetic-target"}))
+    path.chmod(0o600)
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(path))
+    original = config_edit._edit_lock
+
+    @contextmanager
+    def other_writer_first():
+        # another writer saved a period just before this command took the lock
+        with original():
+            cfg = json.loads(path.read_text())
+            cfg["cloud_llm"] = {"window_start": "2026-10-20T00:00:00+09:00", "window_budget_usd": 50}
+            path.write_text(json.dumps(cfg))
+            yield
+    monkeypatch.setattr(config_edit, "_edit_lock", other_writer_first)
+    args = {"daily_usd": None, "monthly_usd": None, "period_usd": "80", "window_from": None, "until": None}
+    assert cloud_cli.budget_command(SimpleNamespace(**args)) == 0
+    saved = json.loads(path.read_text())["cloud_llm"]
+    assert saved == {"window_start": "2026-10-20T00:00:00+09:00", "window_budget_usd": 80.0}
+
+
+def test_drain_reservations_use_the_drains_config_not_the_process_default(tmp_path, monkeypatch, now):
+    import json
+    ended, open_root = tmp_path / "ended", tmp_path / "open"
+    for root, until in ((ended, "2026-10-26T11:00:00+09:00"), (open_root, "2026-10-27T00:00:00+09:00")):
+        root.mkdir()
+        (root / "config.json").write_text(json.dumps({"semantic": {"until": until}}))
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(open_root / "config.json"))
+    token = semantic_runtime.JobToken.from_row({"job_id": 1, "kind": "semantic", "project_id": 1,
+                                                "message_id": 1, "state": "pending", "attempts": 0,
+                                                "payload": "{}"})
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        reserve = semantic_runtime.usage_reserver(ledger, token, kind="semantic_usage", model="m",
+                                                  project_id=1, message_id=1,
+                                                  config_path=str(ended / "config.json"))
+        with pytest.raises(JevError) as raised:
+            reserve({"model": "m"}, 2)
+        assert raised.value.detail == "semantic_until_expired"
+
+
+def test_live_tool_refuses_when_the_config_it_read_has_vanished(tmp_path):
+    import semantic_jev
+    from writer_lock import code_stamp
+    (tmp_path / "data").mkdir()
+    Ledger(str(tmp_path / "data" / "ledger.db")).close()
+    with pytest.raises(JevError) as raised:
+        semantic_jev._reserve_live_usage(tmp_path, "wire_smoke", code_stamp(), {"model": "m"}, 2, True)
+    assert raised.value.detail == "semantic_config_unreadable"
+
+
+def test_first_exempt_only_section_keeps_the_config_generation():
+    base = {"semantic": {"mode": "assist", "project_ids": None, "daily_request_budget": 10}}
+    edited = {**base, "cloud_llm": {"until": "2026-10-30T23:59:59+09:00"}}
+    assert semantic_runtime.config_generation(edited) == semantic_runtime.config_generation(base)
+
+
+def test_pruned_usage_stops_a_period_that_started_before_it_even_after_the_clock_moves_back(tmp_path, now):
+    import maintenance
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        reservation = c.usage_reserver(ledger, _period(), route="reextract", project_id=1, unit_key="u1")(
+            {"model": c.MODEL, "max_tokens": 100}, 2)
+        assert reservation and c.budget_block_reason(ledger, _period()) is None
+        # The clock ran ahead and maintenance pruned rows from inside the period.
+        import time
+        ahead = time.time() + 86400          # past every row's real created_at
+        maintenance._prune_cloud_usage(ledger.db, ahead)
+        assert not ledger.artifacts("cloud_usage_reserve")
+        # Back at NOW the period looks young, but its counted history is gone.
+        assert c.budget_block_reason(ledger, _period()) == "window_history_unverified"
+        assert c.budget_block_reason(ledger, _period(window_start="2026-10-27T12:00:00+09:00",
+                                                     until="2026-10-28T00:00:00+09:00")) == "not_started"
+        later = datetime.fromtimestamp(ahead + 86400, c.JST).isoformat()
+        assert c.window_history_pruned(ledger, _period(window_start=later)) is False
+        # A lower later cutoff never moves the mark back; an unreadable mark fails closed.
+        maintenance._prune_cloud_usage(ledger.db, NOW)
+        ledger.db.execute("INSERT INTO artifacts(kind,content,created_at) VALUES(?,?,?)",
+                          ("cloud_usage_reserve", "{}", NOW - 10))
+        ledger.db.commit()
+        maintenance._prune_cloud_usage(ledger.db, NOW)
+        assert float(ledger.artifacts(c.PRUNE_MARK_KIND)[0]["content"]) == ahead
+        ledger.db.execute("UPDATE artifacts SET content='x' WHERE kind=?", (c.PRUNE_MARK_KIND,))
+        ledger.db.commit()
+        assert c.window_history_pruned(ledger, _period(window_start=later)) is True
+
+
+@pytest.mark.parametrize("marks", [["x"], ["nan"], ["inf"], ["1.0", "nan"], ["1.0", "2.0"]])
+def test_a_broken_or_duplicate_prune_mark_stays_and_keeps_periods_stopped(tmp_path, now, marks):
+    import time
+    import maintenance
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        for mark in marks:
+            ledger.db.execute("INSERT INTO artifacts(kind,content,created_at) VALUES(?,?,?)",
+                              (c.PRUNE_MARK_KIND, mark, NOW))
+        ledger.db.execute("INSERT INTO artifacts(kind,content,created_at) VALUES(?,?,?)",
+                          ("cloud_usage_reserve", "{}", NOW - 10))
+        ledger.db.commit()
+        broken = True
+        later = datetime.fromtimestamp(time.time() + 3 * 86400, c.JST).isoformat()
+        assert c.window_history_pruned(ledger, _period(window_start=later)) is broken
+        maintenance._prune_cloud_usage(ledger.db, time.time())
+        # maintenance never overwrites a mark whose earlier range it cannot read
+        assert sorted(row["content"] for row in ledger.artifacts(c.PRUNE_MARK_KIND)) == sorted(marks)
+        assert c.window_history_pruned(ledger, _period(window_start=later)) is broken

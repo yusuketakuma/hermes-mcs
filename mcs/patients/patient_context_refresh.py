@@ -2203,7 +2203,20 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
             max_attempts=1)
         if not getattr(client, "supports_attempt_hooks", False):
             return "deferred", None
-        client = semantic_runtime.bind_jev(client, guard, reserve_locked, deadline)
+        def seal_not_sent(unsent, reason):
+            # committed, but its POST never started: settle it so the page can be asked again
+            fd = acquire_run_lock()
+            if fd is None:
+                return
+            try:
+                ledger.db.execute("BEGIN IMMEDIATE")
+                with ledger.db:
+                    semantic_runtime.patient_summary_resolve_request_tx(
+                        ledger, unsent, identity, {}, set(), project_id=pid, purpose=purpose, not_sent=reason)
+            finally:
+                os.close(fd)
+
+        client = semantic_runtime.bind_jev(client, guard, reserve_locked, deadline, not_sent=seal_not_sent)
         by_id = {fact["id"]: fact for fact in initial["facts"]}
         by_source = {(source["source"], context_plan.source_key(source)): source for source in initial["sources"]}
         pages = initial["pages"] if source is not None else [None] * math.ceil(len(identity["fact_ids"]) / 12)

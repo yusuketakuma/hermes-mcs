@@ -1004,6 +1004,25 @@ def _source_repair_cloud_pins(con, rows):
     return held, reserve_ids
 
 
+def _mark_cloud_usage_pruned(con, cutoff):
+    """Durably record how far usage was pruned, in the deleting transaction: a period
+    budget starting before it cannot be counted even if the clock later moves back."""
+    rows = con.execute("SELECT artifact_id,content FROM artifacts WHERE kind='cloud_usage_pruned_before' "
+                       "ORDER BY artifact_id").fetchall()
+    if not rows:
+        con.execute("INSERT INTO artifacts(kind,content,created_at) VALUES('cloud_usage_pruned_before',?,?)",
+                    (repr(float(cutoff)), time.time()))
+        return
+    try:
+        marks = [float(content) for _, content in rows]
+    except (TypeError, ValueError):
+        return   # an unreadable mark keeps period budgets stopped; its lost range is never overwritten
+    if len(rows) != 1 or not math.isfinite(marks[0]):
+        return   # likewise for duplicates or a non-finite mark
+    if marks[0] < cutoff:
+        con.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (repr(float(cutoff)), rows[0][0]))
+
+
 def _prune_cloud_usage(con, cutoff):
     """Keep exact source-repair reservation/result/disposition evidence beyond ordinary accounting retention."""
     total, last_id = 0, 0
@@ -1019,6 +1038,7 @@ def _prune_cloud_usage(con, cutoff):
             if not rows:
                 return total
             held, pinned_ids = _source_repair_cloud_pins(con, rows)
+            _mark_cloud_usage_pruned(con, cutoff)
             for artifact_id, kind, pid, raw in rows:
                 if kind in ('cloud_usage_reserve', 'cloud_usage_result', 'cloud_usage_disposition') and (pid in held or artifact_id in pinned_ids):
                     continue

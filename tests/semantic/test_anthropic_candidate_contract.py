@@ -31,10 +31,10 @@ def test_cloud_interpretation_scope_and_mode_are_bound(monkeypatch):
     assert candidate._cloud_contract(cfg)["mode"] == "shadow"
 
 
-@pytest.mark.parametrize("block", [None, {}, {"mode": "on", "project_ids": [1]},
+@pytest.mark.parametrize("block", [{"daily_cost_limit_usd": 2}, {"mode": "on", "project_ids": [1]},
                                      {"mode": "shadow", "project_ids": [1]}])
 def test_key_presence_binds_the_effective_provider_without_hashing_the_key(monkeypatch, block):
-    cfg = {} if block is None else {"cloud_llm": block}
+    cfg = {"cloud_llm": block}
     key = [None]
     monkeypatch.setattr(cloud_policy, "api_key", lambda: key[0])
     assert candidate._cloud_contract(cfg) is None
@@ -52,12 +52,19 @@ def test_key_presence_binds_the_effective_provider_without_hashing_the_key(monke
     assert candidate.candidate_fingerprint(cfg) == local
 
 
+@pytest.mark.parametrize("cfg", [{}, {"cloud_llm": {}}])
+def test_a_key_without_a_cost_cap_never_binds_a_provider(monkeypatch, cfg):
+    monkeypatch.setattr(cloud_policy, "api_key", lambda: "synthetic-uncapped-key")
+    assert candidate._cloud_contract(cfg) is None
+
+
 def test_adding_a_key_cannot_reuse_a_local_only_approval(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
     key = [None]
     monkeypatch.setattr(cloud_policy, "api_key", lambda: key[0])
     cfg = approved_config({"semantic": {"mode": "assist", "project_ids": [1],
-                                       "fact_source": "canonical"}})
+                                       "fact_source": "canonical"},
+                           "cloud_llm": {"daily_cost_limit_usd": 2}})
     report = cfg["semantic"]["fact_source_evidence"]
     identity = cfg["semantic"]["fact_source_approval"]
     receipt = tmp_path / "data" / "semantic_approvals" / (identity + ".json")
