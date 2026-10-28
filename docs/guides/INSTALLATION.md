@@ -320,8 +320,13 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 
 - 既存の `~/.mcs/config.json` が壊れている（JSON として読めない・
   オブジェクトでない）場合、`init` は何も書かずに停止する（exit 1）。
-  手で直すか、`init --yes` で `config.json.corrupt-<日時>`（0600・
-  中身はそのまま）へ退避して既定値から作り直す
+  手で直すか、`init --yes` で退避して既定値から作り直す。本人所有で
+  内容を確認できる1 MiB以下の通常ファイルまたはシンボリックリンクは、対応環境で
+  `config.json.corrupt-<日時>` へコピーする。通常ファイルの退避先は0600で、中身を保持する。
+  シンボリックリンクはリンク自体をコピーし、リンク先は変更しない。
+  開始時に1 MiB超、読取不能、FIFO、複数のハードリンクがある通常ファイルの場合や、
+  排他的な退避に対応しない環境では退避せず停止する。親フォルダーが本人以外に書き込み可能な場合も
+  停止し、シンボリックリンクでは本人以外が親フォルダーにアクセスできる場合も停止する
 - `init` は通知プラグイン設定の後、対話通知を使うときは gateway を同期し、
   `check` を自動実行する。設定書込み・同期・チェックの失敗は成功扱いにしない
 
@@ -683,7 +688,7 @@ cronに追加され7件になる。別に LLM サーバ常駐の
 | 実行用または復旧用 Python の SQLite が安全条件を満たしていません | 定期ジョブ（または復旧 watchdog）を実際に動かす Python のリンクする SQLite が影響版。`services`・`update` は変更前に停止し、`doctor` は `checks.runtime` / `checks.recovery_runtime` を blocked にする（`runtimes.*` は事実の表示だけ） — 修正済み SQLite（§1 の要件）をリンクした Python で venv を作り直す。復旧側は `--recovery-python` / `init --recovery-python` で安全な独立 Python を指定する |
 | 実行用 Python が見つからないか、実行できません | 定期ジョブが起動できない — `./install.sh` を再実行（stage 2 が venv を作り直す）→ `$PY mcs/ops/mcs_setup.py services`。`services` もこの状態では何も描画せず止まる（独立モードでは専用venvを診断する） |
 | 定期実行から Hermes を呼び出せません | 手元の shell では見えるが定期ジョブから見えない — 表示の `ln -s <hermes> ~/.local/bin/hermes`、または `init --set hermes_bin='"<パス>"'` |
-| 設定ファイルを読み取れないか、形式が不正です | `~/.mcs/config.json` が壊れている — 手で直すか `$PY mcs/ops/mcs_setup.py init --yes` で `config.json.corrupt-<日時>` へ退避して作り直す |
+| 設定ファイルを読み取れないか、形式が不正です | `~/.mcs/config.json` を確認して直す。本人所有で内容を確認できる1 MiB以下の通常ファイルまたはシンボリックリンクは、対応環境で `$PY mcs/ops/mcs_setup.py init --yes` により `config.json.corrupt-<日時>` へ退避できる。通常ファイルに複数のハードリンクがある場合や、親フォルダーの権限が退避に適さない場合は停止する。退避を完了できない場合は停止し、表示に従って現在の設定と退避先を確認する |
 | 必須設定（mcs_login_id、notify_target）が不足しています | `init` で再登録（両方とも必須） |
 | Keychain に MCS のパスワードが登録されていません | パスワード未登録 — `init` で登録（`.env` `MCS_PASSWORD` があれば警告に格下げ） |
 | Keychain の登録内容を読み取れません | login keychain がロック中 — `security unlock-keychain` か GUI ログイン。再起動後も収集が必要な場合は `init` の `.env` フォールバック設定を確認 |
