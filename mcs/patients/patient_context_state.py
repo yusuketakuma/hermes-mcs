@@ -628,4 +628,3 @@ def clinical_state_fact(message, item, category, source="extract_llm"):
         temporal["unknown"] = True
     fact["temporal"] = temporal
     return fact
-
