@@ -8,7 +8,7 @@ from mcs_util import locate_quote_span
 
 from clinical_scope import (CURRENT_MARK, FAMILY_PERSON, OTHER_PERSON, current_medication_continuation, source_axes,
                             source_polarity, source_resolution, source_assertion_span)
-from clinical_values import written_day
+from clinical_values import _is_unambiguous_bp_date_marker, written_day
 
 _JST = timezone(timedelta(hours=9))
 _DATES = ("measured_on", "observed_on", "onset", "last_confirmed_on")
@@ -81,7 +81,8 @@ def paired_date_conflict(quote, posted_at_ts):
     # "翌日" refers to an earlier event, not necessarily to the posting day.
     if "翌日" in quote:
         return True
-    date_markers = list(_WRITTEN_DATE_MARKER.finditer(quote))
+    date_markers = [match for match in _WRITTEN_DATE_MARKER.finditer(quote)
+                    if not _is_unambiguous_bp_date_marker(quote, match.start(), match.end())]
     relative_markers = list(_RELATIVE_DATE_MARKER.finditer(quote))
     paired_dates = list(_PAIRED_DATE.finditer(quote))
     if date_markers and relative_markers and not (
@@ -104,7 +105,7 @@ def paired_date_conflict(quote, posted_at_ts):
         if not day or day[0] != "ymd" or day[1].weekday() != "月火水木金土日".index(match.group(2)):
             return True
     relative_pairs = list(_RELATIVE_WEEKDAY_PAIR.finditer(quote))
-    if relative_pairs and (_WRITTEN_DATE_MARKER.search(quote)
+    if relative_pairs and (date_markers
                            or len(_RELATIVE_DATE_MARKER.findall(quote)) != 1):
         return True  # Another written time may refer to a different assertion.
     for match in relative_pairs:
@@ -120,7 +121,7 @@ def paired_date_conflict(quote, posted_at_ts):
     if any(not any(token.start("word" if token.group("word") else "single") == pair.start(2)
                    and token.end() <= pair.end() for pair in (*pairs, *relative_pairs))
            for token in _WEEKDAY_TOKEN.finditer(quote)) and (
-                   _WRITTEN_DATE_MARKER.search(quote) or _RELATIVE_DATE_MARKER.search(quote)):
+                   date_markers or _RELATIVE_DATE_MARKER.search(quote)):
         return True
     return False
 

@@ -238,6 +238,36 @@ _DATE = re.compile(r"(?<!\d)(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?(?!\d)")
 
 
 _MONTH_DAY = re.compile(r"(?<![\d/年-])(\d{1,2})[/月](\d{1,2})日?(?![\d/])")
+_BP_DATE_LABEL = re.compile(r"(?:BP|血圧)", re.I)
+_BP_DATE_LETTER = re.compile(r"[A-Za-z]", re.I)
+
+
+def _has_bp_date_prefix(text: str, start: int) -> bool:
+    # Candidate prefixes have disjoint trailing whitespace runs, so walking
+    # backward avoids repeatedly scanning and copying the entire source.
+    pos = start
+    while pos and text[pos - 1].isspace():
+        pos -= 1
+    if pos and text[pos - 1] in ":：は":
+        pos -= 1
+    label_start = pos - 2
+    return (label_start >= 0 and _BP_DATE_LABEL.fullmatch(text, label_start, pos) is not None
+            and (label_start == 0 or _BP_DATE_LETTER.fullmatch(text, label_start - 1, label_start) is None))
+
+
+def _is_unambiguous_bp_date_marker(text: str, start: int, end: int) -> bool:
+    # Only exclude a labelled pair that cannot also be a calendar date.
+    pair = unicodedata.normalize("NFKC", text[start:end])
+    if (not re.fullmatch(r"[0-9]{2}/[0-9]{2}", pair)
+            or not _has_bp_date_prefix(text, start)
+            or end < len(text) and unicodedata.normalize("NFKC", text[end]) in "0123456789/日月"):
+        return False
+    month, day = map(int, pair.split("/"))
+    try:
+        date(2000, month, day)
+    except ValueError:
+        return True
+    return False
 
 
 def written_day(text) -> tuple | None:
@@ -248,7 +278,17 @@ def written_day(text) -> tuple | None:
     if not isinstance(text, str):
         return None
     text = unicodedata.normalize("NFKC", text)
-    full, short = list(_DATE.finditer(text)), list(_MONTH_DAY.finditer(_DATE.sub("", text)))
+    full = list(_DATE.finditer(text))
+    spans = [match.span() for match in _MONTH_DAY.finditer(text)
+             if _is_unambiguous_bp_date_marker(text, match.start(), match.end())]
+    # Keep offsets and surrounding text intact; removing dates first could
+    # join an unrelated BP label and a later date-like fragment.
+    masked, pos = [], 0
+    for start, end in spans:
+        masked.extend((text[pos:start], " " * (end - start)))
+        pos = end
+    masked.append(text[pos:])
+    short = list(_MONTH_DAY.finditer(_DATE.sub("", "".join(masked))))
     try:
         if len(full) == 1 and not short:
             return ("ymd", date(*map(int, full[0].groups())))
