@@ -169,15 +169,17 @@ def test_count_or_watermark_read_failure_cannot_be_reported_as_zero(tmp_path, mo
     if failed_sql == 'SELECT * FROM artifacts':
         for path in (live, backup):
             with closing(sqlite3.connect(path)) as con, con:
-                con.execute('CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY, content TEXT)')
+                con.execute('CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY, kind TEXT, content TEXT)')
     watchdog = _load()
     monkeypatch.setattr(watchdog, 'LEDGER', str(live))
     monkeypatch.setattr(watchdog, 'DATA', str(tmp_path))
     original = sqlite3.connect
+    fault_hits = []
 
     class Connection(sqlite3.Connection):
         def execute(self, sql, *args):
             if sql.startswith(failed_sql):
+                fault_hits.append(sql)
                 raise sqlite3.OperationalError('SYNTHETIC_PRIVATE_CANARY')
             return super().execute(sql, *args)
 
@@ -190,9 +192,11 @@ def test_count_or_watermark_read_failure_cannot_be_reported_as_zero(tmp_path, mo
             live_path=str(live), backup_path=str(backup), report_path=str(tmp_path / 'report.json'))
     assert str(caught.value) == 'restore_report_read_failed'
     assert caught.value.__suppress_context__ is True
+    assert len(fault_hits) == 1
     assert not (tmp_path / 'report.json').exists()
     with pytest.raises(sqlite3.OperationalError):
         watchdog._loss_report(str(backup))
+    assert len(fault_hits) == 2
 
 
 
