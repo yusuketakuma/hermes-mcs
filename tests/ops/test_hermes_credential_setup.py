@@ -229,3 +229,27 @@ def test_run_stops_before_asking_when_the_command_is_untrusted(term, tmp_path, c
     assert setup.run(str(shim), "", "slack") == 1
     out = capsys.readouterr().out
     assert "hermes_bin" in out and "hermes_interpreter_from_path" in out
+
+
+def test_a_small_native_binary_is_checked_without_being_decoded(tmp_path):
+    native = tmp_path / "bin" / "hermes"
+    native.parent.mkdir()
+    native.write_bytes(b"\xcf\xfa\xed\xfe\x07\x00\x00\x01" + b"\xff" * 64)   # Mach-O-like, not UTF-8
+    native.chmod(0o700)
+    argv0, _, identity = setup.trusted_command(str(native))
+    assert argv0 == os.path.realpath(native) and len(identity) == 1
+
+
+def test_an_interpreter_reached_through_a_replaceable_directory_is_refused(tmp_path):
+    # the kernel follows the shebang path as written: a safe target behind a directory
+    # others can write is not safe
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "sh").symlink_to("/bin/sh")
+    shared.chmod(0o777)
+    shim, real = _tree(tmp_path, shebang=f"#!{shared / 'sh'}\n")
+    with pytest.raises(setup.UntrustedExecutable) as raised:
+        setup.trusted_command(str(shim))
+    assert str(raised.value) == "interpreter_writable_by_others"
+    shared.chmod(0o755)                     # the same link in a private directory is accepted
+    assert len(setup.trusted_command(str(shim))[2]) == 3
