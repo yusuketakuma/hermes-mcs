@@ -72,6 +72,8 @@ def test_plan_is_readonly_keyless_and_outputs_only_estimates(world):
     assert report["routes"]["reextract"]["targets"] == 1
     assert report["routes"]["patient_context"]["targets"] == 1
     assert report["accounting"]["daily_requests"] == 0
+    assert report["source_repair_evidence_holds"] == {
+        "malformed_receipts": 0, "stalled_repair_units": 0, "count_limit": 1000}
     assert report["input_estimate_basis"] == "character_proxy"
     assert report["reservation_input_upper_bound_tokens"] == 1048576
     raw = json.dumps(report)
