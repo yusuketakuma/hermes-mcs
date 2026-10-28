@@ -1792,12 +1792,12 @@ def test_retry_after_header_any_casing():
     assert c._retry_after({"Retry-After": "soon"}) is None
 
 
-def test_transition_rescues_null_payload_row(tmp_path):
-    # A fetch_jobs row whose stored payload is NULL (only reachable via
-    # out-of-band edits) normalizes to "{}" in JobToken — a strict
-    # payload=? CAS could never fire and the row would wedge pending
-    # forever (S-6).
+def test_transition_fences_null_payload_and_checks_current_payload_cas(tmp_path):
+    # NULL normalizes to an empty legacy payload, but the version fence
+    # prevents a worker from mutating that older or damaged row.
+    from dataclasses import replace
     import semantic_runtime
+    from inference_version import CURRENT_VERSION, VERSION_KEY
     db = _ledger(tmp_path)
     db.ensure_patient(1)
     db.db.execute(
@@ -1809,25 +1809,30 @@ def test_transition_rescues_null_payload_row(tmp_path):
         "SELECT * FROM fetch_jobs WHERE kind='semantic'").fetchone()
     token = semantic_runtime.JobToken.from_row(row)
     assert token.payload_raw == "{}"
-    assert semantic_runtime.transition_tx(db, token, "failed") is True
+    assert semantic_runtime.transition_tx(db, token, "failed") is False
     db.db.commit()
     assert db.db.execute(
         "SELECT state FROM fetch_jobs WHERE job_id=?",
-        (row["job_id"],)).fetchone()["state"] == "failed"
-    # a real payload row must still require an exact CAS match
+        (row["job_id"],)).fetchone()["state"] == "pending"
+    assert db.db.execute("SELECT payload FROM fetch_jobs WHERE job_id=?",
+                         (row["job_id"],)).fetchone()["payload"] is None
+    # A current-generation row must still require an exact CAS match.
+    payload = json.dumps({VERSION_KEY: CURRENT_VERSION, "x": 1})
     db.db.execute(
         "INSERT INTO fetch_jobs(kind,project_id,message_id,payload,state,"
         "next_try,created_at,updated_at) VALUES('semantic',1,8,"
-        "'{\"x\":1}','pending',0,0,0)")
+        "?,'pending',0,0,0)", (payload,))
     db.db.commit()
     row2 = db.db.execute(
         "SELECT * FROM fetch_jobs WHERE message_id=8").fetchone()
     token2 = semantic_runtime.JobToken.from_row(row2)
+    assert semantic_runtime.transition_tx(db, replace(token2, project_id=2), "failed") is False
+    assert semantic_runtime.transition_tx(db, replace(token2, message_id=7), "failed") is False
     assert semantic_runtime.transition_tx(db, token2, "failed") is True
     db.db.commit()
     # but a token built for a DIFFERENT payload must not fire on it
     stale = semantic_runtime.JobToken.from_row(
-        {**dict(row2), "payload": '{"x":2}'})
+        {**dict(row2), "payload": json.dumps({VERSION_KEY: CURRENT_VERSION, "x": 2})})
     db.db.execute(
         "UPDATE fetch_jobs SET state='pending' WHERE message_id=8")
     db.db.commit()
