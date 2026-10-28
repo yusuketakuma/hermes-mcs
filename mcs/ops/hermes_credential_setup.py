@@ -88,9 +88,14 @@ def _status(cli, exe, profile, key, expect=None):
     return "registered"
 
 
+# Slack and Discord tokens use only these characters. Hermes strips non-ASCII and
+# quotes/escapes '#', quotes and backslashes when saving, so anything else would be
+# stored as a different value than the one entered.
+_TOKEN_RE = re.compile(r"[A-Za-z0-9._-]+")
+
+
 def _valid(value, prefix):
-    return (0 < len(value) <= _MAX_TOKEN and value.startswith(prefix)
-            and not any(c.isspace() or ord(c) < 33 or ord(c) == 127 for c in value))
+    return 0 < len(value) <= _MAX_TOKEN and value.startswith(prefix) and bool(_TOKEN_RE.fullmatch(value))
 
 
 def run(exe, profile, transport, *, cli=service_management.hermes_cli):
@@ -134,7 +139,7 @@ def run(exe, profile, transport, *, cli=service_management.hermes_cli):
                     if _valid(value, prefix):
                         updates[key] = value
                         break
-                    print("形式が違うか、空白・制御文字が含まれています。もう一度入力してください。")
+                    print("形式が違います。英数字と . _ - だけの値を入力してください。")
         if not updates:
             print("接続トークンは変更していません。")
             return 0
