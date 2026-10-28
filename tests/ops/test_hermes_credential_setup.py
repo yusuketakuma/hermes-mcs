@@ -52,7 +52,8 @@ def term(monkeypatch):
 
 def test_changes_only_the_chosen_token_over_stdin_and_never_prints_it(term, capsys, tmp_path):
     hermes = FakeHermes(tmp_path / ".env", {"SLACK_BOT_TOKEN": "xoxb-old-registered-token", "SLACK_APP_TOKEN": "xapp-old-app"})
-    term(["1", "2", "1"], ["bad value", BOT])          # retry an invalid value, keep the app token
+    # values Hermes would store differently (spaces, non-ASCII, '#', quotes, backslash) are asked again
+    term(["1", "2", "1"], ["bad value", "xoxb-tökén", "xoxb-a#b", 'xoxb-"q"', "xoxb-a\\b", BOT])
     assert setup.run("hermes", "work", "slack", cli=hermes) == 0
     assert hermes.stored == {"SLACK_BOT_TOKEN": BOT, "SLACK_APP_TOKEN": "xapp-old-app"}
     writes = [call for call in hermes.calls if call[1][:2] == ("config", "set")]
