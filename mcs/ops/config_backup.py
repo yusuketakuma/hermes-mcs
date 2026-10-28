@@ -1,4 +1,4 @@
-"""破損した設定の排他的退避と新しい設定の安全な作成。"""
+"""破損した設定をコピーし、内容を確認して新しい設定を保存する。"""
 from __future__ import annotations
 
 import hashlib

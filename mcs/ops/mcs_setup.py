@@ -494,7 +494,7 @@ def _init_config_snapshot():
     return cfg, ('valid', base)
 
 
-def _init_save_config(cfg, initial):
+def _init_save_config(cfg, initial, args):
     """Publish the reviewed config under the shared short-lived edit lock."""
     import config_backup
     import config_edit
@@ -509,16 +509,19 @@ def _init_save_config(cfg, initial):
             raise config_edit.ConfigConflict('config_changed')
         kind = initial[0]
         if kind == 'invalid_backup':
+            args._config_publication_started = True
             backup = config_backup.archive_and_create(CONF_PATH, initial[1], body.encode('utf-8'))
             print(f'設定ファイルの元の内容を {backup} に退避しました')
             return
         if kind == 'missing':
+            args._config_publication_started = True
             safe_io.publish_new_bytes(CONF_PATH, body.encode('utf-8'))
         else:
             def write_checked(stream):
                 stream.write(body)
                 if _init_config_snapshot()[1] != initial:
                     raise config_edit.ConfigConflict('config_changed')
+            args._config_publication_started = True
             safe_io.atomic_write(CONF_PATH, write_checked, 0o600,
                                  tmp_prefix='.svc.', makedirs=False)
 
@@ -676,6 +679,9 @@ def _init_store_secrets(args, login_id) -> int | None:
         except ValueError:
             print(".env: 認証情報の形式が正しくありません。既存のファイルを保持しました")
             return 1
+        except OSError:
+            print(".env: 保存結果を確認できません。認証情報の現在の状態を確認してください")
+            return 1
         print(f".env: {sorted(updates)} を保存しました（本人のみ読書き可能）")
     if keychain_failed:
         return 1
@@ -706,6 +712,8 @@ def _init_standalone_connectors(cfg: dict, args, integration_ok: bool) -> bool:
 
 def cmd_init(args) -> int:
     args._config_saved = False
+    args._config_publication_started = False
+    args._init_side_effects_started = False
     import config_backup
     import config_edit
     try:
@@ -816,10 +824,18 @@ def cmd_init(args) -> int:
                                          key_presence=cloud_cli.pending_key_presence(HOME)):
             print("設定を中止しました。設定ファイル・辞書・認証情報は保存していません。")
             return 130
+        args._init_side_effects_started = True
         setup_wizard.wizard_drug_map(cfg, wizard_step or 1, home=HOME)
     login_id = cfg.get("mcs_login_id")
 
-    if _init_store_secrets(args, login_id):
+    args._init_side_effects_started = True
+    try:
+        secret_result = _init_store_secrets(args, login_id)
+    except OSError:
+        print('初期設定: 認証情報の保存結果を確認できません。config.jsonは保存していません。'
+              '認証情報や辞書の現在の状態を確認してください')
+        return 1
+    if secret_result:
         print('初期設定: config.jsonは保存していません。認証情報や辞書の準備が済んでいる場合があります。'
               '現在の状態を確認してください')
         return 1
@@ -831,7 +847,7 @@ def cmd_init(args) -> int:
         os.makedirs(d, mode=0o700, exist_ok=True)
         os.chmod(d, 0o700)
     try:
-        _init_save_config(cfg, initial_config)
+        _init_save_config(cfg, initial_config, args)
     except config_backup.BackupUncertain as error:
         if error.parent_unchanged:
             candidate = os.path.join(os.path.dirname(CONF_PATH) or '.', error.backup_name)
@@ -1685,7 +1701,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser(
         "init", help='質問に答えて初期設定を保存します（推奨 / 詳細、パスワードは非表示入力）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='質問なしでの実行例（bash/zshの端末で実行）:\n  read -r -s MCS_SETUP_PASSWORD\n  export MCS_SETUP_PASSWORD\n  python3 mcs/ops/mcs_setup.py init --yes --login-id you@example.com --notify-target slack:C0CHANNELID --set self_posts=true\n  unset MCS_SETUP_PASSWORD\n最初のreadコマンドでMCSパスワードを非表示入力し、Enterを押してください。パスワードをコマンドへ直接書かず、環境変数MCS_SETUP_PASSWORDで渡します。実行後はunsetで削除します。\n--setの値はJSONです。壊れたconfig.jsonは通常停止します。--yesでは対応する場合に元のファイルをconfig.json.corrupt-<日時>へ退避します。1 MiB超・読取不能・FIFO・複数ハードリンクがある通常ファイル・排他的な退避が未対応の環境では退避せず停止します。親フォルダーは本人所有で本人以外の書き込みができない必要があり、シンボリックリンクでは本人以外のアクセスも認めません。')
+        epilog='質問なしでの実行例（bash/zshの端末で実行）:\n  read -r -s MCS_SETUP_PASSWORD\n  export MCS_SETUP_PASSWORD\n  python3 mcs/ops/mcs_setup.py init --yes --login-id you@example.com --notify-target slack:C0CHANNELID --set self_posts=true\n  unset MCS_SETUP_PASSWORD\n最初のreadコマンドでMCSパスワードを非表示入力し、Enterを押してください。パスワードをコマンドへ直接書かず、環境変数MCS_SETUP_PASSWORDで渡します。実行後はunsetで削除します。\n--setの値はJSONです。壊れたconfig.jsonは通常停止します。--yesでは対応する場合に元のファイルをconfig.json.corrupt-<日時>へ退避します。1 MiB超・読取不能・FIFO・複数ハードリンクがある通常ファイル・排他的な退避が未対応の環境では退避せず停止します。親フォルダーは本人所有で、modeで本人以外の書き込みが許可されない必要があります。シンボリックリンクではmodeで本人以外のアクセスも許可しません。ACLは別途確認してください。')
     p.add_argument("--login-id", help="MCSのログインID")
     p.add_argument("--runtime-mode", choices=("hermes", "standalone"),
                    help='実行方法を指定します（省略すると現在の設定を保持）')
@@ -1762,9 +1778,15 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "_config_saved", False):
             print("\n設定を中止しました。途中まで保存した設定は残っています。"
                   "初期設定をもう一度実行すると、保存済みの設定を保持して進められます。")
+        elif getattr(args, "_config_publication_started", False):
+            print("\n設定を中止しました。config.jsonの保存結果を確認できません。"
+                  "認証情報や辞書の準備が済んでいる場合があります。現在の状態を確認してください。")
+        elif getattr(args, "_init_side_effects_started", False):
+            print("\n設定を中止しました。今回の変更は設定ファイルに保存していません。"
+                  "認証情報や辞書の準備が済んでいる場合があります。現在の状態を確認してください。")
         else:
             print("\n設定を中止しました。今回の変更は設定ファイルに保存していません。"
-                  "認証情報は途中まで保存されている場合があります。同じ操作で設定をやり直せます。")
+                  "同じ操作で設定をやり直せます。")
         return 130
 
 
