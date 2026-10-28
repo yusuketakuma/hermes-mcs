@@ -17,6 +17,7 @@ import stat
 import uuid
 
 import lifecycle_io
+import config_edit
 import mcs_runtime
 import mcs_util
 import service_contract
@@ -59,7 +60,7 @@ def _owner_snapshot():
     cfg = lifecycle_io.read_owner_config(mcs_util.CONF_PATH)
     after = identity()
     if before != after:
-        raise ValueError('SDC_OWNER_CHANGED')
+        raise config_edit.ConfigConflict('SDC_OWNER_CHANGED')
     digest = hashlib.sha256(json.dumps(cfg, sort_keys=True, ensure_ascii=True, separators=(',', ':'), allow_nan=False).encode()).hexdigest()
     return {'path': str(Path(mcs_util.CONF_PATH).absolute()), 'file_identity': after, 'config_sha256': digest}
 
@@ -99,7 +100,7 @@ def _retry_enrollment_install(store, connector):
     receipt, intent = _validated_install_intent(store, connector)
     with _sdc_owner_lock():
         if intent['owner'] != _owner_snapshot():
-            raise ValueError('SDC_OWNER_CHANGED')
+            raise config_edit.ConfigConflict('SDC_OWNER_CHANGED')
     identity = receipt['identity']
     print('保存済み同意: 所属: {tenant_name} / 環境: {environment} / 別名: {alias}\n送信範囲: {data_scope}\nfingerprint: {fingerprint}'.format(**identity))
     if input('本体設定への保存が未完了です。同じ内容で専用ジョブの設定保存を再試行しますか？ 1: 再試行 / 2: 中止 [2]: ').strip() != '1':
@@ -112,16 +113,27 @@ def service(enabled, root, *, note=print, reconcile_only=False, expected_owner=N
     """Only install or retire the Connector's existing-manager-owned agent."""
     if sys.platform != 'darwin':
         raise ValueError('SDC_MAC_REQUIRED')
-    with _sdc_owner_lock():
+    with _sdc_owner_lock(), config_edit._edit_lock():
+        base = _owner_snapshot()
         cfg = lifecycle_io.read_owner_config(mcs_util.CONF_PATH)
+        if _owner_snapshot() != base:
+            raise config_edit.ConfigConflict('SDC_OWNER_CHANGED')
         if reconcile_only:
             if enabled is not True or not _enrollment_config_admits(cfg, Path(root)):
                 raise ValueError('SDC_LOCAL_START_NOT_PERMITTED')
         else:
-            if expected_owner is not None and expected_owner != _owner_snapshot():
-                raise ValueError('SDC_OWNER_CHANGED')
+            if expected_owner is not None and expected_owner != base:
+                raise config_edit.ConfigConflict('SDC_OWNER_CHANGED')
+            cfg = dict(cfg)
             cfg['sdc'] = {**cfg.get('sdc', {}), 'enabled': enabled, 'state_root': str(root)}
-            atomic_write(mcs_util.CONF_PATH, lambda stream: json.dump(cfg, stream, ensure_ascii=False, indent=2), mode=0o600, makedirs=False)
+            body = json.dumps(cfg, ensure_ascii=False, indent=2)
+            if len(body.encode('utf-8')) > 65536:
+                raise ValueError('SDC_CONFIG_TOO_LARGE')
+            def write_checked(stream):
+                stream.write(body)
+                if _owner_snapshot() != base:
+                    raise config_edit.ConfigConflict('SDC_OWNER_CHANGED')
+            atomic_write(mcs_util.CONF_PATH, write_checked, mode=0o600, makedirs=False)
     paths = service_management.default_paths(root=mcs_util.HOME, checkout=REPO)
     if not enabled:
         if service_management.retire_agents({service_contract.SDC_LABEL}, note, False, paths=paths):
@@ -329,6 +341,9 @@ def main(argv=None):
             return _connection(store, args)
     except BlockingIOError:
         print('送信処理が終了待ちです。同じ指定で mcs ' + args.command + ' を再実行してください。停止記録と中央確認の完了は、再実行後の結果で確認してください。', file=sys.stderr)
+        return 1
+    except config_edit.ConfigConflict:
+        print('別の設定保存と競合したため操作を完了できませんでした。停止操作の場合、送信は停止していない可能性があります。設定と監視状態を確認し、再試行してください。', file=sys.stderr)
         return 1
     except (OSError, ValueError, TypeError, KeyError, TransportError):
         print('接続操作を完了できませんでした。私有ディレクトリ・承認済み送信先・管理画面の状態を確認してください。秘密値を共有しないでください。', file=sys.stderr)

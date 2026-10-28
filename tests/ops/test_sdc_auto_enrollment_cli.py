@@ -104,7 +104,16 @@ def _stub_job_manager(monkeypatch, home, cfg, *, reconcile):
     monkeypatch.setattr(sdc_cli.mcs_util, 'CONF_PATH', str(home / 'owner.json'))
     monkeypatch.setattr(sdc_cli.sys, 'platform', 'darwin')
     monkeypatch.setattr(sdc_cli.lifecycle_io, 'read_owner_config', lambda _: cfg)
-    monkeypatch.setattr(sdc_cli, 'atomic_write', lambda *args, **kwargs: writes.append('config'))
+    def write_config(_path, writer, **_kwargs):
+        import io
+        import json
+        stream = io.StringIO()
+        writer(stream)
+        saved = json.loads(stream.getvalue())
+        cfg.clear()
+        cfg.update(saved)
+        writes.append('config')
+    monkeypatch.setattr(sdc_cli, 'atomic_write', write_config)
     monkeypatch.setattr(sdc_cli.service_management, 'default_paths', lambda **kwargs: SimpleNamespace(agents_dir=home / 'agents'))
     monkeypatch.setattr(sdc_cli.service_management, 'service_substitutions', lambda *args, **kwargs: {})
     monkeypatch.setattr(sdc_cli.service_management, 'desired_agents', lambda *args, **kwargs: {sdc_cli.service_contract.SDC_LABEL: 'synthetic-plist'})
@@ -286,6 +295,38 @@ def test_sdc_stop_wins_before_initial_install_compare(owner_world):
         sdc_cli.service(True, root, expected_owner=expected)
     assert REAL_OWNER_CONFIG(str(owner))['sdc']['enabled'] is False
     assert files == []
+
+
+def test_sdc_respects_shared_config_writer_lock(owner_world):
+    root, owner, files = owner_world
+    before = owner.read_bytes()
+    with sdc_cli.config_edit._edit_lock():
+        with pytest.raises(sdc_cli.config_edit.ConfigConflict):
+            sdc_cli.service(True, root)
+    assert owner.read_bytes() == before and files == []
+
+
+def test_sdc_preserves_uncoordinated_edit_observed_before_publish(owner_world, monkeypatch):
+    root, owner, files = owner_world
+    original = sdc_cli.atomic_write
+    def write(path, writer, **kwargs):
+        owner.write_text('{"other": "new value"}')
+        return original(path, writer, **kwargs)
+    monkeypatch.setattr(sdc_cli, 'atomic_write', write)
+    with pytest.raises(ValueError, match='SDC_OWNER_CHANGED'):
+        sdc_cli.service(True, root)
+    assert owner.read_text() == '{"other": "new value"}' and files == []
+
+
+def test_sdc_does_not_publish_config_over_owner_reader_limit(owner_world):
+    import json
+    root, owner, files = owner_world
+    owner.write_text(json.dumps({'padding': 'x' * 65500}))
+    before = owner.read_bytes()
+    assert len(before) < 65536
+    with pytest.raises(ValueError, match='SDC_CONFIG_TOO_LARGE'):
+        sdc_cli.service(True, root)
+    assert owner.read_bytes() == before and files == []
 
 
 def test_sdc_enable_wins_then_stop_is_serialized_and_next_tick_is_quiet(owner_world, monkeypatch):
