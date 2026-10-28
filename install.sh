@@ -185,10 +185,12 @@ if [ "$MODE" = install ]; then
     _safe_dir() {
         [ -d "$1" ] || return 1
         _info="$(_directory_info "$1")" || return 1
-        set -- $_info
-        [ "$#" -eq 2 ] && [ "$1" = "$_lock_uid" ] || return 1
-        case "$2" in ''|*[!0-7]*) return 1 ;; esac
-        [ $((0$2 & 022)) -eq 0 ]
+        IFS=' ' read -r _dir_owner _dir_mode <<EOF
+$_info
+EOF
+        [ "$_info" = "$_dir_owner $_dir_mode" ] && [ "$_dir_owner" = "$_lock_uid" ] || return 1
+        case "$_dir_mode" in ''|*[!0-7]*) return 1 ;; esac
+        [ $((0$_dir_mode & 022)) -eq 0 ]
     }
     _unsafe_dir() {
         die "$1 の所有者または書き込み権限を確認できません。所有者が本人ではないか、本人以外に書き込みを許可している可能性があります。設定の改変を防ぐため中止しました。所有者と権限を管理者に確認してください。既存設定は保持しています"
@@ -256,8 +258,11 @@ except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
         _lock_stat="$(_lock_info "$_lock_file")" || die "排他制御ファイルを確認できません"
         _fd_stat="$(_held_info "$_install_lock_fd")" || die "排他制御ファイルを確認できません"
         [ "$_lock_stat" = "$_fd_stat" ] || die "排他制御ファイルが変更されました。担当者に確認してください"
-        set -- $_lock_stat
-        [ "$#" -eq 5 ] && [ "$3" = "$_lock_uid" ] && [ "$4" = 600 ] && [ "$5" = 1 ] \
+        IFS=' ' read -r _lock_dev _lock_inode _lock_owner _lock_mode _lock_links <<EOF
+$_lock_stat
+EOF
+        [ "$_lock_stat" = "$_lock_dev $_lock_inode $_lock_owner $_lock_mode $_lock_links" ] \
+            && [ "$_lock_owner" = "$_lock_uid" ] && [ "$_lock_mode" = 600 ] && [ "$_lock_links" = 1 ] \
             || die "排他制御ファイルの所有者または権限を確認できません"
         if command -v lockf >/dev/null 2>&1; then
             lockf -s -t 0 "$_install_lock_fd" || die "別の導入または更新が進行中です。完了後に再実行してください"
