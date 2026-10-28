@@ -4,6 +4,7 @@ from __future__ import annotations
 import getpass
 import os
 import re
+import stat
 import sys
 import warnings
 
@@ -53,8 +54,11 @@ def _status(cli, exe, profile, key, expect=None):
     if path is None:
         return "unavailable"
     try:
-        raw = safe_io.read_regular_nofollow(path, _MAX_ENV, lambda: ValueError("env_unreadable"))
-        if len(raw) > _MAX_ENV or os.stat(path, follow_symlinks=False).st_uid != os.getuid():
+        raw, info = safe_io.read_regular_nofollow(path, _MAX_ENV, lambda: ValueError("env_unreadable"),
+                                                  with_stat=True)
+        # Hermes keeps an existing .env's mode on save: a new secret must not land in a file
+        # others can read.
+        if len(raw) > _MAX_ENV or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
             return "unavailable"
         lines = raw.decode("utf-8").splitlines()
     except FileNotFoundError:

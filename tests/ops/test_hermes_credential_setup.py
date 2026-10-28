@@ -119,13 +119,16 @@ def test_outside_a_terminal_nothing_is_asked(monkeypatch):
     {"path_ok": False},                                                       # profile cannot be resolved
     {"lines": ["SLACK_BOT_TOKEN=xoxb-first\n", "export SLACK_BOT_TOKEN=xoxb-second\n"]},   # ambiguous
     {"lines": [b"\xff".decode("latin-1") + "SLACK_BOT_TOKEN=x\n"], "binary": True},           # unreadable
+    {"lines": ["OTHER=1\n"], "mode": 0o640},                                    # others could read it
 ])
 def test_an_unverifiable_profile_env_is_never_treated_as_unregistered(term, tmp_path, hermes_kw):
     env = tmp_path / ".env"
-    binary = hermes_kw.pop("binary", False)
+    binary, mode = hermes_kw.pop("binary", False), hermes_kw.pop("mode", None)
     hermes = FakeHermes(env, **hermes_kw)
     if binary:
         env.write_bytes(b"\xffSLACK_BOT_TOKEN=x\n")
+    if mode is not None:
+        env.chmod(mode)
     before = env.read_bytes() if env.exists() else None
     term([], [])
     assert setup.run("hermes", "", "slack", cli=hermes) == 1
