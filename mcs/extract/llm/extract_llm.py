@@ -5127,7 +5127,7 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
 
 
 _CLOUD_OPERATING_LIMITS = ("daily_request_budget", "daily_cost_limit_usd", "monthly_cost_limit_usd",
-                           "max_concurrency", "usd_jpy")
+                           "max_concurrency", "usd_jpy", "window_budget_usd", "window_start", "until")
 
 
 def _same_but_operating_limits(current, cfg):
@@ -5137,6 +5137,13 @@ def _same_but_operating_limits(current, cfg):
         c = dict(c) if isinstance(c, dict) else c
         if isinstance(c, dict) and isinstance(c.get("cloud_llm"), dict):
             c["cloud_llm"] = {k: v for k, v in c["cloud_llm"].items() if k not in _CLOUD_OPERATING_LIMITS}
+            if not c["cloud_llm"]:
+                del c["cloud_llm"]
+        if isinstance(c, dict) and isinstance(c.get("semantic"), dict):
+            # The budget CLI updates both providers' end times together.
+            c["semantic"] = {k: v for k, v in c["semantic"].items() if k != "until"}
+            if not c["semantic"]:
+                del c["semantic"]
         return c
     return strip(current) == strip(cfg)
 

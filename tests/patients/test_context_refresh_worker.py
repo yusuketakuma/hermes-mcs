@@ -89,6 +89,32 @@ def test_engine_gets_extraction_complete_rule(capacity):
     assert complete(2) is False   # one eligible post still pending
 
 
+@pytest.mark.parametrize("scope_changed", [False, True])
+@pytest.mark.parametrize("semantic_present", [False, True])
+def test_context_result_survives_budget_window_edit_only(
+        capacity, monkeypatch, scope_changed, semantic_present):
+    _, cfg, _ = capacity
+    cfg["cloud_llm"] = {"mode": "on", "project_ids": [1]}
+    if semantic_present:
+        cfg["semantic"] = {"mode": "assist", "until": None}
+    current = [cfg]
+    monkeypatch.setattr(worker, "load_config", lambda: current[0])
+
+    def run_due(ledger, config, *, admit, **kwargs):
+        assert admit()
+        current[0] = {**cfg, "cloud_llm": {**cfg["cloud_llm"],
+            "window_budget_usd": 10, "window_start": "2026-10-28T00:00:00+09:00",
+            "until": "2026-10-30T23:59:59+09:00"},
+            "semantic": {**cfg.get("semantic", {}), "until": "2026-10-30T23:59:59+09:00"}}
+        if scope_changed:
+            current[0]["cloud_llm"]["project_ids"] = [2]
+        return {"status": "done" if admit() else "source_changed", "done": int(admit())}
+
+    monkeypatch.setitem(sys.modules, "patient_context_refresh",
+        SimpleNamespace(run_due=run_due, options=patient_context_refresh.options))
+    assert run(capacity)["done"] == int(not scope_changed)
+
+
 @pytest.mark.parametrize("stale_field,stale_value", [
     ("hash", "outdated-source-hash"), ("invalidated", 1),
 ])

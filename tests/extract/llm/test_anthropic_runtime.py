@@ -721,12 +721,18 @@ def test_each_new_reservation_reads_the_budget_in_force_now(routed, monkeypatch)
 
 
 def test_operating_limits_alone_do_not_discard_a_waiting_context_unit():
-    base = {"extract": {"x": 1}, "cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 2}}
+    base = {"extract": {"x": 1}, "semantic": {"mode": "assist", "until": None},
+            "cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 2}}
     edited = {**base, "cloud_llm": {**base["cloud_llm"], "max_concurrency": 4,
-                                    "monthly_cost_limit_usd": 5, "usd_jpy": 150, "daily_request_budget": 9}}
+                                    "monthly_cost_limit_usd": 5, "usd_jpy": 150, "daily_request_budget": 9,
+                                    "window_budget_usd": 10, "window_start": "2026-10-28T00:00:00+09:00",
+                                    "until": "2026-10-30T23:59:59+09:00"},
+              "semantic": {**base["semantic"], "until": "2026-10-30T23:59:59+09:00"}}
     assert worker._same_but_operating_limits(edited, base)
+    assert base["semantic"]["until"] is None
     assert not worker._same_but_operating_limits({**base, "cloud_llm": {**base["cloud_llm"], "project_ids": [2]}}, base)
     assert not worker._same_but_operating_limits({**base, "extract": {"x": 2}}, base)
+    assert not worker._same_but_operating_limits({**base, "semantic": {"mode": "off"}}, base)
 
 
 def test_a_shadow_unit_is_pending_until_measured_and_counted_once(routed):
