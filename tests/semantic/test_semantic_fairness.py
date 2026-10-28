@@ -250,7 +250,7 @@ def test_job_metrics_phase_split_and_cohort(tmp_path):
     db.close()
 
 
-def test_sched_persist_failure_never_breaks_drain(tmp_path, monkeypatch):
+def test_sched_persist_failure_holds_semantic_work(tmp_path, monkeypatch):
     db = _world(tmp_path, [10])
     _job(db, 10, eligible=True)
     monkeypatch.setattr(semantic_drain, "_sched_write",
@@ -259,7 +259,9 @@ def test_sched_persist_failure_never_breaks_drain(tmp_path, monkeypatch):
     out = semantic_drain.run_due(db, _cfg("shadow"), errors,
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm, max_jobs=1)
-    assert out["done"] == 1
+    assert out["done"] == 0
+    assert out['long_defer_reservation_failed'] is True
+    assert "semantic: long_defer_reservation_failed" in errors["errors"]
     assert "semantic: sched_persist_failed" in errors["errors"]
     db.close()
 
