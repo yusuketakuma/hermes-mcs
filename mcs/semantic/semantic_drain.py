@@ -1410,20 +1410,24 @@ def _sched_state(ledger) -> dict:
     drain ever claims it) keeps the cohort share and progress counters
     restart-safe instead of living in process memory (T14)."""
     row = ledger.db.execute(
-        "SELECT payload FROM fetch_jobs WHERE kind=? "
+        "SELECT job_id FROM fetch_jobs WHERE kind=? "
         "AND project_id=0 AND message_id=0", (SCHED_KIND,)).fetchone()
-    return (loads_dict(row["payload"]) or {}) if row else {}
+    return (loads_dict(_bounded_job_payload(ledger.db, row['job_id'],
+                                            _REPROCESS_JOB_MAX_BYTES)) or {}) if row else {}
 
 
 def _sched_write(ledger, state: dict, *, commit=True) -> None:
     now = time.time()
+    payload = json.dumps(state, sort_keys=True)
+    if len(payload.encode('utf-8')) > _REPROCESS_JOB_MAX_BYTES:
+        raise ValueError('semantic_scheduler_invalid')
     ledger.db.execute("""
       INSERT INTO fetch_jobs(kind,project_id,message_id,parent_id,
         payload,state,next_try,created_at,updated_at)
       VALUES(?,0,0,NULL,?,'done',0,?,?)
       ON CONFLICT(kind,project_id,message_id) DO UPDATE SET
         payload=excluded.payload,updated_at=excluded.updated_at
-    """, (SCHED_KIND, json.dumps(state, sort_keys=True), now, now))
+    """, (SCHED_KIND, payload, now, now))
     if commit:
         ledger.db.commit()
 
@@ -1804,6 +1808,28 @@ _LONG_DEFERS_MAX = 500
 _LONG_DEFERS_SCAN_BYTES = 8 * 1024 * 1024
 
 
+def _bounded_job_payload(db, job_id, limit):
+    if (getattr(db, 'text_factory', str) is not str
+            or not callable(getattr(db, 'blobopen', None))
+            or db.execute('PRAGMA encoding').fetchone()[0].upper() != 'UTF-8'):
+        return None
+    row = db.execute('SELECT _rowid_,typeof(payload) FROM fetch_jobs WHERE job_id=?',
+                     (job_id,)).fetchone()
+    if row is None or row[0] != job_id or row[1] != 'text':
+        return None
+    with db.blobopen('fetch_jobs', 'payload', job_id, readonly=True) as blob:
+        size = len(blob)
+        if size > limit:
+            return None
+        raw = blob.read(size)
+        if len(raw) != size:
+            return None
+    try:
+        return raw.decode('utf-8')
+    except UnicodeError:
+        return None
+
+
 def _long_defers(ledger) -> dict:
     """{str(job_id): {"g": generation, "n": free_defers}} — valid entries."""
     raw = _sched_state(ledger).get("long_defers")
@@ -1846,12 +1872,12 @@ def _known_long_defer_generation(raw):
 
 def _reservation_sched(ledger):
     row = ledger.db.execute(
-        "SELECT payload FROM fetch_jobs WHERE kind=? AND project_id=0 AND message_id=0",
+        "SELECT job_id FROM fetch_jobs WHERE kind=? AND project_id=0 AND message_id=0",
         (SCHED_KIND,)).fetchone()
     if row is None:
         return {}, {}
-    raw = row['payload']
-    if not isinstance(raw, str) or len(raw) > _REPROCESS_JOB_MAX_BYTES:
+    raw = _bounded_job_payload(ledger.db, row['job_id'], _REPROCESS_JOB_MAX_BYTES)
+    if raw is None:
         raise ValueError('semantic_scheduler_invalid')
     try:
         if len(raw.encode('utf-8')) > _REPROCESS_JOB_MAX_BYTES:
@@ -1880,19 +1906,20 @@ def _reserve_long_defer(ledger, token):
     with ledger.db:
         sched, entries = _reservation_sched(ledger)
         row = ledger.db.execute(
-            'SELECT state,attempts,payload FROM fetch_jobs '
+            'SELECT state,attempts FROM fetch_jobs '
             'WHERE job_id=? AND kind=? AND project_id=? AND message_id=?',
             (token.job_id, token.kind, token.project_id, token.message_id)).fetchone()
+        raw = _bounded_job_payload(ledger.db, token.job_id, _REPROCESS_JOB_MAX_BYTES) if row else None
         if (row is None or row['state'] != token.state or int(row['attempts'] or 0) != token.attempts
-                or row['payload'] != token.payload_raw
-                or _known_long_defer_generation(row['payload']) != token.generation):
+                or raw != token.payload_raw
+                or _known_long_defer_generation(raw) != token.generation):
             return None
         key = str(token.job_id)
         prior = entries.get(key)
         if prior is None and len(entries) >= _LONG_DEFERS_MAX:
             raise ValueError('semantic_long_defers_capacity')
         if prior and prior['g'] != token.generation:
-            if _reprocess_job_payload(ledger, row, token.project_id, token.message_id) is None:
+            if _reprocess_job_payload(ledger, {'payload': raw}, token.project_id, token.message_id) is None:
                 raise ValueError('semantic_long_defer_generation_unknown')
             prior = None
         count = prior['n'] if prior else 0
@@ -1913,10 +1940,11 @@ def _refund_long_defer(ledger, token, reservation):
         sched, entries = _reservation_sched(ledger)
         key = str(token.job_id)
         row = ledger.db.execute(
-            'SELECT payload FROM fetch_jobs WHERE job_id=? AND kind=? AND project_id=? AND message_id=?',
+            'SELECT job_id FROM fetch_jobs WHERE job_id=? AND kind=? AND project_id=? AND message_id=?',
             (token.job_id, token.kind, token.project_id, token.message_id)).fetchone()
-        if (row is None or row['payload'] != token.payload_raw
-                or _known_long_defer_generation(row['payload']) != token.generation
+        raw = _bounded_job_payload(ledger.db, token.job_id, _REPROCESS_JOB_MAX_BYTES) if row else None
+        if (row is None or raw != token.payload_raw
+                or _known_long_defer_generation(raw) != token.generation
                 or entries.get(key) != reservation[1]):
             return
         if reservation[0] is None:
@@ -1955,9 +1983,8 @@ def _merge_long_defers(ledger, sched: dict, seen: dict) -> None:
         if budget > 0:
             last_scanned = row['job_id']
             limit = min(budget, _REPROCESS_JOB_MAX_BYTES)
-            raw = ledger.db.execute('SELECT substr(payload,1,?) FROM fetch_jobs WHERE job_id=?',
-                                    (limit + 1, row['job_id'])).fetchone()[0]
-            if isinstance(raw, str) and len(raw) <= limit:
+            raw = _bounded_job_payload(ledger.db, row['job_id'], limit)
+            if isinstance(raw, str):
                 try:
                     size = len(raw.encode('utf-8'))
                 except UnicodeError:
