@@ -129,11 +129,20 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     ).fetchone()
     if row is None:
         return "job_not_found", {}
+    # The writer historically accepts duplicate non-version keys.  Retain
+    # that behavior, but never choose a version from an ambiguous top-level
+    # marker (including escaped spellings of the same JSON key).
+    from inference_version import VERSION_KEY
+    class _RetryObject(dict):
+        def __init__(self, pairs):
+            super().__init__(pairs)
+            self.ambiguous_version = sum(k == VERSION_KEY for k, _ in pairs) > 1
+
     try:
-        payload = json.loads(row["payload"] or "{}")
+        payload = json.loads(row["payload"] or "{}", object_pairs_hook=_RetryObject)
     except (ValueError, TypeError, RecursionError):
         return "invalid_payload", {"job_id": row["job_id"]}
-    if not isinstance(payload, dict):
+    if not isinstance(payload, dict) or payload.ambiguous_version:
         return "invalid_payload", {"job_id": row["job_id"]}
     try:
         current_hash = payload_hash(payload)

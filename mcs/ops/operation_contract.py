@@ -44,6 +44,9 @@ def retry_error(row, payload: dict, additional_attempts=None) -> str | None:
     """
     if not isinstance(payload, dict):
         return "invalid_payload"
+    from inference_version import CURRENT_VERSION, LEGACY_VERSION, read_version
+    if read_version(payload) not in (CURRENT_VERSION, LEGACY_VERSION):
+        return "unsupported_inference_version"
     state = row["state"] if not isinstance(row, dict) else row.get("state")
     attempts = row["attempts"] if not isinstance(row, dict) \
         else row.get("attempts")

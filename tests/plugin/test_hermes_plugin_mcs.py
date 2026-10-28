@@ -707,6 +707,38 @@ def test_control_preview_confirm_and_operations_read(tmp_path):
         db.close()
 
 
+def test_retry_preview_and_confirm_reject_unsupported_generation(tmp_path):
+    db = _source(tmp_path)
+    try:
+        (tmp_path / "cmd").mkdir()
+        payload = {"inference_engine_version": "1.0", "generation": "g1", "targets": [1]}
+        job_id = db.job_add("semantic", 1, 1, payload=payload)
+        db.job_fail(job_id)
+        assert ledger.publish_snapshot(str(tmp_path / "source.db"), str(tmp_path / "snapshots"))
+        handler, context = _handler(tmp_path), _context()
+        preview_input = {"op": "control", "phase": "preview", "action": "retry",
+                         "project_id": 1, "job_id": job_id}
+        preview = _call(handler, preview_input, context)
+        assert preview["ok"] is True
+
+        for version in ("2.0", None, "01.0"):
+            changed = {**payload, "inference_engine_version": version}
+            with db.db:
+                db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                              (json.dumps(changed), job_id))
+            assert ledger.publish_snapshot(str(tmp_path / "source.db"), str(tmp_path / "snapshots"))
+            assert _call(handler, preview_input, context) == {
+                "ok": False, "error": "unsupported_inference_version"}
+            assert _call(handler, {"op": "control", "phase": "confirm",
+                                   "payload": preview["payload"],
+                                   "payload_hash": preview["payload_hash"],
+                                   "origin": preview["origin"]}, context) == {
+                "ok": False, "error": "unsupported_inference_version"}
+        assert not list((tmp_path / "cmd").iterdir())
+    finally:
+        db.close()
+
+
 def test_interactive_settings_derives_application_id(tmp_path):
     """application_id omitted: the connected bot's user id fills the
     scope binding — a bot account's user id IS its application id."""

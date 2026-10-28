@@ -64,6 +64,7 @@ ERR_JA = {
     "project_mismatch": "対象の患者が見つかりません。最新のカードでやり直してください。",
     "project_not_found": "対象の患者が見つかりません。最新のカードでやり直してください。",
     "payload_changed": "抽出結果が更新されたため報告できません。最新のカードでやり直してください。",
+    "unsupported_inference_version": "この解析記録の版では再試行できません。管理者に連絡してください。",
     "stamp_not_allowed": "MCSスタンプは設定された担当者だけが操作できます。",
     "stamp_target_changed": "対象の投稿かスタンプの状態が変わりました。最新のカードからやり直してください。",
     "stamp_target_invalid": "このカードにはスタンプを付けられる投稿がありません。",
