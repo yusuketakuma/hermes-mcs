@@ -777,3 +777,23 @@ def test_genuine_disposition_with_lost_scope_and_corrupt_json_never_becomes_succ
         assert c.usage_report(ledger) == billing
         with pytest.raises(ValueError, match='cloud_receipt_invalid'):
             c.reservation_evidence(ledger.db, aid)
+
+
+def test_evidence_hold_counts_report_malformed_receipts_and_stalled_repair_slots_without_ids(tmp_path, now):
+    with closing(Ledger(str(tmp_path / 'l.db'))) as ledger:
+        reservation = _reserve(ledger)
+        c.record_result(ledger, reservation, _result(reservation))
+        assert c.evidence_hold_counts(ledger.db, now=now) == {
+            "malformed_receipts": 0, "stalled_repair_units": 0, "count_limit": 1000}
+        with ledger.db:
+            ledger.db.execute("UPDATE artifacts SET meta='{\"a\":1,\"a\":2}' WHERE kind='cloud_usage_result'")
+            for age, phase in ((c.STALLED_REPAIR_S + 1, "reserved"), (c.STALLED_REPAIR_S - 1, "reserved"),
+                               (c.STALLED_REPAIR_S + 1, "complete")):
+                ledger.db.execute("INSERT INTO artifacts(kind,project_id,content,meta,created_at) VALUES(?,?,?,?,?)",
+                                  ("patient_context_source_quality_repair_candidate_v1", 1,
+                                   json.dumps({"phase": phase}), "{}", now - age))
+        counts = c.evidence_hold_counts(ledger.db, now=now)
+        # Only the old reserved slot counts: a younger one may still be in flight.
+        assert counts == {"malformed_receipts": 1, "stalled_repair_units": 1, "count_limit": 1000}
+        with pytest.raises(ValueError, match='cloud_receipt_invalid'):
+            c.reservation_evidence(ledger.db, ledger.artifacts('cloud_usage_reserve')[0]['artifact_id'])

@@ -746,3 +746,31 @@ def dryrun_tx(ledger, *, route, project_id, unit_key, input_chars=0, max_tokens=
                               "estimated_input_tokens": (input_chars + 2) // 3,
                               "estimated_output_tokens": max_tokens * requests,
                               "price_version": PRICE_VERSION})
+
+
+def evidence_hold_counts(db, *, now, limit=1000):
+    """Count, without IDs, the rows that keep source-repair evidence on hold.
+
+    malformed_receipts: accounting rows whose metadata cannot be attributed to
+    a patient or reservation; every repair adoption holds while any exist.
+    stalled_repair_units: repair slots still reserved after a full call window,
+    i.e. a send whose outcome was not saved. They are never resent."""
+    from patient_context_artifacts import CANDIDATE_KIND
+    malformed = db.execute(
+        "SELECT COUNT(*) FROM (SELECT 1 FROM artifacts WHERE kind IN "
+        "('cloud_usage_reserve','cloud_usage_result','cloud_usage_disposition') AND CASE "
+        "WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
+        "WHEN json_type(meta)!='object' THEN 1 "
+        "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE key IS NOT NULL "
+        "GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
+        "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE type='real' AND abs(value)>1.7976931348623157e308) THEN 1 "
+        "ELSE 0 END LIMIT ?)", (limit,)).fetchone()[0]
+    stalled = db.execute(
+        "SELECT COUNT(*) FROM (SELECT 1 FROM artifacts WHERE kind=? AND created_at<? AND "
+        "CASE WHEN json_valid(content) THEN json_extract(content,'$.phase') END='reserved' LIMIT ?)",
+        (CANDIDATE_KIND, now - STALLED_REPAIR_S, limit)).fetchone()[0]
+    return {"malformed_receipts": malformed, "stalled_repair_units": stalled, "count_limit": limit}
+
+
+# One repair call (300s) plus its commit margin; younger reserved slots may be in flight.
+STALLED_REPAIR_S = 600

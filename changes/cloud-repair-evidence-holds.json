@@ -1,0 +1,17 @@
+{
+  "category": "added",
+  "title": "原典修復を止めている記録の件数を表示",
+  "summary": "`cloud-llm plan`・`estimate` の出力に、原典修復の採用を止めている記録の件数を追加しました。壊れた利用記録があって全患者の修復が保留されている状態と、送信後の結果を保存できずに止まった修復を、IDを出さずに確認できます。",
+  "upgrade": "追加操作は不要です。出力に `source_repair_evidence_holds` の項目が増えます。件数を数えるだけで、記録の変更・再送・修復の再開はしません。",
+  "details": [
+    "`malformed_receipts` は、患者や予約に結び付けられない構造の利用記録の件数です。1件以上ある間は、全患者の原典修復の採用と読取り時の証拠確認を保留します。",
+    "`stalled_repair_units` は、1回の呼出し時間（600秒）を過ぎても予約済みのままの修復unitの件数です。これらは自動で再送せず、原文の改訂・first_seen・患者scope・処理契約が変わるまで結果不明のまま残ります。",
+    "件数は1,000件を上限に数え、上限は `count_limit` に示します。"
+  ],
+  "refs": [
+    "mcs/llm/cloud_policy.py",
+    "mcs/ops/cloud_cli.py",
+    "docs/guides/ANTHROPIC.md",
+    "docs/specs/inference-engine-v1.md"
+  ]
+}

@@ -374,6 +374,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None):
     with _reader(root) as (db, deadline):
         borrowed = SimpleNamespace(db=db)
         accounting = policy.usage_report(borrowed)
+        evidence_holds = policy.evidence_hold_counts(db, now=now)
         reason = policy.global_block_reason(borrowed) or policy.budget_block_reason(borrowed, settings)
         calibration = _calibration(db, now - 62 * 86400) if not accounting["pricing_unverified"] else None
         routes = _route_counts(db, cfg, planning, deadline)
@@ -434,6 +435,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None):
         "daily_cost_limit_usd": settings["daily_cost_limit_usd"],
         "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
         "max_concurrency_per_process": settings["max_concurrency"], "accounting": accounting,
+        "source_repair_evidence_holds": evidence_holds,
         "days": days, "history_days_observed": len(counts),
         "new_posts": sum(row["posts"] for row in counts.values()),
         "daily_patient_context_requests_estimate": sum(row["patients"] for row in counts.values()) / days,
