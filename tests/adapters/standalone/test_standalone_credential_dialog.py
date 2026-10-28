@@ -135,7 +135,7 @@ def test_env_modified_during_input_cancels_publication(tmp_path, monkeypatch):
         cli.initialize(tmp_path, "discord")
     data = tmp_path / "data"
     assert not (data / "discord-credentials.json").exists()
-    assert list(data.iterdir()) == []
+    assert [item.name for item in data.iterdir()] == ["standalone-credentials.lock"]
 
 
 def test_setup_defers_legacy_slack_bot_only_to_native_initializer(tmp_path, monkeypatch):
@@ -231,7 +231,8 @@ def test_setup_env_write_failure_reports_unknown(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda _: "synthetic-discord-token")
     def fail_write(*_):
         raise OSError("synthetic")
-    monkeypatch.setattr(mcs_setup.lifecycle_io, "write_env", fail_write)
+    import api_key_setup
+    monkeypatch.setattr(api_key_setup, "_save", fail_write)
     assert not mcs_setup._apply_standalone_credentials(
         SimpleNamespace(yes=False), {"discord"}, [("DISCORD_BOT_TOKEN", "bot")])
     captured = capsys.readouterr()
