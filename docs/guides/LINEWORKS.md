@@ -96,6 +96,7 @@ $PY -m lineworks_adapter check
 
 `init` は Client ID・Client Secret・Service Account・Bot Secret・
 Private Key のパスを端末で受け取ります。秘密値は非表示入力です。
+非表示入力を使えない端末では、秘密値を入力する前に停止します。
 既定の秘密ファイルは `~/.mcs/data/lineworks-credentials.json`、権限は `0600`。
 秘密ファイルと Private Key を git に追加しません。`init` は既存ファイルを
 上書きしません。診断に失敗した場合は、ファイルの配置・所有者・`0600`権限と

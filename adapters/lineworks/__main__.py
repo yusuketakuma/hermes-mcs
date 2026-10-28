@@ -12,6 +12,7 @@ import sys
 import tempfile
 import threading
 import time
+import warnings
 from contextlib import ExitStack
 from pathlib import Path
 
@@ -57,7 +58,12 @@ def initialize(root):
     values = {"bot_id": scope["application_id"]}
     for key, label in (("client_id", "アプリのClient ID"), ("client_secret", "アプリのClient Secret"),
                        ("service_account", "サービスアカウント（Service Account）"), ("bot_secret", "Botの認証用秘密値（Bot Secret）")):
-        values[key] = getpass.getpass(label + ": ").strip()
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", getpass.GetPassWarning)
+                values[key] = getpass.getpass(label + ": ").strip()
+        except getpass.GetPassWarning:
+            raise ClientError("credential_input_not_hidden") from None
     key = Path(input("ダウンロードした秘密鍵の絶対パス: ").strip()).expanduser().resolve(strict=True)
     values["private_key_path"] = str(key)
     if not key.is_file() or key.stat().st_mode & 0o077 or key.stat().st_size > 16384:

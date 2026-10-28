@@ -1,0 +1,8 @@
+{
+  "category": "security",
+  "title": "LINE WORKSの秘密値を表示せず入力できない端末では停止",
+  "summary": "LINE WORKSの認証情報を入力するとき、非表示入力を使えない端末では秘密値の入力前に停止します。",
+  "upgrade": "秘密値の非表示入力が使える端末で、初回登録をやり直してください。",
+  "details": ["init と credentials のどちらから登録しても同じ保護を適用します。"],
+  "refs": ["adapters/lineworks/__main__.py"]
+}
