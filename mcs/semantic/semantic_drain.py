@@ -1500,6 +1500,8 @@ def _reprocess_target_state(ledger, row, scfg):
         return 'paused'
     if row['body_state'] == 'deleted':
         return 'deleted'
+    if row['body_state'] == 'full' and row['body_text'] == '':
+        return 'empty_body'
     if row['body_state'] not in (None, 'full') or not row['body_text']:
         return 'body_unavailable'
     root = row['parent_id'] or mid
@@ -1587,7 +1589,8 @@ def _reprocess_proof_generation(ledger, cfg, scfg):
     cloud = cfg.get('cloud_llm', {})
     cloud = cloud if isinstance(cloud, dict) else {'mode': 'invalid'}
     return mcs_util.payload_hash({
-        'contract': _REPROCESS_PROOF_CONTRACT, 'execution': runtime.execution_generation(scfg),
+        'contract': _REPROCESS_PROOF_CONTRACT, 'target_classification': 'empty-body-v1',
+        'execution': runtime.execution_generation(scfg),
         'semantic': {key: scfg.get(key) for key in ('mode', 'summary_mode', 'loop_mode',
                      'extract_qc', 'project_ids', 'candidate_fingerprint')},
         'context': patient_context_refresh._contract(cfg),
@@ -1665,7 +1668,7 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
                     'upper': live_upper,
                     'cursor': 0, 'seed_cursor': 0, 'phase': 'seed', 'counts': {}}
     counters = {'current', 'pending', 'repair_required', 'held', 'failed', 'permission',
-                'scope', 'paused', 'deleted', 'body_unavailable'}
+                'scope', 'paused', 'deleted', 'body_unavailable', 'empty_body'}
     if (progress.get('phase') not in ('seed', 'verify', 'verify_patients', 'waiting', 'complete')
             or any(type(progress.get(key)) is not int or not 0 <= progress[key] < 2**63
                    for key in ('cursor', 'upper'))
@@ -1827,7 +1830,8 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
             if processed == len(rows) and (len(rows) < limit or progress['patient_cursor'] >= progress['patient_upper']):
                 messages = progress.get('coverage', {}).get('counts', {})
                 blocked_messages = {key: value for key, value in messages.items()
-                    if value and key in ('pending', 'repair_required', 'held', 'failed', 'paused', 'body_unavailable')}
+                    if value and key in ('pending', 'repair_required', 'held', 'failed', 'paused',
+                                         'body_unavailable', 'empty_body')}
                 blocked_patients = {key: value for key, value in counts.items() if value and key not in ('current', 'excluded')}
                 upper = ledger.db.execute('SELECT COALESCE(MAX(message_id),0) FROM messages').fetchone()[0]
                 tail = upper > progress['seed_cursor']

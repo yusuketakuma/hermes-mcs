@@ -1120,3 +1120,79 @@ def test_model_change_mid_verification_finishes_the_fixed_range_without_completi
         if advanced['phase'] == 'verify' and advanced['cursor'] == 0:
             break
     assert advanced['phase'] == 'verify' and advanced['cursor'] == 0
+
+
+def _current_synthetic_patient(_ledger, _row, _cfg, _scfg, witness):
+    checked = time.time()
+    witness.update(checked_at=checked, valid_until=checked + 3600)
+    return 'current'
+
+
+@pytest.mark.parametrize('with_attachment', [False, True])
+def test_full_empty_body_is_blocked_without_admission_and_text_revision_resumes(store, monkeypatch, with_attachment):
+    store.save_messages([_message(1, body='')], project_id=1)
+    row = store.db.execute('SELECT body_state,body_text FROM messages WHERE message_id=1').fetchone()
+    assert tuple(row) == ('full', '')
+    if with_attachment:
+        with store.db:
+            store.db.execute("INSERT INTO attachments(message_id,file_id,name,state) VALUES(1,'synthetic','synthetic.pdf','pending')")
+    outbox = [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox')]
+    monkeypatch.setattr(drain, '_reprocess_patient_state', _current_synthetic_patient)
+    original = semantic_store.thread_bundle
+    monkeypatch.setattr(semantic_store, 'thread_bundle', lambda *args, **kwargs: pytest.fail('empty source was admitted'))
+    report = _waiting(store)
+    assert report['phase'] == 'waiting' and not report['complete']
+    assert report['coverage']['counts'] == {'empty_body': 1}
+    assert report['waiting_reasons']['messages'] == {'empty_body': 1}
+    assert report['patient_counts'] == {'current': 1}
+    assert _job(store) is None
+    assert [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox')] == outbox
+    monkeypatch.setattr(semantic_store, 'thread_bundle', original)
+    store.save_messages([_message(1, body='完全合成の追記です。')], project_id=1)
+    next_report = _waiting(store)
+    assert next_report['coverage']['counts'] == {'pending': 1}
+    assert not next_report['complete'] and _job(store)['state'] == 'pending'
+    assert json.loads(_job(store)['payload'])['notification_free'] is True
+    assert [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox')] == outbox
+
+
+@pytest.mark.parametrize(('state', 'body'), [
+    ('full', None), (None, ''), ('unknown', ''), ('partial', ''), ('snippet', ''),
+])
+def test_unavailable_empty_or_null_body_is_not_reported_as_acquired_empty(store, state, body):
+    store.save_messages([_message(1, body='')], project_id=1)
+    with store.db:
+        store.db.execute('UPDATE messages SET body_state=?,body_text=? WHERE message_id=1', (state, body))
+    report = _waiting(store)
+    assert report['coverage']['counts'] == {'body_unavailable': 1}
+    assert report['waiting_reasons']['messages'] == {'body_unavailable': 1}
+    assert not report['complete'] and _job(store) is None
+
+
+def test_old_waiting_classification_is_rechecked_without_reopening_existing_attempts(store, monkeypatch):
+    _save(store)
+    _replay(store)
+    with store.db:
+        store.db.execute("UPDATE fetch_jobs SET state='failed',attempts=3 WHERE kind='semantic'")
+    store.save_messages([_message(2, body='')], project_id=1)
+    monkeypatch.setattr(drain, '_reprocess_patient_state', _current_synthetic_patient)
+    original_target = drain._reprocess_target_state
+    original_generation = drain._reprocess_proof_generation
+    def old_target(*args):
+        state = original_target(*args)
+        return 'body_unavailable' if state == 'empty_body' else state
+
+    monkeypatch.setattr(drain, '_reprocess_target_state', old_target)
+    monkeypatch.setattr(drain, '_reprocess_proof_generation', lambda *args: original_generation(*args) + '-old')
+    old = _waiting(store, limit=1)
+    assert old['coverage']['counts'] == {'failed': 1, 'body_unavailable': 1}
+    before_job = dict(_job(store))
+    before_outbox = [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox')]
+    monkeypatch.setattr(drain, '_reprocess_target_state', original_target)
+    monkeypatch.setattr(drain, '_reprocess_proof_generation', original_generation)
+    rechecked = _waiting(store, limit=1)
+    assert rechecked['coverage']['counts'] == {'failed': 1, 'empty_body': 1}
+    assert rechecked['waiting_reasons']['messages'] == {'failed': 1, 'empty_body': 1}
+    assert rechecked['seed_cursor'] == old['seed_cursor'] and not rechecked['complete']
+    assert dict(_job(store)) == before_job and _job(store, 2) is None
+    assert [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox')] == before_outbox
