@@ -238,16 +238,26 @@ def test_rollup_content_scope_must_match_row(env, capsys, content_pid):
     assert snap.read_bytes() == snap_before
 
 
-def test_legacy_rollup_without_project_id_is_unknown_without_config(env):
+def test_legacy_rollup_without_project_id_rebuilds_without_trusting_cache(env, monkeypatch):
+    import rollup
     snap, out = env
     with sqlite3.connect(snap) as conn:
         conn.execute("UPDATE artifacts SET content=?,meta=? WHERE kind='patient_rollup'",
                      (json.dumps({"summary": {"text": "SYNTH untrusted legacy"}}), "{}"))
     before = snap.read_bytes()
+    calls = []
+    original = rollup.build_rollup
+
+    def spy(*args, **kwargs):
+        calls.append((args[1], kwargs.get("cfg")))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(rollup, "build_rollup", spy)
     assert brain_export.run(out, snap)["ok"]
     page = (out / "patients/p1.md").read_text()
-    assert "患者集約: 未確認" in page
+    assert calls == [(1, None)]
     assert "SYNTH untrusted legacy" not in page and "messages: 0" not in page
+    assert "バイタル: 未確認" in page
     assert snap.read_bytes() == before
 
 
@@ -282,7 +292,8 @@ def test_missing_rollup_preserves_all_exports_until_rebuilt(env, capsys, archive
 
     _rollup(snap, summary="SYNTH rebuilt")
     assert brain_export.run(out, snap)["ok"]
-    assert "SYNTH rebuilt" in (out / "patients/p1.md").read_text()
+    page = (out / "patients/p1.md").read_text()
+    assert "患者集約: 未確認" in page and "SYNTH rebuilt" not in page
 
 
 def test_missing_rollup_with_messages_blocks_initial_export(env, capsys):
@@ -319,10 +330,14 @@ def test_layout_and_content(env):
     assert (out / "stats" / f"{today}.md").exists()
     patient = (out / "patients" / "p1.md").read_text()
     assert PATIENT_NAME in patient          # real-name field renders
-    assert "SYNTH-med" in patient           # medications
-    assert "SYNTH-咳" in patient            # symptoms
-    assert "SYNTH summary v1" in patient    # summary
-    assert "SYNTH-nurse" in patient         # senders
+    assert "患者集約: 未確認" in patient
+    assert all(value not in patient for value in
+               ("SYNTH-med", "SYNTH-咳", "SYNTH summary v1", "SYNTH-nurse"))
+    with sqlite3.connect(snap) as conn:
+        roll = json.loads(conn.execute("SELECT content FROM artifacts WHERE kind='patient_rollup'").fetchone()[0])
+    formatted = brain_export._patient_md(1, PATIENT_NAME, {}, roll)
+    assert all(value in formatted for value in
+               ("SYNTH-med", "SYNTH-咳", "SYNTH summary v1", "SYNTH-nurse"))
 
 
 def test_no_raw_bodies(env):
@@ -568,14 +583,16 @@ def test_export_failed_publication_preserves_previous_file(env, monkeypatch):
     assert not list(out.rglob("*.tmp"))
 
 
-def test_updated_rollup_changes_file(env):
+def test_updated_unverified_rollup_does_not_change_patient_page(env):
     snap, out = env
     brain_export.run(out, snap)
+    before = (out / "patients" / "p1.md").read_bytes()
     _rollup(snap, summary="SYNTH summary v2 changed")
     brain_export.run(out, snap)
     patient = (out / "patients" / "p1.md").read_text()
-    assert "SYNTH summary v2 changed" in patient
-    assert "SYNTH summary v1" not in patient
+    assert "患者集約: 未確認" in patient
+    assert "SYNTH summary v1" not in patient and "SYNTH summary v2 changed" not in patient
+    assert (out / "patients" / "p1.md").read_bytes() == before
 
 
 def test_hostile_name_does_not_break_front_matter_or_tables(env):
@@ -603,8 +620,11 @@ def test_hostile_name_does_not_break_front_matter_or_tables(env):
                       if line.startswith("title:"))
     assert json.loads(title_line.split(":", 1)[1].strip()) == \
         "MCS evil: name\n---\ninjected: yes"
-    assert "a|b\nc" not in text  # table cells cannot inject a row break
-    assert "a\\|b c" in text
+    assert "a|b\nc" not in text and "a\\|b c" not in text
+    formatted = brain_export._patient_md(1, "synthetic", {},
+        {"medications": [{"name": "a|b\nc", "dose": "x", "last": "d"}]})
+    assert "a|b\nc" not in formatted  # table cells cannot inject a row break
+    assert "a\\|b c" in formatted
 
 
 def test_stale_cleanup_never_deletes_foreign_files(env, tmp_path):
@@ -869,7 +889,11 @@ def test_unverified_requests_exported_apart_from_confirmed(env):
         _req("SYNTH 候補D", unverified="false"),
         _req("SYNTH 候補E", unverified=0)])
     brain_export.run(out, snap)
-    text = (out / "patients" / "p1.md").read_text()
+    page = (out / "patients" / "p1.md").read_text()
+    assert "患者集約: 未確認" in page and "SYNTH 確定A" not in page and "SYNTH 候補C" not in page
+    with sqlite3.connect(snap) as conn:
+        roll = json.loads(conn.execute("SELECT content FROM artifacts WHERE kind='patient_rollup'").fetchone()[0])
+    text = brain_export._patient_md(1, PATIENT_NAME, {}, roll)
     assert _table_rows(text, "open-looking requests") == [
         "| 2026-09-19 | 確認 | SYNTH 確定A |",
         "| 2026-09-19 | 確認 | SYNTH 確定B |"]
@@ -883,7 +907,11 @@ def test_unverified_only_requests_never_in_confirmed_table(env):
     snap, out = env
     _set_requests(snap, [_req("SYNTH 候補のみ", unverified=True)])
     brain_export.run(out, snap)
-    text = (out / "patients" / "p1.md").read_text()
+    page = (out / "patients" / "p1.md").read_text()
+    assert "患者集約: 未確認" in page and "SYNTH 候補のみ" not in page
+    with sqlite3.connect(snap) as conn:
+        roll = json.loads(conn.execute("SELECT content FROM artifacts WHERE kind='patient_rollup'").fetchone()[0])
+    text = brain_export._patient_md(1, PATIENT_NAME, {}, roll)
     assert _table_rows(text, "open-looking requests") is None
     assert "open-looking requests" not in text
     assert _table_rows(text, "依頼候補（未確認）") == [
@@ -896,7 +924,7 @@ def test_legacy_snapshot_with_family_source_never_exports_patient_current_values
         db.execute("UPDATE messages SET body_text='母の状態：体温38.5℃。' WHERE message_id=100")
     brain_export.run(out, snap)
     text = (out / "patients" / "p1.md").read_text()
-    assert "SYNTH summary v1" in text
+    assert "患者集約: 未確認" in text and "SYNTH summary v1" not in text
     assert "120/80" not in text and "SYNTH-med" not in text
 
 
@@ -939,7 +967,13 @@ def test_period_candidate_and_unrefreshed_ids_are_labelled(env, period_key, ids_
                          period_key: {"start": "2026-09-01", "end": "2026-09-30"},
                          ids_key: [7, 8]}),))
     assert brain_export.run(out, snap)["ok"]
-    text = (out / "patients" / "p1.md").read_text()
+    page = (out / "patients" / "p1.md").read_text()
+    assert "患者集約: 未確認" in page
+    assert "2026-09-01" not in page and "unrefreshed_message_ids" not in page
+    # Formatter inputs use current names; legacy untrusted cache is not promoted.
+    text = brain_export._patient_md(1, PATIENT_NAME, {}, {
+        "med_period_candidate": {"start": "2026-09-01", "end": "2026-09-30"},
+        "unrefreshed_message_ids": [7, 8]})
     assert "## med period candidate（規則抽出・未確認）" in text
     assert '"start": "2026-09-01"' in text
     assert ("> unrefreshed_message_ids: 2 message ids"
@@ -1031,7 +1065,7 @@ def test_legacy_request_without_reply_inference_needs_no_rebuild(env, monkeypatc
     assert snap.read_bytes() == before
 
 
-def test_old_period_rebuilds_clinical_fields_without_writing_the_snapshot(env, monkeypatch):
+def test_old_period_without_config_is_unknown_without_rebuilding_or_writing(env, monkeypatch):
     import rollup
     snap, out = env
     _set_rollup_period(snap, current=False)
@@ -1045,5 +1079,6 @@ def test_old_period_rebuilds_clinical_fields_without_writing_the_snapshot(env, m
     monkeypatch.setattr(rollup, "build_rollup", spy)
     before = snap.read_bytes()
     assert brain_export.run(out, snap)["ok"]
-    assert calls == [1]
+    assert calls == []
+    assert "患者集約: 未確認" in (out / "patients/p1.md").read_text()
     assert snap.read_bytes() == before
