@@ -239,6 +239,8 @@ def test_init_help_explains_backup_limits(capsys):
     assert result.value.code == 0
     out = capsys.readouterr().out
     assert '1 MiB超・読取不能・FIFO' in out and '複数ハードリンク' in out
+    assert 'コピーや保存に失敗した場合' in out
+    assert '排他的な退避が未対応' not in out
 
 
 def test_init_rejects_oversize_before_secret_or_backup(tmp_path, monkeypatch):

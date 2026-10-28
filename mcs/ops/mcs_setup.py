@@ -1701,7 +1701,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser(
         "init", help='質問に答えて初期設定を保存します（推奨 / 詳細、パスワードは非表示入力）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='質問なしでの実行例（bash/zshの端末で実行）:\n  read -r -s MCS_SETUP_PASSWORD\n  export MCS_SETUP_PASSWORD\n  python3 mcs/ops/mcs_setup.py init --yes --login-id you@example.com --notify-target slack:C0CHANNELID --set self_posts=true\n  unset MCS_SETUP_PASSWORD\n最初のreadコマンドでMCSパスワードを非表示入力し、Enterを押してください。パスワードをコマンドへ直接書かず、環境変数MCS_SETUP_PASSWORDで渡します。実行後はunsetで削除します。\n--setの値はJSONです。壊れたconfig.jsonは通常停止します。--yesでは対応する場合に元のファイルをconfig.json.corrupt-<日時>へ退避します。1 MiB超・読取不能・FIFO・複数ハードリンクがある通常ファイル・排他的な退避が未対応の環境では退避せず停止します。親フォルダーは本人所有で、modeで本人以外の書き込みが許可されない必要があります。シンボリックリンクではmodeで本人以外のアクセスも許可しません。ACLは別途確認してください。')
+        epilog='質問なしでの実行例（bash/zshの端末で実行）:\n  read -r -s MCS_SETUP_PASSWORD\n  export MCS_SETUP_PASSWORD\n  python3 mcs/ops/mcs_setup.py init --yes --login-id you@example.com --notify-target slack:C0CHANNELID --set self_posts=true\n  unset MCS_SETUP_PASSWORD\n最初のreadコマンドでMCSパスワードを非表示入力し、Enterを押してください。パスワードをコマンドへ直接書かず、環境変数MCS_SETUP_PASSWORDで渡します。実行後はunsetで削除します。\n--setの値はJSONです。壊れたconfig.jsonは通常停止します。--yesでは元のファイルをconfig.json.corrupt-<日時>へコピーします。1 MiB超・読取不能・FIFO・複数ハードリンクがある通常ファイルは退避せず停止します。コピーや保存に失敗した場合は表示された案内に従って状態を確認してください。親フォルダーは本人所有で、modeで本人以外の書き込みが許可されない必要があります。シンボリックリンクではmodeで本人以外のアクセスも許可しません。ACLは別途確認してください。')
     p.add_argument("--login-id", help="MCSのログインID")
     p.add_argument("--runtime-mode", choices=("hermes", "standalone"),
                    help='実行方法を指定します（省略すると現在の設定を保持）')
