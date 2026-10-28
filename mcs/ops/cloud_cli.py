@@ -407,8 +407,13 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
             # instead of failing the estimate it accompanies.
             try:
                 evidence_holds = policy.evidence_hold_counts(db, now=now)
-            except (sqlite3.OperationalError, ValueError):
+            except ValueError:   # the reader's row/byte budget
                 evidence_holds = {"unknown": "observation_budget_exceeded"}
+            except sqlite3.Error as error:
+                code = getattr(error, "sqlite_errorcode", None)
+                evidence_holds = {"unknown": "deadline" if code == sqlite3.SQLITE_INTERRUPT
+                                  else "value_too_large" if code == sqlite3.SQLITE_TOOBIG
+                                  else "read_failed"}
     calibrated = bool(calibration and calibration["tokens_per_char"] is not None)
     ratio = calibration["tokens_per_char"] if calibrated else Decimal(1) / 3
     output_mean = calibration["output_tokens_per_request"] if calibration else None

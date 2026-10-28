@@ -5,6 +5,7 @@ from datetime import datetime
 from decimal import Decimal
 import hashlib
 import json
+import sqlite3
 import os
 from types import SimpleNamespace
 import uuid
@@ -76,7 +77,7 @@ def test_plan_is_readonly_keyless_and_outputs_only_estimates(world):
     assert "source_repair_evidence_holds" not in report
     holds = cli.observe(config, root=str(root), evidence_holds_wanted=True)["source_repair_evidence_holds"]
     assert (holds["unattributable_accounting_rows"], holds["old_reserved_repair_slots"],
-            holds["unreadable_repair_slots"]) == (0, 0, 0)
+            holds["unparseable_repair_slots"]) == (0, 0, 0)
     assert report["input_estimate_basis"] == "character_proxy"
     assert report["reservation_input_upper_bound_tokens"] == 1048576
     raw = json.dumps(report)
@@ -548,12 +549,30 @@ def test_disposition_receipt_is_auditable_without_double_count_or_identity_leak(
     assert "private-" not in json.dumps(receipt)
 
 
-def test_interrupted_hold_scan_is_unknown_and_keeps_the_estimate(world, monkeypatch):
-    root, _path, config = world
+
+def _real_interrupt(monkeypatch):
+    original = cli.policy.evidence_hold_counts
 
     def interrupted(db, *, now):
-        raise cli.sqlite3.OperationalError("interrupted")
+        db.set_progress_handler(lambda: 1, 1)   # SQLite raises SQLITE_INTERRUPT inside the reader TX
+        return original(db, now=now)
     monkeypatch.setattr(cli.policy, "evidence_hold_counts", interrupted)
+
+
+def test_interrupted_hold_scan_is_unknown_and_keeps_the_estimate(world, monkeypatch):
+    root, _path, config = world
+    _real_interrupt(monkeypatch)
     report = cli.observe(config, root=str(root), evidence_holds_wanted=True)
-    assert report["source_repair_evidence_holds"] == {"unknown": "observation_budget_exceeded"}
+    assert report["source_repair_evidence_holds"] == {"unknown": "deadline"}
+    assert report["routes"]["reextract"]["targets"] == 1
+
+
+def test_oversized_slot_is_unknown_and_keeps_the_estimate(world):
+    root, path, config = world
+    with closing(sqlite3.connect(path)) as db, db:
+        db.execute("INSERT INTO artifacts(kind,project_id,content,meta,created_at) VALUES(?,?,?,?,?)",
+                   ("patient_context_source_quality_repair_candidate_v1", 1, "x" * (3 * 1024 * 1024), "{}", 1.0))
+    report = cli.observe(config, root=str(root), evidence_holds_wanted=True)
+    # The reader's 2 MiB value limit stops the scan; the estimate is still printed.
+    assert report["source_repair_evidence_holds"] == {"unknown": "value_too_large"}
     assert report["routes"]["reextract"]["targets"] == 1

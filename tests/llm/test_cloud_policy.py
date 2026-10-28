@@ -790,7 +790,7 @@ def test_evidence_hold_counts_are_bounded_observations_without_ids(tmp_path, now
         reservation = _reserve(ledger)
         c.record_result(ledger, reservation, _result(reservation))
         assert c.evidence_hold_counts(ledger.db, now=now) == {
-            "unattributable_accounting_rows": 0, "old_reserved_repair_slots": 0, "unreadable_repair_slots": 0,
+            "unattributable_accounting_rows": 0, "old_reserved_repair_slots": 0, "unparseable_repair_slots": 0,
             "reserved_age_s": c.RESERVED_AGE_S, "scan_limit": c.EVIDENCE_SCAN_LIMIT}
         old, young = now - c.RESERVED_AGE_S - 1, now - c.RESERVED_AGE_S + 1
         with ledger.db:
@@ -801,14 +801,22 @@ def test_evidence_hold_counts_are_bounded_observations_without_ids(tmp_path, now
             _slot(ledger.db, old, '{"phase":"complete","phase":"reserved"}')  # duplicate key: unreadable
             _slot(ledger.db, old, "{broken")
             _slot(ledger.db, "yesterday", json.dumps({"phase": "reserved"}))  # unreadable creation time
+            _slot(ledger.db, float("-inf"), json.dumps({"phase": "reserved"}))  # non-finite creation time
             _slot(ledger.db, old, '"' + "x" * 40000 + '"')                    # oversized, never parsed
         counts = c.evidence_hold_counts(ledger.db, now=now)
         assert (counts["unattributable_accounting_rows"], counts["old_reserved_repair_slots"],
-                counts["unreadable_repair_slots"]) == (1, 1, 4)
+                counts["unparseable_repair_slots"]) == (1, 1, 5)
         # The global structure check is the one that holds every repair adoption.
         with pytest.raises(ValueError, match='cloud_receipt_invalid'):
             c.reservation_evidence(ledger.db, ledger.artifacts('cloud_usage_reserve')[0]['artifact_id'])
         # Above the scan bound nothing is guessed: the category is unknown.
-        bounded = c.evidence_hold_counts(ledger.db, now=now, scan_limit=1)
+        statements = []
+        ledger.db.set_trace_callback(statements.append)
+        try:
+            bounded = c.evidence_hold_counts(ledger.db, now=now, scan_limit=1)
+        finally:
+            ledger.db.set_trace_callback(None)
+        # Over the bound only the two LIMIT-ed presence counts run; no row is scanned beyond it.
+        assert len(statements) == 2 and all("LIMIT 2)" in sql for sql in statements)
         assert bounded["unattributable_accounting_rows"] is None and bounded["old_reserved_repair_slots"] is None
-        assert bounded["unreadable_repair_slots"] is None and bounded["scan_limit"] == 1
+        assert bounded["unparseable_repair_slots"] is None and bounded["scan_limit"] == 1
