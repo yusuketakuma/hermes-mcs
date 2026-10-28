@@ -1194,6 +1194,7 @@ def db_maintenance(db_path: str, *, deadline: float | None = None,
     if left() < DB_MAINT_MIN_S:
         return {"skipped": "deadline"}
     out: dict = {}
+    retention_error = None
     con = sqlite3.connect(db_path, timeout=5)
     try:
         con.execute("PRAGMA busy_timeout=5000")
@@ -1202,10 +1203,18 @@ def db_maintenance(db_path: str, *, deadline: float | None = None,
             con.set_progress_handler(
                 lambda: int(monotonic() >= deadline), 10000)
         if daily:
-            out["pruned"] = prune_history(con, now)
+            try:
+                out["pruned"] = prune_history(con, now)
+            except MaintenanceError as error:
+                if str(error) != "source_repair_retention_scope_invalid":
+                    raise
+                # Preserve the ambiguous accounting evidence and report the
+                # incomplete retention pass after independent upkeep runs.
+                retention_error = error
             con.execute("PRAGMA analysis_limit=1000")
             con.execute("PRAGMA optimize=0x10002")
-            state["daily_at"] = now
+            if retention_error is None:
+                state["daily_at"] = now
         if daily or retry_ckpt:
             # pending until its outcome is known: an interrupted or failed
             # TRUNCATE is retried next tick like a busy one
@@ -1226,6 +1235,8 @@ def db_maintenance(db_path: str, *, deadline: float | None = None,
                             "VALUES('optimize')")
             state["fts_at"] = now
             out["fts"] = "optimized"
+        if retention_error is not None:
+            raise retention_error
     except sqlite3.OperationalError as e:
         if deadline is not None and monotonic() >= deadline:
             raise MaintenanceError("db_maintenance_deadline") from e
