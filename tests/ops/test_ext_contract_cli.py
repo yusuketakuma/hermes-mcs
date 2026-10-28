@@ -436,11 +436,13 @@ def test_direct_script_entry_preserves_old_invocation_and_local_commands(
 def test_real_synthetic_database_export_handoff_round_trip(tmp_path, capsys):
     import brain_export
     import ledger
+    import rollup
     from semantic_testkit import _ledger, _message, _patient
 
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(1, body="SYNTHETIC_BODY_NEVER_ON_WIRE")], project_id=1)
+    assert rollup.rebuild(db, 1)
     db.close()
     snapshot = ledger.publish_snapshot(str(tmp_path / "ledger.db"), str(tmp_path / "snapshots"))
     brain_export.run(tmp_path / "export", Path(snapshot))

@@ -197,11 +197,13 @@ def test_old_unbound_journal_never_synthesizes_identity_or_resends(tmp_path):
 def test_real_synthetic_export_handoff_receive_delete_round_trip(tmp_path):
     import brain_export
     import ledger
+    import rollup
     from semantic_testkit import _ledger, _message, _patient
 
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(1, body="SYNTHETIC CLINICAL BODY")], project_id=1)
+    assert rollup.rebuild(db, 1)
     db.close()
     snapshot = ledger.publish_snapshot(str(tmp_path / "ledger.db"), str(tmp_path / "snaps"))
     brain_export.run(tmp_path / "export", Path(snapshot))

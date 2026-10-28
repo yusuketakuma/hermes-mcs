@@ -42,9 +42,11 @@ def test_cli_propose_enqueue_consume_receipt_and_timeline(corpus, tmp_path, monk
 
 
 def test_brain_export_does_not_read_alias_or_timeline_artifacts(corpus, tmp_path):
+    import rollup
     store, _, _ = corpus
     for kind in ("drug_timeline", "drug_alias_proposal", "drug_alias_receipt"):
         store.artifact_add(kind, json.dumps({"alias": "EXPORT_FORBIDDEN_CANARY"}), project_id=1)
+    assert rollup.rebuild(store, 1)
     snapshot = ledger.publish_snapshot(str(tmp_path / "data/ledger.db"), str(tmp_path / "snapshots"))
     out = tmp_path / "export"
     assert brain_export.run(out, Path(snapshot))["ok"]

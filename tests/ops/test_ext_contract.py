@@ -253,10 +253,12 @@ def test_envelope_over_real_export_jsonl(tmp_path):
     """End-to-end: snapshot → brain_export JSONL → governed envelope —
     the fake sink parses the versioned envelope, not free text."""
     from semantic_testkit import _ledger, _message, _patient
+    import rollup
     db = _ledger(tmp_path)
     _patient(db)
     db.save_messages([_message(1, body="synthetic only")],
                      project_id=1)
+    assert rollup.rebuild(db, 1)
     db.close()
     import ledger as _ledger_mod
     snap = _ledger_mod.publish_snapshot(str(tmp_path / "ledger.db"),

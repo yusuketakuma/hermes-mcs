@@ -11,6 +11,7 @@ import pytest
 
 import maintenance
 import run_check
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from ingest_testkit import _ledger, _message
 
 ON = {"semantic": {"mode": "shadow", "project_ids": []}}
@@ -66,7 +67,7 @@ def _legacy_extract(db, mid, *, exhausted):
     import extract_llm
     digest = db.db.execute("SELECT content_hash FROM messages WHERE message_id=?",
                            (mid,)).fetchone()[0]
-    meta = {"hash": digest, "extract_version": extract_llm.EXTRACT_VERSION}
+    meta = {VERSION_KEY: CURRENT_VERSION, "hash": digest, "extract_version": extract_llm.EXTRACT_VERSION}
     content = {"summary": "s", "symptoms": [{"text": "a"}, {"text": "b"}]}
     if exhausted:
         meta.update(error=True, attempts=5, next_try=0)
