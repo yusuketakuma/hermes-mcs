@@ -133,17 +133,31 @@ def test_notification_free_reprocessing_does_not_dirty_history(led, monkeypatch)
     assert _card(led)['ui_state'] == before
 
 
-def test_notification_free_reprocessing_does_not_rerender_delivered_thread(led):
+def test_unrelated_extraction_is_not_suppressed_by_quiet_job_flag(led):
     _seed_thread(led, mids=(100,))
     _extract(led, 100, {'summary': '合成の旧要約'}, kind='extract_llm')
     _dispatch(led, _intent(led, payload={'message_ids': [100]}))
     _deliver(led)
-    before = _latest_render(led)['render_rev']
+    before = _latest_render(led)
+    assert before['state'] == 'delivered'
+    source_hash = led.db.execute('SELECT content_hash FROM messages WHERE message_id=100').fetchone()[0]
+    old_artifact = led.db.execute("SELECT MAX(artifact_id) FROM artifacts WHERE kind='extract_llm' "
+                                  "AND message_id=100").fetchone()[0]
     led.job_add('semantic', 1, message_id=100,
                 payload={'reprocess_only': True, 'notification_free': True})
-    _extract(led, 100, {'summary': '合成の再解析要約'}, kind='extract_llm')
-    notify_cards.sweep(led, CFG, now=NOW + 301)
-    assert _latest_render(led)['render_rev'] == before
+    # A direct artifact write is not evidence that the quiet job produced it.
+    _extract(led, 100, {'summary': '合成の通常更新'}, kind='extract_llm')
+    assert led.db.execute('SELECT content_hash FROM messages WHERE message_id=100').fetchone()[0] == source_hash
+    assert led.db.execute("SELECT MAX(artifact_id) FROM artifacts WHERE kind='extract_llm' "
+                          "AND message_id=100").fetchone()[0] > old_artifact
+    job = led.db.execute("SELECT payload FROM fetch_jobs WHERE kind='semantic' AND message_id=100").fetchone()
+    assert json.loads(job['payload'])['notification_free'] is True
+    sweep = notify_cards.sweep(led, CFG, now=NOW + 301)
+    after = _latest_render(led)
+    assert sweep['updated'] == 1
+    assert after['render_rev'] == before['render_rev'] + 1
+    assert after['delivery_id'] != before['delivery_id']
+    assert after['op'] == 'update' and after['state'] == 'queued' and after['spec_published'] == 1
 
 
 def test_notification_free_reprocessing_keeps_new_reply_intent(led):
