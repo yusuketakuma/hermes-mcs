@@ -236,7 +236,11 @@ Karteが最新から履歴へ移っても、同じfactの保存時の`historical
 
 送信後に応答を保存する前に中断したunitは、予約済みの状態のまま再送せず、その原典の修復は結果不明として止まる。
 この状態は、原文の改訂・first_seen・患者scope・処理契約のいずれかが変わり、新しい入力として扱われるまで解消しない。人の操作で再送や修復の権利を追加する経路は設けない。
-`mcs_setup.py cloud-llm plan`・`estimate` の `source_repair_evidence_holds` は、構造不正の実会計記録の件数（`malformed_receipts`）と、1回の呼出し時間（600秒）を過ぎても予約済みのままの修復unitの件数（`stalled_repair_units`）を、IDを出さずに示す。前者が1件以上なら全患者の修復の採用が保留され、後者はその原典の修復が結果不明で止まっていることを示す。
+`mcs_setup.py cloud-llm plan`・`estimate` は、修復の保留に関わる記録の観測件数を `source_repair_evidence_holds` にIDを出さずに示す。`log`・`compare` では数えない。
+`unattributable_accounting_rows` は、全患者の修復の採用を保留させる実会計3種の構造検査に通らない行の件数である。予約ごとの結果の欠落・重複・改変・取消による拒否は数えない。
+`old_reserved_repair_slots` は、作成から600秒を過ぎても予約済みのままの修復unitの件数で、全患者・旧scope・取消済み・履歴を含む。claimの期限は600秒を超え得るので、送信中のunitを含むことがあり、送信の中断を示す証拠ではない。
+`unreadable_repair_slots` は、内容または作成時刻を読めない修復unitの件数である。
+各区分は最大2万行まで数え、それを超える場合や読取りの期限・容量に達した場合は数えずに不明（`null`、または `unknown`）とする。不明な区分を0件とは扱わない。
 
 この修復は患者背景・療養情報のB/Cを対象とする。夜間の全臨床クラウド処理、有限cohort、復元後の外部推論再開条件、実モデル品質・G6の受入を代替しない。
 

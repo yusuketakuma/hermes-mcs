@@ -355,7 +355,7 @@ def _comparison_report(log):
             "rate_numerators": {label: pair[0] for label, pair in rates.items()}}
 
 
-def observe(cfg, *, root=None, days=14, since=None, project=None):
+def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds_wanted=False):
     """Compute a single bounded read snapshot without sending or persisting anything."""
     if type(days) is not int or not 1 <= days <= 62:
         raise ValueError("days_invalid")
@@ -374,7 +374,6 @@ def observe(cfg, *, root=None, days=14, since=None, project=None):
     with _reader(root) as (db, deadline):
         borrowed = SimpleNamespace(db=db)
         accounting = policy.usage_report(borrowed)
-        evidence_holds = policy.evidence_hold_counts(db, now=now)
         reason = policy.global_block_reason(borrowed) or policy.budget_block_reason(borrowed, settings)
         calibration = _calibration(db, now - 62 * 86400) if not accounting["pricing_unverified"] else None
         routes = _route_counts(db, cfg, planning, deadline)
@@ -402,6 +401,14 @@ def observe(cfg, *, root=None, days=14, since=None, project=None):
             # Explicit projection: IDs, hashes, owner data and content never leave this query.
             log.append(_safe_log(row, meta))
         _checkpoint(deadline)
+        evidence_holds = None
+        if evidence_holds_wanted:
+            # Last read of the snapshot: a deadline or size stop leaves it unknown
+            # instead of failing the estimate it accompanies.
+            try:
+                evidence_holds = policy.evidence_hold_counts(db, now=now)
+            except (sqlite3.OperationalError, ValueError):
+                evidence_holds = {"unknown": "observation_budget_exceeded"}
     calibrated = bool(calibration and calibration["tokens_per_char"] is not None)
     ratio = calibration["tokens_per_char"] if calibrated else Decimal(1) / 3
     output_mean = calibration["output_tokens_per_request"] if calibration else None
@@ -435,7 +442,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None):
         "daily_cost_limit_usd": settings["daily_cost_limit_usd"],
         "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
         "max_concurrency_per_process": settings["max_concurrency"], "accounting": accounting,
-        "source_repair_evidence_holds": evidence_holds,
+        **({"source_repair_evidence_holds": evidence_holds} if evidence_holds_wanted else {}),
         "days": days, "history_days_observed": len(counts),
         "new_posts": sum(row["posts"] for row in counts.values()),
         "daily_patient_context_requests_estimate": sum(row["patients"] for row in counts.values()) / days,
@@ -550,7 +557,8 @@ def command(args):
                 os.close(lock_fd)
             print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control")}, ensure_ascii=False))
             return 0 if receipt["outcome"] == "applied" else 1
-        report = observe(cfg, days=getattr(args, "days", 14), since=getattr(args, "since", None), project=getattr(args, "project", None))
+        report = observe(cfg, days=getattr(args, "days", 14), since=getattr(args, "since", None), project=getattr(args, "project", None),
+                         evidence_holds_wanted=action in ("plan", "estimate"))
         if action == "log":
             result = {"entries": report["log"]}
         elif action == "compare":
