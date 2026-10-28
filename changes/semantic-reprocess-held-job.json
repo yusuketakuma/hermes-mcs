@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "再処理中の解析待ちを保護",
+  "summary": "再処理中に解析待ちの内容が読めない場合や未対応の版の場合、元の記録と試行回数を保持します。",
+  "upgrade": "追加設定はありません。更新後は関連する worker を再起動してください。再処理の直近の確認結果は `python3 mcs/semantic/semantic.py --status --offline` の reprocess_held で確認できます。",
+  "details": [
+    "読み取れない解析待ちは再処理で上書きせず保留し、ほかの対象の確認を続けます。",
+    "保留は再処理時の扱いです。新着の保存や通常の解析処理を通じた変更は対象外です。"
+  ],
+  "refs": ["mcs/semantic/semantic_drain.py", "mcs/semantic/semantic.py"]
+}

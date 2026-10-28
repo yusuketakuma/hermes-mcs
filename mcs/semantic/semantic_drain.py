@@ -30,7 +30,7 @@ from contextlib import contextmanager
 import math
 import time
 
-from mcs_util import load_config, loads_dict
+from mcs_util import load_config, loads_dict, strict_json
 from inference_version import current_meta_pred, read_version, LEGACY_VERSION
 import semantic_jev as jev
 import semantic_runtime as runtime
@@ -1440,6 +1440,44 @@ def _sched_update(ledger):
         _sched_write(ledger, state, commit=False)
 
 
+_REPROCESS_JOB_MAX_BYTES = 1024 * 1024
+
+
+def _reprocess_job_payload(ledger, row, project_id, root):
+    """Read a bounded, supported job without changing uncertain evidence."""
+    raw = row['payload']
+    if not isinstance(raw, str) or len(raw.encode('utf-8')) > _REPROCESS_JOB_MAX_BYTES:
+        return None
+    try:
+        value = strict_json(raw)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    if not isinstance(value, dict) or read_version(value) not in (CURRENT_VERSION, LEGACY_VERSION):
+        return None
+    stack = [(value, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > 128 or (type(node) is int and not -(2**63) <= node < 2**63):
+            return None
+        if isinstance(node, dict):
+            stack.extend((item, depth + 1) for item in node.values())
+        elif isinstance(node, list):
+            stack.extend((item, depth + 1) for item in node)
+    if 'targets' not in value:
+        return value  # Older jobs use their root as the default target.
+    targets = value['targets']
+    if (not isinstance(targets, list) or not targets
+            or any(type(mid) is not int or not 0 < mid < 2**63 for mid in targets)):
+        return None
+    if ledger.db.execute(
+            'SELECT 1 FROM json_each(?) target WHERE NOT EXISTS '
+            '(SELECT 1 FROM messages WHERE project_id=? AND message_id=target.value '
+            'AND (message_id=? OR parent_id=?)) LIMIT 1',
+            (json.dumps(targets), project_id, root, root)).fetchone():
+        return None
+    return value
+
+
 def _reprocess_target_state(ledger, row, scfg):
     """Observe one stored source without mistaking job completion for coverage."""
     from mcs_queries import current_v4_id, paused
@@ -1477,9 +1515,9 @@ def _reprocess_target_state(ledger, row, scfg):
             doc, _ = v4.reproject_doc(ledger.db, mid, meta)
             if doc is not None:
                 return 'current'
-    job = ledger.db.execute("SELECT state,payload FROM fetch_jobs WHERE kind=? "
+    job = ledger.db.execute("SELECT state,substr(payload,1,?) AS payload FROM fetch_jobs WHERE kind=? "
                             'AND project_id=? AND message_id=?',
-                            (JOB_KIND, pid, root)).fetchone()
+                            (_REPROCESS_JOB_MAX_BYTES + 1, JOB_KIND, pid, root)).fetchone()
     if job is not None and is_current(loads_dict(job['payload'])):
         if job['state'] == 'failed':
             return 'failed'
@@ -1698,14 +1736,21 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
             break
         state = _reprocess_target_state(ledger, row, scfg)
         replay = None
-        if state in ('pending', 'repair_required', 'held', 'failed'):
+        if state in ('current', 'pending', 'repair_required', 'held', 'failed'):
             root = row['parent_id'] or row['message_id']
             key = (row['project_id'], root)
+            old = ledger.db.execute('SELECT substr(payload,1,?) AS payload,state FROM fetch_jobs WHERE kind=? '
+                                    'AND project_id=? AND message_id=?',
+                                    (_REPROCESS_JOB_MAX_BYTES + 1, JOB_KIND, *key)).fetchone()
+            pl = _reprocess_job_payload(ledger, old, *key) if old is not None else {}
+            if old is not None and pl is None:
+                planned.append((row, 'held', None))
+                continue
+            if state == 'current':
+                planned.append((row, state, None))
+                continue
             if key not in sources:
                 sources[key] = ledger._semantic_source_generation(*key)
-            old = ledger.db.execute('SELECT payload,state FROM fetch_jobs WHERE kind=? '
-                                    'AND project_id=? AND message_id=?', (JOB_KIND, *key)).fetchone()
-            pl = loads_dict(old[0]) if old is not None else {}
             if (not is_current(pl)
                     or pl.get('execution_contract') == 1 and pl.get('execution_generation') != generation
                     or pl.get('source_generation') != sources[key]
