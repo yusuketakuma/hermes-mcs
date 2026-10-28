@@ -191,6 +191,26 @@ def _env_has_transport_key(raw, transport):
         raise config.ConfigError("credential_existing_state_unverifiable") from None
 
 
+def _slack_env_bot_only(root, raw):
+    if raw is None:
+        return None
+    try:
+        keys = [key for key, sep, _ in
+                (line.partition("=") for line in raw.decode("utf-8").splitlines()) if sep]
+        if keys.count("SLACK_BOT_TOKEN") != 1 or "SLACK_APP_TOKEN" in keys:
+            return None
+        token = config._env_tokens(root, "slack")["SLACK_BOT_TOKEN"]
+        if _credential_env_snapshot(root) != raw:
+            raise config.ConfigError("credential_existing_state_changed")
+        return token if len(token) >= 10 else None
+    except config.ConfigError as exc:
+        if str(exc) == "credential_existing_state_changed":
+            raise
+        return None
+    except (KeyError, UnicodeError, ValueError):
+        return None
+
+
 def initialize(root, transport, *, yes=False):
     _coded(config.connector_settings, root, transport, require_interactive=False)
     path = config.credentials_path(root, transport)
@@ -204,15 +224,21 @@ def initialize(root, transport, *, yes=False):
     try:
         value = config.load_credentials(root, transport)
     except ValueError as exc:
-        if str(exc) != "credentials_missing" or _env_has_transport_key(env_snapshot, transport):
+        existing_bot = (_slack_env_bot_only(root, env_snapshot)
+                        if transport == "slack" and str(exc) == "credentials_missing" else None)
+        if existing_bot is None and (str(exc) != "credentials_missing"
+                                     or _env_has_transport_key(env_snapshot, transport)):
             raise config.ConfigError("credential_existing_state_unverifiable") from None
         if yes or not sys.stdin.isatty():
             raise config.ConfigError("credential_entry_requires_terminal") from None
-        fields = ["bot_token", *(["app_token"] if transport == "slack" else [])]
+        fields = (["app_token"] if existing_bot is not None else
+                  ["bot_token", *(["app_token"] if transport == "slack" else [])])
         labels = {"bot_token": "Botトークン（Slackはxoxb-で始まる値）",
                   "app_token": "アプリトークン（xapp-で始まる値）"}
         print("接続先の管理画面で発行したトークンを入力してください。入力は表示されません。")
         value = {key: _hidden_credential(f"{transport}: {labels[key]}: ").strip() for key in fields}
+        if existing_bot is not None:
+            value["bot_token"] = existing_bot
         _coded(config.validate_credentials, value, transport)
     else:
         if not yes and sys.stdin.isatty() and not _existing_credentials_choice(transport):
