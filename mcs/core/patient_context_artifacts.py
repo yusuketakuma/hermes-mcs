@@ -2,7 +2,7 @@
 from contextlib import closing
 import re
 
-from cloud_policy import reservation_evidence
+from cloud_policy import _reservation_evidence_batch
 
 from inference_version import CURRENT_VERSION, current_meta_pred, is_current, read_version
 from mcs_util import loads_dict, payload_hash, strict_json, valid_hash
@@ -185,6 +185,8 @@ def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, contract, 
     _check_metadata(db, CANDIDATE_KIND, pid, repair=True)
     rows = _rows(db, "SELECT * FROM artifacts WHERE kind=? AND project_id=? AND json_extract(meta,'$.repair_input_key')=? "
                  'ORDER BY artifact_id', (CANDIDATE_KIND, pid, repair_input_key))
+    receipt_ids = [decode_document(row['meta'], metadata=True).get('reservation_artifact_id') for row in rows]
+    evidence_by_id = _reservation_evidence_batch(db, receipt_ids)
     units, spans = {}, []
     for row in rows:
         meta, doc = decode_document(row['meta'], metadata=True), decode_document(row['content'])
@@ -210,7 +212,7 @@ def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, contract, 
         binding = (doc['phase'], span, parts, meta['reservation_artifact_id'], meta['reservation_id'], meta['request_fp'], doc['receipt_sig'])
         unit = units.get(meta['unit_key'])
         if unit is None:
-            evidence = reservation_evidence(db, meta['reservation_artifact_id'])
+            evidence = evidence_by_id[meta['reservation_artifact_id']]
             reservation = evidence['reservation']
             if (reservation['reservation_id'] != meta['reservation_id'] or reservation['request_fp'] != meta['request_fp']
                     or reservation['route'] != 'patient_context' or reservation['project_id'] != pid

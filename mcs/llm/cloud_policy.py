@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import json
 import re
+import sqlite3
 import time
 import uuid
 
@@ -307,16 +308,49 @@ def _receipt_meta(raw):
 
 
 def _reservation_evidence(db, artifact_id):
-    if type(artifact_id) is not int or artifact_id <= 0:
-        raise ValueError("cloud_receipt_invalid")
-    row = db.execute("SELECT artifact_id,kind,project_id,message_id,model,"
-                     "CASE WHEN typeof(meta)='text' AND length(meta)<=32768 THEN meta END,created_at,content "
-                     "FROM artifacts WHERE artifact_id=? AND kind='cloud_usage_reserve'", (artifact_id,)).fetchone()
-    if row is None:
+    return _reservation_evidence_batch(db, [artifact_id])[artifact_id]
+
+
+def _reservation_evidence_batch(db, artifact_ids):
+    # All financial rows are checked in one borrowed snapshot. No proof is
+    # cached outside this call, so later changes must be checked again.
+    try:
+        ids = list(artifact_ids)
+        if any(type(item) is not int or not 0 < item < 2**63 for item in ids):
+            raise ValueError("cloud_receipt_invalid")
+        ids = list(dict.fromkeys(ids))
+        if not ids:
+            return {}
+        db.execute('SAVEPOINT cloud_receipt_batch')
+        try:
+            result = _reservation_evidence_batch_snapshot(db, ids)
+        except BaseException:
+            try:
+                db.execute('ROLLBACK TO cloud_receipt_batch')
+                db.execute('RELEASE cloud_receipt_batch')
+            except sqlite3.Error:
+                pass  # SQLite may already have unwound the savepoint.
+            raise
+        db.execute('RELEASE cloud_receipt_batch')
+        return result
+    except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
+        raise ValueError("cloud_receipt_invalid") from None
+
+
+def _reservation_evidence_batch_snapshot(db, ids):
+    before = (db.execute('PRAGMA data_version').fetchone()[0], db.total_changes)
+    fields = ('artifact_id', 'kind', 'project_id', 'message_id', 'model', 'meta', 'created_at', 'content')
+    originals = {}
+    for row in db.execute(
+            "SELECT artifact_id,kind,project_id,message_id,model,"
+            "CASE WHEN typeof(meta)='text' AND length(meta)<=32768 THEN meta END,created_at,content "
+            "FROM artifacts WHERE kind='cloud_usage_reserve' "
+            "AND artifact_id IN (SELECT value FROM json_each(?))", (json.dumps(ids),)):
+        original = dict(zip(fields, row))
+        meta = _receipt_meta(original['meta'])
+        originals[original['artifact_id']] = (meta, _reserve_valid(meta, original))
+    if len(originals) != len(ids):
         raise ValueError("cloud_receipt_missing")
-    original = dict(zip(('artifact_id','kind','project_id','message_id','model','meta','created_at','content'), row))
-    meta = _receipt_meta(original['meta'])
-    maximum = _reserve_valid(meta, original)
     kinds = (KINDS[0], KINDS[1], 'cloud_usage_disposition')
     # A corrupt row may also have lost its patient/UUID.  It cannot be proved
     # unrelated to this source's disposition, so new adoption evidence holds.
@@ -331,23 +365,35 @@ def _reservation_evidence(db, artifact_id):
     if bad is not None:
         _receipt_meta(bad[0])
         raise ValueError("cloud_receipt_invalid")
-    rows = list(db.execute("SELECT artifact_id,kind,project_id,message_id,model,"
+    wanted = {meta['reservation_id'] for meta, _ in originals.values()}
+    rows_by_reservation = {rid: [] for rid in wanted}
+    rows = db.execute("SELECT artifact_id,kind,project_id,message_id,model,"
         "CASE WHEN typeof(meta)='text' AND length(meta)<=32768 THEN meta END AS meta,created_at,content FROM artifacts "
         "WHERE kind IN (?,?,?) AND CASE WHEN json_valid(meta) THEN EXISTS "
-        "(SELECT 1 FROM json_each(meta) m WHERE m.key='reservation_id' AND m.type='text' AND m.value=?) END "
-        "ORDER BY artifact_id", (*kinds, meta['reservation_id'])))
-    decoded = {item['artifact_id']: _receipt_meta(item['meta']) for item in rows}
-    reservations = [item for item in rows if item['kind'] == KINDS[0]]
-    results = [item for item in rows if item['kind'] == KINDS[1]]
-    if (len(reservations) != 1 or reservations[0]['artifact_id'] != artifact_id or len(results) != 1
-            or any(item['kind'] == 'cloud_usage_disposition' for item in rows)):
-        raise ValueError("cloud_receipt_unresolved")
-    result = decoded[results[0]['artifact_id']]
-    _, settled = _settled(meta, maximum, [(result, results[0])])
-    if not settled or result.get('http_class') != 'http_200' or result.get('error_kind') or result.get('disposition'):
-        raise ValueError("cloud_receipt_unresolved")
-    return {'reservation': meta, 'result': result,
-            'witness': payload_hash([tuple(item) for item in rows])}
+        "(SELECT 1 FROM json_each(meta) m WHERE m.key='reservation_id' AND m.type='text' "
+        "AND m.value IN (SELECT value FROM json_each(?))) END ORDER BY artifact_id",
+        (*kinds, json.dumps(sorted(wanted))))
+    for row in rows:
+        meta = _receipt_meta(row['meta'])
+        rows_by_reservation[meta['reservation_id']].append((row, meta))
+    result = {}
+    for artifact_id in ids:
+        meta, maximum = originals[artifact_id]
+        matched = rows_by_reservation[meta['reservation_id']]
+        reservations = [row for row, _ in matched if row['kind'] == KINDS[0]]
+        results = [(row, value) for row, value in matched if row['kind'] == KINDS[1]]
+        if (len(reservations) != 1 or reservations[0]['artifact_id'] != artifact_id or len(results) != 1
+                or any(row['kind'] == 'cloud_usage_disposition' for row, _ in matched)):
+            raise ValueError("cloud_receipt_unresolved")
+        result_row, result_meta = results[0]
+        _, settled = _settled(meta, maximum, [(result_meta, result_row)])
+        if not settled or result_meta.get('http_class') != 'http_200' or result_meta.get('error_kind') or result_meta.get('disposition'):
+            raise ValueError("cloud_receipt_unresolved")
+        result[artifact_id] = {'reservation': meta, 'result': result_meta,
+                               'witness': payload_hash([tuple(row) for row, _ in matched])}
+    if (db.execute('PRAGMA data_version').fetchone()[0], db.total_changes) != before:
+        raise ValueError("cloud_receipt_changed")
+    return result
 
 
 def _settled(m, maximum, matching):
