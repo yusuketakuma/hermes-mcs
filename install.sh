@@ -194,20 +194,20 @@ try:
     mode = sys.argv[3] if sys.argv[2] == "1" else cfg.get("runtime_mode", "hermes")
     if mode not in ("hermes", "standalone"):
         raise ValueError
+    token = ":".join(str(n) for n in ident(info)) + ":" + hashlib.sha256(raw).hexdigest()
     if not cfg:
-        token = ":".join(str(n) for n in ident(info)) + ":" + hashlib.sha256(raw).hexdigest()
         print(mode + ":empty:" + token)
     else:
-        print(mode + ":existing:")
+        print(mode + ":existing:" + token)
 except (OSError, ValueError, AttributeError, TypeError, RecursionError):
     raise SystemExit(1) from None
 PYMODE
 )" || die "config.json を読み取れないため接続方法を決定できません。設定ファイルを修復してください（--mode は読み取れる設定の接続方法だけを上書きします）"
     RUNTIME_MODE="${MODE_STATUS%%:*}"
     MODE_DETAIL="${MODE_STATUS#*:}"
+    CONFIG_BASE="${MODE_DETAIL#*:}"
     if [ "${MODE_DETAIL%%:*}" = empty ]; then
         CONFIG_EMPTY=1
-        CONFIG_BASE="${MODE_DETAIL#*:}"
     fi
     case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "接続方法を読み取れません。--mode hermes または --mode standalone を指定してください" ;; esac
 else
@@ -1069,7 +1069,6 @@ import json, os, secrets, stat, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "mcs"))
 import _mcs_path
-import lifecycle_io
 import runtime_inspection
 from mcs_util import CONF_PATH, CONFIG_MAX_BYTES, REPO, parse_config
 from safe_io import atomic_write, create_exclusive, fdopen_owned
@@ -1161,40 +1160,41 @@ if sys.argv[4] == "1":
         raise SystemExit("初期設定ファイルの保存先または競合を確認できません。既存設定を保持したため、内容を確認してから再実行してください") from None
     raise SystemExit(0)
 
-if os.environ.get("MCS_INSTALL_RESUME_UNCONFIGURED") == "1":
-    import config_edit
-    try:
-        with config_edit._edit_lock():
-            raw, base = config_edit._snapshot()
-            token = ":".join(str(n) for n in base[0]) + ":" + base[1].hex()
-            if parse_config(raw) != {} or token != os.environ.get("MCS_INSTALL_CONFIG_BASE"):
-                raise ValueError
-            cfg = {"runtime_mode": sys.argv[2]}
-            if sys.argv[3]:
-                cfg["recovery_python"] = sys.argv[3]
-            why = runtime_inspection.configured_recovery_problem(cfg, sys.argv[1], checkout=REPO)
-            if why:
-                raise ValueError(why)
-            def write_checked(handle):
-                json.dump(cfg, handle, ensure_ascii=False, indent=2)
-                if config_edit._snapshot()[1] != base:
-                    raise ValueError
-            atomic_write(CONF_PATH, write_checked, 0o600, makedirs=False)
-    except (OSError, ValueError, TypeError, RecursionError):
-        raise SystemExit("初期設定が変更されたか確認できません。既存設定を保持したため、内容を確認してから再実行してください") from None
-    raise SystemExit(0)
-
+import config_edit
+publication_started = False
 try:
-    cfg = lifecycle_io.read_owner_config(CONF_PATH)
-except ValueError as exc:
-    raise SystemExit(f"config.json を読み取れません（{exc}）。接続方法を選ぶ前に修復してください") from None
-cfg["runtime_mode"] = sys.argv[2]
-if sys.argv[3]:
-    cfg["recovery_python"] = sys.argv[3]
-why = runtime_inspection.configured_recovery_problem(cfg, sys.argv[1], checkout=REPO)
-if why:
-    raise SystemExit("復旧用 Python の設定に問題があります: " + why + "。設定は保存していません")
-atomic_write(CONF_PATH, lambda handle: json.dump(cfg, handle, ensure_ascii=False, indent=2), 0o600)
+    with config_edit._edit_lock():
+        raw, base = config_edit._snapshot()
+        current = os.stat(CONF_PATH, follow_symlinks=False)
+        token = ":".join(str(n) for n in base[0]) + ":" + base[1].hex()
+        # Preserve the previous installer reader's ownership and size contract.
+        if (current.st_uid != os.getuid() or config_edit._identity(current) != base[0]
+                or len(raw) > 65536 or token != os.environ.get("MCS_INSTALL_CONFIG_BASE")):
+            raise ValueError("config_changed")
+        cfg = config_edit._parse(raw)
+        if os.environ.get("MCS_INSTALL_RESUME_UNCONFIGURED") == "1" and cfg != {}:
+            raise ValueError("config_changed")
+        cfg["runtime_mode"] = sys.argv[2]
+        if sys.argv[3]:
+            cfg["recovery_python"] = sys.argv[3]
+        why = runtime_inspection.configured_recovery_problem(cfg, sys.argv[1], checkout=REPO)
+        if why:
+            raise SystemExit("復旧用 Python の設定に問題があります: " + why + "。設定は保存していません")
+        body = json.dumps(cfg, ensure_ascii=False, indent=2, allow_nan=False)
+        if len(body.encode("utf-8")) > 65536:
+            raise ValueError("config_too_large")
+        def write_checked(handle):
+            handle.write(body)
+            if config_edit._snapshot()[1] != base:
+                raise config_edit.ConfigConflict("config_changed")
+        publication_started = True
+        atomic_write(CONF_PATH, write_checked, 0o600, makedirs=False)
+except config_edit.ConfigConflict:
+    raise SystemExit("設定が変更されたか、別の設定保存が進行中です。保存せず中止しました。設定を確認してから再実行してください") from None
+except (OSError, ValueError, TypeError, RecursionError):
+    if publication_started:
+        raise SystemExit("設定の保存結果を確認できません。現在の設定を確認してから再実行してください") from None
+    raise SystemExit("設定が変更されたか読み取れません。保存せず中止しました。設定を確認してから再実行してください") from None
 PYMODE
 fi
 
