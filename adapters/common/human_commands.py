@@ -226,19 +226,22 @@ def _project_exists(view, project_id: int) -> bool:
 
 def _semantic_job(view, requests, project_id: int, job_id: int, additional_attempts=None):
     row = view.db.execute(
-        "SELECT job_id,kind,project_id,state,attempts,payload "
+        "SELECT job_id,kind,project_id,state,attempts,typeof(payload) AS payload_type "
         "FROM fetch_jobs WHERE project_id=? AND job_id=? AND kind='semantic'",
         (project_id, job_id),
     ).fetchone()
     if row is None:
         return None, "job_not_found", None
+    from operation_contract import read_retry_payload, retry_error
+    raw = read_retry_payload(view.db, row, max_bytes=requests.MAX_COMMAND_BYTES)
+    if raw is None:
+        return None, "invalid_payload", None
     try:
-        parsed = requests.parse_command((row["payload"] or "{}").encode("utf-8"))
+        parsed = requests.parse_command(raw.encode("utf-8"))
     except (ValueError, TypeError, UnicodeError, RecursionError):
         return None, "invalid_payload", None
     if not isinstance(parsed, dict):
         return None, "invalid_payload", None
-    from operation_contract import retry_error
     error = retry_error(row, parsed, additional_attempts)
     if error:
         return None, error, None
