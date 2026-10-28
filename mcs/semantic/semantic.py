@@ -41,6 +41,7 @@ from contextlib import closing
 import json
 import math
 import os
+import sqlite3
 import sys
 import time
 
@@ -171,7 +172,28 @@ def status_report(ledger, cfg: dict | None = None) -> dict:
         usage = {"jev_requests_today": semantic_store.jev_usage_today(ledger)}
     except ValueError:
         usage = {"jev_requests_today": None, "jev_usage_error": "semantic_usage_invalid"}
+    try:
+        index = next((r for r in ledger.db.execute('PRAGMA main.index_list(artifacts)')
+                      if r[1] == 'idx_semantic_intake_hold_root'), None)
+        keys = [r[2] for r in ledger.db.execute(
+            'PRAGMA main.index_xinfo(idx_semantic_intake_hold_root)') if r[5]]
+        sql = ledger.db.execute(
+            "SELECT sql FROM main.sqlite_schema WHERE type='index' "
+            "AND name='idx_semantic_intake_hold_root'").fetchone()
+        expected = ("create index idx_semantic_intake_hold_root on artifacts"
+                    "(kind, project_id, model) where kind='semantic_intake_hold_v1'")
+        normalized = ' '.join(sql[0].lower().split()) if sql and isinstance(sql[0], str) else ''
+        if (index is None or index[4] != 1 or keys != ['kind', 'project_id', 'model']
+                or normalized != expected):
+            raise sqlite3.DatabaseError('semantic_hold_index_unverified')
+        held = ledger.db.execute(
+            "SELECT 1 FROM main.artifacts INDEXED BY idx_semantic_intake_hold_root "
+            "WHERE kind='semantic_intake_hold_v1' LIMIT 1").fetchone()
+        intake_hold = 'present' if held else 'none_observed'
+    except sqlite3.Error:
+        intake_hold = 'unverified'
     return {"semantic_jobs": jobs, "reprocess_held": reprocess_held,
+            "intake_hold": intake_hold,
             "audit_statuses": history["audit_statuses"],
             "canonical_readiness": _canonical_readiness(ledger, cfg),
             "audit_statuses_scope": "history", "history": history,

@@ -3,6 +3,7 @@ import semantic_policy
 import semantic_store
 import semantic_transport
 import json
+import sqlite3
 from mcs_util import loads_dict
 
 
@@ -30,6 +31,16 @@ def _stale(reason: str, in_progress: bool):
         raise FreezeSend(reason)
     raise StaleSend(reason)
 
+
+
+def intake_root_held(db, project_id, root):
+    """Hold semantic presentation if the root's intake cannot be verified."""
+    try:
+        import semantic_intake_hold
+        semantic_intake_hold.validate_indexes(db)
+        return semantic_intake_hold.has_held_root(db, project_id, root)
+    except sqlite3.Error:
+        return True
 
 def current_summary(db, project_id: int, message_id: int,
                      bundle, policy: str):
@@ -101,6 +112,48 @@ def _source_event(db, project_id: int, event_id: int):
     return row, source if isinstance(source, dict) else None
 
 
+
+def marker_source_gate(db, project_id, payload, *, in_progress=False):
+    """Recheck the exact arrival and target inside the send-marker transaction."""
+    import semantic_intake_hold
+    src = payload.get('src_event_id')
+    if type(src) is not int or src <= 0:
+        raise ValueError('payload_invalid')
+    row = db.execute(
+        "SELECT state,attempts,typeof(progress) AS progress_type FROM main.notify_outbox "
+        "WHERE event_id=? AND kind='new_messages' AND project_id=?", (src, project_id)).fetchone()
+    if row is None or row['state'] == 'suppressed':
+        _stale('src_event_ineligible', in_progress)
+    try:
+        ids = semantic_intake_hold._arrival_targets(db, project_id, src, strict=True)
+    except (sqlite3.Error, ValueError, TypeError):
+        raise FreezeSend('src_event_unverified') if in_progress else DeferredSend('src_event_unverified') from None
+    degraded = payload.get('degraded', False)
+    targets = payload.get('target_message_ids') if degraded else [payload.get('target_message_id')]
+    if (not isinstance(targets, list) or not targets
+            or any(type(mid) is not int or mid <= 0 for mid in targets)
+            or not set(targets).issubset(ids)):
+        _stale('src_event_ineligible', in_progress)
+    if degraded:
+        if row['state'] == 'accepted' or row['attempts'] > 0:
+            _stale('base_delivered', in_progress)
+        if row['progress_type'] == 'null':
+            progress = {}
+        elif row['progress_type'] == 'text':
+            try:
+                with db.blobopen('notify_outbox', 'progress', src, readonly=True) as blob:
+                    if len(blob) > 65536:
+                        raise ValueError('progress_too_large')
+                    progress = loads_dict(blob.read().decode(semantic_intake_hold._codec(db)))
+            except (sqlite3.Error, ValueError, UnicodeError):
+                progress = None
+        else:
+            progress = None
+        if not isinstance(progress, dict):
+            raise FreezeSend('src_event_unverified') if in_progress else DeferredSend('src_event_unverified')
+        if progress.get('sent'):
+            _stale('base_delivered', in_progress)
+
 def initial_history_ids(db, project_id, ids):
     history = set()
     for offset in range(0, len(ids), 900):
@@ -147,6 +200,8 @@ def semantic_gate(db, ev, payload: dict, cfg: dict,
     if not isinstance(fp, str) or not fp or type(root) is not int \
             or root <= 0 or type(src) is not int or src <= 0:
         raise ValueError("payload_invalid")
+    if intake_root_held(db, project_id, root):
+        raise FreezeSend('semantic_intake_held') if in_progress else DeferredSend('semantic_intake_held')
     source_row, source = _source_event(db, project_id, src)
     if source_row is None or source is None:
         _stale("src_event_ineligible", in_progress)
@@ -225,6 +280,8 @@ def semantic_render_state(db, ev, cfg: dict) -> tuple:
         if row is None:
             continue
         root = row["parent_id"] or row["message_id"]
+        if intake_root_held(db, project_id, root):
+            continue
         cur = current_summary(
             db, project_id, mid,
             lambda r=root, m=mid: semantic_store.thread_bundle(

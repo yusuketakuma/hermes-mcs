@@ -129,6 +129,10 @@ def emit_degraded(ledger, scfg: dict) -> int:
             f"SELECT COALESCE(parent_id,message_id) r FROM messages "
             f"WHERE project_id=? AND message_id IN ({marks})", (pid, *ids))}
         for root in roots:
+            import semantic_intake_hold
+            semantic_intake_hold.validate_indexes(ledger.db)
+            if semantic_intake_hold.has_held_root(ledger.db, pid, root):
+                continue
             if local_model is None:
                 local_model = semantic_transport.llm_model()
             bundle = semantic_store.thread_bundle(ledger.db, pid, root, local_model=local_model)
@@ -145,17 +149,24 @@ def emit_degraded(ledger, scfg: dict) -> int:
                 continue
             dkey = payload_hash({"kind": "semantic_notice", "root": root,
                                  "fp": fp, "degraded": 1})
-            if outbox_has_delivery(ledger.db, dkey):
-                continue
-            ledger.outbox_add("semantic_notice", pid, {
-                "delivery_key": dkey, "root_id": root,
-                "degraded": True, "src_event_id": ev["event_id"],
-                "fingerprint": fp,
-                "policy_fingerprint": semantic_policy.policy_fingerprint(scfg),
-                "target_message_ids": arrivals,
-                "text": semantic_render.render_degraded(ledger.db, pid),
-                "policy_version": semantic_policy.POLICY_VERSION})
-            enqueued += 1
+            if ledger.db.in_transaction:
+                raise ValueError('semantic_degraded_transaction_active')
+            ledger.db.execute('BEGIN IMMEDIATE')
+            with ledger.db:
+                semantic_intake_hold.validate_indexes(ledger.db)
+                if semantic_intake_hold.has_held_root(ledger.db, pid, root):
+                    continue
+                if outbox_has_delivery(ledger.db, dkey):
+                    continue
+                ledger.outbox_add_tx("semantic_notice", pid, {
+                    "delivery_key": dkey, "root_id": root,
+                    "degraded": True, "src_event_id": ev["event_id"],
+                    "fingerprint": fp,
+                    "policy_fingerprint": semantic_policy.policy_fingerprint(scfg),
+                    "target_message_ids": arrivals,
+                    "text": semantic_render.render_degraded(ledger.db, pid),
+                    "policy_version": semantic_policy.POLICY_VERSION})
+                enqueued += 1
     return enqueued
 
 

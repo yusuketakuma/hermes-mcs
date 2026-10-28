@@ -28,6 +28,7 @@ from functools import wraps
 import json
 from contextlib import contextmanager
 import math
+import sqlite3
 import time
 
 from mcs_util import load_config, loads_dict, strict_json
@@ -1582,6 +1583,11 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
     old_progress = original.get('inference_reprocess')
     fields = ('source_epoch', 'analysis_epoch', 'job_state_epoch')
     epochs = {field: original.get(field, 0) for field in fields}
+    import semantic_intake_hold
+    try:
+        epochs['intake_hold_epoch'] = semantic_intake_hold.hold_epoch(ledger.db)
+    except sqlite3.Error:
+        return {'status': 'intake_hold_unverified', 'complete': False}
     if any(original.get(field + '_invalid') or type(value) is not int
            or not 0 <= value < 2**63 for field, value in epochs.items()):
         return {'status': 'invalid_source_epoch', 'complete': False}
@@ -1656,7 +1662,8 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
             if progress != old_progress:
                 with _sched_update(ledger) as sched:
                     if (sched.get('inference_reprocess') != old_progress
-                            or any(sched.get(field, 0) != value for field, value in epochs.items())
+                            or any(sched.get(field, 0) != epochs[field] for field in fields)
+                            or semantic_intake_hold.hold_epoch(ledger.db) != epochs['intake_hold_epoch']
                             or ledger.db.execute('PRAGMA data_version').fetchone()[0] != version
                             or ledger.db.total_changes != changes):
                         return {'status': 'source_changed', 'complete': False, 'processed': 0}
@@ -1697,6 +1704,7 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
                     or ledger.db.execute('PRAGMA data_version').fetchone()[0] != version):
                 return {'status': 'source_changed', 'complete': False, 'processed': 0}
             actual = {field: sched.get(field, 0) for field in fields}
+            actual['intake_hold_epoch'] = semantic_intake_hold.hold_epoch(ledger.db)
             if any(sched.get(field + '_invalid') or type(value) is not int or not 0 <= value < 2**63
                    for field, value in actual.items()):
                 return {'status': 'invalid_source_epoch', 'complete': False, 'processed': 0}
@@ -1747,6 +1755,11 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
                                     'AND project_id=? AND message_id=?',
                                     (_REPROCESS_JOB_MAX_BYTES + 1, JOB_KIND, *key)).fetchone()
             pl = _reprocess_job_payload(ledger, old, *key) if old is not None else {}
+            import semantic_intake_hold
+            semantic_intake_hold.validate_indexes(ledger.db)
+            if semantic_intake_hold.has_held_root(ledger.db, *key):
+                planned.append((row, 'held', None))
+                continue
             if old is not None and pl is None:
                 planned.append((row, 'held', None))
                 continue
@@ -1766,7 +1779,8 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
         planned.append((row, state, replay))
     with _sched_update(ledger) as sched:
         if (sched.get('inference_reprocess') != old_progress
-                or any(sched.get(field, 0) != value for field, value in epochs.items())
+                or any(sched.get(field, 0) != epochs[field] for field in fields)
+                or semantic_intake_hold.hold_epoch(ledger.db) != epochs['intake_hold_epoch']
                 or ledger.db.execute('PRAGMA data_version').fetchone()[0] != version
                 or ledger.db.total_changes != changes):
             return {'status': 'source_changed', 'complete': False, 'processed': 0}
@@ -1912,6 +1926,14 @@ def _reserve_long_defer(ledger, token):
     ledger.db.execute('BEGIN IMMEDIATE')
     with ledger.db:
         sched, entries = _reservation_sched(ledger)
+        import semantic_intake_hold
+        try:
+            semantic_intake_hold.validate_indexes(ledger.db)
+            held = semantic_intake_hold.has_held_root(ledger.db, token.project_id, token.message_id)
+        except sqlite3.Error:
+            raise ValueError('semantic_intake_hold_unverified') from None
+        if held:
+            raise ValueError('semantic_intake_held')
         row = ledger.db.execute(
             'SELECT state,attempts FROM fetch_jobs '
             'WHERE job_id=? AND kind=? AND project_id=? AND message_id=?',
@@ -1948,6 +1970,14 @@ def _refund_long_defer(ledger, token, reservation):
     ledger.db.execute('BEGIN IMMEDIATE')
     with ledger.db:
         sched, entries = _reservation_sched(ledger)
+        import semantic_intake_hold
+        try:
+            semantic_intake_hold.validate_indexes(ledger.db)
+            held = semantic_intake_hold.has_held_root(ledger.db, token.project_id, token.message_id)
+        except sqlite3.Error:
+            raise ValueError('semantic_intake_hold_unverified') from None
+        if held:
+            return
         key = str(token.job_id)
         row = ledger.db.execute(
             'SELECT job_id FROM fetch_jobs WHERE job_id=? AND kind=? AND project_id=? AND message_id=?',
@@ -2092,6 +2122,14 @@ def _adopt_pending_arrival(ledger, job):
     ledger.db.execute('BEGIN IMMEDIATE')
     with ledger.db:
         current = ledger.db.execute('SELECT * FROM fetch_jobs WHERE job_id=?', (job['job_id'],)).fetchone()
+        import semantic_intake_hold
+        try:
+            semantic_intake_hold.validate_indexes(ledger.db)
+            held = semantic_intake_hold.has_held_root(ledger.db, job['project_id'], job['message_id'])
+        except sqlite3.Error:
+            raise ValueError('semantic_intake_hold_unverified') from None
+        if held:
+            return None
         if (current is None or current['payload'] != job['payload'] or current['state'] != 'pending'
                 or ledger.db.execute('PRAGMA data_version').fetchone()[0] != version):
             return None
@@ -2800,11 +2838,31 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 out["lock_skipped"][job["kind"]] = \
                     out["lock_skipped"].get(job["kind"], 0) + 1
                 continue
+            if job['kind'] == JOB_KIND:
+                import semantic_intake_hold
+                try:
+                    semantic_intake_hold.validate_indexes(ledger.db)
+                    intake_held = semantic_intake_hold.has_held_root(
+                        ledger.db, job['project_id'], job['message_id'])
+                except sqlite3.Error:
+                    result['errors'].append('semantic: intake_hold_unverified')
+                    out['intake_hold_unverified'] = True
+                    break
+                if intake_held:
+                    hold_job(job, mutation, 'semantic: intake_held')
+                    continue
             if job['kind'] == JOB_KIND and _known_long_defer_generation(job['payload']) is None:
                 hold_job(job, mutation)
                 continue
             if job['kind'] == JOB_KIND and not is_current(runtime.parse_payload(job)):
-                job = _adopt_pending_arrival(ledger, job)
+                try:
+                    job = _adopt_pending_arrival(ledger, job)
+                except ValueError as error:
+                    if str(error) != 'semantic_intake_hold_unverified':
+                        raise
+                    result['errors'].append('semantic: intake_hold_unverified')
+                    out['intake_hold_unverified'] = True
+                    break
                 if job is None:
                     continue
             token = runtime.JobToken.from_row(job)
@@ -2903,6 +2961,13 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 try:
                     reservation = _reserve_long_defer(ledger, token)
                 except Exception as error:
+                    if type(error) is ValueError and str(error) == 'semantic_intake_held':
+                        hold_job(job, mutation, 'semantic: intake_held')
+                        continue
+                    if type(error) is ValueError and str(error) == 'semantic_intake_hold_unverified':
+                        result['errors'].append('semantic: intake_hold_unverified')
+                        out['intake_hold_unverified'] = True
+                        break
                     if 'semantic: long_defer_reservation_failed' not in result['errors']:
                         result['errors'].append('semantic: long_defer_reservation_failed')
                     out['long_defer_reservation_failed'] = True
