@@ -15,6 +15,7 @@ import pytest
 import extract_llm
 import semantic_v4 as v4
 import semantic_v4_cohort as cohort
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from mcs_queries import current_fact_pred
 from semantic_policy import KIND_FACT_REPAIR
 from semantic_projection import PROJECTION_VERSION
@@ -164,7 +165,7 @@ def _seed_legacy_and_v4(db, mid=1):
         (mid,)).fetchone()[0]
     for kind, ver in (("extract_llm", 3), ("canonical_projection", None),
                       (v4.KIND_V4, 4)):
-        meta = {"hash": h}
+        meta = {VERSION_KEY: CURRENT_VERSION, "hash": h}
         if kind in ("canonical_projection", v4.KIND_V4):
             meta["projection_version"] = PROJECTION_VERSION
         if ver == 4:
@@ -384,12 +385,14 @@ def test_v4_readers_skip_invalid_shapes_and_use_shared_generation_rule(tmp_path)
         h = _seed_legacy_and_v4(db)
         expected = v4.current_v4(db, 1, h)["artifact_id"]
         # A later unrelated or mislabelled generation cannot shadow it.
-        for meta in ({"hash": "other", "engine_version": 4},
-                     {"hash": h, "engine_version": 3}):
+        for meta in ({VERSION_KEY: CURRENT_VERSION, "projection_version": PROJECTION_VERSION,
+                      "hash": "other", "engine_version": 4},
+                     {VERSION_KEY: CURRENT_VERSION, "projection_version": PROJECTION_VERSION,
+                      "hash": h, "engine_version": 3}):
             db.artifact_add(v4.KIND_V4, "{}", project_id=1,
                             message_id=1, meta=meta)
         assert v4.current_v4(db, 1, h)["artifact_id"] == expected
-        for content, meta in (("[]", {"fingerprint": "fp"}),
+        for content, meta in (("[]", {VERSION_KEY: CURRENT_VERSION, "fingerprint": "fp"}),
                               ("{}", []), ("null", None)):
             db.artifact_add(v4.KIND_V4_STAGE, content, message_id=1,
                             meta=meta)

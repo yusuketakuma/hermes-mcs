@@ -8,17 +8,14 @@ import pytest
 
 import semantic_drain
 import semantic_runtime as runtime
-from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
+from semantic_testkit import _FakeJev, _cfg, _ledger, _llm, _message, _patient
 
 
 def _db(tmp_path):
-    db = _seeded(tmp_path)
-    row = db.db.execute("SELECT job_id,payload FROM fetch_jobs WHERE kind='semantic'").fetchone()
-    payload = json.loads(row['payload'])
-    payload['targets'] = [1]
-    with db.db:
-        db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
-                      (json.dumps(payload), row['job_id']))
+    db = _ledger(tmp_path)
+    patient = _patient(db)
+    patient.messages = [_message(1)]
+    db.save_patient(patient, notify={"source": "unread"}, semantic=True)
     return db
 
 

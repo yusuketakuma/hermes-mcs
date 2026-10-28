@@ -10,6 +10,7 @@ import extract
 import extract_llm
 import semantic_drain
 from extract_testkit import _hash, _ledger, _message
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from ledger import Ledger
 from semantic_testkit import BODY, _cfg, _FakeJev, _llm, _patient
 
@@ -106,7 +107,7 @@ def test_semantic_selection_keeps_archive_after_active_across_cohorts(led, lane,
             (21, 2, semantic_drain.JOB_KIND, True),
             (22, 2, semantic_drain.QC_JOB_KIND, False)):
         led.job_add(kind, pid, message_id=mid,
-                    payload={"targets": [mid], "eligible": eligible,
+                    payload={VERSION_KEY: CURRENT_VERSION, "targets": [mid], "eligible": eligible,
                              "generation": f"synthetic-{mid}"})
     with led.db:
         led.db.execute("UPDATE fetch_jobs SET next_try=1,created_at=1,updated_at=1 WHERE project_id=2")
@@ -121,9 +122,9 @@ def test_semantic_selection_keeps_archive_after_active_across_cohorts(led, lane,
 
 def test_archived_arrival_cannot_hide_the_only_active_backfill_slot(led):
     led.job_add(semantic_drain.JOB_KIND, 1, message_id=10,
-                payload={"eligible": True, "generation": "synthetic-archived"})
+                payload={VERSION_KEY: CURRENT_VERSION, "eligible": True, "generation": "synthetic-archived"})
     led.job_add(semantic_drain.JOB_KIND, 2, message_id=20,
-                payload={"generation": "synthetic-active"})
+                payload={VERSION_KEY: CURRENT_VERSION, "generation": "synthetic-active"})
     due, *_ = semantic_drain._select_due(led, None, (semantic_drain.JOB_KIND,), False, 1)
     assert [r["project_id"] for r in due] == [2]
 
@@ -131,9 +132,9 @@ def test_archived_arrival_cannot_hide_the_only_active_backfill_slot(led):
 @pytest.mark.parametrize("lane", [None, "backlog"], ids=["fair", "backlog"])
 def test_semantic_archived_work_remains_runnable_after_active_work_finishes(led, lane):
     led.job_add(semantic_drain.JOB_KIND, 1, message_id=10,
-                payload={"generation": "synthetic-archived"})
+                payload={VERSION_KEY: CURRENT_VERSION, "generation": "synthetic-archived"})
     led.job_add(semantic_drain.JOB_KIND, 2, message_id=20,
-                payload={"generation": "synthetic-active"})
+                payload={VERSION_KEY: CURRENT_VERSION, "generation": "synthetic-active"})
     with led.db:
         led.db.execute("UPDATE fetch_jobs SET state='done' WHERE project_id=2")
     due, *_ = semantic_drain._select_due(led, lane, (semantic_drain.JOB_KIND,), False, 1)
@@ -144,9 +145,10 @@ def test_backlog_retains_overscan_for_each_active_kind(led, monkeypatch):
     monkeypatch.setattr(semantic_drain, "_BACKLOG_TURN", {"kind": semantic_drain.JOB_KIND})
     max_jobs = 1
     for mid in range(100, 100 + max_jobs + 8):
-        led.job_add(semantic_drain.QC_JOB_KIND, 2, message_id=mid)
-    led.job_add(semantic_drain.JOB_KIND, 2, message_id=20)
-    led.job_add(semantic_drain.QC_JOB_KIND, 1, message_id=10)
+        led.job_add(semantic_drain.QC_JOB_KIND, 2, message_id=mid,
+                    payload={VERSION_KEY: CURRENT_VERSION})
+    led.job_add(semantic_drain.JOB_KIND, 2, message_id=20, payload={VERSION_KEY: CURRENT_VERSION})
+    led.job_add(semantic_drain.QC_JOB_KIND, 1, message_id=10, payload={VERSION_KEY: CURRENT_VERSION})
     due, qc, *_ = semantic_drain._select_due(
         led, "backlog", (semantic_drain.JOB_KIND, semantic_drain.QC_JOB_KIND), True, max_jobs)
     assert len(qc) == max_jobs + 8
@@ -157,9 +159,9 @@ def test_backlog_retains_overscan_for_each_active_kind(led, monkeypatch):
 
 def test_archived_single_slot_turn_survives_empty_active_pass_and_reopen(led):
     led.job_add(semantic_drain.JOB_KIND, 1, message_id=10,
-                payload={"eligible": True, "generation": "synthetic-arrival"})
+                payload={VERSION_KEY: CURRENT_VERSION, "eligible": True, "generation": "synthetic-arrival"})
     led.job_add(semantic_drain.JOB_KIND, 1, message_id=11,
-                payload={"generation": "synthetic-backfill"})
+                payload={VERSION_KEY: CURRENT_VERSION, "generation": "synthetic-backfill"})
     path = led.db.execute("PRAGMA database_list").fetchone()[2]
     store = led
     try:
@@ -223,7 +225,7 @@ def test_realtime_long_defer_fills_from_archive_until_active_generation_changes(
                       project_id=2, semantic=True, notify={"source": "unread"})
     active = led.job_pending(semantic_drain.JOB_KIND, 2, 20)
     led.job_add(semantic_drain.JOB_KIND, 1, message_id=10,
-                payload={"eligible": True, "generation": "synthetic-archived"})
+                payload={VERSION_KEY: CURRENT_VERSION, "eligible": True, "generation": "synthetic-archived"})
     deferred = {str(active["job_id"]): {"g": json.loads(active["payload"])["generation"], "n": 1}}
     due, *_ = semantic_drain._select_due(
         led, "realtime", (semantic_drain.JOB_KIND,), False, 1, deferred)
