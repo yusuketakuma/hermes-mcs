@@ -50,6 +50,21 @@ def code_stamp() -> int:
     return newest
 
 
+def code_stamp_checked() -> int:
+    """Read the same source stamp, failing if any part is unavailable."""
+    def fail(error):
+        raise error
+
+    newest = 0
+    for base, _dirs, files in os.walk(_MCS_ROOT, onerror=fail):
+        for name in files:
+            if name.endswith('.py'):
+                newest = max(newest, os.stat(os.path.join(base, name)).st_mtime_ns)
+    if not newest:
+        raise OSError('source_stamp_unavailable')
+    return newest
+
+
 class RunLockLost(BaseException):
     """The run lock could not be safely retaken after unlocked transport.
 
