@@ -36,6 +36,72 @@ _EFFECT_TABLES = ("notification_cards", "notification_renders",
                   "notification_view_manifests", "notify_outbox")
 
 
+_INTAKE_EVIDENCE_ROWS = 4096
+_INTAKE_EVIDENCE_ROW_BYTES = 65536
+_INTAKE_EVIDENCE_SECONDS = 1.0
+
+
+def _intake_evidence(con, table, kind):
+    """Compare bounded raw records without exposing their contents."""
+    columns = con.execute(f"PRAGMA table_info({table})").fetchall()
+    if not columns or not any(column[1] == 'kind' for column in columns):
+        return []
+    previous_limit = con.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
+    con.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, min(previous_limit, _INTAKE_EVIDENCE_ROW_BYTES))
+    deadline = time.monotonic() + _INTAKE_EVIDENCE_SECONDS
+    steps = 0
+
+    def stop():
+        nonlocal steps
+        steps += 1
+        return steps > 200 or time.monotonic() >= deadline
+
+    con.set_progress_handler(stop, 1000)
+    try:
+        if con.execute(f"SELECT 1 FROM {table} WHERE kind=? LIMIT 1", (kind,)).fetchone() is None:
+            return []
+        key = 'artifact_id' if table == 'artifacts' else 'job_id'
+        pk = [column for column in columns if column[5]]
+        all_columns = con.execute(f"PRAGMA table_xinfo({table})").fetchall()
+        indexes = con.execute(f"PRAGMA index_list({table})").fetchall()
+        if (len(pk) != 1 or pk[0][1] != key or pk[0][2].upper() != 'INTEGER'
+                or any(column[1].lower() in ('rowid', '_rowid_', 'oid') for column in all_columns)
+                or any(index[3] == 'pk' for index in indexes)):
+            raise sqlite3.DatabaseError('restore_intake_identity_unverified')
+        identities = []
+        cursor = con.execute(
+            f"SELECT rowid,* FROM {table} WHERE kind=? ORDER BY rowid LIMIT ?",
+            (kind, _INTAKE_EVIDENCE_ROWS + 1))
+        for row in cursor:
+            if len(identities) >= _INTAKE_EVIDENCE_ROWS or time.monotonic() >= deadline:
+                raise sqlite3.DatabaseError('restore_intake_evidence_limit')
+            raw = json.dumps([all_columns, row], ensure_ascii=False, separators=(',', ':'),
+                             default=lambda value: {'blob': value.hex()}).encode('utf-8')
+            identities.append(hashlib.sha256(raw).hexdigest())
+        return identities
+    finally:
+        con.set_progress_handler(None, 0)
+        con.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, previous_limit)
+
+
+def _intake_comparison(live, back):
+    """Report live evidence not identically present in the backup."""
+    compared = {}
+    for label, table, kind in (
+            ('held_intents', 'artifacts', 'semantic_intake_hold_v1'),
+            ('unstored_intake', 'fetch_jobs', 'semantic_intake_unstored_v1')):
+        current = _intake_evidence(live, table, kind)
+        saved = _intake_evidence(back, table, kind)
+        if current or saved:
+            present = set(saved)
+            compared[label] = {
+                'live': len(current), 'backup': len(saved),
+                'live_not_identical_in_backup': sum(item not in present for item in current),
+                'live_sha256': hashlib.sha256(''.join(current).encode('ascii')).hexdigest(),
+            }
+    return compared
+
+
 def database_version(path: str) -> int | None:
     try:
         con = sqlite3.connect(
@@ -107,6 +173,7 @@ def create_loss_report(*, live_path: str, backup_path: str, report_path: str) ->
     try:
         live.execute("BEGIN")
         back.execute("BEGIN")
+        intake = _intake_comparison(live, back)
         live_digest = _restore_content_digest(live)
         watermark = _watermark(back)
         stored = {t: _table_count(live, t) - _table_count(back, t)
@@ -130,6 +197,11 @@ def create_loss_report(*, live_path: str, backup_path: str, report_path: str) ->
                                                for n in stored.values()),
                    "external_effect_rows": sum(max(0, n)
                                                for n in effects.values())}
+        if intake:
+            metrics['semantic_intake_evidence'] = intake
+            metrics['semantic_intake_notice'] = (
+                '保留・未保存の記録について、同一の内容が復元先にない件数です。'
+                '保存できなかった投稿は復元されず、元の投稿を再取得できるかは分かりません。')
         metrics["report_id"] = hashlib.sha256(
             json.dumps(metrics, sort_keys=True, separators=(",", ":"),
                        ensure_ascii=False).encode("utf-8")).hexdigest()
