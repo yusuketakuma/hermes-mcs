@@ -13,6 +13,7 @@ from adapters.common import (commands as native_commands, eventlog, paths, proje
                              summary, text as display_text, worker)
 from adapters.common.access import CONTEXT_FLAGS
 from adapters.common.dispatch import make_handler
+from mcs_standalone.credential_gate import protected
 from . import cards, delivery
 from .actions import _authorizing_channel
 from .tasks import Supervisor
@@ -340,6 +341,7 @@ class _Commands:
 _event = eventlog.make_logger("mcs.standalone.discord")
 
 
+@protected
 async def run(root, stopping=None, *, native_admission=None,
               delivery_admission=None, delivery_identity=None):
     """Own one SDK connection and supervisor, including reconnect and shutdown."""
@@ -486,6 +488,7 @@ def _payload(root, payload):
         raise ValueError("discord_payload_invalid") from None
 
 
+@protected
 async def send(root, target, payload):
     """Make one bounded text/file attempt to the explicitly configured channel."""
     from mcs_standalone.config import connector_settings, load_credentials

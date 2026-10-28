@@ -166,47 +166,56 @@ def _apply_standalone_credentials(args, used: set, wanted: list) -> bool:
     from mcs_standalone.config import credentials_path, load_credentials, validate_credentials
     from mcs_standalone.__main__ import (_credential_env_snapshot, _env_has_transport_key,
                                          _hidden_credential, _slack_env_bot_only)
+    from mcs_standalone.credential_gate import CredentialGateUnavailable, _reader as credential_reader
+    from api_key_setup import _snapshot as env_snapshot, _save as save_env
     transports = used & {"slack", "discord"}
-    missing_json = set()
-    for transport in transports:
-        if not os.path.lexists(credentials_path(HOME, transport)):
-            missing_json.add(transport)
-            continue
-        try:
-            load_credentials(HOME, transport)
-        except ValueError:
-            return False
-    if not missing_json:
+    if not transports:
         return True
     try:
-        existing = _credential_env_snapshot(HOME)
+        with credential_reader(HOME):
+            missing_json = set()
+            for transport in transports:
+                if not os.path.lexists(credentials_path(HOME, transport)):
+                    missing_json.add(transport)
+                    continue
+                try:
+                    load_credentials(HOME, transport)
+                except ValueError:
+                    return False
+            if not missing_json:
+                return True
+            existing = _credential_env_snapshot(HOME)
+            deferred_slack = False
+            for transport in missing_json:
+                try:
+                    load_credentials(HOME, transport)
+                except ValueError as exc:
+                    partial = (transport == "slack" and str(exc) == "credentials_missing"
+                               and _slack_env_bot_only(HOME, existing) is not None)
+                    if partial:
+                        deferred_slack = True
+                        continue
+                    if str(exc) != "credentials_missing" or _env_has_transport_key(existing, transport):
+                        raise ValueError("credential_existing_state_unverifiable") from None
+            if deferred_slack:
+                missing_json.remove("slack")
+            wanted = [(key, desc) for key, desc in wanted
+                      if ("slack" if key.startswith("SLACK_") else "discord") in missing_json]
+            current_values = {key: env_value(key, paths=[ENV_PATH], check_env=False)
+                              for key, _ in wanted}
+            if any(not value for value in current_values.values()):
+                _, env_base = env_snapshot(Path(ENV_PATH))
+            else:
+                env_base = None
+    except CredentialGateUnavailable as exc:
+        print("独立接続: 認証情報の利用を確認できないため、設定を中止しました（理由: " + str(exc) + "）。")
+        return False
     except ValueError:
         print("独立接続: 既存の認証情報を確認できません。新しい情報を保存せず、管理担当者に確認してください。")
         return False
-    deferred_slack = False
-    for transport in missing_json:
-        try:
-            load_credentials(HOME, transport)
-        except ValueError as exc:
-            try:
-                partial = (transport == "slack" and str(exc) == "credentials_missing"
-                           and _slack_env_bot_only(HOME, existing) is not None)
-            except ValueError:
-                print("独立接続: 認証情報の状態が変わったため、設定を中止しました。")
-                return False
-            if partial:
-                deferred_slack = True
-                continue
-            if str(exc) != "credentials_missing" or _env_has_transport_key(existing, transport):
-                print("独立接続: 既存の認証情報を確認できません。新しい情報を保存せず、管理担当者に確認してください。")
-                return False
-    if deferred_slack:
-        missing_json.remove("slack")
-    wanted = [(key, desc) for key, desc in wanted
-              if ("slack" if key.startswith("SLACK_") else "discord") in missing_json]
     updates, missing, resolved = {}, [], {}
     for env_key, desc in wanted:
-        current = env_value(env_key, paths=[ENV_PATH], check_env=False)
+        current = current_values[env_key]
         if current:
             resolved[env_key] = current
             print(f"  {env_key}: 設定済み")
@@ -246,12 +255,20 @@ def _apply_standalone_credentials(args, used: set, wanted: list) -> bool:
         return False
     if updates:
         try:
-            if _credential_env_snapshot(HOME) != existing:
-                print("  .env: 入力中に変更されたため、認証情報は保存していません。現在の状態を確認してください")
-                return False
-            lifecycle_io.write_env(ENV_PATH, updates)
+            with credential_reader(HOME, exclusive=True):
+                if (_credential_env_snapshot(HOME) != existing or any(
+                        os.path.lexists(credentials_path(HOME, transport)) for transport in missing_json)):
+                    print("  認証情報が入力中に変更されたため、保存していません。現在の状態を確認してください")
+                    return False
+                save_env(Path(ENV_PATH), updates, env_base)
+        except CredentialGateUnavailable as exc:
+            print("  認証情報を保存できません。現在の状態を確認してください（理由: " + str(exc) + "）。")
+            return False
         except ValueError:
-            print("  .env: トークンの形式が正しくありません。既存のファイルを保持しました")
+            print("  .env: 既存の状態または競合を確認できないため、認証情報は保存していません")
+            return False
+        except BlockingIOError:
+            print("  .env: 別の保存処理が動作中のため、認証情報は保存していません")
             return False
         except OSError:
             print("  .env: 保存結果を確認できません。現在の認証情報の状態を管理担当者に確認してください")

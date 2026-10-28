@@ -17,6 +17,7 @@ import re
 import sys
 import tempfile
 import warnings
+from contextlib import nullcontext
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -29,6 +30,8 @@ from mcs_util import HOME  # noqa: E402
 from safe_io import fdopen_owned  # noqa: E402
 
 from . import config  # noqa: E402
+from .credential_gate import (CredentialGateUnavailable, _reader as credential_reader,  # noqa: E402
+                              inspect as inspect_credential_gate)
 from .host import NotSent, Refused, log  # noqa: E402
 
 EX_TEMPFAIL = 75
@@ -100,6 +103,17 @@ def _payload(root: str) -> dict:
 
 
 def send(root: str, target: str) -> int:
+    try:
+        with credential_reader(root):
+            return _send_with_credential_gate(root, target)
+    except CredentialGateUnavailable as exc:
+        code = str(exc)
+        if code not in ("sender_busy", "credential_gate_held", "credential_gate_unavailable"):
+            code = "credential_gate_unavailable"
+        raise NotSent(code) from None
+
+
+def _send_with_credential_gate(root: str, target: str) -> int:
     cfg = config.load(root)
     transport, _ = config.channel(cfg, target)
     # The Slack connector loads both tokens even to send (load_credentials).
@@ -112,6 +126,8 @@ def send(root: str, target: str) -> int:
         raise NotSent(problem)
     try:
         result = asyncio.run(_runtime(transport).send(root, target, payload))
+    except CredentialGateUnavailable:
+        raise
     except config.ConfigError:
         raise   # setup codes keep their exit status (75 when incomplete)
     except ValueError:
@@ -214,19 +230,28 @@ def _slack_env_bot_only(root, raw):
 def initialize(root, transport, *, yes=False):
     _coded(config.connector_settings, root, transport, require_interactive=False)
     path = config.credentials_path(root, transport)
-    if os.path.lexists(path):
-        config.load_credentials(root, transport)
+    existing_bot = None
+    with credential_reader(root):
+        json_exists = os.path.lexists(path)
+        if json_exists:
+            config.load_credentials(root, transport)
+            env_snapshot = None
+        else:
+            env_snapshot = _credential_env_snapshot(root)
+            try:
+                value = config.load_credentials(root, transport)
+                error = None
+            except ValueError as exc:
+                error = exc
+                if transport == "slack" and str(exc) == "credentials_missing":
+                    existing_bot = _slack_env_bot_only(root, env_snapshot)
+    if json_exists:
         if not yes and sys.stdin.isatty() and not _existing_credentials_choice(transport):
             return 1
         print("既存の認証設定を保持しました。")
         return 0
-    env_snapshot = _credential_env_snapshot(root)
-    try:
-        value = config.load_credentials(root, transport)
-    except ValueError as exc:
-        existing_bot = (_slack_env_bot_only(root, env_snapshot)
-                        if transport == "slack" and str(exc) == "credentials_missing" else None)
-        if existing_bot is None and (str(exc) != "credentials_missing"
+    if error is not None:
+        if existing_bot is None and (str(error) != "credentials_missing"
                                      or _env_has_transport_key(env_snapshot, transport)):
             raise config.ConfigError("credential_existing_state_unverifiable") from None
         if yes or not sys.stdin.isatty():
@@ -252,11 +277,12 @@ def initialize(root, transport, *, yes=False):
             json.dump(value, stream)
             stream.flush()
             os.fsync(stream.fileno())
-        if _credential_env_snapshot(root) != env_snapshot:
-            raise config.ConfigError("credential_existing_state_changed")
-        os.link(temporary, path)
-        from adapters.common.paths import fsync_dir
-        fsync_dir(str(path.parent))
+        with credential_reader(root, exclusive=True):
+            if _credential_env_snapshot(root) != env_snapshot:
+                raise config.ConfigError("credential_existing_state_changed")
+            os.link(temporary, path)
+            from adapters.common.paths import fsync_dir
+            fsync_dir(str(path.parent))
     finally:
         os.unlink(temporary)
     print("認証設定を保存しました（本人だけが読み書きできる権限）。")
@@ -301,15 +327,16 @@ def check(root: str) -> int:
         target = cfg.get(key)
         if isinstance(target, str) and target.split(":", 1)[0] in config.TOKENS:
             used.add(config.channel(cfg, target)[0])
-    for transport in sorted(used):
-        serving = config.interactive(cfg) == transport
-        # send loads both Slack tokens too (load_credentials), not only run.
-        config.tokens(root, transport, socket=serving or transport == "slack")
-        if serving:
-            # The connector builds its settings with connector_settings,
-            # which is stricter than config.load: validate the same rules
-            # here so check/run fail with the code instead of crash-looping.
-            _coded(config.connector_settings, root, transport)
+    if used and inspect_credential_gate(root) in ("held", "unknown"):
+        raise config.ConfigError("credential_gate_unavailable")
+    with credential_reader(root) if used else nullcontext():
+        for transport in sorted(used):
+            serving = config.interactive(cfg) == transport
+            # send loads both Slack tokens too (load_credentials), not only run.
+            config.tokens(root, transport, socket=serving or transport == "slack")
+            if serving:
+                # Validate the same rules as run, before starting the host.
+                _coded(config.connector_settings, root, transport)
     if "lineworks" in _coded(config.transports, root):
         from adapters.lineworks.__main__ import check as lineworks_check
         from adapters.lineworks.client import ClientError
@@ -335,11 +362,12 @@ def main(argv=None) -> int:
         logging.getLogger(name).setLevel(logging.WARNING)
     parser = argparse.ArgumentParser(description="Hermes なしで Slack / Discord と接続する MCS ランタイム")
     subs = parser.add_subparsers(dest="command", required=True)
-    for name in ("run", "send", "check", "init", "status", "service"):
+    for name in ("run", "send", "check", "init", "status", "service", "credential-status"):
         descriptions = {"run": "MCSの常駐処理を開始します", "send": "指定先へ通知を送ります",
                         "check": "必要な設定を確認します", "init": "通知先の認証情報を設定します",
                         "status": "機械処理用のJSONで稼働状態を表示します",
-                        "service": "常駐サービスの設定内容を表示します"}
+                        "service": "常駐サービスの設定内容を表示します",
+                        "credential-status": "認証情報の保留状態を読み取ります"}
         sub = subs.add_parser(name, help=descriptions[name], description=descriptions[name])
         sub.add_argument("--root", default=HOME, help="設定とdataの保存先（既定: ~/.mcs）")
         if name == "send":
@@ -356,6 +384,17 @@ def main(argv=None) -> int:
             return send(args.root, args.to)
         if args.command == "init":
             return initialize(args.root, args.transport, yes=args.yes)
+        if args.command == "credential-status":
+            state = inspect_credential_gate(args.root)
+            messages = {
+                "not_initialized": "認証情報の実行枠はまだ作成されていません。",
+                "unheld": "確認時点で認証情報の保留ファイルはありません。",
+                "held": "認証情報の保留ファイルがあります。変更せず管理担当者に確認してください。",
+                "unknown": "認証情報の保留状態を確認できません。変更せず管理担当者に確認してください。",
+            }
+            print(messages[state])
+            print("この確認では旧版や手動起動のプロセスが停止したことは分かりません。")
+            return 1 if state in ("held", "unknown") else 0
         if args.command in ("status", "service"):
             from . import service
             if args.command == "status":
@@ -364,6 +403,10 @@ def main(argv=None) -> int:
                 print(service.render(args.root)[1])
             return 0
         return check(args.root)
+    except CredentialGateUnavailable as exc:
+        print("認証情報の利用を確認できません。credential-status で保留状態を確認してください。")
+        print(str(exc), file=sys.stderr)
+        return 1
     except config.ConfigError as exc:
         # Codes only: native exceptions can embed paths or secret values.
         if args.command == "init" and str(exc) in (
@@ -372,6 +415,8 @@ def main(argv=None) -> int:
                   "新しい認証情報は保存していません。設定の管理担当者に確認してください。")
         elif args.command == "init" and str(exc) == "credential_hidden_input_unavailable":
             print("入力を非表示にできないため、認証情報は保存していません。端末から再実行してください。")
+        elif args.command == "check" and str(exc) == "credential_gate_unavailable":
+            print("認証情報の利用を確認できません。credential-status で保留状態を確認してください。")
         elif args.command in ("init", "check"):
             print("接続設定を確認できません。通知先・操作権限・認証情報を確認してください。")
         print(str(exc), file=sys.stderr)
