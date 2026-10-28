@@ -173,6 +173,126 @@ def test_fact_source_shadow_writes_without_gate(tmp_path, monkeypatch):
     assert "fact_source_gate" not in cfg["semantic"]
 
 
+def _synthetic_promotion(tmp_path, monkeypatch):
+    from candidate_testkit import approved_config
+    monkeypatch.setattr(mcs_util, 'HOME', str(tmp_path / 'evidence-fixture'))
+    approved = approved_config({'semantic': {'fact_source': 'canonical'}})
+    evidence = tmp_path / 'report.json'
+    evidence.write_text(json.dumps(approved['semantic']['fact_source_evidence']))
+    monkeypatch.setattr(mcs_util, 'HOME', str(tmp_path / 'approval-root'))
+    initial = {'mcs_login_id': 'synthetic', 'notify_target': 'local',
+               'semantic': {'fact_source': 'legacy'}, 'unknown': {'keep': True}}
+    conf = _cmd_cfg(tmp_path, monkeypatch, initial)
+    return conf, evidence, initial
+
+
+def test_fact_source_concurrent_change_before_approval_preserves_both(tmp_path, monkeypatch, capsys):
+    import semantic_candidate
+    conf, evidence, initial = _synthetic_promotion(tmp_path, monkeypatch)
+    other = {**initial, 'unknown': {'other': True}}
+    promotion = semantic_candidate.promotion_problem
+    def concurrent(cfg, report):
+        conf.write_text(json.dumps(other))
+        return promotion(cfg, report)
+    monkeypatch.setattr(semantic_candidate, 'promotion_problem', concurrent)
+    assert mcs_setup.cmd_fact_source(_Args('canonical', str(evidence))) == 1
+    assert json.loads(conf.read_text()) == other
+    assert not (Path(mcs_util.HOME) / 'data/semantic_approvals').exists()
+    assert '設定は保存していません' in capsys.readouterr().out
+
+
+def test_fact_source_concurrent_change_after_approval_keeps_receipt(tmp_path, monkeypatch, capsys):
+    import semantic_candidate
+    conf, evidence, initial = _synthetic_promotion(tmp_path, monkeypatch)
+    other = {**initial, 'unknown': {'other': True}}
+    record = semantic_candidate.record_approval
+    def concurrent(cfg, report):
+        identity = record(cfg, report)
+        conf.write_text(json.dumps(other))
+        return identity
+    monkeypatch.setattr(semantic_candidate, 'record_approval', concurrent)
+    assert mcs_setup.cmd_fact_source(_Args('canonical', str(evidence))) == 1
+    assert json.loads(conf.read_text()) == other
+    receipts = list((Path(mcs_util.HOME) / 'data/semantic_approvals').glob('*.json'))
+    assert len(receipts) == 1
+    out = capsys.readouterr().out
+    assert '設定は保存していません' in out and '承認記録が保存された可能性' in out
+
+
+def test_fact_source_busy_lock_does_not_create_approval(tmp_path, monkeypatch, capsys):
+    import config_edit
+    conf, evidence, initial = _synthetic_promotion(tmp_path, monkeypatch)
+    with config_edit._edit_lock(conf):
+        assert mcs_setup.cmd_fact_source(_Args('canonical', str(evidence))) == 1
+    assert json.loads(conf.read_text()) == initial
+    assert not (Path(mcs_util.HOME) / 'data/semantic_approvals').exists()
+    assert '設定は保存していません' in capsys.readouterr().out
+
+
+def test_fact_source_approval_failure_may_leave_receipt_without_config(tmp_path, monkeypatch, capsys):
+    import semantic_candidate
+    conf, evidence, initial = _synthetic_promotion(tmp_path, monkeypatch)
+    record = semantic_candidate.record_approval
+    def fail_after_record(cfg, report):
+        record(cfg, report)
+        raise OSError('synthetic receipt sync failure')
+    monkeypatch.setattr(semantic_candidate, 'record_approval', fail_after_record)
+    assert mcs_setup.cmd_fact_source(_Args('canonical', str(evidence))) == 1
+    assert json.loads(conf.read_text()) == initial
+    assert len(list((Path(mcs_util.HOME) / 'data/semantic_approvals').glob('*.json'))) == 1
+    out = capsys.readouterr().out
+    assert '承認記録の保存結果を確認できません' in out and '設定は保存していません' in out
+
+
+def test_fact_source_config_fsync_failure_reports_unknown_after_publish(tmp_path, monkeypatch, capsys):
+    import safe_io
+    import semantic_candidate
+    conf, evidence, initial = _synthetic_promotion(tmp_path, monkeypatch)
+    def fail_sync(*args, **kwargs):
+        raise OSError('synthetic directory sync failure')
+    monkeypatch.setattr(safe_io, 'fsync_dir', fail_sync)
+    assert mcs_setup.cmd_fact_source(_Args('canonical', str(evidence))) == 1
+    saved = json.loads(conf.read_text())
+    sem = saved['semantic']
+    assert saved['unknown'] == initial['unknown'] and sem['fact_source'] == 'canonical'
+    assert semantic_candidate.approval_matches(saved, sem['fact_source_evidence'], sem['fact_source_approval'])
+    out = capsys.readouterr().out
+    assert '設定の保存結果を確認できません' in out and '承認記録が保存された可能性' in out
+    assert '設定は保存していません' not in out
+
+
+def test_fact_source_absent_config_concurrent_creation_is_never_overwritten(tmp_path, monkeypatch, capsys):
+    import config_edit
+    conf = tmp_path / 'config.json'
+    monkeypatch.setattr(mcs_setup, 'CONF_PATH', str(conf))
+    snapshot = config_edit._snapshot
+    def concurrent(path=None):
+        conf.write_text('{"unknown":"kept"}')
+        return snapshot(path)
+    monkeypatch.setattr(config_edit, '_snapshot', concurrent)
+    assert mcs_setup.cmd_fact_source(_Args('shadow')) == 1
+    assert json.loads(conf.read_text()) == {'unknown': 'kept'}
+    assert '設定は保存していません' in capsys.readouterr().out
+
+
+def test_fact_source_missing_config_is_exclusively_created(tmp_path, monkeypatch):
+    conf = tmp_path / 'config.json'
+    monkeypatch.setattr(mcs_setup, 'CONF_PATH', str(conf))
+    assert mcs_setup.cmd_fact_source(_Args('shadow')) == 0
+    assert json.loads(conf.read_text()) == {'semantic': {'fact_source': 'shadow'}}
+    assert conf.stat().st_mode & 0o777 == 0o600
+
+
+def test_fact_source_symlink_is_never_followed(tmp_path, monkeypatch):
+    target = tmp_path / 'target.json'
+    target.write_text('{"unknown":"kept"}')
+    conf = tmp_path / 'config.json'
+    conf.symlink_to(target)
+    monkeypatch.setattr(mcs_setup, 'CONF_PATH', str(conf))
+    assert mcs_setup.cmd_fact_source(_Args('shadow')) == 1
+    assert conf.is_symlink() and target.read_text() == '{"unknown":"kept"}'
+
+
 def test_fact_source_canonical_requires_evidence(tmp_path, monkeypatch):
     conf = _cmd_cfg(tmp_path, monkeypatch, {"mcs_login_id": "x",
                                             "notify_target": "slack"})
