@@ -131,14 +131,13 @@ def _restart_import(ledger, req, now):
         return "restarted"
 
 
-def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
+def drain_commands(ledger, result, cmd_dir: str = CMD_DIR, *, consent_only=False):
     """Consume queued bot requests into durable fetch_jobs FIRST. Files may
     arrive mid-write (producer writes non-atomically): a parse failure is
     left in place for the next drain, never consumed."""
-    consent_only = False
     try:
         import notify_spool
-        consent_only = notify_spool.restore_awaiting_consent(
+        consent_only = consent_only or notify_spool.restore_awaiting_consent(
             os.path.dirname(cmd_dir)) is not None
     except Exception:
         # Preserve queued writes when the restore guard cannot be read.
