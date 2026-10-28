@@ -1159,6 +1159,14 @@ with owner._control_store(home) as control:
  assert result['source_sha256']==supplied['owner_evidence_sha256']
  assert control.read(release_state.NAME)['spent']==[]
  assert not (home/'data/update.lock').exists() and not (home/'data/run.lock').exists()
+ legacy=home/'data/install_options.json';before=(home/'config.json').read_bytes();state=control.read(release_state.NAME)
+ for raw,code in ((b'{"v":1,"install_args":[]}','RELEASE_APPLY_SETTINGS_MIGRATION_REQUIRED'),(b'{broken','RELEASE_APPLY_SETTINGS_MIGRATION_UNVERIFIED')):
+  legacy.write_bytes(raw)
+  try:owner._native_preflight(control,runtime_home=home,repository=repo,deadline=time.monotonic()+30)
+  except owner.ReleaseApplyError as error:assert error.code==code
+  else:raise AssertionError('unsettled settings accepted')
+  assert legacy.read_bytes()==raw and (home/'config.json').read_bytes()==before and control.read(release_state.NAME)==state
+ legacy.unlink()
  path=repo/'mcs/ops/release_apply_owner.py'
  path.write_bytes(path.read_bytes()+b'\n# synthetic changed source\n')
  try: owner._native_preflight(control,runtime_home=home,repository=repo,deadline=time.monotonic()+30)
@@ -1241,7 +1249,8 @@ def test_apply_control_signing_rejects_admin_registration_cross_kind_and_unknown
 
 
 @pytest.mark.parametrize('failure', [None, 'global-hook', 'signature', 'artifact', 'schema', 'disabled', 'uncertain_write',
-    'run-registration', 'run-operation', 'run-grant', 'run-cancel', 'run-epoch', 'run-fsync-expiry', 'run-fsync-rollback', 'run-start-uncertain', 'run-unfinished-journal', 'run-git-attributes', 'run-git-grafts'])
+    'run-registration', 'run-operation', 'run-grant', 'run-cancel', 'run-epoch', 'run-fsync-expiry', 'run-fsync-rollback', 'run-start-uncertain', 'run-unfinished-journal', 'run-git-attributes', 'run-git-grafts',
+    'run-settings-required', 'run-settings-unverified', 'run-settings-late'])
 def test_native_plan_freezes_independent_report_after_real_tty_signature_and_artifact_checks(native_product, registered, tmp_path, failure):
     # Development-only accepted root and synthetic credentials; no authorization or crypto is mocked.
     import base64
@@ -1516,6 +1525,7 @@ if pid==0:
      if failure=='run-grant':value['grant']['signature']=value['grant']['signature'][::-1]
      elif failure=='run-cancel':owner._cancel_native_change(control,runtime_home=home,operation_id=operation_id)
      elif failure=='run-epoch':support_state.disable(monitor,now_ms=packet['now'])
+     elif failure=='run-settings-late':(home/'data/install_options.json').write_text('{"v":1,"install_args":[]}')
     return json.dumps(value,ensure_ascii=True).encode('ascii')
    original_child=owner._run_effect_post_merge
    def observed_child(*args,**kwargs):
@@ -1542,6 +1552,8 @@ if pid==0:
    previous=dict(update_journal.default_state(),stages=[dict(stage='local_checks',at=packet['now']/1000),dict(stage='done',at=packet['now']/1000)],applied=[dict(sha=supplied['baseline']['commit'],tag='synthetic-previous')])
    if failure=='run-unfinished-journal':previous['stages'].pop()
    update_journal.save_state(home/'data/update_state.json',previous)
+   if failure=='run-settings-required':(home/'data/install_options.json').write_text('{"v":1,"install_args":[]}')
+   if failure=='run-settings-unverified':(home/'data/install_options.json').write_text('{broken')
    assert not (local_problems:=mcs_update.precheck_local(mcs_update.mcs_util.load_config(),deadline=time.monotonic()+30)),local_problems
    if failure in ('run-fsync-expiry','run-fsync-rollback','run-start-uncertain'):
     write=control.write
@@ -1567,6 +1579,11 @@ if pid==0:
      assert subprocess.check_output(['/usr/bin/git','-C',str(repo),'rev-parse','HEAD'],text=True).strip()==supplied['baseline']['commit']
      assert subprocess.run(['/usr/bin/git','-C',str(repo),'cat-file','-e',packet['target_commit']],capture_output=True).returncode!=0
      assert update_journal.load_state(home/'data/update_state.json').get('applying') is None
+     if failure.startswith('run-settings-'):
+      assert 'release_ref' not in update_journal.load_state(home/'data/update_state.json')
+      assert (home/'data/install_options.json').exists()
+      assert error.code==('RELEASE_APPLY_SETTINGS_MIGRATION_UNVERIFIED' if failure=='run-settings-unverified' else 'RELEASE_APPLY_SETTINGS_MIGRATION_REQUIRED')
+      if failure!='run-settings-late':assert calls==[]
      assert not owner._EFFECT_CAPS and not owner._EFFECT_PARENTS and not owner._LIVE_CONTINUATIONS
      assert control.read('release-successor.json') is None
      assert not hook_marker.exists()
