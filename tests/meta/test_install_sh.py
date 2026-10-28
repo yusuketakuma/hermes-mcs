@@ -440,8 +440,14 @@ exit 1
             os.close(lock_fd)
 
 
-def test_fresh_install_reaches_bootstrap_without_python(tmp_path):
-    _home, hermes_home, stub_root, env = _world(tmp_path)
+@pytest.mark.parametrize('prior_state', ['absent', 'empty_data', 'lock_only'])
+def test_fresh_install_reaches_bootstrap_without_python(tmp_path, prior_state):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    lock = home / '.mcs/data/update.lock'
+    if prior_state != 'absent':
+        lock.parent.mkdir(mode=0o700, parents=True)
+    if prior_state == 'lock_only':
+        lock.touch(mode=0o600)
     (stub_root / 'bin/python3').write_text('#!/bin/sh\nexit 1\n')
     (stub_root / 'bin/python3.14').write_text('#!/bin/sh\nexit 1\n')
     (stub_root / 'bin/brew').write_text('#!/bin/sh\necho "brew $*" >> "$STUB_LOG"\nexit 1\n')
@@ -449,6 +455,50 @@ def test_fresh_install_reaches_bootstrap_without_python(tmp_path):
     assert result.returncode != 0
     assert any(line.startswith('brew ') for line in _calls(stub_root))
     assert not any(line.startswith('python3 ') for line in _calls(stub_root))
+    assert lock.is_file() and lock.stat().st_mode & 0o777 == 0o600
+    assert not (home / '.mcs/config.json').exists()
+
+
+@pytest.mark.parametrize('record', ['legacy', 'pending'])
+def test_recorded_install_requires_python_before_bootstrap(tmp_path, record):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    data = home / '.mcs/data'
+    data.mkdir(mode=0o700, parents=True)
+    path = (data / 'install_options.json' if record == 'legacy'
+            else data.parent / '.install-options-migration.pending')
+    body = '{"v":1,"install_args":["--no-llm","--no-recovery"]}'
+    path.write_text(body)
+    for name in ('python3', 'python3.14'):
+        (stub_root / 'bin' / name).write_text('#!/bin/sh\nexit 1\n')
+    result = _run(env, hermes_home, '--no-llm', '--no-recovery')
+    assert result.returncode != 0
+    assert path.read_text() == body
+    assert not (home / '.mcs/config.json').exists()
+    assert not any(line.startswith(('brew ', 'git ', 'uv ')) for line in _calls(stub_root))
+
+
+@pytest.mark.parametrize('existing', [False, True])
+def test_config_changed_before_first_lock_stops_before_software(tmp_path, existing):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    config = home / '.mcs/config.json'
+    if existing:
+        config.parent.mkdir(mode=0o700)
+        config.write_text('{"runtime_mode":"hermes"}')
+        config.chmod(0o600)
+    winner = '{"runtime_mode":"standalone"}'
+    probe = stub_root / 'runtime-check.py'
+    marker = "    case = os.environ.get('STUB_RECOVERY_RUNTIME', 'safe')"
+    injection = f'''    os.makedirs({str(config.parent)!r}, mode=0o700, exist_ok=True)
+    with open({str(config)!r}, 'w') as stream:
+        stream.write({winner!r})
+    os.chmod({str(config)!r}, 0o600)
+'''
+    probe.write_text(probe.read_text().replace(marker, injection + marker))
+    result = _run(env, hermes_home, '--no-brew', '--no-llm', '--no-plugin', '--no-services')
+    assert result.returncode != 0
+    assert '導入前の確認中に設定' in result.stderr
+    assert config.read_text() == winner
+    assert not any(line.startswith(('brew ', 'git ', 'uv ')) for line in _calls(stub_root))
 
 
 def test_manual_reinstall_keeps_interrupted_update_record(tmp_path):
@@ -791,7 +841,7 @@ def test_config_creation_race_rejects_nonprivate_winner(tmp_path, mode):
 
 @pytest.mark.parametrize('directory', ['home', 'mcs'])
 def test_config_creation_rejects_writable_parent_directory(tmp_path, directory):
-    home, _, _, env = _world(tmp_path)
+    home, _, stub, env = _world(tmp_path)
     _real_config_writer(env)
     root = home / '.mcs'
     if directory == 'mcs':
@@ -801,6 +851,8 @@ def test_config_creation_rejects_writable_parent_directory(tmp_path, directory):
                   '--no-services', '--no-recovery')
     assert result.returncode != 0
     assert not (root / 'config.json').exists()
+    assert not (root / 'data').exists()
+    assert _calls(stub) == []
     assert '本人以外に書き込みを許可' in result.stderr
     assert '設定の改変を防ぐため' in result.stderr
     assert '所有者と権限を管理者に確認' in result.stderr
@@ -1063,8 +1115,14 @@ def test_explicit_recovery_flag_persists_and_renders_selected_target(tmp_path):
 
 
 @pytest.mark.parametrize("runtime", ["unsafe", "unknown", "unsupported"])
-def test_bad_explicit_recovery_selection_precedes_any_installer_write(tmp_path, runtime):
+@pytest.mark.parametrize('prior_state', ['absent', 'empty_root', 'empty_data'])
+def test_bad_explicit_recovery_selection_precedes_any_installer_write(tmp_path, runtime, prior_state):
     home, hermes_home, stub_root, env = _world(tmp_path)
+    if prior_state != 'absent':
+        (home / '.mcs').mkdir(mode=0o700)
+    if prior_state == 'empty_data':
+        (home / '.mcs/data').mkdir(mode=0o700)
+    before = sorted(str(path.relative_to(home)) for path in home.rglob('*'))
     selected = stub_root / "independent-python"
     selected.touch()
     selected.chmod(0o700)
@@ -1072,7 +1130,8 @@ def test_bad_explicit_recovery_selection_precedes_any_installer_write(tmp_path, 
     result = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin",
                   "--no-services", "--recovery-python", str(selected))
     assert result.returncode == 1
-    assert list(home.iterdir()) == []
+    assert sorted(str(path.relative_to(home)) for path in home.rglob('*')) == before
+    assert not (home / '.mcs/data/update.lock').exists()
     assert _bootstraps(stub_root, "org.mcs.recovery") == []
 
 
@@ -1602,6 +1661,7 @@ def test_other_checkout_requires_force_repo(tmp_path):
     assert "--force-repo" in r.stderr and str(other) in r.stderr
     assert (rec / "repo_path").read_text() == f"{other}\n"
     assert _calls(stub_root) == []                     # nothing ran
+    assert not (home / '.mcs').exists()
     r2 = _run(env, hermes_home, "--force-repo")
     assert r2.returncode == 0, r2.stderr
     assert (rec / "repo_path").read_text() == f"{ROOT}\n"

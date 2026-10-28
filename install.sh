@@ -190,17 +190,32 @@ if [ "$MODE" = install ]; then
         case "$2" in ''|*[!0-7]*) return 1 ;; esac
         [ $((0$2 & 022)) -eq 0 ]
     }
-    _safe_dir "$HOME" || die "ホームの所有者または書き込み権限を確認できません。管理者に確認してください"
+    _unsafe_dir() {
+        die "$1 の所有者または書き込み権限を確認できません。所有者が本人ではないか、本人以外に書き込みを許可している可能性があります。設定の改変を防ぐため中止しました。所有者と権限を管理者に確認してください。既存設定は保持しています"
+    }
+    _check_install_dirs() {
+        _safe_dir "$HOME" || _unsafe_dir "ホーム"
+        if [ -e "$MCS_ROOT" ] || [ -L "$MCS_ROOT" ]; then
+            _safe_dir "$MCS_ROOT" || _unsafe_dir "設定フォルダー"
+        fi
+        if [ -e "$_lock_data" ] || [ -L "$_lock_data" ]; then
+            _safe_dir "$_lock_data" || _unsafe_dir "データフォルダー"
+        fi
+    }
+    _install_lock_held=0
+    acquire_install_lock() {
+    [ "$_install_lock_held" -eq 0 ] || return 0
+    _check_install_dirs
     if [ ! -e "$MCS_ROOT" ] && [ ! -L "$MCS_ROOT" ]; then
         [ -z "${MCS_UPDATE_REINSTALL:-}" ] || die "更新の設定フォルダーを確認できません"
         mkdir -m 700 "$MCS_ROOT" || die "設定フォルダーを作成できません"
     fi
-    _safe_dir "$MCS_ROOT" || die "設定フォルダーの所有者または書き込み権限を確認できません"
+    _safe_dir "$MCS_ROOT" || _unsafe_dir "設定フォルダー"
     if [ ! -e "$_lock_data" ] && [ ! -L "$_lock_data" ]; then
         [ -z "${MCS_UPDATE_REINSTALL:-}" ] || die "更新のデータフォルダーを確認できません"
         mkdir -m 700 "$_lock_data" || die "データフォルダーを作成できません"
     fi
-    _safe_dir "$_lock_data" || die "データフォルダーの所有者または書き込み権限を確認できません"
+    _safe_dir "$_lock_data" || _unsafe_dir "データフォルダー"
     if [ -n "${MCS_UPDATE_REINSTALL:-}" ]; then
         _lock_py="$MCS_ROOT/venv/bin/python3"
         [ -x "$_lock_py" ] || _lock_py="$(command -v python3 || true)"
@@ -256,6 +271,14 @@ except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
     fi
     MCS_INSTALL_UPDATE_LOCK_FD="$_install_lock_fd"
     export MCS_INSTALL_UPDATE_LOCK_FD
+    _install_lock_held=1
+    }
+    _check_install_dirs
+    # Existing installs and updater children must respect the held lock before
+    # reading settings. A fresh install creates its lock only after the guards.
+    if [ -e "$_lock_file" ] || [ -L "$_lock_file" ] || [ -n "${MCS_UPDATE_REINSTALL:-}" ]; then
+        acquire_install_lock
+    fi
 fi
 CONFIG_ABSENT=0
 CONFIG_EMPTY=0
@@ -265,7 +288,8 @@ if [ -e "$HOME/.mcs/config.json" ] || [ -L "$HOME/.mcs/config.json" ]; then
     MODE_PY="$HOME/.mcs/venv/bin/python3"
     if [ ! -x "$MODE_PY" ]; then MODE_PY="$(command -v python3 || true)"; fi
     [ -n "$MODE_PY" ] || die "既存設定の接続方法を確認するには Python が必要です。Python を導入して再実行してください"
-    MODE_STATUS="$("$MODE_PY" - "$HOME/.mcs/config.json" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" <<'PYMODE'
+    read_install_config() {
+    "$MODE_PY" - "$HOME/.mcs/config.json" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" <<'PYMODE'
 import json
 import hashlib
 import os
@@ -302,7 +326,8 @@ try:
 except (OSError, ValueError, AttributeError, TypeError, RecursionError):
     raise SystemExit(1) from None
 PYMODE
-)" || die "config.json を読み取れないため接続方法を決定できません。設定ファイルを修復してください（--mode は読み取れる設定の接続方法だけを上書きします）"
+    }
+    MODE_STATUS="$(read_install_config)" || die "config.json を読み取れないため接続方法を決定できません。設定ファイルを修復してください（--mode は読み取れる設定の接続方法だけを上書きします）"
     RUNTIME_MODE="${MODE_STATUS%%:*}"
     MODE_DETAIL="${MODE_STATUS#*:}"
     CONFIG_BASE="${MODE_DETAIL#*:}"
@@ -827,29 +852,6 @@ if [ "$MODE" != install ]; then
     exit 0
 fi
 
-# Inspect the opt-out record before software, service or config changes.
-# The empty state needs no Python until the runtime has been installed.
-set --
-[ "$SKIP_BREW" -eq 0 ] || set -- "$@" --no-brew
-[ "$SKIP_LLM" -eq 0 ] || set -- "$@" --no-llm
-[ "$SKIP_PLUGIN" -eq 0 ] || set -- "$@" --no-plugin
-[ "$SKIP_RECOVERY" -eq 0 ] || set -- "$@" --no-recovery
-OPTIONS_BASE=empty
-OPTIONS_ACTION=inspect
-[ -z "${MCS_UPDATE_REINSTALL:-}" ] || OPTIONS_ACTION=inspect-update
-if { [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ] || [ -e "$MCS_DATA" ] || [ -L "$MCS_DATA" ] || [ -e "$MCS_ROOT/.install-options-migration.pending" ] || [ -L "$MCS_ROOT/.install-options-migration.pending" ]; }; then
-    OPTIONS_PY="${MODE_PY:-}"
-    [ -n "$OPTIONS_PY" ] || OPTIONS_PY="$(command -v python3 || true)"
-    [ -n "$OPTIONS_PY" ] || die "以前の導入設定の確認には Python が必要です。変更は行っていません"
-    OPTIONS_BASE="$("$OPTIONS_PY" "$REPO/mcs/ops/install_options.py" "$OPTIONS_ACTION" "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" - "$@")" \
-        || die "導入設定を変更せず中止しました。旧記録と設定を確認してください"
-fi
-if [ -n "${MCS_UPDATE_REINSTALL:-}" ] && [ -n "${MCS_UPDATE_OPTIONS_BASE:-}" ]; then
-    case "$OPTIONS_BASE" in migrate:*|skip:*) _options_current="${OPTIONS_BASE#*:}" ;; *) _options_current="$OPTIONS_BASE" ;; esac
-    [ "$_options_current" = "$MCS_UPDATE_OPTIONS_BASE" ] \
-        || die "導入設定が変更されたため再導入を開始しません。現在の設定を確認してください"
-fi
-
 # ---------------------------------------------------------- guards
 [ "$IS_ROOT" -eq 0 ] || die "install.sh は root や sudo で実行しないでください。自分のホームへ導入するため、通常のユーザーで再実行してください"
 # mcs_setup services renders cron wrappers/plists against ~/.hermes (its
@@ -897,6 +899,46 @@ if [ -t 0 ] && [ -t 1 ]; then
     printf '  1) この内容で導入する（推奨）\n  2) 今は中止する\n'
     choose '選択 [1・推奨 / 2 / 0・中止]: '
     [ "$_answer" = 1 ] || { printf '導入を中止しました。\n'; exit 130; }
+fi
+
+# All read-only guards have passed. Hold the lock before any software or
+# settings change; creating the lock alone is not an existing opt-out record.
+_prechecks_locked="$_install_lock_held"
+acquire_install_lock
+if [ "$_prechecks_locked" -eq 0 ]; then
+    if [ "$CONFIG_ABSENT" -eq 1 ]; then
+        if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ]; then
+            die "導入前の確認中に設定が作成されました。設定を保持して中止したため、内容を確認して再実行してください"
+        fi
+    else
+        _current_mode="$(read_install_config)" \
+            || die "導入前の確認中に設定を読み取れなくなりました。設定を保持して中止しました"
+        [ "${_current_mode#*:}" = "$MODE_DETAIL" ] \
+            || die "導入前の確認中に設定が変更されました。設定を保持して中止したため、内容を確認して再実行してください"
+    fi
+fi
+
+# Inspect the opt-out record before software, service or config changes.
+# The empty state needs no Python until the runtime has been installed.
+set --
+[ "$SKIP_BREW" -eq 0 ] || set -- "$@" --no-brew
+[ "$SKIP_LLM" -eq 0 ] || set -- "$@" --no-llm
+[ "$SKIP_PLUGIN" -eq 0 ] || set -- "$@" --no-plugin
+[ "$SKIP_RECOVERY" -eq 0 ] || set -- "$@" --no-recovery
+OPTIONS_BASE=empty
+OPTIONS_ACTION=inspect
+[ -z "${MCS_UPDATE_REINSTALL:-}" ] || OPTIONS_ACTION=inspect-update
+if { [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ] || [ -e "$MCS_DATA/install_options.json" ] || [ -L "$MCS_DATA/install_options.json" ] || [ -e "$MCS_ROOT/.install-options-migration.pending" ] || [ -L "$MCS_ROOT/.install-options-migration.pending" ]; }; then
+    OPTIONS_PY="${MODE_PY:-}"
+    [ -n "$OPTIONS_PY" ] || OPTIONS_PY="$(command -v python3 || true)"
+    [ -n "$OPTIONS_PY" ] || die "以前の導入設定の確認には Python が必要です。変更は行っていません"
+    OPTIONS_BASE="$("$OPTIONS_PY" "$REPO/mcs/ops/install_options.py" "$OPTIONS_ACTION" "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" - "$@")" \
+        || die "導入設定を変更せず中止しました。旧記録と設定を確認してください"
+fi
+if [ -n "${MCS_UPDATE_REINSTALL:-}" ] && [ -n "${MCS_UPDATE_OPTIONS_BASE:-}" ]; then
+    case "$OPTIONS_BASE" in migrate:*|skip:*) _options_current="${OPTIONS_BASE#*:}" ;; *) _options_current="$OPTIONS_BASE" ;; esac
+    [ "$_options_current" = "$MCS_UPDATE_OPTIONS_BASE" ] \
+        || die "導入設定が変更されたため再導入を開始しません。現在の設定を確認してください"
 fi
 
 # every non-zero exit from here on is a stopped install, not a usage error
