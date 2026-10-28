@@ -195,11 +195,12 @@ def test_request_id_has_only_the_bounded_provider_contract(request_id, expected)
 def test_only_known_unpriced_usage_metadata_is_accepted():
     usage = {"input_tokens": 10, "output_tokens": 5, "service_tier": "standard",
              "inference_geo": "global", "server_tool_use": {"web_search_requests": 0},
-             "output_tokens_details": {"thinking_tokens": 2}}
+             "output_tokens_details": {"thinking_tokens": 2}, "speed": "standard"}
     client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
         200, {}, json.dumps(_reply(usage=usage)).encode()))
     assert client.complete("synthetic", deadline=time.monotonic() + 10)["usage"]["input_tokens"] == 10
-    for extra in ({"service_tier": "priority"}, {"inference_geo": "us"}, {"new_charge_usd": "10"},
+    for extra in ({"speed": "fast"}, {"speed": None}, {"speed": True}, {"speed": "future"},
+                  {"service_tier": "priority"}, {"inference_geo": "us"}, {"new_charge_usd": "10"},
                   {"service_tier": {"tier": "standard"}}, {"inference_geo": ["global"]}, {"service_tier": True},
                   {"server_tool_use": {"web_search_requests": 1}}, {"unknown_flag": None},
                   {"output_tokens_details": {"thinking_tokens": -1}}, {"output_tokens_details": 3}):
@@ -207,6 +208,30 @@ def test_only_known_unpriced_usage_metadata_is_accepted():
             200, {}, json.dumps(_reply(usage={"input_tokens": 1, "output_tokens": 1, **e})).encode()))
         with pytest.raises(a.AnthropicError, match="pricing_unverified"):
             client.complete("synthetic", deadline=time.monotonic() + 10)
+
+
+@pytest.mark.parametrize("speed,accepted", [("standard", True), ("fast", False), (None, False)])
+def test_speed_metadata_preserves_reservation_accounting(speed, accepted):
+    events = []
+    usage = {"input_tokens": 10, "output_tokens": 5, "cache_creation_input_tokens": 3,
+             "cache_read_input_tokens": 2, "cache_creation": {
+                 "ephemeral_5m_input_tokens": 1, "ephemeral_1h_input_tokens": 2}, "speed": speed}
+    client = a.AnthropicClient("synthetic", post_fn=lambda *args: (
+        200, {}, json.dumps(_reply(usage=usage)).encode()))
+    def complete():
+        return client.complete("synthetic", deadline=time.monotonic() + 10,
+                               reserve_fn=lambda *args: "synthetic-reservation",
+                               after_result=lambda reservation, meta: events.append((reservation, meta)))
+    if accepted:
+        result = complete()
+        assert result["usage"] == {key: value for key, value in usage.items() if key != "speed"}
+        assert events[0][1]["usage"] == result["usage"] and events[0][1]["error_kind"] is None
+    else:
+        with pytest.raises(a.AnthropicError, match="pricing_unverified"):
+            complete()
+        assert events[0][1]["usage"] is None and events[0][1]["error_kind"] == "pricing_unverified"
+    assert len(events) == 1 and events[0][0] == "synthetic-reservation"
+    assert events[0][1]["http_class"] == "http_200"
 
 
 def test_a_dated_model_id_is_not_assumed_to_share_the_price():

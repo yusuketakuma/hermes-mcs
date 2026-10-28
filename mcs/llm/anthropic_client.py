@@ -28,7 +28,8 @@ class AnthropicError(Exception):
 # Usage metadata known not to change the price at its listed values; any other
 # field or value (a priority tier, a regional inference multiplier, a new
 # counter) may be billed differently and stops the route as pricing_unverified.
-_UNPRICED_USAGE = {"service_tier": {"standard"}, "inference_geo": {"global", "not_available"}}
+_UNPRICED_USAGE = {"service_tier": {"standard"}, "inference_geo": {"global", "not_available"},
+                   "speed": {"standard"}}
 
 
 def _unpriced(key, value):
