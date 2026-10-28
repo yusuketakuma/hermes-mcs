@@ -27,7 +27,7 @@ def test_hermes_uses_explicit_profile_and_reports_failure(monkeypatch, tmp_path)
     monkeypatch.setattr("builtins.input", lambda _: next(choices))
     monkeypatch.setattr(menu.mcs_util, "hermes_exe", lambda cfg: "/synthetic/hermes")
     seen = []
-    monkeypatch.setattr(hermes_credential_setup, "run", lambda *args: seen.append(args) or 1)
+    monkeypatch.setattr(hermes_credential_setup, "run", lambda *args, **kwargs: seen.append(args) or 1)
     assert menu.run(tmp_path, {}) == 1
     assert seen == [("/synthetic/hermes", "profile-a", "slack")]
 
@@ -68,9 +68,61 @@ def test_setup_entry_uses_verified_config(monkeypatch, tmp_path):
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(cfg_path))
     seen = []
-    monkeypatch.setattr(menu, "run", lambda root, cfg: seen.append((root, cfg)) or 0)
+    monkeypatch.setattr(menu, "run", lambda root, cfg, **kwargs: seen.append((root, cfg)) or 0)
     assert mcs_setup.main(["api-keys"]) == 0
     assert seen == [(str(tmp_path), {"runtime_mode": "standalone"})]
     cfg_path.write_text('{invalid', encoding="utf-8")
     assert mcs_setup.main(["api-keys"]) == 1
     assert len(seen) == 1
+
+
+def test_setup_entry_refuses_writable_config(monkeypatch, tmp_path):
+    import mcs_setup
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text('{"runtime_mode":"hermes","hermes_bin":"/synthetic"}', encoding="utf-8")
+    cfg_path.chmod(0o666)
+    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(cfg_path))
+    monkeypatch.setattr(menu, "run", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
+    assert mcs_setup.main(["api-keys"]) == 1
+
+
+def test_setup_entry_detects_config_change_before_save(monkeypatch, tmp_path):
+    import mcs_setup
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text('{"runtime_mode":"hermes"}', encoding="utf-8")
+    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(cfg_path))
+    def observe(root, cfg, *, current):
+        assert current()
+        cfg_path.write_text('{"runtime_mode":"standalone"}', encoding="utf-8")
+        assert not current()
+        return 1
+    monkeypatch.setattr(menu, "run", observe)
+    assert mcs_setup.main(["api-keys"]) == 1
+
+
+def test_changed_runtime_stops_before_connector(monkeypatch, tmp_path):
+    monkeypatch.setattr(menu.api_key_setup, "is_terminal", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _: "2")
+    monkeypatch.setattr(menu.subprocess, "run", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
+    assert menu.run(tmp_path, {"runtime_mode": "standalone"}, current=lambda: False) == 1
+
+
+def test_setup_entry_refuses_symlink_and_writable_parent(monkeypatch, tmp_path):
+    import mcs_setup
+    target = tmp_path / "original.json"
+    target.write_text('{}', encoding="utf-8")
+    cfg_path = tmp_path / "config.json"
+    cfg_path.symlink_to(target)
+    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(cfg_path))
+    monkeypatch.setattr(menu, "run", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
+    assert mcs_setup.main(["api-keys"]) == 1
+    cfg_path.unlink()
+    cfg_path.write_text('{}', encoding="utf-8")
+    tmp_path.chmod(0o777)
+    try:
+        assert mcs_setup.main(["api-keys"]) == 1
+    finally:
+        tmp_path.chmod(0o700)

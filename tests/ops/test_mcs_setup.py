@@ -1848,7 +1848,7 @@ def test_plugin_integration_token_via_env_to_env_file(monkeypatch):
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
     mcs_setup._apply_plugin_integration(dict(_DISCORD_CFG),
                                         _plugin_args())
-    assert ("", "DISCORD_BOT_TOKEN", "tok") in sets
+    assert ("default", "DISCORD_BOT_TOKEN", "tok") in sets
 
 
 def test_plugin_integration_slack_writes_scope_and_tokens(monkeypatch):

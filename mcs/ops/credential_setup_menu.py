@@ -10,7 +10,7 @@ import mcs_runtime
 import mcs_util
 
 
-def run(root, cfg):
+def run(root, cfg, *, current=None):
     """端末で設定先を選び、各接続の既存の入力手順へ進みます。"""
     if not api_key_setup.is_terminal():
         print("認証情報の設定は本人の端末で mcs setup api-keys を実行してください。")
@@ -33,6 +33,9 @@ def run(root, cfg):
         if choice == "1":
             result = api_key_setup.run(root)
         elif choice in ("2", "3"):
+            if current is not None and not current():
+                print("設定が変更されたため、接続先の認証情報は保存していません。もう一度設定を開いてください。")
+                return 1
             transport = "slack" if choice == "2" else "discord"
             if standalone:
                 command = [sys.executable, "-m", "mcs_standalone", "init", "--root", str(root),
@@ -47,7 +50,8 @@ def run(root, cfg):
                 try:
                     import hermes_credential_setup
                     profile = input("保存するHermesプロファイル名（既定は空欄）: ").strip()
-                    result = hermes_credential_setup.run(mcs_util.hermes_exe(cfg), profile, transport)
+                    result = hermes_credential_setup.run(mcs_util.hermes_exe(cfg), profile, transport,
+                                                         admission=current)
                 except (EOFError, KeyboardInterrupt):
                     print("\n接続トークンの設定を中止しました。")
                     return 130
@@ -58,6 +62,9 @@ def run(root, cfg):
                     print("この版ではHermesのトークン設定を開けません。導入状態を確認してください。")
                     result = 1
         elif choice == "4":
+            if current is not None and not current():
+                print("設定が変更されたため、接続先の認証情報は保存していません。もう一度設定を開いてください。")
+                return 1
             command = [sys.executable, "-m", "lineworks_adapter", "credentials", "--root", str(root)]
             try:
                 result = subprocess.run(command, cwd=checkout, check=False).returncode

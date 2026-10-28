@@ -339,14 +339,14 @@ def _plugin_profile(args, transport):
     """Resolve the actual Hermes destination before any setup writer runs."""
     profile = getattr(args, "plugin_profile", None)
     if profile is not None:
-        return profile
+        return profile or "default"
     if args.yes:
-        return ""
+        return "default"
     label = {"discord": "Discord", "slack": "Slack"}[transport]
     return input(
         "\n連携設定を保存するHermesの設定名（プロファイル）"
         f"。複数の接続設定がある場合は、{label}を担当する設定名を入力してください。"
-        "空欄で既定の設定を使います: ").strip()
+        "空欄で既定の設定を使います: ").strip() or "default"
 
 
 def _apply_plugin_integration(cfg: dict, args) -> bool:
@@ -480,6 +480,30 @@ def _config_problem() -> str | None:
             f"{type(e).__name__}: not a regular file within {mcs_util.CONFIG_MAX_BYTES} bytes"
     return None if isinstance(raw, dict) else \
         f"top level is {type(raw).__name__}, not an object"
+
+
+def _credential_config_snapshot():
+    """Read the credential setup destination only from a trusted, unchanged config."""
+    parent = Path(CONF_PATH).parent
+    before = os.stat(parent, follow_symlinks=False)
+    if (not stat.S_ISDIR(before.st_mode) or before.st_uid != os.getuid()
+            or before.st_mode & 0o022):
+        raise ValueError('config_parent_untrusted')
+    raw, info = read_regular_nofollow(CONF_PATH, mcs_util.CONFIG_MAX_BYTES, ValueError, with_stat=True)
+    current = os.stat(CONF_PATH, follow_symlinks=False)
+    after = os.stat(parent, follow_symlinks=False)
+    def identity(s):
+        return (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+    if (len(raw) > mcs_util.CONFIG_MAX_BYTES or info.st_uid != os.getuid()
+            or info.st_mode & 0o022 or info.st_nlink != 1
+            or identity(info) != identity(current)
+            or (before.st_dev, before.st_ino, before.st_mode, before.st_uid)
+            != (after.st_dev, after.st_ino, after.st_mode, after.st_uid)):
+        raise ValueError('config_untrusted')
+    cfg = mcs_util.parse_config(raw)
+    if not isinstance(cfg, dict):
+        raise ValueError('config_invalid')
+    return cfg, (identity(info), (before.st_dev, before.st_ino, before.st_mode, before.st_uid), raw)
 
 
 def _guard_config(yes: bool) -> bool:
@@ -1806,10 +1830,13 @@ def main(argv: list[str] | None = None) -> int:
     def api_keys(_args):
         import credential_setup_menu
         try:
-            cfg = mcs_util.parse_config(mcs_util._read_local(CONF_PATH, mcs_util.CONFIG_MAX_BYTES))
-            if not isinstance(cfg, dict):
-                raise ValueError('config_invalid')
-            return credential_setup_menu.run(HOME, cfg)
+            cfg, original = _credential_config_snapshot()
+            def current():
+                try:
+                    return _credential_config_snapshot()[1] == original
+                except (OSError, ValueError, RecursionError):
+                    return False
+            return credential_setup_menu.run(HOME, cfg, current=current)
         except (OSError, ValueError, RecursionError):
             print('設定を読み取れないため、認証情報の設定を開始できません。設定を確認してください。')
             return 1
