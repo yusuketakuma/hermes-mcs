@@ -227,7 +227,7 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 
 `install.sh` が行うこと（6 ステージ）。**失敗したステージで install は
 止まり**（非 0 終了・`エラー: 導入を中断しました。失敗した段階の原因を解消し、install.sh を再実行してください`）、後続ステージは実行されない。原因を直して
-再実行すれば、完了済みの部分は skip され中断箇所から続く:
+再実行すると、既存の状態を確認して必要な段階を進める:
 
 | # | 内容 | 再実行・失敗時 |
 |---|---|---|
@@ -237,6 +237,8 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 | 4 | llama-server を `ai.mcs.llamaserver` LaunchAgent で常駐化（`127.0.0.1:8080`・`-np 3`・Qwen3.5-9B GGUF 約 5.7 GB を `~/.hermes/models/` へ DL）。hermes 管理の `ai.hermes.llamacpp` の plist があれば導入せず、未ロードで `:8080` も無応答なら bootstrap コマンドを警告で案内。plist 内容が変わった場合、サーバが応答中なら再読込せず適用コマンドを警告で案内（処理中の要求を切らない）、無応答なら再読込 | モデルは固定した Hugging Face の revision から DL し、`.part` から続きを再開（`curl -C -`）。DL 後は `install.sh` に記録した sha256 と照合（`MCS_MODEL_SHA256` による上書きは `MCS_ALLOW_MODEL_SHA_OVERRIDE=1` を併せて指定したときだけ有効で、警告を出す）し、不一致なら `.part` を消して停止。`llama-server` 不在・DL 失敗・bootstrap 失敗で停止 |
 | 5 | `~/.mcs/data{,/cmd,/cmd_int}` を作成し、`mcs_setup.py services` — launchd agent 5件 + hermes cronの定期6件（`backup.enabled=true`ならoffsiteを加え7件）の配置・登録（§6 参照） | services が問題を報告したら停止 |
 | 6 | 復旧 watchdog `org.mcs.recovery` を独立系統で導入（`~/.mcs-recovery/mcs_recover.py`、旧版は `.prev`。復旧対象の checkout を `~/.mcs-recovery/repo_path` に記録。15分間隔で中断した update を復旧）。内容・記録が変わった時か未ロード時だけ再読込 | macOS では配備前に復旧用 Python（既定は `/opt/homebrew/bin/python3.14`・`/usr/local/bin/python3.14`・`/usr/bin/python3.14` の順で最初に実行できるもの、または `--recovery-python`）の Python ≥3.14 と SQLite の WAL-reset 修正を検査し、影響版・版不明なら tool・plist を配備せず停止（自動で別 Python へ切り替えない）。bootstrap 失敗でも停止 |
+
+ステージ2では、`~/.mcs/config.json` がなければ本人だけが読み書きできる設定ファイルを作成します。既存の設定は保持し、`--preflight` と `--dry-run` では作成しません。ファイルの作成だけでは初期設定は完了しません。
 
 最後に「ソフトの準備が完了しました」として各段階の結果と、次に実行する
 初期設定のコマンド（`mcs setup` と venv インタプリタのフルパス付きの `init`）、
@@ -282,7 +284,7 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 
 対話ウィザードで推奨コースと詳細コースを選びます。推奨コースは必須情報・通知先・権限範囲を確認し、高度な設定は既存値を保持、未設定なら既定値を使います。詳細コースは全設定を順に案内します。各項目は説明と選択肢を表示し、Enterで表示された値を使います。関連機能がオフの項目は自動スキップします。`init` が行うこと:
 
-- `~/.mcs/config.json` を生成（0600）
+- `~/.mcs/config.json` の既存値を保持し、必要な設定を保存（0600）。ファイルがなければ作成
 - Keychain `mcs-adapter` へ MCS パスワードを登録
 - `~/.mcs/.env` に `MCS_PASSWORD`（Keychain ロック中のフォールバック）
   と `TYPESAFE_API_KEY`（環境変数で渡した場合）を保存

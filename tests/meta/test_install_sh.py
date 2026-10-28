@@ -393,6 +393,133 @@ def test_install_accepts_default_data_root_spellings(tmp_path, root_value):
     assert (home / ".mcs/venv").is_dir()
 
 
+def _real_config_writer(env):
+    env["STUB_REAL_PYTHON"] = sys.executable
+    return env
+
+
+def _race_config_writer(stub_root, raw, *, symlink=False):
+    script = stub_root / "runtime-check.py"
+    text = script.read_text()
+    marker = "exec(compile(code, '<installer-runtime-check>', 'exec'))"
+    assert text.count(marker) == 1
+    inject = f"""
+if sys.argv[0] == '-':
+    import safe_io
+    from pathlib import Path
+    original_publish = safe_io.publish_new_bytes
+    def race_publish(path, body):
+        target = Path(path)
+        if {symlink!r}:
+            other = target.parent.parent / 'synthetic-target.json'
+            other.write_text({raw!r})
+            target.symlink_to(other)
+        else:
+            target.write_text({raw!r})
+        return original_publish(path, body)
+    safe_io.publish_new_bytes = race_publish
+"""
+    script.write_text(text.replace(marker, inject + marker))
+
+
+def test_noninteractive_install_creates_private_unconfigured_config(tmp_path):
+    home, _, _, env = _world(tmp_path)
+    _real_config_writer(env)
+    flags = ('--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    result = _run(env, None, *flags)
+    assert result.returncode == 0, result.stdout + result.stderr
+    config = home / '.mcs/config.json'
+    assert config.read_bytes() == b'{}\n'
+    assert config.stat().st_mode & 0o777 == 0o600
+    assert 'まだ利用開始前の初期設定が必要' in result.stdout
+    before = (config.read_bytes(), config.stat().st_ino, config.stat().st_mtime_ns)
+    result = _run(env, None, *flags)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (config.read_bytes(), config.stat().st_ino, config.stat().st_mtime_ns) == before
+
+
+@pytest.mark.parametrize('runtime', ['hermes', 'standalone'])
+def test_explicit_runtime_is_written_into_new_private_config(tmp_path, runtime):
+    home, _, _, env = _world(tmp_path)
+    _real_config_writer(env)
+    result = _run(env, None, '--mode', runtime, '--no-brew', '--no-llm',
+                  '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    config = home / '.mcs/config.json'
+    assert json.loads(config.read_text()) == {'runtime_mode': runtime}
+    assert config.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize('mode', ['preflight', 'dry-run'])
+def test_config_is_not_created_during_readonly_install_modes(tmp_path, mode):
+    home, _, _, env = _world(tmp_path)
+    _real_config_writer(env)
+    _run(env, None, '--' + mode, '--no-brew', '--no-llm', '--no-plugin',
+         '--no-services', '--no-recovery')
+    assert not (home / '.mcs/config.json').exists()
+
+
+@pytest.mark.parametrize('explicit', [False, True])
+@pytest.mark.parametrize('raw,accepted', [
+    ('{"runtime_mode":"hermes","synthetic":{"keep":true}}', True),
+    ('{"runtime_mode":"standalone"}', False),
+    ('{broken', False),
+    ('{"runtime_mode":"hermes","runtime_mode":"standalone"}', False),
+    ('{"runtime_mode":"hermes","notify_target":123}', False),
+])
+def test_config_creation_race_preserves_and_checks_winner(tmp_path, explicit, raw, accepted):
+    home, _, stub, env = _world(tmp_path)
+    _real_config_writer(env)
+    _race_config_writer(stub, raw)
+    flags = (['--mode', 'hermes'] if explicit else []) + [
+        '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery']
+    result = _run(env, None, *flags)
+    assert (result.returncode == 0) is accepted, result.stdout + result.stderr
+    assert (home / '.mcs/config.json').read_text() == raw
+    if not accepted:
+        assert '既存設定を保持' in result.stderr
+
+
+def test_config_creation_race_never_follows_a_symlink(tmp_path):
+    home, _, stub, env = _world(tmp_path)
+    _real_config_writer(env)
+    raw = '{"runtime_mode":"hermes"}'
+    _race_config_writer(stub, raw, symlink=True)
+    result = _run(env, None, '--no-brew', '--no-llm', '--no-plugin',
+                  '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    config = home / '.mcs/config.json'
+    assert config.is_symlink()
+    assert (home / 'synthetic-target.json').read_text() == raw
+
+
+def test_config_creation_race_rejects_different_recovery_selection(tmp_path):
+    home, _, stub, env = _world(tmp_path)
+    _real_config_writer(env)
+    selected = str(stub / 'bin/python3.14')
+    raw = json.dumps({'runtime_mode': 'hermes', 'recovery_python': '/synthetic/other-python'})
+    _race_config_writer(stub, raw)
+    result = _run(env, None, '--mode', 'hermes', '--recovery-python', selected,
+                  '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    assert (home / '.mcs/config.json').read_text() == raw
+    assert '既存設定を保持' in result.stderr
+
+
+def test_failed_later_install_stage_keeps_created_config_for_retry(tmp_path):
+    home, _, _, env = _world(tmp_path)
+    _real_config_writer(env)
+    flags = ('--no-brew', '--no-llm', '--no-plugin', '--no-recovery')
+    result = _run({**env, 'STUB_FAIL_SERVICES': '1'}, None, *flags)
+    assert result.returncode != 0
+    config = home / '.mcs/config.json'
+    assert config.read_bytes() == b'{}\n'
+    before = (config.read_bytes(), config.stat().st_ino, config.stat().st_mtime_ns)
+    result = _run(env, None, *flags)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (config.read_bytes(), config.stat().st_ino, config.stat().st_mtime_ns) == before
+
+
 @pytest.mark.parametrize("runtime", ["unsafe", "unknown", "failed", "unsupported"])
 @pytest.mark.parametrize("mode", ["install", "preflight", "dry-run"])
 def test_recovery_runtime_gate_fails_before_watchdog_installation(

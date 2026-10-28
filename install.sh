@@ -175,6 +175,7 @@ if [ "${MCS_ROOT+x}" = x ]; then
 fi
 MCS_ROOT="$(abspath "$HOME")/.mcs"
 export MCS_ROOT
+CONFIG_ABSENT=0
 if [ -e "$HOME/.mcs/config.json" ] || [ -L "$HOME/.mcs/config.json" ]; then
     MODE_PY="$HOME/.mcs/venv/bin/python3"
     if [ ! -x "$MODE_PY" ]; then MODE_PY="$(command -v python3 || true)"; fi
@@ -204,6 +205,8 @@ except (OSError, ValueError, AttributeError, TypeError, RecursionError):
 PYMODE
 )" || die "config.json を読み取れないため接続方法を決定できません。設定ファイルを修復してください（--mode は読み取れる設定の接続方法だけを上書きします）"
     case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "接続方法を読み取れません。--mode hermes または --mode standalone を指定してください" ;; esac
+else
+    CONFIG_ABSENT=1
 fi
 DEFAULT_HERMES_HOME="$(abspath "$HOME")/.hermes"
 ENV_HERMES_HOME="${HERMES_HOME:-}"
@@ -1035,17 +1038,56 @@ if recovery_wanted; then
     RECOVERY_PYTHON="$(recovery_runtime_ok "$MCS_PY")" \
         || die "指定した復旧用 Python の安全性を確認できません。設定は保存していません"
 fi
-# Persist explicit selections only; never discard an unreadable config.
-if [ "$RUNTIME_EXPLICIT" -eq 1 ] || [ -n "$RECOVERY_OPTION" ]; then
-    "$MCS_PY" - "$REPO" "$RUNTIME_MODE" "$RECOVERY_OPTION" <<'PYMODE'
-import json, sys
+# Create the initial local config, or persist explicitly selected settings.
+if [ "$CONFIG_ABSENT" -eq 1 ] || [ "$RUNTIME_EXPLICIT" -eq 1 ] || [ -n "$RECOVERY_OPTION" ]; then
+    "$MCS_PY" - "$REPO" "$RUNTIME_MODE" "$RECOVERY_OPTION" "$CONFIG_ABSENT" "$RUNTIME_EXPLICIT" "$RECOVERY_PYTHON" <<'PYMODE'
+import json, os, stat, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "mcs"))
 import _mcs_path
 import lifecycle_io
 import runtime_inspection
-from mcs_util import CONF_PATH, REPO
-from safe_io import atomic_write
+from mcs_util import CONF_PATH, CONFIG_MAX_BYTES, REPO, parse_config
+from safe_io import atomic_write, publish_new_bytes, read_regular_nofollow
+
+if sys.argv[4] == "1":
+    cfg = {}
+    if sys.argv[5] == "1" or sys.argv[3]:
+        cfg["runtime_mode"] = sys.argv[2]
+    if sys.argv[3]:
+        cfg["recovery_python"] = sys.argv[3]
+    why = runtime_inspection.configured_recovery_problem(cfg, sys.argv[1], checkout=REPO)
+    if why:
+        raise SystemExit("復旧用 Python の設定に問題があります: " + why + "。設定は保存していません")
+    path = Path(CONF_PATH)
+    body = (json.dumps(cfg, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    try:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        publish_new_bytes(path, body)
+    except FileExistsError:
+        try:
+            raw, opened = read_regular_nofollow(path, CONFIG_MAX_BYTES, ValueError, with_stat=True)
+            current = path.lstat()
+            identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_size,
+                                  s.st_mtime_ns, s.st_ctime_ns)
+            if (len(raw) > CONFIG_MAX_BYTES or not stat.S_ISREG(current.st_mode) or opened.st_uid != os.getuid()
+                    or identity(opened) != identity(current)):
+                raise ValueError
+            winner = parse_config(raw)
+            if (not isinstance(winner, dict) or winner.get("runtime_mode", "hermes") != sys.argv[2]
+                    or sys.argv[3] and winner.get("recovery_python") != sys.argv[3]
+                    or sys.argv[6] and runtime_inspection.recovery_python(winner) != sys.argv[6]):
+                raise ValueError
+            from mcs_config import validate_config
+            errors, _ = validate_config(winner)
+            if any(not error.startswith("必須の設定項目がありません: ") for error in errors):
+                raise ValueError
+        except (OSError, ValueError, TypeError, RecursionError):
+            raise SystemExit("初期設定の作成中に別の設定が保存されました。既存設定を保持したため、内容を確認してから再実行してください") from None
+    except OSError:
+        raise SystemExit("初期設定ファイルを作成できません。保存先を確認してから再実行してください") from None
+    raise SystemExit(0)
+
 try:
     cfg = lifecycle_io.read_owner_config(CONF_PATH)
 except ValueError as exc:

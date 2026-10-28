@@ -343,6 +343,85 @@ def test_apply_reapply_and_bound_rollback_preserve_released_records(
     assert _records(backup) == original
 
 
+@pytest.mark.parametrize("choice", [None, False, True], ids=["unset", "off", "on"])
+def test_update_and_rollback_preserve_settings_and_follow_release_defaults(
+        tmp_path, monkeypatch, updater, choice):
+    path = next(p for p in ELIGIBLE
+                if p["source"] == "v1.0.29" and p["runtime"] == "hermes")
+    objects, _, config, _, _ = _world(tmp_path, monkeypatch, updater, path)
+    # Isolate settings from schema rollback: this synthetic live DB already
+    # uses the target schema, so rollback does not restore an older backup.
+    with closing(ledger.Ledger(updater.LEDGER)):
+        pass
+
+    cfg = {"runtime_mode": "hermes", "mcs_login_id": "synthetic",
+           "notify_target": "local", "update": {"mode": "notify"},
+           "optional_features": {"future_feature": {"preserve": [1, 2]}},
+           "future_extension": {"preserve": "synthetic"}}
+    if choice is not None:
+        cfg["optional_features"]["csdc"] = choice
+    config.write_text(json.dumps(cfg, indent=2) + "\n")
+    config_bytes = config.read_bytes()
+    monkeypatch.setattr(mcs_util, "load_config", lambda: json.loads(config.read_bytes()))
+
+    # Both synthetic trees contain the actual feature implementation. Only
+    # the new tree's default differs, as a future release might change it.
+    relative = "mcs/core/mcs_config.py"
+    source = (Path(__file__).resolve().parents[2] / relative).read_bytes()
+    old_default = b'OPTIONAL_FEATURE_DEFAULTS = {"csdc": False}'
+    assert source.count(old_default) == 1
+    target = source.replace(old_default, b'OPTIONAL_FEATURE_DEFAULTS = {"csdc": True}')
+    objects.old[relative] = source
+    objects.new[relative] = target
+    objects.blobs.update({_blob_id(source): source, _blob_id(target): target})
+    objects.materialize(objects.old)
+    guarded_operations = []
+    real_git = updater._git
+
+    def guarded_git(args, *extra, **kwargs):
+        if args[0] in ("merge", "reset"):
+            assert Path(updater.MARKER_PATH).exists()
+            assert updater.acquire_update_lock() is None
+            assert updater.acquire_run_lock(updater.RUN_LOCK) is None
+            guarded_operations.append(args[0])
+        return real_git(args, *extra, **kwargs)
+
+    monkeypatch.setattr(updater, "_git", guarded_git)
+
+    def assert_settings(code, expected):
+        current = objects.root / relative
+        assert current.read_bytes() == code
+        assert config.read_bytes() == config_bytes
+        stored = json.loads(config.read_bytes())
+        assert stored == cfg
+        namespace = {"__name__": "synthetic_release_config"}
+        exec(compile(current.read_bytes(), str(current), "exec"), namespace)
+        assert namespace["feature_enabled"](stored, "csdc") is expected
+
+    old_value = False if choice is None else choice
+    new_value = True if choice is None else choice
+    assert_settings(source, old_value)
+    result = updater.plan(objects.target)
+    assert result["route"] == "apply" and not result["blockers"]
+    assert result["schema_bump"] is None
+    assert_settings(source, old_value)
+
+    assert updater.apply(objects.target, objects.after, None) == 0
+    applied = updater.journal_store.load_state(updater.STATE_PATH)["applied"]
+    assert len(applied) == 1 and applied[0]["schema_bump"] is False
+    assert_settings(target, new_value)
+    assert updater.apply(objects.target, objects.after, None) == 0
+    assert len(updater.journal_store.load_state(updater.STATE_PATH)["applied"]) == 1
+    assert_settings(target, new_value)
+
+    assert updater.rollback("synthetic-settings-rollback") == 0
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["executed"]["synthetic-settings-rollback"]["result"] == "rolled_back"
+    assert objects.head == objects.before
+    assert_settings(source, old_value)
+    assert guarded_operations == ["merge", "reset"]
+
+
 @pytest.mark.parametrize("path", ELIGIBLE, ids=_id)
 def test_failed_reinstall_rolls_back_before_schema_migration(
         tmp_path, monkeypatch, updater, path):

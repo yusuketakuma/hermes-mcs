@@ -17,7 +17,8 @@ Slack・Discordでは、元の投稿をチャンネルのカードに、後か�
 > | このMacの状態 | 従う手順書 |
 > |---|---|
 > | `~/.mcs/config.json` も `~/.mcs-recovery/repo_path` も無い（新規） | [SETUP_AGENT.md](docs/guides/SETUP_AGENT.md)（[raw](https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/main/docs/guides/SETUP_AGENT.md)）。一時フォルダに取得した場合は [LOCAL_AGENT_INSTALL.md](docs/guides/LOCAL_AGENT_INSTALL.md) |
-> | どちらかがある（導入済み） | [UPGRADE_AGENT.md](docs/guides/UPGRADE_AGENT.md)（[raw](https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/main/docs/guides/UPGRADE_AGENT.md)）。checkout は `repo_path` の場所（`--no-recovery` で導入して無い場合は [§1](docs/guides/UPGRADE_AGENT.md#1-対象と-python-の特定) の手順で特定）を使い、新しく clone しない |
+> | 設定ファイルはあるが初期設定が未完了 | 既存の checkout と導入状況を確認し、ソフトの準備が完了していれば [SETUP_AGENT.md](docs/guides/SETUP_AGENT.md) の初期設定から再開する。設定ファイルの存在だけで導入完了とは判断しない |
+> | 既存環境の更新・復旧 | [UPGRADE_AGENT.md](docs/guides/UPGRADE_AGENT.md)（[raw](https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/main/docs/guides/UPGRADE_AGENT.md)）。checkout は `repo_path` の場所（`--no-recovery` で導入して無い場合は [§1](docs/guides/UPGRADE_AGENT.md#1-対象と-python-の特定) の手順で特定）を使い、新しく clone しない |
 > | 更新が途中で止まった・`mcs/ops/mcs_update.py status` の `applying` が `null` でない | [UPGRADE_AGENT.md §7 失敗時・巻戻し](docs/guides/UPGRADE_AGENT.md#7-失敗時巻戻し) |
 >
 > 秘密値はチャットに書かせず、ユーザーの端末で入力してもらいます。投稿の収集・通知・既読化・サービス起動は、依頼された範囲でだけ行います。

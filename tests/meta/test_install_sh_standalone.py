@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from test_install_sh import _calls, _run, _world
+from test_install_sh import ROOT, _calls, _run, _world
 
 
 def test_standalone_preflight_and_plan_skip_hermes(tmp_path):
@@ -43,10 +43,10 @@ def test_standalone_install_never_clones_hermes(tmp_path):
     assert any(c.startswith("uv pip install") and "requirements-standalone.txt" in c
                for c in calls), calls
     python = [c for c in calls if c.startswith("venv-python")]
-    # the chosen mode is persisted to config.json, then services run on ~/.mcs/venv
-    # (an empty trailing argument means no --recovery-python was given)
-    assert any(c.rstrip().endswith(" standalone") and c.startswith("venv-python - ")
-               for c in python)
+    # The venv receives the selected mode, the empty recovery option, the
+    # initial/explicit flags, and the verified recovery Python in that order.
+    assert (f"venv-python - {ROOT} standalone  1 1 "
+            f"{stub_root / 'bin' / 'python3.14'}") in python
     assert any("mcs_setup.py services" in c for c in python)
     assert (home / ".mcs" / "venv" / "bin" / "python3").exists() and venv
 
