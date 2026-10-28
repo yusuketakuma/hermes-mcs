@@ -186,6 +186,111 @@ def test_failed_receipt_preserves_uncooperative_edit_for_explicit_recovery(corpu
     assert not journal.exists()
 
 
+def _commit_fault(connection, committed):
+    class CommitFault:
+        def __getattr__(self, name):
+            return getattr(connection, name)
+        def __enter__(self):
+            connection.__enter__()
+            return self
+        def __exit__(self, kind, value, tb):
+            if kind is not None:
+                return connection.__exit__(kind, value, tb)
+            if committed is True:
+                connection.__exit__(None, None, None)
+            elif committed is False:
+                connection.rollback()
+            raise OSError('synthetic indeterminate commit')
+    return CommitFault()
+
+
+@pytest.mark.parametrize('committed', [False, True])
+def test_commit_outcome_unknown_preserves_config_receipt_and_journal(corpus, committed):
+    store, cfg, config = corpus
+    proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    req = request(proposed)
+    connection = store.db
+    store.db = _commit_fault(connection, committed)
+    try:
+        with pytest.raises(mcs_requests.AliasCommitUnknown, match='alias_commit_unknown'):
+            mcs_requests.apply_command(store, req)
+    finally:
+        store.db = connection
+    switched = json.loads(config.read_text())
+    assert switched['drug_map']['sha256'] == proposed['after_dict_sha']
+    assert switched['unrelated'] == cfg['unrelated']
+    journal = config.parent / 'data/drug-map/alias-switch.pending.json'
+    assert journal.exists()
+    row = store.db.execute('SELECT outcome, receipt_json FROM command_receipts WHERE command_id=?',
+                           (req['command_id'],)).fetchone()
+    assert (row is not None) is committed
+    if committed:
+        assert row['outcome'] == 'applied'
+        original_receipt = row['receipt_json']
+        assert mcs_requests.apply_command(store, req)['outcome'] == 'applied'
+        assert journal.exists()
+    else:
+        assert mcs_requests.apply_command(store, req)['error'] == 'alias_recovery_required'
+    assert mcs_requests.apply_command(store, rollback(req['command_id']))['outcome'] == 'applied'
+    assert json.loads(config.read_text()) == cfg and not journal.exists()
+    if committed:
+        assert store.db.execute('SELECT receipt_json FROM command_receipts WHERE command_id=?',
+                                (req['command_id'],)).fetchone()[0] == original_receipt
+
+
+@pytest.mark.parametrize('committed', [False, True])
+def test_rollback_commit_unknown_preserves_both_receipts_and_journal(corpus, committed):
+    store, cfg, config = corpus
+    proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    approval = request(proposed)
+    assert mcs_requests.apply_command(store, approval)['outcome'] == 'applied'
+    original_receipt = store.db.execute('SELECT receipt_json FROM command_receipts WHERE command_id=?',
+                                        (approval['command_id'],)).fetchone()[0]
+    request_rollback = rollback(approval['command_id'])
+    connection = store.db
+    store.db = _commit_fault(connection, committed)
+    try:
+        with pytest.raises(mcs_requests.AliasCommitUnknown, match='alias_commit_unknown'):
+            mcs_requests.apply_command(store, request_rollback)
+    finally:
+        store.db = connection
+    assert json.loads(config.read_text()) == cfg
+    journal = config.parent / 'data/drug-map/alias-switch.pending.json'
+    assert journal.exists()
+    recorded = store.db.execute('SELECT outcome FROM command_receipts WHERE command_id=?',
+                                (request_rollback['command_id'],)).fetchone()
+    assert (recorded is not None) is committed
+    if committed:
+        assert recorded['outcome'] == 'applied'
+    assert store.db.execute('SELECT receipt_json FROM command_receipts WHERE command_id=?',
+                            (approval['command_id'],)).fetchone()[0] == original_receipt
+    assert mcs_requests.apply_command(store, rollback(approval['command_id']))['outcome'] == 'applied'
+    assert json.loads(config.read_text()) == cfg and not journal.exists()
+
+
+def test_commit_unknown_with_open_transaction_is_held_until_rollback(corpus):
+    import sqlite3
+    store, cfg, config = corpus
+    proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    req = request(proposed)
+    connection = store.db
+    store.db = _commit_fault(connection, None)
+    try:
+        with pytest.raises(mcs_requests.AliasCommitUnknown, match='alias_commit_unknown'):
+            mcs_requests.apply_command(store, req)
+    finally:
+        store.db = connection
+    assert connection.in_transaction
+    journal = config.parent / 'data/drug-map/alias-switch.pending.json'
+    assert journal.exists() and json.loads(config.read_text())['drug_map']['sha256'] == proposed['after_dict_sha']
+    with sqlite3.connect(str(config.parent / 'data/ledger.db')) as observer:
+        assert observer.execute('SELECT 1 FROM command_receipts WHERE command_id=?',
+                                (req['command_id'],)).fetchone() is None
+    connection.rollback()
+    assert mcs_requests.apply_command(store, rollback(req['command_id']))['outcome'] == 'applied'
+    assert json.loads(config.read_text()) == cfg and not journal.exists()
+
+
 @pytest.mark.parametrize('change', ['edited', 'same_bytes_replacement'])
 def test_concurrent_config_change_before_lock_is_preserved(corpus, monkeypatch, change):
     store, cfg, config = corpus
@@ -232,6 +337,66 @@ def test_alias_accepts_private_config_above_general_limit(corpus):
     proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
     assert mcs_requests.apply_command(store, request(proposed))['outcome'] == 'applied'
     assert json.loads(config.read_text())['unrelated'] == cfg['unrelated']
+
+
+@pytest.mark.parametrize('extra', [0, 1])
+def test_alias_checks_serialized_config_limit_before_journal(corpus, extra):
+    store, cfg, config = corpus
+    proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    destination = config.parent / 'data/drug-map' / ('alias-' + proposed['after_dict_sha'] + '.json')
+    target = {'path': str(destination), 'sha256': proposed['after_dict_sha']}
+    cfg['unrelated'] = ''
+    remaining = drug_map.MAX_BYTES + extra - len(mcs_requests.canonical({**cfg, 'drug_map': target}))
+    cfg['unrelated'] = 'x' * remaining
+    raw = mcs_requests.canonical(cfg)
+    assert len(raw) <= drug_map.MAX_BYTES
+    assert len(mcs_requests.canonical({**cfg, 'drug_map': target})) == drug_map.MAX_BYTES + extra
+    config.write_bytes(raw)
+    req = request(proposed)
+    receipt = mcs_requests.apply_command(store, req)
+    journal = config.parent / 'data/drug-map/alias-switch.pending.json'
+    if extra:
+        assert receipt['outcome'] == 'rejected' and receipt['error'] == 'alias_switch_failed'
+        assert config.read_bytes() == raw and not journal.exists()
+        assert mcs_requests.apply_command(store, req) == receipt
+        stored = store.db.execute('SELECT outcome FROM command_receipts WHERE command_id=?',
+                                  (req['command_id'],)).fetchone()
+        assert stored['outcome'] == 'rejected'
+    else:
+        assert receipt['outcome'] == 'applied'
+        assert config.stat().st_size == drug_map.MAX_BYTES and not journal.exists()
+        assert mcs_requests.apply_command(store, rollback(req['command_id']))['outcome'] == 'applied'
+        assert json.loads(config.read_text()) == cfg
+
+
+@pytest.mark.parametrize('fail_compensation', [False, True])
+def test_config_and_compensation_directory_sync_failure_preserves_recovery(corpus, monkeypatch,
+                                                                           fail_compensation):
+    store, cfg, config = corpus
+    proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    req = request(proposed)
+    original_write = drug_alias.atomic_write
+    original_sync = safe_io.fsync_dir
+    calls = []
+    def fail_sync(path, **kwargs):
+        raise OSError('synthetic directory sync failure')
+    def write_with_failed_sync(*args, **kwargs):
+        calls.append(True)
+        with monkeypatch.context() as patch:
+            if len(calls) == 1 or fail_compensation:
+                patch.setattr(safe_io, 'fsync_dir', fail_sync)
+            return original_write(*args, **kwargs)
+    monkeypatch.setattr(drug_alias, 'atomic_write', write_with_failed_sync)
+    receipt = mcs_requests.apply_command(store, req)
+    assert receipt['outcome'] == 'rejected' and receipt['error'] == 'alias_switch_failed'
+    assert json.loads(config.read_text()) == cfg
+    journal = config.parent / 'data/drug-map/alias-switch.pending.json'
+    assert journal.exists() is fail_compensation
+    if fail_compensation:
+        monkeypatch.setattr(drug_alias, 'atomic_write', original_write)
+        assert mcs_requests.apply_command(store, rollback(req['command_id']))['outcome'] == 'applied'
+        assert json.loads(config.read_text()) == cfg and not journal.exists()
+    assert safe_io.fsync_dir is original_sync
 
 
 def test_journal_recovery_respects_shared_config_lock(corpus):
