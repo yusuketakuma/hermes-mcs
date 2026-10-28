@@ -144,6 +144,47 @@ def bump_semantic_job_state_epoch_tx(db):
     _bump_inference_epoch_tx(db, 'job_state_epoch')
 
 
+
+class SemanticIntakeHeld(Exception):
+    """The existing semantic job cannot safely be merged with an arrival."""
+
+
+def _read_supported_semantic_seed(db, project_id, job_id):
+    # This experimental guard rejects the enclosing intake transaction. It does
+    # not establish durable arrival intent or guarantee later source refetch.
+    from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY, read_version
+    from operation_contract import read_retry_payload, retry_job_row
+
+    row, error = retry_job_row(db, project_id, job_id)
+    if row is None or error:
+        raise SemanticIntakeHeld('semantic_job_identity_unverified')
+    raw = read_retry_payload(db, row)
+    if raw is None:
+        raise SemanticIntakeHeld('semantic_payload_unreadable')
+
+    class Pairs(dict):
+        def __init__(self, pairs):
+            super().__init__(pairs)
+            self.ambiguous_version = sum(k == VERSION_KEY for k, _ in pairs) > 1
+            self.ambiguous_targets = sum(k == 'targets' for k, _ in pairs) > 1
+
+    def invalid_constant(_):
+        raise ValueError('invalid_constant')
+
+    try:
+        payload = json.loads(raw, object_pairs_hook=Pairs, parse_constant=invalid_constant)
+    except (ValueError, RecursionError):
+        raise SemanticIntakeHeld('semantic_payload_unreadable') from None
+    if (not isinstance(payload, Pairs) or payload.ambiguous_version
+            or payload.ambiguous_targets
+            or read_version(payload) not in (CURRENT_VERSION, LEGACY_VERSION)):
+        raise SemanticIntakeHeld('semantic_payload_unreadable')
+    targets = payload.get('targets')
+    if 'targets' in payload and (not isinstance(targets, list) or not targets
+            or any(type(mid) is not int or not 0 < mid <= 2**63 - 1 for mid in targets)):
+        raise SemanticIntakeHeld('semantic_payload_unreadable')
+    return payload
+
 class Ledger:
     def __init__(self, path: str, *, notify_all_replies: bool = False):
         self.notify_all_replies = notify_all_replies is True
@@ -1759,9 +1800,12 @@ class Ledger:
         now = time.time()
         for root, ids in roots.items():
             existing = self.db.execute("""
-              SELECT job_id,state,attempts,payload FROM fetch_jobs
+              SELECT job_id,state,attempts FROM fetch_jobs
               WHERE kind='semantic' AND project_id=? AND message_id=?
             """, (project_id, root)).fetchone()
+            old_pl = None
+            if existing is not None:
+                old_pl = _read_supported_semantic_seed(self.db, project_id, existing["job_id"])
             eligible = isinstance(origin, dict) \
                 and origin.get("event_id") is not None
             notification_free = isinstance(origin, dict) \
@@ -1772,7 +1816,6 @@ class Ledger:
             source_generation = (_source_generation if _source_generation is not None
                                  else self._semantic_source_generation(project_id, root))
             if existing is not None:
-                old_pl = loads_dict(existing["payload"] or "{}") or {}
                 stored_targets = old_pl.get("targets")
                 old_targets = ({x for x in stored_targets if type(x) is int}
                                if isinstance(stored_targets, list) else set())
