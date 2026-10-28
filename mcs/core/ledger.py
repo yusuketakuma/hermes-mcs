@@ -2137,7 +2137,7 @@ class Ledger:
         """, (project_id, ts)).fetchone()
         return r is not None
 
-    def thread_read_candidates(self, since: float, limit: int) -> list:
+    def thread_read_candidates(self, since: float, limit: int, *, exclude_projects=()) -> list:
         """(project_id, parent_id, last_reply_id) of threads holding a
         stored reply newer than their last confirmed read — newest first.
         Only stored replies qualify: a thread is never cleared before
@@ -2147,11 +2147,12 @@ class Ledger:
           FROM messages m
           LEFT JOIN thread_read_marks t ON t.parent_id=m.parent_id
           WHERE m.parent_id IS NOT NULL AND m.first_seen>=?
+            AND NOT EXISTS (SELECT 1 FROM json_each(?) excluded WHERE excluded.value=m.project_id)
             AND (t.parent_id IS NULL OR t.status!='confirmed'
                  OR m.message_id>t.last_reply_id)
           GROUP BY m.project_id, m.parent_id
           ORDER BY MAX(m.first_seen) DESC LIMIT ?
-        """, (since, limit)).fetchall()
+        """, (since, json.dumps(sorted(set(exclude_projects))), limit)).fetchall()
 
     def stored_reply_ids(self, parent_id: int, *, project_id: int | None = None) -> set:
         """Replies settled for a thread clear: full/deleted bodies, plus
