@@ -814,8 +814,10 @@ def record_result(ledger, reservation, metadata):
                      else error_kind in ("transport", "timeout"))
         error = AnthropicError(error_kind, retryable=retryable, status=status)
     try:
+        # Settle at the price table the reservation was made with: a result that arrives
+        # after PRICE_VALID_UNTIL is still saved; only new sends stop (owner decision 2026-10-28).
         if (metadata.get("model") != MODEL or metadata.get("request_fp") != reservation["request_fp"]
-                or not pricing_valid()):
+                or reservation.get("price_version") != PRICE_VERSION):
             raise AnthropicError("pricing_unverified", "result_mismatch")
         usage = validate_usage(metadata["usage"]) if metadata.get("usage") is not None else None
         maximum = _decimal(reservation["max_cost_usd"])

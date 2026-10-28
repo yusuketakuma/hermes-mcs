@@ -409,3 +409,19 @@ def test_a_broken_or_duplicate_prune_mark_stays_and_keeps_periods_stopped(tmp_pa
         # maintenance never overwrites a mark whose earlier range it cannot read
         assert sorted(row["content"] for row in ledger.artifacts(c.PRUNE_MARK_KIND)) == sorted(marks)
         assert c.window_history_pruned(ledger, _period(window_start=later)) is broken
+
+
+def test_a_result_after_the_price_table_expires_is_settled_at_its_reservation_price(tmp_path, now, monkeypatch):
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        reservation = c.usage_reserver(ledger, _period(), route="reextract", project_id=1, unit_key="u1")(
+            {"model": c.MODEL, "max_tokens": 100}, 2)
+        monkeypatch.setattr(c, "pricing_valid", lambda now=None: False)   # the table expired meanwhile
+        result = {"model": c.MODEL, "request_fp": reservation["request_fp"], "http_class": "http_200",
+                  "usage": {"input_tokens": 10, "output_tokens": 2}, "request_id": "req_synthetic",
+                  "error_kind": None}
+        c.record_result(ledger, reservation, result)
+        assert ledger.artifacts("cloud_usage_result")
+        # new sends still stop
+        assert c.budget_block_reason(ledger, _period()) == "pricing_unverified"
+        with pytest.raises(c.AnthropicError):
+            c.record_result(ledger, {**reservation, "price_version": "older-table"}, result)
