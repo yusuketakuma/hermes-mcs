@@ -112,3 +112,85 @@ def test_check_explains_key_only_without_cap_and_jev_zero_budget(tmp_path, now):
     warnings = environment_diagnostics.cloud_setting_warnings(capped, tmp_path)
     assert not any("cost_limit_required" in w or "jev_budget_zero" in w for w in warnings)
     assert any("semantic.until" in w and "expired" in w for w in warnings)
+
+
+def _period(**kw):
+    return {"cloud_llm": {"mode": "on", "project_ids": [1], "window_start": "2026-10-26T00:00:00+09:00",
+                          "window_budget_usd": 80, **kw}}
+
+
+@pytest.mark.parametrize("block", [
+    {"window_budget_usd": 80},                                     # an amount needs its start
+    {"window_start": "2026-10-26T00:00:00+09:00"},                 # a start needs its amount
+    {"window_start": "2026-10-26T00:00:00+09:00", "window_budget_usd": -1},
+    {"window_start": "2026-10-27T00:00:00+09:00", "window_budget_usd": 80,
+     "until": "2026-10-26T23:59:59+09:00"},                        # the window must end after it starts
+])
+def test_period_budget_needs_a_start_amount_and_ordered_window(block):
+    settings, errors = c.cloud_config({"cloud_llm": {"mode": "on", "project_ids": [1], **block}})
+    assert "config: cloud_llm_window_invalid" in errors and settings["mode"] == "off"
+
+
+def test_period_budget_alone_satisfies_the_key_only_cap():
+    settings, errors = c.cloud_config({"cloud_llm": {"window_start": "2026-10-26T00:00:00+09:00",
+                                                     "window_budget_usd": 80}}, key_present=True)
+    assert errors == [] and settings["mode"] == "on" and settings["project_ids"] is None
+
+
+def test_period_budget_counts_all_spending_since_its_start_and_refuses_before_it(tmp_path, now):
+    def reserve(ledger, cfg, unit):
+        return c.usage_reserver(ledger, cfg, route="reextract", project_id=1, unit_key=unit)(
+            {"model": c.MODEL, "max_tokens": 100}, 2)
+
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        reservation = reserve(ledger, _period(), "u1")
+        maximum = c.max_cost(100, input_bound=c.input_bound({"model": c.MODEL, "max_tokens": 100}))
+        assert c.window_spend(ledger, _period()) == maximum          # unsettled: held at its maximum
+        c.record_result(ledger, reservation, {"model": c.MODEL, "request_fp": reservation["request_fp"],
+                        "usage": {"input_tokens": 10, "output_tokens": 2}, "http_class": "http_200",
+                        "request_id": "req_synthetic", "error_kind": None})
+        spent = c.window_spend(ledger, _period())
+        assert 0 < spent < maximum                                    # settled to the real usage
+        tight = _period(window_budget_usd=float(spent + maximum / 2))
+        assert c.budget_block_reason(ledger, tight) == "window_cap"
+        with pytest.raises(c.AnthropicError) as raised:
+            reserve(ledger, tight, "u2")
+        assert raised.value.detail == "window_cap"
+        # Spending before the period does not count against it.
+        assert c.window_spend(ledger, _period(window_start="2099-01-01T00:00:00+09:00")) == 0
+        future = _period(window_start="2026-10-27T00:00:00+09:00")
+        assert c.budget_block_reason(ledger, future) == "not_started"
+
+
+def test_budget_command_sets_any_period_amount_and_end_date(tmp_path, monkeypatch, capsys):
+    import json
+    from types import SimpleNamespace
+    import cloud_cli
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"mcs_login_id": "synthetic-login", "notify_target": "synthetic-target"}))
+    path.chmod(0o600)
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(path))
+
+    def run(**kw):
+        args = {"daily_usd": None, "monthly_usd": None, "period_usd": None, "window_from": None, "until": None}
+        return cloud_cli.budget_command(SimpleNamespace(**{**args, **kw}))
+
+    assert run(period_usd="80", window_from="2026-10-28", until="2026-10-30") == 0
+    saved = json.loads(path.read_text())
+    assert saved["cloud_llm"] == {"window_budget_usd": 80.0, "window_start": "2026-10-28T00:00:00+09:00",
+                                  "until": "2026-10-30T23:59:59+09:00"}
+    assert saved["semantic"] == {"until": "2026-10-30T23:59:59+09:00"}   # Jev ends with the paid route
+    shown = json.loads(capsys.readouterr().out)
+    assert (shown["period_budget_usd"], shown["until"]) == (80.0, "2026-10-30T23:59:59+09:00")
+    # Without --from the period starts now; an offset-aware time is kept verbatim.
+    assert run(period_usd="25.5", until="2026-11-02T18:00:00+09:00") == 0
+    saved = json.loads(path.read_text())
+    assert saved["cloud_llm"]["window_budget_usd"] == 25.5
+    assert mcs_util.until_epoch(saved["cloud_llm"]["window_start"]) <= mcs_util.until_epoch(
+        saved["cloud_llm"]["until"])
+    for bad in ({"until": "2026-10-30T23:59:59"}, {"period_usd": "-1"}, {"until": "tomorrow"}):
+        before = path.read_text()
+        assert run(**bad) == 1 and path.read_text() == before
+    assert run(period_usd="none", until="none") == 0
+    saved = json.loads(path.read_text())
+    assert saved["cloud_llm"] == {} and saved["semantic"] == {}

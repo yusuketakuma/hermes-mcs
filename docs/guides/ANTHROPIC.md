@@ -45,9 +45,21 @@ Anthropicには、1日の件数 `cloud_llm.daily_request_budget`、1日の費用
 いずれも未指定の場合、その上限はありません。費用の上限は、予約時の最大額で判定するため、実際の費用が上限より低くても先に止まることがあります。
 `cloud_llm.mode` を指定せず、キーを置いて自動で有効にする場合は、`daily_cost_limit_usd` か `monthly_cost_limit_usd` の少なくとも一方が必要です。どちらも無いあいだは送信せず、`check` と `cloud-llm plan` に `cost_limit_required` と表示します。
 
-送信を一定の時刻までに限る場合は、`cloud_llm.until`（Anthropic）と `semantic.until`（Jev）に、時差付きのISO 8601形式で終了時刻を指定します（例: `"2026-10-28T23:59:59+09:00"`）。
-その時刻を過ぎると新しい送信を始めず、ローカルでの処理に戻ります。すでに送信中の要求は最後まで処理します。終了後に再開する場合は、`until` を変更するか削除してください。
-1日の費用上限は日本時間の0時に戻るため、期間を限って使う場合は月の上限も同じ額にしておくと、合計額を超えません。
+`mode` を指定しない場合は、後述の期間予算でもこの条件を満たします。
+
+送信する期間と、その期間全体の予算（ドル）を指定できます。期間予算は日をまたいでも合計で数え、日本時間の0時に戻りません。
+
+```bash
+python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd 80 --until 2026-10-30            # 今から10月30日の終わりまで、合計80ドル
+python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd 80 --from 2026-11-01 --until 2026-11-07
+python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd none --until none                 # 期間と期間予算を解除
+```
+
+- `--until` はAnthropic（`cloud_llm.until`）とJev（`semantic.until`）の両方に同じ終了時刻を設定します。日付だけを指定すると、その日の23:59:59（日本時間）までです。
+- `--from` を省略すると、期間は設定した時点から始まります。開始前と終了後は新しい送信を始めず、ローカルでの処理に戻ります。送信中の要求は最後まで処理します。
+- 時刻は日付（`2026-10-30`）か、時差付きのISO 8601形式（`2026-10-30T18:00:00+09:00`）で指定します。`config.json` に直接書く場合は、`cloud_llm.window_start`・`window_budget_usd`・`until` と `semantic.until` です。
+- 期間予算は、予約時の最大額で判定します。結果が戻ると実際の額で数え直すため、表示額は進行中の予約の分だけ多く見えることがあります。
+- `cloud-llm plan`・`estimate` の `period_budget` に、期間の開始・予算・その時点の使用額（予約中の最大額を含む）を表示します。
 
 費用の上限は、次のコマンドで表示・設定できます。CodexやClaude Codeからもそのまま実行でき、値は `config.json` に保存されます。
 

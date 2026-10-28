@@ -7,6 +7,7 @@ from decimal import Decimal
 import json
 import math
 import os
+import re
 from pathlib import Path
 import sqlite3
 import time
@@ -375,6 +376,14 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
     with _reader(root) as (db, deadline):
         borrowed = SimpleNamespace(db=db)
         accounting = policy.usage_report(borrowed)
+        period = None
+        if settings["window_budget_usd"] is not None:
+            try:
+                spent = str(policy.window_spend(borrowed, settings))
+            except (policy.AnthropicError, ValueError, ArithmeticError):
+                spent = None   # an unverifiable tally is shown as unknown, never as 0
+            period = {"start": settings["window_start"], "budget_usd": settings["window_budget_usd"],
+                      "spent_or_reserved_usd": spent}
         reason = policy.global_block_reason(borrowed) or policy.budget_block_reason(borrowed, settings)
         calibration = _calibration(db, now - 62 * 86400) if not accounting["pricing_unverified"] else None
         routes = _route_counts(db, cfg, planning, deadline)
@@ -449,6 +458,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
         "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
         "max_concurrency_per_process": settings["max_concurrency"], "accounting": accounting,
         **({"source_repair_evidence_holds": evidence_holds} if evidence_holds_wanted else {}),
+        "period_budget": period, "until": settings["until"],
         "days": days, "history_days_observed": len(counts),
         "new_posts": sum(row["posts"] for row in counts.values()),
         "daily_patient_context_requests_estimate": sum(row["patients"] for row in counts.values()) / days,
@@ -592,21 +602,46 @@ def _budget_value(text):
     return value
 
 
+def _time_value(text, *, end):
+    """An offset-aware ISO time; a bare JST date means its start (or, for an end, its last second)."""
+    if text.strip().lower() in ("none", "off", "null"):
+        return None
+    text = text.strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        date.fromisoformat(text)
+        text += "T23:59:59+09:00" if end else "T00:00:00+09:00"
+    mcs_util.until_epoch(text)
+    return text
+
+
 def budget_command(args):
-    """Show or set the Anthropic daily/monthly cost caps in config.json."""
+    """Show or set the Anthropic daily/monthly/period cost caps and the run window in config.json."""
     try:
         changes = {}
         for option, key in _BUDGET_KEYS.items():
             text = getattr(args, option, None)
             if text is not None:
-                changes[key] = _budget_value(text)
+                changes["cloud_llm." + key] = _budget_value(text)
+        period = getattr(args, "period_usd", None)
+        if period is not None:
+            amount = _budget_value(period)
+            changes["cloud_llm.window_budget_usd"] = amount
+            start = getattr(args, "window_from", None)
+            changes["cloud_llm.window_start"] = (
+                None if amount is None else _time_value(start, end=False) if start is not None
+                else datetime.now(policy.JST).replace(microsecond=0).isoformat())
+        until = getattr(args, "until", None)
+        if until is not None:
+            # One end time for both providers: Jev stops with the paid route.
+            changes["cloud_llm.until"] = changes["semantic.until"] = _time_value(until, end=True)
     except ValueError:
-        print("予算: 金額はドル単位の0以上の数値、または none で指定してください")
+        print("予算: 金額はドル単位の0以上の数値、日時は 2026-10-30 または 2026-10-30T23:59:59+09:00 の形、"
+              "解除は none で指定してください")
         return 1
     import config_edit
     try:
         if changes:
-            cfg, cloud_errors = config_edit.apply({"cloud_llm." + k: v for k, v in changes.items()})
+            cfg, cloud_errors = config_edit.apply(changes)
             if cloud_errors:
                 print("設定に誤りがあるため予算を保存していません。mcs_setup.py check で確認してください")
                 return 1
@@ -631,6 +666,8 @@ def budget_command(args):
         return 1
     print(json.dumps({"daily_cost_limit_usd": settings["daily_cost_limit_usd"],
                       "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
+                      "period_budget_usd": settings["window_budget_usd"],
+                      "period_start": settings["window_start"], "until": settings["until"],
                       "saved": bool(changes)}, ensure_ascii=False))
     return 0
 
@@ -645,9 +682,13 @@ def add_parsers(sub):
         if action == "log":
             q.add_argument("--project", type=int)
         q.set_defaults(fn=command)
-    q = actions.add_parser("budget", help="Anthropicの1日・1か月の費用上限（ドル）を表示・設定します")
+    q = actions.add_parser("budget", help="Anthropicの費用上限（1日・1か月・期間、ドル）と送信の終了日時を表示・設定します")
     q.add_argument("--daily-usd", dest="daily_usd", help="1日の上限（ドル）。none で解除")
     q.add_argument("--monthly-usd", dest="monthly_usd", help="1か月の上限（ドル）。none で解除")
+    q.add_argument("--period-usd", dest="period_usd",
+                   help="期間全体の上限（ドル）。開始は --from、未指定なら今。none で解除")
+    q.add_argument("--from", dest="window_from", help="期間の開始（2026-10-28 または時差付きISO時刻）")
+    q.add_argument("--until", help="送信の終了（2026-10-30 はその日の23:59:59）。AnthropicとJevの両方に設定。none で解除")
     q.set_defaults(fn=budget_command, cloud_action="budget")
     for action in ("stop", "resume"):
         q = actions.add_parser(action, help="人の確認と記録を伴うクラウド処理の" + ("停止" if action == "stop" else "再開"))
