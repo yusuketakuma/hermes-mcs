@@ -22,8 +22,8 @@ def _identity(info):
             info.st_mtime_ns, info.st_ctime_ns)
 
 
-def _snapshot():
-    path = Path(mcs_util.CONF_PATH)
+def _snapshot(path=None):
+    path = Path(mcs_util.CONF_PATH if path is None else path)
     raw, info = safe_io.read_regular_nofollow(path, mcs_util.CONFIG_MAX_BYTES,
                                             lambda: ValueError("config_unreadable"), with_stat=True)
     if len(raw) > mcs_util.CONFIG_MAX_BYTES:
@@ -47,12 +47,12 @@ def read_strict() -> dict:
 
 
 @contextmanager
-def _edit_lock():
-    # Shared by the two new CLI editors, never across network or human input.
+def _edit_lock(path=None):
+    # Shared by cooperating editors, never across network or human input.
     # Older writers do not use this lock; the base snapshot below detects
     # their observed changes. It cannot exclude an external rename after
     # the last comparison and before atomic_write's final os.replace.
-    path = str(mcs_util.CONF_PATH) + ".edit.lock"
+    path = str(mcs_util.CONF_PATH if path is None else path) + ".edit.lock"
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:
         info = os.fstat(fd)

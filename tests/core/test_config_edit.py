@@ -65,6 +65,24 @@ def test_same_content_replacement_after_fd_read_is_rejected(conf, monkeypatch):
         config_edit.read_strict()
 
 
+def test_explicit_config_path_has_an_independent_snapshot_and_lock(conf, tmp_path):
+    other_dir = tmp_path / "other"
+    other_dir.mkdir()
+    other = other_dir / "config.json"
+    other.write_bytes(b'{"extension": true}')
+    raw, base = config_edit._snapshot(other)
+    assert raw == other.read_bytes()
+    with config_edit._edit_lock(other):
+        with pytest.raises(config_edit.ConfigConflict):
+            with config_edit._edit_lock(other):
+                pass
+        with config_edit._edit_lock():
+            assert config_edit._snapshot(other)[1] == base
+    other.write_bytes(b'{"extension": false}')
+    assert config_edit._snapshot(other)[1] != base
+    assert json.loads(conf.read_bytes())["extension"] == {"secret": "SYNTHETIC_PRIVATE_MARKER"}
+
+
 @pytest.mark.parametrize("kind", ["oversize", "growth"])
 def test_size_limit_is_checked_before_and_after_read(conf, monkeypatch, kind):
     monkeypatch.setattr(mcs_util, "CONFIG_MAX_BYTES", 8)
