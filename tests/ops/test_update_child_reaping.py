@@ -1,9 +1,22 @@
 """Timed-out update children are reaped before journal outcome is resolved."""
 import mcs_util
+import os
 import subprocess
 
 import mcs_update
 import pytest
+
+
+@pytest.fixture
+def held_update_lock(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcs_update, "UPDATE_LOCK", str(tmp_path / "update.lock"))
+    fd = mcs_update.acquire_update_lock()
+    assert fd is not None
+    try:
+        monkeypatch.setenv(mcs_update.UPDATE_LOCK_FD_ENV, str(fd))
+        yield fd
+    finally:
+        os.close(fd)
 
 
 @pytest.mark.parametrize("durable_done", [False, True])
@@ -39,7 +52,8 @@ def test_post_merge_timeout_reaps_child_before_reading_done(monkeypatch, durable
 @pytest.mark.parametrize("failure_type", [KeyboardInterrupt, RuntimeError])
 @pytest.mark.parametrize("cleanup_fault", [None, "kill_missing", "second_interrupt", "pipe_error", "already_exited"])
 def test_interrupted_update_reaps_before_propagating_original_failure(
-        monkeypatch, operation, failure_type, cleanup_fault):
+        monkeypatch, request, operation, failure_type, cleanup_fault):
+    update_fd = request.getfixturevalue("held_update_lock") if operation == "reinstall" else None
     failure = failure_type("synthetic interrupted wait")
     calls = []
 
@@ -69,6 +83,11 @@ def test_interrupted_update_reaps_before_propagating_original_failure(
 
     def start(*args, **kwargs):
         assert kwargs["start_new_session"] is True
+        if update_fd is not None:
+            inherited = kwargs["pass_fds"]
+            assert len(inherited) == 1 and inherited[0] != update_fd
+            assert os.fstat(inherited[0]).st_ino == os.fstat(update_fd).st_ino
+            assert kwargs["env"][mcs_update.UPDATE_LOCK_FD_ENV] == str(inherited[0])
         return Child()
 
     def stop(pid, signum):
@@ -95,7 +114,7 @@ def test_interrupted_update_reaps_before_propagating_original_failure(
         assert calls[-1] == ("wait", 5)
 
 
-def test_reinstall_timeout_cleanup_errors_do_not_replace_timeout(monkeypatch):
+def test_reinstall_timeout_cleanup_errors_do_not_replace_timeout(monkeypatch, held_update_lock):
     class Child:
         pid = 1234
         returncode = None
