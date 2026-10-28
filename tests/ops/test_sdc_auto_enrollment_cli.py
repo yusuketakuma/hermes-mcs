@@ -100,8 +100,12 @@ def test_pending_tick_uses_single_poll_and_never_facts_or_inventory(tmp_path, mo
 
 def _stub_job_manager(monkeypatch, home, cfg, *, reconcile):
     from types import SimpleNamespace
+    import json
     writes, files = [], []
-    monkeypatch.setattr(sdc_cli.mcs_util, 'CONF_PATH', str(home / 'owner.json'))
+    owner = home / 'owner.json'
+    if not owner.exists():
+        owner.write_text(json.dumps(cfg))
+    monkeypatch.setattr(sdc_cli.mcs_util, 'CONF_PATH', str(owner))
     monkeypatch.setattr(sdc_cli.sys, 'platform', 'darwin')
     monkeypatch.setattr(sdc_cli.lifecycle_io, 'read_owner_config', lambda _: cfg)
     def write_config(_path, writer, **_kwargs):
@@ -110,6 +114,7 @@ def _stub_job_manager(monkeypatch, home, cfg, *, reconcile):
         stream = io.StringIO()
         writer(stream)
         saved = json.loads(stream.getvalue())
+        owner.write_text(stream.getvalue())
         cfg.clear()
         cfg.update(saved)
         writes.append('config')
@@ -306,6 +311,25 @@ def test_sdc_respects_shared_config_writer_lock(owner_world):
     assert owner.read_bytes() == before and files == []
 
 
+def test_sdc_does_not_recreate_missing_config(owner_world):
+    root, owner, files = owner_world
+    owner.unlink()
+    with pytest.raises(ValueError, match='SDC_CONFIG_MISSING'):
+        sdc_cli.service(True, root)
+    assert not owner.exists() and files == []
+
+
+def test_sdc_save_failure_after_publication_leaves_service_unconfirmed(owner_world, monkeypatch):
+    root, owner, files = owner_world
+    def write(path, writer, **kwargs):
+        REAL_ATOMIC_WRITE(path, writer, **kwargs)
+        raise OSError('synthetic directory fsync failure')
+    monkeypatch.setattr(sdc_cli, 'atomic_write', write)
+    with pytest.raises(sdc_cli.SDCConfigWriteUnknown):
+        sdc_cli.service(True, root)
+    assert REAL_OWNER_CONFIG(str(owner))['sdc']['enabled'] is True and files == []
+
+
 def test_sdc_preserves_uncoordinated_edit_observed_before_publish(owner_world, monkeypatch):
     root, owner, files = owner_world
     original = sdc_cli.atomic_write
@@ -327,6 +351,18 @@ def test_sdc_does_not_publish_config_over_owner_reader_limit(owner_world):
     with pytest.raises(ValueError, match='SDC_CONFIG_TOO_LARGE'):
         sdc_cli.service(True, root)
     assert owner.read_bytes() == before and files == []
+
+
+@pytest.mark.parametrize('raw', [
+    '{"synthetic": 1, "synthetic": 2}',
+    '{"other": {"synthetic": 1, "synthetic": 2}}',
+])
+def test_sdc_rejects_duplicate_keys_without_overwriting_config(owner_world, raw):
+    root, owner, files = owner_world
+    owner.write_text(raw)
+    with pytest.raises(ValueError):
+        sdc_cli.service(True, root)
+    assert owner.read_text() == raw and files == []
 
 
 def test_sdc_enable_wins_then_stop_is_serialized_and_next_tick_is_quiet(owner_world, monkeypatch):

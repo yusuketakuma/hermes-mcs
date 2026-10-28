@@ -222,19 +222,25 @@ def test_locked_customer_reconnect_makes_no_request_or_keychain_write(world, cap
     assert KEY not in text.out + text.err
 
 
-def test_disconnect_config_conflict_reports_stop_unconfirmed(world, monkeypatch, capsys):
+@pytest.mark.parametrize('error, message', [
+    (sdc_cli.config_edit.ConfigConflict('config_busy'), '中央の登録状態'),
+    (sdc_cli.config_edit.ConfigConflict('SDC_OWNER_CHANGED'), '再試行だけでは復旧できません'),
+    (sdc_cli.SDCConfigWriteUnknown('SDC_CONFIG_WRITE_UNKNOWN'), '保存結果と監視ジョブの状態'),
+])
+def test_disconnect_config_conflict_reports_stop_unconfirmed(world, monkeypatch, capsys, error, message):
     home, cfg, native, calls, jobs = world
     root = home / 'customer'
     seed(root, customer=True, active=True, native=native)
     cfg['sdc'] = {'enabled': True, 'state_root': str(root)}
     before = (root / 'state.json').read_bytes()
     def conflict(*args, **kwargs):
-        raise sdc_cli.config_edit.ConfigConflict('config_busy')
+        raise error
     monkeypatch.setattr(sdc_cli, 'service', conflict)
     assert sdc_cli.main(['disconnect']) == 1
     assert (root / 'state.json').read_bytes() == before
     assert calls == [] and jobs == []
-    assert '停止していない可能性' in capsys.readouterr().err
+    text = capsys.readouterr().err
+    assert '停止していない可能性' in text and message in text
 
 
 @pytest.mark.parametrize('command', ['connection', 'disconnect', 'rotate-key'])
@@ -249,7 +255,9 @@ def test_customer_flag_is_only_an_explicit_new_enrollment_option(world, command)
 def test_real_service_owner_persists_customer_root_and_keeps_other_sdc_settings(tmp_path, monkeypatch):
     cfg = {'sdc': {'retained_setting': 'synthetic'}}
     saved, reconciled = [], []
-    monkeypatch.setattr(sdc_cli.mcs_util, 'CONF_PATH', str(tmp_path / 'config.json'))
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps(cfg))
+    monkeypatch.setattr(sdc_cli.mcs_util, 'CONF_PATH', str(path))
     monkeypatch.setattr(sdc_cli.sys, 'platform', 'darwin')
     monkeypatch.setattr(sdc_cli.lifecycle_io, 'read_owner_config', lambda _: cfg)
     def save(path, writer, **kwargs):
