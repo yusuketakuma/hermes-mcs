@@ -176,6 +176,13 @@ def test_restore_marker_holds_content_but_allows_existing_alerts(text_world, mon
     kinds = ["new_messages", "signal", "attachment_followup", "semantic_notice",
              "future_content", *sorted(notify_sender.SYSTEM_ALERT_KINDS)]
     ids = {kind: w.led.outbox_add_tx(kind, None, {}, route="text") for kind in kinds}
+    # The semantic marker also binds a real arrival even when this restore
+    # test stubs the rest of the semantic formatting/gate pipeline.
+    w.led.db.execute('UPDATE notify_outbox SET project_id=1,payload=? WHERE event_id=?',
+                     (json.dumps({'message_ids': [1]}), ids['new_messages']))
+    w.led.db.execute('UPDATE notify_outbox SET project_id=1,payload=? WHERE event_id=?',
+                     (json.dumps({'root_id': 1, 'target_message_id': 1,
+                                  'src_event_id': ids['new_messages']}), ids['semantic_notice']))
     w.led.db.commit()
     if phase == "corrupt":
         (w.data / notify_spool.RESTORE_MARKER).write_text("not-json")

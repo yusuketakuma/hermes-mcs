@@ -23,7 +23,9 @@ semantic_render; this module owns delivery and resolves current config.
 import json
 import os
 import re
+import sqlite3
 import time
+from contextvars import ContextVar
 
 import mcs_util
 import notify_sender
@@ -38,6 +40,8 @@ from notify_render import (SECTION_RULE, extraction_failed, signal_evidence,
                            thread_stamp_row)
 import clinical_urgency
 TEXT_CHUNK_WIDTH = 1900
+_NO_RENDER_CONFIG = object()
+_RENDER_CONFIG = ContextVar("notify_render_config", default=_NO_RENDER_CONFIG)
 # Per-notification file caps; oversized files stay local-only and are
 # noted in the text instead of failing the whole send.
 _MAX_FILES = 10
@@ -429,8 +433,10 @@ def _message_notice(ledger, ev, payload: dict):
         summary_suffix = ""
         if not indent:
             try:
-                summary_cfg = _config()
-                summary_suffix = semantic_render.semantic_summary_block(ledger.db, r, summary_cfg)
+                selected_cfg = _RENDER_CONFIG.get()
+                if selected_cfg is _NO_RENDER_CONFIG:
+                    selected_cfg = _config()
+                summary_suffix = semantic_render.semantic_summary_block(ledger.db, r, selected_cfg)
             except Exception:
                 pass  # A config/summary failure cannot break the base notice.
         out.append(_fmt_row(ledger, ev, att_map, r, indent, skipped, stamps=stamps,
@@ -560,15 +566,27 @@ def _transient_pre_send(exc) -> bool:
             and exc.code in _TRANSIENT_SEND_CODES)
 
 
+class _IntakeSnapshotChanged(Exception):
+    """The semantic hold witness changed before a send marker was committed."""
+
+
 def _send_marked(ledger, ev, i: int, sent_ids: list[str],
                  fingerprint: str, argv: list[str], chunk: str,
                  files: list[tuple[str, str]] | None,
                  deadline: float | None,
-                 attachment_pins: dict[str, str] | None = None) -> None:
+                 attachment_pins: dict[str, str] | None = None,
+                 mark_guard=None) -> None:
     """Retain the in-flight marker unless non-delivery is established."""
     notify_sender.send_budget(deadline)
-    ledger.outbox_progress(ev["event_id"], i, list(sent_ids),
-                           fingerprint, i + 1)
+    if mark_guard is None:
+        ledger.outbox_progress(ev["event_id"], i, list(sent_ids), fingerprint, i + 1)
+    else:
+        if ledger.db.in_transaction:
+            raise ValueError('send_marker_transaction_active')
+        with ledger.db:
+            ledger.db.execute('BEGIN IMMEDIATE')
+            mark_guard()
+            ledger.outbox_progress(ev["event_id"], i, list(sent_ids), fingerprint, i + 1)
     try:
         kwargs = {"attachment_pins": attachment_pins} if attachment_pins is not None else {}
         notify_sender.send(argv, chunk, files, deadline=deadline, **kwargs)
@@ -723,17 +741,45 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
             res["uncertain"] = res.get("uncertain", 0) + 1
             return
     import notify_urgent
-    if (ev["kind"] == "new_messages" and _send_never_began(ev)
-            and notify_urgent.settings(cfg) is not None):
+    if ev["kind"] == "new_messages":
+        if ledger.db.in_transaction:
+            raise ValueError('new_messages_render_transaction_active')
+        urgency = _send_never_began(ev) and notify_urgent.settings(cfg) is not None
         with ledger.db:
-            # Bind the initial urgency witness to the rendered snapshot.
-            # A concurrent extractor must not replace ordinary evidence
-            # with high between formatting and capture.
-            ledger.db.execute("BEGIN IMMEDIATE")
-            content, files = _format_event(ledger, ev)
-            notify_urgent.capture_initial(ledger, cfg, ev, now=time.time())
+            # Format and record summary identities against the same snapshot.
+            # The later send gate rejects a hold or revision after this view.
+            ledger.db.execute("BEGIN IMMEDIATE" if urgency else "BEGIN")
+            render_cfg = _config()
+            config_token = _RENDER_CONFIG.set(render_cfg)
+            try:
+                content, files = _format_event(ledger, ev)
+            finally:
+                _RENDER_CONFIG.reset(config_token)
+            render_state = semantic_send_gate.semantic_render_state(ledger.db, ev, render_cfg)
+            render_roots = None
+            if render_state:
+                import semantic_intake_hold
+                render_hold_epoch = semantic_intake_hold.hold_epoch(ledger.db, ev['project_id'])
+                # Keep marker-time work bounded. For larger notices use the
+                # conservative per-project epoch instead of a root scan.
+                if len(render_state) <= 64:
+                    mids = sorted({entry[0] for entry in render_state})
+                    roots = ledger.db.execute(
+                        'SELECT message_id,COALESCE(NULLIF(parent_id,0),message_id) root '
+                        'FROM messages WHERE project_id=? AND message_id IN '
+                        '(SELECT value FROM json_each(?))',
+                        (ev['project_id'], json.dumps(mids))).fetchall()
+                    if len(roots) == len(mids):
+                        render_roots = sorted({str(row['root']) for row in roots})
+            else:
+                render_hold_epoch = None
+            if urgency:
+                notify_urgent.capture_initial(ledger, cfg, ev, now=time.time())
     else:
         content, files = _format_event(ledger, ev)
+        render_state = ()
+        render_hold_epoch = None
+        render_roots = None
     attachment_pins = None
     if notify_sender.hermes_free(cfg, target):
         attachment_pins = {}
@@ -743,8 +789,6 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
             if len(hashes) != 1 or not mcs_util.valid_hash(next(iter(hashes))):
                 raise notify_sender.SendFailed("attachment_unverified")
             attachment_pins[path] = next(iter(hashes))
-    render_state = (semantic_send_gate.semantic_render_state(ledger.db, ev, _config())
-                    if ev["kind"] == "new_messages" else ())
     chunks = (semantic_render.semantic_chunks(content, TEXT_CHUNK_WIDTH)
               if ev["kind"] == "semantic_notice" else
               [content[i:i + TEXT_CHUNK_WIDTH]
@@ -787,11 +831,47 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
         # failure where acceptance is unknown) drops the files
         # and retries text-only so a bad attachment can never
         # sink the notification itself
+        def mark_guard():
+            if ev['kind'] == 'semantic_notice':
+                if semantic_send_gate.intake_root_held(ledger.db, ev['project_id'], payload['root_id']):
+                    raise semantic_send_gate.FreezeSend('semantic_intake_held') if start or i else \
+                        semantic_send_gate.DeferredSend('semantic_intake_held')
+                semantic_send_gate.marker_source_gate(ledger.db, ev['project_id'], payload,
+                                                       in_progress=bool(start or i))
+            elif render_hold_epoch is not None:
+                import semantic_intake_hold
+                try:
+                    if render_roots is None:
+                        changed = semantic_intake_hold.hold_epoch(ledger.db, ev['project_id']) != render_hold_epoch
+                    else:
+                        semantic_intake_hold.validate_indexes(ledger.db)
+                        changed = ledger.db.execute(
+                            "SELECT 1 FROM main.artifacts INDEXED BY idx_semantic_intake_hold_root "
+                            "WHERE kind='semantic_intake_hold_v1' AND project_id=? AND model IN "
+                            "(SELECT value FROM json_each(?)) LIMIT 1",
+                            (ev['project_id'], json.dumps(render_roots))).fetchone() is not None
+                except sqlite3.Error:
+                    changed = True
+                if changed:
+                    raise _IntakeSnapshotChanged()
+
+        def send_once(files):
+            try:
+                _send_marked(ledger, ev, i, sent_ids, fingerprint, argv, chunks[i],
+                             files, deadline, attachment_pins=attachment_pins,
+                             mark_guard=mark_guard if (ev['kind'] == 'semantic_notice'
+                                                       or render_hold_epoch is not None) else None)
+            except _IntakeSnapshotChanged:
+                if start or i:
+                    raise semantic_send_gate.FreezeSend('semantic_intake_changed') from None
+                ledger.outbox_defer(ev['event_id'], RERENDER_RETRY_S)
+                res['rerender'] = res.get('rerender', 0) + 1
+                return False
+            return True
+
         try:
-            _send_marked(ledger, ev, i, sent_ids, fingerprint,
-                         argv, chunks[i],
-                         post_files if i == 0 else None,
-                         deadline, attachment_pins=attachment_pins)
+            if not send_once(post_files if i == 0 else None):
+                return
         except notify_sender.SendUsage:
             # A file-only followup cannot succeed by discarding its payload.
             if i != 0 or not post_files or ev["kind"] == "attachment_followup":
@@ -799,8 +879,8 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
             post_files = None
             if not gate(i, payload):
                 return
-            _send_marked(ledger, ev, i, sent_ids, fingerprint,
-                         argv, chunks[i], None, deadline, attachment_pins=attachment_pins)
+            if not send_once(None):
+                return
         sent_ids.append(str(i + 1))
         ledger.outbox_progress(ev["event_id"], i + 1, sent_ids,
                                fingerprint)
