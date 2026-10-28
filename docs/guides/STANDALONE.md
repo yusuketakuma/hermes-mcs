@@ -103,7 +103,13 @@ actor/project範囲を設定します。`allowed_role_ids`は任意で、@everyo
 `init`はその明示ファイルをJSONへ取り込み、既存ファイルは削除しません。
 JSONが存在して壊れている場合は `.env` へfallbackせず停止します。
 CLIのrun/sendは秘密値をargvで受け取らず、環境やHermes profileから自動取得しません。
-再設定は`$PY -m mcs_standalone init --transport slack`または`discord`を使います。
+`$PY -m mcs_standalone init --transport slack`または`discord`で認証情報を登録できます。
+既存の認証情報がある場合は、保持・変更希望・中止を選べます。変更希望は、古い接続や
+送信処理の停止を確認できる仕組みが整うまで保留し、認証情報は変更しません。
+`--yes`と端末を使わない実行では、既存の認証情報を保持します。
+`.env`に対象の認証情報が一部しかない場合や、読み取れない場合は、新規登録に進まず
+管理担当者への確認を案内します。入力中の`.env`の変更を検出した場合も保存を中止します。
+入力を非表示にできない端末では、認証情報の入力を中止します。
 
 LINE WORKSは[専用手順](LINEWORKS.md)で認証・公開HTTPS Callbackを設定します。
 独立hostがLINE WORKSアダプターも起動するため、別の常駐アダプターと併用しません。

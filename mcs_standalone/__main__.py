@@ -16,6 +16,7 @@ import os
 import re
 import sys
 import tempfile
+import warnings
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -138,24 +139,84 @@ def _coded(call, *args, errors=(ValueError,), **kwargs):
         raise config.ConfigError(str(exc)) from None
 
 
+def _existing_credentials_choice(transport):
+    print(f"{transport}: 認証情報の操作を選んでください。")
+    while True:
+        try:
+            choice = input("1: 保持（推奨） / 2: 変更を希望 / 0: 中止 [1]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n認証情報は変更せず中止しました。")
+            return False
+        if choice in ("", "1"):
+            return True
+        if choice == "2":
+            print("認証情報の変更は保留中です。古い接続や送信処理の停止を確認できる仕組みが必要です。"
+                  "現在の認証情報は変更していません。")
+            return False
+        if choice == "0":
+            print("認証情報は変更せず中止しました。")
+            return False
+        print("1、2、0のいずれかを入力してください。")
+
+
+def _credential_env_snapshot(root):
+    from safe_io import read_private_bytes
+    try:
+        return read_private_bytes(Path(root).expanduser().resolve() / ".env", 65536)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError):
+        raise config.ConfigError("credential_existing_state_unverifiable") from None
+
+
+def _hidden_credential(prompt):
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", getpass.GetPassWarning)
+            return getpass.getpass(prompt)
+    except getpass.GetPassWarning:
+        raise config.ConfigError("credential_hidden_input_unavailable") from None
+
+
+def _env_has_transport_key(raw, transport):
+    if raw is None:
+        return False
+    try:
+        keys = set(config.TOKENS[transport])
+        if transport == "slack":
+            keys.add(config.SOCKET_TOKEN)
+        return any(sep and key in keys for key, sep, _ in
+                   (line.partition("=") for line in raw.decode("utf-8").splitlines()))
+    except (UnicodeError, KeyError):
+        raise config.ConfigError("credential_existing_state_unverifiable") from None
+
+
 def initialize(root, transport, *, yes=False):
     _coded(config.connector_settings, root, transport, require_interactive=False)
     path = config.credentials_path(root, transport)
     if os.path.lexists(path):
         config.load_credentials(root, transport)
+        if not yes and sys.stdin.isatty() and not _existing_credentials_choice(transport):
+            return 1
         print("既存の認証設定を保持しました。")
         return 0
+    env_snapshot = _credential_env_snapshot(root)
     try:
         value = config.load_credentials(root, transport)
-    except ValueError:
+    except ValueError as exc:
+        if str(exc) != "credentials_missing" or _env_has_transport_key(env_snapshot, transport):
+            raise config.ConfigError("credential_existing_state_unverifiable") from None
         if yes or not sys.stdin.isatty():
             raise config.ConfigError("credential_entry_requires_terminal") from None
         fields = ["bot_token", *(["app_token"] if transport == "slack" else [])]
         labels = {"bot_token": "Botトークン（Slackはxoxb-で始まる値）",
                   "app_token": "アプリトークン（xapp-で始まる値）"}
         print("接続先の管理画面で発行したトークンを入力してください。入力は表示されません。")
-        value = {key: getpass.getpass(f"{transport}: {labels[key]}: ").strip() for key in fields}
+        value = {key: _hidden_credential(f"{transport}: {labels[key]}: ").strip() for key in fields}
         _coded(config.validate_credentials, value, transport)
+    else:
+        if not yes and sys.stdin.isatty() and not _existing_credentials_choice(transport):
+            return 1
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     # Not safe_io.publish_new_bytes: that one suppresses a failed staging unlink, and a
     # leftover staging copy of the secret must not end in the success message below.
@@ -165,6 +226,8 @@ def initialize(root, transport, *, yes=False):
             json.dump(value, stream)
             stream.flush()
             os.fsync(stream.fileno())
+        if _credential_env_snapshot(root) != env_snapshot:
+            raise config.ConfigError("credential_existing_state_changed")
         os.link(temporary, path)
         from adapters.common.paths import fsync_dir
         fsync_dir(str(path.parent))
@@ -277,7 +340,13 @@ def main(argv=None) -> int:
         return check(args.root)
     except config.ConfigError as exc:
         # Codes only: native exceptions can embed paths or secret values.
-        if args.command in ("init", "check"):
+        if args.command == "init" and str(exc) in (
+                "credential_existing_state_unverifiable", "credential_existing_state_changed"):
+            print("既存の認証情報を確認できないか、入力中に変更されました。"
+                  "新しい認証情報は保存していません。設定の管理担当者に確認してください。")
+        elif args.command == "init" and str(exc) == "credential_hidden_input_unavailable":
+            print("入力を非表示にできないため、認証情報は保存していません。端末から再実行してください。")
+        elif args.command in ("init", "check"):
             print("接続設定を確認できません。通知先・操作権限・認証情報を確認してください。")
         print(str(exc), file=sys.stderr)
         if args.command != "send":
@@ -291,6 +360,11 @@ def main(argv=None) -> int:
     except NotSent as exc:
         print(f"not_sent {exc}", file=sys.stderr)
         return EX_TEMPFAIL
+    except OSError:
+        if args.command == "init":
+            print("認証情報の保存結果を確認できません。現在の状態を管理担当者に確認してください。")
+        print("failed OSError", file=sys.stderr)
+        return 1
     except Exception as exc:
         print(f"failed {type(exc).__name__}", file=sys.stderr)
         return 1
