@@ -53,8 +53,15 @@ def _fact(fid, kind, statement, quote="引用"):
             "validation_status": "verified"}
 
 
+def _save_karte_profile(db):
+    db.db.execute("UPDATE patients SET karte_id=100 WHERE project_id=1")
+    db.db.commit()
+    db.karte_summary_store(1, 100, {"comment": "生活環境：正本の合成プロフィール。"})
+
+
 def test_rollup_and_cached_reader_do_not_resurrect_contradictory_vitals(db, monkeypatch):
     _complete_history(db, monkeypatch)
+    _save_karte_profile(db)
     body = "本人の2026-10-09測定で血圧120/80でした。"
     db.save_messages([_message(mid=1, body=body,
                                posted_at="2026-10-09T00:00:00+09:00")])
@@ -64,14 +71,17 @@ def test_rollup_and_cached_reader_do_not_resurrect_contradictory_vitals(db, monk
     old = {**current, "latest_vitals": {"at": "2026-10-09T00:00:00+09:00",
                                       "sbp": 180, "dbp": 80},
            "profile_extension": {"text": "架空の補足"},
+           "patient_context": {"memo": {"living": [{"text": "古い合成プロフィール"}]}},
            "medications": [{"name": "架空の旧薬", "dose": "旧形式を保持"}]}
     meta = {"period_check_version": rollup.PERIOD_CHECK_VERSION - 1,
             inference.VERSION_KEY: inference.CURRENT_VERSION}
     before = db.db.total_changes
     safe = rollup.current_cached_refs(db.db, 1, old, meta, cfg={})
     assert safe["latest_vitals"] == current["latest_vitals"]
-    assert safe["profile_extension"] == old["profile_extension"]
-    assert safe["medications"] == old["medications"]
+    assert "profile_extension" not in safe
+    assert not safe.get("medications")
+    assert safe["patient_context"]["memo"]["living"][0]["text"] == "正本の合成プロフィール。"
+    assert "古い合成プロフィール" not in json.dumps(safe, ensure_ascii=False)
     assert db.db.total_changes == before
 
 
@@ -770,6 +780,7 @@ def test_rollup_decodes_in_bounded_pages_and_preserves_source_order(monkeypatch)
 def test_rollup_prior_day_contradictory_vitals_not_restored_from_cache(db, monkeypatch):
     body = "本人の2026-10-02測定で血圧120/80を測定しました。"
     _complete_history(db, monkeypatch)
+    _save_karte_profile(db)
     db.save_messages([_message(mid=1, body=body, posted_at="2026-10-09T00:00:00+09:00")])
     _save_bound_extraction(db, 1, {"vitals": {"sbp": 180, "dbp": 80}})
     current = rollup.build_rollup(db.db, 1, cfg={})
@@ -777,13 +788,16 @@ def test_rollup_prior_day_contradictory_vitals_not_restored_from_cache(db, monke
     old = {**current, "latest_vitals": {"at": "2026-10-09T00:00:00+09:00",
                                       "sbp": 180, "dbp": 80},
            "profile_extension": {"text": "架空の補足"},
+           "patient_context": {"memo": {"living": [{"text": "古い合成プロフィール"}]}},
            "medications": [{"name": "架空の旧薬", "dose": "旧形式を保持"}]}
     meta = {inference.VERSION_KEY: inference.CURRENT_VERSION, "period_check_version": rollup.PERIOD_CHECK_VERSION - 1}
     before = db.db.total_changes
     safe = rollup.current_cached_refs(db.db, 1, old, meta, cfg={})
     assert safe["latest_vitals"] == current["latest_vitals"]
-    assert safe["profile_extension"] == old["profile_extension"]
-    assert safe["medications"] == old["medications"]
+    assert "profile_extension" not in safe
+    assert not safe.get("medications")
+    assert safe["patient_context"]["memo"]["living"][0]["text"] == "正本の合成プロフィール。"
+    assert "古い合成プロフィール" not in json.dumps(safe, ensure_ascii=False)
     assert db.db.total_changes == before
 
 

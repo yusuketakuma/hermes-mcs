@@ -75,6 +75,7 @@ def test_import_deepen_fails_corrupt_job_with_invalid_payload(tmp_path, monkeypa
         db.ensure_patient(1)
         db.job_add("history", 1, payload={"since": 0, "page": 7})
         db.db.execute("UPDATE fetch_jobs SET payload='[]' WHERE project_id=1")
+        db.db.commit()
         cmd_dir = tmp_path / "cmd"
         cmd_dir.mkdir()
         (cmd_dir / "synthetic.json").write_text(

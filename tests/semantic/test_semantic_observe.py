@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from ledger import Ledger
 import semantic
 import semantic_observe
@@ -141,7 +142,7 @@ def test_observation_extract_backlog_excludes_v4_current_messages(tmp_path):
                 "INSERT INTO artifacts(kind,project_id,message_id,content,"
                 "meta,created_at) VALUES('semantic_facts_v4',?,1,'{}',?,?)",
                 (row["project_id"], json.dumps({
-                    "hash": row["content_hash"], "engine_version": 4,
+                    VERSION_KEY: CURRENT_VERSION, "hash": row["content_hash"], "engine_version": 4,
                     "extract_version": 4,
                     "projection_version": PROJECTION_VERSION}), time.time()))
 

@@ -164,7 +164,7 @@ def test_failed_alert_enqueue_is_visible():
         raise OSError("disk")
     ledger = SimpleNamespace(
         finish_run=lambda *a: None, outbox_add=boom,
-        db=SimpleNamespace(
+        db=SimpleNamespace(in_transaction=False,
             execute=lambda *a: SimpleNamespace(
                 fetchone=lambda: {"t": None})))
     result = {"errors": []}

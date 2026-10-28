@@ -3,6 +3,7 @@ import llm_availability
 import json
 import time
 
+from inference_version import CURRENT_VERSION, VERSION_KEY
 import semantic_drain as drain
 import semantic_runtime as runtime
 from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
@@ -85,7 +86,7 @@ def test_nested_jobs_and_next_pass_cannot_replace_outer_reason_or_shadow_totals(
 def test_exception_first_cause_is_job_local_and_qc_gets_empty_diagnostics(tmp_path, monkeypatch):
     db = _seeded(tmp_path)
     monkeypatch.setattr(llm_availability, 'disk_free_mb', lambda *args: 100_000.0)
-    db.job_add(drain.QC_JOB_KIND, 1, 1, payload={"generation": "synthetic-qc"})
+    db.job_add(drain.QC_JOB_KIND, 1, 1, payload={VERSION_KEY: CURRENT_VERSION, "generation": "synthetic-qc"})
     db.db.commit()
     semantic = db.db.execute("SELECT * FROM fetch_jobs WHERE kind=?", (drain.JOB_KIND,)).fetchone()
     qc = db.db.execute("SELECT * FROM fetch_jobs WHERE kind=?", (drain.QC_JOB_KIND,)).fetchone()

@@ -207,6 +207,8 @@ def test_thread_generation_keeps_member_and_attachment_contract_with_constant_qu
         expected = [{
             "message_id": m.message_id, "parent_id": m.parent_id,
             "revision": hashlib.sha256(m.body_html.encode()).hexdigest(),
+            "body_digest": hashlib.sha256(f"synthetic source {m.message_id}".encode()).hexdigest(),
+            "source_occurrence": 1,
             "body_state": "full", "reply_count": 0,
             "sender_id": 7, "sender_name": "old", "sender_type": "user",
             "profession": "看護師", "organization": "病棟A",
@@ -229,7 +231,7 @@ def test_thread_generation_keeps_member_and_attachment_contract_with_constant_qu
         db.db.set_trace_callback(None)
         assert actual == digest
         assert db.db.total_changes == changes and tuple(db.db.iterdump()) == before
-        assert sum(sql.lstrip().upper().startswith("SELECT") for sql in queries) <= 2
+        assert sum(sql.lstrip().upper().startswith("SELECT") for sql in queries) == 3
     finally:
         db.close()
 

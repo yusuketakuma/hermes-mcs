@@ -5,6 +5,7 @@ import semantic_transport
 import json
 import pytest
 
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from ledger import Ledger
 import semantic_v4 as v4
 import semantic_v4_cohort as cohort
@@ -44,7 +45,7 @@ def test_cohort_history_ignores_unreadable_siblings(ledger):
 def test_current_v4_unreadable_content_is_unavailable(ledger):
     revision = ledger.db.execute("SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
     aid = ledger.artifact_add(v4.KIND_V4, '{"meds":[]}', project_id=1, message_id=1,
-                              meta={"hash": revision, "engine_version": 4, "extract_version": 4, "doc_hash": "d",
+                              meta={VERSION_KEY: CURRENT_VERSION, "hash": revision, "engine_version": 4, "extract_version": 4, "doc_hash": "d",
                                     "projection_version": PROJECTION_VERSION})
     assert v4.current_v4(ledger, 1, revision)
     ledger.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (poison_json(ledger), aid))

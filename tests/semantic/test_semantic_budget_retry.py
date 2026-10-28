@@ -8,7 +8,7 @@ import time
 import pytest
 
 import semantic
-from semantic_testkit import _FakeJev, _cfg, _llm, _message, _seeded
+from semantic_testkit import _FakeJev, _cfg, _ledger, _llm, _message, _patient, _seeded
 
 
 @pytest.mark.parametrize('slow_stage', ['jev', 'llm'])
@@ -220,13 +220,10 @@ def test_periodic_revive_gives_failed_jobs_one_bounded_attempt(tmp_path):
 def test_summary_repair_reservation_tracks_actual_dispatch(tmp_path, monkeypatch, failure):
     import semantic_drain
     import semantic_runtime as runtime
-    db = _seeded(tmp_path)
-    with db.db:
-        row = db.db.execute("SELECT job_id,payload FROM fetch_jobs WHERE kind='semantic'").fetchone()
-        payload = json.loads(row["payload"])
-        payload["targets"] = [1]
-        db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
-                      (json.dumps(payload), row["job_id"]))
+    db = _ledger(tmp_path)
+    patient = _patient(db)
+    patient.messages = [_message(1)]
+    db.save_patient(patient, notify={"source": "unread"}, semantic=True)
     calls = []
     failure_type = {"budget_short": runtime.RuntimeBudgetShort,
                     "not_sent": runtime.LLMNotSent,

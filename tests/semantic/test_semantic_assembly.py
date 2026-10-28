@@ -4,6 +4,7 @@ import sqlite3
 
 import pytest
 
+from inference_version import CURRENT_VERSION, VERSION_KEY
 import semantic_assembly as assembly
 import semantic_extraction as extraction
 import semantic_facts as facts
@@ -72,7 +73,7 @@ def test_cached_rebuild_reads_real_checkpoint_rows_without_execution_capabilitie
               sqlite3.SQLITE_PRAGMA, sqlite3.SQLITE_ATTACH, sqlite3.SQLITE_DETACH}
     db.set_authorizer(lambda action, *args: sqlite3.SQLITE_DENY if action in denied else sqlite3.SQLITE_OK)
     try:
-        rebuilt, reason = extraction.rebuild_facts_v2_cached(member, db, FP, 1, original["doc"], {})
+        rebuilt, reason = extraction.rebuild_facts_v2_cached(member, db, FP, 1, original["doc"], {VERSION_KEY: CURRENT_VERSION})
         assert reason is None and rebuilt == original["doc"]
         assert db.total_changes == before and db.in_transaction
     finally:
@@ -97,7 +98,7 @@ def test_cached_rebuild_refuses_an_unfinished_relation_set(request, monkeypatch)
     assert original["extraction_complete"] and len(original["facts"]) == 2
     # First prove the complete manifest/checkpoints are actually reusable.
     rebuilt, reason = extraction.rebuild_facts_v2_cached(
-        member, ledger.db, FP, 1, original["doc"], {})
+        member, ledger.db, FP, 1, original["doc"], {VERSION_KEY: CURRENT_VERSION})
     assert reason is None and rebuilt == original["doc"]
     before = copy.deepcopy(original["doc"])
     changes = ledger.db.total_changes
@@ -110,7 +111,7 @@ def test_cached_rebuild_refuses_an_unfinished_relation_set(request, monkeypatch)
 
     monkeypatch.setattr(semantic_relations, "reconcile_facts", incomplete)
     rebuilt, reason = extraction.rebuild_facts_v2_cached(
-        member, ledger.db, FP, 1, original["doc"], {})
+        member, ledger.db, FP, 1, original["doc"], {VERSION_KEY: CURRENT_VERSION})
     assert comparisons == [True]
     assert rebuilt is None and reason == "chunk_cache_miss"
     assert original["doc"] == before and ledger.db.total_changes == changes

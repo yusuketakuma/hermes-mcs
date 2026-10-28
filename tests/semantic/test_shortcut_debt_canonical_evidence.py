@@ -2,6 +2,7 @@
 import json
 import sqlite3
 
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from test_canonical_request_evaluation import support
 
 
@@ -25,7 +26,7 @@ def test_shadow_pairs_second_evidence_ref_and_rejects_missing_refs():
                        (mid, json.dumps({"candidate": candidate}), json.dumps({"stage": "request_following_candidate"})))
             db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,meta) VALUES('extract_llm',1,?,?,?)",
                        (mid, json.dumps({"requests": [{"action": "資料確認", "evidence": "架空の二つ目の資料"}]}),
-                        json.dumps({"hash": "synthetic"})))
+                        json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": "synthetic"})))
         before = tuple(db.iterdump())
         result = support.shadow_compare(db)
         assert result["matched"] == result["compared"] == 1
