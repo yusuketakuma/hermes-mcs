@@ -172,6 +172,7 @@ def test_unrelated_init_never_loads_a_dictionary(monkeypatch, setup_state, confi
         cfg.pop("drug_map")
     else:
         cfg["drug_map"]["path"] += ".missing"
+    files[0].write_text(json.dumps(cfg))
     monkeypatch.setattr(drug_map, "load", lambda *a, **k: pytest.fail("unexpected dictionary read"))
     assert _run(monkeypatch, ["self_posts=true"]) == 0
     saved = json.loads(files[0].read_text())
@@ -301,7 +302,8 @@ def test_wizard_eof_at_an_operator_input_saves_nothing(tmp_path, monkeypatch):
     _wizard_env(monkeypatch, tmp_path)
     monkeypatch.setattr("builtins.input", answer)
     assert mcs_setup.main() == 130
-    assert not (tmp_path / "c.json").exists()
+    assert json.loads((tmp_path / "c.json").read_text()) == {
+        "mcs_login_id": "fictional-user", "notify_target": "slack"}
     assert not (tmp_path / "data" / "drug-map").exists()
 
 

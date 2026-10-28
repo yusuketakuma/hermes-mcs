@@ -37,6 +37,7 @@ import os
 import plistlib
 import re
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -455,6 +456,73 @@ def _guard_config(yes: bool) -> bool:
     return True
 
 
+def _init_config_snapshot():
+    """Capture the initial config or the identity of an unreadable entry."""
+    import config_backup
+    import config_edit
+    try:
+        info = os.lstat(CONF_PATH)
+    except FileNotFoundError:
+        return {}, ('missing', None)
+    identity = config_edit._identity(info) + (info.st_uid,)
+    if not stat.S_ISREG(info.st_mode) or info.st_size > mcs_util.CONFIG_MAX_BYTES:
+        backup = config_backup.snapshot(CONF_PATH)
+        if backup.identity != identity:
+            raise config_edit.ConfigConflict('config_changed')
+        return {}, ('invalid_backup', backup)
+    try:
+        raw, base = config_edit._snapshot(CONF_PATH)
+    except config_edit.ConfigConflict:
+        raise
+    except (OSError, ValueError):
+        # An unreadable regular file is retained by identity; it is never read
+        # through a symlink or silently treated as a valid empty config.
+        current = os.lstat(CONF_PATH)
+        if config_edit._identity(current) + (current.st_uid,) != identity:
+            raise config_edit.ConfigConflict('config_changed') from None
+        backup = config_backup.snapshot(CONF_PATH)
+        if backup.identity != identity:
+            raise config_edit.ConfigConflict('config_changed')
+        return {}, ('invalid_backup', backup)
+    try:
+        cfg = config_edit._parse(raw)
+    except (ValueError, RecursionError, UnicodeError):
+        backup = config_backup.snapshot(CONF_PATH)
+        if backup.identity != identity or backup.sha256 != base[1]:
+            raise config_edit.ConfigConflict('config_changed')
+        return {}, ('invalid_backup', backup)
+    return cfg, ('valid', base)
+
+
+def _init_save_config(cfg, initial):
+    """Publish the reviewed config under the shared short-lived edit lock."""
+    import config_backup
+    import config_edit
+    import safe_io
+    body = json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + '\n'
+    if len(body.encode('utf-8')) > mcs_util.CONFIG_MAX_BYTES:
+        raise ValueError('config_too_large')
+    parent = os.path.dirname(CONF_PATH) or '.'
+    os.makedirs(parent, exist_ok=True)
+    with config_edit._edit_lock(CONF_PATH):
+        if _init_config_snapshot()[1] != initial:
+            raise config_edit.ConfigConflict('config_changed')
+        kind = initial[0]
+        if kind == 'invalid_backup':
+            backup = config_backup.archive_and_create(CONF_PATH, initial[1], body.encode('utf-8'))
+            print(f'設定ファイルの元の内容を {backup} に退避しました')
+            return
+        if kind == 'missing':
+            safe_io.publish_new_bytes(CONF_PATH, body.encode('utf-8'))
+        else:
+            def write_checked(stream):
+                stream.write(body)
+                if _init_config_snapshot()[1] != initial:
+                    raise config_edit.ConfigConflict('config_changed')
+            safe_io.atomic_write(CONF_PATH, write_checked, 0o600,
+                                 tmp_prefix='.svc.', makedirs=False)
+
+
 
 
 
@@ -638,11 +706,17 @@ def _init_standalone_connectors(cfg: dict, args, integration_ok: bool) -> bool:
 
 def cmd_init(args) -> int:
     args._config_saved = False
-    # --yes may archive a corrupt config: defer that write until the desired
-    # interpreter (including --set overrides) has been verified.
-    if not args.yes and not _guard_config(False):
+    import config_backup
+    import config_edit
+    try:
+        cfg, initial_config = _init_config_snapshot()
+    except (OSError, ValueError, RecursionError):
+        print('初期設定: 設定を安定して読み取れません。設定は保存していません')
         return 1
-    cfg = mcs_util.load_config()
+    if initial_config[0].startswith('invalid') and not args.yes:
+        print('設定ファイルを読み取れないか、形式が不正です。保存していません。'
+              'ファイルを修正するか、`mcs_setup.py init --yes`で退避してください')
+        return 1
     try:
         mode_before = mcs_runtime.mode(cfg)
     except ValueError:
@@ -746,9 +820,8 @@ def cmd_init(args) -> int:
     login_id = cfg.get("mcs_login_id")
 
     if _init_store_secrets(args, login_id):
-        return 1
-
-    if args.yes and not _guard_config(True):
+        print('初期設定: config.jsonは保存していません。認証情報や辞書の準備が済んでいる場合があります。'
+              '現在の状態を確認してください')
         return 1
 
     for d in (os.path.join(HOME, "data"),
@@ -757,7 +830,27 @@ def cmd_init(args) -> int:
         # PHI/session stores: owner-only even when the dir pre-existed
         os.makedirs(d, mode=0o700, exist_ok=True)
         os.chmod(d, 0o700)
-    service_management.write_service_file(CONF_PATH, json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True) + '\n', 384)
+    try:
+        _init_save_config(cfg, initial_config)
+    except config_backup.BackupUncertain as error:
+        if error.parent_unchanged:
+            candidate = os.path.join(os.path.dirname(CONF_PATH) or '.', error.backup_name)
+            print('初期設定: config.jsonまたは退避の保存結果を確認できません。'
+                  f'移動先の候補 {candidate} と現在の設定を確認してください。'
+                  '認証情報や辞書の準備が済んでいる場合があります。')
+        else:
+            print('初期設定: config.jsonまたは退避の保存結果を確認できません。'
+                  '設定フォルダーの保存場所が変わった可能性があります。移動したフォルダーと'
+                  '現在の設定を確認してください。認証情報や辞書の準備が済んでいる場合があります。')
+        return 1
+    except config_edit.ConfigConflict:
+        print('初期設定: 別の設定保存と競合したか、設定が変更されたためconfig.jsonは保存していません。'
+              '認証情報や辞書の準備が済んでいる場合があります。現在の状態を確認して再実行してください')
+        return 1
+    except (OSError, ValueError, RecursionError):
+        print('初期設定: config.jsonまたは退避の保存結果を確認できません。'
+              '認証情報や辞書の準備が済んでいる場合があります。現在の状態を確認してください')
+        return 1
     args._config_saved = True
     print(f"設定ファイルを保存しました: {CONF_PATH}")
     if not args.yes:

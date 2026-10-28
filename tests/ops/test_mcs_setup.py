@@ -738,6 +738,7 @@ def test_init_self_identity_flags(monkeypatch, tmp_path):
     monkeypatch.setattr(mcs_util, 'load_config',
                         lambda: {"mcs_login_id": "u1",
                                  "notify_target": "slack"})
+    (tmp_path / "c.json").write_text(json.dumps({"mcs_login_id": "u1", "notify_target": "slack"}))
     monkeypatch.setattr(
         mcs_setup.sys, "argv",
         ["mcs_setup", "init", "--yes",
@@ -817,6 +818,7 @@ def _init_env(monkeypatch, tmp_path, cfg):
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(tmp_path / "c.json"))
     monkeypatch.setattr(mcs_setup, "ENV_PATH", str(tmp_path / ".env"))
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    (tmp_path / "c.json").write_text(json.dumps(cfg))
     monkeypatch.delenv("MCS_SETUP_PASSWORD", raising=False)
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     # plugin integration is tested separately — keep init tests off the
@@ -877,7 +879,9 @@ def test_init_set_cannot_mint_or_repin_canonical(
     monkeypatch.setattr(mcs_setup.sys, "argv", argv)
     assert mcs_setup.main() == 1
     assert "fact-source canonical --gate-evidence" in capsys.readouterr().out
-    assert not (tmp_path / "c.json").exists()
+    assert json.loads((tmp_path / "c.json").read_text()) == {
+        "mcs_login_id": "u1", "notify_target": "slack",
+        "semantic": {"mode": "off", "fact_source": source, "fact_source_gate": "existing:pin"}}
 
 
 def test_init_rejects_stale_canonical_on_unrelated_set(monkeypatch, tmp_path):
@@ -889,7 +893,8 @@ def test_init_rejects_stale_canonical_on_unrelated_set(monkeypatch, tmp_path):
                         ["mcs_setup", "init", "--yes",
                          "--set", "self_posts=true"])
     assert mcs_setup.main() == 1
-    assert not (tmp_path / "c.json").exists()
+    assert json.loads((tmp_path / "c.json").read_text()) == {
+        "mcs_login_id": "u1", "notify_target": "slack", "semantic": sem}
 
 
 def test_wizard_defaults_and_gates(monkeypatch, tmp_path):
@@ -2513,7 +2518,9 @@ def test_init_invalid_runtime_mode_set_writes_no_secret(monkeypatch, tmp_path, c
     monkeypatch.setattr(mcs_setup.sys, "argv", ["mcs_setup", "init", "--yes", "--set", 'runtime_mode="standalon"'])
     assert mcs_setup.main() == 1
     assert "変更は保存していません" in capsys.readouterr().out
-    assert not (tmp_path / ".env").exists() and not (tmp_path / "c.json").exists()
+    assert not (tmp_path / ".env").exists()
+    assert json.loads((tmp_path / "c.json").read_text()) == {
+        "mcs_login_id": "u1", "notify_target": "slack"}
 
 
 def test_wizard_keeps_explicit_null_project_ids(monkeypatch):
