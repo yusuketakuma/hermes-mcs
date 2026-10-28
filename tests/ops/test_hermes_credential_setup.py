@@ -72,7 +72,8 @@ def test_keeping_declining_or_aborting_writes_nothing(term, answers, tmp_path):
 
 
 @pytest.mark.parametrize("reference", ["${VAULT_SLACK_APP}", "op://vault/slack/app", "\"op://vault/slack/app\"",
-                                       "__BITWARDEN_MANAGED__"])
+                                       "__BITWARDEN_MANAGED__", "xapp-${VAULT_PART}/suffix",
+                                       "${VAULT_SLACK_APP:-xapp-fallback}"])
 def test_environment_and_externally_managed_tokens_are_left_alone(term, monkeypatch, capsys, tmp_path, reference):
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-from-environment")
     hermes = FakeHermes(tmp_path / ".env", {"SLACK_APP_TOKEN": reference})

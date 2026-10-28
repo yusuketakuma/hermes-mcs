@@ -18,7 +18,6 @@ TOKENS = {
 _PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 # A .env value that refers to another secret source (1Password op://, ${NAME}, a managed
 # __PLACEHOLDER__) is owned there: overwriting the reference would detach it.
-_REFERENCE_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}")
 _MAX_TOKEN = 4096
 _MAX_ENV = 1024 * 1024
 
@@ -78,8 +77,9 @@ def _status(cli, exe, profile, key, expect=None):
         return "missing"
     if expect is not None:
         return "registered" if value == expect else "unavailable"   # the saved line, compared in memory only
-    if (value.startswith("op://") or _REFERENCE_RE.fullmatch(value)
-            or (value.startswith("__") and value.endswith("__"))):
+    # Hermes expands ${VAR} / ${VAR:-default} anywhere in a value (env_loader), so any of them
+    # makes the line depend on another source.
+    if value.startswith("op://") or "${" in value or (value.startswith("__") and value.endswith("__")):
         return "external"
     return "registered"
 
