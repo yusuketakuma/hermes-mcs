@@ -43,6 +43,11 @@ modeを明示した既存設定で予算を省略した場合は、従来どお�
 
 Anthropicには、1日の件数 `cloud_llm.daily_request_budget`、1日の費用 `daily_cost_limit_usd`、1か月の費用 `monthly_cost_limit_usd`（費用はドル）を設定できます。
 いずれも未指定の場合、その上限はありません。費用の上限は、予約時の最大額で判定するため、実際の費用が上限より低くても先に止まることがあります。
+`cloud_llm.mode` を指定せず、キーを置いて自動で有効にする場合は、`daily_cost_limit_usd` か `monthly_cost_limit_usd` の少なくとも一方が必要です。どちらも無いあいだは送信せず、`check` と `cloud-llm plan` に `cost_limit_required` と表示します。
+
+送信を一定の時刻までに限る場合は、`cloud_llm.until`（Anthropic）と `semantic.until`（Jev）に、時差付きのISO 8601形式で終了時刻を指定します（例: `"2026-10-28T23:59:59+09:00"`）。
+その時刻を過ぎると新しい送信を始めず、ローカルでの処理に戻ります。すでに送信中の要求は最後まで処理します。終了後に再開する場合は、`until` を変更するか削除してください。
+1日の費用上限は日本時間の0時に戻るため、期間を限って使う場合は月の上限も同じ額にしておくと、合計額を超えません。
 
 費用の上限は、次のコマンドで表示・設定できます。CodexやClaude Codeからもそのまま実行でき、値は `config.json` に保存されます。
 

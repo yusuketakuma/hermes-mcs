@@ -84,6 +84,55 @@ def gateway_sources_mtime(checkout: str, dirs=mcs_runtime.GATEWAY_SOURCE_DIRS, *
     return newest or None
 
 
+_KEY_REASONS = {
+    "env_file_unreadable": ".envを読み取れません",
+    "env_file_not_regular": ".envが通常のファイルではありません",
+    "env_file_owner": ".envの所有者が本人ではありません",
+    "env_file_mode_not_0600": ".envの権限が600（本人だけが読み書き）ではありません",
+    "env_file_too_large": ".envが大きすぎます",
+    "env_file_not_utf8": ".envをUTF-8として読めません",
+    "key_export_prefix": "行頭に export が付いています（「キー名=値」の形で書いてください）",
+    "key_duplicate": "同じキーが複数行にあります",
+    "key_quote_invalid": "値の引用符を読めません",
+    "key_empty": "値が空です",
+    "key_whitespace_or_control": "値に空白や制御文字が含まれています（行末の空白を含む）",
+}
+
+
+def cloud_setting_warnings(cfg: dict, root) -> list[str]:
+    """Explain, without values, why an external-AI key or setting keeps sending off or stopped."""
+    import cloud_policy
+    from semantic_policy import semantic_config
+    out = []
+    for key, label in (("MCS_ANTHROPIC_API_KEY", "Anthropic"), ("TYPESAFE_API_KEY", "Jev")):
+        reason = mcs_util.private_env_problem(key, root)
+        if reason in _KEY_REASONS:   # present but rejected; plain absence is reported elsewhere
+            out.append(f"{key}（{label}）を使えません: {_KEY_REASONS[reason]}。"
+                       f"このキーは使われず、{label}への送信は行いません。エラーコード: {reason}")
+    anthropic_key = bool(mcs_util.private_env_value("MCS_ANTHROPIC_API_KEY", root))
+    cloud, errors = cloud_policy.cloud_config(cfg, key_present=anthropic_key and bool(cfg))
+    if "config: cloud_llm_cost_limit_required" in errors:
+        out.append("Anthropicのキーはありますが、費用の上限が未設定のため送信していません。"
+                   "`mcs_setup.py cloud-llm budget --daily-usd 金額 --monthly-usd 金額`で上限を設定してください。"
+                   "エラーコード: cost_limit_required")
+    if cloud["mode"] in ("on", "shadow") and cloud_policy.setting_block_reason(cloud) == "expired":
+        out.append("cloud_llm.untilの時刻を過ぎたため、Anthropicへの送信を止めています。"
+                   "再開する場合はuntilを変更するか削除してください。エラーコード: expired")
+    block = cfg.get("semantic") if isinstance(cfg, dict) else None
+    if isinstance(block, dict):
+        if block.get("mode", "off") != "off" and "daily_request_budget" not in block:
+            out.append("semantic.modeを指定していますが、semantic.daily_request_budgetが未設定のため"
+                       "Jevの1日の要求上限が0になり、外部解析は行われません。"
+                       "daily_request_budgetに上限の件数を設定してください。エラーコード: jev_budget_zero")
+        if block.get("until") is not None and block.get("mode") != "off":
+            # With a key the only remaining reason for "off" without an error is the window.
+            sem, sem_errors = semantic_config(cfg, key_present=True)
+            if not sem_errors and sem["mode"] == "off":
+                out.append("semantic.untilの時刻を過ぎたため、Jevへの送信を止めています。"
+                           "再開する場合はuntilを変更するか削除してください。エラーコード: expired")
+    return out
+
+
 def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
                       chrome_bin: str, credential_paths: tuple[str, ...],
                       agents_dir: str, deadline=None) -> tuple[list[str], list[str]]:
@@ -204,6 +253,7 @@ def check_environment(cfg: dict, *, paths: service_management.ServicePaths,
     elif not jev_key_present:
         warnings.append("TYPESAFE_API_KEYは未設定です。"
                         "外部の意味解析を有効にする場合に必要です")
+    warnings.extend(cloud_setting_warnings(cfg, paths.root))
     if paths.platform == "darwin" and cfg.get("runtime_mode") != "standalone":
         agents = agents_dir
         labels = service_contract.diagnosed_agent_labels(cfg)

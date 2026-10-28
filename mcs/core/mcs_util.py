@@ -106,33 +106,73 @@ def env_value(key: str, paths=None, check_env: bool = True) -> str | None:
     return None
 
 
-def private_env_value(key: str, root=None) -> str | None:
-    """Read a provider key from an owner-only regular MCS dotenv, never the environment."""
+def _private_env_lookup(key: str, root=None) -> tuple:
+    """(value, None) or (None, fixed reason code); the code never carries file content."""
     from safe_io import fdopen_owned
     try:
         fd = os.open(os.path.join(root or HOME, ".env"),
                      os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None, "env_file_missing"
+    except OSError:
+        return None, "env_file_unreadable"
+    try:
         with fdopen_owned(fd, "rb") as stream:
             st = os.fstat(stream.fileno())
-            if (not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) != 0o600
-                    or st.st_uid != os.getuid() or st.st_size > DOTENV_MAX_BYTES):
-                return None
+            if not stat.S_ISREG(st.st_mode):
+                return None, "env_file_not_regular"
+            if st.st_uid != os.getuid():
+                return None, "env_file_owner"
+            if stat.S_IMODE(st.st_mode) != 0o600:
+                return None, "env_file_mode_not_0600"
+            if st.st_size > DOTENV_MAX_BYTES:
+                return None, "env_file_too_large"
             raw = stream.read(DOTENV_MAX_BYTES + 1)
         if len(raw) > DOTENV_MAX_BYTES:
-            return None
-        matches = [line.split("=", 1)[1] for line in raw.decode("utf-8").splitlines()
-                   if line.startswith(key + "=")]
-        if len(matches) != 1:
-            return None
-        value = matches[0]
+            return None, "env_file_too_large"
+        lines = raw.decode("utf-8").splitlines()
+    except OSError:
+        return None, "env_file_unreadable"
+    except UnicodeError:
+        return None, "env_file_not_utf8"
+    matches = [line.split("=", 1)[1] for line in lines if line.startswith(key + "=")]
+    if not matches:
+        exported = any(line.startswith("export " + key + "=") for line in lines)
+        return None, "key_export_prefix" if exported else "key_missing"
+    if len(matches) != 1:
+        return None, "key_duplicate"
+    value = matches[0]
+    try:
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
             value = json.loads(value) if value[0] == '"' else value[1:-1]
-        if (not isinstance(value, str) or not value
-                or any(c.isspace() or ord(c) < 33 or ord(c) == 127 for c in value)):
-            return None
-        return value
-    except (OSError, ValueError, UnicodeError):
-        return None
+    except ValueError:
+        return None, "key_quote_invalid"
+    if not isinstance(value, str) or not value:
+        return None, "key_empty"
+    if any(c.isspace() or ord(c) < 33 or ord(c) == 127 for c in value):
+        return None, "key_whitespace_or_control"
+    return value, None
+
+
+def until_epoch(value) -> float:
+    """Epoch seconds of a configured ISO 8601 end time that names its UTC offset."""
+    from datetime import datetime
+    if not isinstance(value, str) or len(value) > 64:
+        raise ValueError("until_invalid")
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("until_needs_offset")
+    return parsed.timestamp()
+
+
+def private_env_value(key: str, root=None) -> str | None:
+    """Read a provider key from an owner-only regular MCS dotenv, never the environment."""
+    return _private_env_lookup(key, root)[0]
+
+
+def private_env_problem(key: str, root=None) -> str | None:
+    """Why private_env_value returns None for this key, as a fixed code; None when it is usable."""
+    return _private_env_lookup(key, root)[1]
 
 
 # 4xx statuses that mean "try again later", not a permanent refusal

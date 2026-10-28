@@ -107,13 +107,14 @@ def diagnostics(cfg, *, root=None, probe=False):
                 "daily_request_budget": semantic["daily_request_budget"],
                 "scope": "all" if semantic["project_ids"] is None else "none" if not semantic["project_ids"] else "selected"},
         "anthropic": {"mode": cloud["mode"], "key_present": key,
-                "status": "invalid" if errors else "local" if not key or cloud["mode"] in ("off", "dry_run") else "configured",
+                "status": "invalid" if policy.blocking_errors(errors) else "local" if not key or cloud["mode"] in ("off", "dry_run") else "configured",
                 "daily_request_budget": cloud["daily_request_budget"],
                 "daily_cost_limit_usd": cloud["daily_cost_limit_usd"],
                 "monthly_cost_limit_usd": cloud["monthly_cost_limit_usd"],
                 "scope": "all" if cloud["project_ids"] is None else "none" if not cloud["project_ids"] else "selected",
                 "price_version": policy.PRICE_VERSION, "price_valid": policy.pricing_valid(),
-                "accounting": None, "dry_run": None, "block_reason": None}}
+                "accounting": None, "dry_run": None,
+                "block_reason": "cost_limit_required" if errors and not policy.blocking_errors(errors) else None}}
     eligible_scope = cloud["project_ids"] is None or bool(set(cloud["project_ids"]) - set(cloud["exclude_project_ids"]))
     if (not errors and not key and cloud["mode"] in ("on", "shadow")
             and cloud["routes"] and eligible_scope):
@@ -360,7 +361,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
     if type(days) is not int or not 1 <= days <= 62:
         raise ValueError("days_invalid")
     settings, errors, key = _settings(cfg, root)
-    if errors:
+    if policy.blocking_errors(errors):
         raise ValueError("cloud_config_invalid")
     # Keyless planning can still estimate the scope that auto mode would enable.
     planning = policy.cloud_config(cfg, key_present=True)[0]
@@ -436,7 +437,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
             output_per_request=output_mean)
     peak = max(max((row["patients"] + row["scan_requests"] for row in counts.values()), default=0),
                routes["reextract"]["requests_estimate"])
-    decision = ("off" if settings["mode"] == "off" else "dry_run" if settings["mode"] == "dry_run"
+    decision = ("cost_limit_required" if errors else "off" if settings["mode"] == "off" else "dry_run" if settings["mode"] == "dry_run"
                 else "no_api_key" if not key else reason or
                 ("eligible" if any(item["targets"] for item in routes.values()) else "no_targets"))
     return {"mode": settings["mode"], "key_present": key, "send_decision": decision, "routes": routes,
@@ -505,7 +506,7 @@ def apply_control_tx(db, req, now):
             return "cloud_config_invalid", {}
         key = policy.api_key()
         _, cloud_errors = policy.cloud_config(cfg, key_present=bool(key))
-        if errors or cloud_errors:
+        if errors or policy.blocking_errors(cloud_errors):
             return "cloud_config_invalid", {}
         if not key:
             return "no_api_key", {}

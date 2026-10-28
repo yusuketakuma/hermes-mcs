@@ -1,0 +1,21 @@
+{
+  "category": "changed",
+  "title": "外部AIの送信に終了時刻と費用上限の必須化を追加",
+  "summary": "Anthropicのキーを置くだけで自動的に送信する設定では、費用の上限を設定するまで送信しません。Anthropicには `cloud_llm.until`、Jevには `semantic.until` で送信の終了時刻を指定でき、その時刻を過ぎると新しい送信を止めます。キーや設定が原因で外部AIを使えない理由を `check` に表示します。",
+  "upgrade": "`cloud_llm.mode` を書かずにAnthropicのキーだけで使っている場合は、`mcs_setup.py cloud-llm budget --daily-usd 金額 --monthly-usd 金額` で上限を設定するまで送信が止まります。`cloud_llm.mode` を明示した設定と、Jevの送信条件は変わりません。終了時刻を使わない場合の追加操作は不要です。",
+  "details": [
+    "終了時刻は時差付きのISO 8601形式（例: 2026-10-28T23:59:59+09:00）で指定します。時刻を過ぎると、Anthropicは予約前の確認で送信を止め、Jevは外部解析のすべての種類を止めます。送信中の要求は最後まで処理します。",
+    "1日の費用上限は日本時間の0時に戻ります。期間を限って使う場合は、月の上限も同じ額にしておくと合計額を超えません。",
+    "`.env` のキーを、権限・所有者・重複行・export接頭辞・空白などの理由で使えない場合は、値を表示せずに理由を `check` に表示します。キーを読む条件は変わりません。",
+    "Jevで `semantic.mode` を指定して `daily_request_budget` を省略した場合、1日の要求上限が0のため外部解析が行われないことを `check` に表示します。上限の扱いは変わりません。",
+    "`cloud-llm plan`・`estimate` は、費用上限がないために送信しない状態を `cost_limit_required` と表示します。"
+  ],
+  "refs": [
+    "mcs/llm/cloud_policy.py",
+    "mcs/semantic/semantic_policy.py",
+    "mcs/core/mcs_util.py",
+    "mcs/ops/environment_diagnostics.py",
+    "mcs/ops/cloud_cli.py",
+    "docs/guides/ANTHROPIC.md"
+  ]
+}

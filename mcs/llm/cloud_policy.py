@@ -11,7 +11,7 @@ import uuid
 
 from anthropic_client import AnthropicError, MODEL, MAX_TOKENS, validate_usage
 from llm_retry import http_error
-from mcs_util import private_env_value, payload_hash, strict_json
+from mcs_util import private_env_value, payload_hash, strict_json, until_epoch
 
 PRICE_VERSION = "anthropic-haiku-5-5-2026-10-26"
 PRICE_CHECKED_ON = "2026-10-26"
@@ -57,7 +57,7 @@ def cloud_config(cfg, *, key_present=False):
     out = {"mode": "off", "routes": list(ROUTES), "project_ids": [],
            "exclude_project_ids": [], "model": MODEL, "daily_request_budget": None,
            "max_concurrency": 4, "daily_cost_limit_usd": None, "monthly_cost_limit_usd": None,
-           "usd_jpy": None}
+           "usd_jpy": None, "until": None}
     errors = []
     # an absent block means "unset"; an explicit null is a config error, not an omission
     block = cfg.get("cloud_llm", {}) if isinstance(cfg, dict) else {}
@@ -112,9 +112,35 @@ def cloud_config(cfg, *, key_present=False):
             out[key] = value
         except (ValueError, OverflowError):
             errors.append(f"config: cloud_llm_{key}_invalid")
+    if block.get("until") is not None:
+        try:
+            until_epoch(block["until"])
+            out["until"] = block["until"]
+        except (ValueError, OverflowError):
+            errors.append("config: cloud_llm_until_invalid")
+    # A key alone may enable sending, but never without a spending cap.
+    if (key_present is True and "mode" not in block and out["project_ids"] != []
+            and out["daily_cost_limit_usd"] is None and out["monthly_cost_limit_usd"] is None):
+        errors.append(COST_LIMIT_REQUIRED)
     if errors:
         out["mode"] = "off"
     return out, errors
+
+
+COST_LIMIT_REQUIRED = "config: cloud_llm_cost_limit_required"
+
+
+def blocking_errors(errors):
+    """Config errors other than the missing spending cap, which only keeps sending off."""
+    return [error for error in errors if error != COST_LIMIT_REQUIRED]
+
+
+def setting_block_reason(settings, *, now=None):
+    """A stop decided by normalized settings alone: the configured run window has ended."""
+    until = settings.get("until")
+    if until is not None and (time.time() if now is None else now) >= until_epoch(until):
+        return "expired"
+    return None
 
 
 def _cfg(cfg):
@@ -600,6 +626,9 @@ def budget_block_reason(ledger, cfg, *, max_tokens=1600, input_bound=INPUT_RESER
     ``input_bound`` is the next request's reserved input (the margin alone for a
     pre-check without a request)."""
     c = _cfg(cfg)
+    reason = setting_block_reason(c)
+    if reason:
+        return reason
     if not pricing_valid():
         return "pricing_unverified"
     try:

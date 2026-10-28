@@ -153,6 +153,7 @@ def candidate_fingerprint(cfg: dict) -> str:
     defaults.pop('fact_source_gate', None)
     defaults.pop('fact_source_evidence', None)
     defaults.pop('fact_source_approval', None)
+    defaults.pop('until', None)  # a run window decides when, not how, facts are interpreted
     for field in ('daily_request_budget', 'attempt_timeout_seconds', 'job_budget_seconds',
                   'max_attempts_per_try', 'max_questions_per_request', 'delayed_notice_seconds',
                   'mode', 'summary_mode', 'loop_mode', 'project_ids'):

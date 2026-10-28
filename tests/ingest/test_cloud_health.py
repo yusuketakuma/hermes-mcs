@@ -12,7 +12,7 @@ from anthropic_client import AnthropicError
 from common_testkit import ledger_fixture
 
 db = ledger_fixture(name="db")
-CFG = {"cloud_llm": {}}   # a readable config without a cloud block: on with a key
+CFG = {"cloud_llm": {"daily_cost_limit_usd": 2}}   # no mode: on with a key and a spending cap
 
 
 @pytest.mark.parametrize("kind", ["auth_error", "payment_required", "pricing_unverified"])
