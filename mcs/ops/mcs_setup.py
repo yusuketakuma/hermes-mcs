@@ -163,19 +163,39 @@ def _project_ids_yaml(text: str) -> str | None:
 def _apply_standalone_credentials(args, used: set, wanted: list) -> bool:
     """Provision the wanted standalone tokens into the MCS .env."""
     # Credentials already provisioned by the native initializer need no dotenv copy.
-    from mcs_standalone.config import credentials_path, load_credentials
-    if used & {"slack", "discord"} and all(
-            os.path.lexists(credentials_path(HOME, transport))
-            for transport in used & {"slack", "discord"}):
+    from mcs_standalone.config import credentials_path, load_credentials, validate_credentials
+    from mcs_standalone.__main__ import _credential_env_snapshot, _env_has_transport_key, _hidden_credential
+    transports = used & {"slack", "discord"}
+    missing_json = set()
+    for transport in transports:
+        if not os.path.lexists(credentials_path(HOME, transport)):
+            missing_json.add(transport)
+            continue
         try:
-            for transport in used & {"slack", "discord"}:
-                load_credentials(HOME, transport)
-            return True
+            load_credentials(HOME, transport)
         except ValueError:
             return False
-    updates, missing = {}, []
+    if not missing_json:
+        return True
+    try:
+        existing = _credential_env_snapshot(HOME)
+    except ValueError:
+        print("独立接続: 既存の認証情報を確認できません。新しい情報を保存せず、管理担当者に確認してください。")
+        return False
+    for transport in missing_json:
+        try:
+            load_credentials(HOME, transport)
+        except ValueError as exc:
+            if str(exc) != "credentials_missing" or _env_has_transport_key(existing, transport):
+                print("独立接続: 既存の認証情報を確認できません。新しい情報を保存せず、管理担当者に確認してください。")
+                return False
+    wanted = [(key, desc) for key, desc in wanted
+              if ("slack" if key.startswith("SLACK_") else "discord") in missing_json]
+    updates, missing, resolved = {}, [], {}
     for env_key, desc in wanted:
-        if env_value(env_key, paths=[ENV_PATH], check_env=False):
+        current = env_value(env_key, paths=[ENV_PATH], check_env=False)
+        if current:
+            resolved[env_key] = current
             print(f"  {env_key}: 設定済み")
             continue
         tok = os.environ.get(env_key)
@@ -188,22 +208,43 @@ def _apply_standalone_credentials(args, used: set, wanted: list) -> bool:
                 None):
             tok = hermes_tok
         if not tok and not args.yes:
-            tok = getpass.getpass(f"  {desc}（{ENV_PATH} へ保存。空欄=スキップ）: ") or None
+            try:
+                tok = _hidden_credential(f"  {desc}（{ENV_PATH} へ保存。空欄=スキップ）: ") or None
+            except ValueError:
+                print("  入力を非表示にできないため、認証情報は保存していません。端末から再実行してください")
+                return False
         if tok:
             updates[env_key] = tok
+            resolved[env_key] = tok
         else:
             missing.append(env_key)
+    if missing:
+        print("  未設定: " + ", ".join(missing)
+              + " — 認証情報は保存していません。設定を確認してinitを再実行してください")
+        return False
+    try:
+        if "slack" in missing_json:
+            validate_credentials({"bot_token": resolved["SLACK_BOT_TOKEN"],
+                                  "app_token": resolved["SLACK_APP_TOKEN"]}, "slack")
+        if "discord" in missing_json:
+            validate_credentials({"bot_token": resolved["DISCORD_BOT_TOKEN"]}, "discord")
+    except (KeyError, ValueError):
+        print("  認証情報の形式を確認できないため、保存していません。")
+        return False
     if updates:
         try:
+            if _credential_env_snapshot(HOME) != existing:
+                print("  .env: 入力中に変更されたため、認証情報は保存していません。現在の状態を確認してください")
+                return False
             lifecycle_io.write_env(ENV_PATH, updates)
         except ValueError:
             print("  .env: トークンの形式が正しくありません。既存のファイルを保持しました")
             return False
+        except OSError:
+            print("  .env: 保存結果を確認できません。現在の認証情報の状態を管理担当者に確認してください")
+            return False
         print(f"  {', '.join(sorted(updates))}: {ENV_PATH} へ保存しました（本人のみ読み書きできます）")
-    if missing:
-        print("  未設定: " + ", ".join(missing)
-              + f" — {ENV_PATH} に KEY=値 で追加するか init を再実行")
-    return not missing
+    return True
 
 
 def _plugin_settings_plan(transport: str, nd: dict, args) -> tuple:
@@ -314,7 +355,7 @@ def _apply_plugin_integration(cfg: dict, args) -> bool:
         wanted = [("DISCORD_BOT_TOKEN", "DiscordのBotトークン")] if "discord" in used else []
         if "slack" in used:
             wanted.append(("SLACK_BOT_TOKEN", "SlackのBotトークン（xoxb-で始まる値）"))
-        if interactive == "slack":
+        if "slack" in used:
             wanted.append(("SLACK_APP_TOKEN", "Slackのアプリトークン（xapp-で始まる値）"))
         return _apply_standalone_credentials(args, used, wanted)
     if not isinstance(ntf, dict) \
@@ -707,6 +748,8 @@ def _init_standalone_connectors(cfg: dict, args, integration_ok: bool) -> bool:
                 integration_ok = integration_ok and result.returncode == 0
             except (OSError, subprocess.TimeoutExpired):
                 integration_ok = False
+            if not integration_ok:
+                return False
     return integration_ok
 
 
@@ -884,7 +927,11 @@ def cmd_init(args) -> int:
               "\n入力中のパスワードは表示されません。Ctrl+C で中止すると、保存済みの設定は残ります。")
     integration_ok = _apply_plugin_integration(cfg, args)
     if cfg.get("runtime_mode") == "standalone":
-        integration_ok = _init_standalone_connectors(cfg, args, integration_ok)
+        integration_ok = integration_ok and _init_standalone_connectors(cfg, args, integration_ok)
+        if not integration_ok:
+            print("初期設定: 独立接続の設定を完了できませんでした。"
+                  "設定や先に入力した認証情報は保存済みの場合があります。現在の状態を確認してください。")
+            return 1
     # an interactive transport needs the supervised gateway — on a
     # first install `services` ran BEFORE init could configure
     # interactive, so sync just the gateway here rather than leaving
