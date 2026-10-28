@@ -234,12 +234,16 @@ def test_source_quality_negative_stays_held_without_resampling(runtime, cloud, m
                 assert tuple(led.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (old[0],)).fetchone()) == old
 
 
+@pytest.mark.parametrize("archived", [False, True])
 @pytest.mark.parametrize("count", [0, 13, 257])
-def test_source_quality_capture_keeps_every_fact_and_coverage_question(runtime, cloud, count):
+def test_source_quality_capture_keeps_every_fact_and_coverage_question(runtime, cloud, count, archived):
     led, _, _ = runtime
     statements = [f"合成の生活記録{i:04d}。" for i in range(count)]
     body = "\n\n".join(statements) if statements else "合成の通常連絡。"
     seed(led, body=body)
+    if archived:
+        with led.db:
+            led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
     source = context_refresh._snapshot(led.db, 1, CFG)["sources"][0]
     items = [{"category": "living", "text": text, "evidence": text,
               "subject": "unspecified", "details": []} for text in statements]
@@ -280,6 +284,40 @@ def test_source_quality_capture_keeps_every_fact_and_coverage_question(runtime, 
             context_refresh._source_quality_capture(led.db, 1, CFG, 1, {"code": "a" * 64, "policy": "b" * 64})
     finally:
         led.db.rollback()
+
+
+def test_archived_cloud_source_is_audited_but_never_published(runtime, cloud):
+    led, _, _ = runtime
+    seed(led, body="見出しのない完全合成の居住記録。")
+    with led.db:
+        led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+    for _ in range(20):
+        result = step(runtime)
+        if result.get("lane") == "C" and result["status"] == "progressed":
+            break
+    else:
+        pytest.fail("archived source audit did not finish")
+    assert led.artifacts("patient_context_source_quality_v1", project_id=1)
+    assert led.artifacts("patient_context_source_quality_pass_v1", project_id=1)
+    snapshot = context_refresh._snapshot(led.db, 1, CFG, hydrate=False)
+    scan = context_refresh._current_scans(led.db, 1, snapshot["sources"], snapshot["contract"], cfg=CFG)[1]
+    assert scan["complete"] and scan["audited"]
+    assert not context_refresh._inference_coverage(led.db, 1, CFG, snapshot)["publication_eligible"]
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    led.db.execute("BEGIN")
+    try:
+        with pytest.raises(ValueError, match="patient_summary_quality_source_incomplete"):
+            context_refresh._quality_capture(led.db, 1, CFG, "synthetic", [],
+                                             {"code": "a" * 64, "policy": "b" * 64}, {"groups": {}})
+    finally:
+        led.db.rollback()
+    before = len(led.synthetic_jev_requests)
+    with led.db:
+        led.db.execute("UPDATE patients SET is_archived=0 WHERE project_id=1")
+    active = context_refresh._snapshot(led.db, 1, CFG, hydrate=False)
+    changed = context_refresh._current_scans(led.db, 1, active["sources"], active["contract"], cfg=CFG)[1]
+    assert not changed.get("audited")
+    assert len(led.synthetic_jev_requests) == before
 
 
 def test_source_quality_overlapping_chunks_deduplicate_only_identical_occurrences(runtime, cloud):

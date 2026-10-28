@@ -961,8 +961,7 @@ def _source_quality_capture(db, pid, cfg, source_key, assessment, *, contract=No
     if not db.in_transaction:
         raise RuntimeError("patient_summary_snapshot_required")
     scope = context_queries.patient_context_scope(db, pid)
-    if (not scope or scope.get("is_archived")
-            or scope.get("fetch_reason") in ("forbidden", "permission_denied", "access_revoked")):
+    if (not scope or scope.get("fetch_reason") in ("forbidden", "permission_denied", "access_revoked")):
         raise ValueError("patient_source_quality_scope")
     sources = list(context_queries.patient_context_sources(db, pid, mid=source_key))
     if len(sources) != 1:
@@ -2615,7 +2614,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
 
     ``complete(project_id)`` limits the candidates to patients whose
     stored posts are all extracted under the current LLM generation
-    (owner rule 2026-10-18); None admits every active patient."""
+    (owner rule 2026-10-18); None admits every stored patient."""
     import extract_llm
     if ledger.db.in_transaction:
         return {"status": "deferred", "done": 0, "reason": "transaction_active"}
