@@ -618,6 +618,16 @@ def _time_value(text, *, end):
     return text
 
 
+def _current_window_start():
+    """The saved period start, or None when there is none or the config cannot be read."""
+    import config_edit
+    try:
+        block = config_edit.read_strict().get("cloud_llm")
+    except (OSError, ValueError, RecursionError):
+        return None
+    return block.get("window_start") if isinstance(block, dict) else None
+
+
 def budget_command(args):
     """Show or set the Anthropic daily/monthly/period cost caps and the run window in config.json."""
     try:
@@ -627,13 +637,21 @@ def budget_command(args):
             if text is not None:
                 changes["cloud_llm." + key] = _budget_value(text)
         period = getattr(args, "period_usd", None)
+        start = getattr(args, "window_from", None)
         if period is not None:
             amount = _budget_value(period)
             changes["cloud_llm.window_budget_usd"] = amount
-            start = getattr(args, "window_from", None)
-            changes["cloud_llm.window_start"] = (
-                None if amount is None else _time_value(start, end=False) if start is not None
-                else datetime.now(policy.JST).replace(microsecond=0).isoformat())
+            if amount is None:
+                changes["cloud_llm.window_start"] = None
+            elif start is not None:
+                changes["cloud_llm.window_start"] = _time_value(start, end=False)
+            elif not _current_window_start():
+                # A new period starts now. Changing the amount of an existing period
+                # keeps its start, so spending already counted is never forgotten.
+                changes["cloud_llm.window_start"] = datetime.now(policy.JST).replace(microsecond=0).isoformat()
+        elif start is not None:
+            # Move an existing period's start; without a period budget validation refuses the save.
+            changes["cloud_llm.window_start"] = _time_value(start, end=False)
         until = getattr(args, "until", None)
         if until is not None:
             # One end time for both providers: Jev stops with the paid route.

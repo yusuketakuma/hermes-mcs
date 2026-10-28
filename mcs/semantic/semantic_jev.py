@@ -124,7 +124,8 @@ def _reserve_live_usage(home, operation, expected_code_stamp, body, timeout):
             raise JevError("budget_exceeded", "usage_ledger_unavailable")
         limit = _live_request_budget(home)
         with closing(Ledger(str(path))) as ledger:
-            reserve = manual_usage_reserver(ledger, operation=operation, daily_request_budget=limit)
+            reserve = manual_usage_reserver(ledger, operation=operation, daily_request_budget=limit,
+                                            config_path=home / "config.json")
             reserved = reserve(body, timeout)
             if ((home / "data" / "update_in_progress.marker").exists()
                     or code_stamp() != expected_code_stamp):
@@ -151,7 +152,8 @@ def live_client(key, *, operation, root=None, **options):
     _live_request_budget(home)
     def reserve(body, timeout):
         return _reserve_live_usage(home, operation, expected_code_stamp, body, timeout)
-    yield bind_jev(JevClient(api_key=key, **options), lambda stage: None, reserve)
+    yield bind_jev(JevClient(api_key=key, **options), lambda stage: None, reserve,
+                   config_path=home / "config.json")
 
 
 def _reservation_day(reservation):

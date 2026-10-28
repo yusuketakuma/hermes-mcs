@@ -112,7 +112,8 @@ def cloud_setting_warnings(cfg: dict, root) -> list[str]:
     cloud, errors = cloud_policy.cloud_config(cfg, key_present=anthropic_key and bool(cfg))
     if "config: cloud_llm_cost_limit_required" in errors:
         out.append("Anthropicのキーはありますが、費用の上限が未設定のため送信していません。"
-                   "`mcs_setup.py cloud-llm budget --daily-usd 金額 --monthly-usd 金額`で上限を設定してください。"
+                   "`mcs_setup.py cloud-llm budget --daily-usd 金額 --monthly-usd 金額`、または期間予算"
+                   "`--period-usd 金額 --until 日付`で上限を設定してください。"
                    "エラーコード: cost_limit_required")
     window = cloud_policy.setting_block_reason(cloud) if cloud["mode"] in ("on", "shadow") else None
     if window == "expired":

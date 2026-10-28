@@ -198,15 +198,20 @@ def test_budget_command_sets_any_period_amount_and_end_date(tmp_path, monkeypatc
     assert saved["semantic"] == {"until": "2026-10-30T23:59:59+09:00"}   # Jev ends with the paid route
     shown = json.loads(capsys.readouterr().out)
     assert (shown["period_budget_usd"], shown["until"]) == (80.0, "2026-10-30T23:59:59+09:00")
-    # Without --from the period starts now; an offset-aware time is kept verbatim.
+    # Changing the amount keeps the existing start, so spending already counted still counts.
     assert run(period_usd="25.5", until="2026-11-02T18:00:00+09:00") == 0
     saved = json.loads(path.read_text())
     assert saved["cloud_llm"]["window_budget_usd"] == 25.5
-    assert mcs_util.until_epoch(saved["cloud_llm"]["window_start"]) <= mcs_util.until_epoch(
-        saved["cloud_llm"]["until"])
+    assert saved["cloud_llm"]["window_start"] == "2026-10-28T00:00:00+09:00"
     for bad in ({"until": "2026-10-30T23:59:59"}, {"period_usd": "-1"}, {"until": "tomorrow"}):
         before = path.read_text()
         assert run(**bad) == 1 and path.read_text() == before
+    # --from alone moves the existing period's start; it is never silently ignored.
+    assert run(window_from="2026-10-29") == 0
+    assert json.loads(path.read_text())["cloud_llm"]["window_start"] == "2026-10-29T00:00:00+09:00"
+    assert run(period_usd="none") == 0
+    before = path.read_text()
+    assert run(window_from="2026-10-29") == 1 and path.read_text() == before   # no period to move
     assert run(period_usd="none", until="none") == 0
     saved = json.loads(path.read_text())
     assert saved["cloud_llm"] == {} and saved["semantic"] == {}
@@ -223,3 +228,60 @@ def test_doctor_shows_the_run_window_and_planning_assumes_a_cap(tmp_path, now):
     planning = c.cloud_config({"mcs_login_id": "synthetic"}, key_present=True, require_cost_limit=False)
     assert planning == (c.cloud_config({"cloud_llm": {"daily_cost_limit_usd": 2}}, key_present=True)[0]
                         | {"daily_cost_limit_usd": None}, [])
+
+
+def test_jev_window_uses_the_target_roots_config_at_reservation_and_before_each_attempt(tmp_path, monkeypatch, now):
+    import json
+    ended, open_root = tmp_path / "ended", tmp_path / "open"
+    for root, until in ((ended, "2026-10-26T11:00:00+09:00"), (open_root, "2026-10-27T00:00:00+09:00")):
+        root.mkdir()
+        (root / "config.json").write_text(json.dumps({"semantic": {"until": until}}))
+    # The process default points at the open root; the manual tool targets the ended one.
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(open_root / "config.json"))
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        for root, refused in ((ended, True), (open_root, False)):
+            reserve = semantic_runtime.manual_usage_reserver(
+                ledger, operation="wire_smoke", config_path=root / "config.json")
+            if refused:
+                with pytest.raises(JevError) as raised:
+                    reserve({"model": "m"}, 2)
+                assert raised.value.detail == "semantic_until_expired"
+            else:
+                assert reserve({"model": "m"}, 2) is not None
+        assert len(ledger.artifacts("semantic_usage")) == 1
+    # Reserved inside the window, the attempt itself is checked again just before the HTTP call.
+    guarded = semantic_runtime.bind_jev(object(), lambda stage: None, config_path=open_root / "config.json")
+    guarded._guard("jev_attempt")
+    (open_root / "config.json").write_text(json.dumps({"semantic": {"until": "2026-10-26T11:59:59+09:00"}}))
+    with pytest.raises(JevError) as raised:
+        guarded._guard("jev_attempt")
+    assert raised.value.detail == "semantic_until_expired"
+    guarded._guard("jev_result")      # a response that already arrived is still accepted
+
+
+
+def test_run_window_and_spending_edits_keep_in_flight_jev_results_current():
+    base = {"semantic": {"mode": "assist", "project_ids": None, "daily_request_budget": 10},
+            "cloud_llm": {"daily_cost_limit_usd": 2}}
+    edited = {"semantic": {**base["semantic"], "until": "2026-10-30T23:59:59+09:00"},
+              "cloud_llm": {"daily_cost_limit_usd": 5, "monthly_cost_limit_usd": 9, "until": "2026-10-30T23:59:59+09:00",
+                            "window_start": "2026-10-28T00:00:00+09:00", "window_budget_usd": 80}}
+    assert semantic_runtime.config_generation(edited) == semantic_runtime.config_generation(base)
+    changed = {**base, "semantic": {**base["semantic"], "match_threshold": 0.9}}
+    assert semantic_runtime.config_generation(changed) != semantic_runtime.config_generation(base)
+
+
+def test_reserved_jev_paths_check_the_window_with_the_reservation_not_after_it(tmp_path):
+    import json
+    conf = tmp_path / "config.json"
+    conf.write_text(json.dumps({"semantic": {"until": "2000-01-01T00:00:00+00:00"}}))
+    reserved = semantic_runtime.bind_jev(object(), lambda stage: None, reserve=lambda body, timeout: None,
+                                         config_path=conf)
+    reserved._guard("jev_attempt")   # its reservation already decided; refusing now would strand it
+
+    class Hookless:
+        supports_attempt_hooks = False
+    with pytest.raises(JevError) as raised:
+        semantic_runtime.bind_jev(Hookless(), lambda stage: None, reserve=lambda body, timeout: None
+                                  ).evaluate({}, {}, 0)
+    assert raised.value.detail == "evaluate_guard_unsupported"
