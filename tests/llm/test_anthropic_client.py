@@ -105,14 +105,14 @@ def test_second_guard_rejection_never_dispatches_and_settles_the_reservation_as_
     assert events[3][1]["usage"] is None and events[3][1]["error_kind"] == "budget_exceeded"
 
 
-def test_each_retry_reserves_and_accounts_transport_failures(monkeypatch):
+def test_each_retry_reserves_and_accounts_http_failures(monkeypatch):
     monkeypatch.setattr(a.time, "sleep", lambda delay: None)
     reservations, results, calls = [], [], []
 
     def post(*args):
         calls.append(1)
         if len(calls) == 1:
-            raise ConnectionRefusedError("private response must not appear")   # provably never sent
+            return 529, {}, b"private response must not appear"   # an HTTP status is a definite outcome
         return 200, {}, json.dumps(_reply()).encode()
 
     def reserve(*args):
@@ -124,11 +124,13 @@ def test_each_retry_reserves_and_accounts_transport_failures(monkeypatch):
                     after_result=lambda r, meta: results.append((r, meta)))
     assert reservations == [0, 1]
     assert results[0][1]["usage"] is None and results[0][1]["error_kind"] == "transport"
+    assert results[0][1]["http_class"] == "http_529"
     assert results[1][1]["usage"]["output_tokens"] == 5
     assert "private response" not in json.dumps(results)
 
 
-@pytest.mark.parametrize("error", [TimeoutError("synthetic"), ConnectionResetError("synthetic"), OSError("synthetic")])
+@pytest.mark.parametrize("error", [TimeoutError("synthetic"), ConnectionResetError("synthetic"),
+                                   ConnectionRefusedError("synthetic"), OSError("synthetic")])
 def test_a_failure_that_may_have_been_sent_is_never_retried(monkeypatch, error):
     monkeypatch.setattr(a.time, "sleep", lambda delay: None)
     calls, results = [], []
@@ -143,6 +145,25 @@ def test_a_failure_that_may_have_been_sent_is_never_retried(monkeypatch, error):
                         after_result=lambda r, meta: results.append(meta))
     # one attempt only: its reservation stays counted as possibly billed, never as not_sent
     assert len(calls) == 1 and results[0]["http_class"] != "not_sent"
+
+
+@pytest.mark.parametrize("error", [OSError("http worker transport"), ConnectionRefusedError("http worker connection refused")])
+def test_the_real_request_path_never_resends_a_transport_failure(monkeypatch, error):
+    # bounded_http's parent re-raises the worker's classification as these generic types,
+    # whatever stage failed: no type proves the request never left.
+    monkeypatch.setattr(a.time, "sleep", lambda delay: None)
+    calls = []
+
+    def request(self, method, body, timeout, *, deadline):
+        calls.append(method)
+        raise error
+
+    monkeypatch.setattr(a.AnthropicClient, "request", request)
+    client = a.AnthropicClient("synthetic")
+    with pytest.raises(a.AnthropicError):
+        client.complete("synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: {"r": 1},
+                        after_result=lambda r, meta: None)
+    assert calls == ["POST"]
 
 
 @pytest.mark.parametrize("status,kind,retries", [(401,"auth_error",1), (403,"auth_error",1),

@@ -5,7 +5,6 @@ import json
 import math
 import random
 import re
-import socket
 import time
 
 import bounded_http
@@ -185,12 +184,11 @@ class AnthropicClient:
                           "finish_reason": "length" if stop == "max_tokens" else "stop",
                           "model": MODEL, "usage": meta["usage"]}
             except OSError as error:
-                # Only a refused connection or a failed name lookup proves the request never
-                # left; a timeout or a dropped connection may already be billed (owner
-                # decision 2026-10-28), so it is not sent again.
+                # No transport exception proves the request never left (bounded_http maps a
+                # refusal while reading the response to the same type), and a sent request
+                # may already be billed: it is never sent again (owner decision 2026-10-28).
                 last = AnthropicError("timeout" if isinstance(error, TimeoutError) else "transport",
-                                      type(error).__name__,
-                                      retryable=isinstance(error, (ConnectionRefusedError, socket.gaierror)))
+                                      type(error).__name__, retryable=False)
             except AnthropicError as error:
                 last = error
             except Exception as error:   # never leave a reserved attempt without its result row

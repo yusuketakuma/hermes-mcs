@@ -39,7 +39,7 @@ def test_unsent_receipt_is_not_an_attempt(routed):
     assert not provider.possibly_sent
 
 
-@pytest.mark.parametrize('max_attempts, expected', [(None, 3), (1, 1)])
+@pytest.mark.parametrize('max_attempts, expected', [(None, 1), (1, 1)])
 def test_unit_can_forbid_transport_retry_without_releasing_unknown_cost(
         routed, monkeypatch, max_attempts, expected):
     led, cfg, *_ = routed
@@ -50,7 +50,7 @@ def test_unit_can_forbid_transport_retry_without_releasing_unknown_cost(
 
     def post(body, timeout):
         sent.append(True)
-        raise ConnectionRefusedError('synthetic refusal')   # the only retried transport failure
+        raise ConnectionRefusedError('synthetic refusal')   # never proves "not sent": no retry
 
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
                         lambda key, **kw: AnthropicClient(key, post_fn=post, **kw))
