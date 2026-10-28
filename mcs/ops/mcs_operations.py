@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import os
+import sqlite3
 import stat
 import tempfile
 import time
@@ -174,13 +175,22 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     updated_payload = canonical(payload).decode("utf-8")
     if len(updated_payload.encode(retry_payload_codec(db))) > RETRY_PAYLOAD_MAX_BYTES:
         return "invalid_payload", {"job_id": row["job_id"]}
-    db.execute(
+    rowid_alias = row['retry_rowid_alias']
+    changes_before = db.total_changes
+    cur = db.execute(
         "UPDATE main.fetch_jobs SET state='pending',payload=?,next_try=0,updated_at=? "
-        "WHERE job_id=? AND kind=? AND project_id=? "
+        f'WHERE "{rowid_alias}"=? AND job_id=? COLLATE BINARY AND kind=? AND project_id=? '
         "AND state IN ('failed','pending')",
-        (updated_payload, now, row["job_id"], _SEMANTIC_JOB,
+        (updated_payload, now, row['retry_rowid'], row["job_id"], _SEMANTIC_JOB,
          req["project_id"]),
     )
+    if cur.rowcount != 1 or db.total_changes != changes_before + 1 or db.execute(
+            f'SELECT 1 FROM main.fetch_jobs WHERE "{rowid_alias}"=? '
+            "AND job_id=? COLLATE BINARY AND kind=? AND project_id=? "
+            "AND state='pending' AND attempts=? AND next_try=0 AND payload=? COLLATE BINARY",
+            (row['retry_rowid'], row['job_id'], _SEMANTIC_JOB, req['project_id'],
+             row['attempts'], updated_payload)).fetchone() is None:
+        raise sqlite3.DatabaseError('retry_job_write_unverified')
     return None, extra
 
 
