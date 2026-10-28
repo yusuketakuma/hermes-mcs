@@ -4,6 +4,10 @@ chrome-profile/
 token_cache.json
 config.json
 config.json.*
+# Interrupted private configuration writes may leave these staging files.
+.atomic.*.tmp
+.alias-*.tmp
+.svc.*.tmp
 .env
 .env.*
 *.log
