@@ -794,14 +794,14 @@ def test_rebuild_many_defers_a_racing_patient_and_continues_with_the_next(tmp_pa
 
 def test_rebuild_many_keeps_default_failure_and_does_not_hide_other_db_errors(tmp_path, monkeypatch):
     with closing(_seed(tmp_path)) as ledger:
-        def racing(*_args):
+        def racing(*_args, **_kwargs):
             raise rollup.RollupSourceChanged('inference_rollup_source_changed')
 
         monkeypatch.setattr(rollup, 'rebuild', racing)
         with pytest.raises(sqlite3.OperationalError, match='inference_rollup_source_changed'):
             rollup.rebuild_many(ledger, [1, 2])
 
-        def broken(*_args):
+        def broken(*_args, **_kwargs):
             raise sqlite3.OperationalError('synthetic storage error')
 
         monkeypatch.setattr(rollup, 'rebuild', broken)

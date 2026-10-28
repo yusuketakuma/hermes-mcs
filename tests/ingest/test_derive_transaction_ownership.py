@@ -131,7 +131,7 @@ def test_derive_reports_reconcile_failure_without_echoing_its_contents(tmp_path,
             "done": 0, "pids": [], "reconcile_error": "PRIVATE_CANARY"})
         monkeypatch.setattr(drug_map, "configured", lambda cfg: (None, None))
         monkeypatch.setattr(drug_map, "derive", lambda *a, **k: {"pids": [], "status": "complete"})
-        monkeypatch.setattr(rollup, "scan_dirty_projects", lambda ledger: rollup.RollupScan((), (), False))
+        monkeypatch.setattr(rollup, "scan_dirty_projects", lambda ledger, **kw: rollup.RollupScan((), (), False))
         monkeypatch.setattr(rollup, "rebuild_many", lambda *a, **k: 0)
         monkeypatch.setattr(mcs_signals, "evaluate", lambda *a, **k: {"errors": []})
         result = {"errors": []}
@@ -148,7 +148,7 @@ def test_derive_reports_unknown_without_rebuilding_unknown_candidates(tmp_path, 
         monkeypatch.setattr(extract, "run_pending", lambda *a, **k: {"done": 0, "pids": [2]})
         monkeypatch.setattr(drug_map, "configured", lambda cfg: (None, None))
         monkeypatch.setattr(drug_map, "derive", lambda *a, **k: {"pids": [], "status": "complete"})
-        monkeypatch.setattr(rollup, "scan_dirty_projects", lambda ledger: rollup.RollupScan((1,), (2,), True))
+        monkeypatch.setattr(rollup, "scan_dirty_projects", lambda ledger, **kw: rollup.RollupScan((1,), (2,), True))
         rebuilt = []
         monkeypatch.setattr(rollup, "rebuild_many", lambda _db, pids, **kw: rebuilt.extend(pids) or len(pids))
         monkeypatch.setattr(mcs_signals, "evaluate", lambda *a, **k: {"errors": []})
@@ -167,9 +167,9 @@ def test_derive_reports_source_changed_without_disclosing_patient_id(tmp_path, m
         monkeypatch.setattr(extract, 'run_pending', lambda *a, **k: {'done': 0, 'pids': []})
         monkeypatch.setattr(drug_map, 'configured', lambda cfg: (None, None))
         monkeypatch.setattr(drug_map, 'derive', lambda *a, **k: {'pids': [], 'status': 'complete'})
-        monkeypatch.setattr(rollup, 'scan_dirty_projects', lambda ledger: rollup.RollupScan((17, 18, 19), (), False))
+        monkeypatch.setattr(rollup, 'scan_dirty_projects', lambda ledger, **kw: rollup.RollupScan((17, 18, 19), (), False))
 
-        def rebuild(_ledger, pids, *, deadline, source_changed, source_unknown):
+        def rebuild(_ledger, pids, *, deadline, source_changed, source_unknown, cfg):
             assert set(pids) == {17, 18, 19}
             source_changed.append(17)
             source_unknown.append(18)

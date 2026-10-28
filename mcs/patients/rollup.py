@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import hashlib
 import json
+import math
 import os
 import re
 import sqlite3
@@ -48,7 +49,7 @@ import history_walk
 from patient_context import context_items, extract_context, merged_context
 from mcs_queries import (decode_current_extractions, EXTRACTION_KINDS_SQL, JST, karte_summary_current, karte_summary_block,
                          item_unverified, current_extract_pred, current_fact_pred)
-from mcs_util import HOME, html_to_text, locate_quote_span, loads_dict
+from mcs_util import HOME, html_to_text, locate_quote_span, loads_dict, strict_json, payload_hash
 from writer_lock import acquire_run_lock
 from semantic_projection import PROJECTION_VERSION
 from self_identity import normalize_sender_id
@@ -1349,6 +1350,108 @@ def inference_coverage(db, project_id: int, *, now=None) -> dict:
         return _inference_coverage_snapshot(db, project_id, now=now)
 
 
+def config_generation(cfg):
+    """Bind the explicit model selection used by aggregation, without spending settings."""
+    if not isinstance(cfg, dict):
+        return None
+    import extract_llm
+    model = extract_llm.resolved_model(cfg)
+    if not isinstance(model, str) or not model:
+        raise ValueError('rollup_model_unverified')
+    return payload_hash({'model': model, inference.VERSION_KEY: inference.CURRENT_VERSION})
+
+
+def _completion_valid_until(db, project_id, now, content):
+    """Expire a read proof at the first clock boundary used by build_rollup."""
+    day = datetime.fromtimestamp(now, JST).date() + timedelta(days=1)
+    bounds = [datetime.combine(day, datetime.min.time(), JST).timestamp()]
+    period = content.get('_next_med_period_check')
+    if period is not None:
+        bounds.append(period)
+    # Reply matching admits a posted reply only once its timestamp has arrived.
+    future = db.execute('SELECT MIN(posted_at_ts) FROM messages '
+                        'WHERE project_id=? AND posted_at_ts>?', (project_id, now)).fetchone()[0]
+    if future is not None:
+        bounds.append(future)
+    newest = db.execute('SELECT updated_seen FROM messages WHERE project_id=? '
+                        'ORDER BY posted_at_ts DESC,message_id DESC LIMIT 1', (project_id,)).fetchone()
+    # _unrefreshed_ids normally uses the newest observation, not wall time.
+    if newest is not None and not newest[0]:
+        crossing = db.execute('SELECT MIN(COALESCE(updated_seen,0)+?) FROM messages '
+                              'WHERE project_id=? AND COALESCE(updated_seen,0)+?>=?',
+                              (STALE_DAYS * 86400, project_id, STALE_DAYS * 86400, now)).fetchone()[0]
+        if crossing is not None:
+            bounds.append(crossing)
+    if any(type(value) not in (int, float) or not math.isfinite(value)
+           or not now < value < 1e12 for value in bounds):
+        return None
+    return min(bounds)
+
+
+def _content_identity(content):
+    normalized = strict_json(json.dumps(content, ensure_ascii=False, allow_nan=False))
+    normalized.pop('generated_at', None)
+    # JSON strings distinguish boolean/integer/float values and reject NaN.
+    return json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False)
+
+
+def completion_coverage(db, project_id: int, cfg) -> dict:
+    """Prove saved aggregation against explicit configuration and one read-only snapshot."""
+    result = {inference.VERSION_KEY: inference.CURRENT_VERSION,
+              'current': False, 'status': 'config_unverified', 'source_sig': None}
+    if not isinstance(cfg, dict):
+        return result
+    cfg = copy.deepcopy(cfg)
+    try:
+        config = config_generation(cfg)
+        version = db.execute('PRAGMA data_version').fetchone()[0]
+        changes = db.total_changes
+        db.execute('SAVEPOINT rollup_completion_read')
+        try:
+            result = _completion_coverage_snapshot(db, project_id, cfg, config)
+        finally:
+            # A future helper must not accidentally publish from this proof.
+            if db.total_changes != changes:
+                db.execute('ROLLBACK TO rollup_completion_read')
+            db.execute('RELEASE rollup_completion_read')
+        # data_version advances only after an owned read snapshot is released.
+        if db.total_changes != changes or db.execute('PRAGMA data_version').fetchone()[0] != version:
+            return {**result, 'current': False, 'status': 'unverified'}
+        return result
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError, sqlite3.Error):
+        return {**result, 'current': False, 'status': 'unverified'}
+
+
+def _completion_coverage_snapshot(db, project_id, cfg, config):
+    started = time.time()
+    marker = _inference_coverage_snapshot(db, project_id, now=started)
+    result = {**marker, 'current': False}
+    if not marker['current']:
+        return result
+    rows = db.execute('SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? AND '
+                      + inference.current_meta_pred('meta'), (KIND, project_id)).fetchall()
+    if len(rows) != 1:
+        return {**result, 'status': 'unverified'}
+    saved, meta = (strict_json(rows[0][key]) for key in ('content', 'meta'))
+    if not isinstance(saved, dict) or not isinstance(meta, dict) or meta.get('config_generation') != config:
+        return {**result, 'status': 'config_unverified'}
+    generated = saved.get('generated_at')
+    if type(generated) not in (int, float) or not 0 <= generated <= meta['generated_at'] <= started:
+        return {**result, 'status': 'stale'}
+    expected = build_rollup(db, project_id, cfg=cfg)
+    valid_until = _completion_valid_until(db, project_id, started, expected)
+    if (meta.get('next_med_period_check') != expected.get('_next_med_period_check')
+            or _content_identity(saved) != _content_identity(expected)):
+        return {**result, 'status': 'stale'}
+    ended = time.time()
+    after = _inference_coverage_snapshot(db, project_id, now=ended)
+    if (valid_until is None or not started <= ended < valid_until
+            or not after['current'] or after['source_sig'] != marker['source_sig']):
+        return {**result, 'status': 'stale'}
+    return {**result, 'current': True, 'status': 'current', 'checked_at': ended,
+            'valid_until': valid_until, 'config_generation': config}
+
+
 def _inference_coverage_snapshot(db, project_id: int, *, now=None) -> dict:
     now = time.time() if now is None else now
     dependencies = dependency_loss.read(db, project_id)
@@ -1403,6 +1506,8 @@ def rebuild(ledger, project_id: int, *, cfg=None) -> int:
     meta.generated_at when a newer source would otherwise keep it dirty."""
     if ledger.db.in_transaction:
         raise sqlite3.OperationalError("inference_rollup_transaction_owned")
+    cfg = copy.deepcopy(cfg)
+    config = config_generation(cfg)
     # Guard all inputs, including withdrawal witnesses, without holding a writer during aggregation.
     data_version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
     changes = ledger.db.total_changes
@@ -1412,6 +1517,7 @@ def rebuild(ledger, project_id: int, *, cfg=None) -> int:
     ref_sig = ledger.db.execute(_REF_SIG_SQL.format(pid="?"),
                                 (REF_KIND, project_id)).fetchone()[0]
     d = build_rollup(ledger.db, project_id, cfg=cfg)
+    valid_until = _completion_valid_until(ledger.db, project_id, d["generated_at"], d)
     # compare in JSON space (tuples→lists, int keys→str) like the stored row
     new = json.loads(json.dumps(d, ensure_ascii=False))
     new.pop("generated_at", None)
@@ -1427,13 +1533,13 @@ def rebuild(ledger, project_id: int, *, cfg=None) -> int:
             (KIND, project_id)).fetchall()
         if len(old) == 1:
             try:
-                oc, om = json.loads(old[0]["content"]), json.loads(
-                    old[0]["meta"])
+                oc, om = strict_json(old[0]["content"]), strict_json(old[0]["meta"])
             except (TypeError, ValueError, RecursionError):
                 oc = om = None
             if isinstance(oc, dict) and isinstance(om, dict):
-                oc.pop("generated_at", None)
-                if (oc == new and om.get("period_check_version")
+                old_generated = oc.get('generated_at')
+                if (type(old_generated) in (int, float) and 0 <= old_generated <= d['generated_at']
+                        and _content_identity(oc) == _content_identity(new) and om.get("period_check_version")
                         == PERIOD_CHECK_VERSION
                         and om.get("next_med_period_check")
                         == d.get("_next_med_period_check")
@@ -1446,11 +1552,18 @@ def rebuild(ledger, project_id: int, *, cfg=None) -> int:
                     # before the sources were read, so a racing write
                     # stays dirty
                     g = om.get("generated_at")
-                    if type(g) not in (int, float) or not 0 <= g < 1e12 \
+                    if type(g) not in (int, float) or not 0 <= g <= d["generated_at"] < 1e12 \
+                            or g < old_generated \
                             or _newest_source_ts(ledger.db, project_id) > g \
-                            or om.get("message_sig") != message_sig:
+                            or om.get("message_sig") != message_sig \
+                            or om.get('config_generation') != config \
+                            or om.get('valid_until') != valid_until \
+                            or om.get('content_fingerprint') != hashlib.sha256(_content_identity(d).encode()).hexdigest():
                         om["generated_at"] = d["generated_at"]
                         om["message_sig"] = message_sig
+                        om['config_generation'] = config
+                        om['valid_until'] = valid_until
+                        om['content_fingerprint'] = hashlib.sha256(_content_identity(d).encode()).hexdigest()
                         ledger.db.execute(
                             "UPDATE artifacts SET meta=? WHERE artifact_id=?",
                             (json.dumps(om), old[0]["artifact_id"]))
@@ -1468,6 +1581,9 @@ def rebuild(ledger, project_id: int, *, cfg=None) -> int:
              json.dumps({inference.VERSION_KEY: inference.CURRENT_VERSION,
                          "generated_at": d["generated_at"],
                          "message_sig": message_sig,
+                         "config_generation": config,
+                         "valid_until": valid_until,
+                         "content_fingerprint": hashlib.sha256(_content_identity(d).encode()).hexdigest(),
                          "period_check_version": PERIOD_CHECK_VERSION,
                          "projection_version": PROJECTION_VERSION,
                          "next_med_period_check":
@@ -1499,7 +1615,7 @@ class RollupScan:
     incomplete: bool
 
 
-def scan_dirty_projects(ledger, *, now=None) -> RollupScan:
+def scan_dirty_projects(ledger, *, now=None, cfg=None) -> RollupScan:
     """Check each patient's existing freshness markers on its own snapshot.
 
     This reports marker differences, not a proof of every inference input.
@@ -1516,7 +1632,7 @@ def scan_dirty_projects(ledger, *, now=None) -> RollupScan:
         # observed at different times. A caller-owned TX remains caller-owned.
         try:
             with _freshness_snapshot(db):
-                if _dirty_project_snapshot(db, project_id, now):
+                if _dirty_project_snapshot(db, project_id, now) or (isinstance(cfg, dict) and not _config_current(db, project_id, cfg)):
                     dirty.append(project_id)
         except sqlite3.OperationalError as error:
             if not _invalid_sqlite_text(error):
@@ -1533,16 +1649,35 @@ def scan_dirty_projects(ledger, *, now=None) -> RollupScan:
     return RollupScan(tuple(dirty), tuple(unknown), bool(unknown))
 
 
+def _config_current(db, project_id, cfg):
+    rows = db.execute('SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? AND '
+                      + inference.current_meta_pred('meta'), (KIND, project_id)).fetchall()
+    if len(rows) != 1:
+        return False
+    try:
+        content, meta = (strict_json(rows[0][key]) for key in ('content', 'meta'))
+        generated = content.get('generated_at')
+        stamp = meta.get('generated_at')
+        return (isinstance(content, dict) and isinstance(meta, dict)
+                and inference.is_current(content)
+                and meta.get('config_generation') == config_generation(cfg)
+                and type(stamp) in (int, float) and math.isfinite(stamp)
+                and type(generated) in (int, float) and 0 <= generated <= stamp
+                and meta.get('next_med_period_check') == content.get('_next_med_period_check')
+                and meta.get('content_fingerprint') == hashlib.sha256(_content_identity(content).encode()).hexdigest())
+    except (TypeError, ValueError, KeyError, AttributeError, RecursionError):
+        return False
+
+
 def _rollup_patient_ids(db):
     return [row[0] for row in db.execute(
-        "SELECT p.project_id FROM patients p WHERE EXISTS "
-        "(SELECT 1 FROM messages m WHERE m.project_id=p.project_id)")]
+        "SELECT project_id FROM patients ORDER BY project_id")]
 
 
 def _dirty_project_snapshot(db, project_id, now):
     x = db.execute("""
       SELECT p.project_id, r.g AS gen, r.period_version, r.next_check,
-        r.projection_version, r.message_sig,
+        r.projection_version, r.message_sig, r.valid_until,
         EXISTS(SELECT 1 FROM artifacts a WHERE a.project_id=p.project_id
           AND a.kind IN ('canonical_projection','semantic_facts_v4')) AS has_projection,
         r.ref_sig, r.ref_generation, ({sig}) AS cur_ref_sig,
@@ -1557,6 +1692,8 @@ def _dirty_project_snapshot(db, project_id, now):
                             THEN json_extract(meta,'$.message_sig') END) message_sig,
                    MAX(CASE WHEN json_valid(meta)
                             THEN json_extract(meta,'$.generated_at') END) g,
+                   MAX(CASE WHEN json_valid(meta)
+                            THEN json_extract(meta,'$.valid_until') END) valid_until,
                    MAX(CASE WHEN json_valid(meta)
                             THEN json_extract(meta,'$.period_check_version')
                             END) period_version,
@@ -1574,8 +1711,7 @@ def _dirty_project_snapshot(db, project_id, now):
                             END) projection_version
                  FROM artifacts WHERE kind=? AND project_id=? AND {inference_current}
                  GROUP BY project_id) r ON r.project_id=p.project_id
-      WHERE p.project_id=? AND EXISTS (SELECT 1 FROM messages m3
-                    WHERE m3.project_id=p.project_id)
+      WHERE p.project_id=?
     """.replace("{sig}", _REF_SIG_SQL.format(pid="p.project_id"))
        .replace("{inference_current}", inference.current_meta_pred("meta")),
         (REF_KIND, KIND, project_id, project_id)).fetchone()
@@ -1583,8 +1719,10 @@ def _dirty_project_snapshot(db, project_id, now):
         return False
     ref_generation = generation_signature(db)
     return (type(x["gen"]) not in (int, float)
-            or not 0 <= x["gen"] < 1e12
+            or not 0 <= x["gen"] <= now < 1e12
             or x["period_version"] != PERIOD_CHECK_VERSION
+            or type(x["valid_until"]) not in (int, float)
+            or not now < x["valid_until"] < 1e12
             or (x["has_projection"] and x["projection_version"] != PROJECTION_VERSION)
             or x["ref_sig"] != x["cur_ref_sig"]
             or x["ref_generation"] != ref_generation
@@ -1599,7 +1737,7 @@ def _dirty_project_snapshot(db, project_id, now):
 
 
 def rebuild_many(ledger, project_ids, *, deadline: float | None = None,
-                 source_changed: list | None = None, source_unknown: list | None = None) -> int:
+                 source_changed: list | None = None, source_unknown: list | None = None, cfg=None) -> int:
     """Rebuild patients, optionally reporting unverified inputs and races.
 
     Without a collector, preserve the existing exception behavior. A collected
@@ -1612,7 +1750,7 @@ def rebuild_many(ledger, project_ids, *, deadline: float | None = None,
         if deadline is not None and time.monotonic() >= deadline:
             break
         try:
-            rebuild(ledger, pid)
+            rebuild(ledger, pid, cfg=cfg)
         except RollupSourceChanged:
             if source_changed is None:
                 raise

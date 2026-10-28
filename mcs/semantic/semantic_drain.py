@@ -26,6 +26,7 @@ import semantic_transport
 
 from functools import wraps
 import json
+import copy
 from contextlib import contextmanager
 import math
 import sqlite3
@@ -1536,7 +1537,7 @@ def _reprocess_target_state(ledger, row, scfg):
     return 'pending'
 
 
-def _reprocess_patient_state(ledger, row, cfg, scfg):
+def _reprocess_patient_state(ledger, row, cfg, scfg, witness=None):
     """Inspect patient proofs without replacing a rollup whose freshness is unproved."""
     import patient_context_refresh
     from mcs_queries import paused
@@ -1566,9 +1567,63 @@ def _reprocess_patient_state(ledger, row, cfg, scfg):
         if counts['incomplete'] or proof['status'] in ('unacquired', 'dependency_gap'):
             return 'incomplete'
         return 'pending'
-    # The current cache test does not bind every input. Rebuilding here
-    # without a trusted config could also replace an existing richer rollup.
-    return 'rollup_unverified'
+    import rollup
+    proof = rollup.completion_coverage(ledger.db, pid, cfg)
+    if not is_current(proof) or proof.get('current') is not True:
+        return 'rollup_unverified'
+    if witness is not None:
+        witness.update(proof)
+    return 'current'
+
+
+_REPROCESS_PROOF_CONTRACT = 1
+
+
+def _reprocess_proof_generation(ledger, cfg, scfg):
+    """Bind completion to interpretation and scope, never credentials or spending caps."""
+    import patient_context_refresh
+    import rollup
+    import extract_llm
+    cloud = cfg.get('cloud_llm', {})
+    cloud = cloud if isinstance(cloud, dict) else {'mode': 'invalid'}
+    return mcs_util.payload_hash({
+        'contract': _REPROCESS_PROOF_CONTRACT, 'execution': runtime.execution_generation(scfg),
+        'semantic': {key: scfg.get(key) for key in ('mode', 'summary_mode', 'loop_mode',
+                     'extract_qc', 'project_ids', 'candidate_fingerprint')},
+        'context': patient_context_refresh._contract(cfg),
+        'context_options': patient_context_refresh.options(cfg),
+        'cloud': {key: cloud.get(key) for key in ('mode', 'routes', 'project_ids', 'exclude_project_ids', 'model')},
+        'cloud_contract': extract_llm._cloud_contract(),
+        'rollup': rollup.config_generation(cfg),
+        'dictionary': rollup.generation_signature(ledger.db),
+        'references': tuple(ledger.db.execute('SELECT COUNT(*),MAX(artifact_id) FROM artifacts WHERE kind=?',
+                                             (rollup.REF_KIND,)).fetchone()),
+        'patients': tuple(ledger.db.execute('SELECT COUNT(*),MAX(project_id) FROM patients').fetchone())})
+
+
+def _reprocess_proof_time_valid(progress, now):
+    started, until = progress.get('proof_started_at'), progress.get('proof_valid_until')
+    checked = progress.get('proof_checked_at', started)
+    return (type(started) in (int, float) and math.isfinite(started) and 0 <= started <= now
+            and type(checked) in (int, float) and math.isfinite(checked) and started <= checked <= now
+            and (until is None or type(until) in (int, float) and math.isfinite(until) and now < until < 1e12))
+
+
+def _reprocess_bookmark_sealed(ledger, old_progress, epochs, version, changes, cfg, scfg, generation):
+    """Recheck a cached observation under the same writer fence without rewriting it."""
+    import semantic_intake_hold
+    ledger.db.execute('BEGIN IMMEDIATE')
+    with ledger.db:
+        current, _ = _reservation_sched(ledger)
+        return (current.get('inference_reprocess') == old_progress
+                and all(current.get(field, 0) == epochs[field]
+                        for field in ('source_epoch', 'analysis_epoch', 'job_state_epoch'))
+                and semantic_intake_hold.hold_epoch(ledger.db) == epochs['intake_hold_epoch']
+                and semantic_intake_hold.unstored_epoch(ledger.db) == epochs['intake_unstored_epoch']
+                and ledger.db.execute('PRAGMA data_version').fetchone()[0] == version
+                and ledger.db.total_changes == changes
+                and _reprocess_proof_generation(ledger, cfg, scfg) == generation
+                and _reprocess_proof_time_valid(old_progress, time.time()))
 
 
 def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
@@ -1577,11 +1632,14 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
         raise ValueError('inference_reprocess_limit')
     if ledger.db.in_transaction:
         raise ValueError('inference_reprocess_transaction_active')
+    cfg = copy.deepcopy(cfg)
     scfg, errors = runtime_config(cfg)
     if errors or scfg['mode'] == 'off':
         return {'status': 'off', 'complete': False}
     generation = runtime.execution_generation(scfg)
     scope_generation = mcs_util.payload_hash(scfg['project_ids'])
+    proof_generation = _reprocess_proof_generation(ledger, cfg, scfg)
+    now = time.time()
     version = ledger.db.execute('PRAGMA data_version').fetchone()[0]
     changes = ledger.db.total_changes
     original = _sched_state(ledger)
@@ -1621,6 +1679,8 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
     if type(progress['seed_cursor']) is not int or not 0 <= progress['seed_cursor'] < 2**63:
         return {'status': 'invalid_progress', 'complete': False}
     changed = any(progress.get(field, 0) != value for field, value in epochs.items())
+    proof_changed = progress.get('proof_generation') != proof_generation
+    proof_expired = not _reprocess_proof_time_valid(progress, now)
     progress.update(future_upper=live_upper, tail_pending=live_upper > progress['seed_cursor'])
     progress.update(epochs)
     if changed:
@@ -1629,7 +1689,26 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
     # corpus again. Only a real source, adopted proof or job-state change wakes
     # a new bounded round. Operational settings grant no fresh attempt budget.
     if progress['phase'] in ('waiting', 'complete'):
-        if not changed and not progress['tail_pending']:
+        patient_counts = progress.get('patient_counts')
+        proof_contract = progress.get('proof_contract')
+        if (not isinstance(patient_counts, dict) or any(
+                not isinstance(key, str) or type(value) is not int or not 0 <= value < 2**63
+                for key, value in patient_counts.items())
+                or proof_contract is not None and (type(proof_contract) is not int
+                    or proof_contract != _REPROCESS_PROOF_CONTRACT)):
+            return {'status': 'invalid_progress', 'complete': False}
+        if not changed and not progress['tail_pending'] and not proof_changed and not proof_expired \
+                and progress.get('proof_contract') == _REPROCESS_PROOF_CONTRACT \
+                and ((progress['phase'] == 'waiting' and progress.get('complete') is False
+                      and progress.get('proof_status') in ('incomplete', 'rollup_freshness_unverified'))
+                     or (progress['phase'] == 'complete' and progress.get('complete') is True
+                         and progress.get('proof_status') == 'current' and patient_counts.get('current', 0) > 0
+                         and progress.get('proof_valid_until') is not None)):
+            if not _reprocess_bookmark_sealed(ledger, old_progress, epochs, version, changes,
+                                             cfg, scfg, proof_generation):
+                return {'status': 'source_changed', 'complete': False, 'processed': 0}
+            return {'status': progress['phase'], 'processed': 0, **progress}
+        if not changed and not progress['tail_pending'] and progress.get('proof_contract') != _REPROCESS_PROOF_CONTRACT:
             counts = progress.get('patient_counts')
             if counts is not None and (not isinstance(counts, dict) or any(
                     not isinstance(key, str) or type(value) is not int or not 0 <= value < 2**63
@@ -1665,6 +1744,10 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
                             proof_status='rollup_freshness_unverified',
                             proof_reason='患者集約の現行性を確認できません',
                             remaining_stages=stages)
+            # Keep old observations as unverified; the next call evaluates
+            # this same corpus without resetting a job's attempt generation.
+            progress['proof_contract'] = _REPROCESS_PROOF_CONTRACT
+            progress['proof_generation'] = None
             if progress != old_progress:
                 with _sched_update(ledger) as sched:
                     if (sched.get('inference_reprocess') != old_progress
@@ -1680,7 +1763,17 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
         tail = upper > progress['seed_cursor']
         progress.update(phase='seed' if tail else 'verify',
                         cursor=progress['seed_cursor'] if tail else 0, upper=upper,
-                        counts={}, dirty=False, verify_epochs=dict(epochs), complete=False)
+                        counts={}, dirty=False, verify_epochs=dict(epochs), complete=False,
+                        proof_generation=proof_generation)
+    if progress['phase'] in ('verify', 'verify_patients') and progress.get('proof_generation') != proof_generation:
+        # Finish the bounded round, but never accept mixed-generation proofs.
+        progress.update(dirty=True, complete=False)
+    if progress['phase'] == 'verify_patients' and proof_expired:
+        # Configuration/time changes invalidate accepted patient proofs, not
+        # source enumeration or same-input retry rights.
+        progress.update(patient_cursor=0, patient_counts={},
+                        proof_contract=_REPROCESS_PROOF_CONTRACT, proof_started_at=now,
+                        proof_checked_at=now, proof_valid_until=None, complete=False)
     if progress['phase'] == 'verify_patients':
         states = {'current', 'pending', 'held', 'paused', 'failed', 'incomplete', 'excluded',
                   'terminal_gap', 'repair_pending', 'rollup_unverified'}
@@ -1698,17 +1791,29 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
         for row in rows:
             if deadline is not None and time.monotonic() >= deadline:
                 break
-            state = _reprocess_patient_state(ledger, row, cfg, scfg)
+            witness = {}
+            state = _reprocess_patient_state(ledger, row, cfg, scfg, witness)
+            if state == 'current':
+                until = witness.get('valid_until')
+                checked = witness.get('checked_at')
+                if (type(until) not in (int, float) or not math.isfinite(until) or not now < until < 1e12
+                        or type(checked) not in (int, float) or not math.isfinite(checked) or not now <= checked < until):
+                    state = 'rollup_unverified'
+                else:
+                    prior = progress.get('proof_valid_until')
+                    progress['proof_valid_until'] = until if prior is None else min(prior, until)
+                    progress['proof_checked_at'] = max(progress.get('proof_checked_at', now), checked)
             counts[state] = counts.get(state, 0) + 1
             progress['patient_cursor'] = row['project_id']
             processed += 1
         with _sched_update(ledger) as sched:
-            # This owner may have adopted a rollup proof while planning. Seal
-            # against external writers/source changes, retaining this batch's
-            # cursor while marking a changed proof for the next finite round.
+            # Patient proofs are read-only. No local or external writer may
+            # change their inputs before this batch's cursor is adopted.
             if (sched.get('inference_reprocess') != old_progress
-                    or sched.get('source_epoch', 0) != epochs['source_epoch']
-                    or ledger.db.execute('PRAGMA data_version').fetchone()[0] != version):
+                    or any(sched.get(field, 0) != epochs[field] for field in fields)
+                    or ledger.db.execute('PRAGMA data_version').fetchone()[0] != version
+                    or ledger.db.total_changes != changes
+                    or _reprocess_proof_generation(ledger, cfg, scfg) != proof_generation):
                 return {'status': 'source_changed', 'complete': False, 'processed': 0}
             actual = {field: sched.get(field, 0) for field in fields}
             actual['intake_hold_epoch'] = semantic_intake_hold.hold_epoch(ledger.db)
@@ -1728,20 +1833,30 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
                 tail = upper > progress['seed_cursor']
                 progress.update(future_upper=upper, tail_pending=tail)
                 dirty = progress.get('dirty', False) or progress.get('verify_epochs', actual) != actual
-                progress['complete'] = False  # The rollup witness is not implemented yet.
+                proof_time_valid = _reprocess_proof_time_valid(progress, time.time())
+                progress['complete'] = bool(counts.get('current') and not blocked_messages and not blocked_patients
+                    and not tail and not dirty and not actual['intake_unstored_epoch'] and proof_time_valid
+                    and progress.get('proof_valid_until') is not None
+                    and progress.get('proof_generation') == proof_generation)
                 progress['waiting_reasons'] = {'messages': blocked_messages, 'patients': blocked_patients}
                 if actual['intake_unstored_epoch']:
                     progress['waiting_reasons']['intake_unstored'] = 'present'
                 progress['remaining_stages'] = (['source_or_patient_proof']
                     if blocked_messages or blocked_patients or tail or dirty else [])
-                progress['proof_status'] = 'rollup_freshness_unverified'
-                progress['proof_reason'] = '患者集約の現行性を確認できません'
-                progress['remaining_stages'].append('rollup_freshness_witness')
+                unverified = bool(counts.get('rollup_unverified') or not counts or not proof_time_valid)
+                progress['proof_status'] = ('current' if progress['complete'] else
+                    'rollup_freshness_unverified' if unverified else 'incomplete')
+                if unverified:
+                    progress['proof_reason'] = '患者集約の現行性を確認できません'
+                    progress['remaining_stages'].append('rollup_freshness_witness')
+                else:
+                    progress.pop('proof_reason', None)
                 progress['verified_at'] = time.time()
                 if tail or dirty:
                     progress.update(phase='seed' if tail else 'verify',
                         cursor=progress['seed_cursor'] if tail else 0, upper=upper,
-                        counts={}, dirty=False, verify_epochs=dict(actual))
+                        counts={}, dirty=False, verify_epochs=dict(actual),
+                        proof_generation=proof_generation)
                 else:
                     progress['phase'] = 'complete' if progress['complete'] else 'waiting'
             sched['inference_reprocess'] = progress
@@ -1808,11 +1923,14 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
         if len(planned) == len(rows) and (len(rows) < limit or progress['cursor'] >= progress['upper']):
             if progress['phase'] == 'seed':
                 progress['seed_cursor'] = max(progress['seed_cursor'], progress['upper'])
-                progress.update(phase='verify', cursor=0, counts={}, dirty=False, verify_epochs=dict(epochs))
+                progress.update(phase='verify', cursor=0, counts={}, dirty=False, verify_epochs=dict(epochs),
+                                proof_generation=proof_generation)
             else:
                 progress['coverage'] = {'counts': progress['counts'], 'observed_at': time.time(),
                                        'upper': progress['upper'], **epochs}
                 progress.update(phase='verify_patients', counts={}, patient_cursor=0, patient_counts={},
+                    proof_contract=_REPROCESS_PROOF_CONTRACT,
+                    proof_started_at=time.time(), proof_checked_at=time.time(), proof_valid_until=None,
                     patient_upper=ledger.db.execute('SELECT COALESCE(MAX(project_id),0) FROM patients').fetchone()[0])
         progress['complete'] = False
         progress['tail_pending'] = progress['future_upper'] > progress['seed_cursor']

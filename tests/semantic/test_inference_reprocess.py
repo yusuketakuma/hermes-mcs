@@ -183,7 +183,7 @@ def test_all_stage_join_keeps_source_proofs_but_waits_for_rollup_witness(store, 
     assert report['coverage']['counts'] == {'current': 1}
     assert report['patient_counts'] == {patient_state: 1}
     assert report['complete'] is False and report['phase'] == 'waiting'
-    assert 'rollup_freshness_witness' in report['remaining_stages']
+    assert ('rollup_freshness_witness' in report['remaining_stages']) == (patient_state == 'rollup_unverified')
     assert _replay(store)['complete'] is False
     # A new backward-key source still invalidates the cached observation.
     store.save_messages([_message(1, body='完全合成の訂正です。')], project_id=1)
@@ -562,6 +562,161 @@ def _waiting(store, cfg=None, *, limit=32):
     pytest.fail('bounded synthetic replay did not reach its waiting/completed bookmark')
 
 
+def _completed_source(store, monkeypatch, *, cfg=None, pid=1, mid=1):
+    """Join independent current semantic/context proofs to a real saved rollup."""
+    import patient_context_refresh
+    import rollup
+    cfg = cfg or _cfg(loop_mode='off')
+    _save(store, mid, pid)
+    scfg = semantic_policy.runtime_config(cfg)[0]
+    fp = semantic_store.thread_bundle(store.db, pid, mid)['source_fingerprint']
+    source = store.db.execute('SELECT content_hash FROM messages WHERE message_id=?', (mid,)).fetchone()[0]
+    meta = {VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp, 'hash': source,
+            'policy_fingerprint': semantic_policy.policy_fingerprint(scfg)}
+    for kind, content in (('semantic_audit', {'status': 'PASS'}),
+                          ('semantic_summary', {'claims': []}), ('semantic_facts', {'facts': []})):
+        store.artifact_add(kind, json.dumps(content), project_id=pid, message_id=mid, meta=meta)
+    monkeypatch.setattr(patient_context_refresh, 'inference_coverage',
+                        lambda *args: {VERSION_KEY: CURRENT_VERSION, 'complete': True})
+    rollup.rebuild(store, pid, cfg=cfg)
+    return cfg
+
+
+def test_completion_joins_current_proofs_without_rewriting_or_dispatching(store, monkeypatch):
+    import rollup
+    cfg = _completed_source(store, monkeypatch)
+    protected = [tuple(r) for r in store.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    monkeypatch.setattr(rollup, 'rebuild', lambda *a, **k: pytest.fail('completion wrote a rollup'))
+    report = _waiting(store, cfg)
+    assert report['complete'] is True and report['phase'] == 'complete'
+    assert report['coverage']['counts'] == {'current': 1}
+    assert report['patient_counts'] == {'current': 1} and report['remaining_stages'] == []
+    assert report['proof_status'] == 'current'
+    assert report['verified_at'] < report['proof_valid_until']
+    assert _job(store) is None
+    assert [tuple(r) for r in store.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == protected
+    changes = store.db.total_changes
+    assert _replay(store, cfg)['complete'] is True
+    assert store.db.total_changes == changes
+
+
+def test_model_change_invalidates_completion_until_normal_owner_rebuilds(store, monkeypatch):
+    import rollup
+    cfg = _completed_source(store, monkeypatch)
+    done = _waiting(store, cfg)
+    changed = {**cfg, 'local_llm': {'model': 'synthetic-next-model'}}
+    report = _waiting(store, changed)
+    assert report['complete'] is False and report['patient_counts'] == {'rollup_unverified': 1}
+    assert report['seed_cursor'] == done['seed_cursor'] and _job(store) is None
+    scan = rollup.scan_dirty_projects(store, cfg=changed)
+    assert scan.dirty == (1,)
+    rollup.rebuild_many(store, scan.dirty, cfg=changed)
+    assert _waiting(store, changed)['complete'] is True
+
+
+def test_operating_budget_change_reuses_completion_without_reseeding(store, monkeypatch):
+    cfg = _completed_source(store, monkeypatch)
+    before = _waiting(store, cfg)
+    changed = {**cfg, 'semantic': {**cfg['semantic'], 'daily_request_budget': 12,
+                                   'until': '2099-01-01T00:00:00+09:00'},
+               'cloud_llm': {'window_budget_usd': 3, 'daily_cost_limit_usd': 7}}
+    changes = store.db.total_changes
+    after = _replay(store, changed)
+    assert after['complete'] is True and after['proof_generation'] == before['proof_generation']
+    assert after['processed'] == 0 and store.db.total_changes == changes and _job(store) is None
+
+
+@pytest.mark.parametrize('direction', ['expired', 'backward'])
+def test_clock_change_invalidates_a_completed_bookmark(store, monkeypatch, direction):
+    now = [time.time()]
+    monkeypatch.setattr(time, 'time', lambda: now[0])
+    cfg = _completed_source(store, monkeypatch)
+    before = _waiting(store, cfg)
+    now[0] = before['proof_valid_until'] if direction == 'expired' else before['proof_started_at'] - 1
+    report = _replay(store, cfg)
+    assert report['complete'] is False and report['seed_cursor'] == before['seed_cursor']
+    assert _job(store) is None
+
+
+def test_new_saved_tail_is_discovered_after_completion(store, monkeypatch):
+    cfg = _completed_source(store, monkeypatch)
+    before = _waiting(store, cfg)
+    _save(store, 2)
+    report = _replay(store, cfg, limit=1)
+    assert report['complete'] is False and report['seed_cursor'] > before['seed_cursor']
+    assert _job(store, 2) is not None and _job(store) is None
+    assert json.loads(_job(store, 2)['payload'])['notification_free'] is True
+
+
+def test_patient_proof_race_never_adopts_completion(store, monkeypatch):
+    import rollup
+    cfg = _completed_source(store, monkeypatch)
+    for _ in range(3):
+        report = _replay(store, cfg)
+        if report['phase'] == 'verify_patients':
+            break
+    before = drain._sched_state(store)['inference_reprocess']
+    original = rollup.completion_coverage
+    path = store.db.execute('PRAGMA database_list').fetchone()[2]
+
+    def concurrent(db, pid, config):
+        proof = original(db, pid, config)
+        other = sqlite3.connect(path)
+        try:
+            with other:
+                other.execute("UPDATE messages SET profession='合成の並行訂正' WHERE message_id=1")
+        finally:
+            other.close()
+        return proof
+
+    monkeypatch.setattr(rollup, 'completion_coverage', concurrent)
+    assert _replay(store, cfg) == {'status': 'source_changed', 'complete': False, 'processed': 0}
+    assert drain._sched_state(store)['inference_reprocess'] == before
+
+
+@pytest.mark.parametrize('external', [False, True])
+def test_cached_completion_is_sealed_against_local_and_external_writes(store, monkeypatch, external):
+    cfg = _completed_source(store, monkeypatch)
+    _waiting(store, cfg)
+    original = drain._reprocess_bookmark_sealed
+    path = store.db.execute('PRAGMA database_list').fetchone()[2]
+    before = drain._sched_state(store)['inference_reprocess']
+
+    def changed_before_seal(*args):
+        db = sqlite3.connect(path) if external else store.db
+        try:
+            with db:
+                db.execute("UPDATE messages SET profession='合成の採用前訂正' WHERE message_id=1")
+        finally:
+            if external:
+                db.close()
+        return original(*args)
+
+    monkeypatch.setattr(drain, '_reprocess_bookmark_sealed', changed_before_seal)
+    assert _replay(store, cfg) == {'status': 'source_changed', 'complete': False, 'processed': 0}
+    assert drain._sched_state(store)['inference_reprocess'] == before
+
+
+def test_expired_partial_patient_proof_restarts_only_verification(store, monkeypatch):
+    now = [time.time()]
+    monkeypatch.setattr(time, 'time', lambda: now[0])
+    cfg = _completed_source(store, monkeypatch)
+    _patient(store, 2)
+    _completed_source(store, monkeypatch, cfg=cfg, pid=2, mid=2)
+    for _ in range(8):
+        report = _replay(store, cfg, limit=1)
+        if report['phase'] == 'verify_patients' and report['patient_cursor'] == 1:
+            break
+    assert report['patient_counts'] == {'current': 1}
+    highwater = report['seed_cursor']
+    now[0] = report['proof_valid_until']
+    retry = _replay(store, cfg, limit=1)
+    assert retry['complete'] is False and retry['patient_cursor'] == 1
+    assert retry['patient_counts'] == {'current': 1} and retry['seed_cursor'] == highwater
+    assert _waiting(store, cfg, limit=1)['complete'] is True
+    assert _job(store, 1) is None and _job(store, 2, 2) is None
+
+
 def _saved_old_completion(store, *, phase='complete', malformed=False):
     with drain._sched_update(store) as sched:
         old = dict(sched['inference_reprocess'])
@@ -571,6 +726,7 @@ def _saved_old_completion(store, *, phase='complete', malformed=False):
                    remaining_stages=['source_or_patient_proof'] if phase == 'waiting' else [])
         old.pop('proof_status', None)
         old.pop('proof_reason', None)
+        old.pop('proof_contract', None)
         sched['inference_reprocess'] = old
     return old
 
@@ -606,9 +762,12 @@ def test_old_bookmark_waits_without_losing_results_or_reopening_jobs(store, monk
     assert 'rollup_freshness_witness' in report['remaining_stages']
     if phase == 'waiting':
         assert 'source_or_patient_proof' in report['remaining_stages']
+    # The old bookmark cannot certify the new proof contract. Revalidate it
+    # once without reopening the unchanged failed job or replacing its cache.
+    again = _waiting(store)
+    assert again['phase'] == 'waiting' and again['complete'] is False
     for _ in range(3):
-        again = _replay(store)
-        assert again['phase'] == 'waiting' and again['complete'] is False and again['processed'] == 0
+        assert _replay(store)['processed'] == 0
     assert dict(_job(store)) == before_job
     assert [tuple(row) for row in store.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before_rows
     assert [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox ORDER BY event_id')] == before_outbox
@@ -651,13 +810,13 @@ def test_empty_scope_cannot_claim_unproved_rollup_completion(store):
     assert report['proof_status'] == 'rollup_freshness_unverified'
 
 
-def test_unverified_rollup_does_not_block_existing_semantic_job(store, monkeypatch):
+def test_incomplete_patient_proof_does_not_block_existing_semantic_job(store, monkeypatch):
     from semantic_testkit import _FakeJev
 
     _save(store)
     store.semantic_seed(1, [1], {'source': 'synthetic-existing-job'})
     report = _waiting(store)
-    assert report['proof_status'] == 'rollup_freshness_unverified'
+    assert report['proof_status'] == 'incomplete'
     before_attempts = _job(store)['attempts']
     outbox = [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox ORDER BY event_id')]
     processed = []
@@ -674,7 +833,7 @@ def test_unverified_rollup_does_not_block_existing_semantic_job(store, monkeypat
     assert processed == [_job(store)['job_id']] and _job(store)['state'] == 'done'
     assert _job(store)['attempts'] == before_attempts
     assert output['inference_reprocess']['complete'] is False
-    assert output['inference_reprocess']['proof_status'] == 'rollup_freshness_unverified'
+    assert output['inference_reprocess']['proof_status'] == 'incomplete'
     assert [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox ORDER BY event_id')] == outbox
 
 
@@ -913,3 +1072,51 @@ def test_initial_replay_resumes_across_midnight_with_budget_and_deadline(store, 
             == old_usage)
     finally:
         reopened.close()
+
+
+def test_continuous_patient_and_reference_arrivals_finish_each_bounded_walk(store, monkeypatch):
+    import rollup
+    for mid in range(1, 13):
+        _save(store, mid)
+    monkeypatch.setattr(drain, '_reprocess_patient_state', lambda *args: 'pending')
+    previous = _replay(store, limit=2)
+    initial_upper = previous['upper']
+    seen_patient_walk = False
+    for arrival in range(60):
+        pid = 100 + arrival
+        _patient(store, pid)
+        _save(store, 1000 + arrival, pid)
+        store.artifact_add(rollup.REF_KIND, '{}', project_id=pid, message_id=1000 + arrival)
+        report = _replay(store, limit=2)
+        assert report['processed'] <= 2 and not report['complete']
+        if report['phase'] == previous['phase'] == 'verify' and report['upper'] == previous['upper']:
+            assert report['cursor'] >= previous['cursor']
+        if report['phase'] == previous['phase'] == 'verify_patients' and report['patient_upper'] == previous['patient_upper']:
+            assert report['patient_cursor'] >= previous['patient_cursor']
+        seen_patient_walk |= report['phase'] == 'verify_patients'
+        previous = report
+    assert seen_patient_walk and report['seed_cursor'] >= initial_upper
+    assert _job(store, 12) is not None
+    assert any(_job(store, 1000 + n, 100 + n) is not None for n in range(60))
+
+
+def test_model_change_mid_verification_finishes_the_fixed_range_without_completion(store, monkeypatch):
+    cfg = _completed_source(store, monkeypatch)
+    for pid in range(2, 5):
+        _patient(store, pid)
+        _completed_source(store, monkeypatch, cfg=cfg, pid=pid, mid=pid)
+    for _ in range(12):
+        report = _replay(store, cfg, limit=1)
+        if report['phase'] == 'verify' and report['cursor'] == 1:
+            break
+    assert report['phase'] == 'verify' and report['cursor'] == 1
+    changed = {**cfg, 'local_llm': {'model': 'synthetic-next-model'}}
+    advanced = _replay(store, changed, limit=1)
+    assert advanced['phase'] == 'verify' and advanced['cursor'] == 2
+    assert advanced['dirty'] and not advanced['complete']
+    for _ in range(12):
+        advanced = _replay(store, changed, limit=1)
+        assert not advanced['complete']
+        if advanced['phase'] == 'verify' and advanced['cursor'] == 0:
+            break
+    assert advanced['phase'] == 'verify' and advanced['cursor'] == 0
