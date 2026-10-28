@@ -6,6 +6,7 @@ import uuid
 
 import pytest
 
+import config_edit
 import drug_alias
 import safe_io
 import drug_map
@@ -103,6 +104,174 @@ def test_failed_commit_compensates_config_and_preserves_old_dictionary(corpus):
     assert json.loads(config.read_text())["drug_map"] == cfg["drug_map"]
     assert Path(cfg["drug_map"]["path"]).exists()
     assert not (config.parent / "data/drug-map/alias-switch.pending.json").exists()
+
+
+def test_shared_config_lock_conflict_records_rejection_and_allows_new_command(corpus):
+    store, cfg, config = corpus
+    proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    req = request(proposed)
+    with config_edit._edit_lock(config):
+        receipt = mcs_requests.apply_command(store, req)
+    assert receipt['error'] == 'alias_switch_failed'
+    assert json.loads(config.read_text()) == cfg
+    assert not (config.parent / 'data/drug-map/alias-switch.pending.json').exists()
+    assert mcs_requests.apply_command(store, req) == receipt
+    assert mcs_requests.apply_command(store, request(proposed))['outcome'] == 'applied'
+
+
+def test_shared_lock_remains_held_while_receipt_is_inserted(corpus):
+    store, cfg, config = corpus
+    proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    blocked = []
+    def concurrent_writer():
+        try:
+            with config_edit._edit_lock(config):
+                blocked.append(False)
+        except config_edit.ConfigConflict:
+            blocked.append(True)
+        return 0
+    store.db.create_function('synthetic_config_editor', 0, concurrent_writer)
+    store.db.execute('CREATE TRIGGER observe_config_lock BEFORE INSERT ON command_receipts '
+                     'BEGIN SELECT synthetic_config_editor(); END')
+    assert mcs_requests.apply_command(store, request(proposed))['outcome'] == 'applied'
+    assert blocked == [True]
+    with config_edit._edit_lock(config):
+        assert json.loads(config.read_text())['unrelated'] == 'preserved'
+
+
+def test_failed_receipt_keeps_shared_lock_until_compensation(corpus):
+    import sqlite3
+    store, cfg, config = corpus
+    proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    blocked = []
+    def competing_editor():
+        try:
+            with config_edit._edit_lock(config):
+                blocked.append(False)
+        except config_edit.ConfigConflict:
+            blocked.append(True)
+        return 0
+    store.db.create_function('synthetic_config_editor', 0, competing_editor)
+    store.db.execute('CREATE TRIGGER reject_with_editor BEFORE INSERT ON command_receipts '
+                     "BEGIN SELECT synthetic_config_editor(); SELECT RAISE(ABORT,'synthetic failure'); END")
+    with pytest.raises(sqlite3.IntegrityError):
+        mcs_requests.apply_command(store, request(proposed))
+    assert blocked == [True] and json.loads(config.read_text()) == cfg
+    assert not (config.parent / 'data/drug-map/alias-switch.pending.json').exists()
+    with config_edit._edit_lock(config):
+        assert json.loads(config.read_text()) == cfg
+
+
+def test_failed_receipt_preserves_uncooperative_edit_for_explicit_recovery(corpus):
+    store, cfg, config = corpus
+    proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    req = request(proposed)
+    def edit_other_setting():
+        current = json.loads(config.read_text())
+        current['unrelated'] = 'newer'
+        config.write_text(json.dumps(current))
+        return 0
+    store.db.create_function('synthetic_config_edit', 0, edit_other_setting)
+    store.db.execute('CREATE TRIGGER reject_after_edit BEFORE INSERT ON command_receipts '
+                     "BEGIN SELECT synthetic_config_edit(); SELECT RAISE(ABORT,'synthetic failure'); END")
+    with pytest.raises(RuntimeError, match='alias_recovery_required'):
+        mcs_requests.apply_command(store, req)
+    assert json.loads(config.read_text())['unrelated'] == 'newer'
+    journal = config.parent / 'data/drug-map/alias-switch.pending.json'
+    assert journal.exists()
+    store.db.execute('DROP TRIGGER reject_after_edit')
+    assert mcs_requests.apply_command(store, rollback(req['command_id']))['outcome'] == 'applied'
+    recovered = json.loads(config.read_text())
+    assert recovered['drug_map'] == cfg['drug_map'] and recovered['unrelated'] == 'newer'
+    assert not journal.exists()
+
+
+@pytest.mark.parametrize('change', ['edited', 'same_bytes_replacement'])
+def test_concurrent_config_change_before_lock_is_preserved(corpus, monkeypatch, change):
+    store, cfg, config = corpus
+    proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    original = drug_alias.proposal
+    expected = {**cfg, 'unrelated': 'newer'} if change == 'edited' else cfg
+    def concurrent(*args):
+        result = original(*args)
+        if change == 'edited':
+            config.write_text(json.dumps(expected))
+        else:
+            replacement = config.with_name('replacement.json')
+            replacement.write_bytes(config.read_bytes())
+            replacement.chmod(0o600)
+            replacement.replace(config)
+        return result
+    monkeypatch.setattr(drug_alias, 'proposal', concurrent)
+    assert mcs_requests.apply_command(store, request(proposed))['error'] == 'alias_switch_failed'
+    assert json.loads(config.read_text()) == expected
+    assert not (config.parent / 'data/drug-map/alias-switch.pending.json').exists()
+
+
+def test_concurrent_config_change_before_publish_is_preserved(corpus, monkeypatch):
+    store, cfg, config = corpus
+    proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    snapshot = drug_alias._config_snapshot
+    expected = {**cfg, 'unrelated': 'newer'}
+    calls = []
+    def concurrent(path):
+        calls.append(True)
+        if len(calls) == 3:
+            config.write_text(json.dumps(expected))
+        return snapshot(path)
+    monkeypatch.setattr(drug_alias, '_config_snapshot', concurrent)
+    assert mcs_requests.apply_command(store, request(proposed))['error'] == 'alias_switch_failed'
+    assert json.loads(config.read_text()) == expected
+    assert not (config.parent / 'data/drug-map/alias-switch.pending.json').exists()
+
+
+def test_alias_accepts_private_config_above_general_limit(corpus):
+    store, cfg, config = corpus
+    cfg['unrelated'] = 'x' * (1024 * 1024 + 1)
+    config.write_text(json.dumps(cfg))
+    proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    assert mcs_requests.apply_command(store, request(proposed))['outcome'] == 'applied'
+    assert json.loads(config.read_text())['unrelated'] == cfg['unrelated']
+
+
+def test_journal_recovery_respects_shared_config_lock(corpus):
+    store, cfg, config = corpus
+    proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    req = request(proposed)
+    receipt = mcs_requests.apply_command(store, req)
+    assert receipt['outcome'] == 'applied'
+    journal = config.parent / 'data/drug-map/alias-switch.pending.json'
+    safe_io.publish_new_bytes(journal, mcs_requests.canonical(receipt))
+    before = config.read_bytes()
+    with config_edit._edit_lock(config):
+        blocked = mcs_requests.apply_command(store, rollback(req['command_id']))
+    assert blocked['error'] == 'alias_switch_failed'
+    assert journal.exists() and config.read_bytes() == before
+    assert mcs_requests.apply_command(store, rollback(req['command_id']))['outcome'] == 'applied'
+    assert json.loads(config.read_text())['drug_map'] == cfg['drug_map']
+    assert not journal.exists()
+
+
+def test_journal_recovery_preserves_newer_config(corpus, monkeypatch):
+    store, cfg, config = corpus
+    proposed = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    req = request(proposed)
+    receipt = mcs_requests.apply_command(store, req)
+    assert receipt['outcome'] == 'applied'
+    journal = config.parent / 'data/drug-map/alias-switch.pending.json'
+    safe_io.publish_new_bytes(journal, mcs_requests.canonical(receipt))
+    snapshot = drug_alias._config_snapshot
+    calls, expected = [], {}
+    def concurrent(path):
+        calls.append(True)
+        if len(calls) == 2:
+            expected.update(json.loads(config.read_text()))
+            expected['unrelated'] = 'newer'
+            config.write_text(json.dumps(expected))
+        return snapshot(path)
+    monkeypatch.setattr(drug_alias, '_config_snapshot', concurrent)
+    assert mcs_requests.apply_command(store, rollback(req['command_id']))['error'] == 'alias_switch_failed'
+    assert json.loads(config.read_text()) == expected and journal.exists()
 
 
 def test_crash_journal_blocks_retry_and_allows_explicit_rollback(corpus):

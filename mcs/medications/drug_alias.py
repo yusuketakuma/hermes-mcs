@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import stat
 
+import config_edit
 import drug_map
 import safe_io
 from mcs_requests import canonical, payload_hash, valid_uuid
@@ -33,6 +34,18 @@ def private_json(path, limit=drug_map.MAX_BYTES):
     if not isinstance(doc, dict):
         raise ValueError("alias_file_shape")
     return doc, raw
+
+
+def _config_snapshot(path):
+    raw, base = config_edit._snapshot(path, limit=drug_map.MAX_BYTES)
+    info = path.lstat()
+    if (info.st_uid != os.getuid() or info.st_mode & 0o077
+            or config_edit._identity(info) != base[0]):
+        raise ValueError("alias_private_file")
+    cfg = json.loads(raw)
+    if not isinstance(cfg, dict):
+        raise ValueError("alias_file_shape")
+    return cfg, raw, base
 
 
 def safe_alias(alias):
@@ -145,32 +158,44 @@ def validate_operation(req, common):
 
 
 @contextmanager
-def _switch(config_path, cfg, raw, before, after, journal, record, *, recovery=False):
+def _switch(config_path, cfg, raw, base, before, after, journal, record, *, recovery=False):
     """Keep compensation armed until the surrounding receipt COMMIT completes."""
-    if not recovery:
-        safe_io.publish_new_bytes(journal, canonical(record))
-    switched = False
-    try:
-        if private_json(config_path)[1] != raw:
+    # The DB transaction is already held; all config editors take this lock
+    # non-blocking and none wait for the DB while holding it.
+    with config_edit._edit_lock(config_path):
+        if _config_snapshot(config_path)[2] != base:
             raise ValueError("alias_config_changed")
-        switched = True  # atomic_write may rename and then fail its directory sync.
-        atomic_write(str(config_path), lambda f: f.write(canonical({**cfg, "drug_map": after}).decode()), 0o600)
-        yield
-    except BaseException:
-        if switched:
-            current, _ = private_json(config_path)
-            if current not in (cfg, {**cfg, "drug_map": after}):
-                raise RuntimeError("alias_recovery_required") from None
-            atomic_write(str(config_path), lambda f: f.write(raw.decode()), 0o600)
         if not recovery:
-            journal.unlink()
-            fsync_dir(journal.parent)
-        raise
-    else:
-        # A crash after COMMIT leaves the journal for explicit rollback, never retry.
-        with suppress(OSError):
-            journal.unlink()
-            fsync_dir(journal.parent)
+            safe_io.publish_new_bytes(journal, canonical(record))
+        switched = False
+        try:
+            desired = {**cfg, "drug_map": after}
+            def write_checked(stream):
+                nonlocal switched
+                stream.write(canonical(desired).decode())
+                if _config_snapshot(config_path)[2] != base:
+                    raise ValueError("alias_config_changed")
+                # A later fsync error may occur after the rename.
+                switched = True
+            atomic_write(str(config_path), write_checked, 0o600)
+            if _config_snapshot(config_path)[0] != desired:
+                raise RuntimeError("alias_recovery_required")
+            yield
+        except BaseException:
+            if switched:
+                current, _ = private_json(config_path)
+                if current not in (cfg, {**cfg, "drug_map": after}):
+                    raise RuntimeError("alias_recovery_required") from None
+                atomic_write(str(config_path), lambda f: f.write(raw.decode()), 0o600)
+            if not recovery:
+                journal.unlink()
+                fsync_dir(journal.parent)
+            raise
+        else:
+            # A crash after COMMIT leaves the journal for explicit rollback, never retry.
+            with suppress(OSError):
+                journal.unlink()
+                fsync_dir(journal.parent)
 
 
 def apply_tx(db, req, filesystem_changes):
@@ -188,7 +213,7 @@ def apply_tx(db, req, filesystem_changes):
     folder = root / "data" / "drug-map"
     journal = folder / "alias-switch.pending.json"
     try:
-        cfg, raw = private_json(config_path)
+        cfg, raw, base = _config_snapshot(config_path)
         before = cfg.get("drug_map")
         if drug_map.config_error(before) is not None:
             return "alias_dictionary_unavailable", {}
@@ -241,7 +266,7 @@ def apply_tx(db, req, filesystem_changes):
             rollback_origin = record
             record = {"cmd": req["cmd"], "approval_id": req["approval_id"],
                       "before_pin": before, "after_pin": after, "reason": req["reason"]}
-        filesystem_changes.enter_context(_switch(config_path, cfg, raw, before, after,
+        filesystem_changes.enter_context(_switch(config_path, cfg, raw, base, before, after,
                                                  journal, rollback_origin if req["cmd"] == "ops.drug_alias_rollback" else record,
                                                  recovery=recovery))
         return None, record
