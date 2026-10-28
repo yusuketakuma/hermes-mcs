@@ -417,6 +417,214 @@ def test_bounded_long_defer_scan_rotates(jobs_db, monkeypatch):
     assert str(second_id) not in semantic_drain._long_defers(jobs_db)
 
 
+def test_scheduler_blob_is_read_only_after_size_check(jobs_db):
+    from types import SimpleNamespace
+
+    class TrackedBlob:
+        def __init__(self, blob, job_id, reads):
+            self.blob, self.job_id, self.reads = blob, job_id, reads
+
+        def __enter__(self):
+            self.blob.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.blob.__exit__(*args)
+
+        def __len__(self):
+            return len(self.blob)
+
+        def read(self, size):
+            self.reads.append((self.job_id, size))
+            return self.blob.read(size)
+
+    class TrackedConnection:
+        def __init__(self, db):
+            self.db, self.reads = db, []
+
+        def __getattr__(self, name):
+            return getattr(self.db, name)
+
+        def blobopen(self, table, column, job_id, **kwargs):
+            return TrackedBlob(self.db.blobopen(table, column, job_id, **kwargs), job_id, self.reads)
+
+    tracked = TrackedConnection(jobs_db.db)
+    ledger = SimpleNamespace(db=tracked)
+    limit = semantic_drain._REPROCESS_JOB_MAX_BYTES
+    raw = '{"long_defers":{}}'
+    with jobs_db.db:
+        semantic_drain._sched_write(jobs_db, {}, commit=False)
+        jobs_db.db.execute('UPDATE fetch_jobs SET payload=? WHERE kind=?',
+                           (raw + ' ' * (limit - len(raw)), semantic_drain.SCHED_KIND))
+    assert semantic_drain._reservation_sched(ledger)[1] == {}
+    assert [size for _, size in tracked.reads] == [limit]
+    tracked.reads.clear()
+    with jobs_db.db:
+        jobs_db.db.execute('UPDATE fetch_jobs SET payload=payload||? WHERE kind=?',
+                           (' ', semantic_drain.SCHED_KIND))
+    with pytest.raises(ValueError, match='semantic_scheduler_invalid'):
+        semantic_drain._reservation_sched(ledger)
+    assert tracked.reads == []
+
+
+def test_oversized_changed_job_is_not_fetched_or_refunded(jobs_db):
+    from types import SimpleNamespace
+
+    now = time.time()
+    job_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    token = runtime.JobToken.from_row(jobs_db.db.execute(
+        'SELECT * FROM fetch_jobs WHERE job_id=?', (job_id,)).fetchone())
+    reservation = semantic_drain._reserve_long_defer(jobs_db, token)
+    with jobs_db.db:
+        jobs_db.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?',
+                           ('x' * (semantic_drain._REPROCESS_JOB_MAX_BYTES + 1), job_id))
+
+    class NoReadBlob:
+        def __init__(self, blob):
+            self.blob = blob
+
+        def __enter__(self):
+            self.blob.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.blob.__exit__(*args)
+
+        def __len__(self):
+            return len(self.blob)
+
+        def read(self, size):
+            pytest.fail('oversized job payload was read')
+
+    class TrackedConnection:
+        def __init__(self, db):
+            self.db, self.opened = db, []
+
+        def __getattr__(self, name):
+            return getattr(self.db, name)
+
+        def __enter__(self):
+            self.db.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.db.__exit__(*args)
+
+        def blobopen(self, table, column, row_id, **kwargs):
+            blob = self.db.blobopen(table, column, row_id, **kwargs)
+            self.opened.append((row_id, len(blob)))
+            return NoReadBlob(blob) if row_id == job_id else blob
+
+    tracked = TrackedConnection(jobs_db.db)
+    ledger = SimpleNamespace(db=tracked)
+    assert semantic_drain._reserve_long_defer(ledger, token) is None
+    semantic_drain._refund_long_defer(ledger, token, reservation)
+    assert (job_id, semantic_drain._REPROCESS_JOB_MAX_BYTES + 1) in tracked.opened
+    assert semantic_drain._long_defers(jobs_db)[str(job_id)] == reservation[1]
+
+
+def test_blob_read_error_rolls_back_reservation(jobs_db):
+    import sqlite3
+    from types import SimpleNamespace
+
+    now = time.time()
+    job_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    token = runtime.JobToken.from_row(jobs_db.db.execute(
+        'SELECT * FROM fetch_jobs WHERE job_id=?', (job_id,)).fetchone())
+    with jobs_db.db:
+        semantic_drain._sched_write(jobs_db, {'long_defers': {str(job_id): {'g': 'g40', 'n': 3}}},
+                                    commit=False)
+    before = jobs_db.db.execute('SELECT payload FROM fetch_jobs WHERE kind=?',
+                                (semantic_drain.SCHED_KIND,)).fetchone()[0]
+
+    class BrokenConnection:
+        def __init__(self, db):
+            self.db = db
+
+        def __getattr__(self, name):
+            return getattr(self.db, name)
+
+        def __enter__(self):
+            self.db.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.db.__exit__(*args)
+
+        def blobopen(self, table, column, row_id, **kwargs):
+            if row_id == job_id:
+                raise sqlite3.DatabaseError('synthetic read failure')
+            return self.db.blobopen(table, column, row_id, **kwargs)
+
+    with pytest.raises(sqlite3.DatabaseError):
+        semantic_drain._reserve_long_defer(SimpleNamespace(db=BrokenConnection(jobs_db.db)), token)
+    assert not jobs_db.db.in_transaction
+    assert jobs_db.db.execute('SELECT payload FROM fetch_jobs WHERE kind=?',
+                              (semantic_drain.SCHED_KIND,)).fetchone()[0] == before
+
+
+def test_oversized_serialized_scheduler_does_not_commit(jobs_db):
+    now = time.time()
+    job_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    token = runtime.JobToken.from_row(jobs_db.db.execute(
+        'SELECT * FROM fetch_jobs WHERE job_id=?', (job_id,)).fetchone())
+    raw = json.dumps({'long_defers': {}, 'padding': '合' * 200_000}, ensure_ascii=False)
+    assert len(raw.encode('utf-8')) < semantic_drain._REPROCESS_JOB_MAX_BYTES
+    with jobs_db.db:
+        semantic_drain._sched_write(jobs_db, {}, commit=False)
+        jobs_db.db.execute('UPDATE fetch_jobs SET payload=? WHERE kind=?',
+                           (raw, semantic_drain.SCHED_KIND))
+    with pytest.raises(ValueError, match='semantic_scheduler_invalid'):
+        semantic_drain._reserve_long_defer(jobs_db, token)
+    assert jobs_db.db.execute('SELECT payload FROM fetch_jobs WHERE kind=?',
+                              (semantic_drain.SCHED_KIND,)).fetchone()[0] == raw
+    assert not jobs_db.db.in_transaction
+
+
+def test_unverified_blob_encoding_fails_closed():
+    import sqlite3
+
+    db = sqlite3.connect(':memory:')
+    try:
+        db.execute("PRAGMA encoding='UTF-16'")
+        db.execute('CREATE TABLE fetch_jobs(job_id INTEGER PRIMARY KEY,payload TEXT)')
+        db.execute('INSERT INTO fetch_jobs(payload) VALUES(?)', ('{}',))
+        assert semantic_drain._bounded_job_payload(db, 1, 1024) is None
+    finally:
+        db.close()
+
+
+def test_invalid_utf8_and_nontext_payload_fail_closed(jobs_db):
+    now = time.time()
+    job_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    with jobs_db.db:
+        jobs_db.db.execute("UPDATE fetch_jobs SET payload=CAST(x'80' AS TEXT) WHERE job_id=?", (job_id,))
+    assert semantic_drain._bounded_job_payload(jobs_db.db, job_id, 1024) is None
+    with jobs_db.db:
+        jobs_db.db.execute("UPDATE fetch_jobs SET payload=x'7b7d' WHERE job_id=?", (job_id,))
+    assert semantic_drain._bounded_job_payload(jobs_db.db, job_id, 1024) is None
+
+
+def test_multibyte_job_at_byte_limit_can_reserve(jobs_db):
+    now = time.time()
+    job_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    base = json.dumps({VERSION_KEY: CURRENT_VERSION, 'generation': 'g40',
+                       'padding': '合' * 100}, ensure_ascii=False)
+    limit = semantic_drain._REPROCESS_JOB_MAX_BYTES
+    raw = base + ' ' * (limit - len(base.encode('utf-8')))
+    assert len(raw.encode('utf-8')) == limit
+    with jobs_db.db:
+        jobs_db.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?', (raw, job_id))
+    token = runtime.JobToken.from_row(jobs_db.db.execute(
+        'SELECT * FROM fetch_jobs WHERE job_id=?', (job_id,)).fetchone())
+    reservation = semantic_drain._reserve_long_defer(jobs_db, token)
+    assert reservation[1] == {'g': 'g40', 'n': 1}
+    with jobs_db.db:
+        jobs_db.db.execute('UPDATE fetch_jobs SET payload=payload||? WHERE job_id=?', (' ', job_id))
+    semantic_drain._refund_long_defer(jobs_db, token, reservation)
+    assert semantic_drain._long_defers(jobs_db)[str(job_id)] == reservation[1]
+
+
 def test_legacy_payload_long_job_leaves_realtime(jobs_db, monkeypatch):
     now = time.time()
     long_id = _job(jobs_db, 50, created=now - 50, updated=now - 50,
