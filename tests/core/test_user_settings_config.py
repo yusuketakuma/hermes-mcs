@@ -8,6 +8,7 @@ import config_edit
 import extract_llm
 import llm_availability
 import local_llm
+import mcs_config
 import mcs_util
 from mcs_config import validate_config
 
@@ -55,6 +56,40 @@ def test_the_legacy_environment_still_applies_when_config_is_silent(conf, monkey
     monkeypatch.setenv("MCS_EXTRACT_PREFILTER", "off")
     monkeypatch.setenv("MCS_DISK_GUARD_MB", "0")
     assert extract_llm._prefilter_enabled() is False and llm_availability.disk_floor_mb() == 0.0
+
+
+@pytest.mark.parametrize("choice", [None, True, False])
+def test_saved_choices_and_environment_fallback_survive_default_changes(conf, tmp_path, monkeypatch, choice):
+    cfg = json.loads(conf.read_text())
+    cfg["optional_features"] = {"future_feature": {"synthetic": [False, None, 2]}}
+    cfg["future_extension"] = {"keep": ["synthetic", False]}
+    if choice is not None:
+        cfg["optional_features"]["csdc"] = choice
+    conf.write_text(json.dumps(cfg))
+    broker = str(tmp_path / "synthetic-broker.db")
+    monkeypatch.setenv("MCS_EXTRACT_PREFILTER", "off")
+    monkeypatch.setenv("MCS_DISK_GUARD_MB", "1234")
+    monkeypatch.setenv("MCS_LLM_ADMISSION", broker)
+
+    # An unrelated validated edit must not pin absent release defaults or
+    # erase unknown settings and the existing environment fallback.
+    saved, errors = config_edit.apply({"extract.patient_state_context": False})
+    assert not errors
+    assert saved["optional_features"] == cfg["optional_features"]
+    assert saved["future_extension"] == cfg["future_extension"]
+    assert "prefilter" not in saved["extract"] and "local_llm" not in saved
+    assert extract_llm._prefilter_enabled() is False
+    assert llm_availability.disk_floor_mb() == 1234.0
+    assert local_llm.admission_enabled() is True
+    assert local_llm._admission_db_path() == broker
+
+    stored = conf.read_bytes()
+    for release_default in (False, True):
+        monkeypatch.setitem(mcs_config.OPTIONAL_FEATURE_DEFAULTS, "csdc", release_default)
+        loaded = json.loads(conf.read_text())
+        assert mcs_config.feature_enabled(loaded, "csdc") is (
+            release_default if choice is None else choice)
+        assert conf.read_bytes() == stored
 
 
 @pytest.mark.parametrize("kw", [{"prefilter": "maybe"}, {"guard": "-1"}, {"guard": "nan"}, {"admission": "1"}])

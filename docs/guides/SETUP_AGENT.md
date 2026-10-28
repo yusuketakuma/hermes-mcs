@@ -117,7 +117,7 @@ Path B は `~/.mcs/venv/bin/python3`）。
 | 1 | macOS である | `uname -s` | `Darwin` |
 | 2 | 現 checkout のルート | `ls ./install.sh`。無ければ既存 clone 先へ移動する。新規取得が必要なら `git clone https://github.com/yusuketakuma/hermes-mcs.git` → `cd hermes-mcs`（git が無ければ先に `xcode-select --install`） | ルートの `./install.sh` が存在 |
 | 3 | 前提一式（読取り専用） | `./install.sh --preflight` | exit 0・最終行 `事前確認: 導入を妨げる問題 0件、注意 N件` |
-| 4 | 既存の MCS 設定 | `ls ~/.mcs/config.json 2>/dev/null` | あれば既存の指示で維持/再設定を決め、未決の場合だけ確認 |
+| 4 | 既存の MCS 設定 | `ls ~/.mcs/config.json 2>/dev/null` | 有無だけでは初期設定の完了を判断しない。既存値を表示せず、保持して不足項目を確認する |
 
 `--preflight` は何も書き込まず、root 実行・macOS 版・Xcode CLT・
 Homebrew・Python（brew が入れられない場合のみ 要対処）・git・空き容量・
@@ -140,7 +140,8 @@ github.com / huggingface.co への疎通・既存 hermes-agent checkout・
   - 「管理者 root で実行されています」 → エージェント自身が sudo/root で動いていないか確認
   注意は続行可。内容はユーザーに伝える（例: 「Google Chrome が未導入です」 は
   stage 1 が入れない構成なら `brew install --cask google-chrome`）
-- 4: 既存 `~/.mcs/config.json` がある → 指示・回答から維持/再設定が
+- 4: 初回インストールが作った空の設定ファイル、または実行方法・復旧用 Python の選択だけが入った設定ファイルは、初期設定の完了を意味しない。保存された選択を保持し、ソフトの準備が完了していれば同じ checkout の初期設定から再開する。値をチャットに出さない。不正・読取不能な場合は削除や上書きをせず調査する。
+- 4: それ以外の既存 `~/.mcs/config.json` がある → 指示・回答から維持/再設定が
   決まっていればその方針を使う。未決の場合だけ **【ユーザー確認】**:
   「既存の MCS 設定が見つかりました。上書きせず維持して確認のみ
   進めますか？それとも `init` で再設定しますか？」
@@ -259,6 +260,8 @@ INSTALLATION.md 付録A を案内する（Developer Portal での手順を
 > 必要です。**
 
 ## Phase 5 — Path A: init・services・check
+
+installer 内で初期設定を完了した場合は `init` を繰り返さず、結果を確認して次へ進む。後回し・中断した場合は保存済みの設定を保持し、同じ checkout の `mcs setup` から再開する。
 
 ### 5-1. 設定ウィザード実行
 
