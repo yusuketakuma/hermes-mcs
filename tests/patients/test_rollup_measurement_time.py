@@ -773,6 +773,9 @@ def test_date_of_a_separate_event_never_dates_the_vital(store):
 
 def test_old_cached_value_is_revalidated_read_only(store):
     _seed_out_of_order(store)
+    store.db.execute("UPDATE patients SET karte_id=100 WHERE project_id=1")
+    store.db.commit()
+    store.karte_summary_store(1, 100, {"comment": "生活環境：正本の合成プロフィール。"})
     cached = {inference.VERSION_KEY: inference.CURRENT_VERSION, "project_id": 1,
               "latest_vitals": {"at": "2026-10-05T09:00:00+09:00", "bt": 37.2},
               "recent_labs": [{"at": "2026-10-05T09:00:00+09:00", "name": "Cr", "value": "2.0"}],
@@ -784,7 +787,8 @@ def test_old_cached_value_is_revalidated_read_only(store):
     assert out["latest_vitals"]["bt"] == 36.4
     assert out["latest_vitals"]["at"] == "2026-10-03T09:00:00+09:00"
     assert out["recent_labs"][0]["value"] == "1.1"
-    assert out["profile_extension"] == cached["profile_extension"]
+    assert "profile_extension" not in out
+    assert out["patient_context"]["memo"]["living"][0]["text"] == "正本の合成プロフィール。"
     assert store.db.total_changes == before
 
 
@@ -816,22 +820,28 @@ def test_cache_revalidation_propagates_interruption_without_finishing_borrowed_t
 
 
 @pytest.mark.parametrize('legacy', [True, False])
-def test_cache_revalidation_other_operational_failure_remains_unverified(store, monkeypatch, legacy):
+def test_cache_revalidation_other_operational_failure_propagates_without_changing_cache(store, monkeypatch, legacy):
     cached = {inference.VERSION_KEY: inference.CURRENT_VERSION, 'project_id': 1,
               'latest_vitals': {'bt': 36.4}, 'profile_extension': {'text': '合成'}}
     meta = {inference.VERSION_KEY: inference.CURRENT_VERSION,
             'period_check_version': rollup.PERIOD_CHECK_VERSION - 1 if legacy else rollup.PERIOD_CHECK_VERSION}
 
+    error = sqlite3.OperationalError('synthetic noninterrupt failure')
+    error.sqlite_errorcode = sqlite3.SQLITE_ERROR
+    calls = []
+
     def fail_build(*args, **kwargs):
-        error = sqlite3.OperationalError('synthetic noninterrupt failure')
-        error.sqlite_errorcode = sqlite3.SQLITE_ERROR
+        calls.append(1)
         raise error
 
     monkeypatch.setattr(rollup, 'build_rollup', fail_build)
-    out = rollup.current_cached_refs(store.db, 1, cached, meta, cfg={})
-    assert 'latest_vitals' not in out
-    assert out['measurement_coverage'] == {'complete': False, 'reason': 'measurement_read_failed'}
-    assert out['profile_extension'] == cached['profile_extension']
+    before = json.dumps(cached, sort_keys=True)
+    changes = store.db.total_changes
+    with pytest.raises(sqlite3.OperationalError) as caught:
+        rollup.current_cached_refs(store.db, 1, cached, meta, cfg={})
+    assert caught.value is error and calls == [1]
+    assert json.dumps(cached, sort_keys=True) == before
+    assert store.db.total_changes == changes
 
 
 def test_patient_summary_shows_selected_source_posting_time(store):
@@ -1039,7 +1049,10 @@ def test_patient_summary_with_unproven_model_does_not_show_cached_latest(store, 
     rollup.rebuild(store, 1, cfg={})
     before = store.db.execute('SELECT body_text FROM messages WHERE message_id=1').fetchone()[0]
     _, text = notify_views.patient_summary_text(store.db, 1, cfg=cfg)
-    assert '■ バイタル: 未確認' in text
+    if cfg is None:
+        assert '■ 薬・バイタル・予定: 集約の現行性を確認できません' in text
+    else:
+        assert '■ バイタル: 未確認' in text
     assert '36.4' not in text and '37.2' not in text
     assert '■ 未完了タスク' in text and '■ 背景・療養情報' in text
     assert store.db.execute('SELECT body_text FROM messages WHERE message_id=1').fetchone()[0] == before

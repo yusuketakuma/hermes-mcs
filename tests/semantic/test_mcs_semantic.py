@@ -43,6 +43,8 @@ import sys
 
 import pytest
 
+from inference_version import CURRENT_VERSION, VERSION_KEY
+
 import ledger
 import mcs_view
 import semantic
@@ -452,27 +454,31 @@ def test_jev_unavailable_leaves_pending(tmp_path):
     db.close()
 
 
-def test_stale_generation_not_promoted(tmp_path):
+def test_stale_generation_not_promoted(tmp_path, monkeypatch):
     db = _seeded(tmp_path)
     real_bundle = semantic_store.thread_bundle
+    real_process = semantic_drain._process_job
+    active = [False]
+
+    def process(*args, **kwargs):
+        active[0] = True
+        return real_process(*args, **kwargs)
 
     def drifting_bundle(ledg, pid, root, targets=None):
         # second call (the generation guard) sees a 'newer' bundle
         b = real_bundle(ledg, pid, root, targets)
-        if drifting_bundle.calls > 0 and b:
+        if active[0] and drifting_bundle.calls > 0 and b:
             b["source_fingerprint"] = "x" * 64
-        drifting_bundle.calls += 1
+        if active[0]:
+            drifting_bundle.calls += 1
         return b
 
     drifting_bundle.calls = 0
-    orig = semantic_store.thread_bundle
-    semantic_store.thread_bundle = drifting_bundle
-    try:
-        out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
-                               time.monotonic() + 300,
-                               jev_client=_FakeJev(), llm_fn=_llm)
-    finally:
-        semantic_store.thread_bundle = orig
+    monkeypatch.setattr(semantic_store, "thread_bundle", drifting_bundle)
+    monkeypatch.setattr(semantic_drain, "_process_job", process)
+    out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
+                           time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=_llm)
     assert out["deferred"] == 1
     metas = [json.loads(a["meta"]) for a in
              db.artifacts("semantic_audit", message_id=1)]
@@ -890,12 +896,28 @@ def test_claim_audit_sees_surrounding_context(tmp_path):
     db.close()
 
 
+def _finish_reprocess_for_loop_fixture(db):
+    # Let the real finite enumeration settle before constructing an edge-case
+    # selected job; the worker must still execute its ordinary reprocess step.
+    for _ in range(20):
+        result = semantic_drain.reprocess_step(db, _cfg("shadow"))
+        if result.get("status") == "waiting":
+            return
+        assert result.get("status") in {"seed", "verify", "verify_patients"}, result
+    pytest.fail("synthetic inference reprocess did not settle")
+
+
 def test_loop_scan_not_capped(tmp_path):
     """§17.2 regression: every open candidate is evaluated against new
     targets — not just the newest 10 — and re-runs add no duplicates."""
     db = _seeded(tmp_path)
     db.save_messages([_message(i, parent=1, body=f"確認事項{i}", unread=False)
                       for i in range(20, 32)])
+    _finish_reprocess_for_loop_fixture(db)
+    # Reproduce one current target against previously observed sibling origins.
+    with db.db:
+        db.db.execute("UPDATE fetch_jobs SET payload=json_set(payload, '$.targets', json('[1]')) "
+                      "WHERE kind='semantic' AND project_id=1 AND message_id=1")
     members = {m["message_id"]: m for m in
                semantic_store.thread_bundle(db.db, 1, 1)["members"]}
     for i in range(20, 32):          # 12 sourced same-thread open candidates
@@ -909,7 +931,7 @@ def test_loop_scan_not_capped(tmp_path):
                                     "span_start": 0, "span_end": len(f"確認事項{i}")}},
             "assignee_text": None, "due_text": None,
             "state": "PROPOSED", "history": []}),
-            project_id=1, message_id=i, meta={"candidate_fp": f"fp{i}",
+            project_id=1, message_id=i, meta={VERSION_KEY: CURRENT_VERSION, "candidate_fp": f"fp{i}",
                 "fingerprint": semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"],
                 "policy_fingerprint": semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg())[0])})
     res = {"errors": []}
@@ -917,17 +939,20 @@ def test_loop_scan_not_capped(tmp_path):
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm)
     assert out["done"] == 1
+    assert out["inference_reprocess"]["status"] == "waiting"
     evs = db.db.execute(
         "SELECT content FROM artifacts WHERE kind='loop_event'"
     ).fetchall()
     origins = {json.loads(e["content"])["loop_origin_id"] for e in evs}
     assert origins == set(range(20, 32))
     n0 = len(evs)
-    # replay on the same generation: pair dedup -> zero new events
-    db.semantic_seed(1, [1], {"origin": "replay"})
-    semantic_drain.run_due(db, _cfg("shadow"), res,
-                     time.monotonic() + 300,
-                     jev_client=_FakeJev(), llm_fn=_llm)
+    # Revisit the same target and generation without another relation request.
+    jev_client = _FakeJev()
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
+    scfg = semantic_policy.semantic_config(_cfg("shadow"))[0]
+    created, complete = semantic_drain.update_loops(
+        db, 1, bundle, {}, jev_client, scfg, time.monotonic() + 300)
+    assert created == 0 and complete and not jev_client.calls
     assert db.db.execute(
         "SELECT COUNT(*) c FROM artifacts WHERE kind='loop_event'"
     ).fetchone()["c"] == n0
@@ -1580,6 +1605,12 @@ def test_empty_targets_root_is_target(tmp_path):
     p = _patient(db)
     p.messages = [_message(1), _message(9, parent=1)]
     db.save_patient(p)
+    db.job_add("semantic", 1, 1, payload={VERSION_KEY: CURRENT_VERSION})
+    _finish_reprocess_for_loop_fixture(db)
+    # This current-generation synthetic job deliberately lacks the optional key.
+    with db.db:
+        db.db.execute("UPDATE fetch_jobs SET payload=json_remove(payload, '$.targets') "
+                      "WHERE kind='semantic' AND project_id=1 AND message_id=1")
     source = next(m for m in semantic_store.thread_bundle(db.db, 1, 1)["members"]
                   if m["message_id"] == 9)
     db.artifact_add("loop_candidate", json.dumps({
@@ -1592,13 +1623,16 @@ def test_empty_targets_root_is_target(tmp_path):
         "assignee_text": None,
         "due_text": None, "state": "PROPOSED", "history": []}),
         project_id=1, message_id=9, meta={
+            VERSION_KEY: CURRENT_VERSION,
             "fingerprint": semantic_store.thread_bundle(db.db, 1, 1)["source_fingerprint"],
             "policy_fingerprint": semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg())[0])})
-    db.job_add("semantic", 1, 1, payload={})   # no "targets" key
     out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                            time.monotonic() + 300,
                            jev_client=_FakeJev(), llm_fn=_llm)
     assert out["done"] == 1
+    assert out["inference_reprocess"]["status"] == "waiting"
+    job = db.db.execute("SELECT payload FROM fetch_jobs WHERE kind='semantic'").fetchone()
+    assert "targets" not in json.loads(job["payload"])
     assert db.artifacts("semantic_summary", message_id=1)
     evs = db.artifacts("loop_event", project_id=1)
     assert evs and json.loads(

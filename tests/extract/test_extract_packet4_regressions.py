@@ -15,6 +15,7 @@ import extract
 import extract_bench
 import extract_llm
 import inference_version
+import mcs_queries
 import rollup
 import structured_view
 from semantic_projection import PROJECTION_VERSION
@@ -103,20 +104,34 @@ def test_empty_current_fact_source_never_revives_rule_vitals(db, kind):
     db.save_messages([_message(body="酸素10L投与中")])
     db.artifact_add("extract_v1", json.dumps({"vitals": {"spo2": 10}}),
                     project_id=1, message_id=1,
-                    meta={"hash": _hash(db), "rule_version": extract.RULE_VERSION})
+                    meta={inference_version.VERSION_KEY: inference_version.CURRENT_VERSION,
+                          "hash": _hash(db), "rule_version": extract.RULE_VERSION})
     db.artifact_add(kind, "{}", project_id=1, message_id=1,
-                    meta={"hash": _hash(db), "extract_version": extract_llm.EXTRACT_VERSION,
+                    meta={inference_version.VERSION_KEY: inference_version.CURRENT_VERSION,
+                          "hash": _hash(db), "extract_version": extract_llm.EXTRACT_VERSION,
                           "engine_version": 4, "projection_version": PROJECTION_VERSION})
+    assert mcs_queries.current_message_facts(db.db, 1) == {}
     assert rollup.build_rollup(db.db, 1).get("latest_vitals") is None
 
 
 def test_rule_vitals_remain_available_without_a_current_fact_source(db):
-    db.save_messages([_message(body="SpO2 96%")])
+    body = "本人は2026-09-19に測定したSpO2 96%。"
+    db.save_messages([_message(body=body)])
+    with db.db:
+        db.db.execute("UPDATE patients SET fetch_state='complete',history_floor=-1 WHERE project_id=1")
     db.artifact_add("extract_v1", '{"vitals":{"spo2":96}}',
-                    project_id=1, message_id=1, meta={"hash": _hash(db)})
+                    project_id=1, message_id=1,
+                    meta={inference_version.VERSION_KEY: inference_version.CURRENT_VERSION, "hash": _hash(db)})
     db.artifact_add("extract_llm", "{}", project_id=1, message_id=1,
-                    meta={"hash": "stale-body"})
-    assert rollup.build_rollup(db.db, 1)["latest_vitals"]["spo2"] == 96
+                    meta={inference_version.VERSION_KEY: inference_version.CURRENT_VERSION, "hash": "stale-body"})
+    assert mcs_queries.current_message_facts(db.db, 1) is None
+    # The source-bound post view keeps the observed rule value, while the
+    # patient-wide latest measurement requires a complete bound LLM extraction.
+    assert "バイタル: SpO2 96" in structured_view.structured_lines(db.db, 1)
+    result = rollup.build_rollup(db.db, 1, cfg={})
+    assert "latest_vitals" not in result
+    assert result["measurement_coverage"]["complete"] is False
+    assert result["measurement_coverage"]["unbound_sources"] == 1
 
 
 @pytest.mark.parametrize("suffix", ["ではありません", "疑い", "かもしれません", "extra"])

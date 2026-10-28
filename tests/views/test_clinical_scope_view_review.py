@@ -15,18 +15,25 @@ import structured_view
 from extract_testkit import _message
 from common_testkit import ledger_fixture
 import clinical_urgency
+import clinical_scope
+import clinical_values
 
 
 store = ledger_fixture(name="store", patients=(1,))
 
 
-def seed(store, body, doc, *, age_days=0):
-    store.save_messages([_message(body=body)])
-    with store.db:
-        store.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=1",
-                         (time.time() - age_days * 86400,))
-    row = dict(store.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
-    row["_source_binding"] = inference_dependency_loss.source_binding(store.db, 1, 1)
+def seed(store, body, doc, *, age_days=0, measurement=False, mid=1):
+    store.save_messages([_message(mid=mid, body=body)])
+    if not measurement:
+        with store.db:
+            store.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=?",
+                             (time.time() - age_days * 86400, mid))
+    row = dict(store.db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone())
+    row["_source_binding"] = inference_dependency_loss.source_binding(store.db, 1, mid)
+    if measurement:
+        with store.db:
+            store.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 WHERE project_id=1")
+        row["_target"] = ("", extract_llm.resolved_model({}))
     integrity = {"validation": {"items_dropped": 0, "evidence_dropped": 0},
                  "completeness_chunks": 1,
                  "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}
@@ -119,11 +126,20 @@ def test_symptom_elsewhere_does_not_turn_request_only_urgency_evidence_into_clin
 
 
 def test_family_weight_never_enters_current_patient_rollup(store):
-    body = "母の体重45kg。本人の体重60kg。"
-    seed(store, body, extract_validation.validate({"labs": [
-        {"name": "体重", "value": value, "unit": "kg", "subject": "patient", "evidence": body}
-        for value in (45, 60)]}, body))
-    recent = rollup.build_rollup(store.db, 1)["recent_labs"]
+    for mid, subject, value in ((1, "本人", 60), (2, "母", 45)):
+        body = f"{subject}は2026-09-19測定で体重{value}kg。"
+        start = body.index("体重")
+        assert clinical_scope.patient_source_scope(body, start, start + len("体重")) == (
+            "patient" if subject == "本人" else "family")
+        assert clinical_values.written_day(body)[1].isoformat() == "2026-09-19"
+        doc = extract_validation.validate({"labs": [{
+            "name": "体重", "value": value, "unit": "kg", "subject": "patient",
+            "measured_on": "2026-09-19", "evidence": body}]}, body)
+        assert [item["value"] for item in doc["labs"]] == [value]
+        seed(store, body, doc, measurement=True, mid=mid)
+    result = rollup.build_rollup(store.db, 1, cfg={})
+    assert result["measurement_coverage"]["complete"] is True
+    recent = result["recent_labs"]
     assert [item["value"] for item in recent] == [60]
 
 
@@ -140,10 +156,26 @@ def test_physician_prescription_keeps_patient_medication_and_followup(store):
 
 def test_partial_bp_keeps_measured_side_without_inventing_missing_side(store):
     body = "本人の現在の収縮期血圧は90、拡張期は測定不可です。"
-    seed(store, body, extract_validation.validate({"vitals": {"sbp": 90}}, body))
+    seed(store, body, extract_validation.validate({"vitals": {"sbp": 90}}, body), measurement=True)
     line = next(line for line in structured_view.structured_lines(store.db, 1) if line.startswith("バイタル:"))
     assert "BP 90" in line and "/?" in line
-    assert "dbp" not in rollup.build_rollup(store.db, 1)["latest_vitals"]
+    result = rollup.build_rollup(store.db, 1)
+    assert result["measurement_coverage"]["complete"] is False
+    assert "latest_vitals" not in result
+    dated_unknown = rollup.build_rollup(store.db, 1, cfg={})
+    assert dated_unknown["measurement_coverage"]["complete"] is True
+    assert "latest_vitals" not in dated_unknown
+
+
+def test_dated_patient_bp_pair_is_current_when_source_proof_is_complete(store):
+    body = "本人は2026-09-19測定でBP 90 / 60でした。"
+    assert clinical_values.written_day(body)[1].isoformat() == "2026-09-19"
+    seed(store, body, extract_validation.validate({"vitals": {"sbp": 90, "dbp": 60}}, body),
+         measurement=True)
+    result = rollup.build_rollup(store.db, 1, cfg={})
+    assert result["measurement_coverage"]["complete"] is True
+    assert result["latest_vitals"]["sbp"] == 90
+    assert result["latest_vitals"]["dbp"] == 60
 
 
 def test_urgency_uses_borrowed_uncommitted_source_without_view_or_write(store, monkeypatch):

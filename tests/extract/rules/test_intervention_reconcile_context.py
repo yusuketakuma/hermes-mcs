@@ -17,6 +17,7 @@ def test_intervention_repair_keeps_receipts_but_requires_a_new_context_scan(runt
     led, clock, calls = runtime
     monkeypatch.setattr(extract.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 1))
     monkeypatch.setattr(extract, "_RECONCILE_IDLE_SECONDS", 0)
     monkeypatch.setattr(extract, "_RECONCILE_SECONDS", 60)
     # Approval storage is synthetic and does not access the real MCS root.
