@@ -9,9 +9,14 @@ import cloud_policy
 import extract_llm as worker
 import ledger as ledger_module
 import semantic_runtime
+import patient_context_refresh as context_refresh
+from test_anthropic_context_refresh import cloud
 from test_patient_context_refresh import CFG, document, runtime, seed, stamp, step
 
-__all__ = ['runtime']
+__all__ = ['runtime', 'cloud']
+
+_REAL_PROVIDER = worker._CloudProvider
+_REAL_WRITER_CURRENT = worker._writer_current
 
 
 @pytest.mark.parametrize(('start', 'finish', 'unknown'), [
@@ -19,12 +24,35 @@ __all__ = ['runtime']
     ('2026-10-31T23:59:30', '2026-11-01T00:00:01', False),
     ('2026-10-26T23:59:30', '2026-10-27T00:00:01', True),
 ])
-def test_real_owner_reservation_and_response_across_midnight(runtime, monkeypatch, start, finish, unknown):
+def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, monkeypatch, start, finish, unknown):
     led, clock, _ = runtime
-    seed(led)
-    clock.wall = stamp(start)
     settings = cloud_policy.cloud_config({'cloud_llm': {'mode': 'on', 'project_ids': [1],
                                                         'daily_request_budget': 1}})[0]
+    cfg = {**CFG, 'cloud_llm': settings,
+           'semantic': {'mode': 'assist', 'project_ids': [1], 'daily_request_budget': 3000}}
+    monkeypatch.setattr(worker, '_writer_current', _REAL_WRITER_CURRENT)
+    monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: worker._WRITER_STATE)
+    monkeypatch.setattr(worker, 'load_config', lambda: cfg)
+    monkeypatch.setattr(worker, '_cloud_settings', lambda _cfg: settings)
+    seed(led, body='見出しのない完全合成の居住記録。')
+    # Prepare the exact cloud source proof via the real scan and Jev audit
+    # using only synthetic provider responses; no cloud accounting is spent.
+    for _ in range(10):
+        prepared = step(runtime, cfg=cfg)
+        assert prepared['status'] == 'progressed' or (
+            prepared['status'] == 'deferred' and prepared.get('reason') == 'source_quality_pending'
+        ), prepared
+        scan = document(led, context_refresh.SCAN)
+        if scan and scan.get('complete') and scan.get('audited'):
+            break
+    else:
+        pytest.fail('synthetic source scan and audit did not complete')
+    assert not document(led)
+    assert not led.artifacts('cloud_usage_reserve')
+    assert context_refresh._pending(led.db, 1, cfg)[2]['A']
+    monkeypatch.setattr(worker, '_CloudProvider', _REAL_PROVIDER)
+    clock.wall = stamp(start)
+    clock.mono = 1000
     fake_time = SimpleNamespace(time=lambda: clock.wall, monotonic=lambda: clock.mono,
                                 perf_counter=lambda: clock.mono,
                                 sleep=lambda seconds: setattr(clock, 'mono', clock.mono + seconds))
@@ -32,8 +60,6 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, monkeypatc
         monkeypatch.setattr(module, 'time', fake_time)
     monkeypatch.setattr(worker, '_cloud_settings', lambda _cfg: settings)
     monkeypatch.setattr(worker, '_cloud_mode', lambda *_args: 'on')
-    monkeypatch.setattr(worker, 'load_config', lambda: {'cloud_llm': settings})
-    monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(cloud_policy, 'api_key', lambda *_args: 'synthetic-key')
     calls = []
 
@@ -55,8 +81,8 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, monkeypatc
         return 200, {'Request-Id': 'synthetic'}, json.dumps(response).encode()
 
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', request)
-    result = step(runtime, cfg=CFG, local_admit=lambda: False)
-    assert len(calls) == 1
+    result = step(runtime, cfg=cfg, local_admit=lambda: False)
+    assert len(calls) == 1 and result.get('lane') == 'A'
     reserves, results = led.artifacts('cloud_usage_reserve'), led.artifacts('cloud_usage_result')
     assert len(reserves) == len(results) == 1
     assert reserves[0]['created_at'] < stamp(finish) <= results[0]['created_at']
@@ -64,8 +90,23 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, monkeypatc
     assert saved['reservation_id'] == json.loads(reserves[0]['meta'])['reservation_id']
     assert saved.get('disposition') != 'discarded_workday'
     if unknown:
-        assert result['status'] == 'deferred' and document(led) is None
+        assert result['status'] == 'failed' and result['reason'] == 'nightly_cloud_failed'
+        assert document(led) is None
         assert saved['usage'] is None and saved['error_kind'] == 'pricing_unverified'
+        assert saved['cost_usd'] == json.loads(reserves[0]['meta'])['max_cost_usd']
+        assert cloud_policy.global_block_reason(led) == 'pricing_unverified'
+        accounting = cloud_policy.usage_report(led, now=stamp(start))
+        assert accounting['unresolved_requests'] == 1
+        assert accounting['max_reserved_cost_usd'] == saved['cost_usd']
+        # Even after the persisted retry delay, the terminal pricing guard
+        # prevents a second send or a new reservation for this input.
+        clock.wall += 901
+        clock.mono += 901
+        step(runtime, cfg=cfg, local_admit=lambda: False)
+        assert len(calls) == 1
+        assert len(led.artifacts('cloud_usage_reserve')) == 1
+        assert len(led.artifacts('cloud_usage_result')) == 1
+        assert document(led) is None
     else:
         assert result['status'] == 'progressed' and document(led)
         assert saved['usage']['input_tokens'] == 10 and saved['usage']['output_tokens'] == 2

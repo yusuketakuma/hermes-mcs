@@ -120,6 +120,7 @@ def test_current_reported_stop_supersedes_old_use_but_keeps_both_facts(tmp_path)
 @pytest.mark.parametrize("drop_cache", [False, True])
 def test_deleted_stop_source_never_restarts_old_use_even_when_rollup_cache_was_invalidated(tmp_path, drop_cache):
     with closing(_ledger(tmp_path)) as ledger:
+        ledger.ensure_patient(1)
         a, b = "本人は現在合成薬A5mgを服用中です。", "本人は本日合成薬Aを中止しました。"
         _save(ledger, 1, a, {"meds": [_med(a)]})
         _save(ledger, 2, b, {"meds": [_med(b, dose=None, action="stop")]}, "2026-10-02")
@@ -131,7 +132,10 @@ def test_deleted_stop_source_never_restarts_old_use_even_when_rollup_cache_was_i
         view = rollup.build_rollup(ledger.db, 1)
         assert not view.get("medications")
         assert _doses(view, "unverified_medications") == {"5mg"}
-        witnesses = dependency_loss.read(ledger.db, 1)["losses"]
+        dependencies = dependency_loss.read(ledger.db, 1)
+        witnesses = dependencies["losses"]
+        assert dependencies["complete"] and dependencies["gaps"] == 0
+        assert dependencies["coverage"] == {"terminal": 0, "repairable": 0, "reasons": {}}
         assert witnesses and view["clinical_state"]["dependencies"]["complete"]
         assert all("evidence" not in f and "reported" not in f and "evidence_span" not in f for f in witnesses)
         assert b not in json.dumps(witnesses, ensure_ascii=False)
