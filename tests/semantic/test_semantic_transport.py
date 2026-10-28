@@ -66,7 +66,7 @@ def test_slow_trickle_cannot_extend_real_attempt_deadline(local_http,
 
     assert exc_info.value.kind == "timeout"
     assert elapsed < 10
-    assert events == ["before", "reserve"]
+    assert events == ["before", "reserve", "before"]
     assert client.requests_made == 1
 
 
@@ -112,7 +112,7 @@ def test_real_transport_keeps_hooks_and_fixed_wire_contract(local_http,
 
     assert result["answers"]["q"]["noul"] == 0.9
     assert result["usage"] == {"input_tokens": 2, "output_tokens": 1}
-    assert events == ["before", "reserve", "after"]
+    assert events == ["before", "reserve", "before", "after"]
     assert auth_headers == ["Bearer synthetic"]
     assert received[0]["model"] == jev.JEV_MODEL
     assert "criteria" in received[0]["questions"]["q"]

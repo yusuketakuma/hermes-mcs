@@ -5,6 +5,8 @@ import sqlite3
 import pytest
 
 import extract_llm
+from inference_dependency_loss import source_binding
+from inference_version import CURRENT_VERSION, VERSION_KEY
 import semantic_assessment as assessment
 import semantic_extraction as extraction
 
@@ -14,7 +16,15 @@ def ledger():
     result = sqlite3.connect(":memory:")
     result.row_factory = sqlite3.Row
     result.execute("CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY,"
-                      "kind TEXT,project_id INTEGER,message_id INTEGER,content TEXT,meta TEXT)")
+                      "kind TEXT,project_id INTEGER,message_id INTEGER,content TEXT,meta TEXT, model TEXT)")
+    result.execute("CREATE TABLE messages(project_id INTEGER, message_id INTEGER, content_hash TEXT, "
+                   "body_text TEXT, body_state TEXT, parent_id INTEGER, sender_id INTEGER, "
+                   "sender_name TEXT, sender_type TEXT, profession TEXT, organization TEXT, "
+                   "posted_at TEXT, posted_at_ts REAL)")
+    result.execute("CREATE TABLE message_revisions(message_id INTEGER, seq INTEGER)")
+    result.execute("INSERT INTO messages(project_id, message_id, content_hash, body_text, "
+                   "body_state, posted_at) VALUES(1, 1, 'hash', 'SYNTH', 'full', "
+                   "'2026-01-01T00:00:00+09:00')")
     yield result
     result.close()
 
@@ -42,7 +52,7 @@ def test_detail_uses_newest_valid_matching_generation(ledger, project_id):
 @pytest.mark.parametrize("project_id", [1, None])
 def test_fact_chunk_uses_latest_valid_chunk_despite_newer_malformed_row(ledger, project_id):
     specs = [{"index": 0, "hash": "h", "start": 0, "end": 1, "text": "x"}]
-    meta = {"chunk_index": 0, "schema": extraction.SCHEMA_VERSION, "generation": "gen",
+    meta = {VERSION_KEY: CURRENT_VERSION, "chunk_index": 0, "schema": extraction.SCHEMA_VERSION, "generation": "gen",
             "status": "complete", "source_fingerprint": "fp", "source_hash": "body-hash",
             "revision": "r", "chunks_total": 1, "chunk_hash": "h",
             "start_codepoint": 0, "end_codepoint": 1}
@@ -57,7 +67,9 @@ def test_fact_chunk_uses_latest_valid_chunk_despite_newer_malformed_row(ledger, 
 def test_legacy_chunk_malformed_latest_owner_still_invalidates_old_checkpoint(ledger):
     row = {"message_id": 1, "project_id": 1, "body_text": "SYNTH", "content_hash": "hash",
            "posted_at": "2026-01-01T00:00:00+09:00"}
-    meta = {"hash": "hash", "ver": extract_llm.EXTRACT_VERSION,
+    row["_source_binding"] = source_binding(ledger, 1, 1)
+    assert isinstance(row["_source_binding"], str)
+    meta = {VERSION_KEY: CURRENT_VERSION, "hash": "hash", "ver": extract_llm.EXTRACT_VERSION,
             "chunk_size": extract_llm._CHUNK_SIZE, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": 0}
     add(ledger, "extract_llm_chunk", {"summary": "SYNTH"}, meta)
@@ -81,7 +93,9 @@ def test_legacy_detail_protocol_and_borrowed_chunk_reads_preserve_selection(ledg
     assert extraction._cached_chunks(ledger, 1, 1, "fp", "hash", "r", [], "") == {}
     row = {"message_id": 1, "project_id": 1, "body_text": "SYNTH", "content_hash": "hash",
            "posted_at": "2026-01-01T00:00:00+09:00"}
-    meta = {"hash": "hash", "ver": extract_llm.EXTRACT_VERSION,
+    row["_source_binding"] = source_binding(ledger, 1, 1)
+    assert isinstance(row["_source_binding"], str)
+    meta = {VERSION_KEY: CURRENT_VERSION, "hash": "hash", "ver": extract_llm.EXTRACT_VERSION,
             "chunk_size": extract_llm._CHUNK_SIZE, "context": extract_llm._chunk_context(row, None, checkpoint=True),
             "chunk": 0}
     add(ledger, "extract_llm_chunk", {"summary": "SYNTH"}, meta)

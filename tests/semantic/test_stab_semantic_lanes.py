@@ -13,6 +13,7 @@ import time
 import pytest
 
 import semantic_drain
+from inference_version import CURRENT_VERSION, VERSION_KEY
 import semantic_runtime as runtime
 from semantic_testkit import _FakeJev, _cfg, _ledger, _patient, _seeded
 
@@ -78,7 +79,7 @@ def test_answered_semantic_call_clears_outage(tmp_path):
 # ---------- M6: realtime order and long-output handling ----------
 
 def _job(db, mid, *, created, updated, next_try, generation=None):
-    payload = {"targets": [mid], "eligible": True,
+    payload = {VERSION_KEY: CURRENT_VERSION, "targets": [mid], "eligible": True,
                "generation": generation or f"g{mid}"}
     with db.db:
         return db.db.execute(
@@ -166,7 +167,7 @@ def test_long_defer_entry_dropped_on_new_generation(jobs_db, monkeypatch):
     with jobs_db.db:                     # re-seed: new input generation
         jobs_db.db.execute(
             "UPDATE fetch_jobs SET payload=?, next_try=0 WHERE job_id=?",
-            (json.dumps({"targets": [40], "eligible": True,
+            (json.dumps({VERSION_KEY: CURRENT_VERSION, "targets": [40], "eligible": True,
                          "generation": "g40b"}), long_id))
     _serve(monkeypatch, lambda job: ("done", None))
     _run(jobs_db, None, lane="realtime", max_jobs=1)
@@ -181,7 +182,7 @@ def test_legacy_payload_long_job_leaves_realtime(jobs_db, monkeypatch):
          next_try=now - 900)
     with jobs_db.db:                     # a payload from before "generation"
         jobs_db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
-                           (json.dumps({"targets": [50], "eligible": True}),
+                           (json.dumps({VERSION_KEY: CURRENT_VERSION, "targets": [50], "eligible": True}),
                             long_id))
 
     def outcome(job):

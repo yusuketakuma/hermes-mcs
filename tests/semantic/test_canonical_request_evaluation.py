@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from inference_version import CURRENT_VERSION, VERSION_KEY
+
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
     "canonical_request_eval", ROOT / "evaluation" / "canonical_request_eval.py")
@@ -237,7 +239,7 @@ def test_shadow_corrupt_evidence_does_not_block_other_candidate(bad_field, bad_v
                         json.dumps({'stage': 'request_following_candidate'})))
             db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,meta) VALUES(?,?,?,?,?)',
                        ('extract_llm', 1, mid, json.dumps({'requests': [{'action': text, 'evidence': text}]}),
-                        json.dumps({'hash': 'synthetic'})))
+                        json.dumps({'hash': 'synthetic', VERSION_KEY: CURRENT_VERSION})))
         before = db.total_changes
         result = support.shadow_compare(db)
         assert db.total_changes == before
@@ -290,7 +292,7 @@ def test_shadow_unreadable_legacy_stays_unknown_and_other_candidate_is_compared(
                        ('v4_stage', 1, mid, json.dumps({'candidate': candidate}),
                         json.dumps({'stage': 'request_following_candidate'})))
             db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,meta) VALUES(?,?,?,?,?)',
-                       ('extract_llm', 1, mid, legacy, json.dumps({'hash': 'synthetic'})))
+                       ('extract_llm', 1, mid, legacy, json.dumps({'hash': 'synthetic', VERSION_KEY: CURRENT_VERSION})))
         before = tuple(db.iterdump())
         changes = db.total_changes
         result = support.shadow_compare(db)
