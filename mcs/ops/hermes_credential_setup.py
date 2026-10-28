@@ -45,10 +45,10 @@ def _env_path(cli, exe, profile):
     return path if os.path.isabs(path) else None
 
 
-def _status(cli, exe, profile, key, expect=None):
+def _status(cli, exe, profile, key, expect=None, *, env=True):
     """registered / missing / external / environment / unavailable, judged from the profile's
     own .env line (config get may show a value an external secret source already resolved)."""
-    if os.environ.get(key):
+    if env and os.environ.get(key):
         return "environment"
     path = _env_path(cli, exe, profile)
     if path is None:
@@ -94,6 +94,13 @@ def _status(cli, exe, profile, key, expect=None):
 _TOKEN_RE = re.compile(r"[A-Za-z0-9._-]+")
 
 
+def _hidden(prompt):
+    """Read without echo; raises GetPassWarning instead of falling back to a visible prompt."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", getpass.GetPassWarning)
+        return getpass.getpass(prompt)
+
+
 def _valid(value, prefix):
     return 0 < len(value) <= _MAX_TOKEN and value.startswith(prefix) and bool(_TOKEN_RE.fullmatch(value))
 
@@ -133,9 +140,7 @@ def run(exe, profile, transport, *, cli=service_management.hermes_cli):
                 return 0
             if choice == "1":
                 while True:
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("error", getpass.GetPassWarning)
-                        value = getpass.getpass(f"{label}（非表示、Ctrl+Cで中止）: ")
+                    value = _hidden(f"{label}（非表示、Ctrl+Cで中止）: ")
                     if _valid(value, prefix):
                         updates[key] = value
                         break

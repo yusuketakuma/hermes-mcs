@@ -299,6 +299,13 @@ def _plugin_settings_plan(transport: str, nd: dict, args) -> tuple:
     return fixed, lists
 
 
+def _hermes_token_state(exe, profile, key, expect=None):
+    """registered / missing / external / unavailable from the profile's own .env line."""
+    import hermes_credential_setup
+    return hermes_credential_setup._status(service_management.hermes_cli, exe, profile, key,
+                                           expect, env=False)
+
+
 def _plugin_store_tokens(exe, profile: str, tokens, args) -> bool:
     """Store the transport tokens in the serving profile; True when a write failed."""
     # Pipe tokens to the public writer so process listings cannot expose
@@ -307,31 +314,56 @@ def _plugin_store_tokens(exe, profile: str, tokens, args) -> bool:
     # must land in the SERVING profile's .env: under multiplex each
     # profile's secret scope is authoritative and a miss never falls
     # through to the default profile's .env (agent/secret_scope.py).
-    # Already-configured installs keep their existing tokens.
+    # Already-configured installs keep their existing tokens; a .env that
+    # cannot be judged (unreadable, shared, duplicated, or a secret-source
+    # reference) is never written, even with an explicit environment value.
+    import hermes_credential_setup
+    prefixes = {key: prefix for keys in hermes_credential_setup.TOKENS.values()
+                for key, _, prefix in keys}
+
     def _store(env_key, tok) -> bool:
-        ok = _hermes_config_set(exe, profile, env_key, tok)
+        ok = (_hermes_config_set(exe, profile, env_key, tok)
+              and _hermes_token_state(exe, profile, env_key, tok) == "registered")
         print(f"  {env_key}: "
-              + (f"Hermesの設定「{profile or '既定'}」の.envに保存しました" if ok else "保存失敗 — Hermes の config set --stdin 対応を確認してください"))
+              + (f"Hermesの設定「{profile or '既定'}」の.envに保存しました" if ok
+                 else "保存を確認できません — Hermes の config set --stdin 対応と.envを確認してください"))
         return ok
 
     failed = False
     for env_key, desc in tokens:
+        state = _hermes_token_state(exe, profile, env_key)
+        if state in ("unavailable", "external"):
+            print(f"  {env_key}: "
+                  + ("外部の秘密情報管理を参照しているため変更しません" if state == "external"
+                     else "Hermesの.envを確認できないため保存しません（本人専用の.envか確認してください）"))
+            failed = True
+            continue
         tok = os.environ.get(env_key)
         if tok:
+            # an explicit environment value is still what setup saves (existing contract)
             failed |= not _store(env_key, tok)
-        elif _hermes_config_get(exe, profile, env_key):
+            continue
+        if state == "registered":
             print(f"  {env_key}: 設定済み")
-        else:
-            if not args.yes:
-                tok = getpass.getpass(
-                    f"  {desc}（hermes .env へ保存。"
-                    "空欄=スキップ）: ") or None
-                if tok:
-                    failed |= not _store(env_key, tok)
-            if not tok:
-                print(f"  {env_key}: 未設定 — `hermes "
-                      + (f"-p {profile} " if profile else "")
-                      + "setup` で後から設定")
+            continue
+        tok = None
+        if not args.yes:
+            while True:
+                try:
+                    tok = hermes_credential_setup._hidden(f"  {desc}（hermes .env へ保存。空欄=スキップ）: ")
+                except getpass.GetPassWarning:
+                    print(f"  {env_key}: 入力を非表示にできないため保存しません。端末から再実行してください")
+                    failed, tok = True, None
+                    break
+                if not tok or hermes_credential_setup._valid(tok, prefixes.get(env_key, "")):
+                    break
+                print("  形式が違います。英数字と . _ - だけの値を入力してください。")
+            if tok:
+                failed |= not _store(env_key, tok)
+        if not tok:
+            print(f"  {env_key}: 未設定 — `hermes "
+                  + (f"-p {profile} " if profile else "")
+                  + "setup` で後から設定")
     return failed
 
 
