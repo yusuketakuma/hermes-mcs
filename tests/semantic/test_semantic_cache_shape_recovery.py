@@ -9,6 +9,7 @@ import pytest
 
 import semantic_drain as drain
 import semantic_extraction as extraction
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_policy import KIND_FACTS_V2
 from semantic_testkit import _ledger, _message, _PassJev, v2_doc, v2_fact
 
@@ -61,7 +62,7 @@ def test_malformed_current_cache_is_reextracted_without_losing_history(tmp_path,
         elif field not in ("valid", "normalize"):
             broken[field] = bad
         old = ledger.artifact_add(KIND_FACTS_V2, json.dumps(broken), project_id=1, message_id=1,
-                                   meta={"fingerprint": "fp", "coverage_status": "complete"})
+                                   meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": "fp", "coverage_status": "complete"})
         calls = []
 
         def regenerate(*args, **kwargs):
