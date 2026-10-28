@@ -28,14 +28,14 @@ def test_old_inference_summary_does_not_turn_unparsed_medications_into_absence(l
     led.artifact_add(rollup.KIND, json.dumps({"medications": [{"name": "旧版の架空薬"}]}),
                      project_id=1, meta={inference.VERSION_KEY: inference.LEGACY_VERSION})
     _, text = patient_summary_text(led.db, 1)
-    assert "集約の現行性を確認できません" in text
+    assert "現在使用中の薬剤: 未確認" in text
     assert "旧版の架空薬" not in text and "抽出された薬なし" not in text
 
 
 def test_planned_and_unknown_drugs_are_visible_without_claiming_current_use(led, monkeypatch):
     _seed_thread(led)
     led.artifact_add(rollup.KIND, "{}", project_id=1)
-    monkeypatch.setattr("notify_views.current_cached_refs", lambda *args: {
+    monkeypatch.setattr("notify_views.current_cached_refs", lambda *args, **kwargs: {
         "planned_medications": [{"name": "架空の予定薬", "dose": "10mg"}],
         "unverified_medications": [{"name": "架空の未確認薬", "dose": "5mg"}]})
     _, text = patient_summary_text(led.db, 1)
@@ -48,7 +48,7 @@ def test_planned_and_unknown_drugs_are_visible_without_claiming_current_use(led,
 def test_source_coverage_gap_never_presents_medication_reports_as_a_complete_current_state(led, monkeypatch):
     _seed_thread(led)
     led.artifact_add(rollup.KIND, "{}", project_id=1)
-    monkeypatch.setattr("notify_views.current_cached_refs", lambda *args: {
+    monkeypatch.setattr("notify_views.current_cached_refs", lambda *args, **kwargs: {
         "medications": [{"name": "架空の報告薬", "dose": "5mg"}],
         "clinical_state": {"dependencies": {"complete": False, "gaps": 3}}})
     _, text = patient_summary_text(led.db, 1)

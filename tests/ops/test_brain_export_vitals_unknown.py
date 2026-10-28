@@ -37,8 +37,12 @@ def test_export_discloses_unknown_without_restoring_cached_vitals(tmp_path, curr
     assert brain_export.main(["--out", str(out), "--snapshot", str(snapshot)]) == 0
     assert json.loads(capsys.readouterr().out)["ok"]
     page = (out / "patients" / "p1.md").read_text()
-    assert "## バイタル: 未確認" in page
-    assert "設定と記録の現行性を確認できません。" in page
+    if current:
+        assert "## 患者集約: 未確認" in page
+        assert "記録の現行性を確認できません。" in page
+    else:
+        assert "## バイタル: 未確認" in page
+        assert "設定と記録の現行性を確認できません。" in page
     assert "137/79" not in page and SECRET_BODY not in page
     assert snapshot.read_bytes() == before
     records = (out / "export.jsonl").read_bytes()
@@ -79,7 +83,8 @@ def test_unknown_notice_is_scoped_to_patients_with_rollups(tmp_path):
     pages = sorted((out / "patients").glob("*.md"))
     assert result["patients"] == 1 and [page.name for page in pages] == ["p1.md"]
     text = pages[0].read_text()
-    assert "## バイタル: 未確認" in text
+    assert "## 患者集約: 未確認" in text
+    assert "記録の現行性を確認できません。" in text
     assert "未集約の合成患者" not in text
     assert not (out / "patients" / "p2.md").exists()
     assert snapshot.read_bytes() == before

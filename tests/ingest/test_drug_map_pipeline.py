@@ -78,8 +78,8 @@ def test_dictionary_io_failure_retires_old_candidates_and_recovers(store, tmp_pa
     path = tmp_path / "fictional-drug-map.json"
     config = {"drug_map": {"path": str(path), "sha256": dictionary.sha256}}
     drug_map.derive(store, dictionary)
-    rollup.rebuild(store, 1)
-    assert "架空成分甲" in notify_views.patient_summary_text(store.db, 1)[1]
+    rollup.rebuild(store, 1, cfg=config)
+    assert "架空成分甲" in notify_views.patient_summary_text(store.db, 1, cfg=config)[1]
     monkeypatch.setattr(run_check.time, "monotonic", lambda: 1)
     monkeypatch.setattr(extract, "run_pending", lambda *args, **kwargs: {"done": 0, "pids": []})
     monkeypatch.setattr(mcs_signals, "evaluate", lambda *args, **kwargs: {})
@@ -91,12 +91,12 @@ def test_dictionary_io_failure_retires_old_candidates_and_recovers(store, tmp_pa
     assert result["drug_map"]["status"] == "invalid"
     assert str(path) not in json.dumps(result)
     assert drug_map.current_refs(store.db, 1) == []
-    body = notify_views.patient_summary_text(store.db, 1)[1]
+    body = notify_views.patient_summary_text(store.db, 1, cfg=config)[1]
     assert "架空成分甲" not in body and "キラナ" in body
     recovered = {"errors": []}
     run_check.stage_derive(store, recovered, 100, config, llm_budget_cap=0)
     assert recovered["errors"] == [] and recovered["drug_map"]["status"] == "ok"
-    assert "架空成分甲" in notify_views.patient_summary_text(store.db, 1)[1]
+    assert "架空成分甲" in notify_views.patient_summary_text(store.db, 1, cfg=config)[1]
 
 
 def test_deep_dictionary_returns_safe_tick_diagnostic_without_db_writes(tmp_path, monkeypatch):
