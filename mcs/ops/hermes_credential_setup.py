@@ -105,9 +105,16 @@ def _valid(value, prefix):
     return 0 < len(value) <= _MAX_TOKEN and value.startswith(prefix) and bool(_TOKEN_RE.fullmatch(value))
 
 
-def run(exe, profile, transport, *, cli=service_management.hermes_cli):
+def target_profile(profile):
+    """The profile to pass with -p. Without -p, Hermes follows ~/.hermes/active_profile or a
+    profiles/ HERMES_HOME (hermes_cli/main.py _apply_profile_override), so "default" is explicit."""
+    return profile or "default"
+
+
+def run(exe, profile, transport, *, cli=service_management.hermes_cli, admission=None):
     """Hermesのプロファイルの.envへ、選んだトークンだけを非表示入力で保存します。
 
+    admission は各 config set の直前に呼ばれ、False か例外なら値を渡さずに止めます。
     0=保存または変更なし、1=保存失敗・確認不可、2=端末以外、130=中断。
     """
     if transport not in TOKENS or not isinstance(profile, str) \
@@ -116,10 +123,15 @@ def run(exe, profile, transport, *, cli=service_management.hermes_cli):
     if not is_terminal():
         print("接続トークンの設定は本人の端末で実行してください。")
         return 2
-    target = f"Hermesの設定「{profile or '既定'}」"
+    profile = target_profile(profile)
+    target = f"Hermesの設定「{profile}」"
     saving, saved = False, []
     try:
-        print(f"{transport.capitalize()}の接続トークンを{target}の.envに保存します。入力は表示されません。")
+        destination = _env_path(cli, exe, profile)
+        if destination is None:
+            print("Hermesコマンドを実行できないため、トークンを確認・保存できません。")
+            return 1
+        print(f"{transport.capitalize()}の接続トークンを{target}の.env（{destination}）に保存します。入力は表示されません。")
         updates = {}
         for key, label, prefix in TOKENS[transport]:
             status = _status(cli, exe, profile, key)
@@ -153,6 +165,16 @@ def run(exe, profile, transport, *, cli=service_management.hermes_cli):
             return 0
         saving = True
         for key, value in updates.items():
+            # the destination shown before input must still be the one written, and the
+            # caller's own state (config, runtime) must still allow it
+            try:
+                allowed = admission is None or admission() is True
+            except Exception:
+                allowed = False
+            if not allowed or _env_path(cli, exe, profile) != destination:
+                print("保存先か設定が入力中に変わったため、保存を中止しました。"
+                      + (f"保存済み: {', '.join(saved)}" if saved else "接続トークンは保存していません。"))
+                return 1
             # --stdin keeps the token out of argv; an older Hermes without it fails instead.
             result = cli(exe, profile, "config", "set", key, "--stdin", input_text=value)
             if result is None or result.returncode != 0 or _status(cli, exe, profile, key, value) != "registered":

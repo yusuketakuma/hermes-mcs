@@ -1850,7 +1850,9 @@ def test_plugin_integration_existing_allowlist_kept(monkeypatch):
 
 def test_plugin_integration_token_via_env_to_env_file(monkeypatch):
     """DISCORD_BOT_TOKEN goes through `config set` (routes *_TOKEN to
-    the profile .env) on the launch profile, never via argv flag."""
+    the profile .env), never via argv flag. No profile means an explicit
+    `-p default`: the launchd-supervised default gateway reads the root .env,
+    while a bare CLI would follow the sticky ~/.hermes/active_profile."""
     sets = _plugin_env(monkeypatch)
     monkeypatch.setenv("DISCORD_BOT_TOKEN", "tok")
     mcs_setup._apply_plugin_integration(dict(_DISCORD_CFG),
@@ -2625,7 +2627,7 @@ def test_plugin_tokens_reask_invalid_and_verify_the_saved_line(monkeypatch):
     monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda p="": next(answers))
     assert mcs_setup._plugin_store_tokens("/x/hermes", "", (("SLACK_BOT_TOKEN", "s"),),
                                           _plugin_args(yes=False)) is False
-    assert sets == [("", "SLACK_BOT_TOKEN", "xoxb-synthetic-bot")]
+    assert sets == [("default", "SLACK_BOT_TOKEN", "xoxb-synthetic-bot")]
     # a write the .env does not confirm is reported as a failure
     monkeypatch.setattr(mcs_setup, "_hermes_token_state", lambda e, p, k, expect=None:
                         "missing" if expect is None else "unavailable")
@@ -2640,6 +2642,6 @@ def test_plugin_tokens_refuse_an_environment_value_hermes_would_store_differentl
     monkeypatch.setenv("SLACK_BOT_TOKEN", value)
     failed = mcs_setup._plugin_store_tokens("/x/hermes", "", (("SLACK_BOT_TOKEN", "s"),), _plugin_args())
     if value == "xoxb-ok":       # a valid explicit value is still saved
-        assert failed is False and sets == [("", "SLACK_BOT_TOKEN", value)]
+        assert failed is False and sets == [("default", "SLACK_BOT_TOKEN", value)]
     else:                         # stopped before any write, without echoing the value
         assert failed is True and not sets and value not in capsys.readouterr().out

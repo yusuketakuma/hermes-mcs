@@ -60,7 +60,7 @@ def test_changes_only_the_chosen_token_over_stdin_and_never_prints_it(term, caps
     assert writes == [("work", ("config", "set", "SLACK_BOT_TOKEN", "--stdin"), BOT)]
     assert all(BOT not in arg for _, argv, _ in hermes.calls for arg in argv)
     out = capsys.readouterr().out
-    assert BOT not in out and "old" not in out and "再起動" in out
+    assert BOT not in out and "xoxb-old-registered-token" not in out and "xapp-old-app" not in out and "再起動" in out
 
 
 @pytest.mark.parametrize("answers", [["2", "2"], ["1", "2", "2"], ["0"]])
@@ -142,3 +142,32 @@ def test_a_missing_profile_env_is_unregistered_and_the_saved_line_is_verified(te
     term(["1", "1"], ["discord-synthetic-token-value"])
     assert setup.run("hermes", "", "discord", cli=hermes) == 0
     assert hermes.stored == {"DISCORD_BOT_TOKEN": "discord-synthetic-token-value"}
+
+
+def test_an_empty_profile_is_the_explicit_default_never_the_sticky_active_one(term, tmp_path, capsys):
+    hermes = FakeHermes(tmp_path / ".env")
+    term(["1", "1"], ["discord-synthetic-token-value"])
+    assert setup.run("hermes", "", "discord", cli=hermes) == 0
+    assert {profile for profile, _, _ in hermes.calls} == {"default"}
+    assert str(tmp_path / ".env") in capsys.readouterr().out     # the real destination is shown first
+
+
+@pytest.mark.parametrize("admission", [lambda: False, lambda: 1 / 0, lambda: "yes"])
+def test_the_callers_admission_is_rechecked_right_before_each_write(term, tmp_path, admission):
+    hermes = FakeHermes(tmp_path / ".env")
+    term(["1", "1"], ["discord-synthetic-token-value"])
+    assert setup.run("hermes", "", "discord", cli=hermes, admission=admission) == 1
+    assert hermes.stored == {} and not [c for c in hermes.calls if c[1][:2] == ("config", "set")]
+
+
+def test_a_destination_that_moved_during_input_is_not_written(term, tmp_path, monkeypatch):
+    hermes = FakeHermes(tmp_path / ".env")
+    moved = tmp_path / "other" / ".env"
+
+    def enter(prompt=""):
+        hermes.env = moved          # e.g. HERMES_HOME or the profile store changed meanwhile
+        return "discord-synthetic-token-value"
+    term(["1", "1"], [])
+    monkeypatch.setattr(getpass, "getpass", enter)
+    assert setup.run("hermes", "", "discord", cli=hermes) == 1
+    assert not [c for c in hermes.calls if c[1][:2] == ("config", "set")]

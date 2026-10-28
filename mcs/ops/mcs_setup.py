@@ -302,7 +302,8 @@ def _plugin_settings_plan(transport: str, nd: dict, args) -> tuple:
 def _hermes_token_state(exe, profile, key, expect=None):
     """registered / missing / external / unavailable from the profile's own .env line."""
     import hermes_credential_setup
-    return hermes_credential_setup._status(service_management.hermes_cli, exe, profile, key,
+    return hermes_credential_setup._status(service_management.hermes_cli, exe,
+                                           hermes_credential_setup.target_profile(profile), key,
                                            expect, env=False)
 
 
@@ -320,6 +321,9 @@ def _plugin_store_tokens(exe, profile: str, tokens, args) -> bool:
     import hermes_credential_setup
     prefixes = {key: prefix for keys in hermes_credential_setup.TOKENS.values()
                 for key, _, prefix in keys}
+
+    # an empty profile means the root default, not Hermes' sticky active_profile
+    profile = hermes_credential_setup.target_profile(profile)
 
     def _store(env_key, tok) -> bool:
         ok = (_hermes_config_set(exe, profile, env_key, tok)
