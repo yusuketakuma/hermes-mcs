@@ -228,7 +228,7 @@ def _installed_setup_command(repo):
 def _offer_api_keys(env, repo):
     if not sys.stdin.isatty():
         return
-    print("Jev・Anthropic の API キーを設定または変更できます。")
+    print("外部解析と通知先の認証情報を設定できます。")
     while True:
         try:
             answer = input("1. 今回は設定しない（推奨）  2. API キーを設定する [1]: ").strip() or "1"
