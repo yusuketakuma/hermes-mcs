@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 from pathlib import Path
@@ -183,6 +184,77 @@ def _choose(prompt, choices, default="1"):
         print("表示されている番号を入力してください。")
 
 
+def _installed_setup_command(repo):
+    """Use the installed launcher's pinned runtime only for this checkout."""
+    shim = Path.home() / ".local" / "bin" / "mcs"
+    fd = os.open(str(shim), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or not info.st_mode & stat.S_IXUSR or info.st_uid != os.getuid()
+                or info.st_mode & 0o022 or info.st_size > 8192):
+            raise ValueError("launcher_unverified")
+        raw = stream.read(8193)
+        after = os.fstat(stream.fileno())
+        if (len(raw) > 8192 or (after.st_dev, after.st_ino, after.st_mode, after.st_size,
+                               after.st_mtime_ns, after.st_ctime_ns) !=
+                (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+                 info.st_mtime_ns, info.st_ctime_ns)):
+            raise ValueError("launcher_unverified")
+    lines = raw.decode("utf-8").splitlines()
+    if len(lines) != 5 or lines[:4] != ["#!/bin/sh", "# MCS lifecycle launcher",
+            "unset PYTHONPATH PYTHONHOME", "export MCS_LIFECYCLE_PINNED=1"]:
+        raise ValueError("launcher_unverified")
+    words = shlex.split(lines[4])
+    cli = str(Path(repo) / "mcs" / "ops" / "mcs_cli.py")
+    if (len(words) != 4 or words[0] != "exec" or words[2:] != [cli, "$@"]
+            or not os.path.isabs(words[1]) or not os.access(words[1], os.X_OK)):
+        raise ValueError("launcher_unverified")
+    def source(name):
+        with open(Path(repo) / "mcs" / "ops" / name, "rb") as stream:
+            raw = stream.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
+            raise ValueError("setup_unverified")
+        return raw.decode("utf-8")
+
+    # An older CLI routes unknown setup commands to init. Require the
+    # expected route and parser declarations before offering this argument.
+    route = re.search(r'rest\[0\]\s+in\s*\([^)]*["\']api-keys["\']', source("mcs_cli.py"))
+    parser = re.search(r'sub\.add_parser\(\s*["\']api-keys["\']', source("mcs_setup.py"))
+    if not route or not parser:
+        raise ValueError("setup_unverified")
+    return [words[1], cli, "setup", "api-keys"]
+
+
+def _offer_api_keys(env, repo):
+    if not sys.stdin.isatty():
+        return
+    print("Jev・Anthropic の API キーを設定または変更できます。")
+    while True:
+        try:
+            answer = input("1. 今回は設定しない（推奨）  2. API キーを設定する [1]: ").strip() or "1"
+        except (EOFError, KeyboardInterrupt):
+            print("\nAPI キーの設定は開始していません。")
+            return
+        if answer in ("0", "1"):
+            return
+        if answer == "2":
+            break
+        print("1 または 2 を入力してください。")
+    try:
+        command = _installed_setup_command(repo)
+        setup_env = dict(env)
+        setup_env.pop("PYTHONPATH", None)
+        setup_env.pop("PYTHONHOME", None)
+        setup_env["MCS_LIFECYCLE_PINNED"] = "1"
+        result = subprocess.run(command, env=setup_env, cwd=repo, **_lifetime_fds())
+        if result.returncode == 0:
+            return
+    except (OSError, UnicodeError, SyntaxError, ValueError, RecursionError, KeyboardInterrupt):
+        pass
+    print("API キー設定の完了を確認できません。設定状況と起動コマンドを確認し、必要なら "
+          "~/.local/bin/mcs setup api-keys を実行してください。起動コマンドがない場合は担当者に導入状態の確認を依頼してください。")
+
+
 def interactive_update(cmd, env, repo):
     """Explain the target updater's plan before an explicit local update."""
     print("手順 2/3: この Mac を更新できるか確認しています。")
@@ -201,6 +273,7 @@ def interactive_update(cmd, env, repo):
     route = report.get("route")
     if route == "noop" and not report.get("blockers"):
         print("すでに選択した版です。更新は不要です。")
+        _offer_api_keys(env, repo)
         return 0
     if route not in ("apply", "reinstall") or report.get("blockers"):
         print("この状態では更新を開始できません。現在の設定とデータは変更していません。")
@@ -258,6 +331,7 @@ def interactive_update(cmd, env, repo):
         print("更新の完了を確認できませんでした。再度更新する前に mcs recover と mcs doctor で状態を確認してください。")
         return 1
     print("選択した版への更新完了を確認しました。mcs doctor で動作を確認し、通知先で応答を確認してください。")
+    _offer_api_keys(env, repo)
     return 0
 
 
