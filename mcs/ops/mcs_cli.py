@@ -94,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
         case "setup":
             import mcs_setup
             # services/check/features are explicit; init owns its final check and secrets.
-            command = (rest[0] if rest and rest[0] in ("init", "services", "check", "features")
+            command = (rest[0] if rest and rest[0] in ("init", "services", "check", "features", "api-keys")
                        else "init")
             forwarded = rest[1:] if rest and rest[0] == command else rest
             return mcs_setup.main([command, *forwarded])
