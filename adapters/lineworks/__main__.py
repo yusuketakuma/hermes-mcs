@@ -84,6 +84,41 @@ def initialize(root):
     return 0
 
 
+def credential_dialog(root):
+    """Offer first registration while preserving existing credentials."""
+    if not sys.stdin.isatty():
+        raise ClientError("credential_entry_requires_terminal")
+    existing = os.path.lexists(credentials_path(root))
+    if existing:
+        print("LINE WORKSの認証設定があります。")
+        prompt = "1. 現在の設定を保持する（推奨）  2. 変更について確認する [1]: "
+    else:
+        print("LINE WORKSの認証情報を端末で登録できます。")
+        prompt = "1. 今回は設定しない（推奨）  2. 新しく登録する [1]: "
+    while True:
+        try:
+            answer = input(prompt).strip() or "1"
+        except (EOFError, KeyboardInterrupt):
+            print("\nLINE WORKSの認証設定は変更していません。")
+            return 0
+        if answer in ("0", "1"):
+            print("LINE WORKSの認証設定は変更していません。")
+            return 0
+        if answer == "2":
+            break
+        print("1 または 2 を入力してください。")
+    if existing:
+        print("実行中の旧LINE WORKS接続が認証情報を使っていないことを確認できないため、"
+              "変更しません。送信や接続を停止し、担当者に変更方法を相談してください。")
+        return 1
+    try:
+        return initialize(root)
+    except (OSError, KeyboardInterrupt):
+        print("LINE WORKSの認証情報の登録結果を確認できません。秘密値を表示せず、"
+              "担当者に保存状態の確認を依頼してください。")
+        return 1
+
+
 def check(root):
     scope = settings(root, require_interactive=False)
     client, _ = load_credentials(root, scope)
@@ -263,8 +298,9 @@ def main(argv=None):
     logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
     parser = argparse.ArgumentParser(description="独立LINE WORKS Botアダプター")
     subs = parser.add_subparsers(dest="command", required=True)
-    for name in ("init", "check", "run", "send", "service", "status"):
+    for name in ("init", "credentials", "check", "run", "send", "service", "status"):
         descriptions = {"init": "LINE WORKSの認証情報を設定します", "check": "設定と秘密鍵を確認します",
+                        "credentials": "LINE WORKSの認証設定を対話で確認します",
                         "run": "LINE WORKSへの接続を開始します", "send": "指定先へ通知を送ります",
                         "service": "常駐サービスの設定を生成します",
                         "status": "機械処理用のJSONで処理待ち件数を表示します"}
@@ -279,6 +315,8 @@ def main(argv=None):
     try:
         if args.command == "init":
             return initialize(args.root)
+        if args.command == "credentials":
+            return credential_dialog(args.root)
         if args.command == "check":
             return check(args.root)
         if args.command == "send":
@@ -303,7 +341,7 @@ def main(argv=None):
         return 0
     except (ClientError, OSError, ValueError) as exc:
         # Never echo native exceptions: they can embed local paths or secret values.
-        if args.command in ("init", "check"):
+        if args.command in ("init", "credentials", "check"):
             print("LINE WORKSの設定を確認できません。認証情報と秘密鍵の場所・アクセス権を確認してください。")
         print(getattr(exc, "error_code", "local_configuration_error"), file=sys.stderr)
         # EX_TEMPFAIL: provably nothing was accepted, so the collector may retry.
