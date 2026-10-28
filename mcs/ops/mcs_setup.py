@@ -340,8 +340,13 @@ def _plugin_store_tokens(exe, profile: str, tokens, args) -> bool:
             continue
         tok = os.environ.get(env_key)
         if tok:
-            # an explicit environment value is still what setup saves (existing contract)
-            failed |= not _store(env_key, tok)
+            # an explicit environment value is still what setup saves (existing contract),
+            # but only in a form Hermes stores unchanged; the value itself is never shown
+            if not hermes_credential_setup._valid(tok, prefixes.get(env_key, "")):
+                print(f"  {env_key}: 環境変数の値の形式が違うため保存しません（英数字と . _ - だけの値か確認してください）")
+                failed = True
+            else:
+                failed |= not _store(env_key, tok)
             continue
         if state == "registered":
             print(f"  {env_key}: 設定済み")

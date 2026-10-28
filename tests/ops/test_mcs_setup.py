@@ -1781,8 +1781,10 @@ def test_plugin_integration_reports_failed_write(monkeypatch, cfg, failing):
     monkeypatch.setattr(
         mcs_setup, "_hermes_config_set",
         lambda e, p, k, v: sets.append(k) or not k.endswith(failing))
-    for tok in ("DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"):
-        monkeypatch.setenv(tok, "synthetic-token")
+    # each value in the form its key accepts, so the write itself is what fails
+    for tok, value in (("DISCORD_BOT_TOKEN", "synthetic-token"), ("SLACK_BOT_TOKEN", "xoxb-synthetic"),
+                       ("SLACK_APP_TOKEN", "xapp-synthetic")):
+        monkeypatch.setenv(tok, value)
     assert mcs_setup._apply_plugin_integration(
         dict(cfg), _plugin_args(plugin_user_ids="u1")) is False
     assert any(k.endswith(failing) for k in sets)
@@ -1862,7 +1864,7 @@ def test_plugin_integration_slack_writes_scope_and_tokens(monkeypatch):
     sets = _plugin_env(
         monkeypatch,
         existing={"SLACK_APP_TOKEN": "xapp-already"})
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "bot-tok")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-bot-tok")
     cfg = {"notify": {"interactive": "slack", "slack": {
         "profile": "ops", "application_id": "A1",
         "team_id": "T1", "channel_id": "C1"}}}
@@ -1882,7 +1884,7 @@ def test_plugin_integration_slack_writes_scope_and_tokens(monkeypatch):
     assert ("ops",
             f"{mcs_setup.PLUGIN_SETTINGS}.slack_allowed_user_ids",
             '["U1", "U2"]') in sets
-    assert ("ops", "SLACK_BOT_TOKEN", "bot-tok") in sets
+    assert ("ops", "SLACK_BOT_TOKEN", "xoxb-bot-tok") in sets
     # already-configured token is left alone; discord-only scope keys
     # (guild_id / bare allowed_*_ids) are never written for slack
     assert all(k != "SLACK_APP_TOKEN" for _, k, _ in sets)
@@ -2630,3 +2632,14 @@ def test_plugin_tokens_reask_invalid_and_verify_the_saved_line(monkeypatch):
     answers = iter(["xoxb-synthetic-bot"])
     assert mcs_setup._plugin_store_tokens("/x/hermes", "", (("SLACK_BOT_TOKEN", "s"),),
                                           _plugin_args(yes=False)) is True
+
+
+@pytest.mark.parametrize("value", ["xoxb-tökén", "xoxb-a b", "xoxb-a#b", "xoxb-ok"])
+def test_plugin_tokens_refuse_an_environment_value_hermes_would_store_differently(monkeypatch, capsys, value):
+    sets = _plugin_env(monkeypatch)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", value)
+    failed = mcs_setup._plugin_store_tokens("/x/hermes", "", (("SLACK_BOT_TOKEN", "s"),), _plugin_args())
+    if value == "xoxb-ok":       # a valid explicit value is still saved
+        assert failed is False and sets == [("", "SLACK_BOT_TOKEN", value)]
+    else:                         # stopped before any write, without echoing the value
+        assert failed is True and not sets and value not in capsys.readouterr().out
