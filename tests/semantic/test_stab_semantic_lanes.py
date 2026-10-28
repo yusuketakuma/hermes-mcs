@@ -377,7 +377,8 @@ def test_changed_payload_is_not_refunded(jobs_db):
 
 
 @pytest.mark.parametrize('raw', ['{', '[]', '{"long_defers":null}',
-                                 '{"long_defers":{"1":{"g":"x","n":-1}}}'])
+                                 '{"long_defers":{"1":{"g":"x","n":-1}}}',
+                                 '{"payload_hold_cursors":{"realtime":{"job_id":1,"rank":"bad"}}}'])
 def test_invalid_scheduler_holds_work_and_keeps_original(jobs_db, monkeypatch, raw):
     now = time.time()
     _job(jobs_db, 40, created=now, updated=now, next_try=now)
@@ -517,7 +518,8 @@ def test_oversized_changed_job_is_not_fetched_or_refunded(jobs_db):
 
     tracked = TrackedConnection(jobs_db.db)
     ledger = SimpleNamespace(db=tracked)
-    assert semantic_drain._reserve_long_defer(ledger, token) is None
+    with pytest.raises(ValueError, match='semantic_job_payload_unreadable'):
+        semantic_drain._reserve_long_defer(ledger, token)
     semantic_drain._refund_long_defer(ledger, token, reservation)
     assert (job_id, semantic_drain._REPROCESS_JOB_MAX_BYTES + 1) in tracked.opened
     assert semantic_drain._long_defers(jobs_db)[str(job_id)] == reservation[1]
@@ -623,6 +625,118 @@ def test_multibyte_job_at_byte_limit_can_reserve(jobs_db):
         jobs_db.db.execute('UPDATE fetch_jobs SET payload=payload||? WHERE job_id=?', (' ', job_id))
     semantic_drain._refund_long_defer(jobs_db, token, reservation)
     assert semantic_drain._long_defers(jobs_db)[str(job_id)] == reservation[1]
+
+
+@pytest.mark.parametrize('lane', [None, 'realtime', 'backlog'])
+def test_unreadable_prefix_eventually_yields_to_healthy_job(jobs_db, monkeypatch, lane):
+    from ledger import Ledger
+
+    now = time.time() - 10
+    if lane == 'realtime':
+        healthy = _job(jobs_db, 999, created=now, updated=now, next_try=now)
+    poisoned = []
+    for mid in range(100, 140):
+        job_id = _job(jobs_db, mid, created=now, updated=now, next_try=now)
+        payload = ('{"inference_engine_version":"1.0",'
+                   '"inference_engine_version":"2.0",'
+                   '"eligible":true,"generation":"g","targets":[%d]}' % mid)
+        with jobs_db.db:
+            jobs_db.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?', (payload, job_id))
+        poisoned.append(job_id)
+    if lane != 'realtime':
+        healthy = _job(jobs_db, 999, created=now, updated=now, next_try=now)
+    before = [tuple(row) for row in jobs_db.db.execute(
+        'SELECT job_id,payload,state,attempts,next_try FROM fetch_jobs '
+        'WHERE job_id IN (SELECT value FROM json_each(?)) ORDER BY job_id', (json.dumps(poisoned),))]
+    served = _serve(monkeypatch, lambda job: ('done', None))
+    result = {'errors': []}
+    out = semantic_drain.run_due(jobs_db, _cfg('shadow'), result, time.monotonic() + 300,
+                                jev_client=_FakeJev(), llm_fn=None, lane=lane, max_jobs=1)
+    assert served == []
+    assert result['errors'].count('semantic: job_payload_held') == 1
+    assert out['hold_reasons'] == ['semantic: job_payload_held']
+    path = jobs_db.db.execute('PRAGMA database_list').fetchone()[2]
+    reopened = Ledger(path)
+    try:
+        for _ in range(4):
+            if served:
+                break
+            _run(reopened, None, lane=lane, max_jobs=1)
+        assert served == [999]
+        assert reopened.db.execute('SELECT job_id FROM fetch_jobs WHERE message_id=999').fetchone()[0] == healthy
+        after = [tuple(row) for row in reopened.db.execute(
+            'SELECT job_id,payload,state,attempts,next_try FROM fetch_jobs '
+            'WHERE job_id IN (SELECT value FROM json_each(?)) ORDER BY job_id', (json.dumps(poisoned),))]
+        assert after == before
+    finally:
+        reopened.close()
+
+
+def test_full_capacity_cursor_reaches_a_job_with_an_existing_slot(jobs_db, monkeypatch):
+    now = time.time() - 10
+    waiting = [_job(jobs_db, mid, created=now, updated=now, next_try=now)
+               for mid in range(100, 140)]
+    ready = _job(jobs_db, 999, created=now, updated=now, next_try=now)
+    with jobs_db.db:
+        semantic_drain._sched_write(jobs_db, {'long_defers': {str(ready): {'g': 'g999', 'n': 3}}},
+                                    commit=False)
+    monkeypatch.setattr(semantic_drain, '_LONG_DEFERS_MAX', 1)
+    served = _serve(monkeypatch, lambda job: ('deferred', 'long_output_needs_budget'))
+    for _ in range(4):
+        if served:
+            break
+        _run(jobs_db, None, lane='backlog', max_jobs=1)
+    assert served == [999]
+    assert semantic_drain._long_defers(jobs_db)[str(ready)] == {'g': 'g999', 'n': 4}
+    assert jobs_db.db.execute('SELECT COUNT(*) FROM fetch_jobs WHERE job_id IN '
+                              '(SELECT value FROM json_each(?)) AND state=? AND attempts=0',
+                              (json.dumps(waiting), 'pending')).fetchone()[0] == len(waiting)
+
+
+def test_unreadable_arrival_does_not_starve_backfill_cohort(jobs_db, monkeypatch):
+    now = time.time() - 10
+    for mid in range(100, 140):
+        job_id = _job(jobs_db, mid, created=now, updated=now, next_try=now)
+        with jobs_db.db:
+            jobs_db.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?',
+                ('{"inference_engine_version":"1.0","inference_engine_version":"2.0",'
+                 '"eligible":true}', job_id))
+    healthy = _job(jobs_db, 999, created=now, updated=now, next_try=now)
+    with jobs_db.db:
+        jobs_db.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?',
+                           (json.dumps({VERSION_KEY: CURRENT_VERSION, 'generation': 'g999'}), healthy))
+    served = _serve(monkeypatch, lambda job: ('done', None))
+    result = {'errors': []}
+    semantic_drain.run_due(jobs_db, _cfg('shadow'), result, time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=None, lane=None, max_jobs=1)
+    assert served == [999]
+    assert result['errors'].count('semantic: job_payload_held') == 1
+
+
+def test_hold_cursor_does_not_overwrite_another_workers_progress(jobs_db, monkeypatch):
+    from ledger import Ledger
+
+    now = time.time() - 10
+    bad = _job(jobs_db, 100, created=now, updated=now, next_try=now)
+    _job(jobs_db, 101, created=now, updated=now, next_try=now)
+    with jobs_db.db:
+        jobs_db.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?',
+            ('{"inference_engine_version":"1.0","inference_engine_version":"2.0",'
+             '"eligible":true}', bad))
+    path = jobs_db.db.execute('PRAGMA database_list').fetchone()[2]
+    other = Ledger(path)
+    advanced = {'job_id': 12345, 'rank': None}
+
+    def process(*args, **kwargs):
+        with semantic_drain._sched_update(other) as sched:
+            sched['payload_hold_cursors'] = {'backlog': advanced}
+        return 'done'
+    monkeypatch.setattr(semantic_drain, '_process_job', process)
+    try:
+        _run(jobs_db, None, lane='backlog', max_jobs=1)
+        assert semantic_drain._sched_state(jobs_db)['payload_hold_cursors']['backlog'] == advanced
+    finally:
+        other.close()
 
 
 def test_legacy_payload_long_job_leaves_realtime(jobs_db, monkeypatch):
