@@ -67,6 +67,12 @@ jobs:
         run: |
           bad=$(git ls-files -z | xargs -0 grep -lnE \
                 '(xox[baprs]-[0-9A-Za-z-]+|xapp-[0-9]-[A-Z0-9]{8,}-[0-9]+-[0-9a-f]{20,}|ghp_[0-9A-Za-z]{36}|sk-[0-9A-Za-z]{20,}|BEGIN [A-Z ]*PRIVATE KEY)' || true)
+          # One public signature happens to contain a key-like substring; exempt only these reviewed bytes.
+          public_vectors=adapters/sdc/contracts/releases/signature-vectors.json
+          public_vectors_sha=$(python3 -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$public_vectors")
+          if [ "$public_vectors_sha" = 6c33fb6823f2c784f126b6b6f3be6ab3dd3e9c17882fba100ba22a08f1b31379 ]; then
+            bad=$(printf '%s\n' "$bad" | grep -vFx "$public_vectors" || true)
+          fi
           if [ -n "$bad" ]; then
             echo "::error::possible secret committed:"; echo "$bad"; exit 1
           fi

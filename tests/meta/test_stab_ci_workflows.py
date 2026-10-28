@@ -1,6 +1,8 @@
 """CI workflow guards: bounded jobs, complete failure output, a weekly run
 and a macOS lane."""
 import re
+import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -43,3 +45,29 @@ def test_ci_has_a_macos_lane_with_the_pinned_actions():
         assert pin in mac[0]
     assert 'python-version: "3.14"' in mac[0]
     assert re.search(r"scripts/run_tests\.sh tests/meta tests/ops", mac[0])
+
+
+@pytest.mark.parametrize('changed_vector,other_key,expected', [
+    (False, False, 0),
+    (True, False, 1),
+    (False, True, 1),
+])
+def test_ci_secret_scan_exempts_only_exact_public_vector_bytes(tmp_path, changed_vector, other_key, expected):
+    text = (ROOT / '.github/workflows/ci.yml').read_text()
+    block = re.search(r'^      - name: secret pattern scan\n        run: \|\n(.*?)(?=^      - name:|\Z)',
+                      text, re.M | re.S)[1]
+    vector = 'adapters/sdc/contracts/releases/signature-vectors.json'
+    target = tmp_path / vector
+    target.parent.mkdir(parents=True)
+    target.write_bytes((ROOT / vector).read_bytes() + (b'\n' if changed_vector else b''))
+    paths = [vector]
+    if other_key:
+        (tmp_path / 'unexpected.txt').write_text('API_KEY=' + 'sk' + '-' + 'a' * 32)
+        paths.append('unexpected.txt')
+    subprocess.run(['git', 'init', '-q', str(tmp_path)], check=True)
+    subprocess.run(['git', 'add', '--', *paths], cwd=tmp_path, check=True)
+    result = subprocess.run(['sh', '-eu', '-c', textwrap.dedent(block)], cwd=tmp_path,
+                            text=True, capture_output=True)
+    assert result.returncode == expected, result.stdout + result.stderr
+    if expected:
+        assert 'possible secret committed' in result.stdout
