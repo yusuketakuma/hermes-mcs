@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "旧版の更新プログラムからの再導入を最初に止める",
+  "summary": "1.0.29 の mcs/ops/mcs_update.py を更新ツールを通さずに直接実行して再導入を指定すると、更新の排他制御を引き継げません。この場合は再導入を始める前に止め、元の版への復元を試みて、更新ツールでの再実行を案内します。",
+  "upgrade": "追加操作は不要です。この案内が出たときは status と復旧の結果を確認し、再導入は scripts/mcs_upgrade.py apply --reinstall（または mcs update apply --reinstall）で実行してください。",
+  "details": [
+    "Python や Hermes の固定版の移行で再導入が必要になる場合も、移行を記録する前に runtime_migration_requires_upgrade_tool で止め、元の版への復元を試みます。",
+    "通常の mcs update と scripts/mcs_upgrade.py は対象版の更新プログラムを使うため、影響を受けません。"
+  ],
+  "refs": [
+    "mcs/ops/mcs_update.py",
+    "docs/guides/UPGRADE_AGENT.md"
+  ]
+}

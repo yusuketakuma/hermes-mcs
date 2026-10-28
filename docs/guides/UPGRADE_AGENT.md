@@ -271,6 +271,7 @@ git -C "$REPO" show "${CANDIDATE_SHA}:scripts/mcs_upgrade.py" > "$WORK/mcs_upgra
 | `standalone_external_apply` | 独立モードは host 経由で更新する（[STANDALONE.md](STANDALONE.md#更新復旧)）。`reinstall` がある場合は同書の再導入手順 |
 | `legacy_source_manual` | v1.0.0〜1.0.2 からの更新。§8 の手動経路へ |
 | `reinstall_incomplete` | 前回の再導入が install.sh の途中で中断した。`status` を示し **【ユーザー確認】** の上で `cd "$REPO" && ./install.sh <前回と同じ opt-out（plan の install_args）> --no-services` → `"$PY" mcs/ops/mcs_setup.py services` → `"$PY" mcs/ops/mcs_update.py reinstall-done`（HEAD が再導入した版のときだけ完了を記録し、残りの後処理を復旧処理で完了）→ `check`。復旧処理は install.sh を無人で再実行しない |
+| `reinstall_requires_upgrade_tool` | 1.0.29 以前の `mcs/ops/mcs_update.py` を直接実行して再導入を指定したため、更新の排他制御を引き継げず、再導入を始める前に止めて元の版への復元を試みた。`status` と復旧の結果を確認し、復元できていれば §7 の移行先版の更新ツール（`scripts/mcs_upgrade.py apply --reinstall`）で再実行する |
 | `install_options_unverified` | 承認後の変更か、古い更新記録に照合の根拠がないため、再導入を開始していない。記録を削除せず、現在の状態と導入内容を担当者に確認してもらう |
 | `recovery_incomplete`（復旧レポート） | 抽出処理の起動確認が未完了。中断記録を保持するため、起動失敗の原因を修復して `recover` を再実行する。同じ復旧の再試行では起動済み処理を停止し直さない |
 | `update_state_corrupt` | `data/update_state.json` が読めない。内容を変えずに報告し、ユーザー判断を待つ |

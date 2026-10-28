@@ -274,3 +274,11 @@ def git_reads_or(stub):
             return real(argv, **kwargs)
         return stub(argv, **kwargs)
     return run
+
+
+def in_process_post_merge(updater, monkeypatch):
+    """Run the post-merge stage in-process with the update.lock the real parent hands its child."""
+    def run(expected, *, run_lock_fd, **_kw):
+        monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, str(updater._POST_MERGE_UPDATE_FD.get()))
+        return updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH))
+    return run

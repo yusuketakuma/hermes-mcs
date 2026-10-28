@@ -22,7 +22,7 @@ import uuid
 import pytest
 
 import mcs_update
-from ops_testkit import _git, _make_repo
+from ops_testkit import _git, _make_repo, in_process_post_merge
 import test_mcs_update
 from test_mcs_update import _apply_env
 from ledger import Ledger
@@ -554,7 +554,7 @@ def _install_tag(updater, monkeypatch, tmp_path):
                    "v1.2.0", {"install.sh": "#!/bin/sh\n"})
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: sha)
     monkeypatch.setattr(updater, "_run_post_merge",
-                        lambda expected, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+                        in_process_post_merge(updater, monkeypatch))
     return repo, sha
 
 
@@ -614,7 +614,7 @@ def test_update_runs_same_root_settings_migration_before_merge_once(updater, mon
     sha = _release(tmp_path / 'remote-work', tmp_path / 'remote.git', 'v1.2.0', {'f.txt': 'new synthetic release'})
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
     monkeypatch.setattr(updater, '_run_post_merge',
-                        lambda expected, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+                        in_process_post_merge(updater, monkeypatch))
     _fake_install(monkeypatch)
     config = Path(mcs_util.CONF_PATH)
     config.write_text('{"unknown": {"keep": true}}')
@@ -798,7 +798,7 @@ def test_update_rollback_keeps_legacy_record_and_migrated_settings(updater, monk
     sha = _release(tmp_path / 'remote-work', tmp_path / 'remote.git', 'v1.2.0', {'f.txt': 'new synthetic release'})
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
     monkeypatch.setattr(updater, '_run_post_merge',
-                        lambda expected, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+                        in_process_post_merge(updater, monkeypatch))
     monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda *_a, **_k: [])
     config = Path(mcs_util.CONF_PATH)
     config.write_text('{"unknown": {"keep": true}}')

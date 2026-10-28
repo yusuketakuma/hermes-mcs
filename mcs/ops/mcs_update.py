@@ -1751,9 +1751,11 @@ def _plan_runtime_migration(state: dict, held_fd: int | None = None) -> None:
         head_sha = head.stdout.strip()
     if not needs_python and not _refresh_runtime_pin(venv, head_sha):
         return
-    if held_fd is None and not os.environ.get(RUN_LOCK_FD_ENV, "").isdecimal():
-        # An older updater parent cannot hand over run.lock: roll back and
-        # leave the boundary to scripts/mcs_upgrade.py.
+    if held_fd is None and not (os.environ.get(RUN_LOCK_FD_ENV, "").isdecimal()
+                                and os.environ.get(UPDATE_LOCK_FD_ENV, "").isdecimal()):
+        # An older updater parent cannot hand over run.lock and update.lock
+        # (the migration's install.sh needs both): roll back and leave the
+        # boundary to scripts/mcs_upgrade.py.
         raise UpdateError("runtime_migration_requires_upgrade_tool")
     _verify_install_options_base(applying)
     migration = {"venv": venv, "backup_path": _free_sibling(venv, ".pre-python314"),
@@ -1850,6 +1852,11 @@ def _post_merge(state: dict) -> int:
             raise UpdateError('release_runtime_change_forbidden')
     else:
         if applying.get("reinstall") and not applying.get("reinstall_done"):
+            if not os.environ.get(UPDATE_LOCK_FD_ENV, "").isdecimal():
+                # An older updater parent (1.0.29 run directly) cannot hand
+                # over update.lock: roll back and leave reinstall to the tool.
+                raise UpdateError("reinstall_requires_upgrade_tool: 再導入は更新ツール"
+                                  "（scripts/mcs_upgrade.py apply --reinstall）で実行してください")
             _verify_install_options_base(applying)
         _plan_runtime_migration(state)
     if applying.get("reinstall") and not applying.get("reinstall_done"):

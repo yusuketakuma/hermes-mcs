@@ -5,7 +5,7 @@ network. No real MCS, Discord, Keychain, or external repo access.
 """
 
 import environment_diagnostics
-from ops_testkit import select_updater_service_python
+from ops_testkit import in_process_post_merge, select_updater_service_python
 import restore_evidence
 import scheduled_jobs
 import service_contract
@@ -771,7 +771,7 @@ def test_apply_persists_adapter_restart_decision_before_restarting_gateway(
     sha = _git(remote_work, "rev-parse", "HEAD").stdout.strip()
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: sha)
     monkeypatch.setattr(updater, "_run_post_merge",
-                        lambda expected, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+                        in_process_post_merge(updater, monkeypatch))
     restarts = []
 
     def restart(cfg):

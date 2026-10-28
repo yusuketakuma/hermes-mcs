@@ -8,7 +8,7 @@ import mcs_update
 import mcs_util
 import service_management
 import update_discovery
-from ops_testkit import _git, _load, _make_repo, _mk_schema
+from ops_testkit import _git, _load, _make_repo, _mk_schema, in_process_post_merge
 import test_mcs_update
 from test_mcs_update import _apply_env
 
@@ -31,8 +31,7 @@ def _candidate_env(updater, monkeypatch, *, errors=()):
     monkeypatch.setattr(update_discovery, "remote_tag_sha",
                         lambda *a, **k: pytest.fail("candidate must not contact origin"))
     monkeypatch.setattr(updater, "_plan_runtime_migration", lambda *a, **k: None)
-    monkeypatch.setattr(updater, "_run_post_merge", lambda expected, **kw:
-                        updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+    monkeypatch.setattr(updater, "_run_post_merge", in_process_post_merge(updater, monkeypatch))
     return repo, base, target
 
 

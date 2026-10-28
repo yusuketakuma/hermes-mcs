@@ -21,7 +21,7 @@ import maintenance
 import notify_spool
 import notify_transport
 import mcs_setup
-from ops_testkit import _seed_consent
+from ops_testkit import _seed_consent, in_process_post_merge
 from test_mcs_upgrade import _launcher
 from test_supported_schema_upgrade import (
     FIXTURES, RELEASES, _historical, _preserved, _records, _sha,
@@ -171,7 +171,7 @@ def _world(tmp_path, monkeypatch, updater, path, *, install=False, schema=None):
     monkeypatch.setattr(updater, "restart_agents", lambda bounce=True: [])
     monkeypatch.setattr(updater, "restart_gateway", lambda cfg: None)
     monkeypatch.setattr(updater, "_services_reconcile", lambda: calls.append("services"))
-    monkeypatch.setattr(updater, "_run_post_merge", lambda sha, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+    monkeypatch.setattr(updater, "_run_post_merge", in_process_post_merge(updater, monkeypatch))
     monkeypatch.delenv("MCS_UPDATE_REPO", raising=False)
     real_run = subprocess.run
 
