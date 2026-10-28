@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import stat
 import sys
+import settings_migration_receipt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import _mcs_path  # noqa: E402,F401
@@ -121,13 +122,15 @@ def recorded(config_path, legacy_path):
         return None
 
 
-def save(config_path, legacy_path, desired, expected):
+def save(config_path, legacy_path, desired, expected, *, check_pending=False):
     import config_edit
     import mcs_util
     import safe_io
     publication_started = False
     try:
         with config_edit._edit_lock(config_path):
+            if check_pending and settings_migration_receipt.pending(Path(legacy_path).parent):
+                raise config_edit.ConfigConflict('migration_pending')
             if inspect(config_path, legacy_path, desired) != expected:
                 raise config_edit.ConfigConflict('options_changed')
             if desired is None:
@@ -149,6 +152,7 @@ def save(config_path, legacy_path, desired, expected):
             def write_checked(stream):
                 stream.write(body)
                 if (config_edit._snapshot(config_path)[1] != base
+                        or (check_pending and settings_migration_receipt.pending(Path(legacy_path).parent))
                         or inspect(config_path, legacy_path, desired) != expected):
                     raise config_edit.ConfigConflict('options_changed')
             publication_started = True
@@ -174,6 +178,9 @@ def save(config_path, legacy_path, desired, expected):
 
 def main(argv):
     mode, config_path, legacy_path, expected, *desired = argv
+    if settings_migration_receipt.pending(Path(legacy_path).parent):
+        print('導入設定の移行結果を確認できません。保留記録と設定を保持し、担当者に確認してください。', file=sys.stderr)
+        return 1
     if mode in ('inspect', 'inspect-update'):
         try:
             token = inspect(config_path, legacy_path, desired if mode == 'inspect' else None)
@@ -187,9 +194,9 @@ def main(argv):
             return 1
         return 0
     if mode == 'save':
-        return save(config_path, legacy_path, desired, expected)
+        return save(config_path, legacy_path, desired, expected, check_pending=True)
     if mode == 'migrate':
-        return save(config_path, legacy_path, None, expected)
+        return save(config_path, legacy_path, None, expected, check_pending=True)
     if mode == 'verify':
         try:
             if inspect(config_path, legacy_path) == expected:
