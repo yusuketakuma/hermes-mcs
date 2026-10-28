@@ -138,7 +138,9 @@ def test_log_filter_never_displays_ids_or_untrusted_metadata(world):
 def test_doctor_resolves_auto_without_exposing_keys(world):
     root, _, _ = world
     _key(root)
-    report = cli.diagnostics({"mcs_login_id": "synthetic"}, root=str(root))
+    uncapped = cli.diagnostics({"mcs_login_id": "synthetic"}, root=str(root))["anthropic"]
+    assert (uncapped["mode"], uncapped["status"], uncapped["block_reason"]) == ("off", "local", "cost_limit_required")
+    report = cli.diagnostics({"mcs_login_id": "synthetic", "cloud_llm": {"daily_cost_limit_usd": 2}}, root=str(root))
     assert report["jev"]["mode"] == "assist" and report["jev"]["daily_request_budget"] == 10000
     assert report["anthropic"]["mode"] == "on"
     # an unreadable config reaches the CLI as {}: shown off, like the runtime

@@ -54,7 +54,9 @@ def test_reservation_covers_the_costliest_accepted_usage_for_the_request():
 def test_null_cloud_block_is_a_config_error_not_an_omission():
     settings, errors = c.cloud_config({"cloud_llm": None}, key_present=True)
     assert errors == ["config: cloud_llm_not_object"] and settings["mode"] == "off"
-    assert c.cloud_config({}, key_present=True)[0]["mode"] == "on"
+    # A key alone enables sending only once a spending cap exists.
+    assert c.cloud_config({}, key_present=True)[0]["mode"] == "off"
+    assert c.cloud_config({"cloud_llm": {"monthly_cost_limit_usd": 40}}, key_present=True)[0]["mode"] == "on"
 
 
 @pytest.mark.parametrize("scope,allowed", [(None,True), ([],False), ([1],True), ([2],False)])
@@ -331,9 +333,10 @@ def test_successful_http_without_usage_stops_and_retains_maximum(tmp_path, now):
 
 
 def test_key_based_auto_mode_preserves_explicit_scope_budget_and_off():
-    assert c.cloud_config({}, key_present=True)[0]["mode"] == "on"
-    assert c.cloud_config({}, key_present=True)[0]["project_ids"] is None
-    assert c.cloud_config({"cloud_llm": {"project_ids": [1]}}, key_present=True)[0]["mode"] == "on"
+    capped = {"daily_cost_limit_usd": 2}
+    assert c.cloud_config({"cloud_llm": capped}, key_present=True)[0]["mode"] == "on"
+    assert c.cloud_config({"cloud_llm": capped}, key_present=True)[0]["project_ids"] is None
+    assert c.cloud_config({"cloud_llm": {**capped, "project_ids": [1]}}, key_present=True)[0]["mode"] == "on"
     assert c.cloud_config({"cloud_llm": {"project_ids": [1]}})[0]["mode"] == "off"
     for mode in ("off", "dry_run", "shadow", "on"):
         normalized, errors = c.cloud_config(_cfg(mode=mode, daily_request_budget=0), key_present=True)

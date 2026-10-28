@@ -692,7 +692,8 @@ class _CloudProvider:
         reserved_caps = {}
 
         def caps(settings):
-            return {k: settings[k] for k in ("daily_request_budget", "daily_cost_limit_usd", "monthly_cost_limit_usd")}
+            return {k: settings[k] for k in ("daily_request_budget", "daily_cost_limit_usd",
+                                             "monthly_cost_limit_usd", "window_budget_usd")}
 
         def tightened(now):
             # a cap set or lowered after this attempt's reservation stops the send it
