@@ -72,6 +72,75 @@ def test_queue_stops_if_unknown_commit_left_transaction_open(corpus, tmp_path):
     connection.rollback()
 
 
+@pytest.mark.parametrize('problem', ['invalid', 'capacity'])
+def test_unreadable_retirements_hold_only_alias_command(corpus, tmp_path, monkeypatch, problem):
+    store, cfg, config = corpus
+    req = request(drug_alias.proposal(store.db, cfg, 'キラナン', 'fiction-i1'))
+    other = {'version': 1, 'cmd': 'ops.pause', 'command_id': str(uuid.uuid4()),
+             'actor': 'synthetic', 'human_confirmed': True,
+             'project_id': 1, 'feature': 'semantic'}
+    monkeypatch.setattr(mcs_requests, 'ALIAS_RETIRED_LIMIT', 2)
+    entries = ['invalid'] if problem == 'invalid' else [str(uuid.uuid4()) for _ in range(3)]
+    with store.db:
+        store.db.executemany('INSERT INTO artifacts(kind,content,created_at) VALUES(?,?,0)',
+                             [(mcs_requests.ALIAS_RETIRED_KIND, value) for value in entries])
+    inbox = tmp_path / 'data' / 'cmd'
+    inbox.mkdir()
+    mcs_requests.enqueue(req, inbox)
+    mcs_requests.enqueue(other, inbox)
+    before = config.read_bytes()
+    result = {'errors': []}
+    job_ops.drain_commands(store, result, str(inbox))
+    remaining = list(inbox.glob('*.json'))
+    assert len(remaining) == 1 and json.loads(remaining[0].read_text()) == req
+    assert store.db.execute('SELECT 1 FROM command_receipts WHERE command_id=?',
+                            (req['command_id'],)).fetchone() is None
+    other_receipt = store.db.execute('SELECT outcome FROM command_receipts WHERE command_id=?',
+                                     (other['command_id'],)).fetchone()
+    assert other_receipt['outcome'] == 'applied'
+    assert config.read_bytes() == before
+    assert result['errors'] == [f'alias_retirement_{problem}']
+    job_ops.drain_commands(store, result, str(inbox))
+    assert result['errors'] == [f'alias_retirement_{problem}']
+    assert len(list(inbox.glob('*.json'))) == 1
+
+
+def test_retirement_error_with_open_transaction_stops_queue(corpus, tmp_path):
+    store, cfg, _ = corpus
+    req = request(drug_alias.proposal(store.db, cfg, 'キラナン', 'fiction-i1'))
+    other = {'version': 1, 'cmd': 'ops.pause', 'command_id': str(uuid.uuid4()),
+             'actor': 'synthetic', 'human_confirmed': True,
+             'project_id': 1, 'feature': 'semantic'}
+    with store.db:
+        store.db.execute('INSERT INTO artifacts(kind,content,created_at) VALUES(?,?,0)',
+                         (mcs_requests.ALIAS_RETIRED_KIND, 'invalid'))
+    inbox = tmp_path / 'data' / 'cmd'
+    inbox.mkdir()
+    mcs_requests.enqueue(req, inbox)
+    mcs_requests.enqueue(other, inbox)
+    connection = store.db
+    class LeaveOpen:
+        def __getattr__(self, name):
+            return getattr(connection, name)
+        def __enter__(self):
+            connection.__enter__()
+            return self
+        def __exit__(self, kind, value, tb):
+            return False
+    store.db = LeaveOpen()
+    result = {'errors': []}
+    try:
+        with pytest.raises(mcs_requests.AliasRetirementUnavailable):
+            job_ops.drain_commands(store, result, str(inbox))
+    finally:
+        store.db = connection
+    assert connection.in_transaction and result['errors'] == ['alias_retirement_invalid']
+    assert len(list(inbox.glob('*.json'))) == 2
+    assert connection.execute('SELECT 1 FROM command_receipts WHERE command_id=?',
+                              (other['command_id'],)).fetchone() is None
+    connection.rollback()
+
+
 def test_queued_rollback_retires_earlier_unknown_apply_before_retry(corpus, tmp_path):
     store, cfg, config = corpus
     req = request(drug_alias.proposal(store.db, cfg, 'キラナン', 'fiction-i1'))

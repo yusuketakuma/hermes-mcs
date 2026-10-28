@@ -205,6 +205,14 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR):
                 if ledger.db.in_transaction:
                     raise
                 continue
+            except mcs_requests.AliasRetirementUnavailable as error:
+                # Hold only the affected alias apply; never continue on a
+                # connection whose transaction could still be committed.
+                if error.reason not in result['errors']:
+                    result['errors'].append(error.reason)
+                if ledger.db.in_transaction:
+                    raise
+                continue
             except (ValueError, TypeError, KeyError, UnicodeError,
                     RecursionError, sqlite3.IntegrityError,
                     sqlite3.DataError) as e:
