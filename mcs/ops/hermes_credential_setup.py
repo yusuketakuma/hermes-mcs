@@ -7,6 +7,7 @@ import re
 import sys
 import warnings
 
+import safe_io
 import service_management
 
 TOKENS = {
@@ -15,10 +16,11 @@ TOKENS = {
               ("SLACK_APP_TOKEN", "Slackのアプリトークン（xapp-で始まる値）", "xapp-")),
 }
 _PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
-# `config get` prints an env reference such as ${NAME} unmasked: the value is owned by
-# another secret source, and overwriting the reference would detach it.
+# A .env value that refers to another secret source (1Password op://, ${NAME}, a managed
+# __PLACEHOLDER__) is owned there: overwriting the reference would detach it.
 _REFERENCE_RE = re.compile(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}")
 _MAX_TOKEN = 4096
+_MAX_ENV = 1024 * 1024
 
 
 def is_terminal():
@@ -33,17 +35,51 @@ def _choose(prompt):
         print("1、2、0 のいずれかを入力してください。")
 
 
-def _status(cli, exe, profile, key):
-    """registered / missing / external / unavailable, without keeping or showing the value."""
+def _env_path(cli, exe, profile):
+    """The selected profile's .env, as Hermes itself reports it, or None when unknown."""
+    result = cli(exe, profile, "config", "env-path")
+    if result is None or result.returncode != 0:
+        return None
+    lines = (result.stdout or "").strip().splitlines()
+    path = lines[-1].strip() if lines else ""
+    return path if os.path.isabs(path) else None
+
+
+def _status(cli, exe, profile, key, expect=None):
+    """registered / missing / external / environment / unavailable, judged from the profile's
+    own .env line (config get may show a value an external secret source already resolved)."""
     if os.environ.get(key):
         return "environment"
-    result = cli(exe, profile, "config", "get", key)
-    if result is None:
+    path = _env_path(cli, exe, profile)
+    if path is None:
         return "unavailable"
-    shown = (result.stdout or "").strip()
-    if result.returncode != 0 or not shown:
+    try:
+        raw = safe_io.read_regular_nofollow(path, _MAX_ENV, lambda: ValueError("env_unreadable"))
+        if len(raw) > _MAX_ENV or os.stat(path, follow_symlinks=False).st_uid != os.getuid():
+            return "unavailable"
+        lines = raw.decode("utf-8").splitlines()
+    except FileNotFoundError:
+        return "missing" if not os.path.lexists(path) else "unavailable"
+    except (OSError, ValueError, UnicodeError):
+        return "unavailable"
+    values = []
+    for line in lines:
+        name, sep, value = line.strip().removeprefix("export ").partition("=")
+        if sep and name.strip() == key:
+            values.append(value.strip())
+    if not values:
         return "missing"
-    if _REFERENCE_RE.fullmatch(shown) or (shown.startswith("__") and shown.endswith("__")):
+    if len(values) > 1:
+        return "unavailable"
+    value = values[0]
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        value = value[1:-1]
+    if not value:
+        return "missing"
+    if expect is not None:
+        return "registered" if value == expect else "unavailable"   # the saved line, compared in memory only
+    if (value.startswith("op://") or _REFERENCE_RE.fullmatch(value)
+            or (value.startswith("__") and value.endswith("__"))):
         return "external"
     return "registered"
 
@@ -105,7 +141,7 @@ def run(exe, profile, transport, *, cli=service_management.hermes_cli):
         for key, value in updates.items():
             # --stdin keeps the token out of argv; an older Hermes without it fails instead.
             result = cli(exe, profile, "config", "set", key, "--stdin", input_text=value)
-            if result is None or result.returncode != 0 or _status(cli, exe, profile, key) != "registered":
+            if result is None or result.returncode != 0 or _status(cli, exe, profile, key, value) != "registered":
                 print(f"{key}: 保存を確認できません。Hermesの config set --stdin 対応を確認してください。")
                 if saved:
                     print("保存済み: " + ", ".join(saved))
