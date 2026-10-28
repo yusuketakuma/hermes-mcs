@@ -6,7 +6,6 @@ import pytest
 
 import lifecycle_io
 import mcs_setup
-import service_management
 import setup_wizard
 from test_mcs_setup import _init_env
 
@@ -111,7 +110,7 @@ def test_decline_or_interrupt_precedes_all_writers(monkeypatch, tmp_path, answer
     monkeypatch.setattr(mcs_setup, "_init_store_secrets", lambda *a: pytest.fail("secret write"))
     monkeypatch.setattr(lifecycle_io, "store_keychain", lambda *a: pytest.fail("keychain write"))
     monkeypatch.setattr(lifecycle_io, "write_env", lambda *a: pytest.fail("env write"))
-    monkeypatch.setattr(service_management, "write_service_file", lambda *a: pytest.fail("config write"))
+    monkeypatch.setattr(mcs_setup, "_init_save_config", lambda *a: pytest.fail("config write"))
     monkeypatch.setattr(mcs_setup, "_apply_plugin_integration", lambda *a: pytest.fail("Hermes write"))
     assert mcs_setup.main(["init"]) == 130
     assert config.read_bytes() == original
@@ -127,13 +126,13 @@ def test_consent_precedes_dictionary_secrets_config_and_integration(monkeypatch,
     monkeypatch.setattr(setup_wizard, "confirm_save", lambda *a, **k: order.append("confirm") or True)
     monkeypatch.setattr(setup_wizard, "wizard_drug_map", lambda *a, **k: order.append("dictionary"))
     monkeypatch.setattr(mcs_setup, "_init_store_secrets", lambda *a: order.append("secrets"))
-    original_write = service_management.write_service_file
+    original_write = mcs_setup._init_save_config
 
     def save(*args, **kwargs):
         order.append("config")
         return original_write(*args, **kwargs)
 
-    monkeypatch.setattr(service_management, "write_service_file", save)
+    monkeypatch.setattr(mcs_setup, "_init_save_config", save)
     monkeypatch.setattr(mcs_setup, "_apply_plugin_integration", lambda *a: order.append("integration") or True)
     assert mcs_setup.main(["init"]) == 0
     assert order == ["confirm", "dictionary", "secrets", "config", "integration"]

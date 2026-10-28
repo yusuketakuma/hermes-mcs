@@ -33,7 +33,7 @@ def test_unusable_project_ids_write_nothing(monkeypatch, tmp_path, capsys, ids):
     assert code == 1
     assert "プロジェクトID" in capsys.readouterr().out
     assert stored == []
-    assert not (tmp_path / "c.json").exists()
+    assert json.loads((tmp_path / "c.json").read_text()) == config()
     assert not (tmp_path / ".env").exists()
 
 
