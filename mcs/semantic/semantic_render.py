@@ -417,6 +417,8 @@ def semantic_summary_block(db, r, cfg: dict) -> str:
         if enforce_block_reason(db, scfg, r["project_id"]) is not None:
             return ""
         root = r["parent_id"] or r["message_id"]
+        if semantic_send_gate.intake_root_held(db, r["project_id"], root):
+            return ""
         # The audited summary must describe the current whole-thread
         # generation, not only the target's body revision (INV-15).
         cur = semantic_send_gate.current_summary(
