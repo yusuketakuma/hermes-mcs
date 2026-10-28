@@ -1277,8 +1277,10 @@ _INTAKE_EVIDENCE_SECONDS = 1.0
 def _intake_evidence(con, table, kind):
     """Compare bounded raw records without exposing their contents."""
     columns = con.execute(f"PRAGMA table_info({table})").fetchall()
-    if not columns or not any(column[1] == 'kind' for column in columns):
+    if not columns:
         return []
+    if not any(column[1] == 'kind' for column in columns):
+        raise sqlite3.DatabaseError('restore_intake_schema_unverified')
     previous_limit = con.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
     con.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, min(previous_limit, _INTAKE_EVIDENCE_ROW_BYTES))
     deadline = time.monotonic() + _INTAKE_EVIDENCE_SECONDS
@@ -1322,7 +1324,9 @@ def _intake_comparison(live, back):
     compared = {}
     for label, table, kind in (
             ('held_intents', 'artifacts', 'semantic_intake_hold_v1'),
-            ('unstored_intake', 'fetch_jobs', 'semantic_intake_unstored_v1')):
+            ('unstored_intake', 'fetch_jobs', 'semantic_intake_unstored_v1'),
+            ('unstored_epoch', 'fetch_jobs', 'semantic_intake_unstored_epoch_v1'),
+            ('unstored_roots', 'fetch_jobs', 'semantic_intake_unstored_root_v1')):
         current = _intake_evidence(live, table, kind)
         saved = _intake_evidence(back, table, kind)
         if current or saved:

@@ -65,13 +65,16 @@ def test_report_exposes_unchanged_and_replaced_hold_and_unstored_rows(tmp_path, 
     assert 'synthetic' not in json.dumps(report)
 
 
+@pytest.mark.parametrize('kind', ['semantic_intake_unstored_v1',
+                                  'semantic_intake_unstored_epoch_v1',
+                                  'semantic_intake_unstored_root_v1'])
 @pytest.mark.parametrize('mutation', ['add', 'remove', 'replace', 'update'])
-def test_unstored_change_invalidates_previous_receipt(tmp_path, monkeypatch, mutation):
+def test_unstored_change_invalidates_previous_receipt(tmp_path, monkeypatch, mutation, kind):
     live, backup = tmp_path / 'live.db', tmp_path / 'backup.db'
     _database(live)
     _database(backup)
     with closing(sqlite3.connect(live)) as db, db:
-        db.execute("INSERT INTO fetch_jobs VALUES(1,'semantic_intake_unstored_v1',1,0,'{}','pending',0)")
+        db.execute("INSERT INTO fetch_jobs VALUES(1,?,1,0,'{}','pending',0)", (kind,))
         db.execute('CREATE TABLE command_receipts(command_id TEXT, receipt_json TEXT, outcome TEXT, processed_at REAL)')
     report, watchdog = _reports(tmp_path, monkeypatch, live, backup)
     receipt = {'cmd': 'ops.restore_approve', 'scheduled': True, 'command_id': 'test',
@@ -82,12 +85,12 @@ def test_unstored_change_invalidates_previous_receipt(tmp_path, monkeypatch, mut
     assert watchdog._consent_for(report) == 'test'
     with closing(sqlite3.connect(live)) as db, db:
         if mutation == 'add':
-            db.execute("INSERT INTO fetch_jobs VALUES(2,'semantic_intake_unstored_v1',2,0,'{}','pending',0)")
+            db.execute("INSERT INTO fetch_jobs VALUES(2,?,2,0,'{}','pending',0)", (kind,))
         elif mutation == 'remove':
             db.execute('DELETE FROM fetch_jobs WHERE job_id=1')
         elif mutation == 'replace':
             db.execute('DELETE FROM fetch_jobs WHERE job_id=1')
-            db.execute("INSERT INTO fetch_jobs VALUES(2,'semantic_intake_unstored_v1',2,0,'{}','pending',0)")
+            db.execute("INSERT INTO fetch_jobs VALUES(2,?,2,0,'{}','pending',0)", (kind,))
         else:
             db.execute("UPDATE fetch_jobs SET payload='{\"changed\":true}' WHERE job_id=1")
     changed, _ = _reports(tmp_path, monkeypatch, live, backup)
@@ -96,13 +99,17 @@ def test_unstored_change_invalidates_previous_receipt(tmp_path, monkeypatch, mut
     assert watchdog._consent_for(changed) is None
 
 
-@pytest.mark.parametrize('limit', ['rows', 'bytes', 'bytes_hold', 'identity'])
+@pytest.mark.parametrize('limit', ['rows', 'bytes', 'bytes_hold', 'identity', 'missing_kind'])
 def test_unverifiable_evidence_refuses_restore_report(tmp_path, monkeypatch, limit):
     live, backup = tmp_path / 'live.db', tmp_path / 'backup.db'
     _database(live)
     _database(backup)
     with closing(sqlite3.connect(live)) as db, db:
-        if limit == 'identity':
+        if limit == 'missing_kind':
+            db.execute('DROP TABLE fetch_jobs')
+            db.execute('CREATE TABLE fetch_jobs(job_id INTEGER PRIMARY KEY, payload TEXT)')
+            db.execute("INSERT INTO fetch_jobs VALUES(1,'{}')")
+        elif limit == 'identity':
             db.execute('DROP TABLE fetch_jobs')
             db.execute('CREATE TABLE fetch_jobs(job_id INTEGER, kind TEXT, payload TEXT)')
             db.execute("INSERT INTO fetch_jobs VALUES(1,'semantic_intake_unstored_v1','{}')")
