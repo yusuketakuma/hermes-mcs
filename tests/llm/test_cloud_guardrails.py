@@ -360,3 +360,52 @@ def test_first_exempt_only_section_keeps_the_config_generation():
     base = {"semantic": {"mode": "assist", "project_ids": None, "daily_request_budget": 10}}
     edited = {**base, "cloud_llm": {"until": "2026-10-30T23:59:59+09:00"}}
     assert semantic_runtime.config_generation(edited) == semantic_runtime.config_generation(base)
+
+
+def test_pruned_usage_stops_a_period_that_started_before_it_even_after_the_clock_moves_back(tmp_path, now):
+    import maintenance
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        reservation = c.usage_reserver(ledger, _period(), route="reextract", project_id=1, unit_key="u1")(
+            {"model": c.MODEL, "max_tokens": 100}, 2)
+        assert reservation and c.budget_block_reason(ledger, _period()) is None
+        # The clock ran ahead and maintenance pruned rows from inside the period.
+        import time
+        ahead = time.time() + 86400          # past every row's real created_at
+        maintenance._prune_cloud_usage(ledger.db, ahead)
+        assert not ledger.artifacts("cloud_usage_reserve")
+        # Back at NOW the period looks young, but its counted history is gone.
+        assert c.budget_block_reason(ledger, _period()) == "window_history_unverified"
+        assert c.budget_block_reason(ledger, _period(window_start="2026-10-27T12:00:00+09:00",
+                                                     until="2026-10-28T00:00:00+09:00")) == "not_started"
+        later = datetime.fromtimestamp(ahead + 86400, c.JST).isoformat()
+        assert c.window_history_pruned(ledger, _period(window_start=later)) is False
+        # A lower later cutoff never moves the mark back; an unreadable mark fails closed.
+        maintenance._prune_cloud_usage(ledger.db, NOW)
+        ledger.db.execute("INSERT INTO artifacts(kind,content,created_at) VALUES(?,?,?)",
+                          ("cloud_usage_reserve", "{}", NOW - 10))
+        ledger.db.commit()
+        maintenance._prune_cloud_usage(ledger.db, NOW)
+        assert float(ledger.artifacts(c.PRUNE_MARK_KIND)[0]["content"]) == ahead
+        ledger.db.execute("UPDATE artifacts SET content='x' WHERE kind=?", (c.PRUNE_MARK_KIND,))
+        ledger.db.commit()
+        assert c.window_history_pruned(ledger, _period(window_start=later)) is True
+
+
+@pytest.mark.parametrize("marks", [["x"], ["nan"], ["inf"], ["1.0", "nan"], ["1.0", "2.0"]])
+def test_a_broken_or_duplicate_prune_mark_stays_and_keeps_periods_stopped(tmp_path, now, marks):
+    import time
+    import maintenance
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        for mark in marks:
+            ledger.db.execute("INSERT INTO artifacts(kind,content,created_at) VALUES(?,?,?)",
+                              (c.PRUNE_MARK_KIND, mark, NOW))
+        ledger.db.execute("INSERT INTO artifacts(kind,content,created_at) VALUES(?,?,?)",
+                          ("cloud_usage_reserve", "{}", NOW - 10))
+        ledger.db.commit()
+        broken = True
+        later = datetime.fromtimestamp(time.time() + 3 * 86400, c.JST).isoformat()
+        assert c.window_history_pruned(ledger, _period(window_start=later)) is broken
+        maintenance._prune_cloud_usage(ledger.db, time.time())
+        # maintenance never overwrites a mark whose earlier range it cannot read
+        assert sorted(row["content"] for row in ledger.artifacts(c.PRUNE_MARK_KIND)) == sorted(marks)
+        assert c.window_history_pruned(ledger, _period(window_start=later)) is broken

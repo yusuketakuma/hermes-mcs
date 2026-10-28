@@ -428,7 +428,10 @@ def test_repair_retention_pins_only_exact_original_receipts_and_preserves_stagin
                      for key in ('reserve', 'result', 'disposition', 'header', 'slot')]
         monkeypatch.setattr(maintenance, 'RETENTION_BATCH', batch)
         maintenance.prune_history(db.db, now=now)
-        assert {row[0] for row in db.db.execute('SELECT artifact_id FROM artifacts')} == {
+        # pruning also leaves its durable cutoff for period budgets
+        assert db.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='cloud_usage_pruned_before'").fetchone()[0] == 1
+        assert {row[0] for row in db.db.execute(
+                "SELECT artifact_id FROM artifacts WHERE kind!='cloud_usage_pruned_before'")} == {
             *[linked[key] for key in ('reserve', 'result', 'disposition', 'header', 'slot')],
             *[other_patient[key] for key in ('reserve', 'result', 'disposition')]}
         assert immutable == [tuple(db.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (row[0],)).fetchone())
