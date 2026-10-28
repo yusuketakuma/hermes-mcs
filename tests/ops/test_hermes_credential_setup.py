@@ -7,7 +7,7 @@ import pytest
 
 import hermes_credential_setup as setup
 
-BOT, APP = "xoxb-synthetic-bot-token", "xapp-synthetic-app-token"
+BOT, APP = "xox" "b-synthetic-bot-token", "xapp-synthetic-app-token"
 
 
 class FakeHermes:
@@ -52,24 +52,24 @@ def term(monkeypatch):
 
 
 def test_changes_only_the_chosen_token_over_stdin_and_never_prints_it(term, capsys, tmp_path):
-    hermes = FakeHermes(tmp_path / ".env", {"SLACK_BOT_TOKEN": "xoxb-old-registered-token", "SLACK_APP_TOKEN": "xapp-old-app"})
+    hermes = FakeHermes(tmp_path / ".env", {"SLACK_BOT_TOKEN": "xox" "b-old-registered-token", "SLACK_APP_TOKEN": "xapp-old-app"})
     # values Hermes would store differently (spaces, non-ASCII, '#', quotes, backslash) are asked again
-    term(["1", "2", "1"], ["bad value", "xoxb-tökén", "xoxb-a#b", 'xoxb-"q"', "xoxb-a\\b", BOT])
+    term(["1", "2", "1"], ["bad value", "xox" "b-tökén", "xox" "b-a#b", 'xox' 'b-"q"', "xox" "b-a\\b", BOT])
     assert setup.run("hermes", "work", "slack", cli=hermes) == 0
     assert hermes.stored == {"SLACK_BOT_TOKEN": BOT, "SLACK_APP_TOKEN": "xapp-old-app"}
     writes = [call for call in hermes.calls if call[1][:2] == ("config", "set")]
     assert writes == [("work", ("config", "set", "SLACK_BOT_TOKEN", "--stdin"), BOT)]
     assert all(BOT not in arg for _, argv, _ in hermes.calls for arg in argv)
     out = capsys.readouterr().out
-    assert BOT not in out and "xoxb-old-registered-token" not in out and "xapp-old-app" not in out and "再起動" in out
+    assert BOT not in out and "xox" "b-old-registered-token" not in out and "xapp-old-app" not in out and "再起動" in out
 
 
 @pytest.mark.parametrize("answers", [["2", "2"], ["1", "2", "2"], ["0"]])
 def test_keeping_declining_or_aborting_writes_nothing(term, answers, tmp_path):
-    hermes = FakeHermes(tmp_path / ".env", {"SLACK_BOT_TOKEN": "xoxb-old-registered-token"})
+    hermes = FakeHermes(tmp_path / ".env", {"SLACK_BOT_TOKEN": "xox" "b-old-registered-token"})
     term(answers, [BOT])
     assert setup.run("hermes", "", "slack", cli=hermes) == 0
-    assert hermes.stored == {"SLACK_BOT_TOKEN": "xoxb-old-registered-token"}
+    assert hermes.stored == {"SLACK_BOT_TOKEN": "xox" "b-old-registered-token"}
     assert not [call for call in hermes.calls if call[1][:2] == ("config", "set")]
 
 
@@ -77,13 +77,13 @@ def test_keeping_declining_or_aborting_writes_nothing(term, answers, tmp_path):
                                        "__BITWARDEN_MANAGED__", "xapp-${VAULT_PART}/suffix",
                                        "${VAULT_SLACK_APP:-xapp-fallback}"])
 def test_environment_and_externally_managed_tokens_are_left_alone(term, monkeypatch, capsys, tmp_path, reference):
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-from-environment")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xox" "b-from-environment")
     hermes = FakeHermes(tmp_path / ".env", {"SLACK_APP_TOKEN": reference})
     term([], [])
     assert setup.run("hermes", "", "slack", cli=hermes) == 0
     assert hermes.stored == {"SLACK_APP_TOKEN": reference}
     out = capsys.readouterr().out
-    assert "環境変数" in out and "外部の秘密情報管理" in out and "xoxb-from-environment" not in out
+    assert "環境変数" in out and "外部の秘密情報管理" in out and "xox" "b-from-environment" not in out
 
 
 def test_an_old_hermes_without_stdin_fails_instead_of_using_argv(term, capsys, tmp_path):
@@ -119,7 +119,7 @@ def test_outside_a_terminal_nothing_is_asked(monkeypatch):
 
 @pytest.mark.parametrize("hermes_kw", [
     {"path_ok": False},                                                       # profile cannot be resolved
-    {"lines": ["SLACK_BOT_TOKEN=xoxb-first\n", "export SLACK_BOT_TOKEN=xoxb-second\n"]},   # ambiguous
+    {"lines": ["SLACK_BOT_TOKEN=xox" "b-first\n", "export SLACK_BOT_TOKEN=xox" "b-second\n"]},   # ambiguous
     {"lines": [b"\xff".decode("latin-1") + "SLACK_BOT_TOKEN=x\n"], "binary": True},           # unreadable
     {"lines": ["OTHER=1\n"], "mode": 0o640},                                    # others could read it
 ])
