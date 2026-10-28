@@ -46,7 +46,7 @@ def _operation(site, tmp_path, monkeypatch):
         monkeypatch.setattr(cli.config, "connector_settings", lambda *a, **k: None)
         monkeypatch.setattr(cli.config, "credentials_path", lambda *a: tmp_path / "credentials.json")
         def missing(*args):
-            raise ValueError("synthetic missing credentials")
+            raise cli.config.ConfigError("credentials_missing")
         monkeypatch.setattr(cli.config, "load_credentials", missing)
         monkeypatch.setattr(cli.config, "validate_credentials", lambda *a: None)
         monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)

@@ -1428,16 +1428,19 @@ def test_unreadable_semantic_seed_does_not_rollback_new_reply(tmp_path, raw):
     db.save_messages([_message(mid=1, body="合成の親投稿")], project_id=1, semantic=True)
     job = db.db.execute("SELECT job_id FROM fetch_jobs WHERE kind='semantic'").fetchone()[0]
     with db.db:
-        db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?", (raw, job))
+        db.db.execute("UPDATE fetch_jobs SET payload=?,attempts=4 WHERE job_id=?", (raw, job))
+    before = tuple(db.db.execute("SELECT job_id,state,payload,attempts FROM fetch_jobs WHERE job_id=?", (job,)).fetchone())
     db.save_messages([_message(mid=2, parent_id=1, body="合成の新しい返信")],
                      project_id=1, semantic=True)
     assert db.db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] == 2
-    row = db.db.execute("SELECT job_id,state,payload FROM fetch_jobs WHERE kind='semantic'").fetchone()
-    payload = json.loads(row["payload"])
-    assert row["job_id"] == job and row["state"] == "pending"
-    assert payload["targets"] == [2]
-    assert payload["source_generation"] == db._semantic_source_generation(1, 1)
-    assert not payload.get("eligible")
+    assert tuple(db.db.execute("SELECT job_id,state,payload,attempts FROM fetch_jobs WHERE job_id=?", (job,)).fetchone()) == before
+    rows = db.db.execute("SELECT content FROM artifacts WHERE kind='semantic_intake_hold_v1' AND project_id=1 AND model='1'").fetchall()
+    assert len(rows) == 1
+    held = json.loads(rows[0]["content"])
+    assert held["root_id"] == 1 and held["target_id"] == 2
+    assert held["source_generation"] == db._semantic_source_generation(1, 1)
+    assert held["fingerprint"] == db._semantic_message_fingerprint(1, 2)
+    assert held["event_id"] is None and held["origin"]["source"] == "history_import"
     assert db.db.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0] == 0
     db.close()
 

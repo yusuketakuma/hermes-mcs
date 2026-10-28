@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+import inference_version
 from ledger import Ledger
 import mcs_util
 import semantic_jev as jev
@@ -111,10 +112,13 @@ def test_scheduled_and_manual_reservations_do_not_double_count(home):
     with closing(Ledger(str(home / "data" / "ledger.db"))) as db:
         from extract_testkit import _message
         db.save_messages([_message(1, body="synthetic scheduled source")], project_id=1)
-        db.job_add("semantic", 1, 1, payload={"generation": "synthetic"})
+        db.job_add("semantic", 1, 1, payload={"generation": "synthetic",
+                   inference_version.VERSION_KEY: inference_version.CURRENT_VERSION})
         token = runtime.JobToken.from_row(db.db.execute("SELECT * FROM fetch_jobs WHERE kind='semantic'").fetchone())
+        assert runtime.job_matches(db, token)
         runtime.usage_reserver(db, token, kind="semantic_usage", model=jev.JEV_MODEL,
-                              project_id=1, message_id=1)({}, 1)
+                              project_id=1, message_id=1, config_path=home / "config.json")({}, 1)
+        assert jev_usage_today(db) == 1
     with jev.live_client("synthetic", operation="semantic_detect", root=str(home), post_fn=_answer) as client:
         _evaluate(client)
     assert _used(home) == 2
