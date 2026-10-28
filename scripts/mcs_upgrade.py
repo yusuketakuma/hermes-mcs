@@ -270,6 +270,10 @@ def _main(argv=None) -> int:
     ap.add_argument("--no-fetch", action="store_true",
                     help="通信せず、取得済みの版情報を使う")
     sub = ap.add_subparsers(dest="cmd", required=True)
+    recovery = sub.add_parser('reconcile-settings', help='導入設定の移行保留を確認・再開する')
+    recovery.add_argument('--to', required=True, help='確認済みの移行先の版')
+    recovery.add_argument('--confirm-human', action='store_true', help='担当者が復旧を確認したことを示す')
+    recovery.add_argument('--reason', help='確認理由（秘密や患者情報を含めない）')
     for name in ("plan", "apply", "guide"):
         p = sub.add_parser(name, help="更新内容を確認する（変更しません・JSON出力）" if name == "plan" else "日本語の対話形式で更新を案内する" if name == "guide" else "更新を実行する")
         target = p.add_mutually_exclusive_group()
@@ -297,9 +301,11 @@ def _main(argv=None) -> int:
                 or len(args.reason) > 200
                 or any(ord(char) < 32 or ord(char) == 127 for char in args.reason)):
             ap.error("未公開候補の適用には --confirm-human と200字以内の理由が必要です")
-    elif base_sha is not None or getattr(args, "confirm_human", False) \
-            or getattr(args, "reason", None) is not None:
+    elif args.cmd != 'reconcile-settings' and (base_sha is not None or getattr(args, "confirm_human", False) \
+            or getattr(args, "reason", None) is not None):
         ap.error("更新前SHA・本人確認・理由は --candidate-sha と一緒に指定してください")
+    if args.cmd == 'reconcile-settings' and bool(args.confirm_human) != bool(args.reason):
+        ap.error('復旧には --confirm-human と理由を一緒に指定してください')
     if args.cmd == "guide":
         if not sys.stdin.isatty():
             print("対話形式の更新はターミナルで mcs update を実行してください。")
@@ -316,14 +322,15 @@ def _main(argv=None) -> int:
     with ExitStack() as scope:
         try:
             runtime_home = os.path.abspath(os.path.expanduser(os.environ.get('MCS_ROOT', '~/.mcs')))
-            scope.enter_context(_release_scope(runtime_home))
+            if args.cmd != 'reconcile-settings' or args.confirm_human:
+                scope.enter_context(_release_scope(runtime_home))
         except (OSError, ValueError):
             print('release制御の確認中または状態が不明なため、通常の更新を停止しました。')
             return 2
         repo = os.path.realpath(_git(args.repo, "rev-parse", "--show-toplevel").strip())
         if not args.no_fetch and candidate_sha is None:
             _git(repo, "fetch", "--tags", "origin")
-        if args.keep_hermes_checkout and not COMMIT_SHA_RE.fullmatch(args.keep_hermes_checkout):
+        if getattr(args, 'keep_hermes_checkout', None) and not COMMIT_SHA_RE.fullmatch(args.keep_hermes_checkout):
             raise SystemExit("--keep-hermes-checkout には省略しない40桁の16進数のコミット識別子が必要です")
         tag = candidate_sha or args.to or latest_tag(repo)
         if candidate_sha is not None:
@@ -339,12 +346,18 @@ def _main(argv=None) -> int:
         tmp = tempfile.mkdtemp(prefix="mcs_upgrade_")
         try:
             extract(repo, tag, tmp, local_candidate=candidate_sha is not None)
-            updater = os.path.join(tmp, "mcs", "ops", "mcs_update.py")
+            updater = os.path.join(tmp, "mcs", "ops", "settings_migration_reconcile.py"
+                                   if args.cmd == 'reconcile-settings' else "mcs_update.py")
             if not os.path.exists(updater):
-                raise SystemExit(f"{tag} に更新プログラム mcs/ops/mcs_update.py がありません")
-            cmd = [sys.executable, updater, "plan" if args.cmd == "guide" else args.cmd]
-            cmd += (["--candidate-sha", candidate_sha, "--base-sha", base_sha]
-                    if candidate_sha is not None else ["--tag", tag])
+                raise SystemExit(f"{tag} に必要な更新プログラムがありません")
+            if args.cmd == 'reconcile-settings':
+                cmd = [sys.executable, updater]
+                if args.confirm_human:
+                    cmd += ['--confirm-human', f'--reason={args.reason}']
+            else:
+                cmd = [sys.executable, updater, "plan" if args.cmd == "guide" else args.cmd]
+                cmd += (["--candidate-sha", candidate_sha, "--base-sha", base_sha]
+                        if candidate_sha is not None else ["--tag", tag])
             if args.cmd == "apply":
                 cmd += ["--reinstall"] if args.reinstall else []
                 cmd += [f"--install-arg={a}" for a in args.install_arg]
@@ -353,7 +366,7 @@ def _main(argv=None) -> int:
             env = {**os.environ, "MCS_UPDATE_REPO": repo}
             env.pop("MCS_UPDATE_KEEP_HERMES_CHECKOUT", None)
             env.pop("MCS_UPDATE_OPTIONS_EXPECTED", None)
-            if args.keep_hermes_checkout:
+            if getattr(args, 'keep_hermes_checkout', None):
                 env["MCS_UPDATE_KEEP_HERMES_CHECKOUT"] = args.keep_hermes_checkout
             try:
                 if args.cmd == "guide":

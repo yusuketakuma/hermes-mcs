@@ -4,14 +4,18 @@ reinstall. Fully synthetic: temp git repos, stubbed launchctl/install.sh.
 import mcs_util
 import service_contract
 import service_management
+import safe_io
+import settings_migration_receipt
 import update_discovery
 import update_launch
 import importlib.util
 import fcntl
+import hashlib
 import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 import uuid
 
@@ -31,12 +35,76 @@ updater = test_mcs_update.updater   # shared fixture
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _assert_migration_evidence(path, legacy):
+    evidence = json.loads(path.read_bytes())
+    assert evidence['v'] == 2 and evidence['kind'] == 'install-options-migration'
+    assert evidence['legacy_sha256'] == hashlib.sha256(legacy.read_bytes()).hexdigest()
+    assert len(evidence['base_sha256']) == 64 and len(evidence['operation']) == 32
+
+
 def _launcher():
     spec = importlib.util.spec_from_file_location(
         "mcs_upgrade_launcher", ROOT / "scripts" / "mcs_upgrade.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+@pytest.mark.parametrize('confirmed', [False, True])
+def test_reconciliation_launcher_runs_verified_target_helper_without_fetch(
+        tmp_path, monkeypatch, capfd, confirmed):
+    repo, bare = _make_repo(tmp_path)
+    stub = "import json,sys\nprint(json.dumps({'argv':sys.argv[1:]}))\n"
+    _release(tmp_path / 'remote-work', bare, 'v1.2.0',
+             {'mcs/ops/settings_migration_reconcile.py': stub, 'mcs/_mcs_path.py': ''})
+    _git(repo, 'fetch', '-q', '--tags')
+    _git(repo, 'remote', 'set-url', 'origin', str(tmp_path / 'missing-remote'))
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('MCS_ROOT', str(tmp_path / 'synthetic-mcs'))
+    args = ['--repo', str(repo), '--no-fetch', 'reconcile-settings', '--to', 'v1.2.0']
+    if confirmed:
+        args += ['--confirm-human', '--reason', 'synthetic review']
+    assert _launcher().main(args) == 0
+    result = json.loads(capfd.readouterr().out)
+    assert result['argv'] == (['--confirm-human', '--reason=synthetic review'] if confirmed else [])
+    if not confirmed:
+        assert not (tmp_path / '.mcs-release-control').exists()
+
+
+def test_reconciliation_launcher_extracts_the_real_helper_and_dependencies(tmp_path, monkeypatch, capfd):
+    repo, bare = _make_repo(tmp_path)
+    files = ('mcs/_mcs_path.py', 'mcs/core/safe_io.py', 'mcs/core/mcs_util.py',
+             'mcs/core/install_options_contract.py', 'mcs/ops/config_edit.py',
+             'mcs/ops/install_options.py', 'mcs/ops/settings_migration_receipt.py',
+             'mcs/ops/settings_migration_reconcile.py', 'mcs/ops/update_journal.py',
+             'mcs/ops/release_apply_owner.py')
+    _release(tmp_path / 'remote-work', bare, 'v1.2.0', {name: (ROOT / name).read_text() for name in files})
+    _git(repo, 'fetch', '-q', '--tags')
+    _git(repo, 'remote', 'set-url', 'origin', str(tmp_path / 'missing-remote'))
+    root = tmp_path / 'synthetic-mcs'
+    data = root / 'data'
+    data.mkdir(parents=True, mode=0o700)
+    config, legacy = root / 'config.json', data / 'install_options.json'
+    config.write_text('{"unknown": {"keep": true}}')
+    config.chmod(0o600)
+    legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
+    import install_options
+    base = install_options.inspect(config, legacy)
+    _, digest = install_options._legacy(legacy)
+    evidence = settings_migration_receipt.Receipt(data, base, digest)
+    evidence.begin()
+    evidence.close()
+    before = config.read_bytes(), legacy.read_bytes()
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setenv('MCS_ROOT', str(root))
+    args = ['--repo', str(repo), '--no-fetch', 'reconcile-settings', '--to', 'v1.2.0']
+    assert _launcher().main(args) == 0
+    assert '設定へのコピー前' in capfd.readouterr().out
+    assert _launcher().main(args + ['--confirm-human', '--reason', 'synthetic review']) == 0
+    assert '保留を解除しました' in capfd.readouterr().out
+    assert (config.read_bytes(), legacy.read_bytes()) == before
+    assert not (root / settings_migration_receipt.NAME).exists()
+    assert len(list(root.glob('.install-options-migration.reconcile.*'))) == 1
 
 
 def test_release_fence_stops_old_target_before_git_extraction_or_python(tmp_path, monkeypatch):
@@ -418,7 +486,7 @@ def test_plan_routes_install_change_to_reinstall(updater, monkeypatch, tmp_path)
 @pytest.mark.parametrize(('config', 'legacy', 'status', 'route'), [
     ('{}', '{"v": 1, "install_args": []}', 'required', 'apply'),
     ('{"install_args": []}', '{"v": 1, "install_args": []}', 'none', 'noop'),
-    ('{}', '{broken', 'unverified', 'noop'),
+    ('{}', '{broken', 'unverified', 'blocked'),
 ])
 def test_noop_plan_detects_missing_or_unverified_migration_without_writing(
         updater, monkeypatch, tmp_path, config, legacy, status, route):
@@ -434,6 +502,19 @@ def test_noop_plan_detects_missing_or_unverified_migration_without_writing(
     assert result['settings_migration'] == status and result['route'] == route
     assert ('settings_migration_unverified' in result['blockers']) == (status == 'unverified')
     assert (config_path.read_bytes(), record.read_bytes()) == before
+
+
+def test_noop_plan_reports_pending_as_blocked(updater, monkeypatch, tmp_path):
+    _plan_env(updater, monkeypatch, tmp_path, [])
+    marker = Path(updater.DATA).parent / settings_migration_receipt.NAME
+    marker.write_bytes(settings_migration_receipt.BODY)
+    sha = 'a' * 40
+    result = updater._plan('v1.2.0', {}, updater.journal_store.default_state(),
+                           {'tag': 'v1.2.0', 'sha': sha}, sha)
+    assert result['settings_migration'] == 'pending'
+    assert result['route'] == 'blocked'
+    assert 'settings_migration_pending' in result['blockers']
+    assert marker.read_bytes() == settings_migration_receipt.BODY
 
 
 def test_noop_migration_requiring_reinstall_does_not_claim_repair(updater, monkeypatch, tmp_path):
@@ -598,6 +679,117 @@ def test_postmerge_lost_settings_do_not_record_update_success(updater, monkeypat
     assert not state.get('applied')
     assert 'install_options_unverified' in state['attempts']['v1.2.0']['detail']
     assert legacy.read_bytes() == original
+
+
+def test_config_sync_failure_keeps_receipt_and_blocks_future_mutations(updater, monkeypatch, tmp_path):
+    _apply_env(updater, monkeypatch)
+    sha = _release(tmp_path / 'remote-work', tmp_path / 'remote.git', 'v1.2.0', {'f.txt': 'new'})
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
+    config = Path(mcs_util.CONF_PATH)
+    config.write_text('{"unknown": {"keep": true}}')
+    legacy = Path(updater.DATA) / 'install_options.json'
+    legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
+    original_fsync = safe_io.fsync_dir
+
+    def fail_config_directory(path, **kwargs):
+        if Path(path) == config.parent:
+            _assert_migration_evidence(Path(updater.DATA).parent / settings_migration_receipt.NAME, legacy)
+            raise OSError('synthetic config directory fsync failure')
+        return original_fsync(path, **kwargs)
+
+    monkeypatch.setattr(safe_io, 'fsync_dir', fail_config_directory)
+    assert updater.apply('v1.2.0', sha, None) == 1
+    marker = Path(updater.DATA).parent / settings_migration_receipt.NAME
+    _assert_migration_evidence(marker, legacy)
+    assert json.loads(config.read_text())['install_args'] == ['--no-llm']
+    original = (config.read_bytes(), legacy.read_bytes(), marker.read_bytes(),
+                Path(updater.STATE_PATH).read_bytes())
+    assert updater.apply('v1.2.0', sha, None) == 2
+    assert updater.rollback() == 2
+    assert updater.recover_interrupted() == 2
+    assert updater.cmd_check() == 2
+    assert updater._release_migration_probe(time.monotonic() + 10) == 'unverified'
+    assert (config.read_bytes(), legacy.read_bytes(), marker.read_bytes(),
+            Path(updater.STATE_PATH).read_bytes()) == original
+
+
+def test_receipt_sync_failure_stops_before_config_publication(updater, monkeypatch, tmp_path):
+    _apply_env(updater, monkeypatch)
+    sha = _release(tmp_path / 'remote-work', tmp_path / 'remote.git', 'v1.2.0', {'f.txt': 'new'})
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
+    config = Path(mcs_util.CONF_PATH)
+    config.write_text('{"unknown": {"keep": true}}')
+    legacy = Path(updater.DATA) / 'install_options.json'
+    legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
+    original = config.read_bytes(), legacy.read_bytes()
+    begin = settings_migration_receipt.Receipt.begin
+
+    def uncertain_begin(item):
+        begin(item)
+        raise OSError('synthetic receipt directory fsync result unknown')
+
+    monkeypatch.setattr(settings_migration_receipt.Receipt, 'begin', uncertain_begin)
+    assert updater.apply('v1.2.0', sha, None) == 1
+    assert (config.read_bytes(), legacy.read_bytes()) == original
+    _assert_migration_evidence(Path(updater.DATA).parent / settings_migration_receipt.NAME, legacy)
+
+
+def test_data_replacement_during_publication_keeps_root_receipt(updater, monkeypatch, tmp_path):
+    _apply_env(updater, monkeypatch)
+    sha = _release(tmp_path / 'remote-work', tmp_path / 'remote.git', 'v1.2.0', {'f.txt': 'new'})
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
+    config = Path(mcs_util.CONF_PATH)
+    config.write_text('{"unknown": {"keep": true}}')
+    data = Path(updater.DATA)
+    legacy = data / 'install_options.json'
+    legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
+    begin = settings_migration_receipt.Receipt.begin
+
+    def replace_data_after_begin(item):
+        begin(item)
+        raw = legacy.read_bytes()
+        data.rename(data.with_name('old-synthetic-data'))
+        data.mkdir(mode=0o700)
+        legacy.write_bytes(raw)
+
+    monkeypatch.setattr(settings_migration_receipt.Receipt, 'begin', replace_data_after_begin)
+    assert updater.apply('v1.2.0', sha, None) == 2
+    marker = data.parent / settings_migration_receipt.NAME
+    _assert_migration_evidence(marker, legacy)
+    assert settings_migration_receipt.pending(data)
+    assert config.read_text() == '{"unknown": {"keep": true}}'
+    assert not (data / 'update_state.json').exists()
+    assert updater.apply('v1.2.0', sha, None) == 2
+
+
+def test_data_replacement_after_config_publication_keeps_root_receipt(updater, monkeypatch, tmp_path):
+    _apply_env(updater, monkeypatch)
+    sha = _release(tmp_path / 'remote-work', tmp_path / 'remote.git', 'v1.2.0', {'f.txt': 'new'})
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
+    config = Path(mcs_util.CONF_PATH)
+    config.write_text('{"unknown": {"keep": true}}')
+    data = Path(updater.DATA)
+    legacy = data / 'install_options.json'
+    legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
+    original_fsync = safe_io.fsync_dir
+    changed = []
+
+    def replace_data_after_rename(path, **kwargs):
+        if Path(path) == config.parent and not changed:
+            changed.append(True)
+            raw = legacy.read_bytes()
+            data.rename(data.with_name('old-synthetic-data'))
+            data.mkdir(mode=0o700)
+            legacy.write_bytes(raw)
+        return original_fsync(path, **kwargs)
+
+    monkeypatch.setattr(safe_io, 'fsync_dir', replace_data_after_rename)
+    assert updater.apply('v1.2.0', sha, None) == 2
+    assert changed and json.loads(config.read_text())['install_args'] == ['--no-llm']
+    marker = data.parent / settings_migration_receipt.NAME
+    _assert_migration_evidence(marker, legacy)
+    assert not (data / 'update_state.json').exists()
+    assert updater.apply('v1.2.0', sha, None) == 2
 
 
 def test_update_rollback_keeps_legacy_record_and_migrated_settings(updater, monkeypatch, tmp_path):

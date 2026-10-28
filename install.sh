@@ -652,6 +652,9 @@ preflight() {
     if custom_home_blocks_services; then
         pf_ng "常駐サービスは独自の HERMES_HOME（${HERMES_HOME}）に対応していません" "既定の ~/.hermes を使うか、--no-services でサービス登録を省略してください"
     fi
+    if [ -e "$MCS_ROOT/.install-options-migration.pending" ] || [ -L "$MCS_ROOT/.install-options-migration.pending" ]; then
+        pf_ng "導入設定の移行結果を確認できません" "保留記録と設定を保持し、担当者に確認してください"
+    fi
 
     if [ "$OS" = Darwin ]; then
         if [ -x "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" ]; then pf_ok "Google Chrome は導入済みです"
@@ -734,7 +737,7 @@ set --
 OPTIONS_BASE=empty
 OPTIONS_ACTION=inspect
 [ -z "${MCS_UPDATE_REINSTALL:-}" ] || OPTIONS_ACTION=inspect-update
-if { [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ] || [ -e "$MCS_DATA/install_options.json" ] || [ -L "$MCS_DATA/install_options.json" ]; }; then
+if { [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ] || [ -e "$MCS_DATA" ] || [ -L "$MCS_DATA" ] || [ -e "$MCS_ROOT/.install-options-migration.pending" ] || [ -L "$MCS_ROOT/.install-options-migration.pending" ]; }; then
     OPTIONS_PY="${MODE_PY:-}"
     [ -n "$OPTIONS_PY" ] || OPTIONS_PY="$(command -v python3 || true)"
     [ -n "$OPTIONS_PY" ] || die "以前の導入設定の確認には Python が必要です。変更は行っていません"

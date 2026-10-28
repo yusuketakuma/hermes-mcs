@@ -1,0 +1,8 @@
+{
+  "category": "security",
+  "title": "導入設定の移行中断を保留として検出",
+  "summary": "導入設定の移行中に保存結果を確認できなくなった場合、新版の導入・更新・復旧を停止します。",
+  "upgrade": "保留時は設定と記録を保持し、更新ガイドの確認・復旧手順を使ってください。旧版は保留記録を認識しません。",
+  "details": ["移行前に設定フォルダーの記録を排他的に作成して同期し、設定の保存と照合が完了してから取り除きます。", "設定とdataのフォルダーは本人が所有し、グループと他のユーザーが書き込めない必要があります。ACLは確認しません。", "復旧は担当者の確認と理由が必要です。旧記録や保存先の不一致、旧形式の保留記録、release更新の保留は自動解除しません。"],
+  "refs": ["mcs/ops/settings_migration_receipt.py", "mcs/ops/settings_migration_reconcile.py", "deployment/recovery/mcs_recover.py"]
+}

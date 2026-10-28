@@ -62,6 +62,7 @@ import mcs_config  # noqa: E402
 import install_options  # noqa: E402
 import install_options_contract  # noqa: E402
 import update_migrations  # noqa: E402
+import settings_migration_receipt  # noqa: E402
 import update_journal as journal_store  # noqa: E402
 import update_policy  # noqa: E402
 import owned_process  # noqa: E402
@@ -240,6 +241,9 @@ def _release_legacy_blocked(state):
 
 
 def _release_legacy_hold(state):
+    if settings_migration_receipt.pending(DATA):
+        print('導入設定の移行結果を確認できません。保留記録と設定を保持し、担当者に確認してください。')
+        return True
     if _release_legacy_blocked(state):
         print('release更新の制御状態を確認する必要があります。通常の更新・復旧は停止しました。状態ファイルを削除せず、release statusで確認してください。')
         return True
@@ -251,6 +255,9 @@ _RELEASE_GATE_FD = ContextVar('mcs_update_release_gate_fd', default=None)
 
 def _call_legacy(function, *args, **kwargs):
     # Only entry/cleanup failures are converted to hold; preserve the old body's exception contract.
+    if settings_migration_receipt.pending(DATA):
+        print('導入設定の移行結果を確認できません。保留記録と設定を保持し、担当者に確認してください。')
+        return 2
     with ExitStack() as stack:
         try:
             if _release_legacy_scope is None:
@@ -965,9 +972,13 @@ def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> d
     blockers, reinstall = decision["blockers"], decision["reinstall"]
     noop = cur_sha == target_sha
     try:
-        migration_needed, _, _ = update_migrations.plan(
-            mcs_util.CONF_PATH, os.path.join(DATA, "install_options.json"))
-        migration_status = "required" if migration_needed else "none"
+        if settings_migration_receipt.pending(DATA):
+            migration_status = "pending"
+            blockers.append("settings_migration_pending")
+        else:
+            migration_needed, _, _ = update_migrations.plan(
+                mcs_util.CONF_PATH, os.path.join(DATA, "install_options.json"))
+            migration_status = "required" if migration_needed else "none"
     except (OSError, ValueError, TypeError, RecursionError):
         migration_status = "unverified"
         blockers.append("settings_migration_unverified")
@@ -978,7 +989,7 @@ def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> d
             route = "blocked"
         else:
             route = "apply"
-    elif not noop and migration_status == "unverified":
+    elif migration_status in ("unverified", "pending"):
         route = "blocked"
     interactive = (cfg.get("notify") or {}).get("interactive") \
         if isinstance(cfg.get("notify"), dict) else None
@@ -1025,12 +1036,13 @@ def _install_options_snapshot():
 def _release_migration_probe(deadline):
     # Release-owned preflight is time-bounded and must not print config values.
     source = ("import sys; sys.path.insert(0, sys.argv[1]); import _mcs_path; "
-              "import update_migrations; "
-              "print('required' if update_migrations.plan(sys.argv[2], sys.argv[3])[0] else 'none')")
+              "import update_migrations, settings_migration_receipt as receipt; "
+              "print('unverified' if receipt.pending(sys.argv[4]) else "
+              "'required' if update_migrations.plan(sys.argv[2], sys.argv[3])[0] else 'none')")
     try:
         result = owned_process.run_owned(
             [sys.executable, '-I', '-B', '-c', source, str(Path(__file__).resolve().parent.parent),
-             mcs_util.CONF_PATH, os.path.join(DATA, 'install_options.json')],
+             mcs_util.CONF_PATH, os.path.join(DATA, 'install_options.json'), DATA],
             _bounded_timeout(5, deadline),
             {'PATH': '/usr/bin:/bin', 'HOME': os.path.expanduser('~'), 'LC_ALL': 'C'},
             stdin=subprocess.DEVNULL, deadline=deadline)
@@ -2112,6 +2124,9 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
     borrowed = None
     options_base = None
     lifetime = ExitStack()
+    if settings_migration_receipt.pending(DATA):
+        print('導入設定の移行結果を確認できません。保留記録と設定を保持し、担当者に確認してください。')
+        return 2
     if _release_cap is not None:
         import release_apply_owner
         borrowed = release_apply_owner._claim_effect_entry(_release_cap,
@@ -2383,13 +2398,35 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             if borrowed is None:
                 # Existing command drainers hold run.lock while writing config.
                 # The old watchdog treats this applying-free journal as pre-merge.
+                receipt = None
+                def before_settings_publication():
+                    nonlocal receipt
+                    _, legacy_digest = install_options._legacy(os.path.join(DATA, 'install_options.json'))
+                    receipt = settings_migration_receipt.Receipt(DATA, options_base, legacy_digest)
+                    receipt.begin()
+                    receipt.check()
+                    journal(state, "settings_migration")
                 try:
-                    update_migrations.apply(
+                    migrated = update_migrations.apply(
                         mcs_util.CONF_PATH, os.path.join(DATA, "install_options.json"), options_base,
-                        lambda: journal(state, "settings_migration"))
+                        before_settings_publication)
+                    if migrated and update_migrations.plan(
+                            mcs_util.CONF_PATH, os.path.join(DATA, "install_options.json"))[0]:
+                        raise ValueError('settings_migration_lost')
                     options_base, _ = _install_options_snapshot()
+                    if receipt is not None:
+                        receipt.finish()
                 except (update_migrations.MigrationError, OSError, ValueError, TypeError, RecursionError):
+                    if receipt is not None:
+                        try:
+                            receipt._parent()
+                        except (OSError, ValueError):
+                            print('導入設定の保存先が変更されたため停止しました。保留記録と設定を保持し、担当者に確認してください。')
+                            return 2
                     return bail("settings_migration_unverified: 設定の移行結果を確認してください")
+                finally:
+                    if receipt is not None:
+                        receipt.close()
             if _head_sha(**before_args) == sha:
                 # idempotent: already on the target — record and exit
                 if borrowed is None:
