@@ -903,21 +903,76 @@ def test_wizard_defaults_and_gates(monkeypatch, tmp_path):
     assert mcs_setup.main() == 0
     cfg = json.loads((tmp_path / "c.json").read_text())
     assert cfg["self_posts"] is False
-    assert cfg["metadata_shadow"] is False
+    assert "metadata_shadow" not in cfg
     assert cfg["deep_history"] is True
-    assert cfg["trickle_pages"] == 3
+    assert "trickle_pages" not in cfg
     # interactive defaults to off -> discord/card keys never asked
     assert cfg["notify"] == {"interactive": "off"}
     # signals.notify off -> digest items gated out
-    assert cfg["signals"] == {"notify": False}
+    assert "signals" not in cfg
     # Auto keeps mode/scope unspecified; without a key the effective mode stays off.
-    assert cfg["semantic"] == {"extract_qc": "off"}
+    assert "semantic" not in cfg
     from semantic_policy import semantic_config
     effective, errors = semantic_config(cfg)
     assert not errors
     assert effective["mode"] == "off"
     assert effective["project_ids"] == []
     assert effective["daily_request_budget"] == 10000
+
+
+def test_recommended_wizard_preserves_unasked_values_and_asks_changed_defaults(monkeypatch):
+    import setup_wizard
+
+    cfg = {
+        "mcs_login_id": "synthetic", "notify_target": "slack:C12345678",
+        "metadata_shadow": True, "trickle_pages": 7,
+        "signals": {"notify": True, "self_organizations": ["synthetic"]},
+        "notify": {"interactive": "slack", "slack": {
+            "profile": "synthetic", "application_id": "A1", "team_id": "T1",
+            "channel_id": "C12345678"}},
+    }
+    asked = []
+
+    def answer(key, kind, default, desc, cur, present=False):
+        asked.append(key)
+        if key == "setup_detail":
+            return "recommended"
+        return cur if present else default if default is not None else setup_wizard.UNSET
+
+    monkeypatch.setattr(setup_wizard, "ask", answer)
+    setup_wizard.wizard(cfg)
+    assert cfg["metadata_shadow"] is True and cfg["trickle_pages"] == 7
+    assert cfg["signals"]["self_organizations"] == ["synthetic"]
+    assert cfg["notify"]["card_thread"] is True and cfg["signals"]["digest"] is False
+    assert "notify.card_thread" in asked and "signals.digest" in asked
+    unasked = (
+        "notify.operator", "notify.card_thread_archive_min", "notify.route_epoch",
+        "notify_bot_profile", "notify_max_age_h", "notify_all_replies", "hermes_bin",
+        "daily_digest.enabled", "daily_digest.hour_jst", "daily_digest.include_names",
+        "daily_digest.scope", "metadata_refresh_publish", "metadata_actors",
+        "clinical_metadata", "discover_archived", "job_budget_seconds", "local_llm.url",
+        "local_llm.model", "signals.digest_interval_h", "signals.self_professions",
+        "signals.request_targets", "signals.med_exclude_names", "semantic.mode",
+        "semantic.extract_qc", "semantic.daily_request_budget",
+    )
+    for key in unasked:
+        assert not setup_wizard.has_key(cfg, key) and key not in asked
+
+
+def test_recommended_wizard_keeps_explicit_notification_choices(monkeypatch):
+    import setup_wizard
+
+    cfg = {"mcs_login_id": "synthetic", "notify_target": "slack:C12345678",
+           "signals": {"notify": True, "digest": True},
+           "notify": {"interactive": "slack", "card_thread": False, "slack": {
+               "profile": "synthetic", "application_id": "A1", "team_id": "T1",
+               "channel_id": "C12345678"}}}
+    monkeypatch.setattr(setup_wizard, "ask", lambda key, kind, default, desc, cur, present=False:
+                        "recommended" if key == "setup_detail" else
+                        cur if present else default if default is not None else setup_wizard.UNSET)
+    setup_wizard.wizard(cfg)
+    assert cfg["notify"]["card_thread"] is False
+    assert cfg["signals"]["digest"] is True
 
 
 def test_wizard_discord_scope_and_answers(monkeypatch, tmp_path):
