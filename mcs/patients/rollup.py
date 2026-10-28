@@ -241,6 +241,8 @@ _VITAL_UNCERTAIN_TAIL = re.compile(
     r"(?:の)?測定(?:は|を)?(?:していない|していません|せず|しない|予定))"
 )
 _VITAL_UNCERTAIN_PREFIX = re.compile(r"(?:未測定|未確認|推定|推測)(?:の|された)?\s*$")
+# Match the writer's standalone pulse label without treating BP or SpO2 as P.
+_PULSE_LABEL = r"(?<![A-Za-z])P(?![A-Za-z])[:：は]?\s*(\d{2,3})(?![\d.．])"
 
 
 _no_artifact_fence = object()
@@ -441,7 +443,8 @@ def _dated_vitals(m, values, patient_name):
         pattern = VITAL_PATTERNS.get(pattern_key)
         if pattern is None:
             return False, None
-        matches = [match for match in re.finditer(pattern, body, re.I)
+        patterns = (pattern, _PULSE_LABEL) if key == "hr" else (pattern,)
+        matches = [match for candidate in patterns for match in re.finditer(candidate, body, re.I)
                    if vital_match_values(pattern_key, match).get(key) == value
                    and clinical_scope.patient_source_scope(body, *match.span(), patient_name=patient_name,
                                                            measurement=True) == "patient"]
@@ -469,6 +472,13 @@ def _dated_vitals(m, values, patient_name):
             or written_day(marker[0].group(1)) != day
             or context_state.paired_date_conflict(clause, m["posted_at_ts"])):
         return True, None
+    # The date can carry a different owner from the measurement label:
+    # "家族の2026-09-19測定でP72" must not become the patient's pulse.
+    date_start = start + marker[0].start(1)
+    date_end = start + marker[0].end(1)
+    if clinical_scope.patient_source_scope(body, date_start, date_end,
+                                            patient_name=patient_name, measurement=True) != "patient":
+        return False, None
     return True, _posted_measurement_day(m, day[1].isoformat())
 
 
@@ -477,7 +487,7 @@ def _has_patient_vital(body, patient_name):
         return False
     return any(clinical_scope.patient_source_scope(body, *match.span(), patient_name=patient_name,
                                                     measurement=True) == "patient"
-               for pattern in VITAL_PATTERNS.values()
+               for pattern in (*VITAL_PATTERNS.values(), _PULSE_LABEL)
                for match in re.finditer(pattern, body, re.I))
 
 
@@ -492,7 +502,7 @@ def _noncurrent_vital_reference(body, values):
     if len(matches) != 1 or vital_match_values("bt", matches[0]).get("bt") != values["bt"]:
         return None
     # A second person or second measurement makes the sentence ambiguous.
-    if len([match for pattern in VITAL_PATTERNS.values()
+    if len([match for pattern in (*VITAL_PATTERNS.values(), _PULSE_LABEL)
             for match in re.finditer(pattern, text, re.I)]) != 1:
         return None
     if re.match(r"^家族の\d{4}[-/年]", text) and not re.search(r"本人|患者|利用者", text):
