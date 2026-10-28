@@ -39,6 +39,7 @@ publishing them (INV-15/21).
 import argparse
 from contextlib import closing
 import json
+import math
 import os
 import sys
 import time
@@ -146,11 +147,32 @@ def status_report(ledger, cfg: dict | None = None) -> dict:
     oldest = ledger.db.execute(
         "SELECT MIN(created_at) FROM fetch_jobs WHERE kind=? AND state='pending'",
         (semantic_policy.JOB_KIND,)).fetchone()[0]
+    reprocess_held = {'status': 'unverified', 'count': None, 'observed_at': None}
+    row = ledger.db.execute(
+        'SELECT substr(payload,1,?) FROM fetch_jobs WHERE kind=? AND project_id=0 AND message_id=0',
+        (semantic_drain._REPROCESS_JOB_MAX_BYTES + 1, semantic_policy.SCHED_KIND)).fetchone()
+    raw = row[0] if row else None
+    if isinstance(raw, str) and len(raw.encode('utf-8')) <= semantic_drain._REPROCESS_JOB_MAX_BYTES:
+        from inference_version import is_current
+        from mcs_util import strict_json
+        try:
+            scheduler = strict_json(raw)
+        except (TypeError, ValueError, RecursionError):
+            scheduler = None
+        progress = scheduler.get('inference_reprocess') if isinstance(scheduler, dict) else None
+        coverage = progress.get('coverage') if isinstance(progress, dict) and is_current(progress) else None
+        counts = coverage.get('counts') if isinstance(coverage, dict) else None
+        observed = coverage.get('observed_at') if isinstance(coverage, dict) else None
+        held = counts.get('held', 0) if isinstance(counts, dict) else None
+        if (type(held) is int and 0 <= held < 2**63
+                and type(observed) in (int, float) and math.isfinite(observed) and observed >= 0):
+            reprocess_held = {'status': 'previous_scan', 'count': held, 'observed_at': observed}
     try:
         usage = {"jev_requests_today": semantic_store.jev_usage_today(ledger)}
     except ValueError:
         usage = {"jev_requests_today": None, "jev_usage_error": "semantic_usage_invalid"}
-    return {"semantic_jobs": jobs, "audit_statuses": history["audit_statuses"],
+    return {"semantic_jobs": jobs, "reprocess_held": reprocess_held,
+            "audit_statuses": history["audit_statuses"],
             "canonical_readiness": _canonical_readiness(ledger, cfg),
             "audit_statuses_scope": "history", "history": history,
             "current_quality": current_quality(ledger, cfg),
