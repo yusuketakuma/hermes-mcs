@@ -665,6 +665,21 @@ def build_health(db, result: dict, status: str,
             "ratio": round(current / total, 4) if total else None,
             "counted_at": now, "source": source}
     coll = collection(result)
+    try:
+        import semantic_intake_hold
+        unstored_state = 'present' if semantic_intake_hold.unstored_epoch(db) else 'none_observed'
+    except sqlite3.Error:
+        unstored_state = 'unverified'
+    previous_intake = prev_health()
+    diagnostic_unpersisted = (any(
+        isinstance(error, str) and ': semantic_intake_diagnostic_unpersisted' in error
+        for error in result.get('errors', ()))
+        or previous_intake.get('semantic_intake_diagnostic_unpersisted') is True
+        and previous_intake.get('semantic_intake_source') == source)
+    if diagnostic_unpersisted:
+        unstored_state = 'unverified'
+    if unstored_state != 'none_observed':
+        coll['collection'] = 'incomplete'
     free_mb = attachment_free_mb()
     cards_health = notify_scope.health_cards(db, cfg)
     # Itemized attention separates synthetic job and delivery populations;
@@ -797,6 +812,9 @@ def build_health(db, result: dict, status: str,
         "at": now,
         "unread_at": unread_at(result, status, now),
         **coll,
+        "semantic_intake_unstored": unstored_state,
+        "semantic_intake_diagnostic_unpersisted": diagnostic_unpersisted,
+        "semantic_intake_source": source,
         "collection_diagnostics": collection_diagnostics_health(db, real_errors, now),
         "disk_free_mb": round(free_mb) if free_mb is not None else None,
         "disk_low": disk_low,

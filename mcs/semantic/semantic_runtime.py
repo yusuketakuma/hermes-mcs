@@ -180,10 +180,17 @@ def job_matches(ledger, token: JobToken) -> bool:
     from inference_version import is_current
     if not is_current(parse_payload({'payload': token.payload_raw})):
         return False
+    if token.kind == 'semantic':
+        import semantic_intake_hold
+        semantic_intake_hold.validate_indexes(ledger.db)
     row = ledger.db.execute(
-        "SELECT job_id,kind,project_id,message_id,state,attempts,payload "
+        "SELECT job_id,kind,project_id,message_id,state,attempts,payload, "
+        "CASE WHEN kind='semantic' AND EXISTS (SELECT 1 FROM main.artifacts "
+        "INDEXED BY idx_semantic_intake_hold_root WHERE kind='semantic_intake_hold_v1' "
+        "AND project_id=fetch_jobs.project_id AND model=CAST(fetch_jobs.message_id AS TEXT)) "
+        "THEN 1 ELSE 0 END AS intake_held "
         "FROM fetch_jobs WHERE job_id=?", (token.job_id,)).fetchone()
-    if row is None:
+    if row is None or row['intake_held']:
         return False
     current = JobToken.from_row(row)
     return (current.kind == token.kind
@@ -211,6 +218,10 @@ def _where_args(token: JobToken) -> tuple:
 # forever (S-6). The rescue only applies when the token itself carries
 # the normalized "{}" — real payloads still require an exact match.
 _PAYLOAD_MATCH = ("(payload=? OR (COALESCE(payload,'')='' AND ?='{}'))")
+_NO_INTAKE_HOLD = (
+    " AND (kind!='semantic' OR NOT EXISTS (SELECT 1 FROM main.artifacts "
+    "INDEXED BY idx_semantic_intake_hold_root WHERE kind='semantic_intake_hold_v1' "
+    "AND project_id=fetch_jobs.project_id AND model=CAST(fetch_jobs.message_id AS TEXT)))")
 
 
 def transition_tx(ledger, token: JobToken, action: str,
@@ -224,19 +235,22 @@ def transition_tx(ledger, token: JobToken, action: str,
     from inference_version import is_current
     if not is_current(parse_payload({'payload': token.payload_raw})):
         return False
+    if token.kind == 'semantic':
+        import semantic_intake_hold
+        semantic_intake_hold.validate_indexes(ledger.db)
     now = time.time()
     args = _where_args(token)
     if action == "done":
         cur = ledger.db.execute(
             "UPDATE fetch_jobs SET state='done',updated_at=? "
             "WHERE job_id=? AND kind=? AND project_id=? AND message_id=? "
-            "AND state=? AND attempts=? AND " + _PAYLOAD_MATCH,
+            "AND state=? AND attempts=? AND " + _PAYLOAD_MATCH + _NO_INTAKE_HOLD,
             (now, *args))
     elif action == "defer":
         cur = ledger.db.execute(
             "UPDATE fetch_jobs SET next_try=?,updated_at=? "
             "WHERE job_id=? AND kind=? AND project_id=? AND message_id=? "
-            "AND state=? AND attempts=? AND " + _PAYLOAD_MATCH,
+            "AND state=? AND attempts=? AND " + _PAYLOAD_MATCH + _NO_INTAKE_HOLD,
             (now + max(0.0, retry_in), now, *args))
     elif action == "retry":
         cur = ledger.db.execute(
@@ -244,7 +258,7 @@ def transition_tx(ledger, token: JobToken, action: str,
             "state=CASE WHEN attempts+1>=? THEN 'failed' ELSE state END,"
             "updated_at=? WHERE job_id=? AND kind=? AND project_id=? "
             "AND message_id=? AND state=? AND attempts=? AND "
-            + _PAYLOAD_MATCH,
+            + _PAYLOAD_MATCH + _NO_INTAKE_HOLD,
             (now + max(0.0, retry_in), max(1, int(max_attempts)), now,
              *args))
     elif action == "failed":
@@ -252,7 +266,7 @@ def transition_tx(ledger, token: JobToken, action: str,
             "UPDATE fetch_jobs SET state='failed',updated_at=? "
             "WHERE job_id=? AND kind=? AND project_id=? "
             "AND message_id=? AND state=? AND attempts=? AND "
-            + _PAYLOAD_MATCH,
+            + _PAYLOAD_MATCH + _NO_INTAKE_HOLD,
             (now, *args))
     else:
         raise ValueError(f"unknown semantic transition: {action}")
@@ -629,6 +643,8 @@ def usage_reserver(ledger, token: JobToken, *, kind: str,
         day = None
         def check():
             nonlocal day
+            if token.kind == 'semantic' and not job_matches(ledger, token):
+                raise RuntimeStale('jev_reserve')
             day = int(_jst_day_start(time.time()))
             _daily_cap_check(ledger, daily_request_budget, retryable=True, config_path=config_path)
             if int(_jst_day_start(time.time())) != day:

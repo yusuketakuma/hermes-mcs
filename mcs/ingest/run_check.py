@@ -503,7 +503,7 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
         collection_stages.with_relogin(adapter, ledger, result, "self_probe",
                       collection_stages.stage_self_probe, adapter, ledger, result,
                       deadline, run_id, semantic=sem_on,
-                      notify_max_age_s=notify_max_age_s)
+                      notify_max_age_s=notify_max_age_s, ack_exclusions=ack_exclusions)
         _require_closed_transaction(ledger, result)
     probe_after = result.pop("self_probe_after", None)
     if args.no_backfill:
@@ -516,7 +516,7 @@ def _stage_fetch(adapter, ledger, args, cfg, result, deadline, run_id,
                       run_id, semantic=sem_on,
                       notify_max_age_s=notify_max_age_s,
                       notify_all_new=outage_since is not None,
-                      notify_after=probe_after)
+                      notify_after=probe_after, ack_exclusions=ack_exclusions)
         _require_closed_transaction(ledger, result)
     if outage_since is not None:
         collection_stages.seed_outage_catchup(ledger, result, outage_since)
@@ -575,12 +575,12 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
     collection_stages.with_relogin(adapter, ledger, result, "reply_jobs",
                   job_ops.run_reply_jobs, adapter, ledger, result,
                   deadline, semantic=sem_on,
-                  notify_max_age_s=notify_max_age_s)
+                  notify_max_age_s=notify_max_age_s, ack_exclusions=ack_exclusions)
     _require_closed_transaction(ledger, result)
     collection_stages.with_relogin(adapter, ledger, result, "history_jobs",
                   job_ops.run_history_jobs, adapter, ledger, result,
                   deadline, trickle=False, semantic=sem_on,
-                  notify_max_age_s=notify_max_age_s)
+                  notify_max_age_s=notify_max_age_s, ack_exclusions=ack_exclusions)
     _require_closed_transaction(ledger, result)
     if getattr(args, "mark_read", False):
         # after every import path of this tick has stored its replies
@@ -621,13 +621,13 @@ def _run_jobs(adapter, ledger, args, cfg, result, deadline, sem_on,
                   trickle_pages=trickle_pages,
                   max_jobs=8 if args.jobs_only else None,
                   min_margin=30 if args.jobs_only else None,
-                  semantic=sem_on)
+                  semantic=sem_on, ack_exclusions=ack_exclusions)
     _require_closed_transaction(ledger, result)
 
     # -- post-import reconcile: edits/deletions below the cutoff ---
     collection_stages.with_relogin(adapter, ledger, result, "reconcile",
                   job_ops.run_reconcile_jobs, adapter, ledger, result,
-                  deadline, semantic=sem_on)
+                  deadline, semantic=sem_on, ack_exclusions=ack_exclusions)
     _require_closed_transaction(ledger, result)
 
     # own identity: name/professions/stations from MCS, persisted

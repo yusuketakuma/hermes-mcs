@@ -162,8 +162,25 @@ def main() -> int:
                 try:
                     ledger.upsert_patient_info(p)
                     new_ids = ledger.save_messages(hist)
-                except Exception:
+                except Exception as exc:
+                    import semantic_intake_hold
+                    recorded = semantic_intake_hold.report_write_failure(
+                        ledger, result, p.project_id, exc)
                     stats["errors"].append(f"db {p.project_id}: write_failed")
+                    expired = (isinstance(batch.error, SessionExpired)
+                               or isinstance(merged.error, SessionExpired))
+                    if recorded and expired:
+                        if not reauthed:
+                            reauthed = True
+                            state = adapter.auto_login(profile_dir=CHROME_PROFILE,
+                                                       chrome_bin=CHROME_BIN)
+                            if state == 'ok':
+                                # No page was committed; retry the same cursor.
+                                continue
+                            stats['errors'].append(f'history {p.project_id}: auto_login={state}')
+                        else:
+                            stats['errors'].append('session_expired')
+                        stats['deadline'] = True
                     break
                 total_new += len(new_ids)
                 pages_used = batch.pages

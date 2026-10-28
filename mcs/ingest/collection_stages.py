@@ -181,12 +181,24 @@ def _restore_unobserved(where: str, result, aborted: dict, counted: dict,
             return (key == "coverage_stalled"
                     or ": coverage_stalled_" in str(entry)) \
                 and _entry_pid(entry) not in stalled
+    elif where == 'self_probe':
+        def keep(key, entry):
+            return False
     else:
         return
     for key, entries in aborted.items():
         for entry in entries:
-            if keep(key, entry) and entry not in result.get(key, ()):
+            # A later listing of the patient cannot prove that a failed
+            # write's original messages were fetched again.
+            unstored = (key == 'errors' and isinstance(entry, str)
+                        and ': semantic_intake_' in entry)
+            if (keep(key, entry) or unstored) and entry not in result.get(key, ()):
                 result.setdefault(key, []).append(entry)
+    for entry in aborted.get('errors', ()):
+        if isinstance(entry, str) and ': semantic_intake_' in entry:
+            pid = _entry_pid(entry)
+            if pid is not None and pid not in result.setdefault('incomplete', []):
+                result['incomplete'].append(pid)
 
 
 def with_relogin(adapter, ledger, result, where: str, fn, *args,
@@ -437,9 +449,17 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
         except Exception as e:
             if ack_exclusions is not None:
                 ack_exclusions.add(p.project_id)
-            ledger.patient_fetch_failed(p.project_id, type(e).__name__)
+            if p.project_id not in result['incomplete']:
+                result['incomplete'].append(p.project_id)
+            import semantic_intake_hold
+            hold_failed = semantic_intake_hold.report_write_failure(
+                    ledger, result, p.project_id, e, ack_exclusions)
+            if not hold_failed:
+                ledger.patient_fetch_failed(p.project_id, type(e).__name__)
             result["errors"].append(
                 f"project {p.project_id}: db_write_failed")
+            if hold_failed and session_error:
+                raise session_error
             continue
         result["messages"] += len(p.messages)
         # per patient, for a relogin replay that no longer lists it
@@ -447,6 +467,12 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
             len(p.messages)
         result["new_messages"] += len(new_ids)
         result.setdefault("realtime_ids", []).extend(new_ids)
+        import semantic_intake_hold
+        unstored = semantic_intake_hold.has_unstored(ledger.db, p.project_id)
+        if unstored:
+            if p.project_id not in result['incomplete']:
+                result['incomplete'].append(p.project_id)
+            result['errors'].append(f'project {p.project_id}: semantic_intake_unstored')
         if new_ids:
             ledger.karte_summary_mark_due(p.project_id)
 
@@ -456,6 +482,7 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
             raise batch.error
 
         if (mark_read and p.fetch_state == "complete"
+                and not unstored
                 and (ack_exclusions is None or p.project_id not in ack_exclusions)):
             if ledger.was_marked(p.project_id, snap.timestamp):
                 continue
@@ -578,7 +605,7 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
                    semantic: bool = False,
                    notify_max_age_s: float | None = None,
                    notify_all_new: bool = False,
-                   notify_after: dict | None = None):
+                   notify_after: dict | None = None, ack_exclusions=None):
     """Catch posts the unread API misses (e.g. read by another human).
     notify_all_new (the first collecting run after an outage) announces
     every newly stored row, not only unread ones. notify_after maps a
@@ -613,12 +640,24 @@ def stage_backfill(adapter, ledger, result, deadline, run_id,
         hist = batch.messages
         merged = job_ops.merge_full_replies(
             adapter, hist, 0, deadline, result, ledger=ledger)
-        new_ids = ledger.save_messages(
-            hist, project_id=pid,
-            notify={"run_id": run_id, "source": "history"},
-            semantic=semantic, notify_max_age_s=notify_max_age_s,
-            notify_all_new=notify_all_new,
-            notify_new_after_ts=(notify_after or {}).get(pid))
+        try:
+            new_ids = ledger.save_messages(
+                hist, project_id=pid,
+                notify={"run_id": run_id, "source": "history"},
+                semantic=semantic, notify_max_age_s=notify_max_age_s,
+                notify_all_new=notify_all_new,
+                notify_new_after_ts=(notify_after or {}).get(pid))
+        except Exception as exc:
+            import semantic_intake_hold
+            if not semantic_intake_hold.report_write_failure(ledger, result, pid, exc, ack_exclusions):
+                raise
+            if merged.error:
+                raise merged.error
+            if batch.error:
+                result['errors'].append(f'backfill {pid}: {describe_error(batch.error)}')
+                if isinstance(batch.error, SessionExpired):
+                    raise batch.error
+            continue
         if new_ids:
             result["backfilled"] += len(new_ids)
         if pid in (notify_after or {}) and not batch.reached \
@@ -689,7 +728,7 @@ def _head_stall(ledger, pid: int) -> str | None:
 
 def stage_self_probe(adapter, ledger, result, deadline, run_id,
                      semantic: bool = False,
-                     notify_max_age_s: float | None = None):
+                     notify_max_age_s: float | None = None, ack_exclusions=None):
     """Probe every active patient's `latest` message id against the
     stored ledger. The unread set structurally cannot contain posts the
     operator wrote (never unread for their author) or posts another
@@ -739,10 +778,24 @@ def stage_self_probe(adapter, ledger, result, deadline, run_id,
         merged = job_ops.merge_full_replies(
             adapter, batch.messages, 0, deadline, result, ledger=ledger)
         src = "self" if probe["is_self_only"] else "probe"
-        new_ids = ledger.save_messages(
-            batch.messages, project_id=pid, semantic=semantic,
-            notify={"run_id": run_id, "source": src},
-            notify_max_age_s=notify_max_age_s, notify_all_new=True)
+        try:
+            new_ids = ledger.save_messages(
+                batch.messages, project_id=pid, semantic=semantic,
+                notify={"run_id": run_id, "source": src},
+                notify_max_age_s=notify_max_age_s, notify_all_new=True)
+        except Exception as exc:
+            import semantic_intake_hold
+            if not semantic_intake_hold.report_write_failure(ledger, result, pid, exc, ack_exclusions):
+                raise
+            # Preserve the probe's notification policy if backfill retries.
+            result.setdefault('self_probe_after', {})[pid] = since
+            if merged.error:
+                raise merged.error
+            if batch.error:
+                result['errors'].append(f'probe {pid}: {batch.error.kind}')
+                if isinstance(batch.error, SessionExpired):
+                    raise batch.error
+            continue
         if new_ids:
             result["new_messages"] += len(new_ids)
             result.setdefault("realtime_ids", []).extend(new_ids)
