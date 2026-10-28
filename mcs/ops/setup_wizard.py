@@ -395,7 +395,8 @@ def wizard(cfg: dict):
     detailed = ask("setup_detail", "choice:recommended,detailed", "recommended",
                     "設定の進め方", None) == "detailed"
     basic = {"runtime_mode", "mcs_login_id", "notify_target", "notify_system_target",
-             "notify.interactive", "self_posts", "deep_history"}
+             "notify.interactive", "self_posts", "deep_history",
+             "notify.card_thread", "signals.digest"}
     step = 0
     for title, items in WIZARD:
         if not any(when is None or when(cfg) for *_, when in items):
@@ -403,7 +404,7 @@ def wizard(cfg: dict):
         step += 1
         print(f"\n【手順 {step}】{title}")
         if not detailed:
-            print("  詳細設定は現在の値を保持し、未設定の項目は推奨設定を使います。")
+            print("  質問しない設定は現在の値を保持し、未設定ならその版の既定に従います。")
         for key, kind, default, desc, when in items:
             if when is not None and not when(cfg):
                 continue
@@ -411,8 +412,6 @@ def wizard(cfg: dict):
                 kind = "reqintlist"
             if not detailed and key not in basic and not kind.startswith("req") \
                     and not key.endswith(("project_ids", "project_ids_auto", "allowed_role_ids")):
-                if not has_key(cfg, key) and default is not None:
-                    set_key(cfg, key, default)
                 continue
             if key in ("notify.slack.channel_id", "notify.discord.channel_id") \
                     and get_key(cfg, key) is None:
