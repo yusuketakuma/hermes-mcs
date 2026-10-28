@@ -1495,7 +1495,7 @@ def test_consent_hold_tick_freezes_all_but_approve(tmp_path, monkeypatch,
     cmd.mkdir()
     drain = job_ops.drain_commands
     monkeypatch.setattr(job_ops, "drain_commands",
-                        lambda db, result: drain(db, result, str(cmd)))
+                        lambda db, result, **kw: drain(db, result, str(cmd), **kw))
     # an unrelated op stays queued — its writes would be wiped by the swap
     mcs_requests.enqueue(
         {"version": 1, "cmd": "ops.pause",

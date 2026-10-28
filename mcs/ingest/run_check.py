@@ -112,19 +112,20 @@ except OSError:
 
 
 def _entry_code_current() -> bool:
-    """Refuse a tick when its loaded source or update marker is uncertain."""
-    try:
-        os.lstat(os.path.join(HOME, 'data', UPDATE_MARKER_NAME))
-    except FileNotFoundError:
-        pass
-    except OSError:
-        return False
-    else:
-        return False
+    """Refuse a tick when its loaded source identity is uncertain."""
     try:
         return _CODE_STAMP is not None and writer_lock.code_stamp_checked() == _CODE_STAMP
     except OSError:
         return False
+
+
+def _entry_update_pending() -> bool:
+    """Check the marker without interpreting an inaccessible marker as absent."""
+    try:
+        os.lstat(os.path.join(HOME, 'data', UPDATE_MARKER_NAME))
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def _crash_site(e: BaseException) -> str:
@@ -332,7 +333,7 @@ def _consent_only(lock_fd) -> int:
     result = {"ok": True, "restore_consent_hold": True,
               "commands": 0, "errors": []}
     try:
-        job_ops.drain_commands(ledger, result)
+        job_ops.drain_commands(ledger, result, consent_only=True)
         result["commands"] = result.get("command_commands", 0)
         # The receipt may predate this tick (an earlier spawn lost the
         # run.lock race). Re-check the bound consent directly — when a
@@ -391,8 +392,8 @@ def _commands_only(lock_fd, deadline) -> int:
             # schema-bump DB replace held for human consent — freeze
             # every writer except the consent drain so the approved
             # loss report cannot drift (drain_commands itself is
-            # consent-only while the marker stands)
-            job_ops.drain_commands(ledger, result)
+            # consent-only even if the marker changes during the drain)
+            job_ops.drain_commands(ledger, result, consent_only=True)
             result["restore_consent_hold"] = True
             print(json.dumps(result, ensure_ascii=False))
             return 0 if result["ok"] else 1
@@ -1016,12 +1017,32 @@ def _main() -> int:
 
     try:
         code_current = _entry_code_current()
+        consent_only = False
+        if code_current:
+            try:
+                update_pending = _entry_update_pending()
+            except OSError:
+                code_current = False
+            else:
+                if update_pending:
+                    import notify_spool
+                    try:
+                        hold = notify_spool.restore_awaiting_consent(
+                            os.path.join(HOME, 'data'))
+                        consent_only = (isinstance(hold, dict)
+                                        and hold.get('phase') == 'awaiting_consent'
+                                        and not hold.get('unreadable'))
+                    except (OSError, ValueError, TypeError, RecursionError):
+                        pass
+                    code_current = False
         if code_current:
             os.makedirs(collection_stages.ATTACH_DIR, mode=0o700, exist_ok=True)
             os.chmod(collection_stages.ATTACH_DIR, 0o700)
     except BaseException:
         os.close(lock_fd)
         raise
+    if consent_only:
+        return _consent_only(lock_fd)
     if not code_current:
         os.close(lock_fd)
         print(json.dumps({"ok": False, "error": "code_changed_or_update_pending"}))

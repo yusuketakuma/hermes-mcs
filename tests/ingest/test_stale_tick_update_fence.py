@@ -4,6 +4,7 @@ import os
 import sqlite3
 import sys
 from types import SimpleNamespace
+import uuid
 
 import collection_stages
 import notify_spool
@@ -184,3 +185,88 @@ def test_checked_stamp_fails_when_source_tree_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(writer_lock, '_MCS_ROOT', str(tmp_path / 'missing'))
     with pytest.raises(OSError):
         writer_lock.code_stamp_checked()
+
+
+@pytest.mark.parametrize('commands_only', [False, True])
+@pytest.mark.parametrize('stale', [False, True])
+@pytest.mark.parametrize('hold_changes', [False, True])
+def test_update_hold_processes_only_approval_with_current_code(tmp_path, monkeypatch, capsys, commands_only, stale, hold_changes):
+    import job_ops
+    import mcs_requests
+    import restore_evidence
+    import update_launch
+
+    data = tmp_path / 'data'
+    data.mkdir()
+    cmd = data / 'cmd'
+    cmd.mkdir()
+    for name, value in {'HOME': tmp_path, 'DB': data / 'ledger.db', 'LOCKFILE': data / 'run.lock'}.items():
+        monkeypatch.setattr(run_check, name, str(value))
+    monkeypatch.setattr(collection_stages, 'ATTACH_DIR', str(data / 'attachments'))
+    monkeypatch.setattr(sys, 'argv', ['run_check'] + (['--commands-only'] if commands_only else []))
+    monkeypatch.setattr(run_check, '_CODE_STAMP', 1)
+    monkeypatch.setattr(writer_lock, 'code_stamp_checked', lambda: 2 if stale else 1)
+    monkeypatch.setattr(run_check, 'MCSAdapter', lambda *a, **k: pytest.fail('adapter during hold'))
+    monkeypatch.setattr(run_check, '_commands_only', lambda *a: pytest.fail('ordinary command processing during hold'))
+    (data / 'update_in_progress.marker').write_text('synthetic')
+    notify_spool.mark_restored(str(data), backup_path=str(data / 'b.db'), phase='awaiting_consent')
+    if hold_changes:
+        read_hold = notify_spool.restore_awaiting_consent
+        observations = []
+        def changed_hold(root):
+            observations.append(True)
+            return read_hold(root) if len(observations) == 1 else None
+        monkeypatch.setattr(notify_spool, 'restore_awaiting_consent', changed_hold)
+    rid = 'a' * 64
+    for req in (
+        {'cmd': 'ops.pause', 'project_id': 1, 'feature': 'semantic'},
+        {'cmd': 'ops.restore_approve', 'project_id': None, 'report_id': rid,
+         'backup_sha256': 'b' * 64, 'backup_schema': 7, 'reason': 'synthetic'},
+    ):
+        req.update(version=1, command_id=str(uuid.uuid4()), actor='synthetic', human_confirmed=True)
+        mcs_requests.enqueue(req, str(cmd))
+    drain = job_ops.drain_commands
+    monkeypatch.setattr(job_ops, 'drain_commands', lambda db, result, **kw: drain(db, result, str(cmd), **kw))
+    spawned = []
+    monkeypatch.setattr(update_launch, 'spawn_detached', lambda **kwargs: spawned.append(True))
+    monkeypatch.setattr(restore_evidence, 'create_loss_report', lambda **kwargs: {
+        'report_id': rid, 'backup_sha256': 'b' * 64, 'backup_schema': 7})
+    assert run_check._main() == (3 if stale else 0)
+    result = json.loads(capsys.readouterr().out)
+    assert not (data / 'attachments').exists()
+    if stale:
+        assert not (data / 'ledger.db').exists()
+        assert len(list(cmd.glob('*.json'))) == 2
+        assert not spawned
+    else:
+        assert result['restore_consent_hold'] is True and result['commands'] == 1
+        assert len(list(cmd.glob('*.json'))) == 1
+        assert spawned
+        with sqlite3.connect(data / 'ledger.db') as db:
+            rows = db.execute('SELECT receipt_json FROM command_receipts').fetchall()
+        assert len(rows) == 1 and json.loads(rows[0][0])['cmd'] == 'ops.restore_approve'
+    fd = writer_lock.acquire_run_lock(str(data / 'run.lock'))
+    assert fd is not None
+    os.close(fd)
+
+
+@pytest.mark.parametrize('phase', ['restored', 'unreadable'])
+def test_update_marker_without_confirmed_consent_hold_runs_no_commands(tmp_path, monkeypatch, phase):
+    data = tmp_path / 'data'
+    data.mkdir()
+    monkeypatch.setattr(run_check, 'HOME', str(tmp_path))
+    monkeypatch.setattr(run_check, 'LOCKFILE', str(data / 'run.lock'))
+    monkeypatch.setattr(sys, 'argv', ['run_check', '--commands-only'])
+    monkeypatch.setattr(run_check, '_CODE_STAMP', 1)
+    monkeypatch.setattr(writer_lock, 'code_stamp_checked', lambda: 1)
+    monkeypatch.setattr(run_check, '_commands_only', lambda *a: pytest.fail('commands while update is pending'))
+    monkeypatch.setattr(run_check, '_consent_only', lambda *a: pytest.fail('restore already applied'))
+    (data / 'update_in_progress.marker').write_text('synthetic')
+    if phase == 'restored':
+        notify_spool.mark_restored(str(data), phase='restored')
+    else:
+        (data / 'restore_pending.json').write_text('{')
+    assert run_check._main() == 3
+    fd = writer_lock.acquire_run_lock(str(data / 'run.lock'))
+    assert fd is not None
+    os.close(fd)

@@ -371,7 +371,7 @@ def test_runner_begin_run_requires_actual_backup_consent(restored, monkeypatch,
         monkeypatch.setattr(
             collection_stages if name in {"ATTACH_DIR", "with_relogin"} else (run_check),
             name, str(path))
-    monkeypatch.setattr(job_ops, "drain_commands", lambda *a: None)
+    monkeypatch.setattr(job_ops, "drain_commands", lambda *a, **kw: None)
 
     class Adapter:
         def __init__(self, **kwargs):
