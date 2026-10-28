@@ -34,6 +34,14 @@ from adapters.sdc.transport import Transport, TransportError  # noqa: E402
 from adapters.sdc.inventory_sender import InventorySender  # noqa: E402
 
 
+class SDCConfigWriteUnknown(RuntimeError):
+    pass
+
+
+class SDCConfigInvalid(ValueError):
+    pass
+
+
 @contextmanager
 def _sdc_owner_lock():
     # SDC config writers only. Never hold this lock while waiting for Store.lock.
@@ -57,7 +65,16 @@ def _owner_snapshot():
             return None
         return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
     before = identity()
-    cfg = lifecycle_io.read_owner_config(mcs_util.CONF_PATH)
+    try:
+        cfg = lifecycle_io.read_owner_config(mcs_util.CONF_PATH)
+        if before is not None:
+            raw, _ = config_edit._snapshot(mcs_util.CONF_PATH)
+            if config_edit._parse(raw) != cfg:
+                raise config_edit.ConfigConflict('SDC_OWNER_CHANGED')
+    except config_edit.ConfigConflict:
+        raise
+    except (OSError, ValueError, RecursionError):
+        raise SDCConfigInvalid('SDC_CONFIG_INVALID') from None
     after = identity()
     if before != after:
         raise config_edit.ConfigConflict('SDC_OWNER_CHANGED')
@@ -115,7 +132,12 @@ def service(enabled, root, *, note=print, reconcile_only=False, expected_owner=N
         raise ValueError('SDC_MAC_REQUIRED')
     with _sdc_owner_lock(), config_edit._edit_lock():
         base = _owner_snapshot()
-        cfg = lifecycle_io.read_owner_config(mcs_util.CONF_PATH)
+        if base['file_identity'] is None:
+            raise SDCConfigInvalid('SDC_CONFIG_MISSING')
+        try:
+            cfg = lifecycle_io.read_owner_config(mcs_util.CONF_PATH)
+        except (OSError, ValueError, RecursionError):
+            raise SDCConfigInvalid('SDC_CONFIG_INVALID') from None
         if _owner_snapshot() != base:
             raise config_edit.ConfigConflict('SDC_OWNER_CHANGED')
         if reconcile_only:
@@ -128,12 +150,15 @@ def service(enabled, root, *, note=print, reconcile_only=False, expected_owner=N
             cfg['sdc'] = {**cfg.get('sdc', {}), 'enabled': enabled, 'state_root': str(root)}
             body = json.dumps(cfg, ensure_ascii=False, indent=2)
             if len(body.encode('utf-8')) > 65536:
-                raise ValueError('SDC_CONFIG_TOO_LARGE')
+                raise SDCConfigInvalid('SDC_CONFIG_TOO_LARGE')
             def write_checked(stream):
                 stream.write(body)
                 if _owner_snapshot() != base:
                     raise config_edit.ConfigConflict('SDC_OWNER_CHANGED')
-            atomic_write(mcs_util.CONF_PATH, write_checked, mode=0o600, makedirs=False)
+            try:
+                atomic_write(mcs_util.CONF_PATH, write_checked, mode=0o600, makedirs=False)
+            except OSError:
+                raise SDCConfigWriteUnknown('SDC_CONFIG_WRITE_UNKNOWN') from None
     paths = service_management.default_paths(root=mcs_util.HOME, checkout=REPO)
     if not enabled:
         if service_management.retire_agents({service_contract.SDC_LABEL}, note, False, paths=paths):
@@ -310,6 +335,21 @@ def tick(root=None):
                             signal.setitimer(signal.ITIMER_REAL, max(1e-6, rest), old_timer[1])
 
 
+def _config_failure(error, *, stopping=False):
+    if isinstance(error, SDCConfigWriteUnknown):
+        text = '設定の保存結果と監視ジョブの状態を確認できませんでした。現在の設定、同意記録、中央の登録状態を確認してください。'
+    elif isinstance(error, SDCConfigInvalid):
+        text = '設定を保存できませんでした。設定ファイル、保存済み同意と中央の登録状態を確認してください。'
+    elif str(error) == 'SDC_OWNER_CHANGED':
+        text = '設定が変更されたため操作を完了できませんでした。保存済み同意がある場合、同じ操作の再試行だけでは復旧できません。設定と中央の登録状態を確認し、管理者に復旧方法を相談してください。'
+    else:
+        text = '別の設定保存と競合したため操作を完了できませんでした。同意記録や中央の登録状態が先に更新された可能性があります。設定と監視状態を確認してから再試行してください。'
+    if stopping:
+        text += '送信は停止していない可能性があります。'
+    print(text, file=sys.stderr)
+    return 1
+
+
 def main(argv=None):
     ap = JapaneseArgumentParser(description=__doc__)
     ap.add_argument('command', choices=('connect', 'connection', 'disconnect', 'rotate-key'))
@@ -325,7 +365,12 @@ def main(argv=None):
                                       or args.customer or sdc_provision_cli.requested(args)):
         ap.error('--reconcile-credential は connect / rotate-key / disconnect と --confirm-human・--reason だけに指定してください')
     if sdc_provision_cli.requested(args):
-        return sdc_provision_cli.run(args, connect=lambda store: _connection(store, args))
+        def connect(store):
+            try:
+                return _connection(store, args)
+            except (SDCConfigWriteUnknown, SDCConfigInvalid, config_edit.ConfigConflict) as error:
+                return _config_failure(error)
+        return sdc_provision_cli.run(args, connect=connect)
     if args.customer and args.command != 'connect':
         ap.error('--customer は connect だけに指定できます')
     try:
@@ -342,9 +387,8 @@ def main(argv=None):
     except BlockingIOError:
         print('送信処理が終了待ちです。同じ指定で mcs ' + args.command + ' を再実行してください。停止記録と中央確認の完了は、再実行後の結果で確認してください。', file=sys.stderr)
         return 1
-    except config_edit.ConfigConflict:
-        print('別の設定保存と競合したため操作を完了できませんでした。停止操作の場合、送信は停止していない可能性があります。設定と監視状態を確認し、再試行してください。', file=sys.stderr)
-        return 1
+    except (SDCConfigWriteUnknown, SDCConfigInvalid, config_edit.ConfigConflict) as error:
+        return _config_failure(error, stopping=args.command == 'disconnect')
     except (OSError, ValueError, TypeError, KeyError, TransportError):
         print('接続操作を完了できませんでした。私有ディレクトリ・承認済み送信先・管理画面の状態を確認してください。秘密値を共有しないでください。', file=sys.stderr)
         return 1

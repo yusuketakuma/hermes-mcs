@@ -172,6 +172,31 @@ def test_import_passes_exact_bytes_and_independent_console_expected(boundary, mo
         assert '--provision-ack ' + profile + ' --confirm-human --reason ' in out
 
 
+@pytest.mark.parametrize('error, message', [
+    (sdc_cli.config_edit.ConfigConflict('config_busy'), '中央の登録状態'),
+    (sdc_cli.config_edit.ConfigConflict('SDC_OWNER_CHANGED'), '再試行だけでは復旧できません'),
+    (sdc_cli.SDCConfigInvalid('SDC_CONFIG_INVALID'), '設定を保存できませんでした'),
+    (sdc_cli.SDCConfigWriteUnknown('SDC_CONFIG_WRITE_UNKNOWN'), '保存結果と監視ジョブの状態'),
+])
+def test_monitor_import_reports_config_failure_after_receipt(boundary, monkeypatch, tmp_path, capsys, error, message):
+    file = tmp_path / 'public.json'
+    file.write_bytes(b'{"synthetic":true}')
+    plan = {'bundle': {'profile_id': 'monitor'}}
+    monkeypatch.setattr(provision, 'prepare_import', lambda *a, **kw: plan)
+    def commit(*args, **kwargs):
+        boundary.append(('durable',))
+        return {'local_receipt_id': '00000000-0000-4000-8000-000000000004'}
+    monkeypatch.setattr(provision, 'commit_import', commit)
+    def fail(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(sdc_cli, '_connection', fail)
+    answers(monkeypatch, ['1', *EXPECTED.values(), '1', '1'])
+    root = tmp_path / 'private'
+    assert sdc_cli.main(['connect', '--state-root', str(root), '--import-provision', str(file), *CONFIRM]) == 1
+    assert ('durable',) in boundary
+    assert message in capsys.readouterr().err
+
+
 @pytest.mark.parametrize('profile', ['support', 'restart'])
 def test_customer_registration_flag_cannot_be_ignored_by_profile_import(boundary, monkeypatch, tmp_path, profile):
     file = tmp_path / 'public.json'
