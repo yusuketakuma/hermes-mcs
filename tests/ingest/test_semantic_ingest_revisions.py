@@ -143,14 +143,22 @@ def test_invalid_previous_targets_cannot_roll_back_new_source(tmp_path, path, ba
         with db.db:
             db.db.execute("UPDATE fetch_jobs SET payload=? WHERE kind='semantic'",
                           (json.dumps(payload),))
+        before = tuple(db.db.execute("SELECT job_id,state,payload,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone())
         _write(db, path, _message(body="更新された原文"),
                notify={"source": "unread"})
         assert db.db.execute(
             "SELECT body_text FROM messages WHERE message_id=1"
         ).fetchone()[0] == "更新された原文"
-        current = db.job_payload("semantic", 1, 1)
-        assert current["targets"] == [1]
-        assert current["source_generation"] != payload["source_generation"]
+        assert tuple(db.db.execute("SELECT job_id,state,payload,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()) == before
+        rows = db.db.execute("SELECT content FROM artifacts WHERE kind='semantic_intake_hold_v1' AND project_id=1 AND model='1'").fetchall()
+        assert len(rows) == 1
+        held = json.loads(rows[0]["content"])
+        assert held["root_id"] == 1 and held["target_id"] == 1
+        assert held["source_generation"] == db._semantic_source_generation(1, 1)
+        assert held["source_generation"] != payload["source_generation"]
+        assert held["fingerprint"] == db._semantic_message_fingerprint(1, 1)
+        assert held["event_id"] is None and held["origin"]["source"] == "unread"
+        assert db.db.execute("SELECT COUNT(*) FROM notify_outbox").fetchone()[0] == 0
         assert db.job_pending("semantic", 1, 1) is not None
     finally:
         db.close()

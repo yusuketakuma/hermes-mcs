@@ -334,16 +334,19 @@ def test_drain_reservations_use_the_drains_config_not_the_process_default(tmp_pa
         root.mkdir()
         (root / "config.json").write_text(json.dumps({"semantic": {"until": until}}))
     monkeypatch.setattr(mcs_util, "CONF_PATH", str(open_root / "config.json"))
-    token = semantic_runtime.JobToken.from_row({"job_id": 1, "kind": "semantic", "project_id": 1,
-                                                "message_id": 1, "state": "pending", "attempts": 0,
-                                                "payload": "{}"})
     with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        import inference_version
+        job_id = ledger.job_add("semantic", 1, 1, payload={inference_version.VERSION_KEY: inference_version.CURRENT_VERSION})
+        token = semantic_runtime.JobToken.from_row(ledger.db.execute(
+            "SELECT * FROM fetch_jobs WHERE job_id=?", (job_id,)).fetchone())
+        assert semantic_runtime.job_matches(ledger, token)
         reserve = semantic_runtime.usage_reserver(ledger, token, kind="semantic_usage", model="m",
                                                   project_id=1, message_id=1,
                                                   config_path=str(ended / "config.json"))
         with pytest.raises(JevError) as raised:
             reserve({"model": "m"}, 2)
         assert raised.value.detail == "semantic_until_expired"
+        assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='semantic_usage'").fetchone()[0] == 0
 
 
 def test_live_tool_refuses_when_the_config_it_read_has_vanished(tmp_path):
