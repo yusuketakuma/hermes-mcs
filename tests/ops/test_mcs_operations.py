@@ -3,8 +3,10 @@ import update_discovery
 import update_launch
 
 import json
+import sqlite3
 import time
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -166,6 +168,112 @@ def test_retry_rechecks_version_when_payload_changes_after_preview(tmp_path):
         assert receipt["outcome"] == "rejected"
         assert receipt["error"] == "payload_changed"
         assert dict(_job(db, job_id)) == before
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("raw", ["{" + "x" * (1024 * 1024), None])
+def test_retry_rejects_oversized_or_non_utf8_without_rewriting(tmp_path, raw):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.ensure_patient(1)
+        job_id = db.job_add("semantic", 1, 42, payload={})
+        with db.db:
+            if raw is None:
+                db.db.execute("UPDATE fetch_jobs SET payload=CAST(X'80' AS TEXT), "
+                              "state='failed',attempts=2 WHERE job_id=?", (job_id,))
+            else:
+                db.db.execute("UPDATE fetch_jobs SET payload=?,state='failed',attempts=2 "
+                              "WHERE job_id=?", (raw, job_id))
+        before = tuple(db.db.execute(
+            "SELECT CAST(payload AS BLOB),state,attempts,next_try FROM fetch_jobs WHERE job_id=?",
+            (job_id,)).fetchone())
+        req = _command("ops.retry", job_id=job_id, expected_payload_hash="a" * 64)
+        receipt = mcs_requests.apply_command(db, req)
+        assert receipt["outcome"] == "rejected" and receipt["error"] == "invalid_payload"
+        assert tuple(db.db.execute(
+            "SELECT CAST(payload AS BLOB),state,attempts,next_try FROM fetch_jobs WHERE job_id=?",
+            (job_id,)).fetchone()) == before
+        assert mcs_requests.apply_command(db, req) == receipt
+    finally:
+        db.close()
+
+
+def test_retry_payload_limit_does_not_read_oversized_blob(tmp_path):
+    from operation_contract import read_retry_payload
+
+    class BlobSpy:
+        def __init__(self, blob):
+            self.blob = blob
+
+        def __enter__(self):
+            self.blob.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.blob.__exit__(*args)
+
+        def __len__(self):
+            return len(self.blob)
+
+        def read(self):
+            raise AssertionError("oversized payload must not be read")
+
+    class ConnectionSpy:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def blobopen(self, *args, **kwargs):
+            return BlobSpy(self.connection.blobopen(*args, **kwargs))
+
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.ensure_patient(1)
+        job_id = db.job_add("semantic", 1, 42, payload={})
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                          ("x" * (1024 * 1024 + 1), job_id))
+        row = db.db.execute("SELECT job_id,typeof(payload) AS payload_type "
+                            "FROM fetch_jobs WHERE job_id=?", (job_id,)).fetchone()
+        assert read_retry_payload(ConnectionSpy(db.db), row) is None
+    finally:
+        db.close()
+
+
+def test_retry_preview_reads_bounded_payload_from_readonly_snapshot(tmp_path):
+    from adapters.common.human_commands import _semantic_job
+
+    path = tmp_path / "ledger.db"
+    db = Ledger(str(path))
+    try:
+        db.ensure_patient(1)
+        payload = {VERSION_KEY: CURRENT_VERSION, "targets": [42]}
+        job_id = db.job_add("semantic", 1, 42, payload=payload)
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=2 WHERE job_id=?", (job_id,))
+        db.close()
+        reader = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        reader.row_factory = sqlite3.Row
+        try:
+            reader.execute("BEGIN")
+            row, error, digest = _semantic_job(SimpleNamespace(db=reader), mcs_requests, 1, job_id)
+            assert error is None and row["attempts"] == 2
+            assert digest == mcs_requests.payload_hash(payload)
+        finally:
+            reader.close()
+        db = Ledger(str(path))
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                          ("x" * (1024 * 1024 + 1), job_id))
+        db.close()
+        reader = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        reader.row_factory = sqlite3.Row
+        try:
+            reader.execute("BEGIN")
+            assert _semantic_job(SimpleNamespace(db=reader), mcs_requests, 1, job_id) == (
+                None, "invalid_payload", None)
+        finally:
+            reader.close()
     finally:
         db.close()
 

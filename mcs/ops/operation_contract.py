@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import sqlite3
 
 from mcs_util import valid_text
 from mcs_util import positive, valid_hash
@@ -28,6 +29,23 @@ def reference_path(data_dir, name: str, stage: str) -> str:
 _MAX_ADDITIONAL_ATTEMPTS = 3
 
 _FEATURE = "semantic"
+_RETRY_PAYLOAD_MAX_BYTES = 1024 * 1024
+
+
+def read_retry_payload(db, row, *, max_bytes=_RETRY_PAYLOAD_MAX_BYTES):
+    """Read at most the retry payload limit without copying a larger value."""
+    if row["payload_type"] == "null":
+        return "{}"
+    if row["payload_type"] != "text":
+        return None
+    try:
+        with db.blobopen("fetch_jobs", "payload", row["job_id"], readonly=True) as blob:
+            if len(blob) > max_bytes:
+                return None
+            raw = blob.read()
+        return raw.decode("utf-8") or "{}"
+    except (sqlite3.Error, UnicodeError):
+        return None
 
 
 def bounded_integer(value, low: int, high: int) -> bool:

@@ -20,7 +20,7 @@ import time
 from mcs_util import valid_text
 from mcs_requests import canonical, payload_hash
 from update_policy import RELEASE_TAG_RE
-from operation_contract import bounded_integer, retry_error
+from operation_contract import bounded_integer, read_retry_payload, retry_error
 from mcs_queries import SEMANTIC_CONTROL_KIND as _CONTROL_ARTIFACT
 from safe_io import fsync_dir, fdopen_owned
 
@@ -123,12 +123,15 @@ def _apply_scan_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
 
 def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     row = db.execute(
-        "SELECT job_id,kind,project_id,state,attempts,payload "
+        "SELECT job_id,kind,project_id,state,attempts,typeof(payload) AS payload_type "
         "FROM fetch_jobs WHERE job_id=? AND kind=? AND project_id=?",
         (req["job_id"], _SEMANTIC_JOB, req["project_id"]),
     ).fetchone()
     if row is None:
         return "job_not_found", {}
+    raw = read_retry_payload(db, row)
+    if raw is None:
+        return "invalid_payload", {"job_id": row["job_id"]}
     # The writer historically accepts duplicate non-version keys.  Retain
     # that behavior, but never choose a version from an ambiguous top-level
     # marker (including escaped spellings of the same JSON key).
@@ -139,7 +142,7 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
             self.ambiguous_version = sum(k == VERSION_KEY for k, _ in pairs) > 1
 
     try:
-        payload = json.loads(row["payload"] or "{}", object_pairs_hook=_RetryObject)
+        payload = json.loads(raw, object_pairs_hook=_RetryObject)
     except (ValueError, TypeError, RecursionError):
         return "invalid_payload", {"job_id": row["job_id"]}
     if not isinstance(payload, dict) or payload.ambiguous_version:
