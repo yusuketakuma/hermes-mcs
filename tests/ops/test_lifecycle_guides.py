@@ -21,7 +21,7 @@ def _terminal(monkeypatch, answers):
 @pytest.mark.parametrize("answer,expected", [("", 1), ("0", 1), ("2", 3)])
 def test_update_requires_explicit_execution(monkeypatch, answer, expected):
     launcher = _launcher()
-    _terminal(monkeypatch, [answer])
+    _terminal(monkeypatch, [answer, ""])
     calls = []
 
     def run(cmd, **kwargs):
@@ -229,13 +229,99 @@ def test_reinstall_missing_or_invalid_previous_settings_stops(monkeypatch, insta
 
 def test_reinstall_preserves_previous_optouts(monkeypatch):
     launcher = _launcher()
-    _terminal(monkeypatch, ["2"])
+    _terminal(monkeypatch, ["2", ""])
     calls = []
     report = {"route": "reinstall", "install_args": ["--no-llm", "--no-plugin"]}
     monkeypatch.setattr(launcher.subprocess, "run", lambda cmd, **kwargs:
                         calls.append(cmd) or SimpleNamespace(returncode=0, stdout=json.dumps({"route": "noop", "blockers": []} if len(calls) == 3 else report)))
     assert launcher.interactive_update(["python", "updater", "plan"], {}, "/synthetic") == 0
     assert calls[1][-3:] == ["--reinstall", "--install-arg=--no-llm", "--install-arg=--no-plugin"]
+
+
+def _api_key_checkout(tmp_path, *, old=False):
+    repo = tmp_path / "checkout"
+    ops = repo / "mcs/ops"
+    ops.mkdir(parents=True)
+    (ops / "mcs_cli.py").write_text('rest[0] in ("init", "features"' + ('' if old else ', "api-keys"') + ')\n')
+    (ops / "mcs_setup.py").write_text('sub.add_parser("api-keys")\n')
+    return str(repo)
+
+
+@pytest.mark.parametrize("updated", [False, True])
+def test_update_offers_api_keys_using_pinned_runtime(monkeypatch, tmp_path, updated):
+    launcher = _launcher()
+    answers = ["2", "2"] if updated else ["2"]
+    _terminal(monkeypatch, answers)
+    monkeypatch.setattr(launcher.Path, "home", lambda: tmp_path)
+    repo = _api_key_checkout(tmp_path)
+    shim = tmp_path / ".local/bin/mcs"
+    shim.parent.mkdir(parents=True)
+    shim.write_text("#!/bin/sh\n# MCS lifecycle launcher\nunset PYTHONPATH PYTHONHOME\n"
+                    "export MCS_LIFECYCLE_PINNED=1\n"
+                    f"exec '{sys.executable}' '{repo}/mcs/ops/mcs_cli.py' \"$@\"\n")
+    shim.chmod(0o700)
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        if cmd[-2:] == ["setup", "api-keys"]:
+            return SimpleNamespace(returncode=0)
+        route = "apply" if updated and len(calls) == 1 else "noop"
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"route": route}))
+
+    monkeypatch.setattr(launcher.subprocess, "run", run)
+    assert launcher.interactive_update(["old-python", "updater", "plan"],
+                                       {"PYTHONPATH": "ignore", "PYTHONHOME": "ignore"},
+                                       repo) == 0
+    command, kwargs = calls[-1]
+    assert command == [sys.executable, repo + "/mcs/ops/mcs_cli.py", "setup", "api-keys"]
+    assert kwargs["env"]["MCS_LIFECYCLE_PINNED"] == "1"
+    assert "PYTHONPATH" not in kwargs["env"] and "PYTHONHOME" not in kwargs["env"]
+    assert "capture_output" not in kwargs
+
+
+@pytest.mark.parametrize("case", ["missing", "other_checkout", "link", "old_cli", "failed", "interrupt"])
+def test_update_key_setup_failure_keeps_update_success(monkeypatch, tmp_path, capsys, case):
+    launcher = _launcher()
+    _terminal(monkeypatch, ["2"])
+    monkeypatch.setattr(launcher.Path, "home", lambda: tmp_path)
+    repo = _api_key_checkout(tmp_path, old=case == "old_cli")
+    shim = tmp_path / ".local/bin/mcs"
+    shim.parent.mkdir(parents=True)
+    if case != "missing":
+        target = tmp_path / "launcher" if case == "link" else shim
+        cli = "/other/mcs/ops/mcs_cli.py" if case == "other_checkout" else repo + "/mcs/ops/mcs_cli.py"
+        target.write_text("#!/bin/sh\n# MCS lifecycle launcher\nunset PYTHONPATH PYTHONHOME\n"
+                          "export MCS_LIFECYCLE_PINNED=1\n"
+                          f"exec '{sys.executable}' '{cli}' \"$@\"\n")
+        target.chmod(0o700)
+        if case == "link":
+            shim.symlink_to(target)
+    calls = []
+
+    def run(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[-2:] == ["setup", "api-keys"]:
+            if case == "interrupt":
+                raise KeyboardInterrupt
+            return SimpleNamespace(returncode=1)
+        return SimpleNamespace(returncode=0, stdout=json.dumps({"route": "noop"}))
+
+    monkeypatch.setattr(launcher.subprocess, "run", run)
+    assert launcher.interactive_update(["python", "updater", "plan"], {}, repo) == 0
+    assert "API キー設定の完了を確認できません" in capsys.readouterr().out
+    assert len(calls) == (2 if case in ("failed", "interrupt") else 1)
+
+
+def test_noop_nonterminal_never_offers_or_launches_setup(monkeypatch):
+    launcher = _launcher()
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda _: pytest.fail("no nonterminal prompt"))
+    calls = []
+    monkeypatch.setattr(launcher.subprocess, "run", lambda cmd, **kwargs:
+                        calls.append(cmd) or SimpleNamespace(returncode=0, stdout='{"route":"noop"}'))
+    assert launcher.interactive_update(["python", "updater", "plan"], {}, "/synthetic") == 0
+    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("error", [KeyboardInterrupt, OSError])
