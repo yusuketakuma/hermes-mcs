@@ -324,7 +324,7 @@ def incomplete_parts_health(db, now: float, cfg=None) -> dict:
         "WHERE r.state='delivered' AND c.revoked_at IS NULL "
         "AND c.delivery_state NOT IN ('revoked','message_deleted') "
         "AND r.render_rev=(SELECT MAX(render_rev) FROM notification_renders "
-        "                  WHERE card_id=r.card_id) "
+        "                  WHERE card_id=r.card_id AND state='delivered') "
         "AND p.kind!='card' AND p.state IN ('pending','unknown','not_sent','held') "
         # An unavailable source attachment has its visible failure caption;
         # it is not an unconfirmed delivery of a file we could send.

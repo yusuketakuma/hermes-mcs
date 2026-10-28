@@ -102,6 +102,16 @@ def test_mixed_parts_count_cards_once_and_preserve_borrowed_transaction(stored):
     assert notify_scope.incomplete_parts_health(stored, NOW, SLACK)['total'] == 0
 
 
+@pytest.mark.parametrize('new_state', ['queued', 'sending', 'cancelled', 'unknown'])
+def test_unconfirmed_refresh_cannot_hide_the_last_delivered_cards_parts(stored, new_state):
+    card, _ = _render(stored, [('attachment_part', 'unknown', None)])
+    _render(stored, [('attachment_part', 'pending', None)], card=card, revision=2,
+            render_state=new_state)
+    assert notify_scope.incomplete_parts_health(stored, NOW, SLACK)['by_state']['unknown'] == 1
+    _render(stored, [('attachment_part', 'delivered', None)], card=card, revision=3)
+    assert notify_scope.incomplete_parts_health(stored, NOW, SLACK)['total'] == 0
+
+
 def test_missing_delivery_evidence_is_not_reported_as_zero(stored):
     stored.execute('DROP TABLE notification_render_parts')
     with pytest.raises(sqlite3.Error):
