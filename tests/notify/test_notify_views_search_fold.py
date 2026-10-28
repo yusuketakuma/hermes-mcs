@@ -5,6 +5,7 @@ import sqlite3
 
 import pytest
 
+import inference_version as inference
 import notify_views
 import rollup
 from notify_testkit import NOW, _msg, _patient, led as led  # noqa: F401
@@ -89,17 +90,20 @@ def test_loop_candidate_counts_only_current_revision(led):
     _patient(led)
     _msg(led, 101)
     reqs = [{"ctx": "処方変更", "at": "2026-09-29T09:00", "mid": 101}]
-    # Exercise rendering of an already validated current rollup, not legacy migration.
+    # A current cache is still unverified when model configuration is absent.
     led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
                    "created_at) VALUES('patient_rollup',1,NULL,?,'t',?,?)",
-                   (json.dumps({"recent_requests": reqs}),
-                    json.dumps({"period_check_version": rollup.PERIOD_CHECK_VERSION}), NOW))
+                   (json.dumps({inference.VERSION_KEY: inference.CURRENT_VERSION, "project_id": 1, "recent_requests": reqs}),
+                    json.dumps({inference.VERSION_KEY: inference.CURRENT_VERSION,
+                                "period_check_version": rollup.PERIOD_CHECK_VERSION}), NOW))
 
     def mark(revision):
         led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,"
                        "meta,created_at) VALUES('loop_candidate',1,101,?,'t','{}',?)",
                        (json.dumps({"origin": {"revision": revision}}), NOW))
-        return "Loop候補" in notify_views.patient_summary_text(led.db, 1)[1]
+        text = notify_views.patient_summary_text(led.db, 1)[1]
+        assert "集約の現行性を確認できません" in text and "Loop候補" not in text
+        return "Loop候補" in "\n".join(notify_views._request_reply_lines(led.db, 1, {"recent_requests": reqs}))
 
     assert mark("0" * 64) is False                     # stale generation
     assert mark(f"{101:064x}") is True                 # current content_hash

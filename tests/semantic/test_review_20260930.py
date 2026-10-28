@@ -11,6 +11,7 @@ import extract_llm
 import notify_views
 import rollup
 import semantic_runtime as runtime
+from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY
 from semantic_testkit import (
     _AuditFailJev, _canonical_cfg, _ledger,
     _llm_v2, _message, _patient, _seeded_two,
@@ -117,16 +118,24 @@ def test_exhausted_revive_prefix_does_not_starve_tail(tmp_path):
     try:
         for i in range(extract_llm.REVIVE_MAX * 4 + 1):
             db.save_messages([_message(i + 1, body="synthetic exhausted input")], project_id=1)
+            source_hash = db.db.execute("SELECT content_hash FROM messages WHERE message_id=?", (i + 1,)).fetchone()[0]
             db.artifact_add("extract_llm", '{"_error":true}', project_id=1, message_id=i+1,
-                            meta={"error": True, "extract_version": extract_llm.EXTRACT_VERSION,
-                                  "attempts": 5, "hash": "synthetic",
+                            meta={VERSION_KEY: CURRENT_VERSION, "error": True,
+                                  "extract_version": extract_llm.EXTRACT_VERSION,
+                                  "attempts": 5, "hash": source_hash,
                                   "auto_retry": 3 if i < extract_llm.REVIVE_MAX * 4 else 0})
+        old = db.artifact_add("extract_llm", '{"_error":true}', project_id=1, message_id=1,
+                              meta={VERSION_KEY: LEGACY_VERSION, "error": True,
+                                    "extract_version": extract_llm.EXTRACT_VERSION,
+                                    "attempts": 5, "hash": source_hash, "auto_retry": 0})
+        old_meta = db.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (old,)).fetchone()[0]
         with db.db:
             db.db.execute("UPDATE artifacts SET created_at=?", (now - 25000,))
         result = extract_llm.revive_failed(db, now)
         assert result == {"revived": 1, "skipped_cap": 120}
-        tail = json.loads(db.artifacts("extract_llm")[-1]["meta"])
+        tail = json.loads(db.artifacts("extract_llm", message_id=extract_llm.REVIVE_MAX * 4 + 1)[0]["meta"])
         assert tail["auto_retry"] == 1 and tail["attempts"] == 4
+        assert db.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (old,)).fetchone()[0] == old_meta
     finally:
         db.close()
 

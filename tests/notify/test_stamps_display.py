@@ -315,17 +315,19 @@ def test_patient_summary_request_reply_states(led):
              "mid": 100, "reply_state": "done", "reply_conflict": True},
             {"kind": "doctor", "ctx": "処方変更", "at": "2026-09-29T09:00", "mid": 101}]
     reqs += [{"ctx": f"依頼{i}", "at": "2026-09-01T09:00", "mid": 200 + i} for i in range(5)]
-    # Exercise rendering of an already validated current rollup, not legacy migration.
+    # No configuration proof means the integration view must not trust this cache.
     led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
                    "created_at) VALUES('patient_rollup',1,NULL,?,'t',?,?)",
-                   (json.dumps({inference.VERSION_KEY: inference.CURRENT_VERSION, "recent_requests": reqs}),
+                   (json.dumps({inference.VERSION_KEY: inference.CURRENT_VERSION, "project_id": 1, "recent_requests": reqs}),
                     json.dumps({inference.VERSION_KEY: inference.CURRENT_VERSION,
                                 "period_check_version": rollup.PERIOD_CHECK_VERSION}), NOW))
     led.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
                    "created_at) VALUES('loop_candidate',1,101,?,'t','{}',?)",
                    (json.dumps({"origin": {"revision": f"{101:064x}"}}), NOW))
     _, text = notify_views.patient_summary_text(led.db, 1)
-    sec = text.split("■ 依頼候補の返信状況", 1)[1].split("\n■ ", 1)[0]
+    assert "集約の現行性を確認できません" in text
+    assert "■ 依頼候補の返信状況" not in text
+    sec = "\n".join(notify_views._request_reply_lines(led.db, 1, {"recent_requests": reqs}))
     assert "・09-30 残薬確認 — 返信: 完了と取消の記録あり" in sec
     assert "・09-29 処方変更 — 返信: 記録なし・Loop候補（semantic shadow）あり" in sec
     assert sec.count("\n・") == 5

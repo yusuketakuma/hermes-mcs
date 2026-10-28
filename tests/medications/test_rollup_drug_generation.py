@@ -9,6 +9,7 @@ import drug_map
 import rollup
 from medications_testkit import DOCUMENT, _dictionary, _seed, store as store
 from ingest_testkit import _message
+from ledger import Ledger
 
 
 def _cached(store):
@@ -67,7 +68,7 @@ def test_generation_change_before_build_stays_dirty_then_settles(store, tmp_path
     assert rollup.rebuild(store, 1) == aid
 
 
-def test_generation_change_during_cached_source_read_drops_only_refs(store, tmp_path, monkeypatch):
+def test_generation_change_during_cached_source_read_keeps_snapshot_consistent(store, tmp_path, monkeypatch):
     _seed(store)
     drug_map.derive(store, _dictionary(tmp_path))
     rollup.rebuild(store, 1)
@@ -76,12 +77,32 @@ def test_generation_change_during_cached_source_read_drops_only_refs(store, tmp_
     document['dict_id'] = 'fictional-replacement'
     replacement = _dictionary(tmp_path, document)
     real = rollup.current_refs
-    def racing(db, mid):
-        refs = real(db, mid)
-        drug_map.derive(store, replacement, deadline=0)
-        return refs
-    monkeypatch.setattr(rollup, 'current_refs', racing)
-    rendered = rollup.current_cached_refs(store.db, 1, cached, meta)
-    assert rendered['medications'][0]['name'] == 'キラナ'
-    assert 'ref' not in rendered['medications'][0]
-    assert 'ref' in cached['medications'][0]  # neither cache nor raw artifacts rewritten
+    assert cached['medications'][0]['ref']['dict_id'] == 'fictional-v1'
+    unknown = rollup.current_cached_refs(store.db, 1, cached, meta)
+    assert unknown['rollup_freshness'] == 'unknown' and 'medications' not in unknown
+    old_generation = drug_map.generation_signature(store.db)
+    path = store.db.execute('PRAGMA database_list').fetchone()[2]
+    other = Ledger(path)
+    calls = []
+    try:
+        def racing(db, mid):
+            refs = real(db, mid)
+            calls.append((mid, refs))
+            assert drug_map.derive(other, replacement, deadline=0)['status'] == 'partial'
+            return refs
+
+        monkeypatch.setattr(rollup, 'current_refs', racing)
+        rendered = rollup.current_cached_refs(store.db, 1, cached, meta, cfg={})
+        assert [mid for mid, _ in calls] == [1]
+        assert calls[0][1][0]['dict_id'] == 'fictional-v1'
+        assert rendered['medications'][0]['name'] == 'キラナ'
+        assert rendered['medications'][0]['ref']['dict_id'] == 'fictional-v1'
+        assert drug_map.generation_signature(store.db) != old_generation
+        monkeypatch.setattr(rollup, 'current_refs', real)
+        refreshed = rollup.current_cached_refs(store.db, 1, cached, meta, cfg={})
+        assert refreshed['medications'][0]['name'] == 'キラナ'
+        assert 'ref' not in refreshed['medications'][0]
+        assert _cached(store) == (cached, meta)
+        assert cached['medications'][0]['ref']['dict_id'] == 'fictional-v1'
+    finally:
+        other.close()

@@ -8,6 +8,7 @@ import time
 import pytest
 
 import semantic_drain
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
 
 
@@ -57,7 +58,8 @@ def test_worker_records_validation_code_without_leaking_it_to_the_next_job(tmp_p
     db.db.execute(
         "INSERT INTO fetch_jobs(job_id,kind,project_id,message_id,payload,"
         "state,attempts,next_try,created_at,updated_at) "
-        "VALUES (100,'extract_qc',1,1,'{}','pending',0,0,0,0)")
+        "VALUES (100,'extract_qc',1,1,?,'pending',0,0,0,0)",
+        (json.dumps({VERSION_KEY: CURRENT_VERSION}),))
     db.db.commit()
     monkeypatch.setattr(semantic_drain, '_BACKLOG_TURN', {'kind': None})
     monkeypatch.setattr(semantic_qc, '_qc_seed', lambda *a: 0)
