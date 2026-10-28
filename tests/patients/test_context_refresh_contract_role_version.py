@@ -1,4 +1,5 @@
 """A role-extraction generation change makes old nightly scans unusable and reruns them."""
+import patient_context_plan as context_plan
 import json
 
 import pytest
@@ -25,7 +26,7 @@ def test_generation_change_rejects_completed_scan_and_rescans(runtime, monkeypat
     monkeypatch.setattr(module, version, getattr(module, version) + 1)
     current = context_refresh._snapshot(led.db, 1, CFG)
     assert old_meta["contract"] != current["contract"]
-    assert old_meta["source_sig"] == context_refresh._source_sig(current["sources"][0])
+    assert old_meta["source_sig"] == context_plan.source_signature(current["sources"][0])
     assert context_refresh._current_scans(led.db, 1, current["sources"], current["contract"]) == {}
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
     pending = context_refresh._pending(led.db, 1, CFG, now=clock.wall)[2]

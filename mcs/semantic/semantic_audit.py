@@ -934,3 +934,47 @@ def audit_patient_summary_chunk(jev_client, summary, candidates, sources, deadli
             "passing_choices": {fid: "supports" if fid in selected else "omission_ok" for fid in ids}}
     return audit_patient_quality_page(jev_client, page, deadline, threshold, prior_answers=prior_answers,
         on_valid_answers=on_valid_answers, on_attempt_result=on_attempt_result)
+
+
+def patient_source_quality_identity(source, facts, occurrence, contract, chunks_sig, assessment):
+    """Build source QA identity from source and the selected, strictly validated facts."""
+    import hashlib
+    from mcs_util import html_to_text, payload_hash, valid_hash
+
+    if (not isinstance(source, dict) or not isinstance(facts, list)
+            or not isinstance(occurrence, dict) or set(occurrence) != {'source_binding', 'first_seen', 'scope'}
+            or not valid_hash(occurrence['source_binding']) or not isinstance(occurrence['scope'], dict)
+            or set(occurrence['scope']) != {'project_id', 'project_type', 'karte_id', 'is_archived'}
+            or occurrence['scope']['project_id'] != source.get('project_id')
+            or not isinstance(contract, dict) or not valid_hash(chunks_sig)
+            or not isinstance(assessment, dict) or set(assessment) != {'code', 'policy'}
+            or any(not valid_hash(value) for value in assessment.values())):
+        raise ValueError('patient_source_identity_invalid')
+    body = source.get('body_text')
+    if not isinstance(body, str):
+        raise ValueError('patient_source_identity_invalid')
+    if source.get('source') == 'chat':
+        html = source.get('body_html')
+        if (not isinstance(html, str) or hashlib.sha256(html.encode('utf-8')).hexdigest() != source.get('content_hash')
+                or html_to_text(html) != body):
+            raise ValueError('patient_source_identity_invalid')
+    source_key = source.get('source_key', source.get('message_id'))
+    source_input_key = payload_hash(['patient-source-input/1', source['project_id'], occurrence['scope'],
+        source_key, occurrence['source_binding'], occurrence['first_seen'], source.get('content_hash'),
+        hashlib.sha256(body.encode('utf-8')).hexdigest(), contract])
+    pages = list(patient_source_quality_pages(source, facts, source_input_key=source_input_key, assessment=assessment))
+    ids = [fid for page in pages for fid in page['fact_ids']]
+    passing = {fid: choice for page in pages for fid, choice in page['passing_choices'].items()}
+    question_keys = {fid: key for page in pages for fid, key in page['question_keys'].items()}
+    if not ids or len(ids) != len(set(ids)) or set(ids) != set(passing) or set(ids) != set(question_keys):
+        raise ValueError('patient_source_identity_invalid')
+    input_key = payload_hash(['source', source_input_key])
+    candidate_key = payload_hash(sorted(payload_hash([{key:value for key,value in fact.items()
+        if key not in ('found_at','found_night_id','discovery')}]) for fact in facts))
+    material = [[page['fact_ids'], page['state'], page['questions'], page['passing_choices']] for page in pages]
+    failure_key = payload_hash(['source', input_key, candidate_key, assessment])
+    identity = {'purpose':'source', 'input_key':input_key, 'candidate_key':candidate_key,
+        'failure_key':failure_key, 'audit_key':payload_hash([failure_key, chunks_sig, material]),
+        'fact_ids':ids, 'passing_choices':passing, 'source_fact_count':len(facts),
+        'assessment':assessment, 'source_input_key':source_input_key, 'question_keys':question_keys}
+    return identity, pages

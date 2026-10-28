@@ -1002,3 +1002,64 @@ def current_message_urgency_qc(db, mid: int):
         f"   {current_extract_pred('a', 'm2')})"
         " ORDER BY q.artifact_id DESC LIMIT 1", (mid,)).fetchone()
     return loads_dict(row["content"]) if row else None
+
+
+def patient_context_scope(db, pid):
+    """Read the patient's nonsecret source scope on a borrowed connection."""
+    row = db.execute("SELECT project_id,project_type,karte_id,is_archived,fetch_state,fetch_reason "
+                     "FROM patients WHERE project_id=?", (pid,)).fetchone()
+    return dict(row) if row else None
+
+
+def patient_context_sources(db, pid, *, hydrate=True, mid=None):
+    """Read only the patient's original records, never previous generated prose."""
+    from patient_context import context_items, extract_context, project_context_items
+    from patient_context_plan import source_digest
+    extractions = {}
+    seen = set()
+    for row in db.execute(
+            "SELECT a.message_id,a.artifact_id,a.kind,a.content,a.model,a.meta FROM artifacts a "
+            "JOIN messages m ON m.message_id=a.message_id WHERE m.project_id=? "
+            "AND (a.project_id=? OR (a.project_id IS NULL AND a.kind IN ('extract_v1','extract_llm'))) AND a.kind IN "
+            f"({EXTRACTION_KINDS_SQL}) "
+            + current_extract_pred("a", "m")
+            + " AND (a.kind IN ('extract_v1','extract_llm') OR (1=1 " + current_fact_pred("a", "m") + ")) "
+            + ("AND m.message_id=? " if mid is not None else "")
+            + "ORDER BY a.artifact_id DESC", (pid, pid, mid) if mid is not None else (pid, pid)):
+        if (row[0], row[2]) in seen:
+            continue
+        seen.add((row[0], row[2]))
+        extractions.setdefault(row[0], []).append(row)
+    columns = ("m.*" if hydrate else "m.message_id,m.project_id,m.content_hash,m.body_state,"
+               "m.posted_at,m.posted_at_ts,m.sender_id,m.sender_name,m.parent_id,m.first_seen")
+    for row in db.execute(f"SELECT {columns},length(m.body_text) AS body_length FROM messages m "
+                          "WHERE project_id=? " + ("AND message_id=? " if mid is not None else "")
+                          + "ORDER BY message_id", (pid, mid) if mid is not None else (pid,)):
+        message = dict(row)
+        rows = extractions.get(message["message_id"], [])
+        message["extraction_sig"] = source_digest(sorted((r[2], extraction_input_signature(r[3], r[5], r[4])) for r in rows))
+        items = source_patient_context(db, message, art_rows=list(reversed(rows))) if hydrate else []
+        source = {key: message.get(key) for key in
+                  ("project_id", "message_id", "content_hash", "posted_at_ts")}
+        items = project_context_items(items, "detail", source)
+        # Explicit headings remain usable before the ordinary extractor runs.
+        items = context_items({"patient_context": items + (extract_context(message.get("body_text")) if hydrate else [])},
+                              message.get("body_text"))
+        yield {**message, "source": "chat", "items": items,
+               "canonical_context": any(row[2] in ("canonical_projection", "semantic_facts_v4") for row in rows)}
+    if mid not in (None, 0) and not (isinstance(mid, str) and mid.startswith("karte:")):
+        return
+    scope = patient_context_scope(db, pid)
+    rows = db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind='karte_summary' "
+                      "AND project_id=? ORDER BY artifact_id DESC", (pid,))
+    latest = True
+    for row in rows:
+        meta = loads_dict(row[2]) or {}
+        if not scope or scope["karte_id"] is None or meta.get("karte_id") != scope["karte_id"]:
+            continue
+        source_key = "karte:" + str(row[0])
+        current_record, latest = latest, False
+        if isinstance(mid, str) and mid != source_key:
+            continue
+        source = karte_source_record(row, pid, historical=not current_record)
+        yield {**source, "items": extract_context(source["body_text"]) if hydrate else []}

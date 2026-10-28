@@ -1002,6 +1002,9 @@ def patient_source_question_evidence(db, pid, identity, fact_ids):
                     if item["fact_id"] in requested and item["question_key"] == keys["question_keys"][item["fact_id"]]}
         if request["source_input_key"] != keys["source_input_key"]:
             continue
+        if request['assessment_hash'] != payload_hash(keys['assessment']):
+            result['problems'].update(dict.fromkeys(matching, 'unknown'))
+            continue
         parts = _quality_result_parts(meta, request)
         if parts is None:
             result["problems"].update(dict.fromkeys(matching, "unknown"))
@@ -1418,3 +1421,119 @@ def bind_jev(client, guard, reserve=None, cutoff=None, *, transport=None, timing
     if client is None:
         return None
     return JevEvaluation(client, guard, reserve, cutoff, transport, timing)
+
+
+_SOURCE_PASS_POLICY_KEYS = ('model', 'match_threshold', 'nomatch_threshold',
+                          'calibration_version', 'fact_source', 'candidate_fingerprint')
+
+
+def patient_source_assessment_descriptor(assessment, policy):
+    """Describe the interpretation policy without credentials, scope lists or spending settings."""
+    return {'v': 1, 'assessment': dict(assessment),
+            'policy': {key: policy.get(key) for key in _SOURCE_PASS_POLICY_KEYS}}
+
+
+def patient_source_pass_content(db, pid, identity, descriptor):
+    """Rebuild a source PASS from its bounded policy and original Jev receipts."""
+    import hashlib
+    import extract_llm
+    import semantic_candidate
+    import semantic_policy
+    from semantic_jev import JEV_MODEL
+
+    if not db.in_transaction:
+        raise ValueError('patient_source_snapshot_required')
+    keys = _quality_identity(identity, purpose='source')
+    if (type(pid) is not int or pid <= 0 or not isinstance(descriptor, dict)
+            or set(descriptor) != {'v', 'assessment', 'policy'} or type(descriptor['v']) is not int
+            or descriptor['v'] != 1 or not isinstance(descriptor['policy'], dict)
+            or set(descriptor['policy']) != set(_SOURCE_PASS_POLICY_KEYS)):
+        raise ValueError('patient_source_descriptor_invalid')
+    policy = descriptor['policy']
+    lo, hi = policy['nomatch_threshold'], policy['match_threshold']
+    if (policy['model'] != JEV_MODEL or type(lo) not in (int, float) or type(hi) not in (int, float)
+            or not math.isfinite(lo) or not math.isfinite(hi) or not 0 <= lo < hi <= 1
+            or policy['fact_source'] not in ('legacy', 'shadow', 'canonical')
+            or policy['calibration_version'] is not None and (
+                not isinstance(policy['calibration_version'], str)
+                or not policy['calibration_version'].strip() or len(policy['calibration_version']) > 128)
+            or policy['fact_source'] == 'legacy' and policy['candidate_fingerprint'] is not None
+            or policy['fact_source'] != 'legacy' and not valid_hash(policy['candidate_fingerprint'])):
+        raise ValueError('patient_source_descriptor_invalid')
+    assessment = descriptor['assessment']
+    code = payload_hash([extract_llm._LOADED_SOURCE_DIGESTS, semantic_candidate.loaded_source_contract()])
+    if (assessment != keys['assessment'] or not isinstance(assessment, dict)
+            or set(assessment) != {'code', 'policy'} or assessment['code'] != code
+            or assessment['policy'] != semantic_policy.policy_fingerprint(policy)):
+        raise ValueError('patient_source_descriptor_invalid')
+    ids = identity.get('fact_ids')
+    if (not isinstance(ids, list) or not ids or len(ids) != len(set(ids))
+            or set(ids) != set(keys['question_keys']) or type(identity.get('source_fact_count')) is not int
+            or identity['source_fact_count'] != len(ids) - 1):
+        raise ValueError('patient_source_identity_invalid')
+    references = hashlib.sha256()
+    for start in range(0, len(ids), 12):
+        page = ids[start:start + 12]
+        evidence = patient_source_question_evidence(db, pid, identity, page)
+        if (evidence['problems'] or set(evidence['answers']) != set(page)
+                or set(evidence['references']) != set(page)
+                or any(evidence['answers'][fid]['choice'] != keys['passing_choices'][fid]
+                       or evidence['answers'][fid]['confidence'] < hi for fid in page)):
+            return None
+        for fid in page:
+            references.update(bytes.fromhex(payload_hash([fid, evidence['references'][fid]])))
+    return {'question_count': len(ids), 'source_fact_count': identity['source_fact_count'],
+            'answer_refs_sig': references.hexdigest(), 'descriptor': descriptor}
+
+
+def patient_source_pass_descriptor(db, pid, audit_key):
+    """Read only a unique, strictly parsed source PASS descriptor by audit identity."""
+    from inference_version import CURRENT_VERSION, current_meta_pred
+
+    if not db.in_transaction or type(pid) is not int or pid <= 0 or not valid_hash(audit_key):
+        raise ValueError('patient_source_descriptor_invalid')
+    kinds = ('patient_context_source_quality_fail_v1', 'patient_context_source_quality_pass_v1')
+    bad = db.execute("SELECT 1 FROM artifacts WHERE project_id=? AND kind IN (?,?) AND CASE "
+        "WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
+        "WHEN json_type(meta)!='object' THEN 1 "
+        "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE key IS NOT NULL GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
+        "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE type='real' AND abs(value)>1.7976931348623157e308) THEN 1 "
+        "ELSE 0 END LIMIT 1", (pid, *kinds)).fetchone()
+    if bad:
+        return None
+    rows = db.execute("SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? AND "
+        + current_meta_pred('meta', target=CURRENT_VERSION)
+        + " AND json_extract(meta,'$.audit_key')=? ORDER BY artifact_id LIMIT 2",
+        (kinds[1], pid, audit_key)).fetchall()
+    if len(rows) != 1:
+        return None
+    content, meta = _quality_json(rows[0][0]), _quality_json(rows[0][1])
+    if content is None or meta is None or meta.get('audit_key') != audit_key:
+        return None
+    return content.get('descriptor')
+
+
+def patient_source_pass_verified(db, pid, identity, descriptor):
+    """Verify recorded policy and original receipts, not current config or publication authority."""
+    from inference_version import CURRENT_VERSION, current_meta_pred
+
+    if patient_source_pass_descriptor(db, pid, identity['audit_key']) != descriptor:
+        return False
+    expected = patient_source_pass_content(db, pid, identity, descriptor)
+    if expected is None:
+        return False
+    for kind, key, value in (('patient_context_source_quality_fail_v1', 'failure_key', identity['failure_key']),
+                             ('patient_context_source_quality_pass_v1', 'audit_key', identity['audit_key'])):
+        rows = db.execute("SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? AND "
+            + current_meta_pred('meta', target=CURRENT_VERSION)
+            + " AND json_extract(meta,?)=? ORDER BY artifact_id LIMIT 2",
+            (kind, pid, '$.' + key, value)).fetchall()
+        if kind.endswith('_fail_v1'):
+            if rows:
+                return False
+        elif (len(rows) != 1 or _quality_json(rows[0][0]) != expected
+              or not isinstance(_quality_json(rows[0][1]), dict)
+              or any(_quality_json(rows[0][1]).get(key) != identity[key]
+                     for key in ('input_key', 'candidate_key', 'audit_key'))):
+            return False
+    return True

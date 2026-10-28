@@ -93,6 +93,7 @@ import initial_import_state
 import history_walk
 import mcs_queries
 import inference_dependency_loss
+import patient_context_artifacts
 import mcs_util
 import semantic_assembly
 import semantic_facts
@@ -141,6 +142,7 @@ _LOADED_SOURCE_DIGESTS = {
                        ("writer_lock", writer_lock.__file__),
                        ("inference_version", inference.__file__),
                        ("inference_dependency_loss", inference_dependency_loss.__file__),
+                       ("patient_context_artifacts", patient_context_artifacts.__file__),
                        ("semantic_store", semantic_store.__file__),
                        ("semantic_notice", semantic_notice.__file__),
                        ("semantic_render", semantic_render.__file__),
@@ -669,7 +671,7 @@ class _CloudProvider:
 
     def __init__(self, ledger, cfg, *, route, project_id, unit_key, deadline,
                  current, dispatch, message_id=None, owner=None, discard_reason=None,
-                 max_attempts=None):
+                 max_attempts=None, on_reserved_tx=None, reserve_dispatch=None):
         cfg = {**cfg, "cloud_llm": _cloud_settings(cfg)}
         self.model = cfg["cloud_llm"]["model"]
         self.contract = _cloud_contract()
@@ -720,9 +722,10 @@ class _CloudProvider:
             current_cfg = {"cloud_llm": _cloud_settings(load_config())}
             reserved_caps.clear()
             reserved_caps.update(caps(current_cfg["cloud_llm"]))
+            hook = {"on_reserved_tx": on_reserved_tx} if on_reserved_tx is not None else {}
             return cloud_policy.usage_reserver(ledger, current_cfg, route=route, project_id=project_id,
-                unit_key=unit_key, message_id=message_id, owner=owner)(body, timeout)
-        self.reserve = lambda body, timeout: dispatch(lambda: reserve(body, timeout))
+                unit_key=unit_key, message_id=message_id, owner=owner, **hook)(body, timeout)
+        self.reserve = lambda body, timeout: (reserve_dispatch or dispatch)(lambda: reserve(body, timeout))
         def record(reservation, metadata):
             # The callback also settles a reservation rejected before sending.
             # Capture the other cases before owner-thread dispatch: acquiring the

@@ -8,6 +8,7 @@ import re
 
 from inference_version import CURRENT_VERSION
 from mcs_util import loads_dict
+import patient_context_artifacts as context_artifacts
 
 KIND = 'inference_dependency_loss'
 SCHEMA = 'dependency-loss/v1'
@@ -16,8 +17,8 @@ _SOURCE_FIELDS = ('content_hash', 'body_text', 'body_state', 'parent_id', 'sende
 SOURCE_BINDING_COLUMNS = (','.join('m.' + field for field in _SOURCE_FIELDS)
                           + ',(SELECT COALESCE(MAX(seq),1) FROM message_revisions '
                             'WHERE message_id=m.message_id) AS _source_revision')
-_SOURCE_KINDS = ('extract_v1', 'extract_llm', 'canonical_projection', 'semantic_facts_v4',
-                 'patient_context_scan_chunk_v1')
+_SOURCE_KINDS = ('extract_v1', 'extract_llm', 'canonical_projection', 'semantic_facts_v4')
+_CONTEXT_KINDS = (context_artifacts.ORIGINAL_KIND, context_artifacts.CANDIDATE_KIND)
 
 
 def _digest(value):
@@ -218,15 +219,18 @@ def _facts(source, artifact):
     if (meta is None or doc is None or meta.get('error') or doc.get('_error')
             or meta.get('invalidated')
             or meta.get('source_binding') is not None and meta['source_binding'] != source.get('_binding')
-            or artifact['kind'] != 'patient_context_scan_chunk_v1'
+            or artifact['kind'] not in _CONTEXT_KINDS
             and meta.get('hash', meta.get('content_hash')) != source['content_hash']):
         return None
-    if artifact['kind'] == 'patient_context_scan_chunk_v1':
+    if artifact['kind'] in _CONTEXT_KINDS:
+        if artifact['kind'] == context_artifacts.CANDIDATE_KIND and doc.get('phase') == 'split':
+            return [] if doc.get('facts') == [] else None
         candidates = []
         for fact in doc.get('facts') or []:
             if (not isinstance(fact, dict) or any(fact.get(k) != source.get(k)
                     for k in ('project_id', 'message_id', 'content_hash'))
-                    or source.get('source_key') is not None and fact.get('source_key') != source['source_key']):
+                    or source.get('source_key') is not None and fact.get('source_key') != source['source_key']
+                    or artifact['kind'] == context_artifacts.CANDIDATE_KIND and fact.get('source_key') != meta.get('source_key')):
                 continue
             span = fact.get('evidence_span')
             if (not isinstance(span, list) or len(span) != 2 or any(type(n) is not int for n in span)
@@ -251,6 +255,76 @@ def _facts(source, artifact):
     return candidates
 
 
+def _context_occurrence(db, pid, source, binding):
+    scope = db.execute('SELECT project_id,project_type,karte_id,is_archived FROM patients WHERE project_id=?', (pid,)).fetchone()
+    if scope is None:
+        raise ValueError('dependency_loss_scope_unavailable')
+    return {'source_binding': binding, 'first_seen': source.get('first_seen'), 'scope': dict(scope)}
+
+
+
+def _verified_cloud_context(db, pid, key, scan):
+    """Prove raw source and recorded-policy receipts, not current config or publication authority."""
+    import patient_context_plan as plan
+    import semantic_audit
+    import semantic_runtime
+    from mcs_queries import patient_context_scope, patient_context_sources, paused
+
+    try:
+        doc, meta = context_artifacts.decode_document(scan['content']), context_artifacts.decode_document(scan['meta'], metadata=True)
+        audit_key, chunks_sig = doc.get('source_quality_audit_key'), doc.get('audited_chunks_sig')
+        if (doc.get('complete') is not True or doc.get('audited') is not True
+                or not isinstance(audit_key, str) or not re.fullmatch('[0-9a-f]{64}', audit_key)):
+            return False
+        descriptor = semantic_runtime.patient_source_pass_descriptor(db, pid, audit_key)
+        if not isinstance(descriptor, dict):
+            return False
+        actual = list(patient_context_sources(db, pid, mid=key))
+        if len(actual) != 1 or not plan.source_usable(actual[0]):
+            return False
+        source = actual[0]
+        scope = patient_context_scope(db, pid)
+        policy = descriptor.get('policy')
+        if (not scope or scope.get('is_archived') or paused(db, pid) or scope.get('fetch_reason') in
+                ('forbidden', 'permission_denied', 'access_revoked') or not isinstance(policy, dict)
+                or (source.get('source') == 'chat'
+                    and bool(source.get('canonical_context')) != (policy.get('fact_source') == 'canonical'))):
+            return False
+        binding = source_binding(db, pid, source['message_id'], **({'source_key':key} if isinstance(key,str) else {}))
+        occurrence = _context_occurrence(db, pid, source, binding)
+        contract = meta.get('route_contract', meta.get('contract'))
+        if (not isinstance(contract, dict) or not contract.get('provider')
+                or meta.get('source_sig') != plan.source_signature(source)):
+            return False
+        selected = context_artifacts.selected_rows(db, pid, key, source_binding=binding,
+            source_occurrence=occurrence, body_size=len(source['body_text']))
+        if doc.get('accepted_candidate_ref') is None:
+            selected = context_artifacts.original_quality_rows(db, pid, key, scan, plan.source_signature(source),
+                contract, occurrence, len(source['body_text']))
+        elif doc['accepted_candidate_ref'].get('chunks_sig') != chunks_sig:
+            return False
+        facts_by_id = {}
+        for row in selected:
+            chunk = context_artifacts.decode_document(row['content'])
+            if chunk.get('phase') == 'split':
+                continue
+            facts = chunk.get('facts')
+            if not isinstance(facts, list) or len(plan.validated_source_facts(source, facts)) != len(facts):
+                return False
+            for fact in facts:
+                prior = facts_by_id.get(fact['id'])
+                def meaning(value):
+                    return plan.source_digest([{k:v for k,v in value.items()
+                        if k not in ('found_at','found_night_id','discovery')}])
+                if prior is not None and meaning(prior) != meaning(fact):
+                    return False
+                facts_by_id.setdefault(fact['id'], fact)
+        identity, _ = semantic_audit.patient_source_quality_identity(source, list(facts_by_id.values()),
+            occurrence, contract, chunks_sig, descriptor.get('assessment'))
+        return identity['audit_key'] == audit_key and semantic_runtime.patient_source_pass_verified(db, pid, identity, descriptor)
+    except (ValueError, TypeError, KeyError, UnicodeError, OSError, RuntimeError, OverflowError):
+        return False
+
 def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
     """Capture validated old support in memory under the caller's writer reservation."""
     _active(db)
@@ -265,9 +339,7 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
         binding = source_binding(db, pid, 0, source_key=source_key)
         source['_binding'] = binding
         revision = raw_id
-        condition = ("artifacts.project_id=? AND artifacts.kind='patient_context_scan_chunk_v1' "
-            "AND CASE WHEN json_valid(artifacts.meta) THEN json_extract(artifacts.meta,'$.source_key')=? END")
-        params = (pid, source_key)
+        condition, params = '0', ()
     else:
         source_row = db.execute('SELECT * FROM messages WHERE project_id=? AND message_id=?', (pid, mid)).fetchone()
         if source_row is None:
@@ -279,6 +351,7 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
         condition = ('(artifacts.project_id=? OR artifacts.project_id IS NULL) AND artifacts.message_id=? '
                      'AND artifacts.kind IN (' + ','.join('?' for _ in _SOURCE_KINDS) + ')')
         params = (pid, mid, *_SOURCE_KINDS)
+    selected = None
     if artifact_ids is None:
         rows = db.execute('SELECT artifacts.* FROM artifacts WHERE ' + condition
                           + ' ORDER BY artifacts.artifact_id', params).fetchall()
@@ -302,7 +375,22 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
                               (json.dumps(sorted(selected)), *params)).fetchall()
         else:
             rows = []
+    context_failed = False
+    if selected is None or db.execute('SELECT 1 FROM json_each(?) selected CROSS JOIN artifacts '
+            'WHERE artifacts.artifact_id=selected.value AND artifacts.kind IN (?,?) LIMIT 1',
+            (json.dumps(sorted(selected)), *_CONTEXT_KINDS)).fetchone():
+        try:
+            chunks = context_artifacts.selected_rows(db, pid, source_key if source_key is not None else mid,
+                artifact_ids=selected, source_binding=binding,
+                source_occurrence=_context_occurrence(db, pid, source, binding), body_size=len(source.get('body_text') or ''))
+            rows = sorted([*rows, *chunks], key=lambda artifact: artifact['artifact_id'])
+        except ValueError:
+            context_failed = True
     records, gaps, bound_facts, observed = [], [], {}, []
+    if context_failed:
+        gaps.append({'message_id': mid, 'content_hash': source['content_hash'], 'revision': revision,
+            'binding': binding, 'source_key': source_key if source_key is not None else mid,
+            'kind': 'patient_context_candidate_unavailable', 'artifact_id': None})
     analysed = False
     valid_chunk_sigs = set()
     import patient_context_state as state
@@ -325,11 +413,11 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
             if not known and not meta.get('error'):
                 gaps.append(origin)
             continue
-        if artifact['kind'] == 'patient_context_scan_chunk_v1' and isinstance(meta.get('source_sig'), str):
+        if artifact['kind'] in _CONTEXT_KINDS and isinstance(meta.get('source_sig'), str):
             valid_chunk_sigs.add(meta['source_sig'])
         if artifact['kind'] != 'extract_v1':
             observed.append(origin)
-        if artifact['kind'] not in ('extract_v1', 'patient_context_scan_chunk_v1'):
+        if artifact['kind'] not in ('extract_v1', *_CONTEXT_KINDS):
             analysed = True
         for fact in facts:
             bound_facts[fact['id']] = (fact, origin)
@@ -345,16 +433,51 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
                           'support': _digest([state.dependency_values(fact), temporal])}
                 records.append(record)
     audited = False
-    if artifact_ids is None and valid_chunk_sigs:
-        for scan in db.execute("SELECT content,meta FROM artifacts WHERE kind='patient_context_scan_v1' AND project_id=? "
-                "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.source_key') IS ? END", (pid, source_key if source_key is not None else mid)):
-            scan_doc, scan_meta = loads_dict(scan[0]) or {}, loads_dict(scan[1]) or {}
-            if (scan_meta.get('source_sig') in valid_chunk_sigs and not scan_meta.get('invalidated')
-                    and scan_doc.get('complete') is True and scan_doc.get('audited') is True
+    quality_required = False
+    for item in rows:
+        if item['kind'] in _CONTEXT_KINDS:
+            entry = loads_dict(item['meta']) or {}
+            route = entry.get('route_contract')
+            quality_required |= bool(entry.get('provider') or isinstance(route, dict) and route.get('provider'))
+    scan = (context_artifacts.selected_scan(db, pid, source_key if source_key is not None else mid)
+            if valid_chunk_sigs or quality_required else None)
+    if scan is not None:
+        scan_doc, scan_meta = loads_dict(scan['content']) or {}, loads_dict(scan['meta']) or {}
+        ref = scan_doc.get('accepted_candidate_ref')
+        route = scan_meta.get('route_contract', scan_meta.get('contract'))
+        quality_required = bool(quality_required or ref is not None or scan_meta.get('provider')
+                                or isinstance(route, dict) and route.get('provider'))
+        verified = (scan_doc.get('complete') is True and scan_doc.get('audited') is True
                     and isinstance(scan_doc.get('audited_chunks_sig'), str)
-                    and re.fullmatch('[0-9a-f]{64}', scan_doc['audited_chunks_sig'])):
-                analysed = audited = True
-                break
+                    and re.fullmatch('[0-9a-f]{64}', scan_doc['audited_chunks_sig'])
+                    and (ref is None or isinstance(ref, dict) and ref.get('chunks_sig') == scan_doc['audited_chunks_sig']))
+        if quality_required:
+            verified = bool(verified and _verified_cloud_context(db, pid, source_key if source_key is not None else mid, scan))
+            if not verified:
+                gaps.append({'message_id': mid, 'content_hash': source['content_hash'], 'revision': revision,
+                    'binding': binding, 'source_key': source_key if source_key is not None else mid,
+                    'kind': 'patient_context_audit_unverified', 'artifact_id': None})
+        else:
+            # Local legacy keeps its existing scan proof, including explicit row selection.
+            if selected is not None:
+                try:
+                    full = context_artifacts.selected_rows(db, pid, source_key if source_key is not None else mid,
+                        source_binding=binding, source_occurrence=_context_occurrence(db, pid, source, binding),
+                        body_size=len(source.get('body_text') or ''))
+                    full_sigs = {(loads_dict(item['meta']) or {}).get('source_sig') for item in full}
+                except ValueError:
+                    full_sigs = set()
+            else:
+                full_sigs = valid_chunk_sigs
+            verified = bool(verified and scan_meta.get('source_sig') in full_sigs)
+        if verified:
+            audited = True
+            if artifact_ids is None:
+                analysed = True
+    elif quality_required:
+        gaps.append({'message_id': mid, 'content_hash': source['content_hash'], 'revision': revision,
+            'binding': binding, 'source_key': source_key if source_key is not None else mid,
+            'kind': 'patient_context_audit_unverified', 'artifact_id': None})
     # Resolve only explicit, affirmed correction targets using the same exact
     # quote/person/category relation contract as the clinical projection.
     for fact, origin in list(bound_facts.values()):
@@ -368,8 +491,31 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
             target_source = dict(target_row)
             target_source['_binding'] = source_binding(db, pid, target_mid)
             candidates = {}
-            for target_artifact in db.execute('SELECT * FROM artifacts WHERE (project_id=? OR project_id IS NULL) AND message_id=? '
-                    'AND kind IN (' + ','.join('?' for _ in _SOURCE_KINDS) + ')', (pid, target_mid, *_SOURCE_KINDS)):
+            target_rows = list(db.execute('SELECT * FROM artifacts WHERE (project_id=? OR project_id IS NULL) AND message_id=? '
+                    'AND kind IN (' + ','.join('?' for _ in _SOURCE_KINDS) + ')', (pid, target_mid, *_SOURCE_KINDS)))
+            try:
+                selected_target = context_artifacts.selected_rows(db, pid, target_mid,
+                    source_binding=target_source['_binding'],
+                    source_occurrence=_context_occurrence(db, pid, target_source, target_source['_binding']),
+                    body_size=len(target_source.get('body_text') or ''))
+                target_scan = context_artifacts.selected_scan(db, pid, target_mid) if selected_target else None
+                target_meta = loads_dict(target_scan['meta']) or {} if target_scan else {}
+                target_doc = loads_dict(target_scan['content']) or {} if target_scan else {}
+                target_route = target_meta.get('route_contract', target_meta.get('contract'))
+                target_requires_qa = bool(target_doc.get('accepted_candidate_ref') is not None
+                    or target_meta.get('provider') or isinstance(target_route, dict) and target_route.get('provider'))
+                for target_item in selected_target:
+                    target_origin = loads_dict(target_item['meta']) or {}
+                    target_route = target_origin.get('route_contract')
+                    target_requires_qa |= bool(target_origin.get('provider')
+                        or isinstance(target_route, dict) and target_route.get('provider'))
+                if target_requires_qa and (target_scan is None or not _verified_cloud_context(db, pid, target_mid, target_scan)):
+                    gaps.append({**origin, 'kind': 'patient_context_audit_unverified'})
+                else:
+                    target_rows.extend(selected_target)
+            except ValueError:
+                gaps.append({**origin, 'kind': 'patient_context_candidate_unavailable'})
+            for target_artifact in target_rows:
                 for candidate in _facts(target_source, target_artifact) or []:
                     candidates[candidate['id']] = candidate
             projection = state.project([fact, *candidates.values()])
@@ -393,7 +539,7 @@ def capture_tx(db, pid, mid, *, artifact_ids=None, source_key=None):
     if artifact_ids is None and not analysed and source.get('body_state') in (None, 'full') and source.get('body_text'):
         gaps.append({'message_id': mid, 'content_hash': source['content_hash'], 'revision': revision,
                      'binding': binding, 'source_key': source_key if source_key is not None else mid, 'kind': 'unanalysed', 'artifact_id': None})
-    return {'project_id': pid, 'message_id': mid, 'records': records, 'gaps': gaps, 'observed': observed, 'source_key': source_key, 'audited': audited}
+    return {'project_id': pid, 'message_id': mid, 'records': records, 'gaps': gaps, 'observed': observed, 'source_key': source_key, 'audited': audited, 'quality_required': quality_required}
 
 
 
@@ -419,7 +565,8 @@ def record_tx(db, snapshot, *, replacement_id=None, replacement_ids=(), audited_
     entries = [(r, False) for r in snapshot['records']
                if (r['entity'], r['axis'], r['support']) not in equivalent]
     entries += [({'origin': origin}, True) for origin in snapshot['gaps']]
-    audit_proof = audited_source or snapshot.get('audited') is True
+    audit_proof = (snapshot.get('audited') is True if snapshot.get('quality_required')
+                   else audited_source or snapshot.get('audited') is True)
     if not replacement_ids and (not entries or audit_proof) and not snapshot['gaps']:
         entries += [({'origin': origin, 'coverage': True, 'audited_source': audit_proof}, False) for origin in snapshot.get('observed', [])]
     count = 0

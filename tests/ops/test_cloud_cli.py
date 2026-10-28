@@ -1,4 +1,5 @@
 """Local-only cloud estimates and receipt-based global controls with synthetic data."""
+import patient_context_plan as context_plan
 from contextlib import closing
 from datetime import datetime
 from decimal import Decimal
@@ -315,29 +316,91 @@ def test_resume_refuses_unreadable_or_schema_invalid_config_at_mutation_owner(wo
 
 
 def _complete_context(db, config):
-    """Fabricate checked empty facts for the fixture's nonclinical full source."""
+    """Build a completed synthetic context with the original source QA evidence."""
     import patient_context_refresh as context
+    import semantic_jev
+    import semantic_policy
+    import semantic_runtime
+
+    with db.db:
+        db.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 "
+                      "WHERE project_id=1")
     contract = context._contract({**config, "cloud_llm": {"mode": "off"}})
     contract["provider"] = extract_llm._cloud_contract()
+    policy, errors = semantic_policy.semantic_config(config, key_present=True)
+    assert not errors
+    assessment = context._quality_assessment(policy)
     snapshot = context._snapshot(db.db, 1, config, hydrate=False, contract=contract)
+    assert len(snapshot["sources"]) == 1
+    source = snapshot["sources"][0]
+    meta = {"source_sig": context_plan.source_signature(source), "contract": contract,
+            "provider": contract["provider"], "model": cloud_policy.MODEL}
+    span = [0, source["body_length"]]
+    unit = context._digest([context_plan.source_key(source), meta["source_sig"], span])
+    chunk = {"chunk_span": span, "part": 0, "parts": 1, "facts": []}
+    chunk_key = context._digest([unit, 0])
     with db.db:
-        for source in snapshot["sources"]:
-            meta = {"source_sig": context._source_sig(source), "contract": contract,
-                    "provider": contract["provider"], "model": cloud_policy.MODEL}
-            span = [0, source["body_length"]]
-            unit = context._digest([context._source_key(source), meta["source_sig"], span])
-            chunk = {"chunk_span": span, "part": 0, "parts": 1, "facts": []}
-            chunk_key = context._digest([unit, 0])
-            context._replace(db, context.CHUNK, 1, chunk,
-                {**meta, "unit_key": unit, "chunk_key": chunk_key}, source["message_id"])
-            chunks_sig = context._digest([context._digest([chunk_key, json.dumps(chunk, ensure_ascii=False)])])
-            context._replace(db, context.SCAN, 1,
-                {"complete": True, "audited": True, "facts": [], "audited_chunks_sig": chunks_sig},
-                meta, source["message_id"])
-        context._replace(db, context.KIND, 1, {"facts": [], "summary": []},
+        context._replace(db, context.CHUNK, 1, chunk,
+            {**meta, "unit_key": unit, "chunk_key": chunk_key}, source["message_id"])
+        context._replace(db, context.SCAN, 1,
+            {"complete": True, "audited": False, "facts": []}, meta, source["message_id"])
+
+    db.db.execute("BEGIN")
+    try:
+        captured = context._source_quality_capture(db.db, 1, config, context_plan.source_key(source),
+                                                    assessment, contract=contract)
+    finally:
+        db.db.rollback()
+    identity = captured["identity"]
+    assert not captured["facts"] and len(captured["pages"]) == 1
+    page = captured["pages"][0]
+    body = {"model": semantic_jev.JEV_MODEL, "state": page["state"], "questions": page["questions"]}
+    reserve = semantic_runtime.patient_summary_usage_reserver(db, project_id=1, guard=lambda _stage: None,
+        daily_request_budget=3000, identity=identity, purpose="source")
+    reservation = reserve(body, 2)
+    answers = {fid: {"choice": page["passing_choices"][fid], "confidence": 1.0} for fid in page["fact_ids"]}
+    assert list(answers.values()) == [{"choice": "complete", "confidence": 1.0}]
+    with db.db:
+        db.db.execute("BEGIN IMMEDIATE")
+        bindings = semantic_runtime.patient_source_answer_binding(db.db, 1, identity, reservation, page["fact_ids"])
+        for fid, answer in answers.items():
+            db.artifact_add_tx("patient_context_source_quality_v1", json.dumps(answer), project_id=1,
+                meta={inference.VERSION_KEY: inference.CURRENT_VERSION, "input_key": identity["input_key"],
+                      "audit_key": identity["audit_key"], "fact_id": fid, **bindings[fid]})
+        assert semantic_runtime.patient_summary_resolve_request_tx(
+            db, reservation, identity, answers, set(), project_id=1, purpose="source") == 1
+        descriptor = semantic_runtime.patient_source_assessment_descriptor(assessment, policy)
+        content = semantic_runtime.patient_source_pass_content(db.db, 1, identity, descriptor)
+        assert content and content["source_fact_count"] == 0 and content["question_count"] == 1
+        db.artifact_add_tx("patient_context_source_quality_pass_v1", json.dumps(content), project_id=1,
+            meta={inference.VERSION_KEY: inference.CURRENT_VERSION, **{key: identity[key] for key in
+                ("input_key", "candidate_key", "audit_key")}})
+        context._replace(db, context.SCAN, 1,
+            {"complete": True, "audited": True, "facts": [], "audited_chunks_sig": captured["chunks_sig"],
+             "source_quality_audit_key": identity["audit_key"]}, meta, source["message_id"])
+
+    projection = {"groups": {}, "relations": []}
+    db.db.execute("BEGIN")
+    try:
+        summary = context._quality_capture(db.db, 1, config, "synthetic", [], assessment, projection,
+                                           contract=contract)
+    finally:
+        db.db.rollback()
+    summary_identity = summary["identity"]
+    assert not summary["facts"] and not summary_identity["fact_ids"]
+    with db.db:
+        db.db.execute("BEGIN IMMEDIATE")
+        summary_content = context._quality_pass_content(db.db, 1, summary_identity)
+        assert summary_content == {"fact_count": 0, "zero_questions": True}
+        db.artifact_add_tx(context.QUALITY_PASS, json.dumps(summary_content), project_id=1,
+            meta={inference.VERSION_KEY: inference.CURRENT_VERSION, **{key: summary_identity[key] for key in
+                ("input_key", "candidate_key", "audit_key")}})
+        context._replace(db, context.KIND, 1, {"facts": [], "summary": [], "temporal_view": projection},
             {"source_sig": snapshot["source_sig"], "contract": contract,
              "provider": contract["provider"], "model": cloud_policy.MODEL,
              "published": context.options(config)["publication"], "summary_checked": True,
+             "quality_audit_key": summary_identity["audit_key"],
+             "quality_schedule_key": context._digest([config, assessment["code"]]),
              "scan_sig": context._scan_sig(db.db, 1)})
     assert not any(context._pending(db.db, 1, config, contract=contract)[2].values())
 

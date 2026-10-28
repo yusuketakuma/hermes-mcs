@@ -240,3 +240,46 @@ def test_changed_source_never_receives_a_previous_attempt_failure(routed, monkey
     assert sent == [True]
     assert not [row for row in led.artifacts(worker.KIND) if json.loads(row['meta']).get('error')]
     assert cloud_policy.usage_report(led)['unresolved_requests'] == 1
+
+
+def test_provider_reservation_dispatch_releases_owner_lock_before_http(routed, monkeypatch):
+    led, cfg, *_ = routed
+    monkeypatch.setattr(cloud_policy, 'usage_reserver', _REAL_RESERVE)
+    monkeypatch.setattr(cloud_policy, 'record_result', _REAL_RESULT)
+    led.db.execute('CREATE TABLE synthetic_slot(reservation_id TEXT)')
+    led.db.commit()
+    lock = {'held': False}
+    deltas = []
+    calls = []
+    def dispatch(fn, **kwargs):
+        assert not lock['held']
+        return fn()
+    def reserve_dispatch(fn):
+        assert not lock['held'] and not led.db.in_transaction
+        lock['held'] = True
+        before = led.db.total_changes
+        try:
+            result = fn()
+            assert not led.db.in_transaction
+            deltas.append(led.db.total_changes - before)
+            return result
+        finally:
+            lock['held'] = False
+    def on_reserved(ledger, meta, artifact_id):
+        assert lock['held'] and ledger.db.in_transaction
+        ledger.db.execute('INSERT INTO synthetic_slot VALUES(?)', (meta['reservation_id'],))
+        calls.append(artifact_id)
+        return 1
+    def post(body, timeout):
+        assert not lock['held'] and not led.db.in_transaction
+        return 200, {}, json.dumps({'model': MODEL, 'usage': {'input_tokens': 10, 'output_tokens': 2},
+            'content': [{'type': 'text', 'text': '{}'}], 'stop_reason': 'end_turn'}).encode()
+    monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
+                        lambda key, **kw: AnthropicClient(key, post_fn=post, **kw))
+    provider = worker._CloudProvider(led, cfg, route='patient_context', project_id=1,
+        unit_key='synthetic-repair', deadline=time.monotonic() + 180, current=lambda: True,
+        dispatch=dispatch, reserve_dispatch=reserve_dispatch, on_reserved_tx=on_reserved, max_attempts=1)
+    assert provider('synthetic', deadline=time.monotonic() + 180, max_tokens=100)['status'] == 200
+    assert len(calls) == 1 and deltas == [2]
+    assert led.db.execute('SELECT count(*) FROM synthetic_slot').fetchone()[0] == 1
+    assert cloud_policy.usage_report(led)['daily_requests'] == 1

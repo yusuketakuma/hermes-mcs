@@ -386,3 +386,280 @@ def test_context_scan_generations_and_all_fact_chunks_survive_history_retention(
     assert [tuple(row) for row in db.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
     assert [row[0] for row in db.db.execute('SELECT artifact_id FROM artifacts ORDER BY artifact_id')] == ids
     db.close()
+
+
+def _repair_accounting(db, pid, marker, *, header=True, slot=True):
+    reservation_id, unit_key, request_fp = marker * 32, marker * 64, 'f' * 64
+    binding = {'project_id': pid, 'reservation_id': reservation_id, 'request_fp': request_fp,
+               'unit_key': unit_key, 'route': 'patient_context', 'model': 'synthetic', 'price_version': 'synthetic'}
+    rows = {}
+    for label, kind in (('reserve', 'cloud_usage_reserve'), ('result', 'cloud_usage_result'),
+                        ('disposition', 'cloud_usage_disposition'), ('dryrun', 'cloud_usage_dryrun'),
+                        ('compare', 'cloud_compare_v1')):
+        rows[label] = db.artifact_add(kind, '{}', project_id=pid, meta=binding)
+    repair_input_key = 'e' * 64
+    if header:
+        rows['header'] = db.artifact_add('patient_context_source_quality_repair_v1', '{"phase":"staging"}',
+            project_id=pid, meta={'project_id': pid, 'repair_input_key': repair_input_key})
+    if slot:
+        rows['slot'] = db.artifact_add('patient_context_source_quality_repair_candidate_v1', '{"facts":[]}',
+            project_id=pid, meta={'project_id': pid, 'repair_input_key': repair_input_key, 'source_key': 1,
+                'unit_key': unit_key, 'reservation_artifact_id': rows['reserve'],
+                'reservation_id': reservation_id, 'request_fp': request_fp})
+    return rows
+
+
+def _expire_repair_accounting(db, now):
+    db.db.execute('UPDATE artifacts SET created_at=?', (now - 63 * 86400,))
+    db.db.commit()
+
+
+@pytest.mark.parametrize('batch', [1, 5000])
+def test_repair_retention_pins_only_exact_original_receipts_and_preserves_staging(tmp_path, monkeypatch, batch):
+    db = _ledger(tmp_path)
+    try:
+        now = time.time()
+        linked = _repair_accounting(db, 1, 'a')
+        unrelated = _repair_accounting(db, 1, 'b', header=False, slot=False)
+        other_patient = _repair_accounting(db, 2, 'a', header=False, slot=False)
+        other_uuid = _repair_accounting(db, 3, 'c', header=False, slot=False)
+        _expire_repair_accounting(db, now)
+        immutable = [tuple(db.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (linked[key],)).fetchone())
+                     for key in ('reserve', 'result', 'disposition', 'header', 'slot')]
+        monkeypatch.setattr(maintenance, 'RETENTION_BATCH', batch)
+        maintenance.prune_history(db.db, now=now)
+        assert {row[0] for row in db.db.execute('SELECT artifact_id FROM artifacts')} == {
+            *[linked[key] for key in ('reserve', 'result', 'disposition', 'header', 'slot')],
+            *[other_patient[key] for key in ('reserve', 'result', 'disposition')]}
+        assert immutable == [tuple(db.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (row[0],)).fetchone())
+                             for row in immutable]
+        assert not set(unrelated.values()).intersection(row[0] for row in db.db.execute('SELECT artifact_id FROM artifacts'))
+        remaining = {row[0] for row in db.db.execute('SELECT artifact_id FROM artifacts')}
+        # Financial adoption requires UUID uniqueness across patients.  These
+        # conflicting receipts must not disappear and restore a former PASS.
+        assert not {other_patient['dryrun'], other_patient['compare']}.intersection(remaining)
+        assert not set(other_uuid.values()).intersection(remaining)
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('broken', ['missing_id', 'missing_hash', 'invalid_source', 'duplicate_json',
+                                   'nonfinite_json', 'missing_slot', 'invalid_header', 'changed_reservation'])
+def test_broken_repair_binding_holds_only_its_patient_receipts(tmp_path, broken):
+    db = _ledger(tmp_path)
+    try:
+        now = time.time()
+        linked = _repair_accounting(db, 1, 'a')
+        same_patient = _repair_accounting(db, 1, 'b', header=False, slot=False)
+        other = _repair_accounting(db, 2, 'c', header=False, slot=False)
+        if broken == 'missing_slot':
+            db.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (linked['slot'],))
+        elif broken == 'invalid_header':
+            db.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', ('{"broken":', linked['header']))
+        elif broken == 'changed_reservation':
+            raw = db.db.execute('SELECT meta FROM artifacts WHERE artifact_id=?', (linked['reserve'],)).fetchone()[0]
+            meta = json.loads(raw)
+            meta['request_fp'] = 'd' * 64
+            db.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), linked['reserve']))
+        else:
+            raw = db.db.execute('SELECT meta FROM artifacts WHERE artifact_id=?', (linked['slot'],)).fetchone()[0]
+            meta = json.loads(raw)
+            if broken == 'missing_id':
+                meta.pop('reservation_artifact_id')
+            elif broken == 'missing_hash':
+                meta.pop('request_fp')
+            elif broken == 'invalid_source':
+                meta['source_key'] = '../unsafe'
+            if broken == 'duplicate_json':
+                raw = '{"repair_input_key":"' + 'a' * 64 + '","repair_input_key":"' + 'b' * 64 + '"}'
+            elif broken == 'nonfinite_json':
+                raw = '{"repair_input_key":"' + 'a' * 64 + '","number":1e999}'
+            else:
+                raw = json.dumps(meta)
+            db.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (raw, linked['slot']))
+        _expire_repair_accounting(db, now)
+        maintenance.prune_history(db.db, now=now)
+        remaining = {row[0] for row in db.db.execute('SELECT artifact_id FROM artifacts')}
+        assert {linked[key] for key in ('reserve', 'result', 'disposition')} <= remaining
+        assert {same_patient[key] for key in ('reserve', 'result', 'disposition')} <= remaining
+        assert not set(other.values()).intersection(remaining)
+        assert not {linked['dryrun'], linked['compare'], same_patient['dryrun'], same_patient['compare']}.intersection(remaining)
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('orphan', ['header', 'reserve', 'partial_content'])
+def test_orphan_or_partial_candidate_keeps_known_receipts_without_pinning_unrelated_usage(tmp_path, orphan):
+    db = _ledger(tmp_path)
+    try:
+        now = time.time()
+        linked = _repair_accounting(db, 1, 'a')
+        unrelated = _repair_accounting(db, 1, 'b', header=False, slot=False)
+        if orphan == 'partial_content':
+            db.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', ('{"partial":', linked['slot']))
+        else:
+            db.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (linked[orphan],))
+        _expire_repair_accounting(db, now)
+        maintenance.prune_history(db.db, now=now)
+        remaining = {row[0] for row in db.db.execute('SELECT artifact_id FROM artifacts')}
+        assert {linked[key] for key in ('result', 'disposition', 'slot')} <= remaining
+        assert not set(unrelated.values()).intersection(remaining)
+    finally:
+        db.close()
+
+
+def test_unscoped_repair_corruption_stops_deletion_instead_of_inventing_a_patient_scope(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        now = time.time()
+        linked = _repair_accounting(db, 1, 'a')
+        db.db.execute('UPDATE artifacts SET project_id=NULL WHERE artifact_id=?', (linked['slot'],))
+        _expire_repair_accounting(db, now)
+        before = [tuple(row) for row in db.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+        with pytest.raises(maintenance.MaintenanceError, match='source_repair_retention_scope_invalid'):
+            maintenance._prune_cloud_usage(db.db, now - maintenance.CLOUD_USAGE_KEEP_S)
+        assert before == [tuple(row) for row in db.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    finally:
+        db.close()
+
+
+def test_unlinked_malformed_old_accounting_keeps_ordinary_retention(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        now = time.time()
+        rows = _repair_accounting(db, 1, 'a', header=False, slot=False)
+        db.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', ('{"broken":', rows['result']))
+        _expire_repair_accounting(db, now)
+        maintenance.prune_history(db.db, now=now)
+        assert not db.artifacts('cloud_usage_reserve') and not db.artifacts('cloud_usage_result')
+        assert not db.artifacts('cloud_usage_disposition')
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('kind', ['reserve', 'result', 'disposition'])
+def test_exact_repair_receipt_survives_a_corrupt_row_scope(tmp_path, kind):
+    db = _ledger(tmp_path)
+    try:
+        now = time.time()
+        linked = _repair_accounting(db, 1, 'a')
+        db.db.execute('UPDATE artifacts SET project_id=NULL WHERE artifact_id=?', (linked[kind],))
+        _expire_repair_accounting(db, now)
+        maintenance.prune_history(db.db, now=now)
+        remaining = {row[0] for row in db.db.execute('SELECT artifact_id FROM artifacts')}
+        assert {linked[key] for key in ('reserve', 'result', 'disposition', 'header', 'slot')} <= remaining
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('kind', ['result', 'disposition'])
+@pytest.mark.parametrize('broken_field', ['request_fp', 'reservation_id'])
+def test_ambiguous_receipt_scope_and_binding_pin_the_exact_batch_row(tmp_path, kind, broken_field):
+    db = _ledger(tmp_path)
+    try:
+        now = time.time()
+        linked = _repair_accounting(db, 1, 'a')
+        other = _repair_accounting(db, 3, 'c', header=False, slot=False)
+        raw = db.db.execute('SELECT meta FROM artifacts WHERE artifact_id=?', (linked[kind],)).fetchone()[0]
+        meta = json.loads(raw)
+        meta[broken_field] = 'invalid'
+        db.db.execute('UPDATE artifacts SET project_id=2,meta=? WHERE artifact_id=?', (json.dumps(meta), linked[kind]))
+        _expire_repair_accounting(db, now)
+        maintenance.prune_history(db.db, now=now)
+        remaining = {row[0] for row in db.db.execute('SELECT artifact_id FROM artifacts')}
+        assert linked[kind] in remaining
+        assert {linked[key] for key in ('reserve', 'result', 'disposition', 'header', 'slot')} <= remaining
+        assert not set(other.values()).intersection(remaining)
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('batch', [1, 5000])
+@pytest.mark.parametrize('kind', ['result', 'disposition'])
+@pytest.mark.parametrize('corrupt', ['syntax', 'duplicate', 'nonfinite'])
+def test_unknown_receipt_scope_and_unparseable_metadata_pin_only_that_batch_row(tmp_path, monkeypatch, batch, kind, corrupt):
+    db = _ledger(tmp_path)
+    try:
+        now = time.time()
+        linked = _repair_accounting(db, 1, 'a')
+        unrelated = _repair_accounting(db, 2, 'b', header=False, slot=False)
+        raw = {'syntax': '{"broken":', 'duplicate': '{"project_id":2,"project_id":1}',
+               'nonfinite': '{"project_id":1,"unused":1e999}'}[corrupt]
+        db.db.execute('UPDATE artifacts SET project_id=2,meta=? WHERE artifact_id=?', (raw, linked[kind]))
+        _expire_repair_accounting(db, now)
+        monkeypatch.setattr(maintenance, 'RETENTION_BATCH', batch)
+        maintenance.prune_history(db.db, now=now)
+        remaining = {row[0] for row in db.db.execute('SELECT artifact_id FROM artifacts')}
+        assert {linked[key] for key in ('reserve', 'result', 'disposition', 'header', 'slot')} <= remaining
+        assert not set(unrelated.values()).intersection(remaining)
+        assert linked['dryrun'] not in remaining and linked['compare'] not in remaining
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('batch', [1, 5000])
+@pytest.mark.parametrize('kind', ['cloud_usage_result', 'cloud_usage_disposition'])
+def test_global_uuid_conflicts_remain_rejection_evidence_after_retention(tmp_path, monkeypatch, batch, kind):
+    from datetime import datetime
+    import cloud_policy
+    from anthropic_client import MODEL
+
+    db = _ledger(tmp_path)
+    try:
+        now = datetime(2026, 10, 26, 12, tzinfo=cloud_policy.JST).timestamp()
+        monkeypatch.setattr(cloud_policy.time, 'time', lambda: now)
+        monkeypatch.setattr(maintenance, 'RETENTION_BATCH', batch)
+        cfg = {'cloud_llm': {'mode': 'on', 'project_ids': [1, 2]}}
+        repair_key, unit_key = 'e' * 64, 'a' * 64
+        owned = {}
+        def reserved(owner, reservation, artifact_id):
+            owned['reserve'] = artifact_id
+            owned['header'] = owner.artifact_add_tx('patient_context_source_quality_repair_v1', '{"phase":"ready"}',
+                project_id=1, meta={'project_id': 1, 'repair_input_key': repair_key})
+            owned['slot'] = owner.artifact_add_tx('patient_context_source_quality_repair_candidate_v1', '{"phase":"reserved"}',
+                project_id=1, meta={'project_id': 1, 'repair_input_key': repair_key, 'source_key': 1,
+                    'unit_key': unit_key, 'reservation_artifact_id': artifact_id,
+                    'reservation_id': reservation['reservation_id'], 'request_fp': reservation['request_fp']})
+            return 2
+        request = {'model': MODEL, 'max_tokens': 100}
+        reservation = cloud_policy.usage_reserver(db, cfg, route='patient_context', project_id=1,
+            unit_key=unit_key, owner={'repair_input_key': repair_key, 'unit_key': unit_key}, on_reserved_tx=reserved)(request, 2)
+        result = {'model': MODEL, 'request_fp': reservation['request_fp'], 'usage': {'input_tokens': 10, 'output_tokens': 2},
+                  'http_class': 'http_200', 'request_id': 'req_synthetic', 'error_kind': None}
+        cloud_policy.record_result(db, reservation, result)
+        if kind == 'cloud_usage_disposition':
+            # Obtain genuine public-writer bytes without leaving the fixture's
+            # original successful occurrence already discarded.
+            db.db.execute('SAVEPOINT synthetic_disposition')
+            aid = cloud_policy.record_disposition_tx(db, reservation, 'discarded_scope')
+            conflict = dict(db.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (aid,)).fetchone())
+            db.db.execute('ROLLBACK TO synthetic_disposition')
+            db.db.execute('RELEASE synthetic_disposition')
+        else:
+            conflict = dict(db.db.execute("SELECT * FROM artifacts WHERE kind='cloud_usage_result' AND project_id=1").fetchone())
+        other = cloud_policy.usage_reserver(db, cfg, route='patient_context', project_id=2, unit_key='b' * 64)(request, 2)
+        cloud_policy.record_result(db, other, {**result, 'request_fp': other['request_fp']})
+        unrelated = {row[0] for row in db.db.execute("SELECT artifact_id FROM artifacts WHERE project_id=2 AND kind IN "
+            "('cloud_usage_reserve','cloud_usage_result','cloud_usage_disposition')")}
+        _expire_repair_accounting(db, now)
+        proof = cloud_policy.reservation_evidence(db.db, owned['reserve'])
+        with db.db:
+            db.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?',
+                (json.dumps({'phase': 'complete', 'receipt_sig': proof['witness'], 'facts': []}), owned['slot']))
+            meta = {**json.loads(conflict['meta']), 'project_id': 2, 'message_id': None}
+            conflict_id = db.db.execute('INSERT INTO artifacts(kind,project_id,message_id,model,content,meta,created_at) '
+                'VALUES(?,?,NULL,?,?,?,?)', (kind, 2, conflict['model'], conflict['content'], json.dumps(meta), now - 63 * 86400)).lastrowid
+        original = [tuple(row) for row in db.db.execute("SELECT * FROM artifacts WHERE project_id=1 AND kind IN "
+            "('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")]
+        with pytest.raises(ValueError, match='cloud_receipt_invalid'):
+            cloud_policy.reservation_evidence(db.db, owned['reserve'])
+        maintenance.prune_history(db.db, now=now)
+        assert db.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (conflict_id,)).fetchone()
+        assert original == [tuple(row) for row in db.db.execute("SELECT * FROM artifacts WHERE project_id=1 AND kind IN "
+            "('cloud_usage_reserve','cloud_usage_result') ORDER BY artifact_id")]
+        assert json.loads(db.db.execute('SELECT content FROM artifacts WHERE artifact_id=?', (owned['slot'],)).fetchone()[0])['receipt_sig'] == proof['witness']
+        assert not unrelated.intersection(row[0] for row in db.db.execute('SELECT artifact_id FROM artifacts'))
+        with pytest.raises(ValueError, match='cloud_receipt_invalid'):
+            cloud_policy.reservation_evidence(db.db, owned['reserve'])
+    finally:
+        db.close()

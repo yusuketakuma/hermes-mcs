@@ -1,4 +1,6 @@
 """Synthetic per-unit context routing; no keys, GPU, HTTP or source data."""
+import patient_context_plan as context_plan
+import mcs_queries
 import json
 import os
 import sqlite3
@@ -12,6 +14,12 @@ import extract_llm as worker
 import patient_context_refresh as context_refresh
 from extract_testkit import _message
 from test_patient_context_refresh import CFG as BASE_CFG, document, runtime, seed, stamp, step as base_step
+
+import semantic_jev as _source_repair_jev
+
+_SOURCE_REPAIR_PROVIDER = worker._CloudProvider
+_SOURCE_REPAIR_CLIENT = worker.anthropic_client.AnthropicClient
+_SOURCE_REPAIR_JEV = _source_repair_jev.JevClient
 
 __all__ = ["runtime"]
 
@@ -148,6 +156,7 @@ def test_source_quality_precedes_cloud_summary_and_missing_receipt_reopens_c(run
 @pytest.mark.parametrize("negative_target", ["source_coverage", "source_facts"])
 def test_source_quality_negative_stays_held_without_resampling(runtime, cloud, monkeypatch, negative_target):
     import semantic_jev
+    _source_repair_wire_protocol(monkeypatch, cloud)
     led, clock, _ = runtime
     seed(led, body="合成の居住記録です。介護ベッドを使用しています。")
     client_factory = semantic_jev.JevClient
@@ -194,7 +203,9 @@ def test_source_quality_negative_stays_held_without_resampling(runtime, cloud, m
         with led.db:
             led.db.execute('INSERT INTO message_revisions(message_id,seq,content_hash,prev_content_hash,body_state,observed_at) '
                 'VALUES(?,?,?,?,?,?)', (1, revision + 1, source['content_hash'], source['content_hash'], source['body_state'], clock.wall))
-        assert context_refresh._pending(led.db, 1, CFG)[2]['C']
+        # A real occurrence change starts B again; an unchanged failed
+        # source never regains another repair right from the clock alone.
+        assert context_refresh._pending(led.db, 1, CFG)[2]['B']
         for _ in range(10):
             clock.wall += 61
             if step(runtime).get('reason') == 'source_quality_held':
@@ -232,10 +243,10 @@ def test_source_quality_capture_keeps_every_fact_and_coverage_question(runtime, 
     source = context_refresh._snapshot(led.db, 1, CFG)["sources"][0]
     items = [{"category": "living", "text": text, "evidence": text,
               "subject": "unspecified", "details": []} for text in statements]
-    facts = context_refresh._facts(source, items, night_id="synthetic", discovery="new_report")
+    facts = context_plan.source_facts(source, items, night_id="synthetic", discovery="new_report", found_at=context_refresh.time.time())
     assert len(facts) == count
     contract = context_refresh._contract(CFG, 1)
-    meta = {"source_sig": context_refresh._source_sig(source), "source_key": 1,
+    meta = {"source_sig": context_plan.source_signature(source), "source_key": 1,
             "contract": contract, "provider": contract["provider"], "model": "synthetic"}
     cap = context_refresh.context_plan.MAX_SOURCE_FACTS
     parts = max(1, (len(facts) + cap - 1) // cap)
@@ -277,15 +288,15 @@ def test_source_quality_overlapping_chunks_deduplicate_only_identical_occurrence
     body = '合成の前置きです。\n\n' + text + '\n\n補足を共有します。'
     seed(led, body=body)
     source = context_refresh._snapshot(led.db, 1, CFG)['sources'][0]
-    facts = context_refresh._facts(source, [{'category': 'living', 'text': text, 'evidence': text,
+    facts = context_plan.source_facts(source, [{'category': 'living', 'text': text, 'evidence': text,
                                             'subject': 'unspecified', 'details': []}],
-                                   night_id='synthetic', discovery='new_report')
+                                   night_id='synthetic', discovery='new_report', found_at=context_refresh.time.time())
     assert len(facts) == 1
     fact = facts[0]
     start, end = fact['evidence_span']
     assert 0 < start < end < len(body)
     contract = context_refresh._contract(CFG, 1)
-    meta = {'source_sig': context_refresh._source_sig(source), 'source_key': 1,
+    meta = {'source_sig': context_plan.source_signature(source), 'source_key': 1,
             'contract': contract, 'provider': contract['provider'], 'model': 'synthetic'}
     repeated = {**fact, 'found_at': fact['found_at'] + 1, 'discovery': 'backfill_found',
                 'found_night_id': 'later-synthetic'}
@@ -330,12 +341,12 @@ def test_source_quality_identical_text_in_distinct_posts_retains_distinct_facts(
     with led.db:
         for source in sources:
             mid = source['message_id']
-            facts = context_refresh._facts(source, [{'category': 'living', 'text': text, 'evidence': text,
+            facts = context_plan.source_facts(source, [{'category': 'living', 'text': text, 'evidence': text,
                                                      'subject': 'unspecified', 'details': []}],
-                                           night_id='synthetic', discovery='new_report')
+                                           night_id='synthetic', discovery='new_report', found_at=context_refresh.time.time())
             assert len(facts) == 1
             expected_ids.append(facts[0]['id'])
-            meta = {'source_sig': context_refresh._source_sig(source), 'source_key': mid,
+            meta = {'source_sig': context_plan.source_signature(source), 'source_key': mid,
                     'contract': contract, 'provider': contract['provider'], 'model': 'synthetic'}
             context_refresh._replace(led, context_refresh.SCAN, 1,
                 {'cursor': 1, 'chunks': 1, 'complete': True, 'audited': False, 'facts': []}, meta, mid)
@@ -375,7 +386,7 @@ def test_scan_quality_proof_reuses_one_snapshot_enumeration(runtime, cloud):
         expected = context_refresh._current_scans(led.db, 1, snapshot['sources'],
                                                    snapshot['contract'], check_quality=False)
         for source in snapshot['sources']:
-            key = context_refresh._source_key(source)
+            key = context_plan.source_key(source)
             if expected[key].get('audited') and not context_refresh._source_quality_verified(
                     led.db, 1, source, snapshot['contract'], CFG, expected[key]):
                 expected[key]['audited'] = False
@@ -412,6 +423,7 @@ def test_scan_proof_keeps_hydration_rows_with_conflicting_invalidation_keys(runt
     seed(led, mid=1, body='見出しのない完全合成の居住記録1。')
     seed(led, mid=2, body='見出しのない完全合成の居住記録2。')
     drain(runtime)
+    _source_legacy_storage(led)
     original = led.db.execute("SELECT * FROM artifacts WHERE kind=? AND message_id=1", (context_refresh.CHUNK,)).fetchone()
     # SQL sees the first invalidated key (excluded from scan proof), while
     # Python sees the final key (included in the original hydration reader).
@@ -427,11 +439,11 @@ def test_scan_proof_keeps_hydration_rows_with_conflicting_invalidation_keys(runt
         old = list(context_refresh._source_chunks(db, pid, source, contract, scan))
         new = list(context_refresh._source_chunks(db, pid, source, contract, scan, artifact_ids=scan_proof[-1]))
         assert new == old
-        if context_refresh._source_key(source) == 1:
+        if context_plan.source_key(source) == 1:
             assert extra in [chunk['_artifact_id'] for chunk in new]
         actual = verified(db, pid, source, contract, cfg, scan, scan_proof=scan_proof)
         assert actual == verified(db, pid, source, contract, cfg, scan)
-        seen.append(context_refresh._source_key(source))
+        seen.append(context_plan.source_key(source))
         return actual
     monkeypatch.setattr(context_refresh, '_source_quality_verified', compare)
     snapshot = context_refresh._snapshot(led.db, 1, CFG, hydrate=False)
@@ -444,6 +456,7 @@ def test_scan_proof_keeps_sql_and_python_source_key_membership_distinct(runtime,
     seed(led, mid=1, body='見出しのない完全合成の居住記録1。')
     seed(led, mid=2, body='見出しのない完全合成の居住記録2。')
     drain(runtime)
+    _source_legacy_storage(led)
     original = led.db.execute("SELECT * FROM artifacts WHERE kind=? AND message_id=1", (context_refresh.CHUNK,)).fetchone()
     changed = json.loads(original['meta'])
     changed.update(unit_key='synthetic-other-unit', chunk_key='synthetic-other-chunk')
@@ -471,7 +484,7 @@ def test_scan_proof_keeps_sql_and_python_source_key_membership_distinct(runtime,
         assert new == old and extra not in [chunk['_artifact_id'] for chunk in new]
         actual = verified(db, pid, source, contract, cfg, scan, scan_proof=scan_proof)
         assert actual == verified(db, pid, source, contract, cfg, scan)
-        seen.append(context_refresh._source_key(source))
+        seen.append(context_plan.source_key(source))
         return actual
     monkeypatch.setattr(context_refresh, '_source_quality_verified', compare)
     out = context_refresh._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
@@ -573,7 +586,7 @@ def test_partial_cloud_scan_requires_same_rules_and_provider_contract(runtime, c
     seed(led)
     snapshot = context_refresh._snapshot(led.db, 1, CFG)
     source = snapshot["sources"][0]
-    meta = {"source_sig": context_refresh._source_sig(source), "contract": snapshot["contract"],
+    meta = {"source_sig": context_plan.source_signature(source), "contract": snapshot["contract"],
             "provider": {**snapshot["contract"]["provider"], "prompt": "0" * 16}}
     with led.db:
         context_refresh._replace(led, context_refresh.SCAN, 1, {"cursor": 1, "complete": False, "facts": []}, meta, 1)
@@ -621,7 +634,7 @@ def test_fallback_reuse_requires_exact_local_and_route_contract(runtime, cloud, 
     contract = snapshot['contract']
     # A previously saved local fallback is read-only compatibility evidence;
     # current explicit cloud work no longer creates one on provider failure.
-    meta = {'source_sig': context_refresh._source_sig(snapshot['sources'][0]),
+    meta = {'source_sig': context_plan.source_signature(snapshot['sources'][0]),
             'contract': {key: value for key, value in contract.items() if key != 'provider'},
             'route_contract': contract, 'model': 'synthetic'}
     with led.db:
@@ -724,7 +737,7 @@ def test_summary_comparison_resolves_source_and_reported_subject(runtime):
     led, _, _ = runtime
     seed(led, body="生活環境: 完全合成の居住記録。")
     source = context_refresh._snapshot(led.db, 1, CFG)["sources"][0]
-    facts = context_refresh._facts(source, source["items"], night_id="synthetic", discovery="new_report")
+    facts = context_plan.source_facts(source, source["items"], night_id="synthetic", discovery="new_report", found_at=context_refresh.time.time())
     assert facts
     first = facts[0]
     other_source = {**source, "message_id": 2}
@@ -744,18 +757,22 @@ def test_shadow_scan_does_not_count_local_prefix_as_cloud_work(runtime, cloud, m
     seed(led, body="生活環境: 完全合成の前半記録。\n\n【補足記録】\n" + "完全合成の後半記録です。" * 400)
     snapshot = context_refresh._snapshot(led.db, 1, CFG)
     source = snapshot["sources"][0]
-    prefix = context_refresh._facts(source, source["items"], night_id="synthetic", discovery="new_report")
+    prefix = context_plan.source_facts(source, source["items"], night_id="synthetic", discovery="new_report", found_at=context_refresh.time.time())
     assert prefix
     chunks = context_refresh.context_plan.scan_plan(source, {})[0]
     assert len(chunks) > 1
     assert all(f["evidence_span"][1] <= len(chunks[0]) for f in prefix)
-    saved = {"cursor": 1, "chunks": len(chunks), "complete": False, "audited": False, "facts": prefix}
-    binding = {"source_sig": context_refresh._source_sig(source), "source_key": 1,
-               "contract": snapshot["contract"], "model": "synthetic"}
+    occurrence = context_refresh._source_occurrence(led.db, 1, source)
+    saved = {"cursor": 1, "chunks": len(chunks), "complete": False, "audited": False, "facts": prefix,
+             "source_occurrence_version": 1, "source_occurrence": occurrence}
+    binding = {"source_sig": context_plan.source_signature(source), "source_key": 1,
+               "contract": snapshot["contract"], "model": "synthetic",
+               "source_occurrence_version": 1, "source_occurrence": occurrence,
+               "source_binding": occurrence["source_binding"]}
     with led.db:
         context_refresh._replace(led, context_refresh.CHUNK, 1,
             {"chunk_span": [0,len(chunks[0])], "part": 0, "parts": 1, "facts": prefix},
-            {**binding,"chunk_key":"synthetic-prefix", "unit_key":"synthetic-unit"}, 1)
+            {**binding,"chunk_key":"a" * 64, "unit_key":"b" * 64}, 1)
         context_refresh._replace(led, context_refresh.SCAN, 1, saved,
             binding, 1)
         context_refresh._replace(led, context_refresh.PROGRESS, 0, {"cursor": 6}, {})
@@ -1091,7 +1108,7 @@ def test_paid_failure_of_a_partial_cloud_scan_keeps_its_cloud_pin(runtime, cloud
     led, _, local_calls = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
     snapshot = context_refresh._snapshot(led.db, 1, CFG)
-    meta = {"source_sig": context_refresh._source_sig(snapshot["sources"][0]),
+    meta = {"source_sig": context_plan.source_signature(snapshot["sources"][0]),
             "contract": snapshot["contract"], "provider": snapshot["contract"]["provider"]}
     with led.db:
         context_refresh._replace(led, context_refresh.SCAN, 1,
@@ -1194,12 +1211,12 @@ def test_quality_hold_reason_is_visible_and_clears_only_after_success(runtime, c
 
 
 def _extend_source_candidate(led):
-    source = list(context_refresh._sources(led.db, 1, mid=1))[0]
+    source = list(mcs_queries.patient_context_sources(led.db, 1, mid=1))[0]
     text = '介護ベッドを使用しています。'
     assert text in source['body_text']
-    extra = context_refresh._facts(source, [{'category': 'living', 'text': text,
+    extra = context_plan.source_facts(source, [{'category': 'living', 'text': text,
         'evidence': text, 'subject': 'unspecified', 'details': []}],
-        night_id='synthetic', discovery='backfill_found')
+        night_id='synthetic', discovery='backfill_found', found_at=context_refresh.time.time())
     assert len(extra) == 1
     row = led.db.execute('SELECT artifact_id,content FROM artifacts WHERE kind=? AND message_id=1 '
                          'ORDER BY artifact_id LIMIT 1', (context_refresh.CHUNK,)).fetchone()
@@ -1269,15 +1286,15 @@ def test_missing_original_source_reservation_cannot_become_an_unasked_question(r
 def test_source_quality_hold_key_includes_source_occurrence_and_patient_scope(runtime, cloud, changed):
     led, _, _ = runtime
     seed(led, body='合成の居住情報です。')
-    source = list(context_refresh._sources(led.db, 1, mid=1))[0]
+    source = list(mcs_queries.patient_context_sources(led.db, 1, mid=1))[0]
     before = context_refresh._source_quality_hold_key(led.db, 1, CFG, source, 'a' * 64)
     with led.db:
         if changed == 'first_seen':
             led.db.execute('UPDATE messages SET first_seen=first_seen+1 WHERE message_id=1')
         else:
             led.db.execute('UPDATE patients SET karte_id=99 WHERE project_id=1')
-    fresh = list(context_refresh._sources(led.db, 1, mid=1))[0]
-    assert context_refresh._source_sig(source) == context_refresh._source_sig(fresh)
+    fresh = list(mcs_queries.patient_context_sources(led.db, 1, mid=1))[0]
+    assert context_plan.source_signature(source) == context_plan.source_signature(fresh)
     assert context_refresh._source_quality_hold_key(led.db, 1, CFG, fresh, 'a' * 64) != before
 
 
@@ -1509,6 +1526,635 @@ def test_paired_read_rechecks_originals_and_receipts_after_the_previous_read_end
     assert second[0] is None and not second[1]['complete']
 
 
+_REPAIR_HOME = '本人は自宅で生活しています。'
+_REPAIR_BED = '本人は介護ベッドを使用しています。'
+
+
+def _source_legacy_storage(led):
+    """An explicit old-format fixture keeps the old SQL/Python membership oracle."""
+    with led.db:
+        for row in led.db.execute('SELECT artifact_id,kind,content,meta FROM artifacts WHERE kind IN (?,?)',
+                                   (context_refresh.SCAN, context_refresh.CHUNK)).fetchall():
+            content, meta = json.loads(row['content']), json.loads(row['meta'])
+            for value in (content, meta):
+                value.pop('source_occurrence_version', None)
+                value.pop('source_occurrence', None)
+            meta.pop('source_binding', None)
+            led.db.execute('UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?',
+                (row['content'] if row['kind'] == context_refresh.CHUNK else json.dumps(content, ensure_ascii=False),
+                 json.dumps(meta, ensure_ascii=False), row['artifact_id']))
+
+
+def _source_repair_wire_protocol(monkeypatch, cloud):
+    """Old negative fixtures use the real repair reservation protocol, never a fake capability."""
+    original = worker._CloudProvider
+    monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
+    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda now=None: True)
+    def post(body, timeout):
+        prompt = json.loads(body['messages'][0]['content'])
+        cloud[0].append(prompt)
+        text = prompt['source']
+        answer = {'patient_context':[{'category':'living','text':text,'evidence':text,'subject':'unspecified','details':[]}]}
+        return 200, {}, json.dumps({'model':worker.anthropic_client.MODEL,'usage':{'input_tokens':1,'output_tokens':1},
+            'stop_reason':'end_turn','content':[{'type':'text','text':json.dumps(answer)}]}).encode()
+    monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
+        lambda key, **kwargs:_SOURCE_REPAIR_CLIENT(key, post_fn=post, **kwargs))
+    monkeypatch.setattr(worker, '_CloudProvider', lambda *args, **kwargs:
+        _SOURCE_REPAIR_PROVIDER(*args, **kwargs) if kwargs.get('on_reserved_tx') else original(*args, **kwargs))
+
+
+@pytest.fixture
+def source_repair(runtime, cloud, monkeypatch):
+    """Independent two-fact oracle, real reservations and synthetic wire only."""
+    led, _, _ = runtime
+    original_provider = worker._CloudProvider
+    control = {'sent':[], 'fault':None, 'qa_fault':None}
+    monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
+    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda now=None: True)
+    class InitialProvider(original_provider):
+        def __call__(self, prompt, **kwargs):
+            payload = json.loads(prompt)
+            if 'reports' in payload:
+                return super().__call__(prompt, **kwargs)
+            self.guard()
+            cloud[0].append(payload)
+            items = ([{'category':'living','subject':'patient','text':_REPAIR_HOME,
+                       'evidence':_REPAIR_HOME,'details':[]}] if _REPAIR_HOME in payload['source'] else [])
+            self.possibly_sent = True
+            return {'status':200,'finish_reason':'stop','text':json.dumps({'patient_context':items})}
+    def post(body, timeout):
+        assert not led.db.in_transaction and timeout > 0
+        prompt = json.loads(body['messages'][0]['content'])
+        control['sent'].append(prompt)
+        if control['fault'] == 'timeout':
+            raise TimeoutError('synthetic transport only')
+        items = [{'category':'living','subject':'patient','text':text,'evidence':text,'details':[]}
+                 for text in (_REPAIR_HOME, _REPAIR_BED) if text in prompt['source']
+                 and not (control['fault'] == 'omit_bed' and text == _REPAIR_BED)]
+        stop = 'max_tokens' if control['fault'] == 'length_once' and len(control['sent']) == 1 else 'end_turn'
+        if control['fault'] == 'capacity_once' and len(control['sent']) == 1:
+            items = items * (context_refresh.context_plan.MAX_SCAN_ITEMS + 1)
+        raw = json.dumps({'model':worker.anthropic_client.MODEL,
+            'usage':{'input_tokens':1,'output_tokens':1}, 'stop_reason':stop,
+            'content':[{'type':'text','text':json.dumps({'patient_context':items}, ensure_ascii=False)}]},
+            ensure_ascii=False).encode()
+        assert len(raw) <= worker.anthropic_client.bounded_http.MAX_RESPONSE_BYTES
+        return 200, {}, raw
+    monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
+        lambda key, **kwargs: _SOURCE_REPAIR_CLIENT(key, post_fn=post, **kwargs))
+    monkeypatch.setattr(worker, '_CloudProvider', lambda *args, **kwargs:
+        _SOURCE_REPAIR_PROVIDER(*args, **kwargs) if kwargs.get('on_reserved_tx') else InitialProvider(*args, **kwargs))
+    def judge(body, timeout):
+        assert not led.db.in_transaction and timeout > 0
+        led.synthetic_jev_requests.append(body)
+        answers = {}
+        target = body['state']['target']
+        if target['id'] == 'source_coverage' and control['qa_fault'] == 'unknown':
+            raise TimeoutError('synthetic Jev result unknown')
+        for qid, question in body['questions'].items():
+            options = question['criteria']
+            if target['id'] == 'source_coverage':
+                texts = {fact['text'] for fact in target['candidate_facts']}
+                choice = 'complete' if {_REPAIR_HOME, _REPAIR_BED} <= texts else 'missing'
+            else:
+                choice = 'supports' if 'supports' in options else 'omission_ok'
+            if target['id'] == 'source_coverage' and control['qa_fault'] == 'ambiguous':
+                choice = 'ambiguous'
+            answers[qid] = {'type':'choice','choice':choice,
+                'confidence':.1 if target['id'] == 'source_coverage' and control['qa_fault'] == 'low_confidence' else 1.0,
+                'probabilities':{option:float(option == choice) for option in options}}
+        if target['id'] == 'source_coverage' and control['qa_fault'] == 'invalid':
+            answers = {}
+        return 200, {}, json.dumps({'model':_source_repair_jev.JEV_MODEL, 'answers':answers,
+                                   'usage':{'input_tokens':1,'output_tokens':1}}).encode()
+    monkeypatch.setattr(_source_repair_jev, 'JevClient', lambda **kwargs: _SOURCE_REPAIR_JEV(post_fn=judge, **kwargs))
+    body = _REPAIR_HOME + '合成の申し送りです。' * 310 + _REPAIR_BED
+    seed(led, body=body)
+    return control
+
+
+def test_source_normal_fail_repairs_all_units_preserving_original_chunks_and_supported_fact(runtime, source_repair):
+    led, _, _ = runtime
+    # Stop before any repair POST, retaining exactly the original extraction.
+    for _ in range(20):
+        result = step(runtime)
+        if led.artifacts('patient_context_source_quality_fail_v1', project_id=1):
+            break
+        assert result['status'] in ('progressed','deferred')
+    else:
+        pytest.fail('independent source coverage oracle did not find the omitted bed')
+    originals = [tuple(row) for row in led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? ORDER BY artifact_id',
+                                                     (context_refresh.CHUNK,))]
+    supported = {fact['id']:fact for row in originals for fact in json.loads(row[1])['facts']}
+    assert {fact['text'] for fact in supported.values()} == {_REPAIR_HOME}
+    drain(runtime)
+    assert len(source_repair['sent']) == 2
+    assert [tuple(row) for row in led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? ORDER BY artifact_id',
+                                                (context_refresh.CHUNK,))] == originals
+    assert len(led.artifacts(context_refresh.SOURCE_REPAIR, project_id=1)) == 1
+    snapshot = context_refresh._snapshot(led.db, 1, CFG)
+    scan = context_refresh._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)[1]
+    assert scan['accepted_candidate_ref'] and scan['audited']
+    facts = list(context_refresh._scan_facts(led.db, 1, snapshot['sources'][0], snapshot['contract'], scan))
+    assert {fact['text'] for fact in facts} == {_REPAIR_HOME, _REPAIR_BED}
+    for fid, fact in supported.items():
+        actual = next(value for value in facts if value['id'] == fid)
+        assert context_refresh._facts_sig([actual]) == context_refresh._facts_sig([fact])
+    reserves = led.artifacts('cloud_usage_reserve', project_id=1)
+    assert len(reserves) == 2
+    assert len({json.loads(row['meta'])['unit_key'] for row in reserves}) == 2
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
+
+
+@pytest.mark.parametrize('failure', ['timeout','crash_after_reserve','save_failure'])
+def test_uncertain_source_repair_unit_is_never_resent_on_restart_or_another_day(runtime, source_repair, monkeypatch, failure):
+    led, clock, _ = runtime
+    if failure == 'timeout':
+        source_repair['fault'] = 'timeout'
+    elif failure == 'crash_after_reserve':
+        reserve = worker.cloud_policy.usage_reserver
+        def factory(*args, **kwargs):
+            original = reserve(*args, **kwargs)
+            def uncertain(body, timeout):
+                original(body, timeout)
+                raise RuntimeError('synthetic process boundary after durable reserve')
+            return uncertain
+        monkeypatch.setattr(worker.cloud_policy, 'usage_reserver', factory)
+    else:
+        monkeypatch.setattr(context_refresh, '_source_repair_update_tx',
+            lambda *args: (_ for _ in ()).throw(ValueError('nightly_synthetic_save_failure')))
+    for _ in range(25):
+        step(runtime)
+        if led.artifacts(context_refresh.SOURCE_REPAIR_CANDIDATE, project_id=1):
+            break
+    else:
+        pytest.fail('source repair never consumed its unit')
+    before = len(source_repair['sent'])
+    rights = [tuple(row) for row in led.db.execute('SELECT * FROM artifacts WHERE kind IN (?,?) ORDER BY artifact_id',
+        (context_refresh.SOURCE_REPAIR, 'cloud_usage_reserve'))]
+    for _ in range(3):
+        clock.wall += 86400
+        step(runtime)
+    assert len(source_repair['sent']) == before
+    assert [tuple(row) for row in led.db.execute('SELECT * FROM artifacts WHERE kind IN (?,?) ORDER BY artifact_id',
+        (context_refresh.SOURCE_REPAIR, 'cloud_usage_reserve'))] == rights
+    assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+
+
+def test_source_repair_sealing_checkpoint_resumes_without_repeating_a_completed_post(runtime, source_repair, monkeypatch):
+    led, _, _ = runtime
+    original = context_refresh._source_repair_seal
+    monkeypatch.setattr(context_refresh, '_source_repair_seal', lambda *a: ('deferred', None))
+    for _ in range(25):
+        step(runtime)
+        rows = led.artifacts(context_refresh.SOURCE_REPAIR, project_id=1)
+        if rows and json.loads(rows[0]['content'])['phase'] == 'sealing':
+            break
+    else:
+        pytest.fail('completed source range was not durably marked for seal')
+    before = len(source_repair['sent'])
+    monkeypatch.setattr(context_refresh, '_source_repair_seal', original)
+    drain(runtime)
+    assert len(source_repair['sent']) == before == 2
+
+
+@pytest.mark.parametrize('tamper', ['duplicate_slot','duplicate_header','receipt','new_revision','scope','key','budget'])
+def test_source_repair_rejects_changed_evidence_before_adoption(runtime, source_repair, monkeypatch, tamper):
+    led, clock, _ = runtime
+    original = context_refresh._source_repair_seal
+    monkeypatch.setattr(context_refresh, '_source_repair_seal', lambda *a: ('deferred', None))
+    for _ in range(25):
+        step(runtime)
+        if len(source_repair['sent']) == 2:
+            break
+    else:
+        pytest.fail('two source units were not completed')
+    if tamper == 'key':
+        monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *a, **k: None)
+    elif tamper == 'budget':
+        monkeypatch.setattr(worker, 'load_config', lambda: {**CFG, 'semantic':{**CFG['semantic'], 'daily_request_budget':0}})
+    with led.db:
+        if tamper in ('duplicate_slot','duplicate_header'):
+            led.db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) '
+                           'SELECT kind,project_id,message_id,content,model,meta,created_at FROM artifacts WHERE kind=? LIMIT 1',
+                           (context_refresh.SOURCE_REPAIR_CANDIDATE if tamper == 'duplicate_slot' else context_refresh.SOURCE_REPAIR,))
+        elif tamper == 'receipt':
+            led.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.request_fp',?) WHERE kind='cloud_usage_result'", ('f' * 64,))
+        elif tamper == 'new_revision':
+            revision = led.db.execute('SELECT COALESCE(MAX(seq),1) FROM message_revisions WHERE message_id=1').fetchone()[0]
+            row = led.db.execute('SELECT content_hash FROM messages WHERE message_id=1').fetchone()
+            led.db.execute("INSERT INTO message_revisions VALUES(?,?,?,?,?,?)", (1, revision + 1, row[0], row[0], 'full', clock.wall))
+        elif tamper == 'scope':
+            led.db.execute('UPDATE patients SET karte_id=99 WHERE project_id=1')
+    monkeypatch.setattr(context_refresh, '_source_repair_seal', original)
+    for _ in range(3):
+        clock.wall += 61
+        step(runtime)
+    assert not any(json.loads(row['content']).get('accepted_candidate_ref') for row in led.artifacts(context_refresh.SCAN, project_id=1))
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+
+
+def test_source_repair_never_reinjects_rejected_seed_and_preserves_local_union(runtime, monkeypatch):
+    led, clock, _ = runtime
+    other = '合成の申し送りです。'
+    seed(led, body=_REPAIR_HOME + other + _REPAIR_BED)
+    source = list(mcs_queries.patient_context_sources(led.db, 1))[0]
+    def record(text):
+        return {'category':'living','subject':'patient','text':text,'evidence':text,'details':[]}
+    source['items'] = [record(other)]
+    protected = context_plan.source_facts(source, [record(_REPAIR_HOME)], night_id='synthetic', discovery='new_report', found_at=context_refresh.time.time())
+    asked = []
+    def answer(*args, **kwargs):
+        asked.append(True)
+        return {'patient_context':[record(_REPAIR_BED)]}
+    monkeypatch.setattr(context_refresh, '_ask', answer)
+    repaired = context_refresh._scan(CFG, source, {}, 'synthetic', clock.mono + 600, lambda: True,
+        source_repair={'codes':['missing'],'protected':protected})
+    assert {fact['text'] for fact in repaired['facts']} == {_REPAIR_HOME, _REPAIR_BED}
+    assert context_refresh._facts_sig([next(f for f in repaired['facts'] if f['id'] == protected[0]['id'])]) == context_refresh._facts_sig(protected)
+    local = context_refresh._scan(CFG, source, {}, 'synthetic', clock.mono + 600, lambda: True)
+    assert {fact['text'] for fact in local['facts']} == {other, _REPAIR_BED}
+    assert len(asked) == 2
+
+
+@pytest.mark.parametrize('choice,returned', [('supports', True), ('not_supported', True), ('not_supported', False)])
+def test_historical_karte_repair_retains_original_question_and_answer(runtime, cloud, monkeypatch, choice, returned):
+    import semantic_audit
+    import semantic_policy
+    import semantic_runtime
+    led, clock, _ = runtime
+    seed(led, body='')
+    with led.db:
+        led.db.execute('UPDATE patients SET karte_id=17 WHERE project_id=1')
+    led.karte_summary_store(1, 17, {'comment': _REPAIR_HOME, 'updated_at': '2026-10-16T09:00:00+09:00'})
+    source = next(item for item in mcs_queries.patient_context_sources(led.db, 1) if item['source'] == 'karte_summary')
+    assert not source['historical']
+    record = {'category': 'living', 'subject': 'patient', 'text': _REPAIR_HOME, 'evidence': _REPAIR_HOME, 'details': []}
+    facts = context_plan.source_facts(source, [record], night_id='synthetic', discovery='new_report', found_at=context_refresh.time.time())
+    assert len(facts) == 1 and facts[0]['historical'] is False
+    contract = context_refresh._contract(CFG, 1)
+    occurrence = context_refresh._source_occurrence(led.db, 1, source)
+    meta = {'source_key': context_plan.source_key(source), 'source_sig': context_plan.source_signature(source),
+            'contract': contract, 'provider': contract['provider'], 'model': contract['provider']['model'],
+            'source_occurrence_version': 1, 'source_occurrence': occurrence,
+            'source_binding': occurrence['source_binding'], 'unit_key': '1' * 64, 'chunk_key': '2' * 64}
+    checkpoint = {'complete': True, 'audited': False, 'cursor': 1, 'chunks': 1,
+                  'source_occurrence_version': 1, 'source_occurrence': occurrence}
+    with led.db:
+        context_refresh._replace(led, context_refresh.CHUNK, 1,
+            {'chunk_span': [0, len(source['body_text'])], 'part': 0, 'parts': 1, 'facts': facts}, meta, 0)
+        context_refresh._replace(led, context_refresh.SCAN, 1, checkpoint, meta, 0)
+    calls = []
+    def judge(body, timeout):
+        calls.append(body)
+        answers = {}
+        for qid, question in body['questions'].items():
+            options = question['criteria']
+            selected = choice if 'supports' in options else 'complete'
+            answers[qid] = {'type': 'choice', 'choice': selected, 'confidence': 1.0,
+                           'probabilities': {option: float(option == selected) for option in options}}
+        return 200, {}, json.dumps({'model': _source_repair_jev.JEV_MODEL, 'answers': answers,
+                                   'usage': {'input_tokens': 1, 'output_tokens': 1}}).encode()
+    monkeypatch.setattr(_source_repair_jev, 'JevClient',
+                        lambda **kwargs: _SOURCE_REPAIR_JEV(post_fn=judge, **kwargs))
+    assert context_refresh._quality_step(led, 1, CFG, 'synthetic', {}, clock.mono + 600,
+                                         lambda: True, source=source)[0] == 'pending'
+    assessment = context_refresh._quality_assessment(semantic_policy.runtime_config(CFG)[0])
+    led.db.execute('BEGIN')
+    try:
+        before = context_refresh._source_quality_capture(led.db, 1, CFG, meta['source_key'], assessment)
+    finally:
+        led.db.rollback()
+    fid = facts[0]['id']
+    original = semantic_runtime.patient_source_question_evidence(led.db, 1, before['identity'], [fid])
+    assert original['answers'][fid]['choice'] == choice and original['references'][fid]
+    retained = [tuple(row) for row in led.db.execute('SELECT artifact_id,content,meta FROM artifacts '
+        'WHERE kind IN (?,?) ORDER BY artifact_id', ('semantic_usage', 'patient_context_source_quality_v1'))]
+    led.karte_summary_store(1, 17, {'comment': '本人は合成の住居へ転居しました。',
+                                  'updated_at': '2026-10-17T09:00:00+09:00'})
+    historical = next(mcs_queries.patient_context_sources(led.db, 1, mid=meta['source_key']))
+    assert historical['historical']
+    led.db.execute('BEGIN')
+    try:
+        after = context_refresh._source_quality_capture(led.db, 1, CFG, meta['source_key'], assessment)
+    finally:
+        led.db.rollback()
+    assert after['identity']['source_input_key'] == before['identity']['source_input_key']
+    asked = []
+    def response(_cfg, payload, *_args, **_kwargs):
+        asked.append(json.loads(json.dumps(payload)))
+        return {'patient_context': [record] if returned else []}
+    monkeypatch.setattr(context_refresh, '_ask', response)
+    repaired = context_refresh._scan(CFG, historical, {}, 'synthetic', clock.mono + 600, lambda: True,
+        source_repair={'codes': ['not_supported'], 'protected': facts if choice == 'supports' else [],
+                      'historical_by_id': {fact['id']: {'historical': fact['historical']} for fact in before['facts']}})
+    assert len(asked) == 1 and asked[0]['already_found'] == [] and 'historical_by_id' not in asked[0]
+    if returned:
+        assert len(repaired['facts']) == 1 and repaired['facts'][0]['historical'] is False
+        pages = list(semantic_audit.patient_source_quality_pages(historical, repaired['facts'],
+            source_input_key=before['identity']['source_input_key'], assessment=assessment))
+        assert pages[0]['question_keys'][fid] == before['identity']['question_keys'][fid]
+        reused = semantic_runtime.patient_source_question_evidence(led.db, 1, after['identity'], [fid])
+        assert reused == original and len(calls) == 1
+        if choice == 'supports':
+            assert repaired['facts'][0] is facts[0]
+    else:
+        assert repaired['facts'] == []  # The historical map never reinjects a refused fact.
+    assert [tuple(row) for row in led.db.execute('SELECT artifact_id,content,meta FROM artifacts '
+        'WHERE kind IN (?,?) ORDER BY artifact_id', ('semantic_usage', 'patient_context_source_quality_v1'))] == retained
+
+
+def test_source_repair_forbids_the_scan_helpers_hidden_second_question(runtime, monkeypatch):
+    led, clock, _ = runtime
+    seed(led, body=_REPAIR_HOME)
+    source = list(mcs_queries.patient_context_sources(led.db, 1))[0]
+    asked = []
+    def invalid(*args, **kwargs):
+        asked.append(True)
+        return {'patient_context':[{'category':'living','subject':'patient','text':'not in source','evidence':'not in source','details':[]}]}
+    monkeypatch.setattr(context_refresh, '_ask', invalid)
+    with pytest.raises(ValueError, match='nightly_unsupported_items'):
+        context_refresh._scan(CFG, source, {}, 'synthetic', clock.mono + 600, lambda: True,
+            source_repair={'codes':['missing'],'protected':[]})
+    assert asked == [True]
+
+
+@pytest.mark.parametrize('quality_state', ['ambiguous','low_confidence','invalid','unknown'])
+def test_nondefinitive_source_quality_never_consumes_an_extraction_repair(runtime, source_repair, quality_state):
+    led, clock, _ = runtime
+    source_repair['qa_fault'] = quality_state
+    for _ in range(20):
+        step(runtime)
+        clock.wall += 61
+    assert not source_repair['sent']
+    assert not led.artifacts(context_refresh.SOURCE_REPAIR, project_id=1)
+    assert not led.artifacts('cloud_usage_reserve', project_id=1)
+    assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+
+
+def test_unchanged_missing_answer_is_not_rerolled_for_a_staged_source_candidate(runtime, source_repair):
+    led, clock, _ = runtime
+    source_repair['fault'] = 'omit_bed'
+    for _ in range(25):
+        step(runtime)
+        if len(source_repair['sent']) == 2:
+            break
+    coverage_requests = sum(request['state']['target']['id'] == 'source_coverage'
+                            for request in led.synthetic_jev_requests)
+    for _ in range(5):
+        clock.wall += 86400
+        step(runtime)
+    assert len(source_repair['sent']) == 2
+    assert sum(request['state']['target']['id'] == 'source_coverage'
+               for request in led.synthetic_jev_requests) == coverage_requests == 1
+    assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+
+
+@pytest.mark.parametrize('changed_row', ['source','other'])
+def test_unexpected_trigger_write_cannot_be_blessed_as_a_source_repair_owner_write(runtime, source_repair, changed_row):
+    led, clock, _ = runtime
+    before_body = led.db.execute('SELECT body_text FROM messages WHERE message_id=1').fetchone()[0]
+    led.db.execute('CREATE TEMP TABLE synthetic_side_effect(value INTEGER)')
+    led.db.execute('INSERT INTO synthetic_side_effect VALUES(0)')
+    change = ("UPDATE messages SET body_text=body_text || '変更' WHERE message_id=1;" if changed_row == 'source'
+              else 'UPDATE synthetic_side_effect SET value=value+1;')
+    # TEMP keeps this entirely synthetic while allowing the trigger to see
+    # the test-only side-effect table on the same connection.
+    led.db.execute('CREATE TEMP TRIGGER synthetic_unexpected_repair_write AFTER UPDATE OF content ON artifacts '
+        "WHEN OLD.kind='patient_context_source_quality_repair_candidate_v1' "
+        "AND json_extract(NEW.content,'$.phase')='complete' BEGIN " + change + ' END')
+    led.db.commit()
+    for _ in range(25):
+        step(runtime)
+        if source_repair['sent']:
+            break
+    for _ in range(3):
+        clock.wall += 61
+        step(runtime)
+    assert len(source_repair['sent']) == 1
+    assert led.db.execute('SELECT body_text FROM messages WHERE message_id=1').fetchone()[0] == before_body
+    assert led.db.execute('SELECT value FROM synthetic_side_effect').fetchone()[0] == 0
+    slots = led.artifacts(context_refresh.SOURCE_REPAIR_CANDIDATE, project_id=1)
+    assert slots and all(json.loads(row['content'])['phase'] == 'reserved' for row in slots)
+    assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+
+
+@pytest.mark.parametrize('changed_row', ['source', 'scope', 'other', 'scan', 'progress', 'epoch'])
+def test_unexpected_write_during_source_adoption_rolls_back_and_retains_stage(runtime, source_repair, monkeypatch, changed_row):
+    led, _, _ = runtime
+    with led.db:
+        led.db.execute("INSERT INTO fetch_jobs(kind,project_id,message_id,payload,state,next_try,created_at,updated_at) "
+                       "VALUES('semantic_sched',0,0,'{\"analysis_epoch\":7}','done',0,1,1)")
+    led.db.execute('CREATE TEMP TABLE source_adoption_sentinel(value INTEGER)')
+    led.db.execute('INSERT INTO source_adoption_sentinel VALUES(0)')
+    led.db.commit()
+    condition = ("NEW.kind='patient_context_scan_v1' AND "
+                 "json_type(NEW.content,'$.accepted_candidate_ref')='object'")
+    table, event = 'artifacts', 'INSERT'
+    if changed_row == 'source':
+        action = "UPDATE messages SET body_text='synthetic changed during adoption' WHERE message_id=1;"
+    elif changed_row == 'scope':
+        action = 'UPDATE patients SET karte_id=99 WHERE project_id=1;'
+    elif changed_row == 'other':
+        action = 'UPDATE source_adoption_sentinel SET value=value+1;'
+    elif changed_row == 'scan':
+        action = "UPDATE artifacts SET content=json_set(content,'$.audited',json('false')) WHERE artifact_id=NEW.artifact_id;"
+    elif changed_row == 'progress':
+        condition = (f"NEW.kind='{context_refresh.PROGRESS}' AND EXISTS(SELECT 1 FROM artifacts WHERE "
+                     "kind='patient_context_scan_v1' AND project_id=1 AND "
+                     "json_type(content,'$.accepted_candidate_ref')='object')")
+        action = "UPDATE artifacts SET content=json_set(content,'$.summary_pending',json('false')) WHERE artifact_id=NEW.artifact_id;"
+    else:
+        table, event = 'fetch_jobs', 'UPDATE'
+        condition = ("NEW.kind='semantic_sched' AND json_extract(NEW.payload,'$.analysis_epoch')<1000 "
+                     "AND EXISTS(SELECT 1 FROM artifacts WHERE kind='patient_context_scan_v1' AND project_id=1 "
+                     "AND json_type(content,'$.accepted_candidate_ref')='object')")
+        action = "UPDATE fetch_jobs SET payload=json_set(payload,'$.analysis_epoch',1000) WHERE job_id=NEW.job_id;"
+    led.db.executescript('CREATE TEMP TRIGGER synthetic_source_adoption AFTER ' + event + ' ON ' + table
+                        + ' WHEN ' + condition + ' BEGIN ' + action + ' END;')
+    original_replace = context_refresh._replace
+    observed = []
+    def observe(owner, kind, pid, content, meta, mid=None, **kwargs):
+        if kind == context_refresh.SCAN and content.get('accepted_candidate_ref') is not None:
+            assert owner.db.in_transaction
+            observed.append({
+                'body': owner.db.execute('SELECT body_text FROM messages WHERE message_id=1').fetchone()[0],
+                'scope': tuple(owner.db.execute('SELECT project_type,karte_id,is_archived FROM patients WHERE project_id=1').fetchone()),
+                'scan': [tuple(row) for row in owner.db.execute('SELECT * FROM artifacts WHERE kind=? AND project_id=1', (context_refresh.SCAN,))],
+                'progress': [tuple(row) for row in owner.db.execute('SELECT * FROM artifacts WHERE kind=? AND project_id=1', (context_refresh.PROGRESS,))],
+                'epoch': tuple(owner.db.execute("SELECT job_id,payload FROM fetch_jobs WHERE kind='semantic_sched'").fetchone()),
+                'stage': [tuple(row) for row in owner.db.execute('SELECT * FROM artifacts WHERE kind IN (?,?) ORDER BY artifact_id',
+                                                               (context_refresh.SOURCE_REPAIR, context_refresh.SOURCE_REPAIR_CANDIDATE))]})
+        return original_replace(owner, kind, pid, content, meta, mid, **kwargs)
+    monkeypatch.setattr(context_refresh, '_replace', observe)
+    for _ in range(35):
+        result = step(runtime)
+        if observed:
+            break
+    assert observed and result['status'] == 'source_changed' and result['done'] == 0
+    before = observed[0]
+    assert led.db.execute('SELECT body_text FROM messages WHERE message_id=1').fetchone()[0] == before['body']
+    assert tuple(led.db.execute('SELECT project_type,karte_id,is_archived FROM patients WHERE project_id=1').fetchone()) == before['scope']
+    assert led.db.execute('SELECT value FROM source_adoption_sentinel').fetchone()[0] == 0
+    assert [tuple(row) for row in led.db.execute('SELECT * FROM artifacts WHERE kind=? AND project_id=1', (context_refresh.SCAN,))] == before['scan']
+    assert [tuple(row) for row in led.db.execute('SELECT * FROM artifacts WHERE kind=? AND project_id=1', (context_refresh.PROGRESS,))] == before['progress']
+    assert tuple(led.db.execute("SELECT job_id,payload FROM fetch_jobs WHERE kind='semantic_sched'").fetchone()) == before['epoch']
+    assert [tuple(row) for row in led.db.execute('SELECT * FROM artifacts WHERE kind IN (?,?) ORDER BY artifact_id',
+                                               (context_refresh.SOURCE_REPAIR, context_refresh.SOURCE_REPAIR_CANDIDATE))] == before['stage']
+    assert len(source_repair['sent']) == 2 and not led.db.in_transaction
+    assert not any(json.loads(row['content']).get('accepted_candidate_ref') for row in led.artifacts(context_refresh.SCAN, project_id=1))
+    assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+
+
+@pytest.mark.parametrize('changed', ['claim', 'revision', 'key', 'scope'])
+def test_source_repair_losing_its_claim_after_the_budget_reservation_cannot_post(runtime, source_repair, monkeypatch, changed):
+    led, clock, _ = runtime
+    reserve = worker.cloud_policy.usage_reserver
+    def factory(*args, **kwargs):
+        original = reserve(*args, **kwargs)
+        def changed_after_commit(body, timeout):
+            reservation = original(body, timeout)
+            assert not led.db.in_transaction
+            if changed == 'key':
+                monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *a, **k: None)
+            with led.db:
+                if changed == 'claim':
+                    led.db.execute("UPDATE fetch_jobs SET payload=json_set(payload,'$.token','synthetic-other-owner') WHERE kind=?",
+                                   (context_refresh.QUALITY_CLAIM,))
+                elif changed == 'revision':
+                    seq = led.db.execute('SELECT COALESCE(MAX(seq),1) FROM message_revisions WHERE message_id=1').fetchone()[0]
+                    digest = led.db.execute('SELECT content_hash FROM messages WHERE message_id=1').fetchone()[0]
+                    led.db.execute('INSERT INTO message_revisions VALUES(?,?,?,?,?,?)',
+                                   (1, seq + 1, digest, digest, 'full', clock.wall))
+                elif changed == 'scope':
+                    led.db.execute('UPDATE patients SET karte_id=99 WHERE project_id=1')
+            return reservation
+        return changed_after_commit
+    monkeypatch.setattr(worker.cloud_policy, 'usage_reserver', factory)
+    for _ in range(25):
+        step(runtime)
+        if led.artifacts(context_refresh.SOURCE_REPAIR_CANDIDATE, project_id=1):
+            break
+    assert not source_repair['sent']
+    headers = led.artifacts(context_refresh.SOURCE_REPAIR, project_id=1)
+    slots = led.artifacts(context_refresh.SOURCE_REPAIR_CANDIDATE, project_id=1)
+    reserves = led.artifacts('cloud_usage_reserve', project_id=1)
+    results = led.artifacts('cloud_usage_result', project_id=1)
+    assert len(headers) == len(slots) == len(reserves) == len(results) == 1
+    slot = json.loads(slots[0]['meta'])
+    reservation, result = json.loads(reserves[0]['meta']), json.loads(results[0]['meta'])
+    assert json.loads(slots[0]['content'])['phase'] == 'reserved'
+    assert slot['reservation_artifact_id'] == reserves[0]['artifact_id']
+    assert slot['reservation_id'] == reservation['reservation_id'] == result['reservation_id']
+    assert result['http_class'] == 'not_sent' and result['cost_usd'] == '0'
+    assert worker.cloud_policy.usage_report(led)['unresolved_requests'] == 0
+    original = [(item['artifact_id'], item['content'], item['meta']) for item in (headers[0], slots[0], reserves[0])]
+    # The original input keeps its spent right and unresolved unit slot. A real
+    # new revision may start B separately; it cannot redispatch this old unit.
+    for _ in range(2):
+        clock.wall += 61
+        step(runtime)
+    assert [tuple(led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE artifact_id=?', (aid,)).fetchone())
+            for aid, _content, _meta in original] == original
+    assert led.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='cloud_usage_reserve' "
+                          "AND json_extract(meta,'$.owner.repair_input_key')=?",
+                          (slot['repair_input_key'],)).fetchone()[0] == 1
+    assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+
+
+@pytest.mark.parametrize('stop', ['length_once','capacity_once'])
+def test_source_repair_persists_a_known_stop_before_continuing_finite_children(runtime, source_repair, stop):
+    led, clock, _ = runtime
+    source_repair['fault'] = stop
+    for _ in range(25):
+        step(runtime)
+        if source_repair['sent']:
+            break
+    slots = led.artifacts(context_refresh.SOURCE_REPAIR_CANDIDATE, project_id=1)
+    assert len(slots) == 1 and json.loads(slots[0]['content'])['phase'] == 'split'
+    original_unit = json.loads(slots[0]['meta'])['unit_key']
+    header = led.artifacts(context_refresh.SOURCE_REPAIR, project_id=1)[0]
+    assert json.loads(header['content'])['split'] == 1
+    clock.wall += 86400
+    drain(runtime)
+    reservations = [json.loads(row['meta']) for row in led.artifacts('cloud_usage_reserve', project_id=1)]
+    assert len(reservations) == len(source_repair['sent'])
+    assert len({row['unit_key'] for row in reservations}) == len(reservations)
+    assert sum(row['unit_key'] == original_unit for row in reservations) == 1
+    assert len(led.artifacts(context_refresh.SOURCE_REPAIR, project_id=1)) == 1
+    assert context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+
+
+@pytest.mark.parametrize('changed', ['revision','first_seen','scope'])
+def test_new_raw_occurrence_restarts_b_without_deleting_prior_original_chunks(runtime, cloud, changed):
+    led, clock, _ = runtime
+    seed(led, body='見出しのない完全合成の居住記録。')
+    drain(runtime)
+    for generation in (2, 3):
+        old = [tuple(row) for row in led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? ORDER BY artifact_id',
+                                                   (context_refresh.CHUNK,))]
+        with led.db:
+            if changed == 'revision':
+                led.db.execute('BEGIN IMMEDIATE')
+                before = context_refresh.dependency_loss.capture_tx(led.db, 1, 1)
+                context_refresh.dependency_loss.record_tx(led.db, before)
+                previous = led.db.execute('SELECT COALESCE(MAX(seq),1) FROM message_revisions WHERE message_id=1').fetchone()[0]
+                body_hash = led.db.execute('SELECT content_hash FROM messages WHERE message_id=1').fetchone()[0]
+                led.db.execute('INSERT INTO message_revisions VALUES(?,?,?,?,?,?)',
+                               (1, previous + 1, body_hash, body_hash, 'full', clock.wall))
+            elif changed == 'first_seen':
+                led.db.execute('UPDATE messages SET first_seen=first_seen+1 WHERE message_id=1')
+            else:
+                led.db.execute('UPDATE patients SET karte_id=? WHERE project_id=1', (generation,))
+        assert context_refresh._pending(led.db, 1, CFG)[2]['B']
+        assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+        drain(runtime)
+        current = {row[0]:tuple(row) for row in led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=?',
+                                                             (context_refresh.CHUNK,))}
+        assert all(current[row[0]] == row for row in old)
+        assert len(current) == len(old) + 1
+        assert context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+    keys = [json.loads(row['meta'])['unit_key'] for row in led.artifacts(context_refresh.CHUNK, project_id=1)]
+    assert len(keys) == len(set(keys)) == 3
+
+
+def test_scope_aba_holds_an_unproven_original_cursor_without_reposting_or_overwriting(runtime, cloud):
+    led, _, _ = runtime
+    seed(led, body='見出しのない完全合成の居住記録。')
+    drain(runtime)
+    with led.db:
+        led.db.execute('UPDATE patients SET karte_id=99 WHERE project_id=1')
+    drain(runtime)
+    originals = [tuple(row) for row in led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? ORDER BY artifact_id',
+                                                     (context_refresh.CHUNK,))]
+    calls = len(cloud[0])
+    with led.db:
+        led.db.execute('UPDATE patients SET karte_id=NULL WHERE project_id=1')
+    step(runtime)
+    assert len(cloud[0]) == calls
+    assert [tuple(row) for row in led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? ORDER BY artifact_id',
+                                                (context_refresh.CHUNK,))] == originals
+    checkpoint = led.artifacts(context_refresh.SCAN, project_id=1)[0]
+    stored = json.loads(checkpoint['content'])
+    assert stored['held'] and stored['failure'] == 'nightly_original_unit_unverified'
+    assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+
+
+@pytest.mark.parametrize('field', ['invalidated','source_key'])
+def test_new_occurrence_marker_never_uses_duplicate_metadata_as_legacy(runtime, cloud, field):
+    led, _, _ = runtime
+    seed(led, body='見出しのない完全合成の居住記録。')
+    drain(runtime)
+    original = led.db.execute('SELECT artifact_id,meta FROM artifacts WHERE kind=?', (context_refresh.CHUNK,)).fetchone()
+    value = '0' if field == 'invalidated' else '1'
+    malformed = '{"' + field + '":' + value + ',' + original['meta'][1:-1] + ',"' + field + '":' + value + '}'
+    with led.db:
+        led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (malformed, original['artifact_id']))
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+
+
 def test_source_verified_reads_each_receipt_page_once_and_refuses_missing_evidence(runtime, cloud, monkeypatch):
     import semantic_runtime
     led, _, _ = runtime
@@ -1540,11 +2186,29 @@ def test_source_verified_reads_each_receipt_page_once_and_refuses_missing_eviden
 
 
 @pytest.mark.parametrize('problem', ['none', 'unknown', 'invalid_exhausted', 'missing', 'negative', 'low'])
-def test_source_pass_content_checks_each_logical_page_once(monkeypatch, problem):
+def test_source_pass_content_checks_each_logical_page_once(runtime, cloud, monkeypatch, problem):
+    import semantic_audit
+    import semantic_policy
     import semantic_runtime
-    ids = [format(number, '064x') for number in range(1, 26)]
-    identity = {'purpose': 'source', 'fact_ids': ids, 'source_fact_count': 24,
-                'passing_choices': {fid: ('complete' if fid == ids[-1] else 'supports') for fid in ids}}
+
+    led, _, _ = runtime
+    texts = [f'合成の居住状況{number:02d}。' for number in range(24)]
+    seed(led, body=''.join(texts))
+    source = next(mcs_queries.patient_context_sources(led.db, 1, mid=1))
+    items = [{'category': 'living', 'text': text, 'evidence': text,
+              'subject': 'unspecified', 'details': []} for text in texts]
+    facts = context_plan.source_facts(source, items, night_id='synthetic', discovery='new_report',
+                                      found_at=context_refresh.time.time())
+    assert len(facts) == 24
+    scfg, errors = semantic_policy.semantic_config(CFG, key_present=True)
+    assert not errors
+    assessment = context_refresh._quality_assessment(scfg)
+    occurrence = context_refresh._source_occurrence(led.db, 1, source)
+    identity, _ = semantic_audit.patient_source_quality_identity(
+        source, facts, occurrence, context_refresh._contract(CFG, 1), 'a' * 64, assessment)
+    ids = identity['fact_ids']
+    assert len(ids) == 25
+    descriptor = semantic_runtime.patient_source_assessment_descriptor(assessment, scfg)
     calls = []
     def evidence(_db, _pid, _identity, page):
         calls.append(tuple(page))
@@ -1562,10 +2226,102 @@ def test_source_pass_content_checks_each_logical_page_once(monkeypatch, problem)
                 answers[ids[-1]]['confidence'] = 0.1
         return {'answers': answers, 'references': refs, 'problems': problems}
     monkeypatch.setattr(semantic_runtime, 'patient_source_question_evidence', evidence)
-    result = context_refresh._quality_pass_content(None, 1, identity, threshold=0.8)
+    led.db.execute('BEGIN')
+    try:
+        result = context_refresh._quality_pass_content(
+            led.db, 1, identity, threshold=scfg['match_threshold'], descriptor=descriptor)
+    finally:
+        led.db.rollback()
     assert calls == [tuple(ids[:12]), tuple(ids[12:24]), tuple(ids[24:])]
     if problem == 'none':
         assert result['question_count'] == 25 and result['source_fact_count'] == 24
         assert len(result['answer_refs_sig']) == 64
+        assert result['descriptor'] == descriptor
     else:
         assert result is None
+
+
+@pytest.mark.parametrize('damage', ['none', 'usage_missing', 'answer_missing',
+                                    'answer_altered', 'low_confidence', 'pass_content'])
+def test_legacy_source_pass_is_enriched_only_with_original_evidence(runtime, cloud, damage):
+    """Enrich one old PASS only after verifying every original source QA receipt."""
+    from mcs_util import payload_hash
+
+    led, clock, _ = runtime
+    seed(led, body='完全合成の居住状況を記録しました。')
+    drain(runtime)
+    pass_kind = 'patient_context_source_quality_pass_v1'
+    answer_kind = 'patient_context_source_quality_v1'
+    pass_rows = led.db.execute(
+        'SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=1',
+        (pass_kind,)).fetchall()
+    assert len(pass_rows) == 1
+    pass_id, raw_content, raw_meta = pass_rows[0]
+    original = json.loads(raw_content)
+    descriptor = original.pop('descriptor')
+    assert set(original) == {'question_count', 'source_fact_count', 'answer_refs_sig'}
+    answer = led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? '
+                            'AND project_id=1 ORDER BY artifact_id LIMIT 1', (answer_kind,)).fetchone()
+    assert answer
+    answer_id, answer_content, answer_meta = answer
+    usage = led.db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind='semantic_usage' "
+        "AND project_id=1 AND json_extract(meta,'$.operation')='patient_source_quality' "
+        'ORDER BY artifact_id').fetchall()
+    assert usage
+    answer_fid = json.loads(answer_meta)['fact_id']
+    matching = [(row_id, json.loads(meta)) for row_id, meta in usage
+                if answer_fid in json.loads(meta)['quality_result']['answers']]
+    assert len(matching) == 1
+    usage_id, usage_meta = matching[0]
+    assert usage_meta['quality_result']['answers'][answer_fid]['answer_artifact_id'] == answer_id
+
+    if damage == 'pass_content':
+        original['answer_refs_sig'] = '0' * 64
+    legacy_content = json.dumps(original, separators=(',', ':'))
+    with led.db:
+        led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (legacy_content, pass_id))
+        if damage == 'usage_missing':
+            led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (usage_id,))
+        elif damage == 'answer_missing':
+            led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (answer_id,))
+        elif damage in ('answer_altered', 'low_confidence'):
+            changed = json.loads(answer_content)
+            changed['confidence'] = 0.1
+            led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?',
+                           (json.dumps(changed, separators=(',', ':')), answer_id))
+            if damage == 'low_confidence':
+                # Bind the lower confidence to the original reservation, so this
+                # tests the threshold as well as receipt integrity.
+                usage_meta['quality_result']['answers'][answer_fid]['answer_hash'] = payload_hash(changed)
+                led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
+                               (json.dumps(usage_meta, separators=(',', ':')), usage_id))
+
+    def receipts():
+        return [tuple(row) for row in led.db.execute(
+            "SELECT * FROM artifacts WHERE project_id=1 AND kind IN ('semantic_usage', ?) ORDER BY artifact_id",
+            (answer_kind,))]
+
+    before_receipts = receipts()
+    before_jev, before_cloud = len(led.synthetic_jev_requests), len(cloud[0])
+    source = next(mcs_queries.patient_context_sources(led.db, 1, mid=1))
+    def recheck():
+        return context_refresh._quality_step(led, 1, CFG, 'synthetic', {}, clock.mono + 180,
+                                             lambda: True, source=source)
+
+    if damage in ('pass_content', 'low_confidence'):
+        expected = ('patient_source_quality_receipt_missing' if damage == 'pass_content'
+                    else 'patient_summary_quality_incomplete')
+        with pytest.raises(ValueError, match=expected):
+            recheck()
+    else:
+        status, _ = recheck()
+        assert status == ('passed' if damage == 'none' else 'unknown')
+    assert receipts() == before_receipts
+    assert len(led.synthetic_jev_requests) == before_jev and len(cloud[0]) == before_cloud
+    after = led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=1',
+                           (pass_kind,)).fetchall()
+    assert len(after) == 1 and after[0][0] == pass_id and after[0][2] == raw_meta
+    if damage == 'none':
+        assert json.loads(after[0][1]) == {**original, 'descriptor': descriptor}
+    else:
+        assert after[0][1] == legacy_content

@@ -10,7 +10,7 @@ import uuid
 
 from anthropic_client import AnthropicError, MODEL, MAX_TOKENS, validate_usage
 from llm_retry import http_error
-from mcs_util import private_env_value, payload_hash
+from mcs_util import private_env_value, payload_hash, strict_json
 
 PRICE_VERSION = "anthropic-haiku-5-5-2026-10-26"
 PRICE_CHECKED_ON = "2026-10-26"
@@ -286,6 +286,70 @@ def _matching_rows(ledger, kind, reservation_id):
     return _matching_rows_many(ledger, kind, [reservation_id])
 
 
+def reservation_evidence(db, artifact_id):
+    """Validate a retained reservation's original successful result by exact reference."""
+    try:
+        return _reservation_evidence(db, artifact_id)
+    except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
+        raise ValueError("cloud_receipt_invalid") from None
+
+
+def _receipt_meta(raw):
+    if not isinstance(raw, str) or len(raw) > 32768:
+        raise ValueError('cloud_receipt_invalid')
+    try:
+        value = strict_json(raw)
+    except (TypeError, ValueError, UnicodeError, RecursionError, OverflowError):
+        raise ValueError('cloud_receipt_invalid') from None
+    if not isinstance(value, dict):
+        raise ValueError('cloud_receipt_invalid')
+    return value
+
+
+def _reservation_evidence(db, artifact_id):
+    if type(artifact_id) is not int or artifact_id <= 0:
+        raise ValueError("cloud_receipt_invalid")
+    row = db.execute("SELECT artifact_id,kind,project_id,message_id,model,"
+                     "CASE WHEN typeof(meta)='text' AND length(meta)<=32768 THEN meta END,created_at,content "
+                     "FROM artifacts WHERE artifact_id=? AND kind='cloud_usage_reserve'", (artifact_id,)).fetchone()
+    if row is None:
+        raise ValueError("cloud_receipt_missing")
+    original = dict(zip(('artifact_id','kind','project_id','message_id','model','meta','created_at','content'), row))
+    meta = _receipt_meta(original['meta'])
+    maximum = _reserve_valid(meta, original)
+    kinds = (KINDS[0], KINDS[1], 'cloud_usage_disposition')
+    # A corrupt row may also have lost its patient/UUID.  It cannot be proved
+    # unrelated to this source's disposition, so new adoption evidence holds.
+    bad = db.execute("SELECT CASE WHEN typeof(meta)='text' AND length(meta)<=32768 THEN meta END "
+                  "FROM artifacts WHERE kind IN (?,?,?) AND CASE "
+                  "WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
+                  "WHEN json_type(meta)!='object' THEN 1 "
+                  "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE key IS NOT NULL "
+                  "GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
+                  "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE type='real' AND abs(value)>1.7976931348623157e308) THEN 1 "
+                  "ELSE 0 END LIMIT 1", kinds).fetchone()
+    if bad is not None:
+        _receipt_meta(bad[0])
+        raise ValueError("cloud_receipt_invalid")
+    rows = list(db.execute("SELECT artifact_id,kind,project_id,message_id,model,"
+        "CASE WHEN typeof(meta)='text' AND length(meta)<=32768 THEN meta END AS meta,created_at,content FROM artifacts "
+        "WHERE kind IN (?,?,?) AND CASE WHEN json_valid(meta) THEN EXISTS "
+        "(SELECT 1 FROM json_each(meta) m WHERE m.key='reservation_id' AND m.type='text' AND m.value=?) END "
+        "ORDER BY artifact_id", (*kinds, meta['reservation_id'])))
+    decoded = {item['artifact_id']: _receipt_meta(item['meta']) for item in rows}
+    reservations = [item for item in rows if item['kind'] == KINDS[0]]
+    results = [item for item in rows if item['kind'] == KINDS[1]]
+    if (len(reservations) != 1 or reservations[0]['artifact_id'] != artifact_id or len(results) != 1
+            or any(item['kind'] == 'cloud_usage_disposition' for item in rows)):
+        raise ValueError("cloud_receipt_unresolved")
+    result = decoded[results[0]['artifact_id']]
+    _, settled = _settled(meta, maximum, [(result, results[0])])
+    if not settled or result.get('http_class') != 'http_200' or result.get('error_kind') or result.get('disposition'):
+        raise ValueError("cloud_receipt_unresolved")
+    return {'reservation': meta, 'result': result,
+            'witness': payload_hash([tuple(item) for item in rows])}
+
+
 def _settled(m, maximum, matching):
     """(cost, settled?) of one reservation's single bound result; raises when
     the result is duplicated, unbound or its usage/cost disagrees."""
@@ -519,10 +583,12 @@ def resume(ledger):
     ledger.artifact_add("cloud_control", "running")
 
 
-def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None, owner=None):
+def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None, owner=None, on_reserved_tx=None):
     """Bind one unit's accounting; callers supply the same guard before and after this hook."""
     from semantic_runtime import reserve_artifact
     c = _cfg(cfg)
+    if on_reserved_tx is not None and not callable(on_reserved_tx):
+        raise ValueError("cloud_reservation_hook_invalid")
 
     def reserve(body, timeout):
         if not isinstance(body, dict) or body.get("model") != MODEL:
@@ -552,8 +618,22 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
                 raise AnthropicError("pricing_unverified" if reason == "pricing_unverified" else "budget_exceeded", reason)
 
         def write():
-            ledger.artifact_add_tx(KINDS[0], "{}", project_id=project_id, message_id=message_id,
-                                   model=MODEL, meta=meta)
+            artifact_id = ledger.artifact_add_tx(KINDS[0], "{}", project_id=project_id, message_id=message_id,
+                                                  model=MODEL, meta=meta)
+            if on_reserved_tx is not None:
+                from copy import deepcopy
+                row = ledger.db.execute("SELECT kind,project_id,message_id,model,content,meta FROM artifacts "
+                                        "WHERE artifact_id=?", (artifact_id,)).fetchone()
+                if row is None:
+                    raise RuntimeError("cloud_reservation_hook_invalid")
+                original = tuple(row)
+                before = ledger.db.total_changes
+                writes = on_reserved_tx(ledger, deepcopy(meta), artifact_id)
+                row = ledger.db.execute("SELECT kind,project_id,message_id,model,content,meta FROM artifacts "
+                                        "WHERE artifact_id=?", (artifact_id,)).fetchone()
+                if (not ledger.db.in_transaction or type(writes) is not int or writes <= 0
+                        or ledger.db.total_changes - before != writes or row is None or tuple(row) != original):
+                    raise RuntimeError("cloud_reservation_hook_invalid")
             return meta
         try:
             return reserve_artifact(ledger, check, write)

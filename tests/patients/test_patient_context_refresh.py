@@ -1,4 +1,6 @@
 """Synthetic acceptance of idle-night work, source validity, and resumable coverage."""
+import patient_context_plan as context_plan
+import mcs_queries
 from datetime import datetime
 import json
 import os
@@ -520,6 +522,7 @@ def test_revoked_source_is_not_generated_or_displayed(runtime):
 
 
 def test_view_reads_only_quoted_bodies_without_reextracting_history(runtime, monkeypatch):
+    import patient_context
     led, _, calls = runtime
     seed(led)
     for mid in range(2, 12):
@@ -528,9 +531,9 @@ def test_view_reads_only_quoted_bodies_without_reextracting_history(runtime, mon
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
     finish(runtime)
     before = len(calls)
-    monkeypatch.setattr(context_refresh, 'source_patient_context',
+    monkeypatch.setattr(mcs_queries, 'source_patient_context',
                         lambda *a: pytest.fail('view re-extracted saved history'))
-    monkeypatch.setattr(context_refresh, 'extract_context',
+    monkeypatch.setattr(patient_context, 'extract_context',
                         lambda *a: pytest.fail('view parsed saved history'))
     queries = []
     led.db.set_trace_callback(queries.append)
@@ -690,15 +693,15 @@ def test_failed_source_does_not_block_other_history_in_same_patient(runtime, mon
 def test_family_medication_detail_survives_source_revalidation(runtime):
     led, _, _ = runtime
     seed(led, body='母の薬は3錠残っているとの合成記録。')
-    source = next(context_refresh._sources(led.db, 1))
+    source = next(mcs_queries.patient_context_sources(led.db, 1))
     body = source['body_text']
     items = [{'category': 'medication_management', 'subject': 'family',
               'text': body, 'evidence': body,
               'details': [{'key': 'residual_quantity', 'value': '3錠', 'evidence': body}]}]
-    facts = context_refresh._facts(source, items, night_id='2026-10-17', discovery='backfill_found')
+    facts = context_plan.source_facts(source, items, night_id='2026-10-17', discovery='backfill_found', found_at=context_refresh.time.time())
     assert facts[0]['details'] == items[0]['details']
     assert facts[0]['subject'] == 'unspecified' and facts[0]['reported_subject'] == 'family'
-    assert context_refresh._validated_facts(source, facts) == facts
+    assert context_plan.validated_source_facts(source, facts) == facts
 
 
 def test_new_backfill_evidence_rearms_exhausted_summary(runtime, monkeypatch):
@@ -782,10 +785,10 @@ def test_revalidation_rejects_changed_posted_date_text(runtime):
     led, _, _ = runtime
     seed(led)
     finish(runtime)
-    source = next(context_refresh._sources(led.db, 1))
+    source = next(mcs_queries.patient_context_sources(led.db, 1))
     facts = document(led)["facts"]
     facts[0]["posted_at"] = "2099-01-01T00:00:00+09:00"
-    assert context_refresh._validated_facts(source, facts) == facts[1:]
+    assert context_plan.validated_source_facts(source, facts) == facts[1:]
 
 
 def test_fully_quoted_lines_still_scan_and_keep_distinct_summary_assertions(runtime):
@@ -865,12 +868,12 @@ def test_history_scan_hydrates_only_the_selected_post(runtime, monkeypatch):
     for mid in range(1, 9):
         seed(led, mid=mid)
     assert step(runtime)["lane"] == "A"
-    original = context_refresh.source_patient_context
+    original = mcs_queries.source_patient_context
     hydrated = []
     def read(db, message, **kwargs):
         hydrated.append(message["message_id"])
         return original(db, message, **kwargs)
-    monkeypatch.setattr(context_refresh, "source_patient_context", read)
+    monkeypatch.setattr(mcs_queries, "source_patient_context", read)
     assert step(runtime)["lane"] == "B"
     assert len(hydrated) == 1
 

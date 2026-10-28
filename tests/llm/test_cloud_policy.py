@@ -575,3 +575,205 @@ def test_daily_cost_cap_stops_reservations_once_reached(tmp_path, now):
 def test_invalid_daily_cost_cap_turns_the_route_off(value):
     settings, errors = c.cloud_config(_cfg(daily_cost_limit_usd=value))
     assert errors and settings["mode"] == "off"
+
+
+def test_reservation_hook_commits_its_slot_with_real_usage(tmp_path, now):
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        ledger.db.execute("CREATE TABLE synthetic_slot(reservation_id TEXT, request_fp TEXT)")
+        ledger.db.commit()
+        seen = []
+        def on_reserved(owner, meta, artifact_id):
+            assert owner is ledger and owner.db.in_transaction
+            row = owner.db.execute("SELECT kind,meta FROM artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()
+            assert row[0] == "cloud_usage_reserve" and json.loads(row[1]) == meta
+            seen.append(artifact_id)
+            owner.db.execute("INSERT INTO synthetic_slot VALUES(?,?)", (meta["reservation_id"], meta["request_fp"]))
+            return 1
+        before = ledger.db.total_changes
+        reservation = _reserve(ledger, on_reserved_tx=on_reserved)
+        assert not ledger.db.in_transaction and ledger.db.total_changes - before == 2
+        assert len(seen) == 1
+        assert tuple(ledger.db.execute("SELECT * FROM synthetic_slot").fetchone()) == (
+            reservation["reservation_id"], reservation["request_fp"])
+        assert c.usage_report(ledger)["unresolved_requests"] == 1
+
+
+@pytest.mark.parametrize("failure", ["raise", "count", "receipt"])
+def test_reservation_hook_failure_rolls_back_usage_and_slot(tmp_path, now, failure):
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        ledger.db.execute("CREATE TABLE synthetic_slot(value TEXT)")
+        ledger.db.commit()
+        def on_reserved(owner, meta, artifact_id):
+            owner.db.execute("INSERT INTO synthetic_slot VALUES('spent')")
+            if failure == "raise":
+                raise RuntimeError("synthetic")
+            if failure == "receipt":
+                owner.db.execute("UPDATE artifacts SET content='changed' WHERE artifact_id=?", (artifact_id,))
+                return 2
+            return 2
+        with pytest.raises(RuntimeError):
+            _reserve(ledger, on_reserved_tx=on_reserved)
+        assert not ledger.db.in_transaction
+        assert not ledger.artifacts("cloud_usage_reserve")
+        assert ledger.db.execute("SELECT count(*) FROM synthetic_slot").fetchone()[0] == 0
+        assert c.usage_report(ledger)["daily_requests"] == 0
+
+
+def test_reservation_hook_never_commits_borrowed_transaction(tmp_path, now):
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        ledger.db.execute("CREATE TABLE synthetic_slot(value TEXT)")
+        ledger.db.commit()
+        ledger.db.execute("INSERT INTO synthetic_slot VALUES('owner')")
+        def on_reserved(*args):
+            pytest.fail("must not run while the caller owns a transaction")
+        with pytest.raises(AnthropicError) as error:
+            _reserve(ledger, on_reserved_tx=on_reserved)
+        assert error.value.kind == "budget_exceeded" and error.value.detail == "owner_transaction_active"
+        assert ledger.db.in_transaction
+        assert ledger.db.execute("SELECT count(*) FROM synthetic_slot").fetchone()[0] == 1
+        ledger.db.rollback()
+        assert ledger.db.execute("SELECT count(*) FROM synthetic_slot").fetchone()[0] == 0
+        assert not ledger.artifacts("cloud_usage_reserve")
+
+
+def test_retained_original_receipt_is_verified_by_exact_id_without_a_62_day_lookup_window(tmp_path, now):
+    with closing(Ledger(str(tmp_path / 'l.db'))) as ledger:
+        reservation = _reserve(ledger)
+        c.record_result(ledger, reservation, _result(reservation))
+        aid = ledger.artifacts('cloud_usage_reserve')[0]['artifact_id']
+        before = c.reservation_evidence(ledger.db, aid)
+        with ledger.db:
+            ledger.db.execute('UPDATE artifacts SET created_at=created_at-?', (80 * 86400,))
+        after = c.reservation_evidence(ledger.db, aid)
+        assert after['reservation'] == before['reservation'] == reservation
+        assert after['result'] == before['result'] and after['witness'] != before['witness']
+        ledger.db.execute('BEGIN')
+        changes = ledger.db.total_changes
+        assert c.reservation_evidence(ledger.db, aid) == after
+        assert ledger.db.in_transaction and ledger.db.total_changes == changes
+        ledger.db.rollback()
+
+
+@pytest.mark.parametrize('damage', ['missing','duplicate','request_fp','scope','unknown','disposition'])
+def test_original_receipt_evidence_rejects_ambiguous_or_changed_accounting(tmp_path, now, damage):
+    with closing(Ledger(str(tmp_path / 'l.db'))) as ledger:
+        reservation = _reserve(ledger)
+        c.record_result(ledger, reservation, _result(reservation))
+        aid = ledger.artifacts('cloud_usage_reserve')[0]['artifact_id']
+        with ledger.db:
+            if damage == 'missing':
+                ledger.db.execute("DELETE FROM artifacts WHERE kind='cloud_usage_result'")
+            elif damage == 'duplicate':
+                ledger.db.execute("INSERT INTO artifacts(kind,project_id,message_id,model,content,meta,created_at) "
+                    "SELECT kind,project_id,message_id,model,content,meta,created_at FROM artifacts WHERE kind='cloud_usage_result'")
+            elif damage == 'request_fp':
+                ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.request_fp',?) WHERE kind='cloud_usage_result'", ('f' * 64,))
+            elif damage == 'scope':
+                ledger.db.execute("UPDATE artifacts SET project_id=2 WHERE kind='cloud_usage_result'")
+            elif damage == 'unknown':
+                ledger.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.http_class','transport','$.error_kind','timeout') WHERE kind='cloud_usage_result'")
+            else:
+                ledger.db.execute('BEGIN')
+                c.record_disposition_tx(ledger, reservation, 'discarded_scope')
+        with pytest.raises(ValueError, match='cloud_receipt_invalid'):
+            c.reservation_evidence(ledger.db, aid)
+
+
+@pytest.mark.parametrize('damage', ['reserve_duplicate', 'reserve_nonfinite', 'result_http_duplicate',
+                                  'result_usage_duplicate', 'result_nonfinite', 'result_nan',
+                                  'hidden_disposition', 'foreign_hidden_disposition', 'unmatched_disposition_duplicate'])
+def test_original_receipt_evidence_strictly_rejects_duplicate_and_nonfinite_json(tmp_path, now, damage):
+    with closing(Ledger(str(tmp_path / 'l.db'))) as ledger:
+        reservation = _reserve(ledger)
+        c.record_result(ledger, reservation, _result(reservation))
+        aid = ledger.artifacts('cloud_usage_reserve')[0]['artifact_id']
+        assert c.reservation_evidence(ledger.db, aid)['reservation'] == reservation
+        with ledger.db:
+            if damage in ('hidden_disposition', 'foreign_hidden_disposition'):
+                ledger.db.execute('BEGIN')
+                c.record_disposition_tx(ledger, reservation, 'discarded_scope')
+                target = ledger.db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind='cloud_usage_disposition'").fetchone()
+                different = ('0' if reservation['reservation_id'][0] != '0' else '1') + reservation['reservation_id'][1:]
+                raw = '{"reservation_id":' + json.dumps(different) + ',' + target['meta'][1:]
+                if damage == 'foreign_hidden_disposition':
+                    ledger.db.execute('UPDATE artifacts SET project_id=2 WHERE artifact_id=?', (target['artifact_id'],))
+            elif damage == 'unmatched_disposition_duplicate':
+                ledger.db.execute('BEGIN')
+                target = {'artifact_id': ledger.artifact_add_tx('cloud_usage_disposition', '{}', project_id=1,
+                    meta={'reservation_id': 'synthetic-other', 'unused': 1})}
+                raw = '{"reservation_id":"synthetic-other","unused":0,"unused":1}'
+            else:
+                kind = 'cloud_usage_reserve' if damage.startswith('reserve_') else 'cloud_usage_result'
+                target = ledger.db.execute('SELECT artifact_id,meta FROM artifacts WHERE kind=?', (kind,)).fetchone()
+                raw = target['meta']
+                if damage == 'reserve_duplicate':
+                    raw = '{"max_tokens":0,' + raw[1:]
+                elif damage == 'result_http_duplicate':
+                    raw = '{"http_class":"transport",' + raw[1:]
+                elif damage == 'result_usage_duplicate':
+                    document = json.loads(raw)
+                    usage = json.dumps(document['usage'])
+                    raw = json.dumps(document).replace(usage, '{"input_tokens":999,' + usage[1:], 1)
+                else:
+                    raw = raw[:-1] + ',"unused":{"value":' + ('NaN' if damage == 'result_nan' else '1e999') + '}}'
+            ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (raw, target['artifact_id']))
+        with pytest.raises(ValueError, match='cloud_receipt_invalid'):
+            c.reservation_evidence(ledger.db, aid)
+
+
+def test_unknown_scope_corruption_holds_new_evidence_without_changing_existing_billing(tmp_path, now):
+    with closing(Ledger(str(tmp_path / 'l.db'))) as ledger:
+        reservation = _reserve(ledger)
+        c.record_result(ledger, reservation, _result(reservation))
+        aid = ledger.artifacts('cloud_usage_reserve')[0]['artifact_id']
+        expected = c.reservation_evidence(ledger.db, aid)
+        billing = c.usage_report(ledger)
+        assert expected['reservation'] == reservation
+        unrelated = ledger.artifact_add('cloud_usage_disposition', '{}', project_id=2)
+        raw = '{"reservation_id":"synthetic-other","unused":0,"unused":1}'
+        with ledger.db:
+            ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
+                             (raw, unrelated))
+        assert c._loads(raw) == json.loads(raw)
+        assert c.usage_report(ledger) == billing
+        with pytest.raises(ValueError, match='cloud_receipt_invalid'):
+            c.reservation_evidence(ledger.db, aid)
+
+
+def test_original_receipt_evidence_permits_normal_bound_receipts_of_another_patient(tmp_path, now):
+    with closing(Ledger(str(tmp_path / 'l.db'))) as ledger:
+        reservation = _reserve(ledger)
+        c.record_result(ledger, reservation, _result(reservation))
+        aid = ledger.artifacts('cloud_usage_reserve')[0]['artifact_id']
+        expected = c.reservation_evidence(ledger.db, aid)
+        other = c.usage_reserver(ledger, _cfg(project_ids=[1, 2]), route='reextract', project_id=2,
+            unit_key='synthetic-other')({'model': MODEL, 'max_tokens': 100}, 2)
+        c.record_result(ledger, other, _result(other))
+        ledger.db.execute('BEGIN')
+        with ledger.db:
+            c.record_disposition_tx(ledger, other, 'discarded_scope')
+        assert c.usage_report(ledger)['daily_requests'] == 2
+        assert c.reservation_evidence(ledger.db, aid) == expected
+
+
+@pytest.mark.parametrize('damage', ['syntax', 'duplicate', 'nonfinite', 'nan', 'oversize', 'null', 'nonobject'])
+def test_genuine_disposition_with_lost_scope_and_corrupt_json_never_becomes_success(tmp_path, now, damage):
+    with closing(Ledger(str(tmp_path / 'l.db'))) as ledger:
+        reservation = _reserve(ledger)
+        c.record_result(ledger, reservation, _result(reservation))
+        aid = ledger.artifacts('cloud_usage_reserve')[0]['artifact_id']
+        assert c.reservation_evidence(ledger.db, aid)['reservation'] == reservation
+        billing = c.usage_report(ledger)
+        ledger.db.execute('BEGIN')
+        with ledger.db:
+            discarded = c.record_disposition_tx(ledger, reservation, 'discarded_scope')
+        raw = {'syntax': '{"broken":',
+               'duplicate': '{"reservation_id":"synthetic-other","reservation_id":' + json.dumps(reservation['reservation_id']) + '}',
+               'nonfinite': '{"unused":1e999}', 'nan': '{"unused":NaN}',
+               'oversize': '{"unused":' + json.dumps('x' * 32768) + '}',
+               'null': None, 'nonobject': '[]'}[damage]
+        with ledger.db:
+            ledger.db.execute('UPDATE artifacts SET project_id=2,meta=? WHERE artifact_id=?', (raw, discarded))
+        assert c.usage_report(ledger) == billing
+        with pytest.raises(ValueError, match='cloud_receipt_invalid'):
+            c.reservation_evidence(ledger.db, aid)

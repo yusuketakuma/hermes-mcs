@@ -1,4 +1,5 @@
 """Synthetic source-bound checks for non-medication context projections."""
+import patient_context_plan as context_plan
 
 from datetime import datetime
 
@@ -22,7 +23,7 @@ def source(mid, body, *, day=1, content_hash=None):
 
 
 def facts_for(row):
-    return refresh._facts(row, extract_context(row["body_text"]), night_id=1, discovery="new_report")
+    return context_plan.source_facts(row, extract_context(row["body_text"]), night_id=1, discovery="new_report", found_at=refresh.time.time())
 
 
 def category_fact(row, category):
@@ -227,10 +228,10 @@ def test_other_project_or_category_does_not_interfere_with_allergy():
 def test_deleted_or_revised_source_cannot_validate_old_context_fact():
     row = source(1, "生活環境: 本人は本日独居しています。")
     fact = category_fact(row, "living")
-    assert refresh._validated_facts(row, [fact])
-    assert refresh._validated_facts({**row, "body_state": "deleted"}, [fact]) == []
+    assert context_plan.validated_source_facts(row, [fact])
+    assert context_plan.validated_source_facts({**row, "body_state": "deleted"}, [fact]) == []
     revised = {**row, "content_hash": "synthetic-revised", "body_text": "生活環境: 本人は同居しています。"}
-    assert refresh._validated_facts(revised, [fact]) == []
+    assert context_plan.validated_source_facts(revised, [fact]) == []
 
 
 def test_explicit_nonmedication_correction_preserves_both_sources():

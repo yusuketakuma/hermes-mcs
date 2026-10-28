@@ -1,4 +1,5 @@
 """Synthetic posted-time allergy excerpts on a borrowed patient snapshot."""
+import patient_context_plan as context_plan
 from dataclasses import replace
 import sqlite3
 
@@ -30,7 +31,7 @@ def _seed(ctx, mid, body):
     ledger.save_messages([replace(_message(mid, body=body), posted_at="2026-10-03T09:00:00+09:00")], project_id=1)
     source = {**dict(ledger.db.execute("SELECT * FROM messages WHERE project_id=1 AND message_id=?", (mid,)).fetchone()),
               "source": "chat"}
-    created = refresh._facts(source, extract_context(body), night_id="2026-10-03", discovery="new_report")
+    created = context_plan.source_facts(source, extract_context(body), night_id="2026-10-03", discovery="new_report", found_at=refresh.time.time())
     assert created
     for fact in created:
         fact["view_bucket"] = "unknown"

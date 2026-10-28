@@ -1,4 +1,6 @@
 """Independent synthetic invariants for atomic context, bounded storage and generations."""
+import patient_context_plan as context_plan
+import mcs_queries
 import copy
 from contextlib import closing
 from datetime import datetime
@@ -10,7 +12,8 @@ import sqlite3
 import pytest
 
 import patient_context_refresh as refresh
-from inference_version import VERSION_KEY
+import patient_context
+from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY
 from test_patient_context_refresh import CFG, document, finish, runtime, seed, step
 import patient_context_state as state
 import inference_dependency_loss as loss
@@ -167,7 +170,7 @@ def test_explicit_correction_targets_only_the_named_source_assertion():
 @pytest.mark.parametrize('span', [[True, 5], [-1, 2], [0, 999], [1, 4]])
 def test_comparison_rejects_invalid_absolute_span_instead_of_guessing(span):
     body = '合成の原文です。'
-    facts = refresh._facts(source(body), [assertion(body)], night_id='synthetic', discovery='new_report')
+    facts = context_plan.source_facts(source(body), [assertion(body)], night_id='synthetic', discovery='new_report', found_at=refresh.time.time())
     facts[0]['evidence_span'] = span
     with pytest.raises(ValueError, match='cloud_comparison'):
         refresh._comparison_context({'facts': facts}, [source(body)])
@@ -176,8 +179,8 @@ def test_comparison_rejects_invalid_absolute_span_instead_of_guessing(span):
 def test_comparison_distinguishes_repeated_source_quotes_by_absolute_position():
     text = '合成の確認記録です。'
     raw = source(text+'別の記録。'+text)
-    first = refresh._facts(raw, [assertion(text)], night_id='synthetic', discovery='new_report', chunk=text)
-    last = refresh._facts(raw, [assertion(text)], night_id='synthetic', discovery='new_report', offset=len(text+'別の記録。'), chunk=text)
+    first = context_plan.source_facts(raw, [assertion(text)], night_id='synthetic', discovery='new_report', chunk=text, found_at=refresh.time.time())
+    last = context_plan.source_facts(raw, [assertion(text)], night_id='synthetic', discovery='new_report', offset=len(text+'別の記録。'), chunk=text, found_at=refresh.time.time())
     assert refresh._comparison_context({'facts': first}, [raw]) != refresh._comparison_context({'facts': last}, [raw])
 
 
@@ -196,13 +199,13 @@ def test_same_paragraph_preserves_distinct_subjects_attributes_and_absolute_span
     body = first+second
     items = [assertion(first,details=[{'key':'residual_quantity','value':'3錠','evidence':first}]),
              assertion(second,subject='family',details=[{'key':'residual_quantity','value':'7錠','evidence':second}])]
-    facts = refresh._facts(source(body),items,night_id='synthetic',discovery='new_report')
+    facts = context_plan.source_facts(source(body),items,night_id='synthetic',discovery='new_report', found_at=refresh.time.time())
     assert len(facts) == 2 and len({f['id'] for f in facts}) == 2
     assert [f['evidence_span'] for f in facts] == [[0,len(first)],[len(first),len(body)]]
     assert [f['reported_subject'] for f in facts] == ['patient','family']
     assert [f['details'][0]['value'] for f in facts] == ['3錠','7錠']
     assert all(f['quote'] == body for f in facts)
-    assert refresh._validated_facts(source(body),facts) == facts
+    assert context_plan.validated_source_facts(source(body),facts) == facts
     reports = refresh.context_plan.summary_reports(facts)
     assert [r['id'] for r in reports] == [f['id'] for f in facts]
 
@@ -211,11 +214,11 @@ def test_atomic_identity_changes_with_details_not_discovery_or_item_order():
     body = '薬剤Aの残薬は3錠、保管場所は棚です。'
     a = assertion(body,details=[{'key':'residual_quantity','value':'3錠','evidence':body}])
     b = assertion(body,details=[{'key':'storage_place','value':'棚','evidence':body}])
-    first = refresh._facts(source(body),[a,b],night_id='old',discovery='new_report')
-    second = refresh._facts(source(body),[b,a],night_id='next',discovery='backfill_found')
+    first = context_plan.source_facts(source(body),[a,b],night_id='old',discovery='new_report', found_at=refresh.time.time())
+    second = context_plan.source_facts(source(body),[b,a],night_id='next',discovery='backfill_found', found_at=refresh.time.time())
     assert len({f['id'] for f in first}) == 2
     assert {f['id'] for f in first} == {f['id'] for f in second}
-    assert {f['id'] for f in first} != {f['id'] for f in refresh._facts(source(body),[a],night_id='old',discovery='new_report')}
+    assert {f['id'] for f in first} != {f['id'] for f in context_plan.source_facts(source(body),[a],night_id='old',discovery='new_report', found_at=refresh.time.time())}
 
 
 def test_summary_signature_binds_relation_and_details_but_not_discovery_time():
@@ -224,7 +227,7 @@ def test_summary_signature_binds_relation_and_details_but_not_discovery_time():
                  'project_id':1,'message_id':2,'content_hash':'b'*64,'fingerprint':'c'*64,
                  'parent_fingerprint':'d'*64,'posted_at_ts':123}
     value = assertion(body,details=[{'key':'storage_place','value':'棚','evidence':body,'refers_to':reference}])
-    facts = refresh._facts(source(body),[value],night_id='old',discovery='new_report')
+    facts = context_plan.source_facts(source(body),[value],night_id='old',discovery='new_report', found_at=refresh.time.time())
     assert facts[0]['details'][0]['refers_to'] == reference
     changed = copy.deepcopy(facts)
     changed[0]['details'][0]['refers_to']['fingerprint'] = 'e'*64
@@ -238,17 +241,17 @@ def test_repeated_quote_is_bound_by_its_known_chunk_offset():
     text = '本人は訪問日を確認しました。'
     body = text+'別の合成記録。'+text
     start = len(text+'別の合成記録。')
-    facts = refresh._facts(source(body),[assertion(text)],night_id='synthetic',discovery='backfill_found',offset=start,chunk=text)
+    facts = context_plan.source_facts(source(body),[assertion(text)],night_id='synthetic',discovery='backfill_found',offset=start,chunk=text, found_at=refresh.time.time())
     assert facts[0]['evidence_span'] == [start,len(body)]
-    assert refresh._validated_facts(source(body),facts) == facts
+    assert context_plan.validated_source_facts(source(body),facts) == facts
     tampered = copy.deepcopy(facts)
     tampered[0]['evidence_span'] = [0,len(text)]
-    assert refresh._validated_facts(source(body),tampered) == []
+    assert context_plan.validated_source_facts(source(body),tampered) == []
 
 
 def test_long_unbroken_paragraph_is_structured_and_can_be_selected_without_summary_hold():
     body = ''.join(f'合成記録{i:04d}では生活環境を確認しました。' for i in range(1200))
-    facts = refresh._facts(source(body),[assertion(body)],night_id='synthetic',discovery='new_report')
+    facts = context_plan.source_facts(source(body),[assertion(body)],night_id='synthetic',discovery='new_report', found_at=refresh.time.time())
     assert len(facts) > 1 and ''.join(f['evidence'] for f in facts) == body
     assert all(len(f['quote']) <= refresh.context_plan.SCAN_CHUNK for f in facts)
     assert all(f['reference_context']['span'] == [0,len(body)] for f in facts)
@@ -400,7 +403,7 @@ def test_single_indivisible_oversized_value_is_explicitly_held_without_http_or_e
     body = '薬の保管場所は'+value+'です。'
     seed(led, body=body)
     item = assertion(body, details=[{'key':'storage_place','value':value,'evidence':body}])
-    monkeypatch.setattr(refresh, 'extract_context', lambda text: [item] if text == body else [])
+    monkeypatch.setattr(patient_context, 'extract_context', lambda text: [item] if text == body else [])
     for _ in range(2):
         result = step(runtime)
         assert result['status'] == 'failed' and result['reason'] == 'nightly_unsplittable_assertion'
@@ -441,12 +444,12 @@ def _clinical_source(led, mid, body, day, *, pid=1, dose=None):
     row = led.db.execute('SELECT content_hash FROM messages WHERE message_id=?', (mid,)).fetchone()
     led.artifact_add('extract_v1', json.dumps({'patient_context':[item]}), project_id=pid, message_id=mid,
         meta={VERSION_KEY:refresh.CURRENT_VERSION, 'hash':row[0], 'rule_version':refresh._contract(CFG)['rule']})
-    return next(refresh._sources(led.db,pid,mid=mid)), item
+    return next(mcs_queries.patient_context_sources(led.db,pid,mid=mid)), item
 
 
 def _delete_supported_stop(led, mid=2, *, pid=1):
     raw, item = _clinical_source(led, mid, '本人は本日薬剤Aを中止しました。', '2026-10-02', pid=pid)
-    facts = refresh._facts(raw, [item], night_id='synthetic', discovery='backfill_found')
+    facts = context_plan.source_facts(raw, [item], night_id='synthetic', discovery='backfill_found', found_at=refresh.time.time())
     assert facts[0]['temporal']['use_state'] == 'stopped'
     with led.db:
         aid = led.artifact_add_tx(refresh.CHUNK, json.dumps({'facts':facts}), project_id=pid, message_id=mid,
@@ -579,14 +582,30 @@ def test_another_patients_dependency_loss_does_not_change_current_proof_or_proje
 @pytest.mark.parametrize('reject_record', [False, True])
 def test_chunk_replacement_captures_exact_old_unit_and_commits_or_rolls_back_all_shards(runtime, monkeypatch, reject_record):
     led, _, _ = runtime
-    _clinical_source(led,1,'本人は本日薬剤Aを5mg服用中です。','2026-10-01',dose='5mg')
+    clinical = '本人は本日薬剤Aを5mg服用中です。'
+    lines = [clinical] + [f'合成確認{i:03d}。' for i in range(context_plan.MAX_SOURCE_FACTS)]
+    body = ''.join(lines)
+    raw, _ = _clinical_source(led,1,body,'2026-10-01',dose='5mg')
+    assert len(body) < context_plan.SCAN_CHUNK
+    # Storage replacement owns every shard; density planning is a separate boundary.
+    monkeypatch.setattr(context_plan,'plan_chunks',lambda text,size=3000:[text])
     finish(runtime)
-    scan_row = led.db.execute('SELECT artifact_id,content FROM artifacts WHERE kind=?', (refresh.SCAN,)).fetchone()
-    with led.db:
-        led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?',
-                       (json.dumps({**json.loads(scan_row[1]),'complete':False,'audited':False,'cursor':0}),scan_row[0]))
-    old_ids = {r[0] for r in led.db.execute('SELECT artifact_id FROM artifacts WHERE kind=?', (refresh.CHUNK,))}
+    old_rows = list(led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=?', (refresh.CHUNK,)))
+    assert len(old_rows) == 1
+    old_ids = {row[0] for row in old_rows}
+    meta = json.loads(old_rows[0][2])
+    chunk_span = json.loads(old_rows[0][1])['chunk_span']
+    assert chunk_span == [0,len(body)] and meta['source_occurrence_version'] == 1
+    items = [assertion(clinical,details=[{'key':'drug_name','value':'薬剤A','evidence':clinical},
+                                       {'key':'actual_dose','value':'5mg','evidence':clinical}])]
+    items += [{'category':'living','text':line,'evidence':line,'subject':'unspecified','details':[]} for line in lines[1:]]
+    facts = context_plan.source_facts(raw,items,night_id='synthetic',discovery='backfill_found',found_at=refresh.time.time())
+    assert len(facts) == len({fact['id'] for fact in facts}) == 129
+    assert [fact['evidence'] for fact in facts] == lines
+    assert context_plan.validated_source_facts(raw,facts) == facts
     before = [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
+    with pytest.raises(RuntimeError,match='patient_context_source_transaction_required'):
+        refresh._save_source_chunk_tx(led,1,1,context_plan.source_key(raw),chunk_span,facts,meta)
     capture, record = loss.capture_tx, loss.record_tx
     seen = []
     committed_at_failure = []
@@ -602,8 +621,12 @@ def test_chunk_replacement_captures_exact_old_unit_and_commits_or_rolls_back_all
         seen.append('capture')
         return result
     def record_unit(db, snapshot, *, replacement_ids=()):
-        assert db.in_transaction and replacement_ids and not old_ids.intersection(replacement_ids)
-        assert all(db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?',(aid,)).fetchone() for aid in replacement_ids)
+        assert db.in_transaction and len(replacement_ids) == 2 and not old_ids.intersection(replacement_ids)
+        parts = [json.loads(db.execute('SELECT content FROM artifacts WHERE artifact_id=?',(aid,)).fetchone()[0])
+                 for aid in replacement_ids]
+        assert [part['part'] for part in parts] == [0,1] and all(part['parts'] == 2 for part in parts)
+        assert [len(part['facts']) for part in parts] == [128,1]
+        assert [fact for part in parts for fact in part['facts']] == facts
         seen.append('record')
         result = record(db,snapshot,replacement_ids=replacement_ids)
         if reject_record:
@@ -614,15 +637,18 @@ def test_chunk_replacement_captures_exact_old_unit_and_commits_or_rolls_back_all
         return result
     monkeypatch.setattr(loss,'capture_tx',capture_unit)
     monkeypatch.setattr(loss,'record_tx',record_unit)
+    def replace_unit():
+        with led.db:
+            led.db.execute('BEGIN IMMEDIATE')
+            return refresh._save_source_chunk_tx(led,1,1,context_plan.source_key(raw),chunk_span,facts,meta)
     if reject_record:
         with pytest.raises(RuntimeError,match='synthetic_dependency_record_failed'):
-            step(runtime)
+            replace_unit()
         after = [tuple(r) for r in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')]
-        assert after == committed_at_failure
-        assert [row for row in after if row[1] != refresh.PROGRESS] == [row for row in before if row[1] != refresh.PROGRESS]
-        assert len([row for row in after if row[1] == refresh.PROGRESS]) == 2
+        assert after == committed_at_failure == before
     else:
-        assert step(runtime)['lane'] == 'B'
+        replacement_ids = replace_unit()
+        assert len(replacement_ids) == 2
         assert not old_ids.intersection(r[0] for r in led.db.execute('SELECT artifact_id FROM artifacts WHERE kind=?',(refresh.CHUNK,)))
         assert loss.read(led.db,1)['complete'] and loss.read(led.db,1)['losses'] == []
     assert seen == ['capture','record'] and not led.db.in_transaction
@@ -654,20 +680,36 @@ def test_chunk_and_checkpoint_commit_atomically(runtime,monkeypatch):
     assert len([row for row in after if row[1] == refresh.PROGRESS]) == 2
 
 
-def test_new_inference_generation_keeps_old_rows_and_never_reads_them_as_current(runtime,monkeypatch):
+def _retain_context_as_legacy(led):
+    """Keep old persisted rows while running the actual current worker in every owner."""
+    kinds = (refresh.KIND, refresh.SCAN, refresh.CHUNK, refresh.PROGRESS)
+    rows = led.db.execute('SELECT artifact_id,meta FROM artifacts WHERE kind IN (?,?,?,?) ORDER BY artifact_id', kinds).fetchall()
+    assert rows and refresh.CURRENT_VERSION == CURRENT_VERSION
+    with led.db:
+        for artifact_id, raw_meta in rows:
+            meta = json.loads(raw_meta)
+            assert meta[VERSION_KEY] == CURRENT_VERSION
+            meta[VERSION_KEY] = LEGACY_VERSION
+            for key in ('contract', 'route_contract'):
+                if isinstance(meta.get(key), dict):
+                    meta[key] = {**meta[key], VERSION_KEY: LEGACY_VERSION}
+            led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
+                           (json.dumps(meta, ensure_ascii=False), artifact_id))
+    return [tuple(row) for row in led.db.execute('SELECT * FROM artifacts WHERE kind IN (?,?,?,?) ORDER BY artifact_id', kinds)]
+
+
+def test_new_inference_generation_keeps_old_rows_and_never_reads_them_as_current(runtime):
     led,_,_ = runtime
     seed(led,body='合成の見出しなしの旧原文です。')
     finish(runtime)
-    original = [tuple(r) for r in led.db.execute('SELECT * FROM artifacts WHERE kind IN (?,?,?,?) ORDER BY artifact_id',
-                (refresh.KIND,refresh.SCAN,refresh.CHUNK,refresh.PROGRESS))]
-    monkeypatch.setattr(refresh,'CURRENT_VERSION','1.1')
+    original = _retain_context_as_legacy(led)
     assert refresh.context_view_input(led.db,1,cfg=CFG) is None
     assert refresh.status(led.db,CFG)['initial_pending'] == 1
     finish(runtime)
     assert refresh.context_view_input(led.db,1,cfg=CFG)
     assert [tuple(led.db.execute('SELECT * FROM artifacts WHERE artifact_id=?',(r[0],)).fetchone()) for r in original] == original
     metas = [json.loads(row[0]) for row in led.db.execute('SELECT meta FROM artifacts WHERE kind=?',(refresh.KIND,))]
-    assert {m[VERSION_KEY] for m in metas} == {'1.0','1.1'}
+    assert {m[VERSION_KEY] for m in metas} == {LEGACY_VERSION, CURRENT_VERSION}
 
 
 def test_valid_empty_new_generation_has_no_old_nonempty_fallback(runtime,monkeypatch):
@@ -675,7 +717,7 @@ def test_valid_empty_new_generation_has_no_old_nonempty_fallback(runtime,monkeyp
     seed(led,body='合成の見出しなしの原文です。')
     finish(runtime)
     assert document(led)['facts']
-    monkeypatch.setattr(refresh,'CURRENT_VERSION','1.1')
+    retained = _retain_context_as_legacy(led)
     original = refresh.local_llm.admitted_chat
     def empty(owner,prompt,**kwargs):
         if 'source' in json.loads(prompt):
@@ -686,6 +728,7 @@ def test_valid_empty_new_generation_has_no_old_nonempty_fallback(runtime,monkeyp
     view = refresh.context_view_input(led.db,1,cfg=CFG)
     assert view['facts'] == view['summary'] == []
     assert view['coverage']['analyzed'] == 1
+    assert [tuple(led.db.execute('SELECT * FROM artifacts WHERE artifact_id=?',(r[0],)).fetchone()) for r in retained] == retained
 
 
 @pytest.mark.parametrize('mutation',["UPDATE messages SET content_hash='edited' WHERE message_id=1", None])
@@ -731,7 +774,7 @@ def test_all_karte_originals_are_scanned_but_only_latest_enters_current_summary(
     led.karte_summary_store(1,10,{'comment':'合成の旧連携記録です。','updated_at':'2026-01-01'})
     led.karte_summary_store(1,10,{'comment':'合成の最新連携記録です。','updated_at':'2026-02-01'})
     finish(runtime)
-    sources = [s for s in refresh._sources(led.db,1) if s['source'] == 'karte_summary']
+    sources = [s for s in mcs_queries.patient_context_sources(led.db,1) if s['source'] == 'karte_summary']
     assert len(sources) == 2 and len({s['source_key'] for s in sources}) == 2
     view = refresh.context_view_input(led.db,1,cfg=CFG)
     assert any(f['evidence'] == '合成の最新連携記録です。' for f in view['facts'])
@@ -757,11 +800,11 @@ def test_karte_relative_time_uses_only_aware_original_time_and_keeps_the_origina
     body = '本人は本日薬剤Aを中止しました。'
     led.karte_summary_store(1,10,{'comment':body,'updated_at':updated})
     row = led.db.execute("SELECT artifact_id,content FROM artifacts WHERE kind='karte_summary'").fetchone()
-    raw = next(s for s in refresh._sources(led.db,1) if s['source']=='karte_summary')
+    raw = next(s for s in mcs_queries.patient_context_sources(led.db,1) if s['source']=='karte_summary')
     assert raw['source_key'] == 'karte:'+str(row[0]) and raw['source_artifact_id'] == row[0]
     assert raw['content_hash'] == refresh._digest(json.loads(row[1]))
     item = assertion(body, details=[{'key':'drug_name','value':'薬剤A','evidence':body}])
-    fact = refresh._facts(raw,[item],night_id='synthetic',discovery='backfill_found')[0]
+    fact = context_plan.source_facts(raw,[item],night_id='synthetic',discovery='backfill_found', found_at=refresh.time.time())[0]
     assert fact['temporal']['event_day'] == expected
     assert fact['temporal']['posted_day'] == expected
     assert (raw['posted_at_ts'] is None) == (expected is None)
@@ -782,14 +825,14 @@ def test_same_content_karte_originals_have_distinct_fact_and_capture_occurrences
     # Two immutable imported originals may share content. Their occurrence IDs
     # must not become one source just because a hash or message_id=0 matches.
     led.artifact_add('karte_summary',row[0],project_id=1,meta=json.loads(row[1]))
-    originals = [s for s in refresh._sources(led.db,1) if s['source']=='karte_summary']
+    originals = [s for s in mcs_queries.patient_context_sources(led.db,1) if s['source']=='karte_summary']
     assert len(originals)==2 and len({s['content_hash'] for s in originals})==1
     assert len({s['source_key'] for s in originals})==2 and [s['historical'] for s in originals]==[False,True]
     item = assertion(body,details=[{'key':'drug_name','value':'薬剤A','evidence':body}])
     ids, facts = [], []
     with led.db:
         for raw in originals:
-            fact = refresh._facts(raw,[item],night_id='synthetic',discovery='backfill_found')[0]
+            fact = context_plan.source_facts(raw,[item],night_id='synthetic',discovery='backfill_found', found_at=refresh.time.time())[0]
             facts.append(fact)
             ids.append(refresh._replace(led,refresh.CHUNK,1,{'facts':[fact]},
                 {'source_key':raw['source_key'],'chunk_key':raw['source_key']},0))

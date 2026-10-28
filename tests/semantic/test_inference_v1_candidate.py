@@ -18,7 +18,7 @@ from candidate_testkit import approved_config
 from extract_testkit import _ledger, _message
 
 
-MODULES = ("inference_version", "inference_dependency_loss", "clinical_events", "rollup", "patient_context_state", "patient_state_context")
+MODULES = ("inference_version", "inference_dependency_loss", "patient_context_artifacts", "clinical_events", "rollup", "patient_context_state", "patient_state_context")
 
 
 @pytest.fixture
@@ -58,6 +58,7 @@ def _reject_old_approval(approved):
     ("patient_context_state", "project"),
     ("patient_state_context", "reference_current"),
     ("inference_dependency_loss", "read"),
+    ("patient_context_artifacts", "selected_rows"),
 ])
 def test_changed_definition_invalidates_new_worker_approval_without_blessing_old_worker(
         approved, monkeypatch, owner, member):
@@ -84,6 +85,7 @@ def test_changed_definition_invalidates_new_worker_approval_without_blessing_old
     ("patient_context_state", "_VALUE_KEYS", {"actual_dose", "synthetic_dimension"}),
     ("patient_state_context", "STATE_MAX", 601),
     ("inference_dependency_loss", "SCHEMA", "dependency-loss/synthetic-change"),
+    ("patient_context_artifacts", "CANDIDATE_KIND", "synthetic_candidate_kind"),
 ])
 def test_meaning_constant_changes_invalidate_old_promotion_receipt(approved, monkeypatch, owner, constant, value):
     cfg = approved[0]

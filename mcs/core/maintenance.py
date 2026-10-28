@@ -879,6 +879,155 @@ def _prune_semantic_usage(con, cutoff):
         last_id = rows[-1][0]
 
 
+def _source_repair_cloud_pins(con, rows):
+    """Pin only this deletion batch's source-repair receipts and ambiguous patient scopes."""
+    from mcs_util import strict_json, valid_hash
+
+    header_kind = 'patient_context_source_quality_repair_v1'
+    slot_kind = 'patient_context_source_quality_repair_candidate_v1'
+    receipt_kinds = {'cloud_usage_reserve', 'cloud_usage_result', 'cloud_usage_disposition'}
+
+    def parsed(raw):
+        if not isinstance(raw, str) or len(raw) > 32768:
+            return None
+        try:
+            value = strict_json(raw)
+        except (TypeError, ValueError, RecursionError, OverflowError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    def uuid_ok(value):
+        return isinstance(value, str) and re.fullmatch('[0-9a-f]{32}', value) is not None
+
+    if con.execute('SELECT 1 FROM artifacts WHERE kind IN (?,?) AND '
+                   "(typeof(project_id)!='integer' OR project_id<=0) LIMIT 1", (header_kind, slot_kind)).fetchone():
+        raise MaintenanceError('source_repair_retention_scope_invalid')
+    old = [(row, parsed(row[3])) for row in rows if row[1] in receipt_kinds]
+    has_repair = con.execute('SELECT 1 FROM artifacts WHERE kind IN (?,?) LIMIT 1', (header_kind, slot_kind)).fetchone() is not None
+    unattributed_ids = {row[0] for row, meta in old if meta is None} if has_repair else set()
+    if (any(not (type(row[2]) is int and row[2] > 0)
+            and not (meta is not None and type(meta.get('project_id')) is int and meta['project_id'] > 0)
+            for row, meta in old)
+            and has_repair):
+        raise MaintenanceError('source_repair_retention_scope_invalid')
+    projects = {pid for row, meta in old for pid in (row[2], meta.get('project_id') if meta else None)
+                if type(pid) is int and pid > 0}
+    wanted_ids = {row[0] for row in rows if row[1] == 'cloud_usage_reserve'}
+    batch_uuids = {meta['reservation_id'] for _, meta in old if meta is not None and uuid_ok(meta.get('reservation_id'))}
+    referenced_uuids = set()
+    if batch_uuids:
+        # Adoption treats a UUID as global.  Keep conflicting scopes/results
+        # as rejection evidence instead of deleting them back into a PASS.
+        for (reservation_id,) in con.execute(
+                "SELECT DISTINCT r.value FROM artifacts a, "
+                "json_each(CASE WHEN json_valid(a.meta) THEN a.meta ELSE '{}' END) r "
+                "WHERE a.kind=? AND r.key='reservation_id' AND r.type='text' "
+                "AND r.value IN (SELECT value FROM json_each(?))", (slot_kind, json.dumps(sorted(batch_uuids)))):
+            referenced_uuids.add(reservation_id)
+    unattributed_ids.update(row[0] for row, meta in old
+                            if meta is not None and uuid_ok(meta.get('reservation_id'))
+                            and meta['reservation_id'] in referenced_uuids)
+    if wanted_ids:
+        for _, low, high in con.execute(
+                "SELECT json_extract(meta,'$.reservation_artifact_id'),MIN(project_id),MAX(project_id) "
+                'FROM artifacts WHERE kind=? AND CASE WHEN json_valid(meta) THEN '
+                "json_extract(meta,'$.reservation_artifact_id') IN (SELECT value FROM json_each(?)) END "
+                "GROUP BY json_extract(meta,'$.reservation_artifact_id')", (slot_kind, json.dumps(sorted(wanted_ids)))):
+            if low != high:
+                raise MaintenanceError('source_repair_retention_scope_invalid')
+            projects.add(low)
+    if not projects:
+        return set(), unattributed_ids
+    wanted_uuids = {(pid, meta['reservation_id']) for row, meta in old
+                    if meta is not None and uuid_ok(meta.get('reservation_id'))
+                    for pid in (row[2], meta.get('project_id')) if type(pid) is int and pid > 0}
+    held, reserve_ids, reservations = set(), unattributed_ids, {}
+    source_projects = set()
+    query = ("SELECT a.kind,a.project_id,CASE WHEN typeof(a.meta)='text' AND length(a.meta)<=32768 THEN a.meta END "
+             'FROM json_each(?) p CROSS JOIN artifacts a WHERE a.project_id=p.value AND a.kind IN (?,?)')
+    for kind, pid, raw in con.execute(query, (json.dumps(sorted(projects)), header_kind, slot_kind)):
+        source_projects.add(pid)
+        meta = parsed(raw)
+        if (meta is None or not valid_hash(meta.get('repair_input_key'))
+                or 'project_id' in meta and (type(meta['project_id']) is not int or meta['project_id'] != pid)):
+            held.add(pid)
+            continue
+        if kind == header_kind:
+            if not con.execute('SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND CASE WHEN json_valid(meta) THEN '
+                               "json_extract(meta,'$.repair_input_key')=? END LIMIT 1",
+                               (slot_kind, pid, meta['repair_input_key'])).fetchone():
+                held.add(pid)
+            continue
+        source_key, artifact_id = meta.get('source_key'), meta.get('reservation_artifact_id')
+        if (not ((type(source_key) is int and source_key > 0)
+                 or (isinstance(source_key, str) and re.fullmatch(r'karte:[1-9][0-9]{0,18}', source_key)
+                     and int(source_key[6:]) < 2**63))
+                or not valid_hash(meta.get('unit_key')) or type(artifact_id) is not int
+                or not 0 < artifact_id < 2**63 or not uuid_ok(meta.get('reservation_id'))
+                or not valid_hash(meta.get('request_fp'))):
+            held.add(pid)
+            continue
+        reservation = (pid, meta['reservation_id'])
+        if artifact_id not in wanted_ids and reservation not in wanted_uuids:
+            continue
+        if artifact_id in wanted_ids:
+            reserve_ids.add(artifact_id)
+        if reservation in wanted_uuids:
+            if reservation in reservations and reservations[reservation] != meta['request_fp']:
+                held.add(pid)
+            reservations[reservation] = meta['request_fp']
+        original = con.execute("SELECT kind,project_id,CASE WHEN typeof(meta)='text' AND length(meta)<=32768 "
+                               'THEN meta END FROM artifacts WHERE artifact_id=?', (artifact_id,)).fetchone()
+        if original is not None:
+            saved = parsed(original[2])
+            if (original[0] != 'cloud_usage_reserve' or original[1] != pid or saved is None
+                    or any(saved.get(field) != meta[field] for field in ('reservation_id', 'request_fp', 'unit_key'))
+                    or type(saved.get('project_id')) is not int or saved['project_id'] != pid):
+                held.add(pid)
+                continue
+    for row, meta in old:
+        row_scope = (row[2], meta.get('project_id') if meta else None)
+        pid = next((scope for scope in row_scope if scope in source_projects), row[2])
+        if pid not in source_projects:
+            continue
+        if meta is None or type(meta.get('project_id')) is not int or meta['project_id'] != row[2]:
+            # Both scope assertions matter; retain this bounded batch row even if only its metadata identifies the patient.
+            reserve_ids.add(row[0])
+            held.add(pid)
+        elif not uuid_ok(meta.get('reservation_id')) or not valid_hash(meta.get('request_fp')):
+            held.add(pid)
+        elif ((pid, meta['reservation_id']) in reservations
+              and meta['request_fp'] != reservations[(pid, meta['reservation_id'])]):
+            held.add(pid)
+        elif row[1] in ('cloud_usage_result', 'cloud_usage_disposition') and (pid, meta['reservation_id']) in reservations:
+            reserve_ids.add(row[0])
+    return held, reserve_ids
+
+
+def _prune_cloud_usage(con, cutoff):
+    """Keep exact source-repair reservation/result/disposition evidence beyond ordinary accounting retention."""
+    total, last_id = 0, 0
+    kinds = ('cloud_usage_reserve', 'cloud_usage_result', 'cloud_usage_dryrun', 'cloud_compare_v1', 'cloud_usage_disposition')
+    while True:
+        with con:
+            if not con.in_transaction:
+                con.execute('BEGIN IMMEDIATE')
+            rows = con.execute("SELECT artifact_id,kind,project_id,CASE WHEN typeof(meta)='text' AND length(meta)<=32768 "
+                'THEN meta END FROM artifacts WHERE kind IN (' + ','.join('?' for _ in kinds)
+                + ') AND created_at<? AND artifact_id>? ORDER BY artifact_id LIMIT ?',
+                (*kinds, cutoff, last_id, RETENTION_BATCH)).fetchall()
+            if not rows:
+                return total
+            held, pinned_ids = _source_repair_cloud_pins(con, rows)
+            for artifact_id, kind, pid, raw in rows:
+                if kind in ('cloud_usage_reserve', 'cloud_usage_result', 'cloud_usage_disposition') and (pid in held or artifact_id in pinned_ids):
+                    continue
+                total += con.execute('DELETE FROM artifacts WHERE artifact_id=? AND kind=?', (artifact_id, kind)).rowcount
+        if len(rows) < RETENTION_BATCH:
+            return total
+        last_id = rows[-1][0]
+
+
 def _outbox_refs(con, tables: set) -> str:
     """NOT EXISTS guards for every column that can name an outbox event.
 
@@ -1015,10 +1164,7 @@ def prune_history(con, now: float | None = None) -> dict:
             con, "artifacts", "kind='semantic_drain_run' AND created_at < ?",
             (now - DRAIN_RUN_KEEP_S,))
         out["usage_receipts"] = _prune_semantic_usage(con, now - USAGE_KEEP_S)
-        out["cloud_usage_receipts"] = _delete_batched(
-            con, "artifacts", "kind IN ('cloud_usage_reserve','cloud_usage_result',"
-            "'cloud_usage_dryrun','cloud_compare_v1','cloud_usage_disposition') AND created_at < ?",
-            (now - CLOUD_USAGE_KEEP_S,))
+        out["cloud_usage_receipts"] = _prune_cloud_usage(con, now - CLOUD_USAGE_KEEP_S)
     return out
 
 

@@ -1,9 +1,12 @@
 """Plan bounded patient-context source scans and validate verbatim selections without I/O."""
+import hashlib
 import json
 from itertools import accumulate
 
 from clinical_chunking import plan_chunks
 from patient_context import CATEGORIES, context_items
+import patient_context_state as context_state
+from mcs_util import locate_quote_span
 
 MAX_FACTS = 256
 MAX_SUMMARY = 12
@@ -213,3 +216,109 @@ def assertion_parts(text, details):
             parts.append(text[start:end])
             start = end
     return parts
+
+
+def source_key(source):
+    return source.get("source_key", source["message_id"])
+
+
+def source_usable(source):
+    return (source.get("body_state") in (None, "full")
+            and (bool(source["body_text"].strip()) if isinstance(source.get("body_text"), str)
+                 else (source.get("body_length") or 0) > 0))
+
+
+def source_digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                     separators=(",", ":")).encode()).hexdigest()
+
+
+def source_facts(source, items, *, night_id, discovery, found_at, offset=0, chunk=None):
+    """Keep atomic assertions and source spans separate from their modifier context."""
+    body = source["body_text"]
+    unit = body if chunk is None else chunk
+    if (not isinstance(body, str) or not isinstance(unit, str) or type(offset) is not int
+            or offset < 0 or body[offset:offset + len(unit)] != unit):
+        return []
+    result = {}
+    for item in context_items({"patient_context": items}, unit):
+        span = locate_quote_span(unit, item["evidence"])
+        if span is None:
+            continue
+        # Long explicit sections are partitioned with the same bounded planner;
+        # each fragment retains its own source position, never one paragraph ID.
+        parts = assertion_parts(item["evidence"], item.get("details", []))
+        at = offset + span[0]
+        for part in parts:
+            start, stop = at, at + len(part)
+            at = stop
+            evidence = body[start:stop]
+            left = body.rfind("\n\n", 0, start)
+            left = left + 2 if left >= 0 else 0
+            right = body.find("\n\n", stop)
+            right = right if right >= 0 else len(body)
+            context = body[left:right].strip()
+            # A long paragraph is reference-only, not a repeated giant prompt.
+            quote = context if len(context) <= SCAN_CHUNK else evidence
+            quote_at = start if quote == evidence else body.find(quote, left, right)
+            details = [{**d, "evidence": d["evidence"] if locate_quote_span(evidence, d["evidence"]) else evidence}
+                       for d in item.get("details", []) if isinstance(d.get("evidence"), str)
+                       and (locate_quote_span(evidence, d["evidence"]) is not None
+                            or (isinstance(d.get("value"), str) and locate_quote_span(evidence, d["value"]) is not None))]
+            text = item["text"] if item["text"] in evidence else evidence
+            value = {"category": item["category"], "text": text, "quote": quote, "evidence": evidence,
+                     "evidence_span": [start, stop], "quote_span": [quote_at, quote_at + len(quote)],
+                     "reference_context": {"span": [left, right],
+                         "leading_span": [left, min(start, left + 512)],
+                         "leading": body[left:min(start, left + 512)],
+                         "before_span": [max(left, start - 512), start],
+                         "before": body[max(left, start - 512):start],
+                         "after_span": [stop, min(right, stop + 512)],
+                         "after": body[stop:min(right, stop + 512)]},
+                     "subject": "unspecified", "reported_subject": item["subject"], "temporality": "reported",
+                     "details": details, "source": source["source"],
+                     "source_key": source_key(source), "historical": source.get("historical", False),
+                     "project_id": source["project_id"], "message_id": source["message_id"],
+                     "content_hash": source["content_hash"], "posted_at": source.get("posted_at"),
+                     "posted_at_ts": source.get("posted_at_ts"), "sender": source.get("sender_name"),
+                     "discovery": discovery, "found_night_id": night_id, "found_at": found_at}
+            value["assertion"] = {key: value[key] for key in
+                                  ("category", "text", "evidence", "evidence_span", "reported_subject", "details")}
+            value["temporal"] = context_state.annotate(value, body)
+            value["id"] = source_digest({key: value[key] for key in
+                ("source", "source_key", "project_id", "message_id", "content_hash", "assertion")})
+            result.setdefault(value["id"], value)
+    return list(result.values())
+
+
+def validated_source_facts(source, facts):
+    if not source_usable(source) or not isinstance(facts, list):
+        return []
+    valid = []
+    body = source["body_text"]
+    for fact in facts:
+        if not isinstance(fact, dict):
+            continue
+        if any(fact.get(k) != source.get(k) for k in ("project_id", "message_id", "content_hash", "source")):
+            continue
+        span = fact.get("evidence_span")
+        if (not isinstance(span, list) or len(span) != 2 or any(type(n) is not int for n in span)
+                or not 0 <= span[0] < span[1] <= len(body)
+                or fact.get("evidence") != body[span[0]:span[1]]):
+            continue
+        candidate = {**fact, "subject": fact.get("reported_subject")}
+        rebuilt = source_facts(source, [candidate], night_id=fact.get("found_night_id"),
+                         discovery=fact.get("discovery"), found_at=fact.get("found_at"),
+                         offset=span[0], chunk=body[span[0]:span[1]])
+        if rebuilt and all(rebuilt[0][key] == fact.get(key) for key in
+                ("id", "text", "quote", "quote_span", "details", "subject", "temporality", "assertion",
+                 "source_key", "reference_context", "sender", "posted_at", "posted_at_ts", "temporal")):
+            valid.append(fact)
+    return valid
+
+
+
+def source_signature(source):
+    return source_digest({k: source.get(k) for k in ("project_id", "message_id", "source", "content_hash",
+                    "body_length", "body_state", "posted_at", "posted_at_ts", "sender_id",
+                    "sender_name", "parent_id", "extraction_sig", "canonical_context", "source_key", "empty")})

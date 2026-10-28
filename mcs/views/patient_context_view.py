@@ -334,7 +334,7 @@ def _allergy_correction(text, target):
 
 def allergy_posted_records(db, ev):
     """Keep a directly written allergy report separate from current clinical state."""
-    import patient_context_refresh
+    import patient_context_plan
     import patient_context_state
     from mcs_queries import JST
 
@@ -415,7 +415,7 @@ def allergy_posted_records(db, ev):
     if (source.get("content_hash") != fact.get("content_hash") or source.get("body_text") != body
             or source.get("posted_at_ts") != fact["posted_at_ts"] or not isinstance(html, str)
             or hashlib.sha256(html.encode()).hexdigest() != fact["content_hash"] or html_to_text(html) != body
-            or not patient_context_refresh._validated_facts(source, [fact])):
+            or not patient_context_plan.validated_source_facts(source, [fact])):
         return []
     try:
         rows = db.execute("SELECT message_id,body_state,content_hash,"

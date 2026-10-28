@@ -9,7 +9,8 @@
 | 所有先 | 責務・主要入口 | 状態と副作用 |
 |---|---|---|
 | `mcs/core/` | `ledger`の台帳writer、`ledger_schema`のschema/migration/構造検証、`mcs_contract`のMCS値/例外、`mcs_config`の設定検証、`scheduled_jobs`の定期ジョブ契約 | `Ledger`が接続とwriterのtransactionを所有。schema初期化は借用した接続上で行い、接続を開閉しない |
-| `mcs/core/mcs_queries.py`・`message_observations` | 原文・artifactの現行性、表示装飾前の患者文脈、保存済み観測の共通読取 | 呼出元の同一connectionとtransactionを借用し、open/close/commitしない。表示用の架空Ledgerを作らない |
+| `mcs/core/mcs_queries.py`・`message_observations` | 原文・artifactの現行性、表示装飾前の患者文脈、`patient_context_sources`の原典集合、保存済み観測の共通読取 | 呼出元の同一connectionとtransactionを借用し、open/close/commitしない。表示用の架空Ledgerを作らない |
+| `mcs/core/patient_context_artifacts.py` | 患者文脈の原CHUNK・採用済み修復候補の選択、参照・範囲・part・元費用証拠の共通検証 | 表示と依存喪失の記録が同じ保存集合を読む。呼出元のconnectionとtransactionを借用し、Jev判定・認可・公開・通信を行わない |
 | `mcs/core/writer_lock.py`・`safe_io` | writerの取得・コード/更新世代の照合、安全なファイル公開とFD所有権移管 | 取得したFDは呼出元が保持・解放する。借用接続をclose/commitせず、ファイル公開は既存の同期・置換順序を守る |
 | `mcs/core/snapshots.py` | snapshotのコピー・候補検証・atomic publish | 一時接続・一時ファイル・検証用子プロセスを生成し、成功/失敗時の終了と破棄を所有 |
 | `mcs/core/snapshot_access.py` | 借用snapshotの世代・時刻とtable存在確認 | 呼出元の同一connectionを借用し、open/close/commitしない |
@@ -21,7 +22,7 @@
 | `mcs/extract/clinical/` | `clinical_scope`の本人/家族/時点、`clinical_values`の値・原文根拠・バイタル適格性、分割・薬局の共通判断 | scopeのbounded cacheは同moduleが所有。rule統括へ呼び戻さない |
 | `mcs/extract/clinical/clinical_urgency.py` | 本人の根拠に基づく緊急度・QCの共通判断 | `mcs_queries`の現行原文/artifact読取を使い、通知・統計・rulesが表示moduleを経由せず利用。借用connectionを開閉・commitしない |
 | `mcs/extract/llm/` | `extract_schema`、`extract_validation`、`extract_quality`、`extract_llm`の推論/再抽出/保存統括 | schemaと検証は推論I/Oから分離。薬剤tokenの文法は`extract_schema`に一元化し、rules/qualityが直接利用。claim/carry/checkpointと保存は統括側 |
-| `mcs/patients/` | `patient_context`の患者背景/薬局参照項目、状態参照・一患者一件の集約、`patient_context_plan`の純粋な選択/予算計画 | `patient_context_refresh`が時刻・推論・再試行・保存と公開を所有。読取は同じconnectionを借用し、公開前に原文/世代/scanを再照合 |
+| `mcs/patients/` | `patient_context`の患者背景/薬局参照項目、状態参照・一患者一件の集約、`patient_context_plan`の純粋な選択/予算計画・原文fact構築と厳格検証 | `patient_context_refresh`が時刻・推論・再試行・保存と公開を所有。factの発見時刻は呼出元が明示する。読取は同じconnectionを借用し、公開前に原文/世代/scanを再照合 |
 | `mcs/medications/` | 辞書照合・別名承認・薬剤履歴・登録情報との比較 | 公開master原本、私有辞書、患者の注記と人承認receiptを区別 |
 | `mcs/semantic/` | claim/QC/公開、`semantic_v4`の公開transaction処理、`semantic_store`の読取、`semantic_transport`の推論状態 | `semantic_drain`が実行順・予算・jobを所有。`semantic_runtime`が明示されたjob判定/送信hookを扱い、`semantic`のCLI facadeへ戻らない |
 | `mcs/semantic/semantic_v4_cohort.py` | 変換manifest・予約・receipt・実行前の適格性 | runtimeと操作CLIが同じ実体を利用し、評価専用領域を経由しない。読取は借用接続、予約/receipt/job更新は呼出元writerの同一transaction |
@@ -59,6 +60,7 @@
 - セマンティックの本文・分割・要約表示は`semantic_render`、各送信直前の現行性/権限/停止判定は`semantic_send_gate`が所有します。配送側は各境界で現在の設定を渡し、表示用wrapperを認可の代わりにしません。
 - Jevへのguard・予算予約・通信期限は呼出し単位で渡し、同じclientの可変hookを付け替えません。jobの診断とpassの集計、再入時の状態を混同しません。
 - 患者コンテキスト作成の選択/予算は純粋な計画へ分け、原文と時刻の観測、再試行と公開はworkerが所有します。終日処理し、作業日はJST 00:00に切り替わります。
+- 原典QAの質問識別子は`semantic_audit`、元予約・回答・判定方針・PASSの読取検証は`semantic_runtime`が正本です。クラウド原典の依存記録は全選択範囲の証拠を照合し、現在の設定・権限・公開許可は呼出元で別に確認します。
 - 集計と抽出監査は`stats_contract`の同じ期間/患者範囲/上限を使います。表示上限と全体件数を分け、監査の定義識別子は実際の計算契約に結び付けます。
 - 通知のspec計画、同一TXのjournal記録、commit後のatomic publishの順序を保ちます。parts/scopeを分けてもtransactionの所有を分散しません。
 - スタンプは読取り・表示・操作を`stamps/`へ集約します。一般のメタデータ検証は`core/message_observations`に置き、収集や送信が表示moduleを経由しない構成にします。操作の設定・本人照合・復元時の停止条件は[スタンプ管理契約](../specs/stamp-management.md)が正本です。

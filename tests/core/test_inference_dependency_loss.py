@@ -6,14 +6,18 @@ import sqlite3
 
 import pytest
 
+import cloud_policy
 import inference_dependency_loss as loss
 from inference_version import CURRENT_VERSION, VERSION_KEY
+import patient_context_artifacts as context_artifacts
 import patient_context_state as state
+from mcs_util import payload_hash
 from semantic_testkit import _ledger, _message, _patient
 
 
 @pytest.fixture
-def store(tmp_path):
+def store(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda now=None: True)
     ledger = _ledger(tmp_path)
     _patient(ledger)
     yield ledger
@@ -604,3 +608,654 @@ def test_retained_legacy_null_hash_snippet_metadata_is_not_fake_hydration(store)
     store.save_messages([original], project_id=1)
     assert row(store, 1)['content_hash'] is not None
     assert store.db.execute('SELECT COUNT(*) FROM message_revisions').fetchone()[0] == 1
+
+
+def _context_fact(source, name, quote):
+    fact = state.clinical_state_fact(source, {'name': name, 'subject': 'patient', 'evidence': quote}, 'medications')
+    assert fact is not None
+    fact['source_key'] = source.get('source_key', source['message_id'])
+    return fact
+
+
+def _context_receipt(store, source, repair_input_key, unit_key):
+    """Create real synthetic reserve/result rows through the existing accounting owner."""
+    pid, mid = source['project_id'], source['message_id'] or None
+    reservation = cloud_policy.usage_reserver(store, {'cloud_llm': {'mode': 'on', 'project_ids': [pid]}},
+        route='patient_context', project_id=pid, message_id=mid, unit_key=unit_key,
+        owner={'repair_input_key': repair_input_key, 'unit_key': unit_key})(
+            {'model': cloud_policy.MODEL, 'max_tokens': 100}, 2)
+    cloud_policy.record_result(store, reservation, {'model': cloud_policy.MODEL, 'request_fp': reservation['request_fp'],
+        'usage': {'input_tokens': 10, 'output_tokens': 2}, 'http_class': 'http_200',
+        'request_id': 'synthetic_receipt', 'error_kind': None})
+    artifact_id = store.db.execute("SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_reserve' "
+        "AND json_extract(meta,'$.reservation_id')=?", (reservation['reservation_id'],)).fetchone()[0]
+    evidence = cloud_policy.reservation_evidence(store.db, artifact_id)
+    return artifact_id, reservation, evidence['witness']
+
+
+def _sealed_context(store, source, facts, *, original_facts=(), repair_input_key=None, source_sig=None):
+    pid, mid = source['project_id'], source['message_id']
+    source_key = source.get('source_key', mid)
+    binding = loss.source_binding(store.db, pid, mid,
+        **({'source_key': source_key} if type(source_key) is str else {}))
+    provider = {'backend': 'anthropic', 'model': cloud_policy.MODEL}
+    contract = {'model': 'synthetic-local', 'provider': provider}
+    origin = {VERSION_KEY: CURRENT_VERSION, 'repair_input_key': repair_input_key or 'd' * 64, 'source_key': source_key,
+        'source_sig': source_sig or 'a' * 64, 'source_binding': binding, 'contract': contract,
+        'provider': provider, 'model': provider['model']}
+    scope = dict(store.db.execute('SELECT project_id,project_type,karte_id,is_archived FROM patients WHERE project_id=?', (pid,)).fetchone())
+    origin.update(source_occurrence={'source_binding': binding, 'first_seen': source.get('first_seen'), 'scope': scope},
+                  source_occurrence_version=1, body_length=len(source['body_text']))
+    original = store.artifact_add(context_artifacts.ORIGINAL_KIND, json.dumps({'facts': list(original_facts)}, ensure_ascii=False),
+        project_id=pid, message_id=mid or None, model=provider['model'], meta=origin)
+    header = store.artifact_add(context_artifacts.REPAIR_KIND, '{"phase":"scanning"}', project_id=pid, meta=origin)
+    reservation_artifact_id, reservation, receipt_sig = _context_receipt(store, source, origin['repair_input_key'], 'b' * 64)
+    meta = {**origin, 'unit_key': 'b' * 64, 'reservation_artifact_id': reservation_artifact_id,
+            'reservation_id': reservation['reservation_id'], 'request_fp': reservation['request_fp']}
+    content = {'phase': 'complete', 'chunk_span': [0, len(source['body_text'])], 'part': 0, 'parts': 1,
+               'facts': facts, 'receipt_sig': receipt_sig}
+    candidate = store.artifact_add(context_artifacts.CANDIDATE_KIND, json.dumps(content, ensure_ascii=False),
+        project_id=pid, message_id=mid or None, model=provider['model'], meta=meta)
+    ref = {'repair_artifact_id': header, 'repair_input_key': origin['repair_input_key'],
+           'candidate_key': payload_hash(facts), 'chunks_sig': '0' * 64}
+    scan = store.artifact_add(context_artifacts.SCAN_KIND, '{}', project_id=pid, message_id=mid or None, meta=origin)
+    fixture = {'source': source, 'origin': origin, 'original': original, 'header': header,
+               'candidate': candidate, 'scan': scan, 'ref': ref, 'reservation': reservation_artifact_id, 'receipt': reservation}
+    _reseal_context(store, fixture)
+    return fixture
+
+
+def _reseal_context(store, fixture):
+    pid, key = fixture['source']['project_id'], fixture['ref']['repair_input_key']
+    material = [list(row) for row in store.db.execute(
+        "SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? "
+        "AND json_extract(meta,'$.repair_input_key')=? ORDER BY artifact_id", (context_artifacts.CANDIDATE_KIND, pid, key))]
+    fixture['ref']['chunks_sig'] = payload_hash(material)
+    ref = fixture['ref']
+    seal = {'phase': 'ready', 'candidate_key': ref['candidate_key'], 'chunks_sig': ref['chunks_sig']}
+    scan = {'complete': True, 'audited': True, 'audited_chunks_sig': ref['chunks_sig'], 'accepted_candidate_ref': ref,
+            'source_occurrence': fixture['origin']['source_occurrence'], 'source_occurrence_version': 1}
+    with store.db:
+        store.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(seal), fixture['header']))
+        store.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(scan), fixture['scan']))
+
+
+def test_context_selection_and_dependency_capture_use_only_the_adopted_occurrence(store):
+    text = '本人は本日、合成薬Aを中止しました。本人は本日、合成薬Bを服用しています。'
+    save(store, 1, text)
+    source = row(store, 1)
+    a = _context_fact(source, '合成薬A', text.split('。')[0] + '。')
+    b = _context_fact(source, '合成薬B', text.split('。')[1] + '。')
+    fixture = _sealed_context(store, source, [b], original_facts=[a])
+    before = store.db.total_changes
+    selected = context_artifacts.selected_rows(store.db, 1, 1, source_binding=fixture['origin']['source_binding'])
+    assert [item['artifact_id'] for item in selected] == [fixture['candidate']]
+    assert store.db.total_changes == before and not store.db.in_transaction
+    with store.db:
+        store.db.execute('UPDATE messages SET message_id=message_id WHERE 0')
+        snapshot = loss.capture_tx(store.db, 1, 1)
+        # Storage provenance is valid, but this fixture has no Jev source receipt.
+        assert not snapshot['audited'] and snapshot['records'] and snapshot['gaps']
+        assert {record['origin']['artifact_id'] for record in snapshot['records']} == {fixture['candidate']}
+        assert loss.capture_tx(store.db, 1, 1, artifact_ids=[fixture['original']])['records'] == []
+        chosen = loss.capture_tx(store.db, 1, 1, artifact_ids=[fixture['candidate']])
+        assert {record['origin']['artifact_id'] for record in chosen['records']} == {fixture['candidate']}
+
+
+@pytest.mark.parametrize('damage', ['result_missing', 'result_changed', 'disposition', 'foreign_pid'])
+@pytest.mark.parametrize('route', ['empty', 'fact', 'correction'])
+def test_adopted_context_needs_its_original_receipt_for_capture_and_correction(store, damage, route):
+    text = '本人は本日、合成薬Aを服用しています。'
+    save(store, 1, text)
+    source = row(store, 1)
+    fact = _context_fact(source, '合成薬A', text)
+    fixture = _sealed_context(store, source, [] if route == 'empty' else [fact],
+                              original_facts=[] if route == 'empty' else [fact])
+    captured_mid, selected_ids = 1, None
+    if route == 'correction':
+        save(store, 2, '本人は投稿#1の「' + text + '」を撤回しました。', day='20')
+        correction = row(store, 2)
+        record = {'id': 'synthetic-receipt-correction', 'project_id': 1, 'message_id': 2,
+            'content_hash': correction['content_hash'], 'category': 'medications',
+            'evidence': correction['body_text'], 'evidence_span': [0, len(correction['body_text'])],
+            'details': [], 'posted_at_ts': correction['posted_at_ts'], 'reported_subject': 'patient'}
+        record['temporal'] = state.annotate(record, correction['body_text'])
+        aid = store.artifact_add(context_artifacts.ORIGINAL_KIND, json.dumps({'facts': [record]}),
+            project_id=1, message_id=2, meta={VERSION_KEY: CURRENT_VERSION,
+                'source_binding': loss.source_binding(store.db, 1, 2)})
+        captured_mid, selected_ids = 2, [aid]
+    store.db.execute('BEGIN')
+    try:
+        healthy = loss.capture_tx(store.db, 1, captured_mid, artifact_ids=selected_ids)
+        if route == 'correction':
+            # A storage-only target is not Jev-approved evidence for a correction.
+            assert not any(item.get('target_origin', {}).get('message_id') == 1 for item in healthy['records'])
+            assert any(g['kind'] == 'patient_context_audit_unverified' for g in healthy['gaps'])
+        else:
+            # This storage-only fixture has no source quality PASS.
+            assert not healthy['audited'] and healthy['gaps']
+            assert bool(healthy['records']) is (route == 'fact')
+    finally:
+        store.db.rollback()
+    with store.db:
+        store.db.execute('BEGIN')
+        result_id = store.db.execute("SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_result' "
+            "AND json_extract(meta,'$.reservation_id')=?", (fixture['receipt']['reservation_id'],)).fetchone()[0]
+        if damage == 'result_missing':
+            store.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (result_id,))
+        elif damage == 'result_changed':
+            store.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.request_fp',?) WHERE artifact_id=?",
+                             ('0' * 64, result_id))
+        elif damage == 'disposition':
+            cloud_policy.record_disposition_tx(store, fixture['receipt'], 'discarded_scope')
+        else:
+            store.db.execute("INSERT OR IGNORE INTO patients(project_id,patient_name) VALUES(2,'synthetic-2')")
+            store.db.execute('UPDATE artifacts SET project_id=2,message_id=NULL WHERE artifact_id=?', (result_id,))
+    store.db.execute('CREATE TEMP TABLE receipt_read_sentinel(value TEXT)')
+    store.db.execute('BEGIN')
+    store.db.execute("INSERT INTO receipt_read_sentinel VALUES ('prior')")
+    before = store.db.total_changes
+    try:
+        with pytest.raises(ValueError):
+            context_artifacts.selected_rows(store.db, 1, 1, source_binding=fixture['origin']['source_binding'])
+        captured = loss.capture_tx(store.db, 1, captured_mid, artifact_ids=selected_ids)
+        assert captured['gaps'] and not captured['audited']
+        if route == 'correction':
+            assert not any(item.get('target_origin', {}).get('message_id') == 1 for item in captured['records'])
+        else:
+            assert not captured['records']
+        assert store.db.in_transaction and store.db.total_changes == before
+        assert [item[0] for item in store.db.execute('SELECT value FROM receipt_read_sentinel')] == ['prior']
+        assert store.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (fixture['original'],)).fetchone()
+    finally:
+        store.db.rollback()
+    assert not store.db.in_transaction and not store.db.execute('SELECT 1 FROM receipt_read_sentinel').fetchone()
+
+
+@pytest.mark.parametrize('missing', ['ref', 'scan', 'header', 'stage'])
+def test_missing_accepted_reference_or_evidence_never_falls_back_to_original(store, missing):
+    save(store, 1, '本人は本日、合成薬Aを服用しています。')
+    source = row(store, 1)
+    fact = _context_fact(source, '合成薬A', source['body_text'])
+    fixture = _sealed_context(store, source, [fact], original_facts=[fact])
+    with store.db:
+        if missing == 'ref':
+            raw = store.db.execute('SELECT content FROM artifacts WHERE artifact_id=?', (fixture['scan'],)).fetchone()[0]
+            doc = json.loads(raw)
+            doc.pop('accepted_candidate_ref')
+            store.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(doc), fixture['scan']))
+        else:
+            store.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (fixture[{'stage': 'candidate'}.get(missing, missing)],))
+    with pytest.raises(ValueError):
+        context_artifacts.selected_rows(store.db, 1, 1, source_binding=fixture['origin']['source_binding'])
+    with store.db:
+        store.db.execute('UPDATE messages SET message_id=message_id WHERE 0')
+        snapshot = loss.capture_tx(store.db, 1, 1)
+        assert not snapshot['records'] and snapshot['gaps']
+        assert store.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (fixture['original'],)).fetchone()
+
+
+@pytest.mark.parametrize('broken', ['missing_part', 'duplicate_part', 'tail_gap', 'reserved', 'split_facts',
+                                  'physical_message', 'source_key', 'raw_seal', 'header_duplicate'])
+def test_candidate_storage_rejects_incomplete_ambiguous_or_foreign_rows(store, broken):
+    save(store, 1, '本人は本日、合成薬Aを服用しています。')
+    if broken == 'physical_message':
+        save(store, 2, '完全合成の別の投稿です。')
+    source = row(store, 1)
+    fixture = _sealed_context(store, source, [_context_fact(source, '合成薬A', source['body_text'])])
+    candidate = store.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (fixture['candidate'],)).fetchone()
+    doc, meta = json.loads(candidate['content']), json.loads(candidate['meta'])
+    with store.db:
+        if broken == 'duplicate_part':
+            store.artifact_add_tx(context_artifacts.CANDIDATE_KIND, candidate['content'], project_id=1,
+                message_id=1, model=candidate['model'], meta=meta)
+        elif broken == 'header_duplicate':
+            header = store.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (fixture['header'],)).fetchone()
+            store.artifact_add_tx(context_artifacts.REPAIR_KIND, header['content'], project_id=1, meta=json.loads(header['meta']))
+        elif broken == 'physical_message':
+            store.db.execute('UPDATE artifacts SET message_id=2 WHERE artifact_id=?', (fixture['candidate'],))
+        else:
+            if broken == 'missing_part':
+                doc['parts'] = 2
+            elif broken == 'tail_gap':
+                doc['chunk_span'][1] -= 1
+            elif broken == 'reserved':
+                doc['phase'] = 'reserved'
+            elif broken == 'split_facts':
+                doc['phase'] = 'split'
+            elif broken == 'source_key':
+                meta['source_key'] = 2
+            else:
+                doc['facts'] = []
+            store.db.execute('UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?',
+                (json.dumps(doc), json.dumps(meta), fixture['candidate']))
+    if broken != 'raw_seal':
+        _reseal_context(store, fixture)
+    with pytest.raises(ValueError):
+        context_artifacts.candidate_rows(store.db, 1, 1, fixture['ref'], source_binding=fixture['origin']['source_binding'])
+
+
+def test_staging_range_mode_is_explicit_and_split_slots_do_not_supply_facts(store):
+    save(store, 1, '本人は本日、合成薬Aを服用しています。')
+    source = row(store, 1)
+    fixture = _sealed_context(store, source, [])
+    origin = fixture['origin']
+    raw = store.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (fixture['candidate'],)).fetchone()
+    doc, meta = json.loads(raw['content']), json.loads(raw['meta'])
+    with store.db:
+        doc['phase'] = 'split'
+        store.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(doc), fixture['candidate']))
+    args = {'source_sig': origin['source_sig'], 'source_binding': origin['source_binding'],
+            'contract': origin['contract'], 'body_size': len(source['body_text'])}
+    assert len(context_artifacts.staged_rows(store.db, 1, 1, fixture['ref']['repair_input_key'], require_complete=False, **args)) == 1
+    with pytest.raises(ValueError):
+        context_artifacts.staged_rows(store.db, 1, 1, fixture['ref']['repair_input_key'], **args)
+    aid, reservation, receipt_sig = _context_receipt(store, source, origin['repair_input_key'], 'e' * 64)
+    with store.db:
+        meta.update(unit_key='e' * 64, reservation_artifact_id=aid,
+                    reservation_id=reservation['reservation_id'], request_fp=reservation['request_fp'])
+        store.artifact_add_tx(context_artifacts.CANDIDATE_KIND, json.dumps({**doc, 'phase': 'complete', 'receipt_sig': receipt_sig}),
+            project_id=1, message_id=1, model=origin['model'], meta=meta)
+    _reseal_context(store, fixture)
+    selected = context_artifacts.candidate_rows(store.db, 1, 1, fixture['ref'], **args)
+    assert len(selected) == 2 and all(json.loads(item['content'])['facts'] == [] for item in selected)
+
+
+@pytest.mark.parametrize('changed', ['argument_type', 'scan', 'stage'])
+def test_candidate_occurrence_must_match_the_saved_scan_and_all_units(store, changed):
+    save(store, 1, '本人は本日、合成薬Aを服用しています。')
+    source = row(store, 1)
+    fixture = _sealed_context(store, source, [_context_fact(source, '合成薬A', source['body_text'])])
+    fixture['origin']['source_occurrence']['first_seen'] = 1
+    with store.db:
+        for identity in (fixture['header'], fixture['candidate']):
+            raw = store.db.execute('SELECT meta FROM artifacts WHERE artifact_id=?', (identity,)).fetchone()[0]
+            meta = {**json.loads(raw), 'source_occurrence': fixture['origin']['source_occurrence']}
+            store.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), identity))
+    _reseal_context(store, fixture)
+    if changed == 'argument_type':
+        occurrence = {**fixture['origin']['source_occurrence'], 'first_seen': 1.0}
+        with pytest.raises(ValueError):
+            context_artifacts.candidate_rows(store.db, 1, 1, fixture['ref'], source_occurrence=occurrence)
+        return
+    column, identity = ('content', fixture['scan']) if changed == 'scan' else ('meta', fixture['candidate'])
+    with store.db:
+        raw = store.db.execute('SELECT ' + column + ' FROM artifacts WHERE artifact_id=?', (identity,)).fetchone()[0]
+        doc = json.loads(raw)
+        doc['source_occurrence']['scope']['karte_id'] = 999
+        store.db.execute('UPDATE artifacts SET ' + column + '=? WHERE artifact_id=?', (json.dumps(doc), identity))
+    if changed == 'stage':
+        _reseal_context(store, fixture)
+    with pytest.raises(ValueError):
+        context_artifacts.selected_rows(store.db, 1, 1, source_binding=fixture['origin']['source_binding'])
+
+
+@pytest.mark.parametrize('field,value', [('first_seen', None), ('project_type', '合成別区分'),
+                                       ('karte_id', 999), ('is_archived', 1)])
+def test_adopted_context_is_a_gap_when_scope_or_first_seen_changes_without_raw_binding(store, field, value):
+    save(store, 1, '本人は本日、合成薬Aを服用しています。')
+    source = row(store, 1)
+    fixture = _sealed_context(store, source, [_context_fact(source, '合成薬A', source['body_text'])])
+    with store.db:
+        if field == 'first_seen':
+            store.db.execute('UPDATE messages SET first_seen=first_seen+1 WHERE message_id=1')
+        else:
+            store.db.execute('UPDATE patients SET ' + field + '=? WHERE project_id=1', (value,))
+        assert loss.source_binding(store.db, 1, 1) == fixture['origin']['source_binding']
+        current = loss.capture_tx(store.db, 1, 1)
+        assert not current['records'] and current['gaps']
+
+
+@pytest.mark.parametrize('damaged', [None, 'scan_marker', 'chunk_marker', 'missing_part', 'tail_gap'])
+def test_new_original_occurrence_excludes_prior_repair_and_legacy_chunks(store, damaged):
+    save(store, 1, '本人は本日、合成薬Aを服用しています。')
+    source = row(store, 1)
+    fixture = _sealed_context(store, source, [_context_fact(source, '合成薬A', source['body_text'])])
+    with store.db:
+        store.db.execute('UPDATE messages SET first_seen=first_seen+1 WHERE message_id=1')
+    actual = row(store, 1)
+    occurrence = {**fixture['origin']['source_occurrence'], 'first_seen': actual['first_seen']}
+    meta = {**fixture['origin'], 'source_occurrence': occurrence, 'source_sig': '9' * 64,
+            'unit_key': '8' * 64, 'chunk_key': '7' * 64}
+    doc = {'chunk_span': [0, len(actual['body_text'])], 'part': 0, 'parts': 1,
+           'facts': [_context_fact(actual, '合成薬A', actual['body_text'])]}
+    if damaged == 'chunk_marker':
+        meta.pop('source_occurrence_version')
+    elif damaged == 'missing_part':
+        doc['parts'] = 2
+    elif damaged == 'tail_gap':
+        doc['chunk_span'][1] -= 1
+    aid = store.artifact_add(context_artifacts.ORIGINAL_KIND, json.dumps(doc), project_id=1, message_id=1, meta=meta)
+    checkpoint = {'source_occurrence_version': 1, 'source_occurrence': occurrence, 'complete': True, 'audited': False}
+    if damaged == 'scan_marker':
+        checkpoint.pop('source_occurrence_version')
+    with store.db:
+        store.db.execute('UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?',
+                         (json.dumps(checkpoint), json.dumps(meta), fixture['scan']))
+        current = loss.capture_tx(store.db, 1, 1)
+        if damaged is None:
+            assert current['records'] and not current['audited']
+            assert {item['origin']['artifact_id'] for item in current['records']} == {aid}
+        else:
+            assert not current['records']
+        assert current['gaps']
+
+
+def test_correction_capture_does_not_resolve_against_another_context_occurrence(store):
+    save(store, 1, '本人は本日、合成薬Aを服用しています。')
+    source = row(store, 1)
+    _sealed_context(store, source, [_context_fact(source, '合成薬A', source['body_text'])])
+    save(store, 2, '本人は投稿#1の「本人は本日、合成薬Aを服用しています。」を撤回しました。', day='20')
+    correction = row(store, 2)
+    fact = {'id': 'synthetic-occurrence-correction', 'project_id': 1, 'message_id': 2,
+            'content_hash': correction['content_hash'], 'category': 'medications',
+            'evidence': correction['body_text'], 'evidence_span': [0, len(correction['body_text'])],
+            'details': [], 'posted_at_ts': correction['posted_at_ts'], 'reported_subject': 'patient'}
+    fact['temporal'] = state.annotate(fact, correction['body_text'])
+    aid = store.artifact_add(context_artifacts.ORIGINAL_KIND, json.dumps({'facts': [fact]}), project_id=1, message_id=2,
+        meta={VERSION_KEY: CURRENT_VERSION, 'source_binding': loss.source_binding(store.db, 1, 2)})
+    with store.db:
+        store.db.execute('UPDATE messages SET first_seen=first_seen+1 WHERE message_id=1')
+        captured = loss.capture_tx(store.db, 1, 2, artifact_ids=[aid])
+        assert not any(item.get('target_origin', {}).get('message_id') == 1 for item in captured['records'])
+        assert captured['gaps']
+
+
+@pytest.mark.parametrize('field', ['invalidated', 'source_key'])
+def test_original_rows_retains_legacy_sql_and_python_duplicate_key_membership(store, field):
+    save(store, 1, '合成の原典1。')
+    save(store, 2, '合成の原典2。')
+    raw = ('{"source_key":1,"invalidated":1,"invalidated":0}' if field == 'invalidated'
+           else '{"source_key":2,"source_key":1}')
+    with store.db:
+        aid = store.db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) VALUES(?,?,?,?,?,0)',
+                              (context_artifacts.ORIGINAL_KIND, 1, 2, '{"facts":[]}', raw)).lastrowid
+    selected = context_artifacts.original_rows(store.db, 1, 1, {}, {})
+    assert [item['artifact_id'] for item in selected] == ([aid] if field == 'invalidated' else [])
+
+
+@pytest.mark.parametrize('field', ['invalidated', 'source_key'])
+def test_new_original_rows_rejects_duplicate_metadata_without_legacy_fallback(store, field):
+    save(store, 1, '合成の原典1。')
+    source = row(store, 1)
+    fixture = _sealed_context(store, source, [])
+    meta = {**fixture['origin'], 'unit_key': '5' * 64, 'chunk_key': '6' * 64}
+    content = json.dumps({'chunk_span': [0, len(source['body_text'])], 'part': 0, 'parts': 1, 'facts': []})
+    checkpoint = {'source_occurrence_version': 1, 'source_occurrence': meta['source_occurrence'], 'complete': True}
+    with store.db:
+        store.db.execute('UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?',
+                         (content, json.dumps(meta), fixture['original']))
+    assert [item['artifact_id'] for item in context_artifacts.original_rows(store.db, 1, 1, meta, checkpoint)] == [fixture['original']]
+    raw = ('{"invalidated":1,' + json.dumps(meta)[1:-1] + ',"invalidated":0}' if field == 'invalidated'
+           else '{"source_key":2,' + json.dumps(meta)[1:])
+    with store.db:
+        store.db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) VALUES(?,?,?,?,?,0)',
+                         (context_artifacts.ORIGINAL_KIND, 1, 1, content, raw))
+    with pytest.raises(ValueError):
+        context_artifacts.original_rows(store.db, 1, 1, meta, checkpoint)
+
+
+@pytest.mark.parametrize('kind', ['chat_revision2', 'chat_aba', 'karte'])
+def test_current_raw_binding_supports_adopted_context_but_stale_binding_is_a_gap(store, kind):
+    if kind == 'karte':
+        from mcs_queries import karte_source_record
+        with store.db:
+            store.db.execute('UPDATE patients SET karte_id=17 WHERE project_id=1')
+        store.karte_summary_store(1, 17, {'comment': '本人は本日、合成薬Aを中止しました。',
+                                        'updated_at': '2026-09-20T09:00:00+09:00'})
+        raw = store.db.execute("SELECT * FROM artifacts WHERE kind='karte_summary' ORDER BY artifact_id DESC LIMIT 1").fetchone()
+        source = karte_source_record(raw, 1)
+    else:
+        original = save(store, 1, '本人は本日、合成薬Aを服用しています。')
+        store.save_messages([replace(original, body_html='<p>本人は本日、合成薬Aを中止しました。</p>')], project_id=1)
+        source = row(store, 1)
+    fact = _context_fact(source, '合成薬A', source['body_text'])
+    fixture = _sealed_context(store, source, [fact])
+    source_key = source.get('source_key', source['message_id'])
+    args = {'source_key': source_key} if kind == 'karte' else {}
+    with store.db:
+        store.db.execute('UPDATE messages SET message_id=message_id WHERE 0')
+        current = loss.capture_tx(store.db, 1, source['message_id'], **args)
+        # Raw storage can be selected, but this fixture lacks the real Jev PASS.
+        assert current['records'] and not current['audited'] and current['gaps']
+    if kind == 'chat_aba':
+        old = fixture['origin']['source_binding']
+        store.save_messages([original], project_id=1)
+        store.save_messages([replace(original, body_html='<p>本人は本日、合成薬Aを中止しました。</p>')], project_id=1)
+        assert loss.source_binding(store.db, 1, 1) != old
+        with store.db:
+            store.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.invalidated') WHERE artifact_id=?", (fixture['scan'],))
+    else:
+        with store.db:
+            for identity in (fixture['header'], fixture['candidate']):
+                raw = store.db.execute('SELECT meta FROM artifacts WHERE artifact_id=?', (identity,)).fetchone()[0]
+                meta = {**json.loads(raw), 'source_binding': 'e' * 64}
+                store.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), identity))
+        _reseal_context(store, fixture)
+    with store.db:
+        store.db.execute('UPDATE messages SET message_id=message_id WHERE 0')
+        stale = loss.capture_tx(store.db, 1, source['message_id'], **args)
+        assert not stale['records'] and stale['gaps']
+
+
+def test_source_quality_proof_binds_actual_questions_and_receipts(store):
+    import extract_llm
+    import patient_context_plan as plan
+    import semantic_audit
+    import semantic_candidate
+    import semantic_jev
+    import semantic_policy
+    import semantic_runtime
+
+    text = '本人の寝室は一階です。'
+    save(store, 1, text)
+    source = {**row(store, 1), 'source': 'chat'}
+    occurrence = {'source_binding': loss.source_binding(store.db, 1, 1), 'first_seen': source['first_seen'],
+                  'scope': dict(store.db.execute('SELECT project_id,project_type,karte_id,is_archived '
+                                                'FROM patients WHERE project_id=1').fetchone())}
+    facts = plan.source_facts(source, [{'category':'living', 'text':text, 'evidence':text,
+                                        'subject':'patient', 'details':[]}], night_id='synthetic', discovery='new_report', found_at=1790000000.0)
+    assert len(facts) == 1 and plan.validated_source_facts(source, facts) == facts
+    policy, errors = semantic_policy.semantic_config({'semantic': {'mode':'assist', 'project_ids':[1]}}, key_present=True)
+    assert not errors
+    assessment = {'code': payload_hash([extract_llm._LOADED_SOURCE_DIGESTS, semantic_candidate.loaded_source_contract()]),
+                  'policy': semantic_policy.policy_fingerprint(policy)}
+    descriptor = {'v':1, 'assessment':assessment, 'policy': {key: policy.get(key) for key in
+        ('model','match_threshold','nomatch_threshold','calibration_version','fact_source','candidate_fingerprint')}}
+    identity, pages = semantic_audit.patient_source_quality_identity(source, facts, occurrence,
+                                                                       {'model':'synthetic'}, 'a' * 64, assessment)
+    usage_ids, answer_ids = [], []
+    for page in pages:
+        body = {'model': semantic_jev.JEV_MODEL, 'state': page['state'], 'questions': page['questions']}
+        reserve = semantic_runtime.patient_summary_usage_reserver(store, project_id=1, guard=lambda _stage: None,
+            daily_request_budget=3000, identity=identity, purpose='source')
+        reservation = reserve(body, 2)
+        answers = {fid:{'choice':page['passing_choices'][fid], 'confidence':1.0} for fid in page['fact_ids']}
+        with store.db:
+            store.db.execute('BEGIN IMMEDIATE')
+            bindings = semantic_runtime.patient_source_answer_binding(store.db, 1, identity, reservation, page['fact_ids'])
+            for fid, answer in answers.items():
+                answer_ids.append(store.artifact_add_tx('patient_context_source_quality_v1', json.dumps(answer),
+                    project_id=1, meta={VERSION_KEY: CURRENT_VERSION, 'input_key':identity['input_key'],
+                    'audit_key':identity['audit_key'], 'fact_id':fid, **bindings[fid]}))
+            assert semantic_runtime.patient_summary_resolve_request_tx(store, reservation, identity, answers, set(),
+                                                                        project_id=1, purpose='source') == 1
+        usage_ids.append(reservation.artifact_id)
+    with store.db:
+        store.db.execute('BEGIN IMMEDIATE')
+        content = semantic_runtime.patient_source_pass_content(store.db, 1, identity, descriptor)
+        assert content and content['source_fact_count'] == 1 and content['question_count'] == 2
+        pass_id = store.artifact_add_tx('patient_context_source_quality_pass_v1', json.dumps(content), project_id=1,
+            meta={VERSION_KEY: CURRENT_VERSION, **{key: identity[key] for key in ('input_key','candidate_key','audit_key')}})
+    store.db.execute('BEGIN')
+    try:
+        assert semantic_runtime.patient_source_pass_verified(store.db, 1, identity, descriptor)
+        changed = {**descriptor, 'policy': {**descriptor['policy'], 'match_threshold': 0.1}}
+        assert not semantic_runtime.patient_source_pass_verified(store.db, 1, identity, changed)
+        for artifact_id in (usage_ids[0], answer_ids[0], pass_id):
+            store.db.execute('SAVEPOINT synthetic_damage')
+            store.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (artifact_id,))
+            assert not semantic_runtime.patient_source_pass_verified(store.db, 1, identity, descriptor)
+            store.db.execute('ROLLBACK TO synthetic_damage')
+            store.db.execute('RELEASE synthetic_damage')
+        assert semantic_runtime.patient_source_pass_verified(store.db, 1, identity, descriptor)
+    finally:
+        store.db.rollback()
+
+
+@pytest.mark.parametrize("kind", ["chat", "karte"])
+@pytest.mark.parametrize("with_fact", [False, True])
+def test_cloud_candidate_capture_requires_genuine_source_qa_evidence(store, kind, with_fact):
+    import extract_llm
+    import patient_context_plan as plan
+    import semantic_audit
+    import semantic_candidate
+    import semantic_jev
+    import semantic_policy
+    import semantic_runtime
+    from mcs_queries import patient_context_sources
+
+    text = '本人は本日、合成薬Aを服用しています。'
+    if kind == 'chat':
+        save(store, 1, text)
+        source_key = 1
+    else:
+        with store.db:
+            store.db.execute('UPDATE patients SET karte_id=17 WHERE project_id=1')
+        store.karte_summary_store(1, 17, {'comment':text, 'updated_at':'2026-09-20T09:00:00+09:00'})
+        artifact_id = store.db.execute("SELECT artifact_id FROM artifacts WHERE kind='karte_summary' "
+                                       "ORDER BY artifact_id DESC LIMIT 1").fetchone()[0]
+        source_key = 'karte:' + str(artifact_id)
+    source = list(patient_context_sources(store.db, 1, mid=source_key))[0]
+    facts = plan.source_facts(source, [{'category':'medication_management', 'text':text, 'evidence':text,
+        'subject':'patient', 'details':[{'key':'drug_name','value':'合成薬A','evidence':text}]}],
+        night_id='synthetic', discovery='new_report', found_at=1790000000.0)
+    assert len(facts) == 1 and plan.validated_source_facts(source, facts) == facts
+    if not with_fact:
+        facts = []
+    binding = loss.source_binding(store.db, 1, source['message_id'],
+        **({'source_key':source_key} if kind == 'karte' else {}))
+    occurrence = loss._context_occurrence(store.db, 1, source, binding)
+    policy, errors = semantic_policy.semantic_config({'semantic': {'mode':'assist', 'project_ids':[1]}}, key_present=True)
+    assert not errors
+    assessment = {'code':payload_hash([extract_llm._LOADED_SOURCE_DIGESTS, semantic_candidate.loaded_source_contract()]),
+                  'policy':semantic_policy.policy_fingerprint(policy)}
+    descriptor = {'v':1, 'assessment':assessment, 'policy': {key:policy.get(key) for key in
+        ('model','match_threshold','nomatch_threshold','calibration_version','fact_source','candidate_fingerprint')}}
+    contract = {'model':'synthetic-local', 'provider':{'backend':'anthropic','model':cloud_policy.MODEL}}
+    initial, _ = semantic_audit.patient_source_quality_identity(source, facts, occurrence, contract, '0' * 64, assessment)
+    fixture = _sealed_context(store, source, facts, repair_input_key=initial['source_input_key'],
+                              source_sig=plan.source_signature(source))
+    fixture['ref']['candidate_key'] = initial['candidate_key']
+    _reseal_context(store, fixture)
+    identity, pages = semantic_audit.patient_source_quality_identity(source, facts, occurrence,
+        contract, fixture['ref']['chunks_sig'], assessment)
+    assert identity['source_input_key'] == fixture['ref']['repair_input_key']
+    usage_ids, answer_ids = [], []
+    for page in pages:
+        body = {'model':semantic_jev.JEV_MODEL, 'state':page['state'], 'questions':page['questions']}
+        reserve = semantic_runtime.patient_summary_usage_reserver(store, project_id=1, guard=lambda _stage: None,
+            daily_request_budget=3000, identity=identity, purpose='source')
+        reservation = reserve(body, 2)
+        answers = {fid:{'choice':page['passing_choices'][fid], 'confidence':1.0} for fid in page['fact_ids']}
+        with store.db:
+            store.db.execute('BEGIN IMMEDIATE')
+            bindings = semantic_runtime.patient_source_answer_binding(store.db, 1, identity, reservation, page['fact_ids'])
+            for fid, answer in answers.items():
+                answer_ids.append(store.artifact_add_tx('patient_context_source_quality_v1', json.dumps(answer),
+                    project_id=1, meta={VERSION_KEY:CURRENT_VERSION, 'input_key':identity['input_key'],
+                    'audit_key':identity['audit_key'], 'fact_id':fid, **bindings[fid]}))
+            assert semantic_runtime.patient_summary_resolve_request_tx(store, reservation, identity, answers, set(),
+                project_id=1, purpose='source') == 1
+        usage_ids.append(reservation.artifact_id)
+    with store.db:
+        store.db.execute('BEGIN IMMEDIATE')
+        content = semantic_runtime.patient_source_pass_content(store.db, 1, identity, descriptor)
+        assert content
+        pass_id = store.artifact_add_tx('patient_context_source_quality_pass_v1', json.dumps(content), project_id=1,
+            meta={VERSION_KEY:CURRENT_VERSION, **{key:identity[key] for key in ('input_key','candidate_key','audit_key')}})
+        doc = json.loads(store.db.execute('SELECT content FROM artifacts WHERE artifact_id=?', (fixture['scan'],)).fetchone()[0])
+        doc['source_quality_audit_key'] = identity['audit_key']
+        store.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(doc), fixture['scan']))
+    correction_id = None
+    if kind == 'chat' and with_fact:
+        correction_text = '本人は投稿#1の「' + text + '」を撤回しました。'
+        save(store, 2, correction_text, day='20')
+        correction_source = list(patient_context_sources(store.db, 1, mid=2))[0]
+        correction_facts = plan.source_facts(correction_source, [{'category':'medication_management',
+            'text':correction_text, 'evidence':correction_text, 'subject':'patient',
+            'details':[{'key':'drug_name','value':'合成薬A','evidence':correction_text}]}],
+            night_id='synthetic', discovery='new_report', found_at=1790000000.0)
+        assert len(correction_facts) == 1 and correction_facts[0]['temporal']['corrections']
+        correction_id = store.artifact_add(context_artifacts.ORIGINAL_KIND, json.dumps({'facts':correction_facts}),
+            project_id=1, message_id=2, meta={VERSION_KEY:CURRENT_VERSION,
+                'source_binding':loss.source_binding(store.db, 1, 2)})
+    store.db.execute('BEGIN')
+    try:
+        args = {'source_key':source_key} if kind == 'karte' else {}
+        full = loss.capture_tx(store.db, 1, source['message_id'], **args)
+        explicit = loss.capture_tx(store.db, 1, source['message_id'], artifact_ids=[fixture['candidate']], **args)
+        assert full['audited'] and explicit['audited'] and not full['gaps'] and not explicit['gaps']
+        if correction_id is not None:
+            corrected = loss.capture_tx(store.db, 1, 2, artifact_ids=[correction_id])
+            assert any(item.get('target_origin', {}).get('message_id') == 1 for item in corrected['records'])
+        for artifact_id in (usage_ids[0], answer_ids[0], pass_id):
+            store.db.execute('SAVEPOINT synthetic_damage')
+            store.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (artifact_id,))
+            for ids in (None, [fixture['candidate']]):
+                captured = loss.capture_tx(store.db, 1, source['message_id'], artifact_ids=ids, **args)
+                assert not captured['audited'] and any(g['kind'] == 'patient_context_audit_unverified' for g in captured['gaps'])
+            if correction_id is not None:
+                corrected = loss.capture_tx(store.db, 1, 2, artifact_ids=[correction_id])
+                assert not any(item.get('target_origin', {}).get('message_id') == 1 for item in corrected['records'])
+                assert any(g['kind'] == 'patient_context_audit_unverified' for g in corrected['gaps'])
+            store.db.execute('ROLLBACK TO synthetic_damage')
+            store.db.execute('RELEASE synthetic_damage')
+        for damage in ('answer', 'descriptor', 'old_pass', 'scan_identity', 'usage_assessment'):
+            store.db.execute('SAVEPOINT synthetic_damage')
+            if damage == 'usage_assessment':
+                store.db.execute("UPDATE artifacts SET meta=json_set(meta,'$.quality_request.assessment_hash',?) "
+                                 'WHERE artifact_id=?', ('f' * 64, usage_ids[0]))
+            elif damage == 'answer':
+                store.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?',
+                    (json.dumps({'choice':'missing','confidence':1.0}), answer_ids[-1]))
+            elif damage in ('descriptor', 'old_pass'):
+                raw = store.db.execute('SELECT content FROM artifacts WHERE artifact_id=?', (pass_id,)).fetchone()[0]
+                content = json.loads(raw)
+                if damage == 'old_pass':
+                    content.pop('descriptor')
+                else:
+                    content['descriptor']['policy']['match_threshold'] = 0.01
+                store.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(content), pass_id))
+            else:
+                raw = store.db.execute('SELECT content FROM artifacts WHERE artifact_id=?', (fixture['scan'],)).fetchone()[0]
+                content = json.loads(raw)
+                content['source_quality_audit_key'] = 'f' * 64
+                store.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(content), fixture['scan']))
+            assert not loss.capture_tx(store.db, 1, source['message_id'], **args)['audited']
+            store.db.execute('ROLLBACK TO synthetic_damage')
+            store.db.execute('RELEASE synthetic_damage')
+        assert loss.capture_tx(store.db, 1, source['message_id'], **args)['audited']
+    finally:
+        store.db.rollback()
+
+
+def test_unverified_karte_snapshot_cannot_clear_retained_audit_gap(store):
+    from mcs_queries import karte_source_record
+    store.karte_summary_store(1, 17, {'comment':'完全合成の住環境記録です。',
+                                     'updated_at':'2026-09-20T09:00:00+09:00'})
+    raw = store.db.execute("SELECT * FROM artifacts WHERE kind='karte_summary' ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    source = karte_source_record(raw, 1)
+    fixture = _sealed_context(store, source, [])
+    store.db.execute('BEGIN')
+    try:
+        for ids in (None, [fixture['candidate']]):
+            snapshot = loss.capture_tx(store.db, 1, 0, artifact_ids=ids, source_key=source['source_key'])
+            assert not snapshot['audited'] and snapshot['quality_required']
+            assert any(gap['kind'] == 'patient_context_audit_unverified' for gap in snapshot['gaps'])
+            loss.record_tx(store.db, snapshot, audited_source=True)
+        records = [json.loads(item[0]) for item in store.db.execute('SELECT content FROM artifacts WHERE kind=?', (loss.KIND,))]
+        assert not any(item.get('audited_source') is True for item in records)
+        assert not loss.read(store.db, 1)['complete']
+    finally:
+        store.db.rollback()
