@@ -811,7 +811,10 @@ def test_unreadable_config_never_auto_enables_the_paid_route(routed):
     led, *_ = routed
     assert worker._cloud_settings({})["mode"] == "off"
     assert worker._cloud_mode(led, {}, "reextract", 1) == "off"
-    assert worker._cloud_settings({"mcs_login_id": "synthetic"})["mode"] == "on"
+    # A readable config with a key auto-enables only once a spending cap exists.
+    assert worker._cloud_settings({"mcs_login_id": "synthetic"})["mode"] == "off"
+    assert worker._cloud_settings({"mcs_login_id": "synthetic",
+                                   "cloud_llm": {"daily_cost_limit_usd": 2}})["mode"] == "on"
 
 
 def test_paid_cloud_failure_with_the_local_breaker_open_records_the_retry(routed, monkeypatch):
@@ -831,3 +834,20 @@ def test_paid_cloud_failure_with_the_local_breaker_open_records_the_retry(routed
     assert error["attempts"] == 1 and error["next_try"] > time.time()
     # the retry backoff keeps the next pass from re-sending the same body
     assert worker.run_pending(led, budget_s=180)["done"] == 0 and len(calls) == 1
+
+
+def test_run_window_end_stops_the_next_post_but_keeps_an_arrived_result(routed):
+    led, cfg, calls, reserved, _ = routed
+    provider = worker._CloudProvider(led, cfg, route="reextract", project_id=1,
+        unit_key="synthetic", deadline=time.monotonic() + 180,
+        current=lambda: True, dispatch=lambda fn, **kw: fn())
+    provider.guard()                                   # inside the window: the attempt may POST
+    cfg["cloud_llm"]["until"] = "2000-01-01T00:00:00+00:00"
+    with pytest.raises(worker.CloudFallback):
+        provider.guard()                               # every later attempt or retry is refused
+    provider.commit_guard()                            # a response that already arrived is still saved
+    cfg["cloud_llm"]["until"] = "2999-01-01T00:00:00+00:00"
+    cfg["cloud_llm"]["window_start"], cfg["cloud_llm"]["window_budget_usd"] = "2999-01-01T00:00:00+00:00", 1
+    cfg["cloud_llm"]["until"] = "2999-01-02T00:00:00+00:00"
+    with pytest.raises(worker.CloudFallback):
+        provider.guard()                               # before the period starts nothing is sent

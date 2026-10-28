@@ -4,8 +4,6 @@ policy fingerprint. Fixed Jev registry defaults and conditional candidate
 approval checks share this policy boundary with runtime and offline callers."""
 from __future__ import annotations
 
-import time
-
 from mcs_util import payload_hash, until_epoch
 import semantic_jev as jev
 
@@ -167,10 +165,11 @@ def semantic_config(cfg: dict, *, key_present=False) -> tuple[dict, list]:
             out["project_ids"] = []
     if out["nomatch_threshold"] >= out["match_threshold"]:
         errors.append("config: semantic_threshold_order_invalid")
-    expired = False
     if block.get("until") is not None:
+        # Enforced per Jev reservation (semantic_runtime), never by switching modes off:
+        # intake, existing notices and in-flight results keep their normal handling.
         try:
-            expired = time.time() >= until_epoch(block["until"])
+            until_epoch(block["until"])
             out["until"] = block["until"]
         except (ValueError, OverflowError):
             errors.append("config: semantic_until_invalid")
@@ -189,9 +188,6 @@ def semantic_config(cfg: dict, *, key_present=False) -> tuple[dict, list]:
     if not errors and fact_source != 'legacy':
         from semantic_candidate import candidate_fingerprint
         out['candidate_fingerprint'] = candidate_fingerprint(cfg)
-    if expired:
-        # The configured run window has ended: no new Jev work of any kind.
-        out.update(mode="off", summary_mode="off", loop_mode="off", extract_qc="off")
     if errors:
         out["fact_source"] = "legacy"
         out["mode"] = "off"

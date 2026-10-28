@@ -708,7 +708,10 @@ class _CloudProvider:
             if self.final_disposition is not None:
                 raise CloudFallback("cloud_unit_changed")
             now = _cloud_settings(load_config())   # one read: every check judges the same settings
-            if ((inference and (time.monotonic() >= deadline or tightened(caps(now))))
+            # The run window gates each new POST (retries included); a result that
+            # already arrived is still judged only by scope, not by the clock.
+            if ((inference and (time.monotonic() >= deadline or tightened(caps(now))
+                                or cloud_policy.setting_block_reason(now)))
                     or writer_lock.updater_state() != updater
                     or updater[0] or cloud_policy.api_key(HOME) != key
                     or cloud_policy.scope_generation({"cloud_llm": now}) != scope
