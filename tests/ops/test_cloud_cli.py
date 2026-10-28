@@ -578,3 +578,22 @@ def test_oversized_slot_is_unknown_and_keeps_the_estimate(world):
     # The reader's 2 MiB value limit stops the scan; the estimate is still printed.
     assert report["source_repair_evidence_holds"] == {"unknown": "value_too_large"}
     assert report["routes"]["reextract"]["targets"] == 1
+
+
+def test_period_spending_is_unknown_once_usage_inside_it_was_pruned(world):
+    root, path, config = world
+    config["cloud_llm"].update(window_start="2026-10-26T00:00:00+09:00", window_budget_usd=80)
+    assert cli.observe(config, root=str(root))["period_budget"]["spent_or_reserved_usd"] == "0"
+    with closing(Ledger(str(path))) as db:
+        db.db.execute("INSERT INTO artifacts(kind,content,created_at) VALUES(?,?,?)",
+                      (cloud_policy.PRUNE_MARK_KIND, repr(cli.time.time() - 3600), cli.time.time()))
+        db.db.commit()
+    # a pruned range would make the sum look smaller; it is shown as unknown instead
+    assert cli.observe(config, root=str(root))["period_budget"]["spent_or_reserved_usd"] is None
+
+
+def test_an_expired_period_older_than_the_usage_history_is_unknown_even_without_a_mark(world):
+    root, path, config = world
+    config["cloud_llm"].update(window_start="2026-08-01T00:00:00+09:00", window_budget_usd=80,
+                               until="2026-10-01T00:00:00+09:00")
+    assert cli.observe(config, root=str(root))["period_budget"]["spent_or_reserved_usd"] is None

@@ -383,7 +383,11 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
         period = None
         if settings["window_budget_usd"] is not None:
             try:
-                spent = str(policy.window_spend(borrowed, settings))
+                # rows maintenance already pruned from the period cannot be counted: unknown, not a smaller sum
+                # judged apart from the run window: an expired period can still be too old to count
+                spent = (None if policy.window_history_pruned(borrowed, settings)
+                         or time.time() - mcs_util.until_epoch(settings["window_start"]) > policy.WINDOW_HISTORY_S
+                         else str(policy.window_spend(borrowed, settings)))
             except (policy.AnthropicError, ValueError, ArithmeticError):
                 spent = None   # an unverifiable tally is shown as unknown, never as 0
             period = {"start": settings["window_start"], "budget_usd": settings["window_budget_usd"],
