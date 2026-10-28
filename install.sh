@@ -714,7 +714,7 @@ dry_run_plan() {
         plan_line "6/6 復旧" "$RECOVERY_DIR/mcs_recover.py [$(state "$RECOVERY_DIR/mcs_recover.py")], repo_path = $REPO"
         plan_line "" "起動設定 $WATCH_PLIST [$(state "$WATCH_PLIST")]; 変更があるか未起動の場合だけ org.mcs.recovery を起動・再起動"
     fi
-    plan_line "省略項目の保存" "$MCS_DATA/install_options.json [$(state "$MCS_DATA/install_options.json")] （更新計画の install_args に表示。更新時は各項目を --install-arg で指定）"
+    plan_line "省略項目の保存" "$MCS_ROOT/config.json （更新計画の install_args に表示。旧記録は保持）"
 }
 
 if [ "$MODE" != install ]; then
@@ -722,6 +722,29 @@ if [ "$MODE" != install ]; then
     if [ "$MODE" = dry-run ]; then dry_run_plan; fi
     [ "$PF_NG" -eq 0 ] || exit 1
     exit 0
+fi
+
+# Inspect the opt-out record before software, service or config changes.
+# The empty state needs no Python until the runtime has been installed.
+set --
+[ "$SKIP_BREW" -eq 0 ] || set -- "$@" --no-brew
+[ "$SKIP_LLM" -eq 0 ] || set -- "$@" --no-llm
+[ "$SKIP_PLUGIN" -eq 0 ] || set -- "$@" --no-plugin
+[ "$SKIP_RECOVERY" -eq 0 ] || set -- "$@" --no-recovery
+OPTIONS_BASE=empty
+OPTIONS_ACTION=inspect
+[ -z "${MCS_UPDATE_REINSTALL:-}" ] || OPTIONS_ACTION=inspect-update
+if { [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ] || [ -e "$MCS_DATA/install_options.json" ] || [ -L "$MCS_DATA/install_options.json" ]; }; then
+    OPTIONS_PY="${MODE_PY:-}"
+    [ -n "$OPTIONS_PY" ] || OPTIONS_PY="$(command -v python3 || true)"
+    [ -n "$OPTIONS_PY" ] || die "以前の導入設定の確認には Python が必要です。変更は行っていません"
+    OPTIONS_BASE="$("$OPTIONS_PY" "$REPO/mcs/ops/install_options.py" "$OPTIONS_ACTION" "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" - "$@")" \
+        || die "導入設定を変更せず中止しました。旧記録と設定を確認してください"
+fi
+if [ -n "${MCS_UPDATE_REINSTALL:-}" ] && [ -n "${MCS_UPDATE_OPTIONS_BASE:-}" ]; then
+    case "$OPTIONS_BASE" in migrate:*|skip:*) _options_current="${OPTIONS_BASE#*:}" ;; *) _options_current="$OPTIONS_BASE" ;; esac
+    [ "$_options_current" = "$MCS_UPDATE_OPTIONS_BASE" ] \
+        || die "導入設定が変更されたため再導入を開始しません。現在の設定を確認してください"
 fi
 
 # ---------------------------------------------------------- guards
@@ -1410,13 +1433,15 @@ fi
 # without asking (mcs_update.INSTALL_ARGS; --no-services is the updater's own).
 # Updater runs add migration/repair opt-outs the operator did not choose.
 if [ -z "${MCS_UPDATE_REINSTALL:-}" ]; then
-    _opts=""
-    for _o in brew:"$SKIP_BREW" llm:"$SKIP_LLM" plugin:"$SKIP_PLUGIN" recovery:"$SKIP_RECOVERY"; do
-        if [ "${_o#*:}" -eq 1 ]; then _opts="$_opts${_opts:+, }\"--no-${_o%%:*}\""; fi
-    done
-    printf '{"v": 1, "install_args": [%s]}\n' "$_opts" > "$MCS_DATA/install_options.json.tmp" \
-        || die "導入オプションを $MCS_DATA/install_options.json に保存できません。アクセス権と空き容量を確認し install.sh を再実行してください"
-    publish "$MCS_DATA/install_options.json.tmp" "$MCS_DATA/install_options.json" || :
+    "$MCS_PY" "$REPO/mcs/ops/install_options.py" save "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" "$OPTIONS_BASE" "$@" \
+        || die "ソフトの準備は途中まで反映されています。導入設定を確認してから再実行してください"
+elif [ "${OPTIONS_BASE#migrate:}" != "$OPTIONS_BASE" ]; then
+    "$MCS_PY" "$REPO/mcs/ops/install_options.py" migrate "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" "${OPTIONS_BASE#migrate:}" \
+        || die "ソフトの準備は途中まで反映されています。導入設定を確認してから再実行してください"
+else
+    _options_current="${OPTIONS_BASE#skip:}"
+    "$MCS_PY" "$REPO/mcs/ops/install_options.py" verify "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" "$_options_current" \
+        || die "ソフトの準備は途中まで反映されています。導入設定を確認してから再実行してください"
 fi
 
 # ------------------------------------------------------------ summary

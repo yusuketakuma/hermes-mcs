@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from test_install_sh import _world, _run, _calls
+from test_install_sh import _world, _run, _calls, SAVED_FLAGS
 
 
 FLAGS = ('--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
@@ -45,7 +45,7 @@ def test_explicit_mode_does_not_write_before_invalid_config_refusal(tmp_path, ru
             inject = stub / 'legacy-json-depth.py'
             inject.write_text('import json, sys\n'
                               'def limited(*args, **kwargs): raise RecursionError("synthetic decoder limit")\n'
-                              'json.load = limited\n'
+                              'json.load = json.loads = limited\n'
                               'sys.argv = sys.argv[1:]\n'
                               'exec(compile(sys.stdin.read(), "<mode-selection>", "exec"))\n')
             py = stub / 'bin/python3'
@@ -78,7 +78,7 @@ def test_explicit_runtime_keeps_other_initial_settings(tmp_path, before, after):
     cfg.write_text(json.dumps(original))
     result = _run(env, None, '--mode', after, *FLAGS)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert json.loads(cfg.read_text()) == {**original, 'runtime_mode': after}
+    assert json.loads(cfg.read_text()) == {**original, 'runtime_mode': after, 'install_args': SAVED_FLAGS}
 
 
 @pytest.mark.parametrize('response,serving', [

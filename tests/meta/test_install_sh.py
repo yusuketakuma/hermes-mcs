@@ -26,6 +26,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 INSTALL = ROOT / "install.sh"
+SAVED_FLAGS = ['--no-brew', '--no-llm', '--no-plugin', '--no-recovery']
 
 
 def _pin():
@@ -183,7 +184,7 @@ exit 0
     "python3": """#!/bin/sh
 echo "python3 $*" >> "$STUB_LOG"
 case "$*" in
-  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*requires_python_admits.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
+  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*requires_python_admits.py*|*install_options.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
 esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
@@ -225,7 +226,7 @@ echo "/dev/stub 100000000 1 ${STUB_DF_KB:-50000000} 1% /"
 VENV_PYTHON = """#!/bin/sh
 echo "venv-python $*" >> "$STUB_LOG"
 case "$*" in
-  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*requires_python_admits.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
+  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*requires_python_admits.py*|*install_options.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
 esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
@@ -334,6 +335,7 @@ exec(compile(code, '<installer-runtime-check>', 'exec'))
         "STUB_GIT_HEAD": git_head or _pin(),
         "STUB_CLONE_HEAD": CLONE_HEAD,
         "STUB_PARSE_PYTHON": sys.executable,
+        "STUB_REAL_PYTHON": sys.executable,
         # sha256 of the stub curl's model bytes ("stub-model-bytes\n")
         "MCS_MODEL_SHA256": STUB_MODEL_SHA256,
         "MCS_ALLOW_MODEL_SHA_OVERRIDE": "1",
@@ -446,7 +448,7 @@ def test_noninteractive_install_creates_private_unconfigured_config(tmp_path):
     result = _run(env, None, *flags)
     assert result.returncode == 0, result.stdout + result.stderr
     config = home / '.mcs/config.json'
-    assert config.read_bytes() == b'{}\n'
+    assert json.loads(config.read_text()) == {'install_args': SAVED_FLAGS}
     assert config.stat().st_mode & 0o777 == 0o600
     assert 'まだ利用開始前の初期設定が必要' in result.stdout
     before = (config.read_bytes(), config.stat().st_ino, config.stat().st_mtime_ns)
@@ -463,7 +465,7 @@ def test_explicit_runtime_is_written_into_new_private_config(tmp_path, runtime):
                   '--no-plugin', '--no-services', '--no-recovery')
     assert result.returncode == 0, result.stdout + result.stderr
     config = home / '.mcs/config.json'
-    assert json.loads(config.read_text()) == {'runtime_mode': runtime}
+    assert json.loads(config.read_text()) == {'runtime_mode': runtime, 'install_args': SAVED_FLAGS}
     assert config.stat().st_mode & 0o777 == 0o600
 
 
@@ -477,7 +479,7 @@ def test_existing_explicit_install_preserves_other_settings(tmp_path):
     result = _run(env, None, '--mode', 'standalone', '--no-brew', '--no-llm',
                   '--no-plugin', '--no-services', '--no-recovery')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert json.loads(config.read_text()) == {**initial, 'runtime_mode': 'standalone'}
+    assert json.loads(config.read_text()) == {**initial, 'runtime_mode': 'standalone', 'install_args': SAVED_FLAGS}
     assert config.stat().st_mode & 0o777 == 0o600
 
 
@@ -492,7 +494,7 @@ def test_existing_recovery_selection_preserves_other_settings(tmp_path):
     result = _run(env, None, '--recovery-python', selected, '--no-brew', '--no-llm',
                   '--no-plugin', '--no-services', '--no-recovery')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert json.loads(config.read_text()) == {**initial, 'recovery_python': selected}
+    assert json.loads(config.read_text()) == {**initial, 'recovery_python': selected, 'install_args': SAVED_FLAGS}
 
 
 @pytest.mark.parametrize('length', [65536, 65537])
@@ -624,8 +626,10 @@ def test_config_creation_race_preserves_and_checks_winner(tmp_path, explicit, ra
         '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery']
     result = _run(env, None, *flags)
     assert (result.returncode == 0) is accepted, result.stdout + result.stderr
-    assert (home / '.mcs/config.json').read_text() == raw
-    if not accepted:
+    if accepted:
+        assert json.loads((home / '.mcs/config.json').read_text()) == {**json.loads(raw), 'install_args': SAVED_FLAGS}
+    else:
+        assert (home / '.mcs/config.json').read_text() == raw
         assert '既存設定を保持' in result.stderr
 
 
@@ -728,7 +732,7 @@ def test_config_creation_accepts_private_existing_parent_symlink(tmp_path):
     result = _run(env, None, '--no-brew', '--no-llm', '--no-plugin',
                   '--no-services', '--no-recovery')
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (target / 'config.json').read_bytes() == b'{}\n'
+    assert json.loads((target / 'config.json').read_text()) == {'install_args': SAVED_FLAGS}
 
 
 def test_config_creation_race_rejects_different_recovery_selection(tmp_path):
@@ -752,10 +756,9 @@ def test_failed_later_install_stage_keeps_created_config_for_retry(tmp_path):
     assert result.returncode != 0
     config = home / '.mcs/config.json'
     assert config.read_bytes() == b'{}\n'
-    before = (config.read_bytes(), config.stat().st_ino, config.stat().st_mtime_ns)
     result = _run(env, None, *flags)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert (config.read_bytes(), config.stat().st_ino, config.stat().st_mtime_ns) == before
+    assert json.loads(config.read_text()) == {'install_args': SAVED_FLAGS}
 
 
 @pytest.mark.parametrize('race', [False, True])
@@ -823,7 +826,7 @@ if os.environ.get('MCS_INSTALL_RESUME_UNCONFIGURED') == '1':
     if race:
         assert config.read_text() == winner
     else:
-        assert json.loads(config.read_text()) == {'runtime_mode': 'standalone'}
+        assert json.loads(config.read_text()) == {'runtime_mode': 'standalone', 'install_args': SAVED_FLAGS}
     assert not hermes_home.joinpath('plugins/mcs-discord-commands').exists()
 
 
@@ -877,6 +880,7 @@ def test_recovery_template_executable_is_probed_without_substitution(tmp_path):
     repo = tmp_path / "synthetic-checkout"
     (repo / "deployment/launchagents").mkdir(parents=True)
     (repo / "deployment/recovery").mkdir()
+    (repo / "mcs").symlink_to(ROOT / "mcs", target_is_directory=True)
     shutil.copy2(INSTALL, repo / "install.sh")
     shutil.copy2(ROOT / "deployment/recovery/mcs_recover.py",
                  repo / "deployment/recovery/mcs_recover.py")
@@ -949,8 +953,8 @@ def test_install_run_then_rerun_converges(tmp_path):
 
     r1 = _run(env, hermes_home)
     assert r1.returncode == 0, r1.stderr
-    assert json.loads((home / ".mcs" / "data" / "install_options.json").read_text()) \
-        == {"v": 1, "install_args": []}
+    assert json.loads((home / ".mcs" / "config.json").read_text())["install_args"] == []
+    assert not (home / ".mcs" / "data" / "install_options.json").exists()
     recovery = home / ".mcs-recovery" / "mcs_recover.py"
     assert recovery.is_file() and os.access(recovery, os.X_OK)
     first_gen = recovery.read_bytes()
@@ -1104,21 +1108,79 @@ def test_skip_flags_bypass_stages(tmp_path):
                    for c in _calls(stub_root))
     assert any(c.startswith("git clone") for c in _calls(stub_root))
     # the updater's plan repeats these opt-outs on a reinstall
-    assert json.loads((home / ".mcs" / "data" / "install_options.json").read_text()) \
-        == {"v": 1, "install_args": ["--no-llm", "--no-plugin", "--no-recovery"]}
+    assert json.loads((home / ".mcs" / "config.json").read_text())["install_args"] \
+        == ["--no-llm", "--no-plugin", "--no-recovery"]
 
 
 def test_updater_run_keeps_the_operator_opt_out_record(tmp_path):
     """The updater adds migration/repair opt-outs (--no-llm --no-plugin);
     they must not replace what the operator chose."""
     home, hermes_home, _stub_root, env = _world(tmp_path)
-    record = home / ".mcs" / "data" / "install_options.json"
+    record = home / ".mcs" / "config.json"
     assert _run(env, hermes_home).returncode == 0
-    before = record.read_bytes()
+    before = json.loads(record.read_text())["install_args"]
     r = _run({**env, "MCS_UPDATE_REINSTALL": "1"}, hermes_home,
              "--no-llm", "--no-plugin", "--no-services")
     assert r.returncode == 0, r.stderr
-    assert record.read_bytes() == before
+    assert json.loads(record.read_text())["install_args"] == before
+
+
+def test_updater_migrates_legacy_without_recording_its_temporary_flags(tmp_path):
+    home, hermes_home, _stub_root, env = _world(tmp_path)
+    config = home / '.mcs/config.json'
+    data = home / '.mcs/data'
+    data.mkdir(parents=True)
+    config.write_text('{"synthetic": {"keep": true}}')
+    legacy = data / 'install_options.json'
+    legacy.write_text('{"v": 1, "install_args": ["--no-brew"]}')
+    original = legacy.read_bytes()
+    result = _run({**env, 'MCS_UPDATE_REINSTALL': '1'}, hermes_home,
+                  '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(config.read_text()) == {'synthetic': {'keep': True}, 'install_args': ['--no-brew']}
+    assert legacy.read_bytes() == original
+
+
+def test_updater_reinstall_refuses_conflicting_records_before_side_effects(tmp_path):
+    home, hermes_home, stub, env = _world(tmp_path)
+    data = home / '.mcs/data'
+    data.mkdir(parents=True)
+    config = home / '.mcs/config.json'
+    config.write_text('{"install_args": []}')
+    legacy = data / 'install_options.json'
+    legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
+    result = _run({**env, 'MCS_UPDATE_REINSTALL': '1'}, hermes_home, '--no-llm', '--no-services')
+    assert result.returncode != 0
+    assert config.read_text() == '{"install_args": []}'
+    assert legacy.read_text() == '{"v": 1, "install_args": ["--no-llm"]}'
+    assert not any(c.startswith(('brew install', 'git clone', 'uv ', 'launchctl bootstrap')) for c in _calls(stub))
+
+
+def test_updater_reinstall_checks_approved_base_before_side_effects(tmp_path):
+    home, hermes_home, stub, env = _world(tmp_path)
+    config = home / '.mcs/config.json'
+    config.parent.mkdir()
+    config.write_text('{"install_args": ["--no-llm"]}')
+    result = _run({**env, 'MCS_UPDATE_REINSTALL': '1', 'MCS_UPDATE_OPTIONS_BASE': 'empty'},
+                  hermes_home, '--no-llm', '--no-services')
+    assert result.returncode != 0 and '再導入を開始しません' in result.stderr
+    assert config.read_text() == '{"install_args": ["--no-llm"]}'
+    assert not any(c.startswith(('brew install', 'git clone', 'uv ', 'launchctl bootstrap')) for c in _calls(stub))
+
+
+def test_updater_reinstall_reports_change_during_software_preparation(tmp_path):
+    home, hermes_home, stub, env = _world(tmp_path)
+    config = home / '.mcs/config.json'
+    config.parent.mkdir()
+    config.write_text('{"install_args": []}')
+    git = stub / 'bin/git'
+    git.write_text(git.read_text().replace('echo "git $*" >> "$STUB_LOG"',
+        'echo "git $*" >> "$STUB_LOG"\n'
+        'if [ "$1" = clone ]; then printf \'{"install_args": ["--no-llm"]}\' > "$HOME/.mcs/config.json"; fi'))
+    result = _run({**env, 'MCS_UPDATE_REINSTALL': '1'}, hermes_home,
+                  '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode != 0 and '途中まで反映' in result.stderr
+    assert json.loads(config.read_text()) == {'install_args': ['--no-llm']}
 
 
 def test_no_brew_and_no_services_flags(tmp_path):
@@ -1323,6 +1385,7 @@ def test_full_clone_fetches_unadvertised_pin_or_stops_before_venv(tmp_path, avai
     git("-C", str(remote), "config", "uploadpack.allowAnySHA1InWant", "true")
     pin = hidden if available else "2" * 40
     script = tmp_path / "install.sh"
+    (tmp_path / "mcs").symlink_to(ROOT / "mcs", target_is_directory=True)
     script.write_text(INSTALL.read_text().replace(
         'HERMES_REPO="https://github.com/yusuketakuma/hermes-agent.git"',
         f'HERMES_REPO="{remote.as_uri()}"').replace(_pin(), pin))
@@ -1873,3 +1936,44 @@ def test_missing_uv_stops_before_hermes_checkout_or_venv_changes(tmp_path, mode)
     assert "uv が必要" in result.stdout + result.stderr
     assert not (hermes_home / "hermes-agent").exists()
     assert not any(call.startswith("git clone") for call in _calls(stub))
+
+
+def test_new_install_updates_opt_outs_without_a_legacy_record(tmp_path):
+    home, hermes_home, _stub, env = _world(tmp_path)
+    first = _run(env, hermes_home, '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert first.returncode == 0, first.stderr
+    config = home / '.mcs' / 'config.json'
+    before = json.loads(config.read_text())
+    before['unknown_example'] = {'synthetic': 1}
+    config.write_text(json.dumps(before))
+    second = _run(env, hermes_home, '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert second.returncode == 0, second.stderr
+    after = json.loads(config.read_text())
+    assert after['install_args'] == ['--no-brew', '--no-llm', '--no-plugin', '--no-recovery']
+    assert after['unknown_example'] == {'synthetic': 1}
+    assert not (home / '.mcs' / 'data' / 'install_options.json').exists()
+
+
+def test_conflicting_legacy_record_stops_before_install_side_effects(tmp_path):
+    home, hermes_home, stub, env = _world(tmp_path)
+    data = home / '.mcs' / 'data'
+    data.mkdir(parents=True)
+    config = home / '.mcs' / 'config.json'
+    config.write_text('{}')
+    legacy = data / 'install_options.json'
+    legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
+    original = legacy.read_bytes()
+    result = _run(env, hermes_home, '--no-brew', '--no-llm')
+    assert result.returncode != 0
+    assert '旧記録' in result.stderr
+    assert config.read_text() == '{}'
+    assert legacy.read_bytes() == original
+    assert not any(c.startswith(('brew install', 'git clone', 'uv ', 'launchctl bootstrap')) for c in _calls(stub))
+
+
+def test_standalone_records_implicit_plugin_skip(tmp_path):
+    home, _, _stub, env = _world(tmp_path)
+    result = _run(env, None, '--mode', 'standalone', '--no-brew', '--no-llm', '--no-services', '--no-recovery')
+    assert result.returncode == 0, result.stderr
+    assert json.loads((home / '.mcs' / 'config.json').read_text())['install_args'] == [
+        '--no-brew', '--no-llm', '--no-plugin', '--no-recovery']

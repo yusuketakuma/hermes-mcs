@@ -324,6 +324,34 @@ def test_noop_nonterminal_never_offers_or_launches_setup(monkeypatch):
     assert len(calls) == 1
 
 
+def test_guided_apply_passes_approved_record_separately(monkeypatch):
+    launcher = _launcher()
+    _terminal(monkeypatch, ['2'])
+    calls = []
+    report = {'route': 'reinstall', 'install_args': ['--no-llm']}
+    def run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        value = {'route': 'noop', 'blockers': []} if len(calls) == 3 else report
+        return SimpleNamespace(returncode=0, stdout=json.dumps(value))
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    assert launcher.interactive_update(['python', 'updater', 'plan'], {}, '/synthetic') == 0
+    assert json.loads(calls[1][1]['env']['MCS_UPDATE_OPTIONS_EXPECTED']) == ['--no-llm']
+    assert calls[1][0][-2:] == ['--reinstall', '--install-arg=--no-llm']
+
+
+def test_guided_non_reinstall_does_not_require_an_install_record(monkeypatch):
+    launcher = _launcher()
+    _terminal(monkeypatch, ['2'])
+    calls = []
+    def run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        value = {'route': 'noop', 'blockers': []} if len(calls) == 3 else {'route': 'apply', 'install_args': None}
+        return SimpleNamespace(returncode=0, stdout=json.dumps(value))
+    monkeypatch.setattr(launcher.subprocess, 'run', run)
+    assert launcher.interactive_update(['python', 'updater', 'plan'], {}, '/synthetic') == 0
+    assert 'MCS_UPDATE_OPTIONS_EXPECTED' not in calls[1][1]['env']
+
+
 @pytest.mark.parametrize("error", [KeyboardInterrupt, OSError])
 def test_recovery_interruption_reports_incomplete_in_japanese(monkeypatch, tmp_path, capsys, error):
     mod = _recovery(monkeypatch, tmp_path, {"applying": {"tag": "v1.2.0"}})

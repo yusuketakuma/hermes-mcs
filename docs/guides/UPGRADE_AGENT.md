@@ -22,7 +22,7 @@ Hermes経由の導入・更新にはuvが必要です。Hermesのディレクト
 ### 1.0.29で追加された更新時の確認
 
 - 通常の更新ツールで、Hermes gateway、使用中の独立通知アダプター、抽出workerへ同じ候補を反映してください。接続世代・範囲の確認、収集、抽出の修正は再起動後または次の定期処理から有効になります。checkoutだけの変更では適用完了になりません。
-- `config.json`・`~/.mcs/.env`・`~/.hermes/.env` はシンボリックリンク・通常ファイル以外・上限超過（config 1 MiB、.env 64 KiB）を読まず、未設定と同じ扱いにします。リンクにしている場合は更新前に実ファイルへ置き換えてください。グループ/他者が書込みできるファイルは警告 `local_file_permissions_weak` を出して読み込みます。`runtime_mode=standalone` の `config.json` がグループ/他者書込み可なら `standalone_configuration_invalid` で起動を止めるので、`chmod 600`（または644）にしてください。
+- 共通の設定読取は、`config.json` がシンボリックリンク・通常ファイル以外・1 MiB超過なら読まず、未設定と同じ扱いにします。共通の認証情報読取は環境変数を優先し、`~/.mcs/.env`・`~/.hermes/.env` がシンボリックリンク・通常ファイル以外・64 KiB超過ならそのファイルを読み飛ばします。初期設定などには、読み取れない設定をそのまま保存せず停止する場合もあります。導入時の復旧設定確認・既存設定の明示保存とSDCの設定処理は、`config.json` の上限が64 KiBです。リンクにしている場合は更新前に実ファイルへ置き換えてください。共通読取ではグループ/他者が書込みできるファイルは警告 `local_file_permissions_weak` を出して読み込みます。`runtime_mode=standalone` の `config.json` がグループ/他者書込み可なら `standalone_configuration_invalid` で起動を止めるので、`chmod 600`（または644）にしてください。
 - MCSサーバーがHTTP 429を返した場合、Retry-After（最大60秒、その回の期限内）を守って再試行し、1回の定期実行で2回受けたら残りの取得を次回へ回します。取得範囲・既読化・人承認・no-redirect/no-proxyは変わりません。本文を取得できていない親投稿がある患者は既読にしません。
 - DB schema 9、ルール世代24、LLM抽出世代9、モデルは維持します。患者集約は版12（期間検査）で再構築されます。抽出・意味判定のコードの識別値が変わるため、旧候補に対する承認・保留receiptは新しい候補の承認になりません。保存済みの結果と人の承認は自動で置き換えません。
 - 次にDBを開いたとき返信用の索引を自動で作ります（schema versionは変えません）。返信の多いDBでは初回に時間がかかります。更新後の最初の処理で読取り用スナップショットを1回作り直します。複数の変更境界のバックアップを保持するため、空き容量を確認してください。
@@ -203,7 +203,7 @@ git -C "$REPO" show "${TAG}:scripts/mcs_upgrade.py" > "$WORK/mcs_upgrade.py"   #
 | `schema_bump` | DB の版変更。あれば事前バックアップからの復元が巻戻しに含まれる |
 | `restarts` | 更新後に必要な再起動（`gateway`・`lineworks_adapter`） |
 | `recovery_tool_changed` | 復旧 watchdog の変更。`reinstall` 経路なら自動で反映（`--no-recovery` を付けた場合を除く）。`apply` 経路では適用後に、承認を得て `./install.sh <opt-out> --no-services` を再実行する |
-| `install_args` | 前回成功した install.sh の opt-out（`~/.mcs/data/install_options.json`）。`null` は記録なし（1.0.21 以前の導入） |
+| `install_args` | 前回成功した install.sh の opt-out（`~/.mcs/config.json`。未記録時は旧 `data/install_options.json` を参照）。`null` は記録なし、読取不能、形式不正、または新旧の記録が不一致 |
 | `notes` | 現在版より新しく移行先までの各版の「更新時の注意」（CHANGELOG） |
 
 1.0.13以降、macOS 標準 `/usr/bin/python3` の SQLite は WAL-reset 影響版のため、
@@ -271,6 +271,7 @@ git -C "$REPO" show "${CANDIDATE_SHA}:scripts/mcs_upgrade.py" > "$WORK/mcs_upgra
 | `standalone_external_apply` | 独立モードは host 経由で更新する（[STANDALONE.md](STANDALONE.md#更新復旧)）。`reinstall` がある場合は同書の再導入手順 |
 | `legacy_source_manual` | v1.0.0〜1.0.2 からの更新。§8 の手動経路へ |
 | `reinstall_incomplete` | 前回の再導入が install.sh の途中で中断した。`status` を示し **【ユーザー確認】** の上で `cd "$REPO" && ./install.sh <前回と同じ opt-out（plan の install_args）> --no-services` → `"$PY" mcs/ops/mcs_setup.py services` → `"$PY" mcs/ops/mcs_update.py reinstall-done`（HEAD が再導入した版のときだけ完了を記録し、残りの後処理を復旧処理で完了）→ `check`。復旧処理は install.sh を無人で再実行しない |
+| `install_options_unverified` | 承認後の変更か、古い更新記録に照合の根拠がないため、再導入を開始していない。記録を削除せず、現在の状態と導入内容を担当者に確認してもらう |
 | `recovery_incomplete`（復旧レポート） | 抽出処理の起動確認が未完了。中断記録を保持するため、起動失敗の原因を修復して `recover` を再実行する。同じ復旧の再試行では起動済み処理を停止し直さない |
 | `update_state_corrupt` | `data/update_state.json` が読めない。内容を変えずに報告し、ユーザー判断を待つ |
 | `tag_not_fetched` | `git fetch --tags origin` が失敗している。ネットワーク・タグ名を確認 |
@@ -286,13 +287,34 @@ git -C "$REPO" show "${CANDIDATE_SHA}:scripts/mcs_upgrade.py" > "$WORK/mcs_upgra
 - 現在版→移行先、`route`、停止の見込み時間
 - `notes` の要約（版ごと。必要な追加操作を明示）
 - `reinstall` の場合: install.sh の再実行と、使う opt-out。`plan` の `install_args` が配列なら
-  その opt-out を使い、確認は不要（空配列は opt-out なし）。`null` のときだけ、ユーザーに
+  その opt-out を使い、確認は不要（空配列は opt-out なし）。`null` のときは記録の欠落・不正・
+  不一致を区別できないため、自動更新と再導入を停止し、担当者に確認を依頼する。
+  旧記録と中央設定の両方に省略項目がないと確認できた場合は、ユーザーに
   `--no-llm`（自前 LLM サーバ）・`--no-brew`・`--no-plugin`・`--no-recovery` のどれを使っていたか確認する
-  （`--mode` は不要。設定から自動判定）。どちらの場合も、`~/.mcs-recovery/` があるなら復旧機能は導入済みなので、
+  （`--mode` は不要。設定から自動判定）。`~/.mcs-recovery/` があるなら復旧機能は導入済みなので、
   `install_args` や回答に `--no-recovery` があっても除き、`notes` が求める場合だけ付ける
   （付けると復旧ツールが古いまま残る）。
-  記録は利用者が install.sh を直接実行して成功したときだけ更新される。更新ツールが行う再導入は、
-  Python 移行や修復のために足した opt-out を記録しない
+  新しい選択は利用者が install.sh を直接実行して成功したときに記録する。standalone では
+  明示指定の有無にかかわらず `--no-plugin` を記録する。通常の更新では、
+  検証済みの旧記録があり中央設定に記録がなければ、run.lock を取得後、mergeの前にその値を中央設定へ写す。
+  既存の更新条件を満たす場合、最新版であっても移行が必要なら `plan` は `settings_migration: required` と表示し、確認後の更新で写す。
+  認証情報と保存データは現在の保存先に保持し、DBの形式変更は既存のバックアップ・移行手順で扱う。
+  Python 移行や修復のために足した opt-out は記録しない。
+  旧記録はそのまま保持され、有効な旧記録と異なる opt-out を保存する直接導入は停止する。
+  更新が中断・失敗した場合も、同じ値を写した設定は残る場合がある。
+  旧watchdogが `interrupted_pre_merge` と報告しても、設定へのコピーが行われなかった証拠にはならない。
+  保存後の同期に失敗した場合は結果を確定できないため、旧記録と設定を保持して担当者に確認を依頼する。
+  release-owned 経路は承認時の設定を変えないため、この記録の移行が必要または確認不能な場合は停止する。
+  owner の計画時と適用開始前にも確認する。開始前に検出した場合は適用開始記録を作らない。
+  中央の grant が発行された後に検出した場合は、既存の承認・記録を保持して担当者に確認を依頼する。
+  開始後の保留は通常の更新・復旧で解除できない。状態ファイルを削除しない。
+  対話で確認した導入設定は適用前と再導入前に照合し、変更された場合は停止する。
+  手動で指定した再導入引数は記録値と別に扱う。古い更新記録に照合の根拠がない場合、
+  自動再導入を停止して中断した更新の復旧手順を案内する。
+  旧版は中央の記録を参照しないため、旧版へ戻すときは導入内容と旧記録を確認する。
+  旧記録がなく `null` の場合、対話式の自動更新は再導入を開始しない。
+  更新前から開いていた旧版の手動設定は共通ロックを使わないため、移行後に中央設定を上書きする場合がある。
+  旧記録は保持され、中央の項目が失われた場合は次の更新で照合して再度写す。
 - `schema_bump` の有無、`restarts`
 
 ## 5. 適用

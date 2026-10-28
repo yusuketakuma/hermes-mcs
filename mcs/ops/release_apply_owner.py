@@ -31,6 +31,22 @@ class _EffectCapability:
     __slots__ = ()
 
 
+def _require_settled_install_options(runtime_home, repository, deadline):
+    """Hold before owner approval can be spent when migration is pending or unknown."""
+    import mcs_update
+    expected = os.path.abspath(os.path.expanduser(str(runtime_home)))
+    if (os.path.abspath(mcs_update.HOME) != expected
+            or os.path.abspath(mcs_update.mcs_util.CONF_PATH) != os.path.join(expected, 'config.json')
+            or os.path.abspath(mcs_update.DATA) != os.path.join(expected, 'data')
+            or Path(mcs_update.__file__).resolve() != Path(repository).resolve() / 'mcs/ops/mcs_update.py'):
+        raise ReleaseApplyError('SETTINGS_MIGRATION_UNVERIFIED')
+    result = mcs_update._release_migration_probe(deadline)
+    if result == 'required':
+        raise ReleaseApplyError('SETTINGS_MIGRATION_REQUIRED')
+    if result != 'none':
+        raise ReleaseApplyError('SETTINGS_MIGRATION_UNVERIFIED')
+
+
 def _tty_planning_confirmation(installation, *, deadline):
     """Read the controlling terminal directly; stdin and caller booleans cannot approve."""
     from adapters.sdc import release_contract
@@ -529,6 +545,10 @@ def _prepare_native_plan(control, monitor, *, runtime_home, repository, case_id,
                     control._release_owner_uncertain = True
                     raise
             return record, prepared
+    except ReleaseApplyError as exc:
+        if exc.code in ('RELEASE_APPLY_SETTINGS_MIGRATION_REQUIRED', 'RELEASE_APPLY_SETTINGS_MIGRATION_UNVERIFIED'):
+            raise
+        raise ReleaseApplyError('PLAN_HOLD') from None
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, mcs_update.UpdateError):
         raise ReleaseApplyError('PLAN_HOLD') from None
 
@@ -835,6 +855,8 @@ def _run_native_release(control, monitor, *, runtime_home, repository, operation
             now = int(time.time() * 1000)
             poll_request = _prepare_apply_control(current, 'poll', dict(schema_version=apply.VERSIONS['control'],
                 poll_id=str(uuid.uuid4()), case_id=context['expected']['case_id']), now_ms=now, deadline=deadline)
+        _initial_provider_source(control, repository, deadline=deadline)
+        _require_settled_install_options(runtime_home, repository, deadline)
         # The carrier supplies untrusted bytes only; no callback supplies observations or authority.
         polled = _apply_response(carrier(poll_request), 'poll', ('context',))['context']
         release.fields(polled, ('intent', 'approval', 'acceptance', 'operation', 'admission'))
@@ -961,6 +983,16 @@ def _run_native_release(control, monitor, *, runtime_home, repository, operation
                         or not operation['window']['starts_at'] <= now < operation['window']['ends_at']
                         or not grant['not_before'] <= now < grant['expires_at'] or time.monotonic() >= bounded):
                     raise ValueError
+                _initial_provider_source(control, repository, deadline=bounded)
+                _require_settled_install_options(runtime_home, repository, bounded)
+                # The bounded source and settings probes can consume the
+                # remaining grant window. Never spend the earlier timestamp.
+                now = int(time.time() * 1000)
+                apply.validate_apply_authorization(**authorization, grant=grant, admission=admission, now_ms=now)
+                if (now >= registration['expires_at']
+                        or not operation['window']['starts_at'] <= now < operation['window']['ends_at']
+                        or not grant['not_before'] <= now < grant['expires_at'] or time.monotonic() >= bounded):
+                    raise ValueError
                 # Consume the same-process RAM continuation before the durable boundary.
                 with _EFFECT_MUTEX:
                     if os.getpid() != _EFFECT_PROCESS_ID or _LIVE_CONTINUATIONS.pop(owner, None) is not continuation:
@@ -1041,6 +1073,10 @@ def _run_native_release(control, monitor, *, runtime_home, repository, operation
                     spent=spent, installed=installed)
                 queued = True
             return dict(started=True, readiness='unknown', installed=installed, pipeline_returncode=result)
+    except ReleaseApplyError as exc:
+        if exc.code in ('RELEASE_APPLY_SETTINGS_MIGRATION_REQUIRED', 'RELEASE_APPLY_SETTINGS_MIGRATION_UNVERIFIED'):
+            raise
+        raise ReleaseApplyError('RUN_HOLD') from None
     except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError, mcs_update.UpdateError):
         raise ReleaseApplyError('RUN_HOLD') from None
     finally:
@@ -1685,6 +1721,7 @@ def _native_preflight(control, *, runtime_home, repository, deadline):
         raise ReleaseApplyError('PREFLIGHT_HOLD')
     observed_at = int(time.time() * 1000)
     provider = _initial_provider_source(control, repository, deadline=deadline)
+    _require_settled_install_options(runtime_home, repository, deadline)
     configuration = mcs_update.mcs_util.load_config()
     python = mcs_runtime.python_executable(configuration, root=runtime_home)
     facts = runtime_inspection.probe_python(python, deadline=deadline)

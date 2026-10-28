@@ -1159,6 +1159,14 @@ with owner._control_store(home) as control:
  assert result['source_sha256']==supplied['owner_evidence_sha256']
  assert control.read(release_state.NAME)['spent']==[]
  assert not (home/'data/update.lock').exists() and not (home/'data/run.lock').exists()
+ legacy=home/'data/install_options.json';before=(home/'config.json').read_bytes();state=control.read(release_state.NAME)
+ for raw,code in ((b'{"v":1,"install_args":[]}','RELEASE_APPLY_SETTINGS_MIGRATION_REQUIRED'),(b'{broken','RELEASE_APPLY_SETTINGS_MIGRATION_UNVERIFIED')):
+  legacy.write_bytes(raw)
+  try:owner._native_preflight(control,runtime_home=home,repository=repo,deadline=time.monotonic()+30)
+  except owner.ReleaseApplyError as error:assert error.code==code
+  else:raise AssertionError('unsettled settings accepted')
+  assert legacy.read_bytes()==raw and (home/'config.json').read_bytes()==before and control.read(release_state.NAME)==state
+ legacy.unlink()
  path=repo/'mcs/ops/release_apply_owner.py'
  path.write_bytes(path.read_bytes()+b'\n# synthetic changed source\n')
  try: owner._native_preflight(control,runtime_home=home,repository=repo,deadline=time.monotonic()+30)
@@ -1241,7 +1249,8 @@ def test_apply_control_signing_rejects_admin_registration_cross_kind_and_unknown
 
 
 @pytest.mark.parametrize('failure', [None, 'global-hook', 'signature', 'artifact', 'schema', 'disabled', 'uncertain_write',
-    'run-registration', 'run-operation', 'run-grant', 'run-cancel', 'run-epoch', 'run-fsync-expiry', 'run-fsync-rollback', 'run-start-uncertain', 'run-unfinished-journal', 'run-git-attributes', 'run-git-grafts'])
+    'run-registration', 'run-operation', 'run-grant', 'run-cancel', 'run-epoch', 'run-fsync-expiry', 'run-fsync-rollback', 'run-start-uncertain', 'run-unfinished-journal', 'run-git-attributes', 'run-git-grafts',
+    'run-settings-required', 'run-settings-unverified', 'run-settings-late', 'run-settings-expiry'])
 def test_native_plan_freezes_independent_report_after_real_tty_signature_and_artifact_checks(native_product, registered, tmp_path, failure):
     # Development-only accepted root and synthetic credentials; no authorization or crypto is mocked.
     import base64
@@ -1516,6 +1525,8 @@ if pid==0:
      if failure=='run-grant':value['grant']['signature']=value['grant']['signature'][::-1]
      elif failure=='run-cancel':owner._cancel_native_change(control,runtime_home=home,operation_id=operation_id)
      elif failure=='run-epoch':support_state.disable(monitor,now_ms=packet['now'])
+     elif failure=='run-settings-late':(home/'data/install_options.json').write_text('{"v":1,"install_args":[]}')
+     elif failure=='run-settings-expiry':admission_box['grant_returned']=True
     return json.dumps(value,ensure_ascii=True).encode('ascii')
    original_child=owner._run_effect_post_merge
    def observed_child(*args,**kwargs):
@@ -1542,6 +1553,17 @@ if pid==0:
    previous=dict(update_journal.default_state(),stages=[dict(stage='local_checks',at=packet['now']/1000),dict(stage='done',at=packet['now']/1000)],applied=[dict(sha=supplied['baseline']['commit'],tag='synthetic-previous')])
    if failure=='run-unfinished-journal':previous['stages'].pop()
    update_journal.save_state(home/'data/update_state.json',previous)
+   if failure=='run-settings-required':(home/'data/install_options.json').write_text('{"v":1,"install_args":[]}')
+   if failure=='run-settings-unverified':(home/'data/install_options.json').write_text('{broken')
+   if failure=='run-settings-expiry':
+    check_settings=owner._require_settled_install_options;checks_after_grant=[]
+    def expire_after_last_probe(*args,**kwargs):
+     result=check_settings(*args,**kwargs)
+     if admission_box.get('grant_returned'):
+      checks_after_grant.append(True)
+      if len(checks_after_grant)==2:time.time=lambda:(packet['now']+31000)/1000
+     return result
+    owner._require_settled_install_options=expire_after_last_probe
    assert not (local_problems:=mcs_update.precheck_local(mcs_update.mcs_util.load_config(),deadline=time.monotonic()+30)),local_problems
    if failure in ('run-fsync-expiry','run-fsync-rollback','run-start-uncertain'):
     write=control.write
@@ -1567,6 +1589,14 @@ if pid==0:
      assert subprocess.check_output(['/usr/bin/git','-C',str(repo),'rev-parse','HEAD'],text=True).strip()==supplied['baseline']['commit']
      assert subprocess.run(['/usr/bin/git','-C',str(repo),'cat-file','-e',packet['target_commit']],capture_output=True).returncode!=0
      assert update_journal.load_state(home/'data/update_state.json').get('applying') is None
+     if failure.startswith('run-settings-'):
+      assert 'release_ref' not in update_journal.load_state(home/'data/update_state.json')
+      if failure=='run-settings-expiry':
+       assert error.code=='RELEASE_APPLY_RUN_HOLD' and len(checks_after_grant)==2
+      else:
+       assert (home/'data/install_options.json').exists()
+       assert error.code==('RELEASE_APPLY_SETTINGS_MIGRATION_UNVERIFIED' if failure=='run-settings-unverified' else 'RELEASE_APPLY_SETTINGS_MIGRATION_REQUIRED')
+       if failure!='run-settings-late':assert calls==[]
      assert not owner._EFFECT_CAPS and not owner._EFFECT_PARENTS and not owner._LIVE_CONTINUATIONS
      assert control.read('release-successor.json') is None
      assert not hook_marker.exists()
@@ -1650,3 +1680,37 @@ print('synthetic native plan checked')
         input=json.dumps(packet), capture_output=True, text=True, env=environment, timeout=190)
     assert result.returncode == 0, result.stderr
     assert result.stdout.endswith('synthetic native plan checked\n')
+
+
+def test_release_owned_migration_needed_holds_before_merge(registered_effect, monkeypatch):
+    """A spent, bound release capability cannot silently migrate personal settings."""
+    import json
+    import mcs_update
+    import mcs_util
+    cap, entry, parameters = registered_effect
+    config = Path(entry.runtime_home) / 'config.json'
+    legacy = Path(entry.runtime_home) / 'data' / 'install_options.json'
+    config.write_text('{}')
+    legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
+    original = config.read_bytes(), legacy.read_bytes()
+    monkeypatch.setattr(mcs_util, 'CONF_PATH', str(config))
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
+    monkeypatch.setattr(mcs_update, 'HOME', entry.runtime_home)
+    monkeypatch.setattr(mcs_update, 'REPO', entry.repository)
+    monkeypatch.setattr(mcs_update, 'DATA', str(legacy.parent))
+    monkeypatch.setattr(mcs_update, 'STATE_PATH', str(parameters['journal_path']))
+    monkeypatch.setattr(release_apply_owner, '_effect_artifact', lambda *_a: None)
+    monkeypatch.setattr(release_apply_owner, '_import_started_artifact', lambda *_a: None)
+    monkeypatch.setattr(mcs_update, 'precheck_local', lambda *_a, **_k: [])
+    monkeypatch.setattr(mcs_update, '_precheck_target_tree', lambda *_a, **_k: ([], []))
+    monkeypatch.setattr(mcs_update, '_precheck_target_runtime_files', lambda *_a, **_k: [])
+    monkeypatch.setattr(mcs_update, '_enqueue_notice', lambda *_a, **_k: True)
+    monkeypatch.setattr(mcs_update, 'quiesce', lambda: pytest.fail('quiesce before migration hold'))
+    monkeypatch.setattr(mcs_update, '_git', lambda *_a, **_k: pytest.fail('merge before migration hold'))
+    arguments = parameters['arguments']
+    assert mcs_update._apply_pipeline(*arguments[:6], candidate_sha=arguments[6],
+                                      confirm_human=arguments[7], reason=arguments[8], _release_cap=cap) == 1
+    state = update_journal.load_state(parameters['journal_path'])
+    assert state.get('release_ref') == entry.reference and not state.get('applied')
+    assert 'settings_migration_requires_manual_update' in json.dumps(state)
+    assert (config.read_bytes(), legacy.read_bytes()) == original

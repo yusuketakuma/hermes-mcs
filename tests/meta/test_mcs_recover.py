@@ -149,6 +149,23 @@ def test_pre_merge_interrupt_restores(rec, tmp_path):
     assert report["result"] == "interrupted_pre_merge"
 
 
+@pytest.mark.parametrize('published', [False, True])
+def test_old_watchdog_premerge_settings_stage_never_claims_update(rec, tmp_path, published):
+    _make_repo(tmp_path)
+    config, legacy = tmp_path / 'config.json', Path(rec.DATA) / 'install_options.json'
+    config.write_text(json.dumps({'other': {'keep': True}, **({'install_args': []} if published else {})}))
+    legacy.write_text('{"v": 1, "install_args": []}')
+    original = (config.read_bytes(), legacy.read_bytes())
+    state = {'v': 1, 'applying': None, 'stages': [{'stage': 'settings_migration', 'at': time.time() - 4000}],
+             'applied': [], 'attempts': {}, 'executed': {}}
+    Path(rec.STATE_PATH).write_text(json.dumps(state))
+    assert rec.recover() == 0
+    after = json.loads(Path(rec.STATE_PATH).read_text())
+    assert after['applied'] == [] and after['applying'] is None and after['stages'] == []
+    assert json.loads(Path(rec.REPORT_PATH).read_text())['result'] == 'interrupted_pre_merge'
+    assert (config.read_bytes(), legacy.read_bytes()) == original
+
+
 @pytest.mark.parametrize("dirty", ["update_path", "update_third",
                                     "unrelated_path", "index_only",
                                     "index_update_third"])

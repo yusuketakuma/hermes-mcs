@@ -77,9 +77,10 @@ def test_interrupted_update_reaps_before_propagating_original_failure(
             raise ProcessLookupError("synthetic child already gone")
 
     monkeypatch.setattr(mcs_update.subprocess, "Popen", start)
+    monkeypatch.setattr(mcs_update, "_install_options_snapshot", lambda: ("empty", None))
     monkeypatch.setattr(mcs_update.os, "killpg", stop)
     monkeypatch.setattr(mcs_update.journal_store, "load_state", lambda path: {"applying": {}})
-    applying = {"reinstall": True}
+    applying = {"reinstall": True, "install_options_base": "empty"}
     with pytest.raises(failure_type) as caught:
         if operation == "post_merge":
             mcs_update._run_post_merge("a" * 40, run_lock_fd=None)
@@ -107,6 +108,7 @@ def test_reinstall_timeout_cleanup_errors_do_not_replace_timeout(monkeypatch):
             raise KeyboardInterrupt("synthetic second interruption")
 
     monkeypatch.setattr(mcs_update.subprocess, "Popen", lambda *a, **kw: Child())
+    monkeypatch.setattr(mcs_update, "_install_options_snapshot", lambda: ("empty", None))
     monkeypatch.setattr(mcs_update.os, "killpg", lambda *a: (_ for _ in ()).throw(OSError("synthetic failure")))
     with pytest.raises(mcs_update.UpdateError, match="install_failed: timeout"):
-        mcs_update._reinstall({"reinstall": True})
+        mcs_update._reinstall({"reinstall": True, "install_options_base": "empty"})

@@ -7,6 +7,7 @@ import re
 
 from backup_config import validate_backup_config as _backup_config
 import bounded_http
+import install_options_contract
 from mcs_util import REPO
 from stats_math import finite_number
 
@@ -49,6 +50,10 @@ def _bot_profile(v):
 
 def _dict(v):
     return None if isinstance(v, dict) else "JSONオブジェクト（キーと値の組）を指定してください"
+
+
+def _install_args(value):
+    return None if install_options_contract.valid(value) else "導入時の省略項目を確認してください"
 
 
 def _drug_map_config(value):
@@ -118,6 +123,7 @@ def _urgency_escalation(v):
 
 
 CONFIG_RULES = {
+    "install_args":          (False, _install_args),
     "runtime_mode":          (False, lambda v: None if v in ("hermes", "standalone")
                              else '"hermes"（Hermes経由）か"standalone"（独立動作）を選んでください'),
     "recovery_python":       (False, recovery_python_problem),
