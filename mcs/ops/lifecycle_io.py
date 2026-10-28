@@ -9,6 +9,7 @@ import os
 import stat
 import re
 import subprocess
+from pathlib import Path
 
 from safe_io import atomic_write, fdopen_owned
 
@@ -51,8 +52,7 @@ def run_bounded(argv: list, *, timeout: int = 60, input_text: str | None = None,
 # ---- .env merge ------------------------------------------------------
 
 def write_env(path: str, updates: dict[str, str]):
-    """Merge KEY=value lines — existing keys preserved unless updated; a
-    repeated key collapses to one line (last value wins, first position)."""
+    """Merge updates while preserving unrelated lines and their order."""
     encoded = {}
     for key, value in updates.items():
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) \
@@ -62,17 +62,35 @@ def write_env(path: str, updates: dict[str, str]):
                         if value != value.strip() or any(c in value for c in "\"'\\")
                         else value)
     updates = encoded
-    lines = []
-    with suppress(FileNotFoundError), open(path, encoding="utf-8") as stream:
-        lines = stream.read().splitlines()
-    # KEY=value lines keyed by KEY (private_env_value rejects a repeated key), others by index
-    kept: dict = {}
-    for i, line in enumerate(lines):
-        kept[line.split("=", 1)[0] if "=" in line else i] = line
-    for key, val in updates.items():
-        kept[key] = f"{key}={val}"
-    atomic_write(path, lambda stream: stream.write("\n".join(kept.values()) + "\n"),
-                 0o600, tmp_prefix=".svc.")
+    # Share the short publication lock with interactive API-key edits.  Do not
+    # acquire it during input or Keychain access.
+    from api_key_setup import EnvLockError, _env_edit_lock
+    env_path = Path(path)
+    os.makedirs(env_path.parent, exist_ok=True)
+    try:
+        with _env_edit_lock(env_path):
+            lines = []
+            with suppress(FileNotFoundError), open(path, encoding="utf-8", newline="") as stream:
+                lines = stream.read().splitlines(keepends=True)
+            kept = []
+            replaced = set()
+            for line in lines:
+                key = line.split("=", 1)[0] if "=" in line else None
+                if key not in updates:
+                    kept.append(line)
+                elif key not in replaced:
+                    suffix = '\r\n' if line.endswith('\r\n') else '\n' if line.endswith('\n') else '\r' if line.endswith('\r') else ''
+                    kept.append(f"{key}={updates[key]}{suffix}")
+                    replaced.add(key)
+            for key, val in updates.items():
+                if key not in replaced:
+                    if kept and not kept[-1].endswith(('\n', '\r')):
+                        kept[-1] += '\n'
+                    kept.append(f"{key}={val}\n")
+            atomic_write(path, lambda stream: stream.write("".join(kept)),
+                         0o600, tmp_prefix=".svc.")
+    except EnvLockError as exc:
+        raise OSError("env_edit_lock_unavailable") from exc
 
 
 def store_keychain(account: str, pw: str, *, service: str = KEYCHAIN_SERVICE) -> bool:

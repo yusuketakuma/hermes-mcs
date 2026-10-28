@@ -206,14 +206,14 @@ def test_env_write_merges_and_preserves(tmp_path):
     assert oct(p.stat().st_mode & 0o777) == "0o600"
 
 
-def test_env_write_collapses_repeated_keys_to_the_last_value(tmp_path):
-    """private_env_value rejects a repeated key, so init must repair, not preserve, duplicates."""
+def test_env_write_repairs_only_the_explicitly_updated_key(tmp_path):
+    """An unrelated duplicate remains rejected until explicitly changed."""
     p = tmp_path / ".env"
     p.write_text("# synthetic\nTYPESAFE_API_KEY=\nDUP=first\nKEEP=1\nTYPESAFE_API_KEY=k1\nDUP=last\n",
                  encoding="utf-8")
     lifecycle_io.write_env(str(p), {"TYPESAFE_API_KEY": "k2"})
     assert p.read_text(encoding="utf-8").splitlines() == [
-        "# synthetic", "TYPESAFE_API_KEY=k2", "DUP=last", "KEEP=1"]
+        "# synthetic", "TYPESAFE_API_KEY=k2", "DUP=first", "KEEP=1", "DUP=last"]
     assert mcs_util.private_env_value("TYPESAFE_API_KEY", str(tmp_path)) == "k2"
 
 
@@ -1919,7 +1919,7 @@ def test_env_merge_failure_preserves_existing_credentials(tmp_path, monkeypatch)
     with pytest.raises(OSError, match="synthetic publication failure"):
         lifecycle_io.write_env(str(path), {"SAMPLE_TOKEN": "synthetic-new"})
     assert path.read_bytes() == original
-    assert sorted(p.name for p in tmp_path.iterdir()) == [".env"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [".env", ".env.edit.lock"]
 
 
 def test_hermes_token_is_piped_without_argv_fallback(monkeypatch):

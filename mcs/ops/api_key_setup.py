@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fcntl
+from contextlib import contextmanager
 import getpass
 import hashlib
 import json
@@ -54,20 +55,32 @@ def _merge(raw, updates):
     return body
 
 
-def _save(path, updates, expected):
+class EnvLockError(ValueError):
+    pass
+
+
+@contextmanager
+def _env_edit_lock(path):
     parent = path.parent.stat()
     if parent.st_uid != os.getuid() or parent.st_mode & 0o022:
-        raise ValueError('env_parent_untrusted')
+        raise EnvLockError('env_parent_untrusted')
     fd = os.open(str(path) + '.edit.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:
         info = os.fstat(fd)
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
                 or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1 or info.st_size
                 or _identity(os.stat(str(path) + '.edit.lock', follow_symlinks=False)) != _identity(info)):
-            raise ValueError('env_lock_invalid')
+            raise EnvLockError('env_lock_invalid')
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         if _identity(os.stat(str(path) + '.edit.lock', follow_symlinks=False)) != _identity(info):
-            raise ValueError('env_lock_changed')
+            raise EnvLockError('env_lock_changed')
+        yield
+    finally:
+        os.close(fd)
+
+
+def _save(path, updates, expected):
+    with _env_edit_lock(path):
         raw, base = _snapshot(path)
         if base != expected:
             raise ValueError('env_changed')
@@ -78,8 +91,6 @@ def _save(path, updates, expected):
                 raise ValueError('env_changed')
         safe_io.atomic_write(str(path), write_checked, 0o600, binary=True,
                              tmp_prefix='.env.stage-', makedirs=False)
-    finally:
-        os.close(fd)
 
 
 def _choose(prompt):
