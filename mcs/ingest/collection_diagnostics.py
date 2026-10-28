@@ -15,6 +15,7 @@ ERROR_LABELS = {
 FETCH_LABELS = {
     "parent_body_incomplete": "親本文未取得", "thread_incomplete": "返信取得未完了",
     "replies_missing": "返信不足", "unread_capped": "未読取得の上限",
+    "semantic_intake_unstored": "保存できず再取得を確認できない投稿",
     "other": "その他・理由未分類",
 }
 # Producer prefixes (collection_stages, job_ops, init_data, run_check) ahead of the code.
@@ -102,7 +103,9 @@ _CODES = {
                     "schema"),
     **dict.fromkeys(("db_write_failed", "write_failed", "patient_write_failed", "disk_low",
                      "disk_full", "fs", "fs_OSError", "fs_PermissionError",
-                     "fs_FileNotFoundError", "OperationalError", "health_write_failed"),
+                     "fs_FileNotFoundError", "OperationalError", "health_write_failed",
+                     "semantic_intake_unstored", "semantic_intake_diagnostic_unpersisted",
+                     "semantic_intake_retry_unpersisted"),
                     "storage"),
     **dict.fromkeys(("parent_body_incomplete", "thread_incomplete", "replies_missing",
                      "unread_capped", "history_incomplete", "post_ack_gap", "window_stalled",

@@ -164,6 +164,13 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     unread_unknown = "unread_at" in h and not finite_number(unread_at)
     if report["status"] == "ok" and unread_unknown:
         report["status"] = "degraded"
+    unstored = h.get('semantic_intake_unstored')
+    if 'semantic_intake_unstored' in h:
+        if unstored not in ('present', 'none_observed', 'unverified'):
+            unstored = 'unverified'
+        report['semantic_intake_unstored'] = unstored
+        if report['status'] == 'ok' and unstored != 'none_observed':
+            report['status'] = 'degraded'
     run = h.get("run")
     if isinstance(run, dict):
         overshoot = run.get("overshoot_s")
@@ -177,6 +184,11 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     reasons = h.get("state_reasons")
     reasons = (reasons if isinstance(reasons, list)
                and all(_is_code(r) for r in reasons) else None)
+    if (report.get('semantic_intake_unstored') in ('present', 'unverified')
+            and report['status'] in ('degraded', 'failed')):
+        reasons = list(reasons or [])
+        if 'collection_incomplete' not in reasons:
+            reasons.append('collection_incomplete')
     if unread_unknown and report["status"] == "degraded":
         reasons = list(reasons or [])
         if "unread_collection_unknown" not in reasons:
@@ -851,6 +863,14 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             action = _STANDALONE_ACTION.get(base, action)
         elif report.get("notify_transport") == "lineworks":
             action = _LINEWORKS_ACTION.get(base, action)
+        if base == 'collection_incomplete' and report.get('semantic_intake_unstored') in ('present', 'unverified'):
+            meaning = ('保存できず、未取得の可能性が残る記録があります'
+                       if report['semantic_intake_unstored'] == 'present'
+                       else '保存できなかった記録の状態を確認できません')
+            action = ('保存先の空き容量と書込み権限を確認し、MCSの画面で内容を照合。'
+                      '外部で既読化された記録は再取得できない場合があります')
+            if report.get('observations_recorded'):
+                meaning = '記録時点: ' + meaning
         if isinstance(host.get(base), str) and host[base]:
             meaning += f"（{host[base]}）"
         if base == "backup_not_verified":
@@ -883,6 +903,8 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             extra = f"（最古 {_hours(oldest.get('semantic_jobs'))}）"
         guide = None
         if base in ("stage_errors", "collection_incomplete") and not report.get("observations_recorded") \
+                and not (base == 'collection_incomplete' and report.get('semantic_intake_unstored')
+                         in ('present', 'unverified')) \
                 and report.get("collection_diagnostics") is not None:
             from collection_diagnostics import detail_lines, guidance
             section = "errors" if base == "stage_errors" else "incomplete"

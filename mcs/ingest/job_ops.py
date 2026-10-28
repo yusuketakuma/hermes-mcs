@@ -445,7 +445,7 @@ def _job_retry(ledger, job_id: int, error: MCSError, retry_in: float = 300, **kw
 
 def run_reply_jobs(adapter, ledger, result, deadline,
                    semantic: bool = False,
-                   notify_max_age_s: float | None = None):
+                   notify_max_age_s: float | None = None, ack_exclusions=None):
     """Retry fetching full bodies for replies the thread API missed."""
     # self-heal: replies persisted outside a merge (unread path,
     # sibling saves) carry no retry reservation and would stay
@@ -493,11 +493,22 @@ def run_reply_jobs(adapter, ledger, result, deadline,
         replies = [m for m in full if m.message_id != job["parent_id"]]
         for m in replies:
             m.parent_id = job["parent_id"]
-        if replies and ledger.save_thread_replies(
-                replies, job["project_id"],
-                notify={"source": "reply_job"}, semantic=semantic,
-                notify_max_age_s=notify_max_age_s):
-            ledger.karte_summary_mark_due(job["project_id"])
+        try:
+            if replies and ledger.save_thread_replies(
+                    replies, job["project_id"],
+                    notify={"source": "reply_job"}, semantic=semantic,
+                    notify_max_age_s=notify_max_age_s):
+                ledger.karte_summary_mark_due(job["project_id"])
+        except Exception as exc:
+            import semantic_intake_hold
+            if not semantic_intake_hold.report_write_failure(
+                    ledger, result, job['project_id'], exc, ack_exclusions, job['job_id'], replies):
+                raise
+            if window_error:
+                result['errors'].append(f"thread {job['parent_id']}: {window_error.kind}")
+                if isinstance(window_error, SessionExpired):
+                    raise window_error
+            continue
         if window_error:
             # Preserve the unwalked thread even if a target in an earlier
             # page already retired its individual reply job.
@@ -594,7 +605,7 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                      max_jobs: int | None = None,
                      min_margin: float | None = None,
                      semantic: bool = False,
-                     notify_max_age_s: float | None = None):
+                     notify_max_age_s: float | None = None, ack_exclusions=None):
     """Work the durable history-import queue.
 
     trickle=False drains user-requested/cmd jobs (payload pages cap).
@@ -606,6 +617,7 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
     """
     limit = max_jobs or (TRICKLE_PATIENTS if trickle else HISTORY_JOB_LIMIT)
     done_n = 0
+    failed_saves = 0
     # one fair (least-recently-touched) snapshot list; processing bumps
     # updated_at, rotating the job back for the NEXT drain (Oracle F8)
     for job in ledger.history_jobs_due():
@@ -646,7 +658,7 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                 ledger.job_fail(job["job_id"], reason_code="invalid_payload")
                 result["errors"].append(f"import {pid}: initial_history_walk_invalid")
                 done_n += 1
-                if done_n >= limit:
+                if done_n + failed_saves >= limit:
                     break
                 continue
             if walk["phase"] == "accepted":
@@ -654,7 +666,7 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
                 result.setdefault("trickle_imports" if trickle else "cmd_imports", []).append(
                     {"pid": pid, "new": 0, "floored": floored})
                 done_n += 1
-                if done_n >= limit:
+                if done_n + failed_saves >= limit:
                     break
                 continue
         cursor = pl.get("page", 1)
@@ -678,17 +690,33 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
             result["errors"].append(
                 f"import {pid} replies: {type(e).__name__}")
             merged = MergeResult(checkpoint_safe=False)
-        if pl.get("notify"):
-            max_age_s = notify_max_age_s
-            if pl.get("notify_source") == "discovery" and max_age_s is None:
-                max_age_s = DISCOVERY_NOTIFY_MAX_AGE_S
-            new_ids = ledger.save_messages(
-                hist, project_id=pid, semantic=semantic,
-                notify={"source": pl.get("notify_source", "history")},
-                notify_max_age_s=max_age_s, notify_all_new=True)
-        else:
-            new_ids = ledger.save_messages(hist, project_id=pid,
-                                           semantic=semantic)
+        try:
+            if pl.get("notify"):
+                max_age_s = notify_max_age_s
+                if pl.get("notify_source") == "discovery" and max_age_s is None:
+                    max_age_s = DISCOVERY_NOTIFY_MAX_AGE_S
+                new_ids = ledger.save_messages(
+                    hist, project_id=pid, semantic=semantic,
+                    notify={"source": pl.get("notify_source", "history")},
+                    notify_max_age_s=max_age_s, notify_all_new=True)
+            else:
+                new_ids = ledger.save_messages(hist, project_id=pid,
+                                               semantic=semantic)
+        except Exception as exc:
+            import semantic_intake_hold
+            if not semantic_intake_hold.report_write_failure(
+                    ledger, result, pid, exc, ack_exclusions, job['job_id'], hist):
+                raise
+            if merged.error:
+                raise merged.error
+            if batch.error:
+                result['errors'].append(f'import {pid}: {batch.error.kind}')
+                if isinstance(batch.error, SessionExpired):
+                    raise batch.error
+            failed_saves += 1
+            if done_n + failed_saves >= limit:
+                break
+            continue
         action = None
         invalid_observations = False
         if initial:
@@ -797,7 +825,7 @@ def run_history_jobs(adapter, ledger, result, deadline, trickle: bool = False,
             {"pid": pid, "new": len(new_ids),
              "floored": floored})
         done_n += 1
-        if done_n >= limit:
+        if done_n + failed_saves >= limit:
             break
     return done_n
 
@@ -821,7 +849,7 @@ def seed_reconcile(ledger):
 
 
 def run_reconcile_jobs(adapter, ledger, result, deadline,
-                       semantic: bool = False):
+                       semantic: bool = False, ack_exclusions=None):
     """Re-walk floored patients' history in small page windows, with NO
     since cutoff — the only path where an edit/deletion/tombstone on an
     old post is observed (F04). Re-saving lets the upsert detect the
@@ -868,8 +896,21 @@ def run_reconcile_jobs(adapter, ledger, result, deadline,
             continue
         merged = merge_full_replies(adapter, batch.messages, 0, deadline,
                                     result, ledger=ledger)
-        new_ids = ledger.save_messages(batch.messages, project_id=pid,
-                                       semantic=semantic)
+        try:
+            new_ids = ledger.save_messages(batch.messages, project_id=pid,
+                                           semantic=semantic)
+        except Exception as exc:
+            import semantic_intake_hold
+            if not semantic_intake_hold.report_write_failure(
+                    ledger, result, pid, exc, ack_exclusions, job['job_id'], batch.messages):
+                raise
+            if merged.error:
+                raise merged.error
+            if batch.error:
+                result['errors'].append(f'reconcile {pid}: {batch.error.kind}')
+                if isinstance(batch.error, SessionExpired):
+                    raise batch.error
+            continue
         if merged.error:
             raise merged.error
         stalled = False
