@@ -12,9 +12,10 @@ import semantic_drain as drain
 import semantic_v4 as v4
 import structured_view
 import semantic_projection as projection
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from mcs_queries import FACT_KINDS_SQL, current_fact_pred
-from semantic_testkit import (_PassJev, _canonical_cfg, _llm_v2,
-                              _seeded_two, v2_doc, v2_fact)
+from semantic_testkit import (_PassJev, _canonical_cfg, _ledger, _llm_v2, _message,
+                              _patient, _seeded_two, v2_doc, v2_fact)
 
 
 def _doc(quote, quantity, *, statement=None, kind="medication_event"):
@@ -85,7 +86,19 @@ def test_multiple_own_quotes_with_the_same_amount_stay_unverified():
         {"code": "fact_quantity_relation_unverified", "fact": "fact_a"}]
 
 
-def _stage(db, quantity):
+_CURRENT_SOURCE = "本人は現在アムロジピン5mgを継続しています。"
+
+
+def _seeded_current(tmp_path):
+    db = _ledger(tmp_path)
+    patient = _patient(db)
+    patient.messages = [_message(1, body=_CURRENT_SOURCE)]
+    patient.messages[0].replies = [_message(2, parent=1, body="メトホルミン500mgが出ています。")]
+    db.save_patient(patient, notify={"source": "unread"}, semantic=True)
+    return db
+
+
+def _stage(db, quantity, *, evidence_quote=None):
     bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
     member = bundle["members"][0]
     scfg = semantic_policy.semantic_config(_canonical_cfg())[0]
@@ -95,6 +108,8 @@ def _stage(db, quantity):
         response = json.loads(_llm_v2(prompt))
         for fact in response.get("facts", []):
             fact.update(epistemic="reported", quantity=quantity)
+            if evidence_quote is not None:
+                fact["evidence_quote"] = evidence_quote
         return json.dumps(response, ensure_ascii=False)
 
     stage = drain._fact_stage(db, scfg, member, 1, 1, bundle["source_fingerprint"], policy,
@@ -104,9 +119,9 @@ def _stage(db, quantity):
 
 @pytest.mark.parametrize("quantity,accepted", [("5mg", True), ("50mg", False)])
 def test_fact_stage_blocks_wrong_quantity_before_current_projection_and_view(tmp_path, quantity, accepted):
-    db = _seeded_two(tmp_path)
+    db = _seeded_current(tmp_path)
     try:
-        stage, *_ = _stage(db, quantity)
+        stage, *_ = _stage(db, quantity, evidence_quote=_CURRENT_SOURCE)
         assert (stage["outcome"] is None) is accepted
         current = db.db.execute(
             "SELECT a.content FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
@@ -123,6 +138,21 @@ def test_fact_stage_blocks_wrong_quantity_before_current_projection_and_view(tmp
         db.close()
 
 
+def test_ambiguous_quantity_evidence_does_not_claim_current_medication(tmp_path):
+    db = _seeded_two(tmp_path)
+    try:
+        stage, *_ = _stage(db, "5mg")
+        assert stage["outcome"] is None
+        current = db.db.execute(
+            "SELECT a.content FROM artifacts a JOIN messages m ON m.message_id=a.message_id "
+            f"WHERE a.kind IN ({FACT_KINDS_SQL}) AND m.message_id=1 {current_fact_pred()}").fetchone()
+        meds = [med for med in json.loads(current["content"])["meds"] if med.get("dose") == "5mg"]
+        assert meds and all(med["status"] is None and med["unverified"] is True for med in meds)
+        assert not any("5mg" in line for line in structured_view.structured_lines(db.db, 1, drug_candidates=False))
+    finally:
+        db.close()
+
+
 def test_cached_pass_cannot_authorize_wrong_quantity_or_reprojection(tmp_path):
     db = _seeded_two(tmp_path)
     try:
@@ -135,13 +165,13 @@ def test_cached_pass_cannot_authorize_wrong_quantity_or_reprojection(tmp_path):
         fingerprint = bundle["source_fingerprint"]
         doc_hash = semantic_facts.doc_hash(doc)
         db.artifact_add("semantic_facts_v2", json.dumps(doc), project_id=1, message_id=1,
-                        meta={"fingerprint": fingerprint, "policy_fingerprint": policy,
+                        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fingerprint, "policy_fingerprint": policy,
                               "coverage_status": "complete"})
         db.artifact_add("semantic_facts_audit", json.dumps({"status": "PASS", "evaluated": True,
                         "findings": [], "fact_verdicts": {}}), project_id=1, message_id=1,
-                        meta={"fingerprint": fingerprint, "policy_fingerprint": policy,
+                        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fingerprint, "policy_fingerprint": policy,
                               "doc_hash": doc_hash})
-        assert v4.reproject_doc(db.db, 1, {"fingerprint": fingerprint, "policy_fingerprint": policy,
+        assert v4.reproject_doc(db.db, 1, {VERSION_KEY: CURRENT_VERSION, "fingerprint": fingerprint, "policy_fingerprint": policy,
                                        "doc_hash": doc_hash}) == (None, "quantity_unverified")
         # The synthetic old PASS is present, but cannot mint another projection.
         count = len(db.artifacts("canonical_projection", message_id=1))
@@ -172,15 +202,15 @@ def test_existing_wrong_publication_is_held_before_and_after_reprojection(tmp_pa
             if fact["provenance"] == "local_llm":
                 fact["quantity"] = "50mg"
         fingerprint, doc_hash = bundle["source_fingerprint"], semantic_facts.doc_hash(doc)
-        meta = {"fingerprint": fingerprint, "policy_fingerprint": policy,
+        meta = {VERSION_KEY: CURRENT_VERSION, "fingerprint": fingerprint, "policy_fingerprint": policy,
                 "doc_hash": doc_hash, "hash": member["revision"], "projection_version": 3}
         payload = json.dumps(projection.project_v2_doc_legacy(doc))
         db.artifact_add("semantic_facts_v2", json.dumps(doc), project_id=1, message_id=1,
-                        meta={"fingerprint": fingerprint, "policy_fingerprint": policy,
+                        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fingerprint, "policy_fingerprint": policy,
                               "coverage_status": "complete"})
         db.artifact_add("semantic_facts_audit", json.dumps({"status": "PASS", "evaluated": True,
                         "findings": [], "fact_verdicts": {}}), project_id=1, message_id=1,
-                        meta={"fingerprint": fingerprint, "policy_fingerprint": policy, "doc_hash": doc_hash})
+                        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fingerprint, "policy_fingerprint": policy, "doc_hash": doc_hash})
         # Represent the proven old producer's persisted row. No history is deleted.
         with db.db:
             db.db.execute("UPDATE artifacts SET content=?,meta=? WHERE kind='canonical_projection' "
@@ -206,9 +236,9 @@ def test_existing_wrong_publication_is_held_before_and_after_reprojection(tmp_pa
 
 @pytest.mark.parametrize("quantity", ["5mg", "unknown"])
 def test_valid_old_publication_regenerates_once_with_the_current_version(tmp_path, quantity):
-    db = _seeded_two(tmp_path)
+    db = _seeded_current(tmp_path)
     try:
-        stage, bundle, member, scfg, policy, _model = _stage(db, quantity)
+        stage, bundle, member, scfg, policy, _model = _stage(db, quantity, evidence_quote=_CURRENT_SOURCE)
         assert stage["outcome"] is None
         with db.db:
             v4.publish(db, 1, 1, bundle["source_fingerprint"], policy, member, stage["v2_doc"])

@@ -5,6 +5,7 @@ import extraction_progress
 import extract_llm
 import notify_views
 import semantic_extraction
+from inference_dependency_loss import source_binding
 from notify_testkit import led, _msg, _patient
 
 __all__ = ["led"]
@@ -132,12 +133,13 @@ def test_real_legacy_checkpoint_reaches_private_summary_read_only(led, change):
     body = "SOURCE_CANARY 完全合成の自由文。\n" * 300
     _msg(led, 1, body=body)
     row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row["_source_binding"] = source_binding(led.db, row["project_id"], row["message_id"])
     model = "synthetic-progress-model"
     row["_target"] = ("", model)
     context = extract_llm._thread_context(led.db, row)
     pieces = extract_llm.plan_chunks(body, extract_llm._CHUNK_SIZE)
     assert len(pieces) > 1
-    extract_llm._persist_chunks(led, row, {0: {}}, context)
+    assert extract_llm._persist_chunks(led, row, {0: {}}, context)
     cfg = {"local_llm": {"model": model}}
     if change == "source_edit":
         with led.db:

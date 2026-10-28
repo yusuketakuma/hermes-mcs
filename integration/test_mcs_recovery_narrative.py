@@ -71,6 +71,7 @@ import notify_cmds  # noqa: E402
 import notify_reconcile  # noqa: E402
 import notify_transport  # noqa: E402
 import read_model  # noqa: E402
+import rollup  # noqa: E402
 import semantic_facts as sf  # noqa: E402
 import semantic_v4 as v4  # noqa: E402
 
@@ -542,7 +543,8 @@ def _run_narrative(tmp_path, *, reply_cards=True):
         slack_ok = (
             render["parts_state"] == "complete"
             and len(slack_cards) == (2 if reply_cards else 1)
-            and all(card["delivery_state"] == "delivered" and card["layout"] == (4 if reply_cards else 3)
+            and all(card["delivery_state"] == "delivered" and card["layout"] == (
+                    notify_cards.CARD_LAYOUT if reply_cards else notify_cards.FACE_LAYOUT)
                     for card in slack_cards)
             and kinds == {"card", "thread", "body_part",
                           "attachment_part"}
@@ -590,20 +592,21 @@ def _run_narrative(tmp_path, *, reply_cards=True):
                 notify_cards.dispatch_intent(led, ev2, discord_cfg, now=TD.NOW)
 
         asyncio.run(_ddeliver(worker))
+        dcard = dict(led.db.execute(
+            "SELECT * FROM notification_cards WHERE transport='discord' AND root_message_id=1 "
+            "AND card_key NOT LIKE '%|reply:%'").fetchone())
         drender = dict(led.db.execute(
-            "SELECT * FROM notification_renders ORDER BY render_rev "
-            "DESC LIMIT 1").fetchone())
+            "SELECT * FROM notification_renders WHERE card_id=? ORDER BY render_rev "
+            "DESC LIMIT 1", (dcard["card_id"],)).fetchone())
         dparts = _parts(led, drender["delivery_id"])
         thread_posts = [s for t in _threads(bot) for s in t.sent]
         thread_files = [f for t in _threads(bot) for f in t.files]
-        dcard = dict(led.db.execute(
-            "SELECT * FROM notification_cards WHERE transport='discord'"
-        ).fetchone())
         discord_cards = led.db.execute(
             "SELECT delivery_state,layout FROM notification_cards WHERE transport='discord'").fetchall()
         N.check("discord_card_full_thread_file_parts",
                 len(discord_cards) == (2 if reply_cards else 1)
-                and all(card["delivery_state"] == "delivered" and card["layout"] == (4 if reply_cards else 3)
+                and all(card["delivery_state"] == "delivered" and card["layout"] == (
+                        notify_cards.CARD_LAYOUT if reply_cards else notify_cards.FACE_LAYOUT)
                         for card in discord_cards)
                 and dcard["delivery_state"] == "delivered"
                 and drender["parts_state"] == "complete"
@@ -616,6 +619,10 @@ def _run_narrative(tmp_path, *, reply_cards=True):
                  "states": {k: v["state"] for k, v in dparts.items()}})
 
         # ---- 7. read model + governed external export, same gen ----
+        rollup_id = rollup.rebuild(led, 1, cfg=_canonical_cfg())
+        assert led.db.execute(
+            "SELECT 1 FROM artifacts WHERE artifact_id=? AND kind='patient_rollup' AND project_id=1",
+            (rollup_id,)).fetchone()
         led.close()
         snap = _ledger.publish_snapshot(str(N.data / "ledger.db"),
                                         str(N.tmp / "snaps"))

@@ -7,6 +7,7 @@ import extraction_refresh
 import extract_llm
 import notify_cards
 import semantic_extraction
+from inference_dependency_loss import source_binding
 from ledger import Ledger
 
 
@@ -32,6 +33,7 @@ def test_legacy_checkpoint_is_committed_before_refresh(tmp_path, monkeypatch):
     try:
         db.save_messages([_message()])
         row = dict(db.db.execute("SELECT * FROM messages").fetchone())
+        row["_source_binding"] = source_binding(db.db, row["project_id"], row["message_id"])
         calls = []
 
         def queued(ledger, pid, mid):
@@ -40,7 +42,7 @@ def test_legacy_checkpoint_is_committed_before_refresh(tmp_path, monkeypatch):
             calls.append((pid, mid))
 
         monkeypatch.setattr(extract_llm, "_rerender_cards", queued)
-        extract_llm._persist_chunks(db, row, {0: {}})
+        assert extract_llm._persist_chunks(db, row, {0: {}})
         assert calls == [(row["project_id"], row["message_id"])]
     finally:
         db.close()

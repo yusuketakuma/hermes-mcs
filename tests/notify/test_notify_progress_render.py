@@ -6,6 +6,7 @@ import pytest
 import extraction_progress
 import notify_cards
 import notify_render
+from inference_dependency_loss import source_binding
 from notify_testkit import _card, _deliver, _dispatch, _intent, _seed_thread, led
 
 __all__ = ["led"]
@@ -81,12 +82,13 @@ def test_real_current_checkpoint_updates_shared_summary_without_partial_facts(le
     with led.db:
         led.db.execute("UPDATE messages SET body_text=? WHERE message_id=100", (body,))
     row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=100").fetchone())
+    row["_source_binding"] = source_binding(led.db, row["project_id"], row["message_id"])
     model = "synthetic-shared-progress"
     row["_target"] = ("", model)
     context = extract_llm._thread_context(led.db, row)
     roots = extract_llm.plan_chunks(body, extract_llm._CHUNK_SIZE)
     assert len(roots) > 1
-    extract_llm._persist_chunks(led, row, {0: {}}, context)
+    assert extract_llm._persist_chunks(led, row, {0: {}}, context)
     led.db.execute("PRAGMA query_only=ON")
     block = notify_render._summary_block(led.db, 100, cfg={"local_llm": {"model": model}})
     assert f"解析更新中（{len(roots)}区間中1区間完了）" in block["text"]

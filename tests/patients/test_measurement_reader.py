@@ -66,6 +66,11 @@ def test_single_source_preflight_counts_only_revisions_dependency_reader_materia
             ledger.db.execute("INSERT INTO message_revisions "
                               "(message_id,seq,content_hash,body_state,observed_at) VALUES (?,?,?,?,?)",
                               (2, seq, "a" * 64, "full", 1.0))
+        boundary = measurement_reader.read_measurements(ledger.db, 1, cfg={}, message_id=1)
+        assert boundary["coverage"]["reader_state"] == "bounded"
+        ledger.db.execute("INSERT INTO message_revisions "
+                          "(message_id,seq,content_hash,body_state,observed_at) VALUES (?,?,?,?,?)",
+                          (2, 7, "a" * 64, "full", 1.0))
         limited = measurement_reader.read_measurements(ledger.db, 1, cfg={}, message_id=1)
         assert limited["coverage"]["reader_state"] == "resource_limit"
         assert limited["records"] == []

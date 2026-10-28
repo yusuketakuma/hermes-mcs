@@ -71,7 +71,26 @@ def test_old_context_without_the_new_attributes_reads_unchanged():
 ])
 def test_prescription_inquiry_needs_a_prescription_inquiry_cue(body):
     out = extract_validation.validate({"events": ["prescription_inquiry"]}, body)
-    assert out["events"] == ["prescription_inquiry"]
+    assert out["events"] == []
+    record, = out["event_records"]
+    assert record["kind"] == "prescription_inquiry" and record["unverified"] is True
+    assert record["subject"] == "unknown"
+    assert body[record["span"]["start"]:record["span"]["end"]] == record["evidence"]
+
+
+@pytest.mark.parametrize("body,subject,status,negated,events", [
+    ("本人は現在、疑義照会しました。", "patient", "current", False, ["prescription_inquiry"]),
+    ("母は現在、疑義照会しました。", "family", "current", False, []),
+    ("本人は明日疑義照会予定です。", "patient", "planned", False, []),
+    ("本人は疑義照会はありません。", "patient", "current", True, []),
+])
+def test_prescription_inquiry_projection_preserves_source_axes(body, subject, status, negated, events):
+    out = extract_validation.validate({"events": ["prescription_inquiry"]}, body)
+    assert out["events"] == events
+    record, = out["event_records"]
+    assert (record["subject"], record["status"], record["negated"]) == (subject, status, negated)
+    assert not record.get("unverified")
+    assert body[record["span"]["start"]:record["span"]["end"]] == record["evidence"]
 
 
 @pytest.mark.parametrize("body", [
@@ -83,7 +102,10 @@ def test_prescription_inquiry_needs_a_prescription_inquiry_cue(body):
 ])
 def test_a_non_prescription_inquiry_is_no_event(body):
     out = extract_validation.validate({"summary": "合成の要約", "events": ["prescription_inquiry"]}, body)
-    assert out["events"] == [] and out["_items_dropped"] == 1
+    assert out["events"] == []
+    record, = out["event_records"]
+    assert record["kind"] == "prescription_inquiry" and record["unverified"] is True
+    assert record["subject"] == "unknown" and record["span"] is None and record["evidence"] == ""
 
 
 def test_prescription_inquiry_bodies_reach_the_model():

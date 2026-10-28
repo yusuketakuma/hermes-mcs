@@ -51,6 +51,11 @@ def world(tmp_path):
           ALTER TABLE messages ADD COLUMN updated_seen REAL;
           ALTER TABLE messages ADD COLUMN posted_at_ts REAL;
           ALTER TABLE messages ADD COLUMN body_text TEXT;
+          CREATE TABLE message_revisions(
+            message_id INTEGER NOT NULL, seq INTEGER NOT NULL,
+            content_hash TEXT NOT NULL, prev_content_hash TEXT,
+            body_state TEXT NOT NULL, observed_at REAL NOT NULL,
+            PRIMARY KEY(message_id,seq));
           ALTER TABLE fetch_jobs ADD COLUMN reason_code TEXT;
           ALTER TABLE attachments ADD COLUMN error TEXT;
           DELETE FROM fetch_jobs;

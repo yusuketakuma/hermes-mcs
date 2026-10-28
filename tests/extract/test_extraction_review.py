@@ -102,8 +102,7 @@ def test_explicit_unknown_request_metadata_does_not_invent_roles_or_kind():
             "kind": None, "action": "確認", "evidence": body}],
         "summary": body, "urgency": "routine"}, body)
     assert out["symptoms"] == []
-    assert out["requests"] == [{"to": None, "action": "確認", "evidence": body,
-                                "unverified": True}]
+    assert out["requests"] == [{"to": None, "action": "確認", "evidence": body}]
 
 
 def test_negative_symptom_and_legacy_sparse_output_remain_valid():

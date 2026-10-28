@@ -10,6 +10,7 @@ import pytest
 import extract_llm
 import notify_cards
 import notify_render
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from notify_testkit import (
     CFG, NOW, _add_request, _card, _deliver, _dispatch, _intent,
     _latest_render, _msg, _patient, _seed_thread, _signal_row, _spec,
@@ -67,7 +68,7 @@ def test_failed_extraction_is_named_on_the_post(led):
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
         "created_at) VALUES('extract_llm',1,100,'{}','m',?,?)",
-        (json.dumps({"error": 1, "attempts": 5, "hash": f"{100:064x}",
+        (json.dumps({VERSION_KEY: CURRENT_VERSION, "error": 1, "attempts": 5, "hash": f"{100:064x}",
                      "extract_version": extract_llm.EXTRACT_VERSION}), NOW))
     led.db.commit()
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))

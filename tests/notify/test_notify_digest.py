@@ -9,6 +9,7 @@ import pytest
 
 import notify_digest
 import notify_flush
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from notify_testkit import _at, _msg, _patient, _signal_row, led
 from semantic_send_gate import StaleSend
 import clinical_urgency
@@ -152,7 +153,7 @@ def test_counts_ids_and_no_patient_content(led):
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES('extract_v1',1,100,?,'rules',?,?)",
-        (json.dumps({"urgency": "high", "urgency_evidence": ["本人が急変"]}), json.dumps({"hash": f"{100:064x}"}),
+        (json.dumps({"urgency": "high", "urgency_evidence": ["本人が急変"]}), json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": f"{100:064x}"}),
          T))
     led.db.commit()
     cfg = {**ON, "notify_max_age_h": 48}
@@ -179,7 +180,7 @@ def test_patient_names_only_when_opted_in(led):
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,"
         "meta,created_at) VALUES('extract_v1',1,100,?,'rules',?,?)",
-        (json.dumps({"urgency": "high", "urgency_evidence": ["本人が急変"]}), json.dumps({"hash": f"{100:064x}"}),
+        (json.dumps({"urgency": "high", "urgency_evidence": ["本人が急変"]}), json.dumps({VERSION_KEY: CURRENT_VERSION, "hash": f"{100:064x}"}),
          T))
     led.db.commit()
     cfg = {**ON, "daily_digest": {**ON["daily_digest"], "include_names": True}}
