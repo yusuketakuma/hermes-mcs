@@ -107,9 +107,20 @@ def payload_generation(payload: dict) -> str:
     return payload_hash(payload)
 
 
+# Run-window and spending settings decide when new requests may start, not how a
+# job's answer is interpreted: editing them must not discard results already received.
+_GENERATION_EXEMPT = {"semantic": ("until",),
+                      "cloud_llm": ("until", "window_start", "window_budget_usd",
+                                    "daily_cost_limit_usd", "monthly_cost_limit_usd")}
+
+
 def config_generation(cfg: dict) -> str:
-    """Stable generation for the complete config snapshot."""
-    return payload_hash(cfg if isinstance(cfg, dict) else {})
+    """Stable generation for the config snapshot, apart from run-window and spending settings."""
+    cfg = dict(cfg) if isinstance(cfg, dict) else {}
+    for section, keys in _GENERATION_EXEMPT.items():
+        if isinstance(cfg.get(section), dict):
+            cfg[section] = {k: v for k, v in cfg[section].items() if k not in keys}
+    return payload_hash(cfg)
 
 
 def execution_generation(scfg: dict) -> str:
@@ -548,7 +559,7 @@ def reserve_artifact(ledger, check, write):
         return write()
 
 
-def _daily_cap_check(ledger, limit: int, retryable: bool = False):
+def _daily_cap_check(ledger, limit: int, retryable: bool = False, *, config_path=None):
     """Refuse a reservation once today's durable count reaches `limit`."""
     from semantic_jev import JevError
     from semantic_store import jev_usage_today
@@ -558,14 +569,17 @@ def _daily_cap_check(ledger, limit: int, retryable: bool = False):
         raise JevError("budget_exceeded", "semantic_usage_invalid", retryable=retryable) from None
     if used >= limit:
         raise JevError("budget_exceeded", "daily_cap", retryable=retryable)
-    _jev_window_check(retryable)
+    _jev_window_check(retryable, config_path=config_path)
 
 
-def _jev_window_check(retryable: bool = False):
-    """Refuse a new Jev request after semantic.until, read from the live config at reservation time."""
+def _jev_window_check(retryable: bool = False, *, config_path=None):
+    """Refuse a new Jev request after semantic.until in that installation's live config.
+
+    Checked with each attempt's reservation (the step right before it is
+    sent), or at the attempt itself for callers that do not reserve."""
     from semantic_jev import JevError
     import mcs_util
-    path = mcs_util.CONF_PATH
+    path = mcs_util.CONF_PATH if config_path is None else str(config_path)
     if not os.path.lexists(path):
         return
     cfg = mcs_util.load_config_checked(path)
@@ -633,7 +647,7 @@ def usage_reserver(ledger, token: JobToken, *, kind: str,
     return reserve
 
 
-def manual_usage_reserver(ledger, *, operation: str, daily_request_budget=None):
+def manual_usage_reserver(ledger, *, operation: str, daily_request_budget=None, config_path=None):
     """Reserve every explicit live-evaluation HTTP against the same MCS daily count."""
     from semantic_jev import DAILY_REQUEST_LIMIT, JEV_MODEL, JevError
     if operation not in {"wire_smoke", "jev_value", "semantic_bench", "semantic_detect", "semantic_shadow_e2e"}:
@@ -650,7 +664,7 @@ def manual_usage_reserver(ledger, *, operation: str, daily_request_budget=None):
         def check():
             nonlocal day
             day = int(_jst_day_start(time.time()))
-            _daily_cap_check(ledger, limit)
+            _daily_cap_check(ledger, limit, config_path=config_path)
             if int(_jst_day_start(time.time())) != day:
                 raise JevError("budget_exceeded", "reservation_day_changed", retryable=True)
 
@@ -1368,9 +1382,18 @@ def _can_bind_call(fn, *args, **kwargs):
 
 class JevEvaluation:
     """Bind one job's evaluation guards, reservation and timing without client mutation."""
-    def __init__(self, client, guard, reserve, cutoff, transport, timing):
+    def __init__(self, client, guard, reserve, cutoff, transport, timing, config_path=None):
         self._client = client
-        self._guard = guard
+
+        def windowed(stage):
+            guard(stage)
+            if stage == "jev_attempt" and reserve is None:
+                # Reserved paths check semantic.until in the same transaction as each
+                # attempt's reservation, immediately before it is sent; refusing after
+                # that reservation would only strand it unresolved. Unreserved callers
+                # are checked here instead.
+                _jev_window_check(config_path=config_path)
+        self._guard = windowed
         self._reserve = reserve
         self._cutoff = cutoff
         self._transport = transport
@@ -1421,6 +1444,10 @@ class JevEvaluation:
     def evaluate(self, state, questions, deadline):
         try:
             if not getattr(self._client, "supports_attempt_hooks", False):
+                if self._reserve is not None:
+                    # Without attempt hooks the reservation could not precede each POST.
+                    from semantic_jev import JevError
+                    raise JevError("budget_exceeded", "evaluate_guard_unsupported", retryable=True)
                 self._guard("jev_attempt")
                 _jev_cutoff(self._cutoff)
                 value = self._evaluate(state, questions, deadline)
@@ -1440,11 +1467,14 @@ class JevEvaluation:
             raise
 
 
-def bind_jev(client, guard, reserve=None, cutoff=None, *, transport=None, timing=None):
-    """Bind the finite per-call Jev execution protocol; own no client-global hooks."""
+def bind_jev(client, guard, reserve=None, cutoff=None, *, transport=None, timing=None, config_path=None):
+    """Bind the finite per-call Jev execution protocol; own no client-global hooks.
+
+    config_path names the installation whose semantic.until gates each attempt
+    (default: this MCS root)."""
     if client is None:
         return None
-    return JevEvaluation(client, guard, reserve, cutoff, transport, timing)
+    return JevEvaluation(client, guard, reserve, cutoff, transport, timing, config_path)
 
 
 _SOURCE_PASS_POLICY_KEYS = ('model', 'match_threshold', 'nomatch_threshold',
