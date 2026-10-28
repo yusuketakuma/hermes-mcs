@@ -31,14 +31,12 @@ from __future__ import annotations
 
 import argparse
 import getpass
-import hashlib
 import json
 import math
 import os
 import plistlib
 import re
 import sqlite3
-import stat
 import subprocess
 import sys
 import time
@@ -75,7 +73,7 @@ import mcs_runtime
 import runtime_inspection
 
 from mcs_util import (CONF_PATH, HOME, REPO, env_value)
-from safe_io import fdopen_owned, read_regular_nofollow
+from safe_io import read_regular_nofollow
 
 ENV_PATH = os.path.join(HOME, ".env")
 CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -1218,35 +1216,21 @@ def _doctor_optional_features(cfg) -> dict:
             for name, default in OPTIONAL_FEATURE_DEFAULTS.items()}
 
 
-def _config_identity():
-    """The config file's inode and bounded digest from one no-follow, non-blocking FD;
-    None when absent, a unique token when unreadable, not regular, a link or oversize."""
-    try:
-        fd = os.open(CONF_PATH, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-    except FileNotFoundError:
-        return None
-    except OSError:
-        return object()
-    try:
-        with fdopen_owned(fd, "rb") as stream:
-            st = os.fstat(stream.fileno())
-            if not stat.S_ISREG(st.st_mode):
-                return object()
-            raw = stream.read(mcs_util.CONFIG_MAX_BYTES + 1)
-    except OSError:
-        return object()
-    if len(raw) > mcs_util.CONFIG_MAX_BYTES:
-        return object()
-    return st.st_dev, st.st_ino, hashlib.sha256(raw).hexdigest()
-
-
 def cmd_features(args) -> int:
     """Choose whether optional setup guidance follows the release default (CSDC: off now)."""
     if _config_problem():
         print("任意機能: config.json を読み取れないため変更しません。mcs_setup.py check で確認してください")
         return 1
-    identity = _config_identity()
-    cfg = mcs_util.load_config()
+    import config_edit
+    import safe_io
+    try:
+        raw, base = config_edit._snapshot(CONF_PATH)
+        cfg = config_edit._parse(raw)
+    except FileNotFoundError:
+        base, cfg = None, {}
+    except (OSError, ValueError, RecursionError):
+        print("任意機能: config.json を読み取れないため変更しません。mcs_setup.py check で確認してください")
+        return 1
     before = json.dumps(cfg.get("optional_features"), sort_keys=True)
     if not sys.stdin.isatty():
         print("任意機能: 端末から実行してください。設定は変更していません。")
@@ -1266,13 +1250,36 @@ def cmd_features(args) -> int:
     except (KeyboardInterrupt, EOFError):
         print("\n任意機能: 中止しました。保存していません。")
         return 130
-    # Not an atomic compare-and-swap: this only refuses changes made while the questions were open.
-    if _config_identity() != identity:
-        print("任意機能: 質問の間に config.json が変更・置換・削除・作成されたため保存していません。"
-              "もう一度実行してください。")
+    try:
+        body = json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + '\n'
+        if len(body.encode("utf-8")) > mcs_util.CONFIG_MAX_BYTES:
+            raise ValueError("config_unreadable")
+        with config_edit._edit_lock(CONF_PATH):
+            def current_base():
+                try:
+                    return config_edit._snapshot(CONF_PATH)[1]
+                except FileNotFoundError:
+                    return None
+
+            if current_base() != base:
+                raise config_edit.ConfigConflict("config_changed")
+            if base is None:
+                # Publish an absent base exclusively, without replacing a concurrent creator.
+                safe_io.publish_new_bytes(CONF_PATH, body.encode("utf-8"))
+            else:
+                def write_checked(stream):
+                    stream.write(body)
+                    if current_base() != base:
+                        raise config_edit.ConfigConflict("config_changed")
+                safe_io.atomic_write(CONF_PATH, write_checked, 0o600,
+                                     tmp_prefix=".svc.", makedirs=False)
+    except (config_edit.ConfigConflict, FileExistsError, FileNotFoundError):
+        print("任意機能: 別の設定保存と競合したか、質問の間に config.json が変更されたため"
+              "保存していません。もう一度実行してください。")
         return 1
-    service_management.write_service_file(
-        CONF_PATH, json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True) + '\n', 0o600)
+    except (OSError, ValueError, RecursionError):
+        print("任意機能: config.json または保存用ロックを確認できないため変更しません。")
+        return 1
     print("任意機能の選択を保存しました。登録・同意・送信はこの操作では行っていません。")
     return 0
 

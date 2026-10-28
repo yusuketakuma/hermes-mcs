@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+import config_edit
 import mcs_config
 import mcs_setup
 import mcs_util
@@ -168,6 +169,24 @@ def test_features_never_overwrites_a_config_changed_while_asking(monkeypatch, tm
     _during_the_prompt(monkeypatch, lambda: path.write_text(json.dumps(other)))
     assert mcs_setup.main(["features"]) == 1
     assert json.loads(path.read_text()) == other                    # the other writer's state is kept
+
+
+def test_features_detects_a_cooperating_edit_during_the_prompt(monkeypatch, tmp_path):
+    initial = {"mcs_login_id": "synthetic", "notify_target": "local", "keep": [1]}
+    path = _features_env(monkeypatch, tmp_path, initial)
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(path))
+    _during_the_prompt(monkeypatch, lambda: config_edit.apply({"extract.prefilter": False}))
+    assert mcs_setup.main(["features"]) == 1
+    assert json.loads(path.read_text()) == {**initial, "extract": {"prefilter": False}}
+
+
+def test_features_refuses_an_active_shared_lock(monkeypatch, tmp_path):
+    initial = {"mcs_login_id": "synthetic", "notify_target": "local"}
+    path = _features_env(monkeypatch, tmp_path, initial)
+    _during_the_prompt(monkeypatch, lambda: None)
+    with config_edit._edit_lock(path):
+        assert mcs_setup.main(["features"]) == 1
+    assert json.loads(path.read_text()) == initial
 
 
 @pytest.mark.parametrize("change", ["deleted", "replaced_same_bytes", "corrupted"])
