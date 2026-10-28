@@ -25,6 +25,13 @@ class AliasCommitUnknown(RuntimeError):
     pass
 
 
+class AliasRetirementUnavailable(RuntimeError):
+    def __init__(self, reason):
+        self.reason = (reason if reason in ('alias_retirement_invalid', 'alias_retirement_capacity')
+                       else 'alias_retirement_unavailable')
+        super().__init__('alias_retirement_unavailable')
+
+
 def alias_retired_commands(db):
     """Read the bounded, durable set of commands retired during recovery."""
     rows = db.execute(
@@ -239,8 +246,8 @@ def apply_command(ledger, req, *, cfg=None, data_dir=None):
         if req.get('cmd') == 'ops.drug_alias_apply':
             try:
                 retired = alias_retired_commands(db)
-            except ValueError:
-                raise RuntimeError('alias_retirement_unavailable') from None
+            except ValueError as error:
+                raise AliasRetirementUnavailable(str(error)) from None
             if req['command_id'] in retired:
                 return {'command_id': req['command_id'], 'outcome': 'rejected',
                         'error': 'alias_recovery_retired'}
