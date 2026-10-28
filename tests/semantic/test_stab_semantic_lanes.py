@@ -15,7 +15,7 @@ import pytest
 import semantic_drain
 from inference_version import CURRENT_VERSION, VERSION_KEY
 import semantic_runtime as runtime
-from semantic_testkit import _FakeJev, _cfg, _ledger, _patient, _seeded
+from semantic_testkit import _FakeJev, _cfg, _ledger, _message, _patient, _seeded
 
 
 @pytest.fixture(autouse=True)
@@ -159,6 +159,7 @@ def test_long_output_jobs_leave_realtime_and_cap_free_defers(
 
 def test_long_defer_entry_dropped_on_new_generation(jobs_db, monkeypatch):
     now = time.time()
+    jobs_db.save_messages([_message(40)], project_id=1)
     long_id = _job(jobs_db, 40, created=now - 50, updated=now - 50,
                    next_try=now - 50)
     _serve(monkeypatch, lambda job: ("deferred", "long_output_needs_budget"))
@@ -172,6 +173,248 @@ def test_long_defer_entry_dropped_on_new_generation(jobs_db, monkeypatch):
     _serve(monkeypatch, lambda job: ("done", None))
     _run(jobs_db, None, lane="realtime", max_jobs=1)
     assert str(long_id) not in semantic_drain._long_defers(jobs_db)
+
+
+def test_wrong_root_targets_do_not_discard_old_generation(jobs_db):
+    now = time.time()
+    jobs_db.save_messages([_message(40), _message(41)], project_id=1)
+    job_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    original = {'g': 'g40', 'n': 7}
+    with jobs_db.db:
+        jobs_db.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?',
+                           (json.dumps({VERSION_KEY: CURRENT_VERSION, 'generation': 'g40b',
+                                        'targets': [41]}), job_id))
+        semantic_drain._sched_write(jobs_db, {'long_defers': {str(job_id): original}}, commit=False)
+    with semantic_drain._sched_update(jobs_db) as sched:
+        semantic_drain._merge_long_defers(jobs_db, sched, {})
+    assert semantic_drain._long_defers(jobs_db)[str(job_id)] == original
+    token = runtime.JobToken.from_row(jobs_db.db.execute(
+        'SELECT * FROM fetch_jobs WHERE job_id=?', (job_id,)).fetchone())
+    with pytest.raises(ValueError, match='semantic_long_defer_generation_unknown'):
+        semantic_drain._reserve_long_defer(jobs_db, token)
+    assert semantic_drain._long_defers(jobs_db)[str(job_id)] == original
+
+
+@pytest.mark.parametrize('payload', [
+    '{',
+    json.dumps({VERSION_KEY: '2.0', 'targets': [40], 'generation': 'future'}),
+    '{"targets":[40],"x":' + '[' * 130 + '0' + ']' * 130 + '}',
+    '{"inference_engine_version":"1.0","inference_engine_version":"2.0"}',
+    '{"targets":null}',
+    '{"padding":"' + 'x' * (1024 * 1024) + '"}',
+])
+def test_unreadable_long_defer_survives_other_job_and_restart(jobs_db, monkeypatch, payload):
+    now = time.time()
+    held_id = _job(jobs_db, 40, created=now - 50, updated=now - 50, next_try=now - 50)
+    _job(jobs_db, 41, created=now - 40, updated=now - 40, next_try=now - 40)
+    original = {'g': 'g40', 'n': 7}
+    with jobs_db.db:
+        jobs_db.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?', (payload, held_id))
+        semantic_drain._sched_write(jobs_db, {'long_defers': {str(held_id): original}}, commit=False)
+    served = _serve(monkeypatch, lambda job: ('done', None))
+    _run(jobs_db, None, lane='backlog', max_jobs=1)
+    assert served == [41]
+    assert semantic_drain._long_defers(jobs_db)[str(held_id)] == original
+    path = jobs_db.db.execute('PRAGMA database_list').fetchone()[2]
+    jobs_db.db.close()
+    # Reopening the same synthetic database exercises the durable scheduler row.
+    import sqlite3
+    jobs_db.db = sqlite3.connect(path)
+    jobs_db.db.row_factory = sqlite3.Row
+    assert semantic_drain._long_defers(jobs_db)[str(held_id)] == original
+
+
+def test_uncertain_long_defer_is_not_replaced_or_evicted(jobs_db, monkeypatch):
+    now = time.time()
+    held_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    other_id = _job(jobs_db, 41, created=now, updated=now, next_try=now)
+    original = {'g': 'g40', 'n': 7}
+    with jobs_db.db:
+        jobs_db.db.execute("UPDATE fetch_jobs SET payload='{',state='failed' WHERE job_id=?", (held_id,))
+        semantic_drain._sched_write(jobs_db, {'long_defers': {str(held_id): original}}, commit=False)
+    monkeypatch.setattr(semantic_drain, '_LONG_DEFERS_MAX', 1)
+    with pytest.raises(ValueError, match='semantic_long_defers_capacity'):
+        with semantic_drain._sched_update(jobs_db) as sched:
+            semantic_drain._merge_long_defers(jobs_db, sched, {
+                str(held_id): {'g': 'other', 'n': 1},
+                str(other_id): {'g': 'g41', 'n': 1},
+            })
+    assert semantic_drain._long_defers(jobs_db) == {str(held_id): original}
+
+
+def test_full_long_defer_map_holds_new_job_before_call(jobs_db, monkeypatch):
+    now = time.time()
+    held_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    pending_id = _job(jobs_db, 41, created=now, updated=now, next_try=now)
+    original = {'g': 'g40', 'n': 7}
+    with jobs_db.db:
+        jobs_db.db.execute("UPDATE fetch_jobs SET payload='{' WHERE job_id=?", (held_id,))
+        semantic_drain._sched_write(jobs_db, {'long_defers': {str(held_id): original}}, commit=False)
+    monkeypatch.setattr(semantic_drain, '_LONG_DEFERS_MAX', 1)
+    served = _serve(monkeypatch, lambda job: ('done', None))
+    result = {'errors': []}
+    out = semantic_drain.run_due(jobs_db, _cfg('shadow'), result,
+                                 time.monotonic() + 300, jev_client=_FakeJev(),
+                                 llm_fn=None, lane='backlog', max_jobs=1)
+    assert served == []
+    assert out['long_defer_reservation_failed'] is True
+    assert 'semantic: long_defer_reservation_failed' in result['errors']
+    assert semantic_drain._long_defers(jobs_db) == {str(held_id): original}
+    assert jobs_db.db.execute('SELECT state,attempts FROM fetch_jobs WHERE job_id=?',
+                              (pending_id,)).fetchone()[:] == ('pending', 0)
+
+
+def test_reservation_survives_lost_run_lock(jobs_db, monkeypatch):
+    import writer_lock
+
+    now = time.time()
+    job_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+
+    def interrupted(*args, **kwargs):
+        raise writer_lock.RunLockLost(False)
+    monkeypatch.setattr(semantic_drain, '_process_job', interrupted)
+    _run(jobs_db, None, lane='backlog', max_jobs=1)
+    assert semantic_drain._long_defers(jobs_db)[str(job_id)] == {'g': 'g40', 'n': 1}
+    path = jobs_db.db.execute('PRAGMA database_list').fetchone()[2]
+    jobs_db.db.close()
+    import sqlite3
+    jobs_db.db = sqlite3.connect(path)
+    jobs_db.db.row_factory = sqlite3.Row
+    assert semantic_drain._long_defers(jobs_db)[str(job_id)] == {'g': 'g40', 'n': 1}
+
+
+def test_no_long_defer_refunds_reservation(jobs_db, monkeypatch):
+    now = time.time()
+    job_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    original = {'g': 'g40', 'n': 3}
+    with jobs_db.db:
+        semantic_drain._sched_write(jobs_db, {'long_defers': {str(job_id): original}}, commit=False)
+    served = _serve(monkeypatch, lambda job: ('deferred', 'not_a_long_output_defer'))
+    _run(jobs_db, None, lane='backlog', max_jobs=1)
+    assert served == [40]
+    assert semantic_drain._long_defers(jobs_db)[str(job_id)] == original
+
+
+def test_full_map_allows_existing_generation_but_holds_new(jobs_db, monkeypatch):
+    now = time.time()
+    held_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    existing_id = _job(jobs_db, 41, created=now, updated=now, next_try=now)
+    _job(jobs_db, 42, created=now, updated=now, next_try=now)
+    with jobs_db.db:
+        jobs_db.db.execute("UPDATE fetch_jobs SET payload='{' WHERE job_id=?", (held_id,))
+        semantic_drain._sched_write(jobs_db, {'long_defers': {
+            str(held_id): {'g': 'g40', 'n': 3},
+            str(existing_id): {'g': 'g41', 'n': 2},
+        }}, commit=False)
+    monkeypatch.setattr(semantic_drain, '_LONG_DEFERS_MAX', 2)
+    served = _serve(monkeypatch, lambda job: ('deferred', 'long_output_needs_budget'))
+    result = {'errors': []}
+    semantic_drain.run_due(jobs_db, _cfg('shadow'), result, time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=None, lane='backlog', max_jobs=2)
+    assert served == [41]
+    assert semantic_drain._long_defers(jobs_db) == {
+        str(held_id): {'g': 'g40', 'n': 3}, str(existing_id): {'g': 'g41', 'n': 3}}
+    assert 'semantic: long_defer_reservation_failed' in result['errors']
+
+
+def test_separate_connections_respect_reserved_capacity(jobs_db, monkeypatch):
+    from ledger import Ledger
+
+    now = time.time()
+    first_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    second_id = _job(jobs_db, 41, created=now, updated=now, next_try=now)
+    tokens = [runtime.JobToken.from_row(jobs_db.db.execute(
+        'SELECT * FROM fetch_jobs WHERE job_id=?', (job_id,)).fetchone())
+        for job_id in (first_id, second_id)]
+    monkeypatch.setattr(semantic_drain, '_LONG_DEFERS_MAX', 1)
+    path = jobs_db.db.execute('PRAGMA database_list').fetchone()[2]
+    other = Ledger(path)
+    try:
+        semantic_drain._reserve_long_defer(jobs_db, tokens[0])
+        with pytest.raises(ValueError, match='semantic_long_defers_capacity'):
+            semantic_drain._reserve_long_defer(other, tokens[1])
+        assert semantic_drain._long_defers(other) == {str(first_id): {'g': 'g40', 'n': 1}}
+    finally:
+        other.close()
+
+
+def test_reservation_lock_failure_keeps_existing_scheduler(jobs_db):
+    import sqlite3
+    from ledger import Ledger
+
+    now = time.time()
+    job_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    token = runtime.JobToken.from_row(jobs_db.db.execute(
+        'SELECT * FROM fetch_jobs WHERE job_id=?', (job_id,)).fetchone())
+    path = jobs_db.db.execute('PRAGMA database_list').fetchone()[2]
+    other = Ledger(path)
+    try:
+        other.db.execute('PRAGMA busy_timeout=0')
+        jobs_db.db.execute('BEGIN IMMEDIATE')
+        with pytest.raises(sqlite3.OperationalError):
+            semantic_drain._reserve_long_defer(other, token)
+        jobs_db.db.rollback()
+        assert semantic_drain._long_defers(other) == {}
+        semantic_drain._reserve_long_defer(other, token)
+        assert semantic_drain._long_defers(jobs_db)[str(job_id)] == {'g': 'g40', 'n': 1}
+    finally:
+        if jobs_db.db.in_transaction:
+            jobs_db.db.rollback()
+        other.close()
+
+
+def test_changed_payload_is_not_refunded(jobs_db):
+    now = time.time()
+    job_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    token = runtime.JobToken.from_row(jobs_db.db.execute(
+        'SELECT * FROM fetch_jobs WHERE job_id=?', (job_id,)).fetchone())
+    reservation = semantic_drain._reserve_long_defer(jobs_db, token)
+    with jobs_db.db:
+        jobs_db.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?',
+                           (json.dumps({VERSION_KEY: '2.0'}), job_id))
+    semantic_drain._refund_long_defer(jobs_db, token, reservation)
+    assert semantic_drain._long_defers(jobs_db)[str(job_id)] == {'g': 'g40', 'n': 1}
+
+
+@pytest.mark.parametrize('raw', ['{', '[]', '{"long_defers":null}',
+                                 '{"long_defers":{"1":{"g":"x","n":-1}}}'])
+def test_invalid_scheduler_holds_work_and_keeps_original(jobs_db, monkeypatch, raw):
+    now = time.time()
+    _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    with jobs_db.db:
+        semantic_drain._sched_write(jobs_db, {}, commit=False)
+        jobs_db.db.execute('UPDATE fetch_jobs SET payload=? WHERE kind=?',
+                           (raw, semantic_drain.SCHED_KIND))
+    served = _serve(monkeypatch, lambda job: ('done', None))
+    result = {'errors': []}
+    semantic_drain.run_due(jobs_db, _cfg('shadow'), result, time.monotonic() + 300,
+                           jev_client=_FakeJev(), llm_fn=None, lane='backlog', max_jobs=1)
+    assert served == []
+    assert 'semantic: long_defer_reservation_failed' in result['errors']
+    assert jobs_db.db.execute('SELECT payload FROM fetch_jobs WHERE kind=?',
+                              (semantic_drain.SCHED_KIND,)).fetchone()[0] == raw
+
+
+def test_bounded_long_defer_scan_rotates(jobs_db, monkeypatch):
+    now = time.time()
+    first_id = _job(jobs_db, 40, created=now, updated=now, next_try=now)
+    second_id = _job(jobs_db, 41, created=now, updated=now, next_try=now)
+    with jobs_db.db:
+        jobs_db.db.execute('UPDATE fetch_jobs SET payload=? WHERE job_id=?',
+                           (json.dumps({VERSION_KEY: CURRENT_VERSION, 'generation': 'g41b'}), second_id))
+        semantic_drain._sched_write(jobs_db, {'long_defers': {
+            str(first_id): {'g': 'g40', 'n': 2},
+            str(second_id): {'g': 'g41', 'n': 3},
+        }}, commit=False)
+    monkeypatch.setattr(semantic_drain, '_LONG_DEFERS_SCAN_BYTES', 1)
+    with semantic_drain._sched_update(jobs_db) as sched:
+        semantic_drain._merge_long_defers(jobs_db, sched, {})
+    assert str(second_id) in semantic_drain._long_defers(jobs_db)
+    # Give the next pass enough room for the second row; the cursor starts there.
+    monkeypatch.setattr(semantic_drain, '_LONG_DEFERS_SCAN_BYTES', 100)
+    with semantic_drain._sched_update(jobs_db) as sched:
+        semantic_drain._merge_long_defers(jobs_db, sched, {})
+    assert str(second_id) not in semantic_drain._long_defers(jobs_db)
 
 
 def test_legacy_payload_long_job_leaves_realtime(jobs_db, monkeypatch):

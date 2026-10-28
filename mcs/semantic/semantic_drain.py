@@ -1435,7 +1435,7 @@ def _sched_update(ledger):
         raise ValueError('semantic_scheduler_transaction_active')
     ledger.db.execute('BEGIN IMMEDIATE')
     with ledger.db:
-        state = _sched_state(ledger)
+        state, _ = _reservation_sched(ledger)
         yield state
         _sched_write(ledger, state, commit=False)
 
@@ -1801,6 +1801,7 @@ _REALTIME_ORDER = ("CASE WHEN next_try<=updated_at THEN updated_at "
 # never fit the call ends in a visible failure instead of looping (M6).
 LONG_FREE_DEFER_CAP = 24
 _LONG_DEFERS_MAX = 500
+_LONG_DEFERS_SCAN_BYTES = 8 * 1024 * 1024
 
 
 def _long_defers(ledger) -> dict:
@@ -1813,25 +1814,174 @@ def _long_defers(ledger) -> dict:
             and isinstance(v.get("g"), str) and type(v.get("n")) is int}
 
 
+def _known_long_defer_generation(raw):
+    if not isinstance(raw, str) or len(raw) > _REPROCESS_JOB_MAX_BYTES:
+        return None
+    try:
+        if len(raw.encode('utf-8')) > _REPROCESS_JOB_MAX_BYTES:
+            return None
+        payload = strict_json(raw)
+        if not isinstance(payload, dict) or read_version(payload) not in (CURRENT_VERSION, LEGACY_VERSION):
+            return None
+        nodes = [(payload, 0)]
+        while nodes:
+            node, depth = nodes.pop()
+            if depth > 128 or (type(node) is int and not -(2**63) <= node < 2**63):
+                return None
+            if isinstance(node, dict):
+                nodes.extend((value, depth + 1) for value in node.values())
+            elif isinstance(node, list):
+                nodes.extend((value, depth + 1) for value in node)
+        if 'targets' in payload and (not isinstance(payload['targets'], list)
+                or not payload['targets']
+                or any(type(mid) is not int or not 0 < mid < 2**63 for mid in payload['targets'])):
+            return None
+        generation = payload.get('generation')
+        if generation is not None and not isinstance(generation, str):
+            return None
+        return runtime.payload_generation(payload)
+    except (TypeError, ValueError, RecursionError, UnicodeError):
+        return None
+
+
+def _reservation_sched(ledger):
+    row = ledger.db.execute(
+        "SELECT payload FROM fetch_jobs WHERE kind=? AND project_id=0 AND message_id=0",
+        (SCHED_KIND,)).fetchone()
+    if row is None:
+        return {}, {}
+    raw = row['payload']
+    if not isinstance(raw, str) or len(raw) > _REPROCESS_JOB_MAX_BYTES:
+        raise ValueError('semantic_scheduler_invalid')
+    try:
+        if len(raw.encode('utf-8')) > _REPROCESS_JOB_MAX_BYTES:
+            raise ValueError('semantic_scheduler_invalid')
+        sched = strict_json(raw)
+    except (TypeError, ValueError, UnicodeError, RecursionError):
+        raise ValueError('semantic_scheduler_invalid') from None
+    if not isinstance(sched, dict):
+        raise ValueError('semantic_scheduler_invalid')
+    entries = sched.get('long_defers', {})
+    if not isinstance(entries, dict) or any(
+            not isinstance(key, str) or not key.isascii() or not key.isdigit()
+            or len(key) > 19 or str(int(key)) != key or int(key) >= 2**63
+            or not isinstance(value, dict) or set(value) != {'g', 'n'}
+            or not isinstance(value['g'], str) or not value['g']
+            or type(value['n']) is not int or not 0 <= value['n'] < 2**63 - 1
+            for key, value in entries.items()):
+        raise ValueError('semantic_scheduler_invalid')
+    return sched, dict(entries)
+
+
+def _reserve_long_defer(ledger, token):
+    if ledger.db.in_transaction:
+        raise ValueError('semantic_scheduler_transaction_active')
+    ledger.db.execute('BEGIN IMMEDIATE')
+    with ledger.db:
+        sched, entries = _reservation_sched(ledger)
+        row = ledger.db.execute(
+            'SELECT state,attempts,payload FROM fetch_jobs '
+            'WHERE job_id=? AND kind=? AND project_id=? AND message_id=?',
+            (token.job_id, token.kind, token.project_id, token.message_id)).fetchone()
+        if (row is None or row['state'] != token.state or int(row['attempts'] or 0) != token.attempts
+                or row['payload'] != token.payload_raw
+                or _known_long_defer_generation(row['payload']) != token.generation):
+            return None
+        key = str(token.job_id)
+        prior = entries.get(key)
+        if prior is None and len(entries) >= _LONG_DEFERS_MAX:
+            raise ValueError('semantic_long_defers_capacity')
+        if prior and prior['g'] != token.generation:
+            if _reprocess_job_payload(ledger, row, token.project_id, token.message_id) is None:
+                raise ValueError('semantic_long_defer_generation_unknown')
+            prior = None
+        count = prior['n'] if prior else 0
+        if count >= 2**63 - 2:
+            raise ValueError('semantic_scheduler_invalid')
+        reserved = {'g': token.generation, 'n': count + 1}
+        entries[key] = reserved
+        sched['long_defers'] = entries
+        _sched_write(ledger, sched, commit=False)
+        return prior, reserved
+
+
+def _refund_long_defer(ledger, token, reservation):
+    if ledger.db.in_transaction:
+        raise ValueError('semantic_scheduler_transaction_active')
+    ledger.db.execute('BEGIN IMMEDIATE')
+    with ledger.db:
+        sched, entries = _reservation_sched(ledger)
+        key = str(token.job_id)
+        row = ledger.db.execute(
+            'SELECT payload FROM fetch_jobs WHERE job_id=? AND kind=? AND project_id=? AND message_id=?',
+            (token.job_id, token.kind, token.project_id, token.message_id)).fetchone()
+        if (row is None or row['payload'] != token.payload_raw
+                or _known_long_defer_generation(row['payload']) != token.generation
+                or entries.get(key) != reservation[1]):
+            return
+        if reservation[0] is None:
+            entries.pop(key)
+        else:
+            entries[key] = reservation[0]
+        if entries:
+            sched['long_defers'] = entries
+        else:
+            sched.pop('long_defers', None)
+        _sched_write(ledger, sched, commit=False)
+
+
 def _merge_long_defers(ledger, sched: dict, seen: dict) -> None:
     """Fold this pass's long defers into the persisted map and prune
     entries whose job left 'pending' or moved to a new generation."""
-    current = _long_defers(ledger)
+    previous = _long_defers(ledger)
+    current = dict(previous)
     current.update(seen)
     if not current:
         sched.pop("long_defers", None)
         return
     alive = {}
+    budget = _LONG_DEFERS_SCAN_BYTES
+    cursor = sched.get('long_defers_scan_cursor', 0)
+    if type(cursor) is not int or not 0 <= cursor < 2**63:
+        cursor = 0
+    last_scanned = None
     for row in ledger.db.execute(
-            "SELECT job_id,payload FROM fetch_jobs WHERE kind=? "
-            "AND state='pending' AND job_id IN (SELECT value FROM json_each(?))",
-            (JOB_KIND, json.dumps(sorted(int(k) for k in current)))):
+            "SELECT job_id,state,project_id,message_id FROM fetch_jobs WHERE kind=? "
+            "AND job_id IN (SELECT value FROM json_each(?)) "
+            "ORDER BY CASE WHEN job_id>? THEN 0 ELSE 1 END,job_id",
+            (JOB_KIND, json.dumps(sorted(int(k) for k in current)), cursor)):
         key = str(row["job_id"])
-        generation = runtime.payload_generation(runtime.parse_payload(row))
-        if current[key]["g"] == generation:
+        generation = None
+        if budget > 0:
+            last_scanned = row['job_id']
+            limit = min(budget, _REPROCESS_JOB_MAX_BYTES)
+            raw = ledger.db.execute('SELECT substr(payload,1,?) FROM fetch_jobs WHERE job_id=?',
+                                    (limit + 1, row['job_id'])).fetchone()[0]
+            if isinstance(raw, str) and len(raw) <= limit:
+                try:
+                    size = len(raw.encode('utf-8'))
+                except UnicodeError:
+                    size = limit + 1
+                if size <= limit:
+                    budget -= size
+                    generation = _known_long_defer_generation(raw)
+                    if (generation is not None
+                            and (row['state'] != 'pending' or current[key]['g'] != generation)
+                            and _reprocess_job_payload(ledger, {'payload': raw},
+                                                       row['project_id'], row['message_id']) is None):
+                        generation = None
+                else:
+                    budget -= limit
+            else:
+                budget -= limit
+        if generation is None:
+            alive[key] = previous.get(key, current[key])
+        elif row['state'] == 'pending' and current[key]["g"] == generation:
             alive[key] = current[key]
-    while len(alive) > _LONG_DEFERS_MAX:
-        alive.pop(min(alive, key=int))
+    if last_scanned is not None:
+        sched['long_defers_scan_cursor'] = last_scanned
+    if len(alive) > _LONG_DEFERS_MAX:
+        raise ValueError('semantic_long_defers_capacity')
     if alive:
         sched["long_defers"] = alive
     else:
@@ -1988,6 +2138,10 @@ _JOB_LOCK_BUCKETS = 1024
 _invalidated_at: float | None = None
 
 
+class _SchedulerUnavailable(Exception):
+    pass
+
+
 @contextmanager
 def _job_lock(ledger, job_id):
     """Exclude duplicate inference for a job while ingestion keeps writing."""
@@ -2014,9 +2168,12 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
     if lane == 'backlog':
         # Two resident lanes share this durable turn. Realtime arrivals keep
         # their existing active-first policy; an archive backlog cannot starve.
-        with _sched_update(ledger) as state:
-            archive_first = bool(state.get('reprocess_archive_turn'))
-            state['reprocess_archive_turn'] = not archive_first
+        try:
+            with _sched_update(ledger) as state:
+                archive_first = bool(state.get('reprocess_archive_turn'))
+                state['reprocess_archive_turn'] = not archive_first
+        except Exception:
+            raise _SchedulerUnavailable from None
         first = _select_due_class(ledger, lane, kinds, qc_active, max_jobs,
                                   long_defers, archive_first,
                                   excluded=excluded, turns=turns)
@@ -2158,8 +2315,12 @@ def _refill_due(ledger, lane, kinds, qc_active, max_jobs, long_defers,
         if remaining <= 0 or len(inspected) >= scan_limit:
             return
         turns = {**_sched_state(ledger), **consumed_turns}
-        batch = _select_due(ledger, lane, kinds, qc_active, remaining,
-                            long_defers, excluded=inspected, turns=turns)
+        try:
+            batch = _select_due(ledger, lane, kinds, qc_active, remaining,
+                                long_defers, excluded=inspected, turns=turns)
+        except _SchedulerUnavailable:
+            out['long_defer_reservation_failed'] = True
+            return
 
 
 def _job_metric(job, token, cohort: str, status, job_age: float,
@@ -2332,6 +2493,13 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
            # (usage receipts excluded) — "no completion" is not "no
            # progress" for the tick's starvation guard (2026-09-30)
            "progressed": 0}
+    if scfg['mode'] != 'off':
+        try:
+            _reservation_sched(ledger)
+        except Exception:
+            result['errors'].append('semantic: long_defer_reservation_failed')
+            out['long_defer_reservation_failed'] = True
+            return out
     global _invalidated_at
     # The scan is O(corpus) (thread_bundle per canonical thread) and the
     # backlog resident calls run_due once per job under the run lock, so
@@ -2450,7 +2618,6 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     llm_health = {"down": False, "fed": False}
     marks_unsaved0 = semantic_transport.long_mark_failures()
     long_defers = _long_defers(ledger)
-    long_seen: dict = {}
 
     @wraps(original_llm)
     def unlocked_llm(*args, **kwargs):
@@ -2499,7 +2666,12 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # the semantic lanes leave unused. A 1-job window cannot be split —
     # QC falls back to the persisted cohort alternation inside the
     # non-eligible lane.
-    first_batch = _select_due(ledger, lane, kinds, qc_active, max_jobs, long_defers)
+    try:
+        first_batch = _select_due(ledger, lane, kinds, qc_active, max_jobs, long_defers)
+    except _SchedulerUnavailable:
+        result['errors'].append('semantic: long_defer_reservation_failed')
+        out['long_defer_reservation_failed'] = True
+        return out
     due = first_batch[0]
     consumed_turns = {}
     sched_mut = {"consumed_turns": consumed_turns}
@@ -2615,6 +2787,16 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     ledger, token, kind=KIND_USAGE, model=jev.JEV_MODEL,
                     project_id=job["project_id"], message_id=job["message_id"],
                     daily_request_budget=lane_cap)
+            reservation = None
+            if job['kind'] == JOB_KIND:
+                try:
+                    reservation = _reserve_long_defer(ledger, token)
+                except Exception:
+                    result['errors'].append('semantic: long_defer_reservation_failed')
+                    out['long_defer_reservation_failed'] = True
+                    continue
+                if reservation is None:
+                    continue
             # only now has the job cleared every gate — the persisted
             # fairness counters count jobs that were actually served, not
             # selections lost to circuit/budget/pause breaks (T14)
@@ -2681,11 +2863,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 status = "retry"
             if status in ("deferred", "deferred_backoff") \
                     and diagnostics.get("not_sent") == "long_output_needs_budget":
-                key = str(job["job_id"])
-                prior = long_seen.get(key) or long_defers.get(key)
-                n = (prior["n"] if prior and prior["g"] == token.generation
-                     else 0) + 1
-                long_seen[key] = {"g": token.generation, "n": n}
+                n = reservation[1]['n'] if reservation is not None else 0
                 if n > LONG_FREE_DEFER_CAP:
                     # this generation keeps meeting passes too short for
                     # its long-output call — stop the free loop: charge
@@ -2695,6 +2873,11 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     out["long_output_capped"] = \
                         out.get("long_output_capped", 0) + 1
                     status = "retry"
+            elif reservation is not None and status is not None:
+                try:
+                    _refund_long_defer(ledger, token, reservation)
+                except Exception:
+                    result['errors'].append('semantic: long_defer_refund_failed')
             # requests this attempt made — real clients already reserved one
             # usage row per request before POST; the delta row below is only
             # for fake clients without attempt hooks (jev_usage_today)
@@ -2745,6 +2928,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 break
     if llm_health["fed"]:
         out["llm_down"] = True
+    if (out.get('long_defer_reservation_failed')
+            and 'semantic: long_defer_reservation_failed' not in result['errors']):
+        result['errors'].append('semantic: long_defer_reservation_failed')
     unsaved = {cause: n - marks_unsaved0.get(cause, 0)
                for cause, n in semantic_transport.long_mark_failures().items()
                if n > marks_unsaved0.get(cause, 0)}
@@ -2772,7 +2958,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         out["observation"]["complete"] = False
     if due:
         _persist_drain_accounting(ledger, scfg, out, result, selected,
-                                  qc_active, sched_mut, long_seen,
+                                  qc_active, sched_mut, None,
                                   long_defers)
     return out
 
