@@ -20,7 +20,8 @@ import time
 from mcs_util import valid_text
 from mcs_requests import canonical, payload_hash
 from update_policy import RELEASE_TAG_RE
-from operation_contract import bounded_integer, read_retry_payload, retry_error
+from operation_contract import (RETRY_PAYLOAD_MAX_BYTES, bounded_integer, read_retry_payload,
+                                retry_error, retry_job_row, retry_payload_codec)
 from mcs_queries import SEMANTIC_CONTROL_KIND as _CONTROL_ARTIFACT
 from safe_io import fsync_dir, fdopen_owned
 
@@ -122,13 +123,9 @@ def _apply_scan_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
 
 
 def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
-    row = db.execute(
-        "SELECT job_id,kind,project_id,state,attempts,typeof(payload) AS payload_type "
-        "FROM fetch_jobs WHERE job_id=? AND kind=? AND project_id=?",
-        (req["job_id"], _SEMANTIC_JOB, req["project_id"]),
-    ).fetchone()
-    if row is None:
-        return "job_not_found", {}
+    row, error = retry_job_row(db, req["project_id"], req["job_id"])
+    if error:
+        return error, {}
     raw = read_retry_payload(db, row)
     if raw is None:
         return "invalid_payload", {"job_id": row["job_id"]}
@@ -174,11 +171,14 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
             "new_attempt_limit": new_limit,
             "additional_attempts": additional,
         })
+    updated_payload = canonical(payload).decode("utf-8")
+    if len(updated_payload.encode(retry_payload_codec(db))) > RETRY_PAYLOAD_MAX_BYTES:
+        return "invalid_payload", {"job_id": row["job_id"]}
     db.execute(
-        "UPDATE fetch_jobs SET state='pending',payload=?,next_try=0,updated_at=? "
+        "UPDATE main.fetch_jobs SET state='pending',payload=?,next_try=0,updated_at=? "
         "WHERE job_id=? AND kind=? AND project_id=? "
         "AND state IN ('failed','pending')",
-        (canonical(payload).decode("utf-8"), now, row["job_id"], _SEMANTIC_JOB,
+        (updated_payload, now, row["job_id"], _SEMANTIC_JOB,
          req["project_id"]),
     )
     return None, extra
