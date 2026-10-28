@@ -326,7 +326,7 @@ def test_noop_nonterminal_never_offers_or_launches_setup(monkeypatch):
 
 def test_guided_apply_passes_approved_record_separately(monkeypatch):
     launcher = _launcher()
-    _terminal(monkeypatch, ['2'])
+    _terminal(monkeypatch, ['2', '1'])
     calls = []
     report = {'route': 'reinstall', 'install_args': ['--no-llm']}
     def run(cmd, **kwargs):
@@ -335,13 +335,14 @@ def test_guided_apply_passes_approved_record_separately(monkeypatch):
         return SimpleNamespace(returncode=0, stdout=json.dumps(value))
     monkeypatch.setattr(launcher.subprocess, 'run', run)
     assert launcher.interactive_update(['python', 'updater', 'plan'], {}, '/synthetic') == 0
+    assert len(calls) == 3
     assert json.loads(calls[1][1]['env']['MCS_UPDATE_OPTIONS_EXPECTED']) == ['--no-llm']
     assert calls[1][0][-2:] == ['--reinstall', '--install-arg=--no-llm']
 
 
 def test_guided_non_reinstall_does_not_require_an_install_record(monkeypatch):
     launcher = _launcher()
-    _terminal(monkeypatch, ['2'])
+    _terminal(monkeypatch, ['2', '1'])
     calls = []
     def run(cmd, **kwargs):
         calls.append((cmd, kwargs))
@@ -349,6 +350,7 @@ def test_guided_non_reinstall_does_not_require_an_install_record(monkeypatch):
         return SimpleNamespace(returncode=0, stdout=json.dumps(value))
     monkeypatch.setattr(launcher.subprocess, 'run', run)
     assert launcher.interactive_update(['python', 'updater', 'plan'], {}, '/synthetic') == 0
+    assert len(calls) == 3
     assert 'MCS_UPDATE_OPTIONS_EXPECTED' not in calls[1][1]['env']
 
 
