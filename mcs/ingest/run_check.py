@@ -105,7 +105,26 @@ def _write_health(ledger, result: dict, status: str,
 LOCK_WAIT_S = 150
 
 
-_CODE_STAMP = writer_lock.code_stamp()
+try:
+    _CODE_STAMP = writer_lock.code_stamp_checked()
+except OSError:
+    _CODE_STAMP = None
+
+
+def _entry_code_current() -> bool:
+    """Refuse a tick when its loaded source or update marker is uncertain."""
+    try:
+        os.lstat(os.path.join(HOME, 'data', UPDATE_MARKER_NAME))
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return False
+    else:
+        return False
+    try:
+        return _CODE_STAMP is not None and writer_lock.code_stamp_checked() == _CODE_STAMP
+    except OSError:
+        return False
 
 
 def _crash_site(e: BaseException) -> str:
@@ -983,8 +1002,6 @@ def _main() -> int:
         ap.error("--watchdog-grace must be 1..3600")
 
     os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
-    os.makedirs(collection_stages.ATTACH_DIR, mode=0o700, exist_ok=True)
-    os.chmod(collection_stages.ATTACH_DIR, 0o700)
 
     # Scheduled work waits briefly for a DB writer. Background transport
     # releases this lock; command watchers stay non-blocking.
@@ -995,6 +1012,19 @@ def _main() -> int:
                                                 marker_path=os.path.join(HOME, "data", UPDATE_MARKER_NAME))
     if lock_fd is None:
         print(json.dumps({"ok": False, "error": "lock_held"}))
+        return 3
+
+    try:
+        code_current = _entry_code_current()
+        if code_current:
+            os.makedirs(collection_stages.ATTACH_DIR, mode=0o700, exist_ok=True)
+            os.chmod(collection_stages.ATTACH_DIR, 0o700)
+    except BaseException:
+        os.close(lock_fd)
+        raise
+    if not code_current:
+        os.close(lock_fd)
+        print(json.dumps({"ok": False, "error": "code_changed_or_update_pending"}))
         return 3
 
     deadline = time.monotonic() + RUN_DEADLINE_S
