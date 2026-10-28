@@ -238,7 +238,7 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 | 5 | `~/.mcs/data{,/cmd,/cmd_int}` を作成し、`mcs_setup.py services` — launchd agent 5件 + hermes cronの定期6件（`backup.enabled=true`ならoffsiteを加え7件）の配置・登録（§6 参照） | services が問題を報告したら停止 |
 | 6 | 復旧 watchdog `org.mcs.recovery` を独立系統で導入（`~/.mcs-recovery/mcs_recover.py`、旧版は `.prev`。復旧対象の checkout を `~/.mcs-recovery/repo_path` に記録。15分間隔で中断した update を復旧）。内容・記録が変わった時か未ロード時だけ再読込 | macOS では配備前に復旧用 Python（既定は `/opt/homebrew/bin/python3.14`・`/usr/local/bin/python3.14`・`/usr/bin/python3.14` の順で最初に実行できるもの、または `--recovery-python`）の Python ≥3.14 と SQLite の WAL-reset 修正を検査し、影響版・版不明なら tool・plist を配備せず停止（自動で別 Python へ切り替えない）。bootstrap 失敗でも停止 |
 
-ステージ2では、`~/.mcs/config.json` がなければ本人だけが読み書きできる設定ファイルを作成します。既存の設定は保持し、`--preflight` と `--dry-run` では作成しません。ファイルの作成だけでは初期設定は完了しません。
+ステージ2の最後に、接続方法にかかわらず `~/.mcs/config.json` がなければ本人だけが読み書きできる設定ファイルを作成します。既存の設定は保持し、`--preflight` と `--dry-run` では作成しません。ファイルの作成だけでは初期設定は完了しません。
 
 最後に「ソフトの準備が完了しました」として各段階の結果と、次に実行する
 初期設定のコマンド（`mcs setup` と venv インタプリタのフルパス付きの `init`）、
