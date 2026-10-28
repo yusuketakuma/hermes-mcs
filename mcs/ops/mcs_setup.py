@@ -850,7 +850,7 @@ def cmd_fact_source(args) -> int:
             raw_config, base = config_edit._snapshot(CONF_PATH)
             cfg = config_edit._parse(raw_config)
     except (OSError, ValueError, RecursionError):
-        print("解析結果の採用方法: config.json を読み取れないため変更していません。設定を確認してください")
+        print("解析結果の採用方法: config.json を読み取れないため保存していません。設定を確認してください")
         return 1
     existing_sem = cfg.get("semantic")
     if existing_sem is not None and not isinstance(existing_sem, dict):
