@@ -30,14 +30,14 @@ def test_init_publishes_private_credentials_without_overwrite_or_staging(tmp_pat
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert stat.S_IMODE((tmp_path / "data").stat().st_mode) == 0o700
     assert json.loads(path.read_text()) == {"bot_token": "synthetic-discord-token"}
-    assert [p.name for p in path.parent.iterdir()] == [path.name]
+    assert {p.name for p in path.parent.iterdir()} == {path.name, "standalone-credentials.lock"}
     # a credentials file appearing after the existence check is never replaced
     path.write_text('{"bot_token": "kept-existing-token"}')
     monkeypatch.setattr(cli.os.path, "lexists", lambda _p: False)
     with pytest.raises(FileExistsError):
         cli.initialize(str(tmp_path), "discord", yes=True)
     assert json.loads(path.read_text()) == {"bot_token": "kept-existing-token"}
-    assert [p.name for p in path.parent.iterdir()] == [path.name]
+    assert {p.name for p in path.parent.iterdir()} == {path.name, "standalone-credentials.lock"}
 
 
 def _pin(path, blob):

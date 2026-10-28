@@ -14,11 +14,54 @@ class CredentialGateUnavailable(Exception):
     """A fixed code: no credential use was started by this reader."""
 
 
-@contextmanager
-def _reader(root):
-    data = Path(root).expanduser().resolve() / "data"
+def inspect(root):
+    """Observe gate files without creating, modifying, or interpreting them."""
     directory = fd = None
     try:
+        data = Path(root).expanduser().resolve(strict=True) / "data"
+        try:
+            resolved = data.resolve(strict=True)
+        except FileNotFoundError:
+            return "unknown" if os.path.lexists(data) else "not_initialized"
+        directory = os.open(resolved, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        parent = os.fstat(directory)
+        parent_now = data.stat()
+        if (parent.st_uid != os.getuid() or parent.st_mode & 0o022
+                or (parent.st_dev, parent.st_ino) != (parent_now.st_dev, parent_now.st_ino)):
+            return "unknown"
+        try:
+            os.stat("standalone-credentials.hold", dir_fd=directory, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            return "held"
+        try:
+            fd = os.open("standalone-credentials.lock", os.O_RDONLY | os.O_NOFOLLOW
+                         | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=directory)
+        except FileNotFoundError:
+            return "not_initialized"
+        info = os.fstat(fd)
+        current = os.stat("standalone-credentials.lock", dir_fd=directory, follow_symlinks=False)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1 or info.st_size
+                or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino)):
+            return "unknown"
+        return "unheld"
+    except (OSError, ValueError, RuntimeError):
+        return "unknown"
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if directory is not None:
+            os.close(directory)
+
+
+@contextmanager
+def _reader(root, *, exclusive=False):
+    directory = fd = None
+    reason = "credential_gate_unavailable"
+    try:
+        data = Path(root).expanduser().resolve(strict=True) / "data"
         data.mkdir(mode=0o700, parents=True, exist_ok=True)
         resolved = data.resolve(strict=True)
         directory = os.open(resolved, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -31,7 +74,11 @@ def _reader(root):
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
                 or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1 or info.st_size):
             raise ValueError
-        fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(fd, (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB)
+        except BlockingIOError:
+            reason = "sender_busy"
+            raise
         current = os.stat("standalone-credentials.lock", dir_fd=directory, follow_symlinks=False)
         parent_now = data.stat()
         if (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino) \
@@ -42,13 +89,14 @@ def _reader(root):
         except FileNotFoundError:
             pass
         else:
+            reason = "credential_gate_held"
             raise ValueError
     except (OSError, ValueError, RuntimeError):
         if fd is not None:
             os.close(fd)
         if directory is not None:
             os.close(directory)
-        raise CredentialGateUnavailable("credential_gate_unavailable") from None
+        raise CredentialGateUnavailable(reason) from None
     try:
         yield
     finally:

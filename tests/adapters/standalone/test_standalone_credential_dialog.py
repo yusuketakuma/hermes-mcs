@@ -134,7 +134,7 @@ def test_env_modified_during_input_cancels_publication(tmp_path, monkeypatch):
         cli.initialize(tmp_path, "discord")
     data = tmp_path / "data"
     assert not (data / "discord-credentials.json").exists()
-    assert list(data.iterdir()) == []
+    assert [item.name for item in data.iterdir()] == ["standalone-credentials.lock"]
 
 
 def test_setup_does_not_complete_an_incomplete_env_implicitly(tmp_path, monkeypatch):
