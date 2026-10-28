@@ -197,6 +197,13 @@ def drain_commands(ledger, result, cmd_dir: str = CMD_DIR, *, consent_only=False
                     receipt = notify_recovery.apply_card_resolve(ledger, req)
                 else:
                     receipt = mcs_requests.apply_command(ledger, req)
+            except mcs_requests.AliasCommitUnknown:
+                # Keep the command for receipt-first reconciliation; other
+                # commands can run only if the database has closed its TX.
+                result['errors'].append('drug_alias_commit_unknown')
+                if ledger.db.in_transaction:
+                    raise
+                continue
             except (ValueError, TypeError, KeyError, UnicodeError,
                     RecursionError, sqlite3.IntegrityError,
                     sqlite3.DataError) as e:
