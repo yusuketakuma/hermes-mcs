@@ -35,21 +35,32 @@ class UntrustedExecutable(ValueError):
     """The Hermes command cannot be shown to be safe to hand a secret to (a fixed code)."""
 
 
+def _safe_owner(st):
+    return st.st_uid in (os.getuid(), 0) and not stat.S_IMODE(st.st_mode) & 0o022
+
+
 def _trusted_path(path, code):
-    """Stat a resolved path whose file and every parent dir only this user or root can write."""
-    real = os.path.realpath(path)
+    """Stat a path whose file, every directory on its path as written (the kernel follows
+    that spelling for a shebang) and every directory of its resolved target only this user
+    or root can write. A symlink on the way must itself belong to this user or root."""
+    lexical = os.path.abspath(path)
+    real = os.path.realpath(lexical)
     info = os.stat(real)
     if not stat.S_ISREG(info.st_mode):
         raise UntrustedExecutable(code + "_not_regular")
-    current = real
-    while True:
-        st = os.stat(current)
-        if st.st_uid not in (os.getuid(), 0) or stat.S_IMODE(st.st_mode) & 0o022:
-            raise UntrustedExecutable(code + "_writable_by_others")
-        parent = os.path.dirname(current)
-        if parent == current:
-            break
-        current = parent
+    for chain in (lexical, real):
+        current = chain
+        while True:
+            link = os.lstat(current)
+            if stat.S_ISLNK(link.st_mode) and link.st_uid not in (os.getuid(), 0):
+                raise UntrustedExecutable(code + "_writable_by_others")
+            parent = os.path.dirname(current)
+            # the directory holding this entry decides who can replace it
+            if not _safe_owner(os.stat(parent)) or not _safe_owner(os.stat(current)):
+                raise UntrustedExecutable(code + "_writable_by_others")
+            if parent == current:
+                break
+            current = parent
     return real, (real, info.st_dev, info.st_ino, info.st_mtime_ns, info.st_mode, info.st_uid)
 
 
@@ -74,7 +85,9 @@ def trusted_command(exe):
         real, ident = _trusted_path(found, "hermes")
         identity = [ident]
         head = _head(real)
-        shim = _SHIM_RE.fullmatch(head.decode("utf-8")) if len(head) <= 4096 else None
+        # only a script can be the shim; a native binary is not decoded
+        shim = (_SHIM_RE.fullmatch(head.decode("utf-8"))
+                if head.startswith(b"#!") and len(head) <= 4096 else None)
         if shim:
             target = shlex.split(shim.group(1))
             if len(target) != 1 or not os.path.isabs(target[0]):
