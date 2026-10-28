@@ -4,12 +4,14 @@ from __future__ import annotations
 import getpass
 import os
 import re
+import shlex
+import shutil
 import stat
+import subprocess
 import sys
 import warnings
 
 import safe_io
-import service_management
 
 TOKENS = {
     "discord": (("DISCORD_BOT_TOKEN", "DiscordのBotトークン", ""),),
@@ -21,6 +23,99 @@ _PROFILE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 # __PLACEHOLDER__) is owned there: overwriting the reference would detach it.
 _MAX_TOKEN = 4096
 _MAX_ENV = 1024 * 1024
+
+
+# The shim install.sh writes (install.sh: SHIM_BODY): only this exact form is run through
+# to its venv executable, so the secret never depends on PATH lookup of bash.
+_SHIM_RE = re.compile(r'#!/usr/bin/env bash\nunset PYTHONPATH\nunset PYTHONHOME\nexec (.+) "\$@"\n?')
+_KEPT_ENV = ("HOME", "USER", "LOGNAME", "LANG", "TMPDIR", "TERM", "HERMES_HOME")
+
+
+class UntrustedExecutable(ValueError):
+    """The Hermes command cannot be shown to be safe to hand a secret to (a fixed code)."""
+
+
+def _trusted_path(path, code):
+    """Stat a resolved path whose file and every parent dir only this user or root can write."""
+    real = os.path.realpath(path)
+    info = os.stat(real)
+    if not stat.S_ISREG(info.st_mode):
+        raise UntrustedExecutable(code + "_not_regular")
+    current = real
+    while True:
+        st = os.stat(current)
+        if st.st_uid not in (os.getuid(), 0) or stat.S_IMODE(st.st_mode) & 0o022:
+            raise UntrustedExecutable(code + "_writable_by_others")
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return real, (real, info.st_dev, info.st_ino, info.st_mtime_ns, info.st_mode, info.st_uid)
+
+
+def _head(path):
+    with open(path, "rb") as stream:
+        return stream.read(4097)
+
+
+def trusted_command(exe):
+    """(argv0, env, identity) for a Hermes command that may receive a secret.
+
+    Only the checked files are trusted: their owner is this user or root and no one else can
+    write them or any parent directory. This does not stop the same user from changing them
+    meanwhile; identity lets the caller notice a change right before each write.
+    """
+    if not isinstance(exe, str) or not exe:
+        raise UntrustedExecutable("hermes_missing")
+    found = exe if os.path.isabs(exe) else shutil.which(exe)
+    if not found or not os.path.lexists(found):
+        raise UntrustedExecutable("hermes_missing")
+    try:
+        real, ident = _trusted_path(found, "hermes")
+        identity = [ident]
+        head = _head(real)
+        shim = _SHIM_RE.fullmatch(head.decode("utf-8")) if len(head) <= 4096 else None
+        if shim:
+            target = shlex.split(shim.group(1))
+            if len(target) != 1 or not os.path.isabs(target[0]):
+                raise UntrustedExecutable("hermes_shim_unknown")
+            real, ident = _trusted_path(target[0], "hermes")
+            identity.append(ident)
+            head = _head(real)
+        if head.startswith(b"#!"):
+            words = head[2:].split(b"\n", 1)[0].decode("utf-8").split()
+            if not words or not os.path.isabs(words[0]) or len(words) > 2:
+                raise UntrustedExecutable("hermes_interpreter_unknown")
+            if os.path.basename(words[0]) == "env":
+                # the interpreter would come from PATH
+                raise UntrustedExecutable("hermes_interpreter_from_path")
+            identity.append(_trusted_path(words[0], "interpreter")[1])
+    except (OSError, UnicodeError):
+        raise UntrustedExecutable("hermes_unreadable") from None
+    env = {key: os.environ[key] for key in _KEPT_ENV if key in os.environ}
+    env.update({key: value for key, value in os.environ.items() if key.startswith("LC_")})
+    env["PATH"] = os.path.dirname(real) + ":/usr/bin:/bin"
+    return real, env, tuple(identity)
+
+
+def secret_cli(exe):
+    """A hermes_cli-shaped callable bound to the trusted command, and a check that it is unchanged."""
+    argv0, env, identity = trusted_command(exe)
+
+    def cli(_exe, profile, *argv, input_text=None):
+        try:
+            return subprocess.run([argv0, *(["-p", profile] if profile else []), *argv],
+                                  capture_output=True, text=True, timeout=30, input=input_text, env=env)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+
+    def unchanged():
+        try:
+            again = trusted_command(exe)
+        except UntrustedExecutable:
+            return False
+        return again[0] == argv0 and again[1] == env and again[2] == identity
+    return cli, unchanged
 
 
 def is_terminal():
@@ -111,7 +206,13 @@ def target_profile(profile):
     return profile or "default"
 
 
-def run(exe, profile, transport, *, cli=service_management.hermes_cli, admission=None):
+_UNTRUSTED_HELP = ("Hermesの実行ファイルを、本人だけが変更できる場所の実行ファイルとして確認できないため、"
+                   "トークンを入力しません。mcs install で起動コマンドを作り直すか、config.json の hermes_bin に"
+                   "本人所有で他者が書き込めない実行ファイルの絶対パスを設定してください。"
+                   "`#!/usr/bin/env` で始まる手書きのラッパーは使えません。")
+
+
+def run(exe, profile, transport, *, cli=None, admission=None):
     """Hermesのプロファイルの.envへ、選んだトークンだけを非表示入力で保存します。
 
     admission は各 config set の直前に呼ばれ、False か例外なら値を渡さずに止めます。
@@ -125,6 +226,15 @@ def run(exe, profile, transport, *, cli=service_management.hermes_cli, admission
         return 2
     profile = target_profile(profile)
     target = f"Hermesの設定「{profile}」"
+    if cli is None:
+        try:
+            cli, unchanged = secret_cli(exe)
+        except UntrustedExecutable as error:
+            print(f"{_UNTRUSTED_HELP}（{error}）")
+            return 1
+    else:
+        def unchanged():
+            return True
     saving, saved = False, []
     try:
         destination = _env_path(cli, exe, profile)
@@ -171,7 +281,7 @@ def run(exe, profile, transport, *, cli=service_management.hermes_cli, admission
                 allowed = admission is None or admission() is True
             except Exception:
                 allowed = False
-            if not allowed or _env_path(cli, exe, profile) != destination:
+            if not allowed or not unchanged() or _env_path(cli, exe, profile) != destination:
                 print("保存先か設定が入力中に変わったため、保存を中止しました。"
                       + (f"保存済み: {', '.join(saved)}" if saved else "接続トークンは保存していません。"))
                 return 1

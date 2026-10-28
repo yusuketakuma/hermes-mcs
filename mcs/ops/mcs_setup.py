@@ -299,12 +299,21 @@ def _plugin_settings_plan(transport: str, nd: dict, args) -> tuple:
     return fixed, lists
 
 
+def _secret_hermes(exe):
+    """(cli, unchanged) for a Hermes command trusted to receive a secret."""
+    import hermes_credential_setup
+    return hermes_credential_setup.secret_cli(exe)
+
+
 def _hermes_token_state(exe, profile, key, expect=None):
     """registered / missing / external / unavailable from the profile's own .env line."""
     import hermes_credential_setup
-    return hermes_credential_setup._status(service_management.hermes_cli, exe,
-                                           hermes_credential_setup.target_profile(profile), key,
-                                           expect, env=False)
+    try:
+        cli, _ = _secret_hermes(exe)
+    except hermes_credential_setup.UntrustedExecutable:
+        return "unavailable"
+    return hermes_credential_setup._status(cli, exe, hermes_credential_setup.target_profile(profile),
+                                           key, expect, env=False)
 
 
 def _plugin_store_tokens(exe, profile: str, tokens, args) -> bool:
@@ -324,9 +333,17 @@ def _plugin_store_tokens(exe, profile: str, tokens, args) -> bool:
 
     # an empty profile means the root default, not Hermes' sticky active_profile
     profile = hermes_credential_setup.target_profile(profile)
+    # secrets go only to a Hermes command shown to be writable by this user or root alone
+    try:
+        secret_cli, unchanged = _secret_hermes(exe)
+    except hermes_credential_setup.UntrustedExecutable as error:
+        print(f"  {hermes_credential_setup._UNTRUSTED_HELP}（{error}）")
+        return True
 
     def _store(env_key, tok) -> bool:
-        ok = (_hermes_config_set(exe, profile, env_key, tok)
+        result = (secret_cli(exe, profile, "config", "set", env_key, "--stdin", input_text=tok)
+                  if unchanged() else None)
+        ok = (result is not None and result.returncode == 0
               and _hermes_token_state(exe, profile, env_key, tok) == "registered")
         print(f"  {env_key}: "
               + (f"Hermesの設定「{profile or '既定'}」の.envに保存しました" if ok
