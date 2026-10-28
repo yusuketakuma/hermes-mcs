@@ -185,6 +185,19 @@ def test_platform_gates_distinguish_provisioning_and_uri_encoding(monkeypatch, t
     assert gates.gate_no_direct_platform_api()
     setup.write_text('def _apply_plugin_integration():\n return "https://discord.com/api"\n')
     assert gates.gate_no_direct_platform_api()
+    setup.write_text('def _apply_standalone_credentials():\n return resolved["SLACK_BOT_TOKEN"]\n')
+    assert gates.gate_no_direct_platform_api() == []
+    helper = mcs / "ops" / "hermes_credential_setup.py"
+    monkeypatch.setattr(gates, "_py_files", lambda *args: [helper])
+    helper.write_text('TOKENS = {"slack": (("SLACK_BOT_TOKEN", "", "xoxb-"),)}\n')
+    assert gates.gate_no_direct_platform_api() == []
+    # only the TOKENS table is exempt: any other token use or URL in the helper still fails
+    for body in ('def read():\n return os.environ.get("SLACK_APP_TOKEN")\n',
+                 'OTHER = "DISCORD_BOT_TOKEN"\n',
+                 'TOKENS = {"x": "https://slack.com/api/chat.postMessage"}\n'):
+        helper.write_text(body)
+        assert gates.gate_no_direct_platform_api()
+    monkeypatch.setattr(gates, "_py_files", lambda *args: [setup])
     for source, allowed in [("from urllib.parse import quote\n", True),
                             ("from urllib.request import urlopen\n", False),
                             ("import urllib\n", False)]:

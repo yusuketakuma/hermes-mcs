@@ -208,14 +208,21 @@ def gate_no_direct_platform_api() -> list[str]:
     for path in _py_files(MCS):
         text = path.read_text(encoding="utf-8")
         tree = ast.parse(text)
-        # Setup provisions the serving Hermes profile via its public CLI;
-        # it does not own a platform transport. Keep token access limited
-        # to that function, while still checking every platform URL.
+        # Setup provisions the serving Hermes profile via its public CLI, and the
+        # standalone .env; it does not own a platform transport. Keep token names
+        # limited to those exact definitions, while still checking every platform URL.
         provisioning = set()
         if path == MCS / "ops" / "mcs_setup.py":
             for node in tree.body:
                 if isinstance(node, ast.FunctionDef) and node.name in {
-                        "_apply_plugin_integration", "_hermes_config_set"}:
+                        "_apply_plugin_integration", "_hermes_config_set",
+                        "_apply_standalone_credentials"}:
+                    provisioning.update(range(node.lineno, node.end_lineno + 1))
+        elif path == MCS / "ops" / "hermes_credential_setup.py":
+            # only the table of keys it asks for; the rest of the module stays checked
+            for node in tree.body:
+                if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name) and node.targets[0].id == "TOKENS"):
                     provisioning.update(range(node.lineno, node.end_lineno + 1))
         for i, line in enumerate(text.splitlines(), 1):
             if _PLATFORM_URLS.search(line):
