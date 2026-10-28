@@ -369,6 +369,74 @@ def _calls(stub_root):
     return [line for line in log.read_text().splitlines() if line.strip()] if log.exists() else []
 
 
+@pytest.mark.parametrize('boundary', ['directory', 'lock'])
+@pytest.mark.parametrize('invalid', [
+    'extra-field', 'newline', 'tab', 'glob-owner', 'foreign-owner', 'unsafe-mode',
+])
+def test_install_rejects_invalid_stat_before_software(tmp_path, boundary, invalid):
+    home, hermes_home, stub, env = _world(tmp_path)
+    data = home / '.mcs/data'
+    data.mkdir(parents=True, mode=0o700)
+    (data / 'update.lock').touch(mode=0o600)
+    uid = str(os.getuid())
+    fields = [uid, '700'] if boundary == 'directory' else ['1', '2', uid, '600', '1']
+    if invalid == 'extra-field':
+        fields.append('unexpected')
+    elif invalid == 'glob-owner':
+        fields[0 if boundary == 'directory' else 2] = f'[{uid[0]}]{uid[1:]}'
+    elif invalid == 'foreign-owner':
+        fields[0 if boundary == 'directory' else 2] = str(os.getuid() + 1)
+    elif invalid == 'unsafe-mode':
+        fields[1 if boundary == 'directory' else 3] = '666'
+    output = ('\n' if invalid == 'newline' else '\t' if invalid == 'tab' else ' ').join(fields)
+    stat = stub / 'bin/stat'
+    stat.write_text('''#!/bin/sh
+case "$2" in
+  *%i*) boundary=lock ;;
+  *) boundary=directory ;;
+esac
+if [ "$boundary" = "$STUB_STAT_BOUNDARY" ]; then
+    printf '%s\\n' "$STUB_STAT_OUTPUT"
+else
+    exec /usr/bin/stat "$@"
+fi
+''')
+    stat.chmod(0o755)
+    # The old unquoted field split expanded this pattern into a valid owner.
+    cwd = tmp_path / 'stat-cwd'
+    cwd.mkdir()
+    (cwd / uid).touch()
+    result = _run({**env, 'STUB_STAT_BOUNDARY': boundary, 'STUB_STAT_OUTPUT': output},
+                  hermes_home, '--no-llm', cwd=cwd)
+    assert result.returncode != 0, result.stdout + result.stderr
+    expected = '所有者または書き込み権限' if boundary == 'directory' else '排他制御ファイルの所有者または権限'
+    assert expected in result.stderr
+    assert _calls(stub) == []
+    assert not (home / '.mcs/config.json').exists()
+
+
+def test_install_rejects_stat_lock_identity_mismatch_before_software(tmp_path):
+    home, hermes_home, stub, env = _world(tmp_path)
+    data = home / '.mcs/data'
+    data.mkdir(parents=True, mode=0o700)
+    (data / 'update.lock').touch(mode=0o600)
+    stat = stub / 'bin/stat'
+    stat.write_text('''#!/bin/sh
+case "$2" in
+  *%i*)
+    case "$3" in /dev/fd/*) inode=3 ;; *) inode=2 ;; esac
+    printf '1 %s %s 600 1\\n' "$inode" "$STUB_UID" ;;
+  *) exec /usr/bin/stat "$@" ;;
+esac
+''')
+    stat.chmod(0o755)
+    result = _run(env, hermes_home, '--no-llm')
+    assert result.returncode != 0
+    assert '排他制御ファイルが変更されました' in result.stderr
+    assert _calls(stub) == []
+    assert not (home / '.mcs/config.json').exists()
+
+
 def test_install_stops_before_software_when_update_lock_is_held(tmp_path):
     import fcntl
     home, hermes_home, stub_root, env = _world(tmp_path)
