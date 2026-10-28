@@ -779,21 +779,36 @@ def test_genuine_disposition_with_lost_scope_and_corrupt_json_never_becomes_succ
             c.reservation_evidence(ledger.db, aid)
 
 
-def test_evidence_hold_counts_report_malformed_receipts_and_stalled_repair_slots_without_ids(tmp_path, now):
+
+def _slot(db, created_at, content):
+    db.execute("INSERT INTO artifacts(kind,project_id,content,meta,created_at) VALUES(?,?,?,?,?)",
+               ("patient_context_source_quality_repair_candidate_v1", 1, content, "{}", created_at))
+
+
+def test_evidence_hold_counts_are_bounded_observations_without_ids(tmp_path, now):
     with closing(Ledger(str(tmp_path / 'l.db'))) as ledger:
         reservation = _reserve(ledger)
         c.record_result(ledger, reservation, _result(reservation))
         assert c.evidence_hold_counts(ledger.db, now=now) == {
-            "malformed_receipts": 0, "stalled_repair_units": 0, "count_limit": 1000}
+            "unattributable_accounting_rows": 0, "old_reserved_repair_slots": 0, "unreadable_repair_slots": 0,
+            "reserved_age_s": c.RESERVED_AGE_S, "scan_limit": c.EVIDENCE_SCAN_LIMIT}
+        old, young = now - c.RESERVED_AGE_S - 1, now - c.RESERVED_AGE_S + 1
         with ledger.db:
             ledger.db.execute("UPDATE artifacts SET meta='{\"a\":1,\"a\":2}' WHERE kind='cloud_usage_result'")
-            for age, phase in ((c.STALLED_REPAIR_S + 1, "reserved"), (c.STALLED_REPAIR_S - 1, "reserved"),
-                               (c.STALLED_REPAIR_S + 1, "complete")):
-                ledger.db.execute("INSERT INTO artifacts(kind,project_id,content,meta,created_at) VALUES(?,?,?,?,?)",
-                                  ("patient_context_source_quality_repair_candidate_v1", 1,
-                                   json.dumps({"phase": phase}), "{}", now - age))
+            _slot(ledger.db, old, json.dumps({"phase": "reserved"}))     # counted: old and reserved
+            _slot(ledger.db, young, json.dumps({"phase": "reserved"}))   # may still be in flight
+            _slot(ledger.db, old, json.dumps({"phase": "complete"}))
+            _slot(ledger.db, old, '{"phase":"complete","phase":"reserved"}')  # duplicate key: unreadable
+            _slot(ledger.db, old, "{broken")
+            _slot(ledger.db, "yesterday", json.dumps({"phase": "reserved"}))  # unreadable creation time
+            _slot(ledger.db, old, '"' + "x" * 40000 + '"')                    # oversized, never parsed
         counts = c.evidence_hold_counts(ledger.db, now=now)
-        # Only the old reserved slot counts: a younger one may still be in flight.
-        assert counts == {"malformed_receipts": 1, "stalled_repair_units": 1, "count_limit": 1000}
+        assert (counts["unattributable_accounting_rows"], counts["old_reserved_repair_slots"],
+                counts["unreadable_repair_slots"]) == (1, 1, 4)
+        # The global structure check is the one that holds every repair adoption.
         with pytest.raises(ValueError, match='cloud_receipt_invalid'):
             c.reservation_evidence(ledger.db, ledger.artifacts('cloud_usage_reserve')[0]['artifact_id'])
+        # Above the scan bound nothing is guessed: the category is unknown.
+        bounded = c.evidence_hold_counts(ledger.db, now=now, scan_limit=1)
+        assert bounded["unattributable_accounting_rows"] is None and bounded["old_reserved_repair_slots"] is None
+        assert bounded["unreadable_repair_slots"] is None and bounded["scan_limit"] == 1

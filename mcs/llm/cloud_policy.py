@@ -748,29 +748,45 @@ def dryrun_tx(ledger, *, route, project_id, unit_key, input_chars=0, max_tokens=
                               "price_version": PRICE_VERSION})
 
 
-def evidence_hold_counts(db, *, now, limit=1000):
-    """Count, without IDs, the rows that keep source-repair evidence on hold.
+# Observations only: a reserved slot older than this may still be in flight
+# (claim leases can outlast it), so it is not proof that a send was interrupted.
+RESERVED_AGE_S = 600
+# Rows read per category at most; above it the count is reported as unknown.
+EVIDENCE_SCAN_LIMIT = 20000
+_UNREADABLE_JSON = ("typeof({c})!='text' OR length({c})>32768 OR NOT json_valid({c}) "
+                    "OR json_type({c})!='object' OR EXISTS (SELECT 1 FROM json_tree({c}) "
+                    "WHERE key IS NOT NULL GROUP BY parent,key HAVING COUNT(*)>1)")
 
-    malformed_receipts: accounting rows whose metadata cannot be attributed to
-    a patient or reservation; every repair adoption holds while any exist.
-    stalled_repair_units: repair slots still reserved after a full call window,
-    i.e. a send whose outcome was not saved. They are never resent."""
+
+def evidence_hold_counts(db, *, now, scan_limit=EVIDENCE_SCAN_LIMIT):
+    """Observed counts, without IDs, behind source-repair holds; None where not fully counted.
+
+    unattributable_accounting_rows: accounting rows failing the global structure
+    check that holds every repair adoption. Per-reservation evidence failures
+    (missing, duplicate, altered or disposed results) are not counted here.
+    old_reserved_repair_slots / unreadable_repair_slots: repair slots, across all
+    patients, scopes and history, still marked reserved after RESERVED_AGE_S, or
+    whose content or creation time cannot be read. Neither proves an interrupted send.
+    """
     from patient_context_artifacts import CANDIDATE_KIND
-    malformed = db.execute(
-        "SELECT COUNT(*) FROM (SELECT 1 FROM artifacts WHERE kind IN "
-        "('cloud_usage_reserve','cloud_usage_result','cloud_usage_disposition') AND CASE "
-        "WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
-        "WHEN json_type(meta)!='object' THEN 1 "
-        "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE key IS NOT NULL "
-        "GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
-        "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE type='real' AND abs(value)>1.7976931348623157e308) THEN 1 "
-        "ELSE 0 END LIMIT ?)", (limit,)).fetchone()[0]
-    stalled = db.execute(
-        "SELECT COUNT(*) FROM (SELECT 1 FROM artifacts WHERE kind=? AND created_at<? AND "
-        "CASE WHEN json_valid(content) THEN json_extract(content,'$.phase') END='reserved' LIMIT ?)",
-        (CANDIDATE_KIND, now - STALLED_REPAIR_S, limit)).fetchone()[0]
-    return {"malformed_receipts": malformed, "stalled_repair_units": stalled, "count_limit": limit}
-
-
-# One repair call (300s) plus its commit margin; younger reserved slots may be in flight.
-STALLED_REPAIR_S = 600
+    receipt_kinds = ('cloud_usage_reserve', 'cloud_usage_result', 'cloud_usage_disposition')
+    out = {"unattributable_accounting_rows": None, "old_reserved_repair_slots": None,
+           "unreadable_repair_slots": None, "reserved_age_s": RESERVED_AGE_S, "scan_limit": scan_limit}
+    rows = db.execute("SELECT COUNT(*) FROM artifacts WHERE kind IN (?,?,?)", receipt_kinds).fetchone()[0]
+    if rows <= scan_limit:
+        out["unattributable_accounting_rows"] = db.execute(
+            "SELECT COUNT(*) FROM artifacts WHERE kind IN (?,?,?) AND CASE WHEN "
+            + _UNREADABLE_JSON.format(c="meta") + " THEN 1 WHEN EXISTS (SELECT 1 FROM json_tree(meta) "
+            "WHERE type='real' AND abs(value)>1.7976931348623157e308) THEN 1 ELSE 0 END",
+            receipt_kinds).fetchone()[0]
+    slots = db.execute("SELECT COUNT(*) FROM artifacts WHERE kind=?", (CANDIDATE_KIND,)).fetchone()[0]
+    if slots <= scan_limit:
+        unreadable = ("typeof(created_at) NOT IN ('integer','real') OR "
+                      + _UNREADABLE_JSON.format(c="content"))
+        bad, old = db.execute(
+            "SELECT COALESCE(SUM(CASE WHEN " + unreadable + " THEN 1 ELSE 0 END),0),"
+            "COALESCE(SUM(CASE WHEN " + unreadable + " THEN 0 WHEN created_at<? "
+            "AND json_extract(content,'$.phase')='reserved' THEN 1 ELSE 0 END),0) "
+            "FROM artifacts WHERE kind=?", (now - RESERVED_AGE_S, CANDIDATE_KIND)).fetchone()
+        out["unreadable_repair_slots"], out["old_reserved_repair_slots"] = bad, old
+    return out

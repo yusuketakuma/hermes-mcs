@@ -72,8 +72,11 @@ def test_plan_is_readonly_keyless_and_outputs_only_estimates(world):
     assert report["routes"]["reextract"]["targets"] == 1
     assert report["routes"]["patient_context"]["targets"] == 1
     assert report["accounting"]["daily_requests"] == 0
-    assert report["source_repair_evidence_holds"] == {
-        "malformed_receipts": 0, "stalled_repair_units": 0, "count_limit": 1000}
+    # log/compare share observe; only plan/estimate pay for the hold scan.
+    assert "source_repair_evidence_holds" not in report
+    holds = cli.observe(config, root=str(root), evidence_holds_wanted=True)["source_repair_evidence_holds"]
+    assert (holds["unattributable_accounting_rows"], holds["old_reserved_repair_slots"],
+            holds["unreadable_repair_slots"]) == (0, 0, 0)
     assert report["input_estimate_basis"] == "character_proxy"
     assert report["reservation_input_upper_bound_tokens"] == 1048576
     raw = json.dumps(report)
@@ -543,3 +546,14 @@ def test_disposition_receipt_is_auditable_without_double_count_or_identity_leak(
     assert report["accounting"]["daily_requests"] == 0
     assert Decimal(report["accounting"]["monthly_cost_usd"]) == 0
     assert "private-" not in json.dumps(receipt)
+
+
+def test_interrupted_hold_scan_is_unknown_and_keeps_the_estimate(world, monkeypatch):
+    root, _path, config = world
+
+    def interrupted(db, *, now):
+        raise cli.sqlite3.OperationalError("interrupted")
+    monkeypatch.setattr(cli.policy, "evidence_hold_counts", interrupted)
+    report = cli.observe(config, root=str(root), evidence_holds_wanted=True)
+    assert report["source_repair_evidence_holds"] == {"unknown": "observation_budget_exceeded"}
+    assert report["routes"]["reextract"]["targets"] == 1
