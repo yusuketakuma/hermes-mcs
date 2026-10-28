@@ -29,6 +29,7 @@ from mcs_util import HOME  # noqa: E402
 from safe_io import fdopen_owned  # noqa: E402
 
 from . import config  # noqa: E402
+from .credential_gate import CredentialGateUnavailable  # noqa: E402
 from .host import NotSent, Refused, log  # noqa: E402
 
 EX_TEMPFAIL = 75
@@ -112,6 +113,8 @@ def send(root: str, target: str) -> int:
         raise NotSent(problem)
     try:
         result = asyncio.run(_runtime(transport).send(root, target, payload))
+    except CredentialGateUnavailable:
+        raise NotSent("credential_gate_unavailable") from None
     except config.ConfigError:
         raise   # setup codes keep their exit status (75 when incomplete)
     except ValueError:

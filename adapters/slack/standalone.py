@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 from adapters.common import eventlog
 from adapters.common.paths import read_verified_attachment
 from adapters.common.worker import await_settled
+from mcs_standalone.credential_gate import protected
 from .delivery import _TS, _failed, _payload, _upload_file_id
 from .tasks import Supervisor
 
@@ -251,6 +252,7 @@ async def _socket(client, credentials, inflight):
 _event = eventlog.make_logger("mcs.standalone.slack")
 
 
+@protected
 async def run(root, stopping=None, *, native_admission=None,
               delivery_admission=None, delivery_identity=None):
     """Own one Socket Mode connection while reusing the existing card supervisor."""
@@ -380,6 +382,7 @@ def _files(root, payload):
     return blobs
 
 
+@protected
 async def send(root, target, payload):
     """Send one configured text notification and its verified attachments once."""
     from mcs_standalone.config import connector_settings, load_credentials
