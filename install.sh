@@ -97,24 +97,6 @@ while [ $# -gt 0 ]; do
     shift
 done
 
-# Ask only on a fresh interactive install. Existing JSON is parsed below
-# without grep, so malformed or unsupported modes cannot silently fall back.
-if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ ! -e "$HOME/.mcs/config.json" ] \
-        && [ ! -L "$HOME/.mcs/config.json" ] \
-        && [ "$MODE" = install ] && [ -t 0 ] && [ -t 1 ]; then
-    printf '%s\n' "MCS の導入を始めます。番号を入力して Enter キーで進みます。" \
-        "Slack / Discord との連携方式を選んでください。" \
-        "  1) わからないので推奨を使う — Hermes Agent と連携（標準）" \
-        "  2) MCS 単独で使う — Hermes Agent を導入しない" \
-        "LINE WORKS を使う場合も、通知先は後の初期設定で選べます。"
-    choose '選択 [1・推奨 / 2 / 0・中止]: '
-    case "$_answer" in
-        2) RUNTIME_MODE=standalone ;;
-        1) RUNTIME_MODE=hermes ;;
-    esac
-    RUNTIME_EXPLICIT=1
-fi
-
 say()  { printf '\n=== %s ===\n' "$1"; }
 ok()   { printf '  完了: %s\n' "$*"; }
 skip() { printf '  省略: %s\n' "$*"; }
@@ -176,22 +158,31 @@ fi
 MCS_ROOT="$(abspath "$HOME")/.mcs"
 export MCS_ROOT
 CONFIG_ABSENT=0
+CONFIG_EMPTY=0
+RESUME_UNCONFIGURED=0
+CONFIG_BASE=""
 if [ -e "$HOME/.mcs/config.json" ] || [ -L "$HOME/.mcs/config.json" ]; then
     MODE_PY="$HOME/.mcs/venv/bin/python3"
     if [ ! -x "$MODE_PY" ]; then MODE_PY="$(command -v python3 || true)"; fi
     [ -n "$MODE_PY" ] || die "既存設定の接続方法を確認するには Python が必要です。Python を導入して再実行してください"
-    RUNTIME_MODE="$("$MODE_PY" - "$HOME/.mcs/config.json" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" <<'PYMODE'
+    MODE_STATUS="$("$MODE_PY" - "$HOME/.mcs/config.json" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" <<'PYMODE'
 import json
+import hashlib
 import os
 import stat
 import sys
 try:
     fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
             raise ValueError
-        with os.fdopen(fd, encoding="utf-8", closefd=False) as stream:
-            cfg = json.load(stream)
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            raw = stream.read()
+        cfg = json.loads(raw.decode("utf-8"))
+        ident = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+        if ident(info) != ident(os.fstat(fd)) or ident(info) != ident(os.stat(sys.argv[1], follow_symlinks=False)):
+            raise ValueError
     finally:
         os.close(fd)
     if not isinstance(cfg, dict):
@@ -199,14 +190,43 @@ try:
     mode = sys.argv[3] if sys.argv[2] == "1" else cfg.get("runtime_mode", "hermes")
     if mode not in ("hermes", "standalone"):
         raise ValueError
-    print(mode)
+    if not cfg:
+        token = ":".join(str(n) for n in ident(info)) + ":" + hashlib.sha256(raw).hexdigest()
+        print(mode + ":empty:" + token)
+    else:
+        print(mode + ":existing:")
 except (OSError, ValueError, AttributeError, TypeError, RecursionError):
     raise SystemExit(1) from None
 PYMODE
 )" || die "config.json を読み取れないため接続方法を決定できません。設定ファイルを修復してください（--mode は読み取れる設定の接続方法だけを上書きします）"
+    RUNTIME_MODE="${MODE_STATUS%%:*}"
+    MODE_DETAIL="${MODE_STATUS#*:}"
+    if [ "${MODE_DETAIL%%:*}" = empty ]; then
+        CONFIG_EMPTY=1
+        CONFIG_BASE="${MODE_DETAIL#*:}"
+    fi
     case "$RUNTIME_MODE" in hermes|standalone) ;; *) die "接続方法を読み取れません。--mode hermes または --mode standalone を指定してください" ;; esac
 else
     CONFIG_ABSENT=1
+fi
+# An interrupted noninteractive first install can have created only {}.
+# A completed install or any other existing settings retain their mode.
+if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ "$MODE" = install ] && [ -t 0 ] && [ -t 1 ] \
+        && { [ "$CONFIG_ABSENT" -eq 1 ] || { [ "$CONFIG_EMPTY" -eq 1 ] \
+        && [ ! -e "$HOME/.mcs/data/install_options.json" ] \
+        && [ ! -L "$HOME/.mcs/data/install_options.json" ]; }; }; then
+    printf '%s\n' "MCS の導入を始めます。番号を入力して Enter キーで進みます。" \
+        "Slack / Discord との連携方式を選んでください。" \
+        "  1) わからないので推奨を使う — Hermes Agent と連携（標準）" \
+        "  2) MCS 単独で使う — Hermes Agent を導入しない" \
+        "LINE WORKS を使う場合も、通知先は後の初期設定で選べます。"
+    choose '選択 [1・推奨 / 2 / 0・中止]: '
+    case "$_answer" in
+        2) RUNTIME_MODE=standalone ;;
+        1) RUNTIME_MODE=hermes ;;
+    esac
+    RUNTIME_EXPLICIT=1
+    [ "$CONFIG_ABSENT" -eq 1 ] || RESUME_UNCONFIGURED=1
 fi
 DEFAULT_HERMES_HOME="$(abspath "$HOME")/.hermes"
 ENV_HERMES_HOME="${HERMES_HOME:-}"
@@ -1040,15 +1060,15 @@ if recovery_wanted; then
 fi
 # Create the initial local config, or persist explicitly selected settings.
 if [ "$CONFIG_ABSENT" -eq 1 ] || [ "$RUNTIME_EXPLICIT" -eq 1 ] || [ -n "$RECOVERY_OPTION" ]; then
-    "$MCS_PY" - "$REPO" "$RUNTIME_MODE" "$RECOVERY_OPTION" "$CONFIG_ABSENT" "$RUNTIME_EXPLICIT" "$RECOVERY_PYTHON" <<'PYMODE'
-import json, os, stat, sys
+    MCS_INSTALL_RESUME_UNCONFIGURED="$RESUME_UNCONFIGURED" MCS_INSTALL_CONFIG_BASE="$CONFIG_BASE" "$MCS_PY" - "$REPO" "$RUNTIME_MODE" "$RECOVERY_OPTION" "$CONFIG_ABSENT" "$RUNTIME_EXPLICIT" "$RECOVERY_PYTHON" <<'PYMODE'
+import json, os, secrets, stat, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "mcs"))
 import _mcs_path
 import lifecycle_io
 import runtime_inspection
 from mcs_util import CONF_PATH, CONFIG_MAX_BYTES, REPO, parse_config
-from safe_io import atomic_write, publish_new_bytes, read_regular_nofollow
+from safe_io import atomic_write, create_exclusive, fdopen_owned
 
 if sys.argv[4] == "1":
     cfg = {}
@@ -1062,30 +1082,96 @@ if sys.argv[4] == "1":
     path = Path(CONF_PATH)
     body = (json.dumps(cfg, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
     try:
-        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        publish_new_bytes(path, body)
-    except FileExistsError:
+        home_fd = os.open(path.parent.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
-            raw, opened = read_regular_nofollow(path, CONFIG_MAX_BYTES, ValueError, with_stat=True)
-            current = path.lstat()
-            identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_size,
-                                  s.st_mtime_ns, s.st_ctime_ns)
-            if (len(raw) > CONFIG_MAX_BYTES or not stat.S_ISREG(current.st_mode) or opened.st_uid != os.getuid()
-                    or identity(opened) != identity(current)):
+            home_stat = os.fstat(home_fd)
+            if home_stat.st_uid != os.getuid() or home_stat.st_mode & 0o022:
                 raise ValueError
-            winner = parse_config(raw)
-            if (not isinstance(winner, dict) or winner.get("runtime_mode", "hermes") != sys.argv[2]
-                    or sys.argv[3] and winner.get("recovery_python") != sys.argv[3]
-                    or sys.argv[6] and runtime_inspection.recovery_python(winner) != sys.argv[6]):
+            try:
+                os.mkdir(path.parent.name, 0o700, dir_fd=home_fd)
+            except FileExistsError:
+                pass
+            dir_fd = os.open(path.parent.name, os.O_RDONLY | os.O_DIRECTORY, dir_fd=home_fd)
+            try:
+                def check_parent():
+                    opened = os.fstat(dir_fd)
+                    current = os.stat(path.parent.name, dir_fd=home_fd)
+                    named = os.stat(path.parent)
+                    if (opened.st_uid != os.getuid() or opened.st_mode & 0o022
+                            or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+                            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)):
+                        raise ValueError
+
+                check_parent()
+                staging = ".alias-" + secrets.token_hex(16) + ".tmp"
+                fd = create_exclusive(staging, dir_fd=dir_fd)
+                try:
+                    with fdopen_owned(fd, "wb") as stream:
+                        stream.write(body)
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    check_parent()
+                    try:
+                        os.link(staging, path.name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd,
+                                follow_symlinks=False)
+                        os.fsync(dir_fd)
+                    except FileExistsError:
+                        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                     dir_fd=dir_fd)
+                        with fdopen_owned(fd, "rb") as stream:
+                            opened = os.fstat(stream.fileno())
+                            if not stat.S_ISREG(opened.st_mode) or opened.st_size > CONFIG_MAX_BYTES:
+                                raise ValueError
+                            raw = stream.read(CONFIG_MAX_BYTES + 1)
+                        current = os.stat(path.name, dir_fd=dir_fd, follow_symlinks=False)
+                        check_parent()
+                        identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_size,
+                                              s.st_mtime_ns, s.st_ctime_ns)
+                        if (len(raw) > CONFIG_MAX_BYTES or not stat.S_ISREG(current.st_mode)
+                                or opened.st_uid != os.getuid() or stat.S_IMODE(opened.st_mode) != 0o600
+                                or identity(opened) != identity(current)):
+                            raise ValueError
+                        winner = parse_config(raw)
+                        if (not isinstance(winner, dict) or winner.get("runtime_mode", "hermes") != sys.argv[2]
+                                or sys.argv[3] and winner.get("recovery_python") != sys.argv[3]
+                                or sys.argv[6] and runtime_inspection.recovery_python(winner) != sys.argv[6]):
+                            raise ValueError
+                        from mcs_config import validate_config
+                        errors, _ = validate_config(winner)
+                        if any(not error.startswith("必須の設定項目がありません: ") for error in errors):
+                            raise ValueError
+                    check_parent()
+                finally:
+                    os.unlink(staging, dir_fd=dir_fd)
+            finally:
+                os.close(dir_fd)
+        finally:
+            os.close(home_fd)
+    except (OSError, ValueError, TypeError, RecursionError):
+        raise SystemExit("初期設定ファイルの保存先または競合を確認できません。既存設定を保持したため、内容を確認してから再実行してください") from None
+    raise SystemExit(0)
+
+if os.environ.get("MCS_INSTALL_RESUME_UNCONFIGURED") == "1":
+    import config_edit
+    try:
+        with config_edit._edit_lock():
+            raw, base = config_edit._snapshot()
+            token = ":".join(str(n) for n in base[0]) + ":" + base[1].hex()
+            if parse_config(raw) != {} or token != os.environ.get("MCS_INSTALL_CONFIG_BASE"):
                 raise ValueError
-            from mcs_config import validate_config
-            errors, _ = validate_config(winner)
-            if any(not error.startswith("必須の設定項目がありません: ") for error in errors):
-                raise ValueError
-        except (OSError, ValueError, TypeError, RecursionError):
-            raise SystemExit("初期設定の作成中に別の設定が保存されました。既存設定を保持したため、内容を確認してから再実行してください") from None
-    except OSError:
-        raise SystemExit("初期設定ファイルを作成できません。保存先を確認してから再実行してください") from None
+            cfg = {"runtime_mode": sys.argv[2]}
+            if sys.argv[3]:
+                cfg["recovery_python"] = sys.argv[3]
+            why = runtime_inspection.configured_recovery_problem(cfg, sys.argv[1], checkout=REPO)
+            if why:
+                raise ValueError(why)
+            def write_checked(handle):
+                json.dump(cfg, handle, ensure_ascii=False, indent=2)
+                if config_edit._snapshot()[1] != base:
+                    raise ValueError
+            atomic_write(CONF_PATH, write_checked, 0o600, makedirs=False)
+    except (OSError, ValueError, TypeError, RecursionError):
+        raise SystemExit("初期設定が変更されたか確認できません。既存設定を保持したため、内容を確認してから再実行してください") from None
     raise SystemExit(0)
 
 try:

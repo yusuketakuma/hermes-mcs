@@ -398,26 +398,33 @@ def _real_config_writer(env):
     return env
 
 
-def _race_config_writer(stub_root, raw, *, symlink=False):
+def _race_config_writer(stub_root, raw, *, symlink=False, mode=0o600, swap_parent=False):
     script = stub_root / "runtime-check.py"
     text = script.read_text()
     marker = "exec(compile(code, '<installer-runtime-check>', 'exec'))"
     assert text.count(marker) == 1
     inject = f"""
 if sys.argv[0] == '-':
-    import safe_io
     from pathlib import Path
-    original_publish = safe_io.publish_new_bytes
-    def race_publish(path, body):
-        target = Path(path)
+    original_link = os.link
+    def race_link(src, dst, **kwargs):
+        target = Path(os.environ['HOME']) / '.mcs' / 'config.json'
+        if {swap_parent!r}:
+            parent = target.parent
+            alternate = parent.parent / 'synthetic-alternate'
+            alternate.mkdir(mode=0o700)
+            parent.rename(parent.parent / 'synthetic-original')
+            parent.symlink_to(alternate, target_is_directory=True)
+            return original_link(src, dst, **kwargs)
         if {symlink!r}:
             other = target.parent.parent / 'synthetic-target.json'
             other.write_text({raw!r})
             target.symlink_to(other)
         else:
             target.write_text({raw!r})
-        return original_publish(path, body)
-    safe_io.publish_new_bytes = race_publish
+            target.chmod({mode!r})
+        return original_link(src, dst, **kwargs)
+    os.link = race_link
 """
     script.write_text(text.replace(marker, inject + marker))
 
@@ -493,6 +500,54 @@ def test_config_creation_race_never_follows_a_symlink(tmp_path):
     assert (home / 'synthetic-target.json').read_text() == raw
 
 
+@pytest.mark.parametrize('mode', [0o644, 0o660, 0o666])
+def test_config_creation_race_rejects_nonprivate_winner(tmp_path, mode):
+    home, _, stub, env = _world(tmp_path)
+    _real_config_writer(env)
+    raw = '{"runtime_mode":"hermes"}'
+    _race_config_writer(stub, raw, mode=mode)
+    result = _run(env, None, '--no-brew', '--no-llm', '--no-plugin',
+                  '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    config = home / '.mcs/config.json'
+    assert config.read_text() == raw and config.stat().st_mode & 0o777 == mode
+
+
+def test_config_creation_rejects_writable_parent_directory(tmp_path):
+    home, _, _, env = _world(tmp_path)
+    _real_config_writer(env)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700)
+    root.chmod(0o777)
+    result = _run(env, None, '--no-brew', '--no-llm', '--no-plugin',
+                  '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    assert not (root / 'config.json').exists()
+
+
+def test_config_creation_pins_parent_directory_during_swap(tmp_path):
+    home, _, stub, env = _world(tmp_path)
+    _real_config_writer(env)
+    _race_config_writer(stub, '{}', swap_parent=True)
+    result = _run(env, None, '--no-brew', '--no-llm', '--no-plugin',
+                  '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    assert not (home / 'synthetic-alternate/config.json').exists()
+    assert (home / 'synthetic-original/config.json').read_bytes() == b'{}\n'
+
+
+def test_config_creation_accepts_private_existing_parent_symlink(tmp_path):
+    home, _, _, env = _world(tmp_path)
+    _real_config_writer(env)
+    target = tmp_path / 'synthetic-root'
+    target.mkdir(mode=0o700)
+    (home / '.mcs').symlink_to(target, target_is_directory=True)
+    result = _run(env, None, '--no-brew', '--no-llm', '--no-plugin',
+                  '--no-services', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (target / 'config.json').read_bytes() == b'{}\n'
+
+
 def test_config_creation_race_rejects_different_recovery_selection(tmp_path):
     home, _, stub, env = _world(tmp_path)
     _real_config_writer(env)
@@ -518,6 +573,75 @@ def test_failed_later_install_stage_keeps_created_config_for_retry(tmp_path):
     result = _run(env, None, *flags)
     assert result.returncode == 0, result.stdout + result.stderr
     assert (config.read_bytes(), config.stat().st_ino, config.stat().st_mtime_ns) == before
+
+
+@pytest.mark.parametrize('race', [False, True])
+def test_interactive_resume_can_choose_mode_after_noninteractive_failure(tmp_path, race):
+    import errno
+    import pty
+    import select
+    import time
+
+    home, hermes_home, stub, env = _world(tmp_path)
+    _real_config_writer(env)
+    result = _run({**env, 'STUB_FAIL_SERVICES': '1'}, None, '--no-brew', '--no-llm',
+                  '--no-plugin', '--no-recovery')
+    assert result.returncode != 0
+    config = home / '.mcs/config.json'
+    assert config.read_bytes() == b'{}\n'
+    winner = '{"runtime_mode":"hermes","synthetic":"kept"}'
+    if race:
+        script = stub / 'runtime-check.py'
+        text = script.read_text()
+        marker = "exec(compile(code, '<installer-runtime-check>', 'exec'))"
+        assert text.count(marker) == 1
+        inject = f"""
+if os.environ.get('MCS_INSTALL_RESUME_UNCONFIGURED') == '1':
+    from pathlib import Path
+    (Path(os.environ['HOME']) / '.mcs/config.json').write_text({winner!r})
+"""
+        script.write_text(text.replace(marker, inject + marker))
+    master, slave = pty.openpty()
+    process = subprocess.Popen(['sh', str(INSTALL), '--no-brew', '--no-llm',
+                                '--no-plugin', '--no-services', '--no-recovery'],
+                               stdin=slave, stdout=slave, stderr=slave, env=env)
+    os.close(slave)
+    output = b''
+    deadline = time.monotonic() + 60
+    try:
+        prompts = [('選択 [1・推奨 / 2 / 0'.encode(), b'2\n'),
+                   ('この内容で導入する（推奨）'.encode(), b'1\n')]
+        if not race:
+            prompts.append(('初期設定を始める'.encode(), b'2\n'))
+        for prompt, answer in prompts:
+            while prompt not in output:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0 and select.select([master], [], [], remaining)[0], output
+                output += os.read(master, 4096)
+                assert len(output) < 100000
+            os.write(master, answer)
+        while process.poll() is None:
+            remaining = deadline - time.monotonic()
+            assert remaining > 0
+            if select.select([master], [], [], remaining)[0]:
+                try:
+                    output += os.read(master, 4096)
+                except OSError as exc:
+                    if exc.errno != errno.EIO:
+                        raise
+                    break
+        status = process.wait(timeout=max(0.1, deadline - time.monotonic()))
+        assert (status != 0) is race, output
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        os.close(master)
+    if race:
+        assert config.read_text() == winner
+    else:
+        assert json.loads(config.read_text()) == {'runtime_mode': 'standalone'}
+    assert not hermes_home.joinpath('plugins/mcs-discord-commands').exists()
 
 
 @pytest.mark.parametrize("runtime", ["unsafe", "unknown", "failed", "unsupported"])
