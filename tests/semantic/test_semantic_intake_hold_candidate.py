@@ -1,4 +1,4 @@
-"""Synthetic intake evidence; recovery and old-reader fencing remain unfinished."""
+"""Synthetic intake evidence and guards against publishing through active holds."""
 import json
 
 import pytest

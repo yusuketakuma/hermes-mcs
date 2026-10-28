@@ -1840,6 +1840,9 @@ class Ledger:
                                      "SELECT 1 FROM notify_outbox WHERE event_id=? AND project_id=? "
                                      "AND kind='new_messages' AND state!='suppressed'",
                                      (arrival, project_id)).fetchone() is not None)
+                if isinstance(old_pl.get('intake_notification_targets'), dict) and not old_notification_free:
+                    preserve_live |= any(semantic_intake_hold.notification_allowed(self, old_pl, project_id, mid)
+                                         for mid in old_targets)
                 pl = dict(old_pl)
                 pl["targets"] = sorted(old_targets | set(ids))
                 # once a job descends from a notify intent it keeps that
@@ -1854,6 +1857,12 @@ class Ledger:
                     pl["origin"] = origin
                 if eligible:
                     pl["eligible"] = True
+                    if isinstance(pl.get('intake_notification_targets'), dict):
+                        arrival_ids = semantic_intake_hold._arrival_targets(
+                            self.db, project_id, origin['event_id'], strict=True)
+                        pl['intake_notification_targets'].update({
+                            str(mid): self._semantic_message_fingerprint(project_id, mid)
+                            for mid in ids if mid in arrival_ids})
                     # An actual arrival event is the explicit opt-in for a
                     # notification.  It supersedes a replay's suppression
                     # marker, even when the old origin is being replaced.
