@@ -171,14 +171,18 @@ import hashlib
 import os
 import stat
 import sys
+# Keep in sync with mcs_util.CONFIG_MAX_BYTES; this runs before the MCS venv exists.
+config_max_bytes = 1024 * 1024
 try:
     fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     try:
         info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
+        if not stat.S_ISREG(info.st_mode) or info.st_size > config_max_bytes:
             raise ValueError
         with os.fdopen(fd, "rb", closefd=False) as stream:
-            raw = stream.read()
+            raw = stream.read(config_max_bytes + 1)
+        if len(raw) > config_max_bytes:
+            raise ValueError
         cfg = json.loads(raw.decode("utf-8"))
         ident = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
         if ident(info) != ident(os.fstat(fd)) or ident(info) != ident(os.stat(sys.argv[1], follow_symlinks=False)):
@@ -1070,6 +1074,9 @@ import runtime_inspection
 from mcs_util import CONF_PATH, CONFIG_MAX_BYTES, REPO, parse_config
 from safe_io import atomic_write, create_exclusive, fdopen_owned
 
+class UnsafeParent(ValueError):
+    pass
+
 if sys.argv[4] == "1":
     cfg = {}
     if sys.argv[5] == "1" or sys.argv[3]:
@@ -1086,7 +1093,7 @@ if sys.argv[4] == "1":
         try:
             home_stat = os.fstat(home_fd)
             if home_stat.st_uid != os.getuid() or home_stat.st_mode & 0o022:
-                raise ValueError
+                raise UnsafeParent
             try:
                 os.mkdir(path.parent.name, 0o700, dir_fd=home_fd)
             except FileExistsError:
@@ -1097,8 +1104,9 @@ if sys.argv[4] == "1":
                     opened = os.fstat(dir_fd)
                     current = os.stat(path.parent.name, dir_fd=home_fd)
                     named = os.stat(path.parent)
-                    if (opened.st_uid != os.getuid() or opened.st_mode & 0o022
-                            or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+                    if opened.st_uid != os.getuid() or opened.st_mode & 0o022:
+                        raise UnsafeParent
+                    if ((opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
                             or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)):
                         raise ValueError
 
@@ -1147,6 +1155,8 @@ if sys.argv[4] == "1":
                 os.close(dir_fd)
         finally:
             os.close(home_fd)
+    except UnsafeParent:
+        raise SystemExit("ホームフォルダーまたは ~/.mcs の所有者が本人ではないか、本人以外に書き込みを許可しています。設定の改変を防ぐため作成を中止しました。所有者と権限を管理者に確認してください。既存設定は保持しています") from None
     except (OSError, ValueError, TypeError, RecursionError):
         raise SystemExit("初期設定ファイルの保存先または競合を確認できません。既存設定を保持したため、内容を確認してから再実行してください") from None
     raise SystemExit(0)

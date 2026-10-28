@@ -513,16 +513,57 @@ def test_config_creation_race_rejects_nonprivate_winner(tmp_path, mode):
     assert config.read_text() == raw and config.stat().st_mode & 0o777 == mode
 
 
-def test_config_creation_rejects_writable_parent_directory(tmp_path):
+@pytest.mark.parametrize('directory', ['home', 'mcs'])
+def test_config_creation_rejects_writable_parent_directory(tmp_path, directory):
     home, _, _, env = _world(tmp_path)
     _real_config_writer(env)
     root = home / '.mcs'
-    root.mkdir(mode=0o700)
-    root.chmod(0o777)
+    if directory == 'mcs':
+        root.mkdir(mode=0o700)
+    (home if directory == 'home' else root).chmod(0o777)
     result = _run(env, None, '--no-brew', '--no-llm', '--no-plugin',
                   '--no-services', '--no-recovery')
     assert result.returncode != 0
     assert not (root / 'config.json').exists()
+    assert '本人以外に書き込みを許可' in result.stderr
+    assert '設定の改変を防ぐため' in result.stderr
+    assert '所有者と権限を管理者に確認' in result.stderr
+
+
+@pytest.mark.parametrize('mode', ['preflight', 'dry-run', 'install'])
+def test_oversized_config_is_refused_before_installer_changes(tmp_path, mode):
+    from mcs_util import CONFIG_MAX_BYTES
+
+    home, _, stub, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700)
+    path = root / 'config.json'
+    body = b'{"padding":"' + b'x' * CONFIG_MAX_BYTES + b'"}'
+    path.write_bytes(body)
+    before = (path.stat().st_ino, path.stat().st_mtime_ns)
+    args = ([f'--{mode}'] if mode != 'install' else []) + [
+        '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery']
+    result = _run(env, None, *args)
+    assert result.returncode != 0
+    assert 'config.json を読み取れない' in result.stderr
+    assert path.read_bytes() == body
+    assert (path.stat().st_ino, path.stat().st_mtime_ns) == before
+    assert not any(c.startswith(('uv ', 'git clone', 'launchctl bootstrap')) for c in _calls(stub))
+
+
+def test_mode_detection_accepts_config_at_read_limit(tmp_path):
+    from mcs_util import CONFIG_MAX_BYTES
+
+    home, _, _, env = _world(tmp_path)
+    root = home / '.mcs'
+    root.mkdir(mode=0o700)
+    prefix, suffix = b'{"padding":"', b'"}'
+    body = prefix + b'x' * (CONFIG_MAX_BYTES - len(prefix) - len(suffix)) + suffix
+    path = root / 'config.json'
+    path.write_bytes(body)
+    result = _run(env, None, '--preflight', '--no-brew', '--no-llm', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert path.read_bytes() == body
 
 
 def test_config_creation_pins_parent_directory_during_swap(tmp_path):
