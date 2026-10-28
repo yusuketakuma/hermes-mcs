@@ -798,12 +798,12 @@ class DeliveryWorker(_BaseWorker):
 
     async def _file_remote_match(self, thread_ts: str, part: dict,
                                  ctx: dict, *, prior_only=False):
-        """Bounded replies scan for a bot/app-authored message already
-        carrying this file — the remote entry must match the sealed
-        name, size and sha256, then the
-        part binds that file's real id. A foreign user's file with
-        identical metadata can never satisfy a part. Each file id
-        binds once so identical uploads dedupe one-for-one."""
+        """Find an owned file by name and integer size, matching the sealed size when supplied.
+
+        The sealed hash must match the remote hash, unless the remote hash is absent
+        and the exact prior file is hosted, nonexternal, and noneditable. Each file
+        ID binds at most once; other users' files cannot satisfy a part.
+        """
         if ctx.get("history") is None:
             ctx["history"] = await self._replies(thread_ts)
         name = part.get("name") or "file"
@@ -830,9 +830,8 @@ class DeliveryWorker(_BaseWorker):
                         and f.get("size") != part["bytes"]):
                     continue
                 rsha = f.get("sha256")
-                # Slack does not promise a file hash in replies. A sealed
-                # earlier receipt can instead prove these same bytes, but
-                # only for this bot's still-present immutable hosted upload.
+                # Without a remote hash, bind only this bot's exact prior
+                # hosted, immutable file with the matching name and size.
                 proven_prior = (rsha is None and fid == part.get("prior_remote_id")
                                 and f.get("mode") == "hosted"
                                 and f.get("is_external") is False
