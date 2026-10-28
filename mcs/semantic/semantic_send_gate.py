@@ -40,6 +40,11 @@ def current_summary(db, project_id: int, message_id: int,
     Returns ``{artifact_id, content, meta}``. ``bundle`` may be a dict or
     a zero-arg callable resolved only after the cheap row/meta checks pass
     (thread_bundle reads the whole thread); a raising callable -> None."""
+    from ledger import semantic_intake_held
+    source = db.execute('SELECT COALESCE(parent_id,message_id) FROM messages '
+                        'WHERE project_id=? AND message_id=?', (project_id, message_id)).fetchone()
+    if source is None or semantic_intake_held(db, project_id, source[0]):
+        return None
     row = db.execute(
         "SELECT artifact_id,content,meta FROM artifacts "
         "WHERE kind='semantic_summary' AND project_id=? AND message_id=? "
@@ -147,6 +152,9 @@ def semantic_gate(db, ev, payload: dict, cfg: dict,
     if not isinstance(fp, str) or not fp or type(root) is not int \
             or root <= 0 or type(src) is not int or src <= 0:
         raise ValueError("payload_invalid")
+    from ledger import semantic_intake_held
+    if semantic_intake_held(db, project_id, root):
+        raise FreezeSend('semantic_intake_held') if in_progress else DeferredSend('semantic_intake_held')
     source_row, source = _source_event(db, project_id, src)
     if source_row is None or source is None:
         _stale("src_event_ineligible", in_progress)

@@ -122,13 +122,21 @@ def _apply_scan_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
 
 
 def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
+    from ledger import SEMANTIC_HOLD_INTENT, SEMANTIC_JOB_MAX_BYTES
     row = db.execute(
-        "SELECT job_id,kind,project_id,state,attempts,payload "
+        "SELECT job_id,kind,project_id,message_id,state,attempts,substr(payload,1,?) AS payload "
         "FROM fetch_jobs WHERE job_id=? AND kind=? AND project_id=?",
-        (req["job_id"], _SEMANTIC_JOB, req["project_id"]),
+        (SEMANTIC_JOB_MAX_BYTES + 1, req["job_id"], _SEMANTIC_JOB, req["project_id"]),
     ).fetchone()
     if row is None:
         return "job_not_found", {}
+    if db.execute('SELECT 1 FROM artifacts WHERE kind=? AND project_id=? '
+                  'AND (message_id=? OR message_id IS NULL) AND model=? LIMIT 1',
+                  (SEMANTIC_HOLD_INTENT, row['project_id'], row['message_id'], str(row['message_id']))).fetchone():
+        return "semantic_intake_held", {"job_id": row["job_id"]}
+    if (not isinstance(row['payload'], str)
+            or len(row['payload'].encode('utf-8')) > SEMANTIC_JOB_MAX_BYTES):
+        return "invalid_payload", {"job_id": row["job_id"]}
     # The writer historically accepts duplicate non-version keys.  Retain
     # that behavior, but never choose a version from an ambiguous top-level
     # marker (including escaped spellings of the same JSON key).
@@ -151,7 +159,7 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     if current_hash != req["expected_payload_hash"]:
         return "payload_changed", {"job_id": row["job_id"]}
     additional = req.get("additional_attempts")
-    error = retry_error(row, payload, additional)
+    error = retry_error(row, payload, additional, db=db)
     if error:
         return error, {"job_id": row["job_id"],
                        "attempts": row["attempts"]}
@@ -182,18 +190,25 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
 
 
 def _apply_control_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
+    from ledger import SEMANTIC_HOLD_INTENT, SEMANTIC_JOB_MAX_BYTES, semantic_job_payload
     project_id = req["project_id"]
     if not _project_exists(db, project_id):
         return "project_not_found", {}
     content = "paused" if req["cmd"] == "ops.pause" else "running"
     rows = db.execute(
-        "SELECT job_id,payload FROM fetch_jobs WHERE kind=? "
+        "SELECT job_id,message_id,substr(payload,1,?) AS payload FROM fetch_jobs WHERE kind=? "
         "AND project_id=? AND state='pending' ORDER BY job_id",
-        (_SEMANTIC_JOB, project_id),
+        (SEMANTIC_JOB_MAX_BYTES + 1, _SEMANTIC_JOB, project_id),
     ).fetchall()
     parsed: list[tuple[int, dict]] = []
     skipped = 0
     for row in rows:
+        if (db.execute('SELECT 1 FROM artifacts WHERE kind=? AND project_id=? '
+                       'AND (message_id=? OR message_id IS NULL) AND model=? LIMIT 1',
+                       (SEMANTIC_HOLD_INTENT, project_id, row['message_id'], str(row['message_id']))).fetchone()
+                or semantic_job_payload(row['payload'], root=row['message_id']) is None):
+            skipped += 1
+            continue
         try:
             payload = json.loads(row["payload"] or "{}")
         except (ValueError, TypeError, RecursionError):

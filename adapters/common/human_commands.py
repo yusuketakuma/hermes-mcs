@@ -225,13 +225,21 @@ def _project_exists(view, project_id: int) -> bool:
 
 
 def _semantic_job(view, requests, project_id: int, job_id: int, additional_attempts=None):
+    from ledger import SEMANTIC_HOLD_INTENT, SEMANTIC_JOB_MAX_BYTES
     row = view.db.execute(
-        "SELECT job_id,kind,project_id,state,attempts,payload "
+        "SELECT job_id,kind,project_id,message_id,state,attempts,substr(payload,1,?) AS payload "
         "FROM fetch_jobs WHERE project_id=? AND job_id=? AND kind='semantic'",
-        (project_id, job_id),
+        (SEMANTIC_JOB_MAX_BYTES + 1, project_id, job_id),
     ).fetchone()
     if row is None:
         return None, "job_not_found", None
+    if view.db.execute('SELECT 1 FROM artifacts WHERE kind=? AND project_id=? '
+                       'AND (message_id=? OR message_id IS NULL) AND model=? LIMIT 1',
+                       (SEMANTIC_HOLD_INTENT, project_id, row['message_id'], str(row['message_id']))).fetchone():
+        return None, 'semantic_intake_held', None
+    if (not isinstance(row['payload'], str)
+            or len(row['payload'].encode('utf-8')) > SEMANTIC_JOB_MAX_BYTES):
+        return None, 'invalid_payload', None
     try:
         parsed = requests.parse_command((row["payload"] or "{}").encode("utf-8"))
     except (ValueError, TypeError, UnicodeError, RecursionError):
@@ -239,7 +247,7 @@ def _semantic_job(view, requests, project_id: int, job_id: int, additional_attem
     if not isinstance(parsed, dict):
         return None, "invalid_payload", None
     from operation_contract import retry_error
-    error = retry_error(row, parsed, additional_attempts)
+    error = retry_error(row, parsed, additional_attempts, db=view.db)
     if error:
         return None, error, None
     from semantic_runtime import attempt_limit

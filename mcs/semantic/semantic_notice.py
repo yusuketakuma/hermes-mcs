@@ -97,6 +97,7 @@ def emit_degraded(ledger, scfg: dict) -> int:
     code-generated degraded notice through the existing outbox — no
     clinical claims, original-check instruction only (spec §19.3).
     Each (root, fingerprint) pair dedupes via delivery_key."""
+    from ledger import semantic_intake_held
     cutoff = time.time() - scfg["delayed_notice_seconds"]
     enqueued = 0
     # Only events still undelivered qualify — a base notification that
@@ -129,6 +130,8 @@ def emit_degraded(ledger, scfg: dict) -> int:
             f"SELECT COALESCE(parent_id,message_id) r FROM messages "
             f"WHERE project_id=? AND message_id IN ({marks})", (pid, *ids))}
         for root in roots:
+            if semantic_intake_held(ledger.db, pid, root):
+                continue
             if local_model is None:
                 local_model = semantic_transport.llm_model()
             bundle = semantic_store.thread_bundle(ledger.db, pid, root, local_model=local_model)

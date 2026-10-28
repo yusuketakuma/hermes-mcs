@@ -75,7 +75,15 @@ class LLMRejected(RuntimeError):
 
 def parse_payload(row: dict | object) -> dict:
     raw = row.get("payload") if isinstance(row, dict) else row["payload"]
-    return loads_dict(raw) or {}
+    from ledger import SEMANTIC_JOB_MAX_BYTES
+    from mcs_util import strict_json
+    if not isinstance(raw, str) or len(raw.encode('utf-8')) > SEMANTIC_JOB_MAX_BYTES:
+        return {}
+    try:
+        value = strict_json(raw)
+    except (TypeError, ValueError, RecursionError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def attempt_limit(payload: dict) -> int:

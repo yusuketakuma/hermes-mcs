@@ -29,7 +29,7 @@ import uuid
 from pathlib import Path
 from contextlib import suppress
 
-from mcs_util import RETRY_LATER_4XX, html_to_text, loads_dict, valid_hash
+from mcs_util import RETRY_LATER_4XX, html_to_text, loads_dict, strict_json, valid_hash
 
 
 import ledger_schema
@@ -40,6 +40,54 @@ from snapshots import publish_snapshot  # noqa: F401 - retained public ledger AP
 
 
 SCHEMA_VERSION = 10
+SEMANTIC_HOLD_INTENT = 'semantic_hold_intent'
+SEMANTIC_HOLD_EVIDENCE = 'semantic_hold_evidence'
+SEMANTIC_HOLD_BATCH = 128
+SEMANTIC_JOB_MAX_BYTES = 1024 * 1024
+
+
+def semantic_intake_held(db, project_id, root):
+    """Check whether a thread has durable intake waiting for review."""
+    return db.execute('SELECT 1 FROM artifacts WHERE kind=? AND project_id=? '
+                      'AND (message_id=? OR message_id IS NULL) AND model=? LIMIT 1',
+                      (SEMANTIC_HOLD_INTENT, project_id, root, str(root))).fetchone() is not None
+
+
+def semantic_job_payload(raw, *, db=None, project_id=None, root=None):
+    """Read only supported, bounded and unambiguous semantic job payloads."""
+    from inference_version import CURRENT_VERSION, LEGACY_VERSION, read_version
+    if not isinstance(raw, str) or len(raw.encode('utf-8')) > SEMANTIC_JOB_MAX_BYTES:
+        return None
+    try:
+        value = strict_json(raw)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    if not isinstance(value, dict) or read_version(value) not in (CURRENT_VERSION, LEGACY_VERSION):
+        return None
+    stack = [(value, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > 128 or (type(node) is int and not -(2**63) <= node < 2**63):
+            return None
+        if isinstance(node, dict):
+            stack.extend((item, depth + 1) for item in node.values())
+        elif isinstance(node, list):
+            stack.extend((item, depth + 1) for item in node)
+    if 'targets' not in value:
+        return value
+    targets = value['targets']
+    if (not isinstance(targets, list) or not targets
+            or any(type(mid) is not int or not 0 < mid < 2**63 for mid in targets)):
+        return None
+    if db is not None and db.execute(
+            'SELECT 1 FROM json_each(?) target WHERE NOT EXISTS '
+            '(SELECT 1 FROM messages WHERE project_id=? AND message_id=target.value '
+            'AND (message_id=? OR parent_id=?)) LIMIT 1',
+            (json.dumps(targets), project_id, root, root)).fetchone():
+        return None
+    return value
+
+
 JOB_REASON_CODES = frozenset({
     "invalid_payload", "schema_error", "fetch_error", "network_error",
     "worker_error", "worker_timeout", "deadline_exceeded", "session_expired",
@@ -1747,9 +1795,12 @@ class Ledger:
         ROOT so one job covers a post plus its replies; a new arrival on
         an evaluated thread revives the job as a new input generation."""
         from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
+        blocked = set()
         # Pause holds execution, not durable intake; OFF callers do not seed.
         if not message_ids:
             return
+        if not self.db.in_transaction:
+            self.db.execute('BEGIN IMMEDIATE')
         q = ("SELECT message_id,COALESCE(parent_id,message_id) r "
              "FROM messages WHERE project_id=? AND message_id IN ("
              + ",".join("?" * len(message_ids)) + ")")
@@ -1759,9 +1810,54 @@ class Ledger:
         now = time.time()
         for root, ids in roots.items():
             existing = self.db.execute("""
-              SELECT job_id,state,attempts,payload FROM fetch_jobs
+              SELECT job_id,state,attempts,substr(payload,1,?) AS payload FROM fetch_jobs
               WHERE kind='semantic' AND project_id=? AND message_id=?
-            """, (project_id, root)).fetchone()
+            """, (SEMANTIC_JOB_MAX_BYTES + 1, project_id, root)).fetchone()
+            held = self.db.execute(
+                'SELECT 1 FROM artifacts WHERE kind=? AND project_id=? '
+                'AND (message_id=? OR message_id IS NULL) AND model=? LIMIT 1',
+                (SEMANTIC_HOLD_INTENT, project_id, root, str(root))).fetchone()
+            pl = (semantic_job_payload(existing['payload'], db=self.db,
+                  project_id=project_id, root=root) if existing is not None else None)
+            if held or existing is not None and pl is None:
+                blocked.add(root)
+                anchor = root if self.db.execute(
+                    'SELECT 1 FROM messages WHERE project_id=? AND message_id=?',
+                    (project_id, root)).fetchone() else None
+                # Keep one bounded byte-exact copy. Larger original payloads
+                # stay in their protected job row, avoiding a huge second copy.
+                if existing is not None and pl is None:
+                    raw = existing['payload']
+                    copied = ((isinstance(raw, str) and len(raw.encode('utf-8')) <= SEMANTIC_JOB_MAX_BYTES)
+                              or (isinstance(raw, bytes) and len(raw) <= SEMANTIC_JOB_MAX_BYTES))
+                    meta = json.dumps({'job_id': existing['job_id'], 'state': existing['state'],
+                                       'attempts': existing['attempts'], 'copied': copied}, sort_keys=True)
+                    if not self.db.execute(
+                            'SELECT 1 FROM artifacts WHERE kind=? AND project_id=? '
+                            'AND (message_id=? OR message_id IS NULL) AND model=? LIMIT 1',
+                            (SEMANTIC_HOLD_EVIDENCE, project_id, root, str(root))).fetchone():
+                        if copied:
+                            self.db.execute(
+                                'INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) '
+                                'SELECT ?,?,?,payload,?,?,? FROM fetch_jobs WHERE job_id=?',
+                                (SEMANTIC_HOLD_EVIDENCE, project_id, anchor, str(root), meta, now,
+                                 existing['job_id']))
+                        else:
+                            self.artifact_add_tx(SEMANTIC_HOLD_EVIDENCE, '', project_id=project_id,
+                                                 message_id=anchor, model=str(root), meta=json.loads(meta))
+                targets = sorted(set(ids))
+                for start in range(0, len(targets), SEMANTIC_HOLD_BATCH):
+                    content = json.dumps({'targets': targets[start:start + SEMANTIC_HOLD_BATCH],
+                                          'origin': origin}, ensure_ascii=False, sort_keys=True,
+                                         allow_nan=False)
+                    if len(content.encode('utf-8')) > SEMANTIC_JOB_MAX_BYTES:
+                        raise ValueError('semantic_hold_intent_too_large')
+                    if not self.db.execute('SELECT 1 FROM artifacts WHERE kind=? AND project_id=? '
+                                           'AND (message_id=? OR message_id IS NULL) AND model=? AND content=? LIMIT 1',
+                                           (SEMANTIC_HOLD_INTENT, project_id, root, str(root), content)).fetchone():
+                        self.artifact_add_tx(SEMANTIC_HOLD_INTENT, content,
+                                             project_id=project_id, message_id=anchor, model=str(root))
+                continue
             eligible = isinstance(origin, dict) \
                 and origin.get("event_id") is not None
             notification_free = isinstance(origin, dict) \
@@ -1772,10 +1868,10 @@ class Ledger:
             source_generation = (_source_generation if _source_generation is not None
                                  else self._semantic_source_generation(project_id, root))
             if existing is not None:
-                old_pl = loads_dict(existing["payload"] or "{}") or {}
+                old_pl = pl
                 stored_targets = old_pl.get("targets")
                 old_targets = ({x for x in stored_targets if type(x) is int}
-                               if isinstance(stored_targets, list) else set())
+                               if isinstance(stored_targets, list) else {root})
                 old_origin = old_pl.get("origin")
                 old_eligible = bool(old_pl.get("eligible"))
                 old_notification_free = bool(old_pl.get(
@@ -1890,13 +1986,14 @@ class Ledger:
                 """, ("semantic", project_id, root, None,
                       json.dumps(payload, ensure_ascii=False, sort_keys=True),
                       now, now, now))
+        return blocked or None
 
     def semantic_seed(self, project_id: int, message_ids: list,
                       origin: dict):
         """Standalone seed for explicit replay — same job shape as the
         ingest path, committed on its own (spec §18.5)."""
         with self.db:
-            self.semantic_seed_tx(project_id, message_ids, origin)
+            return self.semantic_seed_tx(project_id, message_ids, origin)
 
     def pending_reply_jobs(self, project_id: int) -> int:
         """Live reply-fetch work only. 'failed' rows are terminal

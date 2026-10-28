@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "解析待ちの破損と後続の投入を保護",
+  "summary": "解析待ちが壊れている場合や未対応の版である場合も、元の内容と後から届いた解析対象を保持します。",
+  "upgrade": "追加設定はありません。更新後は関連する worker を再起動してください。保留は自動で解除されません。`python3 mcs/semantic/semantic.py --status --offline` の held_intakes と held_threads を確認し、0より大きい場合は記録を削除せず管理者に連絡してください。",
+  "details": [
+    "読み取れない解析待ちは内容と試行回数を保持して処理を止めます。判別できる不正な記録は失敗状態に隔離し、未対応の版は変更せず保留します。",
+    "保留中の新着や履歴の投入元を別々に保存し、自動で再投入しません。"
+  ],
+  "refs": ["mcs/core/ledger.py", "mcs/semantic/semantic_drain.py"]
+}

@@ -75,8 +75,9 @@ def seed(ledger, message_id: int, origin: str = "replay",
         # out of the rollout scope — seeding it would only churn in
         # drain-time defers
         return None
-    ledger.semantic_seed(row["project_id"], [message_id],
-                         {"source": origin, "notification_free": True})
+    if ledger.semantic_seed(row["project_id"], [message_id],
+                            {"source": origin, "notification_free": True}):
+        return None
     return row["r"]
 
 
@@ -130,6 +131,7 @@ def _canonical_readiness(ledger, cfg: dict | None) -> dict:
 
 def status_report(ledger, cfg: dict | None = None) -> dict:
     from semantic_metrics import audit_history, current_quality
+    from ledger import SEMANTIC_HOLD_INTENT
     jobs = {"pending": 0, "failed": 0, "done": 0}
     for r in ledger.db.execute(
             "SELECT state,COUNT(*) c FROM fetch_jobs WHERE kind=? "
@@ -146,11 +148,16 @@ def status_report(ledger, cfg: dict | None = None) -> dict:
     oldest = ledger.db.execute(
         "SELECT MIN(created_at) FROM fetch_jobs WHERE kind=? AND state='pending'",
         (semantic_policy.JOB_KIND,)).fetchone()[0]
+    held = ledger.db.execute(
+        'SELECT COUNT(*) AS intents,COUNT(DISTINCT project_id || ":" || model) AS threads '
+        'FROM artifacts WHERE kind=?', (SEMANTIC_HOLD_INTENT,)).fetchone()
     try:
         usage = {"jev_requests_today": semantic_store.jev_usage_today(ledger)}
     except ValueError:
         usage = {"jev_requests_today": None, "jev_usage_error": "semantic_usage_invalid"}
-    return {"semantic_jobs": jobs, "audit_statuses": history["audit_statuses"],
+    return {"semantic_jobs": jobs, "held_intakes": held['intents'],
+            "held_threads": held['threads'], "held_job_inspection": "unverified",
+            "audit_statuses": history["audit_statuses"],
             "canonical_readiness": _canonical_readiness(ledger, cfg),
             "audit_statuses_scope": "history", "history": history,
             "current_quality": current_quality(ledger, cfg),
