@@ -374,6 +374,8 @@ def _initialize(db, *, schema_version: int) -> bool:
             ON messages(project_id, COALESCE(parent_id,message_id), posted_at_ts);
           CREATE INDEX IF NOT EXISTS idx_artifacts_lookup
             ON artifacts(kind, project_id, message_id);
+          CREATE INDEX IF NOT EXISTS idx_semantic_control_epoch
+            ON artifacts(project_id, artifact_id DESC) WHERE kind='semantic_control';
           CREATE INDEX IF NOT EXISTS idx_requests_source_msg
             ON requests(source_message_id);
           CREATE INDEX IF NOT EXISTS idx_artifacts_kind_msg
@@ -382,6 +384,8 @@ def _initialize(db, *, schema_version: int) -> bool:
             ON artifacts(kind, created_at);
           CREATE INDEX IF NOT EXISTS idx_fetch_jobs_pending_due
             ON fetch_jobs(kind, next_try) WHERE state='pending';
+          CREATE INDEX IF NOT EXISTS idx_fetch_jobs_control_scan
+            ON fetch_jobs(kind, project_id, state, job_id);
           CREATE INDEX IF NOT EXISTS idx_attachments_pending
             ON attachments(attachment_id) WHERE state='pending';
           CREATE INDEX IF NOT EXISTS idx_outbox_due_states

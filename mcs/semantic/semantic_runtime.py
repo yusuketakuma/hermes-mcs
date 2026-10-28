@@ -135,12 +135,13 @@ class JobToken:
     payload_digest: str
     generation: str
     source_generation: str | None
+    control_epoch: int = 0
 
     @classmethod
     def from_row(cls, row: dict | object) -> JobToken:
         def get(name, default=None):
             return row.get(name, default) if isinstance(row, dict) \
-                else row[name]
+                else row[name] if name in row.keys() else default
 
         payload_raw = get("payload") or "{}"
         payload = parse_payload({"payload": payload_raw})
@@ -157,7 +158,14 @@ class JobToken:
                                if isinstance(payload.get("source_generation"),
                                               str)
                                else None),
+            control_epoch=int(get("patient_control_epoch", 0)),
         )
+
+
+CONTROL_EPOCH_SQL = ("COALESCE((SELECT artifact_id FROM artifacts "
+                     "WHERE kind='semantic_control' "
+                     "AND project_id=fetch_jobs.project_id "
+                     "ORDER BY artifact_id DESC LIMIT 1),0)")
 
 
 def job_matches(ledger, token: JobToken) -> bool:
@@ -166,7 +174,8 @@ def job_matches(ledger, token: JobToken) -> bool:
     if not is_current(parse_payload({'payload': token.payload_raw})):
         return False
     row = ledger.db.execute(
-        "SELECT job_id,kind,project_id,message_id,state,attempts,payload "
+        "SELECT job_id,kind,project_id,message_id,state,attempts,payload, "
+        + CONTROL_EPOCH_SQL + " AS patient_control_epoch "
         "FROM fetch_jobs WHERE job_id=?", (token.job_id,)).fetchone()
     if row is None:
         return False
@@ -176,6 +185,7 @@ def job_matches(ledger, token: JobToken) -> bool:
             and current.message_id == token.message_id
             and current.state == token.state
             and current.attempts == token.attempts
+            and current.control_epoch == token.control_epoch
             and current.generation == token.generation
             and current.payload_digest == token.payload_digest)
 
@@ -186,7 +196,7 @@ def _where_args(token: JobToken) -> tuple:
     # field. New semantic rows always carry a UUID generation.
     return (token.job_id, token.kind, token.project_id, token.message_id,
             token.state, token.attempts, token.payload_raw,
-            token.payload_raw)
+            token.payload_raw, token.control_epoch)
 
 
 # payload is matched exactly, with one rescue: a stored NULL/empty payload
@@ -196,6 +206,7 @@ def _where_args(token: JobToken) -> tuple:
 # forever (S-6). The rescue only applies when the token itself carries
 # the normalized "{}" — real payloads still require an exact match.
 _PAYLOAD_MATCH = ("(payload=? OR (COALESCE(payload,'')='' AND ?='{}'))")
+_CONTROL_EPOCH_MATCH = " AND " + CONTROL_EPOCH_SQL + "=?"
 
 
 def transition_tx(ledger, token: JobToken, action: str,
@@ -215,13 +226,13 @@ def transition_tx(ledger, token: JobToken, action: str,
         cur = ledger.db.execute(
             "UPDATE fetch_jobs SET state='done',updated_at=? "
             "WHERE job_id=? AND kind=? AND project_id=? AND message_id=? "
-            "AND state=? AND attempts=? AND " + _PAYLOAD_MATCH,
+            "AND state=? AND attempts=? AND " + _PAYLOAD_MATCH + _CONTROL_EPOCH_MATCH,
             (now, *args))
     elif action == "defer":
         cur = ledger.db.execute(
             "UPDATE fetch_jobs SET next_try=?,updated_at=? "
             "WHERE job_id=? AND kind=? AND project_id=? AND message_id=? "
-            "AND state=? AND attempts=? AND " + _PAYLOAD_MATCH,
+            "AND state=? AND attempts=? AND " + _PAYLOAD_MATCH + _CONTROL_EPOCH_MATCH,
             (now + max(0.0, retry_in), now, *args))
     elif action == "retry":
         cur = ledger.db.execute(
@@ -229,7 +240,7 @@ def transition_tx(ledger, token: JobToken, action: str,
             "state=CASE WHEN attempts+1>=? THEN 'failed' ELSE state END,"
             "updated_at=? WHERE job_id=? AND kind=? AND project_id=? "
             "AND message_id=? AND state=? AND attempts=? AND "
-            + _PAYLOAD_MATCH,
+            + _PAYLOAD_MATCH + _CONTROL_EPOCH_MATCH,
             (now + max(0.0, retry_in), max(1, int(max_attempts)), now,
              *args))
     elif action == "failed":
@@ -237,7 +248,7 @@ def transition_tx(ledger, token: JobToken, action: str,
             "UPDATE fetch_jobs SET state='failed',updated_at=? "
             "WHERE job_id=? AND kind=? AND project_id=? "
             "AND message_id=? AND state=? AND attempts=? AND "
-            + _PAYLOAD_MATCH,
+            + _PAYLOAD_MATCH + _CONTROL_EPOCH_MATCH,
             (now, *args))
     else:
         raise ValueError(f"unknown semantic transition: {action}")
@@ -587,6 +598,8 @@ def usage_reserver(ledger, token: JobToken, *, kind: str,
         day = None
         def check():
             nonlocal day
+            if not job_matches(ledger, token):
+                raise RuntimeStale("reservation")
             day = int(_jst_day_start(time.time()))
             _daily_cap_check(ledger, daily_request_budget, retryable=True)
             if int(_jst_day_start(time.time())) != day:

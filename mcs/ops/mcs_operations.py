@@ -28,6 +28,55 @@ from safe_io import fsync_dir, fdopen_owned
 _SEMANTIC_JOB = "semantic"
 _HISTORY_JOB = "history"
 _ADOPTION_ARTIFACT = "semantic_adoption"
+_CONTROL_MAX_JOBS = 128
+_CONTROL_BUDGET_SECONDS = 2.0
+_CONTROL_PAYLOAD_MAX_BYTES = 1024 * 1024
+
+
+def _control_job_payload(db, row):
+    """Read a supported control target without loading large or ambiguous input."""
+    from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY, read_version
+
+    class ControlObject(dict):
+        def __init__(self, pairs):
+            super().__init__(pairs)
+            self.ambiguous_version = sum(k == VERSION_KEY for k, _ in pairs) > 1
+
+    if row['payload_type'] == 'null':
+        raw = '{}'
+    elif row['payload_type'] == 'text':
+        with db.blobopen('fetch_jobs', 'payload', row['job_id'], readonly=True) as blob:
+            if len(blob) > _CONTROL_PAYLOAD_MAX_BYTES:
+                return None
+            try:
+                raw = blob.read().decode('utf-8') or '{}'
+            except UnicodeError:
+                return None
+    else:
+        return None
+    try:
+        payload = json.loads(raw, object_pairs_hook=ControlObject)
+        if (not isinstance(payload, dict) or payload.ambiguous_version
+                or read_version(payload) not in (CURRENT_VERSION, LEGACY_VERSION)):
+            return None
+        canonical(payload)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    return payload
+
+
+class _ControlBudgetExceeded(Exception):
+    pass
+
+
+def _pause_without_job_rewrite(db, req, now):
+    meta = canonical({"command_id": req["command_id"], "actor": req["actor"]}).decode("utf-8")
+    cur = db.execute(
+        "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
+        "created_at) VALUES(?,?,?,?,?,?,?)",
+        (_CONTROL_ARTIFACT, req['project_id'], None, 'paused', 'cco', meta, now))
+    return None, {'control_artifact_id': cur.lastrowid, 'updated_jobs': 0,
+                  'skipped_jobs': None, 'content': 'paused', 'jobs_unscanned': True}
 
 
 def _history_payload(raw) -> dict | None:
@@ -186,53 +235,65 @@ def _apply_control_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     if not _project_exists(db, project_id):
         return "project_not_found", {}
     content = "paused" if req["cmd"] == "ops.pause" else "running"
+    deadline = time.monotonic() + _CONTROL_BUDGET_SECONDS
     rows = db.execute(
-        "SELECT job_id,payload FROM fetch_jobs WHERE kind=? "
-        "AND project_id=? AND state='pending' ORDER BY job_id",
-        (_SEMANTIC_JOB, project_id),
+        "SELECT job_id,typeof(payload) AS payload_type FROM fetch_jobs WHERE kind=? "
+        "AND project_id=? AND state='pending' ORDER BY job_id LIMIT ?",
+        (_SEMANTIC_JOB, project_id, _CONTROL_MAX_JOBS + 1),
     ).fetchall()
-    parsed: list[tuple[int, dict]] = []
-    skipped = 0
-    for row in rows:
-        try:
-            payload = json.loads(row["payload"] or "{}")
-        except (ValueError, TypeError, RecursionError):
-            skipped += 1
-            continue
-        if not isinstance(payload, dict):
-            skipped += 1
-            continue
-        try:
-            canonical(payload).decode("utf-8")
-        except (TypeError, ValueError, RecursionError):
-            skipped += 1
-            continue
-        parsed.append((row["job_id"], payload))
-
+    if len(rows) > _CONTROL_MAX_JOBS:
+        if req["cmd"] == "ops.pause":
+            return _pause_without_job_rewrite(db, req, now)
+        return "semantic_control_job_limit", {"limit": _CONTROL_MAX_JOBS}
+    if time.monotonic() >= deadline:
+        if req["cmd"] == "ops.pause":
+            return _pause_without_job_rewrite(db, req, now)
+        return "semantic_control_budget_exceeded", {}
     meta = canonical({"command_id": req["command_id"],
                       "actor": req["actor"]}).decode("utf-8")
-    cur = db.execute(
-        "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
-        "created_at) VALUES(?,?,?,?,?,?,?)",
-        (_CONTROL_ARTIFACT, project_id, None, content, "cco", meta, now),
-    )
-    control_generation = cur.lastrowid
-    for job_id, payload in parsed:
-        payload["control_generation"] = control_generation
-        if req["cmd"] == "ops.resume":
-            db.execute(
-                "UPDATE fetch_jobs SET payload=?,next_try=0,updated_at=? "
-                "WHERE job_id=? AND kind=? AND project_id=? AND state='pending'",
-                (canonical(payload).decode("utf-8"), now, job_id, _SEMANTIC_JOB, project_id),
-            )
-        else:
-            db.execute(
-                "UPDATE fetch_jobs SET payload=?,updated_at=? "
-                "WHERE job_id=? AND kind=? AND project_id=? AND state='pending'",
-                (canonical(payload).decode("utf-8"), now, job_id, _SEMANTIC_JOB, project_id),
-            )
+    db.execute('SAVEPOINT semantic_control_budget')
+    try:
+        cur = db.execute(
+            "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
+            "created_at) VALUES(?,?,?,?,?,?,?)",
+            (_CONTROL_ARTIFACT, project_id, None, content, "cco", meta, now),
+        )
+        control_generation = cur.lastrowid
+        updated = skipped = 0
+        for row in rows:
+            if time.monotonic() >= deadline:
+                raise _ControlBudgetExceeded
+            payload = _control_job_payload(db, row)
+            if time.monotonic() >= deadline:
+                raise _ControlBudgetExceeded
+            if payload is None:
+                skipped += 1
+                continue
+            payload["control_generation"] = control_generation
+            if req["cmd"] == "ops.resume":
+                db.execute(
+                    "UPDATE fetch_jobs SET payload=?,next_try=0,updated_at=? "
+                    "WHERE job_id=? AND kind=? AND project_id=? AND state='pending'",
+                    (canonical(payload).decode("utf-8"), now, row['job_id'], _SEMANTIC_JOB, project_id),
+                )
+            else:
+                db.execute(
+                    "UPDATE fetch_jobs SET payload=?,updated_at=? "
+                    "WHERE job_id=? AND kind=? AND project_id=? AND state='pending'",
+                    (canonical(payload).decode("utf-8"), now, row['job_id'], _SEMANTIC_JOB, project_id),
+                )
+            updated += 1
+        if time.monotonic() >= deadline:
+            raise _ControlBudgetExceeded
+    except _ControlBudgetExceeded:
+        db.execute('ROLLBACK TO semantic_control_budget')
+        db.execute('RELEASE semantic_control_budget')
+        if req["cmd"] == "ops.pause":
+            return _pause_without_job_rewrite(db, req, now)
+        return 'semantic_control_budget_exceeded', {}
+    db.execute('RELEASE semantic_control_budget')
     return None, {"control_artifact_id": control_generation,
-                  "updated_jobs": len(parsed), "skipped_jobs": skipped,
+                  "updated_jobs": updated, "skipped_jobs": skipped,
                   "content": content}
 
 

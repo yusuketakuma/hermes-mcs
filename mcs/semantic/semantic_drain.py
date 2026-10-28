@@ -1840,6 +1840,8 @@ def _merge_long_defers(ledger, sched: dict, seen: dict) -> None:
 
 _ARCHIVED_JOB = ("EXISTS (SELECT 1 FROM patients p "
                  "WHERE p.project_id=fetch_jobs.project_id AND p.is_archived)")
+_JOB_WITH_CONTROL_EPOCH = ("SELECT fetch_jobs.*, " + runtime.CONTROL_EPOCH_SQL
+                           + " AS patient_control_epoch FROM fetch_jobs ")
 # an arrival-seeded job: a real notification event spawned it
 _ELIGIBLE_SQL = "json_valid(payload) AND COALESCE(json_extract(payload,'$.eligible'),0)=1"
 
@@ -1872,8 +1874,9 @@ def _adopt_pending_arrival(ledger, job):
         raise ValueError('semantic_arrival_adoption_transaction_active')
     ledger.db.execute('BEGIN IMMEDIATE')
     with ledger.db:
-        current = ledger.db.execute('SELECT * FROM fetch_jobs WHERE job_id=?', (job['job_id'],)).fetchone()
+        current = ledger.db.execute(_JOB_WITH_CONTROL_EPOCH + 'WHERE job_id=?', (job['job_id'],)).fetchone()
         if (current is None or current['payload'] != job['payload'] or current['state'] != 'pending'
+                or current['patient_control_epoch'] != job['patient_control_epoch']
                 or ledger.db.execute('PRAGMA data_version').fetchone()[0] != version):
             return None
         if origin is None:
@@ -1882,7 +1885,7 @@ def _adopt_pending_arrival(ledger, job):
             return None
         ledger.semantic_seed_tx(job['project_id'], targets,
             {'source': 'unread', 'event_id': origin}, _source_generation=source)
-    return ledger.db.execute('SELECT * FROM fetch_jobs WHERE job_id=?', (job['job_id'],)).fetchone()
+    return ledger.db.execute(_JOB_WITH_CONTROL_EPOCH + 'WHERE job_id=?', (job['job_id'],)).fetchone()
 
 
 def _due_lanes(ledger, kinds: tuple, max_jobs: int,
@@ -1938,14 +1941,14 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
             share = min(backlog_due, max_jobs - arrivals_due)
     order = "CASE WHEN kind=? THEN 0 ELSE 1 END, job_id"
     arrivals = ledger.db.execute(f"""
-      SELECT * FROM fetch_jobs
+      {_JOB_WITH_CONTROL_EPOCH}
       WHERE state='pending' AND next_try <= ? AND kind IN ({kind_ph})
         AND {eligible} AND {scope}
       ORDER BY {order} LIMIT ?
     """, (now, *kinds, excluded_json, JOB_KIND, max_jobs - share)).fetchall() \
         if max_jobs - share > 0 else []
     backfill = ledger.db.execute(f"""
-      SELECT * FROM fetch_jobs
+      {_JOB_WITH_CONTROL_EPOCH}
       WHERE state='pending' AND next_try <= ? AND kind IN ({kind_ph})
         AND NOT ({eligible}) AND {scope}
       ORDER BY {order} LIMIT ?
@@ -2055,7 +2058,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
         qc_rows = []
         if qc_active and max_jobs > 1:
             qc_rows = ledger.db.execute(
-                "SELECT * FROM fetch_jobs WHERE state='pending' "
+                _JOB_WITH_CONTROL_EPOCH + "WHERE state='pending' "
                 f"AND kind=? AND next_try<=? AND {scope} ORDER BY job_id LIMIT ?",
                 (QC_JOB_KIND, time.time(), excluded_json, max_jobs)).fetchall()
         qc_share = min(len(qc_rows), max(1, max_jobs // 4), max_jobs - 1)
@@ -2084,7 +2087,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
             # the backlog workers.
             # (same input generation only: a re-seed gets a new try)
             rows = ledger.db.execute(
-                f"SELECT * FROM fetch_jobs WHERE state='pending' AND next_try<=? "
+                _JOB_WITH_CONTROL_EPOCH + "WHERE state='pending' AND next_try<=? "
                 f"AND kind=? AND {eligible} AND {scope} "
                 "AND NOT EXISTS (SELECT 1 FROM json_each(?) s"
                 " WHERE s.key=CAST(fetch_jobs.job_id AS TEXT)"
@@ -2110,7 +2113,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
             rows = [row for kind in sorted(
                         kinds, key=lambda k: k == _BACKLOG_TURN["kind"])
                     for row in ledger.db.execute(
-                        "SELECT * FROM fetch_jobs WHERE state='pending' "
+                        _JOB_WITH_CONTROL_EPOCH + "WHERE state='pending' "
                         f"AND next_try<=? AND kind=? AND {scope} ORDER BY "
                         f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
                         (time.time(), kind, excluded_json, max_jobs + 8)).fetchall()]
