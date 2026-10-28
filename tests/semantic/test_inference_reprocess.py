@@ -45,6 +45,70 @@ def _arrival(store):
     return store.outbox_add('new_messages', 1, {'source': 'unread', 'message_ids': [1]})
 
 
+@pytest.mark.parametrize('raw', [None, '{', '[]', 'null', '{"bad":"' + 'x' * 1_000_000])
+def test_reprocess_holds_unreadable_job_and_advances_to_later_sources(store, monkeypatch, raw):
+    _save(store, 1)
+    _save(store, 2)
+    store.semantic_seed(1, [1], {'source': 'synthetic'})
+    with store.db:
+        store.db.execute("UPDATE fetch_jobs SET payload=?,attempts=4 WHERE kind='semantic' AND message_id=1",
+                         (raw,))
+    before = tuple(_job(store, 1))
+    original_loads = drain.loads_dict
+    observed = []
+
+    def checked_loads(value):
+        if value == raw:
+            assert not store.db.in_transaction
+            observed.append(True)
+        return original_loads(value)
+
+    monkeypatch.setattr(drain, 'loads_dict', checked_loads)
+    first = _replay(store, limit=1)
+    assert first['cursor'] == 1 and first['counts']['held'] == 1
+    assert tuple(_job(store, 1)) == before
+    second = _replay(store, limit=1)
+    assert second['seed_cursor'] == 2 and _job(store, 2) is not None
+    assert tuple(_job(store, 1)) == before and observed
+    verification = _replay(store, limit=2)
+    assert verification['coverage']['counts']['held'] == 1
+    assert verification['complete'] is False
+    assert tuple(_job(store, 1)) == before
+
+
+@pytest.mark.parametrize('writer', ['same_connection', 'other_connection'])
+def test_reprocess_rejects_a_plan_if_corrupt_job_is_repaired(store, monkeypatch, writer):
+    _save(store, 1)
+    _save(store, 2)
+    store.semantic_seed(1, [1], {'source': 'synthetic'})
+    repaired = _job(store, 1)['payload']
+    with store.db:
+        store.db.execute("UPDATE fetch_jobs SET payload='{',attempts=4 WHERE kind='semantic' AND message_id=1")
+    path = store.db.execute('PRAGMA database_list').fetchone()[2]
+    original_update = drain._sched_update
+
+    @contextmanager
+    def concurrent(ledger):
+        if writer == 'other_connection':
+            with sqlite3.connect(path) as other:
+                other.execute("UPDATE fetch_jobs SET payload=?,attempts=5 WHERE kind='semantic' AND message_id=1",
+                              (repaired,))
+        else:
+            with ledger.db:
+                ledger.db.execute("UPDATE fetch_jobs SET payload=?,attempts=5 WHERE kind='semantic' AND message_id=1",
+                                  (repaired,))
+        with original_update(ledger) as sched:
+            yield sched
+
+    monkeypatch.setattr(drain, '_sched_update', concurrent)
+    result = _replay(store, limit=2)
+    assert result['status'] == 'source_changed' and result['processed'] == 0
+    row = _job(store, 1)
+    assert row['payload'] == repaired and row['attempts'] == 5
+    assert _job(store, 2) is None
+    assert 'inference_reprocess' not in drain._sched_state(store)
+
+
 def test_replay_is_bounded_and_restartable_for_roots_replies_archives_and_null_full(store):
     _patient(store, 2)
     for mid, pid, parent in [(1, 1, None), (2, 1, 1), (3, 2, None), (4, 1, None)]:
@@ -161,6 +225,36 @@ def test_current_pass_with_empty_projection_is_counted_without_legacy_fallback(s
     report = _replay(store, cfg)
     assert report['coverage']['counts'] == {'current': 1}
     assert report['complete'] is False and _job(store) is None
+
+
+def test_current_source_does_not_read_its_job_payload(store, monkeypatch):
+    _save(store)
+    cfg = _cfg(loop_mode='off')
+    scfg, errors = semantic_policy.runtime_config(cfg)
+    assert not errors
+    fp = semantic_store.thread_bundle(store.db, 1, 1)['source_fingerprint']
+    policy = semantic_policy.policy_fingerprint(scfg)
+    binding = {VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp, 'policy_fingerprint': policy}
+    store.artifact_add('semantic_summary', '{"claims":[]}', project_id=1, message_id=1, meta=binding)
+    store.artifact_add('semantic_audit', '{"status":"PASS"}', project_id=1, message_id=1, meta=binding)
+    store.artifact_add('semantic_facts', '{"facts":[]}', project_id=1, message_id=1, meta=binding)
+    store.semantic_seed(1, [1], {'source': 'synthetic'})
+    raw = '{"bad":"' + 'x' * 1_000_000
+    with store.db:
+        store.db.execute("UPDATE fetch_jobs SET payload=? WHERE kind='semantic' AND message_id=1", (raw,))
+    before = tuple(_job(store))
+    original_loads = drain.loads_dict
+
+    def checked_loads(value):
+        assert value != raw
+        return original_loads(value)
+
+    monkeypatch.setattr(drain, 'loads_dict', checked_loads)
+    report = _replay(store, cfg)
+    assert report['processed'] == 1 and report['phase'] == 'verify'
+    report = _replay(store, cfg)
+    assert report['coverage']['counts'] == {'current': 1}
+    assert tuple(_job(store)) == before
 
 
 @pytest.mark.parametrize('proof_version,patient_state', [

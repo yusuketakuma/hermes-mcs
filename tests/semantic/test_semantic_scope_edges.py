@@ -47,17 +47,27 @@ def test_thread_bundle_rejects_unrelated_targets_instead_of_dropping_them(
         for target_ids in ([3], [4], [2, 3], [2, 4], [True], [1.0], "1"):
             with pytest.raises(ValueError, match="semantic_target_scope"):
                 semantic_store.thread_bundle(db.db, 1, 1, target_ids)
-        row = db.db.execute("SELECT payload FROM fetch_jobs WHERE kind='semantic'").fetchone()
+        # Keep unrelated, valid threads out of this drain's due window. The
+        # replay enumerator otherwise creates and runs them independently.
+        db.semantic_seed(1, [3], {'source': 'history_import', 'notification_free': True})
+        db.semantic_seed(2, [4], {'source': 'history_import', 'notification_free': True})
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET next_try=? WHERE kind='semantic' AND message_id IN (3,4)",
+                          (time.time() + 3600,))
+        row = db.db.execute("SELECT payload FROM fetch_jobs WHERE kind='semantic' AND message_id=1").fetchone()
         payload = json.loads(row['payload'])
         payload['targets'] = [2, 4]
         with db.db:
-            db.db.execute("UPDATE fetch_jobs SET payload=? WHERE kind='semantic'",
+            db.db.execute("UPDATE fetch_jobs SET payload=? WHERE kind='semantic' AND message_id=1",
                           (json.dumps(payload),))
         client = _FakeJev()
         semantic_drain.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 300,
                          jev_client=client, llm_fn=_llm)
         assert not client.calls
-        assert db.db.execute("SELECT state FROM fetch_jobs WHERE kind='semantic'").fetchone()[0] == 'failed'
+        assert db.db.execute("SELECT state FROM fetch_jobs WHERE kind='semantic' AND message_id=1").fetchone()[0] == 'failed'
+        assert [tuple(row) for row in db.db.execute(
+            "SELECT message_id,state FROM fetch_jobs WHERE kind='semantic' AND message_id IN (3,4) ORDER BY message_id"
+        )] == [(3, 'pending'), (4, 'pending')]
     finally:
         db.close()
 

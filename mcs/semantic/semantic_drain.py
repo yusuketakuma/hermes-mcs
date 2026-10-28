@@ -1701,11 +1701,18 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
         if state in ('pending', 'repair_required', 'held', 'failed'):
             root = row['parent_id'] or row['message_id']
             key = (row['project_id'], root)
-            if key not in sources:
-                sources[key] = ledger._semantic_source_generation(*key)
             old = ledger.db.execute('SELECT payload,state FROM fetch_jobs WHERE kind=? '
                                     'AND project_id=? AND message_id=?', (JOB_KIND, *key)).fetchone()
             pl = loads_dict(old[0]) if old is not None else {}
+            if old is not None and pl is None:
+                # An unreadable job is evidence, not an empty legacy job.
+                # Leave its bytes and retry budget alone and allow the finite
+                # pass to continue to later sources. Intake and repair are
+                # separate from this read-only observation.
+                planned.append((row, 'held', None))
+                continue
+            if key not in sources:
+                sources[key] = ledger._semantic_source_generation(*key)
             if (not is_current(pl)
                     or pl.get('execution_contract') == 1 and pl.get('execution_generation') != generation
                     or pl.get('source_generation') != sources[key]
