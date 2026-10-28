@@ -11,6 +11,7 @@ import pytest
 import notify_flush
 import notify_sender
 import notify_urgent
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from self_identity import record_station_staff
 from notify_testkit import (
     CFG, NOW, _begin, _dispatch, _extract, _latest_render, _msg, _part_receipt,
@@ -72,7 +73,7 @@ def _fact(store, *, mid=100, urgency="high", at=NOW - 600, kind="extract_llm", *
         content_hash = store.db.execute("SELECT content_hash FROM messages WHERE message_id=?",
                                         (mid,)).fetchone()[0]
         store.artifact_add(kind, json.dumps(content), project_id=1, message_id=mid,
-                           meta={"hash": content_hash, "engine_version": 4,
+                           meta={VERSION_KEY: CURRENT_VERSION, "hash": content_hash, "engine_version": 4,
                                  "projection_version": PROJECTION_VERSION, **meta})
     else:
         _extract(store, mid, content, kind=kind, **meta)

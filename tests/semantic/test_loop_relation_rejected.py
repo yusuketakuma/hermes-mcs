@@ -9,6 +9,7 @@ import pytest
 import semantic_drain
 import semantic_jev as jev
 import semantic_loops
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _cfg, _FakeJev, _llm, _message, _pending_fact, _seeded
 
 CODE = "relation:probabilities_sum_off_ge_1e-3"
@@ -173,10 +174,11 @@ def test_pair_ids_must_be_positive_ints_not_bools(ids):
     receipt = {"status": "INCOMPLETE", "loop_artifact_id": ids[0],
                "trigger_message_id": ids[1], "trigger_revision": "rev", "code": CODE}
     meta = {"policy_fingerprint": "p", "retry_scope": "s",
-            "registry": jev.REGISTRY_VERSION}
+            "registry": jev.REGISTRY_VERSION, VERSION_KEY: CURRENT_VERSION}
     assert semantic_loops.rejected_relation_pair(receipt, meta, "p", "s") is None
     receipt.update(loop_artifact_id=1, trigger_message_id=2)
     assert semantic_loops.rejected_relation_pair(receipt, meta, "p", "s") == ((1, 2, "rev"), CODE)
+    assert semantic_loops.rejected_relation_pair(receipt, {k: v for k, v in meta.items() if k != VERSION_KEY}, "p", "s") is None
 
 
 

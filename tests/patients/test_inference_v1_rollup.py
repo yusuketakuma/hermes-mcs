@@ -15,6 +15,7 @@ import pytest
 
 import inference_version as inference
 import inference_dependency_loss as dependency_loss
+import mcs_queries
 from ledger import Ledger
 import rollup
 from extract_testkit import _message
@@ -222,7 +223,7 @@ def test_paged_rollup_matches_whole_snapshot_oracle_across_pages(tmp_path, monke
         for _ in range(2):
             ledger.artifact_add('extract_v1', '{"requests":[]}', project_id=1, message_id=65,
                                 meta={inference.VERSION_KEY: inference.CURRENT_VERSION, 'hash': row[0]})
-        reference_blobs = rollup.current_extraction_blobs(ledger.db, 1)
+        reference_blobs = mcs_queries.current_extraction_blobs(ledger.db, 1)
         assert reference_blobs[65]['extract_v1'] == '{"requests":[]}'
         for ids in (list(range(1, 65)), list(range(65, 129)), [129, 130, 131, 900]):
             page_blobs = rollup._current_extraction_page(ledger.db, 1, ids)
@@ -234,7 +235,7 @@ def test_paged_rollup_matches_whole_snapshot_oracle_across_pages(tmp_path, monke
 
         def whole_snapshot(db, project_id, cursor, first_page, cfg, *, html_available):
             messages = first_page + cursor.fetchall()
-            arts = rollup.current_extraction_blobs(db, project_id)
+            arts = mcs_queries.current_extraction_blobs(db, project_id)
             refs = rollup._clinical_artifact_refs(db, project_id, arts)
             ref_mids = {r[0] for r in db.execute(
                 'SELECT DISTINCT a.message_id FROM artifacts a JOIN messages m ON m.message_id=a.message_id '

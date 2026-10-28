@@ -7,6 +7,7 @@ import pytest
 
 import notify_flush
 import notify_urgent
+from inference_version import CURRENT_VERSION, LEGACY_VERSION, LLM_EXTRACT_VERSION, VERSION_KEY
 from ledger import Ledger
 from self_identity import record_station_staff
 from notify_testkit import (
@@ -675,7 +676,7 @@ def test_triage_assigned_or_live_deferral_stops_e2_and_queued_send(
         assert result["sent"] == 1 and len(calls) == 1
 
 
-def _qc_urgency(store, mid, aid, jev):
+def _qc_urgency(store, mid, aid, jev, *, inference_version=CURRENT_VERSION):
     """A done QC verdict on urgency, pinned to artifact `aid`."""
     h = store.db.execute("SELECT content_hash FROM messages WHERE message_id=?",
                          (mid,)).fetchone()[0]
@@ -686,7 +687,9 @@ def _qc_urgency(store, mid, aid, jev):
             (mid, json.dumps({"qc": "done", "items": [],
                               "urgency": {"extracted": "high", "jev": jev,
                                           "confidence": 0.9}}),
-             json.dumps({"hash": h, "source_artifact_id": aid}), NOW))
+             json.dumps({"hash": h, "source_artifact_id": aid,
+                         "extract_version": LLM_EXTRACT_VERSION,
+                         VERSION_KEY: inference_version}), NOW))
 
 
 @pytest.mark.parametrize("jev", ["routine", "unclear"])
@@ -708,6 +711,14 @@ def test_qc_agreement_does_not_veto_escalation(world):
     _base(store, interactive=True)
     aid = _fact(store)
     _qc_urgency(store, 100, aid, "high")
+    assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
+
+
+def test_legacy_qc_disagreement_does_not_veto_current_escalation(world):
+    store, cfg, _, _ = world
+    _base(store, interactive=True)
+    aid = _fact(store)
+    _qc_urgency(store, 100, aid, "routine", inference_version=LEGACY_VERSION)
     assert notify_urgent.maybe_enqueue(store, cfg)["queued"] == 1
 
 

@@ -1,9 +1,11 @@
 """Synthetic acceptance of the run-lock wait after a finished nightly inference (p1)."""
+import json
 import os
 import sqlite3
 
 import pytest
 
+import inference_version as inference
 import patient_context_refresh as context_refresh
 from test_patient_context_refresh import document, runtime, seed, step
 
@@ -55,7 +57,8 @@ def test_scan_row_inserted_during_lock_wait_is_not_published(runtime, monkeypatc
     def insert(n):
         if n == 3:
             other.execute('INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) '
-                          "VALUES (?,1,1,'{}','','{}',0)", (context_refresh.SCAN,))
+                          "VALUES (?,1,1,'{}','',?,0)",
+                          (context_refresh.SCAN, json.dumps({inference.VERSION_KEY: inference.CURRENT_VERSION})))
             other.commit()
     contended_lock(monkeypatch, clock, grant_after=3, on_try=insert)
     assert step(runtime)['status'] == 'source_changed'
@@ -72,7 +75,8 @@ def test_context_published_by_another_process_during_lock_wait_is_not_overwritte
     def publish(n):
         if n == 3:
             other.execute('INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) '
-                          "VALUES (?,1,NULL,'{\"version\": 1}','','{}',0)", (context_refresh.KIND,))
+                          "VALUES (?,1,NULL,'{\"version\": 1}','',?,0)",
+                          (context_refresh.KIND, json.dumps({inference.VERSION_KEY: inference.CURRENT_VERSION})))
             other.commit()
     contended_lock(monkeypatch, clock, grant_after=3, on_try=publish)
     assert step(runtime)['status'] == 'source_changed'

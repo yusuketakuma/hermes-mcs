@@ -19,6 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import inference_version as inference
 import job_ops
 import ledger
 import snapshots
@@ -920,7 +921,10 @@ def test_context_change_invalidates_projection_even_with_semantic_off(tmp_path, 
     db.save_messages([root])
     db.artifact_add("canonical_projection", '{"meds":[]}', project_id=1,
                     message_id=10, meta={"hash": "kept", "fingerprint": "previous"})
-    db.artifact_add("patient_rollup", '{}', project_id=1)
+    current = db.artifact_add("patient_rollup", '{}', project_id=1,
+                              meta={inference.VERSION_KEY: inference.CURRENT_VERSION})
+    legacy = db.artifact_add("patient_rollup", '{}', project_id=1,
+                             meta={inference.VERSION_KEY: inference.LEGACY_VERSION})
     if change == "reply":
         db.save_thread_replies([_message(mid=11, parent_id=10)], 1, semantic=False)
     else:
@@ -929,7 +933,8 @@ def test_context_change_invalidates_projection_even_with_semantic_off(tmp_path, 
     meta = json.loads(db.db.execute(
         "SELECT meta FROM artifacts WHERE kind='canonical_projection'").fetchone()[0])
     assert meta["invalidated"] is True and meta["hash"] == "kept"
-    assert not db.db.execute("SELECT 1 FROM artifacts WHERE kind='patient_rollup'").fetchone()
+    assert not db.db.execute("SELECT 1 FROM artifacts WHERE artifact_id=?", (current,)).fetchone()
+    assert db.db.execute("SELECT 1 FROM artifacts WHERE artifact_id=?", (legacy,)).fetchone()
     assert not db.db.execute("SELECT 1 FROM fetch_jobs WHERE kind='semantic'").fetchone()
     db.close()
 

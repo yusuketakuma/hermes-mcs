@@ -8,6 +8,7 @@ import pytest
 
 import semantic_snapshot as snapshot
 import semantic_snapshot_observations as observations
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_candidate import candidate_fingerprint
 from semantic_evaluation import EvaluationError
 from semantic_holdout import holdout_payload
@@ -55,7 +56,7 @@ def fixture(tmp_path, cfg=None, full=False, multi=False):
                               (json.dumps(content), json.dumps(meta), row['artifact_id']))
         audit_id = ledger.artifact_add('semantic_audit', json.dumps({'status': 'PASS', 'findings': [], 'target_message_id': 1}),
                                        project_id=1, message_id=1,
-                                       meta={'fingerprint': fp, 'policy_fingerprint': policy, 'audit_status': 'PASS'})
+                                       meta={VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp, 'policy_fingerprint': policy, 'audit_status': 'PASS'})
         if multi:
             summary = {**summary, 'limitations': ['合成の返信を文脈として保持'],
                        'claims': [{'claim_id': 'c1', 'text': '合成事実', 'fact_refs': [0]}]}
@@ -71,7 +72,7 @@ def fixture(tmp_path, cfg=None, full=False, multi=False):
             loop_ids.append(ledger.artifact_add('loop_candidate', json.dumps({
                 'loop_id': 'loop1', 'kind': 'pending_item', 'description': '合成確認依頼',
                 'state': 'PROPOSED', 'origin': {'revision': bundle['members'][0]['revision']}}),
-                project_id=1, message_id=1, meta={'fingerprint': fp, 'policy_fingerprint': policy}))
+                project_id=1, message_id=1, meta={VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp, 'policy_fingerprint': policy}))
         rows = []
         for row in ledger.db.execute('SELECT * FROM artifacts'):
             rows.append({key: json.loads(row[key]) if key in ('content', 'meta') else row[key]

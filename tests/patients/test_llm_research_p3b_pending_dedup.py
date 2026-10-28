@@ -4,6 +4,7 @@ import sqlite3
 
 import pytest
 
+import inference_version as inference
 import patient_context_refresh as context_refresh
 from test_patient_context_refresh import document, finish, runtime, seed, step
 
@@ -106,8 +107,9 @@ def test_progress_published_during_selection_is_preserved(runtime, monkeypatch, 
         if not inserted:
             inserted.append(True)
             conn.execute('INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) '
-                         "VALUES (?,1,NULL,?,'','{}',?)",
-                         (context_refresh.PROGRESS, json.dumps(newest), clock.wall))
+                         "VALUES (?,1,NULL,?,'',?,?)",
+                         (context_refresh.PROGRESS, json.dumps(newest),
+                          json.dumps({inference.VERSION_KEY: inference.CURRENT_VERSION}), clock.wall))
             conn.commit()
 
     pending, latest = context_refresh._pending, context_refresh._latest

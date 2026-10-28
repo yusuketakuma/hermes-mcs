@@ -17,6 +17,7 @@ import semantic_facts as sf
 import semantic_loops
 import semantic_send_gate
 import semantic_v4 as v4
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_testkit import _cfg, _ledger, _message, _patient
 
 NO = {c: "none" for c in sf.MANDATORY_CATEGORIES}
@@ -71,7 +72,7 @@ class World:
                                         open_obligation_ids=[])
         sf.validate_facts_doc(repaired)
         self.base_hash, self.repaired_hash = semantic_facts.doc_hash(base), semantic_facts.doc_hash(repaired)
-        meta = {"fingerprint": self.fp, "policy_fingerprint": self.policy}
+        meta = {VERSION_KEY: CURRENT_VERSION, "fingerprint": self.fp, "policy_fingerprint": self.policy}
         self.base_id = self._add("semantic_facts_v2", base, meta)
         if conflicting_base:
             # same facts and evidence (same doc_hash), different statuses

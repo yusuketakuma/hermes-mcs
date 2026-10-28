@@ -16,6 +16,7 @@ import semantic_blind as blind
 import semantic_evaluation as evaluation
 import semantic_lifecycle as lifecycle
 import semantic_v4
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_evaluation import EvaluationError
 from semantic_render import mandatory_render, render_notice
 from semantic_testkit import (CRITERIA, MANIFEST, _ledger, _message, _patient,
@@ -31,7 +32,7 @@ def _doc(facts):
 
 
 def _meta(**extra):
-    return {"fingerprint": FP, "policy_fingerprint": POLICY, **extra}
+    return {VERSION_KEY: CURRENT_VERSION, "fingerprint": FP, "policy_fingerprint": POLICY, **extra}
 
 
 def _audit(db, doc, status="PASS", evaluated=True):
