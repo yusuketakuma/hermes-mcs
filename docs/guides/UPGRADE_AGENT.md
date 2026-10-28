@@ -14,6 +14,8 @@ Hermes経由の導入・更新にはuvが必要です。Hermesのディレクト
 
 - 対話形式の更新が完了したとき、または更新が不要だったとき、Jev・Anthropic、Slack、Discord、LINE WORKSの認証情報設定を選べます。省略した場合は、後から `~/.local/bin/mcs setup api-keys` を実行できます。起動コマンドや実行環境を確認できない場合は、担当者に導入状態の確認を依頼してください。更新の確認（plan）と非対話の更新では認証情報設定を起動しません。
 - Jev・AnthropicのキーはMCSの `.env` に保存します。Slack・DiscordのHermes経由の接続は、選んだHermesプロファイルの `.env` に保存します。独立動作のSlack・DiscordとLINE WORKSは、それぞれの既存の保存方法を使います。独立動作のSlack・DiscordとLINE WORKSでは、既存の認証情報の変更は保留中です。表示される案内に従い、担当者に変更方法を相談してください。
+- Anthropicの費用設定を省略した環境では、1日25ドル・1か月75ドルの上限を適用します。明示した `null`（個別の上限を解除）・`0`・低い上限・`mode=off`・対象範囲は維持します。以前のCLIによる解除で項目が削除されていた場合も既定値が適用されるため、解除を続ける場合は更新後に `cloud-llm budget --daily-usd none` または `--monthly-usd none` を指定してください。設定ファイルへ既定値を書き込む移行はありません。
+- Jevはキーがあり、modeと予算が未指定なら、従来どおり通常運用の `assist`・1日10000要求です。明示したmode・低い上限・対象範囲を保持し、modeを明示して予算を省略した環境は上限 `0` を保ちます。キーがない場合は両サービスとも送信しません。費用・件数の確認と変更は[設定ガイド](ANTHROPIC.md)に従ってください。
 - 任意機能のセットアップ案内に「既定に従う／案内を表示する／案内を省略する」の選択が加わりました。CSDC（状態監視・遠隔支援）の案内は、この版では既定で省略します。更新後に `mcs_setup.py doctor` の「任意機能の案内」で現在の選択を確認し、変える場合は端末で `mcs setup features`（PATH未設定なら `~/.local/bin/mcs setup features`）を実行してください。
 - この選択は案内を表示するかだけを決めます。CSDCの登録・同意・鍵の保管・送信は行わず、案内を省略しても既存の登録や送信は止まりません。登録や稼働の状態はCSDCの手順と診断で確認します。
 - 1.1.0ではCSDCを有効化・接続して提供しません（コードは同梱）。新規導入では`config.sdc.enabled`が未設定のため、CSDCの専用ジョブは登録されません。すでに`sdc.enabled=true`を設定している環境は、この更新で自動的に停止・変更しません（停止は別の明示操作です）。保存済みの有効状態だけで送信を開始しない設定再確認の修正を含みます。送信開始済みのHTTP要求を即時に回収する保証はありません。`optional_features.csdc`は案内の表示だけを決めます。
@@ -365,6 +367,9 @@ DB を開いて移行（加法 migration）→ 事後検証。失敗時は自動
 4. 使用中のgatewayまたは独立host・通知アダプターと抽出ワーカー2本について、更新後に起動したプロセスであることと稼働状態を確認します。古いworkerが新しい通知形式を保留している場合、保存ファイルを削除して再送させず、更新したworkerで通常の配送を再開します。
    Hermes の Slack では、カードを送るのは plugin settings の `slack_profile` の profile だけです。複数 profile の gateway で他の profile の接続が見送られた場合は、イベントログ `hermes.plugin.mcs_slack` に `worker_disabled`（`reason=profile_mismatch`）が出ます。これは正常な動作です。`channel_not_found` だけを根拠に再送しません。成否不明（`unknown`）や再送上限（`resend_exhausted`）の配送を、保存データの書換えや強制再送で解除しません。
 5. 検証:
+
+以下は公開タグの確認例です。§2-Aの未公開候補では、`git -C "$REPO" rev-parse HEAD` と `status` の `current_sha`・`state.applied[-1].sha` が候補SHAに一致し、`state.applied[-1].target_kind=local_candidate`、`state.applying=null` であることを確認します。
+再planでは `--to "$TAG"` の代わりに `--candidate-sha "$CANDIDATE_SHA" --base-sha <適用後HEADの40桁SHA>` を指定します。更新前の `BASE_SHA` を再利用すると `base_sha_mismatch` で止まるため、その結果だけで更新失敗と判断せず、適用後のHEADで再計画してください。
 
 ```bash
 "$PY" "$REPO/mcs/ops/mcs_update.py" status     # applied の最後が $TAG、applying が null

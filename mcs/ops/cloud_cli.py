@@ -629,7 +629,12 @@ def budget_command(args):
         for option, key in _BUDGET_KEYS.items():
             text = getattr(args, option, None)
             if text is not None:
-                changes["cloud_llm." + key] = _budget_value(text)
+                dotted = "cloud_llm." + key
+                changes[dotted] = _budget_value(text)
+                if changes[dotted] is None:
+                    # apply removes None changes first; restore an explicit null under
+                    # the same lock so clearing a cap does not restore its default.
+                    defaults[dotted] = None
         period = getattr(args, "period_usd", None)
         start = getattr(args, "window_from", None)
         if period is not None:
@@ -699,8 +704,8 @@ def add_parsers(sub):
             q.add_argument("--project", type=int)
         q.set_defaults(fn=command)
     q = actions.add_parser("budget", help="Anthropicの費用上限（1日・1か月・期間、ドル）と送信の終了日時を表示・設定します")
-    q.add_argument("--daily-usd", dest="daily_usd", help="1日の上限（ドル）。none で解除")
-    q.add_argument("--monthly-usd", dest="monthly_usd", help="1か月の上限（ドル）。none で解除")
+    q.add_argument("--daily-usd", dest="daily_usd", help="1日の上限（ドル、設定省略時25）。none でこの上限を解除")
+    q.add_argument("--monthly-usd", dest="monthly_usd", help="1か月の上限（ドル、設定省略時75）。none でこの上限を解除")
     q.add_argument("--period-usd", dest="period_usd",
                    help="期間全体の上限（ドル）。開始は --from、未指定なら今。none で解除")
     q.add_argument("--from", dest="window_from", help="期間の開始（2026-10-28 または時差付きISO時刻）")

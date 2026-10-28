@@ -587,6 +587,9 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
               "詳細: docs/guides/ANTHROPIC.md")
     else:
         print(f"  Anthropic追加処理: {cloud['mode']} / キー未登録・off・dry_runの場合は外部送信しません。")
+    daily_cap, monthly_cap = ("上限なし" if cloud[key] is None else f"{cloud[key]:g} USD"
+                              for key in ("daily_cost_limit_usd", "monthly_cost_limit_usd"))
+    print(f"  Anthropic費用上限: 1日 {daily_cap} / 1か月 {monthly_cap}（両方の上限を適用）")
     print("  公開薬情報の照会: 同梱公開マスターで照合した薬品名・一般疾患名・公式URLを"
           "TinyFishへ送り、トークンファイルがない場合だけ固定の無料Exaへ送ります。患者本文は送りません。"
           "\n  定期的な薬情報更新確認: "

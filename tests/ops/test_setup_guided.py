@@ -8,6 +8,7 @@ import pytest
 import mcs_setup
 import mcs_util
 import semantic_policy
+import cloud_policy
 from test_mcs_setup import _init_env
 
 
@@ -41,6 +42,12 @@ def test_recommended_path_keeps_settings_and_collects_authority(monkeypatch):
     assert 'semantic.mode' not in seen and 'mode' not in cfg.get('semantic', {})
     assert semantic_policy.semantic_config(cfg, key_present=False)[0]['mode'] == 'off'
     assert semantic_policy.semantic_config(cfg, key_present=True)[0]['mode'] == 'assist'
+    assert semantic_policy.semantic_config(cfg, key_present=True)[0]['daily_request_budget'] == 10000
+    assert 'cloud_llm' not in cfg
+    cloud, errors = cloud_policy.cloud_config(cfg, key_present=True)
+    assert errors == [] and cloud['mode'] == 'on'
+    assert (cloud['daily_cost_limit_usd'], cloud['monthly_cost_limit_usd']) == (25, 75)
+    assert cloud_policy.cloud_config(cfg, key_present=False)[0]['mode'] == 'off'
     assert cfg['notify']['slack']['allowed_user_ids'] == ['U123']
     assert cfg['notify']['slack']['project_ids'] == [101]
     assert mcs_setup.validate_config(cfg)[0] == []
@@ -65,6 +72,21 @@ def test_recommended_path_preserves_explicit_semantic_off(monkeypatch):
         actual, errors = semantic_policy.semantic_config(cfg, key_present=key_present)
         assert not errors
         assert actual['mode'] == 'off' and actual['daily_request_budget'] == 17
+
+
+@pytest.mark.parametrize('daily,monthly', [(None, None), (0, 0), (2, 20)])
+def test_recommended_path_preserves_explicit_cloud_caps_and_scope(monkeypatch, daily, monthly):
+    cloud = {'mode': 'off', 'project_ids': [101], 'exclude_project_ids': [102],
+             'daily_cost_limit_usd': daily, 'monthly_cost_limit_usd': monthly}
+    cfg = {'mcs_login_id': 'synthetic-login', 'notify_target': 'local', 'cloud_llm': dict(cloud)}
+    monkeypatch.setattr('builtins.input', lambda prompt: 'いいえ' if 'drug_map.bundled' in prompt else '')
+    setup_wizard.wizard(cfg)
+    assert cfg['cloud_llm'] == cloud
+    for key_present in (False, True):
+        normalized, errors = cloud_policy.cloud_config(cfg, key_present=key_present)
+        assert errors == [] and normalized['mode'] == 'off'
+        assert (normalized['daily_cost_limit_usd'], normalized['monthly_cost_limit_usd']) == (daily, monthly)
+        assert normalized['project_ids'] == [101] and normalized['exclude_project_ids'] == [102]
 
 
 def test_required_unknown_does_not_invent_an_identifier(monkeypatch, capsys):

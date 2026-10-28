@@ -31,7 +31,7 @@ def test_cloud_interpretation_scope_and_mode_are_bound(monkeypatch):
     assert candidate._cloud_contract(cfg)["mode"] == "shadow"
 
 
-@pytest.mark.parametrize("block", [{"daily_cost_limit_usd": 2}, {"mode": "on", "project_ids": [1]},
+@pytest.mark.parametrize("block", [{}, {"daily_cost_limit_usd": 2}, {"mode": "on", "project_ids": [1]},
                                      {"mode": "shadow", "project_ids": [1]}])
 def test_key_presence_binds_the_effective_provider_without_hashing_the_key(monkeypatch, block):
     cfg = {"cloud_llm": block}
@@ -52,8 +52,8 @@ def test_key_presence_binds_the_effective_provider_without_hashing_the_key(monke
     assert candidate.candidate_fingerprint(cfg) == local
 
 
-@pytest.mark.parametrize("cfg", [{}, {"cloud_llm": {}}])
-def test_a_key_without_a_cost_cap_never_binds_a_provider(monkeypatch, cfg):
+def test_a_key_without_a_cost_cap_never_binds_a_provider(monkeypatch):
+    cfg = {"cloud_llm": {"daily_cost_limit_usd": None, "monthly_cost_limit_usd": None}}
     monkeypatch.setattr(cloud_policy, "api_key", lambda: "synthetic-uncapped-key")
     assert candidate._cloud_contract(cfg) is None
 

@@ -54,8 +54,8 @@ def test_reservation_covers_the_costliest_accepted_usage_for_the_request():
 def test_null_cloud_block_is_a_config_error_not_an_omission():
     settings, errors = c.cloud_config({"cloud_llm": None}, key_present=True)
     assert errors == ["config: cloud_llm_not_object"] and settings["mode"] == "off"
-    # A key alone enables sending only once a spending cap exists.
-    assert c.cloud_config({}, key_present=True)[0]["mode"] == "off"
+    # An absent block uses the spending defaults; a malformed block never does.
+    assert c.cloud_config({}, key_present=True)[0]["mode"] == "on"
     assert c.cloud_config({"cloud_llm": {"monthly_cost_limit_usd": 40}}, key_present=True)[0]["mode"] == "on"
 
 
@@ -343,6 +343,30 @@ def test_key_based_auto_mode_preserves_explicit_scope_budget_and_off():
         assert not errors and normalized["mode"] == mode and normalized["daily_request_budget"] == 0
     normalized, errors = c.cloud_config({"cloud_llm": {"project_ids": [], "daily_request_budget": 0}}, key_present=True)
     assert not errors and normalized["project_ids"] == [] and normalized["daily_request_budget"] == 0
+
+
+@pytest.mark.parametrize("daily,monthly", [(None, None), (0, 0), (1.5, 30)])
+def test_explicit_cost_caps_survive_normalization_and_keep_scope(daily, monthly):
+    cfg = _cfg(mode="off", daily_cost_limit_usd=daily, monthly_cost_limit_usd=monthly,
+               exclude_project_ids=[2], daily_request_budget=0)
+    before = json.dumps(cfg, sort_keys=True)
+    normalized, errors = c.cloud_config(cfg, key_present=True)
+    assert errors == [] and normalized["mode"] == "off"
+    assert (normalized["daily_cost_limit_usd"], normalized["monthly_cost_limit_usd"]) == (daily, monthly)
+    assert normalized["project_ids"] == [1] and normalized["exclude_project_ids"] == [2]
+    assert normalized["daily_request_budget"] == 0
+    assert json.dumps(cfg, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("block", [{}, {"daily_cost_limit_usd": 2}, {"monthly_cost_limit_usd": None}])
+def test_missing_cost_caps_follow_defaults_without_pinning_config(block):
+    cfg = {"cloud_llm": dict(block)}
+    normalized, errors = c.cloud_config(cfg, key_present=True)
+    assert errors == [] and normalized["mode"] == "on"
+    assert normalized["daily_cost_limit_usd"] == block.get("daily_cost_limit_usd", 25)
+    assert normalized["monthly_cost_limit_usd"] == block.get("monthly_cost_limit_usd", 75)
+    assert cfg == {"cloud_llm": block}
+    assert c.cloud_config(cfg, key_present=False)[0]["mode"] == "off"
 
 
 def test_active_caller_transaction_is_not_committed_or_reused(tmp_path, now):

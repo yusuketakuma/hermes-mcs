@@ -37,6 +37,8 @@ LONG_INPUT_THRESHOLD = 100000
 JST = timezone(timedelta(hours=9))
 KINDS = ("cloud_usage_reserve", "cloud_usage_result", "cloud_usage_dryrun")
 ROUTES = ("patient_context", "reextract")
+DEFAULT_DAILY_COST_LIMIT_USD = 25
+DEFAULT_MONTHLY_COST_LIMIT_USD = 75
 _BINDING_KEYS = ("reservation_id", "request_fp", "route", "project_id",
                  "unit_key", "message_id", "model", "price_version")
 
@@ -57,7 +59,8 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
     """Normalize the optional cloud block, failing closed on every config error."""
     out = {"mode": "off", "routes": list(ROUTES), "project_ids": [],
            "exclude_project_ids": [], "model": MODEL, "daily_request_budget": None,
-           "max_concurrency": 4, "daily_cost_limit_usd": None, "monthly_cost_limit_usd": None,
+           "max_concurrency": 4, "daily_cost_limit_usd": DEFAULT_DAILY_COST_LIMIT_USD,
+           "monthly_cost_limit_usd": DEFAULT_MONTHLY_COST_LIMIT_USD,
            "usd_jpy": None, "until": None,
            "window_start": None, "window_budget_usd": None}
     errors = []
@@ -104,8 +107,10 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
         else:
             out[key] = value
     for key in ("daily_cost_limit_usd", "monthly_cost_limit_usd", "usd_jpy"):
-        value = block.get(key)
+        value = block.get(key, out[key])
         if value is None:
+            # Explicit null removes this cap; an omitted key follows the default.
+            out[key] = None
             continue
         try:
             if type(value) not in (int, float) or (key == "usd_jpy" and value <= 0):

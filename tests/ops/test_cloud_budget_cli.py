@@ -28,8 +28,24 @@ def test_sets_and_clears_daily_and_monthly_caps_keeping_other_settings(conf, cap
                                   "daily_cost_limit_usd": 1.5, "monthly_cost_limit_usd": 30.0}
     assert saved["notify"] == {"synthetic": True} and (conf.stat().st_mode & 0o777) == 0o600
     assert _run(daily="none") == 0
-    assert "daily_cost_limit_usd" not in json.loads(conf.read_text())["cloud_llm"]
-    assert json.loads(capsys.readouterr().out.splitlines()[-1])["monthly_cost_limit_usd"] == 30.0
+    assert json.loads(conf.read_text())["cloud_llm"]["daily_cost_limit_usd"] is None
+    shown = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert shown["daily_cost_limit_usd"] is None and shown["monthly_cost_limit_usd"] == 30.0
+
+
+@pytest.mark.parametrize("option,key,other", [
+    ("daily", "daily_cost_limit_usd", "monthly"),
+    ("monthly", "monthly_cost_limit_usd", "daily"),
+])
+@pytest.mark.parametrize("clear", ["none", "off", "null"])
+def test_explicit_cap_removal_survives_later_edits_and_reads(conf, capsys, option, key, other, clear):
+    assert _run(**{option: clear}) == 0
+    assert key in json.loads(conf.read_text())["cloud_llm"]
+    assert json.loads(conf.read_text())["cloud_llm"][key] is None
+    assert _run(**{other: "2"}) == 0
+    saved = conf.read_bytes()
+    assert _run() == 0 and conf.read_bytes() == saved
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])[key] is None
 
 
 @pytest.mark.parametrize("value", ["-1", "nan", "inf", "abc"])
@@ -48,9 +64,21 @@ def test_a_missing_or_unreadable_config_is_never_overwritten(conf, content):
     assert (not conf.exists()) if content is None else conf.read_text() == content
 
 
-def test_show_only_does_not_write(conf):
+def test_show_only_does_not_write_and_reports_effective_defaults(conf, capsys):
     before = conf.stat().st_mtime_ns
     assert _run() == 0 and conf.stat().st_mtime_ns == before
+    shown = json.loads(capsys.readouterr().out)
+    assert (shown["daily_cost_limit_usd"], shown["monthly_cost_limit_usd"]) == (25, 75)
+    assert json.loads(conf.read_text())["cloud_llm"] == {"mode": "on", "project_ids": [1]}
+
+
+def test_budget_edit_preserves_explicit_off_scope_and_zero_cap(conf):
+    cfg = json.loads(conf.read_text())
+    cfg["cloud_llm"] = {"mode": "off", "project_ids": [1], "exclude_project_ids": [2],
+                        "daily_request_budget": 0, "daily_cost_limit_usd": 0}
+    conf.write_text(json.dumps(cfg))
+    assert _run(monthly="3") == 0
+    assert json.loads(conf.read_text())["cloud_llm"] == {**cfg["cloud_llm"], "monthly_cost_limit_usd": 3.0}
 
 
 @pytest.mark.parametrize("block", [{"daily_cost_limit_usd": "5"}, {"monthly_cost_limit_usd": -1},

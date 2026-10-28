@@ -824,8 +824,12 @@ def test_unreadable_config_never_auto_enables_the_paid_route(routed):
     led, *_ = routed
     assert worker._cloud_settings({})["mode"] == "off"
     assert worker._cloud_mode(led, {}, "reextract", 1) == "off"
-    # A readable config with a key auto-enables only once a spending cap exists.
-    assert worker._cloud_settings({"mcs_login_id": "synthetic"})["mode"] == "off"
+    # A readable config uses the spending defaults, without changing its scope.
+    defaults = worker._cloud_settings({"mcs_login_id": "synthetic"})
+    assert defaults["mode"] == "on" and defaults["project_ids"] is None
+    assert (defaults["daily_cost_limit_usd"], defaults["monthly_cost_limit_usd"]) == (25, 75)
+    assert worker._cloud_settings({"mcs_login_id": "synthetic", "cloud_llm": {
+        "daily_cost_limit_usd": None, "monthly_cost_limit_usd": None}})["mode"] == "off"
     assert worker._cloud_settings({"mcs_login_id": "synthetic",
                                    "cloud_llm": {"daily_cost_limit_usd": 2}})["mode"] == "on"
 

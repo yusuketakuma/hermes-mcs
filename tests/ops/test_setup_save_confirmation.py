@@ -79,6 +79,23 @@ def test_jev_display_includes_qc_only_mode_and_budget(monkeypatch, capsys, budge
     assert expected in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("block,daily,monthly", [
+    ({}, "25 USD", "75 USD"),
+    ({"mode": "off", "daily_cost_limit_usd": 0, "monthly_cost_limit_usd": 2}, "0 USD", "2 USD"),
+    ({"daily_cost_limit_usd": None, "monthly_cost_limit_usd": None}, "上限なし", "上限なし"),
+])
+def test_save_confirmation_shows_effective_provider_defaults_without_pinning(monkeypatch, capsys, block, daily, monthly):
+    cfg = {"notify_target": "slack:C123", "cloud_llm": block}
+    before = copy.deepcopy(cfg)
+    monkeypatch.setattr("builtins.input", lambda prompt: "2")
+    assert setup_wizard.confirm_save(cfg, plugin_profile=None,
+                                     key_presence={"jev": True, "anthropic": True}) is False
+    output = capsys.readouterr().out
+    assert f"Anthropic費用上限: 1日 {daily} / 1か月 {monthly}" in output
+    assert "Jev設定: mode=assist" in output and "1日の要求上限 10000" in output
+    assert cfg == before
+
+
 def test_wizard_only_collects_settings_and_returns_dictionary_step(monkeypatch, tmp_path):
     cfg = {"mcs_login_id": "synthetic", "notify_target": "slack:C123", "trickle_pages": 7}
     monkeypatch.setattr("builtins.input", lambda prompt: "")

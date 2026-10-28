@@ -24,14 +24,18 @@ def now(monkeypatch):
 
 
 def test_key_only_sending_requires_a_cost_cap():
-    off, errors = c.cloud_config({}, key_present=True)
+    on, errors = c.cloud_config({}, key_present=True)
+    assert errors == [] and on["mode"] == "on" and on["project_ids"] is None
+    assert (on["daily_cost_limit_usd"], on["monthly_cost_limit_usd"]) == (25, 75)
+    uncapped = {"daily_cost_limit_usd": None, "monthly_cost_limit_usd": None}
+    off, errors = c.cloud_config({"cloud_llm": uncapped}, key_present=True)
     assert errors == [c.COST_LIMIT_REQUIRED] and off["mode"] == "off"
     assert c.blocking_errors(errors) == []
     for cap in ("daily_cost_limit_usd", "monthly_cost_limit_usd"):
-        on, errors = c.cloud_config({"cloud_llm": {cap: 80}}, key_present=True)
+        on, errors = c.cloud_config({"cloud_llm": {**uncapped, cap: 80}}, key_present=True)
         assert errors == [] and on["mode"] == "on" and on["project_ids"] is None
     # An explicit mode is the operator's own choice and keeps its meaning.
-    explicit, errors = c.cloud_config({"cloud_llm": {"mode": "on", "project_ids": None}}, key_present=True)
+    explicit, errors = c.cloud_config({"cloud_llm": {**uncapped, "mode": "on", "project_ids": None}}, key_present=True)
     assert errors == [] and explicit["mode"] == "on"
     # Without a key nothing is auto-enabled, so nothing is required.
     assert c.cloud_config({}, key_present=False) == (c.cloud_config({})[0], [])
@@ -118,10 +122,15 @@ def test_missing_env_file_is_plain_absence(tmp_path):
 
 def test_check_explains_key_only_without_cap_and_jev_zero_budget(tmp_path, now):
     _env(tmp_path, "MCS_ANTHROPIC_API_KEY=sk-synthetic\n")
-    cfg = {"runtime_mode": "hermes", "semantic": {"mode": "assist", "project_ids": None}}
+    cfg = {"runtime_mode": "hermes", "semantic": {"mode": "assist", "project_ids": None},
+           "cloud_llm": {"daily_cost_limit_usd": None, "monthly_cost_limit_usd": None}}
     warnings = environment_diagnostics.cloud_setting_warnings(cfg, tmp_path)
     assert any("cost_limit_required" in w for w in warnings)
+    assert any("日・月の費用上限を両方解除し、期間予算もない" in w for w in warnings)
     assert any("jev_budget_zero" in w for w in warnings)
+    defaults = {**cfg, "cloud_llm": {}}
+    assert not any("cost_limit_required" in w
+                   for w in environment_diagnostics.cloud_setting_warnings(defaults, tmp_path))
     capped = {**cfg, "cloud_llm": {"daily_cost_limit_usd": 80},
               "semantic": {"mode": "assist", "project_ids": None, "daily_request_budget": 100,
                            "until": "2026-10-26T11:00:00+09:00"}}
@@ -149,6 +158,8 @@ def test_period_budget_needs_a_start_amount_and_ordered_window(block):
 
 def test_period_budget_alone_satisfies_the_key_only_cap():
     settings, errors = c.cloud_config({"cloud_llm": {"window_start": "2026-10-26T00:00:00+09:00",
+                                                     "daily_cost_limit_usd": None,
+                                                     "monthly_cost_limit_usd": None,
                                                      "window_budget_usd": 80}}, key_present=True)
     assert errors == [] and settings["mode"] == "on" and settings["project_ids"] is None
 
@@ -226,8 +237,8 @@ def test_doctor_shows_the_run_window_and_planning_assumes_a_cap(tmp_path, now):
     assert (report["mode"], report["status"], report["block_reason"]) == ("on", "local", "expired")
     # Planning estimates what a capped auto mode would do; sending now is a separate decision.
     planning = c.cloud_config({"mcs_login_id": "synthetic"}, key_present=True, require_cost_limit=False)
-    assert planning == (c.cloud_config({"cloud_llm": {"daily_cost_limit_usd": 2}}, key_present=True)[0]
-                        | {"daily_cost_limit_usd": None}, [])
+    assert planning == c.cloud_config({"mcs_login_id": "synthetic"}, key_present=True)
+    assert (planning[0]["daily_cost_limit_usd"], planning[0]["monthly_cost_limit_usd"]) == (25, 75)
 
 
 def test_jev_window_uses_the_target_roots_config_at_reservation_and_before_each_attempt(tmp_path, monkeypatch, now):

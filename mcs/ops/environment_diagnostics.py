@@ -111,7 +111,7 @@ def cloud_setting_warnings(cfg: dict, root) -> list[str]:
     anthropic_key = bool(mcs_util.private_env_value("MCS_ANTHROPIC_API_KEY", root))
     cloud, errors = cloud_policy.cloud_config(cfg, key_present=anthropic_key and bool(cfg))
     if "config: cloud_llm_cost_limit_required" in errors:
-        out.append("Anthropicのキーはありますが、費用の上限が未設定のため送信していません。"
+        out.append("Anthropicのキーはありますが、日・月の費用上限を両方解除し、期間予算もないため送信していません。"
                    "`mcs_setup.py cloud-llm budget --daily-usd 金額 --monthly-usd 金額`、または期間予算"
                    "`--period-usd 金額 --until 日付`で上限を設定してください。"
                    "エラーコード: cost_limit_required")
