@@ -1,5 +1,4 @@
 """Synthetic checks for the beginner setup path; no live services."""
-import service_management
 import lifecycle_io
 import setup_wizard
 import json
@@ -88,7 +87,8 @@ def test_cancellation_does_not_write_config_or_secrets(monkeypatch, tmp_path, ca
     monkeypatch.setattr('builtins.input', answer)
     monkeypatch.setattr(mcs_setup, '_init_store_secrets', lambda *a: pytest.fail('secret write'))
     assert mcs_setup.main(['init']) == 130
-    assert not (tmp_path / 'c.json').exists()
+    assert json.loads((tmp_path / 'c.json').read_text()) == {
+        'mcs_login_id': 'synthetic-login', 'notify_target': 'slack'}
     assert '保存していません' in capsys.readouterr().out
 
 
@@ -102,6 +102,8 @@ def test_cancellation_during_password_input_does_not_claim_config_saved(
     original = json.dumps(cfg).encode()
     if existing:
         path.write_bytes(original)
+    else:
+        path.unlink()
     monkeypatch.setattr(setup_wizard, 'wizard', lambda cfg, **kwargs: cfg.update(trickle_pages=2))
     monkeypatch.setattr(setup_wizard, 'confirm_save', lambda cfg, **kwargs: True)
 
@@ -110,8 +112,8 @@ def test_cancellation_during_password_input_does_not_claim_config_saved(
 
     monkeypatch.setattr(mcs_setup.getpass, 'getpass', interrupt)
     monkeypatch.setattr(lifecycle_io, 'store_keychain', lambda *a: pytest.fail('secret write'))
-    monkeypatch.setattr(service_management, 'write_service_file', lambda *a: pytest.fail('config write'))
-    assert mcs_setup.main(['init']) == 130
+    monkeypatch.setattr(mcs_setup, '_init_save_config', lambda *a: pytest.fail('config write'))
+    assert mcs_setup.main(['init', '--login-id', 'synthetic-login', '--notify-target', 'slack']) == 130
     assert path.exists() is existing
     if existing:
         assert path.read_bytes() == original

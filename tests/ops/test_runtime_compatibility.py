@@ -555,7 +555,8 @@ def test_bad_recovery_init_stops_before_keychain_and_env(monkeypatch, tmp_path, 
     monkeypatch.setattr(sys, "argv", ["mcs_setup", "init", "--yes",
                                     "--recovery-python", str(tmp_path / "independent-python")])
     assert mcs_setup.main() == 1
-    assert not (tmp_path / ".env").exists() and not (tmp_path / "c.json").exists()
+    assert not (tmp_path / ".env").exists()
+    assert json.loads((tmp_path / "c.json").read_text()) == {"mcs_login_id": "synthetic", "notify_target": "local"}
     assert "変更は保存していません" in capsys.readouterr().out
 
 
