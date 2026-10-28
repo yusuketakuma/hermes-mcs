@@ -829,13 +829,63 @@ def test_apply_transient_lock_failure_keeps_receipt(updater, tmp_path,
 
 
 def test_apply_update_lock_busy_returns_cleanly(updater, tmp_path,
-                                               monkeypatch):
+                                               monkeypatch, capsys):
     """A live updater holds update.lock — a second apply must exit
     without touching state rather than queue another attempt."""
     _apply_env(updater, monkeypatch)
+    before = updater.journal_store.load_state(updater.STATE_PATH)
     fd = updater.acquire_update_lock()
     try:
-        assert updater.apply("v1.1.0", "a" * 40, "cid-2") == 0
+        assert updater.apply("v1.1.0", "a" * 40, "cid-2") == 2
+        assert 'この更新は開始していません' in capsys.readouterr().out
+        assert updater.journal_store.load_state(updater.STATE_PATH) == before
+    finally:
+        os.close(fd)
+
+
+def test_scheduled_approval_stays_pending_when_apply_lock_becomes_busy(updater, tmp_path, monkeypatch):
+    _apply_env(updater, monkeypatch, cfg={'update': {'mode': 'notify'}})
+    db = tmp_path / 'synthetic-receipts.db'
+    con = _receipts_db(db)
+    cid, target = 'synthetic-approved', 'a' * 40
+    con.execute("INSERT INTO command_receipts VALUES(?,?,NULL,NULL,'applied',?,?)",
+                (cid, 'h' * 64, _rec(cid, 'ops.update_apply', 1,
+                                     tag='v1.2.0', target_sha=target), 1))
+    con.commit()
+    con.close()
+    monkeypatch.setattr(updater, 'LEDGER', str(db))
+    monkeypatch.setattr(update_discovery, 'detect_latest', lambda *_a, **_k: (None, None))
+    monkeypatch.setattr(update_discovery, 'current_version', lambda **_k: ('v1.0.0', 'b' * 40))
+    monkeypatch.setattr(updater, '_apply_runtime_gate_errors', lambda *_a, **_k: [])
+    acquire = updater.acquire_update_lock
+    calls = []
+
+    def busy_after_scan():
+        calls.append(True)
+        return acquire() if len(calls) == 1 else None
+
+    monkeypatch.setattr(updater, 'acquire_update_lock', busy_after_scan)
+    assert updater.cmd_check() == 2
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert cid not in state.get('executed', {})
+    assert [entry['command_id'] for entry in updater.scan_pending_approvals(state)[0]] == [cid]
+    monkeypatch.setattr(updater, 'acquire_update_lock', acquire)
+    seen = []
+    monkeypatch.setattr(updater, 'apply', lambda *args: seen.append(args) or 0)
+    assert updater.cmd_check() == 0
+    assert len(seen) == 1 and seen[0][2] == cid
+
+
+def test_scheduled_check_skips_when_update_lock_is_busy(updater, tmp_path, monkeypatch):
+    _apply_env(updater, monkeypatch, cfg={'update': {'mode': 'notify'}})
+    monkeypatch.setattr(update_discovery, 'detect_latest', lambda *_a, **_k: (None, None))
+    monkeypatch.setattr(update_discovery, 'current_version', lambda **_k: ('v1.0.0', 'b' * 40))
+    monkeypatch.setattr(updater, 'scan_pending_approvals', lambda *_a: pytest.fail('must defer scan'))
+    before = updater.journal_store.load_state(updater.STATE_PATH)
+    fd = updater.acquire_update_lock()
+    try:
+        assert updater.cmd_check() == 0
+        assert updater.journal_store.load_state(updater.STATE_PATH) == before
     finally:
         os.close(fd)
 

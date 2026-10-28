@@ -2290,7 +2290,8 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             if borrowed is None:
                 upd_fd = acquire_update_lock()
                 if upd_fd is None:
-                    return 0                    # another updater is alive
+                    print("別の導入または更新が進行中です。完了後に状況を確認してください。この更新は開始していません。")
+                    return 2                    # this apply was not started
                 state = journal_store.load_state(STATE_PATH)            # fresh view under the lock
                 if _release_legacy_hold(state):
                     return 2
