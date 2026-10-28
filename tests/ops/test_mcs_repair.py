@@ -70,6 +70,7 @@ def world(tmp_path):
                    "VALUES('patient_rollup',1,?,100)",
                    (json.dumps({VERSION_KEY: CURRENT_VERSION, "generated_at": 100,
                                 "period_check_version": PERIOD_CHECK_VERSION,
+                                "valid_until": rollup._completion_valid_until(db, 1, 100, {}),
                                 "med_ref_sig": "0:",
                                 "med_ref_generation": drug_map.generation_signature(db),
                                 "message_sig": rollup._message_source_signature(db, 1, 100)}),))
@@ -151,6 +152,17 @@ def test_rollup_count_ignores_reobservation_but_detects_metadata_change(world):
     assert _hash(snapshot) == before
     _change(snapshot, 'UPDATE messages SET sender_name=? WHERE message_id=101', ('別の合成名',))
     assert repair.plan(snapshot, nonce=NONCE)['counts']['dirty_rollups'] == 1
+
+
+@pytest.mark.parametrize("metadata", ["json_remove(meta, '$.valid_until')",
+                                      "json_set(meta, '$.valid_until', 100)"])
+def test_rollup_count_marks_missing_or_expired_clock_boundary_dirty(world, metadata):
+    snapshot = world['snapshot']
+    assert repair.plan(snapshot, nonce=NONCE)['counts']['dirty_rollups'] == 0
+    _change(snapshot, 'UPDATE artifacts SET meta=' + metadata + " WHERE kind='patient_rollup'")
+    before = _hash(snapshot)
+    assert repair.plan(snapshot, nonce=NONCE)['counts']['dirty_rollups'] == 1
+    assert _hash(snapshot) == before
 
 
 def test_rollup_count_is_unknown_when_snapshot_lacks_input_columns(world):
