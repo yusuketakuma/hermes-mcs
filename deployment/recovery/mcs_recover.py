@@ -1730,7 +1730,52 @@ def recover(if_stale=False):
         return _recover_legacy(if_stale=if_stale)
 
 
+def _settings_migration_pending():
+    """The independent watchdog must retain an uncertain settings receipt."""
+    root = os.path.dirname(os.path.abspath(DATA))
+    try:
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    except FileNotFoundError:
+        return os.path.lexists(root)
+    except OSError:
+        return True
+    try:
+        info, current = os.fstat(fd), os.stat(root)
+        if (info.st_uid != os.getuid() or info.st_mode & 0o022
+                or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino)):
+            return True
+        try:
+            os.stat('.install-options-migration.pending', dir_fd=fd, follow_symlinks=False)
+        except FileNotFoundError:
+            found = False
+        else:
+            found = True
+        again = os.stat(root)
+        if found or (again.st_dev, again.st_ino) != (info.st_dev, info.st_ino):
+            return True
+        try:
+            data_fd = os.open(DATA, os.O_RDONLY | os.O_DIRECTORY)
+        except FileNotFoundError:
+            return os.path.lexists(DATA)
+        try:
+            held, current = os.fstat(data_fd), os.stat(DATA)
+            if (held.st_uid != os.getuid() or held.st_mode & 0o022
+                    or (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino)):
+                return True
+        finally:
+            os.close(data_fd)
+        again = os.stat(root)
+        return (again.st_dev, again.st_ino) != (info.st_dev, info.st_ino)
+    except OSError:
+        return True
+    finally:
+        os.close(fd)
+
+
 def _recover_legacy(if_stale=False):
+    if _settings_migration_pending():
+        print('導入設定の移行結果を確認できません。保留記録と設定を保持し、担当者に確認してください。')
+        return 2
     state = _load_state()
     if state.get("_corrupt"):
         _report("corrupt_state",
@@ -1754,6 +1799,8 @@ def _recover_legacy(if_stale=False):
         return 0                            # a tick is running — retry
     try:
         state = _load_state()               # fresh view under the locks
+        if _settings_migration_pending():
+            return 2
         if state.get("_corrupt"):
             _report("corrupt_state", "update_state.json unreadable under lock")
             return 2
@@ -2081,6 +2128,9 @@ def interactive_recovery():
         return 2
     print("MCS 復旧のご案内 — 中断した更新の状態を確認します。")
     print("手順 1/3: 状態を確認しています（この確認では変更しません）。")
+    if _settings_migration_pending():
+        print('導入設定の移行結果を確認できません。保留記録と設定を保持し、担当者に確認してください。')
+        return 2
     state = _load_state()
     if state.get("_corrupt"):
         print("更新記録を読み取れません。変更せず停止しました。担当者に確認を依頼してください。")
@@ -2154,7 +2204,7 @@ def main():
     if "--status" in args:
         state = _load_state()
         print(json.dumps({"state": state, "head": _head(),
-                          "clean": _clean()},
+                          "clean": _clean(), "settings_migration_pending": _settings_migration_pending()},
                          ensure_ascii=False, indent=2, default=str))
         return 0
     return recover(if_stale="--if-stale" in sys.argv)

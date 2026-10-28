@@ -4,6 +4,8 @@ chrome-profile/
 token_cache.json
 config.json
 config.json.*
+.install-options-migration.pending
+.install-options-migration.reconcile.*
 # Interrupted private configuration writes may leave these staging files.
 .atomic.*.tmp
 .alias-*.tmp
