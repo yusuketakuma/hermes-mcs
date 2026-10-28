@@ -1798,6 +1798,7 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
 
 _REALTIME_ORDER = ("CASE WHEN next_try<=updated_at THEN updated_at "
                    "ELSE created_at END DESC, job_id DESC")
+_REALTIME_KEY = "CASE WHEN next_try<=updated_at THEN updated_at ELSE created_at END"
 # Free long-output defers (the call needs LONG_MIN_CALL_S and the pass
 # had less) are tracked per job generation in the sched row: such a job
 # leaves the realtime lane, and after this many free defers of the same
@@ -1896,6 +1897,12 @@ def _reservation_sched(ledger):
             or type(value['n']) is not int or not 0 <= value['n'] < 2**63 - 1
             for key, value in entries.items()):
         raise ValueError('semantic_scheduler_invalid')
+    cursors = sched.get('payload_hold_cursors', {})
+    if (not isinstance(cursors, dict) or any(
+            key not in ('combined', 'realtime', 'backlog')
+            or not _held_cursor_valid(value, None if key == 'combined' else key)
+            for key, value in cursors.items())):
+        raise ValueError('semantic_scheduler_invalid')
     return sched, dict(entries)
 
 
@@ -1910,9 +1917,12 @@ def _reserve_long_defer(ledger, token):
             'WHERE job_id=? AND kind=? AND project_id=? AND message_id=?',
             (token.job_id, token.kind, token.project_id, token.message_id)).fetchone()
         raw = _bounded_job_payload(ledger.db, token.job_id, _REPROCESS_JOB_MAX_BYTES) if row else None
-        if (row is None or row['state'] != token.state or int(row['attempts'] or 0) != token.attempts
-                or raw != token.payload_raw
-                or _known_long_defer_generation(raw) != token.generation):
+        if row is None or row['state'] != token.state or int(row['attempts'] or 0) != token.attempts:
+            return None
+        generation = _known_long_defer_generation(raw)
+        if generation is None:
+            raise ValueError('semantic_job_payload_unreadable')
+        if raw != token.payload_raw or generation != token.generation:
             return None
         key = str(token.job_id)
         prior = entries.get(key)
@@ -2021,13 +2031,45 @@ _ARCHIVED_JOB = ("EXISTS (SELECT 1 FROM patients p "
 _ELIGIBLE_SQL = "json_valid(payload) AND COALESCE(json_extract(payload,'$.eligible'),0)=1"
 
 
-def _class_scope(archived: bool, excluded) -> tuple[str, str]:
+def _held_cursor_valid(value, lane):
+    if (not isinstance(value, dict) or set(value) != {'job_id', 'rank'}
+            or type(value['job_id']) is not int or not 0 < value['job_id'] < 2**63):
+        return False
+    rank = value['rank']
+    return rank is None or (lane == 'realtime' and type(rank) in (int, float)
+                            and abs(rank) < 2**63 and math.isfinite(rank))
+
+
+def _held_cursor_for(job, lane):
+    rank = None
+    if lane == 'realtime':
+        next_try, updated, created = job['next_try'], job['updated_at'], job['created_at']
+        values = (next_try, updated, created)
+        if any(value is not None and (type(value) not in (int, float)
+                or abs(value) >= 2**63 or not math.isfinite(value)) for value in values):
+            return None
+        rank = updated if next_try is not None and updated is not None and next_try <= updated else created
+    cursor = {'job_id': job['job_id'], 'rank': rank}
+    return cursor if _held_cursor_valid(cursor, lane) else None
+
+
+def _class_scope(archived: bool, excluded, *, lane=None, held_after=None) -> tuple[str, str]:
     """(patient-class + excluded-job SQL predicate, its json_each parameter)."""
     scope = (("" if archived else "NOT ") + _ARCHIVED_JOB
              + ' AND (' + current_meta_pred('fetch_jobs.payload')
              + ' OR (' + current_meta_pred('fetch_jobs.payload', target=LEGACY_VERSION)
              + " AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.eligible')=1 END))"
              + " AND job_id NOT IN (SELECT value FROM json_each(?))")
+    if _held_cursor_valid(held_after, lane):
+        job_id = held_after['job_id']
+        if lane == 'realtime':
+            rank = held_after['rank']
+            predicate = (f"({_REALTIME_KEY} IS NULL AND job_id<{job_id})" if rank is None else
+                         f"({_REALTIME_KEY} IS NULL OR {_REALTIME_KEY}<{rank!r} OR "
+                         f"({_REALTIME_KEY}={rank!r} AND job_id<{job_id}))")
+        else:
+            predicate = f'job_id>{job_id}'
+        scope += f" AND (kind!='{JOB_KIND}' OR {predicate})"
     return scope, json.dumps(sorted(excluded))
 
 
@@ -2063,7 +2105,7 @@ def _adopt_pending_arrival(ledger, job):
 
 
 def _due_lanes(ledger, kinds: tuple, max_jobs: int,
-               archived: bool = False, *, excluded=(), turns=None) -> tuple[list, list, dict]:
+               archived: bool = False, *, excluded=(), turns=None, held_after=None) -> tuple[list, list, dict]:
     """Two-lane due selection with a persisted fairness share.
 
     Arrival-seeded jobs (payload.eligible=1 — a real notification event
@@ -2078,7 +2120,7 @@ def _due_lanes(ledger, kinds: tuple, max_jobs: int,
     Returns (arrival_jobs, backfill_jobs, sched_mutation) — the mutation
     is written by the caller once the batch is consumed."""
     now = time.time()
-    scope, excluded_json = _class_scope(archived, excluded)
+    scope, excluded_json = _class_scope(archived, excluded, held_after=held_after)
     turn_key = "archived_turn" if archived else "turn"
     kind_ph = ",".join("?" * len(kinds))
     eligible = _ELIGIBLE_SQL
@@ -2190,7 +2232,7 @@ def _job_lock(ledger, job_id):
 
 def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
                 max_jobs: int, long_defers: dict | None = None, *,
-                excluded=(), turns=None) -> tuple:
+                excluded=(), turns=None, held_after=None) -> tuple:
     """Select active patients first, retaining each cohort's bounded fairness."""
     if lane == 'backlog':
         # Two resident lanes share this durable turn. Realtime arrivals keep
@@ -2201,32 +2243,37 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
                 state['reprocess_archive_turn'] = not archive_first
         except Exception:
             raise _SchedulerUnavailable from None
-        first = _select_due_class(ledger, lane, kinds, qc_active, max_jobs,
-                                  long_defers, archive_first,
-                                  excluded=excluded, turns=turns)
-        if first[0]:
-            return first
-        return _select_due_class(ledger, lane, kinds, qc_active,
-                                 max_jobs, long_defers, not archive_first,
-                                 excluded=excluded, turns=turns)
-    active = _select_due_class(
-        ledger, lane, kinds, qc_active, max_jobs, long_defers, False,
-        excluded=excluded, turns=turns)
-    remaining = max_jobs - len(active[0])
-    if remaining <= 0:
-        return active
-    archived = _select_due_class(
-        ledger, lane, kinds, qc_active, remaining, long_defers, True,
-        excluded=excluded, turns=turns)
-    due, qc_jobs, arrivals, backfill = [
-        a + b for a, b in zip(active[:4], archived[:4])]
-    return (due, qc_jobs, arrivals, backfill,
-            active[4] if active[4].get("turn") else archived[4])
+        def select(after):
+            first = _select_due_class(ledger, lane, kinds, qc_active, max_jobs,
+                                      long_defers, archive_first,
+                                      excluded=excluded, turns=turns, held_after=after)
+            if first[0]:
+                return first
+            return _select_due_class(ledger, lane, kinds, qc_active,
+                                     max_jobs, long_defers, not archive_first,
+                                     excluded=excluded, turns=turns, held_after=after)
+    else:
+        def select(after):
+            active = _select_due_class(
+                ledger, lane, kinds, qc_active, max_jobs, long_defers, False,
+                excluded=excluded, turns=turns, held_after=after)
+            remaining = max_jobs - len(active[0])
+            if remaining <= 0:
+                return active
+            archived = _select_due_class(
+                ledger, lane, kinds, qc_active, remaining, long_defers, True,
+                excluded=excluded, turns=turns, held_after=after)
+            due, qc_jobs, arrivals, backfill = [
+                a + b for a, b in zip(active[:4], archived[:4])]
+            return (due, qc_jobs, arrivals, backfill,
+                    active[4] if active[4].get("turn") else archived[4])
+    result = select(held_after)
+    return select(None) if held_after and not result[0] else result
 
 
 def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
                       max_jobs: int, long_defers: dict | None,
-                      archived: bool, *, excluded=(), turns=None) -> tuple:
+                      archived: bool, *, excluded=(), turns=None, held_after=None) -> tuple:
     """Due-job selection for one patient class in a drain pass.
 
     Returns (due, qc_jobs, arrivals, backfill, sched_mut): the ordered
@@ -2234,7 +2281,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
     ``long_defers`` ({str(job_id): {"g", "n"}}) keeps jobs known to need
     the long-output budget out of the realtime lane.
     """
-    scope, excluded_json = _class_scope(archived, excluded)
+    scope, excluded_json = _class_scope(archived, excluded, lane=lane, held_after=held_after)
     if lane is None:
         qc_rows = []
         if qc_active and max_jobs > 1:
@@ -2246,7 +2293,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
         qc_jobs = list(qc_rows[:qc_share])
         arrivals, backfill, sched_mut = _due_lanes(
             ledger, (JOB_KIND,) if qc_jobs else kinds,
-            max_jobs - len(qc_jobs), archived, excluded=excluded, turns=turns)
+            max_jobs - len(qc_jobs), archived, excluded=excluded, turns=turns, held_after=held_after)
         # unused lane capacity flows back to QC — same rule the backfill
         # cohort uses against an idle arrival lane
         spare = max_jobs - len(qc_jobs) - len(arrivals) - len(backfill)
@@ -2312,7 +2359,7 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
 
 
 def _refill_due(ledger, lane, kinds, qc_active, max_jobs, long_defers,
-                first_batch, selected, out, deadline, consumed_turns):
+                first_batch, selected, out, deadline, consumed_turns, held_after=None):
     """Refill skipped slots without revisiting jobs or scanning an unbounded queue."""
     inspected = set()
     batch = first_batch
@@ -2344,7 +2391,7 @@ def _refill_due(ledger, lane, kinds, qc_active, max_jobs, long_defers,
         turns = {**_sched_state(ledger), **consumed_turns}
         try:
             batch = _select_due(ledger, lane, kinds, qc_active, remaining,
-                                long_defers, excluded=inspected, turns=turns)
+                                long_defers, excluded=inspected, turns=turns, held_after=held_after)
         except _SchedulerUnavailable:
             out['long_defer_reservation_failed'] = True
             return
@@ -2464,6 +2511,19 @@ def _persist_drain_accounting(ledger, scfg, out: dict, result: dict,
             if sched_mut.get("turn") and sched_mut.get("turn_consumed"):
                 sched[sched_mut.get("turn_key", "turn")] = sched_mut["turn"]
             sched.update(sched_mut.get("consumed_turns", {}))
+            if sched_mut.get('hold_cursor_changed'):
+                cursors = dict(sched.get('payload_hold_cursors', {}))
+                key = sched_mut['hold_cursor_lane']
+                cursor = sched_mut.get('hold_cursor')
+                if cursors.get(key) == sched_mut.get('hold_cursor_expected'):
+                    if cursor is None:
+                        cursors.pop(key, None)
+                    else:
+                        cursors[key] = cursor
+                    if cursors:
+                        sched['payload_hold_cursors'] = cursors
+                    else:
+                        sched.pop('payload_hold_cursors', None)
             if long_seen or long_defers:
                 _merge_long_defers(ledger, sched, long_seen or {})
     except Exception:
@@ -2522,7 +2582,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
            "progressed": 0}
     if scfg['mode'] != 'off':
         try:
-            _reservation_sched(ledger)
+            initial_sched, _ = _reservation_sched(ledger)
         except Exception:
             result['errors'].append('semantic: long_defer_reservation_failed')
             out['long_defer_reservation_failed'] = True
@@ -2693,22 +2753,43 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # the semantic lanes leave unused. A 1-job window cannot be split —
     # QC falls back to the persisted cohort alternation inside the
     # non-eligible lane.
+    hold_lane = lane or 'combined'
+    held_after = initial_sched.get('payload_hold_cursors', {}).get(hold_lane)
     try:
-        first_batch = _select_due(ledger, lane, kinds, qc_active, max_jobs, long_defers)
+        cursor_arg = {'held_after': held_after} if held_after is not None else {}
+        first_batch = _select_due(ledger, lane, kinds, qc_active, max_jobs, long_defers,
+                                  **cursor_arg)
     except _SchedulerUnavailable:
         result['errors'].append('semantic: long_defer_reservation_failed')
         out['long_defer_reservation_failed'] = True
         return out
     due = first_batch[0]
     consumed_turns = {}
-    sched_mut = {"consumed_turns": consumed_turns}
+    sched_mut = {"consumed_turns": consumed_turns, 'hold_cursor_expected': held_after}
+    saw_held = False
+
+    def hold_job(job, mutation, reason='semantic: job_payload_held'):
+        nonlocal saw_held
+        saw_held = True
+        out['payload_hold_count'] = out.get('payload_hold_count', 0) + 1
+        reasons = out.setdefault('hold_reasons', [])
+        if reason not in reasons:
+            reasons.append(reason)
+        if reason not in result['errors']:
+            result['errors'].append(reason)
+        cursor = _held_cursor_for(job, lane)
+        if cursor is not None:
+            sched_mut.update(hold_cursor_changed=True, hold_cursor_lane=hold_lane,
+                             hold_cursor=cursor)
+        if mutation.get('turn') and job['job_id'] == mutation.get('turn_job_id'):
+            consumed_turns[mutation.get('turn_key', 'turn')] = mutation['turn']
     out["lanes"] = {"arrival": 0, "backfill": 0}
     if qc_active:
         out["lanes"]["qc"] = 0
     selected = {"qc": 0, "arrival": 0, "backfill": 0}
     for job, cohort_name, mutation in _refill_due(
             ledger, lane, kinds, qc_active, max_jobs, long_defers,
-            first_batch, selected, out, deadline, consumed_turns):
+            first_batch, selected, out, deadline, consumed_turns, held_after):
         if llm_health["down"] and job["kind"] == JOB_KIND:
             # the endpoint refused this pass: the remaining model jobs
             # would each only re-defer (and rewrite updated_at); they
@@ -2718,6 +2799,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             if not held:
                 out["lock_skipped"][job["kind"]] = \
                     out["lock_skipped"].get(job["kind"], 0) + 1
+                continue
+            if job['kind'] == JOB_KIND and _known_long_defer_generation(job['payload']) is None:
+                hold_job(job, mutation)
                 continue
             if job['kind'] == JOB_KIND and not is_current(runtime.parse_payload(job)):
                 job = _adopt_pending_arrival(ledger, job)
@@ -2818,9 +2902,16 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             if job['kind'] == JOB_KIND:
                 try:
                     reservation = _reserve_long_defer(ledger, token)
-                except Exception:
-                    result['errors'].append('semantic: long_defer_reservation_failed')
+                except Exception as error:
+                    if 'semantic: long_defer_reservation_failed' not in result['errors']:
+                        result['errors'].append('semantic: long_defer_reservation_failed')
                     out['long_defer_reservation_failed'] = True
+                    if type(error) is ValueError and str(error) in (
+                            'semantic_job_payload_unreadable', 'semantic_long_defers_capacity',
+                            'semantic_long_defer_generation_unknown'):
+                        hold_job(job, mutation, 'semantic: long_defer_capacity'
+                                 if str(error) == 'semantic_long_defers_capacity'
+                                 else 'semantic: job_payload_held')
                     continue
                 if reservation is None:
                     continue
@@ -2860,9 +2951,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                         jev_transport=jev_transport, jev_timing=jev_timing)
             except writer_lock.RunLockLost as e:
                 # An updater won the lock in a transport window (or the
-                # bounded reacquire expired). Write nothing: the job
-                # stays pending with its attempts untouched (its only
-                # claim is the _job_lock flock released on return),
+                # bounded reacquire expired). Make no further writes: the job
+                # stays pending with its attempts untouched. Its previously
+                # committed long-defer reservation remains conservatively charged;
+                # the _job_lock flock is released on return.
                 # later jobs are not started, and the caller ends the
                 # tick/batch on out["run_lock_lost"].
                 out["run_lock_lost"] = ("held" if e.held
@@ -2953,6 +3045,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 result["errors"].append("semantic: jev_payment_required")
                 out["jev_blocked"] = "payment_required"
                 break
+    if held_after and not saw_held and sum(selected.values()):
+        sched_mut.update(hold_cursor_changed=True, hold_cursor_lane=hold_lane, hold_cursor=None)
     if llm_health["fed"]:
         out["llm_down"] = True
     if (out.get('long_defer_reservation_failed')
