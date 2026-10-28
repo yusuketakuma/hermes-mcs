@@ -1250,6 +1250,7 @@ def cmd_features(args) -> int:
     except (KeyboardInterrupt, EOFError):
         print("\n任意機能: 中止しました。保存していません。")
         return 130
+    publication_started = False
     try:
         body = json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + '\n'
         if len(body.encode("utf-8")) > mcs_util.CONFIG_MAX_BYTES:
@@ -1265,12 +1266,14 @@ def cmd_features(args) -> int:
                 raise config_edit.ConfigConflict("config_changed")
             if base is None:
                 # Publish an absent base exclusively, without replacing a concurrent creator.
+                publication_started = True
                 safe_io.publish_new_bytes(CONF_PATH, body.encode("utf-8"))
             else:
                 def write_checked(stream):
                     stream.write(body)
                     if current_base() != base:
                         raise config_edit.ConfigConflict("config_changed")
+                publication_started = True
                 safe_io.atomic_write(CONF_PATH, write_checked, 0o600,
                                      tmp_prefix=".svc.", makedirs=False)
     except config_edit.ConfigConflict:
@@ -1278,8 +1281,12 @@ def cmd_features(args) -> int:
               "保存していません。もう一度実行してください。")
         return 1
     except (OSError, ValueError, RecursionError):
-        print("任意機能: 保存結果を確認できません。端末で mcs setup features を開き、"
-              "表示される現在の選択を確認してください。")
+        if publication_started:
+            print("任意機能: 保存結果を確認できません。端末で mcs setup features を開き、"
+                  "表示される現在の選択を確認してください。")
+        else:
+            print("任意機能: 設定または保存用ロックを確認できないため保存していません。"
+                  "問題を確認してから再実行してください。")
         return 1
     print("任意機能の選択を保存しました。登録・同意・送信はこの操作では行っていません。")
     return 0
