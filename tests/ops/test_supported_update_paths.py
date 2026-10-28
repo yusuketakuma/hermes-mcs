@@ -8,6 +8,7 @@ import runtime_inspection
 from contextlib import closing
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -21,7 +22,7 @@ import maintenance
 import notify_spool
 import notify_transport
 import mcs_setup
-from ops_testkit import _seed_consent
+from ops_testkit import _seed_consent, in_process_post_merge
 from test_mcs_upgrade import _launcher
 from test_supported_schema_upgrade import (
     FIXTURES, RELEASES, _historical, _preserved, _records, _sha,
@@ -171,7 +172,7 @@ def _world(tmp_path, monkeypatch, updater, path, *, install=False, schema=None):
     monkeypatch.setattr(updater, "restart_agents", lambda bounce=True: [])
     monkeypatch.setattr(updater, "restart_gateway", lambda cfg: None)
     monkeypatch.setattr(updater, "_services_reconcile", lambda: calls.append("services"))
-    monkeypatch.setattr(updater, "_run_post_merge", lambda sha, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+    monkeypatch.setattr(updater, "_run_post_merge", in_process_post_merge(updater, monkeypatch))
     monkeypatch.delenv("MCS_UPDATE_REPO", raising=False)
     real_run = subprocess.run
 
@@ -452,7 +453,13 @@ def test_legacy_manual_reinstall_migration_and_restore(
     objects.run(["merge", "--ff-only", f"refs/tags/{objects.target}"])
     applying = {"reinstall": True, "install_args": ["--no-llm"],
                 "install_options_base": updater._install_options_snapshot()[0]}
-    updater._reinstall(applying)
+    update_fd = updater.acquire_update_lock()
+    assert update_fd is not None
+    try:
+        monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, str(update_fd))
+        updater._reinstall(applying)
+    finally:
+        os.close(update_fd)
     assert applying["reinstall_done"] is True
     assert updater._postcheck({"baseline_check": []}, objects.after) == []
     _preserved(Path(updater.LEDGER), expected)

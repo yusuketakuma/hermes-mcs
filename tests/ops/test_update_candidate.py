@@ -8,7 +8,7 @@ import mcs_update
 import mcs_util
 import service_management
 import update_discovery
-from ops_testkit import _git, _load, _make_repo, _mk_schema
+from ops_testkit import _git, _load, _make_repo, _mk_schema, in_process_post_merge
 import test_mcs_update
 from test_mcs_update import _apply_env
 
@@ -31,8 +31,7 @@ def _candidate_env(updater, monkeypatch, *, errors=()):
     monkeypatch.setattr(update_discovery, "remote_tag_sha",
                         lambda *a, **k: pytest.fail("candidate must not contact origin"))
     monkeypatch.setattr(updater, "_plan_runtime_migration", lambda *a, **k: None)
-    monkeypatch.setattr(updater, "_run_post_merge", lambda expected, **kw:
-                        updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+    monkeypatch.setattr(updater, "_run_post_merge", in_process_post_merge(updater, monkeypatch))
     return repo, base, target
 
 
@@ -122,11 +121,18 @@ def test_candidate_plan_keeps_recovery_guidance_without_parsing_sha_as_a_version
     assert released["notes"] == release_notes + recovery_notes
     assert parsed_versions == [("v1.2.0", "v1.1.0")]
     _git(repo, "reset", "--hard", target)
-    assert updater.plan("v1.2.0")["notes"] == []
+    assert updater.plan("v1.2.0")["notes"] == recovery_notes
     noop = updater.plan(candidate_sha=target, base_sha=target)
-    assert len(noop["notes"]) == 1
+    assert noop["route"] == "noop" and noop["blockers"] == blockers
+    assert noop["notes"][1:] == recovery_notes
     assert "未公開のローカル候補" in noop["notes"][0]["notes"]
     assert parsed_versions == [("v1.2.0", "v1.1.0")]
+    blockers.clear()
+    monkeypatch.setattr(service_management, "recovery_repair_pending", lambda *a, **k: False)
+    assert updater.plan("v1.2.0")["notes"] == []
+    repaired = updater.plan(candidate_sha=target, base_sha=target)
+    assert repaired["route"] == "noop" and repaired["blockers"] == []
+    assert len(repaired["notes"]) == 1
 
 
 @pytest.mark.parametrize("problem", ["install_sh_changed", "unsafe_path: ../escape",

@@ -5,7 +5,7 @@ network. No real MCS, Discord, Keychain, or external repo access.
 """
 
 import environment_diagnostics
-from ops_testkit import select_updater_service_python
+from ops_testkit import in_process_post_merge, select_updater_service_python
 import restore_evidence
 import scheduled_jobs
 import service_contract
@@ -771,7 +771,7 @@ def test_apply_persists_adapter_restart_decision_before_restarting_gateway(
     sha = _git(remote_work, "rev-parse", "HEAD").stdout.strip()
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda tag, **_lif05_paths: sha)
     monkeypatch.setattr(updater, "_run_post_merge",
-                        lambda expected, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+                        in_process_post_merge(updater, monkeypatch))
     restarts = []
 
     def restart(cfg):
@@ -3164,7 +3164,7 @@ def test_guided_apply_stops_if_approved_options_changed(updater, monkeypatch, tm
     assert json.loads(config.read_text()) == {'install_args': ['--no-llm']}
 
 
-def test_manual_apply_can_choose_args_different_from_record(updater, monkeypatch):
+def test_manual_apply_accepts_different_args_before_busy_lock(updater, monkeypatch, capsys):
     config = Path(mcs_util.CONF_PATH)
     config.write_text('{"install_args": ["--no-llm"]}')
     monkeypatch.delenv('MCS_UPDATE_OPTIONS_EXPECTED', raising=False)
@@ -3174,8 +3174,10 @@ def test_manual_apply_can_choose_args_different_from_record(updater, monkeypatch
     captured = []
     monkeypatch.setattr(updater, '_install_options_snapshot', lambda: captured.append(snapshot()) or captured[-1])
     monkeypatch.setattr(updater, 'acquire_update_lock', lambda: None)
-    assert updater._apply_pipeline('v1.0.23', None, None, reinstall=True, install_args=('--no-brew',)) == 0
+    assert updater._apply_pipeline('v1.0.23', None, None, reinstall=True, install_args=('--no-brew',)) == 2
+    assert '別の導入または更新が進行中' in capsys.readouterr().out
     assert captured[0][1] == ['--no-llm']
+    assert not Path(updater.STATE_PATH).exists()
 
 
 def test_interrupted_update_recovery_precedes_changed_guided_options(updater, monkeypatch):

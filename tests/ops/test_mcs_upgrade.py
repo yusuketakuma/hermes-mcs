@@ -22,7 +22,7 @@ import uuid
 import pytest
 
 import mcs_update
-from ops_testkit import _git, _make_repo
+from ops_testkit import _git, _make_repo, in_process_post_merge
 import test_mcs_update
 from test_mcs_update import _apply_env
 from ledger import Ledger
@@ -314,7 +314,7 @@ def test_launcher_preserves_a_dash_leading_reason_at_the_child_parser(tmp_path, 
 
 def test_launcher_refuses_target_without_updater(tmp_path):
     repo, _ = _make_repo(tmp_path)
-    with pytest.raises(SystemExit, match="更新プログラム mcs/ops/mcs_update.py がありません"):
+    with pytest.raises(SystemExit, match="v1.1.0 に必要な更新プログラムがありません"):
         _launcher().main(["--repo", str(repo), "--no-fetch", "plan",
                           "--to", "v1.1.0"])
 
@@ -554,7 +554,7 @@ def _install_tag(updater, monkeypatch, tmp_path):
                    "v1.2.0", {"install.sh": "#!/bin/sh\n"})
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda t, **_lif05_paths: sha)
     monkeypatch.setattr(updater, "_run_post_merge",
-                        lambda expected, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+                        in_process_post_merge(updater, monkeypatch))
     return repo, sha
 
 
@@ -596,6 +596,8 @@ def _fake_install(monkeypatch, rc=0):
 
 def test_reinstall_runs_install_before_services(updater, monkeypatch, tmp_path):
     repo, sha = _install_tag(updater, monkeypatch, tmp_path)
+    Path(mcs_util.CONF_PATH).write_text('{"install_args": ["--no-brew"]}')
+    assert updater._install_options_snapshot()[1] == ["--no-brew"]
     calls = _fake_install(monkeypatch)
     monkeypatch.setattr(updater, "_services_reconcile",
                         lambda: calls.append("services"))
@@ -614,7 +616,7 @@ def test_update_runs_same_root_settings_migration_before_merge_once(updater, mon
     sha = _release(tmp_path / 'remote-work', tmp_path / 'remote.git', 'v1.2.0', {'f.txt': 'new synthetic release'})
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
     monkeypatch.setattr(updater, '_run_post_merge',
-                        lambda expected, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+                        in_process_post_merge(updater, monkeypatch))
     _fake_install(monkeypatch)
     config = Path(mcs_util.CONF_PATH)
     config.write_text('{"unknown": {"keep": true}}')
@@ -798,7 +800,7 @@ def test_update_rollback_keeps_legacy_record_and_migrated_settings(updater, monk
     sha = _release(tmp_path / 'remote-work', tmp_path / 'remote.git', 'v1.2.0', {'f.txt': 'new synthetic release'})
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
     monkeypatch.setattr(updater, '_run_post_merge',
-                        lambda expected, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+                        in_process_post_merge(updater, monkeypatch))
     monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda *_a, **_k: [])
     config = Path(mcs_util.CONF_PATH)
     config.write_text('{"unknown": {"keep": true}}')
@@ -861,8 +863,14 @@ def test_reinstall_marks_install_sh_as_an_updater_run(updater, monkeypatch):
             seen.append(kw["env"].get(mcs_update.REINSTALL_ENV))
             super().__init__(argv, **kw)
     monkeypatch.setattr(mcs_update.subprocess, "Popen", lambda argv, *a, **kw: Install(argv, **kw))
-    updater._reinstall({"reinstall": True, "install_args": ["--no-llm"],
-                        "install_options_base": updater._install_options_snapshot()[0]})
+    update_fd = updater.acquire_update_lock()
+    assert update_fd is not None
+    try:
+        monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, str(update_fd))
+        updater._reinstall({"reinstall": True, "install_args": ["--no-llm"],
+                            "install_options_base": updater._install_options_snapshot()[0]})
+    finally:
+        os.close(update_fd)
     assert seen == ["1"]
 
 

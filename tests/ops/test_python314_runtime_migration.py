@@ -66,8 +66,18 @@ def test_old_parent_without_inherited_lock_rolls_back_instead(updater, old_inter
     assert "runtime_migration" not in updater.journal_store.load_state(updater.STATE_PATH)["applying"]
 
 
+def test_old_parent_with_run_lock_only_rolls_back_before_journaling(updater, old_interpreter, monkeypatch):
+    monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
+    monkeypatch.delenv(updater.UPDATE_LOCK_FD_ENV, raising=False)
+    state = _state(updater)
+    with pytest.raises(updater.UpdateError, match="runtime_migration_requires_upgrade_tool"):
+        updater._plan_runtime_migration(state)
+    assert "runtime_migration" not in updater.journal_store.load_state(updater.STATE_PATH)["applying"]
+
+
 def test_migration_is_journaled_before_install(updater, old_interpreter, monkeypatch):
     monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
+    monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, "8")
     (old_interpreter.parent / "venv.pre-python314").mkdir()
     state = _state(updater, install_args=["--no-brew", "--no-llm"])
     updater._plan_runtime_migration(state)
@@ -82,6 +92,7 @@ def test_migration_is_journaled_before_install(updater, old_interpreter, monkeyp
 
 
 def test_old_journal_missing_options_base_stops_before_replanning(updater, old_interpreter, monkeypatch):
+    monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, "8")
     state = _state(updater, reinstall=True, install_options_base=None)
     before = Path(updater.STATE_PATH).read_bytes()
     monkeypatch.setattr(updater, '_plan_runtime_migration', lambda *_: pytest.fail('journal changed before check'))
@@ -121,6 +132,7 @@ def test_hermes_checkout_head_is_recorded_and_restored(updater, tmp_path, monkey
     monkeypatch.setattr(updater, "_runtime_venv", lambda cfg: (str(venv), str(checkout)))
     monkeypatch.setattr(updater, "HERMES_PIN", new_head)
     monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
+    monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, "8")
     state = _state(updater)
     updater._plan_runtime_migration(state)
     migration = state["applying"]["runtime_migration"]
@@ -300,6 +312,7 @@ def test_post_merge_child_inherits_both_parent_locks(updater, monkeypatch, tmp_p
 
 def test_post_merge_migrates_then_reconciles_with_new_python(updater, old_interpreter, monkeypatch):
     monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
+    monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, "8")
     monkeypatch.setattr(updater, "_SERVICES_PYTHON", None)
     order = []
 
@@ -413,6 +426,7 @@ def test_linked_worktree_checkout_head_is_recorded_too(updater, tmp_path, monkey
     select_updater_service_python(monkeypatch, updater, str(venv / 'bin/python3'))
     assert updater._runtime_venv({}) == (str(venv), str(checkout))
     monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
+    monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, "8")
     state = _state(updater)
     updater._plan_runtime_migration(state)
     assert state["applying"]["runtime_migration"]["checkout_head"] == old_head
@@ -614,6 +628,7 @@ def test_confirmed_own_checkout_is_kept_only_when_exact_clean_and_ready(
     assert updater._migration_checkout_problem({}) == expected
     if case == "confirmed":
         monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
+        monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, "8")
         state = _state(updater)
         updater._plan_runtime_migration(state)
         migration = state["applying"]["runtime_migration"]
@@ -644,6 +659,7 @@ def test_supported_previous_pin_refresh_is_journaled_and_restores_old_dependenci
     monkeypatch.setattr(updater, "HERMES_PIN", new_head)
     monkeypatch.delenv(updater.KEEP_CHECKOUT_ENV, raising=False)
     monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
+    monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, "8")
     state = _state(updater)
     updater._plan_runtime_migration(state, held_fd=5)
     saved = updater.journal_store.load_state(updater.STATE_PATH)["applying"]
@@ -864,3 +880,11 @@ def test_nonmigrating_checkout_is_preserved_by_precheck_and_plan(
     assert {p: (p.read_bytes(), p.stat().st_ino) for p in before} == before
     assert _git(checkout, "rev-parse", "HEAD").stdout.strip() == head
     assert not list(checkout.glob("venv.pre-python314*"))
+
+
+def test_old_parent_without_update_lock_refuses_reinstall_before_install(updater, monkeypatch):
+    monkeypatch.delenv(updater.UPDATE_LOCK_FD_ENV, raising=False)
+    monkeypatch.setattr(updater, "_reinstall", lambda applying: pytest.fail("install.sh must not start"))
+    state = _state(updater, reinstall=True)
+    with pytest.raises(updater.UpdateError, match="reinstall_requires_upgrade_tool"):
+        updater._post_merge(state)
