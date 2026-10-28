@@ -1841,12 +1841,95 @@ def _merge_long_defers(ledger, sched: dict, seen: dict) -> None:
 _ARCHIVED_JOB = ("EXISTS (SELECT 1 FROM patients p "
                  "WHERE p.project_id=fetch_jobs.project_id AND p.is_archived)")
 # an arrival-seeded job: a real notification event spawned it
-_ELIGIBLE_SQL = "json_valid(payload) AND COALESCE(json_extract(payload,'$.eligible'),0)=1"
+_ELIGIBLE_SQL = "CASE WHEN json_valid(payload) THEN COALESCE(json_extract(payload,'$.eligible'),0)=1 ELSE 0 END"
+
+
+def _future_version(raw):
+    """Hold canonical future versions and ambiguous version markers untouched."""
+    class Pairs(dict):
+        def __init__(self, pairs):
+            super().__init__(pairs)
+            self.ambiguous = sum(key == VERSION_KEY for key, _ in pairs) > 1
+
+    try:
+        value = json.loads(raw, object_pairs_hook=Pairs)
+    except json.JSONDecodeError:
+        return False
+    except (RecursionError, ValueError):
+        # An incomplete parse cannot prove there is no future/ambiguous marker.
+        return True
+    except TypeError:
+        return False
+    if not isinstance(value, Pairs):
+        return False
+    if value.ambiguous:
+        return True  # The version cannot be selected without discarding evidence.
+    version = read_version(value)
+    return version is not None and version not in (CURRENT_VERSION, LEGACY_VERSION)
+
+
+def _quarantine_scheduler(ledger):
+    row = ledger.db.execute('SELECT substr(payload,1,?) FROM fetch_jobs WHERE kind=? '
+                            'AND project_id=0 AND message_id=0',
+                            (_REPROCESS_JOB_MAX_BYTES + 1, SCHED_KIND)).fetchone()
+    raw = row[0] if row is not None else '{}'
+    if not isinstance(raw, str) or len(raw.encode('utf-8')) > _REPROCESS_JOB_MAX_BYTES:
+        return None
+    try:
+        value = strict_json(raw)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _quarantine_invalid_jobs(ledger, limit, deadline):
+    """Quarantine a bounded due page without changing payloads or attempts."""
+    from ledger import bump_semantic_job_state_epoch_tx
+    if time.monotonic() >= deadline:
+        return
+    ledger.db.execute('BEGIN IMMEDIATE')
+    with ledger.db:
+        sched = _quarantine_scheduler(ledger)
+        if sched is None:
+            return
+        cursor = sched.get('invalid_job_cursor', [0, 0])
+        if (not isinstance(cursor, list) or len(cursor) != 2
+                or type(cursor[0]) not in (int, float) or not math.isfinite(cursor[0])
+                or type(cursor[1]) is not int or cursor[1] < 0):
+            return
+        defers = sched.get('long_defers', {})
+        if not isinstance(defers, dict):
+            return
+        rows = ledger.db.execute(
+            "SELECT job_id,project_id,message_id,next_try,substr(payload,1,?) AS payload "
+            "FROM fetch_jobs WHERE kind='semantic' AND state='pending' AND next_try<=? "
+            'AND (next_try,job_id)>(?,?) ORDER BY next_try,job_id LIMIT ?',
+            (_REPROCESS_JOB_MAX_BYTES + 1, time.time(), *cursor, limit)).fetchall()
+        if not rows:
+            cursor = [0, 0]
+        for row in rows:
+            if time.monotonic() >= deadline:
+                break
+            cursor = [row['next_try'], row['job_id']]
+            raw = row['payload']
+            if not isinstance(raw, str) or len(raw.encode('utf-8')) > _REPROCESS_JOB_MAX_BYTES:
+                continue
+            if _reprocess_job_payload(ledger, row, row['project_id'], row['message_id']) is not None:
+                continue
+            if _future_version(raw) or str(row['job_id']) in defers:
+                continue
+            if ledger.db.execute("UPDATE fetch_jobs SET state='failed' WHERE job_id=? AND state='pending'",
+                                 (row['job_id'],)).rowcount:
+                bump_semantic_job_state_epoch_tx(ledger.db)
+        sched = _sched_state(ledger)
+        sched['invalid_job_cursor'] = cursor
+        _sched_write(ledger, sched, commit=False)
 
 
 def _class_scope(archived: bool, excluded) -> tuple[str, str]:
     """(patient-class + excluded-job SQL predicate, its json_each parameter)."""
     scope = (("" if archived else "NOT ") + _ARCHIVED_JOB
+             + f" AND length(CAST(fetch_jobs.payload AS BLOB))<={_REPROCESS_JOB_MAX_BYTES}"
              + ' AND (' + current_meta_pred('fetch_jobs.payload')
              + ' OR (' + current_meta_pred('fetch_jobs.payload', target=LEGACY_VERSION)
              + " AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.eligible')=1 END))"
@@ -2097,7 +2180,8 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
             # a payload from before the generation field: its generation
             # is the payload digest, which SQL cannot compute
             rows = [r for r in rows
-                    if (long_defers or {}).get(str(r["job_id"]), {}).get("g")
+                    if _reprocess_job_payload(ledger, r, r['project_id'], r['message_id']) is not None
+                    and (long_defers or {}).get(str(r["job_id"]), {}).get("g")
                     != runtime.payload_generation(runtime.parse_payload(r))
                     ][:max_jobs + 8]
         else:
@@ -2346,6 +2430,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     if scfg["mode"] == "off":
         return out
     try:
+        _quarantine_invalid_jobs(ledger, max_jobs, deadline)
+    except Exception as error:
+        result['errors'].append(f'semantic_quarantine: {type(error).__name__}')
+    try:
         out['inference_reprocess'] = reprocess_step(ledger, cfg, deadline=deadline)
     except Exception as error:
         out['inference_reprocess'] = {'status': 'error', 'complete': False}
@@ -2510,6 +2598,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     for job, cohort_name, mutation in _refill_due(
             ledger, lane, kinds, qc_active, max_jobs, long_defers,
             first_batch, selected, out, deadline, consumed_turns):
+        if (job['kind'] == JOB_KIND and _reprocess_job_payload(
+                ledger, job, job['project_id'], job['message_id']) is None):
+            continue
         if llm_health["down"] and job["kind"] == JOB_KIND:
             # the endpoint refused this pass: the remaining model jobs
             # would each only re-defer (and rewrite updated_at); they
@@ -2801,14 +2892,25 @@ def revive_failed(ledger, now: float | None = None) -> dict:
     out = {"revived": 0, "skipped_cap": 0}
     # capped jobs are excluded BEFORE the LIMIT — selecting them first
     # let a capped prefix starve every eligible job behind it
-    capped = ("(CASE WHEN json_valid(payload) AND "
+    capped = ("(CASE WHEN json_valid(payload) THEN CASE WHEN "
               "json_type(payload,'$.auto_retry')='integer' "
-              "THEN json_extract(payload,'$.auto_retry') ELSE 0 END)")
-    where = "WHERE kind=? AND state='failed' AND updated_at<=? AND "
+              "THEN json_extract(payload,'$.auto_retry') ELSE 0 END ELSE 0 END)")
+    versions = (f"({current_meta_pred('fetch_jobs.payload')} OR "
+                f"{current_meta_pred('fetch_jobs.payload', target=LEGACY_VERSION)})")
+    where = ("WHERE kind=? AND state='failed' AND updated_at<=? AND "
+             f"length(CAST(payload AS BLOB))<={_REPROCESS_JOB_MAX_BYTES} AND {versions} AND ")
+    sched = _quarantine_scheduler(ledger)
+    if sched is None:
+        return out
+    cursor = sched.get('revive_scan_cursor', [0, 0])
+    if (not isinstance(cursor, list) or len(cursor) != 2
+            or type(cursor[0]) not in (int, float) or not math.isfinite(cursor[0])
+            or type(cursor[1]) is not int or cursor[1] < 0):
+        return out
     rows = ledger.db.execute(
-        "SELECT job_id,attempts,payload,updated_at FROM fetch_jobs " + where
-        + capped + "<? ORDER BY updated_at LIMIT ?",
-        (JOB_KIND, now - REVIVE_COOLDOWN_S, REVIVE_PER_INPUT,
+        "SELECT job_id,project_id,message_id,attempts,payload,updated_at FROM fetch_jobs " + where
+        + capped + "<? AND (updated_at,job_id)>(?,?) ORDER BY updated_at,job_id LIMIT ?",
+        (JOB_KIND, now - REVIVE_COOLDOWN_S, REVIVE_PER_INPUT, *cursor,
          REVIVE_MAX * 4)).fetchall()
     out["skipped_cap"] = ledger.db.execute(
         "SELECT COUNT(*) FROM fetch_jobs " + where + capped + ">=?",
@@ -2817,7 +2919,8 @@ def revive_failed(ledger, now: float | None = None) -> dict:
     for row in rows:
         if out["revived"] >= REVIVE_MAX:
             break
-        pl = loads_dict(row["payload"] or "{}")
+        cursor = [row['updated_at'], row['job_id']]
+        pl = _reprocess_job_payload(ledger, row, row['project_id'], row['message_id'])
         if pl is None:
             continue
         n = pl.get("auto_retry")
@@ -2839,6 +2942,14 @@ def revive_failed(ledger, now: float | None = None) -> dict:
                  now, now, row["job_id"], row["attempts"], row["payload"],
                  row["updated_at"])).rowcount
         out["revived"] += changed
+    if not rows or out['revived']:
+        cursor = [0, 0]
+    ledger.db.execute('BEGIN IMMEDIATE')
+    with ledger.db:
+        sched = _quarantine_scheduler(ledger)
+        if sched is not None:
+            sched['revive_scan_cursor'] = cursor
+            _sched_write(ledger, sched, commit=False)
     return out
 
 
