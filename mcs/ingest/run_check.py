@@ -249,7 +249,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
                     realtime if admitted is None else realtime & admitted),
                 # Only realtime arrivals use this slot, newest first.
                 # Existing claim leases exclude in-flight work.
-                oldest_first=False, batch_k=extract_llm._BATCH_K,
+                oldest_first=False, batch_k=extract_llm._BATCH_K, allow_cloud=False,
                 vital_policy=extract_validation.vital_threshold_policy(cfg))
             if result["extract_llm"].get("gc_error") == "extract_stale_gc_failed":
                 result["errors"].append("extract_llm: extract_stale_gc_failed")

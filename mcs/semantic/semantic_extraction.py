@@ -414,6 +414,8 @@ def _persist_chunk(ledger, project_id, message_id, model, source_fp,
         "chunk_hash": spec["hash"],
         "dropped": dropped,
         "generation": generation,
+        "actual_model": semantic_transport.inference_model(),
+        "inference_requests": semantic_transport.inference_requests(),
     }
     ledger.artifact_add(
         kind, json.dumps(content, ensure_ascii=False, allow_nan=False),

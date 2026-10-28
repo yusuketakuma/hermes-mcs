@@ -27,7 +27,7 @@ import semantic_transport
 from functools import wraps
 import json
 import copy
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import math
 import sqlite3
 import time
@@ -118,7 +118,7 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
         KIND_SUMMARY,
         json.dumps(summary, ensure_ascii=False),
         project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+        meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
               "audit_status": final_status, "publication_mode": publication_mode,
               "stale": final_status == "STALE",
               "target_revision": members[mid]["revision"],
@@ -132,7 +132,7 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
                     "findings": r["findings"],
                     "target_message_id": mid}, ensure_ascii=False),
         project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+        meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
               "audit_status": final_status, "publication_mode": publication_mode,
               "repair_count": 1 if r["repaired"] else 0,
               "jev_requests": r.get("jev_requests", 0),
@@ -155,7 +155,7 @@ def _park_needs_review(ledger, pid, mid, fp, policy, v2_doc,
         json.dumps({"status": "NEEDS_REVIEW", "findings": findings,
                     "target_message_id": mid}, ensure_ascii=False),
         project_id=pid, message_id=mid,
-        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
+        meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy,
               "audit_status": "NEEDS_REVIEW",
               "technical_status": "needs_review"})
     return {"outcome": "hard_fail", "v2_doc": v2_doc,
@@ -288,7 +288,7 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
                                     v2_result["chunks_total"]}),
                     project_id=pid, message_id=mid,
                     model=semantic_transport.llm_model(),
-                    meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
+                    meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp,
                           "policy_fingerprint": policy,
                           "generation": v2_generation()})
         else:
@@ -326,7 +326,7 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
                            allow_nan=False),
                 project_id=pid, message_id=mid,
                 model=semantic_transport.llm_model(),
-                meta=meta)
+                meta={**meta, "inference_requests": semantic_transport.inference_requests()})
     if fact_source == "canonical" and v2_doc is not None \
             and v2_doc["coverage"]["status"] != "complete":
         if coverage_retry or spent \
@@ -385,7 +385,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                                allow_nan=False),
                     project_id=pid, message_id=mid,
                     model=jev.JEV_MODEL,
-                    meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
+                    meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp,
                           "policy_fingerprint": policy,
                           "schema": SCHEMA_VERSION,
                           "doc_hash": doc_hash,
@@ -434,7 +434,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                            ensure_ascii=False),
                 project_id=pid, message_id=mid,
                 model=semantic_transport.llm_model(),
-                meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
+                meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp,
                       "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION,
                       "doc_hash": doc_hash})
@@ -490,7 +490,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                            ensure_ascii=False, allow_nan=False),
                 project_id=pid, message_id=mid,
                 model=semantic_transport.llm_model(),
-                meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
+                meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp,
                       "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION,
                       "doc_hash": doc_hash,
@@ -503,7 +503,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                                allow_nan=False),
                     project_id=pid, message_id=mid,
                     model=semantic_transport.llm_model(),
-                    meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
+                    meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp,
                           "policy_fingerprint": policy,
                           "schema": SCHEMA_VERSION,
                           "fact_source": fact_source,
@@ -560,7 +560,7 @@ def _fact_legacy(ledger, member, pid, mid, fp, policy, llm_fn, deadline):
                                      if f.get("_evidence")}},
                        ensure_ascii=False),
             project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-            meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+            meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
                   "chunks_total": len(mcs_util.text_chunks(
                       member["body_original"])),
                   "dropped_by_cap": f_dropped})
@@ -697,7 +697,7 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
                         json.dumps({"target_message_id": mid}),
                         project_id=pid, message_id=mid,
                         model=semantic_transport.llm_model(),
-                        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
+                        meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy,
                               "repair_count": 1})
                     summary, summary_reason = summarize(
                         llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
@@ -827,7 +827,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                 "target_message_id": root},
                                ensure_ascii=False),
                     project_id=pid, message_id=root, model=jev.JEV_MODEL,
-                    meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+                    meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
                           "audit_status": "STALE",
                           "technical_status": "stale"})
             raise
@@ -864,7 +864,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         ledger.artifact_add(
             KIND_BUNDLE, json.dumps(bundle, ensure_ascii=False, separators=(',', ':')),
             project_id=pid, message_id=root, model=jev.JEV_MODEL,
-            meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION})
+            meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION})
     all_targets = [t for t in (targets or [root])
                    if any(m["message_id"] == t
                           and m['body_state'] == 'full' and m['body_original']
@@ -962,7 +962,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     ledger.artifact_add(
                         KIND_COVERAGE, json.dumps(coverage, ensure_ascii=False),
                         project_id=pid, message_id=mid, model=jev.JEV_MODEL,
-                        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
+                        meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy,
                               "technical_status": "complete" if coverage["evaluated"] else "pending"})
             coverage_by_target[mid] = coverage["findings"]
             if not coverage["evaluated"]:
@@ -1041,7 +1041,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                 "target_message_id": mid},
                                ensure_ascii=False),
                     project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-                    meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
+                    meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
                           "technical_status": "pending"})
             incomplete = True
             if not_sent is not None:
@@ -1058,7 +1058,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             ledger.artifact_add(
                 KIND_CANDIDATE, json.dumps(summary, ensure_ascii=False),
                 project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-                meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
+                meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy,
                       "schema": SCHEMA_VERSION, "stage": "pre_audit",
                       "publication_mode": scfg["summary_mode"],
                       "target_revision": members[mid]["revision"]})
@@ -1108,7 +1108,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 repair_id = ledger.artifact_add(
                     KIND_REPAIR, json.dumps({"target_message_id": mid}),
                     project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-                    meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy, "repair_count": 1})
+                    meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "repair_count": 1})
                 repaired = True
                 try:
                     summary2 = summarize(
@@ -1288,7 +1288,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                  cfg_path: str | None = None,
                  config_generation: str | None = None,
                  reserve_fn=None, lane: str | None = None, *,
-                       jev_transport=None, jev_timing=None,
+                       jev_transport=None, jev_timing=None, cloud_transport=None, llm_timing=None,
                  diagnostics: dict, shadow_stats: dict | None = None) -> str:
     """Preserve stale workers while bounding timeouts after dispatched work."""
     requests_before = jev_client.requests_made if jev_client is not None else 0
@@ -1305,11 +1305,48 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                 and jev_client.requests_made > requests_before)
 
     try:
-        status = _process_job_inner(
-            ledger, scfg, job, jev_client, tracked_llm, deadline,
-            cfg_path=cfg_path, config_generation=config_generation,
-            reserve_fn=reserve_fn, lane=lane, diagnostics=diagnostics, shadow_stats=shadow_stats,
-            jev_transport=jev_transport, jev_timing=jev_timing)
+        with ExitStack() as stack:
+            if cloud_transport is not None:
+                token = runtime.JobToken.from_row(job)
+                payload = runtime.parse_payload(job)
+                targets = payload.get("targets", [job["message_id"]])
+
+                def source():
+                    bundle = semantic_store.thread_bundle(
+                        ledger.db, job["project_id"], job["message_id"], targets)
+                    return bundle["source_fingerprint"] if bundle else None
+
+                fingerprint = source()
+
+                def current():
+                    try:
+                        runtime.guard(ledger, token, deadline=deadline,
+                            expected_config_generation=config_generation,
+                            expected_execution_generation=runtime.execution_generation(scfg),
+                            expected_mode=scfg["mode"], cfg_path=cfg_path,
+                            load_cfg=load_config, parse_cfg=runtime_config,
+                            source_fingerprint=fingerprint, current_source=source, stage="cloud")
+                    except runtime.RuntimeGuardError:
+                        return False
+                    return True
+
+                cloud = stack.enter_context(semantic_transport.backlog_inference(
+                    ledger, load_config() if cfg_path is None else load_config(cfg_path),
+                    job, runtime.job_deadline(scfg, deadline), current, cloud_transport))
+                if cloud is not None:
+                    def cloud_call(prompt, timeout=None):
+                        started = time.perf_counter()
+                        try:
+                            return cloud(prompt, timeout=timeout)
+                        finally:
+                            if llm_timing is not None:
+                                llm_timing["s"] += time.perf_counter() - started
+                    llm_fn = cloud_call
+            status = _process_job_inner(
+                ledger, scfg, job, jev_client, tracked_llm, deadline,
+                cfg_path=cfg_path, config_generation=config_generation,
+                reserve_fn=reserve_fn, lane=lane, diagnostics=diagnostics, shadow_stats=shadow_stats,
+                jev_transport=jev_transport, jev_timing=jev_timing)
         from extraction_refresh import refresh_extraction_cards
         if semantic_store.refresh_cards_allowed(ledger.db, job['project_id'], job['message_id']):
             refresh_extraction_cards(ledger, job["project_id"], job["message_id"])
@@ -2834,6 +2871,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         "ORDER BY artifact_id DESC LIMIT 1", (KIND_POLICY,)).fetchone()
     if previous_policy is None or previous_policy["content"] != policy:
         ledger.artifact_add(KIND_POLICY, policy)
+    cloud_backlog = llm_fn is None and lane == "backlog"
     if llm_fn is None:
         llm_fn = semantic_transport.llm_chat
     if jev_client is None and scfg["daily_request_budget"] > 0:
@@ -3162,7 +3200,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                         cfg_path=cfg_path,
                         config_generation=cfg_generation,
                         reserve_fn=reserve_fn, lane=lane, diagnostics=diagnostics, shadow_stats=shadow_stats,
-                        jev_transport=jev_transport, jev_timing=jev_timing)
+                        jev_transport=jev_transport, jev_timing=jev_timing,
+                        cloud_transport=(lambda call, *a, **kw: _unlocked("llm", call, *a, **kw))
+                        if cloud_backlog else None, llm_timing=llm_acc)
             except writer_lock.RunLockLost as e:
                 # An updater won the lock in a transport window (or the
                 # bounded reacquire expired). Make no further writes: the job

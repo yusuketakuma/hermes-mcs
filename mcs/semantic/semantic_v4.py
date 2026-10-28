@@ -84,6 +84,7 @@ def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
                    ensure_ascii=False, allow_nan=False),
         project_id=pid, message_id=mid,
         meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
+              "inference_requests": semantic_transport.inference_requests(),
               "stage": stage, "engine_version": ENGINE_VERSION})
 
 
@@ -219,6 +220,7 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
                             allow_nan=False),
         project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
         meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
+              "inference_requests": semantic_transport.inference_requests(),
               "source_binding": source_binding(ledger.db, pid, mid),
               "schema": 2, "hash": member["revision"],
               "extract_version": ENGINE_VERSION,
@@ -744,6 +746,7 @@ def diagnostic(ledger, pid: int, mid: int, fp: str, policy: str,
                    ensure_ascii=False, allow_nan=False),
         project_id=pid, message_id=mid,
         meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
+              "inference_requests": semantic_transport.inference_requests(),
               "engine_version": ENGINE_VERSION, "audit_status": status,
               "diagnostic": True})
 

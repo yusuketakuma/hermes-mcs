@@ -568,6 +568,7 @@ def test_stage_derive_admission_by_fact_source(tmp_path, monkeypatch,
 
     def run_pending(ledger, **kw):
         seen["admitted"] = kw["admitted_ids"]
+        assert kw["allow_cloud"] is False
         return {"done": 0, "failed": 0, "left": 0, "pids": []}
     monkeypatch.setattr(extract_llm, "run_pending", run_pending)
     result = {"errors": [], "realtime_ids": [1]}

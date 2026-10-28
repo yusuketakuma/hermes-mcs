@@ -671,7 +671,7 @@ class _CloudProvider:
 
     def __init__(self, ledger, cfg, *, route, project_id, unit_key, deadline,
                  current, dispatch, message_id=None, owner=None, discard_reason=None,
-                 max_attempts=None, on_reserved_tx=None, reserve_dispatch=None):
+                 max_attempts=None, on_reserved_tx=None, reserve_dispatch=None, transport=None):
         cfg = {**cfg, "cloud_llm": _cloud_settings(cfg)}
         self.model = cfg["cloud_llm"]["model"]
         self.contract = _cloud_contract()
@@ -758,8 +758,11 @@ class _CloudProvider:
                 return value
             return dispatch(write, result=True)
         self.result = record
-        self.client = (anthropic_client.AnthropicClient(key) if max_attempts is None
-                       else anthropic_client.AnthropicClient(key, max_attempts=max_attempts))
+        client_args = {} if max_attempts is None else {"max_attempts": max_attempts}
+        if transport is not None:
+            client_args["post_fn"] = lambda body, timeout: transport(
+                self.client.request, "POST", body, timeout, deadline=self.deadline)
+        self.client = anthropic_client.AnthropicClient(key, **client_args)
 
     def discard(self):
         """Append the unit's final disposition without mutating financial results."""
@@ -792,6 +795,8 @@ class _CloudProvider:
         except CloudFallback as error:
             if str(error) == "cloud_unit_changed":
                 self.discard()
+            raise
+        except writer_lock.RunLockLost:
             raise
         except Exception as exc:
             # Client errors contain fixed categories; no remote body enters local errors.
@@ -911,12 +916,15 @@ def _cloud_compare_tx(ledger, *, route, project_id, left, right, rejected, held,
               **({"uncompared": "pending"} if pending else {})})
 
 
-def _cloud_reextract(ledger, row):
+def _cloud_reextract(ledger, row, *, background=False):
     if row["qc_src"] or row["thin_src"] or row["human_src"] or row["attempts"]:
         return False
     if ledger.db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? "
             f"AND EXISTS ({_hold_sql()})", (row["message_id"],)).fetchone():
         return False
+    if background:
+        return (row["message_id"] not in _recent_arrivals(ledger)
+                and cloud_policy.history_thread_allowed(ledger.db, row["project_id"], row["message_id"]))
     prior = _prior_extract(ledger.db, row)
     meta = loads_dict(prior["meta"]) if prior else None
     if not meta or type(meta.get("extract_version")) is not int:
@@ -3353,6 +3361,10 @@ def progress_for_messages(db, rows, *, model: str | None):
 
 
 def _owns_current_source(ledger, r, lease: float) -> bool:
+    if r.get("_cloud_background"):
+        if (r["message_id"] in _recent_arrivals(ledger)
+                or not cloud_policy.history_thread_allowed(ledger.db, r["project_id"], r["message_id"])):
+            return False
     token = r.get("_claim_token") if isinstance(r, dict) else None
     return ledger.db.execute(
         "SELECT 1 FROM messages m JOIN fetch_jobs j "
@@ -3931,7 +3943,8 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
     return rows, fresh_selected
 
 
-def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True) -> tuple[list, int, int]:
+def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
+                  background=False) -> tuple[list, int, int]:
     """Load contexts/checkpoints on the calling thread; settle prefiltered rows."""
     jobs = []
     skipped = 0
@@ -3949,7 +3962,9 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True) ->
             continue
         r['_source_binding'] = binding
         r["_target"] = target
-        mode = _cloud_mode(ledger, cfg, "reextract", r["project_id"]) if allow_cloud and _cloud_reextract(ledger, r) else "off"
+        mode = _cloud_mode(ledger, cfg, "reextract", r["project_id"]) if allow_cloud and _cloud_reextract(
+            ledger, r, background=background) else "off"
+        r["_cloud_background"] = background and mode in ("on", "shadow")
         r["_cloud_mode"] = mode
         if mode in ("on", "shadow"):
             r["_cloud_settings"] = _cloud_settings(cfg)
@@ -4117,7 +4132,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 write_wait_s: float = 60,
                 carry: list | None = None,
                 archived_first: bool = False,
-                fair_oldest: bool = False) -> dict:
+                fair_oldest: bool = False, allow_cloud: bool = True,
+                background: bool = False) -> dict:
     """Extract up to `limit` pending/stale messages within budget_s.
     Returns {'done': n, 'left': n, 'failed': n}.
 
@@ -4214,7 +4230,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # Manifest-declared conversions (admitted_ids) were explicitly
     # requested — the prefilter never overrides them.
     prefilter = _prefilter_enabled() and admitted_ids is None
-    jobs, skipped, context_blocked = _prepare_jobs(ledger, rows, target, prefilter)
+    jobs, skipped, context_blocked = _prepare_jobs(
+        ledger, rows, target, prefilter, allow_cloud=allow_cloud, background=background)
     deferred += context_blocked
     metas = [None] * len(jobs)
     batch_metas = []
@@ -5403,7 +5420,11 @@ def _main() -> int:
                     if semantic_priority and not oldest_turn:
                         recent = _recent_arrivals(led)
                         adm = recent if adm is None else adm & recent
-                    r = run_pending(led, limit=1 if args.semantic else 8,
+                    cloud_history = oldest_turn or not args.semantic
+                    cloud_cfg = _cloud_settings(load_config())
+                    extract_limit = (cloud_cfg["max_concurrency"] if cloud_history
+                                     and cloud_cfg["mode"] == "on" else 1)
+                    r = run_pending(led, limit=extract_limit if args.semantic else 8,
                                     budget_s=min(budget, 900),
                                     oldest_first=oldest_turn,
                                     archived_first=oldest_turn and semantic_archive_turn,
@@ -5413,6 +5434,7 @@ def _main() -> int:
                                     workers=max(1, min(args.workers, 8)),
                                     shard=shard, batch_k=args.batch,
                                     admitted_ids=adm,
+                                    allow_cloud=cloud_history, background=cloud_history,
                                     write_wait_s=_RESIDENT_WRITE_WAIT_S,
                                     carry=carry)
                     if oldest_turn:

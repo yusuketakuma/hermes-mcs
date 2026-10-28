@@ -200,11 +200,17 @@ def _route_counts(db, cfg, settings, deadline):
                 f"AND COALESCE(json_extract({json_or_null('a.content')},'$._error'),0)=0 "
                 "ORDER BY a.artifact_id DESC LIMIT 1", (extract.KIND, row["message_id"], row["project_id"], row["content_hash"])).fetchone()
             meta = mcs_util.loads_dict(prior[0]) if prior else None
-            if not meta or type(meta.get("extract_version")) is not int:
+            if ((not meta or type(meta.get("extract_version")) is not int)
+                    and not policy.history_thread_allowed(db, row["project_id"], row["message_id"])):
+                continue
+            recent = db.execute("SELECT 1 FROM messages WHERE message_id=? AND notified_at>=?",
+                                (row["message_id"], now - extract._ARRIVAL_CARRY_S)).fetchone()
+            if recent:
                 continue
             released = db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? "
                 f"AND EXISTS ({extract._hold_sql(released=True)})", (row["message_id"],)).fetchone()
-            if (meta["extract_version"] >= extract.EXTRACT_VERSION
+            if (meta and type(meta.get("extract_version")) is int
+                    and meta["extract_version"] >= extract.EXTRACT_VERSION
                     and extract.inference.is_current(meta, target=extract._INFERENCE_VERSION) and not released):
                 continue
             item = out["reextract"]
@@ -214,6 +220,23 @@ def _route_counts(db, cfg, settings, deadline):
             item["basic_requests_estimate"] += 1
             item["chunk_extra_requests_estimate"] += requests - 1
             item["requests_estimate"] += requests
+    if "semantic_backlog" in settings["routes"]:
+        scope, params = _source_scope(settings, "j")
+        rows = db.execute(
+            "SELECT j.project_id,j.message_id,length(m.body_text) AS body_length FROM fetch_jobs j "
+            "JOIN messages m ON m.project_id=j.project_id AND m.message_id=j.message_id "
+            "WHERE j.kind='semantic' AND j.state='pending' AND json_valid(j.payload) "
+            "AND COALESCE(json_extract(j.payload,'$.eligible'),0)!=1" + scope, params)
+        item = out["semantic_backlog"]
+        for count, row in enumerate(rows, 1):
+            _checkpoint(deadline, count)
+            if not policy.history_thread_allowed(db, row["project_id"], row["message_id"]):
+                continue
+            item["targets"] += 1
+            item["input_chars"] += row["body_length"] or 0
+        # Planning only: cache reuse, shadow extraction, repairs and thread context vary.
+        item["requests_estimate"] = item["basic_requests_estimate"] = 2 * item["targets"]
+        item["estimate_basis"] = "two_calls_per_pending_job_before_cache_repairs_and_thread_context"
     return out
 
 
@@ -437,7 +460,8 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
     output_mean = calibration["output_tokens_per_request"] if calibration else None
     import extract_llm as extract
     for route, item in routes.items():
-        _costs(item, ratio, settings["usd_jpy"], output_limit=extract.MAX_TOKENS if route == "reextract" else 1600,
+        _costs(item, ratio, settings["usd_jpy"], output_limit=(extract.MAX_TOKENS if route == "reextract"
+               else 8192 if route == "semantic_backlog" else 1600),
                output_per_request=output_mean)
     total_chars = sum(row["chars"] for row in counts.values())
     total_requests = sum(row["patients"] + row["scan_requests"] for row in counts.values())
@@ -530,6 +554,7 @@ def apply_control_tx(db, req, now):
             return "no_api_key", {}
         if not policy.pricing_valid() or policy.usage_report(SimpleNamespace(db=db))["pricing_unverified"]:
             return "pricing_unverified", {}
+        policy.capture_history_tx(db, req["command_id"], now)
         state = {"consecutive_failures": 0, "open_until": 0.0,
                  "failure_class": None, "updated_at": now}
         db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
