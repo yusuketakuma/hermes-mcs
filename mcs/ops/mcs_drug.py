@@ -328,6 +328,19 @@ def _workflow(args):
                     if row and report.get("cmd") not in ("ops.drug_alias_apply", "ops.drug_alias_rollback"):
                         report = ({k: report.get(k) for k in ("command_id", "outcome", "error")}
                                   if report.get("outcome") == "rejected" else {"outcome": "not_observed"})
+                    journal = Path(HOME) / 'data' / 'drug-map' / 'alias-switch.pending.json'
+                    try:
+                        journal.lstat()
+                    except FileNotFoundError:
+                        journal_state = 'not_observed'
+                    except OSError:
+                        journal_state = 'unavailable'
+                    else:
+                        journal_state = 'present'
+                    if journal_state != 'not_observed':
+                        report = {'outcome': 'unknown', 'recorded_receipt': report,
+                                  'recovery_journal': journal_state,
+                                  'guidance': '辞書切替の処理が進行中でないことを確認し、設定と復旧用記録を確認してください。'}
             finally:
                 view.close()
     except (ValueError, TypeError, OSError, sqlite3.Error):

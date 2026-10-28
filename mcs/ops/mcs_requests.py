@@ -17,10 +17,28 @@ from safe_io import fsync_dir, read_regular_nofollow, fdopen_owned
 
 MAX_COMMAND_BYTES = 16384
 STATUSES = ("open", "in_progress", "done", "cancelled")
+ALIAS_RETIRED_KIND = 'drug_alias_retired_command'
+ALIAS_RETIRED_LIMIT = 2048
 
 
 class AliasCommitUnknown(RuntimeError):
     pass
+
+
+def alias_retired_commands(db):
+    """Read the bounded, durable set of commands retired during recovery."""
+    rows = db.execute(
+        "SELECT typeof(content),length(CAST(content AS BLOB)),substr(content,1,37) "
+        "FROM artifacts WHERE kind=? LIMIT ?",
+        (ALIAS_RETIRED_KIND, ALIAS_RETIRED_LIMIT + 1)).fetchall()
+    if len(rows) > ALIAS_RETIRED_LIMIT:
+        raise ValueError('alias_retirement_capacity')
+    values = set()
+    for row in rows:
+        if row[0] != 'text' or row[1] != 36 or not valid_uuid(row[2]) or row[2] in values:
+            raise ValueError('alias_retirement_invalid')
+        values.add(row[2])
+    return values
 
 
 @contextmanager
@@ -218,6 +236,14 @@ def apply_command(ledger, req, *, cfg=None, data_dir=None):
         found, old = replay_receipt(db, req["command_id"], digest)
         if found:
             return old
+        if req.get('cmd') == 'ops.drug_alias_apply':
+            try:
+                retired = alias_retired_commands(db)
+            except ValueError:
+                raise RuntimeError('alias_retirement_unavailable') from None
+            if req['command_id'] in retired:
+                return {'command_id': req['command_id'], 'outcome': 'rejected',
+                        'error': 'alias_recovery_retired'}
         error = validate(req)
         before = after = None
         pid = req.get("project_id") if positive(req.get("project_id")) else None

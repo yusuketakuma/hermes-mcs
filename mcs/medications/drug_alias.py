@@ -10,11 +10,13 @@ import os
 from pathlib import Path
 import re
 import stat
+import time
 
 import config_edit
 import drug_map
 import safe_io
-from mcs_requests import AliasCommitUnknown, canonical, payload_hash, valid_uuid
+from mcs_requests import (ALIAS_RETIRED_KIND, ALIAS_RETIRED_LIMIT, AliasCommitUnknown,
+                          alias_retired_commands, canonical, payload_hash, valid_uuid)
 from mcs_util import valid_hash
 from safe_io import atomic_write, fsync_dir
 
@@ -269,12 +271,22 @@ def apply_tx(db, req, filesystem_changes):
             after = record["before_pin"]
             if drug_map.load(after["path"], expected_sha256=after["sha256"]) is None:
                 return "alias_previous_dictionary_missing", {}
+            retire = False
+            if recovery and db.execute('SELECT 1 FROM command_receipts WHERE command_id=?',
+                                       (req['approval_id'],)).fetchone() is None:
+                retired = alias_retired_commands(db)
+                retire = req['approval_id'] not in retired
+                if retire and len(retired) >= ALIAS_RETIRED_LIMIT:
+                    return 'alias_retirement_capacity', {}
             rollback_origin = record
             record = {"cmd": req["cmd"], "approval_id": req["approval_id"],
                       "before_pin": before, "after_pin": after, "reason": req["reason"]}
         filesystem_changes.enter_context(_switch(config_path, cfg, raw, base, before, after,
                                                  journal, rollback_origin if req["cmd"] == "ops.drug_alias_rollback" else record,
                                                  recovery=recovery))
+        if req['cmd'] == 'ops.drug_alias_rollback' and recovery and retire:
+            db.execute('INSERT INTO artifacts(kind,content,created_at) VALUES(?,?,?)',
+                       (ALIAS_RETIRED_KIND, req['approval_id'], time.time()))
         return None, record
     except (OSError, ValueError, KeyError, TypeError):
         return "alias_switch_failed", {}
