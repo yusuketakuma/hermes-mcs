@@ -59,7 +59,7 @@ def test_configured_cache_rebuilds_requests_with_the_other_fields(tmp_path, monk
 
 @pytest.mark.parametrize("which", ["content_missing", "content_old", "meta_missing", "meta_old"])
 @pytest.mark.parametrize("cfg", [None, {}])
-def test_legacy_or_unstamped_cache_is_rebuilt_or_unknown(tmp_path, monkeypatch, which, cfg):
+def test_legacy_or_unstamped_cache_is_rebuilt_from_sources(tmp_path, monkeypatch, which, cfg):
     db = _seeded(tmp_path)
     try:
         cached = {inference.VERSION_KEY: inference.CURRENT_VERSION,
@@ -83,13 +83,13 @@ def test_legacy_or_unstamped_cache_is_rebuilt_or_unknown(tmp_path, monkeypatch, 
         monkeypatch.setattr(rollup, "build_rollup", counted)
         before = db.db.total_changes
         out = rollup.current_cached_refs(db.db, 1, cached, meta, cfg=cfg)
+        assert calls == [cfg]
+        # generated_at is the clock at each independent read.
+        assert {k: v for k, v in out.items() if k != "generated_at"} == {
+            k: v for k, v in expected.items() if k != "generated_at"}
         if cfg is None:
-            assert calls == [] and out["rollup_freshness"] == "unknown"
-        else:
-            assert calls == [cfg]
-            # generated_at is the clock at each independent read.
-            assert {k: v for k, v in out.items() if k != "generated_at"} == {
-                k: v for k, v in expected.items() if k != "generated_at"}
+            assert out["measurement_coverage"]["complete"] is False
+            assert not out.get("latest_vitals") and not out.get("recent_labs")
         assert not any(item.get("ctx") == "旧依頼" for item in out.get("recent_requests", []))
         assert db.db.total_changes == before
     finally:

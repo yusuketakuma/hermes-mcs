@@ -203,6 +203,18 @@ def _synthetic_dictionary_cache(ledger):
     return content, meta
 
 
+def test_dictionary_cache_without_config_is_unknown_without_lookup(ledger, monkeypatch):
+    content, meta = _synthetic_dictionary_cache(ledger)
+    def unexpected(*args):
+        pytest.fail('unconfigured cache must not look up dictionary annotations')
+    monkeypatch.setattr(rollup, 'current_refs', unexpected)
+    result = rollup.current_cached_refs(ledger.db, 1, content, meta, cfg=None)
+    assert result['rollup_freshness'] == 'unknown'
+    assert result['measurement_coverage'] == {'complete': False, 'reason': 'configuration_unavailable'}
+    assert 'medications' not in result
+    assert content['medications'][0]['ref']['name'] == '合成薬'
+
+
 @pytest.mark.parametrize('code', [None, sqlite3.SQLITE_INTERRUPT, sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED])
 def test_dictionary_revalidation_interruption_preserves_borrowed_transaction(ledger, monkeypatch, code):
     content, meta = _synthetic_dictionary_cache(ledger)
@@ -219,7 +231,7 @@ def test_dictionary_revalidation_interruption_preserves_borrowed_transaction(led
     ledger.db.execute("UPDATE patients SET fetch_reason='synthetic-change' WHERE project_id=1")
     try:
         with pytest.raises(sqlite3.OperationalError) as caught:
-            rollup.current_cached_refs(ledger.db, 1, content, meta, cfg=None)
+            rollup.current_cached_refs(ledger.db, 1, content, meta, cfg=CFG_A)
         assert caught.value is error and calls == [1]
         assert ledger.db.in_transaction
         assert ledger.db.execute('SELECT fetch_reason FROM patients WHERE project_id=1').fetchone()[0] == 'synthetic-change'
@@ -230,7 +242,7 @@ def test_dictionary_revalidation_interruption_preserves_borrowed_transaction(led
 
 
 @pytest.mark.parametrize('operational', [False, True])
-def test_dictionary_revalidation_other_db_failure_strips_only_annotation(ledger, monkeypatch, operational):
+def test_dictionary_revalidation_schema_error_propagates_without_mutating_cache(ledger, monkeypatch, operational):
     content, meta = _synthetic_dictionary_cache(ledger)
     error = sqlite3.OperationalError('synthetic schema failure') if operational else sqlite3.DatabaseError('synthetic schema failure')
     error.sqlite_errorcode = sqlite3.SQLITE_ERROR
@@ -241,10 +253,9 @@ def test_dictionary_revalidation_other_db_failure_strips_only_annotation(ledger,
         raise error
 
     monkeypatch.setattr(rollup, 'current_refs', unavailable)
-    result = rollup.current_cached_refs(ledger.db, 1, content, meta, cfg=None)
-    assert calls == [1]
-    assert result['medications'][0]['name'] == '合成薬'
-    assert 'ref' not in result['medications'][0]
+    with pytest.raises(type(error)) as caught:
+        rollup.current_cached_refs(ledger.db, 1, content, meta, cfg=CFG_A)
+    assert caught.value is error and calls == [1]
     assert content['medications'][0]['ref']['name'] == '合成薬'
 
 
@@ -260,7 +271,7 @@ def test_dictionary_revalidation_unknown_sqlite_error_is_not_retried(ledger, mon
 
     monkeypatch.setattr(rollup, 'current_refs', unavailable)
     with pytest.raises(error_type) as caught:
-        rollup.current_cached_refs(ledger.db, 1, content, meta, cfg=None)
+        rollup.current_cached_refs(ledger.db, 1, content, meta, cfg=CFG_A)
     assert caught.value is error and calls == [1]
     assert content['medications'][0]['ref']['name'] == '合成薬'
 
