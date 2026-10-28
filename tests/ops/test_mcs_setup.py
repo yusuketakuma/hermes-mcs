@@ -1699,6 +1699,11 @@ def _plugin_env(monkeypatch, existing=None):
     monkeypatch.setattr(
         mcs_setup, "_hermes_config_set",
         lambda e, p, k, v: sets.append((p, k, str(v))) or True)
+    # the token state comes from the profile .env line; a saved value reads back
+    monkeypatch.setattr(
+        mcs_setup, "_hermes_token_state",
+        lambda e, p, k, expect=None: "registered" if expect is not None or (existing or {}).get(k)
+        else "missing")
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
     return sets
 
@@ -1964,9 +1969,9 @@ def test_plugin_integration_token_check_reads_serving_profile(
     sets = _plugin_env(monkeypatch)
     monkeypatch.delenv("DISCORD_BOT_TOKEN", raising=False)
     monkeypatch.setattr(
-        mcs_setup, "_hermes_config_get",
-        lambda e, p, k: "tok" if (p, k) == ("cco", "DISCORD_BOT_TOKEN")
-        else None)
+        mcs_setup, "_hermes_token_state",
+        lambda e, p, k, expect=None: "registered" if (p, k) == ("cco", "DISCORD_BOT_TOKEN")
+        else "missing")
     mcs_setup._apply_plugin_integration(
         dict(_DISCORD_CFG), _plugin_args(plugin_profile="cco"))
     # token seen on cco -> reported set, no write attempted
@@ -2584,3 +2589,44 @@ def test_init_replaces_malformed_signal_and_semantic_sections(capsys):
     assert out.count("既存の意味解析設定（semantic）の形式が不正です。この設定項目を空にして設定し直します") == 1
     assert cfg == {"signals": {"notify": False, "self_organizations": ["合成事業所"]},
                    "semantic": {"mode": "off"}, "keep": 1}
+
+
+@pytest.mark.parametrize("state", ["unavailable", "external"])
+def test_plugin_tokens_never_overwrite_an_unverifiable_or_referenced_env(monkeypatch, state):
+    """An unreadable/shared/duplicated .env or a secret-source reference is never written,
+    not even with an explicit environment value, and nothing is asked."""
+    sets = _plugin_env(monkeypatch)
+    monkeypatch.setenv("DISCORD_BOT_TOKEN", "synthetic-environment-token")
+    monkeypatch.setattr(mcs_setup, "_hermes_token_state", lambda e, p, k, expect=None: state)
+    monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda p="": pytest.fail("asked"))
+    assert mcs_setup._plugin_store_tokens("/x/hermes", "cco", (("DISCORD_BOT_TOKEN", "d"),),
+                                          _plugin_args(yes=False)) is True
+    assert not sets
+
+
+def test_plugin_tokens_ask_hidden_and_never_fall_back_to_a_visible_prompt(monkeypatch, capsys):
+    import warnings
+    sets = _plugin_env(monkeypatch)
+
+    def visible(prompt=""):
+        warnings.warn("echo", mcs_setup.getpass.GetPassWarning)
+        return "discord-synthetic-token"
+    monkeypatch.setattr(mcs_setup.getpass, "getpass", visible)
+    assert mcs_setup._plugin_store_tokens("/x/hermes", "", (("DISCORD_BOT_TOKEN", "d"),),
+                                          _plugin_args(yes=False)) is True
+    assert not sets and "非表示にできない" in capsys.readouterr().out
+
+
+def test_plugin_tokens_reask_invalid_and_verify_the_saved_line(monkeypatch):
+    sets = _plugin_env(monkeypatch)
+    answers = iter(["xoxb-bad value", "xoxb-synthetic-bot"])
+    monkeypatch.setattr(mcs_setup.getpass, "getpass", lambda p="": next(answers))
+    assert mcs_setup._plugin_store_tokens("/x/hermes", "", (("SLACK_BOT_TOKEN", "s"),),
+                                          _plugin_args(yes=False)) is False
+    assert sets == [("", "SLACK_BOT_TOKEN", "xoxb-synthetic-bot")]
+    # a write the .env does not confirm is reported as a failure
+    monkeypatch.setattr(mcs_setup, "_hermes_token_state", lambda e, p, k, expect=None:
+                        "missing" if expect is None else "unavailable")
+    answers = iter(["xoxb-synthetic-bot"])
+    assert mcs_setup._plugin_store_tokens("/x/hermes", "", (("SLACK_BOT_TOKEN", "s"),),
+                                          _plugin_args(yes=False)) is True
