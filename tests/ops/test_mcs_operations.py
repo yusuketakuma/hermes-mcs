@@ -6,6 +6,7 @@ import json
 import sqlite3
 import time
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -513,6 +514,155 @@ def test_retry_uses_main_table_even_when_temp_table_shadows_it(tmp_path):
         assert error is None
         assert db.execute('SELECT state FROM main.fetch_jobs').fetchone()[0] == 'pending'
         assert json.loads(db.execute('SELECT payload FROM temp.fetch_jobs').fetchone()[0]) == other
+    finally:
+        db.close()
+
+
+def test_retry_update_is_fixed_to_the_selected_rowid_with_different_collations(tmp_path):
+    import mcs_operations
+
+    db = sqlite3.connect(tmp_path / 'nonstandard.db')
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute('CREATE TABLE fetch_jobs(job_id TEXT COLLATE RTRIM,kind TEXT,project_id INTEGER, '
+                   'state TEXT,attempts INTEGER,payload TEXT,next_try REAL,updated_at REAL)')
+        db.execute('CREATE UNIQUE INDEX unique_job_id ON fetch_jobs(job_id COLLATE BINARY)')
+        payload = {VERSION_KEY: CURRENT_VERSION, 'targets': [42], 'note': 'target'}
+        other = {VERSION_KEY: CURRENT_VERSION, 'targets': [99], 'note': 'other'}
+        db.execute("INSERT INTO fetch_jobs VALUES('100','semantic',1,'failed',2,?,0,0)",
+                   (json.dumps(payload),))
+        db.execute("INSERT INTO fetch_jobs VALUES('100 ','semantic',1,'failed',2,?,0,0)",
+                   (json.dumps(other),))
+        error, _ = mcs_operations._apply_retry_tx(db, _command(
+            'ops.retry', job_id=100, expected_payload_hash=mcs_requests.payload_hash(payload)), 123.0)
+        assert error is None
+        rows = db.execute('SELECT payload,state FROM fetch_jobs ORDER BY rowid').fetchall()
+        assert json.loads(rows[0]['payload'])['note'] == 'target' and rows[0]['state'] == 'pending'
+        assert json.loads(rows[1]['payload']) == other and rows[1]['state'] == 'failed'
+    finally:
+        db.close()
+
+
+def test_retry_does_not_report_success_when_update_is_ignored(tmp_path):
+    import mcs_operations
+
+    db = sqlite3.connect(tmp_path / 'nonstandard.db')
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute('CREATE TABLE fetch_jobs(job_id INTEGER PRIMARY KEY,kind TEXT,project_id INTEGER, '
+                   'state TEXT,attempts INTEGER,payload TEXT,next_try REAL,updated_at REAL)')
+        payload = {VERSION_KEY: CURRENT_VERSION, 'targets': [42]}
+        db.execute("INSERT INTO fetch_jobs VALUES(100,'semantic',1,'failed',2,?,0,0)",
+                   (json.dumps(payload),))
+        db.execute('CREATE TRIGGER ignore_update BEFORE UPDATE ON fetch_jobs '
+                   'BEGIN SELECT RAISE(IGNORE); END')
+        before = tuple(db.execute('SELECT * FROM fetch_jobs').fetchone())
+        with pytest.raises(sqlite3.DatabaseError, match='retry_job_trigger_unverified'):
+            mcs_operations._apply_retry_tx(db, _command(
+                'ops.retry', job_id=100, expected_payload_hash=mcs_requests.payload_hash(payload)), 123.0)
+        assert tuple(db.execute('SELECT * FROM fetch_jobs').fetchone()) == before
+    finally:
+        db.close()
+
+
+def test_retry_rolls_back_when_trigger_alters_updated_job(tmp_path):
+    db = Ledger(str(tmp_path / 'ledger.db'))
+    try:
+        db.ensure_patient(1)
+        payload = {VERSION_KEY: CURRENT_VERSION, 'targets': [42]}
+        job_id = db.job_add('semantic', 1, 42, payload=payload)
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=2 WHERE job_id=?", (job_id,))
+            db.db.execute('CREATE TRIGGER corrupt_retry AFTER UPDATE ON fetch_jobs '
+                          "WHEN NEW.kind='semantic' BEGIN UPDATE fetch_jobs SET payload='{}' "
+                          'WHERE job_id=NEW.job_id; END')
+        before = dict(_job(db, job_id))
+        request = _command('ops.retry', job_id=job_id,
+                           expected_payload_hash=mcs_requests.payload_hash(payload))
+        with pytest.raises(sqlite3.DatabaseError, match='retry_job_trigger_unverified'):
+            mcs_requests.apply_command(db, request)
+        assert dict(_job(db, job_id)) == before
+        assert db.db.execute('SELECT COUNT(*) FROM command_receipts').fetchone()[0] == 0
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('temporary', [False, True])
+def test_retry_never_runs_unverified_trigger_with_other_row_side_effects(tmp_path, temporary):
+    db = Ledger(str(tmp_path / 'ledger.db'))
+    try:
+        db.ensure_patient(1)
+        payload = {VERSION_KEY: CURRENT_VERSION, 'targets': [42]}
+        job_id = db.job_add('semantic', 1, 42, payload=payload)
+        other_id = db.job_add('semantic', 1, 99, payload={'synthetic': 'preserve'})
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=2 WHERE job_id=?", (job_id,))
+            db.db.execute('CREATE TABLE side_effect(value TEXT)')
+            db.db.execute("INSERT INTO side_effect VALUES('preserve')")
+            temp = 'TEMP ' if temporary else ''
+            db.db.execute(f'CREATE {temp}TRIGGER risky AFTER UPDATE ON main.fetch_jobs '
+                          f"BEGIN UPDATE fetch_jobs SET attempts=99 WHERE job_id={other_id}; "
+                          "UPDATE side_effect SET value='changed'; END")
+        before = dict(_job(db, job_id)), dict(_job(db, other_id))
+        request = _command('ops.retry', job_id=job_id,
+                           expected_payload_hash=mcs_requests.payload_hash(payload))
+        with pytest.raises(sqlite3.DatabaseError, match='retry_job_trigger_unverified'):
+            mcs_requests.apply_command(db, request)
+        assert (dict(_job(db, job_id)), dict(_job(db, other_id))) == before
+        assert db.db.execute('SELECT value FROM side_effect').fetchone()[0] == 'preserve'
+        assert db.db.execute('SELECT COUNT(*) FROM command_receipts').fetchone()[0] == 0
+    finally:
+        db.close()
+
+
+def test_retry_rolls_back_nonstandard_foreign_key_side_effect(tmp_path):
+    import mcs_operations
+
+    db = sqlite3.connect(tmp_path / 'nonstandard.db')
+    db.row_factory = sqlite3.Row
+    try:
+        db.execute('PRAGMA foreign_keys=ON')
+        db.execute('CREATE TABLE fetch_jobs(job_id INTEGER PRIMARY KEY,kind TEXT,project_id INTEGER, '
+                   'state TEXT UNIQUE,attempts INTEGER,payload TEXT,next_try REAL,updated_at REAL)')
+        db.execute('CREATE TABLE dependent(job_state TEXT REFERENCES fetch_jobs(state) ON UPDATE CASCADE)')
+        payload = {VERSION_KEY: CURRENT_VERSION, 'targets': [42]}
+        db.execute("INSERT INTO fetch_jobs VALUES(100,'semantic',1,'failed',2,?,0,0)",
+                   (json.dumps(payload),))
+        db.execute("INSERT INTO dependent VALUES('failed')")
+        db.commit()
+        request = _command('ops.retry', job_id=100,
+                           expected_payload_hash=mcs_requests.payload_hash(payload))
+        with pytest.raises(sqlite3.DatabaseError, match='retry_job_write_unverified'):
+            with db:
+                db.execute('BEGIN IMMEDIATE')
+                mcs_operations._apply_retry_tx(db, request, 123.0)
+        assert db.execute('SELECT state FROM fetch_jobs').fetchone()[0] == 'failed'
+        assert db.execute('SELECT job_state FROM dependent').fetchone()[0] == 'failed'
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('shape', range(1, 14))
+def test_retry_accepts_released_synthetic_schema_shapes(tmp_path, shape):
+    from adapters.common.human_commands import _semantic_job
+    import mcs_operations
+
+    fixture = Path(__file__).resolve().parents[1] / 'fixtures' / 'schema_upgrade' / f'shape-{shape}.sql'
+    db = sqlite3.connect(tmp_path / 'legacy.db')
+    db.row_factory = sqlite3.Row
+    try:
+        db.executescript(fixture.read_text())
+        payload = {VERSION_KEY: CURRENT_VERSION, 'targets': [42]}
+        db.execute("INSERT INTO fetch_jobs(kind,project_id,message_id,state,attempts,payload) "
+                   "VALUES('semantic',1,42,'failed',2,?)", (json.dumps(payload),))
+        job_id = db.execute("SELECT job_id FROM fetch_jobs WHERE kind='semantic'").fetchone()[0]
+        _, error, digest = _semantic_job(SimpleNamespace(db=db), mcs_requests, 1, job_id)
+        assert error is None and digest == mcs_requests.payload_hash(payload)
+        error, _ = mcs_operations._apply_retry_tx(db, _command(
+            'ops.retry', job_id=job_id, expected_payload_hash=digest), 123.0)
+        assert error is None
+        row = db.execute('SELECT state,attempts FROM fetch_jobs WHERE job_id=?', (job_id,)).fetchone()
+        assert tuple(row) == ('pending', 2)
     finally:
         db.close()
 

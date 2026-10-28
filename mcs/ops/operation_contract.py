@@ -36,6 +36,10 @@ def retry_job_row(db, project_id, job_id):
     """Identify one semantic job and its unshadowed SQLite rowid."""
     if not db.in_transaction:
         raise sqlite3.DatabaseError("retry_snapshot_required")
+    for schema in ('main', 'temp'):
+        if db.execute(f"SELECT 1 FROM {schema}.sqlite_schema WHERE type='trigger' "
+                      "AND tbl_name='fetch_jobs' COLLATE NOCASE LIMIT 1").fetchone():
+            raise sqlite3.DatabaseError("retry_job_trigger_unverified")
     fields = list(db.execute("PRAGMA main.table_xinfo(fetch_jobs)"))
     columns = {row[1].lower() for row in fields}
     alias = next((name for name in ("rowid", "_rowid_", "oid") if name not in columns), None)
@@ -63,7 +67,8 @@ def retry_job_row(db, project_id, job_id):
             raise sqlite3.DatabaseError("retry_job_unique_index_required")
     indexed = '' if rowid_pk else f' INDEXED BY "{index}"'
     rows = db.execute(
-        f'SELECT "{alias}" AS retry_rowid,job_id,kind,project_id,state,attempts,'
+        f'SELECT "{alias}" AS retry_rowid,\'{alias}\' AS retry_rowid_alias,'
+        'job_id,kind,project_id,state,attempts,'
         f"typeof(payload) AS payload_type FROM main.fetch_jobs{indexed} "
         "WHERE project_id=? AND job_id=? COLLATE BINARY AND kind='semantic' LIMIT 2",
         (project_id, job_id)).fetchall()
