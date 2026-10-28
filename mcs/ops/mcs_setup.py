@@ -1742,10 +1742,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--yes", action="store_true",
                    help='質問せず、指定値と既存設定で実行します。壊れた設定は対応する場合に退避')
     p.set_defaults(fn=cmd_init)
-    p = sub.add_parser("api-keys", help='外部解析のAPIキーを非表示入力で設定します')
+    p = sub.add_parser("api-keys", help='外部解析や通知先の認証情報を非表示入力で設定します')
     def api_keys(_args):
-        import api_key_setup
-        return api_key_setup.run(HOME)
+        import credential_setup_menu
+        try:
+            cfg = mcs_util.parse_config(mcs_util._read_local(CONF_PATH, mcs_util.CONFIG_MAX_BYTES))
+            if not isinstance(cfg, dict):
+                raise ValueError('config_invalid')
+            return credential_setup_menu.run(HOME, cfg)
+        except (OSError, ValueError, RecursionError):
+            print('設定を読み取れないため、認証情報の設定を開始できません。設定を確認してください。')
+            return 1
     p.set_defaults(fn=api_keys)
     p = sub.add_parser("fact-source",
                        help='解析結果の採用方法を設定します（legacy=従来、shadow=比較、canonical=検証済み結果）')
