@@ -869,6 +869,15 @@ def cmd_init(args) -> int:
         return 1
     args._config_saved = True
     print(f"設定ファイルを保存しました: {CONF_PATH}")
+    api_key_result = 0
+    if not args.yes:
+        import api_key_setup
+        if api_key_setup.is_terminal():
+            api_key_result = api_key_setup.run(HOME)
+            if api_key_result:
+                print('初期設定: 設定は保存済みですが、APIキーの確認は完了していません。mcs setup api-keys で続けられます。')
+                if api_key_result == 130:
+                    return 130
     if not args.yes:
         print("続いて通知サービスへの接続を設定します。"
               "\nアプリの認証情報と操作を許可する人・場所のIDを用意してください。"
@@ -912,7 +921,7 @@ def cmd_init(args) -> int:
             print("初期設定: Hermes連携の設定をすべて"
                   "保存できませんでした。使用するプロファイルとHermesコマンドを確認してinitを再実行してください")
         return 1
-    result = 1 if gateway_result else check_result
+    result = 1 if gateway_result or api_key_result else check_result
     if result:
         print("設定は保存しましたが、利用開始に必要な確認が残っています。"
               "上に表示された項目を確認してください。"
@@ -1733,6 +1742,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--yes", action="store_true",
                    help='質問せず、指定値と既存設定で実行します。壊れた設定は対応する場合に退避')
     p.set_defaults(fn=cmd_init)
+    p = sub.add_parser("api-keys", help='外部解析のAPIキーを非表示入力で設定します')
+    def api_keys(_args):
+        import api_key_setup
+        return api_key_setup.run(HOME)
+    p.set_defaults(fn=api_keys)
     p = sub.add_parser("fact-source",
                        help='解析結果の採用方法を設定します（legacy=従来、shadow=比較、canonical=検証済み結果）')
     p.add_argument("fact_source",

@@ -1,0 +1,15 @@
+{
+  "category": "added",
+  "title": "外部解析のAPIキーを対話で設定",
+  "summary": "初期設定の途中や mcs setup api-keys から、JevとAnthropicのAPIキーを非表示で入力できます。選んだキーだけを本人専用のMCS .envに保存します。",
+  "upgrade": "設定は任意です。既存のキーを残す場合は「現在のまま」を選んでください。外部解析が有効な場合は投稿や患者の文脈が送られるため、対象範囲・利用条件・費用上限を確認してください。",
+  "details": [
+    "入力した値はコマンド引数や表示に出しません。保存前に確認し、設定中に別の変更が検出された場合は上書きを止めます。",
+    "質問しない初期設定では対話入力を行いません。Slack、Discord、LINE WORKSの認証情報は従来の各接続方式で管理します。"
+  ],
+  "refs": [
+    "mcs/ops/api_key_setup.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/mcs_cli.py"
+  ]
+}
