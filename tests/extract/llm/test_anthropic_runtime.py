@@ -96,20 +96,29 @@ def _assert_legacy_retained(led, before):
 
 
 @pytest.mark.parametrize("local_circuit", [0, 60])
-def test_parallel_http_hooks_stay_on_ledger_owner(routed, monkeypatch, local_circuit):
+@pytest.mark.parametrize("background", [False, True])
+def test_parallel_http_hooks_stay_on_ledger_owner(routed, monkeypatch, local_circuit, background):
     led, cfg, calls, reserves, results = routed
-    old(led, 1)
-    old(led, 2)
+    if background:
+        led.save_messages([_message(mid, "完全合成の過去記録。", project_id=1) for mid in (1, 2)])
+        with led.db:
+            led.db.execute("UPDATE messages SET first_seen=?", (time.time() - 601,))
+            led.db.execute("UPDATE message_revisions SET observed_at=?", (time.time() - 601,))
+            cloud_policy.capture_history_tx(led.db, "synthetic-resume", time.time())
+    else:
+        old(led, 1)
+        old(led, 2)
     prior = [dict(row) for row in led.artifacts(worker.KIND)]
     monkeypatch.setattr(worker, "circuit_open_s", lambda db: local_circuit)
     monkeypatch.setattr(worker, "_probe_format", lambda **kw: pytest.fail("cloud probed local GPU"))
-    report = worker.run_pending(led, budget_s=180, workers=1, batch_k=4)
+    report = worker.run_pending(led, budget_s=180, workers=1, batch_k=4, background=background)
     assert report["done"] == 2 and report["failed"] == 0
     assert len(calls) == len(reserves) == len(results) == 2
     assert {r["identity"]["unit_key"] for r in reserves} == {"1", "2"}
     current = _current_artifacts(led)
     assert len(current) == 2
-    _assert_legacy_retained(led, prior)
+    if not background:
+        _assert_legacy_retained(led, prior)
     for artifact in current:
         meta = json.loads(artifact["meta"])
         assert meta["backend"] == "anthropic"
@@ -145,6 +154,45 @@ def test_new_post_and_edited_body_are_not_version_reextract(routed):
     row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     row.update(qc_src=None, thin_src=None, human_src=None, attempts=0)
     assert not worker._cloud_reextract(led, row)
+
+
+def test_background_without_prior_result_uses_cloud_but_recent_arrival_does_not(routed):
+    led, *_ = routed
+    led.save_messages([_message(1, "完全合成の過去記録。", project_id=1)])
+    row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
+    row.update(qc_src=None, thin_src=None, human_src=None, attempts=0)
+    assert not worker._cloud_reextract(led, row)
+    assert not worker._cloud_reextract(led, row, background=True)
+    with led.db:
+        led.db.execute("UPDATE messages SET first_seen=?", (time.time() - 601,))
+        led.db.execute("UPDATE message_revisions SET observed_at=?", (time.time() - 601,))
+        cloud_policy.capture_history_tx(led.db, "synthetic-resume", time.time())
+    assert worker._cloud_reextract(led, row, background=True)
+    with led.db:
+        led.db.execute("UPDATE messages SET notified_at=? WHERE message_id=1", (time.time(),))
+    assert not worker._cloud_reextract(led, row, background=True)
+
+
+def test_explicit_local_only_never_selects_provider(routed, monkeypatch):
+    led, *_ = routed
+    old(led)
+    with led.db:
+        led.db.execute("UPDATE messages SET first_seen=?", (time.time() - 601,))
+        led.db.execute("UPDATE message_revisions SET observed_at=?", (time.time() - 601,))
+        cloud_policy.capture_history_tx(led.db, "synthetic-resume", time.time())
+    original = worker._prepare_jobs
+    modes = []
+
+    def prepare(*args, **kwargs):
+        result = original(*args, **kwargs)
+        modes.extend(row["_cloud_mode"] for row, *_ in result[0])
+        return result
+
+    monkeypatch.setattr(worker, "_prepare_jobs", prepare)
+    monkeypatch.setattr(worker, "llm_extract", lambda *a, **kw: {})
+    worker.run_pending(led, allow_cloud=False, background=True, budget_s=180)
+    assert modes and modes == ["off"]
+    assert not routed[2]
 
 
 @pytest.mark.parametrize("change", ["scope", "stop", "mode", "daily_cap", "monthly_cap", "window_start"])

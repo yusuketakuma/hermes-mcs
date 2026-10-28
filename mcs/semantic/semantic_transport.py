@@ -4,6 +4,8 @@ import json
 import os
 import sys
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import partial
 
 import local_llm
@@ -13,6 +15,7 @@ from mcs_util import HOME, load_config, json_object
 LLM_ENDPOINT = local_llm.ENDPOINT
 LLM_MODEL = local_llm.MODEL
 _LLM_EPIN, _LLM_MPIN = LLM_ENDPOINT, LLM_MODEL
+_job_model = ContextVar("semantic_job_model", default=None)
 
 
 def llm_conf(cfg: dict | None = None) -> tuple[str, str]:
@@ -29,6 +32,78 @@ def llm_conf(cfg: dict | None = None) -> tuple[str, str]:
 
 def llm_model(cfg: dict | None = None) -> str:
     return llm_conf(cfg)[1]
+
+
+def inference_model() -> str:
+    """Identify the actual backend without changing the shared source/cache contract."""
+    provider = _job_model.get()
+    return provider.model if provider is not None else llm_model()
+
+
+def inference_requests() -> list:
+    """Keep actual paid calls distinct from reused local or cloud stage results."""
+    provider = _job_model.get()
+    return ([r["reservation_id"] for r in provider.completed_reservations]
+            if provider is not None else [])
+
+
+@contextmanager
+def backlog_inference(ledger, cfg, job, deadline, current, transport):
+    """Route historical semantic inference through the existing cloud budget guards."""
+    import extract_llm
+    import cloud_policy
+    import writer_lock
+    pl = runtime.parse_payload(job)
+    if pl.get("eligible") or not cloud_policy.history_thread_allowed(
+            ledger.db, job["project_id"], job["message_id"]) or extract_llm._cloud_mode(
+            ledger, cfg, "semantic_backlog", job["project_id"]) != "on":
+        yield None
+        return
+    lock_lost = None
+
+    def dispatch(call, **unused):
+        # A lost run lock leaves the reservation held; callbacks must not write.
+        if lock_lost is not None:
+            raise lock_lost
+        return call()
+
+    def request(call, *args, **kwargs):
+        nonlocal lock_lost
+        try:
+            return transport(call, *args, **kwargs)
+        except writer_lock.RunLockLost as error:
+            lock_lost = error
+            raise
+
+    def scoped_current():
+        return current() and cloud_policy.history_thread_allowed(
+            ledger.db, job["project_id"], job["message_id"])
+
+    provider = extract_llm._CloudProvider(
+        ledger, cfg, route="semantic_backlog", project_id=job["project_id"],
+        message_id=job["message_id"], unit_key=f"semantic:{job['job_id']}:{pl.get('generation', '')}",
+        deadline=deadline, current=scoped_current, dispatch=dispatch, transport=request)
+
+    def chat(prompt, timeout=None):
+        _failed(None)
+        try:
+            response = provider(prompt, deadline=min(deadline, time.monotonic() + (timeout or LLM_TIMEOUT)),
+                                max_tokens=LLM_LONG_MAX_TOKENS)
+        except extract_llm.CloudFallback:
+            current()
+            return _failed("cloud_failed")
+        error = local_llm.acceptance_error(response)
+        return _failed(error) if error else response["text"]
+
+    token = _job_model.set(provider)
+    try:
+        yield chat
+    except runtime.RuntimeGuardError:
+        if lock_lost is None:
+            provider.discard()
+        raise
+    finally:
+        _job_model.reset(token)
 # The per-call timeout allows bounded fact documents to finish under
 # shared load. The drain also uses this as timeout_cap, except in the
 # backlog lane, where the job deadline bounds the call instead.

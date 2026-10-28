@@ -9,6 +9,7 @@ import re
 import sqlite3
 import time
 import uuid
+from functools import lru_cache
 
 from anthropic_client import AnthropicError, MODEL, MAX_TOKENS, validate_usage
 from llm_retry import http_error
@@ -36,11 +37,71 @@ PRICES = {"input": "0.1", "output": "0.5", "long_input": "0.5", "long_output": "
 LONG_INPUT_THRESHOLD = 100000
 JST = timezone(timedelta(hours=9))
 KINDS = ("cloud_usage_reserve", "cloud_usage_result", "cloud_usage_dryrun")
-ROUTES = ("patient_context", "reextract")
+ROUTES = ("patient_context", "reextract", "semantic_backlog")
 DEFAULT_DAILY_COST_LIMIT_USD = 25
 DEFAULT_MONTHLY_COST_LIMIT_USD = 75
 _BINDING_KEYS = ("reservation_id", "request_fp", "route", "project_id",
                  "unit_key", "message_id", "model", "price_version")
+
+
+def capture_history_tx(db, command_id, now):
+    """Freeze saved source occurrences within the human resume receipt transaction."""
+    from inference_dependency_loss import source_binding
+    if not db.in_transaction:
+        raise RuntimeError("cloud_history_transaction_required")
+    sources = {}
+    cutoff = now - 600
+    for count, row in enumerate(db.execute("SELECT project_id,message_id FROM messages m "
+            "WHERE m.first_seen IS NOT NULL AND m.first_seen<=? "
+            "AND (m.notified_at IS NULL OR m.notified_at<=?) "
+            "AND NOT EXISTS (SELECT 1 FROM message_revisions r "
+            "WHERE r.message_id=m.message_id AND r.observed_at>?) LIMIT 100001",
+            (cutoff, cutoff, cutoff)), 1):
+        if count > 100000:
+            raise ValueError("cloud_history_scope_too_large")
+        binding = source_binding(db, row[0], row[1])
+        if binding is not None:
+            sources[f"{row[0]}:{row[1]}"] = binding
+    db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
+        ("cloud_history_scope", json.dumps({"version": 1, "sources": sources}), MODEL,
+         json.dumps({"command_id": command_id, "targets": len(sources)}), now))
+
+
+@lru_cache(maxsize=2)
+def _history_sources(raw):
+    if not isinstance(raw, str) or len(raw) > 16 * 1024 * 1024:
+        return {}
+    try:
+        doc = json.loads(raw)
+        sources = doc.get("sources")
+        if doc.get("version") != 1 or not isinstance(sources, dict):
+            return {}
+        if any(not isinstance(k, str) or re.fullmatch(r"[1-9][0-9]*:[1-9][0-9]*", k) is None
+               or not isinstance(v, str) or re.fullmatch(r"[0-9a-f]{64}", v) is None
+               for k, v in sources.items()):
+            return {}
+        return sources
+    except (ValueError, TypeError, AttributeError, RecursionError):
+        return {}
+
+
+def history_thread_allowed(db, project_id, message_id):
+    """Require every prompt member to match the receipted history snapshot occurrence."""
+    from inference_dependency_loss import source_binding
+    scope = db.execute("SELECT content FROM artifacts WHERE kind='cloud_history_scope' "
+                       "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    if scope is None:
+        return False
+    sources = _history_sources(scope[0])
+    target = db.execute("SELECT COALESCE(parent_id,message_id) FROM messages "
+                        "WHERE project_id=? AND message_id=?", (project_id, message_id)).fetchone()
+    if target is None:
+        return False
+    members = db.execute("SELECT message_id FROM messages WHERE project_id=? "
+                         "AND (message_id=? OR parent_id=?)", (project_id, target[0], target[0])).fetchall()
+    return bool(members) and all(
+        sources.get(f"{project_id}:{row[0]}") == source_binding(db, project_id, row[0])
+        and sources.get(f"{project_id}:{row[0]}") is not None for row in members)
 
 
 def _decimal(value):
