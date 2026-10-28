@@ -218,7 +218,15 @@ def sync_recovery(cfg, note, dry, *, paths: ServicePaths) -> int:
     fds = []
     parent_held = update_parent_holds_locks(data)
     try:
+        borrowed = os.environ.get('MCS_INSTALL_UPDATE_LOCK_FD')
+        if borrowed is not None:
+            from release_apply_owner import _verify_inherited_lock
+            if not borrowed.isascii() or not borrowed.isdecimal() or int(borrowed) < 3:
+                raise ValueError('installer_lock_unverified')
+            _verify_inherited_lock(int(borrowed), data / 'update.lock')
         for name in ('update.lock', 'run.lock'):
+            if name == 'update.lock' and borrowed is not None:
+                continue
             fd = os.open(data / name, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 384)
             fds.append(fd)
             st = os.fstat(fd)
@@ -244,7 +252,7 @@ def sync_recovery(cfg, note, dry, *, paths: ServicePaths) -> int:
             note('復旧監視: 新しい監視の起動を確認できません。別のPythonへの自動切り替えは行いません')
             return 1
         return 0
-    except (OSError, BlockingIOError):
+    except (OSError, ValueError, OverflowError):
         note('復旧監視: 他の処理が使用中か、操作に失敗したため、置き換えていません')
         return 1
     finally:

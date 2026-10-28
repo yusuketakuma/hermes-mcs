@@ -157,6 +157,106 @@ if [ "${MCS_ROOT+x}" = x ]; then
 fi
 MCS_ROOT="$(abspath "$HOME")/.mcs"
 export MCS_ROOT
+
+# Keep this lock through software preparation and the optional setup child.
+# macOS lockf and Linux flock operate on the inherited descriptor, so no
+# Python installation is needed on a fresh machine.
+if [ "$MODE" = install ]; then
+    [ "$(id -u)" -ne 0 ] || die "install.sh は root や sudo で実行しないでください。通常のユーザーで再実行してください"
+    _lock_uid="$(/usr/bin/id -u)" || die "実行ユーザーを確認できません"
+    [ "$_lock_uid" -ne 0 ] || die "install.sh は root や sudo で実行しないでください。通常のユーザーで再実行してください"
+    _lock_data="$MCS_ROOT/data"
+    _lock_file="$_lock_data/update.lock"
+    if [ -n "${MCS_UPDATE_REINSTALL:-}" ]; then
+        _install_lock_fd="${MCS_UPDATE_LOCK_FD:-}"
+        case "$_install_lock_fd" in ''|*[!0-9]*) die "更新の排他制御を確認できません。更新ツールから再導入してください" ;; esac
+    elif [ -n "${MCS_UPDATE_LOCK_FD:-}" ]; then
+        die "更新の排他制御が不明です。担当者に確認してください"
+    fi
+    _directory_info() {
+        stat -Lc '%u %a' "$1" 2>/dev/null || stat -Lf '%u %Lp' "$1" 2>/dev/null
+    }
+    _lock_info() {
+        stat -c '%d %i %u %a %h' "$1" 2>/dev/null || stat -f '%d %i %u %Lp %l' "$1" 2>/dev/null
+    }
+    _held_info() {
+        stat -Lc '%d %i %u %a %h' "/dev/fd/$1" 2>/dev/null || stat -f '%d %i %u %Lp %l' <&"$1" 2>/dev/null
+    }
+    _safe_dir() {
+        [ -d "$1" ] || return 1
+        _info="$(_directory_info "$1")" || return 1
+        set -- $_info
+        [ "$#" -eq 2 ] && [ "$1" = "$_lock_uid" ] || return 1
+        case "$2" in ''|*[!0-7]*) return 1 ;; esac
+        [ $((0$2 & 022)) -eq 0 ]
+    }
+    _safe_dir "$HOME" || die "ホームの所有者または書き込み権限を確認できません。管理者に確認してください"
+    if [ ! -e "$MCS_ROOT" ] && [ ! -L "$MCS_ROOT" ]; then
+        [ -z "${MCS_UPDATE_REINSTALL:-}" ] || die "更新の設定フォルダーを確認できません"
+        mkdir -m 700 "$MCS_ROOT" || die "設定フォルダーを作成できません"
+    fi
+    _safe_dir "$MCS_ROOT" || die "設定フォルダーの所有者または書き込み権限を確認できません"
+    if [ ! -e "$_lock_data" ] && [ ! -L "$_lock_data" ]; then
+        [ -z "${MCS_UPDATE_REINSTALL:-}" ] || die "更新のデータフォルダーを確認できません"
+        mkdir -m 700 "$_lock_data" || die "データフォルダーを作成できません"
+    fi
+    _safe_dir "$_lock_data" || die "データフォルダーの所有者または書き込み権限を確認できません"
+    if [ -n "${MCS_UPDATE_REINSTALL:-}" ]; then
+        _lock_py="$MCS_ROOT/venv/bin/python3"
+        [ -x "$_lock_py" ] || _lock_py="$(command -v python3 || true)"
+        [ -n "$_lock_py" ] || die "更新の排他制御を確認する Python が必要です"
+        "$_lock_py" -I -c '
+# mcs-installer-inherited-lock
+import fcntl, os, stat, sys
+try:
+    fd = int(sys.argv[1]); path = sys.argv[2]
+    if fd < 3: raise ValueError
+    probe = os.open(path, os.O_WRONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        held, actual = os.fstat(fd), os.fstat(probe)
+        if (not stat.S_ISREG(held.st_mode) or held.st_uid != os.getuid() or held.st_nlink != 1
+                or stat.S_IMODE(held.st_mode) != 0o600
+                or (held.st_dev, held.st_ino) != (actual.st_dev, actual.st_ino)):
+            raise ValueError
+        try: fcntl.flock(probe, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError: pass
+        else: raise ValueError
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        current = os.stat(path, follow_symlinks=False)
+        if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino): raise ValueError
+    finally: os.close(probe)
+except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
+' "$_install_lock_fd" "$_lock_file" || die "更新の排他制御を確認できません。記録を保持して担当者に確認してください"
+    else
+        if [ -e "$_lock_file" ] || [ -L "$_lock_file" ]; then
+            [ -f "$_lock_file" ] && [ ! -L "$_lock_file" ] || die "排他制御ファイルを確認できません"
+        fi
+        if [ "${MCS_UPDATE_RUN_LOCK_FD:-}" = 9 ]; then
+            exec 8>>"$_lock_file" || die "排他制御ファイルを開けません"
+            _install_lock_fd=8
+        else
+            exec 9>>"$_lock_file" || die "排他制御ファイルを開けません"
+            _install_lock_fd=9
+        fi
+        _lock_stat="$(_lock_info "$_lock_file")" || die "排他制御ファイルを確認できません"
+        _fd_stat="$(_held_info "$_install_lock_fd")" || die "排他制御ファイルを確認できません"
+        [ "$_lock_stat" = "$_fd_stat" ] || die "排他制御ファイルが変更されました。担当者に確認してください"
+        set -- $_lock_stat
+        [ "$#" -eq 5 ] && [ "$3" = "$_lock_uid" ] && [ "$4" = 600 ] && [ "$5" = 1 ] \
+            || die "排他制御ファイルの所有者または権限を確認できません"
+        if command -v lockf >/dev/null 2>&1; then
+            lockf -s -t 0 "$_install_lock_fd" || die "別の導入または更新が進行中です。完了後に再実行してください"
+        elif command -v flock >/dev/null 2>&1; then
+            flock -n "$_install_lock_fd" || die "別の導入または更新が進行中です。完了後に再実行してください"
+        else
+            die "排他制御を行う lockf または flock が必要です。導入してから再実行してください"
+        fi
+        [ "$(_lock_info "$_lock_file")" = "$(_held_info "$_install_lock_fd")" ] \
+            || die "排他制御ファイルが変更されました。担当者に確認してください"
+    fi
+    MCS_INSTALL_UPDATE_LOCK_FD="$_install_lock_fd"
+    export MCS_INSTALL_UPDATE_LOCK_FD
+fi
 CONFIG_ABSENT=0
 CONFIG_EMPTY=0
 RESUME_UNCONFIGURED=0

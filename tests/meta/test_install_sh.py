@@ -184,7 +184,7 @@ exit 0
     "python3": """#!/bin/sh
 echo "python3 $*" >> "$STUB_LOG"
 case "$*" in
-  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*requires_python_admits.py*|*install_options.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
+  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*mcs-installer-inherited-lock*|*requires_python_admits.py*|*install_options.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
 esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
@@ -226,7 +226,7 @@ echo "/dev/stub 100000000 1 ${STUB_DF_KB:-50000000} 1% /"
 VENV_PYTHON = """#!/bin/sh
 echo "venv-python $*" >> "$STUB_LOG"
 case "$*" in
-  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*requires_python_admits.py*|*install_options.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
+  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*mcs-installer-inherited-lock*|*requires_python_admits.py*|*install_options.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
 esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
@@ -335,6 +335,7 @@ exec(compile(code, '<installer-runtime-check>', 'exec'))
         "STUB_GIT_HEAD": git_head or _pin(),
         "STUB_CLONE_HEAD": CLONE_HEAD,
         "STUB_PARSE_PYTHON": sys.executable,
+        "STUB_UID": str(os.getuid()),
         "STUB_REAL_PYTHON": sys.executable,
         # sha256 of the stub curl's model bytes ("stub-model-bytes\n")
         "MCS_MODEL_SHA256": STUB_MODEL_SHA256,
@@ -350,9 +351,138 @@ def _run(env, hermes_home, *flags, script=INSTALL, cwd=None, pass_fds=()):
         env=env, capture_output=True, text=True, timeout=60, pass_fds=pass_fds)
 
 
+def _run_reinstall(env, hermes_home, *flags):
+    import fcntl
+    data = Path(env['HOME']) / '.mcs/data'
+    data.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(data / 'update.lock', os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return _run({**env, 'MCS_UPDATE_REINSTALL': '1', 'MCS_UPDATE_LOCK_FD': str(fd)},
+                    hermes_home, *flags, pass_fds=(fd,))
+    finally:
+        os.close(fd)
+
+
 def _calls(stub_root):
     log = stub_root / "calls.log"
     return [line for line in log.read_text().splitlines() if line.strip()] if log.exists() else []
+
+
+def test_install_stops_before_software_when_update_lock_is_held(tmp_path):
+    import fcntl
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    data = home / '.mcs/data'
+    data.mkdir(parents=True, mode=0o700)
+    fd = os.open(data / 'update.lock', os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = _run(env, hermes_home, '--no-llm')
+        assert result.returncode != 0
+        assert '別の導入または更新' in result.stderr
+        assert _calls(stub_root) == []
+        assert not (home / '.mcs/config.json').exists()
+    finally:
+        os.close(fd)
+
+
+def test_install_rejects_symlinked_update_lock(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    data = home / '.mcs/data'
+    data.mkdir(parents=True, mode=0o700)
+    target = tmp_path / 'synthetic-lock-target'
+    target.write_text('keep')
+    (data / 'update.lock').symlink_to(target)
+    result = _run(env, hermes_home, '--no-llm')
+    assert result.returncode != 0
+    assert target.read_text() == 'keep'
+    assert _calls(stub_root) == []
+
+
+def test_install_child_keeps_lock_after_parent_is_killed(tmp_path):
+    import fcntl
+    import time
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    brew = stub_root / 'bin/brew'
+    brew.write_text('''#!/bin/sh
+touch "$STUB_STATE/brew-started"
+while [ ! -f "$STUB_STATE/release-brew" ]; do /bin/sleep 0.05; done
+exit 1
+''')
+    process = subprocess.Popen(['sh', str(INSTALL), '--no-llm', '--no-recovery', str(hermes_home)],
+                               env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+    lock_fd = None
+    try:
+        deadline = time.monotonic() + 20
+        while not (stub_root / 'state/brew-started').exists():
+            assert process.poll() is None and time.monotonic() < deadline
+            time.sleep(0.05)
+        lock_fd = os.open(home / '.mcs/data/update.lock', os.O_WRONLY)
+        process.kill()
+        process.wait(timeout=5)
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        (stub_root / 'state/release-brew').touch()
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                assert time.monotonic() < deadline
+                time.sleep(0.05)
+    finally:
+        (stub_root / 'state/release-brew').touch()
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        if lock_fd is not None:
+            os.close(lock_fd)
+
+
+def test_fresh_install_reaches_bootstrap_without_python(tmp_path):
+    _home, hermes_home, stub_root, env = _world(tmp_path)
+    (stub_root / 'bin/python3').write_text('#!/bin/sh\nexit 1\n')
+    (stub_root / 'bin/python3.14').write_text('#!/bin/sh\nexit 1\n')
+    (stub_root / 'bin/brew').write_text('#!/bin/sh\necho "brew $*" >> "$STUB_LOG"\nexit 1\n')
+    result = _run(env, hermes_home, '--no-llm', '--no-recovery')
+    assert result.returncode != 0
+    assert any(line.startswith('brew ') for line in _calls(stub_root))
+    assert not any(line.startswith('python3 ') for line in _calls(stub_root))
+
+
+def test_manual_reinstall_keeps_interrupted_update_record(tmp_path):
+    home, hermes_home, _stub_root, env = _world(tmp_path)
+    data = home / '.mcs/data'
+    data.mkdir(parents=True, mode=0o700)
+    journal = data / 'update_state.json'
+    journal.write_text('{"v": 1, "applying": {"reinstall": true}, "stages": []}')
+    before = journal.read_bytes()
+    result = _run(env, hermes_home, '--no-llm', '--no-brew', '--no-services', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert journal.read_bytes() == before
+
+
+@pytest.mark.parametrize('held', [False, True])
+def test_updater_reinstall_requires_the_matching_held_update_lock(tmp_path, held):
+    import fcntl
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    data = home / '.mcs/data'
+    data.mkdir(parents=True, mode=0o700)
+    fd = os.open(data / 'update.lock', os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        if held:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = _run({**env, 'MCS_UPDATE_REINSTALL': '1', 'MCS_UPDATE_LOCK_FD': str(fd)},
+                      hermes_home, '--no-llm', '--no-brew', pass_fds=(fd,))
+        if held:
+            assert result.returncode == 0, result.stdout + result.stderr
+        else:
+            assert result.returncode != 0
+            assert not any(line.startswith(('brew ', 'git ', 'uv ')) for line in _calls(stub_root))
+            assert not (home / '.mcs/config.json').exists()
+    finally:
+        os.close(fd)
 
 
 def _bootstraps(stub_root, label):
@@ -1119,7 +1249,7 @@ def test_updater_run_keeps_the_operator_opt_out_record(tmp_path):
     record = home / ".mcs" / "config.json"
     assert _run(env, hermes_home).returncode == 0
     before = json.loads(record.read_text())["install_args"]
-    r = _run({**env, "MCS_UPDATE_REINSTALL": "1"}, hermes_home,
+    r = _run_reinstall(env, hermes_home,
              "--no-llm", "--no-plugin", "--no-services")
     assert r.returncode == 0, r.stderr
     assert json.loads(record.read_text())["install_args"] == before
@@ -1134,7 +1264,7 @@ def test_updater_migrates_legacy_without_recording_its_temporary_flags(tmp_path)
     legacy = data / 'install_options.json'
     legacy.write_text('{"v": 1, "install_args": ["--no-brew"]}')
     original = legacy.read_bytes()
-    result = _run({**env, 'MCS_UPDATE_REINSTALL': '1'}, hermes_home,
+    result = _run_reinstall(env, hermes_home,
                   '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(config.read_text()) == {'synthetic': {'keep': True}, 'install_args': ['--no-brew']}
@@ -1149,7 +1279,7 @@ def test_updater_reinstall_refuses_conflicting_records_before_side_effects(tmp_p
     config.write_text('{"install_args": []}')
     legacy = data / 'install_options.json'
     legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
-    result = _run({**env, 'MCS_UPDATE_REINSTALL': '1'}, hermes_home, '--no-llm', '--no-services')
+    result = _run_reinstall(env, hermes_home, '--no-llm', '--no-services')
     assert result.returncode != 0
     assert config.read_text() == '{"install_args": []}'
     assert legacy.read_text() == '{"v": 1, "install_args": ["--no-llm"]}'
@@ -1161,7 +1291,7 @@ def test_updater_reinstall_checks_approved_base_before_side_effects(tmp_path):
     config = home / '.mcs/config.json'
     config.parent.mkdir()
     config.write_text('{"install_args": ["--no-llm"]}')
-    result = _run({**env, 'MCS_UPDATE_REINSTALL': '1', 'MCS_UPDATE_OPTIONS_BASE': 'empty'},
+    result = _run_reinstall({**env, 'MCS_UPDATE_OPTIONS_BASE': 'empty'},
                   hermes_home, '--no-llm', '--no-services')
     assert result.returncode != 0 and '再導入を開始しません' in result.stderr
     assert config.read_text() == '{"install_args": ["--no-llm"]}'
@@ -1177,7 +1307,7 @@ def test_updater_reinstall_reports_change_during_software_preparation(tmp_path):
     git.write_text(git.read_text().replace('echo "git $*" >> "$STUB_LOG"',
         'echo "git $*" >> "$STUB_LOG"\n'
         'if [ "$1" = clone ]; then printf \'{"install_args": ["--no-llm"]}\' > "$HOME/.mcs/config.json"; fi'))
-    result = _run({**env, 'MCS_UPDATE_REINSTALL': '1'}, hermes_home,
+    result = _run_reinstall(env, hermes_home,
                   '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
     assert result.returncode != 0 and '途中まで反映' in result.stderr
     assert json.loads(config.read_text()) == {'install_args': ['--no-llm']}

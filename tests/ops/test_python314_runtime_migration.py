@@ -147,6 +147,7 @@ def test_restore_without_a_backup_changes_nothing(updater, tmp_path):
 
 
 def test_reinstall_hands_lock_and_backup_to_install_sh(updater, monkeypatch, tmp_path):
+    import fcntl
     calls = []
 
     class Child:
@@ -156,11 +157,13 @@ def test_reinstall_hands_lock_and_backup_to_install_sh(updater, monkeypatch, tmp
             return "", None
 
     def popen(argv, **kwargs):
-        if kwargs['pass_fds']:
-            inherited, = kwargs['pass_fds']
-            assert inherited != lock.fileno()
-            assert kwargs['env'][updater.RUN_LOCK_FD_ENV] == str(inherited)
-            assert os.fstat(inherited) == os.fstat(lock.fileno())
+        inherited_update = int(kwargs['env'][updater.UPDATE_LOCK_FD_ENV])
+        assert inherited_update in kwargs['pass_fds']
+        assert os.fstat(inherited_update) == os.fstat(update_fd)
+        if updater.RUN_LOCK_FD_ENV in kwargs['env']:
+            inherited_run = int(kwargs['env'][updater.RUN_LOCK_FD_ENV])
+            assert inherited_run in kwargs['pass_fds']
+            assert os.fstat(inherited_run) == os.fstat(lock.fileno())
         calls.append((argv, kwargs))
         return Child()
 
@@ -170,21 +173,35 @@ def test_reinstall_hands_lock_and_backup_to_install_sh(updater, monkeypatch, tmp
     applying = {"reinstall": True, "install_args": ["--no-llm", "--no-plugin"],
                 "install_options_base": baseline,
                 "runtime_migration": {"venv": str(tmp_path / "venv"), "backup_path": backup}}
-    with (tmp_path / 'run.lock').open('w+b') as lock:
-        monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, str(lock.fileno()))
-        updater._reinstall(applying)
-        os.fstat(lock.fileno())  # The child borrows a copy; the parent keeps its descriptor.
-    with pytest.raises(OSError):
-        os.fstat(calls[0][1]['pass_fds'][0])
-    argv, kwargs = calls[0]
-    assert argv[-3:] == ["--no-llm", "--no-plugin", "--no-services"]
-    assert kwargs["env"][updater.RUNTIME_BACKUP_ENV] == backup
-    assert kwargs["env"]["MCS_UPDATE_OPTIONS_BASE"] == baseline
-    # a plain operator reinstall never carries the migration permission
-    calls.clear()
-    updater._reinstall({"reinstall": True, "install_args": [], "install_options_base": baseline})
-    assert calls[0][1]["pass_fds"] == ()
-    assert updater.RUN_LOCK_FD_ENV not in calls[0][1]["env"]
+    update_fd = os.open(updater.UPDATE_LOCK, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(update_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, str(update_fd))
+        with (tmp_path / 'run.lock').open('w+b') as lock:
+            monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, str(lock.fileno()))
+            updater._reinstall(applying)
+            os.fstat(lock.fileno())  # The child borrows a copy; the parent keeps its descriptor.
+        with pytest.raises(OSError):
+            os.fstat(calls[0][1]['pass_fds'][0])
+        argv, kwargs = calls[0]
+        assert argv[-3:] == ["--no-llm", "--no-plugin", "--no-services"]
+        assert kwargs["env"][updater.RUNTIME_BACKUP_ENV] == backup
+        assert kwargs["env"]["MCS_UPDATE_OPTIONS_BASE"] == baseline
+        # A plain reinstall still inherits update.lock, but not the run lock.
+        calls.clear()
+        updater._reinstall({"reinstall": True, "install_args": [], "install_options_base": baseline})
+        assert len(calls[0][1]["pass_fds"]) == 1
+        assert updater.RUN_LOCK_FD_ENV not in calls[0][1]["env"]
+    finally:
+        os.close(update_fd)
+
+
+def test_reinstall_rejects_unknown_update_lock_before_child(updater, monkeypatch):
+    baseline = updater._install_options_snapshot()[0]
+    monkeypatch.delenv(updater.UPDATE_LOCK_FD_ENV, raising=False)
+    monkeypatch.setattr(updater.subprocess, 'Popen', lambda *_a, **_k: pytest.fail('unexpected child'))
+    with pytest.raises(updater.UpdateError, match='排他制御'):
+        updater._reinstall({'reinstall': True, 'install_options_base': baseline})
 
 
 @pytest.mark.parametrize('old_journal', [False, True])
@@ -251,6 +268,34 @@ def test_post_merge_child_inherits_the_held_run_lock(updater, monkeypatch, tmp_p
         os.fstat(seen['pass_fds'][0])
     updater._run_post_merge("b" * 40, run_lock_fd=None)
     assert seen["pass_fds"] == () and updater.RUN_LOCK_FD_ENV not in seen["env"]
+
+
+def test_post_merge_child_inherits_both_parent_locks(updater, monkeypatch, tmp_path):
+    seen = {}
+
+    class Child:
+        returncode = 0
+        def communicate(self, timeout=None):
+            return '', ''
+
+    def popen(_argv, **kwargs):
+        inherited_update = int(kwargs['env'][updater.UPDATE_LOCK_FD_ENV])
+        inherited_run = int(kwargs['env'][updater.RUN_LOCK_FD_ENV])
+        assert os.fstat(inherited_update) == os.fstat(update.fileno())
+        assert os.fstat(inherited_run) == os.fstat(run.fileno())
+        seen.update(kwargs)
+        return Child()
+
+    monkeypatch.setattr(updater.subprocess, 'Popen', popen)
+    monkeypatch.setenv('MCS_INSTALL_UPDATE_LOCK_FD', '99')
+    with (tmp_path / 'update.lock').open('w+b') as update, (tmp_path / 'run.lock').open('w+b') as run:
+        token = updater._POST_MERGE_UPDATE_FD.set(update.fileno())
+        try:
+            updater._run_post_merge('b' * 40, run_lock_fd=run.fileno())
+        finally:
+            updater._POST_MERGE_UPDATE_FD.reset(token)
+    assert len(seen['pass_fds']) == 2
+    assert 'MCS_INSTALL_UPDATE_LOCK_FD' not in seen['env']
 
 
 def test_post_merge_migrates_then_reconciles_with_new_python(updater, old_interpreter, monkeypatch):

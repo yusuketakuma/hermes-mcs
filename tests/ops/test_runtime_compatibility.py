@@ -450,6 +450,33 @@ def test_services_repairs_owned_unsafe_selection_without_autoenabling(
     assert service_management.runtime_gate_errors(cfg, paths=mcs_setup._service_paths()) == []
 
 
+@pytest.mark.parametrize('held', [False, True])
+def test_recovery_repair_accepts_only_verified_installer_lock(monkeypatch, tmp_path, held):
+    import fcntl
+    path, _ = _owned_recovery(monkeypatch, tmp_path)
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    monkeypatch.setattr(lifecycle_io, 'run_bounded', lambda *_a, **_k: SimpleNamespace(
+        returncode=113, stdout=''))
+    data = tmp_path / 'data'
+    fd = os.open(data / 'update.lock', os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        if held:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        monkeypatch.setenv('MCS_INSTALL_UPDATE_LOCK_FD', str(fd))
+        before = path.read_bytes()
+        desired = str(tmp_path / 'independent-python')
+        result = service_management.sync_recovery(
+            {'recovery_python': desired}, lambda _text: None, False, paths=mcs_setup._service_paths())
+        if held:
+            assert result == 0
+            assert plistlib.loads(path.read_bytes())['ProgramArguments'][0] == desired
+        else:
+            assert result == 1
+            assert path.read_bytes() == before
+    finally:
+        os.close(fd)
+
+
 @pytest.mark.parametrize("boundary", ["foreign", "active", "unknown"])
 def test_owned_recovery_repair_rejects_unknown_or_active_before_writes(
         monkeypatch, tmp_path, boundary):

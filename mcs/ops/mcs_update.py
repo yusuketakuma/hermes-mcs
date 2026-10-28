@@ -174,6 +174,8 @@ _UPDATE_PM_ENV = "_MCS_UPDATE_PM"   # post-merge child handshake token
 # the proof install.sh checks before moving an established venv aside.
 RUNTIME_MIN = (3, 14)
 RUN_LOCK_FD_ENV = "MCS_UPDATE_RUN_LOCK_FD"
+UPDATE_LOCK_FD_ENV = "MCS_UPDATE_LOCK_FD"
+_POST_MERGE_UPDATE_FD = ContextVar('mcs_post_merge_update_fd', default=None)
 RUNTIME_BACKUP_ENV = "MCS_UPDATE_RUNTIME_BACKUP"
 # install.sh leaves data/install_options.json alone when the updater runs it
 REINSTALL_ENV = "MCS_UPDATE_REINSTALL"
@@ -1613,20 +1615,33 @@ def _reinstall(applying: dict) -> None:
         return
     expected_base = _verify_install_options_base(applying)
     args = [a for a in applying.get("install_args") or [] if a in INSTALL_ARGS]
-    env, fds = os.environ.copy(), ()
+    env = os.environ.copy()
+    env.pop('MCS_INSTALL_UPDATE_LOCK_FD', None)
+    try:
+        from release_apply_owner import _verify_inherited_lock
+        raw = env.get(UPDATE_LOCK_FD_ENV, '')
+        if not raw.isascii() or not raw.isdecimal() or int(raw) < 3:
+            raise ValueError('update_lock_missing')
+        update_fd = int(raw)
+        _verify_inherited_lock(update_fd, UPDATE_LOCK)
+    except (OSError, ValueError, OverflowError):
+        raise UpdateError('install_failed: 更新の排他制御を確認できません') from None
+    fds = [update_fd]
     # migration/repair args are forced, not the operator's opt-outs: keep the record
     env[REINSTALL_ENV] = "1"
     env["MCS_UPDATE_OPTIONS_BASE"] = expected_base
     migration = applying.get("runtime_migration")
     if migration:
         env[RUNTIME_BACKUP_ENV] = migration["backup_path"]
-        fds = (int(env[RUN_LOCK_FD_ENV]),)
+        run_fd = int(env[RUN_LOCK_FD_ENV])
+        fds.append(run_fd)
     else:
         env.pop(RUN_LOCK_FD_ENV, None)   # no migration: no venv move allowed
     try:
         with owned_process._inherited_fds(fds) as inherited:
+            env[UPDATE_LOCK_FD_ENV] = str(inherited[update_fd])
             if migration:
-                env[RUN_LOCK_FD_ENV] = str(inherited[fds[0]])
+                env[RUN_LOCK_FD_ENV] = str(inherited[run_fd])
             child = subprocess.Popen(
                 ["/bin/sh", os.path.join(REPO, "install.sh"), *args,
                  "--no-services"], stdin=subprocess.DEVNULL,
@@ -1944,6 +1959,7 @@ def _run_post_merge(sha: str, *, run_lock_fd: int | None, _release_entry=None) -
     grandchildren too. Raises UpdateError unless the child either exits
     cleanly or proves it already wrote 'done' (H5)."""
     env = update_launch.launch_environment(os.environ, detached=False)
+    env.pop('MCS_INSTALL_UPDATE_LOCK_FD', None)
     if _release_entry is not None:
         import release_apply_owner
         if (type(_release_entry) is not release_apply_owner._StartedEffect
@@ -1953,12 +1969,16 @@ def _run_post_merge(sha: str, *, run_lock_fd: int | None, _release_entry=None) -
         return release_apply_owner._run_effect_post_merge(_release_entry, environment=env, timeout=T_POST_MERGE)
     env[_UPDATE_PM_ENV] = sha       # child handshake token (L17)
     env.pop(RUN_LOCK_FD_ENV, None)
+    env.pop(UPDATE_LOCK_FD_ENV, None)
     run_fd = run_lock_fd
+    update_fd = _POST_MERGE_UPDATE_FD.get()
     # the merged checkout's updater, not __file__: scripts/mcs_upgrade.py
     # runs this module from a temp copy of the target tag
-    with owned_process._inherited_fds(() if run_fd is None else (run_fd,)) as inherited:
+    with owned_process._inherited_fds(tuple(fd for fd in (run_fd, update_fd) if fd is not None)) as inherited:
         if run_fd is not None:
             env[RUN_LOCK_FD_ENV] = str(inherited[run_fd])
+        if update_fd is not None:
+            env[UPDATE_LOCK_FD_ENV] = str(inherited[update_fd])
         child = subprocess.Popen(
             [sys.executable, os.path.join(REPO, "mcs", "ops", "mcs_update.py"),
              "--post-merge"],
@@ -2447,7 +2467,11 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 release_apply_owner._verify_merged_source(borrowed)
             journal(state, "post_merge")
             if borrowed is None:
-                _run_post_merge(sha, run_lock_fd=run_fd)
+                token = _POST_MERGE_UPDATE_FD.set(upd_fd)
+                try:
+                    _run_post_merge(sha, run_lock_fd=run_fd)
+                finally:
+                    _POST_MERGE_UPDATE_FD.reset(token)
                 _verify_install_options_base({"install_options_base": options_base})
             else:
                 _run_post_merge(sha, run_lock_fd=run_fd, _release_entry=borrowed)
