@@ -68,6 +68,22 @@ def test_nonterminal_never_requests_input_or_writes(monkeypatch, tmp_path):
     assert not config.credentials_path(tmp_path).exists()
 
 
+@pytest.mark.parametrize("command", ["init", "credentials"])
+def test_no_echo_fallback_is_rejected_before_secret_input(monkeypatch, tmp_path, capsys, command):
+    world(tmp_path)
+    (tmp_path / "config.json").write_text(json.dumps(CONFIG))
+    _terminal(monkeypatch, ["2"] if command == "credentials" else [])
+
+    monkeypatch.setattr(cli.getpass, "getpass", cli.getpass.fallback_getpass)
+    monkeypatch.setattr(cli.getpass, "_raw_input", lambda *args, **kwargs:
+                        pytest.fail("fallback would read a visible secret"))
+    assert cli.main([command, "--root", str(tmp_path)]) == 1
+    assert not config.credentials_path(tmp_path).exists()
+    out = capsys.readouterr()
+    assert "credential_input_not_hidden" in out.err
+    assert "Warning: Password input may be echoed" not in out.out + out.err
+
+
 @pytest.mark.parametrize("error", [EOFError, KeyboardInterrupt])
 def test_cancelled_choice_never_starts_registration(monkeypatch, tmp_path, error):
     monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
