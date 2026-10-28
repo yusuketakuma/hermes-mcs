@@ -46,9 +46,9 @@ def test_generation_change_before_build_stays_dirty_then_settles(store, tmp_path
     initial_id = rollup.rebuild(store, 1)
     initial_cache = _cached(store)
     build = rollup.build_rollup
-    def changed_before_build(ledger, pid):
+    def changed_before_build(ledger, pid, *, cfg=None):
         drug_map.derive(store, replacement, deadline=0)
-        return build(ledger, pid)
+        return build(ledger, pid, cfg=cfg)
     monkeypatch.setattr(rollup, 'build_rollup', changed_before_build)
     with pytest.raises(sqlite3.OperationalError, match="^inference_rollup_source_changed$"):
         rollup.rebuild(store, 1)

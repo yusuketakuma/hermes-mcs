@@ -12,11 +12,14 @@ All synthetic: stub LLM/Jev, temp SQLite. Covers:
 import writer_lock
 import json
 import time
+from datetime import datetime, timezone
 
 import pytest
 
 import semantic
 import semantic_drain
+import semantic_qc
+from inference_version import CURRENT_VERSION, VERSION_KEY
 from semantic_observe import observe
 from semantic_policy import SCHED_KIND
 from semantic_testkit import _cfg, _FakeJev, _ledger, _llm, _message, _patient
@@ -24,12 +27,12 @@ from semantic_testkit import _cfg, _FakeJev, _ledger, _llm, _message, _patient
 
 def _job(db, mid, eligible=False, pid=1):
     """Direct fetch_jobs seed — arrival jobs carry eligible=True."""
-    payload = {"targets": [mid],
+    payload = {VERSION_KEY: CURRENT_VERSION, "targets": [mid],
                "origin": {"source": "unread" if eligible
                           else "history_import",
                           "event_id": mid if eligible else None},
                "generation": f"g{mid}",
-               "source_generation": "sg1"}
+               "source_generation": db._semantic_source_generation(pid, mid)}
     if eligible:
         payload["eligible"] = True
     db.db.execute(
@@ -60,7 +63,7 @@ def _due(db, **kw):
 def test_backfill_guaranteed_share_under_arrival_stream(tmp_path):
     """10 arrivals + 3 backfill at max_jobs=4: every window gives the
     backlog >=1 slot, so a continuous arrival stream cannot starve it."""
-    db = _world(tmp_path, list(range(10, 40)))
+    db = _world(tmp_path, [*range(10, 20), *range(30, 33)])
     for mid in range(10, 20):
         _job(db, mid, eligible=True)
     for mid in range(30, 33):
@@ -88,7 +91,7 @@ def test_backfill_guaranteed_share_under_arrival_stream(tmp_path):
 def test_single_slot_alternation_is_restart_safe(tmp_path):
     """max_jobs=1 must not permanently starve either cohort: the turn
     marker lives in fetch_jobs and survives a Ledger reopen."""
-    db = _world(tmp_path, [10, 20, 30, 40])
+    db = _world(tmp_path, [10, 20])
     _job(db, 10, eligible=True)
     _job(db, 20)
     out = _due(db, max_jobs=1)
@@ -111,6 +114,7 @@ def test_single_slot_alternation_is_restart_safe(tmp_path):
     assert semantic_drain._sched_state(db)["turn"] == first
     # contention again after restart: the cohort that lost the last
     # contested slot (drain1) wins — i.e. the marker's other side
+    db.save_messages([_message(30), _message(40)], project_id=1)
     _job(db, 30, eligible=True)
     _job(db, 40)
     out = _due(db, max_jobs=1)
@@ -261,10 +265,11 @@ def test_sched_persist_failure_never_breaks_drain(tmp_path, monkeypatch):
 
 
 def test_observe_exposes_queue_fairness_and_rates(tmp_path):
-    db = _world(tmp_path, [10, 20])
+    db = _world(tmp_path, [10])
     _job(db, 10, eligible=True)
     out = _due(db, max_jobs=1)
     assert out["done"] == 1
+    db.save_messages([_message(20)], project_id=1)
     _job(db, 20)
     db.close()
     snap = observe(str(tmp_path / "ledger.db"), _cfg())
@@ -386,14 +391,25 @@ def test_single_job_unbound_lane_records_qc_cohort(tmp_path):
     from extract_testkit import _hash, _v2_artifact
     from operational_progress import pipeline_progress
 
-    db = _world(tmp_path, [10])
+    db = _ledger(tmp_path)
+    _patient(db)
+    message = _message(10)
+    message.posted_at = datetime.now(timezone.utc).isoformat()
+    db.save_messages([message], project_id=1)
     cfg = _cfg("shadow", budget=100000, extract_qc="annotate")
     try:
         _v2_artifact(db, 10, _hash(db, 10))
+        db.semantic_seed(1, [10], {"source": "history_import", "notification_free": True})
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET next_try=? WHERE kind='semantic'", (time.time() + 3600,))
+        assert semantic_qc._qc_seed(db, time.time()) == 1
+        client = _FakeJev()
         out = semantic_drain.run_due(db, cfg, {"errors": []}, time.monotonic() + 60,
-                               jev_client=_FakeJev(), llm_fn=_llm, max_jobs=1)
-        assert out["done_by_kind"].get("extract_qc") == 1
+                               jev_client=client, llm_fn=_llm, max_jobs=1)
+        assert out["done"] == 1 and out["done_by_kind"].get("extract_qc") == 1
         assert out["job_metrics"][0]["cohort"] == "qc"
+        assert client.calls and db.artifacts("extract_qc", message_id=10)
+        assert db.job_pending("semantic", 1, 10) is not None
         observed = pipeline_progress(db.db, cfg, now=time.time())
         assert observed["queues"]["qc"]["throughput"]["completed"] == 1
         assert observed["queues"]["backfill"]["throughput"]["completed"] == 0

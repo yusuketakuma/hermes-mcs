@@ -7,94 +7,142 @@ import pytest
 
 import clinical_values
 import extract
-from extract_testkit import _message, _hash
-from common_testkit import ledger_fixture
+import extract_llm
+import extract_validation
+import inference_dependency_loss
+from extract_testkit import _message
+from common_testkit import make_ledger
 import rollup
 
 
-store = ledger_fixture(name="store", patients=(1,))
+@pytest.fixture
+def store(tmp_path, monkeypatch):
+    monkeypatch.setattr(extract_llm, "_writer_current", lambda **_kwargs: True)
+    monkeypatch.setattr(extract_llm, "_rerender_cards", lambda *args, **kwargs: None)
+    ledger = make_ledger(tmp_path)
+    ledger.ensure_patient(1)
+    ledger.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 "
+                      "WHERE project_id=1")
+    ledger.db.commit()
+    yield ledger
+    ledger.close()
 
 
-def seed(store, body, doc):
-    store.save_messages([_message(body=body)])
-    store.artifact_add("extract_llm", json.dumps(doc), project_id=1, message_id=1,
-                       meta={"hash": _hash(store)})
+def seed(store, body, doc, *, mid=1, posted_at="2026-09-19T00:00:00+09:00"):
+    store.save_messages([_message(mid=mid, body=body, posted_at=posted_at)])
+    row = dict(store.db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone())
+    row["_source_binding"] = inference_dependency_loss.source_binding(store.db, 1, mid)
+    row["_target"] = ("", extract_llm.resolved_model({}))
+    integrity = {"validation": {"items_dropped": 0, "evidence_dropped": 0},
+                 "completeness_chunks": 1,
+                 "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}
+    assert extract_llm._replace_current(store, row, json.dumps(doc, ensure_ascii=False), integrity=integrity)
 
 
 def test_mislabeled_family_values_never_become_patient_current(store):
-    seed(store, "母の状態：\n体温38.5℃。Cr 2.1 mg/dL。合成薬Aを開始。発熱あり。", {
+    seed(store, "母の状態：\n母の2026-09-19測定で体温38.5℃。母の2026-09-19採血でCr 2.1 mg/dL。"
+                "母は合成薬Aを開始し服用しています。母は発熱があります。", {
         "vitals": {"bt": 38.5},
         "labs": [{"name": "Cr", "value": "2.1", "unit": "mg/dL", "subject": "patient",
-                  "evidence": "Cr 2.1 mg/dL"}],
+                  "measured_on": "2026-09-19", "evidence": "母の2026-09-19採血でCr 2.1 mg/dL。"}],
         "meds": [{"name": "合成薬A", "action": "start", "subject": "patient",
-                  "status": "current", "evidence": "合成薬Aを開始"}],
+                  "status": "current", "evidence": "母は合成薬Aを開始し服用しています。"}],
         "symptoms": [{"text": "発熱", "subject": "patient", "status": "ongoing",
-                      "evidence": "発熱あり"}]})
-    out = rollup.build_rollup(store.db, 1)
+                      "evidence": "母は発熱があります。"}]})
+    out = rollup.build_rollup(store.db, 1, cfg={})
     for key in ("latest_vitals", "recent_labs", "medications", "recent_symptoms"):
         assert not out.get(key), key
 
 
 def test_mixed_source_keeps_patient_readings_medication_and_symptom(store):
-    body = "母の状態：\n体温38.5℃。Cr 2.1 mg/dL。合成薬Aを開始。発熱あり。\n本人の状態：\n体温36.5℃。Cr 0.9 mg/dL。合成薬Bを開始。咳あり。"
-    seed(store, body, {"vitals": {"bt": 36.5}, "labs": [
-        {"name": "Cr", "value": "2.1", "subject": "patient", "evidence": "Cr 2.1 mg/dL"},
-        {"name": "Cr", "value": "0.9", "subject": "patient", "evidence": "Cr 0.9 mg/dL"}],
-        "meds": [{"name": f"合成薬{c}", "action": "start", "subject": "patient", "status": "current",
-                  "evidence": f"合成薬{c}を開始"} for c in "AB"],
-        "symptoms": [{"text": s, "subject": "patient", "status": "ongoing", "evidence": s + "あり"}
-                     for s in ("発熱", "咳")]})
-    out = rollup.build_rollup(store.db, 1)
+    body = ("母の体温38.5℃。母のCr 2.1 mg/dL。母は合成薬Aを開始。母は発熱あり。"
+            "本人は2026-09-19測定で体温36.5℃。本人は2026-09-19採血でCr 0.9 mg/dL。"
+            "本人は合成薬Bを開始し服用しています。本人は咳があります。")
+    doc = {"vitals": {"bt": 36.5}, "labs": [
+        {"name": "Cr", "value": "2.1", "subject": "family", "evidence": "Cr 2.1 mg/dL"},
+        {"name": "Cr", "value": "0.9", "unit": "mg/dL", "measured_on": "2026-09-19",
+         "subject": "patient", "evidence": "本人は2026-09-19採血でCr 0.9 mg/dL。"}],
+        "meds": [{"name": f"合成薬{c}", "action": "start", "subject": "family" if c == "A" else "patient",
+                  "status": "current", "negated": False,
+                  "evidence": ("合成薬Aを開始" if c == "A" else "本人は合成薬Bを開始し服用しています。")}
+                 for c in "AB"],
+        "symptoms": [{"text": "発熱", "subject": "family", "status": "ongoing", "negated": False,
+                      "evidence": "発熱あり"},
+                     {"text": "咳", "subject": "patient", "status": "ongoing", "negated": False,
+                      "evidence": "本人は咳があります。"}]}
+    validated = extract_validation.validate(doc, body)
+    assert validated is not None and not validated.get("_items_dropped") and not validated.get("_evidence_dropped")
+    seed(store, body, doc)
+    out = rollup.build_rollup(store.db, 1, cfg={})
+    assert out["measurement_coverage"]["complete"] is True
     assert out["latest_vitals"]["bt"] == 36.5
     assert [x["value"] for x in out["recent_labs"]] == ["0.9"]
     assert [x["name"] for x in out["medications"]] == ["合成薬B"]
     assert [x["symptom"] for x in out["recent_symptoms"]] == ["咳"]
 
 
+def test_family_topic_keeps_later_bare_patient_lab_unconfirmed(store):
+    body = ("母の状態：\n体温38.5℃。Cr 2.1 mg/dL。合成薬Aを開始。発熱あり。\n本人の状態：\n"
+            "本人の2026-09-19測定で体温36.5℃。本人の2026-09-19採血でCr 0.9 mg/dL。"
+            "本人は合成薬Bを開始し服用しています。本人は咳があります。")
+    seed(store, body, {"labs": [{"name": "Cr", "value": "0.9", "unit": "mg/dL",
+                                "measured_on": "2026-09-19", "subject": "patient",
+                                "evidence": "本人の2026-09-19採血でCr 0.9 mg/dL。"}]})
+    out = rollup.build_rollup(store.db, 1, cfg={})
+    assert out["measurement_coverage"]["complete"] is True
+    assert out["measurement_coverage"]["unverified_lab_reports"] == 1
+    assert not out.get("recent_labs")
+
+
 def test_cached_clinical_fields_are_rechecked_without_erasing_profile(store):
     seed(store, "母の状態：\n体温38.5℃。合成薬Aを開始。", {"vitals": {"bt": 38.5},
         "meds": [{"name": "合成薬A", "subject": "patient", "status": "current",
                   "evidence": "合成薬Aを開始"}]})
+    store.db.execute("UPDATE patients SET karte_id=100 WHERE project_id=1")
+    store.db.commit()
+    store.karte_summary_store(1, 100, {"comment": "生活環境：正本の合成プロフィール。"})
     cached = {"latest_vitals": {"at": "old", "bt": 38.5},
               "medications": [{"name": "合成薬A", "last": "old"}],
-              "patient_context": {"memo": {"living": ["合成プロフィール"]}}}
+              "patient_context": {"memo": {"living": ["古い合成プロフィール"]}}}
     store.db.execute("PRAGMA query_only=ON")
-    out = rollup.current_cached_refs(store.db, 1, cached, {})
+    before = store.db.total_changes
+    out = rollup.current_cached_refs(store.db, 1, cached, {}, cfg={})
     assert not out.get("latest_vitals") and not out.get("medications")
-    assert out["patient_context"] == cached["patient_context"]
+    assert out["patient_context"]["memo"]["living"][0]["text"] == "正本の合成プロフィール。"
+    assert "古い合成プロフィール" not in json.dumps(out, ensure_ascii=False)
+    assert store.db.total_changes == before
 
 
 def test_full_sentence_evidence_inherits_subject_at_item_surface(store):
-    seed(store, "母は合成薬Aを開始し発熱あり。本人は合成薬Bを開始し咳あり。", {
+    seed(store, "母は合成薬Aを開始し発熱あり。本人は合成薬Bを開始し服用しています。本人は咳があります。", {
         "meds": [{"name": "合成薬A", "subject": "patient", "status": "current",
                   "evidence": "母は合成薬Aを開始し発熱あり。"},
                  {"name": "合成薬B", "subject": "patient", "status": "current",
-                  "evidence": "本人は合成薬Bを開始し咳あり。"}],
+                  "evidence": "本人は合成薬Bを開始し服用しています。"}],
         "symptoms": [{"text": "発熱", "subject": "patient", "status": "ongoing",
                       "evidence": "母は合成薬Aを開始し発熱あり。"},
                      {"text": "咳", "subject": "patient", "status": "ongoing",
-                      "evidence": "本人は合成薬Bを開始し咳あり。"}]})
+                      "evidence": "本人は咳があります。"}]})
     out = rollup.build_rollup(store.db, 1)
     assert [x["name"] for x in out["medications"]] == ["合成薬B"]
     assert [x["symptom"] for x in out["recent_symptoms"]] == ["咳"]
 
 
 def test_older_unscoped_trusted_output_contract_is_preserved(store):
-    seed(store, "合成本文", {"vitals": {"bt": 36.5},
+    seed(store, "合成本文。本人の2026-09-19測定で体温36.5℃。本人は合成薬Aを服用しています。",
+         {"vitals": {"bt": 36.5},
                             "meds": [{"name": "合成薬A", "subject": "patient", "status": "current"}]})
-    out = rollup.build_rollup(store.db, 1)
+    out = rollup.build_rollup(store.db, 1, cfg={})
     assert out["latest_vitals"]["bt"] == 36.5
     assert out["medications"][0]["name"] == "合成薬A"
 
 
 def test_recent_family_stop_does_not_suppress_older_patient_medication(store):
-    seed(store, "本人は合成薬Aを開始。", {"meds": [{"name": "合成薬A", "subject": "patient",
-        "status": "current", "action": "start", "evidence": "本人は合成薬Aを開始。"}]})
-    store.save_messages([_message(mid=2, body="母の状態：\n以前、合成薬Aを中止。",
-                                   posted_at="2026-09-20T00:00:00+09:00")])
-    store.artifact_add("extract_llm", json.dumps({"meds": [{"name": "合成薬A", "subject": "patient",
-        "status": "past", "action": "stop", "evidence": "以前、合成薬Aを中止。"}]}),
-        project_id=1, message_id=2, meta={"hash": _hash(store, 2)})
+    seed(store, "本人は合成薬Aを開始し服用しています。", {"meds": [{"name": "合成薬A", "subject": "patient",
+        "status": "current", "action": "start", "evidence": "本人は合成薬Aを開始し服用しています。"}]})
+    seed(store, "母の状態：\n以前、合成薬Aを中止。", {"meds": [{"name": "合成薬A", "subject": "patient",
+        "status": "past", "action": "stop", "evidence": "以前、合成薬Aを中止。"}]},
+        mid=2, posted_at="2026-09-20T00:00:00+09:00")
     assert rollup.build_rollup(store.db, 1)["medications"][0]["name"] == "合成薬A"
 
 
@@ -171,15 +219,19 @@ def test_unlocated_item_scans_a_long_body_once(heading_scans):
     assert heading_scans.scans <= 3  # at most one more per provider_fields variant
 
 
-def test_scope_prefix_scans_stay_within_the_clause(heading_scans, monkeypatch):
+def test_scope_prefix_scans_stay_within_the_sentence(heading_scans, monkeypatch):
     owner, breaks = _WindowPattern(clinical_scope._DIRECT_OWNER), _WindowPattern(clinical_scope._SCOPE_BREAK)
     monkeypatch.setattr(clinical_scope, '_DIRECT_OWNER', owner)
     monkeypatch.setattr(clinical_scope, '_SCOPE_BREAK', breaks)
     body = "体温36.5℃、咳あり。" * 200
     assert clinical_values.patient_item_scope({}, body) == "patient"
     assert owner.windows and breaks.windows
-    # was the whole prefix body[:start] per clause end, i.e. quadratic in the body length
-    assert max(owner.windows + breaks.windows) <= len("体温36.5℃、")
+    # Conditional phrases can cross a comma, but scans must not cross sentences.
+    assert max(owner.windows + breaks.windows) <= len("体温36.5℃、咳あり。")
+    assert sum(owner.windows + breaks.windows) <= 6 * len(body)
+    conditional = "もし本人に発熱があれば、本人は受診します。"
+    start = conditional.index("受診")
+    assert clinical_scope.source_axes(conditional, start, start + len("受診"))[1] == "conditional"
 
 
 def test_unlocated_item_stops_at_first_non_patient_clause(monkeypatch):
@@ -194,35 +246,43 @@ def test_unlocated_item_stops_at_first_non_patient_clause(monkeypatch):
     assert calls == [1]
 
 
-def test_current_cache_with_mixed_scope_source_is_not_rebuilt_on_read(store, monkeypatch):
-    store.save_messages([_message(body="母の状態：\n体温38.5℃。\n本人の状態：\n体温36.5℃。合成薬Bを開始。")])
-    store.artifact_add("extract_llm", json.dumps({
+def test_current_cache_with_mixed_scope_source_is_revalidated_on_read(store, monkeypatch):
+    seed(store, "母の状態：\n体温38.5℃。\n本人の状態：\n"
+                "本人の2026-09-19測定で体温36.5℃。本人は合成薬Bを開始し服用しています。", {
         "vitals": {"bt": 36.5},
         "meds": [{"name": "合成薬B", "action": "start", "subject": "patient", "status": "current",
-                  "evidence": "合成薬Bを開始"}]}), project_id=1, message_id=1, meta={"hash": _hash(store)})
-    rollup.rebuild(store, 1)
+                  "evidence": "本人は合成薬Bを開始し服用しています。"}]})
+    rollup.rebuild(store, 1, cfg={})
     row = store.db.execute("SELECT content,meta FROM artifacts WHERE kind='patient_rollup' "
                            "AND project_id=1").fetchone()
     cached, meta = json.loads(row["content"]), row["meta"]
     assert json.loads(meta)["period_check_version"] == rollup.PERIOD_CHECK_VERSION
     assert rollup.dirty_projects(store) == []
     assert cached["latest_vitals"]["bt"] == 36.5
-    # The legacy (unstamped) path still recomputes; its output is the reference.
     original, calls = rollup.build_rollup, []
 
     def counted(*args, **kwargs):
-        calls.append(1)
+        calls.append(kwargs.get("cfg"))
         return original(*args, **kwargs)
 
     monkeypatch.setattr(rollup, "build_rollup", counted)
-    expected = rollup.current_cached_refs(store.db, 1, cached, {})
-    assert calls == [1]
-    stale = rollup.current_cached_refs(store.db, 1, cached, {"period_check_version": rollup.PERIOD_CHECK_VERSION - 1})
-    assert calls == [1, 1]
-    monkeypatch.setattr(rollup, "build_rollup", lambda *_a, **_k: pytest.fail("current cache rebuilt"))
-    got = rollup.current_cached_refs(store.db, 1, cached, meta)
-    assert json.dumps(got, ensure_ascii=False) == json.dumps(expected, ensure_ascii=False)
-    assert stale == expected
+    before = store.db.total_changes
+    poisoned = {**cached, "latest_vitals": {"bt": 99}, "medications": [{"name": "古い合成薬"}]}
+    got = rollup.current_cached_refs(store.db, 1, poisoned, meta, cfg={})
+    assert calls == [{}]
+    assert got["latest_vitals"]["bt"] == 36.5
+    assert [item["name"] for item in got["medications"]] == ["合成薬B"]
+    assert "古い合成薬" not in json.dumps(got, ensure_ascii=False)
+    for old_meta in ({}, {"period_check_version": rollup.PERIOD_CHECK_VERSION - 1}):
+        refreshed = rollup.current_cached_refs(store.db, 1, poisoned, old_meta, cfg={})
+        assert refreshed["latest_vitals"]["bt"] == 36.5
+        assert [item["name"] for item in refreshed["medications"]] == ["合成薬B"]
+        assert "古い合成薬" not in json.dumps(refreshed, ensure_ascii=False)
+    assert calls == [{}, {}, {}]
+    unknown = rollup.current_cached_refs(store.db, 1, poisoned, meta)
+    assert calls == [{}, {}, {}] and unknown["rollup_freshness"] == "unknown"
+    assert not unknown.get("latest_vitals") and not unknown.get("medications")
+    assert store.db.total_changes == before
 
 
 class _InPlacePattern:

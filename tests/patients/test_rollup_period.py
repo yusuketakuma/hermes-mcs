@@ -1,9 +1,11 @@
 """Synthetic medication-period rollup contracts at the snapshot date."""
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
+import inference_version as inference
 from extract_testkit import _message, _hash
 from common_testkit import ledger_fixture
 import rollup
@@ -21,7 +23,7 @@ def _add_period(db, mid, period, body="合成薬を内服"):
         posted_at=f"2026-09-{18 + mid:02d}T00:00:00+09:00")])
     db.artifact_add("extract_v1", json.dumps({"med_periods": [period]}),
                     project_id=1, message_id=mid,
-                    meta={"hash": _hash(db, mid)})
+                    meta={"hash": _hash(db, mid), inference.VERSION_KEY: inference.CURRENT_VERSION})
 
 
 @pytest.mark.parametrize(("period", "body"), [
@@ -115,21 +117,39 @@ def test_meta_mismatch_forces_rewrite(db, monkeypatch, meta_patch):
         == rollup.PERIOD_CHECK_VERSION
 
 
-def test_concurrent_delete_before_rebuild_reinserts(db, monkeypatch):
+def test_concurrent_delete_rejects_stale_rebuild_then_retry_reinserts(db, monkeypatch):
     _add_period(db, 1, {"raw": "9/1-9/30"})
-    rollup.rebuild(db, 1)
+    original_id = rollup.rebuild(db, 1)
+    sources = [tuple(row) for row in db.db.execute(
+        "SELECT artifact_id,content,meta FROM artifacts WHERE kind='extract_v1'")]
+    message = tuple(db.db.execute(
+        "SELECT body_text,content_hash FROM messages WHERE message_id=1").fetchone())
+    other = sqlite3.connect(db.db.execute("PRAGMA database_list").fetchone()[2])
     real = rollup.build_rollup
 
-    def build_then_delete(ledger, pid):
-        d = real(ledger, pid)
-        with ledger:   # another writer drops the rollup mid-rebuild
-            ledger.execute("DELETE FROM artifacts WHERE kind=?",
-                              (rollup.KIND,))
+    def build_then_delete(ledger, pid, *, cfg=None):
+        d = real(ledger, pid, cfg=cfg)
+        with other:
+            deleted = other.execute("DELETE FROM artifacts WHERE artifact_id=?", (original_id,))
+            assert deleted.rowcount == 1
         return d
 
-    monkeypatch.setattr(rollup, "build_rollup", build_then_delete)
-    rollup.rebuild(db, 1)
-    assert len(_rollup_rows(db)) == 1
+    try:
+        monkeypatch.setattr(rollup, "build_rollup", build_then_delete)
+        with pytest.raises(rollup.RollupSourceChanged, match="^inference_rollup_source_changed$"):
+            rollup.rebuild(db, 1)
+        assert _rollup_rows(db) == []
+        assert not db.db.in_transaction
+        assert [tuple(row) for row in db.db.execute(
+            "SELECT artifact_id,content,meta FROM artifacts WHERE kind='extract_v1'")] == sources
+        assert tuple(db.db.execute(
+            "SELECT body_text,content_hash FROM messages WHERE message_id=1").fetchone()) == message
+        monkeypatch.setattr(rollup, "build_rollup", real)
+        replacement_id = rollup.rebuild(db, 1)
+        assert replacement_id != original_id
+        assert [row["artifact_id"] for row in _rollup_rows(db)] == [replacement_id]
+    finally:
+        other.close()
 
 
 def test_pre9_rollup_keys_read_as_current_names_until_rebuilt(db, monkeypatch):
@@ -142,15 +162,20 @@ def test_pre9_rollup_keys_read_as_current_names_until_rebuilt(db, monkeypatch):
     content["current_med_period"] = content.pop("med_period_candidate")
     content["possibly_deleted"] = content.pop("unrefreshed_message_ids")
     meta = {"period_check_version": 8}
+    old_content, old_meta = json.dumps(content), json.dumps(meta)
     with db.db:
         db.db.execute("UPDATE artifacts SET content=?, meta=? WHERE artifact_id=?",
-                      (json.dumps(content), json.dumps(meta), aid))
+                      (old_content, old_meta, aid))
     read = rollup.current_cached_refs(db.db, 1, content, meta)
     assert read["med_period_candidate"] == period
     assert read["unrefreshed_message_ids"] == []
     assert "current_med_period" not in read and "possibly_deleted" not in read
     assert rollup.dirty_projects(db) == [1]
-    rollup.rebuild(db, 1)
-    rebuilt = json.loads(_rollup_rows(db)[0]["content"])
+    new_id = rollup.rebuild(db, 1)
+    rows = {row["artifact_id"]: row for row in _rollup_rows(db)}
+    assert new_id != aid and set(rows) == {aid, new_id}
+    assert (rows[aid]["content"], rows[aid]["meta"]) == (old_content, old_meta)
+    assert json.loads(rows[new_id]["meta"])[inference.VERSION_KEY] == inference.CURRENT_VERSION
+    rebuilt = json.loads(rows[new_id]["content"])
     assert rebuilt["med_period_candidate"] == period
     assert "current_med_period" not in rebuilt and "possibly_deleted" not in rebuilt
