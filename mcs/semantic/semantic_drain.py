@@ -1240,11 +1240,13 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         r.get("findings") or [], fact_source)
             if stale:
                 continue
+            import semantic_intake_hold
             semantic_notice.record_notice_plan_tx(
                 ledger, pid, root, mid, fp, policy, r["summary"], final_status,
                 members[mid], all_targets, mode=scfg["mode"],
                 summary_mode=scfg["summary_mode"],
-                notification_free=pl.get("notification_free"),
+                notification_free=(pl.get("notification_free") or not
+                    semantic_intake_hold.notification_allowed(ledger, pl, pid, mid)),
                 origin=pl.get("origin"), content_quality=bundle["content_quality"])
         if (not stale and not pending and loops_done
                 and not runtime.transition_tx(ledger, token, "done")):
@@ -2068,6 +2070,17 @@ _ARCHIVED_JOB = ("EXISTS (SELECT 1 FROM patients p "
                  "WHERE p.project_id=fetch_jobs.project_id AND p.is_archived)")
 # an arrival-seeded job: a real notification event spawned it
 _ELIGIBLE_SQL = "json_valid(payload) AND COALESCE(json_extract(payload,'$.eligible'),0)=1"
+# Malformed rows have no usable version/arrival metadata. Select these only
+# for the bounded raw-CAS quarantine before any admission or model call.
+_MALFORMED_JOB_SQL = (
+    "(CASE WHEN kind='semantic' AND typeof(payload)='text' "
+    "AND length(CAST(payload AS BLOB))<=1048576 THEN CASE "
+    "WHEN NOT json_valid(payload) THEN 1 WHEN json_type(payload)!='object' THEN 1 "
+    "WHEN json_type(payload,'$.inference_engine_version') IS NULL AND ("
+    "(json_type(payload,'$.targets') IS NOT NULL AND (json_type(payload,'$.targets')!='array' "
+    "OR json_array_length(payload,'$.targets')=0)) OR "
+    "(json_type(payload,'$.generation') IS NOT NULL AND json_type(payload,'$.generation')!='text')) "
+    "THEN 1 ELSE 0 END ELSE 0 END)")
 
 
 def _held_cursor_valid(value, lane):
@@ -2097,7 +2110,8 @@ def _class_scope(archived: bool, excluded, *, lane=None, held_after=None) -> tup
     scope = (("" if archived else "NOT ") + _ARCHIVED_JOB
              + ' AND (' + current_meta_pred('fetch_jobs.payload')
              + ' OR (' + current_meta_pred('fetch_jobs.payload', target=LEGACY_VERSION)
-             + " AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.eligible')=1 END))"
+             + " AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.eligible')=1 END)"
+             + ' OR ' + _MALFORMED_JOB_SQL + ')'
              + " AND job_id NOT IN (SELECT value FROM json_each(?))")
     if _held_cursor_valid(held_after, lane):
         job_id = held_after['job_id']
@@ -2851,6 +2865,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 import semantic_intake_hold
                 try:
                     semantic_intake_hold.validate_indexes(ledger.db)
+                    if (_known_long_defer_generation(job['payload']) is None
+                            and semantic_intake_hold.quarantine_invalid_job(ledger, job)):
+                        out['failed'] += 1
+                        continue
                     intake_held = semantic_intake_hold.has_held_root(
                         ledger.db, job['project_id'], job['message_id'])
                 except sqlite3.Error:
@@ -3185,7 +3203,8 @@ def revive_failed(ledger, now: float | None = None) -> dict:
     capped = ("(CASE WHEN json_valid(payload) AND "
               "json_type(payload,'$.auto_retry')='integer' "
               "THEN json_extract(payload,'$.auto_retry') ELSE 0 END)")
-    where = "WHERE kind=? AND state='failed' AND updated_at<=? AND "
+    where = ("WHERE kind=? AND state='failed' AND updated_at<=? "
+             "AND reason_code IS NOT 'semantic_payload_invalid' AND ")
     rows = ledger.db.execute(
         "SELECT job_id,attempts,payload,updated_at FROM fetch_jobs " + where
         + capped + "<? ORDER BY updated_at LIMIT ?",

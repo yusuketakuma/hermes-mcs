@@ -223,6 +223,13 @@ def main() -> int:
                     help="seed one finite evaluation job (writer lock)")
     actions.add_argument("--intake-preview", nargs=2, type=int, metavar=("PROJECT_ID", "ROOT_ID"),
                     help="read a bounded page of locally held intake identities")
+    actions.add_argument("--intake-release", nargs=2, type=int, metavar=("PROJECT_ID", "ROOT_ID"),
+                    help="replay verified held intake while retaining its evidence")
+    actions.add_argument("--intake-prepare", nargs=2, type=int, metavar=("PROJECT_ID", "ROOT_ID"),
+                    help="prepare a bounded, read-only intake release snapshot")
+    ap.add_argument('--expected-job-sha256')
+    ap.add_argument('--expected-snapshot-sha256')
+    ap.add_argument('--expected-hold-epoch', type=int)
     ap.add_argument("--max-jobs", type=int, default=4)
     ap.add_argument("--after-hold-id", type=int, default=0)
     ap.add_argument("--offline", action="store_true",
@@ -236,7 +243,15 @@ def main() -> int:
         ap.error("after-hold-id requires intake-preview and must be nonnegative")
     if args.offline and args.drain:
         ap.error("offline mode cannot drain model jobs")
-    if args.status or args.intake_preview is not None:
+    if args.intake_release is None and (args.expected_job_sha256 is not None or args.expected_hold_epoch is not None
+                                      or args.expected_snapshot_sha256 is not None):
+        ap.error('expected release identities require intake-release')
+    if args.intake_release is not None:
+        from mcs_util import valid_hash
+        if (not valid_hash(args.expected_job_sha256) or not valid_hash(args.expected_snapshot_sha256)
+                or type(args.expected_hold_epoch) is not int or not 0 < args.expected_hold_epoch < 2**63):
+            ap.error('intake-release requires the job hash, snapshot hash and positive hold epoch from intake-prepare')
+    if args.status or args.intake_preview is not None or args.intake_prepare is not None:
         try:
             reader = LedgerReader(DB)
         except Exception as e:
@@ -244,7 +259,14 @@ def main() -> int:
                               "error": type(e).__name__}))
             return 1
         with closing(reader):
-            if args.intake_preview is not None:
+            if args.intake_prepare is not None:
+                import semantic_intake_hold
+                try:
+                    report = semantic_intake_hold.prepare_release(reader, *args.intake_prepare)
+                except (ValueError, sqlite3.Error):
+                    print(json.dumps({'ok': False, 'error': 'intake_release_unverified'}))
+                    return 1
+            elif args.intake_preview is not None:
                 import semantic_intake_hold
                 try:
                     report = semantic_intake_hold.preview_root(
@@ -267,6 +289,18 @@ def main() -> int:
         print(json.dumps({"ok": False, "error": "ledger_init_failed"}))
         return 1
     try:
+        if args.intake_release is not None:
+            import semantic_intake_hold
+            try:
+                out = semantic_intake_hold.release_root(
+                    ledger, *args.intake_release, expected_job_sha256=args.expected_job_sha256,
+                    expected_hold_epoch=args.expected_hold_epoch, expected_snapshot_sha256=args.expected_snapshot_sha256,
+                    cfg=load_config(CONF_PATH), run_lock_fd=lock_fd)
+            except (ValueError, sqlite3.Error):
+                print(json.dumps({'ok': False, 'error': 'intake_release_unverified'}))
+                return 1
+            print(json.dumps({'ok': True, **out}))
+            return 0
         if args.replay is not None:
             root = seed(ledger, args.replay)
             print(json.dumps({"ok": root is not None, "root": root}))

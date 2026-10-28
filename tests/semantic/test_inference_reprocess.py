@@ -456,15 +456,15 @@ def test_source_epoch_requires_caller_transaction_and_old_rollups_survive(store)
 
 
 def test_guard_does_not_treat_a_missing_patient_as_a_permission_refusal(store):
-    # Minimal borrowed schema models the existing direct semantic-job API.
+    # Keep the real guard/index contracts while removing only the patient.
     db = sqlite3.connect(':memory:')
     db.row_factory = sqlite3.Row
     try:
-        db.executescript('CREATE TABLE patients(project_id,fetch_reason);'
-                        'CREATE TABLE artifacts(kind,project_id,artifact_id,content);'
-                        'CREATE TABLE fetch_jobs(job_id,kind,project_id,message_id,state,attempts,payload);')
+        store.db.backup(db)
+        db.execute('DELETE FROM patients')
         payload = json.dumps({VERSION_KEY: CURRENT_VERSION})
-        db.execute("INSERT INTO fetch_jobs VALUES(1,'semantic',1,1,'pending',0,?)", (payload,))
+        db.execute("INSERT INTO fetch_jobs(job_id,kind,project_id,message_id,state,attempts,payload) "
+                   "VALUES(1,'semantic',1,1,'pending',0,?)", (payload,))
         token = runtime.JobToken.from_row(db.execute('SELECT * FROM fetch_jobs').fetchone())
         runtime.guard(SimpleNamespace(db=db), token, deadline=time.monotonic() + 60,
                       expected_config_generation=None, expected_mode='shadow')

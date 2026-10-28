@@ -394,6 +394,15 @@ def _initialize(db, *, schema_version: int) -> bool:
           CREATE INDEX IF NOT EXISTS idx_semantic_intake_hold_project_epoch
             ON artifacts(project_id, artifact_id)
             WHERE kind='semantic_intake_hold_v1';
+          CREATE INDEX IF NOT EXISTS idx_semantic_intake_release_epoch
+            ON artifacts(artifact_id)
+            WHERE kind IN ('semantic_intake_released_v1','semantic_intake_release_receipt_v1');
+          CREATE INDEX IF NOT EXISTS idx_semantic_intake_release_project_epoch
+            ON artifacts(project_id, artifact_id)
+            WHERE kind IN ('semantic_intake_released_v1','semantic_intake_release_receipt_v1');
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_semantic_intake_release_request
+            ON artifacts(kind, project_id, model)
+            WHERE kind='semantic_intake_release_receipt_v1';
           CREATE INDEX IF NOT EXISTS idx_semantic_intake_unstored_epoch
             ON fetch_jobs(job_id) WHERE kind='semantic_intake_unstored_v1';
           CREATE INDEX IF NOT EXISTS idx_attachments_pending

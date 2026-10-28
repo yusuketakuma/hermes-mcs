@@ -77,11 +77,15 @@ def test_invalid_job_payload_is_quarantined_before_dispatch(tmp_path, raw):
     db = _seeded(tmp_path)
     try:
         with db.db:
-            db.db.execute("UPDATE fetch_jobs SET payload=? WHERE kind='semantic'", (raw,))
+            db.db.execute("UPDATE fetch_jobs SET payload=?,attempts=4 WHERE kind='semantic'", (raw,))
         client = _FakeJev()
         semantic_drain.run_due(db, _cfg(), {'errors': []}, time.monotonic() + 300,
                          jev_client=client, llm_fn=_llm)
         assert not client.calls
-        assert db.db.execute("SELECT state FROM fetch_jobs WHERE kind='semantic'").fetchone()[0] == 'failed'
+        row = db.db.execute("SELECT state,payload,attempts,reason_code FROM fetch_jobs WHERE kind='semantic'").fetchone()
+        assert tuple(row) == ('failed', raw, 4, 'semantic_payload_invalid')
+        assert semantic_drain.revive_failed(db, time.time() + 86400)['revived'] == 0
+        assert tuple(db.db.execute(
+            "SELECT state,payload,attempts,reason_code FROM fetch_jobs WHERE kind='semantic'").fetchone()) == tuple(row)
     finally:
         db.close()
