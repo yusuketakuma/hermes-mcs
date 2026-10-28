@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import sqlite3
 
 from mcs_util import valid_text
 from mcs_util import positive, valid_hash
@@ -28,21 +29,71 @@ def reference_path(data_dir, name: str, stage: str) -> str:
 _MAX_ADDITIONAL_ATTEMPTS = 3
 
 _FEATURE = "semantic"
-_RETRY_PAYLOAD_MAX_BYTES = 1024 * 1024
+RETRY_PAYLOAD_MAX_BYTES = 1024 * 1024
 
 
-def read_retry_payload(db, row, *, max_bytes=_RETRY_PAYLOAD_MAX_BYTES):
+def retry_job_row(db, project_id, job_id):
+    """Identify one semantic job and its unshadowed SQLite rowid."""
+    if not db.in_transaction:
+        raise sqlite3.DatabaseError("retry_snapshot_required")
+    fields = list(db.execute("PRAGMA main.table_xinfo(fetch_jobs)"))
+    columns = {row[1].lower() for row in fields}
+    alias = next((name for name in ("rowid", "_rowid_", "oid") if name not in columns), None)
+    if alias is None:
+        raise sqlite3.DatabaseError("retry_job_rowid_unavailable")
+    indexes = list(db.execute("PRAGMA main.index_list(fetch_jobs)"))
+    table = next((row for row in db.execute("PRAGMA main.table_list(fetch_jobs)")
+                  if row[0] == 'main' and row[1] == 'fetch_jobs' and row[2] == 'table'), None)
+    pk = [row for row in fields if row[5]]
+    rowid_pk = (table is not None and table[4] == 0 and len(pk) == 1
+                and pk[0][1].lower() == 'job_id' and pk[0][2].upper() == 'INTEGER'
+                and not any(row[3] == 'pk' for row in indexes))
+    index = None
+    if not rowid_pk:
+        for entry in indexes:
+            if not entry[2] or entry[4]:
+                continue
+            name = entry[1].replace('"', '""')
+            keys = [row for row in db.execute(f'PRAGMA main.index_xinfo("{name}")') if row[5]]
+            if (len(keys) == 1 and isinstance(keys[0][2], str)
+                    and keys[0][2].lower() == 'job_id' and keys[0][4] == 'BINARY'):
+                index = name
+                break
+        if index is None:
+            raise sqlite3.DatabaseError("retry_job_unique_index_required")
+    indexed = '' if rowid_pk else f' INDEXED BY "{index}"'
+    rows = db.execute(
+        f'SELECT "{alias}" AS retry_rowid,job_id,kind,project_id,state,attempts,'
+        f"typeof(payload) AS payload_type FROM main.fetch_jobs{indexed} "
+        "WHERE project_id=? AND job_id=? COLLATE BINARY AND kind='semantic' LIMIT 2",
+        (project_id, job_id)).fetchall()
+    if len(rows) > 1:
+        return None, "invalid_payload"
+    if rows and type(rows[0]["retry_rowid"]) is not int:
+        raise sqlite3.DatabaseError("retry_job_rowid_unavailable")
+    return (rows[0], None) if rows else (None, "job_not_found")
+
+
+def retry_payload_codec(db):
+    encoding = db.execute("PRAGMA encoding").fetchone()[0]
+    codec = {"utf-8": "utf-8", "utf-16le": "utf-16-le",
+             "utf-16be": "utf-16-be"}.get(encoding.lower() if isinstance(encoding, str) else "")
+    if codec is None:
+        raise sqlite3.DatabaseError("retry_payload_encoding_unsupported")
+    return codec
+
+
+def read_retry_payload(db, row, *, max_bytes=RETRY_PAYLOAD_MAX_BYTES):
     """Read at most the retry payload limit without copying a larger value."""
-    if row["payload_type"] == "null":
-        return "{}"
     if row["payload_type"] != "text":
         return None
     try:
-        with db.blobopen("fetch_jobs", "payload", row["job_id"], readonly=True) as blob:
+        with db.blobopen("fetch_jobs", "payload", row["retry_rowid"], readonly=True) as blob:
             if len(blob) > max_bytes:
                 return None
             raw = blob.read()
-        return raw.decode("utf-8") or "{}"
+        decoded = raw.decode(retry_payload_codec(db))
+        return decoded if decoded else None
     except UnicodeError:
         return None
 
@@ -61,6 +112,10 @@ def retry_error(row, payload: dict, additional_attempts=None) -> str | None:
     """
     if not isinstance(payload, dict):
         return "invalid_payload"
+    if 'targets' in payload:
+        targets = payload['targets']
+        if not isinstance(targets, list) or not targets or any(not positive(mid) for mid in targets):
+            return "invalid_payload"
     from inference_version import CURRENT_VERSION, LEGACY_VERSION, read_version
     if read_version(payload) not in (CURRENT_VERSION, LEGACY_VERSION):
         return "unsupported_inference_version"

@@ -225,15 +225,13 @@ def _project_exists(view, project_id: int) -> bool:
 
 
 def _semantic_job(view, requests, project_id: int, job_id: int, additional_attempts=None):
-    row = view.db.execute(
-        "SELECT job_id,kind,project_id,state,attempts,typeof(payload) AS payload_type "
-        "FROM fetch_jobs WHERE project_id=? AND job_id=? AND kind='semantic'",
-        (project_id, job_id),
-    ).fetchone()
-    if row is None:
-        return None, "job_not_found", None
-    from operation_contract import read_retry_payload, retry_error
-    raw = read_retry_payload(view.db, row, max_bytes=requests.MAX_COMMAND_BYTES)
+    from operation_contract import read_retry_payload, retry_error, retry_job_row
+    row, error = retry_job_row(view.db, project_id, job_id)
+    if error:
+        return None, error, None
+    # SQLite UTF-16 can use two bytes for each UTF-8 ASCII byte. The
+    # existing parser enforces the exact UTF-8 command limit after decode.
+    raw = read_retry_payload(view.db, row, max_bytes=2 * requests.MAX_COMMAND_BYTES)
     if raw is None:
         return None, "invalid_payload", None
     try:
