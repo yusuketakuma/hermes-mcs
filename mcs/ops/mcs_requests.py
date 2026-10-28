@@ -19,6 +19,22 @@ MAX_COMMAND_BYTES = 16384
 STATUSES = ("open", "in_progress", "done", "cancelled")
 
 
+class AliasCommitUnknown(RuntimeError):
+    pass
+
+
+@contextmanager
+def _receipt_transaction(db):
+    commit_sensitive = [False]
+    try:
+        with db:
+            yield commit_sensitive
+    except BaseException as error:
+        if commit_sensitive[0]:
+            raise AliasCommitUnknown("alias_commit_unknown: journal retained; inspect receipt and config before rollback") from error
+        raise
+
+
 def parse_command(raw):
     if len(raw) > MAX_COMMAND_BYTES:
         raise ValueError("command_too_large")
@@ -197,7 +213,7 @@ def apply_command(ledger, req, *, cfg=None, data_dir=None):
         from mcs_operations import prepare_update_pins
         req = prepare_update_pins(req)
     # SQLite exits first, so a failed COMMIT still unwinds file promotions.
-    with ExitStack() as filesystem_changes, db:
+    with ExitStack() as filesystem_changes, _receipt_transaction(db) as commit_sensitive:
         db.execute("BEGIN IMMEDIATE")
         found, old = replay_receipt(db, req["command_id"], digest)
         if found:
@@ -240,6 +256,8 @@ def apply_command(ledger, req, *, cfg=None, data_dir=None):
         db.execute("INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
                    (req["command_id"], digest, pid, rid, receipt["outcome"],
                     canonical(receipt).decode(), now))
+        if not error and req.get("cmd") in ("ops.drug_alias_apply", "ops.drug_alias_rollback"):
+            commit_sensitive[0] = True
     return receipt
 
 

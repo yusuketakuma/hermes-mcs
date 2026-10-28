@@ -14,7 +14,7 @@ import stat
 import config_edit
 import drug_map
 import safe_io
-from mcs_requests import canonical, payload_hash, valid_uuid
+from mcs_requests import AliasCommitUnknown, canonical, payload_hash, valid_uuid
 from mcs_util import valid_hash
 from safe_io import atomic_write, fsync_dir
 
@@ -165,14 +165,17 @@ def _switch(config_path, cfg, raw, base, before, after, journal, record, *, reco
     with config_edit._edit_lock(config_path):
         if _config_snapshot(config_path)[2] != base:
             raise ValueError("alias_config_changed")
+        desired = {**cfg, "drug_map": after}
+        body = canonical(desired)
+        if len(body) > drug_map.MAX_BYTES:
+            raise ValueError("alias_config_size")
         if not recovery:
             safe_io.publish_new_bytes(journal, canonical(record))
         switched = False
         try:
-            desired = {**cfg, "drug_map": after}
             def write_checked(stream):
                 nonlocal switched
-                stream.write(canonical(desired).decode())
+                stream.write(body.decode())
                 if _config_snapshot(config_path)[2] != base:
                     raise ValueError("alias_config_changed")
                 # A later fsync error may occur after the rename.
@@ -181,6 +184,9 @@ def _switch(config_path, cfg, raw, base, before, after, journal, record, *, reco
             if _config_snapshot(config_path)[0] != desired:
                 raise RuntimeError("alias_recovery_required")
             yield
+        except AliasCommitUnknown:
+            # COMMIT may have succeeded; keep both config and the journal for inspection.
+            raise
         except BaseException:
             if switched:
                 current, _ = private_json(config_path)
