@@ -106,7 +106,7 @@ def _live_request_budget(home):
     return limit
 
 
-def _reserve_live_usage(home, operation, expected_code_stamp, body, timeout):
+def _reserve_live_usage(home, operation, expected_code_stamp, body, timeout, config_seen=False):
     """Own a short writer interval for one HTTP reservation, never its transport."""
     from ledger import Ledger
     from semantic_runtime import manual_usage_reserver
@@ -122,6 +122,9 @@ def _reserve_live_usage(home, operation, expected_code_stamp, body, timeout):
         path = home / "data" / "ledger.db"
         if path.is_symlink() or not path.is_file():
             raise JevError("budget_exceeded", "usage_ledger_unavailable")
+        if config_seen and not os.path.lexists(home / "config.json"):
+            # its run window and cap were read at start; a vanished file is not "no limits"
+            raise JevError("budget_exceeded", "semantic_config_unreadable")
         limit = _live_request_budget(home)
         with closing(Ledger(str(path))) as ledger:
             reserve = manual_usage_reserver(ledger, operation=operation, daily_request_budget=limit,
@@ -149,9 +152,10 @@ def live_client(key, *, operation, root=None, **options):
     if path.is_symlink() or not path.is_file():
         raise JevError("budget_exceeded", "usage_ledger_unavailable")
     expected_code_stamp = code_stamp()
+    config_seen = os.path.lexists(home / "config.json")
     _live_request_budget(home)
     def reserve(body, timeout):
-        return _reserve_live_usage(home, operation, expected_code_stamp, body, timeout)
+        return _reserve_live_usage(home, operation, expected_code_stamp, body, timeout, config_seen)
     yield bind_jev(JevClient(api_key=key, **options), lambda stage: None, reserve,
                    config_path=home / "config.json")
 

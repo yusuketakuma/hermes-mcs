@@ -150,14 +150,23 @@ def blocking_errors(errors):
     return [error for error in errors if error != COST_LIMIT_REQUIRED]
 
 
+# A period budget sums cloud_usage rows since window_start, and maintenance prunes
+# them after CLOUD_USAGE_KEEP_S (62 days); one day short of that keeps every counted row.
+WINDOW_HISTORY_S = 61 * 86400
+
+
 def setting_block_reason(settings, *, now=None):
-    """A stop decided by normalized settings alone: outside the configured run window."""
+    """A stop decided by normalized settings alone: outside the configured run window,
+    or a period older than the usage history its budget is counted from."""
     now = time.time() if now is None else now
     until, start = settings.get("until"), settings.get("window_start")
     if until is not None and now >= until_epoch(until):
         return "expired"
     if start is not None and now < until_epoch(start):
         return "not_started"
+    if (start is not None and settings.get("window_budget_usd") is not None
+            and now - until_epoch(start) > WINDOW_HISTORY_S):
+        return "window_history_unverified"
     return None
 
 

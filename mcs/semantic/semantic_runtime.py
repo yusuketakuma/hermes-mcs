@@ -120,6 +120,9 @@ def config_generation(cfg: dict) -> str:
     for section, keys in _GENERATION_EXEMPT.items():
         if isinstance(cfg.get(section), dict):
             cfg[section] = {k: v for k, v in cfg[section].items() if k not in keys}
+            if not cfg[section]:
+                # first adding only an exempt key must not look like a new section
+                del cfg[section]
     return payload_hash(cfg)
 
 
@@ -610,8 +613,9 @@ def _check_reservation_day(ledger, artifact_id, day):
 
 def usage_reserver(ledger, token: JobToken, *, kind: str,
                    model: str, project_id: int, message_id: int,
-                   daily_request_budget: int | None = None):
-    """Build a durable one-request reservation written before POST."""
+                   daily_request_budget: int | None = None, config_path=None):
+    """Build a durable one-request reservation written before POST; config_path
+    names the config whose semantic.until gates it (default: this MCS root)."""
     if daily_request_budget is not None and (
             type(daily_request_budget) is not int or daily_request_budget < 0):
         raise ValueError("semantic_daily_budget_invalid")
@@ -626,7 +630,7 @@ def usage_reserver(ledger, token: JobToken, *, kind: str,
         def check():
             nonlocal day
             day = int(_jst_day_start(time.time()))
-            _daily_cap_check(ledger, daily_request_budget, retryable=True)
+            _daily_cap_check(ledger, daily_request_budget, retryable=True, config_path=config_path)
             if int(_jst_day_start(time.time())) != day:
                 from semantic_jev import JevError
                 raise JevError("budget_exceeded", "reservation_day_changed", retryable=True)

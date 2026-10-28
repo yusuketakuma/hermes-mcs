@@ -121,6 +121,10 @@ def cloud_setting_warnings(cfg: dict, root) -> list[str]:
                    "再開する場合はuntilを変更するか削除してください。エラーコード: expired")
     elif window == "not_started":
         out.append("cloud_llm.window_startの開始前のため、Anthropicへの送信はまだ始まりません。エラーコード: not_started")
+    elif window == "window_history_unverified":
+        out.append("期間予算の開始から61日を過ぎ、使用額の記録が保存期間から外れるため、Anthropicへの送信を止めています。"
+                   "`--period-usd 金額 --from 日付`で61日以内の期間に設定し直してください。"
+                   "エラーコード: window_history_unverified")
     block = cfg.get("semantic") if isinstance(cfg, dict) else None
     if isinstance(block, dict):
         if block.get("mode", "off") != "off" and "daily_request_budget" not in block:

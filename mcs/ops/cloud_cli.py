@@ -618,20 +618,10 @@ def _time_value(text, *, end):
     return text
 
 
-def _current_window_start():
-    """The saved period start, or None when there is none or the config cannot be read."""
-    import config_edit
-    try:
-        block = config_edit.read_strict().get("cloud_llm")
-    except (OSError, ValueError, RecursionError):
-        return None
-    return block.get("window_start") if isinstance(block, dict) else None
-
-
 def budget_command(args):
     """Show or set the Anthropic daily/monthly/period cost caps and the run window in config.json."""
     try:
-        changes = {}
+        changes, defaults = {}, {}
         for option, key in _BUDGET_KEYS.items():
             text = getattr(args, option, None)
             if text is not None:
@@ -645,10 +635,10 @@ def budget_command(args):
                 changes["cloud_llm.window_start"] = None
             elif start is not None:
                 changes["cloud_llm.window_start"] = _time_value(start, end=False)
-            elif not _current_window_start():
+            else:
                 # A new period starts now. Changing the amount of an existing period
-                # keeps its start, so spending already counted is never forgotten.
-                changes["cloud_llm.window_start"] = datetime.now(policy.JST).replace(microsecond=0).isoformat()
+                # keeps its start (decided under the edit lock), so counted spending stays.
+                defaults["cloud_llm.window_start"] = datetime.now(policy.JST).replace(microsecond=0).isoformat()
         elif start is not None:
             # Move an existing period's start; without a period budget validation refuses the save.
             changes["cloud_llm.window_start"] = _time_value(start, end=False)
@@ -663,7 +653,7 @@ def budget_command(args):
     import config_edit
     try:
         if changes:
-            cfg, cloud_errors = config_edit.apply(changes)
+            cfg, cloud_errors = config_edit.apply(changes, defaults)
             if cloud_errors:
                 print("設定に誤りがあるため予算を保存していません。mcs_setup.py check で確認してください")
                 return 1

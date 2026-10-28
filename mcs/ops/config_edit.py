@@ -70,9 +70,10 @@ def _edit_lock(path=None):
         os.close(fd)
 
 
-def apply(changes: dict) -> tuple[dict | None, list[str]]:
+def apply(changes: dict, defaults: dict | None = None) -> tuple[dict | None, list[str]]:
     """Validate the whole edited config and atomically save against its locked base.
 
+    ``defaults`` are set only where the locked config has no value yet.
     Every known schema error blocks publication, including errors outside
     the edited section.
     """
@@ -91,6 +92,13 @@ def apply(changes: dict) -> tuple[dict | None, list[str]]:
             else:
                 block[key] = value
             cfg[section] = block
+        for dotted, value in (defaults or {}).items():
+            section, key = dotted.split(".", 1)
+            block = cfg.get(section, {})
+            if not isinstance(block, dict):
+                raise ValueError("config_section_invalid")
+            if block.get(key) is None:
+                cfg[section] = {**block, key: value}
         errors, _ = validate_config(cfg)
         if errors:  # unknown keys remain warnings and are preserved verbatim
             return None, errors

@@ -60,6 +60,7 @@ python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd none --until none    
 - Jevは終了時刻を過ぎると、新しい要求（再試行と手動の評価ツールを含む）を予約しません。新着投稿の保存、既存の通知、送信中の結果の保存はそのまま続きます。Jevの開始時刻と期間予算はありません。Jevの量は1日の要求件数で制限します。
 - 時刻は日付（`2026-10-30`）か、時差付きのISO 8601形式（`2026-10-30T18:00:00+09:00`）で指定します。`config.json` に直接書く場合は、`cloud_llm.window_start`・`window_budget_usd`・`until` と `semantic.until` です。
 - 期間予算は、予約時の最大額で判定します。結果が戻ると実際の額で数え直すため、表示額は進行中の予約の分だけ多く見えることがあります。
+- 期間予算の期間は、開始から61日までです。使用額の記録は62日で削除されるため、開始から61日を過ぎると使用額を確かめられないとして送信を止め、`check` に `window_history_unverified` と表示します。
 - `cloud-llm plan`・`estimate` の `period_budget` に、期間の開始・予算・その時点の使用額（予約中の最大額を含む）を表示します。
 
 費用の上限は、次のコマンドで表示・設定できます。CodexやClaude Codeからもそのまま実行でき、値は `config.json` に保存されます。

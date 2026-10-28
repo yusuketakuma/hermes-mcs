@@ -263,7 +263,8 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
 
     unevaluated = None
     req0 = jev_client.requests_made
-    client = runtime.bind_jev(jev_client, guard, reserve_fn, transport=jev_transport, timing=jev_timing)
+    client = runtime.bind_jev(jev_client, guard, reserve_fn, transport=jev_transport, timing=jev_timing,
+                              config_path=cfg_path)
     try:
         out = (jev.evaluate_chunked(client, state, questions, deadline,
                                     scfg["max_questions_per_request"])

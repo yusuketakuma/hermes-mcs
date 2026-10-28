@@ -841,7 +841,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     jev_client = runtime.bind_jev(
         jev_client, guard, reserve_fn,
         cutoff=transport_deadline if lane == "backlog" else None,
-        transport=jev_transport, timing=jev_timing)
+        transport=jev_transport, timing=jev_timing, config_path=cfg_path)
     llm_fn = runtime.guarded_llm(
         # a backlog worker owns its slot: one long-output call may use the
         # transport deadline instead of burning 600 s per attempt (2026-10-10)
@@ -2614,7 +2614,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 reserve_fn = runtime.usage_reserver(
                     ledger, token, kind=KIND_USAGE, model=jev.JEV_MODEL,
                     project_id=job["project_id"], message_id=job["message_id"],
-                    daily_request_budget=lane_cap)
+                    daily_request_budget=lane_cap, config_path=cfg_path)
             # only now has the job cleared every gate — the persisted
             # fairness counters count jobs that were actually served, not
             # selections lost to circuit/budget/pause breaks (T14)
