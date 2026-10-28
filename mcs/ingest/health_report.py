@@ -682,6 +682,9 @@ def build_health(db, result: dict, status: str,
         coll['collection'] = 'incomplete'
     free_mb = attachment_free_mb()
     cards_health = notify_scope.health_cards(db, cfg)
+    incomplete_parts = notify_scope.incomplete_parts_health(db, now, cfg)
+    if incomplete_parts['total']:
+        notify_state = "incomplete"
     # Itemized attention separates synthetic job and delivery populations;
     # an aggregate status alone cannot identify which saved work needs review.
     # Three separate signals: fresh failures (24h), due-but-never-
@@ -798,6 +801,7 @@ def build_health(db, result: dict, status: str,
             ("notification_parked", bool(notify_res.get("parked"))),
             ("notification_held", bool(held)),
             ("notification_pending", bool(outbox["pending"])),
+            ("notification_parts_incomplete", bool(incomplete_parts["total"])),
             ("disk_low", disk_low),
             ("backup_deferred_deadline", backup_deferred),
         ) if present] + stalls
@@ -824,6 +828,7 @@ def build_health(db, result: dict, status: str,
                    "held_reasons": held_reasons,
                    "retired_held": retired_held,
                    "held_pinned_attachments": held_pins,
+                   "incomplete_parts": incomplete_parts,
                    "part_holds": part_holds_health(db, now)},
         "semantic_jobs": {"pending": sem["c"],
                           "oldest_age_s": (round(now - sem["o"], 1)

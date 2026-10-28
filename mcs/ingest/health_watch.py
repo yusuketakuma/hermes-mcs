@@ -44,7 +44,7 @@ REALERT_S = 4 * 3600        # unchanged bad state re-alerts every 4h
 # health observations (distinct health_at); every other reason alerts at once.
 TRANSIENT_REASONS = frozenset({"stage_errors", "run_deadline_exceeded", "collection_incomplete",
                                "notification_deferred", "notification_parked",
-                               "notification_pending"})
+                               "notification_pending", "notification_parts_incomplete"})
 STREAK_ALERT = 3
 DELIVERY_RETRY_S = 60       # only provably unsent alerts may retry
 UNKNOWN_HISTORY = 50        # retained uncertain-delivery records
@@ -217,6 +217,13 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     pending = notify.get("pending")
     report["notify_pending"] = (pending if finite_number(pending)
                                 and pending >= 0 else None)
+    parts = notify.get('incomplete_parts')
+    states = parts.get('by_state') if isinstance(parts, dict) else None
+    report['notify_incomplete_parts'] = (
+        parts['total'] if isinstance(states, dict)
+        and set(states) == {'pending', 'unknown', 'not_sent', 'held'}
+        and _count(parts.get('total')) and all(_count(n) for n in states.values())
+        and sum(states.values()) == parts['total'] else None)
     held = notify.get("held_reasons")
     report["held_reasons"] = (
         held if isinstance(held, dict)
@@ -676,6 +683,8 @@ _REASON_JA = {
                           "python3 mcs/ops/mcs_setup.py doctor で保留理由を確認"),
     "notification_pending": ("送信待ちの通知があります",
                              "doctor で待ちの理由と通知先・gateway の稼働を確認"),
+    "notification_parts_incomplete": ("本文・添付などの送信完了を確認できません",
+                                      "配送記録と通知先を照合。送信結果が不明な部品は自動で再送しません"),
     "disk_low": ("ディスクの空き容量が不足しています", "不要なファイルを削除するか保存先を広げる"),
     "card_delivery_stalled": ("カードの配送が30分以上止まっています",
                               "slack_profile / profile と worker_started の記録を確認。設定が正しくworkerが停止している場合は hermes gateway restart"),
@@ -896,6 +905,9 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             age = _hours(oldest.get("notify"))
             extra = ((f" {int(n)}件" if finite_number(n) else "") + (f"（最古 {age}）" if age else "")
                      + _wait_summary(report.get("notify_wait"), report.get("observations_recorded", False)))
+        elif base == "notification_parts_incomplete":
+            n = report.get('notify_incomplete_parts')
+            extra = f" {n}件" if _count(n) else ""
         elif base in ("backup_not_verified", "backup_deferred_deadline"):
             extra = ("" if report.get("observations_recorded")
                      else _backup_local_text(report.get("backup_local")))

@@ -306,6 +306,38 @@ def retired_transports(cfg) -> tuple[str, ...]:
     return tuple(t for t in SUPPORTED_TRANSPORTS if t != active)
 
 
+def incomplete_parts_health(db, now: float, cfg=None) -> dict:
+    """Count unfinished parts on each live card's latest delivered render."""
+    retired = retired_transports(cfg)
+    live = (f" AND r.transport NOT IN ({','.join('?' * len(retired))})"
+            if retired else "")
+    row = db.execute(
+        "SELECT COUNT(*) total,COUNT(DISTINCT r.card_id) cards,"
+        "COALESCE(SUM(p.state='pending'),0) pending,"
+        "COALESCE(SUM(p.state='unknown'),0) unknown,"
+        "COALESCE(SUM(p.state='not_sent'),0) not_sent,"
+        "COALESCE(SUM(p.state='held'),0) held,"
+        "MIN(COALESCE(p.updated_at,r.created_at)) oldest "
+        "FROM notification_render_parts p "
+        "JOIN notification_renders r USING(delivery_id) "
+        "JOIN notification_cards c USING(card_id) "
+        "WHERE r.state='delivered' AND c.revoked_at IS NULL "
+        "AND c.delivery_state NOT IN ('revoked','message_deleted') "
+        "AND r.render_rev=(SELECT MAX(render_rev) FROM notification_renders "
+        "                  WHERE card_id=r.card_id) "
+        "AND p.kind!='card' AND p.state IN ('pending','unknown','not_sent','held') "
+        # An unavailable source attachment has its visible failure caption;
+        # it is not an unconfirmed delivery of a file we could send.
+        "AND NOT (p.kind='attachment_part' AND p.state='not_sent' "
+        "         AND p.error_code IS 'attachment_unavailable')" + live,
+        retired).fetchone()
+    oldest = _finite(row['oldest'])
+    return {"total": row['total'], "cards": row['cards'],
+            "by_state": {state: row[state] for state in ('pending', 'unknown', 'not_sent', 'held')},
+            "oldest_age_s": max(0.0, now - oldest) if oldest is not None else None,
+            "observed_at": now}
+
+
 def layout_migration_counts(db) -> list:
     """Read-only counts of retained layouts and cards blocked by unknown parts."""
     return [dict(row) for row in db.execute("""
