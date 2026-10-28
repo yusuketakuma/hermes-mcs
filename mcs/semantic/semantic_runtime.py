@@ -23,6 +23,38 @@ DEFAULT_ATTEMPT_LIMIT = 6
 MAX_SQL_INTEGER = 2**63 - 1
 
 
+def admissible_job_sql(*, check_scope=True) -> str:
+    from inference_version import LEGACY_VERSION, current_meta_pred
+
+    payload = 'fetch_jobs.payload'
+    version = (f"({current_meta_pred(payload)} OR "
+               f"{current_meta_pred(payload, target=LEGACY_VERSION)})")
+    source = (" OR NOT EXISTS (SELECT 1 FROM messages source WHERE "
+              "source.project_id=fetch_jobs.project_id AND source.message_id=target.value AND "
+              "(source.message_id=fetch_jobs.message_id OR source.parent_id=fetch_jobs.message_id))"
+              if check_scope else "")
+    return (f"(CASE WHEN typeof(fetch_jobs.attempts)='integer' AND fetch_jobs.attempts>=0 "
+            f"AND typeof({payload})='text' AND json_valid({payload}) THEN "
+            f"CASE WHEN json_type({payload})='object' THEN "
+            f"CASE WHEN {version} AND NOT EXISTS (SELECT 1 FROM json_tree({payload}) "
+            "WHERE key IS NOT NULL GROUP BY parent,key HAVING COUNT(*)>1) "
+            f"AND NOT EXISTS (SELECT 1 FROM json_tree({payload}) node WHERE "
+            "(node.type='real' AND (node.value>1.7976931348623157e308 "
+            "OR node.value< -1.7976931348623157e308)) "
+            "OR (node.type='integer' AND typeof(node.value)!='integer')) "
+            f"AND NOT EXISTS (WITH RECURSIVE nodes(id,parent) AS (SELECT id,parent FROM json_tree({payload})), "
+            "depths(id,depth) AS (SELECT id,0 FROM nodes WHERE parent IS NULL UNION ALL "
+            "SELECT nodes.id,depths.depth+1 FROM nodes JOIN depths ON nodes.parent=depths.id "
+            "WHERE depths.depth<=128) SELECT 1 FROM depths WHERE depth>128) THEN "
+            f"CASE WHEN json_type({payload},'$.targets') IS NULL THEN 1 "
+            f"WHEN json_type({payload},'$.targets')='array' THEN "
+            f"CASE WHEN json_array_length({payload},'$.targets')>0 THEN "
+            f"NOT EXISTS (SELECT 1 FROM json_each({payload},'$.targets') target "
+            "WHERE target.type!='integer' OR typeof(target.value)!='integer' OR target.value<=0"
+            + source + ") "
+            "ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END ELSE 0 END)")
+
+
 @dataclass(frozen=True)
 class JevReservation:
     """The accounting day and artifact of one committed Jev reservation."""
@@ -166,9 +198,9 @@ def job_matches(ledger, token: JobToken) -> bool:
     if not is_current(parse_payload({'payload': token.payload_raw})):
         return False
     row = ledger.db.execute(
-        "SELECT job_id,kind,project_id,message_id,state,attempts,payload "
+        "SELECT job_id,kind,project_id,message_id,state,attempts,payload," + admissible_job_sql(check_scope=False) + " AS admissible "
         "FROM fetch_jobs WHERE job_id=?", (token.job_id,)).fetchone()
-    if row is None:
+    if row is None or not row['admissible'] or row['payload'] != token.payload_raw:
         return False
     current = JobToken.from_row(row)
     return (current.kind == token.kind

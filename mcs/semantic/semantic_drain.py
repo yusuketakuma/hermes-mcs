@@ -1698,13 +1698,19 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
             break
         state = _reprocess_target_state(ledger, row, scfg)
         replay = None
-        if state in ('pending', 'repair_required', 'held', 'failed'):
+        if state in ('current', 'pending', 'repair_required', 'held', 'failed'):
             root = row['parent_id'] or row['message_id']
             key = (row['project_id'], root)
+            old = ledger.db.execute('SELECT payload,state,' + runtime.admissible_job_sql() + ' AS admissible FROM fetch_jobs WHERE kind=? '
+                                    'AND project_id=? AND message_id=?', (JOB_KIND, *key)).fetchone()
+            if old is not None and not old['admissible']:
+                planned.append((row, 'held', None))
+                continue
+            if state == 'current':
+                planned.append((row, state, None))
+                continue
             if key not in sources:
                 sources[key] = ledger._semantic_source_generation(*key)
-            old = ledger.db.execute('SELECT payload,state FROM fetch_jobs WHERE kind=? '
-                                    'AND project_id=? AND message_id=?', (JOB_KIND, *key)).fetchone()
             pl = loads_dict(old[0]) if old is not None else {}
             if (not is_current(pl)
                     or pl.get('execution_contract') == 1 and pl.get('execution_generation') != generation
@@ -1776,17 +1782,25 @@ def _merge_long_defers(ledger, sched: dict, seen: dict) -> None:
     if not current:
         sched.pop("long_defers", None)
         return
-    alive = {}
+    alive, held = {}, set()
     for row in ledger.db.execute(
-            "SELECT job_id,payload FROM fetch_jobs WHERE kind=? "
+            "SELECT job_id,payload," + runtime.admissible_job_sql() + " AS admissible FROM fetch_jobs WHERE kind=? "
             "AND state='pending' AND job_id IN (SELECT value FROM json_each(?))",
             (JOB_KIND, json.dumps(sorted(int(k) for k in current)))):
         key = str(row["job_id"])
+        if not row['admissible']:
+            alive[key] = current[key]
+            held.add(key)
+            continue
         generation = runtime.payload_generation(runtime.parse_payload(row))
         if current[key]["g"] == generation:
             alive[key] = current[key]
-    while len(alive) > _LONG_DEFERS_MAX:
-        alive.pop(min(alive, key=int))
+    # Held evidence must not displace the retry budget of runnable jobs.
+    active = set(alive) - held
+    while len(active) > _LONG_DEFERS_MAX:
+        oldest = min(active, key=int)
+        alive.pop(oldest)
+        active.remove(oldest)
     if alive:
         sched["long_defers"] = alive
     else:
@@ -1796,7 +1810,7 @@ def _merge_long_defers(ledger, sched: dict, seen: dict) -> None:
 _ARCHIVED_JOB = ("EXISTS (SELECT 1 FROM patients p "
                  "WHERE p.project_id=fetch_jobs.project_id AND p.is_archived)")
 # an arrival-seeded job: a real notification event spawned it
-_ELIGIBLE_SQL = "json_valid(payload) AND COALESCE(json_extract(payload,'$.eligible'),0)=1"
+_ELIGIBLE_SQL = "CASE WHEN json_valid(payload) THEN COALESCE(json_extract(payload,'$.eligible'),0)=1 ELSE 0 END"
 
 
 def _class_scope(archived: bool, excluded) -> tuple[str, str]:
@@ -1805,6 +1819,7 @@ def _class_scope(archived: bool, excluded) -> tuple[str, str]:
              + ' AND (' + current_meta_pred('fetch_jobs.payload')
              + ' OR (' + current_meta_pred('fetch_jobs.payload', target=LEGACY_VERSION)
              + " AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.eligible')=1 END))"
+             + " AND (fetch_jobs.kind!='semantic' OR " + runtime.admissible_job_sql() + ")"
              + " AND job_id NOT IN (SELECT value FROM json_each(?))")
     return scope, json.dumps(sorted(excluded))
 
@@ -1828,15 +1843,19 @@ def _adopt_pending_arrival(ledger, job):
     ledger.db.execute('BEGIN IMMEDIATE')
     with ledger.db:
         current = ledger.db.execute('SELECT * FROM fetch_jobs WHERE job_id=?', (job['job_id'],)).fetchone()
-        if (current is None or current['payload'] != job['payload'] or current['state'] != 'pending'
+        if (current is None or any(current[key] != job[key] for key in
+                ('kind', 'project_id', 'message_id', 'state', 'attempts', 'payload', 'updated_at'))
+                or current['state'] != 'pending'
                 or ledger.db.execute('PRAGMA data_version').fetchone()[0] != version):
             return None
         if origin is None:
             ledger.db.execute('UPDATE fetch_jobs SET next_try=? WHERE job_id=?',
                               (time.time() + 300, job['job_id']))
             return None
-        ledger.semantic_seed_tx(job['project_id'], targets,
+        blocked = ledger.semantic_seed_tx(job['project_id'], targets,
             {'source': 'unread', 'event_id': origin}, _source_generation=source)
+        if blocked:
+            return None
     return ledger.db.execute('SELECT * FROM fetch_jobs WHERE job_id=?', (job['job_id'],)).fetchone()
 
 
@@ -2756,10 +2775,10 @@ def revive_failed(ledger, now: float | None = None) -> dict:
     out = {"revived": 0, "skipped_cap": 0}
     # capped jobs are excluded BEFORE the LIMIT — selecting them first
     # let a capped prefix starve every eligible job behind it
-    capped = ("(CASE WHEN json_valid(payload) AND "
+    capped = ("(CASE WHEN json_valid(payload) THEN CASE WHEN "
               "json_type(payload,'$.auto_retry')='integer' "
-              "THEN json_extract(payload,'$.auto_retry') ELSE 0 END)")
-    where = "WHERE kind=? AND state='failed' AND updated_at<=? AND "
+              "THEN json_extract(payload,'$.auto_retry') ELSE 0 END ELSE 0 END)")
+    where = "WHERE kind=? AND state='failed' AND updated_at<=? AND " + runtime.admissible_job_sql() + " AND "
     rows = ledger.db.execute(
         "SELECT job_id,attempts,payload,updated_at FROM fetch_jobs " + where
         + capped + "<? ORDER BY updated_at LIMIT ?",

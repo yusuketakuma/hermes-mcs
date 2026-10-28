@@ -225,13 +225,16 @@ def _project_exists(view, project_id: int) -> bool:
 
 
 def _semantic_job(view, requests, project_id: int, job_id: int, additional_attempts=None):
+    from semantic_runtime import admissible_job_sql
     row = view.db.execute(
-        "SELECT job_id,kind,project_id,state,attempts,payload "
+        "SELECT job_id,kind,project_id,state,attempts,payload," + admissible_job_sql() + " AS admissible "
         "FROM fetch_jobs WHERE project_id=? AND job_id=? AND kind='semantic'",
         (project_id, job_id),
     ).fetchone()
     if row is None:
         return None, "job_not_found", None
+    if not row['admissible']:
+        return None, "invalid_payload", None
     try:
         parsed = requests.parse_command((row["payload"] or "{}").encode("utf-8"))
     except (ValueError, TypeError, UnicodeError, RecursionError):

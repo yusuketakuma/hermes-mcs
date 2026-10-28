@@ -122,13 +122,16 @@ def _apply_scan_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
 
 
 def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
+    from semantic_runtime import admissible_job_sql
     row = db.execute(
-        "SELECT job_id,kind,project_id,state,attempts,payload "
+        "SELECT job_id,kind,project_id,state,attempts,payload," + admissible_job_sql() + " AS admissible "
         "FROM fetch_jobs WHERE job_id=? AND kind=? AND project_id=?",
         (req["job_id"], _SEMANTIC_JOB, req["project_id"]),
     ).fetchone()
     if row is None:
         return "job_not_found", {}
+    if not row['admissible']:
+        return "invalid_payload", {"job_id": row["job_id"]}
     try:
         payload = json.loads(row["payload"] or "{}")
     except (ValueError, TypeError, RecursionError):

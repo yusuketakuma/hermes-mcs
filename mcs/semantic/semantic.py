@@ -75,9 +75,9 @@ def seed(ledger, message_id: int, origin: str = "replay",
         # out of the rollout scope — seeding it would only churn in
         # drain-time defers
         return None
-    ledger.semantic_seed(row["project_id"], [message_id],
-                         {"source": origin, "notification_free": True})
-    return row["r"]
+    blocked = ledger.semantic_seed(row["project_id"], [message_id],
+                                  {"source": origin, "notification_free": True})
+    return None if row["r"] in (blocked or ()) else row["r"]
 
 
 def _canonical_readiness(ledger, cfg: dict | None) -> dict:

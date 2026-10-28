@@ -1747,9 +1747,13 @@ class Ledger:
         ROOT so one job covers a post plus its replies; a new arrival on
         an evaluated thread revives the job as a new input generation."""
         from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
+        from semantic_runtime import admissible_job_sql
+        blocked = set()
         # Pause holds execution, not durable intake; OFF callers do not seed.
         if not message_ids:
-            return
+            return None
+        if not self.db.in_transaction:
+            self.db.execute('BEGIN IMMEDIATE')
         q = ("SELECT message_id,COALESCE(parent_id,message_id) r "
              "FROM messages WHERE project_id=? AND message_id IN ("
              + ",".join("?" * len(message_ids)) + ")")
@@ -1759,9 +1763,12 @@ class Ledger:
         now = time.time()
         for root, ids in roots.items():
             existing = self.db.execute("""
-              SELECT job_id,state,attempts,payload FROM fetch_jobs
+              SELECT job_id,state,attempts,payload,""" + admissible_job_sql() + """ AS admissible FROM fetch_jobs
               WHERE kind='semantic' AND project_id=? AND message_id=?
             """, (project_id, root)).fetchone()
+            if existing is not None and not existing['admissible']:
+                blocked.add(root)
+                continue
             eligible = isinstance(origin, dict) \
                 and origin.get("event_id") is not None
             notification_free = isinstance(origin, dict) \
@@ -1775,7 +1782,7 @@ class Ledger:
                 old_pl = loads_dict(existing["payload"] or "{}") or {}
                 stored_targets = old_pl.get("targets")
                 old_targets = ({x for x in stored_targets if type(x) is int}
-                               if isinstance(stored_targets, list) else set())
+                               if isinstance(stored_targets, list) else {root})
                 old_origin = old_pl.get("origin")
                 old_eligible = bool(old_pl.get("eligible"))
                 old_notification_free = bool(old_pl.get(
@@ -1890,13 +1897,14 @@ class Ledger:
                 """, ("semantic", project_id, root, None,
                       json.dumps(payload, ensure_ascii=False, sort_keys=True),
                       now, now, now))
+        return blocked or None
 
     def semantic_seed(self, project_id: int, message_ids: list,
                       origin: dict):
         """Standalone seed for explicit replay — same job shape as the
         ingest path, committed on its own (spec §18.5)."""
         with self.db:
-            self.semantic_seed_tx(project_id, message_ids, origin)
+            return self.semantic_seed_tx(project_id, message_ids, origin)
 
     def pending_reply_jobs(self, project_id: int) -> int:
         """Live reply-fetch work only. 'failed' rows are terminal

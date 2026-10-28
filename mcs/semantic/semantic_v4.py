@@ -480,8 +480,10 @@ def _seed_rebuild(ledger, scfg, pid: int, mid: int, meta: dict):
     state = ledger.job_state(JOB_KIND, pid, row["r"]) if row else None
     if state in ("failed", "pending"):
         return f"job_{state}"
-    ledger.semantic_seed_tx(pid, [mid], {"source": "hint_rebuild",
-                                          "notification_free": True})
+    blocked = ledger.semantic_seed_tx(pid, [mid], {"source": "hint_rebuild",
+                                                    "notification_free": True})
+    if row and row['r'] in (blocked or ()):
+        return "job_invalid_payload"
     return None
 
 
