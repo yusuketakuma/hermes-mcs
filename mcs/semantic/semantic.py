@@ -41,6 +41,7 @@ from contextlib import closing
 import json
 import math
 import os
+import sqlite3
 import sys
 import time
 
@@ -171,7 +172,34 @@ def status_report(ledger, cfg: dict | None = None) -> dict:
         usage = {"jev_requests_today": semantic_store.jev_usage_today(ledger)}
     except ValueError:
         usage = {"jev_requests_today": None, "jev_usage_error": "semantic_usage_invalid"}
+    try:
+        index = next((r for r in ledger.db.execute('PRAGMA main.index_list(artifacts)')
+                      if r[1] == 'idx_semantic_intake_hold_root'), None)
+        keys = [r[2] for r in ledger.db.execute(
+            'PRAGMA main.index_xinfo(idx_semantic_intake_hold_root)') if r[5]]
+        sql = ledger.db.execute(
+            "SELECT sql FROM main.sqlite_schema WHERE type='index' "
+            "AND name='idx_semantic_intake_hold_root'").fetchone()
+        expected = ("create index idx_semantic_intake_hold_root on artifacts"
+                    "(kind, project_id, model) where kind='semantic_intake_hold_v1'")
+        normalized = ' '.join(sql[0].lower().split()) if sql and isinstance(sql[0], str) else ''
+        if (index is None or index[4] != 1 or keys != ['kind', 'project_id', 'model']
+                or normalized != expected):
+            raise sqlite3.DatabaseError('semantic_hold_index_unverified')
+        held = ledger.db.execute(
+            "SELECT 1 FROM main.artifacts INDEXED BY idx_semantic_intake_hold_root "
+            "WHERE kind='semantic_intake_hold_v1' LIMIT 1").fetchone()
+        intake_hold = 'present' if held else 'none_observed'
+    except sqlite3.Error:
+        intake_hold = 'unverified'
+    try:
+        import semantic_intake_hold
+        unstored = semantic_intake_hold.unstored_epoch(ledger.db)
+        intake_unstored = 'present' if unstored else 'none_observed'
+    except sqlite3.Error:
+        intake_unstored = 'unverified'
     return {"semantic_jobs": jobs, "reprocess_held": reprocess_held,
+            "intake_hold": intake_hold, "intake_unstored": intake_unstored,
             "audit_statuses": history["audit_statuses"],
             "canonical_readiness": _canonical_readiness(ledger, cfg),
             "audit_statuses_scope": "history", "history": history,
@@ -193,7 +221,10 @@ def main() -> int:
                     help="process due semantic jobs now (writer lock)")
     actions.add_argument("--replay", type=int, metavar="MESSAGE_ID",
                     help="seed one finite evaluation job (writer lock)")
+    actions.add_argument("--intake-preview", nargs=2, type=int, metavar=("PROJECT_ID", "ROOT_ID"),
+                    help="read a bounded page of locally held intake identities")
     ap.add_argument("--max-jobs", type=int, default=4)
+    ap.add_argument("--after-hold-id", type=int, default=0)
     ap.add_argument("--offline", action="store_true",
                     help="forbid network; status and local replay seeding only")
     args = ap.parse_args()
@@ -201,9 +232,11 @@ def main() -> int:
         ap.error("max-jobs must be between 1 and 32")
     if args.replay is not None and not 0 < args.replay < 2**63:
         ap.error("replay message ID must be a positive SQLite integer")
+    if not 0 <= args.after_hold_id < 2**63 or args.after_hold_id and args.intake_preview is None:
+        ap.error("after-hold-id requires intake-preview and must be nonnegative")
     if args.offline and args.drain:
         ap.error("offline mode cannot drain model jobs")
-    if args.status:
+    if args.status or args.intake_preview is not None:
         try:
             reader = LedgerReader(DB)
         except Exception as e:
@@ -211,8 +244,17 @@ def main() -> int:
                               "error": type(e).__name__}))
             return 1
         with closing(reader):
-            print(json.dumps(status_report(reader, load_config(CONF_PATH)),
-                             ensure_ascii=False))
+            if args.intake_preview is not None:
+                import semantic_intake_hold
+                try:
+                    report = semantic_intake_hold.preview_root(
+                        reader.db, *args.intake_preview, after=args.after_hold_id)
+                except (ValueError, sqlite3.Error):
+                    print(json.dumps({'ok': False, 'error': 'intake_preview_unverified'}))
+                    return 1
+            else:
+                report = status_report(reader, load_config(CONF_PATH))
+            print(json.dumps(report, ensure_ascii=False))
         return 0
     lock_fd = acquire_run_lock()
     if lock_fd is None:

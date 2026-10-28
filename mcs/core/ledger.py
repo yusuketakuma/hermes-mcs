@@ -27,7 +27,7 @@ import time
 from time import monotonic
 import uuid
 from pathlib import Path
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 
 from mcs_util import RETRY_LATER_4XX, html_to_text, loads_dict, valid_hash
 
@@ -199,6 +199,21 @@ class Ledger:
         self.db.commit()
 
     # ---------- patients + messages ----------
+
+    @contextmanager
+    def _intake_transaction(self):
+        """Identify failures after a held intent was attempted, including commit errors."""
+        previous = getattr(self, '_intake_hold_touched', False)
+        self._intake_hold_touched = False
+        try:
+            with self.db:
+                yield
+        except Exception as exc:
+            if self._intake_hold_touched:
+                exc.semantic_intake_hold_write_failed = True
+            raise
+        finally:
+            self._intake_hold_touched = previous
 
     def _save_attachments(self, m, now: float):
         for a in m.attachments:
@@ -446,10 +461,22 @@ class Ledger:
         before_semantic = (self._semantic_generation_snapshot(p.messages)
                            if semantic or self._needs_semantic_source_tracking() else {})
         invalidated_roots = set()
-        with self.db:  # commit on success, rollback on exception
+        with self._intake_transaction():  # commit on success, rollback on exception
             self.db.execute('UPDATE patients SET project_id=project_id WHERE 0')
-            previous = self.db.execute("SELECT fetch_reason,project_type,karte_id,is_archived FROM patients WHERE project_id=?", (p.project_id,)).fetchone()
+            previous = self.db.execute("SELECT fetch_reason,project_type,karte_id,is_archived,fetch_state FROM patients WHERE project_id=?", (p.project_id,)).fetchone()
             first = previous is None
+            import semantic_intake_hold
+            unstored = semantic_intake_hold.has_unstored(self.db, p.project_id)
+            fetch_state = ('forbidden' if unstored and (p.fetch_state == 'forbidden'
+                           or previous is not None and previous[4] == 'forbidden')
+                           else 'incomplete' if unstored else p.fetch_state)
+            restricted = ('forbidden', 'permission_denied', 'access_revoked')
+            if unstored and p.fetch_reason in restricted:
+                fetch_reason = p.fetch_reason
+            elif unstored and previous is not None and previous[0] in restricted:
+                fetch_reason = previous[0]
+            else:
+                fetch_reason = 'semantic_intake_unstored' if unstored else p.fetch_reason
             import inference_dependency_loss as dependency_loss
             old_karte = (dependency_loss.capture_current_karte_tx(self.db, p.project_id)
                 if previous is not None and getattr(p, 'karte_id', None) is not None
@@ -476,12 +503,12 @@ class Ledger:
                 is_archived=0
             """, (p.project_id, p.project_type, p.patient_name, p.disease,
                   p.station_name, p.url, getattr(p, "karte_id", None),
-                  p.fetch_state, p.fetch_reason,
-                  now if p.fetch_state == "complete" else None,
+                  fetch_state, fetch_reason,
+                  now if fetch_state == "complete" else None,
                   now, now))
             if old_karte is not None:
                 dependency_loss.record_tx(self.db, old_karte)
-            if (previous is None or (previous[0] == 'forbidden') != (p.fetch_reason == 'forbidden')
+            if (previous is None or (previous[0] == 'forbidden') != (fetch_reason == 'forbidden')
                     or previous[1] != p.project_type or previous[3]
                     or getattr(p, 'karte_id', None) is not None and previous[2] != p.karte_id):
                 self.bump_inference_source_epoch_tx()
@@ -580,7 +607,8 @@ class Ledger:
                                       invalidated_roots=invalidated_roots)
             if live_seed:
                 self.semantic_seed_tx(project_id, live_seed, origin,
-                                      invalidated_roots=invalidated_roots)
+                                      invalidated_roots=invalidated_roots,
+                                      _eligible_ids=set(notify_ids))
 
     def _filter_notify_age(self, ids: list, now: float,
                            max_age_s: float | None) -> list:
@@ -870,7 +898,7 @@ class Ledger:
         before_semantic = (self._semantic_generation_snapshot(msgs)
                            if semantic or self._needs_semantic_source_tracking() else {})
         invalidated_roots = set()
-        with self.db:
+        with self._intake_transaction():
             for m in msgs:
                 self._save_tree(m, new_ids, now, project_id)
             changed_semantic = (self._semantic_changed_ids(
@@ -937,7 +965,7 @@ class Ledger:
         before_semantic = (self._semantic_generation_snapshot(replies)
                            if semantic or self._needs_semantic_source_tracking() else {})
         invalidated_roots = set()
-        with self.db:
+        with self._intake_transaction():
             for m in replies:
                 self._save_tree(m, new_ids, now, project_id)
                 # reconcile against the STORED body, not the fetched one:
@@ -1740,16 +1768,22 @@ class Ledger:
 
     def semantic_seed_tx(self, project_id: int, message_ids: list,
                           origin: dict, *, invalidated_roots: set | None = None,
-                          _source_generation: str | None = None):
+                          _source_generation: str | None = None,
+                          _eligible_ids: set | None = None):
         """Durable semantic-eval seeding — caller holds `with self.db` so
         job creation commits (or rolls back) with the message and notify
         intent that triggered it (INV-06, spec §18.1). Keyed by thread
         ROOT so one job covers a post plus its replies; a new arrival on
         an evaluated thread revives the job as a new input generation."""
         from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
+        import semantic_intake_hold
         # Pause holds execution, not durable intake; OFF callers do not seed.
         if not message_ids:
             return
+        semantic_intake_hold.validate_indexes(self.db)
+        if self.db.execute("SELECT 1 FROM temp.sqlite_schema WHERE type IN ('table','view') "
+                           "AND lower(name) IN ('fetch_jobs','artifacts','notify_outbox') LIMIT 1").fetchone():
+            raise sqlite3.DatabaseError('semantic_seed_temp_shadow')
         q = ("SELECT message_id,COALESCE(parent_id,message_id) r "
              "FROM messages WHERE project_id=? AND message_id IN ("
              + ",".join("?" * len(message_ids)) + ")")
@@ -1759,9 +1793,24 @@ class Ledger:
         now = time.time()
         for root, ids in roots.items():
             existing = self.db.execute("""
-              SELECT job_id,state,attempts,payload FROM fetch_jobs
+              SELECT job_id,state,attempts,typeof(payload) AS payload_type FROM fetch_jobs
               WHERE kind='semantic' AND project_id=? AND message_id=?
             """, (project_id, root)).fetchone()
+            if ((existing is not None and not semantic_intake_hold.supported_job(
+                    self.db, existing, project_id, root))
+                    or semantic_intake_hold.has_held_root(self.db, project_id, root)):
+                self._intake_hold_touched = True
+                try:
+                    semantic_intake_hold.hold_tx(
+                        self, project_id, root, ids, origin, eligible_ids=_eligible_ids,
+                        source_generation=(_source_generation if _source_generation is not None
+                                           else self._semantic_source_generation(project_id, root)))
+                except Exception as exc:
+                    # Keep the original exception type for callers. The enclosing
+                    # message transaction must roll back before recording failure.
+                    exc.semantic_intake_hold_write_failed = True
+                    raise
+                continue
             eligible = isinstance(origin, dict) \
                 and origin.get("event_id") is not None
             notification_free = isinstance(origin, dict) \
@@ -1772,6 +1821,9 @@ class Ledger:
             source_generation = (_source_generation if _source_generation is not None
                                  else self._semantic_source_generation(project_id, root))
             if existing is not None:
+                existing = self.db.execute(
+                    'SELECT job_id,state,attempts,payload FROM fetch_jobs WHERE job_id=?',
+                    (existing['job_id'],)).fetchone()
                 old_pl = loads_dict(existing["payload"] or "{}") or {}
                 stored_targets = old_pl.get("targets")
                 old_targets = ({x for x in stored_targets if type(x) is int}
@@ -2148,6 +2200,8 @@ class Ledger:
           LEFT JOIN thread_read_marks t ON t.parent_id=m.parent_id
           WHERE m.parent_id IS NOT NULL AND m.first_seen>=?
             AND NOT EXISTS (SELECT 1 FROM json_each(?) excluded WHERE excluded.value=m.project_id)
+            AND NOT EXISTS (SELECT 1 FROM fetch_jobs j WHERE j.kind='semantic_intake_unstored_v1'
+                            AND j.project_id=m.project_id AND j.message_id=0)
             AND (t.parent_id IS NULL OR t.status!='confirmed'
                  OR m.message_id>t.last_reply_id)
           GROUP BY m.project_id, m.parent_id
