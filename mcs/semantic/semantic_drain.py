@@ -2541,6 +2541,17 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     if scfg["mode"] == "off":
         return out
     try:
+        import semantic_quarantine
+        diagnostics = {}
+        out['invalid_quarantined'] = semantic_quarantine.scan(
+            ledger, min(deadline, time.monotonic() + 0.1), _reservation_sched, _job_lock,
+            diagnostics=diagnostics)
+        out['failed'] += out['invalid_quarantined']
+        if diagnostics:
+            out['invalid_quarantine_holds'] = diagnostics
+    except Exception:
+        result['errors'].append('semantic: quarantine_scan_failed')
+    try:
         out['inference_reprocess'] = reprocess_step(ledger, cfg, deadline=deadline)
     except Exception as error:
         out['inference_reprocess'] = {'status': 'error', 'complete': False}
