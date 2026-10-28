@@ -398,6 +398,16 @@ def _real_config_writer(env):
     return env
 
 
+def _inject_before_config_persistence(stub_root, code):
+    script = stub_root / "runtime-check.py"
+    text = script.read_text()
+    marker = "exec(compile(code, '<installer-runtime-check>', 'exec'))"
+    assert text.count(marker) == 1
+    script.write_text(text.replace(marker, "if sys.argv[0] == '-':\n" +
+                                   "\n".join("    " + line for line in code.splitlines()) +
+                                   "\n" + marker))
+
+
 def _race_config_writer(stub_root, raw, *, symlink=False, mode=0o600, swap_parent=False):
     script = stub_root / "runtime-check.py"
     text = script.read_text()
@@ -455,6 +465,138 @@ def test_explicit_runtime_is_written_into_new_private_config(tmp_path, runtime):
     config = home / '.mcs/config.json'
     assert json.loads(config.read_text()) == {'runtime_mode': runtime}
     assert config.stat().st_mode & 0o777 == 0o600
+
+
+def test_existing_explicit_install_preserves_other_settings(tmp_path):
+    home, _, _, env = _world(tmp_path)
+    _real_config_writer(env)
+    config = home / '.mcs/config.json'
+    config.parent.mkdir(mode=0o700)
+    initial = {'runtime_mode': 'hermes', 'unknown': {'keep': True}, 'notify_target': 'synthetic'}
+    config.write_text(json.dumps(initial))
+    result = _run(env, None, '--mode', 'standalone', '--no-brew', '--no-llm',
+                  '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(config.read_text()) == {**initial, 'runtime_mode': 'standalone'}
+    assert config.stat().st_mode & 0o777 == 0o600
+
+
+def test_existing_recovery_selection_preserves_other_settings(tmp_path):
+    home, _, stub, env = _world(tmp_path)
+    _real_config_writer(env)
+    config = home / '.mcs/config.json'
+    config.parent.mkdir(mode=0o700)
+    initial = {'runtime_mode': 'hermes', 'unknown': {'keep': True}}
+    config.write_text(json.dumps(initial))
+    selected = str(stub / 'bin/python3.14')
+    result = _run(env, None, '--recovery-python', selected, '--no-brew', '--no-llm',
+                  '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(config.read_text()) == {**initial, 'recovery_python': selected}
+
+
+@pytest.mark.parametrize('length', [65536, 65537])
+def test_existing_explicit_install_rejects_oversized_update(tmp_path, length):
+    home, _, _, env = _world(tmp_path)
+    _real_config_writer(env)
+    config = home / '.mcs/config.json'
+    config.parent.mkdir(mode=0o700)
+    prefix, suffix = b'{"padding":"', b'"}'
+    raw = prefix + b'x' * (length - len(prefix) - len(suffix)) + suffix
+    config.write_bytes(raw)
+    result = _run(env, None, '--mode', 'standalone', '--no-brew', '--no-llm',
+                  '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    assert '保存せず中止' in result.stderr
+    assert config.read_bytes() == raw
+
+
+def test_existing_explicit_install_respects_shared_edit_lock(tmp_path):
+    import config_edit
+
+    home, _, _, env = _world(tmp_path)
+    _real_config_writer(env)
+    config = home / '.mcs/config.json'
+    config.parent.mkdir(mode=0o700)
+    raw = '{"runtime_mode":"hermes","unknown":"kept"}'
+    config.write_text(raw)
+    with config_edit._edit_lock(config):
+        result = _run(env, None, '--mode', 'standalone', '--no-brew', '--no-llm',
+                      '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    assert '別の設定保存が進行中' in result.stderr
+    assert config.read_text() == raw
+
+
+@pytest.mark.parametrize('change', ['edited', 'replaced', 'deleted', 'corrupted', 'symlink'])
+def test_existing_explicit_install_refuses_changes_after_initial_read(tmp_path, change):
+    home, _, stub, env = _world(tmp_path)
+    _real_config_writer(env)
+    config = home / '.mcs/config.json'
+    config.parent.mkdir(mode=0o700)
+    raw = '{"runtime_mode":"hermes","unknown":{"keep":true}}'
+    config.write_text(raw)
+    winner = '{"runtime_mode":"hermes","unknown":{"other":true}}'
+    action = {
+        'edited': f'target.write_text({winner!r})',
+        'replaced': "fresh = target.with_name('fresh.json'); fresh.write_text(target.read_text()); fresh.replace(target)",
+        'deleted': 'target.unlink()',
+        'corrupted': "target.write_text('{broken')",
+        'symlink': f"other = target.with_name('other.json'); other.write_text({winner!r}); target.unlink(); target.symlink_to(other)",
+    }[change]
+    _inject_before_config_persistence(stub, "from pathlib import Path\ntarget = Path(os.environ['HOME']) / '.mcs/config.json'\n" + action)
+    result = _run(env, None, '--mode', 'standalone', '--no-brew', '--no-llm',
+                  '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    assert '保存せず中止' in result.stderr
+    if change == 'deleted':
+        assert not config.exists()
+    elif change == 'symlink':
+        assert config.is_symlink() and config.read_text() == winner
+    else:
+        assert config.read_text() == {'edited': winner, 'replaced': raw, 'corrupted': '{broken'}[change]
+
+
+def test_existing_explicit_install_detects_change_during_publication(tmp_path):
+    home, _, stub, env = _world(tmp_path)
+    _real_config_writer(env)
+    config = home / '.mcs/config.json'
+    config.parent.mkdir(mode=0o700)
+    config.write_text('{"runtime_mode":"hermes"}')
+    winner = '{"runtime_mode":"hermes","unknown":"kept"}'
+    _inject_before_config_persistence(stub, f"""import config_edit
+real_snapshot = config_edit._snapshot
+calls = []
+def raced_snapshot():
+    calls.append(1)
+    if len(calls) == 2:
+        from pathlib import Path
+        (Path(os.environ['HOME']) / '.mcs/config.json').write_text({winner!r})
+    return real_snapshot()
+config_edit._snapshot = raced_snapshot""")
+    result = _run(env, None, '--mode', 'standalone', '--no-brew', '--no-llm',
+                  '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    assert '保存せず中止' in result.stderr
+    assert config.read_text() == winner
+
+
+def test_existing_explicit_install_reports_unknown_after_directory_fsync_failure(tmp_path):
+    home, _, stub, env = _world(tmp_path)
+    _real_config_writer(env)
+    config = home / '.mcs/config.json'
+    config.parent.mkdir(mode=0o700)
+    config.write_text('{"runtime_mode":"hermes","unknown":"kept"}')
+    _inject_before_config_persistence(stub, """import safe_io
+def fail_sync(*args, **kwargs):
+    raise OSError('synthetic sync failure')
+safe_io.fsync_dir = fail_sync""")
+    result = _run(env, None, '--mode', 'standalone', '--no-brew', '--no-llm',
+                  '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    assert '保存結果を確認できません' in result.stderr
+    assert '保存せず中止' not in result.stderr
+    assert json.loads(config.read_text()) == {'runtime_mode': 'standalone', 'unknown': 'kept'}
 
 
 @pytest.mark.parametrize('mode', ['preflight', 'dry-run'])
