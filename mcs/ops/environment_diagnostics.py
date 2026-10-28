@@ -102,7 +102,6 @@ _KEY_REASONS = {
 def cloud_setting_warnings(cfg: dict, root) -> list[str]:
     """Explain, without values, why an external-AI key or setting keeps sending off or stopped."""
     import cloud_policy
-    from semantic_policy import semantic_config
     out = []
     for key, label in (("MCS_ANTHROPIC_API_KEY", "Anthropic"), ("TYPESAFE_API_KEY", "Jev")):
         reason = mcs_util.private_env_problem(key, root)
@@ -115,20 +114,25 @@ def cloud_setting_warnings(cfg: dict, root) -> list[str]:
         out.append("Anthropicのキーはありますが、費用の上限が未設定のため送信していません。"
                    "`mcs_setup.py cloud-llm budget --daily-usd 金額 --monthly-usd 金額`で上限を設定してください。"
                    "エラーコード: cost_limit_required")
-    if cloud["mode"] in ("on", "shadow") and cloud_policy.setting_block_reason(cloud) == "expired":
-        out.append("cloud_llm.untilの時刻を過ぎたため、Anthropicへの送信を止めています。"
+    window = cloud_policy.setting_block_reason(cloud) if cloud["mode"] in ("on", "shadow") else None
+    if window == "expired":
+        out.append("cloud_llm.untilの時刻を過ぎたため、Anthropicへの新しい送信を止めています。"
                    "再開する場合はuntilを変更するか削除してください。エラーコード: expired")
+    elif window == "not_started":
+        out.append("cloud_llm.window_startの開始前のため、Anthropicへの送信はまだ始まりません。エラーコード: not_started")
     block = cfg.get("semantic") if isinstance(cfg, dict) else None
     if isinstance(block, dict):
         if block.get("mode", "off") != "off" and "daily_request_budget" not in block:
             out.append("semantic.modeを指定していますが、semantic.daily_request_budgetが未設定のため"
                        "Jevの1日の要求上限が0になり、外部解析は行われません。"
                        "daily_request_budgetに上限の件数を設定してください。エラーコード: jev_budget_zero")
-        if block.get("until") is not None and block.get("mode") != "off":
-            # With a key the only remaining reason for "off" without an error is the window.
-            sem, sem_errors = semantic_config(cfg, key_present=True)
-            if not sem_errors and sem["mode"] == "off":
-                out.append("semantic.untilの時刻を過ぎたため、Jevへの送信を止めています。"
+        until = block.get("until")
+        try:
+            ended = until is not None and time.time() >= mcs_util.until_epoch(until)
+        except (ValueError, OverflowError):
+            ended = False   # an invalid value is already a config error
+        if ended and block.get("mode") != "off":
+                out.append("semantic.untilの時刻を過ぎたため、Jevへの新しい送信を止めています。"
                            "再開する場合はuntilを変更するか削除してください。エラーコード: expired")
     return out
 

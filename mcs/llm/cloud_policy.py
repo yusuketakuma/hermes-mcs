@@ -52,7 +52,7 @@ def _decimal(value):
     return result
 
 
-def cloud_config(cfg, *, key_present=False):
+def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
     """Normalize the optional cloud block, failing closed on every config error."""
     out = {"mode": "off", "routes": list(ROUTES), "project_ids": [],
            "exclude_project_ids": [], "model": MODEL, "daily_request_budget": None,
@@ -133,7 +133,7 @@ def cloud_config(cfg, *, key_present=False):
         except (ValueError, OverflowError):
             errors.append("config: cloud_llm_window_invalid")
     # A key alone may enable sending, but never without a spending cap.
-    if (key_present is True and "mode" not in block and out["project_ids"] != []
+    if (require_cost_limit and key_present is True and "mode" not in block and out["project_ids"] != []
             and out["daily_cost_limit_usd"] is None and out["monthly_cost_limit_usd"] is None
             and out["window_budget_usd"] is None):
         errors.append(COST_LIMIT_REQUIRED)

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 import inspect
 import json
 import math
+import os
 import time
 import uuid
 from contextlib import suppress
@@ -557,6 +558,29 @@ def _daily_cap_check(ledger, limit: int, retryable: bool = False):
         raise JevError("budget_exceeded", "semantic_usage_invalid", retryable=retryable) from None
     if used >= limit:
         raise JevError("budget_exceeded", "daily_cap", retryable=retryable)
+    _jev_window_check(retryable)
+
+
+def _jev_window_check(retryable: bool = False):
+    """Refuse a new Jev request after semantic.until, read from the live config at reservation time."""
+    from semantic_jev import JevError
+    import mcs_util
+    path = mcs_util.CONF_PATH
+    if not os.path.lexists(path):
+        return
+    cfg = mcs_util.load_config_checked(path)
+    block = cfg.get("semantic") if isinstance(cfg, dict) else None
+    if cfg is None or (block is not None and not isinstance(block, dict)):
+        raise JevError("budget_exceeded", "semantic_config_unreadable", retryable=retryable)
+    until = (block or {}).get("until")
+    if until is None:
+        return
+    try:
+        ended = time.time() >= mcs_util.until_epoch(until)
+    except (ValueError, OverflowError):
+        raise JevError("budget_exceeded", "semantic_until_invalid", retryable=retryable) from None
+    if ended:
+        raise JevError("budget_exceeded", "semantic_until_expired", retryable=retryable)
 
 
 def _check_reservation_day(ledger, artifact_id, day):

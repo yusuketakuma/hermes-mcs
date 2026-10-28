@@ -117,6 +117,9 @@ def diagnostics(cfg, *, root=None, probe=False):
                 "accounting": None, "dry_run": None,
                 "block_reason": "cost_limit_required" if errors and not policy.blocking_errors(errors) else None}}
     eligible_scope = cloud["project_ids"] is None or bool(set(cloud["project_ids"]) - set(cloud["exclude_project_ids"]))
+    window_reason = policy.setting_block_reason(cloud) if not errors else None
+    if key and cloud["mode"] in ("on", "shadow") and window_reason:
+        out["anthropic"].update(status="local", block_reason=window_reason)
     if (not errors and not key and cloud["mode"] in ("on", "shadow")
             and cloud["routes"] and eligible_scope):
         # A plain doctor cannot observe the persisted pause without opening DB.
@@ -365,7 +368,8 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
     if policy.blocking_errors(errors):
         raise ValueError("cloud_config_invalid")
     # Keyless planning can still estimate the scope that auto mode would enable.
-    planning = policy.cloud_config(cfg, key_present=True)[0]
+    # Estimate the scope that auto mode would enable once a cap is set; whether it may send now is send_decision.
+    planning = policy.cloud_config(cfg, key_present=True, require_cost_limit=False)[0]
     now = time.time()
     start = now - days * 86400
     if since is not None:

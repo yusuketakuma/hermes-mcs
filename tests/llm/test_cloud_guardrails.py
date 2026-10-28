@@ -9,6 +9,8 @@ import cloud_policy as c
 import environment_diagnostics
 import mcs_util
 import semantic_policy
+import semantic_runtime
+from semantic_jev import JevError
 from ledger import Ledger
 
 NOW = datetime(2026, 10, 26, 12, tzinfo=c.JST).timestamp()
@@ -17,7 +19,7 @@ NOW = datetime(2026, 10, 26, 12, tzinfo=c.JST).timestamp()
 @pytest.fixture
 def now(monkeypatch):
     monkeypatch.setattr(c.time, "time", lambda: NOW)
-    monkeypatch.setattr(semantic_policy.time, "time", lambda: NOW)
+    monkeypatch.setattr(semantic_runtime.time, "time", lambda: NOW)
     return NOW
 
 
@@ -59,17 +61,31 @@ def test_cloud_until_stops_new_reservations_after_the_window(tmp_path, now):
         assert ledger.artifacts("cloud_usage_reserve") == []
 
 
-def test_semantic_until_turns_every_jev_feature_off_after_the_window(now):
+def test_semantic_until_refuses_new_jev_reservations_without_switching_modes(tmp_path, monkeypatch, now):
+    import json
     block = {"mode": "assist", "project_ids": None, "daily_request_budget": 100,
              "summary_mode": "assist", "loop_mode": "assist", "extract_qc": "annotate"}
-    live, errors = semantic_policy.semantic_config({"semantic": {**block, "until": "2026-10-26T12:00:01+09:00"}})
-    assert errors == [] and live["mode"] == "assist" and live["extract_qc"] == "annotate"
-    ended, errors = semantic_policy.semantic_config({"semantic": {**block, "until": "2026-10-26T12:00:00+09:00"}})
-    assert errors == []
-    assert (ended["mode"], ended["summary_mode"], ended["loop_mode"], ended["extract_qc"]) == ("off",) * 4
-    # A run window never changes interpretation identities or receipts.
-    assert semantic_policy.policy_fingerprint(live) == semantic_policy.policy_fingerprint(ended)
+    conf = tmp_path / "config.json"
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(conf))
 
+    def reserve(ledger):
+        return semantic_runtime.manual_usage_reserver(ledger, operation="wire_smoke")({"model": "m"}, 2)
+
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        conf.write_text(json.dumps({"semantic": {**block, "until": "2026-10-26T12:00:01+09:00"}}))
+        assert reserve(ledger) is not None                       # inside the window
+        conf.write_text(json.dumps({"semantic": {**block, "until": "2026-10-26T12:00:00+09:00"}}))
+        with pytest.raises(JevError) as raised:
+            reserve(ledger)                                     # every later request, retries included
+        assert (raised.value.kind, raised.value.detail) == ("budget_exceeded", "semantic_until_expired")
+        assert len(ledger.artifacts("semantic_usage")) == 1
+        conf.write_text("{broken")
+        with pytest.raises(JevError):
+            reserve(ledger)                                     # an unreadable config never widens sending
+    # Modes stay as configured: intake, existing notices and in-flight results keep working.
+    ended, errors = semantic_policy.semantic_config({"semantic": {**block, "until": "2026-10-26T12:00:00+09:00"}})
+    assert errors == [] and (ended["mode"], ended["summary_mode"], ended["extract_qc"]) == ("assist", "assist", "annotate")
+    assert ended["until"] == "2026-10-26T12:00:00+09:00"
 
 def _env(root, text, mode=0o600):
     path = root / ".env"
@@ -194,3 +210,16 @@ def test_budget_command_sets_any_period_amount_and_end_date(tmp_path, monkeypatc
     assert run(period_usd="none", until="none") == 0
     saved = json.loads(path.read_text())
     assert saved["cloud_llm"] == {} and saved["semantic"] == {}
+
+
+def test_doctor_shows_the_run_window_and_planning_assumes_a_cap(tmp_path, now):
+    import cloud_cli
+    _env(tmp_path, "MCS_ANTHROPIC_API_KEY=sk-synthetic\n")
+    ended = {"mcs_login_id": "synthetic", "cloud_llm": {"daily_cost_limit_usd": 2,
+             "until": "2026-10-26T11:00:00+09:00"}}
+    report = cloud_cli.diagnostics(ended, root=str(tmp_path))["anthropic"]
+    assert (report["mode"], report["status"], report["block_reason"]) == ("on", "local", "expired")
+    # Planning estimates what a capped auto mode would do; sending now is a separate decision.
+    planning = c.cloud_config({"mcs_login_id": "synthetic"}, key_present=True, require_cost_limit=False)
+    assert planning == (c.cloud_config({"cloud_llm": {"daily_cost_limit_usd": 2}}, key_present=True)[0]
+                        | {"daily_cost_limit_usd": None}, [])
