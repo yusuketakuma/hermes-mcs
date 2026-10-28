@@ -110,12 +110,15 @@ def _owner_allowed(ctx, adapter, settings, transport):
     profile, source = _owner_identity(ctx, adapter)
     log = _event_logger("mcs_" + transport)
     log("worker_owner", code=source)
-    if profile is None or profile != settings["profile"]:
-        reason = "owner_unverified" if profile is None else "profile_mismatch"
+    unverified = profile is None or (getattr(ctx, "mode", None) == "central"
+                                     and source not in ("adapter", "runner"))
+    if unverified or profile != settings["profile"]:
+        reason = "owner_unverified" if unverified else "profile_mismatch"
         log("worker_disabled", reason=reason)
         # A foreign adapter must not overwrite the legitimate owner's witness.
-        witness = {**settings, "profile": profile}
-        _worker_witness(witness, transport, reason)
+        if not (unverified and getattr(ctx, "mode", None) == "central"):
+            witness = {**settings, "profile": profile}
+            _worker_witness(witness, transport, reason)
         return False
     return True
 
@@ -125,8 +128,12 @@ def make_discord_factory(ctx):
         """Bound at connect() per Bot instance — registers the
         interaction listener and the supervised delivery worker. SDK
         imports stay inside so /mcs works without discord.py."""
-        settings = _interactive_settings(ctx, native)
-        if settings is None and ctx.get_config("interactive", False) is True:
+        from .settings import view
+        config = view(ctx)
+        if config.mode == "invalid":
+            return None
+        settings = _interactive_settings(config, native)
+        if settings is None and config.get_config("interactive", False) is True:
             # opted in but unusable: queued cards would wait silently
             _event_logger("mcs_discord")("worker_disabled",
                                           reason="config_incomplete")
@@ -135,7 +142,7 @@ def make_discord_factory(ctx):
         if _standalone_owned(settings["data_root"]):
             _event_logger("mcs_discord")("worker_disabled", reason="standalone_owned")
             return None
-        if not _owner_allowed(ctx, adapter, settings, "discord"):
+        if not _owner_allowed(config, adapter, settings, "discord"):
             return None
         from adapters.common.access import id_text as _id_text
         user_id = _id_text(getattr(getattr(native, "user", None), "id", None))
@@ -215,16 +222,20 @@ def _slack_adapter_settings(ctx) -> dict[str, Any] | None:
 
 def make_slack_factory(ctx):
     def factory(native, adapter):
-        settings = _slack_adapter_settings(ctx)
+        from .settings import view
+        config = view(ctx)
+        if config.mode == "invalid":
+            return None
+        settings = _slack_adapter_settings(config)
         if settings is None:
-            if ctx.get_config("slack_adapter_enabled", False) is True:
+            if config.get_config("slack_adapter_enabled", False) is True:
                 _event_logger("mcs_slack")("worker_disabled",
                                             reason="config_incomplete")
             return None
         if _standalone_owned(settings["data_root"]):
             _event_logger("mcs_slack")("worker_disabled", reason="standalone_owned")
             return None
-        if not _owner_allowed(ctx, adapter, settings, "slack"):
+        if not _owner_allowed(config, adapter, settings, "slack"):
             return None
         _ensure_repo_root()
         from adapters.common import paths

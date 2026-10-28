@@ -513,3 +513,59 @@ def test_real_sdk_broadcasts_a_new_post_on_an_existing_card(tmp_path, monkeypatc
     assert first == {"result": "delivered", "remote_id": replies[0]["ts"]}
     assert again == first                    # re-bound, never re-posted
     assert all(handlers == [] for m, handlers, _ in seen if m != "auth.test")
+
+
+def test_real_hermes_discovers_central_profile_settings(tmp_path, monkeypatch):
+    """The pinned host loads a central view without using stale plugin grants."""
+    monkeypatch.setattr(socket.socket, "connect",
+                        lambda *_: (_ for _ in ()).throw(AssertionError("no network")))
+    home = tmp_path / "hermes"
+    home.mkdir()
+    root = tmp_path / "mcs"
+    data = root / "data"
+    data.mkdir(parents=True)
+    (data / "flags").mkdir()
+    (data / "flags" / "notify.json").write_text(json.dumps({
+        "interactive": True, "transport": "slack", "route_epoch": 1}))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("MCS_ROOT", str(root))
+    from hermes_cli.profiles import get_active_profile_name
+    profile = get_active_profile_name()
+    name = "mcs-discord-commands"
+    plugin = home / "plugins" / name
+    plugin.parent.mkdir()
+    plugin.symlink_to(MCS_ROOT / "hermes_plugin", target_is_directory=True)
+    old = {"data_root": str(data), "settings_source": "central",
+           "slack_allowed_user_ids": ["old-user"], "project_ids": [99]}
+    (home / "config.yaml").write_text(json.dumps({"plugins": {
+        "enabled": [name], "entries": {name: {"settings": old}}}}))
+    central = {"slack_adapter_enabled": True, "slack_team_id": "T1",
+               "slack_application_id": "A1", "slack_channel_id": "C1",
+               "slack_allowed_user_ids": ["new-user"],
+               "project_ids": [], "project_ids_auto": True,
+               "snapshot": str(data / "snapshots" / "ledger-snapshot.db"),
+               "inbox": str(data / "cmd")}
+    (root / "config.json").write_text(json.dumps({"hermes_plugin_settings": {
+        "schema_version": 1, "profiles": {profile: {
+            "mode": "central", "data_root": str(data), "settings": central}}}}))
+    captured = []
+    from adapters.slack import tasks
+
+    class Supervisor:
+        def __init__(self, **kwargs):
+            captured.append(kwargs["settings"])
+
+        def start(self):
+            return True
+
+    monkeypatch.setattr(tasks, "Supervisor", Supervisor)
+    manager = PluginManager()
+    manager.discover_and_load()
+    factory = next(fn for fn, plugin_name in manager.get_platform_handler_factories("slack")
+                   if plugin_name == name)
+    assert factory(object(), SimpleNamespace(_owner_profile=profile)) is not None
+    assert captured[0]["allowed_user_ids"] == frozenset({"new-user"})
+    assert captured[0]["project_ids"] == frozenset()
+    assert captured[0]["project_ids_auto"] is True
+    assert captured[0]["route_epoch"] == 1

@@ -10,6 +10,10 @@ platforms:
   - discord
   - slack
 config_schema:
+  settings_source:
+    type: str
+    required: false
+    description: Marker for settings migrated to the MCS configuration.
   snapshot:
     type: str
     required: true
