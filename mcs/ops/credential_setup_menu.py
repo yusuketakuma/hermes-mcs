@@ -27,6 +27,8 @@ def run(root, cfg):
             print("\n認証情報の設定を終了しました。")
             return 130
         if choice == "0":
+            if unresolved:
+                print("途中で完了を確認できなかった設定があります。現在の保存状態を確認してください。")
             return 1 if unresolved else 0
         if choice == "1":
             result = api_key_setup.run(root)
@@ -42,8 +44,8 @@ def run(root, cfg):
                 except KeyboardInterrupt:
                     return 130
             else:
-                import hermes_credential_setup
                 try:
+                    import hermes_credential_setup
                     profile = input("保存するHermesプロファイル名（既定は空欄）: ").strip()
                     result = hermes_credential_setup.run(mcs_util.hermes_exe(cfg), profile, transport)
                 except (EOFError, KeyboardInterrupt):
@@ -51,6 +53,9 @@ def run(root, cfg):
                     return 130
                 except ValueError:
                     print("Hermesプロファイル名を確認してください。")
+                    result = 1
+                except ImportError:
+                    print("この版ではHermesのトークン設定を開けません。導入状態を確認してください。")
                     result = 1
         elif choice == "4":
             command = [sys.executable, "-m", "lineworks_adapter", "credentials", "--root", str(root)]
@@ -68,5 +73,3 @@ def run(root, cfg):
         if result != 0:
             unresolved.add(choice)
             print("選んだ認証情報の設定を完了できませんでした。表示された内容と保存状態を確認してください。")
-        else:
-            unresolved.discard(choice)

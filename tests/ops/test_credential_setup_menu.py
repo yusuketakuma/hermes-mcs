@@ -38,10 +38,39 @@ def test_noninteractive_never_enters_a_setup(monkeypatch, tmp_path):
     assert menu.run(tmp_path, {}) == 2
 
 
-def test_failed_selection_can_be_retried(monkeypatch, tmp_path):
+def test_missing_hermes_helper_is_reported_without_traceback(monkeypatch, tmp_path):
+    import builtins
+    original_import = builtins.__import__
+    def without_helper(name, *args, **kwargs):
+        if name == "hermes_credential_setup":
+            raise ImportError("synthetic")
+        return original_import(name, *args, **kwargs)
+    monkeypatch.setattr(menu.api_key_setup, "is_terminal", lambda: True)
+    choices = iter(["2", "0"])
+    monkeypatch.setattr(builtins, "input", lambda _: next(choices))
+    monkeypatch.setattr(builtins, "__import__", without_helper)
+    assert menu.run(tmp_path, {}) == 1
+
+
+def test_failure_remains_visible_when_retry_does_not_prove_prior_result(monkeypatch, tmp_path):
     monkeypatch.setattr(menu.api_key_setup, "is_terminal", lambda: True)
     choices = iter(["4", "4", "0"])
     results = iter([1, 0])
     monkeypatch.setattr("builtins.input", lambda _: next(choices))
     monkeypatch.setattr(menu.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=next(results)))
-    assert menu.run(tmp_path, {}) == 0
+    assert menu.run(tmp_path, {}) == 1
+
+
+def test_setup_entry_uses_verified_config(monkeypatch, tmp_path):
+    import mcs_setup
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text('{"runtime_mode":"standalone"}', encoding="utf-8")
+    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(cfg_path))
+    seen = []
+    monkeypatch.setattr(menu, "run", lambda root, cfg: seen.append((root, cfg)) or 0)
+    assert mcs_setup.main(["api-keys"]) == 0
+    assert seen == [(str(tmp_path), {"runtime_mode": "standalone"})]
+    cfg_path.write_text('{invalid', encoding="utf-8")
+    assert mcs_setup.main(["api-keys"]) == 1
+    assert len(seen) == 1
