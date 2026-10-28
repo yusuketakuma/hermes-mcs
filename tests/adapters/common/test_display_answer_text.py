@@ -8,7 +8,7 @@ from adapters.common import forms, text
 
 CODES = ("card_missing", "signal_not_open", "signal_not_found", "signal_corrupt",
          "project_mismatch", "project_not_found", "payload_changed",
-         "some_future_code")
+         "unsupported_inference_version", "some_future_code")
 
 
 @pytest.mark.parametrize("code", CODES)
@@ -16,6 +16,12 @@ def test_rejections_never_show_internal_codes(code):
     msg = text.ja({"outcome": "rejected", "error": code})
     assert code not in msg and "拒否されました" not in msg
     assert "未対応" not in msg
+
+
+def test_unsupported_retry_version_explains_hold_without_retrying():
+    msg = text.ja({"outcome": "rejected", "error": "unsupported_inference_version"})
+    assert "版" in msg and "再試行できません" in msg and "管理者に連絡" in msg
+    assert "最新のカードからやり直し" not in msg
 
 
 def test_crash_is_one_fixed_sentence_that_claims_nothing_about_the_change():

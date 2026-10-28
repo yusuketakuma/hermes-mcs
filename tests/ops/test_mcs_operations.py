@@ -12,6 +12,7 @@ from ledger import Ledger
 import job_ops
 import mcs_queries
 import mcs_requests
+from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY
 
 
 def _command(cmd, project_id=1, **fields):
@@ -78,6 +79,95 @@ def test_ops_retry_records_optional_reason_in_receipt(tmp_path):
     assert receipt["reason"] == stored["reason"] == "synthetic restart note"
     assert "additional_attempts" not in stored
     db.close()
+
+
+@pytest.mark.parametrize("version,allowed", [
+    (CURRENT_VERSION, True), (LEGACY_VERSION, True),
+    ("2.0", False), ("0.2", False), (None, False),
+    (True, False), ("01.0", False),
+])
+def test_retry_preserves_unsupported_job_and_replays_receipt(tmp_path, version, allowed):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.ensure_patient(1)
+        payload = {VERSION_KEY: version, "generation": "synthetic", "targets": [42]}
+        job_id = db.job_add("semantic", 1, 42, payload=payload)
+        db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=2,next_try=99 WHERE job_id=?", (job_id,))
+        db.db.commit()
+        before = dict(_job(db, job_id))
+        req = _command("ops.retry", job_id=job_id,
+                       expected_payload_hash=mcs_requests.payload_hash(payload))
+        receipt = mcs_requests.apply_command(db, req)
+        assert mcs_requests.apply_command(db, req) == receipt
+        after = dict(_job(db, job_id))
+        if allowed:
+            assert receipt["outcome"] == "applied"
+            assert after["attempts"] == 2 and after["state"] == "pending"
+            assert json.loads(after["payload"])[VERSION_KEY] == version
+        else:
+            assert receipt["outcome"] == "rejected"
+            assert receipt["error"] == "unsupported_inference_version"
+            assert after == before
+        assert db.db.execute("SELECT COUNT(*) FROM command_receipts").fetchone()[0] == 1
+    finally:
+        db.close()
+
+
+def test_retry_rejects_ambiguous_top_level_version_without_rewriting(tmp_path):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.ensure_patient(1)
+        job_id = db.job_add("semantic", 1, 42, payload={})
+        raw = '{"inference_engine_version":"2.0","inference_engine_\\u0076ersion":"1.0","targets":[42]}'
+        db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=2,payload=? WHERE job_id=?", (raw, job_id))
+        db.db.commit()
+        before = dict(_job(db, job_id))
+        req = _command("ops.retry", job_id=job_id,
+                       expected_payload_hash=mcs_requests.payload_hash(json.loads(raw)))
+        result = mcs_requests.apply_command(db, req)
+        assert result["outcome"] == "rejected" and result["error"] == "invalid_payload"
+        assert dict(_job(db, job_id)) == before
+        assert mcs_requests.apply_command(db, req) == result
+    finally:
+        db.close()
+
+
+def test_retry_does_not_change_non_version_duplicate_handling(tmp_path):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.ensure_patient(1)
+        job_id = db.job_add("semantic", 1, 42, payload={})
+        raw = ('{"inference_engine_version":"1.0","targets":[42],'
+               '"extra":{"inference_engine_version":"2.0",'
+               '"inference_engine_version":"1.0"},"x":1,"x":2}')
+        db.db.execute("UPDATE fetch_jobs SET state='failed',attempts=2,payload=? WHERE job_id=?", (raw, job_id))
+        db.db.commit()
+        req = _command("ops.retry", job_id=job_id,
+                       expected_payload_hash=mcs_requests.payload_hash(json.loads(raw)))
+        assert mcs_requests.apply_command(db, req)["outcome"] == "applied"
+        assert _job(db, job_id)["attempts"] == 2
+    finally:
+        db.close()
+
+
+def test_retry_rechecks_version_when_payload_changes_after_preview(tmp_path):
+    db = Ledger(str(tmp_path / "ledger.db"))
+    try:
+        db.ensure_patient(1)
+        payload = {VERSION_KEY: CURRENT_VERSION, "targets": [42]}
+        job_id = db.job_add("semantic", 1, 42, payload=payload)
+        request = _command("ops.retry", job_id=job_id,
+                           expected_payload_hash=mcs_requests.payload_hash(payload))
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                          (json.dumps({**payload, VERSION_KEY: "2.0"}), job_id))
+        before = dict(_job(db, job_id))
+        receipt = mcs_requests.apply_command(db, request)
+        assert receipt["outcome"] == "rejected"
+        assert receipt["error"] == "payload_changed"
+        assert dict(_job(db, job_id)) == before
+    finally:
+        db.close()
 
 
 def test_ops_scan_deepens_existing_history_without_resetting_cursor(tmp_path):
