@@ -811,8 +811,18 @@ def _quality_bound(meta):
     return request
 
 
+# A reservation whose POST provably never started (the run window ended between
+# its commit and the send) is sealed with one of these reasons and no answers.
+_NOT_SENT_REASONS = frozenset({"semantic_until_expired", "semantic_until_invalid", "semantic_config_unreadable"})
+
+
 def _quality_result_parts(meta, request):
     result = meta.get("quality_result")
+    if isinstance(result, dict) and set(result) == {"answers", "invalid", "not_sent"}:
+        # nothing was asked: no question is answered or counted invalid
+        if result["answers"] == {} and result["invalid"] == [] and result["not_sent"] in _NOT_SENT_REASONS:
+            return {}, []
+        return None
     if not isinstance(result, dict) or set(result) != {"answers", "invalid"}:
         return None
     answers, invalid = result["answers"], result["invalid"]
@@ -1051,6 +1061,8 @@ def patient_source_question_evidence(db, pid, identity, fact_ids):
         if parts is None:
             result["problems"].update(dict.fromkeys(matching, "unknown"))
             continue
+        if "not_sent" in meta["quality_result"]:
+            continue
         answers, invalid = parts
         checked = {fid: _source_answer_record(db, pid, usage_id, meta, request, fid, ref)
                    for fid, ref in answers.items()}
@@ -1194,13 +1206,16 @@ def patient_summary_request_problem(db, pid, identity, fact_ids, *, purpose="sum
     return None
 
 
-def patient_summary_resolve_request_tx(ledger, reservation, identity, answers, invalid_ids, *, project_id, purpose="summary"):
-    """Seal one request only with its already-persisted answer evidence."""
+def patient_summary_resolve_request_tx(ledger, reservation, identity, answers, invalid_ids, *, project_id,
+                                       purpose="summary", not_sent=None):
+    """Seal one request only with its already-persisted answer evidence, or as
+    ``not_sent`` (no answers) when its POST provably never started."""
     if not ledger.db.in_transaction or not isinstance(reservation, JevReservation):
         raise RuntimeError("patient_summary_transaction_required")
     keys = _quality_identity(identity, purpose=purpose)
     operation, _ = _quality_purpose(purpose)
-    if not isinstance(answers, dict) or not isinstance(invalid_ids, set):
+    if (not isinstance(answers, dict) or not isinstance(invalid_ids, set)
+            or not_sent is not None and (not_sent not in _NOT_SENT_REASONS or answers or invalid_ids)):
         raise ValueError("patient_summary_result_invalid")
     row = ledger.db.execute("SELECT project_id,meta FROM artifacts WHERE kind='semantic_usage' AND artifact_id=?",
                             (reservation.artifact_id,)).fetchone()
@@ -1228,6 +1243,8 @@ def patient_summary_resolve_request_tx(ledger, reservation, identity, answers, i
             result = {"answers": {fid: payload_hash(value) for fid, value in answers.items()}, "invalid": sorted(invalid_ids)}
     except (TypeError, ValueError, RecursionError):
         raise ValueError("patient_summary_result_invalid") from None
+    if not_sent is not None:
+        result["not_sent"] = not_sent
     candidate = {**meta, "quality_result": result}
     if not _quality_result(ledger.db, row[0], candidate, request):
         raise ValueError("patient_summary_result_invalid")
@@ -1386,19 +1403,36 @@ def _can_bind_call(fn, *args, **kwargs):
 
 class JevEvaluation:
     """Bind one job's evaluation guards, reservation and timing without client mutation."""
-    def __init__(self, client, guard, reserve, cutoff, transport, timing, config_path=None):
+    def __init__(self, client, guard, reserve, cutoff, transport, timing, config_path=None, not_sent=None):
         self._client = client
+        unsent = [None]   # committed by reserve, not yet past its pre-POST attempt hook
+
+        def reserving(body, timeout):
+            unsent[0] = reserve(body, timeout)
+            return unsent[0]
 
         def windowed(stage):
             guard(stage)
-            if stage == "jev_attempt" and reserve is None:
-                # Reserved paths check semantic.until in the same transaction as each
-                # attempt's reservation, immediately before it is sent; refusing after
-                # that reservation would only strand it unresolved. Unreserved callers
-                # are checked here instead.
+            if stage != "jev_attempt":
+                return
+            if reserve is None:
                 _jev_window_check(config_path=config_path)
+                return
+            # The client calls this hook after each reservation and before its POST,
+            # so the window can still end while BEGIN waited; that request is provably unsent.
+            pending, unsent[0] = unsent[0], None
+            if pending is None:
+                return
+            from semantic_jev import JevError
+            try:
+                _jev_window_check(True, config_path=config_path)
+            except JevError as error:
+                if not_sent is not None:
+                    with suppress(Exception):   # unsealed, it stays unresolved: fail closed
+                        not_sent(pending, error.detail)
+                raise
         self._guard = windowed
-        self._reserve = reserve
+        self._reserve = None if reserve is None else reserving
         self._cutoff = cutoff
         self._transport = transport
         self._timing = timing
@@ -1471,14 +1505,16 @@ class JevEvaluation:
             raise
 
 
-def bind_jev(client, guard, reserve=None, cutoff=None, *, transport=None, timing=None, config_path=None):
+def bind_jev(client, guard, reserve=None, cutoff=None, *, transport=None, timing=None, config_path=None,
+             not_sent=None):
     """Bind the finite per-call Jev execution protocol; own no client-global hooks.
 
     config_path names the installation whose semantic.until gates each attempt
-    (default: this MCS root)."""
+    (default: this MCS root); not_sent(reservation, reason) settles a reservation
+    stopped before its POST."""
     if client is None:
         return None
-    return JevEvaluation(client, guard, reserve, cutoff, transport, timing, config_path)
+    return JevEvaluation(client, guard, reserve, cutoff, transport, timing, config_path, not_sent)
 
 
 _SOURCE_PASS_POLICY_KEYS = ('model', 'match_threshold', 'nomatch_threshold',

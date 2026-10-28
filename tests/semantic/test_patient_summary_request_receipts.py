@@ -630,3 +630,73 @@ def test_oversized_source_receipt_metadata_is_unknown_without_hydrating_it(tmp_p
         assert not evidence['answers'] and not evidence['references']
     finally:
         db.close()
+
+
+@pytest.mark.parametrize("purpose", ["summary", "source"])
+def test_window_ending_after_the_reservation_seals_it_unsent_and_the_page_can_be_asked_again(tmp_path, purpose):
+    conf = tmp_path / "config.json"
+    def until(value):
+        conf.write_text(json.dumps({"semantic": {"until": value}}))
+    until("2999-01-01T00:00:00+00:00")
+    db = _ledger(tmp_path)
+    try:
+        if purpose == "source":
+            identity, wire, ids = source_case()
+            reserver = runtime.patient_summary_usage_reserver(db, project_id=1, guard=lambda _stage: None,
+                daily_request_budget=100, identity=identity, purpose="source")
+        else:
+            identity, wire, ids = IDENTITY, body(), [FACT0, FACT1]
+            reserver = runtime.patient_summary_usage_reserver(db, project_id=1, guard=lambda _stage: None,
+                daily_request_budget=100, identity=identity)
+
+        def reserve_then_window_ends(payload, timeout):
+            reservation = reserver(payload, timeout)
+            until("2000-01-01T00:00:00+00:00")     # the window ended while BEGIN waited
+            return reservation
+
+        def seal(unsent, reason):
+            db.db.execute("BEGIN IMMEDIATE")
+            with db.db:
+                runtime.patient_summary_resolve_request_tx(db, unsent, identity, {}, set(), project_id=1,
+                                                           purpose=purpose, not_sent=reason)
+
+        class Client:
+            supports_attempt_hooks = True
+            posted = False
+
+            def evaluate(self, state, questions, deadline, *, before_attempt, after_result, reserve_fn, transport):
+                before_attempt()
+                reserve_fn(wire, 10)
+                before_attempt()                 # the client's last hook before its POST
+                self.posted = True
+
+        client = Client()
+        bound = runtime.bind_jev(client, lambda _stage: None, reserve_then_window_ends,
+                                 config_path=conf, not_sent=seal)
+        with pytest.raises(semantic_jev.JevError) as raised:
+            bound.evaluate({}, {}, time.time() + 60)
+        assert raised.value.detail == "semantic_until_expired" and not client.posted
+        (meta,) = [json.loads(row[0]) for row in db.db.execute(
+            "SELECT meta FROM artifacts WHERE kind='semantic_usage'")]
+        assert meta["quality_result"] == {"answers": {}, "invalid": [], "not_sent": "semantic_until_expired"}
+        # Settled, not unknown and not an invalid attempt: once the window reopens it is asked again.
+        assert runtime.patient_summary_request_problem(db.db, 1, identity, ids, purpose=purpose) is None
+        until("2999-01-01T00:00:00+00:00")
+        assert reserver(wire, 10) is not None
+    finally:
+        db.close()
+
+
+def test_not_sent_is_only_a_seal_without_answers(tmp_path):
+    db = _ledger(tmp_path)
+    try:
+        reservation = reserve(db)
+        db.db.execute("BEGIN IMMEDIATE")
+        for answers, invalid, reason in (({FACT0: ANSWER}, set(), "semantic_until_expired"),
+                                         ({}, {FACT0}, "semantic_until_expired"), ({}, set(), "http_200")):
+            with pytest.raises(ValueError):
+                runtime.patient_summary_resolve_request_tx(db, reservation, IDENTITY, answers, invalid,
+                                                           project_id=1, not_sent=reason)
+        db.db.rollback()
+    finally:
+        db.close()

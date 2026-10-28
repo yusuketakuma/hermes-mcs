@@ -9,7 +9,8 @@
     "終了時刻は時差付きのISO 8601形式（例: 2026-10-28T23:59:59+09:00）で指定します。時刻を過ぎると、Anthropicは再試行を含む新しい送信を止め、Jevは手動の評価ツールを含む新しい要求を予約しません。送信中の要求は最後まで処理して結果を保存し、新着投稿の保存と既存の通知はそのまま続きます。",
     "`.env` のキーを、権限・所有者・重複行・export接頭辞・空白などの理由で使えない場合は、値を表示せずに理由を `check` に表示します。キーを読む条件は変わりません。",
     "Jevで `semantic.mode` を指定して `daily_request_budget` を省略した場合、1日の要求上限が0のため外部解析が行われないことを `check` に表示します。上限の扱いは変わりません。",
-    "`cloud-llm plan`・`estimate` は、費用上限がないために送信しない状態を `cost_limit_required` と表示します。"
+    "`cloud-llm plan`・`estimate` は、費用上限がないために送信しない状態を `cost_limit_required` と表示します。",
+    "Jevでは、予約した直後、送信の前に終了時刻を過ぎた要求も送信しません。患者情報の照合では、その予約を未送信として記録します。照合が止まったままにならず、期間を延ばすと同じ質問をもう一度問い合わせます。"
   ],
   "refs": [
     "mcs/llm/cloud_policy.py",
@@ -19,6 +20,7 @@
     "mcs/ops/cloud_cli.py",
     "docs/guides/ANTHROPIC.md",
     "mcs/extract/llm/extract_llm.py",
-    "mcs/semantic/semantic_runtime.py"
+    "mcs/semantic/semantic_runtime.py",
+    "mcs/patients/patient_context_refresh.py"
   ]
 }
