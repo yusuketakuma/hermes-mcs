@@ -190,6 +190,25 @@ def test_features_refuses_an_active_shared_lock(monkeypatch, tmp_path):
     assert json.loads(path.read_text()) == initial
 
 
+@pytest.mark.parametrize("failure", ["oversize", "invalid_lock"])
+def test_features_reports_no_save_before_publication(monkeypatch, tmp_path, capsys, failure):
+    initial = {"mcs_login_id": "synthetic", "notify_target": "local"}
+    path = _features_env(monkeypatch, tmp_path, initial)
+    raw = path.read_bytes()
+    if failure == "oversize":
+        monkeypatch.setattr(mcs_util, "CONFIG_MAX_BYTES", len(raw))
+    else:
+        lock = Path(str(path) + ".edit.lock")
+        lock.write_text("synthetic nonempty lock")
+        lock.chmod(0o600)
+    _during_the_prompt(monkeypatch, lambda: None)
+    assert mcs_setup.main(["features"]) == 1
+    assert path.read_bytes() == raw
+    out = capsys.readouterr().out
+    assert "保存していません" in out
+    assert "保存結果を確認できません" not in out
+
+
 @pytest.mark.parametrize("initially_present", [True, False])
 @pytest.mark.parametrize("error", [OSError, FileNotFoundError])
 def test_features_reports_unknown_after_publication_fsync_error(monkeypatch, tmp_path, capsys,
