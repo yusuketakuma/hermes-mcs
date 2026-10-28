@@ -1,5 +1,6 @@
 """Synthetic Hermes CLI only: no real Hermes, Slack or Discord."""
 import getpass
+import os
 import subprocess
 
 import pytest
@@ -171,3 +172,60 @@ def test_a_destination_that_moved_during_input_is_not_written(term, tmp_path, mo
     monkeypatch.setattr(getpass, "getpass", enter)
     assert setup.run("hermes", "", "discord", cli=hermes) == 1
     assert not [c for c in hermes.calls if c[1][:2] == ("config", "set")]
+
+
+def _tree(tmp_path, *, shebang="#!/bin/sh\n", body='echo "argv=$*" "pp=${PYTHONPATH-unset}" "dy=${DYLD_INSERT_LIBRARIES-unset}"\n'):
+    """A synthetic install: the install.sh shim and its venv executable (no real Hermes)."""
+    venv = tmp_path / "venv" / "bin"
+    venv.mkdir(parents=True)
+    real = venv / "hermes"
+    real.write_text(shebang + body)
+    real.chmod(0o700)
+    shim_dir = tmp_path / "bin"
+    shim_dir.mkdir()
+    shim = shim_dir / "hermes"
+    shim.write_text(f'#!/usr/bin/env bash\nunset PYTHONPATH\nunset PYTHONHOME\nexec {real} "$@"\n')
+    shim.chmod(0o700)
+    return shim, real
+
+
+def test_the_mcs_shim_runs_its_venv_command_directly_with_a_minimal_environment(tmp_path, monkeypatch):
+    shim, real = _tree(tmp_path)
+    for key, value in (("PYTHONPATH", "/synthetic/inject"), ("DYLD_INSERT_LIBRARIES", "/synthetic/lib"),
+                       ("BASH_ENV", "/synthetic/rc"), ("HERMES_HOME", str(tmp_path / "hh"))):
+        monkeypatch.setenv(key, value)
+    argv0, env, identity = setup.trusted_command(str(shim))
+    assert argv0 == os.path.realpath(real) and len(identity) == 3       # shim, venv command, /bin/sh
+    assert not {"PYTHONPATH", "DYLD_INSERT_LIBRARIES", "BASH_ENV"} & set(env)
+    assert env["HERMES_HOME"] == str(tmp_path / "hh") and env["PATH"].startswith(os.path.dirname(argv0))
+    cli, unchanged = setup.secret_cli(str(shim))
+    out = cli("ignored", "default", "config", "env-path").stdout
+    assert "argv=-p default config env-path" in out and "pp=unset" in out and "dy=unset" in out
+    assert unchanged()
+    real.write_text("#!/bin/sh\necho swapped\n")                         # the same user edits it meanwhile
+    assert not unchanged()
+
+
+@pytest.mark.parametrize("change, code", [
+    ("group_writable_dir", "hermes_writable_by_others"),
+    ("env_shebang", "hermes_interpreter_from_path"),
+    ("relative_shebang", "hermes_interpreter_unknown"),
+    ("missing", "hermes_missing"),
+])
+def test_an_unprovable_hermes_command_is_refused_before_any_input(tmp_path, change, code):
+    shim, real = _tree(tmp_path, shebang={"env_shebang": "#!/usr/bin/env python3\n",
+                                          "relative_shebang": "#!python3\n"}.get(change, "#!/bin/sh\n"))
+    if change == "group_writable_dir":
+        real.parent.chmod(0o770)
+    target = str(tmp_path / "nowhere") if change == "missing" else str(shim)
+    with pytest.raises(setup.UntrustedExecutable) as raised:
+        setup.trusted_command(target)
+    assert str(raised.value) == code
+
+
+def test_run_stops_before_asking_when_the_command_is_untrusted(term, tmp_path, capsys):
+    shim, real = _tree(tmp_path, shebang="#!/usr/bin/env python3\n")
+    term([], [])                                       # any prompt would raise StopIteration
+    assert setup.run(str(shim), "", "slack") == 1
+    out = capsys.readouterr().out
+    assert "hermes_bin" in out and "hermes_interpreter_from_path" in out

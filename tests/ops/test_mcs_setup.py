@@ -9,6 +9,7 @@ import setup_wizard
 import mcs_config
 import scheduled_jobs
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1699,6 +1700,13 @@ def _plugin_env(monkeypatch, existing=None):
     monkeypatch.setattr(
         mcs_setup, "_hermes_config_set",
         lambda e, p, k, v: sets.append((p, k, str(v))) or True)
+    # secrets go through the trusted Hermes command; here it forwards to the stubbed writer
+    def secret_cli(e, p, *argv, input_text=None):
+        if argv[:2] == ("config", "set"):
+            ok = mcs_setup._hermes_config_set(e, p, argv[2], input_text)
+            return subprocess.CompletedProcess(argv, 0 if ok else 1, "", "")
+        return subprocess.CompletedProcess(argv, 1, "", "")
+    monkeypatch.setattr(mcs_setup, "_secret_hermes", lambda e: (secret_cli, lambda: True))
     # the token state comes from the profile .env line; a saved value reads back
     monkeypatch.setattr(
         mcs_setup, "_hermes_token_state",
