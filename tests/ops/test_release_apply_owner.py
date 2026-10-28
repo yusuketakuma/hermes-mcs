@@ -1250,7 +1250,7 @@ def test_apply_control_signing_rejects_admin_registration_cross_kind_and_unknown
 
 @pytest.mark.parametrize('failure', [None, 'global-hook', 'signature', 'artifact', 'schema', 'disabled', 'uncertain_write',
     'run-registration', 'run-operation', 'run-grant', 'run-cancel', 'run-epoch', 'run-fsync-expiry', 'run-fsync-rollback', 'run-start-uncertain', 'run-unfinished-journal', 'run-git-attributes', 'run-git-grafts',
-    'run-settings-required', 'run-settings-unverified', 'run-settings-late'])
+    'run-settings-required', 'run-settings-unverified', 'run-settings-late', 'run-settings-expiry'])
 def test_native_plan_freezes_independent_report_after_real_tty_signature_and_artifact_checks(native_product, registered, tmp_path, failure):
     # Development-only accepted root and synthetic credentials; no authorization or crypto is mocked.
     import base64
@@ -1526,6 +1526,7 @@ if pid==0:
      elif failure=='run-cancel':owner._cancel_native_change(control,runtime_home=home,operation_id=operation_id)
      elif failure=='run-epoch':support_state.disable(monitor,now_ms=packet['now'])
      elif failure=='run-settings-late':(home/'data/install_options.json').write_text('{"v":1,"install_args":[]}')
+     elif failure=='run-settings-expiry':admission_box['grant_returned']=True
     return json.dumps(value,ensure_ascii=True).encode('ascii')
    original_child=owner._run_effect_post_merge
    def observed_child(*args,**kwargs):
@@ -1554,6 +1555,15 @@ if pid==0:
    update_journal.save_state(home/'data/update_state.json',previous)
    if failure=='run-settings-required':(home/'data/install_options.json').write_text('{"v":1,"install_args":[]}')
    if failure=='run-settings-unverified':(home/'data/install_options.json').write_text('{broken')
+   if failure=='run-settings-expiry':
+    check_settings=owner._require_settled_install_options;checks_after_grant=[]
+    def expire_after_last_probe(*args,**kwargs):
+     result=check_settings(*args,**kwargs)
+     if admission_box.get('grant_returned'):
+      checks_after_grant.append(True)
+      if len(checks_after_grant)==2:time.time=lambda:(packet['now']+31000)/1000
+     return result
+    owner._require_settled_install_options=expire_after_last_probe
    assert not (local_problems:=mcs_update.precheck_local(mcs_update.mcs_util.load_config(),deadline=time.monotonic()+30)),local_problems
    if failure in ('run-fsync-expiry','run-fsync-rollback','run-start-uncertain'):
     write=control.write
@@ -1581,9 +1591,12 @@ if pid==0:
      assert update_journal.load_state(home/'data/update_state.json').get('applying') is None
      if failure.startswith('run-settings-'):
       assert 'release_ref' not in update_journal.load_state(home/'data/update_state.json')
-      assert (home/'data/install_options.json').exists()
-      assert error.code==('RELEASE_APPLY_SETTINGS_MIGRATION_UNVERIFIED' if failure=='run-settings-unverified' else 'RELEASE_APPLY_SETTINGS_MIGRATION_REQUIRED')
-      if failure!='run-settings-late':assert calls==[]
+      if failure=='run-settings-expiry':
+       assert error.code=='RELEASE_APPLY_RUN_HOLD' and len(checks_after_grant)==2
+      else:
+       assert (home/'data/install_options.json').exists()
+       assert error.code==('RELEASE_APPLY_SETTINGS_MIGRATION_UNVERIFIED' if failure=='run-settings-unverified' else 'RELEASE_APPLY_SETTINGS_MIGRATION_REQUIRED')
+       if failure!='run-settings-late':assert calls==[]
      assert not owner._EFFECT_CAPS and not owner._EFFECT_PARENTS and not owner._LIVE_CONTINUATIONS
      assert control.read('release-successor.json') is None
      assert not hook_marker.exists()

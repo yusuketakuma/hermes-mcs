@@ -985,6 +985,14 @@ def _run_native_release(control, monitor, *, runtime_home, repository, operation
                     raise ValueError
                 _initial_provider_source(control, repository, deadline=bounded)
                 _require_settled_install_options(runtime_home, repository, bounded)
+                # The bounded source and settings probes can consume the
+                # remaining grant window. Never spend the earlier timestamp.
+                now = int(time.time() * 1000)
+                apply.validate_apply_authorization(**authorization, grant=grant, admission=admission, now_ms=now)
+                if (now >= registration['expires_at']
+                        or not operation['window']['starts_at'] <= now < operation['window']['ends_at']
+                        or not grant['not_before'] <= now < grant['expires_at'] or time.monotonic() >= bounded):
+                    raise ValueError
                 # Consume the same-process RAM continuation before the durable boundary.
                 with _EFFECT_MUTEX:
                     if os.getpid() != _EFFECT_PROCESS_ID or _LIVE_CONTINUATIONS.pop(owner, None) is not continuation:

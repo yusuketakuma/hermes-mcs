@@ -1,0 +1,8 @@
+{
+  "category": "security",
+  "title": "release更新の開始直前に承認の期限を再確認",
+  "summary": "release更新の開始前の確認中に承認の期限が切れた場合、更新を開始せず承認記録を保持します。",
+  "upgrade": "保留された更新は、既存の承認と状態を担当者が確認してください。",
+  "details": ["設定とsourceの確認後、grant・更新実施窓・登録の期限を改めて照合します。"],
+  "refs": ["mcs/ops/release_apply_owner.py"]
+}
