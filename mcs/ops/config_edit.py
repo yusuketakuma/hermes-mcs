@@ -22,11 +22,12 @@ def _identity(info):
             info.st_mtime_ns, info.st_ctime_ns)
 
 
-def _snapshot(path=None):
+def _snapshot(path=None, *, limit=None):
     path = Path(mcs_util.CONF_PATH if path is None else path)
-    raw, info = safe_io.read_regular_nofollow(path, mcs_util.CONFIG_MAX_BYTES,
+    limit = mcs_util.CONFIG_MAX_BYTES if limit is None else limit
+    raw, info = safe_io.read_regular_nofollow(path, limit,
                                             lambda: ValueError("config_unreadable"), with_stat=True)
-    if len(raw) > mcs_util.CONFIG_MAX_BYTES:
+    if len(raw) > limit:
         raise ValueError("config_unreadable")
     current = path.lstat()
     if not stat.S_ISREG(current.st_mode) or _identity(current) != _identity(info):
