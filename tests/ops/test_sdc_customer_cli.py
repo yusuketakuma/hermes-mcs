@@ -222,6 +222,21 @@ def test_locked_customer_reconnect_makes_no_request_or_keychain_write(world, cap
     assert KEY not in text.out + text.err
 
 
+def test_disconnect_config_conflict_reports_stop_unconfirmed(world, monkeypatch, capsys):
+    home, cfg, native, calls, jobs = world
+    root = home / 'customer'
+    seed(root, customer=True, active=True, native=native)
+    cfg['sdc'] = {'enabled': True, 'state_root': str(root)}
+    before = (root / 'state.json').read_bytes()
+    def conflict(*args, **kwargs):
+        raise sdc_cli.config_edit.ConfigConflict('config_busy')
+    monkeypatch.setattr(sdc_cli, 'service', conflict)
+    assert sdc_cli.main(['disconnect']) == 1
+    assert (root / 'state.json').read_bytes() == before
+    assert calls == [] and jobs == []
+    assert '停止していない可能性' in capsys.readouterr().err
+
+
 @pytest.mark.parametrize('command', ['connection', 'disconnect', 'rotate-key'])
 def test_customer_flag_is_only_an_explicit_new_enrollment_option(world, command):
     _, _, native, calls, jobs = world
@@ -237,7 +252,11 @@ def test_real_service_owner_persists_customer_root_and_keeps_other_sdc_settings(
     monkeypatch.setattr(sdc_cli.mcs_util, 'CONF_PATH', str(tmp_path / 'config.json'))
     monkeypatch.setattr(sdc_cli.sys, 'platform', 'darwin')
     monkeypatch.setattr(sdc_cli.lifecycle_io, 'read_owner_config', lambda _: cfg)
-    monkeypatch.setattr(sdc_cli, 'atomic_write', lambda path, writer, **kwargs: saved.append(writer(io.StringIO())))
+    def save(path, writer, **kwargs):
+        stream = io.StringIO()
+        writer(stream)
+        saved.append(json.loads(stream.getvalue()))
+    monkeypatch.setattr(sdc_cli, 'atomic_write', save)
     monkeypatch.setattr(sdc_cli.service_management, 'default_paths', lambda **_: SimpleNamespace(agents_dir=tmp_path / 'agents'))
     monkeypatch.setattr(sdc_cli.service_management, 'service_substitutions', lambda config, **_: {'SDC_ROOT': config['sdc']['state_root']})
     monkeypatch.setattr(sdc_cli.service_management, 'desired_agents', lambda values, *a, **kw: {service_contract.SDC_LABEL: values['SDC_ROOT']})
@@ -245,8 +264,8 @@ def test_real_service_owner_persists_customer_root_and_keeps_other_sdc_settings(
     monkeypatch.setattr(sdc_cli.service_management, 'agent_reconcile', lambda *a, **kw: True)
     root = tmp_path / 'customer'
     sdc_cli.service(True, root, note=lambda _: None)
-    assert cfg['sdc'] == {'retained_setting': 'synthetic', 'enabled': True, 'state_root': str(root)}
-    assert saved == [None]
+    assert cfg['sdc'] == {'retained_setting': 'synthetic'}
+    assert saved[0]['sdc'] == {'retained_setting': 'synthetic', 'enabled': True, 'state_root': str(root)}
     assert reconciled[0][1] == str(root)
 
 
