@@ -839,9 +839,19 @@ def cmd_fact_source(args) -> int:
     foreign-criteria reports can never mint the token, and the written
     config is validated fail-closed before it lands.
     """
-    if not _guard_config(False):
+    import config_edit
+    import safe_io
+    try:
+        try:
+            os.lstat(CONF_PATH)
+        except FileNotFoundError:
+            base, cfg = None, {}
+        else:
+            raw_config, base = config_edit._snapshot(CONF_PATH)
+            cfg = config_edit._parse(raw_config)
+    except (OSError, ValueError, RecursionError):
+        print("解析結果の採用方法: config.json を読み取れないため変更していません。設定を確認してください")
         return 1
-    cfg = mcs_util.load_config()
     existing_sem = cfg.get("semantic")
     if existing_sem is not None and not isinstance(existing_sem, dict):
         print("解析結果の採用方法: config.jsonのsemanticの形式が不正です。"
@@ -908,11 +918,6 @@ def cmd_fact_source(args) -> int:
                 or getattr(args, 'reason', None) != 'reviewed_sealed_holdout'):
             print('人による確認と理由の指定が必要です: --confirm-human --reason reviewed_sealed_holdout')
             return 1
-        try:
-            sem['fact_source_approval'] = record_approval(cfg, report)
-        except (OSError, ValueError):
-            print('承認記録を保存できません。保存先の権限と空き容量を確認してください')
-            return 1
         sem["fact_source_evidence"] = report
         sem["fact_source_gate"] = token(cfg, report)
     else:
@@ -920,15 +925,62 @@ def cmd_fact_source(args) -> int:
         sem.pop("fact_source_evidence", None)
         sem.pop("fact_source_approval", None)
     sem["fact_source"] = source
-    # Fail closed: never write a config the production validator rejects.
-    errors, _ = validate_config(cfg)
-    sem_errors = [e for e in errors
-                  if e.startswith(("config: semantic", "semantic:"))]
-    if sem_errors:
-        print("意味解析の設定に誤りがあるため保存していません。修正してください: "
-              + "; ".join(sem_errors))
+    approval_attempted = False
+    publication_started = False
+    try:
+        # Match the former writer's ability to create a missing parent directory.
+        os.makedirs(os.path.dirname(CONF_PATH) or ".", exist_ok=True)
+        with config_edit._edit_lock(CONF_PATH):
+            def current_base():
+                try:
+                    return config_edit._snapshot(CONF_PATH)[1]
+                except FileNotFoundError:
+                    return None
+
+            if current_base() != base:
+                raise config_edit.ConfigConflict("config_changed")
+            if source == "canonical":
+                approval_attempted = True
+                try:
+                    sem['fact_source_approval'] = record_approval(cfg, report)
+                except (OSError, ValueError, TypeError, RecursionError):
+                    print("承認記録の保存結果を確認できません。設定は保存していません。"
+                          "承認記録を確認してください")
+                    return 1
+            # The canonical validator requires the separate approval receipt.
+            errors, _ = validate_config(cfg)
+            sem_errors = [e for e in errors
+                          if e.startswith(("config: semantic", "semantic:"))]
+            if sem_errors:
+                print("意味解析の設定に誤りがあるため設定は保存していません。修正してください: "
+                      + "; ".join(sem_errors)
+                      + ("。承認記録が保存された可能性があります" if approval_attempted else ""))
+                return 1
+            body = json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + '\n'
+            if len(body.encode("utf-8")) > mcs_util.CONFIG_MAX_BYTES:
+                raise ValueError("config_too_large")
+            if current_base() != base:
+                raise config_edit.ConfigConflict("config_changed")
+            publication_started = True
+            if base is None:
+                safe_io.publish_new_bytes(CONF_PATH, body.encode("utf-8"))
+            else:
+                def write_checked(handle):
+                    handle.write(body)
+                    if current_base() != base:
+                        raise config_edit.ConfigConflict("config_changed")
+                safe_io.atomic_write(CONF_PATH, write_checked, 0o600,
+                                     tmp_prefix=".svc.", makedirs=False)
+    except config_edit.ConfigConflict:
+        print("設定が変更されたか、別の設定保存が進行中のため設定は保存していません。"
+              + ("承認記録が保存された可能性があります。" if approval_attempted else "")
+              + "設定を確認してから再実行してください")
         return 1
-    service_management.write_service_file(CONF_PATH, json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True) + '\n', 384)
+    except (OSError, ValueError, TypeError, RecursionError):
+        print(("設定の保存結果を確認できません。" if publication_started else "設定は保存していません。")
+              + ("承認記録が保存された可能性があります。" if approval_attempted else "")
+              + "設定を確認してから再実行してください")
+        return 1
     print(f"解析結果の採用方法を保存しました: semantic.fact_source = {source}"
           + (f"（評価証拠の識別子: {sem['fact_source_gate']}）"
              if source == "canonical" else ""))
