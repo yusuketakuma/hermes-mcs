@@ -29,7 +29,7 @@ import uuid
 from pathlib import Path
 from contextlib import suppress
 
-from mcs_util import RETRY_LATER_4XX, html_to_text, loads_dict, valid_hash
+from mcs_util import RETRY_LATER_4XX, html_to_text, loads_dict, strict_json, valid_hash
 
 
 import ledger_schema
@@ -40,6 +40,56 @@ from snapshots import publish_snapshot  # noqa: F401 - retained public ledger AP
 
 
 SCHEMA_VERSION = 10
+SEMANTIC_DEFERRED_INTAKE = 'semantic_deferred_intake'
+SEMANTIC_INTAKE_BATCH = 128
+SEMANTIC_JSON_MAX_BYTES = 1024 * 1024
+SEMANTIC_JSON_MAX_DEPTH = 128
+
+
+def semantic_job_payload(raw, *, db=None, project_id=None, root=None):
+    """Return a supported job payload, or None when its evidence must be held."""
+    from inference_version import CURRENT_VERSION, LEGACY_VERSION, read_version
+    if not isinstance(raw, str) or len(raw.encode('utf-8')) > SEMANTIC_JSON_MAX_BYTES:
+        return None
+    try:
+        value = strict_json(raw)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    if not isinstance(value, dict) or read_version(value) not in (CURRENT_VERSION, LEGACY_VERSION):
+        return None
+    stack = [(value, 0)]
+    while stack:
+        node, depth = stack.pop()
+        if depth > SEMANTIC_JSON_MAX_DEPTH:
+            return None
+        if type(node) is int and not -(2**63) <= node < 2**63:
+            return None
+        if isinstance(node, dict):
+            stack.extend((item, depth + 1) for item in node.values())
+        elif isinstance(node, list):
+            stack.extend((item, depth + 1) for item in node)
+    if 'targets' not in value:
+        quiet = value.get('deferred_quiet_targets', [])
+        if not isinstance(quiet, list) or any(type(mid) is not int or mid != root for mid in quiet):
+            return None
+        return value  # Legacy jobs use their root as the implicit target.
+    targets = value['targets']
+    if (not isinstance(targets, list) or not targets
+            or any(type(mid) is not int or not 0 < mid < 2**63 for mid in targets)):
+        return None
+    quiet = value.get('deferred_quiet_targets', [])
+    target_set = set(targets)
+    if not isinstance(quiet, list) or any(type(mid) is not int or mid not in target_set for mid in quiet):
+        return None
+    if db is not None and db.execute(
+            'SELECT 1 FROM json_each(?) target WHERE NOT EXISTS '
+            '(SELECT 1 FROM messages WHERE project_id=? AND message_id=target.value '
+            'AND (message_id=? OR parent_id=?)) LIMIT 1',
+            (json.dumps(targets), project_id, root, root)).fetchone():
+        return None
+    return value
+
+
 JOB_REASON_CODES = frozenset({
     "invalid_payload", "schema_error", "fetch_error", "network_error",
     "worker_error", "worker_timeout", "deadline_exceeded", "session_expired",
@@ -1740,7 +1790,8 @@ class Ledger:
 
     def semantic_seed_tx(self, project_id: int, message_ids: list,
                           origin: dict, *, invalidated_roots: set | None = None,
-                          _source_generation: str | None = None):
+                          _source_generation: str | None = None,
+                          _preserve_pending_live: bool = False):
         """Durable semantic-eval seeding — caller holds `with self.db` so
         job creation commits (or rolls back) with the message and notify
         intent that triggered it (INV-06, spec §18.1). Keyed by thread
@@ -1759,9 +1810,28 @@ class Ledger:
         now = time.time()
         for root, ids in roots.items():
             existing = self.db.execute("""
-              SELECT job_id,state,attempts,payload FROM fetch_jobs
+              SELECT job_id,state,attempts,substr(payload,1,?) AS payload FROM fetch_jobs
               WHERE kind='semantic' AND project_id=? AND message_id=?
-            """, (project_id, root)).fetchone()
+            """, (SEMANTIC_JSON_MAX_BYTES + 1, project_id, root)).fetchone()
+            old_pl = (semantic_job_payload(existing['payload'], db=self.db,
+                      project_id=project_id, root=root) if existing is not None else None)
+            if existing is not None and old_pl is None:
+                # Record the incoming work separately: the existing job is
+                # evidence and cannot be reinterpreted or overwritten here.
+                targets = sorted(set(ids))
+                for start in range(0, len(targets), SEMANTIC_INTAKE_BATCH):
+                    content = json.dumps(
+                        {'targets': targets[start:start + SEMANTIC_INTAKE_BATCH], 'origin': origin},
+                        ensure_ascii=False, sort_keys=True, allow_nan=False)
+                    if len(content.encode('utf-8')) > SEMANTIC_JSON_MAX_BYTES:
+                        raise ValueError('semantic_deferred_intake_too_large')
+                    if not self.db.execute(
+                            'SELECT 1 FROM artifacts WHERE kind=? AND project_id=? '
+                            'AND message_id=? AND content=? LIMIT 1',
+                            (SEMANTIC_DEFERRED_INTAKE, project_id, root, content)).fetchone():
+                        self.artifact_add_tx(SEMANTIC_DEFERRED_INTAKE, content,
+                                             project_id=project_id, message_id=root)
+                continue
             eligible = isinstance(origin, dict) \
                 and origin.get("event_id") is not None
             notification_free = isinstance(origin, dict) \
@@ -1772,14 +1842,13 @@ class Ledger:
             source_generation = (_source_generation if _source_generation is not None
                                  else self._semantic_source_generation(project_id, root))
             if existing is not None:
-                old_pl = loads_dict(existing["payload"] or "{}") or {}
                 stored_targets = old_pl.get("targets")
-                old_targets = ({x for x in stored_targets if type(x) is int}
-                               if isinstance(stored_targets, list) else set())
+                old_targets = (set(stored_targets) if isinstance(stored_targets, list) else {root})
                 old_origin = old_pl.get("origin")
                 old_eligible = bool(old_pl.get("eligible"))
                 old_notification_free = bool(old_pl.get(
                     "notification_free"))
+                old_quiet = set(old_pl.get('deferred_quiet_targets', []))
                 arrival = origin.get('arrival_event_id') if isinstance(origin, dict) else None
                 preserve_live = (execution is not None
                                  and existing['state'] == 'pending'
@@ -1788,8 +1857,28 @@ class Ledger:
                                      "SELECT 1 FROM notify_outbox WHERE event_id=? AND project_id=? "
                                      "AND kind='new_messages' AND state!='suppressed'",
                                      (arrival, project_id)).fetchone() is not None)
+                if (_preserve_pending_live and existing['state'] == 'pending'
+                        and old_eligible and not old_notification_free
+                        and notification_free and old_targets):
+                    from semantic_notice import origin_event_id
+                    preserve_live = preserve_live or origin_event_id(
+                        self.db, project_id, sorted(old_targets)) is not None
                 pl = dict(old_pl)
                 pl["targets"] = sorted(old_targets | set(ids))
+                quiet = set(old_quiet)
+                if eligible:
+                    quiet.difference_update(ids)
+                elif _preserve_pending_live and notification_free:
+                    # History-only targets stay quiet even when a live sibling
+                    # causes the enclosing job to be notification-eligible.
+                    for mid in ids:
+                        if not (preserve_live and mid in old_targets
+                                and origin_event_id(self.db, project_id, [mid]) is not None):
+                            quiet.add(mid)
+                if quiet:
+                    pl['deferred_quiet_targets'] = sorted(quiet)
+                else:
+                    pl.pop('deferred_quiet_targets', None)
                 # once a job descends from a notify intent it keeps that
                 # provenance — a later history/replay merge must not
                 # demote its drain priority nor erase which arrival
@@ -1833,6 +1922,7 @@ class Ledger:
                     if not preserve_live:
                         pl['reprocess_only'] = True
                 payload_changed = (input_changed
+                                   or old_quiet != quiet
                                    or old_origin != pl.get("origin")
                                    or old_eligible != bool(pl.get("eligible"))
                                    or old_notification_free
@@ -1883,6 +1973,8 @@ class Ledger:
                     payload["eligible"] = True
                 elif notification_free:
                     payload["notification_free"] = True
+                    if _preserve_pending_live:
+                        payload['deferred_quiet_targets'] = sorted(set(ids))
                 self.db.execute("""
                   INSERT INTO fetch_jobs(kind,project_id,message_id,parent_id,
                     payload,state,next_try,created_at,updated_at)

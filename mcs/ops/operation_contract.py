@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import json
 
 from mcs_util import valid_text
 from mcs_util import positive, valid_hash
@@ -34,7 +35,7 @@ def bounded_integer(value, low: int, high: int) -> bool:
     return type(value) is int and low <= value <= high
 
 
-def retry_error(row, payload: dict, additional_attempts=None) -> str | None:
+def retry_error(row, payload: dict, additional_attempts=None, *, db=None) -> str | None:
     """Validate an ordinary or explicitly extended semantic retry.
 
     The same predicate is used by the Discord preview and the receipt writer;
@@ -47,6 +48,31 @@ def retry_error(row, payload: dict, additional_attempts=None) -> str | None:
     from inference_version import CURRENT_VERSION, LEGACY_VERSION, read_version
     if read_version(payload) not in (CURRENT_VERSION, LEGACY_VERSION):
         return "unsupported_inference_version"
+    targets = payload.get('targets')
+    if 'targets' in payload and (not isinstance(targets, list) or not targets
+            or any(type(mid) is not int or not 0 < mid < 2**63 for mid in targets)):
+        return "invalid_payload"
+    if db is not None and targets:
+        root = row['message_id']
+        project_id = row['project_id']
+        # Legacy/manual fixture rows may predate a stored root.  Where the
+        # root exists, never rewrite a target from another thread or project.
+        if db.execute('SELECT 1 FROM messages WHERE project_id=? AND message_id=?',
+                      (project_id, root)).fetchone() and db.execute(
+                'SELECT 1 FROM json_each(?) target WHERE NOT EXISTS '
+                '(SELECT 1 FROM messages WHERE project_id=? AND message_id=target.value '
+                'AND (message_id=? OR parent_id=?)) LIMIT 1',
+                (json.dumps(targets), project_id, root, root)).fetchone():
+            return "invalid_payload"
+    stack = [(payload, 0)]
+    while stack:
+        value, depth = stack.pop()
+        if depth > 128 or (type(value) is int and not -(2**63) <= value < 2**63):
+            return "invalid_payload"
+        if isinstance(value, dict):
+            stack.extend((item, depth + 1) for item in value.values())
+        elif isinstance(value, list):
+            stack.extend((item, depth + 1) for item in value)
     state = row["state"] if not isinstance(row, dict) else row.get("state")
     attempts = row["attempts"] if not isinstance(row, dict) \
         else row.get("attempts")

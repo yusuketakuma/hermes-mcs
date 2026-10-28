@@ -782,7 +782,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     # lock and still be written in time.
     transport_deadline = deadline - (_backlog_commit_reserve(scfg)
                                      if lane == "backlog" else 0.0)
-    pl = loads_dict(job["payload"])
+    from ledger import semantic_job_payload
+    pl = semantic_job_payload(job['payload'], db=ledger.db, project_id=pid, root=root)
     if pl is None or not is_current(pl):
         return "failed"
     targets = pl.get("targets", [root])
@@ -1243,7 +1244,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 ledger, pid, root, mid, fp, policy, r["summary"], final_status,
                 members[mid], all_targets, mode=scfg["mode"],
                 summary_mode=scfg["summary_mode"],
-                notification_free=pl.get("notification_free"),
+                notification_free=(pl.get("notification_free")
+                                   or mid in pl.get('deferred_quiet_targets', [])),
                 origin=pl.get("origin"), content_quality=bundle["content_quality"])
         if (not stale and not pending and loops_done
                 and not runtime.transition_tx(ledger, token, "done")):
@@ -1428,6 +1430,24 @@ def _sched_write(ledger, state: dict, *, commit=True) -> None:
         ledger.db.commit()
 
 
+def _sched_state_strict(ledger):
+    from ledger import SEMANTIC_JSON_MAX_BYTES
+    from mcs_util import strict_json
+    row = ledger.db.execute('SELECT substr(payload,1,?) FROM fetch_jobs WHERE kind=? '
+                            'AND project_id=0 AND message_id=0',
+                            (SEMANTIC_JSON_MAX_BYTES + 1, SCHED_KIND)).fetchone()
+    if row is None:
+        return {}
+    raw = row[0]
+    if not isinstance(raw, str) or len(raw.encode('utf-8')) > SEMANTIC_JSON_MAX_BYTES:
+        return None
+    try:
+        state = strict_json(raw)
+    except (TypeError, ValueError, RecursionError):
+        return None
+    return state if isinstance(state, dict) else None
+
+
 @contextmanager
 def _sched_update(ledger):
     """Serialize a short scheduler read/modify/write against concurrent owners."""
@@ -1440,8 +1460,80 @@ def _sched_update(ledger):
         _sched_write(ledger, state, commit=False)
 
 
+def _resume_deferred_intake(ledger, limit, deadline=None):
+    """Replay a bounded slice of held intake after its original job is repaired."""
+    from ledger import (SEMANTIC_DEFERRED_INTAKE, SEMANTIC_INTAKE_BATCH,
+                        SEMANTIC_JSON_MAX_BYTES, semantic_job_payload)
+    from mcs_util import strict_json
+
+    if not ledger.db.execute('SELECT 1 FROM artifacts WHERE kind=? LIMIT 1',
+                             (SEMANTIC_DEFERRED_INTAKE,)).fetchone():
+        return
+    if deadline is not None and time.monotonic() >= deadline:
+        return
+    ledger.db.execute('BEGIN IMMEDIATE')
+    with ledger.db:
+        sched = _sched_state_strict(ledger)
+        if sched is None:
+            return
+        cursor = sched.get('deferred_intake_cursor', [0, 0])
+        if (not isinstance(cursor, list) or len(cursor) != 2
+                or any(type(value) is not int or not 0 <= value < 2**63 for value in cursor)):
+            return
+        rows = ledger.db.execute(
+            'SELECT artifact_id,project_id,message_id,substr(content,1,?) AS content FROM artifacts '
+            'WHERE kind=? AND (message_id,artifact_id)>(?,?) ORDER BY message_id,artifact_id LIMIT ?',
+            (SEMANTIC_JSON_MAX_BYTES + 1, SEMANTIC_DEFERRED_INTAKE, *cursor, limit)).fetchall()
+        if not rows:
+            sched['deferred_intake_cursor'] = [0, 0]
+            _sched_write(ledger, sched, commit=False)
+            return
+        for row in rows:
+            if deadline is not None and time.monotonic() >= deadline:
+                break
+            cursor = [row['message_id'], row['artifact_id']]
+            existing = ledger.db.execute(
+                "SELECT substr(payload,1,?) AS payload FROM fetch_jobs WHERE kind='semantic' "
+                'AND project_id=? AND message_id=?',
+                (SEMANTIC_JSON_MAX_BYTES + 1, row['project_id'], row['message_id'])).fetchone()
+            if existing is not None and semantic_job_payload(
+                    existing['payload'], db=ledger.db,
+                    project_id=row['project_id'], root=row['message_id']) is None:
+                continue
+            if not isinstance(row['content'], str) or len(row['content'].encode('utf-8')) > SEMANTIC_JSON_MAX_BYTES:
+                continue
+            try:
+                intake = strict_json(row['content'])
+            except (TypeError, ValueError, RecursionError):
+                continue
+            if (not isinstance(intake, dict) or not isinstance(intake.get('origin'), dict)
+                    or not isinstance(intake.get('targets'), list) or not intake['targets']
+                    or len(intake['targets']) > SEMANTIC_INTAKE_BATCH
+                    or any(type(mid) is not int or not 0 < mid < 2**63 for mid in intake['targets'])):
+                continue
+            marks = ','.join('?' for _ in intake['targets'])
+            found = ledger.db.execute(
+                f'SELECT COUNT(*) FROM messages WHERE project_id=? AND message_id IN ({marks}) '
+                'AND COALESCE(parent_id,message_id)=?',
+                (row['project_id'], *intake['targets'], row['message_id'])).fetchone()[0]
+            if found != len(set(intake['targets'])):
+                continue
+            ledger.semantic_seed_tx(row['project_id'], intake['targets'], intake['origin'],
+                                    _preserve_pending_live=True)
+            ledger.db.execute('DELETE FROM artifacts WHERE artifact_id=? AND kind=?',
+                              (row['artifact_id'], SEMANTIC_DEFERRED_INTAKE))
+        # Seeding may advance the persisted source epoch; preserve it instead
+        # of replacing it with the scheduler snapshot from before seeding.
+        latest = _sched_state(ledger)
+        sched.clear()
+        sched.update(latest)
+        sched['deferred_intake_cursor'] = cursor
+        _sched_write(ledger, sched, commit=False)
+
+
 def _reprocess_target_state(ledger, row, scfg):
     """Observe one stored source without mistaking job completion for coverage."""
+    from ledger import SEMANTIC_JSON_MAX_BYTES, semantic_job_payload
     from mcs_queries import current_v4_id, paused
     pid, mid = row['project_id'], row['message_id']
     if row['fetch_reason'] in ('forbidden', 'permission_denied', 'access_revoked'):
@@ -1477,10 +1569,11 @@ def _reprocess_target_state(ledger, row, scfg):
             doc, _ = v4.reproject_doc(ledger.db, mid, meta)
             if doc is not None:
                 return 'current'
-    job = ledger.db.execute("SELECT state,payload FROM fetch_jobs WHERE kind=? "
+    job = ledger.db.execute("SELECT state,substr(payload,1,?) AS payload FROM fetch_jobs WHERE kind=? "
                             'AND project_id=? AND message_id=?',
-                            (JOB_KIND, pid, root)).fetchone()
-    if job is not None and is_current(loads_dict(job['payload'])):
+                            (SEMANTIC_JSON_MAX_BYTES + 1, JOB_KIND, pid, root)).fetchone()
+    if job is not None and is_current(semantic_job_payload(
+            job['payload'], db=ledger.db, project_id=pid, root=root)):
         if job['state'] == 'failed':
             return 'failed'
         if audit and audit['content'].get('status') == 'NEEDS_REVIEW':
@@ -1532,6 +1625,7 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
     scfg, errors = runtime_config(cfg)
     if errors or scfg['mode'] == 'off':
         return {'status': 'off', 'complete': False}
+    _resume_deferred_intake(ledger, limit, deadline)
     generation = runtime.execution_generation(scfg)
     scope_generation = mcs_util.payload_hash(scfg['project_ids'])
     version = ledger.db.execute('PRAGMA data_version').fetchone()[0]
@@ -1698,14 +1792,23 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
             break
         state = _reprocess_target_state(ledger, row, scfg)
         replay = None
-        if state in ('pending', 'repair_required', 'held', 'failed'):
+        if state in ('current', 'pending', 'repair_required', 'held', 'failed'):
             root = row['parent_id'] or row['message_id']
             key = (row['project_id'], root)
+            from ledger import SEMANTIC_JSON_MAX_BYTES, semantic_job_payload
+            old = ledger.db.execute('SELECT substr(payload,1,?) AS payload,state FROM fetch_jobs WHERE kind=? '
+                                    'AND project_id=? AND message_id=?',
+                                    (SEMANTIC_JSON_MAX_BYTES + 1, JOB_KIND, *key)).fetchone()
+            pl = (semantic_job_payload(old['payload'], db=ledger.db, project_id=key[0], root=root)
+                  if old is not None else {})
+            if old is not None and pl is None:
+                planned.append((row, 'held', None))
+                continue
+            if state == 'current':
+                planned.append((row, state, None))
+                continue
             if key not in sources:
                 sources[key] = ledger._semantic_source_generation(*key)
-            old = ledger.db.execute('SELECT payload,state FROM fetch_jobs WHERE kind=? '
-                                    'AND project_id=? AND message_id=?', (JOB_KIND, *key)).fetchone()
-            pl = loads_dict(old[0]) if old is not None else {}
             if (not is_current(pl)
                     or pl.get('execution_contract') == 1 and pl.get('execution_generation') != generation
                     or pl.get('source_generation') != sources[key]
@@ -1756,6 +1859,7 @@ _REALTIME_ORDER = ("CASE WHEN next_try<=updated_at THEN updated_at "
 # never fit the call ends in a visible failure instead of looping (M6).
 LONG_FREE_DEFER_CAP = 24
 _LONG_DEFERS_MAX = 500
+_HELD_LONG_DEFER = 'semantic_held_long_defer'
 
 
 def _long_defers(ledger) -> dict:
@@ -1776,12 +1880,25 @@ def _merge_long_defers(ledger, sched: dict, seen: dict) -> None:
     if not current:
         sched.pop("long_defers", None)
         return
+    from ledger import SEMANTIC_JSON_MAX_BYTES, semantic_job_payload
     alive = {}
     for row in ledger.db.execute(
-            "SELECT job_id,payload FROM fetch_jobs WHERE kind=? "
-            "AND state='pending' AND job_id IN (SELECT value FROM json_each(?))",
-            (JOB_KIND, json.dumps(sorted(int(k) for k in current)))):
+            "SELECT job_id,substr(payload,1,?) AS payload,state,project_id,message_id FROM fetch_jobs WHERE kind=? "
+            "AND state IN ('pending','failed') AND job_id IN (SELECT value FROM json_each(?))",
+            (SEMANTIC_JSON_MAX_BYTES + 1, JOB_KIND, json.dumps(sorted(int(k) for k in current)))):
         key = str(row["job_id"])
+        if semantic_job_payload(row['payload'], db=ledger.db,
+                                project_id=row['project_id'], root=row['message_id']) is None:
+            content = json.dumps({'job_id': row['job_id'], **current[key]}, sort_keys=True)
+            if not ledger.db.execute(
+                    "SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND message_id=? "
+                    "AND model='held' AND content=? LIMIT 1",
+                    (_HELD_LONG_DEFER, row['project_id'], row['message_id'], content)).fetchone():
+                ledger.artifact_add_tx(_HELD_LONG_DEFER, content, project_id=row['project_id'],
+                                       message_id=row['message_id'], model='held')
+            continue
+        if row['state'] != 'pending':
+            continue
         generation = runtime.payload_generation(runtime.parse_payload(row))
         if current[key]["g"] == generation:
             alive[key] = current[key]
@@ -1793,15 +1910,162 @@ def _merge_long_defers(ledger, sched: dict, seen: dict) -> None:
         sched.pop("long_defers", None)
 
 
+def _restore_held_long_defers(ledger, limit, deadline):
+    """Restore preserved defer budgets before a repaired job is selected."""
+    from ledger import SEMANTIC_JSON_MAX_BYTES, semantic_job_payload
+    from mcs_util import strict_json
+    if time.monotonic() >= deadline or not ledger.db.execute(
+            "SELECT 1 FROM artifacts WHERE kind=? AND model='held' LIMIT 1",
+            (_HELD_LONG_DEFER,)).fetchone():
+        return
+    status = {'scanned': 0, 'restored': 0, 'capacity_blocked': 0, 'conflict': 0}
+    ledger.db.execute('BEGIN IMMEDIATE')
+    with ledger.db:
+        sched = _sched_state_strict(ledger)
+        if sched is None:
+            return
+        cursor = sched.get('held_long_defer_cursor', [0, 0])
+        if (not isinstance(cursor, list) or len(cursor) != 2
+                or any(type(value) is not int or not 0 <= value < 2**63 for value in cursor)):
+            return
+        current = sched.get('long_defers', {})
+        if not isinstance(current, dict) or len(current) > _LONG_DEFERS_MAX:
+            return
+        rows = ledger.db.execute(
+            "SELECT artifact_id,project_id,message_id,substr(content,1,?) AS content FROM artifacts "
+            "WHERE kind=? AND (message_id,artifact_id)>(?,?) ORDER BY message_id,artifact_id LIMIT ?",
+            (SEMANTIC_JSON_MAX_BYTES + 1, _HELD_LONG_DEFER, *cursor, limit)).fetchall()
+        if not rows:
+            cursor = [0, 0]
+        for row in rows:
+            if time.monotonic() >= deadline:
+                break
+            status['scanned'] += 1
+            cursor = [row['message_id'], row['artifact_id']]
+            raw = row['content']
+            if not isinstance(raw, str) or len(raw.encode('utf-8')) > SEMANTIC_JSON_MAX_BYTES:
+                continue
+            try:
+                item = strict_json(raw)
+            except (TypeError, ValueError, RecursionError):
+                continue
+            if (not isinstance(item, dict) or type(item.get('job_id')) is not int
+                    or not isinstance(item.get('g'), str)
+                    or type(item.get('n')) is not int or item['n'] < 0):
+                continue
+            job = ledger.db.execute(
+                "SELECT job_id,project_id,message_id,state,substr(payload,1,?) AS payload "
+                "FROM fetch_jobs WHERE kind='semantic' AND project_id=? AND message_id=?",
+                (SEMANTIC_JSON_MAX_BYTES + 1, row['project_id'], row['message_id'])).fetchone()
+            if job is None:
+                continue
+            payload = semantic_job_payload(job['payload'], db=ledger.db,
+                                           project_id=job['project_id'], root=job['message_id'])
+            if payload is None:
+                continue
+            generation = runtime.payload_generation(payload)
+            same_generation = job['job_id'] == item['job_id'] and generation == item['g']
+            if same_generation and job['state'] != 'pending':
+                # Failed jobs can be revived later without a new input.
+                # Keep their counter until it can be restored atomically.
+                continue
+            if same_generation:
+                key = str(job['job_id'])
+                item = {'g': item['g'], 'n': item['n']}
+                if key not in current and len(current) >= _LONG_DEFERS_MAX:
+                    status['capacity_blocked'] += 1
+                    continue
+                if key in current and current[key] != item:
+                    status['conflict'] += 1
+                    continue
+                current[key] = item
+                status['restored'] += 1
+            ledger.db.execute('UPDATE artifacts SET kind=? WHERE artifact_id=? AND kind=?',
+                              (_HELD_LONG_DEFER + '_history', row['artifact_id'], _HELD_LONG_DEFER))
+        sched['long_defers'] = current
+        sched['held_long_defer_cursor'] = cursor
+        _sched_write(ledger, sched, commit=False)
+    return status
+
+
 _ARCHIVED_JOB = ("EXISTS (SELECT 1 FROM patients p "
                  "WHERE p.project_id=fetch_jobs.project_id AND p.is_archived)")
 # an arrival-seeded job: a real notification event spawned it
-_ELIGIBLE_SQL = "json_valid(payload) AND COALESCE(json_extract(payload,'$.eligible'),0)=1"
+_ELIGIBLE_SQL = "CASE WHEN json_valid(payload) THEN COALESCE(json_extract(payload,'$.eligible'),0)=1 ELSE 0 END"
+
+
+def _has_unambiguous_future_version(raw):
+    """Hold a canonical future version; ambiguous markers are malformed."""
+    class Pairs(dict):
+        def __init__(self, pairs):
+            super().__init__(pairs)
+            self.ambiguous_version = sum(key == VERSION_KEY for key, _ in pairs) > 1
+
+    try:
+        payload = json.loads(raw, object_pairs_hook=Pairs)
+    except (TypeError, ValueError, RecursionError):
+        return False
+    if not isinstance(payload, Pairs):
+        return False
+    version = read_version(payload)
+    return not payload.ambiguous_version and version is not None and version not in (CURRENT_VERSION, LEGACY_VERSION)
+
+
+def _quarantine_invalid_jobs(ledger, limit, deadline):
+    """Make malformed pending jobs visible as failed without changing their evidence."""
+    from ledger import (SEMANTIC_JSON_MAX_BYTES, bump_semantic_job_state_epoch_tx,
+                        semantic_job_payload)
+    if time.monotonic() >= deadline:
+        return
+    ledger.db.execute('BEGIN IMMEDIATE')
+    with ledger.db:
+        sched = _sched_state_strict(ledger)
+        if sched is None:
+            return
+        cursor = sched.get('invalid_job_cursor', [0, 0])
+        if (not isinstance(cursor, list) or len(cursor) != 2
+                or type(cursor[0]) not in (int, float) or not math.isfinite(cursor[0])
+                or type(cursor[1]) is not int or cursor[1] < 0):
+            return
+        rows = ledger.db.execute(
+            "SELECT job_id,project_id,message_id,next_try,substr(payload,1,?) AS payload "
+            "FROM fetch_jobs WHERE kind='semantic' AND state='pending' AND next_try<=? "
+            'AND (next_try,job_id)>(?,?) ORDER BY next_try,job_id LIMIT ?',
+            (SEMANTIC_JSON_MAX_BYTES + 1, time.time(), *cursor, limit)).fetchall()
+        if not rows:
+            sched['invalid_job_cursor'] = [0, 0]
+            _sched_write(ledger, sched, commit=False)
+            return
+        for row in rows:
+            if time.monotonic() >= deadline:
+                break
+            cursor = [row['next_try'], row['job_id']]
+            raw = row['payload']
+            if not isinstance(raw, str) or len(raw.encode('utf-8')) > SEMANTIC_JSON_MAX_BYTES:
+                continue  # A truncated record may carry an unknown version.
+            if semantic_job_payload(raw, db=ledger.db, project_id=row['project_id'], root=row['message_id']) is not None:
+                continue
+            if _has_unambiguous_future_version(raw):
+                continue
+            changed = ledger.db.execute(
+                "UPDATE fetch_jobs SET state='failed' WHERE job_id=? AND state='pending'",
+                (row['job_id'],)).rowcount
+            if changed:
+                bump_semantic_job_state_epoch_tx(ledger.db)
+        latest = _sched_state(ledger)
+        latest['invalid_job_cursor'] = cursor
+        _sched_write(ledger, latest, commit=False)
 
 
 def _class_scope(archived: bool, excluded) -> tuple[str, str]:
     """(patient-class + excluded-job SQL predicate, its json_each parameter)."""
+    from ledger import SEMANTIC_JSON_MAX_BYTES
     scope = (("" if archived else "NOT ") + _ARCHIVED_JOB
+             + f" AND length(CAST(fetch_jobs.payload AS BLOB))<={SEMANTIC_JSON_MAX_BYTES}"
+             + " AND (fetch_jobs.kind!='semantic' OR NOT EXISTS (SELECT 1 FROM artifacts held "
+             + "WHERE held.kind='semantic_held_long_defer' AND held.project_id=fetch_jobs.project_id "
+             + "AND held.message_id=fetch_jobs.message_id "
+             + "AND held.model='held'))"
              + ' AND (' + current_meta_pred('fetch_jobs.payload')
              + ' OR (' + current_meta_pred('fetch_jobs.payload', target=LEGACY_VERSION)
              + " AND CASE WHEN json_valid(payload) THEN json_extract(payload,'$.eligible')=1 END))"
@@ -2300,6 +2564,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         _invalidated_at = time.monotonic()
     if scfg["mode"] == "off":
         return out
+    held_long_defer = _restore_held_long_defers(ledger, max_jobs, deadline)
+    if held_long_defer is not None:
+        out['held_long_defer'] = held_long_defer
+    _quarantine_invalid_jobs(ledger, max_jobs, deadline)
     try:
         out['inference_reprocess'] = reprocess_step(ledger, cfg, deadline=deadline)
     except Exception as error:
@@ -2756,14 +3024,26 @@ def revive_failed(ledger, now: float | None = None) -> dict:
     out = {"revived": 0, "skipped_cap": 0}
     # capped jobs are excluded BEFORE the LIMIT — selecting them first
     # let a capped prefix starve every eligible job behind it
-    capped = ("(CASE WHEN json_valid(payload) AND "
+    capped = ("(CASE WHEN json_valid(payload) THEN CASE WHEN "
               "json_type(payload,'$.auto_retry')='integer' "
-              "THEN json_extract(payload,'$.auto_retry') ELSE 0 END)")
-    where = "WHERE kind=? AND state='failed' AND updated_at<=? AND "
+              "THEN json_extract(payload,'$.auto_retry') ELSE 0 END ELSE 0 END)")
+    from ledger import SEMANTIC_JSON_MAX_BYTES
+    versions = (f"({current_meta_pred('fetch_jobs.payload')} OR "
+                f"{current_meta_pred('fetch_jobs.payload', target=LEGACY_VERSION)})")
+    where = ("WHERE kind=? AND state='failed' AND updated_at<=? AND "
+             f"length(CAST(payload AS BLOB))<={SEMANTIC_JSON_MAX_BYTES} AND {versions} AND ")
+    sched = _sched_state_strict(ledger)
+    if sched is None:
+        return out
+    cursor = sched.get('revive_scan_cursor', [0, 0])
+    if (not isinstance(cursor, list) or len(cursor) != 2
+            or type(cursor[0]) not in (int, float) or not math.isfinite(cursor[0])
+            or type(cursor[1]) is not int or cursor[1] < 0):
+        return out
     rows = ledger.db.execute(
-        "SELECT job_id,attempts,payload,updated_at FROM fetch_jobs " + where
-        + capped + "<? ORDER BY updated_at LIMIT ?",
-        (JOB_KIND, now - REVIVE_COOLDOWN_S, REVIVE_PER_INPUT,
+        "SELECT job_id,project_id,message_id,attempts,payload,updated_at FROM fetch_jobs " + where
+        + capped + "<? AND (updated_at,job_id)>(?,?) ORDER BY updated_at,job_id LIMIT ?",
+        (JOB_KIND, now - REVIVE_COOLDOWN_S, REVIVE_PER_INPUT, *cursor,
          REVIVE_MAX * 4)).fetchall()
     out["skipped_cap"] = ledger.db.execute(
         "SELECT COUNT(*) FROM fetch_jobs " + where + capped + ">=?",
@@ -2772,7 +3052,10 @@ def revive_failed(ledger, now: float | None = None) -> dict:
     for row in rows:
         if out["revived"] >= REVIVE_MAX:
             break
-        pl = loads_dict(row["payload"] or "{}")
+        cursor = [row['updated_at'], row['job_id']]
+        from ledger import semantic_job_payload
+        pl = semantic_job_payload(row['payload'], db=ledger.db,
+                                  project_id=row['project_id'], root=row['message_id'])
         if pl is None:
             continue
         n = pl.get("auto_retry")
@@ -2794,6 +3077,14 @@ def revive_failed(ledger, now: float | None = None) -> dict:
                  now, now, row["job_id"], row["attempts"], row["payload"],
                  row["updated_at"])).rowcount
         out["revived"] += changed
+    if not rows or out['revived']:
+        cursor = [0, 0]
+    ledger.db.execute('BEGIN IMMEDIATE')
+    with ledger.db:
+        sched = _sched_state_strict(ledger)
+        if sched is not None:
+            sched['revive_scan_cursor'] = cursor
+            _sched_write(ledger, sched, commit=False)
     return out
 
 

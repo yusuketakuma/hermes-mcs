@@ -122,13 +122,17 @@ def _apply_scan_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
 
 
 def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
+    from ledger import SEMANTIC_JSON_MAX_BYTES
     row = db.execute(
-        "SELECT job_id,kind,project_id,state,attempts,payload "
+        "SELECT job_id,kind,project_id,message_id,state,attempts,substr(payload,1,?) AS payload "
         "FROM fetch_jobs WHERE job_id=? AND kind=? AND project_id=?",
-        (req["job_id"], _SEMANTIC_JOB, req["project_id"]),
+        (SEMANTIC_JSON_MAX_BYTES + 1, req["job_id"], _SEMANTIC_JOB, req["project_id"]),
     ).fetchone()
     if row is None:
         return "job_not_found", {}
+    if (not isinstance(row['payload'], str)
+            or len(row['payload'].encode('utf-8')) > SEMANTIC_JSON_MAX_BYTES):
+        return "invalid_payload", {"job_id": row["job_id"]}
     # The writer historically accepts duplicate non-version keys.  Retain
     # that behavior, but never choose a version from an ambiguous top-level
     # marker (including escaped spellings of the same JSON key).
@@ -151,7 +155,7 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     if current_hash != req["expected_payload_hash"]:
         return "payload_changed", {"job_id": row["job_id"]}
     additional = req.get("additional_attempts")
-    error = retry_error(row, payload, additional)
+    error = retry_error(row, payload, additional, db=db)
     if error:
         return error, {"job_id": row["job_id"],
                        "attempts": row["attempts"]}
