@@ -5,9 +5,10 @@ import json
 import hashlib
 import os
 import re
+import secrets
 import stat
 
-from safe_io import atomic_write, fdopen_owned
+from safe_io import fdopen_owned
 
 
 def valid_release_ref(value):
@@ -121,7 +122,52 @@ def load_state(path) -> dict:
 def save_state(path, state: dict) -> None:
     """tmp -> fsync -> os.replace -> dir fsync (R13). Caller holds
     update.lock (or is the --locks-held post-merge child)."""
-    atomic_write(path,
-                 lambda f: json.dump(state, f, ensure_ascii=False,
-                                     sort_keys=True),
-                 tmp_prefix=".update_state.")
+    path = os.fspath(path)
+    parent, name = os.path.dirname(path) or '.', os.path.basename(path)
+    os.makedirs(parent, exist_ok=True)
+    directory = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+    tmp, identity = None, None
+    try:
+        held = os.fstat(directory)
+        def verify_parent():
+            current = os.stat(parent)
+            if (held.st_dev, held.st_ino) != (current.st_dev, current.st_ino):
+                raise OSError('journal_directory_changed')
+        verify_parent()
+        for _ in range(32):
+            candidate = '.update_state.' + secrets.token_hex(16) + '.tmp'
+            try:
+                fd = os.open(candidate, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=directory)
+                try:
+                    identity = os.fstat(fd)
+                except BaseException:
+                    os.close(fd)
+                    raise
+                tmp = candidate
+                break
+            except FileExistsError:
+                continue
+        else:
+            raise FileExistsError('journal_temporary_name_exhausted')
+        with fdopen_owned(fd, 'w', encoding='utf-8') as stream:
+            json.dump(state, stream, ensure_ascii=False, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        verify_parent()
+        current = os.stat(tmp, dir_fd=directory, follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino):
+            raise OSError('journal_temporary_changed')
+        os.replace(tmp, name, src_dir_fd=directory, dst_dir_fd=directory)
+        tmp = None
+        os.fsync(directory)
+        verify_parent()
+    finally:
+        if tmp is not None:
+            try:
+                current = os.stat(tmp, dir_fd=directory, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino):
+                    os.unlink(tmp, dir_fd=directory)
+            except OSError:
+                pass
+        os.close(directory)

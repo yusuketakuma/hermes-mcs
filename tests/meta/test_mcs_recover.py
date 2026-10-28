@@ -9,6 +9,8 @@ import scheduled_jobs
 import json
 import os
 import subprocess
+import importlib.util
+import hashlib
 import time
 from contextlib import suppress
 from pathlib import Path
@@ -16,6 +18,50 @@ from types import SimpleNamespace
 
 import pytest
 from ops_testkit import _FakeLaunchd, _git, _load
+
+
+def test_v1029_watchdog_retains_unknown_pending_receipt(tmp_path, monkeypatch):
+    raw = (Path(__file__).parent / 'fixtures/mcs_recover_v1_0_29.py.txt').read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == '12071648de2b24d02a4fb4b33347614140619ac8817f813297f9cfa9714edd3f'
+    source = tmp_path / 'old_recover.py'
+    source.write_bytes(raw)
+    spec = importlib.util.spec_from_file_location('synthetic_v1029_recover', source)
+    old = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(old)
+    data = tmp_path / 'data'
+    data.mkdir(mode=0o700)
+    marker = tmp_path / '.install-options-migration.pending'
+    marker.write_bytes(b'{"v":1,"kind":"install-options-migration"}\n')
+    state = {'v': 1, 'applying': None, 'stages': [{'stage': 'settings_migration', 'at': 1}],
+             'applied': [], 'attempts': {}, 'executed': {}}
+    journal = data / 'update_state.json'
+    journal.write_text(json.dumps(state))
+    for name, value in {'DATA': data, 'STATE_PATH': journal, 'UPDATE_LOCK': data / 'update.lock',
+                        'RUN_LOCK': data / 'run.lock', 'MARKER_PATH': data / 'update.marker',
+                        'REPORT_PATH': data / 'recovery_report.json', 'REPO': tmp_path / 'repo'}.items():
+        monkeypatch.setattr(old, name, str(value))
+    monkeypatch.setattr(old, '_notify', lambda *_a, **_k: None)
+    monkeypatch.setattr(old, '_head', lambda: 'synthetic-head')
+    monkeypatch.setattr(old, '_restart_drainers', lambda **_k: [])
+    monkeypatch.setattr(old, '_restart_services', lambda *_a, **_k: 0)
+    monkeypatch.setattr(old, '_clean_stale_git_locks', lambda: [])
+    monkeypatch.setattr(old, '_runtime_mode', lambda: 'hermes')
+    reports = []
+    monkeypatch.setattr(old, '_report', lambda result, *_a, **_k: reports.append(result))
+    before = marker.read_bytes()
+    assert old.recover() == 0
+    assert reports == ['interrupted_pre_merge']
+    assert json.loads(journal.read_text())['stages'] == []
+    assert marker.read_bytes() == before
+
+
+def test_new_watchdog_stops_before_recovery_when_receipt_exists(rec, monkeypatch, capsys):
+    marker = Path(rec.DATA).parent / '.install-options-migration.pending'
+    marker.write_text('synthetic receipt')
+    monkeypatch.setattr(rec, '_try_lock', lambda *_a: pytest.fail('must not take recovery locks'))
+    assert rec.recover() == 2
+    assert marker.read_text() == 'synthetic receipt'
+    assert '移行結果を確認できません' in capsys.readouterr().out
 
 
 def _make_repo(tmp_path):
@@ -1755,7 +1801,8 @@ def test_status_keeps_json_contract(rec, monkeypatch, capsys):
     monkeypatch.setattr(rec, "recover", lambda **kw: pytest.fail("must not recover"))
     assert rec.main() == 0
     assert json.loads(capsys.readouterr().out) == {
-        "state": state, "head": "synthetic-sha", "clean": True}
+        "state": state, "head": "synthetic-sha", "clean": True,
+        "settings_migration_pending": False}
 
 
 @pytest.mark.parametrize("detail,expected", [
