@@ -715,7 +715,7 @@ def cmd_init(args) -> int:
         return 1
     if initial_config[0].startswith('invalid') and not args.yes:
         print('設定ファイルを読み取れないか、形式が不正です。保存していません。'
-              'ファイルを修正するか、`mcs_setup.py init --yes`で退避してください')
+              'ファイルを確認して修正してください。対応する場合は `mcs_setup.py init --yes` で退避できます')
         return 1
     try:
         mode_before = mcs_runtime.mode(cfg)
@@ -836,11 +836,11 @@ def cmd_init(args) -> int:
         if error.parent_unchanged:
             candidate = os.path.join(os.path.dirname(CONF_PATH) or '.', error.backup_name)
             print('初期設定: config.jsonまたは退避の保存結果を確認できません。'
-                  f'移動先の候補 {candidate} と現在の設定を確認してください。'
+                  f'退避先の候補 {candidate} と現在の設定を確認してください。'
                   '認証情報や辞書の準備が済んでいる場合があります。')
         else:
             print('初期設定: config.jsonまたは退避の保存結果を確認できません。'
-                  '設定フォルダーの保存場所が変わった可能性があります。移動したフォルダーと'
+                  '設定フォルダーの保存場所が変わった可能性があります。元のフォルダーと'
                   '現在の設定を確認してください。認証情報や辞書の準備が済んでいる場合があります。')
         return 1
     except config_edit.ConfigConflict:
@@ -1250,7 +1250,7 @@ def cmd_check(args) -> int:
     if why:
         e0 = e0 + [f"設定ファイル{CONF_PATH}を読み取れないか、形式が不正です（詳細: {why}）。"
                    "すべて未設定として扱われています。修正するか、"
-                   "`mcs_setup.py init --yes`で退避して設定し直してください"]
+                   "対応する場合は `mcs_setup.py init --yes` で退避して設定し直してください"]
     e1, w1 = validate_config(cfg)
     e2, w2 = check_environment(cfg)
     e3, w3 = service_management.script_drift(paths=_service_paths()) if cfg.get("runtime_mode", "hermes") in ("hermes", "standalone") else ([], [])
@@ -1685,7 +1685,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser(
         "init", help='質問に答えて初期設定を保存します（推奨 / 詳細、パスワードは非表示入力）',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='質問なしでの実行例（bash/zshの端末で実行）:\n  read -r -s MCS_SETUP_PASSWORD\n  export MCS_SETUP_PASSWORD\n  python3 mcs/ops/mcs_setup.py init --yes --login-id you@example.com --notify-target slack:C0CHANNELID --set self_posts=true\n  unset MCS_SETUP_PASSWORD\n最初のreadコマンドでMCSパスワードを非表示入力し、Enterを押してください。パスワードをコマンドへ直接書かず、環境変数MCS_SETUP_PASSWORDで渡します。実行後はunsetで削除します。\n--setの値はJSONです。壊れたconfig.jsonは通常停止します。--yesでは元のファイルをconfig.json.corrupt-<日時>へ退避して初期値から設定します。')
+        epilog='質問なしでの実行例（bash/zshの端末で実行）:\n  read -r -s MCS_SETUP_PASSWORD\n  export MCS_SETUP_PASSWORD\n  python3 mcs/ops/mcs_setup.py init --yes --login-id you@example.com --notify-target slack:C0CHANNELID --set self_posts=true\n  unset MCS_SETUP_PASSWORD\n最初のreadコマンドでMCSパスワードを非表示入力し、Enterを押してください。パスワードをコマンドへ直接書かず、環境変数MCS_SETUP_PASSWORDで渡します。実行後はunsetで削除します。\n--setの値はJSONです。壊れたconfig.jsonは通常停止します。--yesでは対応する場合に元のファイルをconfig.json.corrupt-<日時>へ退避します。1 MiB超・読取不能・FIFO・複数ハードリンクがある通常ファイル・排他的な退避が未対応の環境では退避せず停止します。親フォルダーは本人所有で本人以外の書き込みができない必要があり、シンボリックリンクでは本人以外のアクセスも認めません。')
     p.add_argument("--login-id", help="MCSのログインID")
     p.add_argument("--runtime-mode", choices=("hermes", "standalone"),
                    help='実行方法を指定します（省略すると現在の設定を保持）')
@@ -1715,7 +1715,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--plugin-project-ids", metavar="A,B",
                    help='閲覧・操作を許可するMCSプロジェクトID（複数はカンマ区切り）')
     p.add_argument("--yes", action="store_true",
-                   help='質問せず、指定値と既存設定で実行します。壊れた設定ファイルは退避して初期値から設定')
+                   help='質問せず、指定値と既存設定で実行します。壊れた設定は対応する場合に退避')
     p.set_defaults(fn=cmd_init)
     p = sub.add_parser("fact-source",
                        help='解析結果の採用方法を設定します（legacy=従来、shadow=比較、canonical=検証済み結果）')

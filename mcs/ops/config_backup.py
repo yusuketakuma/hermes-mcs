@@ -1,14 +1,11 @@
 """破損した設定の排他的退避と新しい設定の安全な作成。"""
 from __future__ import annotations
 
-import ctypes
-import errno
 import hashlib
 import os
 from pathlib import Path
 import secrets
 import stat
-import sys
 import time
 from dataclasses import dataclass
 
@@ -43,8 +40,11 @@ def _parent_identity(info):
     return info.st_dev, info.st_ino
 
 
-def _check_parent(parent, parent_fd, expected):
-    if (_parent_identity(os.fstat(parent_fd)) != expected
+def _check_parent(parent, parent_fd, expected, *, private=False):
+    opened = os.fstat(parent_fd)
+    if (opened.st_uid != os.getuid() or opened.st_mode & (0o077 if private else 0o022)):
+        raise ValueError('config_backup_parent_permissions')
+    if (_parent_identity(opened) != expected
             or _parent_identity(os.stat(parent)) != expected):
         raise BackupChanged('config_parent_changed')
 
@@ -56,7 +56,7 @@ def _entry(parent_fd, name):
     if stat.S_ISREG(info.st_mode):
         if info.st_size > mcs_util.CONFIG_MAX_BYTES:
             raise ValueError('config_backup_too_large')
-        if info.st_nlink != 1 and stat.S_IMODE(info.st_mode) != 0o600:
+        if info.st_nlink != 1:
             raise ValueError('config_backup_hardlink')
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
         try:
@@ -77,7 +77,7 @@ def _entry(parent_fd, name):
         raise ValueError('config_backup_type')
     if _identity(os.stat(name, dir_fd=parent_fd, follow_symlinks=False)) != _identity(info):
         raise BackupChanged('config_changed')
-    return _identity(info), hashlib.sha256(raw).digest()
+    return _identity(info), hashlib.sha256(raw).digest(), raw
 
 
 def snapshot(path):
@@ -86,28 +86,47 @@ def snapshot(path):
     try:
         parent = _parent_identity(os.fstat(parent_fd))
         _check_parent(path.parent, parent_fd, parent)
-        identity, digest = _entry(parent_fd, path.name)
-        _check_parent(path.parent, parent_fd, parent)
+        identity, digest, _ = _entry(parent_fd, path.name)
+        _check_parent(path.parent, parent_fd, parent, private=stat.S_ISLNK(identity[2]))
         return BackupSnapshot(parent, identity, digest)
     finally:
         os.close(parent_fd)
 
 
-def _rename_exclusive(parent_fd, source, destination):
-    if sys.platform == 'darwin':
-        name, flags = 'renameatx_np', 4
-    elif sys.platform.startswith('linux'):
-        name, flags = 'renameat2', 1
-    else:
-        raise OSError(errno.ENOTSUP, 'exclusive_rename_unsupported')
-    fn = getattr(ctypes.CDLL(None, use_errno=True), name, None)
-    if fn is None:
-        raise OSError(errno.ENOTSUP, 'exclusive_rename_unsupported')
-    fn.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-    fn.restype = ctypes.c_int
-    if fn(parent_fd, os.fsencode(source), parent_fd, os.fsencode(destination), flags):
-        code = ctypes.get_errno()
-        raise OSError(code, os.strerror(code))
+def _staged(parent_fd, raw, *, prefix):
+    name = prefix + '.stage-' + secrets.token_hex(16) + '.tmp'
+    fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
+    identity = _parent_identity(os.fstat(fd))
+    try:
+        with fdopen_owned(fd, 'wb') as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        _remove_owned_stage(parent_fd, name, identity)
+        raise
+    return name, identity
+
+
+def _remove_owned_stage(parent_fd, name, identity):
+    try:
+        if _parent_identity(os.stat(name, dir_fd=parent_fd, follow_symlinks=False)) == identity:
+            os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        pass
+
+
+def _publish_backup(parent_fd, name, raw, is_symlink):
+    if is_symlink:
+        os.symlink(raw, os.fsencode(name), dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        return
+    temp, identity = _staged(parent_fd, raw, prefix=name.rsplit('.corrupt-', 1)[0])
+    try:
+        os.link(temp, name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd, follow_symlinks=False)
+        os.fsync(parent_fd)
+    finally:
+        _remove_owned_stage(parent_fd, temp, identity)
 
 
 def archive_and_create(path, expected, body):
@@ -118,65 +137,59 @@ def archive_and_create(path, expected, body):
     path = Path(path)
     parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
     backup = None
+    backup_started = False
+    private_parent = stat.S_ISLNK(expected.identity[2])
     try:
-        _check_parent(path.parent, parent_fd, expected.parent)
-        if _entry(parent_fd, path.name) != (expected.identity, expected.sha256):
-            raise BackupChanged('config_changed')
-        stem = path.name + '.corrupt-' + time.strftime('%Y%m%dT%H%M%S')
-        for n in range(1000):
-            backup = stem if n == 0 else f'{stem}.{n}'
-            try:
-                _rename_exclusive(parent_fd, path.name, backup)
-                break
-            except FileExistsError:
-                backup = None
-        else:
-            raise ValueError('config_backup_full')
         try:
-            moved, digest = _entry(parent_fd, backup)
-            if moved[:5] + moved[6:] != expected.identity[:5] + expected.identity[6:] or digest != expected.sha256:
-                raise BackupChanged('config_moved_changed')
-            _check_parent(path.parent, parent_fd, expected.parent)
-            if stat.S_ISREG(moved[2]):
-                fd = os.open(backup, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+            _check_parent(path.parent, parent_fd, expected.parent, private=private_parent)
+            source_identity, source_digest, source_raw = _entry(parent_fd, path.name)
+            if (source_identity, source_digest) != (expected.identity, expected.sha256):
+                raise BackupChanged('config_changed')
+            stem = path.name + '.corrupt-' + time.strftime('%Y%m%dT%H%M%S')
+            for n in range(1000):
+                backup = stem if n == 0 else f'{stem}.{n}'
+                backup_started = True
                 try:
-                    current = _identity(os.fstat(fd))
-                    if current != moved:
-                        raise BackupChanged('config_moved_changed')
-                    if stat.S_IMODE(moved[2]) != 0o600:
-                        if os.fstat(fd).st_nlink != 1:
-                            raise ValueError('config_backup_hardlink')
-                        os.fchmod(fd, 0o600)
-                        os.fsync(fd)
-                finally:
-                    os.close(fd)
-            os.fsync(parent_fd)
-            _check_parent(path.parent, parent_fd, expected.parent)
-            temp = '.setup-' + secrets.token_hex(16) + '.tmp'
-            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
-            staging = _parent_identity(os.fstat(fd))
+                    _publish_backup(parent_fd, backup, source_raw, stat.S_ISLNK(source_identity[2]))
+                    break
+                except FileExistsError:
+                    backup_started = False
+                    backup = None
+            else:
+                raise ValueError('config_backup_full')
+            _check_parent(path.parent, parent_fd, expected.parent, private=private_parent)
+            backup_identity, backup_digest, backup_raw = _entry(parent_fd, backup)
+            if (backup_digest != source_digest or backup_raw != source_raw
+                    or stat.S_IFMT(backup_identity[2]) != stat.S_IFMT(source_identity[2])
+                    or (stat.S_ISREG(backup_identity[2]) and stat.S_IMODE(backup_identity[2]) != 0o600)):
+                raise BackupChanged('config_backup_changed')
+            temp, temp_identity = _staged(parent_fd, body, prefix=path.name)
             try:
-                with fdopen_owned(fd, 'wb') as stream:
-                    stream.write(body)
-                    stream.flush()
-                    os.fsync(stream.fileno())
-                _check_parent(path.parent, parent_fd, expected.parent)
-                os.link(temp, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd, follow_symlinks=False)
+                _check_parent(path.parent, parent_fd, expected.parent, private=private_parent)
+                now_identity, now_digest, _ = _entry(parent_fd, path.name)
+                if (now_identity, now_digest) != (expected.identity, expected.sha256):
+                    raise BackupChanged('config_changed')
+                if _entry(parent_fd, backup)[:2] != (backup_identity, backup_digest):
+                    raise BackupChanged('config_backup_changed')
+                os.replace(temp, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
                 os.fsync(parent_fd)
             finally:
-                try:
-                    if _parent_identity(os.stat(temp, dir_fd=parent_fd, follow_symlinks=False)) == staging:
-                        os.unlink(temp, dir_fd=parent_fd)
-                except FileNotFoundError:
-                    pass
-            _check_parent(path.parent, parent_fd, expected.parent)
+                _remove_owned_stage(parent_fd, temp, temp_identity)
+            _check_parent(path.parent, parent_fd, expected.parent, private=private_parent)
+            current_identity, current_digest, _ = _entry(parent_fd, path.name)
+            if (current_identity[:2] != temp_identity or not stat.S_ISREG(current_identity[2])
+                    or stat.S_IMODE(current_identity[2]) != 0o600
+                    or current_digest != hashlib.sha256(body).digest()
+                    or _entry(parent_fd, backup)[:2] != (backup_identity, backup_digest)):
+                raise BackupChanged('config_backup_readback_changed')
             return str(path.parent / backup)
-        except (OSError, ValueError):
+        finally:
+            os.close(parent_fd)
+    except BaseException:
+        if backup_started:
             try:
-                _check_parent(path.parent, parent_fd, expected.parent)
-                parent_unchanged = True
-            except (OSError, ValueError):
+                parent_unchanged = _parent_identity(os.stat(path.parent)) == expected.parent
+            except BaseException:
                 parent_unchanged = False
             raise BackupUncertain(backup, parent_unchanged) from None
-    finally:
-        os.close(parent_fd)
+        raise
