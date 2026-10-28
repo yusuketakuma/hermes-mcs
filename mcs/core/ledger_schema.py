@@ -382,6 +382,11 @@ def _initialize(db, *, schema_version: int) -> bool:
             ON artifacts(kind, created_at);
           CREATE INDEX IF NOT EXISTS idx_fetch_jobs_pending_due
             ON fetch_jobs(kind, next_try) WHERE state='pending';
+          CREATE UNIQUE INDEX IF NOT EXISTS uq_semantic_intake_hold
+            ON artifacts(kind, project_id, model, meta)
+            WHERE kind='semantic_intake_hold_v1';
+          CREATE INDEX IF NOT EXISTS idx_semantic_intake_hold_root
+            ON artifacts(kind, project_id, model);
           CREATE INDEX IF NOT EXISTS idx_attachments_pending
             ON attachments(attachment_id) WHERE state='pending';
           CREATE INDEX IF NOT EXISTS idx_outbox_due_states

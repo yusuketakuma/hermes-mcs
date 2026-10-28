@@ -580,7 +580,8 @@ class Ledger:
                                       invalidated_roots=invalidated_roots)
             if live_seed:
                 self.semantic_seed_tx(project_id, live_seed, origin,
-                                      invalidated_roots=invalidated_roots)
+                                      invalidated_roots=invalidated_roots,
+                                      _eligible_ids=set(notify_ids))
 
     def _filter_notify_age(self, ids: list, now: float,
                            max_age_s: float | None) -> list:
@@ -1740,16 +1741,21 @@ class Ledger:
 
     def semantic_seed_tx(self, project_id: int, message_ids: list,
                           origin: dict, *, invalidated_roots: set | None = None,
-                          _source_generation: str | None = None):
+                          _source_generation: str | None = None,
+                          _eligible_ids: set | None = None):
         """Durable semantic-eval seeding — caller holds `with self.db` so
         job creation commits (or rolls back) with the message and notify
         intent that triggered it (INV-06, spec §18.1). Keyed by thread
         ROOT so one job covers a post plus its replies; a new arrival on
         an evaluated thread revives the job as a new input generation."""
         from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
+        import semantic_intake_hold
         # Pause holds execution, not durable intake; OFF callers do not seed.
         if not message_ids:
             return
+        if self.db.execute("SELECT 1 FROM temp.sqlite_schema WHERE type IN ('table','view') "
+                           "AND lower(name) IN ('fetch_jobs','artifacts','notify_outbox') LIMIT 1").fetchone():
+            raise sqlite3.DatabaseError('semantic_seed_temp_shadow')
         q = ("SELECT message_id,COALESCE(parent_id,message_id) r "
              "FROM messages WHERE project_id=? AND message_id IN ("
              + ",".join("?" * len(message_ids)) + ")")
@@ -1759,9 +1765,17 @@ class Ledger:
         now = time.time()
         for root, ids in roots.items():
             existing = self.db.execute("""
-              SELECT job_id,state,attempts,payload FROM fetch_jobs
+              SELECT job_id,state,attempts,typeof(payload) AS payload_type FROM fetch_jobs
               WHERE kind='semantic' AND project_id=? AND message_id=?
             """, (project_id, root)).fetchone()
+            if ((existing is not None and not semantic_intake_hold.supported_job(
+                    self.db, existing, project_id, root))
+                    or semantic_intake_hold.has_held_root(self.db, project_id, root)):
+                semantic_intake_hold.hold_tx(
+                    self, project_id, root, ids, origin, eligible_ids=_eligible_ids,
+                    source_generation=(_source_generation if _source_generation is not None
+                                       else self._semantic_source_generation(project_id, root)))
+                continue
             eligible = isinstance(origin, dict) \
                 and origin.get("event_id") is not None
             notification_free = isinstance(origin, dict) \
@@ -1772,6 +1786,9 @@ class Ledger:
             source_generation = (_source_generation if _source_generation is not None
                                  else self._semantic_source_generation(project_id, root))
             if existing is not None:
+                existing = self.db.execute(
+                    'SELECT job_id,state,attempts,payload FROM fetch_jobs WHERE job_id=?',
+                    (existing['job_id'],)).fetchone()
                 old_pl = loads_dict(existing["payload"] or "{}") or {}
                 stored_targets = old_pl.get("targets")
                 old_targets = ({x for x in stored_targets if type(x) is int}
