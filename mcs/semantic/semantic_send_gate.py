@@ -3,6 +3,7 @@ import semantic_policy
 import semantic_store
 import semantic_transport
 import json
+import sqlite3
 from mcs_util import loads_dict
 
 
@@ -30,6 +31,16 @@ def _stale(reason: str, in_progress: bool):
         raise FreezeSend(reason)
     raise StaleSend(reason)
 
+
+
+def intake_root_held(db, project_id, root):
+    """Hold semantic presentation if the root's intake cannot be verified."""
+    try:
+        import semantic_intake_hold
+        semantic_intake_hold.validate_indexes(db)
+        return semantic_intake_hold.has_held_root(db, project_id, root)
+    except sqlite3.Error:
+        return True
 
 def current_summary(db, project_id: int, message_id: int,
                      bundle, policy: str):
@@ -147,6 +158,8 @@ def semantic_gate(db, ev, payload: dict, cfg: dict,
     if not isinstance(fp, str) or not fp or type(root) is not int \
             or root <= 0 or type(src) is not int or src <= 0:
         raise ValueError("payload_invalid")
+    if intake_root_held(db, project_id, root):
+        raise FreezeSend('semantic_intake_held') if in_progress else DeferredSend('semantic_intake_held')
     source_row, source = _source_event(db, project_id, src)
     if source_row is None or source is None:
         _stale("src_event_ineligible", in_progress)
@@ -225,6 +238,8 @@ def semantic_render_state(db, ev, cfg: dict) -> tuple:
         if row is None:
             continue
         root = row["parent_id"] or row["message_id"]
+        if intake_root_held(db, project_id, root):
+            continue
         cur = current_summary(
             db, project_id, mid,
             lambda r=root, m=mid: semantic_store.thread_bundle(

@@ -24,6 +24,7 @@ import json
 import os
 import re
 import time
+from contextvars import ContextVar
 
 import mcs_util
 import notify_sender
@@ -38,6 +39,8 @@ from notify_render import (SECTION_RULE, extraction_failed, signal_evidence,
                            thread_stamp_row)
 import clinical_urgency
 TEXT_CHUNK_WIDTH = 1900
+_NO_RENDER_CONFIG = object()
+_RENDER_CONFIG = ContextVar("notify_render_config", default=_NO_RENDER_CONFIG)
 # Per-notification file caps; oversized files stay local-only and are
 # noted in the text instead of failing the whole send.
 _MAX_FILES = 10
@@ -429,8 +432,10 @@ def _message_notice(ledger, ev, payload: dict):
         summary_suffix = ""
         if not indent:
             try:
-                summary_cfg = _config()
-                summary_suffix = semantic_render.semantic_summary_block(ledger.db, r, summary_cfg)
+                selected_cfg = _RENDER_CONFIG.get()
+                if selected_cfg is _NO_RENDER_CONFIG:
+                    selected_cfg = _config()
+                summary_suffix = semantic_render.semantic_summary_block(ledger.db, r, selected_cfg)
             except Exception:
                 pass  # A config/summary failure cannot break the base notice.
         out.append(_fmt_row(ledger, ev, att_map, r, indent, skipped, stamps=stamps,
@@ -723,17 +728,26 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
             res["uncertain"] = res.get("uncertain", 0) + 1
             return
     import notify_urgent
-    if (ev["kind"] == "new_messages" and _send_never_began(ev)
-            and notify_urgent.settings(cfg) is not None):
+    if ev["kind"] == "new_messages":
+        if ledger.db.in_transaction:
+            raise ValueError('new_messages_render_transaction_active')
+        urgency = _send_never_began(ev) and notify_urgent.settings(cfg) is not None
         with ledger.db:
-            # Bind the initial urgency witness to the rendered snapshot.
-            # A concurrent extractor must not replace ordinary evidence
-            # with high between formatting and capture.
-            ledger.db.execute("BEGIN IMMEDIATE")
-            content, files = _format_event(ledger, ev)
-            notify_urgent.capture_initial(ledger, cfg, ev, now=time.time())
+            # Format and record summary identities against the same snapshot.
+            # The later send gate rejects a hold or revision after this view.
+            ledger.db.execute("BEGIN IMMEDIATE" if urgency else "BEGIN")
+            render_cfg = _config()
+            config_token = _RENDER_CONFIG.set(render_cfg)
+            try:
+                content, files = _format_event(ledger, ev)
+            finally:
+                _RENDER_CONFIG.reset(config_token)
+            render_state = semantic_send_gate.semantic_render_state(ledger.db, ev, render_cfg)
+            if urgency:
+                notify_urgent.capture_initial(ledger, cfg, ev, now=time.time())
     else:
         content, files = _format_event(ledger, ev)
+        render_state = ()
     attachment_pins = None
     if notify_sender.hermes_free(cfg, target):
         attachment_pins = {}
@@ -743,8 +757,6 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
             if len(hashes) != 1 or not mcs_util.valid_hash(next(iter(hashes))):
                 raise notify_sender.SendFailed("attachment_unverified")
             attachment_pins[path] = next(iter(hashes))
-    render_state = (semantic_send_gate.semantic_render_state(ledger.db, ev, _config())
-                    if ev["kind"] == "new_messages" else ())
     chunks = (semantic_render.semantic_chunks(content, TEXT_CHUNK_WIDTH)
               if ev["kind"] == "semantic_notice" else
               [content[i:i + TEXT_CHUNK_WIDTH]
