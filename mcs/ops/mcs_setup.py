@@ -1273,12 +1273,13 @@ def cmd_features(args) -> int:
                         raise config_edit.ConfigConflict("config_changed")
                 safe_io.atomic_write(CONF_PATH, write_checked, 0o600,
                                      tmp_prefix=".svc.", makedirs=False)
-    except (config_edit.ConfigConflict, FileExistsError, FileNotFoundError):
+    except config_edit.ConfigConflict:
         print("任意機能: 別の設定保存と競合したか、質問の間に config.json が変更されたため"
               "保存していません。もう一度実行してください。")
         return 1
     except (OSError, ValueError, RecursionError):
-        print("任意機能: config.json または保存用ロックを確認できないため変更しません。")
+        print("任意機能: 保存結果を確認できません。端末で mcs setup features を開き、"
+              "表示される現在の選択を確認してください。")
         return 1
     print("任意機能の選択を保存しました。登録・同意・送信はこの操作では行っていません。")
     return 0
