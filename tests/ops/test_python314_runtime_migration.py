@@ -24,7 +24,8 @@ def _no_leaked_services_python(monkeypatch):
 def _state(updater, **applying):
     state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.0.18", "sha": "b" * 40, "prev_sha": "a" * 40,
-                         "reinstall": False, "install_args": [], **applying}
+                         "reinstall": False, "install_args": [],
+                         "install_options_base": updater._install_options_snapshot()[0], **applying}
     updater.journal_store.save_state(updater.STATE_PATH, state)
     return updater.journal_store.load_state(updater.STATE_PATH)
 
@@ -78,6 +79,24 @@ def test_migration_is_journaled_before_install(updater, old_interpreter, monkeyp
     assert saved["reinstall"] is True
     assert saved["install_args"] == ["--no-brew", "--no-llm", "--no-plugin"]
     assert updater.journal_store.load_state(updater.STATE_PATH)["stages"][-1]["stage"] == "runtime_migration"
+
+
+def test_old_journal_missing_options_base_stops_before_replanning(updater, old_interpreter, monkeypatch):
+    state = _state(updater, reinstall=True, install_options_base=None)
+    before = Path(updater.STATE_PATH).read_bytes()
+    monkeypatch.setattr(updater, '_plan_runtime_migration', lambda *_: pytest.fail('journal changed before check'))
+    with pytest.raises(updater.UpdateError, match='install_options_unverified'):
+        updater._post_merge(state)
+    assert Path(updater.STATE_PATH).read_bytes() == before
+
+
+def test_new_runtime_migration_requires_options_base_before_journaling(updater, old_interpreter, monkeypatch):
+    state = _state(updater, install_options_base=None)
+    before = Path(updater.STATE_PATH).read_bytes()
+    with pytest.raises(updater.UpdateError, match='install_options_unverified'):
+        updater._plan_runtime_migration(state, held_fd=5)
+    assert Path(updater.STATE_PATH).read_bytes() == before
+    assert not Path(str(old_interpreter) + '.pre-python314').exists()
 
 
 def _checkout(path):
@@ -147,7 +166,9 @@ def test_reinstall_hands_lock_and_backup_to_install_sh(updater, monkeypatch, tmp
 
     monkeypatch.setattr(updater.subprocess, "Popen", popen)
     backup = str(tmp_path / "venv.pre-python314")
+    baseline = updater._install_options_snapshot()[0]
     applying = {"reinstall": True, "install_args": ["--no-llm", "--no-plugin"],
+                "install_options_base": baseline,
                 "runtime_migration": {"venv": str(tmp_path / "venv"), "backup_path": backup}}
     with (tmp_path / 'run.lock').open('w+b') as lock:
         monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, str(lock.fileno()))
@@ -158,11 +179,28 @@ def test_reinstall_hands_lock_and_backup_to_install_sh(updater, monkeypatch, tmp
     argv, kwargs = calls[0]
     assert argv[-3:] == ["--no-llm", "--no-plugin", "--no-services"]
     assert kwargs["env"][updater.RUNTIME_BACKUP_ENV] == backup
+    assert kwargs["env"]["MCS_UPDATE_OPTIONS_BASE"] == baseline
     # a plain operator reinstall never carries the migration permission
     calls.clear()
-    updater._reinstall({"reinstall": True, "install_args": []})
+    updater._reinstall({"reinstall": True, "install_args": [], "install_options_base": baseline})
     assert calls[0][1]["pass_fds"] == ()
     assert updater.RUN_LOCK_FD_ENV not in calls[0][1]["env"]
+
+
+@pytest.mark.parametrize('old_journal', [False, True])
+def test_reinstall_stops_before_child_when_options_changed_or_not_recorded(updater, monkeypatch, old_journal):
+    import mcs_util
+    config = Path(mcs_util.CONF_PATH)
+    config.write_text('{"install_args": []}')
+    baseline = updater._install_options_snapshot()[0]
+    config.write_text('{"install_args": ["--no-llm"]}')
+    applying = {'reinstall': True, 'install_args': ['--no-plugin']}
+    if not old_journal:
+        applying['install_options_base'] = baseline
+    monkeypatch.setattr(updater.subprocess, 'Popen', lambda *_a, **_k: pytest.fail('unexpected install'))
+    with pytest.raises(updater.UpdateError, match='install_options_unverified'):
+        updater._reinstall(applying)
+    assert config.read_text() == '{"install_args": ["--no-llm"]}'
 
 
 @pytest.mark.parametrize("version_ok, backup", [(True, True), (False, True), (True, False)])

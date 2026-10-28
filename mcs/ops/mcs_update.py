@@ -14,8 +14,9 @@ Drives the update lifecycle documented in docs/dev-records/auto-update-plan.md:
   recover   journal-driven interrupted-apply recovery (also invoked by
             the independent launchd watchdog via mcs_recover.py)
 
-Safety invariants: never touches protected paths (data/, config.json,
-.env), never runs `git clean`, treats unverifiable as failure, and the
+Safety invariants: preserves protected paths (data/, config.json, .env);
+normal update and reinstall may migrate validated legacy install options into config.json
+under its config lock. Never runs `git clean`, treats unverifiable as failure, and the
 approval boundary is the command_receipts commit on the receipt-driven
 path (check -> detached spawn, which passes no argv). A local operator's
 `apply --command-id` is NOT looked up in receipts — the CLI trusts the
@@ -58,6 +59,9 @@ import service_management  # noqa: E402
 import service_contract  # noqa: E402
 import mcs_util  # noqa: E402
 import mcs_config  # noqa: E402
+import install_options  # noqa: E402
+import install_options_contract  # noqa: E402
+import update_migrations  # noqa: E402
 import update_journal as journal_store  # noqa: E402
 import update_policy  # noqa: E402
 import owned_process  # noqa: E402
@@ -127,8 +131,7 @@ AGENTS_DIR = os.path.expanduser("~/Library/LaunchAgents")
 # the new services drop it, a rollback's old services recreate it
 # install.sh opt-outs an operator may repeat on a reinstall apply; --mode
 # stays out (install.sh derives it from config.json)
-INSTALL_ARGS = frozenset({"--no-llm", "--no-brew", "--no-plugin",
-                          "--no-recovery"})
+INSTALL_ARGS = install_options_contract.OPTIONS
 from update_policy import REINSTALL_ERRORS  # noqa: E402
 T_INSTALL = 3600
 # S5: only the labels listed above are touched; install.sh-owned
@@ -961,6 +964,22 @@ def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> d
         automatic=_update_mode(cfg) == "auto", noop=cur_sha == target_sha)
     blockers, reinstall = decision["blockers"], decision["reinstall"]
     noop = cur_sha == target_sha
+    try:
+        migration_needed, _, _ = update_migrations.plan(
+            mcs_util.CONF_PATH, os.path.join(DATA, "install_options.json"))
+        migration_status = "required" if migration_needed else "none"
+    except (OSError, ValueError, TypeError, RecursionError):
+        migration_status = "unverified"
+        blockers.append("settings_migration_unverified")
+    route = decision["route"]
+    if noop and migration_status == "required" and not blockers:
+        if reinstall:
+            blockers.append("settings_migration_requires_reinstall")
+            route = "blocked"
+        else:
+            route = "apply"
+    elif not noop and migration_status == "unverified":
+        route = "blocked"
     interactive = (cfg.get("notify") or {}).get("interactive") \
         if isinstance(cfg.get("notify"), dict) else None
     restarts = []
@@ -972,7 +991,7 @@ def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> d
         ["diff", "--quiet", "HEAD", tag, "--", "deployment/recovery"]
     ).returncode != 0
     return {
-        "route": decision["route"], "current": current,
+        "route": route, "current": current,
         "target": {"tag": tag, "sha": target_sha},
         "runtime_mode": cfg.get("runtime_mode") or "hermes",
         "blockers": sorted(set(blockers)), "reinstall": reinstall,
@@ -980,22 +999,46 @@ def _plan(tag, cfg, state, current, target_sha, *, candidate: bool = False) -> d
         "restarts": restarts,
         "recovery_tool_changed": recovery_changed,
         "install_args": recorded_install_args(),
+        "settings_migration": migration_status,
         "reinstall_requires_recovery_repair": bool(reinstall and service_management.recovery_repair_pending(cfg, paths=_service_paths())),
-        "notes": [] if noop else ([] if candidate else upgrade_notes(tag, cur_tag))
+        "notes": (([{"notes": "旧導入記録の選択を現在の設定に引き継ぎます。旧記録は保持します。"}]
+                   if migration_status == "required" else []) if noop
+                  else ([] if candidate else upgrade_notes(tag, cur_tag)))
         + _recovery_notes(cfg, blockers, reinstall),
     }
 
 
 def recorded_install_args() -> list[str] | None:
-    """The opt-outs of the last successful install.sh run, or None when
-    no valid record exists (installs before 1.0.22 wrote none)."""
+    """Return verified install opt-outs or None when they cannot be trusted."""
+    return install_options.recorded(mcs_util.CONF_PATH, os.path.join(DATA, "install_options.json"))
+
+
+def _install_options_snapshot():
+    legacy = os.path.join(DATA, "install_options.json")
+    base = install_options.inspect(mcs_util.CONF_PATH, legacy)
+    current = install_options.selection(mcs_util.CONF_PATH, legacy)
+    if install_options.inspect(mcs_util.CONF_PATH, legacy) != base:
+        raise ValueError("install_options_changed")
+    return base, current
+
+
+def _release_migration_probe(deadline):
+    # Release-owned preflight is time-bounded and must not print config values.
+    source = ("import sys; sys.path.insert(0, sys.argv[1]); import _mcs_path; "
+              "import update_migrations; "
+              "print('required' if update_migrations.plan(sys.argv[2], sys.argv[3])[0] else 'none')")
     try:
-        args = journal_store.read_control_json(os.path.join(DATA, "install_options.json"))["install_args"]
-        if isinstance(args, list) and set(args) <= INSTALL_ARGS:
-            return sorted(set(args))
-    except (OSError, ValueError, TypeError, KeyError):
-        pass
-    return None
+        result = owned_process.run_owned(
+            [sys.executable, '-I', '-B', '-c', source, str(Path(__file__).resolve().parent.parent),
+             mcs_util.CONF_PATH, os.path.join(DATA, 'install_options.json')],
+            _bounded_timeout(5, deadline),
+            {'PATH': '/usr/bin:/bin', 'HOME': os.path.expanduser('~'), 'LC_ALL': 'C'},
+            stdin=subprocess.DEVNULL, deadline=deadline)
+        if result.returncode != 0 or result.stdout.strip() not in ('required', 'none'):
+            return 'unverified'
+        return result.stdout.strip()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return 'unverified'
 
 
 def _recovery_notes(cfg, blockers, reinstall) -> list[str]:
@@ -1550,6 +1593,17 @@ def _stop_update_child(child) -> None:
                 stream.close()
 
 
+def _verify_install_options_base(applying):
+    expected_base = applying.get("install_options_base")
+    try:
+        if not isinstance(expected_base, str) or _install_options_snapshot()[0] != expected_base:
+            raise ValueError("install_options_changed")
+    except (OSError, ValueError, TypeError, RecursionError):
+        raise UpdateError("install_options_unverified: 導入設定を確認できません。"
+                          "docs/guides/UPGRADE_AGENT.md の中断時の手順を確認してください") from None
+    return expected_base
+
+
 def _reinstall(applying: dict) -> None:
     """Operator-requested install.sh re-run (scripts/mcs_upgrade.py
     --reinstall) on the merged tree, before services. Its own session so
@@ -1557,10 +1611,12 @@ def _reinstall(applying: dict) -> None:
     rolled back."""
     if not applying.get("reinstall") or applying.get("reinstall_done"):
         return
+    expected_base = _verify_install_options_base(applying)
     args = [a for a in applying.get("install_args") or [] if a in INSTALL_ARGS]
     env, fds = os.environ.copy(), ()
     # migration/repair args are forced, not the operator's opt-outs: keep the record
     env[REINSTALL_ENV] = "1"
+    env["MCS_UPDATE_OPTIONS_BASE"] = expected_base
     migration = applying.get("runtime_migration")
     if migration:
         env[RUNTIME_BACKUP_ENV] = migration["backup_path"]
@@ -1672,6 +1728,7 @@ def _plan_runtime_migration(state: dict, held_fd: int | None = None) -> None:
         # An older updater parent cannot hand over run.lock: roll back and
         # leave the boundary to scripts/mcs_upgrade.py.
         raise UpdateError("runtime_migration_requires_upgrade_tool")
+    _verify_install_options_base(applying)
     migration = {"venv": venv, "backup_path": _free_sibling(venv, ".pre-python314"),
                  "updater_python": ".".join(map(str, sys.version_info[:3]))}
     if checkout:
@@ -1765,6 +1822,8 @@ def _post_merge(state: dict) -> int:
         if applying.get('reinstall') or applying.get('runtime_migration'):
             raise UpdateError('release_runtime_change_forbidden')
     else:
+        if applying.get("reinstall") and not applying.get("reinstall_done"):
+            _verify_install_options_base(applying)
         _plan_runtime_migration(state)
     if applying.get("reinstall") and not applying.get("reinstall_done"):
         _reinstall(applying)
@@ -2051,6 +2110,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
     block on update.lock, so no lock-order inversion exists. A verified
     release entry instead borrows its already-held gate/update/run locks."""
     borrowed = None
+    options_base = None
     lifetime = ExitStack()
     if _release_cap is not None:
         import release_apply_owner
@@ -2090,6 +2150,18 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 return 2
             if state.get("applying") or state.get("stages"):
                 return recover_interrupted()
+            try:
+                options_base, current_options = _install_options_snapshot()
+                encoded_expected = os.environ.get("MCS_UPDATE_OPTIONS_EXPECTED")
+                if encoded_expected is not None:
+                    expected_options = json.loads(encoded_expected)
+                    if (expected_options is not None and not install_options_contract.valid(expected_options)) \
+                            or current_options != (sorted(set(expected_options)) if expected_options is not None else None):
+                        raise ValueError("install_options_changed")
+            except (OSError, ValueError, TypeError, RecursionError):
+                if reinstall or os.environ.get("MCS_UPDATE_OPTIONS_EXPECTED") is not None:
+                    print("導入設定が変更されたか確認できないため更新を開始しません。設定を確認してください。")
+                    return 1
 
         else:
             deadline = borrowed.prequiesce_deadline
@@ -2284,6 +2356,9 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     return bail('tag_checks: ' + ','.join(errors))
                 # The live factory binds actual TTY change consent to this exact Core, including its schema.
 
+            if borrowed is not None and _release_migration_probe(borrowed.prequiesce_deadline) != 'none':
+                return bail('settings_migration_requires_manual_update')
+
             journal(state, "backup")
             import maintenance
             try:
@@ -2305,8 +2380,20 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             if base_sha and _head_sha(**before_args) != base_sha:
                 return bail("base_sha_mismatch: 承認時点と HEAD が異なる"
                             " — 要再レビュー")
+            if borrowed is None:
+                # Existing command drainers hold run.lock while writing config.
+                # The old watchdog treats this applying-free journal as pre-merge.
+                try:
+                    update_migrations.apply(
+                        mcs_util.CONF_PATH, os.path.join(DATA, "install_options.json"), options_base,
+                        lambda: journal(state, "settings_migration"))
+                    options_base, _ = _install_options_snapshot()
+                except (update_migrations.MigrationError, OSError, ValueError, TypeError, RecursionError):
+                    return bail("settings_migration_unverified: 設定の移行結果を確認してください")
             if _head_sha(**before_args) == sha:
                 # idempotent: already on the target — record and exit
+                if borrowed is None:
+                    _verify_install_options_base({"install_options_base": options_base})
                 state["stages"] = []
                 if command_id:
                     _record_executed(state, command_id, "already_applied")
@@ -2322,6 +2409,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 "plugin_changed": _plugin_changed(target_ref if borrowed is not None else candidate_sha if candidate else tag, cfg, **before_args),
                 "schema_bump": bool(bump),
                 "reinstall": reinstall, "install_args": list(install_args),
+                **({"install_options_base": options_base} if borrowed is None else {}),
                 "backup_path": bpath, "manifest_snapshot": snap,
                 "command_id": command_id, "at": time.time()}
             if borrowed is not None:
@@ -2360,6 +2448,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             journal(state, "post_merge")
             if borrowed is None:
                 _run_post_merge(sha, run_lock_fd=run_fd)
+                _verify_install_options_base({"install_options_base": options_base})
             else:
                 _run_post_merge(sha, run_lock_fd=run_fd, _release_entry=borrowed)
 

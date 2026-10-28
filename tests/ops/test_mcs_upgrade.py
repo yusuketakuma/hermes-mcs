@@ -7,6 +7,7 @@ import service_management
 import update_discovery
 import update_launch
 import importlib.util
+import fcntl
 import json
 import os
 import subprocess
@@ -414,6 +415,38 @@ def test_plan_routes_install_change_to_reinstall(updater, monkeypatch, tmp_path)
     assert [n["version"] for n in p["notes"]] == ["1.2.0"]
 
 
+@pytest.mark.parametrize(('config', 'legacy', 'status', 'route'), [
+    ('{}', '{"v": 1, "install_args": []}', 'required', 'apply'),
+    ('{"install_args": []}', '{"v": 1, "install_args": []}', 'none', 'noop'),
+    ('{}', '{broken', 'unverified', 'noop'),
+])
+def test_noop_plan_detects_missing_or_unverified_migration_without_writing(
+        updater, monkeypatch, tmp_path, config, legacy, status, route):
+    _plan_env(updater, monkeypatch, tmp_path, [])
+    config_path = Path(mcs_util.CONF_PATH)
+    config_path.write_text(config)
+    record = Path(updater.DATA) / 'install_options.json'
+    record.write_text(legacy)
+    before = config_path.read_bytes(), record.read_bytes()
+    sha = 'a' * 40
+    result = updater._plan('v1.2.0', {}, updater.journal_store.default_state(),
+                           {'tag': 'v1.2.0', 'sha': sha}, sha)
+    assert result['settings_migration'] == status and result['route'] == route
+    assert ('settings_migration_unverified' in result['blockers']) == (status == 'unverified')
+    assert (config_path.read_bytes(), record.read_bytes()) == before
+
+
+def test_noop_migration_requiring_reinstall_does_not_claim_repair(updater, monkeypatch, tmp_path):
+    _plan_env(updater, monkeypatch, tmp_path, ['install_sh_changed'])
+    Path(mcs_util.CONF_PATH).write_text('{}')
+    (Path(updater.DATA) / 'install_options.json').write_text('{"v": 1, "install_args": []}')
+    sha = 'a' * 40
+    result = updater._plan('v1.2.0', {}, updater.journal_store.default_state(),
+                           {'tag': 'v1.2.0', 'sha': sha}, sha)
+    assert result['route'] == 'blocked'
+    assert 'settings_migration_requires_reinstall' in result['blockers']
+
+
 @pytest.mark.parametrize("kw,errors,blocker", [
     ({}, ["tree_dirty"], "tree_dirty"),
     ({"legacy": True}, [], "legacy_source_manual"),
@@ -494,6 +527,100 @@ def test_reinstall_runs_install_before_services(updater, monkeypatch, tmp_path):
     assert applied["reinstall_done"] is True and applied["sha"] == sha
 
 
+@pytest.mark.parametrize('reinstall', [False, True])
+def test_update_runs_same_root_settings_migration_before_merge_once(updater, monkeypatch, tmp_path, reinstall):
+    repo = _apply_env(updater, monkeypatch, precheck_errors=['install_sh_changed'] if reinstall else [])
+    sha = _release(tmp_path / 'remote-work', tmp_path / 'remote.git', 'v1.2.0', {'f.txt': 'new synthetic release'})
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
+    monkeypatch.setattr(updater, '_run_post_merge',
+                        lambda expected, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+    _fake_install(monkeypatch)
+    config = Path(mcs_util.CONF_PATH)
+    config.write_text('{"unknown": {"keep": true}}')
+    legacy = Path(updater.DATA) / 'install_options.json'
+    legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
+    before = legacy.read_bytes()
+    stages = []
+    journal = updater.journal
+    def track(state, stage):
+        if stage == 'settings_migration':
+            assert state['applying'] is None
+            assert json.loads(config.read_text()) == {'unknown': {'keep': True}}
+            fd = os.open(updater.RUN_LOCK, os.O_RDWR)
+            try:
+                with pytest.raises(BlockingIOError):
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(fd)
+            stages.append(stage)
+        return journal(state, stage)
+    monkeypatch.setattr(updater, 'journal', track)
+    assert updater.apply('v1.2.0', sha, None, reinstall=reinstall,
+                         install_args=('--no-llm',) if reinstall else ()) == 0
+    assert stages == ['settings_migration']
+    assert json.loads(config.read_text()) == {'unknown': {'keep': True}, 'install_args': ['--no-llm']}
+    assert legacy.read_bytes() == before
+    assert _git(repo, 'rev-parse', 'HEAD').stdout.strip() == sha
+
+
+def test_apply_same_head_recopies_legacy_settings_after_prior_loss(updater, monkeypatch):
+    repo = _apply_env(updater, monkeypatch)
+    sha = _git(repo, 'rev-parse', 'HEAD').stdout.strip()
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
+    config = Path(mcs_util.CONF_PATH)
+    config.write_text('{"unknown": {"keep": true}}')
+    legacy = Path(updater.DATA) / 'install_options.json'
+    legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
+    before = legacy.read_bytes()
+    monkeypatch.setattr(updater, '_run_post_merge', lambda *_a, **_k: pytest.fail('same head cannot merge'))
+    assert updater.apply('v1.1.0', sha, None) == 0
+    assert json.loads(config.read_text()) == {'unknown': {'keep': True}, 'install_args': ['--no-llm']}
+    assert legacy.read_bytes() == before
+
+
+def test_postmerge_lost_settings_do_not_record_update_success(updater, monkeypatch, tmp_path):
+    _apply_env(updater, monkeypatch)
+    sha = _release(tmp_path / 'remote-work', tmp_path / 'remote.git', 'v1.2.0', {'f.txt': 'new'})
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
+    config = Path(mcs_util.CONF_PATH)
+    config.write_text('{"unknown": {"keep": true}}')
+    legacy = Path(updater.DATA) / 'install_options.json'
+    legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
+    original = legacy.read_bytes()
+
+    def old_writer_after_migration(_sha, *, run_lock_fd):
+        config.write_text('{"unknown": {"keep": true}}')
+
+    monkeypatch.setattr(updater, '_run_post_merge', old_writer_after_migration)
+    monkeypatch.setattr(updater, '_rollback_tree', lambda *_a, **_k: None)
+    assert updater.apply('v1.2.0', sha, None) == 1
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert not state.get('applied')
+    assert 'install_options_unverified' in state['attempts']['v1.2.0']['detail']
+    assert legacy.read_bytes() == original
+
+
+def test_update_rollback_keeps_legacy_record_and_migrated_settings(updater, monkeypatch, tmp_path):
+    repo = _apply_env(updater, monkeypatch)
+    old_head = _git(repo, 'rev-parse', 'HEAD').stdout.strip()
+    sha = _release(tmp_path / 'remote-work', tmp_path / 'remote.git', 'v1.2.0', {'f.txt': 'new synthetic release'})
+    monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
+    monkeypatch.setattr(updater, '_run_post_merge',
+                        lambda expected, *, run_lock_fd: updater._post_merge(updater.journal_store.load_state(updater.STATE_PATH)))
+    monkeypatch.setattr(service_management, 'retire_to_snapshot', lambda *_a, **_k: [])
+    config = Path(mcs_util.CONF_PATH)
+    config.write_text('{"unknown": {"keep": true}}')
+    legacy = Path(updater.DATA) / 'install_options.json'
+    legacy.write_text('{"v": 1, "install_args": ["--no-brew"]}')
+    before = legacy.read_bytes()
+    assert updater.apply('v1.2.0', sha, None) == 0
+    assert updater.rollback() == 0
+    assert _git(repo, 'rev-parse', 'HEAD').stdout.strip() == old_head
+    assert legacy.read_bytes() == before
+    assert json.loads(legacy.read_text())['install_args'] == ['--no-brew']
+    assert json.loads(config.read_text()) == {'unknown': {'keep': True}, 'install_args': ['--no-brew']}
+
+
 def test_failed_reinstall_rolls_the_tree_back(updater, monkeypatch, tmp_path):
     repo, _ = _install_tag(updater, monkeypatch, tmp_path)
     before = _git(repo, "rev-parse", "HEAD").stdout.strip()
@@ -542,7 +669,8 @@ def test_reinstall_marks_install_sh_as_an_updater_run(updater, monkeypatch):
             seen.append(kw["env"].get(mcs_update.REINSTALL_ENV))
             super().__init__(argv, **kw)
     monkeypatch.setattr(mcs_update.subprocess, "Popen", lambda argv, *a, **kw: Install(argv, **kw))
-    updater._reinstall({"reinstall": True, "install_args": ["--no-llm"]})
+    updater._reinstall({"reinstall": True, "install_args": ["--no-llm"],
+                        "install_options_base": updater._install_options_snapshot()[0]})
     assert seen == ["1"]
 
 

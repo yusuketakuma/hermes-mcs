@@ -1650,3 +1650,37 @@ print('synthetic native plan checked')
         input=json.dumps(packet), capture_output=True, text=True, env=environment, timeout=190)
     assert result.returncode == 0, result.stderr
     assert result.stdout.endswith('synthetic native plan checked\n')
+
+
+def test_release_owned_migration_needed_holds_before_merge(registered_effect, monkeypatch):
+    """A spent, bound release capability cannot silently migrate personal settings."""
+    import json
+    import mcs_update
+    import mcs_util
+    cap, entry, parameters = registered_effect
+    config = Path(entry.runtime_home) / 'config.json'
+    legacy = Path(entry.runtime_home) / 'data' / 'install_options.json'
+    config.write_text('{}')
+    legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
+    original = config.read_bytes(), legacy.read_bytes()
+    monkeypatch.setattr(mcs_util, 'CONF_PATH', str(config))
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
+    monkeypatch.setattr(mcs_update, 'HOME', entry.runtime_home)
+    monkeypatch.setattr(mcs_update, 'REPO', entry.repository)
+    monkeypatch.setattr(mcs_update, 'DATA', str(legacy.parent))
+    monkeypatch.setattr(mcs_update, 'STATE_PATH', str(parameters['journal_path']))
+    monkeypatch.setattr(release_apply_owner, '_effect_artifact', lambda *_a: None)
+    monkeypatch.setattr(release_apply_owner, '_import_started_artifact', lambda *_a: None)
+    monkeypatch.setattr(mcs_update, 'precheck_local', lambda *_a, **_k: [])
+    monkeypatch.setattr(mcs_update, '_precheck_target_tree', lambda *_a, **_k: ([], []))
+    monkeypatch.setattr(mcs_update, '_precheck_target_runtime_files', lambda *_a, **_k: [])
+    monkeypatch.setattr(mcs_update, '_enqueue_notice', lambda *_a, **_k: True)
+    monkeypatch.setattr(mcs_update, 'quiesce', lambda: pytest.fail('quiesce before migration hold'))
+    monkeypatch.setattr(mcs_update, '_git', lambda *_a, **_k: pytest.fail('merge before migration hold'))
+    arguments = parameters['arguments']
+    assert mcs_update._apply_pipeline(*arguments[:6], candidate_sha=arguments[6],
+                                      confirm_human=arguments[7], reason=arguments[8], _release_cap=cap) == 1
+    state = update_journal.load_state(parameters['journal_path'])
+    assert state.get('release_ref') == entry.reference and not state.get('applied')
+    assert 'settings_migration_requires_manual_update' in json.dumps(state)
+    assert (config.read_bytes(), legacy.read_bytes()) == original

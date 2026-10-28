@@ -241,10 +241,13 @@ def interactive_update(cmd, env, repo):
         return 0
     apply_cmd = list(cmd)
     apply_cmd[2] = "apply"
+    # Keep the approved record separate from temporary repair/install flags.
+    apply_env = dict(env)
     if route == "reinstall":
+        apply_env["MCS_UPDATE_OPTIONS_EXPECTED"] = json.dumps(install_args, separators=(",", ":"))
         apply_cmd.append("--reinstall")
         apply_cmd.extend(f"--install-arg={arg}" for arg in install_args)
-    result = subprocess.run(apply_cmd, env=env, cwd=repo, **_lifetime_fds())
+    result = subprocess.run(apply_cmd, env=apply_env, cwd=repo, **_lifetime_fds())
     if result.returncode:
         print("更新は完了していません。繰り返し実行せず、mcs recover で状態を確認してください。")
         return result.returncode
@@ -349,6 +352,7 @@ def _main(argv=None) -> int:
                     cmd += ["--confirm-human", f"--reason={args.reason}"]
             env = {**os.environ, "MCS_UPDATE_REPO": repo}
             env.pop("MCS_UPDATE_KEEP_HERMES_CHECKOUT", None)
+            env.pop("MCS_UPDATE_OPTIONS_EXPECTED", None)
             if args.keep_hermes_checkout:
                 env["MCS_UPDATE_KEEP_HERMES_CHECKOUT"] = args.keep_hermes_checkout
             try:

@@ -151,6 +151,7 @@ def _world(tmp_path, monkeypatch, updater, path, *, install=False, schema=None):
     root = Path(updater.REPO)
     config = root / "config.json"
     config.write_text(json.dumps(cfg))
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(config))
     objects = _Objects(root, origin, install,
                        path.get("target", MANIFEST["target"]["version"]),
                        ledger.SCHEMA_VERSION if schema is None else schema)
@@ -449,7 +450,8 @@ def test_legacy_manual_reinstall_migration_and_restore(
     backup_hash = _sha(Path(backup))
     # The documented operator route has no automatic apply/rollback promise.
     objects.run(["merge", "--ff-only", f"refs/tags/{objects.target}"])
-    applying = {"reinstall": True, "install_args": ["--no-llm"]}
+    applying = {"reinstall": True, "install_args": ["--no-llm"],
+                "install_options_base": updater._install_options_snapshot()[0]}
     updater._reinstall(applying)
     assert applying["reinstall_done"] is True
     assert updater._postcheck({"baseline_check": []}, objects.after) == []

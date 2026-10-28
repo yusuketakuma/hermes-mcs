@@ -170,6 +170,7 @@ def updater(tmp_path, monkeypatch):
     selected.chmod(0o700)
     monkeypatch.setattr(mcs_setup, "HOME", str(runtime_home))
     monkeypatch.setattr(mcs_update, "HOME", str(runtime_home))
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(runtime_home / "config.json"))
     monkeypatch.setattr(mcs_setup, "HERMES_PY", str(selected))
     select_updater_service_python(monkeypatch, mcs_update, str(selected))
     agents = runtime_home / "agents"
@@ -958,6 +959,28 @@ def test_recover_pre_applying_remnant_is_cleaned(updater, tmp_path,
     assert after["stages"] == [] and after["applying"] is None
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
     assert report["result"] == "interrupted_pre_merge"
+
+
+@pytest.mark.parametrize('published', [False, True])
+def test_recover_interrupted_premerge_settings_migration_preserves_data(updater, tmp_path, monkeypatch, published):
+    repo, _ = _make_repo(tmp_path)
+    monkeypatch.setattr(updater, 'REPO', str(repo))
+    monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ())
+    monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
+    monkeypatch.setattr(updater, '_enqueue_notice', lambda *_a, **_k: True)
+    config = Path(mcs_util.CONF_PATH)
+    legacy = Path(updater.DATA) / 'install_options.json'
+    value = {'unknown': {'keep': True}, **({'install_args': ['--no-llm']} if published else {})}
+    config.write_text(json.dumps(value))
+    legacy.write_text('{"v": 1, "install_args": ["--no-llm"]}')
+    original = (config.read_bytes(), legacy.read_bytes())
+    state = updater.journal_store.default_state()
+    state['stages'] = [{'stage': 'settings_migration', 'at': time.time() - 4000}]
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    assert updater.recover_interrupted() == 0
+    after = updater.journal_store.load_state(updater.STATE_PATH)
+    assert after['applied'] == [] and after['applying'] is None and after['stages'] == []
+    assert (config.read_bytes(), legacy.read_bytes()) == original
 
 
 def test_recover_completes_done_bookkeeping(updater, tmp_path,
@@ -2819,6 +2842,7 @@ def test_stopping_an_update_child_closes_its_pipes(updater):
 ])
 def test_recorded_install_args_only_trusts_known_opt_outs(tmp_path, monkeypatch, body, expected):
     monkeypatch.setattr(mcs_update, "DATA", str(tmp_path))
+    monkeypatch.setattr(mcs_update.mcs_util, "CONF_PATH", str(tmp_path / "config.json"))
     if body is not None:
         (tmp_path / "install_options.json").write_text(body)
     assert mcs_update.recorded_install_args() == expected
@@ -2826,6 +2850,7 @@ def test_recorded_install_args_only_trusts_known_opt_outs(tmp_path, monkeypatch,
 
 def test_recorded_install_args_ignores_a_symlinked_record(tmp_path, monkeypatch):
     monkeypatch.setattr(mcs_update, "DATA", str(tmp_path))
+    monkeypatch.setattr(mcs_update.mcs_util, "CONF_PATH", str(tmp_path / "config.json"))
     (tmp_path / "real.json").write_text('{"install_args": ["--no-llm"]}')
     (tmp_path / "install_options.json").symlink_to(tmp_path / "real.json")
     assert mcs_update.recorded_install_args() is None
@@ -3075,3 +3100,80 @@ def test_release_git_scope_uses_fixed_binary_and_environment_after_quiesce(tmp_p
     assert not marker.exists()
     assert os.environ['PATH'] == str(fake)
     assert updater._RELEASE_GIT_SCOPE.get() is False
+
+
+def test_guided_apply_stops_if_approved_options_changed(updater, monkeypatch, tmp_path, capsys):
+    config = Path(mcs_util.CONF_PATH)
+    config.write_text('{"install_args": ["--no-llm"]}')
+    monkeypatch.setenv('MCS_UPDATE_OPTIONS_EXPECTED', '[]')
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
+    monkeypatch.setattr(updater, '_apply_runtime_gate_errors', lambda *_: [])
+    assert updater._apply_pipeline('v1.0.23', None, None, reinstall=True) == 1
+    assert '導入設定が変更' in capsys.readouterr().out
+    assert not Path(updater.STATE_PATH).exists()
+    assert json.loads(config.read_text()) == {'install_args': ['--no-llm']}
+
+
+def test_manual_apply_can_choose_args_different_from_record(updater, monkeypatch):
+    config = Path(mcs_util.CONF_PATH)
+    config.write_text('{"install_args": ["--no-llm"]}')
+    monkeypatch.delenv('MCS_UPDATE_OPTIONS_EXPECTED', raising=False)
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
+    monkeypatch.setattr(updater, '_apply_runtime_gate_errors', lambda *_: [])
+    snapshot = updater._install_options_snapshot
+    captured = []
+    monkeypatch.setattr(updater, '_install_options_snapshot', lambda: captured.append(snapshot()) or captured[-1])
+    monkeypatch.setattr(updater, 'acquire_update_lock', lambda: None)
+    assert updater._apply_pipeline('v1.0.23', None, None, reinstall=True, install_args=('--no-brew',)) == 0
+    assert captured[0][1] == ['--no-llm']
+
+
+def test_interrupted_update_recovery_precedes_changed_guided_options(updater, monkeypatch):
+    state = updater.journal_store.default_state()
+    state['applying'] = {'tag': 'v1.0.23', 'sha': 'a' * 40, 'prev_sha': 'b' * 40}
+    updater.journal_store.save_state(updater.STATE_PATH, state)
+    monkeypatch.setenv('MCS_UPDATE_OPTIONS_EXPECTED', '[]')
+    monkeypatch.setattr(mcs_util, 'load_config', lambda: {})
+    monkeypatch.setattr(updater, '_apply_runtime_gate_errors', lambda *_: [])
+    monkeypatch.setattr(updater, '_install_options_snapshot', lambda: pytest.fail('recovery must take priority'))
+    monkeypatch.setattr(updater, 'recover_interrupted', lambda: 7)
+    assert updater._apply_pipeline('v1.0.23', None, None, reinstall=True) == 7
+
+
+def test_install_options_snapshot_propagates_transient_read_failure(updater, monkeypatch):
+    original = updater.install_options._legacy
+    calls = []
+    def interrupted(path):
+        calls.append(True)
+        if len(calls) == 2:
+            raise PermissionError('synthetic transient read failure')
+        return original(path)
+    monkeypatch.setattr(updater.install_options, '_legacy', interrupted)
+    with pytest.raises(PermissionError):
+        updater._install_options_snapshot()
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(('config', 'legacy', 'expected'), [
+    ('{}', None, 'none'),
+    ('{}', '{"v": 1, "install_args": []}', 'required'),
+    ('{"install_args": []}', '{"v": 1, "install_args": []}', 'none'),
+    ('{"install_args": []}', '{"v": 1, "install_args": ["--no-llm"]}', 'unverified'),
+    ('{}', '{broken', 'unverified'),
+])
+def test_release_migration_probe_is_read_only_and_returns_only_fixed_tokens(updater, tmp_path, config, legacy, expected):
+    path = Path(mcs_util.CONF_PATH)
+    path.write_text(config)
+    record = Path(updater.DATA) / 'install_options.json'
+    if legacy is not None:
+        record.write_text(legacy)
+    before = path.read_bytes(), record.read_bytes() if record.exists() else None
+    assert updater._release_migration_probe(time.monotonic() + 10) == expected
+    assert (path.read_bytes(), record.read_bytes() if record.exists() else None) == before
+
+
+def test_release_migration_probe_refuses_timeout(updater, monkeypatch):
+    def expired(*_a, **_k):
+        raise subprocess.TimeoutExpired('synthetic', 1)
+    monkeypatch.setattr(owned_process, 'run_owned', expired)
+    assert updater._release_migration_probe(time.monotonic() + 10) == 'unverified'

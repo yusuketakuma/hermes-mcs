@@ -126,7 +126,7 @@ def test_interactive_install_asks_for_the_runtime(tmp_path, setup_answer, setup_
     assert config.read_bytes() == saved
 
 
-def test_rerun_on_an_existing_install_never_prompts_or_writes(tmp_path):
+def test_rerun_on_an_existing_install_never_prompts_and_keeps_settings(tmp_path):
     import shutil
     import subprocess
     import sys
@@ -141,9 +141,11 @@ def test_rerun_on_an_existing_install_never_prompts_or_writes(tmp_path):
     r = subprocess.run(["script", "-q", "/dev/null", "sh", str(INSTALL), "--preflight"],
                        stdin=subprocess.DEVNULL, env=env, capture_output=True, text=True, timeout=120)
     assert "選択 [1・推奨" not in r.stdout and "接続方法: hermes" in r.stdout
+    assert cfg.read_text() == '{"mcs_login_id": "synthetic"}\n'
     r = subprocess.run(["sh", str(INSTALL), "--no-llm", "--no-brew"], env=env,
                        capture_output=True, text=True, timeout=120)
-    assert cfg.read_text() == '{"mcs_login_id": "synthetic"}\n'
+    assert json.loads(cfg.read_text()) == {'mcs_login_id': 'synthetic',
+                                          'install_args': ['--no-brew', '--no-llm']}
     assert not any(c.startswith("venv-python - ") for c in _calls(stub_root))
 
 
