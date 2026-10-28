@@ -13,6 +13,7 @@ import config_edit
 import mcs_config
 import mcs_setup
 import mcs_util
+import safe_io
 import setup_wizard
 
 
@@ -187,6 +188,27 @@ def test_features_refuses_an_active_shared_lock(monkeypatch, tmp_path):
     with config_edit._edit_lock(path):
         assert mcs_setup.main(["features"]) == 1
     assert json.loads(path.read_text()) == initial
+
+
+@pytest.mark.parametrize("initially_present", [True, False])
+@pytest.mark.parametrize("error", [OSError, FileNotFoundError])
+def test_features_reports_unknown_after_publication_fsync_error(monkeypatch, tmp_path, capsys,
+                                                               initially_present, error):
+    initial = {"mcs_login_id": "synthetic", "notify_target": "local"} if initially_present else None
+    path = _features_env(monkeypatch, tmp_path, initial)
+    if not initially_present:
+        # Exercise exclusive publication independently of required-key validation.
+        monkeypatch.setattr(mcs_setup, "validate_config", lambda cfg: ([], []))
+    _during_the_prompt(monkeypatch, lambda: None)
+    def fail_after_publication(*args, **kwargs):
+        raise error("synthetic directory sync error")
+    monkeypatch.setattr(safe_io, "fsync_dir", fail_after_publication)
+    assert mcs_setup.main(["features"]) == 1
+    assert json.loads(path.read_text())["optional_features"] == {"csdc": True}
+    out = capsys.readouterr().out
+    assert "保存結果を確認できません" in out
+    assert "表示される現在の選択を確認" in out
+    assert "保存していません" not in out and "変更しません" not in out
 
 
 @pytest.mark.parametrize("change", ["deleted", "replaced_same_bytes", "corrupted"])
