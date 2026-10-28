@@ -10,6 +10,17 @@ import restore_evidence
 from ops_testkit import _load
 
 
+INTAKE_CASES = [
+    ('held_intents', 'artifacts', 'semantic_intake_hold_v1'),
+    ('released_intents', 'artifacts', 'semantic_intake_released_v1'),
+    ('release_receipts', 'artifacts', 'semantic_intake_release_receipt_v1'),
+    ('archived_intake', 'fetch_jobs', 'semantic_intake_archive_v1'),
+    ('unstored_intake', 'fetch_jobs', 'semantic_intake_unstored_v1'),
+    ('unstored_epoch', 'fetch_jobs', 'semantic_intake_unstored_epoch_v1'),
+    ('unstored_roots', 'fetch_jobs', 'semantic_intake_unstored_root_v1'),
+]
+
+
 def _database(path):
     with closing(sqlite3.connect(path)) as db, db:
         db.executescript("""
@@ -20,6 +31,15 @@ def _database(path):
             CREATE TABLE fetch_jobs(job_id INTEGER PRIMARY KEY, kind TEXT, project_id INTEGER,
                                     message_id INTEGER, payload TEXT, state TEXT, attempts INTEGER);
         """)
+
+
+def _insert_evidence(db, table, kind, row_id):
+    if table == 'artifacts':
+        db.execute('INSERT INTO artifacts VALUES(?,?,?,?,?,?,?,?)',
+                   (row_id, kind, 1, None, '{"synthetic":true}', '1', '{}', 1))
+    else:
+        db.execute('INSERT INTO fetch_jobs VALUES(?,?,?,?,?,?,?)',
+                   (row_id, kind, 1, row_id, '{"synthetic":true}', 'pending', 0))
 
 
 def _reports(tmp_path, monkeypatch, live, backup):
@@ -45,36 +65,30 @@ def test_no_intake_records_keep_legacy_report_identity(tmp_path, monkeypatch):
         metrics, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()).hexdigest()
 
 
-def test_report_exposes_unchanged_and_replaced_hold_and_unstored_rows(tmp_path, monkeypatch):
+@pytest.mark.parametrize('label,table,kind', INTAKE_CASES)
+def test_report_exposes_unchanged_and_replaced_intake_rows(tmp_path, monkeypatch, label, table, kind):
     live, backup = tmp_path / 'live.db', tmp_path / 'backup.db'
     _database(live)
     _database(backup)
     for path, offset in ((live, 0), (backup, 1)):
         with closing(sqlite3.connect(path)) as db, db:
-            db.executemany('INSERT INTO artifacts VALUES(?,?,?,?,?,?,?,?)', [
-                (1, 'semantic_intake_hold_v1', 1, None, '{"synthetic":1}', '1', '{}', 1),
-                (2 + offset, 'semantic_intake_hold_v1', 1, None, '{"synthetic":2}', '1', '{}', 1),
-            ])
-            db.executemany('INSERT INTO fetch_jobs VALUES(?,?,?,?,?,?,?)', [
-                (1, 'semantic_intake_unstored_v1', 1, 0, '{}', 'pending', 0),
-                (2 + offset, 'semantic_intake_unstored_v1', 2, 0, '{}', 'pending', 0),
-            ])
+            _insert_evidence(db, table, kind, 1)
+            _insert_evidence(db, table, kind, 2 + offset)
     report, _ = _reports(tmp_path, monkeypatch, live, backup)
-    for entry in report['semantic_intake_evidence'].values():
-        assert (entry['live'], entry['backup'], entry['live_not_identical_in_backup']) == (2, 2, 1)
+    assert set(report['semantic_intake_evidence']) == {label}
+    entry = report['semantic_intake_evidence'][label]
+    assert (entry['live'], entry['backup'], entry['live_not_identical_in_backup']) == (2, 2, 1)
     assert 'synthetic' not in json.dumps(report)
 
 
-@pytest.mark.parametrize('kind', ['semantic_intake_unstored_v1',
-                                  'semantic_intake_unstored_epoch_v1',
-                                  'semantic_intake_unstored_root_v1'])
+@pytest.mark.parametrize('label,table,kind', INTAKE_CASES)
 @pytest.mark.parametrize('mutation', ['add', 'remove', 'replace', 'update'])
-def test_unstored_change_invalidates_previous_receipt(tmp_path, monkeypatch, mutation, kind):
+def test_intake_change_invalidates_previous_receipt(tmp_path, monkeypatch, mutation, label, table, kind):
     live, backup = tmp_path / 'live.db', tmp_path / 'backup.db'
     _database(live)
     _database(backup)
     with closing(sqlite3.connect(live)) as db, db:
-        db.execute("INSERT INTO fetch_jobs VALUES(1,?,1,0,'{}','pending',0)", (kind,))
+        _insert_evidence(db, table, kind, 1)
         db.execute('CREATE TABLE command_receipts(command_id TEXT, receipt_json TEXT, outcome TEXT, processed_at REAL)')
     report, watchdog = _reports(tmp_path, monkeypatch, live, backup)
     receipt = {'cmd': 'ops.restore_approve', 'scheduled': True, 'command_id': 'test',
@@ -83,17 +97,20 @@ def test_unstored_change_invalidates_previous_receipt(tmp_path, monkeypatch, mut
         db.execute("INSERT INTO command_receipts VALUES('test',?,'applied',1)", (json.dumps(receipt),))
     assert restore_evidence.find_restore_consent(report, live_path=str(live)) == 'test'
     assert watchdog._consent_for(report) == 'test'
+    key = 'artifact_id' if table == 'artifacts' else 'job_id'
     with closing(sqlite3.connect(live)) as db, db:
         if mutation == 'add':
-            db.execute("INSERT INTO fetch_jobs VALUES(2,?,2,0,'{}','pending',0)", (kind,))
+            _insert_evidence(db, table, kind, 2)
         elif mutation == 'remove':
-            db.execute('DELETE FROM fetch_jobs WHERE job_id=1')
+            db.execute(f'DELETE FROM {table} WHERE {key}=1')
         elif mutation == 'replace':
-            db.execute('DELETE FROM fetch_jobs WHERE job_id=1')
-            db.execute("INSERT INTO fetch_jobs VALUES(2,?,2,0,'{}','pending',0)", (kind,))
+            db.execute(f'DELETE FROM {table} WHERE {key}=1')
+            _insert_evidence(db, table, kind, 2)
         else:
-            db.execute("UPDATE fetch_jobs SET payload='{\"changed\":true}' WHERE job_id=1")
+            field = 'meta' if table == 'artifacts' else 'payload'
+            db.execute(f'UPDATE {table} SET {field}=? WHERE {key}=1', ('{"changed":true}',))
     changed, _ = _reports(tmp_path, monkeypatch, live, backup)
+    assert changed.get('semantic_intake_evidence', {}).get(label) != report['semantic_intake_evidence'][label]
     assert changed['report_id'] != report['report_id']
     assert restore_evidence.find_restore_consent(changed, live_path=str(live)) is None
     assert watchdog._consent_for(changed) is None

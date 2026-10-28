@@ -91,6 +91,9 @@ def _intake_comparison(live, back):
     compared = {}
     for label, table, kind in (
             ('held_intents', 'artifacts', 'semantic_intake_hold_v1'),
+            ('released_intents', 'artifacts', 'semantic_intake_released_v1'),
+            ('release_receipts', 'artifacts', 'semantic_intake_release_receipt_v1'),
+            ('archived_intake', 'fetch_jobs', 'semantic_intake_archive_v1'),
             ('unstored_intake', 'fetch_jobs', 'semantic_intake_unstored_v1'),
             ('unstored_epoch', 'fetch_jobs', 'semantic_intake_unstored_epoch_v1'),
             ('unstored_roots', 'fetch_jobs', 'semantic_intake_unstored_root_v1')):
