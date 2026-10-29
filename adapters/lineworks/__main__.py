@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import signal
+import stat
 import sys
 import tempfile
 import threading
@@ -22,7 +23,7 @@ if __package__ in (None, ""):
 
 from adapters.common import eventlog, paths, registry
 from mcs_util import HOME
-from safe_io import fdopen_owned
+from safe_io import fdopen_owned, read_regular_nofollow
 from .actions import Actions
 from .client import ClientError, Credentials, _sign, valid_protocol_text, valid_filename
 from .config import credentials_path, destination, load_credentials, settings
@@ -49,11 +50,18 @@ def initialize(root):
     # Text-only LINE WORKS targets also send with these credentials (see check/send).
     scope = settings(root, require_interactive=False)
     path = credentials_path(root)
-    if path.exists():
+    if os.path.lexists(path):
         print("既存の認証設定を保持します。checkで確認してください。")
         return 0
     if not sys.stdin.isatty():
         raise ClientError("credential_entry_requires_terminal")
+    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    def parent_identity():
+        info = os.stat(path.parent, follow_symlinks=False)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+            raise ClientError('lineworks_credentials_parent_untrusted')
+        return info.st_dev, info.st_ino, info.st_uid, info.st_mode
+    parent = parent_identity()
     print("LINE WORKSの開発者画面で発行した認証情報を入力します。入力は表示されません。")
     values = {"bot_id": scope["application_id"]}
     for key, label in (("client_id", "アプリのClient ID"), ("client_secret", "アプリのClient Secret"),
@@ -73,19 +81,36 @@ def initialize(root):
     Credentials(**{k: v for k, v in values.items() if k != "bot_secret"})
     if not valid_protocol_text(values["bot_secret"], 4096):
         raise ClientError("credentials_invalid")
-    path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    body = json.dumps(values, ensure_ascii=False).encode()
+    if len(body) > 16384:
+        raise ClientError("credentials_invalid")
+    if parent_identity() != parent or settings(root, require_interactive=False) != scope:
+        raise ClientError('lineworks_configuration_changed')
     # Kept inline: unlike publish_new_bytes, a failed staging cleanup must fail init.
     fd, temporary = tempfile.mkstemp(prefix=".lineworks-init-", dir=path.parent)
     try:
         with fdopen_owned(fd, "wb") as stream:
-            stream.write(json.dumps(values, ensure_ascii=False).encode())
+            stream.write(body)
             stream.flush()
             os.fsync(stream.fileno())
+        if parent_identity() != parent or settings(root, require_interactive=False) != scope:
+            raise ClientError('lineworks_configuration_changed')
         # Exclusive publication: another init's existing file is never overwritten.
         os.link(temporary, path)
         paths.fsync_dir(str(path.parent))
     finally:
         os.unlink(temporary)
+    try:
+        saved, info = read_regular_nofollow(path, 16384, lambda: ValueError('credentials_unverified'), with_stat=True)
+        current = os.stat(path, follow_symlinks=False)
+        if (parent_identity() != parent or settings(root, require_interactive=False) != scope
+                or saved != body or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
+                or (current.st_dev, current.st_ino, current.st_mode, current.st_size, current.st_mtime_ns, current.st_ctime_ns)
+                != (info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns)):
+            raise ValueError('credentials_unverified')
+    except (OSError, ValueError, ClientError):
+        raise OSError('credentials_unverified') from None
     print("LINE WORKS認証設定を保存しました。次にcheckを実行してください。")
     return 0
 
