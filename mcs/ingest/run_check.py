@@ -286,7 +286,9 @@ def stage_derive(ledger, result, deadline, cfg=None,
         touched |= set(scan.dirty)
         touched.difference_update(scan.unknown)
         result["rollup_scan"] = {"state": "unknown" if scan.incomplete else "checked",
-                                 "unknown_observed": len(scan.unknown)}
+                                 "unknown_observed": len(scan.unknown),
+                                 "unknown_reasons": dict(scan.unknown_reasons),
+                                 "rechecked": scan.rechecked}
         if scan.incomplete:
             result["errors"].append("rollup: scan_unknown")
         source_changed = []
