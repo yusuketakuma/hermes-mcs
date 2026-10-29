@@ -10,6 +10,7 @@ from mcs_util import strict_json
 
 # Bound retained evidence independently of the reader's time and output budgets.
 MAX_ROWS = 100000
+MAX_PROOF_BYTES = 16 * 1024 * 1024
 _VALID_META = ("CASE WHEN typeof(meta)='text' AND length(CAST(meta AS BLOB))<=32768 "
                "AND json_valid(meta) THEN CASE WHEN json_type(meta)='object' THEN meta END END")
 
@@ -40,7 +41,14 @@ def observe(db, *, now=None):
     if not db.in_transaction:
         raise sqlite3.DatabaseError("observation_snapshot_required")
 
+    proof_bytes = 0
+
     def classify(reserve_count, result_count, *values):
+        nonlocal proof_bytes
+        proof_bytes += sum(len(value.encode("utf-8")) for value in (values[0], values[5])
+                           if isinstance(value, str))
+        if proof_bytes > MAX_PROOF_BYTES:
+            raise ValueError("observation_proof_budget_exceeded")
         try:
             if reserve_count != 1 or result_count > 1:
                 return "invalid"
@@ -60,7 +68,11 @@ def observe(db, *, now=None):
     # Raw proof payloads never cross the reader boundary or accumulate in Python.
     query = f"""
         WITH identities AS MATERIALIZED (
-            SELECT artifact_id,kind,json_extract({_VALID_META},'$.reservation_id') AS rid
+            SELECT artifact_id,kind,CASE
+                       WHEN json_type({_VALID_META},'$.reservation_id')='text'
+                        AND length(json_extract({_VALID_META},'$.reservation_id'))=32
+                        AND length(CAST(json_extract({_VALID_META},'$.reservation_id') AS BLOB))<=128
+                       THEN json_extract({_VALID_META},'$.reservation_id') END AS rid
             FROM artifacts WHERE kind IN ('cloud_usage_reserve','cloud_usage_result')
             LIMIT ?
         ), pairs AS (
