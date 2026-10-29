@@ -2,6 +2,7 @@
 """Generate source-based, fictional Slack illustrations for README."""
 
 import argparse
+import base64
 import hashlib
 from html import escape
 import json
@@ -22,7 +23,7 @@ MUTED = "#66716f"
 GREEN = "#087f5b"
 FONT = "Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif"
 # Fully fictional example shared by every screen (no real or anonymised posts).
-HEADING = "💻 山田 花子（あおぞら）"
+HEADING = "💬 山田 花子（あおぞら）"
 # layout 2: the line under the title — start date, then counts
 META = "10-01〜 · {n}投稿 · 📎 1 · @自分宛て"
 SENDER = "佐藤さん（訪問看護・あおぞら）"
@@ -147,6 +148,7 @@ class Screen:
         for (sender, bullets), stamps in zip(shown, STAMPS[0 if full else post:]):
             y = self.rule(x, y, width)
             y = self.paragraph(x, y, sender, width, 15, MUTED)
+            y = self.provider_row(x, y - 5, 0 if sender == POSTS[0][0] else 1)
             for bullet in bullets:
                 y = self.paragraph(x, y - 2, "・" + bullet, width, 18)
             y = self.fold(x, y, width, 16)
@@ -166,6 +168,20 @@ class Screen:
         """The collapsed 原文（N字） container block under a post."""
         self.rect(x - 8, y - size - 2, width + 16, size + 22, "#f3f6f4", 8, "#dce2dd")
         return self.paragraph(x, y + 4, f"▸ 原文（{len(BODY)}字）", width, size, MUTED) + 8
+
+    def provider_row(self, x, y, post):
+        """Illustrate synthetic per-post execution, separate from validation verdicts."""
+        marks = (("✓", "−", "↷", "−"), ("−", "−", "✓", "✓"))[post]
+        for index, (provider, mark) in enumerate(zip(("anthropic", "openai", "jev", "local"), marks)):
+            left = x + index * 66
+            if provider == "local":
+                self.text(left, y + 18, "💻", 20)
+            else:
+                data = base64.b64encode((ROOT / "resources/provider-icons" / f"{provider}.png").read_bytes()).decode("ascii")
+                self.parts.append(f'<image x="{left}" y="{y}" width="22" height="22" '
+                                  f'href="data:image/png;base64,{data}"><title>{provider} {mark}</title></image>')
+            self.text(left + 28, y + 18, mark, 18, MUTED)
+        return y + 44
 
     def finish(self):
         return "\n".join(self.parts + ["</svg>"]) + "\n"
@@ -188,7 +204,7 @@ def overview():
 
 
 def notification():
-    s = Screen(2, "返信ごとのカードで、確認と担当を共有。", "各カードの要約・原文・スタンプ・操作は、そのカードの投稿だけが対象です。", 1180)
+    s = Screen(2, "返信ごとのカードで、確認と担当を共有。", "各カードの要約・原文・スタンプ・操作は、そのカードの投稿だけが対象です。", 1300)
     x, y = s.app()
     y = s.actions(x, s.card(x, y, replies=1))
     s.text(x, y + 40, "スレッド内の返信カード", 17, MUTED, True)
@@ -437,7 +453,9 @@ def asset_hashes(out=OUT, screens=SCREENS):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
-    parser.add_argument("--png", action="store_true", help="also export with Inkscape and local CJK fonts")
+    parser.add_argument("--png", action="store_true", help="also export PNGs with local CJK fonts")
+    parser.add_argument("--renderer", choices=("inkscape", "sips"), default="inkscape",
+                        help="PNG renderer (sips is available on macOS)")
     args = parser.parse_args()
     if args.check and args.png:
         parser.error("--check and --png cannot be combined")
@@ -455,10 +473,11 @@ def main():
         if args.png:
             temporary = path.with_name(f".{name}.tmp.png")
             try:
-                subprocess.run(["inkscape", str(path), "--export-type=png",
-                                "--export-width=1650",
-                                f"--export-filename={temporary}"], check=True,
-                               stdout=subprocess.DEVNULL)
+                command = (["sips", "-s", "format", "png", "--resampleWidth", "1650",
+                            str(path), "--out", str(temporary)] if args.renderer == "sips" else
+                           ["inkscape", str(path), "--export-type=png", "--export-width=1650",
+                            f"--export-filename={temporary}"])
+                subprocess.run(command, check=True, timeout=60, stdout=subprocess.DEVNULL)
                 verify_png(temporary, data)
                 temporary.replace(path.with_suffix(".png"))
             finally:
@@ -484,6 +503,6 @@ def main():
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (OSError, ValueError, zlib.error, subprocess.CalledProcessError) as exc:
+    except (OSError, ValueError, zlib.error, subprocess.SubprocessError) as exc:
         print(f"Slack gallery: {exc}", file=sys.stderr)
         raise SystemExit(1)
