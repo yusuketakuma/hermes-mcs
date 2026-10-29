@@ -18,6 +18,31 @@ _STAMP_LINE = "スタンプ "
 _DIVIDER = {"type": "divider"}
 _MENTION = re.compile(r"<@[UW][A-Z0-9]{1,30}>")
 MEMBER_LABEL = "メンバー"
+_PROVIDERS = (("anthropic", "Anthropic", "https://www.anthropic.com/images/icons/apple-touch-icon.png"),
+              ("openai", "OpenAI", "https://avatars.githubusercontent.com/u/14957082?v=4"),
+              ("jev", "Jev", "https://framerusercontent.com/images/aNFzSFxM4fjICmnibw7npfZjcQ.png"))
+_STATE_LABELS = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
+                 "pending": "処理待ち", "failed": "失敗", "unknown": "不明"}
+_STATE_MARKS = {"done": "✓", "partial": "✓↷", "skipped": "↷", "unused": "−", "pending": "…", "failed": "!", "unknown": "?"}
+
+
+def _provider_context(states):
+    elements = []
+    for key, name, url in _PROVIDERS:
+        elements.append({"type": "image", "image_url": url,
+                         "alt_text": f"{name} {_STATE_LABELS[states[key]]}"})
+        elements.append({"type": "plain_text", "text": _STATE_MARKS[states[key]]})
+    elements.append({"type": "plain_text", "text": f"💻 {_STATE_MARKS[states['local']]} {_STATE_LABELS[states['local']]}"})
+    return {"type": "context", "elements": elements}
+
+
+def _provider_line(text):
+    labels = "|".join(map(re.escape, _STATE_LABELS.values()))
+    match = re.fullmatch(rf"Anthropic ({labels}) · OpenAI ({labels}) · Jev ({labels}) · 💻 ({labels})", text)
+    if match is None:
+        return None
+    codes = {label: code for code, label in _STATE_LABELS.items()}
+    return dict(zip(("anthropic", "openai", "jev", "local"), map(codes.get, match.groups())))
 
 
 def mention_ids(spec) -> set:
@@ -59,8 +84,12 @@ def thread_part_blocks(spec, part, text):
     if is_header_part(name):
         lines = text.split("\n")
         rest = [ln for ln in lines[1:] if ln]
+        states = (_provider_line(rest[0]) if rest and (spec.get("parts") or {}).get("provider_states_version") == 1
+                  else None)
+        if states is not None:
+            rest.pop(0)
         summary = "\n".join(ln for ln in rest if not ln.startswith(_STAMP_LINE))
-        blocks = contexts(lines[0]) + (text_sections(summary) if summary else [])
+        blocks = contexts(lines[0]) + ([_provider_context(states)] if states else []) + (text_sections(summary) if summary else [])
         for ln in rest:
             if ln.startswith(_STAMP_LINE):
                 blocks.extend(contexts(ln))
@@ -156,7 +185,12 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
         if item.get("rule") and blocks:
             blocks.append(dict(_DIVIDER))
         if card_kind == "thread" and item.get("rule") and kind == "text":
-            blocks.extend(contexts(item["text"]))
+            states = item.get("provider_states")
+            if states is not None:
+                blocks.extend(contexts(item["text"].rsplit("\n", 1)[0]))
+                blocks.append(_provider_context(states))
+            else:
+                blocks.extend(contexts(item["text"]))
             continue
         if kind == "heading" and len(item["text"]) <= HEADER_MAX:
             blocks.append({
@@ -185,7 +219,10 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
         blocks.extend(_link_context(text) or contexts(text))
     for post in stamp_posts:
         # A multi-post card must retain which post each observed reaction belongs to.
-        lines = [parts["containers"][post["at"]]["text"]] if len(face) > 1 else []
+        item = parts["containers"][post["at"]]
+        header = (item["text"].rsplit("\n", 1)[0]
+                  if item.get("provider_states") is not None else item["text"])
+        lines = [header] if len(face) > 1 else []
         blocks.extend(contexts("\n".join(lines + post["stamps"])))
     if stamp_control:
         blocks.append(stamp_control)

@@ -431,20 +431,33 @@ def _delivery_db(tmp_path, messages=()):
 
 
 def _summary(db, claims=1):
+    from mcs_util import payload_hash
+
     bundle = semantic_store.thread_bundle(db.db, 1, 1)
     content = {"claims": [
         {"text": f"claim-{i}-" + "x" * 220, "section": "status",
          "claim_kind": "reported_fact"}
         for i in range(claims)
-    ], "limitations": ["制約-" + "y" * 120]}
-    db.artifact_add(
+    ], "limitations": ["制約-" + "y" * 120], "audit_status": "PASS"}
+    fp = bundle["source_fingerprint"]
+    policy = semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg("enforce"))[0])
+    revision = bundle["members"][0]["revision"]
+    common = {VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
+              "schema": semantic_policy.SCHEMA_VERSION, "audit_status": "PASS",
+              "publication_mode": "enforce", "target_revision": revision}
+    facts = [{"fact_id": "synthetic-fact", "statement": "synthetic evidence"}]
+    db.artifact_add("semantic_facts", json.dumps({"facts": facts}), project_id=1, message_id=1,
+                    meta={VERSION_KEY: CURRENT_VERSION, "schema": semantic_policy.SCHEMA_VERSION, "fingerprint": fp})
+    summary_id = db.artifact_add(
         "semantic_summary", json.dumps(content, ensure_ascii=False),
         project_id=1, message_id=1, model="Qwen3.5-9B",
-        meta={"fingerprint": bundle["source_fingerprint"],
-              "policy_fingerprint": semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg("enforce"))[0]),
-              "audit_status": "PASS",
-              "publication_mode": "enforce",
-              "target_revision": bundle["members"][0]["revision"]})
+        meta=common)
+    audit = {"status": "PASS", "findings": [], "target_message_id": 1}
+    binding = payload_hash({"project_id": 1, "message_id": 1, "fingerprint": fp, "policy": policy,
+                            "revision": revision, "claims": content["claims"], "facts": facts})
+    db.artifact_add("semantic_audit", json.dumps(audit), project_id=1, message_id=1,
+                    meta={**common, "summary_artifact_id": summary_id, "summary_hash": payload_hash(content),
+                          "audit_content_hash": payload_hash(audit), "claim_input_binding": binding})
 
 
 def _notice_text(body):
@@ -467,13 +480,27 @@ def _semantic_event(db, text="notice"):
         db.outbox_mark(row["event_id"], "accepted")
     bundle = semantic_store.thread_bundle(db.db, 1, 1)
     _summary(db, claims=1)
+    from mcs_util import payload_hash
+    summary = db.artifacts("semantic_summary", message_id=1)[-1]
     payload = {
         "root_id": 1, "target_message_id": 1, "src_event_id": src,
         "target_revision": bundle["members"][0]["revision"],
         "fingerprint": bundle["source_fingerprint"],
         "policy_version": semantic_policy.POLICY_VERSION,
-        "policy_fingerprint": semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg("enforce"))[0]), "text": _notice_text(text),
+        "summary_artifact_id": summary["artifact_id"], "summary_hash": payload_hash(json.loads(summary["content"])),
+        "policy_fingerprint": semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg("enforce"))[0]),
+        "text": _notice_text(text), "notice_text_hash": payload_hash(_notice_text(text)),
     }
+    payload["delivery_key"] = payload_hash({"kind": "semantic_notice", "root": 1,
+                                            "fp": payload["fingerprint"], "mid": 1,
+                                            "policy": payload["policy_fingerprint"]})
+    receipt_keys = ("delivery_key", "root_id", "target_message_id", "src_event_id", "fingerprint",
+                    "policy_fingerprint", "summary_artifact_id", "summary_hash", "notice_text_hash")
+    receipt = {key: payload[key] for key in receipt_keys}
+    payload["notice_receipt_id"] = db.artifact_add(
+        "semantic_notice_receipt", json.dumps(receipt), project_id=1, message_id=1,
+        meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": payload["fingerprint"],
+              "policy_fingerprint": payload["policy_fingerprint"]})
     db.outbox_add("semantic_notice", 1, payload)
     return db.db.execute(
         "SELECT * FROM notify_outbox WHERE kind='semantic_notice'"

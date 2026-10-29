@@ -47,6 +47,80 @@ KIND_V4_SKIPPED = "semantic_facts_v4_skipped"
 KIND_V4_STAGE = "v4_stage"
 KIND_V4_DIAG = "v4_diagnostic"
 
+
+def _projection_provenance(db, pid, mid, fp, policy, member, doc, content):
+    from inference_dependency_loss import source_binding
+    from semantic_projection import project_v2_doc_legacy
+
+    providers, complete, jev = [], False, "unknown"
+    doc_hash = semantic_facts.doc_hash(doc)
+    if payload_hash(project_v2_doc_legacy(doc)) != payload_hash(content):
+        return {"version": 1, "stage": "projection", "providers": providers, "complete": complete,
+                "result_hash": payload_hash(content), "source_fingerprint": fp, "policy_fingerprint": policy,
+                "target_revision": member["revision"], "source_binding": source_binding(db, pid, mid), "jev": jev}
+    for kind in (KIND_FACTS_V2, KIND_FACT_AUDIT):
+        row = db.execute("SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? "
+                         "AND message_id=? ORDER BY artifact_id DESC LIMIT 1", (kind, pid, mid)).fetchone()
+        if row is None:
+            continue
+        try:
+            data, meta = strict_json(row["content"]), strict_json(row["meta"])
+            if (not isinstance(data, dict) or not isinstance(meta, dict) or not is_current(meta)
+                    or meta.get("invalidated") or meta.get("fingerprint") != fp
+                    or meta.get("policy_fingerprint") != policy):
+                continue
+            if kind == KIND_FACTS_V2:
+                proof = meta.get("provider_provenance")
+                if (payload_hash(data) == payload_hash(doc) and isinstance(proof, dict)
+                        and type(proof.get("version")) is int and proof["version"] == 1
+                        and proof.get("stage") == "facts" and proof.get("result_hash") == payload_hash(data)
+                        and proof.get("source_fingerprint") == fp and proof.get("policy_fingerprint") == policy
+                        and proof.get("target_revision") == member["revision"]
+                        and type(proof.get("complete")) is bool and isinstance(proof.get("providers"), list)
+                        and all(isinstance(p, str) and p in ("local", "anthropic", "openai")
+                                for p in proof["providers"])
+                        and len(set(proof["providers"])) == len(proof["providers"])
+                        and (not proof["complete"] or bool(proof["providers"]))):
+                    from semantic_extraction import rebuild_facts_v2_cached
+                    producer = {}
+                    rebuilt, error = rebuild_facts_v2_cached(member, db, fp, pid, data, meta,
+                                                             producer_out=producer)
+                    if (error is None and rebuilt is not None and payload_hash(rebuilt) == payload_hash(data)
+                            and producer.get("providers") == proof["providers"]
+                            and producer.get("complete") is proof["complete"]):
+                        providers, complete = proof["providers"], proof["complete"]
+            else:
+                proof = meta.get("jev_provenance")
+                if (meta.get("doc_hash") == doc_hash and isinstance(proof, dict)
+                        and type(proof.get("version")) is int and proof["version"] == 1
+                        and proof.get("stage") == "fact_audit" and proof.get("doc_hash") == doc_hash
+                        and proof.get("document_hash") == payload_hash(doc)
+                        and proof.get("result_hash") == payload_hash(data)
+                        and proof.get("outcome") in ("done", "partial", "skipped", "unknown")
+                        and proof.get("outcome") in ("done", "partial")):
+                    from semantic_audit import FACT_SUPPORT_OPTIONS, _probability
+                    verdicts = data.get("fact_verdicts")
+                    facts = doc.get("facts")
+                    if not isinstance(verdicts, dict) or not verdicts or not isinstance(facts, list):
+                        continue
+                    fact_ids = {fact["fact_id"] for fact in facts
+                                if isinstance(fact, dict) and fact.get("validation_status") == "verified"}
+                    if (not set(verdicts).issubset(fact_ids)
+                            or any(not isinstance(answer, dict) or answer.get("choice") not in FACT_SUPPORT_OPTIONS
+                                   or not _probability(answer.get("confidence")) for answer in verdicts.values())):
+                        continue
+                    if (proof["outcome"] == "done" and data.get("evaluated") is True
+                            and data.get("status") in ("PASS", "NEEDS_REVIEW") and set(verdicts) == fact_ids):
+                        jev = "done"
+                    elif proof["outcome"] == "partial" and data.get("evaluated") is False:
+                        jev = "partial"
+        except (KeyError, TypeError, ValueError, RecursionError, OverflowError):
+            continue
+    return {"version": 1, "stage": "projection", "providers": providers, "complete": complete,
+            "result_hash": payload_hash(content), "source_fingerprint": fp, "policy_fingerprint": policy,
+            "target_revision": member["revision"], "source_binding": source_binding(db, pid, mid), "jev": jev}
+
+
 def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
                  stage: str, status: str, tx: bool = False,
                  **detail) -> None:
@@ -228,6 +302,7 @@ def publish(ledger, pid: int, mid: int, fp: str, policy: str,
               "engine_version": ENGINE_VERSION,
               "fact_source": "canonical",
               "doc_hash": doc_hash,
+              "provider_provenance": _projection_provenance(ledger.db, pid, mid, fp, policy, member, v2_doc, content),
               "projection_version": PROJECTION_VERSION})
     record_tx(ledger.db, footprint, replacement_id=artifact_id)
     ledger.bump_inference_analysis_epoch_tx(pid)
@@ -879,10 +954,10 @@ def publish_fact_projection(ledger, member, pid, mid, fp, policy,
                 "AND json_extract(meta,'$.invalidated') IS NOT 1 END ORDER BY artifact_id DESC LIMIT 1",
                 (KIND_FACT_PROJ, pid, mid, fp, policy))] if prev_proj else []
             footprint = capture_tx(ledger.db, pid, mid, artifact_ids=prior_ids)
+            content = project_v2_doc_legacy(v2_doc)
             new_id = ledger.artifact_add_tx(
                 KIND_FACT_PROJ,
-                json.dumps(project_v2_doc_legacy(v2_doc),
-                           ensure_ascii=False, allow_nan=False),
+                json.dumps(content, ensure_ascii=False, allow_nan=False),
                 project_id=pid, message_id=mid,
                 model=semantic_transport.llm_model(),
                 meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
@@ -891,6 +966,7 @@ def publish_fact_projection(ledger, member, pid, mid, fp, policy,
                       "schema": SCHEMA_VERSION,
                       "hash": member["revision"],
                       "doc_hash": doc_hash,
+                      "provider_provenance": _projection_provenance(ledger.db, pid, mid, fp, policy, member, v2_doc, content),
                       "projection_version": PROJECTION_VERSION})
             record_tx(ledger.db, footprint, replacement_id=new_id)
             ledger.bump_inference_analysis_epoch_tx(pid)
@@ -957,7 +1033,8 @@ def _publish_skipped(ledger, pid, mid, fp, policy, member, doc):
             "projection_version": PROJECTION_VERSION, "audit_status": "SKIPPED", "jev_evaluated": False,
             "jev_skip_reason": reason, "code_checks": "passed", "fact_artifact_id": facts["id"],
             "fact_audit_artifact_id": fact_audit["id"], "summary_artifact_id": summary["id"],
-            "audit_artifact_id": audit["id"], "inference_requests": facts["meta"].get("inference_requests")}
+            "audit_artifact_id": audit["id"], "inference_requests": facts["meta"].get("inference_requests"),
+            "provider_provenance": _projection_provenance(ledger.db, pid, mid, fp, policy, member, doc, content)}
     prior = latest(KIND_V4_SKIPPED)
     if prior is not None and prior["content"] == content and prior["meta"] == meta:
         return prior["id"]

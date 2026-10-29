@@ -137,7 +137,7 @@ def test_enumeration_and_done_job_are_not_coverage_completion(store):
     assert verified['complete'] is False
 
 
-def test_current_pass_with_empty_projection_is_counted_without_legacy_fallback(store):
+def test_unbound_old_pass_is_held_without_legacy_fallback(store):
     _save(store)
     cfg = _cfg(loop_mode='off')
     scfg, errors = semantic_policy.runtime_config(cfg)
@@ -155,12 +155,27 @@ def test_current_pass_with_empty_projection_is_counted_without_legacy_fallback(s
     store.artifact_add('semantic_facts', '{"facts":[]}', project_id=1, message_id=1, meta=binding)
     store.artifact_add('extract_llm', '{"summary":"obsolete"}', project_id=1, message_id=1,
                        meta={**binding, VERSION_KEY: '0.1'})
-    # Noncanonical semantic scope accepts its audited empty summary. The
-    # canonical publication selector is separately covered by the read tests.
-    _replay(store, cfg)
-    report = _replay(store, cfg)
-    assert report['coverage']['counts'] == {'current': 1}
-    assert report['complete'] is False and _job(store) is None
+    old_artifacts = [tuple(row) for row in store.db.execute(
+        'SELECT * FROM artifacts ORDER BY artifact_id')]
+    old_messages = [tuple(row) for row in store.db.execute('SELECT * FROM messages')]
+    old_outbox = [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox')]
+    assert _job(store) is None
+    # These old rows have no receipt binding them to one another or the facts.
+    report = _waiting(store, cfg)
+    assert report['coverage']['counts'] == {'held': 1}
+    assert report['complete'] is False and report['phase'] == 'waiting'
+    job = dict(_job(store))
+    payload = json.loads(job['payload'])
+    assert job['state'] == 'pending' and job['attempts'] == 0
+    assert payload['targets'] == [1] and payload['origin']['source'] == 'inference_reprocess'
+    assert payload['notification_free'] is True and payload['reprocess_only'] is True
+    assert payload['execution_generation'] == runtime.execution_generation(scfg)
+    assert payload['source_generation'] == store._semantic_source_generation(1, 1)
+    assert [tuple(row) for row in store.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == old_artifacts
+    assert [tuple(row) for row in store.db.execute('SELECT * FROM messages')] == old_messages
+    assert [tuple(row) for row in store.db.execute('SELECT * FROM notify_outbox')] == old_outbox
+    assert _replay(store, cfg)['coverage']['counts'] == {'held': 1}
+    assert dict(_job(store)) == job
 
 
 @pytest.mark.parametrize('proof_version,patient_state', [
@@ -562,6 +577,39 @@ def _waiting(store, cfg=None, *, limit=32):
     pytest.fail('bounded synthetic replay did not reach its waiting/completed bookmark')
 
 
+def _write_current_synthetic_pass(store, scfg, pid, mid):
+    """Persist a source-bound synthetic fact and summary using the result writer."""
+    import semantic_audit
+
+    bundle = semantic_store.thread_bundle(store.db, pid, mid, [mid])
+    member = next(item for item in bundle['members'] if item['message_id'] == mid)
+    body = member['body_original']
+    facts, dropped = semantic_extraction._normalise_facts(
+        [{'statement': body, 'kind': 'other', 'evidence_quote': body}], member, body, 0)
+    assert not dropped and len(facts) == 1 and facts[0]['evidence_refs']
+    summary = {'summary_id': f"sum_{bundle['bundle_id']}", 'input_bundle_id': bundle['bundle_id'],
+               'schema_version': semantic_policy.SCHEMA_VERSION, 'target_message_id': mid,
+               'claims': [{'claim_id': f'claim_{mid}_0', 'section': 'other', 'text': body,
+                           'claim_kind': 'reported_fact', 'fact_refs': [0],
+                           'evidence_refs': facts[0]['evidence_refs'], 'status': 'not_stated',
+                           'polarity': 'uncertain'}], 'limitations': [], 'code_limitations': [],
+               'audit_status': 'PASS'}
+    assert semantic_audit.audit_code(bundle, facts, summary) == []
+    fp = bundle['source_fingerprint']
+    policy = semantic_policy.policy_fingerprint(scfg)
+    store.artifact_add('semantic_facts', json.dumps(
+        {'facts': facts, 'evidence': {facts[0]['_evidence']['evidence_id']: facts[0]['_evidence']}},
+        ensure_ascii=False), project_id=pid, message_id=mid,
+        meta={VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp, 'policy_fingerprint': policy,
+              'schema': semantic_policy.SCHEMA_VERSION, 'chunks_total': 1, 'dropped_by_cap': 0})
+    result = {'summary': summary, 'status': 'PASS', 'findings': [], 'repaired': False,
+              'claim_input_binding': drain._claim_input_binding(
+                  pid, mid, fp, policy, member['revision'], summary, facts)}
+    with store.db:
+        drain._write_result(store, pid, mid, result, fp, {mid: member}, 'PASS', policy,
+                            scfg['summary_mode'])
+
+
 def _completed_source(store, monkeypatch, *, cfg=None, pid=1, mid=1):
     """Join independent current semantic/context proofs to a real saved rollup."""
     import patient_context_refresh
@@ -569,13 +617,7 @@ def _completed_source(store, monkeypatch, *, cfg=None, pid=1, mid=1):
     cfg = cfg or _cfg(loop_mode='off')
     _save(store, mid, pid)
     scfg = semantic_policy.runtime_config(cfg)[0]
-    fp = semantic_store.thread_bundle(store.db, pid, mid)['source_fingerprint']
-    source = store.db.execute('SELECT content_hash FROM messages WHERE message_id=?', (mid,)).fetchone()[0]
-    meta = {VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp, 'hash': source,
-            'policy_fingerprint': semantic_policy.policy_fingerprint(scfg)}
-    for kind, content in (('semantic_audit', {'status': 'PASS'}),
-                          ('semantic_summary', {'claims': []}), ('semantic_facts', {'facts': []})):
-        store.artifact_add(kind, json.dumps(content), project_id=pid, message_id=mid, meta=meta)
+    _write_current_synthetic_pass(store, scfg, pid, mid)
     monkeypatch.setattr(patient_context_refresh, 'inference_coverage',
                         lambda *args: {VERSION_KEY: CURRENT_VERSION, 'complete': True})
     rollup.rebuild(store, pid, cfg=cfg)

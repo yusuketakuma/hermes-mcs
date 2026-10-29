@@ -446,9 +446,20 @@ def _message_notice(ledger, ev, payload: dict):
 
 
 def _has_sent_progress(ev) -> bool:
-    progress = mcs_util.loads_dict(ev["progress"] or "{}")
-    return (progress is not None
-            and type(progress.get("next")) is int and progress["next"] > 0)
+    raw = ev["progress"]
+    if raw is None or raw == "":
+        return False
+    try:
+        progress = mcs_util.strict_json(raw)
+        if not isinstance(progress, dict) or "invalid_progress" in progress:
+            return True
+        count, sent = progress.get("next", 0), progress.get("sent", [])
+        if (type(count) is not int or count < 0 or not isinstance(sent, list)
+                or len(sent) != count or any(not isinstance(item, str) or not item.isdigit() for item in sent)):
+            return True
+        return count > 0 or progress.get("sending") is not None
+    except (TypeError, ValueError, UnicodeError, RecursionError, OverflowError):
+        return True
 
 
 def _send_never_began(ev) -> bool:
@@ -458,15 +469,18 @@ def _send_never_began(ev) -> bool:
     is ambiguous — a corrupted record of a real send — so it fails
     safe (False)."""
     raw = ev["progress"]
-    if not raw:
+    if raw is None or raw == "":
         return True
-    progress = mcs_util.loads_dict(raw)
-    if progress is None:
+    try:
+        progress = mcs_util.strict_json(raw)
+    except (TypeError, ValueError, UnicodeError, RecursionError, OverflowError):
         return False
-    if "invalid_progress" in progress:
+    if not isinstance(progress, dict) or "invalid_progress" in progress or "hold_reason" in progress:
         return False
-    return (not progress.get("next") and progress.get("sending") is None
-            and not progress.get("sent"))
+    count, sent = progress.get("next", 0), progress.get("sent", [])
+    return (type(count) is int and count == 0 and isinstance(sent, list) and not sent
+            and progress.get("sending") is None
+            and (progress.get("fingerprint") is None or isinstance(progress["fingerprint"], str)))
 
 
 def hold_event(ledger, ev, cfg, proven_undelivered=False,
@@ -570,6 +584,32 @@ class _IntakeSnapshotChanged(Exception):
     """The semantic hold witness changed before a send marker was committed."""
 
 
+class _SemanticSnapshotChanged(Exception):
+    """An outbox row changed while its semantic notice was being prepared."""
+
+
+def _hold_if_snapshot(ledger, ev, cfg, reason, *, rescue=True):
+    if ledger.db.in_transaction:
+        raise ValueError('send_marker_transaction_active')
+    with ledger.db:
+        ledger.db.execute('BEGIN IMMEDIATE')
+        current = ledger.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                                    (ev["event_id"],)).fetchone()
+        if (current is None or current["state"] not in ("pending", "failed")
+                or current["state"] != ev["state"] or current["next_try"] != ev["next_try"]
+                or current["payload"] != ev["payload"] or current["progress"] != ev["progress"]
+                or _route(current) != _route(ev)):
+            return False
+        hold_event(ledger, current, cfg, reason=reason, rescue=rescue)
+    return True
+
+
+def _owned_progress(ev, next_chunk, sent_ids, fingerprint, sending=None):
+    if isinstance(ev, dict) and ev.get('kind') == 'semantic_notice':
+        ev['_failure_progress'] = json.dumps({'next': next_chunk, 'sent': list(sent_ids),
+                                              'fingerprint': fingerprint, 'sending': sending})
+
+
 def _send_marked(ledger, ev, i: int, sent_ids: list[str],
                  fingerprint: str, argv: list[str], chunk: str,
                  files: list[tuple[str, str]] | None,
@@ -578,6 +618,14 @@ def _send_marked(ledger, ev, i: int, sent_ids: list[str],
                  mark_guard=None) -> None:
     """Retain the in-flight marker unless non-delivery is established."""
     notify_sender.send_budget(deadline)
+    try:
+        ev["state"], ev["next_try"], ev["payload"]
+        baseline = ev
+    except (KeyError, IndexError):
+        baseline = ledger.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                                     (ev["event_id"],)).fetchone()
+        if baseline is None:
+            raise _SemanticSnapshotChanged()
     if mark_guard is None:
         ledger.outbox_progress(ev["event_id"], i, list(sent_ids), fingerprint, i + 1)
     else:
@@ -587,19 +635,39 @@ def _send_marked(ledger, ev, i: int, sent_ids: list[str],
             ledger.db.execute('BEGIN IMMEDIATE')
             mark_guard()
             ledger.outbox_progress(ev["event_id"], i, list(sent_ids), fingerprint, i + 1)
+    _owned_progress(ev, i, sent_ids, fingerprint, i + 1)
     try:
         kwargs = {"attachment_pins": attachment_pins} if attachment_pins is not None else {}
         notify_sender.send(argv, chunk, files, deadline=deadline, **kwargs)
-    except (notify_sender.SendFailed, notify_sender.SendUsage):
-        ledger.outbox_progress(ev["event_id"], len(sent_ids),
-                               list(sent_ids), fingerprint)
+    except (notify_sender.SendFailed, notify_sender.SendUsage) as error:
+        # Refund only our own still-current in-flight marker. Another
+        # writer may have accepted, held, or replaced this event meanwhile.
+        with ledger.db:
+            if not ledger.db.in_transaction:
+                ledger.db.execute('BEGIN IMMEDIATE')
+            current = ledger.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                                        (ev["event_id"],)).fetchone()
+            try:
+                progress = mcs_util.strict_json(current["progress"]) if current is not None else None
+            except (TypeError, ValueError, UnicodeError, RecursionError, OverflowError):
+                progress = None
+            expected = {"next": i, "sent": list(sent_ids), "fingerprint": fingerprint, "sending": i + 1}
+            if (current is None or current["state"] != baseline["state"]
+                    or current["next_try"] != baseline["next_try"] or current["payload"] != baseline["payload"]
+                    or _route(current) != _route(baseline) or progress != expected):
+                raise _SemanticSnapshotChanged() from error
+            ledger.outbox_progress(ev["event_id"], len(sent_ids), list(sent_ids), fingerprint)
+            _owned_progress(ev, len(sent_ids), sent_ids, fingerprint)
         raise
 
 
 def _progress(raw: str, count: int) -> tuple[int, list[str], str | None,
                                             int | None]:
-    d = mcs_util.loads_dict(raw or "{}")
-    if (d is None or "invalid_progress" in d
+    try:
+        d = mcs_util.strict_json("{}" if raw is None or raw == "" else raw)
+    except (TypeError, ValueError, UnicodeError, RecursionError, OverflowError):
+        raise ValueError("progress_invalid") from None
+    if (not isinstance(d, dict) or "invalid_progress" in d or "hold_reason" in d
             or type(d.get("next", 0)) is not int):
         raise ValueError("progress_invalid")
     next_chunk = d.get("next", 0)
@@ -610,7 +678,8 @@ def _progress(raw: str, count: int) -> tuple[int, list[str], str | None,
             or len(sent) != next_chunk
             or any(not isinstance(x, str) or not x.isdigit() for x in sent)
             or (fingerprint is not None and not isinstance(fingerprint, str))
-            or (sending is not None and type(sending) is not int)):
+            or (sending is not None and (type(sending) is not int
+                                         or sending != next_chunk + 1 or sending > count))):
         raise ValueError("progress_invalid")
     return next_chunk, sent, fingerprint, sending
 
@@ -644,11 +713,19 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
         res["parked"] += 1
         return True
     if not sealed and ev["kind"] not in ("urgent_notice", "signal") and text_mode:
-        if ev["kind"] == "attachment_followup" and not _send_never_began(ev):
-            hold_event(ledger, ev, cfg, reason="thread_route_after_partial", rescue=False)
-            res["failed"] += 1
+        if not _send_never_began(ev):
+            reason = "thread_route_after_partial" if ev["kind"] == "attachment_followup" else "send_outcome_unknown"
+            if _hold_if_snapshot(ledger, ev, cfg, reason, rescue=False):
+                if ev["kind"] == "attachment_followup":
+                    res["failed"] += 1
+                else:
+                    res["uncertain"] = res.get("uncertain", 0) + 1
+            else:
+                res["skipped"] += 1
             return True
-        notify_cards.revert_to_text(ledger, ev["event_id"])
+        if not notify_cards.revert_to_text(ledger, ev["event_id"], expected=ev):
+            res["skipped"] += 1
+            return True
         return False
     if ev["kind"] == "attachment_followup" and _route(ev) == "text":
         if not _send_never_began(ev):
@@ -667,7 +744,7 @@ def _dispatch_interactive(ledger, ev, cfg, res) -> bool:
     try:
         outcome = notify_cards.dispatch_intent(ledger, ev, cfg)
         if outcome.get("text_fallback") and not sealed and _send_never_began(ev) \
-                and notify_cards.revert_to_text(ledger, ev["event_id"]):
+                and notify_cards.revert_to_text(ledger, ev["event_id"], expected=ev):
             return False
         if outcome.get("parked"):
             res["parked"] += 1
@@ -725,6 +802,16 @@ def _base_render_gate_ok(ledger, ev, render_state, in_progress,
 
 
 def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
+    owned = dict(ev)
+    try:
+        return _send_text_owned(ledger, owned, cfg, argv, target, res, deadline)
+    except Exception as exc:
+        if owned['kind'] == 'semantic_notice':
+            exc._mcs_failure_snapshot = owned
+        raise
+
+
+def _send_text_owned(ledger, ev, cfg, argv, target, res, deadline) -> None:
     """Format, chunk and send one text event — per-chunk progress is
     journaled so a crash mid-event resumes at the first unacknowledged
     chunk rather than duplicating accepted posts. Insufficient time raises
@@ -733,12 +820,17 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
     # An unknown send outcome is held before formatting: a stale/closed
     # source would otherwise suppress the event and lose the receipt.
     if ev["progress"]:
-        early_progress = mcs_util.loads_dict(ev["progress"])
-        if early_progress is None:
+        try:
+            early_progress = mcs_util.strict_json(ev["progress"])
+        except (TypeError, ValueError, UnicodeError, RecursionError, OverflowError):
+            raise ValueError("progress_invalid") from None
+        if not isinstance(early_progress, dict):
             raise ValueError("progress_invalid")
         if early_progress.get("sending") is not None:
-            hold_event(ledger, ev, cfg, reason="send_outcome_unknown", rescue=False)
-            res["uncertain"] = res.get("uncertain", 0) + 1
+            if _hold_if_snapshot(ledger, ev, cfg, "send_outcome_unknown", rescue=False):
+                res["uncertain"] = res.get("uncertain", 0) + 1
+            else:
+                res["skipped"] = res.get("skipped", 0) + 1
             return
     import notify_urgent
     if ev["kind"] == "new_messages":
@@ -801,11 +893,28 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
         ev["progress"], len(chunks))
     fingerprint = notify_sender.delivery_fingerprint(target, chunks, files)
     if start and previous != fingerprint:
-        hold_event(ledger, ev, cfg, reason="delivery_changed")
-        res["failed"] += 1
+        if _hold_if_snapshot(ledger, ev, cfg, "delivery_changed"):
+            res["failed"] += 1
+        else:
+            res["skipped"] = res.get("skipped", 0) + 1
         return
     if not start:
-        ledger.outbox_progress(ev["event_id"], 0, [], fingerprint)
+        if ev["kind"] == "semantic_notice":
+            if ledger.db.in_transaction:
+                raise ValueError('send_marker_transaction_active')
+            with ledger.db:
+                ledger.db.execute('BEGIN IMMEDIATE')
+                current = ledger.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                                            (ev["event_id"],)).fetchone()
+                if (current is None or current["state"] != ev["state"]
+                        or current["state"] not in ("pending", "failed")
+                        or current["payload"] != ev["payload"] or _route(current) != _route(ev)
+                        or current["next_try"] != ev["next_try"] or current["progress"] != ev["progress"]):
+                    raise _SemanticSnapshotChanged()
+                ledger.outbox_progress(ev["event_id"], 0, [], fingerprint)
+                _owned_progress(ev, 0, [], fingerprint)
+        else:
+            ledger.outbox_progress(ev["event_id"], 0, [], fingerprint)
     post_files = files
 
     def gate(i, payload) -> bool:
@@ -834,11 +943,27 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
         # sink the notification itself
         def mark_guard():
             if ev['kind'] == 'semantic_notice':
+                current = ledger.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                                            (ev['event_id'],)).fetchone()
+                if (current is None or current['state'] != ev['state']
+                        or current['state'] not in ('pending', 'failed')
+                        or current['next_try'] != ev['next_try']):
+                    raise _SemanticSnapshotChanged()
+                try:
+                    saved_next, saved_ids, saved_fp, sending = _progress(current['progress'], len(chunks))
+                except ValueError:
+                    raise _SemanticSnapshotChanged() from None
+                if (current['payload'] != ev['payload'] or _route(current) != _route(ev)
+                        or saved_next != i or saved_ids != sent_ids or saved_fp != fingerprint or sending is not None):
+                    raise _SemanticSnapshotChanged()
                 if semantic_send_gate.intake_root_held(ledger.db, ev['project_id'], payload['root_id']):
                     raise semantic_send_gate.FreezeSend('semantic_intake_held') if start or i else \
                         semantic_send_gate.DeferredSend('semantic_intake_held')
+                marker_cfg = _config()
+                semantic_send_gate.semantic_gate(ledger.db, current, payload, marker_cfg,
+                                                 in_progress=bool(start or i))
                 semantic_send_gate.marker_source_gate(ledger.db, ev['project_id'], payload,
-                                                       in_progress=bool(start or i))
+                                                       in_progress=bool(start or i), cfg=marker_cfg)
             elif render_hold_epoch is not None:
                 import semantic_intake_hold
                 try:
@@ -889,6 +1014,7 @@ def _send_text(ledger, ev, cfg, argv, target, res, deadline) -> None:
         sent_ids.append(str(i + 1))
         ledger.outbox_progress(ev["event_id"], i + 1, sent_ids,
                                fingerprint)
+        _owned_progress(ev, i + 1, sent_ids, fingerprint)
     ledger.outbox_mark(ev["event_id"], "accepted",
                        sent_ids[-1] if sent_ids else "")
     res["sent"] += 1
@@ -898,7 +1024,30 @@ def _fail_event(ledger, ev, cfg, res, exc):
     """Per-event failure accounting — quarantine, park, suppress or
     backoff according to the exception class (notify_sender.SendUncertain must be
     checked before OSError, which it subclasses)."""
-    if isinstance(exc, notify_sender.SendBudget):
+    if (ev["kind"] == "semantic_notice" and not isinstance(exc, _SemanticSnapshotChanged)
+            and not ledger.db.in_transaction):
+        # Failure handling must not overwrite a concurrently accepted,
+        # suppressed, replaced, or already-held notice.
+        with ledger.db:
+            ledger.db.execute('BEGIN IMMEDIATE')
+            current = ledger.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                                        (ev["event_id"],)).fetchone()
+            expected = getattr(exc, '_mcs_failure_snapshot', ev)
+            expected_progress = (expected.get('_failure_progress', expected['progress'])
+                                 if isinstance(expected, dict) else expected['progress'])
+            if (current is None or current["state"] not in ("pending", "failed")
+                    or current["next_try"] is None or current["state"] != expected['state']
+                    or current["next_try"] != expected['next_try']
+                    or current["attempts"] != expected['attempts']
+                    or current["payload"] != expected['payload']
+                    or _route(current) != _route(expected) or current['progress'] != expected_progress):
+                res["skipped"] += 1
+                return
+            return _fail_event(ledger, current, cfg, res, exc)
+    if isinstance(exc, _SemanticSnapshotChanged):
+        # The other writer owns the new state and receipt; do not overwrite it.
+        res["skipped"] += 1
+    elif isinstance(exc, notify_sender.SendBudget):
         res["skipped"] += 1
         res["send_budget_insufficient"] = res.get("send_budget_insufficient", 0) + 1
     elif isinstance(exc, semantic_send_gate.DeferredSend):
@@ -1041,8 +1190,19 @@ def flush(ledger, limit: int = 10, deadline: float | None = None) -> dict:
                 continue
             ledger.db.execute("UPDATE notify_outbox SET route='interactive' WHERE event_id=?", (ev["event_id"],))
             ledger.db.commit()
-        if card_route(ev) and _dispatch_interactive(ledger, ev, cfg, res):
-            continue
+        if card_route(ev):
+            if _dispatch_interactive(ledger, ev, cfg, res):
+                continue
+            # The interactive kill switch just changed this event's route.
+            # Re-read its snapshot, but never adopt unrelated concurrent edits.
+            current = ledger.db.execute("SELECT * FROM notify_outbox WHERE event_id=?",
+                                        (ev["event_id"],)).fetchone()
+            if (current is None or _route(current) != "text"
+                    or any(current[key] != ev[key] for key in
+                           ("kind", "project_id", "payload", "state", "next_try", "attempts", "progress"))):
+                res["skipped"] += 1
+                continue
+            ev = current
         if not exe_ok and not notify_sender.hermes_free(cfg, notify_sender.target(cfg, ev["kind"])):
             # no hermes exe — text events can't send, but an interactive
             # event later in the queue still dispatches (cards don't

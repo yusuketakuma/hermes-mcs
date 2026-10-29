@@ -340,7 +340,7 @@ def _fit_item(blocks, budget=PAGE_TEXT_BUDGET) -> list:
         if over <= 0:
             return blocks
         target = max((b for b in blocks
-                      if b["type"] in ("heading", "text", "quote")),
+                      if b["type"] in ("heading", "text", "quote") and not b.get("provider_states")),
                      key=lambda b: len(b.get("text") or ""),
                      default=None)
         if target is None or len(target["text"]) <= 120:
@@ -742,7 +742,7 @@ SECTION_RULE = "─" * 12
 
 
 def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
-                  include_summary=True, layout=1, stamp_time=True) -> str:
+                  include_summary=True, layout=1, stamp_time=True, provider_states=None) -> str:
     """One MCS post as a thread message.
 
     Each post shows its summary, stamp observation, then source body.
@@ -750,9 +750,14 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
     ``stamps=False`` and ``include_summary=False`` remain available to
     callers that explicitly request only the original text."""
     if m["body_state"] == "deleted":
-        return head + _deleted_line(m["posted_at"], sender)
-    title = f"{head}{posted_time_label(m['posted_at'])} {sender}"
+        return " ".join((head + _deleted_line(m["posted_at"], sender)).splitlines())
+    # A sender or patient label is source data; it cannot introduce a
+    # second header line that a transport could mistake for status metadata.
+    title = " ".join(f"{head}{posted_time_label(m['posted_at'])} {sender}".splitlines())
     out = [title]
+    if provider_states is not None:
+        import processing_route
+        out.append(processing_route.provider_text(provider_states))
     if include_summary:
         # the same plain wording and item rows as the card face
         out.append(_summary_block(db, mid, cfg=cfg, label=layout < 2)["text"])
@@ -810,6 +815,7 @@ def card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
     stamp_time = "transport" not in card.keys() or card["transport"] != "lineworks"
     if card["kind"] == "thread":
         lines = []
+        bundle_cache = {}
         bare = ("transport" in card.keys()
                 and not presenter(card["transport"]).THREAD_HEAD_PATIENT)
         head = ("↳ " if bare
@@ -824,9 +830,14 @@ def card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
                 (mid, card["project_id"])).fetchone()
             if m is None:
                 continue
+            import processing_route
+            states = (processing_route.provider_states(db, card["project_id"], mid, cfg=cfg,
+                                                       bundle_cache=bundle_cache)
+                      if m["body_state"] != "deleted" and include_summary else None)
             lines.append(_message_post(db, mid, m, _sender_tag(m, db),
                                        head=head, stamps=stamps, cfg=cfg,
-                                       include_summary=include_summary, layout=layout, stamp_time=stamp_time))
+                                       include_summary=include_summary, layout=layout, stamp_time=stamp_time,
+                                       provider_states=states))
         title = f"💬 {patient_heading(db, card['project_id'])} — 本文"
         text = "\n\n".join(lines)
     else:
@@ -912,11 +923,19 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
                 containers.append({"type": "text", "text": f"↳ 返信 {replies}件を保存済み"})
         # per post: sender line + its full 📋 要約 (or its empty state)
         rendered = []
+        import processing_route
+        bundle_cache = {}
         for m in msgs:
             line = (_deleted_line(m["posted_at"], _sender_tag(m, db))
                     if m["body_state"] == "deleted" else
                     f"{posted_time_label(m['posted_at'])} {_sender_tag(m, db)}")
-            blocks = [{"type": "text", "rule": True, "text": line}]
+            post_line = {"type": "text", "rule": True, "text": line}
+            if m["body_state"] != "deleted":
+                states = processing_route.provider_states(db, card["project_id"], m["message_id"], cfg=cfg,
+                                                          bundle_cache=bundle_cache)
+                post_line.update(text=_cap_card_text(line, 500) + "\n" + processing_route.provider_text(states),
+                                 provider_states=states)
+            blocks = [post_line]
             if m["body_state"] != "deleted":
                 blocks.append(_summary_block(db, m["message_id"], cfg=cfg,
                                              progress_by_mid=progress_by_mid,
@@ -996,10 +1015,6 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
     pages = len(pages_idx)
     page = _page(ui, pages, default=pages - 1 if kind == "thread" else 0)
     shown, footer, toggles = page_states[page]
-    if kind == "thread":
-        import processing_route
-        icon = processing_route.icon(db, card["project_id"], shown)
-        containers[0] = {**containers[0], "text": icon + containers[0]["text"][1:]}
     if pages > 1:
         _add_page_marker(containers, page, pages)
     for i in pages_idx[page]:

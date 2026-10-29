@@ -16,6 +16,24 @@ LLM_ENDPOINT = local_llm.ENDPOINT
 LLM_MODEL = local_llm.MODEL
 _LLM_EPIN, _LLM_MPIN = LLM_ENDPOINT, LLM_MODEL
 _job_model = ContextVar("semantic_job_model", default=None)
+_inference_trace = ContextVar("semantic_inference_trace", default=None)
+
+
+@contextmanager
+def trace_inference():
+    """Capture accepted responses inside one source-bound stage."""
+    providers = []
+    token = _inference_trace.set(providers)
+    try:
+        yield providers
+    finally:
+        _inference_trace.reset(token)
+
+
+def _record_inference(provider):
+    providers = _inference_trace.get()
+    if providers is not None and provider is not None:
+        providers.append(provider)
 
 
 def llm_conf(cfg: dict | None = None) -> tuple[str, str]:
@@ -95,7 +113,13 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport):
             current()
             return _failed("cloud_failed")
         error = local_llm.acceptance_error(response)
-        return _failed(error) if error else response["text"]
+        if error:
+            return _failed(error)
+        import anthropic_client
+        import openai_client
+        provider_name = {anthropic_client.MODEL: "anthropic", openai_client.MODEL: "openai"}.get(provider.model)
+        _record_inference(provider_name)
+        return response["text"]
 
     token = _job_model.set(provider)
     try:
@@ -409,4 +433,5 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     acceptance = local_llm.acceptance_error(response)
     if acceptance is not None:
         return _failed(acceptance)
+    _record_inference("local")
     return response["text"]

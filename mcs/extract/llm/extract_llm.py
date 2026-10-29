@@ -567,6 +567,105 @@ def _opener_request(endpoint: str, method: str, body, timeout: float,
 _CALL_NOTES = threading.local()
 
 
+def _provider_evidence(providers=(), complete=False):
+    allowed = ("local", "anthropic", "openai")
+    return {"providers": [name for name in allowed if name in providers],
+            "complete": bool(complete)}
+
+
+def _provider_strict_dict(raw):
+    try:
+        value = strict_json(raw)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _provider_result_hash(content):
+    value = _provider_strict_dict(content)
+    if not isinstance(value, dict):
+        return None
+    try:
+        return mcs_util.payload_hash(value)
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return None
+
+
+def _evidence_matches_route(evidence, model, contract):
+    names = evidence.get("providers")
+    if not isinstance(model, str) or not model or not isinstance(names, list):
+        return False
+    if not names:
+        return evidence.get("complete") is False
+    if len(names) != 1:
+        return False
+    if names == ["local"]:
+        return contract is None
+    models = {"anthropic": anthropic_client.MODEL, "openai": openai_client.MODEL}
+    name = names[0]
+    return (name in models and isinstance(contract, dict)
+            and set(contract) == {"backend", "model", "prompt"}
+            and contract.get("backend") == name and contract.get("model") == models[name] == model
+            and isinstance(contract.get("prompt"), str)
+            and re.fullmatch(r"[0-9a-f]{16}", contract["prompt"]) is not None)
+
+
+def _prior_provider_evidence(prior, content, binding):
+    # Only inherit evidence bound to the exact retained artifact and source.
+    meta = _provider_strict_dict(prior["meta"]) if prior else None
+    proof = meta.get("provider_provenance") if isinstance(meta, dict) else None
+    digest = _provider_result_hash(content)
+    if (not isinstance(proof, dict) or digest is None
+            or prior["content"] != content or meta.get("source_binding") != binding
+            or type(proof.get("version")) is not int or proof.get("version") != 1
+            or proof.get("stage") != "extract"
+            or proof.get("source_binding") != binding
+            or proof.get("result_hash") != digest
+            or type(proof.get("complete")) is not bool
+            or not isinstance(proof.get("providers"), list)
+            or any(name not in ("local", "anthropic", "openai") for name in proof["providers"])
+            or len(set(proof["providers"])) != len(proof["providers"])
+            or (proof["complete"] and not proof["providers"])):
+        return _provider_evidence()
+    contract = ({key: meta.get(key) for key in ("backend", "model", "prompt")}
+                if any(key in meta for key in ("backend", "model", "prompt")) else None)
+    if (meta.get("actual_model") != prior["model"]
+            or not _evidence_matches_route(proof, prior["model"], contract)):
+        return _provider_evidence()
+    return _provider_evidence(proof["providers"], proof["complete"])
+
+
+class _EvidenceLeaf(dict):
+    def __init__(self, value, evidence):
+        super().__init__(value)
+        self.provider_evidence = evidence
+
+
+def _leaf_evidence(value):
+    proof = getattr(value, "provider_evidence", None)
+    if not isinstance(proof, dict):
+        return None
+    names, complete = proof.get("providers"), proof.get("complete")
+    if (not isinstance(names, list) or type(complete) is not bool
+            or any(name not in ("local", "anthropic", "openai") for name in names)
+            or len(set(names)) != len(names) or (complete and not names)):
+        return None
+    return _provider_evidence(names, complete)
+
+
+def _leaf_record(meta, r, evidence, content):
+    digest = _provider_result_hash(content)
+    if (evidence is None or digest is None
+            or not _evidence_matches_route(evidence, meta["actual_model"], r.get("_provider_contract"))):
+        return None
+    return {"version": 1, "stage": "extract", **evidence, "result_hash": digest,
+            "source_binding": r["_source_binding"], "context": meta["context"],
+            "piece_sha256": meta["piece_sha256"], "chunk": meta["chunk"],
+            "chunk_size": meta["chunk_size"], "plan_version": meta["plan_version"],
+            "extract_version": EXTRACT_VERSION, "inference_version": _INFERENCE_VERSION,
+            "model": meta["actual_model"], "provider_contract": r.get("_provider_contract")}
+
+
 @contextlib.contextmanager
 def pin_target(target):
     """One job's actual endpoint/model tuple, never a global overwrite or log payload."""
@@ -991,6 +1090,10 @@ def _llm_call(prompt: str, deadline: float | None = None,
         answer = json_object(response.get("text"))
         if answer is None:
             raise CloudFallback("cloud_invalid_response")
+        if isinstance(provider, _CloudProvider):
+            _CALL_NOTES.provider_response = (
+                "openai" if provider.model == openai_client.MODEL else
+                "anthropic" if provider.model == anthropic_client.MODEL else None)
         return answer
     if deadline is not None \
             and deadline - time.monotonic() < (need_s or 0):
@@ -1084,7 +1187,10 @@ def _llm_call(prompt: str, deadline: float | None = None,
         text = response.get("text")
         if not isinstance(text, str):
             return None
-        return json_object(text)
+        answer = json_object(text)
+        if isinstance(answer, dict):
+            _CALL_NOTES.provider_response = "local"
+        return answer
 
 
 # Returned by llm_extract when the caller's deadline ran out mid-
@@ -1195,6 +1301,26 @@ def llm_extract(body: str, *, context: str | None = None,
     splits = dict(splits_in or {})
     sizes = []
     pending_quality = set()
+    accepted_providers = []
+
+    def evidenced_call(*args, **kwargs):
+        # A monkeypatched call or a failed dispatch cannot inherit an earlier marker.
+        _CALL_NOTES.provider_response = None
+        result = call(*args, **kwargs)
+        return result, getattr(_CALL_NOTES, "provider_response", None)
+
+    def leaf_parts(value):
+        evidence = _leaf_evidence(value)
+        if evidence is None:
+            return None
+        return evidence["providers"] + ([] if evidence["complete"] else [None])
+
+    def with_leaf(value, providers):
+        if providers is None:
+            return value
+        return _EvidenceLeaf(value, _provider_evidence(
+            providers, bool(providers) and all(providers)))
+
     if meta_out is not None:
         meta_out["completeness"] = {}
         meta_out.pop("completeness_chunks", None)
@@ -1245,7 +1371,8 @@ def llm_extract(body: str, *, context: str | None = None,
         piece_hints = hints if piece == body and isinstance(hints, dict) else _rule_hints(
             {"body_text": piece, "posted_at": posted_at})
         if key in saved and quality_status is None:
-            result = {k: value for k, value in cached.items() if k != "_quality_result"}
+            result = {k: value for k, value in cached.items()
+                      if k not in ("_quality_result", "_provider_leaf")}
             record = cached.get("_quality_result")
             if not isinstance(record, dict):
                 record = _hint_coverage(result, piece_hints, piece)
@@ -1257,7 +1384,8 @@ def llm_extract(body: str, *, context: str | None = None,
             if quality_status is None:
                 sizes.append(len(piece))
                 replayed = isinstance(cached.get("_quality_result"), dict) and record == cached["_quality_result"]
-                return finish_piece(key, result, record, replayed=replayed)
+                return finish_piece(key, result, record, replayed=replayed,
+                                    providers=leaf_parts(cached))
         if key in splits:
             return children(key, piece, start, remaining)
         sizes.append(len(piece))
@@ -1266,9 +1394,15 @@ def llm_extract(body: str, *, context: str | None = None,
         scoped_prompt = prompt + reference + (_HINT_HEAD + hint + _HINT_TAIL if hint else "")
         piece_context = has_ctx or bool(reference)
         call_start = len(notes)
-        d = ({k: value for k, value in cached.items() if k != "_quality_status"}
-             if quality_status else call(scoped_prompt + thead + piece + _PROMPT_TAIL,
-                                             deadline=deadline, need_s=_MIN_CALL_S))
+        if quality_status:
+            d = {k: value for k, value in cached.items()
+                 if k not in ("_quality_status", "_provider_leaf")}
+            first_provider = leaf_parts(cached) or [None]
+        else:
+            d, first_provider = evidenced_call(scoped_prompt + thead + piece + _PROMPT_TAIL,
+                                               deadline=deadline, need_s=_MIN_CALL_S)
+            first_provider = [first_provider]
+        piece_providers = first_provider if isinstance(d, dict) else []
         if deadline is not None and time.monotonic() > deadline:
             # A dispatched failure still consumes its attempt after the deadline.
             return None if d is None else _DEFERRED
@@ -1332,7 +1466,7 @@ def llm_extract(body: str, *, context: str | None = None,
                     "全て抽出してください")
             repair_deadline = deadline - remaining * _MIN_CALL_S if deadline is not None else None
             if completeness and v is not None:
-                pending = {**v, "_quality_status": "pending"}
+                pending = with_leaf({**v, "_quality_status": "pending"}, piece_providers)
                 if chunks_out is not None:
                     chunks_out[key] = pending
                 if on_chunk is not None:
@@ -1343,25 +1477,27 @@ def llm_extract(body: str, *, context: str | None = None,
                         quality_note("skipped_budget")
                     else:
                         pending_quality.add(key)
-                    return finish_piece(key, v, quality_record, pending=key in pending_quality)
+                    return finish_piece(key, v, quality_record, pending=key in pending_quality,
+                                        providers=piece_providers)
             if issues and (repair_deadline is None or time.monotonic() < repair_deadline):
                 if completeness and v is not None and on_chunk is not None:
-                    if on_chunk(key, {**v, "_quality_status": "started"}) is False:
+                    if on_chunk(key, with_leaf({**v, "_quality_status": "started"}, piece_providers)) is False:
                         # Nothing was dispatched: a start that may still have been
                         # saved is released, so the next run retries the repair.
-                        on_chunk(key, {**v, "_quality_status": "pending"})
+                        on_chunk(key, with_leaf({**v, "_quality_status": "pending"}, piece_providers))
                         return _DEFERRED
                     if repair_deadline is not None and repair_deadline - time.monotonic() < _MIN_REPAIR_S:
                         # The checkpoint wait spent the reserve, before any
                         # inference dispatch. Only this proven unsent start is released.
-                        on_chunk(key, {**v, "_quality_status": "pending"})
+                        on_chunk(key, with_leaf({**v, "_quality_status": "pending"}, piece_providers))
                         if quality_status == "pending" and not remaining:
                             quality_note("skipped_budget")
                         else:
                             pending_quality.add(key)
-                        return finish_piece(key, v, quality_record, pending=key in pending_quality)
+                        return finish_piece(key, v, quality_record, pending=key in pending_quality,
+                                            providers=piece_providers)
                 repair_start = len(notes)
-                rd = call(
+                rd, repair_provider = evidenced_call(
                     _repair_prompt(posted_at, issues, d, piece_hints, reference)
                     + piece + _PROMPT_TAIL,
                     deadline=repair_deadline, need_s=_MIN_REPAIR_S, kind="repair")
@@ -1381,6 +1517,7 @@ def llm_extract(body: str, *, context: str | None = None,
                     if (extract_quality.quality_improves(rv, v, body, piece_hints if piece == body else None)
                             if completeness else extract_quality.improves(rv, v)):
                         v = rv
+                        piece_providers.append(repair_provider)
                         bump("repair_wins")
                 quality_note("dispatch_unknown" if rd is None or rd is _DEFERRED else
                              "unresolved" if rv is None or extract_quality.completeness_issues(v, piece_hints, piece)
@@ -1393,13 +1530,15 @@ def llm_extract(body: str, *, context: str | None = None,
                 meta_out.update(failed_chunk=str(key), failure_reason=(
                     "response_or_transport" if d is None else "validation"))
             return None
-        return finish_piece(key, v, quality_record)
+        return finish_piece(key, v, quality_record, providers=piece_providers)
 
-    def finish_piece(key, v, quality_record, *, pending=False, replayed=False):
+    def finish_piece(key, v, quality_record, *, pending=False, replayed=False, providers=None):
+        accepted_providers.extend(providers if providers else [None])
         if meta_out is not None:
             meta_out.setdefault("completeness", {})[str(key)] = quality_record
         checkpoint = {**v, "_quality_status": "pending"} if pending else (
             {**v, "_quality_result": quality_record} if quality_record is not None else v)
+        checkpoint = with_leaf(checkpoint, providers)
         if chunks_out is not None:
             chunks_out[key] = checkpoint
         callback = on_chunk_replay if replayed and on_chunk_replay is not None else on_chunk
@@ -1438,6 +1577,8 @@ def llm_extract(body: str, *, context: str | None = None,
             out["_chunks_total"] = len(outs)
         if meta_out is not None:
             meta_out.update(_integrity_summary(notes))
+            meta_out["_provider_evidence"] = _provider_evidence(
+                accepted_providers, bool(accepted_providers) and all(accepted_providers))
             meta_out["chunk_size"] = min(sizes) if sizes else chunk_size
             meta_out["completeness_chunks"] = len(outs)
             if extract_quality.is_thin(out, body):
@@ -2086,15 +2227,34 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
                         remove_chunks=not scoped_cleanup)
         held_prior = True
     else:
-        if prior_meta and (human_failed or qc_failed or
-                           (isinstance(r, dict) and r.get("_kept_prior"))):
+        retaining_prior = bool(human_failed or qc_failed or r.get("_kept_prior"))
+        if retaining_prior and prior is not None and prior_meta:
             for key in ("actual_model", "plan_version", "context_binding", "context_snapshot",
-                        "context_digest", "patient_state_context", "ctx", "patient_context_version", "integrity"):
+                        "context_digest", "patient_state_context", "ctx", "patient_context_version", "integrity",
+                        "backend", "model", "prompt", "config_generation"):
                 if key in prior_meta:
                     meta[key] = prior_meta[key]
                 else:
                     meta.pop(key, None)
             actual_model = prior["model"]
+        proof = (_prior_provider_evidence(prior, content, r["_source_binding"])
+                 if retaining_prior else r.get("_provider_evidence"))
+        if (not isinstance(proof, dict) or type(proof.get("complete")) is not bool
+                or not isinstance(proof.get("providers"), list)
+                or any(name not in ("local", "anthropic", "openai") for name in proof["providers"])
+                or (proof["complete"] and not proof["providers"])):
+            proof = _provider_evidence()
+        contract = ({key: meta.get(key) for key in ("backend", "model", "prompt")}
+                    if any(key in meta for key in ("backend", "model", "prompt")) else None)
+        if not _evidence_matches_route(proof, actual_model, contract):
+            proof = _provider_evidence()
+        digest = _provider_result_hash(content)
+        if digest is not None:
+            meta["provider_provenance"] = {
+                "version": 1, "stage": "extract", **_provider_evidence(proof["providers"], proof["complete"]),
+                "result_hash": digest, "source_binding": r["_source_binding"]}
+        else:
+            meta.pop("provider_provenance", None)
         if prior_meta and (prior_meta.get("extract_version") != EXTRACT_VERSION or not inference.is_current(prior_meta, target=_INFERENCE_VERSION)):
             meta["upgrade"] = {"prior_artifact_id": prior["artifact_id"],
                 "prior_version": prior_meta.get("extract_version"),
@@ -2745,14 +2905,14 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
         key = meta.get("chunk")
         if type(key) is int and key >= 0 or isinstance(key, str):
             if not identity_only:
-                records[key] = (meta, a["content"])
+                records[key] = (meta, a["content"], a["project_id"], a["model"], a["meta"])
             if identities is not None:
                 identities[key] = (a["artifact_id"], a["project_id"], a["content"], a["model"], a["meta"])
     if identity_only:
         return {}, {}
     saved, splits = {}, {}
     for key in sorted(records, key=lambda key: (str(key).count(":"), str(key))):
-        meta, content = records[key]
+        meta, content, artifact_project, artifact_model, raw_meta = records[key]
         piece = _chunk_piece(r["body_text"], chunk_size, key, splits)
         if piece is None:
             continue
@@ -2767,8 +2927,9 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                 if len(parts) >= 2 and "".join(parts) == piece:
                     splits[key] = size
             continue
+        raw_content = content
         try:
-            content = json.loads(content)
+            content = json.loads(raw_content)
         except (ValueError, TypeError, RecursionError):
             continue
         validated = extract_validation.validate(content, r["body_text"], references=_frame_refs(r)) if isinstance(content, dict) else None
@@ -2776,6 +2937,25 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
             for counter in ("_items_dropped", "_evidence_dropped"):
                 if type(content.get(counter)) is int and content[counter] >= 0:
                     validated[counter] = max(validated.get(counter, 0), content[counter])
+            strict_meta = _provider_strict_dict(raw_meta)
+            proof = strict_meta.get("provider_leaf") if strict_meta is not None else None
+            evidence = _leaf_evidence(_EvidenceLeaf({}, proof))
+            if (artifact_project == r["project_id"] and evidence is not None
+                    and isinstance(r.get("_source_binding"), str) and r["_source_binding"]
+                    and type(meta.get("plan_version")) is int
+                    and meta.get("plan_version") == PLAN_VERSION
+                    and meta.get("piece_sha256") == sha
+                    and meta.get("actual_model") == _actual_model(r)
+                    and artifact_model == meta.get("actual_model")
+                    and _provider_result_hash(raw_content) is not None
+                    and _provider_result_hash(raw_content) == _provider_result_hash(json.dumps(validated))):
+                expected = _leaf_record(meta, r, evidence, raw_content)
+                try:
+                    matches = expected is not None and mcs_util.canonical(proof) == mcs_util.canonical(expected)
+                except (TypeError, ValueError, OverflowError, RecursionError):
+                    matches = False
+                if matches:
+                    validated = _EvidenceLeaf(validated, evidence)
             if meta.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT and meta.get("quality_status") in ("pending", "started"):
                 validated["_quality_status"] = meta["quality_status"]
             elif meta.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT and meta.get("quality_status") in (
@@ -3023,6 +3203,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                     "plan_version": PLAN_VERSION}
             if split_size is not None:
                 meta["split_size"] = split_size
+            evidence = _leaf_evidence(value)
             quality_status = value.get("_quality_status")
             if quality_status in ("pending", "started"):
                 meta.update(quality_pass=extract_quality._QUALITY_CHECKPOINT, quality_status=quality_status)
@@ -3032,7 +3213,12 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                 meta.update(quality_pass=extract_quality._QUALITY_CHECKPOINT, quality_status=quality["state"],
                             quality_remaining=quality["remaining_hint_candidates"])
                 value = {key: item for key, item in value.items() if key != "_quality_result"}
+            value = {key: item for key, item in value.items() if key != "_provider_leaf"}
             content = json.dumps(value, ensure_ascii=False)
+            if split_size is None:
+                proof = _leaf_record(meta, r, evidence, content)
+                if proof is not None:
+                    meta["provider_leaf"] = proof
             if (split_size is None and (
                     quality_status is None and meta.get("quality_status") == "hint_gaps_resolved"
                     or quality_status == "pending" and meta.get("quality_status") == "pending"
@@ -4149,6 +4335,7 @@ def _run_batch_call(tups, target, deadline: float,
                     # clear — unbounded in a resident worker
     start = len(notes)
     with pin_target(target):
+        _CALL_NOTES.provider_response = None
         d = _llm_call(
             _batch_prompt([(r["body_text"], r["posted_at"], hints)
                            for _, r, _c, _s, hints, _q, _l in tups]),
@@ -4156,6 +4343,9 @@ def _run_batch_call(tups, target, deadline: float,
             max_tokens=_BATCH_MAX_TOKENS,
             need_s=_batch_need_s(len(tups)))
     meta = _integrity_summary(notes[start:])
+    batch_provider = getattr(_CALL_NOTES, "provider_response", None)
+    meta["_provider_evidence"] = _provider_evidence(
+        [batch_provider] if batch_provider else (), batch_provider == "local")
     meta["batch"] = len(tups)
     if d is _DEFERRED:
         return "deferred", {}, meta
@@ -4406,8 +4596,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if time.monotonic() > deadline:
             return _DEFERRED, chunks_out
         try:
-            return _extract_call(r, ctx, saved, hints, qc, index,
-                                 meta, chunks_out), chunks_out
+            result = _extract_call(r, ctx, saved, hints, qc, index, meta, chunks_out)
+            r["_provider_evidence"] = meta.pop("_provider_evidence", None)
+            return result, chunks_out
         finally:
             r["_transport"] = getattr(_CALL_NOTES, "transport", None)
             r["_transport_at"] = getattr(_CALL_NOTES, "transport_at", None)
@@ -4771,6 +4962,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # own observation is applied here, before any of them run
             _observe(transport, at)
         residue = []
+        provider_evidence = meta.pop("_provider_evidence", None)
         batch_metas.append(meta)
         for tup in tups:
             index, r, ctx, saved, hints, qc, lease = tup
@@ -4780,9 +4972,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     # The batch paid for this valid first candidate. Persist it
                     # before the single lane attempts only its optional repair.
                     saved[0] = {**results[index], "_quality_status": "pending"}
+                    if _leaf_evidence(_EvidenceLeaf({}, provider_evidence)) is not None:
+                        saved[0] = _EvidenceLeaf(saved[0], provider_evidence)
                     _checkpoint(index, 0, saved[0])
                     residue.append(tup)
                 else:
+                    r["_provider_evidence"] = provider_evidence
                     metas[index] = meta
                     row_meta = {**meta, "completeness_chunks": 1,
                         "completeness": {"0": _hint_coverage(results[index], hints, r["body_text"])}}

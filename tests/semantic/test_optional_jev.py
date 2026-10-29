@@ -156,11 +156,17 @@ def test_repaired_summary_stays_pending_if_jev_cannot_recheck(tmp_path, monkeypa
         out = semantic_drain.run_due(db, _cfg("assist", budget=100), {"errors": []},
                                      time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)
         assert out["done"] == 0 and calls[0] >= 2
-        [row] = db.artifacts("semantic_audit", message_id=1)
-        audit = json.loads(row["content"])
+        rows = db.artifacts("semantic_audit", message_id=1)
+        assert len(rows) == 2
+        original = json.loads(rows[0]["content"])
+        assert original["status"] == "PENDING"
+        assert {f["code"] for f in original["findings"]} >= {"claim_not_supported"}
+        assert json.loads(rows[0]["meta"])["repair_count"] == 1
+        audit = json.loads(rows[-1]["content"])
         assert audit["status"] == "PENDING"
         assert {f["code"] for f in audit["findings"]} >= {"prior_audit_unverified", "support_unevaluated"}
         assert all(f["code"] != "claim_not_supported" for f in audit["findings"])
+        assert json.loads(rows[-1]["meta"])["repair_count"] == 1
     finally:
         db.close()
 

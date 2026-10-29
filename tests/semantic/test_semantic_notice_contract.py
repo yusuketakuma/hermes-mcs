@@ -48,6 +48,9 @@ def test_plan_and_per_target_intent_keep_selection_and_dedupe(
     try:
         summary = {"claims": [], "mandatory_facts": ["合成の原文確認事項"],
                    "_internal": "not rendered"}
+        clean_summary = {key: value for key, value in summary.items() if not key.startswith("_")}
+        summary_id = ledger.artifact_add("semantic_summary", json.dumps(clean_summary),
+                                         project_id=1, message_id=1, meta={})
         origin = {"source": "synthetic-origin", "event_id": 991}
         args = (ledger, 1, 1, 1, "synthetic-fingerprint", "synthetic-policy",
                 summary, status, {"revision": "selected-revision"}, [1, 2])
@@ -81,6 +84,13 @@ def test_plan_and_per_target_intent_keep_selection_and_dedupe(
             assert payload["policy_fingerprint"] == "synthetic-policy"
             assert payload["fingerprint"] == "synthetic-fingerprint"
             assert payload["text"] == plan["text"]
+            assert payload["summary_artifact_id"] == summary_id
+            from mcs_util import payload_hash
+            assert payload["summary_hash"] == payload_hash(clean_summary)
+            assert payload["notice_text_hash"] == payload_hash(plan["text"])
+            receipt = ledger.db.execute("SELECT content FROM artifacts WHERE artifact_id=?",
+                                        (payload["notice_receipt_id"],)).fetchone()
+            assert json.loads(receipt["content"])["notice_text_hash"] == payload["notice_text_hash"]
             assert type(payload["src_event_id"]) is int
     finally:
         ledger.close()
@@ -110,6 +120,22 @@ def test_plan_failure_rolls_back_intent_and_callers_pending_result(tmp_path, mon
         assert ledger.db.execute("SELECT count(*) FROM notify_outbox WHERE kind='semantic_notice'").fetchone()[0] == 0
         assert ledger.db.execute("SELECT count(*) FROM notify_outbox WHERE kind='new_messages'").fetchone()[0] > 0
         assert ledger.db.execute("SELECT 1").fetchone()[0] == 1
+    finally:
+        ledger.close()
+
+
+def test_notice_does_not_bind_a_different_latest_summary(tmp_path):
+    ledger = _seeded(tmp_path)
+    try:
+        ledger.artifact_add("semantic_summary", json.dumps({"claims": [{"text": "different"}]}),
+                            project_id=1, message_id=1, meta={})
+        with ledger.db:
+            semantic_notice.record_notice_plan_tx(
+                ledger, 1, 1, 1, "synthetic-fingerprint", "synthetic-policy",
+                {"claims": []}, "PASS", {"revision": "selected-revision"}, [1],
+                mode="enforce", summary_mode="enforce", notification_free=False,
+                origin=None, content_quality="full")
+        assert not ledger.db.execute("SELECT 1 FROM notify_outbox WHERE kind='semantic_notice'").fetchone()
     finally:
         ledger.close()
 

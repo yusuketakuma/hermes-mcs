@@ -43,16 +43,30 @@ def test_current_summary_rejects_cheap_metadata_before_lazy_source(tmp_path, pro
 
 
 def test_current_summary_newest_invalid_never_revives_prior_and_keeps_pending_tx(tmp_path):
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+    from mcs_util import payload_hash
+    from semantic_policy import SCHEMA_VERSION
+
     db = sqlite3.connect(tmp_path / "synthetic.db")
     db.row_factory = sqlite3.Row
-    meta = {"audit_status": "PASS", "publication_mode": "enforce",
+    meta = {VERSION_KEY: CURRENT_VERSION, "schema": SCHEMA_VERSION,
+            "audit_status": "PASS", "publication_mode": "enforce",
             "policy_fingerprint": "policy", "fingerprint": "source",
             "target_revision": "revision"}
+    summary = {"claims": [{"text": "合成", "fact_refs": [0], "evidence_refs": ["ev1"]}], "audit_status": "PASS"}
+    audit = {"status": "PASS", "target_message_id": 1, "findings": []}
+    facts = [{"statement": "合成", "evidence_refs": ["ev1"]}]
+    binding = payload_hash({"project_id": 1, "message_id": 1, "fingerprint": "source", "policy": "policy",
+                            "revision": "revision", "claims": summary["claims"], "facts": facts})
+    audit_meta = {**meta, "summary_artifact_id": 1, "summary_hash": payload_hash(summary),
+                  "audit_content_hash": payload_hash(audit), "claim_input_binding": binding}
     bundle = {"source_fingerprint": "source",
               "members": [{"message_id": 1, "revision": "revision"}]}
     try:
         db.execute("CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY,kind TEXT,project_id INTEGER,message_id INTEGER,content TEXT,meta TEXT)")
-        db.execute("INSERT INTO artifacts VALUES(1,'semantic_summary',1,1,'{}',?)", (json.dumps(meta),))
+        db.execute("INSERT INTO artifacts VALUES(1,'semantic_summary',1,1,?,?)", (json.dumps(summary), json.dumps(meta)))
+        db.execute("INSERT INTO artifacts VALUES(2,'semantic_facts',1,1,?,?)", (json.dumps({"facts": facts}), json.dumps(meta)))
+        db.execute("INSERT INTO artifacts VALUES(3,'semantic_audit',1,1,?,?)", (json.dumps(audit), json.dumps(audit_meta)))
         db.commit()
         called = []
 
@@ -64,20 +78,20 @@ def test_current_summary_newest_invalid_never_revives_prior_and_keeps_pending_tx
         current = semantic_send_gate.current_summary(db, 1, 1, source, "policy")
         assert current["artifact_id"] == 1 and called == ["source"]
         assert db.in_transaction
-        db.execute("INSERT INTO artifacts VALUES(2,'semantic_summary',1,1,'{}',?)",
+        db.execute("INSERT INTO artifacts VALUES(4,'semantic_summary',1,1,'{}',?)",
                    (json.dumps({**meta, "stale": True}),))
         assert semantic_send_gate.current_summary(db, 1, 1, source, "policy") is None
         assert called == ["source"]
         assert db.in_transaction
         db.rollback()
-        assert db.execute("SELECT count(*) FROM artifacts").fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM artifacts").fetchone()[0] == 3
         assert semantic_send_gate.current_summary(db, 1, 1, bundle, "policy")["artifact_id"] == 1
 
         def unavailable():
             raise ValueError("synthetic source unavailable")
 
         assert semantic_send_gate.current_summary(db, 1, 1, unavailable, "policy") is None
-        assert db.execute("SELECT count(*) FROM artifacts").fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM artifacts").fetchone()[0] == 3
     finally:
         db.close()
 

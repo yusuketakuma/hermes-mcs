@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "通知前の監査記録の照合を強化",
+  "summary": "最新の要約と監査記録、通知本文の対応を確認できない場合は、通知を保留します。送信途中の通知は進捗を保持して停止し、古い記録に確認できない情報を補いません。",
+  "upgrade": "通常の更新後に通知ワーカーを再起動すると適用されます。",
+  "details": [],
+  "refs": ["mcs/semantic/semantic_send_gate.py", "mcs/semantic/semantic_notice.py", "mcs/notify/notify_flush.py", "mcs/notify/notify_cards.py", "mcs/core/ledger.py"]
+}
