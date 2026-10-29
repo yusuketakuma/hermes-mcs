@@ -17,7 +17,7 @@ import time
 import uuid
 from contextlib import suppress
 
-from mcs_util import loads_dict, payload_hash, reject_constant, unique_pairs, valid_hash
+from mcs_util import loads_dict, payload_hash, reject_constant, strict_json, unique_pairs, valid_hash
 
 
 DEFAULT_ATTEMPT_LIMIT = 6
@@ -376,7 +376,8 @@ def _circuit_state(ledger, now=None, *, kind=_CIRCUIT_ARTIFACT_KIND) -> dict:
         return {"consecutive_failures": 0, "open_until": 0.0,
                 "failure_class": None}
     try:
-        state = json.loads(row["content"] or "{}")
+        state = (strict_json(row["content"] or "{}") if kind == "cloud_circuit"
+                 else json.loads(row["content"] or "{}"))
         count = state.get("consecutive_failures")
         open_until = state.get("open_until", 0.0)
         failure_class = state.get("failure_class")
@@ -386,7 +387,10 @@ def _circuit_state(ledger, now=None, *, kind=_CIRCUIT_ARTIFACT_KIND) -> dict:
                 or (failure_class is not None
                     and failure_class not in (_CIRCUIT_FAILURE_CLASSES |
                         ({"auth_error", "payment_required", "pricing_unverified", "contract_error"}
-                         if kind == "cloud_circuit" else set())))):
+                         if kind == "cloud_circuit" else set())))
+                or (kind == "cloud_circuit"
+                    and failure_class in {"auth_error", "payment_required", "pricing_unverified"}
+                    and open_until <= _circuit_now(now))):
             raise ValueError
         return {"consecutive_failures": min(count, _CIRCUIT_FAILURE_LIMIT),
                 "open_until": float(open_until),
@@ -474,6 +478,8 @@ def _record_circuit_result(ledger, error, now=None, *, kind=_CIRCUIT_ARTIFACT_KI
     if kind == "cloud_circuit" and getattr(error, "kind", "") == "contract_error":
         failure_class = "contract_error"
     if error is None:
+        if kind == "cloud_circuit" and not reset and _circuit_is_open(state, current):
+            return True
         if state["consecutive_failures"] == 0 and not _circuit_is_open(state, current):
             return False
         clean = {"consecutive_failures": 0, "open_until": 0.0,
