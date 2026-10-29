@@ -2,6 +2,11 @@
 import json
 import logging
 
+import pytest
+
+import mcs_util
+import run_log
+
 from adapters.common import eventlog
 
 
@@ -82,3 +87,49 @@ def test_standalone_runtime_diagnostics_survive(caplog):
     ]
     for event, fields in cases:
         assert json.loads(_line(caplog, event, **fields)) == {"event": event, **fields}
+
+
+@pytest.mark.parametrize("captured", [False, True])
+def test_canonical_sink_receives_one_redacted_event(tmp_path, monkeypatch, caplog, captured):
+    data = tmp_path / "data"
+    data.mkdir(mode=0o700)
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setenv("MCS_RUN_LOG_CAPTURED", "1" if captured else "0")
+    caplog.set_level(logging.INFO, logger="mcs.test.eventlog")
+    logger = logging.getLogger("mcs.test.eventlog")
+    writes = []
+    prepare = run_log._prepare
+    def observed(*args, **kwargs):
+        writes.append(True)
+        return prepare(*args, **kwargs)
+    monkeypatch.setattr(run_log, "_prepare", observed)
+    class CapturedOutput(logging.Handler):
+        def emit(self, record):
+            # Model the existing capture drainer, whose appends must remain unconditional.
+            run_log.append(data, (record.getMessage() + "\n").encode("utf-8"))
+    handler = CapturedOutput()
+    if captured:
+        logger.addHandler(handler)
+    try:
+        line = _line(caplog, "synthetic_event", error="PRIVATE_CANARY text", text="dropped")
+    finally:
+        logger.removeHandler(handler)
+    assert json.loads(line) == {"event": "synthetic_event", "error": "redacted"}
+    assert (data / "mcs.log").read_text() == line + "\n"
+    assert writes == [True]
+
+
+@pytest.mark.parametrize("error_type", [OSError, run_log.RunLogError])
+def test_canonical_append_failure_preserves_logger_and_fixed_error(tmp_path, monkeypatch, caplog, capsys, error_type):
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.delenv("MCS_RUN_LOG_CAPTURED", raising=False)
+    caplog.set_level(logging.INFO, logger="mcs.test.eventlog")
+    calls = []
+    def fail(data, payload):
+        calls.append((data, payload))
+        raise error_type("PRIVATE_CANARY error")
+    monkeypatch.setattr(run_log, "append", fail)
+    line = _line(caplog, "synthetic_failure", error="PRIVATE_CANARY text")
+    assert json.loads(line) == {"event": "synthetic_failure", "error": "redacted"}
+    assert calls == [(str(tmp_path / "data"), (line + "\n").encode("utf-8"))]
+    assert capsys.readouterr().err == "mcs_log_write_failed\n"

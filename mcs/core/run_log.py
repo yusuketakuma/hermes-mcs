@@ -293,6 +293,11 @@ def _prepare(directory, backup, state, stage, *, start=0, source=None, next_sour
     _recover(directory, backup, state)
 
 
+# Routing hint for event loggers; not authorization or proof that a write succeeded.
+def is_captured():
+    return os.environ.get("MCS_RUN_LOG_CAPTURED") == "1"
+
+
 def append(data_dir, payload):
     """Append one byte record durably; recover pending writes first, never infer retry safety."""
     if not isinstance(payload, bytes):

@@ -48,10 +48,10 @@ def make_logger(name: str, level: int = logging.INFO):
     def log(event, **fields) -> None:
         record = render(event, fields)
         logger.log(level, "%s", record)
-        if os.environ.get("MCS_RUN_LOG_CAPTURED") != "1":
-            from .mcs_api import bootstrap
-            bootstrap()
-            import run_log
+        from .mcs_api import bootstrap
+        bootstrap()
+        import run_log
+        if not run_log.is_captured():
             from mcs_util import HOME
             try:
                 run_log.append(os.path.join(HOME, "data"), (record + "\n").encode("utf-8"))
