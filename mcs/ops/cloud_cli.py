@@ -355,7 +355,9 @@ def _safe_log(row, meta):
         if key in meta:
             result[key] = str(policy._decimal(meta[key]))
     if isinstance(meta.get("usage"), dict):
-        result["usage"] = policy.validate_usage(meta["usage"])
+        validator = (policy.openai_client.validate_usage
+                     if meta.get("model") == policy.openai_client.MODEL else policy.validate_usage)
+        result["usage"] = validator(meta["usage"])
     for key in ("requests", "input_chars", "estimated_input_tokens", "estimated_output_tokens",
                 "local_facts", "cloud_facts", "matched", "rejected", "held", "repairs",
                 "version", "units", "validated", "validated_units", "rejected_units",
