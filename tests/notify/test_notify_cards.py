@@ -623,9 +623,38 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
     assert "09-24 08:" in text
     # layout 2: header -> summary -> stamps -> body
     rule = notify_render.SECTION_RULE
-    assert (f"↳ 09-24 08:40 職員（薬剤師・薬局Y）\n要約 処理待ち\nスタンプ 未取得\n{rule}\n"
+    states = "Anthropic 不明 · OpenAI 不明 · Jev 不明 · 💻 不明"
+    assert (f"↳ 09-24 08:40 職員（薬剤師・薬局Y）\n{states}\n要約 処理待ち\nスタンプ 未取得\n{rule}\n"
             f"本文") in text
-    assert f"08:41 職員\n要約 処理待ち\nスタンプ 未取得\n{rule}\n本文" in text
+    assert f"08:41 職員\n{states}\n要約 処理待ち\nスタンプ 未取得\n{rule}\n本文" in text
+
+
+def test_provider_bundle_cache_is_scoped_to_one_render(led, monkeypatch):
+    import processing_route
+
+    _patient(led, 1)
+    _msg(led, 100, 1)
+    _msg(led, 101, 1, parent=100)
+    _dispatch(led, _intent(led))
+    card = {**_card(led), "layout": 3}
+    caches = []
+
+    def states(_db, _pid, _mid, *, cfg=None, bundle_cache=None):
+        caches.append(bundle_cache)
+        return dict.fromkeys(("anthropic", "openai", "jev", "local"), "unknown")
+
+    monkeypatch.setattr(processing_route, "provider_states", states)
+    notify_render.card_content(led.db, card, cfg=CFG)
+    assert len(caches) == 2 and isinstance(caches[0], dict) and caches[0] is caches[1]
+    card_cache = caches[0]
+    caches.clear()
+    notify_render.card_body_text(led.db, card, {"shown": "[100, 101]"}, cfg=CFG)
+    assert len(caches) == 2 and caches[0] is caches[1] and caches[0] is not card_cache
+    body_cache = caches[0]
+    caches.clear()
+    notify_render.card_content(led.db, card, cfg=CFG)
+    assert len(caches) == 2 and caches[0] is caches[1] and caches[0] is not card_cache
+    assert caches[0] is not body_cache
 
 
 def test_signal_quote_shows_sender_metadata(led, tmp_path):

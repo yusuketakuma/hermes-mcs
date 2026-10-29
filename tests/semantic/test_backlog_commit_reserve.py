@@ -285,7 +285,12 @@ def test_a_jev_cutoff_in_the_re_audit_keeps_the_repaired_summary(
         out = _rerun(db, cfg, lane="backlog", max_jobs=1)
         assert out["job_metrics"][0]["status"] == "deferred_short"
         assert _job(db)["attempts"] == 0
-        assert _audits(db, 1) == ["PENDING"]
+        rows = db.artifacts("semantic_audit", message_id=1)
+        assert _audits(db, 1) == ["PENDING", "PENDING"]
+        first, latest = (json.loads(row["content"]) for row in rows)
+        assert {item["code"] for item in first["findings"]} >= {"claim_not_supported"}
+        assert {item["code"] for item in latest["findings"]} >= {"support_unevaluated"}
+        assert all(json.loads(row["meta"])["repair_count"] == 1 for row in rows)
         _rerun(db, cfg, lane="backlog", max_jobs=1)
         assert _job(db)["state"] == "done"
         assert _audits(db, 1)[-1] == "PASS"

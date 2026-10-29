@@ -801,20 +801,19 @@ def test_origin_change_after_gate_prevents_semantic_send_before_marker(tmp_path,
 @pytest.mark.parametrize('column,oversized', [('payload', 'x' * (1024 * 1024)),
                                                ('progress', 'x' * 65536)])
 def test_oversized_origin_is_deferred_before_reading_full_value(tmp_path, column, oversized):
+    import semantic_notice
     import semantic_policy
     import semantic_send_gate
-    import semantic_store
     from semantic_testkit import _cfg, _delivery_db
 
     db = _delivery_db(tmp_path, [_message()])
     try:
         cfg = _cfg('enforce')
         src = db.outbox_add('new_messages', 1, {'message_ids': [1]})
-        bundle = semantic_store.thread_bundle(db.db, 1, 1)
-        policy = semantic_policy.policy_fingerprint(semantic_policy.semantic_config(cfg)[0])
-        payload = {'root_id': 1, 'src_event_id': src, 'fingerprint': bundle['source_fingerprint'],
-                   'policy_fingerprint': policy, 'target_message_ids': [1], 'degraded': True,
-                   'policy_version': semantic_policy.POLICY_VERSION}
+        with db.db:
+            db.db.execute('UPDATE notify_outbox SET created_at=0 WHERE event_id=?', (src,))
+        assert semantic_notice.emit_degraded(db, semantic_policy.semantic_config(cfg)[0]) == 1
+        payload = json.loads(db.db.execute("SELECT payload FROM notify_outbox WHERE kind='semantic_notice'").fetchone()[0])
         value = (json.dumps({'message_ids': [1], 'padding': oversized}) if column == 'payload'
                  else json.dumps({'sent': [], 'padding': oversized}))
         with db.db:
@@ -831,15 +830,19 @@ def test_oversized_origin_is_deferred_before_reading_full_value(tmp_path, column
 
 
 def test_source_reader_keeps_json_blob_compatibility(tmp_path):
+    import semantic_notice
+    import semantic_policy
     import semantic_send_gate
-    from semantic_testkit import _delivery_db
+    from semantic_testkit import _cfg, _delivery_db
 
     db = _delivery_db(tmp_path, [_message()])
     try:
         src = db.outbox_add('new_messages', 1, {'message_ids': [1]})
         with db.db:
-            db.db.execute('UPDATE notify_outbox SET payload=?,progress=? WHERE event_id=?',
+            db.db.execute('UPDATE notify_outbox SET payload=?,progress=?,created_at=0 WHERE event_id=?',
                           (b'{"message_ids":[1]}', b'{"sent":[]}', src))
+        assert semantic_notice.emit_degraded(db, semantic_policy.semantic_config(_cfg('enforce'))[0]) == 1
+        degraded = json.loads(db.db.execute("SELECT payload FROM notify_outbox WHERE kind='semantic_notice'").fetchone()[0])
         row, payload = semantic_send_gate._source_event(db.db, 1, src)
         assert payload == {'message_ids': [1]} and json.loads(row['progress']) == {'sent': []}
         with db.db:
@@ -847,7 +850,7 @@ def test_source_reader_keeps_json_blob_compatibility(tmp_path):
             semantic_send_gate.marker_source_gate(db.db, 1,
                 {'src_event_id': src, 'target_message_id': 1})
             semantic_send_gate.marker_source_gate(db.db, 1,
-                {'src_event_id': src, 'target_message_ids': [1], 'degraded': True})
+                degraded, cfg=_cfg('enforce'))
     finally:
         db.close()
 

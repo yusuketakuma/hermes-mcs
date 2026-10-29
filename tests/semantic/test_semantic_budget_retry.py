@@ -248,8 +248,10 @@ def test_summary_repair_reservation_tracks_actual_dispatch(tmp_path, monkeypatch
         assert out["deferred"] == 1 and not out["done"]
         reservations = db.artifacts("semantic_repair", message_id=1)
         assert bool(reservations) == (failure == "post_dispatch")
-        if failure != "post_dispatch":
-            assert not db.artifacts("semantic_summary", message_id=1)
+        pending = db.artifacts("semantic_audit", message_id=1)[-1]
+        assert json.loads(pending["content"])["status"] == "PENDING"
+        assert "claim_not_supported" in {f["code"] for f in json.loads(pending["content"])["findings"]}
+        assert json.loads(pending["meta"])["repair_count"] == (failure == "post_dispatch")
         blocked[0] = False
         with db.db:
             db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")

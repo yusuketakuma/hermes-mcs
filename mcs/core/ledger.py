@@ -2108,7 +2108,7 @@ class Ledger:
 
     def outbox_due(self, limit: int = 20, *, history_fair: bool = False) -> list:
         now = time.time()
-        sql = ("SELECT event_id,kind,project_id,payload,attempts,progress,route "
+        sql = ("SELECT event_id,kind,project_id,payload,attempts,progress,route,state,next_try "
                "FROM notify_outbox WHERE state IN ('pending','failed') AND next_try <= ? ")
         if not history_fair or limit <= 1:
             return self.db.execute(sql + "ORDER BY event_id LIMIT ?", (now, limit)).fetchall()

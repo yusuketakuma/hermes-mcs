@@ -18,6 +18,7 @@ import semantic_transport
 import copy
 import json
 import re
+import sqlite3
 import time
 
 import semantic_facts as sf
@@ -171,11 +172,59 @@ def _preflight_verdict(jev_client, text: str, deadline, chunk_id):
         return "failed"
 
 
+def _cached_provider(db, row, expected_model):
+    try:
+        import cloud_policy
+        meta = mcs_util.strict_json(row["meta"])
+        content = mcs_util.strict_json(row["content"])
+        proof = meta["provider_provenance"]
+        provider = proof.get("provider")
+        actual = meta.get("actual_model")
+        result_hash = mcs_util.payload_hash(content)
+        rid = proof.get("reservation_id")
+        binding = _chunk_provider_binding(meta, row["project_id"], row["message_id"], row["model"], provider, result_hash, rid)
+        if (proof.get("binding_hash") != mcs_util.payload_hash(binding)
+                or type(proof.get("version")) is not int or proof["version"] != 1
+                or proof.get("stage") != "chunk" or proof.get("result_hash") != result_hash
+                or not isinstance(row["model"], str) or row["model"] != expected_model):
+            return None
+        if provider == "local":
+            return provider if (actual == row["model"] and actual not in cloud_policy.PROVIDERS.values()
+                                and rid is None) else None
+        if provider not in cloud_policy.PROVIDERS or actual != cloud_policy.PROVIDERS[provider]:
+            return None
+        requests = meta.get("inference_requests")
+        if not isinstance(rid, str) or not rid or not isinstance(requests, list) or not requests or requests[-1] != rid:
+            return None
+        rows = db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND project_id IS ? AND message_id IS ? "
+                          "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.reservation_id')=? ELSE 0 END LIMIT 2",
+                          (cloud_policy.KINDS[0], row["project_id"], row["message_id"], rid)).fetchall()
+        if len(rows) != 1:
+            return None
+        reservation = cloud_policy.reservation_evidence(db, rows[0]["artifact_id"])["reservation"]
+        return provider if (reservation.get("reservation_id") == rid and reservation.get("model") == actual
+                            and reservation.get("route") == "semantic_backlog"
+                            and reservation.get("project_id") == row["project_id"]
+                            and reservation.get("message_id") == row["message_id"]) else None
+    except (KeyError, TypeError, ValueError, RecursionError, OverflowError, AttributeError, sqlite3.Error):
+        return None
+
+
+def _chunk_provider_binding(meta, project_id, message_id, model, provider, result_hash, reservation_id):
+    return {"version": 1, "stage": "chunk", "project_id": project_id, "message_id": message_id,
+            "provider": provider, "actual_model": meta.get("actual_model"),
+            "model": model, "source_fingerprint": meta.get("source_fingerprint"), "source_hash": meta.get("source_hash"),
+            "revision": meta.get("revision"), "generation": meta.get("generation"), "chunk_index": meta.get("chunk_index"),
+            "chunks_total": meta.get("chunks_total"), "chunk_hash": meta.get("chunk_hash"),
+            "start_codepoint": meta.get("start_codepoint"), "end_codepoint": meta.get("end_codepoint"),
+            "result_hash": result_hash, "reservation_id": reservation_id}
+
+
 def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
                    revision, specs, source: str, *,
                    kind: str = KIND_CHUNK,
                    schema: str = SCHEMA_VERSION,
-                   extra=None, generation: str | None = None) -> dict[int, dict]:
+                   extra=None, generation: str | None = None, expected_model=None) -> dict[int, dict]:
     if db is None:
         return {}
     cached = {}
@@ -240,6 +289,9 @@ def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
                                                     "start_codepoint",
                                                     "end_codepoint",
                                                     "facts", "dropped"}}}
+            provider = _cached_provider(db, row, expected_model) if expected_model is not None else None
+            if provider is not None:
+                cached[index]["provider"] = provider
         except (KeyError, TypeError, ValueError, RecursionError):
             continue
     return cached
@@ -386,7 +438,7 @@ def progress_for_message(db, row, *, model, policy_fingerprint, chunk_size=3000)
 def _persist_chunk(ledger, project_id, message_id, model, source_fp,
                    body_hash, revision, spec, facts, dropped, chunk_count,
                    *, kind: str = KIND_CHUNK, schema: str = SCHEMA_VERSION,
-                   extra_content=None, generation: str | None = None):
+                   extra_content=None, generation: str | None = None, provider=None):
     if ledger is None:
         return
     _require_idle_ledger(ledger)
@@ -417,9 +469,16 @@ def _persist_chunk(ledger, project_id, message_id, model, source_fp,
         "actual_model": semantic_transport.inference_model(),
         "inference_requests": semantic_transport.inference_requests(),
     }
-    ledger.artifact_add(
-        kind, json.dumps(content, ensure_ascii=False, allow_nan=False),
-        project_id=project_id, message_id=message_id, model=model, meta=meta)
+    if provider in ("local", "anthropic", "openai"):
+        requests = meta["inference_requests"]
+        rid = requests[-1] if provider != "local" and requests else None
+        result_hash = mcs_util.payload_hash(content)
+        binding = _chunk_provider_binding(meta, project_id, message_id, model, provider, result_hash, rid)
+        meta["provider_provenance"] = {"version": 1, "stage": "chunk", "provider": provider,
+                                       "result_hash": result_hash, "reservation_id": rid,
+                                       "binding_hash": mcs_util.payload_hash(binding)}
+    ledger.artifact_add(kind, json.dumps(content, ensure_ascii=False, allow_nan=False),
+                        project_id=project_id, message_id=message_id, model=model, meta=meta)
     from extraction_refresh import refresh_extraction_cards
     from semantic_store import refresh_cards_allowed
     if refresh_cards_allowed(getattr(ledger, 'db', None), project_id, message_id):
@@ -695,7 +754,7 @@ def extract_facts_v2(llm_fn, member: dict,
     cached = _cached_chunks((ledger.db if ledger is not None else None), project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
                             kind=KIND_CHUNK_V2, schema=cache_schema,
-                            extra=assembly.v2_chunk_ok, generation=generation)
+                            extra=assembly.v2_chunk_ok, generation=generation, expected_model=model)
 
     atom_owner = {}
     for chunk in manifest["chunks"]:
@@ -711,6 +770,7 @@ def extract_facts_v2(llm_fn, member: dict,
     completed = []
     reused = []
     failed = []
+    providers = {}
     failed_dropped = 0
     failure_reason = None
     drop_reasons: dict = {}
@@ -721,6 +781,8 @@ def extract_facts_v2(llm_fn, member: dict,
         cid = spec["chunk_id"]
         cached_chunk = cached.get(index)
         if cached_chunk is not None:
+            if cached_chunk.get("provider"):
+                providers[index] = cached_chunk["provider"]
             facts.extend(cached_chunk["facts"])
             presence[cid] = cached_chunk["extra"]["category_presence"]
             stored_pf = cached_chunk["extra"].get("jev_preflight")
@@ -747,8 +809,9 @@ def extract_facts_v2(llm_fn, member: dict,
         if jev_client is not None:
             jev_verdicts[cid] = _preflight_verdict(
                 jev_client, spec["text"], deadline, cid)
-        parsed, reason = _chunk_llm(
-            llm_fn, _chunk_prompt(prompt_template, spec, manifest, source, chunk_size), deadline)
+        with semantic_transport.trace_inference() as observed:
+            parsed, reason = _chunk_llm(
+                llm_fn, _chunk_prompt(prompt_template, spec, manifest, source, chunk_size), deadline)
         if reason is not None:
             failed.append(index)
             failure_reason = reason
@@ -789,7 +852,9 @@ def extract_facts_v2(llm_fn, member: dict,
                        body_hash, revision, spec, chunk_facts,
                        chunk_dropped, len(specs), kind=KIND_CHUNK_V2,
                        schema=cache_schema, extra_content=extra,
-                       generation=generation)
+                       generation=generation, provider=observed[-1] if observed else None)
+        if observed:
+            providers[index] = observed[-1]
         facts.extend(chunk_facts)
         presence[cid] = clean_verdicts
         chunk_status[cid] = "complete"
@@ -812,14 +877,17 @@ def extract_facts_v2(llm_fn, member: dict,
     reconciled = reconcile_facts([], assembled["facts"], deadline=deadline)
     progress = assembly.chunk_progress(specs, completed, reused, failed,
                                        failure_reason, failed_dropped, source_fp)
-    return assembly.assemble_document(assembly.source_binding(member, source_fp), manifest,
-                                      assembled, reconciled, progress, drop_reasons=drop_reasons,
-                                      null_contexts_omitted=omitted.get("context_null", 0),
-                                      generation=generation if request_following else None)
+    result = assembly.assemble_document(assembly.source_binding(member, source_fp), manifest,
+                                        assembled, reconciled, progress, drop_reasons=drop_reasons,
+                                        null_contexts_omitted=omitted.get("context_null", 0),
+                                        generation=generation if request_following else None)
+    result["producer_evidence"] = {"providers": sorted(set(providers.values())),
+                                   "complete": bool(specs) and len(providers) == len(specs)}
+    return result
 
 
 def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
-                            project_id, stored_doc: dict, stored_meta: dict):
+                            project_id, stored_doc: dict, stored_meta: dict, *, producer_out=None):
     """Assemble stored chunks without model/preflight dispatch, writes or transaction ownership."""
     if not is_current(stored_meta):
         return None, 'inference_version_changed'
@@ -842,7 +910,8 @@ def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
                             specs, source, kind=KIND_CHUNK_V2,
                             schema=SCHEMA_VERSION_V2 + ("/coverage-retry" if retry else ""),
                             extra=assembly.v2_chunk_ok,
-                            generation=v2_generation())
+                            generation=v2_generation(),
+                            expected_model=semantic_transport.llm_model() if producer_out is not None else None)
     if any(spec["index"] not in cached for spec in specs):
         return None, "chunk_cache_miss"
     jev_used = any(o.get("source") == "jev_pre" for o in stored_doc.get("obligations") or [])
@@ -878,6 +947,10 @@ def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
                                         assembled, reconciled, progress)
     if not result["extraction_complete"]:
         return None, "chunk_cache_miss"
+    if producer_out is not None:
+        providers = [cached[spec["index"]].get("provider") for spec in specs]
+        producer_out.update(providers=sorted({p for p in providers if p is not None}),
+                            complete=bool(specs) and all(p is not None for p in providers))
     return result["doc"], None
 
 

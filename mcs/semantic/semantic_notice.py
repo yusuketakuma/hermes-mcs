@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import time
 
-from mcs_util import loads_dict, payload_hash, positive
+from mcs_util import loads_dict, payload_hash, positive, strict_json
 import semantic_policy
 import semantic_render
 import semantic_store
@@ -106,7 +106,7 @@ def emit_degraded(ledger, scfg: dict) -> int:
     # so the minimal code-generated notice covers the silence.
     events = ledger.db.execute(
         "SELECT event_id,project_id,payload,progress FROM notify_outbox "
-        "WHERE kind='new_messages' AND state IN ('pending','failed') AND attempts=0 "
+        "WHERE kind='new_messages' AND state IN ('pending','failed') "
         "AND created_at<?", (cutoff,))
     local_model = None      # resolved once per scan, on the first bundle
     for ev in events:
@@ -141,17 +141,11 @@ def emit_degraded(ledger, scfg: dict) -> int:
             fp = bundle["source_fingerprint"]
             arrivals = [m["message_id"] for m in bundle["members"]
                         if m["message_id"] in ids]
-            audits = [semantic_store.current_artifact(ledger.db, semantic_policy.KIND_AUDIT, mid,
-                                        fp, semantic_policy.policy_fingerprint(scfg))
-                      for mid in arrivals]
-            from semantic_send_gate import skipped_summary_current
-            members = {m["message_id"]: m for m in bundle["members"]}
+            from semantic_send_gate import current_summary
             policy = semantic_policy.policy_fingerprint(scfg)
-            if arrivals and all(a and (a["meta"].get("audit_status") == "PASS"
-                or (a["meta"].get("audit_status") == "SKIPPED" and mid in members
-                    and skipped_summary_current(ledger.db, pid, mid, fp, policy,
-                                                members[mid]["revision"], scfg["summary_mode"])))
-                for mid, a in zip(arrivals, audits)):
+            if arrivals and all(current_summary(ledger.db, pid, mid, bundle, policy,
+                                                fact_source=scfg.get("fact_source")) is not None
+                                for mid in arrivals):
                 continue
             dkey = payload_hash({"kind": "semantic_notice", "root": root,
                                  "fp": fp, "degraded": 1})
@@ -164,13 +158,50 @@ def emit_degraded(ledger, scfg: dict) -> int:
                     continue
                 if outbox_has_delivery(ledger.db, dkey):
                     continue
+                from semantic_send_gate import (_SourceUnverified, DeferredSend, FreezeSend, StaleSend,
+                                                _degraded_source_gate, _degraded_summaries_ready, _source_event)
+                try:
+                    source_row, source = _source_event(ledger.db, pid, ev["event_id"])
+                    if source_row is None or source_row["state"] == "suppressed":
+                        continue
+                    source_ids = source.get("message_ids")
+                    if (not isinstance(source_ids, list) or not source_ids
+                            or any(not positive(mid) for mid in source_ids)
+                            or len(set(source_ids)) != len(source_ids)
+                            or not arrivals or not set(arrivals).issubset(source_ids)):
+                        continue
+                    _degraded_source_gate(source_row, False)
+                except (_SourceUnverified, DeferredSend, FreezeSend, StaleSend):
+                    continue
+                current_bundle = semantic_store.thread_bundle(ledger.db, pid, root, local_model=local_model)
+                if current_bundle is None or current_bundle["source_fingerprint"] != fp:
+                    continue
+                current_ids = source_ids[:500]
+                current_ids = set(current_ids) - initial_history_ids(ledger.db, pid, current_ids)
+                member_ids = {m["message_id"] for m in current_bundle["members"]}
+                if (set(arrivals) != current_ids.intersection(member_ids)
+                        or _degraded_summaries_ready(ledger.db, pid, current_bundle, arrivals, scfg)):
+                    continue
+                from inference_version import CURRENT_VERSION, VERSION_KEY
+                text = semantic_render.render_degraded(ledger.db, pid)
+                receipt = {"delivery_key": dkey, "root_id": root,
+                           "src_event_id": ev["event_id"], "fingerprint": fp,
+                           "policy_fingerprint": policy, "target_message_ids": arrivals,
+                           "notice_text_hash": payload_hash(text),
+                           "policy_version": semantic_policy.POLICY_VERSION}
+                receipt_id = ledger.artifact_add_tx(
+                    "semantic_degraded_notice_receipt", json.dumps(receipt, ensure_ascii=False),
+                    project_id=pid, message_id=root,
+                    meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp,
+                          "policy_fingerprint": policy})
                 ledger.outbox_add_tx("semantic_notice", pid, {
                     "delivery_key": dkey, "root_id": root,
                     "degraded": True, "src_event_id": ev["event_id"],
                     "fingerprint": fp,
-                    "policy_fingerprint": semantic_policy.policy_fingerprint(scfg),
+                    "policy_fingerprint": policy,
                     "target_message_ids": arrivals,
-                    "text": semantic_render.render_degraded(ledger.db, pid),
+                    "text": text, "notice_text_hash": receipt["notice_text_hash"],
+                    "degraded_receipt_id": receipt_id,
                     "policy_version": semantic_policy.POLICY_VERSION})
                 enqueued += 1
     return enqueued
@@ -217,11 +248,24 @@ def record_notice_plan_tx(ledger, pid, root, mid, fp, policy,
                          focus_mid=mid)
     enqueued = False
     skipped_valid = False
+    summary_receipt = None
+    row = ledger.db.execute("SELECT artifact_id,content FROM artifacts WHERE kind='semantic_summary' "
+                            "AND project_id=? AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
+                            (pid, mid)).fetchone()
+    if row is not None:
+        try:
+            stored = strict_json(row["content"])
+            if isinstance(stored, dict) and stored == summary_clean:
+                summary_receipt = {"summary_artifact_id": row["artifact_id"],
+                                   "summary_hash": payload_hash(stored)}
+        except (TypeError, ValueError, RecursionError):
+            pass
     if final_status == "SKIPPED":
         from semantic_send_gate import skipped_summary_current
         skipped_valid = skipped_summary_current(ledger.db, pid, mid, fp, policy, member["revision"], summary_mode)
     if (mode == "enforce" and summary_mode == "enforce"
-            and (final_status == "PASS" or skipped_valid) and not notification_free):
+            and (final_status == "PASS" or skipped_valid) and not notification_free
+            and summary_receipt is not None):
         # per-target delivery key — one generation emits one
         # notice PER audited target; a shared (root, fp) key
         # would dedup every later target's claims out of the
@@ -237,12 +281,22 @@ def record_notice_plan_tx(ledger, pid, root, mid, fp, policy,
         src_mid = origin_event_id(ledger.db, pid, [mid])
         if src_mid is not None \
                 and not outbox_has_delivery(ledger.db, dkey):
+            receipt = {"delivery_key": dkey, "root_id": root, "target_message_id": mid,
+                       "src_event_id": src_mid, "fingerprint": fp, "policy_fingerprint": policy,
+                       **summary_receipt, "notice_text_hash": payload_hash(text)}
+            receipt_id = ledger.artifact_add_tx(
+                "semantic_notice_receipt", json.dumps(receipt, ensure_ascii=False),
+                project_id=pid, message_id=mid,
+                meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy})
             ledger.outbox_add_tx("semantic_notice", pid, {
                 "delivery_key": dkey, "root_id": root,
                 "target_message_id": mid,
                 "target_revision": member["revision"],
                 "src_event_id": src_mid, "text": text,
                 "fingerprint": fp,
+                **summary_receipt,
+                "notice_text_hash": payload_hash(text),
+                "notice_receipt_id": receipt_id,
                 "policy_version": POLICY_VERSION,
                 "policy_fingerprint": policy})
             enqueued = True

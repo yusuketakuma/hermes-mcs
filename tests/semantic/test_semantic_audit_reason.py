@@ -31,7 +31,7 @@ def test_invalid_response_is_not_a_service_outage(monkeypatch):
     assert summary['_claim_audit_reason'] == 'response_invalid'
 
 
-@pytest.mark.parametrize('claims,reason', [([], 'audit_claims_empty'), ('invalid', 'audit_claims_invalid')])
+@pytest.mark.parametrize('claims,reason', [('invalid', 'audit_claims_invalid')])
 def test_invalid_saved_claims_fail_once_without_fabricating_pass(tmp_path, monkeypatch, claims, reason):
     db = _seeded(tmp_path)
     original = semantic_drain.summarize

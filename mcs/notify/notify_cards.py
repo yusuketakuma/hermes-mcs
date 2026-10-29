@@ -705,6 +705,9 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         "context": context,
         "preview_text": content["preview_text"],
     }
+    if any("provider_states" in c for c in containers):
+        # Older workers must hold this new display contract until restarted.
+        spec["parts"]["provider_states_version"] = 1
     post_source_id = own_post(card)
     if positive(post_source_id):
         spec["parts"]["post_source_id"] = post_source_id
@@ -1991,19 +1994,27 @@ def dispatch_intent(ledger, ev, cfg, now=None) -> dict:
     return outcome
 
 
-def revert_to_text(ledger, event_id, now=None) -> bool:
+def revert_to_text(ledger, event_id, now=None, *, expected=None) -> bool:
     """Kill-switch path: an UNSEALED interactive intent is provably
     unsent (no batch row, no card, no attempt), so converting its route
     to text can never double-deliver. A sealed intent is untouched."""
     now = time.time() if now is None else now
     db = connection(ledger)
+    predicate = ""
+    params = [now, event_id]
+    if expected is not None:
+        try:
+            params.extend(expected[key] for key in ("state", "next_try", "attempts", "payload", "progress"))
+        except (KeyError, IndexError, TypeError):
+            return False
+        predicate = " AND state IS ? AND next_try IS ? AND attempts IS ? AND payload IS ? AND progress IS ?"
     with db:
         cur = db.execute(
             """UPDATE notify_outbox SET route='text',updated_at=?
                WHERE event_id=? AND route='interactive' AND kind!='patient_history'
                  AND NOT EXISTS(SELECT 1 FROM notification_intent_batches b
-                                WHERE b.event_id=notify_outbox.event_id)""",
-            (now, event_id))
+                                WHERE b.event_id=notify_outbox.event_id)""" + predicate,
+            params)
         return cur.rowcount == 1
 
 

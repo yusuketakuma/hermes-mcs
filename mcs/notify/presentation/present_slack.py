@@ -84,7 +84,10 @@ def face_block_count(parts, face_posts=()) -> int:
         if item.get("rule") and n:
             n += 1                                   # divider
         if item.get("rule") and kind == "text":
-            n += _count(item["text"], _CONTEXT_MAX)
+            if item.get("provider_states") is not None:
+                n += _count(item["text"].rsplit("\n", 1)[0], _CONTEXT_MAX) + 1
+            else:
+                n += _count(item["text"], _CONTEXT_MAX)
         elif kind == "heading" and len(item["text"]) <= _HEADER_MAX:
             n += 1
         else:
@@ -101,7 +104,10 @@ def face_block_count(parts, face_posts=()) -> int:
     n += sum(b.get("ui") == "link" for b in buttons)
     for post in face_posts:
         if post["stamps"]:
-            lines = [parts["containers"][post["at"]]["text"]] if len(face_posts) > 1 else []
+            item = parts["containers"][post["at"]]
+            header = (item["text"].rsplit("\n", 1)[0]
+                      if item.get("provider_states") is not None else item["text"])
+            lines = [header] if len(face_posts) > 1 else []
             n += _count("\n".join(lines + post["stamps"]), _CONTEXT_MAX)
         n += 1 + _count(post["original"], _SECTION_MAX)
     return n

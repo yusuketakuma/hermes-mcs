@@ -83,6 +83,7 @@ PARTS_KEYS = frozenset({
     # "silent": footer text carries <@id> member mentions — Discord sends
     # them with allowed_mentions=none; Slack replaces them with names
     "mentions", "preview_text", "thread_drug_actions", "drug_view_navigation", "thread_notice", "source_thread", "post_source_id",
+    "provider_states_version",
     # per-transport presentation (mcs/notify/present_<t>.py); only the
     # spec's own transport may carry its key — see _transport_parts_cost
     "slack", "discord", "lineworks"})
@@ -356,6 +357,23 @@ def validate(spec) -> dict:
     containers = parts.get("containers")
     if not isinstance(containers, list):
         _err("bad_containers")
+    states = [c for c in containers if isinstance(c, dict) and "provider_states" in c]
+    if states or "provider_states_version" in parts:
+        if (spec.get("kind") != "thread" or type(parts.get("provider_states_version")) is not int
+                or parts["provider_states_version"] != 1 or not states):
+            _err("bad_provider_states")
+        labels = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
+                  "pending": "処理待ち", "failed": "失敗", "unknown": "不明"}
+        for container in states:
+            values = container["provider_states"]
+            if (container.get("type") != "text" or container.get("rule") is not True
+                    or not isinstance(values, dict) or set(values) != {"anthropic", "openai", "jev", "local"}
+                    or any(not isinstance(value, str) or value not in labels for value in values.values())):
+                _err("bad_provider_states")
+            fallback = " · ".join(f"{name} {labels[values[key]]}" for key, name in (
+                ("anthropic", "Anthropic"), ("openai", "OpenAI"), ("jev", "Jev"), ("local", "💻")))
+            if not isinstance(container.get("text"), str) or not container["text"].endswith("\n" + fallback):
+                _err("bad_provider_states")
     budget = MAX_COMPONENTS
     text_budget = MAX_TOTAL_TEXT
     slots, text = _containers_cost(containers)
