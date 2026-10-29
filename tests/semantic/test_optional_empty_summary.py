@@ -678,7 +678,7 @@ def test_finding_without_partial_answer_keeps_empty_repair_held(interrupted_empt
 @pytest.mark.parametrize("corruption", [
     "binding", "candidate_content", "candidate_meta", "prior_summary", "prior_audit",
     "marker_content", "marker_policy", "marker_flag", "marker_replacement",
-    "audit_inflight", "producer_proof",
+    "audit_inflight", "producer_proof", "candidate_schema", "candidate_stale", "marker_count_bool",
 ])
 def test_empty_repair_rejects_corrupt_resume(interrupted_empty_repair, corruption):
     state = interrupted_empty_repair
@@ -716,10 +716,16 @@ def test_empty_repair_rejects_corrupt_resume(interrupted_empty_repair, corruptio
             meta["policy_fingerprint"] = "invalid"
         elif corruption == "marker_flag":
             meta["empty_repair"] = False
+        elif corruption == "marker_count_bool":
+            meta["repair_count"] = True
         elif corruption == "audit_inflight":
             meta["audit_state"] = "inflight"
         elif corruption == "producer_proof":
             meta["provider_provenance"]["result_hash"] = "invalid"
+        elif corruption == "candidate_schema":
+            meta["schema"] = "invalid"
+        elif corruption == "candidate_stale":
+            meta["stale"] = True
         db.execute("UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?",
                    (json.dumps(content, ensure_ascii=False), json.dumps(meta, ensure_ascii=False),
                     row["artifact_id"]))
