@@ -123,7 +123,7 @@ def _apply_scan_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
                   "page": payload["page"]}
 
 
-def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
+def _apply_retry_tx(db, req: dict, now: float, cfg=None) -> tuple[str | None, dict]:
     row, error = retry_job_row(db, req["project_id"], req["job_id"])
     if error:
         return error, {}
@@ -151,6 +151,15 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
         return "invalid_payload", {"job_id": row["job_id"]}
     if current_hash != req["expected_payload_hash"]:
         return "payload_changed", {"job_id": row["job_id"]}
+    if "diagnosis_hash" in req:
+        from job_diagnostics import diagnose_job
+        report = diagnose_job(db, cfg, req["job_id"], now=now)
+        if report["diagnosis_hash"] != req["diagnosis_hash"]:
+            return "diagnosis_changed", {"job_id": row["job_id"]}
+        if report["blockers"]:
+            return "retry_blocked", {"job_id": row["job_id"], "blockers": report["blockers"]}
+        if report["remediation_code"] != req["remediation"]:
+            return "remediation_mismatch", {"job_id": row["job_id"]}
     additional = req.get("additional_attempts")
     error = retry_error(row, payload, additional)
     if error:
@@ -164,6 +173,8 @@ def _apply_retry_tx(db, req: dict, now: float) -> tuple[str | None, dict]:
     extra = {"job_id": row["job_id"], "attempts": row["attempts"]}
     if "reason" in req:
         extra["reason"] = req["reason"]
+    if "diagnosis_hash" in req:
+        extra.update(diagnosis_hash=req["diagnosis_hash"], remediation=req["remediation"])
     if additional is not None:
         new_limit = row["attempts"] + additional
         payload["manual_attempt_limit"] = new_limit
@@ -698,7 +709,7 @@ def apply_tx(db, req: dict, now: float | None = None, *,
     if req["cmd"] == "ops.scan":
         return _apply_scan_tx(db, req, current)
     if req["cmd"] == "ops.retry":
-        return _apply_retry_tx(db, req, current)
+        return _apply_retry_tx(db, req, current, cfg)
     if req["cmd"] in ("ops.pause", "ops.resume"):
         return _apply_control_tx(db, req, current)
     if req["cmd"] == "ops.adopt_summary":

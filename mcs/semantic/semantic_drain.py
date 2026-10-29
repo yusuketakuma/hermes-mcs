@@ -2673,6 +2673,7 @@ def _job_metric(job, token, cohort: str, status, job_age: float,
         "kind": job["kind"],
         "cohort": "qc" if job["kind"] == QC_JOB_KIND else cohort,
         "generation": token.generation,
+        "payload_digest": token.payload_digest, "attempts": token.attempts,
         "status": status if status is not None else "error",
         # phase split — queue wait vs model call vs Jev evaluation
         # vs the residual validate/render phase (T14)
