@@ -15,6 +15,7 @@ import update_discovery
 import release_apply_owner
 
 import runtime_inspection
+from dataclasses import replace
 import json
 import os
 import py_compile
@@ -214,6 +215,27 @@ def updater(tmp_path, monkeypatch):
                         str(tmp_path / "data" / "service_manifest.json"))
     os.makedirs(tmp_path / "data", exist_ok=True)
     return mcs_update
+
+
+@pytest.fixture
+def prepared_run_log(updater, tmp_path, monkeypatch):
+    """Prepare and verify the real log helper only inside this test's runtime."""
+    import run_log_install
+
+    data = Path(updater.HOME) / "data"
+    data.mkdir(mode=0o700, parents=True, exist_ok=True)
+    recovery = tmp_path / "run-log-recovery"
+    original_paths = updater._service_paths
+    monkeypatch.setattr(updater, "_service_paths", lambda: replace(
+        original_paths(), recovery_dir=str(recovery)))
+    source = updater._RUN_LOG_SOURCE
+    assert isinstance(source, bytes) and not updater._RUN_LOG_SOURCE_ERROR
+    updater._prepare_run_log()
+    helper = Path(run_log_install.helper_path(
+        updater.HOME, str(recovery), require_installed=True))
+    assert helper.read_bytes() == source
+    assert (data / "mcs.log").is_file()
+    return helper
 
 
 # ---------------------------------------------------------------- state

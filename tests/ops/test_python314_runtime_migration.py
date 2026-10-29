@@ -11,6 +11,7 @@ import pytest
 
 import mcs_update
 from test_mcs_update import updater as updater  # noqa: F401  (fixture)
+from test_mcs_update import prepared_run_log as prepared_run_log  # noqa: F401 (fixture)
 
 OLD = (3, 13, 9)
 
@@ -234,7 +235,7 @@ def test_reinstall_stops_before_child_when_options_changed_or_not_recorded(updat
 
 @pytest.mark.parametrize("version_ok, backup", [(True, True), (False, True), (True, False)])
 def test_services_use_the_rebuilt_runtime_only_when_verified(
-        updater, monkeypatch, tmp_path, version_ok, backup):
+        updater, monkeypatch, tmp_path, version_ok, backup, prepared_run_log):
     venv = _venv(tmp_path, version_ok)
     if backup:
         (tmp_path / "venv.pre-python314").mkdir()
@@ -310,7 +311,8 @@ def test_post_merge_child_inherits_both_parent_locks(updater, monkeypatch, tmp_p
     assert 'MCS_INSTALL_UPDATE_LOCK_FD' not in seen['env']
 
 
-def test_post_merge_migrates_then_reconciles_with_new_python(updater, old_interpreter, monkeypatch):
+def test_post_merge_migrates_then_reconciles_with_new_python(
+        updater, old_interpreter, monkeypatch, prepared_run_log):
     monkeypatch.setenv(updater.RUN_LOCK_FD_ENV, "7")
     monkeypatch.setenv(updater.UPDATE_LOCK_FD_ENV, "8")
     monkeypatch.setattr(updater, "_SERVICES_PYTHON", None)
@@ -648,7 +650,7 @@ def test_an_explicit_keep_is_decided_before_the_pin_rules(
 
 
 def test_supported_previous_pin_refresh_is_journaled_and_restores_old_dependencies(
-        updater, tmp_path, monkeypatch):
+        updater, tmp_path, monkeypatch, prepared_run_log):
     checkout = tmp_path / "hermes-agent"
     old_head, new_head = _checkout(checkout)
     venv = _venv(checkout)
