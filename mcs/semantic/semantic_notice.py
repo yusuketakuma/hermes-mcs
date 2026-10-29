@@ -93,7 +93,7 @@ def origin_event_id(db, project_id: int,
 
 def emit_degraded(ledger, scfg: dict) -> int:
     """Enforce-only fallback: a new-messages intent whose thread still
-    lacks a PASS-audited summary past delayed_notice_seconds gets ONE
+    lacks a verified PASS or SKIPPED summary past delayed_notice_seconds gets ONE
     code-generated degraded notice through the existing outbox — no
     clinical claims, original-check instruction only (spec §19.3).
     Each (root, fingerprint) pair dedupes via delivery_key."""
