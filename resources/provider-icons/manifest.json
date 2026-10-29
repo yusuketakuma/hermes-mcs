@@ -13,11 +13,12 @@
     {
       "provider": "openai",
       "file": "openai.png",
-      "source_page": "https://lobehub.com/icons/openai",
-      "download_url": "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@2.5.0/light/openai.png",
-      "sha256": "8a33312f6bb17c1edddf8f9d7fbac09ce1d1d697d6601f37227afa879e94c52e",
-      "license": "MIT artwork; OpenAI trademark",
-      "retrieved_on": "2026-10-29"
+      "source_page": "https://github.com/openai",
+      "download_url": "https://avatars.githubusercontent.com/u/14957082?v=4",
+      "sha256": "6025a4347a8eaed17e31eaebf7834e33ec4af26cc7f59be586ac59ba5157fa1c",
+      "license": "OpenAI trademark; service identification",
+      "retrieved_on": "2026-10-29",
+      "source_api": "https://api.github.com/orgs/openai"
     },
     {
       "provider": "jev",
@@ -47,5 +48,16 @@
   "packages": {
     "bootstrap-icons": "1.13.2",
     "@lobehub/icons-static-png": "2.5.0"
-  }
+  },
+  "alternate_assets": [
+    {
+      "provider": "openai",
+      "file": "openai-fallback.png",
+      "source_page": "https://lobehub.com/icons/openai",
+      "download_url": "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@2.5.0/light/openai.png",
+      "sha256": "8a33312f6bb17c1edddf8f9d7fbac09ce1d1d697d6601f37227afa879e94c52e",
+      "license": "MIT artwork; OpenAI trademark",
+      "retrieved_on": "2026-10-29"
+    }
+  ]
 }
