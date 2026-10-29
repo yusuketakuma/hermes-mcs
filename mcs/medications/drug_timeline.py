@@ -27,11 +27,16 @@ def mentions(reader, mid, *, cfg=None):
                 or meta.get("actual_model") != resolved_model(cfg or {})
                 or row[1] != resolved_model(cfg or {})):
             return None
-        message = dict(db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone())
-        from inference_dependency_loss import source_binding
+        from inference_dependency_loss import (SOURCE_BINDING_COLUMNS, source_binding,
+                                              source_binding_from_row)
         if not isinstance(meta.get("source_binding"), str):
             return None
-        binding = source_binding(db, message["project_id"], mid)
+        message = dict(db.execute("SELECT m.*," + SOURCE_BINDING_COLUMNS
+                                  + " FROM messages m WHERE m.message_id=?", (mid,)).fetchone())
+        binding = source_binding_from_row(message)
+        if binding is None:
+            # Preserve the single reader's handling of legacy noninteger revisions.
+            binding = source_binding(db, message["project_id"], mid)
         if binding is None or binding != meta.get("source_binding"):
             return None
         message["_source_binding"] = binding
