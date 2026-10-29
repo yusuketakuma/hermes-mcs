@@ -176,7 +176,7 @@ def test_openai_reservation_uses_its_own_usage_rules(world):
 
 
 @pytest.mark.parametrize('damage', ['boolean_project', 'boolean_tokens', 'boolean_bound',
-                                     'object_unit', 'object_fingerprint', 'object_id', 'encoded_usage'])
+                                     'object_unit', 'object_fingerprint', 'object_id', 'long_id', 'nul_long_id', 'encoded_usage'])
 def test_sql_projection_preserves_json_types_for_accounting_validation(world, damage):
     ledger, _ = world
     now = 1793240000.0
@@ -193,6 +193,10 @@ def test_sql_projection_preserves_json_types_for_accounting_validation(world, da
         extra['request_fp'] = {'x': 'a' * 56}
     elif damage == 'object_id':
         extra['reservation_id'] = {'x': 'a' * 24}
+    elif damage == 'long_id':
+        extra['reservation_id'] = 'a' * 30000
+    elif damage == 'nul_long_id':
+        extra['reservation_id'] = 'a' * 32 + '\0' + 'x' * 1000
     reserve = _reserve(ledger, now - 100, extra=extra)
     _result(ledger, reserve, now - 10, outcome='settled' if damage == 'encoded_usage' else 'not_sent')
     if damage == 'encoded_usage':
@@ -201,3 +205,18 @@ def test_sql_projection_preserves_json_types_for_accounting_validation(world, da
     report = _observe(ledger, now)
     assert report['state'] == 'partial'
     assert report['settled_requests'] is None and report['unresolved_requests'] is None
+
+
+def test_internal_proof_budget_is_bounded_and_does_not_write(world, monkeypatch):
+    ledger, _ = world
+    now = 1793240000.0
+    for _ in range(3):
+        _reserve(ledger, now - 100, extra={'unused': 'x' * 1000})
+    before = ledger.db.total_changes
+    monkeypatch.setattr(observation, 'MAX_PROOF_BYTES', 2048)
+    report = _observe(ledger, now)
+    assert report['state'] == 'unknown'
+    assert report['unresolved_requests'] is None
+    assert ledger.db.total_changes == before
+    monkeypatch.setattr(observation, 'MAX_PROOF_BYTES', 16 * 1024 * 1024)
+    assert _observe(ledger, now)['missing_results'] == 3
