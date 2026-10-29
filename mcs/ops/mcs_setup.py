@@ -803,11 +803,21 @@ def _init_store_secrets(args, login_id) -> int | None:
     # which persist in shell history and `ps` (FIX-SU1)
     pw = os.environ.get("MCS_SETUP_PASSWORD")
     if pw is None and not args.yes:
-        pw = getpass.getpass(
-            "MCSのパスワード（入力は表示されません。Keychainのmcs-adapterと、"
-            "再起動時に使う本人専用の.envへ保存。空欄なら変更しません）: ")
+        import warnings
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter('error', getpass.GetPassWarning)
+                pw = getpass.getpass(
+                    "MCSのパスワード（入力は表示されません。Keychainのmcs-adapterと、"
+                    "再起動時に使う本人専用の.envへ保存。空欄なら変更しません）: ")
+        except getpass.GetPassWarning:
+            print('パスワードを非表示で入力できないため、保存を中止しました。')
+            return 1
     keychain_failed = False
     if pw:
+        if not lifecycle_io.valid_env_value(pw):
+            print('パスワードの形式が正しくありません。保存を中止しました。')
+            return 1
         # .env carries the same secret as the reboot fallback — after a
         # restart the login keychain is locked until first unlock, and
         # auto_login reads MCS_PASSWORD when the keychain can't answer.

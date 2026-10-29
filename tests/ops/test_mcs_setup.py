@@ -207,6 +207,99 @@ def test_env_write_merges_and_preserves(tmp_path):
     assert oct(p.stat().st_mode & 0o777) == "0o600"
 
 
+@pytest.mark.parametrize('kind', ['symlink', 'hardlink', 'fifo', 'large'])
+def test_env_writer_rejects_unsafe_input_file(tmp_path, kind):
+    import os
+    path = tmp_path / '.env'
+    if kind == 'symlink':
+        target = tmp_path / 'target'
+        target.write_text('KEEP=synthetic\n')
+        path.symlink_to(target)
+    elif kind == 'hardlink':
+        target = tmp_path / 'target'
+        target.write_text('KEEP=synthetic\n')
+        os.link(target, path)
+    elif kind == 'fifo':
+        os.mkfifo(path, 0o600)
+    else:
+        path.write_bytes(b'x' * (mcs_util.DOTENV_MAX_BYTES + 1))
+    with pytest.raises((OSError, ValueError)):
+        lifecycle_io.write_env(str(path), {'MCS_PASSWORD': 'synthetic-new'})
+    if kind in ('symlink', 'hardlink'):
+        assert target.read_text() == 'KEEP=synthetic\n'
+    if kind == 'symlink':
+        assert path.is_symlink()
+
+
+def test_env_writer_does_not_overwrite_concurrent_change(tmp_path, monkeypatch):
+    path = tmp_path / '.env'
+    path.write_text('KEEP=before\n')
+    original = lifecycle_io.atomic_write
+    def race(*args, **kwargs):
+        path.write_text('KEEP=after\n')
+        return original(*args, **kwargs)
+    monkeypatch.setattr(lifecycle_io, 'atomic_write', race)
+    with pytest.raises(ValueError, match='env_changed'):
+        lifecycle_io.write_env(str(path), {'MCS_PASSWORD': 'synthetic-new'})
+    assert path.read_text() == 'KEEP=after\n'
+
+
+@pytest.mark.parametrize('damage', ['content', 'mode', 'hardlink'])
+def test_env_writer_reports_unverified_after_publication(tmp_path, monkeypatch, damage):
+    import os
+    path = tmp_path / '.env'
+    original = lifecycle_io.atomic_write
+    def write(*args, **kwargs):
+        original(*args, **kwargs)
+        if damage == 'content':
+            path.write_text('KEEP=synthetic\n')
+        elif damage == 'mode':
+            path.chmod(0o644)
+        else:
+            os.link(path, tmp_path / 'copy')
+    monkeypatch.setattr(lifecycle_io, 'atomic_write', write)
+    with pytest.raises(OSError, match='env_save_unverified'):
+        lifecycle_io.write_env(str(path), {'MCS_PASSWORD': 'synthetic-new'})
+
+
+def test_env_writer_refuses_changed_parent_before_secret_write(tmp_path, monkeypatch):
+    root = tmp_path / 'root'
+    root.mkdir(mode=0o700)
+    prior = tmp_path / 'prior'
+    original = lifecycle_io.atomic_write
+    def race(*args, **kwargs):
+        root.rename(prior)
+        root.mkdir(mode=0o700)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(lifecycle_io, 'atomic_write', race)
+    with pytest.raises(ValueError, match='env_parent_changed'):
+        lifecycle_io.write_env(str(root / '.env'), {'MCS_PASSWORD': 'synthetic-new'})
+    assert not (root / '.env').exists() and not (prior / '.env').exists()
+
+
+@pytest.mark.parametrize('separator', ['\v', '\f', '\x1c', '\x1d', '\x1e', '\x85', '\u2028', '\u2029'])
+def test_env_writer_rejects_embedded_line_separator(tmp_path, separator):
+    path = tmp_path / '.env'
+    path.write_text('KEEP=synthetic\n')
+    with pytest.raises(ValueError, match='invalid_env_update'):
+        lifecycle_io.write_env(str(path), {'MCS_PASSWORD': 'a' + separator + 'b'})
+    assert path.read_text() == 'KEEP=synthetic\n'
+
+
+def test_init_password_refuses_visible_prompt(monkeypatch, capsys):
+    import warnings
+    from types import SimpleNamespace
+    monkeypatch.delenv('MCS_SETUP_PASSWORD', raising=False)
+    def visible(_):
+        warnings.warn('synthetic', mcs_setup.getpass.GetPassWarning)
+        return 'synthetic-secret'
+    monkeypatch.setattr(mcs_setup.getpass, 'getpass', visible)
+    monkeypatch.setattr(lifecycle_io, 'store_keychain', lambda *a: pytest.fail('unexpected keychain'))
+    monkeypatch.setattr(lifecycle_io, 'write_env', lambda *a: pytest.fail('unexpected file write'))
+    assert mcs_setup._init_store_secrets(SimpleNamespace(yes=False), 'synthetic') == 1
+    assert 'synthetic-secret' not in capsys.readouterr().out
+
+
 def test_env_write_repairs_only_the_explicitly_updated_key(tmp_path):
     """An unrelated duplicate remains rejected until explicitly changed."""
     p = tmp_path / ".env"

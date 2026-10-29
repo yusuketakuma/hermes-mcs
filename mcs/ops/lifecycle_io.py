@@ -1,7 +1,6 @@
 """Bound lifecycle subprocesses and safely publish local credentials."""
 from __future__ import annotations
 
-from contextlib import suppress
 import json
 import math
 import time
@@ -11,7 +10,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from safe_io import atomic_write, fdopen_owned
+from safe_io import atomic_write, fdopen_owned, read_regular_nofollow
 
 KEYCHAIN_SERVICE = "mcs-adapter"
 
@@ -51,12 +50,16 @@ def run_bounded(argv: list, *, timeout: int = 60, input_text: str | None = None,
 
 # ---- .env merge ------------------------------------------------------
 
+def valid_env_value(value):
+    return isinstance(value, str) and not any(c in value for c in '\r\n\x00\v\f\x1c\x1d\x1e\x85\u2028\u2029')
+
+
 def write_env(path: str, updates: dict[str, str]):
     """Merge updates while preserving unrelated lines and their order."""
     encoded = {}
     for key, value in updates.items():
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) \
-                or not isinstance(value, str) or any(c in value for c in "\r\n\x00"):
+                or not valid_env_value(value):
             raise ValueError("invalid_env_update")
         encoded[key] = (json.dumps(value, ensure_ascii=False)
                         if value != value.strip() or any(c in value for c in "\"'\\")
@@ -64,14 +67,33 @@ def write_env(path: str, updates: dict[str, str]):
     updates = encoded
     # Share the short publication lock with interactive API-key edits.  Do not
     # acquire it during input or Keychain access.
-    from api_key_setup import EnvLockError, _env_edit_lock
+    from api_key_setup import EnvLockError, _env_edit_lock, _identity, _parent_identity
+    from mcs_util import DOTENV_MAX_BYTES
     env_path = Path(path)
     os.makedirs(env_path.parent, exist_ok=True)
+    parent = _parent_identity(env_path)
+    def check_parent():
+        if _parent_identity(env_path) != parent:
+            raise ValueError('env_parent_changed')
+    def snapshot():
+        try:
+            raw, info = read_regular_nofollow(path, DOTENV_MAX_BYTES,
+                                               lambda: ValueError('env_unreadable'), with_stat=True)
+        except FileNotFoundError:
+            if os.path.lexists(path):
+                raise ValueError('env_unreadable') from None
+            return b'', None
+        if (info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o022
+                or len(raw) > DOTENV_MAX_BYTES
+                or _identity(os.stat(path, follow_symlinks=False)) != _identity(info)):
+            raise ValueError('env_unreadable')
+        return raw, _identity(info)
     try:
+        check_parent()
         with _env_edit_lock(env_path):
-            lines = []
-            with suppress(FileNotFoundError), open(path, encoding="utf-8", newline="") as stream:
-                lines = stream.read().splitlines(keepends=True)
+            check_parent()
+            original = snapshot()
+            lines = original[0].decode('utf-8').splitlines(keepends=True)
             kept = []
             replaced = set()
             for line in lines:
@@ -87,8 +109,24 @@ def write_env(path: str, updates: dict[str, str]):
                     if kept and not kept[-1].endswith(('\n', '\r')):
                         kept[-1] += '\n'
                     kept.append(f"{key}={val}\n")
-            atomic_write(path, lambda stream: stream.write("".join(kept)),
-                         0o600, tmp_prefix=".svc.")
+            body = "".join(kept)
+            if len(body.encode('utf-8')) > DOTENV_MAX_BYTES:
+                raise ValueError('env_too_large')
+            def write_checked(stream):
+                check_parent()
+                stream.write(body)
+                check_parent()
+                if snapshot() != original:
+                    raise ValueError('env_changed')
+            atomic_write(path, write_checked, 0o600, tmp_prefix=".svc.")
+            try:
+                check_parent()
+                saved, identity = snapshot()
+                if (saved != body.encode('utf-8') or identity is None
+                        or stat.S_IMODE(identity[2]) != 0o600):
+                    raise ValueError('env_save_unverified')
+            except (OSError, ValueError):
+                raise OSError('env_save_unverified') from None
     except EnvLockError as exc:
         raise OSError("env_edit_lock_unavailable") from exc
 
