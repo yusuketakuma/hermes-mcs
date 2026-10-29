@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "監視警告のログ案内を統合ログへ修正",
+  "summary": "MCSの監視警告で、収集・抽出・独立接続・更新・LINE WORKSのログ確認先を現在の統合ログ data/mcs.log に揃えました。",
+  "upgrade": "通常の更新で反映します。ログ統合が適用された環境が対象です。追加設定は不要です。共有Hermesログと移行前のログ原本の保持は変更しません。",
+  "details": [
+    "監視の判定条件・通知先・再試行条件は変更せず、ログの案内先だけを修正します。"
+  ],
+  "refs": [
+    "mcs/ingest/health_watch.py",
+    "tests/ingest/test_health_watch.py"
+  ]
+}

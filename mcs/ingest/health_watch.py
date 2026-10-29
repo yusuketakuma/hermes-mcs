@@ -627,7 +627,7 @@ _STATUS_JA = {"degraded": "一部に異常があります", "failed": "収集が
               "corrupt": "状態の記録が壊れています"}
 _SEVERE = frozenset({"failed", "stale", "missing", "corrupt"})
 _CHECK = "python3 mcs/ops/mcs_setup.py check"
-_COLLECTION_LOG = "data/run.log"  # mcs_check.sh redirects run_check output in both modes.
+_COLLECTION_LOG = "data/mcs.log"  # MCS-owned producers share the run_log sink in both modes.
 _STANDALONE_STATUS = "python -m mcs_standalone status"
 _STANDALONE_RESTART = ("hostを再起動（macOS: launchctl kickstart -k gui/$(id -u)/ai.mcs.standalone、"
                        "Linux: systemctl --user restart mcs-standalone.service）")
@@ -691,11 +691,11 @@ _REASON_JA = {
     "extract_backlog_stalled": ("要約の抽出が6時間以上止まっています",
                                 "llama-server と extract-drainer の稼働を確認（launchctl list | grep mcs）"),
     "semantic_backlog_stalled": ("意味チェックが6時間以上止まっています",
-                                 "extract-drainer の稼働と data/extract_drain.log の jev_error を確認"),
+                                 f"extract-drainer の稼働と {_COLLECTION_LOG} の jev_error を確認"),
     "local_llm_down": ("ローカルLLMに1時間以上つながらず、要約の抽出が止まっています",
                        "llama-server の稼働を確認（再起動後は自動で再開します）"),
     "llm_endpoint_down": ("ローカルLLMの失敗が続き、要約の抽出が6時間以上進んでいません",
-                          "llama-server の稼働と data/extract_drain.log を確認"),
+                          f"llama-server の稼働と {_COLLECTION_LOG} を確認"),
     "backup_deferred_deadline": ("収集の制限時間内に日次バックアップを取れず、1日以上更新されていません",
                                  f"DBの大きさと収集の所要時間を確認。続く場合は {_CHECK}"),
     "stall_check_failed": ("停滞の判定処理が失敗しました",
@@ -721,17 +721,17 @@ _REASON_JA = {
     "unread_collection_unknown": ("未読収集の状況が記録されていません",
                                   f"次回の収集を待ち、続く場合は {_COLLECTION_LOG} を確認"),
     "standalone_host_down": ("独立接続のhostが動いていません",
-                             f"{_STANDALONE_STATUS} と data/standalone.log を確認し、{_STANDALONE_RESTART}"),
+                             f"{_STANDALONE_STATUS} と {_COLLECTION_LOG} を確認し、{_STANDALONE_RESTART}"),
     "standalone_child_failing": ("hostの子プロセスが異常終了を繰り返しています",
-                                 f"data/<ジョブ名>.log の末尾と {_STANDALONE_STATUS} の exits を確認"),
+                                 f"{_COLLECTION_LOG} の末尾と {_STANDALONE_STATUS} の exits を確認"),
     "standalone_connector_down": ("Slack/Discordとの接続が回復していません",
-                                  "data/standalone.log の connector_ended と認証情報・ネットワークを確認"
+                                  f"{_COLLECTION_LOG} の connector_ended と認証情報・ネットワークを確認"
                                   "（収集と抽出は継続し、接続は自動で再試行します）"),
     "standalone_update_stuck": ("更新処理が終わらず、収集と抽出が止まっています",
-                                "data/update.log と python3 mcs/ops/mcs_update.py status を確認し、"
+                                f"{_COLLECTION_LOG} と python3 mcs/ops/mcs_update.py status を確認し、"
                                 "必要なら python3 mcs/ops/mcs_update.py recover"),
     "standalone_check_stalled": ("hostの未読収集が成功していません",
-                                 f"data/mcs_check.log と {_COLLECTION_LOG} を確認。続く場合は {_CHECK}"),
+                                 f"{_COLLECTION_LOG} を確認。続く場合は {_CHECK}"),
 }
 # runtime_mode=standalone: the host owns the connection and the workers,
 # so the Hermes gateway / per-agent hints do not apply
@@ -745,10 +745,10 @@ _STANDALONE_ACTION = {
 # notify.interactive=lineworks (Hermes mode): the separate LINE WORKS adapter
 # delivers, so the gateway/profile hints do not apply
 _LW_RESTART = ("launchctl kickstart -k gui/$(id -u)/ai.mcs.lineworks で独立アダプターを再起動し、"
-               "python3 -m lineworks_adapter check と data/lineworks_state/service.stderr.log を確認")
+               f"python3 -m lineworks_adapter check と {_COLLECTION_LOG} を確認")
 _LINEWORKS_ACTION = {
     "worker_start_unverified": "LINE WORKSアダプターの起動記録を確認。止まっていれば " + _LW_RESTART,
-    "worker_start_failed": "data/lineworks_state/service.stderr.log で起動失敗を確認し、" + _LW_RESTART,
+    "worker_start_failed": f"{_COLLECTION_LOG} で起動失敗を確認し、" + _LW_RESTART,
     "worker_restart_required": "更新後のコードで動かすため " + _LW_RESTART,
     "card_delivery_stalled": "LINE WORKSアダプターの稼働を確認。止まっていれば " + _LW_RESTART,
 }
