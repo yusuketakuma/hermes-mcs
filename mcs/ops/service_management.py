@@ -113,7 +113,18 @@ def recovery_owned(*, paths: ServicePaths) -> bool:
         if not isinstance(plist, dict):
             return False
         argv = plist.get('ProgramArguments')
-        return plist.get('Label') == contract.RECOVERY_LABEL and isinstance(argv, list) and (len(argv) == 3) and (argv[1:] == [str(root / 'mcs_recover.py'), '--if-stale']) and (runtime_inspection.recovery_executable(plist) is not None)
+        if (plist.get('Label') != contract.RECOVERY_LABEL or not isinstance(argv, list)
+                or runtime_inspection.recovery_executable(plist) is None):
+            return False
+        if len(argv) == 3:
+            return argv[1:] == [str(root / 'mcs_recover.py'), '--if-stale']
+        # The parser checks the complete wrapper shape and Python identity.
+        # Ownership additionally binds its data, tool and verified private helper.
+        return (len(argv) == 10 and argv[1] == '-I'
+                and argv[5] == str(Path(paths.root, 'data'))
+                and argv[8] == str(root / 'mcs_recover.py')
+                and argv[2] == run_log_install.helper_path(
+                    paths.root, paths.recovery_dir, require_installed=True))
     except (OSError, ValueError, TypeError, RuntimeError):
         return False
 
@@ -878,6 +889,13 @@ def apply_services(cfg, *, paths: ServicePaths, dry_run=False, note):
         return ServiceResult(1, message)
     try:
         subs = service_substitutions(cfg, paths=paths)
+        if not dry:
+            subs['RUN_LOG_HELPER'] = run_log_install.helper_path(
+                paths.root, paths.recovery_dir, require_installed=True)
+    except run_log_install.LogInstallError:
+        return ServiceResult(1, '常駐設定: ログ処理プログラムの配置を確認できません。'
+            '既存の常駐設定は変更していません。導入時の省略オプションを維持して'
+            'install.shを実行し、ログ処理プログラムの準備を完了してください')
     except ValueError as e:
         message = f'常駐設定: 設定に問題があります。修正して再実行してください: {e}。変更していません'
         return ServiceResult(1, message)

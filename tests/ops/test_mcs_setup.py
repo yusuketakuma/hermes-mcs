@@ -1217,6 +1217,13 @@ def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
     # interpreter probe has its own tests — keep it out of `calls`
     monkeypatch.setattr(service_management, 'hermes_py_problem', lambda**_service_kwargs: None)
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_setup, "RECOVERY_DIR", str(tmp_path.resolve() / "log-helper-recovery"))
+    # Live service rendering requires a genuine private helper and root-bound
+    # pointer. Prepare the canonical source in this test's synthetic root.
+    import run_log_install
+    (tmp_path / "data").mkdir(mode=0o700, exist_ok=True)
+    run_log_install.prepare(tmp_path, mcs_setup.REPO_ROOT, mcs_setup.RECOVERY_DIR,
+                            promote=True)
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
     monkeypatch.setattr(service_management, 'agent_loaded',
                         lambda label, **_service_kwargs: label in loaded)

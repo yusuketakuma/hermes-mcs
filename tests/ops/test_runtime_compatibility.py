@@ -426,14 +426,19 @@ def _owned_recovery(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("loaded", [False, True])
+@pytest.mark.parametrize("wrapped", [False, True])
 def test_services_repairs_owned_unsafe_selection_without_autoenabling(
-        monkeypatch, tmp_path, loaded):
+        monkeypatch, tmp_path, loaded, wrapped):
     from test_mcs_setup import _services_env
     real_uid = os.getuid()
     _, args = _services_env(monkeypatch, tmp_path)
     monkeypatch.setattr(os, "getuid", lambda: real_uid)
     path, old = _owned_recovery(monkeypatch, tmp_path)
     helper = _prepare_recovery_helper()
+    if wrapped:
+        path.write_bytes(plistlib.dumps({
+            "Label": service_contract.RECOVERY_LABEL,
+            "ProgramArguments": _recovery_args(old, helper)}))
     desired = str(tmp_path / "independent-python")
     cfg = {"recovery_python": desired}
     monkeypatch.setattr(mcs_util, 'load_config', lambda path=None: cfg if path is None else {})
@@ -466,6 +471,70 @@ def test_services_repairs_owned_unsafe_selection_without_autoenabling(
     assert state["loaded"] is loaded
     assert sum(call[1] == "bootstrap" for call in calls) == int(loaded)
     assert service_management.runtime_gate_errors(cfg, paths=mcs_setup._service_paths()) == []
+
+
+@pytest.mark.parametrize("changed", ["none", "data", "tool", "helper", "hash", "pointer"])
+def test_wrapped_recovery_ownership_requires_root_bound_installed_helper(
+        monkeypatch, tmp_path, changed):
+    path, old = _owned_recovery(monkeypatch, tmp_path)
+    helper = _prepare_recovery_helper()
+    argv = _recovery_args(old, helper)
+    if changed == "data":
+        argv[5] = str(tmp_path / "other-root" / "data")
+    elif changed == "tool":
+        argv[8] = str(tmp_path / "other-recovery" / "mcs_recover.py")
+    elif changed == "helper":
+        argv[2] = str(tmp_path / "other-recovery" / Path(helper).name)
+    elif changed == "hash":
+        with Path(helper).open("ab") as stream:
+            stream.write(b"\n# synthetic changed helper\n")
+    elif changed == "pointer":
+        next(Path(mcs_setup.RECOVERY_DIR).glob("run_log-*.json")).unlink()
+    path.write_bytes(plistlib.dumps({"Label": service_contract.RECOVERY_LABEL,
+                                    "ProgramArguments": argv}))
+    before = _tree(tmp_path)
+    assert service_management.recovery_owned(paths=mcs_setup._service_paths()) is (changed == "none")
+    assert _tree(tmp_path) == before
+
+
+@pytest.mark.parametrize("dry", [False, True])
+@pytest.mark.parametrize("mode", ["hermes", "standalone"])
+def test_services_missing_log_helper_keeps_existing_services_before_mutation(
+        monkeypatch, tmp_path, dry, mode):
+    from test_mcs_setup import _services_env
+    real_uid = os.getuid()
+    calls, args = _services_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(os, "getuid", lambda: real_uid)
+    args.dry_run = dry
+    monkeypatch.setattr(mcs_setup, "RECOVERY_DIR", str(tmp_path.resolve() / "missing-recovery"))
+    cfg = {"runtime_mode": mode}
+    monkeypatch.setattr(mcs_util, "load_config", lambda path=None: cfg if path is None else {})
+    monkeypatch.setattr(service_management, "standalone_py_problem", lambda *a, **k: None)
+    monkeypatch.setattr(service_management, "runtime_gate_errors", lambda *a, **k: [])
+    # Planning can calculate the immutable destination without creating it.
+    paths = mcs_setup._service_paths()
+    import run_log_install
+    expected = run_log_install.helper_path(paths.root, paths.recovery_dir,
+                                          checkout=paths.checkout)
+    assert not Path(expected).exists()
+    Path(paths.agents_dir).mkdir(exist_ok=True)
+    Path(paths.agents_dir, "ai.mcs.extract-drainer.plist").write_bytes(plistlib.dumps({
+        "Label": "ai.mcs.extract-drainer",
+        "ProgramArguments": ["/synthetic/old-python", "synthetic-worker.py"]}))
+    reached = []
+    def mutation_boundary(*a, **k):
+        reached.append(True)
+        assert dry
+        return 0
+    for name in ("sync_recovery", "retire_previous_runtime", "sync_scripts", "sync_agents",
+                 "sync_standalone_service", "sync_standalone_health", "sync_gateway"):
+        monkeypatch.setattr(service_management, name, mutation_boundary)
+    monkeypatch.setattr(service_management, "record_llm_slots", lambda *a, **k: None)
+    before = _tree(tmp_path)
+    result = mcs_setup.cmd_services(args)
+    assert result == (0 if dry else 1)
+    assert bool(reached) is dry
+    assert calls == [] and _tree(tmp_path) == before
 
 
 @pytest.mark.parametrize('held', [False, True])
