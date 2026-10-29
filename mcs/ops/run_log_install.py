@@ -17,11 +17,17 @@ class LogInstallError(RuntimeError):
     """A fixed deployment or migration failure that leaves original logs intact."""
 
 
-def _root(root):
-    root = os.path.abspath(os.fspath(root))
-    if os.path.realpath(root) != root:
+def _canonical_leaf(path):
+    path = Path(os.path.abspath(os.fspath(path)))
+    if path.is_symlink():
         raise LogInstallError('run_log_root_mismatch')
-    return root
+    # macOS exposes standard ancestor aliases such as /var -> /private/var.
+    # Only resolve the parent: the private leaf itself must never be a link.
+    return os.fspath(path.parent.resolve() / path.name)
+
+
+def _root(root):
+    return _canonical_leaf(root)
 
 
 def _checked(fd, *, private=True, directory=False):
@@ -169,8 +175,8 @@ def _migrate(root, receipt, raw):
 def helper_path(root, recovery_dir=None, *, checkout=None, require_installed=False):
     """Read an installed helper, or calculate its immutable path for a read-only plan."""
     root = _root(root)
-    recovery_dir = os.path.abspath(os.fspath(recovery_dir if recovery_dir is not None
-                                            else os.path.expanduser('~/.mcs-recovery')))
+    recovery_dir = _canonical_leaf(recovery_dir if recovery_dir is not None
+                                   else os.path.expanduser('~/.mcs-recovery'))
     try:
         try:
             with _directory(recovery_dir, write=False) as directory:
@@ -198,9 +204,10 @@ def migrate_installed(root, recovery_dir):
     """Re-import a verified finite tail without depending on the runtime checkout."""
     # Older installations have no pointer. Do not inspect or modify their
     # recovery directory, and do not impose new deployment checks on them.
-    if not os.path.lexists(os.path.join(recovery_dir, _pointer(os.path.abspath(root)))):
-        return {'scope': 'unavailable', 'legacy_writers_closed': False}
     root = _root(root)
+    recovery_dir = _canonical_leaf(recovery_dir)
+    if not os.path.lexists(os.path.join(recovery_dir, _pointer(root))):
+        return {'scope': 'unavailable', 'legacy_writers_closed': False}
     try:
         with _directory(recovery_dir) as directory:
             try:
@@ -215,6 +222,7 @@ def migrate_installed(root, recovery_dir):
 def prepare(root, checkout, recovery_dir, *, source=None, promote=False):
     """Publish canonical bytes and import verified prefixes before changing services."""
     root = _root(root)
+    recovery_dir = _canonical_leaf(recovery_dir)
     try:
         source = source_snapshot(checkout) if source is None else source
         if source is None:

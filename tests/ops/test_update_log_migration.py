@@ -143,6 +143,66 @@ def test_uninstalled_legacy_recovery_directory_is_untouched(tmp_path):
     assert recovery.stat().st_mode & 0o777 == 0o755
 
 
+def test_ancestor_aliases_use_one_canonical_namespace_without_plan_writes(tmp_path, monkeypatch):
+    root, checkout, recovery, _ = layout(tmp_path)
+    alias = tmp_path / 'ancestor-alias'
+    alias.symlink_to(tmp_path, target_is_directory=True)
+    alias_root, alias_recovery = alias / root.name, alias / recovery.name
+    before = sorted(str(path) for path in tmp_path.rglob('*'))
+    expected = deploy.helper_path(root, recovery, checkout=checkout)
+    assert deploy.helper_path(alias_root, alias_recovery, checkout=checkout) == expected
+    assert sorted(str(path) for path in tmp_path.rglob('*')) == before
+    put(root / 'data/run.log', b'synthetic alias prefix\n')
+    deploy.prepare(alias_root, checkout, alias_recovery)
+    assert deploy.helper_path(alias_root, alias_recovery, require_installed=True) == expected
+    pointer = recovery / deploy._pointer(str(root))
+    assert json.loads(pointer.read_text())['root'] == str(root)
+    assert len(list(recovery.glob('run_log-*.json'))) == 1
+    put(root / 'data/update.log', b'synthetic alias tail\n')
+    deploy.migrate_installed(alias_root, alias_recovery)
+    assert (root / 'data/mcs.log').read_bytes() == b'synthetic alias prefix\nsynthetic alias tail\n'
+    # The default recovery folder may have the same macOS ancestor alias.
+    canonical_home = tmp_path / 'canonical-home'
+    canonical_home.mkdir(mode=0o700)
+    alias_home = alias / canonical_home.name
+    monkeypatch.setenv('HOME', str(alias_home))
+    before = sorted(str(path) for path in tmp_path.rglob('*'))
+    planned = deploy.helper_path(alias_root, checkout=checkout)
+    assert Path(planned).parent == canonical_home / '.mcs-recovery'
+    assert sorted(str(path) for path in tmp_path.rglob('*')) == before
+
+
+@pytest.mark.parametrize('leaf', ['root', 'recovery'])
+@pytest.mark.parametrize('operation', ['plan', 'prepare', 'tail'])
+def test_private_leaf_symlinks_remain_rejected(tmp_path, leaf, operation):
+    root, checkout, recovery, _ = layout(tmp_path)
+    deploy.prepare(root, checkout, recovery)
+    link = tmp_path / 'private-leaf-link'
+    link.symlink_to(root if leaf == 'root' else recovery, target_is_directory=True)
+    target_root = link if leaf == 'root' else root
+    target_recovery = link if leaf == 'recovery' else recovery
+    before = {path.name: path.read_bytes() for path in recovery.iterdir()}
+    with pytest.raises(deploy.LogInstallError):
+        if operation == 'plan':
+            deploy.helper_path(target_root, target_recovery, checkout=checkout)
+        elif operation == 'prepare':
+            deploy.prepare(target_root, checkout, target_recovery)
+        else:
+            deploy.migrate_installed(target_root, target_recovery)
+    assert link.is_symlink()
+    assert {path.name: path.read_bytes() for path in recovery.iterdir()} == before
+    assert (root / 'data/mcs.log').read_bytes() == b''
+
+
+def test_checkout_ancestor_symlink_contract_is_unchanged(tmp_path):
+    root, checkout, recovery, _ = layout(tmp_path)
+    alias = tmp_path / 'checkout-alias'
+    alias.symlink_to(checkout, target_is_directory=True)
+    with pytest.raises(deploy.LogInstallError):
+        deploy.helper_path(root, recovery, checkout=alias)
+    assert not recovery.exists()
+
+
 @pytest.mark.parametrize('defect', ['symlink', 'hardlink', 'writable'])
 def test_untrusted_source_is_rejected_before_deployment(tmp_path, defect):
     root, checkout, recovery, source = layout(tmp_path)
