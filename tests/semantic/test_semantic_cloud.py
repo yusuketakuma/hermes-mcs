@@ -1,7 +1,13 @@
 """Synthetic backlog routing, accounting and run-lock loss regressions."""
+import hashlib
 import json
+import os
+import select
 import sqlite3
+import subprocess
+import sys
 import time
+from contextlib import contextmanager
 
 import pytest
 
@@ -20,6 +26,19 @@ def snapshot(led):
         led.db.execute("UPDATE messages SET first_seen=?", (time.time() - 601,))
         led.db.execute("UPDATE message_revisions SET observed_at=?", (time.time() - 601,))
         cloud_policy.capture_history_tx(led.db, "synthetic-resume", time.time())
+
+
+def continuous_snapshot(led):
+    command = "synthetic-continuous-resume"
+    meta = {"command_id": command, "actor": "synthetic", "reason": "synthetic"}
+    receipt = {**meta, "outcome": "applied", "control": "running"}
+    with led.db:
+        led.db.execute("BEGIN IMMEDIATE")
+        cloud_policy.capture_history_tx(led.db, command, time.time(), continuous=True)
+        led.db.execute("INSERT INTO artifacts(kind,content,meta) VALUES('cloud_control','running',?)",
+                       (json.dumps(meta),))
+        led.db.execute("INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
+                       (command, "synthetic-hash", None, None, "applied", json.dumps(receipt), time.time()))
 
 
 @pytest.fixture
@@ -577,13 +596,16 @@ def test_selection_uses_one_snapshot_but_fresh_guard_sees_revocation(cloud):
 @pytest.mark.parametrize("lane", ["semantic", "extract"])
 def test_selection_preserves_caller_cursor_and_transaction(cloud, lane):
     led, _, _, _ = cloud
+    progress = []
+    led.db.set_progress_handler(lambda: progress.append(1) and 0, 1)
     led.db.execute("BEGIN")
     led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
     outer = led.db.execute("SELECT 10 UNION ALL SELECT 20 UNION ALL SELECT 30")
     try:
         assert outer.fetchone()[0] == 10
         if lane == "semantic":
-            selected = semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 1)[0]
+            selected = semantic_drain._select_cloud_due(
+                led, "backlog", ("semantic",), False, 1, deadline=time.monotonic() + 60)[0]
         else:
             selected = extract_llm._select_pending(led, 1, None, None, False,
                 cloud_only=True, prioritize_patients=True)[0]
@@ -591,9 +613,240 @@ def test_selection_preserves_caller_cursor_and_transaction(cloud, lane):
         assert [row[0] for row in outer] == [20, 30]
         assert led.db.in_transaction
         assert led.db.execute("SELECT is_archived FROM patients WHERE project_id=1").fetchone()[0] == 1
+        before = len(progress)
+        led.db.execute("SELECT 1").fetchone()
+        assert len(progress) > before
     finally:
         outer.close()
+        led.db.set_progress_handler(None, 0)
         led.db.rollback()
+
+
+def test_cloud_selection_releases_run_lock_for_another_process(cloud, tmp_path, monkeypatch):
+    led, cfg, _, calls = cloud
+    lock_path = tmp_path / "synthetic-run.lock"
+    lock_fd = writer_lock.acquire_run_lock(str(lock_path))
+    assert lock_fd is not None
+    script = """\
+import fcntl, os, sys
+sys.stdin.readline()
+fd = os.open(sys.argv[1], os.O_WRONLY)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    print('acquired', flush=True)
+finally:
+    os.close(fd)
+"""
+    proc = subprocess.Popen([sys.executable, "-c", script, str(lock_path)],
+                            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    original = cloud_policy.history_target_ready
+    observed = []
+
+    def probe(db, pid, mid):
+        if not observed:
+            proc.stdin.write("go\n")
+            proc.stdin.flush()
+            ready, _, _ = select.select([proc.stdout], [], [], 10)
+            assert ready, "synthetic lock probe did not finish"
+            observed.append(proc.stdout.readline().strip())
+        return original(db, pid, mid)
+
+    monkeypatch.setattr(cloud_policy, "history_target_ready", probe)
+    monkeypatch.setattr(semantic_drain, "_process_job", lambda *args, **kwargs: "deferred")
+    try:
+        semantic_drain.run_due(led, cfg, {"errors": []}, time.monotonic() + 1200,
+                               lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
+        assert observed == ["acquired"]
+        assert proc.wait(timeout=10) == 0
+        assert writer_lock.acquire_run_lock(str(lock_path)) is None
+        assert not calls and not rows(led, "cloud_usage_reserve")
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+        proc.stdin.close()
+        proc.stdout.close()
+        proc.stderr.close()
+        os.close(lock_fd)
+
+
+def test_incomplete_cloud_selection_reports_hold_without_starting_work(cloud, tmp_path, monkeypatch):
+    led, cfg, job, calls = cloud
+    lock_fd = writer_lock.acquire_run_lock(str(tmp_path / "synthetic-run.lock"))
+    assert lock_fd is not None
+    deadline = time.monotonic() + 1200
+    observed = []
+
+    def interrupted(*args, **kwargs):
+        observed.append((kwargs.get("deadline"), kwargs.get("isolated")))
+        raise semantic_drain._CloudSelectionIncomplete("deadline")
+
+    monkeypatch.setattr(semantic_drain, "_select_cloud_due", interrupted)
+    monkeypatch.setattr(semantic_drain, "_process_job_inner",
+                        lambda *args, **kwargs: pytest.fail("incomplete selection started work"))
+    try:
+        out = semantic_drain.run_due(led, cfg, {"errors": []}, deadline,
+                                     lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
+        assert observed == [(deadline, True)]
+        assert out.get("cloud_selection_incomplete") is True
+        assert not out["done"] and not calls and not rows(led, "cloud_usage_reserve")
+        current = led.db.execute("SELECT state,attempts FROM fetch_jobs WHERE job_id=?", (job["job_id"],)).fetchone()
+        assert tuple(current) == ("pending", job["attempts"])
+    finally:
+        os.close(lock_fd)
+
+
+def test_cloud_selection_refill_reuses_original_deadline(cloud, tmp_path, monkeypatch):
+    led, cfg, _, calls = cloud
+    for mid in range(2, 12):
+        led.save_messages([_message(mid, body="完全合成の過去記録。")])
+        led.semantic_seed(1, [mid], {"source": "history_import"})
+    snapshot(led)
+    lock_fd = writer_lock.acquire_run_lock(str(tmp_path / "synthetic-run.lock"))
+    assert lock_fd is not None
+    deadline = time.monotonic() + 1200
+    original = semantic_drain._select_cloud_due
+    selections, attempted = [], []
+
+    def select_recorded(*args, **kwargs):
+        if kwargs.get("isolated"):
+            selections.append((kwargs.get("deadline"), kwargs.get("isolated")))
+        return original(*args, **kwargs)
+
+    @contextmanager
+    def held_prefix(_ledger, job_id):
+        attempted.append(job_id)
+        yield len(attempted) > 9
+
+    monkeypatch.setattr(semantic_drain, "_select_cloud_due", select_recorded)
+    monkeypatch.setattr(semantic_drain, "_job_lock", held_prefix)
+    monkeypatch.setattr(semantic_drain, "_process_job", lambda *args, **kwargs: "deferred")
+    try:
+        semantic_drain.run_due(led, cfg, {"errors": []}, deadline,
+                               lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
+        assert len(attempted) >= 10 and len(selections) >= 2
+        assert all(item == (deadline, True) for item in selections)
+        assert not calls and not rows(led, "cloud_usage_reserve")
+    finally:
+        os.close(lock_fd)
+
+
+def test_cloud_selection_refill_deadline_does_not_count_remaining_jobs(cloud, tmp_path, monkeypatch):
+    led, cfg, _, calls = cloud
+    for mid in range(2, 12):
+        led.save_messages([_message(mid, body="完全合成の過去記録。")])
+        led.semantic_seed(1, [mid], {"source": "history_import"})
+    snapshot(led)
+    lock_fd = writer_lock.acquire_run_lock(str(tmp_path / "synthetic-run.lock"))
+    assert lock_fd is not None
+    original = semantic_drain._select_cloud_due
+    selections, attempted, statements = [], [], []
+    deadline = time.monotonic() + 1200
+
+    def select_until_refill(*args, **kwargs):
+        if kwargs.get("isolated"):
+            selections.append(kwargs.get("deadline"))
+            if len(selections) == 2:
+                raise semantic_drain._CloudSelectionIncomplete("deadline")
+        return original(*args, **kwargs)
+
+    @contextmanager
+    def held_prefix(_ledger, job_id):
+        attempted.append(job_id)
+        yield False
+
+    monkeypatch.setattr(semantic_drain, "_select_cloud_due", select_until_refill)
+    monkeypatch.setattr(semantic_drain, "_job_lock", held_prefix)
+    monkeypatch.setattr(semantic_drain, "_process_job_inner",
+                        lambda *args, **kwargs: pytest.fail("incomplete refill started work"))
+    led.db.set_trace_callback(statements.append)
+    try:
+        out = semantic_drain.run_due(led, cfg, {"errors": []}, deadline,
+                                     lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
+        assert len(attempted) == 9 and selections == [deadline, deadline]
+        assert out.get("cloud_selection_incomplete") is True and out["left"] is None
+        assert not any("SELECT COUNT(*) FROM fetch_jobs WHERE kind IN (" in sql for sql in statements)
+        assert not calls and not rows(led, "cloud_usage_reserve") and not rows(led, "semantic_usage")
+    finally:
+        led.db.set_trace_callback(None)
+        os.close(lock_fd)
+
+
+@pytest.mark.parametrize("change", ["job", "source", "receipt", "v2_source", "v2_revision",
+                                     "v2_attachment_add", "v2_attachment_withdraw"])
+def test_cloud_selection_rechecks_changes_after_unlock(cloud, tmp_path, monkeypatch, change):
+    import semantic_store
+    led, cfg, job, calls = cloud
+    if change == "v2_attachment_withdraw":
+        with led.db:
+            led.db.execute("INSERT INTO attachments(message_id,file_id,name,state) VALUES(1,?,?,?)",
+                           ("synthetic-file", "synthetic.pdf", "pending"))
+    if change.startswith("v2_"):
+        continuous_snapshot(led)
+        original_scope = cloud_policy.history_thread_snapshot(led.db, 1, 1)
+        original_bundle = semantic_store.thread_bundle(led.db, 1, 1, [1])["source_fingerprint"]
+        assert original_scope and cloud_policy.history_thread_allowed(led.db, 1, 1)
+        assert cloud_policy.history_target_ready(led.db, 1, 1)
+    lock_path = tmp_path / "synthetic-run.lock"
+    lock_fd = writer_lock.acquire_run_lock(str(lock_path))
+    assert lock_fd is not None
+    original = semantic_drain._select_cloud_due
+    db_path = led.db.execute("PRAGMA database_list").fetchone()[2]
+    changed = []
+
+    def select_and_change(*args, **kwargs):
+        batch = original(*args, **kwargs)
+        if kwargs.get("isolated") and not changed and batch[0]:
+            with sqlite3.connect(db_path) as other:
+                if change == "job":
+                    payload = {**json.loads(job["payload"]), "synthetic_revision": 1}
+                    other.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                                  (json.dumps(payload), job["job_id"]))
+                elif change in ("source", "v2_source"):
+                    body = "完全合成の変更後本文。"
+                    html = f"<p>{body}</p>"
+                    other.execute("UPDATE messages SET body_text=?,body_html=?,content_hash=? "
+                                  "WHERE project_id=1 AND message_id=1",
+                                  (body, html, hashlib.sha256(html.encode()).hexdigest()))
+                elif change == "v2_revision":
+                    other.execute("INSERT INTO message_revisions(message_id,seq,content_hash,prev_content_hash,"
+                                  "body_state,observed_at) SELECT m.message_id,"
+                                  "(SELECT COALESCE(MAX(seq),1)+1 FROM message_revisions WHERE message_id=m.message_id),"
+                                  "m.content_hash,m.content_hash,m.body_state,? FROM messages m "
+                                  "WHERE m.project_id=1 AND m.message_id=1", (time.time() - 1200,))
+                elif change == "v2_attachment_add":
+                    other.execute("INSERT INTO attachments(message_id,file_id,name,state) VALUES(1,?,?,?)",
+                                  ("synthetic-file", "synthetic.pdf", "pending"))
+                elif change == "v2_attachment_withdraw":
+                    other.execute("UPDATE attachments SET state='withdrawn' WHERE message_id=1 AND file_id=?",
+                                  ("synthetic-file",))
+                else:
+                    other.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
+                                  ("cloud_history_scope", '{"version":1,"sources":{}}', "synthetic", "{}", time.time()))
+            changed.append(True)
+        return batch
+
+    monkeypatch.setattr(semantic_drain, "_select_cloud_due", select_and_change)
+    monkeypatch.setattr(semantic_drain, "_process_job_inner",
+                        lambda *args, **kwargs: pytest.fail("stale selection started work"))
+    try:
+        out = semantic_drain.run_due(led, cfg, {"errors": []}, time.monotonic() + 1200,
+                                     lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
+        assert changed
+        assert out.get("cloud_selection_changed") is True
+        if change.startswith("v2_"):
+            assert cloud_policy.history_thread_allowed(led.db, 1, 1)
+            assert cloud_policy.history_target_ready(led.db, 1, 1)
+            if change.startswith("v2_attachment_"):
+                assert cloud_policy.history_thread_snapshot(led.db, 1, 1) == original_scope
+                assert semantic_store.thread_bundle(led.db, 1, 1, [1])["source_fingerprint"] != original_bundle
+            else:
+                assert cloud_policy.history_thread_snapshot(led.db, 1, 1) != original_scope
+        assert not calls and not rows(led, "cloud_usage_reserve") and not rows(led, "semantic_usage")
+        current = led.db.execute("SELECT state,attempts FROM fetch_jobs WHERE job_id=?", (job["job_id"],)).fetchone()
+        assert tuple(current) == ("pending", job["attempts"])
+    finally:
+        os.close(lock_fd)
 
 
 @pytest.mark.parametrize("first", ["local", "cloud"])

@@ -3230,11 +3230,68 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
     return due, qc_jobs, arrivals, backfill, sched_mut
 
 
+class _CloudSelectionIncomplete(Exception):
+    """A cloud selection could not finish safely within the current pass."""
+
+
+def _cloud_selection_identity(db, project_id, message_id):
+    """Bind the receipt, source occurrences and attachments to one snapshot."""
+    import cloud_policy
+    anchor = db.execute('SELECT COALESCE(parent_id,message_id) FROM messages '
+                        'WHERE project_id=? AND message_id=? '
+                        'UNION ALL SELECT NULL UNION ALL SELECT NULL', (project_id, message_id))
+    try:
+        root = anchor.fetchone()[0]
+        if root is None:
+            return None
+        scope = cloud_policy.history_thread_snapshot(db, project_id, message_id)
+        bundle = semantic_store.thread_bundle(db, project_id, root, [message_id])
+        if scope is None or bundle is None:
+            return None
+        return mcs_util.payload_hash({'scope': scope, 'bundle': bundle['source_fingerprint']})
+    finally:
+        anchor.close()
+
+
 def _select_cloud_due(ledger, lane, kinds, qc_active, max_jobs, long_defers=None, *,
-                      excluded=(), turns=None, held_after=None):
+                      excluded=(), turns=None, held_after=None, deadline=None, isolated=False):
     """Choose active patients and their newest activity before archived cloud work."""
     import extract_llm
     import cloud_policy
+    if deadline is not None and time.monotonic() >= deadline:
+        raise _CloudSelectionIncomplete('deadline')
+    if isolated:
+        # The outer connection may have a caller-owned cancellation handler.
+        # Only the separate, read-only connection owns our deadline handler.
+        from pathlib import Path
+        from types import SimpleNamespace
+        if ledger.db.in_transaction:
+            raise _CloudSelectionIncomplete('active_transaction')
+        try:
+            path = ledger.db.execute('PRAGMA database_list').fetchone()[2]
+            if not path:
+                raise _CloudSelectionIncomplete('reader_unavailable')
+            before = os.stat(path)
+            reader = sqlite3.connect(Path(path).absolute().as_uri() + '?mode=ro',
+                                     uri=True, timeout=0)
+            try:
+                after = os.stat(path)
+                if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                    raise _CloudSelectionIncomplete('reader_changed')
+                reader.row_factory = sqlite3.Row
+                if deadline is not None:
+                    reader.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+                return _select_cloud_due(SimpleNamespace(db=reader), lane, kinds, qc_active,
+                    max_jobs, long_defers, excluded=excluded, turns=turns, held_after=held_after,
+                    deadline=deadline)
+            finally:
+                reader.close()
+        except sqlite3.OperationalError as error:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise _CloudSelectionIncomplete('deadline') from error
+            raise _CloudSelectionIncomplete('reader_unavailable') from error
+        except OSError as error:
+            raise _CloudSelectionIncomplete('reader_unavailable') from error
     cfg = load_config()
     settings = extract_llm._cloud_settings(cfg)
     if (lane != "backlog" or settings["mode"] != "on" or "semantic_backlog" not in settings["routes"]
@@ -3243,6 +3300,8 @@ def _select_cloud_due(ledger, lane, kinds, qc_active, max_jobs, long_defers=None
     semantic_scope = runtime_config(cfg)[0]["project_ids"]
     marks = ",".join("?" for _ in kinds)
     with cloud_policy.history_selection_check(ledger.db) as receipt_check:
+        if deadline is not None and time.monotonic() >= deadline:
+            raise _CloudSelectionIncomplete('deadline')
         cursor = ledger.db.execute(
         "SELECT j.* FROM fetch_jobs j LEFT JOIN patients p ON p.project_id=j.project_id "
         f"WHERE j.kind IN ({marks}) AND j.state='pending' AND j.next_try<=? "
@@ -3259,20 +3318,31 @@ def _select_cloud_due(ledger, lane, kinds, qc_active, max_jobs, long_defers=None
          json.dumps(settings["project_ids"]) if settings["project_ids"] is not None else None,
          json.dumps(settings["project_ids"]), json.dumps(settings["exclude_project_ids"]),
          json.dumps(semantic_scope) if semantic_scope is not None else None, json.dumps(semantic_scope)))
-        selected = []
+        selected, snapshots = [], {}
         try:
             for row in cursor:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise _CloudSelectionIncomplete('deadline')
                 if (cloud_policy.history_target_ready(ledger.db, row["project_id"], row["message_id"])
                         and receipt_check(row["project_id"], row["message_id"])):
+                    snapshot = _cloud_selection_identity(ledger.db, row["project_id"], row["message_id"])
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise _CloudSelectionIncomplete('deadline')
+                    if snapshot is None:
+                        continue
+                    snapshots[row['job_id']] = snapshot
                     selected.append(row)
                     if len(selected) >= min(512, max_jobs + max(8, settings["max_concurrency"] * 2)):
                         break
         finally:
             cursor.close()
+        if deadline is not None and time.monotonic() >= deadline:
+            raise _CloudSelectionIncomplete('deadline')
     semantic = [r for r in selected if r["kind"] == JOB_KIND]
     arrivals = [r for r in semantic if runtime.parse_payload(r).get('eligible')]
     backfill = [r for r in semantic if not runtime.parse_payload(r).get('eligible')]
-    return (selected, [r for r in selected if r["kind"] == QC_JOB_KIND], arrivals, backfill, {"turn": None})
+    return (selected, [r for r in selected if r["kind"] == QC_JOB_KIND], arrivals, backfill,
+            {"turn": None, "cloud_snapshots": snapshots})
 
 
 def _refill_due(ledger, lane, kinds, qc_active, max_jobs, long_defers,
@@ -3311,6 +3381,9 @@ def _refill_due(ledger, lane, kinds, qc_active, max_jobs, long_defers,
         try:
             batch = select(ledger, lane, kinds, qc_active, remaining,
                                 long_defers, excluded=inspected, turns=turns, held_after=held_after)
+        except _CloudSelectionIncomplete:
+            out['cloud_selection_incomplete'] = True
+            return
         except _SchedulerUnavailable:
             out['long_defer_reservation_failed'] = True
             return
@@ -3688,12 +3761,19 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # non-eligible lane.
     hold_lane = lane or 'combined'
     held_after = initial_sched.get('payload_hold_cursors', {}).get(hold_lane)
+    def select_cloud(*args, **kwargs):
+        with unlocked_transport(ledger.db, run_lock_fd, wait_s=reacquire_s, deadline=deadline):
+            return _select_cloud_due(*args, **kwargs, deadline=deadline,
+                                     isolated=run_lock_fd is not None)
     try:
         cursor_arg = {'held_after': held_after} if held_after is not None else {}
-        selector = (_select_cloud_due if cloud_only else
+        selector = (select_cloud if cloud_only else
                     partial(_select_due, prioritize_patients=True) if prioritize_patients else _select_due)
         first_batch = selector(ledger, lane, kinds, qc_active, max_jobs, long_defers,
                                   **cursor_arg)
+    except _CloudSelectionIncomplete:
+        out['cloud_selection_incomplete'] = True
+        return out
     except _SchedulerUnavailable:
         result['errors'].append('semantic: long_defer_reservation_failed')
         out['long_defer_reservation_failed'] = True
@@ -3736,6 +3816,31 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 out["lock_skipped"][job["kind"]] = \
                     out["lock_skipped"].get(job["kind"], 0) + 1
                 continue
+            if cloud_only:
+                # Selection ran without the writer lock. Re-read the full job
+                # and its live admission before any transition or model call.
+                import cloud_policy
+                import extract_llm
+                fresh = ledger.db.execute('SELECT * FROM fetch_jobs WHERE job_id=?',
+                                          (job['job_id'],)).fetchone()
+                live_cfg = load_config(cfg_path) if cfg_path is not None else load_config()
+                live_settings = extract_llm._cloud_settings(live_cfg)
+                live_scfg, live_errors = runtime_config(live_cfg)
+                project = job['project_id']
+                if (time.monotonic() >= deadline or fresh is None or tuple(fresh) != tuple(job) or live_errors
+                        or live_scfg['mode'] == 'off' or live_settings['mode'] != 'on'
+                        or 'semantic_backlog' not in live_settings['routes']
+                        or not cloud_policy.selected_key()
+                        or live_settings['project_ids'] is not None and project not in live_settings['project_ids']
+                        or project in live_settings['exclude_project_ids']
+                        or live_scfg['project_ids'] is not None and project not in live_scfg['project_ids']
+                        or not cloud_policy.history_target_ready(ledger.db, project, job['message_id'])
+                        or not mutation.get('cloud_snapshots', {}).get(job['job_id'])
+                        or mutation['cloud_snapshots'][job['job_id']] != _cloud_selection_identity(
+                            ledger.db, project, job['message_id'])):
+                    out['cloud_selection_changed'] = True
+                    continue
+                job = fresh
             if job['kind'] == JOB_KIND:
                 import semantic_intake_hold
                 try:
@@ -4067,10 +4172,11 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         except Exception:
             out["degraded_notices"] = 0
             result["errors"].append("semantic: degraded_scan_failed")
-    kind_ph = ",".join("?" * len(kinds))
-    out["left"] = ledger.db.execute(
-        f"SELECT COUNT(*) FROM fetch_jobs WHERE kind IN ({kind_ph}) "
-        "AND state='pending' AND next_try<=?", (*kinds, time.time())).fetchone()[0]
+    if not out.get('cloud_selection_incomplete'):
+        kind_ph = ",".join("?" * len(kinds))
+        out["left"] = ledger.db.execute(
+            f"SELECT COUNT(*) FROM fetch_jobs WHERE kind IN ({kind_ph}) "
+            "AND state='pending' AND next_try<=?", (*kinds, time.time())).fetchone()[0]
     out["elapsed_s"] = time.perf_counter() - drain_started
     out["observation"] = _observation(
         started_wall, time.time(), cfg_generation, lane, out["job_metrics"])
