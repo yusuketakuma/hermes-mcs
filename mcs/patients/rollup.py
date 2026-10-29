@@ -145,18 +145,18 @@ def _attachment_count(db, project_id):
                       "WHERE m.project_id=?", (project_id,)).fetchone()[0]
 
 
-def _empty_body_proofs(db, project_id, *, html_available, message_ids=None, discard=False):
+def _empty_body_proofs(db, project_id, *, html_available, message_ids=None, discard=False, deadline=None):
     """Stream bounded empty-body HTML and retain only per-message proof results."""
     proofs = {}
     with contextlib.closing(_empty_body_proof_rows(
-            db, project_id, html_available=html_available, message_ids=message_ids)) as rows:
+            db, project_id, html_available=html_available, message_ids=message_ids, deadline=deadline)) as rows:
         for mid, valid in rows:
             if not discard:
                 proofs[mid] = valid
     return proofs
 
 
-def _empty_body_proof_rows(db, project_id, *, html_available, message_ids=None, ordered=False):
+def _empty_body_proof_rows(db, project_id, *, html_available, message_ids=None, ordered=False, deadline=None):
     """Yield bounded source proofs, optionally in the rollup message order."""
     if not html_available:
         return
@@ -170,6 +170,7 @@ def _empty_body_proof_rows(db, project_id, *, html_available, message_ids=None, 
                         params)
     try:
         for mid, content_hash, source_html in cursor:
+            _check_deadline(deadline)
             valid = False
             if isinstance(source_html, str) and isinstance(content_hash, str):
                 try:
@@ -347,16 +348,17 @@ def _current_extraction_page(db, project_id, message_ids):
     return arts
 
 
-def _rollup_source_pages(db, project_id, cursor, first_page, cfg, *, html_available):
+def _rollup_source_pages(db, project_id, cursor, first_page, cfg, *, html_available, deadline=None):
     """Consume one source page at a time on the caller's existing snapshot."""
     expected_model = None
     if isinstance(cfg, dict):
         import extract_llm
         expected_model = extract_llm.resolved_model(cfg)
     with contextlib.closing(_empty_body_proof_rows(
-            db, project_id, html_available=html_available, ordered=True)) as proof_rows:
+            db, project_id, html_available=html_available, ordered=True, deadline=deadline)) as proof_rows:
         page = first_page
         while page:
+            _check_deadline(deadline)
             ids = [row['message_id'] for row in page]
             arts = _current_extraction_page(db, project_id, ids)
             refs = _clinical_artifact_refs(db, project_id, arts, ids)
@@ -611,13 +613,24 @@ def _close_rollup_cursor(cursor):
             raise
 
 
-def build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=None) -> dict:
+class RollupDeadlineExceeded(TimeoutError):
+    pass
+
+
+def _check_deadline(deadline):
+    if deadline is not None and time.monotonic() >= deadline:
+        raise RollupDeadlineExceeded("rollup_deadline_exceeded")
+
+
+def build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=None, deadline=None) -> dict:
     # All source, artifact and progress checks must observe the same snapshot.
     # Releasing a nested savepoint leaves the caller's transaction untouched.
+    _check_deadline(deadline)
     db.execute('SAVEPOINT rollup_build_read')
     try:
         with contextlib.ExitStack() as resources:
-            result = _build_rollup(db, project_id, request_limit=request_limit, cfg=cfg, resources=resources)
+            result = _build_rollup(db, project_id, request_limit=request_limit, cfg=cfg, resources=resources, deadline=deadline)
+            _check_deadline(deadline)
     except BaseException as error:
         try:
             db.execute('RELEASE rollup_build_read')
@@ -631,7 +644,7 @@ def build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=Non
         return result
 
 
-def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=None, resources) -> dict:
+def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=None, resources, deadline=None) -> dict:
     patient = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (project_id,)).fetchone()
     patient_name = patient[0] if patient else None
     measurement_complete, fetch_status, history_status, pending_jobs = _acquisition_state(db, project_id)
@@ -643,7 +656,7 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
     # The original snapshot checked empty-body proofs before reading source
     # rows and choosing generated_at. Repeat that order without retaining the
     # patient-wide proof map; the later page read supplies per-message proofs.
-    _empty_body_proofs(db, project_id, html_available="body_html" in message_columns, discard=True)
+    _empty_body_proofs(db, project_id, html_available="body_html" in message_columns, discard=True, deadline=deadline)
     message_sql = f"""
       SELECT message_id, project_id, posted_at, posted_at_ts, body_text, sender_id, sender_name, sender_type,
              parent_id, {refreshed} AS updated_seen, body_state, content_hash
@@ -658,6 +671,7 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
         initial_cursor = db.execute(message_sql, (project_id,))
         initial_read.callback(_close_rollup_cursor, initial_cursor)
         while page := initial_cursor.fetchmany(64):
+            _check_deadline(deadline)
             if not msg_count:
                 newest_at, newest_ts = page[0]['posted_at'], page[0]['posted_at_ts']
             msg_count += len(page)
@@ -728,9 +742,11 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
     # source bodies and extraction blobs remain in their current page.
     msgs = []
     pages = _rollup_source_pages(db, project_id, cursor, first_page, cfg,
-                                 html_available="body_html" in message_columns)
+                                 html_available="body_html" in message_columns,
+                                 **({"deadline": deadline} if deadline is not None else {}))
     with contextlib.closing(pages):
         for m, blobs, decoded, selected_kind, bound_source, artifact_refs, ref_mids, empty_proofs in pages:
+            _check_deadline(deadline)
             msgs.append({key: m[key] for key in ("message_id", "posted_at", "posted_at_ts", "sender_id",
                                                  "parent_id", "body_state", "updated_seen")})
             ts = m["posted_at_ts"] or 0
@@ -1160,18 +1176,21 @@ def _newest_source_ts(db, project_id: int) -> float:
         " WHERE project_id=:p), 0))", {"p": project_id}).fetchone()[0]
 
 
-def _message_source_signature(db, project_id, now):
+def _message_source_signature(db, project_id, now, *, deadline=None):
     """Rollup inputs and deletion heuristic, excluding mere message observation time."""
+    _check_deadline(deadline)
     with _freshness_snapshot(db):
         try:
-            return _message_source_signature_snapshot(db, project_id, now)
+            value = _message_source_signature_snapshot(db, project_id, now, deadline=deadline)
+            _check_deadline(deadline)
+            return value
         except sqlite3.Error as error:
             if _invalid_sqlite_text(error):
                 raise RollupSourceUnverified('rollup_source_utf8_unverified') from None
             raise
 
 
-def _extraction_source_signature(db, project_id):
+def _extraction_source_signature(db, project_id, *, deadline=None):
     """Bind extraction rows without materializing large TEXT/BLOB columns."""
     # Incremental blobs address SQLite rowids, so reject an unexpected schema
     # rather than hash a different occurrence. Preserve the existing TEXT
@@ -1212,6 +1231,7 @@ def _extraction_source_signature(db, project_id):
           ('extract_v1','extract_llm','canonical_projection','semantic_facts_v4')
         ORDER BY a.artifact_id
     """, (project_id,)):
+        _check_deadline(deadline)
         if type(row[0]) is not int or row[0] != row[-1]:
             raise RollupSourceUnverified('rollup_artifact_rowid_unverified')
         for value in row[:4]:
@@ -1242,6 +1262,7 @@ def _extraction_source_signature(db, project_id):
                 try:
                     with db.blobopen('artifacts', field, row[0], readonly=True) as blob:
                         while remaining:
+                            _check_deadline(deadline)
                             chunk = blob.read(min(32768, remaining))
                             if not chunk or len(chunk) > remaining:
                                 raise RollupSourceUnverified('rollup_artifact_blob_truncated')
@@ -1273,7 +1294,7 @@ def _invalid_sqlite_text(error):
             and str(error).startswith('Could not decode to UTF-8 column '))
 
 
-def _body_source_fingerprint(db, rowid, body_type):
+def _body_source_fingerprint(db, rowid, body_type, *, deadline=None):
     """Hash one SQLite body in bounded byte chunks on the borrowed snapshot."""
     digest = hashlib.sha256()
     if body_type == 'null':
@@ -1286,6 +1307,7 @@ def _body_source_fingerprint(db, rowid, body_type):
         try:
             with db.blobopen('messages', 'body_text', rowid, readonly=True) as body:
                 while chunk := body.read(32768):
+                    _check_deadline(deadline)
                     decoder.decode(chunk, final=False)
                     digest.update(chunk)
                 decoder.decode(b'', final=True)
@@ -1296,7 +1318,7 @@ def _body_source_fingerprint(db, rowid, body_type):
     return digest.hexdigest()
 
 
-def _message_source_signature_snapshot(db, project_id, now):
+def _message_source_signature_snapshot(db, project_id, now, *, deadline=None):
     from registered_data import registered_data
     if db.execute('PRAGMA encoding').fetchone()[0].upper() != 'UTF-8':
         raise RollupSourceUnverified('rollup_encoding_unverified')
@@ -1329,13 +1351,14 @@ def _message_source_signature_snapshot(db, project_id, now):
         m.updated_seen
       FROM messages m WHERE m.project_id=? ORDER BY m.posted_at_ts DESC, m.message_id DESC
     """, (project_id,)):
-        rows.append((*row[:4], _body_source_fingerprint(db, row[4], row[12]), *row[5:]))
+        _check_deadline(deadline)
+        rows.append((*row[:4], _body_source_fingerprint(db, row[4], row[12], deadline=deadline), *row[5:]))
     html_available = any(row[1] == "body_html" for row in db.execute("PRAGMA table_info(messages)"))
-    empty_proofs = _empty_body_proofs(db, project_id, html_available=html_available)
+    empty_proofs = _empty_body_proofs(db, project_id, html_available=html_available, deadline=deadline)
     empty_sources = [(r[0], empty_proofs.get(r[0], False))
                      for r in rows if r[11] == "full" and r[13] == 1]
     payload = (tuple(patient) if patient else None, _acquisition_state(db, project_id), [tuple(a) for a in context],
-               _extraction_source_signature(db, project_id),
+               _extraction_source_signature(db, project_id, deadline=deadline),
                registered_data(db, "aggregate", project_id, None),
                [tuple(r[:-1]) for r in rows],
                _attachment_count(db, project_id), empty_sources,
@@ -1499,31 +1522,36 @@ class RollupSourceChanged(sqlite3.OperationalError):
     """A rollup was discarded because its source changed while it was built."""
 
 
-def rebuild(ledger, project_id: int, *, cfg=None) -> int:
+def rebuild(ledger, project_id: int, *, cfg=None, deadline=None) -> int:
     """Atomic replace — a crash between delete and insert must not leave
     a patient with NO rollup (Oracle B22). An unchanged rebuild (all
     but generated_at equal) keeps the content and id; it only advances
     meta.generated_at when a newer source would otherwise keep it dirty."""
     if ledger.db.in_transaction:
         raise sqlite3.OperationalError("inference_rollup_transaction_owned")
+    _check_deadline(deadline)
     cfg = copy.deepcopy(cfg)
     config = config_generation(cfg)
+    timed = {"deadline": deadline} if deadline is not None else {}
     # Guard all inputs, including withdrawal witnesses, without holding a writer during aggregation.
     data_version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
     changes = ledger.db.total_changes
     ref_generation = generation_signature(ledger.db)
-    message_sig = _message_source_signature(ledger.db, project_id, time.time())
+    message_sig = _message_source_signature(ledger.db, project_id, time.time(), **timed)
     has_projection = _has_projection(ledger.db, project_id)
     ref_sig = ledger.db.execute(_REF_SIG_SQL.format(pid="?"),
                                 (REF_KIND, project_id)).fetchone()[0]
-    d = build_rollup(ledger.db, project_id, cfg=cfg)
+    d = build_rollup(ledger.db, project_id, cfg=cfg, **timed)
+    _check_deadline(deadline)
     valid_until = _completion_valid_until(ledger.db, project_id, d["generated_at"], d)
     # compare in JSON space (tuples→lists, int keys→str) like the stored row
     new = json.loads(json.dumps(d, ensure_ascii=False))
     new.pop("generated_at", None)
     with ledger.db:
+        _check_deadline(deadline)
         if not ledger.db.in_transaction:
             ledger.db.execute("BEGIN IMMEDIATE")
+        _check_deadline(deadline)
         if (ledger.db.total_changes != changes
                 or ledger.db.execute("PRAGMA data_version").fetchone()[0] != data_version):
             raise RollupSourceChanged("inference_rollup_source_changed")
@@ -1568,7 +1596,9 @@ def rebuild(ledger, project_id: int, *, cfg=None) -> int:
                             "UPDATE artifacts SET meta=? WHERE artifact_id=?",
                             (json.dumps(om), old[0]["artifact_id"]))
                         ledger.bump_inference_analysis_epoch_tx()
+                    _check_deadline(deadline)
                     return old[0]["artifact_id"]
+        _check_deadline(deadline)
         ledger.db.execute(
             "DELETE FROM artifacts WHERE kind=? AND project_id=? AND "
             + inference.current_meta_pred("meta"),
@@ -1591,6 +1621,7 @@ def rebuild(ledger, project_id: int, *, cfg=None) -> int:
                          "med_ref_sig": ref_sig,
                          "med_ref_generation": ref_generation}), time.time()))
         ledger.bump_inference_analysis_epoch_tx()
+        _check_deadline(deadline)
     return cur.lastrowid
 
 
@@ -1617,7 +1648,7 @@ class RollupScan:
     rechecked: int = 0
 
 
-def scan_dirty_projects(ledger, *, now=None, cfg=None) -> RollupScan:
+def scan_dirty_projects(ledger, *, now=None, cfg=None, deadline=None) -> RollupScan:
     """Check markers at read snapshots, rechecking clean candidates once on external writes.
 
     Clean is valid at the observed snapshot, not after its release. Rebuild's
@@ -1640,7 +1671,7 @@ def scan_dirty_projects(ledger, *, now=None, cfg=None) -> RollupScan:
     def check(project_id, check_now):
         try:
             with _freshness_snapshot(db):
-                if (_dirty_project_snapshot(db, project_id, check_now)
+                if (_dirty_project_snapshot(db, project_id, check_now, **({"deadline": deadline} if deadline is not None else {}))
                         or (isinstance(cfg, dict) and not _config_current(db, project_id, cfg))):
                     dirty.add(project_id)
         except sqlite3.OperationalError as error:
@@ -1658,8 +1689,16 @@ def scan_dirty_projects(ledger, *, now=None, cfg=None) -> RollupScan:
                           tuple(pid for pid in candidates if pid in unknown), bool(unknown), counts, rechecked)
 
     observed_now = time.time() if now is None else now
-    for project_id in ids:
-        check(project_id, observed_now)
+    checked = set()
+    try:
+        for project_id in ids:
+            _check_deadline(deadline)
+            check(project_id, observed_now)
+            _check_deadline(deadline)
+            checked.add(project_id)
+    except RollupDeadlineExceeded:
+        hold(set(ids) - checked, "deadline")
+        return result(ids)
     if db.total_changes != changes:
         candidates = list(dict.fromkeys([*ids, *_rollup_patient_ids(db)]))
         hold(set(candidates) - dirty, "same_connection_changed")
@@ -1672,10 +1711,20 @@ def scan_dirty_projects(ledger, *, now=None, cfg=None) -> RollupScan:
         closing_ids = _rollup_patient_ids(db)
         hold(initial - set(closing_ids), "patient_removed")
         closing_now = time.time() if now is None else now
-        for project_id in ids:
-            if project_id not in dirty and project_id not in unknown:
-                rechecked += 1
-                check(project_id, closing_now)
+        hold(set(closing_ids) - initial, "new_patient")
+        candidates = set(ids) - dirty - unknown
+        checked = set()
+        try:
+            for project_id in ids:
+                if project_id in candidates:
+                    _check_deadline(deadline)
+                    rechecked += 1
+                    check(project_id, closing_now)
+                    _check_deadline(deadline)
+                    checked.add(project_id)
+        except RollupDeadlineExceeded:
+            hold(candidates - checked, "deadline")
+            return result(list(dict.fromkeys([*ids, *closing_ids])))
     terminal_ids = _rollup_patient_ids(db)
     candidates = list(dict.fromkeys([*ids, *closing_ids, *terminal_ids]))
     for current in (set(closing_ids), set(terminal_ids)):
@@ -1711,7 +1760,7 @@ def _rollup_patient_ids(db):
         "SELECT project_id FROM patients ORDER BY project_id")]
 
 
-def _dirty_project_snapshot(db, project_id, now):
+def _dirty_project_snapshot(db, project_id, now, *, deadline=None):
     x = db.execute("""
       SELECT p.project_id, r.g AS gen, r.period_version, r.next_check,
         r.projection_version, r.message_sig, r.valid_until,
@@ -1770,7 +1819,7 @@ def _dirty_project_snapshot(db, project_id, now):
             or (x["art_ts"] or 0) > x["gen"]
             or not isinstance(x["message_sig"], str)
             or x["message_sig"] != _message_source_signature(
-                db, project_id, now))
+                db, project_id, now, **({"deadline": deadline} if deadline is not None else {})))
 
 
 def rebuild_many(ledger, project_ids, *, deadline: float | None = None,
@@ -1780,14 +1829,16 @@ def rebuild_many(ledger, project_ids, *, deadline: float | None = None,
     Without a collector, preserve the existing exception behavior. A collected
     race or unverified source was not committed and remains eligible for a later scan.
     """
-    if deadline is not None and time.monotonic() >= deadline:
-        return 0
+    project_ids = list(project_ids)
     n = 0
-    for pid in project_ids:
-        if deadline is not None and time.monotonic() >= deadline:
-            break
+    for index, pid in enumerate(project_ids):
         try:
-            rebuild(ledger, pid, cfg=cfg)
+            _check_deadline(deadline)
+            rebuild(ledger, pid, cfg=cfg, **({"deadline": deadline} if deadline is not None else {}))
+        except RollupDeadlineExceeded:
+            if source_unknown is not None:
+                source_unknown.extend(project_ids[index:])
+            break
         except RollupSourceChanged:
             if source_changed is None:
                 raise

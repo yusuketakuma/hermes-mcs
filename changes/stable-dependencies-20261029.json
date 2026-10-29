@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "実行環境と検証ツールの依存を更新",
+  "summary": "standaloneのmultidictを7.2.1へ更新します。検証ツールはpytest 9.2.0、Ruff 0.17.3、uv 0.13.6、CIのPython準備はsetup-python 7.1.0へ更新します。",
+  "upgrade": "standaloneでは通常の更新時に固定した依存が導入されます。Python 3.14とHermesの固定コミットは維持します。",
+  "details": [
+    "2026-10-29に公式の配布情報で最新安定版を照合し、固定バージョンとCI・ローカルの指定を合わせます。"
+  ],
+  "refs": [
+    "deployment/requirements-standalone.txt",
+    "Makefile",
+    ".github/workflows/ci.yml",
+    ".github/workflows/release-notes.yml",
+    "integration/test_pinned_sdk_versions.py"
+  ]
+}

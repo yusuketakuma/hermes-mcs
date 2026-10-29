@@ -1405,6 +1405,11 @@ def _quality_store_answers(ledger, pid, identity, claim, answers, current, thres
                 writes += 1
                 if not _quality_failed(ledger.db, pid, identity):
                     raise ValueError("patient_summary_quality_failure_unverified")
+                # Negative evidence also invalidates an earlier accepted skip.
+                epoch = ledger.db.execute("SELECT 1 FROM fetch_jobs WHERE kind='semantic_sched' "
+                                          "AND project_id=0 AND message_id=0").fetchone()
+                ledger.bump_inference_analysis_epoch_tx()
+                writes += int(epoch is not None)
             if reservation is not None:
                 import semantic_runtime
                 writes += semantic_runtime.patient_summary_resolve_request_tx(

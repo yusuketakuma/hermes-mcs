@@ -205,9 +205,14 @@ def stage_derive(ledger, result, deadline, cfg=None,
         _require_closed_transaction(ledger, result)
 
     transaction_pending()
+    import snapshots
+    # Keep the existing run cap and verification policy. Derived work yields
+    # early enough for size-based snapshot validation and the existing tail.
+    source_db = ledger.db.execute("PRAGMA database_list").fetchone()[2]
+    work_deadline = deadline - snapshots.snapshot_verify_timeout_s(source_db) - 30
     try:
         import extract
-        ex = extract.run_pending(ledger, deadline=deadline - 45)
+        ex = extract.run_pending(ledger, deadline=work_deadline)
         result["extracted"] = ex["done"]
         result["extracted_pids"] = ex["pids"]
         if ex.get("reconcile_error") is not None:
@@ -218,7 +223,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
     transaction_pending()
     try:
         import extract_llm
-        remain = (deadline - time.monotonic()) - 45
+        remain = work_deadline - time.monotonic()
         budget = min(llm_budget_cap, max(0, remain))
         idle = {"done": 0, "failed": 0, "left": -1, "pids": []}
         # This tick's arrivals plus earlier notified arrivals a busy or
@@ -230,7 +235,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
                 (time.time() - REALTIME_CARRY_S,))}
         if budget < extract_llm._MIN_CALL_S or not realtime:
             result["extract_llm"] = idle
-        elif extract_llm.pinned_slot_busy(deadline):
+        elif extract_llm.pinned_slot_busy(work_deadline):
             # Hermes is using realtime; the arrival stays durable for
             # another pass while ingestion and background keep moving.
             result["extract_llm"] = {**idle, "skipped_busy": True}
@@ -264,7 +269,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
         if invalid:
             result["errors"].append(f"drug_map: {error}")
         result["drug_map"] = drug_map.derive(
-            ledger, dictionary, deadline=deadline - 30)
+            ledger, dictionary, deadline=work_deadline)
         if invalid:
             result["drug_map"]["status"] = "invalid"
         elif result["drug_map"]["status"] == "partial":
@@ -282,7 +287,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
         touched |= set(result.get("drug_map", {}).get("pids", []))
         for k in ("cmd_imports", "trickle_imports"):
             touched |= {c["pid"] for c in result.get(k, [])}
-        scan = rollup.scan_dirty_projects(ledger, cfg=cfg)
+        scan = rollup.scan_dirty_projects(ledger, cfg=cfg, deadline=work_deadline)
         touched |= set(scan.dirty)
         touched.difference_update(scan.unknown)
         result["rollup_scan"] = {"state": "unknown" if scan.incomplete else "checked",
@@ -294,7 +299,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
         source_changed = []
         source_unknown = []
         result["rollups"] = rollup.rebuild_many(
-            ledger, touched, deadline=deadline - 30, source_changed=source_changed,
+            ledger, touched, deadline=work_deadline, source_changed=source_changed,
             source_unknown=source_unknown, cfg=cfg)
         if source_changed:
             result["rollup_source_changed"] = len(source_changed)
@@ -311,7 +316,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
     try:
         import mcs_signals
         result["signals"] = mcs_signals.evaluate(
-            ledger, cfg or _config(), deadline=deadline)
+            ledger, cfg or _config(), deadline=work_deadline)
         result["errors"].extend(
             f"signals: {e}" for e in result["signals"].get("errors") or [])
     except Exception as e:
