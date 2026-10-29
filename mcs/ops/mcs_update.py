@@ -94,7 +94,7 @@ except ImportError:
 from mcs_requests import read_scheduled_receipt  # noqa: E402
 
 from mcs_util import HOME, REPO
-from writer_lock import UPDATE_MARKER_NAME, acquire_run_lock
+from writer_lock import RUN_LOCK_POLL_S, UPDATE_MARKER_NAME, acquire_run_lock
 from service_management import launchd_bootstrap
 from safe_io import atomic_write  # noqa: E402
 from mcs_util import file_sha256 as _file_sha256  # noqa: E402
@@ -324,13 +324,19 @@ def acquire_update_lock() -> int | None:
 
 
 def _acquire_run_lock_wait(tries: int = RUN_LOCK_TRIES) -> int | None:
-    for i in range(tries):
+    if not range(tries):
+        return None
+    deadline = time.monotonic() + (tries - 1) * RUN_LOCK_INTERVAL
+    while True:
         fd = acquire_run_lock(RUN_LOCK)
         if fd is not None:
             return fd
-        if i + 1 < tries:
-            time.sleep(RUN_LOCK_INTERVAL)
-    return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        time.sleep(min(RUN_LOCK_POLL_S, remaining))
+        if time.monotonic() > deadline:
+            return None
 
 
 # ------------------------------------------------------------------ git
