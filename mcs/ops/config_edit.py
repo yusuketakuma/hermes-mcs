@@ -71,7 +71,7 @@ def _edit_lock(path=None):
         os.close(fd)
 
 
-def apply(changes: dict, defaults: dict | None = None) -> tuple[dict | None, list[str]]:
+def apply(changes: dict, defaults: dict | None = None, *, expected: dict | None = None) -> tuple[dict | None, list[str]]:
     """Validate the whole edited config and atomically save against its locked base.
 
     ``defaults`` are set only where the locked config has no value yet.
@@ -82,6 +82,8 @@ def apply(changes: dict, defaults: dict | None = None) -> tuple[dict | None, lis
     with _edit_lock():
         raw, base = _snapshot()
         cfg = _parse(raw)
+        if expected is not None and cfg != expected:
+            raise ConfigConflict("config_changed")
         for dotted, value in changes.items():
             section, key = dotted.split(".", 1)
             block = cfg.get(section, {})

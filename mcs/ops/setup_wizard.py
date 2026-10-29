@@ -544,9 +544,10 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
     digest = cfg.get("daily_digest") or {}
     semantic, _ = (runtime_config(cfg) if key_presence is None else
                    semantic_config(cfg, key_present=key_presence.get("jev") is True))
-    cloud_key = (bool(cloud_policy.api_key()) if key_presence is None
+    cloud_key = (bool(cloud_policy.selected_key()) if key_presence is None
                  else key_presence.get("anthropic") is True)
-    cloud, _ = cloud_policy.cloud_config(cfg, key_present=cloud_key)
+    cloud, _ = (cloud_policy.resolve_settings(cfg) if key_presence is None else
+                cloud_policy.cloud_config(cfg, key_present=cloud_key or key_presence.get("openai") is True))
     print("\n【保存前の確認】設定した送り先と、この後に保存する内容を確認してください。"
           "\n  ここで中止すると、今回の設定・認証情報・辞書は保存しません。")
     print(f"  実行方法: {shown(mode)}"
@@ -579,17 +580,18 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
         print("  外部Jev追加解析: 無効（有効な機能と送信予算が必要です）")
     print("  Jev設定: " + ", ".join(f"{key}={shown(semantic[key])}" for key in features)
           + f" / 1日の要求上限 {semantic['daily_request_budget']} / 対象 {project_scope}")
+    print(f"  AI利用先: {cloud['provider']} / モデル {cloud['model']} / API別上限 {cloud['provider_budgets']}")
     cloud_scope = "全対象" if cloud["project_ids"] is None else shown(cloud["project_ids"])
     if cloud["mode"] in ("on", "shadow") and cloud_key:
-        print(f"  Anthropic追加処理: {cloud['mode']} / 対象 {cloud_scope}。患者コンテキストと対象の再抽出で、"
-              "患者名を含む投稿本文・参考文脈を匿名化せずAnthropic APIへ送信します。通常のAPI保持条件が適用されます。"
+        print(f"  外部AI追加処理: {cloud['mode']} / 対象 {cloud_scope}。患者コンテキストと対象の再抽出で、"
+              "患者名を含む投稿本文・参考文脈を匿名化せず選択したAnthropicまたはOpenAIのAPIへ送信します。通常のAPI保持条件が適用されます。"
               "キー登録だけではZDRやHIPAAに関する契約は確認できません。保持条件と契約を利用者側で確認してください。"
               "詳細: docs/guides/ANTHROPIC.md")
     else:
-        print(f"  Anthropic追加処理: {cloud['mode']} / キー未登録・off・dry_runの場合は外部送信しません。")
+        print(f"  外部AI追加処理: {cloud['mode']} / キー未登録・off・dry_runの場合は外部送信しません。")
     daily_cap, monthly_cap = ("上限なし" if cloud[key] is None else f"{cloud[key]:g} USD"
                               for key in ("daily_cost_limit_usd", "monthly_cost_limit_usd"))
-    print(f"  Anthropic費用上限: 1日 {daily_cap} / 1か月 {monthly_cap}（両方の上限を適用）")
+    print(f"  外部AI合計費用上限: 1日 {daily_cap} / 1か月 {monthly_cap}（両方の上限を適用）")
     print("  公開薬情報の照会: 同梱公開マスターで照合した薬品名・一般疾患名・公式URLを"
           "TinyFishへ送り、トークンファイルがない場合だけ固定の無料Exaへ送ります。患者本文は送りません。"
           "\n  定期的な薬情報更新確認: "

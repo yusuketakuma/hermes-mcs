@@ -104,16 +104,7 @@ class AnthropicClient:
             raise ValueError("deadline_invalid")
         if not isinstance(self.api_key, str) or not self.api_key:
             raise AnthropicError("no_api_key")
-        content = prompt
-        if cache_prefix:
-            if not isinstance(cache_prefix, str) or not prompt.startswith(cache_prefix):
-                raise ValueError("cache_prefix_invalid")
-            content = [{"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}}]
-            if prompt[len(cache_prefix):]:
-                content.append({"type": "text", "text": prompt[len(cache_prefix):]})
-        body = {"model": MODEL, "max_tokens": max_tokens, "system": SYSTEM,
-                "output_config": {"effort": "low"},
-                "messages": [{"role": "user", "content": content}]}
+        body = self.body(prompt, max_tokens, cache_prefix)
         last = AnthropicError("budget_exceeded", "deadline", retryable=True)
         for attempt in range(self.max_attempts):
             remaining = deadline - time.monotonic()
@@ -124,7 +115,7 @@ class AnthropicClient:
                 before_attempt()
             reservation = reserve_fn(body, timeout) if reserve_fn else None
             meta = {"usage": None, "http_class": "transport", "request_id": None,
-                    "model": MODEL, "request_fp": payload_hash(body), "error_kind": None}
+                    "model": self.model, "request_fp": payload_hash(body), "error_kind": None}
             unsent = {**meta, "http_class": "not_sent", "error_kind": "budget_exceeded"}
             try:
                 if before_attempt:
@@ -150,7 +141,7 @@ class AnthropicClient:
                 if type(status) is not int or not 100 <= status <= 599:
                     raise AnthropicError("protocol_error", "status_invalid")
                 meta["http_class"] = f"http_{status}"
-                rid = next((v for k, v in headers.items() if str(k).lower() == "request-id"), None)
+                rid = next((v for k, v in headers.items() if str(k).lower() in ("request-id", "x-request-id")), None)
                 if isinstance(rid, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", rid):
                     meta["request_id"] = rid
                 if status != 200:
@@ -163,27 +154,7 @@ class AnthropicClient:
                     obj = json.loads(raw.decode("utf-8"))
                 except (ValueError, UnicodeError, RecursionError):
                     raise AnthropicError("protocol_error", "not_json") from None
-                if not isinstance(obj, dict) or obj.get("model") != MODEL:
-                    raise AnthropicError("model_mismatch")
-                meta["usage"] = validate_usage(obj.get("usage"))
-                content = obj.get("content")
-                if not isinstance(content, list) or any(not isinstance(b, dict) for b in content):
-                    raise AnthropicError("protocol_error", "content_invalid")
-                text = []
-                for block in content:
-                    if block.get("type") == "text" and isinstance(block.get("text"), str):
-                        text.append(block["text"])
-                    elif block.get("type") not in ("thinking", "redacted_thinking"):
-                        raise AnthropicError("protocol_error", "content_invalid")
-                stop = obj.get("stop_reason")
-                if stop not in ("end_turn", "max_tokens") or not text:
-                    raise AnthropicError("contract_error", "incomplete_response")
-                # a validated answer stays usable past the HTTP deadline; the caller's commit
-                # guard decides. An answer cut at max_tokens is a paid "length" stop the
-                # caller re-plans (split), not a failure the breaker counts.
-                result = {"status": 200, "text": "".join(text),
-                          "finish_reason": "length" if stop == "max_tokens" else "stop",
-                          "model": MODEL, "usage": meta["usage"]}
+                result = self.answer(obj, meta)
             except OSError as error:
                 # No transport exception proves the request never left (bounded_http maps a
                 # refusal while reading the response to the same type), and a sent request
@@ -209,3 +180,38 @@ class AnthropicClient:
                 if delay:
                     time.sleep(delay)
         raise last
+
+    def body(self, prompt, max_tokens, cache_prefix):
+        content = prompt
+        if cache_prefix:
+            if not isinstance(cache_prefix, str) or not prompt.startswith(cache_prefix):
+                raise ValueError("cache_prefix_invalid")
+            content = [{"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}}]
+            if prompt[len(cache_prefix):]:
+                content.append({"type": "text", "text": prompt[len(cache_prefix):]})
+        return {"model": MODEL, "max_tokens": max_tokens, "system": SYSTEM,
+                "output_config": {"effort": "low"},
+                "messages": [{"role": "user", "content": content}]}
+
+    def answer(self, obj, meta):
+        if not isinstance(obj, dict) or obj.get("model") != MODEL:
+            raise AnthropicError("model_mismatch")
+        meta["usage"] = validate_usage(obj.get("usage"))
+        content = obj.get("content")
+        if not isinstance(content, list) or any(not isinstance(b, dict) for b in content):
+            raise AnthropicError("protocol_error", "content_invalid")
+        text = []
+        for block in content:
+            if block.get("type") == "text" and isinstance(block.get("text"), str):
+                text.append(block["text"])
+            elif block.get("type") not in ("thinking", "redacted_thinking"):
+                raise AnthropicError("protocol_error", "content_invalid")
+        stop = obj.get("stop_reason")
+        if stop not in ("end_turn", "max_tokens") or not text:
+            raise AnthropicError("contract_error", "incomplete_response")
+        # a validated answer stays usable past the HTTP deadline; the caller's commit
+        # guard decides. An answer cut at max_tokens is a paid "length" stop the
+        # caller re-plans (split), not a failure the breaker counts.
+        return {"status": 200, "text": "".join(text),
+                  "finish_reason": "length" if stop == "max_tokens" else "stop",
+                  "model": MODEL, "usage": meta["usage"]}

@@ -27,13 +27,14 @@ READ_BYTES = 16 * 1024 * 1024
 def pending_key_presence(root=None):
     """Preview only booleans for keys that init will save, never their values."""
     return {"jev": bool(os.environ.get("TYPESAFE_API_KEY") or jev.api_key(root)),
-            "anthropic": bool(os.environ.get("MCS_ANTHROPIC_API_KEY") or policy.api_key(root))}
+            "anthropic": bool(os.environ.get("MCS_ANTHROPIC_API_KEY") or policy.api_key(root)),
+            "openai": bool(os.environ.get("MCS_OPENAI_API_KEY") or policy.provider_key("openai", root))}
 
 
 def _settings(cfg, root=None):
-    key = bool(policy.api_key(root))
+    key = bool(policy.selected_key(root, cfg))
     # an unreadable config arrives as {}: fail closed like the runtime, never auto-enable
-    settings, errors = policy.cloud_config(cfg, key_present=key and bool(cfg))
+    settings, errors = policy.resolve_settings(cfg, root) if cfg else policy.cloud_config({})
     return settings, errors, key
 
 
@@ -113,7 +114,8 @@ def diagnostics(cfg, *, root=None, probe=False):
                 "daily_cost_limit_usd": cloud["daily_cost_limit_usd"],
                 "monthly_cost_limit_usd": cloud["monthly_cost_limit_usd"],
                 "scope": "all" if cloud["project_ids"] is None else "none" if not cloud["project_ids"] else "selected",
-                "price_version": policy.PRICE_VERSION, "price_valid": policy.pricing_valid(),
+                **policy.price_info(cloud["model"]), "model": cloud["model"],
+                "provider_budgets": cloud["provider_budgets"],
                 "accounting": None, "dry_run": None,
                 "block_reason": "cost_limit_required" if errors and not policy.blocking_errors(errors) else None}}
     eligible_scope = cloud["project_ids"] is None or bool(set(cloud["project_ids"]) - set(cloud["exclude_project_ids"]))
@@ -130,13 +132,15 @@ def diagnostics(cfg, *, root=None, probe=False):
                 borrowed = SimpleNamespace(db=db)
                 out["anthropic"]["accounting"] = policy.usage_report(borrowed)
                 out["anthropic"]["dry_run"] = _dryrun_report(db, deadline, time.time())
-                reason = policy.global_block_reason(borrowed) or policy.budget_block_reason(borrowed, cloud)
+                reason = policy.global_block_reason(borrowed, model=cloud["model"]) or policy.budget_block_reason(borrowed, cloud)
                 if reason == "paused":
                     out["anthropic"].update(status="local", block_reason=reason)
                 elif reason:
                     out["anthropic"].update(status="blocked", block_reason=reason)
         except (OSError, ValueError, sqlite3.Error):
             out["anthropic"]["status"] = "unknown"
+    if cloud["provider"] == "openai":
+        out["openai"] = out.pop("anthropic")
     return out
 
 
@@ -163,7 +167,7 @@ def _route_counts(db, cfg, settings, deadline):
         # Resolve the semantic contract without consulting installation credentials.
         contract = context._contract({**cfg, "cloud_llm": {"mode": "off"}})
         if settings["mode"] == "on":
-            contract["provider"] = extract._cloud_contract()
+            contract["provider"] = extract._cloud_contract({"cloud_llm": settings})
         scope, params = _source_scope(settings, "p")
         rows = db.execute("SELECT p.project_id FROM patients p WHERE COALESCE(p.is_archived,0)=0"
                           + scope + " ORDER BY p.project_id", params)
@@ -269,14 +273,15 @@ def _calibration(db, since):
                     or row["model"] != reserve["model"] or row["project_id"] != reserve["project_id"]
                     or row["message_id"] != reserve.get("message_id")):
                 return None
-            usage = policy.validate_usage(usage)
-            if (policy.usage_cost(usage) != policy._decimal(meta.get("cost_usd"))
-                    or policy.usage_cost(usage) > policy._decimal(reserve["max_cost_usd"])):
+            validator = policy.openai_client.validate_usage if reserve["model"] == policy.openai_client.MODEL else policy.validate_usage
+            usage = validator(usage)
+            if (policy.usage_cost(usage, model=reserve["model"]) != policy._decimal(meta.get("cost_usd"))
+                    or policy.usage_cost(usage, model=reserve["model"]) > policy._decimal(reserve["max_cost_usd"])):
                 return None
             chars = reserve.get("input_chars")
             if type(chars) is int and 0 < chars <= 2**53:
                 total_chars += chars
-                total_tokens += usage["input_tokens"] + usage["cache_creation_input_tokens"] + usage["cache_read_input_tokens"]
+                total_tokens += usage["input_tokens"] + usage.get("cache_creation_input_tokens", 0) + usage.get("cache_read_input_tokens", 0)
                 output_tokens += usage["output_tokens"]
                 samples += 1
     return {"settled_requests_with_characters": samples, "input_chars": total_chars,
@@ -285,7 +290,9 @@ def _calibration(db, since):
             "output_tokens_per_request": Decimal(output_tokens) / samples if samples else None}
 
 
-def _costs(item, ratio, fx=None, *, output_limit=1600, output_per_request=None):
+def _costs(item, ratio, fx=None, *, output_limit=1600, output_per_request=None, model=policy.MODEL):
+    prices = ({"input": "0.1", "output": "0.5", "long_input": "0.25", "long_output": "0.75"}
+              if model == policy.openai_client.MODEL else policy.PRICES)
     tokens = int((Decimal(item["input_chars"]) * ratio).to_integral_value(rounding="ROUND_CEILING"))
     ceiling = item["requests_estimate"] * output_limit
     output = (min(ceiling, math.ceil(item["requests_estimate"] * output_per_request))
@@ -294,8 +301,8 @@ def _costs(item, ratio, fx=None, *, output_limit=1600, output_per_request=None):
     item.update(estimated_input_tokens=tokens, estimated_output_tokens=output,
         output_token_request_ceiling=ceiling,
         output_estimate_basis="observed_usage_mean" if output is not None else "unmeasured",
-        estimated_cost_low_usd=str((tokens * Decimal(policy.PRICES["input"]) + low_output * Decimal(policy.PRICES["output"])) / 1000000),
-        estimated_cost_high_usd=str((tokens * Decimal(policy.PRICES["long_input"]) + high_output * Decimal(policy.PRICES["long_output"])) / 1000000))
+        estimated_cost_low_usd=str((tokens * Decimal(prices["input"]) + low_output * Decimal(prices["output"])) / 1000000),
+        estimated_cost_high_usd=str((tokens * Decimal(prices["long_input"]) + high_output * Decimal(prices["long_output"])) / 1000000))
     if fx is not None:
         for bound in ("low", "high"):
             item[f"estimated_cost_{bound}_jpy"] = str(Decimal(item[f"estimated_cost_{bound}_usd"]) * Decimal(str(fx)))
@@ -308,7 +315,7 @@ def _safe_log(row, meta):
         if meta.get("disposition") in ("discarded_scope", "discarded_workday"):
             result["disposition"] = meta["disposition"]
         return result
-    for key, allowed in (("route", policy.ROUTES), ("model", (policy.MODEL,)),
+    for key, allowed in (("route", policy.ROUTES), ("model", tuple(policy.PROVIDERS.values())),
                          ("disposition", ("discarded_scope", "discarded_workday"))):
         if meta.get(key) in allowed:
             result[key] = meta[key]
@@ -393,6 +400,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
     # Keyless planning can still estimate the scope that auto mode would enable.
     # Estimate the scope that auto mode would enable once a cap is set; whether it may send now is send_decision.
     planning = policy.cloud_config(cfg, key_present=True, require_cost_limit=False)[0]
+    planning["provider"], planning["model"] = settings["provider"], settings["model"]
     now = time.time()
     start = now - days * 86400
     if since is not None:
@@ -415,7 +423,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
                 spent = None   # an unverifiable tally is shown as unknown, never as 0
             period = {"start": settings["window_start"], "budget_usd": settings["window_budget_usd"],
                       "spent_or_reserved_usd": spent}
-        reason = policy.global_block_reason(borrowed) or policy.budget_block_reason(borrowed, settings)
+        reason = policy.global_block_reason(borrowed, model=settings["model"]) or policy.budget_block_reason(borrowed, settings)
         calibration = _calibration(db, now - 62 * 86400) if not accounting["pricing_unverified"] else None
         routes = _route_counts(db, cfg, planning, deadline)
         counts = {}
@@ -462,7 +470,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
     for route, item in routes.items():
         _costs(item, ratio, settings["usd_jpy"], output_limit=(extract.MAX_TOKENS if route == "reextract"
                else 8192 if route == "semantic_backlog" else 1600),
-               output_per_request=output_mean)
+               output_per_request=output_mean, model=settings["model"])
     total_chars = sum(row["chars"] for row in counts.values())
     total_requests = sum(row["patients"] + row["scan_requests"] for row in counts.values())
     total_basic = sum(row["patients"] + row["posts"] for row in counts.values())
@@ -475,7 +483,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
             "basic_requests_estimate": math.ceil(total_basic * multiplier),
             "chunk_extra_requests_estimate": math.ceil(total_requests * multiplier) - math.ceil(total_basic * multiplier)},
             ratio, settings["usd_jpy"],
-            output_per_request=output_mean)
+            output_per_request=output_mean, model=settings["model"])
     peak = max(max((row["patients"] + row["scan_requests"] for row in counts.values()), default=0),
                routes["reextract"]["requests_estimate"])
     decision = ("cost_limit_required" if errors else "off" if settings["mode"] == "off" else "dry_run" if settings["mode"] == "dry_run"
@@ -489,6 +497,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
         "daily_cost_limit_usd": settings["daily_cost_limit_usd"],
         "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
         "max_concurrency_per_process": settings["max_concurrency"], "accounting": accounting,
+        "max_concurrency": settings["max_concurrency"], "concurrency_scope": "all_processes",
         **({"source_repair_evidence_holds": evidence_holds} if evidence_holds_wanted else {}),
         "period_budget": period, "until": settings["until"],
         "days": days, "history_days_observed": len(counts),
@@ -526,8 +535,9 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
         "estimate_excludes": ["unmeasured_repair_retry", "prompt_overhead_and_added_context"],
         "cost_basis": "reference_range_not_budget_reservation_or_invoice",
         "reservation_input_upper_bound_tokens": policy.INPUT_RESERVATION_BOUND,
-        "price_version": policy.PRICE_VERSION, "price_checked_on": policy.PRICE_CHECKED_ON,
-        "price_valid_until": policy.PRICE_VALID_UNTIL, "price_valid": policy.pricing_valid(),
+        **policy.price_info(settings["model"]),
+        "provider": settings["provider"], "model": settings["model"],
+        "provider_budgets": settings["provider_budgets"],
         "usd_jpy": settings["usd_jpy"], "log": log}
 
 
@@ -546,13 +556,13 @@ def apply_control_tx(db, req, now):
             errors, _ = validate_config(cfg)
         except (OSError, ValueError, UnicodeError, RecursionError):
             return "cloud_config_invalid", {}
-        key = policy.api_key()
-        _, cloud_errors = policy.cloud_config(cfg, key_present=bool(key))
+        key = policy.selected_key(cfg=cfg)
+        settings, cloud_errors = policy.resolve_settings(cfg)
         if errors or policy.blocking_errors(cloud_errors):
             return "cloud_config_invalid", {}
         if not key:
             return "no_api_key", {}
-        if not policy.pricing_valid() or policy.usage_report(SimpleNamespace(db=db))["pricing_unverified"]:
+        if not policy.pricing_valid(model=settings["model"]) or policy.usage_report(SimpleNamespace(db=db))["pricing_unverified"]:
             return "pricing_unverified", {}
         policy.capture_history_tx(db, req["command_id"], now)
         state = {"consecutive_failures": 0, "open_until": 0.0,
@@ -718,6 +728,80 @@ def budget_command(args):
     return 0
 
 
+def providers_command(args):
+    """Configure provider selection and separate caps while retaining the combined limits."""
+    import config_edit
+    try:
+        changes = {}
+        provider = getattr(args, "provider", None)
+        if provider is not None:
+            changes["cloud_llm.provider"] = provider
+            changes["cloud_llm.model"] = None
+        order = getattr(args, "priority", None)
+        if order is not None:
+            changes["cloud_llm.provider_order"] = order.split(",")
+            changes["cloud_llm.model"] = None
+        cfg = config_edit.read_strict()
+        settings, errors = policy.cloud_config(cfg)
+        if errors:
+            raise ValueError
+        budgets = {name: dict(caps) for name, caps in settings["provider_budgets"].items()}
+        for name in policy.PROVIDERS:
+            daily, monthly = (getattr(args, name + suffix, None) for suffix in ("_daily_usd", "_monthly_usd"))
+            if daily is not None or monthly is not None:
+                caps = budgets.get(name, {})
+                for text, key in ((daily, "daily_cost_limit_usd"), (monthly, "monthly_cost_limit_usd")):
+                    if text is not None:
+                        value = _budget_value(text)
+                        if value is None:
+                            raise ValueError
+                        caps[key] = value
+                budgets[name] = caps
+                changes["cloud_llm.provider_budgets"] = budgets
+        if changes:
+            cfg, errors = config_edit.apply(changes, expected=cfg)
+            if errors:
+                raise ValueError
+        settings, errors = policy.resolve_settings(cfg)
+        if errors:
+            raise ValueError
+    except (OSError, ValueError, RecursionError):
+        print("AI利用先を保存できません。利用先・優先順位・API別の日額/月額と合計上限を確認してください。")
+        return 1
+    print(json.dumps({"saved": bool(changes), "provider": settings["provider"], "model": settings["model"],
+        "provider_order": settings["provider_order"], "provider_budgets": settings["provider_budgets"],
+        "daily_cost_limit_usd": settings["daily_cost_limit_usd"], "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
+        "keys": {name: bool(policy.provider_key(name)) for name in policy.PROVIDERS}}, ensure_ascii=False))
+    return 0
+
+
+def provider_dialog(root):
+    """Offer fixed providers or key-availability priority with explicit per-provider budgets."""
+    import api_key_setup
+    if not api_key_setup.is_terminal() or Path(root).resolve() != Path(mcs_util.HOME).resolve():
+        return 2
+    try:
+        print("AI利用先: 1) Anthropicのみ  2) OpenAIのみ  3) Anthropic優先  4) OpenAI優先  0) 戻る")
+        print("優先モードは登録済みの最優先APIを使います。上限・エラー時は停止し、送信結果が不明な処理を別APIへ再送しません。")
+        choice = input("選択 [0]: ").strip() or "0"
+        if choice == "0":
+            return 0
+        if choice not in ("1", "2", "3", "4"):
+            return 1
+        values = {}
+        for name, label, defaults in (("anthropic", "Anthropic", (20, 60)), ("openai", "OpenAI", (5, 15))):
+            for suffix, period, default in zip(("_daily_usd", "_monthly_usd"), ("1日", "1か月"), defaults):
+                values[name + suffix] = input(f"{label} {period}の上限 USD [{default}]: ").strip() or str(default)
+        print("合計上限は現在の設定を維持します。API別上限の合計がこれを超える設定は保存しません。")
+        if input("保存する場合は 1 を入力 [0]: ").strip() != "1":
+            return 0
+        from types import SimpleNamespace
+        return providers_command(SimpleNamespace(provider={"1": "anthropic", "2": "openai", "3": "auto", "4": "auto"}[choice],
+            priority="openai,anthropic" if choice == "4" else "anthropic,openai", **values))
+    except (EOFError, KeyboardInterrupt):
+        return 130
+
+
 def add_parsers(sub):
     p = sub.add_parser("cloud-llm", help="外部AIの件数・費用を送信せずに試算、照会します")
     actions = p.add_subparsers(dest="cloud_action", required=True)
@@ -728,7 +812,14 @@ def add_parsers(sub):
         if action == "log":
             q.add_argument("--project", type=int)
         q.set_defaults(fn=command)
-    q = actions.add_parser("budget", help="Anthropicの費用上限（1日・1か月・期間、ドル）と送信の終了日時を表示・設定します")
+    q = actions.add_parser("providers", help="AI利用先・優先順位・API別予算を表示・設定します")
+    q.add_argument("--provider", choices=("anthropic", "openai", "auto"))
+    q.add_argument("--priority", choices=("anthropic,openai", "openai,anthropic"))
+    for provider in policy.PROVIDERS:
+        q.add_argument(f"--{provider}-daily-usd")
+        q.add_argument(f"--{provider}-monthly-usd")
+    q.set_defaults(fn=providers_command, cloud_action="providers")
+    q = actions.add_parser("budget", help="外部AI合計の費用上限（1日・1か月・期間、ドル）と送信の終了日時を表示・設定します")
     q.add_argument("--daily-usd", dest="daily_usd", help="1日の上限（ドル、設定省略時25）。none でこの上限を解除")
     q.add_argument("--monthly-usd", dest="monthly_usd", help="1か月の上限（ドル、設定省略時75）。none でこの上限を解除")
     q.add_argument("--period-usd", dest="period_usd",

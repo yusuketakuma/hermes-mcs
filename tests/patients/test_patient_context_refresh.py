@@ -13,7 +13,8 @@ from mcs_queries import JST
 import patient_context_refresh as context_refresh
 
 
-CFG = {'extract': {'patient_context_nightly': {'enabled': True, 'publication': True}}}
+CFG = {'extract': {'patient_context_nightly': {'enabled': True, 'publication': True}},
+       'semantic': {'mode': 'assist', 'project_ids': None}}
 
 
 def stamp(value):
@@ -47,7 +48,49 @@ def runtime(tmp_path, monkeypatch):
     led.close()
 
 
-def seed(led, mid=1, pid=1, body='生活環境: 合成の居住記録。', state='full'):
+def _raw_proof(led, pid, mid, *, cloud=False):
+    import extract_llm
+    import inference_dependency_loss
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+    row = dict(led.db.execute('SELECT * FROM messages WHERE project_id=? AND message_id=?', (pid, mid)).fetchone())
+    row['_source_binding'] = inference_dependency_loss.source_binding(led.db, pid, mid)
+    contract = extract_llm._cloud_contract() if cloud else None
+    model = contract['model'] if cloud else 'synthetic'
+    row['_target'] = ('', model)
+    if cloud:
+        row['_provider_contract'] = contract
+    context = extract_llm._thread_context(led.db, row)
+    size = extract_llm._saved_chunk_size(led.db, row, context)
+    chunks = extract_llm.plan_chunks(row['body_text'], size)
+    meta = {VERSION_KEY: CURRENT_VERSION, 'hash': row['content_hash'],
+            'extract_version': extract_llm.EXTRACT_VERSION, 'actual_model': model,
+            'plan_version': extract_llm.PLAN_VERSION,
+            'source_binding': row['_source_binding'], 'thin_retried': True,
+            'context_binding': extract_llm._chunk_context(row, context),
+            'integrity': {'completeness_chunks': len(chunks), 'completeness': {
+                str(i): {'state': 'hint_gaps_resolved', 'remaining_hint_candidates': 0}
+                for i in range(len(chunks))}}}
+    if cloud:
+        meta.update(contract)
+    led.artifact_add('extract_llm', json.dumps({'summary': '合成の経過報告'}),
+                     project_id=pid, message_id=mid, model=model, meta=meta)
+
+
+def _semantic_proof(led, pid, mid, cfg=CFG):
+    import semantic_policy
+    import semantic_store
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+    policy, errors = semantic_policy.runtime_config(cfg)
+    assert not errors
+    fp = semantic_store.thread_bundle(led.db, pid, mid, [mid])['source_fingerprint']
+    meta = {VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp,
+            'policy_fingerprint': semantic_policy.policy_fingerprint(policy)}
+    for kind, content in (('semantic_facts', {}), ('semantic_summary', {}),
+                          ('semantic_audit', {'status': 'PASS'})):
+        led.artifact_add(kind, json.dumps(content), project_id=pid, message_id=mid, meta=meta)
+
+
+def seed(led, mid=1, pid=1, body='生活環境: 合成の居住記録。', state='full', *, proof=True):
     led.db.execute('INSERT OR IGNORE INTO patients(project_id,patient_name) VALUES (?,?)',
                    (pid, f'synthetic-{pid}'))
     led.db.commit()
@@ -58,6 +101,9 @@ def seed(led, mid=1, pid=1, body='生活環境: 合成の居住記録。', state
     led.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 WHERE project_id=?",
                    (pid,))
     led.db.commit()
+    if proof and state == 'full' and body:
+        _raw_proof(led, pid, mid)
+        _semantic_proof(led, pid, mid)
 
 
 def step(runtime, *, cfg=CFG, admit=lambda: True, seconds=600, **kw):
@@ -298,23 +344,17 @@ def test_full_source_quote_retains_family_negation_plan_and_date(runtime, monkey
     assert view['facts'][0]['subject'] == 'unspecified'
 
 
-def test_patients_take_turns_and_incomplete_records_not_counted_analyzed(runtime):
+def test_incomplete_patient_waits_while_ready_patient_proceeds(runtime):
     led, _, _ = runtime
     seed(led, pid=1)
     seed(led, mid=2, pid=2)
     seed(led, mid=3, pid=1, body='', state='missing')
     assert step(runtime)['lane'] == 'A'
-    assert document(led, pid=1) and document(led, pid=2) is None
-    assert step(runtime)['lane'] == 'A'
-    assert document(led, pid=2)
+    assert document(led, pid=1) is None and document(led, pid=2)
     finish(runtime, waiting=True)
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
     proof = context_refresh.inference_coverage(led.db, 1, CFG)
     assert not proof['complete'] and proof['sources']['incomplete'] == 1
-    cov = document(led)['coverage']
-    assert cov['fetched'] == 2 and cov['analyzed'] == 1 and cov['incomplete'] == 1
-    assert cov['human_accuracy'] is None
-    assert cov['attachments']['analysis'] == 'not_assessed'
 
 
 def test_incomplete_patient_is_skipped_until_extraction_catches_up(runtime):
@@ -326,7 +366,7 @@ def test_incomplete_patient_is_skipped_until_extraction_catches_up(runtime):
     assert step(runtime, complete=lambda pid: pid == 2)['status'] == 'progressed'
     assert document(led, pid=1) is None and document(led, pid=2)
     assert len(calls) == 1
-    assert step(runtime, complete=lambda pid: False)['status'] == 'complete'
+    assert step(runtime, complete=lambda pid: False)['status'] == 'deferred'
     assert document(led, pid=1) is None
 
 
@@ -345,8 +385,11 @@ def test_failure_backoff_does_not_starve_other_patient(runtime, monkeypatch):
     assert progress['failure'] == 'nightly_length_stop'
     assert context_refresh.status(led.db, CFG)['failed'] == 1
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', original)
-    assert step(runtime)['status'] == 'progressed'
-    assert document(led, pid=1) is None and document(led, pid=2)
+    for _ in range(6):
+        assert step(runtime)['status'] == 'progressed'
+        if document(led, pid=2):
+            break
+    assert document(led, pid=2)
     assert calls
 
 
@@ -472,7 +515,10 @@ def test_model_timeout_is_checkpointed_so_other_patients_can_advance(runtime, mo
     step(runtime)
     progress = document(led, context_refresh.PROGRESS)
     assert progress is not None and progress['next_try'] > 0
-    step(runtime)
+    for _ in range(6):
+        step(runtime)
+        if document(led, pid=2):
+            break
     assert document(led, pid=2), 'a timed-out patient must not monopolize every next attempt'
 
 
@@ -504,9 +550,9 @@ def test_changed_source_resets_exhausted_retries(runtime, monkeypatch):
     monkeypatch.setattr(context_refresh.local_llm, 'admitted_chat', original)
     assert step(runtime)['status'] == 'progressed'
     assert document(led, context_refresh.PROGRESS)['attempts'] == 0
-    finish(runtime, waiting=True)
+    finish(runtime)
     assert document(led)
-    assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+    assert context_refresh.inference_coverage(led.db, 1, CFG)['complete']
 
 
 def test_revoked_source_is_not_generated_or_displayed(runtime):
@@ -621,9 +667,9 @@ def test_incomplete_body_states_are_not_counted_as_analyzed(runtime, state):
     with led.db:
         led.db.execute('UPDATE messages SET body_state=? WHERE message_id=1', (state,))
     finish(runtime, waiting=True)
-    coverage = document(led)['coverage']
-    assert coverage['fetched'] == 1 and coverage['incomplete'] == 1
-    assert coverage['analyzed'] == 0 and not calls
+    assert document(led) is None and not calls
+    proof = context_refresh.inference_coverage(led.db, 1, CFG)
+    assert not proof['complete'] and proof['sources']['incomplete'] == 1
 
 
 def test_summary_unknown_output_flag_prevents_publication(runtime, monkeypatch):
@@ -857,7 +903,7 @@ def test_whitespace_ingestion_does_not_leave_a_permanent_scan_candidate(runtime,
     led, _, calls = runtime
     seed(led, body=body)
     seed(led, mid=2, pid=2)
-    finish(runtime)
+    finish(runtime, waiting=True)
     assert led.db.execute("SELECT body_text FROM messages WHERE message_id=1").fetchone()[0] == ""
     assert context_refresh.status(led.db, CFG)["history_pending"] == 0
     assert context_refresh.context_view_input(led.db, 2, cfg=CFG)
@@ -907,10 +953,10 @@ def test_status_counts_only_patients_the_worker_would_work_on(runtime, reason):
     finish(runtime, waiting=True)
     assert calls
     assert {r[0] for r in led.db.execute('SELECT DISTINCT project_id FROM artifacts WHERE kind=?',
-                                       (context_refresh.SCAN,))} == {1, 3}
-    assert document(led, pid=2) is None
+                                       (context_refresh.SCAN,))} == {1}
+    assert document(led, pid=2) is None and document(led, pid=3) is None
     counts = context_refresh.status(led.db, CFG)
-    assert counts['initial_pending'] == 0 and counts['complete'] == 1
+    assert counts['initial_pending'] == 1 and counts['complete'] == 1
     assert not context_refresh.inference_coverage(led.db, 3, CFG)['complete']
 
 

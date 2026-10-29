@@ -160,10 +160,11 @@ B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場�
 | ディスク | `--preflight`の導入前閾値は通常12 GB、`--no-llm`またはモデルファイルが既存なら6 GB。モデル約5.7 GBは固定版を別途取得する。閾値は長期運用の必要容量ではなく、DB・添付・ログ・バックアップは利用量に応じた余裕が必要 |
 | MCS アカウント | ログイン ID とパスワード（自動再ログイン `auto_login` で使用） |
 | TYPESAFE_API_KEY | Jev用。MCSの `.env`（0600）に登録しmode未指定ならassistで自動使用 |
-| MCS_ANTHROPIC_API_KEY | Anthropic用。MCSの `.env`（0600）に登録しmode未指定なら患者文脈更新・旧版投稿の再抽出に自動使用 |
+| MCS_ANTHROPIC_API_KEY | Anthropic用。MCSの `.env`（0600）に登録し、利用先の設定に従って患者文脈更新・履歴解析に使用 |
+| MCS_OPENAI_API_KEY | OpenAI用。MCSの `.env`（0600）に登録し、選択時はgpt-6-lunaで患者文脈更新・履歴解析に使用 |
 | 通知先アプリ | Slack app・Discord botは両形態で作成・権限設定（付録A/B）。Path Bでは[独立モード](STANDALONE.md#slackとdiscordの接続準備)へ認証情報を登録する。LINE WORKS Botは両形態で[独立接続](LINEWORKS.md)を設定 |
 
-Jev・Anthropicには患者名を含み得る本文・文脈を匿名化せず送ります。キー登録前に[対象・予算・保持条件](ANTHROPIC.md)を確認してください。明示したOFFと低い予算は維持します。
+Jev・Anthropic・OpenAIには患者名を含み得る本文・文脈を匿名化せず送ります。キー登録前に[対象・予算・保持条件](ANTHROPIC.md)を確認してください。明示したOFFと低い予算は維持します。
 
 導入時の取得物と運用中の通信は別です。基本ツールはHomebrew、Python依存はPyPI、Hermes連携本体はGitHub、モデルはHugging Faceから必要に応じて取得します。モデル・Chrome・通知SDKはこのリポジトリへ同梱していません。`--no-llm`はモデル取得とAI常駐の設定を省略しますが、AIの処理が利用可能になったことを意味しません。
 
@@ -617,7 +618,7 @@ Hermes cron、手動crontab、旧抽出LaunchAgentを同時に登録しないで
 | 場所 | 内容 | 備考 |
 |---|---|---|
 | Keychain `mcs-adapter` | MCS パスワード | `auto_login` がフォーム投入時に読む |
-| `~/.mcs/.env` (0600) | `MCS_PASSWORD`（Keychain ロック中のフォールバック）・`TYPESAFE_API_KEY`・`MCS_ANTHROPIC_API_KEY`。`runtime_mode=standalone` の互換トークン入力。`init`は私有JSONへ取り込み、run/sendはJSONを優先する | 平文 — FileVault/物理セキュリティ前提 |
+| `~/.mcs/.env` (0600) | `MCS_PASSWORD`（Keychain ロック中のフォールバック）・`TYPESAFE_API_KEY`・`MCS_ANTHROPIC_API_KEY`・`MCS_OPENAI_API_KEY`。`runtime_mode=standalone` の互換トークン入力。`init`は私有JSONへ取り込み、run/sendはJSONを優先する | 平文 — FileVault/物理セキュリティ前提 |
 | `~/.mcs/data/{slack,discord}-credentials.json` (0600) | 独立Slack/DiscordのBot/App token。`mcs_standalone init`が非表示入力または既存の私有 `.env`から登録 | run/sendが優先して検証。秘密値の環境自動取得なし |
 | hermes profile `.env`（Path A のみ） | `DISCORD_BOT_TOKEN` / `SLACK_BOT_TOKEN`+`SLACK_APP_TOKEN` | `init` または `hermes config set --stdin` で書込み（argv に載せない） |
 

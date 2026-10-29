@@ -247,6 +247,31 @@ def test_injected_call_keeps_existing_json_validation(routed):
     assert worker.llm_extract("合成の記録", deadline=time.monotonic() + 180, provider=provider) == {}
 
 
+def test_openai_uses_selected_key_model_and_contract(routed, monkeypatch):
+    led, cfg, *_ = routed
+    cfg["cloud_llm"]["provider"] = "openai"
+    monkeypatch.setattr(cloud_policy, "provider_key", lambda name, root=None: "synthetic-openai" if name == "openai" else None)
+    seen = []
+
+    class Client:
+        def __init__(self, key):
+            assert key == "synthetic-openai"
+
+        def complete(self, prompt, **kwargs):
+            kwargs["before_attempt"]()
+            seen.append(True)
+            return {"status": 200, "text": "{}", "finish_reason": "stop", "model": "gpt-6-luna"}
+
+    monkeypatch.setattr(worker.openai_client, "OpenAIClient", Client)
+    provider = worker._CloudProvider(led, cfg, route="reextract", project_id=1,
+        unit_key="synthetic", deadline=time.monotonic() + 180,
+        current=lambda: True, dispatch=lambda fn, **kw: fn())
+    assert provider.model == provider.contract["model"] == "gpt-6-luna"
+    assert provider.contract["backend"] == "openai"
+    assert worker.llm_extract("合成の記録", deadline=time.monotonic() + 180, provider=provider) == {}
+    assert seen == [True]
+
+
 def test_cloud_failure_restarts_whole_post_with_local_checkpoint_contract(routed, monkeypatch):
     led, cfg, calls, *_ = routed
     old(led)

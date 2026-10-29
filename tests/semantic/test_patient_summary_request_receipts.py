@@ -62,6 +62,25 @@ def reserve_source(db, identity, wire, qids=None, *, pid=1):
         daily_request_budget=100, identity=identity, purpose="source")(wire, 10)
 
 
+@pytest.mark.parametrize("malformed", [False, True])
+def test_source_evidence_handles_string_summary_questions_without_parsing_them_as_json(tmp_path, malformed):
+    db = _ledger(tmp_path)
+    try:
+        ticket = reserve(db)
+        if malformed:
+            row = db.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (ticket.artifact_id,)).fetchone()
+            meta = json.loads(row[0])
+            meta["quality_request"]["questions"]["q0"] = "synthetic-invalid-hash"
+            with db.db:
+                db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(meta), ticket.artifact_id))
+        identity, _, fids = source_case()
+        proof = runtime.patient_source_question_evidence(db.db, 1, identity, fids)
+        assert proof["answers"] == {} and proof["references"] == {}
+        assert proof["problems"] == (dict.fromkeys(fids, "unknown") if malformed else {})
+    finally:
+        db.close()
+
+
 def save_source_answer(db, ticket, identity, fid=FACT0, value=ANSWER, *, pid=1, **change):
     binding = runtime.patient_source_answer_binding(db.db, pid, identity, ticket, [fid])[fid]
     return db.artifact_add_tx("patient_context_source_quality_v1", json.dumps(value), project_id=pid,

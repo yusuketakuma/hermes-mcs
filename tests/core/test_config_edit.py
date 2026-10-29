@@ -52,6 +52,15 @@ def test_symlink_is_rejected_without_rewriting_target(conf):
     assert target.read_bytes() == raw and conf.is_symlink()
 
 
+def test_nested_budget_edit_rejects_a_changed_base(conf):
+    base = config_edit.read_strict()
+    changed = {**base, "cloud_llm": {"provider": "anthropic"}}
+    conf.write_text(json.dumps(changed))
+    with pytest.raises(config_edit.ConfigConflict):
+        config_edit.apply({"cloud_llm.provider_budgets": {}}, expected=base)
+    assert json.loads(conf.read_text()) == changed
+
+
 def test_same_content_replacement_after_fd_read_is_rejected(conf, monkeypatch):
     reader = safe_io.read_regular_nofollow
     def swapped(*a, **k):

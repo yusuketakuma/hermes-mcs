@@ -13,7 +13,7 @@ import pytest
 import extract_llm as worker
 import patient_context_refresh as context_refresh
 from extract_testkit import _message
-from test_patient_context_refresh import CFG as BASE_CFG, document, runtime, seed, stamp, step as base_step
+from test_patient_context_refresh import CFG as BASE_CFG, _semantic_proof, document, runtime, seed, stamp, step as base_step
 
 import semantic_jev as _source_repair_jev
 
@@ -206,13 +206,9 @@ def test_source_quality_negative_stays_held_without_resampling(runtime, cloud, m
         # A real occurrence change starts B again; an unchanged failed
         # source never regains another repair right from the clock alone.
         assert context_refresh._pending(led.db, 1, CFG)[2]['B']
-        for _ in range(10):
-            clock.wall += 61
-            if step(runtime).get('reason') == 'source_quality_held':
-                break
-        else:
-            pytest.fail('a new occurrence did not re-enter source QA')
-        assert len(led.synthetic_jev_requests) > before
+        # A changed occurrence cannot use the old inference or uncaptured source.
+        assert step(runtime)['reason'] == 'patient_context_waiting'
+        assert len(led.synthetic_jev_requests) == before
     if negative_target == "source_facts":
         extra_id = _extend_source_candidate(led)
         for _ in range(10):
@@ -1208,6 +1204,7 @@ def test_quality_policy_change_requeues_audit_without_resending_source_or_draft(
     judged = len(led.synthetic_jev_requests)
     usage_count = len(led.artifacts('semantic_usage', project_id=1))
     monkeypatch.setitem(CFG['semantic'], 'match_threshold', 0.95)
+    _semantic_proof(led, 1, 1, CFG)
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
     _, _, pending = context_refresh._pending(led.db, 1, CFG)
     assert pending == {'A': False, 'B': False, 'C': True}
@@ -1587,7 +1584,8 @@ def _source_repair_wire_protocol(monkeypatch, cloud):
     """Old negative fixtures use the real repair reservation protocol, never a fake capability."""
     original = worker._CloudProvider
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
-    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda now=None: True)
+    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid',
+                        lambda now=None, *, model=worker.anthropic_client.MODEL: model == worker.anthropic_client.MODEL)
     def post(body, timeout):
         prompt = json.loads(body['messages'][0]['content'])
         cloud[0].append(prompt)
@@ -1608,7 +1606,8 @@ def source_repair(runtime, cloud, monkeypatch):
     original_provider = worker._CloudProvider
     control = {'sent':[], 'fault':None, 'qa_fault':None}
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
-    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda now=None: True)
+    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid',
+                        lambda now=None, *, model=worker.anthropic_client.MODEL: model == worker.anthropic_client.MODEL)
     class InitialProvider(original_provider):
         def __call__(self, prompt, **kwargs):
             payload = json.loads(prompt)
@@ -2147,6 +2146,12 @@ def test_new_raw_occurrence_restarts_b_without_deleting_prior_original_chunks(ru
                 led.db.execute('UPDATE patients SET karte_id=? WHERE project_id=1', (generation,))
         assert context_refresh._pending(led.db, 1, CFG)[2]['B']
         assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+        if changed == 'revision':
+            assert step(runtime)['reason'] == 'patient_context_waiting'
+            assert [tuple(row) for row in led.db.execute(
+                'SELECT artifact_id,content,meta FROM artifacts WHERE kind=? ORDER BY artifact_id',
+                (context_refresh.CHUNK,))] == old
+            return
         drain(runtime)
         current = {row[0]:tuple(row) for row in led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=?',
                                                              (context_refresh.CHUNK,))}

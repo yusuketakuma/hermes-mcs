@@ -27,7 +27,7 @@ LEDGER_WRITERS = {
     "extract.py", "extract_llm.py", "init_data.py", "rollup.py",
     "run_check.py", "semantic.py", "semantic_drain.py", "mcs_update.py",
     "project_metadata.py",
-    "cross_lists.py",
+    "cross_lists.py", "cloud_backlog.py",
 }
 
 _LOCAL_MODULES = {p.stem for p in MCS.rglob("*.py")} | {"hermes_plugin", "adapters", "lineworks_adapter", "mcs_standalone"}

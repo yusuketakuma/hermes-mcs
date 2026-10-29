@@ -44,7 +44,7 @@ MAX_RESPONSE_BYTES = 262144
 ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages"
 _HTTP_WORKER_ARG = "--http-worker"
 _WORKER_HEADER_NAMES = frozenset({
-    "content-length", "content-type", "retry-after", "transfer-encoding", "request-id",
+    "content-length", "content-type", "retry-after", "transfer-encoding", "request-id", "x-request-id",
 })
 
 

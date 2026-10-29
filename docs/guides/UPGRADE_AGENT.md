@@ -12,8 +12,8 @@ Hermes経由の導入・更新にはuvが必要です。Hermesのディレクト
 
 ### 1.1.0で追加された更新時の確認
 
-- 対話形式の更新が完了したとき、または更新が不要だったとき、Jev・Anthropic、Slack、Discord、LINE WORKSの認証情報設定を選べます。省略した場合は、後から `~/.local/bin/mcs setup api-keys` を実行できます。起動コマンドや実行環境を確認できない場合は、担当者に導入状態の確認を依頼してください。更新の確認（plan）と非対話の更新では認証情報設定を起動しません。
-- Jev・AnthropicのキーはMCSの `.env` に保存します。Slack・DiscordのHermes経由の接続は、選んだHermesプロファイルの `.env` に保存します。独立動作のSlack・DiscordとLINE WORKSは、それぞれの既存の保存方法を使います。独立動作のSlack・DiscordとLINE WORKSでは、既存の認証情報の変更は保留中です。表示される案内に従い、担当者に変更方法を相談してください。
+- 対話形式の更新が完了したとき、または更新が不要だったとき、Jev・Anthropic・OpenAI、Slack、Discord、LINE WORKSの認証情報設定を選べます。省略した場合は、後から `~/.local/bin/mcs setup api-keys` を実行できます。起動コマンドや実行環境を確認できない場合は、担当者に導入状態の確認を依頼してください。更新の確認（plan）と非対話の更新では認証情報設定を起動しません。
+- Jev・Anthropic・OpenAIのキーはMCSの `.env` に保存します。Slack・DiscordのHermes経由の接続は、選んだHermesプロファイルの `.env` に保存します。独立動作のSlack・DiscordとLINE WORKSは、それぞれの既存の保存方法を使います。独立動作のSlack・DiscordとLINE WORKSでは、既存の認証情報の変更は保留中です。表示される案内に従い、担当者に変更方法を相談してください。
 - Anthropicの費用設定を省略した環境では、1日25ドル・1か月75ドルの上限を適用します。明示した `null`（個別の上限を解除）・`0`・低い上限・`mode=off`・対象範囲は維持します。以前のCLIによる解除で項目が削除されていた場合も既定値が適用されるため、解除を続ける場合は更新後に `cloud-llm budget --daily-usd none` または `--monthly-usd none` を指定してください。設定ファイルへ既定値を書き込む移行はありません。
 - Jevはキーがあり、modeと予算が未指定なら、従来どおり通常運用の `assist`・1日10000要求です。明示したmode・低い上限・対象範囲を保持し、modeを明示して予算を省略した環境は上限 `0` を保ちます。キーがない場合は両サービスとも送信しません。費用・件数の確認と変更は[設定ガイド](ANTHROPIC.md)に従ってください。
 - 任意機能のセットアップ案内に「既定に従う／案内を表示する／案内を省略する」の選択が加わりました。CSDC（状態監視・遠隔支援）の案内は、この版では既定で省略します。更新後に `mcs_setup.py doctor` の「任意機能の案内」で現在の選択を確認し、変える場合は端末で `mcs setup features`（PATH未設定なら `~/.local/bin/mcs setup features`）を実行してください。

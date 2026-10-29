@@ -20,7 +20,7 @@ def run(root, cfg, *, current=None):
     unresolved = set()
     while True:
         print("\n設定する認証情報を選んでください。入力した秘密値は表示されません。")
-        print("1) Jev・Anthropic  2) Slack  3) Discord  4) LINE WORKS  0) 終了")
+        print("1) Jev・Anthropic・OpenAI  2) Slack  3) Discord  4) LINE WORKS  5) AI利用先・予算  0) 終了")
         try:
             choice = input("選択 [0]: ").strip() or "0"
         except (EOFError, KeyboardInterrupt):
@@ -32,6 +32,9 @@ def run(root, cfg, *, current=None):
             return 1 if unresolved else 0
         if choice == "1":
             result = api_key_setup.run(root)
+        elif choice == "5":
+            import cloud_cli
+            result = cloud_cli.provider_dialog(root)
         elif choice in ("2", "3"):
             if current is not None and not current():
                 print("設定が変更されたため、接続先の認証情報は保存していません。もう一度設定を開いてください。")
