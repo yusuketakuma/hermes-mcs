@@ -1,4 +1,4 @@
-"""Validate cloud scope and reserve bounded Anthropic costs on the ledger owner thread."""
+"""Validate cloud scope and reserve bounded provider costs on the ledger owner thread."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -49,14 +49,21 @@ OPENAI_PRICE_VALID_UNTIL = "2026-11-28"
 OPENAI_PRICE_SOURCES = ("https://developers.openai.com/api/docs/models/gpt-6-luna",)
 PROVIDERS = {"anthropic": MODEL, "openai": openai_client.MODEL}
 _BINDING_KEYS = ("reservation_id", "request_fp", "route", "project_id",
-                 "unit_key", "message_id", "model", "price_version")
+                 "unit_key", "message_id", "model", "price_version", "logical_request_fp", "logical_target_id", "logical_unit_fp")
 
 
-def capture_history_tx(db, command_id, now):
-    """Freeze saved source occurrences within the human resume receipt transaction."""
+def capture_history_tx(db, command_id, now, *, continuous=False):
+    """Record the history scope within the human resume receipt transaction."""
     from inference_dependency_loss import source_binding
     if not db.in_transaction:
         raise RuntimeError("cloud_history_transaction_required")
+    if continuous:
+        if not isinstance(command_id, str) or not command_id or len(command_id) > 256:
+            raise ValueError("cloud_history_command_invalid")
+        db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
+            ("cloud_history_scope", json.dumps({"version": 2, "command_id": command_id}), MODEL,
+             json.dumps({"command_id": command_id}), now))
+        return
     sources = {}
     cutoff = now - 600
     for count, row in enumerate(db.execute("SELECT project_id,message_id FROM messages m "
@@ -93,13 +100,74 @@ def _history_sources(raw):
         return {}
 
 
+@lru_cache(maxsize=2)
+def _history_document(raw):
+    try:
+        value = strict_json(raw)
+        return value if isinstance(value, dict) else None
+    except (ValueError, TypeError, AttributeError, RecursionError):
+        return None
+
+
+def _history_scope(db, scope):
+    """Resolve a fixed scope or a continuous scope tied to its resume receipt."""
+    if scope is None:
+        return {}
+    raw, meta = scope
+    if not isinstance(raw, str) or len(raw) > 16 * 1024 * 1024:
+        return {}
+    try:
+        doc = _history_document(raw)
+        if isinstance(doc, dict) and type(doc.get("version")) is int and doc["version"] == 2:
+            if not isinstance(meta, str) or len(meta) > 32768:
+                return {}
+            details = strict_json(meta)
+            command_id = doc.get("command_id")
+            if (set(doc) != {"version", "command_id"} or not isinstance(command_id, str)
+                    or not command_id or len(command_id) > 256 or not isinstance(details, dict)
+                    or details.get("command_id") != command_id):
+                return {}
+            control = db.execute("SELECT content,meta FROM artifacts WHERE kind='cloud_control' "
+                "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.command_id') END=? "
+                "ORDER BY artifact_id DESC LIMIT 1", (command_id,)).fetchone()
+            if control is None or control[0] != "running":
+                return {}
+            control_meta = strict_json(control[1])
+            if (not isinstance(control_meta, dict) or control_meta.get("command_id") != command_id
+                    or not isinstance(control_meta.get('actor'), str) or not control_meta['actor'].strip()
+                    or not isinstance(control_meta.get('reason'), str) or not control_meta['reason'].strip()):
+                return {}
+            receipt = db.execute("SELECT outcome,receipt_json FROM command_receipts WHERE command_id=?",
+                                 (command_id,)).fetchone()
+            if receipt is None or receipt[0] != 'applied':
+                return {}
+            recorded = strict_json(receipt[1])
+            if (not isinstance(recorded, dict) or recorded.get('command_id') != command_id
+                    or recorded.get('outcome') != 'applied' or recorded.get('control') != 'running'
+                    or recorded.get('actor') != control_meta.get('actor')
+                    or recorded.get('reason') != control_meta.get('reason')):
+                return {}
+            return None  # continuous scope, bounded by route and live source checks
+    except (ValueError, TypeError, AttributeError, RecursionError):
+        return {}
+    return _history_sources(raw)
+
+
+def history_target_ready(db, project_id, message_id):
+    """Keep a newly arrived or edited processing target in the realtime lane."""
+    cutoff = time.time() - 600
+    return db.execute("SELECT 1 FROM messages m WHERE m.project_id=? AND m.message_id=? "
+        "AND m.first_seen IS NOT NULL AND m.first_seen<=? "
+        "AND (m.notified_at IS NULL OR m.notified_at<=?) AND NOT EXISTS "
+        "(SELECT 1 FROM message_revisions r WHERE r.message_id=m.message_id AND r.observed_at>?)",
+        (project_id, message_id, cutoff, cutoff, cutoff)).fetchone() is not None
+
+
 def history_thread_allowed(db, project_id, message_id):
     """Require every prompt member to match the receipted history snapshot occurrence."""
-    scope = db.execute("SELECT content FROM artifacts WHERE kind='cloud_history_scope' "
+    scope = db.execute("SELECT content,meta FROM artifacts WHERE kind='cloud_history_scope' "
                        "ORDER BY artifact_id DESC LIMIT 1").fetchone()
-    if scope is None:
-        return False
-    return _history_thread_allowed(db, project_id, message_id, _history_sources(scope[0]))
+    return _history_thread_allowed(db, project_id, message_id, _history_scope(db, scope))
 
 
 def _history_thread_allowed(db, project_id, message_id, sources):
@@ -110,9 +178,51 @@ def _history_thread_allowed(db, project_id, message_id, sources):
         return False
     members = db.execute("SELECT message_id FROM messages WHERE project_id=? "
                          "AND (message_id=? OR parent_id=?)", (project_id, target[0], target[0])).fetchall()
+    if sources is None:
+        return bool(members) and all(source_binding(db, project_id, row[0]) is not None for row in members)
     return bool(members) and all(
         sources.get(f"{project_id}:{row[0]}") == source_binding(db, project_id, row[0])
         and sources.get(f"{project_id}:{row[0]}") is not None for row in members)
+
+
+def history_thread_snapshot(db, project_id, message_id):
+    """Bind the active scope and every current thread occurrence to one read snapshot."""
+    from inference_dependency_loss import source_binding
+    anchor = db.execute("SELECT artifact_id,content,meta FROM (SELECT artifact_id,content,meta FROM artifacts "
+                        "WHERE kind='cloud_history_scope' ORDER BY artifact_id DESC LIMIT 1) "
+                        "UNION ALL SELECT NULL,NULL,NULL UNION ALL SELECT NULL,NULL,NULL")
+    try:
+        scope = anchor.fetchone()
+        if scope is None or scope[0] is None:
+            return None
+        sources = _history_scope(db, (scope[1], scope[2]))
+        if not _history_thread_allowed(db, project_id, message_id, sources):
+            return None
+        target = db.execute("SELECT COALESCE(parent_id,message_id) FROM messages "
+                            "WHERE project_id=? AND message_id=?", (project_id, message_id)).fetchone()
+        if target is None:
+            return None
+        members = db.execute("SELECT message_id FROM messages WHERE project_id=? "
+                             "AND (message_id=? OR parent_id=?) ORDER BY message_id",
+                             (project_id, target[0], target[0])).fetchall()
+        bindings = [(row[0], source_binding(db, project_id, row[0])) for row in members]
+        if not bindings or any(binding is None for _, binding in bindings):
+            return None
+        return payload_hash({'scope_id': scope[0], 'project_id': project_id,
+                             'target_id': message_id, 'members': bindings})
+    finally:
+        anchor.close()
+
+
+def history_scope_target_sql(column):
+    """Pre-filter candidates; the receipt and occurrence check remains authoritative."""
+    if column not in ('m.message_id', 'j.message_id'):
+        raise ValueError('cloud_history_column_invalid')
+    scope = ("SELECT CASE WHEN json_valid(content) THEN content ELSE '{}' END "
+             "FROM artifacts WHERE kind='cloud_history_scope' ORDER BY artifact_id DESC LIMIT 1")
+    return (f"(json_extract(({scope}),'$.version')=2 OR {column} IN "
+            f"(SELECT CAST(substr(s.key,instr(s.key,':')+1) AS INTEGER) "
+            f"FROM json_each(({scope}), '$.sources') s))")
 
 
 @contextmanager
@@ -120,13 +230,14 @@ def history_selection_check(db):
     """Bind one validated receipt and selection to the same SQLite read snapshot."""
     # Keep a statement open to retain the read snapshot without creating a
     # savepoint that an active cancellation handler could prevent releasing.
-    anchor = db.execute("SELECT content FROM (SELECT content FROM artifacts "
+    anchor = db.execute("SELECT content,meta FROM (SELECT content,meta FROM artifacts "
                         "WHERE kind='cloud_history_scope' ORDER BY artifact_id DESC LIMIT 1) "
-                        "UNION ALL SELECT NULL UNION ALL SELECT NULL")
+                        "UNION ALL SELECT NULL,NULL UNION ALL SELECT NULL,NULL")
     active = [True]
     try:
         scope = anchor.fetchone()
-        sources = MappingProxyType(dict(_history_sources(scope[0]))) if scope is not None else MappingProxyType({})
+        resolved = _history_scope(db, scope)
+        sources = None if resolved is None else MappingProxyType(dict(resolved))
         thread_results = {}
 
         def check(pid, mid):
@@ -397,6 +508,27 @@ def _texts(body):
                     yield block["text"]
 
 
+def _logical_request_fp(body):
+    """Identify the same prompt across the two supported provider envelopes."""
+    system = body.get('system', body.get('instructions'))
+    prompt = body.get('input')
+    if prompt is None:
+        messages = body.get('messages')
+        if not isinstance(messages, list) or len(messages) != 1 or not isinstance(messages[0], dict):
+            return None
+        if messages[0].get('role') != 'user':
+            return None
+        prompt = messages[0].get('content')
+        if isinstance(prompt, list):
+            if any(not isinstance(part, dict) or part.get('type') != 'text'
+                   or not isinstance(part.get('text'), str) for part in prompt):
+                return None
+            prompt = ''.join(part['text'] for part in prompt)
+    if not isinstance(system, str) or not isinstance(prompt, str):
+        return None
+    return payload_hash({'system': system, 'prompt': prompt})
+
+
 def input_bound(body):
     """Input tokens to reserve for one request (never above the 1M ceiling)."""
     return min(INPUT_RESERVATION_BOUND,
@@ -480,6 +612,12 @@ def _reserve_valid(meta, row):
     price_version = OPENAI_PRICE_VERSION if model == openai_client.MODEL else PRICE_VERSION
     if (not isinstance(meta.get("reservation_id"), str) or len(meta["reservation_id"]) != 32
             or not isinstance(meta.get("request_fp"), str) or len(meta["request_fp"]) != 64
+            or meta.get('logical_request_fp') is not None and (not isinstance(meta['logical_request_fp'], str)
+                or re.fullmatch(r'[0-9a-f]{64}', meta['logical_request_fp']) is None)
+            or meta.get('logical_unit_fp') is not None and (not isinstance(meta['logical_unit_fp'], str)
+                or re.fullmatch(r'[0-9a-f]{64}', meta['logical_unit_fp']) is None)
+            or meta.get('logical_target_id') is not None and (type(meta['logical_target_id']) is not int
+                or meta['logical_target_id'] <= 0 or meta['logical_target_id'] != row['message_id'])
             or model not in PROVIDERS.values() or row["model"] != model
             or meta.get("price_version") != price_version
             or meta.get("route") not in ROUTES
@@ -663,6 +801,78 @@ def _settled(m, maximum, matching):
             or r["usage"].get("output_tokens", 0) > m["max_tokens"]):
         raise ValueError
     return reported, True
+
+
+def _guard_repeated_request(ledger, candidate):
+    """Keep an unresolved or already answered logical request from being sent again."""
+    rows = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
+        "FROM artifacts WHERE kind=? AND project_id=? AND (message_id IS ? OR ?='semantic_backlog') AND "
+        "CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
+        "WHEN json_type(meta)!='object' OR EXISTS (SELECT 1 FROM json_tree(meta) "
+        "WHERE key IS NOT NULL GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
+        "ELSE json_extract(meta,'$.route')=? AND "
+        "(json_extract(meta,'$.unit_key')=? OR ?='semantic_backlog') END ORDER BY artifact_id",
+        (KINDS[0], candidate['project_id'], candidate['message_id'], candidate['route'],
+         candidate['route'], candidate['unit_key'], candidate['route'])).fetchall()
+    result_map = None
+    for row in rows:
+        try:
+            previous = _receipt_meta(row['meta'])
+            maximum = _reserve_valid(previous, row)
+            old_owner, new_owner = previous.get('owner'), candidate.get('owner')
+            if candidate['route'] == 'semantic_backlog':
+                old_target = previous.get('logical_target_id')
+                if type(old_target) is int and old_target != candidate['message_id']:
+                    continue
+                old_unit, new_unit = previous.get('logical_unit_fp'), candidate.get('logical_unit_fp')
+                if old_unit is not None and new_unit is not None:
+                    if old_unit != new_unit:
+                        continue
+                elif previous.get('unit_key') != candidate.get('unit_key'):
+                    root = new_owner.get('semantic_thread_root') if isinstance(new_owner, dict) else None
+                    if (previous.get('message_id') not in (candidate.get('message_id'), root)
+                            or previous.get('request_fp') != candidate.get('request_fp')):
+                        continue
+            if candidate['route'] == 'patient_context' and isinstance(old_owner, dict) and isinstance(new_owner, dict):
+                if any(isinstance(old_owner.get(k), str) and isinstance(new_owner.get(k), str)
+                       and old_owner[k] != new_owner[k] for k in ('night_id', 'source_sig')):
+                    continue
+            old_fp, new_fp = previous.get('logical_request_fp'), candidate.get('logical_request_fp')
+            if old_fp is not None and new_fp is not None:
+                if old_fp != new_fp:
+                    continue
+            # Legacy reservations contain only an envelope hash. A model or
+            # token-limit change cannot prove that their prompt is different.
+            if result_map is None:
+                result_map = {}
+                results = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
+                    "FROM artifacts WHERE kind=? AND project_id=? AND (message_id IS ? OR ?='semantic_backlog') "
+                    "ORDER BY artifact_id",
+                    (KINDS[1], candidate['project_id'], candidate['message_id'], candidate['route']))
+                for result_row in results:
+                    result_meta = _receipt_meta(result_row['meta'])
+                    result_map.setdefault(result_meta.get('reservation_id'), []).append((result_meta, result_row))
+            matches = result_map.get(previous['reservation_id'], [])
+            _, settled = _settled(previous, maximum, matches)
+            result = matches[0][0]
+            if result.get('disposition'):
+                raise ValueError('discarded')
+            if settled and result.get('http_class') == 'not_sent':
+                continue
+            # A confirmed successful result may be deliberately reprocessed
+            # with another model. An ambiguous send never grants that retry.
+            if (candidate['route'] == 'semantic_backlog' and old_unit is not None and new_unit is not None
+                    and previous['model'] != candidate['model'] and settled
+                    and result.get('http_class') == 'http_200' and result.get('error_kind') is None):
+                continue
+            # A validated rate-limit response rejected this attempt. Its
+            # reserved cost still remains counted under the existing policy.
+            if (result.get('http_class') == 'http_429' and result.get('error_kind') == 'rate_limited'
+                    and result.get('usage') is None):
+                continue
+            raise ValueError('already_sent_or_unknown')
+        except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
+            raise AnthropicError('budget_exceeded', 'cloud_unit_unresolved') from None
 
 
 def usage_report(ledger, *, now=None, period="month"):
@@ -971,12 +1181,23 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
         meta = {"reservation_id": uuid.uuid4().hex, "route": route, "project_id": project_id,
                 "unit_key": str(unit_key), "message_id": message_id, "model": model,
                 "price_version": OPENAI_PRICE_VERSION if model == openai_client.MODEL else PRICE_VERSION, "request_fp": payload_hash(body),
+                "logical_request_fp": _logical_request_fp(body),
+                "logical_target_id": (message_id if route == 'semantic_backlog' and isinstance(owner, dict)
+                                      and owner.get('semantic_target_id') == message_id else None),
                 "max_cost_usd": str(maximum), "max_tokens": tokens, "input_bound": bound,
                 "input_chars": sum(len(text) for text in _texts(body)),
                 "timeout_seconds": float(timeout),
                 "owner": owner or {}}
+        if (route == 'semantic_backlog' and isinstance(owner, dict)
+                and owner.get('semantic_target_id') == message_id
+                and all(isinstance(owner.get(k), str) and owner[k]
+                        for k in ('semantic_source', 'semantic_generation', 'semantic_phase'))):
+            meta['logical_unit_fp'] = payload_hash({
+                'target': message_id, 'source': owner['semantic_source'],
+                'generation': owner['semantic_generation'], 'phase': owner['semantic_phase']})
 
         def check():
+            _guard_repeated_request(ledger, meta)
             reason = block_reason(ledger, c, route, project_id)
             if reason:
                 raise AnthropicError(reason if reason == "pricing_unverified" else "budget_exceeded", reason)

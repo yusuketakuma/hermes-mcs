@@ -169,6 +169,9 @@ def test_background_without_prior_result_uses_cloud_but_recent_arrival_does_not(
         cloud_policy.capture_history_tx(led.db, "synthetic-resume", time.time())
     assert worker._cloud_reextract(led, row, background=True)
     with led.db:
+        led.db.execute("UPDATE messages SET notified_at=? WHERE message_id=1", (time.time() - 3600,))
+    assert worker._cloud_reextract(led, row, background=True)
+    with led.db:
         led.db.execute("UPDATE messages SET notified_at=? WHERE message_id=1", (time.time(),))
     assert not worker._cloud_reextract(led, row, background=True)
 

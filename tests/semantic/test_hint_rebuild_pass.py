@@ -38,6 +38,8 @@ class _Llm:
         self.extractions = 0
 
     def __call__(self, prompt):
+        import semantic_transport
+        semantic_transport._record_inference("local")
         if "要約器" in prompt:
             return _summary_from_facts(prompt)
         self.extractions += 1
@@ -185,8 +187,16 @@ def test_preflight_not_stored_is_never_asked_again(world):
     for row in _kind_rows(db, "semantic_extraction_chunk_v2", 2):
         content = json.loads(row["content"])
         content.pop("jev_preflight")
-        db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
-                      (json.dumps(content, ensure_ascii=False), row["artifact_id"]))
+        import mcs_util
+        row = db.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (row["artifact_id"],)).fetchone()
+        meta = json.loads(row["meta"])
+        proof = meta["provider_provenance"]
+        proof["result_hash"] = mcs_util.payload_hash(content)
+        binding = se._chunk_provider_binding(meta, row["project_id"], row["message_id"], row["model"],
+                                             proof["provider"], proof["result_hash"], proof["reservation_id"])
+        proof["binding_hash"] = mcs_util.payload_hash(binding)
+        db.db.execute("UPDATE artifacts SET content=?, meta=? WHERE artifact_id=?",
+                      (json.dumps(content, ensure_ascii=False), json.dumps(meta), row["artifact_id"]))
     db.db.commit()
     out = v4.reproject_stale(db, _scfg())
     assert out["skip_reasons"]["hint_rebuild:jev_preflight_uncached"] == 1
@@ -320,10 +330,10 @@ def test_one_failing_document_never_blocks_the_next(world, monkeypatch):
     db = world
     real = se.rebuild_facts_v2_cached
 
-    def flaky(member, *args):
+    def flaky(member, *args, **kwargs):
         if member["message_id"] == 1:
             raise RuntimeError("synthetic rebuild failure")
-        return real(member, *args)
+        return real(member, *args, **kwargs)
     monkeypatch.setattr(se, "rebuild_facts_v2_cached", flaky)
     out = v4.reproject_stale(db, _scfg())
     assert out["skip_reasons"]["hint_rebuild:rebuild_failed"] == 1

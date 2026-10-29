@@ -48,6 +48,9 @@ def world(tmp_path, monkeypatch):
                                        posted_at="2026-10-26T10:00:00+09:00")])
             db.artifact_add("extract_llm", "{}", project_id=pid, message_id=mid,
                 meta={"hash": _hash(db, mid), "extract_version": extract_llm.EXTRACT_VERSION - 1})
+        with db.db:
+            db.db.execute("UPDATE messages SET first_seen=?", (now - 3600,))
+            db.db.execute("UPDATE message_revisions SET observed_at=?", (now - 3600,))
     return tmp_path, path, config
 
 
@@ -83,6 +86,13 @@ def test_plan_is_readonly_keyless_and_outputs_only_estimates(world):
     raw = json.dumps(report)
     assert "synthetic private body" not in raw and "synthetic-private-patient" not in raw
     assert "message_id" not in raw and "project_id" not in raw and str(root) not in raw
+
+
+def test_recent_target_is_excluded_from_background_estimate(world):
+    root, path, config = world
+    with closing(Ledger(str(path))) as db, db.db:
+        db.db.execute("UPDATE messages SET notified_at=? WHERE message_id=1", (cli.time.time(),))
+    assert cli.observe(config, root=str(root))["routes"]["reextract"]["targets"] == 0
 
 
 def test_estimate_has_daily_monthly_oneoff_and_optional_fx(world):
@@ -177,6 +187,10 @@ def test_stop_resume_and_idempotent_receipt_share_one_transaction(world):
         req = _req("resume")
         resume = mcs_requests.apply_command(db, req)
         assert resume["outcome"] == "applied" and cloud_policy.global_block_reason(db) is None
+        scope = db.db.execute("SELECT content FROM artifacts WHERE kind='cloud_history_scope' "
+                              "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+        assert json.loads(scope[0]) == {'version': 2, 'command_id': req['command_id']}
+        assert cloud_policy.history_thread_allowed(db.db, 1, 1)
         count = db.db.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0]
         env.unlink()
         assert mcs_requests.apply_command(db, req) == resume
@@ -470,6 +484,8 @@ def test_estimate_separates_chunk_repair_and_shadow_without_fabricating_output_u
                                    posted_at="2026-10-26T10:00:00+09:00")])
         db.artifact_add("extract_llm", "{}", project_id=1, message_id=1,
             meta={"hash": _hash(db, 1), "extract_version": extract_llm.EXTRACT_VERSION - 1})
+        with db.db:
+            db.db.execute("UPDATE message_revisions SET observed_at=? WHERE message_id=1", (cli.time.time() - 3600,))
     report = cli.observe(config, root=str(root))
     parts = report["estimate_components"]
     assert parts["current_backlog"]["reextract"]["basic_requests_estimate"] == 1

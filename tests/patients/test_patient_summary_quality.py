@@ -8,8 +8,9 @@ import pytest
 
 import patient_context_refresh as refresh
 import extract_llm as worker
+import semantic_jev
 import semantic_runtime as semantic_runtime
-from test_patient_context_refresh import runtime as runtime, seed, finish, document, CFG
+from test_patient_context_refresh import runtime as runtime, seed, finish, step, document, CFG
 from semantic_jev import JevError
 from extract_testkit import _ledger, _message
 
@@ -379,15 +380,23 @@ def test_quality_owner_calls_jev_once_and_rechecks_saved_pass(quality_owner):
     assert len(sends) == 1
 
 
-def test_requested_cloud_with_missing_key_does_not_fall_back_to_local(runtime, monkeypatch):
+def test_requested_cloud_with_missing_key_falls_back_to_local(runtime, monkeypatch):
     led, _, local_calls = runtime
     seed(led, body='生活環境: 完全合成の居住記録。')
     cfg = {**CFG, 'cloud_llm': {'mode': 'on', 'project_ids': [1]}}
     monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *_: None)
+    monkeypatch.setattr(worker, 'load_config', lambda: cfg)
+    monkeypatch.setattr(worker, '_writer_current', lambda **_kwargs: True)
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: None)
     result = refresh.run_due(led, cfg, deadline=runtime[1].mono + 600, admit=lambda: True)
-    assert result['status'] == 'deferred' and not local_calls
+    assert result['status'] == 'progressed' and local_calls
     assert refresh._contract(cfg, 1).get('provider') == worker._cloud_contract()
-    assert not document(led)
+    for _ in range(60):
+        result = step(runtime, cfg=cfg)
+        if result['status'] == 'complete':
+            break
+    assert result['status'] == 'complete'
+    assert refresh.context_view_input(led.db, 1, cfg=cfg)
 
 
 @pytest.fixture

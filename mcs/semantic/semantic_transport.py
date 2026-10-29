@@ -17,6 +17,23 @@ LLM_MODEL = local_llm.MODEL
 _LLM_EPIN, _LLM_MPIN = LLM_ENDPOINT, LLM_MODEL
 _job_model = ContextVar("semantic_job_model", default=None)
 _inference_trace = ContextVar("semantic_inference_trace", default=None)
+_inference_target = ContextVar("semantic_inference_target", default=None)
+_inference_generation = ContextVar("semantic_inference_generation", default=None)
+
+
+@contextmanager
+def inference_targets(generation=None):
+    token = _inference_target.set(None)
+    generation_token = _inference_generation.set(generation)
+    try:
+        yield
+    finally:
+        _inference_generation.reset(generation_token)
+        _inference_target.reset(token)
+
+
+def set_inference_target(message_id, phase="facts"):
+    _inference_target.set((message_id, phase))
 
 
 @contextmanager
@@ -58,6 +75,16 @@ def inference_model() -> str:
     return provider.model if provider is not None else llm_model()
 
 
+def inference_provider() -> str:
+    """Identify the current inference backend without inferring old provenance."""
+    provider = _job_model.get()
+    if provider is None:
+        return 'local'
+    import cloud_policy
+    return next((name for name, model in cloud_policy.PROVIDERS.items()
+                 if provider.model == model), 'unknown')
+
+
 def inference_requests() -> list:
     """Keep actual paid calls distinct from reused local or cloud stage results."""
     provider = _job_model.get()
@@ -66,15 +93,20 @@ def inference_requests() -> list:
 
 
 @contextmanager
-def backlog_inference(ledger, cfg, job, deadline, current, transport):
+def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_fallback=None,
+                      fallback_current=None):
     """Route historical semantic inference through the existing cloud budget guards."""
     import extract_llm
     import cloud_policy
     import writer_lock
     pl = runtime.parse_payload(job)
-    if pl.get("eligible") or not cloud_policy.history_thread_allowed(
+    if not cloud_policy.history_target_ready(ledger.db, job["project_id"], job["message_id"]) or not cloud_policy.history_thread_allowed(
             ledger.db, job["project_id"], job["message_id"]) or extract_llm._cloud_mode(
             ledger, cfg, "semantic_backlog", job["project_id"]) != "on":
+        yield None
+        return
+    scope_snapshot = cloud_policy.history_thread_snapshot(ledger.db, job['project_id'], job['message_id'])
+    if scope_snapshot is None:
         yield None
         return
     lock_lost = None
@@ -94,22 +126,67 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport):
             raise
 
     def scoped_current():
-        return current() and cloud_policy.history_thread_allowed(
-            ledger.db, job["project_id"], job["message_id"])
+        return current() and cloud_policy.history_thread_snapshot(
+            ledger.db, job["project_id"], job["message_id"]) == scope_snapshot
 
     provider = extract_llm._CloudProvider(
         ledger, cfg, route="semantic_backlog", project_id=job["project_id"],
         message_id=job["message_id"], unit_key=f"semantic:{job['job_id']}:{pl.get('generation', '')}",
         deadline=deadline, current=scoped_current, dispatch=dispatch, transport=request)
 
+    switched = False
+
+    def call_local(prompt, timeout):
+        if not scoped_current():
+            raise runtime.LLMNotSent('cloud_fallback_source_changed')
+        result = local_fallback(prompt) if timeout is None else local_fallback(prompt, timeout=timeout)
+        if not scoped_current():
+            raise runtime.LLMNotSent('cloud_fallback_source_changed')
+        return result
+
+    def local(prompt, timeout):
+        nonlocal switched
+        if (local_fallback is None or provider.possibly_sent or not scoped_current()
+                or fallback_current is not None and not fallback_current()):
+            raise runtime.LLMNotSent('cloud_fallback_unavailable')
+        switched = True
+        _job_model.set(None)
+        return call_local(prompt, timeout)
+
     def chat(prompt, timeout=None):
+        if switched:
+            return call_local(prompt, timeout)
         _failed(None)
+        target = _inference_target.get()
+        provider.message_id = target[0] if target else job["message_id"]
+        if not cloud_policy.history_target_ready(ledger.db, job["project_id"], provider.message_id):
+            raise runtime.LLMNotSent('realtime_target')
+        provider.owner = {"semantic_target_id": provider.message_id, "semantic_thread_root": job["message_id"]}
+        if target and _inference_generation.get():
+            from inference_dependency_loss import source_binding
+            from mcs_util import payload_hash
+            members = ledger.db.execute("SELECT message_id FROM messages WHERE project_id=? "
+                "AND (message_id=? OR parent_id=?) ORDER BY message_id",
+                (job["project_id"], job["message_id"], job["message_id"])).fetchall()
+            occurrences = [(row[0], source_binding(ledger.db, job["project_id"], row[0])) for row in members]
+            if not occurrences or any(binding is None for _, binding in occurrences):
+                raise runtime.LLMNotSent('cloud_source_unverified')
+            source_occurrences = ([item for item in occurrences if item[0] == provider.message_id]
+                                  if target[1] == 'facts' else occurrences)
+            if not source_occurrences:
+                raise runtime.LLMNotSent('cloud_target_unverified')
+            provider.owner.update(semantic_source=payload_hash(source_occurrences),
+                                  semantic_generation=_inference_generation.get(), semantic_phase=target[1])
         try:
             response = provider(prompt, deadline=min(deadline, time.monotonic() + (timeout or LLM_TIMEOUT)),
                                 max_tokens=LLM_LONG_MAX_TOKENS)
         except extract_llm.CloudBusy:
+            if local_fallback is not None:
+                return local(prompt, timeout)
             raise runtime.LLMNotSent("cloud_capacity") from None
-        except extract_llm.CloudFallback:
+        except extract_llm.CloudFallback as error:
+            if local_fallback is not None and str(error) != 'cloud_unit_changed' and not provider.possibly_sent:
+                return local(prompt, timeout)
             current()
             return _failed("cloud_failed")
         error = local_llm.acceptance_error(response)

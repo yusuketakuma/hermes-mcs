@@ -76,6 +76,84 @@ def test_history_without_false_eligible_uses_cloud_and_settles(cloud):
     assert not cloud_policy.usage_report(led)["pricing_unverified"]
 
 
+def test_same_prompt_for_distinct_targets_has_separate_reservations(cloud):
+    led, cfg, job, calls = cloud
+    led.save_messages([_message(2, parent=1, body='synthetic reply')])
+    snapshot(led)
+    with transport.inference_targets():
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct) as chat:
+            for target in (1, 2):
+                transport.set_inference_target(target)
+                assert json.loads(chat('same synthetic prompt')) == {'facts': []}
+    assert len(calls) == 2
+    assert [row['message_id'] for row in rows(led, 'cloud_usage_reserve')] == [1, 2]
+
+
+def test_not_sent_cloud_falls_back_locally_for_the_rest_of_the_unit(cloud, monkeypatch):
+    led, cfg, job, _ = cloud
+    attempts, local = [], []
+
+    def unavailable(provider, *args, **kwargs):
+        attempts.append(True)
+        raise extract_llm.CloudFallback('synthetic_unavailable')
+
+    monkeypatch.setattr(extract_llm._CloudProvider, '__call__', unavailable)
+    def local_chat(prompt, **kwargs):
+        local.append(transport.inference_model())
+        return '{"facts": []}'
+
+    with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                     lambda: True, direct, local_fallback=local_chat,
+                                     fallback_current=lambda: True) as chat:
+        assert json.loads(chat('synthetic first')) == {'facts': []}
+        assert json.loads(chat('synthetic second')) == {'facts': []}
+    assert len(attempts) == 1 and local == [transport.llm_model()] * 2
+    assert not rows(led, 'cloud_usage_reserve')
+
+
+@pytest.mark.parametrize('change', ['during', 'between'])
+def test_local_fallback_rechecks_scope_on_each_call(cloud, monkeypatch, change):
+    led, cfg, job, _ = cloud
+    state = {'current': True, 'calls': 0}
+    def unavailable(provider, *args, **kwargs):
+        raise extract_llm.CloudFallback('synthetic_unavailable')
+    def local_chat(prompt, **kwargs):
+        state['calls'] += 1
+        if change == 'during':
+            state['current'] = False
+        return '{"facts": []}'
+    monkeypatch.setattr(extract_llm._CloudProvider, '__call__', unavailable)
+    with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                     lambda: state['current'], direct, local_fallback=local_chat,
+                                     fallback_current=lambda: True) as chat:
+        if change == 'between':
+            assert json.loads(chat('synthetic first')) == {'facts': []}
+            state['current'] = False
+        with pytest.raises(transport.runtime.LLMNotSent):
+            chat('synthetic next')
+    assert state['calls'] == 1
+
+
+@pytest.mark.parametrize('state', ['paid_unknown', 'partial'])
+def test_cloud_fallback_never_mixes_a_paid_or_existing_partial_unit(cloud, monkeypatch, state):
+    led, cfg, job, _ = cloud
+
+    def unavailable(provider, *args, **kwargs):
+        provider.possibly_sent = state == 'paid_unknown'
+        raise extract_llm.CloudFallback('synthetic_unavailable')
+
+    monkeypatch.setattr(extract_llm._CloudProvider, '__call__', unavailable)
+    with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                     lambda: True, direct, local_fallback=lambda *a, **kw: pytest.fail('local'),
+                                     fallback_current=lambda: state != 'partial') as chat:
+        if state == 'partial':
+            with pytest.raises(transport.runtime.LLMNotSent):
+                chat('synthetic input')
+        else:
+            assert chat('synthetic input') is None
+
+
 def test_local_only_feedback_is_filtered_before_the_cloud_selection_limit(cloud, monkeypatch):
     led, cfg, _, _ = cloud
     led.save_messages([_message(mid=2, body="完全合成の過去記録。")])
@@ -86,11 +164,12 @@ def test_local_only_feedback_is_filtered_before_the_cloud_selection_limit(cloud,
     assert [row["message_id"] for row in selected] == [2]
 
 
-@pytest.mark.parametrize("denial", ["arrival", "off", "cap", "scope", "route"])
+@pytest.mark.parametrize("denial", ["recent", "off", "cap", "scope", "route"])
 def test_local_boundaries_do_not_send(cloud, denial):
     led, cfg, job, calls = cloud
-    if denial == "arrival":
-        job["payload"] = json.dumps({**json.loads(job["payload"]), "eligible": True})
+    if denial == "recent":
+        with led.db:
+            led.db.execute("UPDATE messages SET notified_at=? WHERE message_id=1", (time.time(),))
     elif denial == "off":
         cfg["cloud_llm"]["mode"] = "off"
     elif denial == "cap":
@@ -105,6 +184,20 @@ def test_local_boundaries_do_not_send(cloud, denial):
     assert not calls and not rows(led, "cloud_usage_reserve")
 
 
+def test_eligible_background_job_after_one_hour_uses_cloud(cloud):
+    led, cfg, job, calls = cloud
+    with led.db:
+        led.db.execute("UPDATE messages SET notified_at=? WHERE message_id=1", (time.time() - 3600,))
+        payload = {**json.loads(job['payload']), 'eligible': True}
+        led.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?", (json.dumps(payload), job['job_id']))
+    job['payload'] = json.dumps(payload)
+    selected = semantic_drain._select_cloud_due(led, 'backlog', ('semantic',), False, 1)[0]
+    assert [row['job_id'] for row in selected] == [job['job_id']]
+    with transport.backlog_inference(led, cfg, job, time.monotonic() + 120, lambda: True, direct) as chat:
+        assert chat and json.loads(chat('synthetic historical prompt')) == {'facts': []}
+    assert len(calls) == 1
+
+
 def test_observe_counts_history_jobs_without_reporting_realtime_as_cloud(cloud):
     import cloud_cli
     led, cfg, job, _ = cloud
@@ -117,7 +210,7 @@ def test_observe_counts_history_jobs_without_reporting_realtime_as_cloud(cloud):
         led.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
             (json.dumps({**json.loads(job["payload"]), "eligible": True}), job["job_id"]))
     counts = cloud_cli._route_counts(led.db, cfg, settings, time.monotonic() + 5)
-    assert counts["semantic_backlog"]["targets"] == 0
+    assert counts["semantic_backlog"]["targets"] == 1
 
 
 @pytest.mark.parametrize("change", ["new", "edit", "aba", "reply", "missing_scope"])
@@ -274,6 +367,22 @@ def test_full_cloud_capacity_defers_without_usage_or_local_fallback(cloud):
     assert not calls and not rows(led, "cloud_usage_reserve")
 
 
+def test_realtime_process_never_uses_cloud_transport(cloud, monkeypatch):
+    led, cfg, job, calls = cloud
+    local = []
+    def stages(ledger, scfg, selected, jev, llm, deadline, **kw):
+        assert llm('synthetic prompt') == 'synthetic local'
+        return 'done'
+    monkeypatch.setattr(semantic_drain, '_process_job_inner', stages)
+    monkeypatch.setattr(semantic_drain.semantic_store, 'refresh_cards_allowed', lambda *a: False)
+    assert semantic_drain._process_job(
+        led, semantic_drain.runtime_config(cfg)[0], job, None,
+        lambda *a, **kw: local.append(True) or 'synthetic local', time.monotonic() + 120,
+        lane='realtime', diagnostics={}, cloud_transport=direct) == 'done'
+    assert local and not calls and not rows(led, 'cloud_usage_reserve')
+    assert not semantic_drain._select_cloud_due(led, 'realtime', ('semantic',), False, 1)[0]
+
+
 def test_cloud_only_process_never_enters_local_stage_when_scope_changes(cloud, monkeypatch):
     led, cfg, job, calls = cloud
     cfg["cloud_llm"]["mode"] = "off"
@@ -347,7 +456,7 @@ def test_selection_reads_receipt_once_for_multiple_candidates(cloud, lane):
     finally:
         led.db.set_trace_callback(None)
     assert len(selected) >= 10
-    assert sum(s.lstrip('- ').startswith("SELECT content FROM (SELECT content FROM artifacts")
+    assert sum(s.lstrip('- ').startswith("SELECT content,meta FROM (SELECT content,meta FROM artifacts")
                for s in statements) == 1
 
 
@@ -488,7 +597,7 @@ def test_selection_preserves_caller_cursor_and_transaction(cloud, lane):
 
 
 @pytest.mark.parametrize("first", ["local", "cloud"])
-def test_cached_chunks_keep_their_actual_backend_without_duplicate_paid_calls(cloud, monkeypatch, first):
+def test_cached_chunks_are_not_mixed_across_backends(cloud, monkeypatch, first):
     import semantic_extraction
     import semantic_store
     from semantic_testkit import _llm_v2
@@ -510,9 +619,13 @@ def test_cached_chunks_keep_their_actual_backend_without_duplicate_paid_calls(cl
         return semantic_extraction.extract_facts_v2(fn, bundle["members"][0], ledger=led,
             project_id=1, source_fingerprint=bundle["source_fingerprint"])
 
+    def local(prompt, **kwargs):
+        transport._record_inference("local")
+        return _llm_v2(prompt, **kwargs)
+
     def use(backend):
         if backend == "local":
-            return extract(_llm_v2)
+            return extract(local)
         with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                          lambda: True, direct) as cloud_fn:
             return extract(cloud_fn)
@@ -531,13 +644,28 @@ def test_cached_chunks_keep_their_actual_backend_without_duplicate_paid_calls(cl
                                          lambda: True, direct) as cloud_fn:
             assemble(cloud_fn)
     else:
-        assemble(_llm_v2)
-    assert len(calls) == count
-    assert [dict(row) for row in rows(led, semantic_extraction.KIND_CHUNK_V2)] == before
-    expected = transport.llm_model() if first == "local" else anthropic_client.MODEL
-    assert json.loads(before[0]["meta"])["actual_model"] == expected
+        assemble(local)
+    assert len(calls) == count + (1 if first == "local" else 0)
+    after = [dict(row) for row in rows(led, semantic_extraction.KIND_CHUNK_V2)]
+    assert len(after) == len(before) + 1
+    first_provider = "local" if first == "local" else "anthropic"
+    second_provider = "anthropic" if first == "local" else "local"
+    assert json.loads(before[0]["meta"])["provider_provenance"]["provider"] == first_provider
+    assert json.loads(after[-1]["meta"])["provider_provenance"]["provider"] == second_provider
     assembled = rows(led, semantic_drain.KIND_FACTS_V2)
-    assert assembled and assembled[-1]["model"] == transport.llm_model()
+    assert assembled and json.loads(assembled[-1]["meta"])["provider_provenance"]["providers"] == [second_provider]
+    stored = assembled[-1]
+    doc, meta = json.loads(stored['content']), json.loads(stored['meta'])
+    producer = {}
+    rebuilt, reason = semantic_extraction.rebuild_facts_v2_cached(
+        bundle['members'][0], led.db, bundle['source_fingerprint'], 1, doc, meta,
+        producer_out=producer)
+    assert reason is None and rebuilt == doc
+    assert producer == {'providers': [second_provider], 'complete': True}
+    meta['provider_provenance']['result_hash'] = 'synthetic-invalid'
+    rebuilt, reason = semantic_extraction.rebuild_facts_v2_cached(
+        bundle['members'][0], led.db, bundle['source_fingerprint'], 1, doc, meta)
+    assert rebuilt is None and reason == 'producer_unverified'
 
 
 def test_resident_history_turn_selects_cloud_batch_without_expanding_realtime(monkeypatch):
@@ -566,4 +694,5 @@ def test_resident_history_turn_selects_cloud_batch_without_expanding_realtime(mo
     history = [r for r in seen if r["oldest_first"]]
     assert history and history[0]["limit"] == 4
     assert history[0]["allow_cloud"] and history[0]["background"]
-    assert all(r["limit"] == 1 and not r["allow_cloud"] for r in seen if not r["oldest_first"])
+    assert all(r["limit"] == 1 and r["allow_cloud"] and r["background"]
+               for r in seen if not r["oldest_first"])

@@ -429,7 +429,7 @@ def test_a_result_after_the_price_table_expires_is_settled_at_its_reservation_pr
     with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
         reservation = c.usage_reserver(ledger, _period(), route="reextract", project_id=1, unit_key="u1")(
             {"model": c.MODEL, "max_tokens": 100}, 2)
-        monkeypatch.setattr(c, "pricing_valid", lambda now=None: False)   # the table expired meanwhile
+        monkeypatch.setattr(c, "pricing_valid", lambda now=None, *, model=None: False)   # the table expired meanwhile
         result = {"model": c.MODEL, "request_fp": reservation["request_fp"], "http_class": "http_200",
                   "usage": {"input_tokens": 10, "output_tokens": 2}, "request_id": "req_synthetic",
                   "error_kind": None}

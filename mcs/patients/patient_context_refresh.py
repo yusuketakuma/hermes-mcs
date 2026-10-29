@@ -116,18 +116,28 @@ def _published_version(db, pid):
                       (pid, KIND, PROGRESS)).fetchone()[0]
 
 
-def _replace(ledger, kind, pid, content, meta, mid=None, *, write_count=None):
-    # Linked summaries have no messages row; their checkpoint is patient-scoped.
+def _artifact_meta(kind, meta, mid):
     meta = {**meta, VERSION_KEY: CURRENT_VERSION}
     if kind in (SCAN, CHUNK):
         meta.setdefault("source_key", mid if mid is not None else 0)
+    if kind == SCAN:
+        meta['backend_slot'] = _digest([meta.get('contract'), meta.get('provider'),
+                                        meta.get('source_binding')])
+    return meta
+
+
+def _replace(ledger, kind, pid, content, meta, mid=None, *, write_count=None):
+    # Linked summaries have no messages row; their checkpoint is patient-scoped.
+    meta = _artifact_meta(kind, meta, mid)
     mid = None if kind in (SCAN, CHUNK) and mid == 0 else mid
     # Keep previous inference generations and distinct original karte records.
     deleted = ledger.db.execute("DELETE FROM artifacts WHERE kind=? AND project_id=? AND message_id IS ? AND "
                       + current_meta_pred("meta", target=CURRENT_VERSION)
                       + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.source_key') END IS ?"
+                      + (" AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.backend_slot') END=?" if kind == SCAN else "")
                       + (" AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.chunk_key') END=?" if kind == CHUNK else ""),
-                      (kind, pid, mid, meta.get("source_key"), *([meta["chunk_key"]] if kind == CHUNK else [])))
+                      (kind, pid, mid, meta.get("source_key"), *([meta['backend_slot']] if kind == SCAN else []),
+                       *([meta["chunk_key"]] if kind == CHUNK else [])))
     artifact_id = ledger.artifact_add_tx(kind, json.dumps(content, ensure_ascii=False),
                                          project_id=pid, message_id=mid, model=meta.get("model", ""), meta=meta)
     if write_count is not None:
@@ -165,10 +175,8 @@ def _save_source_chunk_tx(ledger, pid, mid, source_key, chunk_span, facts, meta)
 
 
 def _adoption_artifact_matches(db, artifact_id, kind, pid, mid, content, meta):
-    meta = {**meta, VERSION_KEY: CURRENT_VERSION}
+    meta = _artifact_meta(kind, meta, mid)
     mid = None if kind == SCAN and mid == 0 else mid
-    if kind == SCAN:
-        meta.setdefault("source_key", mid if mid is not None else 0)
     row = db.execute("SELECT kind=?,project_id=?,message_id IS ?,content=?,model=?,meta=? "
         "FROM artifacts WHERE artifact_id=?", (kind, pid, mid, json.dumps(content, ensure_ascii=False),
         meta.get("model", ""), json.dumps(meta, ensure_ascii=False), artifact_id)).fetchone()
@@ -373,17 +381,25 @@ def _current_scans(db, pid, sources, contract, *, cfg=None, check_quality=True):
 def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quality=True):
     changes = db.total_changes
     stored = {}
-    with closing(db.execute("SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? AND "
+    prior_failure = False
+    by_key = {context_plan.source_key(source): source for source in sources}
+    source_failure_kind = _quality_kind(QUALITY_FAIL, {'purpose': 'source'})
+    with closing(db.execute("SELECT message_id,content,meta, "
+                          "EXISTS(SELECT 1 FROM artifacts f WHERE f.project_id=? AND f.kind=?) "
+                          "FROM artifacts WHERE kind=? AND project_id=? AND "
                           + current_meta_pred("meta", target=CURRENT_VERSION)
-                          + " AND COALESCE(json_extract(CASE WHEN json_valid(meta) THEN meta END,'$.invalidated'),0)=0 ORDER BY artifact_id", (SCAN, pid))) as rows:
+                          + " AND COALESCE(json_extract(CASE WHEN json_valid(meta) THEN meta END,'$.invalidated'),0)=0 ORDER BY artifact_id",
+                          (pid, source_failure_kind, SCAN, pid))) as rows:
         for row in rows:
+            prior_failure = bool(row[3])
             doc, meta = loads_dict(row[1]) or {}, loads_dict(row[2]) or {}
             key = meta.get("source_key", row[0] if row[0] is not None else 0)
             if type(key) not in (int, str):
                 continue
-            stored[key] = (doc, meta)
+            source = by_key.get(key)
+            if source and meta.get("source_sig") == context_plan.source_signature(source) and _route_contract(meta) == contract:
+                stored[key] = (doc, meta)
     result = {}
-    by_key = {context_plan.source_key(source): source for source in sources}
     for key, source in by_key.items():
         doc, meta = stored.get(key, ({}, {}))
         if meta.get("source_sig") == context_plan.source_signature(source) and _route_contract(meta) == contract:
@@ -433,7 +449,8 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
     # the proof query. Preserve its membership, including physical-message
     # mismatches and duplicate JSON keys, without reading chunk bodies here.
     hydrate_ids = {}
-    if (check_quality and contract.get("provider") and cfg is not None
+    quality_required = bool(contract.get("provider") or prior_failure)
+    if (check_quality and quality_required and cfg is not None
             and any(scan.get("audited") or scan.get("source_quality_state") == "skipped"
                     for scan in result.values())):
         with closing(db.execute("SELECT artifact_id,meta,CASE WHEN json_valid(meta) "
@@ -491,11 +508,11 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
                 _source_quality_hold_key(db, pid, cfg, by_key[key], scan["_chunks_sig"]))
             if not scan["_quality_held"]:
                 scan["quality_state"] = None
-        if (check_quality and contract.get("provider") and scan.get("audited")
+        if (check_quality and quality_required and scan.get("audited")
                 and (cfg is None or not _source_quality_verified(db, pid, by_key[key], contract, cfg, scan,
                     scan_proof=(db, pid, context_plan.source_signature(by_key[key]), contract, changes, scan, hydrate_ids.get(key, []))))):
             scan["audited"] = False
-        if (check_quality and contract.get("provider") and cfg is not None
+        if (check_quality and quality_required and cfg is not None
                 and scan.get("source_quality_state") == "skipped"
                 and scan.get("audited_chunks_sig") == scan["_chunks_sig"]):
             scan["_audit_skipped"] = _source_quality_verified(
@@ -612,6 +629,13 @@ def _quality_scope_allowed(db, pid, policy, sources=None):
                for source in sources if context_plan.source_usable(source) and source["source"] == "chat")
 
 
+def _has_prior_quality_failure(db, pid, *, purpose=None):
+    kinds = ((QUALITY_FAIL, _quality_kind(QUALITY_FAIL, {'purpose': 'source'})) if purpose is None
+             else (_quality_kind(QUALITY_FAIL, {'purpose': purpose}),))
+    return db.execute('SELECT 1 FROM artifacts WHERE project_id=? AND kind IN ('
+                      + ','.join('?' for _ in kinds) + ') LIMIT 1', (pid, *kinds)).fetchone() is not None
+
+
 def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
     """Revalidate a cloud summary's receipt and current promotion boundary."""
     import semantic_policy
@@ -690,9 +714,9 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
                and _route_contract(meta) == snapshot["contract"]
                and meta.get("scan_sig") == _scan_sig(db, pid)
                and _summary_valid(db, pid, doc, {context_plan.source_key(s): s for s in sources},
-                                  allow_historical=bool(meta.get("provider") and meta.get("quality_audit_key")))
-               and (not snapshot["contract"].get("provider")
-                    or bool(meta.get("provider") and _quality_publication_allowed(db, pid, cfg, doc, meta, read_proof=read_proof))))
+                                  allow_historical=bool(meta.get("quality_audit_key")))
+               and (not (snapshot["contract"].get("provider") or _has_prior_quality_failure(db, pid))
+                    or _quality_publication_allowed(db, pid, cfg, doc, meta, read_proof=read_proof)))
     scope = snapshot.get("scope") or {}
     acquired_empty = bool(counts["total"] or scope.get("fetch_state") == "complete")
     complete = (not _out_of_scope(snapshot) and options(cfg)["enabled"] and acquired_empty
@@ -1247,7 +1271,8 @@ def _quality_skip_evidence(db, pid, identity, selected, threshold):
     """Reject unresolved or adverse existing answers before accepting a skip."""
     import semantic_runtime
     purpose = identity.get("purpose", "summary")
-    if (_quality_failed(db, pid, identity)
+    if (_has_prior_quality_failure(db, pid, purpose='source' if purpose == 'source' else None)
+            or _quality_failed(db, pid, identity)
             or semantic_runtime.patient_summary_request_problem(
                 db, pid, identity, identity["fact_ids"], purpose=purpose)):
         return False
@@ -2202,7 +2227,15 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
     key = semantic_jev.api_key()
     cloud_key = extract_llm.cloud_policy.selected_key(extract_llm.HOME, cfg)
     scfg, errors = semantic_policy.semantic_config(cfg, key_present=bool(key))
-    if (errors or not cloud_key or scfg["mode"] == "off"
+    local_quality = bool(isinstance(base_meta, dict) and not base_meta.get('provider')
+                         and (base_meta.get('route_contract') or not _contract(cfg, pid).get('provider')))
+    if source is not None:
+        scan = _current_scans(ledger.db, pid, [source], _contract(cfg, pid), check_quality=False).get(
+            context_plan.source_key(source), {})
+        actual = scan.get('_source_meta', {})
+        local_quality = bool(not actual.get('provider')
+                             and (actual.get('route_contract') or not _contract(cfg, pid).get('provider')))
+    if (errors or not cloud_key and not local_quality or scfg["mode"] == "off" and not local_quality
             or scfg["project_ids"] is not None and pid not in scfg["project_ids"]):
         return "deferred", None
     lane_cap = scfg["daily_request_budget"] - math.ceil(
@@ -2213,7 +2246,8 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
         used = jev_usage_today(ledger)
     except (semantic_jev.JevError, ValueError, sqlite3.Error):
         return "deferred", None
-    skip_reason = ("not_configured" if not key else
+    skip_reason = ("disabled" if local_quality and scfg['mode'] == 'off' else
+                   "not_configured" if not key else
                    "disabled" if scfg["daily_request_budget"] <= 0 else
                    "backlog_reserved" if used >= lane_cap else None)
     if semantic_runtime.circuit_open(ledger):
@@ -2259,7 +2293,8 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                     live_cap = live_semantic["daily_request_budget"] - math.ceil(
                         live_semantic["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
                     still_skipped = ((skip_reason == "not_configured" and not live_key)
-                                     or (skip_reason == "disabled" and live_semantic["daily_request_budget"] <= 0)
+                                     or (skip_reason == "disabled" and (live_semantic["daily_request_budget"] <= 0
+                                         or local_quality and live_semantic['mode'] == 'off'))
                                      or (skip_reason == "backlog_reserved" and live_used >= live_cap)
                                      or (skip_reason == "daily_budget" and live_used >= live_cap)
                                      or skip_reason == "service_unavailable"
@@ -2273,7 +2308,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                     denied = True
                     return False
             if (time.monotonic() >= deadline or not admit() or not extract_llm._writer_current(full=True)
-                    or live_key != key or problems or live_semantic["mode"] == "off" or paused(ledger.db, pid)
+                    or live_key != key or problems or live_semantic["mode"] == "off" and not local_quality or paused(ledger.db, pid)
                     or extract_llm.cloud_policy.selected_key(extract_llm.HOME, live) != cloud_key
                     or live_semantic["project_ids"] is not None and pid not in live_semantic["project_ids"]
                     or _quality_assessment(live_semantic) != assessment):
@@ -2331,6 +2366,11 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
             return ("held" if source_candidate_ref is not None else "failed"), identity
         purpose = identity.get("purpose", "summary")
         selected = set() if source is not None else {row["fact_ids"][0] for row in summary}
+
+        def skip_blocked_status():
+            problem = semantic_runtime.patient_summary_request_problem(
+                ledger.db, pid, identity, identity["fact_ids"], purpose=purpose)
+            return "held" if problem == "patient_summary_invalid_exhausted" else "unknown" if problem else "deferred"
         if _quality_pass_present(ledger.db, pid, identity):
             # A PASS marker cannot survive missing or altered answer evidence.
             if purpose == "source":
@@ -2345,6 +2385,8 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                 **({"_candidate_ref":source_candidate_ref,"_source_chunks_sig":initial["chunks_sig"]}
                    if purpose == "source" else {})}
         if skip_reason is not None:
+            if _has_prior_quality_failure(ledger.db, pid, purpose='source' if purpose == 'source' else None):
+                return skip_blocked_status(), identity
             _quality_mark_skipped(ledger, pid, identity, claim, selected, current,
                                   scfg["match_threshold"], skip_reason)
             return "skipped", {**identity, "_keys": (key, cloud_key), "_skip_reason": skip_reason,
@@ -2428,6 +2470,8 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
             if not outcome["evaluated"]:
                 reason = semantic_audit.jev_skip_reason(getattr(client, "last_error", None))
                 if reason is not None:
+                    if _has_prior_quality_failure(ledger.db, pid, purpose='source' if purpose == 'source' else None):
+                        return skip_blocked_status(), identity
                     skip_reason = reason
                     try:
                         _quality_mark_skipped(ledger, pid, identity, claim, selected, current,
@@ -2488,7 +2532,8 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
     stored = _scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], estimate_cfg, proof)
     scans = [stored.get(context_plan.source_key(source), {}) for source in snapshot["sources"] if context_plan.source_usable(source)]
     recheck_available = False
-    if (not estimate and snapshot["contract"].get("provider")
+    quality_required = bool(snapshot["contract"].get("provider") or _has_prior_quality_failure(db, pid))
+    if (not estimate and quality_required
             and (meta.get("quality_audit_status") == "SKIPPED"
                  or any(scan.get("_audit_skipped") for scan in scans))):
         try:
@@ -2510,18 +2555,18 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
             recheck_available = False
     snapshot["source_failures"] = sum(bool(scan.get("failure")) for scan in scans)
     quality_changed = False
-    if snapshot["contract"].get("provider") and meta.get("quality_audit_key"):
+    if quality_required and meta.get("quality_audit_key"):
         # Planning may conservatively recheck an unchanged PASS after config edits;
         # execution still validates policy and reuses receipts before any request.
         quality_changed = meta.get("quality_schedule_key") != _digest([cfg, _quality_code()])
     summary_needed = (not old or meta.get("source_sig") != snapshot["source_sig"]
                     or meta.get("publication_requested", meta.get("published")) != options(cfg)["publication"]
                     or meta.get("summary_checked") is not True
-                    or bool(snapshot["contract"].get("provider") and not meta.get("quality_audit_key"))
+                    or bool(quality_required and not meta.get("quality_audit_key"))
                     or bool(recheck_available and meta.get("quality_audit_status") == "SKIPPED")
                     or quality_changed
                     or progress.get("summary_pending", False))
-    cloud_ready = (not snapshot["contract"].get("provider")
+    cloud_ready = (not quality_required
                    or snapshot["acquisition"]["complete"] and snapshot["dependencies"]["complete"]
                    and _sources_intact(snapshot["sources"])
                    and all(_scan_ready(scan) for scan in scans))
@@ -2640,7 +2685,13 @@ def lane_metrics(db) -> dict:
             "COUNT(*) AS n, SUM(NOT json_valid(a.content)) AS invalid "
             "FROM artifacts a JOIN patients p ON p.project_id=a.project_id "
             "WHERE a.kind IN (?,?) AND COALESCE(p.is_archived,0)=0 AND "
-            + current_meta_pred("a.meta", target=CURRENT_VERSION) + " GROUP BY 1,2", (PROGRESS, PROGRESS, SCAN)):
+            + current_meta_pred("a.meta", target=CURRENT_VERSION)
+            + " AND (a.kind!=? OR NOT EXISTS (SELECT 1 FROM artifacts b WHERE b.kind=a.kind "
+            "AND b.project_id=a.project_id AND b.artifact_id>a.artifact_id AND "
+            + current_meta_pred("b.meta", target=CURRENT_VERSION)
+            + " AND CASE WHEN json_valid(b.meta) THEN json_extract(b.meta,'$.source_key') END "
+            "IS CASE WHEN json_valid(a.meta) THEN json_extract(a.meta,'$.source_key') END)) "
+            "GROUP BY 1,2", (PROGRESS, PROGRESS, SCAN, SCAN)):
         if row[5]:
             raise ValueError("invalid patient context observation")
         lane, failure = row[0], row[1]
@@ -3001,6 +3052,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     provider = None
     mode = extract_llm._cloud_mode(ledger, cfg, "patient_context", pid)
     cloud_requested = bool(snapshot["contract"].get("provider"))
+    quality_required = cloud_requested or _has_prior_quality_failure(ledger.db, pid)
     cloud_settings = extract_llm._cloud_settings(cfg) if mode in ("on", "shadow") else None
     estimated_unit = False
     shadow_call = None
@@ -3055,9 +3107,8 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     def infer(fn, *, unit_key, mid=None, saved=None):
         nonlocal provider, shadow_call, estimated_unit
         # A source's persisted chunk progress pins its backend until complete.
-        if cloud_requested and mode != "on":
-            raise Deferred("nightly_cloud_capacity")
-        use_cloud = mode == "on" and (cloud_requested or not saved or saved.get("_provider_contract"))
+        use_cloud = mode == "on" and (not saved or not saved.get('_source_meta')
+                                      or saved.get("_provider_contract"))
         if use_cloud:
             provider = cloud_for(unit_key, mid)
             try:
@@ -3071,17 +3122,20 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 return value
             except (extract_llm.CloudFallback, ValueError) as error:
                 changed = isinstance(error, extract_llm.CloudFallback) and str(error) == "cloud_unit_changed"
+                paid = provider.possibly_sent
                 if changed:
                     provider.discard()
-                paid = provider.possibly_sent
-                if cloud_requested and paid:
+                    if paid:
+                        meta['provider'] = provider.contract
+                        meta['model'] = provider.model
+                    provider = None
+                    if paid:
+                        raise ValueError('nightly_cloud_failed') from error
+                    raise Deferred("nightly_cloud_source_changed") from error
+                if paid:
                     meta["provider"] = provider.contract
                     meta["model"] = provider.model
                 provider = None
-                if cloud_requested:
-                    if paid:
-                        raise ValueError("nightly_cloud_failed") from error
-                    raise Deferred("nightly_cloud_unavailable") from error
                 if paid and not local_admit():
                     # a paid attempt failed and local cannot take over now: record
                     # the retry instead of re-sending the same unit every tick.
@@ -3091,7 +3145,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     if saved and saved.get("_provider_contract"):
                         meta["provider"] = saved["_provider_contract"]
                         meta["model"] = saved["_provider_contract"]["model"]
-                    else:
+                    elif not cloud_requested:
                         local_route()
                     if isinstance(error, ValueError):
                         raise
@@ -3118,15 +3172,16 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     and _summary_valid(ledger.db, pid, old, {context_plan.source_key(s): s for s in snapshot["sources"]},
                                        allow_historical=True)):
                 same = True
-            if cloud_requested and not old_meta.get("provider"):
-                same = False
             if same:
                 meta["contract"] = old_meta["contract"]
                 if "route_contract" in old_meta:
                     meta["route_contract"] = old_meta["route_contract"]
-            if same and old_meta.get("provider"):
-                meta["provider"] = old_meta["provider"]
-                meta["model"] = old_meta["provider"]["model"]
+            if same and quality_required:
+                if old_meta.get("provider"):
+                    meta["provider"] = old_meta["provider"]
+                    meta["model"] = old_meta["provider"]["model"]
+                else:
+                    meta['model'] = old_meta['model']
                 try:
                     quality_status, quality_result = _quality_step(
                         ledger, pid, cfg, night_id, old, deadline, admit, base_meta=old_meta)
@@ -3166,7 +3221,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 else:
                     meta.pop("quality_audit_status", None)
                 meta["quality_schedule_key"] = _digest([cfg, quality_identity["assessment"]["code"]])
-            summary = (repaired["summary"] if same and old_meta.get("provider") and repaired is not None
+            summary = (repaired["summary"] if same and quality_required and repaired is not None
                        else old["summary"] if same else infer(
                 lambda backend, reset, metrics=None, comparison=False: _summary(cfg, facts, deadline,
                     admit if backend else local_admit, **({"provider": backend} if backend else {}),
@@ -3198,6 +3253,14 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                         return {"status": "source_changed", "done": 0}
                     selected_source[0] = source
                     selected_occurrence[0] = _source_occurrence(ledger.db, pid, source)
+                    if lane == 'C' and isinstance(saved.get('_source_meta'), dict):
+                        prior_meta = saved['_source_meta']
+                        for key in ('contract', 'route_contract', 'provider', 'model', 'source_binding',
+                                    'source_occurrence', 'source_occurrence_version'):
+                            if key in prior_meta:
+                                meta[key] = prior_meta[key]
+                            else:
+                                meta.pop(key, None)
                     if lane == "B":
                         # A legacy partial checkpoint starts the new storage
                         # occurrence at zero; retained legacy chunks are not lost.
@@ -3241,7 +3304,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                                 raise ValueError("nightly_audit_mismatch")
                             audited_ids.append(part["_artifact_id"])
                         result["_audited_chunk_ids"] = audited_ids
-                        if snapshot["contract"].get("provider"):
+                        if cloud_requested or _has_prior_quality_failure(ledger.db, pid, purpose='source'):
                             try:
                                 quality_status, quality_result = _quality_step(
                                     ledger, pid, cfg, night_id, {}, deadline, admit, source=source)
@@ -3454,13 +3517,15 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     audited = all(_scan_ready(saved_scans.get(context_plan.source_key(s), {}))
                                   for s in snapshot["sources"] if context_plan.source_usable(s))
                     intact = _sources_intact(snapshot["sources"])
+                    prior_failure = _has_prior_quality_failure(ledger.db, pid)
+                    quality_ok = (not (quality_required or prior_failure) or quality_identity is not None
+                                  and (not quality_skipped or not prior_failure))
                     _replace(ledger, KIND, pid, result, {**meta, "summary_checked": True,
                         "scan_sig": frozen_scan_sig, "publication_requested": options(cfg)["publication"],
                         "published": bool(options(cfg)["publication"] and audited and intact
                                           and snapshot["dependencies"]["complete"]
-                                          and snapshot["acquisition"]["complete"]
-                                          and (not cloud_requested or quality_identity is not None))})
-                    progress["summary_pending"] = bool(cloud_requested and quality_identity is None)
+                                          and snapshot["acquisition"]["complete"] and quality_ok)})
+                    progress["summary_pending"] = bool(quality_required and quality_identity is None)
                 else:
                     if "source_occurrence" in result:
                         meta.update(source_occurrence_version=1, source_occurrence=result["source_occurrence"],

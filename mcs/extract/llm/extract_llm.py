@@ -789,6 +789,8 @@ class _CloudProvider:
         self.dispatch = dispatch
         self.generation = generation
         self.completed_reservations = []
+        self.message_id = message_id
+        self.owner = owner
         self.possibly_sent = False
         self.discard_reason = discard_reason
         self.ledger = ledger
@@ -846,7 +848,7 @@ class _CloudProvider:
             reserved_caps.update(caps(current_cfg["cloud_llm"]))
             hook = {"on_reserved_tx": on_reserved_tx} if on_reserved_tx is not None else {}
             return cloud_policy.usage_reserver(ledger, current_cfg, route=route, project_id=project_id,
-                unit_key=unit_key, message_id=message_id, owner=owner, **hook)(body, timeout)
+                unit_key=unit_key, message_id=self.message_id, owner=self.owner, **hook)(body, timeout)
         self.reserve = lambda body, timeout: (reserve_dispatch or dispatch)(lambda: reserve(body, timeout))
         def record(reservation, metadata):
             # The callback also settles a reservation rejected before sending.
@@ -1044,7 +1046,7 @@ def _cloud_reextract(ledger, row, *, background=False):
             f"AND EXISTS ({_hold_sql()})", (row["message_id"],)).fetchone():
         return False
     if background:
-        return (row["message_id"] not in _recent_arrivals(ledger)
+        return (cloud_policy.history_target_ready(ledger.db, row["project_id"], row["message_id"])
                 and cloud_policy.history_thread_allowed(ledger.db, row["project_id"], row["message_id"]))
     prior = _prior_extract(ledger.db, row)
     meta = loads_dict(prior["meta"]) if prior else None
@@ -3570,8 +3572,10 @@ def progress_for_messages(db, rows, *, model: str | None):
 
 def _owns_current_source(ledger, r, lease: float) -> bool:
     if r.get("_cloud_background"):
-        if (r["message_id"] in _recent_arrivals(ledger)
-                or not cloud_policy.history_thread_allowed(ledger.db, r["project_id"], r["message_id"])):
+        if (not cloud_policy.history_target_ready(ledger.db, r["project_id"], r["message_id"])
+                or not r.get('_cloud_history_snapshot')
+                or cloud_policy.history_thread_snapshot(ledger.db, r["project_id"], r["message_id"])
+                    != r['_cloud_history_snapshot']):
             return False
     token = r.get("_claim_token") if isinstance(r, dict) else None
     return ledger.db.execute(
@@ -4121,9 +4125,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
         adm_sql += (" AND COALESCE(qc_src,0)=0 AND COALESCE(thin_src,0)=0 "
                     "AND COALESCE(human_src,0)=0 AND attempts=0 "
                     f"AND NOT EXISTS ({_hold_sql()})")
-        adm_sql += (" AND m.message_id IN (SELECT CAST(substr(s.key,instr(s.key,':')+1) AS INTEGER) "
-                    "FROM json_each((SELECT CASE WHEN json_valid(content) THEN content ELSE '{}' END "
-                    "FROM artifacts WHERE kind='cloud_history_scope' ORDER BY artifact_id DESC LIMIT 1), '$.sources') s)")
+        adm_sql += ' AND ' + cloud_policy.history_scope_target_sql('m.message_id')
         for key, exclude in (("project_ids", False), ("exclude_project_ids", True)):
             if cfg[key] is not None and (cfg[key] or not exclude):
                 adm_sql += " AND m.project_id " + ("NOT " if exclude else "") + "IN (SELECT value FROM json_each(?))"
@@ -4153,7 +4155,8 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                 return cursor.fetchall()
             selected = []
             for row in cursor:
-                if receipt_check(row["project_id"], row["message_id"]):
+                if (cloud_policy.history_target_ready(ledger.db, row["project_id"], row["message_id"])
+                        and receipt_check(row["project_id"], row["message_id"])):
                     selected.append(row)
                     if len(selected) >= n:
                         break
@@ -4219,6 +4222,11 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         r["_target"] = target
         mode = _cloud_mode(ledger, cfg, "reextract", r["project_id"]) if allow_cloud and _cloud_reextract(
             ledger, r, background=background) else "off"
+        if background and mode in ('on', 'shadow'):
+            r['_cloud_history_snapshot'] = cloud_policy.history_thread_snapshot(
+                ledger.db, r['project_id'], r['message_id'])
+            if r['_cloud_history_snapshot'] is None:
+                mode = 'off'
         r["_cloud_background"] = background and mode in ("on", "shadow")
         if cloud_only and mode != "on":
             blocked += 1
@@ -5700,22 +5708,22 @@ def _main() -> int:
                     if semantic_priority and not oldest_turn:
                         recent = _recent_arrivals(led)
                         adm = recent if adm is None else adm & recent
-                    cloud_history = oldest_turn or not args.semantic
+                    cloud_turn = oldest_turn or not args.semantic
                     cloud_cfg = _cloud_settings(load_config())
-                    extract_limit = (cloud_cfg["max_concurrency"] if cloud_history
+                    extract_limit = (cloud_cfg["max_concurrency"] if cloud_turn
                                      and cloud_cfg["mode"] == "on" else 1)
                     r = run_pending(led, limit=extract_limit if args.semantic else 8,
                                     budget_s=min(budget, 900),
                                     oldest_first=oldest_turn,
                                     archived_first=oldest_turn and semantic_archive_turn and cloud_cfg["mode"] != "on",
                                     fair_oldest=oldest_turn,
-                                    prioritize_patients=cloud_history and cloud_cfg["mode"] == "on",
+                                    prioritize_patients=cloud_turn and cloud_cfg["mode"] == "on",
                                     per_write_lock=True,
                                     vital_policy=vpol,
                                     workers=max(1, min(args.workers, 8)),
                                     shard=shard, batch_k=args.batch,
                                     admitted_ids=adm,
-                                    allow_cloud=cloud_history, background=cloud_history,
+                                    allow_cloud=True, background=True,
                                     write_wait_s=_RESIDENT_WRITE_WAIT_S,
                                     carry=carry)
                     if oldest_turn:

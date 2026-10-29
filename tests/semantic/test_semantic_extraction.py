@@ -8,6 +8,7 @@ import pytest
 import semantic_audit
 import semantic_extraction as extraction
 import semantic_jev as jev
+import semantic_transport
 from semantic_runtime import RuntimeGuardError
 from semantic_testkit import BODY, _FakeJev, _ledger, _llm, _message, _seeded, _cfg
 
@@ -32,6 +33,7 @@ def test_chunk_failure_persists_prefix_and_replay_reuses_it(tmp_path):
             raise RuntimeError("synthetic model failure")
         parsed = json.loads(_llm(prompt))
         parsed["facts"][0]["statement"] = "前半の" + "詳細" * 120
+        semantic_transport._record_inference('local')
         return json.dumps(parsed, ensure_ascii=False)
 
     db = _ledger(tmp_path)
@@ -58,6 +60,7 @@ def test_chunk_failure_persists_prefix_and_replay_reuses_it(tmp_path):
             parsed = json.loads(_llm(prompt))
             parsed["facts"][0]["statement"] = "後半の重要イベント"
             parsed["facts"][0]["evidence_quote"] = "後半重要イベント"
+            semantic_transport._record_inference('local')
             return json.dumps(parsed, ensure_ascii=False)
 
         second = extraction.extract_facts_resumable(
