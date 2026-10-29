@@ -100,14 +100,15 @@ def _dryrun_report(db, deadline, now):
 def diagnostics(cfg, *, root=None, probe=False):
     """Return only effective modes, key presence, budgets and optional safe accounting."""
     cloud, errors, key = _settings(cfg, root)
-    from semantic_policy import runtime_config
+    from semantic_policy import BACKLOG_BUDGET_RESERVE, runtime_config
     semantic, sem_errors = runtime_config(cfg, root=root)
     jev_key = bool(jev.api_key(root))
     out = {
         "jev": {"mode": semantic["mode"], "key_present": jev_key,
                 "status": "invalid" if sem_errors else "local" if not jev_key or semantic["mode"] == "off" else "configured",
                 "daily_request_budget": semantic["daily_request_budget"],
-                "scope": "all" if semantic["project_ids"] is None else "none" if not semantic["project_ids"] else "selected"},
+                "scope": "all" if semantic["project_ids"] is None else "none" if not semantic["project_ids"] else "selected",
+                "backlog_budget": None},
         "anthropic": {"mode": cloud["mode"], "key_present": key,
                 "status": "invalid" if policy.blocking_errors(errors) else "local" if not key or cloud["mode"] in ("off", "dry_run") else "configured",
                 "daily_request_budget": cloud["daily_request_budget"],
@@ -127,6 +128,28 @@ def diagnostics(cfg, *, root=None, probe=False):
         # A plain doctor cannot observe the persisted pause without opening DB.
         out["anthropic"].update(status="warning" if probe else "local", block_reason="no_api_key")
     if probe:
+        unknown = {"state": "unknown", "used_today": None, "backlog_limit": None,
+                   "realtime_reserve": None, "daily_remaining": None, "reason": None}
+        out["jev"]["backlog_budget"] = unknown
+        if not sem_errors:
+            try:
+                from semantic_store import jev_usage_today
+                with _reader(root) as (db, _deadline):
+                    used = jev_usage_today(SimpleNamespace(db=db))
+                limit = semantic["daily_request_budget"]
+                reserved = math.ceil(limit * BACKLOG_BUDGET_RESERVE)
+                backlog_limit = limit - reserved
+                reason = None
+                if jev_key and semantic["mode"] != "off":
+                    if used >= limit:
+                        reason = "daily_budget_exhausted"
+                    elif used >= backlog_limit:
+                        reason = "backlog_budget_reserved"
+                out["jev"]["backlog_budget"] = {
+                    "state": "recorded", "used_today": used, "backlog_limit": backlog_limit,
+                    "realtime_reserve": reserved, "daily_remaining": max(0, limit - used), "reason": reason}
+            except (OSError, ValueError, sqlite3.Error):
+                pass
         try:
             with _reader(root) as (db, deadline):
                 borrowed = SimpleNamespace(db=db)

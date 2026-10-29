@@ -214,9 +214,12 @@ def worker(parent):
                             lane="backlog", cloud_only=True)
                     finally:
                         os.close(lock)
-                print(json.dumps({"event": "cloud_backlog_pass", "pid": os.getpid(),
+                record = {"event": "cloud_backlog_pass", "pid": os.getpid(),
                     "phase": "extract" if phase % 2 == 0 else "semantic", "done": result.get("done", 0),
-                    "elapsed_s": round(time.monotonic() - started, 3), "ts": time.time()}), flush=True)
+                    "elapsed_s": round(time.monotonic() - started, 3), "ts": time.time()}
+                if phase % 2 and result.get("budget_exhausted") is True:
+                    record["reason"] = "backlog_budget_reserved"
+                print(json.dumps(record), flush=True)
                 if not result.get("done"):
                     time.sleep(2)
             except writer_lock.RunLockLost:
