@@ -537,7 +537,8 @@ def test_unknown_quality_request_survives_later_tick_reopen_day_and_cleanup(qual
     else:
         behavior[fault] = True
         assert refresh._quality_step(led, 1, cfg, '2026-10-17', doc, clock.mono + 600,
-                                     lambda: True)[0] == 'deferred'
+                                     lambda: True)[0] == 'unknown'
+        assert not led.artifacts(refresh.QUALITY_SKIP)
     count = 2 if fault == 'partial' else 1
     assert len(sends) == count
     if fault == 'partial':

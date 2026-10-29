@@ -11,7 +11,7 @@ import math
 import time
 
 from mcs_util import payload_hash
-from mcs_util import loads_dict
+from mcs_util import loads_dict, strict_json
 from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
 import semantic_jev as jev
 from semantic_policy import (KIND_ASSESS, KIND_USAGE,
@@ -217,7 +217,10 @@ def jev_usage_today(ledger) -> int:
     for r in ledger.db.execute(
             "SELECT artifact_id, meta FROM artifacts WHERE kind=? AND created_at>=? "
             "AND artifact_id>? ORDER BY artifact_id", (KIND_USAGE, day, last_id)):
-        meta = loads_dict(r["meta"])
+        try:
+            meta = strict_json(r["meta"])
+        except (ValueError, TypeError, RecursionError, OverflowError):
+            raise ValueError("semantic_usage_invalid") from None
         count = meta.get("jev_requests") if isinstance(meta, dict) else None
         if type(count) is not int or count < 0:
             # Unknown/corrupt usage cannot replenish a spending budget;

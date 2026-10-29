@@ -80,8 +80,11 @@ def test_malformed_cloud_record_stays_held_until_explicit_reset(tmp_path, conten
         assert not runtime.record_circuit_result(ledger, None, now=1000, kind='cloud_circuit', reset=True)
 
 
-def test_jev_legacy_decoder_still_accepts_duplicate_keys(tmp_path):
+def test_jev_duplicate_keys_fail_closed_for_the_bounded_cooldown(tmp_path):
     with closing(Ledger(str(tmp_path / 'ledger.db'))) as ledger:
         ledger.artifact_add(runtime._CIRCUIT_ARTIFACT_KIND,
                             '{"consecutive_failures":1,"consecutive_failures":0,"open_until":0,"failure_class":null}')
-        assert runtime._circuit_state(ledger, now=1000)['consecutive_failures'] == 0
+        state = runtime._circuit_state(ledger, now=1000)
+        assert state['failure_class'] == 'malformed'
+        assert runtime.circuit_open(ledger, now=state['open_until'] - 1)
+        assert not runtime.circuit_open(ledger, now=state['open_until'] + 1)

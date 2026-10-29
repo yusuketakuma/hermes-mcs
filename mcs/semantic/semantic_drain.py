@@ -100,6 +100,14 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
     because it lives on this artifact, not in process memory."""
     summary = {k: v for k, v in r["summary"].items()
                if not k.startswith("_")}
+    skip_meta = {}
+    if final_status == "SKIPPED":
+        reason = r.get("jev_skip_reason")
+        if reason not in {"not_configured", "daily_budget", "backlog_reserved", "disabled",
+                          "service_unavailable", "circuit_open"}:
+            raise ValueError("semantic_skip_reason_invalid")
+        skip_meta = {"jev_skip_reason": reason, "jev_evaluated": False,
+                     "code_checks": "passed", "summary_hash": mcs_util.payload_hash(summary)}
     # A deferred/pending job re-derives the same outcome on every pass.
     # Without this guard, unreachable Jev can produce byte-identical
     # summary+audit pairs repeatedly. The durable store records an outcome
@@ -109,9 +117,11 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
     if (prev_sum is not None and prev_aud is not None
             and prev_sum["content"] == summary
             and prev_sum["meta"].get("audit_status") == final_status
+            and all(prev_sum["meta"].get(key) == value for key, value in skip_meta.items())
             and prev_sum["meta"].get("publication_mode")
             == publication_mode
             and prev_aud["content"].get("status") == final_status
+            and all(prev_aud["meta"].get(key) == value for key, value in skip_meta.items())
             and prev_aud["content"].get("findings") == r["findings"]):
         return
     ledger.artifact_add_tx(
@@ -125,7 +135,7 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
               # the stored content drops _-keys — the oversize marker
               # must survive storage or a re-audit of a PENDING-stored
               # stub would lose its blocking finding
-              "input_oversize": bool(r["summary"].get("_input_oversize"))})
+              "input_oversize": bool(r["summary"].get("_input_oversize")), **skip_meta})
     ledger.artifact_add_tx(
         KIND_AUDIT,
         json.dumps({"status": final_status,
@@ -139,7 +149,7 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
               # raw Jev claim verdicts — the calibration corpus for
               # match_threshold tuning (summary content strips _-keys,
               # so this private channel is the only place they persist)
-              "claim_audit": r["summary"].get("_claim_audit") or {}})
+              "claim_audit": r["summary"].get("_claim_audit") or {}, **skip_meta})
 
 
 def _park_needs_review(ledger, pid, mid, fp, policy, v2_doc,
@@ -163,7 +173,8 @@ def _park_needs_review(ledger, pid, mid, fp, policy, v2_doc,
 
 
 def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
-                jev_client, llm_fn, deadline, *, shadow_stats: dict | None = None):
+                jev_client, llm_fn, deadline, *, shadow_stats: dict | None = None,
+                jev_skip: str | None = None, activate_skip=None, skip_state=None):
     """Fact stage for one bundle member.
 
     fact_source selects the canonical path: "shadow" still feeds
@@ -189,13 +200,15 @@ def _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
     if fact_source == "canonical":
         early, v2_doc, doc_hash = _fact_canonical_audit(
             ledger, scfg, member, pid, mid, fp, policy, fact_source,
-            v2_doc, doc_build, jev_client, llm_fn, deadline)
+            v2_doc, doc_build, jev_client, llm_fn, deadline, jev_skip=jev_skip,
+            activate_skip=activate_skip, skip_state=skip_state)
         if early is not None:
             return early
         from semantic_projection import project_v2_facts
         facts = project_v2_facts(v2_doc)
-        v4.publish_fact_projection(ledger, member, pid, mid, fp, policy,
-                                   v2_doc, doc_hash)
+        if jev_skip is None and not (skip_state and skip_state.get("reason")):
+            v4.publish_fact_projection(ledger, member, pid, mid, fp, policy,
+                                       v2_doc, doc_hash)
     else:
         early, facts = _fact_legacy(ledger, member, pid, mid, fp, policy,
                                     llm_fn, deadline)
@@ -339,7 +352,7 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
 
 def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                           fact_source, v2_doc, doc_build, jev_client,
-                          llm_fn, deadline):
+                          llm_fn, deadline, *, jev_skip=None, activate_skip=None, skip_state=None):
     """POST_JEV bidirectional fact audit with its one bounded repair.
 
     Returns (early, v2_doc, doc_hash): early is the _fact_stage result to
@@ -364,15 +377,31 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
             if time.monotonic() > deadline - 5:
                 break
             from semantic_audit import audit_facts_v2
-            fact_audit = audit_facts_v2(
-                jev_client, v2_doc, member["body_original"],
-                deadline - 5,
-                match_threshold=scfg["match_threshold"],
-                per_request=scfg.get("max_questions_per_request", 12))
+            if jev_skip is not None:
+                fact_audit = semantic_audit.optional_fact_audit(
+                    v2_doc, member, fp, jev_skip, prev_fa["content"] if prev_fa else None,
+                    match_threshold=scfg["match_threshold"])
+            else:
+                fact_audit = audit_facts_v2(
+                    jev_client, v2_doc, member["body_original"],
+                    deadline - 5,
+                    match_threshold=scfg["match_threshold"],
+                    per_request=scfg.get("max_questions_per_request", 12))
+                reason = semantic_audit.jev_skip_reason(getattr(jev_client, "last_error", None))
+                if not fact_audit["evaluated"] and reason is not None and activate_skip is not None:
+                    activate_skip(reason)
+                    jev_skip = reason
+                    if skip_state is not None:
+                        skip_state["reason"] = reason
+                    fact_audit = semantic_audit.optional_fact_audit(
+                        v2_doc, member, fp, reason, fact_audit, match_threshold=scfg["match_threshold"])
             stored = {"status": fact_audit["status"],
                       "evaluated": fact_audit["evaluated"],
                       "findings": fact_audit["findings"],
                       "fact_verdicts": fact_audit["fact_verdicts"]}
+            if fact_audit["status"] == "SKIPPED":
+                stored.update(jev_skip_reason=jev_skip, code_checks="passed",
+                              document_hash=mcs_util.payload_hash(v2_doc))
             # an unevaluated re-run identical to the stored row (a
             # durable resource wait) adds no information — record
             # an outcome once, not once per drain (FIX-SD1)
@@ -393,9 +422,14 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
         v4.record_stage(
             ledger, pid, mid, fp, policy,
             "s4_reaudit" if _attempt else "s2_fact_audit",
-            fact_audit["status"] if fact_audit["evaluated"]
+            fact_audit["status"] if fact_audit["evaluated"] or fact_audit["status"] == "SKIPPED"
             else "unevaluated",
             doc_hash=doc_hash)
+        if jev_skip is not None and fact_audit["status"] == "SKIPPED":
+            audited = True
+            break
+        if jev_skip is not None and fact_audit["status"] == "NEEDS_REVIEW" and not fact_audit["evaluated"]:
+            return _park_needs_review(ledger, pid, mid, fp, policy, v2_doc, fact_audit["findings"]), None, None
         disposition = semantic_audit.canonical_audit_disposition(fact_audit, v2_doc)
         if disposition == "wait":
             error = getattr(jev_client, "last_error", None)
@@ -579,6 +613,20 @@ def _prefiltered(ledger, mid) -> bool:
         (mid,)).fetchone() is not None
 
 
+def _partial_assessment(answers, scfg):
+    """Validate and reduce previously answered proposition chunks to codes."""
+    if not isinstance(answers, dict) or set(answers) - set(jev.PROPOSITIONS):
+        raise ValueError("semantic_partial_assessment_invalid")
+    out = {}
+    for name, answer in answers.items():
+        value = answer.get("noul") if isinstance(answer, dict) else None
+        if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1:
+            raise ValueError("semantic_partial_assessment_invalid")
+        out[name] = {"noul": value, "verdict": jev.verdict_for(
+            value, scfg["match_threshold"], scfg["nomatch_threshold"])}
+    return out
+
+
 def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
                    prev, deadline, *, diagnostics: dict):
     """Primary Jev proposition assessment of one target, durably recorded.
@@ -592,6 +640,7 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
                  "registry": jev.REGISTRY_VERSION,
                  "schema": SCHEMA_VERSION}
     answers = None
+    partial = {}
     req0 = jev_client.requests_made if jev_client else 0
     if jev_client is not None and state is not None and _prefiltered(ledger, mid):
         # the local prefilter already settled this body as carrying no clinical
@@ -618,6 +667,19 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
                 "retry_wait" if e.retryable else "error")
             meta_base["error_kind"] = e.kind
             flag = _jev_fail_flag(e)
+            try:
+                if hasattr(e, "partial_answers"):
+                    partial = _partial_assessment(e.partial_answers, scfg)
+                    old = prev["content"].get("verdicts", {}) if prev else {}
+                    if (_partial_assessment(old, scfg) != old
+                            or any(key in partial and partial[key] != value for key, value in old.items())):
+                        raise ValueError("semantic_partial_assessment_conflict")
+                    partial = {**old, **partial}
+                    e.partial_verdicts = partial
+            except (ValueError, TypeError):
+                e.partial_invalid = True
+                _why(diagnostics, "assess_partial_invalid")
+                return None, "hard"
             _why(diagnostics, f"assess_jev_{flag}")
     meta_base["jev_requests"] = (
         jev_client.requests_made - req0) if jev_client else 0
@@ -630,13 +692,13 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
         # append one artifact per drain forever
         if prev is None or (
                 prev["meta"].get("technical_status"),
-                prev["meta"].get("error_kind")) != (
+                prev["meta"].get("error_kind"), prev["content"].get("verdicts")) != (
                 meta_base["technical_status"],
-                meta_base.get("error_kind")):
+                meta_base.get("error_kind"), partial):
             ledger.artifact_add(
                 KIND_ASSESS,
                 json.dumps({"target_message_id": mid,
-                            "verdicts": {}},
+                            "verdicts": partial},
                            ensure_ascii=False),
                 project_id=pid, message_id=mid,
                 model=jev.JEV_MODEL, meta=meta_base)
@@ -772,10 +834,13 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                        config_generation: str | None = None,
                        reserve_fn=None, lane: str | None = None, *,
                        jev_transport=None, jev_timing=None,
-                       diagnostics: dict, shadow_stats: dict | None = None) -> str:
+                       diagnostics: dict, shadow_stats: dict | None = None,
+                       jev_skip: str | None = None) -> str:
     """One semantic job -> durable artifacts + job state transition.
     Returns 'done'|'deferred'|'deferred_short'|'retry'|'failed'|'stale'."""
     pid, root = job["project_id"], job["message_id"]
+    if jev_skip is not None:
+        diagnostics["jev_skip_reason"] = jev_skip
     token = runtime.JobToken.from_row(job)
     deadline = runtime.job_deadline(scfg, deadline)
     # Stages and their result guards keep the job deadline. In the backlog
@@ -808,6 +873,24 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
 
     def guard(stage):
         try:
+            if jev_skip is not None:
+                # Even a skipped call must not bypass a malformed/expired
+                # authorization window or an unreadable usage ledger.
+                try:
+                    runtime._jev_window_check(config_path=cfg_path)
+                    used = jev_usage_today(ledger)
+                    cap = scfg["daily_request_budget"]
+                    if lane == "backlog":
+                        cap -= math.ceil(cap * BACKLOG_BUDGET_RESERVE)
+                    if ((jev_skip in ("daily_budget", "backlog_reserved") and used < cap)
+                            or (jev_skip == "disabled" and scfg["daily_request_budget"] > 0)
+                            or (jev_skip == "not_configured" and jev.api_key())
+                            or (jev_skip == "circuit_open" and (not runtime.circuit_open(ledger)
+                                or runtime._circuit_state(ledger)["failure_class"]
+                                   not in runtime._CIRCUIT_FAILURE_CLASSES))):
+                        raise ValueError("semantic_skip_reason_stale")
+                except (jev.JevError, ValueError, sqlite3.Error):
+                    raise runtime.RuntimeOff(stage + ':jev_unverified') from None
             runtime.guard(
                 ledger, token, deadline=deadline,
                 expected_config_generation=config_generation,
@@ -881,6 +964,26 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     not_sent = None     # a summary/repair could not dispatch (see below)
     retryable_failure = False
     resource_wait = False
+
+    def record_skipped_assessment(mid, previous, reason, partial=None):
+        partial = partial or {}
+        guard("assessment_skip")
+        if previous is None or (previous["meta"].get("technical_status") != "skipped"
+                                or previous["meta"].get("jev_skip_reason") != reason
+                                or previous["content"].get("verdicts") != partial):
+            ledger.artifact_add(
+                KIND_ASSESS, json.dumps({"target_message_id": mid, "verdicts": partial}, ensure_ascii=False),
+                project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+                meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
+                      "schema": SCHEMA_VERSION, "technical_status": "skipped", "jev_skip_reason": reason})
+
+    def activate_skip(reason):
+        nonlocal jev_skip, jev_client
+        jev_skip = reason
+        jev_client = None
+        diagnostics["jev_skip_reason"] = reason
+        guard("jev_skip")
+
     for mid in all_targets:
         member = members[mid]
         # restart-safe: a complete assessment for THIS fingerprint is
@@ -888,6 +991,16 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         prev = current_artifact(ledger.db, KIND_ASSESS, mid, fp, policy)
         if prev and prev["meta"].get("technical_status") == "complete":
             verdicts[mid] = prev["content"].get("verdicts", {})
+        elif jev_skip is not None:
+            partial = prev["content"].get("verdicts", {}) if prev else {}
+            try:
+                if _partial_assessment(partial, scfg) != partial:
+                    raise ValueError("semantic_partial_assessment_invalid")
+            except (ValueError, TypeError):
+                hard_fail = incomplete = True
+                break
+            record_skipped_assessment(mid, prev, jev_skip, partial)
+            verdicts[mid] = partial
         else:
             if time.monotonic() > deadline - 5:
                 incomplete = True
@@ -895,17 +1008,31 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             target_verdicts, flag = _assess_target(
                 ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
                 prev, deadline, diagnostics=diagnostics)
-            resource_wait |= flag == "resource"
-            retryable_failure |= flag == "retryable"
-            hard_fail |= flag == "hard"
             if target_verdicts is None:
-                incomplete = True
-                continue
-            verdicts[mid] = target_verdicts
+                error = getattr(jev_client, "last_error", None)
+                reason = semantic_audit.jev_skip_reason(error)
+                if not hasattr(error, "partial_verdicts") or getattr(error, "partial_invalid", False):
+                    reason = None
+                if reason is None:
+                    resource_wait |= flag == "resource"
+                    retryable_failure |= flag == "retryable"
+                    hard_fail |= flag == "hard"
+                    incomplete = True
+                    continue
+                jev_skip = reason
+                diagnostics["jev_skip_reason"] = reason
+                partial = error.partial_verdicts
+                jev_client = None
+                record_skipped_assessment(mid, prev, jev_skip, partial)
+                verdicts[mid] = partial
+            else:
+                verdicts[mid] = target_verdicts
         if scfg["summary_mode"] == "off" and scfg["loop_mode"] == "off":
             continue
+        skip_state = {"reason": jev_skip}
         stage = _fact_stage(ledger, scfg, member, pid, mid, fp, policy,
-                            jev_client, llm_fn, deadline, shadow_stats=shadow_stats)
+                            jev_client, llm_fn, deadline, shadow_stats=shadow_stats, jev_skip=jev_skip,
+                            activate_skip=activate_skip, skip_state=skip_state)
         if stage["outcome"] is not None:
             if fact_source == "canonical":
                 # T18: a fact-stage failure still leaves a durable
@@ -931,10 +1058,22 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         facts_by_target[mid] = facts
         from semantic_assessment import evaluate_medication_events
         event_details = evaluate_medication_events(
-            ledger, bundle, mid, facts, jev_client, scfg, deadline - 5)
+            ledger, bundle, mid, facts, jev_client, scfg, deadline - 5,
+            skip_unavailable=jev_skip is not None)
+        if not event_details["complete"] and event_details["failure_reason"] == "technical" and jev_skip is None:
+            reason = semantic_audit.jev_skip_reason(getattr(jev_client, "last_error", None))
+            if reason is not None:
+                jev_skip = reason
+                diagnostics["jev_skip_reason"] = reason
+                jev_client = None
+                guard("medication_detail_skip")
+                event_details = evaluate_medication_events(
+                    ledger, bundle, mid, facts, None, scfg, deadline - 5, skip_unavailable=True)
         guard("medication_detail_result")
-        detail_findings[mid] = event_details["findings"]
-        if not event_details["complete"] and event_details["failure_reason"] != "invalid":
+        detail_findings[mid] = [finding for finding in event_details["findings"]
+                                if finding.get("code") != "medication_detail_unevaluated"]
+        if (not event_details["complete"] and event_details["failure_reason"] != "invalid"
+                and not (jev_skip is not None and event_details["failure_reason"] == "skipped")):
             incomplete = _why(
                 diagnostics, f"medication_detail_{event_details['failure_reason']}")
             error = getattr(jev_client, "last_error", None)
@@ -952,9 +1091,23 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             coverage = previous["content"] if previous else None
             if not coverage or not coverage.get("evaluated"):
                 from semantic_audit import evaluate_source_fact_coverage
-                coverage = evaluate_source_fact_coverage(
-                    jev_client, member["body_original"], facts, deadline,
-                    target_id=f"m{mid}", match_threshold=scfg["match_threshold"])
+                if jev_skip is not None:
+                    coverage = {"status": "SKIPPED", "evaluated": False, "choice": None,
+                                "confidence": None, "failure_reason": jev_skip,
+                                "findings": [{"code": "source_fact_coverage_unevaluated"}]}
+                else:
+                    coverage = evaluate_source_fact_coverage(
+                        jev_client, member["body_original"], facts, deadline,
+                        target_id=f"m{mid}", match_threshold=scfg["match_threshold"])
+                    reason = semantic_audit.jev_skip_reason(getattr(jev_client, "last_error", None))
+                    if not coverage["evaluated"] and reason is not None:
+                        jev_skip = reason
+                        diagnostics["jev_skip_reason"] = reason
+                        jev_client = None
+                        guard("coverage_skip")
+                        coverage = {"status": "SKIPPED", "evaluated": False, "choice": None,
+                                    "confidence": None, "failure_reason": reason,
+                                    "findings": [{"code": "source_fact_coverage_unevaluated"}]}
                 guard("coverage_result")
                 # an identical unevaluated re-run is a durable wait, not new
                 # information — record the outcome once (FIX-SD1)
@@ -964,8 +1117,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         project_id=pid, message_id=mid, model=jev.JEV_MODEL,
                         meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy,
                               "technical_status": "complete" if coverage["evaluated"] else "pending"})
-            coverage_by_target[mid] = coverage["findings"]
-            if not coverage["evaluated"]:
+            coverage_by_target[mid] = ([] if coverage.get("status") == "SKIPPED"
+                                       else coverage["findings"])
+            if not coverage["evaluated"] and coverage.get("status") != "SKIPPED":
                 incomplete = _why(diagnostics, f"coverage_{coverage.get('failure_reason')}")
                 error = getattr(jev_client, "last_error", None)
                 if error is not None and jev.failure_class(error) == "failed":
@@ -1067,11 +1221,13 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         or (prev_audit
                             and prev_audit["meta"].get("repair_count", 0) >= 1))
         summary["_facts"] = facts   # evidence context for the Jev audit
-        req0 = jev_client.requests_made if jev_client else 0
+        audit_client = jev_client
+        req0 = audit_client.requests_made if audit_client else 0
         findings = []
         status = "PENDING"
         for _attempt in range(2):      # initial + at most one repair
-            if not isinstance(summary.get("claims"), list):
+            if (not isinstance(summary.get("claims"), list)
+                    or (jev_skip is not None and not summary["claims"])):
                 _why(diagnostics, "audit_claims_invalid")
                 hard_fail = incomplete = True
                 break
@@ -1097,7 +1253,14 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         "jev_requests": (jev_client.requests_made - req0)
                         if jev_client else 0}
                 break
-            if not evaluated:
+            if not evaluated and jev_skip is None:
+                skip = semantic_audit.jev_skip_reason(getattr(jev_client, "last_error", None))
+                if skip is not None:
+                    jev_skip = skip
+                    diagnostics["jev_skip_reason"] = skip
+                    jev_client = None
+                    guard("claim_audit_skip")
+            if not evaluated and jev_skip is None:
                 reason = summary.pop("_claim_audit_reason", None)
                 if reason in ("claims_empty", "claims_invalid", "client_unavailable", "options_invalid", "response_invalid"):
                     _why(diagnostics, f"audit_{reason}")
@@ -1112,8 +1275,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     retryable_failure |= flag == "retryable"
                     hard_fail |= flag == "hard"
             findings = code_f + jev_f
-            status = audit_status_for(code_f, jev_f, evaluated,
-                                      repaired)
+            status = (semantic_audit.optional_audit_status(code_f, jev_f, jev_skip, repaired)
+                      if not evaluated and jev_skip is not None
+                      else audit_status_for(code_f, jev_f, evaluated, repaired))
             if status == "REPAIR_REQUIRED" and not repaired:
                 guard("repair_reservation")
                 repair_id = ledger.artifact_add(
@@ -1167,8 +1331,9 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         results[mid] = {"summary": summary, "status": status,
                         "findings": findings, "repaired": repaired,
                         "fresh": True,
-                        "jev_requests": (jev_client.requests_made - req0)
-                        if jev_client else 0}
+                        "jev_skip_reason": jev_skip if status == "SKIPPED" else None,
+                        "jev_requests": (audit_client.requests_made - req0)
+                        if audit_client else 0}
     if incomplete:
         if results:
             try:
@@ -1217,7 +1382,16 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                                 for r in results.values())
     loops_done = True
     loops_short = False
-    if not stale and scfg["loop_mode"] != "off":
+    if not stale and scfg["loop_mode"] != "off" and jev_skip is not None:
+        guard("loop_skip")
+        prior = current_artifact(ledger.db, "semantic_loop_skipped", root, fp, policy)
+        if prior is None or prior["content"].get("reason") != jev_skip:
+            ledger.artifact_add(
+                "semantic_loop_skipped", json.dumps({"status": "SKIPPED", "reason": jev_skip}),
+                project_id=pid, message_id=root,
+                meta={VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
+                      "schema": SCHEMA_VERSION})
+    if not stale and scfg["loop_mode"] != "off" and jev_skip is None:
         # loop candidates/relation events for the LIVE generation —
         # kept OUT of the commit tx because matching makes Jev calls
         # (no network inside a DB transaction, §6.2); replay-safe via
@@ -1301,7 +1475,8 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                  reserve_fn=None, lane: str | None = None, *,
                        jev_transport=None, jev_timing=None, cloud_transport=None, llm_timing=None,
                        cloud_only=False,
-                 diagnostics: dict, shadow_stats: dict | None = None) -> str:
+                 diagnostics: dict, shadow_stats: dict | None = None,
+                 jev_skip: str | None = None) -> str:
     """Preserve stale workers while bounding timeouts after dispatched work."""
     requests_before = jev_client.requests_made if jev_client is not None else 0
     llm_started = False
@@ -1360,7 +1535,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                 ledger, scfg, job, jev_client, tracked_llm, deadline,
                 cfg_path=cfg_path, config_generation=config_generation,
                 reserve_fn=reserve_fn, lane=lane, diagnostics=diagnostics, shadow_stats=shadow_stats,
-                jev_transport=jev_transport, jev_timing=jev_timing)
+                jev_transport=jev_transport, jev_timing=jev_timing, jev_skip=jev_skip)
         from extraction_refresh import refresh_extraction_cards
         if semantic_store.refresh_cards_allowed(ledger.db, job['project_id'], job['message_id']):
             refresh_extraction_cards(ledger, job["project_id"], job["message_id"])
@@ -1562,6 +1737,16 @@ def _reprocess_target_state(ledger, row, scfg):
     fp, policy = bundle['source_fingerprint'], policy_fingerprint(scfg)
     audit = current_artifact(ledger.db, KIND_AUDIT, mid, fp, policy)
     summary = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy)
+    if audit and summary and audit['content'].get('status') == 'SKIPPED':
+        import semantic_send_gate
+        member = next((item for item in bundle['members'] if item['message_id'] == mid), None)
+        if (member is not None and semantic_send_gate.skipped_summary_current(
+                ledger.db, pid, mid, fp, policy, member['revision'], scfg['summary_mode'])):
+            if scfg.get('fact_source') != 'canonical':
+                if current_artifact(ledger.db, KIND_FACTS, mid, fp) is not None:
+                    return 'current_skipped'
+            elif v4.current_skipped(ledger.db, pid, mid, fp, policy, member):
+                return 'current_skipped'
     if audit and summary and audit['content'].get('status') == 'PASS':
         if scfg.get('fact_source') != 'canonical':
             if current_artifact(ledger.db, KIND_FACTS, mid, fp) is not None:
@@ -1718,7 +1903,7 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
                     'scope_generation': scope_generation, **epochs,
                     'upper': live_upper,
                     'cursor': 0, 'seed_cursor': 0, 'phase': 'seed', 'counts': {}}
-    counters = {'current', 'pending', 'repair_required', 'held', 'failed', 'permission',
+    counters = {'current', 'current_skipped', 'pending', 'repair_required', 'held', 'failed', 'permission',
                 'scope', 'paused', 'deleted', 'body_unavailable', 'empty_body'}
     if (progress.get('phase') not in ('seed', 'verify', 'verify_patients', 'waiting', 'complete')
             or any(type(progress.get(key)) is not int or not 0 <= progress[key] < 2**63
@@ -1889,7 +2074,8 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
                 progress.update(future_upper=upper, tail_pending=tail)
                 dirty = progress.get('dirty', False) or progress.get('verify_epochs', actual) != actual
                 proof_time_valid = _reprocess_proof_time_valid(progress, time.time())
-                progress['complete'] = bool(counts.get('current') and not blocked_messages and not blocked_patients
+                progress['complete'] = bool((counts.get('current', 0) + counts.get('current_skipped', 0))
+                    and not blocked_messages and not blocked_patients
                     and not tail and not dirty and not actual['intake_unstored_epoch'] and proof_time_valid
                     and progress.get('proof_valid_until') is not None
                     and progress.get('proof_generation') == proof_generation)
@@ -1928,7 +2114,7 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
             break
         state = _reprocess_target_state(ledger, row, scfg)
         replay = None
-        if state in ('current', 'pending', 'repair_required', 'held', 'failed'):
+        if state in ('current', 'current_skipped', 'pending', 'repair_required', 'held', 'failed'):
             root = row['parent_id'] or row['message_id']
             key = (row['project_id'], root)
             old = ledger.db.execute('SELECT substr(payload,1,?) AS payload,state FROM fetch_jobs WHERE kind=? '
@@ -1943,7 +2129,7 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
             if old is not None and pl is None:
                 planned.append((row, 'held', None))
                 continue
-            if state == 'current':
+            if state in ('current', 'current_skipped'):
                 planned.append((row, state, None))
                 continue
             if key not in sources:
@@ -2609,27 +2795,34 @@ def _select_cloud_due(ledger, lane, kinds, qc_active, max_jobs, long_defers=None
         return [], [], [], [], {"turn": None}
     semantic_scope = runtime_config(cfg)[0]["project_ids"]
     marks = ",".join("?" for _ in kinds)
-    rows = ledger.db.execute(
+    with cloud_policy.history_selection_check(ledger.db) as receipt_check:
+        cursor = ledger.db.execute(
         "SELECT j.* FROM fetch_jobs j LEFT JOIN patients p ON p.project_id=j.project_id "
         f"WHERE j.kind IN ({marks}) AND j.state='pending' AND j.next_try<=? "
         "AND json_valid(j.payload) AND COALESCE(json_extract(j.payload,'$.eligible'),0)!=1 "
         "AND " + current_meta_pred('j.payload') + " AND j.job_id NOT IN (SELECT value FROM json_each(?)) "
         "AND (? IS NULL OR j.project_id IN (SELECT value FROM json_each(?))) "
+        "AND j.message_id IN (SELECT CAST(substr(s.key,instr(s.key,':')+1) AS INTEGER) "
+        "FROM json_each((SELECT CASE WHEN json_valid(content) THEN content ELSE '{}' END "
+        "FROM artifacts WHERE kind='cloud_history_scope' ORDER BY artifact_id DESC LIMIT 1), '$.sources') s) "
         "AND j.project_id NOT IN (SELECT value FROM json_each(?)) "
         "AND (? IS NULL OR j.project_id IN (SELECT value FROM json_each(?))) "
         "ORDER BY COALESCE(p.is_archived,0), "
         "(SELECT MAX(m.posted_at_ts) FROM messages m WHERE m.project_id=j.project_id) DESC, "
-        "j.project_id, j.job_id LIMIT 512",
+        "j.project_id, j.job_id",
         (*kinds, time.time(), json.dumps(sorted(excluded)),
          json.dumps(settings["project_ids"]) if settings["project_ids"] is not None else None,
          json.dumps(settings["project_ids"]), json.dumps(settings["exclude_project_ids"]),
-         json.dumps(semantic_scope) if semantic_scope is not None else None, json.dumps(semantic_scope))).fetchall()
-    selected = []
-    for row in rows:
-        if cloud_policy.history_thread_allowed(ledger.db, row["project_id"], row["message_id"]):
-            selected.append(row)
-            if len(selected) >= max_jobs + max(8, settings["max_concurrency"] * 2):
-                break
+         json.dumps(semantic_scope) if semantic_scope is not None else None, json.dumps(semantic_scope)))
+        selected = []
+        try:
+            for row in cursor:
+                if receipt_check(row["project_id"], row["message_id"]):
+                    selected.append(row)
+                    if len(selected) >= min(512, max_jobs + max(8, settings["max_concurrency"] * 2)):
+                        break
+        finally:
+            cursor.close()
     return (selected, [r for r in selected if r["kind"] == QC_JOB_KIND], [],
             [r for r in selected if r["kind"] == JOB_KIND], {"turn": None})
 
@@ -3011,14 +3204,21 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         return _unlocked("jev", call, *args, **kwargs)
 
     jev_transport = unlocked_jev_request if run_lock_fd is not None else None
-    if not cloud_only and scfg["mode"] != "off" and scfg["extract_qc"] == "annotate" \
-            and jev_client is not None:
+    if not cloud_only and scfg["mode"] != "off" and scfg["extract_qc"] == "annotate":
         try:
-            semantic_qc._qc_seed(ledger, time.time())
+            qc_cap = scfg["daily_request_budget"]
+            if lane == "backlog":
+                qc_cap -= math.ceil(qc_cap * BACKLOG_BUDGET_RESERVE)
+            qc_skip_mode = (jev_client is None or
+                            not getattr(jev_client, "api_key", True) or
+                            runtime.circuit_open(ledger) or jev_usage_today(ledger) >= qc_cap)
+            if qc_skip_mode:
+                semantic_qc._qc_seed(ledger, time.time(), skip_mode=True)
+            else:
+                semantic_qc._qc_seed(ledger, time.time())
         except Exception:
             result["errors"].append("semantic: qc_seed_failed")
-    qc_active = (scfg["extract_qc"] == "annotate"
-                 and jev_client is not None)
+    qc_active = scfg["extract_qc"] == "annotate"
     kinds = (JOB_KIND, QC_JOB_KIND) if qc_active else (JOB_KIND,)
     # arrival-descended seeds outrank import/replay seeds: a deep
     # backfill must never starve a fresh notification's evaluation
@@ -3122,9 +3322,13 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             token = runtime.JobToken.from_row(job)
             payload = runtime.parse_payload(job)
             limit = runtime.attempt_limit(payload)
+            job_skip = None
             if runtime.circuit_open(ledger):
                 out["circuit_open"] = True
-                break
+                circuit = runtime._circuit_state(ledger)
+                if circuit["failure_class"] not in runtime._CIRCUIT_FAILURE_CLASSES:
+                    break
+                job_skip = "circuit_open"
             from mcs_queries import paused
             if paused(ledger.db, job["project_id"]):
                 runtime.transition(ledger, token, "defer", retry_in=300)
@@ -3133,6 +3337,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             if cfg_path is not None:
                 current_cfg = load_config(cfg_path)
                 scfg, errs = runtime_config(current_cfg)
+                errors = errs
                 current_generation = runtime.config_generation(current_cfg)
                 observation_config_changed |= current_generation != cfg_generation
                 cfg_generation = current_generation
@@ -3186,25 +3391,42 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             lane_cap = scfg["daily_request_budget"]
             if lane == "backlog":
                 lane_cap -= math.ceil(lane_cap * BACKLOG_BUDGET_RESERVE)
-            if jev_client is not None:
+            if jev_client is None:
+                job_skip = job_skip or "disabled"
+            elif not getattr(jev_client, "api_key", True):
+                job_skip = job_skip or "not_configured"
+            if jev_client is not None and job_skip is None:
                 # the daily cap binds at REQUEST granularity, not just job
                 # granularity — one job's claim-audit + loop-relation calls
                 # must not overshoot it mid-flight (§13.5)
                 remaining = lane_cap - jev_usage_today(ledger)
                 if remaining <= 0:
-                    result["errors"].append(
-                        "semantic: backlog_budget_reserved" if lane == "backlog"
-                        else "semantic: daily_budget_exhausted")
+                    # Compatibility field: the Jev quota is unavailable;
+                    # the semantic job itself may still continue.
                     out["budget_exhausted"] = True
-                    break
-                jev_client.request_cap = (jev_client.requests_made
-                                          + remaining)
+                    job_skip = "backlog_reserved" if lane == "backlog" else "daily_budget"
+                else:
+                    jev_client.request_cap = (jev_client.requests_made
+                                              + remaining)
                 if hasattr(jev_client, "attempt_timeout"):
                     jev_client.attempt_timeout = scfg["attempt_timeout_seconds"]
                 if hasattr(jev_client, "job_budget"):
                     jev_client.job_budget = scfg["job_budget_seconds"]
+            if job_skip is not None:
+                try:
+                    if errors:
+                        raise ValueError("semantic_config_invalid")
+                    runtime._jev_window_check(config_path=cfg_path)
+                    jev_usage_today(ledger)
+                except (jev.JevError, ValueError, sqlite3.Error):
+                    if "semantic: jev_skip_unverified" not in result["errors"]:
+                        result["errors"].append("semantic: jev_skip_unverified")
+                    runtime.transition(ledger, token, "defer", retry_in=300)
+                    out["deferred"] += 1
+                    continue
+            job_jev = None if job_skip is not None else jev_client
             reserve_fn = None
-            if (jev_client is not None
+            if (job_jev is not None
                     and getattr(jev_client, "supports_attempt_hooks", False)):
                 reserve_fn = runtime.usage_reserver(
                     ledger, token, kind=KIND_USAGE, model=jev.JEV_MODEL,
@@ -3254,19 +3476,23 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
             timed_llm, llm_acc = _timed_llm(llm_fn)
             art0 = _last_stage_artifact(ledger, job["project_id"])
             diagnostics = _job_diagnostics()
+            if job_skip is not None:
+                diagnostics["jev_skip_reason"] = job_skip
             try:
                 if job["kind"] == QC_JOB_KIND:
                     status = semantic_qc._process_qc_job(
-                        ledger, scfg, job, jev_client, deadline,
+                        ledger, scfg, job, job_jev, deadline,
                         reserve_fn=reserve_fn, cfg_path=cfg_path,
                         config_generation=cfg_generation,
-                        jev_transport=jev_transport, jev_timing=jev_timing)
+                        jev_transport=jev_transport, jev_timing=jev_timing,
+                        skip_reason=job_skip, lane=lane, diagnostics=diagnostics)
                 else:
                     status = _process_job(
-                        ledger, scfg, job, jev_client, timed_llm, deadline,
+                        ledger, scfg, job, job_jev, timed_llm, deadline,
                         cfg_path=cfg_path,
                         config_generation=cfg_generation,
                         reserve_fn=reserve_fn, lane=lane, diagnostics=diagnostics, shadow_stats=shadow_stats,
+                        jev_skip=job_skip,
                         jev_transport=jev_transport, jev_timing=jev_timing,
                         cloud_transport=(lambda call, *a, **kw: _unlocked("llm", call, *a, **kw))
                         if cloud_backlog else None, llm_timing=llm_acc, cloud_only=cloud_only)
@@ -3292,6 +3518,12 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 out["failed"] += 1
                 status = None
             job_elapsed = time.perf_counter() - job_started
+            skip_observed = diagnostics.get("jev_skip_reason")
+            if skip_observed and status == "done":
+                counts = out.setdefault("jev_skipped", {})
+                counts[skip_observed] = counts.get(skip_observed, 0) + 1
+                if skip_observed in ("daily_budget", "backlog_reserved"):
+                    out["budget_exhausted"] = True
             job_progressed = _last_stage_artifact(ledger, job["project_id"]) > art0
             if job_progressed:
                 out["progressed"] += 1

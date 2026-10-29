@@ -172,7 +172,8 @@ def test_worker_alternates_cloud_only_units_without_local_calls(tmp_path, monkey
     passes = [json.loads(line) for line in capsys.readouterr().out.splitlines()
               if json.loads(line).get('event') == 'cloud_backlog_pass']
     assert 'reason' not in passes[0]
-    assert passes[1].get('reason') == ('backlog_budget_reserved' if budget is True else None)
+    assert passes[1].get('reason') == ('jev_backlog_budget_reserved' if budget is True else None)
+    assert passes[1].get('jev_effect') == ('skipped_if_eligible' if budget is True else None)
 
 
 def test_worker_never_opens_database_without_startup_lock(monkeypatch):

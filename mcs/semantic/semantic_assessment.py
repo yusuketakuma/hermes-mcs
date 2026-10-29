@@ -214,7 +214,7 @@ def _append_finding(findings: list, code: str, fact_id=None,
 
 def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
                                jev_client, scfg: dict,
-                               deadline: float | None) -> dict:
+                               deadline: float | None, *, skip_unavailable=False) -> dict:
     """Evaluate every extracted medication event independently.
 
     A complete detail result is durable at ``(source fingerprint, policy
@@ -271,7 +271,7 @@ def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
         return _result(details, findings, False, "invalid")
     if not events:
         return _result(details, findings, True)
-    if jev_client is None:
+    if jev_client is None and not skip_unavailable:
         _append_finding(findings, "medication_detail_technical_error")
         return _result(details, findings, False, "technical")
 
@@ -280,6 +280,7 @@ def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
         project_id, target_id, source_fp, policy_fp,
         {(fact["fact_id"], dimension): options for fact in events
          for dimension, (_, options) in jev.MED_DETAIL_QUESTIONS.items()})
+    skipped = False
     for fact in events:
         fact_id = fact["fact_id"]
         state, state_error = _event_state(fact, context, members)
@@ -306,7 +307,9 @@ def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
                                 for dimension in jev.MED_DETAIL_QUESTIONS
                                 if (fact_id, dimension) in cache})
         keys = list(missing)
-        for start in range(0, len(keys), limit):
+        if keys and jev_client is None:
+            skipped = True
+        for start in range(0, len(keys) if jev_client is not None else 0, limit):
             part = {dimension: missing[dimension] for dimension in keys[start:start + limit]}
             if deadline is not None and time.monotonic() > deadline:
                 _append_finding(findings, "medication_detail_deadline", fact_id, next(iter(part)))
@@ -341,7 +344,9 @@ def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
                 answers[dimension] = {"choice": choice, "confidence": confidence}
                 details[fact_id][dimension] = choice
         for dimension in jev.MED_DETAIL_QUESTIONS:
-            answer = cache.get((fact_id, dimension)) or answers[dimension]
+            answer = cache.get((fact_id, dimension)) or answers.get(dimension)
+            if answer is None:
+                continue
             choice, confidence = answer["choice"], answer["confidence"]
             details[fact_id][dimension] = choice
             if (confidence >= threshold and dimension in ("status", "polarity")
@@ -353,4 +358,7 @@ def evaluate_medication_events(ledger, bundle: dict, target_id, facts: list,
                 _append_finding(findings, "medication_detail_low_confidence",
                                 fact_id, dimension, confidence=confidence)
 
+    if skipped:
+        _append_finding(findings, "medication_detail_unevaluated")
+        return _result(details, findings, False, "skipped")
     return _result(details, findings, True)

@@ -376,8 +376,7 @@ def _circuit_state(ledger, now=None, *, kind=_CIRCUIT_ARTIFACT_KIND) -> dict:
         return {"consecutive_failures": 0, "open_until": 0.0,
                 "failure_class": None}
     try:
-        state = (strict_json(row["content"] or "{}") if kind == "cloud_circuit"
-                 else json.loads(row["content"] or "{}"))
+        state = strict_json(row["content"] or "{}")
         count = state.get("consecutive_failures")
         open_until = state.get("open_until", 0.0)
         failure_class = state.get("failure_class")

@@ -36,6 +36,7 @@ QUALITY_REPAIR = "patient_context_summary_quality_repair_v1"
 QUALITY_REPAIR_CANDIDATE = "patient_context_summary_quality_repair_candidate_v1"
 QUALITY_RETRY = "patient_context_summary_quality_retry_v1"
 QUALITY_CLAIM = "patient_context_summary_quality_claim"
+QUALITY_SKIP = "patient_context_summary_quality_skipped_v1"
 SOURCE_REPAIR = "patient_context_source_quality_repair_v1"
 SOURCE_REPAIR_CANDIDATE = "patient_context_source_quality_repair_candidate_v1"
 CONTRACT = "patient-context-nightly/1"
@@ -54,7 +55,7 @@ def _quality_kind(kind, identity):
     purpose = identity.get("purpose", "summary")
     if purpose == "summary":
         return kind
-    if purpose == "source" and kind in (QUALITY, QUALITY_FAIL, QUALITY_PASS, QUALITY_RETRY):
+    if purpose == "source" and kind in (QUALITY, QUALITY_FAIL, QUALITY_PASS, QUALITY_RETRY, QUALITY_SKIP):
         return kind.replace("patient_context_summary_quality", "patient_context_source_quality", 1)
     raise ValueError("patient_summary_quality_purpose_invalid")
 
@@ -433,7 +434,8 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
     # mismatches and duplicate JSON keys, without reading chunk bodies here.
     hydrate_ids = {}
     if (check_quality and contract.get("provider") and cfg is not None
-            and any(scan.get("audited") for scan in result.values())):
+            and any(scan.get("audited") or scan.get("source_quality_state") == "skipped"
+                    for scan in result.values())):
         with closing(db.execute("SELECT artifact_id,meta,CASE WHEN json_valid(meta) "
                               "THEN json_extract(meta,'$.source_key') END FROM artifacts "
                               "WHERE kind=? AND project_id=? AND " + current_meta_pred("meta", target=CURRENT_VERSION)
@@ -450,6 +452,9 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
                         and _source_chunk_marker_matches(meta, scan)):
                     hydrate_ids.setdefault(context_plan.source_key(source), []).append(row[0])
     for key, scan in result.items():
+        # This flag is a freshly verified read-side property, never trust a
+        # persisted flag as evidence that an unavailable Jev was run.
+        scan["_audit_skipped"] = False
         occurrence = None
         if "source_occurrence_version" in scan or "source_occurrence" in scan:
             try:
@@ -490,7 +495,19 @@ def _current_scans_snapshot(db, pid, sources, contract, *, cfg=None, check_quali
                 and (cfg is None or not _source_quality_verified(db, pid, by_key[key], contract, cfg, scan,
                     scan_proof=(db, pid, context_plan.source_signature(by_key[key]), contract, changes, scan, hydrate_ids.get(key, []))))):
             scan["audited"] = False
+        if (check_quality and contract.get("provider") and cfg is not None
+                and scan.get("source_quality_state") == "skipped"
+                and scan.get("audited_chunks_sig") == scan["_chunks_sig"]):
+            scan["_audit_skipped"] = _source_quality_verified(
+                db, pid, by_key[key], contract, cfg, scan,
+                scan_proof=(db, pid, context_plan.source_signature(by_key[key]), contract,
+                            changes, scan, hydrate_ids.get(key, [])))
     return result
+
+
+def _scan_ready(scan):
+    return bool(scan.get("complete") and not scan.get("failure")
+                and (scan.get("audited") or scan.get("_audit_skipped") is True))
 
 
 def _source_chunks(db, pid, source, contract, scan, *, artifact_ids=None):
@@ -621,9 +638,13 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
             identity = captured["identity"]
             if (meta.get("quality_audit_key") != identity["audit_key"]
                     or semantic_runtime.patient_summary_request_problem(db, pid, identity, identity["fact_ids"])
-                    or _quality_failed(db, pid, identity) or not _quality_passed(db, pid, identity)):
+                    or _quality_failed(db, pid, identity)):
                 return False
             selected = {row["fact_ids"][0] for row in doc["summary"]}
+            if meta.get("quality_audit_status") == "SKIPPED":
+                return _quality_skip_receipt(db, pid, identity, selected, policy["match_threshold"]) is not None
+            if not _quality_passed(db, pid, identity):
+                return False
             for start in range(0, len(identity["fact_ids"]), 12):
                 ids = identity["fact_ids"][start:start + 12]
                 answers = _quality_answers(db, pid, identity["audit_key"], ids)
@@ -643,7 +664,7 @@ def _quality_publication_allowed(db, pid, cfg, doc, meta, *, read_proof=None):
 def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
     sources = snapshot["sources"]
     scans = _scans_from_read(db, pid, sources, snapshot["contract"], cfg, read_proof)
-    counts = dict.fromkeys(("total", "eligible", "scanned", "audited", "pending", "held", "failed",
+    counts = dict.fromkeys(("total", "eligible", "scanned", "audited", "skipped", "pending", "held", "failed",
                            "incomplete", "excluded", "observed_empty"), 0)
     counts["total"] = len(sources)
     for source in sources:
@@ -658,7 +679,9 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
             counts["scanned"] += int(bool(scan.get("complete")))
             audited = bool(scan.get("complete") and scan.get("audited") and not scan.get("failure"))
             counts["audited"] += int(audited)
-            if not audited:
+            skipped = _scan_ready(scan) and not audited
+            counts["skipped"] += int(skipped)
+            if not audited and not skipped:
                 counts["held" if scan.get("held") or scan.get("quality_state") == "held"
                        else "failed" if scan.get("failure") else "pending"] += 1
     doc, meta = _latest(db, KIND, pid)
@@ -673,7 +696,7 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
     scope = snapshot.get("scope") or {}
     acquired_empty = bool(counts["total"] or scope.get("fetch_state") == "complete")
     complete = (not _out_of_scope(snapshot) and options(cfg)["enabled"] and acquired_empty
-                and counts["eligible"] == counts["audited"] and not counts["incomplete"]
+                and counts["eligible"] == counts["audited"] + counts["skipped"] and not counts["incomplete"]
                 and not progress.get("held") and not progress.get("failure") and current
                 and snapshot["dependencies"]["complete"] and snapshot["acquisition"]["complete"])
     fetch_allowed = snapshot["acquisition"]["complete"]
@@ -691,7 +714,7 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
               else "unacquired" if not acquired_empty else "incomplete" if counts["incomplete"]
               else "acquisition_incomplete" if not fetch_allowed
               else "scan_pending" if counts["scanned"] < counts["eligible"]
-              else "audit_pending" if counts["audited"] < counts["eligible"]
+              else "audit_pending" if counts["audited"] + counts["skipped"] < counts["eligible"]
               else "summary_pending" if not complete
               else "excluded" if counts["eligible"] == 0 and counts["excluded"] else "empty" if counts["eligible"] == 0 else "complete")
     return {VERSION_KEY: CURRENT_VERSION, "complete": bool(complete), "publication_eligible": eligible,
@@ -955,7 +978,7 @@ def _quality_capture(db, pid, cfg, night_id, summary, assessment_contract, displ
             raise ValueError("patient_summary_quality_source_incomplete")
         if context_plan.source_usable(source):
             scan = scans.get(context_plan.source_key(source), {})
-            if not scan.get("complete") or not scan.get("audited") or scan.get("failure"):
+            if not _scan_ready(scan):
                 raise ValueError("patient_summary_quality_source_incomplete")
     _, _, _, facts, state = _all_facts(db, pid, snapshot, night_id, include_all=True, cfg=cfg, read_proof=read_proof)
     identity = _quality_input(db, pid, snapshot, facts, state, summary, assessment_contract, display_projection)
@@ -1053,6 +1076,9 @@ def _source_quality_verified(db, pid, source, contract, cfg, scan, *, scan_proof
                 return False
             import semantic_runtime
             descriptor = semantic_runtime.patient_source_assessment_descriptor(identity["assessment"], policy)
+            if scan.get("source_quality_state") == "skipped":
+                _quality_integrity(db, pid)
+                return _quality_skip_receipt(db, pid, identity, set(), policy["match_threshold"]) is not None
             return semantic_runtime.patient_source_pass_verified(db, pid, identity, descriptor)
         finally:
             db.execute("RELEASE source_quality_read")
@@ -1132,6 +1158,7 @@ def _quality_integrity(db, pid):
     kinds = {QUALITY: ("input_key", "audit_key", "fact_id"),
              QUALITY_FAIL: ("input_key", "candidate_key", "failure_key", "audit_key"),
              QUALITY_PASS: ("input_key", "candidate_key", "audit_key"),
+             QUALITY_SKIP: ("input_key", "candidate_key", "audit_key"),
              QUALITY_RETRY: ("input_key", "audit_key", "page_key"),
              QUALITY_REPAIR: ("input_key", "candidate_key"),
              QUALITY_REPAIR_CANDIDATE: ("input_key", "candidate_key", "audit_key", "original_failure_key"),
@@ -1140,12 +1167,16 @@ def _quality_integrity(db, pid):
              SOURCE_REPAIR_CANDIDATE: ("repair_input_key", "source_sig", "source_binding", "original_audit_key", "original_failure_key",
                                        "original_chunks_sig", "protected_sig", "original_receipts_sig", "unit_key", "request_fp")}
     kinds.update({_quality_kind(kind, {"purpose": "source"}): kinds[kind]
-                  for kind in (QUALITY, QUALITY_FAIL, QUALITY_PASS, QUALITY_RETRY)})
+                  for kind in (QUALITY, QUALITY_FAIL, QUALITY_PASS, QUALITY_RETRY, QUALITY_SKIP)})
     for row in db.execute("SELECT kind,CASE WHEN typeof(meta)='text' AND length(meta)<=32768 "
                           "THEN meta END FROM artifacts WHERE project_id=? AND kind IN ("
                           + ",".join("?" for _ in kinds) + ")",
                           (pid, *kinds)):
-        meta = loads_dict(row[1])
+        try:
+            meta = (strict_json(row[1]) if row[0] in (QUALITY_SKIP,
+                    _quality_kind(QUALITY_SKIP, {"purpose": "source"})) else loads_dict(row[1]))
+        except (ValueError, TypeError, UnicodeError, RecursionError):
+            raise ValueError("patient_summary_quality_metadata_invalid") from None
         if (not isinstance(meta, dict) or VERSION_KEY not in meta or read_version(meta) is None
                 or any(not valid_hash(meta.get(key)) for key in kinds[row[0]])):
             raise ValueError("patient_summary_quality_metadata_invalid")
@@ -1210,6 +1241,97 @@ def _quality_failed(db, pid, identity):
                       + current_meta_pred("meta", target=CURRENT_VERSION)
                       + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.failure_key') END=? LIMIT 1",
                       (_quality_kind(QUALITY_FAIL, identity), pid, identity["failure_key"])).fetchone() is not None
+
+
+def _quality_skip_evidence(db, pid, identity, selected, threshold):
+    """Reject unresolved or adverse existing answers before accepting a skip."""
+    import semantic_runtime
+    purpose = identity.get("purpose", "summary")
+    if (_quality_failed(db, pid, identity)
+            or semantic_runtime.patient_summary_request_problem(
+                db, pid, identity, identity["fact_ids"], purpose=purpose)):
+        return False
+    for offset in range(0, len(identity["fact_ids"]), 12):
+        ids = identity["fact_ids"][offset:offset + 12]
+        answers = _quality_answers(db, pid, identity["audit_key"], ids, purpose=purpose, identity=identity)
+        if any(answer["confidence"] < threshold
+               or answer["choice"] != _quality_expected(identity, fid, selected)
+               for fid, answer in answers.items()):
+            return False
+    return True
+
+
+def _quality_skip_receipt(db, pid, identity, selected, threshold):
+    """Read an identity-bound skip without turning it into an audit PASS."""
+    rows = db.execute("SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? AND "
+                      + current_meta_pred("meta", target=CURRENT_VERSION)
+                      + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.audit_key') END=?",
+                      (_quality_kind(QUALITY_SKIP, identity), pid, identity["audit_key"])).fetchall()
+    if len(rows) != 1 or not _quality_skip_evidence(db, pid, identity, selected, threshold):
+        return None
+    try:
+        content, meta = strict_json(rows[0][0]), strict_json(rows[0][1])
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        return None
+    reasons = {"not_configured", "disabled", "daily_budget", "backlog_reserved", "service_unavailable", "circuit_open"}
+    if (not isinstance(content, dict) or set(content) != {"status", "reason", "fact_count", "purpose"}
+            or content.get("status") != "SKIPPED" or content.get("reason") not in reasons
+            or type(content.get("fact_count")) is not int or content["fact_count"] != len(identity["fact_ids"])
+            or content.get("purpose") != identity.get("purpose", "summary")
+            or not isinstance(meta, dict) or any(meta.get(key) != identity[key]
+                for key in ("input_key", "candidate_key", "audit_key"))):
+        return None
+    return content
+
+
+def _quality_mark_skipped(ledger, pid, identity, claim, selected, current, threshold, reason):
+    """Persist a bounded skip only while the source, scope and owner remain current."""
+    if not current():
+        raise ValueError("patient_summary_quality_source_changed")
+    version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
+    changes = ledger.db.total_changes
+    ledger.db.execute("BEGIN")
+    try:
+        if not _quality_skip_evidence(ledger.db, pid, identity, selected, threshold):
+            raise ValueError("patient_summary_quality_unresolved_request")
+        prior = _quality_skip_receipt(ledger.db, pid, identity, selected, threshold)
+    finally:
+        ledger.db.rollback()
+    if ledger.db.execute("PRAGMA data_version").fetchone()[0] != version or ledger.db.total_changes != changes:
+        raise ValueError("patient_summary_quality_source_changed")
+    fd = acquire_run_lock()
+    if fd is None:
+        raise Deferred("patient_summary_quality_lock")
+    try:
+        ledger.db.execute("BEGIN IMMEDIATE")
+        try:
+            if (not _quality_owns(ledger.db, pid, identity["input_key"], claim) or not current()
+                    or ledger.db.execute("PRAGMA data_version").fetchone()[0] != version
+                    or ledger.db.total_changes != changes):
+                raise ValueError("patient_summary_quality_source_changed")
+            writes = 0
+            if prior is None:
+                # A malformed or duplicate existing receipt is never replaced.
+                exists = ledger.db.execute("SELECT 1 FROM artifacts WHERE kind=? AND project_id=? AND "
+                    + current_meta_pred("meta", target=CURRENT_VERSION)
+                    + " AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.audit_key') END=? LIMIT 1",
+                    (_quality_kind(QUALITY_SKIP, identity), pid, identity["audit_key"])).fetchone()
+                if exists:
+                    raise ValueError("patient_summary_quality_skip_invalid")
+                ledger.artifact_add_tx(_quality_kind(QUALITY_SKIP, identity), json.dumps({
+                    "status": "SKIPPED", "reason": reason, "fact_count": len(identity["fact_ids"]),
+                    "purpose": identity.get("purpose", "summary")}, separators=(",", ":")),
+                    project_id=pid, meta={VERSION_KEY: CURRENT_VERSION, **{key: identity[key] for key in
+                        ("input_key", "candidate_key", "audit_key")}})
+                writes = 1
+            if not _quality_skip_receipt(ledger.db, pid, identity, selected, threshold) or not current(writes):
+                raise ValueError("patient_summary_quality_source_changed")
+            ledger.db.commit()
+        except BaseException:
+            ledger.db.rollback()
+            raise
+    finally:
+        os.close(fd)
 
 
 def _quality_failure_allows_remainder(db, pid, identity):
@@ -2075,13 +2197,25 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
     key = semantic_jev.api_key()
     cloud_key = extract_llm.cloud_policy.selected_key(extract_llm.HOME, cfg)
     scfg, errors = semantic_policy.semantic_config(cfg, key_present=bool(key))
-    if (errors or not key or not cloud_key or scfg["mode"] == "off" or scfg["daily_request_budget"] <= 0
+    if (errors or not cloud_key or scfg["mode"] == "off"
             or scfg["project_ids"] is not None and pid not in scfg["project_ids"]):
         return "deferred", None
     lane_cap = scfg["daily_request_budget"] - math.ceil(
         scfg["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
-    if lane_cap <= 0:
+    from semantic_store import jev_usage_today
+    try:
+        semantic_runtime._jev_window_check()
+        used = jev_usage_today(ledger)
+    except (semantic_jev.JevError, ValueError, sqlite3.Error):
         return "deferred", None
+    skip_reason = ("not_configured" if not key else
+                   "disabled" if scfg["daily_request_budget"] <= 0 else
+                   "backlog_reserved" if used >= lane_cap else None)
+    if semantic_runtime.circuit_open(ledger):
+        state = semantic_runtime._circuit_state(ledger)
+        if state["failure_class"] not in semantic_runtime._CIRCUIT_FAILURE_CLASSES:
+            return "deferred", None
+        skip_reason = skip_reason or "circuit_open"
     assessment = _quality_assessment(scfg)
     summary = doc.get("summary")
     display_projection = doc.get("temporal_view")
@@ -2113,6 +2247,26 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
             live = extract_llm.load_config()
             live_key = semantic_jev.api_key()
             live_semantic, problems = semantic_policy.semantic_config(live, key_present=bool(live_key))
+            if skip_reason is not None:
+                try:
+                    semantic_runtime._jev_window_check()
+                    live_used = jev_usage_today(ledger)
+                    live_cap = live_semantic["daily_request_budget"] - math.ceil(
+                        live_semantic["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
+                    still_skipped = ((skip_reason == "not_configured" and not live_key)
+                                     or (skip_reason == "disabled" and live_semantic["daily_request_budget"] <= 0)
+                                     or (skip_reason == "backlog_reserved" and live_used >= live_cap)
+                                     or (skip_reason == "daily_budget" and live_used >= live_cap)
+                                     or skip_reason == "service_unavailable"
+                                     or (skip_reason == "circuit_open" and semantic_runtime.circuit_open(ledger)
+                                         and semantic_runtime._circuit_state(ledger)["failure_class"]
+                                         in semantic_runtime._CIRCUIT_FAILURE_CLASSES))
+                    if not still_skipped:
+                        denied = True
+                        return False
+                except (semantic_jev.JevError, ValueError, sqlite3.Error):
+                    denied = True
+                    return False
             if (time.monotonic() >= deadline or not admit() or not extract_llm._writer_current(full=True)
                     or live_key != key or problems or live_semantic["mode"] == "off" or paused(ledger.db, pid)
                     or extract_llm.cloud_policy.selected_key(extract_llm.HOME, live) != cloud_key
@@ -2184,6 +2338,12 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                             if purpose == "source" else None))
             return "passed", {**identity, "_keys": (key, cloud_key),
                 **({"_candidate_ref":source_candidate_ref,"_source_chunks_sig":initial["chunks_sig"]}
+                   if purpose == "source" else {})}
+        if skip_reason is not None:
+            _quality_mark_skipped(ledger, pid, identity, claim, selected, current,
+                                  scfg["match_threshold"], skip_reason)
+            return "skipped", {**identity, "_keys": (key, cloud_key), "_skip_reason": skip_reason,
+                **({"_candidate_ref": source_candidate_ref, "_source_chunks_sig": initial["chunks_sig"]}
                    if purpose == "source" else {})}
         reserve = semantic_runtime.patient_summary_usage_reserver(
             ledger, project_id=pid, guard=guard, daily_request_budget=scfg["daily_request_budget"], identity=identity, purpose=purpose)
@@ -2261,6 +2421,17 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                        list(sources.values()), deadline, scfg["match_threshold"], prior_answers=prior,
                        on_attempt_result=persist))
             if not outcome["evaluated"]:
+                reason = semantic_audit.jev_skip_reason(getattr(client, "last_error", None))
+                if reason is not None:
+                    skip_reason = reason
+                    try:
+                        _quality_mark_skipped(ledger, pid, identity, claim, selected, current,
+                                              scfg["match_threshold"], reason)
+                    except (ValueError, Deferred):
+                        return "unknown", identity
+                    return "skipped", {**identity, "_keys": (key, cloud_key), "_skip_reason": reason,
+                        **({"_candidate_ref": source_candidate_ref, "_source_chunks_sig": initial["chunks_sig"]}
+                           if purpose == "source" else {})}
                 failure_class = outcome.get("failure_class", "failed")
                 if failure_class in ("retry", "failed"):
                     _quality_record_failure(ledger, pid, identity, claim, page_key, failure_class, current)
@@ -2311,6 +2482,27 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
     proof = proof_for(snapshot, estimate_cfg) if proof_for is not None else None
     stored = _scans_from_read(db, pid, snapshot["sources"], snapshot["contract"], estimate_cfg, proof)
     scans = [stored.get(context_plan.source_key(source), {}) for source in snapshot["sources"] if context_plan.source_usable(source)]
+    recheck_available = False
+    if (not estimate and snapshot["contract"].get("provider")
+            and (meta.get("quality_audit_status") == "SKIPPED"
+                 or any(scan.get("_audit_skipped") for scan in scans))):
+        try:
+            from types import SimpleNamespace
+            import semantic_jev
+            import semantic_policy
+            import semantic_runtime
+            from semantic_store import jev_usage_today
+            key = semantic_jev.api_key()
+            scfg, errs = semantic_policy.semantic_config(cfg, key_present=bool(key))
+            semantic_runtime._jev_window_check()
+            cap = scfg["daily_request_budget"] - math.ceil(
+                scfg["daily_request_budget"] * semantic_policy.BACKLOG_BUDGET_RESERVE)
+            view = SimpleNamespace(db=db)
+            recheck_available = bool(key and not errs and scfg["mode"] != "off"
+                                     and cap > jev_usage_today(view)
+                                     and not semantic_runtime.circuit_open(view))
+        except (ValueError, TypeError, sqlite3.Error, semantic_jev.JevError):
+            recheck_available = False
     snapshot["source_failures"] = sum(bool(scan.get("failure")) for scan in scans)
     quality_changed = False
     if snapshot["contract"].get("provider") and meta.get("quality_audit_key"):
@@ -2321,19 +2513,21 @@ def _pending(db, pid, cfg, *, now=None, contract=None, estimate=False, proof_for
                     or meta.get("publication_requested", meta.get("published")) != options(cfg)["publication"]
                     or meta.get("summary_checked") is not True
                     or bool(snapshot["contract"].get("provider") and not meta.get("quality_audit_key"))
+                    or bool(recheck_available and meta.get("quality_audit_status") == "SKIPPED")
                     or quality_changed
                     or progress.get("summary_pending", False))
     cloud_ready = (not snapshot["contract"].get("provider")
                    or snapshot["acquisition"]["complete"] and snapshot["dependencies"]["complete"]
                    and _sources_intact(snapshot["sources"])
-                   and all(scan.get("complete") and scan.get("audited") and not scan.get("failure")
-                           for scan in scans))
+                   and all(_scan_ready(scan) for scan in scans))
     snapshot["unfinished"] = bool(summary_needed or not snapshot["acquisition"]["complete"]
         or not snapshot["dependencies"]["complete"] or not _sources_intact(snapshot["sources"])
-        or any(not scan.get("complete") or not scan.get("audited") or scan.get("failure") for scan in scans))
+        or any(not _scan_ready(scan) for scan in scans))
     pending = {"A": summary_needed and cloud_ready and _ready(progress, now),
                "B": any(not scan.get("complete") and _ready(scan, now) for scan in scans),
-               "C": any(scan.get("complete") and not scan.get("audited") and _ready(scan, now) for scan in scans)}
+               "C": any(scan.get("complete") and (not _scan_ready(scan)
+                         or recheck_available and scan.get("_audit_skipped")) and _ready(scan, now)
+                        for scan in scans)}
     return snapshot, progress, pending
 
 
@@ -2680,7 +2874,7 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
             elif (db.execute("SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? "
                              "AND message_id=? AND state!='done' LIMIT 1",
                              (semantic_policy.JOB_KIND, pid, root)).fetchone()
-                  or semantic_drain._reprocess_target_state(ledger, row, policy) != "current"):
+                  or semantic_drain._reprocess_target_state(ledger, row, policy) not in ("current", "current_skipped")):
                 return False
         if policy["mode"] != "off" and policy["extract_qc"] == "annotate":
             scope, params = semantic_qc.qc_scope_sql(time.time())
@@ -2690,15 +2884,19 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
                 WHERE j.project_id=? AND j.kind=? AND j.state!='done' AND {scope}
                 LIMIT 1""", (pid, semantic_policy.QC_JOB_KIND, *params)).fetchone():
                 return False
-            if db.execute(f"""SELECT 1 FROM messages m JOIN artifacts a
+            missing_qc = db.execute(f"""SELECT m.message_id,m.content_hash,a.artifact_id FROM messages m JOIN artifacts a
                 ON a.artifact_id={qc_source_id(version=version)}
                 WHERE m.project_id=? AND {scope}
                   AND CASE WHEN json_valid(a.meta) AND json_type(a.meta)='object'
                       THEN json_extract(a.meta,'$.prefilter') IS NULL END
                   AND NOT EXISTS (SELECT 1 FROM artifacts q WHERE q.kind=?
                       AND q.message_id=m.message_id {current_qc_pred('q', version=version)})
-                LIMIT 1""", (pid, *params, semantic_policy.QC_ARTIFACT)).fetchone():
-                return False
+                """, (pid, *params, semantic_policy.QC_ARTIFACT))
+            for missing in missing_qc:
+                if (time.monotonic() + COMMIT_MARGIN >= deadline
+                        or not semantic_qc.skipped_current(db, pid, missing['message_id'], missing['artifact_id'],
+                                                           missing['content_hash'], version, policy)):
+                    return False
         return time.monotonic() + COMMIT_MARGIN < deadline
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError):
         return False
@@ -2806,6 +3004,8 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     quality_keys = None
     source_quality_identity = None
     source_quality_keys = None
+    quality_skipped = False
+    source_quality_skipped = False
     selected_source = [None]
     selected_occurrence = [None]
 
@@ -2941,9 +3141,11 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                             ledger, pid, cfg, night_id, repaired, deadline, admit, base_doc=old, base_meta=old_meta)
                 except (Deferred, ValueError, RuntimeError):
                     raise Deferred("summary_quality_unavailable") from None
-                if quality_status != "passed":
+                if quality_status not in ("passed", "skipped"):
                     raise Deferred("summary_quality_" + quality_status)
                 quality_keys = quality_result.pop("_keys")
+                quality_skipped = quality_status == "skipped"
+                quality_result.pop("_skip_reason", None)
                 quality_identity = quality_result
                 if repaired is not None:
                     facts, total = repaired["facts"], repaired["facts_total"]
@@ -2954,6 +3156,10 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 if problems or not _quality_scope_allowed(ledger.db, pid, quality_policy, snapshot["sources"]):
                     raise Deferred("summary_quality_promotion")
                 meta["quality_audit_key"] = quality_identity["audit_key"]
+                if quality_skipped:
+                    meta["quality_audit_status"] = "SKIPPED"
+                else:
+                    meta.pop("quality_audit_status", None)
                 meta["quality_schedule_key"] = _digest([cfg, quality_identity["assessment"]["code"]])
             summary = (repaired["summary"] if same and old_meta.get("provider") and repaired is not None
                        else old["summary"] if same else infer(
@@ -3041,10 +3247,12 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                                 quality_status, quality_result = _quality_step(
                                     ledger, pid, cfg, night_id, {}, deadline, admit, source=source,
                                     source_candidate_ref=quality_result)
-                            if quality_status != "passed":
+                            if quality_status not in ("passed", "skipped"):
                                 result = None
                                 raise Deferred("source_quality_" + quality_status)
                             source_quality_keys = quality_result.pop("_keys")
+                            source_quality_skipped = quality_status == "skipped"
+                            quality_result.pop("_skip_reason", None)
                             accepted = quality_result.pop("_candidate_ref", None)
                             result["audited_chunks_sig"] = quality_result.pop("_source_chunks_sig")
                             if accepted is not None:
@@ -3057,6 +3265,11 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                                 result["_chunks_sig"] = accepted["chunks_sig"]
                             source_quality_identity = quality_result
                             result["source_quality_audit_key"] = source_quality_identity["audit_key"]
+                            if source_quality_skipped:
+                                result["audited"] = False
+                                result["source_quality_state"] = "skipped"
+                            else:
+                                result.pop("source_quality_state", None)
                             result.pop("quality_state", None)
                             result.pop("quality_hold_key", None)
                     break
@@ -3081,8 +3294,9 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         try:
             if not _source_quality_verified(ledger.db, pid, source, snapshot["contract"], cfg, result):
                 return {"status": "source_changed", "done": 0}
-            source_pass_content = _quality_pass_content(ledger.db, pid, source_quality_identity)
-            if source_pass_content is None:
+            source_pass_content = (_quality_pass_content(ledger.db, pid, source_quality_identity)
+                                   if not source_quality_skipped else None)
+            if not source_quality_skipped and source_pass_content is None:
                 return {"status": "source_changed", "done": 0}
         finally:
             ledger.db.rollback()
@@ -3142,7 +3356,9 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 if (problems or not _quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
                         or quality_keys != (semantic_jev.api_key(), extract_llm.cloud_policy.selected_key(extract_llm.HOME, live_cfg))
                         or quality_identity["assessment"] != _quality_assessment(live_policy)
-                        or not _quality_passed(ledger.db, pid, quality_identity)
+                        or (not _quality_skip_receipt(ledger.db, pid, quality_identity,
+                                {row["fact_ids"][0] for row in result["summary"]}, live_policy["match_threshold"])
+                            if quality_skipped else not _quality_passed(ledger.db, pid, quality_identity))
                         or _quality_failed(ledger.db, pid, quality_identity)):
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0}
@@ -3154,7 +3370,9 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 if (problems or not _quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
                         or source_quality_keys != (semantic_jev.api_key(), extract_llm.cloud_policy.selected_key(extract_llm.HOME, live_cfg))
                         or source_quality_identity["assessment"] != _quality_assessment(live_policy)
-                        or not _quality_passed(ledger.db, pid, source_quality_identity, expected=source_pass_content)
+                        or (not _quality_skip_receipt(ledger.db, pid, source_quality_identity,
+                                set(), live_policy["match_threshold"]) if source_quality_skipped else
+                            not _quality_passed(ledger.db, pid, source_quality_identity, expected=source_pass_content))
                         or _quality_failed(ledger.db, pid, source_quality_identity)):
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0}
@@ -3228,9 +3446,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                         or prior_doc.get("facts_sig") != result.get("facts_sig")
                         or prior_doc.get("summary") != result.get("summary"))
                     saved_scans = _current_scans(ledger.db, pid, snapshot["sources"], snapshot["contract"], cfg=cfg)
-                    audited = all(saved_scans.get(context_plan.source_key(s), {}).get("complete")
-                                  and saved_scans.get(context_plan.source_key(s), {}).get("audited")
-                                  and not saved_scans.get(context_plan.source_key(s), {}).get("failure")
+                    audited = all(_scan_ready(saved_scans.get(context_plan.source_key(s), {}))
                                   for s in snapshot["sources"] if context_plan.source_usable(s))
                     intact = _sources_intact(snapshot["sources"])
                     _replace(ledger, KIND, pid, result, {**meta, "summary_checked": True,

@@ -13,6 +13,23 @@ import semantic_jev as jev
 from semantic_quantities import claim_quantity_findings, extract_quantities
 
 
+def jev_skip_reason(error) -> str | None:
+    """Classify only known Jev unavailability, never an unverified guard."""
+    if not isinstance(error, jev.JevError):
+        return None
+    kind = getattr(error, "kind", None)
+    detail = getattr(error, "detail", None)
+    if kind == "no_api_key":
+        return "not_configured"
+    if kind == "budget_exceeded" and detail == "daily_cap":
+        return "daily_budget"
+    if kind == "timeout" and detail == "job_deadline_exceeded":
+        return None
+    if kind in ("transport", "timeout", "rate_limited", "auth_error", "payment_required"):
+        return "service_unavailable"
+    return None
+
+
 def _probability(value) -> bool:
     return type(value) in (int, float) and 0 <= value <= 1
 
@@ -378,7 +395,7 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
         # facts may all be supported, yet the doc is not complete
         findings.append({"code": "canonical_coverage_incomplete"})
     # an invalid batch size must not skip every fact (range() runs empty)
-    if jev_client is None or type(per_request) is not int or not 1 <= per_request <= 48:
+    if type(per_request) is not int or not 1 <= per_request <= 48:
         findings.append({"code": "fact_audit_unevaluated"})
         return {"status": "INCOMPLETE", "evaluated": False,
                 "findings": findings, "fact_verdicts": {}}
@@ -403,6 +420,10 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
                 findings.append({"code": "fact_patient_context_invalid", "fact": fid})
                 continue
         pending.append((fact, quotes))
+    if jev_client is None:
+        findings.append({"code": "fact_audit_unevaluated"})
+        return {"status": "INCOMPLETE", "evaluated": False,
+                "findings": findings, "fact_verdicts": {}}
     # Facts share one source: up to per_request facts ride in one request and
     # the source text is sent once, instead of one request (and one full
     # source copy) per fact.
@@ -506,6 +527,25 @@ def audit_status_for(code_findings: list, jev_findings: list,
     return "PASS"
 
 
+def optional_audit_status(code_findings: list, jev_findings: list,
+                          skip_reason: str | None, repaired: bool) -> str:
+    """Keep concrete findings when Jev could not finish its evaluation."""
+    if skip_reason not in {"not_configured", "daily_budget", "backlog_reserved",
+                           "disabled", "service_unavailable", "circuit_open"}:
+        return audit_status_for(code_findings, jev_findings, False, repaired)
+    permitted = {"support_unevaluated", "claim_not_supported", "claim_contradicts",
+                 "claim_ambiguous", "claim_low_confidence"}
+    if any(not isinstance(finding, dict) or finding.get("code") not in permitted
+           for finding in jev_findings):
+        return "NEEDS_REVIEW"
+    known = [finding for finding in jev_findings
+             if finding["code"] != "support_unevaluated"]
+    result = audit_status_for(code_findings, known, True, repaired)
+    if result == "PASS" and (code_findings or known):
+        return "NEEDS_REVIEW"
+    return "SKIPPED" if result == "PASS" else result
+
+
 def fact_audit_verdict(audit, doc_hash: str) -> str | None:
     """Completed fact-audit status for the v2 document ``doc_hash``, or
     None when it has none. ``audit`` is the generation's NEWEST
@@ -543,6 +583,52 @@ def canonical_audit_disposition(audit: dict, doc: dict) -> str:
     if audit["status"] == "PASS":
         return "pass" if doc["coverage"]["status"] == "complete" else "coverage_incomplete"
     return "review"
+
+
+def optional_fact_audit(doc, member, source_fingerprint, reason, previous=None,
+                        match_threshold=jev.MATCH_THRESHOLD):
+    """Check the full source-bound fact contract without fabricating a Jev verdict."""
+    import semantic_assembly
+    import semantic_facts
+    allowed = {"not_configured", "disabled", "daily_budget", "backlog_reserved",
+               "service_unavailable", "circuit_open"}
+    result = {"status": "NEEDS_REVIEW", "evaluated": False,
+              "findings": [{"code": "fact_optional_validation_failed"}], "fact_verdicts": {}}
+    if reason not in allowed or not isinstance(member, dict) or not _probability(match_threshold):
+        return result
+    try:
+        body = member["body_original"]
+        if (not isinstance(body, str) or member.get("body_state") != "full"
+                or member.get("attachments_complete", True) is not True
+                or semantic_assembly.source_binding(member, source_fingerprint) != doc.get("source")):
+            return result
+        semantic_facts.validate_facts_doc(doc)
+        for item in doc["evidence"]:
+            if body[item["start"]:item["end"]] != item["quote"]:
+                return result
+        if previous is not None:
+            if not isinstance(previous, dict) or not isinstance(previous.get("findings"), list):
+                return result
+            permitted = {"fact_audit_unevaluated", "source_fact_coverage_unevaluated"}
+            if any(not isinstance(item, dict) or item.get("code") not in permitted
+                   for item in previous["findings"]):
+                return {**result, "findings": previous["findings"]}
+            verdicts = previous.get("fact_verdicts", {})
+            if not isinstance(verdicts, dict) or any(
+                    not isinstance(value, dict) or value.get("choice") != "supports"
+                    or not _probability(value.get("confidence"))
+                    or value["confidence"] < match_threshold
+                    for value in verdicts.values()):
+                return result
+        checked = audit_facts_v2(None, doc, body, deadline=0)
+        remaining = [item for item in checked["findings"] if item.get("code") != "fact_audit_unevaluated"]
+        if remaining:
+            return {**result, "findings": remaining}
+        return {"status": "SKIPPED", "evaluated": False,
+                "findings": [{"code": "fact_audit_unevaluated"}], "fact_verdicts": {},
+                "jev_skip_reason": reason, "code_checks": "passed"}
+    except (KeyError, TypeError, ValueError, RecursionError, OverflowError):
+        return result
 
 
 def fact_repair_plan(findings: list, attempt: int) -> tuple[dict, bool, bool]:

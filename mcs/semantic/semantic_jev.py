@@ -883,7 +883,13 @@ def evaluate_chunked(jev_client, state: dict, questions: dict,
     step = max(1, limit)
     for i in range(0, len(keys), step):
         part = {k: questions[k] for k in keys[i:i + step]}
-        out = evaluate_once_more(jev_client, state, part, deadline)
+        try:
+            out = evaluate_once_more(jev_client, state, part, deadline)
+        except JevError as error:
+            # Completed chunks are validated answers. Preserve them when a
+            # later chunk stops, so callers cannot discard a known finding.
+            error.partial_answers = dict(merged["answers"])
+            raise
         merged["answers"].update(out["answers"])
     return merged
 

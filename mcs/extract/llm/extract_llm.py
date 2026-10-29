@@ -3635,7 +3635,7 @@ def upgrade_status(db, *, model: str | None) -> dict:
 
 def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
                    archived: bool | None = None, rehold: bool | None = None,
-                   prioritize_patients: bool = False) -> str:
+                   prioritize_patients: bool = False, bounded: bool = True) -> str:
     """run_pending's due-row selection.
 
     Retry state is read through correlated subqueries instead of a
@@ -3680,7 +3680,7 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
         AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try'))
                       {_ERROR_ROWS_SQL}), 0) <= ?
       ORDER BY {priority}m.posted_at_ts {order}, m.message_id {order}
-      LIMIT ?
+      {'LIMIT ?' if bounded else ''}
     """
 
 
@@ -3885,6 +3885,20 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
                     oldest_first: bool, *, archived_first: bool = False,
                     fair_oldest: bool = False, prioritize_patients: bool = False,
                     cloud_only: bool = False) -> tuple[list, int | None]:
+    check = (cloud_policy.history_selection_check(ledger.db) if cloud_only
+             else contextlib.nullcontext(None))
+    with check as receipt_check:
+        return _select_pending_impl(ledger, limit, admitted_ids, shard, oldest_first,
+            archived_first=archived_first, fair_oldest=fair_oldest,
+            prioritize_patients=prioritize_patients, cloud_only=cloud_only,
+            receipt_check=receipt_check)
+
+
+def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
+                         shard: tuple[int, int] | None,
+                         oldest_first: bool, *, archived_first: bool = False,
+                         fair_oldest: bool = False, prioritize_patients: bool = False,
+                         cloud_only: bool = False, receipt_check=None) -> tuple[list, int | None]:
     """Select the claimable pending rows for one run_pending pass ->
     (rows, how many of them are new arrivals; None for oldest_first)."""
     # pending = no current-version artifact, plus retriable CURRENT-
@@ -3937,7 +3951,8 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
     def _select(fresh, n, archived, rehold=None, scope="", scope_params=()):
-        return ledger.db.execute(_selection_sql(ledger.db, order, adm_sql + scope, fresh, archived, rehold,
+        cursor = ledger.db.execute(_selection_sql(ledger.db, order, adm_sql + scope,
+                                               fresh, archived, rehold, bounded=not cloud_only,
                                                prioritize_patients=prioritize_patients), (
             KIND, EXTRACT_VERSION,
             *adm_params, *scope_params,
@@ -3946,8 +3961,19 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
             shard[0] if shard else 0,
             now,
             KIND, EXTRACT_VERSION,
-            now,
-            n)).fetchall()
+            now, *((n,) if not cloud_only else ())))
+        try:
+            if not cloud_only:
+                return cursor.fetchall()
+            selected = []
+            for row in cursor:
+                if receipt_check(row["project_id"], row["message_id"]):
+                    selected.append(row)
+                    if len(selected) >= n:
+                        break
+            return selected
+        finally:
+            cursor.close()
 
     rows, fresh_selected = [], None if oldest_first else 0
     # an admission set (canonical engine) already decides what may run

@@ -4,7 +4,7 @@ import semantic_store
 import semantic_transport
 import json
 import sqlite3
-from mcs_util import loads_dict
+from mcs_util import loads_dict, payload_hash, strict_json
 
 
 
@@ -42,6 +42,40 @@ def intake_root_held(db, project_id, root):
     except sqlite3.Error:
         return True
 
+
+def skipped_summary_current(db, project_id, message_id, fingerprint, policy, revision, mode):
+    """Validate a skipped summary against its current, separately stored receipt."""
+    from inference_version import is_current
+    from semantic_policy import KIND_AUDIT, KIND_SUMMARY
+    rows = []
+    for kind in (KIND_SUMMARY, KIND_AUDIT):
+        row = db.execute("SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? "
+                         "AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
+                         (kind, project_id, message_id)).fetchone()
+        if row is None:
+            return False
+        try:
+            content, meta = strict_json(row["content"]), strict_json(row["meta"])
+        except (ValueError, TypeError, UnicodeError, RecursionError):
+            return False
+        if (not isinstance(content, dict) or not isinstance(meta, dict) or not is_current(meta)
+                or meta.get("fingerprint") != fingerprint or meta.get("policy_fingerprint") != policy
+                or meta.get("audit_status") != "SKIPPED" or meta.get("jev_evaluated") is not False
+                or meta.get("code_checks") != "passed" or meta.get("invalidated") or meta.get("stale")
+                or meta.get("publication_mode") != mode):
+            return False
+        rows.append((content, meta))
+    (summary, smeta), (audit, ameta) = rows
+    reasons = {"not_configured", "disabled", "daily_budget", "backlog_reserved", "service_unavailable", "circuit_open"}
+    findings = audit.get("findings")
+    return (smeta.get("target_revision") == revision and summary.get("audit_status") == "SKIPPED"
+            and audit.get("status") == "SKIPPED" and audit.get("target_message_id") == message_id
+            and isinstance(findings, list) and bool(findings)
+            and all(isinstance(item, dict) and item.get("code") == "support_unevaluated" for item in findings)
+            and smeta.get("jev_skip_reason") in reasons
+            and smeta.get("jev_skip_reason") == ameta.get("jev_skip_reason")
+            and smeta.get("summary_hash") == ameta.get("summary_hash") == payload_hash(summary))
+
 def current_summary(db, project_id: int, message_id: int,
                      bundle, policy: str):
     """The newest semantic_summary for this message when it is publishable
@@ -61,7 +95,7 @@ def current_summary(db, project_id: int, message_id: int,
     content, meta = loads_dict(row["content"]), loads_dict(row["meta"])
     if not isinstance(content, dict) or not isinstance(meta, dict):
         return None
-    if (meta.get("audit_status") != "PASS"
+    if (meta.get("audit_status") not in ("PASS", "SKIPPED")
             or meta.get("stale")
             or meta.get("publication_mode") != "enforce"
             or meta.get("policy_fingerprint") != policy):
@@ -77,7 +111,10 @@ def current_summary(db, project_id: int, message_id: int,
                    if m["message_id"] == message_id), None)
     if (meta.get("fingerprint") == bundle.get("source_fingerprint")
             and target is not None
-            and meta.get("target_revision") == target["revision"]):
+            and meta.get("target_revision") == target["revision"]
+            and (meta.get("audit_status") == "PASS" or skipped_summary_current(
+                db, project_id, message_id, bundle["source_fingerprint"], policy,
+                target["revision"], "enforce"))):
         return {"artifact_id": row["artifact_id"], "content": content,
                 "meta": meta}
     return None

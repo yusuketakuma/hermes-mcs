@@ -33,7 +33,7 @@ import semantic_transport
 import hashlib
 import json
 import time
-from mcs_util import loads_dict
+from mcs_util import loads_dict, payload_hash, strict_json
 from mcs_queries import (current_projection_id, current_v4_id, current_v4_pred,
                          json_object_or_null)
 from semantic_policy import (SCHEMA_VERSION, JOB_KIND, KIND_AUDIT, KIND_COVERAGE,
@@ -43,6 +43,7 @@ from semantic_policy import (SCHEMA_VERSION, JOB_KIND, KIND_AUDIT, KIND_COVERAGE
 
 ENGINE_VERSION = 4
 KIND_V4 = "semantic_facts_v4"
+KIND_V4_SKIPPED = "semantic_facts_v4_skipped"
 KIND_V4_STAGE = "v4_stage"
 KIND_V4_DIAG = "v4_diagnostic"
 
@@ -900,6 +901,130 @@ def publish_fact_projection(ledger, member, pid, mid, fp, policy,
 
 
 
+def _publish_skipped(ledger, pid, mid, fp, policy, member, doc):
+    """Store a separately typed, fully bound non-Jev read model."""
+    from semantic_audit import fact_audit_verdict, optional_fact_audit
+    from semantic_projection import PROJECTION_VERSION, project_v2_doc_legacy
+    from inference_dependency_loss import source_binding, capture_tx, record_tx
+
+    def latest(kind):
+        row = ledger.db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind=? "
+                                "AND project_id=? AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
+                                (kind, pid, mid)).fetchone()
+        if row is None:
+            return None
+        try:
+            content, meta = strict_json(row["content"]), strict_json(row["meta"])
+        except (ValueError, TypeError, UnicodeError, RecursionError):
+            return None
+        if (not isinstance(content, dict) or not isinstance(meta, dict) or not is_current(meta)
+                or meta.get("fingerprint") != fp or meta.get("policy_fingerprint") != policy
+                or meta.get("invalidated")):
+            return None
+        return {"id": row["artifact_id"], "content": content, "meta": meta}
+
+    facts, fact_audit, summary, audit = (latest(kind) for kind in
+        (KIND_FACTS_V2, KIND_FACT_AUDIT, KIND_SUMMARY, KIND_AUDIT))
+    if not all((facts, fact_audit, summary, audit)):
+        return None
+    doc_hash = semantic_facts.doc_hash(doc)
+    document_hash = payload_hash(doc)
+    if payload_hash(facts["content"]) != document_hash:
+        return None
+    reason = audit["meta"].get("jev_skip_reason")
+    if (audit["content"].get("status") != "SKIPPED" or audit["meta"].get("audit_status") != "SKIPPED"
+            or audit["meta"].get("jev_evaluated") is not False or audit["meta"].get("code_checks") != "passed"
+            or summary["meta"].get("audit_status") != "SKIPPED"
+            or summary["meta"].get("jev_skip_reason") != reason
+            or summary["meta"].get("jev_evaluated") is not False
+            or summary["meta"].get("code_checks") != "passed"
+            or audit["meta"].get("summary_hash") != payload_hash(summary["content"])
+            or summary["meta"].get("summary_hash") != payload_hash(summary["content"])
+            or summary["meta"].get("target_revision") != member["revision"]):
+        return None
+    fact_content, fact_meta = fact_audit["content"], fact_audit["meta"]
+    if fact_content.get("status") == "SKIPPED":
+        if (fact_meta.get("doc_hash") != doc_hash or fact_content.get("document_hash") != document_hash
+                or fact_content.get("jev_skip_reason") != reason or fact_content.get("code_checks") != "passed"
+                or optional_fact_audit(doc, member, fp, reason, fact_content)["status"] != "SKIPPED"):
+            return None
+    elif fact_audit_verdict({"meta": fact_meta, "content": fact_content}, doc_hash) != "PASS":
+        return None
+    content = project_v2_doc_legacy(doc)
+    meta = {VERSION_KEY: CURRENT_VERSION, "fingerprint": fp, "policy_fingerprint": policy,
+            "source_binding": source_binding(ledger.db, pid, mid), "hash": member["revision"],
+            "doc_hash": doc_hash, "document_hash": document_hash, "engine_version": ENGINE_VERSION,
+            "projection_version": PROJECTION_VERSION, "audit_status": "SKIPPED", "jev_evaluated": False,
+            "jev_skip_reason": reason, "code_checks": "passed", "fact_artifact_id": facts["id"],
+            "fact_audit_artifact_id": fact_audit["id"], "summary_artifact_id": summary["id"],
+            "audit_artifact_id": audit["id"], "inference_requests": facts["meta"].get("inference_requests")}
+    prior = latest(KIND_V4_SKIPPED)
+    if prior is not None and prior["content"] == content and prior["meta"] == meta:
+        return prior["id"]
+    footprint = capture_tx(ledger.db, pid, mid, artifact_ids=[prior["id"]] if prior else [])
+    artifact_id = ledger.artifact_add_tx(KIND_V4_SKIPPED, json.dumps(content, ensure_ascii=False, allow_nan=False),
+                                         project_id=pid, message_id=mid, meta=meta)
+    record_tx(ledger.db, footprint, replacement_id=artifact_id)
+    ledger.bump_inference_analysis_epoch_tx(pid)
+    return artifact_id
+
+
+def current_skipped(db, pid, mid, fp, policy, member):
+    """Read the distinct skipped projection only while all receipts still bind."""
+    from semantic_audit import fact_audit_verdict, optional_fact_audit
+    from semantic_projection import PROJECTION_VERSION, project_v2_doc_legacy
+    from semantic_send_gate import skipped_summary_current
+    from inference_dependency_loss import source_binding
+
+    def latest(kind):
+        row = db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind=? "
+                         "AND project_id=? AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
+                         (kind, pid, mid)).fetchone()
+        if row is None:
+            return None
+        try:
+            content, meta = strict_json(row["content"]), strict_json(row["meta"])
+        except (ValueError, TypeError, UnicodeError, RecursionError):
+            return None
+        if (not isinstance(content, dict) or not isinstance(meta, dict) or not is_current(meta)
+                or meta.get("fingerprint") != fp or meta.get("policy_fingerprint") != policy
+                or meta.get("invalidated")):
+            return None
+        return {"id": row["artifact_id"], "content": content, "meta": meta}
+
+    try:
+        skipped, facts, fact_audit, summary, audit = (latest(kind) for kind in
+            (KIND_V4_SKIPPED, KIND_FACTS_V2, KIND_FACT_AUDIT, KIND_SUMMARY, KIND_AUDIT))
+        if not all((skipped, facts, fact_audit, summary, audit)):
+            return None
+        meta, doc = skipped["meta"], facts["content"]
+        reason = meta.get("jev_skip_reason")
+        document_hash, doc_hash = payload_hash(doc), semantic_facts.doc_hash(doc)
+        if (meta.get("audit_status") != "SKIPPED" or meta.get("jev_evaluated") is not False
+                or meta.get("code_checks") != "passed" or meta.get("hash") != member["revision"]
+                or meta.get("engine_version") != ENGINE_VERSION or meta.get("projection_version") != PROJECTION_VERSION
+                or meta.get("source_binding") != source_binding(db, pid, mid)
+                or meta.get("document_hash") != document_hash or meta.get("doc_hash") != doc_hash
+                or meta.get("fact_artifact_id") != facts["id"] or meta.get("fact_audit_artifact_id") != fact_audit["id"]
+                or meta.get("summary_artifact_id") != summary["id"] or meta.get("audit_artifact_id") != audit["id"]
+                or skipped["content"] != project_v2_doc_legacy(doc)
+                or not skipped_summary_current(db, pid, mid, fp, policy, member["revision"],
+                                               summary["meta"].get("publication_mode"))
+                or audit["meta"].get("jev_skip_reason") != reason):
+            return None
+        fact_content, fact_meta = fact_audit["content"], fact_audit["meta"]
+        if fact_content.get("status") == "SKIPPED":
+            if (fact_meta.get("doc_hash") != doc_hash or fact_content.get("document_hash") != document_hash
+                    or fact_content.get("jev_skip_reason") != reason or fact_content.get("code_checks") != "passed"
+                    or optional_fact_audit(doc, member, fp, reason, fact_content)["status"] != "SKIPPED"):
+                return None
+        elif fact_audit_verdict({"meta": fact_meta, "content": fact_content}, doc_hash) != "PASS":
+            return None
+        return skipped
+    except (KeyError, TypeError, ValueError, RecursionError, OverflowError):
+        return None
+
+
 def publish_target_tx(ledger, pid: int, mid: int, fp: str, policy: str,
                 members: dict, v2_docs_by_target: dict,
                 final_status: str, findings: list,
@@ -919,6 +1044,12 @@ def publish_target_tx(ledger, pid: int, mid: int, fp: str, policy: str,
         doc = prev_v2["content"] if prev_v2 and prev_v2["meta"].get(
             "hint_rebuild") in (None, "same") else None
     doc_hash = semantic_facts.doc_hash(doc) if doc else None
+    if final_status == "SKIPPED" and doc is not None:
+        vid = _publish_skipped(ledger, pid, mid, fp, policy, members[mid], doc)
+        if vid is not None:
+            record_stage(ledger, pid, mid, fp, policy, "s8_publish", "SKIPPED", tx=True,
+                         artifact_id=vid, doc_hash=doc_hash)
+            return
     if final_status == "PASS" and doc is not None:
         vid = publish(ledger, pid, mid, fp, policy,
                          members[mid], doc)

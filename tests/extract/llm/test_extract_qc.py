@@ -357,15 +357,23 @@ def test_qc_artifact_reports_item_coverage(tmp_path):
     db.close()
 
 
-def test_drain_no_jev_client_leaves_job_pending(tmp_path):
+def test_drain_without_jev_records_skip_and_rechecks_after_recovery(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))
-    out = semantic_drain.run_due(db, _cfg(extract_qc="annotate", budget=0),
+    out = semantic_drain.run_due(db, _cfg(extract_qc="annotate", daily_request_budget=0),
                            {"errors": []}, time.monotonic() + 60)
-    assert out["done"] == 0
-    # budget=0 -> no client -> not claimed; stays pending for a later
-    # drain with a client (also: no seed without annotate+client here)
+    assert out["done"] == 1
+    assert _qc_artifact(db) is None
+    assert len(db.artifacts("extract_qc_skipped")) == 1
+    repeated = semantic_drain.run_due(db, _cfg(extract_qc="annotate", daily_request_budget=0),
+                                     {"errors": []}, time.monotonic() + 60)
+    assert repeated["done"] == 0 and len(db.artifacts("extract_qc_skipped")) == 1
+    client = _FakeJev(noul=0.9, choice="routine")
+    recovered = semantic_drain.run_due(db, _cfg(extract_qc="annotate"),
+                                      {"errors": []}, time.monotonic() + 60, jev_client=client)
+    assert recovered["done"] == 1 and client.requests_made > 0
+    assert _qc_artifact(db) is not None
     db.close()
 
 
@@ -385,7 +393,7 @@ def test_qc_respects_project_scope(tmp_path):
 
 # ---------- fail-open ----------
 
-def test_jev_retryable_error_retries_job(tmp_path):
+def test_jev_retryable_error_records_skip_without_qc_pass(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))
@@ -394,14 +402,16 @@ def test_jev_retryable_error_retries_job(tmp_path):
     out = semantic_drain.run_due(db, _cfg(extract_qc="annotate"),
                            {"errors": []}, time.monotonic() + 60,
                            jev_client=client)
-    assert out["done"] == 0
+    assert out["done"] == 1
     job = _qc_job(db)
-    assert job["state"] == "pending"  # retry leaves pending w/ backoff
+    assert job["state"] == "done"
     assert _qc_artifact(db) is None
+    [skip] = db.artifacts("extract_qc_skipped")
+    assert json.loads(skip["content"])["reason"] == "service_unavailable"
     db.close()
 
 
-def test_jev_resource_error_defers_without_artifact(tmp_path):
+def test_jev_missing_key_records_skip_without_qc_pass(tmp_path):
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     _v2_artifact(db, 1, _hash(db))
@@ -410,8 +420,10 @@ def test_jev_resource_error_defers_without_artifact(tmp_path):
                      {"errors": []}, time.monotonic() + 60,
                      jev_client=client)
     job = _qc_job(db)
-    assert job["state"] == "pending" and job["attempts"] == 0
+    assert job["state"] == "done" and job["attempts"] == 0
     assert _qc_artifact(db) is None
+    [skip] = db.artifacts("extract_qc_skipped")
+    assert json.loads(skip["content"])["reason"] == "not_configured"
     db.close()
 
 

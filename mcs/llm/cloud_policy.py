@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 import json
 import math
 import re
 import sqlite3
 import time
+from types import MappingProxyType
 import uuid
 from functools import lru_cache
 
@@ -78,9 +80,9 @@ def _history_sources(raw):
     if not isinstance(raw, str) or len(raw) > 16 * 1024 * 1024:
         return {}
     try:
-        doc = json.loads(raw)
+        doc = strict_json(raw)
         sources = doc.get("sources")
-        if doc.get("version") != 1 or not isinstance(sources, dict):
+        if type(doc.get("version")) is not int or doc.get("version") != 1 or not isinstance(sources, dict):
             return {}
         if any(not isinstance(k, str) or re.fullmatch(r"[1-9][0-9]*:[1-9][0-9]*", k) is None
                or not isinstance(v, str) or re.fullmatch(r"[0-9a-f]{64}", v) is None
@@ -93,12 +95,15 @@ def _history_sources(raw):
 
 def history_thread_allowed(db, project_id, message_id):
     """Require every prompt member to match the receipted history snapshot occurrence."""
-    from inference_dependency_loss import source_binding
     scope = db.execute("SELECT content FROM artifacts WHERE kind='cloud_history_scope' "
                        "ORDER BY artifact_id DESC LIMIT 1").fetchone()
     if scope is None:
         return False
-    sources = _history_sources(scope[0])
+    return _history_thread_allowed(db, project_id, message_id, _history_sources(scope[0]))
+
+
+def _history_thread_allowed(db, project_id, message_id, sources):
+    from inference_dependency_loss import source_binding
     target = db.execute("SELECT COALESCE(parent_id,message_id) FROM messages "
                         "WHERE project_id=? AND message_id=?", (project_id, message_id)).fetchone()
     if target is None:
@@ -108,6 +113,38 @@ def history_thread_allowed(db, project_id, message_id):
     return bool(members) and all(
         sources.get(f"{project_id}:{row[0]}") == source_binding(db, project_id, row[0])
         and sources.get(f"{project_id}:{row[0]}") is not None for row in members)
+
+
+@contextmanager
+def history_selection_check(db):
+    """Bind one validated receipt and selection to the same SQLite read snapshot."""
+    # Keep a statement open to retain the read snapshot without creating a
+    # savepoint that an active cancellation handler could prevent releasing.
+    anchor = db.execute("SELECT content FROM (SELECT content FROM artifacts "
+                        "WHERE kind='cloud_history_scope' ORDER BY artifact_id DESC LIMIT 1) "
+                        "UNION ALL SELECT NULL UNION ALL SELECT NULL")
+    active = [True]
+    try:
+        scope = anchor.fetchone()
+        sources = MappingProxyType(dict(_history_sources(scope[0]))) if scope is not None else MappingProxyType({})
+        thread_results = {}
+
+        def check(pid, mid):
+            if not active[0]:
+                return 0
+            target = db.execute("SELECT COALESCE(parent_id,message_id) FROM messages "
+                                "WHERE project_id=? AND message_id=?", (pid, mid)).fetchone()
+            if target is None:
+                return 0
+            key = (pid, target[0])
+            if key not in thread_results:
+                thread_results[key] = _history_thread_allowed(db, pid, mid, sources)
+            return int(thread_results[key])
+
+        yield check
+    finally:
+        active[0] = False
+        anchor.close()
 
 
 def _decimal(value):
