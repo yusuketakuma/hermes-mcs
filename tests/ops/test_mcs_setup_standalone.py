@@ -185,7 +185,7 @@ def test_switching_retires_the_other_runtimes_jobs(monkeypatch, tmp_path):
     listing = service_management.inspect_cron
     # like the real parser: a fresh list per call, not the one removes mutate
     monkeypatch.setattr(service_management, 'inspect_cron', lambda h: list(listing(h)))
-    (tmp_path / "data").mkdir()
+    (tmp_path / "data").mkdir(exist_ok=True)
     (tmp_path / "data" / "service_manifest.json").write_text(json.dumps(
         {"cron": [{"script": e["script"]} for e in owned]}))
     assert mcs_setup.cmd_services(args) == 0
@@ -318,8 +318,8 @@ def test_services_never_reloads_the_job_it_runs_inside(monkeypatch, tmp_path):
     (argv, kw), = helpers
     assert argv[:7] == [service_management.sys.executable, "-I", helper, "exec", "--data-dir", str(tmp_path / "data"), "--"]
     assert argv[7:9] == ["/bin/sh", "-c"]
-    assert argv[11:] == [str(mcs_setup.os.getpid()), "gui/501/ai.mcs.cron.mcs-update",
-                        "gui/501", str(plist)]
+    assert argv[11:] == [str(mcs_setup.os.getpid()), f"gui/{mcs_setup.os.getuid()}/ai.mcs.cron.mcs-update",
+                        f"gui/{mcs_setup.os.getuid()}", str(plist)]
     assert kw["start_new_session"] and "XPC_SERVICE_NAME" not in kw["env"]
 
 
@@ -452,7 +452,7 @@ def test_unverifiable_launchd_stop_keeps_the_old_agent_and_starts_nothing(
         return fixture_run(argv, **kw)
     monkeypatch.setattr(mcs_setup.subprocess, "run", run)
     (tmp_path / "agents").mkdir()
-    (tmp_path / "data").mkdir()
+    (tmp_path / "data").mkdir(exist_ok=True)
     old = tmp_path / "agents" / (label + ".plist")
     old.write_text("synthetic old service")
     manifest = tmp_path / "data" / "service_manifest.json"
@@ -485,7 +485,7 @@ def _switch_back_env(monkeypatch, tmp_path):
     cfg["runtime_mode"] = "hermes"
     calls, args = _standalone_services(monkeypatch, tmp_path, cfg, loaded={service_contract.STANDALONE_LABEL})
     (tmp_path / "agents").mkdir()
-    (tmp_path / "data").mkdir()
+    (tmp_path / "data").mkdir(exist_ok=True)
     (tmp_path / "agents" / (service_contract.STANDALONE_LABEL + ".plist")).write_text("synthetic old host")
     manifest = tmp_path / "data" / "service_manifest.json"
     manifest.write_text(json.dumps({"runtime_mode": "standalone",

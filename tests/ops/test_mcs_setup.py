@@ -1234,7 +1234,6 @@ def _services_env(monkeypatch, tmp_path, cron_names=frozenset(),
     monkeypatch.setattr(service_management, 'inspect_cron', lambda h: entries)
     monkeypatch.setattr(mcs_setup.os.path, "isfile", lambda p: True)
     monkeypatch.setattr(mcs_setup.os, "access", lambda p, m: True)
-    monkeypatch.setattr(mcs_setup.os, "getuid", lambda: 501)
 
     def fake_run(argv, **kw):
         calls.append(list(argv))
@@ -1376,11 +1375,11 @@ def test_services_retires_previous_manifest_agent(monkeypatch, tmp_path):
     agents = tmp_path / "agents"
     agents.mkdir()
     (agents / (obsolete + ".plist")).write_text("synthetic")
-    (tmp_path / "data").mkdir()
+    (tmp_path / "data").mkdir(exist_ok=True)
     Path(mcs_setup.MANIFEST_PATH).write_text(json.dumps({"agents": [{"label": obsolete}]}))
     assert mcs_setup.cmd_services(args) == 0
     assert not (agents / (obsolete + ".plist")).exists()
-    assert ["launchctl", "bootout", "gui/501/" + obsolete] in calls
+    assert ["launchctl", "bootout", f"gui/{mcs_setup.os.getuid()}/" + obsolete] in calls
 
 
 def test_services_hermes_missing_reports_problem(monkeypatch, tmp_path):
@@ -1745,7 +1744,7 @@ def test_standalone_loaded_host_without_heartbeat_starts_without_kill(monkeypatc
 
     monkeypatch.setattr(service, "request_restart", request)
     assert mcs_setup.cmd_services(args) == 0
-    assert ["launchctl", "kickstart", "gui/501/ai.mcs.standalone"] in calls
+    assert ["launchctl", "kickstart", f"gui/{mcs_setup.os.getuid()}/ai.mcs.standalone"] in calls
     assert not any("-k" in call or "bootout" in call for call in calls)
 
 
@@ -1760,7 +1759,7 @@ def test_standalone_mode_switch_stops_only_previous_owned_jobs(monkeypatch, tmp_
     assert mcs_setup.cmd_services(args) == 0
     assert ["/x/hermes", "cron", "remove", "aaaaaa"] in calls
     assert not any("bbbbbb" in call or "ai.hermes.gateway" in call for call in calls)
-    assert ["launchctl", "bootout", "gui/501/local.mcs-int"] in calls
+    assert ["launchctl", "bootout", f"gui/{mcs_setup.os.getuid()}/local.mcs-int"] in calls
 
 
 def test_standalone_init_never_writes_hermes_config(monkeypatch):
@@ -2619,7 +2618,7 @@ def test_changed_standalone_plist_is_reloaded_into_launchd(monkeypatch, tmp_path
     with open(stale, "w") as f:
         f.write("<plist>old checkout</plist>")
     assert mcs_setup.cmd_services(args) == 0
-    assert ["launchctl", "bootout", "gui/501/ai.mcs.standalone"] in calls
+    assert ["launchctl", "bootout", f"gui/{mcs_setup.os.getuid()}/ai.mcs.standalone"] in calls
     assert any(c[:2] == ["launchctl", "bootstrap"] for c in calls)
     assert requests == []
 
