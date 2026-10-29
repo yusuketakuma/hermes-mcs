@@ -155,7 +155,8 @@ def test_derive_reports_unknown_without_rebuilding_unknown_candidates(tmp_path, 
         result = {"errors": []}
         run_check.stage_derive(store, result, time.monotonic() + 600, {}, llm_budget_cap=0)
         assert rebuilt == [1]
-        assert result["rollup_scan"] == {"state": "unknown", "unknown_observed": 1}
+        assert result["rollup_scan"] == {"state": "unknown", "unknown_observed": 1,
+                                         "unknown_reasons": {}, "rechecked": 0}
         assert "rollup: scan_unknown" in result["errors"]
     finally:
         store.close()

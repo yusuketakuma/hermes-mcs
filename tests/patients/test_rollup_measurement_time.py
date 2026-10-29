@@ -249,7 +249,7 @@ def test_acquisition_signature_uses_one_borrowed_snapshot_during_other_writer(st
         other.close()
 
 
-def test_dirty_scan_reports_concurrent_change_as_unknown_and_legacy_entry_fails_closed(store, monkeypatch):
+def test_dirty_scan_rechecks_changed_patient_without_invalidating_other_patients(store, monkeypatch):
     _seed_out_of_order(store)
     store.ensure_patient(2)
     store.save_messages([_message(mid=3, project_id=2, body="合成の記録")])
@@ -272,10 +272,9 @@ def test_dirty_scan_reports_concurrent_change_as_unknown_and_legacy_entry_fails_
     monkeypatch.setattr(rollup, "_dirty_project_snapshot", mutate_after_read)
     try:
         scan = rollup.scan_dirty_projects(store)
-        assert scan.incomplete and scan.unknown == (1, 2)
-        assert not scan.dirty and not store.db.in_transaction
-        with pytest.raises(sqlite3.OperationalError, match="rollup_scan_unknown"):
-            rollup.dirty_projects(store)
+        assert 1 in set(scan.dirty) | set(scan.unknown)
+        assert 2 not in set(scan.dirty) | set(scan.unknown)
+        assert scan.rechecked == 2 and not store.db.in_transaction
         monkeypatch.setattr(rollup, "_dirty_project_snapshot", original)
         assert not rollup.scan_dirty_projects(store).incomplete
     finally:
@@ -301,7 +300,8 @@ def test_dirty_scan_new_patient_during_scan_is_unknown(store, monkeypatch):
     monkeypatch.setattr(rollup, "_rollup_patient_ids", add_patient_after_list)
     try:
         scan = rollup.scan_dirty_projects(store)
-        assert scan.incomplete and scan.dirty == () and scan.unknown == (1, 3)
+        assert scan.incomplete and scan.dirty == () and scan.unknown == (3,)
+        assert dict(scan.unknown_reasons) == {"new_patient": 1}
         assert not store.db.in_transaction
     finally:
         other.close()
@@ -1056,3 +1056,227 @@ def test_patient_summary_with_unproven_model_does_not_show_cached_latest(store, 
     assert '36.4' not in text and '37.2' not in text
     assert '■ 未完了タスク' in text and '■ 背景・療養情報' in text
     assert store.db.execute('SELECT body_text FROM messages WHERE message_id=1').fetchone()[0] == before
+
+
+def test_irrelevant_accounting_write_does_not_make_clean_patients_unknown(store, monkeypatch):
+    _seed_out_of_order(store)
+    store.ensure_patient(2)
+    store.save_messages([_message(mid=3, project_id=2, body="合成の記録")])
+    rollup.rebuild(store, 1, cfg={})
+    rollup.rebuild(store, 2, cfg={})
+    assert rollup.dirty_projects(store) == []
+    other = sqlite3.connect(store.db.execute("PRAGMA database_list").fetchone()[2])
+    original = rollup._dirty_project_snapshot
+
+    def account_after_read(db, project_id, now):
+        result = original(db, project_id, now)
+        other.execute("INSERT INTO artifacts(kind,content,created_at) VALUES('cloud_usage_result','{}',0)")
+        other.commit()
+        return result
+
+    monkeypatch.setattr(rollup, "_dirty_project_snapshot", account_after_read)
+    try:
+        scan = rollup.scan_dirty_projects(store)
+        assert not scan.incomplete and scan.unknown == () and scan.dirty == ()
+        assert scan.rechecked == 2 and not store.db.in_transaction
+    finally:
+        other.close()
+
+
+@pytest.fixture
+def clean_scan_pair(store):
+    _seed_out_of_order(store)
+    store.ensure_patient(2)
+    store.save_messages([_message(mid=3, project_id=2, body="合成の記録")])
+    rollup.rebuild(store, 1, cfg={})
+    rollup.rebuild(store, 2, cfg={})
+    assert rollup.scan_dirty_projects(store, cfg={}).dirty == ()
+    return store
+
+
+@pytest.mark.parametrize("change", ["acquisition", "configuration", "shared_policy"])
+def test_final_snapshot_rechecks_real_input_changes(clean_scan_pair, monkeypatch, change):
+    store = clean_scan_pair
+    other = sqlite3.connect(store.db.execute("PRAGMA database_list").fetchone()[2])
+    original = rollup._dirty_project_snapshot
+    changed = []
+
+    def change_after_read(db, pid, now):
+        result = original(db, pid, now)
+        if not changed:
+            changed.append(True)
+            if change == "acquisition":
+                other.execute("UPDATE patients SET fetch_state='incomplete' WHERE project_id=1")
+            elif change == "configuration":
+                other.execute("UPDATE artifacts SET meta=json_set(meta,'$.config_generation','synthetic-other') "
+                              "WHERE kind=? AND project_id=1", (rollup.KIND,))
+            else:
+                other.execute("INSERT INTO artifacts(kind,content,meta,created_at) "
+                              "VALUES('semantic_policy','{}','{}',0)")
+            other.commit()
+        return result
+
+    monkeypatch.setattr(rollup, "_dirty_project_snapshot", change_after_read)
+    try:
+        scan = rollup.scan_dirty_projects(store, cfg={})
+        assert not scan.incomplete and scan.unknown == ()
+        assert set(scan.dirty) == ({1, 2} if change == "shared_policy" else {1})
+        assert not store.db.in_transaction
+    finally:
+        other.close()
+
+
+def test_patient_added_during_final_snapshot_is_unknown(clean_scan_pair, monkeypatch):
+    store = clean_scan_pair
+    other = sqlite3.connect(store.db.execute("PRAGMA database_list").fetchone()[2])
+    original_check, original_ids = rollup._dirty_project_snapshot, rollup._rollup_patient_ids
+    checks, listings = [], []
+
+    def account(db, pid, now):
+        value = original_check(db, pid, now)
+        if not checks:
+            other.execute("INSERT INTO artifacts(kind,content,created_at) VALUES('cloud_usage_result','{}',0)")
+            other.commit()
+        checks.append(pid)
+        return value
+
+    def add_during_closing(db):
+        ids = original_ids(db)
+        listings.append(True)
+        if len(listings) == 2:
+            other.execute("INSERT INTO patients(project_id) VALUES(3)")
+            other.commit()
+        return ids
+
+    monkeypatch.setattr(rollup, "_dirty_project_snapshot", account)
+    monkeypatch.setattr(rollup, "_rollup_patient_ids", add_during_closing)
+    try:
+        scan = rollup.scan_dirty_projects(store)
+        assert scan.dirty == () and scan.unknown == (3,) and scan.incomplete
+        assert dict(scan.unknown_reasons) == {"new_patient": 1}
+        assert scan.rechecked == 2 and not store.db.in_transaction
+    finally:
+        other.close()
+
+
+def test_removed_patient_cannot_be_returned_clean(clean_scan_pair, monkeypatch):
+    store = clean_scan_pair
+    other = sqlite3.connect(store.db.execute("PRAGMA database_list").fetchone()[2])
+    original = rollup._dirty_project_snapshot
+    deleted = []
+
+    def remove_after_read(db, pid, now):
+        value = original(db, pid, now)
+        if not deleted:
+            other.execute("DELETE FROM messages WHERE project_id=2")
+            other.execute("DELETE FROM patients WHERE project_id=2")
+            other.commit()
+            deleted.append(True)
+        return value
+
+    monkeypatch.setattr(rollup, "_dirty_project_snapshot", remove_after_read)
+    try:
+        scan = rollup.scan_dirty_projects(store)
+        assert scan.dirty == () and scan.unknown == (2,) and scan.incomplete
+        assert dict(scan.unknown_reasons) == {"patient_removed": 1}
+    finally:
+        other.close()
+
+
+def test_unverified_patient_stays_held_during_unrelated_commits(clean_scan_pair, monkeypatch):
+    store = clean_scan_pair
+    store.db.execute("UPDATE messages SET body_text=CAST(x'80' AS TEXT) WHERE project_id=1")
+    store.db.commit()
+    other = sqlite3.connect(store.db.execute("PRAGMA database_list").fetchone()[2])
+    original = rollup._dirty_project_snapshot
+
+    def account(db, pid, now):
+        result = original(db, pid, now)
+        other.execute("INSERT INTO artifacts(kind,content,created_at) VALUES('cloud_usage_result','{}',0)")
+        other.commit()
+        return result
+
+    monkeypatch.setattr(rollup, "_dirty_project_snapshot", account)
+    try:
+        scan = rollup.scan_dirty_projects(store)
+        assert scan.dirty == () and scan.unknown == (1,) and scan.incomplete
+        assert sum(dict(scan.unknown_reasons).values()) == 1
+        with pytest.raises(sqlite3.OperationalError, match="rollup_scan_unknown"):
+            rollup.dirty_projects(store)
+        assert not store.db.in_transaction
+    finally:
+        other.close()
+
+
+def test_scan_preserves_caller_read_snapshot(clean_scan_pair):
+    store = clean_scan_pair
+    other = sqlite3.connect(store.db.execute("PRAGMA database_list").fetchone()[2])
+    try:
+        store.db.execute("BEGIN")
+        store.db.execute("SELECT COUNT(*) FROM patients").fetchone()
+        other.execute("UPDATE patients SET fetch_state='incomplete' WHERE project_id=1")
+        other.commit()
+        scan = rollup.scan_dirty_projects(store)
+        assert scan.dirty == () and scan.unknown == () and not scan.incomplete
+        assert store.db.in_transaction
+        store.db.rollback()
+        assert rollup.scan_dirty_projects(store).dirty == (1,)
+    finally:
+        store.db.rollback()
+        other.close()
+
+
+def test_scan_does_not_commit_caller_write_transaction(clean_scan_pair):
+    store = clean_scan_pair
+    other = sqlite3.connect(store.db.execute("PRAGMA database_list").fetchone()[2])
+    try:
+        store.db.execute("BEGIN IMMEDIATE")
+        store.db.execute("UPDATE patients SET fetch_state='incomplete' WHERE project_id=1")
+        scan = rollup.scan_dirty_projects(store)
+        assert scan.dirty == (1,) and store.db.in_transaction
+        assert other.execute("SELECT fetch_state FROM patients WHERE project_id=1").fetchone()[0] == 'complete'
+        store.db.rollback()
+        assert rollup.scan_dirty_projects(store).dirty == ()
+    finally:
+        store.db.rollback()
+        other.close()
+
+
+def test_recheck_does_not_swallow_sql_failure(clean_scan_pair, monkeypatch):
+    store = clean_scan_pair
+    other = sqlite3.connect(store.db.execute("PRAGMA database_list").fetchone()[2])
+    original = rollup._dirty_project_snapshot
+    calls = []
+
+    def interrupted(db, pid, now):
+        calls.append(pid)
+        if len(calls) == 3:
+            raise sqlite3.OperationalError('synthetic read interrupted')
+        value = original(db, pid, now)
+        if len(calls) == 1:
+            other.execute("INSERT INTO artifacts(kind,content,created_at) VALUES('cloud_usage_result','{}',0)")
+            other.commit()
+        return value
+
+    monkeypatch.setattr(rollup, "_dirty_project_snapshot", interrupted)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match='synthetic read interrupted'):
+            rollup.scan_dirty_projects(store)
+        assert calls == [1, 2, 1] and not store.db.in_transaction
+    finally:
+        other.close()
+
+
+def test_same_connection_changes_keep_the_conservative_hold(clean_scan_pair, monkeypatch):
+    store = clean_scan_pair
+    original = rollup._dirty_project_snapshot
+
+    def mutate_self(db, pid, now):
+        value = original(db, pid, now)
+        db.execute("INSERT INTO artifacts(kind,content,created_at) VALUES('cloud_usage_result','{}',0)")
+        return value
+
+    monkeypatch.setattr(rollup, "_dirty_project_snapshot", mutate_self)
+    scan = rollup.scan_dirty_projects(store)
+    assert scan.incomplete and scan.unknown == (1, 2) and scan.dirty == ()
+    assert dict(scan.unknown_reasons) == {'same_connection_changed': 2}

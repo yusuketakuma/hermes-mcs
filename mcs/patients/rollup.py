@@ -1609,44 +1609,81 @@ def dirty_projects(ledger, *, now=None) -> list:
 
 @dataclass(frozen=True)
 class RollupScan:
-    """Marker checks observed per patient, with explicit concurrent uncertainty."""
+    """Snapshot marker checks, with patient-specific uncertainty and bounded revalidation."""
     dirty: tuple[int, ...]
     unknown: tuple[int, ...]
     incomplete: bool
+    unknown_reasons: tuple[tuple[str, int], ...] = ()
+    rechecked: int = 0
 
 
 def scan_dirty_projects(ledger, *, now=None, cfg=None) -> RollupScan:
-    """Check each patient's existing freshness markers on its own snapshot.
+    """Check markers at read snapshots, rechecking clean candidates once on external writes.
 
-    This reports marker differences, not a proof of every inference input.
+    Clean is valid at the observed snapshot, not after its release. Rebuild's
+    independent source validation remains mandatory before publishing results.
     """
     db = ledger.db
     version = db.execute("PRAGMA data_version").fetchone()[0]
     changes = db.total_changes
     ids = _rollup_patient_ids(db)
-    now = time.time() if now is None else now
-    dirty = []
-    unknown = []
-    for project_id in ids:
-        # Each patient is internally consistent; different patients may be
-        # observed at different times. A caller-owned TX remains caller-owned.
+    initial = set(ids)
+    dirty, unknown = set(), set()
+    reasons = {}
+    rechecked = 0
+
+    def hold(project_ids, reason):
+        for pid in project_ids:
+            unknown.add(pid)
+            reasons.setdefault(pid, reason)
+
+    def check(project_id, check_now):
         try:
             with _freshness_snapshot(db):
-                if _dirty_project_snapshot(db, project_id, now) or (isinstance(cfg, dict) and not _config_current(db, project_id, cfg)):
-                    dirty.append(project_id)
+                if (_dirty_project_snapshot(db, project_id, check_now)
+                        or (isinstance(cfg, dict) and not _config_current(db, project_id, cfg))):
+                    dirty.add(project_id)
         except sqlite3.OperationalError as error:
             if not _invalid_sqlite_text(error):
                 raise
-            unknown.append(project_id)
+            hold((project_id,), "invalid_sqlite_text")
         except RollupSourceUnverified:
-            unknown.append(project_id)
-    if db.total_changes != changes or db.execute("PRAGMA data_version").fetchone()[0] != version:
-        # A writer may have changed an already-examined patient or added a
-        # candidate. Do not present unexamined/possibly changed rows as clean.
-        candidates = dict.fromkeys([*ids, *_rollup_patient_ids(db)])
-        dirty_set = set(dirty)
-        return RollupScan(tuple(dirty), tuple(pid for pid in candidates if pid not in dirty_set), True)
-    return RollupScan(tuple(dirty), tuple(unknown), bool(unknown))
+            hold((project_id,), "source_unverified")
+
+    def result(candidates):
+        dirty.difference_update(unknown)
+        counts = tuple((reason, sum(reasons.get(pid) == reason for pid in unknown))
+                       for reason in sorted(set(reasons.values())))
+        return RollupScan(tuple(pid for pid in candidates if pid in dirty),
+                          tuple(pid for pid in candidates if pid in unknown), bool(unknown), counts, rechecked)
+
+    observed_now = time.time() if now is None else now
+    for project_id in ids:
+        check(project_id, observed_now)
+    if db.total_changes != changes:
+        candidates = list(dict.fromkeys([*ids, *_rollup_patient_ids(db)]))
+        hold(set(candidates) - dirty, "same_connection_changed")
+        return result(candidates)
+    if db.execute("PRAGMA data_version").fetchone()[0] == version:
+        return result(ids)
+
+    # A common final snapshot prevents unrelated commits from invalidating every patient.
+    with _freshness_snapshot(db):
+        closing_ids = _rollup_patient_ids(db)
+        hold(initial - set(closing_ids), "patient_removed")
+        closing_now = time.time() if now is None else now
+        for project_id in ids:
+            if project_id not in dirty and project_id not in unknown:
+                rechecked += 1
+                check(project_id, closing_now)
+    terminal_ids = _rollup_patient_ids(db)
+    candidates = list(dict.fromkeys([*ids, *closing_ids, *terminal_ids]))
+    for current in (set(closing_ids), set(terminal_ids)):
+        hold(current - initial, "new_patient")
+        hold(initial - current, "patient_removed")
+    if db.total_changes != changes:
+        hold(set(candidates) - dirty, "same_connection_changed")
+    return result(candidates)
 
 
 def _config_current(db, project_id, cfg):
