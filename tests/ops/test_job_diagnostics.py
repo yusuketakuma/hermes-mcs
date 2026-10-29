@@ -199,3 +199,17 @@ def test_old_unbound_reason_does_not_hide_unsettled_cloud_send(data):
     result = _read(ledger, job, cfg)
     assert result["reason_code"] == "unknown"
     assert "send_unverified" not in result["blockers"]
+
+
+@pytest.mark.parametrize('code,remedy', [
+    ('audit_claims_empty', 'quality'), ('audit_claims_invalid', 'quality'),
+    ('audit_client_unavailable', 'jev'), ('audit_options_invalid', 'investigate'),
+    ('audit_response_invalid', 'jev'), ('audit_jev_None', 'investigate'),
+    ('audit_unevaluated', 'investigate'),
+])
+def test_bound_audit_failure_codes_are_reported_without_guessing(data, code, remedy):
+    ledger, job, payload, cfg = data
+    _metric(ledger, job, payload, retry_reason=code)
+    report = _read(ledger, job, cfg)
+    assert report['reason_code'] == code and report['remediation_code'] == remedy
+    assert report['reason_basis'] == 'bound_job_metric'

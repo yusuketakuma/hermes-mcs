@@ -105,13 +105,20 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
     (findings, evaluated) — evaluated=False means the check could not
     run, i.e. PENDING rather than a silent PASS."""
     findings = []
-    # per_request has semantic_policy's max_questions_per_request bound; an
-    # invalid size must not skip every claim and pass (range() runs empty)
-    if jev_client is None or not _probability(match_threshold) \
-            or type(per_request) is not int or not 1 <= per_request <= 48:
+    summary.pop("_claim_audit_reason", None)
+    claims = summary.get("claims")
+    if not isinstance(claims, list):
+        summary["_claim_audit_reason"] = "claims_invalid"
         return [{"code": "support_unevaluated"}], False
-    claims = summary["claims"]
     if not claims:
+        summary["_claim_audit_reason"] = "claims_empty"
+        return [{"code": "support_unevaluated"}], False
+    if jev_client is None:
+        summary["_claim_audit_reason"] = "client_unavailable"
+        return [{"code": "support_unevaluated"}], False
+    # per_request has semantic_policy's max_questions_per_request bound.
+    if not _probability(match_threshold) or type(per_request) is not int or not 1 <= per_request <= 48:
+        summary["_claim_audit_reason"] = "options_invalid"
         return [{"code": "support_unevaluated"}], False
     members = {m["message_id"]: m for m in bundle["members"]}
     ev_ctx = {}
@@ -165,16 +172,19 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
         try:
             out = jev.evaluate_once_more(jev_client, state, questions, deadline)
         except jev.JevError as error:
+            summary["_claim_audit_reason"] = "service_error"
             with suppress(Exception):
                 jev_client.last_error = error
             return findings + [{"code": "support_unevaluated",
                                 "claim": chunk[0]["claim_id"]}], False
+        answers = out.get("answers") if isinstance(out, dict) else None
         for c in chunk:
-            ans = out["answers"][c["claim_id"]]
+            ans = answers.get(c["claim_id"]) if isinstance(answers, dict) else None
             if (not isinstance(ans, dict)
                     or not isinstance(ans.get("choice"), str)
                     or ans["choice"] not in jev.CLAIM_SUPPORT_OPTIONS
                     or not _probability(ans.get("confidence"))):
+                summary["_claim_audit_reason"] = "response_invalid"
                 return findings + [{"code": "support_unevaluated",
                                     "claim": c["claim_id"]}], False
             # raw answers ride on the summary's private channel so the
