@@ -31,7 +31,7 @@ def run(root, cfg, *, current=None):
                 print("途中で完了を確認できなかった設定があります。現在の保存状態を確認してください。")
             return 1 if unresolved else 0
         if choice == "1":
-            result = api_key_setup.run(root)
+            result = api_key_setup.run(root, admission=current)
         elif choice == "5":
             import cloud_cli
             result = cloud_cli.provider_dialog(root)
