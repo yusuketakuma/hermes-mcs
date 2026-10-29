@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "リリースノートの同期対象を限定",
+  "summary": "Releaseイベントでは対象の版だけを同期し、指定した版を単独で確認・更新できるようにしました。",
+  "upgrade": "追加操作は不要です。手動で全版を同期する既定の動作は変わりません。",
+  "details": [
+    "対象タグやReleaseの識別情報が一致しない場合は更新を停止します。"
+  ],
+  "refs": [
+    "scripts/development/sync_release_notes.py"
+  ]
+}

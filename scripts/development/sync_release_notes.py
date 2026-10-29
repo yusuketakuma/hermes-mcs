@@ -54,8 +54,13 @@ def api(repo, endpoint, payload=None):
     return json.loads(result.stdout)
 
 
-def synchronize(text, request, apply=False):
+def synchronize(text, request, apply=False, tag=None, release_id=None):
     versions = set(check_changelog(text))
+    if tag is not None and (not isinstance(tag, str) or not re.fullmatch(STABLE_TAG, tag)
+                            or tag[1:] not in versions):
+        raise ValueError("対象タグが不正またはCHANGELOGにありません")
+    if release_id is not None and (tag is None or type(release_id) is not int or release_id <= 0):
+        raise ValueError("Release IDが不正です")
     releases = []
     for page in range(1, 101):
         chunk = request(f"releases?per_page=100&page={page}")
@@ -68,17 +73,25 @@ def synchronize(text, request, apply=False):
         raise ValueError("Release一覧がページ上限を超えました")
     plan, seen = [], set()
     for release in releases:
+        if not isinstance(release, dict) or not isinstance(release.get("tag_name"), str):
+            raise ValueError("Release応答の形式が不正です")
+        if tag is not None and release["tag_name"] != tag:
+            continue
         release = release_record(release)
-        tag = release["tag_name"]
-        if not re.fullmatch(STABLE_TAG, tag):
+        release_tag = release["tag_name"]
+        if not re.fullmatch(STABLE_TAG, release_tag):
             continue  # prerelease tags are outside this stable-release policy.
-        if tag in seen or tag[1:] not in versions:
-            raise ValueError(f"{tag}: 重複またはCHANGELOGの対応版がありません")
-        seen.add(tag)
-        body = section(text, tag[1:])
-        desired = {"name": release_title(body, tag[1:]), "body": body}
+        if release_tag in seen or release_tag[1:] not in versions:
+            raise ValueError(f"{release_tag}: 重複またはCHANGELOGの対応版がありません")
+        if release_id is not None and release["id"] != release_id:
+            raise ValueError("イベントとRelease IDが一致しません")
+        seen.add(release_tag)
+        body = section(text, release_tag[1:])
+        desired = {"name": release_title(body, release_tag[1:]), "body": body}
         if any((release.get(k) or "") != v for k, v in desired.items()):
             plan.append((release, desired))
+    if tag is not None and tag not in seen:
+        raise ValueError("対象のReleaseが見つかりません")
     # Preflight all releases before the first write.
     results = []
     for old, desired in plan:
@@ -102,18 +115,56 @@ def synchronize(text, request, apply=False):
             "updated" if apply else "would_update": results}
 
 
+def event_target(repo, requested_tag):
+    if os.environ.get("GITHUB_EVENT_NAME") != "release":
+        return requested_tag, None
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("イベントJSONに重複キーがあります")
+            result[key] = value
+        return result
+
+    path = os.environ.get("GITHUB_EVENT_PATH")
+    if not path:
+        raise ValueError("Releaseイベントの入力がありません")
+    event = json.loads(Path(path).read_text(encoding="utf-8"), object_pairs_hook=unique_object)
+    if not isinstance(event, dict) or not isinstance(event.get("release"), dict):
+        raise ValueError("Releaseイベントの形式が不正です")
+    release = event["release"]
+    tag, release_id = release.get("tag_name"), release.get("id")
+    if (not isinstance(tag, str) or not re.fullmatch(STABLE_TAG, tag)
+            or type(release_id) is not int or release_id <= 0):
+        raise ValueError("ReleaseイベントのタグまたはIDが不正です")
+    repository = event.get("repository")
+    environment_repo = os.environ.get("GITHUB_REPOSITORY")
+    if (not isinstance(repository, dict) or not isinstance(repository.get("full_name"), str)
+            or not environment_repo or repository["full_name"].casefold() != repo.casefold()
+            or environment_repo.casefold() != repo.casefold()
+            or os.environ.get("GITHUB_REF") != f"refs/tags/{tag}"
+            or requested_tag is not None and requested_tag != tag):
+        raise ValueError("Releaseイベントの対象が一致しません")
+    return tag, release_id
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY"))
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--tag", action="append")
     args = parser.parse_args(argv)
     if not args.repo:
         parser.error("--repoまたはGITHUB_REPOSITORYが必要です")
     try:
+        if args.tag is not None and len(args.tag) != 1:
+            raise ValueError("--tagは一度だけ指定してください")
+        tag, release_id = event_target(args.repo, args.tag[0] if args.tag else None)
         result = synchronize((args.root / "CHANGELOG.md").read_text(encoding="utf-8"),
                              lambda endpoint, payload=None: api(args.repo, endpoint, payload),
-                             apply=args.apply)
+                             apply=args.apply, tag=tag, release_id=release_id)
         print(json.dumps(result, ensure_ascii=False))
     except (ValueError, OSError, RecursionError, subprocess.SubprocessError) as exc:
         # Do not print request payloads or subprocess output (which may include secrets).
