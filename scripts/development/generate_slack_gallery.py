@@ -171,7 +171,7 @@ class Screen:
 
     def provider_row(self, x, y, post):
         """Illustrate synthetic per-post execution, separate from validation verdicts."""
-        marks = (("✓", "−", "↷", "−"), ("−", "−", "✓", "✓"))[post]
+        marks = (("✓", "?", "↷", "?"), ("?", "?", "✓", "✓"))[post]
         for index, (provider, mark) in enumerate(zip(("anthropic", "openai", "jev", "local"), marks)):
             left = x + index * 66
             if provider == "local":
