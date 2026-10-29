@@ -60,7 +60,7 @@ def test_status_without_completed_scan_does_not_report_zero(tmp_path):
 
 
 @pytest.mark.parametrize('raw', ['{', '{"inference_engine_version":"2.0","targets":[1]}'])
-def test_current_artifacts_do_not_hide_an_unreadable_job(tmp_path, raw):
+def test_unverified_artifacts_do_not_hide_an_unreadable_job(tmp_path, raw):
     db = _ledger(tmp_path)
     try:
         _patient(db)
@@ -84,7 +84,7 @@ def test_current_artifacts_do_not_hide_an_unreadable_job(tmp_path, raw):
         row = db.db.execute('SELECT m.message_id,m.project_id,m.parent_id,m.body_state,m.body_text, '
                             'p.project_id AS patient_id,p.fetch_reason FROM messages m '
                             'LEFT JOIN patients p ON p.project_id=m.project_id WHERE m.message_id=1').fetchone()
-        assert semantic_drain._reprocess_target_state(db, row, scfg) == 'current'
+        assert semantic_drain._reprocess_target_state(db, row, scfg) == 'held'
         semantic_drain.reprocess_step(db, cfg)
         report = semantic_drain.reprocess_step(db, cfg)
         assert report['coverage']['counts'] == {'held': 1}

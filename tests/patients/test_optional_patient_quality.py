@@ -36,13 +36,28 @@ def test_uncertain_prior_request_cannot_be_converted_to_skip(quality_owner):
 def test_prior_negative_quality_answer_cannot_be_converted_to_skip(quality_owner):
     ledger, clock, cfg, doc, sends, behavior = quality_owner
     behavior['negative'] = True
-    status, _ = refresh._quality_step(
+    status, identity = refresh._quality_step(
         ledger, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
     assert status == 'pending' and sends
+    assert refresh._quality_failed(ledger.db, 1, identity)
+    original = [(row['artifact_id'], row['content'], row['meta'])
+                for kind in (refresh.QUALITY, refresh.QUALITY_FAIL)
+                for row in ledger.artifacts(kind)]
+    sent = list(sends)
     cfg['semantic']['daily_request_budget'] = 0
-    with pytest.raises(ValueError, match='patient_summary_quality_unresolved_request'):
-        refresh._quality_step(ledger, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+    status, after_identity = refresh._quality_step(
+        ledger, 1, cfg, '2026-10-17', doc, clock.mono + 600, lambda: True)
+    assert status in ('held', 'deferred', 'unknown')
+    assert after_identity == identity
+    assert refresh._quality_failed(ledger.db, 1, identity)
+    assert [(row['artifact_id'], row['content'], row['meta'])
+            for kind in (refresh.QUALITY, refresh.QUALITY_FAIL)
+            for row in ledger.artifacts(kind)] == original
+    assert sends == sent
     assert not ledger.artifacts(refresh.QUALITY_SKIP)
+    assert not ledger.artifacts(refresh.QUALITY_PASS)
+    assert not refresh._quality_passed(ledger.db, 1, identity)
+    assert refresh.context_view_input(ledger.db, 1, cfg=cfg) is None
 
 
 def test_cloud_patient_context_advances_with_bound_skips(runtime, cloud, monkeypatch):

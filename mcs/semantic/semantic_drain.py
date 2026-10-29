@@ -1995,7 +1995,161 @@ def _reprocess_job_payload(ledger, row, project_id, root):
     return value
 
 
-def _reprocess_target_state(ledger, row, scfg):
+def _classification_only_state(ledger, row, scfg, cfg, bundle, fp, policy):
+    """Validate current raw and primary assessment evidence for classification only."""
+    import extract_llm
+    import patient_context_refresh
+    import semantic_intake_hold
+
+    db, pid, mid = ledger.db, row['project_id'], row['message_id']
+    root = row['parent_id'] or mid
+    try:
+        if semantic_intake_hold.has_unstored(db, pid) or semantic_intake_hold.has_held_root(db, pid, root):
+            return 'held'
+        job = db.execute("SELECT state,substr(payload,1,?) AS payload FROM fetch_jobs WHERE kind=? "
+                         "AND project_id=? AND message_id=?",
+                         (_REPROCESS_JOB_MAX_BYTES + 1, JOB_KIND, pid, root)).fetchone()
+        if job is not None:
+            if _reprocess_job_payload(ledger, job, pid, root) is None:
+                return 'held'
+            if job['state'] == 'failed':
+                return 'failed'
+            if job['state'] != 'done':
+                return 'pending'
+        source = db.execute('SELECT * FROM messages WHERE project_id=? AND message_id=?', (pid, mid)).fetchone()
+        if source is None:
+            return 'held'
+        if (scfg['extract_qc'] == 'annotate'
+                and not patient_context_refresh._extraction_qc_ready(db, pid, scfg, message_id=mid)):
+            return 'held'
+        complete, selected_meta = patient_context_refresh._raw_extraction_current(db, source, cfg)
+        latest = db.execute("SELECT content,meta FROM artifacts WHERE kind=? AND message_id=? "
+                            "AND (project_id IS NULL OR project_id=?) ORDER BY artifact_id DESC LIMIT 1",
+                            (extract_llm.KIND, mid, pid)).fetchone()
+        if not complete or latest is None:
+            return 'held'
+        raw, raw_meta = strict_json(latest['content']), strict_json(latest['meta'])
+        if (not isinstance(raw, dict) or not isinstance(raw_meta, dict) or raw_meta != selected_meta
+                or not is_current(raw_meta) or raw_meta.get('invalidated')):
+            return 'held'
+        # A newer adverse or unparseable audit never becomes a classification success.
+        for kind in (KIND_AUDIT, KIND_FACT_AUDIT):
+            audit = db.execute('SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? AND message_id=? '
+                               'ORDER BY artifact_id DESC LIMIT 1', (kind, pid, mid)).fetchone()
+            if audit is None:
+                continue
+            content, meta = strict_json(audit['content']), strict_json(audit['meta'])
+            if (not isinstance(content, dict) or not isinstance(meta, dict) or not is_current(meta)
+                    or not isinstance(meta.get('fingerprint'), str)
+                    or not isinstance(meta.get('policy_fingerprint'), str)):
+                return 'held'
+            if meta.get('fingerprint') == fp and meta.get('policy_fingerprint') == policy:
+                status, findings = content.get('status'), content.get('findings', [])
+                if (meta.get('invalidated') or status not in ('PASS', 'SKIPPED')
+                        or not isinstance(findings, list) or any(not isinstance(item, dict)
+                            or not isinstance(item.get('code'), str) for item in findings)):
+                    return 'held'
+                if kind == KIND_FACT_AUDIT:
+                    facts = current_artifact(db, KIND_FACTS_V2, mid, fp)
+                    if facts is None or meta.get('doc_hash') != semantic_facts.doc_hash(facts['content']):
+                        return 'held'
+                    if status == 'PASS':
+                        if findings or content.get('evaluated') is not True or v4.reproject_doc(db, mid, meta)[0] is None:
+                            return 'held'
+                    else:
+                        member = next((item for item in bundle['members'] if item['message_id'] == mid), None)
+                        reason = content.get('jev_skip_reason')
+                        if (content.get('evaluated') is not False or content.get('code_checks') != 'passed'
+                                or content.get('document_hash') != mcs_util.payload_hash(facts['content'])
+                                or semantic_audit.optional_fact_audit(facts['content'], member, fp, reason, content,
+                                    match_threshold=scfg['match_threshold'])['status'] != 'SKIPPED'):
+                            return 'held'
+                else:
+                    import semantic_send_gate
+                    member = next((item for item in bundle['members'] if item['message_id'] == mid), None)
+                    mode = meta.get('publication_mode')
+                    if (member is None or mode not in ('shadow', 'assist', 'enforce')
+                            or semantic_send_gate._paired_summary(db, pid, mid, fp, policy,
+                                member['revision'], mode, status) is None):
+                        return 'held'
+                if kind == KIND_AUDIT and status == 'PASS':
+                    if (any(item['code'] in ('fact_contradicts', 'fact_not_supported', 'fact_ambiguous',
+                                              'fact_low_confidence') for item in findings)
+                            or semantic_audit.audit_status_for(findings, findings, True, True) != 'PASS'):
+                        return 'held'
+                elif kind == KIND_AUDIT and (meta.get('jev_evaluated') is not False or meta.get('code_checks') != 'passed'
+                      or meta.get('jev_skip_reason') not in ('not_configured', 'disabled', 'daily_budget',
+                          'backlog_reserved', 'service_unavailable', 'circuit_open')
+                      or any(item['code'] != 'support_unevaluated' for item in findings)):
+                    return 'held'
+        assessment = None
+        previous = []
+        for stored in db.execute('SELECT content,meta,model FROM artifacts WHERE kind=? AND project_id=? '
+                                 'AND message_id=? ORDER BY artifact_id DESC', (KIND_ASSESS, pid, mid)):
+            meta = strict_json(stored['meta'])
+            if not isinstance(meta, dict):
+                return 'held'
+            content = strict_json(stored['content'])
+            if not isinstance(content, dict):
+                return 'held'
+            if meta.get('fact_id') is not None:
+                import semantic_assessment
+                if (meta.get('schema') != semantic_assessment.ASSESSMENT_SCHEMA_VERSION
+                        or content.get('schema') != semantic_assessment.ASSESSMENT_SCHEMA_VERSION
+                        or meta.get('technical_status') != 'complete'
+                        or not isinstance(meta.get('fact_id'), str) or not isinstance(meta.get('dimension'), str)
+                        or content.get('fact_id') != meta['fact_id'] or content.get('dimension') != meta['dimension']
+                        or type(content.get('target_message_id')) is not int or content['target_message_id'] != mid
+                        or not isinstance(content.get('choice'), str)
+                        or semantic_assessment._finite_confidence(content.get('confidence')) is None):
+                    return 'held'
+                continue
+            if assessment is None:
+                assessment = (content, meta, stored['model'])
+            elif meta.get('fingerprint') == fp and meta.get('policy_fingerprint') == policy:
+                previous.append((content, meta))
+        if assessment is None:
+            return 'held'
+        content, meta, model = assessment
+        verdicts = content.get('verdicts')
+        if (not is_current(meta) or meta.get('invalidated') or meta.get('fingerprint') != fp
+                or meta.get('policy_fingerprint') != policy or meta.get('schema') != SCHEMA_VERSION
+                or model != jev.JEV_MODEL or type(content.get('target_message_id')) is not int
+                or content.get('target_message_id') != mid
+                or _partial_assessment(verdicts, scfg) != verdicts):
+            return 'held'
+        for old, old_meta in previous:
+            if (meta.get('technical_status') != 'skipped' and old_meta.get('technical_status')
+                    not in ('retry_wait', 'error', 'pending', 'skipped')):
+                continue
+            old_verdicts = old.get('verdicts')
+            if (not is_current(old_meta) or old_meta.get('invalidated')
+                    or old_meta.get('schema') != SCHEMA_VERSION
+                    or type(old.get('target_message_id')) is not int or old['target_message_id'] != mid
+                    or _partial_assessment(old_verdicts, scfg) != old_verdicts
+                    or any(verdicts.get(key) != value for key, value in old_verdicts.items())):
+                return 'held'
+        if meta.get('technical_status') == 'complete':
+            if meta.get('registry') != jev.REGISTRY_VERSION or meta.get('model') != jev.JEV_MODEL:
+                return 'held'
+            if set(verdicts) == set(jev.PROPOSITIONS):
+                return 'current'
+            if (verdicts == {} and meta.get('skipped') == 'prefilter_no_signal'
+                    and meta.get('jev_requests') == 0 and raw_meta.get('prefilter') == 'no_signal'
+                    and patient_context_refresh._saved_cloud_contract(raw_meta) is None
+                    and extract_llm._low_signal(source['body_text'], extract_llm._rule_hints(dict(source)))
+                    and _prefiltered(ledger, mid)):
+                return 'current'
+            return 'held'
+        if (meta.get('technical_status') != 'skipped' or meta.get('jev_skip_reason') not in
+                ('not_configured', 'disabled', 'daily_budget', 'backlog_reserved', 'service_unavailable', 'circuit_open')):
+            return 'held'
+        return 'current_skipped'
+    except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
+        return 'held'
+
+
+def _reprocess_target_state(ledger, row, scfg, *, cfg=None):
     """Observe one stored source without mistaking job completion for coverage."""
     from mcs_queries import current_v4_id, paused
     pid, mid = row['project_id'], row['message_id']
@@ -2018,6 +2172,8 @@ def _reprocess_target_state(ledger, row, scfg):
     if bundle is None:
         return 'held'
     fp, policy = bundle['source_fingerprint'], policy_fingerprint(scfg)
+    if scfg['summary_mode'] == 'off' and scfg['loop_mode'] == 'off':
+        return _classification_only_state(ledger, row, scfg, cfg if cfg is not None else load_config(), bundle, fp, policy)
     audit = current_artifact(ledger.db, KIND_AUDIT, mid, fp, policy)
     summary = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy)
     if audit and summary and audit['content'].get('status') == 'SKIPPED':
@@ -2403,7 +2559,7 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
     for row in rows:
         if deadline is not None and time.monotonic() >= deadline:
             break
-        state = _reprocess_target_state(ledger, row, scfg)
+        state = _reprocess_target_state(ledger, row, scfg, cfg=cfg)
         replay = None
         if state in ('current', 'current_skipped', 'pending', 'repair_required', 'held', 'failed'):
             root = row['parent_id'] or row['message_id']
