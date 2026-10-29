@@ -285,8 +285,9 @@ def test_not_sent_llm_defers_only_when_no_jev_was_spent(
         raise semantic_runtime.LLMNotSent(stage)
 
     monkeypatch.setattr(semantic_drain, "_process_job_inner", inner)
+    policy = semantic_drain.runtime_config(_cfg("shadow"))[0]
     assert semantic_drain._process_job(
-        None, None, None, client, lambda *a, **k: None, None, diagnostics=semantic_drain._job_diagnostics()) == expected
+        None, policy, None, client, lambda *a, **k: None, None, diagnostics=semantic_drain._job_diagnostics()) == expected
 
 
 def test_not_sent_target_summary_keeps_completed_siblings(tmp_path):
@@ -359,8 +360,14 @@ def test_not_sent_repair_resumes_and_keeps_completed_siblings(tmp_path):
             "SELECT message_id, json_extract(meta,'$.audit_status') "
             "FROM artifacts WHERE kind='semantic_audit'").fetchall())
         assert audits.get(1) == "PASS"
-        assert audits.get(2) is None
+        assert audits.get(2) == "PENDING"
+        prior = db.artifacts("semantic_audit", message_id=2)[-1]
+        assert any(item['code'] == 'claim_without_evidence'
+                   for item in json.loads(prior['content'])['findings'])
+        assert json.loads(prior['meta'])['repair_count'] == 0
+        assert calls['n'] == 3
         assert not db.artifacts("semantic_repair", message_id=2)
+        assert not db.db.execute("SELECT 1 FROM notify_outbox WHERE kind='semantic_notice'").fetchone()
         with db.db:
             db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
         out = semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
@@ -370,6 +377,7 @@ def test_not_sent_repair_resumes_and_keeps_completed_siblings(tmp_path):
         assert len(db.artifacts("semantic_summary", message_id=1)) == 1
         latest = db.artifacts("semantic_audit", message_id=2)[-1]
         assert json.loads(latest["meta"])["audit_status"] == "PASS"
+        assert not db.db.execute("SELECT 1 FROM notify_outbox WHERE kind='semantic_notice'").fetchone()
     finally:
         db.close()
 
