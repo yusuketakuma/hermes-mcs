@@ -80,18 +80,49 @@ def _env_edit_lock(path):
         os.close(fd)
 
 
-def _save(path, updates, expected):
+def _parent_identity(path):
+    info = path.parent.stat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+        raise ValueError('env_parent_untrusted')
+    return info.st_dev, info.st_ino, info.st_uid, info.st_mode
+
+
+def _check_admission(admission):
+    if admission is not None:
+        try:
+            allowed = admission() is True
+        except Exception:
+            allowed = False
+        if not allowed:
+            raise ValueError('configuration_changed')
+
+
+def _save(path, updates, expected, *, parent_identity=None, admission=None):
+    def check():
+        if parent_identity is not None and _parent_identity(path) != parent_identity:
+            raise ValueError('env_parent_changed')
+        _check_admission(admission)
+
+    check()
     with _env_edit_lock(path):
+        check()
         raw, base = _snapshot(path)
         if base != expected:
             raise ValueError('env_changed')
         body = _merge(raw, updates)
         def write_checked(stream):
+            check()
             stream.write(body)
+            check()
             if _snapshot(path)[1] != base:
                 raise ValueError('env_changed')
         safe_io.atomic_write(str(path), write_checked, 0o600, binary=True,
                              tmp_prefix='.env.stage-', makedirs=False)
+        check()
+        saved, _ = _snapshot(path)
+        if saved != body or any(mcs_util.private_env_value(key, path.parent) != value
+                                for key, value in updates.items() if key in dict(KEYS)):
+            raise ValueError('env_save_unverified')
 
 
 def _choose(prompt):
@@ -106,7 +137,7 @@ def is_terminal():
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def run(root=None):
+def run(root=None, *, admission=None):
     """非表示入力でAPIキーを選択し、既存の認証情報を保護して保存します。"""
     if not is_terminal():
         print('APIキーの設定は本人の端末で mcs setup api-keys を実行してください。')
@@ -115,6 +146,8 @@ def run(root=None):
     path = root / '.env'
     saving = False
     try:
+        _check_admission(admission)
+        parent_identity = _parent_identity(path)
         _, base = _snapshot(path)
         print('外部解析のAPIキーを設定します。キーは表示されず、このMCSの本人専用 .env に保存します。')
         print('有効な場合、Jev・Anthropic・OpenAIへ投稿や患者の文脈が送られ、費用が発生することがあります。対象範囲と上限は設定で確認してください。')
@@ -144,7 +177,7 @@ def run(root=None):
             print('APIキーの変更は保存していません。')
             return 0
         saving = True
-        _save(path, updates, base)
+        _save(path, updates, base, parent_identity=parent_identity, admission=admission)
     except (KeyboardInterrupt, EOFError):
         print('\nAPIキーの保存結果を確認できません。既存の認証情報の状態を確認してください。'
               if saving else '\nAPIキーの変更は保存していません。')

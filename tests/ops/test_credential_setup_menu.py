@@ -9,7 +9,7 @@ def test_standalone_routes_each_selection_to_its_own_entry(monkeypatch, tmp_path
     choices = iter(["1", "2", "3", "4", "0"])
     monkeypatch.setattr("builtins.input", lambda _: next(choices))
     seen = []
-    monkeypatch.setattr(menu.api_key_setup, "run", lambda root: seen.append(("api", root)) or 0)
+    monkeypatch.setattr(menu.api_key_setup, "run", lambda root, **kwargs: seen.append(("api", root)) or 0)
     monkeypatch.setattr(menu.subprocess, "run", lambda command, **kwargs: (
         seen.append((command, kwargs)) or SimpleNamespace(returncode=0)))
     assert menu.run(tmp_path, {"runtime_mode": "standalone"}) == 0
@@ -107,6 +107,19 @@ def test_changed_runtime_stops_before_connector(monkeypatch, tmp_path):
     monkeypatch.setattr("builtins.input", lambda _: "2")
     monkeypatch.setattr(menu.subprocess, "run", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
     assert menu.run(tmp_path, {"runtime_mode": "standalone"}, current=lambda: False) == 1
+
+
+def test_api_setup_receives_config_guard_and_refuses_changed_config(monkeypatch, tmp_path):
+    monkeypatch.setattr(menu.api_key_setup, "is_terminal", lambda: True)
+    choices = iter(["1", "1", "2", "2", "1", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(choices))
+    current = [True]
+    def enter(_):
+        current[0] = False
+        return "synthetic-key"
+    monkeypatch.setattr(menu.api_key_setup.getpass, "getpass", enter)
+    assert menu.run(tmp_path, {}, current=lambda: current[0]) == 1
+    assert not (tmp_path / ".env").exists()
 
 
 def test_setup_entry_refuses_symlink_and_writable_parent(monkeypatch, tmp_path):

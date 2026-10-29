@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "APIキー登録中の設定変更と保存結果を確認",
+  "summary": "OpenAI・Anthropic・Jevのキー登録中に設定や保存先が変わった場合は保存を止めます。保存後に内容と本人専用の権限を確認し、結果が不明なまま成功と表示しません。",
+  "upgrade": "追加操作は不要です。更新後の導入・更新後の設定案内と mcs setup api-keys に適用します。既存キーの変更・削除や外部APIへの接続確認は自動で行いません。",
+  "details": [
+    "既存の.envと他の認証情報を保持し、入力できない端末では非表示入力を迂回しません。",
+    "保存先と設定を確認する処理を共有し、OpenAI・Anthropic・Jevへ同じ保護を適用します。"
+  ],
+  "refs": [
+    "mcs/ops/api_key_setup.py",
+    "mcs/ops/credential_setup_menu.py"
+  ]
+}

@@ -128,6 +128,85 @@ def test_noninteractive_does_not_prompt_or_write(tmp_path, monkeypatch):
     assert not (tmp_path / '.env').exists()
 
 
+@pytest.mark.parametrize('index', range(3))
+def test_config_change_during_entry_prevents_saving(tmp_path, terminal, index, capsys):
+    selections = ['2', '2', '2', '1']
+    selections[index] = '1'
+    current = [True]
+    answers(terminal, selections)
+    def enter(_):
+        current[0] = False
+        return 'synthetic-key'
+    terminal.setattr(api_key_setup.getpass, 'getpass', enter)
+    assert api_key_setup.run(tmp_path, admission=lambda: current[0]) == 1
+    assert not (tmp_path / '.env').exists()
+    assert 'synthetic-key' not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('index', range(3))
+def test_replaced_root_during_entry_never_receives_key(tmp_path, terminal, index):
+    root = tmp_path / 'root'
+    root.mkdir(mode=0o700)
+    original = tmp_path / 'original'
+    selections = ['2', '2', '2', '1']
+    selections[index] = '1'
+    answers(terminal, selections)
+    def enter(_):
+        root.rename(original)
+        root.mkdir(mode=0o700)
+        return 'synthetic-key'
+    terminal.setattr(api_key_setup.getpass, 'getpass', enter)
+    assert api_key_setup.run(root) == 1
+    assert not (root / '.env').exists() and not (original / '.env').exists()
+
+
+@pytest.mark.parametrize('index', range(3))
+def test_post_publication_replacement_is_not_reported_as_success(tmp_path, terminal, index, capsys):
+    selections = ['2', '2', '2', '1']
+    selections[index] = '1'
+    answers(terminal, selections, ['synthetic-key'])
+    original = api_key_setup.safe_io.atomic_write
+    def replace(*args, **kwargs):
+        original(*args, **kwargs)
+        path = tmp_path / '.env'
+        path.write_text('OTHER=synthetic\n')
+    terminal.setattr(api_key_setup.safe_io, 'atomic_write', replace)
+    assert api_key_setup.run(tmp_path) == 1
+    assert '保存結果を確認できません' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('damage', ['mode', 'hardlink', 'reader'])
+def test_post_publication_requires_private_readable_single_file(tmp_path, terminal, damage):
+    answers(terminal, ['1', '2', '2', '1'], ['synthetic-key'])
+    original = api_key_setup.safe_io.atomic_write
+    def write(*args, **kwargs):
+        original(*args, **kwargs)
+        path = tmp_path / '.env'
+        if damage == 'mode':
+            path.chmod(0o644)
+        elif damage == 'hardlink':
+            os.link(path, tmp_path / 'copy')
+        else:
+            terminal.setattr(mcs_util, 'private_env_value', lambda *args: None)
+    terminal.setattr(api_key_setup.safe_io, 'atomic_write', write)
+    assert api_key_setup.run(tmp_path) == 1
+
+
+def test_config_guard_exception_fails_closed(tmp_path, terminal):
+    def unavailable():
+        raise RuntimeError('synthetic')
+    terminal.setattr('builtins.input', lambda _: pytest.fail('unexpected prompt'))
+    assert api_key_setup.run(tmp_path, admission=unavailable) == 1
+    assert not (tmp_path / '.env').exists()
+
+
+def test_stale_config_refuses_before_prompt(tmp_path, terminal):
+    terminal.setattr('builtins.input', lambda _: pytest.fail('unexpected prompt'))
+    terminal.setattr(api_key_setup.getpass, 'getpass', lambda _: pytest.fail('unexpected secret prompt'))
+    assert api_key_setup.run(tmp_path, admission=lambda: False) == 1
+    assert not (tmp_path / '.env').exists()
+
+
 def test_cli_routes_to_api_key_setup(monkeypatch):
     calls = []
     monkeypatch.setenv('MCS_LIFECYCLE_PINNED', '1')
