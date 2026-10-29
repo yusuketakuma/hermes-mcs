@@ -69,6 +69,7 @@ import owned_process  # noqa: E402
 import update_discovery  # noqa: E402
 import update_launch  # noqa: E402
 import restore_evidence  # noqa: E402
+import run_log_install  # noqa: E402
 # Rollback resets the checkout before restore/reconcile/postcheck. Keep their
 # finite code dependencies loaded from this generation, including lazily used
 # presenters and admission/backup-adoption checks. Never import a mixed tree.
@@ -114,6 +115,15 @@ def _load_gateway_restart():
 
 
 _request_gateway_restart = _load_gateway_restart()
+
+# Capture canonical bytes before rollback resets the tree. Diagnostic commands
+# still load if this optional new-generation helper cannot be verified.
+try:
+    _RUN_LOG_SOURCE = run_log_install.source_snapshot(REPO)
+    _RUN_LOG_SOURCE_ERROR = False
+except (OSError, run_log_install.LogInstallError):
+    _RUN_LOG_SOURCE = None
+    _RUN_LOG_SOURCE_ERROR = True
 
 DATA = os.path.join(HOME, "data")
 LEDGER = os.path.join(DATA, "ledger.db")
@@ -1553,7 +1563,27 @@ def _record_attempt(state: dict, tag: str | None, result: str,
             "result": result, "at": time.time(), "detail": detail}
 
 
+def _prepare_run_log(*, promote=False) -> None:
+    if _RUN_LOG_SOURCE_ERROR:
+        raise UpdateError('run_log_source_unverified')
+    if _RUN_LOG_SOURCE is None:
+        return  # Older checkout: keep its existing recovery path intact.
+    try:
+        run_log_install.prepare(HOME, REPO, _service_paths().recovery_dir,
+                                source=_RUN_LOG_SOURCE, promote=promote)
+    except run_log_install.LogInstallError:
+        raise UpdateError('run_log_prepare_failed') from None
+
+
+def _migrate_log_tail() -> None:
+    try:
+        run_log_install.migrate_installed(HOME, _service_paths().recovery_dir)
+    except run_log_install.LogInstallError:
+        raise UpdateError('run_log_tail_unverified') from None
+
+
 def _services_reconcile() -> None:
+    _prepare_run_log()
     try:
         r = owned_process.run_owned(
             [_SERVICES_PYTHON or sys.executable, os.path.join(REPO, "mcs", "ops", "mcs_setup.py"),
@@ -1870,6 +1900,7 @@ def _post_merge(state: dict) -> int:
         journal(state, "reinstall")      # persists reinstall_done
     if applying.get("runtime_migration"):
         _use_migrated_runtime(applying["runtime_migration"])
+    _prepare_run_log(promote=True)
     _services_reconcile()
     journal(state, "services")
     problems = restart_agents()
@@ -2014,13 +2045,19 @@ def _run_post_merge(sha: str, *, run_lock_fd: int | None, _release_entry=None) -
         cout, cerr = child.communicate(
             timeout=T_POST_MERGE + (T_INSTALL if (journal_store.load_state(STATE_PATH).get(
                 "applying") or {}).get("reinstall") else 0))
+        reaped = child.returncode is not None
     except subprocess.TimeoutExpired:
         _stop_update_child(child)
+        reaped = child.returncode is not None
         cout, cerr = "", "post_merge_timeout"
         child.returncode = -9
     except BaseException:
         _stop_update_child(child)
         raise
+    if reaped:
+        # This owned child is gone; other legacy FDs (including this old
+        # updater's own output) may remain. Import only a verified prefix.
+        _migrate_log_tail()
     if child.returncode != 0:
         state = journal_store.load_state(STATE_PATH)
         stages = [s.get("stage") for s in state.get("stages", [])]
@@ -3297,6 +3334,12 @@ def recover_interrupted(if_stale: bool = False) -> int:
                         "restore witness without update journal — keep writers stopped",
                         writers_stopped=True)
                 return 1
+        try:
+            _migrate_log_tail()
+        except UpdateError:
+            _report('recovery_incomplete', 'run_log_tail_unverified')
+            return 1
+        if not applying and not stages:
             _remove_marker()           # orphan marker — writer is dead
             return 0
         if if_stale and _journal_is_fresh(state, applying):

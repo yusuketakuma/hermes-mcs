@@ -559,6 +559,7 @@ import service_contract
 import mcs_config
 import mcs_runtime
 import runtime_inspection
+import run_log_install
 from scheduled_jobs import render_template
 try:
     cfg = lifecycle_io.read_owner_config(sys.argv[3])
@@ -580,7 +581,10 @@ if "recovery_python" in cfg and os.path.lexists(
         raise SystemExit("復旧用 Python の設定と稼働設定が一致しません。処理が動いていないことを確認し、mcs setup init --yes、mcs setup services の順に修復してください")
 from html import escape
 text = Path(sys.argv[2]).read_text()
-rendered = render_template(text, {"RECOVERY_PYTHON":escape(desired, quote=False)})
+helper = run_log_install.helper_path(Path(sys.argv[3]).parent, sys.argv[7], checkout=sys.argv[1])
+rendered = render_template(text, {"RECOVERY_PYTHON":escape(desired, quote=False),
+    "RUN_LOG_HELPER":escape(helper, quote=False), "RECOVERY":escape(sys.argv[7], quote=False),
+    "DATA":escape(str(Path(sys.argv[3]).parent / "data"), quote=False)})
 actual = runtime_inspection.recovery_executable(plistlib.loads(rendered.encode()))
 problem = mcs_config.recovery_python_problem(actual, sys.argv[1])
 if problem:
@@ -593,7 +597,7 @@ if problem:
     print("復旧用 Python に問題があります: " + problem, file=sys.stderr)
     sys.exit(1)
 print(desired)
-' "$REPO" "$RECOVERY_TEMPLATE" "$HOME/.mcs/config.json" "$RECOVERY_OPTION" "$SKIP_RECOVERY" "$AGENTS_DIR"
+' "$REPO" "$RECOVERY_TEMPLATE" "$HOME/.mcs/config.json" "$RECOVERY_OPTION" "$SKIP_RECOVERY" "$AGENTS_DIR" "$RECOVERY_DIR"
 }
 loaded() { launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; }
 # launchd may still be tearing down a just-booted-out job ("5: Input/
@@ -1403,6 +1407,15 @@ else
     sum "3/6 プラグイン:   リンク作成・有効化済み"
 fi
 
+# Install the independent helper before either llama or the regular services
+# can start using it. This is a prefix import; old open FDs remain sources.
+mkdir -p "$MCS_DATA"
+"$MCS_PY" -I "$REPO/mcs/ops/run_log_install.py" "$MCS_ROOT" "$REPO" "$RECOVERY_DIR" \
+    || die "ログの統合準備を確認できません。旧ログを保持して常駐サービスの登録前に停止しました。内容を確認して再実行してください"
+RUN_LOG_HELPER="$("$MCS_PY" -I "$REPO/mcs/ops/run_log_install.py" --helper-path \
+    "$MCS_ROOT" "$REPO" "$RECOVERY_DIR" --require-installed)" \
+    || die "ログ処理の配置を確認できません。常駐サービスの登録前に停止しました"
+
 # -------------------------------------------------- 4. local LLM server
 say "【4/6】この Mac で動かす AI（llama-server、ポート8080）"
 if [ "$SKIP_LLM" -eq 1 ]; then
@@ -1474,6 +1487,9 @@ else
         fi
         mkdir -p "$AGENTS_DIR" "$RUNTIME_HOME/logs"
         sed -e "s|__LLAMA_BIN__|$(xml_sed "$LLAMA_BIN")|g" \
+            -e "s|__PYTHON__|$(xml_sed "$MCS_PY")|g" \
+            -e "s|__RUN_LOG_HELPER__|$(xml_sed "$RUN_LOG_HELPER")|g" \
+            -e "s|__DATA__|$(xml_sed "$MCS_DATA")|g" \
             -e "s|__MODEL__|$(xml_sed "$MODEL_FILE")|g" \
             -e "s|__HERMES_HOME__|$(xml_sed "$RUNTIME_HOME")|g" \
             "$REPO/deployment/launchagents/ai.mcs.llamaserver.plist" \
@@ -1557,6 +1573,7 @@ else
     if [ "$OS" = Darwin ]; then
         mkdir -p "$AGENTS_DIR"
         sed -e "s|__RECOVERY__|$(xml_sed "$RECOVERY_DIR")|g" \
+            -e "s|__RUN_LOG_HELPER__|$(xml_sed "$RUN_LOG_HELPER")|g" \
             -e "s|__DATA__|$(xml_sed "$MCS_DATA")|g" \
             -e "s|__RECOVERY_PYTHON__|$(xml_sed "$RECOVERY_PYTHON")|g" \
             "$RECOVERY_TEMPLATE" \
