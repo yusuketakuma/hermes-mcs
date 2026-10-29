@@ -1,0 +1,13 @@
+{
+  "category": "added",
+  "title": "OpenAIの利用先選択とAPI別予算に対応",
+  "summary": "Anthropicに加えてOpenAIのgpt-6-lunaを利用できます。利用先・キーの優先順位・API別予算を設定し、合計上限も同時に適用します。",
+  "upgrade": "mcs setup api-keysでMCS専用.envへOpenAIキーを登録し、AI利用先・予算を設定してください。既存のキーと設定を保持し、API別予算を設定していない環境は従来の合計上限を使います。",
+  "details": [
+    "新規導入・更新後・API追加の非表示入力でOpenAIキーを登録できます。",
+    "利用先の既定は登録済みキーのAnthropic優先です。選択したAPIの上限・エラーによる停止時に別APIへ自動再送しません。",
+    "OpenAIは標準サービス・応答保存なし・30分プロンプトキャッシュで送り、キャッシュ書込みを含む使用量を記録します。検証できない要求は最大予約額を保持して停止します。",
+    "キー登録だけでは利用先のデータ保持条件や契約を保証しません。患者情報を外部送信する範囲と費用を確認してください。"
+  ],
+  "refs": ["mcs/llm/openai_client.py", "mcs/llm/cloud_policy.py", "mcs/ops/cloud_cli.py", "mcs/ops/api_key_setup.py"]
+}

@@ -24,7 +24,7 @@ import semantic_extraction
 import semantic_store
 import semantic_transport
 
-from functools import wraps
+from functools import wraps, partial
 import json
 import copy
 from contextlib import contextmanager, ExitStack
@@ -1289,6 +1289,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                  config_generation: str | None = None,
                  reserve_fn=None, lane: str | None = None, *,
                        jev_transport=None, jev_timing=None, cloud_transport=None, llm_timing=None,
+                       cloud_only=False,
                  diagnostics: dict, shadow_stats: dict | None = None) -> str:
     """Preserve stale workers while bounding timeouts after dispatched work."""
     requests_before = jev_client.requests_made if jev_client is not None else 0
@@ -1333,6 +1334,8 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                 cloud = stack.enter_context(semantic_transport.backlog_inference(
                     ledger, load_config() if cfg_path is None else load_config(cfg_path),
                     job, runtime.job_deadline(scfg, deadline), current, cloud_transport))
+                if cloud_only and cloud is None:
+                    raise runtime.LLMNotSent("cloud_scope_or_budget")
                 if cloud is not None:
                     def cloud_call(prompt, timeout=None):
                         started = time.perf_counter()
@@ -1633,7 +1636,7 @@ def _reprocess_proof_generation(ledger, cfg, scfg):
         'context': patient_context_refresh._contract(cfg),
         'context_options': patient_context_refresh.options(cfg),
         'cloud': {key: cloud.get(key) for key in ('mode', 'routes', 'project_ids', 'exclude_project_ids', 'model')},
-        'cloud_contract': extract_llm._cloud_contract(),
+        'cloud_contract': extract_llm._cloud_contract(cfg),
         'rollup': rollup.config_generation(cfg),
         'dictionary': rollup.generation_signature(ledger.db),
         'references': tuple(ledger.db.execute('SELECT COUNT(*),MAX(artifact_id) FROM artifacts WHERE kind=?',
@@ -2452,9 +2455,11 @@ def _job_lock(ledger, job_id):
 
 def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
                 max_jobs: int, long_defers: dict | None = None, *,
-                excluded=(), turns=None, held_after=None) -> tuple:
+                excluded=(), turns=None, held_after=None, prioritize_patients=False) -> tuple:
     """Select active patients first, retaining each cohort's bounded fairness."""
-    if lane == 'backlog':
+    select_class = (partial(_select_due_class, prioritize_patients=True)
+                    if prioritize_patients else _select_due_class)
+    if lane == 'backlog' and not prioritize_patients:
         # Two resident lanes share this durable turn. Realtime arrivals keep
         # their existing active-first policy; an archive backlog cannot starve.
         try:
@@ -2464,23 +2469,23 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
         except Exception:
             raise _SchedulerUnavailable from None
         def select(after):
-            first = _select_due_class(ledger, lane, kinds, qc_active, max_jobs,
+            first = select_class(ledger, lane, kinds, qc_active, max_jobs,
                                       long_defers, archive_first,
                                       excluded=excluded, turns=turns, held_after=after)
             if first[0]:
                 return first
-            return _select_due_class(ledger, lane, kinds, qc_active,
+            return select_class(ledger, lane, kinds, qc_active,
                                      max_jobs, long_defers, not archive_first,
                                      excluded=excluded, turns=turns, held_after=after)
     else:
         def select(after):
-            active = _select_due_class(
+            active = select_class(
                 ledger, lane, kinds, qc_active, max_jobs, long_defers, False,
                 excluded=excluded, turns=turns, held_after=after)
             remaining = max_jobs - len(active[0])
             if remaining <= 0:
                 return active
-            archived = _select_due_class(
+            archived = select_class(
                 ledger, lane, kinds, qc_active, remaining, long_defers, True,
                 excluded=excluded, turns=turns, held_after=after)
             due, qc_jobs, arrivals, backfill = [
@@ -2493,7 +2498,8 @@ def _select_due(ledger, lane, kinds: tuple, qc_active: bool,
 
 def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
                       max_jobs: int, long_defers: dict | None,
-                      archived: bool, *, excluded=(), turns=None, held_after=None) -> tuple:
+                      archived: bool, *, excluded=(), turns=None, held_after=None,
+                      prioritize_patients=False) -> tuple:
     """Due-job selection for one patient class in a drain pass.
 
     Returns (due, qc_jobs, arrivals, backfill, sched_mut): the ordered
@@ -2558,12 +2564,14 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
             # the kind this worker served last goes second.
             # QC re-seeding refreshes next_try: its new generation must
             # queue behind QC that was already waiting, despite an old id.
+            priority = ("(SELECT MAX(m.posted_at_ts) FROM messages m "
+                        "WHERE m.project_id=fetch_jobs.project_id) DESC, project_id, ") if prioritize_patients else ""
             rows = [row for kind in sorted(
                         kinds, key=lambda k: k == _BACKLOG_TURN["kind"])
                     for row in ledger.db.execute(
                         "SELECT * FROM fetch_jobs WHERE state='pending' "
                         f"AND next_try<=? AND kind=? AND {scope} ORDER BY "
-                        f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
+                        + priority + f"{'next_try, job_id' if kind == QC_JOB_KIND else 'job_id'} LIMIT ?",
                         (time.time(), kind, excluded_json, max_jobs + 8)).fetchall()]
         # Include extra candidates so another worker's current job cannot
         # hide the next runnable item. Work remains bounded by max_jobs.
@@ -2578,12 +2586,51 @@ def _select_due_class(ledger, lane, kinds: tuple, qc_active: bool,
     return due, qc_jobs, arrivals, backfill, sched_mut
 
 
+def _select_cloud_due(ledger, lane, kinds, qc_active, max_jobs, long_defers=None, *,
+                      excluded=(), turns=None, held_after=None):
+    """Choose active patients and their newest activity before archived cloud work."""
+    import extract_llm
+    import cloud_policy
+    cfg = load_config()
+    settings = extract_llm._cloud_settings(cfg)
+    if (settings["mode"] != "on" or "semantic_backlog" not in settings["routes"]
+            or not cloud_policy.selected_key()):
+        return [], [], [], [], {"turn": None}
+    semantic_scope = runtime_config(cfg)[0]["project_ids"]
+    marks = ",".join("?" for _ in kinds)
+    rows = ledger.db.execute(
+        "SELECT j.* FROM fetch_jobs j LEFT JOIN patients p ON p.project_id=j.project_id "
+        f"WHERE j.kind IN ({marks}) AND j.state='pending' AND j.next_try<=? "
+        "AND json_valid(j.payload) AND COALESCE(json_extract(j.payload,'$.eligible'),0)!=1 "
+        "AND " + current_meta_pred('j.payload') + " AND j.job_id NOT IN (SELECT value FROM json_each(?)) "
+        "AND (? IS NULL OR j.project_id IN (SELECT value FROM json_each(?))) "
+        "AND j.project_id NOT IN (SELECT value FROM json_each(?)) "
+        "AND (? IS NULL OR j.project_id IN (SELECT value FROM json_each(?))) "
+        "ORDER BY COALESCE(p.is_archived,0), "
+        "(SELECT MAX(m.posted_at_ts) FROM messages m WHERE m.project_id=j.project_id) DESC, "
+        "j.project_id, j.job_id LIMIT 512",
+        (*kinds, time.time(), json.dumps(sorted(excluded)),
+         json.dumps(settings["project_ids"]) if settings["project_ids"] is not None else None,
+         json.dumps(settings["project_ids"]), json.dumps(settings["exclude_project_ids"]),
+         json.dumps(semantic_scope) if semantic_scope is not None else None, json.dumps(semantic_scope))).fetchall()
+    selected = []
+    for row in rows:
+        if cloud_policy.history_thread_allowed(ledger.db, row["project_id"], row["message_id"]):
+            selected.append(row)
+            if len(selected) >= max_jobs + max(8, settings["max_concurrency"] * 2):
+                break
+    return (selected, [r for r in selected if r["kind"] == QC_JOB_KIND], [],
+            [r for r in selected if r["kind"] == JOB_KIND], {"turn": None})
+
+
 def _refill_due(ledger, lane, kinds, qc_active, max_jobs, long_defers,
-                first_batch, selected, out, deadline, consumed_turns, held_after=None):
+                first_batch, selected, out, deadline, consumed_turns, held_after=None,
+                selector=None):
     """Refill skipped slots without revisiting jobs or scanning an unbounded queue."""
     inspected = set()
     batch = first_batch
-    scan_limit = max_jobs * 16
+    scan_limit = max_jobs * (64 if selector is not None else 16)
+    select = selector or _select_due
     while len(inspected) < scan_limit and sum(selected.values()) < max_jobs:
         before = len(inspected)
         due, qc_jobs, arrivals, backfill, mutation = batch
@@ -2610,7 +2657,7 @@ def _refill_due(ledger, lane, kinds, qc_active, max_jobs, long_defers,
             return
         turns = {**_sched_state(ledger), **consumed_turns}
         try:
-            batch = _select_due(ledger, lane, kinds, qc_active, remaining,
+            batch = select(ledger, lane, kinds, qc_active, remaining,
                                 long_defers, excluded=inspected, turns=turns, held_after=held_after)
         except _SchedulerUnavailable:
             out['long_defer_reservation_failed'] = True
@@ -2775,7 +2822,8 @@ def _persist_drain_accounting(ledger, scfg, out: dict, result: dict,
 def run_due(ledger, cfg: dict, result: dict, deadline: float,
             jev_client=None, llm_fn=None, max_jobs: int = 4,
             cfg_path: str | None = None, run_lock_fd=None,
-            lane: str | None = None) -> dict:
+            lane: str | None = None, cloud_only: bool = False,
+            prioritize_patients: bool = False) -> dict:
     """Drain due semantic jobs inside the tick's remaining budget.
     OFF returns immediately — no job creation, no external calls, no
     auto-drain (AT-053). The caller's shared run lock is held by
@@ -2786,6 +2834,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     started_wall = time.time()
     if lane not in (None, "realtime", "backlog"):
         raise ValueError("semantic_lane_invalid")
+    if cloud_only and (lane != "backlog" or llm_fn is not None):
+        raise ValueError("semantic_cloud_lane_invalid")
     if type(max_jobs) is not int or not 1 <= max_jobs <= 32:
         raise ValueError("semantic_max_jobs_invalid")
     scfg, errors = runtime_config(cfg)
@@ -2813,18 +2863,19 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # that lane refreshes at most every _BACKLOG_INVALIDATE_S; the tick
     # (_semantic_enabled + realtime lane) still runs it every pass.
     now_m = time.monotonic()
-    if lane != "backlog" or _invalidated_at is None \
-            or now_m - _invalidated_at >= _BACKLOG_INVALIDATE_S:
+    if not cloud_only and (lane != "backlog" or _invalidated_at is None \
+            or now_m - _invalidated_at >= _BACKLOG_INVALIDATE_S):
         from semantic_v4 import invalidate_projections
         invalidate_projections(ledger.db, scfg)
         _invalidated_at = time.monotonic()
     if scfg["mode"] == "off":
         return out
-    try:
-        out['inference_reprocess'] = reprocess_step(ledger, cfg, deadline=deadline)
-    except Exception as error:
-        out['inference_reprocess'] = {'status': 'error', 'complete': False}
-        result['errors'].append(f'semantic_reprocess: {type(error).__name__}')
+    if not cloud_only:
+        try:
+            out['inference_reprocess'] = reprocess_step(ledger, cfg, deadline=deadline)
+        except Exception as error:
+            out['inference_reprocess'] = {'status': 'error', 'complete': False}
+            result['errors'].append(f'semantic_reprocess: {type(error).__name__}')
     # Stability guards shared with the extract lane: a nearly-full
     # volume turns per-job artifact writes into an I/O error storm, and
     # an open endpoint breaker means every llm_fn call pays a dead
@@ -2838,12 +2889,13 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     # endpoint breaker or LLM admission): bring current projection/v4
     # rows minted by an older projection version up to date, a bounded
     # slice per tick, right after this tick's invalidation pass.
-    try:
-        out["reproject"] = v4.reproject_stale(ledger, scfg)
-    except Exception as e:
-        result["errors"].append(f"semantic_reproject: {type(e).__name__}")
+    if not cloud_only:
+        try:
+            out["reproject"] = v4.reproject_stale(ledger, scfg)
+        except Exception as e:
+            result["errors"].append(f"semantic_reproject: {type(e).__name__}")
     circuit_s = llm_availability.circuit_open_s(ledger.db)
-    if circuit_s:
+    if circuit_s and not cloud_only:
         out["circuit_open_s"] = round(circuit_s)
         return out
     drain_started = time.perf_counter()
@@ -2947,7 +2999,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         return _unlocked("jev", call, *args, **kwargs)
 
     jev_transport = unlocked_jev_request if run_lock_fd is not None else None
-    if scfg["mode"] != "off" and scfg["extract_qc"] == "annotate" \
+    if not cloud_only and scfg["mode"] != "off" and scfg["extract_qc"] == "annotate" \
             and jev_client is not None:
         try:
             semantic_qc._qc_seed(ledger, time.time())
@@ -2978,7 +3030,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     held_after = initial_sched.get('payload_hold_cursors', {}).get(hold_lane)
     try:
         cursor_arg = {'held_after': held_after} if held_after is not None else {}
-        first_batch = _select_due(ledger, lane, kinds, qc_active, max_jobs, long_defers,
+        selector = (_select_cloud_due if cloud_only else
+                    partial(_select_due, prioritize_patients=True) if prioritize_patients else _select_due)
+        first_batch = selector(ledger, lane, kinds, qc_active, max_jobs, long_defers,
                                   **cursor_arg)
     except _SchedulerUnavailable:
         result['errors'].append('semantic: long_defer_reservation_failed')
@@ -3010,7 +3064,8 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     selected = {"qc": 0, "arrival": 0, "backfill": 0}
     for job, cohort_name, mutation in _refill_due(
             ledger, lane, kinds, qc_active, max_jobs, long_defers,
-            first_batch, selected, out, deadline, consumed_turns, held_after):
+            first_batch, selected, out, deadline, consumed_turns, held_after,
+            selector=selector if cloud_only or prioritize_patients else None):
         if llm_health["down"] and job["kind"] == JOB_KIND:
             # the endpoint refused this pass: the remaining model jobs
             # would each only re-defer (and rewrite updated_at); they
@@ -3202,7 +3257,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                         reserve_fn=reserve_fn, lane=lane, diagnostics=diagnostics, shadow_stats=shadow_stats,
                         jev_transport=jev_transport, jev_timing=jev_timing,
                         cloud_transport=(lambda call, *a, **kw: _unlocked("llm", call, *a, **kw))
-                        if cloud_backlog else None, llm_timing=llm_acc)
+                        if cloud_backlog else None, llm_timing=llm_acc, cloud_only=cloud_only)
             except writer_lock.RunLockLost as e:
                 # An updater won the lock in a transport window (or the
                 # bounded reacquire expired). Make no further writes: the job
@@ -3314,7 +3369,7 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
         # suppression still holds in-process, but a restart repeats
         # the base-ceiling call — surfaced instead of swallowed
         out["long_mark_unsaved"] = unsaved
-    if scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce":
+    if not cloud_only and scfg["mode"] == "enforce" and scfg["summary_mode"] == "enforce":
         try:
             out["degraded_notices"] = semantic_notice.emit_degraded(ledger, scfg)
         except Exception:

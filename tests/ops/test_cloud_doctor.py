@@ -16,7 +16,7 @@ def local(tmp_path, monkeypatch):
     monkeypatch.setattr(cloud_cli.time, "time", lambda: now)
     monkeypatch.setattr(cloud_policy, "api_key", lambda root=None: None)
     monkeypatch.setattr(cloud_cli.jev, "api_key", lambda root=None: None)
-    monkeypatch.setattr(cloud_policy, "pricing_valid", lambda now=None: True)
+    monkeypatch.setattr(cloud_policy, "pricing_valid", lambda now=None, **kw: True)
     (tmp_path / "data").mkdir()
     with closing(Ledger(str(tmp_path / "data/ledger.db"))) as ledger:
         yield tmp_path, ledger, now

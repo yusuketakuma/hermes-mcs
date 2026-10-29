@@ -500,6 +500,7 @@ def _fixed_logs() -> tuple:
     return (LOGFILE,
             os.path.join(data, "extract_drain.log"),
             os.path.join(data, "extract_drain_2.log"),
+            os.path.join(data, "cloud_backlog.log"),
             os.path.join(data, "extract_llm.log"),
             os.path.join(data, "semantic_drain.log"),
             # runtime_mode=standalone connector / launchd jobs

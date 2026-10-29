@@ -89,6 +89,8 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport):
         try:
             response = provider(prompt, deadline=min(deadline, time.monotonic() + (timeout or LLM_TIMEOUT)),
                                 max_tokens=LLM_LONG_MAX_TOKENS)
+        except extract_llm.CloudBusy:
+            raise runtime.LLMNotSent("cloud_capacity") from None
         except extract_llm.CloudFallback:
             current()
             return _failed("cloud_failed")

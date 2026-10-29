@@ -15,7 +15,8 @@ import warnings
 import mcs_util
 import safe_io
 
-KEYS = (("TYPESAFE_API_KEY", "Jev"), ("MCS_ANTHROPIC_API_KEY", "Anthropic"))
+KEYS = (("TYPESAFE_API_KEY", "Jev"), ("MCS_ANTHROPIC_API_KEY", "Anthropic"),
+        ("MCS_OPENAI_API_KEY", "OpenAI"))
 
 
 def _identity(info):
@@ -116,7 +117,7 @@ def run(root=None):
     try:
         _, base = _snapshot(path)
         print('外部解析のAPIキーを設定します。キーは表示されず、このMCSの本人専用 .env に保存します。')
-        print('有効な場合、JevやAnthropicへ投稿や患者の文脈が送られ、費用が発生することがあります。対象範囲と上限は設定で確認してください。')
+        print('有効な場合、Jev・Anthropic・OpenAIへ投稿や患者の文脈が送られ、費用が発生することがあります。対象範囲と上限は設定で確認してください。')
         updates = {}
         for key, label in KEYS:
             problem = mcs_util.private_env_problem(key, root)

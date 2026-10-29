@@ -21,6 +21,29 @@ def _run(**kw):
     return cli.budget_command(SimpleNamespace(daily_usd=kw.get("daily"), monthly_usd=kw.get("monthly")))
 
 
+def test_provider_selection_and_split_preserve_total_and_existing_settings(conf, capsys):
+    args = SimpleNamespace(provider="auto", priority="anthropic,openai", anthropic_daily_usd="20",
+        anthropic_monthly_usd="60", openai_daily_usd="5", openai_monthly_usd="15")
+    assert cli.providers_command(args) == 0
+    cfg = json.loads(conf.read_text())
+    assert cfg["notify"] == {"synthetic": True}
+    assert cfg["cloud_llm"]["provider_budgets"]["openai"] == {"daily_cost_limit_usd": 5, "monthly_cost_limit_usd": 15}
+    shown = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert shown["daily_cost_limit_usd"] == 25 and shown["monthly_cost_limit_usd"] == 75
+    args.provider = "openai"
+    assert cli.providers_command(args) == 0
+    shown = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert shown["provider"] == "openai" and shown["model"] == "gpt-6-luna"
+
+
+def test_provider_split_over_total_or_partial_caps_never_saves(conf):
+    before = conf.read_bytes()
+    assert cli.providers_command(SimpleNamespace(provider="auto", openai_daily_usd="26", openai_monthly_usd="15")) == 1
+    assert conf.read_bytes() == before
+    assert cli.providers_command(SimpleNamespace(provider="openai", openai_daily_usd="5")) == 1
+    assert conf.read_bytes() == before
+
+
 def test_sets_and_clears_daily_and_monthly_caps_keeping_other_settings(conf, capsys):
     assert _run(daily="1.5", monthly="30") == 0
     saved = json.loads(conf.read_text())

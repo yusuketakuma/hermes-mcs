@@ -819,7 +819,7 @@ def _init_store_secrets(args, login_id) -> int | None:
         else:
             print(f"Keychain: '{KEYCHAIN_SERVICE}' を登録しました")
 
-    for name in ("TYPESAFE_API_KEY", "MCS_ANTHROPIC_API_KEY"):
+    for name in ("TYPESAFE_API_KEY", "MCS_ANTHROPIC_API_KEY", "MCS_OPENAI_API_KEY"):
         key = os.environ.get(name)
         if key:
             if any(char.isspace() or ord(char) < 33 or ord(char) == 127 for char in key):
@@ -1762,7 +1762,8 @@ def cmd_doctor(args) -> int:
             print(f"  {name}: mode={provider['mode']}、キー={'登録済み' if provider['key_present'] else '未登録'}、"
                   f"状態={provider['status']}")
             if provider.get("block_reason") == "no_api_key":
-                print("    鍵が未登録のためローカルで処理中です。MCSの.envにMCS_ANTHROPIC_API_KEYを権限0600で登録してください。")
+                key_name = "MCS_OPENAI_API_KEY" if name == "openai" else "MCS_ANTHROPIC_API_KEY"
+                print(f"    鍵が未登録のためローカルで処理中です。MCSの.envに{key_name}を権限0600で登録してください。")
             for day in (provider.get("dry_run") or {}).get("days", []):
                 print(f"    ドライラン {day['day']}（JST）: {day['units']}単位・{day['requests']}要求相当、"
                       f"入力{day['input_chars']}字／推定{day['estimated_input_tokens']}tokens、"

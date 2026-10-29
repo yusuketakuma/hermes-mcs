@@ -74,6 +74,16 @@ def test_history_without_false_eligible_uses_cloud_and_settles(cloud):
     assert not cloud_policy.usage_report(led)["pricing_unverified"]
 
 
+def test_local_only_feedback_is_filtered_before_the_cloud_selection_limit(cloud, monkeypatch):
+    led, cfg, _, _ = cloud
+    led.save_messages([_message(mid=2, body="完全合成の過去記録。")])
+    snapshot(led)
+    monkeypatch.setattr(extract_llm, "_qc_flagged_sql", lambda *a, **kw: "SELECT 1 WHERE m.message_id=1")
+    selected, _ = extract_llm._select_pending(led, 1, None, None, False,
+        cloud_only=True, prioritize_patients=True)
+    assert [row["message_id"] for row in selected] == [2]
+
+
 @pytest.mark.parametrize("denial", ["arrival", "off", "cap", "scope", "route"])
 def test_local_boundaries_do_not_send(cloud, denial):
     led, cfg, job, calls = cloud
@@ -203,7 +213,8 @@ def test_real_process_wrapper_selects_cloud_and_resets_model(cloud, monkeypatch)
     assert transport.llm_model() == model
 
 
-def test_cloud_stages_remain_current_for_normal_readers_after_context_exit(cloud, monkeypatch):
+@pytest.mark.parametrize("cloud_only", [False, True])
+def test_cloud_stages_remain_current_for_normal_readers_after_context_exit(cloud, monkeypatch, cloud_only):
     import semantic_store
     import semantic_v4
     from candidate_testkit import approved_config
@@ -224,9 +235,14 @@ def test_cloud_stages_remain_current_for_normal_readers_after_context_exit(cloud
 
     monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
     monkeypatch.setattr(transport, "llm_chat", lambda *a, **kw: pytest.fail("local GPU used"))
+    if cloud_only:
+        monkeypatch.setattr(semantic_drain, "reprocess_step", lambda *a, **kw: pytest.fail("worker repeated corpus seed"))
+        monkeypatch.setattr(semantic_v4, "reproject_stale", lambda *a: pytest.fail("worker repeated corpus projection"))
+        monkeypatch.setattr(semantic_drain.llm_availability, "circuit_open_s", lambda *a: 60)
     result = {"errors": []}
     out = semantic_drain.run_due(led, cfg, result, time.monotonic() + 1200,
-                                jev_client=_PassJev(), lane="backlog", max_jobs=1)
+                                jev_client=_PassJev(), lane="backlog", max_jobs=1,
+                                cloud_only=cloud_only)
     assert out["done"] == 1 and not result["errors"], (out, result)
     assert calls
     fp = semantic_store.thread_bundle(led.db, 1, 1)["source_fingerprint"]
@@ -241,6 +257,52 @@ def test_cloud_stages_remain_current_for_normal_readers_after_context_exit(cloud
     from extraction_progress import message_progress
     row = led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
     assert message_progress(led.db, row, cfg=cfg)["state"] == "complete"
+
+
+def test_full_cloud_capacity_defers_without_usage_or_local_fallback(cloud):
+    import cloud_backlog
+    import semantic_runtime
+    led, cfg, job, calls = cloud
+    cfg["cloud_llm"]["max_concurrency"] = 1
+    with cloud_backlog.request_slot(extract_llm.HOME, 1):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct) as chat:
+            with pytest.raises(semantic_runtime.LLMNotSent, match="cloud_capacity"):
+                chat("Synthetic facts JSON:")
+    assert not calls and not rows(led, "cloud_usage_reserve")
+
+
+def test_cloud_only_process_never_enters_local_stage_when_scope_changes(cloud, monkeypatch):
+    led, cfg, job, calls = cloud
+    cfg["cloud_llm"]["mode"] = "off"
+    monkeypatch.setattr(semantic_drain, "_process_job_inner", lambda *a, **kw: pytest.fail("local fallback"))
+    assert semantic_drain._process_job(
+        led, semantic_drain.runtime_config(cfg)[0], job, None,
+        lambda *a, **kw: pytest.fail("local GPU used"), time.monotonic() + 120,
+        lane="backlog", diagnostics={}, cloud_transport=direct, cloud_only=True) == "deferred"
+    assert not calls
+
+
+def test_cloud_and_resident_selection_prioritize_active_latest_patient(cloud):
+    led, cfg, _, _ = cloud
+    cfg["cloud_llm"]["project_ids"] = None
+    for pid in (2, 3):
+        _patient(led, pid)
+        led.save_messages([_message(pid, pid=pid)])
+        led.semantic_seed(pid, [pid], {"source": "history_import"})
+    with led.db:
+        led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=3")
+        for mid in (1, 2, 3):
+            led.db.execute("UPDATE messages SET posted_at_ts=? WHERE message_id=?", (mid * 100, mid))
+    snapshot(led)
+    selected = semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 3)[0]
+    assert [r["project_id"] for r in selected] == [2, 1, 3]
+    selected = semantic_drain._select_due(led, "backlog", ("semantic",), False, 3,
+                                         prioritize_patients=True)[0]
+    assert [r["project_id"] for r in selected] == [2, 1, 3]
+    selected, _ = extract_llm._select_pending(led, 3, None, None, False,
+                                              cloud_only=True, prioritize_patients=True)
+    assert [r["project_id"] for r in selected] == [2, 1, 3]
 
 
 @pytest.mark.parametrize("first", ["local", "cloud"])

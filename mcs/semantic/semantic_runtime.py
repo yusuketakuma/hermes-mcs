@@ -929,7 +929,7 @@ def _source_quality_rows(db, pid, source_input_key, question_keys):
         return f"json_extract(meta,'$.{path}')"
     version = get("quality_request.v")
     source_operation = get("operation") + "='patient_source_quality'"
-    question = "json_extract(q.value,'$.question_key')"
+    question = "CASE q.type WHEN 'object' THEN json_extract(q.value,'$.question_key') END"
     field_checks = [hash_sql(get("quality_request." + key)) for key in _QUALITY_ID_KEYS]
     field_checks += [hash_sql(get("request_fp")), hash_sql(get("reservation_id"), 32)]
     source_fields = " AND ".join(hash_sql(get("quality_request." + key))

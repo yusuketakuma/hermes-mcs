@@ -71,7 +71,9 @@ import self_identity  # noqa: E402
 import safe_io  # noqa: E402
 import bounded_http
 import anthropic_client
+import openai_client
 import cloud_policy
+import cloud_backlog
 import llm_retry
 import mcs_config
 import clinical_values
@@ -133,7 +135,9 @@ _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
     for name, path in (("extract_llm", __file__),
                        ("anthropic_client", anthropic_client.__file__),
+                       ("openai_client", openai_client.__file__),
                        ("cloud_policy", cloud_policy.__file__),
+                       ("cloud_backlog", cloud_backlog.__file__),
                        ("llm_retry", llm_retry.__file__),
                        ("mcs_config", mcs_config.__file__),
                        ("mcs_queries", mcs_queries.__file__),
@@ -666,6 +670,10 @@ class CloudFallback(Exception):
     """Discard this provider's unit and retry under the local contract."""
 
 
+class CloudBusy(CloudFallback):
+    """No shared cloud capacity was reserved or sent."""
+
+
 class _CloudProvider:
     """Bind one unit's guarded HTTP attempts to the ledger's owning thread."""
 
@@ -674,11 +682,11 @@ class _CloudProvider:
                  max_attempts=None, on_reserved_tx=None, reserve_dispatch=None, transport=None):
         cfg = {**cfg, "cloud_llm": _cloud_settings(cfg)}
         self.model = cfg["cloud_llm"]["model"]
-        self.contract = _cloud_contract()
+        self.contract = _cloud_contract(cfg)
         generation = cloud_policy.config_generation(cfg)
         scope = cloud_policy.scope_generation(cfg)
         updater = writer_lock.updater_state()
-        key = cloud_policy.api_key(HOME)
+        key = cloud_policy.selected_key(HOME, cfg)
         self.dispatch = dispatch
         self.generation = generation
         self.completed_reservations = []
@@ -697,6 +705,10 @@ class _CloudProvider:
             # an earlier period start counts more spending, like a lower cap
             start = settings["window_start"]
             out["window_start"] = None if start is None else mcs_util.until_epoch(start)
+            budgets = settings["provider_budgets"]
+            provider_caps = budgets.get(settings["provider"], {})
+            for key in ("daily_cost_limit_usd", "monthly_cost_limit_usd"):
+                out["provider_" + key] = provider_caps.get(key, 0 if budgets else None)
             return out
 
         def tightened(now):
@@ -714,10 +726,10 @@ class _CloudProvider:
             now = _cloud_settings(load_config())   # one read: every check judges the same settings
             # The run window gates each new POST (retries included); a result that
             # already arrived is still judged only by scope, not by the clock.
-            if ((inference and (time.monotonic() >= deadline or tightened(caps(now))
+            if ((inference and (not cloud_backlog.owner_alive() or time.monotonic() >= deadline or tightened(caps(now))
                                 or cloud_policy.setting_block_reason(now)))
                     or writer_lock.updater_state() != updater
-                    or updater[0] or cloud_policy.api_key(HOME) != key
+                    or updater[0] or cloud_policy.selected_key(HOME, {"cloud_llm": now}) != key
                     or cloud_policy.scope_generation({"cloud_llm": now}) != scope
                     # A paid result that already arrived is kept while its scope holds: a stop,
                     # an open circuit or expired pricing stops only new sends (owner decision 2026-10-28).
@@ -762,7 +774,8 @@ class _CloudProvider:
         if transport is not None:
             client_args["post_fn"] = lambda body, timeout: transport(
                 self.client.request, "POST", body, timeout, deadline=self.deadline)
-        self.client = anthropic_client.AnthropicClient(key, **client_args)
+        client = openai_client.OpenAIClient if self.model == openai_client.MODEL else anthropic_client.AnthropicClient
+        self.client = client(key, **client_args)
 
     def discard(self):
         """Append the unit's final disposition without mutating financial results."""
@@ -781,6 +794,13 @@ class _CloudProvider:
         return self.dispatch(write, result=True)
 
     def __call__(self, prompt, *, deadline, max_tokens, **unused):
+        capacity = _cloud_settings(load_config())["max_concurrency"]
+        with cloud_backlog.request_slot(HOME, capacity) as held:
+            if not held:
+                raise CloudBusy("cloud_capacity")
+            return self._complete(prompt, deadline=deadline, max_tokens=max_tokens)
+
+    def _complete(self, prompt, *, deadline, max_tokens):
         try:
             http_deadline = min(self.deadline, deadline) - patient_context_refresh.COMMIT_MARGIN
             if time.monotonic() >= http_deadline:
@@ -808,10 +828,7 @@ def _cloud_settings(cfg):
         # an unreadable config (load_config's {}) never auto-enables the paid
         # route: a real config always carries mcs_login_id, so {} means unread
         return cloud_policy.cloud_config({})[0]
-    block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
-    if isinstance(block, dict) and "mode" in block:
-        return cloud_policy.cloud_config(cfg)[0]
-    return cloud_policy.cloud_config(cfg, key_present=bool(cloud_policy.api_key(HOME)))[0]
+    return cloud_policy.resolve_settings(cfg, HOME)[0]
 
 
 # Reuse key: the provider and its fixed request shape. The inference rule
@@ -822,8 +839,13 @@ _CLOUD_CONTRACT = {"backend": "anthropic", "model": anthropic_client.MODEL,
                    "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": "low"})[:16]}
 
 
-def _cloud_contract():
-    return dict(_CLOUD_CONTRACT)   # a copy: callers store it in metadata they may edit
+def _cloud_contract(cfg=None):
+    settings = _cloud_settings(load_config() if cfg is None else cfg)
+    if settings["provider"] == "openai":
+        return {"backend": "openai", "model": openai_client.MODEL,
+                "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": "low",
+                                               "service_tier": "default", "cache_ttl": "30m"})[:16]}
+    return dict(_CLOUD_CONTRACT)
 
 
 def _cloud_mode(ledger, cfg, route, project_id):
@@ -831,7 +853,7 @@ def _cloud_mode(ledger, cfg, route, project_id):
     if not cloud_policy.eligible(settings, route, project_id):
         return "off"
     mode = settings["mode"]
-    if mode in ("on", "shadow") and (not cloud_policy.api_key(HOME)
+    if mode in ("on", "shadow") and (not cloud_policy.selected_key(HOME, cfg)
             or cloud_policy.block_reason(ledger, settings, route, project_id)
             or cloud_policy.budget_block_reason(ledger, settings)):
         return "off"   # a reached cap keeps the rows in the local batches
@@ -3612,7 +3634,8 @@ def upgrade_status(db, *, model: str | None) -> dict:
 
 
 def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
-                   archived: bool | None = None, rehold: bool | None = None) -> str:
+                   archived: bool | None = None, rehold: bool | None = None,
+                   prioritize_patients: bool = False) -> str:
     """run_pending's due-row selection.
 
     Retry state is read through correlated subqueries instead of a
@@ -3635,6 +3658,8 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
         archived_sql = (" AND " + ("" if archived else "NOT ")
                         + "EXISTS (SELECT 1 FROM patients p WHERE p.project_id=m.project_id"
                           " AND COALESCE(p.is_archived,0)!=0)")
+    priority = ("(SELECT MAX(latest.posted_at_ts) FROM messages latest "
+                "WHERE latest.project_id=m.project_id) DESC, m.project_id ASC, ") if prioritize_patients else ""
     return f"""
       SELECT m.message_id, m.project_id, {inference_dependency_loss.SOURCE_BINDING_COLUMNS},
              ({_qc_flagged_sql()}) AS qc_src,
@@ -3654,7 +3679,7 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
         AND {pending_pred(db)}
         AND COALESCE((SELECT MAX(json_extract(e.meta,'$.next_try'))
                       {_ERROR_ROWS_SQL}), 0) <= ?
-      ORDER BY m.posted_at_ts {order}, m.message_id {order}
+      ORDER BY {priority}m.posted_at_ts {order}, m.message_id {order}
       LIMIT ?
     """
 
@@ -3857,7 +3882,8 @@ def patient_progress_counts(db) -> dict:
 def _select_pending(ledger, limit: int, admitted_ids: set | None,
                     shard: tuple[int, int] | None,
                     oldest_first: bool, *, archived_first: bool = False,
-                    fair_oldest: bool = False) -> tuple[list, int | None]:
+                    fair_oldest: bool = False, prioritize_patients: bool = False,
+                    cloud_only: bool = False) -> tuple[list, int | None]:
     """Select the claimable pending rows for one run_pending pass ->
     (rows, how many of them are new arrivals; None for oldest_first)."""
     # pending = no current-version artifact, plus retriable CURRENT-
@@ -3886,6 +3912,21 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
             # even when the manifest exceeds SQLite's variable limit.
             adm_sql = " AND m.message_id IN (SELECT value FROM json_each(?))"
             adm_params = [json.dumps(sorted(admitted_ids))]
+    if cloud_only:
+        cfg = _cloud_settings(load_config())
+        if cfg["mode"] != "on" or "reextract" not in cfg["routes"]:
+            return [], 0
+        # Filter unpaid local-only work before LIMIT so it cannot starve cloud history.
+        adm_sql += (" AND COALESCE(qc_src,0)=0 AND COALESCE(thin_src,0)=0 "
+                    "AND COALESCE(human_src,0)=0 AND attempts=0 "
+                    f"AND NOT EXISTS ({_hold_sql()})")
+        adm_sql += (" AND m.message_id IN (SELECT CAST(substr(s.key,instr(s.key,':')+1) AS INTEGER) "
+                    "FROM json_each((SELECT CASE WHEN json_valid(content) THEN content ELSE '{}' END "
+                    "FROM artifacts WHERE kind='cloud_history_scope' ORDER BY artifact_id DESC LIMIT 1), '$.sources') s)")
+        for key, exclude in (("project_ids", False), ("exclude_project_ids", True)):
+            if cfg[key] is not None and (cfg[key] or not exclude):
+                adm_sql += " AND m.project_id " + ("NOT " if exclude else "") + "IN (SELECT value FROM json_each(?))"
+                adm_params.append(json.dumps(cfg[key]))
     # QC-flagged rows keep their current artifact but re-enter pending
     # for exactly one feedback re-extract — a meta.qc_fix artifact
     # (applied or declined) ends the loop. Thin artifacts re-pend once
@@ -3895,7 +3936,8 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
     def _select(fresh, n, archived, rehold=None, scope="", scope_params=()):
-        return ledger.db.execute(_selection_sql(ledger.db, order, adm_sql + scope, fresh, archived, rehold), (
+        return ledger.db.execute(_selection_sql(ledger.db, order, adm_sql + scope, fresh, archived, rehold,
+                                               prioritize_patients=prioritize_patients), (
             KIND, EXTRACT_VERSION,
             *adm_params, *scope_params,
             shard[1] if shard else None,
@@ -3908,7 +3950,7 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
 
     rows, fresh_selected = [], None if oldest_first else 0
     # an admission set (canonical engine) already decides what may run
-    focus = [] if oldest_first or admitted_ids is not None else _focus_patients(ledger)
+    focus = [] if oldest_first or admitted_ids is not None or prioritize_patients else _focus_patients(ledger)
     # NULL project rows must survive the exclusion (NULL NOT IN is NULL)
     rest = (" AND (m.project_id IS NULL OR m.project_id NOT IN ("
             + ",".join("?" * len(focus)) + "))") if focus else ""
@@ -3917,7 +3959,7 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
     # usual fresh/re-extraction order, except that a fair oldest turn
     # interleaves update-released holds by source time.
     for archived in ((True, False) if archived_first else (False, True)):
-        for fresh in ((None,) if oldest_first else (True, False)):
+        for fresh in ((None,) if oldest_first or prioritize_patients else (True, False)):
             if fresh is False and not archived:
                 # the patients nearest completion re-extract first, one by one;
                 # their released holds too, since the patient completes only
@@ -3944,7 +3986,7 @@ def _select_pending(ledger, limit: int, admitted_ids: set | None,
 
 
 def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
-                  background=False) -> tuple[list, int, int]:
+                  background=False, cloud_only=False) -> tuple[list, int, int]:
     """Load contexts/checkpoints on the calling thread; settle prefiltered rows."""
     jobs = []
     skipped = 0
@@ -3965,11 +4007,14 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         mode = _cloud_mode(ledger, cfg, "reextract", r["project_id"]) if allow_cloud and _cloud_reextract(
             ledger, r, background=background) else "off"
         r["_cloud_background"] = background and mode in ("on", "shadow")
+        if cloud_only and mode != "on":
+            blocked += 1
+            continue
         r["_cloud_mode"] = mode
         if mode in ("on", "shadow"):
             r["_cloud_settings"] = _cloud_settings(cfg)
         if mode == "on":
-            r["_provider_contract"] = _cloud_contract()
+            r["_provider_contract"] = _cloud_contract(cfg)
             r["_target"] = (target[0], r["_provider_contract"]["model"])
         qc = _qc_feedback(ledger, r["qc_src"]) if r["qc_src"] else None
         if r["qc_src"] and qc is None:
@@ -4133,7 +4178,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 carry: list | None = None,
                 archived_first: bool = False,
                 fair_oldest: bool = False, allow_cloud: bool = True,
-                background: bool = False) -> dict:
+                background: bool = False, cloud_only: bool = False,
+                prioritize_patients: bool = False) -> dict:
     """Extract up to `limit` pending/stale messages within budget_s.
     Returns {'done': n, 'left': n, 'failed': n}.
 
@@ -4179,10 +4225,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if ledger.db.in_transaction:
             raise
         gc_error = 'extract_stale_gc_failed'
-    rows, fresh_selected = _select_pending(ledger, limit, admitted_ids,
+    rows, fresh_selected = _select_pending(ledger, limit * 64 if cloud_only else limit, admitted_ids,
                                            shard, oldest_first,
                                            archived_first=archived_first,
-                                           fair_oldest=fair_oldest)
+                                           fair_oldest=fair_oldest, cloud_only=cloud_only,
+                                           prioritize_patients=prioritize_patients)
     done = failed = deferred = lock_lost = held_prior = 0
     done_pids = set()
     endpoint_down = False
@@ -4231,7 +4278,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # requested — the prefilter never overrides them.
     prefilter = _prefilter_enabled() and admitted_ids is None
     jobs, skipped, context_blocked = _prepare_jobs(
-        ledger, rows, target, prefilter, allow_cloud=allow_cloud, background=background)
+        ledger, rows, target, prefilter, allow_cloud=allow_cloud, background=background,
+        cloud_only=cloud_only)
+    if cloud_only:
+        jobs = jobs[:limit]
     deferred += context_blocked
     metas = [None] * len(jobs)
     batch_metas = []
@@ -4355,12 +4405,16 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     if result is None:
                         raise CloudFallback("cloud_validation_failed")
                     return result
+            except CloudBusy:
+                return _DEFERRED
             except CloudFallback as error:
                 if str(error) == "cloud_unit_changed":
                     provider.discard()
                 # a paid attempt that failed marks the row: if local cannot finish it
                 # now, _handle records the retry so the next pass does not re-send it
                 r["_cloud_failed"] = provider.possibly_sent
+                if cloud_only:
+                    return _DEFERRED
                 # A posting is the provider unit: partial cloud chunks never seed local work.
                 def reset_local():
                     r.pop("_provider_contract", None)
@@ -5069,7 +5123,8 @@ def _background_semantic(ledger, stop=None):
         result = {"errors": []}
         out = semantic_drain.run_due(
             ledger, cfg, result, deadline, max_jobs=1,
-            cfg_path=CONF_PATH, run_lock_fd=lock_fd, lane="backlog")
+            cfg_path=CONF_PATH, run_lock_fd=lock_fd, lane="backlog",
+            prioritize_patients=_cloud_settings(cfg)["mode"] == "on")
         out["errors"] = result["errors"]
         return out
     finally:
@@ -5337,6 +5392,7 @@ def _main() -> int:
             return legacy_admissions(led, cfg), extract_validation.vital_threshold_policy(cfg)
         except Exception:
             return set(), None
+    cloud_pool = cloud_backlog.Pool(HOME) if args.all and args.lane == 2 else None
     try:
         if args.all:
             # Backlog drainer: per-write locking only — holding the run
@@ -5377,6 +5433,8 @@ def _main() -> int:
                     total["stopped"] = "stop_after"
                     break
                 try:
+                    if cloud_pool is not None:
+                        cloud_pool.sync(load_config(), ledger=led)
                     if context_lane:
                         # lane 3 serves patient context first; it yields to
                         # semantic/extraction only when nothing is due. A
@@ -5427,8 +5485,9 @@ def _main() -> int:
                     r = run_pending(led, limit=extract_limit if args.semantic else 8,
                                     budget_s=min(budget, 900),
                                     oldest_first=oldest_turn,
-                                    archived_first=oldest_turn and semantic_archive_turn,
+                                    archived_first=oldest_turn and semantic_archive_turn and cloud_cfg["mode"] != "on",
                                     fair_oldest=oldest_turn,
+                                    prioritize_patients=cloud_history and cloud_cfg["mode"] == "on",
                                     per_write_lock=True,
                                     vital_policy=vpol,
                                     workers=max(1, min(args.workers, 8)),
@@ -5542,6 +5601,8 @@ def _main() -> int:
             finally:
                 os.close(lock_fd)
     finally:
+        if cloud_pool is not None:
+            cloud_pool.close()
         led.close()
     return 0
 

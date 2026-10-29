@@ -199,7 +199,7 @@ def _contract(cfg, pid=None):
         settings = extract_llm._cloud_settings(cfg)
         if (settings["mode"] == "on"
                 and extract_llm.cloud_policy.eligible(settings, "patient_context", pid)):
-            contract["provider"] = extract_llm._cloud_contract()
+            contract["provider"] = extract_llm._cloud_contract(cfg)
     return contract
 
 
@@ -702,6 +702,14 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
             "source_sig": snapshot["source_sig"], "contract": snapshot["contract"]}
 
 
+def _saved_cloud_contract(provider):
+    import extract_llm
+    if not isinstance(provider, dict) or provider.get("backend") not in ("anthropic", "openai"):
+        return None
+    expected = extract_llm._cloud_contract({"cloud_llm": {"mode": "off", "provider": provider["backend"]}})
+    return expected if all(provider.get(key) == value for key, value in expected.items()) else None
+
+
 def _publication_contract(cfg, meta):
     stored = _route_contract(meta)
     if stored is None:
@@ -714,8 +722,7 @@ def _publication_contract(cfg, meta):
     if cfg is None:
         pinned["model"] = stored.get("model")
     if "provider" in stored:
-        import extract_llm
-        if stored["provider"] != extract_llm._cloud_contract():
+        if _saved_cloud_contract(stored["provider"]) != stored["provider"]:
             return None
         pinned["provider"] = stored["provider"]
     return pinned if stored == pinned else None
@@ -2066,9 +2073,9 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
     key = semantic_jev.api_key()
-    anthropic_key = extract_llm.cloud_policy.api_key(extract_llm.HOME)
+    cloud_key = extract_llm.cloud_policy.selected_key(extract_llm.HOME, cfg)
     scfg, errors = semantic_policy.semantic_config(cfg, key_present=bool(key))
-    if (errors or not key or not anthropic_key or scfg["mode"] == "off" or scfg["daily_request_budget"] <= 0
+    if (errors or not key or not cloud_key or scfg["mode"] == "off" or scfg["daily_request_budget"] <= 0
             or scfg["project_ids"] is not None and pid not in scfg["project_ids"]):
         return "deferred", None
     lane_cap = scfg["daily_request_budget"] - math.ceil(
@@ -2108,7 +2115,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
             live_semantic, problems = semantic_policy.semantic_config(live, key_present=bool(live_key))
             if (time.monotonic() >= deadline or not admit() or not extract_llm._writer_current(full=True)
                     or live_key != key or problems or live_semantic["mode"] == "off" or paused(ledger.db, pid)
-                    or extract_llm.cloud_policy.api_key(extract_llm.HOME) != anthropic_key
+                    or extract_llm.cloud_policy.selected_key(extract_llm.HOME, live) != cloud_key
                     or live_semantic["project_ids"] is not None and pid not in live_semantic["project_ids"]
                     or _quality_assessment(live_semantic) != assessment):
                 denied = True
@@ -2175,7 +2182,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
             _quality_mark_pass(ledger, pid, identity, claim, selected, current, scfg["match_threshold"],
                 descriptor=(semantic_runtime.patient_source_assessment_descriptor(assessment, scfg)
                             if purpose == "source" else None))
-            return "passed", {**identity, "_keys": (key, anthropic_key),
+            return "passed", {**identity, "_keys": (key, cloud_key),
                 **({"_candidate_ref":source_candidate_ref,"_source_chunks_sig":initial["chunks_sig"]}
                    if purpose == "source" else {})}
         reserve = semantic_runtime.patient_summary_usage_reserver(
@@ -2276,7 +2283,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
         _quality_mark_pass(ledger, pid, identity, claim, selected, current, scfg["match_threshold"],
                 descriptor=(semantic_runtime.patient_source_assessment_descriptor(assessment, scfg)
                             if purpose == "source" else None))
-        return "passed", {**identity, "_keys": (key, anthropic_key),
+        return "passed", {**identity, "_keys": (key, cloud_key),
                 **({"_candidate_ref":source_candidate_ref,"_source_chunks_sig":initial["chunks_sig"]}
                    if purpose == "source" else {})}
     finally:
@@ -2609,12 +2616,99 @@ def _scan(cfg, source, saved, night_id, deadline, admit, *, provider=None, metri
             **({"repairs": repairs} if repairs else {})}
 
 
+def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_dependency_repair=False):
+    """Require current post-level evidence before any context lane runs."""
+    import extract_llm
+    import semantic_drain
+    import semantic_intake_hold
+    import semantic_policy
+    import semantic_qc
+    from mcs_queries import current_qc_pred, paused, qc_source_id
+
+    db = ledger.db
+    owns_read = not db.in_transaction
+    if owns_read:
+        db.execute("BEGIN")
+    try:
+        snapshot = _snapshot(db, pid, cfg, hydrate=False)
+        policy, errors = semantic_policy.runtime_config(cfg)
+        coverage = snapshot["dependencies"].get("coverage", {})
+        repairable = (allow_dependency_repair and coverage.get("terminal") == 0
+                      and coverage.get("repairable", 0) > 0
+                      and set(coverage.get("reasons", {})) == {"retained_karte_requires_audit"})
+        if (errors or _out_of_scope(snapshot) or paused(db, pid)
+                or not snapshot["acquisition"]["complete"]
+                or not (snapshot["dependencies"]["complete"] or repairable)
+                or semantic_intake_hold.has_unstored(db, pid)
+                or complete is not None and not complete(pid)):
+            return False
+        if db.execute(f"SELECT 1 FROM messages m WHERE m.project_id=? AND "
+                      f"(({extract_llm.pending_pred(db)}) OR EXISTS ({extract_llm._hold_sql()})) LIMIT 1",
+                      (pid,)).fetchone():
+            return False
+        rows = db.execute(
+            "SELECT m.*,p.project_id AS patient_id,p.fetch_reason FROM messages m "
+            "LEFT JOIN patients p ON p.project_id=m.project_id WHERE m.project_id=?",
+            (pid,)).fetchall()
+        if not rows:
+            return False
+        for row in rows:
+            if time.monotonic() + COMMIT_MARGIN >= deadline:
+                return False
+            root = row["parent_id"] or row["message_id"]
+            if semantic_intake_hold.has_held_root(db, pid, root):
+                return False
+            if policy["mode"] == "off":
+                candidate = dict(row)
+                model = extract_llm.resolved_model(cfg)
+                latest = db.execute("SELECT meta FROM artifacts WHERE kind=? AND message_id=? "
+                                    "AND (project_id IS NULL OR project_id=?) AND "
+                                    + current_meta_pred("meta")
+                                    + " AND COALESCE(json_extract(CASE WHEN json_valid(meta) THEN meta END,"
+                                      "'$.invalidated'),0)=0 ORDER BY artifact_id DESC LIMIT 1",
+                                    (extract_llm.KIND, row["message_id"], pid)).fetchone()
+                meta = loads_dict(latest[0]) if latest else None
+                cloud = _saved_cloud_contract(meta)
+                if cloud is not None:
+                    candidate["_provider_contract"] = cloud
+                    model = cloud["model"]
+                if extract_llm.progress_for_message(db, candidate, model=model)["state"] != "complete":
+                    return False
+            elif (db.execute("SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? "
+                             "AND message_id=? AND state!='done' LIMIT 1",
+                             (semantic_policy.JOB_KIND, pid, root)).fetchone()
+                  or semantic_drain._reprocess_target_state(ledger, row, policy) != "current"):
+                return False
+        if policy["mode"] != "off" and policy["extract_qc"] == "annotate":
+            scope, params = semantic_qc.qc_scope_sql(time.time())
+            version = extract_llm.EXTRACT_VERSION
+            if db.execute(f"""SELECT 1 FROM fetch_jobs j JOIN messages m
+                ON m.message_id=j.message_id AND m.project_id=j.project_id
+                WHERE j.project_id=? AND j.kind=? AND j.state!='done' AND {scope}
+                LIMIT 1""", (pid, semantic_policy.QC_JOB_KIND, *params)).fetchone():
+                return False
+            if db.execute(f"""SELECT 1 FROM messages m JOIN artifacts a
+                ON a.artifact_id={qc_source_id(version=version)}
+                WHERE m.project_id=? AND {scope}
+                  AND CASE WHEN json_valid(a.meta) AND json_type(a.meta)='object'
+                      THEN json_extract(a.meta,'$.prefilter') IS NULL END
+                  AND NOT EXISTS (SELECT 1 FROM artifacts q WHERE q.kind=?
+                      AND q.message_id=m.message_id {current_qc_pred('q', version=version)})
+                LIMIT 1""", (pid, *params, semantic_policy.QC_ARTIFACT)).fetchone():
+                return False
+        return time.monotonic() + COMMIT_MARGIN < deadline
+    except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        return False
+    finally:
+        if owns_read:
+            db.rollback()
+
+
 def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     """Advance one fair idle-lane unit, freezing inputs across inference and commit.
 
-    ``complete(project_id)`` limits the candidates to patients whose
-    stored posts are all extracted under the current LLM generation
-    (owner rule 2026-10-18); None admits every stored patient."""
+    ``complete(project_id)`` may add an extraction gate to the current
+    post-level inference and acquisition evidence required for every patient."""
     import extract_llm
     if ledger.db.in_transaction:
         return {"status": "deferred", "done": 0, "reason": "transaction_active"}
@@ -2629,47 +2723,46 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     started = time.monotonic()
     scanned = 0
     waiting = 0
-    best, archived_best = {}, {}
-    for row in ledger.db.execute("SELECT project_id FROM patients ORDER BY is_archived,project_id"):
+    best = {}
+    patients = ledger.db.execute(
+        "SELECT p.project_id FROM patients p LEFT JOIN messages m ON m.project_id=p.project_id "
+        "GROUP BY p.project_id ORDER BY COALESCE(p.is_archived,0)!=0, "
+        "MAX(m.posted_at_ts) IS NULL, MAX(m.posted_at_ts) DESC, p.project_id").fetchall()
+    for row in patients:
         if time.monotonic() + COMMIT_MARGIN >= deadline:
             return {"status": "deferred", "done": 0}
         pid = row[0]
-        if complete is not None and not complete(pid):
-            continue
         scanned += 1
-        # Capture before the reused inputs: a concurrent publisher during
-        # selection must invalidate them just as one during inference does.
         published_version = _published_version(ledger.db, pid)
         snapshot, progress, pending = _pending(ledger.db, pid, cfg, now=now)
         if _out_of_scope(snapshot):
             continue
-        waiting += int(snapshot["unfinished"])
-        for lane, due in pending.items():
-            # Only the leader's selection-time snapshot is kept, so the
-            # chosen patient is not re-read after selection.
-            key = context_plan.candidate_key(snapshot, progress, pid, lane)
-            pool = archived_best if snapshot["scope"].get("is_archived") else best
-            if due and (lane not in pool or key < pool[lane][0]):
-                pool[lane] = (key, snapshot, progress, published_version)
+        ready = _inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
+                                 allow_dependency_repair=True)
+        if not snapshot["dependencies"]["complete"]:
+            pending["A"] = False
+        waiting += int(snapshot["unfinished"] or not ready)
+        if not ready or not any(pending.values()):
+            continue
+        best = {lane: (snapshot, progress, published_version) for lane, due in pending.items() if due}
+        break
     stats = {"scanned": scanned, "scan_ms": int((time.monotonic() - started) * 1000)}
     rotation, _ = _latest(ledger.db, PROGRESS, 0)
-    # Normal work keeps nine units out of ten; archived stored sources still
-    # receive a finite share even while new active work continues arriving.
-    if archived_best and (not best or rotation.get("units", 0) % 10 == 9):
-        best = archived_best
     lane, index, next_cursor = context_plan.lane_rotation(best, rotation)
     if lane is None:
         return {"status": "deferred" if waiting else "complete", "done": 0,
                 **({"reason": "patient_context_waiting"} if waiting else {}), **stats}
-    key, snapshot, progress, frozen_ver = best[lane]
-    pid = key[-1]
+    snapshot, progress, frozen_ver = best[lane]
     # Like extraction claims, scheduling is fenced by SQLite, not the tick's run lock.
     ledger.db.execute("BEGIN IMMEDIATE")
     try:
         if (time.monotonic() + COMMIT_MARGIN >= deadline or not admit()
                 or not extract_llm._writer_current(full=True)
                 or _published_version(ledger.db, pid) != frozen_ver
-                or _latest(ledger.db, PROGRESS, 0)[0] != rotation):
+                or _latest(ledger.db, PROGRESS, 0)[0] != rotation
+                or _snapshot(ledger.db, pid, cfg, hydrate=False)["source_sig"] != snapshot["source_sig"]
+                or not _inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
+                                        allow_dependency_repair=lane != "A")):
             ledger.db.rollback()
             return {"status": "source_changed", "done": 0, **stats}
         progress = {**progress, "last_attempt": now,
@@ -2718,6 +2811,8 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         actual = next((row for row in latest["sources"] if selected_source[0] is not None
                        and context_plan.source_key(row) == context_plan.source_key(selected_source[0])), None)
         return (admit() and latest["source_sig"] == snapshot["source_sig"]
+                and _inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
+                                     allow_dependency_repair=lane != "A")
                 and _scan_sig(ledger.db, pid) == frozen_scan_sig
                 and _published_version(ledger.db, pid) == frozen_ver
                 and (selected_source[0] is None or actual is not None
@@ -2727,7 +2822,9 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         return extract_llm._CloudProvider(ledger, {"cloud_llm": cloud_settings}, route="patient_context", project_id=pid,
             message_id=mid, unit_key=unit_key, deadline=deadline,
             current=(lambda: admit()
-                and _snapshot(ledger.db, pid, cfg, hydrate=False)["source_sig"] == snapshot["source_sig"])
+                and _snapshot(ledger.db, pid, cfg, hydrate=False)["source_sig"] == snapshot["source_sig"]
+                and _inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
+                                     allow_dependency_repair=lane != "A"))
                 if after_commit else current,
             dispatch=lambda fn, **kw: fn(), owner={"night_id": night_id, "source_sig": snapshot["source_sig"]})
 
@@ -3040,7 +3137,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 live_policy, problems = semantic_policy.runtime_config(live_cfg)
                 import semantic_jev
                 if (problems or not _quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
-                        or quality_keys != (semantic_jev.api_key(), extract_llm.cloud_policy.api_key(extract_llm.HOME))
+                        or quality_keys != (semantic_jev.api_key(), extract_llm.cloud_policy.selected_key(extract_llm.HOME, live_cfg))
                         or quality_identity["assessment"] != _quality_assessment(live_policy)
                         or not _quality_passed(ledger.db, pid, quality_identity)
                         or _quality_failed(ledger.db, pid, quality_identity)):
@@ -3052,7 +3149,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 live_policy, problems = semantic_policy.runtime_config(live_cfg)
                 import semantic_jev
                 if (problems or not _quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
-                        or source_quality_keys != (semantic_jev.api_key(), extract_llm.cloud_policy.api_key(extract_llm.HOME))
+                        or source_quality_keys != (semantic_jev.api_key(), extract_llm.cloud_policy.selected_key(extract_llm.HOME, live_cfg))
                         or source_quality_identity["assessment"] != _quality_assessment(live_policy)
                         or not _quality_passed(ledger.db, pid, source_quality_identity, expected=source_pass_content)
                         or _quality_failed(ledger.db, pid, source_quality_identity)):
@@ -3071,7 +3168,9 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 scans_now = _scan_sig(ledger.db, pid)
             selected_now = next((row for row in fresh["sources"] if selected_source[0] is not None
                                  and context_plan.source_key(row) == context_plan.source_key(selected_source[0])), None)
-            moved = (fresh["source_sig"] != snapshot["source_sig"] or scans_now != frozen_scan_sig
+            moved = (not _inference_ready(ledger, pid, cfg, deadline=deadline, complete=complete,
+                                          allow_dependency_repair=lane != "A")
+                     or fresh["source_sig"] != snapshot["source_sig"] or scans_now != frozen_scan_sig
                      or _published_version(ledger.db, pid) != frozen_ver
                      or snapshot["contract"].get(VERSION_KEY) != CURRENT_VERSION
                      or selected_source[0] is not None and (selected_now is None
@@ -3179,7 +3278,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     and final_source is not None and context_plan.source_signature(final_source) == context_plan.source_signature(source)
                     and _digest(_source_occurrence(ledger.db, pid, final_source)) == _digest(selected_occurrence[0])
                     and _digest(extract_llm.load_config()) == adoption_cfg
-                    and source_quality_keys == (semantic_jev.api_key(), extract_llm.cloud_policy.api_key(extract_llm.HOME))
+                    and source_quality_keys == (semantic_jev.api_key(), extract_llm.cloud_policy.selected_key(extract_llm.HOME, extract_llm.load_config()))
                     and _quality_scope_allowed(ledger.db, pid, live_policy, [final_source])
                     and context_queries.patient_context_scope(ledger.db, pid).get('fetch_reason') not in ('forbidden', 'permission_denied', 'access_revoked')
                     and admit() and extract_llm._writer_current(full=True) and time.monotonic() < deadline

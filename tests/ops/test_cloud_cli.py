@@ -190,9 +190,9 @@ def test_resume_rechecks_requirements_inside_receipt_writer(world, monkeypatch, 
     root, path, config = world
     _key(root)
     if blocked == "key":
-        monkeypatch.setattr(cloud_policy, "api_key", lambda: None)
+        monkeypatch.setattr(cloud_policy, "api_key", lambda root=None: None)
     elif blocked == "price":
-        monkeypatch.setattr(cloud_policy, "pricing_valid", lambda: False)
+        monkeypatch.setattr(cloud_policy, "pricing_valid", lambda **kw: False)
     else:
         config["cloud_llm"]["model"] = "invalid"
         (root / "config.json").write_text(json.dumps(config))
@@ -448,14 +448,18 @@ def test_current_context_targets_follow_runtime_signatures_without_message_times
     assert report["recurring_basis"] == "stored_message_timestamp_proxy"
 
 
-def test_current_context_planning_never_reads_an_implicit_installation_key(world, monkeypatch):
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+def test_current_context_planning_never_reads_an_implicit_installation_key(world, monkeypatch, provider):
     root, _, config = world
-    original = cloud_policy.api_key
-    def key(path=None):
+    (root / ".env").write_text(("MCS_OPENAI_API_KEY" if provider == "openai" else "MCS_ANTHROPIC_API_KEY") + "=synthetic\n")
+    (root / ".env").chmod(0o600)
+    original = cloud_policy.provider_key
+    def key(name, path=None):
         assert path == str(root), "planning must not inspect a different installation"
-        return original(path)
-    monkeypatch.setattr(cloud_policy, "api_key", key)
-    assert cli.observe(config, root=str(root))["routes"]["patient_context"]["targets"] == 1
+        return original(name, path)
+    monkeypatch.setattr(cloud_policy, "provider_key", key)
+    report = cli.observe(config, root=str(root))
+    assert report["routes"]["patient_context"]["targets"] == 1 and report["provider"] == provider
 
 
 def test_estimate_separates_chunk_repair_and_shadow_without_fabricating_output_usage(world):

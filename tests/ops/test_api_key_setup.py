@@ -27,7 +27,7 @@ def test_save_selected_key_preserves_other_credentials_and_never_prints_values(t
     path = tmp_path / '.env'
     path.write_text('MCS_PASSWORD=synthetic-password\nOTHER=keep\nOTHER=keep-again\n')
     path.chmod(0o600)
-    answers(terminal, ['1', '2', '1'], ['synthetic-jev-key'])
+    answers(terminal, ['1', '2', '2', '1'], ['synthetic-jev-key'])
     assert api_key_setup.run(tmp_path) == 0
     assert path.read_text() == ('MCS_PASSWORD=synthetic-password\nOTHER=keep\nOTHER=keep-again\n'
                                 'TYPESAFE_API_KEY=synthetic-jev-key\n')
@@ -43,29 +43,40 @@ def test_declining_save_preserves_file(tmp_path, terminal):
     path.write_text('MCS_PASSWORD=synthetic-password\n')
     path.chmod(0o600)
     before = path.read_bytes()
-    answers(terminal, ['1', '2', '2'], ['synthetic-key'])
+    answers(terminal, ['1', '2', '2', '2'], ['synthetic-key'])
     assert api_key_setup.run(tmp_path) == 0
     assert path.read_bytes() == before
 
 
 def test_both_keys_and_quoted_characters_round_trip(tmp_path, terminal):
-    answers(terminal, ['1', '1', '1'], ['synthetic-jev', 'synthetic-"anthropic'])
+    answers(terminal, ['1', '1', '2', '1'], ['synthetic-jev', 'synthetic-"anthropic'])
     assert api_key_setup.run(tmp_path) == 0
     assert mcs_util.private_env_value('TYPESAFE_API_KEY', tmp_path) == 'synthetic-jev'
     assert mcs_util.private_env_value('MCS_ANTHROPIC_API_KEY', tmp_path) == 'synthetic-"anthropic'
+
+
+def test_openai_key_can_be_added_without_replacing_other_keys(tmp_path, terminal, capsys):
+    path = tmp_path / '.env'
+    path.write_text('MCS_ANTHROPIC_API_KEY=synthetic-retained\n')
+    path.chmod(0o600)
+    answers(terminal, ['2', '2', '1', '1'], ['synthetic-openai'])
+    assert api_key_setup.run(tmp_path) == 0
+    assert mcs_util.private_env_value('MCS_OPENAI_API_KEY', tmp_path) == 'synthetic-openai'
+    assert mcs_util.private_env_value('MCS_ANTHROPIC_API_KEY', tmp_path) == 'synthetic-retained'
+    assert 'synthetic-openai' not in capsys.readouterr().out
 
 
 def test_explicit_change_replaces_exported_duplicate(tmp_path, terminal):
     path = tmp_path / '.env'
     path.write_text('export TYPESAFE_API_KEY=synthetic-old\nOTHER=keep\n')
     path.chmod(0o600)
-    answers(terminal, ['1', '2', '1'], ['synthetic-new'])
+    answers(terminal, ['1', '2', '2', '1'], ['synthetic-new'])
     assert api_key_setup.run(tmp_path) == 0
     assert path.read_text() == 'OTHER=keep\nTYPESAFE_API_KEY=synthetic-new\n'
 
 
 def test_post_publication_failure_reports_unknown(tmp_path, terminal, capsys):
-    answers(terminal, ['1', '2', '1'], ['synthetic-key'])
+    answers(terminal, ['1', '2', '2', '1'], ['synthetic-key'])
     original = api_key_setup.safe_io.atomic_write
     def write(*args, **kwargs):
         original(*args, **kwargs)
@@ -86,7 +97,7 @@ def test_concurrent_change_is_not_overwritten(tmp_path, terminal, capsys):
         return 'synthetic-key'
     terminal.setattr(api_key_setup.getpass, 'getpass', enter)
     terminal.setattr('builtins.input', lambda _: next(selections))
-    selections = iter(['1', '2', '1'])
+    selections = iter(['1', '2', '2', '1'])
     assert api_key_setup.run(tmp_path) == 1
     assert path.read_text() == 'MCS_PASSWORD=after\n'
     assert 'synthetic-key' not in capsys.readouterr().out
