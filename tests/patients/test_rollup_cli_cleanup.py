@@ -10,6 +10,7 @@ import rollup
 @pytest.mark.parametrize("error", [RuntimeError, KeyboardInterrupt])
 def test_rollup_cli_cleanup_on_failure(monkeypatch, stage, error):
     events = []
+    monkeypatch.setattr(rollup, "load_config", lambda: {})
     monkeypatch.setattr(rollup.sys, "argv", ["rollup", "--project", "1"])
     monkeypatch.setattr(rollup, "acquire_run_lock", lambda: 987654)
     monkeypatch.setattr(rollup.os, "close", lambda fd: events.append(("release", fd)))
@@ -24,7 +25,7 @@ def test_rollup_cli_cleanup_on_failure(monkeypatch, stage, error):
             raise error("synthetic initialization failure")
         return SimpleNamespace(close=close)
 
-    def rebuild(*args):
+    def rebuild(*args, **kwargs):
         if stage == "rebuild":
             raise error("synthetic rebuild failure")
         return 1

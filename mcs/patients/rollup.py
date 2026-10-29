@@ -49,7 +49,7 @@ import history_walk
 from patient_context import context_items, extract_context, merged_context
 from mcs_queries import (decode_current_extractions, EXTRACTION_KINDS_SQL, JST, karte_summary_current, karte_summary_block,
                          item_unverified, current_extract_pred, current_fact_pred)
-from mcs_util import HOME, html_to_text, locate_quote_span, loads_dict, strict_json, payload_hash
+from mcs_util import HOME, html_to_text, locate_quote_span, loads_dict, strict_json, payload_hash, load_config
 from writer_lock import acquire_run_lock
 from semantic_projection import PROJECTION_VERSION
 from self_identity import normalize_sender_id
@@ -1869,7 +1869,7 @@ def main() -> int:
         led = Ledger(DB)
         ids = args.project or [r["project_id"] for r in
                                led.db.execute("SELECT project_id FROM patients")]
-        n = rebuild_many(led, ids)
+        n = rebuild_many(led, ids, cfg=load_config())
         print(json.dumps({"rollups": n}, ensure_ascii=False))
         return 0
     finally:
