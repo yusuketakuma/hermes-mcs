@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "通知の受領記録が書込み待ちのまま残る問題を修正",
+  "summary": "通知の受領記録を保存する処理が他の書込みと重なった場合、短いロック解放の間にも保存を再試行します。新しい操作が来なくても定期的に再試行し、受領記録が反映されないまま残ることを防ぎます。",
+  "upgrade": "通常の更新で反映します。Hermesモードでは更新後のサービス設定の再読込みが必要です。患者情報の外部送信、通知の再送条件、既存の承認条件は変更しません。",
+  "details": [
+    "commands-onlyにも既存の世代・更新確認付きロック待ちを適用し、その待機を480秒の実行予算に含める。期限を過ぎた場合は後続処理を開始しない。通常収集の実行予算の起点は変更しない。",
+    "Hermesのlocal.mcs-intは既存のWatchPathsに5秒間隔の定期起動を追加する。同じサービスの実行を使い、新しいworkerや無制限の処理は追加しない。"
+  ],
+  "refs": ["mcs/ingest/run_check.py", "deployment/launchagents/local.mcs-int.plist", "tests/ingest/test_run_check_stages.py", "tests/ops/test_service_contract.py"]
+}

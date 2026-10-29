@@ -92,3 +92,16 @@ def test_job_identity_strip_does_not_strip_detached_update_flags():
         "_HERMES_GATEWAY": "1", "PATH": "/synthetic/bin"}
     assert update_launch.launch_environment(original, detached=True) == {"PATH": "/synthetic/bin"}
     assert original["XPC_SERVICE_NAME"] == "synthetic-service"
+
+
+def test_command_watcher_retries_pending_work_without_another_directory_event():
+    import plistlib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    text = (root / "deployment/launchagents/local.mcs-int.plist").read_text()
+    agent = plistlib.loads(contract.render_agent(text, {"DATA": "/synthetic/root/data"}).encode())
+    assert agent["WatchPaths"] == ["/synthetic/root/data/cmd_int"]
+    assert agent["StartInterval"] == agent["ThrottleInterval"] == 5
+    assert agent["ProgramArguments"][-2:] == ["--json", "--commands-only"]
+    assert not agent.get("KeepAlive")

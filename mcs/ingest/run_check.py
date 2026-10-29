@@ -1014,11 +1014,14 @@ def _main() -> int:
 
     os.makedirs(os.path.join(HOME, "data"), exist_ok=True)
 
-    # Scheduled work waits briefly for a DB writer. Background transport
-    # releases this lock; command watchers stay non-blocking.
+    deadline = time.monotonic() + RUN_DEADLINE_S if args.commands_only else None
+    # Command receipts also wait for short writer windows. The existing
+    # generation/update fence applies. Only commands count waiting against
+    # their run budget; scheduled collection retains its full work budget.
     lock_fd = acquire_run_lock(LOCKFILE)
-    if lock_fd is None and not args.commands_only:
-        lock_fd = writer_lock.wait_run_lock(LOCKFILE, wait_s=LOCK_WAIT_S,
+    if lock_fd is None:
+        lock_fd = writer_lock.wait_run_lock(LOCKFILE, wait_s=(LOCK_WAIT_S if deadline is None else min(
+                                                LOCK_WAIT_S, max(0, deadline - time.monotonic()))),
                                                 expected_code_stamp=_CODE_STAMP,
                                                 marker_path=os.path.join(HOME, "data", UPDATE_MARKER_NAME))
     if lock_fd is None:
@@ -1058,7 +1061,12 @@ def _main() -> int:
         print(json.dumps({"ok": False, "error": "code_changed_or_update_pending"}))
         return 3
 
-    deadline = time.monotonic() + RUN_DEADLINE_S
+    if deadline is None:
+        deadline = time.monotonic() + RUN_DEADLINE_S
+    elif time.monotonic() >= deadline:
+        os.close(lock_fd)
+        print(json.dumps({"ok": False, "error": "run_deadline_exceeded"}))
+        return 3
     if args.commands_only:
         return _commands_only(lock_fd, deadline)
     import notify_spool

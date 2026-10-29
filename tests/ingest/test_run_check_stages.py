@@ -2192,8 +2192,8 @@ def test_tick_waits_for_a_run_lock_released_between_batches(
 
 @pytest.mark.parametrize("argv, waits", [
     (["run_check", "--no-notify"], True),
-    (["run_check", "--commands-only"], False)])
-def test_lock_held_exit_waits_only_for_scheduled_runs(
+    (["run_check", "--commands-only"], True)])
+def test_lock_held_exit_waits_for_scheduled_and_command_runs(
         tmp_path, monkeypatch, capsys, argv, waits):
     data = _point_run_check_at(tmp_path, monkeypatch)
     held = run_check.acquire_run_lock(str(data / "run.lock"))
@@ -2207,6 +2207,97 @@ def test_lock_held_exit_waits_only_for_scheduled_runs(
         os.close(held)
     assert bool(waited) is waits
     assert "lock_held" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("fence", [None, "marker", "code_changed"])
+def test_command_worker_catches_short_lock_window_without_crossing_update(
+        tmp_path, monkeypatch, fence):
+    data = _point_run_check_at(tmp_path, monkeypatch)
+    fd = os.open(str(tmp_path / "synthetic-lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    clock, calls = [100.0], []
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(run_check.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    monkeypatch.setattr(run_check, "_CODE_STAMP", 123)
+    monkeypatch.setattr(writer_lock, "code_stamp", lambda: 124 if fence == "code_changed" else 123)
+    monkeypatch.setattr(writer_lock, "code_stamp_checked", lambda: 123)
+    monkeypatch.setattr(run_check, "acquire_run_lock", lambda path: None)
+    monkeypatch.setattr(writer_lock, "acquire_run_lock",
+                        lambda path: fd if clock[0] >= 100.6 else None)
+    if fence == "marker":
+        (data / writer_lock.UPDATE_MARKER_NAME).write_text("synthetic update")
+
+    def commands(held_fd, deadline):
+        calls.append((held_fd, deadline, clock[0]))
+        os.close(held_fd)
+        return 0
+
+    monkeypatch.setattr(run_check, "_commands_only", commands)
+    monkeypatch.setattr(sys, "argv", ["run_check", "--commands-only"])
+    try:
+        assert run_check.main() == (0 if fence is None else 3)
+        if fence is None:
+            assert len(calls) == 1 and calls[0][0] == fd
+            assert calls[0][1] == 100 + run_check.RUN_DEADLINE_S
+            assert calls[0][2] > 100  # lock waiting spent this same budget
+        else:
+            assert calls == []
+        with pytest.raises(OSError):
+            os.fstat(fd)  # every accepted or refused lock is released
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+def test_command_worker_does_not_reset_budget_after_slow_entry_check(
+        tmp_path, monkeypatch):
+    _point_run_check_at(tmp_path, monkeypatch)
+    clock, calls = [100.0], []
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
+
+    def slow_entry_check():
+        clock[0] += run_check.RUN_DEADLINE_S + 1
+        return True
+
+    monkeypatch.setattr(run_check, "_entry_code_current", slow_entry_check)
+    monkeypatch.setattr(run_check, "_commands_only", lambda *args: calls.append(args) or 0)
+    monkeypatch.setattr(sys, "argv", ["run_check", "--commands-only"])
+    assert run_check.main() == 3
+    assert calls == []
+    fd = run_check.acquire_run_lock(run_check.LOCKFILE)
+    assert fd is not None
+    os.close(fd)
+
+
+def test_scheduled_worker_keeps_full_budget_after_waiting_for_writer(
+        tmp_path, monkeypatch):
+    _point_run_check_at(tmp_path, monkeypatch)
+    clock, deadlines = [100.0], []
+    fd = os.open(str(tmp_path / "synthetic-lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(run_check, "acquire_run_lock", lambda path: None)
+
+    def wait(path, **kwargs):
+        assert kwargs["wait_s"] == run_check.LOCK_WAIT_S
+        clock[0] += run_check.LOCK_WAIT_S
+        return fd
+
+    monkeypatch.setattr(writer_lock, "wait_run_lock", wait)
+    monkeypatch.setattr(run_check, "_entry_code_current", lambda: True)
+    monkeypatch.setattr(run_check, "_config", lambda: {})
+    monkeypatch.setattr(run_check, "MCSAdapter", lambda **kwargs: SimpleNamespace(
+        set_deadline=deadlines.append))
+
+    def refuse_ledger(*args, **kwargs):
+        raise RuntimeError("synthetic stop before database work")
+
+    monkeypatch.setattr(run_check, "Ledger", refuse_ledger)
+    monkeypatch.setattr(sys, "argv", ["run_check", "--no-notify"])
+    assert run_check.main() == 1
+    assert deadlines == [100 + run_check.LOCK_WAIT_S + run_check.RUN_DEADLINE_S]
+    with pytest.raises(OSError):
+        os.fstat(fd)
 
 
 def test_jobs_only_health_keeps_last_unread_time(tmp_path, monkeypatch):
