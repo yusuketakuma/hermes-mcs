@@ -15,6 +15,14 @@ import mcs_requests
 import mcs_util
 
 
+def _config():
+    from mcs_config import validate_config
+    cfg = mcs_util.load_config_checked()
+    if cfg is None or validate_config(cfg)[0]:
+        raise ValueError("config_invalid")
+    return cfg
+
+
 def main(argv=None):
     """失敗理由の確認と、診断状態を照合する再試行を行います。"""
     parser = JapaneseArgumentParser(prog="mcs jobs", description=__doc__)
@@ -35,7 +43,6 @@ def main(argv=None):
     retry.add_argument("--actor", default="local-operator")
     args = parser.parse_args(argv)
     try:
-        cfg = mcs_util.load_config()
         if args.action == "retry":
             # Reject unconfirmed or malformed input before opening even a reader.
             req = {"version": 1, "cmd": "ops.retry", "command_id": args.command_id or str(uuid.uuid4()),
@@ -48,6 +55,7 @@ def main(argv=None):
             if mcs_requests.validate(req):
                 print("再試行には有効な診断情報、--confirm-human、--reason が必要です。")
                 return 1
+        cfg = _config()
         with cloud_cli._reader() as (db, _deadline):
             if args.action == "failed":
                 report = ({"jobs": [job_diagnostics.diagnose_job(db, cfg, args.job_id)], "truncated": False}
@@ -80,7 +88,7 @@ def main(argv=None):
             if (path.parent / "update_in_progress.marker").exists() or code_stamp() != expected_code:
                 raise ValueError("update_in_progress")
             # Reload under the writer lock: a changed scope must invalidate the diagnosis.
-            cfg = mcs_util.load_config()
+            cfg = _config()
             with closing(Ledger(str(path))) as ledger:
                 receipt = mcs_requests.apply_command(ledger, req, cfg=cfg)
         finally:

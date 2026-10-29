@@ -26,9 +26,10 @@ def world(tmp_path, monkeypatch):
     job = ledger.job_add('semantic', 1, 42, payload=payload)
     ledger.db.execute("UPDATE fetch_jobs SET state='failed',attempts=6 WHERE job_id=?", (job,))
     ledger.db.commit()
-    cfg = {'semantic': {'mode': 'assist', 'project_ids': [1]}}
+    cfg = {'mcs_login_id': 'synthetic', 'notify_target': 'slack:#synthetic',
+           'semantic': {'mode': 'assist', 'project_ids': [1]}}
     monkeypatch.setattr(mcs_util, 'HOME', str(root))
-    monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda: cfg)
     yield ledger, job, payload, cfg
     ledger.close()
 
@@ -138,3 +139,33 @@ def test_retry_below_limit_does_not_extend_attempts(world):
     assert mcs_requests.apply_command(ledger, req, cfg=cfg)['outcome'] == 'applied'
     row = ledger.db.execute('SELECT attempts,payload FROM fetch_jobs WHERE job_id=?', (job,)).fetchone()
     assert row[0] == 2 and 'manual_attempt_limit' not in json.loads(row[1])
+
+
+@pytest.mark.parametrize('invalid', [None, {}, {'mcs_login_id': 123}])
+def test_cli_invalid_config_never_opens_reader(world, monkeypatch, invalid):
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda: invalid)
+    monkeypatch.setattr(cloud_cli, '_reader', lambda: pytest.fail('invalid config read'))
+    assert job_cli.main(['failed']) == 1
+
+
+def test_config_becomes_unreadable_under_writer_lock_changes_nothing(world, monkeypatch):
+    ledger, job, payload, cfg = world
+    req = request(world)
+    configs = iter([cfg, None])
+    monkeypatch.setattr(mcs_util, 'load_config_checked', lambda: next(configs))
+    before = ledger.db.total_changes
+    args = ['retry', '--job-id', str(job), '--diagnosis-hash', req['diagnosis_hash'],
+            '--expected-payload-hash', req['expected_payload_hash'], '--remediation', req['remediation'],
+            '--additional-attempts', '1', '--confirm-human', '--reason', req['reason'], '--command-id', req['command_id']]
+    assert job_cli.main(args) == 1
+    assert ledger.db.total_changes == before
+    assert ledger.db.execute('SELECT count(*) FROM command_receipts').fetchone()[0] == 0
+    assert ledger.db.execute('SELECT state FROM fetch_jobs WHERE job_id=?', (job,)).fetchone()[0] == 'failed'
+
+
+@pytest.mark.parametrize('cfg', [None, {}])
+def test_direct_diagnosed_retry_requires_valid_config(world, cfg):
+    ledger, job, payload, _ = world
+    req = request(world)
+    assert mcs_requests.apply_command(ledger, req, cfg=cfg)['error'] == 'config_invalid'
+    assert ledger.db.execute('SELECT state FROM fetch_jobs WHERE job_id=?', (job,)).fetchone()[0] == 'failed'
