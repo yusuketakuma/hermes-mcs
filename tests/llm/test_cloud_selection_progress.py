@@ -1,5 +1,6 @@
 """Cloud selection progresses past unreceipted replies without widening history scope."""
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -55,6 +56,46 @@ def test_receipted_work_behind_large_invalid_prefix_eventually_selected(blocked_
             break
     assert [row["project_id"] for row in observed] == [513]
     assert all(row["message_id"] == 513 for row in observed)
+
+
+def test_isolated_semantic_selection_reaches_receipted_tail(blocked_prefix):
+    led, _ = blocked_prefix
+    selected = semantic_drain._select_cloud_due(
+        led, "backlog", ("semantic",), False, 1,
+        deadline=time.monotonic() + 60, isolated=True)[0]
+    assert [row["project_id"] for row in selected] == [513]
+    assert cloud_policy.history_thread_allowed(led.db, 513, 513)
+
+
+def test_expired_selection_deadline_is_not_an_empty_success(blocked_prefix):
+    led, _ = blocked_prefix
+    with pytest.raises(semantic_drain._CloudSelectionIncomplete):
+        semantic_drain._select_cloud_due(
+            led, "backlog", ("semantic",), False, 1,
+            deadline=time.monotonic() - 1, isolated=True)
+
+
+def test_selection_deadline_during_candidate_scan_is_incomplete(blocked_prefix, monkeypatch):
+    led, _ = blocked_prefix
+    clock = [time.monotonic()]
+    deadline = clock[0] + 10
+    monkeypatch.setattr(semantic_drain, "time", SimpleNamespace(
+        monotonic=lambda: clock[0], time=time.time, perf_counter=time.perf_counter))
+    original = cloud_policy.history_target_ready
+    checked = []
+
+    def expire_after_first(db, pid, mid):
+        checked.append(mid)
+        result = original(db, pid, mid)
+        clock[0] = deadline + 1
+        return result
+
+    monkeypatch.setattr(cloud_policy, "history_target_ready", expire_after_first)
+    with pytest.raises(semantic_drain._CloudSelectionIncomplete):
+        semantic_drain._select_cloud_due(
+            led, "backlog", ("semantic",), False, 1,
+            deadline=deadline, isolated=True)
+    assert checked
 
 
 @pytest.mark.parametrize("lane", ["semantic", "extract"])
