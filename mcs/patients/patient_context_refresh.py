@@ -2434,13 +2434,16 @@ def lane_metrics(db) -> dict:
     lanes = {lane: dict.fromkeys(("length_stop", "unsupported", "other_failure", "split", "repair"), 0)
              for lane in "ABC"}
     for row in db.execute(
-            "SELECT CASE WHEN a.kind=? THEN 'A' WHEN json_extract(a.content,'$.complete') THEN 'C' "
-            "ELSE 'B' END AS lane, json_extract(a.content,'$.failure') AS failure, "
-            "SUM(COALESCE(json_extract(a.content,'$.split'),0)>0) AS split, "
-            "SUM(COALESCE(json_extract(a.content,'$.repairs'),0)>0) AS repair, COUNT(*) AS n "
+            "SELECT CASE WHEN a.kind=? THEN 'A' WHEN json_extract(CASE WHEN json_valid(a.content) THEN a.content END,'$.complete') THEN 'C' "
+            "ELSE 'B' END AS lane, json_extract(CASE WHEN json_valid(a.content) THEN a.content END,'$.failure') AS failure, "
+            "SUM(COALESCE(json_extract(CASE WHEN json_valid(a.content) THEN a.content END,'$.split'),0)>0) AS split, "
+            "SUM(COALESCE(json_extract(CASE WHEN json_valid(a.content) THEN a.content END,'$.repairs'),0)>0) AS repair, "
+            "COUNT(*) AS n, SUM(NOT json_valid(a.content)) AS invalid "
             "FROM artifacts a JOIN patients p ON p.project_id=a.project_id "
-            "WHERE a.kind IN (?,?) AND json_valid(a.content) AND "
+            "WHERE a.kind IN (?,?) AND COALESCE(p.is_archived,0)=0 AND "
             + current_meta_pred("a.meta", target=CURRENT_VERSION) + " GROUP BY 1,2", (PROGRESS, PROGRESS, SCAN)):
+        if row[5]:
+            raise ValueError("invalid patient context observation")
         lane, failure = row[0], row[1]
         if failure:
             lanes[lane][_LANE_CODES.get(failure, "other_failure")] += row[4]
@@ -2449,7 +2452,7 @@ def lane_metrics(db) -> dict:
             lanes["B"]["repair"] += row[3]
     published = db.execute(
         "SELECT COUNT(*) FROM artifacts a JOIN patients p ON p.project_id=a.project_id "
-        "WHERE a.kind=? AND " + current_meta_pred("a.meta", target=CURRENT_VERSION)
+        "WHERE a.kind=? AND COALESCE(p.is_archived,0)=0 AND " + current_meta_pred("a.meta", target=CURRENT_VERSION)
         + " AND CASE WHEN json_valid(a.meta) "
         "THEN json_extract(a.meta,'$.published')=1 ELSE 0 END", (KIND,)).fetchone()[0]
     return {"lanes": lanes, "published": published}
