@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import glob
 import http.client
 import json
 import os
@@ -73,8 +72,18 @@ def _source(root, source):
         return _read_json(path)
     if os.path.islink(path) or not os.path.isdir(path):
         return None                       # an absent directory is unknown, not "0 workers"
-    files = sorted(glob.glob(os.path.join(path, "*.json")))[:MAX_DIR_FILES]
-    return [doc for doc in map(_read_json, files) if isinstance(doc, dict)]
+    try:
+        files = []
+        with os.scandir(path) as entries:
+            for entry in entries:
+                if not entry.name.startswith(".") and entry.name.endswith(".json"):
+                    files.append(entry.path)
+                    if len(files) > MAX_DIR_FILES:
+                        return None
+    except OSError:
+        return None
+    docs = [_read_json(path) for path in sorted(files)]
+    return docs if all(isinstance(doc, dict) for doc in docs) else None
 
 
 JOB_PREFIXES = ("ai.mcs.", "local.mcs", "org.mcs.", "ai.hermes.")
@@ -116,16 +125,19 @@ def _llm_get(path, *, endpoint):
         with opener.open(urljoin(endpoint, path), timeout=2) as response:
             if response.status != 200:
                 return None
-            return json.loads(response.read(65537)[:65536])
+            body = response.read(65537)
+            return json.loads(body) if len(body) <= 65536 else None
     except (OSError, ValueError, http.client.HTTPException):
         return None
 
 
 def _network():
-    route = _run(["/sbin/route", "-n", "get", "default"]) or ""
+    route = _run(["/sbin/route", "-n", "get", "default"])
+    if not route:
+        return {"default_route": None, "interface": None}
     iface = next((line.split(":", 1)[1].strip() for line in route.splitlines()
                   if line.strip().startswith("interface:")), None)
-    out = {"default_route": iface is not None,
+    out = {"default_route": True if iface else None,
            "interface": iface if iface and CODE.fullmatch(iface) else None}
     for line in (_run(["/usr/sbin/netstat", "-ibn"]) or "").splitlines()[1:]:
         cols = line.split()
@@ -139,10 +151,19 @@ def _network():
 
 def _jobs():
     running, nonzero = 0, []
-    for line in (_run(["/bin/launchctl", "list"]) or "").splitlines()[1:]:
+    output = _run(["/bin/launchctl", "list"])
+    lines = output.splitlines() if output else []
+    if not lines or lines[0].split() != ["PID", "Status", "Label"]:
+        return None
+    for line in lines[1:]:
         cols = line.split("\t")
-        if len(cols) != 3 or not cols[2].startswith(JOB_PREFIXES) or not CODE.fullmatch(cols[2]):
+        if len(cols) != 3:
+            return None
+        if not cols[2].startswith(JOB_PREFIXES):
             continue
+        if (not CODE.fullmatch(cols[2]) or (cols[0] != "-" and not cols[0].isdigit())
+                or (cols[1] != "-" and not re.fullmatch(r"-?[0-9]+", cols[1]))):
+            return None
         if cols[0] != "-":
             running += 1
         elif cols[1] not in ("0", "-"):
@@ -161,7 +182,8 @@ def host_status(root) -> dict:
     endpoint, _model = local_llm.resolve(mcs_util.load_config())
     slots = _llm_get("/slots", endpoint=endpoint)
     health = _llm_get("/health", endpoint=endpoint)
-    busy = ([s for s in slots if isinstance(s, dict)] if isinstance(slots, list) else None)
+    valid_slots = isinstance(slots, list) and all(isinstance(s, dict) for s in slots)
+    valid_busy = valid_slots and all(type(s.get("is_processing")) is bool for s in slots)
     return {
         "cpu": {"count": os.cpu_count(), "load1": load[0], "load5": load[1], "load15": load[2]},
         "memory": {"total_bytes": _int(_sysctl("hw.memsize")),
@@ -170,10 +192,9 @@ def host_status(root) -> dict:
         "disk": {"free_mb": usage.free // 2**20 if usage else None,
                  "total_mb": usage.total // 2**20 if usage else None},
         "uptime_s": int(time.time()) - int(boot[1]) if boot else None,
-        "llm": {"health": (health.get("status") if isinstance(health, dict) else None) or "down",
-                "slots_total": len(busy) if busy is not None else None,
-                "slots_busy": sum(1 for s in busy if s.get("is_processing") is True)
-                              if busy is not None else None},
+        "llm": {"health": health.get("status") if isinstance(health, dict) else None,
+                "slots_total": len(slots) if valid_slots else None,
+                "slots_busy": sum(1 for s in slots if s["is_processing"]) if valid_busy else None},
         "network": _network(),
         "jobs": _jobs(),
     }
@@ -247,8 +268,10 @@ def snapshot(root=None, spec=None, now=None) -> dict:
                     raw = {}
                     for doc in data:
                         key = doc.get(field["count_by"])
-                        if isinstance(key, str) and CODE.fullmatch(key):
-                            raw[key] = raw.get(key, 0) + 1
+                        if not isinstance(key, str) or not CODE.fullmatch(key):
+                            raw = None
+                            break
+                        raw[key] = raw.get(key, 0) + 1
             else:
                 raw = _dig(data, field.get("path", ""))
         if raw is None and field.get("nullable") is True and src != "build" \
