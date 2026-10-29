@@ -156,13 +156,20 @@ def _v_scan(req: dict, base: set) -> str | None:
 
 def _v_retry(req: dict, base: set) -> str | None:
     allowed = base | {"job_id", "expected_payload_hash",
-                      "additional_attempts", "reason"}
+                      "additional_attempts", "reason", "diagnosis_hash", "remediation"}
     if req.keys() - allowed:
         return "unknown_field"
     if not positive(req.get("job_id")):
         return "bad_job_id"
     if not valid_hash(req.get("expected_payload_hash")):
         return "bad_payload_hash"
+    if "diagnosis_hash" in req or "remediation" in req:
+        if not valid_hash(req.get("diagnosis_hash")):
+            return "bad_diagnosis_hash"
+        if req.get("remediation") not in ("permission", "scope", "source", "budget", "quality", "model", "jev", "investigate"):
+            return "bad_remediation"
+        if not valid_text(req.get("reason"), 2000):
+            return "bad_reason"
     if "additional_attempts" in req:
         if not bounded_integer(req["additional_attempts"],
                             1, _MAX_ADDITIONAL_ATTEMPTS):

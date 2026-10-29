@@ -4,6 +4,7 @@ import json
 import time
 
 from inference_version import CURRENT_VERSION, VERSION_KEY
+from mcs_util import payload_hash
 import semantic_drain as drain
 import semantic_runtime as runtime
 from semantic_testkit import _FakeJev, _cfg, _llm, _seeded
@@ -113,6 +114,8 @@ def test_exception_first_cause_is_job_local_and_qc_gets_empty_diagnostics(tmp_pa
         result = drain.run_due(db, config, errors, time.monotonic() + 300,
                               jev_client=_FakeJev(), llm_fn=_llm, max_jobs=2)
         first, second = result["job_metrics"]
+        assert first["payload_digest"] == payload_hash(json.loads(semantic["payload"]))
+        assert first["attempts"] == semantic["attempts"]
         assert first["status"] == "error" and first["retry_reason"] == "before_exception"
         assert first["summary_validation_error"] == "summary_bad" and first["loops_rejected"] == "loop_bad"
         assert second["kind"] == drain.QC_JOB_KIND and second["status"] == "done"
