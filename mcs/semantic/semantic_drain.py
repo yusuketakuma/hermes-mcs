@@ -180,13 +180,14 @@ def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts):
             return None, True
         proof = meta.get('provider_provenance')
         producer = _summary_producer({'content': content, 'meta': meta}, fp, policy, revision)
-        if (not is_current(meta) or meta.get('invalidated') or meta.get('stage') != 'empty_repair'
+        if (not is_current(meta) or meta.get('invalidated') or meta.get('stale')
+                or meta.get('schema') != SCHEMA_VERSION or meta.get('stage') != 'empty_repair'
                 or meta.get('fingerprint') != fp or meta.get('policy_fingerprint') != policy
                 or meta.get('publication_mode') != mode or meta.get('target_revision') != revision
                 or type(meta.get('repair_artifact_id')) is not int or meta['repair_artifact_id'] != marker['artifact_id']
                 or marker_content != {'target_message_id': mid}
                 or marker_meta.get('policy_fingerprint') != policy
-                or marker_meta.get('repair_count') != 1
+                or type(marker_meta.get('repair_count')) is not int or marker_meta['repair_count'] != 1
                 or type(content.get('target_message_id')) is not int or content['target_message_id'] != mid
                 or not isinstance(content.get('claims'), list) or not content['claims']
                 or meta.get('claim_input_binding') != _claim_input_binding(pid, mid, fp, policy, revision, content, facts)
