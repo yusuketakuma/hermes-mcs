@@ -130,3 +130,16 @@ def test_local_to_cloud_updates_one_icon_without_provider_label(led, provider_na
     assert heading.startswith('☁️ ') and '💻' not in heading
     assert provider_name not in heading
     assert notify_render.content_fingerprint(before) != notify_render.content_fingerprint(after)
+
+
+def test_openai_reply_switches_to_local_and_refreshes_fingerprint(led):
+    _seed_thread(led)
+    _artifact(led, 101, 'cloud', provider_name='openai')
+    _dispatch(led, _intent(led, payload={'message_ids': [100, 101]}))
+    reply = {**_card(led), 'anchor_key': json.dumps({'source': 101})}
+    before, heading = _heading(led, reply)
+    assert before['shown'] == [101] and heading.startswith('☁️ ')
+    _artifact(led, 101, 'local')
+    after, heading = _heading(led, reply)
+    assert heading.startswith('💻 ')
+    assert notify_render.content_fingerprint(before) != notify_render.content_fingerprint(after)
