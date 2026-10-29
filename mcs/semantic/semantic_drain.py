@@ -134,6 +134,93 @@ def _claim_input_binding(pid, mid, fp, policy, revision, summary, facts):
                                   "claims": summary.get("claims"), "facts": facts})
 
 
+def _empty_repair_prior(db, pid, mid):
+    """Identify the latest summary and audit without replacing either."""
+    refs = []
+    for kind in (KIND_SUMMARY, KIND_AUDIT):
+        row = db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? '
+                         'AND project_id=? AND message_id=? ORDER BY artifact_id DESC LIMIT 1',
+                         (kind, pid, mid)).fetchone()
+        if row is None:
+            refs.append(None)
+            continue
+        content, meta = strict_json(row['content']), strict_json(row['meta'])
+        if not isinstance(content, dict) or not isinstance(meta, dict):
+            raise ValueError('empty_repair_prior_invalid')
+        refs.append({'id': row['artifact_id'], 'hash': mcs_util.payload_hash([content, meta])})
+    return refs
+
+
+def _empty_repair_candidate(db, pid, mid, fp, policy, revision, mode, facts):
+    """Recover only the latest source-bound, reserved empty repair candidate."""
+    try:
+        row = db.execute('SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? '
+                         'AND message_id=? ORDER BY artifact_id DESC LIMIT 1',
+                         (KIND_CANDIDATE, pid, mid)).fetchone()
+        content, meta = (strict_json(row['content']), strict_json(row['meta'])) if row else (None, None)
+        candidate_bound = (isinstance(meta, dict) and meta.get('stage') == 'empty_repair'
+                           and meta.get('fingerprint') == fp)
+        marker = db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? '
+                            'AND message_id=? ORDER BY artifact_id DESC LIMIT 1',
+                            (KIND_REPAIR, pid, mid)).fetchone()
+        if marker is None:
+            return None, candidate_bound
+        marker_content, marker_meta = strict_json(marker['content']), strict_json(marker['meta'])
+        if not isinstance(marker_content, dict) or not isinstance(marker_meta, dict):
+            return None, True
+        if not isinstance(marker_meta.get('fingerprint'), str):
+            return None, True
+        if marker_meta.get('fingerprint') != fp or marker_meta.get('empty_repair') is not True:
+            return None, candidate_bound
+        if not is_current(marker_meta) or marker_meta.get('invalidated') or marker_meta.get('stale'):
+            return None, True
+        if row is None:
+            return None, True
+        if not isinstance(content, dict) or not isinstance(meta, dict):
+            return None, True
+        proof = meta.get('provider_provenance')
+        producer = _summary_producer({'content': content, 'meta': meta}, fp, policy, revision)
+        if (not is_current(meta) or meta.get('invalidated') or meta.get('stage') != 'empty_repair'
+                or meta.get('fingerprint') != fp or meta.get('policy_fingerprint') != policy
+                or meta.get('publication_mode') != mode or meta.get('target_revision') != revision
+                or type(meta.get('repair_artifact_id')) is not int or meta['repair_artifact_id'] != marker['artifact_id']
+                or marker_content != {'target_message_id': mid}
+                or marker_meta.get('policy_fingerprint') != policy
+                or marker_meta.get('repair_count') != 1
+                or type(content.get('target_message_id')) is not int or content['target_message_id'] != mid
+                or not isinstance(content.get('claims'), list) or not content['claims']
+                or meta.get('claim_input_binding') != _claim_input_binding(pid, mid, fp, policy, revision, content, facts)
+                or meta.get('prior') != _empty_repair_prior(db, pid, mid)
+                or proof != _summary_provenance(producer, fp, policy, revision, content)
+                or meta.get('audit_state') != 'ready' or meta.get('partial_answers') != {}):
+            return None, True
+        return {'content': content, 'meta': meta, 'producer': producer}, True
+    except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
+        return None, True
+
+
+def _store_empty_repair(ledger, pid, mid, fp, policy, revision, mode, facts,
+                        summary, producer, repair_id, prior, guard, *, partial_answers=None, audit_state='ready'):
+    """Persist a bounded repair result without modifying the previous audit."""
+    content = {key: value for key, value in summary.items() if not key.startswith('_')}
+    guard('empty_repair_candidate')
+    with ledger.db:
+        if not ledger.db.in_transaction:
+            ledger.db.execute('BEGIN IMMEDIATE')
+        guard('empty_repair_candidate_tx')
+        if _empty_repair_prior(ledger.db, pid, mid) != prior:
+            raise runtime.RuntimeStale('empty_repair_prior')
+        ledger.artifact_add_tx(
+            KIND_CANDIDATE, json.dumps(content, ensure_ascii=False), project_id=pid, message_id=mid,
+            model=semantic_transport.llm_model(),
+            meta={VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp, 'policy_fingerprint': policy,
+                  'schema': SCHEMA_VERSION, 'stage': 'empty_repair', 'publication_mode': mode,
+                  'target_revision': revision, 'repair_artifact_id': repair_id, 'prior': prior,
+                  'claim_input_binding': _claim_input_binding(pid, mid, fp, policy, revision, content, facts),
+                  'provider_provenance': _summary_provenance(producer, fp, policy, revision, content),
+                  'partial_answers': partial_answers or {}, 'audit_state': audit_state})
+
+
 def _reused_pass_current(db, pid, mid, fp, policy, revision, mode, result, facts):
     """Allow a reused PASS notice only while its latest paired receipts agree."""
     rows = []
@@ -1352,9 +1439,20 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         if time.monotonic() > deadline - 5:
             incomplete = True
             break
-        summary, summary_reason, summary_error, sent_error, producer = _obtain_summary(
-            ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
-            facts, verdicts, existing, deadline, diagnostics=diagnostics)
+        recovered, empty_reserved = _empty_repair_candidate(
+            ledger.db, pid, mid, fp, policy, members[mid]['revision'], scfg['summary_mode'], facts)
+        if empty_reserved and recovered is None:
+            _why(diagnostics, 'empty_repair_unverified')
+            held_empty_targets.add(mid)
+            incomplete = resource_wait = True
+            continue
+        if recovered is not None:
+            summary, producer = recovered['content'], recovered['producer']
+            summary_reason, summary_error, sent_error = None, {}, None
+        else:
+            summary, summary_reason, summary_error, sent_error, producer = _obtain_summary(
+                ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
+                facts, verdicts, existing, deadline, diagnostics=diagnostics)
         if sent_error is not None:
             not_sent = sent_error
         if summary is None:
@@ -1414,101 +1512,151 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         claim_input_binding = None
         jev_outcome = "unknown"
         empty_unverified = False
+        empty_repair = recovered is not None
+        empty_prior = recovered['meta']['prior'] if recovered else None
+        empty_repair_id = recovered['meta']['repair_artifact_id'] if recovered else None
         for _attempt in range(2):      # initial + at most one repair
             if summary.get("claims") == []:
-                # Empty claims alone cannot prove an empty source. Preserve
-                # any earlier negative audit while other targets commit.
                 _why(diagnostics, "audit_empty_unverified")
-                held_empty_targets.add(mid)
-                empty_unverified = incomplete = resource_wait = True
-                break
-            if not isinstance(summary.get("claims"), list):
-                _why(diagnostics, "audit_claims_invalid")
-                hard_fail = incomplete = True
-                break
-            code_f = (audit_code(bundle, facts, summary) + coverage_by_target.get(mid, [])
-                      + detail_findings.get(mid, []))
-            claim_input_binding = _claim_input_binding(pid, mid, fp, policy, members[mid]["revision"], summary, facts)
-            before_audit = getattr(jev_client, "requests_made", None)
-            try:
-                jev_f, evaluated = semantic_audit.audit_claims(
-                    jev_client, bundle, summary, deadline,
-                    scfg["match_threshold"], scfg["max_questions_per_request"])
-            except (runtime.LLMNotSent, runtime.RuntimeBudget) as error:
-                # Jev cutoff/budget: earlier targets commit below. A repair
-                # already applied this pass is kept as a PENDING result, so
-                # the next pass re-audits the repaired text (INV-10: the
-                # one repair is spent, never refunded).
-                not_sent = error
-                incomplete = True
-                if _attempt:
-                    summary["audit_status"] = "PENDING"
-                    results[mid] = {
-                        "summary": summary, "status": "PENDING",
-                        "findings": code_f + [{"code": "support_unevaluated"}],
-                        "repaired": True, "fresh": True,
-                        "producer": producer, "jev_outcome": "unknown",
-                        "jev_requests": (jev_client.requests_made - req0)
-                        if jev_client else 0}
-                break
-            if not evaluated and jev_skip is None:
-                skip = semantic_audit.jev_skip_reason(getattr(jev_client, "last_error", None))
-                if skip is not None:
-                    jev_skip = skip
-                    diagnostics["jev_skip_reason"] = skip
-                    jev_client = None
-                    guard("claim_audit_skip")
-            after_audit = getattr(audit_client, "requests_made", None)
-            sent = (type(before_audit) is int and type(after_audit) is int
-                    and after_audit > before_audit)
-            observed = summary.get("_claim_audit", {})
-            claim_ids = [claim.get("claim_id") for claim in summary["claims"] if isinstance(claim, dict)]
-            valid_ids = (len(claim_ids) == len(summary["claims"])
-                         and all(isinstance(claim_id, str) for claim_id in claim_ids))
-            if (sent and evaluated and valid_ids and claim_ids and isinstance(observed, dict)
-                    and set(observed) == set(claim_ids)):
-                jev_outcome = "done"
-            elif sent and isinstance(observed, dict) and observed:
-                jev_outcome = "partial"
-            elif jev_skip is not None and prev_audit is None and not sent and not observed:
-                jev_outcome = "skipped"
+                if repaired or summary.get("_input_oversize"):
+                    held_empty_targets.add(mid)
+                    empty_unverified = incomplete = resource_wait = True
+                    break
+                # A malformed or otherwise unbound prior audit is unknown;
+                # do not let a fresh empty candidate replace that evidence.
+                prior_row = ledger.db.execute(
+                    "SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? AND message_id=? "
+                    "ORDER BY artifact_id DESC LIMIT 1", (KIND_AUDIT, pid, mid)).fetchone()
+                if prior_row is not None:
+                    try:
+                        prior_bound = (prev_audit is not None
+                                       and strict_json(prior_row['content']) == prev_audit['content']
+                                       and strict_json(prior_row['meta']) == prev_audit['meta'])
+                    except (ValueError, TypeError, RecursionError):
+                        prior_bound = False
+                    if not prior_bound:
+                        held_empty_targets.add(mid)
+                        empty_unverified = incomplete = resource_wait = True
+                        break
+                empty_repair = True
+                empty_prior = _empty_repair_prior(ledger.db, pid, mid)
+                code_f = [{"code": "summary_empty_unverified"}]
+                jev_f = []
+                findings = code_f
+                status = "REPAIR_REQUIRED"
+                claim_input_binding = _claim_input_binding(
+                    pid, mid, fp, policy, members[mid]["revision"], summary, facts)
             else:
-                jev_outcome = "unknown"
-            if not evaluated and jev_skip is None:
-                reason = summary.pop("_claim_audit_reason", None)
-                if reason in ("claims_empty", "claims_invalid", "client_unavailable", "options_invalid", "response_invalid"):
-                    _why(diagnostics, f"audit_{reason}")
-                    # A saved empty/invalid claim list is reused unchanged on each retry.
-                    hard_fail |= reason in ("claims_empty", "claims_invalid")
-                    resource_wait |= reason == "client_unavailable"
-                    retryable_failure |= reason == "response_invalid"
+                if not isinstance(summary.get("claims"), list):
+                    _why(diagnostics, "audit_claims_invalid")
+                    if empty_repair:
+                        held_empty_targets.add(mid)
+                        empty_unverified = incomplete = resource_wait = True
+                    else:
+                        hard_fail = incomplete = True
+                    break
+                code_f = (audit_code(bundle, facts, summary) + coverage_by_target.get(mid, [])
+                          + detail_findings.get(mid, []))
+                claim_input_binding = _claim_input_binding(pid, mid, fp, policy, members[mid]["revision"], summary, facts)
+                before_audit = getattr(jev_client, "requests_made", None)
+                if empty_repair and jev_client is not None:
+                    _store_empty_repair(ledger, pid, mid, fp, policy, members[mid]['revision'],
+                        scfg['summary_mode'], facts, summary, producer, empty_repair_id, empty_prior,
+                        guard, audit_state='inflight')
+                try:
+                    jev_f, evaluated = semantic_audit.audit_claims(
+                        jev_client, bundle, summary, deadline,
+                        scfg["match_threshold"], scfg["max_questions_per_request"])
+                except (runtime.LLMNotSent, runtime.RuntimeBudget) as error:
+                    # Jev cutoff/budget: earlier targets commit below. A repair
+                    # already applied this pass is kept as a PENDING result, so
+                    # the next pass re-audits the repaired text (INV-10: the
+                    # one repair is spent, never refunded).
+                    not_sent = error
+                    incomplete = True
+                    if empty_repair and jev_client is not None:
+                        partial = summary.get('_claim_audit') or {}
+                        _store_empty_repair(ledger, pid, mid, fp, policy, members[mid]['revision'],
+                            scfg['summary_mode'], facts, summary, producer, empty_repair_id, empty_prior,
+                            guard, partial_answers=partial, audit_state='held' if partial else 'ready')
+                    if _attempt and not empty_repair:
+                        summary["audit_status"] = "PENDING"
+                        results[mid] = {
+                            "summary": summary, "status": "PENDING",
+                            "findings": code_f + [{"code": "support_unevaluated"}],
+                            "repaired": True, "fresh": True,
+                            "producer": producer, "jev_outcome": "unknown",
+                            "jev_requests": (jev_client.requests_made - req0)
+                            if jev_client else 0}
+                    break
+                if empty_repair and jev_client is not None:
+                    partial = summary.get('_claim_audit') or {} if not evaluated else {}
+                    if not evaluated:
+                        adverse = [item for item in jev_f if not isinstance(item, dict)
+                                   or item.get('code') != 'support_unevaluated']
+                        if adverse:
+                            partial = {'answers': partial, 'findings': adverse}
+                    _store_empty_repair(ledger, pid, mid, fp, policy, members[mid]['revision'],
+                        scfg['summary_mode'], facts, summary, producer, empty_repair_id, empty_prior,
+                        guard, partial_answers=partial, audit_state='held' if partial else 'ready')
+                if not evaluated and jev_skip is None:
+                    skip = semantic_audit.jev_skip_reason(getattr(jev_client, "last_error", None))
+                    if skip is not None:
+                        jev_skip = skip
+                        diagnostics["jev_skip_reason"] = skip
+                        jev_client = None
+                        guard("claim_audit_skip")
+                after_audit = getattr(audit_client, "requests_made", None)
+                sent = (type(before_audit) is int and type(after_audit) is int
+                        and after_audit > before_audit)
+                observed = summary.get("_claim_audit", {})
+                claim_ids = [claim.get("claim_id") for claim in summary["claims"] if isinstance(claim, dict)]
+                valid_ids = (len(claim_ids) == len(summary["claims"])
+                             and all(isinstance(claim_id, str) for claim_id in claim_ids))
+                if (sent and evaluated and valid_ids and claim_ids and isinstance(observed, dict)
+                        and set(observed) == set(claim_ids)):
+                    jev_outcome = "done"
+                elif sent and isinstance(observed, dict) and observed:
+                    jev_outcome = "partial"
+                elif jev_skip is not None and prev_audit is None and not sent and not observed:
+                    jev_outcome = "skipped"
                 else:
-                    flag = _jev_fail_flag(getattr(jev_client, "last_error", None))
-                    _why(diagnostics, f"audit_jev_{flag}" if flag else "audit_unevaluated")
-                    resource_wait |= flag == "resource"
-                    retryable_failure |= flag == "retryable"
-                    hard_fail |= flag == "hard"
-            prior_blocked = False
-            if not evaluated and jev_skip is not None:
-                known, unbound = _prior_pending_findings(ledger.db, pid, mid, fp, policy,
-                                                         members[mid]["revision"], scfg["summary_mode"], repaired, prev_audit,
-                                                         summary, claim_input_binding)
-                prior_blocked = bool(known) or unbound or _attempt > 0
-                if known:
-                    jev_f.extend(f for f in known if f not in jev_f)
-                if unbound or _attempt > 0:
-                    jev_f.append({"code": "prior_audit_unverified"})
-                if any(f.get("code") != "support_unevaluated" for f in jev_f):
-                    prior_blocked = True
-            findings = code_f + jev_f
-            status = (semantic_audit.optional_audit_status(code_f, jev_f, jev_skip, repaired)
-                      if not evaluated and jev_skip is not None
-                      else audit_status_for(code_f, jev_f, evaluated, repaired))
-            if prior_blocked:
-                # A skipped re-audit cannot clear an earlier negative result
-                # or certify a repair that has not itself been re-evaluated.
-                status = "PENDING"
-                resource_wait = True
+                    jev_outcome = "unknown"
+                if not evaluated and jev_skip is None:
+                    reason = summary.pop("_claim_audit_reason", None)
+                    if reason in ("claims_empty", "claims_invalid", "client_unavailable", "options_invalid", "response_invalid"):
+                        _why(diagnostics, f"audit_{reason}")
+                        # A saved empty/invalid claim list is reused unchanged on each retry.
+                        hard_fail |= reason in ("claims_empty", "claims_invalid")
+                        resource_wait |= reason == "client_unavailable"
+                        retryable_failure |= reason == "response_invalid"
+                    else:
+                        flag = _jev_fail_flag(getattr(jev_client, "last_error", None))
+                        _why(diagnostics, f"audit_jev_{flag}" if flag else "audit_unevaluated")
+                        resource_wait |= flag == "resource"
+                        retryable_failure |= flag == "retryable"
+                        hard_fail |= flag == "hard"
+                prior_blocked = False
+                if not evaluated and jev_skip is not None:
+                    known, unbound = _prior_pending_findings(ledger.db, pid, mid, fp, policy,
+                                                             members[mid]["revision"], scfg["summary_mode"], repaired, prev_audit,
+                                                             summary, claim_input_binding)
+                    prior_blocked = bool(known) or unbound or _attempt > 0
+                    if known:
+                        jev_f.extend(f for f in known if f not in jev_f)
+                    if unbound or _attempt > 0:
+                        jev_f.append({"code": "prior_audit_unverified"})
+                    if any(f.get("code") != "support_unevaluated" for f in jev_f):
+                        prior_blocked = True
+                findings = code_f + jev_f
+                status = (semantic_audit.optional_audit_status(code_f, jev_f, jev_skip, repaired)
+                          if not evaluated and jev_skip is not None
+                          else audit_status_for(code_f, jev_f, evaluated, repaired))
+                if prior_blocked:
+                    # A skipped re-audit cannot clear an earlier negative result
+                    # or certify a repair that has not itself been re-evaluated.
+                    status = "PENDING"
+                    resource_wait = True
             if status == "REPAIR_REQUIRED" and not repaired:
                 guard("repair_reservation")
                 # Preserve the rejected original and its exact audit before
@@ -1522,13 +1670,17 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     if not ledger.db.in_transaction:
                         ledger.db.execute('BEGIN IMMEDIATE')
                     guard("repair_reservation_tx")
-                    _write_result(ledger, pid, mid, repair_pending, fp, members,
-                                  "PENDING", policy, scfg["summary_mode"])
+                    if not empty_repair:
+                        _write_result(ledger, pid, mid, repair_pending, fp, members,
+                                      "PENDING", policy, scfg["summary_mode"])
                     repair_id = ledger.artifact_add_tx(
                         KIND_REPAIR, json.dumps({"target_message_id": mid}),
                         project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
-                        meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "repair_count": 1})
+                        meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "repair_count": 1,
+                              **({'empty_repair': True} if empty_repair else {})})
                 repaired = True
+                if empty_repair:
+                    empty_repair_id = repair_id
                 try:
                     summary2, repair_producer = _summarize_observed(
                         llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
@@ -1543,9 +1695,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                             ledger.db.execute(
                                 "DELETE FROM artifacts WHERE artifact_id=?",
                                 (repair_id,))
-                            repair_pending["repaired"] = False
-                            _write_result(ledger, pid, mid, repair_pending, fp, members,
-                                          "PENDING", policy, scfg["summary_mode"])
+                            if not empty_repair:
+                                repair_pending["repaired"] = False
+                                _write_result(ledger, pid, mid, repair_pending, fp, members,
+                                              "PENDING", policy, scfg["summary_mode"])
                     if isinstance(error, (runtime.LLMNotSent,
                                           runtime.RuntimeBudget)):
                         not_sent = error
@@ -1555,13 +1708,23 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 if summary2 is not None:
                     summary = summary2
                     producer = repair_producer
+                    if empty_repair and isinstance(summary.get('claims'), list) and summary['claims']:
+                        _store_empty_repair(ledger, pid, mid, fp, policy, members[mid]['revision'],
+                            scfg['summary_mode'], facts, summary, producer, repair_id, empty_prior, guard)
                     summary["_facts"] = facts
                     continue
+                if empty_repair:
+                    held_empty_targets.add(mid)
+                    empty_unverified = incomplete = resource_wait = True
+                    break
                 status = "NEEDS_REVIEW"
                 findings.append({"code": "repair_unavailable"})
             break
         if not_sent is not None:
             break
+        if empty_repair and status == "PENDING":
+            held_empty_targets.add(mid)
+            empty_unverified = incomplete = resource_wait = True
         if empty_unverified:
             continue
         v2_doc = v2_docs_by_target.get(mid)
