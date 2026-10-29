@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "リポジトリの起動コマンドでジョブの調査を利用可能に修正",
+  "summary": "sh scripts/mcs jobs から既存の失敗ジョブの調査と再試行へ進めるようにし、ヘルプにも操作名を表示します。",
+  "upgrade": "追加操作は不要です。再試行に必要な診断情報、人による確認、理由と承認記録の条件は変更しません。",
+  "details": ["jobsの引数を既存のPython CLIへ引き渡す。"],
+  "refs": ["scripts/mcs", "tests/meta/test_jobs_launcher.py"]
+}

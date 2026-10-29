@@ -5,13 +5,13 @@ REPO="$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)"
 case "${1:-}" in
     install) shift; exec /bin/sh "$REPO/install.sh" "$@" ;;
     ""|-h|--help)
-        printf '%s\n' '使い方: mcs install|update|recover|setup|doctor|drug|connect|connection|disconnect|rotate-key|inventory|support|diagnostics [オプション]' \
+        printf '%s\n' '使い方: mcs install|update|recover|setup|doctor|drug|connect|connection|disconnect|rotate-key|inventory|support|diagnostics|jobs [オプション]' \
             '初めて導入するとき: sh scripts/mcs install [オプション]' \
             'install: 導入 / update: 更新の案内 / recover: 中断した更新の復旧 / setup: 初期設定 / doctor: 診断 / drug: 医薬品マスターの確認' \
             'connect: 状態監視登録 / connection: 接続状態 / disconnect: 送信停止 / rotate-key: 鍵交換 / inventory: 公開構成の許可・停止 / support: 遠隔支援の同意・停止' \
-            'diagnostics: 固定診断コードの送信許可・停止'
+            'diagnostics: 固定診断コードの送信許可・停止 / jobs: 失敗ジョブの調査と再試行'
         exit 0 ;;
-    update|recover|setup|doctor|drug|connect|connection|disconnect|rotate-key|inventory|support|diagnostics) ;;
+    update|recover|setup|doctor|drug|connect|connection|disconnect|rotate-key|inventory|support|diagnostics|jobs) ;;
     *) printf '%s\n' '操作名が正しくありません。--helpで操作名を確認してください。' >&2; exit 2 ;;
 esac
 unset PYTHONPATH PYTHONHOME
