@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+import json
 
 from mcs_util import payload_hash, positive, strict_json, until_epoch
 from operation_contract import read_retry_payload, retry_error, retry_job_row
@@ -51,39 +52,88 @@ def _snapshot(db):
         raise sqlite3.DatabaseError("job_diagnostics_snapshot_required")
 
 
-def _metrics(db):
+def _metrics(db, job_ids):
     # Do not materialize oversized content in Python, and retain code fields only.
-    rows = db.execute("SELECT artifact_id, CASE WHEN typeof(content)='text' "
-                      "AND length(CAST(content AS BLOB))<=1048576 THEN content END "
-                      "FROM main.artifacts WHERE kind='semantic_drain_run' "
-                      "ORDER BY artifact_id DESC LIMIT 512")
+    deadline = time.monotonic() + 4.0
+    exhausted = [False]
+    def within_budget():
+        if time.monotonic() >= deadline:
+            exhausted[0] = True
+            raise ValueError('metric_observation_limit')
+        return 1
+    db.create_function('mcs_job_metric_budget', 0, within_budget)
     out = []
-    for artifact_id, raw in rows:
-        if raw is None:
-            continue
-        try:
-            doc = strict_json(raw)
-        except (ValueError, TypeError, RecursionError):
-            continue
-        metrics = doc.get("job_metrics") if isinstance(doc, dict) else None
-        if not isinstance(metrics, list) or len(metrics) > 64:
-            continue
-        for metric in reversed(metrics):
-            if not isinstance(metric, dict):
+    try:
+        # Rank identifiers, not document bodies, independently for each job.
+        # SQLite may reject JSON that Python's strict decoder accepts: keep
+        # those opaque records as candidates for every requested job.
+        rows = db.execute("""
+            WITH wanted AS (SELECT value AS job_id FROM json_each(?)),
+            hits AS (
+              SELECT a.artifact_id, json_extract(m.value, '$.job_id') AS job_id
+              FROM main.artifacts a, json_each(CASE
+                WHEN typeof(a.content)='text' AND length(CAST(a.content AS BLOB))<=1048576
+                  AND json_valid(a.content) THEN CASE
+                    WHEN json_type(a.content,'$.job_metrics')='array'
+                      AND json_array_length(a.content,'$.job_metrics')<=64
+                    THEN a.content ELSE '{}' END
+                ELSE '{}' END, '$.job_metrics') m
+              WHERE a.kind='semantic_drain_run' AND mcs_job_metric_budget()=1
+                AND CASE WHEN m.type='object' THEN
+                  CASE WHEN json_type(m.value,'$.job_id')='integer'
+                    THEN json_extract(m.value,'$.job_id') IN (SELECT job_id FROM wanted)
+                    ELSE 0 END ELSE 0 END
+              UNION ALL
+              SELECT a.artifact_id, wanted.job_id FROM main.artifacts a CROSS JOIN wanted
+              WHERE a.kind='semantic_drain_run' AND mcs_job_metric_budget()=1
+                AND typeof(a.content)='text' AND length(CAST(a.content AS BLOB))<=1048576
+                AND NOT json_valid(a.content)
+            ), ranked AS (
+              SELECT artifact_id, ROW_NUMBER() OVER
+                (PARTITION BY job_id ORDER BY artifact_id DESC) AS rank
+              FROM (SELECT DISTINCT artifact_id, job_id FROM hits)
+            )
+            SELECT a.artifact_id, CASE WHEN typeof(content)='text'
+              AND length(CAST(content AS BLOB))<=1048576 THEN content END
+            FROM main.artifacts a JOIN (SELECT DISTINCT artifact_id FROM ranked WHERE rank<=512) r
+              ON a.artifact_id=r.artifact_id ORDER BY a.artifact_id DESC
+        """, (json.dumps(job_ids),))
+        bytes_read = 0
+        for artifact_id, raw in rows:
+            if raw is None:
                 continue
-            fields = ("job_id", "project_id", "kind", "generation", "payload_digest", "attempts", "status")
-            values = [metric.get(field) for field in fields]
-            if (any(type(values[index]) is not int for index in (0, 1, 5))
-                    or any(not isinstance(values[index], str) or len(values[index]) > 128
-                           for index in (2, 3, 4, 6))):
+            bytes_read += len(raw) * 4
+            if bytes_read > 16 * 1024 * 1024 or time.monotonic() >= deadline:
+                return []
+            try:
+                doc = strict_json(raw)
+            except (ValueError, TypeError, RecursionError):
                 continue
-            code = metric.get("retry_reason")
-            if isinstance(code, str) and code.startswith("exception_") and len(code) > len("exception_"):
-                code = "internal_error"
-            if not isinstance(code, str) or code not in _REASONS:
-                llm_error = metric.get("llm_error")
-                code = "llm_" + llm_error if isinstance(llm_error, str) and len(llm_error) <= 64 else None
-            out.append((artifact_id, *values, code if code in _REASONS else None))
+            metrics = doc.get("job_metrics") if isinstance(doc, dict) else None
+            if not isinstance(metrics, list) or len(metrics) > 64:
+                continue
+            for metric in reversed(metrics):
+                if not isinstance(metric, dict):
+                    continue
+                fields = ("job_id", "project_id", "kind", "generation", "payload_digest", "attempts", "status")
+                values = [metric.get(field) for field in fields]
+                if (any(type(values[index]) is not int for index in (0, 1, 5))
+                        or any(not isinstance(values[index], str) or len(values[index]) > 128
+                               for index in (2, 3, 4, 6))):
+                    continue
+                code = metric.get("retry_reason")
+                if isinstance(code, str) and code.startswith("exception_") and len(code) > len("exception_"):
+                    code = "internal_error"
+                if not isinstance(code, str) or code not in _REASONS:
+                    llm_error = metric.get("llm_error")
+                    code = "llm_" + llm_error if isinstance(llm_error, str) and len(llm_error) <= 64 else None
+                out.append((artifact_id, *values, code if code in _REASONS else None))
+    except sqlite3.Error:
+        if not exhausted[0]:
+            raise
+        return []
+    finally:
+        db.create_function('mcs_job_metric_budget', 0, None)
     return out
 
 
@@ -143,7 +193,9 @@ def _unsettled_cloud(db, row):
 def diagnose_job(db, cfg, job_id, now=None):
     """Describe a job without changing it or exposing its payload or source text."""
     _snapshot(db)
-    return _diagnose(db, cfg, job_id, now, _metrics(db))
+    if not positive(job_id):
+        raise ValueError("job_id_invalid")
+    return _diagnose(db, cfg, job_id, now, _metrics(db, [job_id]))
 
 
 def _diagnose(db, cfg, job_id, now, metrics):
@@ -252,6 +304,6 @@ def list_failed(db, cfg, limit=50, now=None):
         raise ValueError("job_limit_invalid")
     ids = [row[0] for row in db.execute("SELECT job_id FROM main.fetch_jobs WHERE state='failed' "
                                          "ORDER BY job_id DESC LIMIT ?", (limit + 1,))]
-    metrics = _metrics(db) if ids else []
+    metrics = _metrics(db, ids[:limit]) if ids else []
     return {"jobs": [_diagnose(db, cfg, job_id, now, metrics) for job_id in ids[:limit]],
             "truncated": len(ids) > limit}

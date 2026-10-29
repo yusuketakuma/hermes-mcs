@@ -72,6 +72,89 @@ def test_current_metric_is_bound_and_hash_ignores_unrelated_usage(data):
     assert later["diagnosis_hash"] != first["diagnosis_hash"]
 
 
+def test_idle_runs_do_not_hide_matching_failure_evidence(data):
+    ledger, job, payload, cfg = data
+    _metric(ledger, job, payload)
+    before = _read(ledger, job, cfg)
+    ledger.db.executemany("INSERT INTO artifacts(kind,content) VALUES('semantic_drain_run',?)",
+                          [(json.dumps({'job_metrics': []}),)] * 513)
+    ledger.db.commit()
+    assert _read(ledger, job, cfg)['reason_code'] == 'budget_short'
+    ledger.db.execute('BEGIN')
+    try:
+        report = diag.list_failed(ledger.db, cfg)
+    finally:
+        ledger.db.rollback()
+    assert report['jobs'][0]['reason_code'] == 'budget_short'
+    assert report['jobs'][0]['diagnosis_hash'] == before['diagnosis_hash']
+
+
+def test_one_jobs_history_does_not_hide_another_jobs_evidence(data):
+    ledger, job, payload, _ = data
+    other = job + 100
+    _metric(ledger, other, payload)
+    metric = {"job_id": job, "project_id": 1, "kind": "semantic", "generation": payload["generation"],
+              "payload_digest": payload_hash(payload), "attempts": 2, "status": "retry",
+              "retry_reason": "budget_short"}
+    content = json.dumps({"job_metrics": [metric]})
+    ledger.db.executemany("INSERT INTO artifacts(kind,content) VALUES('semantic_drain_run',?)", [(content,)] * 513)
+    ledger.db.commit()
+    ledger.db.execute('BEGIN')
+    try:
+        metrics = diag._metrics(ledger.db, [job, other])
+    finally:
+        ledger.db.rollback()
+    assert sum(item[1] == job for item in metrics) == 512
+    assert any(item[1] == other and item[-1] == 'budget_short' for item in metrics)
+
+
+def test_sqlite_opaque_newer_json_is_strictly_parsed(data):
+    import sys
+    ledger, job, payload, cfg = data
+    _metric(ledger, job, payload)
+    metric = {"job_id": job, "project_id": 1, "kind": "semantic", "generation": payload["generation"],
+              "payload_digest": payload_hash(payload), "attempts": 2, "status": "retry",
+              "retry_reason": None, "llm_error": None}
+    raw = '{"job_metrics":[' + json.dumps(metric) + '],"nested":' + '[' * 2100 + '0' + ']' * 2100 + '}'
+    assert ledger.db.execute('SELECT json_valid(?)', (raw,)).fetchone()[0] == 0
+    ledger.artifact_add('semantic_drain_run', raw)
+    ledger.db.commit()
+    previous_limit = sys.getrecursionlimit()
+    try:
+        sys.setrecursionlimit(8000)
+        assert _read(ledger, job, cfg)['reason_code'] == 'unknown'
+    finally:
+        sys.setrecursionlimit(previous_limit)
+
+
+def test_newest_bound_metric_without_reason_remains_unknown(data):
+    ledger, job, payload, cfg = data
+    _metric(ledger, job, payload)
+    _metric(ledger, job, payload, retry_reason=None, llm_error=None)
+    assert _read(ledger, job, cfg)['reason_code'] == 'unknown'
+
+
+def test_candidate_json_never_confuses_boolean_id_or_duplicate_keys(data):
+    ledger, job, payload, cfg = data
+    metric = {'job_id': True, 'project_id': 1, 'kind': 'semantic', 'generation': payload['generation'],
+              'payload_digest': payload_hash(payload), 'attempts': 2, 'status': 'retry', 'retry_reason': 'budget_short'}
+    ledger.artifact_add('semantic_drain_run', json.dumps({'job_metrics': [metric]}))
+    ledger.artifact_add('semantic_drain_run', '{"job_metrics":[],"job_metrics":[' + json.dumps(metric) + ']}')
+    ledger.db.commit()
+    assert _read(ledger, job, cfg)['reason_code'] == 'unknown'
+
+
+def test_metric_time_limit_returns_unknown_without_changing_data(data, monkeypatch):
+    from types import SimpleNamespace
+    ledger, job, payload, cfg = data
+    _metric(ledger, job, payload)
+    clock = iter((0.0, 5.0))
+    monkeypatch.setattr(diag, 'time', SimpleNamespace(monotonic=lambda: next(clock)))
+    before = ledger.db.total_changes
+    assert _read(ledger, job, cfg)['reason_code'] == 'unknown'
+    assert ledger.db.total_changes == before
+
+
 @pytest.mark.parametrize("changed", [
     {"project_id": 2}, {"generation": "other"}, {"payload_digest": "0" * 64},
     {"attempts": 1}, {"status": "done"}, {"retry_reason": {"secret": "synthetic"}},
