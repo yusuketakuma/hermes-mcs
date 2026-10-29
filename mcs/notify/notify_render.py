@@ -996,6 +996,10 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
     pages = len(pages_idx)
     page = _page(ui, pages, default=pages - 1 if kind == "thread" else 0)
     shown, footer, toggles = page_states[page]
+    if kind == "thread":
+        import processing_route
+        icon = processing_route.icon(db, card["project_id"], shown)
+        containers[0] = {**containers[0], "text": icon + containers[0]["text"][1:]}
     if pages > 1:
         _add_page_marker(containers, page, pages)
     for i in pages_idx[page]:
