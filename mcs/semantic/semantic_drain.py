@@ -1158,6 +1158,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         guard("jev_skip")
 
     for mid in all_targets:
+        semantic_transport.set_inference_target(mid)
         member = members[mid]
         # restart-safe: a complete assessment for THIS fingerprint is
         # reused; retry_wait/error/pending ones are re-attempted
@@ -1320,6 +1321,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
     results = {}
     held_empty_targets = set()
     for mid, facts in facts_by_target.items():
+        semantic_transport.set_inference_target(mid, "summary")
         if scfg["summary_mode"] == "off":
             continue
         existing = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy)
@@ -1747,6 +1749,7 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
     """Preserve stale workers while bounding timeouts after dispatched work."""
     requests_before = jev_client.requests_made if jev_client is not None else 0
     llm_started = False
+    local_llm_fn = llm_fn
 
     @wraps(llm_fn)
     def tracked_llm(*args, **kwargs):
@@ -1760,7 +1763,8 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
 
     try:
         with ExitStack() as stack:
-            if cloud_transport is not None:
+            stack.enter_context(semantic_transport.inference_targets(runtime.execution_generation(scfg)))
+            if cloud_transport is not None and lane == "backlog":
                 token = runtime.JobToken.from_row(job)
                 payload = runtime.parse_payload(job)
                 targets = payload.get("targets", [job["message_id"]])
@@ -1771,6 +1775,16 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                     return bundle["source_fingerprint"] if bundle else None
 
                 fingerprint = source()
+                def fallback_current():
+                    # Never join a local result to a previously persisted cloud
+                    # prefix, or to a chunk whose producer cannot be proven.
+                    import semantic_extraction
+                    rows = ledger.db.execute("SELECT * FROM artifacts WHERE project_id=? AND kind IN (?,?) "
+                        "AND (NOT json_valid(meta) OR json_extract(meta,'$.source_fingerprint')=?)",
+                        (job['project_id'], semantic_extraction.KIND_CHUNK,
+                         semantic_extraction.KIND_CHUNK_V2, fingerprint)).fetchall()
+                    return all(semantic_extraction._cached_provider(
+                        ledger.db, row, semantic_transport.llm_model()) == 'local' for row in rows)
 
                 def current():
                     try:
@@ -1786,7 +1800,9 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
 
                 cloud = stack.enter_context(semantic_transport.backlog_inference(
                     ledger, load_config() if cfg_path is None else load_config(cfg_path),
-                    job, runtime.job_deadline(scfg, deadline), current, cloud_transport))
+                    job, runtime.job_deadline(scfg, deadline), current, cloud_transport,
+                    local_fallback=local_llm_fn if not cloud_only else None,
+                    fallback_current=fallback_current if not cloud_only else None))
                 if cloud_only and cloud is None:
                     raise runtime.LLMNotSent("cloud_scope_or_budget")
                 if cloud is not None:
@@ -3065,7 +3081,7 @@ def _select_cloud_due(ledger, lane, kinds, qc_active, max_jobs, long_defers=None
     import cloud_policy
     cfg = load_config()
     settings = extract_llm._cloud_settings(cfg)
-    if (settings["mode"] != "on" or "semantic_backlog" not in settings["routes"]
+    if (lane != "backlog" or settings["mode"] != "on" or "semantic_backlog" not in settings["routes"]
             or not cloud_policy.selected_key()):
         return [], [], [], [], {"turn": None}
     semantic_scope = runtime_config(cfg)[0]["project_ids"]
@@ -3074,12 +3090,10 @@ def _select_cloud_due(ledger, lane, kinds, qc_active, max_jobs, long_defers=None
         cursor = ledger.db.execute(
         "SELECT j.* FROM fetch_jobs j LEFT JOIN patients p ON p.project_id=j.project_id "
         f"WHERE j.kind IN ({marks}) AND j.state='pending' AND j.next_try<=? "
-        "AND json_valid(j.payload) AND COALESCE(json_extract(j.payload,'$.eligible'),0)!=1 "
+        "AND json_valid(j.payload) "
         "AND " + current_meta_pred('j.payload') + " AND j.job_id NOT IN (SELECT value FROM json_each(?)) "
         "AND (? IS NULL OR j.project_id IN (SELECT value FROM json_each(?))) "
-        "AND j.message_id IN (SELECT CAST(substr(s.key,instr(s.key,':')+1) AS INTEGER) "
-        "FROM json_each((SELECT CASE WHEN json_valid(content) THEN content ELSE '{}' END "
-        "FROM artifacts WHERE kind='cloud_history_scope' ORDER BY artifact_id DESC LIMIT 1), '$.sources') s) "
+        "AND " + cloud_policy.history_scope_target_sql('j.message_id') + " "
         "AND j.project_id NOT IN (SELECT value FROM json_each(?)) "
         "AND (? IS NULL OR j.project_id IN (SELECT value FROM json_each(?))) "
         "ORDER BY COALESCE(p.is_archived,0), "
@@ -3092,14 +3106,17 @@ def _select_cloud_due(ledger, lane, kinds, qc_active, max_jobs, long_defers=None
         selected = []
         try:
             for row in cursor:
-                if receipt_check(row["project_id"], row["message_id"]):
+                if (cloud_policy.history_target_ready(ledger.db, row["project_id"], row["message_id"])
+                        and receipt_check(row["project_id"], row["message_id"])):
                     selected.append(row)
                     if len(selected) >= min(512, max_jobs + max(8, settings["max_concurrency"] * 2)):
                         break
         finally:
             cursor.close()
-    return (selected, [r for r in selected if r["kind"] == QC_JOB_KIND], [],
-            [r for r in selected if r["kind"] == JOB_KIND], {"turn": None})
+    semantic = [r for r in selected if r["kind"] == JOB_KIND]
+    arrivals = [r for r in semantic if runtime.parse_payload(r).get('eligible')]
+    backfill = [r for r in semantic if not runtime.parse_payload(r).get('eligible')]
+    return (selected, [r for r in selected if r["kind"] == QC_JOB_KIND], arrivals, backfill, {"turn": None})
 
 
 def _refill_due(ledger, lane, kinds, qc_active, max_jobs, long_defers,

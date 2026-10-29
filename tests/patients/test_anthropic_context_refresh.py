@@ -23,7 +23,8 @@ _SOURCE_REPAIR_JEV = _source_repair_jev.JevClient
 
 __all__ = ["runtime"]
 
-CFG = {**BASE_CFG, "semantic": {"mode": "assist", "project_ids": [1], "daily_request_budget": 3000}}
+CFG = {**BASE_CFG, "semantic": {"mode": "assist", "summary_mode": "assist",
+                                "project_ids": [1], "daily_request_budget": 3000}}
 
 
 def step(runtime, **kwargs):
@@ -414,7 +415,8 @@ def test_scan_quality_proof_reuses_one_snapshot_enumeration(runtime, cloud):
         finally:
             led.db.set_trace_callback(None)
         assert led.db.in_transaction and all(actual[mid]['audited'] for mid in (1, 2, 3))
-        assert sum(sql.startswith('SELECT message_id,content,meta FROM artifacts') for sql in statements) == 1
+        assert sum(sql.startswith('SELECT message_id,content,meta, ')
+                   and "FROM artifacts WHERE kind=" in sql for sql in statements) == 1
         assert sum(sql.startswith('SELECT meta, CASE WHEN json_valid(content)') for sql in statements) == 1
         assert sum(sql.startswith('SELECT artifact_id,meta,CASE WHEN json_valid(meta)') for sql in statements) == 1
         expected = context_refresh._current_scans(led.db, 1, snapshot['sources'],
@@ -525,17 +527,14 @@ def test_scan_proof_keeps_sql_and_python_source_key_membership_distinct(runtime,
     assert seen == [1, 2] and not out[1]['audited'] and out[2]['audited']
 
 
-def test_requested_cloud_failure_stays_private_and_recovers_without_local_fallback(runtime, cloud):
+def test_requested_cloud_failure_falls_back_to_verified_local_context(runtime, cloud):
     led, _, local_calls = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
     cloud[2][0] = True
     result = step(runtime)
-    assert result['status'] == 'deferred' and result.get('reason') == 'nightly_cloud_unavailable'
-    assert not local_calls and not cloud[0] and document(led) is None
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
-    cloud[2][0] = False
+    assert result['status'] == 'progressed'
     drain(runtime)
-    assert not local_calls and cloud[0] and context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    assert local_calls and not cloud[0] and context_refresh.context_view_input(led.db, 1, cfg=CFG)
     assert step(runtime)['status'] == 'complete'
 
 
@@ -548,6 +547,125 @@ def test_failed_cloud_does_not_bypass_local_admission(runtime, cloud):
     result = step(runtime, local_admit=lambda: False)
     assert result["status"] == "deferred"
     assert not local_calls and document(led) is None
+
+
+def test_local_fallback_does_not_skip_a_preexisting_negative_quality_result(runtime, cloud, monkeypatch):
+    import semantic_jev
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+
+    led, _, local_calls = runtime
+    seed(led, body="見出しのない完全合成の居住記録。")
+    failure_id = led.artifact_add(context_refresh.QUALITY_FAIL, '{}', project_id=1,
+        meta={VERSION_KEY: CURRENT_VERSION, 'input_key': '1' * 64, 'candidate_key': '2' * 64,
+              'failure_key': '3' * 64, 'audit_key': '4' * 64})
+    cloud[2][0] = True
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: None)
+    for _ in range(20):
+        result = step(runtime)
+        if result.get('reason') in ('source_quality_deferred', 'summary_quality_deferred'):
+            break
+    assert result.get('reason') in ('source_quality_deferred', 'summary_quality_deferred')
+    assert local_calls and context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    assert led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (failure_id,)).fetchone()
+
+
+@pytest.mark.parametrize('failure_kind', ['summary', 'source'])
+def test_local_mode_requires_new_quality_pass_after_prior_negative(runtime, cloud, monkeypatch, failure_kind):
+    import semantic_jev
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+
+    led, clock, local_calls = runtime
+    seed(led, body="完全合成の居住記録です。")
+    kind = (context_refresh.QUALITY_FAIL if failure_kind == 'summary' else
+            context_refresh._quality_kind(context_refresh.QUALITY_FAIL, {'purpose': 'source'}))
+    failure_id = led.artifact_add(kind, '{}', project_id=1,
+        meta={VERSION_KEY: CURRENT_VERSION, 'input_key': '1' * 64, 'candidate_key': '2' * 64,
+              'failure_key': '3' * 64, 'audit_key': '4' * 64})
+    cloud[1][0] = 'off'
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: None)
+    for _ in range(20):
+        result = step(runtime)
+        if result.get('reason') in ('source_quality_deferred', 'summary_quality_deferred'):
+            break
+    assert result.get('reason') in ('source_quality_deferred', 'summary_quality_deferred')
+    assert local_calls and context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    assert led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (failure_id,)).fetchone()
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: 'synthetic-jev-key')
+    clock.wall += 120
+    trace = []
+    for _ in range(30):
+        outcome = step(runtime)
+        trace.append(outcome)
+        if outcome['status'] == 'complete':
+            break
+    assert outcome['status'] == 'complete', trace
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    assert led.artifacts(context_refresh.QUALITY_PASS, project_id=1)
+    if failure_kind == 'source':
+        assert led.artifacts(context_refresh._quality_kind(context_refresh.QUALITY_PASS, {'purpose': 'source'}), project_id=1)
+    assert led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (failure_id,)).fetchone()
+    with led.db:
+        led.db.execute("UPDATE artifacts SET content='{}' WHERE kind=?", (context_refresh.CHUNK,))
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+
+
+def test_summary_negative_does_not_invalidate_source_skip(runtime, cloud, monkeypatch):
+    import semantic_jev
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+
+    led, _, _ = runtime
+    seed(led, body='完全合成の居住記録です。')
+    monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: None)
+    source_skip = context_refresh._quality_kind(context_refresh.QUALITY_SKIP, {'purpose': 'source'})
+    for _ in range(20):
+        step(runtime)
+        if led.artifacts(source_skip):
+            break
+    assert led.artifacts(source_skip)
+    meta = {VERSION_KEY: CURRENT_VERSION, 'input_key': '1' * 64, 'candidate_key': '2' * 64,
+            'failure_key': '3' * 64, 'audit_key': '4' * 64}
+    led.artifact_add(context_refresh.QUALITY_FAIL, '{}', project_id=1, meta=meta)
+    snapshot = context_refresh._snapshot(led.db, 1, CFG)
+    scans = context_refresh._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+    assert scans[1]['_audit_skipped'] is True
+    source_failure = context_refresh._quality_kind(context_refresh.QUALITY_FAIL, {'purpose': 'source'})
+    led.artifact_add(source_failure, '{}', project_id=1, meta=meta)
+    scans = context_refresh._current_scans(led.db, 1, snapshot['sources'], snapshot['contract'], cfg=CFG)
+    assert scans[1]['_audit_skipped'] is False
+
+
+@pytest.mark.parametrize('mode', ['on', 'off'])
+@pytest.mark.parametrize('purpose', ['source', 'summary'])
+def test_mid_audit_budget_skip_cannot_override_prior_negative(runtime, cloud, monkeypatch, mode, purpose):
+    import semantic_audit
+    import semantic_jev
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+
+    led, clock, _ = runtime
+    seed(led, body='完全合成の居住記録です。')
+    kind = context_refresh._quality_kind(context_refresh.QUALITY_FAIL, {'purpose': purpose})
+    led.artifact_add(kind, '{}', project_id=1,
+        meta={VERSION_KEY: CURRENT_VERSION, 'input_key': '1' * 64, 'candidate_key': '2' * 64,
+              'failure_key': '3' * 64, 'audit_key': '4' * 64})
+    cloud[1][0] = mode
+    name = 'audit_patient_quality_page' if purpose == 'source' else 'audit_patient_summary_chunk'
+    real = getattr(semantic_audit, name)
+    def exhausted(client, *args, **kwargs):
+        client.last_error = semantic_jev.JevError('budget_exceeded', 'daily_cap')
+        return {'evaluated': False}
+    monkeypatch.setattr(semantic_audit, name, exhausted)
+    reason = purpose + '_quality_deferred'
+    for _ in range(25):
+        result = step(runtime)
+        if result.get('reason') == reason:
+            break
+    assert result.get('reason') == reason
+    assert not led.artifacts(context_refresh._quality_kind(context_refresh.QUALITY_SKIP, {'purpose': purpose}))
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    monkeypatch.setattr(semantic_audit, name, real)
+    clock.wall += 120
+    drain(runtime)
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
 
 
 def test_shadow_runs_only_after_local_commit_and_never_publishes_cloud(runtime, cloud, monkeypatch):
@@ -611,8 +729,12 @@ def test_cloud_completed_data_is_not_reused_after_route_change(runtime, cloud, m
     assert not context_refresh._current_scans(led.db, 1, snapshot["sources"], snapshot["contract"])
     drain(runtime)
     assert local_calls and context_refresh.context_view_input(led.db, 1, cfg=CFG)
-    for row in led.db.execute("SELECT meta FROM artifacts WHERE kind IN (?,?)", (context_refresh.KIND, context_refresh.SCAN)):
-        assert "provider" not in json.loads(row[0])
+    current = context_refresh._snapshot(led.db, 1, CFG, hydrate=False)
+    scans = context_refresh._current_scans(led.db, 1, current['sources'], current['contract'])
+    assert scans and all(not scan.get('_provider_contract') for scan in scans.values())
+    assert not context_refresh._latest(led.db, context_refresh.KIND, 1)[1].get('provider')
+    assert any(json.loads(row[0]).get('provider') for row in led.db.execute(
+        "SELECT meta FROM artifacts WHERE kind=?", (context_refresh.SCAN,)))
 
 
 def test_partial_cloud_scan_requires_same_rules_and_provider_contract(runtime, cloud, monkeypatch):
@@ -704,17 +826,14 @@ def test_dryrun_does_not_count_deferred_or_audit_and_stops_after_completion(runt
 
 
 
-def test_cloud_budget_wait_stays_private_and_resumes_when_capacity_returns(runtime, cloud, monkeypatch):
+def test_cloud_budget_wait_uses_verified_local_context(runtime, cloud, monkeypatch):
     led, _, local_calls = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
     monkeypatch.setattr(worker, "_cloud_mode", lambda *args: "off")
     result = step(runtime)
-    assert result['status'] == 'deferred' and result.get('reason') == 'nightly_cloud_capacity'
-    assert not local_calls and not cloud[0] and document(led) is None
-    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
-    monkeypatch.setattr(worker, "_cloud_mode", lambda *args: cloud[1][0])
+    assert result['status'] == 'progressed'
     drain(runtime)
-    assert not local_calls and cloud[0] and context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    assert local_calls and not cloud[0] and context_refresh.context_view_input(led.db, 1, cfg=CFG)
     assert step(runtime)['status'] == 'complete'
 
 
@@ -2178,7 +2297,7 @@ def test_scope_aba_holds_an_unproven_original_cursor_without_reposting_or_overwr
     assert len(cloud[0]) == calls
     assert [tuple(row) for row in led.db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? ORDER BY artifact_id',
                                                 (context_refresh.CHUNK,))] == originals
-    checkpoint = led.artifacts(context_refresh.SCAN, project_id=1)[0]
+    checkpoint = led.artifacts(context_refresh.SCAN, project_id=1)[-1]
     stored = json.loads(checkpoint['content'])
     assert stored['held'] and stored['failure'] == 'nightly_original_unit_unverified'
     assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']

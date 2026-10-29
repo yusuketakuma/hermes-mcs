@@ -231,9 +231,7 @@ def _route_counts(db, cfg, settings, deadline):
             if ((not meta or type(meta.get("extract_version")) is not int)
                     and not policy.history_thread_allowed(db, row["project_id"], row["message_id"])):
                 continue
-            recent = db.execute("SELECT 1 FROM messages WHERE message_id=? AND notified_at>=?",
-                                (row["message_id"], now - extract._ARRIVAL_CARRY_S)).fetchone()
-            if recent:
+            if not policy.history_target_ready(db, row["project_id"], row["message_id"]):
                 continue
             released = db.execute(f"SELECT 1 FROM messages m WHERE m.message_id=? "
                 f"AND EXISTS ({extract._hold_sql(released=True)})", (row["message_id"],)).fetchone()
@@ -253,12 +251,12 @@ def _route_counts(db, cfg, settings, deadline):
         rows = db.execute(
             "SELECT j.project_id,j.message_id,length(m.body_text) AS body_length FROM fetch_jobs j "
             "JOIN messages m ON m.project_id=j.project_id AND m.message_id=j.message_id "
-            "WHERE j.kind='semantic' AND j.state='pending' AND json_valid(j.payload) "
-            "AND COALESCE(json_extract(j.payload,'$.eligible'),0)!=1" + scope, params)
+            "WHERE j.kind='semantic' AND j.state='pending' AND json_valid(j.payload) " + scope, params)
         item = out["semantic_backlog"]
         for count, row in enumerate(rows, 1):
             _checkpoint(deadline, count)
-            if not policy.history_thread_allowed(db, row["project_id"], row["message_id"]):
+            if (not policy.history_target_ready(db, row["project_id"], row["message_id"])
+                    or not policy.history_thread_allowed(db, row["project_id"], row["message_id"])):
                 continue
             item["targets"] += 1
             item["input_chars"] += row["body_length"] or 0
@@ -590,7 +588,7 @@ def apply_control_tx(db, req, now):
             return "no_api_key", {}
         if not policy.pricing_valid(model=settings["model"]) or policy.usage_report(SimpleNamespace(db=db))["pricing_unverified"]:
             return "pricing_unverified", {}
-        policy.capture_history_tx(db, req["command_id"], now)
+        policy.capture_history_tx(db, req["command_id"], now, continuous=True)
         state = {"consecutive_failures": 0, "open_until": 0.0,
                  "failure_class": None, "updated_at": now}
         db.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",

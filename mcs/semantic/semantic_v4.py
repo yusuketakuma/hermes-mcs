@@ -619,8 +619,9 @@ def _rebuild_hint_docs(ledger, scfg: dict, limit: int, out: dict) -> int:
                 reason = "repaired"  # cannot be re-derived from cached chunks
             else:
                 old = json.dumps(validate_facts_doc(doc), sort_keys=True)
+                producer = {}
                 new, reason = rebuild_facts_v2_cached(member, ledger.db, fp, pid,
-                                                      doc, meta)
+                                                      doc, meta, producer_out=producer)
                 if new is not None and old == json.dumps(
                         validate_facts_doc(new), sort_keys=True):
                     new, reason = None, "same"
@@ -647,6 +648,16 @@ def _rebuild_hint_docs(ledger, scfg: dict, limit: int, out: dict) -> int:
                 if new is not None:
                     new_meta = {k: v for k, v in meta.items()
                                 if k != "hint_rebuild"}
+                    if isinstance(new_meta.get("provider_provenance"), dict):
+                        new_meta["provider_provenance"] = {
+                            **new_meta["provider_provenance"],
+                            "providers": producer.get("providers", []),
+                            "complete": producer.get("complete") is True,
+                            "result_hash": payload_hash(new),
+                            "source_fingerprint": fp,
+                            "policy_fingerprint": meta.get("policy_fingerprint"),
+                            "target_revision": member["revision"],
+                        }
                     new_meta.update(
                         build=FACTS_V2_BUILD, rebuilt_from=row["artifact_id"],
                         coverage_status=new["coverage"]["status"],

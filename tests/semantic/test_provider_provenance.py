@@ -96,7 +96,7 @@ def test_summary_provenance_requires_exact_content_and_source():
     assert proof['result_hash'] == mcs_util.payload_hash(content)
 
 
-def test_cached_chunks_require_intact_provider_binding(tmp_path):
+def test_cached_chunks_require_intact_provider_binding(tmp_path, monkeypatch):
     import cloud_policy
     import json
     import semantic_extraction
@@ -124,6 +124,11 @@ def test_cached_chunks_require_intact_provider_binding(tmp_path):
             no_call, member, ledger=ledger, source_fingerprint=bundle['source_fingerprint'], project_id=1)
         assert reused['reused_chunks']
         assert reused['producer_evidence'] == first['producer_evidence']
+        monkeypatch.setattr(transport, 'inference_provider', lambda: 'anthropic')
+        other_backend = semantic_extraction.extract_facts_v2(
+            no_call, member, ledger=ledger, source_fingerprint=bundle['source_fingerprint'], project_id=1)
+        assert not other_backend['reused_chunks'] and not other_backend['extraction_complete']
+        monkeypatch.setattr(transport, 'inference_provider', lambda: 'local')
         row = ledger.db.execute('SELECT artifact_id,meta,model,content FROM artifacts WHERE kind=?',
                                 (semantic_extraction.KIND_CHUNK_V2,)).fetchone()
         meta = json.loads(row['meta'])
@@ -147,7 +152,7 @@ def test_cached_chunks_require_intact_provider_binding(tmp_path):
             ledger.db.commit()
             old = semantic_extraction.extract_facts_v2(
                 no_call, member, ledger=ledger, source_fingerprint=bundle['source_fingerprint'], project_id=1)
-            assert old['reused_chunks']
+            assert not old['reused_chunks'] and not old['extraction_complete']
             assert old['producer_evidence'] == {'providers': [], 'complete': False}
         ledger.db.execute('UPDATE artifacts SET meta=?,model=?,content=? WHERE artifact_id=?',
                           (row['meta'], row['model'], row['content'], row['artifact_id']))
@@ -173,6 +178,7 @@ def test_cached_cloud_chunk_is_unknown_without_independent_receipt(tmp_path, mon
         answer = facts_llm([])
         monkeypatch.setattr(transport, 'inference_model', lambda: cloud_policy.PROVIDERS['anthropic'])
         monkeypatch.setattr(transport, 'inference_requests', lambda: ['synthetic-reservation'])
+        monkeypatch.setattr(transport, 'inference_provider', lambda: 'anthropic')
 
         def observed(prompt):
             transport._record_inference('anthropic')
@@ -187,7 +193,7 @@ def test_cached_cloud_chunk_is_unknown_without_independent_receipt(tmp_path, mon
 
         reused = semantic_extraction.extract_facts_v2(
             no_call, member, ledger=ledger, source_fingerprint=bundle['source_fingerprint'], project_id=1)
-        assert reused['reused_chunks']
+        assert not reused['reused_chunks'] and not reused['extraction_complete']
         assert reused['producer_evidence'] == {'providers': [], 'complete': False}
         reserve_id = ledger.artifact_add(cloud_policy.KINDS[0], '{}', project_id=1, message_id=1,
                                          model=cloud_policy.PROVIDERS['anthropic'],
@@ -199,12 +205,17 @@ def test_cached_cloud_chunk_is_unknown_without_independent_receipt(tmp_path, mon
         proven = semantic_extraction.extract_facts_v2(
             no_call, member, ledger=ledger, source_fingerprint=bundle['source_fingerprint'], project_id=1)
         assert proven['producer_evidence'] == first['producer_evidence']
+        monkeypatch.setattr(transport, 'inference_provider', lambda: 'local')
+        local_retry = semantic_extraction.extract_facts_v2(
+            no_call, member, ledger=ledger, source_fingerprint=bundle['source_fingerprint'], project_id=1)
+        assert not local_retry['reused_chunks'] and not local_retry['extraction_complete']
+        monkeypatch.setattr(transport, 'inference_provider', lambda: 'anthropic')
         ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
                           (json.dumps({'reservation_id': 'other'}), reserve_id))
         ledger.db.commit()
         stale = semantic_extraction.extract_facts_v2(
             no_call, member, ledger=ledger, source_fingerprint=bundle['source_fingerprint'], project_id=1)
-        assert stale['reused_chunks']
+        assert not stale['reused_chunks'] and not stale['extraction_complete']
         assert stale['producer_evidence'] == {'providers': [], 'complete': False}
     finally:
         ledger.close()

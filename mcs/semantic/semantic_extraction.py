@@ -224,7 +224,8 @@ def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
                    revision, specs, source: str, *,
                    kind: str = KIND_CHUNK,
                    schema: str = SCHEMA_VERSION,
-                   extra=None, generation: str | None = None, expected_model=None) -> dict[int, dict]:
+                   extra=None, generation: str | None = None, expected_model=None,
+                   expected_provider=None) -> dict[int, dict]:
     if db is None:
         return {}
     cached = {}
@@ -282,6 +283,9 @@ def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
                         raise ValueError("cached_evidence_invalid")
             if extra is not None and not extra(content):
                 continue
+            provider = _cached_provider(db, row, expected_model) if expected_model is not None else None
+            if expected_provider is not None and provider != expected_provider:
+                continue
             cached[index] = {"facts": content["facts"],
                              "dropped": content.get("dropped", 0),
                              "extra": {k: content[k] for k in content
@@ -289,7 +293,6 @@ def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
                                                     "start_codepoint",
                                                     "end_codepoint",
                                                     "facts", "dropped"}}}
-            provider = _cached_provider(db, row, expected_model) if expected_model is not None else None
             if provider is not None:
                 cached[index]["provider"] = provider
         except (KeyError, TypeError, ValueError, RecursionError):
@@ -515,7 +518,8 @@ def extract_facts_resumable(llm_fn, member: dict,
     generation = _chunk_generation(model, semantic_llm._FACT_PROMPT, chunk_size=chunk_size)
     cached = _cached_chunks((ledger.db if ledger is not None else None), project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
-                            generation=generation)
+                            generation=generation, expected_model=model,
+                            expected_provider=semantic_transport.inference_provider())
 
     facts = []
     completed = []
@@ -535,8 +539,9 @@ def extract_facts_resumable(llm_fn, member: dict,
             failed.append(index)
             failure_reason = "deadline"
             break
-        parsed, reason = _chunk_llm(
-            llm_fn, _chunk_prompt(semantic_llm._FACT_PROMPT, spec, manifest, source, chunk_size), deadline)
+        with semantic_transport.trace_inference() as observed:
+            parsed, reason = _chunk_llm(
+                llm_fn, _chunk_prompt(semantic_llm._FACT_PROMPT, spec, manifest, source, chunk_size), deadline)
         if reason is not None:
             failed.append(index)
             failure_reason = reason
@@ -559,7 +564,7 @@ def extract_facts_resumable(llm_fn, member: dict,
         _persist_chunk(ledger, project_id, message_id, model,
                        source_fp,
                        body_hash, revision, spec, chunk_facts, chunk_dropped,
-                       len(specs), generation=generation)
+                       len(specs), generation=generation, provider=observed[-1] if observed else None)
         facts.extend(chunk_facts)
         completed.append(index)
 
@@ -754,7 +759,8 @@ def extract_facts_v2(llm_fn, member: dict,
     cached = _cached_chunks((ledger.db if ledger is not None else None), project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
                             kind=KIND_CHUNK_V2, schema=cache_schema,
-                            extra=assembly.v2_chunk_ok, generation=generation, expected_model=model)
+                            extra=assembly.v2_chunk_ok, generation=generation, expected_model=model,
+                            expected_provider=semantic_transport.inference_provider())
 
     atom_owner = {}
     for chunk in manifest["chunks"]:
@@ -906,14 +912,36 @@ def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
         return None, "manifest_changed"
     specs = assembly.manifest_specs(manifest)
     retry = bool(stored_meta.get("coverage_retry"))
+    proof = stored_meta.get("provider_provenance")
+    expected_provider = None
+    if proof is not None:
+        if (not isinstance(proof, dict) or type(proof.get("version")) is not int
+                or proof["version"] != 1 or proof.get("stage") != "facts"
+                or proof.get("result_hash") != mcs_util.payload_hash(stored_doc)
+                or proof.get("source_fingerprint") != source_fp
+                or proof.get("policy_fingerprint") != stored_meta.get("policy_fingerprint")
+                or proof.get("target_revision") != member.get("revision")
+                or type(proof.get("complete")) is not bool
+                or not isinstance(proof.get("providers"), list)
+                or any(not isinstance(p, str) or p not in ("local", "anthropic", "openai")
+                       for p in proof["providers"])
+                or len(set(proof["providers"])) != len(proof["providers"])
+                or proof["complete"] and len(proof["providers"]) != 1):
+            return None, "producer_unverified"
+        if proof["complete"]:
+            expected_provider = proof["providers"][0]
     cached = _cached_chunks(db, project_id, message_id, source_fp, body_hash, revision,
                             specs, source, kind=KIND_CHUNK_V2,
                             schema=SCHEMA_VERSION_V2 + ("/coverage-retry" if retry else ""),
                             extra=assembly.v2_chunk_ok,
                             generation=v2_generation(),
-                            expected_model=semantic_transport.llm_model() if producer_out is not None else None)
+                            expected_model=semantic_transport.llm_model(),
+                            expected_provider=expected_provider)
     if any(spec["index"] not in cached for spec in specs):
         return None, "chunk_cache_miss"
+    providers = [cached[spec["index"]].get("provider") for spec in specs]
+    if len(set(providers)) > 1:
+        return None, "producer_unverified"
     jev_used = any(o.get("source") == "jev_pre" for o in stored_doc.get("obligations") or [])
     if jev_used and any(not isinstance(cached[spec["index"]]["extra"].get("jev_preflight"), dict)
                         for spec in specs):
@@ -947,6 +975,10 @@ def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
                                         assembled, reconciled, progress)
     if not result["extraction_complete"]:
         return None, "chunk_cache_miss"
+    # Legacy checkpoints with unknown producers may confirm an unchanged
+    # document, but cannot authorize a new document assembled from them.
+    if None in providers and mcs_util.payload_hash(result["doc"]) != mcs_util.payload_hash(stored_doc):
+        return None, "producer_unverified"
     if producer_out is not None:
         providers = [cached[spec["index"]].get("provider") for spec in specs]
         producer_out.update(providers=sorted({p for p in providers if p is not None}),
