@@ -186,17 +186,20 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
                             "claims": [{"id": c["claim_id"], "text": c["text"]}
                                        for c in chunk]},
                  "context": list(ctx.values())}
+        partial = False
         try:
             out = jev.evaluate_once_more(jev_client, state, questions, deadline)
         except jev.JevError as error:
             summary["_claim_audit_reason"] = "service_error"
             with suppress(Exception):
                 jev_client.last_error = error
-            return findings + [{"code": "support_unevaluated",
-                                "claim": chunk[0]["claim_id"]}], False
+            out = {"answers": getattr(error, "partial_answers", {})}
+            partial = True
         answers = out.get("answers") if isinstance(out, dict) else None
         for c in chunk:
             ans = answers.get(c["claim_id"]) if isinstance(answers, dict) else None
+            if partial and ans is None:
+                continue
             if (not isinstance(ans, dict)
                     or not isinstance(ans.get("choice"), str)
                     or ans["choice"] not in jev.CLAIM_SUPPORT_OPTIONS
@@ -222,6 +225,9 @@ def audit_claims(jev_client, bundle: dict, summary: dict,
                 findings.append({"code": "claim_ambiguous",
                                  "claim": c["claim_id"],
                                  "confidence": ans["confidence"]})
+        if partial:
+            return findings + [{"code": "support_unevaluated",
+                                "claim": chunk[0]["claim_id"]}], False
     return findings, True
 
 
@@ -447,6 +453,7 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
         state = {"target": {"id": "facts", "facts": [
                      {"id": fact["fact_id"], "text": _fact_audit_target(fact)} for fact, _ in chunk]},
                  "context": list(ctx.values())}
+        partial = False
         try:
             out = jev.evaluate_once_more(jev_client, state, questions, deadline)
         except RuntimeGuardError:
@@ -454,14 +461,14 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
         except Exception as error:
             with suppress(Exception):
                 jev_client.last_error = error
-            findings.append({"code": "fact_audit_unevaluated",
-                             "fact": chunk[0][0]["fact_id"]})
-            return {"status": "INCOMPLETE", "evaluated": False,
-                    "findings": findings, "fact_verdicts": verdicts}
+            out = {"answers": getattr(error, "partial_answers", {})}
+            partial = True
         answers = out.get("answers") if isinstance(out, dict) else None
         for fact, _ in chunk:
             fid = fact["fact_id"]
             answer = answers.get(fid) if isinstance(answers, dict) else None
+            if partial and answer is None:
+                continue
             choice = answer.get("choice") if isinstance(answer, dict) else None
             confidence = answer.get("confidence") \
                 if isinstance(answer, dict) else None
@@ -478,6 +485,10 @@ def audit_facts_v2(jev_client, doc: dict, source_text: str,
                 findings.append({"code": f"fact_{choice}", "fact": fid})
             elif choice == "ambiguous":
                 findings.append({"code": "fact_ambiguous", "fact": fid})
+        if partial:
+            findings.append({"code": "fact_audit_unevaluated", "fact": chunk[0][0]["fact_id"]})
+            return {"status": "INCOMPLETE", "evaluated": False,
+                    "findings": findings, "fact_verdicts": verdicts}
 
     # source -> facts coverage (shared Choice, identical semantics to
     # the legacy audit path).

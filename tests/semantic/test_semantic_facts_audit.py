@@ -86,6 +86,42 @@ def test_jev_failure_mid_audit_is_incomplete():
     assert not result["evaluated"]
 
 
+@pytest.mark.parametrize("target", ["claim", "fact"])
+def test_partial_same_request_keeps_negative_finding_on_unavailability(target):
+    import semantic_jev as jev
+
+    class Partial:
+        last_error = None
+        calls = 0
+
+        def evaluate(self, state, questions, deadline):
+            self.calls += 1
+            if self.calls == 1:
+                first, second = list(questions)
+                options = questions[first]["criteria"]
+                distribution = {key: float(key == "contradicts") for key in options}
+                error = jev.JevError("protocol_error", f"{second}:type_invalid")
+                error.answers = {first: {"type": "choice", "choice": "contradicts",
+                                         "confidence": 0.6, "distribution": distribution}}
+                error.failed = [second]
+                raise error
+            raise jev.JevError("rate_limited", "http_429")
+
+    if target == "claim":
+        summary = {"claims": [{"claim_id": key, "text": "合成", "evidence_refs": []}
+                              for key in ("a", "b")]}
+        findings, evaluated = audit.audit_claims(Partial(), {"members": []}, summary, 10**9)
+        assert not evaluated
+        assert {f["code"] for f in findings} >= {"claim_contradicts", "claim_low_confidence", "support_unevaluated"}
+        assert summary["_claim_audit"]["a"]["choice"] == "contradicts"
+    else:
+        doc = v2_doc([_fact("a"), _fact("b")], [EV])
+        result = audit.audit_facts_v2(Partial(), doc, "合成", 10**9)
+        assert not result["evaluated"]
+        assert {f["code"] for f in result["findings"]} >= {"fact_contradicts", "fact_low_confidence", "fact_audit_unevaluated"}
+        assert result["fact_verdicts"]["a"]["choice"] == "contradicts"
+
+
 def test_coverage_missing_is_needs_review():
     doc = v2_doc([_fact("fact_a")], [EV])
     jev = _Jev(coverage="missing")

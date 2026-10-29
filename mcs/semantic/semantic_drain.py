@@ -92,6 +92,79 @@ def _why(diagnostics: dict, code: str) -> bool:
 
 
 
+def _claim_input_binding(pid, mid, fp, policy, revision, summary, facts):
+    """Bind the exact claims and evidence supplied to the claim audit."""
+    return mcs_util.payload_hash({"project_id": pid, "message_id": mid, "fingerprint": fp,
+                                  "policy": policy, "revision": revision,
+                                  "claims": summary.get("claims"), "facts": facts})
+
+
+def _prior_pending_findings(db, pid, mid, fp, policy, revision, mode, repaired, previous, summary, binding):
+    """Keep known negative findings only when the prior pair is bound to this audit input."""
+    if previous is None:
+        rows = db.execute("SELECT meta FROM artifacts WHERE kind=? AND project_id=? AND message_id=? "
+                          "ORDER BY artifact_id DESC LIMIT 1025", (KIND_AUDIT, pid, mid))
+        for index, row in enumerate(rows):
+            if index == 1024:
+                return [], True
+            try:
+                meta = mcs_util.strict_json(row["meta"])
+                if (not isinstance(meta, dict) or not isinstance(meta.get("fingerprint"), str)
+                        or not isinstance(meta.get("policy_fingerprint"), str)):
+                    return [], True
+                if meta["fingerprint"] == fp and meta["policy_fingerprint"] == policy:
+                    return [], True
+            except (ValueError, TypeError, RecursionError):
+                return [], True
+        return [], False
+    if previous["meta"].get("audit_status") != "PENDING":
+        return [], False
+    findings = previous["content"].get("findings")
+    if not isinstance(findings, list) or any(not isinstance(f, dict) or not isinstance(f.get("code"), str)
+                                              for f in findings):
+        return [], True
+    known = [f for f in findings if f["code"] != "support_unevaluated"]
+    audit = db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? "
+                       "AND message_id=? ORDER BY artifact_id DESC LIMIT 1", (KIND_AUDIT, pid, mid)).fetchone()
+    prior_sum = db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? "
+                           "AND message_id=? ORDER BY artifact_id DESC LIMIT 1", (KIND_SUMMARY, pid, mid)).fetchone()
+    try:
+        ameta = mcs_util.strict_json(audit["meta"])
+        content = mcs_util.strict_json(audit["content"])
+        smeta = mcs_util.strict_json(prior_sum["meta"])
+        stored = mcs_util.strict_json(prior_sum["content"])
+        bound = (is_current(ameta) and is_current(smeta)
+                 and ameta == previous["meta"] and content == previous["content"]
+                 and ameta.get("audit_content_hash") == mcs_util.payload_hash(content)
+                 and ameta.get("summary_artifact_id") == prior_sum["artifact_id"]
+                 and ameta.get("summary_hash") == mcs_util.payload_hash(stored)
+                 and ameta.get("claim_input_binding") == binding
+                 and smeta.get("fingerprint") == ameta.get("fingerprint")
+                 and smeta.get("policy_fingerprint") == ameta.get("policy_fingerprint")
+                 and smeta.get("target_revision") == ameta.get("target_revision")
+                 and all(summary.get(k) == stored.get(k) for k in ("claims",)))
+        # Old PENDING pairs predate the hash/ID receipt. Permit only the
+        # strictly identifiable no-answer case, never an old repair or any
+        # partial finding/verdict whose source cannot be proven.
+        legacy_empty = (not known and bool(findings) and not repaired and is_current(ameta) and is_current(smeta)
+                        and not any(key in ameta for key in ("summary_artifact_id", "claim_input_binding", "audit_content_hash"))
+                        and ameta == previous["meta"] and content == previous["content"]
+                        and content.get("status") == "PENDING" and content.get("target_message_id") == mid
+                        and ameta.get("audit_status") == smeta.get("audit_status") == "PENDING"
+                        and ameta.get("fingerprint") == smeta.get("fingerprint") == fp
+                        and ameta.get("policy_fingerprint") == smeta.get("policy_fingerprint") == policy
+                        and ameta.get("publication_mode") == smeta.get("publication_mode") == mode
+                        and smeta.get("target_revision") == revision
+                        and type(ameta.get("repair_count")) is int and ameta["repair_count"] == 0
+                        and ameta.get("claim_audit") == {}
+                        and not any(meta.get(key) for meta in (ameta, smeta) for key in ("invalidated", "stale"))
+                        and summary.get("claims") == stored.get("claims"))
+        bound = bound or legacy_empty
+    except (TypeError, KeyError, ValueError, AttributeError, RecursionError):
+        bound = False
+    return (known, False) if bound else ([], True)
+
+
 def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
                   members: dict, final_status: str, policy: str, publication_mode: str) -> None:
     """Summary + audit artifact pair for one evaluated target — the
@@ -121,10 +194,11 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
             and prev_sum["meta"].get("publication_mode")
             == publication_mode
             and prev_aud["content"].get("status") == final_status
+            and prev_aud["meta"].get("claim_input_binding") == r.get("claim_input_binding")
             and all(prev_aud["meta"].get(key) == value for key, value in skip_meta.items())
             and prev_aud["content"].get("findings") == r["findings"]):
         return
-    ledger.artifact_add_tx(
+    summary_id = ledger.artifact_add_tx(
         KIND_SUMMARY,
         json.dumps(summary, ensure_ascii=False),
         project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
@@ -136,15 +210,18 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
               # must survive storage or a re-audit of a PENDING-stored
               # stub would lose its blocking finding
               "input_oversize": bool(r["summary"].get("_input_oversize")), **skip_meta})
+    audit_content = {"status": final_status, "findings": r["findings"], "target_message_id": mid}
     ledger.artifact_add_tx(
         KIND_AUDIT,
-        json.dumps({"status": final_status,
-                    "findings": r["findings"],
-                    "target_message_id": mid}, ensure_ascii=False),
+        json.dumps(audit_content, ensure_ascii=False),
         project_id=pid, message_id=mid, model=jev.JEV_MODEL,
         meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp, "policy_fingerprint": policy, "schema": SCHEMA_VERSION,
               "audit_status": final_status, "publication_mode": publication_mode,
               "repair_count": 1 if r["repaired"] else 0,
+              "summary_artifact_id": summary_id, "summary_hash": mcs_util.payload_hash(summary),
+              "audit_content_hash": mcs_util.payload_hash(audit_content),
+              "claim_input_binding": r.get("claim_input_binding"),
+              "target_revision": members[mid]["revision"],
               "jev_requests": r.get("jev_requests", 0),
               # raw Jev claim verdicts — the calibration corpus for
               # match_threshold tuning (summary content strips _-keys,
@@ -1225,6 +1302,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         req0 = audit_client.requests_made if audit_client else 0
         findings = []
         status = "PENDING"
+        claim_input_binding = None
         for _attempt in range(2):      # initial + at most one repair
             if (not isinstance(summary.get("claims"), list)
                     or (jev_skip is not None and not summary["claims"])):
@@ -1233,6 +1311,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 break
             code_f = (audit_code(bundle, facts, summary) + coverage_by_target.get(mid, [])
                       + detail_findings.get(mid, []))
+            claim_input_binding = _claim_input_binding(pid, mid, fp, policy, members[mid]["revision"], summary, facts)
             try:
                 jev_f, evaluated = semantic_audit.audit_claims(
                     jev_client, bundle, summary, deadline,
@@ -1274,10 +1353,27 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                     resource_wait |= flag == "resource"
                     retryable_failure |= flag == "retryable"
                     hard_fail |= flag == "hard"
+            prior_blocked = False
+            if not evaluated and jev_skip is not None:
+                known, unbound = _prior_pending_findings(ledger.db, pid, mid, fp, policy,
+                                                         members[mid]["revision"], scfg["summary_mode"], repaired, prev_audit,
+                                                         summary, claim_input_binding)
+                prior_blocked = bool(known) or unbound or _attempt > 0
+                if known:
+                    jev_f.extend(f for f in known if f not in jev_f)
+                if unbound or _attempt > 0:
+                    jev_f.append({"code": "prior_audit_unverified"})
+                if any(f.get("code") != "support_unevaluated" for f in jev_f):
+                    prior_blocked = True
             findings = code_f + jev_f
             status = (semantic_audit.optional_audit_status(code_f, jev_f, jev_skip, repaired)
                       if not evaluated and jev_skip is not None
                       else audit_status_for(code_f, jev_f, evaluated, repaired))
+            if prior_blocked:
+                # A skipped re-audit cannot clear an earlier negative result
+                # or certify a repair that has not itself been re-evaluated.
+                status = "PENDING"
+                resource_wait = True
             if status == "REPAIR_REQUIRED" and not repaired:
                 guard("repair_reservation")
                 repair_id = ledger.artifact_add(
@@ -1331,6 +1427,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         results[mid] = {"summary": summary, "status": status,
                         "findings": findings, "repaired": repaired,
                         "fresh": True,
+                        "claim_input_binding": claim_input_binding,
                         "jev_skip_reason": jev_skip if status == "SKIPPED" else None,
                         "jev_requests": (audit_client.requests_made - req0)
                         if audit_client else 0}

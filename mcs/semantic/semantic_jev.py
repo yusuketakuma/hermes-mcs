@@ -358,6 +358,27 @@ def failure_class(error) -> str:
         or is_answer_defect(error) else "failed"
 
 
+def _merge_partial_answers(questions, *groups):
+    """Combine validated subsets without accepting conflicting or foreign answers."""
+    merged = {}
+    for group in groups:
+        if group is None:
+            continue
+        if not isinstance(group, dict):
+            raise JevError("protocol_error", "partial_answers_invalid")
+        for qid, answer in group.items():
+            if qid not in questions or qid in merged or not isinstance(answer, dict):
+                raise JevError("protocol_error", "partial_answers_invalid")
+            wire = dict(answer)
+            if wire.get("type") == "choice" and "distribution" in wire:
+                wire["probabilities"] = wire["distribution"]
+            try:
+                merged[qid] = _validate_answer(qid, questions[qid], wire)
+            except (JevError, TypeError, ValueError, AttributeError):
+                raise JevError("protocol_error", "partial_answers_invalid") from None
+    return merged
+
+
 def evaluate_once_more(client, state: dict, questions: dict,
                        deadline: float, *, on_valid_answers=None, on_attempt_result=None) -> dict:
     """Retry one malformed answer; persist validated answers before any retry.
@@ -425,6 +446,8 @@ def evaluate_once_more(client, state: dict, questions: dict,
         result = client.evaluate(state, questions, deadline)
     except JevError as error:
         if not is_answer_defect(error):
+            if on_valid_answers is None and hasattr(error, "partial_answers"):
+                error.partial_answers = _merge_partial_answers(questions, error.partial_answers)
             raise
         kept = getattr(error, "answers", None)
         failed = getattr(error, "failed", None)
@@ -432,6 +455,13 @@ def evaluate_once_more(client, state: dict, questions: dict,
         if on_valid_answers is not None:
             persist(result.get("answers"))
         return result
+    if on_valid_answers is None and (kept is not None or failed is not None):
+        if (not isinstance(kept, dict) or not isinstance(failed, (list, tuple, set, frozenset))
+                or any(not isinstance(q, str) for q in failed)
+                or len(failed) != len(set(failed))
+                or set(kept) & set(failed)
+                or set(kept) | set(failed) != set(questions)):
+            raise JevError("protocol_error", "partial_answers_invalid")
     if kept:
         persist(kept)
     remaining = ({q: questions[q] for q in failed} if kept and failed else questions)
@@ -440,6 +470,10 @@ def evaluate_once_more(client, state: dict, questions: dict,
     except JevError as error:
         if is_answer_defect(error):
             persist(getattr(error, "answers", None))
+        if on_valid_answers is None:
+            error.partial_answers = _merge_partial_answers(
+                questions, kept, getattr(error, "partial_answers", None),
+                getattr(error, "answers", None) if is_answer_defect(error) else None)
         raise
     if on_valid_answers is not None:
         persist(again.get("answers"))
@@ -888,7 +922,8 @@ def evaluate_chunked(jev_client, state: dict, questions: dict,
         except JevError as error:
             # Completed chunks are validated answers. Preserve them when a
             # later chunk stops, so callers cannot discard a known finding.
-            error.partial_answers = dict(merged["answers"])
+            error.partial_answers = _merge_partial_answers(
+                questions, merged["answers"], getattr(error, "partial_answers", None))
             raise
         merged["answers"].update(out["answers"])
     return merged

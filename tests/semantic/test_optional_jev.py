@@ -5,6 +5,219 @@ from semantic_audit import jev_skip_reason, optional_audit_status
 from semantic_jev import JevError
 
 
+@pytest.mark.parametrize("stop", ["rate_limited", "budget_exceeded"])
+@pytest.mark.parametrize("chunked", [False, True])
+def test_same_chunk_negative_survives_failed_answer_retry(stop, chunked):
+    import semantic_jev as jev
+    questions = {key: jev.noul_question("synthetic", "yes", "no") for key in ("a", "b")}
+
+    class Partial:
+        def __init__(self):
+            self.calls = 0
+
+        def evaluate(self, state, requested, deadline):
+            self.calls += 1
+            if self.calls == 1:
+                error = JevError("protocol_error", "b:type_invalid")
+                error.answers = {"a": {"type": "noul", "noul": 0.1}}
+                error.failed = ["b"]
+                raise error
+            raise JevError(stop, "daily_cap" if stop == "budget_exceeded" else "http_429")
+
+    with pytest.raises(JevError) as caught:
+        if chunked:
+            jev.evaluate_chunked(Partial(), {}, questions, 1, 2)
+        else:
+            jev.evaluate_once_more(Partial(), {}, questions, 1)
+    assert caught.value.kind == stop
+    assert caught.value.partial_answers == {"a": {"type": "noul", "noul": 0.1}}
+
+
+@pytest.mark.parametrize("bad", [
+    {"foreign": {"type": "noul", "noul": 0.1}},
+    {"a": {"type": "noul", "noul": float("nan")}},
+    {"a": {"type": "noul", "noul": 0.9}},
+    ["not", "a", "mapping"],
+])
+def test_invalid_or_conflicting_retry_partial_never_authorizes_skip(bad):
+    import semantic_jev as jev
+    questions = {key: jev.noul_question("synthetic", "yes", "no") for key in ("a", "b")}
+
+    class Partial:
+        calls = 0
+
+        def evaluate(self, state, requested, deadline):
+            self.calls += 1
+            if self.calls == 1:
+                error = JevError("protocol_error", "b:type_invalid")
+                error.answers, error.failed = {"a": {"type": "noul", "noul": 0.1}}, ["b"]
+                raise error
+            error = JevError("rate_limited", "http_429")
+            error.partial_answers = bad
+            raise error
+
+    with pytest.raises(JevError) as caught:
+        jev.evaluate_chunked(Partial(), {}, questions, 1, 2)
+    assert caught.value.kind == "protocol_error"
+    assert jev_skip_reason(caught.value) is None
+
+
+@pytest.mark.parametrize("prior", ["bound", "missing_binding", "corrupt", "corrupt_findings", "older_corrupt"])
+def test_pending_negative_survives_next_run_with_jev_disabled(tmp_path, monkeypatch, prior):
+    import json
+    import time
+    import semantic_audit
+    import semantic_drain
+    from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
+
+    db = _seeded(tmp_path)
+    count = [0]
+
+    def claim_audit(client, bundle, summary, deadline, *args):
+        count[0] += 1
+        if client is not None:
+            client.last_error = JevError("protocol_error", "claim_2:type_invalid", retryable=True)
+            return [{"code": "claim_contradicts", "claim": "claim_1", "confidence": 0.9},
+                    {"code": "support_unevaluated", "claim": "claim_2"}], False
+        return [{"code": "support_unevaluated"}], False
+
+    real_audit = semantic_audit.audit_claims
+    monkeypatch.setattr(semantic_audit, "audit_claims", claim_audit)
+    try:
+        first = semantic_drain.run_due(db, _cfg("assist", budget=100), {"errors": []},
+                                       time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)
+        assert first["done"] == 0
+        [old] = db.artifacts("semantic_audit", message_id=1)
+        assert json.loads(old["meta"])["audit_status"] == "PENDING"
+        if prior == "missing_binding":
+            db.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.claim_input_binding') "
+                          "WHERE kind='semantic_audit' AND message_id=1")
+        elif prior == "corrupt":
+            db.db.execute("UPDATE artifacts SET content='not-json' WHERE kind='semantic_audit' AND message_id=1")
+        elif prior == "corrupt_findings":
+            db.db.execute("UPDATE artifacts SET content=json_set(content,'$.findings',json(?)) "
+                          "WHERE kind='semantic_audit' AND message_id=1",
+                          ('[{"code":"support_unevaluated"}]',))
+        elif prior == "older_corrupt":
+            db.db.execute("UPDATE artifacts SET content='not-json' WHERE kind='semantic_audit' AND message_id=1")
+            db.db.execute("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                          "SELECT kind,project_id,message_id,'{}',model,json_set(meta,'$.policy_fingerprint',?),created_at "
+                          "FROM artifacts WHERE kind='semantic_audit' AND message_id=1 ORDER BY artifact_id DESC LIMIT 1",
+                          ("b" * 64,))
+        db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+        db.db.commit()
+        attempts = db.db.execute("SELECT attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()[0]
+        second = semantic_drain.run_due(db, _cfg("assist", budget=0), {"errors": []},
+                                        time.monotonic() + 300, llm_fn=_llm)
+        assert second["done"] == 0
+        current = json.loads(db.artifacts("semantic_audit", message_id=1)[-1]["content"])
+        assert current["status"] == "PENDING"
+        codes = {f["code"] for f in current["findings"]}
+        assert ("claim_contradicts" if prior == "bound" else "prior_audit_unverified") in codes
+        if prior != "bound":
+            assert "claim_contradicts" not in codes
+        for _ in range(2):
+            db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+            db.db.commit()
+            semantic_drain.run_due(db, _cfg("assist", budget=0), {"errors": []},
+                                   time.monotonic() + 300, llm_fn=_llm)
+        job = db.db.execute("SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
+        assert job["state"] == "pending" and job["attempts"] == attempts
+        monkeypatch.setattr(semantic_audit, "audit_claims", real_audit)
+        db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+        db.db.commit()
+        recovered = semantic_drain.run_due(db, _cfg("assist", budget=100), {"errors": []},
+                                           time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)
+        assert recovered["done"] == 1
+    finally:
+        db.close()
+
+
+def test_repaired_summary_stays_pending_if_jev_cannot_recheck(tmp_path, monkeypatch):
+    import json
+    import time
+    import semantic_audit
+    import semantic_drain
+    from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
+
+    db = _seeded(tmp_path)
+    calls = [0]
+
+    def claim_audit(client, bundle, summary, deadline, *args):
+        calls[0] += 1
+        if calls[0] == 1:
+            return [{"code": "claim_not_supported", "claim": "claim_1", "confidence": 0.9}], True
+        if client is not None:
+            client.last_error = JevError("rate_limited", "http_429", retryable=True)
+        return [{"code": "support_unevaluated"}], False
+
+    monkeypatch.setattr(semantic_audit, "audit_claims", claim_audit)
+    try:
+        out = semantic_drain.run_due(db, _cfg("assist", budget=100), {"errors": []},
+                                     time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)
+        assert out["done"] == 0 and calls[0] >= 2
+        [row] = db.artifacts("semantic_audit", message_id=1)
+        audit = json.loads(row["content"])
+        assert audit["status"] == "PENDING"
+        assert {f["code"] for f in audit["findings"]} >= {"prior_audit_unverified", "support_unevaluated"}
+        assert all(f["code"] != "claim_not_supported" for f in audit["findings"])
+    finally:
+        db.close()
+
+
+def test_legacy_pending_without_any_jev_answer_can_skip_after_recheck(tmp_path, monkeypatch):
+    import json
+    import time
+    import semantic_audit
+    import semantic_drain
+    from semantic_testkit import _cfg, _FakeJev, _llm, _seeded
+
+    db = _seeded(tmp_path)
+
+    def claim_audit(client, bundle, summary, deadline, *args):
+        if client is not None:
+            client.last_error = JevError("protocol_error", "claim_1:type_invalid", retryable=True)
+        return [{"code": "support_unevaluated"}], False
+
+    monkeypatch.setattr(semantic_audit, "audit_claims", claim_audit)
+    try:
+        assert semantic_drain.run_due(db, _cfg("assist", budget=100), {"errors": []},
+                time.monotonic() + 300, jev_client=_FakeJev(), llm_fn=_llm)["done"] == 0
+        db.db.execute("UPDATE artifacts SET meta=json_remove(meta,'$.summary_artifact_id',"
+                      "'$.claim_input_binding','$.summary_hash','$.target_revision','$.audit_content_hash') "
+                      "WHERE kind='semantic_audit'")
+        db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+        db.db.commit()
+        out = semantic_drain.run_due(db, _cfg("assist", budget=0), {"errors": []},
+                                     time.monotonic() + 300, llm_fn=_llm)
+        assert out["done"] == 1
+        assert all(json.loads(row["content"])["status"] == "SKIPPED"
+                   for row in db.artifacts("semantic_audit")[-2:])
+    finally:
+        db.close()
+
+
+def test_prior_audit_scan_limit_fails_closed(tmp_path):
+    import json
+    import semantic_drain
+    from semantic_testkit import _seeded
+
+    db = _seeded(tmp_path)
+    try:
+        meta = json.dumps({"fingerprint": "c" * 64, "policy_fingerprint": "d" * 64})
+        with db.db:
+            db.db.executemany("INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) "
+                              "VALUES('semantic_audit',1,1,'{}','synthetic',?,0)", [(meta,)] * 1025)
+        args = (db.db, 1, 1, "a" * 64, "b" * 64, "revision", "shadow", False, None, {}, "binding")
+        assert semantic_drain._prior_pending_findings(*args) == ([], True)
+        with db.db:
+            db.db.execute("DELETE FROM artifacts WHERE artifact_id=(SELECT MAX(artifact_id) FROM artifacts "
+                          "WHERE kind='semantic_audit')")
+        assert semantic_drain._prior_pending_findings(*args) == ([], False)
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize(("kind", "detail", "expected"), [
     ("no_api_key", "unset", "not_configured"),
     ("budget_exceeded", "daily_cap", "daily_budget"),
