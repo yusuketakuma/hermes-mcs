@@ -621,8 +621,12 @@ def precheck_local(cfg: dict, *, deadline=None) -> list[str]:
     except Exception as e:
         errors.append(f"validate_config_failed: {type(e).__name__}")
     with suppress(OSError):
-        need = os.path.getsize(LEDGER) * 2 + 64 * 1024 * 1024
-        if shutil.disk_usage(DATA).free < need:
+        import maintenance
+        # Preserve the updater's reserve as well as the backup's own guard.
+        free = shutil.disk_usage(DATA).free
+        legacy_need = os.path.getsize(LEDGER) * 2 + 64 * 1024 * 1024
+        backup_need_mb = maintenance._backup_need_mb(LEDGER)
+        if free < legacy_need or free / (1024 * 1024) < backup_need_mb:
             errors.append("insufficient_disk")
     # an owned idle watchdog whose explicit selection drifted is repaired by
     # the post-merge `services`; anything else still blocks before merge
