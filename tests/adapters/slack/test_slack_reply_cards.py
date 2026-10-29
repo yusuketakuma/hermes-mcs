@@ -55,12 +55,12 @@ def test_late_reply_gets_its_own_card_in_the_root_thread(led, monkeypatch):
     assert reply["card_key"].endswith("|reply:202")
     assert json.loads(reply["anchor_key"]) == {"root": 100, "source": 202}
     assert reply["layout"] == notify_cards.CARD_LAYOUT and reply["delivery_state"] == "delivered"
-    # posted inside the root card's thread, never re-shown in the channel
+    # The first reply card stays in the root thread and is also shown in the channel.
     assert reply["thread_id"] == root["message_id"] != reply["message_id"]
     posts = world.client.thread_posts[before:]
     card_posts = [p for p in posts if p.get("blocks")]
     assert len(card_posts) == 1 and card_posts[0]["thread_ts"] == root["message_id"]
-    assert not any(p.get("reply_broadcast") for p in posts)
+    assert [p for p in posts if p.get("reply_broadcast")] == card_posts
     assert not any("新しい返信をカードに追加しました。" in (p.get("text") or "") for p in posts)
 
     spec = _spec(led, reply["card_id"])

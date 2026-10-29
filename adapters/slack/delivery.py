@@ -334,6 +334,11 @@ class SlackCardAdapter:
                     return {"result": "not_sent", "error_code": "thread_root_unverified"}
                 if op != "update":
                     kwargs["thread_ts"] = thread_ts
+                    if (op == "create" and spec["kind"] == "thread"
+                            and reply_card_key(spec.get("card_key"))
+                            and spec["parts"].get("source_thread") is True
+                            and delivery.get("intent_event_ids")):
+                        kwargs["reply_broadcast"] = True
             response = await call_native(send, **kwargs)
         except asyncio.CancelledError:
             raise

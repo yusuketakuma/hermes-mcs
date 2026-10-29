@@ -177,18 +177,85 @@ def test_short_reply_face_pins_drug_actions_to_parent_thread_and_its_own_card(le
     _llm_extract(led, 201, {"meds": [{"name": "合成薬", "dose": "5mg", "action": "start",
                                    "subject": "patient", "status": "current", "negated": False,
                                    "unverified": False, "evidence": "合成の薬剤記録"}]})
-    assert _dispatch(led, _intent(led, payload={"message_ids": [201]}), cfg, now=clock[0])["dispatched"]
+    intent = _intent(led, payload={"message_ids": [201]})
+    assert _dispatch(led, intent, cfg, now=clock[0])["dispatched"]
     asyncio.run(_granted_card(world.worker, led, world.root))
     reply = led.db.execute("SELECT * FROM notification_cards WHERE card_key LIKE '%|reply:201'").fetchone()
     assert reply["delivery_state"] == "delivered" and reply["message_id"] != ROOT_TS
     spec = json.loads(_latest_render(led, reply["card_id"])["spec_json"])
     assert spec["parts"]["slack"]["face_posts"] and not spec["parts"]["thread_body_parts"]
+    broadcasts = [p for p in world.client.thread_posts if p.get("reply_broadcast")]
+    assert len(broadcasts) == 1 and broadcasts[0]["thread_ts"] == ROOT_TS
+    # Replaying the accepted intent and polling again never posts another card.
+    _dispatch(led, intent, cfg, now=clock[0])
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    assert [p for p in world.client.thread_posts if p.get("reply_broadcast")] == broadcasts
     tokens = [token for token, context in token_map(spec).items() if context["action"] == "meds"]
     assert tokens
     for token in tokens:
         pin = world.reg.token(token)
         assert pin["verified_thread_id"] == ROOT_TS
         assert pin["verified_card_message_id"] == reply["message_id"]
+
+
+@pytest.mark.parametrize("mode", ["reply", "update", "reprocess", "root", "signal", "foreign_root", "timeout"])
+def test_only_first_verified_reply_card_send_broadcasts(world, mode):
+    spec = _post_spec(202, "reply_key")
+    spec["parts"]["source_thread"] = True
+    if mode == "update":
+        spec["op"] = "update"
+        spec["delivery"]["message_id"] = "1790000000.000020"
+    elif mode == "reprocess":
+        spec["delivery"]["intent_event_ids"] = []
+    elif mode == "root":
+        spec["card_key"] = "synthetic-root"
+        spec["parts"].pop("source_thread")
+        spec["delivery"].pop("thread_id")
+    elif mode == "signal":
+        spec["kind"] = "signal"
+        spec["card_key"] = "synthetic-signal"
+    elif mode == "foreign_root":
+        async def foreign(**kwargs):
+            return {"ok": True, "messages": [{"ts": ROOT_TS, "bot_id": "B_OTHER"}]}
+        world.client.conversations_replies = foreign
+    elif mode == "timeout":
+        world.client.failure = TimeoutError("synthetic uncertain response")
+    out = asyncio.run(world.sender.perform(spec))
+    writes = [(op, kw) for op, kw in world.client.calls if op in ("create", "update")]
+    if mode == "foreign_root":
+        assert out == {"result": "not_sent", "error_code": "thread_root_unverified"}
+        assert writes == []
+        return
+    assert out["result"] == ("unknown" if mode == "timeout" else "delivered")
+    assert len(writes) == 1
+    op, wire = writes[0]
+    assert op == ("update" if mode == "update" else "create")
+    assert wire.get("reply_broadcast", False) is (mode in ("reply", "timeout"))
+    assert wire.get("thread_ts") == (ROOT_TS if mode in ("reply", "reprocess", "signal", "timeout") else None)
+
+
+def test_uncertain_reply_card_broadcast_is_not_automatically_retried(led, monkeypatch):
+    import notify_cards
+
+    clock = [NOW]
+    monkeypatch.setattr(notify_cards.time, "time", lambda: clock[0])
+    cfg = {**SLACK, "notify": {**SLACK["notify"], "reply_cards": True}}
+    _seed_thread(led, mids=(100,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}), cfg)
+    world = _mkworld(led)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    clock[0] += 60
+    _msg(led, 202, parent=100, body="合成の新しい返信", ts=int(clock[0]))
+    _dispatch(led, _intent(led, payload={"message_ids": [202]}), cfg, now=clock[0])
+    world.client.failure = TimeoutError("synthetic uncertain send")
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    reply = led.db.execute("SELECT * FROM notification_cards WHERE card_key LIKE '%|reply:202'").fetchone()
+    assert reply["delivery_state"] == "delivery_unknown"
+    writes = [kw for op, kw in world.client.calls if op == "create" and kw.get("reply_broadcast")]
+    assert len(writes) == 1
+    world.client.failure = None
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    assert [kw for op, kw in world.client.calls if op == "create" and kw.get("reply_broadcast")] == writes
 
 
 @pytest.mark.parametrize("marker", ["post_source_id", "reply_key"])
