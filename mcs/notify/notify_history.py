@@ -30,9 +30,10 @@ def targets(db, project_id, payload, transport, *, scope=None):
         prior = db.execute("SELECT delivery_state,ui_state FROM notification_cards "
             "WHERE kind='patient_history' AND project_id=? AND transport='lineworks' "
             "AND json_extract(anchor_key,'$.cohort_id')=? "
-            "AND json_extract(anchor_key,'$.phase')='start' AND profile IS ? AND team_id IS ? "
+            "AND json_extract(anchor_key,'$.phase')='start' AND profile IS ? AND application_id IS ? AND team_id IS ? "
             "AND channel_id IS ? ORDER BY card_id DESC LIMIT 1",
-            (project_id, state["cohort_id"], scope.get("profile"), scope.get("team_id"), scope.get("channel_id"))).fetchone()
+            (project_id, state["cohort_id"], scope.get("profile"), scope.get("application_id"),
+             scope.get("team_id"), scope.get("channel_id"))).fetchone()
         if prior and prior["delivery_state"] == "delivered" and (
                 (loads_dict(prior["ui_state"]) or {}).get("history_latest") or {}).get("phase") == "complete":
             phase = "complete"
@@ -264,9 +265,9 @@ def emit_completion_tx(ledger, card, now):
         return
     cohort = anchor(card)["cohort_id"]
     if ledger.db.execute("SELECT 1 FROM notification_cards WHERE kind='patient_history' AND project_id=? "
-            "AND transport='lineworks' AND profile IS ? AND team_id IS ? AND channel_id IS ? "
+            "AND transport='lineworks' AND profile IS ? AND application_id IS ? AND team_id IS ? AND channel_id IS ? "
             "AND json_extract(anchor_key,'$.cohort_id')=? AND json_extract(anchor_key,'$.phase')='complete'",
-            (card["project_id"], card["profile"], card["team_id"], card["channel_id"], cohort)).fetchone():
+            (card["project_id"], card["profile"], card["application_id"], card["team_id"], card["channel_id"], cohort)).fetchone():
         return
     if not ledger.db.execute("SELECT 1 FROM notify_outbox WHERE kind='patient_history' AND project_id=? "
             "AND state IN ('pending','failed') AND next_try IS NOT NULL AND json_valid(payload) "

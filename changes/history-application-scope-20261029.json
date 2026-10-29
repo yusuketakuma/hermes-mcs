@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "Bot変更後の初回履歴通知を修正",
+  "summary": "LINE WORKSのBotを変更した場合、以前のBotの送信記録で新しいBotの開始・完了通知が抑止される問題を修正します。",
+  "upgrade": "LINE WORKS利用時は通常の更新で適用されます。送信結果が不明な通知は再送しません。",
+  "details": [
+    "初回履歴の送信済み判定にapplication_idを含めます。"
+  ],
+  "refs": [
+    "mcs/notify/notify_history.py"
+  ]
+}
