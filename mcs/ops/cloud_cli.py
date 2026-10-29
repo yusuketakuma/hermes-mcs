@@ -616,6 +616,15 @@ def command(args):
                 os.close(lock_fd)
             print(json.dumps({k: receipt.get(k) for k in ("command_id", "outcome", "error", "control")}, ensure_ascii=False))
             return 0 if receipt["outcome"] == "applied" else 1
+        if action == "outstanding":
+            import cloud_observation
+            try:
+                with _reader() as (db, _deadline):
+                    result = cloud_observation.observe(db)
+            except (OSError, ValueError, sqlite3.Error):
+                result = cloud_observation._unknown("observation_unavailable")
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            return 0 if result["state"] == "complete" else 1
         report = observe(cfg, days=getattr(args, "days", 14), since=getattr(args, "since", None), project=getattr(args, "project", None),
                          evidence_holds_wanted=action in ("plan", "estimate"))
         if action == "log":
@@ -812,6 +821,8 @@ def add_parsers(sub):
         if action == "log":
             q.add_argument("--project", type=int)
         q.set_defaults(fn=command)
+    q = actions.add_parser("outstanding", help="未精算の外部AI利用記録を確認（送信しない）")
+    q.set_defaults(fn=command, cloud_action="outstanding")
     q = actions.add_parser("providers", help="AI利用先・優先順位・API別予算を表示・設定します")
     q.add_argument("--provider", choices=("anthropic", "openai", "auto"))
     q.add_argument("--priority", choices=("anthropic,openai", "openai,anthropic"))

@@ -157,7 +157,10 @@ python3 mcs/ops/mcs_setup.py cloud-llm plan
 python3 mcs/ops/mcs_setup.py cloud-llm estimate --days 14
 python3 mcs/ops/mcs_setup.py cloud-llm log --days 14
 python3 mcs/ops/mcs_setup.py cloud-llm compare --days 14
+python3 mcs/ops/mcs_setup.py cloud-llm outstanding
 ```
+
+`outstanding` は保存されている会計履歴全体から、結果記録がない要求と、結果を精算できない要求の件数・最古の経過時間・10分以上の件数を集計します。本文や患者識別子は表示しません。読取り上限に達した場合は `unknown`、不正・重複・対応しない記録がある場合は `partial` とし、未確定の件数を0とは表示しません。この照会で予約額の解除や再送はしません。
 
 `--since YYYY-MM-DD` は日本時間の日付で絞ります。`log` だけは `--project` でも絞れます。
 文字数はトークン数ではありません。dry-runは保存に成功した処理単位の観測から試算します。
