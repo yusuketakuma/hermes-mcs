@@ -383,7 +383,9 @@ def _med_messages(db, scope, extra_sql="", extra_params=()):
         if not isinstance(meds, list):
             continue
         # the same source-span patient scope the signal detectors apply (_patient_fact_keys)
-        meds = [x for x in meds if isinstance(x, dict) and patient_item_scope(x, body, patient_name=name, surface=x.get("name")) == "patient"]
+        # Dictionary refs use source positions, including excluded mentions.
+        meds = [(i, x) for i, x in enumerate(meds) if isinstance(x, dict)
+                and patient_item_scope(x, body, patient_name=name, surface=x.get("name")) == "patient"]
         if meds:
             yield pid, mid, ts, meds
 
@@ -394,7 +396,7 @@ def _med_rows(db, scope, msgs=None):
     ``msgs`` reuses an already-materialized _med_messages list."""
     for pid, mid, ts, meds in (_med_messages(db, scope) if msgs is None
                                else msgs):
-        for med in meds:
+        for _i, med in meds:
             # negated / other-person / historical-report mentions are
             # not the patient's current medication activity — the same
             # predicate the prospective signal applies
@@ -473,7 +475,7 @@ def _med_candidate_breakdown(db, msgs):
     for _pid, mid, _ts, meds in msgs:
         rows = drug_map.current_refs_with_progress(db, mid, progress)
         refs = {ref["i"]: ref for ref in rows}
-        for i, med in enumerate(meds):
+        for i, med in meds:
             if not med_is_patient_current(med):
                 continue
             total += 1
@@ -681,7 +683,7 @@ def st_med_change_followup(db, scope):
         if not any(med_is_patient_current(x)
                    and x.get("action") in CHANGE_ACTIONS
                    and not med_capability_evidence(x.get("evidence"))
-                   for x in meds):
+                   for _i, x in meds):
             continue
         total += 1
         tracked = db.execute(

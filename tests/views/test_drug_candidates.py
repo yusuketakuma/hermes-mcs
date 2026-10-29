@@ -266,6 +266,53 @@ def test_review_list_is_bounded_while_total_names_and_mentions_are_complete(stor
     assert all(row["share"]["denominator"] == 125 for row in review["items"]["items"])
 
 
+@pytest.mark.parametrize("position", [0, 1])
+@pytest.mark.parametrize("same_name", [False, True])
+def test_patient_candidate_refs_keep_source_indices_after_scope_filter(
+        store, tmp_path, position, same_name):
+    from extract_testkit import _hash, _message
+
+    aid = _seed(store, names=("キラナ", "別キラナ"))
+    content, meta = store.db.execute(
+        "SELECT content,meta FROM artifacts WHERE artifact_id=?", (aid,)).fetchone()
+    content, meta = json.loads(content), json.loads(meta)
+    family_name = "キラナ" if same_name else "架空不明"
+    family_quote = f"家族は{family_name}を服用しています。"
+    family = {**content["meds"][0], "name": family_name,
+              "subject": "family", "evidence": family_quote}
+    content["meds"].insert(position, family)
+    store.save_messages([_message(mid=1, body="".join(
+        med["evidence"] for med in content["meds"]))])
+    meta["hash"] = _hash(store, 1)
+    store.db.execute("UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?",
+                     (json.dumps(content), json.dumps(meta), aid))
+    store.db.commit()
+    drug_map.derive(store, _dictionary(tmp_path))
+    if same_name:
+        # Same-name stored notes may differ: index, not surface equality,
+        # must decide which annotation belongs to the patient's mention.
+        row = store.db.execute("SELECT artifact_id,content FROM artifacts WHERE kind=?",
+                               (drug_map.KIND,)).fetchone()
+        annotations = json.loads(row[1])
+        ref = next(ref for ref in annotations["refs"] if ref["i"] == position)
+        ref.update(status="unresolved", cands=[])
+        store.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                         (json.dumps(annotations), row[0]))
+        store.db.commit()
+    refs = drug_map.current_refs(store.db, 1)
+    assert [ref["i"] for ref in refs] == [0, 1, 2]
+    before = store.db.total_changes
+    stats = _stats(store)
+    assert store.db.total_changes == before
+    assert stats["distinct_names"] == 2 and stats["action_totals"] == {"start": 2}
+    block = stats["by_ingredient_candidate"]
+    assert block["mentions"] == 2
+    assert block["by_resolution"]["resolved"]["numerator"] == 2
+    assert block["by_resolution"]["unavailable"]["numerator"] == 0
+    assert block["items"]["items"][0]["mentions"] == 2
+    assert stats["drug_map_review"]["review_mentions"] == 0
+
+
 def test_all_new_local_fields_are_omitted_from_c1_export(store, tmp_path):
     from medications_testkit import _source_document
     _seed(store, names=("架空製品", "架空ブランド", "架空不明"))
