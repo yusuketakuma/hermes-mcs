@@ -58,7 +58,7 @@ def test_actual_distribution_versions_match_lane(lane, request):
                         else (sys.version_info[:2] < target)) is False:
                     continue
             requirements.append(requirement.strip())
-        requirements.append("pytest==9.1.1")
+        requirements.append("pytest==9.2.0")
     else:
         import tomllib
 
