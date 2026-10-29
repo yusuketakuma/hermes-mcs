@@ -56,6 +56,8 @@ from semantic_store import current_artifact, jev_state, jev_usage_today
 
 import semantic_qc
 
+KIND_LOOP_COMPLETION = 'semantic_loop_completion'
+
 
 def _shadow_v2_tried(ledger, mid: int, fp: str, policy: str) -> bool:
     """This source + policy already ran the current v2 extraction in shadow
@@ -1867,9 +1869,40 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 notification_free=(pl.get("notification_free") or not
                     semantic_intake_hold.notification_allowed(ledger, pl, pid, mid)),
                 origin=pl.get("origin"), content_quality=bundle["content_quality"])
-        if (not stale and not pending and loops_done
-                and not runtime.transition_tx(ledger, token, "done")):
-            raise runtime.RuntimeStale("promote")
+        if not stale and not pending and loops_done:
+            if (scfg['summary_mode'] == 'off' and scfg['loop_mode'] != 'off'
+                    and not hard_fail and not retryable_failure and not resource_wait
+                    and isinstance(targets, list) and targets and len(targets) == len(set(targets))
+                    and set(targets) == set(facts_by_target) and not any(detail_findings.values())
+                    and (jev_skip is not None or jev_client is not None)):
+                try:
+                    manifest = _loop_completion_manifest(ledger.db, pid, bundle, targets, scfg,
+                        facts_by_target=facts_by_target, skipped=jev_skip is not None, deadline=deadline)
+                except sqlite3.Error as error:
+                    raise runtime.RuntimeBudgetShort('loop_completion_read') from error
+                except (ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
+                    manifest = None
+                skip_ref = (_loop_skip_ref(ledger.db, pid, root, fp, policy, jev_skip)
+                            if jev_skip is not None else None)
+                if jev_skip is not None and skip_ref is None:
+                    manifest = None
+                guard('loop_completion')
+                if manifest is not None:
+                    status = 'SKIPPED' if jev_skip is not None else 'DONE'
+                    content = {'status': status, 'target_ids': sorted(targets),
+                               'loop_mode': scfg['loop_mode'], 'semantic_mode': scfg['mode'], 'manifest': manifest,
+                               'skip_reason': jev_skip if status == 'SKIPPED' else None, 'skip_ref': skip_ref}
+                    for mid in targets:
+                        ledger.artifact_add_tx(KIND_LOOP_COMPLETION, json.dumps(content, ensure_ascii=False),
+                            project_id=pid, message_id=mid, model=jev.JEV_MODEL,
+                            meta={VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp,
+                                  'policy_fingerprint': policy, 'schema': SCHEMA_VERSION,
+                                  'target_revision': members[mid]['revision'],
+                                  'execution_generation': runtime.execution_generation(scfg),
+                                  'loop_status': status, 'skip_reason': content['skip_reason'],
+                                  'content_hash': mcs_util.payload_hash(content)})
+            if not runtime.transition_tx(ledger, token, "done"):
+                raise runtime.RuntimeStale("promote")
     if stale:
         return "stale"
     if hard_fail:
@@ -2159,6 +2192,186 @@ def _reprocess_job_payload(ledger, row, project_id, root):
     return value
 
 
+def _valid_detail_assessment(content, meta, mid):
+    import semantic_assessment
+    return (meta.get('schema') == semantic_assessment.ASSESSMENT_SCHEMA_VERSION
+            and content.get('schema') == semantic_assessment.ASSESSMENT_SCHEMA_VERSION
+            and meta.get('technical_status') == 'complete'
+            and isinstance(meta.get('fact_id'), str) and isinstance(meta.get('dimension'), str)
+            and content.get('fact_id') == meta['fact_id'] and content.get('dimension') == meta['dimension']
+            and type(content.get('target_message_id')) is int and content['target_message_id'] == mid
+            and isinstance(content.get('choice'), str)
+            and semantic_assessment._finite_confidence(content.get('confidence')) is not None)
+
+
+def _loop_skip_ref(db, pid, root, fp, policy, reason):
+    """Identify the newest valid loop-skip record for this generation."""
+    row = db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? '
+                     'AND message_id=? ORDER BY artifact_id DESC LIMIT 1',
+                     ('semantic_loop_skipped', pid, root)).fetchone()
+    if row is None:
+        return None
+    try:
+        content, meta = strict_json(row['content']), strict_json(row['meta'])
+        if (not isinstance(content, dict) or not isinstance(meta, dict) or not is_current(meta)
+                or meta.get('invalidated') or meta.get('stale') or meta.get('schema') != SCHEMA_VERSION
+                or meta.get('fingerprint') != fp or meta.get('policy_fingerprint') != policy
+                or content != {'status': 'SKIPPED', 'reason': reason}):
+            return None
+        return [row['artifact_id'], mcs_util.payload_hash([content, meta])]
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError):
+        return None
+
+
+def _loop_completion_manifest(db, pid, bundle, targets, scfg, *, facts_by_target=None, skipped=False,
+                              deadline=None):
+    """Bind actual fact and loop artifacts for a completed target set."""
+    import semantic_loops
+    import semantic_projection
+
+    def check_deadline():
+        if deadline is not None and time.monotonic() >= deadline:
+            raise runtime.RuntimeBudgetShort('loop_completion')
+
+    check_deadline()
+    fp, policy = bundle['source_fingerprint'], policy_fingerprint(scfg)
+    members = {member['message_id']: member for member in bundle['members']}
+    if (not isinstance(targets, list) or not targets or len(targets) != len(set(targets))
+            or any(type(mid) is not int or mid not in members for mid in targets)):
+        return None
+    refs, candidates, events, rejections = [], {}, {}, []
+    fact_kind = KIND_FACTS_V2 if scfg.get('fact_source') == 'canonical' else KIND_FACTS
+    for mid in targets:
+        check_deadline()
+        found = None
+        for row in db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? '
+                              'AND message_id=? ORDER BY artifact_id DESC', (fact_kind, pid, mid)):
+            check_deadline()
+            meta = strict_json(row['meta'])
+            if not isinstance(meta, dict):
+                return None
+            if meta.get('fingerprint') != fp:
+                continue
+            content = strict_json(row['content'])
+            if (not isinstance(content, dict) or not is_current(meta) or meta.get('invalidated')
+                    or meta.get('stale') or meta.get('schema') != SCHEMA_VERSION):
+                return None
+            facts = (semantic_projection.project_v2_facts(content) if fact_kind == KIND_FACTS_V2
+                     else content.get('facts'))
+            if (not isinstance(facts, list) or facts_by_target is not None and facts != facts_by_target.get(mid)):
+                return None
+            found = row
+            refs.append([fact_kind, mid, row['artifact_id'], mcs_util.payload_hash([content, meta])])
+            break
+        if found is None:
+            return None
+        if fact_kind == KIND_FACTS_V2:
+            audit = db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? '
+                               'AND message_id=? ORDER BY artifact_id DESC LIMIT 1',
+                               (KIND_FACT_AUDIT, pid, mid)).fetchone()
+            if audit is None:
+                return None
+            audit_content, audit_meta = strict_json(audit['content']), strict_json(audit['meta'])
+            if (not isinstance(audit_content, dict) or not isinstance(audit_meta, dict)
+                    or not is_current(audit_meta) or audit_meta.get('invalidated') or audit_meta.get('stale')
+                    or audit_meta.get('fingerprint') != fp or audit_meta.get('policy_fingerprint') != policy
+                    or audit_content.get('status') not in ('PASS', 'SKIPPED')):
+                return None
+            refs.append([KIND_FACT_AUDIT, mid, audit['artifact_id'],
+                         mcs_util.payload_hash([audit_content, audit_meta])])
+        assessments = 0
+        for row in db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? '
+                              'AND message_id=? ORDER BY artifact_id', (KIND_ASSESS, pid, mid)):
+            check_deadline()
+            meta = strict_json(row['meta'])
+            if not isinstance(meta, dict):
+                return None
+            if meta.get('fingerprint') != fp or meta.get('policy_fingerprint') != policy:
+                continue
+            content = strict_json(row['content'])
+            if (not isinstance(content, dict)
+                    or (not is_current(meta) if meta.get('fact_id') is None
+                        else not _valid_detail_assessment(content, meta, mid))):
+                return None
+            refs.append([KIND_ASSESS, mid, row['artifact_id'], mcs_util.payload_hash([content, meta])])
+            if meta.get('fact_id') is None:
+                assessments += 1
+        if not assessments:
+            return None
+    def loop_rows():
+        for kind in (KIND_LOOP, KIND_LOOP_EVENT, semantic_loops.KIND_LOOP_REJECTED):
+            for mid in sorted(members):
+                check_deadline()
+                yield from db.execute('SELECT artifact_id,kind,message_id,content,meta FROM artifacts '
+                                      'WHERE kind=? AND project_id=? AND message_id=? ORDER BY artifact_id',
+                                      (kind, pid, mid))
+    for row in loop_rows():
+        check_deadline()
+        meta = strict_json(row['meta'])
+        if not isinstance(meta, dict):
+            return None
+        if meta.get('fingerprint') != fp or meta.get('policy_fingerprint') != policy:
+            continue
+        content = strict_json(row['content'])
+        if not isinstance(content, dict) or not is_current(meta):
+            return None
+        refs.append([row['kind'], row['message_id'], row['artifact_id'], mcs_util.payload_hash([content, meta])])
+        if meta.get('invalidated') or meta.get('stale'):
+            continue
+        if row['kind'] == KIND_LOOP:
+            source = members.get(row['message_id'])
+            origin = content.get('origin')
+            if (not semantic_loops._valid_candidate(content, meta) or not isinstance(origin, dict)
+                    or source is None or origin.get('message_id') != row['message_id']
+                    or origin.get('revision') != source['revision'] or not origin.get('evidence')
+                    or content.get('root_id') != bundle['root_id']
+                    or content.get('project_id') != pid or content.get('account_scope') != bundle['account_scope']
+                    or meta.get('registry') != jev.REGISTRY_VERSION):
+                return None
+            candidates[row['artifact_id']] = (row['message_id'], content)
+        elif row['kind'] == KIND_LOOP_EVENT:
+            key = (content.get('loop_artifact_id'), content.get('trigger_message_id'))
+            if (type(key[0]) is not int or type(key[1]) is not int or key in events
+                    or content.get('trigger_message_id') != row['message_id']
+                    or meta.get('registry') != jev.REGISTRY_VERSION
+                    or content.get('relation') not in jev.LOOP_RELATION_OPTIONS
+                    or content.get('reported_relation') not in jev.LOOP_RELATION_OPTIONS
+                    or type(content.get('confidence')) not in (int, float)
+                    or not math.isfinite(content['confidence']) or not 0 <= content['confidence'] <= 1):
+                return None
+            events[key] = content
+        else:
+            rejections.append((content, meta))
+    for content, meta in rejections:
+        check_deadline()
+        scope = meta.get('retry_scope')
+        if not isinstance(scope, str):
+            return None
+        rejected = semantic_loops.rejected_relation_pair(content, meta, policy, scope)
+        if rejected is None:
+            return None
+        (aid, mid, revision), _ = rejected
+        if (aid in candidates and mid in targets and revision == members[mid]['revision']
+                and (skipped or (aid, mid) not in events)):
+            return None
+    if not skipped:
+        for aid, (origin_id, candidate) in candidates.items():
+            for mid in targets:
+                check_deadline()
+                if mid == origin_id:
+                    continue
+                event = events.get((aid, mid))
+                if (event is None or event.get('root_id') != bundle['root_id']
+                        or event.get('origin_revision') != members[origin_id]['revision']
+                        or event.get('trigger_revision') != members[mid]['revision']
+                        or event.get('candidate_state') != candidate.get('state')):
+                    return None
+    check_deadline()
+    digest = mcs_util.payload_hash({'targets': sorted(targets), 'artifacts': refs})
+    check_deadline()
+    return digest
+
+
 def _classification_only_state(ledger, row, scfg, cfg, bundle, fp, policy):
     """Validate current raw and primary assessment evidence for classification only."""
     import extract_llm
@@ -2257,15 +2470,7 @@ def _classification_only_state(ledger, row, scfg, cfg, bundle, fp, policy):
             if not isinstance(content, dict):
                 return 'held'
             if meta.get('fact_id') is not None:
-                import semantic_assessment
-                if (meta.get('schema') != semantic_assessment.ASSESSMENT_SCHEMA_VERSION
-                        or content.get('schema') != semantic_assessment.ASSESSMENT_SCHEMA_VERSION
-                        or meta.get('technical_status') != 'complete'
-                        or not isinstance(meta.get('fact_id'), str) or not isinstance(meta.get('dimension'), str)
-                        or content.get('fact_id') != meta['fact_id'] or content.get('dimension') != meta['dimension']
-                        or type(content.get('target_message_id')) is not int or content['target_message_id'] != mid
-                        or not isinstance(content.get('choice'), str)
-                        or semantic_assessment._finite_confidence(content.get('confidence')) is None):
+                if not _valid_detail_assessment(content, meta, mid):
                     return 'held'
                 continue
             if assessment is None:
@@ -2313,7 +2518,74 @@ def _classification_only_state(ledger, row, scfg, cfg, bundle, fp, policy):
         return 'held'
 
 
-def _reprocess_target_state(ledger, row, scfg, *, cfg=None):
+def _loop_only_state(ledger, row, scfg, cfg, bundle, fp, policy, deadline=None):
+    """Require a current classification and a bound completed loop pass."""
+    base = _classification_only_state(ledger, row, scfg, cfg, bundle, fp, policy)
+    if base not in ('current', 'current_skipped'):
+        return base
+    db, pid, mid = ledger.db, row['project_id'], row['message_id']
+    try:
+        receipt = db.execute('SELECT content,meta,model FROM artifacts WHERE kind=? AND project_id=? '
+                             'AND message_id=? ORDER BY artifact_id DESC LIMIT 1',
+                             (KIND_LOOP_COMPLETION, pid, mid)).fetchone()
+        if receipt is None:
+            return 'held'
+        content, meta = strict_json(receipt['content']), strict_json(receipt['meta'])
+        if not isinstance(content, dict) or not isinstance(meta, dict):
+            return 'held'
+        targets, status = content.get('target_ids'), content.get('status')
+        member = next((item for item in bundle['members'] if item['message_id'] == mid), None)
+        if (not isinstance(targets, list) or not targets or any(type(item) is not int for item in targets)
+                or targets != sorted(set(targets)) or mid not in targets or member is None
+                or set(content) != {'status', 'target_ids', 'loop_mode', 'semantic_mode',
+                                    'manifest', 'skip_reason', 'skip_ref'}
+                or status not in ('DONE', 'SKIPPED') or content['loop_mode'] != scfg['loop_mode']
+                or content['semantic_mode'] != scfg['mode']
+                or not is_current(meta) or meta.get('invalidated') or meta.get('stale')
+                or meta.get('schema') != SCHEMA_VERSION or meta.get('fingerprint') != fp
+                or meta.get('policy_fingerprint') != policy or meta.get('target_revision') != member['revision']
+                or meta.get('execution_generation') != runtime.execution_generation(scfg)
+                or meta.get('loop_status') != status or meta.get('skip_reason') != content.get('skip_reason')
+                or meta.get('content_hash') != mcs_util.payload_hash(content) or receipt['model'] != jev.JEV_MODEL):
+            return 'held'
+        if status == 'SKIPPED':
+            reason = content.get('skip_reason')
+            if (reason not in ('not_configured', 'disabled', 'daily_budget', 'backlog_reserved',
+                               'service_unavailable', 'circuit_open')
+                    or content.get('skip_ref') is None
+                    or content['skip_ref'] != _loop_skip_ref(db, pid, bundle['root_id'], fp, policy, reason)):
+                return 'held'
+        elif content.get('skip_reason') is not None or content.get('skip_ref') is not None:
+            return 'held'
+        current = semantic_store.thread_bundle(db, pid, bundle['root_id'], targets)
+        if current is None or current['source_fingerprint'] != fp:
+            return 'held'
+        states = []
+        for target in targets:
+            if deadline is not None and time.monotonic() >= deadline:
+                return 'held'
+            source = db.execute('SELECT m.*,p.project_id AS patient_id,p.fetch_reason FROM messages m '
+                                'JOIN patients p ON p.project_id=m.project_id '
+                                'WHERE m.project_id=? AND m.message_id=?', (pid, target)).fetchone()
+            if source is None:
+                return 'held'
+            state = _classification_only_state(ledger, source, scfg, cfg, current, fp, policy)
+            if state not in ('current', 'current_skipped'):
+                return 'held'
+            states.append(state)
+        if status == 'DONE' and 'current_skipped' in states:
+            return 'held'
+        manifest = _loop_completion_manifest(db, pid, current, targets, scfg,
+                                             skipped=status == 'SKIPPED', deadline=deadline)
+        if manifest is None or manifest != content.get('manifest'):
+            return 'held'
+        return 'current_skipped' if status == 'SKIPPED' or 'current_skipped' in states else 'current'
+    except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError,
+            runtime.RuntimeBudgetShort):
+        return 'held'
+
+
+def _reprocess_target_state(ledger, row, scfg, *, cfg=None, deadline=None):
     """Observe one stored source without mistaking job completion for coverage."""
     from mcs_queries import current_v4_id, paused
     pid, mid = row['project_id'], row['message_id']
@@ -2338,6 +2610,9 @@ def _reprocess_target_state(ledger, row, scfg, *, cfg=None):
     fp, policy = bundle['source_fingerprint'], policy_fingerprint(scfg)
     if scfg['summary_mode'] == 'off' and scfg['loop_mode'] == 'off':
         return _classification_only_state(ledger, row, scfg, cfg if cfg is not None else load_config(), bundle, fp, policy)
+    if scfg['summary_mode'] == 'off':
+        return _loop_only_state(ledger, row, scfg, cfg if cfg is not None else load_config(),
+                                bundle, fp, policy, deadline=deadline)
     audit = current_artifact(ledger.db, KIND_AUDIT, mid, fp, policy)
     summary = current_artifact(ledger.db, KIND_SUMMARY, mid, fp, policy)
     if audit and summary and audit['content'].get('status') == 'SKIPPED':
@@ -2723,7 +2998,8 @@ def reprocess_step(ledger, cfg, *, limit=32, deadline=None):
     for row in rows:
         if deadline is not None and time.monotonic() >= deadline:
             break
-        state = _reprocess_target_state(ledger, row, scfg, cfg=cfg)
+        extra = {'deadline': deadline} if scfg['summary_mode'] == 'off' and scfg['loop_mode'] != 'off' else {}
+        state = _reprocess_target_state(ledger, row, scfg, cfg=cfg, **extra)
         replay = None
         if state in ('current', 'current_skipped', 'pending', 'repair_required', 'held', 'failed'):
             root = row['parent_id'] or row['message_id']

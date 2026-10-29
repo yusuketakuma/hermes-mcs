@@ -2968,7 +2968,9 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
             elif (db.execute("SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? "
                              "AND message_id=? AND state!='done' LIMIT 1",
                              (semantic_policy.JOB_KIND, pid, root)).fetchone()
-                  or semantic_drain._reprocess_target_state(ledger, row, policy, cfg=cfg) not in ("current", "current_skipped")):
+                  or semantic_drain._reprocess_target_state(ledger, row, policy, cfg=cfg,
+                       **({'deadline': deadline} if policy['summary_mode'] == 'off'
+                          and policy['loop_mode'] != 'off' else {})) not in ("current", "current_skipped")):
                 return False
         if (policy["mode"] != "off" and policy["extract_qc"] == "annotate"
                 and not _extraction_qc_ready(db, pid, policy, deadline=deadline)):
