@@ -808,7 +808,7 @@ def test_flagless_rollback_does_not_overwrite_changed_journal(
     assert Path(live).read_bytes() == db_bytes
 
 
-@pytest.mark.parametrize("bad_backup", [None, "", 123, [], {}])
+@pytest.mark.parametrize("bad_backup", [None, "", "  ", 123, [], {}])
 @pytest.mark.parametrize("entry_point", ["manual", "tree"])
 def test_schema_rollback_rejects_missing_or_invalid_backup_before_reset(
         updater, tmp_path, monkeypatch, bad_backup, entry_point):
