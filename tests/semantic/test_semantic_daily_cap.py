@@ -203,7 +203,11 @@ def test_backlog_lane_leaves_a_tenth_of_the_budget_to_realtime(tmp_path):
         out = semantic_drain.run_due(db, config, res, time.monotonic() + 300, lane="backlog",
                                      jev_client=fake, llm_fn=_llm)
         assert out["budget_exhausted"] is True and fake.requests_made == 0
-        assert "semantic: backlog_budget_reserved" in res["errors"]
+        assert out["jev_skipped"].get("backlog_reserved") == 1
+        assert "semantic: backlog_budget_reserved" not in res["errors"]
+        # A new run of the same synthetic generation may use the realtime reserve.
+        db.db.execute("UPDATE fetch_jobs SET state='pending',next_try=0 WHERE kind='semantic'")
+        db.db.commit()
         fake = _FakeJev()
         res = {"errors": []}
         out = semantic_drain.run_due(db, config, res, time.monotonic() + 300, lane="realtime",

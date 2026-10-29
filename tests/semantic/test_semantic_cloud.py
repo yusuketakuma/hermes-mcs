@@ -1,5 +1,6 @@
 """Synthetic backlog routing, accounting and run-lock loss regressions."""
 import json
+import sqlite3
 import time
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 import anthropic_client
 import cloud_policy
 import extract_llm
+import inference_dependency_loss
 import semantic_drain
 import semantic_transport as transport
 import writer_lock
@@ -303,6 +305,186 @@ def test_cloud_and_resident_selection_prioritize_active_latest_patient(cloud):
     selected, _ = extract_llm._select_pending(led, 3, None, None, False,
                                               cloud_only=True, prioritize_patients=True)
     assert [r["project_id"] for r in selected] == [2, 1, 3]
+
+
+@pytest.mark.parametrize("lane", ["semantic", "extract"])
+@pytest.mark.parametrize("change", ["reply", "edit", "aba"])
+def test_cloud_selection_requires_current_thread_receipt(cloud, lane, change):
+    led, _, _, _ = cloud
+    if change == "reply":
+        led.save_messages([_message(2, parent=1, body="完全合成の新しい返信。")])
+    else:
+        led.save_messages([_message(body="完全合成の変更。")])
+        if change == "aba":
+            led.save_messages([_message()])
+
+    def select():
+        if lane == "semantic":
+            return semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 1)[0]
+        return extract_llm._select_pending(led, 10, None, None, False,
+            cloud_only=True, prioritize_patients=True)[0]
+
+    assert not select()
+    snapshot(led)
+    assert 1 in [row["message_id"] for row in select()]
+
+
+@pytest.mark.parametrize("lane", ["semantic", "extract"])
+def test_selection_reads_receipt_once_for_multiple_candidates(cloud, lane):
+    led, _, _, _ = cloud
+    for mid in range(2, 16):
+        led.save_messages([_message(mid, body="完全合成の記録。")])
+        led.semantic_seed(1, [mid], {"source": "history_import"})
+    snapshot(led)
+    statements = []
+    led.db.set_trace_callback(statements.append)
+    try:
+        if lane == "semantic":
+            selected = semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 10)[0]
+        else:
+            selected = extract_llm._select_pending(led, 10, None, None, False,
+                cloud_only=True, prioritize_patients=True)[0]
+    finally:
+        led.db.set_trace_callback(None)
+    assert len(selected) >= 10
+    assert sum(s.lstrip('- ').startswith("SELECT content FROM (SELECT content FROM artifacts")
+               for s in statements) == 1
+
+
+@pytest.mark.parametrize("lane", ["semantic", "extract"])
+def test_selection_checks_each_thread_once_per_snapshot(cloud, monkeypatch, lane):
+    led, _, _, _ = cloud
+    for mid in range(2, 8):
+        led.save_messages([_message(mid, parent=1, body="完全合成の返信。")])
+        led.semantic_seed(1, [mid], {"source": "history_import"})
+    snapshot(led)
+    checked = []
+    original = cloud_policy._history_thread_allowed
+
+    def count(*args):
+        checked.append(1)
+        return original(*args)
+
+    monkeypatch.setattr(cloud_policy, "_history_thread_allowed", count)
+    if lane == "semantic":
+        # Semantic jobs collapse to the thread root, so exercise multiple
+        # member candidates through the same check used by its selector.
+        with cloud_policy.history_selection_check(led.db) as check:
+            selected = [check(1, mid) for mid in range(1, 8)]
+        assert all(selected)
+    else:
+        selected = extract_llm._select_pending(led, 10, None, None, False,
+            cloud_only=True, prioritize_patients=True)[0]
+    assert len(selected) >= 2
+    assert len(checked) == 1
+
+
+def test_selection_failure_preserves_outer_transaction_and_uninstalls_check(cloud, monkeypatch):
+    led, _, _, _ = cloud
+    progress = []
+    led.db.set_progress_handler(lambda: progress.append(1) and 0, 1)
+    led.db.execute("BEGIN")
+    led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+    check = None
+    try:
+        def fail(*args, **kwargs):
+            raise ValueError("synthetic_binding_error")
+        monkeypatch.setattr(inference_dependency_loss, "source_binding", fail)
+        with pytest.raises(ValueError, match="synthetic_binding_error"):
+            with cloud_policy.history_selection_check(led.db) as check:
+                check(1, 1)
+        assert led.db.in_transaction
+        assert led.db.execute("SELECT is_archived FROM patients WHERE project_id=1").fetchone()[0] == 1
+        assert progress
+        assert check(1, 1) == 0
+        before = len(progress)
+        led.db.execute("SELECT 1").fetchone()
+        assert len(progress) > before
+    finally:
+        led.db.set_progress_handler(None, 0)
+        led.db.rollback()
+
+
+def test_selection_cancel_cleans_up_without_replacing_progress_handler(cloud):
+    led, _, _, _ = cloud
+    led.db.execute("BEGIN")
+    calls = []
+    check = None
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="interrupt"):
+            with cloud_policy.history_selection_check(led.db) as check:
+                def cancel_once():
+                    calls.append(1)
+                    return int(len(calls) == 1)
+                led.db.set_progress_handler(cancel_once, 1)
+                check(1, 1)
+        assert led.db.in_transaction
+        count = len(calls)
+        assert check(1, 1) == 0
+        led.db.execute("SELECT 1").fetchone()
+        assert len(calls) > count
+    finally:
+        led.db.set_progress_handler(None, 0)
+        led.db.rollback()
+
+
+def test_persistent_cancel_leaves_no_selection_transaction(cloud):
+    led, _, _, _ = cloud
+    calls = []
+    check = None
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="interrupt"):
+            with cloud_policy.history_selection_check(led.db) as check:
+                def cancel():
+                    calls.append(1)
+                    return 1
+                led.db.set_progress_handler(cancel, 1)
+                check(1, 1)
+        assert not led.db.in_transaction
+        count = len(calls)
+        with pytest.raises(sqlite3.OperationalError, match="interrupt"):
+            led.db.execute("SELECT 1").fetchone()
+        assert len(calls) > count
+    finally:
+        led.db.set_progress_handler(None, 0)
+    assert check(1, 1) == 0
+
+
+def test_selection_uses_one_snapshot_but_fresh_guard_sees_revocation(cloud):
+    led, _, _, _ = cloud
+    path = led.db.execute("PRAGMA database_list").fetchone()[2]
+    with cloud_policy.history_selection_check(led.db) as check:
+        other = sqlite3.connect(path)
+        try:
+            other.execute("INSERT INTO artifacts(kind,content,model,meta,created_at) VALUES(?,?,?,?,?)",
+                ("cloud_history_scope", '{"version":1,"sources":{}}', "synthetic", "{}", time.time()))
+            other.commit()
+        finally:
+            other.close()
+        assert check(1, 1) == 1
+    assert not cloud_policy.history_thread_allowed(led.db, 1, 1)
+
+
+@pytest.mark.parametrize("lane", ["semantic", "extract"])
+def test_selection_preserves_caller_cursor_and_transaction(cloud, lane):
+    led, _, _, _ = cloud
+    led.db.execute("BEGIN")
+    led.db.execute("UPDATE patients SET is_archived=1 WHERE project_id=1")
+    outer = led.db.execute("SELECT 10 UNION ALL SELECT 20 UNION ALL SELECT 30")
+    try:
+        assert outer.fetchone()[0] == 10
+        if lane == "semantic":
+            selected = semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 1)[0]
+        else:
+            selected = extract_llm._select_pending(led, 1, None, None, False,
+                cloud_only=True, prioritize_patients=True)[0]
+        assert [row["message_id"] for row in selected] == [1]
+        assert [row[0] for row in outer] == [20, 30]
+        assert led.db.in_transaction
+        assert led.db.execute("SELECT is_archived FROM patients WHERE project_id=1").fetchone()[0] == 1
+    finally:
+        outer.close()
+        led.db.rollback()
 
 
 @pytest.mark.parametrize("first", ["local", "cloud"])

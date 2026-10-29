@@ -144,8 +144,14 @@ def emit_degraded(ledger, scfg: dict) -> int:
             audits = [semantic_store.current_artifact(ledger.db, semantic_policy.KIND_AUDIT, mid,
                                         fp, semantic_policy.policy_fingerprint(scfg))
                       for mid in arrivals]
-            if arrivals and all(a and a["meta"].get("audit_status") == "PASS"
-                                for a in audits):
+            from semantic_send_gate import skipped_summary_current
+            members = {m["message_id"]: m for m in bundle["members"]}
+            policy = semantic_policy.policy_fingerprint(scfg)
+            if arrivals and all(a and (a["meta"].get("audit_status") == "PASS"
+                or (a["meta"].get("audit_status") == "SKIPPED" and mid in members
+                    and skipped_summary_current(ledger.db, pid, mid, fp, policy,
+                                                members[mid]["revision"], scfg["summary_mode"])))
+                for mid, a in zip(arrivals, audits)):
                 continue
             dkey = payload_hash({"kind": "semantic_notice", "root": root,
                                  "fp": fp, "degraded": 1})
@@ -210,8 +216,12 @@ def record_notice_plan_tx(ledger, pid, root, mid, fp, policy,
                          quality=content_quality,
                          focus_mid=mid)
     enqueued = False
+    skipped_valid = False
+    if final_status == "SKIPPED":
+        from semantic_send_gate import skipped_summary_current
+        skipped_valid = skipped_summary_current(ledger.db, pid, mid, fp, policy, member["revision"], summary_mode)
     if (mode == "enforce" and summary_mode == "enforce"
-            and final_status == "PASS" and not notification_free):
+            and (final_status == "PASS" or skipped_valid) and not notification_free):
         # per-target delivery key — one generation emits one
         # notice PER audited target; a shared (root, fp) key
         # would dedup every later target's claims out of the

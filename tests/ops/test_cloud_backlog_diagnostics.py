@@ -34,6 +34,7 @@ def test_reports_backlog_budget_and_realtime_reserve(world, used, reason):
     assert (out['used_today'], out['backlog_limit'], out['realtime_reserve']) == (used, 9000, 1000)
     assert out['daily_remaining'] == max(0, 10000 - used)
     assert out['reason'] == reason
+    assert out['effect'] == ('jev_skipped_if_eligible' if reason else None)
     assert 'synthetic' not in json.dumps(out)
 
 
@@ -48,6 +49,7 @@ def test_invalid_usage_is_unknown(world):
     _usage(ledger, 'synthetic-invalid')
     out = cloud_cli.diagnostics(_cfg(), root=root, probe=True)['jev']['backlog_budget']
     assert out['state'] == 'unknown' and out['used_today'] is None and out['reason'] is None
+    assert out['effect'] is None
 
 
 def test_backlog_reserve_uses_the_worker_rounding(world):
@@ -64,6 +66,7 @@ def test_missing_key_does_not_claim_a_backlog_stop(world, monkeypatch):
     monkeypatch.setattr(cloud_cli.jev, 'api_key', lambda *args: None)
     out = cloud_cli.diagnostics(_cfg(), root=root, probe=True)['jev']['backlog_budget']
     assert out['state'] == 'recorded' and out['reason'] is None
+    assert out['effect'] == 'jev_skipped_if_eligible'
 
 
 def test_jev_observation_is_independent_of_cloud_accounting_failure(world, monkeypatch):

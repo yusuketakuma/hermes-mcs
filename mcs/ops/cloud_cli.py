@@ -129,7 +129,7 @@ def diagnostics(cfg, *, root=None, probe=False):
         out["anthropic"].update(status="warning" if probe else "local", block_reason="no_api_key")
     if probe:
         unknown = {"state": "unknown", "used_today": None, "backlog_limit": None,
-                   "realtime_reserve": None, "daily_remaining": None, "reason": None}
+                   "realtime_reserve": None, "daily_remaining": None, "reason": None, "effect": None}
         out["jev"]["backlog_budget"] = unknown
         if not sem_errors:
             try:
@@ -147,7 +147,8 @@ def diagnostics(cfg, *, root=None, probe=False):
                         reason = "backlog_budget_reserved"
                 out["jev"]["backlog_budget"] = {
                     "state": "recorded", "used_today": used, "backlog_limit": backlog_limit,
-                    "realtime_reserve": reserved, "daily_remaining": max(0, limit - used), "reason": reason}
+                    "realtime_reserve": reserved, "daily_remaining": max(0, limit - used), "reason": reason,
+                    "effect": "jev_skipped_if_eligible" if semantic["mode"] != "off" and (reason or not jev_key) else None}
             except (OSError, ValueError, sqlite3.Error):
                 pass
         try:

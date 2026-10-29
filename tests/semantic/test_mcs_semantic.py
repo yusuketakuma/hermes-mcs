@@ -441,16 +441,17 @@ def test_repair_once_then_needs_review(tmp_path):
     db.close()
 
 
-def test_jev_unavailable_leaves_pending(tmp_path):
+def test_jev_unavailable_finishes_with_explicit_skip(tmp_path):
     db = _seeded(tmp_path)
     res = {"errors": []}
-    semantic_drain.run_due(db, _cfg("shadow", budget=0), res,
-                     time.monotonic() + 60,
-                     jev_client=None, llm_fn=_llm)
-    job = db.job_pending("semantic", 1, 1)
-    assert job is not None                     # deferred, not failed/done
+    out = semantic_drain.run_due(db, _cfg("shadow", budget=0), res,
+                                 time.monotonic() + 60,
+                                 jev_client=None, llm_fn=_llm)
+    assert out["done"] == 1
+    assert db.job_pending("semantic", 1, 1) is None
     art = db.artifacts("semantic_assess", message_id=1)[-1]
-    assert json.loads(art["meta"])["technical_status"] == "pending"
+    assert json.loads(art["meta"])["technical_status"] == "skipped"
+    assert json.loads(art["meta"])["jev_skip_reason"] == "disabled"
     db.close()
 
 
@@ -620,9 +621,10 @@ def test_daily_budget_exhausted(tmp_path):
     out = semantic_drain.run_due(db, _cfg("shadow", budget=5), res,
                            time.monotonic() + 60,
                            jev_client=_FakeJev(), llm_fn=_llm)
-    assert out["done"] == 0
+    assert out["done"] == 1
     assert out["budget_exhausted"] is True
-    assert "semantic: daily_budget_exhausted" in res["errors"]
+    assert out["jev_skipped"].get("daily_budget") == 1
+    assert "semantic: daily_budget_exhausted" not in res["errors"]
     db.close()
 
 
@@ -636,7 +638,7 @@ def test_degraded_notice_enforce_only(tmp_path):
     semantic_drain.run_due(db, _cfg("enforce", delayed_notice_seconds=900,
                             budget=0),
                            res, time.monotonic() + 60,
-                           jev_client=None, llm_fn=_llm)
+                           jev_client=None, llm_fn=lambda _prompt: None)
     rows = db.db.execute("SELECT payload FROM notify_outbox "
                          "WHERE kind='semantic_notice'").fetchall()
     assert len(rows) == 1
@@ -646,7 +648,7 @@ def test_degraded_notice_enforce_only(tmp_path):
     semantic_drain.run_due(db, _cfg("enforce", delayed_notice_seconds=900,
                             budget=0),
                      res, time.monotonic() + 60, jev_client=None,
-                     llm_fn=_llm)
+                     llm_fn=lambda _prompt: None)
     assert db.db.execute("SELECT count(*) FROM notify_outbox "
                          "WHERE kind='semantic_notice'").fetchone()[0] == 1
     # shadow mode must never enqueue (AT-049)
@@ -1262,8 +1264,8 @@ def test_chunk_failure_defers_without_partial_facts(tmp_path):
     db.close()
 
 
-def test_pending_assess_artifact_dedup(tmp_path):
-    """A durable Jev wait-state records ONE pending artifact per
+def test_skipped_assess_artifact_dedup(tmp_path):
+    """A durable Jev skip records ONE skipped artifact per
     generation — repeated drains must not stack identical rows."""
     db = _seeded(tmp_path)
     res = {"errors": []}
@@ -1276,7 +1278,7 @@ def test_pending_assess_artifact_dedup(tmp_path):
         db.db.commit()
     rows = db.artifacts("semantic_assess", message_id=1)
     assert len(rows) == 1
-    assert json.loads(rows[0]["meta"])["technical_status"] == "pending"
+    assert json.loads(rows[0]["meta"])["technical_status"] == "skipped"
     db.close()
 
 
@@ -1305,7 +1307,10 @@ def test_daily_budget_binds_inside_job(tmp_path):
     assert client.requests_made == 3        # capped mid-job, not after
     job = db.db.execute("SELECT state,attempts FROM fetch_jobs "
                         "WHERE kind='semantic'").fetchone()
-    assert job["state"] == "pending"        # audit unfinished -> retry
+    assert job["state"] == "done"
+    audits = db.artifacts("semantic_audit", message_id=1)
+    # A finding from a completed Jev chunk remains a review outcome.
+    assert json.loads(audits[-1]["meta"])["audit_status"] == "NEEDS_REVIEW"
     db.close()
 
 

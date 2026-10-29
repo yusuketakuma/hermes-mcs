@@ -10,11 +10,12 @@ from __future__ import annotations
 from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
 
 import json
+import math
 import time
 from collections import deque
 from contextlib import suppress
 
-from mcs_util import load_config
+from mcs_util import load_config, strict_json
 from mcs_queries import current_qc_pred, qc_source_id
 import semantic_jev as jev
 import semantic_runtime as runtime
@@ -25,6 +26,51 @@ _QC_SECTIONS = ("vitals", "meds", "symptoms", "labs", "events")
 # QC covers posts from the last 60 days. A pending job that ages past
 # the window is reaped rather than evaluated late.
 QC_REALTIME_MAX_AGE_S = 60 * 86400
+
+
+def skipped_current(db, project_id, message_id, source_id, source_hash, version, scfg):
+    """A skip is usable only for this extraction and without a known QC objection."""
+    rows = db.execute("SELECT content,meta FROM artifacts WHERE kind='extract_qc_skipped' "
+                      "AND project_id=? AND message_id=? ORDER BY artifact_id DESC LIMIT 1025",
+                      (project_id, message_id)).fetchall()
+    source = db.execute("SELECT content FROM artifacts WHERE artifact_id=? AND kind='extract_llm' "
+                        "AND project_id=? AND message_id=?", (source_id, project_id, message_id)).fetchone()
+    if not rows or len(rows) > 1024 or source is None:
+        return False
+    try:
+        extraction = strict_json(source[0])
+        questions, _, _ = _qc_questions(extraction)
+        matched = False
+        for row in rows:
+            content, meta = strict_json(row[0]), strict_json(row[1])
+            if not isinstance(meta, dict) or not is_current(meta):
+                return False
+            if meta.get("hash") != source_hash or meta.get("source_artifact_id") != source_id:
+                continue
+            matched = True
+            if (not isinstance(content, dict) or content.get("status") != "SKIPPED"
+                    or content.get("reason") not in {"not_configured", "disabled", "daily_budget", "backlog_reserved",
+                                                     "circuit_open", "service_unavailable"}
+                    or type(meta.get("extract_version")) is not int or meta["extract_version"] != version):
+                return False
+            partial = content.get("partial_answers", {})
+            if not isinstance(partial, dict) or set(partial) - set(questions):
+                return False
+            for qid, answer in partial.items():
+                if not isinstance(answer, dict) or answer.get("type") != questions[qid].get("type"):
+                    return False
+                if answer["type"] == "noul":
+                    value = answer.get("noul")
+                    if type(value) not in (int, float) or not math.isfinite(value) or not scfg["match_threshold"] <= value <= 1:
+                        return False
+                elif (qid != "urg" or answer.get("choice") != extraction.get("urgency")
+                      or type(answer.get("confidence")) not in (int, float)
+                      or not math.isfinite(answer["confidence"])
+                      or not scfg["match_threshold"] <= answer["confidence"] <= 1):
+                    return False
+        return matched
+    except (ValueError, TypeError, KeyError, RecursionError, OverflowError):
+        return False
 
 
 def qc_scope_sql(now: float, msg: str = "m") -> tuple[str, tuple]:
@@ -43,7 +89,7 @@ def _drop_stale_qc(ledger, mid: int, current_hash: str) -> None:
         (QC_ARTIFACT, mid, current_hash))
 
 
-def _qc_seed(ledger, now: float, limit: int = 32) -> int:
+def _qc_seed(ledger, now: float, limit: int = 32, *, skip_mode: bool = False) -> int:
     """Queue extract_qc jobs for current extract_llm artifacts lacking a
     QC artifact for the same content hash and extractor generation.
     Re-extraction (hash change) or an extractor version bump re-pends
@@ -77,6 +123,13 @@ def _qc_seed(ledger, now: float, limit: int = 32) -> int:
             AND NOT EXISTS(SELECT 1 FROM artifacts q
                            WHERE q.kind=? AND q.message_id=a.message_id
                              {current_qc_pred('q', version=version)})
+            AND (NOT ? OR NOT EXISTS(SELECT 1 FROM artifacts s
+                           WHERE s.kind='extract_qc_skipped' AND s.project_id=m.project_id
+                             AND s.message_id=a.message_id AND json_valid(s.meta)
+                             AND json_extract(s.meta,'$.hash')=m.content_hash
+                             AND json_extract(s.meta,'$.extract_version')={version}
+                             AND json_extract(s.meta,'$.source_artifact_id')=a.artifact_id
+                             AND json_extract(s.meta,'$.{VERSION_KEY}')='{CURRENT_VERSION}'))
             AND NOT EXISTS(SELECT 1 FROM fetch_jobs j
                            WHERE j.kind=? AND j.message_id=a.message_id
                              AND j.state IN ('pending','failed')
@@ -102,7 +155,7 @@ def _qc_seed(ledger, now: float, limit: int = 32) -> int:
               OR json_extract(fetch_jobs.payload,'$.{VERSION_KEY}') IS NOT '{CURRENT_VERSION}'
             ELSE 1 END
         """, (QC_JOB_KIND, now, now, now, *scope_params,
-              QC_ARTIFACT, QC_JOB_KIND, limit))
+              QC_ARTIFACT, int(skip_mode), QC_JOB_KIND, limit))
     return cur.rowcount
 
 
@@ -174,14 +227,15 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
                     deadline: float, reserve_fn=None,
                     cfg_path: str | None = None,
                     config_generation: str | None = None, *,
-                    jev_transport=None, jev_timing=None) -> str:
+                    jev_transport=None, jev_timing=None, skip_reason=None, lane=None,
+                    diagnostics=None) -> str:
     """One extract_qc job -> extract_qc artifact (annotate only).
     The job row transitions to 'done' inside the artifact commit tx —
     a claimed row must never be left re-claimable after its result
     landed. Returns 'done'|'deferred'|'retry'|'stale'|'failed'."""
     import extract_llm
 
-    if jev_client is None or scfg.get("extract_qc") != "annotate":
+    if (jev_client is None and skip_reason is None) or scfg.get("extract_qc") != "annotate":
         return "deferred"
     token = runtime.JobToken.from_row(job)
     deadline = runtime.job_deadline(scfg, deadline)
@@ -231,6 +285,24 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
                          for qid, text in ctx_items.items()]}
 
     def guard(stage):
+        if skip_reason is not None:
+            from semantic_store import jev_usage_today
+            try:
+                runtime._jev_window_check(config_path=cfg_path)
+                used = jev_usage_today(ledger)
+                cap = scfg["daily_request_budget"]
+                if lane == "backlog":
+                    from semantic_policy import BACKLOG_BUDGET_RESERVE
+                    cap -= math.ceil(cap * BACKLOG_BUDGET_RESERVE)
+                if ((skip_reason in ("daily_budget", "backlog_reserved") and used < cap)
+                        or (skip_reason == "disabled" and scfg["daily_request_budget"] > 0)
+                        or (skip_reason == "not_configured" and jev.api_key())
+                        or (skip_reason == "circuit_open" and (not runtime.circuit_open(ledger)
+                            or runtime._circuit_state(ledger)["failure_class"]
+                               not in runtime._CIRCUIT_FAILURE_CLASSES))):
+                    raise ValueError("semantic_skip_reason_stale")
+            except (jev.JevError, ValueError):
+                raise runtime.RuntimeOff(stage + ':jev_unverified') from None
         def current_source():
             row = ledger.db.execute(
                 f"SELECT content_hash,{qc_source_id(version=extract_llm.EXTRACT_VERSION)} "
@@ -261,6 +333,52 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
             if not runtime.transition_tx(ledger, token, "done"):
                 raise runtime.RuntimeStale("qc:write")
 
+    def write_skip(reason, partial):
+        nonlocal skip_reason
+        skip_reason = reason
+        if skip_reason not in {"not_configured", "disabled", "daily_budget", "backlog_reserved", "circuit_open", "service_unavailable"}:
+            return "deferred"
+        if not isinstance(partial, dict) or set(partial) - set(questions):
+            return "failed"
+        reduced = {}
+        for qid, answer in partial.items():
+            if not isinstance(answer, dict):
+                return "failed"
+            question = questions[qid]
+            if question.get("type") == "noul":
+                value = answer.get("noul")
+                if type(value) not in (int, float) or not math.isfinite(value) or not 0 <= value <= 1:
+                    return "failed"
+                reduced[qid] = {"type": "noul", "noul": value}
+            else:
+                choice, confidence = answer.get("choice"), answer.get("confidence")
+                if (not isinstance(choice, str) or choice not in question.get("criteria", {})
+                        or type(confidence) not in (int, float)
+                        or not math.isfinite(confidence) or not 0 <= confidence <= 1):
+                    return "failed"
+                reduced[qid] = {"type": "choice", "choice": choice, "confidence": confidence}
+        try:
+            with ledger.db:
+                guard('qc:skip')
+                ledger.artifact_add_tx(
+                    "extract_qc_skipped", json.dumps({"status": "SKIPPED", "reason": skip_reason,
+                                                      **({"partial_answers": reduced} if reduced else {})}),
+                    project_id=pid, message_id=mid,
+                    meta={VERSION_KEY: CURRENT_VERSION, "hash": art[1],
+                          "extract_version": extract_llm.EXTRACT_VERSION, "source_artifact_id": art[2]})
+                if not runtime.transition_tx(ledger, token, "done"):
+                    raise runtime.RuntimeStale('qc:skip')
+        except runtime.RuntimeStale:
+            return "stale"
+        except (runtime.RuntimeOff, runtime.RuntimeBudget):
+            return "deferred"
+        if diagnostics is not None:
+            diagnostics["jev_skip_reason"] = skip_reason
+        return "done"
+
+    if skip_reason is not None:
+        return write_skip(skip_reason, {})
+
     unevaluated = None
     req0 = jev_client.requests_made
     client = runtime.bind_jev(jev_client, guard, reserve_fn, transport=jev_transport, timing=jev_timing,
@@ -272,6 +390,10 @@ def _process_qc_job(ledger, scfg: dict, job, jev_client,
     except jev.JevError as error:
         with suppress(Exception):
             jev_client.last_error = error
+        from semantic_audit import jev_skip_reason
+        reason = jev_skip_reason(error)
+        if reason is not None and hasattr(error, "partial_answers"):
+            return write_skip(reason, error.partial_answers)
         cls = jev.failure_class(error)
         if cls == "resource":
             return "deferred"

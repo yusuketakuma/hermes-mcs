@@ -63,6 +63,24 @@ def test_unreadable_usage_fails_closed(ledger):
         store.jev_usage_today(ledger)
 
 
+@pytest.mark.parametrize('raw', [
+    '{"jev_requests":10,"jev_requests":0}',
+    '{"jev_requests":0,"unused":NaN}',
+    '{"jev_requests":0,"unused":1e9999}',
+])
+def test_malformed_usage_never_advances_the_cached_count(ledger, raw):
+    ledger.artifact_add(KIND_USAGE, '{}', meta={'jev_requests': 2})
+    assert store.jev_usage_today(ledger) == 2
+    before = list(ledger._jev_usage_cache)
+    artifact_id = ledger.artifact_add(KIND_USAGE, '{}', meta={'jev_requests': 1})
+    ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (raw, artifact_id))
+    ledger.db.commit()
+    for _ in range(2):
+        with pytest.raises(ValueError, match='semantic_usage_invalid'):
+            store.jev_usage_today(ledger)
+        assert ledger._jev_usage_cache == before
+
+
 def test_unreadable_chunk_is_ignored_and_manifest_can_be_rebuilt(ledger):
     raw = poison_json(ledger)
     ledger.artifact_add(extraction.KIND_CHUNK, raw, project_id=1, message_id=1,

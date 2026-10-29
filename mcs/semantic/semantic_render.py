@@ -230,7 +230,7 @@ def render_notice(db, project_id: int, root_id: int,
              f"対象新着：{len(members)}投稿"
              f"｜対象投稿の最終時刻：{latest}",
              f"取得：{'完全' if quality == 'full' else '一部未取得'}",
-             f"要約：{'自動検査完了' if audit_status == 'PASS' else '要確認'}"]
+             f"要約：{'自動検査完了' if audit_status == 'PASS' else '生成済み' if audit_status == 'SKIPPED' else '要確認'}"]
     if focus_mid is not None and len(ids) > 1:
         trow = db.execute(
             "SELECT posted_at FROM messages WHERE project_id=? "
@@ -442,10 +442,12 @@ def semantic_summary_block(db, r, cfg: dict) -> str:
         if mfacts:
             if body:
                 body += "\n"
-            body += "■ 抽出済み事実（監査済み）\n" + "\n".join(f"・{x}" for x in mfacts)
+            title = "抽出済み事実（監査済み）" if cur["meta"].get("audit_status") == "PASS" else "抽出済み事実"
+            body += f"■ {title}\n" + "\n".join(f"・{x}" for x in mfacts)
         lims = summary_limitations(summ)
         if lims:
             body += "\n・（原文確認）" + "；".join(lims)
-        return f"\n───── 要約（自動検査済） ─────\n{body}"
+        heading = "要約（自動検査済）" if cur["meta"].get("audit_status") == "PASS" else "要約"
+        return f"\n───── {heading} ─────\n{body}"
     except Exception:
         return ""

@@ -143,6 +143,22 @@ def test_detail_values_enter_the_same_audit_target_and_document_hash():
     rejected = semantic_audit.audit_facts_v2(Capture(), raw, BODY, deadline=10 ** 9)
     assert rejected["status"] != "PASS"
     assert any(item["code"] == "fact_patient_context_invalid" for item in rejected["findings"])
+    unavailable = semantic_audit.audit_facts_v2(None, raw, BODY, deadline=10 ** 9)
+    assert unavailable["evaluated"] is False
+    assert any(item["code"] == "fact_patient_context_invalid" for item in unavailable["findings"])
+
+
+def test_optional_fact_validation_rejects_changed_source_and_prior_rejection():
+    doc = _extract()["doc"]
+    member = _member(BODY)
+    fingerprint = doc["source"]["source_fingerprint"]
+    result = semantic_audit.optional_fact_audit(doc, member, fingerprint, "disabled")
+    assert result["status"] == "SKIPPED" and result["evaluated"] is False
+    changed = copy.deepcopy(member)
+    changed["body_original"] += "追加"
+    assert semantic_audit.optional_fact_audit(doc, changed, fingerprint, "disabled")["status"] == "NEEDS_REVIEW"
+    previous = {"findings": [{"code": "fact_contradicts"}], "fact_verdicts": {}}
+    assert semantic_audit.optional_fact_audit(doc, member, fingerprint, "disabled", previous)["status"] == "NEEDS_REVIEW"
 
 
 def test_active_v4_pass_publishes_new_context_through_existing_stage_fences(tmp_path):

@@ -5,6 +5,16 @@ clinical facts.  The legacy `extract_llm` path stays available as the
 compatibility / shadow / rollback route.  This document covers the
 rollout stages, the evidence gate, and the operating commands.
 
+## Jevが利用できない場合（2026-10-29）
+
+意味解析を有効にしている環境では、Jevが利用可能な間は従来の検証を行います。未設定、日次予算0、日上限・背景留保への到達、または正規のサービス障害では、Jevの検証を省略して処理を続けます。省略は `SKIPPED` と理由を保存し、`PASS` や実施済みの検証件数には加えません。設定不正、利用期限切れ、原文未取得、未確定の要求、既に判明した不一致は省略の対象にしません。
+
+canonicalの省略結果は `semantic_facts_v4_skipped` に保存します。従来の `semantic_facts_v4`・`canonical_projection` に未検証の結果を混ぜません。明示的に対応した読取処理だけが、原文・処理世代・policy・文書のハッシュ・要約と検証記録の対応を確認して利用します。従来のPASS専用の読取処理は、この新しい種別を選びません。
+
+患者コンテキストの原文検証と要約検証も、それぞれ別の省略記録を持ちます。検証済み件数と省略件数は分けます。患者コンテキストでは、Jevが復旧した場合に既存の処理枠で再照合します。投稿の新規解析と、原文・処理世代の変更に伴う再解析でもJevを利用します。省略結果は実際に再評価されるまで `SKIPPED` のまま保持し、完了済み投稿の処理を再照合待ちだけで未完了には戻しません。原文が変わった結果や配送済み通知を無条件に再送しません。canonicalへの昇格に必要な評価証拠と人の承認を、この変更で自動更新することはありません。
+
+以下のPASS専用の処理説明は、Jevの検証を実施した経路を示します。省略した経路の状態と読取条件は本節に従います。
+
 ## Fact source modes
 
 `semantic.fact_source` selects which extraction feeds consumers:
@@ -13,7 +23,7 @@ rollout stages, the evidence gate, and the operating commands.
 |-------------|---------------|----------------|
 | `legacy`    | not produced  | `extract_llm` artifacts only |
 | `shadow`    | produced, not audited | `extract_llm` (canonical artifacts written for comparison; the Jev fact audit is canonical-only) |
-| `canonical` | produced, must PASS audit | `canonical_projection` artifacts (legacy shape, canonical source) |
+| `canonical` | produced; PASS or separately recorded SKIPPED | PASS: `canonical_projection` / `semantic_facts_v4`; SKIPPED: explicitly supported readers only |
 
 Set it through the activation command; it validates the resulting config
 before writing. The default remains `legacy`.
