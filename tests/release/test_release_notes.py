@@ -1,7 +1,11 @@
 """実データ・ネットワークなしで生成と拒否条件を検証する。"""
 
 import importlib.util
+import copy
+import contextlib
+import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -17,6 +21,7 @@ SPEC = importlib.util.spec_from_file_location(
     "release_notes", Path(__file__).resolve().parents[2] / "scripts/development/release_notes.py")
 notes = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(notes)
+import sync_release_notes as sync  # noqa: E402 - development scripts path is installed above
 
 
 class ReleaseNotesTest(unittest.TestCase):
@@ -260,6 +265,98 @@ class ReleaseNotesTest(unittest.TestCase):
                     self.assertRaises(subprocess.CalledProcessError):
                 notes.require_fragment(root, "base")
             self.assertEqual(calls[-1][:2], ["git", "show"])
+
+
+class ReleaseSyncTargetTest(unittest.TestCase):
+    def setUp(self):
+        item = dict(category="fixed", title="合成の修正", summary="通知を更新します。",
+                    upgrade="追加操作は不要です。", details=[], refs=["#1"])
+        body = notes.render([item], "通知を修正", "合成の説明です。")
+        self.text = ("## [Unreleased]\n\n## [1.0.1] — 2026-10-02\n\n" + body
+                     + "\n## [1.0.0] — 2026-10-01\n\n" + body)
+        base = dict(name="old", body="old", draft=False, prerelease=False,
+                    target_commitish="main", created_at="a", published_at="b", updated_at="c")
+        self.records = [dict(base, id=1, tag_name="v1.0.0"),
+                        dict(base, id=2, tag_name="v1.0.1")]
+        self.writes = []
+
+    def request(self, endpoint, payload=None):
+        if "?" in endpoint:
+            return copy.deepcopy(self.records)
+        record = next(r for r in self.records if endpoint == f"releases/{r['id']}")
+        if payload is not None:
+            self.writes.append((endpoint, copy.deepcopy(payload)))
+            record.update(payload)
+        return copy.deepcopy(record)
+
+    def test_tag_limits_writes_and_default_still_updates_all(self):
+        result = sync.synchronize(self.text, self.request, apply=True, tag="v1.0.1")
+        self.assertEqual(result["releases_checked"], 1)
+        self.assertEqual(result["updated"], ["v1.0.1"])
+        self.assertEqual([endpoint for endpoint, _ in self.writes], ["releases/2"])
+        result = sync.synchronize(self.text, self.request, apply=True)
+        self.assertEqual(result["updated"], ["v1.0.0"])
+
+    def test_invalid_missing_duplicate_or_changed_target_never_writes(self):
+        for tag in ("1.0.1", "v1.0.1-rc1", "v9.0.0", ""):
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                sync.synchronize(self.text, self.request, apply=True, tag=tag)
+        with self.assertRaises(ValueError):
+            sync.synchronize(self.text, self.request, apply=True, tag="v1.0.1", release_id=1)
+        self.records.append(copy.deepcopy(self.records[1]))
+        with self.assertRaises(ValueError):
+            sync.synchronize(self.text, self.request, apply=True, tag="v1.0.1")
+        self.records.pop()
+        self.records.pop()
+        with self.assertRaises(ValueError):
+            sync.synchronize(self.text, self.request, apply=True, tag="v1.0.1")
+        self.records.append(dict(self.records[0], id=2, tag_name="v1.0.1"))
+
+        def changed(endpoint, payload=None):
+            result = self.request(endpoint, payload)
+            if "?" not in endpoint and payload is None:
+                result["updated_at"] = "changed"
+            return result
+
+        with self.assertRaises(ValueError):
+            sync.synchronize(self.text, changed, apply=True, tag="v1.0.1")
+        self.assertEqual(self.writes, [])
+
+    def test_release_event_uses_canonical_target_and_rejects_mismatches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "CHANGELOG.md").write_text(self.text, encoding="utf-8")
+            event_path = root / "event.json"
+            event = {"release": {"id": 2, "tag_name": "v1.0.1"},
+                     "repository": {"full_name": "example/repo"}}
+            event_path.write_text(json.dumps(event), encoding="utf-8")
+            env = {"GITHUB_EVENT_NAME": "release", "GITHUB_EVENT_PATH": str(event_path),
+                   "GITHUB_REPOSITORY": "example/repo", "GITHUB_REF": "refs/tags/v1.0.1"}
+            with patch.dict(os.environ, env, clear=True), \
+                    patch.object(sync, "api", side_effect=lambda repo, endpoint, payload=None:
+                                 self.request(endpoint, payload)), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(sync.main(["--root", tmp, "--apply"]), 0)
+            self.assertEqual([endpoint for endpoint, _ in self.writes], ["releases/2"])
+            self.writes.clear()
+            for changes, args in (({"GITHUB_EVENT_PATH": ""}, []),
+                                  ({"GITHUB_REF": "refs/tags/v1.0.0"}, []),
+                                  ({"GITHUB_REPOSITORY": "other/repo"}, []),
+                                  ({}, ["--tag", "v1.0.0"]),
+                                  ({}, ["--tag", "v1.0.1", "--tag", "v1.0.1"])):
+                with self.subTest(changes=changes, args=args), patch.dict(os.environ, env | changes, clear=True), \
+                        patch.object(sync, "api", side_effect=AssertionError("unexpected API call")), \
+                        contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    sync.main(["--root", tmp, "--apply", *args])
+            for payload in ('{"release": {"id": 2, "tag_name": "v1.0.1", '
+                            '"tag_name": "v1.0.0"}}',
+                            json.dumps(event | {"release": {"id": True, "tag_name": "v1.0.1"}}),
+                            json.dumps(event | {"repository": {"full_name": "other/repo"}})):
+                event_path.write_text(payload, encoding="utf-8")
+                with self.subTest(payload=payload), patch.dict(os.environ, env, clear=True), \
+                        patch.object(sync, "api", side_effect=AssertionError("unexpected API call")), \
+                        contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    sync.main(["--root", tmp, "--apply"])
+            self.assertEqual(self.writes, [])
 
 
 if __name__ == "__main__":
