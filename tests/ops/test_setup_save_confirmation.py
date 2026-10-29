@@ -91,7 +91,7 @@ def test_save_confirmation_shows_effective_provider_defaults_without_pinning(mon
     assert setup_wizard.confirm_save(cfg, plugin_profile=None,
                                      key_presence={"jev": True, "anthropic": True}) is False
     output = capsys.readouterr().out
-    assert f"Anthropic費用上限: 1日 {daily} / 1か月 {monthly}" in output
+    assert f"外部AI合計費用上限: 1日 {daily} / 1か月 {monthly}" in output
     assert "Jev設定: mode=assist" in output and "1日の要求上限 10000" in output
     assert cfg == before
 

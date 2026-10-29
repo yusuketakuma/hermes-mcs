@@ -544,10 +544,20 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
     digest = cfg.get("daily_digest") or {}
     semantic, _ = (runtime_config(cfg) if key_presence is None else
                    semantic_config(cfg, key_present=key_presence.get("jev") is True))
-    cloud_key = (bool(cloud_policy.selected_key()) if key_presence is None
-                 else key_presence.get("anthropic") is True)
-    cloud, _ = (cloud_policy.resolve_settings(cfg) if key_presence is None else
-                cloud_policy.cloud_config(cfg, key_present=cloud_key or key_presence.get("openai") is True))
+    if key_presence is None:
+        from mcs_util import private_env_problem
+        key_presence = {name: private_env_problem(key) is None for name, key in (
+            ("anthropic", "MCS_ANTHROPIC_API_KEY"), ("openai", "MCS_OPENAI_API_KEY"))}
+    cloud, cloud_errors = cloud_policy.cloud_config(cfg)
+    provider = cloud["provider"]
+    if provider == "auto":
+        provider = next((name for name in cloud["provider_order"] if key_presence.get(name) is True),
+                        cloud["provider_order"][0])
+    cloud_key = key_presence.get(provider) is True
+    block = cfg.get("cloud_llm")
+    if (block is None or isinstance(block, dict) and "mode" not in block) and not cloud_errors:
+        cloud, _ = cloud_policy.cloud_config(cfg, key_present=cloud_key)
+    cloud["provider"], cloud["model"] = provider, cloud_policy.PROVIDERS[provider]
     print("\n【保存前の確認】設定した送り先と、この後に保存する内容を確認してください。"
           "\n  ここで中止すると、今回の設定・認証情報・辞書は保存しません。")
     print(f"  実行方法: {shown(mode)}"
@@ -584,7 +594,7 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
     cloud_scope = "全対象" if cloud["project_ids"] is None else shown(cloud["project_ids"])
     if cloud["mode"] in ("on", "shadow") and cloud_key:
         print(f"  外部AI追加処理: {cloud['mode']} / 対象 {cloud_scope}。患者コンテキストと対象の再抽出で、"
-              "患者名を含む投稿本文・参考文脈を匿名化せず選択したAnthropicまたはOpenAIのAPIへ送信します。通常のAPI保持条件が適用されます。"
+              f"患者名を含む投稿本文・参考文脈を匿名化せず選択した{'OpenAI' if provider == 'openai' else 'Anthropic'}のAPIへ送信します。通常のAPI保持条件が適用されます。"
               "キー登録だけではZDRやHIPAAに関する契約は確認できません。保持条件と契約を利用者側で確認してください。"
               "詳細: docs/guides/ANTHROPIC.md")
     else:
