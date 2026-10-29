@@ -22,7 +22,7 @@ MUTED = "#66716f"
 GREEN = "#087f5b"
 FONT = "Noto Sans CJK JP,Hiragino Sans,Yu Gothic,Droid Sans Fallback,sans-serif"
 # Fully fictional example shared by every screen (no real or anonymised posts).
-HEADING = "💬 山田 花子（あおぞら）"
+HEADING = "💻 山田 花子（あおぞら）"
 # layout 2: the line under the title — start date, then counts
 META = "10-01〜 · {n}投稿 · 📎 1 · @自分宛て"
 SENDER = "佐藤さん（訪問看護・あおぞら）"
