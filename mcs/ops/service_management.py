@@ -122,7 +122,8 @@ def runtime_gate_errors(cfg, *, repair_recovery=False, update_repo=None, allow_r
     errors = []
     probe_args = {} if deadline is None else {"deadline": deadline}
     try:
-        python = service_substitutions(cfg, paths=paths)['PYTHON']
+        contract.service_config_substitutions(cfg)
+        python = selected_python(cfg, paths=paths)
     except ValueError as e:
         errors.append(f'config: {e}')
     else:

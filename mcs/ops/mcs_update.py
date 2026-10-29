@@ -1764,7 +1764,7 @@ def _runtime_python(venv: str) -> str | None:
 def _runtime_venv(cfg: dict) -> tuple[str, str | None]:
     """(venv, Hermes checkout or None) of the interpreter services run."""
     venv = os.path.dirname(os.path.dirname(os.path.abspath(
-        service_management.service_substitutions(cfg, paths=_service_paths())["PYTHON"])))
+        service_management.selected_python(cfg, paths=_service_paths()))))
     if cfg.get("runtime_mode") == "standalone":
         return venv, None
     checkout = os.path.dirname(venv)     # <hermes-agent>/venv

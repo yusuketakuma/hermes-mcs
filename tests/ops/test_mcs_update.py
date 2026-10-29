@@ -113,6 +113,18 @@ def test_standalone_precheck_does_not_require_hermes(updater, monkeypatch):
     assert updater.precheck_local({"runtime_mode": "standalone", "mcs_login_id": "u", "notify_target": "local"}) == []
 
 
+@pytest.mark.parametrize("mode", ["hermes", "standalone"])
+def test_runtime_venv_accepts_old_checkout_without_log_helper(updater, mode):
+    cfg = {"runtime_mode": mode}
+    selected = service_management.selected_python(cfg, paths=updater._service_paths())
+    venv = Path(selected).parent.parent
+    checkout = venv.parent if mode == "hermes" else None
+    if checkout is not None:
+        (checkout / ".git").mkdir(parents=True)
+    assert not Path(updater.REPO, "mcs", "core", "run_log.py").exists()
+    assert updater._runtime_venv(cfg) == (str(venv), str(checkout) if checkout else None)
+
+
 def test_standalone_quiesce_and_restart_keep_the_host_alive(updater, monkeypatch):
     monkeypatch.setattr(mcs_util, 'load_config', lambda: {"runtime_mode": "standalone"})
     (Path(updater.DATA).parent / "config.json").write_text('{"runtime_mode":"standalone"}')

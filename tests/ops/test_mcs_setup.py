@@ -2190,6 +2190,9 @@ def test_check_reports_deployed_script_drift(monkeypatch, tmp_path, capsys):
     (src / "a.sh").write_text("#!/bin/sh\nexec __PYTHON__ __REPO__/x\n")
     (src / "b.sh").write_text("#!/bin/sh\necho __DATA__\n")
     (src / "README.md").write_text("not a script")
+    helper = tmp_path / "repo" / "mcs" / "core" / "run_log.py"
+    helper.parent.mkdir(parents=True)
+    helper.write_bytes((Path(__file__).resolve().parents[2] / "mcs" / "core" / "run_log.py").read_bytes())
     monkeypatch.setattr(mcs_setup, "REPO_ROOT", str(tmp_path / "repo"))
     monkeypatch.setattr(mcs_setup, "SCRIPTS_DIR", str(tmp_path / "scripts"))
     monkeypatch.setattr(mcs_setup, "HERMES_PY", "/h/venv/bin/python")

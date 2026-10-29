@@ -121,18 +121,12 @@ def selected_python(cfg, *, standalone_runtime_home, hermes_python):
     return os.path.join(standalone_runtime_home, "venv", "bin", "python3") if mcs_runtime.standalone(cfg) else hermes_python
 
 
-def service_substitutions(cfg, *, root, checkout, standalone_runtime_home, hermes_runtime_home, hermes_python, recovery_dir=None):
-    standalone = mcs_runtime.standalone(cfg)
-    python = selected_python(cfg, standalone_runtime_home=standalone_runtime_home, hermes_python=hermes_python)
-    subs = {"PYTHON": python, "REPO": checkout, "DATA": os.path.join(root, "data"),
-            "RUNTIME_HOME": standalone_runtime_home if standalone else hermes_runtime_home}
-    from run_log_install import helper_path
-    subs["RUN_LOG_HELPER"] = helper_path(root, recovery_dir, checkout=checkout)
+def service_config_substitutions(cfg):
     backup = cfg.get("backup", {"enabled": False})
     error = validate_backup_config(backup)
     if error:
         raise ValueError("backup_config_invalid")
-    subs.update(BACKUP_ENABLED="1" if backup["enabled"] else "0",
+    subs = dict(BACKUP_ENABLED="1" if backup["enabled"] else "0",
                 BACKUP_POLICY=backup["policy"] if backup["enabled"] else "",
                 BACKUP_SNAPSHOT=backup.get("snapshot", "") if backup["enabled"] else "",
                 BACKUP_SNAPSHOT_DIR=backup.get("snapshot_dir", "") if backup["enabled"] else "")
@@ -144,6 +138,17 @@ def service_substitutions(cfg, *, root, checkout, standalone_runtime_home, herme
     if not isinstance(sdc_root, str) or not os.path.isabs(sdc_root) or any(ord(c) < 32 for c in sdc_root):
         raise ValueError("sdc_root_invalid")
     subs["SDC_ROOT"] = sdc_root
+    return subs
+
+
+def service_substitutions(cfg, *, root, checkout, standalone_runtime_home, hermes_runtime_home, hermes_python, recovery_dir=None):
+    standalone = mcs_runtime.standalone(cfg)
+    python = selected_python(cfg, standalone_runtime_home=standalone_runtime_home, hermes_python=hermes_python)
+    subs = {"PYTHON": python, "REPO": checkout, "DATA": os.path.join(root, "data"),
+            "RUNTIME_HOME": standalone_runtime_home if standalone else hermes_runtime_home}
+    subs.update(service_config_substitutions(cfg))
+    from run_log_install import helper_path
+    subs["RUN_LOG_HELPER"] = helper_path(root, recovery_dir, checkout=checkout)
     return subs
 
 
