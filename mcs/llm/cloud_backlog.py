@@ -11,6 +11,8 @@ import subprocess
 import sys
 import time
 
+from run_log_install import helper_path, LogInstallError
+
 _parent = None
 
 
@@ -96,7 +98,6 @@ class Pool:
         self.root = Path(root)
         self.children = []
         self.lock = None
-        self.log = None
         self.last_sync = 0.0
 
     def sync(self, cfg, *, ledger=None):
@@ -122,17 +123,17 @@ class Pool:
                 return
         self.children = [p for p in self.children if p.poll() is None]
         target = min(settings["max_concurrency"], len(self.children) + memory_workers(settings["max_concurrency"]))
-        if self.log is None:
-            fd = os.open(directory / "cloud_backlog.log", os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-            info = os.fstat(fd)
-            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o077:
-                os.close(fd)
-                raise ValueError("cloud_log_untrusted")
-            self.log = os.fdopen(fd, "ab", buffering=0)
+        inherited = os.environ.get("MCS_RUN_LOG_HELPER")
+        recovery = str(Path(inherited).parent) if inherited and os.path.isabs(inherited) else None
+        helper = helper_path(self.root, recovery, require_installed=True)
+        if inherited and inherited != helper:
+            raise LogInstallError("run_log_helper_unverified")
         for _ in range(max(0, target - len(self.children))):
-            child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
-                "--parent", str(os.getpid())], stdin=subprocess.DEVNULL,
-                stdout=self.log, stderr=self.log, close_fds=True)
+            child = subprocess.Popen(
+                [sys.executable, "-I", helper, "exec", "--data-dir", str(directory), "--",
+                 sys.executable, str(Path(__file__).resolve()), "--parent", str(os.getpid())],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                close_fds=True)
             self.children.append(child)
 
     def close(self):
@@ -147,9 +148,6 @@ class Pool:
                 child.kill()
                 child.wait(timeout=1)
         self.children = []
-        if self.log is not None:
-            self.log.close()
-            self.log = None
         if self.lock is not None:
             os.close(self.lock)
             self.lock = None

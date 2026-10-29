@@ -13,7 +13,7 @@ def _systemd_arg(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$") + '"'
 
 
-def generate(root, *, python_executable=sys.executable, platform=sys.platform) -> Path:
+def generate(root, *, python_executable=sys.executable, platform=sys.platform, recovery_dir=None) -> Path:
     """Write an owner-only launchd or systemd user-service candidate."""
     if platform not in ("darwin", "linux"):
         raise ValueError("lineworks_service_platform_unsupported")
@@ -33,10 +33,12 @@ def generate(root, *, python_executable=sys.executable, platform=sys.platform) -
             raise ValueError("lineworks_service_paths_invalid")
         directory.mkdir(mode=0o700, exist_ok=True)
         directory.chmod(0o700)
-    stdout, stderr = state / "service.stdout.log", state / "service.stderr.log"
-    if stdout.is_symlink() or stderr.is_symlink():
-        raise ValueError("lineworks_service_paths_invalid")
-    argv = [str(python), str(entry), "run", "--root", str(root)]
+    from adapters.common.mcs_api import bootstrap
+    bootstrap()
+    from run_log_install import helper_path
+    helper = helper_path(root, recovery_dir, checkout=entry.parents[1])
+    argv = [str(python), "-I", helper, "exec", "--data-dir", str(data), "--",
+            str(python), str(entry), "run", "--root", str(root)]
     if platform == "darwin":
         target = folder / "ai.mcs.lineworks.plist"
         body = plistlib.dumps({
@@ -44,7 +46,7 @@ def generate(root, *, python_executable=sys.executable, platform=sys.platform) -
             "WorkingDirectory": str(root), "RunAtLoad": True, "KeepAlive": True,
             "ThrottleInterval": 10, "Umask": 0o077,
             "EnvironmentVariables": {"PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin", "PYTHONUTF8": "1"},
-            "StandardOutPath": str(stdout), "StandardErrorPath": str(stderr),
+            "StandardOutPath": os.devnull, "StandardErrorPath": os.devnull,
         })
     else:
         target = folder / "hermes-mcs-lineworks.service"
@@ -56,8 +58,7 @@ def generate(root, *, python_executable=sys.executable, platform=sys.platform) -
                 f"ExecStart={' '.join(_systemd_arg(v) for v in argv)}\n"
                 "Restart=always\nRestartSec=10\nUMask=0077\n"
                 "Environment=PYTHONUTF8=1\n"
-                f"StandardOutput=append:{str(stdout).replace('%', '%%')}\n"
-                f"StandardError=append:{str(stderr).replace('%', '%%')}\n"
+                "StandardOutput=null\nStandardError=null\n"
                 "\n[Install]\nWantedBy=default.target\n").encode("utf-8")
     if target.is_symlink():
         raise ValueError("lineworks_service_paths_invalid")

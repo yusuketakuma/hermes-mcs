@@ -1,0 +1,17 @@
+{
+  "category": "changed",
+  "title": "常駐処理と定期処理の出力先を共通ログに統一",
+  "summary": "常駐処理・抽出ワーカー・定期処理の運用ログを data/mcs.log に集約します。収集診断と独立動作の確認案内も共通ログへそろえます。",
+  "upgrade": "更新時のサービス切替後に適用します。旧ログは自動統合の対象として原本を保持します。Hermes gateway全体のログは統合しません。",
+  "details": [
+    "ログを収録する独立した子プロセスを使い、処理本体のPID・引数・入力と終了結果を維持します。親プロセスが終了しても、処理本体からの出力が閉じられるまで収録を続けます。",
+    "起動中の処理の所有者を確認できない場合は保留し、重複起動や未確認の終了操作を行いません。通知用の標準出力と警報判定を維持します。"
+  ],
+  "refs": [
+    "mcs_standalone/runtime.py",
+    "mcs/llm/cloud_backlog.py",
+    "mcs/ops/service_management.py",
+    "mcs/ingest/collection_diagnostics.py",
+    "adapters/common/eventlog.py"
+  ]
+}

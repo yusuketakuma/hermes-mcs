@@ -7,12 +7,19 @@
   <key>ProgramArguments</key>
   <array>
     <string>__RECOVERY_PYTHON__</string>
+    <string>-I</string>
+    <string>__RUN_LOG_HELPER__</string>
+    <string>exec</string>
+    <string>--data-dir</string>
+    <string>__DATA__</string>
+    <string>--</string>
+    <string>__RECOVERY_PYTHON__</string>
     <string>__RECOVERY__/mcs_recover.py</string>
     <string>--if-stale</string>
   </array>
   <key>StartInterval</key><integer>900</integer>
   <key>RunAtLoad</key><false/>
-  <key>StandardOutPath</key><string>__DATA__/recovery.log</string>
-  <key>StandardErrorPath</key><string>__DATA__/recovery.log</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>/dev/null</string>
 </dict>
 </plist>

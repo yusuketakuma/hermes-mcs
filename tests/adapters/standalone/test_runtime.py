@@ -1,7 +1,6 @@
 """Native job ownership with synthetic queues and stubbed child processes."""
 from datetime import datetime, timezone
 import json
-import os
 
 import pytest
 from types import SimpleNamespace
@@ -169,11 +168,13 @@ def test_log_and_status_failures_still_drain_children_and_close_connector(tmp_pa
             self.code = 0
         def kill(self):
             self.code = -9
-    real_open = runtime.os.open
-    def open_log(path, *args, **kwargs):
-        if str(path).endswith('extract-2.log'):
-            raise PermissionError('synthetic log failure')
-        return real_open(path, *args, **kwargs)
+    helper_checks = []
+    def verified_helper(root, recovery, *, require_installed):
+        assert require_installed is True
+        helper_checks.append(root)
+        if len(helper_checks) == 2:
+            raise runtime.LogInstallError('synthetic helper verification failure')
+        return str(tmp_path / 'verified-immutable-helper.py')
     def broken_status(*args, **kwargs):
         raise OSError('synthetic status failure')
     async def connector(root, stopping, *, native_admission, delivery_admission, delivery_identity):
@@ -184,14 +185,14 @@ def test_log_and_status_failures_still_drain_children_and_close_connector(tmp_pa
         await sleep(0)
     monkeypatch.setattr(runtime, 'Runtime', host)
     monkeypatch.setattr(runtime.subprocess, 'Popen', Child)
-    monkeypatch.setattr(runtime.os, 'open', open_log)
+    monkeypatch.setattr(runtime, 'helper_path', verified_helper)
     monkeypatch.setattr(runtime, 'atomic_write', broken_status)
     monkeypatch.setattr(runtime.config, 'load', lambda root: cfg)
     monkeypatch.setattr(runtime.asyncio, 'sleep', fast_sleep)
     # A status write failure (e.g. a full disk) is logged, never a crash loop.
     assert asyncio.run(runtime.serve(tmp_path, cfg, connector)) == 0
     assert hosts[0].write_error.get(runtime.service.STATUS_FILE) == 'unknown'
-    assert len(children) == 1 and children[0].code == 0
+    assert len(helper_checks) == 2 and len(children) == 1 and children[0].code == 0
     assert not hosts[0].children and closed == [True]
 
 
@@ -333,20 +334,24 @@ def test_crash_loop_is_visible_in_log_and_status(tmp_path, monkeypatch):
     assert [f["code"] for f in ended] == [1, 1, 0]
 
 
-def test_log_stream_failure_closes_descriptor_before_requesting_restart(tmp_path, monkeypatch):
+def test_logged_child_spawn_failure_requests_restart_without_parent_log_descriptor(tmp_path, monkeypatch):
     (tmp_path / "data").mkdir()
     host = runtime.Runtime(tmp_path, {"runtime_mode": "standalone"})
-    opened = []
-
-    def unavailable_stream(fd, mode, *, closefd):
-        assert closefd is True
-        opened.append(fd)
-        raise OSError("synthetic stream handoff failure")
-
-    monkeypatch.setattr(runtime.os, "fdopen", unavailable_stream)
-    monkeypatch.setattr(runtime.subprocess, "Popen", lambda *a, **k: pytest.fail("child started"))
+    events, attempts = [], []
+    helper = str(tmp_path / "verified-immutable-helper.py")
+    monkeypatch.setattr(runtime, "helper_path", lambda *a, **k: helper)
+    monkeypatch.setattr(runtime, "log", lambda event, **fields: events.append((event, fields)))
+    monkeypatch.setattr(runtime.os, "fdopen", lambda *a, **k: pytest.fail("parent log descriptor"))
+    def unavailable_child(argv, **kwargs):
+        attempts.append((argv, kwargs))
+        raise OSError("synthetic child spawn failure")
+    monkeypatch.setattr(runtime.subprocess, "Popen", unavailable_child)
     host.start("extract-0", "background", 1)
     assert host.restarting and host.children == {}
-    assert len(opened) == 1
-    with pytest.raises(OSError):
-        os.fstat(opened[0])
+    assert len(attempts) == 1
+    argv, kwargs = attempts[0]
+    assert argv[1:7] == ["-I", helper, "exec", "--data-dir", str(tmp_path / "data"), "--"]
+    assert argv[7:] == host.argv["extract-0"]
+    assert kwargs["stdout"] == kwargs["stderr"] == runtime.subprocess.DEVNULL
+    assert events == [("child_start_failed", {"job": "extract-0"})]
+    assert not (tmp_path / "data" / "extract-0.log").exists()

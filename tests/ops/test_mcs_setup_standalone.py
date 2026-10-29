@@ -140,7 +140,10 @@ def test_standalone_services_use_launchd_not_hermes(monkeypatch, tmp_path):
     assert argv[3:] == [str(scheduled_jobs.CRON_TIMEOUT_S), "/bin/bash",
                        str(tmp_path / "scripts" / "mcs_check.sh")]
     plist = plistlib.loads((tmp_path / "agents" / "ai.mcs.standalone.plist").read_bytes())
-    assert plist["ProgramArguments"] == [venv, "-m", "mcs_standalone", "run", "--root", str(tmp_path)]
+    assert plist["ProgramArguments"][:2] == [venv, "-I"]
+    assert plist["ProgramArguments"][3:7] == ["exec", "--data-dir", str(tmp_path / "data"), "--"]
+    assert plist["ProgramArguments"][7:] == [venv, "-m", "mcs_standalone", "run", "--root", str(tmp_path)]
+    assert plist["StandardOutPath"] == plist["StandardErrorPath"] == os.devnull
     assert plist["AbandonProcessGroup"] is True  # Chrome outlives a tick
     assert len(host.schedules) == 6
     assert not any(a[0] == "/x/hermes" for a in calls)
@@ -286,8 +289,19 @@ def test_back_to_hermes_without_hermes_keeps_the_launchd_schedule(monkeypatch, t
     assert not any(label.startswith("ai.mcs.cron.") for label in outs)
 
 
+def _installed_reload_helper(tmp_path):
+    from run_log_install import prepare, helper_path
+    recovery = tmp_path / "private-recovery"
+    (tmp_path / "data").mkdir(mode=0o700, exist_ok=True)
+    prepare(tmp_path, Path(__file__).resolve().parents[2], recovery, promote=True)
+    return recovery, helper_path(tmp_path, recovery, require_installed=True)
+
+
 def test_services_never_reloads_the_job_it_runs_inside(monkeypatch, tmp_path):
+    from dataclasses import replace
+    recovery, helper = _installed_reload_helper(tmp_path)
     calls, args = _standalone_services(monkeypatch, tmp_path, config())
+    paths = replace(mcs_setup._service_paths(), recovery_dir=str(recovery))
     helpers = []
     # never a real process here: the helper would drive the real launchd
     monkeypatch.setattr(mcs_setup.subprocess, "Popen", lambda argv, **kw: helpers.append((argv, kw)))
@@ -295,14 +309,16 @@ def test_services_never_reloads_the_job_it_runs_inside(monkeypatch, tmp_path):
     plist = tmp_path / "agents" / "ai.mcs.cron.mcs-update.plist"
     plist.parent.mkdir()
     plist.write_text("synthetic")
-    assert service_management.agent_reconcile('ai.mcs.cron.mcs-update', str(plist), lambda m: None, False, paths=mcs_setup._service_paths())
+    assert service_management.agent_reconcile('ai.mcs.cron.mcs-update', str(plist), lambda m: None, False, paths=paths)
     touched = [a for a in calls if a[0] == "launchctl" and "ai.mcs.cron.mcs-update" in " ".join(a)]
     assert touched == []
     plist = tmp_path / "agents" / "ai.mcs.cron.mcs-update.plist"
     assert plist.exists()
     # ...a detached helper reloads it once this run (pid) has exited
     (argv, kw), = helpers
-    assert argv[4:] == [str(mcs_setup.os.getpid()), "gui/501/ai.mcs.cron.mcs-update",
+    assert argv[:7] == [service_management.sys.executable, "-I", helper, "exec", "--data-dir", str(tmp_path / "data"), "--"]
+    assert argv[7:9] == ["/bin/sh", "-c"]
+    assert argv[11:] == [str(mcs_setup.os.getpid()), "gui/501/ai.mcs.cron.mcs-update",
                         "gui/501", str(plist)]
     assert kw["start_new_session"] and "XPC_SERVICE_NAME" not in kw["env"]
 
@@ -368,13 +384,17 @@ def test_failed_hermes_cron_keeps_the_launchd_schedule(monkeypatch, tmp_path):
 
 
 def test_self_reload_waits_for_the_updater_not_for_services(monkeypatch, tmp_path):
+    from dataclasses import replace
+    recovery, helper = _installed_reload_helper(tmp_path)
     calls, args = _standalone_services(monkeypatch, tmp_path, config())
+    paths = replace(mcs_setup._service_paths(), recovery_dir=str(recovery))
     helpers = []
     monkeypatch.setattr(mcs_setup.subprocess, "Popen", lambda argv, **kw: helpers.append(argv))
     monkeypatch.setenv("XPC_SERVICE_NAME", "ai.mcs.cron.mcs-update")
     monkeypatch.setenv("MCS_JOB_PID", "424242")
-    assert service_management.agent_reconcile('ai.mcs.cron.mcs-update', '/synthetic/plist', lambda m: None, False, paths=mcs_setup._service_paths())
-    assert helpers[0][4] == "424242"
+    assert service_management.agent_reconcile('ai.mcs.cron.mcs-update', '/synthetic/plist', lambda m: None, False, paths=paths)
+    assert helpers[0][:7] == [service_management.sys.executable, "-I", helper, "exec", "--data-dir", str(tmp_path / "data"), "--"]
+    assert helpers[0][11] == "424242"
 
 
 def test_cron_timeout_wrapper_forwards_sigterm(tmp_path):

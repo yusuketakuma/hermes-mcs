@@ -5,7 +5,7 @@
 set -u
 PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
-LOG=__DATA__/run.log
+LOG=__DATA__/mcs.log
 PY=__PYTHON__
 WATCHDOG_GRACE=__WATCHDOG_GRACE__
 set -- --json --jobs-only
@@ -13,7 +13,8 @@ if [ "$WATCHDOG_GRACE" -gt 0 ]; then
   set -- "$@" --watchdog-grace "$WATCHDOG_GRACE"
 fi
 
-"$PY" __REPO__/mcs/ingest/run_check.py "$@" >>"$LOG" 2>&1
+"$PY" -I __RUN_LOG_HELPER__ exec --data-dir __DATA__ -- \
+  "$PY" __REPO__/mcs/ingest/run_check.py "$@"
 rc=$?
 if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
   printf 'mcs deep: run_check exited %d — see %s\n' "$rc" "$LOG"

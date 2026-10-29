@@ -1,6 +1,6 @@
 #!/bin/bash
 # Daily restart only after a valid, idle /slots observation within 15 minutes.
-exec /usr/bin/python3 - __DATA__/llamacpp-restart.log <<'PY'
+exec __PYTHON__ - __DATA__ __RUN_LOG_HELPER__ <<'PY'
 import datetime
 import json
 import os
@@ -11,14 +11,16 @@ import time
 from contextlib import suppress
 from pathlib import Path
 
-LOG = Path(sys.argv[1])
+DATA, HELPER = sys.argv[1:3]
 MAX_RESPONSE = 65536
 
 
 def log(message):
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    with LOG.open("a", encoding="utf-8") as stream:
-        stream.write(f"{stamp} {message}\n")
+    result = subprocess.run([sys.executable, "-I", HELPER, "append-stdin", "--data-dir", DATA],
+                            input=f"{stamp} {message}\n".encode())
+    if result.returncode:
+        raise OSError("mcs_log_append_failed")
 
 
 def unique_keys(pairs):
@@ -72,7 +74,6 @@ def busy_slots(deadline):
 
 
 def main():
-    LOG.parent.mkdir(parents=True, exist_ok=True)
     log("checking loaded llamacpp agent before idle wait")
     # Preserve loaded-label precedence; --no-llm needs no slot probe.
     label = ""

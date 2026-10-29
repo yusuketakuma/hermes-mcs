@@ -10,7 +10,7 @@
 set -u
 PATH="$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
-LOG=__DATA__/run.log
+LOG=__DATA__/mcs.log
 PY=__PYTHON__
 WATCHDOG_GRACE=__WATCHDOG_GRACE__
 set -- --json --download-files --mark-read
@@ -21,7 +21,8 @@ fi
 # lane 1 (realtime) = wire id_slot 0; see local_llm.LANES
 export MCS_LLM_SLOT=0
 
-"$PY" __REPO__/mcs/ingest/run_check.py "$@" >>"$LOG" 2>&1
+"$PY" -I __RUN_LOG_HELPER__ exec --data-dir __DATA__ -- \
+  "$PY" __REPO__/mcs/ingest/run_check.py "$@"
 rc=$?
 if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
   printf 'mcs check: run_check exited %d — see %s\n' "$rc" "$LOG"

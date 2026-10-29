@@ -23,6 +23,7 @@ import threading
 import uuid
 
 import update_journal
+from run_log_install import helper_path, LogInstallError
 from xml.sax.saxutils import escape
 
 from mcs_runtime import python_executable
@@ -155,7 +156,7 @@ def _process_args(pid):
     return None
 
 
-def _is_orphan(pid, argv, owner_pid):
+def _is_orphan(pid, argv, owner_pid, starting_argv=None):
     found = _process_args(pid)
     if found is None:
         try:
@@ -165,6 +166,10 @@ def _is_orphan(pid, argv, owner_pid):
         except OSError:
             pass
         return None
+    if (found[0] != owner_pid and starting_argv is not None
+            and found[1] == " ".join(starting_argv)):
+        # The verified helper has not execed yet: neither duplicate nor signal it.
+        return None
     return found[0] != owner_pid and found[1] == " ".join(argv)
 
 
@@ -172,8 +177,8 @@ def _identity_worker():
     """Probe and optionally signal one exact process; never load host state or credentials."""
     raw = sys.stdin.buffer.read(IDENTITY_BYTES + 1)
     request = json.loads(raw)
-    if not isinstance(request, dict) or set(request) != {
-            "pid", "argv", "operation", "generation", "owner_pid"}:
+    required = {"pid", "argv", "operation", "generation", "owner_pid"}
+    if not isinstance(request, dict) or set(request) not in (required, required | {"starting_argv"}):
         raise ValueError("identity_request_invalid")
     pid, argv, operation = request["pid"], request["argv"], request["operation"]
     if (len(raw) > IDENTITY_BYTES or type(pid) is not int or not 1 < pid < 2**31
@@ -185,7 +190,16 @@ def _identity_worker():
             or operation is not None and (type(operation) is not int
                 or operation not in (signal.SIGTERM, signal.SIGKILL))):
         raise ValueError("identity_request_invalid")
-    identity = _is_orphan(pid, argv, request["owner_pid"])
+    starting = request.get("starting_argv")
+    if starting is not None:
+        if (not isinstance(starting, list) or len(starting) != len(argv) + 7
+                or not all(isinstance(arg, str) and "\0" not in arg for arg in starting)
+                or starting[1:2] != ["-I"] or starting[3:5] != ["exec", "--data-dir"]
+                or starting[6:7] != ["--"] or starting[7:] != argv):
+            raise ValueError("identity_request_invalid")
+        identity = _is_orphan(pid, argv, request["owner_pid"], starting)
+    else:
+        identity = _is_orphan(pid, argv, request["owner_pid"])
     sent = False
     if identity is True and operation is not None:
         try:
@@ -271,8 +285,13 @@ class Runtime:
         self.argv = {}
         for job, label in {**BACKGROUND, **COMMANDS}.items():
             text = (REPO / "deployment/launchagents" / (label + ".plist")).read_text()
-            self.argv[job] = plistlib.loads(render_template(
+            argv = plistlib.loads(render_template(
                 text, {k: escape(v) for k, v in subs.items()}).encode())["ProgramArguments"]
+            # Reuse the independent exec helper when starting owned children.
+            # Retain original argv here for post-exec orphan identity and TERM checks.
+            if argv[1:2] == ["-I"] and argv[3:5] == ["exec", "--data-dir"] and argv[6:7] == ["--"]:
+                argv = argv[7:]
+            self.argv[job] = argv
         if (cfg.get("notify") or {}).get("interactive") == "lineworks":
             self.argv["lineworks"] = [subs["PYTHON"], "-m", "lineworks_adapter", "run",
                                       "--root", str(self.root)]
@@ -683,15 +702,18 @@ class Runtime:
                 or job in self.children or job in self.orphan_candidates
                 or now < self.retry_at.get(job, 0)):
             return
-        path = self.data / (job + ".log")
         try:
-            fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-            with safe_io.fdopen_owned(fd, "ab") as output:
-                os.fchmod(output.fileno(), 0o600)
-                child = subprocess.Popen(self.argv[job], cwd=REPO,
-                    env={**os.environ, "MCS_ROOT": str(self.root)}, stdin=subprocess.DEVNULL,
-                    stdout=output, stderr=output, close_fds=True)
-        except OSError:
+            inherited = os.environ.get("MCS_RUN_LOG_HELPER")
+            directory = str(Path(inherited).parent) if inherited and os.path.isabs(inherited) else None
+            helper = helper_path(self.root, directory, require_installed=True)
+            if inherited and inherited != helper:
+                raise LogInstallError("run_log_helper_unverified")
+            child = subprocess.Popen(
+                [sys.executable,
+                 "-I", helper, "exec", "--data-dir", str(self.data), "--", *self.argv[job]],
+                cwd=REPO, env={**os.environ, "MCS_ROOT": str(self.root)},
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
+        except (OSError, LogInstallError):
             self.restarting = True
             log("child_start_failed", job=job)
             return
@@ -824,6 +846,18 @@ class Runtime:
             self.identity_operation[job] = operation
             request = {"pid": pid, "argv": list(self.argv[job]), "operation": int(operation) if operation else None,
                        "generation": self.generation, "owner_pid": os.getpid()}
+            try:
+                inherited = os.environ.get("MCS_RUN_LOG_HELPER")
+                directory = str(Path(inherited).parent) if inherited and os.path.isabs(inherited) else None
+                helper = helper_path(self.root, directory, require_installed=True)
+                if inherited and inherited != helper:
+                    raise LogInstallError("run_log_helper_unverified")
+                request["starting_argv"] = [sys.executable, "-I", helper, "exec", "--data-dir",
+                                            str(self.data), "--", *self.argv[job]]
+            except (OSError, LogInstallError):
+                # Without verified startup identity, hold the candidate rather than clear it.
+                self.identity_due[job] = time.monotonic() + IDENTITY_RETRY_S
+                return
             code = ("import sys; sys.path.insert(0,sys.argv[1]); "
                     "sys.path.insert(0,sys.argv[1]+'/mcs'); import _mcs_path; "
                     "from mcs_standalone.runtime import _identity_worker; _identity_worker()")

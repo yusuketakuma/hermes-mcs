@@ -106,6 +106,7 @@ def test_rollback_to_a_pre_standalone_tree_is_refused(monkeypatch):
 
 
 def test_detached_updater_drops_the_launchd_job_identity(monkeypatch, tmp_path):
+    monkeypatch.setattr("run_log_install.helper_path", lambda *a, **k: "/synthetic/helper.py")
     seen = {}
     monkeypatch.setattr("mcs_util.load_config", lambda: {})
     monkeypatch.setattr(update_launch, 'wrapper_path', lambda *a, **kw: "/x/mcs_update.sh")
@@ -134,4 +135,5 @@ def test_the_hermes_independent_health_watch_is_known_everywhere():
                 "local.mcs-health.plist").read_bytes()
     plist = plistlib.loads(body)
     assert plist["StartInterval"] == 300 and plist["RunAtLoad"] is False
-    assert plist["ProgramArguments"][1].endswith("/mcs/ingest/health_watch.py")
+    assert plist["ProgramArguments"][8].endswith("/mcs/ingest/health_watch.py")
+    assert plist["ProgramArguments"][1:2] == ["-I"] and plist["ProgramArguments"][3:7] == ["exec", "--data-dir", "__DATA__", "--"]

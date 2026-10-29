@@ -31,8 +31,9 @@ if [ -e "$DATA/update_in_progress.marker" ]; then
   exit 0
 fi
 
-"$PY" "$REPO/mcs/ops/mcs_backup.py" offsite --scheduled --keychain \
-  --state-dir "$DATA" "$@" >/dev/null 2>&1
+"$PY" -I __RUN_LOG_HELPER__ exec --data-dir "$DATA" -- \
+  "$PY" "$REPO/mcs/ops/mcs_backup.py" offsite --scheduled --keychain \
+  --state-dir "$DATA" "$@"
 rc=$?
 if [ "$rc" -ne 0 ]; then
   printf 'mcs offsite: backup failed (exit %d)\n' "$rc"

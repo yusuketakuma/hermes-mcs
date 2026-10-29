@@ -26,6 +26,7 @@ def test_rendered_wrapper_uses_configured_watchdog_grace(tmp_path, script, grace
         "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n")
     python.chmod(0o700)
     subs = {"DATA": str(data), "PYTHON": str(python), "REPO": str(tmp_path),
+            "RUN_LOG_HELPER": str(Path(__file__).resolve().parents[2] / "mcs/core/run_log.py"),
             "WATCHDOG_GRACE": service_management.service_substitutions({'watchdog_grace_s': grace}, paths=mcs_setup._service_paths())["WATCHDOG_GRACE"]}
     source = Path(__file__).resolve().parents[2] / "deployment" / "scripts" / script
     target = tmp_path / script
@@ -36,7 +37,10 @@ def test_rendered_wrapper_uses_configured_watchdog_grace(tmp_path, script, grace
     assert process.returncode == 0, process.stderr
     assert process.stdout == "" and process.stderr == ""
     calls = [json.loads(line) for line in record.read_text().splitlines()]
-    argv = next(row for row in calls if row[0].endswith("/mcs/ingest/run_check.py"))
+    logged = next(row for row in calls if row[:1] == ["-I"])
+    assert logged[2:6] == ["exec", "--data-dir", str(data), "--"]
+    argv = logged[7:]
+    assert logged[6] == str(python) and argv[0].endswith("/mcs/ingest/run_check.py")
     if grace:
         assert argv[-2:] == ["--watchdog-grace", str(grace)]
     else:

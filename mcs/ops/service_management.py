@@ -26,6 +26,7 @@ import runtime_inspection
 import service_contract as contract
 import owned_process
 import update_launch
+import run_log_install
 from mcs_config import recovery_python_problem, validate_notify
 import scheduled_jobs
 
@@ -75,7 +76,7 @@ def _runtime_home(cfg, paths):
 def service_substitutions(cfg, *, paths):
     return contract.service_substitutions(cfg, root=paths.root, checkout=paths.checkout,
         standalone_runtime_home=_runtime_home(cfg, paths), hermes_runtime_home=paths.hermes_runtime_home,
-        hermes_python=paths.hermes_python)
+        hermes_python=paths.hermes_python, recovery_dir=paths.recovery_dir)
 
 
 def hermes_cli(exe: str, profile: str, *argv: str, input_text: str | None=None, deadline=None):
@@ -189,7 +190,7 @@ def sync_recovery(cfg, note, dry, *, paths: ServicePaths) -> int:
         return 1
     try:
         text = Path(paths.checkout, 'deployment/launchagents', f'{contract.RECOVERY_LABEL}.plist').read_text()
-        body = scheduled_jobs.render_template(text, {key: xml_escape(value, quote=False) for key, value in {'RECOVERY_PYTHON': desired, 'RECOVERY': paths.recovery_dir, 'DATA': str(Path(paths.root, 'data'))}.items()})
+        body = scheduled_jobs.render_template(text, {key: xml_escape(value, quote=False) for key, value in {'RECOVERY_PYTHON': desired, 'RECOVERY': paths.recovery_dir, 'DATA': str(Path(paths.root, 'data')), 'RUN_LOG_HELPER': run_log_install.helper_path(paths.root, paths.recovery_dir, checkout=paths.checkout)}.items()})
         if runtime_inspection.recovery_executable(plistlib.loads(body.encode())) != desired:
             note('復旧監視: 設定のひな形と使用するPythonが一致しないため、置き換えていません')
             return 1
@@ -298,7 +299,7 @@ def check_runtime(cfg: dict, *, paths: ServicePaths) -> tuple[list[str], list[st
         else:
             try:
                 from mcs_standalone.service import render
-                _, desired = render(paths.root, platform=paths.platform)
+                _, desired = render(paths.root, platform=paths.platform, recovery_dir=paths.recovery_dir)
                 if Path(path).read_text(encoding='utf-8') != desired:
                     errors.append('独立動作の常駐設定が現在のプログラムと一致しません。`mcs_setup.py services`を実行してください')
             except (OSError, ValueError):
@@ -386,7 +387,8 @@ def agent_reconcile(label: str, dst: str, note, dry: bool, *, paths: ServicePath
             script = 'while kill -0 "$1" 2>/dev/null; do sleep 5; done; launchctl bootout "$2"; launchctl bootstrap "$3" "$4"'
             env = update_launch.without_job_identity(os.environ)
             waiter = os.environ.get('MCS_JOB_PID') or str(os.getpid())
-            subprocess.Popen(['/bin/sh', '-c', script, 'mcs-reload', waiter, target, f'gui/{uid}', dst], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, close_fds=True, start_new_session=True)
+            helper = run_log_install.helper_path(paths.root, paths.recovery_dir, require_installed=True)
+            subprocess.Popen([sys.executable, '-I', helper, 'exec', '--data-dir', os.path.join(paths.root, 'data'), '--', '/bin/sh', '-c', script, 'mcs-reload', waiter, target, f'gui/{uid}', dst], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, close_fds=True, start_new_session=True)
         return True
     if agent_loaded(label, paths=paths):
         note(f'常駐処理{label}: 設定が変わったため読み込み直します')
@@ -684,7 +686,7 @@ def check_standalone_health(*, paths: ServicePaths) -> tuple[list[str], list[str
     errors, warnings = ([], [])
     try:
         from mcs_standalone.service import render_health
-        bodies = render_health(paths.root, platform=paths.platform)
+        bodies = render_health(paths.root, platform=paths.platform, recovery_dir=paths.recovery_dir)
     except ValueError:
         return (errors, warnings)
     installed = True
@@ -710,7 +712,7 @@ def check_standalone_health(*, paths: ServicePaths) -> tuple[list[str], list[str
         return (errors, warnings)
     for code in reasons:
         extra = details.get(code)
-        warnings.append(f'独立動作に確認が必要です（診断コード: {code}）' + (f' ({extra})' if extra else '') + ' — see `python -m mcs_standalone status` and data/standalone.log')
+        warnings.append(f'独立動作に確認が必要です（診断コード: {code}）' + (f' ({extra})' if extra else '') + ' — see `python -m mcs_standalone status` and data/mcs.log')
     return (errors, warnings)
 
 def sync_standalone_health(manifest, note, dry, *, paths: ServicePaths) -> int:
@@ -718,7 +720,7 @@ def sync_standalone_health(manifest, note, dry, *, paths: ServicePaths) -> int:
     wedged or crash-looping host must still raise an alert."""
     from mcs_standalone.service import render_health
     changed = False
-    bodies = render_health(paths.root, platform=paths.platform)
+    bodies = render_health(paths.root, platform=paths.platform, recovery_dir=paths.recovery_dir)
     for name, body in bodies:
         path = health_unit_path(name, paths=paths)
         try:
@@ -803,7 +805,7 @@ def sync_standalone_service(manifest, note, dry, *, paths: ServicePaths):
     if paths.platform != 'darwin' and (not paths.platform.startswith('linux')):
         note('独立動作の常駐設定にはlaunchdかsystemdが必要です。このOSでは別の常駐管理ツールを使ってください')
         return 1
-    _, body = render(paths.root, platform=paths.platform)
+    _, body = render(paths.root, platform=paths.platform, recovery_dir=paths.recovery_dir)
     path = standalone_service_path(paths=paths)
     try:
         current = Path(path).read_text(encoding='utf-8')

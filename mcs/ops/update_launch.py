@@ -1,6 +1,7 @@
 """Inspect and launch deployed update wrappers after the caller commits approval."""
 import os
 import subprocess
+import sys
 
 import mcs_runtime
 
@@ -54,21 +55,19 @@ def inspect_launch(*, root, hermes_wrapper: str) -> tuple[bool, dict]:
     return True, update
 
 
-def spawn_detached(*, root, data_dir, hermes_wrapper: str, environment) -> None:
+def spawn_detached(*, root, data_dir, hermes_wrapper: str, environment, recovery_dir=None) -> None:
     """Launch only the wrapper, after the caller commits the approval receipt.
 
     No approval is carried in argv: the updater re-scans committed receipts.
-    The private log descriptor is closed in this process on every path.
+    A verified independent helper drains output after this parent returns.
     """
     from mcs_util import load_config
     env = launch_environment(environment, detached=True)
     os.makedirs(data_dir, exist_ok=True)
     wrapper = wrapper_path(load_config(), root=root, hermes_wrapper=hermes_wrapper)
-    from safe_io import fdopen_owned
-    fd = os.open(os.path.join(data_dir, "update.log"),
-                 os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
-                 | os.O_CLOEXEC, 0o600)
-    with fdopen_owned(fd, "ab") as log:
-        subprocess.Popen([wrapper], stdin=subprocess.DEVNULL,
-                         stdout=log, stderr=log, env=env,
-                         close_fds=True, start_new_session=True)
+    from run_log_install import helper_path
+    helper = helper_path(root, recovery_dir, require_installed=True)
+    subprocess.Popen([sys.executable, "-I", helper, "exec", "--data-dir", os.fspath(data_dir),
+                      "--", wrapper], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env,
+                     close_fds=True, start_new_session=True)

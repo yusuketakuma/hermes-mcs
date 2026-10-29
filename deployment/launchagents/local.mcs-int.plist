@@ -7,6 +7,13 @@
   <key>ProgramArguments</key>
   <array>
     <string>__PYTHON__</string>
+    <string>-I</string>
+    <string>__RUN_LOG_HELPER__</string>
+    <string>exec</string>
+    <string>--data-dir</string>
+    <string>__DATA__</string>
+    <string>--</string>
+    <string>__PYTHON__</string>
     <string>__REPO__/mcs/ingest/run_check.py</string>
     <string>--json</string>
     <string>--commands-only</string>
@@ -15,7 +22,7 @@
   <array>
     <string>__DATA__/cmd_int</string>
   </array>
-  <key>StandardOutPath</key><string>__DATA__/cmd_int.log</string>
-  <key>StandardErrorPath</key><string>__DATA__/cmd_int.log</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>/dev/null</string>
 </dict>
 </plist>

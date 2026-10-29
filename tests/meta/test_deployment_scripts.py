@@ -106,12 +106,14 @@ def _llama_restart(tmp_path, launchctl_body, *,
         f"    sleep=lambda seconds: _clock.__setitem__(0, _clock[0] + max(seconds, {clock_step})))\n"
     )
     if log_failure:
-        method = "mkdir" if log_failure == "mkdir" else "open"
         clock += (
-            "from pathlib import Path\n"
-            "def fail_log(*args, **kwargs):\n"
-            "    raise OSError('synthetic-private-detail:/private/injected-path')\n"
-            f"Path.{method} = fail_log\n"
+            "_run = subprocess.run\n"
+            "def fail_log(argv, *args, **kwargs):\n"
+            "    if len(argv)>3 and argv[3]=='append-stdin':\n"
+            + ("        raise OSError('synthetic-private-detail:/private/injected-path')\n"
+               if log_failure == "start" else "        return subprocess.CompletedProcess(argv, 1)\n")
+            + "    return _run(argv, *args, **kwargs)\n"
+            "subprocess.run = fail_log\n"
         )
     if monotonic_values is not None:
         clock += (f"_ticks = iter({monotonic_values!r})\n"
@@ -120,13 +122,16 @@ def _llama_restart(tmp_path, launchctl_body, *,
         body = body.replace("import selectors\n",
                             "import selectors\n"
                             "selectors.DefaultSelector.select = lambda self, timeout: []\n")
+    data = tmp_path / "data"
+    data.mkdir(mode=0o700, exist_ok=True)
     runner = tmp_path / "runner.sh"
     runner.write_text(body.replace("/usr/bin/curl", str(bindir / "curl"))
                       .replace("/bin/launchctl", str(bindir / "launchctl"))
-                      .replace("/usr/bin/python3", sys.executable)
+                      .replace("__PYTHON__", sys.executable)
+                      .replace("__RUN_LOG_HELPER__", str(SCRIPTS.parents[1] / "mcs/core/run_log.py"))
                       .replace("import time\n", "import time\n" + clock)
                       .replace("__DATA__", str(tmp_path / "data")))
-    log = tmp_path / "data" / "llamacpp-restart.log"
+    log = tmp_path / "data" / "mcs.log"
     log.unlink(missing_ok=True)
     proc = subprocess.run(["bash", str(runner)],
                           env={"HOME": str(tmp_path),
@@ -256,7 +261,7 @@ def test_llama_restart_rejects_oversized_valid_idle_json(tmp_path):
     assert "kickstart" not in (tmp_path / "stub/launchctl.args").read_text()
 
 
-@pytest.mark.parametrize("failure", ["mkdir", "open"])
+@pytest.mark.parametrize("failure", ["start", "append"])
 def test_llama_restart_log_failure_has_no_private_traceback(tmp_path, failure):
     proc, log = _llama_restart(
         tmp_path, "exit 0\n", log_failure=failure)
@@ -278,7 +283,7 @@ def test_llama_restart_log_path_survives_the_rendered_quoting():
 
     data = "/synthetic/da ta 'x"
     path = Path(__file__).resolve().parents[2] / "deployment/scripts/llamacpp_restart_if_idle.sh"
-    rendered = service_contract.render_script(path.read_text(), {"DATA": data})
+    rendered = service_contract.render_script(path.read_text(), {"DATA": data, "PYTHON": "/synthetic/python", "RUN_LOG_HELPER": "/synthetic/helper.py"})
     exec_line = next(line for line in rendered.splitlines() if line.startswith("exec "))
     assert shlex.split(exec_line.split(" <<", 1)[0]) == [
-        "exec", "/usr/bin/python3", "-", f"{data}/llamacpp-restart.log"]
+        "exec", "/synthetic/python", "-", data, "/synthetic/helper.py"]

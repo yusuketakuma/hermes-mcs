@@ -26,7 +26,10 @@ def test_generate_private_literal_candidates(tmp_path, monkeypatch, platform):
     monkeypatch.setattr(service.os, "system", lambda *a: pytest.fail("no installation"))
     candidate = service.generate(root, python_executable=python, platform=platform)
     entry = Path(service.__file__).resolve().parents[2] / "lineworks_adapter" / "__main__.py"
-    expected = [str(python), str(entry), "run", "--root", str(root)]
+    from run_log_install import helper_path
+    helper = helper_path(root, checkout=entry.parents[1])
+    expected = [str(python), "-I", helper, "exec", "--data-dir", str(root / "data"), "--",
+                str(python), str(entry), "run", "--root", str(root)]
     assert not (root / "lineworks_adapter").exists()
     assert candidate.parent == root / "data" / "lineworks-service"
     assert candidate.stat().st_mode & 0o777 == 0o600
@@ -44,7 +47,7 @@ def test_generate_private_literal_candidates(tmp_path, monkeypatch, platform):
         # Model the documented quote unescaping followed by literal %%/$$ expansion.
         assert [v.replace("%%", "%").replace("$$", "$") for v in shlex.split(line)] == expected
         assert f"WorkingDirectory={str(root).replace('%', '%%')}/.\n" in text
-        assert "StandardOutput=append:" in text and "Restart=always\n" in text
+        assert "StandardOutput=null\nStandardError=null\n" in text and "Restart=always\n" in text
     old = candidate.read_bytes()
     assert service.generate(root, python_executable=python, platform=platform) == candidate
     assert candidate.read_bytes() == old

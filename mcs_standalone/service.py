@@ -13,6 +13,7 @@ import uuid
 
 from mcs_runtime import python_executable
 import service_contract
+from run_log_install import helper_path
 from safe_io import atomic_write
 
 # Watches the host from outside it: the same label as Hermes mode's agent.
@@ -79,7 +80,7 @@ def _systemd_quote(value):
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$") + '"'
 
 
-def render_health(root, platform=None):
+def render_health(root, platform=None, *, recovery_dir=None):
     """The independent health watcher as [(file name, content)] for launchd or
     systemd. It runs outside the host, so a dead, wedged or crash-looping host
     still raises an alert (health_watch reads standalone-status.json)."""
@@ -88,7 +89,9 @@ def render_health(root, platform=None):
     repository = str(Path(__file__).resolve().parents[1])
     python = python_executable({"runtime_mode": "standalone"}, root=root)
     argv = [python, repository + "/mcs/ingest/health_watch.py", "--home", str(root)]
-    logfile = str(root / "data/health_watch.log")
+    argv = [python, "-I", helper_path(root, recovery_dir, checkout=repository), "exec",
+            "--data-dir", str(root / "data"), "--", *argv]
+    logfile = os.devnull
     if platform == "darwin":
         value = {"Label": service_contract.HEALTH_LABEL, "ProgramArguments": argv,
                  "EnvironmentVariables": {"MCS_ROOT": str(root)},
@@ -102,7 +105,7 @@ def render_health(root, platform=None):
                 "[Service]\nType=oneshot\nWorkingDirectory=" + repository.replace("%", "%%") + "/."
                 + "\nEnvironment=" + _systemd_quote("MCS_ROOT=" + str(root))
                 + "\nExecStart=" + " ".join(_systemd_quote(v) for v in argv)
-                + "\nTimeoutStartSec=300\nUMask=0077\n")
+                + "\nTimeoutStartSec=300\nUMask=0077\nStandardOutput=null\nStandardError=null\n")
         timer = ("[Unit]\nDescription=Independent MCS health watch timer\n\n"
                  f"[Timer]\nOnBootSec={HEALTH_INTERVAL_S}s\nOnUnitActiveSec={HEALTH_INTERVAL_S}s\n"
                  f"Unit={service_contract.HEALTH_UNIT}\n\n[Install]\nWantedBy=timers.target\n")
@@ -110,13 +113,15 @@ def render_health(root, platform=None):
     raise ValueError("standalone_service_platform_unsupported")
 
 
-def render(root, platform=None):
+def render(root, platform=None, *, recovery_dir=None):
     root = Path(root).expanduser().resolve()
     platform = platform or sys.platform
     repository = str(Path(__file__).resolve().parents[1])
     python = python_executable({"runtime_mode": "standalone"}, root=root)
     argv = [python, "-m", "mcs_standalone", "run", "--root", str(root)]
-    logfile = str(root / "data/standalone.log")
+    argv = [python, "-I", helper_path(root, recovery_dir, checkout=repository), "exec",
+            "--data-dir", str(root / "data"), "--", *argv]
+    logfile = os.devnull
     if platform == "darwin":
         value = {"Label": service_contract.STANDALONE_LABEL, "ProgramArguments": argv,
                  "WorkingDirectory": repository, "RunAtLoad": True, "KeepAlive": True,
@@ -132,6 +137,6 @@ def render(root, platform=None):
                 "[Service]\nType=simple\nWorkingDirectory=" + repository.replace("%", "%%") + "/."
                 + "\nExecStart=" + " ".join(quote(v) for v in argv)
                 + "\nRestart=always\nRestartSec=30\nTimeoutStopSec=3660\nUMask=0077\n"
-                  "KillMode=control-group\n\n[Install]\nWantedBy=default.target\n")
+                  "StandardOutput=null\nStandardError=null\nKillMode=control-group\n\n[Install]\nWantedBy=default.target\n")
         return service_contract.STANDALONE_UNIT, body
     raise ValueError("standalone_service_platform_unsupported")

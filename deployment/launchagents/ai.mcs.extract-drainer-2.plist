@@ -7,6 +7,13 @@
   <key>ProgramArguments</key>
   <array>
     <string>__PYTHON__</string>
+    <string>-I</string>
+    <string>__RUN_LOG_HELPER__</string>
+    <string>exec</string>
+    <string>--data-dir</string>
+    <string>__DATA__</string>
+    <string>--</string>
+    <string>__PYTHON__</string>
     <string>__REPO__/mcs/extract/llm/extract_llm.py</string>
     <string>--all</string>
     <string>--workers</string><string>1</string>
@@ -16,7 +23,7 @@
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>30</integer>
-  <key>StandardOutPath</key><string>__DATA__/extract_drain_2.log</string>
-  <key>StandardErrorPath</key><string>__DATA__/extract_drain_2.log</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>/dev/null</string>
 </dict>
 </plist>

@@ -9,6 +9,22 @@ from types import SimpleNamespace
 import pytest
 
 import cloud_backlog as backlog
+import run_log_install
+
+
+@pytest.fixture(autouse=True)
+def installed_pool_log_helper(tmp_path, monkeypatch):
+    monkeypatch.delenv("MCS_RUN_LOG_HELPER", raising=False)
+    recovery = tmp_path / "synthetic-recovery"
+    prepared = []
+    def helper(root, recovery_dir=None, **kwargs):
+        assert Path(root).resolve() == tmp_path
+        if not prepared:
+            recovery.mkdir(mode=0o700)
+            run_log_install.prepare(tmp_path, Path(__file__).resolve().parents[2], recovery, promote=True)
+            prepared.append(True)
+        return run_log_install.helper_path(root, recovery, **kwargs)
+    monkeypatch.setattr(backlog, "helper_path", helper)
 
 
 def test_shared_slots_count_reduced_limits_and_release(tmp_path):
@@ -97,8 +113,11 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
 
     class Child:
         def __init__(self, command, **kw):
-            assert command[-2:] == ["--parent", str(os.getpid())]
+            helper = backlog.helper_path(tmp_path, require_installed=True)
+            assert command[:7] == [sys.executable, "-I", helper, "exec", "--data-dir", str(tmp_path / "data"), "--"]
+            assert command[7:] == [sys.executable, str(Path(backlog.__file__).resolve()), "--parent", str(os.getpid())]
             assert kw["stdin"] == subprocess.DEVNULL and kw["close_fds"]
+            assert kw["stdout"] == kw["stderr"] == subprocess.DEVNULL
             self.stopped = False
             children.append(self)
 
