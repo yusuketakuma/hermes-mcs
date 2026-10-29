@@ -14,7 +14,7 @@ import patient_context_refresh as context_refresh
 
 
 CFG = {'extract': {'patient_context_nightly': {'enabled': True, 'publication': True}},
-       'semantic': {'mode': 'assist', 'project_ids': None}}
+       'semantic': {'mode': 'assist', 'summary_mode': 'assist', 'project_ids': None}}
 
 
 def stamp(value):
@@ -76,21 +76,69 @@ def _raw_proof(led, pid, mid, *, cloud=False):
                      project_id=pid, message_id=mid, model=model, meta=meta)
 
 
-def _semantic_proof(led, pid, mid, cfg=CFG):
+def _semantic_proof(led, pid, mid, cfg=CFG, *, observation_quote=None):
+    import time
+    import semantic_audit
+    import semantic_drain
+    import semantic_llm
     import semantic_policy
     import semantic_store
-    from inference_version import CURRENT_VERSION, VERSION_KEY
     policy, errors = semantic_policy.runtime_config(cfg)
     assert not errors
-    fp = semantic_store.thread_bundle(led.db, pid, mid, [mid])['source_fingerprint']
-    meta = {VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp,
-            'policy_fingerprint': semantic_policy.policy_fingerprint(policy)}
-    for kind, content in (('semantic_facts', {}), ('semantic_summary', {}),
-                          ('semantic_audit', {'status': 'PASS'})):
-        led.artifact_add(kind, json.dumps(content), project_id=pid, message_id=mid, meta=meta)
+    bundle = semantic_store.thread_bundle(led.db, pid, mid, [mid])
+    member = next(m for m in bundle['members'] if m['message_id'] == mid)
+    fp = bundle['source_fingerprint']
+    policy_fp = semantic_policy.policy_fingerprint(policy)
+    deadline = time.monotonic() + 60
+
+    def extract(prompt):
+        quote = prompt.split('<<<\n', 1)[1].split('\n>>>', 1)[0]
+        if observation_quote is not None:
+            assert observation_quote in member['body_original']
+            if observation_quote not in quote:
+                return json.dumps({'facts': []})
+            quote = observation_quote
+        return json.dumps({'facts': [{'statement': quote, 'evidence_quote': quote,
+            'kind': 'observation', 'status': 'not_stated', 'polarity': 'affirmed'}]})
+
+    early, facts = semantic_drain._fact_legacy(
+        led, member, pid, mid, fp, policy_fp, extract, deadline)
+    assert early is None and facts and all(f['_evidence'] for f in facts)
+    summary = semantic_llm.summarize(lambda _prompt: json.dumps({'claims': [
+        {'section': 'other', 'claim_kind': 'reported_fact', 'text': f['statement'],
+         'fact_refs': [i]} for i, f in enumerate(facts)], 'limitations': []}),
+        bundle, mid, facts, {}, deadline=deadline)
+    assert summary is not None and summary['claims']
+    summary['_facts'] = facts
+
+    class QuotedSourceAudit:
+        def evaluate(self, state, questions, _deadline):
+            quotes = {entry['text'].strip() for entry in state['context']
+                      if entry['role'] == 'evidence_quote'}
+            claims = {claim['id']: claim['text'] for claim in state['target']['claims']}
+            assert set(questions) <= set(claims)
+            # Only verbatim source claims are supported by this synthetic client.
+            return {'answers': {qid: {'choice': 'supports' if claims[qid] in quotes
+                                      else 'not_supported', 'confidence': 1.0}
+                                for qid in questions}}
+
+    code_findings = semantic_audit.audit_code(bundle, facts, summary)
+    findings, evaluated = semantic_audit.audit_claims(
+        QuotedSourceAudit(), bundle, summary, deadline)
+    status = semantic_audit.audit_status_for(code_findings, findings, evaluated, False)
+    assert status == 'PASS', (code_findings, findings)
+    summary['audit_status'] = status
+    result = {'summary': summary, 'findings': code_findings + findings, 'repaired': False,
+              'claim_input_binding': semantic_drain._claim_input_binding(
+                  pid, mid, fp, policy_fp, member['revision'], summary, facts)}
+    with led.db:
+        semantic_drain._write_result(led, pid, mid, result, fp,
+            {m['message_id']: m for m in bundle['members']}, status,
+            policy_fp, policy['summary_mode'])
 
 
-def seed(led, mid=1, pid=1, body='生活環境: 合成の居住記録。', state='full', *, proof=True):
+def seed(led, mid=1, pid=1, body='生活環境: 合成の居住記録。', state='full', *,
+         proof=True, semantic_quote=None):
     led.db.execute('INSERT OR IGNORE INTO patients(project_id,patient_name) VALUES (?,?)',
                    (pid, f'synthetic-{pid}'))
     led.db.commit()
@@ -101,9 +149,11 @@ def seed(led, mid=1, pid=1, body='生活環境: 合成の居住記録。', state
     led.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 WHERE project_id=?",
                    (pid,))
     led.db.commit()
-    if proof and state == 'full' and body:
+    saved_body = led.db.execute('SELECT body_text FROM messages WHERE project_id=? AND message_id=?',
+                                (pid, mid)).fetchone()[0]
+    if proof and state == 'full' and saved_body:
         _raw_proof(led, pid, mid)
-        _semantic_proof(led, pid, mid)
+        _semantic_proof(led, pid, mid, observation_quote=semantic_quote)
 
 
 def step(runtime, *, cfg=CFG, admit=lambda: True, seconds=600, **kw):
@@ -327,7 +377,7 @@ def test_old_distinct_background_items_survive_newer_same_category(runtime):
 def test_full_source_quote_retains_family_negation_plan_and_date(runtime, monkeypatch):
     led, _, _ = runtime
     body = '2026年10月01日、家族は酸素を使用していない。本人への導入は検討中。'
-    seed(led, body=body)
+    seed(led, body=body, semantic_quote='家族は酸素を使用していない。')
     original = context_refresh.local_llm.admitted_chat
     def partial_quote(*args, **kwargs):
         payload = json.loads(args[1])
@@ -738,7 +788,8 @@ def test_failed_source_does_not_block_other_history_in_same_patient(runtime, mon
 
 def test_family_medication_detail_survives_source_revalidation(runtime):
     led, _, _ = runtime
-    seed(led, body='母の薬は3錠残っているとの合成記録。')
+    seed(led, body='母の薬は3錠残っているとの合成記録。',
+         semantic_quote='残っているとの合成記録。')
     source = next(mcs_queries.patient_context_sources(led.db, 1))
     body = source['body_text']
     items = [{'category': 'medication_management', 'subject': 'family',
