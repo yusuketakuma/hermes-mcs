@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "provider": "anthropic",
+      "file": "anthropic.png",
+      "source_page": "https://www.anthropic.com/company",
+      "download_url": "https://www.anthropic.com/images/icons/apple-touch-icon.png",
+      "sha256": "40e3900fcb3ad237af6869dbd40e77efc8eb23549c478125b40e563ac74423cb",
+      "license": "Anthropic trademark; service identification",
+      "retrieved_on": "2026-10-29"
+    },
+    {
+      "provider": "openai",
+      "file": "openai.png",
+      "source_page": "https://lobehub.com/icons/openai",
+      "download_url": "https://cdn.jsdelivr.net/npm/@lobehub/icons-static-png@2.5.0/light/openai.png",
+      "sha256": "8a33312f6bb17c1edddf8f9d7fbac09ce1d1d697d6601f37227afa879e94c52e",
+      "license": "MIT artwork; OpenAI trademark",
+      "retrieved_on": "2026-10-29"
+    },
+    {
+      "provider": "jev",
+      "file": "jev.png",
+      "source_page": "https://typesafe.ai/",
+      "download_url": "https://framerusercontent.com/images/aNFzSFxM4fjICmnibw7npfZjcQ.png",
+      "sha256": "fcb8f554778c45ff62b97ca05df643588b39c8c66913736b7fe3485cedd96180",
+      "license": "TypeSafe AI trademark; service identification",
+      "retrieved_on": "2026-10-29"
+    },
+    {
+      "provider": "local",
+      "file": "local.svg",
+      "source_page": "https://icons.getbootstrap.com/",
+      "download_url": "https://registry.npmjs.org/bootstrap-icons/-/bootstrap-icons-1.13.2.tgz",
+      "sha256": "0f350ba160b9c23ad1b3a12dc64b26e749d700441a81ec3efc89702876aa5dae",
+      "license": "MIT",
+      "retrieved_on": "2026-10-29"
+    }
+  ],
+  "local_png": {
+    "file": "local.png",
+    "source": "local.svg",
+    "renderer": "macOS sips SVG rasterization; no recoloring or cropping",
+    "sha256": "2df2bfecd9215f39e496a1a8a611896c7e918e6df8cf933ed29881039f0cd595"
+  },
+  "packages": {
+    "bootstrap-icons": "1.13.2",
+    "@lobehub/icons-static-png": "2.5.0"
+  }
+}
