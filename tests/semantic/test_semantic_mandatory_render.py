@@ -6,6 +6,7 @@ omitting model summary can never make adjudicated content invisible.
 """
 import semantic_render
 import json
+import pytest
 
 import semantic_render as render
 from semantic_testkit import SOURCE, _seeded, v2_doc, v2_fact
@@ -70,6 +71,21 @@ def test_notice_includes_mandatory_section(tmp_path):
         assert "薬剤｜アムロジピン継続" in text
         assert "既存の制約" not in text
         assert "要約対象外の情報があります。MCS原文を確認してください。" in text
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(("status", "title"), [
+    ("PASS", "抽出済み事実（監査済み）"),
+    ("SKIPPED", "抽出済み事実"),
+])
+def test_notice_distinguishes_audited_from_skipped_mandatory_facts(tmp_path, status, title):
+    db = _seeded(tmp_path)
+    try:
+        summary = {"claims": [], "mandatory_facts": ["合成の確認事項"]}
+        text = semantic_render.render_notice(db.db, 1, 1, summary, status, quality="full")
+        assert f"■ {title}\n・合成の確認事項" in text
+        assert ("監査済み" in text) == (status == "PASS")
     finally:
         db.close()
 

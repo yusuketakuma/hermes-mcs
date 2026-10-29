@@ -253,7 +253,8 @@ def render_notice(db, project_id: int, root_id: int,
                 lines.append(f"・{prefix}{semantic_text_line(c['text'])}")
     mfacts = summary.get("mandatory_facts") or []
     if mfacts:
-        lines.append("\n■ 抽出済み事実（監査済み）")
+        title = "抽出済み事実（監査済み）" if audit_status == "PASS" else "抽出済み事実"
+        lines.append(f"\n■ {title}")
         m_overview = summary.get("mandatory_overview")
         if m_overview:
             lines.append(f"・{semantic_text_line(m_overview)}")
