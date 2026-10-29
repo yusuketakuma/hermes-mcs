@@ -1,11 +1,16 @@
 """Serialize private runtime-log records, verified legacy imports and recoverable rotation."""
 from contextlib import ExitStack, contextmanager
+import errno
 import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
+import select
+import signal
 import stat
+import subprocess
+import sys
 import tempfile
 import threading
 import uuid
@@ -418,7 +423,9 @@ class PipeCapture:
     output, close() joins the drain thread and reports any logging failure. It
     never signals, waits on or reaps the child. On spawn failure close() also
     closes the parent's write end. Do not call close before reaping an outputting
-    child: pipe backpressure is intentionally not discarded.
+    child: pipe backpressure is intentionally not discarded. finished is set only
+    after EOF/error draining and read-FD closure, including descendant writers;
+    failed separately reports whether close() will expose a capture failure.
     """
     def __init__(self, data_dir):
         self.data_dir = os.fspath(data_dir)
@@ -426,6 +433,7 @@ class PipeCapture:
         self._read, self.write_fd = os.pipe()
         self._error = None
         self.failed = threading.Event()
+        self.finished = threading.Event()
         self.discarded_bytes = 0
         self._thread = threading.Thread(target=self._drain, name="mcs-log-drain", daemon=False)
         try:
@@ -475,7 +483,10 @@ class PipeCapture:
             except OSError:
                 pass
         finally:
-            os.close(self._read)
+            try:
+                os.close(self._read)
+            finally:
+                self.finished.set()
 
     def _emit(self, record):
         end = record.tell()
@@ -497,3 +508,160 @@ class PipeCapture:
         self._thread.join()
         if self._error is not None:
             raise RunLogError("run_log_capture_failed") from None
+
+
+def _consume_fd(data_dir, fd):
+    # Run the same bounded-memory record consumer synchronously in the CLI.
+    # Ownership of fd transfers to _drain, including all error paths.
+    capture = PipeCapture.__new__(PipeCapture)
+    capture.data_dir = os.fspath(data_dir)
+    capture._read = fd
+    capture._error = None
+    capture.failed = threading.Event()
+    capture.finished = threading.Event()
+    capture.discarded_bytes = 0
+    capture._drain()
+    if capture._error is not None:
+        raise RunLogError("run_log_capture_failed") from None
+
+
+def append_file(data_dir, path):
+    """Append a private regular file's exact records without changing its bytes."""
+    initialize(data_dir)
+    source = Path(path).absolute()
+    directory = _directory(source.parent)
+    try:
+        with _file(directory, source.name) as fd:
+            _consume_fd(data_dir, os.dup(fd))
+    finally:
+        os.close(directory)
+
+
+def _drainer(data_dir, read_fd, ready_fd):
+    info = os.fstat(read_fd)
+    if (not stat.S_ISFIFO(info.st_mode)
+            or fcntl.fcntl(read_fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_RDONLY
+            or not stat.S_ISFIFO(os.fstat(ready_fd).st_mode)
+            or fcntl.fcntl(ready_fd, fcntl.F_GETFL) & os.O_ACCMODE != os.O_WRONLY):
+        raise RunLogError("run_log_drain_fd_invalid")
+    initialize(data_dir)
+    # Group shutdown must let the producer finish and close its writers. These
+    # handlers disappear with this EOF-limited child; SIGKILL cannot be drained.
+    for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(signum, signal.SIG_IGN)
+    _write(ready_fd, b"R")
+    os.close(ready_fd)
+    _consume_fd(data_dir, read_fd)
+
+
+def exec_logged(data_dir, argv):
+    """Replace this process with an unchanged argv, draining only stdout and stderr."""
+    if (not argv or not all(isinstance(arg, str) and "\0" not in arg for arg in argv)
+            or not os.path.isabs(argv[0])):
+        raise ValueError("run_log_exec_argv_invalid")
+    initialize(data_dir)
+    read_fd = write_fd = ready_read = ready_write = None
+    saved = {}
+    child = None
+    try:
+        read_fd, write_fd = _pipe_above_stdio()
+        ready_read, ready_write = _pipe_above_stdio()
+        child = subprocess.Popen(
+            [sys.executable, "-I", os.path.abspath(__file__), "_drain", "--data-dir",
+             os.path.abspath(data_dir), str(read_fd), str(ready_write)],
+            pass_fds=(read_fd, ready_write), stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        os.close(read_fd)
+        read_fd = None
+        os.close(ready_write)
+        ready_write = None
+        if not select.select([ready_read], [], [], 10)[0] or os.read(ready_read, 1) != b"R":
+            raise RunLogError("run_log_drain_start_failed")
+        for fd in (1, 2):
+            try:
+                saved[fd] = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 3)
+            except OSError as error:
+                if error.errno != errno.EBADF:
+                    raise
+                saved[fd] = None
+            os.dup2(write_fd, fd)
+        os.close(write_fd)
+        write_fd = None
+        command_env = dict(os.environ)
+        command_env["MCS_RUN_LOG_CAPTURED"] = "1"
+        command_env["MCS_RUN_LOG_HELPER"] = os.path.abspath(__file__)
+        os.execve(argv[0], argv, command_env)
+    finally:
+        # Reached only when spawning or exec failed. Restore notification outputs
+        # before reporting failure, then actually reap the EOF-limited drainer.
+        for fd, original in saved.items():
+            if original is None:
+                try:
+                    os.close(fd)
+                except OSError as error:
+                    if error.errno != errno.EBADF:
+                        raise
+            else:
+                os.dup2(original, fd)
+                os.close(original)
+        for fd in (read_fd, write_fd, ready_read, ready_write):
+            if fd is not None:
+                os.close(fd)
+        if child is not None:
+            try:
+                child.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait()
+
+
+def _pipe_above_stdio():
+    descriptors = list(os.pipe())
+    try:
+        for index, fd in enumerate(descriptors):
+            if fd < 3:
+                descriptors[index] = fcntl.fcntl(fd, fcntl.F_DUPFD_CLOEXEC, 3)
+                os.close(fd)
+        return descriptors
+    except BaseException:
+        for fd in descriptors:
+            os.close(fd)
+        raise
+
+
+def main(argv=None):
+    """Run explicit append or process replacement commands without a shell."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="MCS private runtime log")
+    commands = parser.add_subparsers(dest="command", required=True)
+    for command in ("append-stdin", "append-file", "exec", "_drain"):
+        sub = commands.add_parser(command)
+        sub.add_argument("--data-dir", required=True)
+        if command == "append-file":
+            sub.add_argument("--file", required=True)
+        elif command in ("exec", "_drain"):
+            sub.add_argument("args", nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "append-file":
+            append_file(args.data_dir, args.file)
+        elif args.command == "append-stdin":
+            initialize(args.data_dir)
+            _consume_fd(args.data_dir, os.dup(0))
+        elif args.command == "exec":
+            values = args.args[1:] if args.args[:1] == ["--"] else args.args
+            exec_logged(args.data_dir, values)
+        else:
+            if len(args.args) != 2:
+                raise ValueError("run_log_drain_fd_invalid")
+            _drainer(args.data_dir, int(args.args[0]), int(args.args[1]))
+    except (OSError, ValueError, RunLogError):
+        print("mcs_log_operation_failed", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
