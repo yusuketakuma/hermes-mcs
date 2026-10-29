@@ -23,9 +23,14 @@ def test_processing_complete_attention_updates_both_face_and_body(led, monkeypat
     original = notify_render.card_content(led.db, card)
     assert "解析更新中" not in notify_render.display_text(original)
     processing = notify_render.card_content(led.db, card, cfg={})
-    assert "解析中 2" in notify_render.display_text(processing)   # once, on the meta line
+    [header] = [c for c in processing["containers"] if c.get("provider_scope") == "header"]
+    assert "解析中" not in header["text"] and "解析要確認" not in header["text"]
+    post_indices = [i for i, c in enumerate(processing["containers"]) if c.get("rule")]
+    assert len(post_indices) == len(processing["shown"]) == 2
+    for index in post_indices:
+        assert "解析更新中（3区間中1区間完了）" in processing["containers"][index + 1]["text"]
     body = notify_render.card_body_text(led.db, card, {"shown": json.dumps([100])}, cfg={})[1]
-    assert "解析更新中" not in body    # layout 2: progress sits on the meta line only
+    assert "解析更新中" not in body    # Layout 2 keeps thread body behaviour unchanged.
     assert processing["source_fp"] == original["source_fp"]
     assert processing["source_fp"] == card["source_fp"]
     drift = notify_cards._generation_drift(card, processing)
@@ -36,7 +41,10 @@ def test_processing_complete_attention_updates_both_face_and_body(led, monkeypat
     assert notify_render.content_fingerprint(complete) != notify_render.content_fingerprint(processing)
     progress.update(state="attention", completed=1)
     attention = notify_render.card_content(led.db, card, cfg={})
-    assert "解析要確認 2" in notify_render.display_text(attention)
+    [header] = [c for c in attention["containers"] if c.get("provider_scope") == "header"]
+    assert "解析要確認" not in header["text"]
+    for index in [i for i, c in enumerate(attention["containers"]) if c.get("rule")]:
+        assert "解析要確認（3区間中1区間完了）" in attention["containers"][index + 1]["text"]
     assert "解析中" not in notify_render.display_text(attention)
 
 
@@ -113,7 +121,9 @@ def test_card_reads_each_current_message_once_and_reuses_even_unknown_progress(l
     led.db.execute("PRAGMA query_only=ON")
     content = notify_render.card_content(led.db, card, cfg={})
     assert calls == [100, 101]
-    assert "解析中 1" in notify_render.display_text(content)
+    [header] = [c for c in content["containers"] if c.get("provider_scope") == "header"]
+    assert "解析中" not in header["text"] and "解析要確認" not in header["text"]
+    assert notify_render.display_text(content).count("解析更新中（3区間中1区間完了）") == 1
     assert content["progress_fp"] == notify_render.payload_hash([
         (100, {"state": "processing", "completed": 1, "total": 3}), (101, None)])
     calls.clear()
@@ -144,7 +154,9 @@ def test_thread_body_includes_summary_and_attachment_caption_keeps_source(led, t
     spec = json.loads(_latest_render(led)["spec_json"])
     face = notify_render.display_text(spec["parts"])
     assert "GENERATED-SUMMARY-CANARY" in face
-    assert "解析中 1" in face
+    [header] = [c for c in spec["parts"]["containers"] if c.get("provider_scope") == "header"]
+    assert "解析中" not in header["text"] and "解析要確認" not in header["text"]
+    assert "解析更新中（3区間中1区間完了）" in face
     body = "".join(spec["parts"]["thread_body_parts"])
     caption = next(part["caption"] for part in spec["parts"]["manifest"] if part["kind"] == "attachment_part")
     assert "合成所属" in caption

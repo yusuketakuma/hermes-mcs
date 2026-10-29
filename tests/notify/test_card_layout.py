@@ -35,19 +35,30 @@ def test_heading_names_patient_station_and_same_name_suffix(led):
 
 
 def test_context_line_counts_posts_missing_replies_files_and_mention(led):
+    import processing_route
+
     _seed_thread(led)
     led.db.execute("UPDATE messages SET reply_count=3 WHERE message_id=100")
     led.db.execute("INSERT INTO attachments(message_id,name,state) "
                    "VALUES(101,'a.jpg','downloaded')")
     led.db.commit()
     _dispatch(led, _intent(led))
-    texts = _texts(_spec(led))
-    assert texts[1] == "09-24〜 · 2投稿 · 返信未取得 2件 · 📎 1 · 解析中 2"
+    spec = _spec(led)
+    texts = _texts(spec)
+    header = spec["parts"]["containers"][1]
+    states = dict.fromkeys(processing_route.PROVIDERS, "unknown")
+    assert header["provider_scope"] == "header" and header["provider_states"] == states
+    assert texts[1] == ("09-24〜 · 2投稿 · 返信未取得 2件 · 📎 1 · "
+                        + processing_route.provider_text(states))
+    assert spec["parts"]["provider_states_version"] == 2
     # each post is its own zone: rule before it, its 要約 state after it
-    rules = [c for c in _spec(led)["parts"]["containers"] if c.get("rule")]
-    summary = notify_render._summary_block(led.db, 100, cfg=CFG, label=False)["text"]
+    rules = [c for c in spec["parts"]["containers"] if c.get("rule")]
+    progress = {mid: notify_render.progress_state(led.db, mid, CFG) for mid in (100, 101)}
+    assert all(value["state"] == "processing" for value in progress.values())
+    summary = notify_render._summary_block(led.db, 100, cfg=CFG,
+                                           progress_by_mid=progress, label=False)["text"]
     assert len(rules) == 2 and texts.count(summary) == 2
-    assert summary == "要約 処理待ち"      # progress sits once on the meta line
+    assert summary == "要約 処理待ち\n解析更新中（1区間中0区間完了）"
 
 
 def test_new_replies_since_the_card_was_posted(led):
@@ -64,6 +75,8 @@ def test_new_replies_since_the_card_was_posted(led):
 
 
 def test_failed_extraction_is_named_on_the_post(led):
+    import processing_route
+
     _seed_thread(led, mids=(100,))
     led.db.execute(
         "INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,"
@@ -72,10 +85,18 @@ def test_failed_extraction_is_named_on_the_post(led):
                      "extract_version": extract_llm.EXTRACT_VERSION}), NOW))
     led.db.commit()
     _dispatch(led, _intent(led, payload={"message_ids": [100]}))
-    summary = notify_render._summary_block(led.db, 100, cfg=CFG, label=False)["text"]
-    assert summary in _texts(_spec(led))
-    assert summary == "要約 作成失敗"
-    assert "解析要確認 1" in _texts(_spec(led))[1]
+    progress = {100: notify_render.progress_state(led.db, 100, CFG)}
+    assert progress[100]["state"] == "attention"
+    summary = notify_render._summary_block(led.db, 100, cfg=CFG,
+                                           progress_by_mid=progress, label=False)["text"]
+    spec = _spec(led)
+    assert summary in _texts(spec)
+    assert summary == "要約 作成失敗\n解析要確認（1区間中0区間完了）"
+    header = spec["parts"]["containers"][1]
+    states = dict.fromkeys(processing_route.PROVIDERS, "unknown")
+    assert header["provider_scope"] == "header" and header["provider_states"] == states
+    assert header["text"] == "09-24〜 · 1投稿 · " + processing_route.provider_text(states)
+    assert spec["parts"]["provider_states_version"] == 2
 
 
 def test_footer_is_one_state_item_and_revoked_card_has_no_buttons(led):

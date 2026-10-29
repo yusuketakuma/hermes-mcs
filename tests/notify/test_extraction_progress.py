@@ -161,6 +161,8 @@ def test_real_legacy_checkpoint_reaches_private_summary_read_only(led, change):
 def test_generation_upgrade_and_retry_status_reaches_summary_and_shared_render(led, attempts, state):
     import json
     import notify_render
+    import processing_route
+    from notify_testkit import _card, _dispatch, _intent
     _patient(led)
     _msg(led, 1, body="SOURCE_CANARY 合成の経過報告です。")
     row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
@@ -169,6 +171,8 @@ def test_generation_upgrade_and_retry_status_reaches_summary_and_shared_render(l
     if attempts:
         extract_llm._fail(led, row, attempts - 1)
     cfg = {"local_llm": {"model": extract_llm.MODEL}}
+    _dispatch(led, _intent(led, payload={"message_ids": [1]}))
+    card = _card(led)
     led.db.execute("PRAGMA query_only=ON")
     assert extraction_progress.message_progress(led.db, row, cfg=cfg)["state"] == state
     progress = extraction_progress.patient_progress(led.db, 1, cfg=cfg)
@@ -177,3 +181,15 @@ def test_generation_upgrade_and_retry_status_reaches_summary_and_shared_render(l
     assert ("解析要確認" in text) == (state == "attention")
     assert ("解析更新中" in text) == (state == "processing")
     assert "SOURCE_CANARY" not in text
+    content = notify_render.card_content(led.db, card, cfg=cfg)
+    header = next(item for item in content["containers"] if item.get("provider_scope") == "header")
+    states = dict.fromkeys(processing_route.PROVIDERS, "unknown")
+    assert header["provider_states"] == states
+    assert header["text"].endswith(processing_route.provider_text(states))
+    assert "解析更新中" not in header["text"] and "解析要確認" not in header["text"]
+    label = "解析要確認" if state == "attention" else "解析更新中"
+    summaries = [item["text"] for item in content["containers"]
+                 if item.get("type") == "text" and label in item.get("text", "")]
+    assert len(summaries) == 1
+    assert label + f"（{progress['total']}区間中{progress['completed']}区間完了）" in summaries[0]
+    assert "SOURCE_CANARY" not in summaries[0]

@@ -705,7 +705,9 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         "context": context,
         "preview_text": content["preview_text"],
     }
-    if any("provider_states" in c for c in containers):
+    if any(c.get("provider_scope") == "header" for c in containers):
+        spec["parts"]["provider_states_version"] = 2
+    elif any("provider_states" in c for c in containers):
         # Older workers must hold this new display contract until restarted.
         spec["parts"]["provider_states_version"] = 1
     post_source_id = own_post(card)
