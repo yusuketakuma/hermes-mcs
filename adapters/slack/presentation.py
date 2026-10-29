@@ -22,12 +22,12 @@ _PROVIDERS = (("anthropic", "Anthropic", "https://www.anthropic.com/images/icons
               ("openai", "OpenAI", "https://avatars.githubusercontent.com/u/14957082?v=4"),
               ("jev", "Jev", "https://framerusercontent.com/images/aNFzSFxM4fjICmnibw7npfZjcQ.png"))
 _STATE_LABELS = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
-                 "pending": "処理待ち", "failed": "失敗", "unknown": "不明"}
-_STATE_MARKS = {"done": "✓", "partial": "✓↷", "skipped": "↷", "unused": "−", "pending": "…", "failed": "!", "unknown": "?"}
+                 "pending": "処理待ち", "failed": "失敗", "unknown": "不明", "used": "使用あり"}
+_STATE_MARKS = {"done": "✓", "partial": "✓↷", "skipped": "↷", "unused": "−", "pending": "…", "failed": "!", "unknown": "?", "used": "✓"}
 
 
-def _provider_context(states):
-    elements = []
+def _provider_context(states, prefix=None):
+    elements = ([{"type": "plain_text", "text": prefix}] if prefix else [])
     for key, name, url in _PROVIDERS:
         elements.append({"type": "image", "image_url": url,
                          "alt_text": f"{name} {_STATE_LABELS[states[key]]}"})
@@ -36,12 +36,13 @@ def _provider_context(states):
     return {"type": "context", "elements": elements}
 
 
-def _provider_line(text):
-    labels = "|".join(map(re.escape, _STATE_LABELS.values()))
+def _provider_line(text, *, version=1):
+    supported = {key: label for key, label in _STATE_LABELS.items() if key != "used" or version == 2}
+    labels = "|".join(map(re.escape, supported.values()))
     match = re.fullmatch(rf"Anthropic ({labels}) · OpenAI ({labels}) · Jev ({labels}) · 💻 ({labels})", text)
     if match is None:
         return None
-    codes = {label: code for code, label in _STATE_LABELS.items()}
+    codes = {label: code for code, label in supported.items()}
     return dict(zip(("anthropic", "openai", "jev", "local"), map(codes.get, match.groups())))
 
 
@@ -84,7 +85,8 @@ def thread_part_blocks(spec, part, text):
     if is_header_part(name):
         lines = text.split("\n")
         rest = [ln for ln in lines[1:] if ln]
-        states = (_provider_line(rest[0]) if rest and (spec.get("parts") or {}).get("provider_states_version") == 1
+        version = (spec.get("parts") or {}).get("provider_states_version")
+        states = (_provider_line(rest[0], version=version) if rest and version in (1, 2)
                   else None)
         if states is not None:
             rest.pop(0)
@@ -168,6 +170,7 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
     blocks = []
     accessories = _post_buttons(parts)
     face = _face_posts(parts)
+    version = parts.get("provider_states_version")
     pending = None
 
     def close_post():
@@ -184,9 +187,23 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
             pending = face.get(index)
         if item.get("rule") and blocks:
             blocks.append(dict(_DIVIDER))
+        if (card_kind == "thread" and version == 2 and item.get("provider_scope") == "header"
+                and kind == "text"):
+            states = item["provider_states"]
+            text = item["text"]
+            # The validated fallback is the last part of the text; it remains
+            # available to non-Slack transports while Slack shows native images.
+            fallback = " · ".join(f"{name} {_STATE_LABELS[states[key]]}" for key, name in (
+                ("anthropic", "Anthropic"), ("openai", "OpenAI"), ("jev", "Jev"), ("local", "💻")))
+            prefix = text[:-len(fallback)].removesuffix(" · ")
+            if len(prefix) > CONTEXT_MAX:
+                blocks.extend(contexts(prefix[:-CONTEXT_MAX]))
+                prefix = prefix[-CONTEXT_MAX:]
+            blocks.append(_provider_context(states, prefix))
+            continue
         if card_kind == "thread" and item.get("rule") and kind == "text":
             states = item.get("provider_states")
-            if states is not None:
+            if states is not None and version != 2:
                 blocks.extend(contexts(item["text"].rsplit("\n", 1)[0]))
                 blocks.append(_provider_context(states))
             else:
@@ -221,7 +238,7 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
         # A multi-post card must retain which post each observed reaction belongs to.
         item = parts["containers"][post["at"]]
         header = (item["text"].rsplit("\n", 1)[0]
-                  if item.get("provider_states") is not None else item["text"])
+                  if version != 2 and item.get("provider_states") is not None else item["text"])
         lines = [header] if len(face) > 1 else []
         blocks.extend(contexts("\n".join(lines + post["stamps"])))
     if stamp_control:

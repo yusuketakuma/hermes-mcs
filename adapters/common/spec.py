@@ -358,21 +358,74 @@ def validate(spec) -> dict:
     if not isinstance(containers, list):
         _err("bad_containers")
     states = [c for c in containers if isinstance(c, dict) and "provider_states" in c]
-    if states or "provider_states_version" in parts:
-        if (spec.get("kind") != "thread" or type(parts.get("provider_states_version")) is not int
-                or parts["provider_states_version"] != 1 or not states):
+    scoped = [c for c in containers if isinstance(c, dict) and "provider_scope" in c]
+    footer = parts.get("footer")
+    if isinstance(footer, list) and any(isinstance(c, dict) and "provider_scope" in c for c in footer):
+        _err("bad_provider_states")
+    if states or scoped or "provider_states_version" in parts:
+        version = parts.get("provider_states_version")
+        if (spec.get("kind") != "thread" or type(version) is not int
+                or version not in (1, 2) or not states):
             _err("bad_provider_states")
         labels = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
                   "pending": "処理待ち", "failed": "失敗", "unknown": "不明"}
-        for container in states:
-            values = container["provider_states"]
-            if (container.get("type") != "text" or container.get("rule") is not True
-                    or not isinstance(values, dict) or set(values) != {"anthropic", "openai", "jev", "local"}
-                    or any(not isinstance(value, str) or value not in labels for value in values.values())):
+        providers = (("anthropic", "Anthropic"), ("openai", "OpenAI"),
+                     ("jev", "Jev"), ("local", "💻"))
+
+        def checked_values(container, allowed):
+            values = container.get("provider_states")
+            if (not isinstance(values, dict) or set(values) != {key for key, _ in providers}
+                    or any(not isinstance(value, str) or value not in allowed for value in values.values())):
                 _err("bad_provider_states")
-            fallback = " · ".join(f"{name} {labels[values[key]]}" for key, name in (
-                ("anthropic", "Anthropic"), ("openai", "OpenAI"), ("jev", "Jev"), ("local", "💻")))
-            if not isinstance(container.get("text"), str) or not container["text"].endswith("\n" + fallback):
+            return values
+
+        if version == 1:
+            if scoped:
+                _err("bad_provider_states")
+            for container in states:
+                values = checked_values(container, labels)
+                if container.get("type") != "text" or container.get("rule") is not True:
+                    _err("bad_provider_states")
+                fallback = " · ".join(f"{name} {labels[values[key]]}" for key, name in providers)
+                if not isinstance(container.get("text"), str) or not container["text"].endswith("\n" + fallback):
+                    _err("bad_provider_states")
+        else:
+            if len(scoped) != 1:
+                _err("bad_provider_states")
+            header = scoped[0]
+            if (header.get("provider_scope") != "header" or header.get("type") != "text"
+                    or "rule" in header or "provider_states" not in header):
+                _err("bad_provider_states")
+            header_index = next(i for i, container in enumerate(containers) if container is header)
+            if (header_index != 1 or not isinstance(containers[0], dict)
+                    or containers[0].get("type") != "heading"):
+                _err("bad_provider_states")
+            posts = []
+            for index, container in enumerate(containers):
+                if not isinstance(container, dict) or container is header:
+                    continue
+                is_post = container.get("type") == "text" and container.get("rule") is True
+                if "provider_scope" in container or ("provider_states" in container and not is_post):
+                    _err("bad_provider_states")
+                if is_post:
+                    if index <= header_index:
+                        _err("bad_provider_states")
+                    posts.append(checked_values(container, labels) if "provider_states" in container
+                                 else {key: "unknown" for key, _ in providers})
+            header_labels = {**labels, "used": "使用あり"}
+            values = checked_values(header, header_labels)
+            if len(posts) == 1:
+                aggregate = posts[0]
+            else:
+                aggregate = {key: ("used" if any(post[key] in ("done", "partial") for post in posts)
+                                  else "unknown") for key, _ in providers}
+            if values != aggregate:
+                _err("bad_provider_states")
+            fallback = " · ".join(f"{name} {header_labels[values[key]]}" for key, name in providers)
+            text = header.get("text")
+            if (not isinstance(text, str) or len(text.splitlines()) != 1
+                    or (text != fallback and not (text.endswith(" · " + fallback)
+                                                  and len(text) > len(fallback) + 3))):
                 _err("bad_provider_states")
     budget = MAX_COMPONENTS
     text_budget = MAX_TOTAL_TEXT

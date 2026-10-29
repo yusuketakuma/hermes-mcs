@@ -9,7 +9,14 @@ from mcs_util import payload_hash, strict_json
 
 PROVIDERS = ("anthropic", "openai", "jev", "local")
 STATE_LABELS = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
-                "pending": "処理待ち", "failed": "失敗", "unknown": "不明"}
+                "pending": "処理待ち", "failed": "失敗", "unknown": "不明", "used": "使用あり"}
+
+
+def aggregate_provider_states(posts):
+    if len(posts) == 1:
+        return dict(posts[0])
+    return {key: ("used" if any(post[key] in ("done", "partial") for post in posts)
+                  else "unknown") for key in PROVIDERS}
 
 
 def _extract_jev_state(db, project_id, message_id, source_id, source_hash, version, content):

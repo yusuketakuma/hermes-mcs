@@ -507,9 +507,8 @@ def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True) -> di
         empty = ("作成失敗" if extraction_failed(db, mid) else
                  "要確認" if state and state["state"] == "attention" else "処理待ち")
         block = {"type": "text", "text": ("📋 要約 " if label else "要約 ") + empty}
-    # layout 2 (label=False) reports extraction progress once on the
-    # card's meta line instead of under every post
-    progress = "" if not label else _progress_label(state)
+    # Keep each post's progress with its own summary.
+    progress = _progress_label(state) if label or progress_by_mid is not None else ""
     if progress:
         block["text"] += "\n" + progress
     return block
@@ -898,7 +897,6 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
                 meta.append(f"{mmdd(first.get('posted_at'))}〜")
             if context:
                 meta.append(context)
-            meta.extend(_progress_summary(progress_by_mid))
             if meta:
                 containers.append({"type": "text", "text": " · ".join(meta)})
         else:
@@ -933,8 +931,7 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
             if m["body_state"] != "deleted":
                 states = processing_route.provider_states(db, card["project_id"], m["message_id"], cfg=cfg,
                                                           bundle_cache=bundle_cache)
-                post_line.update(text=_cap_card_text(line, 500) + "\n" + processing_route.provider_text(states),
-                                 provider_states=states)
+                post_line.update(text=_cap_card_text(line, 500), provider_states=states)
             blocks = [post_line]
             if m["body_state"] != "deleted":
                 blocks.append(_summary_block(db, m["message_id"], cfg=cfg,
@@ -976,6 +973,17 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
         item_shown = [ks for _, ks in groups]
         max_count = PAGE_DIGEST if kind == "digest" else PAGE_THREAD
         shown_kind = "signal_keys"
+    header_placeholder = None
+    if kind == "thread":
+        # Reserve the longest possible provider line before packing pages.
+        header_placeholder = processing_route.provider_text(
+            dict.fromkeys(processing_route.PROVIDERS, "partial"))
+        if len(containers) > 1 and containers[1]["type"] == "text" and not containers[1].get("rule"):
+            containers[1]["text"] += " · " + header_placeholder
+        else:
+            containers.insert(1, {"type": "text", "text": header_placeholder})
+        containers[1].update(provider_scope="header", provider_states=dict.fromkeys(
+            processing_route.PROVIDERS, "partial"))
     source_fp = source_fingerprint(db, card)
     generation = render_source_generation(card, source_fp)
     # A long heading shares the old 800-character reserve with the footer.
@@ -1017,6 +1025,18 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
     shown, footer, toggles = page_states[page]
     if pages > 1:
         _add_page_marker(containers, page, pages)
+    if header_placeholder is not None:
+        post_states = []
+        for i in pages_idx[page]:
+            for item in rendered[i]:
+                if item.get("type") == "text" and item.get("rule"):
+                    post_states.append(item.get("provider_states", dict.fromkeys(
+                        processing_route.PROVIDERS, "unknown")))
+        states = processing_route.aggregate_provider_states(post_states)
+        header = containers[1]
+        prefix = header["text"].replace(header_placeholder, "", 1).strip(" ·")
+        header["text"] = (prefix + " · " if prefix else "") + processing_route.provider_text(states)
+        header["provider_states"] = states
     for i in pages_idx[page]:
         containers.extend(rendered[i])
     reactions = []

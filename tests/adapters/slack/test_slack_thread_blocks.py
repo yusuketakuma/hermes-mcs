@@ -57,6 +57,81 @@ def test_provider_context_uses_fixed_images_and_accessible_states():
     assert thread[2]["text"]["text"] == "要約: 合成の観察"
 
 
+def test_v2_provider_context_is_in_card_header_once_with_metadata_and_accessible_used():
+    import present_slack
+
+    aggregate = {"anthropic": "used", "openai": "unknown", "jev": "partial", "local": "done"}
+    post_states = {"anthropic": "done", "openai": "unknown", "jev": "partial", "local": "unknown"}
+    fallback = "Anthropic 使用あり · OpenAI 不明 · Jev 一部実行・一部省略 · 💻 実行済み"
+    face_posts = [{"at": 2, "original": "合成本文一", "stamps": ["スタンプ 👍1"]},
+                  {"at": 4, "original": "合成本文二", "stamps": ["スタンプ ✅1"]}]
+    parts = {"provider_states_version": 2, "containers": [
+        {"type": "heading", "text": "💬 合成カード"},
+        {"type": "text", "provider_scope": "header", "provider_states": aggregate,
+         "text": "起点 06-01 · 返信2件 · " + fallback},
+        {"type": "text", "rule": True, "text": "09:00 合成職員一", "provider_states": post_states},
+        {"type": "text", "text": "合成要約一"},
+        {"type": "text", "rule": True, "text": "09:01 合成職員二", "provider_states": post_states},
+        {"type": "text", "text": "合成要約二"}],
+        "footer": [], "action_rows": [], "slack": {"face_posts": face_posts}}
+    blocks = render_parts(parts, card_kind="thread")
+    assert blocks[0]["type"] == "header"
+    context = blocks[1]
+    assert context["type"] == "context" and len(context["elements"]) == 8
+    assert context["elements"][0] == {"type": "plain_text", "text": "起点 06-01 · 返信2件"}
+    assert [item["alt_text"] for item in context["elements"] if item["type"] == "image"] == [
+        "Anthropic 使用あり", "OpenAI 不明", "Jev 一部実行・一部省略"]
+    assert [item["text"] for item in context["elements"] if item["type"] == "plain_text"] == [
+        "起点 06-01 · 返信2件", "✓", "?", "✓↷", "💻 ✓ 実行済み"]
+    provider_blocks = [block for block in blocks if block["type"] == "context"
+                       and any(element["type"] == "image" for element in block["elements"])]
+    assert provider_blocks == [context]
+    assert fallback not in json.dumps(blocks, ensure_ascii=False)
+    assert any(element.get("text") == "09:00 合成職員一" for block in blocks
+               if block["type"] == "context" for element in block["elements"])
+    assert any(element.get("text") == "09:01 合成職員二" for block in blocks
+               if block["type"] == "context" for element in block["elements"])
+    stamp_lines = [element["text"] for block in blocks if block["type"] == "context"
+                   for element in block["elements"] if "スタンプ" in element.get("text", "")]
+    assert stamp_lines == ["09:00 合成職員一\nスタンプ 👍1", "09:01 合成職員二\nスタンプ ✅1"]
+    nested = sum(len(block.get("child_blocks", [])) for block in blocks)
+    assert present_slack.face_block_count(parts, face_posts) == len(blocks) + nested
+
+
+@pytest.mark.parametrize("prefix", ["", "合成の状態", "a" * 4001])
+def test_v2_provider_header_count_includes_long_metadata_prefix(prefix):
+    import present_slack
+
+    states = {"anthropic": "unknown", "openai": "used", "jev": "skipped", "local": "unknown"}
+    fallback = "Anthropic 不明 · OpenAI 使用あり · Jev 省略 · 💻 不明"
+    text = (prefix + " · " if prefix else "") + fallback
+    parts = {"provider_states_version": 2, "containers": [
+        {"type": "text", "provider_scope": "header", "provider_states": states, "text": text}],
+        "footer": [], "action_rows": []}
+    blocks = render_parts(parts, card_kind="thread")
+    assert present_slack.face_block_count(parts) == len(blocks)
+    assert all(block["type"] == "context" for block in blocks)
+    assert all(len(element.get("text", "")) <= 2000 for block in blocks for element in block["elements"])
+    assert len(blocks[-1]["elements"]) == (8 if prefix else 7)
+    preceding = "".join(element["text"] for block in blocks[:-1] for element in block["elements"])
+    last_prefix = blocks[-1]["elements"][0]["text"] if prefix else ""
+    assert preceding + last_prefix == prefix
+    assert [item["alt_text"] for item in blocks[-1]["elements"] if item["type"] == "image"][1] == "OpenAI 使用あり"
+
+
+def test_v2_thread_header_keeps_legacy_per_post_provider_details():
+    spec = _split_spec("m:100:header#1", "m:100#1")
+    spec["parts"]["provider_states_version"] = 2
+    line = "Anthropic 実行済み · OpenAI 不明 · Jev 省略 · 💻 不明"
+    blocks = thread_part_blocks(spec, {"name": "m:100:header#1"},
+                                "合成投稿\n" + line + "\n要約: 合成\nスタンプ 👍1")
+    assert [block["type"] for block in blocks] == ["context", "context", "section", "context"]
+    assert [item["alt_text"] for item in blocks[1]["elements"] if item["type"] == "image"] == [
+        "Anthropic 実行済み", "OpenAI 不明", "Jev 省略"]
+    assert blocks[2]["text"]["text"] == "要約: 合成"
+    assert blocks[3]["elements"][0]["text"] == "スタンプ 👍1"
+
+
 @pytest.mark.parametrize("separator", ["\n", "\r\n", "\u2028"])
 def test_sender_cannot_insert_a_fake_provider_line_in_thread_header(monkeypatch, separator):
     import notify_render
@@ -123,6 +198,97 @@ def test_provider_state_contract_rejects_bad_values_and_mismatched_fallback():
             item["provider_states"]["other"] = "done"
         with pytest.raises(ValueError, match="bad_provider_states"):
             validate(broken)
+
+
+def _v2_provider_spec():
+    spec = _spec()
+    states = {"anthropic": "done", "openai": "unknown", "jev": "partial", "local": "skipped"}
+    fallback = "Anthropic 実行済み · OpenAI 不明 · Jev 一部実行・一部省略 · 💻 省略"
+    spec["parts"]["provider_states_version"] = 2
+    spec["parts"]["containers"] = [
+        {"type": "heading", "text": "合成カード"},
+        {"type": "text", "provider_scope": "header", "provider_states": states.copy(),
+         "text": "合成情報 · " + fallback},
+        {"type": "text", "rule": True, "text": "合成の投稿", "provider_states": states.copy()},
+        {"type": "text", "text": "合成の要約"},
+    ]
+    return spec
+
+
+@pytest.mark.parametrize("mutation", [
+    "forged_aggregate", "duplicate_scope", "late_header", "post_scope", "footer_scope",
+    "missing_version", "invalid_version", "unknown_provider", "post_used", "invalid_state",
+    "header_rule", "header_newline", "forged_fallback", "missing_header", "states_not_post",
+    "header_at_start", "header_after_unrelated_text", "no_heading",
+])
+def test_v2_provider_contract_rejects_tampering(mutation):
+    spec = _v2_provider_spec()
+    validate(spec)
+    parts = spec["parts"]
+    containers = parts["containers"]
+    header, post = containers[1], containers[2]
+    if mutation == "forged_aggregate":
+        header["provider_states"]["openai"] = "done"
+        header["text"] = header["text"].replace("OpenAI 不明", "OpenAI 実行済み")
+    elif mutation == "duplicate_scope":
+        containers.insert(2, copy.deepcopy(header))
+    elif mutation == "late_header":
+        containers[1], containers[2] = post, header
+    elif mutation == "post_scope":
+        post["provider_scope"] = "header"
+    elif mutation == "footer_scope":
+        parts["footer"][0]["provider_scope"] = "header"
+    elif mutation == "missing_version":
+        del parts["provider_states_version"]
+    elif mutation == "invalid_version":
+        parts["provider_states_version"] = True
+    elif mutation == "unknown_provider":
+        post["provider_states"]["other"] = "done"
+    elif mutation == "post_used":
+        post["provider_states"]["anthropic"] = "used"
+    elif mutation == "invalid_state":
+        post["provider_states"]["local"] = "invented"
+    elif mutation == "header_rule":
+        header["rule"] = False
+    elif mutation == "header_newline":
+        header["text"] = "合成情報\n" + header["text"]
+    elif mutation == "forged_fallback":
+        header["text"] = header["text"].replace("OpenAI 不明", "OpenAI 実行済み")
+    elif mutation == "missing_header":
+        del containers[1]
+    elif mutation == "states_not_post":
+        containers[3]["provider_states"] = post["provider_states"].copy()
+    elif mutation == "header_at_start":
+        containers[0], containers[1] = header, containers[0]
+    elif mutation == "header_after_unrelated_text":
+        containers.insert(1, {"type": "text", "text": "合成の追加情報"})
+    elif mutation == "no_heading":
+        containers[0] = {"type": "text", "text": "合成タイトル"}
+    with pytest.raises(ValueError, match="bad_provider_states"):
+        validate(spec)
+
+
+def test_v2_missing_post_state_counts_as_unknown_in_aggregate():
+    spec = _v2_provider_spec()
+    parts = spec["parts"]
+    header = parts["containers"][1]
+    parts["containers"].append({"type": "text", "rule": True, "text": "合成の別投稿"})
+    # A missing state is still a second post: do not present the one known
+    # post's status as an exact aggregate for all posts.
+    with pytest.raises(ValueError, match="bad_provider_states"):
+        validate(spec)
+    header["provider_states"] = {"anthropic": "used", "openai": "unknown",
+                                 "jev": "used", "local": "unknown"}
+    header["text"] = "Anthropic 使用あり · OpenAI 不明 · Jev 使用あり · 💻 不明"
+    validate(spec)
+    # One missing-state post, or no posts at all, both produce all unknown.
+    unknown = dict.fromkeys(("anthropic", "openai", "jev", "local"), "unknown")
+    header["provider_states"] = unknown
+    header["text"] = "Anthropic 不明 · OpenAI 不明 · Jev 不明 · 💻 不明"
+    del parts["containers"][2]
+    validate(spec)
+    parts["containers"].pop()
+    validate(spec)
 
 
 def test_body_chunk_folds_behind_collapsed_container_only_with_a_header_part():

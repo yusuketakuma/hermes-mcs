@@ -77,14 +77,18 @@ def face_block_count(parts, face_posts=()) -> int:
     as contexts and one folded original with its child sections). Count
     all levels conservatively; Slack's nested-block accounting is unspecified."""
     n = 0
+    version = parts.get("provider_states_version")
     for item in parts["containers"]:
         kind = item["type"]
         if kind == "meta":
             continue
         if item.get("rule") and n:
             n += 1                                   # divider
-        if item.get("rule") and kind == "text":
-            if item.get("provider_states") is not None:
+        if version == 2 and item.get("provider_scope") == "header" and kind == "text":
+            prefix, separator, _ = item["text"].rpartition(" · Anthropic ")
+            n += _count(prefix if separator else "", _CONTEXT_MAX)
+        elif item.get("rule") and kind == "text":
+            if item.get("provider_states") is not None and version != 2:
                 n += _count(item["text"].rsplit("\n", 1)[0], _CONTEXT_MAX) + 1
             else:
                 n += _count(item["text"], _CONTEXT_MAX)
@@ -106,7 +110,7 @@ def face_block_count(parts, face_posts=()) -> int:
         if post["stamps"]:
             item = parts["containers"][post["at"]]
             header = (item["text"].rsplit("\n", 1)[0]
-                      if item.get("provider_states") is not None else item["text"])
+                      if version != 2 and item.get("provider_states") is not None else item["text"])
             lines = [header] if len(face_posts) > 1 else []
             n += _count("\n".join(lines + post["stamps"]), _CONTEXT_MAX)
         n += 1 + _count(post["original"], _SECTION_MAX)

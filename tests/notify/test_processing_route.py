@@ -29,6 +29,55 @@ def _heading(led, card, layout=4):
     return content, content['containers'][0]['text']
 
 
+def test_provider_summary_without_visible_posts_is_unknown():
+    assert processing_route.aggregate_provider_states([]) == dict.fromkeys(
+        processing_route.PROVIDERS, 'unknown')
+
+
+@pytest.mark.parametrize('state', [
+    'done', 'partial', 'skipped', 'unused', 'pending', 'failed', 'unknown',
+])
+def test_single_visible_post_preserves_exact_provider_states(state):
+    post = {'anthropic': state, 'openai': 'unknown', 'jev': 'partial', 'local': 'done'}
+    before = dict(post)
+    assert processing_route.aggregate_provider_states([post]) == before
+    assert post == before
+
+
+@pytest.mark.parametrize(('first', 'second', 'expected'), [
+    ('done', 'unknown', 'used'),
+    ('unknown', 'done', 'used'),
+    ('partial', 'unknown', 'used'),
+    ('unknown', 'partial', 'used'),
+    ('done', 'done', 'used'),
+    ('partial', 'partial', 'used'),
+    ('done', 'skipped', 'used'),
+    ('unused', 'unused', 'unknown'),
+    ('skipped', 'skipped', 'unknown'),
+    ('failed', 'failed', 'unknown'),
+    ('pending', 'unknown', 'unknown'),
+    ('failed', 'skipped', 'unknown'),
+])
+def test_multiple_posts_show_only_evidence_of_any_use(first, second, expected):
+    posts = [dict.fromkeys(processing_route.PROVIDERS, first),
+             dict.fromkeys(processing_route.PROVIDERS, second)]
+    before = [dict(post) for post in posts]
+    assert processing_route.aggregate_provider_states(posts) == dict.fromkeys(
+        processing_route.PROVIDERS, expected)
+    assert posts == before
+
+
+def test_multiple_posts_aggregate_each_provider_independently():
+    posts = [
+        {'anthropic': 'done', 'openai': 'unknown', 'jev': 'partial', 'local': 'unknown'},
+        {'anthropic': 'unknown', 'openai': 'failed', 'jev': 'skipped', 'local': 'done'},
+        {'anthropic': 'unknown', 'openai': 'unused', 'jev': 'unknown', 'local': 'unknown'},
+    ]
+    expected = {'anthropic': 'used', 'openai': 'unknown', 'jev': 'used', 'local': 'used'}
+    assert processing_route.aggregate_provider_states(posts) == expected
+    assert processing_route.aggregate_provider_states(list(reversed(posts))) == expected
+
+
 @pytest.mark.parametrize('route', ['local', 'cloud'])
 @pytest.mark.parametrize('layout', [1, 2, 4])
 def test_thread_heading_keeps_fixed_icon_and_states_are_per_post(led, route, layout):
@@ -118,6 +167,69 @@ def test_post_states_are_separate_and_update_the_visible_fingerprint(led, monkey
     assert notify_render.content_fingerprint(before) != notify_render.content_fingerprint(after)
 
 
+def test_provider_heading_aggregates_only_visible_page_posts(led, monkeypatch):
+    mids = (100, 101, 102, 103)
+    _seed_thread(led, mids=mids)
+    _dispatch(led, _intent(led, payload={'message_ids': list(mids)}))
+    monkeypatch.setattr(notify_render, 'PAGE_THREAD', 2)
+    states = {mid: dict.fromkeys(processing_route.PROVIDERS, 'unknown') for mid in mids}
+    states[100]['anthropic'] = 'done'
+    states[101]['local'] = 'done'
+    states[102]['jev'] = 'partial'
+    states[103]['openai'] = 'done'
+    monkeypatch.setattr(processing_route, 'provider_states',
+                        lambda db, pid, mid, cfg=None, **kwargs: dict(states[mid]))
+    card = {**_card(led), 'layout': 2}
+
+    expected = [
+        {'anthropic': 'used', 'openai': 'unknown', 'jev': 'unknown', 'local': 'used'},
+        {'anthropic': 'unknown', 'openai': 'used', 'jev': 'used', 'local': 'unknown'},
+    ]
+    for page, wanted in enumerate(expected):
+        content = notify_render.card_content(led.db, {**card, 'ui_state': json.dumps({'page': page})}, cfg=CFG)
+        assert content['pages'] == 2 and content['page'] == page
+        assert content['shown'] == list(mids[page * 2:page * 2 + 2])
+        assert content['containers'][0]['text'].startswith('💬 ')
+        [header] = [c for c in content['containers'] if c.get('provider_scope') == 'header']
+        assert header['provider_states'] == wanted
+        assert header['text'].endswith(processing_route.provider_text(wanted))
+        posts = [c for c in content['containers'] if c.get('rule')]
+        assert [post['provider_states'] for post in posts] == [states[mid] for mid in content['shown']]
+        assert all('Anthropic ' not in post['text'] and '💻 ' not in post['text'] for post in posts)
+
+
+def test_single_post_page_preserves_exact_status_and_deleted_page_is_unknown(led, monkeypatch):
+    _seed_thread(led, mids=(100, 101))
+    _dispatch(led, _intent(led, payload={'message_ids': [100, 101]}))
+    led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=101")
+    led.db.commit()
+    monkeypatch.setattr(notify_render, 'PAGE_THREAD', 1)
+    actual = {'anthropic': 'done', 'openai': 'failed', 'jev': 'partial', 'local': 'unknown'}
+    calls = []
+
+    def provider_states(db, pid, mid, cfg=None, **kwargs):
+        calls.append(mid)
+        assert mid == 100
+        return dict(actual)
+
+    monkeypatch.setattr(processing_route, 'provider_states', provider_states)
+    card = {**_card(led), 'layout': 2}
+    first = notify_render.card_content(led.db, {**card, 'ui_state': json.dumps({'page': 0})}, cfg=CFG)
+    assert first['shown'] == [100] and first['containers'][0]['text'].startswith('💬 ')
+    [header] = [c for c in first['containers'] if c.get('provider_scope') == 'header']
+    assert header['provider_states'] == actual
+    [post] = [c for c in first['containers'] if c.get('rule')]
+    assert post['provider_states'] == actual and 'Anthropic ' not in post['text']
+
+    second = notify_render.card_content(led.db, {**card, 'ui_state': json.dumps({'page': 1})}, cfg=CFG)
+    assert second['shown'] == [101] and second['containers'][0]['text'].startswith('💬 ')
+    [header] = [c for c in second['containers'] if c.get('provider_scope') == 'header']
+    assert header['provider_states'] == dict.fromkeys(processing_route.PROVIDERS, 'unknown')
+    [post] = [c for c in second['containers'] if c.get('rule')]
+    assert 'provider_states' not in post
+    assert calls and set(calls) == {100}  # Deleted posts have no provider evidence lookup.
+
+
 def test_deleted_post_has_no_provider_status(led):
     _seed_thread(led, mids=(100,))
     _dispatch(led, _intent(led, payload={'message_ids': [100]}))
@@ -125,7 +237,7 @@ def test_deleted_post_has_no_provider_status(led):
     led.db.commit()
     content, heading = _heading(led, _card(led))
     assert heading.startswith('💬 ')
-    assert all('provider_states' not in c for c in content['containers'])
+    assert all('provider_states' not in c for c in content['containers'] if c.get('rule'))
 
 
 @pytest.mark.parametrize('provider', ['local', 'anthropic', 'openai'])
