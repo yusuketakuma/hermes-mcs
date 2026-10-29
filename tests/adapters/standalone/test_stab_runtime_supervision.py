@@ -105,7 +105,7 @@ def test_connector_failure_backs_off_without_stopping_the_host(tmp_path, monkeyp
     assert asyncio.run(runtime.serve(tmp_path, cfg, connector)) == 0
     host = ticks[0]
     # workers kept running: started once, never restarted with the connector
-    assert sum(1 for argv in started if argv == host.argv["extract-0"]) == 1
+    assert sum(1 for argv in started if argv[7:] == host.argv["extract-0"]) == 1
     gaps = [b - a for a, b in zip(attempts, attempts[1:])]
     # detected on the next 10 s pass, then 30 s, 60 s; a settings change
     # reconnects at once; then 120 s
@@ -431,12 +431,12 @@ def test_children_of_a_killed_host_are_stopped_or_awaited(tmp_path, monkeypatch)
     assert set(host.children) == {"extract-0", "mcs_check"}
     assert sent == [(4001, runtime.signal.SIGTERM)]
     host.tick(QUIET + 1)
-    assert host.argv["mcs_check"] not in started and host.argv["extract-0"] not in started
+    assert all(argv[7:] not in (host.argv["mcs_check"], host.argv["extract-0"]) for argv in started)
     alive -= {4001, 4002}
     host.tick(QUIET + 2)
     assert host.exits["mcs_check"]["last_exit"] is None   # unknown, not a failure
     host.tick(QUIET + 3)
-    assert host.argv["extract-0"] in started
+    assert any(argv[7:] == host.argv["extract-0"] for argv in started)
     assert [f["action"] for e, f in events if e == "orphan_adopted"] == ["stop", "wait"]
 
 
@@ -630,3 +630,46 @@ def test_adopted_eperm_rechecks_identity_without_releasing_unknown_slot(
         assert host.inflight == {"mcs_check": 600}
         assert host.exits == {}
         assert probes == [(4005, 0), (4005, 0)]
+
+
+@pytest.mark.parametrize("job", ["extract-0", "mcs_check"])
+def test_verified_helper_startup_is_held_until_original_argv_execs(tmp_path, monkeypatch, job):
+    host = _host(tmp_path, monkeypatch, [])
+    pid = 4001
+    host.orphan_candidates[job] = pid
+    helper = runtime.helper_path(tmp_path, None, require_installed=True)
+    starting = [runtime.sys.executable, "-I", helper, "exec", "--data-dir",
+                str(tmp_path / "data"), "--", *host.argv[job]]
+    request = {"pid": pid, "argv": list(host.argv[job]), "operation": int(runtime.signal.SIGTERM),
+               "generation": host.generation, "owner_pid": runtime.os.getpid(), "starting_argv": starting}
+    sent = []
+    monkeypatch.setattr(runtime.os, "kill", lambda pid, sig: sent.append((pid, sig)))
+    monkeypatch.setattr(runtime, "_process_args", lambda pid: (1, " ".join(starting)))
+    output = io.StringIO()
+    with monkeypatch.context() as worker:
+        worker.setattr(runtime.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(json.dumps(request).encode())))
+        worker.setattr(runtime.sys, "stdout", output)
+        runtime._identity_worker()
+    result = json.loads(output.getvalue())
+    assert result["identity"] is None and result["sent"] is False and sent == []
+    host._identity_result({**request, "job": job}, result, QUIET)
+    assert host.orphan_candidates == {job: pid} and host.children == {}
+    host.start(job, "core", QUIET)
+    assert host.children == {}                 # no duplicate while helper is starting
+    # A different prefix is never signal-authorized; only the original argv can be adopted.
+    other = starting.copy()
+    other[2] += "-unverified"
+    monkeypatch.setattr(runtime, "_process_args", lambda pid: (1, " ".join(other)))
+    assert runtime._is_orphan(pid, host.argv[job], runtime.os.getpid(), starting) is False
+    _complete_identity(host, monkeypatch, job, True, QUIET + 1)
+    assert job not in host.orphan_candidates and host.children[job]["adopted"]
+
+
+def test_unverified_startup_prefix_does_not_clear_or_signal_orphan(tmp_path, monkeypatch):
+    host = _host(tmp_path, monkeypatch, [])
+    host.orphan_candidates["mcs_check"] = 4001
+    monkeypatch.setattr(runtime, "helper_path", lambda *a, **k: (_ for _ in ()).throw(
+        runtime.LogInstallError("synthetic_unverified")))
+    monkeypatch.setattr(runtime.subprocess, "Popen", lambda *a, **k: pytest.fail("unverified identity request"))
+    runtime.Runtime._start_identity(host)
+    assert host.orphan_candidates == {"mcs_check": 4001} and host.identity_probe is None

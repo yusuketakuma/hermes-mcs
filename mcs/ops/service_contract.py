@@ -121,11 +121,13 @@ def selected_python(cfg, *, standalone_runtime_home, hermes_python):
     return os.path.join(standalone_runtime_home, "venv", "bin", "python3") if mcs_runtime.standalone(cfg) else hermes_python
 
 
-def service_substitutions(cfg, *, root, checkout, standalone_runtime_home, hermes_runtime_home, hermes_python):
+def service_substitutions(cfg, *, root, checkout, standalone_runtime_home, hermes_runtime_home, hermes_python, recovery_dir=None):
     standalone = mcs_runtime.standalone(cfg)
     python = selected_python(cfg, standalone_runtime_home=standalone_runtime_home, hermes_python=hermes_python)
     subs = {"PYTHON": python, "REPO": checkout, "DATA": os.path.join(root, "data"),
             "RUNTIME_HOME": standalone_runtime_home if standalone else hermes_runtime_home}
+    from run_log_install import helper_path
+    subs["RUN_LOG_HELPER"] = helper_path(root, recovery_dir, checkout=checkout)
     backup = cfg.get("backup", {"enabled": False})
     error = validate_backup_config(backup)
     if error:

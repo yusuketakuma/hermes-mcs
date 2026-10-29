@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import sys
 import re
 
 ALLOWED_FIELDS = frozenset({
@@ -44,5 +46,16 @@ def make_logger(name: str, level: int = logging.INFO):
     logger = logging.getLogger(name)
 
     def log(event, **fields) -> None:
-        logger.log(level, "%s", render(event, fields))
+        record = render(event, fields)
+        logger.log(level, "%s", record)
+        if os.environ.get("MCS_RUN_LOG_CAPTURED") != "1":
+            from .mcs_api import bootstrap
+            bootstrap()
+            import run_log
+            from mcs_util import HOME
+            try:
+                run_log.append(os.path.join(HOME, "data"), (record + "\n").encode("utf-8"))
+            except (OSError, run_log.RunLogError):
+                # Preserve the operation and existing logger; expose only a fixed code.
+                print("mcs_log_write_failed", file=sys.stderr)
     return log

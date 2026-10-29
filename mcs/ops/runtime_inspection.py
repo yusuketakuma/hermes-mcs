@@ -111,6 +111,16 @@ def recovery_executable(plist) -> str | None:
     else:
         argv = plist.get("ProgramArguments")
         exe = argv[0] if isinstance(argv, list) and argv else None
+    argv = plist.get("ProgramArguments")
+    if isinstance(argv, list) and argv[1:2] == ["-I"]:
+        # Keep this parser usable for code-owned templates; live inspection
+        # below additionally verifies the installed root-bound helper bytes.
+        if (len(argv) != 10 or not all(isinstance(arg, str) for arg in argv)
+                or argv[3:5] != ["exec", "--data-dir"] or argv[6] != "--"
+                or argv[9] != "--if-stale" or exe != argv[0] or argv[7] != exe
+                or Path(argv[8]).name != "mcs_recover.py"):
+            return None
+        exe = argv[7]
     return exe if isinstance(exe, str) and os.path.isabs(exe) else None
 
 
@@ -123,7 +133,22 @@ def recovery_runtime(plist_path: str | Path, *, checkout: str | Path, deadline=N
         exe = recovery_executable(plist)
         if exe is None or recovery_python_problem(exe, checkout=checkout):
             return None
-    except (OSError, ValueError, TypeError, AttributeError, plistlib.InvalidFileException):
+        argv = plist.get("ProgramArguments")
+        if isinstance(argv, list) and argv[1:2] == ["-I"]:
+            from run_log_install import helper_path, LogInstallError
+            helper, data, tool = argv[2], argv[5], argv[8]
+            if (not all(os.path.isabs(path) for path in (helper, data, tool))
+                    or Path(data).name != "data"
+                    or Path(helper).resolve().is_relative_to(Path(checkout).resolve())
+                    or tool != str(Path(helper).parent / "mcs_recover.py")):
+                return None
+            try:
+                trusted = helper_path(Path(data).parent, Path(helper).parent, require_installed=True)
+            except LogInstallError:
+                return None
+            if helper != trusted:
+                return None
+    except (OSError, ValueError, TypeError, AttributeError, RuntimeError, plistlib.InvalidFileException):
         return None
     return probe_python(exe, **({} if deadline is None else {"deadline": deadline}))
 

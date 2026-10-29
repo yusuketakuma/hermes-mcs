@@ -14,8 +14,11 @@ def test_rendered_health_watch_runs_outside_the_host(tmp_path):
     [(name, body)] = service.render_health(tmp_path, platform="darwin")
     value = plistlib.loads(body.encode())
     assert name == "local.mcs-health.plist" and value["Label"] == service_contract.HEALTH_LABEL
-    assert value["ProgramArguments"][1].endswith("/mcs/ingest/health_watch.py")
-    assert value["ProgramArguments"][2:] == ["--home", str(tmp_path)]
+    assert value["ProgramArguments"][8].endswith("/mcs/ingest/health_watch.py")
+    assert value["ProgramArguments"][9:] == ["--home", str(tmp_path)]
+    assert value["ProgramArguments"][1] == "-I"
+    assert value["ProgramArguments"][3:7] == ["exec", "--data-dir", str(tmp_path / "data"), "--"]
+    assert value["StandardOutPath"] == value["StandardErrorPath"] == "/dev/null"
     assert value["StartInterval"] == 300 and value["Umask"] == 0o077
     units = dict(service.render_health(tmp_path, platform="linux"))
     assert set(units) == set(service_contract.HEALTH_UNITS)

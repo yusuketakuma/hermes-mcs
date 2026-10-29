@@ -6,6 +6,7 @@ import os
 import sqlite3
 import time
 from contextlib import closing
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -117,38 +118,51 @@ def test_prune_leftovers_removes_only_day_old_temp_and_invalid(tmp_path, monkeyp
     assert sorted(p.name for p in cmd.iterdir()) == ["y.json"]
 
 
-def test_rotate_log_covers_update_recovery_cmd_int_and_llamacpp(monkeypatch, tmp_path):
-    monkeypatch.setenv("HOME", str(tmp_path))
-    checked = []
+def test_default_rotation_keeps_legacy_sources_for_verified_migration(monkeypatch, tmp_path):
+    import run_log
+    data = tmp_path / "data"
+    data.mkdir(mode=0o700)
+    monkeypatch.setattr(maintenance, "HOME", str(tmp_path))
+    monkeypatch.setattr(maintenance, "LOG_MAX", 1)
+    old_paths = [data / name for name in ("update.log", "recovery.log", "cmd_int.log")]
+    for path in old_paths:
+        path.write_bytes(b"synthetic legacy bytes\n")
+    run_log.append(data, b"canonical record\n")
+    run_log.enable_rotation(data, legacy_writers_closed=True)
+    result = maintenance.rotate_log()
+    assert result["rotated"]
+    assert (data / result["archive"]).read_bytes() == b"canonical record\n"
+    assert (data / run_log.LOG).read_bytes() == b""
+    assert all(path.read_bytes() == b"synthetic legacy bytes\n" for path in old_paths)
+    assert all(not Path(str(path) + ".1").exists() for path in old_paths)
 
-    real = os.lstat
 
-    def lstat(path, *args, **kwargs):
-        checked.append(path)
-        return real(path, *args, **kwargs)
-
-    monkeypatch.setattr(maintenance.os, "lstat", lstat)
-    maintenance.rotate_log()
-    names = {os.path.basename(p) for p in checked}
-    assert {"update.log", "recovery.log", "cmd_int.log", "llamacpp.log"} <= names
-    assert str(tmp_path / ".hermes" / "logs" / "llamacpp.log") in checked
-
-
-def test_rotate_log_covers_standalone_llamacpp_log(monkeypatch, tmp_path):
+def test_default_rotation_never_opens_shared_hermes_or_old_llama_logs(monkeypatch, tmp_path):
+    import run_log
+    home = tmp_path / "mcs"
+    data = home / "data"
+    data.mkdir(mode=0o700, parents=True)
+    shared = tmp_path / "user" / ".hermes" / "logs" / "llamacpp.log"
+    owned = home / "logs" / "llamacpp.log"
+    for path in (shared, owned):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"preserved synthetic llama output\n")
     monkeypatch.setenv("HOME", str(tmp_path / "user"))
-    monkeypatch.setattr(maintenance, "HOME", str(tmp_path / "mcs"))
-    checked = []
-
-    real = os.lstat
+    monkeypatch.setattr(maintenance, "HOME", str(home))
+    monkeypatch.setattr(maintenance, "LOG_MAX", 1)
+    run_log.append(data, b"canonical record\n")
+    run_log.enable_rotation(data, legacy_writers_closed=True)
+    checked, original = [], maintenance.os.lstat
 
     def lstat(path, *args, **kwargs):
-        checked.append(path)
-        return real(path, *args, **kwargs)
+        checked.append(os.fspath(path))
+        return original(path, *args, **kwargs)
 
     monkeypatch.setattr(maintenance.os, "lstat", lstat)
     maintenance.rotate_log()
-    assert str(tmp_path / "mcs" / "logs" / "llamacpp.log") in checked
-    assert str(tmp_path / "user" / ".hermes" / "logs" / "llamacpp.log") in checked
+    assert str(shared) not in checked and str(owned) not in checked
+    assert shared.read_bytes() == owned.read_bytes() == b"preserved synthetic llama output\n"
+    assert not Path(str(shared) + ".1").exists() and not Path(str(owned) + ".1").exists()
 
 
 def test_rotate_log_keeps_rotated_copy_private_under_loose_umask(monkeypatch, tmp_path):
