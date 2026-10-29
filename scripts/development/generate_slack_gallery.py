@@ -140,6 +140,7 @@ class Screen:
         "↳ 返信 N件を保存済み", a reply card (post>0) sits in the thread."""
         y = self.paragraph(x, y, HEADING if post == 0 else "↳ " + HEADING, width, 21, INK, True)
         y = self.paragraph(x, y - 4, META.format(n=2 if full else 1), width, 17, MUTED)
+        y = self.provider_row(x, y - 5, post)
         if full:
             y = self.paragraph(x, y - 4, "🆕 返信+1", width, 17, GREEN)
         if replies:
@@ -148,7 +149,6 @@ class Screen:
         for (sender, bullets), stamps in zip(shown, STAMPS[0 if full else post:]):
             y = self.rule(x, y, width)
             y = self.paragraph(x, y, sender, width, 15, MUTED)
-            y = self.provider_row(x, y - 5, 0 if sender == POSTS[0][0] else 1)
             for bullet in bullets:
                 y = self.paragraph(x, y - 2, "・" + bullet, width, 18)
             y = self.fold(x, y, width, 16)
@@ -170,7 +170,7 @@ class Screen:
         return self.paragraph(x, y + 4, f"▸ 原文（{len(BODY)}字）", width, size, MUTED) + 8
 
     def provider_row(self, x, y, post):
-        """Illustrate synthetic per-post execution, separate from validation verdicts."""
+        """Illustrate execution for the synthetic post shown in the card metadata."""
         marks = (("✓", "?", "↷", "?"), ("?", "?", "✓", "✓"))[post]
         for index, (provider, mark) in enumerate(zip(("anthropic", "openai", "jev", "local"), marks)):
             left = x + index * 66
