@@ -75,6 +75,11 @@ python3 ci/mine_gates.py --check
   本番辞書を自動で承認・有効化しない。CHANGELOG・GitHub Release の書式と生成は `docs/development/RELEASE_NOTES.md`、
   README の見直し記録は `docs/development/README_MAINTENANCE.md` に従う。
 
+## 処理経路の整理
+
+- 機能追加・修正のたびに関連する複雑な処理経路と重複分岐を見直し、既存の共通経路へ段階的に集約し続ける。
+  呼出元と互換性を確認し、認証・予算・人承認・データ保護の条件を維持する。経路ごとの例外や代替処理を追加する前に、共通処理で解決できるかを検討する。
+
 ## 並列開発
 
 - 独立した実装は並列で進める。ファイル所有範囲・依存・受入条件を分け、共有ファイルを同時に編集しない。
