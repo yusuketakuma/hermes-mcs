@@ -407,9 +407,9 @@ def semantic_chunk_parts(content: str,
 
 
 def semantic_summary_block(db, r, cfg: dict) -> str:
-    """Enforce-mode: audited summary section appended to this post.
-    Only the newest semantic_summary with audit_status PASS on the
-    CURRENT generation qualifies — stale/failed/unaudited ones are
+    """Enforce-mode: eligible summary section appended to this post.
+    Only the newest semantic_summary with a verified PASS or SKIPPED
+    outcome on the CURRENT generation qualifies — stale/failed/unverified ones are
     silently absent, and in shadow/assist/off the notification stays
     byte-identical to pre-Phase-J (INV-16, spec §20.2)."""
     try:
