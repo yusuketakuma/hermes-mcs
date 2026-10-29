@@ -433,6 +433,35 @@ def _save_state(state):
     _atomic_json(STATE_PATH, state, ".ustate.", ensure_ascii=False, sort_keys=True)
 
 
+def _ensure_recovery_marker():
+    """Keep or create the launcher hold; it does not prove writers stopped."""
+    directory, name = os.path.split(MARKER_PATH)
+    dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        flags = os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+        try:
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | flags, 0o600, dir_fd=dfd)
+        except FileExistsError:
+            fd = os.open(name, os.O_RDONLY | flags, dir_fd=dfd)
+            try:
+                opened = os.fstat(fd)
+                current = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                if (not stat.S_ISREG(opened.st_mode)
+                        or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)):
+                    raise OSError("update_marker_unverifiable")
+            finally:
+                os.close(fd)
+            return
+        with _fdopen_owned(fd, "w") as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(str(time.time()))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
+
+
 def _report(result, detail, **extra):
     with suppress(OSError):
         _atomic_json(REPORT_PATH, dict({"result": result, "detail": detail,
@@ -1861,8 +1890,7 @@ def _recover_legacy(if_stale=False):
                 "update_state.json unreadable — escalate, do nothing")
         return 2
     if _unreconciled_restore() is not None and not _restored_writer_compatible():
-        _report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation",
-                writers_stopped=True)
+        _report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation")
         return 1
     applying = state.get("applying")
     stages = [s.get("stage") for s in state.get("stages", [])]
@@ -1884,8 +1912,7 @@ def _recover_legacy(if_stale=False):
             _report("corrupt_state", "update_state.json unreadable under lock")
             return 2
         if _unreconciled_restore() is not None and not _restored_writer_compatible():
-            _report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation",
-                    writers_stopped=True)
+            _report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation")
             return 1
         applying = state.get("applying")
         stages = [s.get("stage") for s in state.get("stages", [])]
@@ -1894,6 +1921,25 @@ def _recover_legacy(if_stale=False):
                        + [(applying or {}).get("at", 0)])
             if last and time.time() - last < STALE_S:
                 return 0                    # newest locked journal is still fresh
+        schema_rollback = (isinstance(applying, dict) and applying.get("rollback")
+                           and applying.get("schema_bump") is not False
+                           and (applying.get("schema_bump") is not None or applying.get("backup_path")))
+        if schema_rollback:
+            try:
+                # This marker prevents new launches; it is not stop evidence.
+                _ensure_recovery_marker()
+                if applying.get("restore_incomplete") is not True:
+                    applying["restore_incomplete"] = True
+                    _save_state(state)
+                    if _load_state() != state:
+                        raise ValueError("restore_hold_unverified")
+            except (OSError, ValueError, TypeError, RecursionError):
+                _report("restore_hold_unverified", "rollback hold could not be saved or verified")
+                return 1
+            backup = applying.get("backup_path")
+            if not isinstance(backup, str) or not backup.strip():
+                _report("restore_backup_unverified", "schema rollback backup path is missing or invalid")
+                return 1
         if not applying and not stages:
             _remove_marker()                # orphan — writer is dead
             return 0
@@ -1902,9 +1948,8 @@ def _recover_legacy(if_stale=False):
             _report_alert("runtime_migration_pending", state,
                           "runtime_migration interrupted — recover with the target mcs_update",
                           "[MCS] 実行環境の移行中に更新が中断しました。復旧ツールは何も変更せず、"
-                          "常駐処理も止めたままにしています。移行先の版の更新ツール"
-                          "（mcs_update.py recover）で復旧してください",
-                          writers_stopped=True)
+                          "常駐処理の状態は未確認です。移行先の版の更新ツール"
+                          "（mcs_update.py recover）で復旧してください")
             return 1
         removed = _clean_stale_git_locks()
         prev = (applying or {}).get("prev_sha")
@@ -1953,6 +1998,11 @@ def _recover_legacy(if_stale=False):
             # write notify_outbox (it is in the loss report's digest —
             # a write voids the pending consent). Report + a direct
             # `hermes send` (bypasses the ledger) only; next pass retries.
+            if (applying or {}).get("restore_incomplete"):
+                # A hold is not evidence that writers have stopped.
+                # Keep the journal and marker without sending a notice.
+                _report("escalate", detail, alert_key=_alert_key(state, detail))
+                return 1
             if held():
                 _report_alert("restore_consent_blocked", state,
                               detail[:240]
@@ -1967,15 +2017,6 @@ def _recover_legacy(if_stale=False):
                     "result": "escalated", "detail": detail[:200],
                     "at": time.time()}
                 _save_state(state)
-            if (applying or {}).get("restore_incomplete"):
-                # = mcs_update: apply's schema rollback failed before the
-                # DB restore finished — keep drainers down and the marker
-                _report_alert("escalate", state, detail,
-                              "[MCS] 更新の中断復旧ができません"
-                              f"（要手動対応）: {_recovery_explanation(detail)} データベースの復元が"
-                              "未完了のため常駐処理は停止したままです",
-                              writers_stopped=True)
-                return 1
             dkey = _drainers_key(state, head)
             _report_alert("escalate", state, detail,
                           "[MCS] 更新の中断復旧ができません"
@@ -2067,10 +2108,68 @@ def _recover_legacy(if_stale=False):
                 if not clean:
                     return escalate("target tree could not be cleaned")
             if applying.get("rollback") and applying.get("backup_path"):
-                err = _restore_db(applying["backup_path"],
-                                  on_hold=lambda report: _record_hold(
-                                      state, report,
-                                      applying["backup_path"]))
+                # Older rollback journals did not record the restore hold.
+                # Seal it under both locks before touching the database so
+                # every failure and a process interruption remains held.
+                if applying.get("restore_incomplete") is not True:
+                    applying["restore_incomplete"] = True
+                    try:
+                        _save_state(state)
+                        if _load_state() != state:
+                            raise ValueError("restore_hold_unverified")
+                    except (OSError, ValueError, TypeError, RecursionError):
+                        _report("restore_hold_unverified",
+                                "rollback restore hold could not be saved or verified")
+                        return 1
+                identity_keys = ("sha", "prev_sha", "backup_path", "rollback", "command_id",
+                                 "schema_bump", "tag", "manifest_snapshot", "runtime_migration",
+                                 "target_kind", "release_ref")
+
+                def restore_identity(record):
+                    # Preserve missing/null and JSON types as well as values.
+                    return json.dumps([[key in record, record.get(key)] for key in identity_keys],
+                                      sort_keys=True, allow_nan=False, separators=(",", ":"))
+
+                try:
+                    identity = restore_identity(applying)
+                except (TypeError, ValueError, RecursionError):
+                    _report("restore_journal_unverified", "rollback identity is unverified")
+                    return 1
+
+                def fresh_restore_state():
+                    current = _load_state()
+                    record = current.get("applying")
+                    if (current.get("_corrupt") or not isinstance(record, dict)
+                            or record.get("restore_incomplete") is not True
+                            or restore_identity(record) != identity):
+                        raise ValueError("restore_journal_changed")
+                    return current, record
+
+                def record_restore_hold(report):
+                    nonlocal state, applying
+                    state, applying = fresh_restore_state()
+                    _record_hold(state, report, applying["backup_path"])
+
+                try:
+                    err = _restore_db(applying["backup_path"],
+                                      on_hold=record_restore_hold)
+                except Exception as error:
+                    _report("restore_incomplete",
+                            "rollback database restore failed: " + type(error).__name__)
+                    return 1
+                try:
+                    # Staging and reconciliation can update the journal.
+                    # Never overwrite their changes with the pre-restore copy.
+                    state, applying = fresh_restore_state()
+                except (OSError, ValueError, TypeError, RecursionError):
+                    _report("restore_journal_unverified", "rollback journal changed during restore")
+                    return 1
+                if "restore_staging" in applying:
+                    _report("restore_journal_unverified", "rollback restore staging remains unverified")
+                    return 1
+                if err is not None and (not isinstance(err, str) or not err):
+                    _report("restore_incomplete", "rollback database restore result unverified")
+                    return 1
                 if err and err.startswith("restore_consent_pending:"):
                     # held, not escalated: drainers stay stopped, both
                     # markers stay up, 'applying' stays — each watchdog
@@ -2079,13 +2178,12 @@ def _recover_legacy(if_stale=False):
                     _report("restore_consent_pending", err + " — " + RESTORE_LOSS_NOTICE)
                     return 0
                 if err == "restore_reconcile_pending":
-                    _report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation",
-                            writers_stopped=True)
+                    _report("restore_reconcile_pending", "restored DB awaits compatible notification reconciliation")
                     return 1
                 if err:
                     return escalate("rollback db restore: " + err)
-                # DB at the backup schema, marker left awaiting_consent:
-                # the hold is over — later failures escalate normally
+                # A verified compatible restored runner takes over notification
+                # reconciliation; restore_pending continues to deny delivery.
                 held_before = state.pop("restore_consent", None) is not None
                 if applying.pop("restore_incomplete", None) or held_before:
                     _save_state(state)

@@ -422,6 +422,37 @@ def _restore_hold_active() -> bool:
                 or (journal_store.load_state(STATE_PATH).get("applying") or {}).get("restore_incomplete"))
 
 
+def _freeze_schema_rollback(state: dict, entry: dict) -> bool:
+    """Persist a recovery hold before changing a schema rollback's tree."""
+    if not (entry.get("schema_bump") and entry.get("backup_path")):
+        return False
+    applying = state.get("applying")
+    if not isinstance(applying, dict) or not applying.get("rollback"):
+        raise UpdateError("rollback_journal_unverifiable")
+    applying["restore_incomplete"] = True
+    journal_store.save_state(STATE_PATH, state)
+    return True
+
+
+def _fresh_rollback_state(expected: dict) -> tuple[dict, dict]:
+    """Reload the same rollback after a restore callback changed its journal."""
+    state = journal_store.load_state(STATE_PATH)
+    current = state.get("applying")
+    keys = ("sha", "prev_sha", "backup_path", "rollback", "schema_bump", "tag", "command_id",
+            "manifest_snapshot", "runtime_migration", "target_kind", "release_ref")
+    try:
+        identity = lambda record: json.dumps(  # noqa: E731
+            [[key in record, record.get(key)] for key in keys],
+            sort_keys=True, allow_nan=False, separators=(",", ":"))
+        same = isinstance(current, dict) and identity(current) == identity(expected)
+    except (TypeError, ValueError, RecursionError):
+        same = False
+    if (state.get("_corrupt") or not same
+            or current.get("restore_incomplete") is not True):
+        raise UpdateError("rollback_journal_changed")
+    return state, current
+
+
 def _current_version() -> tuple[str | None, str]:
     """(nearest release tag, HEAD sha) of the checkout; Git failures become UpdateError."""
     try:
@@ -1136,6 +1167,35 @@ def _write_marker() -> None:
         f.flush()
         os.fsync(f.fileno())
     fsync_dir(DATA, require_dir=False)
+
+
+def _ensure_recovery_marker() -> None:
+    """Keep or create the launcher hold; it does not prove writers stopped."""
+    directory, name = os.path.split(MARKER_PATH)
+    dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        flags = os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+        try:
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | flags, 0o600, dir_fd=dfd)
+        except FileExistsError:
+            fd = os.open(name, os.O_RDONLY | flags, dir_fd=dfd)
+            try:
+                opened = os.fstat(fd)
+                current = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+                if (not stat.S_ISREG(opened.st_mode)
+                        or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)):
+                    raise OSError("update_marker_unverifiable")
+            finally:
+                os.close(fd)
+            return
+        with fdopen_owned(fd, "w") as f:
+            os.fchmod(f.fileno(), 0o600)
+            f.write(str(time.time()))
+            f.flush()
+            os.fsync(f.fileno())
+        os.fsync(dfd)
+    finally:
+        os.close(dfd)
 
 
 def _awaiting_consent_marker() -> dict | None:
@@ -2275,7 +2335,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
         delegated = False
 
         def bail(reason: str) -> int:
-            nonlocal rollback_failed, consent_hold
+            nonlocal rollback_failed, consent_hold, state
             transient = reason.split(":")[0] in _TRANSIENT_BAIL
             stages = [s.get("stage") for s in state.get("stages", [])]
             merged = "merge" in stages or "post_merge" in stages
@@ -2303,8 +2363,18 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 try:
                     # The post-merge child may have restarted writers before failing.
                     quiesce()
+                    schema_hold = bool(entry.get("schema_bump") and entry.get("backup_path"))
+                    if schema_hold:
+                        consent_hold = True
+                    _freeze_schema_rollback(state, entry)
+                    expected_rollback = dict(state["applying"])
                     _rollback_tree(entry, lambda report: _consent_hold(
-                        state, RestoreConsentPending(report), entry["backup_path"]))
+                        _fresh_rollback_state(expected_rollback)[0],
+                        RestoreConsentPending(report), entry["backup_path"]),
+                        **({"expected_rollback": expected_rollback} if schema_hold else {}))
+                    if schema_hold:
+                        state, _current = _fresh_rollback_state(expected_rollback)
+                    consent_hold = False
                     state.pop("restore_consent", None)
                     reason += " (rolled back)"
                 except RestoreConsentPending as e:
@@ -2314,6 +2384,11 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     # record the hold FIRST: a failing quiesce must never
                     # lose the consent record or let finally drop the marker
                     consent_hold = True
+                    try:
+                        state, _current = _fresh_rollback_state(expected_rollback)
+                    except UpdateError as err:
+                        _report("restore_consent_blocked", str(err))
+                        return 2
                     rc = _hold_rollback_for_consent(
                         state, e, tag, command_id, reason)
                     try:
@@ -2325,15 +2400,21 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                               f"{type(qe).__name__}: {qe}"[:200])
                     return rc
                 except Exception as e:
-                    if _restore_hold_active():
+                    if consent_hold or _restore_hold_active():
                         consent_hold = True
                         _report("restore_consent_blocked", str(e))
                         try:
-                            quiesce()
-                        except Exception as qe:
-                            _report("restore_consent_blocked",
-                                    f"{e}; quiesce failed: {type(qe).__name__}")
-                        return 2
+                            state, current = _fresh_rollback_state(state["applying"])
+                            if not current.get("restore_incomplete"):
+                                return 2
+                            reason += f" (rollback failed: {e} — escalate)"
+                            if command_id:
+                                _record_executed(state, command_id, "failed", reason)
+                            _record_attempt(state, tag, "failed", reason)
+                            journal_store.save_state(STATE_PATH, state)
+                        except Exception:
+                            return 2
+                        return 1
                     rollback_failed = True
                     reason += f" (rollback failed: {e} — escalate)"
                     if state["applying"].get("rollback"):
@@ -2643,11 +2724,14 @@ def _rollback_backup_error(entry: dict) -> str | None:
     old code must never be left running against the newer schema. (The
     apply bail path keeps reset-then-escalate: its backup is fresh and
     its journal must stay classifiable as a pending restore.)"""
-    if not (entry.get("schema_bump") and entry.get("backup_path")):
+    if not entry.get("schema_bump"):
         return None
-    if ledger.valid_mcs_db(entry["backup_path"]):
+    path = entry.get("backup_path")
+    if not isinstance(path, str) or not path.strip():
+        return "backup_invalid: missing or invalid backup path"
+    if ledger.valid_mcs_db(path):
         return None
-    return "backup_invalid: " + entry["backup_path"]
+    return "backup_invalid: " + path
 
 
 _CARD_LAYOUT_RE = re.compile(r"^CARD_LAYOUT\s*=\s*(\d+)", re.M)
@@ -2717,12 +2801,17 @@ def _rollback_layout_error(entry: dict) -> str | None:
             f"target layout {target} ({entry['prev_sha'][:12]})")
 
 
-def _rollback_tree(entry: dict, on_hold=None) -> None:
+def _rollback_tree(entry: dict, on_hold=None, *, expected_rollback=None) -> None:
     """Restore tracked files to prev_sha — shared by rollback() and the
     post-merge failure path. Caller holds both locks and drainers are
     already quiesced. Do not additionally delete untracked paths just
     because their names occur in the update diff; ownership is unproven."""
     prev = entry["prev_sha"]
+    backup_path = entry.get("backup_path")
+    if entry.get("schema_bump") and (not isinstance(backup_path, str) or not backup_path.strip()):
+        raise UpdateError("backup_invalid: missing or invalid backup path")
+    if expected_rollback is not None:
+        _fresh_rollback_state(expected_rollback)
     if mcs_util.load_config().get("runtime_mode") == "standalone" and not _standalone_target_supported(prev):
         raise UpdateError("standalone_runtime_missing_in_target")
     err = _rollback_layout_error(entry)
@@ -2738,7 +2827,12 @@ def _rollback_tree(entry: dict, on_hold=None) -> None:
     if _head_sha() != prev or not _tree_clean():
         raise UpdateError("rollback_verify_failed")
     if entry.get("schema_bump") and entry.get("backup_path"):
+        expected = expected_rollback
         _restore_db(entry["backup_path"], on_hold=on_hold)
+        if expected is not None:
+            _fresh_state, current = _fresh_rollback_state(expected)
+            if "restore_staging" in current:
+                raise UpdateError("rollback_restore_staging_unverified")
     _cancel_unsent_notices()
     problems = service_management.retire_to_snapshot(entry.get('manifest_snapshot') if 'manifest_snapshot' in entry else journal_store.load_state(STATE_PATH).get('manifest_snapshot'), cfg=mcs_util.load_config(), paths=_service_paths())
     _services_reconcile()
@@ -2858,24 +2952,38 @@ def rollback(command_id: str | None = None) -> int:
             journal(state, "rollback")
             quiesced = True
             quiesce()
+            schema_hold = bool(entry.get("schema_bump") and entry.get("backup_path"))
+            if schema_hold:
+                consent_hold = True
             rb_error = None
             try:
+                _freeze_schema_rollback(state, entry)
+                expected_rollback = dict(state["applying"])
                 _rollback_tree(entry, lambda report: _consent_hold(
-                    state, RestoreConsentPending(report), entry["backup_path"]))
+                    _fresh_rollback_state(expected_rollback)[0],
+                    RestoreConsentPending(report), entry["backup_path"]),
+                    **({"expected_rollback": expected_rollback} if schema_hold else {}))
+                if schema_hold:
+                    state, _current = _fresh_rollback_state(expected_rollback)
+                consent_hold = False
             except RestoreConsentPending as e:
                 # HOLD, don't unwind: drainers stay stopped, senders
                 # stay denied (awaiting_consent marker + update marker),
                 # the rollback receipt stays pending, and every later
                 # check/watchdog pass re-evaluates the same report until
                 # a bound ops.restore_approve receipt lands.
-                state = journal_store.load_state(STATE_PATH)
+                try:
+                    state, _current = _fresh_rollback_state(expected_rollback)
+                except UpdateError as err:
+                    _report("restore_consent_blocked", str(err))
+                    return 2
                 rid = _consent_hold(state, e, entry.get("backup_path"))
                 print("復元は承認待ちです。restore_report.jsonで影響を確認してください。確認番号:", rid)
                 print(restore_evidence.RESTORE_LOSS_NOTICE)
                 consent_hold = True
                 return 2
             except Exception as e:
-                if _restore_hold_active():
+                if consent_hold or _restore_hold_active():
                     consent_hold = True
                     _report("restore_consent_blocked", str(e))
                     return 2
@@ -2909,7 +3017,12 @@ def rollback(command_id: str | None = None) -> int:
             _enqueue_notice(f"[MCS] ロールバックしました: "
                             f"{entry.get('tag')} → {prev[:12]}")
             return 0
-        except UpdateError as e:
+        except Exception as e:
+            if consent_hold:
+                _report("restore_consent_blocked", str(e))
+                return 2
+            if not isinstance(e, UpdateError):
+                raise
             if quiesced:
                 # quiesce itself failed part-way (one drainer already
                 # stopped) — restart before reporting (H4)
@@ -3332,6 +3445,27 @@ def recover_interrupted(if_stale: bool = False) -> int:
             return 2
         applying = state.get("applying")
         stages = [s.get("stage") for s in state.get("stages", [])]
+        if if_stale and _journal_is_fresh(state, applying):
+            return 0                   # fresh journal — leave it alone
+        schema_rollback = (isinstance(applying, dict) and applying.get("rollback")
+                           and applying.get("schema_bump") is not False
+                           and (applying.get("schema_bump") is not None
+                                or applying.get("backup_path")))
+        if schema_rollback:
+            # Older journals can lack both the durable freeze and its launcher
+            # marker. Neither is proof that already-running writers stopped.
+            try:
+                _ensure_recovery_marker()
+                applying["restore_incomplete"] = True
+                journal_store.save_state(STATE_PATH, state)
+                state, applying = _fresh_rollback_state(applying)
+            except Exception as e:
+                _report("restore_consent_blocked", f"recovery hold unverified: {type(e).__name__}")
+                return 1
+            backup_path = applying.get("backup_path")
+            if not isinstance(backup_path, str) or not backup_path.strip():
+                _report("restore_consent_blocked", "rollback backup path is missing or invalid")
+                return 1
         if not applying and not stages:
             if _restore_writer_hold_marker() is not None:
                 _report("restore_reconcile_blocked",
@@ -3346,8 +3480,6 @@ def recover_interrupted(if_stale: bool = False) -> int:
         if not applying and not stages:
             _remove_marker()           # orphan marker — writer is dead
             return 0
-        if if_stale and _journal_is_fresh(state, applying):
-            return 0                   # fresh journal — leave it alone
         try:
             _check_runtime_restore(applying or {})
         except UpdateError as e:
@@ -3415,7 +3547,7 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 # marker kept, report only) — an outbox notice would write
                 # the newer-schema DB under the old code and join the later
                 # restore's loss report
-                _report("escalate", detail, alert_key=key, writers_stopped=True)
+                _report("escalate", detail, alert_key=key)
                 return 1
             notify, notified_at = _alert_due("escalate", key, time.time())
             dkey = _drainers_key(state, head)
@@ -3491,21 +3623,50 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 if not _tree_clean():
                     return escalate("target tree could not be cleaned")
             if applying.get("rollback") and applying.get("backup_path"):
+                # Old rollback journals may predate the durable freeze.
+                # Persist it before entering any DB restore operation.
+                applying["restore_incomplete"] = True
                 try:
-                    _restore_db(applying["backup_path"], lambda report: _consent_hold(
-                        state, RestoreConsentPending(report), applying["backup_path"]))
+                    journal_store.save_state(STATE_PATH, state)
+                except Exception as e:
+                    _report("restore_consent_blocked", f"restore journal: {type(e).__name__}")
+                    return 1
+                expected = dict(applying)
+
+                def record_restore_hold(report):
+                    current_state, current_applying = _fresh_rollback_state(expected)
+                    _consent_hold(current_state, RestoreConsentPending(report),
+                                  current_applying["backup_path"])
+
+                try:
+                    _restore_db(applying["backup_path"], record_restore_hold)
                 except RestoreConsentPending as e:
                     # held, not escalated: drainers stay stopped, both
                     # markers stay up, the receipt and 'applying' stay —
                     # each later recover pass re-checks the consent
                     # receipt against a fresh loss report.
+                    try:
+                        state, applying = _fresh_rollback_state(expected)
+                    except UpdateError as err:
+                        _report("restore_consent_blocked", str(err))
+                        return 1
                     _consent_hold(state, e, applying.get("backup_path"))
                     return 0
-                except UpdateError as e:
-                    if (isinstance(applying, dict)
-                            and (journal_store.load_state(STATE_PATH).get("applying") or {}).get("restore_incomplete")):
-                        applying["restore_incomplete"] = True
+                except Exception as e:
+                    try:
+                        state, applying = _fresh_rollback_state(expected)
+                    except UpdateError as err:
+                        _report("restore_consent_blocked", str(err))
+                        return 1
                     return escalate("rollback db restore: " + str(e))
+                try:
+                    state, applying = _fresh_rollback_state(expected)
+                except UpdateError as err:
+                    _report("restore_consent_blocked", str(err))
+                    return 1
+                if "restore_staging" in applying:
+                    _report("restore_consent_blocked", "rollback restore staging remains unverified")
+                    return 1
                 # the DB is at the backup schema and the marker left
                 # awaiting_consent: the hold is over — later failures
                 # escalate normally (drainers up on a consistent DB)
@@ -3599,11 +3760,31 @@ def _undo_interrupted_migration(state, applying, drainers, escalate) -> int:
         journal(state, "rollback")      # crash-visible before quiesce
     quiesce()
     try:
+        _freeze_schema_rollback(state, entry)
+        expected_rollback = dict(state["applying"])
         _rollback_tree(entry, lambda report: _consent_hold(
-            state, RestoreConsentPending(report), entry.get("backup_path")))
+            _fresh_rollback_state(expected_rollback)[0],
+            RestoreConsentPending(report), entry.get("backup_path")),
+            **({"expected_rollback": expected_rollback}
+               if entry.get("schema_bump") and entry.get("backup_path") else {}))
+        if entry.get("schema_bump") and entry.get("backup_path"):
+            state, _current = _fresh_rollback_state(expected_rollback)
     except RestoreConsentPending as e:
-        _consent_hold(journal_store.load_state(STATE_PATH), e, entry.get("backup_path"))
+        if entry.get("schema_bump") and entry.get("backup_path"):
+            try:
+                state, _current = _fresh_rollback_state(expected_rollback)
+            except UpdateError as err:
+                _report("restore_consent_blocked", str(err))
+                return 1
+        else:
+            state = journal_store.load_state(STATE_PATH)
+        _consent_hold(state, e, entry.get("backup_path"))
         return 0
+    except Exception as e:
+        if entry.get("schema_bump") and entry.get("backup_path"):
+            _report("restore_writer_state_unverified", str(e))
+            return 1
+        raise
     problems = drainers(_drainers_key(state, _head_sha()))
     if problems:
         return escalate("runtime migration rollback: " + ",".join(problems))
