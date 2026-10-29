@@ -1071,6 +1071,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         findings = []
         status = "PENDING"
         for _attempt in range(2):      # initial + at most one repair
+            if not isinstance(summary.get("claims"), list):
+                _why(diagnostics, "audit_claims_invalid")
+                hard_fail = incomplete = True
+                break
             code_f = (audit_code(bundle, facts, summary) + coverage_by_target.get(mid, [])
                       + detail_findings.get(mid, []))
             try:
@@ -1093,13 +1097,20 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         "jev_requests": (jev_client.requests_made - req0)
                         if jev_client else 0}
                 break
-            if not evaluated and jev_client is not None:
-                flag = _jev_fail_flag(getattr(jev_client, "last_error",
-                                              None))
-                _why(diagnostics, f"audit_jev_{flag}")
-                resource_wait |= flag == "resource"
-                retryable_failure |= flag == "retryable"
-                hard_fail |= flag == "hard"
+            if not evaluated:
+                reason = summary.pop("_claim_audit_reason", None)
+                if reason in ("claims_empty", "claims_invalid", "client_unavailable", "options_invalid", "response_invalid"):
+                    _why(diagnostics, f"audit_{reason}")
+                    # A saved empty/invalid claim list is reused unchanged on each retry.
+                    hard_fail |= reason in ("claims_empty", "claims_invalid")
+                    resource_wait |= reason == "client_unavailable"
+                    retryable_failure |= reason == "response_invalid"
+                else:
+                    flag = _jev_fail_flag(getattr(jev_client, "last_error", None))
+                    _why(diagnostics, f"audit_jev_{flag}" if flag else "audit_unevaluated")
+                    resource_wait |= flag == "resource"
+                    retryable_failure |= flag == "retryable"
+                    hard_fail |= flag == "hard"
             findings = code_f + jev_f
             status = audit_status_for(code_f, jev_f, evaluated,
                                       repaired)
