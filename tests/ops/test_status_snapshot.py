@@ -35,8 +35,7 @@ def _root(tmp_path, health=HEALTH):
     (tmp_path / "health.json").write_text(json.dumps(health))
     workers = tmp_path / "worker_status"
     workers.mkdir()
-    for i, reason in enumerate(["worker_started", "profile_mismatch", "profile_mismatch",
-                                "合成の自由文"]):
+    for i, reason in enumerate(["worker_started", "profile_mismatch", "profile_mismatch"]):
         (workers / f"slack-{i}.json").write_text(json.dumps({"reason": reason}))
     return tmp_path
 
@@ -94,6 +93,7 @@ def test_cli_writes_an_owner_only_file(tmp_path, monkeypatch):
 
 
 def test_host_status_reads_only_numbers_and_codes(tmp_path, monkeypatch):
+    monkeypatch.setattr(status_snapshot.mcs_util, "load_config", lambda: {})
     replies = {
         ("/usr/sbin/sysctl", "-n", "kern.boottime"): "{ sec = 100, usec = 0 } Thu",
         ("/usr/sbin/sysctl", "-n", "vm.swapusage"): "total = 2048.00M  used = 512.50M  free = 1.0M",
@@ -125,12 +125,107 @@ def test_host_status_reads_only_numbers_and_codes(tmp_path, monkeypatch):
 
 
 def test_host_status_marks_unreachable_llm_and_unknown_values(tmp_path, monkeypatch):
+    monkeypatch.setattr(status_snapshot.mcs_util, "load_config", lambda: {})
     monkeypatch.setattr(status_snapshot, "_run", lambda argv: None)
     monkeypatch.setattr(status_snapshot, "_llm_get", lambda path, **kwargs: None)
     host = status_snapshot.host_status(str(tmp_path))
-    assert host["llm"] == {"health": "down", "slots_total": None, "slots_busy": None}
+    assert host["llm"] == {"health": None, "slots_total": None, "slots_busy": None}
     assert host["memory"]["free_pct"] is None and host["uptime_s"] is None
-    assert host["network"] == {"default_route": False, "interface": None}
+    assert host["network"] == {"default_route": None, "interface": None}
+    assert host["jobs"] is None
+
+
+def test_empty_worker_directory_is_observed_zero(tmp_path):
+    (tmp_path / "worker_status").mkdir()
+    result = status_snapshot.snapshot(str(tmp_path), SPEC)
+    assert result["fields"]["card_workers"] == {}
+    assert "card_workers" not in result["unavailable"]
+
+
+@pytest.mark.parametrize("bad", ["{", "[]", "{}", '{"reason":"合成の自由文"}',
+                                  '{"reason":null}'])
+def test_incomplete_worker_record_is_unknown_without_leaking_content(tmp_path, bad):
+    workers = tmp_path / "worker_status"
+    workers.mkdir()
+    (workers / "ok.json").write_text('{"reason":"worker_started"}')
+    (workers / "bad.json").write_text(bad)
+    result = status_snapshot.snapshot(str(tmp_path), SPEC)
+    assert "card_workers" not in result["fields"]
+    assert "card_workers" in result["unavailable"]
+    assert "合成の自由文" not in json.dumps(result, ensure_ascii=False)
+
+
+def test_worker_directory_over_limit_is_unknown(tmp_path):
+    workers = tmp_path / "worker_status"
+    workers.mkdir()
+    for index in range(status_snapshot.MAX_DIR_FILES + 1):
+        (workers / f"worker-{index}.json").write_text('{"reason":"worker_started"}')
+    result = status_snapshot.snapshot(str(tmp_path), SPEC)
+    assert "card_workers" not in result["fields"]
+    assert "card_workers" in result["unavailable"]
+    (workers / f"worker-{status_snapshot.MAX_DIR_FILES}.json").unlink()
+    result = status_snapshot.snapshot(str(tmp_path), SPEC)
+    assert result["fields"]["card_workers"] == {"worker_started": status_snapshot.MAX_DIR_FILES}
+
+
+def test_unreadable_worker_directory_or_symlinked_record_is_unknown(tmp_path, monkeypatch):
+    workers = tmp_path / "worker_status"
+    workers.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text('{"reason":"worker_started"}')
+    (workers / "link.json").symlink_to(outside)
+    result = status_snapshot.snapshot(str(tmp_path), SPEC)
+    assert "card_workers" in result["unavailable"]
+    monkeypatch.setattr(status_snapshot.os, "scandir", lambda path: (_ for _ in ()).throw(PermissionError()))
+    result = status_snapshot.snapshot(str(tmp_path), SPEC)
+    assert "card_workers" in result["unavailable"]
+
+
+def test_host_failures_are_unavailable_while_valid_empty_observations_are_zero(tmp_path, monkeypatch):
+    monkeypatch.setattr(status_snapshot.mcs_util, "load_config", lambda: {})
+    spec = status_snapshot.load_fields()
+    names = {"jobs_running", "jobs_nonzero_exit", "net_default_route", "llm_health",
+             "llm_slots_total", "llm_slots_busy"}
+    spec["fields"] = [field for field in spec["fields"] if field["name"] in names]
+    monkeypatch.setattr(status_snapshot, "_run", lambda argv: None)
+    monkeypatch.setattr(status_snapshot, "_llm_get", lambda *args, **kwargs: None)
+    missing = status_snapshot.snapshot(str(tmp_path), spec)
+    assert set(missing["unavailable"]) == names
+    assert not missing["fields"]
+
+    def run(argv):
+        if argv == ["/bin/launchctl", "list"]:
+            return "PID\tStatus\tLabel\n"
+        if argv == ["/sbin/route", "-n", "get", "default"]:
+            return "interface: en9\n"
+        return None
+
+    monkeypatch.setattr(status_snapshot, "_run", run)
+    monkeypatch.setattr(status_snapshot, "_llm_get", lambda path, **kwargs:
+                        {"status": "ok"} if path == "/health" else [])
+    observed = status_snapshot.snapshot(str(tmp_path), spec)
+    assert observed["fields"] == {"jobs_running": 0, "jobs_nonzero_exit": [],
+                                  "net_default_route": True, "llm_health": "ok",
+                                  "llm_slots_total": 0, "llm_slots_busy": 0}
+    assert observed["unavailable"] == []
+
+
+@pytest.mark.parametrize("slots,total", [([None], None), ([{}], 1),
+                                          ([{"is_processing": "false"}], 1)])
+def test_invalid_slots_never_understate_busy_count(tmp_path, monkeypatch, slots, total):
+    monkeypatch.setattr(status_snapshot.mcs_util, "load_config", lambda: {})
+    monkeypatch.setattr(status_snapshot, "_run", lambda argv: None)
+    monkeypatch.setattr(status_snapshot, "_llm_get", lambda path, **kwargs:
+                        {"status": "ok"} if path == "/health" else slots)
+    llm = status_snapshot.host_status(str(tmp_path))["llm"]
+    assert llm["slots_total"] == total and llm["slots_busy"] is None
+
+
+@pytest.mark.parametrize("output", ["", "broken", "PID\tStatus\tLabel\nbroken\n",
+                                    "PID\tStatus\tLabel\n?\t0\tai.mcs.extract\n"])
+def test_invalid_job_list_is_unknown(monkeypatch, output):
+    monkeypatch.setattr(status_snapshot, "_run", lambda argv: output)
+    assert status_snapshot._jobs() is None
 
 
 def test_host_probes_the_configured_llm_port(tmp_path, monkeypatch):
@@ -164,6 +259,20 @@ def test_llm_probe_refuses_unsafe_configuration_before_io(monkeypatch, endpoint)
     monkeypatch.setattr(status_snapshot.urllib.request, "build_opener",
                         lambda *args: pytest.fail("unsafe endpoint reached HTTP"))
     assert status_snapshot._llm_get("/health", endpoint=endpoint) is None
+
+
+def test_oversized_llm_response_is_not_a_valid_truncated_observation(monkeypatch):
+    import io
+    from types import SimpleNamespace
+
+    def open_url(url, *, timeout):
+        response = io.BytesIO(b'{"status":"ok"}' + b" " * 65536)
+        response.status = 200
+        return response
+
+    monkeypatch.setattr(status_snapshot.urllib.request, "build_opener",
+                        lambda *args: SimpleNamespace(open=open_url))
+    assert status_snapshot._llm_get("/health", endpoint="http://127.0.0.1:18080/") is None
 
 
 @pytest.mark.parametrize("overshoot", [0, 1.125])
