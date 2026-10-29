@@ -314,23 +314,27 @@ def test_validated_backup_without_marker_rearms_the_fast_path(tmp_path, monkeypa
 
 # ---------- M1: child and LINE WORKS logs rotate ----------
 
-def test_rotate_log_discovers_child_logs_and_skips_symlinks(tmp_path, monkeypatch):
+def test_default_rotation_keeps_child_logs_and_skips_shared_links(tmp_path, monkeypatch):
+    import run_log
     home = tmp_path / "mcs"
     data = home / "data"
     (data / "lineworks_state").mkdir(parents=True)
     monkeypatch.setattr(maintenance, "HOME", str(home))
-    monkeypatch.setattr(maintenance, "LOGFILE", str(data / "run.log"))
     monkeypatch.setattr(maintenance, "LOG_MAX", 3)
     child = data / "extract-0.log"
     service = data / "lineworks_state" / "service.stderr.log"
     outside = tmp_path / "outside.log"
-    for f in (child, service, outside):
-        f.write_text("synthetic log line\n")
+    for path in (child, service, outside):
+        path.write_bytes(b"synthetic old writer output\n")
     (data / "linked.log").symlink_to(outside)
-    maintenance.rotate_log()
-    assert child.read_text() == "" and (data / "extract-0.log.1").exists()
-    assert service.read_text() == ""
-    assert outside.read_text() == "synthetic log line\n"   # never followed
+    run_log.append(data, b"canonical output\n")
+    run_log.enable_rotation(data, legacy_writers_closed=True)
+    result = maintenance.rotate_log()
+    assert result["rotated"]
+    assert (data / result["archive"]).read_bytes() == b"canonical output\n"
+    assert (data / run_log.LOG).read_bytes() == b""
+    assert child.read_bytes() == service.read_bytes() == outside.read_bytes() == b"synthetic old writer output\n"
+    assert not (data / "extract-0.log.1").exists()
     assert not (data / "linked.log.1").exists()
 
 

@@ -28,7 +28,7 @@ from llm_availability import disk_floor_mb
 
 BACKUP_DIR = os.path.join(HOME, "data", "backups")
 SNAPSHOT_DIR = os.path.join(HOME, "data", "snapshots")
-LOGFILE = os.path.join(HOME, "data", "run.log")
+LOGFILE = os.path.join(HOME, "data", "mcs.log")
 BACKUP_KEEP = 7
 BACKUP_OVERDUE_S = 2 * 86400
 LOG_MAX = 5 * 1024 * 1024
@@ -427,7 +427,9 @@ def prune_preupdate_backups(state_path: str | None = None) -> int:
 
 
 def rotate_log(paths=None):
-    """Keep the run/drain logs bounded: >5MB -> <name>.1 (single
+    """Rotate only the shared MCS runtime log during ordinary maintenance.
+
+    Explicit old-utility paths retain the former >5MB -> <name>.1 contract:
     generation). The drainer logs are held open by resident launchd
     writers, so rename-rotation would strand them on the old inode —
     copy the content aside then truncate the live file in place
@@ -436,8 +438,18 @@ def rotate_log(paths=None):
     logs still rotate, then MaintenanceError reports the refusal. The live
     log itself is opened no-follow and only when lstat shows a regular
     file. Idempotent and cheap (one lstat per log), so it runs every tick."""
+    if paths is None:
+        import run_log
+        try:
+            return run_log.rotate(os.path.join(HOME, "data"), max_bytes=LOG_MAX)
+        except FileNotFoundError:
+            return None
+        except (OSError, run_log.RunLogError):
+            raise MaintenanceError("run_log_rotation_failed") from None
+    # Explicit-path compatibility is retained for callers of the old utility;
+    # production maintenance never discovers or truncates legacy/shared logs.
     refused = []
-    for path in paths or _default_logs():
+    for path in paths:
         try:
             st = os.lstat(path)
             # a symlinked or special live log is never read or truncated
@@ -476,46 +488,13 @@ def _plain_file(path: str) -> bool:
 
 
 def _default_logs() -> list:
-    """The fixed log targets, then every other data/*.log — standalone
-    child logs data/<job>.log (extract-0, extract-2, cmd, lineworks,
-    mcs_* ...) — and the LINE WORKS service stdout/stderr (M1).
-    Discovered files are taken only as plain files: a symlink found by
-    the glob is never followed."""
-    data = os.path.join(HOME, "data")
-    paths = list(_fixed_logs())
-    seen = set(paths)
-    found = sorted(glob.glob(os.path.join(glob.escape(data), "*.log")))
-    found += [os.path.join(data, "lineworks_state", name)
-              for name in ("service.stdout.log", "service.stderr.log")]
-    for path in found:
-        if path not in seen and _plain_file(path):
-            seen.add(path)
-            paths.append(path)
-    return paths
+    """The canonical log only; legacy sources belong to verified update migration."""
+    return list(_fixed_logs())
 
 
 def _fixed_logs() -> tuple:
     """Known log targets; evaluated per call (HOME may be patched)."""
-    data = os.path.join(HOME, "data")
-    return (LOGFILE,
-            os.path.join(data, "extract_drain.log"),
-            os.path.join(data, "extract_drain_2.log"),
-            os.path.join(data, "cloud_backlog.log"),
-            os.path.join(data, "extract_llm.log"),
-            os.path.join(data, "semantic_drain.log"),
-            # runtime_mode=standalone connector / launchd jobs
-            os.path.join(data, "standalone.log"),
-            os.path.join(data, "cron.log"),
-            os.path.join(data, "llamacpp-restart.log"),
-            # mcs_update.sh / org.mcs.recovery / local.mcs-int
-            os.path.join(data, "update.log"),
-            os.path.join(data, "recovery.log"),
-            os.path.join(data, "cmd_int.log"),
-            # ai.mcs.llamaserver plist (__HERMES_HOME__/logs):
-            # Hermes mode ~/.hermes, standalone ~/.mcs
-            os.path.join(os.path.expanduser("~/.hermes"),
-                         "logs", "llamacpp.log"),
-            os.path.join(HOME, "logs", "llamacpp.log"))
+    return (os.path.join(HOME, "data", "mcs.log"),)
 
 
 def prune_attachments(db_path: str) -> int:
