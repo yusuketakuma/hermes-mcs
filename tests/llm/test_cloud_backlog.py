@@ -1,5 +1,6 @@
 """Synthetic cross-process capacity and owned cloud-worker lifecycle checks."""
 import os
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -131,7 +132,8 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
         second.close()
 
 
-def test_worker_alternates_cloud_only_units_without_local_calls(tmp_path, monkeypatch):
+@pytest.mark.parametrize('budget', [True, False, None, 'synthetic'])
+def test_worker_alternates_cloud_only_units_without_local_calls(tmp_path, monkeypatch, capsys, budget):
     import extract_llm
     import ledger
     import mcs_util
@@ -155,18 +157,22 @@ def test_worker_alternates_cloud_only_units_without_local_calls(tmp_path, monkey
     def extract(*a, **kw):
         assert kw["cloud_only"] and kw["background"] and kw["prioritize_patients"]
         seen.append("extract")
-        return {"done": 1}
+        return {"done": 1, "budget_exhausted": True}
 
     def semantic(*a, **kw):
         assert kw["cloud_only"] and kw["lane"] == "backlog"
         seen.append("semantic")
-        return {"done": 1}
+        return {"done": 1, "budget_exhausted": budget}
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
     monkeypatch.setattr(semantic_drain, "run_due", semantic)
     monkeypatch.setattr(backlog, "_parent", None)
     backlog.worker(parent)
     assert seen == ["extract", "semantic"]
+    passes = [json.loads(line) for line in capsys.readouterr().out.splitlines()
+              if json.loads(line).get('event') == 'cloud_backlog_pass']
+    assert 'reason' not in passes[0]
+    assert passes[1].get('reason') == ('backlog_budget_reserved' if budget is True else None)
 
 
 def test_worker_never_opens_database_without_startup_lock(monkeypatch):
