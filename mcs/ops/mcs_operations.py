@@ -153,6 +153,9 @@ def _apply_retry_tx(db, req: dict, now: float, cfg=None) -> tuple[str | None, di
         return "payload_changed", {"job_id": row["job_id"]}
     if "diagnosis_hash" in req:
         from job_diagnostics import diagnose_job
+        from mcs_config import validate_config
+        if not isinstance(cfg, dict) or validate_config(cfg)[0]:
+            return "config_invalid", {"job_id": row["job_id"]}
         report = diagnose_job(db, cfg, req["job_id"], now=now)
         if report["diagnosis_hash"] != req["diagnosis_hash"]:
             return "diagnosis_changed", {"job_id": row["job_id"]}
