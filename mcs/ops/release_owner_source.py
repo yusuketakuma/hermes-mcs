@@ -207,6 +207,25 @@ def build_manifest(repository, *, deadline):
         raise SourceError() from None
 
 
+def _check_ignored_imports(repository, manifest, deadline):
+    # Match _mcs_path's import-root discovery without importing candidate code.
+    def visible(path):
+        parts = path.split('/')
+        return (parts[0] == 'mcs' and len(parts) > 1
+                and all(not part.startswith(('.', '_')) for part in parts[1:-1])
+                and parts[1:3] not in (['extract', 'v2'], ['extract', 'v3']))
+
+    ignored = [path for path in _git(repository,
+        ['ls-files', '--others', '--ignored', '--exclude-standard', '-z'], deadline).split('\0') if path]
+    python_paths = [row['path'] for row in manifest['files'] if row['path'].endswith('.py')]
+    python_paths.extend(path for path in ignored if path.endswith('.py'))
+    roots = {'mcs'} | {path.rsplit('/', 1)[0] for path in python_paths if visible(path)}
+    for path in ignored:
+        budget(deadline)
+        if visible(path) and path.endswith(('.py', '.pyc')):
+            check(path.rsplit('/', 1)[0] not in roots)
+
+
 def verify_checkout(repository, manifest, *, deadline, current=False):
     """Check bytes and declarations; qualification additionally needs independent root or Core proof."""
     try:
@@ -221,6 +240,7 @@ def verify_checkout(repository, manifest, *, deadline, current=False):
             check(tuple(value['provider_profile']) == PROVIDER_PROFILE)
         check(not _git(repository, ['status', '--porcelain', '--untracked-files=no'], deadline).strip())
         check(not any(source_path(p) for p in _git(repository, ['ls-files', '--others', '--exclude-standard', '-z'], deadline).split('\0') if p))
+        _check_ignored_imports(repository, value, deadline)
         return dict(manifest=value, sha256=digest(value), provider_profile=tuple(value['provider_profile']))
     except SourceError:
         raise

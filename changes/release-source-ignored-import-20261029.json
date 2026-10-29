@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "Gitの管理対象外にあるPythonコードの見落としを修正",
+  "summary": "更新用ソースの確認時に、Gitの無視対象でもMCSが読み込めるPythonコードがあれば停止します。通常の実行環境や私有データの保存先は引き続き使用できます。",
+  "upgrade": "この確認で停止した場合は、MCS内部の読み込み対象に管理外のPythonコードがないか確認してください。既存の承認や保留は維持され、ソースの再認定は自動では行いません。",
+  "details": [
+    "MCSの起動処理が選ぶディレクトリにある無視対象のPythonコードを確認する。",
+    "リポジトリ直下のvenvとdata、起動処理が除外するディレクトリは拒否しない。"
+  ],
+  "refs": ["mcs/ops/release_owner_source.py", "tests/ops/test_release_source_ignored_import.py"]
+}
