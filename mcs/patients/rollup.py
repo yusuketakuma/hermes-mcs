@@ -1646,9 +1646,10 @@ class RollupScan:
     incomplete: bool
     unknown_reasons: tuple[tuple[str, int], ...] = ()
     rechecked: int = 0
+    next_project_id: int | None = None
 
 
-def scan_dirty_projects(ledger, *, now=None, cfg=None, deadline=None) -> RollupScan:
+def scan_dirty_projects(ledger, *, now=None, cfg=None, deadline=None, start_id=None) -> RollupScan:
     """Check markers at read snapshots, rechecking clean candidates once on external writes.
 
     Clean is valid at the observed snapshot, not after its release. Rebuild's
@@ -1658,10 +1659,14 @@ def scan_dirty_projects(ledger, *, now=None, cfg=None, deadline=None) -> RollupS
     version = db.execute("PRAGMA data_version").fetchone()[0]
     changes = db.total_changes
     ids = _rollup_patient_ids(db)
+    if ids and type(start_id) is int:
+        offset = next((i for i, pid in enumerate(ids) if pid >= start_id), 0)
+        ids = ids[offset:] + ids[:offset]
     initial = set(ids)
     dirty, unknown = set(), set()
     reasons = {}
     rechecked = 0
+    next_project_id = None
 
     def hold(project_ids, reason):
         for pid in project_ids:
@@ -1686,19 +1691,23 @@ def scan_dirty_projects(ledger, *, now=None, cfg=None, deadline=None) -> RollupS
         counts = tuple((reason, sum(reasons.get(pid) == reason for pid in unknown))
                        for reason in sorted(set(reasons.values())))
         return RollupScan(tuple(pid for pid in candidates if pid in dirty),
-                          tuple(pid for pid in candidates if pid in unknown), bool(unknown), counts, rechecked)
+                          tuple(pid for pid in candidates if pid in unknown), bool(unknown), counts, rechecked,
+                          next_project_id)
 
     observed_now = time.time() if now is None else now
     checked = set()
     try:
-        for project_id in ids:
+        for index, project_id in enumerate(ids):
             _check_deadline(deadline)
+            next_project_id = ids[(index + 1) % len(ids)]
             check(project_id, observed_now)
             _check_deadline(deadline)
             checked.add(project_id)
     except RollupDeadlineExceeded:
         hold(set(ids) - checked, "deadline")
         return result(ids)
+    if ids:
+        next_project_id = ids[1 % len(ids)]
     if db.total_changes != changes:
         candidates = list(dict.fromkeys([*ids, *_rollup_patient_ids(db)]))
         hold(set(candidates) - dirty, "same_connection_changed")
@@ -1733,6 +1742,46 @@ def scan_dirty_projects(ledger, *, now=None, cfg=None, deadline=None) -> RollupS
     if db.total_changes != changes:
         hold(set(candidates) - dirty, "same_connection_changed")
     return result(candidates)
+
+
+def scan_fair_dirty_projects(ledger, *, now=None, cfg=None, deadline=None, commit_deadline=None):
+    import collection_stages
+    db = ledger.db
+    if db.in_transaction:
+        raise RuntimeError("rollup_cursor_requires_closed_transaction")
+    row = db.execute(
+        "SELECT content FROM artifacts WHERE kind=? AND json_valid(content) "
+        "AND json_valid(meta) AND json_extract(meta,'$.stage')=? "
+        "ORDER BY artifact_id DESC LIMIT 1", (collection_stages.WALK_CURSOR_KIND, "rollup")).fetchone()
+    start_id = (loads_dict(row[0]) or {}).get("next") if row else None
+    scan = scan_dirty_projects(ledger, now=now, cfg=cfg, deadline=deadline, start_id=start_id)
+    if scan.next_project_id is None:
+        return scan
+    content = json.dumps({"next": scan.next_project_id})
+    previous_wait = None
+    try:
+        _check_deadline(commit_deadline)
+        if commit_deadline is not None:
+            previous_wait = db.execute("PRAGMA busy_timeout").fetchone()[0]
+            wait_ms = min(previous_wait, max(0, int((commit_deadline - time.monotonic()) * 1000)))
+            db.execute(f"PRAGMA busy_timeout={wait_ms}")
+        with db:
+            row = db.execute(
+                "SELECT artifact_id,content FROM artifacts WHERE kind=? AND json_valid(meta) "
+                "AND json_extract(meta,'$.stage')=? ORDER BY artifact_id DESC LIMIT 1",
+                (collection_stages.WALK_CURSOR_KIND, "rollup")).fetchone()
+            if row and row[1] != content:
+                db.execute("UPDATE artifacts SET content=?, created_at=? WHERE artifact_id=?",
+                           (content, time.time(), row[0]))
+            elif row is None:
+                ledger.artifact_add_tx(collection_stages.WALK_CURSOR_KIND, content, meta={"stage": "rollup"})
+            _check_deadline(commit_deadline)
+    except RollupDeadlineExceeded:
+        pass
+    finally:
+        if previous_wait is not None:
+            db.execute(f"PRAGMA busy_timeout={previous_wait}")
+    return scan
 
 
 def _config_current(db, project_id, cfg):

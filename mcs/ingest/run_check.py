@@ -287,9 +287,12 @@ def stage_derive(ledger, result, deadline, cfg=None,
         touched |= set(result.get("drug_map", {}).get("pids", []))
         for k in ("cmd_imports", "trickle_imports"):
             touched |= {c["pid"] for c in result.get(k, [])}
-        scan = rollup.scan_dirty_projects(ledger, cfg=cfg, deadline=work_deadline)
-        touched |= set(scan.dirty)
+        scan_start = time.monotonic()
+        scan_deadline = min(work_deadline, scan_start + max(0, work_deadline - scan_start) / 2)
+        scan = rollup.scan_fair_dirty_projects(ledger, cfg=cfg, deadline=scan_deadline,
+                                               commit_deadline=work_deadline)
         touched.difference_update(scan.unknown)
+        rebuild_ids = list(dict.fromkeys([*scan.dirty, *sorted(touched)]))
         result["rollup_scan"] = {"state": "unknown" if scan.incomplete else "checked",
                                  "unknown_observed": len(scan.unknown),
                                  "unknown_reasons": dict(scan.unknown_reasons),
@@ -299,7 +302,7 @@ def stage_derive(ledger, result, deadline, cfg=None,
         source_changed = []
         source_unknown = []
         result["rollups"] = rollup.rebuild_many(
-            ledger, touched, deadline=work_deadline, source_changed=source_changed,
+            ledger, rebuild_ids, deadline=work_deadline, source_changed=source_changed,
             source_unknown=source_unknown, cfg=cfg)
         if source_changed:
             result["rollup_source_changed"] = len(source_changed)
