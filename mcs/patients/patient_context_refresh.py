@@ -2869,14 +2869,65 @@ def _scan(cfg, source, saved, night_id, deadline, admit, *, provider=None, metri
             **({"repairs": repairs} if repairs else {})}
 
 
+def _raw_extraction_current(db, row, cfg):
+    """Check the stored post extraction against its source and actual backend."""
+    import extract_llm
+    candidate = dict(row)
+    pid = candidate["project_id"]
+    model = extract_llm.resolved_model(cfg)
+    latest = db.execute("SELECT meta FROM artifacts WHERE kind=? AND message_id=? "
+                        "AND (project_id IS NULL OR project_id=?) AND "
+                        + current_meta_pred("meta")
+                        + " AND COALESCE(json_extract(CASE WHEN json_valid(meta) THEN meta END,"
+                          "'$.invalidated'),0)=0 ORDER BY artifact_id DESC LIMIT 1",
+                        (extract_llm.KIND, candidate["message_id"], pid)).fetchone()
+    meta = loads_dict(latest[0]) if latest else None
+    cloud = _saved_cloud_contract(meta)
+    if cloud is not None:
+        candidate["_provider_contract"] = cloud
+        model = cloud["model"]
+    return extract_llm.progress_for_message(db, candidate, model=model)["state"] == "complete", meta
+
+
+def _extraction_qc_ready(db, pid, policy, *, deadline=None, message_id=None):
+    """Check pending and current extraction QC using the shared source proof."""
+    import extract_llm
+    import semantic_policy
+    import semantic_qc
+    from mcs_queries import current_qc_pred, qc_source_id
+
+    scope, params = semantic_qc.qc_scope_sql(time.time())
+    target_sql = ' AND m.message_id=?' if message_id is not None else ''
+    target_params = (message_id,) if message_id is not None else ()
+    version = extract_llm.EXTRACT_VERSION
+    if db.execute(f"""SELECT 1 FROM fetch_jobs j JOIN messages m
+        ON m.message_id=j.message_id AND m.project_id=j.project_id
+        WHERE j.project_id=? AND j.kind=? AND j.state!='done' AND {scope}{target_sql}
+        LIMIT 1""", (pid, semantic_policy.QC_JOB_KIND, *params, *target_params)).fetchone():
+        return False
+    missing_qc = db.execute(f"""SELECT m.message_id,m.content_hash,a.artifact_id FROM messages m JOIN artifacts a
+        ON a.artifact_id={qc_source_id(version=version)}
+        WHERE m.project_id=? AND {scope}{target_sql}
+          AND CASE WHEN json_valid(a.meta) AND json_type(a.meta)='object'
+              THEN json_extract(a.meta,'$.prefilter') IS NULL END
+          AND NOT EXISTS (SELECT 1 FROM artifacts q WHERE q.kind=?
+              AND q.message_id=m.message_id {current_qc_pred('q', version=version)})
+        """, (pid, *params, *target_params, semantic_policy.QC_ARTIFACT))
+    for missing in missing_qc:
+        if (deadline is not None and time.monotonic() + COMMIT_MARGIN >= deadline
+                or not semantic_qc.skipped_current(db, pid, missing['message_id'], missing['artifact_id'],
+                                                   missing['content_hash'], version, policy)):
+            return False
+    return True
+
+
 def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_dependency_repair=False):
     """Require current post-level evidence before any context lane runs."""
     import extract_llm
     import semantic_drain
     import semantic_intake_hold
     import semantic_policy
-    import semantic_qc
-    from mcs_queries import current_qc_pred, paused, qc_source_id
+    from mcs_queries import paused
 
     db = ledger.db
     owns_read = not db.in_transaction
@@ -2912,47 +2963,16 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
             if semantic_intake_hold.has_held_root(db, pid, root):
                 return False
             if policy["mode"] == "off":
-                candidate = dict(row)
-                model = extract_llm.resolved_model(cfg)
-                latest = db.execute("SELECT meta FROM artifacts WHERE kind=? AND message_id=? "
-                                    "AND (project_id IS NULL OR project_id=?) AND "
-                                    + current_meta_pred("meta")
-                                    + " AND COALESCE(json_extract(CASE WHEN json_valid(meta) THEN meta END,"
-                                      "'$.invalidated'),0)=0 ORDER BY artifact_id DESC LIMIT 1",
-                                    (extract_llm.KIND, row["message_id"], pid)).fetchone()
-                meta = loads_dict(latest[0]) if latest else None
-                cloud = _saved_cloud_contract(meta)
-                if cloud is not None:
-                    candidate["_provider_contract"] = cloud
-                    model = cloud["model"]
-                if extract_llm.progress_for_message(db, candidate, model=model)["state"] != "complete":
+                if not _raw_extraction_current(db, row, cfg)[0]:
                     return False
             elif (db.execute("SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? "
                              "AND message_id=? AND state!='done' LIMIT 1",
                              (semantic_policy.JOB_KIND, pid, root)).fetchone()
-                  or semantic_drain._reprocess_target_state(ledger, row, policy) not in ("current", "current_skipped")):
+                  or semantic_drain._reprocess_target_state(ledger, row, policy, cfg=cfg) not in ("current", "current_skipped")):
                 return False
-        if policy["mode"] != "off" and policy["extract_qc"] == "annotate":
-            scope, params = semantic_qc.qc_scope_sql(time.time())
-            version = extract_llm.EXTRACT_VERSION
-            if db.execute(f"""SELECT 1 FROM fetch_jobs j JOIN messages m
-                ON m.message_id=j.message_id AND m.project_id=j.project_id
-                WHERE j.project_id=? AND j.kind=? AND j.state!='done' AND {scope}
-                LIMIT 1""", (pid, semantic_policy.QC_JOB_KIND, *params)).fetchone():
-                return False
-            missing_qc = db.execute(f"""SELECT m.message_id,m.content_hash,a.artifact_id FROM messages m JOIN artifacts a
-                ON a.artifact_id={qc_source_id(version=version)}
-                WHERE m.project_id=? AND {scope}
-                  AND CASE WHEN json_valid(a.meta) AND json_type(a.meta)='object'
-                      THEN json_extract(a.meta,'$.prefilter') IS NULL END
-                  AND NOT EXISTS (SELECT 1 FROM artifacts q WHERE q.kind=?
-                      AND q.message_id=m.message_id {current_qc_pred('q', version=version)})
-                """, (pid, *params, semantic_policy.QC_ARTIFACT))
-            for missing in missing_qc:
-                if (time.monotonic() + COMMIT_MARGIN >= deadline
-                        or not semantic_qc.skipped_current(db, pid, missing['message_id'], missing['artifact_id'],
-                                                           missing['content_hash'], version, policy)):
-                    return False
+        if (policy["mode"] != "off" and policy["extract_qc"] == "annotate"
+                and not _extraction_qc_ready(db, pid, policy, deadline=deadline)):
+            return False
         return time.monotonic() + COMMIT_MARGIN < deadline
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError):
         return False
