@@ -35,6 +35,17 @@ def test_calendar_fragment_cannot_supply_dose_scope_or_frequency(calendar, tail,
             for q in quantities] == expected
 
 
+@pytest.mark.parametrize("calendar", ["2026年9月21日", "２０２６年９月２１日", "2026-09-21"])
+def test_calendar_separates_numbers_units_and_dose_scope(calendar):
+    assert semantic_quantities.extract_quantities(f"3 {calendar} mg") == []
+    quantities = semantic_quantities.extract_quantities(f"1回{calendar} 3mg")
+    assert [(q["kind"], q["value"], q["unit"], q.get("scope")) for q in quantities] == [
+        ("frequency", "1", "count", None), ("amount", "3", "mg", None)]
+    quantities = semantic_quantities.extract_quantities(f"3mg {calendar} /日")
+    assert [(q["kind"], q["value"], q["unit"], q.get("scope")) for q in quantities] == [
+        ("amount", "3", "mg", None)]
+
+
 def test_calendar_exclusion_keeps_unknown_units_invalid_dates_and_multiple_amounts_held():
     for usage, unit in [("5mg/kgを使用しました。", "unknown:mg/kg"),
                         ("5mg/kg使用しました。", "unknown:mg/kg使用")]:
