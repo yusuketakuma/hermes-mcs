@@ -10,7 +10,30 @@ import clinical_values
 import extract_llm
 import inference_dependency_loss
 import structured_view
+import semantic_quantities
 from extract_testkit import _hash, _ledger, _message
+
+
+@pytest.mark.parametrize("calendar", ["2026年9月21日", "２０２６年９月２１日", "2026-09-21", "2026/9/21"])
+def test_calendar_date_is_not_a_medication_quantity(calendar):
+    quantities = semantic_quantities.extract_quantities(calendar + "に合成薬Aを5mg服用しました。")
+    assert [(q["kind"], q["value"], q["unit"]) for q in quantities] == [("amount", "5", "mg")]
+
+
+def test_calendar_exclusion_keeps_unknown_units_invalid_dates_and_multiple_amounts_held():
+    for usage, unit in [("5mg/kgを使用しました。", "unknown:mg/kg"),
+                        ("5mg/kg使用しました。", "unknown:mg/kg使用")]:
+        unknown = semantic_quantities.extract_quantities("2026年9月21日に合成薬Aを" + usage)
+        assert len(unknown) == 1 and unknown[0]["unit"] == unit and not unknown[0]["recognized"]
+        assert unknown[0]["value"] == "5"
+    invalid = semantic_quantities.extract_quantities("2026年2月30日に訪問予定です。")
+    assert invalid and all(q.get("recognized") is False for q in invalid)
+    attached_unit = semantic_quantities.extract_quantities("2026年9月21mgを記録しました。")
+    assert any(q.get("recognized") is False for q in attached_unit)
+    text = "2026年9月21日に合成薬Aを5mg、合成薬Bを10mg服用しました。"
+    findings = semantic_quantities.claim_quantity_findings(
+        {"claim_id": "synthetic", "text": text, "fact_refs": [0]}, [{"_evidence": {"quote": text}}])
+    assert [item["code"] for item in findings] == ["claim_quantity_relation_unverified"]
 
 
 @pytest.mark.parametrize("name", ["ﾛｷｿﾆﾝ錠６０ｍｇ", "ろきそにん錠60mg"])
@@ -21,7 +44,7 @@ def test_medication_surface_when_width_or_kana_varies(name, monkeypatch):
            "status": "past", "subject": "patient", "negated": False,
            "evidence": body}
     monkeypatch.setattr(extract_llm, "_llm_call",
-                        lambda *a, **kw: {"meds": [raw]})
+                        lambda *a, **kw: {"symptoms": [], "meds": [raw]})
     # When: the production single-message extraction validates the response.
     med = extract_llm.llm_extract(body)["meds"][0]
     # Then: raw values survive, with surface-only, unresolved identity.
@@ -202,8 +225,8 @@ def test_lab_merge_when_dates_or_confirmation_differ():
 def test_lab_repair_when_evidence_becomes_supported(monkeypatch):
     # Given: a first quote-less assertion and its evidence-grounding repair.
     body = "Cr 1.2mg/dL"
-    replies = iter([{"labs": [{"name": "Cr", "value": 1.2, "unit": "mg/dL"}]},
-                    {"labs": [{"name": "Cr", "value": 1.2, "unit": "mg/dL",
+    replies = iter([{"symptoms": [], "labs": [{"name": "Cr", "value": 1.2, "unit": "mg/dL"}]},
+                    {"symptoms": [], "labs": [{"name": "Cr", "value": 1.2, "unit": "mg/dL",
                                "evidence": body}]}])
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **kw: next(replies))
     # When: the production bounded repair pass runs.

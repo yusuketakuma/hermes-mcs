@@ -123,7 +123,7 @@ def test_failed_scalar_repair_keeps_facts_but_never_reports_complete(writer, mon
     calls = []
     def response(*args, **kwargs):
         calls.append(kwargs.get("kind", "first"))
-        return {"vitals": VITALS, "summary": "合成" * 31 + "発熱なし"} if len(calls) == 1 else None
+        return {"symptoms": [], "vitals": VITALS, "summary": "合成" * 31 + "発熱なし"} if len(calls) == 1 else None
     monkeypatch.setattr(llm, "_llm_call", response)
     meta = {}
     out = llm.llm_extract(BODY, meta_out=meta)
@@ -139,8 +139,8 @@ def test_repaired_complete_prose_can_finish_without_losing_facts(writer, monkeyp
     calls = []
     def response(*args, **kwargs):
         calls.append(1)
-        return {"vitals": VITALS, "summary": "合成" * 31 + "発熱なし"} if len(calls) == 1 else {
-            "vitals": VITALS, "summary": "本人の血圧120/80を記録"}
+        return {"symptoms": [], "vitals": VITALS, "summary": "合成" * 31 + "発熱なし"} if len(calls) == 1 else {
+            "symptoms": [], "vitals": VITALS, "summary": "本人の血圧120/80を記録"}
     monkeypatch.setattr(llm, "_llm_call", response)
     meta = {}
     out = llm.llm_extract(BODY, meta_out=meta)

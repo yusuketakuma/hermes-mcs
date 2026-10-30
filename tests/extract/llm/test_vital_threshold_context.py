@@ -23,7 +23,9 @@ def test_kufuu_does_not_mark_reading_as_family():
 def test_high_policy_raises_urgency_despite_daijoubu(monkeypatch):
     body = "SpO2 88%です。大丈夫と言っていますが呼吸が苦しそうです"
     monkeypatch.setattr(extract_llm, "_llm_call",
-                        lambda *a, **k: {"vitals": {"spo2": 88},
+                        lambda *a, **k: {"symptoms": [{"text": "呼吸が苦しそう",
+                            "negated": False, "subject": "patient", "evidence": "呼吸が苦しそうです"}],
+                                         "vitals": {"spo2": 88},
                                          "urgency": "routine"})
     high = extract_validation.vital_threshold_policy({"vital_urgency": {"mode": "high"}})
     out = extract_llm.llm_extract(body, vital_policy=high)

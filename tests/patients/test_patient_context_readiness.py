@@ -84,12 +84,14 @@ def test_all_posts_need_current_evidence_and_complete_acquisition(runtime):
 
 
 @pytest.mark.parametrize("state,body", [("deleted", ""), ("full", ""), ("missing", "")])
-def test_empty_deleted_or_unavailable_post_cannot_be_complete(runtime, state, body):
+def test_unacquired_empty_deleted_or_unavailable_post_cannot_be_complete(runtime, state, body):
     led, _, _ = runtime
     cfg = _cfg("assist")
     seed(led, 1, proof=False)
     _proof(led, 1, 1, cfg)
     seed(led, 2, body=body, state=state, proof=False)
+    with led.db:
+        led.db.execute("UPDATE patients SET fetch_state='pending',history_floor=NULL WHERE project_id=1")
     assert not _ready(runtime, cfg)
 
 

@@ -19,7 +19,7 @@ def test_single_batch_repair_share_fixed_leading_bytes(monkeypatch):
 
     def call(prompt, **kw):
         prompts.append(prompt)
-        return {"summary": "合成"}
+        return {"symptoms": [], "summary": "合成"}
     monkeypatch.setattr(extract_llm, "_llm_call", call)
     body = "合成の短い本文です。"
     extract_llm.llm_extract(body, context="文脈A", posted_at=POSTED)

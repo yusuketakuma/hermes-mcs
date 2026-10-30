@@ -35,8 +35,8 @@ def test_rollup_deadline_preserves_unprocessed_dirty_projects(tmp_path, monkeypa
         clock = {"now": 1.0}
         monkeypatch.setattr(rollup.time, "monotonic", lambda: clock["now"])
         original = rollup.rebuild
-        def one_project(store, pid, *, cfg=None):
-            value = original(store, pid, cfg=cfg)
+        def one_project(store, pid, *, cfg=None, deadline=None):
+            value = original(store, pid, cfg=cfg, deadline=deadline)
             clock["now"] = 10.0
             return value
         monkeypatch.setattr(rollup, "rebuild", one_project)

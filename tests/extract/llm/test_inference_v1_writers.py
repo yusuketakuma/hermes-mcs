@@ -301,7 +301,8 @@ def _synthetic_inference(monkeypatch, answer):
 def test_zero_hint_first_pass_records_explicit_completed_leaf(source, monkeypatch):
     led, row = source
     meta, checkpoints = {}, {}
-    _synthetic_inference(monkeypatch, lambda *a, **k: {"summary": "合成の経過報告"})
+    _synthetic_inference(monkeypatch, lambda *a, **k: {"symptoms": [{"text": "発熱", "negated": True,
+        "subject": "patient", "evidence": "本人は発熱なし。"}], "summary": "合成の経過報告"})
     result = llm.llm_extract(row["body_text"], meta_out=meta, chunks_out=checkpoints)
     assert result is not None and result is not llm._DEFERRED
     assert meta["completeness_chunks"] == 1
@@ -352,7 +353,7 @@ def test_partial_chunk_never_has_a_completed_coverage_denominator(source, monkey
     monkeypatch.setattr(llm, "plan_chunks", lambda text, size: [text[:10], text[10:]])
     calls = []
     _synthetic_inference(monkeypatch, lambda *a, **k: calls.append(1) or
-        ({"summary": "合成"} if len(calls) == 1 else None))
+        ({"symptoms": [], "summary": "合成"} if len(calls) == 1 else None))
     meta = {}
     assert llm.llm_extract(body, meta_out=meta) is None
     assert meta["completeness"]["0"]["state"] == "hint_gaps_resolved"

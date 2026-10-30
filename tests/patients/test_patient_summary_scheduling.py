@@ -47,7 +47,7 @@ def test_cloud_draft_waits_for_two_source_scans_and_audits_before_quality(cloud_
     import semantic_jev
     import semantic_runtime
 
-    cfg = {**cfg, 'semantic': {'mode': 'assist', 'project_ids': [1, 2], 'daily_request_budget': 3000}}
+    cfg = {**cfg, 'semantic': {**CFG['semantic'], 'project_ids': [1, 2], 'daily_request_budget': 3000}}
     clock.mono = time.monotonic()
     monkeypatch.setattr(worker, 'load_config', lambda: cfg)
     monkeypatch.setattr(worker, '_writer_current', lambda **_kwargs: True)

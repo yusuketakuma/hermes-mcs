@@ -13,7 +13,6 @@ from decimal import Decimal, InvalidOperation
 import re
 import unicodedata
 
-
 # Longest units must be matched first: ``mg/mL`` otherwise becomes ``mg``.
 _AMOUNT_RE = re.compile(
     r"(?<![0-9A-Za-z_.,+\-−＋])"
@@ -129,10 +128,16 @@ def extract_quantities(text: object) -> list[dict]:
     """
     if not isinstance(text, str) or not text:
         return []
+    # clinical_values imports the number normalizer from this module.
+    import clinical_values
+
     # NFKC makes full-width digits and multiplication signs comparable while
     # leaving the original evidence quote untouched in the caller's record.
     value = unicodedata.normalize("NFKC", text)
     found: list[tuple[int, int, dict]] = []
+    calendar_spans = [match.span() for match in clinical_values._DATE.finditer(value)
+                      if clinical_values.written_day(match[0]) is not None
+                      and (match[0].endswith("日") or not re.match(r"[A-Za-zμµ%回]", value[match.end():]))]
 
     known_amount_spans: list[tuple[int, int]] = []
     for match in _AMOUNT_RE.finditer(value):
@@ -150,6 +155,8 @@ def extract_quantities(text: object) -> list[dict]:
         start, end = match.span()
         if any(start < known_end and end > known_start
                for known_start, known_end in known_amount_spans):
+            continue
+        if any(date_start <= start and end <= date_end for date_start, date_end in calendar_spans):
             continue
         # 回/日 are frequency/duration tokens, not unsupported amount units;
         # the greedy kanji unit may run on (``3回内服``, ``7日分``).

@@ -81,8 +81,8 @@ def test_unqualified_prose_cannot_recast_another_person_or_noncurrent_value(body
 @pytest.mark.parametrize("repair_correctly", [False, True])
 def test_vital_prose_uses_at_most_one_repair_and_never_saves_the_rejected_value(monkeypatch, repair_correctly):
     calls = []
-    invalid = {"summary": "拡張期血圧80", "points": ["拡張期血圧80"], "vitals": {"sbp": 90}}
-    valid = {"summary": "収縮期血圧90、拡張期は未測定", "points": ["収縮期血圧90"], "vitals": {"sbp": 90}}
+    invalid = {"symptoms": [], "summary": "拡張期血圧80", "points": ["拡張期血圧80"], "vitals": {"sbp": 90}}
+    valid = {"symptoms": [], "summary": "収縮期血圧90、拡張期は未測定", "points": ["収縮期血圧90"], "vitals": {"sbp": 90}}
 
     def model(prompt, **kwargs):
         calls.append(prompt)

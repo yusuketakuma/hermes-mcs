@@ -63,6 +63,7 @@ def test_thin_retry_does_not_erase_prior_valid_clinical_fact(db, monkeypatch):
     db.artifact_add('extract_llm', json.dumps(prior), project_id=1, message_id=1,
                    meta={'hash': _hash(db), 'extract_version': extract_llm.EXTRACT_VERSION})
     monkeypatch.setattr(extract_llm, '_llm_call', lambda *a, **kw: {})
+    monkeypatch.setattr(extract_llm, '_llm_up', lambda **kw: True)
     extract_llm.run_pending(db, limit=10, budget_s=300)
     out = json.loads(db.artifacts('extract_llm', message_id=1)[0]['content'])
     assert out.get('symptoms') == prior['symptoms'], out

@@ -3,8 +3,6 @@ import json
 
 import extract
 import extract_llm
-import inference_dependency_loss
-import inference_version
 import mcs_util
 import patient_context_refresh as refresh
 import semantic_candidate
@@ -30,20 +28,18 @@ def test_intervention_repair_keeps_receipts_but_requires_a_new_context_scan(runt
     rule = led.db.execute("SELECT artifact_id,content,meta FROM artifacts "
                           "WHERE kind='extract_v1' AND message_id=1").fetchone()
     assert json.loads(rule["content"])["intervention_schedule"]["coverage"]["state"] == "invalid_source"
+    # Restore verified source bytes before producing the pre-repair context proof.
+    with led.db:
+        led.db.execute("UPDATE messages SET body_html=? WHERE message_id=1", (body,))
+    finish(runtime)
     source = led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
-    prior_id = led.artifact_add(
-        "extract_llm", "{}", project_id=1, message_id=1, model="synthetic",
-        meta={inference_version.VERSION_KEY: inference_version.CURRENT_VERSION,
-              "hash": source["content_hash"], "extract_version": extract_llm.EXTRACT_VERSION,
-              "source_binding": inference_dependency_loss.source_binding(led.db, 1, 1)})
-    prior = led.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (prior_id,)).fetchone()
+    prior = led.db.execute("SELECT * FROM artifacts WHERE kind='extract_llm' AND message_id=1 "
+                           "ORDER BY artifact_id DESC LIMIT 1").fetchone()
     with led.db:
         extract_llm._record_hold_tx(led, source, prior, "qc_failed", remove_chunks=False)
     hold_query = "SELECT EXISTS(" + extract_llm._hold_sql() + ") FROM messages m WHERE m.message_id=1"
     assert led.db.execute(hold_query).fetchone()[0] == 1
 
-    # A completed scan is produced by the existing isolated fake-LLM runner.
-    finish(runtime)
     before, _, pending = refresh._pending(led.db, 1, CFG, now=clock.wall)
     old_scan = refresh._current_scans(led.db, 1, before["sources"], before["contract"])[1]
     assert old_scan["complete"] and old_scan["audited"] and not pending["B"]

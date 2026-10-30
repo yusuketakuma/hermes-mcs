@@ -2954,23 +2954,34 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
             "SELECT m.*,p.project_id AS patient_id,p.fetch_reason FROM messages m "
             "LEFT JOIN patients p ON p.project_id=m.project_id WHERE m.project_id=?",
             (pid,)).fetchall()
-        if not rows:
-            return False
         for row in rows:
             if time.monotonic() + COMMIT_MARGIN >= deadline:
                 return False
             root = row["parent_id"] or row["message_id"]
             if semantic_intake_hold.has_held_root(db, pid, root):
                 return False
+            if policy["mode"] != "off" and db.execute(
+                    "SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? "
+                    "AND message_id=? AND state!='done' LIMIT 1",
+                    (semantic_policy.JOB_KIND, pid, root)).fetchone():
+                return False
+            if row["body_state"] == "deleted" or row["body_state"] == "full" and row["body_text"] == "":
+                if db.execute("SELECT 1 FROM attachments WHERE message_id=? "
+                              "AND state IS NOT 'withdrawn' LIMIT 1", (row["message_id"],)).fetchone():
+                    return False
+                if row["body_state"] != "deleted":
+                    html = row["body_html"]
+                    if (not isinstance(html, str) or not valid_hash(row["content_hash"])
+                            or hashlib.sha256(html.encode("utf-8")).hexdigest() != row["content_hash"]
+                            or html_to_text(html) != ""):
+                        return False
+                continue
             if policy["mode"] == "off":
                 if not _raw_extraction_current(db, row, cfg)[0]:
                     return False
-            elif (db.execute("SELECT 1 FROM fetch_jobs WHERE kind=? AND project_id=? "
-                             "AND message_id=? AND state!='done' LIMIT 1",
-                             (semantic_policy.JOB_KIND, pid, root)).fetchone()
-                  or semantic_drain._reprocess_target_state(ledger, row, policy, cfg=cfg,
+            elif semantic_drain._reprocess_target_state(ledger, row, policy, cfg=cfg,
                        **({'deadline': deadline} if policy['summary_mode'] == 'off'
-                          and policy['loop_mode'] != 'off' else {})) not in ("current", "current_skipped")):
+                          and policy['loop_mode'] != 'off' else {})) not in ("current", "current_skipped"):
                 return False
         if (policy["mode"] != "off" and policy["extract_qc"] == "annotate"
                 and not _extraction_qc_ready(db, pid, policy, deadline=deadline)):

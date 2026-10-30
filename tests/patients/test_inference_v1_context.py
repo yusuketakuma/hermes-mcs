@@ -14,7 +14,7 @@ import pytest
 import patient_context_refresh as refresh
 import patient_context
 from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY
-from test_patient_context_refresh import CFG, document, finish, runtime, seed, step
+from test_patient_context_refresh import CFG, _raw_proof, _semantic_proof, document, finish, runtime, seed, step
 import patient_context_state as state
 import inference_dependency_loss as loss
 
@@ -415,6 +415,47 @@ def test_single_indivisible_oversized_value_is_explicitly_held_without_http_or_e
     assert refresh.context_view_input(led.db, 1, cfg=CFG) is None
 
 
+@pytest.mark.parametrize("mode", ["off", "assist"])
+@pytest.mark.parametrize("source", ["no_rows", "observed_empty", "deleted"])
+def test_proven_empty_readiness_retains_source_and_attachment_guards(runtime, mode, source):
+    led, clock, _ = runtime
+    seed(led, body='', state='deleted' if source == 'deleted' else 'full', proof=False)
+    if source == 'no_rows':
+        with led.db:
+            led.db.execute('DELETE FROM messages WHERE project_id=1')
+    cfg = {'semantic': {**CFG['semantic'], 'mode': mode}}
+    def ready():
+        return refresh._inference_ready(led, 1, cfg, deadline=clock.mono + 600)
+    assert ready()
+    with led.db:
+        led.db.execute("UPDATE patients SET fetch_state='pending',history_floor=NULL WHERE project_id=1")
+    assert not ready()
+    with led.db:
+        led.db.execute("UPDATE patients SET fetch_state='complete',history_floor=-1 WHERE project_id=1")
+    assert ready()
+    if source != 'no_rows':
+        with led.db:
+            led.db.execute("INSERT INTO attachments(message_id,file_id,state) VALUES(1,'synthetic','pending')")
+        assert not ready()
+        with led.db:
+            led.db.execute("UPDATE attachments SET state='withdrawn' WHERE message_id=1")
+        assert ready()
+        if source == 'observed_empty':
+            with led.db:
+                led.db.execute("UPDATE messages SET body_html='unverified' WHERE message_id=1")
+            assert not ready()
+            with led.db:
+                led.db.execute("UPDATE messages SET body_html='',body_state='missing' WHERE message_id=1")
+            assert not ready()
+            with led.db:
+                led.db.execute("UPDATE messages SET body_state='full' WHERE message_id=1")
+            assert ready()
+    led.artifact_add(loss.KIND, json.dumps({'schema':loss.SCHEMA,'project_id':1,'gap':True,
+        'origin':{'message_id':99,'revision':1,'kind':'unanalysed'}}), project_id=1,
+        meta={'schema':loss.SCHEMA,'identity':'a'*64,VERSION_KEY:refresh.CURRENT_VERSION})
+    assert not ready()
+
+
 def test_no_source_needs_explicit_acquisition_proof_even_after_an_empty_summary(runtime):
     led, _, calls = runtime
     seed(led, body='')
@@ -433,7 +474,7 @@ def test_no_source_needs_explicit_acquisition_proof_even_after_an_empty_summary(
 
 
 def _clinical_source(led, mid, body, day, *, pid=1, dose=None):
-    seed(led, mid=mid, pid=pid, body=body)
+    seed(led, mid=mid, pid=pid, body=body, proof=False)
     at = datetime.fromisoformat(day+'T09:00:00+09:00')
     with led.db:
         led.db.execute('UPDATE messages SET posted_at=?,posted_at_ts=? WHERE message_id=?', (at.isoformat(),at.timestamp(),mid))
@@ -444,6 +485,8 @@ def _clinical_source(led, mid, body, day, *, pid=1, dose=None):
     row = led.db.execute('SELECT content_hash FROM messages WHERE message_id=?', (mid,)).fetchone()
     led.artifact_add('extract_v1', json.dumps({'patient_context':[item]}), project_id=pid, message_id=mid,
         meta={VERSION_KEY:refresh.CURRENT_VERSION, 'hash':row[0], 'rule_version':refresh._contract(CFG)['rule']})
+    _raw_proof(led, pid, mid)
+    _semantic_proof(led, pid, mid)
     return next(mcs_queries.patient_context_sources(led.db,pid,mid=mid)), item
 
 

@@ -16,7 +16,7 @@ def test_latest_partial_bp_does_not_borrow_the_previous_readings_other_side(late
 def test_real_chunk_extraction_preserves_latest_single_bp_side(monkeypatch, side, label, value):
     first = "本人の血圧150/90です。\n"
     body = first + f"本人の{label}血圧{value}です。"
-    responses = iter([{"vitals": {"sbp": 150, "dbp": 90}}, {"vitals": {side: value}}])
+    responses = iter([{"symptoms": [], "vitals": {"sbp": 150, "dbp": 90}}, {"symptoms": [], "vitals": {side: value}}])
     calls = []
 
     def model(prompt, **kwargs):

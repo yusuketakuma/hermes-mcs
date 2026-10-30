@@ -150,9 +150,10 @@ def test_chunk_survives_later_exception_and_all_leases_release(db, monkeypatch, 
         core = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
         if "い" * 100 in core:
             raise RuntimeError("synthetic interruption")
-        return {"summary": "完了チャンク"}
+        return {"symptoms": [], "summary": "完了チャンク"}
 
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
+    monkeypatch.setattr(extract_llm, "_llm_up", lambda **kw: True)
     if workers == 1:
         with pytest.raises(RuntimeError, match="synthetic interruption"):
             extract_llm.run_pending(db, workers=workers)
@@ -500,13 +501,13 @@ def test_ambiguous_batch_index_retries_only_its_message(db, monkeypatch, workers
     db.save_messages([_message(1, body='合成本文A', day=19),
                       _message(2, body='合成本文B', day=20)])
     monkeypatch.setattr(extract_llm, '_llm_call', lambda *a, **kw: {
-        'items': [{'i': 0, 'summary': '先の候補'},
-                  {'i': 1, 'summary': '一意の候補'},
-                  {'i': 0, 'summary': '矛盾する候補'},
-                  {'i': 0, 'summary': '三つ目の候補'}]})
+        'items': [{'symptoms': [], 'i': 0, 'summary': '先の候補'},
+                  {'symptoms': [], 'i': 1, 'summary': '一意の候補'},
+                  {'symptoms': [], 'i': 0, 'summary': '矛盾する候補'},
+                  {'symptoms': [], 'i': 0, 'summary': '三つ目の候補'}]})
     calls = []
     monkeypatch.setattr(extract_llm, 'llm_extract',
-                        lambda body, **kw: calls.append(body) or {'summary': '再抽出'})
+                        lambda body, **kw: calls.append(body) or {'symptoms': [], 'summary': '再抽出'})
     result = extract_llm.run_pending(db, budget_s=30, batch_k=2, workers=workers)
     assert result['done'] == 2 and result['failed'] == 0
     assert calls == ['合成本文B']

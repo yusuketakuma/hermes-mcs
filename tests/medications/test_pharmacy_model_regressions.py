@@ -136,7 +136,7 @@ def test_unnamed_medication_hints_do_not_force_an_impossible_repair(monkeypatch,
     body = f"本人は{name}5mgを服用しています。"
     rule = hints(body)
     assert rule.get("medications")
-    candidate = {"summary": "薬名の記載なし", "patient_context": [
+    candidate = {"symptoms": [], "summary": "薬名の記載なし", "patient_context": [
         {"category": "medication_management", "subject": "patient", "text": body, "evidence": body}]}
     calls = []
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k: calls.append(a) or copy.deepcopy(candidate))
@@ -159,9 +159,9 @@ def test_specific_drug_hints_still_require_the_missing_medication(name):
 def test_nonuse_and_unspecified_names_use_only_one_existing_repair(monkeypatch, generic):
     body = "本人の薬は一包化しています。" if generic else "本人の解熱剤は使用せず経過観察としました。"
     name = "本人の薬" if generic else "解熱剤"
-    initial = {"summary": "合成要約", "meds": [medication(name, body)]}
-    repaired = {"summary": "合成要約", "patient_context": [context(body, "support_method", "一包化")]} \
-        if generic else {"summary": "合成要約", "meds": [{**medication(name, body), "negated": True}]}
+    initial = {"symptoms": [], "summary": "合成要約", "meds": [medication(name, body)]}
+    repaired = {"symptoms": [], "summary": "合成要約", "patient_context": [context(body, "support_method", "一包化")]} \
+        if generic else {"symptoms": [], "summary": "合成要約", "meds": [{**medication(name, body), "negated": True}]}
     calls = []
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k:
                         calls.append(a) or copy.deepcopy(initial if len(calls) == 1 else repaired))
@@ -176,7 +176,7 @@ def test_nonuse_and_unspecified_names_use_only_one_existing_repair(monkeypatch, 
 
 def test_repeated_wrong_nonuse_is_not_coerced_or_retried_again(monkeypatch):
     body = "本人の解熱剤は使用せず経過観察としました。"
-    wrong = {"summary": "合成要約", "meds": [medication("解熱剤", body)]}
+    wrong = {"symptoms": [], "summary": "合成要約", "meds": [medication("解熱剤", body)]}
     calls = []
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k: calls.append(a) or copy.deepcopy(wrong))
     meta = {}
@@ -234,13 +234,13 @@ def test_rejected_medication_reports_the_specific_source_conflict(quote, reason)
 
 def test_concrete_medication_feedback_recovers_family_quote_in_one_repair(monkeypatch):
     body = "兄が合成薬Zを服用しています。本人の薬に変更はありません。"
-    invalid = {"summary": "家族の服薬情報", "meds": [medication("合成薬Z", "本人の薬に変更はありません")]}
+    invalid = {"symptoms": [], "summary": "家族の服薬情報", "meds": [medication("合成薬Z", "本人の薬に変更はありません")]}
     calls = []
 
     def model(prompt, **kwargs):
         calls.append(prompt)
         if len(calls) == 2 and "meds[0]" in prompt and "evidenceにnameが含まれていません" in prompt:
-            return {"summary": "家族の服薬情報", "meds": [medication("合成薬Z", "兄が合成薬Zを服用しています", "family")]}
+            return {"symptoms": [], "summary": "家族の服薬情報", "meds": [medication("合成薬Z", "兄が合成薬Zを服用しています", "family")]}
         return copy.deepcopy(invalid)
 
     monkeypatch.setattr(extract_llm, "_llm_call", model)
@@ -277,7 +277,7 @@ def context(body, key, value):
 ])
 @pytest.mark.parametrize("use_hints", [False, True])
 def test_missing_pharmacy_details_use_one_existing_repair(monkeypatch, body, key, value, use_hints):
-    initial = {"summary": "合成要約", "urgency": "routine"}
+    initial = {"symptoms": [], "summary": "合成要約", "urgency": "routine"}
     complete = {**initial, "patient_context": [context(body, key, value)]}
     if key == "inquiry_result":
         complete["events"] = ["prescription_inquiry"]
@@ -341,7 +341,7 @@ def test_pharmacy_issues_do_not_fabricate_facts_or_loop(monkeypatch):
     body = "本人の合成薬Eを疑義照会し、回答は未確認です。"
     calls = []
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k:
-                        calls.append(a) or {"summary": "合成要約"})
+                        calls.append(a) or {"symptoms": [], "summary": "合成要約"})
     meta = {}
     out = extract_llm.llm_extract(body, hints=hints(body), meta_out=meta)
     assert len(calls) == 2 and not out.get("patient_context") and not out.get("events")
@@ -456,7 +456,7 @@ def test_optional_negative_or_planned_details_retain_the_raw_qualification(monke
     calls = []
     def model(*args, **kwargs):
         calls.append(args)
-        return {"patient_context": [context(body, key, value)]}
+        return {"symptoms": [], "patient_context": [context(body, key, value)]}
     monkeypatch.setattr(extract_llm, "_llm_call", model)
     out = extract_llm.llm_extract(body)
     assert len(calls) == 1
@@ -476,13 +476,13 @@ def test_repair_restates_rejected_field_contract_without_schema_support(field, r
 
 
 @pytest.mark.parametrize("body,first,repaired,field", [
-    ("本人の脈拍は64です。", {"vitals": [{"hr": 64}]}, {"vitals": {"hr": 64}}, "vitals"),
+    ("本人の脈拍は64です。", {"symptoms": [], "vitals": [{"hr": 64}]}, {"symptoms": [], "vitals": {"hr": 64}}, "vitals"),
     ("母は合成薬Zを服用中です。本人の処方は変わりません。",
-     {"meds": [medication("合成薬Z", "本人の処方は変わりません")]},
-     {"meds": [medication("合成薬Z", "母は合成薬Zを服用中です", "family")]}, "meds"),
+     {"symptoms": [], "meds": [medication("合成薬Z", "本人の処方は変わりません")]},
+     {"symptoms": [], "meds": [medication("合成薬Z", "母は合成薬Zを服用中です", "family")]}, "meds"),
     ("本人の合成薬Zは開封後も遮光保管しています。",
-     {"patient_context": [context("本人の合成薬Zは開封後も遮光保管しています。", "storage_status", "光を避けて保管")]},
-     {"patient_context": [context("本人の合成薬Zは開封後も遮光保管しています。", "storage_status", "遮光保管")]}, "patient_context"),
+     {"symptoms": [], "patient_context": [context("本人の合成薬Zは開封後も遮光保管しています。", "storage_status", "光を避けて保管")]},
+     {"symptoms": [], "patient_context": [context("本人の合成薬Zは開封後も遮光保管しています。", "storage_status", "遮光保管")]}, "patient_context"),
 ])
 def test_one_repair_recovers_only_source_valid_shape_owner_and_raw_detail(monkeypatch, body, first, repaired, field):
     calls = []

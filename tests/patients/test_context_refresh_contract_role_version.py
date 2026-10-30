@@ -7,7 +7,7 @@ import pytest
 import extract
 import extract_llm
 import patient_context_refresh as context_refresh
-from test_patient_context_refresh import CFG, finish, runtime, seed
+from test_patient_context_refresh import CFG, _raw_proof, finish, runtime, seed
 
 __all__ = ["runtime"]
 
@@ -31,10 +31,11 @@ def test_generation_change_rejects_completed_scan_and_rescans(runtime, monkeypat
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
     pending = context_refresh._pending(led.db, 1, CFG, now=clock.wall)[2]
     assert pending["A"] and pending["B"]
+    if module is extract_llm:
+        _raw_proof(led, 1, 1)
     finish(runtime)
-    after = led.db.execute("SELECT content,meta FROM artifacts WHERE kind=? AND project_id=1",
-                           (context_refresh.SCAN,)).fetchone()
-    scan, meta = json.loads(after[0]), json.loads(after[1])
+    after = context_refresh._latest(led.db, context_refresh.SCAN, 1, 1)
+    scan, meta = after
     assert scan["complete"] and scan["audited"]
     assert meta["contract"] == context_refresh._contract(CFG)
     assert sum("source" in call for call in calls) == 1

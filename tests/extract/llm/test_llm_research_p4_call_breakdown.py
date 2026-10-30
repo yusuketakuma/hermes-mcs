@@ -12,7 +12,7 @@ from extract_testkit import _ledger, _message
 from test_extraction_review import db
 
 __all__ = ["db"]
-VALID = {"status": 200, "text": '{"summary":"合成の部分結果"}', "finish_reason": "stop"}
+VALID = {"status": 200, "text": '{"symptoms":[],"summary":"合成の部分結果"}', "finish_reason": "stop"}
 
 
 def _fake_backend(monkeypatch, reply):
@@ -39,7 +39,7 @@ def _integrity(db):
 def test_run_pending_breaks_calls_down_by_reason(db, monkeypatch):
     body = "完全合成の詳細" * 40
     db.save_messages([_message(body=body)])
-    bad = {"labs": [{"name": "合成検査", "value": 1, "unit": None, "evidence": "ない引用",
+    bad = {"symptoms": [], "summary": "合成の詳細", "labs": [{"name": "合成検査", "value": 1, "unit": None, "evidence": "ない引用",
                      "subject": "patient", "status": "current"}]}
     full = []
 
@@ -50,7 +50,7 @@ def test_run_pending_breaks_calls_down_by_reason(db, monkeypatch):
         if len(full) == 1:
             return {"status": 200, "text": json.dumps(bad), "finish_reason": "stop"}
         assert "前回出力" in prompt
-        return {"status": 200, "text": '{"summary":"途中"}', "finish_reason": "length"}
+        return {"status": 200, "text": '{"symptoms":[],"summary":"途中"}', "finish_reason": "length"}
     _fake_backend(monkeypatch, reply)
     res = extract_llm.run_pending(db, limit=1, budget_s=200)
     assert res["done"] == 1
@@ -80,7 +80,7 @@ def test_dropped_carry_reuses_checkpoint_without_a_second_call(tmp_path, monkeyp
     monkeypatch.setattr(extract_llm, "acquire_run_lock", acquire)
     monkeypatch.setattr(extract_llm.time, "sleep", lambda s: None)
     calls = _fake_backend(monkeypatch, lambda piece, prompt: {
-        "status": 200, "text": '{"summary":"clean"}', "finish_reason": "stop"})
+        "status": 200, "text": '{"symptoms":[],"summary":"clean"}', "finish_reason": "stop"})
     res = extract_llm.run_pending(db, limit=10, budget_s=200, per_write_lock=True,
                                   write_wait_s=1, carry=[])
     assert res["lock_lost"] == 1 and len(res["carry"]) == 1 and len(calls) == 1
@@ -103,7 +103,7 @@ def test_format_downgrade_is_counted_on_the_answered_call(monkeypatch):
     monkeypatch.setattr(extract_llm, "_choose_slot", lambda **kw: 0)
     monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
     answers = [{"status": 400, "text": None, "finish_reason": None, "usage": None},
-               {"status": 200, "text": '{"summary":"合成"}', "finish_reason": "stop"}]
+               {"status": 200, "text": '{"symptoms":[],"summary":"合成"}', "finish_reason": "stop"}]
     monkeypatch.setattr(extract_llm.local_llm, "chat", lambda prompt, **kw: answers.pop(0))
     meta = {}
     assert extract_llm.llm_extract("合成の本文", meta_out=meta) is not None
@@ -119,7 +119,7 @@ def test_probe_is_counted_once_per_format_check(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)
     monkeypatch.setattr(extract_llm.local_llm, "probe_format", lambda *a, **kw: "object")
     monkeypatch.setattr(extract_llm.local_llm, "chat", lambda prompt, **kw: {
-        "status": 200, "text": '{"summary":"合成"}', "finish_reason": "stop"})
+        "status": 200, "text": '{"symptoms":[],"summary":"合成"}', "finish_reason": "stop"})
     first, second = {}, {}
     extract_llm.llm_extract("合成の本文", meta_out=first)
     extract_llm.llm_extract("合成の本文", meta_out=second)
