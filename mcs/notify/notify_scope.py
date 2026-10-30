@@ -130,7 +130,7 @@ def route_epoch(cfg: dict) -> int:
 
 
 def delivery_scope(cfg: dict) -> dict | None:
-    """The Discord destination the runner addresses — all four fields
+    """The notification destination the runner addresses — all four fields
     required; a partial scope is a config error, never a fallback."""
     transport = active_transport(cfg)
     d = notify_cfg(cfg).get(transport)
@@ -311,6 +311,18 @@ def incomplete_parts_health(db, now: float, cfg=None) -> dict:
     retired = retired_transports(cfg)
     live = (f" AND r.transport NOT IN ({','.join('?' * len(retired))})"
             if retired else "")
+    # Match delivery_scope's nonblank string fields, including str.strip's
+    # Unicode whitespace. Unused guild/team columns may still be NULL.
+    whitespace = (' \t\n\r\v\f\x1c\x1d\x1e\x1f\x85\xa0\u1680'
+                  '\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a'
+                  '\u2028\u2029\u202f\u205f\u3000')
+    proof_scope = ' OR '.join(
+        f"(r.transport='{transport}' AND " + ' AND '.join(
+            f"(typeof(r.{field})='text' AND length(trim(r.{field},?))>0)"
+            for field in scope_fields(transport)) + ')'
+        for transport in SUPPORTED_TRANSPORTS)
+    proof_params = tuple(whitespace for transport in SUPPORTED_TRANSPORTS
+                         for _ in scope_fields(transport))
     row = db.execute(
         "SELECT COUNT(*) total,COUNT(DISTINCT r.card_id) cards,"
         "COALESCE(SUM(p.state='pending'),0) pending,"
@@ -328,6 +340,7 @@ def incomplete_parts_health(db, now: float, cfg=None) -> dict:
         " JOIN notification_render_parts sent ON sent.delivery_id=done.delivery_id "
         " WHERE done.card_id=r.card_id AND done.render_rev>r.render_rev "
         " AND done.state='delivered' AND done.transport IS r.transport "
+        f" AND ({proof_scope}) "
         " AND done.profile IS r.profile AND done.application_id IS r.application_id "
         " AND done.guild_id IS r.guild_id AND done.team_id IS r.team_id "
         " AND done.channel_id IS r.channel_id AND sent.kind=p.kind "
@@ -350,7 +363,7 @@ def incomplete_parts_health(db, now: float, cfg=None) -> dict:
         " AND ((p.kind='body_part' AND p.name IS NOT NULL AND p.name!='' AND sent.name=p.name) "
         "   OR (p.kind='attachment_part' AND p.attachment_id>0 AND sent.attachment_id=p.attachment_id) "
         "   OR (p.kind='thread' AND sent.part_id=p.part_id)))" + live,
-        retired).fetchone()
+        proof_params + retired).fetchone()
     oldest = _finite(row['oldest'])
     return {"total": row['total'], "cards": row['cards'],
             "by_state": {state: row[state] for state in ('pending', 'unknown', 'not_sent', 'held')},

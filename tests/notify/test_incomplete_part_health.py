@@ -31,17 +31,22 @@ def stored(tmp_path, monkeypatch):
 
 
 def _render(db, states, *, transport='slack', card=None, revision=1, render_state='delivered'):
+    scope = ('synthetic-profile', 'synthetic-application',
+             'synthetic-guild' if transport == 'discord' else None,
+             None if transport == 'discord' else 'synthetic-team', 'synthetic-channel')
     if card is None:
         key = f'synthetic-{db.execute("SELECT COUNT(*) FROM notification_cards").fetchone()[0]}'
         card = db.execute(
-            "INSERT INTO notification_cards(card_key,kind,anchor_key,transport,delivery_state,created_at,updated_at) "
-            "VALUES(?,'thread','synthetic',?,'delivered',?,?)",
-            (key, transport, NOW - 100, NOW)).lastrowid
+            "INSERT INTO notification_cards(card_key,kind,anchor_key,transport,delivery_state,"
+            "profile,application_id,guild_id,team_id,channel_id,created_at,updated_at) "
+            "VALUES(?,'thread','synthetic',?,'delivered',?,?,?,?,?,?,?)",
+            (key, transport, *scope, NOW - 100, NOW)).lastrowid
     delivery = f'synthetic-{card}-{revision}'
     db.execute(
         "INSERT INTO notification_renders(delivery_id,card_id,op,render_rev,route_epoch,transport,"
-        "payload_hash,correlation,state,created_at,updated_at) VALUES(?,?,'update',?,1,?,?,?, ?,?,?)",
-        (delivery, card, revision, transport, 'synthetic-hash', delivery, render_state, NOW - 100, NOW))
+        "payload_hash,correlation,state,profile,application_id,guild_id,team_id,channel_id,created_at,updated_at) "
+        "VALUES(?,?,'update',?,1,?,?,?,?,?,?,?,?,?,?,?)",
+        (delivery, card, revision, transport, 'synthetic-hash', delivery, render_state, *scope, NOW - 100, NOW))
     for index, (kind, state, error) in enumerate(states):
         db.execute(
             "INSERT INTO notification_render_parts(delivery_id,part_id,kind,idx,state,error_code,name,"
@@ -188,6 +193,41 @@ def test_other_delivery_scope_cannot_resolve_an_old_part(stored, field):
     assert notify_scope.incomplete_parts_health(stored, NOW, SLACK)['total'] == 1
 
 
+@pytest.mark.parametrize('transport', ['discord', 'slack', 'lineworks'])
+@pytest.mark.parametrize('field', ['profile', 'application_id', 'organization', 'channel_id'])
+@pytest.mark.parametrize('invalid', [None, '', ' \t\r\n', '\u3000', b'synthetic-scope'])
+def test_matching_malformed_scope_cannot_resolve_an_old_part(stored, transport, field, invalid):
+    field = ('guild_id' if transport == 'discord' else 'team_id') if field == 'organization' else field
+    card, old = _render(stored, [('body_part', 'unknown', None)], transport=transport)
+    _render(stored, [('body_part', 'delivered', None)], transport=transport, card=card, revision=2)
+    stored.execute(f'UPDATE notification_renders SET {field}=? WHERE card_id=?', (invalid, card))
+    before = stored.total_changes
+    report = notify_scope.incomplete_parts_health(stored, NOW)
+    assert report['total'] == report['cards'] == 1
+    assert report['by_state']['unknown'] == 1 and stored.total_changes == before
+    assert set(report) == {'total', 'cards', 'by_state', 'oldest_age_s', 'observed_at'}
+    assert stored.execute('SELECT state FROM notification_render_parts WHERE delivery_id=?', (old,)).fetchone()[0] == 'unknown'
+
+
+@pytest.mark.parametrize('transport', ['discord', 'slack', 'lineworks'])
+@pytest.mark.parametrize('kind', ['body_part', 'attachment_part', 'thread'])
+def test_complete_scope_with_unused_null_column_resolves_only_the_matching_part(stored, transport, kind):
+    card, old = _render(stored, [(kind, 'held', None)], transport=transport)
+    _render(stored, [(kind, 'delivered', None)], transport=transport, card=card, revision=2)
+    unused = 'team_id' if transport == 'discord' else 'guild_id'
+    assert stored.execute(f'SELECT {unused} FROM notification_renders WHERE delivery_id=?', (old,)).fetchone()[0] is None
+    before = stored.total_changes
+    assert notify_scope.incomplete_parts_health(stored, NOW)['total'] == 0
+    assert stored.total_changes == before
+    assert stored.execute('SELECT state FROM notification_render_parts WHERE delivery_id=?', (old,)).fetchone()[0] == 'held'
+
+
+def test_unrecognized_transport_cannot_supply_later_scope_proof(stored):
+    card, _ = _render(stored, [('body_part', 'unknown', None)], transport='synthetic-unknown')
+    _render(stored, [('body_part', 'delivered', None)], transport='synthetic-unknown', card=card, revision=2)
+    assert notify_scope.incomplete_parts_health(stored, NOW)['total'] == 1
+
+
 def test_earlier_or_unconfirmed_delivery_and_text_acceptance_are_not_later_part_proof(stored):
     card, _ = _render(stored, [('body_part', 'delivered', None)])
     _render(stored, [('body_part', 'unknown', None)], card=card, revision=2)
@@ -238,6 +278,7 @@ def test_unavailable_seed_is_complete_only_after_its_caption_delivery(stored, ca
             result = notify_transport.settle_part_receipt(stored, {
                 'delivery_id': delivery, 'part_id': part['part_id'], 'render_rev': 1,
                 'payload_hash': 'synthetic-hash', 'route_epoch': 1, 'correlation': delivery,
+                **notify_scope.stored_scope(notify_scope.render_row(stored, delivery)),
                 'result': 'delivered', 'remote_id': 'SYNTHETIC_CAPTION',
             }, NOW)
         assert result['applied']

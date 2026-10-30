@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "配送先が確認できない通知の未完了警告を保持",
+  "summary": "過去の通知と後続の通知で配送先の必須項目がともに欠けていても、同じ配送先への送達とは扱わず、本文・添付などの未完了警告を残します。",
+  "upgrade": "通常の更新で適用され、追加設定は不要です。保存済みの配送状態や再送・承認条件は変わりません。",
+  "details": [
+    "Discordではprofile・application_id・guild_id・channel_id、SlackとLINE WORKSではprofile・application_id・team_id・channel_idを照合し、必須項目がNULL・空文字・空白だけの場合は警告を解消しません。",
+    "配送方式ごとに使わないguild_idまたはteam_idがNULLでも、必要な配送先情報と同じ部品の送達記録が揃っていれば警告を解消します。"
+  ],
+  "refs": ["mcs/notify/notify_scope.py"]
+}
