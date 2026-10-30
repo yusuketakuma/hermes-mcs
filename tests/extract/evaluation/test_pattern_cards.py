@@ -464,6 +464,48 @@ def test_wal_only_name_is_rejected_without_changing_original_files(tmp_path, var
         writer.close()
 
 
+def test_checkpoint_during_copy_cannot_drop_a_committed_name(tmp_path, monkeypatch, capsys):
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    db_path, _ = synthetic_snapshot(source_dir)
+    card = clean_card()
+    card["current_shape"] = "oral"  # Fully synthetic identity that is also allowed vocabulary.
+    card_path = tmp_path / "card.json"
+    card_path.write_text(json.dumps(card), encoding="utf-8")
+    reader_temp = tmp_path / "reader-temp"
+    reader_temp.mkdir()
+    mkdtemp, copyfile = pattern_cards.tempfile.mkdtemp, pattern_cards.shutil.copyfile
+    monkeypatch.setattr(pattern_cards.tempfile, "mkdtemp",
+                        lambda **kw: mkdtemp(dir=reader_temp, **kw))
+    checkpointed = []
+    writer = sqlite3.connect(db_path)
+    try:
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("INSERT INTO patients(project_id,patient_name) VALUES(99,'oral')")
+        writer.commit()
+        assert Path(str(db_path) + "-wal").stat().st_size > 0
+
+        def checkpoint_after_main(original, target):
+            result = copyfile(original, target)
+            if Path(original) == db_path:
+                assert writer.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0] == 0
+                checkpointed.append({p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                                     for p in source_dir.iterdir()})
+            return result
+
+        monkeypatch.setattr(pattern_cards.shutil, "copyfile", checkpoint_after_main)
+        result = pattern_cards.main(["lint", str(card_path), "--db", str(db_path)])
+        assert len(checkpointed) == 1
+        assert {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in source_dir.iterdir()} == checkpointed[0]
+        assert list(reader_temp.iterdir()) == []
+        output = capsys.readouterr()
+        assert output.out == output.err == ""
+        assert result == 1
+    finally:
+        writer.close()
+
+
 def test_denylist_load_failure_never_echoes_a_name_and_removes_copies(tmp_path, snapshot):
     db_path, _ = snapshot
     insert_name(db_path, "patients.patient_name", "input")

@@ -367,16 +367,33 @@ def _snapshot_denylist(source: Path) -> set[str]:
     private = Path(tempfile.mkdtemp(prefix="mcs-pattern-cards-"))
     try:
         source = source.resolve()
-        if Path(str(source) + "-journal").exists():
+        files = {suffix: Path(str(source) + suffix) for suffix in ("", "-wal", "-shm", "-journal")}
+
+        def identities():
+            result = {}
+            for suffix, path in files.items():
+                try:
+                    info = path.stat()
+                except FileNotFoundError:
+                    result[suffix] = None
+                else:
+                    result[suffix] = (info.st_dev, info.st_ino, info.st_size,
+                                      info.st_mtime_ns, info.st_ctime_ns)
+            return result
+
+        before = identities()
+        if before["-journal"] is not None:
             raise ValueError("snapshot_hot_journal")
         copy = private / "snapshot.db"
         for suffix in ("", "-wal", "-shm"):
-            original = Path(str(source) + suffix)
-            if suffix and not original.exists():
+            if suffix and before[suffix] is None:
                 continue
             target = Path(str(copy) + suffix)
-            shutil.copyfile(original, target)
+            shutil.copyfile(files[suffix], target)
             os.chmod(target, 0o600)
+        # A checkpoint between copies can leave a valid DB missing committed WAL names.
+        if identities() != before:
+            raise ValueError("snapshot_changed")
         with closing(sqlite3.connect(copy.as_uri() + "?mode=ro", uri=True)) as db:
             return _denylist(db)
     finally:
