@@ -7,7 +7,7 @@ import pytest
 import extract_llm as llm
 import inference_dependency_loss
 from extract_testkit import _hash, _ledger, _message
-from inference_version import CURRENT_VERSION, VERSION_KEY
+from inference_version import CURRENT_VERSION, LLM_EXTRACT_VERSION, VERSION_KEY
 from semantic_projection import PROJECTION_VERSION
 
 
@@ -44,7 +44,7 @@ def _pending(ledger):
 
 def test_same_generation_version_nine_requeues_and_ignores_old_retry_budget(source):
     ledger, row, prior = source
-    assert llm.EXTRACT_VERSION == 10
+    assert llm.EXTRACT_VERSION == LLM_EXTRACT_VERSION
     assert _pending(ledger)
     # A terminal retry in the previous extraction contract must not exhaust the new contract.
     ledger.artifact_add("extract_llm", '{"_error":true}', project_id=1, message_id=1,
@@ -55,14 +55,14 @@ def test_same_generation_version_nine_requeues_and_ignores_old_retry_budget(sour
         "extract_version": 9, "source_artifact_id": prior})
     now = time.time()
     selected = ledger.db.execute(llm._selection_sql(ledger.db, "DESC", "", None),
-        (llm.KIND, 10, None, 1, 0, now, llm.KIND, 10, now, 10)).fetchall()
+        (llm.KIND, LLM_EXTRACT_VERSION, None, 1, 0, now, llm.KIND, LLM_EXTRACT_VERSION, now, 10)).fetchall()
     assert len(selected) == 1 and selected[0]["message_id"] == 1
     assert selected[0]["attempts"] == 0 and selected[0]["qc_src"] is None
 
 
 def test_version_nine_checkpoint_is_readable_only_by_the_old_contract(source, monkeypatch):
     ledger, row, _ = source
-    assert llm.EXTRACT_VERSION == 10
+    assert llm.EXTRACT_VERSION == LLM_EXTRACT_VERSION
     with monkeypatch.context() as old:
         old.setattr(llm, "EXTRACT_VERSION", 9)
         assert llm._persist_chunks(ledger, row, {0: {"summary": "合成の途中経過"}})
@@ -76,7 +76,7 @@ def test_version_nine_checkpoint_is_readable_only_by_the_old_contract(source, mo
 
 def test_held_prior_is_rechecked_under_new_target_without_losing_evidence(source, monkeypatch):
     ledger, row, prior = source
-    assert llm.EXTRACT_VERSION == 10
+    assert llm.EXTRACT_VERSION == LLM_EXTRACT_VERSION
     original = dict(ledger.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (prior,)).fetchone())
     weak = '{"summary":"合成の候補","symptoms":[]}'
     with monkeypatch.context() as old:
@@ -85,12 +85,12 @@ def test_held_prior_is_rechecked_under_new_target_without_losing_evidence(source
         first = json.loads(ledger.artifacts(llm.UPGRADE_KIND)[0]["content"])
         assert first["state"] == "held_prior" and first["target_version"] == 9
         assert not _pending(ledger)
-    assert _pending(ledger)  # Old target's hold is not a receipt for target 10.
+    assert _pending(ledger)  # Old target's hold is not a receipt for the current target.
     assert llm._replace_current(ledger, row, weak) is False
     assert dict(ledger.db.execute("SELECT * FROM artifacts WHERE artifact_id=?", (prior,)).fetchone()) == original
     receipts = [json.loads(item["content"]) for item in ledger.artifacts(llm.UPGRADE_KIND)]
-    assert {item["target_version"] for item in receipts} == {9, 10}
-    newest, = [item for item in receipts if item["target_version"] == 10]
+    assert {item["target_version"] for item in receipts} == {9, LLM_EXTRACT_VERSION}
+    newest, = [item for item in receipts if item["target_version"] == LLM_EXTRACT_VERSION]
     assert newest["state"] == "held_prior" and newest["reason"] == "protected_loss"
     assert newest["prior_artifact_id"] == prior and newest["hash"] == row["content_hash"]
     assert newest["contract"] == llm._upgrade_contract()
@@ -99,7 +99,7 @@ def test_held_prior_is_rechecked_under_new_target_without_losing_evidence(source
 
 def test_current_canonical_projection_has_priority_over_version_nine_retry(source):
     ledger, row, prior = source
-    assert llm.EXTRACT_VERSION == 10 and _pending(ledger)
+    assert llm.EXTRACT_VERSION == LLM_EXTRACT_VERSION and _pending(ledger)
     ledger.artifact_add("semantic_facts_v4", '{"facts":[]}', project_id=1, message_id=1,
         meta={VERSION_KEY: CURRENT_VERSION, "hash": row["content_hash"], "engine_version": 4,
               "projection_version": PROJECTION_VERSION})

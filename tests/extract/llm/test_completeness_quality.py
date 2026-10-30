@@ -12,6 +12,7 @@ import pytest
 
 import extract_llm
 from extract_testkit import _hash, _ledger, _message
+from inference_version import LLM_EXTRACT_VERSION
 
 
 OBSERVATIONS = {"symptoms": [
@@ -50,7 +51,7 @@ def test_clean_first_candidate_recovers_a_supported_missing_hint(monkeypatch, ta
         [request] = result["requests"]
         assert request["action"] == "記録確認" and request["evidence"] in body
         assert request.get("unverified") is not True
-    assert extract_llm.EXTRACT_VERSION == 10
+    assert extract_llm.EXTRACT_VERSION == LLM_EXTRACT_VERSION
 
 
 @pytest.mark.parametrize("tail", [
@@ -69,7 +70,7 @@ def test_weak_other_person_past_negative_or_unsupported_hints_do_not_add_a_call(
 
 
 @pytest.mark.parametrize("repair", [
-    {"vitals": {"sbp": 120, "dbp": 80}},
+    {"symptoms": [], "vitals": {"sbp": 120, "dbp": 80}},
     {**OBSERVATIONS, "meds": [{"name": "原文に存在しない架空薬"}]},
 ])
 def test_optional_repair_cannot_erase_prior_facts_or_win_with_an_ungrounded_gain(monkeypatch, repair):
@@ -196,7 +197,7 @@ def test_answer_returned_after_absolute_deadline_cannot_finish_the_message(monke
 
     def late(*args, **kwargs):
         clock[0] = 12.0
-        return {"summary": "完全合成の遅れた回答"}
+        return {"symptoms": [], "summary": "完全合成の遅れた回答"}
 
     monkeypatch.setattr(extract_llm, "_llm_call", late)
     assert extract_llm.llm_extract("完全合成の通常連絡。", deadline=11.0) is extract_llm._DEFERRED
@@ -425,7 +426,7 @@ def test_source_digest_change_reuses_legacy_checkpoint_and_only_repairs_missing_
         def model(prompt, **kwargs):
             calls.append((prompt, kwargs.get("kind")))
             assert needs_repair and kwargs.get("kind") == "repair"
-            return {"vitals": {"sbp": 120, "dbp": 80}}
+            return {"symptoms": [], "vitals": {"sbp": 120, "dbp": 80}}
 
         monkeypatch.setattr(extract_llm, "_llm_call", model)
         assert extract_llm.run_pending(db, budget_s=200)["done"] == 1
@@ -1662,7 +1663,7 @@ def test_a_repair_after_an_invalid_answer_records_its_own_gaps(monkeypatch, repa
     body = PREFIX + "本人の架空薬A5mgを中止しました。"
     calls, meta = [], {}
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs: calls.append(args) or copy.deepcopy(
-        {"meds": "broken"} if len(calls) == 1 else {**OBSERVATIONS, "meds": repaired}))
+        {"symptoms": [], "meds": "broken"} if len(calls) == 1 else {**OBSERVATIONS, "meds": repaired}))
     extract_llm.llm_extract(body, hints=hints(body), meta_out=meta)
     assert len(calls) == 2
     states = {e["state"] for e in (meta.get("completeness") or {}).values()}
@@ -1754,8 +1755,8 @@ def test_a_time_word_glued_to_the_drug_keeps_its_change(text, action, status):
 
 @pytest.mark.parametrize("body,answer", [
     ("午前の血圧136/82。現在の収縮期血圧は98、拡張期血圧は測定できませんでした。",
-     {"vitals": {"sbp": 98}}),
-    ("午前の血圧136/82。現在の血圧は測定できませんでした。", {"summary": "現在は測定できず"}),
+     {"symptoms": [], "vitals": {"sbp": 98}}),
+    ("午前の血圧136/82。現在の血圧は測定できませんでした。", {"symptoms": [], "summary": "現在は測定できず"}),
 ])
 def test_superseded_vital_hints_do_not_force_a_false_unresolved_repair(monkeypatch, body, answer):
     calls = []

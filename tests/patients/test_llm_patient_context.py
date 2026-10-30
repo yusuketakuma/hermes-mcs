@@ -79,17 +79,17 @@ def test_patient_context_chunk_merge_keeps_distinct_subjects_and_reports():
 def test_patient_context_llm_single_and_chunks_remain_source_bound(monkeypatch):
     first, second = item(), item("cognition", "会話は明瞭です")
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs:
-                        {"patient_context": [first]})
+                        {"symptoms": [], "patient_context": [first]})
     assert extract_llm.llm_extract("独居です。")["patient_context"] == [first]
     body = "独居です。" + "あ" * 3100 + "会話は明瞭です。"
     def infer(prompt, **kwargs):
         core = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
         items = [item for item in (first, second) if item["evidence"] in core]
-        return {"patient_context": items} if items else {}
+        return {"symptoms": [], **({"patient_context": items} if items else {})}
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
     assert extract_llm.llm_extract(body)["patient_context"] == [first, second]
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *args, **kwargs:
-                        {"patient_context": [first]})
+                        {"symptoms": [], "patient_context": [first]})
     lifted = extract_llm.llm_extract("本文は別の記載です。", context="独居です。")
     assert lifted is None
 
@@ -104,7 +104,7 @@ def test_new_detail_contract_marks_results_and_repends_existing_v5(db, generatio
         old[inference_version.VERSION_KEY] = generation
     old_content = {"summary": "旧合成概要"}
     old_id = db.artifact_add("extract_llm", json.dumps(old_content), project_id=1, message_id=1, meta=old)
-    assert extract_llm.EXTRACT_VERSION == 10
+    assert extract_llm.EXTRACT_VERSION == inference_version.LLM_EXTRACT_VERSION
     assert not extract_llm._current(db, 1, row["content_hash"])
     content = {"patient_context": [item()]}
     assert extract_llm._replace_current(db, row, json.dumps(content))

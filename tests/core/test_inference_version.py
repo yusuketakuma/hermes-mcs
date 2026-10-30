@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 
 from inference_version import (
-    CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY,
+    CURRENT_VERSION, LEGACY_VERSION, LLM_EXTRACT_VERSION, VERSION_KEY,
     current_meta_pred, is_current, read_version,
 )
 
@@ -73,6 +73,7 @@ def test_public_version_does_not_replace_internal_semantic_structure_version():
     assert VERSION_KEY == 'inference_engine_version'
     assert LEGACY_VERSION == '0.1'
     assert CURRENT_VERSION == '1.0'
+    assert LLM_EXTRACT_VERSION == 11
     meta = {'engine_version': 4, VERSION_KEY: '1.0'}
     assert is_current(meta)
     assert meta == {'engine_version': 4, VERSION_KEY: '1.0'}

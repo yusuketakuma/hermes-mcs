@@ -1232,6 +1232,11 @@ def _hint_coverage(value, hints, body, *, state=None):
     return {"state": state, "remaining_hint_candidates": remaining}
 
 
+def _response_has_required_fields(document):
+    return isinstance(document, dict) and all(
+        key in document for key in extract_schema.SCHEMA["schema"]["required"])
+
+
 def llm_extract(body: str, *, context: str | None = None,
                 hints: dict | None = None,
                 deadline: float | None = None,
@@ -1414,7 +1419,8 @@ def llm_extract(body: str, *, context: str | None = None,
                 and notes[-1].get("finish_reason") == "length"):
             return split_piece(key, piece, start, remaining)
         drops: dict = {}
-        v = extract_validation.validate_piece(d, piece, body, drops, piece_context, references, source_offset=start) if d is not None else None
+        v = (extract_validation.validate_piece(d, piece, body, drops, piece_context, references, source_offset=start)
+             if d is not None and (quality_status or _response_has_required_fields(d)) else None)
         if quality_status and v is not None and isinstance(cached, dict):
             # Filtering a checkpoint again cannot erase its earlier validation loss.
             for counter in ("_items_dropped", "_evidence_dropped"):
@@ -1512,7 +1518,8 @@ def llm_extract(body: str, *, context: str | None = None,
                 if rd is _DEFERRED and v is None:
                     return _DEFERRED
                 if rd is not None and rd is not _DEFERRED:
-                    rv = extract_validation.validate_piece(rd, piece, body, ctx=piece_context, references=references, source_offset=start)
+                    rv = (extract_validation.validate_piece(rd, piece, body, ctx=piece_context, references=references, source_offset=start)
+                          if _response_has_required_fields(rd) else None)
                     if rv is not None and not context:
                         rv.pop("reply", None)
                     # a replacement must see every change in the message, so only an unsplit body
@@ -4376,6 +4383,8 @@ def _run_batch_call(tups, target, deadline: float,
             out.pop(tups[i][0], None)
             continue
         seen.add(i)
+        if not _response_has_required_fields(item):
+            continue
         index, r = tups[i][0], tups[i][1]
         drops: dict = {}
         v = extract_validation.validate({k: val for k, val in item.items() if k != "i"},

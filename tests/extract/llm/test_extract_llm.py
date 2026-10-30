@@ -228,7 +228,7 @@ def test_unlocated_condition_triggers_repair_and_stays_unverified(monkeypatch):
 
     def fake(prompt, **kw):
         calls.append(prompt)
-        return {"requests": [{"to": "看護師", "action": "医師へ連絡",
+        return {"symptoms": [], "requests": [{"to": "看護師", "action": "医師へ連絡",
                               "condition": "熱が出たら",
                               "evidence": body}],
                 "summary": "s"}
@@ -244,7 +244,7 @@ def test_repair_that_locates_condition_is_adopted(monkeypatch):
     conds = iter(["発熱時", "熱が出たら"])
 
     def fake(prompt, **kw):
-        return {"requests": [{"to": "医師", "action": "医師へ連絡",
+        return {"symptoms": [], "requests": [{"to": "医師", "action": "医師へ連絡",
                               "kind": "request", "condition": next(conds),
                               "evidence": body}],
                 "summary": "s"}
@@ -406,7 +406,7 @@ def test_thin_output_gets_one_repair_nudge(monkeypatch):
     def fake_call(prompt, **_ignored):
         calls.append(prompt)
         if len(calls) == 1:
-            return {"events": ["visit"], "urgency": "routine"}
+            return {"symptoms": [], "events": ["visit"], "urgency": "routine"}
         return {"events": ["visit"], "urgency": "high",
                 "urgency_evidence": ["夕方から呼吸が苦しそうです"],
                 "summary": "発熱持続",
@@ -477,10 +477,10 @@ def test_thin_unresolved_marks_meta(monkeypatch):
     coverage audits can find it."""
     monkeypatch.setattr(
         extract_llm, "_llm_call",
-        lambda prompt, **_ignored: {"urgency": "routine"})
+        lambda prompt, **_ignored: {"symptoms": [], "urgency": "routine"})
     meta = {}
     out = extract_llm.llm_extract("あ" * 400, meta_out=meta)
-    assert out == {"urgency": "routine"} and meta["thin"] is True
+    assert out == {"symptoms": [], "urgency": "routine"} and meta["thin"] is True
 
 
 # ---------- lazy-replace version migration ----------
@@ -750,11 +750,11 @@ def test_prompt_concat_handles_percent_body(monkeypatch):
         def open(self, req, timeout=None):
             captured["req"] = req
             return io.BytesIO(json.dumps(
-                {"choices": [{"message": {"content": "{}"}}]}
+                {"choices": [{"message": {"content": '{"symptoms":[]}'}}]}
             ).encode())
 
     monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(FakeOpener()))
-    assert extract_llm.llm_extract("SpO2 97% 低下を認める") == {}
+    assert extract_llm.llm_extract("SpO2 97% 低下を認める") == {"symptoms": []}
     sent = json.loads(captured["req"].data.decode())
     assert "SpO2 97% 低下" in sent["messages"][0]["content"]
 
@@ -923,7 +923,7 @@ def test_llm_extract_context_block_boundaries(monkeypatch):
         def open(self, req, timeout=None):
             captured["req"] = req
             return io.BytesIO(json.dumps(
-                {"choices": [{"message": {"content": "{}"}}]}
+                {"choices": [{"message": {"content": '{"symptoms":[]}'}}]}
             ).encode())
 
     monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(FakeOpener()))
@@ -952,7 +952,7 @@ def test_reply_rules_ride_context_only_and_root_posts_drop_reply(
 
     def fake(prompt, **kw):
         prompts.append(prompt)
-        return {"reply": {"kind": "ack", "evidence": "承知しました"},
+        return {"symptoms": [], "reply": {"kind": "ack", "evidence": "承知しました"},
                 "summary": "s"}
     monkeypatch.setattr(extract_llm, "_llm_call", fake)
     body = "承知しました。"
@@ -1013,7 +1013,7 @@ def test_rule_hints_ride_the_prompt_as_candidates(monkeypatch):
         def open(self, req, timeout=None):
             captured["req"] = req
             return io.BytesIO(json.dumps(
-                {"choices": [{"message": {"content": "{}"}}]}
+                {"choices": [{"message": {"content": '{"symptoms":[]}'}}]}
             ).encode())
 
     monkeypatch.setattr(extract_llm, "_opener_request",
@@ -1212,11 +1212,11 @@ def test_context_with_karte_head_but_no_tail_is_thread(monkeypatch):
 
     def fake(prompt, **kw):
         seen["prompt"] = prompt
-        return {"summary": "s"}
+        return {"symptoms": [], "summary": "s"}
     monkeypatch.setattr(extract_llm, "_llm_call", fake)
     ctx = extract_llm._KARTE_HEAD + "headの後にtailが無い断片"
     out = extract_llm.llm_extract("対象本文です", context=ctx)
-    assert out == {"summary": "s"}
+    assert out == {"symptoms": [], "summary": "s"}
     assert extract_llm._CTX_HEAD in seen["prompt"]
     assert "断片" in seen["prompt"]
 
@@ -1253,7 +1253,7 @@ def test_karte_block_changes_ctx_hash_and_prompt_placement(tmp_path, monkeypatch
         def open(self, req, timeout=None):
             captured["req"] = req
             return io.BytesIO(json.dumps(
-                {"choices": [{"message": {"content": "{}"}}]}
+                {"choices": [{"message": {"content": '{"symptoms":[]}'}}]}
             ).encode())
 
     monkeypatch.setattr(extract_llm, "_opener_request",
@@ -1376,13 +1376,13 @@ def test_extract_degrades_mid_run_on_format_reject(monkeypatch):
                 raise _http_error(400)
             return io.BytesIO(json.dumps(
                 {"choices": [{"message":
-                              {"content": '{"summary":"ok"}'}}]}
+                              {"content": '{"symptoms":[],"summary":"ok"}'}}]}
             ).encode())
 
     op = Swap()
     monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(op))
     out = extract_llm.llm_extract("本文")
-    assert out == {"summary": "ok"}
+    assert out == {"symptoms": [], "summary": "ok"}
     # degrade is ONE rung on the ladder — schema -> object, not
     # straight to plain
     assert extract_llm._FMT_MODE == "object"
@@ -1445,7 +1445,7 @@ def test_chunk_failure_fails_message_not_partial(monkeypatch):
 
     def fake_call(prompt, **_ignored):
         calls["n"] += 1
-        return {"summary": "ok"} if calls["n"] == 1 else None
+        return {"symptoms": [], "summary": "ok"} if calls["n"] == 1 else None
 
     monkeypatch.setattr(extract_llm, "_llm_call", fake_call)
     assert extract_llm.llm_extract(body) is None
@@ -1463,7 +1463,7 @@ def test_chunk_deadline_defers_without_error(tmp_path, monkeypatch):
     message pending WITHOUT writing an error artifact (budget
     exhaustion is not a retryable failure)."""
     monkeypatch.setattr(extract_llm, "_llm_call",
-                        lambda prompt, **_ignored: {"summary": "ok"})
+                        lambda prompt, **_ignored: {"symptoms": [], "summary": "ok"})
     body = "あ" * 2500 + "\n" + "い" * 1200
     # deadline between chunk 1 and chunk 2
     assert extract_llm.llm_extract(
@@ -1738,7 +1738,7 @@ def test_posted_at_reaches_prompt(monkeypatch):
         def open(self, req, timeout=None):
             captured["req"] = req
             return io.BytesIO(json.dumps(
-                {"choices": [{"message": {"content": "{}"}}]}
+                {"choices": [{"message": {"content": '{"symptoms":[]}'}}]}
             ).encode())
 
     monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(FakeOpener()))
@@ -1811,7 +1811,7 @@ def test_chunk_checkpoint_resumes_without_reinference(tmp_path, monkeypatch):
 
     def fake_call(prompt, **_):
         calls.append(1)
-        return {"summary": "x"} if len(calls) == 1 \
+        return {"symptoms": [], "summary": "x"} if len(calls) == 1 \
             else extract_llm._DEFERRED
 
     monkeypatch.setattr(extract_llm, "_llm_call", fake_call)
@@ -1824,7 +1824,7 @@ def test_chunk_checkpoint_resumes_without_reinference(tmp_path, monkeypatch):
     calls.clear()
     monkeypatch.setattr(
         extract_llm, "_llm_call",
-        lambda p, **_: calls.append(1) or {"summary": "y"})
+        lambda p, **_: calls.append(1) or {"symptoms": [], "summary": "y"})
     r = extract_llm.run_pending(db, limit=5, budget_s=60)
     assert r["done"] == 1
     assert len(calls) == 1
@@ -1869,7 +1869,7 @@ def test_batch_extracts_all_rows_one_call(tmp_path, monkeypatch):
 
     def fake_call(prompt, **kw):
         calls.append(prompt)
-        return {"items": [{"i": i, "summary": f"s{i}",
+        return {"items": [{"i": i, "symptoms": [], "summary": f"s{i}",
                            "urgency": "routine"} for i in range(4)]}
     monkeypatch.setattr(extract_llm, "_llm_call", fake_call)
     res = extract_llm.run_pending(db, limit=10, budget_s=30, batch_k=4)
@@ -1899,8 +1899,8 @@ def test_batch_skips_context_and_multichunk_rows(tmp_path, monkeypatch):
     monkeypatch.setattr(
         extract_llm, "_llm_call",
         lambda p, **kw: batch_calls.append(p) or {"items": [
-            {"i": 0, "summary": "s0"}, {"i": 1, "summary": "s1"},
-            {"i": 2, "summary": "s2"}]})
+            {"i": 0, "symptoms": [], "summary": "s0"}, {"i": 1, "symptoms": [], "summary": "s1"},
+            {"i": 2, "symptoms": [], "summary": "s2"}]})
     singles = []
     monkeypatch.setattr(
         extract_llm, "llm_extract",
@@ -1924,8 +1924,8 @@ def test_batch_omitted_item_falls_back_to_single(tmp_path, monkeypatch):
     db = _batch_ledger(tmp_path, n=4)
     monkeypatch.setattr(
         extract_llm, "_llm_call",
-        lambda p, **kw: {"items": [{"i": 0, "summary": "s0"},
-                                   {"i": 2, "summary": "s2"}]})
+        lambda p, **kw: {"items": [{"i": 0, "symptoms": [], "summary": "s0"},
+                                   {"i": 2, "symptoms": [], "summary": "s2"}]})
     seen = []
     monkeypatch.setattr(
         extract_llm, "llm_extract",
@@ -1958,7 +1958,7 @@ def test_batch_call_notes_reset_between_runs(tmp_path, monkeypatch):
         # mirror the real _llm_call's note append
         extract_llm._integrity_note(
             {"status": 200, "finish_reason": "stop"})
-        return {"items": [{"i": i, "summary": f"s{i}"}
+        return {"items": [{"i": i, "symptoms": [], "summary": f"s{i}"}
                           for i in range(4)]}
 
     monkeypatch.setattr(extract_llm, "_llm_call", fake_call)
@@ -1984,10 +1984,10 @@ def test_batch_item_evidence_validates_against_own_body(
     monkeypatch.setattr(
         extract_llm, "_llm_call",
         lambda p, **kw: {"items": [
-            {"i": 0, "meds": [{"name": "ロキソプロフェン", "action": "stop",
+            {"i": 0, "symptoms": [], "meds": [{"name": "ロキソプロフェン", "action": "stop",
                                "status": "past", "subject": "patient", "negated": False,
                                "evidence": "ロキソプロフェン中止"}]},
-            {"i": 1, "meds": [{"name": "ロキソプロフェン",
+            {"i": 1, "symptoms": [], "meds": [{"name": "ロキソプロフェン",
                                "evidence": "ロキソプロフェン中止"}]}]})
     singles = []
     monkeypatch.setattr(
@@ -2063,9 +2063,9 @@ def test_repair_rescues_dropped_evidence(monkeypatch):
     def fake(prompt, **kw):
         calls.append(prompt)
         if len(calls) == 1:
-            return {"meds": [{"name": "カロナール",
+            return {"symptoms": [], "meds": [{"name": "カロナール",
                               "evidence": "存在しない引用"}]}
-        return {"meds": [{"name": "カロナール",
+        return {"symptoms": [], "meds": [{"name": "カロナール",
                           "evidence": "カロナールを服用中"}],
                 "summary": "s"}
     monkeypatch.setattr(extract_llm, "_llm_call", fake)
@@ -2082,17 +2082,17 @@ def test_repair_not_run_on_clean_output(monkeypatch):
 
     def fake(p, **kw):
         calls.append(p)
-        return {"summary": "clean"}
+        return {"symptoms": [], "summary": "clean"}
     monkeypatch.setattr(extract_llm, "_llm_call", fake)
-    assert extract_llm.llm_extract("本文") == {"summary": "clean"}
+    assert extract_llm.llm_extract("本文") == {"symptoms": [], "summary": "clean"}
     assert len(calls) == 1          # zero cost on the clean path
 
 
 def test_repair_keeps_first_when_no_better(monkeypatch):
     """A repair that drops just as much does not displace the
     original — the first salvageable output stands."""
-    seq = iter([{"meds": [{"name": "x", "evidence": "not-in-body"}]},
-                {"meds": [{"name": "y", "evidence": "also-bad"}]}])
+    seq = iter([{"symptoms": [], "meds": [{"name": "x", "evidence": "not-in-body"}]},
+                {"symptoms": [], "meds": [{"name": "y", "evidence": "also-bad"}]}])
     monkeypatch.setattr(extract_llm, "_llm_call", lambda p, **kw: next(seq))
     out = extract_llm.llm_extract("対象本文です")
     assert out["meds"][0]["name"] == "x"
@@ -2187,7 +2187,7 @@ def test_deferred_batch_rows_fall_back_to_singles(tmp_path, monkeypatch):
             calls["batch"] += 1
             return extract_llm._DEFERRED
         calls["single"] += 1
-        return {"summary": "s"}
+        return {"symptoms": [], "summary": "s"}
     monkeypatch.setattr(extract_llm, "_llm_call", _call)
     res = extract_llm.run_pending(db, limit=10, budget_s=30, batch_k=4)
     assert calls == {"batch": 1, "single": 4}
@@ -2206,7 +2206,7 @@ def test_deferred_batch_fall_back_parallel(tmp_path, monkeypatch):
             calls["batch"] += 1
             return extract_llm._DEFERRED
         calls["single"] += 1
-        return {"summary": "s"}
+        return {"symptoms": [], "summary": "s"}
     monkeypatch.setattr(extract_llm, "_llm_call", _call)
     res = extract_llm.run_pending(db, limit=10, budget_s=30, batch_k=4,
                                   workers=3)
@@ -2302,7 +2302,7 @@ def test_llm_extract_injects_qc_feedback(monkeypatch):
 
     def fake(prompt, **_):
         seen.append(prompt)
-        return {"summary": "ok"}
+        return {"symptoms": [], "summary": "ok"}
 
     monkeypatch.setattr(extract_llm, "_llm_call", fake)
     extract_llm.llm_extract(
@@ -2673,8 +2673,8 @@ def test_blood_pressure_at_body_end_keeps_diastolic_side():
 def test_multichunk_labs_preserve_distinct_readings_and_evidence(monkeypatch):
     body = "合成検査A 1。" + "あ" * 2500 + "\n" + "い" * 1000 + "合成検査A 2。合成検査B 3。"
     replies = iter([
-        {"labs": [{"name": "合成検査A", "value": 1, "evidence": "合成検査A 1"}]},
-        {"labs": [{"name": "合成検査A", "value": 2, "evidence": "合成検査A 2"},
+        {"symptoms": [], "labs": [{"name": "合成検査A", "value": 1, "evidence": "合成検査A 1"}]},
+        {"symptoms": [], "labs": [{"name": "合成検査A", "value": 2, "evidence": "合成検査A 2"},
                   {"name": "合成検査B", "value": 3, "evidence": "合成検査B 3"}]},
     ])
     monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **kw: next(replies))
@@ -2715,7 +2715,7 @@ def test_invalid_chunk_checkpoint_is_reinferred(tmp_path, monkeypatch, bad):
     db.db.commit()
     calls = []
     monkeypatch.setattr(extract_llm, "_llm_call",
-                        lambda *a, **kw: calls.append(1) or {"summary": "再抽出"})
+                        lambda *a, **kw: calls.append(1) or {"symptoms": [], "summary": "再抽出"})
     result = extract_llm.run_pending(db, budget_s=180)
     assert result["done"] == 1 and calls == [1]
     assert json.loads(db.artifacts("extract_llm")[0]["content"])["summary"] == "再抽出"
@@ -3129,7 +3129,7 @@ def test_vital_threshold_flags_anchor_and_context():
 def test_vital_policy_off_flag_high_modes(monkeypatch):
     body = "SpO2 88%です。今も苦しそうな様子が続いています"
     monkeypatch.setattr(extract_llm, "_llm_call",
-                        lambda *a, **k: {"vitals": {"spo2": 88},
+                        lambda *a, **k: {"symptoms": [], "vitals": {"spo2": 88},
                                          "urgency": "routine",
                                          "summary": "SpO2低下"})
     out = extract_llm.llm_extract(body)
@@ -3154,8 +3154,8 @@ def test_vital_policy_applies_after_chunk_merge(monkeypatch):
             "対象本文(投稿日時: 不明):\n<<<\n", 1)[1].rsplit(
             "\n>>>\nJSON:", 1)[0]
         if "SpO2" in tgt:
-            return {"vitals": {"spo2": 85}, "urgency": "routine"}
-        return {"urgency": "routine"}
+            return {"symptoms": [], "vitals": {"spo2": 85}, "urgency": "routine"}
+        return {"symptoms": [], "urgency": "routine"}
 
     monkeypatch.setattr(extract_llm, "_llm_call", fake)
     out = extract_llm.llm_extract(

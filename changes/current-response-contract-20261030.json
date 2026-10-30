@@ -1,0 +1,17 @@
+{
+  "category": "fixed",
+  "title": "抽出応答の必須項目の欠落を検出",
+  "summary": "症状欄がない抽出応答を完了扱いせず、既存の修復と再試行へ回します。症状が記載されていないことを示す空配列は、引き続き受け付けます。",
+  "upgrade": "通常の更新で反映します。内部抽出版を10から11へ更新し、既存の対象判定と予算内で対象投稿を順次再処理します。更新直後に旧結果を削除しません。公開推論版1.0、モデル、予算、外部送信先、人承認の条件は変更しません。",
+  "details": [
+    "初回・修復・batchの生の抽出応答だけで、現在のschemaが要求する必須項目を確認します。初回の欠落は既存の修復へ回し、必須項目が欠けた修復応答は採用しません。",
+    "batchの必須項目が欠けた投稿は、既存の投稿単位の再試行へ残します。",
+    "正規化済みcheckpoint、旧保存payload、内部の部分payloadと空結果の保存は、従来の読取り・検証条件を保ちます。"
+  ],
+  "refs": [
+    "mcs/extract/llm/extract_llm.py",
+    "mcs/core/inference_version.py",
+    "tests/extract/llm/test_current_response_contract.py",
+    "tests/core/test_inference_version.py"
+  ]
+}
