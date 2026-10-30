@@ -1743,565 +1743,565 @@
       "sha256": "086fa3e318104682603733c64cde36b2e0bb6c34b8b2985b0293f1f73f3de422"
     },
     {
-      "path": "changes/admission-live-fence-20261030.json",
+      "path": "changes/archive/1.1.0/admission-live-fence-20261030.json",
       "id": "admission-live-fence-20261030",
       "title": "共有中の推論受付でも旧版の解放記録を確認",
       "sha256": "1d716f7a43c2e0f180dde03a0d3fa6e961067c1d33ac2b671fc89d51cfeecdda"
     },
     {
-      "path": "changes/admission-owner-retirement-proof-20261030.json",
+      "path": "changes/archive/1.1.0/admission-owner-retirement-proof-20261030.json",
       "id": "admission-owner-retirement-proof-20261030",
       "title": "実行元の終了だけで送信済み推論の枠を解放しない",
       "sha256": "d245b239e13156ba8cc4f3c358463aa338d4c61a297eb162ef5c72d729246760"
     },
     {
-      "path": "changes/admission-retirement-proof-20261030.json",
+      "path": "changes/archive/1.1.0/admission-retirement-proof-20261030.json",
       "id": "admission-retirement-proof-20261030",
       "title": "完了未確認のローカル推論をidle表示だけで終了扱いにしない",
       "sha256": "cacc9915626969f0b5df9af28a91a82264a68e9899a8bd099ab0de99b0ea3ce7"
     },
     {
-      "path": "changes/anthropic-usage-compat-20261029.json",
+      "path": "changes/archive/1.1.0/anthropic-usage-compat-20261029.json",
       "id": "anthropic-usage-compat-20261029",
       "title": "Anthropicの通常速度の使用量を正しく扱う",
       "sha256": "f3ec5a78f077c7d9a0b20f64b4ce7bde4488f1251985aaf237112d5ac3ec78b9"
     },
     {
-      "path": "changes/api-key-provider-icons-20261030.json",
+      "path": "changes/archive/1.1.0/api-key-provider-icons-20261030.json",
       "id": "api-key-provider-icons-20261030",
       "title": "登録済みの外部処理サービスを表示",
       "sha256": "e85464c5e63f080f1f157973f86b566b933fbae34b54a5669b426816868e4853"
     },
     {
-      "path": "changes/api-key-registration-hardening-20261029.json",
+      "path": "changes/archive/1.1.0/api-key-registration-hardening-20261029.json",
       "id": "api-key-registration-hardening-20261029",
       "title": "APIキー登録中の設定変更と保存結果を確認",
       "sha256": "f1def95ebfa7097922c8ef111e038a616fa667996614cb8aa4906594af395db7"
     },
     {
-      "path": "changes/archived-context-reprocess-20261029.json",
+      "path": "changes/archive/1.1.0/archived-context-reprocess-20261029.json",
       "id": "archived-context-reprocess-20261029",
       "title": "アーカイブ済み投稿の内部監査を再開",
       "sha256": "4df323f3f976cccb2a84bc4c364a10d312f96261368623256b326ca52c80fe60"
     },
     {
-      "path": "changes/audit-failure-reasons-20261029.json",
+      "path": "changes/archive/1.1.0/audit-failure-reasons-20261029.json",
       "id": "audit-failure-reasons-20261029",
       "title": "監査できなかった理由を区別し同じ不正な要約の再試行を停止",
       "sha256": "9cc531ef7ff3dc08688a8c6c0ef98ee7b5f0539c8bac66e69528876ebda36e29"
     },
     {
-      "path": "changes/cloud-backlog-budget-observation-20261029.json",
+      "path": "changes/archive/1.1.0/cloud-backlog-budget-observation-20261029.json",
       "id": "cloud-backlog-budget-observation-20261029",
       "title": "背景処理がJevの予算で待機する理由を表示",
       "sha256": "24cfc0be2fbb514d511307b190451a49eb9c162b12264de8ddbe0a01a6923eb4"
     },
     {
-      "path": "changes/cloud-backlog-routing-20261029.json",
+      "path": "changes/archive/1.1.0/cloud-backlog-routing-20261029.json",
       "id": "cloud-backlog-routing-20261029",
       "title": "背景の意味解析と投稿抽出を登録済みクラウドへ接続",
       "sha256": "3b788c4cc00a7ec414f87dcb406dbe9a5fb1419cdf9efc7d1f44d04ea086329c"
     },
     {
-      "path": "changes/cloud-circuit-late-success-20261029.json",
+      "path": "changes/archive/1.1.0/cloud-circuit-late-success-20261029.json",
       "id": "cloud-circuit-late-success-20261029",
       "title": "混雑時の待機を並行要求の成功で早期解除しない",
       "sha256": "2d7c7defde5e71d145d6f807fd371e0bb6baad275e6a7a1ac7b1545f9d7b35f3"
     },
     {
-      "path": "changes/cloud-main-local-fallback-20261029.json",
+      "path": "changes/archive/1.1.0/cloud-main-local-fallback-20261029.json",
       "id": "cloud-main-local-fallback-20261029",
       "title": "履歴のクラウド処理とローカルへの切り替えを改善",
       "sha256": "670e43bcf9423c3c49df509f900c0ec86f22b0a1f5a83fd217c76adf28923048"
     },
     {
-      "path": "changes/cloud-output-length-20261030.json",
+      "path": "changes/archive/1.1.0/cloud-output-length-20261030.json",
       "id": "cloud-output-length-20261030",
       "title": "本文が出る前の出力上限到達を契約違反にしない",
       "sha256": "d8c609f716f8f2673ec1efaafe1702aadb634ef5b6ec346dc15f5b81b0c97091"
     },
     {
-      "path": "changes/cloud-outstanding-observation-20261029.json",
+      "path": "changes/archive/1.1.0/cloud-outstanding-observation-20261029.json",
       "id": "cloud-outstanding-observation-20261029",
       "title": "クラウド利用の未精算記録を少量の読取りで照会",
       "sha256": "0ee4340f3242a4bb0af9df7de47c62b8b8a000d272986b799a2cdd698f0646c9"
     },
     {
-      "path": "changes/cloud-parallel-patient-priority-20261029.json",
+      "path": "changes/archive/1.1.0/cloud-parallel-patient-priority-20261029.json",
       "id": "cloud-parallel-patient-priority-20261029",
       "title": "アクティブ患者の履歴解析を優先して並列処理",
       "sha256": "f598b4b1ddf965dc7aa81ee18b13f8120c475d230fcf5a00c186bb2543d7c656"
     },
     {
-      "path": "changes/cloud-selection-progress-20261029.json",
+      "path": "changes/archive/1.1.0/cloud-selection-progress-20261029.json",
       "id": "cloud-selection-progress-20261029",
       "title": "クラウド処理の対象が待機したままになる問題を修正",
       "sha256": "45ca50d5f3a60a1ecccd65da2ce1bb57103d1ba783e31f5c827b4b6f717ea0c9"
     },
     {
-      "path": "changes/cloud-selection-writer-lock-20261030.json",
+      "path": "changes/archive/1.1.0/cloud-selection-writer-lock-20261030.json",
       "id": "cloud-selection-writer-lock-20261030",
       "title": "クラウド処理の候補確認が収集を長時間妨げる問題を修正",
       "sha256": "3e86403df9ed34b27d25767b44c45f965e55e88ad4840221f28d8f39d89f16a8"
     },
     {
-      "path": "changes/cloud-split-checkpoint-ack-20261030.json",
+      "path": "changes/archive/1.1.0/cloud-split-checkpoint-ack-20261030.json",
       "id": "cloud-split-checkpoint-ack-20261030",
       "title": "分割計画を保存できない場合の追加課金を防止",
       "sha256": "cf6740f40c1ee9f15da6900a878f6ef3e52e3486a49863a350e71ca9254407cf"
     },
     {
-      "path": "changes/command-worker-contention-retry-20261030.json",
+      "path": "changes/archive/1.1.0/command-worker-contention-retry-20261030.json",
       "id": "command-worker-contention-retry-20261030",
       "title": "通知の受領記録が書込み待ちのまま残る問題を修正",
       "sha256": "ba36592ae02a7c2c474639856b581c67ebc746869c52194c55912e57a54bf6b2"
     },
     {
-      "path": "changes/context-budget-window-result.json",
+      "path": "changes/archive/1.1.0/context-budget-window-result.json",
       "id": "context-budget-window-result",
       "title": "予算の期間変更で取得済みの患者文脈が破棄される問題を修正",
       "sha256": "cf8ca83ce03e5d886937aa130e889f831adb01e899fc5d0d5ea4d255157859c0"
     },
     {
-      "path": "changes/credential-writer-boundary-20261029.json",
+      "path": "changes/archive/1.1.0/credential-writer-boundary-20261029.json",
       "id": "credential-writer-boundary-20261029",
       "title": "認証情報の保存で不正なファイルと行の混入を拒否",
       "sha256": "2cf04d1360ec4a68d2a0e55a52010ea0d9fd6c1fff91bba34d04c6443b3e2165"
     },
     {
-      "path": "changes/current-response-contract-20261030.json",
+      "path": "changes/archive/1.1.0/current-response-contract-20261030.json",
       "id": "current-response-contract-20261030",
       "title": "抽出応答の必須項目の欠落を検出",
       "sha256": "245fec3e700e882887ce9b54e793ca7b5816af0706664dfb95072d90626ec03d"
     },
     {
-      "path": "changes/drug-stat-source-index-20261030.json",
+      "path": "changes/archive/1.1.0/drug-stat-source-index-20261030.json",
       "id": "drug-stat-source-index-20261030",
       "title": "薬剤集計で別の記載の辞書注記を結び付ける問題を修正",
       "sha256": "1e715bf1c12a6d340272ef5ac1a1dc91d00447b759aa21d8b711b444164acb69"
     },
     {
-      "path": "changes/drug-timeline-bindings-20261029.json",
+      "path": "changes/archive/1.1.0/drug-timeline-bindings-20261029.json",
       "id": "drug-timeline-bindings-20261029",
       "title": "薬剤言及履歴で原文の重複読取りを削減",
       "sha256": "e1e0b2adf0f316a83a14777276f08363c07e471996475d886eb3e1858f44e674"
     },
     {
-      "path": "changes/failed-job-diagnostics-20261029.json",
+      "path": "changes/archive/1.1.0/failed-job-diagnostics-20261029.json",
       "id": "failed-job-diagnostics-20261029",
       "title": "失敗した解析ジョブの理由調査と対策後の再試行を追加",
       "sha256": "48fd729746d967005de7d59739ebce6bccaab30abd0f2af7e21bcfb0f96b060f"
     },
     {
-      "path": "changes/failed-job-targeted-evidence-20261029.json",
+      "path": "changes/archive/1.1.0/failed-job-targeted-evidence-20261029.json",
       "id": "failed-job-targeted-evidence-20261029",
       "title": "過去の失敗理由を対象ジョブの記録から確認",
       "sha256": "5e68917dc06ed4d43f8f4b24ab32e6902bebb30bb9c3ea8e75d3bcffab00004e"
     },
     {
-      "path": "changes/health-log-guidance-20261030.json",
+      "path": "changes/archive/1.1.0/health-log-guidance-20261030.json",
       "id": "health-log-guidance-20261030",
       "title": "監視警告のログ案内を統合ログへ修正",
       "sha256": "8596473f03187c881e08dd6e98788cadae85a6f35a492a1ca2dc6e6f41605903"
     },
     {
-      "path": "changes/health-part-observation-budget-20261030.json",
+      "path": "changes/archive/1.1.0/health-part-observation-budget-20261030.json",
       "id": "health-part-observation-budget-20261030",
       "title": "通知の完了確認と監視の発報条件を修正",
       "sha256": "ff65189ca600695f291b9ef62383b6c64b747965757d146fe8cdae5f8c99058c"
     },
     {
-      "path": "changes/history-application-scope-20261029.json",
+      "path": "changes/archive/1.1.0/history-application-scope-20261029.json",
       "id": "history-application-scope-20261029",
       "title": "Bot変更後の初回履歴通知を修正",
       "sha256": "53ed8a6c0878fb30c50d4153d990d8ce9d5fa2f9ecaa91e87f5a15116baa3513"
     },
     {
-      "path": "changes/inference-reprocess-completion-20261029.json",
+      "path": "changes/archive/1.1.0/inference-reprocess-completion-20261029.json",
       "id": "inference-reprocess-completion-20261029",
       "title": "保存済みチャットの再処理で完了を確認できるよう修正",
       "sha256": "c2707ed1d26fb60d3dafee02fd2e779ac69fbc9f654b75a074f5342d29b02085"
     },
     {
-      "path": "changes/install-options-central.json",
+      "path": "changes/archive/1.1.0/install-options-central.json",
       "id": "install-options-central",
       "title": "導入時の省略項目を設定ファイルに保存",
       "sha256": "d8fc4af3eafa09eb42f83ad3f12be725f9a7bca0540fec4a9f5a41db7ba40e62"
     },
     {
-      "path": "changes/install-settings-durability.json",
+      "path": "changes/archive/1.1.0/install-settings-durability.json",
       "id": "install-settings-durability",
       "title": "導入設定の移行中断を保留として検出",
       "sha256": "9a646cd41dd7e8de4d0ddeeb65e660c87d08b8b51318bdd80455c950d9434d71"
     },
     {
-      "path": "changes/installer-bootstrap-guards-20261028.json",
+      "path": "changes/archive/1.1.0/installer-bootstrap-guards-20261028.json",
       "id": "installer-bootstrap-guards-20261028",
       "title": "Python未導入の初回導入と事前確認の順序を修正",
       "sha256": "e4f9cdc388e762a467f0988aeaa50d03571df250056d9397c66847728f82489a"
     },
     {
-      "path": "changes/installer-stat-fields-20261028.json",
+      "path": "changes/archive/1.1.0/installer-stat-fields-20261028.json",
       "id": "installer-stat-fields-20261028",
       "title": "導入時の所有者と権限の読取りを修正",
       "sha256": "50e5dd21c93c3e0cb358a4e7fa4b37e0c7d09fb53fe8a83296c2e6348c7f1e18"
     },
     {
-      "path": "changes/installer-update-exclusion.json",
+      "path": "changes/archive/1.1.0/installer-update-exclusion.json",
       "id": "installer-update-exclusion",
       "title": "導入と更新の同時実行を防止",
       "sha256": "f99437f325b67b4135d99dbe30336a2317c26013781f730905d252152432ce07"
     },
     {
-      "path": "changes/jev-empty-summary-20261029.json",
+      "path": "changes/archive/1.1.0/jev-empty-summary-20261029.json",
       "id": "jev-empty-summary-20261029",
       "title": "空の解析結果で再処理が進まなくなる問題を修正",
       "sha256": "ba05636a405139544edb8e7d2bfbb68535eba120b6b4f9d25fe209665d6008ea"
     },
     {
-      "path": "changes/jev-optional-runtime-20261029.json",
+      "path": "changes/archive/1.1.0/jev-optional-runtime-20261029.json",
       "id": "jev-optional-runtime-20261029",
       "title": "Jevを利用できないときもクラウド解析を継続",
       "sha256": "67170fad8c4ec4002e3090e3ba52fbbee4ee4222d70ccf545bb0b4fa92b3e003"
     },
     {
-      "path": "changes/jobs-repository-launcher-20261029.json",
+      "path": "changes/archive/1.1.0/jobs-repository-launcher-20261029.json",
       "id": "jobs-repository-launcher-20261029",
       "title": "リポジトリの起動コマンドでジョブの調査を利用可能に修正",
       "sha256": "88ef59f0e5be054a1856b19aaef9ae7ec4ac56d718c5ec3c525b0306f925953d"
     },
     {
-      "path": "changes/latest-audit-send-gate-20261029.json",
+      "path": "changes/archive/1.1.0/latest-audit-send-gate-20261029.json",
       "id": "latest-audit-send-gate-20261029",
       "title": "通知前の監査記録の照合を強化",
       "sha256": "15cb3711f7f00f7bfd62d215c658a02cef892afe782b9a8bf4bd8ff9383cf845"
     },
     {
-      "path": "changes/lineworks-registration-boundary-20261029.json",
+      "path": "changes/archive/1.1.0/lineworks-registration-boundary-20261029.json",
       "id": "lineworks-registration-boundary-20261029",
       "title": "LINE WORKSの認証情報を保存前後に確認",
       "sha256": "ab3eed98a7f9bb78649218bdad0f6912405d553380fe271ddf3fe503dd1618fa"
     },
     {
-      "path": "changes/log-service-ownership-20261030.json",
+      "path": "changes/archive/1.1.0/log-service-ownership-20261030.json",
       "id": "log-service-ownership-20261030",
       "title": "ログ統合後も復旧用Pythonを安全に変更できるよう修正",
       "sha256": "40d812799a763954f274086db8ccb73d62856078e29397ae92dfa5114d4e6a29"
     },
     {
-      "path": "changes/loop-only-context-readiness-20261030.json",
+      "path": "changes/archive/1.1.0/loop-only-context-readiness-20261030.json",
       "id": "loop-only-context-readiness-20261030",
       "title": "ループのみを使う設定で患者文脈の更新が止まる問題を修正",
       "sha256": "dc642fbdf2987f3e6f70e792de5ef7dedcde14c400f2abd469ff615d11f6103c"
     },
     {
-      "path": "changes/merge-restore-intake-evidence.json",
+      "path": "changes/archive/1.1.0/merge-restore-intake-evidence.json",
       "id": "merge-restore-intake-evidence",
       "title": "復元前の照合に未保存の範囲と世代を追加",
       "sha256": "52e928fe141626a1aac8064b27defa211bf63bf38b5570ca29bfd7dafa779ded"
     },
     {
-      "path": "changes/notification-part-health-20261029.json",
+      "path": "changes/archive/1.1.0/notification-part-health-20261029.json",
       "id": "notification-part-health-20261029",
       "title": "本文・添付の未完了を通知監視へ反映",
       "sha256": "185dc6d9f426dfc695831406ce42b1d80d157b1b0adfb16452ec7701855cb278"
     },
     {
-      "path": "changes/notification-part-health-proof-20261030.json",
+      "path": "changes/archive/1.1.0/notification-part-health-proof-20261030.json",
       "id": "notification-part-health-proof-20261030",
       "title": "通知本文や添付の未完了を後続のカード更新で見落とす問題を修正",
       "sha256": "d610ddc19c1790b235401c76a03834de28664dbff8688c1de5b3d03f6ca88474"
     },
     {
-      "path": "changes/notification-part-scope-proof-20261030.json",
+      "path": "changes/archive/1.1.0/notification-part-scope-proof-20261030.json",
       "id": "notification-part-scope-proof-20261030",
       "title": "配送先が確認できない通知の未完了警告を保持",
       "sha256": "2c5d60923914ab6480f6fea3c9b8547ed5c0c1dd48a5f7b3d01da0c6593a6f70"
     },
     {
-      "path": "changes/openai-provider-budgets-20261029.json",
+      "path": "changes/archive/1.1.0/openai-provider-budgets-20261029.json",
       "id": "openai-provider-budgets-20261029",
       "title": "OpenAIの利用先選択とAPI別予算に対応",
       "sha256": "b82df268c19a88309447f80db6174ec76a91d1a804835b5780cfdc1e983e02df"
     },
     {
-      "path": "changes/openai-usage-log-20261029.json",
+      "path": "changes/archive/1.1.0/openai-usage-log-20261029.json",
       "id": "openai-usage-log-20261029",
       "title": "OpenAIの使用量を診断で読み取れるよう修正",
       "sha256": "c55f98d499dce3a152c36e71a6e931262e8530eae136cd6de4d8dc57ef454aea"
     },
     {
-      "path": "changes/owned-process-lost-reap-20261030.json",
+      "path": "changes/archive/1.1.0/owned-process-lost-reap-20261030.json",
       "id": "owned-process-lost-reap-20261030",
       "title": "通知ワーカーの起動確認が子プロセスの回収待ちで止まる問題を修正",
       "sha256": "7f49bf127adef57c0e082b5d443ece0aef59fc88c561b5e0311a3a2a16264a37"
     },
     {
-      "path": "changes/patient-context-after-inference-20261029.json",
+      "path": "changes/archive/1.1.0/patient-context-after-inference-20261029.json",
       "id": "patient-context-after-inference-20261029",
       "title": "患者の全投稿の解析を終えてからコンテキストを生成",
       "sha256": "21267e6adf195f84854d78d75c0dea86b5c2e4ef43ba65a1a6999a8fd6402408"
     },
     {
-      "path": "changes/patient-context-observation-20261029.json",
+      "path": "changes/archive/1.1.0/patient-context-observation-20261029.json",
       "id": "patient-context-observation-20261029",
       "title": "患者コンテキストの進捗集計を改善",
       "sha256": "bbe2cdd42b8389ffa093d2dc2893589d161a393ff9c75835e4a8566d03e13a05"
     },
     {
-      "path": "changes/pattern-denylist-snapshot-20261030.json",
+      "path": "changes/archive/1.1.0/pattern-denylist-snapshot-20261030.json",
       "id": "pattern-denylist-snapshot-20261030",
       "title": "パターンカード検査時の氏名照合漏れを修正",
       "sha256": "953be8e41bcd390b800742c0a68aa460fbd0634f3f13390266e05d574fb41a59"
     },
     {
-      "path": "changes/per-post-provider-icons-20261029.json",
+      "path": "changes/archive/1.1.0/per-post-provider-icons-20261029.json",
       "id": "per-post-provider-icons-20261029",
       "title": "投稿ごとに処理サービスをアイコンで表示",
       "sha256": "c89c3d055090c94ec18e47d8f63bda743cf5ca9f8baa930515dbc02209e3e6fd"
     },
     {
-      "path": "changes/post-processing-status-order-20261030.json",
+      "path": "changes/archive/1.1.0/post-processing-status-order-20261030.json",
       "id": "post-processing-status-order-20261030",
       "title": "投稿カード上部に解析状態を表示",
       "sha256": "d1578ec3df7cd5455001758e692aaa2743f6c0ccb3d519dc7fb6c2c8097030b7"
     },
     {
-      "path": "changes/processing-route-icon-20261029.json",
+      "path": "changes/archive/1.1.0/processing-route-icon-20261029.json",
       "id": "processing-route-icon-20261029",
       "title": "チャットの見出しで解析方式をアイコン表示",
       "sha256": "072f831240b79de64a6919d4cd578ebadc334e0af8ec5740067c89ffff6df66e"
     },
     {
-      "path": "changes/provider-default-budgets-20261029.json",
+      "path": "changes/archive/1.1.0/provider-default-budgets-20261029.json",
       "id": "provider-default-budgets-20261029",
       "title": "Anthropicの初期費用上限を1日25ドル・1か月75ドルに設定",
       "sha256": "ad83331e29f097aa2956ea19aeea1d926bc5eb33b8015ee3a60cd423f2c05f46"
     },
     {
-      "path": "changes/provider-header-location-20261030.json",
+      "path": "changes/archive/1.1.0/provider-header-location-20261030.json",
       "id": "provider-header-location-20261030",
       "title": "処理サービスの表示をチャットの見出し行へ移動",
       "sha256": "27e87a2b3c2087fbe0df67145550d1a257ac36b4257625c291fd587c0c3f4ea6"
     },
     {
-      "path": "changes/quality-epoch-invalidation-20261029.json",
+      "path": "changes/archive/1.1.0/quality-epoch-invalidation-20261029.json",
       "id": "quality-epoch-invalidation-20261029",
       "title": "品質の再点検で問題が見つかった後の完了表示を修正",
       "sha256": "e4d65c944d92f0ea302d3fceeeb5e66d8b4c20454334aae2cbb2dd78acf28342"
     },
     {
-      "path": "changes/recover-cli-log-wrapper-20261030.json",
+      "path": "changes/archive/1.1.0/recover-cli-log-wrapper-20261030.json",
       "id": "recover-cli-log-wrapper-20261030",
       "title": "ログ統合後の復旧コマンドを修正",
       "sha256": "a7fa86b5c3608add834052cd9f3cafd0029559bf235435c698e8c4cfcca2b764"
     },
     {
-      "path": "changes/reinstall-old-updater-parent.json",
+      "path": "changes/archive/1.1.0/reinstall-old-updater-parent.json",
       "id": "reinstall-old-updater-parent",
       "title": "旧版の更新プログラムからの再導入を最初に止める",
       "sha256": "5c03eece99c9fbc50aa1606ebf31d590dc735983425218da4d73b996bc9b10f4"
     },
     {
-      "path": "changes/release-grant-time-recheck.json",
+      "path": "changes/archive/1.1.0/release-grant-time-recheck.json",
       "id": "release-grant-time-recheck",
       "title": "release更新の開始直前に承認の期限を再確認",
       "sha256": "6b15e74c46f68f08eeea108963f66b95478ef3ce174852cc44df9a705d36ac08"
     },
     {
-      "path": "changes/release-settings-preflight.json",
+      "path": "changes/archive/1.1.0/release-settings-preflight.json",
       "id": "release-settings-preflight",
       "title": "release更新の開始前に導入設定の移行を確認",
       "sha256": "3589cd9703cb8207cb8babcd4626838f83e64cd025ad5d9ff3730c67d854bee2"
     },
     {
-      "path": "changes/release-source-ignored-import-20261029.json",
+      "path": "changes/archive/1.1.0/release-source-ignored-import-20261029.json",
       "id": "release-source-ignored-import-20261029",
       "title": "Gitの管理対象外にあるPythonコードの見落としを修正",
       "sha256": "668c5285f66d04200cbb078dcbd957802e7e1afe45b2c11373d39f9341af3768"
     },
     {
-      "path": "changes/release-targeted-sync-20261029.json",
+      "path": "changes/archive/1.1.0/release-targeted-sync-20261029.json",
       "id": "release-targeted-sync-20261029",
       "title": "リリースノートの同期対象を限定",
       "sha256": "064a38dae6a434e3c9ff7a95345522f64d723c3160abb35cf615a1941f0ec6b9"
     },
     {
-      "path": "changes/reprocess-empty-body-20261029.json",
+      "path": "changes/archive/1.1.0/reprocess-empty-body-20261029.json",
       "id": "reprocess-empty-body-20261029",
       "title": "保存済みチャットの空本文を未取得と区別",
       "sha256": "b32e9e1672fa470399b8a0d71474b239ca744e8cde00a566417bbf8a813c2992"
     },
     {
-      "path": "changes/restore-intake-release-evidence-20261028.json",
+      "path": "changes/archive/1.1.0/restore-intake-release-evidence-20261028.json",
       "id": "restore-intake-release-evidence-20261028",
       "title": "復元前の比較に保留解除後の記録を追加",
       "sha256": "be879ee20b4d59b23663f01bda1f2ed31dcd94dcb677374d92e202a310d0217f"
     },
     {
-      "path": "changes/rollback-restore-failure-hold-20261030.json",
+      "path": "changes/archive/1.1.0/rollback-restore-failure-hold-20261030.json",
       "id": "rollback-restore-failure-hold-20261030",
       "title": "復元失敗時に常駐処理を再開しないよう修正",
       "sha256": "82a926ad39968db130e39fd6de341b140922a98d39a666b361e7216fcaffdb8c"
     },
     {
-      "path": "changes/rollup-cli-config-20261029.json",
+      "path": "changes/archive/1.1.0/rollup-cli-config-20261029.json",
       "id": "rollup-cli-config-20261029",
       "title": "手動の集約修復に現在の設定を反映",
       "sha256": "47afe4ab05bd101b0d4e481ccfb900bafbfaf618d332e26798aa8f248e94da43"
     },
     {
-      "path": "changes/rollup-concurrent-observation-20261029.json",
+      "path": "changes/archive/1.1.0/rollup-concurrent-observation-20261029.json",
       "id": "rollup-concurrent-observation-20261029",
       "title": "集約走査が無関係なDB更新で未確認になる問題を修正",
       "sha256": "8f8ef29e10e022c900685774149c1e6755e0e0f3e9ef3e0894386b326c21c4d5"
     },
     {
-      "path": "changes/rollup-cursor-busy-20261030.json",
+      "path": "changes/archive/1.1.0/rollup-cursor-busy-20261030.json",
       "id": "rollup-cursor-busy-20261030",
       "title": "巡回位置の保存時にDBが混雑しても患者集計を続行",
       "sha256": "3d2d0040986afd872925af32e16861787852f816b2e9de53da3abd2bef2c7004"
     },
     {
-      "path": "changes/rollup-deadline-classification-20261030.json",
+      "path": "changes/archive/1.1.0/rollup-deadline-classification-20261030.json",
       "id": "rollup-deadline-classification-20261030",
       "title": "患者集約の確認繰越を先送りとして案内",
       "sha256": "17cde0e3e9ad805c0404aed7323eb821b80c335ae1df3aaa91d0fc07c628d274"
     },
     {
-      "path": "changes/rollup-deadline-fair-progress-20261030.json",
+      "path": "changes/archive/1.1.0/rollup-deadline-fair-progress-20261030.json",
       "id": "rollup-deadline-fair-progress-20261030",
       "title": "患者情報の集約が期限内に進みやすくなるよう修正",
       "sha256": "867dd2f06a684b83a0dc963ec3f86bcc0736415db29aabc2262a6eee022ff2e4"
     },
     {
-      "path": "changes/rollup-stage-budget-20261029.json",
+      "path": "changes/archive/1.1.0/rollup-stage-budget-20261029.json",
       "id": "rollup-stage-budget-20261029",
       "title": "患者集約で実行期限と閲覧用スナップショットの検証時間を確保",
       "sha256": "d75622912192dda452c47cbcaaa5c1d4ff5db6c4d573bf9f1222761c0cb7ca78"
     },
     {
-      "path": "changes/semantic-intake-current.json",
+      "path": "changes/archive/1.1.0/semantic-intake-current.json",
       "id": "semantic-intake-current",
       "title": "解析の保留を証拠と通知対象を確認して解除",
       "sha256": "e78298691bae307da747e456fe9d5b30cf35f6de1e43e68cc20271cee968582b"
     },
     {
-      "path": "changes/setup-provider-consent-20261029.json",
+      "path": "changes/archive/1.1.0/setup-provider-consent-20261029.json",
       "id": "setup-provider-consent-20261029",
       "title": "初期設定の外部AI送信先の確認表示を修正",
       "sha256": "744c216d281ccf6a5dc0cdd8be93376e323ef7cea9102270bda4d5e79bd2d248"
     },
     {
-      "path": "changes/signals-deadline-health-20261030.json",
+      "path": "changes/archive/1.1.0/signals-deadline-health-20261030.json",
       "id": "signals-deadline-health-20261030",
       "title": "シグナル確認の時間切れを監視状態へ反映",
       "sha256": "72b9ab0840789c42afef5b125b4f2bd957a9beb9c7d74e136d751a92112895f6"
     },
     {
-      "path": "changes/skipped-audit-display-20261030.json",
+      "path": "changes/archive/1.1.0/skipped-audit-display-20261030.json",
       "id": "skipped-audit-display-20261030",
       "title": "検査を省略した要約の事実表示を修正",
       "sha256": "ef1703372a2680c54c68f865a6ea268efcd18d774cebedcaf8a9e3e367e53601"
     },
     {
-      "path": "changes/slack-header-member-names-20261030.json",
+      "path": "changes/archive/1.1.0/slack-header-member-names-20261030.json",
       "id": "slack-header-member-names-20261030",
       "title": "Slack通知更新時のメンバー名を修正",
       "sha256": "7106e5ff8f827100ebf9fcba32eef241f04b32894561bb5e5ac5ba46b7c32848"
     },
     {
-      "path": "changes/slack-reply-card-broadcast-20261030.json",
+      "path": "changes/archive/1.1.0/slack-reply-card-broadcast-20261030.json",
       "id": "slack-reply-card-broadcast-20261030",
       "title": "Slackの新しい返信をチャンネルにも表示",
       "sha256": "dbe52f76e59a74750474ab8d7484967b801db09baacb4a958a62264e5bb9dd90"
     },
     {
-      "path": "changes/slack-sdk-stable-20261030.json",
+      "path": "changes/archive/1.1.0/slack-sdk-stable-20261030.json",
       "id": "slack-sdk-stable-20261030",
       "title": "Slack独立接続のSDKを3.46.0へ更新",
       "sha256": "09a0d6a68412c2a80501cb5b52ebecb9fa5faf2eb8bee3c3ec2e2a701e08dd2e"
     },
     {
-      "path": "changes/source-quality-mixed-receipts-20261029.json",
+      "path": "changes/archive/1.1.0/source-quality-mixed-receipts-20261029.json",
       "id": "source-quality-mixed-receipts-20261029",
       "title": "要約と原文の確認記録が混在する場合の読取りを修正",
       "sha256": "39538053b1edb0de5cf91eeb6da1835aa8ae43288415a8f22b18407999a9681a"
     },
     {
-      "path": "changes/stable-dependencies-20261029.json",
+      "path": "changes/archive/1.1.0/stable-dependencies-20261029.json",
       "id": "stable-dependencies-20261029",
       "title": "実行環境と検証ツールの依存を更新",
       "sha256": "0c61a6629a59bbddfcf245550f71a1898571746d4ec82b4b1abcc6f16f707710"
     },
     {
-      "path": "changes/standalone-credential-gate.json",
+      "path": "changes/archive/1.1.0/standalone-credential-gate.json",
       "id": "standalone-credential-gate",
       "title": "独立接続の認証情報利用を保護",
       "sha256": "3cddaf4ca8f088fb019abc644d834b0c8391134282c31be486f73cf2ad01b527"
     },
     {
-      "path": "changes/status-unknown-snapshot-20261029.json",
+      "path": "changes/archive/1.1.0/status-unknown-snapshot-20261029.json",
       "id": "status-unknown-snapshot-20261029",
       "title": "状態を取得できない場合の表示を修正",
       "sha256": "c3fead09d10e040b23a86b9b41af19017266c1afbd3c1b92da6448e0ec5fa827"
     },
     {
-      "path": "changes/summary-off-context-readiness-20261030.json",
+      "path": "changes/archive/1.1.0/summary-off-context-readiness-20261030.json",
       "id": "summary-off-context-readiness-20261030",
       "title": "要約を使わない設定で患者文脈の更新が止まる問題を修正",
       "sha256": "5f97f8f30455dabc2629602c45c1e5e0cc9ce88db351e81685b9cfa9d85ad65a"
     },
     {
-      "path": "changes/unified-log-adapter-sandbox-20261030.json",
+      "path": "changes/archive/1.1.0/unified-log-adapter-sandbox-20261030.json",
       "id": "unified-log-adapter-sandbox-20261030",
       "title": "通知接続のログ処理を実行制約に対応",
       "sha256": "02816a0dae836256767a36097fa3daecedd4358ecfc76fe8e0c64fcae785d30e"
     },
     {
-      "path": "changes/unified-log-runtime-upgrade-20261030.json",
+      "path": "changes/archive/1.1.0/unified-log-runtime-upgrade-20261030.json",
       "id": "unified-log-runtime-upgrade-20261030",
       "title": "旧版からの更新前に実行環境を確認できるよう修正",
       "sha256": "eab809f6cd8f2c9921f829a8e0ca4a320a40c6c707d424d0a8b2033ffe45574a"
     },
     {
-      "path": "changes/unified-log-update-20261029.json",
+      "path": "changes/archive/1.1.0/unified-log-update-20261029.json",
       "id": "unified-log-update-20261029",
       "title": "導入と更新時に共通ログの保存先を準備",
       "sha256": "e96ca577f87155075b14d2d236e2b7365d74e6f5cee99b2007b7167fdc112802"
     },
     {
-      "path": "changes/unified-log-writers-20261029.json",
+      "path": "changes/archive/1.1.0/unified-log-writers-20261029.json",
       "id": "unified-log-writers-20261029",
       "title": "常駐処理と定期処理の出力先を共通ログに統一",
       "sha256": "d094226d123beb6fa2c8f5c5a37494ab95369dcaedad04351ad5f15d45afe4a8"
     },
     {
-      "path": "changes/unified-runtime-log-20261029.json",
+      "path": "changes/archive/1.1.0/unified-runtime-log-20261029.json",
       "id": "unified-runtime-log-20261029",
       "title": "MCSの運用ログを一つのファイルへ集約",
       "sha256": "e2fd3640a98ac3cf2a4811d9afa8761ea401309c5b2b89e46252cf5aa4fd3db5"
     },
     {
-      "path": "changes/update-backup-capacity-precheck-20261030.json",
+      "path": "changes/archive/1.1.0/update-backup-capacity-precheck-20261030.json",
       "id": "update-backup-capacity-precheck-20261030",
       "title": "更新計画でバックアップ容量の不足を事前に検出",
       "sha256": "db0d96cf1e9e276d2964b49761e0906367ab681ab0711a3ff5bf0608b9fda441"
     },
     {
-      "path": "changes/update-busy-apply.json",
+      "path": "changes/archive/1.1.0/update-busy-apply.json",
       "id": "update-busy-apply",
       "title": "導入・更新中の更新要求を未実行として返す",
       "sha256": "0430080324e16bed9d57e7bad59a81e8b76024024d2ee19a12730ed0341f07bb"
     },
     {
-      "path": "changes/update-lock-short-window-20261029.json",
+      "path": "changes/archive/1.1.0/update-lock-short-window-20261029.json",
       "id": "update-lock-short-window-20261029",
       "title": "更新時に定期処理の短いロック解放を見逃さないよう修正",
       "sha256": "be51c82eae6e6d28c8116c558d7115d2f06302179860735c0e8cda1985d39007"
     },
     {
-      "path": "changes/worker-birth-witness-20261030.json",
+      "path": "changes/archive/1.1.0/worker-birth-witness-20261030.json",
       "id": "worker-birth-witness-20261030",
       "title": "通知ワーカーの起動記録をプロセスの開始時刻でも照合",
       "sha256": "bb3f400227fa32f669ab4c478aae43688e591f80a593a3251d403b889a8ecabd"
