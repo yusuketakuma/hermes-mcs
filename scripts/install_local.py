@@ -104,7 +104,7 @@ def plan(source, dest=None):
     source = _git(source, "rev-parse", "--show-toplevel")
     notes = []
     if _git(source, "status", "--porcelain"):
-        notes.append("元のソースフォルダにコミットされていない変更があります。導入先にはコミット済みの内容だけが入ります")
+        notes.append("元のソースフォルダにコミットされていない変更があります。新しくコピーする場合はコミット済みの内容だけを使い、元のフォルダを導入先に選ぶ場合は未コミットの変更も使います")
     if dest is None:
         recorded = os.path.expanduser(RECORDED_REPO)
         if os.path.isfile(recorded):

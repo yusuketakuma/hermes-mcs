@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 384,
+  "fragment_count": 385,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every original record linked without rewriting",
   "records": [
@@ -2311,6 +2311,12 @@
       "id": "notification-split-delivery-evidence-20261030",
       "title": "長文を分割して配送した後も未完了の警報が続く問題を修正",
       "sha256": "4a57945fec541d1e7ee5eea99daba08c54acda44719ee974e849a381e18b1312"
+    },
+    {
+      "path": "changes/archive/1.1.0/install-update-guidance-20261030.json",
+      "id": "install-update-guidance-20261030",
+      "title": "導入・更新の案内を現行の設定と保護条件に合わせる",
+      "sha256": "f86981f8e26c2cf6bf8870a7af56e4d6b13a7ec1c00a1a884d59e0d6caf61cfe"
     }
   ]
 }

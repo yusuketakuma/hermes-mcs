@@ -120,7 +120,7 @@
 ### 技術詳細
 
 <details>
-<summary>変更記録384件の詳細・更新条件・根拠を表示</summary>
+<summary>変更記録385件の詳細・更新条件・根拠を表示</summary>
 
 各リンクは、この版の変更記録です。要約・適用条件・更新操作・技術詳細・根拠を原文のまま保存しています。同じ箇所に複数の記録がある場合、後続の修正を含む現行の説明は上の本文と各機能のガイドを確認してください。たとえば、処理方式アイコンの初期配置は後続の見出し行への移動で置き換えています。
 
@@ -508,6 +508,8 @@
 - [更新時に定期処理の短いロック解放を見逃さないよう修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/update-lock-short-window-20261029.json)
 - [通知ワーカーの起動記録をプロセスの開始時刻でも照合](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/worker-birth-witness-20261030.json)
 - [長文を分割して配送した後も未完了の警報が続く問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/notification-split-delivery-evidence-20261030.json)
+
+- [導入・更新の案内を現行の設定と保護条件に合わせる](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/install-update-guidance-20261030.json)
 
 </details>
 

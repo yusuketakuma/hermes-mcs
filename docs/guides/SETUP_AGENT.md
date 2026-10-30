@@ -91,8 +91,10 @@ TYPESAFE_API_KEY・LINE WORKS の Client Secret / Bot Secret / Private Key**。
   接続先IDの取得手順は本書のPhase 4、[導入ガイド](INSTALLATION.md)、
   [LINE WORKS](LINEWORKS.md) の該当する導入手順を参照してください。
 - パスワードとトークンは本人の端末で非表示入力します。AIとの会話へ貼り付けません。
-- 外部Jev APIへ本文を送る追加解析は、従来どおり既定で無効です。
-  初心者向けの案内でも、自動で有効化しません。
+- 外部Jev APIへ本文を送る追加解析は、`auto`が既定です。このMCSの`.env`に
+  キーが登録され、modeが未指定なら`assist`を使います。対象範囲と上限も
+  未指定なら全対象・1日10000要求です。明示した`off`・対象範囲・低い上限は
+  保持し、キーがない場合は送信しません。
 
 質問を省略する既存の `--yes`・`--set` は引き続き使用できます。
 コマンド名、オプション名、設定キー、機械処理用JSONの形式は変更していません。
@@ -357,7 +359,7 @@ hermes config set plugins.entries.mcs-discord-commands.settings.slack_adapter_en
 
 ### 5-4. 必須条件の検証
 
-【検証】`init` の自動チェックで exit 0・最終行
+【検証】`init` の自動チェックで exit 0・結果行
 `設定確認: 正常 （問題0件、注意N件）` を確認する。設定・サービスを後から
 直した場合だけ `~/.hermes/hermes-agent/venv/bin/python mcs/ops/mcs_setup.py check`
 を再実行する。
@@ -386,7 +388,7 @@ blocker 一覧と launchd agent の状態は `check` で確認する:
 - Keychainの登録内容を読み取れない → `security unlock-keychain` を
   ユーザーに依頼
 - 常駐処理の設定はあるが起動していない → 表示の
-  `launchctl bootstrap ...`（MCS 4件なら `services` 再実行）
+  `launchctl bootstrap ...`（MCS 5件なら `services` 再実行）
 - 配置済みのスクリプトが配布版と異なる → `services` 再実行
 - 復旧監視が別の保存先を参照している → 正しい
   checkout で `./install.sh`（移動した場合。別 checkout が残っていれば

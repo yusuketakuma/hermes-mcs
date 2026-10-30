@@ -265,7 +265,7 @@ git -C "$REPO" show "${CANDIDATE_SHA}:scripts/mcs_upgrade.py" > "$WORK/mcs_upgra
 | `runtime_migration_pending`（復旧レポート） | Pythonや接続用ライブラリの移行が途中。定期の復旧ツールは環境・更新記録を保持して停止する。通常の復旧を繰り返さず、§7の移行先版の更新ツールを確認する |
 | `restore_consent_pending` | DB 復元の人承認待ち。[バックアップ・復元ガイド §8](BACKUP.md#consent) の損失報告・バックアップhashに束縛された復元承認手順をユーザーが行う |
 | `hermes_not_resolvable` / `standalone_interpreter_unavailable` | 実行基盤が無い。`./install.sh --preflight` の `対処:` を確認しユーザーと対処 |
-| `insufficient_disk` | DB の2倍+64MB の空きが必要。ユーザーに空き容量の確保を依頼 |
+| `insufficient_disk` | DBの2倍に、64MiBと設定された空き容量下限の大きい方を加えた空きが必要。下限の既定値は512MiB。原本と必要なバックアップを保護して容量を確保 |
 | `not_fast_forward: …` | checkout が移行先の祖先でない（ローカルコミットや新しすぎる版）。**【ユーザー確認】** |
 | `untracked_collision: …` | 未追跡ファイルが移行先の追跡ファイルと衝突。内容を示し **【ユーザー確認】** |
 | `schema_downgrade:…` | 移行先が古い。対象タグを見直す |

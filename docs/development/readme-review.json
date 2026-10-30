@@ -55,7 +55,7 @@
       ]
     },
     "docs": {
-      "notes": "2026-10-30: 1.1.0資料への導線、設定ガイド、CHANGELOGの生成要約とリンクを照合。1.0.29以前の本文は作業開始時点から変更せず、履歴を保持した。 追加の変更記録1件をarchiveへ揃え、384件の対応表・詳細リンクと、受入票のスナップショット時点の383件を区別した。",
+      "notes": "2026-10-30: 1.1.0資料への導線、設定ガイド、CHANGELOGの生成要約とリンクを照合。1.0.29以前の本文は作業開始時点から変更せず、履歴を保持した。 追加の変更記録1件をarchiveへ揃え、385件の対応表・詳細リンクと、受入票のスナップショット時点の383件を区別した。 導入・更新の案内と配置説明を現行コードに合わせ、機能・既定値・人承認の条件を保持した。",
       "sources": [
         "README.md",
         "docs/releases/v1.1.0/README.md",
@@ -63,7 +63,12 @@
         "docs/development/RELEASE_NOTES.md",
         "docs/releases/v1.1.0/change-map.json",
         "docs/releases/v1.1.0/ACCEPTANCE_1.1.0.md",
-        "changes/archive/1.1.0/notification-split-delivery-evidence-20261030.json"
+        "changes/archive/1.1.0/notification-split-delivery-evidence-20261030.json",
+        "docs/guides/SETUP_AGENT.md",
+        "docs/guides/UPGRADE_AGENT.md",
+        "deployment/README.md",
+        "adapters/README.md",
+        "changes/archive/1.1.0/install-update-guidance-20261030.json"
       ]
     }
   }

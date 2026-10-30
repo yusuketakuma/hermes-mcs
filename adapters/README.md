@@ -1,12 +1,13 @@
 # 接続アダプター
 
-通知先ごとの接続・表示・操作処理をこのフォルダにまとめています。
+通知先ごとの接続・表示・操作処理と、状態監視・遠隔支援の接続コードをまとめています。
 
 | フォルダ | 接続方法 | 実装の範囲 |
 | --- | --- | --- |
 | `slack/` | Hermes の既存 Slack 接続 | カード表示、本文・添付配送、全機能の `/mcs <JSON>`、操作・確認 |
 | `discord/` | Hermes の既存 Discord 接続 | カード表示、本文・添付配送、全機能の `/mcs <JSON>`、操作・確認 |
 | `lineworks/` | 独自の Bot API 接続 | 認証、配送、署名付き callback、本人トークの `mcs <JSON>`、操作・確認、起動 CLI |
+| `sdc/` | 状態監視・遠隔支援（CSDC） | 接続コードのみ同梱。1.1.0では未提供で、新規導入は既定OFF |
 | `common/` | 接続先共通の基盤 | 共通コマンド・患者権限、配送 grant、journal、receipt、registry、render-spec、共通テキスト |
 
 Slack・Discord は Hermes が所有する接続・認証・allowlist を使用します。
