@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 import json
 import os
+import re
 import threading
 import time
 from datetime import datetime
@@ -216,6 +217,120 @@ def test_malformed_thinking_never_creates_cloud_splits_or_extra_http(routed, mon
     assert not splits and not completed
     assert len(calls) == len(reservations) == len(results) == len(metadata) == 1
     assert metadata[0]["error_kind"] == "protocol_error"
+
+
+def _split_checkpoint_cloud_jobs(routed, monkeypatch, workers):
+    led, cfg, _, _, _ = routed
+    cfg["cloud_llm"]["max_concurrency"] = workers
+    bodies = {mid: "".join(f"完全合成{mid}番区間{i}の居住記録です。" for i in range(6)) for mid in (1, 2)}
+    for mid, body in bodies.items():
+        led.save_messages([_message(mid, body)])
+        led.artifact_add(worker.KIND, "{}", project_id=1, message_id=mid,
+            meta={"hash": _hash(led, mid), "extract_version": worker.EXTRACT_VERSION - 1})
+    with led.db:
+        led.db.execute("UPDATE messages SET first_seen=?", (time.time() - 601,))
+        led.db.execute("UPDATE message_revisions SET observed_at=?", (time.time() - 601,))
+        cloud_policy.capture_history_tx(led.db, "synthetic-checkpoint-ack", time.time())
+    posts, rejected = [], set()
+
+    def wire(self, method, request, timeout, **kwargs):
+        content = request["messages"][0]["content"]
+        prompt = content if isinstance(content, str) else "".join(block["text"] for block in content)
+        piece = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
+        mid = int(re.search(r"完全合成([12])番", piece)[1])
+        posts.append({"message_id": mid, "piece": piece, "after_rejection": mid in rejected})
+        length = piece == bodies[mid]
+        content = ([{"type": "thinking", "thinking": "synthetic"}] if length else
+                   [{"type": "text", "text": json.dumps({"symptoms": [], "patient_context": [
+                       {"category": "living", "subject": "patient", "text": piece, "evidence": piece}]})}])
+        return 200, {}, json.dumps({"model": worker.anthropic_client.MODEL,
+            "stop_reason": "max_tokens" if length else "end_turn", "content": content,
+            "usage": {"input_tokens": 10, "output_tokens": 5}}).encode()
+
+    monkeypatch.setattr(worker.anthropic_client, "AnthropicClient", AnthropicClient)
+    monkeypatch.setattr(AnthropicClient, "request", wire)
+    monkeypatch.setattr(worker, "_probe_format", lambda **kwargs: pytest.fail("cloud probed local GPU"))
+    return bodies, posts, rejected
+
+
+@pytest.mark.parametrize("workers,reject", [(1, "split"), (2, "split"), (1, "child"), (2, "child")],
+                         ids=["serial-split", "parallel-split", "serial-child", "parallel-child"])
+def test_run_pending_rejected_checkpoint_stops_further_cloud_posts(routed, monkeypatch, workers, reject):
+    led, _, _, reservations, results = routed
+    bodies, posts, rejected = _split_checkpoint_cloud_jobs(routed, monkeypatch, workers)
+    before = [dict(row) for row in led.artifacts(worker.KIND)]
+    persist = worker._persist_chunks
+    saved_splits = []
+
+    def rejected_checkpoint(ledger, row, chunks, context=None, **kwargs):
+        is_split = kwargs.get("split_size") is not None
+        if is_split == (reject == "split"):
+            rejected.add(row["message_id"])
+            return False
+        accepted = persist(ledger, row, chunks, context, **kwargs)
+        if is_split and accepted:
+            saved_splits.append(row["message_id"])
+        return accepted
+
+    monkeypatch.setattr(worker, "_persist_chunks", rejected_checkpoint)
+    report = worker.run_pending(led, limit=2, workers=workers, budget_s=180, cloud_only=True)
+    assert rejected == set(bodies) and report["done"] == 0
+    assert not [post for post in posts if post["after_rejection"]], posts
+    assert len(posts) == len(reservations) == len(results) == (2 if reject == "split" else 4)
+    assert sorted(saved_splits) == ([] if reject == "split" else [1, 2])
+    assert not _current_artifacts(led)
+    _assert_legacy_retained(led, before)
+
+
+@pytest.mark.parametrize("workers", [1, 2], ids=["serial", "parallel"])
+def test_run_pending_acknowledged_split_keeps_full_cloud_coverage(routed, monkeypatch, workers):
+    led, _, _, reservations, results = routed
+    bodies, posts, rejected = _split_checkpoint_cloud_jobs(routed, monkeypatch, workers)
+    persist, saved_splits = worker._persist_chunks, []
+
+    def acknowledged(ledger, row, chunks, context=None, **kwargs):
+        accepted = persist(ledger, row, chunks, context, **kwargs)
+        if kwargs.get("split_size") is not None:
+            assert accepted
+            saved_splits.append(row["message_id"])
+        return accepted
+
+    monkeypatch.setattr(worker, "_persist_chunks", acknowledged)
+    report = worker.run_pending(led, limit=2, workers=workers, budget_s=180, cloud_only=True)
+    assert report["done"] == 2 and not rejected and sorted(saved_splits) == [1, 2]
+    assert len(posts) == len(reservations) == len(results) == 6
+    current = _current_artifacts(led)
+    assert len(current) == 2
+    for row in current:
+        assert "".join(item["text"] for item in json.loads(row["content"])["patient_context"]) == bodies[row["message_id"]]
+
+
+@pytest.mark.parametrize("stop", ["deadline", "owner"])
+def test_run_pending_split_ack_wait_releases_on_deadline_or_owner_stop(routed, monkeypatch, stop):
+    led, _, _, _, _ = routed
+    bodies, posts, rejected = _split_checkpoint_cloud_jobs(routed, monkeypatch, 2)
+    persist, clock = worker._persist_chunks, time.monotonic
+    started = clock()
+
+    def stopped(ledger, row, chunks, context=None, **kwargs):
+        if kwargs.get("split_size") is None:
+            return persist(ledger, row, chunks, context, **kwargs)
+        rejected.update(bodies)
+        if stop == "owner":
+            raise RuntimeError("synthetic-owner-checkpoint-stop")
+        accepted = persist(ledger, row, chunks, context, **kwargs)
+        monkeypatch.setattr(worker.time, "monotonic", lambda: started + 181)
+        return accepted
+
+    monkeypatch.setattr(worker, "_persist_chunks", stopped)
+    if stop == "owner":
+        with pytest.raises(RuntimeError, match="synthetic-owner-checkpoint-stop"):
+            worker.run_pending(led, limit=2, workers=2, budget_s=180, cloud_only=True)
+    else:
+        assert worker.run_pending(led, limit=2, workers=2, budget_s=180, cloud_only=True)["done"] == 0
+    assert clock() - started < 3 and rejected
+    assert 1 <= len(posts) <= 2 and not [post for post in posts if post["after_rejection"]]
+    assert not _current_artifacts(led)
 
 
 @pytest.mark.parametrize("local_circuit", [0, 60])

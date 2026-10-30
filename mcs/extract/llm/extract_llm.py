@@ -1369,7 +1369,8 @@ def llm_extract(body: str, *, context: str | None = None,
         splits[key] = smaller
         bump("length_resplits")
         if on_split is not None:
-            on_split(key, smaller)
+            if on_split(key, smaller) is False:
+                return _DEFERRED
         return children(key, piece, start, remaining)
 
     def infer_piece(key, piece, start, remaining):
@@ -4563,11 +4564,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 receipt["event"].set()
 
     def _queue_checkpoint(index, chunk, value, split=False, replay=False):
-        if not replay and (split or "_quality_status" not in value):
+        if not replay and not split and "_quality_status" not in value:
             checkpoints.put((index, chunk, value, split, None, replay))
             return None
         receipt = {"event": threading.Event(), "saved": False}
-        checkpoints.put((index, chunk, value, False, receipt, replay))
+        checkpoints.put((index, chunk, value, split, receipt, replay))
         while not receipt["event"].is_set():
             if checkpoint_stopped.is_set() or time.monotonic() >= deadline:
                 return False
@@ -4631,7 +4632,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             provider = _owner_call(lambda: _CloudProvider(ledger, {"cloud_llm": r["_cloud_settings"]}, route="reextract",
                 project_id=r["project_id"], message_id=r["message_id"],
                 unit_key=str(r["message_id"]), deadline=deadline,
-                current=lambda: _owns_current_source(ledger, r, r["_cloud_lease"]),
+                current=lambda: not r.get("_checkpoint_conflict")
+                    and _owns_current_source(ledger, r, r["_cloud_lease"]),
                 dispatch=_owner_call, owner={"lease": leases[index]}))
         if provider is not None:
             try:
