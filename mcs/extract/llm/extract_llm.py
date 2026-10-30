@@ -1973,9 +1973,10 @@ def _write_lock(enabled: bool, wait_s: float = 60, *, deadline=None):
     the QC/thin/human re-mints. The drainer's other writes are lockless
     on purpose — claim leases (a cross-process fence of their own),
     rule-only ``extract_v1``/prefilter markers and chunk checkpoints.
-    Each is fenced by content hash and the v4 predicate inside its own
-    SQLite transaction, and taking the lock per row (up to 60 s each)
-    while leases are held would stall the drainer for no proven gain."""
+    Claim renewal checks the owner token, lease and source hash; release
+    checks the owner token and lease. Other writes use their respective
+    source and generation guards. Taking the lock per row (up to 60 s
+    each) while leases are held would stall the drainer for no proven gain."""
     fd = None
     if enabled and deadline is not None:
         until = min(deadline, time.monotonic() + max(0.0, wait_s))
