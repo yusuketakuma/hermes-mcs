@@ -3,7 +3,19 @@ from types import SimpleNamespace as NS
 
 import pytest
 
+import card_worker_status
+import environment_diagnostics
 from hermes_plugin import card_workers as cw
+
+
+@pytest.fixture(autouse=True)
+def process_birth(monkeypatch):
+    started = [1_790_000_000.0]
+    monkeypatch.setattr(card_worker_status.os, 'getpid', lambda: 424242)
+    monkeypatch.setattr(card_worker_status.os, 'kill', lambda *_: None)
+    monkeypatch.setattr(environment_diagnostics, 'process_started_at',
+                        lambda pid, *, deadline: started[0])
+    return started
 
 
 @pytest.mark.parametrize('adapter,ctx,expected', [
@@ -25,7 +37,7 @@ def test_owner_source(adapter, ctx, expected):
     ('owner', 101, 202, False, 'application_mismatch'),
     (None, 101, 101, False, 'owner_unverified'),
 ])
-def test_discord_bound_owner_and_native_bot(tmp_path, monkeypatch, owner, user, application, starts, reason):
+def test_discord_bound_owner_and_native_bot(tmp_path, monkeypatch, process_birth, owner, user, application, starts, reason):
     events, started = [], []
     ctx = NS(get_config=lambda k, d=None: d)
     adapter = NS() if owner is None else NS(_owner_profile=owner)
@@ -53,6 +65,10 @@ def test_discord_bound_owner_and_native_bot(tmp_path, monkeypatch, owner, user, 
         import card_worker_status
         assert card_worker_status.status(tmp_path, 'discord', 'owner') == {
             'state': 'started', 'reason': 'worker_started'}
+        process_birth[0] += 1
+        assert card_worker_status.status(tmp_path, 'discord', 'owner') == {
+            'state': 'unknown', 'reason': 'worker_start_unverified'}
+        assert started == [True]
 
 
 @pytest.mark.parametrize('transport,override', [
@@ -98,7 +114,7 @@ def test_route_flags_rejection_replaces_old_started_witness_without_private_valu
                       {'event': 'worker_disabled', 'reason': 'route_flags_unready'}]
     (witness,) = (tmp_path / 'worker_status').glob('*.json')
     stored = json.loads(witness.read_text())
-    assert set(stored) == {'version', 'reason', 'pid', 'at'}
+    assert set(stored) == {'version', 'reason', 'pid', 'at', 'started_at'}
     rendered = '\n'.join(record.getMessage() for record in caplog.records)
     for private in (profile, str(tmp_path), '101', 'synthetic-private-config'):
         assert private not in rendered

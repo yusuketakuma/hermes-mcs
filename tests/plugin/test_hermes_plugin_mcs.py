@@ -793,7 +793,12 @@ def test_worker_witness_bootstraps_without_command_apis_when_loaded_by_file_loca
     import subprocess
     plugin = Path(hermes_plugin.__file__).resolve()
     code = (
-        "import importlib.util, sys, types\n"
+        "import importlib.util, os, sys, types\n"
+        "probe = types.ModuleType('environment_diagnostics')\n"
+        "probe.process_started_at = lambda pid, *, deadline: 1790000000.0\n"
+        "sys.modules[probe.__name__] = probe\n"
+        "os.getpid = lambda: 424242\n"
+        "os.kill = lambda *_: None\n"
         "sys.modules['hermes_plugins'] = types.ModuleType('hermes_plugins')\n"
         f"spec = importlib.util.spec_from_file_location('hermes_plugins.mcs', {str(plugin)!r},"
         f" submodule_search_locations=[{str(plugin.parent)!r}])\n"
@@ -801,6 +806,7 @@ def test_worker_witness_bootstraps_without_command_apis_when_loaded_by_file_loca
         "sys.modules[spec.name] = mod\n"
         "spec.loader.exec_module(mod)\n"
         "from hermes_plugins.mcs import card_workers\n"
+        "assert 'card_worker_status' not in sys.modules\n"
         f"settings = {{'data_root': {str(tmp_path)!r}, 'profile': 'synthetic'}}\n"
         "card_workers._worker_witness(settings, 'discord', 'worker_started')\n"
         "import card_worker_status\n"

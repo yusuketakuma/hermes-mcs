@@ -13,6 +13,10 @@ from test_lineworks_runtime import queued_callback, run_once
 
 
 def test_successful_serve_records_worker_started(monkeypatch, tmp_path):
+    monkeypatch.setattr(card_worker_status.os, "getpid", lambda: 424242)
+    monkeypatch.setattr(card_worker_status.os, "kill", lambda *_: None)
+    monkeypatch.setattr(card_worker_status.environment_diagnostics, "process_started_at",
+                        lambda pid, *, deadline: 1_790_000_000.0)
     w, box, _ = queued_callback(tmp_path)
     run_once(monkeypatch, tmp_path, w, box)
     assert card_worker_status.status(w.settings["data_root"], "lineworks", "default") == {

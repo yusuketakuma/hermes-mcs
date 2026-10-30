@@ -28,7 +28,11 @@ def test_context_entries_are_ordered_scoped_and_link_only_safe_urls():
     assert not safe_url("https://a.invalid/x y") and not safe_url("http://a.invalid")
 
 
-def test_lineworks_adapter_start_is_diagnosed_like_other_workers(tmp_path):
+def test_lineworks_adapter_start_is_diagnosed_like_other_workers(tmp_path, monkeypatch):
+    monkeypatch.setattr(card_worker_status.os, "getpid", lambda: 424242)
+    monkeypatch.setattr(card_worker_status.os, "kill", lambda *_: None)
+    monkeypatch.setattr(card_worker_status.environment_diagnostics, "process_started_at",
+                        lambda pid, *, deadline: 1_790_000_000.0)
     cfg = {"notify": {"interactive": "lineworks", "lineworks": {}}}
     assert card_worker_status.diagnose(tmp_path, cfg)["reason"] == "worker_start_unverified"
     card_worker_status.record(tmp_path, "lineworks", "default", "worker_started")

@@ -4,14 +4,16 @@ from __future__ import annotations
 from contextlib import closing
 import hashlib
 import json
+import math
 import os
 import sqlite3
 from pathlib import Path
 import time
 
+import environment_diagnostics
 from safe_io import atomic_write
 
-VERSION = '2026-10-17.1'
+VERSION = '2026-10-30.1'
 REASONS = frozenset({'worker_started', 'profile_mismatch', 'owner_unverified',
                      'application_mismatch', 'standalone_owned', 'worker_start_failed',
                      'route_flags_unready'})
@@ -35,8 +37,13 @@ def record(root, transport, profile, reason):
     target.parent.mkdir(mode=0o700, exist_ok=True)
     if target.parent.is_symlink():
         raise ValueError('worker_status_path_invalid')
-    value = {'version': VERSION, 'reason': reason, 'pid': os.getpid(),
-             'at': time.time()}
+    pid = os.getpid()
+    try:
+        started_at = environment_diagnostics.process_started_at(pid, deadline=time.monotonic() + 1)
+    except (OSError, ValueError, TypeError, OverflowError):
+        started_at = None
+    value = {'version': VERSION, 'reason': reason, 'pid': pid,
+             'at': time.time(), 'started_at': started_at}
     atomic_write(str(target), lambda f: json.dump(value, f), mode=0o600)
 
 
@@ -54,10 +61,16 @@ def status(root, transport, profile):
         pid = value.get('pid')
         if type(pid) is not int or pid <= 0:
             raise ValueError('invalid')
+        started_at = value.get('started_at')
+        if (type(started_at) not in (int, float) or not math.isfinite(started_at)
+                or started_at <= 0):
+            raise ValueError('invalid')
         os.kill(pid, 0)
+        if environment_diagnostics.process_started_at(pid, deadline=time.monotonic() + 1) != started_at:
+            raise ValueError('invalid')
         return {'state': 'started' if value['reason'] == 'worker_started' else 'disabled',
                 'reason': value['reason']}
-    except (OSError, ValueError, TypeError, RecursionError):
+    except (OSError, ValueError, TypeError, OverflowError, RecursionError):
         return {'state': 'unknown', 'reason': 'worker_start_unverified'}
 
 
