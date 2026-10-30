@@ -6,9 +6,70 @@ import pytest
 import cloud_policy
 import extract_llm
 from inference_version import CURRENT_VERSION, VERSION_KEY
+import mcs_util
 import notify_render
 import processing_route
 from notify_testkit import CFG, NOW, _card, _dispatch, _intent, _seed_thread, led as led
+
+
+@pytest.mark.parametrize(('anthropic', 'openai'), [(False, False), (True, False), (False, True), (True, True)])
+def test_visible_providers_only_uses_private_registered_keys(tmp_path, monkeypatch, anthropic, openai):
+    path = tmp_path / '.env'
+    path.write_text(('MCS_ANTHROPIC_API_KEY=synthetic-anthropic\n' if anthropic else '')
+                    + ('MCS_OPENAI_API_KEY=synthetic-openai\n' if openai else ''))
+    path.chmod(0o600)
+    monkeypatch.setenv('MCS_ANTHROPIC_API_KEY', 'synthetic-environment-only')
+    monkeypatch.setenv('MCS_OPENAI_API_KEY', 'synthetic-environment-only')
+    calls = []
+    check = mcs_util.private_env_problem
+
+    def observe(key, root):
+        calls.append((key, root))
+        return check(key, root)
+
+    monkeypatch.setattr(mcs_util, 'private_env_problem', observe)
+    expected = (('anthropic',) if anthropic else ()) + (('openai',) if openai else ()) + ('jev', 'local')
+    assert processing_route.visible_providers(tmp_path) == expected
+    assert calls == [('MCS_ANTHROPIC_API_KEY', tmp_path), ('MCS_OPENAI_API_KEY', tmp_path)]
+
+
+@pytest.mark.parametrize('case', ['duplicate', 'whitespace', 'mode', 'symlink', 'missing'])
+def test_visible_providers_fails_closed_on_invalid_private_key(tmp_path, case):
+    path = tmp_path / '.env'
+    if case != 'missing':
+        target = tmp_path / 'target' if case == 'symlink' else path
+        value = ('MCS_ANTHROPIC_API_KEY=synthetic key\n' if case == 'whitespace'
+                 else 'MCS_ANTHROPIC_API_KEY=synthetic\n')
+        if case == 'duplicate':
+            value += 'MCS_ANTHROPIC_API_KEY=synthetic-second\n'
+        target.write_text(value + 'MCS_OPENAI_API_KEY=synthetic\n')
+        target.chmod(0o644 if case == 'mode' else 0o600)
+        if case == 'symlink':
+            path.symlink_to(target)
+    visible = processing_route.visible_providers(tmp_path)
+    assert 'anthropic' not in visible
+    assert ('openai' in visible) == (case in ('duplicate', 'whitespace'))
+    assert visible[-2:] == ('jev', 'local')
+
+
+def test_visible_providers_isolates_unexpected_key_check_failure(monkeypatch):
+    def check(key, root):
+        if key == 'MCS_ANTHROPIC_API_KEY':
+            raise OSError('synthetic failure')
+        return None
+
+    monkeypatch.setattr(mcs_util, 'private_env_problem', check)
+    assert processing_route.visible_providers('/synthetic-root') == ('openai', 'jev', 'local')
+
+
+def test_provider_text_filters_only_visible_services_and_keeps_legacy_default():
+    states = {'anthropic': 'done', 'openai': 'unused', 'jev': 'partial', 'local': 'done'}
+    before = dict(states)
+    assert processing_route.provider_text(states) == (
+        'Anthropic 実行済み · OpenAI 未使用 · Jev 一部実行・一部省略 · 💻 実行済み')
+    assert processing_route.provider_text(states, ('openai', 'jev', 'local')) == (
+        'OpenAI 未使用 · Jev 一部実行・一部省略 · 💻 実行済み')
+    assert states == before
 
 
 def _artifact(led, mid, route, *, hash_=None, project=1, version=CURRENT_VERSION, content=None, provider_name="anthropic"):
@@ -179,6 +240,7 @@ def test_provider_heading_aggregates_only_visible_page_posts(led, monkeypatch):
     states[103]['openai'] = 'done'
     monkeypatch.setattr(processing_route, 'provider_states',
                         lambda db, pid, mid, cfg=None, **kwargs: dict(states[mid]))
+    monkeypatch.setattr(processing_route, 'visible_providers', lambda: processing_route.PROVIDERS)
     card = {**_card(led), 'layout': 2}
 
     expected = [
@@ -193,6 +255,7 @@ def test_provider_heading_aggregates_only_visible_page_posts(led, monkeypatch):
         [header] = [c for c in content['containers'] if c.get('provider_scope') == 'header']
         assert header['provider_states'] == wanted
         assert header['text'].endswith(processing_route.provider_text(wanted))
+        assert ' ·  · ' not in header['text']
         posts = [c for c in content['containers'] if c.get('rule')]
         assert [post['provider_states'] for post in posts] == [states[mid] for mid in content['shown']]
         assert all('Anthropic ' not in post['text'] and '💻 ' not in post['text'] for post in posts)

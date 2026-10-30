@@ -359,13 +359,15 @@ def validate(spec) -> dict:
         _err("bad_containers")
     states = [c for c in containers if isinstance(c, dict) and "provider_states" in c]
     scoped = [c for c in containers if isinstance(c, dict) and "provider_scope" in c]
+    visible = [c for c in containers if isinstance(c, dict) and "visible_providers" in c]
     footer = parts.get("footer")
-    if isinstance(footer, list) and any(isinstance(c, dict) and "provider_scope" in c for c in footer):
+    if isinstance(footer, list) and any(isinstance(c, dict) and
+                                       ("provider_scope" in c or "visible_providers" in c) for c in footer):
         _err("bad_provider_states")
-    if states or scoped or "provider_states_version" in parts:
+    if states or scoped or visible or "provider_states_version" in parts:
         version = parts.get("provider_states_version")
         if (spec.get("kind") != "thread" or type(version) is not int
-                or version not in (1, 2) or not states):
+                or version not in (1, 2, 3) or not states):
             _err("bad_provider_states")
         labels = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
                   "pending": "処理待ち", "failed": "失敗", "unknown": "不明"}
@@ -380,7 +382,7 @@ def validate(spec) -> dict:
             return values
 
         if version == 1:
-            if scoped:
+            if scoped or visible:
                 _err("bad_provider_states")
             for container in states:
                 values = checked_values(container, labels)
@@ -396,6 +398,19 @@ def validate(spec) -> dict:
             if (header.get("provider_scope") != "header" or header.get("type") != "text"
                     or "rule" in header or "provider_states" not in header):
                 _err("bad_provider_states")
+            if version == 3:
+                selected = header.get("visible_providers")
+                keys = [key for key, _ in providers]
+                if (len(visible) != 1 or visible[0] is not header
+                        or not isinstance(selected, list)
+                        or not all(isinstance(key, str) for key in selected)
+                        or selected != [key for key in keys if key in selected]
+                        or not {"jev", "local"}.issubset(selected)):
+                    _err("bad_provider_states")
+            elif visible:
+                _err("bad_provider_states")
+            else:
+                selected = [key for key, _ in providers]
             header_index = next(i for i, container in enumerate(containers) if container is header)
             if (header_index != 1 or not isinstance(containers[0], dict)
                     or containers[0].get("type") != "heading"):
@@ -421,7 +436,8 @@ def validate(spec) -> dict:
                                   else "unknown") for key, _ in providers}
             if values != aggregate:
                 _err("bad_provider_states")
-            fallback = " · ".join(f"{name} {header_labels[values[key]]}" for key, name in providers)
+            fallback = " · ".join(f"{name} {header_labels[values[key]]}"
+                                  for key, name in providers if key in selected)
             text = header.get("text")
             if (not isinstance(text, str) or len(text.splitlines()) != 1
                     or (text != fallback and not (text.endswith(" · " + fallback)

@@ -610,8 +610,11 @@ def test_card_sender_tag_shows_time_profession_org(led, tmp_path):
     assert "職員（）" not in joined and "（・" not in joined
 
 
-def test_body_manifest_shows_sender_metadata(led, tmp_path):
+def test_body_manifest_shows_sender_metadata(led, tmp_path, monkeypatch):
     """The 📄本文表示 manifest header carries the same sender tag."""
+    import processing_route
+
+    monkeypatch.setattr(processing_route, "visible_providers", lambda: ("jev", "local"))
     _patient(led, 1)
     _msg(led, 100, 1, prof="薬剤師", org="薬局Y")
     _msg(led, 101, 1, parent=100)
@@ -623,7 +626,7 @@ def test_body_manifest_shows_sender_metadata(led, tmp_path):
     assert "09-24 08:" in text
     # layout 2: header -> summary -> stamps -> body
     rule = notify_render.SECTION_RULE
-    states = "Anthropic 不明 · OpenAI 不明 · Jev 不明 · 💻 不明"
+    states = "Jev 不明 · 💻 不明"
     assert (f"↳ 09-24 08:40 職員（薬剤師・薬局Y）\n{states}\n要約 処理待ち\nスタンプ 未取得\n{rule}\n"
             f"本文") in text
     assert f"08:41 職員\n{states}\n要約 処理待ち\nスタンプ 未取得\n{rule}\n本文" in text

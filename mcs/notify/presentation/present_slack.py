@@ -84,11 +84,14 @@ def face_block_count(parts, face_posts=()) -> int:
             continue
         if item.get("rule") and n:
             n += 1                                   # divider
-        if version == 2 and item.get("provider_scope") == "header" and kind == "text":
-            prefix, separator, _ = item["text"].rpartition(" · Anthropic ")
-            n += _count(prefix if separator else "", _CONTEXT_MAX)
+        if version in (2, 3) and item.get("provider_scope") == "header" and kind == "text":
+            import processing_route
+            fallback = processing_route.provider_text(
+                item["provider_states"], item.get("visible_providers") if version == 3 else None)
+            prefix = item["text"][:-len(fallback)].removesuffix(" · ")
+            n += _count(prefix, _CONTEXT_MAX)
         elif item.get("rule") and kind == "text":
-            if item.get("provider_states") is not None and version != 2:
+            if item.get("provider_states") is not None and version not in (2, 3):
                 n += _count(item["text"].rsplit("\n", 1)[0], _CONTEXT_MAX) + 1
             else:
                 n += _count(item["text"], _CONTEXT_MAX)
@@ -110,7 +113,7 @@ def face_block_count(parts, face_posts=()) -> int:
         if post["stamps"]:
             item = parts["containers"][post["at"]]
             header = (item["text"].rsplit("\n", 1)[0]
-                      if version != 2 and item.get("provider_states") is not None else item["text"])
+                      if version not in (2, 3) and item.get("provider_states") is not None else item["text"])
             lines = [header] if len(face_posts) > 1 else []
             n += _count("\n".join(lines + post["stamps"]), _CONTEXT_MAX)
         n += 1 + _count(post["original"], _SECTION_MAX)
