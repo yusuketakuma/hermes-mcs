@@ -331,7 +331,7 @@ run_check の同意待ち経路も通常の収集・derive・送信を凍結す�
 マーカーを手で消したり、phase を書き換えたりして迂回しない。
 `--no-notify` だけでは outbox への登録防止や復元承認にはならない。
 
-現行の [ops.restore_approve](../../mcs/ops/mcs_operations.py) と
+現行の [ops.restore_approve](../../mcs/ops/commands/mcs_operations.py) と
 [updater の承認照合](../../mcs/ops/mcs_update.py) は、更新・rollback の
 損失報告 `report_id`、`backup_sha256`、`backup_schema` に束縛された receipt。
 人の確認・actor・reason と receipt commit が必要で、過去の更新承認で代用しない。

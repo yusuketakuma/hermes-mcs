@@ -68,7 +68,7 @@ Slackの[`feedback_buttons`](https://docs.slack.dev/reference/block-kit/block-el
 
 利用者は投稿、スタンプ、理由を選び、プレビューで確認してから承認します。スタンプの選択肢もMCSと同じ順で、自分が押しているスタンプを選ぶと取消になります（この形式より前に開いたフォームの「取消」も受け付けます）。添付の表示があっても、選択されるのはその添付を含む根元投稿または返信投稿です。本人スタンプが未取得・不明・処理中の投稿を、新しい操作の根拠にはできません。
 
-共通UIはフォームに含まれるIDとhashから`ops.mcs_reaction`を組み立てます。人の確認、actor、理由、command IDを伴い、[mcs_requests.apply_command](../../mcs/ops/mcs_requests.py)を経由します。理由は空欄不可・最大200文字です。受付時にもフォームhash、本文hash、観測した本人状態、通知先と権限を再検証します。
+共通UIはフォームに含まれるIDとhashから`ops.mcs_reaction`を組み立てます。人の確認、actor、理由、command IDを伴い、[mcs_requests.apply_command](../../mcs/ops/commands/mcs_requests.py)を経由します。理由は空欄不可・最大200文字です。受付時にもフォームhash、本文hash、観測した本人状態、通知先と権限を再検証します。
 
 受付成功の`queued`は送信完了ではありません。receiptと操作artifactを同じDBトランザクションで保存してから、定期処理の[run_check.py](../../mcs/ingest/run_check.py)が送信処理を行います。同じcommand ID・同じpayloadの再送は既存receiptを返し、別payloadで同じIDを使うと拒否します。受付中・結果不明の操作がある投稿には、別commandで重ねて送信しません。
 

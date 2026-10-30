@@ -97,7 +97,7 @@ jobs:
         run: pip install "pytest==9.2.0" -r deployment/requirements-standalone.txt
       # pinned-version assertion + required-collection check + test guards
       - name: standalone SDK integration
-        run: MCS_TEST_PYTHON="$(command -v python)" sh scripts/check_pinned_sdks.sh standalone
+        run: MCS_TEST_PYTHON="$(command -v python)" sh scripts/development/check_pinned_sdks.sh standalone
 
   incident-gates:
     runs-on: ubuntu-latest
@@ -168,4 +168,4 @@ jobs:
           MCS_TEST_PYTHON: ${{ github.workspace }}/hermes-agent/.venv/bin/python
           MCS_HERMES_SOURCE: ${{ github.workspace }}/hermes-agent
           MCS_HERMES_REFERENCE: ${{ github.workspace }}/hermes-agent
-        run: sh scripts/check_pinned_sdks.sh hermes
+        run: sh scripts/development/check_pinned_sdks.sh hermes

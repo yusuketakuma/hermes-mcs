@@ -10,7 +10,7 @@ import time
 from contextlib import closing
 from pathlib import Path
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import _mcs_path  # noqa: F401
 
 from ledger import LedgerReader

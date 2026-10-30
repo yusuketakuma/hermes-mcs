@@ -13,7 +13,7 @@ import sys
 from typing import TypedDict
 import unicodedata
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2] / "evaluation"
 FOCUSES = ("request", "question", "self_plan", "reply", "ack", "false_done",
            "conditional", "dependency", "time", "recipient_ambiguity", "requester_ambiguity")
 FIELDS = ("request_to", "request_from", "due_text", "condition")

@@ -337,7 +337,7 @@
 
 **成果物**
 - 変更: `mcs/notify/notify_flush.py`（下限・restore ゲート・方針表・理由記録）、`mcs/core/ledger.py`（`hold_reason` migration、`outbox_hold` の引数）、`mcs/ingest/run_check.py`（health に held の内訳）。
-- 任意（実需確認後）: `mcs/ops/mcs_requests.py` と `mcs/ingest/job_ops.py`（resolve コマンド）、`mcs/views/mcs_view.py`（hold 一覧）。
+- 任意（実需確認後）: `mcs/ops/commands/mcs_requests.py` と `mcs/ingest/job_ops.py`（resolve コマンド）、`mcs/views/mcs_view.py`（hold 一覧）。
 - 文書: `hermes_plugin/README.md`、`docs/specs/lifecycle-spec.md` の該当節。
 
 **受入条件とテスト（合成のみ）**

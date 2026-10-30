@@ -11,7 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 EVALUATION = ROOT / "evaluation"
 SPEC = importlib.util.spec_from_file_location(
-    "request_following_review", EVALUATION / "request_following_review.py")
+    "request_following_review", ROOT / "scripts" / "evaluation" / "request_following_review.py")
 assert SPEC is not None and SPEC.loader is not None
 support = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(support)
@@ -180,7 +180,7 @@ def test_invalid_queue_inputs_emit_a_code_without_private_paths(tmp_path, capsys
 def test_real_cli_exports_parseable_complete_pending_queue(command):
     # Given / When
     process = subprocess.run(
-        [sys.executable, str(EVALUATION / "request_following_review.py"), command],
+        [sys.executable, str(ROOT / "scripts" / "evaluation" / "request_following_review.py"), command],
         capture_output=True, text=True, timeout=20)
     # Then
     assert process.returncode == 0, process.stderr

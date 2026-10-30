@@ -8,10 +8,10 @@ import os
 from pathlib import Path
 import stat
 import sys
-import settings_migration_receipt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import _mcs_path  # noqa: E402,F401
+import settings_migration_receipt  # noqa: E402
 from install_options_contract import valid  # noqa: E402
 
 KEY = 'install_args'

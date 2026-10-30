@@ -19,6 +19,7 @@ DETAILS = {"request_to": "薬剤師", "request_from": "架空担当A",
 
 
 def reply(text=TEXT, details=None):
+    semantic_transport._record_inference("local")
     presence = dict.fromkeys(facts.MANDATORY_CATEGORIES, "none")
     presence["request_pending"] = "one"
     return json.dumps({"facts": [{
@@ -287,7 +288,7 @@ def test_shadow_compare_reads_staged_candidates_without_writes(tmp_path, source,
     from pathlib import Path
     spec = importlib.util.spec_from_file_location(
         "canonical_request_eval_shadow",
-        Path(__file__).resolve().parents[2] / "evaluation" / "canonical_request_eval.py")
+        Path(__file__).resolve().parents[2] / "scripts" / "evaluation" / "canonical_request_eval.py")
     report_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(report_module)
     db, _, _ = source

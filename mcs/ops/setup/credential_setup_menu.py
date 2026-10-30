@@ -16,7 +16,7 @@ def run(root, cfg, *, current=None):
         print("認証情報の設定は本人の端末で mcs setup api-keys を実行してください。")
         return 2
     standalone = mcs_runtime.standalone(cfg)
-    checkout = Path(__file__).resolve().parents[2]
+    checkout = Path(__file__).resolve().parents[3]
     unresolved = set()
     while True:
         print("\n設定する認証情報を選んでください。入力した秘密値は表示されません。")

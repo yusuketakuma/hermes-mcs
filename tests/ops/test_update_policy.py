@@ -3,7 +3,15 @@ import copy
 
 import pytest
 
-from update_policy import preflight_decision
+from update_policy import environment_impact, preflight_decision
+
+
+@pytest.mark.parametrize("path", [
+    "mcs/ops/service_contract.py", "mcs/ops/service_management.py",
+    "mcs/ops/services/service_contract.py", "mcs/ops/services/service_management.py",
+])
+def test_service_source_changes_in_both_layouts_require_settings_review(path):
+    assert "新しい必須設定の可能性があります" in environment_impact([path], {})
 
 
 @pytest.mark.parametrize("state,tag_errors,automatic,noop,route,blocker", [

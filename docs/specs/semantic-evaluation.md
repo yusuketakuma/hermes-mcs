@@ -23,7 +23,7 @@ provide 220 wholly fictional office/coordination conversations. Sources and
 synthetic proposals are separate, and all cases are pending with
 `promotion_eligible: false`. There are zero human-verified labels.
 
-`python3 evaluation/request_following_review.py validate` checks the fixed
+`python3 scripts/evaluation/request_following_review.py validate` checks the fixed
 queue. `export` produces source-only worksheets; `export-proposals` produces
 a separate comparison file. The tool does not generate human signatures,
 receipts, model outputs or completed labels. This queue is not an

@@ -440,7 +440,7 @@ SQLと集計の途中で期限を確認し、読取り量にも上限を設け�
 
 ## 仕組み
 
-![全体の流れ](../assets/flow-overview.svg)
+![全体の流れ](../assets/diagrams/flow-overview.svg)
 
 MCSサーバーの負荷対策として、自動取得を5分から10分間隔へ変更しています。
 
@@ -460,7 +460,7 @@ MCSサーバーの負荷対策として、自動取得を5分から10分間隔�
 
 **実際に稼働している構成**
 
-![稼働中のシステム構成](../assets/runtime-topology.svg)
+![稼働中のシステム構成](../assets/diagrams/runtime-topology.svg)
 
 情報の行き先（AI の使用箇所・外部送信の有無）の詳細と現在の機能・運用上の制約は
 [SECURITY.md](../../SECURITY.md)「人工知能（AI）の使用箇所と情報の行き先」「復旧と解析の限界」、
@@ -488,7 +488,7 @@ MCSサーバーの負荷対策として、自動取得を5分から10分間隔�
 
 ### メディカルチャットから縦断データへ
 
-![パイプライン図](../assets/flow-pipeline.svg)
+![パイプライン図](../assets/diagrams/flow-pipeline.svg)
 
 ### 測定できること
 
@@ -860,7 +860,7 @@ mcs drug formulary-ack 'アムロジピンOD錠2.5mg「トーワ」' --sha256 <�
 
 ### メッセージではなく症例経過
 
-![症例経過シーケンス図](../assets/flow-journey.svg)
+![症例経過シーケンス図](../assets/diagrams/flow-journey.svg)
 
 hermes-mcs はこの流れを単なる6投稿としてではなく、
 **症状 → 評価 → 提案 → 判断 → 実施 → 再評価** という一つの症例経過として
@@ -869,7 +869,7 @@ hermes-mcs はこの流れを単なる6投稿としてではなく、
 
 ### 多職種連携の解析
 
-![多職種連携ネットワーク図](../assets/flow-network.svg)
+![多職種連携ネットワーク図](../assets/diagrams/flow-network.svg)
 
 すべての職種が同じ患者の記録に書き込むため、「誰が誰に相談したか」
 「相談から回答までの時間」「依頼が回答・実施まで完結したか」
@@ -882,7 +882,7 @@ hermes-mcs はこの流れを単なる6投稿としてではなく、
 
 ### 縦断症例解析
 
-![症例タイムライン図](../assets/flow-timeline.svg)
+![症例タイムライン図](../assets/diagrams/flow-timeline.svg)
 
 解析可能な軸: 症状→薬剤変更までの時間、薬剤変更→再評価までの時間、
 退院→薬剤照合までの時間、同一問題の再発、薬剤変更・多職種連携が
@@ -905,7 +905,7 @@ hermes-mcs はこの流れを単なる6投稿としてではなく、
 | 期間終了後の更新なし | 期間表現の終了日を過ぎても新しい期間表現の記録がないもの（内服切れの可能性） |
 | 退院前後の薬変更 | 退院・転院の±14日に薬の変更言及が重なるもの |
 
-![アラートフロー図](../assets/flow-signals.svg)
+![アラートフロー図](../assets/diagrams/flow-signals.svg)
 
 **「未来を予測する」機能ではありません。** 過去の統計から条件を
 学習する仕組みはなく、条件は固定値または人が承認した変更のみ
@@ -916,7 +916,7 @@ hermes-mcs はこの流れを単なる6投稿としてではなく、
 
 ### 出力イメージ
 
-![解析概要イメージ](../assets/analytics-overview.svg)
+![解析概要イメージ](../assets/diagrams/analytics-overview.svg)
 
 *Synthetic example — 架空データ。実患者データではない。*
 
