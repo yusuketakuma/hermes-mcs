@@ -1778,6 +1778,14 @@ def scan_fair_dirty_projects(ledger, *, now=None, cfg=None, deadline=None, commi
             _check_deadline(commit_deadline)
     except RollupDeadlineExceeded:
         pass
+    except sqlite3.OperationalError as error:
+        code = getattr(error, "sqlite_errorcode", None)
+        if code is None:  # Python 3.10 does not expose SQLite result codes.
+            busy = str(error) in ("database is locked", "database table is locked")
+        else:
+            busy = code & 0xff in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+        if not busy:
+            raise
     finally:
         if previous_wait is not None:
             db.execute(f"PRAGMA busy_timeout={previous_wait}")

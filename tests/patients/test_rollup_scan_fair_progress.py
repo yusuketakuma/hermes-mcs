@@ -1,5 +1,6 @@
 """Synthetic multi-tick fairness for the rollup dirty scan."""
 import json
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -106,6 +107,62 @@ def test_cursor_commit_deadline_retains_scan_without_persisting(ledger, scan_clo
     assert scan.next_project_id == 2
     assert _cursor(ledger) == []
     assert not ledger.db.in_transaction
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_cursor_writer_contention_retains_scan_and_restores_timeout(ledger, scan_clock, existing):
+    scan_clock.slow = False
+    if existing:
+        ledger.artifact_add("patient_walk_cursor_v1", '{"next":2}', meta={"stage": "rollup"})
+    before = _cursor(ledger)
+    ledger.db.execute("PRAGMA busy_timeout=517")
+    path = ledger.db.execute("PRAGMA database_list").fetchone()[2]
+    writer = sqlite3.connect(path)
+    try:
+        writer.execute("BEGIN IMMEDIATE")
+        scan = rollup.scan_fair_dirty_projects(ledger, deadline=5.0, commit_deadline=0.41)
+        assert set(scan.dirty) == {1, 2, 3, 4}
+        assert not scan.incomplete and scan.unknown == ()
+        assert _cursor(ledger) == before
+        assert not ledger.db.in_transaction
+        assert ledger.db.execute("PRAGMA busy_timeout").fetchone()[0] == 517
+    finally:
+        writer.rollback()
+        writer.close()
+
+
+@pytest.mark.parametrize(("code", "message", "retryable"), [
+    (6, "synthetic locked", True),
+    (517, "synthetic busy snapshot", True),
+    (262, "synthetic locked shared cache", True),
+    (None, "database is locked", True),
+    (None, "database table is locked", True),
+    (None, "synthetic cursor SQL failure", False),
+    (1, "database is locked", False),
+    (10, "synthetic cursor I/O failure", False),
+])
+def test_cursor_only_tolerates_classified_contention(ledger, scan_clock, monkeypatch,
+                                                    code, message, retryable):
+    scan_clock.slow = False
+    ledger.db.execute("PRAGMA busy_timeout=517")
+    error = sqlite3.OperationalError(message)
+    if code is not None:
+        error.sqlite_errorcode = code
+
+    def failed_write(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(ledger, "artifact_add_tx", failed_write)
+    if retryable:
+        scan = rollup.scan_fair_dirty_projects(ledger, deadline=5.0, commit_deadline=0.41)
+        assert set(scan.dirty) == {1, 2, 3, 4}
+    else:
+        with pytest.raises(sqlite3.OperationalError) as caught:
+            rollup.scan_fair_dirty_projects(ledger, deadline=5.0, commit_deadline=0.41)
+        assert caught.value is error
+    assert _cursor(ledger) == []
+    assert not ledger.db.in_transaction
+    assert ledger.db.execute("PRAGMA busy_timeout").fetchone()[0] == 517
 
 
 def test_cursor_insert_is_rolled_back_if_deadline_expires_after_write(ledger, scan_clock, monkeypatch):

@@ -1,4 +1,6 @@
 """Synthetic derivation reserves snapshot verification time without hiding unfinished work."""
+import sqlite3
+
 import drug_map
 import extract
 import mcs_signals
@@ -130,6 +132,44 @@ def test_real_scan_timeout_preserves_time_to_rebuild_confirmed_dirty(tmp_path, m
         assert result["rollup_scan"]["state"] == "unknown"
         assert result["rollup_scan"]["unknown_reasons"] == {"deadline": 1}
         assert "rollup: scan_unknown" in result["errors"]
+        assert not ledger.db.in_transaction
+    finally:
+        ledger.close()
+
+
+def test_cursor_busy_does_not_skip_confirmed_dirty_rebuild(tmp_path, monkeypatch):
+    ledger = _ledger(tmp_path)
+    rebuilt = []
+    try:
+        ledger.ensure_patient(1)
+        monkeypatch.setattr(snapshots, "snapshot_verify_timeout_s", lambda path: 20)
+        monkeypatch.setattr(run_check.time, "monotonic", lambda: 20)
+        monkeypatch.setattr(extract, "run_pending", lambda *a, **k: {"done": 0, "pids": []})
+        monkeypatch.setattr(drug_map, "configured", lambda cfg: (None, None))
+        monkeypatch.setattr(drug_map, "derive", lambda *a, **k: {"pids": [], "status": "complete"})
+        monkeypatch.setattr(mcs_signals, "evaluate", lambda *a, **k: {"errors": []})
+        monkeypatch.setattr(rollup, "_dirty_project_snapshot", lambda *a, **k: True)
+        add = ledger.artifact_add_tx
+
+        def busy_cursor(kind, *args, **kwargs):
+            if kind == "patient_walk_cursor_v1":
+                raise sqlite3.OperationalError("database is locked")
+            return add(kind, *args, **kwargs)
+
+        def rebuild(current_ledger, project_id, *, cfg, deadline):
+            rebuilt.append(project_id)
+            current_ledger.artifact_add(rollup.KIND, "synthetic", project_id=project_id)
+
+        monkeypatch.setattr(ledger, "artifact_add_tx", busy_cursor)
+        monkeypatch.setattr(rollup, "rebuild", rebuild)
+        result = {"errors": []}
+        run_check.stage_derive(ledger, result, 200, {}, llm_budget_cap=0)
+
+        assert rebuilt == [1]
+        assert result["rollups"] == 1
+        assert result["rollup_scan"]["state"] == "checked"
+        assert "rollup: OperationalError" not in result["errors"]
+        assert [row["project_id"] for row in ledger.artifacts(rollup.KIND)] == [1]
         assert not ledger.db.in_transaction
     finally:
         ledger.close()
