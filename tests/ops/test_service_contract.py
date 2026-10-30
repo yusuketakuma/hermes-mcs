@@ -4,6 +4,7 @@ import shlex
 
 import pytest
 
+import run_log_install
 import service_contract as contract
 import update_launch
 
@@ -69,8 +70,11 @@ def substitutions(cfg):
         hermes_python="/synthetic/hermes/python")
 
 
-def test_runtime_selection_validation_and_rendering_use_supplied_facts():
+def test_runtime_selection_validation_and_rendering_use_supplied_facts(monkeypatch):
+    monkeypatch.setattr(run_log_install, "helper_path",
+                        lambda root, recovery_dir, *, checkout: "/synthetic/run_log.py")
     assert substitutions({})["PYTHON"] == "/synthetic/hermes/python"
+    assert substitutions({})["RUN_LOG_HELPER"] == "/synthetic/run_log.py"
     standalone = substitutions({"runtime_mode": "standalone", "watchdog_grace_s": 0})
     assert standalone["PYTHON"] == "/synthetic/standalone/venv/bin/python3"
     assert standalone["WATCHDOG_GRACE"] == "0"

@@ -10,6 +10,7 @@ import pytest
 
 import mcs_backup as backup
 import mcs_setup
+import run_log_install
 
 
 SCRIPT = Path(__file__).resolve().parents[2] / "deployment/scripts/mcs_offsite.sh"
@@ -18,11 +19,17 @@ SCRIPT = Path(__file__).resolve().parents[2] / "deployment/scripts/mcs_offsite.s
 def _wrapper(tmp_path, exit_code=0, *, enabled=False):
     data = tmp_path / "private data"
     data.mkdir(mode=0o700)
+    (tmp_path / "data").mkdir(mode=0o700)
+    recovery = tmp_path / "private recovery"
+    run_log_install.prepare(tmp_path, SCRIPT.parents[2], recovery, promote=True)
+    helper = run_log_install.helper_path(tmp_path, recovery, require_installed=True)
     interpreter = tmp_path / "python stub"
     calls = tmp_path / "calls.json"
     interpreter.write_text(
         f"#!{sys.executable}\n"
         "import json, os, sys\n"
+        "if sys.argv[1:2] == ['-I']:\n"
+        "    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])\n"
         f"with open({str(calls)!r}, 'w') as f:\n"
         "    json.dump({'argv':sys.argv[1:], 'path':os.environ['PATH']}, f)\n"
         "print('synthetic output must not leak')\n"
@@ -30,6 +37,7 @@ def _wrapper(tmp_path, exit_code=0, *, enabled=False):
     interpreter.chmod(0o700)
     runner = tmp_path / "wrapper.sh"
     subs = {"DATA": str(data), "PYTHON": str(interpreter),
+            "RUN_LOG_HELPER": helper,
             "REPO": str(tmp_path / "repo with spaces"),
             "BACKUP_ENABLED": "1" if enabled else "0",
             "BACKUP_POLICY": str(tmp_path / "owner policy.json"),
@@ -73,6 +81,7 @@ def test_wrapper_forwards_explicit_policy_snapshot_and_redacts_output(tmp_path, 
     assert result.stdout == (f"mcs offsite: backup failed (exit {code})\n".encode()
                              if code else b"")
     assert result.stderr == b""
+    assert (data / "mcs.log").read_bytes() == b"synthetic output must not leak\n"
 
 
 def test_rendered_owner_opt_in_works_without_cron_arguments(tmp_path):
@@ -80,6 +89,7 @@ def test_rendered_owner_opt_in_works_without_cron_arguments(tmp_path):
     result = subprocess.run(["/bin/bash", str(runner)], capture_output=True,
                             env={"HOME": str(tmp_path)}, timeout=10)
     assert result.returncode == 0 and result.stdout == b""
+    assert (data / "mcs.log").read_bytes() == b"synthetic output must not leak\n"
     assert json.loads(calls.read_text())["argv"] == [
         str(tmp_path / "repo with spaces/mcs/ops/mcs_backup.py"), "offsite",
         "--scheduled", "--keychain", "--state-dir", str(data),

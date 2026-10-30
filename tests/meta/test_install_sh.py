@@ -1130,7 +1130,7 @@ def test_recovery_template_executable_is_probed_without_substitution(tmp_path):
     repo = tmp_path / "synthetic-checkout"
     (repo / "deployment/launchagents").mkdir(parents=True)
     (repo / "deployment/recovery").mkdir()
-    (repo / "mcs").symlink_to(ROOT / "mcs", target_is_directory=True)
+    shutil.copytree(ROOT / "mcs", repo / "mcs", ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copy2(INSTALL, repo / "install.sh")
     shutil.copy2(ROOT / "deployment/recovery/mcs_recover.py",
                  repo / "deployment/recovery/mcs_recover.py")
@@ -1141,6 +1141,7 @@ def test_recovery_template_executable_is_probed_without_substitution(tmp_path):
     document = plistlib.loads(
         (ROOT / "deployment/launchagents/org.mcs.recovery.plist").read_bytes())
     document["Program"] = str(executable)
+    document["ProgramArguments"][0] = document["ProgramArguments"][7] = str(executable)
     template.write_bytes(plistlib.dumps(document))
     r = _run(env, hermes_home, "--no-brew", "--no-llm", "--no-plugin", "--no-services",
              script=repo / "install.sh")
@@ -1149,6 +1150,7 @@ def test_recovery_template_executable_is_probed_without_substitution(tmp_path):
     assert f"runtime-metadata {stub_root}/bin/python3.14" not in _calls(stub_root)
     installed = plistlib.loads((home / "Library/LaunchAgents/org.mcs.recovery.plist").read_bytes())
     assert installed["Program"] == str(executable)
+    assert installed["ProgramArguments"][0] == installed["ProgramArguments"][7] == str(executable)
 
 
 def test_explicit_no_recovery_keeps_watchdog_unconfigured_without_probe(tmp_path):
@@ -1269,7 +1271,7 @@ def test_partial_states_resume_without_duplicates(tmp_path):
     link = hermes_home / "plugins" / "mcs-discord-commands"
     link.symlink_to(ROOT / "hermes_plugin")            # killed after 3/6
     rec = home / ".mcs-recovery"
-    rec.mkdir(parents=True)
+    rec.mkdir(mode=0o700, parents=True)
     old_gen = b"# old generation - only thing that still runs"
     (rec / "mcs_recover.py").write_bytes(old_gen)      # killed after cp
     agents = home / "Library" / "LaunchAgents"
@@ -1475,7 +1477,11 @@ def test_install_paths_remain_literal_shell_and_xml_data(tmp_path):
     llama = plistlib.loads((agents / "ai.mcs.llamaserver.plist").read_bytes())
     watch = plistlib.loads((agents / "org.mcs.recovery.plist").read_bytes())
     assert llama["WorkingDirectory"] == str(hermes_home)
-    assert watch["ProgramArguments"][1] == str(home / ".mcs-recovery" / "mcs_recover.py")
+    argv = watch["ProgramArguments"]
+    assert argv[1] == "-I"
+    assert argv[3:7] == ["exec", "--data-dir", str(home / ".mcs/data"), "--"]
+    assert argv[argv.index("--") + 1:] == [
+        argv[0], str(home / ".mcs-recovery" / "mcs_recover.py"), "--if-stale"]
     assert any(c.startswith("venv-hermes ") for c in _calls(stub_root))
 
 
@@ -1499,7 +1505,7 @@ def test_backslash_home_and_final_instructions_survive(tmp_path):
 def test_same_release_rerun_keeps_the_real_previous_generation(tmp_path):
     home, hermes_home, stub_root, env = _world(tmp_path)
     rec = home / ".mcs-recovery"
-    rec.mkdir(parents=True)
+    rec.mkdir(mode=0o700, parents=True)
     (rec / "mcs_recover.py").write_bytes(b"# old generation")
     assert _run(env, hermes_home).returncode == 0
     assert (rec / "mcs_recover.py.prev").read_bytes() == b"# old generation"
@@ -1722,7 +1728,7 @@ def test_other_checkout_requires_force_repo(tmp_path):
     other = tmp_path / "other-checkout"
     other.mkdir()
     rec = home / ".mcs-recovery"
-    rec.mkdir(parents=True)
+    rec.mkdir(mode=0o700, parents=True)
     (rec / "repo_path").write_text(f"{other}\n")
     r = _run(env, hermes_home)
     assert r.returncode == 1
@@ -1970,7 +1976,7 @@ def test_preflight_reports_blockers_with_fixes(tmp_path):
     other = tmp_path / "other-checkout"
     other.mkdir()
     rec = home / ".mcs-recovery"
-    rec.mkdir()
+    rec.mkdir(mode=0o700)
     (rec / "repo_path").write_text(f"{other}\n")
     r = _run({**env, "STUB_UID": "0", "STUB_DF_KB": "1000",
               "STUB_CURL_FAIL": "github.com"}, None, "--preflight")
@@ -2040,7 +2046,7 @@ def test_failed_stage_stops_install_then_rerun_recovers(
     converges and the previous recovery generation survives both runs."""
     home, hermes_home, stub_root, env = _world(tmp_path)
     rec = home / ".mcs-recovery"
-    rec.mkdir(parents=True)
+    rec.mkdir(mode=0o700, parents=True)
     old_gen = b"# old generation - only thing that still runs"
     (rec / "mcs_recover.py").write_bytes(old_gen)
 
@@ -2075,12 +2081,17 @@ def test_transient_watchdog_bootstrap_error_is_retried(tmp_path):
 
 def test_standalone_documented_service_preserves_literal_paths(tmp_path):
     from mcs_standalone.service import render
+    import run_log_install
     root = tmp_path / "home & space"
     _, body = render(root, platform="darwin")
     spec = plistlib.loads(body.encode())
-    assert spec["ProgramArguments"] == [str(root / "venv/bin/python3"), "-m",
-                                         "mcs_standalone", "run", "--root", str(root)]
-    assert spec["StandardOutPath"] == str(root / "data/standalone.log")
+    argv = spec["ProgramArguments"]
+    assert argv[:2] == [str(root / "venv/bin/python3"), "-I"]
+    assert argv[2] == run_log_install.helper_path(root, checkout=ROOT)
+    assert argv[3:7] == ["exec", "--data-dir", str(root / "data"), "--"]
+    assert argv[7:] == [str(root / "venv/bin/python3"), "-m",
+                        "mcs_standalone", "run", "--root", str(root)]
+    assert spec["StandardOutPath"] == spec["StandardErrorPath"] == os.devnull
     guide = (ROOT / "docs/guides/INSTALLATION.md").read_text()
     assert "./install.sh --mode standalone" in guide
     assert "$PY mcs/ops/mcs_setup.py check" in guide

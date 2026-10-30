@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import plistlib
+import shutil
 import sys
 from types import SimpleNamespace
 
@@ -44,6 +45,10 @@ def test_installer_recovery_gate_uses_public_inspection_without_real_commands(
         tmp_path, monkeypatch, capsys, case):
     checkout = tmp_path / "checkout"
     checkout.mkdir()
+    source = checkout / "mcs/core"
+    source.mkdir(parents=True)
+    shutil.copyfile(Path(__file__).resolve().parents[2] / "mcs/core/run_log.py",
+                    source / "run_log.py")
     selected = str(tmp_path / "independent-python")
     config = tmp_path / "config.json"
     config.write_text(json.dumps({"recovery_python": selected}))
@@ -63,7 +68,8 @@ def test_installer_recovery_gate_uses_public_inspection_without_real_commands(
                         lambda *a, **k: pytest.fail("installer attempted a real runtime command"))
     monkeypatch.setattr(sys, "path", list(sys.path))
     monkeypatch.setattr(sys, "argv", ["synthetic-probe", str(checkout), str(template),
-                                     str(config), "", "0", str(agents)])
+                                     str(config), "", "0", str(agents),
+                                     str(tmp_path / "private-recovery")])
     script = compile(_installer_recovery_script(), "<synthetic-installer-recovery>", "exec")
     if case == "safe":
         exec(script, {})

@@ -289,7 +289,7 @@ def test_update_lock_nonblocking(updater):
 
 @pytest.mark.parametrize("interrupted", [False, True])
 def test_rollback_keeps_manifest_and_restarts_changed_plugin(
-        updater, tmp_path, monkeypatch, interrupted):
+        updater, prepared_run_log, tmp_path, monkeypatch, interrupted):
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(updater, "REPO", str(repo))
     before = _git(repo, "rev-parse", "v1.0.0").stdout.strip()
@@ -792,7 +792,7 @@ def _apply_env(updater, monkeypatch, *, precheck_errors=(),
     ("lineworks_adapter/__main__.py", False),
 ])
 def test_apply_persists_adapter_restart_decision_before_restarting_gateway(
-        updater, tmp_path, monkeypatch, path, needs_restart):
+        updater, prepared_run_log, tmp_path, monkeypatch, path, needs_restart):
     repo = _apply_env(updater, monkeypatch)
     remote_work = tmp_path / "remote-work"
     changed = remote_work / path
@@ -1734,7 +1734,8 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
 
         monkeypatch.setattr(mcs_update, "_replace_database", fail_swap)
     monkeypatch.setattr(mcs_update, "_run_post_merge", post_merge)
-    assert mcs_update.apply("v1.1.0", sha, "cid-apply") == 2
+    expected = 1 if approved_swap_failure else 2
+    assert mcs_update.apply("v1.1.0", sha, "cid-apply") == expected
     st = mcs_update.journal_store.load_state(mcs_update.STATE_PATH)
     assert st.get("restore_consent")
     assert events[-1] == "quiesce" and "restart" in events
@@ -2036,7 +2037,7 @@ def test_rollback_partial_quiesce_restarts_despite_hung_launchctl(
 
 @pytest.mark.parametrize("exc", _HANG_EXCS)
 def test_recover_escalates_when_services_reconcile_hangs(
-        updater, tmp_path, monkeypatch, exc):
+        updater, prepared_run_log, tmp_path, monkeypatch, exc):
     """head == target resume: a hung/missing `mcs_setup services` child
     escalates (drainers back, marker gone, receipt consumed) instead of
     escaping recover with drainers still quiesced."""
@@ -2689,7 +2690,8 @@ def test_failed_bail_rollback_is_not_finished_as_pre_merge(
     # frozen DB (restore incomplete): report only, no outbox write
     assert notices == []
     report = json.loads(Path(mcs_update.REPORT_PATH).read_text())
-    assert report["result"] == "escalate" and report["writers_stopped"]
+    assert report["result"] == "restore_consent_blocked"
+    assert "writers_stopped" not in report
     assert Path(mcs_update.MARKER_PATH).exists()
     st = mcs_update.journal_store.load_state(mcs_update.STATE_PATH)
     assert st["applying"]["restore_incomplete"] is True
