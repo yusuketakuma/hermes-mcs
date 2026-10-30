@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from decimal import Decimal, InvalidOperation
+import hashlib
+from itertools import chain
 import json
 import math
 import re
@@ -16,7 +18,7 @@ from functools import lru_cache
 from anthropic_client import AnthropicError, MODEL, MAX_TOKENS, validate_usage
 import openai_client
 from llm_retry import http_error
-from mcs_util import private_env_value, payload_hash, strict_json, until_epoch
+from mcs_util import canonical, private_env_value, payload_hash, strict_json, until_epoch
 
 PRICE_VERSION = "anthropic-haiku-5-5-2026-10-26"
 PRICE_CHECKED_ON = "2026-10-26"
@@ -588,9 +590,14 @@ def _unbilled(http_class):
 
 
 def _periods(now):
-    date = datetime.fromtimestamp(now, JST)
-    day = date.replace(hour=0, minute=0, second=0, microsecond=0)
-    return day.timestamp(), day.replace(day=1).timestamp()
+    try:
+        if type(now) not in (int, float) or not math.isfinite(now):
+            raise ValueError
+        date = datetime.fromtimestamp(now, JST)
+        day = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        return day.timestamp(), day.replace(day=1).timestamp()
+    except (TypeError, ValueError, OverflowError, OSError):
+        raise AnthropicError("pricing_unverified", "usage_timestamp_invalid") from None
 
 
 def _loads(value):
@@ -599,8 +606,40 @@ def _loads(value):
         if not isinstance(result, dict):
             raise ValueError
         return result
-    except (ValueError, TypeError, RecursionError):
+    except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
         raise AnthropicError("pricing_unverified", "usage_invalid") from None
+
+
+def _accounting_meta(value):
+    result = _loads(value)
+    try:
+        strict_json(value)
+    except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
+        raise AnthropicError("pricing_unverified", "usage_invalid") from None
+    return result
+
+
+@contextmanager
+def _accounting_snapshot(db):
+    # A pending result keeps the SQLite read snapshot without committing a caller's transaction.
+    anchor = db.execute("SELECT artifact_id FROM (SELECT artifact_id FROM artifacts "
+        "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') LIMIT 1) "
+        "UNION ALL SELECT NULL UNION ALL SELECT NULL")
+    try:
+        anchor.fetchone()
+        yield
+    finally:
+        anchor.close()
+
+
+def _validate_accounting_timestamps(db):
+    # Values outside this conservative interior are checked precisely; no
+    # otherwise valid historical timestamp is excluded by these scan bounds.
+    candidates = db.execute("SELECT created_at FROM artifacts WHERE kind IN (?,?) AND CASE "
+        "WHEN typeof(created_at) NOT IN ('integer','real') THEN 1 "
+        "ELSE created_at < ? OR created_at > ? END", (KINDS[0], KINDS[1], -62135500000, 253402000000))
+    for row in candidates:
+        _periods(row[0])
 
 
 def _binding(meta):
@@ -637,26 +676,39 @@ def _reserve_valid(meta, row):
     return maximum
 
 
-def _stored_reservation(ledger, reservation):
+def _stored_reservation(ledger, reservation, *, bound_only=False):
     """The one retained reservation row matching ``reservation``, validated."""
-    rows = _matching_rows(ledger, KINDS[0], reservation.get("reservation_id"))
+    rid = reservation.get("reservation_id")
+    rows = (_matching_bound_rows(ledger, KINDS[0], rid) if bound_only
+            else _matching_rows(ledger, KINDS[0], rid))
     if len(rows) != 1:
         raise AnthropicError("pricing_unverified", "reservation_missing")
-    stored = _loads(rows[0]["meta"])
+    if bound_only and rows[0]["created_at"] < time.time() - 62 * 86400:
+        raise AnthropicError("pricing_unverified", "reservation_missing")
+    stored = _accounting_meta(rows[0]["meta"])
     _reserve_valid(stored, rows[0])
     if stored != reservation:
         raise AnthropicError("pricing_unverified", "reservation_mismatch")
     return stored
 
 
-def _matching_rows_many(ledger, kind, reservation_ids, *, now=None):
+def _matching_rows_many(ledger, kind, reservation_ids, *, now=None, _timestamps_checked=False):
     """Select retained reservation identities in SQL, preserving every duplicate match."""
+    if not _timestamps_checked:
+        with _accounting_snapshot(ledger.db):
+            _validate_accounting_timestamps(ledger.db)
+            return _matching_rows_many(ledger, kind, reservation_ids, now=now, _timestamps_checked=True)
     ids = list(dict.fromkeys(reservation_ids))
     cutoff = (time.time() if now is None else now) - 62 * 86400
     rows = []
     if ids and ledger.db.execute(
             "SELECT 1 FROM artifacts WHERE kind=? AND created_at>=? AND "
-            "CASE WHEN json_valid(meta) THEN json_type(meta)!='object' ELSE 1 END LIMIT 1",
+            "CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
+            "WHEN json_type(meta)!='object' THEN 1 "
+            "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE key IS NOT NULL "
+            "GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
+            "WHEN EXISTS (SELECT 1 FROM json_tree(meta) WHERE type='real' "
+            "AND abs(value)>1.7976931348623157e308) THEN 1 ELSE 0 END LIMIT 1",
             (kind, cutoff)).fetchone():
         raise AnthropicError("pricing_unverified", "usage_invalid")
     for offset in range(0, len(ids), 900):
@@ -672,6 +724,25 @@ def _matching_rows_many(ledger, kind, reservation_ids, *, now=None):
 
 def _matching_rows(ledger, kind, reservation_id):
     return _matching_rows_many(ledger, kind, [reservation_id])
+
+
+def _matching_bound_rows(ledger, kind, reservation_id):
+    """Inspect all retained rows naming this reservation, without unrelated accounting rows."""
+    if not isinstance(reservation_id, str) or len(reservation_id) != 32:
+        raise AnthropicError("pricing_unverified", "reservation_invalid")
+    rows = ledger.db.execute(
+        "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
+        "WHERE kind=? AND CASE WHEN json_valid(meta) THEN EXISTS "
+        "(SELECT 1 FROM json_each(meta) WHERE key='reservation_id' AND type='text' AND value=?) "
+        "WHEN typeof(meta)='text' THEN instr(meta,?)>0 "
+        "WHEN typeof(meta)='blob' THEN instr(meta,CAST(? AS BLOB))>0 ELSE 0 END ORDER BY artifact_id",
+        (kind, reservation_id, reservation_id, reservation_id)).fetchall()
+    for row in rows:
+        if not isinstance(row["meta"], str) or len(row["meta"]) > 32768:
+            raise AnthropicError("pricing_unverified", "usage_invalid")
+        _accounting_meta(row["meta"])
+        _periods(row["created_at"])
+    return rows
 
 
 def reservation_evidence(db, artifact_id):
@@ -878,8 +949,19 @@ def _guard_repeated_request(ledger, candidate):
 
 def usage_report(ledger, *, now=None, period="month"):
     """Aggregate JST attempts; ambiguous results retain the full reserved amount.
-    ``period="day"`` validates and counts only today's rows (any newly written
-    result is today's); its cost fields then cover today only."""
+    All retained accounting timestamps must be readable. With ``period="day"``,
+    the count and cost fields cover only today's rows."""
+    try:
+        with _accounting_snapshot(ledger.db):
+            _validate_accounting_timestamps(ledger.db)
+            return _usage_report_snapshot(ledger, now=now, period=period)
+    except (AnthropicError, ValueError, InvalidOperation, TypeError, OverflowError, OSError):
+        return {"daily_requests": None, "monthly_cost_usd": None,
+                "settled_cost_usd": None, "max_reserved_cost_usd": None,
+                "unresolved_requests": None, "pricing_unverified": True}
+
+
+def _usage_report_snapshot(ledger, *, now=None, period="month"):
     now = time.time() if now is None else now
     day, month = _periods(now)
     rows = list(ledger.db.execute(
@@ -892,7 +974,7 @@ def usage_report(ledger, *, now=None, period="month"):
     providers = {name: {"cost_usd": Decimal(0), "unresolved_requests": 0} for name in PROVIDERS}
     try:
         for row in rows:
-            m = _loads(row["meta"])
+            m = _accounting_meta(row["meta"])
             rid = m.get("reservation_id")
             if row["kind"] == "cloud_usage_reserve":
                 maximum = _reserve_valid(m, row)
@@ -923,8 +1005,8 @@ def usage_report(ledger, *, now=None, period="month"):
         # bindings once per bounded ID group, rather than once per result.
         previous = {}
         orphan_ids = results.keys() - reserves.keys()
-        for row in _matching_rows_many(ledger, KINDS[0], orphan_ids, now=now):
-            meta = _loads(row["meta"])
+        for row in _matching_rows_many(ledger, KINDS[0], orphan_ids, now=now, _timestamps_checked=True):
+            meta = _accounting_meta(row["meta"])
             previous.setdefault(meta.get("reservation_id"), []).append((meta, row))
         for rid in orphan_ids:
             prior = previous.get(rid, [])
@@ -940,7 +1022,7 @@ def usage_report(ledger, *, now=None, period="month"):
                 "unresolved_requests": unknown, "pricing_unverified": invalid,
                 "providers": {name: {**values, "cost_usd": str(values["cost_usd"])} for name, values in providers.items()}}
     except (AnthropicError, ValueError, InvalidOperation):
-        return {"daily_requests": daily, "monthly_cost_usd": None,
+        return {"daily_requests": None, "monthly_cost_usd": None,
                 "settled_cost_usd": None, "max_reserved_cost_usd": None,
                 "unresolved_requests": None, "pricing_unverified": True}
 
@@ -973,9 +1055,8 @@ def global_block_reason(ledger, *, model=MODEL):
 
 class _Tally:
     """usage_report's month totals kept incrementally for the reservation gate:
-    every usage row is decoded once per process instead of once per reservation
-    (the gate runs under the write lock). Rows are append-only within a month;
-    an unreadable row stops the gate and is read again next time."""
+    unchanged rows are hashed without decoding their metadata again; changed
+    history rebuilds the tally, and unreadable history stops the gate."""
 
     def __init__(self, month, connection):
         self.month = month
@@ -986,6 +1067,8 @@ class _Tally:
         self.open = {}       # rid -> (meta, maximum, day): reserved, no result yet
         self.closed = {}     # rid -> (maximum, cost, settled, day): one result seen
         self.orphans = {}    # rid -> (prior-month reservation rows, results)
+        self.checked_at = None
+        self.history_valid_until = math.inf
         self.days = {}       # day -> [requests, cost]
         self.provider_days = {}
         self.provider_totals = {}
@@ -998,13 +1081,21 @@ class _Tally:
         self.provider_days[(model, day)] = self.provider_days.get((model, day), Decimal(0)) + cost
         self.provider_totals[model] = self.provider_totals.get(model, Decimal(0)) + cost
 
-    def fingerprint(self, ledger):
-        """Cheap check that the tallied rows are still there unchanged (the
-        runtime only appends; a same-length in-place edit is not detected)."""
-        return tuple(ledger.db.execute(
-            "SELECT count(*), total(length(meta)), total(created_at) FROM artifacts "
+    def fingerprint(self, ledger, now):
+        """Hash all accounting columns, including reservations outside the period."""
+        digest = hashlib.sha256()
+        with closing(ledger.db.execute(
+            "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
             "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
-            "AND artifact_id<=?", (self.month, self.last_id)).fetchone())
+            "AND artifact_id<=? ORDER BY artifact_id", (self.month, self.last_id))) as rows:
+            prior = _matching_rows_many(ledger, KINDS[0], self.orphans, now=now, _timestamps_checked=True)
+            try:
+                for row in chain(rows, sorted(prior, key=lambda row: row['artifact_id'])):
+                    digest.update(canonical(tuple(row)))
+                    digest.update(b'\n')
+            except (TypeError, ValueError, UnicodeError):
+                raise AnthropicError('pricing_unverified', 'usage_invalid') from None
+        return digest.digest()
 
     def update(self, ledger, now):
         rows = ledger.db.execute(
@@ -1012,7 +1103,7 @@ class _Tally:
             "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
             "AND artifact_id>? ORDER BY artifact_id", (self.month, self.last_id)).fetchall()
         for row in rows:
-            m = _loads(row["meta"])
+            m = _accounting_meta(row["meta"])
             rid = m.get("reservation_id")
             if row["kind"] == "cloud_usage_reserve":
                 maximum = _reserve_valid(m, row)
@@ -1042,8 +1133,11 @@ class _Tally:
             else:
                 entry = self.orphans.get(rid)
                 if entry is None:
-                    prior = [(_loads(r["meta"]), r) for r in _matching_rows_many(ledger, KINDS[0], [rid], now=now)]
+                    prior = [(_accounting_meta(r["meta"]), r) for r in _matching_rows_many(
+                        ledger, KINDS[0], [rid], now=now, _timestamps_checked=True)]
                     entry = self.orphans[rid] = (prior, [])
+                    for _, reserved in prior:
+                        self.history_valid_until = min(self.history_valid_until, reserved['created_at'] + 62 * 86400)
                 entry[1].append((m, row))
                 try:
                     if len(entry[0]) != 1:
@@ -1052,7 +1146,8 @@ class _Tally:
                 except (AnthropicError, ValueError, InvalidOperation, TypeError):
                     self.invalid = True
             self.last_id = row["artifact_id"]
-        self.prefix = self.fingerprint(ledger)
+        self.prefix = self.fingerprint(ledger, now)
+        self.checked_at = now
 
 
 def _tally_precheck(db, start):
@@ -1065,15 +1160,22 @@ def _current_tally(ledger, start, attribute, now):
     tally = getattr(ledger, attribute, None)
     before = _tally_precheck(ledger.db, start)
     previous = tally.precheck if tally is not None else None
-    if before is not None and before == previous and not tally.invalid:
+    if (before is not None and before == previous and not tally.invalid
+            and (not tally.orphans or tally.checked_at <= now <= tally.history_valid_until)):
         return tally
     if tally is not None:
         tally.precheck = None
-    if (tally is None or tally.connection is not ledger.db or tally.month != start or tally.invalid
-            or (tally.prefix is not None and tally.prefix != tally.fingerprint(ledger))):
-        tally = _Tally(start, ledger.db)
-        setattr(ledger, attribute, tally)
-    tally.update(ledger, now)
+    try:
+        with _accounting_snapshot(ledger.db):
+            _validate_accounting_timestamps(ledger.db)
+            if (tally is None or tally.connection is not ledger.db or tally.month != start or tally.invalid
+                    or (tally.prefix is not None and tally.prefix != tally.fingerprint(ledger, now))):
+                tally = _Tally(start, ledger.db)
+                setattr(ledger, attribute, tally)
+            tally.update(ledger, now)
+    except BaseException:
+        setattr(ledger, attribute, None)
+        raise
     if before is not None:
         if before == _tally_precheck(ledger.db, start) and not tally.invalid:
             tally.precheck = before
@@ -1297,12 +1399,14 @@ def record_result(ledger, reservation, metadata):
             result["disposition"] = metadata["disposition"]
 
         def check():
-            _stored_reservation(ledger, reservation)
+            _stored_reservation(ledger, reservation, bound_only=True)
 
         def write():
-            rows = _matching_rows(ledger, KINDS[1], reservation["reservation_id"])
+            rows = _matching_bound_rows(ledger, KINDS[1], reservation["reservation_id"])
             if rows:
-                if len(rows) == 1 and _loads(rows[0]["meta"]) == result:
+                if len(rows) != 1:
+                    raise AnthropicError("pricing_unverified", "duplicate_result")
+                if _accounting_meta(rows[0]["meta"]) == result:
                     return False
                 # Preserve the conflict durably; accounting must never pick the cheaper result.
                 ledger.artifact_add_tx(KINDS[1], "{}", project_id=reservation["project_id"],

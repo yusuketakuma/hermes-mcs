@@ -1,16 +1,17 @@
 """Synthetic unchanged-read reuse never replaces transactional budget checks."""
-from contextlib import closing
+from contextlib import closing, nullcontext
 import json
 import re
 import sqlite3
+import time
 from types import SimpleNamespace
 
 import pytest
 
 import cloud_policy as c
-from anthropic_client import AnthropicError, MODEL
+from anthropic_client import AnthropicClient, AnthropicError, MODEL
 from ledger import Ledger
-from test_cloud_policy import _cfg, _reserve, now
+from test_cloud_policy import _cfg, _late_results, _reserve, _result, now
 
 __all__ = ['now']
 
@@ -46,7 +47,7 @@ def test_reservation_rechecks_inside_transaction_and_obeys_new_caps(tmp_path, no
         finally:
             ledger.db.set_trace_callback(None)
         assert 'BEGIN IMMEDIATE' in statements
-        assert any(sql.startswith('SELECT count(*), total(length(meta))') for sql in statements)
+        assert any('AND artifact_id<=' in sql for sql in statements)
         assert ledger._cloud_usage_tally.precheck is None
         assert len(ledger.artifacts(c.KINDS[0])) == 1
 
@@ -70,25 +71,256 @@ def test_same_length_mutation_rechecks_existing_fingerprint(tmp_path, now, perio
         statements = []
         ledger.db.set_trace_callback(statements.append)
         try:
-            assert _read(ledger, period, now) is original
+            rebuilt = _read(ledger, period, now)
+            assert rebuilt is not original and rebuilt.total == original.total
         finally:
             ledger.db.set_trace_callback(None)
-        assert any(sql.startswith('SELECT count(*), total(length(meta))') for sql in statements)
+        assert any('AND artifact_id<=' in sql for sql in statements)
+
+
+@pytest.mark.parametrize('external', [False, True])
+def test_same_length_invalid_metadata_blocks_next_reservation(tmp_path, now, external):
+    path = str(tmp_path / 'synthetic.db')
+    with closing(Ledger(path)) as ledger:
+        _reserve(ledger)
+        c._tally(ledger)
+        row = ledger.db.execute('SELECT artifact_id,meta FROM artifacts WHERE kind=?', (c.KINDS[0],)).fetchone()
+        changed = re.sub(r'("project_id"\s*:\s*)1', r'\g<1>2', row['meta'])
+        assert changed != row['meta'] and len(changed) == len(row['meta'])
+        with closing(sqlite3.connect(path)) if external else nullcontext(ledger.db) as writer:
+            with writer:
+                writer.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (changed, row['artifact_id']))
+        with pytest.raises(AnthropicError, match='pricing_unverified'):
+            _reserve(ledger, unit='next')
+        assert len(ledger.artifacts(c.KINDS[0])) == 1
+
+
+def _window_cfg():
+    return _cfg(window_start='2026-10-26T00:00:00+09:00', window_budget_usd=20)
+
+
+def _assert_unverified_without_http(ledger, cfg, *, expected_kind='pricing_unverified'):
+    report = c.usage_report(ledger)
+    assert report['pricing_unverified'] and report['monthly_cost_usd'] is None
+    assert c.budget_block_reason(ledger, cfg) == 'pricing_unverified'
+    with pytest.raises(AnthropicError, match='pricing_unverified'):
+        c.window_spend(ledger, cfg)
+    before = len(ledger.artifacts(c.KINDS[0]))
+    calls = []
+    client = AnthropicClient('synthetic', post_fn=lambda *args: calls.append(True), max_attempts=1)
+    reserve = c.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='different')
+    with pytest.raises(AnthropicError) as caught:
+        client.complete('合成の入力', deadline=time.monotonic() + 30, max_tokens=100, reserve_fn=reserve)
+    assert caught.value.kind == expected_kind
+    if expected_kind == 'budget_exceeded':
+        assert caught.value.detail == 'cloud_unit_unresolved'
+    assert not calls and len(ledger.artifacts(c.KINDS[0])) == before
+
+
+@pytest.mark.parametrize('kind', [c.KINDS[0], c.KINDS[1]])
+@pytest.mark.parametrize('bad', [None, 'invalid-date', float('inf'), float('-inf'), 1e30, -1e30])
+@pytest.mark.parametrize('external', [False, True])
+def test_invalid_timestamp_in_any_accounting_row_blocks_all_budget_paths(tmp_path, now, kind, bad, external):
+    path = str(tmp_path / 'synthetic.db')
+    with closing(Ledger(path)) as ledger:
+        reservation = _reserve(ledger)
+        if kind == c.KINDS[1]:
+            c.record_result(ledger, reservation, _result(reservation))
+        cfg = _window_cfg()
+        c._tally(ledger)
+        c.window_spend(ledger, cfg)
+        row = ledger.db.execute('SELECT artifact_id FROM artifacts WHERE kind=?', (kind,)).fetchone()
+        with closing(sqlite3.connect(path)) if external else nullcontext(ledger.db) as writer:
+            with writer:
+                writer.execute('UPDATE artifacts SET created_at=? WHERE artifact_id=?', (bad, row['artifact_id']))
+        _assert_unverified_without_http(ledger, cfg)
+        report = c.usage_report(ledger)
+        assert report['daily_requests'] is None
+        saved = ledger.db.execute('SELECT created_at FROM artifacts WHERE artifact_id=?', (row['artifact_id'],)).fetchone()
+        assert saved is not None and saved['created_at'] == bad
+
+
+@pytest.mark.parametrize('kind', [c.KINDS[0], c.KINDS[1]])
+@pytest.mark.parametrize('damage', ['duplicate', 'overflow', 'nan'])
+def test_ambiguous_accounting_metadata_is_unverified(tmp_path, now, kind, damage):
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        reservation = _reserve(ledger)
+        if kind == c.KINDS[1]:
+            c.record_result(ledger, reservation, _result(reservation))
+        row = ledger.db.execute('SELECT artifact_id,meta FROM artifacts WHERE kind=?', (kind,)).fetchone()
+        raw = row['meta']
+        if damage == 'duplicate':
+            raw = '{"project_id":2,' + raw[1:]
+        else:
+            raw = raw[:-1] + ',"unused":' + ('1e999' if damage == 'overflow' else 'NaN') + '}'
+        with ledger.db:
+            ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (raw, row['artifact_id']))
+        expected = 'budget_exceeded' if kind == c.KINDS[0] and damage in ('duplicate', 'nan') else 'pricing_unverified'
+        _assert_unverified_without_http(ledger, _window_cfg(), expected_kind=expected)
+        assert ledger.db.execute('SELECT meta FROM artifacts WHERE artifact_id=?', (row['artifact_id'],)).fetchone()[0] == raw
+
+
+@pytest.mark.parametrize('damage', ['timestamp', 'duplicate', 'nonfinite'])
+def test_corrupt_prior_period_orphan_reservation_is_unverified(tmp_path, now, damage):
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        _late_results(ledger, 1, c._periods(now)[1] - 1, now)
+        c._tally(ledger)
+        row = ledger.db.execute('SELECT artifact_id,meta FROM artifacts WHERE kind=?', (c.KINDS[0],)).fetchone()
+        with ledger.db:
+            if damage == 'timestamp':
+                ledger.db.execute('UPDATE artifacts SET created_at=NULL WHERE artifact_id=?', (row['artifact_id'],))
+            else:
+                raw = ('{"project_id":2,' + row['meta'][1:] if damage == 'duplicate'
+                       else row['meta'][:-1] + ',"unused":1e999}')
+                ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (raw, row['artifact_id']))
+        expected = 'budget_exceeded' if damage == 'duplicate' else 'pricing_unverified'
+        _assert_unverified_without_http(ledger, _window_cfg(), expected_kind=expected)
+
+
+@pytest.mark.parametrize('bad_kind', [c.KINDS[0], c.KINDS[1]])
+def test_paid_result_survives_unrelated_corrupt_timestamp_but_new_sends_stop(tmp_path, now, bad_kind):
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        other = _reserve(ledger, unit='other')
+        if bad_kind == c.KINDS[1]:
+            c.record_result(ledger, other, _result(other))
+        bad_row = ledger.db.execute('SELECT artifact_id,created_at FROM artifacts WHERE kind=?', (bad_kind,)).fetchone()
+        received = []
+        sent = []
+
+        def post(body, timeout):
+            sent.append(True)
+            before = c.usage_report(ledger)
+            assert before['unresolved_requests'] >= 1
+            with ledger.db:
+                ledger.db.execute('UPDATE artifacts SET created_at=NULL WHERE artifact_id=?', (bad_row['artifact_id'],))
+            reply = {'model': MODEL, 'stop_reason': 'end_turn',
+                     'content': [{'type': 'text', 'text': '合成の回答'}],
+                     'usage': {'input_tokens': 10, 'output_tokens': 2}}
+            return 200, {}, json.dumps(reply).encode()
+
+        def save(reservation, metadata):
+            received.append((reservation, metadata))
+            c.record_result(ledger, reservation, metadata)
+
+        client = AnthropicClient('synthetic', post_fn=post, max_attempts=1)
+        reserve = c.usage_reserver(ledger, _cfg(), route='reextract', project_id=1, unit_key='paid')
+        answer = client.complete('合成の入力', deadline=time.monotonic() + 30, max_tokens=100,
+                                 reserve_fn=reserve, after_result=save)
+        assert answer['text'] == '合成の回答' and sent == [True] and len(received) == 1
+        paid, metadata = received[0]
+        c.record_result(ledger, paid, metadata)
+        rows = c._matching_bound_rows(ledger, c.KINDS[1], paid['reservation_id'])
+        assert len(rows) == 1
+        saved = json.loads(rows[0]['meta'])
+        cost, settled = c._settled(paid, c._decimal(paid['max_cost_usd']), [(saved, rows[0])])
+        assert settled and cost == c.usage_cost(metadata['usage'], model=MODEL)
+        assert c.usage_report(ledger)['pricing_unverified']
+        assert c.budget_block_reason(ledger, _cfg()) == 'pricing_unverified'
+        with pytest.raises(AnthropicError, match='pricing_unverified'):
+            client.complete('新しい合成入力', deadline=time.monotonic() + 30, max_tokens=100,
+                            reserve_fn=c.usage_reserver(ledger, _cfg(), route='reextract',
+                                                        project_id=1, unit_key='next'))
+        assert sent == [True] and len(ledger.artifacts(c.KINDS[0])) == 2
+        assert ledger.db.execute('SELECT created_at FROM artifacts WHERE artifact_id=?',
+                                 (bad_row['artifact_id'],)).fetchone()[0] is None
+        with ledger.db:
+            ledger.db.execute('UPDATE artifacts SET created_at=? WHERE artifact_id=?',
+                              (bad_row['created_at'], bad_row['artifact_id']))
+        report = c.usage_report(ledger)
+        other_cost = (c._decimal(other['max_cost_usd']) if bad_kind == c.KINDS[0]
+                      else c.usage_cost(_result(other)['usage'], model=MODEL))
+        assert not report['pricing_unverified']
+        assert c._decimal(report['monthly_cost_usd']) == cost + other_cost
+        assert report['unresolved_requests'] == (1 if bad_kind == c.KINDS[0] else 0)
+
+
+@pytest.mark.parametrize('kind', [c.KINDS[0], c.KINDS[1]])
+@pytest.mark.parametrize('damage', ['timestamp', 'duplicate', 'duplicate_key', 'blob', 'oversized'])
+def test_result_rejects_damage_to_its_own_reservation_or_result(tmp_path, now, kind, damage):
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        reservation = _reserve(ledger)
+        metadata = _result(reservation)
+        if kind == c.KINDS[1]:
+            c.record_result(ledger, reservation, metadata)
+        row = ledger.db.execute('SELECT artifact_id,meta FROM artifacts WHERE kind=?', (kind,)).fetchone()
+        with ledger.db:
+            if damage == 'timestamp':
+                ledger.db.execute('UPDATE artifacts SET created_at=NULL WHERE artifact_id=?', (row['artifact_id'],))
+            elif damage == 'duplicate':
+                ledger.db.execute('INSERT INTO artifacts(kind,project_id,message_id,model,content,meta,created_at) '
+                                  'SELECT kind,project_id,message_id,model,content,meta,created_at '
+                                  'FROM artifacts WHERE artifact_id=?', (row['artifact_id'],))
+            elif damage == 'duplicate_key':
+                raw = '{"reservation_id":"' + 'f' * 32 + '",' + row['meta'][1:]
+                ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (raw, row['artifact_id']))
+            elif damage == 'blob':
+                raw = b'{"reservation_id":"' + reservation['reservation_id'].encode() + b'"\xff'
+                ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (raw, row['artifact_id']))
+            else:
+                raw = row['meta'][:-1] + ',"padding":"' + 'x' * 32768 + '"}'
+                ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (raw, row['artifact_id']))
+        before = [tuple(r) for r in ledger.db.execute('SELECT * FROM artifacts WHERE kind IN (?,?) ORDER BY artifact_id',
+                                                       c.KINDS[:2])]
+        with pytest.raises(AnthropicError, match='pricing_unverified'):
+            c.record_result(ledger, reservation, metadata)
+        after = [tuple(r) for r in ledger.db.execute('SELECT * FROM artifacts WHERE kind IN (?,?) ORDER BY artifact_id',
+                                                      c.KINDS[:2])]
+        assert after == before
+
+
+@pytest.mark.parametrize('column', ['artifact_id', 'kind', 'project_id', 'message_id', 'model', 'meta', 'created_at'])
+def test_changed_accounting_columns_rebuild_or_reject_tally(tmp_path, now, column):
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        _reserve(ledger)
+        original = c._tally(ledger)
+        row = ledger.db.execute('SELECT * FROM artifacts WHERE kind=?', (c.KINDS[0],)).fetchone()
+        changed = {'artifact_id': row['artifact_id'] + 100, 'kind': c.KINDS[1], 'project_id': 2,
+                   'message_id': 2, 'model': 'invalid', 'meta': row['meta'].replace('"u"', '"v"'),
+                   'created_at': now + 86400}[column]
+        if column == 'message_id':
+            from semantic_testkit import _message, _patient
+            _patient(ledger, 1)
+            ledger.save_messages([_message(2, pid=1, body='完全合成の関連付け検証。')])
+        with ledger.db:
+            ledger.db.execute(f'UPDATE artifacts SET {column}=? WHERE artifact_id=?', (changed, row['artifact_id']))
+        if column in ('project_id', 'message_id', 'model'):
+            with pytest.raises(AnthropicError, match='pricing_unverified'):
+                c._tally(ledger)
+        else:
+            rebuilt = c._tally(ledger)
+            assert rebuilt is not original
+            if column == 'kind':
+                assert rebuilt.invalid
+            else:
+                assert rebuilt.total == original.total
+                if column == 'created_at':
+                    assert c._periods(now)[0] not in rebuilt.days
+                    assert rebuilt.days[c._periods(changed)[0]][0] == 1
 
 
 @pytest.mark.parametrize('period', ['month', 'window'])
-def test_unrelated_write_and_append_preserve_incremental_tally(tmp_path, now, period):
+def test_unrelated_write_and_append_preserve_incremental_tally(tmp_path, monkeypatch, now, period):
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
         reservation = _reserve(ledger)
         original = _read(ledger, period, now)
         last_id, total = original.last_id, original.total
+        decoded = []
+        original_loads = c._loads
+
+        def loads(raw):
+            decoded.append(raw)
+            return original_loads(raw)
+
+        monkeypatch.setattr(c, '_loads', loads)
         ledger.artifact_add('synthetic_observation', '{}')
         assert _read(ledger, period, now) is original
         assert original.last_id == last_id and original.total == total
+        assert not decoded
         ledger.artifact_add(c.KINDS[0], '{}', project_id=1, model=MODEL,
                             meta={**reservation, 'reservation_id': 'b' * 32, 'unit_key': 'other'})
         assert _read(ledger, period, now) is original
         assert original.last_id > last_id and original.total == 2 * total
+        assert len(decoded) == 1
 
 
 @pytest.mark.parametrize('period', ['month', 'window'])
@@ -128,6 +360,119 @@ def test_commit_during_refresh_is_not_cached_with_new_stamp(tmp_path, monkeypatc
         first = c._tally(ledger)
         assert first.precheck is None and ledger._cloud_usage_tally is None
         assert c._tally(ledger).total == 2 * first.total
+
+
+def test_concurrent_precheck_commit_cannot_bypass_transactional_cap_or_open_circuit(tmp_path, monkeypatch, now):
+    path = str(tmp_path / 'synthetic.db')
+    with closing(Ledger(path)) as ledger:
+        reservation = _reserve(ledger)
+        c._tally(ledger)
+        ledger.artifact_add('synthetic_observation', '{}')
+        original = c._Tally.update
+        committed = []
+
+        def update(tally, owner, current):
+            original(tally, owner, current)
+            if not committed:
+                committed.append(True)
+                with sqlite3.connect(path) as writer:
+                    writer.execute('INSERT INTO artifacts(kind,project_id,model,meta,content,created_at) '
+                                   'VALUES(?,?,?,?,?,?)', (c.KINDS[0], 1, MODEL,
+                                   json.dumps({**reservation, 'reservation_id': 'b' * 32, 'unit_key': 'other'}),
+                                   '{}', now))
+
+        monkeypatch.setattr(c._Tally, 'update', update)
+        cfg = _cfg(daily_request_budget=2)
+        assert c.budget_block_reason(ledger, cfg) is None
+        assert committed and ledger._cloud_usage_tally is None
+        assert c.global_block_reason(ledger, model=MODEL) is None
+        calls = []
+        client = AnthropicClient('synthetic', post_fn=lambda *args: calls.append(True), max_attempts=1)
+        reserve = c.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='third')
+        with pytest.raises(AnthropicError, match='budget_exceeded'):
+            client.complete('合成の入力', deadline=time.monotonic() + 30, max_tokens=100, reserve_fn=reserve)
+        assert not calls and len(ledger.artifacts(c.KINDS[0])) == 2
+        assert c.global_block_reason(ledger, model=MODEL) is None
+
+
+@pytest.mark.parametrize('period', ['month', 'window'])
+def test_mutation_between_fingerprint_and_update_uses_one_snapshot(tmp_path, monkeypatch, now, period):
+    path = str(tmp_path / 'synthetic.db')
+    with closing(Ledger(path)) as ledger:
+        _reserve(ledger)
+        original = _read(ledger, period, now)
+        ledger.artifact_add('synthetic_observation', '{}')
+        fingerprint = c._Tally.fingerprint
+        committed = []
+
+        def changed(tally, owner, current):
+            result = fingerprint(tally, owner, current)
+            if not committed:
+                committed.append(True)
+                with closing(sqlite3.connect(path)) as writer, writer:
+                    writer.execute('UPDATE artifacts SET project_id=2 WHERE kind=?', (c.KINDS[0],))
+            return result
+
+        monkeypatch.setattr(c._Tally, 'fingerprint', changed)
+        snapshot = _read(ledger, period, now)
+        assert committed and snapshot is original and not snapshot.invalid and snapshot.total > 0
+        attribute = '_cloud_usage_tally' if period == 'month' else '_cloud_window_tally'
+        assert snapshot.precheck is None and getattr(ledger, attribute) is None
+        with pytest.raises(AnthropicError, match='pricing_unverified'):
+            _read(ledger, period, now)
+
+
+@pytest.mark.parametrize('period', ['month', 'window'])
+@pytest.mark.parametrize('mutation', ['binding', 'delete', 'duplicate'])
+def test_prior_period_reservation_changes_invalidate_orphan_binding(tmp_path, now, period, mutation):
+    path = str(tmp_path / 'synthetic.db')
+    with closing(Ledger(path)) as ledger:
+        _late_results(ledger, 1, c._periods(now)[1] - 1, now)
+        original = _read(ledger, period, now)
+        assert original.orphans and not original.invalid and original.total == 0
+        row = ledger.db.execute('SELECT * FROM artifacts WHERE kind=?', (c.KINDS[0],)).fetchone()
+        with closing(sqlite3.connect(path)) as writer, writer:
+            if mutation == 'binding':
+                changed = re.sub(r'("unit_key"\s*:\s*)"0"', r'\g<1>"1"', row['meta'])
+                assert changed != row['meta'] and len(changed) == len(row['meta'])
+                writer.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (changed, row['artifact_id']))
+            elif mutation == 'delete':
+                writer.execute('DELETE FROM artifacts WHERE artifact_id=?', (row['artifact_id'],))
+            else:
+                writer.execute('INSERT INTO artifacts(kind,project_id,model,meta,content,created_at) '
+                               'VALUES(?,?,?,?,?,?)', (row['kind'], row['project_id'], row['model'],
+                               row['meta'], '{}', row['created_at']))
+        rebuilt = _read(ledger, period, now)
+        assert rebuilt is not original and rebuilt.invalid and rebuilt.precheck is None
+
+
+@pytest.mark.parametrize('period', ['month', 'window'])
+def test_prior_reservation_retention_boundary_expires_unchanged_cache(tmp_path, monkeypatch, now, period):
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        _late_results(ledger, 1, now - 62 * 86400 + 1, now)
+        original = _read(ledger, period, now)
+        assert not original.invalid and original.precheck is not None
+        monkeypatch.setattr(c.time, 'time', lambda: now + 1)
+        at_boundary = c._tally(ledger) if period == 'month' else _read(ledger, period, now)
+        assert at_boundary is original
+        monkeypatch.setattr(c.time, 'time', lambda: now + 2)
+        expired = c._tally(ledger) if period == 'month' else _read(ledger, period, now)
+        assert expired is not original and expired.invalid
+
+
+@pytest.mark.parametrize('period', ['month', 'window'])
+def test_clock_rollback_rechecks_previously_expired_duplicate(tmp_path, monkeypatch, now, period):
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        _late_results(ledger, 1, c._periods(now)[1] - 1, now)
+        with ledger.db:
+            ledger.db.execute('INSERT INTO artifacts(kind,project_id,model,meta,content,created_at) '
+                              'SELECT kind,project_id,model,meta,content,? FROM artifacts WHERE kind=?',
+                              (now - 62 * 86400 - 1, c.KINDS[0]))
+        original = _read(ledger, period, now)
+        assert not original.invalid and original.precheck is not None
+        monkeypatch.setattr(c.time, 'time', lambda: now - 2)
+        earlier = c._tally(ledger) if period == 'month' else _read(ledger, period, now)
+        assert earlier is not original and earlier.invalid
 
 
 @pytest.mark.parametrize('period', ['month', 'window'])

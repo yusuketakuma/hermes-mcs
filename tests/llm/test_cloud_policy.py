@@ -441,9 +441,15 @@ def test_matching_rows_filters_in_sql_and_keeps_all_retained_duplicates(tmp_path
         assert len(rows) == 2 and expired not in {row["artifact_id"] for row in rows}
         assert {json.loads(row["meta"])["unit_key"] for row in rows} == {"u", "conflicting-binding"}
         selects = [sql for sql in statements if sql.startswith("SELECT")]
-        assert len(selects) == 2
-        assert all("created_at>=" in sql and "json_valid(meta)" in sql for sql in selects)
-        assert "json_extract(meta,'$.reservation_id')" in selects[1]
+        anchors = [sql for sql in selects if sql.startswith("SELECT artifact_id FROM (SELECT artifact_id")]
+        timestamp_checks = [sql for sql in selects if sql.startswith("SELECT created_at FROM artifacts")]
+        retained = [sql for sql in selects if sql not in anchors and sql not in timestamp_checks]
+        assert len(anchors) == len(timestamp_checks) == 1
+        assert "UNION ALL SELECT NULL" in anchors[0]
+        assert "typeof(created_at)" in timestamp_checks[0]
+        assert len(retained) == 2
+        assert all("created_at>=" in sql and "json_valid(meta)" in sql for sql in retained)
+        assert "json_extract(meta,'$.reservation_id')" in retained[1]
         assert all("SELECT *" not in sql for sql in selects)
 
 
@@ -485,9 +491,15 @@ def test_month_crossing_bindings_use_batched_queries_and_linear_python_decoding(
         assert not report["pricing_unverified"] and report["daily_requests"] == 0
         assert Decimal(report["monthly_cost_usd"]) == 0  # All reservations belong to October.
         selects = [sql for sql in statements if sql.startswith("SELECT")]
-        assert len(selects) == 2 + (count + 899) // 900
+        anchors = [sql for sql in selects if sql.startswith("SELECT artifact_id FROM (SELECT artifact_id")]
+        timestamp_checks = [sql for sql in selects if sql.startswith("SELECT created_at FROM artifacts")]
+        period_queries = [sql for sql in selects if sql not in anchors and sql not in timestamp_checks]
+        assert len(anchors) == len(timestamp_checks) == 1
+        assert "UNION ALL SELECT NULL" in anchors[0]
+        assert "typeof(created_at)" in timestamp_checks[0]
+        assert len(period_queries) == 2 + (count + 899) // 900
         assert len(decoded) == 2 * count
-        assert all("created_at>=" in sql for sql in selects)
+        assert all("created_at>=" in sql for sql in period_queries)
 
 
 @pytest.mark.parametrize("duplicate", [False, True])
