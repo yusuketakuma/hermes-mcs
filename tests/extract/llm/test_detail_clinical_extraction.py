@@ -169,7 +169,16 @@ def _fake_backend(monkeypatch, reply):
     def chat(prompt, **kwargs):
         assert kwargs["max_tokens"] == 1600
         piece = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
-        return reply(piece)
+        response = reply(piece)
+        if response.get("status") == 200 and response.get("finish_reason") == "stop":
+            try:
+                answer = json.loads(response.get("text"))
+            except (ValueError, TypeError):
+                pass
+            else:
+                if isinstance(answer, dict):
+                    response = {**response, "text": json.dumps({"symptoms": [], **answer})}
+        return response
 
     monkeypatch.setattr(extract_llm.local_llm, "chat", chat)
 

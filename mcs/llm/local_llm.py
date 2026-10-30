@@ -676,11 +676,11 @@ def acceptance_error(response: dict | None) -> str | None:
         return "transport"
     if response.get("status") != 200:
         return "http_status"
+    if response.get("finish_reason") == "length":
+        return "length_stop"
     text = response.get("text")
     if not isinstance(text, str) or not text.strip():
         return "empty"
-    if response.get("finish_reason") == "length":
-        return "length_stop"
     return None
 
 

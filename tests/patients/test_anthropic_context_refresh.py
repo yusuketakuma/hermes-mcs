@@ -1747,12 +1747,16 @@ def source_repair(runtime, cloud, monkeypatch):
         items = [{'category':'living','subject':'patient','text':text,'evidence':text,'details':[]}
                  for text in (_REPAIR_HOME, _REPAIR_BED) if text in prompt['source']
                  and not (control['fault'] == 'omit_bed' and text == _REPAIR_BED)]
-        stop = 'max_tokens' if control['fault'] == 'length_once' and len(control['sent']) == 1 else 'end_turn'
+        length = control['fault'] in ('length_once', 'thinking_length_once') and len(control['sent']) == 1
+        stop = 'max_tokens' if length else 'end_turn'
         if control['fault'] == 'capacity_once' and len(control['sent']) == 1:
             items = items * (context_refresh.context_plan.MAX_SCAN_ITEMS + 1)
+        content = ([{'type':'redacted_thinking','data':'synthetic-hidden'}]
+                   if length and control['fault'] == 'thinking_length_once' else
+                   [{'type':'text','text':json.dumps({'patient_context':items}, ensure_ascii=False)}])
         raw = json.dumps({'model':worker.anthropic_client.MODEL,
             'usage':{'input_tokens':1,'output_tokens':1}, 'stop_reason':stop,
-            'content':[{'type':'text','text':json.dumps({'patient_context':items}, ensure_ascii=False)}]},
+            'content':content},
             ensure_ascii=False).encode()
         assert len(raw) <= worker.anthropic_client.bounded_http.MAX_RESPONSE_BYTES
         return 200, {}, raw
@@ -2219,7 +2223,7 @@ def test_source_repair_losing_its_claim_after_the_budget_reservation_cannot_post
     assert not context_refresh.inference_coverage(led.db, 1, CFG)['complete']
 
 
-@pytest.mark.parametrize('stop', ['length_once','capacity_once'])
+@pytest.mark.parametrize('stop', ['length_once','capacity_once','thinking_length_once'])
 def test_source_repair_persists_a_known_stop_before_continuing_finite_children(runtime, source_repair, stop):
     led, clock, _ = runtime
     source_repair['fault'] = stop
@@ -2238,8 +2242,66 @@ def test_source_repair_persists_a_known_stop_before_continuing_finite_children(r
     assert len(reservations) == len(source_repair['sent'])
     assert len({row['unit_key'] for row in reservations}) == len(reservations)
     assert sum(row['unit_key'] == original_unit for row in reservations) == 1
+    results = led.artifacts('cloud_usage_result', project_id=1)
+    assert len(results) == len(reservations)
+    assert all(json.loads(row['meta'])['error_kind'] is None for row in results)
     assert len(led.artifacts(context_refresh.SOURCE_REPAIR, project_id=1)) == 1
     assert context_refresh.inference_coverage(led.db, 1, CFG)['complete']
+
+
+@pytest.mark.parametrize('stage', ['summary', 'repair'])
+def test_thinking_only_length_holds_summary_and_consumes_no_second_repair(runtime, cloud, monkeypatch, stage):
+    led, clock, _ = runtime
+    facts = [{'id':fid,'category':'living','text':f'完全合成の居住記録{fid}です。',
+              'source':'chat','project_id':1,'message_id':1,'posted_at':None,
+              'posted_at_ts':1,'subject':'patient'} for fid in ('a','b')]
+    seed(led, body=''.join(fact['text'] for fact in facts))
+    calls, results = [], []
+
+    def post(body, timeout):
+        assert not led.db.in_transaction
+        calls.append(body)
+        return 200, {}, json.dumps({'model':worker.anthropic_client.MODEL,'stop_reason':'max_tokens',
+            'content':[{'type':'thinking','thinking':'synthetic-hidden'}],
+            'usage':{'input_tokens':10,'output_tokens':10}}).encode()
+
+    client = _SOURCE_REPAIR_CLIENT('synthetic', post_fn=post)
+
+    def length_only(prompt, *, deadline, max_tokens):
+        return client.complete(prompt, deadline=deadline, max_tokens=max_tokens,
+            after_result=lambda reservation, meta:results.append(meta))
+
+    deadline = clock.mono + 600
+    if stage == 'summary':
+        with pytest.raises(ValueError, match='nightly_length_stop'):
+            context_refresh._summary(CFG, facts, deadline, lambda:True, provider=length_only)
+    else:
+        # Seed the negative assessment/owner boundary; retain the real one-use repair reservation.
+        monkeypatch.setattr(context_refresh, '_quality_owns', lambda *args:True)
+        monkeypatch.setattr(context_refresh, '_quality_failed', lambda *args:True)
+        monkeypatch.setattr(context_refresh, '_quality_answers', lambda *args:{
+            'a':{'choice':'supports','confidence':1},'b':{'choice':'important_missing','confidence':1}})
+        original = worker._CloudProvider
+
+        class LengthOnly(original):
+            def __call__(self, prompt, **kwargs):
+                self.guard()
+                self.possibly_sent = True
+                return length_only(prompt, **kwargs)
+
+        monkeypatch.setattr(worker, '_CloudProvider', LengthOnly)
+        identity = {'fact_ids':['a','b'],'input_key':'1'*64,'audit_key':'2'*64,
+                    'candidate_key':'3'*64,'failure_key':'4'*64}
+        doc = {'summary':[{'text':facts[0]['text'],'fact_ids':['a']}]}
+        args = (led, 1, CFG, 'synthetic-night', doc, identity, 'synthetic-claim',
+                lambda *args:True, deadline, lambda:True, facts, {}, .9, {'groups':[],'relations':[]})
+        assert context_refresh._quality_repair_candidate(*args) == ('held', None)
+        assert len(led.artifacts(context_refresh.QUALITY_REPAIR, project_id=1)) == 1
+        assert context_refresh._quality_repair_candidate(*args) == ('held', None)
+        assert not led.artifacts(context_refresh.QUALITY_REPAIR_CANDIDATE, project_id=1)
+    assert len(calls) == len(results) == 1 and results[0]['error_kind'] is None
+    assert results[0]['usage']['output_tokens'] == 10 and 'synthetic-hidden' not in json.dumps(results)
+    assert document(led) is None and not led.artifacts(context_refresh.QUALITY_PASS, project_id=1)
 
 
 @pytest.mark.parametrize('changed', ['revision','first_seen','scope'])

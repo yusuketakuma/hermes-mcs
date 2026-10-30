@@ -14,8 +14,12 @@ def _local(monkeypatch, outputs):
     answers = iter(outputs)
     monkeypatch.setattr(worker, "_probe_format", lambda **kw: "plain")
     monkeypatch.setattr(worker.local_llm, "admission_enabled", lambda: False)
-    monkeypatch.setattr(worker.local_llm, "chat", lambda *a, **kw: {
-        "status": 200, "finish_reason": "stop", "text": json.dumps(next(answers))})
+    def chat(*args, **kwargs):
+        answer = next(answers)
+        if "items" not in answer:
+            answer = {"symptoms": [], **answer}
+        return {"status": 200, "finish_reason": "stop", "text": json.dumps(answer)}
+    monkeypatch.setattr(worker.local_llm, "chat", chat)
 
 
 @pytest.mark.parametrize("name", ["anthropic", "openai"])
@@ -27,7 +31,7 @@ def test_cloud_result_is_identified_by_the_actual_provider(name):
             pass
 
         def __call__(self, *args, **kwargs):
-            return {"status": 200, "finish_reason": "stop", "text": '{"summary":"合成"}'}
+            return {"status": 200, "finish_reason": "stop", "text": '{"summary":"合成","symptoms":[]}'}
 
     meta = {}
     result = worker.llm_extract("完全合成の記録です。", provider=Provider(), meta_out=meta)
@@ -159,9 +163,9 @@ def test_checkpoint_evidence_fails_closed_on_tampering(tmp_path, monkeypatch, ta
 
 
 def test_batch_marks_only_routed_valid_items(monkeypatch):
-    _local(monkeypatch, [{"items": [{"i": 0, "summary": "合成"},
-                                     {"i": 1, "summary": "合成"},
-                                     {"i": 1, "summary": "重複"}]}])
+    _local(monkeypatch, [{"items": [{"i": 0, "summary": "合成", "symptoms": []},
+                                     {"i": 1, "summary": "合成", "symptoms": []},
+                                     {"i": 1, "summary": "重複", "symptoms": []}]}])
     rows = [(i, {"body_text": "合成の記録です。", "posted_at": "2032-06-01"},
              None, {}, None, None, None) for i in range(2)]
     status, results, meta = worker._run_batch_call(rows, ("local", "model"), 10**12, None)

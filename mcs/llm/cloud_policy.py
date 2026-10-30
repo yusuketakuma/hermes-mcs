@@ -1245,8 +1245,8 @@ def record_result(ledger, reservation, metadata):
         error_kind = "pricing_unverified"
     error = None
     if error_kind:
-        # Rebuild the attempt's failure with its retry class: the breaker counts
-        # only retryable (429/5xx/transport/timeout) failures (semantic_runtime).
+        # Rebuild the attempt's failure with its retry class; semantic_runtime
+        # applies the cloud circuit's transient, contract and terminal policy.
         status = int(http_class[5:]) if isinstance(http_class, str) and http_class[5:].isdigit() else 0
         retryable = (http_error(status)[1] if status and status != 200
                      else error_kind in ("transport", "timeout"))

@@ -686,7 +686,7 @@ def _note_list() -> list:
 
 def _integrity_note(response, kind: str = "first", probe: int = 0,
                      downgrades: int = 0, err_out: dict | None = None) -> None:
-    """Bounded per-call integrity record for the legacy path: counts and
+    """Bounded per-call integrity record for shared extraction paths: counts and
     token usage only — never payload text."""
     # probe/downgrade counts ride on the answered call's note so
     # `calls == len(notes)` stays untouched
@@ -1087,7 +1087,11 @@ def _llm_call(prompt: str, deadline: float | None = None,
             return _DEFERRED
         response = provider(prompt, deadline=deadline, max_tokens=max_tokens,
                             need_s=need_s, kind=kind)
-        if local_llm.acceptance_error(response) is not None:
+        _integrity_note(response, kind)
+        acceptance = local_llm.acceptance_error(response)
+        if acceptance == "length_stop":
+            return None
+        if acceptance is not None:
             raise CloudFallback("cloud_incomplete_response")
         answer = json_object(response.get("text"))
         if answer is None:
@@ -1294,7 +1298,7 @@ def llm_extract(body: str, *, context: str | None = None,
             prompt += (_FEEDBACK_HEAD
                        + "\n".join("- " + x for x in flines) + "\n\n")
     thead = _target_head(posted_at)
-    notes = [] if provider is not None else _note_list()
+    notes = _note_list()
     notes.clear()
 
     def bump(key, n=1):

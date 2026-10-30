@@ -95,6 +95,41 @@ def test_history_without_false_eligible_uses_cloud_and_settles(cloud):
     assert not cloud_policy.usage_report(led)["pricing_unverified"]
 
 
+@pytest.mark.parametrize("kind", ["thinking", "redacted_thinking"])
+def test_thinking_only_length_holds_summary_without_format_repair_or_paid_resend(cloud, monkeypatch, kind):
+    import semantic_runtime
+    import semantic_store
+    led, cfg, job, calls = cloud
+
+    def request(self, method, body, timeout, **kwargs):
+        calls.append(body)
+        return 200, {}, json.dumps({"model": anthropic_client.MODEL, "stop_reason": "max_tokens",
+            "content": [{"type": kind, "thinking" if kind == "thinking" else "data": "synthetic-hidden"}],
+            "usage": {"input_tokens": 10, "output_tokens": 10}}).encode()
+
+    monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
+    bundle = semantic_store.thread_bundle(led.db, 1, 1)
+    scfg = semantic_drain.runtime_config(cfg)[0]
+    deadline = time.monotonic() + 120
+    with transport.backlog_inference(led, cfg, job, deadline, lambda: True, direct,
+                                     local_fallback=lambda *a, **kw: pytest.fail("paid local fallback")) as chat:
+        summary, reason, error, sent_error, _ = semantic_drain._obtain_summary(
+            led, scfg, bundle, chat, lambda *args: None, 1, 1, bundle["source_fingerprint"],
+            "synthetic-policy", [], {}, None, deadline, diagnostics={})
+        assert summary is None and reason == "model" and sent_error is None
+        assert error["code"] == "json_object_invalid" and transport.last_llm_failure() == "length_stop"
+        assert not rows(led, semantic_drain.KIND_SUMMARY_FORMAT_REPAIR)
+        assert len(calls) == 1
+        prompt = calls[0]["messages"][0]["content"]
+        assert chat(prompt) is None  # the same paid logical request remains fenced
+    reserves, results = rows(led, "cloud_usage_reserve"), rows(led, "cloud_usage_result")
+    assert len(calls) == len(reserves) == len(results) == 1
+    result = json.loads(results[0]["meta"])
+    assert result["error_kind"] is None and result["usage"]["output_tokens"] == 10
+    assert float(result["cost_usd"]) > 0 and "synthetic-hidden" not in json.dumps(result)
+    assert semantic_runtime._circuit_state(led, kind="cloud_circuit")["consecutive_failures"] == 0
+
+
 def test_same_prompt_for_distinct_targets_has_separate_reservations(cloud):
     led, cfg, job, calls = cloud
     led.save_messages([_message(2, parent=1, body='synthetic reply')])

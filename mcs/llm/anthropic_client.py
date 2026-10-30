@@ -204,14 +204,22 @@ class AnthropicClient:
         for block in content:
             if block.get("type") == "text" and isinstance(block.get("text"), str):
                 text.append(block["text"])
-            elif block.get("type") not in ("thinking", "redacted_thinking"):
+            elif (block.get("type") == "thinking" and isinstance(block.get("thinking"), str)
+                  and block["thinking"].strip()):
+                pass
+            elif (block.get("type") == "redacted_thinking" and isinstance(block.get("data"), str)
+                  and block["data"].strip()):
+                pass
+            else:
                 raise AnthropicError("protocol_error", "content_invalid")
         stop = obj.get("stop_reason")
-        if stop not in ("end_turn", "max_tokens") or not text:
+        answer = "".join(text)
+        if (stop not in ("end_turn", "max_tokens") or not content
+                or stop == "end_turn" and not answer.strip()):
             raise AnthropicError("contract_error", "incomplete_response")
         # a validated answer stays usable past the HTTP deadline; the caller's commit
         # guard decides. An answer cut at max_tokens is a paid "length" stop the
-        # caller re-plans (split), not a failure the breaker counts.
-        return {"status": 200, "text": "".join(text),
+        # caller handles as truncation, not a failure the breaker counts.
+        return {"status": 200, "text": answer,
                   "finish_reason": "length" if stop == "max_tokens" else "stop",
                   "model": MODEL, "usage": meta["usage"]}

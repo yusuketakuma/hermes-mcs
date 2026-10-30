@@ -63,6 +63,69 @@ def test_a_max_tokens_stop_is_a_paid_length_answer_not_a_failure():
         client.complete("synthetic", deadline=time.monotonic() + 10)
 
 
+@pytest.mark.parametrize("types", [("thinking",), ("redacted_thinking",),
+                                    ("thinking", "redacted_thinking")],
+                         ids=["thinking", "redacted", "both"])
+def test_thinking_only_max_tokens_is_one_paid_length_response(types):
+    calls, results = [], []
+    content = [{"type": kind, "thinking" if kind == "thinking" else "data":
+                "synthetic-private-thinking"} for kind in types]
+
+    def post(body, timeout):
+        calls.append(body)
+        return 200, {}, json.dumps(_reply(stop_reason="max_tokens", content=content)).encode()
+
+    client = a.AnthropicClient("synthetic", post_fn=post)
+    result = client.complete("synthetic", deadline=time.monotonic() + 10,
+                             reserve_fn=lambda *args: "synthetic-reservation",
+                             after_result=lambda reservation, meta: results.append((reservation, meta)))
+    assert result["status"] == 200 and result["finish_reason"] == "length" and result["text"] == ""
+    assert len(calls) == len(results) == 1 and results[0][0] == "synthetic-reservation"
+    assert results[0][1]["error_kind"] is None
+    assert result["usage"] == results[0][1]["usage"] and result["usage"]["output_tokens"] == 5
+    assert "synthetic-private-thinking" not in json.dumps((result, results))
+
+
+@pytest.mark.parametrize("stop,content,usage,kind", [
+    ("end_turn", [{"type": "thinking", "thinking": "synthetic"}], None, "contract_error"),
+    ("end_turn", [{"type": "text", "text": ""}], None, "contract_error"),
+    ("end_turn", [{"type": "text", "text": "  "}], None, "contract_error"),
+    ("max_tokens", [], None, "contract_error"),
+    ("max_tokens", [{"type": "tool_use"}], None, "protocol_error"),
+    ("max_tokens", [{"type": "thinking"}], {"input_tokens": 1, "output_tokens": -1}, "pricing_unverified"),
+])
+def test_empty_or_unverified_responses_do_not_gain_the_paid_length_contract(stop, content, usage, kind):
+    results = []
+    reply = _reply(stop_reason=stop, content=content)
+    if usage is not None:
+        reply["usage"] = usage
+    client = a.AnthropicClient("synthetic", post_fn=lambda *args: (200, {}, json.dumps(reply).encode()))
+    with pytest.raises(a.AnthropicError, match=kind):
+        client.complete("synthetic", deadline=time.monotonic() + 10,
+                        after_result=lambda reservation, meta: results.append(meta))
+    assert len(results) == 1 and results[0]["error_kind"] == kind
+
+
+@pytest.mark.parametrize("block", [
+    {"type": "thinking"}, {"type": "thinking", "thinking": None},
+    {"type": "thinking", "thinking": 1}, {"type": "thinking", "thinking": ""},
+    {"type": "thinking", "thinking": "  "}, {"type": "redacted_thinking"},
+    {"type": "redacted_thinking", "data": {}}, {"type": "redacted_thinking", "data": ""},
+])
+def test_malformed_thinking_cannot_become_a_length_replan(block):
+    calls, results = [], []
+
+    def post(body, timeout):
+        calls.append(body)
+        return 200, {}, json.dumps(_reply(stop_reason="max_tokens", content=[block])).encode()
+
+    client = a.AnthropicClient("synthetic", post_fn=post)
+    with pytest.raises(a.AnthropicError, match="protocol_error"):
+        client.complete("synthetic", deadline=time.monotonic() + 10,
+                        after_result=lambda reservation, meta: results.append(meta))
+    assert len(calls) == len(results) == 1 and results[0]["error_kind"] == "protocol_error"
+
+
 def test_a_cache_prefix_becomes_the_first_cached_text_block():
     seen = []
     client = a.AnthropicClient("synthetic", post_fn=lambda body, timeout: (

@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "本文が出る前の出力上限到達を契約違反にしない",
+  "summary": "Anthropicの推論がthinkingまたはredacted_thinkingだけで出力上限に達した場合も、課金済みのlength終了として扱うようにしました。抽出では既存の分割・再開経路で対象本文全体の処理を続け、空の結果を成功として保存しません。",
+  "upgrade": "対象はAnthropicのクラウド推論を使う環境です。追加設定は不要です。semanticはlength終了を未完了として保持し、形式修復のために同じ有料要求を繰り返しません。contextのscanは既存の上限内で分割し、summaryとrepairは未完了を維持します。",
+  "details": [
+    "max_tokensでthinking・redacted_thinkingだけが返る非空のcontentをlengthとして返す。空content、未知のblock、内容が欠落・空・文字列以外のthinking block、空のend_turn、不正なusageは拒否し、thinkingの内容は結果や記録へ含めない。",
+    "共通の受入判定はHTTPの確認後にlengthをemptyと区別する。抽出のprovider経路も既存のthread-local integrity記録へ合流し、lengthだけを既存の再分割へ渡す。他の失敗は既存のCloudFallbackを維持する。",
+    "分割済みの完了checkpointを再利用し、切れたJSONや空本文から成功したfactを作らない。分割で処理し切れない場合も未完了とし、semanticに新しい入力分割機構は追加しない。",
+    "usageと課金記録、scope確認、同一promptの再送防止を維持する。実HTTPの1回ごとに結果を1回記録し、出力上限到達を理由に同じ有料要求を自動再送しない。"
+  ],
+  "refs": ["mcs/llm/anthropic_client.py", "mcs/llm/local_llm.py", "mcs/extract/llm/extract_llm.py"]
+}

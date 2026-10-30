@@ -8,6 +8,7 @@ from datetime import datetime
 
 import pytest
 
+from anthropic_client import AnthropicClient
 import cloud_policy
 import extract_llm as worker
 import inference_dependency_loss as dependency_loss
@@ -64,7 +65,7 @@ def routed(tmp_path, monkeypatch):
             before_attempt()
             calls.append(prompt)
             after_result(reservation, {"http_class": "success"})
-            return {"status": 200, "finish_reason": "stop", "text": "{}"}
+            return {"status": 200, "finish_reason": "stop", "text": '{"symptoms":[]}'}
     monkeypatch.setattr(worker.anthropic_client, "AnthropicClient", Client)
     yield led, cfg, calls, reserved, results
     led.close()
@@ -93,6 +94,128 @@ def _assert_legacy_retained(led, before):
     after = {row["artifact_id"]: dict(row) for row in led.artifacts(worker.KIND)}
     assert before and all(after[row["artifact_id"]] == row for row in before)
     assert all(inference.read_version(json.loads(row["meta"])) == inference.LEGACY_VERSION for row in before)
+
+
+def test_cloud_empty_length_replans_the_whole_source_without_json_salvage():
+    body = "".join(f"完全合成の居住記録{i:02d}です。" for i in range(12))
+    seen, accepted, meta = [], [], {}
+
+    def provider(prompt, **kwargs):
+        piece = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
+        seen.append(piece)
+        if len(piece) > len(body) // 2:
+            return {"status": 200, "text": "", "finish_reason": "length"}
+        accepted.append(piece)
+        return {"status": 200, "finish_reason": "stop", "text": json.dumps({"symptoms": [], "patient_context": [
+            {"category": "living", "subject": "patient", "text": piece, "evidence": piece}]})}
+
+    result = worker.llm_extract(body, hints={}, provider=provider, meta_out=meta)
+    assert isinstance(result, dict) and "".join(accepted) == body
+    assert "".join(item["text"] for item in result["patient_context"]) == body
+    assert seen[0] == body and body not in accepted
+    assert meta["length_stops"] == meta["length_resplits"] == 1
+    assert meta["calls"] == len(seen)
+
+
+def test_paid_cloud_split_resumes_completed_children_without_resending(routed, monkeypatch):
+    led, cfg, _, reservations, results = routed
+    body = "".join(f"完全合成の居住記録{i:02d}です。" for i in range(12))
+    prompts, pieces, metadata = [], [], []
+    record = cloud_policy.record_result
+
+    def recorded(ledger, reservation, outcome):
+        metadata.append(dict(outcome))
+        return record(ledger, reservation, outcome)
+
+    def wire(self, method, request, timeout, **kwargs):
+        content = request["messages"][0]["content"]
+        prompt = content if isinstance(content, str) else "".join(block["text"] for block in content)
+        piece = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
+        prompts.append(prompt)
+        pieces.append(piece)
+        length = len(piece) > len(body) // 2
+        content = ([{"type": "thinking", "thinking": "synthetic-private-thinking"}] if length else
+                   [{"type": "text", "text": json.dumps({"symptoms": [], "patient_context": [
+                       {"category": "living", "subject": "patient", "text": piece, "evidence": piece}]})}])
+        return 200, {}, json.dumps({"model": worker.anthropic_client.MODEL,
+            "stop_reason": "max_tokens" if length else "end_turn", "content": content,
+            "usage": {"input_tokens": 10, "output_tokens": 5}}).encode()
+
+    class PausedProvider(worker._CloudProvider):
+        paused = False
+
+        def __call__(self, prompt, **kwargs):
+            if len(pieces) == 2 and not self.paused:
+                self.paused = True
+                raise worker.CloudBusy("synthetic-before-next-child")
+            return super().__call__(prompt, **kwargs)
+
+    monkeypatch.setattr(worker.anthropic_client, "AnthropicClient", AnthropicClient)
+    monkeypatch.setattr(AnthropicClient, "request", wire)
+    monkeypatch.setattr(cloud_policy, "record_result", recorded)
+    deadline = time.monotonic() + 600
+    provider = PausedProvider(led, cfg, route="reextract", project_id=1, unit_key="synthetic-split",
+        deadline=deadline, current=lambda: True, dispatch=lambda fn, **kw: fn())
+    completed, splits = {}, {}
+    with pytest.raises(worker.CloudBusy, match="synthetic-before-next-child"):
+        worker.llm_extract(body, deadline=deadline, provider=provider, hints={}, chunks_out=completed,
+                           on_split=lambda key, size: splits.__setitem__(key, size))
+    assert len(completed) == 1 and splits and len(prompts) == 2
+    paid_prefix = list(prompts)
+    meta = {}
+    result = worker.llm_extract(body, deadline=deadline, provider=provider, hints={}, chunks_in=completed, splits_in=splits,
+                                meta_out=meta)
+    assert isinstance(result, dict) and meta["checkpoint_reuses"] == 1
+    assert "".join(item["text"] for item in result["patient_context"]) == body
+    assert prompts[:2] == paid_prefix and len(set(prompts)) == len(prompts)
+    assert len(prompts) == len(reservations) == len(results) == len(metadata) == 3
+    assert all(m["error_kind"] is None and m["usage"]["output_tokens"] == 5 for m in metadata)
+    assert "synthetic-private-thinking" not in json.dumps(metadata)
+
+
+@pytest.mark.parametrize("text", ["", '{"summary":"partial"}'])
+def test_unrecoverable_cloud_length_is_bounded_and_never_an_empty_success(text):
+    calls, splits = [], {}
+
+    def provider(prompt, **kwargs):
+        calls.append(prompt)
+        return {"status": 200, "text": text, "finish_reason": "length"}
+
+    meta = {}
+    assert worker.llm_extract("合成本文", provider=provider, hints={}, meta_out=meta,
+                              on_split=lambda key, size: splits.__setitem__(key, size)) is None
+    assert meta["failure_reason"] == "split_exhausted" and splits
+    assert len(calls) <= len("合成本文").bit_length() + 1
+
+
+@pytest.mark.parametrize("block", [{"type": "thinking"}, {"type": "redacted_thinking", "data": 1}])
+def test_malformed_thinking_never_creates_cloud_splits_or_extra_http(routed, monkeypatch, block):
+    led, cfg, _, reservations, results = routed
+    calls, metadata, splits, completed = [], [], [], {}
+    record = cloud_policy.record_result
+
+    def recorded(ledger, reservation, outcome):
+        metadata.append(dict(outcome))
+        return record(ledger, reservation, outcome)
+
+    def wire(self, method, body, timeout, **kwargs):
+        calls.append(body)
+        return 200, {}, json.dumps({"model": worker.anthropic_client.MODEL,
+            "stop_reason": "max_tokens", "content": [block],
+            "usage": {"input_tokens": 10, "output_tokens": 5}}).encode()
+
+    monkeypatch.setattr(worker.anthropic_client, "AnthropicClient", AnthropicClient)
+    monkeypatch.setattr(AnthropicClient, "request", wire)
+    monkeypatch.setattr(cloud_policy, "record_result", recorded)
+    deadline = time.monotonic() + 180
+    provider = worker._CloudProvider(led, cfg, route="reextract", project_id=1, unit_key="synthetic-invalid",
+        deadline=deadline, current=lambda: True, dispatch=lambda fn, **kw: fn())
+    with pytest.raises(worker.CloudFallback, match="cloud_unit_failed"):
+        worker.llm_extract("完全合成の本文です。", provider=provider, deadline=deadline,
+                           chunks_out=completed, on_split=lambda *args: splits.append(args))
+    assert not splits and not completed
+    assert len(calls) == len(reservations) == len(results) == len(metadata) == 1
+    assert metadata[0]["error_kind"] == "protocol_error"
 
 
 @pytest.mark.parametrize("local_circuit", [0, 60])
@@ -247,7 +370,7 @@ def test_injected_call_keeps_existing_json_validation(routed):
     provider = worker._CloudProvider(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kw: fn())
-    assert worker.llm_extract("合成の記録", deadline=time.monotonic() + 180, provider=provider) == {}
+    assert worker.llm_extract("合成の記録", deadline=time.monotonic() + 180, provider=provider) == {"symptoms": []}
 
 
 def test_openai_uses_selected_key_model_and_contract(routed, monkeypatch):
@@ -263,7 +386,7 @@ def test_openai_uses_selected_key_model_and_contract(routed, monkeypatch):
         def complete(self, prompt, **kwargs):
             kwargs["before_attempt"]()
             seen.append(True)
-            return {"status": 200, "text": "{}", "finish_reason": "stop", "model": "gpt-6-luna"}
+            return {"status": 200, "text": '{"symptoms":[]}', "finish_reason": "stop", "model": "gpt-6-luna"}
 
     monkeypatch.setattr(worker.openai_client, "OpenAIClient", Client)
     provider = worker._CloudProvider(led, cfg, route="reextract", project_id=1,
@@ -271,7 +394,7 @@ def test_openai_uses_selected_key_model_and_contract(routed, monkeypatch):
         current=lambda: True, dispatch=lambda fn, **kw: fn())
     assert provider.model == provider.contract["model"] == "gpt-6-luna"
     assert provider.contract["backend"] == "openai"
-    assert worker.llm_extract("合成の記録", deadline=time.monotonic() + 180, provider=provider) == {}
+    assert worker.llm_extract("合成の記録", deadline=time.monotonic() + 180, provider=provider) == {"symptoms": []}
     assert seen == [True]
 
 
@@ -386,16 +509,21 @@ def test_saved_provider_contract_is_the_fixed_request_shape_and_a_fresh_copy():
     assert worker._cloud_contract()["model"] == worker.anthropic_client.MODEL
 
 
-def test_cloud_and_shadow_leave_legacy_integrity_notes_untouched(routed):
-    led, cfg, *_ = routed
+def test_cloud_call_resets_prior_unit_integrity_and_records_once(routed):
+    led, cfg, calls, reservations, results = routed
     provider = worker._CloudProvider(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kw: fn())
     notes = worker._note_list()
     prior = {"synthetic": "local"}
     notes[:] = [prior]
-    assert worker.llm_extract("合成の記録", deadline=time.monotonic() + 180, provider=provider) == {}
-    assert notes == [prior]
+    meta = {}
+    assert worker.llm_extract("合成の記録", deadline=time.monotonic() + 180,
+                              provider=provider, meta_out=meta) == {"symptoms": []}
+    assert len(notes) == 1 and notes[0] is not prior
+    assert notes[0]["status"] == 200 and notes[0]["finish_reason"] == "stop"
+    assert meta["calls"] == meta["first_calls"] == 1 and meta["repair_calls"] == meta["length_stops"] == 0
+    assert len(calls) == len(reservations) == len(results) == 1
     notes.clear()
 
 
@@ -540,7 +668,7 @@ def test_completed_http_uses_result_dispatch_and_never_labels_only_deadline_as_s
         # The HTTP response completed on time, then its owner callback waited.
         monkeypatch.setattr(worker.time, "monotonic", lambda: clock() + 200)
         after_result(reservation, {"http_class": "success"})
-        return {"status": 200, "finish_reason": "stop", "text": "{}"}
+        return {"status": 200, "finish_reason": "stop", "text": '{"symptoms":[]}'}
     monkeypatch.setattr(worker.anthropic_client.AnthropicClient, "complete", complete)
     monkeypatch.setattr(cloud_policy, "record_result", lambda ledger, reservation, metadata: outcomes.append(metadata))
     def dispatch(fn, *, result=False):
@@ -548,7 +676,7 @@ def test_completed_http_uses_result_dispatch_and_never_labels_only_deadline_as_s
         return fn()
     provider = worker._CloudProvider(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=clock() + 180, current=lambda: True, dispatch=dispatch)
-    assert provider("synthetic", deadline=clock() + 180, max_tokens=100)["text"] == "{}"
+    assert provider("synthetic", deadline=clock() + 180, max_tokens=100)["text"] == '{"symptoms":[]}'
     assert outcomes == [{"http_class": "success"}]
     assert dispatches[-2:] == [True, True]
     with pytest.raises(worker.CloudFallback):
@@ -691,7 +819,7 @@ def test_http_deadline_reserves_existing_commit_margin_without_changing_unit_dea
     provider = worker._CloudProvider(led, cfg, route="reextract", project_id=1,
         unit_key="synthetic", deadline=unit_deadline, current=lambda: True,
         dispatch=lambda fn, **kwargs: fn())
-    assert provider("synthetic", deadline=repair_deadline, max_tokens=100)["text"] == "{}"
+    assert provider("synthetic", deadline=repair_deadline, max_tokens=100)["text"] == '{"symptoms":[]}'
     assert seen == [repair_deadline - worker.patient_context_refresh.COMMIT_MARGIN]
     assert provider.deadline == unit_deadline and len(reserved) == len(results) == 1
 

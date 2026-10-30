@@ -457,8 +457,9 @@ def record_circuit_result(ledger, error, now=None, *, kind=_CIRCUIT_ARTIFACT_KIN
 def _record_circuit_result(ledger, error, now=None, *, kind=_CIRCUIT_ARTIFACT_KIND, reset=False) -> bool:
     """Persist one Jev result and return the resulting open state.
 
-    Only retryable rate-limit/5xx/transport/timeout failures count.  Error
-    details are intentionally reduced to a fixed class label before storage.
+    Retryable rate-limit/5xx/transport/timeout failures count; cloud circuits
+    also count contract errors and hold auth/payment/pricing failures.
+    Error details are reduced to a fixed class label before storage.
     ``None`` represents a successful Jev call and resets the consecutive
     failure count.
     """

@@ -59,6 +59,14 @@ def test_canonical_acceptance_rejects_length_stop_and_empty():
         {"status": 200, "text": "{}", "finish_reason": "stop"}) is None
 
 
+@pytest.mark.parametrize("text", [None, "", "  "], ids=["missing", "empty", "blank"])
+def test_canonical_length_is_distinct_from_empty_after_the_http_gate(text):
+    assert local_llm.acceptance_error(
+        {"status": 200, "text": text, "finish_reason": "length"}) == "length_stop"
+    assert local_llm.acceptance_error(
+        {"status": 500, "text": text, "finish_reason": "length"}) == "http_status"
+
+
 def test_non_loopback_endpoint_and_bad_args_fail_closed():
     with pytest.raises(ValueError, match="local_endpoint_not_allowed"):
         local_llm.chat("p", endpoint="https://example.com/v1/chat")
@@ -103,13 +111,12 @@ def test_extract_llm_keeps_empty_object_contract_and_records_integrity(
 
 
 def test_extract_llm_valid_empty_object_still_empty(monkeypatch):
-    """Legacy/shadow contract: a valid ``{}`` stays a result, not an
-    error — canonical cutover decides later."""
+    """Required empty response fields remain visible in the validated extraction."""
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
 
     monkeypatch.setattr(extract_llm, "_opener_request",
-                        _fake_request(_response("{}")))
-    assert extract_llm.llm_extract("なにも記載なし") == {}
+                        _fake_request(_response('{"symptoms":[]}')))
+    assert extract_llm.llm_extract("なにも記載なし") == {"symptoms": []}
 
 
 def test_extract_llm_format_degrade_still_walks_ladder(monkeypatch):
@@ -131,7 +138,7 @@ def test_extract_llm_format_degrade_still_walks_ladder(monkeypatch):
 def test_llm_extract_attaches_bounded_integrity_to_nonempty_output(
         monkeypatch):
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
-    payload = {"meds": [{"name": "薬A", "status": "current",
+    payload = {"symptoms": [], "meds": [{"name": "薬A", "status": "current",
                          "subject": "patient", "negated": False}]}
 
     monkeypatch.setattr(extract_llm, "_opener_request", _fake_request(_response(
@@ -165,7 +172,7 @@ def test_chat_returns_llama_timings_sanitized():
 
 def test_llm_extract_integrity_aggregates_timings(monkeypatch):
     monkeypatch.setattr(extract_llm, "_FMT_MODE", "plain")
-    payload = _response('{"summary": "s"}')
+    payload = _response('{"summary": "s", "symptoms": []}')
     payload["timings"] = {"prompt_n": 100, "prompt_ms": 500,
                           "predicted_n": 10, "predicted_ms": 200,
                           "cache_n": 60}
