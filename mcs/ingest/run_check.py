@@ -450,7 +450,7 @@ def _commands_only(lock_fd, deadline) -> int:
         dirty = notify_cards.snapshot_dirty(ledger)
         if dirty:
             result["snapshot"] = maintenance.publish_snapshot(
-                DB, deadline=_hard_deadline())
+                DB, deadline=deadline)
             if result["snapshot"]:
                 notify_cards.clear_snapshot_dirty(ledger, dirty)
             else:

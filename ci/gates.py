@@ -380,7 +380,7 @@ def gate_snapshot_readonly() -> list[str]:
         operator_writes = {node for fn in tree.body
                            if isinstance(fn, ast.FunctionDef) and (
                                (path == MCS / "ops/notification_cancel.py" and fn.name == "apply")
-                               or (path == MCS / "core/snapshots.py" and fn.name == "publish_snapshot"))
+                               or (path == MCS / "core/snapshots.py" and fn.name == "_prepare_snapshot"))
                            for node in ast.walk(fn)}
         for node in ast.walk(tree):
             if not (isinstance(node, ast.Call)

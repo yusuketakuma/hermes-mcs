@@ -111,7 +111,7 @@ def test_stalled_validation_preserves_published_snapshot(tmp_path, monkeypatch):
     monkeypatch.setattr(snapshots, 'SNAPSHOT_VERIFY_TIMEOUT_S', 0.2)
     assert snapshots.publish_snapshot(str(source), str(output)) is None
     assert published.read_bytes() == b'synthetic previous snapshot'
-    assert not list(output.glob('.snapshot.*'))
+    assert not list(output.glob('.snapshot.*.tmp'))
     assert (output / '.validation.lock').stat().st_mode & 0o777 == 0o600
 
 
@@ -245,16 +245,15 @@ def test_validator_wait_fault_keeps_publication_and_owned_lock_contract(
 
     class Child:
         def __init__(self, *args, **kwargs):
-            assert len(kwargs["pass_fds"]) == 1
-            self.fd = os.dup(kwargs["pass_fds"][0])
+            assert len(kwargs["pass_fds"]) == 2
+            self.fds = [os.dup(fd) for fd in kwargs["pass_fds"]]
             self.returncode = None
             self.waits, self.kills = [], 0
             children.append(self)
 
         def release(self):
-            if self.fd is not None:
-                owned, self.fd = self.fd, None
-                os.close(owned)
+            while self.fds:
+                os.close(self.fds.pop())
 
         def poll(self):
             if cleanup == "already-reaped":
@@ -280,7 +279,14 @@ def test_validator_wait_fault_keeps_publication_and_owned_lock_contract(
             self.release()
             return self.returncode
 
-    monkeypatch.setattr(snapshots.subprocess, "Popen", Child)
+    spawn = snapshots.subprocess.Popen
+
+    def spawn_validator(*args, **kwargs):
+        if args[0][3] == snapshots._SNAPSHOT_VALIDATION_CODE:
+            return Child(*args, **kwargs)
+        return spawn(*args, **kwargs)
+
+    monkeypatch.setattr(snapshots.subprocess, "Popen", spawn_validator)
     try:
         if fault is OSError:
             assert snapshots.publish_snapshot(str(source), str(output)) is None
@@ -294,7 +300,7 @@ def test_validator_wait_fault_keeps_publication_and_owned_lock_contract(
         assert child.kills == (0 if cleanup == "already-reaped" else 1)
         assert source.read_bytes() == original
         assert published.read_bytes() == b"synthetic prior snapshot"
-        assert not list(output.glob(".snapshot.*"))
+        assert bool(list(output.glob(".snapshot.*.tmp"))) is (cleanup == "blocked")
         assert (output / ".validation.lock").stat().st_mode & 0o777 == 0o600
         with (output / ".validation.lock").open() as lock:
             if cleanup == "blocked":

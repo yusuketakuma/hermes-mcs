@@ -146,7 +146,7 @@ def test_snapshot_stops_at_the_callers_hard_deadline(tmp_path, snapdir, monkeypa
     assert maintenance.refresh_snapshot(path, deadline=time.monotonic() - 1) is None
     seen = {}
 
-    def verify(_tmp, *, deadline):
+    def verify(_tmp, *, deadline, **_kwargs):
         seen["deadline"] = deadline
         return False
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", verify)
@@ -154,6 +154,63 @@ def test_snapshot_stops_at_the_callers_hard_deadline(tmp_path, snapdir, monkeypa
     assert maintenance.refresh_snapshot(path, deadline=hard) is None
     assert seen["deadline"] == hard          # never past the watchdog
     assert not (snapdir / "ledger-snapshot.db").exists()
+
+
+def test_signature_iteration_expiry_does_not_publish_or_change_marker(tmp_path, snapdir, monkeypatch):
+    path = tmp_path / "ledger.db"
+    with closing(ledger.Ledger(str(path))) as db:
+        db.ensure_patient(1)
+        db.ensure_patient(2)
+    snapdir.mkdir()
+    marker = snapdir / maintenance.SNAPSHOT_SIG_NAME
+    marker.write_text('{"sig": {}, "published_at": 1}')
+    clock = [0.0]
+    dumps = maintenance.json.dumps
+
+    def expire(*args, **kwargs):
+        value = dumps(*args, **kwargs)
+        clock[0] = 10.0
+        return value
+
+    monkeypatch.setattr(maintenance, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(maintenance.json, "dumps", expire)
+    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **kw: pytest.fail("expired copy"))
+    assert maintenance.refresh_snapshot(str(path), force=True, deadline=10.0) is None
+    assert marker.read_text() == '{"sig": {}, "published_at": 1}'
+
+
+def test_signature_sql_progress_expiry_does_not_publish(tmp_path, monkeypatch):
+    path = tmp_path / "ledger.db"
+    with closing(sqlite3.connect(path)) as con:
+        con.execute("CREATE TABLE patients(project_id, project_type, patient_name, disease, station_name, url)")
+        con.executemany("INSERT INTO patients VALUES (?, '', '', '', '', '')", [(i,) for i in range(2000)])
+        con.commit()
+    clock, traces = [0.0], []
+    connect = sqlite3.connect
+
+    class Connection(sqlite3.Connection):
+        def set_progress_handler(self, callback, instructions):
+            def expire():
+                clock[0] = 0.5
+                return callback()
+            self.set_trace_callback(traces.append)
+            return super().set_progress_handler(expire, instructions)
+
+    monkeypatch.setattr(maintenance, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(maintenance.sqlite3, "connect",
+                        lambda *a, **kw: connect(*a, factory=Connection, **kw))
+    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **kw: pytest.fail("expired copy"))
+    assert maintenance.refresh_snapshot(str(path), deadline=0.5) is None
+    assert any(sql == "PRAGMA busy_timeout=500" for sql in traces)
+    assert clock[0] == 0.5
+
+
+def test_unreadable_signature_still_requests_fresh_copy(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(maintenance, "publish_snapshot", lambda *a, **kw: calls.append(kw) or False)
+    deadline = time.monotonic() + 10
+    assert maintenance.refresh_snapshot(str(tmp_path / "missing.db"), deadline=deadline) is None
+    assert calls == [{"deadline": deadline}]
 
 
 def test_snapshot_copy_completes_under_concurrent_writes(tmp_path, monkeypatch):
@@ -173,13 +230,18 @@ def test_snapshot_copy_completes_under_concurrent_writes(tmp_path, monkeypatch):
         writer.execute("INSERT INTO t VALUES(1)")
         return real()
     monkeypatch.setattr(snapshots, "monotonic", clock)
-    monkeypatch.setattr(snapshots, "_valid_snapshot_candidate",
-                        lambda _p, *, deadline: True)
+    candidate = str(tmp_path / "candidate.db")
     try:
-        out = snapshots.publish_snapshot(path, str(tmp_path / "snap"),
-                                      deadline=real() + 10)
+        snapshots._prepare_snapshot(path, candidate, real() + 10)
     finally:
         writer.close()
+    with closing(sqlite3.connect(candidate)) as snap, closing(sqlite3.connect(path)) as source:
+        copied_count = snap.execute("SELECT COUNT(*) FROM t").fetchone()[0]
+        assert 6000 <= copied_count < source.execute("SELECT COUNT(*) FROM t").fetchone()[0]
+    monkeypatch.setattr(snapshots, "monotonic", real)
+    monkeypatch.setattr(snapshots, "_valid_snapshot_candidate",
+                        lambda _p, *, deadline, **_kwargs: True)
+    out = snapshots.publish_snapshot(path, str(tmp_path / "snap"), deadline=real() + 10)
     assert out is not None
     timing = snapshots.last_timing()        # the margin is visible on success too
     assert set(timing) == {"copy_s", "verify_s", "budget_s"}
@@ -187,7 +249,7 @@ def test_snapshot_copy_completes_under_concurrent_writes(tmp_path, monkeypatch):
     # a later refused publish leaves no stale success timing behind
     monkeypatch.setattr(snapshots, "monotonic", real)
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate",
-                        lambda _p, *, deadline: False)
+                        lambda _p, *, deadline, **_kwargs: False)
     assert snapshots.publish_snapshot(path, str(tmp_path / "snap"), deadline=real() + 10) is None
     assert snapshots.last_timing() == {}
     with closing(sqlite3.connect(out)) as snap:
