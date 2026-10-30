@@ -11,9 +11,9 @@ from anthropic_client import AnthropicError, MODEL
 from ledger import Ledger
 
 
-def _reserve(ledger):
+def _reserve(ledger, unit_key='synthetic'):
     cfg = {'cloud_llm': {'mode': 'on', 'project_ids': [1]}}
-    return cloud_policy.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='synthetic')(
+    return cloud_policy.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key=unit_key)(
         {'model': MODEL, 'max_tokens': 100}, 2)
 
 
@@ -39,11 +39,13 @@ def test_late_success_is_saved_without_reopening_cloud_sends(tmp_path, monkeypat
         for model in (MODEL, openai_client.MODEL):
             assert cloud_policy.global_block_reason(owner, model=model) == 'http_429'
         with pytest.raises(AnthropicError, match='budget_exceeded'):
-            _reserve(owner)
+            _reserve(owner, 'synthetic-while-open')
         assert len(owner.artifacts('cloud_usage_reserve')) == 1
         clock[0] += runtime._CIRCUIT_COOLDOWN_SECONDS
         assert cloud_policy.global_block_reason(owner, model=MODEL) is None
-        assert _reserve(owner)
+        with pytest.raises(AnthropicError, match='budget_exceeded'):
+            _reserve(owner)
+        assert _reserve(owner, 'synthetic-after-cooldown')
 
 
 def test_cloud_explicit_reset_and_expired_success_still_close_circuit(tmp_path):

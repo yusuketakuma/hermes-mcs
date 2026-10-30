@@ -38,7 +38,9 @@ def test_corrupt_progress_holds_and_later_event_delivers(tmp_path, monkeypatch, 
                                 (bad,)).fetchone()
         assert row["state"] == "failed" and row["next_try"] is None
         assert json.loads(row["progress"])["invalid_progress"] == progress
-        assert result["sent"] == 1 and result["failed"] == 1 and sent == [1]
+        assert result["sent"] == 1 and sent == [1]
+        assert result["failed"] == int(archived)
+        assert result.get("uncertain", 0) == int(not archived)
         assert ledger.db.execute("SELECT state FROM notify_outbox WHERE event_id=?", (good,)).fetchone()[0] == "accepted"
         assert ledger.db.execute("SELECT count(*) FROM notify_outbox").fetchone()[0] == 2
     finally:

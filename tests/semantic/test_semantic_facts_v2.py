@@ -14,10 +14,21 @@ import pytest
 import semantic_extraction as extraction
 import semantic_facts as sf
 import semantic_extraction as ex
-from semantic_testkit import NO_FACTS, facts_llm as _llm
+from semantic_testkit import NO_FACTS, facts_llm
 
 
 FP = "sf_v2_test"
+
+
+def _llm(*args, **kwargs):
+    answer = facts_llm(*args, **kwargs)
+
+    def observed(prompt):
+        response = answer(prompt)
+        semantic_transport._record_inference("local")
+        return response
+
+    return observed
 
 
 def _member(body, **kw):
@@ -223,6 +234,7 @@ def test_durable_prefix_reuse_v2(request):
         calls.append(prompt)
         if len(calls) == 2:
             raise RuntimeError("model down")
+        semantic_transport._record_inference("local")
         return json.dumps({"facts": [], "category_presence": NO_FACTS},
                           ensure_ascii=False)
 
@@ -236,6 +248,7 @@ def test_durable_prefix_reuse_v2(request):
 
     def llm_ok(prompt):
         second_calls.append(prompt)
+        semantic_transport._record_inference("local")
         return json.dumps({"facts": [], "category_presence": NO_FACTS},
                           ensure_ascii=False)
 

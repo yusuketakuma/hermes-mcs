@@ -114,8 +114,8 @@ def test_usage_count_resumes_after_the_last_summed_row(tmp_path, monkeypatch):
     db = _seeded(tmp_path)
     try:
         parsed = []
-        original = semantic_store.loads_dict
-        monkeypatch.setattr(semantic_store, 'loads_dict',
+        original = semantic_store.strict_json
+        monkeypatch.setattr(semantic_store, 'strict_json',
                             lambda raw: parsed.append(raw) or original(raw))
         for _ in range(3):
             db.artifact_add('semantic_usage', '{}', meta={'jev_requests': 2})

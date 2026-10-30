@@ -218,7 +218,9 @@ def test_hold_uses_current_delivery_receipt(tmp_path, monkeypatch, failure):
             db.db.execute("UPDATE notify_outbox SET progress='[]'")
             db.db.commit()
         result = notify_flush.flush(db)
-        assert result["failed"] == 1
+        assert result["failed"] == (0 if failure == "corrupt" else 1)
+        if failure == "corrupt":
+            assert result["uncertain"] == 1
         rows = db.db.execute("SELECT * FROM notify_outbox").fetchall()
         assert len(rows) == 1, "unknown or partially delivered intent was rescued"
         assert rows[0]["event_id"] == eid

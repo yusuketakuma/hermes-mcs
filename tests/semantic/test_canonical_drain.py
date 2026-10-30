@@ -228,7 +228,7 @@ def test_drain_flags_incomplete_mandatory_pages(tmp_path):
     PASS."""
     db = _seeded_two(tmp_path)
     try:
-        out = _drain(db, llm=_many_facts_llm(3, statement_len=5000))
+        out = _drain(db, llm=_many_facts_llm(1, statement_len=5000))
         assert out["done"] == 1 and not out["failed"]
         audit = _audit_doc(db, 1)
         assert audit["status"] == "NEEDS_REVIEW"
@@ -495,7 +495,7 @@ def _diags(db, mid):
 
 def test_reused_needs_review_keeps_diagnostic_findings(tmp_path):
     db = _seeded_two(tmp_path)
-    _drain(db, llm=_many_facts_llm(3, statement_len=5000))
+    _drain(db, llm=_many_facts_llm(1, statement_len=5000))
     assert _audit_doc(db, 1)["status"] == "NEEDS_REVIEW"
     before = _diags(db, 1)
     assert before and before[-1]["findings"]

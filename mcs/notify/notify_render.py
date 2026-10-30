@@ -848,12 +848,12 @@ def card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
                 continue
             states = (processing_route.provider_states(db, card["project_id"], mid, cfg=cfg,
                                                        bundle_cache=bundle_cache)
-                      if m["body_state"] != "deleted" and include_summary else None)
+                      if layout >= 3 and m["body_state"] != "deleted" and include_summary else None)
             lines.append(_message_post(db, mid, m, _sender_tag(m, db),
                                        head=head, stamps=stamps, cfg=cfg,
                                        include_summary=include_summary, layout=layout, stamp_time=stamp_time,
                                        provider_states=states, visible_providers=visible_providers,
-                                       include_progress=False))
+                                       include_progress=layout < 2))
         title = f"💬 {patient_heading(db, card['project_id'])} — 本文"
         text = "\n\n".join(lines)
     else:
@@ -917,6 +917,11 @@ def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=N
                 meta.append(f"{mmdd(first.get('posted_at'))}〜")
             if context:
                 meta.append(context)
+            if layout == 2:
+                states = [p["state"] for p in (progress_by_mid or {}).values() if p]
+                for state, label in (("processing", "解析中"), ("attention", "解析要確認")):
+                    if count := states.count(state):
+                        meta.append(f"{label} {count}")
             if meta:
                 containers.append({"type": "text", "text": " · ".join(meta)})
         else:
@@ -949,7 +954,7 @@ def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=N
                     f"{posted_time_label(m['posted_at'])} {_sender_tag(m, db)}")
             post_line = {"type": "text", "rule": True, "text": line}
             sequence = {}
-            if m["body_state"] != "deleted":
+            if layout >= 3 and m["body_state"] != "deleted":
                 states = processing_route.provider_states(db, card["project_id"], m["message_id"], cfg=cfg,
                                                           bundle_cache=bundle_cache, sequence_out=sequence)
                 post_line.update(text=_cap_card_text(line, 500), provider_states=states)
@@ -958,7 +963,7 @@ def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=N
             if m["body_state"] != "deleted":
                 blocks.append(_summary_block(db, m["message_id"], cfg=cfg,
                                              progress_by_mid=progress_by_mid,
-                                             label=layout < 2, include_progress=False))
+                                             label=layout < 2, include_progress=layout < 2))
             rendered.append(_fit_item(blocks))
         item_shown = [[m["message_id"]] for m in msgs]
         max_count = PAGE_THREAD
@@ -996,7 +1001,7 @@ def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=N
         max_count = PAGE_DIGEST if kind == "digest" else PAGE_THREAD
         shown_kind = "signal_keys"
     header_placeholder = None
-    if kind == "thread":
+    if kind == "thread" and layout >= 3:
         # Reserve the longest possible provider line before packing pages.
         header_placeholder = (PROCESSING_STATUS_LABELS["attention"] + " · 採用結果の処理順: Anthropic → OpenAI · その他（順序不明） · "
                               + processing_route.provider_text(

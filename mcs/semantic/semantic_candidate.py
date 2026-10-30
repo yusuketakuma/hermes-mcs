@@ -130,10 +130,14 @@ def loaded_source_contract():
 
 def _cloud_contract(cfg):
     import cloud_policy
+    block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
+    _, errors = cloud_policy.cloud_config(cfg)
+    if errors or isinstance(block, dict) and block.get("mode") in ("off", "dry_run"):
+        return None
     settings, errors = cloud_policy.resolve_settings(cfg)
     if errors or settings["mode"] in ("off", "dry_run"):
         return None
-    if not cloud_policy.selected_key():
+    if not cloud_policy.selected_key(cfg=cfg):
         return None
     return {key: settings[key] for key in ("mode", "routes", "project_ids", "exclude_project_ids", "model", "provider", "provider_order")}
 

@@ -3,6 +3,7 @@ import semantic_facts
 import semantic_assembly as assembly
 import semantic_policy
 import semantic_store
+import semantic_transport
 import copy
 import hashlib
 import json
@@ -163,6 +164,7 @@ def test_actual_synthetic_extraction_cache_replay_and_durable_staging(runtime):
         calls.append("synthetic-only")
         presence = dict.fromkeys(facts.MANDATORY_CATEGORIES, "none")
         presence["request_pending"] = "one"
+        semantic_transport._record_inference("local")
         return json.dumps({
             "facts": [{"kind": "request_pending", "statement": "架空資料Xを確認",
                        "evidence_quote": TEXT, "polarity": "affirmed",

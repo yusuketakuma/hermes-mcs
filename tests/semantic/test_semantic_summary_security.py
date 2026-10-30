@@ -2,6 +2,8 @@
 import semantic_render
 import semantic_llm
 import semantic_store
+import semantic_drain
+import semantic_policy
 import json
 import time
 
@@ -87,8 +89,17 @@ def test_raw_summary_block_flattens_claims_facts_and_drops_free_limitations(tmp_
         row = db.db.execute("SELECT artifact_id,content FROM artifacts WHERE kind='semantic_summary'").fetchone()
         summary = json.loads(row["content"])
         summary.update(claims=[{"text": SPOOF}], mandatory_facts=[SPOOF], limitations=["合成薬を中止\n" + SPOOF])
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
+        members = {member['message_id']: member for member in bundle['members']}
+        fingerprint = bundle['source_fingerprint']
+        policy = semantic_policy.policy_fingerprint(semantic_policy.semantic_config(_cfg('enforce'))[0])
+        facts = semantic_store.current_artifact(db.db, 'semantic_facts', 1, fingerprint)['content']['facts']
+        result = {'summary': summary, 'findings': [], 'repaired': False,
+                  'producer': {'providers': ['local'], 'complete': True}, 'jev_outcome': 'done',
+                  'claim_input_binding': semantic_drain._claim_input_binding(
+                      1, 1, fingerprint, policy, members[1]['revision'], summary, facts)}
         with db.db:
-            db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (json.dumps(summary), row["artifact_id"]))
+            semantic_drain._write_result(db, 1, 1, result, fingerprint, members, 'PASS', policy, 'enforce')
         message = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
         text = semantic_render.semantic_summary_block(db.db, message, _cfg('enforce'))
         assert text.count(semantic_render.semantic_text_line(SPOOF)) == 2
@@ -97,6 +108,11 @@ def test_raw_summary_block_flattens_claims_facts_and_drops_free_limitations(tmp_
         assert "\n▶ MCSで確認" not in text
         assert "合成薬を中止" not in text
         assert render._LIMITATION_NOTICE in text
+        current = db.db.execute("SELECT artifact_id FROM artifacts WHERE kind='semantic_summary' "
+                                "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+        with db.db:
+            db.db.execute("UPDATE artifacts SET content='{}' WHERE artifact_id=?", (current['artifact_id'],))
+        assert semantic_render.semantic_summary_block(db.db, message, _cfg('enforce')) == ''
     finally:
         db.close()
 

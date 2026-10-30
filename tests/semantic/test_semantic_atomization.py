@@ -11,6 +11,7 @@ import pytest
 
 import semantic_extraction as extraction
 import semantic_facts as sf
+import semantic_transport
 from test_semantic_facts_v2 import _FakeLedger
 
 
@@ -164,6 +165,7 @@ def test_durable_prefix_reuse_after_interruption(request):
         completed.append(len(completed))
         if len(completed) == 2:
             raise RuntimeError("model down")
+        semantic_transport._record_inference("local")
         return json.dumps({"facts": []}, ensure_ascii=False)
 
     ledger = _FakeLedger(request)
@@ -178,6 +180,7 @@ def test_durable_prefix_reuse_after_interruption(request):
 
     def llm_second(prompt):
         second_calls.append(prompt)
+        semantic_transport._record_inference("local")
         return json.dumps({"facts": []}, ensure_ascii=False)
 
     second = extraction.extract_facts_resumable(

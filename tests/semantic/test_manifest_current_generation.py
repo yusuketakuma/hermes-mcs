@@ -58,6 +58,7 @@ def test_real_resume_model_aba_reselects_latest_manifest_and_preserves_prefix(le
             current_calls.append(prompt)
             if index == 2 or len(current_calls) > 1:
                 raise RuntimeError("synthetic interruption")
+            semantic_transport._record_inference("local")
             return json.dumps({"facts": [], "category_presence": NO_FACTS})
 
         results.append(extraction.extract_facts_v2(

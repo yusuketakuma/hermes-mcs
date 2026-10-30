@@ -13,7 +13,7 @@ import semantic_extraction as extraction
 import semantic_facts as sf
 import semantic_llm
 from semantic_testkit import _PassJev, _canonical_cfg, _drain, _seeded_two
-from test_semantic_facts_v2 import FP, NO_FACTS, _FakeLedger, _member
+from test_semantic_facts_v2 import FP, NO_FACTS, _FakeLedger, _llm, _member
 
 
 def _case():
@@ -124,16 +124,17 @@ def test_current_plan_reuses_completed_prefix_but_plan_version_change_rejects_it
         calls.append(_core(prompt))
         if len(calls) == 2:
             raise RuntimeError("synthetic interruption")
+        semantic_transport._record_inference("local")
         return json.dumps({"facts": [], "category_presence": NO_FACTS})
 
     first = extraction.extract_facts_v2(interrupted, _member(body), ledger=ledger,
                                         source_fingerprint=FP, chunk_size=50)
     assert first["completed_chunks"] == [0] and not first["extraction_complete"]
-    resumed = extraction.extract_facts_v2(lambda _: json.dumps({"facts": [], "category_presence": NO_FACTS}),
+    resumed = extraction.extract_facts_v2(_llm([]),
                                           _member(body), ledger=ledger, source_fingerprint=FP, chunk_size=50)
     assert resumed["complete"] and resumed["reused_chunks"] == [0]
     monkeypatch.setattr(clinical_chunking, "PLAN_VERSION", clinical_chunking.PLAN_VERSION + 1)
-    changed = extraction.extract_facts_v2(lambda _: json.dumps({"facts": [], "category_presence": NO_FACTS}),
+    changed = extraction.extract_facts_v2(_llm([]),
                                           _member(body), ledger=ledger, source_fingerprint=FP, chunk_size=50)
     assert changed["complete"] and not changed["reused_chunks"]
 

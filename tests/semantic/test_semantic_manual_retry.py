@@ -64,10 +64,10 @@ def test_manual_retry_extension_is_bounded_across_seed_and_restart(tmp_path):
         assert payload["source_generation"] == original_payload["source_generation"]
         assert not runtime.transition(db, old_token, "retry")
 
-        # A retryable fake failure consumes exactly the two explicitly
+        # A retryable malformed response consumes exactly the two explicitly
         # granted durable job attempts.  One job may make several Jev
         # questions, so the assertion belongs to the durable attempt count.
-        failing = _FakeJev(error=jev.JevError("transport", retryable=True))
+        failing = _FakeJev(error=jev.JevError("protocol_error", "synthetic_invalid_reply", retryable=True))
         for _ in range(2):
             with db.db:
                 db.db.execute(

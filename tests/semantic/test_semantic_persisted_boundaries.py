@@ -60,8 +60,8 @@ def test_send_summary_and_origin_readers_reject_unreadable_rows(ledger):
     eid = ledger.outbox_add("new_messages", 1, {})
     ledger.db.execute("UPDATE notify_outbox SET payload=? WHERE event_id=?", (poison_json(ledger), eid))
     ledger.db.commit()
-    row, payload = send_gate._source_event(ledger.db, 1, eid)
-    assert row is not None and payload is None
+    with pytest.raises(send_gate._SourceUnverified):
+        send_gate._source_event(ledger.db, 1, eid)
 
 
 def test_poison_delivery_payload_does_not_hide_valid_delivery_key(ledger):

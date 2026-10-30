@@ -144,6 +144,8 @@ def test_audit_definition_binds_version_json_and_hash_readers(monkeypatch, modul
 def test_audit_definition_binds_version_constants(monkeypatch, name, value):
     import inference_version
     target = LEGACY_VERSION if name == 'CURRENT_VERSION' else CURRENT_VERSION
+    if name == 'LLM_EXTRACT_VERSION':
+        value = inference_version.LLM_EXTRACT_VERSION + 1
     before = audit.definition_fingerprint(target_version=8, inference_target=target)
     monkeypatch.setattr(inference_version, name, value)
     assert audit.definition_fingerprint(target_version=8, inference_target=target) != before

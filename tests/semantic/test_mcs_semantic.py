@@ -1449,10 +1449,17 @@ def test_deferred_run_preserves_completed_results(tmp_path):
                            jev_client=_FakeJev(), llm_fn=llm)
     assert out["deferred"] == 1
     audits = db.artifacts("semantic_audit", message_id=1)
-    assert len(audits) == 1
-    meta = json.loads(audits[0]["meta"])
+    audits = sorted(audits, key=lambda row: row["artifact_id"])
+    assert [json.loads(row["meta"])["audit_status"] for row in audits] == ["PENDING", "NEEDS_REVIEW"]
+    assert any(finding["code"] == "claim_without_evidence"
+               for finding in json.loads(audits[0]["content"])["findings"])
+    meta = json.loads(audits[-1]["meta"])
     assert meta["audit_status"] == "NEEDS_REVIEW"
     assert meta["repair_count"] == 1      # budget spent, durably
+    summary = db.db.execute("SELECT content FROM artifacts WHERE artifact_id=?",
+                            (meta["summary_artifact_id"],)).fetchone()
+    assert meta["summary_hash"] == mcs_util.payload_hash(json.loads(summary["content"]))
+    assert len(db.artifacts("semantic_repair", message_id=1)) == 1
     # writer back -> rerun completes WITHOUT re-auditing mid-1
     fixed["v"] = True
     db.db.execute("UPDATE fetch_jobs SET next_try=0 "
@@ -1463,8 +1470,8 @@ def test_deferred_run_preserves_completed_results(tmp_path):
                             jev_client=_FakeJev(), llm_fn=llm)
     assert out2["done"] == 1
     assert calls["bad"] == 2   # initial + one repair, never re-run
-    assert len(db.artifacts("semantic_audit", message_id=1)) == 1
-    assert len(db.artifacts("semantic_summary", message_id=1)) == 1
+    assert len(db.artifacts("semantic_audit", message_id=1)) == 2
+    assert len(db.artifacts("semantic_summary", message_id=1)) == 2
     db.close()
 
 
@@ -1773,9 +1780,13 @@ def test_oversize_marker_survives_storage(tmp_path):
     p = _patient(db)
     p.messages = [_message(1, body=big)]
     db.save_patient(p, notify={"source": "unread"}, semantic=True)
+    def llm(prompt):
+        assert "要約器" not in prompt
+        return _llm(prompt)
+
     semantic_drain.run_due(db, _cfg("shadow"), {"errors": []},
                      time.monotonic() + 300,
-                     jev_client=_FakeJev(), llm_fn=_llm)
+                     jev_client=_FakeJev(), llm_fn=llm)
     meta = json.loads(db.db.execute(
         "SELECT meta FROM artifacts WHERE kind='semantic_summary'"
     ).fetchone()["meta"])
@@ -1784,6 +1795,7 @@ def test_oversize_marker_survives_storage(tmp_path):
         "SELECT meta FROM artifacts WHERE kind='semantic_audit'"
     ).fetchone()["meta"])
     assert audit["audit_status"] == "NEEDS_REVIEW"
+    assert not db.artifacts("semantic_repair")
     db.close()
 
 

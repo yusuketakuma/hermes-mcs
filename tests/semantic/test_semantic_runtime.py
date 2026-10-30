@@ -96,7 +96,7 @@ def test_usage_reservation_survives_unknown_post_failure(tmp_path):
     db.close()
 
 
-def test_retryable_http_failures_reach_terminal_attempt_bound(tmp_path, monkeypatch):
+def test_retryable_http_failure_skips_verification_without_spending_job_attempts(tmp_path, monkeypatch):
     # Pin the clock to JST noon: advancing +301s per drain must not cross
     # the daily-budget boundary that jev_usage_today() measures against.
     import math
@@ -115,21 +115,22 @@ def test_retryable_http_failures_reach_terminal_attempt_bound(tmp_path, monkeypa
     client = jev.JevClient(api_key="synthetic", post_fn=post,
                            max_attempts=1)
     result = {"errors": []}
-    for _ in range(6):
-        clock[0] += 301  # allow the durable outage circuit to cool down
-        db.db.execute("UPDATE fetch_jobs SET next_try=0 "
-                      "WHERE kind='semantic'")
-        db.db.commit()
-        semantic_drain.run_due(db, _cfg("shadow"), result,
-                         # the window must host the whole job budget
-                         # (default 45 s) — a shorter one is skipped at
-                         # the pick-time floor, never attempted
-                         time.monotonic() + 60,
-                         jev_client=client, llm_fn=_llm)
+    completed = semantic_drain.run_due(db, _cfg("shadow"), result,
+                                      time.monotonic() + 60,
+                                      jev_client=client, llm_fn=_llm)
     row = db.db.execute(
         "SELECT state,attempts FROM fetch_jobs WHERE kind='semantic'").fetchone()
-    assert row["state"] == "failed" and row["attempts"] == 6
-    assert len(calls) == semantic_store.jev_usage_today(db)
+    assert completed["done"] == 1 and row["state"] == "done" and row["attempts"] == 0
+    audits = db.artifacts("semantic_audit")
+    assert audits and all(json.loads(row["meta"])["audit_status"] == "SKIPPED" for row in audits)
+    assert all(json.loads(row["meta"])["jev_skip_reason"] == "service_unavailable" for row in audits)
+    assert len(calls) == semantic_store.jev_usage_today(db) > 0
+    before = len(calls)
+    clock[0] += 301
+    replay = semantic_drain.run_due(db, _cfg("shadow"), result,
+                                   time.monotonic() + 60,
+                                   jev_client=client, llm_fn=_llm)
+    assert replay["done"] == 0 and len(calls) == before
     db.close()
 
 

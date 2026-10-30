@@ -387,10 +387,11 @@ def test_every_post_reads_summary_then_stamps_then_body(led, monkeypatch):
                                  ("スタンプ 🙆2 👍1 · ",
                                   "スタンプ 未取得")):
         lines = post.split("\n")
-        assert lines[1] == f"・要約{mid}"
-        assert lines[2].startswith(stamps)
-        assert lines[3] == notify_render.SECTION_RULE
-        assert lines[4] == led.db.execute(
+        assert lines[1] == "Jev 不明 · 💻 不明"
+        assert lines[2] == f"・要約{mid}"
+        assert lines[3].startswith(stamps)
+        assert lines[4] == notify_render.SECTION_RULE
+        assert lines[5] == led.db.execute(
             "SELECT body_text FROM messages WHERE message_id=?", (mid,)).fetchone()[0]
         assert post.count(notify_render.SECTION_RULE) == 1
 
@@ -525,7 +526,7 @@ def test_stamp_actor_names_reach_each_platform_without_pings(led, monkeypatch, p
         assert not any("スタンプ 👀3" in element.get("text", "") for block in blocks
                    for element in block.get("elements", []))
         stamp_context = [element for block in blocks if block["type"] == "context"
-                         for element in block["elements"] if "スタンプ" in element["text"]]
+                         for element in block["elements"] if "スタンプ" in element.get("text", "")]
         # Per-post counts and people remain; the redundant total is hidden.
         assert len(stamp_context) == 2 and all(e["type"] == "plain_text" for e in stamp_context)
         assert all("<@" not in e["text"] for e in stamp_context)

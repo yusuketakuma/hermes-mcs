@@ -367,8 +367,8 @@ def _write_result(ledger, pid: int, mid: int, r: dict, fp: str,
               "target_revision": members[mid]["revision"],
               "provider_provenance": provenance,
               # the stored content drops _-keys — the oversize marker
-              # must survive storage or a re-audit of a PENDING-stored
-              # stub would lose its blocking finding
+              # must survive storage so a later re-audit of the stub
+              # keeps its blocking finding
               "input_oversize": bool(r["summary"].get("_input_oversize")), **skip_meta})
     audit_content = {"status": final_status, "findings": r["findings"], "target_message_id": mid}
     ledger.artifact_add_tx(
@@ -1519,6 +1519,10 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
         empty_prior = recovered['meta']['prior'] if recovered else None
         empty_repair_id = recovered['meta']['repair_artifact_id'] if recovered else None
         for _attempt in range(2):      # initial + at most one repair
+            if summary.get("_input_oversize") is True:
+                findings = audit_code(bundle, facts, summary)
+                status = "NEEDS_REVIEW"
+                break
             if summary.get("claims") == []:
                 _why(diagnostics, "audit_empty_unverified")
                 if repaired or summary.get("_input_oversize"):
