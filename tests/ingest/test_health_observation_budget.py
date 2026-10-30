@@ -7,6 +7,7 @@ import pytest
 import health_report
 import health_watch
 import notify_scope
+import status_snapshot
 from ingest_testkit import _ledger
 
 
@@ -128,3 +129,91 @@ def test_unknown_parts_reach_producer_and_monitor_without_zero(stored, tmp_path,
     path.write_text(json.dumps(report))
     watched = health_watch.classify_health(str(path), NOW + 1, 1800)
     assert watched["notify_incomplete_parts"] is None and watched["status"] == report["overall"]
+
+
+def test_card_observation_preserves_observed_zero(stored):
+    report = health_report.build_health(stored, {"errors": [], "notify": {}}, "ok", cfg={})
+    assert report["cards"]["attempts_unsettled"] == 0
+    assert report["cards"]["layout_inventory"] == []
+    assert report["attention"]["delivery_unsettled"]["attempts"] == 0
+    assert "notification_cards_unavailable" not in report["state_reasons"]
+
+
+@pytest.mark.parametrize("failure", ["sql_limit", "unavailable"])
+@pytest.mark.parametrize("run_status", ["ok", "failed"])
+def test_failed_card_read_is_unknown_and_reaches_monitor(stored, tmp_path, monkeypatch, failure, run_status):
+    stored.execute("PRAGMA busy_timeout=7000")
+    original_limit = stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
+    stored.execute("INSERT INTO runs(started_at,status,error) VALUES(?,'ok','')", (NOW,))
+    clock = [100.0]
+    monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
+
+    def read(db, cfg=None):
+        if failure == "unavailable":
+            raise ValueError("SYNTHETIC_PRIVATE_ERROR")
+        clock[0] += 1
+        db.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 "
+                   "FROM n WHERE x<2000) SELECT SUM(x) FROM n").fetchone()
+        pytest.fail("card SQL must be interrupted at the observation deadline")
+
+    monkeypatch.setattr(notify_scope, "health_cards", read)
+    report = health_report.build_health(stored, {"errors": [], "notify": {}}, run_status, cfg={})
+    cards = report["cards"]
+    assert cards["status"] == "unknown"
+    assert cards["reason"] == ("observation_limit" if failure == "sql_limit" else "observation_unavailable")
+    assert all(cards[name] is None for name in ("pending", "attempts_unsettled", "layout_inventory",
+                                               "unsettled", "unknown_parts", "oldest_unsettled_age_s"))
+    assert "SYNTHETIC_PRIVATE_ERROR" not in json.dumps(report)
+    assert report["attention"]["delivery_unsettled"] == {"attempts": None, "oldest_age_s": None}
+    assert report["overall"] == ("failed" if run_status == "failed" else "degraded")
+    assert report["notify"]["state"] == "incomplete"
+    assert "notification_cards_unavailable" in report["state_reasons"]
+    assert stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) == original_limit
+    assert stored.execute("PRAGMA busy_timeout").fetchone()[0] == 7000
+    assert stored.in_transaction
+    assert stored.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 "
+                          "FROM n WHERE x<2000) SELECT SUM(x) FROM n").fetchone()[0] == 2001000
+    stored.commit()
+    assert stored.execute("SELECT COUNT(*) FROM runs WHERE started_at=?", (NOW,)).fetchone()[0] == 1
+    path = tmp_path / "health.json"
+    path.write_text(json.dumps(report))
+    watched = health_watch.classify_health(str(path), NOW + 1, 1800)
+    assert watched["status"] == report["overall"]
+    assert "notification_cards_unavailable" in watched["state_reasons"]
+    spec = {"sources": {"health": {"kind": "json", "path": "health.json"}}, "fields": [
+        {"name": "delivery_unsettled_attempts", "source": "health",
+         "path": "attention.delivery_unsettled.attempts", "type": "int"}]}
+    snap = status_snapshot.snapshot(str(tmp_path), spec, now=NOW)
+    assert snap["unavailable"] == ["delivery_unsettled_attempts"]
+
+
+@pytest.mark.parametrize("overall,expected", [("ok", "degraded"), ("degraded", "degraded"),
+                                             ("failed", "failed")])
+def test_monitor_rechecks_unknown_cards_even_if_producer_reasons_are_missing(tmp_path, overall, expected):
+    path = tmp_path / "health.json"
+    path.write_text(json.dumps({"at": NOW, "overall": overall, "state_reasons": [],
+                                "cards": {"status": "unknown"}}))
+    watched = health_watch.classify_health(str(path), NOW + 1, 1800)
+    assert watched["status"] == expected
+    assert watched["state_reasons"] == ["notification_cards_unavailable"]
+    stale = health_watch.classify_health(str(path), NOW + 1801, 1800)
+    assert stale["status"] == "stale" and stale["state_reasons"] is None
+
+
+@pytest.mark.parametrize("unknown", ["cards", "parts", "both", "unread", "intake"])
+def test_unknown_blocks_never_hide_unreadable_reasons_or_delay_alert(tmp_path, unknown):
+    health = {"at": NOW, "overall": "degraded", "state_reasons": ["notification_pending:3"]}
+    if unknown in ("cards", "both"):
+        health["cards"] = {"status": "unknown"}
+    if unknown in ("parts", "both"):
+        health["notify"] = {"incomplete_parts": {"status": "unknown"}}
+    if unknown == "unread":
+        health["unread_at"] = None
+    if unknown == "intake":
+        health["semantic_intake_unstored"] = "unverified"
+    path = tmp_path / "data" / "health.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps(health))
+    watched = health_watch.evaluate(str(tmp_path), NOW + 1, cfg={})
+    assert watched["state_reasons"] is None
+    assert watched["alert"] and not watched["alert_held"]
