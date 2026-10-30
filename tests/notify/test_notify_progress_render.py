@@ -212,11 +212,12 @@ def test_page_processing_status_never_promotes_unfinished_or_unknown(values, exp
     assert notify_render._page_processing_status(values) == expected
 
 
-def test_header_status_uses_only_visible_nondeleted_posts(led, monkeypatch):
+@pytest.mark.parametrize("layout", [1, 2, 3])
+def test_header_status_uses_only_visible_nondeleted_posts(led, monkeypatch, layout):
     mids = (100, 101, 102, 103, 104)
     _seed_thread(led, mids=mids)
     assert _dispatch(led, _intent(led, payload={"message_ids": list(mids)}))["dispatched"]
-    card = {**_card(led), "layout": 2}
+    card = {**_card(led), "layout": layout}
     with led.db:
         led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=104")
     progress = {100: {"state": "complete", "completed": 1, "total": 1},
@@ -237,5 +238,5 @@ def test_header_status_uses_only_visible_nondeleted_posts(led, monkeypatch):
         assert header["provider_sequence"] is None
         assert notify_render.PROCESSING_STATUS_LABELS[expected] in header["text"]
         assert "解析更新中" not in notify_render.display_text(content)
-        if page < 2:
+        if page < 2 and layout >= 3:
             assert "合成の臨床要約" in notify_render.display_text(content)
