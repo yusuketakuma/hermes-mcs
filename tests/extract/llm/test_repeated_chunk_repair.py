@@ -89,11 +89,28 @@ def test_completeness_repair_is_preserved_for_repeated_chunks(monkeypatch):
 
 
 def test_globally_empty_validation_still_repairs_and_fails(monkeypatch):
-    out, calls = run_chunks(monkeypatch, {"patient_context": [
+    validations = []
+    validate = extract_validation.validate
+
+    def observe_validation(document, source, *args, **kwargs):
+        result = validate(document, source, *args, **kwargs)
+        validations.append((source, copy.deepcopy(result)))
+        return result
+
+    monkeypatch.setattr(extract_validation, "validate", observe_validation)
+    document = {"symptoms": [], "patient_context": [
         {"category": "observations", "subject": "patient", "text": "痛みがあります",
-         "evidence": PIECE}]})
+         "evidence": PIECE}]}
+    out, calls = run_chunks(monkeypatch, document)
     assert out is None
     assert len(calls) == 2
+    assert [source for source, _ in validations] == [PIECE, PIECE * 2] * 2
+    for source, result in validations:
+        if source == PIECE:
+            assert result["patient_context"] == document["patient_context"]
+            assert result["symptoms"] == []
+        else:
+            assert result is None
 
 
 def test_mixed_local_and_global_evidence_loss_still_repairs(monkeypatch):
@@ -103,9 +120,16 @@ def test_mixed_local_and_global_evidence_loss_still_repairs(monkeypatch):
 
 
 def test_single_body_thin_repair_remains(monkeypatch):
-    monkeypatch.setattr(extract_quality, 'is_thin', lambda *a: True)
-    _, calls = run_chunks(monkeypatch, {"summary": "経過の連絡"}, [PIECE * 2])
+    document = {"summary": "経過の連絡", "symptoms": []}
+    body = PIECE * 2 + "合成背景の文章です。" * 30
+    meta = {}
+    out, calls = run_chunks(monkeypatch, document, [body], meta_out=meta)
+    assert out == document
     assert len(calls) == 2
+    assert meta["repair_issues"]["thin"] == 1
+    assert meta["repair_issues"]["structure"] == 0
+    assert meta["thin"] is True
+    assert "本文の情報量に対し抽出項目が少なすぎます" in calls[1]
 
 
 def test_ambiguity_inside_one_core_still_requests_a_repair(monkeypatch):
