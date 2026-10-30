@@ -59,7 +59,7 @@ rollupの `patient_context` は `memo` と `chat` を別々に持つ。チャッ
 
 本節は実装済みの契約で、抽出世代8（ルール世代21）で適用する。配備後は通常の抽出workerが旧世代の結果を順次再抽出し、保存済みの結果を直接書き換えない。本番への配備と、参照情報（`patient_state_context`、既定false）の有効化は別の判断で、まだ行っていない。
 
-- **集約**: `rollup.pharmacy_state_items` は現在の抽出から、`inquiry_result`・`storage_status`・`storage_place`・`medication_manager`・`interaction_check`・`support_method`・`residual_quantity`・`missed_doses`・`followup` の根拠付き detail を1件ずつの list で返す。同じ親の `drug_name` を全件付け、値を薬剤ごとに分配しない。親の引用・text・主体、親と項目の fingerprint、project・message・本文hash・投稿時刻を持つ。rollup の `pharmacy_state` は `{items, total, truncated, source}` で新しい投稿順に最大100報告。最新の報告は現在の確定状態ではなく、否定・予定・過去の原文を保つ。
+- **集約**: `patient_context.pharmacy_state_items` は現在の抽出から、`inquiry_result`・`storage_status`・`storage_place`・`medication_manager`・`interaction_check`・`support_method`・`residual_quantity`・`missed_doses`・`followup` の根拠付き detail を1件ずつの list で返す。同じ親の `drug_name` を全件付け、値を薬剤ごとに分配しない。親の引用・text・主体、親と項目の fingerprint、project・message・本文hash・投稿時刻を持つ。rollup の `pharmacy_state` は `{items, total, truncated, source}` で新しい投稿順に最大100報告。最新の報告は現在の確定状態ではなく、否定・予定・過去の原文を保つ。
 - **本人向け表示**: 患者の記録まとめは最大8件と残り件数・集約上限を示し、表示前に現在の本文と抽出から再計算した fingerprint と一致する報告だけを出す。共有カードには上記の限定5属性と区分だけを出す。
 - **参照情報（`extract.patient_state_context`、bool、既定false）**: 有効時だけ、同じ患者・対象より厳密に前・最大200投稿の現在の抽出（`current_fact_pred` の現行1件、品質確認済み、保持中の旧結果を除く）から、本人で否定・予定・過去・不確実でなく、同じ投稿で値や薬剤が一意な報告だけを日付付きの参照（最大600文字、既存の文脈と合わせて1200文字）にする。より新しい同じ薬剤・項目の報告が使えない場合は古い値へ戻らない。集約済みの現在値から逆生成しない。無効時の文脈は従来と同一。
 - **試行への固定**: 初回推論前に、投稿・本文hash・時点・モデル・実装契約・試行・設定へ結び付けた参照本文と参照表（digest付き）を保存し、chunk・分割の再開と完了後の進捗は保存済みの内容だけを使う。他投稿の更新では作り直さず、破損した保存内容は推論せず保留する。

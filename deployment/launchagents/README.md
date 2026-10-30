@@ -25,7 +25,7 @@ services所有のlaunchdは `mcs/ops/service_contract.py` の `AGENT_LABELS`。�
 | 更新チェック `mcs_update.py check` | `10 5 * * *` | hermes cron (`mcs_update.sh`) |
 | 更新中断の復旧 `mcs_recover.py --if-stale` | 15分間隔 | launchd `org.mcs.recovery`（独立・install.sh 所有） |
 | コマンド取込 `run_check.py --json --download-files --mark-read` | `data/cmd/` WatchPaths（イベント駆動） | launchd `local.mcs-cmd` |
-| 対話カードコマンド `run_check.py --json --commands-only` | `data/cmd_int/` WatchPaths（イベント駆動） | launchd `local.mcs-int` |
+| 対話カードコマンド `run_check.py --json --commands-only` | `data/cmd_int/` WatchPathsに加え、StartInterval/ThrottleIntervalを5秒に設定（通常のサービス再配置で反映） | launchd `local.mcs-int` |
 | ヘルス監視の予備 `health_watch.py` | 300秒間隔（hermes cron が詰まっても警報する。flock・重複抑止は cron 側と共有） | launchd `local.mcs-health` |
 | 抽出・semantic/QC 常駐drainer（レーン2） | KeepAlive・24時間・idle poll 120s | launchd `ai.mcs.extract-drainer` |
 | 抽出・semantic/QC 常駐drainer（レーン3） | KeepAlive・24時間・idle poll 120s | launchd `ai.mcs.extract-drainer-2` |
@@ -39,8 +39,8 @@ wrapperは`~/.mcs/scripts/`、Pythonは`~/.mcs/venv/bin/python3`になる。
 モード変更時はmanifestの所有ジョブを照合する。Hermesへ戻す際は新cronの検証後に
 以前の独立サービスを退役させる。詳細は[独立モードの手順](../../docs/guides/STANDALONE.md)。
 
-wrapperスクリプトの正本は `deployment/scripts/`（`__PYTHON__`/`__REPO__`/`__DATA__`
-プレースホルダ付き）。実機の `~/.hermes/scripts/` へは下記の置換コマンドで
+wrapperスクリプトの正本は `deployment/scripts/`（`__PYTHON__`/`__REPO__`/`__DATA__`/`__RUN_LOG_HELPER__`
+プレースホルダ付き）。実機の `~/.hermes/scripts/` へは下記の生成処理で
 生成する — 直接編集すると repo との drift になる。
 
 ## セットアップ
@@ -70,7 +70,7 @@ plist を `~/.hermes/hermes-agent/venv/bin/python` で起動するよう描画�
 
 **復旧 watchdog（install.sh が別系統で所有）**: `org.mcs.recovery`
 は hermes cron に乗らない独立 launchd agent（StartInterval 900、
-選択した独立Pythonで `~/.mcs-recovery/mcs_recover.py --if-stale`）。
+選択した独立Pythonと検証済みのログhelperを通して `~/.mcs-recovery/mcs_recover.py --if-stale` を起動）。
 既定（`/opt/homebrew/bin/python3.14`・`/usr/local/bin/python3.14`・`/usr/bin/python3.14`の順で最初に実行できるもの）も含め、Python 3.14以上とSQLiteのWAL修正を
 事前に検証する。必要なら`install.sh --recovery-python /absolute/path/to/python`
 または`mcs setup init --recovery-python /absolute/path/to/python`で
@@ -78,8 +78,9 @@ plist を `~/.hermes/hermes-agent/venv/bin/python` で起動するよう描画�
 gateway死亡・新版破損でも動くことが目的のため、通常のmanifest所有対象とは別系統にする。
 `services`は未配置のwatchdogを有効化しない。明示選択と配置済みPythonが異なる場合だけ、
 所有・停止状態・ロックを検証して配置を修正する。稼働中や所有を検証できない場合は修正せず終了する。
-手動実行は選択したPythonで `~/.mcs-recovery/mcs_recover.py --status`
-を実行する。復旧対象の checkout は install.sh が
+手動の状態確認は公式wrapperの `mcs recover --status` を使う。
+配置済みplistから独立Pythonと、ログhelperを使う場合の配置・保存先を検証し、
+確認できなければ停止する。復旧対象の checkout は install.sh が
 `~/.mcs-recovery/repo_path` に記録する（無ければ `~/.mcs`）。
 
 配置内容を確認してから適用する場合:
@@ -97,9 +98,9 @@ install.sh が作る venv インタプリタを使う）
 
 残る2件は install.sh が初回配置し、置換規則も異なる:
 
-- `org.mcs.recovery` — `__RECOVERY_PYTHON__`/`__RECOVERY__`/`__DATA__` を置換
+- `org.mcs.recovery` — `__RECOVERY_PYTHON__`/`__RECOVERY__`/`__DATA__`/`__RUN_LOG_HELPER__` を置換
   （install.sh stage 6、明示したPython選択の差分だけは上記の条件でservicesが修正）
-- `ai.mcs.llamaserver` — `__LLAMA_BIN__`/`__MODEL__`/`__HERMES_HOME__` を
+- `ai.mcs.llamaserver` — `__LLAMA_BIN__`/`__MODEL__`/`__HERMES_HOME__`/`__PYTHON__`/`__RUN_LOG_HELPER__`/`__DATA__` を
   置換（install.sh stage 4。実機で hermes 管理の `ai.hermes.llamacpp`
   が既存なら導入自体を skip）
 
@@ -107,10 +108,11 @@ install.sh が作る venv インタプリタを使う）
 
 | プレースホルダ | 置換者 | 例 |
 |---|---|---|
-| `__PYTHON__` | `mcs_setup.py services` | `/Users/you/.hermes/hermes-agent/venv/bin/python` |
+| `__PYTHON__` | `mcs_setup.py services`・install.sh（LLM） | `/Users/you/.hermes/hermes-agent/venv/bin/python` |
 | `__REPO__` | `mcs_setup.py services` | このリポジトリの checkout パス（例 `/Users/you/hermes-mcs`） |
-| `__DATA__` | `mcs_setup.py services`・install.sh（recovery） | データ dir（例 `/Users/you/.mcs/data`） |
-| `__RECOVERY__` | install.sh | 復旧ツール dir（`~/.mcs-recovery`） |
+| `__DATA__` | `mcs_setup.py services`・install.sh（LLM/recovery） | データ dir（例 `/Users/you/.mcs/data`） |
+| `__RUN_LOG_HELPER__` | `mcs_setup.py services`・install.sh | 復旧ツール dir内の独立ログhelperの絶対パス（計画時は配置予定、実配置時は配置・hashを検証） |
+| `__RECOVERY__` | install.sh・mcs_setup services（配置済み監視の修正時） | 復旧ツール dir（`~/.mcs-recovery`） |
 | `__RECOVERY_PYTHON__` | install.sh・mcs_setup services | 更新対象から独立した、検証済みPythonの絶対パス |
 | `__LLAMA_BIN__` | install.sh | llama-server バイナリ（例 `/opt/homebrew/bin/llama-server`） |
 | `__MODEL__` | install.sh | モデル gguf（例 `~/.hermes/models/Qwen3.5-9B-Q4_K_M.gguf`） |

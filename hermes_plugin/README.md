@@ -262,9 +262,12 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   へ segment 回転)と scope 別 registry(`registry-*.json`)は fsync 永続化。
   再起動時に未レポート結果の receipt 再送と未完 attempt の保守的決済を行う。
   閉じた journal は起動時と回転時に圧縮するが、落とすのは決済済み・unknown 以外・
-  claim も未送 part もない attempt で、かつ `data/backups/*.db` の最古 backup より
-  1日以上古い行だけ（restore 後の照合証拠を残すため。backup が無ければ圧縮しない。
-  `data/backups` 外の複製から restore する運用はこの保証の対象外）。
+  claim も未送 part もない attempt で、かつ `data/backups/*.db` の最古 backup の
+  1日前より古い行だけ。backup ディレクトリが無い場合や `.db` が無い場合は、
+  現在から90日前を基準に、さらに1日の余白を引いた91日前より古い行だけを削減する。
+  backup 一覧を読めない場合と restore 保留中は削減しない。
+  restore 後の照合証拠を残すための条件であり、`data/backups` 外の複製から
+  restore する運用はこの保証の対象外。
   scope ごとの fcntl lock で同一配送先の sender は1つ。
 - runner と常駐 worker は別々に更新される。worker が知らない spec key
   （新機能）を含む render は、カードだけ送って機能を落とすのではなく丸ごと保留し
@@ -310,13 +313,13 @@ SDK や設定がなくても `/mcs` 側は従来どおり動く。
   `ops.extract_feedback` を組み立て、preview → 本人確認
   → enqueue の順で、既存の human_confirmed ゲートを通す。📝 のフォームは
   クリック結果の `form`（抽出済み依頼の下書き・担当者候補）で作る。
-  担当者候補は runner の `notify_cards.assignee_choices()`（MCS の自局
+  担当者候補は runner の `notify_action_context.assignee_choices()`（MCS の自局
   スタッフ一覧 `station_staff_v1`、無ければ自局名で投稿した送信者）で、
   plugin は台帳を読まない。候補があれば選択肢（Discord は Label+Select、
   Slack は static_select）＋手入力欄、無ければ手入力のみ（既定値は押した人の
-  表示名）。任意の `理由` 欄が空なら `text.TASK_REASON`
+  表示名）。任意の `理由` 欄が空なら `forms.TASK_REASON`
   （「通知カードからタスク作成」）を `reason` にし、preview には常に
-  理由行を出す。入力欄の定義は `adapters/common/text.py` の `modal_fields()` に
+  理由行を出す。入力欄の定義と既定の理由は `adapters/common/forms.py` の `modal_fields()` と `TASK_REASON` に
   両 transport 共通でまとめてある。`確定` が command を
   書込み中に押された `取消`／二度目の `確定` は「処理中」と答え、取り消したとは
   報告しない（書込み失敗時は確認が再び有効になる）。
