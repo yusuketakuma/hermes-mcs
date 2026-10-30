@@ -28,7 +28,7 @@ MCS の医療・介護チャットを収集・解析するローカルシステ�
 ## コマンド
 
 ```bash
-scripts/run_tests.sh                     # tests/ 一式（一時HOME・認証環境の隔離）。絞るときも scripts/run_tests.sh tests/<領域>/
+scripts/run_tests.sh                     # tests/・integration/ 一式（一時HOME・認証環境の隔離）。絞るときも scripts/run_tests.sh tests/<領域>/
 ruff check mcs/ tests/ hermes_plugin/ adapters/ lineworks_adapter/ mcs_standalone/ integration/ ci/ scripts/ deployment/ conftest.py  # CIと同じ範囲
 python3 scripts/development/update_readme.py [--check]   # 生成ブロックの再生成 / drift 検査
 python3 ci/gates.py
