@@ -1,0 +1,14 @@
+{
+  "category": "changed",
+  "title": "Slack独立接続のSDKを3.46.0へ更新",
+  "summary": "Slackの独立接続に使うSDKを3.46.0へ更新しました。",
+  "upgrade": "runtime_mode=standaloneでSlackを利用する環境が対象です。更新手順に従って依存環境を更新し、スタンドアロンの常駐処理を再起動してください。通知先・人承認・通信・再試行の条件は変更しません。Hermes接続のSDK構成は変更しません。",
+  "details": [
+    "slack-sdkの固定版だけを3.45.0から3.46.0へ更新し、他の12個のruntime依存pinは維持します。"
+  ],
+  "refs": [
+    "deployment/requirements-standalone.txt",
+    "integration/test_standalone_slack_sdk.py",
+    "integration/test_pinned_sdk_versions.py"
+  ]
+}
