@@ -2334,7 +2334,7 @@
       "path": "changes/archive/1.1.0/baseline-empty-readiness-calendar-20261031.json",
       "id": "baseline-empty-readiness-calendar-20261031",
       "title": "取得済みの空投稿と日付の扱いを修正",
-      "sha256": "4334e26df1b8e19bd06850a7f6767227cd0b209145d51a8db8b9f166b791d2a5"
+      "sha256": "30bc67c168862eea0dbe663796ee0d9e6ed4876cb121e36cf7b78ae1f50d8c9a"
     },
     {
       "path": "changes/archive/1.1.0/baseline-semantic-notify-20261031.json",
