@@ -257,6 +257,10 @@ class Broker:
                 if recover:
                     self._recover()
                     fcntl.flock(self._owner_fd, fcntl.LOCK_SH)
+                else:
+                    # A live owner avoids full recovery, not unsafe-fence checks.
+                    with self._write_tx():
+                        pass
             except BaseException:
                 self.db.close()
                 raise
@@ -269,7 +273,7 @@ class Broker:
         """Create or migrate the broker's private durable store."""
         # one write transaction: two processes starting together must not
         # both see owner_pid missing and race the ALTER (duplicate column)
-        with self._write_tx():
+        with self._write_tx(check_fences=False):
             self.db.execute("""
               CREATE TABLE IF NOT EXISTS admission_meta(
                 singleton INTEGER PRIMARY KEY CHECK (singleton=1),
@@ -325,7 +329,7 @@ class Broker:
             "WHERE singleton=1").fetchone()
 
     @contextmanager
-    def _write_tx(self):
+    def _write_tx(self, *, check_fences=True):
         """Lock the store before reading a state used for admission.
 
         ``with sqlite3.Connection`` commits writes but does not begin a
@@ -334,11 +338,38 @@ class Broker:
         """
         self.db.execute("BEGIN IMMEDIATE")
         try:
+            if check_fences:
+                self._fence_unsafe_epoch()
             yield
             self.db.commit()
         except BaseException:
             self.db.rollback()
             raise
+
+    def _rotate_epoch(self, epoch: int) -> None:
+        """Fence live permits and close the next epoch inside the caller's tx."""
+        self.db.execute(
+            "UPDATE permits SET state='fenced',"
+            " outcome='epoch_fence' WHERE epoch=? AND state IN"
+            f" {_LIVE_IN}", (epoch, *LIVE))
+        self.db.execute(
+            "UPDATE admission_meta SET epoch=?,"
+            " state='closed', rt_waiting=0, rotated_at=?"
+            " WHERE singleton=1", (epoch + 1, time.time()))
+
+    def _fence_unsafe_epoch(self) -> None:
+        """Close hidden owner-death work before dispatch or pruning in this tx."""
+        row = self._meta()
+        if row is None:
+            return
+        # Unsent provenance cannot contradict either persisted send marker.
+        unsafe = self.db.execute(
+            "SELECT 1 FROM permits WHERE epoch=? AND state='fenced'"
+            " AND outcome='owner_dead' AND (proof IS NOT 'owner_dead_unsent'"
+            " OR token IS NOT NULL OR sent_at IS NOT NULL) LIMIT 1",
+            (row["epoch"],)).fetchone()
+        if unsafe:
+            self._rotate_epoch(row["epoch"])
 
     def _recover(self) -> None:
         """Rotate the epoch when the previous process exited with any
@@ -346,8 +377,8 @@ class Broker:
         A stale pre-rotation request must find only a fenced world.
         The new epoch opens CLOSED until a trusted caller confirms the
         backend is empty through ``open_epoch``."""
-        row = self._meta()
-        with self.db:
+        with self._write_tx():
+            row = self._meta()
             if row is None:
                 self.db.execute(
                     "INSERT INTO admission_meta"
@@ -358,24 +389,8 @@ class Broker:
                 "SELECT COUNT(*) FROM permits WHERE epoch=? AND state "
                 f"IN {_LIVE_IN}",
                 (row["epoch"], *LIVE)).fetchone()[0]
-            # Older owner-death fences could hide accepted server work.
-            # The new marker records only unsent provenance; contradictory
-            # send markers still require the existing closed-epoch recovery.
-            unproven_owner_fence = self.db.execute(
-                "SELECT 1 FROM permits WHERE epoch=? AND state='fenced'"
-                " AND outcome='owner_dead' AND (proof IS NOT 'owner_dead_unsent'"
-                " OR token IS NOT NULL OR sent_at IS NOT NULL) LIMIT 1",
-                (row["epoch"],)).fetchone()
-            if live or row["state"] == "dirty" or unproven_owner_fence:
-                new_epoch = row["epoch"] + 1
-                self.db.execute(
-                    "UPDATE permits SET state='fenced',"
-                    " outcome='epoch_fence' WHERE epoch=? AND state IN"
-                    f" {_LIVE_IN}", (row["epoch"], *LIVE))
-                self.db.execute(
-                    "UPDATE admission_meta SET epoch=?,"
-                    " state='closed', rt_waiting=0, rotated_at=?"
-                    " WHERE singleton=1", (new_epoch, time.time()))
+            if live or row["state"] == "dirty":
+                self._rotate_epoch(row["epoch"])
 
     @_serialized
     def open_epoch(self, verify_empty) -> bool:
@@ -384,10 +399,16 @@ class Broker:
         The broker does not independently verify this callback's result.
         The caller needs evidence that no queued or decoding work remains;
         idle ``/slots`` samples alone do not establish that assertion.
+        Fence first, run the callback outside the transaction, and reopen
+        only if the epoch still matches that assertion's starting point.
         """
+        with self._write_tx():
+            epoch = self._meta()["epoch"]
         if not callable(verify_empty) or not verify_empty():
             return False
-        with self.db:
+        with self._write_tx():
+            if self._meta()["epoch"] != epoch:
+                return False
             self.db.execute(
                 "UPDATE admission_meta SET state='open'"
                 " WHERE singleton=1")
@@ -434,11 +455,12 @@ class Broker:
         if self._identity is not None and self._identity[1] is None:
             self._identity = None
         with self._write_tx():
-            self._reclaim_and_prune()
             meta = self._meta()
             if meta["state"] != "open":
                 return {"admitted": False, "reason": "epoch_closed",
                         "epoch": meta["epoch"]}
+            self._reclaim_and_prune()
+            meta = self._meta()
             epoch = meta["epoch"]
             if cls == "BACKLOG":
                 # an RT waiting or occupying closes BACKLOG admission
@@ -644,22 +666,23 @@ class Broker:
             permit_id = int(parts[1])
         except ValueError:
             return {"ok": False, "reason": "malformed"}
-        meta = self._meta()
-        if epoch != meta["epoch"]:
-            return {"ok": False, "reason": "stale_epoch",
-                    "epoch": meta["epoch"]}
-        p = self._permit(permit_id)
-        if p is None or p["token"] != token:
-            return {"ok": False, "reason": "unknown_token"}
-        if p["state"] != "sent":
-            return {"ok": False, "reason": f"state_{p['state']}"}
-        if p["cls"] != cls:
-            return {"ok": False, "reason": "class_mismatch"}
-        if request_id is not None and p["request_id"] is not None \
-                and p["request_id"] != request_id:
-            return {"ok": False, "reason": "request_mismatch"}
-        return {"ok": True, "permit_id": permit_id, "cls": p["cls"],
-                "epoch": epoch}
+        with self._write_tx():
+            meta = self._meta()
+            if epoch != meta["epoch"]:
+                return {"ok": False, "reason": "stale_epoch",
+                        "epoch": meta["epoch"]}
+            p = self._permit(permit_id)
+            if p is None or p["token"] != token:
+                return {"ok": False, "reason": "unknown_token"}
+            if p["state"] != "sent":
+                return {"ok": False, "reason": f"state_{p['state']}"}
+            if p["cls"] != cls:
+                return {"ok": False, "reason": "class_mismatch"}
+            if request_id is not None and p["request_id"] is not None \
+                    and p["request_id"] != request_id:
+                return {"ok": False, "reason": "request_mismatch"}
+            return {"ok": True, "permit_id": permit_id, "cls": p["cls"],
+                    "epoch": epoch}
 
     @_serialized
     def terminal(self, permit_id: int, outcome: str,
