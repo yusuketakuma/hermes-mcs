@@ -298,7 +298,10 @@ def stage_derive(ledger, result, deadline, cfg=None,
                                  "unknown_reasons": dict(scan.unknown_reasons),
                                  "rechecked": scan.rechecked}
         if scan.incomplete:
-            result["errors"].append("rollup: scan_unknown")
+            if scan.unknown and dict(scan.unknown_reasons) == {"deadline": len(scan.unknown)}:
+                _defer_stage(result, "rollup_scan")
+            else:
+                result["errors"].append("rollup: scan_unknown")
         source_changed = []
         source_unknown = []
         result["rollups"] = rollup.rebuild_many(

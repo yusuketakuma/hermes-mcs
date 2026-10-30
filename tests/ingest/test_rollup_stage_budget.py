@@ -1,8 +1,13 @@
 """Synthetic derivation reserves snapshot verification time without hiding unfinished work."""
+import json
 import sqlite3
+
+import pytest
 
 import drug_map
 import extract
+import health_report
+import health_watch
 import mcs_signals
 import rollup
 import run_check
@@ -48,7 +53,8 @@ def test_derive_reserves_verification_and_existing_tail_for_every_stage(tmp_path
                         "scan_commit": 296, "rebuild": 296, "signals": 296}
         assert result["rollup_scan"]["state"] == "unknown"
         assert result["rollup_scan"]["unknown_reasons"] == {"deadline": 1}
-        assert "rollup: scan_unknown" in result["errors"]
+        assert result["errors"] == ["deadline_deferred:rollup_scan"]
+        assert result["deferred_stages"] == ["rollup_scan"]
         assert run_check.RUN_DEADLINE_S == 480
     finally:
         ledger.close()
@@ -91,7 +97,8 @@ def test_derive_reserves_rebuild_time_and_excludes_unknown_touched(tmp_path, mon
         assert result["rollups"] == 2
         assert result["rollup_scan"]["state"] == "unknown"
         assert result["rollup_scan"]["unknown_reasons"] == {"deadline": 1}
-        assert "rollup: scan_unknown" in result["errors"]
+        assert result["errors"] == ["deadline_deferred:rollup_scan"]
+        assert result["deferred_stages"] == ["rollup_scan"]
     finally:
         ledger.close()
 
@@ -131,7 +138,8 @@ def test_real_scan_timeout_preserves_time_to_rebuild_confirmed_dirty(tmp_path, m
         assert result["rollups"] == 1
         assert result["rollup_scan"]["state"] == "unknown"
         assert result["rollup_scan"]["unknown_reasons"] == {"deadline": 1}
-        assert "rollup: scan_unknown" in result["errors"]
+        assert result["errors"] == ["deadline_deferred:rollup_scan"]
+        assert result["deferred_stages"] == ["rollup_scan"]
         assert not ledger.db.in_transaction
     finally:
         ledger.close()
@@ -173,3 +181,119 @@ def test_cursor_busy_does_not_skip_confirmed_dirty_rebuild(tmp_path, monkeypatch
         assert not ledger.db.in_transaction
     finally:
         ledger.close()
+
+
+@pytest.fixture
+def derive_case(tmp_path, monkeypatch):
+    ledger = _ledger(tmp_path)
+    monkeypatch.setattr(run_check, 'HOME', str(tmp_path))
+    monkeypatch.setattr(run_check, 'DB', ledger.db.execute('PRAGMA database_list').fetchone()[2])
+    monkeypatch.setattr(snapshots, 'snapshot_verify_timeout_s', lambda path: 20)
+    monkeypatch.setattr(run_check.time, 'monotonic', lambda: 20)
+    monkeypatch.setattr(extract, 'run_pending', lambda *a, **k: {'done': 0, 'pids': [2, 3]})
+    monkeypatch.setattr(drug_map, 'configured', lambda cfg: (None, None))
+    monkeypatch.setattr(drug_map, 'derive', lambda *a, **k: {'pids': [], 'status': 'complete'})
+    monkeypatch.setattr(mcs_signals, 'evaluate', lambda *a, **k: {'errors': []})
+
+    def run(scan_result, *, changed=(), unknown=()):
+        rebuilt = []
+
+        def scan(*a, **k):
+            if isinstance(scan_result, Exception):
+                raise scan_result
+            return scan_result
+
+        def rebuild(_ledger, project_ids, *, source_changed, source_unknown, **kwargs):
+            rebuilt.extend(project_ids)
+            source_changed.extend(changed)
+            source_unknown.extend(unknown)
+            return len(project_ids) - len(changed) - len(unknown)
+
+        monkeypatch.setattr(rollup, 'scan_fair_dirty_projects', scan)
+        monkeypatch.setattr(rollup, 'rebuild_many', rebuild)
+        result = {'errors': [], 'incomplete': []}
+        run_check.stage_derive(ledger, result, 200, {}, llm_budget_cap=0)
+        return result, rebuilt
+
+    try:
+        yield ledger, run
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize('reasons', [
+    (), (('source_unverified', 2),),
+    (('deadline', 1), ('source_unverified', 1)),
+    (('deadline', 1), ('same_connection_changed', 1)),
+    (('deadline', 1),), (('deadline', 0),),
+])
+def test_missing_or_mixed_scan_reasons_remain_scan_unknown(derive_case, reasons):
+    _ledger, run = derive_case
+    result, rebuilt = run(rollup.RollupScan((1,), (2, 3), True, reasons))
+    assert rebuilt == [1]
+    assert result['rollup_scan']['state'] == 'unknown'
+    assert result['rollup_scan']['unknown_reasons'] == dict(reasons)
+    assert result['errors'] == ['rollup: scan_unknown']
+    assert 'deferred_stages' not in result
+
+
+@pytest.mark.parametrize('error', [sqlite3.OperationalError, rollup.RollupSourceUnverified])
+def test_scan_exceptions_remain_errors_without_disclosing_details(derive_case, error):
+    _ledger, run = derive_case
+    result, rebuilt = run(error('SYNTHETIC_PRIVATE_ERROR'))
+    assert not rebuilt and 'rollup_scan' not in result
+    assert result['errors'] == [f'rollup: {error.__name__}']
+    assert 'deferred_stages' not in result
+    assert 'SYNTHETIC_PRIVATE_ERROR' not in str(result)
+
+
+@pytest.mark.parametrize('reason', ['source_changed', 'source_unknown'])
+def test_scan_deferral_keeps_independent_rebuild_source_errors(derive_case, reason):
+    _ledger, run = derive_case
+    outcome = {'changed' if reason == 'source_changed' else 'unknown': (1,)}
+    result, rebuilt = run(rollup.RollupScan((1,), (2, 3), True, (('deadline', 2),)), **outcome)
+    assert rebuilt == [1] and result['rollups'] == 0
+    assert result['errors'] == ['deadline_deferred:rollup_scan', f'rollup: {reason}']
+    assert result[f'rollup_{reason}'] == 1
+    assert result['rollup_scan']['state'] == 'unknown'
+    assert result['deferred_stages'] == ['rollup_scan']
+
+
+def test_scan_deferral_uses_the_common_compact_marker_with_later_deferral(derive_case, monkeypatch):
+    _ledger, run = derive_case
+    monkeypatch.setattr(mcs_signals, 'evaluate', lambda *a, **k: {'errors': [], 'detectors_deferred': True})
+    result, rebuilt = run(rollup.RollupScan((1,), (2, 3), True, (('deadline', 2),)))
+    assert rebuilt == [1]
+    assert result['errors'] == ['deadline_deferred:rollup_scan,signals']
+    assert result['deferred_stages'] == ['rollup_scan', 'signals']
+
+
+def test_scan_deadline_stays_partial_and_reaches_existing_health_deferred_guidance(
+        derive_case, monkeypatch, tmp_path):
+    import notify_cards
+    import notify_cmds
+    import notify_spool
+
+    ledger, run = derive_case
+    result, rebuilt = run(rollup.RollupScan((1,), (2, 3), True, (('deadline', 2),)))
+    assert rebuilt == [1] and result['rollup_scan']['state'] == 'unknown'
+    monkeypatch.setattr(notify_cmds, 'drain_int_commands', lambda *a, **k: None)
+    monkeypatch.setattr(notify_spool, 'publish_flags', lambda *a, **k: None)
+    monkeypatch.setattr(notify_cards, 'snapshot_dirty', lambda *a, **k: False)
+    monkeypatch.setattr(run_check.maintenance, 'refresh_snapshot', lambda *a, **k: 'unchanged')
+    run_id = ledger.begin_run(None)
+    assert run_check._finish_run(ledger, {}, result, run_id, 200) == 'partial'
+    stored = ledger.db.execute('SELECT status,error FROM runs WHERE run_id=?', (run_id,)).fetchone()
+    assert tuple(stored) == ('partial', 'deadline_deferred:rollup_scan')
+    block = health_report.collection_diagnostics_health(ledger.db, result['errors'], 3700)
+    assert block['errors']['categories']['deferred'] == 1
+    assert block['errors']['categories']['postprocess'] == 0
+    path = tmp_path / 'health.json'
+    path.write_text(json.dumps({'at': 3700, 'overall': 'degraded', 'run_status': 'partial',
+                               'state_reasons': ['stage_errors'], 'collection_diagnostics': block}))
+    report = health_watch.classify_health(str(path), 3710, 600)
+    assert report['status'] == 'degraded'
+    lines = '\n'.join(health_watch._reason_rows(report, report['state_reasons']))
+    assert '時間内に終わらず先送り' in lines and '異常ではありません' in lines
+    assert '対処不要。次回以降に実行されます' in lines
+    assert '収集後の処理が失敗しました' not in lines
