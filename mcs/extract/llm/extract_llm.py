@@ -40,6 +40,7 @@ import sys
 import functools
 import threading
 import time
+from types import SimpleNamespace
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every module dir (any depth) as an import root
@@ -1959,7 +1960,7 @@ def _clear_error_tx(ledger, mid: int, project_id: int):
 
 
 @contextlib.contextmanager
-def _write_lock(enabled: bool, wait_s: float = 60):
+def _write_lock(enabled: bool, wait_s: float = 60, *, deadline=None):
     """Hold the run lock only across a DB write when `enabled`, waiting
     up to ``wait_s`` seconds for it.
 
@@ -1976,7 +1977,17 @@ def _write_lock(enabled: bool, wait_s: float = 60):
     SQLite transaction, and taking the lock per row (up to 60 s each)
     while leases are held would stall the drainer for no proven gain."""
     fd = None
-    if enabled:
+    if enabled and deadline is not None:
+        until = min(deadline, time.monotonic() + max(0.0, wait_s))
+        while time.monotonic() < deadline:
+            fd = acquire_run_lock()
+            if fd is not None:
+                break
+            remaining = until - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(1.0, remaining))
+    elif enabled:
         for _ in range(max(1, int(wait_s))):
             fd = acquire_run_lock()
             if fd is not None:
@@ -2732,6 +2743,16 @@ def _claim(ledger, r, lease_s: float = _EXTRACT_LEASE_S) -> float | None:
         if not _source_writable(ledger.db, r):
             ledger.db.commit()
             return None
+        if isinstance(r, dict) and r.get('_cloud_mode') in ('on', 'shadow'):
+            now = time.time()
+            current = ledger.db.execute(
+                _selection_sql(ledger.db, 'DESC', ' AND m.message_id=?'),
+                (KIND, EXTRACT_VERSION, r['message_id'], None, 1, 0, now,
+                 KIND, EXTRACT_VERSION, now, 1)).fetchone()
+            if current is None or any(current[key] != r.get(key)
+                                      for key in ('qc_src', 'thin_src', 'human_src', 'attempts')):
+                ledger.db.commit()
+                return None
         if isinstance(r, dict):
             from inference_dependency_loss import source_binding
             r['_source_binding'] = source_binding(ledger.db, r['project_id'], r['message_id'])
@@ -4084,25 +4105,120 @@ def patient_progress_counts(db) -> dict:
             "focus_eligible": focus, "focus_targets": min(focus, _FOCUS_PATIENTS)}
 
 
+class _CloudSelectionIncomplete(Exception):
+    """A cloud selection could not finish safely within the current pass."""
+
+
+_CLOUD_PRIORITY_PAGE = 128
+
+
+def _cloud_priority_identity(db, cfg, admitted_ids, shard, oldest_first, archived_first, fair_oldest):
+    """Identify one non-authoritative ordering walk without retaining receipt contents."""
+    scope = db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind='cloud_history_scope' "
+                       "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    control = db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind='cloud_control' "
+                         "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    receipt = scoped_control = None
+    if scope is not None:
+        document = cloud_policy._history_document(scope['content'])
+        command_id = document.get('command_id') if isinstance(document, dict) else None
+        if isinstance(command_id, str):
+            receipt = db.execute("SELECT outcome,receipt_json FROM command_receipts WHERE command_id=?",
+                                 (command_id,)).fetchone()
+            scoped_control = db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind='cloud_control' "
+                "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.command_id') END=? "
+                "ORDER BY artifact_id DESC LIMIT 1", (command_id,)).fetchone()
+    return mcs_util.payload_hash({'scope': tuple(scope) if scope is not None else None,
+        'control': tuple(control) if control is not None else None,
+        'scoped_control': tuple(scoped_control) if scoped_control is not None else None,
+        'receipt': tuple(receipt) if receipt is not None else None,
+        'config': cfg, 'admitted': sorted(admitted_ids) if admitted_ids is not None else None,
+        'shard': shard, 'oldest': oldest_first, 'archived': archived_first, 'fair': fair_oldest})
+
+
+def _cloud_priority_discard(ledger, mid):
+    """Move past a candidate that could not be prepared or claimed this pass."""
+    state = getattr(ledger, '_cloud_priority_progress', None)
+    if isinstance(state, dict):
+        state['ready'] = [item for item in state['ready'] if item[0] != mid]
+
+
 def _select_pending(ledger, limit: int, admitted_ids: set | None,
                     shard: tuple[int, int] | None,
                     oldest_first: bool, *, archived_first: bool = False,
                     fair_oldest: bool = False, prioritize_patients: bool = False,
-                    cloud_only: bool = False) -> tuple[list, int | None]:
-    check = (cloud_policy.history_selection_check(ledger.db) if cloud_only
-             else contextlib.nullcontext(None))
-    with check as receipt_check:
-        return _select_pending_impl(ledger, limit, admitted_ids, shard, oldest_first,
-            archived_first=archived_first, fair_oldest=fair_oldest,
-            prioritize_patients=prioritize_patients, cloud_only=cloud_only,
-            receipt_check=receipt_check)
+                    cloud_only: bool = False, deadline: float | None = None) -> tuple[list, int | None]:
+    deadline = deadline if cloud_only else None
+    reader = None
+    owner = ledger
+    if deadline is not None:
+        if time.monotonic() >= deadline:
+            raise _CloudSelectionIncomplete('deadline')
+        if ledger.db.in_transaction:
+            raise _CloudSelectionIncomplete('active_transaction')
+        # A caller-owned cancellation handler remains authoritative on this read.
+        path = ledger.db.execute('PRAGMA database_list').fetchone()[2]
+        if not path:
+            raise _CloudSelectionIncomplete('reader_unavailable')
+    try:
+        if deadline is not None:
+            before = os.stat(path)
+            reader = sqlite3.connect(Path(path).absolute().as_uri() + '?mode=ro', uri=True, timeout=0)
+            after = os.stat(path)
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                raise _CloudSelectionIncomplete('reader_changed')
+            reader.row_factory = sqlite3.Row
+            reader.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+            ledger = SimpleNamespace(db=reader, _cloud_state_owner=owner,
+                                     _cloud_db_identity=(before.st_dev, before.st_ino))
+            if prioritize_patients:
+                # Keep the ordinary inference floor available whenever the
+                # pass is long enough, while still allowing short passes to scan.
+                deadline -= min(_MIN_CALL_S, max(0.0, deadline - time.monotonic()) / 2.0)
+        check = (cloud_policy.history_selection_check(ledger.db) if cloud_only
+                 else contextlib.nullcontext(None))
+        with check as receipt_check:
+            result = _select_pending_impl(ledger, limit, admitted_ids, shard, oldest_first,
+                archived_first=archived_first, fair_oldest=fair_oldest,
+                prioritize_patients=prioritize_patients, cloud_only=cloud_only,
+                receipt_check=receipt_check, deadline=deadline)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise _CloudSelectionIncomplete('deadline')
+    except MemoryError as error:
+        if reader is not None:
+            with contextlib.suppress(sqlite3.Error):
+                reader.close()
+        if hasattr(owner, '_cloud_priority_progress'):
+            owner._cloud_priority_progress = None
+        raise _CloudSelectionIncomplete('memory') from error
+    except BaseException as error:
+        if reader is not None:
+            with contextlib.suppress(sqlite3.Error):
+                reader.close()
+        if deadline is not None and isinstance(error, (sqlite3.OperationalError, OSError)):
+            reason = 'deadline' if time.monotonic() >= deadline else 'reader_unavailable'
+            raise _CloudSelectionIncomplete(reason) from error
+        raise
+    else:
+        if reader is not None:
+            try:
+                reader.close()
+            except sqlite3.Error as error:
+                raise _CloudSelectionIncomplete('reader_close_failed') from error
+        if cloud_only and prioritize_patients and deadline is not None:
+            state = getattr(owner, '_cloud_priority_progress', None)
+            if (isinstance(state, dict) and not state['ready']
+                    and state['phase'] >= state.get('phase_count', 4)):
+                owner._cloud_priority_progress = None
+        return result
 
 
 def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                          shard: tuple[int, int] | None,
                          oldest_first: bool, *, archived_first: bool = False,
                          fair_oldest: bool = False, prioritize_patients: bool = False,
-                         cloud_only: bool = False, receipt_check=None) -> tuple[list, int | None]:
+                         cloud_only: bool = False, receipt_check=None,
+                         deadline: float | None = None) -> tuple[list, int | None]:
     """Select the claimable pending rows for one run_pending pass ->
     (rows, how many of them are new arrivals; None for oldest_first)."""
     # pending = no current-version artifact, plus retriable CURRENT-
@@ -4133,6 +4249,9 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     if cloud_only:
         cfg = _cloud_settings(load_config())
         if cfg["mode"] != "on" or "reextract" not in cfg["routes"]:
+            owner = getattr(ledger, '_cloud_state_owner', None)
+            if owner is not None and prioritize_patients:
+                owner._cloud_priority_progress = None
             return [], 0
         # Filter unpaid local-only work before LIMIT so it cannot starve cloud history.
         adm_sql += (" AND COALESCE(qc_src,0)=0 AND COALESCE(thin_src,0)=0 "
@@ -4152,6 +4271,8 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
     def _select(fresh, n, archived, rehold=None, scope="", scope_params=()):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise _CloudSelectionIncomplete('deadline')
         cursor = ledger.db.execute(_selection_sql(ledger.db, order, adm_sql + scope,
                                                fresh, archived, rehold, bounded=not cloud_only,
                                                prioritize_patients=prioritize_patients), (
@@ -4168,14 +4289,104 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                 return cursor.fetchall()
             selected = []
             for row in cursor:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise _CloudSelectionIncomplete('deadline')
                 if (cloud_policy.history_target_ready(ledger.db, row["project_id"], row["message_id"])
                         and receipt_check(row["project_id"], row["message_id"])):
                     selected.append(row)
                     if len(selected) >= n:
                         break
+            if deadline is not None and time.monotonic() >= deadline:
+                raise _CloudSelectionIncomplete('deadline')
             return selected
         finally:
             cursor.close()
+
+    if cloud_only and prioritize_patients and deadline is not None:
+        owner = ledger._cloud_state_owner
+        identity = (ledger._cloud_db_identity,
+                    _cloud_priority_identity(ledger.db, cfg, admitted_ids, shard,
+                                             oldest_first, archived_first, fair_oldest))
+        state = getattr(owner, '_cloud_priority_progress', None)
+        if not isinstance(state, dict) or state.get('identity') != identity:
+            upper = ledger.db.execute('SELECT message_id FROM messages ORDER BY message_id DESC LIMIT 1').fetchone()
+            state = {'identity': identity, 'upper': upper[0] if upper else None, 'after': None,
+                     'rows': [], 'maxima': {}, 'ordered': None, 'phase': 0, 'position': 0, 'ready': []}
+            owner._cloud_priority_progress = state
+        while state['ordered'] is None:
+            if time.monotonic() >= deadline:
+                raise _CloudSelectionIncomplete('deadline')
+            if state['upper'] is None:
+                page = []
+            elif state['after'] is None:
+                page = ledger.db.execute('SELECT message_id,project_id,posted_at_ts FROM messages '
+                    'WHERE message_id<=? ORDER BY message_id LIMIT ?',
+                    (state['upper'], _CLOUD_PRIORITY_PAGE)).fetchall()
+            else:
+                page = ledger.db.execute('SELECT message_id,project_id,posted_at_ts FROM messages '
+                    'WHERE message_id>? AND message_id<=? ORDER BY message_id LIMIT ?',
+                    (state['after'], state['upper'], _CLOUD_PRIORITY_PAGE)).fetchall()
+            for mid, pid, posted in page:
+                if time.monotonic() >= deadline:
+                    raise _CloudSelectionIncomplete('deadline')
+                if type(mid) is not int or (pid is not None and type(pid) is not int) \
+                        or (posted is not None and (type(posted) not in (int, float) or not math.isfinite(posted))):
+                    raise _CloudSelectionIncomplete('ordering_unverified')
+                state['after'] = mid
+                if pid is None:
+                    continue  # history_target_ready cannot authorize NULL project IDs
+                state['rows'].append((mid, pid, posted))
+                previous = state['maxima'].get(pid)
+                if posted is not None and (previous is None or posted > previous):
+                    state['maxima'][pid] = posted
+            if len(page) < _CLOUD_PRIORITY_PAGE:
+                def priority(item):
+                    mid, pid, posted = item
+                    latest = state['maxima'].get(pid)
+                    return (latest is None, -latest if latest is not None else 0, pid,
+                            posted is not None if oldest_first else posted is None,
+                            (-posted if not oldest_first else posted) if posted is not None else 0,
+                            -mid if not oldest_first else mid)
+                state['ordered'] = sorted(state.pop('rows'), key=priority)
+                state.pop('maxima')
+                if time.monotonic() >= deadline:
+                    raise _CloudSelectionIncomplete('deadline')
+
+        phases = [(archived, rehold) for archived in ((True, False) if archived_first else (False, True))
+                  for rehold in ((None,) if oldest_first and fair_oldest else (False, True))]
+        state['phase_count'] = len(phases)
+        selected, ready = [], []
+        # Re-read every previously selected ID under this pass's fresh receipt snapshot.
+        old_ready = state['ready']
+        for offset, (mid, archived, rehold) in enumerate(old_ready):
+            if selected and deadline - time.monotonic() <= 1.0:
+                ready.extend(old_ready[offset:])
+                break
+            found = _select(None, 1, archived, rehold, scope=' AND m.message_id=?', scope_params=(mid,))
+            if found:
+                selected.extend(found)
+                ready.append((mid, archived, rehold))
+        state['ready'] = ready
+        selected = selected[:limit]
+        while len(selected) < limit and state['phase'] < len(phases):
+            if selected and deadline - time.monotonic() <= 1.0:
+                break
+            if time.monotonic() >= deadline:
+                raise _CloudSelectionIncomplete('deadline')
+            if state['position'] >= len(state['ordered']):
+                state['phase'] += 1
+                state['position'] = 0
+                continue
+            mid, _, _ = state['ordered'][state['position']]
+            archived, rehold = phases[state['phase']]
+            found = _select(None, 1, archived, rehold, scope=' AND m.message_id=?', scope_params=(mid,))
+            state['position'] += 1
+            if found:
+                state['ready'].append((mid, archived, rehold))
+                selected.extend(found)
+        if time.monotonic() >= deadline:
+            raise _CloudSelectionIncomplete('deadline')
+        return selected, None if oldest_first else 0
 
     rows, fresh_selected = [], None if oldest_first else 0
     # an admission set (canonical engine) already decides what may run
@@ -4436,7 +4647,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     separate semaphore. All DB access stays on the calling thread: cloud
     contexts are prepared as candidates are claimed, and writes land in
     the serial commit loop as each message/chunk completes. `budget_s`
-    bounds inference and cloud claim admission, not the selection SQL.
+    bounds inference and cloud claim admission; cloud-only selection also
+    cooperatively interrupts SQL and receipt checks on a separate reader.
 
     `batch_k` groups context-free single-chunk rows K-to-a-call — the
     fixed per-call cost (queue wait, spec eval, decode ramp) amortizes
@@ -4456,6 +4668,20 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 "pids": [], "updated": True}
     deadline = time.monotonic() + budget_s
     lock = functools.partial(_write_lock, wait_s=write_wait_s)
+    carry_settled = dict.fromkeys(('done', 'held_prior', 'deferred'), 0)
+    carry_count, carry_pids = 0, set()
+    if cloud_only and carry and deadline - time.monotonic() > 1:
+        # Settle or renew paid work before a bounded selection can defer.
+        # The supplied lock follows the caller's existing lock ownership.
+        wait_s = min(write_wait_s, max(0.0, deadline - time.monotonic() - 1.0))
+        carry_settled, carry_count, carry_pids = _settle_carry(
+            ledger, carry, final=False, fence=_WRITER_STATE,
+            lock_context=_write_lock(per_write_lock, wait_s=wait_s, deadline=deadline), report=False,
+            preserve_on_fence_loss=True, deadline=deadline)
+        if not _writer_current(full=True):
+            return {'done': carry_settled['done'], 'failed': 0, 'left': None,
+                    'deferred': carry_settled['deferred'], 'pids': sorted(carry_pids),
+                    'carry': carry, 'updated': True}
     # A damaged maintenance cursor must not stop unrelated fresh extraction.
     # Only continue if the GC transaction was fully unwound.
     gc_error = None
@@ -4465,13 +4691,25 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if ledger.db.in_transaction:
             raise
         gc_error = 'extract_stale_gc_failed'
-    rows, fresh_selected = _select_pending(ledger, limit * 64 if cloud_only else limit, admitted_ids,
-                                           shard, oldest_first,
-                                           archived_first=archived_first,
-                                           fair_oldest=fair_oldest, cloud_only=cloud_only,
-                                           prioritize_patients=prioritize_patients)
-    done = failed = deferred = lock_lost = held_prior = 0
-    done_pids = set()
+    try:
+        rows, fresh_selected = _select_pending(ledger, limit * 64 if cloud_only else limit, admitted_ids,
+                                               shard, oldest_first,
+                                               archived_first=archived_first,
+                                               fair_oldest=fair_oldest, cloud_only=cloud_only,
+                                               prioritize_patients=prioritize_patients,
+                                               **({'deadline': deadline} if cloud_only else {}))
+    except _CloudSelectionIncomplete as error:
+        return {"done": carry_settled['done'], "failed": 0, "left": None,
+                "deferred": carry_settled['deferred'], "held_prior": carry_settled['held_prior'],
+                "carried": carry_count, "pids": sorted(carry_pids),
+                "carry": carry if carry is not None else [], "selected": None, "fresh_selected": None,
+                "left_estimate": None, "left_estimate_age_s": None,
+                "queue_ages_s": {"oldest": None, "newest": None},
+                "cloud_selection_incomplete": True, "cloud_selection_reason": str(error),
+                **({'gc_error': gc_error} if gc_error else {})}
+    done, held_prior, deferred = (carry_settled[k] for k in ('done', 'held_prior', 'deferred'))
+    failed = lock_lost = 0
+    done_pids = set(carry_pids)
     endpoint_down = False
     breaker_fed = False
     slow_deferred = 0
@@ -4509,8 +4747,9 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     pending_writes: list = []
     shadow_tasks = []
     carry_out: list = []
-    carried = 0
+    carried = carry_count
     keep_claims: set = set()
+    cloud_tail_updated = False
     # thread contexts + any durable chunk checkpoints are loaded on the
     # calling thread — worker threads never touch the sqlite handle
     target = _resolved_llm()
@@ -4717,6 +4956,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 if r.get("_cloud_discard"):
                     r["_cloud_discard"]()
                 deferred += 1
+                if settled is not None:
+                    settled['deferred'] += 1
                 return False
         # QC-flagged/thin/human-reported rows already hold a current
         # artifact — replacing it is the point of the feedback pass.
@@ -4923,7 +5164,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             keep_lease = True
             pending_writes.append((r, d, ctx, integrity, qc, lease, tuple(chunks_out)))
         finally:
-            if not keep_lease:
+            if not keep_lease and (not cloud_only or _writer_current(full=True)):
                 _release(ledger, r, lease)
 
     # stability gates before any claim: an open circuit breaker (dead
@@ -4953,6 +5194,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 context_blocked += row_blocked
                 deferred += row_blocked
                 if not prepared:
+                    if prioritize_patients and time.monotonic() < deadline:
+                        _cloud_priority_discard(ledger, candidate['message_id'])
                     continue
                 index = len(jobs)
                 candidate = prepared[0]
@@ -4981,11 +5224,14 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 _ensure_v1(ledger, r, hints)
                 if cloud_only and len(claimed) >= limit:
                     break
+            elif cloud_only and prioritize_patients and time.monotonic() < deadline:
+                _cloud_priority_discard(ledger, r['message_id'])
     except BaseException:
         # Preparation precedes inference's finally; release its committed
         # claims too when a rule write fails or the worker is interrupted.
-        for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
-            _release(ledger, r, lease)
+        if not cloud_only or _writer_current(full=True):
+            for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
+                _release(ledger, r, lease)
         raise
 
     if cloud_only:
@@ -5127,64 +5373,99 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             (index, (r, ctx, saved, hints, qc)))
                         _handle(r, ctx, d, metas[index], lease,
                                 chunks_out, qc)
-        if pending_writes or carry:
-            with lock(per_write_lock) as held:
-                for i, (r, lease, commit) in enumerate(carry or ()):
-                    if held and _owns_current_source(ledger, r, lease):
-                        settled = dict.fromkeys(("done", "held_prior", "deferred"), 0)
-                        commit(settled=settled, shadow=shadow_tasks)
-                        # The thunk closes over its original pass's counters.
-                        done += settled["done"]
-                        held_prior += settled["held_prior"]
-                        deferred += settled["deferred"]
-                        if settled["done"]:
-                            done_pids.add(r["project_id"])
-                        _release(ledger, r, lease)
-                        carried += 1
-                    elif held or lease <= time.time() + _CARRY_MARGIN_S:
-                        if r.get("_cloud_discard") and not _owns_current_source(ledger, r, lease):
-                            r["_cloud_discard"]()
-                        # the source moved / lease lapsed, or no time
-                        # left to wait: stays pending, no attempt burned
-                        _release(ledger, r, lease)
-                        deferred += 1
-                    else:
-                        renewed = _renew(ledger, r, lease)
-                        if renewed is None:
-                            if r.get("_cloud_discard"):
+        if cloud_only and carry:
+            final_settled, final_carried, final_pids = _settle_carry(
+                ledger, carry, final=False, fence=_WRITER_STATE,
+                lock_context=_write_lock(per_write_lock, wait_s=write_wait_s, deadline=deadline),
+                report=False, preserve_on_fence_loss=True, deadline=deadline)
+            done += final_settled['done']
+            held_prior += final_settled['held_prior']
+            deferred += final_settled['deferred']
+            carried += final_carried
+            done_pids.update(final_pids)
+            carry_out.extend(carry)
+        if pending_writes or (carry and not cloud_only):
+            tail_lock = (_write_lock(per_write_lock, wait_s=write_wait_s, deadline=deadline)
+                         if cloud_only else lock(per_write_lock))
+            with tail_lock as held:
+                if cloud_only and not _writer_current(full=True):
+                    cloud_tail_updated = True
+                    for r, d, ctx, integrity, qc, lease, used_keys in pending_writes:
+                        carry_out.append((r, lease, functools.partial(
+                            _commit, r, d, ctx, integrity, qc, used_keys)))
+                else:
+                    for i, (r, lease, commit) in enumerate(carry if carry and not cloud_only else ()):
+                        if held and _owns_current_source(ledger, r, lease):
+                            settled = dict.fromkeys(("done", "held_prior", "deferred"), 0)
+                            commit(settled=settled, shadow=shadow_tasks)
+                            # The thunk closes over its original pass's counters.
+                            done += settled["done"]
+                            held_prior += settled["held_prior"]
+                            deferred += settled["deferred"]
+                            if settled["done"]:
+                                done_pids.add(r["project_id"])
+                            _release(ledger, r, lease)
+                            carried += 1
+                        elif held or lease <= time.time() + _CARRY_MARGIN_S:
+                            if r.get("_cloud_discard") and not _owns_current_source(ledger, r, lease):
                                 r["_cloud_discard"]()
-                            # body changed or lease lost: our old claim
-                            # must not keep hiding the new body
+                            # the source moved / lease lapsed, or no time
+                            # left to wait: stays pending, no attempt burned
                             _release(ledger, r, lease)
                             deferred += 1
                         else:
-                            # the caller keeps this list if we raise
-                            # below: its lease must match the DB now
-                            carry[i] = (r, renewed, commit)
-                            carry_out.append((r, renewed, commit))
-                for r, d, ctx, integrity, qc, lease, used_keys in pending_writes:
-                    # still lock-bound, or the body changed/lease lapsed
-                    # while we waited: the row stays pending for the
-                    # next run — deferred, no attempt burned
-                    if held and _owns_current_source(ledger, r, lease):
-                        _commit(r, d, ctx, integrity, qc, used_keys)
-                    elif carry is not None and not held \
-                            and lease > time.time() + _CARRY_MARGIN_S \
-                            and (renewed := _renew(ledger, r, lease)):
-                        carry_out.append((r, renewed, functools.partial(
-                            _commit, r, d, ctx, integrity, qc, used_keys)))
-                        keep_claims.add(id(r))
-                    else:
-                        if r.get("_cloud_discard") and not _owns_current_source(ledger, r, lease):
-                            r["_cloud_discard"]()
-                        deferred += 1
+                            renewed = _renew(ledger, r, lease)
+                            if renewed is None:
+                                if r.get("_cloud_discard"):
+                                    r["_cloud_discard"]()
+                                # body changed or lease lost: our old claim
+                                # must not keep hiding the new body
+                                _release(ledger, r, lease)
+                                deferred += 1
+                            else:
+                                # the caller keeps this list if we raise
+                                # below: its lease must match the DB now
+                                carry[i] = (r, renewed, commit)
+                                carry_out.append((r, renewed, commit))
+                    for r, d, ctx, integrity, qc, lease, used_keys in pending_writes:
+                        # still lock-bound, or the body changed/lease lapsed
+                        # while we waited: the row stays pending for the
+                        # next run — deferred, no attempt burned
+                        if cloud_only and time.monotonic() >= deadline and carry is not None:
+                            carry_out.append((r, lease, functools.partial(
+                                _commit, r, d, ctx, integrity, qc, used_keys)))
+                            keep_claims.add(id(r))
+                        elif held and _owns_current_source(ledger, r, lease):
+                            _commit(r, d, ctx, integrity, qc, used_keys)
+                        elif carry is not None and not held \
+                                and lease > time.time() + _CARRY_MARGIN_S \
+                                and (renewed := _renew(ledger, r, lease)):
+                            carry_out.append((r, renewed, functools.partial(
+                                _commit, r, d, ctx, integrity, qc, used_keys)))
+                            keep_claims.add(id(r))
+                        else:
+                            if r.get("_cloud_discard") and not _owns_current_source(ledger, r, lease):
+                                r["_cloud_discard"]()
+                            deferred += 1
+        if cloud_only and not _writer_current(full=True):
+            cloud_tail_updated = True
     finally:
-        try:
-            _flush_checkpoints()
-        finally:
-            for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
-                if id(r) not in keep_claims:
-                    _release(ledger, r, lease)
+        if cloud_only and not _writer_current(full=True):
+            cloud_tail_updated = True
+        if not cloud_tail_updated:
+            try:
+                _flush_checkpoints()
+            finally:
+                if cloud_only and not _writer_current(full=True):
+                    cloud_tail_updated = True
+                if not cloud_tail_updated:
+                    for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
+                        if id(r) not in keep_claims:
+                            _release(ledger, r, lease)
+    if cloud_tail_updated:
+        return {'done': done, 'failed': failed, 'held_prior': held_prior, 'left': None,
+                'carried': carried, 'carry': carry_out, 'deferred': deferred,
+                'pids': sorted(done_pids), 'updated': True}
     for r, local_result, ctx, unit in shadow_tasks:
         if deadline - time.monotonic() < _MIN_CALL_S:
             continue       # its pending row (written with the commit) stays uncompared
@@ -5426,7 +5707,8 @@ def _context_memory_available() -> bool:
 
 
 def _settle_carry(ledger, carry: list, *, final: bool = True,
-                  write: bool = True, fence=None) -> None:
+                  write: bool = True, fence=None, lock_context=None, report=True,
+                  preserve_on_fence_loss=False, deadline=None):
     """Lock attempt for results carried across run_pending calls.
     ``final`` (resident exit) releases whatever is still lock-bound or
     no longer owned — it stays pending and re-extracts later, no attempt
@@ -5436,39 +5718,64 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
     code never writes after the update fence; ``fence`` (the resident's
     initial updater state) is re-read under the lock for the same
     reason — an updater may finish while we wait for the lock."""
+    settled = dict.fromkeys(("done", "held_prior", "deferred"), 0)
+    count, pids = 0, set()
     if not carry:
-        return
+        return settled, count, pids
     keep = []
     shadow = []
-    settled = dict.fromkeys(("done", "held_prior", "deferred"), 0)
-    with _write_lock(True, wait_s=60 if final else _RESIDENT_WRITE_WAIT_S) as held:
+    context = lock_context if lock_context is not None else _write_lock(
+        True, wait_s=60 if final else _RESIDENT_WRITE_WAIT_S)
+    with context as held:
+        if preserve_on_fence_loss and (not _writer_current(full=True) or
+                (fence is not None and writer_lock.updater_state() != fence)):
+            return settled, count, pids
         if held and fence is not None:
             write = write and writer_lock.updater_state() == fence
-        for i, (r, lease, commit) in enumerate(carry):
-            if held and write and _owns_current_source(ledger, r, lease):
-                commit(settled=settled, shadow=shadow)
-                _release(ledger, r, lease)
-            elif final or held or lease <= time.time() + _CARRY_MARGIN_S:
-                if r.get("_cloud_discard") and (not write or not _owns_current_source(ledger, r, lease)):
-                    r["_cloud_discard"]()
-                _release(ledger, r, lease)
-            else:
-                renewed = _renew(ledger, r, lease)
-                if renewed is None:
-                    if r.get("_cloud_discard"):
+        next_index = 0
+        try:
+            for i, (r, lease, commit) in enumerate(carry):
+                if deadline is not None and time.monotonic() >= deadline:
+                    keep.extend(carry[i:])
+                    break
+                if held and write and _owns_current_source(ledger, r, lease):
+                    before = settled['done']
+                    commit(settled=settled, shadow=shadow)
+                    next_index = i + 1
+                    _release(ledger, r, lease)
+                    count += 1
+                    if settled['done'] > before:
+                        pids.add(r['project_id'])
+                elif final or held or lease <= time.time() + _CARRY_MARGIN_S:
+                    if r.get("_cloud_discard") and (not write or not _owns_current_source(ledger, r, lease)):
                         r["_cloud_discard"]()
                     _release(ledger, r, lease)
+                    if not report:
+                        settled['deferred'] += 1
                 else:
-                    # written back at once: a transient sqlite error on a
-                    # later item leaves this list to the resident's retry,
-                    # whose owner fence must match the renewed DB lease
-                    carry[i] = (r, renewed, commit)
-                    keep.append((r, renewed, commit))
+                    renewed = _renew(ledger, r, lease)
+                    if renewed is None:
+                        if r.get("_cloud_discard"):
+                            r["_cloud_discard"]()
+                        _release(ledger, r, lease)
+                        if not report:
+                            settled['deferred'] += 1
+                    else:
+                        # written back at once: a transient sqlite error on a
+                        # later item leaves this list to the resident's retry,
+                        # whose owner fence must match the renewed DB lease
+                        carry[i] = (r, renewed, commit)
+                        keep.append((r, renewed, commit))
+                next_index = i + 1
+        except BaseException:
+            carry[:] = keep + carry[next_index:]
+            raise
         # no comparison budget outside run_pending: these units keep the pending
         # row their commit wrote
     carry[:] = keep
-    if any(settled.values()):
+    if report and any(settled.values()):
         print(json.dumps({"carry_settled": settled, "ts": time.time()}), flush=True)
+    return settled, count, pids
 
 
 _CLOUD_OPERATING_LIMITS = ("daily_request_budget", "daily_cost_limit_usd", "monthly_cost_limit_usd",

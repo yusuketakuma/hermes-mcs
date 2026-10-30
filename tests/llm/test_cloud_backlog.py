@@ -1,9 +1,11 @@
 """Synthetic cross-process capacity and owned cloud-worker lifecycle checks."""
 import os
 import json
+import sqlite3
 from pathlib import Path
 import subprocess
 import sys
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -153,17 +155,22 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('budget', [True, False, None, 'synthetic'])
 @pytest.mark.parametrize('semantic_busy', [False, True])
-@pytest.mark.parametrize('counters,expected,done', [
+@pytest.mark.parametrize('counters,expected,done,selection_reason', [
     ({'selected': 64, 'deferred': 3, 'context_blocked': 1, 'skipped': 0,
       'lock_lost': 2, 'slow_deferred': 4},
      {'selected': 64, 'deferred': 3, 'context_blocked': 1, 'skipped': 0,
-      'lock_lost': 2, 'slow_deferred': 4}, 1),
-    ({}, {}, 0),
+      'lock_lost': 2, 'slow_deferred': 4}, 1, None),
+    ({}, {}, 0, None),
     ({'selected': True, 'deferred': -1, 'context_blocked': 'synthetic-private-extra',
-      'skipped': 1.5, 'lock_lost': None, 'slow_deferred': {'private': 'synthetic-private-extra'}}, {}, 0),
+      'skipped': 1.5, 'lock_lost': None, 'slow_deferred': {'private': 'synthetic-private-extra'},
+      'cloud_selection_incomplete': 'synthetic-private-extra', 'cloud_selection_reason': 'deadline'}, {}, 0, None),
+    ({'selected': None, 'cloud_selection_incomplete': True, 'cloud_selection_reason': 'deadline'},
+     {}, 0, 'cloud_selection_deadline'),
+    ({'selected': None, 'cloud_selection_incomplete': True, 'cloud_selection_reason': 'synthetic-private-extra'},
+     {}, 0, 'cloud_selection_incomplete'),
 ])
 def test_worker_alternates_cloud_only_units_without_local_calls(
-        tmp_path, monkeypatch, capsys, budget, counters, expected, done, semantic_busy):
+        tmp_path, monkeypatch, capsys, budget, counters, expected, done, semantic_busy, selection_reason):
     import extract_llm
     import ledger
     import mcs_util
@@ -210,9 +217,12 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
     assert seen == ["extract", "extract" if semantic_busy else "semantic"]
     passes = [json.loads(line) for line in capsys.readouterr().out.splitlines()
               if json.loads(line).get('event') == 'cloud_backlog_pass']
-    assert 'reason' not in passes[0]
-    assert passes[1].get('reason') == ('jev_backlog_budget_reserved' if budget is True and not semantic_busy else None)
-    assert passes[1].get('jev_effect') == ('skipped_if_eligible' if budget is True and not semantic_busy else None)
+    assert passes[0].get('reason') == selection_reason
+    budget_held = selection_reason is None and budget is True and not semantic_busy
+    assert passes[1].get('reason') == (selection_reason or ('jev_backlog_budget_reserved' if budget_held else None))
+    assert passes[1].get('jev_effect') == ('skipped_if_eligible' if budget_held else None)
+    assert [item.get('cloud_selection_incomplete') for item in passes] == (
+        [True, True] if selection_reason is not None else [None, None])
     keys = {'selected', 'deferred', 'context_blocked', 'skipped', 'lock_lost', 'slow_deferred'}
     assert [item['done'] for item in passes] == [done, done]
     assert [{key: item[key] for key in keys if key in item} for item in passes] == [expected, expected]
@@ -247,3 +257,210 @@ def test_low_memory_worker_exits_and_closes_its_ledger(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: pytest.fail("low-memory work started"))
     backlog.worker(991)
     assert closed == [True]
+
+
+@pytest.fixture
+def carry_worker(tmp_path, monkeypatch):
+    """Run a worker with synthetic state and no network or real ledger."""
+    import extract_llm
+    import ledger
+    import mcs_util
+    import semantic_drain
+    import writer_lock
+
+    state = SimpleNamespace(alive=True, generation=(False, 1), memory=True,
+                            block=None, events=[], closed=False, carry=None)
+    monkeypatch.setattr(backlog, "_parent", None)
+    monkeypatch.setattr(backlog.os, "getppid", lambda: 991 if state.alive else 1)
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: state.generation)
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda: os.open(
+        tmp_path / "lock", os.O_CREAT | os.O_RDWR, 0o600))
+    fake_ledger = SimpleNamespace(close=lambda: setattr(state, "closed", True))
+    monkeypatch.setattr(ledger, "Ledger", lambda *a: fake_ledger)
+    monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: state.memory)
+    monkeypatch.setattr(extract_llm, "_writer_current", lambda **kw: True)
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1]}}
+    monkeypatch.setattr(mcs_util, "load_config", lambda: (
+        {"cloud_llm": {"mode": "off"}} if state.block == "mode" else cfg))
+    monkeypatch.setattr(extract_llm.cloud_policy, "global_block_reason",
+                        lambda *a, **kw: state.block if state.block == "stop" else None)
+    monkeypatch.setattr(extract_llm.cloud_policy, "budget_block_reason",
+                        lambda *a: state.block if state.block == "budget" else None)
+    monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
+    monkeypatch.setattr(extract_llm, "_write_lock", lambda *a, **kw: nullcontext(True))
+    monkeypatch.setattr(semantic_drain, "runtime_config",
+                        lambda *a: ({"job_budget_seconds": 1200}, []))
+    monkeypatch.setattr(semantic_drain, "run_due",
+                        lambda *a, **kw: state.events.append("semantic") or {"done": 1})
+    monkeypatch.setattr(backlog.time, "sleep", lambda _: None)
+    return state, fake_ledger
+
+
+@pytest.mark.parametrize("block", ["stop", "budget", "mode"])
+def test_worker_settles_paid_carry_before_no_new_send_gate(carry_worker, monkeypatch, block):
+    import extract_llm
+    state, fake_ledger = carry_worker
+    item = object()
+
+    def extract(ledger, **kw):
+        state.events.append("extract")
+        state.block = block
+        state.received = (ledger, list(kw["carry"]))
+        return {"done": 1, "carry": [item]}
+
+    def settle(ledger, carry, **kw):
+        state.events.append("settle")
+        assert ledger is fake_ledger and carry == [item]
+        assert kw["final"] is False and kw["fence"] == (False, 1)
+        assert kw["preserve_on_fence_loss"] is True and kw["deadline"] > 0
+        carry.clear()
+        return {"done": 1, "held_prior": 0, "deferred": 0}, 1, set()
+
+    def sleep(_):
+        if state.block:
+            state.events.append("blocked")
+            state.alive = False
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(backlog.time, "sleep", sleep)
+    backlog.worker(991)
+    assert state.events == ["extract", "settle", "blocked"]
+    assert state.received == (fake_ledger, [])
+    assert state.closed
+
+
+def test_worker_keeps_paid_carry_when_extract_return_omits_carry(carry_worker, monkeypatch):
+    import extract_llm
+    state, fake_ledger = carry_worker
+    item = object()
+    seen = []
+
+    def extract(ledger, **kw):
+        state.block = "stop"
+        seen.append(kw["carry"])
+        state.carry = kw["carry"]
+        state.carry.append(item)
+        return {"done": 1}
+
+    def settle(ledger, carry, **kw):
+        assert ledger is fake_ledger and carry is state.carry and carry == [item]
+        state.events.append("settle")
+        carry.clear()
+        return {"done": 0, "held_prior": 0, "deferred": 0}, 0, set()
+
+    def sleep(_):
+        if state.block:
+            state.alive = False
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(backlog.time, "sleep", sleep)
+    backlog.worker(991)
+    assert len(seen) == 1 and seen[0] is state.carry
+    assert state.events == ["settle"]
+    assert state.carry == [] and state.closed
+
+
+def test_worker_does_not_settle_old_carry_after_update_fence(carry_worker, monkeypatch):
+    import extract_llm
+    state, _ = carry_worker
+    item = object()
+
+    def extract(ledger, **kw):
+        state.generation = (False, 2)
+        state.carry = kw["carry"]
+        state.carry.append(item)
+        return {"done": 0, "updated": True}
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm, "_settle_carry", lambda *a, **kw: state.events.append("settle"))
+    backlog.worker(991)
+    assert state.events == [] and state.carry == [item] and state.closed
+
+
+def test_worker_attempts_paid_carry_before_low_memory_exit(carry_worker, monkeypatch):
+    import extract_llm
+    state, fake_ledger = carry_worker
+    item = object()
+
+    def extract(ledger, **kw):
+        state.memory = False
+        state.carry = [item]
+        return {"done": 1, "carry": state.carry}
+
+    def settle(ledger, carry, **kw):
+        assert ledger is fake_ledger and carry == [item]
+        assert kw["final"] is False and kw["fence"] == (False, 1)
+        assert kw["preserve_on_fence_loss"] is True and kw["deadline"] > 0
+        state.events.append("settle")
+        carry.clear()
+        return {"done": 1, "held_prior": 0, "deferred": 0}, 1, set()
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    backlog.worker(991)
+    assert state.events == ["settle"] and state.carry == [] and state.closed
+
+
+def test_worker_retries_retained_paid_carry_before_starting_more_work(carry_worker, monkeypatch):
+    import extract_llm
+    state, _ = carry_worker
+    item = object()
+
+    def extract(ledger, **kw):
+        state.events.append("extract")
+        state.carry = [item]
+        state.block = "stop"
+        return {"done": 1, "carry": state.carry}
+
+    def settle(ledger, carry, **kw):
+        assert carry is state.carry and carry == [item]
+        state.events.append("settle")
+        if state.events.count("settle") == 3:
+            carry.clear()
+        return {"done": 0, "held_prior": 0, "deferred": 0}, 0, set()
+
+    def sleep(seconds):
+        if seconds == 10:
+            state.alive = False
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(backlog.time, "sleep", sleep)
+    backlog.worker(991)
+    assert state.events == ["extract", "settle", "settle", "settle"]
+    assert state.carry == [] and state.closed
+
+
+def test_worker_retries_same_paid_carry_after_temporary_sqlite_lock(carry_worker, monkeypatch):
+    import extract_llm
+    state, fake_ledger = carry_worker
+    item = object()
+
+    def extract(ledger, **kw):
+        state.events.append("extract")
+        state.carry = [item]
+        state.block = "stop"
+        return {"done": 1, "carry": state.carry}
+
+    def settle(ledger, carry, **kw):
+        assert ledger is fake_ledger and carry is state.carry and carry == [item]
+        assert kw["final"] is False and kw["fence"] == (False, 1)
+        assert kw["preserve_on_fence_loss"] is True and kw["deadline"] > 0
+        state.events.append("settle")
+        if state.events.count("settle") == 1:
+            raise sqlite3.OperationalError("database is locked")
+        carry.clear()
+        return {"done": 1, "held_prior": 0, "deferred": 0}, 1, set()
+
+    def sleep(_):
+        if state.carry == []:
+            state.alive = False
+
+    monkeypatch.setattr(extract_llm, "run_pending", extract)
+    monkeypatch.setattr(extract_llm, "_settle_carry", settle)
+    monkeypatch.setattr(backlog.time, "sleep", sleep)
+    backlog.worker(991)
+    assert state.events == ["extract", "settle", "settle"]
+    assert state.carry == [] and state.closed

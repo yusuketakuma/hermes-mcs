@@ -182,57 +182,104 @@ def worker(parent):
     finally:
         os.close(startup_lock)
     with closing(ledger):
-        while os.getppid() == parent and writer_lock.updater_state() == initial and not initial[0]:
-            if not extract_llm._context_memory_available():
-                return
-            cfg = load_config()
-            settings = extract_llm._cloud_settings(cfg)
-            if (settings["mode"] != "on"
-                    or extract_llm.cloud_policy.global_block_reason(ledger, model=settings["model"])
-                    or extract_llm.cloud_policy.budget_block_reason(ledger, settings)):
-                time.sleep(10)
-                continue
-            started = time.monotonic()
-            try:
-                if phase % 2 == 0:
-                    result = extract_llm.run_pending(ledger, limit=1, budget_s=900,
-                        per_write_lock=True, workers=1, background=True,
-                        cloud_only=True, prioritize_patients=True,
-                        admitted_ids=extract_llm.legacy_admissions(ledger, cfg))
-                else:
-                    lock = writer_lock.acquire_run_lock()
-                    if lock is None:
-                        phase += 1
-                        time.sleep(1)
-                        continue
+        carry = []
+        allow_exit_settle = True
+
+        def settle_carry():
+            deadline = time.monotonic() + 3.0
+            extract_llm._settle_carry(
+                ledger, carry, final=False, fence=initial,
+                lock_context=extract_llm._write_lock(True, wait_s=1, deadline=deadline),
+                preserve_on_fence_loss=True, deadline=deadline)
+
+        try:
+            while os.getppid() == parent and writer_lock.updater_state() == initial and not initial[0]:
+                if carry:
                     try:
-                        scfg = semantic_drain.runtime_config(cfg)[0]
-                        result = semantic_drain.run_due(ledger, cfg, {"errors": []},
-                            time.monotonic() + scfg["job_budget_seconds"] + 30,
-                            max_jobs=1, cfg_path=CONF_PATH, run_lock_fd=lock,
-                            lane="backlog", cloud_only=True)
-                    finally:
-                        os.close(lock)
-                record = {"event": "cloud_backlog_pass", "pid": os.getpid(),
-                    "phase": "extract" if phase % 2 == 0 else "semantic", "done": result.get("done", 0),
-                    "elapsed_s": round(time.monotonic() - started, 3), "ts": time.time()}
-                record.update({key: result[key] for key in
-                    ("selected", "deferred", "context_blocked", "skipped", "lock_lost", "slow_deferred")
-                    if type(result.get(key)) is int and result[key] >= 0})
-                if phase % 2 and result.get("budget_exhausted") is True:
-                    record["reason"] = "jev_backlog_budget_reserved"
-                    record["jev_effect"] = "skipped_if_eligible"
-                print(json.dumps(record), flush=True)
-                if not result.get("done"):
+                        settle_carry()
+                    except writer_lock.RunLockLost:
+                        return
+                    except Exception as error:
+                        print(json.dumps({"event": "cloud_carry_settle_error",
+                                          "class": type(error).__name__}), flush=True)
+                        time.sleep(2)
+                        continue
+                    if writer_lock.updater_state() != initial or not extract_llm._writer_current(full=True):
+                        return
+                    if carry:
+                        if not extract_llm._context_memory_available():
+                            return
+                        time.sleep(2)
+                        continue
+                if not extract_llm._context_memory_available():
+                    return
+                cfg = load_config()
+                settings = extract_llm._cloud_settings(cfg)
+                if (settings["mode"] != "on"
+                        or extract_llm.cloud_policy.global_block_reason(ledger, model=settings["model"])
+                        or extract_llm.cloud_policy.budget_block_reason(ledger, settings)):
+                    time.sleep(10)
+                    continue
+                started = time.monotonic()
+                try:
+                    if phase % 2 == 0:
+                        result = extract_llm.run_pending(ledger, limit=1, budget_s=900,
+                            per_write_lock=True, workers=1, background=True,
+                            cloud_only=True, prioritize_patients=True,
+                            admitted_ids=extract_llm.legacy_admissions(ledger, cfg), carry=carry)
+                        carry = result.get("carry", carry)
+                        if result.get("updated"):
+                            allow_exit_settle = False
+                            return
+                    else:
+                        lock = writer_lock.acquire_run_lock()
+                        if lock is None:
+                            phase += 1
+                            time.sleep(1)
+                            continue
+                        try:
+                            scfg = semantic_drain.runtime_config(cfg)[0]
+                            result = semantic_drain.run_due(ledger, cfg, {"errors": []},
+                                time.monotonic() + scfg["job_budget_seconds"] + 30,
+                                max_jobs=1, cfg_path=CONF_PATH, run_lock_fd=lock,
+                                lane="backlog", cloud_only=True)
+                        finally:
+                            os.close(lock)
+                    record = {"event": "cloud_backlog_pass", "pid": os.getpid(),
+                        "phase": "extract" if phase % 2 == 0 else "semantic", "done": result.get("done", 0),
+                        "elapsed_s": round(time.monotonic() - started, 3), "ts": time.time()}
+                    record.update({key: result[key] for key in
+                        ("selected", "deferred", "context_blocked", "skipped", "lock_lost", "slow_deferred")
+                        if type(result.get(key)) is int and result[key] >= 0})
+                    if result.get("cloud_selection_incomplete") is True:
+                        record["cloud_selection_incomplete"] = True
+                        reason = result.get("cloud_selection_reason")
+                        record["reason"] = ("cloud_selection_" + reason if reason in (
+                            "deadline", "active_transaction", "reader_unavailable", "reader_changed", "reader_close_failed")
+                            else "cloud_selection_incomplete")
+                    elif phase % 2 and result.get("budget_exhausted") is True:
+                        record["reason"] = "jev_backlog_budget_reserved"
+                        record["jev_effect"] = "skipped_if_eligible"
+                    print(json.dumps(record), flush=True)
+                    if not result.get("done"):
+                        time.sleep(2)
+                except writer_lock.RunLockLost:
+                    return
+                except semantic_runtime.RuntimeGuardError:
                     time.sleep(2)
-            except writer_lock.RunLockLost:
-                return
-            except semantic_runtime.RuntimeGuardError:
-                time.sleep(2)
-            except Exception as error:
-                print(json.dumps({"event": "cloud_backlog_error", "class": type(error).__name__}), flush=True)
-                time.sleep(10)
-            phase += 1
+                except Exception as error:
+                    print(json.dumps({"event": "cloud_backlog_error", "class": type(error).__name__}), flush=True)
+                    time.sleep(10)
+                phase += 1
+        finally:
+            if (carry and allow_exit_settle and owner_alive()
+                    and writer_lock.updater_state() == initial
+                    and extract_llm._writer_current(full=True)):
+                try:
+                    settle_carry()
+                except Exception as error:
+                    print(json.dumps({"event": "cloud_carry_settle_error",
+                                      "class": type(error).__name__}), flush=True)
 
 
 def main():
