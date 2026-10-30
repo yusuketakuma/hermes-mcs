@@ -43,6 +43,8 @@ STATE = ("👤 担当: 田中 · ✅ 確認: 田中",
          "📝 タスク 1件")
 RULE = "─" * 12
 BODY = "次回訪問時に残薬を確認してください。服薬カレンダーの写真を共有します。"
+PROCESSING_LABELS = {"processing": "解析中", "preparing": "結果を準備中", "complete": "解析完了",
+                     "attention": "解析未完了・要確認", "unknown": "状況不明"}
 
 
 class Screen:
@@ -51,6 +53,8 @@ class Screen:
         # Screen 2 illustrates only the Anthropic key being registered.
         self.providers = (("anthropic", "jev", "local") if number == 2
                           else ("anthropic", "openai", "jev", "local"))
+        self.processing = {1: ("complete", "preparing"), 2: ("processing", "unknown"),
+                           3: ("attention", "unknown")}.get(number, ("unknown", "unknown"))
         self.parts = [
             f'<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="{height}" '
             f'viewBox="0 0 1100 {height}" font-family="{FONT}">',
@@ -143,17 +147,21 @@ class Screen:
         "↳ 返信 N件を保存済み", a reply card (post>0) sits in the thread."""
         y = self.paragraph(x, y, HEADING if post == 0 else "↳ " + HEADING, width, 21, INK, True)
         y = self.paragraph(x, y - 4, META.format(n=2 if full else 1), width, 17, MUTED)
-        y = self.provider_row(x, y - 5, post)
+        y = self.provider_row(x, y - 5, post, width)
         if full:
             y = self.paragraph(x, y - 4, "🆕 返信+1", width, 17, GREEN)
         if replies:
             y = self.paragraph(x, y - 4, f"↳ 返信 {replies}件を保存済み", width, 17, GREEN)
         shown = POSTS[:2] if full else POSTS[post:post + 1]
+        status = self.processing[post]
         for (sender, bullets), stamps in zip(shown, STAMPS[0 if full else post:]):
             y = self.rule(x, y, width)
             y = self.paragraph(x, y, sender, width, 15, MUTED)
-            for bullet in bullets:
-                y = self.paragraph(x, y - 2, "・" + bullet, width, 18)
+            summary = (bullets if status == "complete" else
+                       ("要約 要確認",) if status == "attention" else ("要約 処理待ち",))
+            for bullet in summary:
+                text = bullet if bullet.startswith("要約 ") else "・" + bullet
+                y = self.paragraph(x, y - 2, text, width, 18)
             y = self.fold(x, y, width, 16)
         y = self.rule(x, y, width)
         for line in STATE if full else ("📝 タスク 1件",):
@@ -172,20 +180,29 @@ class Screen:
         self.rect(x - 8, y - size - 2, width + 16, size + 22, "#f3f6f4", 8, "#dce2dd")
         return self.paragraph(x, y + 4, f"▸ 原文（{len(BODY)}字）", width, size, MUTED) + 8
 
-    def provider_row(self, x, y, post):
-        """Illustrate execution for the synthetic post shown in the card metadata."""
-        marks = dict(zip(("anthropic", "openai", "jev", "local"),
-                         (("✓", "?", "↷", "?"), ("?", "?", "✓", "✓"))[post]))
-        for index, provider in enumerate(self.providers):
+    def provider_row(self, x, y, post, width):
+        """Illustrate one fictional adopted order and explicit unknown groups."""
+        status = self.processing[post]
+        sequence = ["jev", "local"] if status == "complete" else []
+        marks = {provider: "✓" if provider in sequence else "?" for provider in self.providers}
+        order = "Jev → 💻" if sequence else "不明"
+        y = self.paragraph(x, y, PROCESSING_LABELS[status] + " · 採用結果の処理順: " + order,
+                           width, 15, MUTED)
+        ordered = sequence + [provider for provider in self.providers if provider not in sequence]
+        for index, provider in enumerate(ordered):
+            if sequence and index == len(sequence):
+                y = self.paragraph(x, y + 39, "その他（順序不明）", width, 15, MUTED)
+            column = index - len(sequence) if sequence and index >= len(sequence) else index
             mark = marks[provider]
-            left = x + index * 66
+            label = "実行済み" if mark == "✓" else "不明"
+            left = x + column * 66
             if provider == "local":
                 self.text(left, y + 18, "💻", 20)
             else:
                 data = base64.b64encode((ROOT / "resources/provider-icons" / f"{provider}.png").read_bytes()).decode("ascii")
                 self.parts.append(f'<image x="{left}" y="{y}" width="22" height="22" '
-                                  f'href="data:image/png;base64,{data}"><title>{provider} {mark}</title></image>')
-            self.text(left + 28, y + 18, mark, 18, MUTED)
+                                  f'href="data:image/png;base64,{data}"><title>{provider} {label}</title></image>')
+            self.text(left + 28, y + 18, f"{mark} {label}" if provider == "local" else mark, 18, MUTED)
         return y + 44
 
     def finish(self):
@@ -193,8 +210,8 @@ class Screen:
 
 
 def overview():
-    s = Screen(1, "元の投稿と返信を、1件ずつのカードで。", "元の投稿はチャンネルに、返信は1件ずつのカードとしてスレッドに。添付もスレッドへ。", 1200)
-    s.line(662, 194, 662, 1119)
+    s = Screen(1, "元の投稿と返信を、1件ずつのカードで。", "元の投稿はチャンネルに、返信は1件ずつのカードとしてスレッドに。添付もスレッドへ。", 1350)
+    s.line(662, 194, 662, 1269)
     x, y = s.app(188, 227)
     s.actions(x, s.card(x, y, 397, replies=1))
     s.text(689, 227, "スレッド", 23, INK, True)
