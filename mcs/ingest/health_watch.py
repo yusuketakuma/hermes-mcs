@@ -179,6 +179,11 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
                 and finite_number(overshoot)
                 and overshoot > 0):
             report["status"] = "degraded"
+    notify = h.get("notify") if isinstance(h.get("notify"), dict) else {}
+    parts = notify.get('incomplete_parts')
+    parts_unknown = isinstance(parts, dict) and parts.get('status') == 'unknown'
+    if parts_unknown and report['status'] == 'ok':
+        report['status'] = 'degraded'
     # explain non-ok from the producer's own codes/counters (never text):
     # absent or malformed fields stay unknown (None), never "no reason"
     reasons = h.get("state_reasons")
@@ -193,6 +198,10 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         reasons = list(reasons or [])
         if "unread_collection_unknown" not in reasons:
             reasons.append("unread_collection_unknown")
+    if parts_unknown and report['status'] in ('degraded', 'failed'):
+        reasons = list(reasons or [])
+        if 'notification_parts_incomplete' not in reasons:
+            reasons.append('notification_parts_incomplete')
     if report["status"] == "stale":
         # the stale file's codes describe its own run, not the current
         # staleness: keep them labelled as recorded, the cause unknown
@@ -213,14 +222,12 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     last_ok = h.get("last_ok_at")
     report["last_ok_at"] = (last_ok if finite_number(last_ok)
                             and last_ok >= 0 else None)
-    notify = h.get("notify") if isinstance(h.get("notify"), dict) else {}
     pending = notify.get("pending")
     report["notify_pending"] = (pending if finite_number(pending)
                                 and pending >= 0 else None)
-    parts = notify.get('incomplete_parts')
     states = parts.get('by_state') if isinstance(parts, dict) else None
     report['notify_incomplete_parts'] = (
-        parts['total'] if isinstance(states, dict)
+        parts['total'] if not parts_unknown and isinstance(states, dict)
         and set(states) == {'pending', 'unknown', 'not_sent', 'held'}
         and _count(parts.get('total')) and all(_count(n) for n in states.values())
         and sum(states.values()) == parts['total'] else None)
@@ -362,6 +369,10 @@ def _errors_transient(obs: dict) -> bool:
             and all(CATEGORIES[k][2] for k, n in counts.items() if n))
 
 
+def _alert_reasons(obs: dict) -> list:
+    return [r for r in obs.get("state_reasons") or [] if r.split(":")[0] != "code_changed"]
+
+
 def _streak(state: dict, obs: dict) -> tuple[dict | None, bool]:
     """(streak block to persist, whether it can be trusted for holding an alert back)."""
     prior = state.get("streak")
@@ -373,7 +384,7 @@ def _streak(state: dict, obs: dict) -> tuple[dict | None, bool]:
     at = obs.get("health_at")
     if obs["status"] not in OVERALL_STATUS or not finite_number(at):
         return (prior if valid else None), valid      # not a fresh observation: nothing to count
-    reasons = {r.split(":")[0] for r in obs.get("state_reasons") or []} & TRANSIENT_REASONS
+    reasons = {r.split(":")[0] for r in _alert_reasons(obs)} & TRANSIENT_REASONS
     if valid and prior and at == prior["health_at"]:
         return prior, True                            # the same observation read again
     newer = bool(valid and prior and at > prior["health_at"])
@@ -441,7 +452,7 @@ def evaluate(home: str = HOME, now: float | None = None,
     # alerted in this episode is news (e.g. degraded by notifications,
     # then also by collection) — a reason that drops and returns stays
     # silent until the episode ends, so flapping codes cannot spam
-    reasons = obs.get("state_reasons") or []
+    reasons = _alert_reasons(obs)
     seen = state.get("alerted_reasons")
     if transition:
         seen = set()

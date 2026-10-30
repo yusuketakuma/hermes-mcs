@@ -573,6 +573,20 @@ def part_holds_health(db, now) -> dict:
     return {**report, "status": "recorded", "observed_at": now}
 
 
+def incomplete_parts_health(db, now, cfg=None) -> dict:
+    """Observe unfinished notification counts within the existing reader budget."""
+    import notify_scope
+    try:
+        report = bounded_health_read(
+            db, lambda _check: notify_scope.incomplete_parts_health(db, now, cfg))
+    except Exception as exc:
+        return {"total": None, "cards": None,
+                "by_state": dict.fromkeys(("pending", "unknown", "not_sent", "held")),
+                "oldest_age_s": None, "observed_at": now,
+                "status": "unknown", "reason": _observation_failure(exc)}
+    return {**report, "status": "recorded"}
+
+
 def build_health(db, result: dict, status: str,
             run_id: int | None = None, *, cfg: dict | None = None) -> dict:
     """Per-subsystem machine-readable state: collection completeness,
@@ -682,8 +696,9 @@ def build_health(db, result: dict, status: str,
         coll['collection'] = 'incomplete'
     free_mb = attachment_free_mb()
     cards_health = notify_scope.health_cards(db, cfg)
-    incomplete_parts = notify_scope.incomplete_parts_health(db, now, cfg)
-    if incomplete_parts['total']:
+    incomplete_parts = incomplete_parts_health(db, now, cfg)
+    parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(incomplete_parts['total'])
+    if parts_incomplete:
         notify_state = "incomplete"
     # Itemized attention separates synthetic job and delivery populations;
     # an aggregate status alone cannot identify which saved work needs review.
@@ -801,7 +816,7 @@ def build_health(db, result: dict, status: str,
             ("notification_parked", bool(notify_res.get("parked"))),
             ("notification_held", bool(held)),
             ("notification_pending", bool(outbox["pending"])),
-            ("notification_parts_incomplete", bool(incomplete_parts["total"])),
+            ("notification_parts_incomplete", parts_incomplete),
             ("disk_low", disk_low),
             ("backup_deferred_deadline", backup_deferred),
         ) if present] + stalls

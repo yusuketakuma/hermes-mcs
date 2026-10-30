@@ -88,10 +88,17 @@ def test_optional_failure_keeps_original_counts_verdict_and_connection(stored, m
         def fail(*args, **kwargs):
             raise ValueError("synthetic-private-error")
         monkeypatch.setattr(notify_scope, "pending_breakdown", fail)
-    elif failure == "deadline":
-        monkeypatch.setattr(health_report, 'HEALTH_OBSERVATION_S', 0)
-    elif failure == "items":
-        monkeypatch.setattr(health_report, 'HEALTH_OBSERVATION_ITEMS', 2)
+    elif failure in ("deadline", "items"):
+        pending_read = health_report.pending_health
+        setting, limit = (("HEALTH_OBSERVATION_S", 0) if failure == "deadline"
+                          else ("HEALTH_OBSERVATION_ITEMS", 2))
+
+        def limited_pending(*args, **kwargs):
+            with monkeypatch.context() as patch:
+                patch.setattr(health_report, setting, limit)
+                return pending_read(*args, **kwargs)
+
+        monkeypatch.setattr(health_report, "pending_health", limited_pending)
     else:
         db.db.execute("UPDATE notify_outbox SET progress=?",
                       ('{"large":"' + "x" * (2 * 1024 * 1024) + '"}',))
