@@ -151,7 +151,7 @@ def test_probe_run_counts_one_ladder_with_two_requests(monkeypatch):
         return replies.pop(0)
 
     monkeypatch.setattr(extract_llm.local_llm, "chat", chat)
-    assert extract_llm._llm_call("合成本文") == {"summary": "合成の部分結果"}
+    assert extract_llm._llm_call("合成本文") == {"symptoms": [], "summary": "合成の部分結果"}
     assert [call["type"] for call in calls] == ["json_schema", "json_object", "json_object"]
     summary = extract_llm._integrity_summary(extract_llm._note_list())
     assert summary["probe_runs"] == 1 and "probe_calls" not in summary
