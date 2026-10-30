@@ -154,7 +154,7 @@ def test_incomplete_wrong_head_refuses_before_clean(updater, monkeypatch):
     assert updater.recover_interrupted() == 1
     assert trace == ["runtime_gate", "cleanup", "adopt_marker", "marker", "head",
                      "marker", ("report", "escalate")]
-    assert reports[0][2]["writers_stopped"] is True
+    assert "writers_stopped" not in reports[0][2]
 
 
 @pytest.mark.parametrize("clean,detail", [(True, "unclassifiable repo state"),
@@ -172,12 +172,38 @@ def test_unknown_head_keeps_required_clean_observation(updater, monkeypatch, cle
 
 def test_previous_route_rereads_marker_and_escalation_rereads_again(updater, monkeypatch):
     trace, reports = _trace_world(updater, monkeypatch,
-        applying={"sha": "t", "prev_sha": "p", "rollback": True, "backup_path": "synthetic.db"},
+        applying={"sha": "t", "prev_sha": "p", "rollback": True, "backup_path": "synthetic.db",
+                  "schema_bump": False},
         markers=(None, {"phase": "awaiting_consent"}, {"phase": "awaiting_consent"}))
     assert updater.recover_interrupted() == 1
     assert trace == ["runtime_gate", "cleanup", "adopt_marker", "marker", "head", "clean",
                      "marker", "marker", ("report", "restore_consent_blocked")]
     assert "hold lost" in reports[0][1]
+
+
+@pytest.mark.parametrize("schema_bump", [None, True])
+def test_schema_rollback_freezes_before_classifying_previous_head(updater, monkeypatch, schema_bump):
+    from pathlib import Path
+
+    applying = {"sha": "t", "prev_sha": "p", "rollback": True, "backup_path": "synthetic.db"}
+    if schema_bump is not None:
+        applying["schema_bump"] = schema_bump
+    trace, reports = _trace_world(updater, monkeypatch, applying=applying,
+                                  markers=(None, {"phase": "awaiting_consent"}), clean=())
+    ensure = updater._ensure_recovery_marker
+
+    def freeze():
+        trace.append("ensure")
+        ensure()
+
+    monkeypatch.setattr(updater, "_ensure_recovery_marker", freeze)
+    assert updater.recover_interrupted() == 1
+    assert trace == ["ensure", "runtime_gate", "cleanup", "adopt_marker", "marker", "head",
+                     "marker", ("report", "restore_consent_blocked")]
+    state = updater.journal_store.load_state(updater.STATE_PATH)
+    assert state["applying"]["restore_incomplete"] is True
+    assert Path(updater.MARKER_PATH).exists()
+    assert "writers_stopped" not in reports[0][2]
 
 
 @pytest.mark.parametrize("after_head,tail", [

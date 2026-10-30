@@ -388,7 +388,7 @@ Hermesのコードが更新開始時・移行先のどちらとも違う場合�
 - apply が非0: `status` の `attempts[$TAG].detail` を報告する。自動巻戻し済みなら checkout は元の SHA。
   `rollback failed — escalate` の場合は追加操作をせず報告する（復旧 watchdog と人の判断に委ねる）。
   schema 変更を伴う更新で旧版の checkout へ戻した後なら、DB 復元が完了するまで抽出処理と更新 marker を止めたままにする（通知は復旧レポートで行う）。
-  以後の `recover` も、復旧レポートが `escalate` と `writers_stopped: true` を示す間は処理を再開しない。
+  以後の `recover` も、復元の保留markerや未完了記録が残る間は処理を強制再開しない。独立した復旧監視のレポートに `writers_stopped` がない場合、保留だけでwriterの停止を確認済みとは扱わず、実際のプロセス状態を確認する。
   使えるバックアップと復元承認がそろい、復元後の照合も完了した場合に通常の再開に戻る。
   `restore_reconcile_schema_blocked` は、復元したDBを読込済みの新版writerで開くと再移行してしまうため、照合と再開を停止した状態です。
   DBはバックアップのschemaを保ち、復元済みmarkerと`restore_incomplete`を残します。追加の承認では解除されません。

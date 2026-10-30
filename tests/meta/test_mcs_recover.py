@@ -954,13 +954,15 @@ def test_recover_escalates_on_rollback_db_restore(rec, tmp_path,
     live = tmp_path / "data" / "ledger.db"
     _mk_db(live, 8)
     monkeypatch.setattr(rec, "LEDGER", str(live))
-    monkeypatch.setattr(rec, "_notify", lambda *a: None)
+    monkeypatch.setattr(rec, "_notify", lambda *a: pytest.fail("no notice during restore hold"))
+    monkeypatch.setattr(rec, "_restart_drainers",
+                        lambda **kw: pytest.fail("no writer restart before verified restore"))
     assert rec.recover() == 1
     report = json.loads(Path(rec.REPORT_PATH).read_text())
     assert report["result"] == "escalate"
     assert "backup_unreadable" in report["detail"]
     after = json.loads(Path(rec.STATE_PATH).read_text())
-    assert after["executed"]["cid-rb"]["result"] == "escalated"
+    assert "cid-rb" not in after["executed"]
     # applying record preserved for the human — not consumed
     assert after["applying"]["rollback"] is True
 
@@ -973,13 +975,15 @@ def test_recover_resumed_verifies_db_restore(rec, tmp_path, monkeypatch):
     _mk_db(back, 7)
     _rollback_state(rec, tmp_path, str(back))
     monkeypatch.setattr(rec, "LEDGER", str(live))
-    monkeypatch.setattr(rec, "_notify", lambda *a: None)
+    monkeypatch.setattr(rec, "_notify", lambda *a: pytest.fail("no notice during restore hold"))
+    monkeypatch.setattr(rec, "_restart_drainers",
+                        lambda **kw: pytest.fail("no writer restart before verified restore"))
     monkeypatch.setattr(rec, "_reconcile_membership", lambda s: [])
     _consent(rec, live, back)
     assert rec.recover() == 1
     assert rec._db_version(str(live)) == 7
     report = json.loads(Path(rec.REPORT_PATH).read_text())
-    assert report["result"] == "restore_reconcile_pending" and report["writers_stopped"] is True
+    assert report["result"] == "restore_reconcile_pending" and "writers_stopped" not in report
     after = json.loads(Path(rec.STATE_PATH).read_text())
     assert "cid-rb" not in after["executed"]
     assert after["applying"]["restore_incomplete"] is True
@@ -1360,7 +1364,7 @@ def test_git_failure_inside_consent_hold_keeps_the_freeze(
     report = json.loads(Path(rec.REPORT_PATH).read_text())
     assert report["result"] == "restore_consent_blocked"
     assert live.read_bytes() == live_before         # digest intact
-    assert len(notices) == 1                        # hermes send, deduped
+    assert notices == []                           # report-only restore hold
 
 
 def test_git_failure_outside_hold_still_escalates(rec, tmp_path,
@@ -1584,7 +1588,7 @@ def test_non_git_escalation_inside_consent_hold_keeps_the_freeze(
         rec, tmp_path, monkeypatch, kind):
     """Journal inconsistency / restore failure inside a hold used to
     escalate (drainers up on the newer-schema DB, marker gone, receipt
-    consumed). The freeze holds with one deduped `hermes send`. After
+    consumed). The freeze reports locally without sending. After
     consent, the DB copy succeeds but notification reconciliation still
     requires a compatible writer, so the journal and markers remain held."""
     live, back, restarts, notices = _held_world(rec, tmp_path,
@@ -1604,7 +1608,7 @@ def test_non_git_escalation_inside_consent_hold_keeps_the_freeze(
     for _ in range(2):
         assert rec.recover() == 1
     _assert_frozen(rec, tmp_path, live, live_before, restarts)
-    assert len(notices) == 1                        # hermes send, deduped
+    assert notices == []                           # report-only restore hold
     undo()
     _consent(rec, live, back)
     assert rec.recover() == 1  # copied, but compatible notification reconcile is still pending
@@ -1618,12 +1622,12 @@ def test_non_git_escalation_inside_consent_hold_keeps_the_freeze(
     marker = tmp_path / "data" / "restore_pending.json"
     assert json.loads(marker.read_text())["phase"] == "restored"
     report = json.loads(Path(rec.REPORT_PATH).read_text())
-    assert report["result"] == "restore_reconcile_pending" and report["writers_stopped"] is True
+    assert report["result"] == "restore_reconcile_pending" and "writers_stopped" not in report
     held_db, held_state, held_marker = live.read_bytes(), Path(rec.STATE_PATH).read_bytes(), marker.read_bytes()
     assert rec.recover() == 1
     assert live.read_bytes() == held_db and Path(rec.STATE_PATH).read_bytes() == held_state
     assert marker.read_bytes() == held_marker and restarts == []
-    assert len(notices) == 1  # pending reconcile reports only; no new send
+    assert notices == []  # pending reconcile never sends
 
 
 def test_marker_only_hold_survives_git_failure(rec, tmp_path,
@@ -1660,7 +1664,7 @@ def test_marker_only_hold_survives_git_failure(rec, tmp_path,
     marker = tmp_path / "data" / "restore_pending.json"
     assert json.loads(marker.read_text())["phase"] == "restored"
     report = json.loads(Path(rec.REPORT_PATH).read_text())
-    assert report["result"] == "restore_reconcile_pending" and report["writers_stopped"] is True
+    assert report["result"] == "restore_reconcile_pending" and "writers_stopped" not in report
     held_db, held_state, held_marker = live.read_bytes(), Path(rec.STATE_PATH).read_bytes(), marker.read_bytes()
     assert rec.recover() == 1
     assert live.read_bytes() == held_db and Path(rec.STATE_PATH).read_bytes() == held_state
@@ -1768,10 +1772,10 @@ def test_incomplete_restore_never_finishes_without_restoring_target(
         assert rec.recover() == 1
         after = rec._load_state()
         assert after["applying"] == applying and after["stages"] == state["stages"]
-        assert after["executed"]["synthetic-held"]["result"] == "escalated"
+        assert "synthetic-held" not in after["executed"]
         assert Path(rec.MARKER_PATH).read_text() == "synthetic writer freeze"
         report = json.loads(Path(rec.REPORT_PATH).read_text())
-        assert report["writers_stopped"] is True
+        assert "writers_stopped" not in report
         assert "restore_incomplete" in report["detail"]
 
 
