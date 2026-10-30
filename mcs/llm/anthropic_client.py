@@ -76,15 +76,19 @@ def validate_usage(value):
 
 class AnthropicClient:
     """Keep per-attempt ownership hooks local to each completion call."""
-    def __init__(self, api_key, *, attempt_timeout=120.0, max_attempts=3, post_fn=None):
+    def __init__(self, api_key, *, attempt_timeout=120.0, max_attempts=3, post_fn=None,
+                 wait_fn=None):
         if (type(attempt_timeout) not in (int, float)
                 or not math.isfinite(attempt_timeout) or not 0 < attempt_timeout <= 120
                 or type(max_attempts) is not int or not 1 <= max_attempts <= 3):
             raise ValueError("attempt_policy_invalid")
+        if wait_fn is not None and not callable(wait_fn):
+            raise ValueError("wait_fn_invalid")
         self.api_key = api_key
         self.model = MODEL
         self.attempt_timeout, self.max_attempts = attempt_timeout, max_attempts
         self._post_fn = post_fn
+        self._wait_fn = wait_fn
 
     def request(self, method, body, timeout, *, deadline=None):
         return bounded_http.bounded_http_request(
@@ -178,7 +182,7 @@ class AnthropicClient:
                 delay = min(wait if wait is not None else 2**attempt + random.uniform(0, 0.5),
                             max(0.0, deadline - time.monotonic()))
                 if delay:
-                    time.sleep(delay)
+                    (self._wait_fn if self._wait_fn is not None else time.sleep)(delay)
         raise last
 
     def body(self, prompt, max_tokens, cache_prefix):

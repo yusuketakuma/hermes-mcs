@@ -808,10 +808,11 @@ def _guard_repeated_request(ledger, candidate):
     rows = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
         "FROM artifacts WHERE kind=? AND project_id=? AND (message_id IS ? OR ?='semantic_backlog') AND "
         "CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
-        "WHEN json_type(meta)!='object' OR EXISTS (SELECT 1 FROM json_tree(meta) "
-        "WHERE key IS NOT NULL GROUP BY parent,key HAVING COUNT(*)>1) THEN 1 "
-        "ELSE json_extract(meta,'$.route')=? AND "
-        "(json_extract(meta,'$.unit_key')=? OR ?='semantic_backlog') END ORDER BY artifact_id",
+        "WHEN json_type(meta)!='object' THEN 1 "
+        "WHEN json_extract(meta,'$.route')=? AND "
+        "(json_extract(meta,'$.unit_key')=? OR ?='semantic_backlog') THEN 1 "
+        "ELSE EXISTS (SELECT 1 FROM json_tree(meta) "
+        "WHERE key IS NOT NULL GROUP BY parent,key HAVING COUNT(*)>1) END ORDER BY artifact_id",
         (KINDS[0], candidate['project_id'], candidate['message_id'], candidate['route'],
          candidate['route'], candidate['unit_key'], candidate['route'])).fetchall()
     result_map = None
@@ -976,8 +977,10 @@ class _Tally:
     (the gate runs under the write lock). Rows are append-only within a month;
     an unreadable row stops the gate and is read again next time."""
 
-    def __init__(self, month):
+    def __init__(self, month, connection):
         self.month = month
+        self.connection = connection
+        self.precheck = None
         self.last_id = 0
         self.prefix = None   # fingerprint of the rows already tallied
         self.open = {}       # rid -> (meta, maximum, day): reserved, no result yet
@@ -1052,25 +1055,42 @@ class _Tally:
         self.prefix = self.fingerprint(ledger)
 
 
+def _tally_precheck(db, start):
+    if db.in_transaction:
+        return None
+    return db, start, db.execute('PRAGMA data_version').fetchone()[0], db.total_changes
+
+
+def _current_tally(ledger, start, attribute, now):
+    tally = getattr(ledger, attribute, None)
+    before = _tally_precheck(ledger.db, start)
+    previous = tally.precheck if tally is not None else None
+    if before is not None and before == previous and not tally.invalid:
+        return tally
+    if tally is not None:
+        tally.precheck = None
+    if (tally is None or tally.connection is not ledger.db or tally.month != start or tally.invalid
+            or (tally.prefix is not None and tally.prefix != tally.fingerprint(ledger))):
+        tally = _Tally(start, ledger.db)
+        setattr(ledger, attribute, tally)
+    tally.update(ledger, now)
+    if before is not None:
+        if before == _tally_precheck(ledger.db, start) and not tally.invalid:
+            tally.precheck = before
+        else:
+            # A concurrent write must not attach a fresh stamp to an older total.
+            setattr(ledger, attribute, None)
+    return tally
+
+
 def _tally(ledger, now=None):
     now = time.time() if now is None else now
-    month = _periods(now)[1]
-    tally = getattr(ledger, "_cloud_usage_tally", None)
-    if (tally is None or tally.month != month
-            or (tally.prefix is not None and tally.prefix != tally.fingerprint(ledger))):
-        tally = ledger._cloud_usage_tally = _Tally(month)
-    tally.update(ledger, now)
-    return tally
+    return _current_tally(ledger, _periods(now)[1], "_cloud_usage_tally", now)
 
 
 def _window_tally(ledger, start):
     """The same incremental tally as the monthly one, bounded below by the period start."""
-    tally = getattr(ledger, "_cloud_window_tally", None)
-    if (tally is None or tally.month != start
-            or (tally.prefix is not None and tally.prefix != tally.fingerprint(ledger))):
-        tally = ledger._cloud_window_tally = _Tally(start)
-    tally.update(ledger, time.time())
-    return tally
+    return _current_tally(ledger, start, "_cloud_window_tally", time.time())
 
 
 PRUNE_MARK_KIND = "cloud_usage_pruned_before"

@@ -202,6 +202,7 @@ def worker(parent):
                 else:
                     lock = writer_lock.acquire_run_lock()
                     if lock is None:
+                        phase += 1
                         time.sleep(1)
                         continue
                     try:
@@ -215,6 +216,9 @@ def worker(parent):
                 record = {"event": "cloud_backlog_pass", "pid": os.getpid(),
                     "phase": "extract" if phase % 2 == 0 else "semantic", "done": result.get("done", 0),
                     "elapsed_s": round(time.monotonic() - started, 3), "ts": time.time()}
+                record.update({key: result[key] for key in
+                    ("selected", "deferred", "context_blocked", "skipped", "lock_lost", "slow_deferred")
+                    if type(result.get(key)) is int and result[key] >= 0})
                 if phase % 2 and result.get("budget_exhausted") is True:
                     record["reason"] = "jev_backlog_budget_reserved"
                     record["jev_effect"] = "skipped_if_eligible"

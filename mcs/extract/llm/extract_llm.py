@@ -875,6 +875,7 @@ class _CloudProvider:
         if transport is not None:
             client_args["post_fn"] = lambda body, timeout: transport(
                 self.client.request, "POST", body, timeout, deadline=self.deadline)
+            client_args["wait_fn"] = lambda delay: transport(time.sleep, delay)
         client = openai_client.OpenAIClient if self.model == openai_client.MODEL else anthropic_client.AnthropicClient
         self.client = client(key, **client_args)
 
@@ -3841,9 +3842,10 @@ def _selection_sql(db, order: str, adm_sql: str, fresh: bool | None = None,
     """run_pending's due-row selection.
 
     Retry state is read through correlated subqueries instead of a
-    LEFT JOIN + GROUP BY over every eligible message, so rows stream in
-    posted_at order and the LIMIT can stop the walk once an index on
-    messages(posted_at_ts) exists; the cheap shard/claim tests precede
+    LEFT JOIN + GROUP BY over every eligible message. Without patient
+    priority, rows can stream in posted_at order and a SQL LIMIT can stop
+    the indexed walk. Cloud selection filters receipts before its Python
+    limit; patient priority adds a sort. The cheap shard/claim tests precede
     the per-message JSON work. The row set equals the former grouped
     query (attempts: MAX(COALESCE(attempts,0)) or 0 without error rows;
     due: COALESCE(MAX(next_try),0) <= now); message_id breaks posted_at
@@ -4112,11 +4114,10 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     # leases keep concurrent callers off each other's rows. oldest_first
     # (ASC) remains for callers that must walk the tail.
     order = "ASC" if oldest_first else "DESC"
-    # T18: under v4 activation the v3 engine's new-inference admission
-    # defaults to ZERO — only message ids carried by a live, non-expired
-    # conversion manifest may be claimed. The filter lives INSIDE the
-    # query so a large backlog can never starve an admitted manifest id
-    # behind the LIMIT.
+    # Canonical fact source closes legacy inference; conversion cohorts
+    # never grant it an exception. Explicit admission sets from callers
+    # stay inside the query so a large backlog cannot starve an admitted
+    # message behind the LIMIT.
     adm_sql = ""
     adm_params: list = []
     if admitted_ids is not None:
@@ -4419,7 +4420,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 fair_oldest: bool = False, allow_cloud: bool = True,
                 background: bool = False, cloud_only: bool = False,
                 prioritize_patients: bool = False) -> dict:
-    """Extract up to `limit` pending/stale messages within budget_s.
+    """Extract up to `limit` pending/stale messages with bounded inference.
     Returns {'done': n, 'left': n, 'failed': n}.
 
     ``write_wait_s`` bounds each per-write lock wait. With ``carry`` (a
@@ -4430,12 +4431,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     under the next call's end-of-run lock and dropped only when its
     lease nears expiry or the source moved (then re-extracted later).
 
-    `workers` fans out the LLM calls across threads — llama.cpp assigns
-    each unpinned request to a free slot, so workers should not exceed
-    the server's slot count. All DB access stays on the calling thread
-    (a sqlite3 connection is not thread-safe): thread contexts are
-    fetched serially up front and all writes land in the serial commit
-    loop as each message/chunk completes.
+    `workers` bounds local calls; resident lanes may pin a local slot.
+    Cloud configuration can widen the pool while local calls retain their
+    separate semaphore. All DB access stays on the calling thread: cloud
+    contexts are prepared as candidates are claimed, and writes land in
+    the serial commit loop as each message/chunk completes. `budget_s`
+    bounds inference and cloud claim admission, not the selection SQL.
 
     `batch_k` groups context-free single-chunk rows K-to-a-call — the
     fixed per-call cost (queue wait, spec eval, decode ramp) amortizes
@@ -4516,18 +4517,16 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # Manifest-declared conversions (admitted_ids) were explicitly
     # requested — the prefilter never overrides them.
     prefilter = _prefilter_enabled() and admitted_ids is None
-    jobs, skipped, context_blocked = _prepare_jobs(
+    jobs, skipped, context_blocked = ([], 0, 0) if cloud_only else _prepare_jobs(
         ledger, rows, target, prefilter, allow_cloud=allow_cloud, background=background,
         cloud_only=cloud_only)
-    if cloud_only:
-        jobs = jobs[:limit]
     deferred += context_blocked
     metas = [None] * len(jobs)
     batch_metas = []
     checkpoints = queue.SimpleQueue()
     checkpoint_stopped = threading.Event()
     cfg = load_config()
-    cloud_workers = _cloud_settings(cfg)["max_concurrency"] if any(
+    cloud_workers = _cloud_settings(cfg)["max_concurrency"] if cloud_only or any(
         r.get("_cloud_mode") == "on" for r, *_ in jobs) else 1
     pool_workers = max(workers, cloud_workers)
     local_slots = threading.BoundedSemaphore(max(1, workers))
@@ -4940,9 +4939,29 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     # never pay for the same LLM call (F14)
     claimed = []
     try:
-        for index, (r, ctx, saved, hints, qc) in enumerate(jobs):
+        for index, candidate in enumerate(rows if cloud_only else jobs):
             if disk_low:
                 break
+            if cloud_only:
+                if time.monotonic() >= deadline:
+                    break
+                # Lookahead replenishes lost claims without freezing unused attempt frames.
+                prepared, row_skipped, row_blocked = _prepare_jobs(
+                    ledger, [candidate], target, prefilter, allow_cloud=allow_cloud,
+                    background=background, cloud_only=True)
+                skipped += row_skipped
+                context_blocked += row_blocked
+                deferred += row_blocked
+                if not prepared:
+                    continue
+                index = len(jobs)
+                candidate = prepared[0]
+                jobs.append(candidate)
+                metas.append(None)
+                if time.monotonic() >= deadline:
+                    deferred += 1
+                    break
+            r, ctx, saved, hints, qc = candidate
             if circuit_s and r.get("_cloud_mode") != "on":
                 continue
             lease = _claim(ledger, r, max(_EXTRACT_LEASE_S,
@@ -4960,12 +4979,17 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 # claimed rows mint/refresh their extract_v1 artifact here so
                 # speed-lane readers never wait on the LLM queue
                 _ensure_v1(ledger, r, hints)
+                if cloud_only and len(claimed) >= limit:
+                    break
     except BaseException:
         # Preparation precedes inference's finally; release its committed
         # claims too when a rule write fails or the worker is interrupted.
         for _index, r, _ctx, _saved, _hints, _qc, lease in claimed:
             _release(ledger, r, lease)
         raise
+
+    if cloud_only:
+        parallel = pool_workers > 1 and len(claimed) > 1
 
     def _exec_batch(tups):
         _CALL_NOTES.transport = _CALL_NOTES.transport_at = None
@@ -5193,7 +5217,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 rejected=sum(cloud_result.get(k, 0) for k in ("_items_dropped", "_evidence_dropped")) if valid else None,
                 held=int(bool(extract_quality.protected_lost(local_result, cloud_result, r["body_text"]))) if valid else None,
                 repairs=comparison_meta.get("repairs", 0 if valid else None))
-    left, age_min, age_max, estimate = _backlog_report(
+    # Cloud selection is scope-limited; an empty result cannot bound the global backlog.
+    left, age_min, age_max, estimate = (None, None, None, None) if cloud_only else _backlog_report(
         ledger, len(rows), limit, done + skipped + held_prior)
     now_ts = time.time()
     llm_calls = _llm_call_stats([*metas, *batch_metas])
@@ -5205,8 +5230,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             "carried": carried, "carry": carry_out,
             # pending as of the last full count, minus what this process
             # settled since; age says how stale the count is
-            "left_estimate": max(0, estimate["left"] - estimate["done"]),
-            "left_estimate_age_s": round(time.monotonic() - estimate["at"]),
+            "left_estimate": max(0, estimate["left"] - estimate["done"]) if estimate is not None else None,
+            "left_estimate_age_s": round(time.monotonic() - estimate["at"]) if estimate is not None else None,
             "fresh_selected": fresh_selected,
             "selected": len(rows), "deferred": deferred,
             "context_blocked": context_blocked,
@@ -5298,8 +5323,11 @@ def _llm_call_stats(metas) -> dict | None:
 
 
 def legacy_admissions(ledger, cfg) -> set | None:
-    """T18 legacy (v3) admission set shared by the tick and the drainer:
-    None = unrestricted (legacy fact_source), a set = only those ids.
+    """Close legacy inference under canonical source and invalid configuration.
+
+    Shared by the tick and drainer: None is unrestricted for a noncanonical
+    fact_source; canonical source returns an empty set. Conversion cohorts
+    do not authorize legacy inference.
     A non-dict config, a semantic_config error or any failure fails
     CLOSED (empty set) — an errored canonical block must not fall back
     to legacy and reopen unrestricted v3 inference."""

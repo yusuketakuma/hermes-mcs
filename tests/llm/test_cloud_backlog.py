@@ -152,14 +152,25 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('budget', [True, False, None, 'synthetic'])
-def test_worker_alternates_cloud_only_units_without_local_calls(tmp_path, monkeypatch, capsys, budget):
+@pytest.mark.parametrize('semantic_busy', [False, True])
+@pytest.mark.parametrize('counters,expected,done', [
+    ({'selected': 64, 'deferred': 3, 'context_blocked': 1, 'skipped': 0,
+      'lock_lost': 2, 'slow_deferred': 4},
+     {'selected': 64, 'deferred': 3, 'context_blocked': 1, 'skipped': 0,
+      'lock_lost': 2, 'slow_deferred': 4}, 1),
+    ({}, {}, 0),
+    ({'selected': True, 'deferred': -1, 'context_blocked': 'synthetic-private-extra',
+      'skipped': 1.5, 'lock_lost': None, 'slow_deferred': {'private': 'synthetic-private-extra'}}, {}, 0),
+])
+def test_worker_alternates_cloud_only_units_without_local_calls(
+        tmp_path, monkeypatch, capsys, budget, counters, expected, done, semantic_busy):
     import extract_llm
     import ledger
     import mcs_util
     import semantic_drain
     import writer_lock
     parent = 991
-    parents = iter([parent, parent, parent, parent, 1])
+    parents = iter([parent] * (5 if semantic_busy else 4) + [1])
     monkeypatch.setattr(backlog.os, "getppid", lambda: next(parents))
     monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: True)
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 1))
@@ -169,30 +180,44 @@ def test_worker_alternates_cloud_only_units_without_local_calls(tmp_path, monkey
     monkeypatch.setattr(extract_llm.cloud_policy, "global_block_reason", lambda *a, **kw: None)
     monkeypatch.setattr(extract_llm.cloud_policy, "budget_block_reason", lambda *a: None)
     monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
+    monkeypatch.setattr(backlog.time, "sleep", lambda _: None)
     monkeypatch.setattr(semantic_drain, "runtime_config", lambda *a: ({"job_budget_seconds": 1200}, []))
-    monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda: os.open(tmp_path / "lock", os.O_CREAT | os.O_RDWR, 0o600))
+    acquisitions = []
+    def acquire():
+        acquisitions.append(True)
+        if semantic_busy and len(acquisitions) == 2:
+            return None
+        return os.open(tmp_path / "lock", os.O_CREAT | os.O_RDWR, 0o600)
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", acquire)
     seen = []
 
     def extract(*a, **kw):
         assert kw["cloud_only"] and kw["background"] and kw["prioritize_patients"]
         seen.append("extract")
-        return {"done": 1, "budget_exhausted": True}
+        return {"done": done, "budget_exhausted": True, **counters,
+                "pids": [1], "private_extra": "synthetic-private-extra"}
 
     def semantic(*a, **kw):
         assert kw["cloud_only"] and kw["lane"] == "backlog"
         seen.append("semantic")
-        return {"done": 1, "budget_exhausted": budget}
+        return {"done": done, "budget_exhausted": budget, **counters,
+                "pids": [1], "private_extra": "synthetic-private-extra"}
 
     monkeypatch.setattr(extract_llm, "run_pending", extract)
     monkeypatch.setattr(semantic_drain, "run_due", semantic)
     monkeypatch.setattr(backlog, "_parent", None)
     backlog.worker(parent)
-    assert seen == ["extract", "semantic"]
+    assert seen == ["extract", "extract" if semantic_busy else "semantic"]
     passes = [json.loads(line) for line in capsys.readouterr().out.splitlines()
               if json.loads(line).get('event') == 'cloud_backlog_pass']
     assert 'reason' not in passes[0]
-    assert passes[1].get('reason') == ('jev_backlog_budget_reserved' if budget is True else None)
-    assert passes[1].get('jev_effect') == ('skipped_if_eligible' if budget is True else None)
+    assert passes[1].get('reason') == ('jev_backlog_budget_reserved' if budget is True and not semantic_busy else None)
+    assert passes[1].get('jev_effect') == ('skipped_if_eligible' if budget is True and not semantic_busy else None)
+    keys = {'selected', 'deferred', 'context_blocked', 'skipped', 'lock_lost', 'slow_deferred'}
+    assert [item['done'] for item in passes] == [done, done]
+    assert [{key: item[key] for key in keys if key in item} for item in passes] == [expected, expected]
+    assert not any('pids' in item or 'private_extra' in item for item in passes)
+    assert 'synthetic-private-extra' not in json.dumps(passes)
 
 
 def test_worker_never_opens_database_without_startup_lock(monkeypatch):

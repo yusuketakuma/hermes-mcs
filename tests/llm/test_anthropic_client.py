@@ -5,6 +5,9 @@ import time
 import pytest
 
 import anthropic_client as a
+from test_semantic_cloud import cloud
+
+__all__ = ["cloud"]
 
 
 def _reply(**values):
@@ -311,6 +314,148 @@ def test_retry_after_alone_paces_retries(monkeypatch):
     with pytest.raises(a.AnthropicError, match="rate_limited"):
         client.complete("synthetic", deadline=time.monotonic() + 60)
     assert slept == [2, 2]
+
+
+@pytest.mark.parametrize("wait_fn", [False, 0, "sleep", [], {}])
+def test_retry_wait_hook_must_be_callable(wait_fn):
+    with pytest.raises(ValueError, match="wait_fn_invalid"):
+        a.AnthropicClient("synthetic", wait_fn=wait_fn)
+
+
+@pytest.mark.parametrize("outcome", ["success", "wait_failed", "scope_changed", "deadline"])
+def test_retry_wait_follows_settlement_and_preserves_send_guards(monkeypatch, outcome):
+    now, events = [0.0], []
+    reservations, calls, results = [], [], []
+    allowed = [True]
+    monkeypatch.setattr(a.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(a.time, "sleep", lambda _: pytest.fail("custom wait was bypassed"))
+
+    def guard():
+        events.append("guard")
+        if not allowed[0]:
+            raise RuntimeError("synthetic_scope_changed")
+
+    def reserve(*args):
+        events.append("reserve")
+        reservations.append(len(reservations))
+        return reservations[-1]
+
+    def post(*args):
+        events.append("post")
+        calls.append(True)
+        if len(calls) == 1:
+            return 429, {"Retry-After": "20" if outcome == "deadline" else "2"}, b""
+        return 200, {}, json.dumps(_reply()).encode()
+
+    def settle(reservation, meta):
+        events.append("settle")
+        results.append((reservation, meta))
+
+    def wait(delay):
+        assert events == ["guard", "reserve", "guard", "post", "settle"]
+        assert len(reservations) == len(calls) == len(results) == 1
+        assert results[0][1]["http_class"] == "http_429"
+        events.append("wait")
+        assert delay == (10 if outcome == "deadline" else 2)
+        if outcome == "wait_failed":
+            raise RuntimeError("synthetic_wait_failed")
+        now[0] += delay
+        if outcome == "scope_changed":
+            allowed[0] = False
+
+    client = a.AnthropicClient("synthetic", post_fn=post, wait_fn=wait)
+    if outcome == "success":
+        answer = client.complete("synthetic", deadline=10, before_attempt=guard,
+                                 reserve_fn=reserve, after_result=settle)
+        assert answer["status"] == 200
+        assert events[6:] == ["guard", "reserve", "guard", "post", "settle"]
+        assert len(reservations) == len(calls) == len(results) == 2
+    else:
+        error = a.AnthropicError if outcome == "deadline" else RuntimeError
+        reason = "rate_limited" if outcome == "deadline" else "synthetic_" + outcome
+        with pytest.raises(error, match=reason):
+            client.complete("synthetic", deadline=10, before_attempt=guard,
+                            reserve_fn=reserve, after_result=settle)
+        assert len(reservations) == len(calls) == len(results) == 1
+        assert events[6:] == (["guard"] if outcome == "scope_changed" else [])
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "openai"])
+def test_semantic_retry_wait_releases_writer_lock_after_settlement(cloud, tmp_path, monkeypatch, provider):
+    import os
+    import subprocess
+    import sys
+    import cloud_policy
+    import extract_llm
+    import openai_client
+    import semantic_transport
+    import writer_lock
+    from test_openai_client import response
+    from test_semantic_cloud import rows
+
+    led, cfg, job, _ = cloud
+    cfg["cloud_llm"]["provider"] = provider
+    monkeypatch.setattr(extract_llm, "HOME", str(tmp_path))
+    monkeypatch.setattr(cloud_policy, "provider_key", lambda *args: "synthetic-key")
+    monkeypatch.setattr(cloud_policy, "pricing_valid", lambda *args, **kwargs: True)
+    lock_path = tmp_path / "synthetic-run.lock"
+    lock_fd = writer_lock.acquire_run_lock(str(lock_path))
+    assert lock_fd is not None
+    deadline = time.monotonic() + 60
+    events = []
+    original_result = cloud_policy.record_result
+
+    def assert_locked():
+        other = writer_lock.acquire_run_lock(str(lock_path))
+        if other is not None:
+            os.close(other)
+            pytest.fail("writer lock was not reacquired")
+
+    def settle(*args):
+        assert_locked()
+        events.append("settle")
+        return original_result(*args)
+
+    def request(self, *args, **kwargs):
+        events.append("post")
+        if events == ["post"]:
+            return 429, {"Retry-After": "2"}, b""
+        reply = _reply() if provider == "anthropic" else response()
+        return 200, {}, json.dumps(reply).encode()
+
+    def wait(delay):
+        assert delay == 2 and events == ["post", "settle"]
+        assert len(rows(led, "cloud_usage_reserve")) == len(rows(led, "cloud_usage_result")) == 1
+        script = """\
+import fcntl, os, sys
+fd = os.open(sys.argv[1], os.O_WRONLY)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    print('acquired')
+finally:
+    os.close(fd)
+"""
+        probe = subprocess.run([sys.executable, "-I", "-c", script, str(lock_path)],
+                               capture_output=True, text=True, timeout=10)
+        assert probe.returncode == 0 and probe.stdout.strip() == "acquired"
+        events.append("wait")
+
+    def transport(call, *args, **kwargs):
+        with writer_lock.unlocked_transport(led.db, lock_fd, wait_s=1, deadline=deadline):
+            return call(*args, **kwargs)
+
+    cls = a.AnthropicClient if provider == "anthropic" else openai_client.OpenAIClient
+    monkeypatch.setattr(cls, "request", request)
+    monkeypatch.setattr(cloud_policy, "record_result", settle)
+    monkeypatch.setattr(extract_llm.time, "sleep", wait)
+    try:
+        with semantic_transport.backlog_inference(led, cfg, job, deadline, lambda: True, transport) as chat:
+            assert json.loads(chat("Synthetic JSON:")) == {"synthetic": True}
+        assert events == ["post", "settle", "wait", "post", "settle"]
+        assert len(rows(led, "cloud_usage_reserve")) == len(rows(led, "cloud_usage_result")) == 2
+        assert_locked()
+    finally:
+        os.close(lock_fd)
 
 
 def test_a_deadline_after_the_reservation_settles_it_as_unsent(monkeypatch):
