@@ -230,6 +230,10 @@ def test_sweep_replans_known_length_rejection_once_and_preserves_prior(led, monk
                           (initial["delivery_id"],)).fetchone()[0] == "delivered"
     assert led.db.execute("SELECT state FROM notification_render_parts WHERE delivery_id=? AND name='m:100#1'",
                           (failed["delivery_id"],)).fetchone()[0] == "not_sent"
+    before_gc = notify_scope.incomplete_parts_health(led.db, NOW + 4, SLACK)
+    notify_cards.gc(led, SLACK, now=NOW + 5)
+    after_gc = notify_scope.incomplete_parts_health(led.db, NOW + 6, SLACK)
+    assert (before_gc["total"], after_gc["total"]) == (0, 0)
 
 
 def test_unknown_length_attempt_is_never_replanned_or_released(led, monkeypatch):

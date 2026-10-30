@@ -1,10 +1,13 @@
 """Read notification scope, configuration and health populations on a borrowed connection."""
 from __future__ import annotations
 
+import hashlib
 import json
 import math
+import re
 import time
 from mcs_requests import positive
+from mcs_util import loads_dict, payload_hash, text_sha256, valid_hash
 
 TRANSPORT_VERSIONS = {"discord": 1, "slack": 2, "lineworks": 3}
 SUPPORTED_TRANSPORTS = tuple(TRANSPORT_VERSIONS)
@@ -306,6 +309,189 @@ def retired_transports(cfg) -> tuple[str, ...]:
     return tuple(t for t in SUPPORTED_TRANSPORTS if t != active)
 
 
+_BODY_GROUP = re.compile(r"((?:m:[1-9][0-9]*|s:[0-9a-f]{16})(?::header)?)#([1-9][0-9]*)")
+_LENGTH_ERRORS = ("msg_too_long", "body_part_wire_too_long")
+
+# Only fixed keys, an integer version and SHA-256 triples can survive PHI GC.
+BODY_COVERAGE_WITNESS_SQL = """COALESCE((
+    json_type(r.spec_json,'$.body_delivery_coverage')='object'
+    AND (SELECT COUNT(*) FROM json_each(r.spec_json))=1
+    AND (SELECT COUNT(*) FROM json_each(r.spec_json,'$.body_delivery_coverage'))=3
+    AND json_type(r.spec_json,'$.body_delivery_coverage.version')='integer'
+    AND json_extract(r.spec_json,'$.body_delivery_coverage.version')=1
+    AND json_extract(r.spec_json,'$.body_delivery_coverage.payload_hash')=r.payload_hash
+    AND length(r.payload_hash)=64 AND r.payload_hash NOT GLOB '*[^0-9a-f]*'
+    AND json_type(r.spec_json,'$.body_delivery_coverage.proofs')='array'
+    AND json_array_length(r.spec_json,'$.body_delivery_coverage.proofs')>0
+    AND NOT EXISTS (
+      SELECT 1 FROM json_each(r.spec_json,'$.body_delivery_coverage.proofs') proof
+      WHERE proof.type!='array'
+        OR json_array_length(CASE WHEN proof.type='array' THEN proof.value ELSE '[]' END)!=3
+        OR EXISTS (
+          SELECT 1 FROM json_each(CASE WHEN proof.type='array' THEN proof.value ELSE '[]' END) item
+          WHERE item.type!='text' OR length(item.value)!=64 OR item.value GLOB '*[^0-9a-f]*'))
+),0)"""
+
+
+def _body_groups_metadata(rows, *, delivered=False):
+    groups = {}
+    for row in rows:
+        match = _BODY_GROUP.fullmatch(row['name'] or '')
+        if match:
+            groups.setdefault(match[1], []).append((int(match[2]), row))
+    out = {}
+    for group, members in groups.items():
+        members.sort(key=lambda member: member[0])
+        if [number for number, _ in members] != list(range(1, len(members) + 1)):
+            continue
+        metadata = []
+        for _, row in members:
+            if (type(row['bytes']) is not int or row['bytes'] <= 0
+                    or not valid_hash(row['payload_sha256'])):
+                break
+            entry = [row['name'], row['bytes'], row['payload_sha256']]
+            if delivered:
+                if (row['state'] != 'delivered' or not isinstance(row['remote_id'], str)
+                        or not row['remote_id'].strip() or type(row['idx']) is not int
+                        or row['idx'] < 0 or not isinstance(row['part_id'], str)
+                        or re.fullmatch(r'body:[0-9]{4}', row['part_id']) is None):
+                    break
+                entry += [row['part_id'], row['idx'], row['remote_id']]
+            metadata.append(entry)
+        else:
+            out[group] = metadata
+    return out
+
+
+def _body_witness_proofs(raw, render):
+    spec = loads_dict(raw)
+    if spec is None or set(spec) != {'body_delivery_coverage'}:
+        return None
+    witness = spec['body_delivery_coverage']
+    if (not isinstance(witness, dict)
+            or set(witness) != {'version', 'payload_hash', 'proofs'}
+            or type(witness['version']) is not int or witness['version'] != 1
+            or not valid_hash(witness['payload_hash'])
+            or witness['payload_hash'] != render['payload_hash']
+            or not isinstance(witness['proofs'], list) or not witness['proofs']):
+        return None
+    proofs = set()
+    for proof in witness['proofs']:
+        if (not isinstance(proof, list) or len(proof) != 3
+                or not all(valid_hash(value) for value in proof)):
+            return None
+        proofs.add(tuple(proof))
+    return proofs if len(proofs) == len(witness['proofs']) else None
+
+
+def _sealed_body_bytes(render, rows, groups):
+    spec = loads_dict(render['spec_json'])
+    if spec is None:
+        return {}
+    try:
+        if (payload_hash(spec) != render['payload_hash']
+                or any(spec.get(key) != render[key] for key in
+                       ('delivery_id', 'render_rev', 'op'))
+                or any(spec['delivery'].get(key) != render[key]
+                       for key in ('route_epoch', 'correlation'))
+                or not scope_matches(render, spec.get('delivery'))):
+            return {}
+        parts = spec['parts']
+        manifest = [part for part in parts['manifest'] if part['kind'] == 'body_part']
+        chunks = parts['thread_body_parts']
+        saved = {row['part_id']: row for row in rows}
+        if (not isinstance(chunks, list) or len(manifest) != len(chunks)
+                or len(saved) != len(rows) or len(saved) != len(manifest)):
+            return {}
+        texts = {}
+        for index, (part, chunk) in enumerate(zip(manifest, chunks, strict=True), 1):
+            if not isinstance(chunk, str) or part['part_id'] != f'body:{index:04d}':
+                return {}
+            row = saved.get(part['part_id'])
+            if (row is None or any(row[key] != part.get(field) for key, field in (
+                    ('kind', 'kind'), ('idx', 'index'), ('name', 'name'),
+                    ('bytes', 'bytes'), ('payload_sha256', 'sha256')))
+                    or part['sha256'] != text_sha256(chunk)
+                    or part['bytes'] != len(chunk.encode('utf-8'))
+                    or part['name'] in texts):
+                return {}
+            texts[part['name']] = chunk.encode('utf-8')
+        return {group: b''.join(texts[entry[0]] for entry in metadata)
+                for group, metadata in groups.items()}
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        return {}
+
+
+def _body_delivery_coverage(db, render, cache):
+    if (render is None or render['transport'] != 'slack' or render['op'] != 'update'
+            or render['state'] != 'delivered' or render['guild_id'] is not None
+            or not valid_hash(render['payload_hash'])
+            or any(not isinstance(render[key], str) or not render[key].strip()
+                   for key in scope_fields('slack'))):
+        return None, set()
+    scope = tuple(render[key] for key in scope_fields('slack'))
+    key = (render['card_id'], scope)
+    if key not in cache:
+        old_groups = []
+        for old in db.execute(
+                "SELECT r.* FROM notification_renders r WHERE r.card_id=? "
+                "AND r.transport='slack' AND r.state='delivered' AND r.guild_id IS NULL "
+                "AND r.profile=? AND r.application_id=? AND r.team_id=? AND r.channel_id=? "
+                "AND EXISTS(SELECT 1 FROM notification_render_parts p WHERE p.delivery_id=r.delivery_id "
+                "AND p.kind='body_part' AND p.state='not_sent' "
+                "AND p.error_code IN ('msg_too_long','body_part_wire_too_long'))",
+                (render['card_id'], *scope)).fetchall():
+            rows = [dict(row) for row in db.execute(
+                "SELECT * FROM notification_render_parts WHERE delivery_id=? AND kind='body_part'",
+                (old['delivery_id'],))]
+            for group, metadata in _body_groups_metadata(rows).items():
+                targets = {(old['delivery_id'], row['part_id']) for row in rows
+                           if row['state'] == 'not_sent' and row['error_code'] in _LENGTH_ERRORS
+                           and (match := _BODY_GROUP.fullmatch(row['name'] or '')) and match[1] == group}
+                if targets:
+                    old_groups.append((old['render_rev'], group, metadata, targets))
+        cache[key] = old_groups
+    if not cache[key]:
+        return None, set()
+    rows = [dict(row) for row in db.execute(
+        "SELECT * FROM notification_render_parts WHERE delivery_id=? AND kind='body_part'",
+        (render['delivery_id'],))]
+    remotes = [row['remote_id'] for row in rows if row['state'] == 'delivered']
+    if len(remotes) != len(set(remotes)):
+        return None, set()
+    groups = _body_groups_metadata(rows, delivered=True)
+    saved_proofs = _body_witness_proofs(render['spec_json'], render)
+    bodies = _sealed_body_bytes(render, rows, groups) if saved_proofs is None else {}
+    proofs, covered = set(), set()
+    for revision, group, old, targets in cache[key]:
+        if revision >= render['render_rev'] or group not in groups:
+            continue
+        proof = (text_sha256(group), payload_hash(old), payload_hash(groups[group]))
+        if saved_proofs is not None:
+            matches = proof in saved_proofs
+        else:
+            body = bodies.get(group, b'')
+            offset = 0
+            matches = len(body) == sum(entry[1] for entry in old)
+            for _, size, digest in old:
+                if not matches or hashlib.sha256(body[offset:offset + size]).hexdigest() != digest:
+                    matches = False
+                    break
+                offset += size
+        if matches:
+            proofs.add(proof)
+            covered.update(targets)
+    witness = ({'body_delivery_coverage': {'version': 1, 'payload_hash': render['payload_hash'],
+                                         'proofs': [list(proof) for proof in sorted(proofs)]}}
+               if proofs else None)
+    return witness, covered
+
+
+def body_coverage_witness(db, delivery_id, cache):
+    """Keep only hash-bound evidence of fully delivered split-body repairs."""
+    return _body_delivery_coverage(db, render_row(db, delivery_id), cache)[0]
+
+
 def incomplete_parts_health(db, now: float, cfg=None) -> dict:
     """Read unfinished parts, excluding only matching later delivery evidence."""
     retired = retired_transports(cfg)
@@ -323,13 +509,9 @@ def incomplete_parts_health(db, now: float, cfg=None) -> dict:
         for transport in SUPPORTED_TRANSPORTS)
     proof_params = tuple(whitespace for transport in SUPPORTED_TRANSPORTS
                          for _ in scope_fields(transport))
-    row = db.execute(
-        "SELECT COUNT(*) total,COUNT(DISTINCT r.card_id) cards,"
-        "COALESCE(SUM(p.state='pending'),0) pending,"
-        "COALESCE(SUM(p.state='unknown'),0) unknown,"
-        "COALESCE(SUM(p.state='not_sent'),0) not_sent,"
-        "COALESCE(SUM(p.state='held'),0) held,"
-        "MIN(COALESCE(p.updated_at,r.created_at)) oldest "
+    rows = db.execute(
+        "SELECT p.delivery_id,p.part_id,p.state,p.kind,p.error_code,r.card_id,"
+        "COALESCE(p.updated_at,r.created_at) oldest "
         "FROM notification_render_parts p "
         "JOIN notification_renders r USING(delivery_id) "
         "JOIN notification_cards c USING(card_id) "
@@ -363,10 +545,27 @@ def incomplete_parts_health(db, now: float, cfg=None) -> dict:
         " AND ((p.kind='body_part' AND p.name IS NOT NULL AND p.name!='' AND sent.name=p.name) "
         "   OR (p.kind='attachment_part' AND p.attachment_id>0 AND sent.attachment_id=p.attachment_id) "
         "   OR (p.kind='thread' AND sent.part_id=p.part_id)))" + live,
-        proof_params + retired).fetchone()
-    oldest = _finite(row['oldest'])
-    return {"total": row['total'], "cards": row['cards'],
-            "by_state": {state: row[state] for state in ('pending', 'unknown', 'not_sent', 'held')},
+        proof_params + retired)
+    states = dict.fromkeys(('pending', 'unknown', 'not_sent', 'held'), 0)
+    cards, checked, covered, cache = set(), set(), set(), {}
+    oldest = None
+    for row in rows:
+        if row['kind'] == 'body_part' and row['state'] == 'not_sent' and row['error_code'] in _LENGTH_ERRORS:
+            if row['card_id'] not in checked:
+                for later in db.execute("SELECT * FROM notification_renders WHERE card_id=? "
+                                        "AND transport='slack' AND op='update' AND state='delivered' "
+                                        "AND spec_json IS NOT NULL", (row['card_id'],)).fetchall():
+                    covered.update(_body_delivery_coverage(db, later, cache)[1])
+                checked.add(row['card_id'])
+            if (row['delivery_id'], row['part_id']) in covered:
+                continue
+        states[row['state']] += 1
+        cards.add(row['card_id'])
+        at = _finite(row['oldest'])
+        if at is not None:
+            oldest = min(oldest, at) if oldest is not None else at
+    return {"total": sum(states.values()), "cards": len(cards),
+            "by_state": states,
             "oldest_age_s": max(0.0, now - oldest) if oldest is not None else None,
             "observed_at": now}
 

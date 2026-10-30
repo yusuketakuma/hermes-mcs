@@ -156,6 +156,111 @@ def test_later_delivery_resolves_only_the_same_part(stored, kind, difference, re
     assert stored.execute('SELECT state FROM notification_render_parts WHERE delivery_id=?', (old,)).fetchone()[0] == 'unknown'
 
 
+def _split_repair(db, *, new_group='m:100', changed=False):
+    from mcs_util import canonical, payload_hash, text_sha256
+
+    text = 'SYNTHETIC_PRIVATE_BODY\n' + 'あ' * 2100 + '\n' + 'é' * 2300
+    original = [text[:2200], text[2200:]]
+    current = ('x' + text[1:]) if changed else text
+    repaired = [current[start:start + 900] for start in range(0, len(current), 900)]
+    card, old = _render(db, [('body_part', 'not_sent', 'msg_too_long')] * len(original))
+    _, new = _render(db, [('body_part', 'delivered', None)] * len(repaired), card=card, revision=2)
+    for delivery, chunks, group in [(old, original, 'm:100'), (new, repaired, new_group)]:
+        for index, chunk in enumerate(chunks):
+            db.execute('UPDATE notification_render_parts SET part_id=?,idx=?,name=?,bytes=?,payload_sha256=? '
+                       'WHERE delivery_id=? AND part_id=?',
+                       (f'body:{index + 1:04d}', index + 2, f'{group}#{index + 1}',
+                        len(chunk.encode('utf-8')), text_sha256(chunk), delivery, f'part-{index}'))
+    render = notify_scope.render_row(db, new)
+    rows = db.execute('SELECT * FROM notification_render_parts WHERE delivery_id=? ORDER BY idx', (new,)).fetchall()
+    spec = {'delivery_id': new, 'render_rev': 2, 'op': 'update',
+            'delivery': {**notify_scope.stored_scope(render), 'route_epoch': 1, 'correlation': new},
+            'parts': {'thread_body_parts': repaired, 'manifest': [
+                {'kind': 'body_part', 'part_id': row['part_id'], 'index': row['idx'], 'name': row['name'],
+                 'bytes': row['bytes'], 'sha256': row['payload_sha256']} for row in rows]}}
+    db.execute('UPDATE notification_renders SET spec_json=?,payload_hash=? WHERE delivery_id=?',
+               (canonical(spec).decode(), payload_hash(spec), new))
+    return old, new
+
+
+def test_split_group_proof_survives_gc_without_body_or_replay(led):
+    import notify_cards
+    import notify_spool
+
+    old, new = _split_repair(led.db)
+    before = led.db.total_changes
+    assert notify_scope.incomplete_parts_health(led.db, NOW, SLACK)['total'] == 0
+    assert led.db.total_changes == before
+    notify_cards.gc(led, SLACK, now=NOW + 1)
+    raw = notify_scope.render_row(led.db, new)['spec_json']
+    assert set(json.loads(raw)) == {'body_delivery_coverage'}
+    assert 'SYNTHETIC_PRIVATE_BODY' not in raw and 'thread_body_parts' not in raw
+    assert notify_scope.incomplete_parts_health(led.db, NOW + 2, SLACK)['total'] == 0
+    notify_cards.gc(led, SLACK, now=NOW + 3)
+    assert notify_scope.render_row(led.db, new)['spec_json'] == raw
+    assert notify_spool.recover(led, SLACK, {})['republished'] == 0
+    assert notify_scope.incomplete_parts_health(led.db, NOW + 4, SLACK)['total'] == 0
+    assert {row[0] for row in led.db.execute(
+        'SELECT state FROM notification_render_parts WHERE delivery_id=?', (old,))} == {'not_sent'}
+
+
+@pytest.mark.parametrize('difference', ['scope', 'remote', 'duplicate_remote', 'hash', 'bytes',
+                                       'missing_spec', 'partial', 'old_bytes', 'old_unknown',
+                                       'source', 'header', 'changed'])
+def test_split_proof_requires_complete_matching_group(stored, difference):
+    old, new = _split_repair(stored, new_group={'source': 'm:101', 'header': 'm:100:header'}.get(difference, 'm:100'),
+                             changed=difference == 'changed')
+    if difference == 'scope':
+        stored.execute("UPDATE notification_renders SET channel_id='SYNTHETIC_OTHER' WHERE delivery_id=?", (new,))
+    elif difference == 'remote':
+        stored.execute("UPDATE notification_render_parts SET remote_id='' WHERE delivery_id=? AND part_id='body:0001'", (new,))
+    elif difference == 'duplicate_remote':
+        stored.execute("UPDATE notification_render_parts SET remote_id='SYNTHETIC_SAME' WHERE delivery_id=?", (new,))
+    elif difference == 'hash':
+        stored.execute("UPDATE notification_render_parts SET payload_sha256=? WHERE delivery_id=? AND part_id='body:0001'", ('a' * 64, new))
+    elif difference == 'bytes':
+        stored.execute("UPDATE notification_render_parts SET bytes=bytes+1 WHERE delivery_id=? AND part_id='body:0001'", (new,))
+    elif difference == 'missing_spec':
+        stored.execute('UPDATE notification_renders SET spec_json=NULL WHERE delivery_id=?', (new,))
+    elif difference == 'partial':
+        stored.execute("UPDATE notification_render_parts SET state='unknown' WHERE delivery_id=? AND part_id='body:0001'", (new,))
+    elif difference == 'old_bytes':
+        stored.execute("UPDATE notification_render_parts SET bytes=bytes+1 WHERE delivery_id=? AND part_id='body:0001'", (old,))
+    elif difference == 'old_unknown':
+        stored.execute("UPDATE notification_render_parts SET state='unknown' WHERE delivery_id=?", (old,))
+    report = notify_scope.incomplete_parts_health(stored, NOW, SLACK)
+    assert report['by_state']['unknown' if difference == 'old_unknown' else 'not_sent'] >= 2
+
+
+@pytest.mark.parametrize('difference', ['old_hash', 'new_remote', 'new_unknown', 'new_scope',
+                                       'payload_hash', 'version', 'extra_content'])
+def test_compact_split_proof_revalidates_saved_evidence(led, difference):
+    import notify_cards
+
+    old, new = _split_repair(led.db)
+    notify_cards.gc(led, SLACK, now=NOW + 1)
+    assert notify_scope.incomplete_parts_health(led.db, NOW + 2, SLACK)['total'] == 0
+    if difference == 'old_hash':
+        led.db.execute("UPDATE notification_render_parts SET payload_sha256=? WHERE delivery_id=? AND part_id='body:0001'", ('a' * 64, old))
+    elif difference == 'new_remote':
+        led.db.execute("UPDATE notification_render_parts SET remote_id='SYNTHETIC_CHANGED' WHERE delivery_id=? AND part_id='body:0001'", (new,))
+    elif difference == 'new_unknown':
+        led.db.execute("UPDATE notification_render_parts SET state='unknown' WHERE delivery_id=? AND part_id='body:0001'", (new,))
+    elif difference == 'new_scope':
+        led.db.execute("UPDATE notification_renders SET channel_id='SYNTHETIC_OTHER' WHERE delivery_id=?", (new,))
+    else:
+        witness = json.loads(notify_scope.render_row(led.db, new)['spec_json'])
+        if difference == 'extra_content':
+            witness['body_delivery_coverage']['source'] = 'SYNTHETIC_PRIVATE_CONTENT'
+        else:
+            witness['body_delivery_coverage'][difference] = 2 if difference == 'version' else 'a' * 64
+        led.db.execute('UPDATE notification_renders SET spec_json=? WHERE delivery_id=?', (json.dumps(witness), new))
+    assert notify_scope.incomplete_parts_health(led.db, NOW + 3, SLACK)['by_state']['not_sent'] == 2
+    if difference == 'extra_content':
+        notify_cards.gc(led, SLACK, now=NOW + 4)
+        assert notify_scope.render_row(led.db, new)['spec_json'] is None
+
+
 @pytest.mark.parametrize('later_hash', [None, 'b' * 64])
 def test_uncaptioned_unavailable_is_incomplete_until_its_later_receipt(stored, later_hash):
     card, old = _render(stored, [('attachment_part', 'not_sent', 'attachment_unavailable')])

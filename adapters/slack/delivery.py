@@ -681,10 +681,10 @@ class DeliveryWorker(_BaseWorker):
         """chat.update this bot's earlier reply of the same chunk and
         return the delivered outcome, or None so the caller posts fresh
         exactly as before (no prior, target gone, foreign or already
-        bound, or an update Slack rejected outright). Only a reply
+        bound, or a rejection in the explicit repost whitelist). Only a reply
         provably authored by this bot/app in this thread is rewritten.
-        An update is idempotent, so it needs no single-shot guard; a
-        crash after it is re-bound by ``_remote_match``. Any other
+        The single-attempt sender guards the update; a crash after it
+        is re-bound by ``_remote_match``. Any other
         failure is unknown and is never followed by a second post."""
         if not isinstance(prior, str) or not _TS.fullmatch(prior) \
                 or prior == thread_ts or prior in ctx["consumed"]:

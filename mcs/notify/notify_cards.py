@@ -2334,8 +2334,9 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
     and delivered renders whose durable parts are all settled and no
     active restore hold covers the render or its card — in both cases
     only with no unsettled attempt on the card and no pending intent
-    binding. Delivered signal creates retain only a content-free thread-route
-    witness. DB readers of spec_json (dispatch re-entry, sweep watchdog,
+    binding. Delivered signal creates retain a content-free thread-route
+    witness; verified split-body repairs retain only coverage hashes.
+    DB readers of spec_json (dispatch re-entry, sweep watchdog,
     recover) republish queued/held renders or delivered plans with
     pending parts; the latter cannot enter this clearing path. The
     worker and reconcile read the spec file, which a pending part plan
@@ -2350,14 +2351,16 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
             "DELETE FROM notification_action_tokens WHERE expires_at<?",
             (now,)).rowcount
         cleared = 0
+        coverage_cache = {}
         for r in db.execute(
-                """SELECT r.delivery_id,r.op,r.state,r.spec_json,c.kind FROM notification_renders r
+                f"""SELECT r.delivery_id,r.op,r.state,r.spec_json,c.kind FROM notification_renders r
                    LEFT JOIN notification_cards c ON c.card_id=r.card_id
                    WHERE r.spec_json IS NOT NULL
                      AND CASE WHEN json_valid(r.spec_json) THEN NOT (
                        json_type(r.spec_json,'$.signal_thread_route') IS NOT NULL
                        AND json_type(r.spec_json,'$.thread_id') IS NOT NULL
-                       AND (SELECT COUNT(*) FROM json_each(r.spec_json))=2) ELSE 1 END
+                       AND (SELECT COUNT(*) FROM json_each(r.spec_json))=2)
+                       AND NOT {notify_scope.BODY_COVERAGE_WITNESS_SQL} ELSE 1 END
                      AND NOT EXISTS (
                        SELECT 1 FROM notification_delivery_attempts a
                        JOIN notification_renders active
@@ -2393,6 +2396,8 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                    ORDER BY r.updated_at LIMIT ?""", (limit,)).fetchall():
             witness = (_signal_route_witness(r["spec_json"]) if r["kind"] == "signal"
                        and r["op"] == "create" and r["state"] == "delivered" else None)
+            if witness is None and r['op'] == 'update':
+                witness = notify_scope.body_coverage_witness(db, r['delivery_id'], coverage_cache)
             db.execute(
                 "UPDATE notification_renders SET spec_json=?,"
                 "updated_at=? WHERE delivery_id=?",
