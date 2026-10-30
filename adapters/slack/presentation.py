@@ -232,8 +232,8 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
             sequence = item.get("provider_sequence") if version == 4 else None
             selected = visible if visible is not None else [key for key, _ in _PROVIDER_NAMES]
             ordered = _ordered_providers(selected, sequence)
-            names = dict(_PROVIDER_NAMES)
-            fallback_items = [f"{names[key]} {_STATE_LABELS[states[key]]}" for key in ordered]
+            provider_names = dict(_PROVIDER_NAMES)
+            fallback_items = [f"{provider_names[key]} {_STATE_LABELS[states[key]]}" for key in ordered]
             if sequence is not None and len(ordered) > len(sequence):
                 fallback_items.insert(len(sequence), "その他（順序不明）")
             fallback = " · ".join(fallback_items)

@@ -583,3 +583,31 @@ def test_writer_split_header_uses_registered_provider_visibility(led, monkeypatc
     for provider, name in (("anthropic", "Anthropic"), ("openai", "OpenAI")):
         assert (name in text) == (provider in cloud)
         assert (name in rendered) == (provider in cloud)
+
+
+@pytest.mark.parametrize("version,sequence", [(2, None), (3, None), (4, None), (4, ["jev", "local"])])
+def test_silent_footer_keeps_member_names_after_provider_header(version, sequence):
+    from adapters.slack.cards import render
+
+    spec = _spec()
+    states = dict.fromkeys(("anthropic", "openai", "jev", "local"), "unknown")
+    visible = ["anthropic", "openai", "jev", "local"] if version == 2 else ["jev", "local"]
+    fallback = " · ".join(f"{name} 不明" for key, name in (
+        ("anthropic", "Anthropic"), ("openai", "OpenAI"), ("jev", "Jev"), ("local", "💻"))
+        if key in visible)
+    header = {"type": "text", "provider_scope": "header", "provider_states": states.copy(),
+              "text": fallback}
+    if version >= 3:
+        header["visible_providers"] = visible
+    if version == 4:
+        order = "Jev → 💻" if sequence else "不明"
+        header.update(processing_status="processing", provider_sequence=sequence,
+                      text=f"解析中 · 採用結果の処理順: {order} · {fallback}")
+    spec["parts"].update(provider_states_version=version, mentions="silent", containers=[
+        {"type": "heading", "text": "合成カード"}, header,
+        {"type": "text", "rule": True, "text": "合成投稿", "provider_states": states.copy()}],
+        footer=[{"type": "text", "text": "確認: <@U0A>・<@U0B>・<@U0X>"}])
+    _, blocks = render(spec, names={"U0A": "合成担当A", "U0B": "合成担当B"})
+    text = json.dumps(blocks, ensure_ascii=False)
+    assert "合成担当A" in text and "合成担当B" in text and "メンバー" in text
+    assert "<@U0A>" not in text and "<@U0B>" not in text and "<@U0X>" not in text
