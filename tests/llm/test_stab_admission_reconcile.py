@@ -1,12 +1,18 @@
-"""Completion-unproven permits of a live (resident) owner are released
-only after the hold AND backend evidence; occupancy is visible for
-alerting. Synthetic broker store and stubbed /slots only."""
+"""Unproven completions stay occupying until confirmed retirement or a fence.
+
+Synthetic server-queued requests can coexist with idle slots."""
 import json
 
 import pytest
 
 import llm_admission as adm
 import local_llm
+
+
+@pytest.fixture(autouse=True)
+def live_owner(monkeypatch):
+    monkeypatch.setattr(adm, "_proc_started", lambda pid: "proc:1")
+    monkeypatch.setattr(adm, "_pid_alive", lambda pid: True)
 
 
 @pytest.fixture
@@ -39,24 +45,22 @@ def test_unknown_permits_fill_width_and_show_in_status(broker):
     assert status["oldest_unresolved_age_s"] >= 10
 
 
-def test_reconcile_needs_age_and_evidence(broker):
+def test_reconcile_keeps_age_and_unverified_evidence_read_only(broker):
     fresh = _unknown(broker, 10)
     aged = _unknown(broker, adm.UNKNOWN_HOLD_S + 5)
     probes = []
 
-    def no_proof():
-        probes.append(1)
-        return None
-    assert broker.reconcile_unknown(no_proof) == {"reconciled": 0, "held": 1}
-    assert broker.reconcile_unknown(lambda: "") ["reconciled"] == 0
+    before = broker.db.total_changes
+    for proof in (None, "", "slots_idle_x3", "backend-empty"):
+        def evidence():
+            probes.append(1)
+            return proof
+        assert broker.reconcile_unknown(evidence) == {"reconciled": 0, "held": 1}
+    assert broker.db.total_changes == before
     assert broker._permit(aged)["state"] == "unknown"
-    assert broker.reconcile_unknown(lambda: "slots_idle_x3") == {"reconciled": 1}
-    row = broker._permit(aged)
-    assert (row["state"], row["outcome"], row["proof"]) == \
-        ("terminal", "reconciled", "slots_idle_x3")
-    assert broker._permit(fresh)["state"] == "unknown"     # still held
-    assert broker.acquire("mcs.extract", "BACKLOG")["admitted"]
-    assert probes == [1]
+    assert broker._permit(fresh)["state"] == "unknown"
+    assert broker.acquire("mcs.extract", "BACKLOG")["reason"] == "class_full"
+    assert probes == []
 
 
 def test_reconcile_without_candidates_never_probes(broker):
@@ -76,39 +80,61 @@ def _slots(monkeypatch, payloads):
     return calls
 
 
-def test_idle_evidence_requires_every_sample_idle(monkeypatch):
+@pytest.mark.parametrize("state", ["unknown", "cancel_pending"])
+def test_idle_slots_do_not_retire_a_server_queued_request(broker, monkeypatch, state):
+    permit = _unknown(broker, adm.UNKNOWN_HOLD_S + 5)
+    if state == "cancel_pending":
+        broker.cancel(permit)
+    queued = [permit]
     idle = [{"id": 0, "is_processing": False}, {"id": 1, "is_processing": False}]
-    busy = [{"id": 0, "is_processing": True}, {"id": 1, "is_processing": False}]
     calls = _slots(monkeypatch, [idle, idle, idle])
-    assert local_llm.backend_idle_evidence() == "slots_idle_x3"
-    assert len(calls) == 3 and all(c.endswith("/slots") for c in calls)
-    _slots(monkeypatch, [idle, busy, idle])
-    assert local_llm.backend_idle_evidence() is None
-    _slots(monkeypatch, [[]])
-    assert local_llm.backend_idle_evidence() is None
+
+    def evidence():
+        assert queued == [permit]
+        return local_llm.backend_idle_evidence()
+
+    result = broker.reconcile_unknown(evidence)
+    assert result == {"reconciled": 0, "held": 1}, {
+        "result": result, "idle_samples": len(calls), "server_queued": len(queued)}
+    assert broker._permit(permit)["state"] == state and queued == [permit]
+    rt = broker.acquire("hermes.interactive", "RT")
+    assert not rt["admitted"] and rt["reason"] == "waiting"
+    assert not broker.overlap()
 
 
-def test_admitted_chat_reconciles_aged_unknowns_once(tmp_path, monkeypatch):
+def test_idle_observations_cannot_supply_retirement_evidence(monkeypatch):
+    idle = [{"id": 0, "is_processing": False}, {"id": 1, "is_processing": False}]
+    calls = _slots(monkeypatch, [idle, idle, idle])
+    assert local_llm.backend_idle_evidence() is None
+    assert calls == []
+
+
+def test_admitted_chat_holds_queued_work_until_confirmed_retirement(tmp_path, monkeypatch):
     path = str(tmp_path / "adm2.db")
     monkeypatch.setenv("MCS_LLM_ADMISSION", path)
     monkeypatch.setattr(local_llm, "_RECONCILED_AT", {})
     broker = local_llm._broker(path)
     broker.open_epoch(lambda: True)
-    for _ in range(broker.slots):
-        _unknown(broker, adm.UNKNOWN_HOLD_S + 5)
+    queued = [_unknown(broker, adm.UNKNOWN_HOLD_S + 5) for _ in range(broker.slots)]
     idle = [{"id": 0, "is_processing": False}]
     probes = _slots(monkeypatch, [idle])
-    monkeypatch.setattr(local_llm, "chat", lambda prompt, **kw: {
-        "text": "{}", "finish_reason": "stop", "usage": None, "status": 200})
+    sends = []
+
+    def chat(prompt, **kw):
+        assert not queued
+        sends.append(1)
+        return {"text": "{}", "finish_reason": "stop", "usage": None, "status": 200}
+
+    monkeypatch.setattr(local_llm, "chat", chat)
+    out = local_llm.admitted_chat("mcs.extract", "synthetic prompt")
+    assert out["admission"] == "class_full" and probes == [] and sends == []
+    assert local_llm.admission_status(path)["unresolved"] == broker.slots
+    retired = tuple(queued)
+    queued.clear()
+    for permit in retired:
+        assert broker.terminal(permit, "confirmed_retired", proof="synthetic-backend-ack")["terminal"]
     out = local_llm.admitted_chat("mcs.extract", "synthetic prompt")
     assert out["status"] == 200 and "admission" not in out
-    assert len(probes) == 3
-    status = local_llm.admission_status(path)
-    assert status["unresolved"] == 0
-    # a second aged permit inside the interval is not probed again
-    _unknown(broker, adm.UNKNOWN_HOLD_S + 5)
-    for _ in range(broker.slots - 1):
-        _unknown(broker, adm.UNKNOWN_HOLD_S + 5)
-    out = local_llm.admitted_chat("mcs.extract", "synthetic prompt")
-    assert out["admission"] == "class_full" and len(probes) == 3
+    assert sends == [1] and probes == []
+    assert local_llm.admission_status(path)["unresolved"] == 0
     broker.close()

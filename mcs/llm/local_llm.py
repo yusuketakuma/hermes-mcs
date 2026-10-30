@@ -224,11 +224,9 @@ def _broker(path: str | None = None):
         return b
 
 
-# Unknown-permit reconciliation: at most one evidence probe per broker
-# path per interval, and only when aged unresolved permits exist.
+# Legacy reconciliation cadence/cache; neither age nor idle observations
+# provide retirement evidence.
 RECONCILE_INTERVAL_S = 300.0
-_IDLE_SAMPLES = 3
-_IDLE_GAP_S = 1.0
 _RECONCILED_AT: dict = {}
 
 
@@ -282,23 +280,13 @@ def _wait_slot_idle(request, endpoint: str, slot: int,
 
 def backend_idle_evidence(endpoint: str = ENDPOINT,
                           deadline: float | None = None) -> str | None:
-    """Proof string when ``/slots`` reports every slot idle in each of
-    several spaced samples, else None. Used only to reconcile permits
-    already past ``llm_admission.UNKNOWN_HOLD_S`` — a single idle sample
-    is never treated as retirement evidence."""
-    for i in range(_IDLE_SAMPLES):
-        if i:
-            if deadline is not None and time.monotonic() + _IDLE_GAP_S >= deadline:
-                return None
-            time.sleep(_IDLE_GAP_S)
-        if not _slots_idle(endpoint, deadline):
-            return None
-    return f"slots_idle_x{_IDLE_SAMPLES}"
+    """Return no retirement evidence: idle slots do not exclude server-queued work."""
+    return None
 
 
 def _maybe_reconcile(broker, path: str, endpoint: str,
                      deadline: float | None) -> bool:
-    """Throttled ``reconcile_unknown``; True when it freed a permit."""
+    """Preserve the reconciliation entry point without retiring unproven work."""
     last = _RECONCILED_AT.get(path)
     if last is not None and time.monotonic() - last < RECONCILE_INTERVAL_S:
         return False
@@ -361,7 +349,7 @@ def admitted_chat(client_route: str, prompt: str, *,
             and acq.get("reason") in ("class_full", "rt_pending") \
             and _maybe_reconcile(broker, broker_path or _admission_db_path(),
                                  kw.get("endpoint", ENDPOINT), deadline):
-        # aged completion-unproven permits were retired on evidence
+        # Retry only when the broker itself reports a completed reconciliation.
         acq = broker.acquire(client_route, cls)
     pid = acq.get("permit_id")
     if not acq.get("admitted") and acq.get("reason") == "waiting" \

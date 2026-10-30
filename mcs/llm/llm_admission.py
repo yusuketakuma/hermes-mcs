@@ -97,17 +97,15 @@ OCCUPYING = ("reserved", "admitted", "sent", "unknown",
 LIVE = OCCUPYING + ("waiting",)
 _LIVE_IN = f"({','.join('?' * len(LIVE))})"
 TERMINAL = ("terminal", "fenced")
-# Occupancy lease: 2x the longest client timeout (a backlog semantic
-# call is bounded by its job budget, at most 900 s). Only combined with
-# a dead owner process is expiry acted on.
+# Occupancy lease exceeds semantic_policy's maximum 1260 s job budget.
+# Expiry acts only with a provably dead or replaced recorded owner.
 LEASE_S = 1800.0
 # Terminal rows older than this are pruned, a bounded batch per acquire.
 RETENTION_S = 7 * 86400.0
 PRUNE_BATCH = 100
 RECLAIM_BATCH = 20
-# Completion-unproven states. A live owner's such permit is retired only
-# by ``reconcile_unknown`` — after this hold (past any client deadline
-# and bounded generation) AND with backend evidence of an empty server.
+# Completion-unproven states stay occupying until confirmed terminal
+# retirement or an existing fence. The hold only scopes reconciliation counts.
 UNRESOLVED = ("unknown", "cancel_pending")
 UNKNOWN_HOLD_S = LEASE_S
 
@@ -753,39 +751,18 @@ class Broker:
             (epoch, *UNRESOLVED, now - UNKNOWN_HOLD_S, RECLAIM_BATCH))]
 
     def reconcile_unknown(self, evidence) -> dict:
-        """Retire current-epoch ``unknown``/``cancel_pending`` permits whose
-        send is older than ``UNKNOWN_HOLD_S`` — only on backend evidence.
+        """Report held permits without trusting caller-supplied retirement evidence.
 
-        A resident owner never restarts, so without this its timed-out
-        permits held their class until the process exited: two of them
-        filled the backlog width for good. Age alone is never proof:
-        ``evidence`` is called (outside the store's write lock, only when
-        aged candidates exist) and must return a non-empty proof string
-        that the backend holds no work — e.g. repeated idle ``/slots``
-        samples taken after the hold, which cannot coexist with a request
-        still decoding. Anything else keeps the permits occupying."""
-        with self._mutex:       # the evidence probe runs unserialized
+        This compatibility callback has no request-bound verification
+        contract. Neither a proof string nor idle slots exclude server-queued
+        work, so leave completion-unproven permits to terminal or epoch fences.
+        """
+        with self._mutex:
             epoch = self._meta()["epoch"]
             candidates = self._aged_unresolved(epoch, time.time())
         if not candidates:
             return {"reconciled": 0}
-        try:
-            proof = evidence() if callable(evidence) else None
-        except Exception:
-            proof = None
-        if not isinstance(proof, str) or not proof:
-            return {"reconciled": 0, "held": len(candidates)}
-        with self._mutex, self._write_tx():
-            if self._meta()["epoch"] != epoch:
-                return {"reconciled": 0}
-            marks = ",".join("?" * len(candidates))
-            cur = self.db.execute(
-                "UPDATE permits SET state='terminal', outcome='reconciled',"
-                " proof=?, terminal_at=? WHERE epoch=? AND permit_id IN"
-                f" ({marks}) AND state IN"
-                f" ({','.join('?' * len(UNRESOLVED))})",
-                (proof[:200], time.time(), epoch, *candidates, *UNRESOLVED))
-            return {"reconciled": cur.rowcount}
+        return {"reconciled": 0, "held": len(candidates)}
 
     # ---------- observability ----------
 
@@ -800,8 +777,7 @@ class Broker:
             f"AND cls='BACKLOG' AND state IN "
             f"({','.join('?' * len(OCCUPYING))})",
             (meta["epoch"], *OCCUPYING)).fetchone()[0]
-        # unresolved = occupying without a live request behind it; a
-        # sustained non-zero count is the alert signal (width lost)
+        # Unresolved work may still be queued or decoding; expose its held width.
         unresolved, oldest_unresolved = self.db.execute(
             "SELECT COUNT(*), MIN(COALESCE(sent_at,admitted_at,created_at))"
             " FROM permits WHERE epoch=? AND state IN"
