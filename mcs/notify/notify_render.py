@@ -741,7 +741,8 @@ SECTION_RULE = "─" * 12
 
 
 def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
-                  include_summary=True, layout=1, stamp_time=True, provider_states=None) -> str:
+                  include_summary=True, layout=1, stamp_time=True, provider_states=None,
+                  visible_providers=None) -> str:
     """One MCS post as a thread message.
 
     Each post shows its summary, stamp observation, then source body.
@@ -756,7 +757,7 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
     out = [title]
     if provider_states is not None:
         import processing_route
-        out.append(processing_route.provider_text(provider_states))
+        out.append(processing_route.provider_text(provider_states, visible_providers))
     if include_summary:
         # the same plain wording and item rows as the card face
         out.append(_summary_block(db, mid, cfg=cfg, label=layout < 2)["text"])
@@ -798,7 +799,7 @@ def _signal_body(db, sig: dict, stamps=True, *, cfg=None, include_summary=True,
 
 
 def card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
-                    stamps=True, *, cfg=None, include_summary=True) -> tuple:
+                    stamps=True, *, cfg=None, include_summary=True, visible_providers=None) -> tuple:
     """Full text of the shown set frozen into the click's manifest —
     'body' answers what the button rendered, never the card's *current*
     page, so a concurrent nav cannot swap the view under the click.
@@ -813,6 +814,9 @@ def card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
     layout = card["layout"] if "layout" in card.keys() else 1
     stamp_time = "transport" not in card.keys() or card["transport"] != "lineworks"
     if card["kind"] == "thread":
+        import processing_route
+        if visible_providers is None:
+            visible_providers = processing_route.visible_providers()
         lines = []
         bundle_cache = {}
         bare = ("transport" in card.keys()
@@ -829,14 +833,13 @@ def card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
                 (mid, card["project_id"])).fetchone()
             if m is None:
                 continue
-            import processing_route
             states = (processing_route.provider_states(db, card["project_id"], mid, cfg=cfg,
                                                        bundle_cache=bundle_cache)
                       if m["body_state"] != "deleted" and include_summary else None)
             lines.append(_message_post(db, mid, m, _sender_tag(m, db),
                                        head=head, stamps=stamps, cfg=cfg,
                                        include_summary=include_summary, layout=layout, stamp_time=stamp_time,
-                                       provider_states=states))
+                                       provider_states=states, visible_providers=visible_providers))
         title = f"💬 {patient_heading(db, card['project_id'])} — 本文"
         text = "\n\n".join(lines)
     else:
@@ -853,7 +856,7 @@ def card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
     return title, text or "（表示できる本文がありません）"
 
 
-def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
+def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=None) -> dict:
     """The deterministic display model for a card at its current page:
     containers + footer + shown-set + pages. Tokens/buttons are added
     per-render and are NOT part of the content fingerprint."""
@@ -866,6 +869,9 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
     urgent = False
     layout = card["layout"] if "layout" in card.keys() else 1
     if kind == "thread":
+        import processing_route
+        if visible_providers is None:
+            visible_providers = processing_route.visible_providers()
         # layout 4: a reply card shows its one reply, the root card its root only
         only = reply_source(card) or (card["root_message_id"] if layout >= 4 else None)
         msgs = [dict(m) for m in db.execute(
@@ -921,7 +927,6 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
                 containers.append({"type": "text", "text": f"↳ 返信 {replies}件を保存済み"})
         # per post: sender line + its full 📋 要約 (or its empty state)
         rendered = []
-        import processing_route
         bundle_cache = {}
         for m in msgs:
             line = (_deleted_line(m["posted_at"], _sender_tag(m, db))
@@ -977,13 +982,13 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
     if kind == "thread":
         # Reserve the longest possible provider line before packing pages.
         header_placeholder = processing_route.provider_text(
-            dict.fromkeys(processing_route.PROVIDERS, "partial"))
+            dict.fromkeys(processing_route.PROVIDERS, "partial"), visible_providers)
         if len(containers) > 1 and containers[1]["type"] == "text" and not containers[1].get("rule"):
             containers[1]["text"] += " · " + header_placeholder
         else:
             containers.insert(1, {"type": "text", "text": header_placeholder})
-        containers[1].update(provider_scope="header", provider_states=dict.fromkeys(
-            processing_route.PROVIDERS, "partial"))
+        containers[1].update(provider_scope="header", visible_providers=list(visible_providers),
+                             provider_states=dict.fromkeys(processing_route.PROVIDERS, "partial"))
     source_fp = source_fingerprint(db, card)
     generation = render_source_generation(card, source_fp)
     # A long heading shares the old 800-character reserve with the footer.
@@ -1034,8 +1039,9 @@ def card_content(db, card, *, cfg=None, waiting=frozenset()) -> dict:
                         processing_route.PROVIDERS, "unknown")))
         states = processing_route.aggregate_provider_states(post_states)
         header = containers[1]
-        prefix = header["text"].replace(header_placeholder, "", 1).strip(" ·")
-        header["text"] = (prefix + " · " if prefix else "") + processing_route.provider_text(states)
+        before, _, after = header["text"].partition(header_placeholder)
+        prefix = " · ".join(part for part in (before.strip(" ·"), after.strip(" ·")) if part)
+        header["text"] = (prefix + " · " if prefix else "") + processing_route.provider_text(states, visible_providers)
         header["provider_states"] = states
     for i in pages_idx[page]:
         containers.extend(rendered[i])

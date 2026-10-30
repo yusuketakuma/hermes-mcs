@@ -21,14 +21,26 @@ MEMBER_LABEL = "メンバー"
 _PROVIDERS = (("anthropic", "Anthropic", "https://www.anthropic.com/images/icons/apple-touch-icon.png"),
               ("openai", "OpenAI", "https://avatars.githubusercontent.com/u/14957082?v=4"),
               ("jev", "Jev", "https://framerusercontent.com/images/aNFzSFxM4fjICmnibw7npfZjcQ.png"))
+_PROVIDER_NAMES = tuple((key, name) for key, name, _ in _PROVIDERS) + (("local", "💻"),)
 _STATE_LABELS = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
                  "pending": "処理待ち", "failed": "失敗", "unknown": "不明", "used": "使用あり"}
 _STATE_MARKS = {"done": "✓", "partial": "✓↷", "skipped": "↷", "unused": "−", "pending": "…", "failed": "!", "unknown": "?", "used": "✓"}
 
 
-def _provider_context(states, prefix=None):
+def _visible_providers(value):
+    keys = [key for key, _ in _PROVIDER_NAMES]
+    if (not isinstance(value, list) or value != [key for key in keys if key in value]
+            or "jev" not in value or "local" not in value):
+        raise ValueError("bad_provider_states")
+    return value
+
+
+def _provider_context(states, prefix=None, visible=None):
+    visible = visible if visible is not None else [key for key, _ in _PROVIDER_NAMES]
     elements = ([{"type": "plain_text", "text": prefix}] if prefix else [])
     for key, name, url in _PROVIDERS:
+        if key not in visible:
+            continue
         elements.append({"type": "image", "image_url": url,
                          "alt_text": f"{name} {_STATE_LABELS[states[key]]}"})
         elements.append({"type": "plain_text", "text": _STATE_MARKS[states[key]]})
@@ -36,14 +48,16 @@ def _provider_context(states, prefix=None):
     return {"type": "context", "elements": elements}
 
 
-def _provider_line(text, *, version=1):
-    supported = {key: label for key, label in _STATE_LABELS.items() if key != "used" or version == 2}
+def _provider_line(text, *, version=1, visible=None):
+    supported = {key: label for key, label in _STATE_LABELS.items() if key != "used" or version in (2, 3)}
     labels = "|".join(map(re.escape, supported.values()))
-    match = re.fullmatch(rf"Anthropic ({labels}) · OpenAI ({labels}) · Jev ({labels}) · 💻 ({labels})", text)
+    names = [(key, name) for key, name in _PROVIDER_NAMES if visible is None or key in visible]
+    pattern = " · ".join(rf"{re.escape(name)} ({labels})" for _, name in names)
+    match = re.fullmatch(pattern, text)
     if match is None:
         return None
     codes = {label: code for code, label in supported.items()}
-    return dict(zip(("anthropic", "openai", "jev", "local"), map(codes.get, match.groups())))
+    return dict(zip((key for key, _ in names), map(codes.get, match.groups())))
 
 
 def mention_ids(spec) -> set:
@@ -85,13 +99,19 @@ def thread_part_blocks(spec, part, text):
     if is_header_part(name):
         lines = text.split("\n")
         rest = [ln for ln in lines[1:] if ln]
-        version = (spec.get("parts") or {}).get("provider_states_version")
-        states = (_provider_line(rest[0], version=version) if rest and version in (1, 2)
+        parts = spec.get("parts") or {}
+        version = parts.get("provider_states_version")
+        visible = None
+        if version == 3:
+            header = next((item for item in parts.get("containers", [])
+                           if item.get("provider_scope") == "header"), {})
+            visible = _visible_providers(header.get("visible_providers"))
+        states = (_provider_line(rest[0], version=version, visible=visible) if rest and version in (1, 2, 3)
                   else None)
         if states is not None:
             rest.pop(0)
         summary = "\n".join(ln for ln in rest if not ln.startswith(_STAMP_LINE))
-        blocks = contexts(lines[0]) + ([_provider_context(states)] if states else []) + (text_sections(summary) if summary else [])
+        blocks = contexts(lines[0]) + ([_provider_context(states, visible=visible)] if states else []) + (text_sections(summary) if summary else [])
         for ln in rest:
             if ln.startswith(_STAMP_LINE):
                 blocks.extend(contexts(ln))
@@ -187,23 +207,24 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
             pending = face.get(index)
         if item.get("rule") and blocks:
             blocks.append(dict(_DIVIDER))
-        if (card_kind == "thread" and version == 2 and item.get("provider_scope") == "header"
+        if (card_kind == "thread" and version in (2, 3) and item.get("provider_scope") == "header"
                 and kind == "text"):
             states = item["provider_states"]
             text = item["text"]
+            visible = _visible_providers(item.get("visible_providers")) if version == 3 else None
             # The validated fallback is the last part of the text; it remains
             # available to non-Slack transports while Slack shows native images.
-            fallback = " · ".join(f"{name} {_STATE_LABELS[states[key]]}" for key, name in (
-                ("anthropic", "Anthropic"), ("openai", "OpenAI"), ("jev", "Jev"), ("local", "💻")))
+            fallback = " · ".join(f"{name} {_STATE_LABELS[states[key]]}" for key, name in _PROVIDER_NAMES
+                                  if visible is None or key in visible)
             prefix = text[:-len(fallback)].removesuffix(" · ")
             if len(prefix) > CONTEXT_MAX:
                 blocks.extend(contexts(prefix[:-CONTEXT_MAX]))
                 prefix = prefix[-CONTEXT_MAX:]
-            blocks.append(_provider_context(states, prefix))
+            blocks.append(_provider_context(states, prefix, visible))
             continue
         if card_kind == "thread" and item.get("rule") and kind == "text":
             states = item.get("provider_states")
-            if states is not None and version != 2:
+            if states is not None and version not in (2, 3):
                 blocks.extend(contexts(item["text"].rsplit("\n", 1)[0]))
                 blocks.append(_provider_context(states))
             else:
@@ -238,7 +259,7 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
         # A multi-post card must retain which post each observed reaction belongs to.
         item = parts["containers"][post["at"]]
         header = (item["text"].rsplit("\n", 1)[0]
-                  if version != 2 and item.get("provider_states") is not None else item["text"])
+                  if version not in (2, 3) and item.get("provider_states") is not None else item["text"])
         lines = [header] if len(face) > 1 else []
         blocks.extend(contexts("\n".join(lines + post["stamps"])))
     if stamp_control:

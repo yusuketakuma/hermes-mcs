@@ -705,11 +705,16 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         "context": context,
         "preview_text": content["preview_text"],
     }
-    if any(c.get("provider_scope") == "header" for c in containers):
-        spec["parts"]["provider_states_version"] = 2
-    elif any("provider_states" in c for c in containers):
-        # Older workers must hold this new display contract until restarted.
-        spec["parts"]["provider_states_version"] = 1
+    def set_provider_version(parts):
+        headers = [c for c in parts["containers"] if c.get("provider_scope") == "header"]
+        if headers:
+            parts["provider_states_version"] = 3 if "visible_providers" in headers[0] else 2
+        elif any("provider_states" in c for c in parts["containers"]):
+            parts["provider_states_version"] = 1
+        else:
+            parts.pop("provider_states_version", None)
+
+    set_provider_version(spec["parts"])
     post_source_id = own_post(card)
     if positive(post_source_id):
         spec["parts"]["post_source_id"] = post_source_id
@@ -740,6 +745,7 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         face_posts, face_mids = notify_parts.face_posts(db, card, spec["parts"], content, present)
     spec["parts"], budget_hold = notify_parts.build_manifest(
         db, card, spec, content, in_thread_body, cfg=cfg, face_mids=face_mids, waiting=waiting)
+    set_provider_version(spec["parts"])
     if any(b["id"] == "meds" for row in spec["parts"]["action_rows"] for b in row):
         spec["parts"]["drug_view_navigation"] = True
     if present.THREAD_DRUG_ACTIONS and spec["parts"].get("thread_body_parts"):
@@ -899,7 +905,11 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
                            (pending[0], card_id))
                 complete_intent(db, pending[0], now)
             return None
-    content = card_content(db, card, cfg=cfg)
+    content_options = {}
+    if card["kind"] == "thread":
+        import processing_route
+        content_options["visible_providers"] = processing_route.visible_providers()
+    content = card_content(db, card, cfg=cfg, **content_options)
     if (card["transport"] == "lineworks" and card["kind"] == "thread"
             and not content.get("urgent")):
         from notify_render import structured_block, extraction_failed, progress_state
@@ -924,7 +934,7 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
             # Publish ready posts without consuming newer posts' own deadlines.
             # The global source fingerprint remains intact for stale-action guards;
             # shown sets and intent binding describe only this render's coverage.
-            content = card_content(db, card, cfg=cfg, waiting=waiting)
+            content = card_content(db, card, cfg=cfg, waiting=waiting, **content_options)
             if not (ready - delivered) and _presentation_fp(card, content, cfg) == card["content_fp"]:
                 return None  # only the still-waiting posts changed
     gens = _generation_drift(card, content, cfg)

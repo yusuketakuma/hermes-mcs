@@ -48,6 +48,9 @@ BODY = "次回訪問時に残薬を確認してください。服薬カレンダ
 class Screen:
     def __init__(self, number, title, subtitle, height=800):
         self.height = height
+        # Screen 2 illustrates only the Anthropic key being registered.
+        self.providers = (("anthropic", "jev", "local") if number == 2
+                          else ("anthropic", "openai", "jev", "local"))
         self.parts = [
             f'<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="{height}" '
             f'viewBox="0 0 1100 {height}" font-family="{FONT}">',
@@ -171,8 +174,10 @@ class Screen:
 
     def provider_row(self, x, y, post):
         """Illustrate execution for the synthetic post shown in the card metadata."""
-        marks = (("✓", "?", "↷", "?"), ("?", "?", "✓", "✓"))[post]
-        for index, (provider, mark) in enumerate(zip(("anthropic", "openai", "jev", "local"), marks)):
+        marks = dict(zip(("anthropic", "openai", "jev", "local"),
+                         (("✓", "?", "↷", "?"), ("?", "?", "✓", "✓"))[post]))
+        for index, provider in enumerate(self.providers):
+            mark = marks[provider]
             left = x + index * 66
             if provider == "local":
                 self.text(left, y + 18, "💻", 20)
@@ -204,7 +209,7 @@ def overview():
 
 
 def notification():
-    s = Screen(2, "返信ごとのカードで、確認と担当を共有。", "各カードの要約・原文・スタンプ・操作は、そのカードの投稿だけが対象です。", 1300)
+    s = Screen(2, "返信ごとのカードで、確認と担当を共有。", "Anthropicのキーのみ登録した例。操作の対象は、そのカードの投稿です。", 1300)
     x, y = s.app()
     y = s.actions(x, s.card(x, y, replies=1))
     s.text(x, y + 40, "スレッド内の返信カード", 17, MUTED, True)

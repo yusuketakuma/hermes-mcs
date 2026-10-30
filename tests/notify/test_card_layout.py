@@ -48,9 +48,10 @@ def test_context_line_counts_posts_missing_replies_files_and_mention(led):
     header = spec["parts"]["containers"][1]
     states = dict.fromkeys(processing_route.PROVIDERS, "unknown")
     assert header["provider_scope"] == "header" and header["provider_states"] == states
+    assert header["visible_providers"] == ["jev", "local"]
     assert texts[1] == ("09-24〜 · 2投稿 · 返信未取得 2件 · 📎 1 · "
-                        + processing_route.provider_text(states))
-    assert spec["parts"]["provider_states_version"] == 2
+                        + "Jev 不明 · 💻 不明")
+    assert spec["parts"]["provider_states_version"] == 3
     # each post is its own zone: rule before it, its 要約 state after it
     rules = [c for c in spec["parts"]["containers"] if c.get("rule")]
     progress = {mid: notify_render.progress_state(led.db, mid, CFG) for mid in (100, 101)}
@@ -95,8 +96,9 @@ def test_failed_extraction_is_named_on_the_post(led):
     header = spec["parts"]["containers"][1]
     states = dict.fromkeys(processing_route.PROVIDERS, "unknown")
     assert header["provider_scope"] == "header" and header["provider_states"] == states
-    assert header["text"] == "09-24〜 · 1投稿 · " + processing_route.provider_text(states)
-    assert spec["parts"]["provider_states_version"] == 2
+    assert header["visible_providers"] == ["jev", "local"]
+    assert header["text"] == "09-24〜 · 1投稿 · Jev 不明 · 💻 不明"
+    assert spec["parts"]["provider_states_version"] == 3
 
 
 def test_footer_is_one_state_item_and_revoked_card_has_no_buttons(led):
@@ -210,6 +212,28 @@ def _lw_reissue(led, change=False):
 def test_lineworks_identical_post_is_not_reposted(led):
     posts = _lw_reissue(led)
     assert posts and all(p.get("prior_remote_id") for p in posts)
+
+
+def test_lineworks_reuses_provider_visibility_during_one_render(led, monkeypatch):
+    import processing_route
+
+    _seed_thread(led, mids=(100, 101))
+    led.db.execute("UPDATE messages SET first_seen=? WHERE message_id=101", (NOW - 1,))
+    led.db.commit()
+    observations = []
+    monkeypatch.setattr(processing_route, "visible_providers",
+                        lambda: observations.append("checked") or ("openai", "jev", "local"))
+    calls = []
+    original = notify_cards.card_content
+
+    def record_content(*args, **kwargs):
+        calls.append(kwargs.get("visible_providers"))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(notify_cards, "card_content", record_content)
+    _dispatch(led, _intent(led), LINEWORKS)
+    assert observations == ["checked"]
+    assert calls == [("openai", "jev", "local"), ("openai", "jev", "local")]
 
 
 def test_lineworks_changed_post_is_posted_anew(led):

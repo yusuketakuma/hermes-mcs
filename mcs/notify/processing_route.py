@@ -4,12 +4,26 @@ from __future__ import annotations
 import math
 import sqlite3
 
+import mcs_util
 from mcs_queries import FACT_KINDS_SQL, current_fact_pred
 from mcs_util import payload_hash, strict_json
 
 PROVIDERS = ("anthropic", "openai", "jev", "local")
 STATE_LABELS = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
                 "pending": "処理待ち", "failed": "失敗", "unknown": "不明", "used": "使用あり"}
+
+
+def visible_providers(root=None):
+    """Return services whose private API keys are usable, plus Jev and local."""
+    result = []
+    for provider, key in (("anthropic", "MCS_ANTHROPIC_API_KEY"),
+                          ("openai", "MCS_OPENAI_API_KEY")):
+        try:
+            if mcs_util.private_env_problem(key, root) is None:
+                result.append(provider)
+        except Exception:
+            pass
+    return (*result, "jev", "local")
 
 
 def aggregate_provider_states(posts):
@@ -214,10 +228,11 @@ def provider_info(db, project_id, message_id, cfg=None, *, bundle_cache=None):
     return result()
 
 
-def provider_text(states):
+def provider_text(states, visible=None):
     """Readable fallback for transports without inline provider images."""
+    allowed = PROVIDERS if visible is None else visible if isinstance(visible, (list, tuple)) else ()
     return " · ".join(f"{name} {STATE_LABELS[states[key]]}" for key, name in (
-        ("anthropic", "Anthropic"), ("openai", "OpenAI"), ("jev", "Jev"), ("local", "💻")))
+        ("anthropic", "Anthropic"), ("openai", "OpenAI"), ("jev", "Jev"), ("local", "💻")) if key in allowed)
 
 
 def _route(row, meta, content):

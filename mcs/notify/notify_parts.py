@@ -591,6 +591,19 @@ def face_posts(db, card, parts, content, present) -> tuple:
     return posts, frozenset(mids)
 
 
+def _provider_visibility(parts):
+    providers = ("anthropic", "openai", "jev", "local")
+    if parts.get("provider_states_version") != 3:
+        return providers
+    headers = [item for item in parts.get("containers", [])
+               if isinstance(item, dict) and item.get("provider_scope") == "header"]
+    value = headers[0].get("visible_providers") if len(headers) == 1 else None
+    if (not isinstance(value, list) or value != [key for key in providers if key in value]
+            or "jev" not in value or "local" not in value):
+        raise ValueError("bad_provider_states")
+    return tuple(value)
+
+
 def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                          face_mids=frozenset(), waiting=frozenset()) -> tuple[dict, str | None]:
     """Return new parts and an optional hold reason using borrowed read-only DB access.
@@ -606,12 +619,17 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
     parts = dict(spec["parts"])
     budget_hold = None
     reused_card = None
+    visible_providers = _provider_visibility(parts)
     if card["transport"] == "lineworks" and spec["op"] == "update":
         old = db.execute("SELECT spec_json FROM notification_renders WHERE card_id=? "
                          "AND state='delivered' ORDER BY render_rev DESC LIMIT 1",
                          (card["card_id"],)).fetchone()
         previous = json.loads(old[0]) if old and old[0] else None
         if previous and "parts" in previous:
+            try:
+                prior_visible = _provider_visibility(previous["parts"])
+            except ValueError:
+                prior_visible = None
             def strip_tokens(rows):
                 return [[{k: v for k, v in b.items() if k != "token"}
                          for b in row] for row in rows]
@@ -621,6 +639,9 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                     and previous["source_generation"] == spec["source_generation"]
                     and previous["ui_revision"] == spec["ui_revision"]
                     and scope_matches(previous["delivery"], stored_scope(card))
+                    and (previous["parts"].get("provider_states_version") == 3)
+                    == (parts.get("provider_states_version") == 3)
+                    and prior_visible == visible_providers
                     and strip_tokens(previous["parts"]["action_rows"]) == strip_tokens(parts["action_rows"])):
                 for field in ("containers", "footer", "action_rows", "preview_text"):
                     if field in previous["parts"]:
@@ -666,7 +687,8 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
         keyed.extend(present.overflow(parts, split_chunks))
     for key, mids in _body_groups(db, card, planned, posts):
         man = {"shown": json.dumps(mids, ensure_ascii=False)}
-        body = card_body_text(db, card, man, max_chars=None, cfg=cfg)[1]
+        body = card_body_text(db, card, man, max_chars=None, cfg=cfg,
+                              visible_providers=visible_providers)[1]
         # lossless — no chunk dropped
         header, divider, original = body.partition("\n" + "─" * 12 + "\n")
         header_chunks = []

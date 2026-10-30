@@ -132,6 +132,76 @@ def test_v2_thread_header_keeps_legacy_per_post_provider_details():
     assert blocks[3]["elements"][0]["text"] == "スタンプ 👍1"
 
 
+@pytest.mark.parametrize("cloud", [[], ["anthropic"], ["openai"], ["anthropic", "openai"]])
+def test_v3_visibility_filters_face_and_split_header_without_losing_states(cloud):
+    import present_slack
+
+    visible = cloud + ["jev", "local"]
+    states = {"anthropic": "done", "openai": "done", "jev": "partial", "local": "unknown"}
+    names = {"anthropic": "Anthropic", "openai": "OpenAI", "jev": "Jev", "local": "💻"}
+    labels = {"anthropic": "実行済み", "openai": "実行済み", "jev": "一部実行・一部省略", "local": "不明"}
+    fallback = " · ".join(f"{names[key]} {labels[key]}" for key in visible)
+    parts = {"provider_states_version": 3, "containers": [
+        {"type": "heading", "text": "合成カード"},
+        {"type": "text", "provider_scope": "header", "provider_states": states.copy(),
+         "visible_providers": visible, "text": "合成情報 · " + fallback},
+        {"type": "text", "rule": True, "text": "合成投稿", "provider_states": states.copy()},
+        {"type": "text", "text": "合成要約"}], "footer": [], "action_rows": []}
+    blocks = render_parts(parts, card_kind="thread")
+    elements = blocks[1]["elements"]
+    assert [item["alt_text"] for item in elements if item["type"] == "image"] == [
+        f"{names[key]} {labels[key]}" for key in visible if key != "local"]
+    assert elements[-1]["text"] == "💻 ? 不明"
+    assert parts["containers"][1]["provider_states"] == states
+    assert parts["containers"][2]["provider_states"] == states
+    assert present_slack.face_block_count(parts) == len(blocks)
+    for key in {"anthropic", "openai"} - set(cloud):
+        assert names[key] not in json.dumps(blocks, ensure_ascii=False)
+
+    spec = _split_spec("m:100:header#1", "m:100#1")
+    spec["parts"].update(provider_states_version=3, containers=parts["containers"])
+    split = thread_part_blocks(spec, {"name": "m:100:header#1"},
+                               "合成投稿\n" + fallback + "\n要約: 合成")
+    assert [item["alt_text"] for item in split[1]["elements"] if item["type"] == "image"] == [
+        f"{names[key]} {labels[key]}" for key in visible if key != "local"]
+    assert split[2]["text"]["text"] == "要約: 合成"
+    for key in {"anthropic", "openai"} - set(cloud):
+        assert names[key] not in json.dumps(split, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("prefix", ["", "合成" * 2000 + "x"])
+@pytest.mark.parametrize("visible", [["jev", "local"], ["openai", "jev", "local"]])
+def test_v3_header_count_matches_blocks_without_anthropic(prefix, visible):
+    import present_slack
+    import processing_route
+
+    states = dict.fromkeys(("anthropic", "openai", "jev", "local"), "unknown")
+    fallback = processing_route.provider_text(states, visible)
+    text = (prefix + " · " if prefix else "") + fallback
+    parts = {"provider_states_version": 3, "containers": [
+        {"type": "text", "provider_scope": "header", "visible_providers": visible,
+         "provider_states": states, "text": text}], "footer": [], "action_rows": []}
+    blocks = render_parts(parts, card_kind="thread")
+    assert present_slack.face_block_count(parts) == len(blocks)
+    assert all(block["type"] == "context" for block in blocks)
+    assert all(len(element.get("text", "")) <= 2000 for block in blocks for element in block["elements"])
+    prior = "".join(element["text"] for block in blocks[:-1] for element in block["elements"])
+    last = blocks[-1]["elements"][0]["text"] if prefix else ""
+    assert prior + last == prefix
+    assert "Anthropic" not in json.dumps(blocks, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("visible", [None, [], ["local", "jev"], ["jev", "jev", "local"],
+                                      ["other", "jev", "local"], "jev,local"])
+def test_v3_provider_visibility_rejects_invalid_metadata(visible):
+    parts = {"provider_states_version": 3, "containers": [
+        {"type": "text", "provider_scope": "header", "visible_providers": visible,
+         "provider_states": dict.fromkeys(("anthropic", "openai", "jev", "local"), "unknown"),
+         "text": "Jev 不明 · 💻 不明"}], "footer": [], "action_rows": []}
+    with pytest.raises(ValueError, match="bad_provider_states"):
+        render_parts(parts, card_kind="thread")
+
+
 @pytest.mark.parametrize("separator", ["\n", "\r\n", "\u2028"])
 def test_sender_cannot_insert_a_fake_provider_line_in_thread_header(monkeypatch, separator):
     import notify_render
@@ -374,3 +444,43 @@ def test_other_rejections_are_not_retried_without_blocks(led, error, monkeypatch
     out = _run(w, spec, BODY, {"part_id": "body:0002", "kind": "body_part", "name": "m:100#1"})
     assert out["result"] == "not_sent" and len(attempts) == 1
     assert json.dumps(attempts[0]["blocks"])  # the blocks were sent, once
+
+
+@pytest.mark.parametrize("cloud", [(), ("anthropic",), ("openai",), ("anthropic", "openai")])
+def test_writer_split_header_uses_registered_provider_visibility(led, monkeypatch, cloud):
+    import mcs_util
+    import present_slack
+    import processing_route
+    from notify_testkit import _dispatch, _intent, _seed_thread, _spec as written_spec
+    from slack_testkit import SLACK
+
+    requested = []
+    keys = {"MCS_ANTHROPIC_API_KEY": "anthropic", "MCS_OPENAI_API_KEY": "openai"}
+
+    def key_problem(name, root=None):
+        requested.append(name)
+        return None if keys[name] in cloud else "missing"
+
+    monkeypatch.setattr(mcs_util, "private_env_problem", key_problem)
+    monkeypatch.setattr(present_slack, "BODY_ON_FACE", False)
+    monkeypatch.setattr(processing_route, "provider_states",
+                        lambda *args, **kwargs: dict.fromkeys(processing_route.PROVIDERS, "done"))
+    _seed_thread(led, mids=(100,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)
+    spec = written_spec(led)
+    validate(spec)
+    assert requested == list(keys)
+    assert spec["parts"]["provider_states_version"] == 3
+    assert spec["parts"]["containers"][1]["visible_providers"] == [*cloud, "jev", "local"]
+    part = next(p for p in spec["parts"]["manifest"]
+                if p.get("kind") == "body_part" and p.get("name") == "m:100:header#1")
+    text = spec["parts"]["thread_body_parts"][int(part["part_id"].split(":")[1]) - 1]
+    blocks = thread_part_blocks(spec, part, text)
+    assert blocks is not None
+    images = [element["alt_text"].split()[0].lower() for block in blocks
+              for element in block.get("elements", []) if element.get("type") == "image"]
+    assert images == [*cloud, "jev"]
+    rendered = json.dumps(blocks, ensure_ascii=False)
+    for provider, name in (("anthropic", "Anthropic"), ("openai", "OpenAI")):
+        assert (name in text) == (provider in cloud)
+        assert (name in rendered) == (provider in cloud)
