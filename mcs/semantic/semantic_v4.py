@@ -48,11 +48,14 @@ KIND_V4_STAGE = "v4_stage"
 KIND_V4_DIAG = "v4_diagnostic"
 
 
-def _projection_provenance(db, pid, mid, fp, policy, member, doc, content):
+def _projection_provenance(db, pid, mid, fp, policy, member, doc, content, *, sequence_out=None):
     from inference_dependency_loss import source_binding
     from semantic_projection import project_v2_doc_legacy
 
     providers, complete, jev = [], False, "unknown"
+    preflight = None
+    if sequence_out is not None:
+        sequence_out['sequence'] = None
     doc_hash = semantic_facts.doc_hash(doc)
     if payload_hash(project_v2_doc_legacy(doc)) != payload_hash(content):
         return {"version": 1, "stage": "projection", "providers": providers, "complete": complete,
@@ -83,12 +86,14 @@ def _projection_provenance(db, pid, mid, fp, policy, member, doc, content):
                         and (not proof["complete"] or bool(proof["providers"]))):
                     from semantic_extraction import rebuild_facts_v2_cached
                     producer = {}
+                    chunk_sequence = {}
                     rebuilt, error = rebuild_facts_v2_cached(member, db, fp, pid, data, meta,
-                                                             producer_out=producer)
+                                                             producer_out=producer, sequence_out=chunk_sequence)
                     if (error is None and rebuilt is not None and payload_hash(rebuilt) == payload_hash(data)
                             and producer.get("providers") == proof["providers"]
                             and producer.get("complete") is proof["complete"]):
                         providers, complete = proof["providers"], proof["complete"]
+                        preflight = chunk_sequence.get('preflight')
             else:
                 proof = meta.get("jev_provenance")
                 if (meta.get("doc_hash") == doc_hash and isinstance(proof, dict)
@@ -116,9 +121,13 @@ def _projection_provenance(db, pid, mid, fp, policy, member, doc, content):
                         jev = "partial"
         except (KeyError, TypeError, ValueError, RecursionError, OverflowError):
             continue
-    return {"version": 1, "stage": "projection", "providers": providers, "complete": complete,
-            "result_hash": payload_hash(content), "source_fingerprint": fp, "policy_fingerprint": policy,
-            "target_revision": member["revision"], "source_binding": source_binding(db, pid, mid), "jev": jev}
+    result = {"version": 1, "stage": "projection", "providers": providers, "complete": complete,
+              "result_hash": payload_hash(content), "source_fingerprint": fp, "policy_fingerprint": policy,
+              "target_revision": member["revision"], "source_binding": source_binding(db, pid, mid), "jev": jev}
+    if sequence_out is not None and complete and len(providers) == 1:
+        if preflight == 'complete':
+            sequence_out['sequence'] = ['jev', providers[0]]
+    return result
 
 
 def record_stage(ledger, pid: int, mid: int, fp: str, policy: str,
@@ -813,9 +822,9 @@ def _hold_upgraded_repairs(ledger, scfg: dict, limit: int, out: dict) -> None:
 def diagnostic(ledger, pid: int, mid: int, fp: str, policy: str,
                status: str, findings: list, doc_hash=None,
                tx: bool = False) -> None:
-    """A non-PASS outcome lives ONLY as a diagnostic receipt — the
-    separate kind guarantees no extraction reader can ever select it
-    as current content. Idempotent per (fp, status, doc_hash): a
+    """Record an outcome as a diagnostic receipt — the separate kind
+    guarantees no extraction reader can ever select it as current content.
+    Idempotent per (fp, status, doc_hash): a
     retried drain must not stack identical rows. ``tx=True`` inside a
     caller-held ``with ledger.db`` block."""
     from semantic_store import current_artifact
@@ -1119,9 +1128,10 @@ def publish_target_tx(ledger, pid: int, mid: int, fp: str, policy: str,
                 fact_source: str) -> None:
     """T18 S8 — called INSIDE the caller's ``with ledger.db`` so the
     read-model switch (or its diagnostic) commits atomically with the
-    status receipt. Only an all-PASS chain mints the ``semantic_facts_v4``
-    read model; anything else leaves a ``v4_diagnostic`` receipt that no
-    extraction reader can select."""
+    status receipt. For canonical facts, an all-PASS chain mints the
+    ``semantic_facts_v4`` read model. Eligible fully-bound SKIPPED results
+    mint ``semantic_facts_v4_skipped``; other outcomes leave a
+    ``v4_diagnostic`` receipt that no extraction reader can select."""
     from semantic_store import current_artifact
     if fact_source != "canonical":
         return

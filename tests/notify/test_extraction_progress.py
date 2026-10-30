@@ -157,8 +157,9 @@ def test_real_legacy_checkpoint_reaches_private_summary_read_only(led, change):
     assert "SOURCE_CANARY" not in text and "完了は抽出処理のみ" not in text
 
 
+@pytest.mark.parametrize("layout", [1, 2])
 @pytest.mark.parametrize("attempts,state", [(0, "processing"), (1, "processing"), (5, "attention")])
-def test_generation_upgrade_and_retry_status_reaches_summary_and_shared_render(led, attempts, state):
+def test_generation_upgrade_and_retry_status_reaches_summary_and_shared_render(led, attempts, state, layout):
     import json
     import notify_render
     import processing_route
@@ -173,6 +174,7 @@ def test_generation_upgrade_and_retry_status_reaches_summary_and_shared_render(l
     cfg = {"local_llm": {"model": extract_llm.MODEL}}
     _dispatch(led, _intent(led, payload={"message_ids": [1]}))
     card = _card(led)
+    card["layout"] = layout
     led.db.execute("PRAGMA query_only=ON")
     assert extraction_progress.message_progress(led.db, row, cfg=cfg)["state"] == state
     progress = extraction_progress.patient_progress(led.db, 1, cfg=cfg)
@@ -185,11 +187,38 @@ def test_generation_upgrade_and_retry_status_reaches_summary_and_shared_render(l
     header = next(item for item in content["containers"] if item.get("provider_scope") == "header")
     states = dict.fromkeys(processing_route.PROVIDERS, "unknown")
     assert header["provider_states"] == states
-    assert header["text"].endswith(processing_route.provider_text(states))
+    assert header["text"].endswith(processing_route.provider_text(states, header["visible_providers"]))
     assert "解析更新中" not in header["text"] and "解析要確認" not in header["text"]
-    label = "解析要確認" if state == "attention" else "解析更新中"
-    summaries = [item["text"] for item in content["containers"]
-                 if item.get("type") == "text" and label in item.get("text", "")]
-    assert len(summaries) == 1
-    assert label + f"（{progress['total']}区間中{progress['completed']}区間完了）" in summaries[0]
-    assert "SOURCE_CANARY" not in summaries[0]
+    expected = ("attention" if state == "attention" else
+                "preparing" if progress["total"] and progress["completed"] == progress["total"]
+                else "processing")
+    assert header["processing_status"] == expected
+    assert notify_render.PROCESSING_STATUS_LABELS[expected] in header["text"]
+    face = notify_render.display_text(content)
+    assert "解析更新中" not in face and "解析要確認" not in face
+    assert "SOURCE_CANARY" not in face
+    body = notify_render.card_body_text(led.db, card, {"shown": "[1]"}, cfg=cfg)[1]
+    assert "SOURCE_CANARY" in body
+    assert "解析更新中" not in body and "解析要確認" not in body
+
+
+@pytest.mark.parametrize("kind", ["signal", "digest"])
+@pytest.mark.parametrize("layout", [1, 2])
+@pytest.mark.parametrize("state,label", [("processing", "解析更新中"), ("attention", "解析要確認")])
+def test_signal_and_digest_body_preserve_legacy_progress(led, monkeypatch, kind, layout, state, label):
+    import json
+    import notify_render
+    from notify_testkit import _signal_row
+
+    _patient(led)
+    _msg(led, 1, body="合成原文")
+    _signal_row(led, "synthetic-signal", mids=[1])
+    monkeypatch.setattr(notify_render, "progress_state", lambda *_args: {
+        "state": state, "completed": 1, "total": 3})
+    monkeypatch.setattr(notify_render, "structured_block", lambda *_args, **_kwargs: {
+        "type": "text", "text": "📋 要約\n合成症状"})
+    card = {"kind": kind, "project_id": 1, "layout": layout}
+    body = notify_render.card_body_text(
+        led.db, card, {"shown": json.dumps(["synthetic-signal"])}, stamps=False, cfg={})[1]
+    assert "合成症状" in body and "合成原文" in body
+    assert (label + "（3区間中1区間完了）" in body) == (layout == 1)

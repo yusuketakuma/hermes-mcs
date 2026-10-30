@@ -472,28 +472,38 @@ def progress_state(db, mid, cfg):
     return extraction_progress.message_progress(db, row, cfg=cfg) if row is not None else None
 
 
-def _progress_label(progress):
-    if not progress or progress["state"] == "complete":
-        return ""
-    label = "解析更新中" if progress["state"] == "processing" else "解析要確認"
-    if progress["total"]:
-        label += f"（{progress['total']}区間中{progress['completed']}区間完了）"
-    return label
+PROCESSING_STATUS_LABELS = {
+    "attention": "解析未完了・要確認", "unknown": "状況不明", "processing": "解析中",
+    "preparing": "結果を準備中", "complete": "解析完了",
+}
 
 
-def _progress_summary(progress_by_mid) -> list[str]:
-    """Card-level extraction progress for layout 2: how many shown posts
-    are still being analysed or need attention (nothing when all done)."""
-    states = [p["state"] for p in (progress_by_mid or {}).values() if p]
-    out = []
-    if (n := states.count("processing")):
-        out.append(f"解析中 {n}")
-    if (n := states.count("attention")):
-        out.append(f"解析要確認 {n}")
-    return out
+def _page_processing_status(progresses):
+    if not progresses:
+        return "unknown"
+    valid = []
+    for progress in progresses:
+        if (not isinstance(progress, dict)
+                or progress.get("state") not in ("processing", "complete", "attention")
+                or type(progress.get("completed")) is not int
+                or type(progress.get("total")) is not int
+                or not 0 <= progress["completed"] <= progress["total"]
+                or (progress["state"] == "complete" and progress["completed"] != progress["total"])):
+            valid.append(None)
+        else:
+            valid.append(progress)
+    if any(progress and progress["state"] == "attention" for progress in valid):
+        return "attention"
+    if any(progress is None for progress in valid):
+        return "unknown"
+    pending = [progress for progress in valid if progress["state"] == "processing"]
+    if any(progress["total"] == 0 or progress["completed"] < progress["total"] for progress in pending):
+        return "processing"
+    return "preparing" if pending else "complete"
 
 
-def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True) -> dict:
+def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True,
+                   include_progress=True) -> dict:
     """📋 要約 of one post, or its visible empty state — a post with no
     usable extraction says whether it is still queued or exhausted its
     retries instead of silently showing nothing."""
@@ -507,9 +517,11 @@ def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True) -> di
         empty = ("作成失敗" if extraction_failed(db, mid) else
                  "要確認" if state and state["state"] == "attention" else "処理待ち")
         block = {"type": "text", "text": ("📋 要約 " if label else "要約 ") + empty}
-    # Keep each post's progress with its own summary.
-    progress = _progress_label(state) if label or progress_by_mid is not None else ""
-    if progress:
+    if (include_progress and (label or progress_by_mid is not None)
+            and state and state["state"] != "complete"):
+        progress = "解析更新中" if state["state"] == "processing" else "解析要確認"
+        if state["total"]:
+            progress += f"（{state['total']}区間中{state['completed']}区間完了）"
         block["text"] += "\n" + progress
     return block
 
@@ -742,7 +754,7 @@ SECTION_RULE = "─" * 12
 
 def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
                   include_summary=True, layout=1, stamp_time=True, provider_states=None,
-                  visible_providers=None) -> str:
+                  visible_providers=None, include_progress=True) -> str:
     """One MCS post as a thread message.
 
     Each post shows its summary, stamp observation, then source body.
@@ -760,7 +772,8 @@ def _message_post(db, mid, m, sender, head="", stamps=True, *, cfg=None,
         out.append(processing_route.provider_text(provider_states, visible_providers))
     if include_summary:
         # the same plain wording and item rows as the card face
-        out.append(_summary_block(db, mid, cfg=cfg, label=layout < 2)["text"])
+        out.append(_summary_block(db, mid, cfg=cfg, label=layout < 2,
+                                  include_progress=include_progress)["text"])
     stamp_line = ""
     if stamps:
         stamp_line = thread_stamp_row(
@@ -839,7 +852,8 @@ def card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
             lines.append(_message_post(db, mid, m, _sender_tag(m, db),
                                        head=head, stamps=stamps, cfg=cfg,
                                        include_summary=include_summary, layout=layout, stamp_time=stamp_time,
-                                       provider_states=states, visible_providers=visible_providers))
+                                       provider_states=states, visible_providers=visible_providers,
+                                       include_progress=False))
         title = f"💬 {patient_heading(db, card['project_id'])} — 本文"
         text = "\n\n".join(lines)
     else:
@@ -927,21 +941,24 @@ def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=N
                 containers.append({"type": "text", "text": f"↳ 返信 {replies}件を保存済み"})
         # per post: sender line + its full 📋 要約 (or its empty state)
         rendered = []
+        post_sequences = []
         bundle_cache = {}
         for m in msgs:
             line = (_deleted_line(m["posted_at"], _sender_tag(m, db))
                     if m["body_state"] == "deleted" else
                     f"{posted_time_label(m['posted_at'])} {_sender_tag(m, db)}")
             post_line = {"type": "text", "rule": True, "text": line}
+            sequence = {}
             if m["body_state"] != "deleted":
                 states = processing_route.provider_states(db, card["project_id"], m["message_id"], cfg=cfg,
-                                                          bundle_cache=bundle_cache)
+                                                          bundle_cache=bundle_cache, sequence_out=sequence)
                 post_line.update(text=_cap_card_text(line, 500), provider_states=states)
+            post_sequences.append(sequence.get("sequence"))
             blocks = [post_line]
             if m["body_state"] != "deleted":
                 blocks.append(_summary_block(db, m["message_id"], cfg=cfg,
                                              progress_by_mid=progress_by_mid,
-                                             label=layout < 2))
+                                             label=layout < 2, include_progress=False))
             rendered.append(_fit_item(blocks))
         item_shown = [[m["message_id"]] for m in msgs]
         max_count = PAGE_THREAD
@@ -981,8 +998,9 @@ def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=N
     header_placeholder = None
     if kind == "thread":
         # Reserve the longest possible provider line before packing pages.
-        header_placeholder = processing_route.provider_text(
-            dict.fromkeys(processing_route.PROVIDERS, "partial"), visible_providers)
+        header_placeholder = (PROCESSING_STATUS_LABELS["attention"] + " · 採用結果の処理順: Anthropic → OpenAI · その他（順序不明） · "
+                              + processing_route.provider_text(
+                                  dict.fromkeys(processing_route.PROVIDERS, "partial"), visible_providers))
         if len(containers) > 1 and containers[1]["type"] == "text" and not containers[1].get("rule"):
             containers[1]["text"] += " · " + header_placeholder
         else:
@@ -1041,7 +1059,22 @@ def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=N
         header = containers[1]
         before, _, after = header["text"].partition(header_placeholder)
         prefix = " · ".join(part for part in (before.strip(" ·"), after.strip(" ·")) if part)
-        header["text"] = (prefix + " · " if prefix else "") + processing_route.provider_text(states, visible_providers)
+        shown_progress = [(progress_by_mid or {}).get(msgs[i]["message_id"])
+                          for i in pages_idx[page] if msgs[i]["body_state"] != "deleted"]
+        status = _page_processing_status(shown_progress)
+        header["processing_status"] = status
+        visible_posts = [i for i in pages_idx[page] if msgs[i]["body_state"] != "deleted"]
+        sequence = post_sequences[visible_posts[0]] if len(visible_posts) == 1 else None
+        if (not isinstance(sequence, list) or len(sequence) != 2 or not all(isinstance(key, str) for key in sequence)
+                or "jev" not in sequence
+                or len(set(sequence)) != 2 or any(key not in visible_providers for key in sequence)):
+            sequence = None
+        header["provider_sequence"] = sequence
+        names = {"anthropic": "Anthropic", "openai": "OpenAI", "jev": "Jev", "local": "💻"}
+        order = " → ".join(names[key] for key in sequence) if sequence else "不明"
+        header["text"] = ((prefix + " · " if prefix else "") + PROCESSING_STATUS_LABELS[status]
+                          + " · 採用結果の処理順: " + order + " · "
+                          + processing_route.provider_text(states, visible_providers, sequence))
         header["provider_states"] = states
     for i in pages_idx[page]:
         containers.extend(rendered[i])

@@ -50,16 +50,17 @@ def test_context_line_counts_posts_missing_replies_files_and_mention(led):
     assert header["provider_scope"] == "header" and header["provider_states"] == states
     assert header["visible_providers"] == ["jev", "local"]
     assert texts[1] == ("09-24〜 · 2投稿 · 返信未取得 2件 · 📎 1 · "
-                        + "Jev 不明 · 💻 不明")
-    assert spec["parts"]["provider_states_version"] == 3
+                        + "解析中 · 採用結果の処理順: 不明 · Jev 不明 · 💻 不明")
+    assert header["processing_status"] == "processing"
+    assert spec["parts"]["provider_states_version"] == 4
     # each post is its own zone: rule before it, its 要約 state after it
     rules = [c for c in spec["parts"]["containers"] if c.get("rule")]
     progress = {mid: notify_render.progress_state(led.db, mid, CFG) for mid in (100, 101)}
     assert all(value["state"] == "processing" for value in progress.values())
     summary = notify_render._summary_block(led.db, 100, cfg=CFG,
-                                           progress_by_mid=progress, label=False)["text"]
+                                           progress_by_mid=progress, label=False, include_progress=False)["text"]
     assert len(rules) == 2 and texts.count(summary) == 2
-    assert summary == "要約 処理待ち\n解析更新中（1区間中0区間完了）"
+    assert summary == "要約 処理待ち"
 
 
 def test_new_replies_since_the_card_was_posted(led):
@@ -89,16 +90,17 @@ def test_failed_extraction_is_named_on_the_post(led):
     progress = {100: notify_render.progress_state(led.db, 100, CFG)}
     assert progress[100]["state"] == "attention"
     summary = notify_render._summary_block(led.db, 100, cfg=CFG,
-                                           progress_by_mid=progress, label=False)["text"]
+                                           progress_by_mid=progress, label=False, include_progress=False)["text"]
     spec = _spec(led)
     assert summary in _texts(spec)
-    assert summary == "要約 作成失敗\n解析要確認（1区間中0区間完了）"
+    assert summary == "要約 作成失敗"
     header = spec["parts"]["containers"][1]
     states = dict.fromkeys(processing_route.PROVIDERS, "unknown")
     assert header["provider_scope"] == "header" and header["provider_states"] == states
     assert header["visible_providers"] == ["jev", "local"]
-    assert header["text"] == "09-24〜 · 1投稿 · Jev 不明 · 💻 不明"
-    assert spec["parts"]["provider_states_version"] == 3
+    assert header["text"] == "09-24〜 · 1投稿 · 解析未完了・要確認 · 採用結果の処理順: 不明 · Jev 不明 · 💻 不明"
+    assert header["processing_status"] == "attention"
+    assert spec["parts"]["provider_states_version"] == 4
 
 
 def test_footer_is_one_state_item_and_revoked_card_has_no_buttons(led):

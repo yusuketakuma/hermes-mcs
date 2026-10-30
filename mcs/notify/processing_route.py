@@ -103,27 +103,15 @@ def _extract_jev_state(db, project_id, message_id, source_id, source_hash, versi
     return "unknown"
 
 
-def registered_providers():
-    """Return registered cloud provider identities without returning credential values."""
-    from mcs_util import private_env_problem
-
-    return tuple(name for name, key in (("anthropic", "MCS_ANTHROPIC_API_KEY"),
-                                        ("openai", "MCS_OPENAI_API_KEY"))
-                 if private_env_problem(key) is None)
-
-
-def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None):
+def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None, sequence_out=None):
     """Return only states supported by current per-post execution evidence."""
-    return provider_info(db, project_id, message_id, cfg, bundle_cache=bundle_cache)["states"]
-
-
-def provider_info(db, project_id, message_id, cfg=None, *, bundle_cache=None):
-    """Return current execution states and a causally proved service sequence."""
     states = dict.fromkeys(PROVIDERS, "unknown")
     sequence = None
 
     def result():
-        return {"states": states, "sequence": sequence}
+        if sequence_out is not None:
+            sequence_out["sequence"] = sequence
+        return states
 
     try:
         row = db.execute(
@@ -191,8 +179,10 @@ def provider_info(db, project_id, message_id, cfg=None, *, bundle_cache=None):
             if source is None:
                 return result()
             doc = strict_json(source["content"])
+            projection_sequence = {}
             if not isinstance(doc, dict) or proof != semantic_v4._projection_provenance(
-                    db, project_id, message_id, bundle["source_fingerprint"], policy, member, doc, content):
+                    db, project_id, message_id, bundle["source_fingerprint"], policy, member, doc, content,
+                    sequence_out=projection_sequence):
                 return result()
             if proof.get("jev") in ("done", "partial", "skipped"):
                 states["jev"] = proof["jev"]
@@ -217,22 +207,29 @@ def provider_info(db, project_id, message_id, cfg=None, *, bundle_cache=None):
                 # The adopted result does not prove that another provider
                 # was never attempted before a fallback or earlier stage.
                 states[provider] = "done" if provider in providers else "unknown"
-            if row["kind"] == "extract_llm":
-                sequence = [providers[0]]
-                if states["jev"] in ("done", "partial"):
-                    # QC names this exact retained extraction, so its Jev calls
-                    # follow the adopted producer. Timestamps are not evidence.
-                    sequence.append("jev")
+            if row["kind"] == "extract_llm" and states["jev"] in ("done", "partial"):
+                # QC names this exact retained extraction, so its Jev calls
+                # follow the adopted producer. Timestamps are not evidence.
+                sequence = [providers[0], "jev"]
+            elif row["kind"] != "extract_llm":
+                sequence = projection_sequence.get("sequence")
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
-        return {"states": dict.fromkeys(PROVIDERS, "unknown"), "sequence": None}
+        states = dict.fromkeys(PROVIDERS, "unknown")
+        sequence = None
     return result()
 
 
-def provider_text(states, visible=None):
+def provider_text(states, visible=None, sequence=None):
     """Readable fallback for transports without inline provider images."""
     allowed = PROVIDERS if visible is None else visible if isinstance(visible, (list, tuple)) else ()
-    return " · ".join(f"{name} {STATE_LABELS[states[key]]}" for key, name in (
-        ("anthropic", "Anthropic"), ("openai", "OpenAI"), ("jev", "Jev"), ("local", "💻")) if key in allowed)
+    names = {"anthropic": "Anthropic", "openai": "OpenAI", "jev": "Jev", "local": "💻"}
+    ordered = list(sequence) if sequence else []
+    remaining = [key for key in PROVIDERS if key in allowed and key not in ordered]
+    lines = [f"{names[key]} {STATE_LABELS[states[key]]}" for key in ordered]
+    if ordered and remaining:
+        lines.append("その他（順序不明）")
+    lines.extend(f"{names[key]} {STATE_LABELS[states[key]]}" for key in remaining)
+    return " · ".join(lines)
 
 
 def _route(row, meta, content):

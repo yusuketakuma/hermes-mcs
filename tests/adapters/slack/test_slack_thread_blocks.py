@@ -133,7 +133,8 @@ def test_v2_thread_header_keeps_legacy_per_post_provider_details():
 
 
 @pytest.mark.parametrize("cloud", [[], ["anthropic"], ["openai"], ["anthropic", "openai"]])
-def test_v3_visibility_filters_face_and_split_header_without_losing_states(cloud):
+@pytest.mark.parametrize("version", [3, 4])
+def test_v3_v4_visibility_filters_face_and_split_header_without_losing_states(cloud, version):
     import present_slack
 
     visible = cloud + ["jev", "local"]
@@ -141,14 +142,16 @@ def test_v3_visibility_filters_face_and_split_header_without_losing_states(cloud
     names = {"anthropic": "Anthropic", "openai": "OpenAI", "jev": "Jev", "local": "💻"}
     labels = {"anthropic": "実行済み", "openai": "実行済み", "jev": "一部実行・一部省略", "local": "不明"}
     fallback = " · ".join(f"{names[key]} {labels[key]}" for key in visible)
-    parts = {"provider_states_version": 3, "containers": [
+    prefix = "合成情報 · 解析中" if version == 4 else "合成情報"
+    parts = {"provider_states_version": version, "containers": [
         {"type": "heading", "text": "合成カード"},
         {"type": "text", "provider_scope": "header", "provider_states": states.copy(),
-         "visible_providers": visible, "text": "合成情報 · " + fallback},
+         "visible_providers": visible, "text": prefix + " · " + fallback},
         {"type": "text", "rule": True, "text": "合成投稿", "provider_states": states.copy()},
         {"type": "text", "text": "合成要約"}], "footer": [], "action_rows": []}
     blocks = render_parts(parts, card_kind="thread")
     elements = blocks[1]["elements"]
+    assert elements[0]["text"] == prefix
     assert [item["alt_text"] for item in elements if item["type"] == "image"] == [
         f"{names[key]} {labels[key]}" for key in visible if key != "local"]
     assert elements[-1]["text"] == "💻 ? 不明"
@@ -159,7 +162,7 @@ def test_v3_visibility_filters_face_and_split_header_without_losing_states(cloud
         assert names[key] not in json.dumps(blocks, ensure_ascii=False)
 
     spec = _split_spec("m:100:header#1", "m:100#1")
-    spec["parts"].update(provider_states_version=3, containers=parts["containers"])
+    spec["parts"].update(provider_states_version=version, containers=parts["containers"])
     split = thread_part_blocks(spec, {"name": "m:100:header#1"},
                                "合成投稿\n" + fallback + "\n要約: 合成")
     assert [item["alt_text"] for item in split[1]["elements"] if item["type"] == "image"] == [
@@ -171,14 +174,15 @@ def test_v3_visibility_filters_face_and_split_header_without_losing_states(cloud
 
 @pytest.mark.parametrize("prefix", ["", "合成" * 2000 + "x"])
 @pytest.mark.parametrize("visible", [["jev", "local"], ["openai", "jev", "local"]])
-def test_v3_header_count_matches_blocks_without_anthropic(prefix, visible):
+@pytest.mark.parametrize("version", [3, 4])
+def test_v3_v4_header_count_matches_blocks_without_anthropic(prefix, visible, version):
     import present_slack
     import processing_route
 
     states = dict.fromkeys(("anthropic", "openai", "jev", "local"), "unknown")
     fallback = processing_route.provider_text(states, visible)
     text = (prefix + " · " if prefix else "") + fallback
-    parts = {"provider_states_version": 3, "containers": [
+    parts = {"provider_states_version": version, "containers": [
         {"type": "text", "provider_scope": "header", "visible_providers": visible,
          "provider_states": states, "text": text}], "footer": [], "action_rows": []}
     blocks = render_parts(parts, card_kind="thread")
@@ -193,11 +197,106 @@ def test_v3_header_count_matches_blocks_without_anthropic(prefix, visible):
 
 @pytest.mark.parametrize("visible", [None, [], ["local", "jev"], ["jev", "jev", "local"],
                                       ["other", "jev", "local"], "jev,local"])
-def test_v3_provider_visibility_rejects_invalid_metadata(visible):
-    parts = {"provider_states_version": 3, "containers": [
+@pytest.mark.parametrize("version", [3, 4])
+def test_v3_v4_provider_visibility_rejects_invalid_metadata(visible, version):
+    parts = {"provider_states_version": version, "containers": [
         {"type": "text", "provider_scope": "header", "visible_providers": visible,
          "provider_states": dict.fromkeys(("anthropic", "openai", "jev", "local"), "unknown"),
          "text": "Jev 不明 · 💻 不明"}], "footer": [], "action_rows": []}
+    with pytest.raises(ValueError, match="bad_provider_states"):
+        render_parts(parts, card_kind="thread")
+
+
+@pytest.mark.parametrize("prefix", ["解析完了", "解析完了 · 初回順 Jev → OpenAI"])
+def test_v4_status_and_proven_order_share_provider_context(prefix):
+    import present_slack
+    import processing_route
+
+    visible = ["openai", "jev", "local"]
+    states = {"anthropic": "unknown", "openai": "done", "jev": "done", "local": "unknown"}
+    fallback = processing_route.provider_text(states, visible)
+    parts = {"provider_states_version": 4, "containers": [
+        {"type": "text", "provider_scope": "header", "visible_providers": visible,
+         "provider_states": states, "text": prefix + " · " + fallback}],
+        "footer": [], "action_rows": []}
+    blocks = render_parts(parts, card_kind="thread")
+    assert len(blocks) == present_slack.face_block_count(parts) == 1
+    assert blocks[0]["elements"][0] == {"type": "plain_text", "text": prefix}
+    assert "Anthropic" not in json.dumps(blocks, ensure_ascii=False)
+
+
+@pytest.mark.parametrize("visible,sequence", [
+    (["jev", "local"], ["local", "jev"]),
+    (["jev", "local"], ["jev", "local"]),
+    (["anthropic", "jev", "local"], ["local", "jev"]),
+    (["openai", "jev", "local"], ["jev", "openai"]),
+    (["openai", "jev", "local"], ["openai", "jev"]),
+    (["anthropic", "openai", "jev", "local"], ["jev", "local"]),
+    (["anthropic", "openai", "jev", "local"], ["local", "jev"]),
+])
+@pytest.mark.parametrize("long_prefix", [False, True])
+def test_v4_proven_order_changes_native_icons_and_separates_other_visible_providers(
+        visible, sequence, long_prefix):
+    import present_slack
+
+    states = {"anthropic": "unknown", "openai": "done", "jev": "partial", "local": "unknown"}
+    prefix = ("合成" * 2001 if long_prefix else "合成") + " · 採用結果の処理順"
+    labels = {"anthropic": "Anthropic 不明", "openai": "OpenAI 実行済み",
+              "jev": "Jev 一部実行・一部省略", "local": "💻 不明"}
+    rest = [key for key in visible if key not in sequence]
+    fallback = " · ".join([*(labels[key] for key in sequence),
+                           *(["その他（順序不明）"] if rest else []), *(labels[key] for key in rest)])
+    parts = {"provider_states_version": 4, "containers": [
+        {"type": "text", "provider_scope": "header", "visible_providers": visible,
+         "provider_states": states, "provider_sequence": sequence,
+         "text": prefix + " · " + fallback}], "footer": [], "action_rows": []}
+    blocks = render_parts(parts, card_kind="thread")
+    assert len(blocks) == present_slack.face_block_count(parts)
+    elements = blocks[-1]["elements"]
+    assert len(elements) <= 10
+    assert all(len(element.get("text", "")) <= 2000 for block in blocks for element in block["elements"])
+    assert "".join(e["text"] for b in blocks[:-1] for e in b["elements"]) + elements[0]["text"] == prefix
+    names = {"Anthropic": "anthropic", "OpenAI": "openai", "Jev": "jev"}
+    ordered = [names[e["alt_text"].split()[0]] if e["type"] == "image" else "local"
+               for e in elements if e["type"] == "image" or e.get("text", "").startswith("💻 ")]
+    assert ordered == sequence + [key for key in visible if key not in sequence]
+    labels = [e.get("text") for e in elements]
+    assert ("その他（順序不明）" in labels) == (len(visible) > len(sequence))
+    if len(visible) > len(sequence):
+        separator = labels.index("その他（順序不明）")
+        provider_positions = [i for i, e in enumerate(elements)
+                              if e["type"] == "image" or e.get("text", "").startswith("💻 ")]
+        assert provider_positions[1] < separator < provider_positions[2]
+    for key, name in (("anthropic", "Anthropic"), ("openai", "OpenAI")):
+        assert (name in json.dumps(blocks, ensure_ascii=False)) == (key in visible)
+
+
+def test_v4_unknown_order_remains_canonical_and_disclosed():
+    import processing_route
+
+    visible = ["anthropic", "openai", "jev", "local"]
+    states = dict.fromkeys(visible, "unknown")
+    prefix = "解析中 · 処理順不明"
+    parts = {"provider_states_version": 4, "containers": [
+        {"type": "text", "provider_scope": "header", "visible_providers": visible,
+         "provider_states": states, "provider_sequence": None,
+         "text": prefix + " · " + processing_route.provider_text(states, visible)}],
+        "footer": [], "action_rows": []}
+    elements = render_parts(parts, card_kind="thread")[0]["elements"]
+    assert elements[0]["text"] == prefix
+    assert [e["alt_text"].split()[0] for e in elements if e["type"] == "image"] == [
+        "Anthropic", "OpenAI", "Jev"]
+    assert elements[-1]["text"] == "💻 ? 不明"
+    assert not any(e.get("text") == "その他（順序不明）" for e in elements)
+
+
+@pytest.mark.parametrize("sequence", [["jev", "openai"], ["jev", "jev"], ["jev"], ["jev", {}]])
+def test_v4_invalid_or_hidden_sequence_is_not_rendered(sequence):
+    parts = {"provider_states_version": 4, "containers": [
+        {"type": "text", "provider_scope": "header", "visible_providers": ["jev", "local"],
+         "provider_states": dict.fromkeys(("anthropic", "openai", "jev", "local"), "unknown"),
+         "provider_sequence": sequence, "text": "合成 · Jev 不明 · 💻 不明"}],
+        "footer": [], "action_rows": []}
     with pytest.raises(ValueError, match="bad_provider_states"):
         render_parts(parts, card_kind="thread")
 
@@ -470,7 +569,7 @@ def test_writer_split_header_uses_registered_provider_visibility(led, monkeypatc
     spec = written_spec(led)
     validate(spec)
     assert requested == list(keys)
-    assert spec["parts"]["provider_states_version"] == 3
+    assert spec["parts"]["provider_states_version"] == 4
     assert spec["parts"]["containers"][1]["visible_providers"] == [*cloud, "jev", "local"]
     part = next(p for p in spec["parts"]["manifest"]
                 if p.get("kind") == "body_part" and p.get("name") == "m:100:header#1")

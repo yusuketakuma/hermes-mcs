@@ -360,14 +360,18 @@ def validate(spec) -> dict:
     states = [c for c in containers if isinstance(c, dict) and "provider_states" in c]
     scoped = [c for c in containers if isinstance(c, dict) and "provider_scope" in c]
     visible = [c for c in containers if isinstance(c, dict) and "visible_providers" in c]
+    progress = [c for c in containers if isinstance(c, dict) and
+                ("processing_status" in c or "provider_sequence" in c)]
     footer = parts.get("footer")
     if isinstance(footer, list) and any(isinstance(c, dict) and
-                                       ("provider_scope" in c or "visible_providers" in c) for c in footer):
+                                       any(k in c for k in ("provider_scope", "visible_providers",
+                                                            "processing_status", "provider_sequence"))
+                                       for c in footer):
         _err("bad_provider_states")
-    if states or scoped or visible or "provider_states_version" in parts:
+    if states or scoped or visible or progress or "provider_states_version" in parts:
         version = parts.get("provider_states_version")
         if (spec.get("kind") != "thread" or type(version) is not int
-                or version not in (1, 2, 3) or not states):
+                or version not in (1, 2, 3, 4) or not states):
             _err("bad_provider_states")
         labels = {"done": "実行済み", "partial": "一部実行・一部省略", "skipped": "省略", "unused": "未使用",
                   "pending": "処理待ち", "failed": "失敗", "unknown": "不明"}
@@ -382,7 +386,7 @@ def validate(spec) -> dict:
             return values
 
         if version == 1:
-            if scoped or visible:
+            if scoped or visible or progress:
                 _err("bad_provider_states")
             for container in states:
                 values = checked_values(container, labels)
@@ -398,7 +402,7 @@ def validate(spec) -> dict:
             if (header.get("provider_scope") != "header" or header.get("type") != "text"
                     or "rule" in header or "provider_states" not in header):
                 _err("bad_provider_states")
-            if version == 3:
+            if version in (3, 4):
                 selected = header.get("visible_providers")
                 keys = [key for key, _ in providers]
                 if (len(visible) != 1 or visible[0] is not header
@@ -411,6 +415,22 @@ def validate(spec) -> dict:
                 _err("bad_provider_states")
             else:
                 selected = [key for key, _ in providers]
+            status_labels = {"processing": "解析中", "preparing": "結果を準備中", "complete": "解析完了",
+                             "attention": "解析未完了・要確認", "unknown": "状況不明"}
+            if version == 4:
+                status = header.get("processing_status")
+                sequence = header.get("provider_sequence")
+                if (len(progress) != 1 or progress[0] is not header
+                        or not isinstance(status, str) or status not in status_labels
+                        or "provider_sequence" not in header):
+                    _err("bad_provider_states")
+                if sequence is not None and (not isinstance(sequence, list) or len(sequence) != 2
+                                             or not all(isinstance(key, str) for key in sequence)
+                                             or len(set(sequence)) != 2 or "jev" not in sequence
+                                             or any(key not in selected for key in sequence)):
+                    _err("bad_provider_states")
+            elif progress:
+                _err("bad_provider_states")
             header_index = next(i for i, container in enumerate(containers) if container is header)
             if (header_index != 1 or not isinstance(containers[0], dict)
                     or containers[0].get("type") != "heading"):
@@ -436,8 +456,17 @@ def validate(spec) -> dict:
                                   else "unknown") for key, _ in providers}
             if values != aggregate:
                 _err("bad_provider_states")
-            fallback = " · ".join(f"{name} {header_labels[values[key]]}"
-                                  for key, name in providers if key in selected)
+            ordered = list(sequence) if version == 4 and sequence else []
+            remaining = [key for key, _ in providers if key in selected and key not in ordered]
+            names = dict(providers)
+            fallback_parts = [f"{names[key]} {header_labels[values[key]]}" for key in ordered]
+            if ordered and remaining:
+                fallback_parts.append("その他（順序不明）")
+            fallback_parts.extend(f"{names[key]} {header_labels[values[key]]}" for key in remaining)
+            fallback = " · ".join(fallback_parts)
+            if version == 4:
+                order = " → ".join(names[key] for key in sequence) if sequence else "不明"
+                fallback = status_labels[status] + " · 採用結果の処理順: " + order + " · " + fallback
             text = header.get("text")
             if (not isinstance(text, str) or len(text.splitlines()) != 1
                     or (text != fallback and not (text.endswith(" · " + fallback)

@@ -99,6 +99,7 @@ def test_summary_provenance_requires_exact_content_and_source():
 def test_cached_chunks_require_intact_provider_binding(tmp_path, monkeypatch):
     import cloud_policy
     import json
+    import mcs_util
     import semantic_extraction
     import semantic_store
     from semantic_testkit import _seeded, facts_llm
@@ -116,6 +117,13 @@ def test_cached_chunks_require_intact_provider_binding(tmp_path, monkeypatch):
         first = semantic_extraction.extract_facts_v2(
             observed, member, ledger=ledger, source_fingerprint=bundle['source_fingerprint'], project_id=1)
         assert first['producer_evidence'] == {'providers': ['local'], 'complete': True}
+        from inference_version import CURRENT_VERSION, VERSION_KEY
+        producer, sequence = {}, {'preflight': 'stale'}
+        rebuilt, reason = semantic_extraction.rebuild_facts_v2_cached(
+            member, ledger.db, bundle['source_fingerprint'], 1, first['doc'],
+            {VERSION_KEY: CURRENT_VERSION}, producer_out=producer, sequence_out=sequence)
+        assert reason is None and rebuilt == first['doc']
+        assert producer == first['producer_evidence'] and sequence['preflight'] is None
 
         def no_call(_prompt):
             raise AssertionError('verified chunk should be reused')
@@ -132,6 +140,23 @@ def test_cached_chunks_require_intact_provider_binding(tmp_path, monkeypatch):
         row = ledger.db.execute('SELECT artifact_id,meta,model,content FROM artifacts WHERE kind=?',
                                 (semantic_extraction.KIND_CHUNK_V2,)).fetchone()
         meta = json.loads(row['meta'])
+        malformed = json.loads(row['content'])
+        malformed['jev_preflight'] = {'medication': 'unexpected'}
+        rebound = json.loads(row['meta'])
+        result_hash = mcs_util.payload_hash(malformed)
+        chunk_proof = rebound['provider_provenance']
+        chunk_proof['result_hash'] = result_hash
+        chunk_proof['binding_hash'] = mcs_util.payload_hash(
+            semantic_extraction._chunk_provider_binding(rebound, 1, 1, row['model'], 'local', result_hash, None))
+        ledger.db.execute('UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?',
+                          (json.dumps(malformed), json.dumps(rebound), row['artifact_id']))
+        sequence = {'preflight': 'stale'}
+        semantic_extraction.rebuild_facts_v2_cached(
+            member, ledger.db, bundle['source_fingerprint'], 1, first['doc'],
+            {VERSION_KEY: CURRENT_VERSION}, sequence_out=sequence)
+        assert sequence['preflight'] is None
+        ledger.db.execute('UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?',
+                          (row['content'], row['meta'], row['artifact_id']))
         missing = dict(meta)
         missing.pop('provider_provenance')
         forged = {**meta, 'provider_provenance': {**meta['provider_provenance'], 'provider': 'anthropic'}}
@@ -160,6 +185,54 @@ def test_cached_chunks_require_intact_provider_binding(tmp_path, monkeypatch):
         restored = semantic_extraction.extract_facts_v2(
             no_call, member, ledger=ledger, source_fingerprint=bundle['source_fingerprint'], project_id=1)
         assert restored['producer_evidence'] == first['producer_evidence']
+    finally:
+        ledger.close()
+
+
+def test_failed_preflight_followed_by_cached_reuse_does_not_prove_order(tmp_path):
+    import json
+    import semantic_extraction
+    import semantic_store
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+    from semantic_testkit import _FakeJev, _seeded, facts_llm
+
+    ledger = _seeded(tmp_path)
+    try:
+        bundle = semantic_store.thread_bundle(ledger.db, 1, 1, [1])
+        member = next(m for m in bundle['members'] if m['message_id'] == 1)
+        answer = facts_llm([])
+        events = []
+
+        class FailedJev(_FakeJev):
+            def evaluate(self, *args):
+                events.append('jev')
+                raise RuntimeError('synthetic failure')
+
+        def observed(prompt):
+            events.append('local')
+            transport._record_inference('local')
+            return answer(prompt)
+
+        first = semantic_extraction.extract_facts_v2(
+            observed, member, ledger=ledger, source_fingerprint=bundle['source_fingerprint'],
+            project_id=1, jev_client=FailedJev())
+        assert first['extraction_complete'] and events == ['jev', 'local']
+        chunk = ledger.db.execute('SELECT content FROM artifacts WHERE kind=?',
+                                  (semantic_extraction.KIND_CHUNK_V2,)).fetchone()
+        assert 'jev_preflight' not in json.loads(chunk['content'])
+
+        def no_call(_prompt):
+            raise AssertionError('cached chunk should be reused')
+
+        reused = semantic_extraction.extract_facts_v2(
+            no_call, member, ledger=ledger, source_fingerprint=bundle['source_fingerprint'], project_id=1)
+        assert reused['reused_chunks'] and reused['producer_evidence'] == first['producer_evidence']
+        producer, sequence = {}, {'preflight': 'stale'}
+        rebuilt, reason = semantic_extraction.rebuild_facts_v2_cached(
+            member, ledger.db, bundle['source_fingerprint'], 1, reused['doc'],
+            {VERSION_KEY: CURRENT_VERSION}, producer_out=producer, sequence_out=sequence)
+        assert reason is None and rebuilt == reused['doc']
+        assert producer == reused['producer_evidence'] and sequence['preflight'] is None
     finally:
         ledger.close()
 
@@ -247,17 +320,24 @@ def test_drain_binds_both_published_projections_to_adopted_stages(tmp_path):
                 assert proof['complete'] is True and proof['jev'] == 'done'
                 assert proof['result_hash'] == mcs_util.payload_hash(content)
                 assert proof['source_binding'] == meta['source_binding'] == source_binding(ledger.db, 1, mid)
-            states = processing_route.provider_states(ledger.db, 1, mid, cfg=_canonical_cfg())
+            sequence = {'sequence': ['stale']}
+            states = processing_route.provider_states(ledger.db, 1, mid, cfg=_canonical_cfg(),
+                                                       sequence_out=sequence)
             assert states == {'anthropic': 'unknown', 'openai': 'unknown', 'jev': 'done', 'local': 'done'}
+            assert sequence['sequence'] == ['jev', 'local']
     finally:
         ledger.close()
 
 
-def test_projection_rechecks_facts_chunks_and_real_verdicts(tmp_path):
+def test_projection_rechecks_facts_chunks_and_real_verdicts(tmp_path, monkeypatch):
     import json
+    import sqlite3
+    import pytest
+    import inference_dependency_loss
     import mcs_util
     import semantic_store
     import semantic_v4
+    import semantic_extraction
     from semantic_testkit import _drain, _llm_v2, _PassJev, _seeded_two
 
     ledger = _seeded_two(tmp_path)
@@ -280,22 +360,56 @@ def test_projection_rechecks_facts_chunks_and_real_verdicts(tmp_path):
         doc, fact_meta, displayed = json.loads(facts['content']), json.loads(facts['meta']), json.loads(projection['content'])
         fp, policy = bundle['source_fingerprint'], fact_meta['policy_fingerprint']
 
-        def provenance(content=displayed):
-            return semantic_v4._projection_provenance(ledger.db, 1, 1, fp, policy, member, doc, content)
+        def provenance(content=displayed, sidecar=None):
+            return semantic_v4._projection_provenance(ledger.db, 1, 1, fp, policy, member, doc, content,
+                                                     sequence_out=sidecar)
 
         assert provenance()['providers'] == ['local'] and provenance()['jev'] == 'done'
+        sequence = {}
+        provenance(sidecar=sequence)
+        assert sequence['sequence'] == ['jev', 'local']
+        with monkeypatch.context() as patch:
+            def source_error(*args):
+                raise sqlite3.OperationalError('synthetic source binding failure')
+
+            patch.setattr(inference_dependency_loss, 'source_binding', source_error)
+            sequence['sequence'] = ['stale']
+            with pytest.raises(sqlite3.OperationalError, match='synthetic source binding failure'):
+                provenance(sidecar=sequence)
+            assert sequence['sequence'] is None
+        rebuild = semantic_extraction.rebuild_facts_v2_cached
+
+        def without_preflight(*args, **kwargs):
+            result = rebuild(*args, **kwargs)
+            kwargs['sequence_out']['preflight'] = 'absent'
+            return result
+
+        with monkeypatch.context() as patch:
+            patch.setattr(semantic_extraction, 'rebuild_facts_v2_cached', without_preflight)
+            provenance(sidecar=sequence)
+            assert sequence['sequence'] is None
         forged = {**fact_meta, 'provider_provenance': {**fact_meta['provider_provenance'], 'providers': ['anthropic']}}
         ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(forged), facts['artifact_id']))
         assert provenance()['complete'] is False and provenance()['providers'] == []
+        provenance(sidecar=sequence)
+        assert sequence['sequence'] is None
         ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (facts['meta'], facts['artifact_id']))
         changed_projection = {**displayed, 'synthetic_tamper': True}
         assert provenance(changed_projection)['complete'] is False and provenance(changed_projection)['jev'] == 'unknown'
+        provenance(changed_projection, sidecar=sequence)
+        assert sequence['sequence'] is None
         audit_content, audit_meta = json.loads(audit['content']), json.loads(audit['meta'])
         audit_content['fact_verdicts'] = {}
         audit_meta['jev_provenance']['result_hash'] = mcs_util.payload_hash(audit_content)
         ledger.db.execute('UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?',
                           (json.dumps(audit_content), json.dumps(audit_meta), audit['artifact_id']))
         assert provenance()['jev'] == 'unknown'
+        provenance(sidecar=sequence)
+        assert sequence['sequence'] == ['jev', 'local']  # Bound preflight still preceded the producer.
+        with monkeypatch.context() as patch:
+            patch.setattr(semantic_extraction, 'rebuild_facts_v2_cached', without_preflight)
+            provenance(sidecar=sequence)
+            assert sequence['sequence'] is None
         ledger.db.execute('UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?',
                           (audit['content'], audit['meta'], audit['artifact_id']))
         assert provenance()['jev'] == 'done'

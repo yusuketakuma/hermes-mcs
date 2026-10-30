@@ -30,7 +30,7 @@ def test_registered_providers_flow_from_writer_to_slack(led, monkeypatch, cloud)
     _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)
     spec = _spec(led)
     assert requested == list(key_names)
-    assert spec["parts"]["provider_states_version"] == 3
+    assert spec["parts"]["provider_states_version"] == 4
     header = spec["parts"]["containers"][1]
     visible = [*cloud, "jev", "local"]
     assert header["visible_providers"] == visible
@@ -97,7 +97,7 @@ def test_removing_registered_key_redraws_delivered_card_on_sweep(led, monkeypatc
     updated = _latest_render(led)
     assert updated["render_rev"] == original["render_rev"] + 1
     spec = _spec(led)
-    assert spec["op"] == "update" and spec["parts"]["provider_states_version"] == 3
+    assert spec["op"] == "update" and spec["parts"]["provider_states_version"] == 4
     validate(spec)
     header = spec["parts"]["containers"][1]
     assert header["visible_providers"] == [key for key in processing_route.PROVIDERS if key != removed]

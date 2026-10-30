@@ -893,8 +893,10 @@ def extract_facts_v2(llm_fn, member: dict,
 
 
 def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
-                            project_id, stored_doc: dict, stored_meta: dict, *, producer_out=None):
+                            project_id, stored_doc: dict, stored_meta: dict, *, producer_out=None, sequence_out=None):
     """Assemble stored chunks without model/preflight dispatch, writes or transaction ownership."""
+    if sequence_out is not None:
+        sequence_out['preflight'] = None
     if not is_current(stored_meta):
         return None, 'inference_version_changed'
     source, message_id, project_id, revision, source_fp, body_hash = \
@@ -983,6 +985,13 @@ def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
         providers = [cached[spec["index"]].get("provider") for spec in specs]
         producer_out.update(providers=sorted({p for p in providers if p is not None}),
                             complete=bool(specs) and all(p is not None for p in providers))
+    if sequence_out is not None and specs and all(p is not None for p in providers):
+        fields = [cached[spec['index']]['extra'] for spec in specs]
+        if all(isinstance(field.get('jev_preflight'), dict)
+               and set(field['jev_preflight']) == set(sf.MANDATORY_CATEGORIES)
+               and all(value in _PREFLIGHT_CHOICES for value in field['jev_preflight'].values())
+               for field in fields):
+            sequence_out['preflight'] = 'complete'
     return result["doc"], None
 
 

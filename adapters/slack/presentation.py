@@ -35,21 +35,36 @@ def _visible_providers(value):
     return value
 
 
-def _provider_context(states, prefix=None, visible=None):
+def _ordered_providers(visible, sequence):
+    if sequence is not None:
+        if (not isinstance(sequence, list) or len(sequence) != 2
+                or not all(isinstance(key, str) and key in visible for key in sequence)
+                or len(set(sequence)) != 2 or "jev" not in sequence):
+            raise ValueError("bad_provider_states")
+        return sequence + [key for key in visible if key not in sequence]
+    return visible
+
+
+def _provider_context(states, prefix=None, visible=None, sequence=None):
     visible = visible if visible is not None else [key for key, _ in _PROVIDER_NAMES]
+    ordered = _ordered_providers(visible, sequence)
     elements = ([{"type": "plain_text", "text": prefix}] if prefix else [])
-    for key, name, url in _PROVIDERS:
-        if key not in visible:
-            continue
-        elements.append({"type": "image", "image_url": url,
-                         "alt_text": f"{name} {_STATE_LABELS[states[key]]}"})
-        elements.append({"type": "plain_text", "text": _STATE_MARKS[states[key]]})
-    elements.append({"type": "plain_text", "text": f"💻 {_STATE_MARKS[states['local']]} {_STATE_LABELS[states['local']]}"})
+    providers = {key: (name, url) for key, name, url in _PROVIDERS}
+    for index, key in enumerate(ordered):
+        if sequence is not None and index == len(sequence):
+            elements.append({"type": "plain_text", "text": "その他（順序不明）"})
+        if key == "local":
+            elements.append({"type": "plain_text", "text": f"💻 {_STATE_MARKS[states[key]]} {_STATE_LABELS[states[key]]}"})
+        else:
+            name, url = providers[key]
+            elements.append({"type": "image", "image_url": url,
+                             "alt_text": f"{name} {_STATE_LABELS[states[key]]}"})
+            elements.append({"type": "plain_text", "text": _STATE_MARKS[states[key]]})
     return {"type": "context", "elements": elements}
 
 
 def _provider_line(text, *, version=1, visible=None):
-    supported = {key: label for key, label in _STATE_LABELS.items() if key != "used" or version in (2, 3)}
+    supported = {key: label for key, label in _STATE_LABELS.items() if key != "used" or version in (2, 3, 4)}
     labels = "|".join(map(re.escape, supported.values()))
     names = [(key, name) for key, name in _PROVIDER_NAMES if visible is None or key in visible]
     pattern = " · ".join(rf"{re.escape(name)} ({labels})" for _, name in names)
@@ -102,11 +117,11 @@ def thread_part_blocks(spec, part, text):
         parts = spec.get("parts") or {}
         version = parts.get("provider_states_version")
         visible = None
-        if version == 3:
+        if version in (3, 4):
             header = next((item for item in parts.get("containers", [])
                            if item.get("provider_scope") == "header"), {})
             visible = _visible_providers(header.get("visible_providers"))
-        states = (_provider_line(rest[0], version=version, visible=visible) if rest and version in (1, 2, 3)
+        states = (_provider_line(rest[0], version=version, visible=visible) if rest and version in (1, 2, 3, 4)
                   else None)
         if states is not None:
             rest.pop(0)
@@ -207,24 +222,30 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
             pending = face.get(index)
         if item.get("rule") and blocks:
             blocks.append(dict(_DIVIDER))
-        if (card_kind == "thread" and version in (2, 3) and item.get("provider_scope") == "header"
+        if (card_kind == "thread" and version in (2, 3, 4) and item.get("provider_scope") == "header"
                 and kind == "text"):
             states = item["provider_states"]
             text = item["text"]
-            visible = _visible_providers(item.get("visible_providers")) if version == 3 else None
+            visible = _visible_providers(item.get("visible_providers")) if version in (3, 4) else None
             # The validated fallback is the last part of the text; it remains
             # available to non-Slack transports while Slack shows native images.
-            fallback = " · ".join(f"{name} {_STATE_LABELS[states[key]]}" for key, name in _PROVIDER_NAMES
-                                  if visible is None or key in visible)
+            sequence = item.get("provider_sequence") if version == 4 else None
+            selected = visible if visible is not None else [key for key, _ in _PROVIDER_NAMES]
+            ordered = _ordered_providers(selected, sequence)
+            names = dict(_PROVIDER_NAMES)
+            fallback_items = [f"{names[key]} {_STATE_LABELS[states[key]]}" for key in ordered]
+            if sequence is not None and len(ordered) > len(sequence):
+                fallback_items.insert(len(sequence), "その他（順序不明）")
+            fallback = " · ".join(fallback_items)
             prefix = text[:-len(fallback)].removesuffix(" · ")
             if len(prefix) > CONTEXT_MAX:
                 blocks.extend(contexts(prefix[:-CONTEXT_MAX]))
                 prefix = prefix[-CONTEXT_MAX:]
-            blocks.append(_provider_context(states, prefix, visible))
+            blocks.append(_provider_context(states, prefix, visible, sequence))
             continue
         if card_kind == "thread" and item.get("rule") and kind == "text":
             states = item.get("provider_states")
-            if states is not None and version not in (2, 3):
+            if states is not None and version not in (2, 3, 4):
                 blocks.extend(contexts(item["text"].rsplit("\n", 1)[0]))
                 blocks.append(_provider_context(states))
             else:
@@ -259,7 +280,7 @@ def render_parts(parts, names=None, silent=False, card_kind=None, stamp_control=
         # A multi-post card must retain which post each observed reaction belongs to.
         item = parts["containers"][post["at"]]
         header = (item["text"].rsplit("\n", 1)[0]
-                  if version not in (2, 3) and item.get("provider_states") is not None else item["text"])
+                  if version not in (2, 3, 4) and item.get("provider_states") is not None else item["text"])
         lines = [header] if len(face) > 1 else []
         blocks.extend(contexts("\n".join(lines + post["stamps"])))
     if stamp_control:

@@ -593,7 +593,7 @@ def face_posts(db, card, parts, content, present) -> tuple:
 
 def _provider_visibility(parts):
     providers = ("anthropic", "openai", "jev", "local")
-    if parts.get("provider_states_version") != 3:
+    if parts.get("provider_states_version") not in (3, 4):
         return providers
     headers = [item for item in parts.get("containers", [])
                if isinstance(item, dict) and item.get("provider_scope") == "header"]
@@ -630,6 +630,13 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 prior_visible = _provider_visibility(previous["parts"])
             except ValueError:
                 prior_visible = None
+            old_headers = [c for c in previous["parts"].get("containers", [])
+                           if isinstance(c, dict) and c.get("provider_scope") == "header"]
+            new_headers = [c for c in parts.get("containers", [])
+                           if isinstance(c, dict) and c.get("provider_scope") == "header"]
+            same_v4_header = (parts.get("provider_states_version") != 4
+                              or (len(old_headers) == len(new_headers) == 1
+                                  and old_headers[0] == new_headers[0]))
             def strip_tokens(rows):
                 return [[{k: v for k, v in b.items() if k != "token"}
                          for b in row] for row in rows]
@@ -639,8 +646,8 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                     and previous["source_generation"] == spec["source_generation"]
                     and previous["ui_revision"] == spec["ui_revision"]
                     and scope_matches(previous["delivery"], stored_scope(card))
-                    and (previous["parts"].get("provider_states_version") == 3)
-                    == (parts.get("provider_states_version") == 3)
+                    and previous["parts"].get("provider_states_version") == parts.get("provider_states_version")
+                    and same_v4_header
                     and prior_visible == visible_providers
                     and strip_tokens(previous["parts"]["action_rows"]) == strip_tokens(parts["action_rows"])):
                 for field in ("containers", "footer", "action_rows", "preview_text"):

@@ -708,7 +708,8 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     def set_provider_version(parts):
         headers = [c for c in parts["containers"] if c.get("provider_scope") == "header"]
         if headers:
-            parts["provider_states_version"] = 3 if "visible_providers" in headers[0] else 2
+            parts["provider_states_version"] = (4 if "processing_status" in headers[0]
+                                                else 3 if "visible_providers" in headers[0] else 2)
         elif any("provider_states" in c for c in parts["containers"]):
             parts["provider_states_version"] = 1
         else:

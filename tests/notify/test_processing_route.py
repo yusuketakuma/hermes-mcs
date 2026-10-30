@@ -423,6 +423,76 @@ def test_extract_jev_state_is_bound_to_current_result_and_distinguishes_partial(
     assert processing_route.provider_states(led.db, 1, 100)['jev'] == 'unknown'
 
 
+@pytest.mark.parametrize('provider', ['local', 'anthropic', 'openai'])
+def test_extract_sequence_requires_bound_producer_and_jev_evidence(led, provider):
+    import inference_dependency_loss
+
+    _seed_thread(led, mids=(100,))
+    _artifact(led, 100, 'local' if provider == 'local' else 'cloud',
+              provider_name='anthropic' if provider == 'local' else provider,
+              content={'symptoms': [{'text': '合成症状'}]})
+    source = led.db.execute("SELECT artifact_id,content,meta FROM artifacts WHERE kind='extract_llm' "
+                            "AND message_id=100 ORDER BY artifact_id DESC LIMIT 1").fetchone()
+    binding = inference_dependency_loss.source_binding(led.db, 1, 100)
+    meta = json.loads(source['meta'])
+    meta.update(source_binding=binding, extract_version=extract_llm.EXTRACT_VERSION,
+                provider_provenance={'version': 1, 'stage': 'extract', 'providers': [provider],
+                                     'complete': True, 'source_binding': binding,
+                                     'result_hash': mcs_util.payload_hash(json.loads(source['content']))})
+    led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), source['artifact_id']))
+    qc_meta = {VERSION_KEY: CURRENT_VERSION, 'hash': f'{100:064x}',
+               'extract_version': extract_llm.EXTRACT_VERSION, 'source_artifact_id': source['artifact_id']}
+    qc = {'qc': 'done', 'items': [{'section': 'symptoms', 'index': 0,
+                                   'verdict': 'NO_MATCH', 'noul': 0.1}], 'coverage': {'checked': 1}}
+
+    def check(expected, jev):
+        sidecar = {'sequence': ['stale']}
+        states = processing_route.provider_states(led.db, 1, 100, sequence_out=sidecar)
+        assert states == processing_route.provider_states(led.db, 1, 100)
+        assert states['jev'] == jev
+        assert sidecar['sequence'] == expected
+
+    check(None, 'unknown')
+    led.db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) '
+                   'VALUES(?,?,?,?,?,?,?)', ('extract_qc', 1, 100, json.dumps(qc), 'synthetic',
+                                            json.dumps({**qc_meta, 'qc': 'done', 'jev_requests': 1}), NOW))
+    check([provider, 'jev'], 'done')
+    qc_id = led.db.execute("SELECT MAX(artifact_id) FROM artifacts WHERE kind='extract_qc'").fetchone()[0]
+
+    for field, value in [('source_artifact_id', source['artifact_id'] + 1), ('hash', '0' * 64),
+                         ('extract_version', extract_llm.EXTRACT_VERSION + 1)]:
+        damaged = {**qc_meta, 'qc': 'done', 'jev_requests': 1, field: value}
+        led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(damaged), qc_id))
+        check(None, 'unknown')
+    led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
+                   (json.dumps({**qc_meta, 'qc': 'done', 'jev_requests': 1}), qc_id))
+    meta['provider_provenance']['providers'] = ['anthropic' if provider == 'local' else 'local']
+    led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), source['artifact_id']))
+    check(None, 'done')
+    meta['provider_provenance']['providers'] = [provider]
+    led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), source['artifact_id']))
+    led.db.execute('UPDATE artifacts SET kind=?,content=?,meta=? WHERE artifact_id=?',
+                   ('extract_qc_skipped', json.dumps({'status': 'SKIPPED', 'reason': 'daily_budget',
+                    'partial_answers': {'s0': {'type': 'noul', 'noul': 0.1}}}), json.dumps(qc_meta), qc_id))
+    check([provider, 'jev'], 'partial')
+    led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?',
+                   (json.dumps({'status': 'SKIPPED', 'reason': 'daily_budget'}), qc_id))
+    check(None, 'skipped')
+
+
+def test_sequence_sidecar_clears_on_evidence_read_failure():
+    import sqlite3
+
+    class BrokenDB:
+        def execute(self, *args):
+            raise sqlite3.OperationalError('synthetic failure')
+
+    sidecar = {'sequence': ['stale']}
+    assert processing_route.provider_states(BrokenDB(), 1, 100, sequence_out=sidecar) == dict.fromkeys(
+        processing_route.PROVIDERS, 'unknown')
+    assert sidecar['sequence'] is None
+
+
 def test_layout4_root_and_reply_use_only_their_own_route(led):
     _seed_thread(led)
     _artifact(led, 100, 'local')
