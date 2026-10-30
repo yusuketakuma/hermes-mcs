@@ -16,7 +16,7 @@ import _mcs_path  # noqa: E402, F401
 from cli_args import JapaneseArgumentParser as _JapaneseParser  # noqa: E402
 import mcs_runtime  # noqa: E402
 from update_policy import release_tag  # noqa: E402
-from mcs_util import load_config  # noqa: E402
+from mcs_util import HOME, load_config  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -37,6 +37,9 @@ def main(argv: list[str] | None = None) -> int:
         if not tool.is_file():
             print("復旧ツールが見つかりません。担当者に導入状態の確認を依頼してください。", file=sys.stderr)
             return 1
+        import runtime_inspection
+        from run_log_install import helper_path, LogInstallError
+
         try:
             if not opts.status and "\nINTERACTIVE_GUIDE_VERSION = 1\n" not in tool.read_text(encoding="utf-8"):
                 print("配備済みの復旧ツールは対話形式に未対応です。担当者にツールの更新を依頼してください。")
@@ -45,15 +48,20 @@ def main(argv: list[str] | None = None) -> int:
             with plist.open("rb") as stream:
                 installed = plistlib.load(stream)
             command = installed.get("ProgramArguments")
-            if ("Program" in installed or not isinstance(command, list) or len(command) != 3
-                    or command[1:] != [str(tool), "--if-stale"]
-                    or not isinstance(command[0], str) or not os.path.isabs(command[0])
-                    or not os.access(command[0], os.X_OK)):
+            python = runtime_inspection.recovery_executable(installed)
+            if ("Program" in installed or not isinstance(command, list)
+                    or python is None or not os.access(python, os.X_OK)):
                 raise ValueError
-        except (OSError, ValueError, TypeError, AttributeError, ExpatError):
+            wrapped = command[1:2] == ["-I"]
+            if (command[7:] if wrapped else command) != [python, str(tool), "--if-stale"]:
+                raise ValueError
+            if wrapped and (command[5] != str(Path(HOME).resolve() / "data")
+                    or command[2] != helper_path(HOME, tool.parent, require_installed=True)):
+                raise ValueError
+        except (OSError, ValueError, TypeError, AttributeError, ExpatError, LogInstallError):
             print("独立した復旧用の実行環境を確認できません。担当者に復旧ツールの導入状態を確認してもらってください。")
             return 1
-        os.execv(command[0], [command[0], str(tool),
+        os.execv(python, [python, str(tool),
                              "--status" if opts.status else "--interactive"])
         return 1
 

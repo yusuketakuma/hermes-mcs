@@ -4,6 +4,7 @@ import lifecycle_io
 import setup_wizard
 import json
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import sqlite3
@@ -272,3 +273,83 @@ def test_cli_update_help_is_japanese(pinned, capsys):
     assert "使い方:" in output
     assert "変更せず更新内容を確認" in output
     assert "再導入に渡すオプション" in output
+
+
+@pytest.fixture
+def recovery_command(monkeypatch, tmp_path):
+    import run_log_install
+
+    home = tmp_path.resolve()
+    root = home / "custom-runtime"
+    (root / "data").mkdir(parents=True, mode=0o700)
+    recovery = home / ".mcs-recovery"
+    run_log_install.prepare(root, ROOT, recovery, promote=True)
+    helper = Path(run_log_install.helper_path(root, recovery, require_installed=True))
+    tool = recovery / "mcs_recover.py"
+    tool.write_text("# synthetic\nINTERACTIVE_GUIDE_VERSION = 1\n")
+    template = (ROOT / "deployment/launchagents/org.mcs.recovery.plist").read_text()
+    for key, value in {"__RECOVERY_PYTHON__": sys.executable,
+                       "__RUN_LOG_HELPER__": str(helper), "__DATA__": str(root / "data"),
+                       "__RECOVERY__": str(recovery)}.items():
+        template = template.replace(key, value)
+    plist = home / "Library/LaunchAgents/org.mcs.recovery.plist"
+    plist.parent.mkdir(parents=True)
+    plist.write_text(template)
+    monkeypatch.setattr(mcs_cli.Path, "home", lambda: home)
+    monkeypatch.setattr(mcs_cli, "HOME", str(root), raising=False)
+    monkeypatch.setattr(mcs_cli, "load_config", lambda: pytest.fail("recovery must bypass runtime config"))
+    return root, helper, tool, plist
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("status", [False, True])
+def test_recovery_cli_uses_verified_inner_python(recovery_command, monkeypatch, wrapped, status):
+    _root, _helper, tool, plist = recovery_command
+    if not wrapped:
+        plist.write_bytes(plistlib.dumps({"ProgramArguments": [sys.executable, str(tool), "--if-stale"]}))
+    before = {p: p.read_bytes() for p in plist.parents[2].rglob("*") if p.is_file()}
+    calls = []
+    monkeypatch.setattr(mcs_cli.os, "execv", lambda exe, argv: calls.append((exe, argv)))
+    mcs_cli.main(["recover", *(["--status"] if status else [])])
+    assert calls == [(sys.executable, [sys.executable, str(tool), "--status" if status else "--interactive"])]
+    assert {p: p.read_bytes() for p in plist.parents[2].rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize("change", ["data", "tool", "helper", "inner_python", "hash", "pointer",
+                                   "missing", "shape", "program", "symlink"])
+def test_recovery_cli_rejects_untrusted_wrapper(recovery_command, monkeypatch, change):
+    root, helper, tool, plist = recovery_command
+    import run_log_install
+
+    value = plistlib.loads(plist.read_bytes())
+    argv = value["ProgramArguments"]
+    if change == "data":
+        argv[5] = str(root.parent / "other-runtime/data")
+    elif change == "tool":
+        argv[8] = str(tool.parent / "other/mcs_recover.py")
+    elif change == "helper":
+        argv[2] = str(helper.parent / "unverified.py")
+    elif change == "inner_python":
+        argv[7] = "/synthetic/other-python"
+    elif change == "hash":
+        helper.write_bytes(helper.read_bytes() + b"\n# synthetic changed helper\n")
+    elif change == "pointer":
+        pointer = helper.parent / run_log_install._pointer(str(root))
+        receipt = json.loads(pointer.read_bytes())
+        receipt["root"] = str(root.parent / "other-runtime")
+        pointer.write_text(json.dumps(receipt))
+    elif change == "missing":
+        helper.unlink()
+    elif change == "shape":
+        argv[-1] = "--interactive"
+    elif change == "program":
+        value["Program"] = sys.executable
+    elif change == "symlink":
+        saved = helper.with_suffix(".saved")
+        helper.rename(saved)
+        helper.symlink_to(saved)
+    plist.write_bytes(plistlib.dumps(value))
+    before = plist.read_bytes()
+    monkeypatch.setattr(mcs_cli.os, "execv", lambda *args: pytest.fail("untrusted recovery must not execute"))
+    assert mcs_cli.main(["recover", "--status"]) == 1
+    assert plist.read_bytes() == before
