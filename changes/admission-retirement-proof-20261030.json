@@ -6,7 +6,7 @@
   "details": [
     "30分を超えたunknown・cancel_pendingも、スロットがidleという観測だけでは解放しない。",
     "reconcile_unknownは互換APIとして保留数を返し、証拠として渡されたcallbackを実行しない。backend_idle_evidenceは終了を示す証拠を返さない。",
-    "通常の終了応答・未送信の確認・未送信waitingの取消・既存のowner fenceとepoch fenceによる回復条件は維持する。",
+    "通常の終了応答・未送信の確認・未送信waitingの取消を維持する。owner fenceによる自動回収は、未送信と確認できる許可枠に限る。epoch fenceの後は、既存の呼出元がバックエンドに処理がないことを確認する条件を維持する。",
     "admissionの有効条件と既定値は変更しない。"
   ],
   "refs": ["mcs/llm/local_llm.py", "mcs/llm/llm_admission.py"]

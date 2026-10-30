@@ -1,4 +1,4 @@
-"""Dead-owner permit reclamation and bounded terminal pruning (synthetic store)."""
+"""Dead-owner unsent reclamation and bounded terminal pruning (synthetic store)."""
 import os
 import subprocess
 import sys
@@ -18,14 +18,14 @@ def _dead_pid():
     return child.pid
 
 
-def _sent_rt(broker, owner_pid, age_s):
+def _unsent_rt(broker, owner_pid, age_s):
     acq = broker.acquire("gbrain.query", "RT")
-    assert broker.sent(acq["permit_id"])["sent"]
+    assert acq["admitted"]
     with broker.db:
         broker.db.execute(
             "UPDATE permits SET owner_pid=?, created_at=created_at-?,"
-            " admitted_at=admitted_at-?, sent_at=sent_at-? WHERE permit_id=?",
-            (owner_pid, age_s, age_s, age_s, acq["permit_id"]))
+            " admitted_at=admitted_at-? WHERE permit_id=?",
+            (owner_pid, age_s, age_s, acq["permit_id"]))
     return acq["permit_id"]
 
 
@@ -39,8 +39,8 @@ def test_permits_record_owner_pid(broker):
     assert broker._permit(acq["permit_id"])["owner_pid"] == os.getpid()
 
 
-def test_expired_permit_of_dead_owner_is_reclaimed(broker):
-    pid = _sent_rt(broker, _dead_pid(), adm.LEASE_S + 1)
+def test_expired_unsent_permit_of_dead_owner_is_reclaimed(broker):
+    pid = _unsent_rt(broker, _dead_pid(), adm.LEASE_S + 1)
     bg = broker.acquire("mcs.extract", "BACKLOG")
     assert bg["admitted"]
     assert _state(broker, pid) == ("fenced", "owner_dead")
@@ -50,15 +50,15 @@ def test_expired_permit_of_dead_owner_is_reclaimed(broker):
 @pytest.mark.parametrize("live", [True, False])
 def test_live_owner_or_unexpired_lease_is_never_reclaimed(broker, live):
     owner, age = (os.getpid(), adm.LEASE_S * 10) if live else (_dead_pid(), 1)
-    pid = _sent_rt(broker, owner, age)
+    pid = _unsent_rt(broker, owner, age)
     assert broker.acquire("mcs.extract", "BACKLOG")["reason"] == "rt_pending"
-    assert _state(broker, pid) == ("sent", None)
+    assert _state(broker, pid) == ("admitted", None)
 
 
 def test_unrecorded_owner_is_never_reclaimed(broker):
-    pid = _sent_rt(broker, None, adm.LEASE_S * 10)
+    pid = _unsent_rt(broker, None, adm.LEASE_S * 10)
     assert broker.acquire("mcs.extract", "BACKLOG")["reason"] == "rt_pending"
-    assert _state(broker, pid)[0] == "sent"
+    assert _state(broker, pid)[0] == "admitted"
 
 
 def test_dead_owner_waiting_rt_releases_waiting_flag(broker):
@@ -203,10 +203,10 @@ def test_permits_record_owner_start_identity(broker):
 
 @pytest.mark.parametrize("recorded,current", [(PS_OLD, PS_NEW),
                                               (PROC_OLD, PROC_NEW)])
-def test_reused_pid_of_expired_owner_is_reclaimed(broker, monkeypatch,
-                                                  recorded, current):
+def test_reused_pid_of_expired_unsent_owner_is_reclaimed(broker, monkeypatch,
+                                                         recorded, current):
     # the recorded owner died and its pid now names this live process
-    pid = _sent_rt(broker, os.getpid(), adm.LEASE_S + 1)
+    pid = _unsent_rt(broker, os.getpid(), adm.LEASE_S + 1)
     _owned(broker, pid, recorded)
     _probe(monkeypatch, broker, current)
     assert broker.acquire("mcs.extract", "BACKLOG")["admitted"]
@@ -241,11 +241,11 @@ def test_reused_pid_of_waiting_rt_releases_waiting_flag(broker, monkeypatch):
 ])
 def test_live_or_unprovable_owner_is_never_reclaimed(broker, monkeypatch,
                                                      recorded, current, age):
-    pid = _sent_rt(broker, os.getpid(), age)
+    pid = _unsent_rt(broker, os.getpid(), age)
     _owned(broker, pid, recorded)
     _probe(monkeypatch, broker, current)
     assert broker.acquire("mcs.extract", "BACKLOG")["reason"] == "rt_pending"
-    assert _state(broker, pid) == ("sent", None)
+    assert _state(broker, pid) == ("admitted", None)
 
 
 def test_identity_probe_runs_once_per_owner_per_pass(broker, monkeypatch):
@@ -255,7 +255,7 @@ def test_identity_probe_runs_once_per_owner_per_pass(broker, monkeypatch):
         broker.db.executemany(
             "INSERT INTO permits(epoch,client,cls,state,created_at,"
             "owner_pid,owner_started) VALUES(?,?,?,?,?,?,?)",
-            [(broker.epoch(), "gbrain.query", "RT", "sent",
+            [(broker.epoch(), "gbrain.query", "RT", "admitted",
               time.time() - adm.LEASE_S - 1, other, PS_OLD)] * 3)
     monkeypatch.setattr(adm, "_pid_alive", lambda p: True)
     monkeypatch.setattr(adm, "_proc_started",
@@ -269,7 +269,7 @@ def test_identity_probes_stop_at_the_pass_budget(broker, monkeypatch):
         broker.db.executemany(
             "INSERT INTO permits(epoch,client,cls,state,created_at,"
             "owner_pid,owner_started) VALUES(?,?,?,?,?,?,?)",
-            [(broker.epoch(), "gbrain.query", "RT", "sent",
+            [(broker.epoch(), "gbrain.query", "RT", "admitted",
               time.time() - adm.LEASE_S - 1, 900000 + i, PS_OLD)
              for i in range(adm.RECLAIM_BATCH)])
     monkeypatch.setattr(adm, "PROBE_BUDGET_S", -1.0)

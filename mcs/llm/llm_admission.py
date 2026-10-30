@@ -10,10 +10,10 @@ response-unknown requests included.
 Design contract:
 
 - **Durable epoch** — a monotonically increasing integer in its own
-  SQLite store. A broker restart with any non-terminal permit (or a
-  dirty epoch flag) rotates the epoch and stays CLOSED until the
-  backend is re-established known-empty; old-epoch permits are fenced
-  and can never admit again.
+  SQLite store. A broker restart with any non-terminal permit, an
+  unproven owner-death fence, or a dirty epoch flag rotates the epoch
+  and stays CLOSED until a trusted caller confirms the backend is empty;
+  old-epoch permits are fenced and can never admit again.
 - **Class from route, not payload** — a client authenticates as a
   named route registered with a fixed class; a caller-supplied class
   value can never grant RT. Unknown routes are rejected.
@@ -27,14 +27,11 @@ Design contract:
 - **Fail closed** — transport timeout, socket drop, expired lease and
   ``/slots`` idle samples are NEVER proof of backend retirement.
   Unknown completions hold admission closed until reconciled with
-  backend evidence. The one exception is a hard-killed owner: a permit
-  whose lease (``LEASE_S``, well past any client deadline) expired AND
-  whose recording process no longer exists (its socket closed with it)
-  — no process with that pid, or one whose kernel start identity
-  provably differs from the recorded one (a reused pid) —
-  is fenced as ``owner_dead`` during acquisition, so a SIGKILL'd
-  request cannot hold its class while other handles keep the store
-  open. A live owner's permit is never reclaimed.
+  backend evidence. Owner death or PID replacement cannot retire an
+  already-dispatched request: the server may still have it queued.
+  Only lease-expired ``reserved``/``admitted``/``waiting`` permits with
+  neither a send timestamp nor a token may be fenced as ``owner_dead``
+  after confirmed owner loss. A live owner's permit is never reclaimed.
 - **Admission token** — each admitted→sent permit mints a single-use
   ``epoch:permit:nonce`` token. The backend access control (in
   production: the backend reachable only through the broker; in the
@@ -98,7 +95,7 @@ LIVE = OCCUPYING + ("waiting",)
 _LIVE_IN = f"({','.join('?' * len(LIVE))})"
 TERMINAL = ("terminal", "fenced")
 # Occupancy lease exceeds semantic_policy's maximum 1260 s job budget.
-# Expiry acts only with a provably dead or replaced recorded owner.
+# Expiry reclaims only proven-unsent permits of a dead or replaced owner.
 LEASE_S = 1800.0
 # Terminal rows older than this are pruned, a bounded batch per acquire.
 RETENTION_S = 7 * 86400.0
@@ -345,9 +342,10 @@ class Broker:
 
     def _recover(self) -> None:
         """Rotate the epoch when the previous process exited with any
-        live permit — a stale pre-rotation request must find only a
-        fenced world. The new epoch opens CLOSED: an operator (or a
-        verified-empty backend probe) must call ``open_epoch``."""
+        live permit or an owner-death fence without unsent provenance.
+        A stale pre-rotation request must find only a fenced world.
+        The new epoch opens CLOSED until a trusted caller confirms the
+        backend is empty through ``open_epoch``."""
         row = self._meta()
         with self.db:
             if row is None:
@@ -360,7 +358,15 @@ class Broker:
                 "SELECT COUNT(*) FROM permits WHERE epoch=? AND state "
                 f"IN {_LIVE_IN}",
                 (row["epoch"], *LIVE)).fetchone()[0]
-            if live or row["state"] == "dirty":
+            # Older owner-death fences could hide accepted server work.
+            # The new marker records only unsent provenance; contradictory
+            # send markers still require the existing closed-epoch recovery.
+            unproven_owner_fence = self.db.execute(
+                "SELECT 1 FROM permits WHERE epoch=? AND state='fenced'"
+                " AND outcome='owner_dead' AND (proof IS NOT 'owner_dead_unsent'"
+                " OR token IS NOT NULL OR sent_at IS NOT NULL) LIMIT 1",
+                (row["epoch"],)).fetchone()
+            if live or row["state"] == "dirty" or unproven_owner_fence:
                 new_epoch = row["epoch"] + 1
                 self.db.execute(
                     "UPDATE permits SET state='fenced',"
@@ -373,10 +379,12 @@ class Broker:
 
     @_serialized
     def open_epoch(self, verify_empty) -> bool:
-        """Reopen the current epoch after the backend is verified
-        empty. ``verify_empty`` is a callable returning True only when
-        the caller has REAL evidence the backend holds no work — a
-        one-shot ``/slots`` idle sample is not evidence."""
+        """Reopen on the trusted caller's assertion that the backend is empty.
+
+        The broker does not independently verify this callback's result.
+        The caller needs evidence that no queued or decoding work remains;
+        idle ``/slots`` samples alone do not establish that assertion.
+        """
         if not callable(verify_empty) or not verify_empty():
             return False
         with self.db:
@@ -477,20 +485,20 @@ class Broker:
             return self._admit(epoch, client, cls, job_gen, request_id)
 
     def _reclaim_and_prune(self) -> None:
-        """Inside the acquire write tx: fence lease-expired permits of
-        dead owners, then delete a bounded batch of old terminal rows."""
+        """Inside the acquire write tx: fence proven-unsent expired reservations
+        of dead owners, then prune a bounded batch of old terminal rows."""
         now = time.time()
         epoch = self._meta()["epoch"]
         stale = self.db.execute(
             "SELECT permit_id,cls,state,owner_pid,owner_started FROM permits"
-            f" WHERE epoch=? AND state IN {_LIVE_IN}"
+            " WHERE epoch=? AND state IN ('reserved','admitted','waiting')"
+            " AND sent_at IS NULL AND token IS NULL"
             " AND owner_pid IS NOT NULL"
             " AND COALESCE(sent_at,admitted_at,created_at)<?"
             " ORDER BY permit_id LIMIT ?",
-            (epoch, *LIVE, now - LEASE_S, RECLAIM_BATCH)).fetchall()
-        # ponytail: an owner whose start identity is unreadable (old row,
-        # probe failure, same-second reuse under ps) stays until the epoch
-        # fence; a live recorded owner is never freed.
+            (epoch, now - LEASE_S, RECLAIM_BATCH)).fetchall()
+        # A live PID without comparable start identity remains held;
+        # owner loss can fence only these proven-unsent reservations.
         probes = {}
         budget = time.monotonic() + PROBE_BUDGET_S
         for p in stale:
@@ -499,7 +507,8 @@ class Broker:
                 continue
             self.db.execute(
                 "UPDATE permits SET state='fenced', outcome='owner_dead',"
-                " terminal_at=? WHERE permit_id=?", (now, p["permit_id"]))
+                " proof='owner_dead_unsent', terminal_at=? WHERE permit_id=?",
+                (now, p["permit_id"]))
             if p["cls"] == "RT" and p["state"] == "waiting":
                 self.db.execute(
                     "UPDATE admission_meta SET rt_waiting="

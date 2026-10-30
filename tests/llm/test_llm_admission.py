@@ -165,9 +165,11 @@ def test_crash_rotates_epoch_and_fences(tmp_path):
     assert stale["sent"] is False and stale["reason"] == "stale_epoch"
     assert backend.post(bg["sent"]["token"], "BACKLOG",
                         "replay")["status"] == 403
-    # epoch reopens only on verified-empty evidence
+    # The trusted caller must confirm the already-accepted work retired.
     assert not b2.open_epoch(lambda: False)
-    assert b2.open_epoch(lambda: True)
+    assert not b2.open_epoch(lambda: not backend.active)
+    backend.finish("BACKLOG")
+    assert b2.open_epoch(lambda: not backend.active)
     # new epoch admits cleanly
     bg2 = _send(backend, b2, "mcs.extract", "BACKLOG")
     assert bg2["resp"]["status"] == 200
