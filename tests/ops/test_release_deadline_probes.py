@@ -82,8 +82,9 @@ def test_runtime_and_service_probes_forward_the_same_absolute_deadline(tmp_path,
     deadline = time.monotonic() + 10
     assert runtime_inspection.probe_python(sys.executable, deadline=deadline) == facts
     assert calls[0]['deadline'] == deadline
-    monkeypatch.setattr(service_management, 'service_substitutions', lambda *_a, **_k: {'PYTHON': sys.executable})
-    paths = SimpleNamespace(agents_dir=str(tmp_path), checkout=str(tmp_path))
+    paths = service_management.default_paths(root=str(tmp_path), checkout=str(tmp_path),
+        hermes_python=sys.executable, hermes_runtime_home=str(tmp_path / 'hermes'),
+        agents_dir=str(tmp_path))
     service_management.runtime_gate_errors({'recovery_python': sys.executable}, paths=paths, deadline=deadline)
     assert len(calls) == 3 and all(v['deadline'] == deadline for v in calls)
 

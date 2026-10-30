@@ -39,9 +39,18 @@ def process_started_at(pid: int, *, deadline=None) -> float | None:
 
     LC_ALL=C keeps the stamp in the English format strptime parses
     (a ja_JP locale prints the weekday in kanji)."""
-    r = lifecycle_io.run_bounded(["ps", "-o", "lstart=", "-p", str(pid)], timeout=10,
-             env={**os.environ, "LC_ALL": "C"}, **({} if deadline is None else {"deadline": deadline}))
-    if r.returncode != 0:
+    timeout = 10
+    if deadline is not None:
+        if type(deadline) not in (int, float) or not math.isfinite(deadline):
+            raise ValueError('lifecycle_deadline_invalid')
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        timeout = min(timeout, remaining)
+    # Read-only ps needs a bounded observation, not a mutation lease's lost-reap hold.
+    r = lifecycle_io.run_bounded(["ps", "-o", "lstart=", "-p", str(pid)], timeout=timeout,
+             env={**os.environ, "LC_ALL": "C"})
+    if r.returncode != 0 or deadline is not None and time.monotonic() >= deadline:
         return None
     stamp = re.sub(r"\s+", " ", (getattr(r, "stdout", "") or "").strip())
     try:
