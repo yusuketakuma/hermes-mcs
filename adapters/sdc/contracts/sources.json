@@ -50,6 +50,9 @@
     "packet_sha256": "e94e5b7d1485549b77bd1f8c9614ae0071aeed1c386bb1f0f0aea38b58e3d1ba",
     "central_result_tree_sha256": "746ca9a325b3ba5ef527c4c62dcdc61084a2ba5db6fecfb8eabc181b717424a8",
     "provided_synthetic_passed": 465,
+    "dependency_files": {
+      "support/restart-plan.schema.json": "32fc9964701b22082a7ba28e3f47e6dbda3d39568738d81038d78b5ae1cffc0c"
+    },
     "status": "pure_contract_snapshot_only",
     "api_runtime_connected": false,
     "real_environment_accepted": false,
@@ -65,6 +68,8 @@
     "central_result_tree_sha256": "267e4dbde0d62ee7a5788beee80f8119ae7f2f29bb0e7a26cd88556a9139a9e0",
     "provided_synthetic_passed": 523,
     "status": "central_api_synthetic_accepted_product_connection_pending",
+    "development_candidate": "restart_plan_and_consent_cli_candidate",
+    "product_runtime_connected_scope": "released_product_connection_not_candidate",
     "product_runtime_connected": false,
     "real_environment_accepted": false,
     "files": {
@@ -83,6 +88,8 @@
     "central_source_tree_sha256": "cf49b8c94c13c464df975fad94fbaa8a2a08d839df5065ffce81d4bb01eae562",
     "provided_synthetic_passed": 555,
     "status": "central_api_synthetic_accepted_product_caller_pending",
+    "development_candidate": "registration_read_and_baseline_cli_candidate",
+    "product_runtime_connected_scope": "released_product_connection_not_candidate",
     "product_runtime_connected": false,
     "real_environment_accepted": false,
     "trusted_origin_and_pin_distribution_complete": false,
@@ -104,6 +111,8 @@
     "provided_synthetic_passed": 660,
     "central_source_files_verified": 152,
     "status": "central_contract_received_product_validation_in_progress",
+    "development_candidate": "profiles_and_consent_bound_diagnostic_tick_candidate",
+    "product_runtime_connected_scope": "released_product_connection_not_candidate",
     "product_runtime_connected": false,
     "real_environment_accepted": false,
     "trusted_origin_and_pin_distribution_complete": false,

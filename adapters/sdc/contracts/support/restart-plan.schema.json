@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "R4b fixed restart target and preflight metadata",
+  "description": "Pure closed metadata contract only. Stable target plan for the sole candidate mcs.standalone/effects profile mcs.standalone.restart.v1. This schema does not register or authorize a service and provides no signature, approval, local receipt, grant, dispatch, execution or completion capability. Existing R4a diagnostic schema/validator/vectors remain separate and unchanged. No path, PID, label, argv, shell, URL, patient information or free text is accepted. Raw JSON uses strict UTF-8/duplicate rejection, no BOM, depth <=8, ASCII CJSON and safe integers, maximum16384 bytes.",
+  "x-max-raw-bytes": 16384,
+  "x-json-max-depth": 8,
+  "$comment": "Runtime requires the exact independent expected_scope object and exact current plan/witness bindings. The plan deliberately has no creation/expiry time and may be confirmed before a later fresh preflight; it is stable metadata, not a long-lived execution permission. A changed runtime generation conflicts with the approved target. runtime_generation names the managed service runtime instance (hyphenless lowercase UUIDv4), distinct from R4a operation admission owner_generation. Machine shape cannot prove current owner observation, side effects, local consent, authorization, one-use grant, owner drain CAS, durable receipt or causal completion. Remote availability remains disabled until the separate owner and operational gates pass.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "product",
+    "tenant",
+    "installation",
+    "device_id",
+    "environment",
+    "case_id",
+    "type",
+    "params"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "sdc.support.restart-plan.v1"
+    },
+    "product": {
+      "const": "hermes-mcs"
+    },
+    "tenant": {
+      "$ref": "operation.schema.json#/properties/tenant"
+    },
+    "installation": {
+      "$ref": "operation.schema.json#/properties/installation"
+    },
+    "device_id": {
+      "$ref": "operation.schema.json#/properties/device_id"
+    },
+    "environment": {
+      "$ref": "operation.schema.json#/properties/environment"
+    },
+    "case_id": {
+      "$ref": "operation.schema.json#/properties/case_id"
+    },
+    "type": {
+      "const": "service.restart"
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "service_id",
+        "expected_runtime_generation",
+        "effects_profile"
+      ],
+      "properties": {
+        "service_id": {
+          "const": "mcs.standalone"
+        },
+        "expected_runtime_generation": {
+          "$ref": "#/$defs/runtime_generation"
+        },
+        "effects_profile": {
+          "const": "mcs.standalone.restart.v1"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "runtime_generation": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$(?![\\s\\S])",
+      "description": "32 lowercase hexadecimal characters encoding UUIDv4 without hyphens; this is the managed service runtime generation, not an operation admission token."
+    },
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "Nonnegative safe UTC epoch milliseconds. Runtime additionally rejects negative zero."
+    },
+    "preflight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "product",
+        "tenant",
+        "installation",
+        "device_id",
+        "environment",
+        "case_id",
+        "service_id",
+        "runtime_generation",
+        "started_at",
+        "observed_at",
+        "owner_alive",
+        "update_in_progress",
+        "command_intake_in_progress",
+        "restarting"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "sdc.support.restart-preflight.v1"
+        },
+        "product": {
+          "const": "hermes-mcs"
+        },
+        "tenant": {
+          "$ref": "operation.schema.json#/properties/tenant"
+        },
+        "installation": {
+          "$ref": "operation.schema.json#/properties/installation"
+        },
+        "device_id": {
+          "$ref": "operation.schema.json#/properties/device_id"
+        },
+        "environment": {
+          "$ref": "operation.schema.json#/properties/environment"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        },
+        "service_id": {
+          "const": "mcs.standalone"
+        },
+        "runtime_generation": {
+          "$ref": "#/$defs/runtime_generation"
+        },
+        "started_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "owner_alive": {
+          "type": "boolean"
+        },
+        "update_in_progress": {
+          "type": "boolean"
+        },
+        "command_intake_in_progress": {
+          "type": "boolean"
+        },
+        "restarting": {
+          "type": "boolean"
+        }
+      },
+      "$comment": "Runtime requires independent full expected scope and a previously validated restart plan. Product/full scope/service/runtime_generation must match that plan. now is a required nonnegative safe UTC millisecond integer (not negative zero); started_at <= observed_at <= now and now-observed_at <=15000. owner_alive must be true and update_in_progress/command_intake_in_progress/restarting must each be false for eligibility. Typed booleans have no defaults. These cross-field/freshness/plan/readiness checks are not established by JSON Schema. A preflight is a fresh witness for grant acquisition and again immediately before owner drain, not a snapshot retained during human approval."
+    },
+    "expected_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tenant",
+        "installation",
+        "device_id",
+        "environment",
+        "case_id"
+      ],
+      "properties": {
+        "tenant": {
+          "$ref": "operation.schema.json#/properties/tenant"
+        },
+        "installation": {
+          "$ref": "operation.schema.json#/properties/installation"
+        },
+        "device_id": {
+          "$ref": "operation.schema.json#/properties/device_id"
+        },
+        "environment": {
+          "$ref": "operation.schema.json#/properties/environment"
+        },
+        "case_id": {
+          "$ref": "operation.schema.json#/properties/case_id"
+        }
+      },
+      "description": "All five fields are independently resolved authenticated target scope, never inferred from the submitted plan or witness. Required by both runtime validators."
+    }
+  }
+}

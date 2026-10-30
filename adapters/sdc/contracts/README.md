@@ -19,7 +19,7 @@
 
 ## 再起動の独立契約部品（R4b）
 
-`restart-wire.schema.json`・`restart-wire-vectors.json`・`restart-signature-vectors.json` は、別の個別変更同意に束縛する契約部品です。当初の純契約合成465件に続き、中央API・現在権限のDB照合・Consoleを含む合成523件成功を受領しています。製品Runtimeへの接続・実機受入は未完です。既存R4aの9ファイルと診断の署名用途・経路は変更しません。
+`restart-wire.schema.json`・`restart-wire-vectors.json`・`restart-signature-vectors.json` は、別の個別変更同意に束縛する契約部品です。参照先の `restart-plan.schema.json` も中央正本と同じbytesで同梱します。当初の純契約合成465件に続き、中央API・現在権限のDB照合・Consoleを含む合成523件成功を受領しています。再起動の準備と同意のCLIは開発候補にありますが、遠隔再起動の実行と実機受入は未完です。既存R4aの9ファイルと診断の署名用途・経路は変更しません。
 
 - intent→個別承認→確認したpreview全体のhash→ローカル変更receipt→accept→operationの順に束縛します。5分のpreviewは初回accept窓、grantは30秒以内の開始窓、追跡期限は初回acceptから15分で再送しても延びません。
 - 署名の新3用途は独立したpin集合を要求します。履歴照合で期限切れの署名を検証できても、現在の権限や新しい実行許可にはなりません。
@@ -44,7 +44,7 @@ HTTP応答の `request_id` は要求の追跡値で、承認や実行証拠で�
 
 製品の契約validatorとrestart専用HMAC・transportはこの固定経路を扱います。取得は、真正に設定済みの固定originへのTLS接続と既存認証を前提とし、新しい署名用途を追加しません。後続callerは取得の本人同意、保存済みR4a案件基線・現在のmonitor binding・ローカルserviceとの独立照合を行い、初回の `service_revision` だけを登録応答から採用します。値を1と推測したり、既知scope/epoch/keyを応答で自動移行したり、previewからexpected15を埋めたりしません。R4a同意をplanning・変更許可へ流用せず、それぞれ別の同意が必要です。
 
-同じ本文でも新しい読取りで、中央の成功枠は端末ごとUTC日60回です。明示的な初回準備だけで使い、定期pollへ接続しません。ACK不明時は同じ本文と新しいHMAC nonce/timeで初回に加えて最大3回、期限・取消・409で停止する中央契約です。この変更は自動再送、初回基線の保存、CLI、Runtime caller、実機受入、真正origin/pinの運用配布を実装・完了するものではありません。
+同じ本文でも新しい読取りで、中央の成功枠は端末ごとUTC日60回です。明示的な初回準備だけで使い、定期pollへ接続しません。ACK不明時は同じ本文と新しいHMAC nonce/timeで初回に加えて最大3回、期限・取消・409で停止する中央契約です。開発候補には登録読取りの再試行、初回基線の保存、準備・同意のCLIがあります。遠隔再起動の実行、実機受入、真正origin/pinの運用配布は完了していません。
 
 ## 初回公開設定と診断イベントの追加契約
 
@@ -54,7 +54,9 @@ HTTP応答の `request_id` は要求の追跡値で、承認や実行証拠で�
 
 診断イベントは固定enumと件数・10分単位の時刻だけです。新規送信には独立した現地同意と中央同意を必要とし、患者情報・秘密・path・URL・例外文・生ログを収集しません。新規データの鮮度検証と、保存済み同ID・同bytesの履歴照合は別です。中央の `unknown` は未送信の証明ではなく、内容の期限切れも再実行の許可にはなりません。
 
-契約validatorだけでは、送信や適用の許可を作りません。monitorの初回import・既存R1への続行・device ACK/statusは `../provision.py` と `mcs/ops/sdc_provision_cli.py` の開発候補へ接続し、手順は[状態監視ガイド](../../../docs/guides/SDC_SELF_MONITORING.md)を正本とします。support/restart profile、診断の独立同意・私有spool・自動送信は未接続です。実actor/channel/pin配布・外部の復元基線・実observer sink・実D1/Macの受入がない状態を、顧客有効化済みとは扱いません。R1・既存R4の経路、署名用途、中央grant CAS以後最大30秒のin-flight契約は変更しません。
+契約validatorだけでは、送信や適用の許可を作りません。monitor・support・restartのprofile取り込みは `../provision.py` と `mcs/ops/sdc_provision_cli.py` の開発候補に接続しています。診断の独立同意・私有spool・既存R1 tickでの条件付き送信も開発候補にあります。手順は[状態監視ガイド](../../../docs/guides/SDC_SELF_MONITORING.md)を正本とします。1.1.0の新規導入ではCSDCは無効で、接続して提供しません。実actor/channel/pin配布・外部の復元基線・実observer sink・実D1/Macの受入がない状態を、顧客有効化済みとは扱いません。R1・既存R4の経路、署名用途、中央grant CAS以後最大30秒のin-flight契約は変更しません。
+
+`sources.json` の該当する `status` と `product_runtime_connected` は、中央契約の受領と提供済み製品の接続状態を記録します。`development_candidate` は現在の開発候補を示し、中央・実機の受入や有効化を意味しません。
 
 ## releases
 

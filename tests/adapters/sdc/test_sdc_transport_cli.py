@@ -73,7 +73,13 @@ def test_existing_cli_routes_sdc_only_after_runtime_pinning(monkeypatch, command
     assert calls == [[command, '--state-root', '/synthetic/private']]
 
 
-def test_service_contract_is_opt_in_in_both_modes_and_uses_selected_python():
+def test_service_contract_is_opt_in_in_both_modes_and_uses_selected_python(tmp_path):
+    base = tmp_path.resolve()
+    checkout = base / 'repo'
+    helper = checkout / 'mcs/core/run_log.py'
+    helper.parent.mkdir(parents=True)
+    helper.write_bytes((Path(__file__).resolve().parents[3] / 'mcs/core/run_log.py').read_bytes())
+    helper.chmod(0o644)
     for mode in ('standalone', 'hermes'):
         cfg = {'runtime_mode': mode}
         original = service_contract.desired_agent_labels(cfg)
@@ -83,7 +89,7 @@ def test_service_contract_is_opt_in_in_both_modes_and_uses_selected_python():
             assert service_contract.SDC_LABEL not in service_contract.desired_agent_labels(cfg)
         cfg['sdc'] = {'enabled': True, 'state_root': '/synthetic/private'}
         assert service_contract.desired_agent_labels(cfg) == original + [service_contract.SDC_LABEL]
-        values = service_contract.service_substitutions(cfg, root='/synthetic/root', checkout='/synthetic/repo', standalone_runtime_home='/synthetic/runtime', hermes_runtime_home='/synthetic/hermes', hermes_python='/synthetic/pinned/python')
+        values = service_contract.service_substitutions(cfg, root=str(base / 'root'), checkout=str(checkout), standalone_runtime_home='/synthetic/runtime', hermes_runtime_home='/synthetic/hermes', hermes_python='/synthetic/pinned/python', recovery_dir=str(base / 'recovery'))
         assert values['SDC_ROOT'] == '/synthetic/private'
         assert values['PYTHON'] == ('/synthetic/runtime/venv/bin/python3' if mode == 'standalone' else '/synthetic/pinned/python')
         body = (Path(__file__).resolve().parents[3] / 'deployment/launchagents/local.mcs-sdc.plist').read_text()
