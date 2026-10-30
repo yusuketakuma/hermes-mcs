@@ -2,7 +2,7 @@
 
 The live answers of the 🧾 summary and the 📋 / 🗂 / 🔎 list buttons:
 read-only over the ledger, recomputed on every click and never
-persisted (notify_cards drops them from stored receipts). Shared
+persisted (notify_actions drops them from stored receipts). Shared
 display helpers (patient names, times, one-line text, member labels)
 come from notify_render.
 """

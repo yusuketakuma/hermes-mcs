@@ -1,4 +1,4 @@
-"""Run sealed private snapshot inputs locally and export only aggregate evaluation reports."""
+"""Run sealed private snapshot generation and produce aggregate-only scoring reports locally."""
 from __future__ import annotations
 
 import argparse

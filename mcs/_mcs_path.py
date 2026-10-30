@@ -6,7 +6,7 @@ at any depth (e.g. extract/rules/, extract/llm/), except retired v2/v3 engines.
 Entry-point modules put
 the mcs/ root on sys.path and import this module; importing it
 prepends every module dir so local modules resolve ahead of any
-same-named installed package. See AGENTS.md "システムと入口".
+same-named installed package. See AGENTS.md "構成".
 """
 import os
 import sys

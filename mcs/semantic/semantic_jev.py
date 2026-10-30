@@ -799,9 +799,9 @@ PROPOSITIONS = {
               "No care preference is mentioned."),
 }
 
-# conditional drill-down dimensions for medication-event candidates
-# (spec §14.3) — asked only for propositions that did not come back
-# NO_MATCH, and never used to drop source text from later stages.
+# Medication-event detail dimensions, evaluated per extracted medication fact
+# by semantic_assessment; primary NO_MATCH does not exclude a fact.
+# These answers never remove source text from later stages.
 MED_DETAIL_QUESTIONS = {
     "change_kind": ("For the medication event described in "
                     "state.target.text, which change kind is reported?",

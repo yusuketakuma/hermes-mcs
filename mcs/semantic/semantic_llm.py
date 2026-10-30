@@ -1,4 +1,4 @@
-"""Local-LLM extraction and summarization (spec §13.1, §15).
+"""LLM extraction and summarization (spec §13.1, §15).
 
 Prompts, response parsing, the fact extraction wrapper, and the
 summary/repair pass. llm_fn is injected; semantic_transport owns network

@@ -153,8 +153,8 @@ def _transports(db, event_ids):
 
 
 def _hold_adapter_locks(data, locks):
-    """The LINE WORKS adapter holds its send scope lock for its whole life and writes no
-    worker_status; holding every one until apply returns also keeps it from starting."""
+    """The LINE WORKS adapter holds its send scope lock for its whole life.
+    Holding every one until apply returns also prevents it from starting."""
     state = Path(notify_dirs(str(data))["lineworks_state"])
     if state.is_symlink():
         raise ValueError("unsafe_data_path")

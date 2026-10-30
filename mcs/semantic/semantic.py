@@ -24,8 +24,8 @@ snapshot readers (mcs_view v5-7 gate) keep working unchanged (AT-065).
 
 Pipeline per durable job (kind='semantic', keyed by thread root):
   bundle snapshot -> per-target primary propositions (Jev noul)
-  -> conditional med-detail (Jev choice) -> local-LLM fact candidates
-  with verified evidence spans -> local-LLM summary with common Claim
+  -> conditional med-detail (Jev choice) -> LLM fact candidates
+  with verified evidence spans -> LLM summary with common Claim
   schema -> code audit + per-claim Jev support choice + coverage check
   -> at most ONE repair -> artifacts persisted in one transaction.
 

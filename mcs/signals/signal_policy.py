@@ -42,12 +42,10 @@ THRESHOLDS = {
 
 
 def approved_policy(db):
-    """Latest signal_policy_v1 artifact as (artifact_id, content), or
-    None when absent or lacking provenance. Provenance required: a policy
-    only counts when it arrived through the human-confirmed command path
-    (non-empty str command_id + actor recorded by _apply_signal_policy_tx).
-    A bare artifact insert cannot move thresholds — same identity
-    boundary as the command envelope."""
+    """Latest signal_policy_v1 artifact as (artifact_id, content), or None
+    when absent or missing non-empty command_id and actor provenance fields.
+    This reader does not verify a command receipt or distinguish a direct
+    artifact insert carrying those fields from the human-confirmed write path."""
     artifact_id, content = latest_artifact(db, POLICY_KIND)
     # Never revive a prior approval past an unreadable latest row.
     if not (content is not None
