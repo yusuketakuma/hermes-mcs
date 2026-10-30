@@ -442,7 +442,7 @@ $PY mcs/ingest/run_check.py --json --download-files --mark-read
 $PY mcs/views/mcs_view.py status
 $PY mcs/views/mcs_view.py signals
 cat ~/.mcs/data/health.json                # collection/extraction 状態
-tail ~/.mcs/data/run.log                   # 実行ログ
+tail ~/.mcs/data/mcs.log                   # 実行ログ
 ```
 
 Discord を使う場合は、対象チャンネルで新着投稿があるとカードが投稿

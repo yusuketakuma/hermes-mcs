@@ -411,7 +411,7 @@ $PY mcs/views/mcs_view.py status
 【検証】`run_check` が exit 0 で終了し、`status` に患者・メッセージ
 数が出る。新着投稿があれば通知が届くことをユーザーに確認してもらう。
 
-【失敗時】`data/run.log` の必要部分をローカルで確認し、状態・件数・
+【失敗時】`data/mcs.log` の必要部分をローカルで確認し、状態・件数・
 エラー分類だけを報告する。`session_expired`
 なら `auto_login` の復旧を待つか INSTALLATION.md §7 の Keychain 節を案内。
 
