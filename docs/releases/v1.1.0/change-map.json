@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 394,
+  "fragment_count": 396,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2371,6 +2371,18 @@
       "id": "repair-oversize-preservation-20261031",
       "title": "再解析が入力上限を超えた場合も確認結果を保持",
       "sha256": "814f56997ab965c9bc1bb7558e6eb87e9d354a49b10367143c530580f0f9ded2"
+    },
+    {
+      "path": "changes/archive/1.1.0/health-cards-observation-budget.json",
+      "id": "health-cards-observation-budget",
+      "title": "通知カードの状態確認が長引く問題を修正",
+      "sha256": "9ac22a57ee53e8ff4595bf794a031ac08e1369f6fb6426ddec83c19b948e9d3e"
+    },
+    {
+      "path": "changes/archive/1.1.0/snapshot-deadline-boundary.json",
+      "id": "snapshot-deadline-boundary",
+      "title": "スナップショット処理の期限切れへの対応を改善",
+      "sha256": "5050c5517dd140dc1ce54273958b4cba4b3155f095af3b7c115fd00cec85335d"
     }
   ]
 }

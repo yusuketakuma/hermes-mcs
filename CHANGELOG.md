@@ -105,6 +105,9 @@
 - **クラウド抽出の重複準備と待機による停滞を改善**
   他のワーカーが先頭候補を確保済みでも次の候補へ進み、必要な件数だけ文脈を準備します。周回ごとの全投稿集計や予算履歴の重複走査を減らし、意味解析のロック待ちやAPIの再試行待機がほかの処理を止める経路を修正しました。候補の確認が期限内に終わらない場合は同じワーカーの次の処理で続行し、保存待ちの結果は新規送信の停止中も保存を試みます。ワーカーの再起動や強制終了では、メモリ内の途中状態は保持されません。予算履歴の同じ文字数での変更や並行更新も検証します。予算・モデル・原文照合・二重課金防止は維持し、周回ログに選択・延期などの集計を残します。実環境での改善幅は未測定です。
 
+- **通知カードの状態確認とスナップショットの期限切れへの対応を修正**
+  通知カードの状態を時間内に確認できない場合は、取得できなかった件数や一覧を不明として監視に表示し、次回の収集で再確認します。スナップショットの準備や検証で期限切れを検知した候補は公開せず、処理が残る間は一時ファイルを保護します。最終的なファイル公開中にディスクが停止した場合は、期限内の終了を保証できません。
+
 ### 更新時の注意
 
 - 通常の更新手順を使い、Hermes gateway、利用中の独立実行host・worker・通知アダプター、抽出workerを再起動してください。Gitの差分だけの反映では、旧コードや旧サービス設定が動き続けます。[更新ガイド](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/docs/guides/UPGRADE_AGENT.md)に従ってください。
@@ -126,7 +129,7 @@
 ### 技術詳細
 
 <details>
-<summary>変更記録394件の詳細・更新条件・根拠を表示</summary>
+<summary>変更記録396件の詳細・更新条件・根拠を表示</summary>
 
 各リンクは、この版の変更記録です。要約・適用条件・更新操作・技術詳細・根拠を参照できます。同じ箇所に複数の記録がある場合、後続の修正を含む現行の説明は上の本文と各機能のガイドを確認してください。たとえば、処理方式アイコンの初期配置は後続の見出し行への移動で置き換えています。
 
@@ -527,6 +530,9 @@
 - [解析候補の確認を中断後も続行](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-selection-resume-20261031.json)
 - [不正なクラウド利用履歴がある場合に送信を保留](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-ledger-integrity-20261031.json)
 - [再解析が入力上限を超えた場合も確認結果を保持](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/repair-oversize-preservation-20261031.json)
+
+- [通知カードの状態確認が長引く問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/health-cards-observation-budget.json)
+- [スナップショット処理の期限切れへの対応を改善](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/snapshot-deadline-boundary.json)
 
 </details>
 
