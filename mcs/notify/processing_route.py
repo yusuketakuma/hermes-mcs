@@ -89,12 +89,31 @@ def _extract_jev_state(db, project_id, message_id, source_id, source_hash, versi
     return "unknown"
 
 
+def registered_providers():
+    """Return registered cloud provider identities without returning credential values."""
+    from mcs_util import private_env_problem
+
+    return tuple(name for name, key in (("anthropic", "MCS_ANTHROPIC_API_KEY"),
+                                        ("openai", "MCS_OPENAI_API_KEY"))
+                 if private_env_problem(key) is None)
+
+
 def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None):
     """Return only states supported by current per-post execution evidence."""
+    return provider_info(db, project_id, message_id, cfg, bundle_cache=bundle_cache)["states"]
+
+
+def provider_info(db, project_id, message_id, cfg=None, *, bundle_cache=None):
+    """Return current execution states and a causally proved service sequence."""
     states = dict.fromkeys(PROVIDERS, "unknown")
+    sequence = None
+
+    def result():
+        return {"states": states, "sequence": sequence}
+
     try:
         row = db.execute(
-            "SELECT a.artifact_id,a.kind,a.meta,a.content,m.content_hash FROM artifacts a JOIN messages m "
+            "SELECT a.artifact_id,a.kind,a.model,a.meta,a.content,m.content_hash FROM artifacts a JOIN messages m "
             "ON m.message_id=a.message_id AND m.project_id=a.project_id "
             "WHERE a.message_id=? AND m.project_id=? AND a.kind IN (" + FACT_KINDS_SQL + ") "
             "AND m.body_state IS NOT 'deleted' "
@@ -102,10 +121,10 @@ def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None):
             + current_fact_pred('a', 'm') + " ORDER BY a.artifact_id DESC LIMIT 1",
             (message_id, project_id)).fetchone()
         if row is None:
-            return states
+            return result()
         meta, content = strict_json(row["meta"]), strict_json(row["content"])
         if not isinstance(meta, dict) or not isinstance(content, dict) or not content:
-            return states
+            return result()
         proof = meta.get("provider_provenance")
         from inference_dependency_loss import source_binding
         binding = source_binding(db, project_id, message_id)
@@ -117,13 +136,13 @@ def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None):
                 or type(proof.get("complete")) is not bool
                 or not isinstance(binding, str) or meta.get("source_binding") != binding
                 or proof.get("source_binding") != binding or proof.get("result_hash") != payload_hash(content)):
-            return states
+            return result()
         if row["kind"] == "extract_llm":
             if proof.get("stage") != "extract":
-                return states
+                return result()
         else:
             if proof.get("stage") != "projection" or not isinstance(cfg, dict):
-                return states
+                return result()
             import semantic_policy
             import semantic_store
             import semantic_transport
@@ -131,7 +150,7 @@ def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None):
                                 "WHERE project_id=? AND message_id=?", (project_id, message_id)).fetchone()
             scfg, errors = semantic_policy.semantic_config(cfg)
             if target is None or errors:
-                return states
+                return result()
             model = semantic_transport.llm_model(cfg)
             cache_key = (project_id, target[0], model)
             if bundle_cache is not None and cache_key in bundle_cache:
@@ -141,14 +160,14 @@ def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None):
                 if bundle_cache is not None:
                     bundle_cache[cache_key] = bundle
             if bundle is None:
-                return states
+                return result()
             member = next((m for m in bundle["members"] if m["message_id"] == message_id), None)
             policy = semantic_policy.policy_fingerprint(scfg)
             if (member is None or proof.get("source_fingerprint") != bundle["source_fingerprint"]
                     or meta.get("fingerprint") != bundle["source_fingerprint"]
                     or proof.get("policy_fingerprint") != policy or meta.get("policy_fingerprint") != policy
                     or proof.get("target_revision") != member["revision"]):
-                return states
+                return result()
             # The projection's own metadata cannot prove its producer. Recheck
             # against the current source document and audit receipts instead.
             import semantic_v4
@@ -156,35 +175,43 @@ def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None):
                                 "AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
                                 (semantic_policy.KIND_FACTS_V2, project_id, message_id)).fetchone()
             if source is None:
-                return states
+                return result()
             doc = strict_json(source["content"])
             if not isinstance(doc, dict) or proof != semantic_v4._projection_provenance(
                     db, project_id, message_id, bundle["source_fingerprint"], policy, member, doc, content):
-                return states
+                return result()
             if proof.get("jev") in ("done", "partial", "skipped"):
                 states["jev"] = proof["jev"]
         providers = proof.get("providers")
         if (not isinstance(providers, list)
                 or any(not isinstance(p, str) or p not in ("local", "anthropic", "openai") for p in providers)
                 or len(set(providers)) != len(providers) or (proof["complete"] and not providers)):
-            return states if row["kind"] == "extract_llm" else dict.fromkeys(PROVIDERS, "unknown")
+            if row["kind"] != "extract_llm":
+                states = dict.fromkeys(PROVIDERS, "unknown")
+            return result()
         if proof["complete"]:
             if row["kind"] == "extract_llm":
                 # A proof's own provider field is not independent evidence:
                 # the selected artifact's actual model/contract must agree.
-                route = _route(db, project_id, message_id)
+                route = _route(row, meta, content)
                 if (len(providers) != 1
                         or (providers[0] == "local" and route != "local")
                         or (providers[0] != "local" and
                             (route != "cloud" or meta.get("backend") != providers[0]))):
-                    return states
+                    return result()
             for provider in ("anthropic", "openai", "local"):
                 # The adopted result does not prove that another provider
                 # was never attempted before a fallback or earlier stage.
                 states[provider] = "done" if provider in providers else "unknown"
+            if row["kind"] == "extract_llm":
+                sequence = [providers[0]]
+                if states["jev"] in ("done", "partial"):
+                    # QC names this exact retained extraction, so its Jev calls
+                    # follow the adopted producer. Timestamps are not evidence.
+                    sequence.append("jev")
     except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
-        return dict.fromkeys(PROVIDERS, "unknown")
-    return states
+        return {"states": dict.fromkeys(PROVIDERS, "unknown"), "sequence": None}
+    return result()
 
 
 def provider_text(states):
@@ -193,21 +220,7 @@ def provider_text(states):
         ("anthropic", "Anthropic"), ("openai", "OpenAI"), ("jev", "Jev"), ("local", "💻")))
 
 
-def _route(db, project_id, message_id):
-    row = db.execute(
-        "SELECT a.kind,a.model,a.meta,a.content FROM artifacts a JOIN messages m "
-        "ON m.message_id=a.message_id AND m.project_id=a.project_id WHERE a.message_id=? AND m.project_id=? "
-        f"AND a.kind IN ({FACT_KINDS_SQL}) AND m.body_state IS NOT 'deleted' "
-        "AND CASE WHEN json_valid(a.content) THEN json_type(a.content)='object' ELSE 0 END "
-        + current_fact_pred('a', 'm') + " ORDER BY a.artifact_id DESC LIMIT 1",
-        (message_id, project_id)).fetchone()
-    if row is None:
-        return None
-    try:
-        meta = strict_json(row["meta"])
-        content = strict_json(row["content"])
-    except (TypeError, ValueError, RecursionError):
-        return None
+def _route(row, meta, content):
     if (not isinstance(meta, dict) or not isinstance(content, dict) or not content
             or not isinstance(row["model"], str) or not row["model"]):
         return None
