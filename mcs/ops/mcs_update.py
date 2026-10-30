@@ -2718,8 +2718,8 @@ def _gateway_restart_if_needed(state: dict) -> None:
 
 
 def _rollback_backup_error(entry: dict) -> str | None:
-    """A schema-bump rollback restores its preupdate backup, but
-    maintenance retains actionable references, but a missing or changed
+    """A schema-bump rollback restores its preupdate backup.
+    Maintenance retains actionable references, but a missing or invalid
     copy must still block rollback. rollback() checks it before journaling or resetting:
     old code must never be left running against the newer schema. (The
     apply bail path keeps reset-then-escalate: its backup is fresh and
