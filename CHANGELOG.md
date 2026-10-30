@@ -10,7 +10,7 @@
 
 **クラウドAIの選択・予算管理、過去チャットの並列解析と返信のチャンネル通知を追加**
 
-過去チャットと患者コンテキストをAnthropicまたはOpenAIで処理し、新着はローカルで解析できます。利用先の優先順位・API別の予算を設定でき、アクティブな患者から過去分を並列処理します。過去の投稿に新しい返信が付くとSlackのチャンネルにも表示し、投稿に使われたサービスはアイコンで確認できます。APIキーと通知先の認証情報は対話で登録できます。収集・通知・更新の安全性と、処理が進まない場合の診断・復旧も改善しました。
+過去チャットと患者コンテキストをAnthropicまたはOpenAIで処理し、新着はローカルで解析できます。利用先の優先順位・API別の予算を設定でき、アクティブな患者から過去分を並列処理します。過去の投稿に新しい返信が付くとSlackのチャンネルにも表示します。処理サービスはSlackではアイコン、DiscordとLINE WORKSではサービス名と状態で確認できます。APIキーと通知先の認証情報は対話で登録できます。収集・通知・更新の安全性と、処理が進まない場合の診断・復旧も改善しました。
 
 > 更新前の確認：MCS専用のAPIキーがあり、modeを省略している環境では外部AIを自動使用します。患者名を含み得る原文や患者文脈を匿名化せずに送信するため、送信先・対象・費用を確認してください。使わない場合は対象サービスのmodeをoffにします。合計費用の既定上限は1日25ドル・1か月75ドルです。明示した無効化・低い上限・対象範囲は保持します。
 
@@ -38,8 +38,8 @@
 - **初期設定・更新後・API追加で認証情報を対話登録**
   OpenAI・Anthropic・JevのAPIキーとSlack・Discord・LINE WORKSの接続情報を、非表示で入力できます。既存の値を保持する選択と、保存前の送信先・実効予算の確認を追加しました。接続方式ごとの保存先は維持し、安全な切替を確認できない登録済み接続情報の変更は保留します。
 
-- **投稿で使われたサービスをアイコンで確認**
-  患者名の下に、処理サービスと「解析中」「結果を準備中」「解析完了」「解析未完了・要確認」「状況不明」を表示します。AnthropicとOpenAIはAPIキーが登録済みのサービスだけを表示します。現在表示する採用結果の生成・検証順を確認できた場合は、その順にアイコンを並べ、ほかのサービスは順序不明の別の群に表示します。複数投稿や証拠不足の場合は処理順を不明とします。患者名の先頭の固定アイコンは維持します。
+- **投稿で使われたサービスと解析状況を確認**
+  患者名の下に、処理サービスと「解析中」「結果を準備中」「解析完了」「解析未完了・要確認」「状況不明」を表示します。Slackはサービスの画像アイコンとローカルの💻を使い、DiscordとLINE WORKSはサービス名と状態を表示します。AnthropicとOpenAIはAPIキーが登録済みのサービスだけを表示します。現在表示する採用結果の生成・検証順を確認できた場合は、その順に表示し、ほかのサービスは順序不明の別の群に表示します。複数投稿や証拠不足の場合は処理順を不明とします。患者名の先頭の固定アイコンは維持します。
 
 - **失敗ジョブの理由を調べ、対策後に再試行**
   `mcs jobs failed`で本文を出さずに失敗理由と対策を確認できます。再試行は診断・入力内容のハッシュと、人の確認・理由を照合して予約します。旧世代・保留・送信結果不明などの安全条件は維持します。
@@ -81,8 +81,8 @@
 - **ログ統合後も手動復旧コマンドを使えるよう修正**
   正式な起動設定と導入先に結合した補助プログラムを確認し、`mcs recover`と`mcs recover --status`から独立した復旧ツールを実行します。従来の起動形式と対話操作も維持します。
 
-- **DB復元に失敗したまま旧コードを再起動しない**
-  スキーマを戻す前に未完了の記録を残し、バックアップや復旧記録の変更・欠損を照合します。復元に失敗した場合は停止を保持し、正常な復旧と人の承認・通知照合の経路は維持します。
+- **DB復元が未完了の場合は復旧を保留**
+  スキーマを戻す前に未完了の記録を残し、バックアップや復旧記録の変更・欠損を照合します。復元に失敗した場合は保留を維持し、復旧処理から旧コードを再起動しません。ワーカーが実際に停止しているかは別に確認が必要です。正常な復旧と人の承認・通知照合の経路は維持します。
 
 - **薬剤統計で原本の記載位置を保持**
   患者以外の薬剤を除いた後も元の配列位置で辞書注記を照合し、同名の別の記載と誤って結び付けることを防ぎます。
@@ -98,6 +98,12 @@
 
 - **認証情報と更新処理の境界を強化**
   キー登録中の設定変更、保存先のリンク・特殊ファイル・権限不正、別設定行になる入力を拒否します。導入と更新の競合、バックアップに必要な空き容量、承認の期限、移行中断を反映前に確認します。
+
+- **取得済みの空投稿・日付・旧形式カードの扱いを修正**
+  取得完了の証拠がある空投稿や削除済み投稿で患者コンテキストが止まる問題と、日付を薬剤量として扱う問題を修正しました。入力超過は要確認として保存し、外部AIを無効にした候補では鍵を探索しません。旧形式カードは表示版だけの変更で一斉再送せず、移行中の復旧記録と復元承認待ちも保護します。
+
+- **クラウド抽出の重複準備と待機による停滞を改善**
+  他のワーカーが先頭候補を確保済みでも次の候補へ進み、必要な件数だけ文脈を準備します。周回ごとの全投稿集計や予算履歴の重複走査を減らし、意味解析のロック待ちやAPIの再試行待機がほかの処理を止める経路を修正しました。候補の確認が期限内に終わらない場合は同じワーカーの次の処理で続行し、保存待ちの結果は新規送信の停止中も保存を試みます。ワーカーの再起動や強制終了では、メモリ内の途中状態は保持されません。予算履歴の同じ文字数での変更や並行更新も検証します。予算・モデル・原文照合・二重課金防止は維持し、周回ログに選択・延期などの集計を残します。実環境での改善幅は未測定です。
 
 ### 更新時の注意
 
@@ -120,9 +126,9 @@
 ### 技術詳細
 
 <details>
-<summary>変更記録385件の詳細・更新条件・根拠を表示</summary>
+<summary>変更記録394件の詳細・更新条件・根拠を表示</summary>
 
-各リンクは、この版の変更記録です。要約・適用条件・更新操作・技術詳細・根拠を原文のまま保存しています。同じ箇所に複数の記録がある場合、後続の修正を含む現行の説明は上の本文と各機能のガイドを確認してください。たとえば、処理方式アイコンの初期配置は後続の見出し行への移動で置き換えています。
+各リンクは、この版の変更記録です。要約・適用条件・更新操作・技術詳細・根拠を参照できます。同じ箇所に複数の記録がある場合、後続の修正を含む現行の説明は上の本文と各機能のガイドを確認してください。たとえば、処理方式アイコンの初期配置は後続の見出し行への移動で置き換えています。
 
 - [アレルギー投稿後の訂正を表示前に確認](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/allergy-ambiguous-corrections.json)
 - [アレルギーの投稿時点の記載を確認](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/allergy-posted-record.json)
@@ -467,7 +473,7 @@
 - [パターンカード検査時の氏名照合漏れを修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/pattern-denylist-snapshot-20261030.json)
 - [投稿ごとに処理サービスをアイコンで表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/per-post-provider-icons-20261029.json)
 - [投稿カード上部に解析状態を表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/post-processing-status-order-20261030.json)
-- [チャットの見出しで解析方式をアイコン表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/processing-route-icon-20261029.json)
+- [チャット上部に処理サービスの状態を表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/processing-route-icon-20261029.json)
 - [Anthropicの初期費用上限を1日25ドル・1か月75ドルに設定](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-default-budgets-20261029.json)
 - [処理サービスの表示をチャットの見出し行へ移動](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-header-location-20261030.json)
 - [品質の再点検で問題が見つかった後の完了表示を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/quality-epoch-invalidation-20261029.json)
@@ -510,6 +516,17 @@
 - [長文を分割して配送した後も未完了の警報が続く問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/notification-split-delivery-evidence-20261030.json)
 
 - [導入・更新の案内を現行の設定と保護条件に合わせる](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/install-update-guidance-20261030.json)
+
+- [機能別の配置へ整理し、入口と保存データを保持](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/repository-layout-organization-20261030.json)
+- [移行中の復旧記録と復元承認待ちの状態を保護](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/baseline-lifecycle-recovery-20261031.json)
+- [取得済みの空投稿と日付の扱いを修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/baseline-empty-readiness-calendar-20261031.json)
+- [無効なクラウドの鍵探索と通知の一斉再送を防止](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/baseline-semantic-notify-20261031.json)
+
+- [クラウド抽出の重複準備と待機による停滞を改善](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-extraction-claim-progress-20261031.json)
+- [既存カードにも処理元を表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-generation-compat-20261031.json)
+- [解析候補の確認を中断後も続行](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-selection-resume-20261031.json)
+- [不正なクラウド利用履歴がある場合に送信を保留](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-ledger-integrity-20261031.json)
+- [再解析が入力上限を超えた場合も確認結果を保持](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/repair-oversize-preservation-20261031.json)
 
 </details>
 
