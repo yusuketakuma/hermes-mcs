@@ -848,12 +848,12 @@ def card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
                 continue
             states = (processing_route.provider_states(db, card["project_id"], mid, cfg=cfg,
                                                        bundle_cache=bundle_cache)
-                      if layout >= 3 and m["body_state"] != "deleted" and include_summary else None)
+                      if m["body_state"] != "deleted" and include_summary else None)
             lines.append(_message_post(db, mid, m, _sender_tag(m, db),
                                        head=head, stamps=stamps, cfg=cfg,
                                        include_summary=include_summary, layout=layout, stamp_time=stamp_time,
                                        provider_states=states, visible_providers=visible_providers,
-                                       include_progress=layout < 2))
+                                       include_progress=False))
         title = f"💬 {patient_heading(db, card['project_id'])} — 本文"
         text = "\n\n".join(lines)
     else:
@@ -870,7 +870,8 @@ def card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
     return title, text or "（表示できる本文がありません）"
 
 
-def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=None) -> dict:
+def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=None,
+                 _provider_version=4) -> dict:
     """The deterministic display model for a card at its current page:
     containers + footer + shown-set + pages. Tokens/buttons are added
     per-render and are NOT part of the content fingerprint."""
@@ -917,7 +918,7 @@ def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=N
                 meta.append(f"{mmdd(first.get('posted_at'))}〜")
             if context:
                 meta.append(context)
-            if layout == 2:
+            if _provider_version == 1 or (layout == 2 and _provider_version == 0):
                 states = [p["state"] for p in (progress_by_mid or {}).values() if p]
                 for state, label in (("processing", "解析中"), ("attention", "解析要確認")):
                     if count := states.count(state):
@@ -954,7 +955,7 @@ def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=N
                     f"{posted_time_label(m['posted_at'])} {_sender_tag(m, db)}")
             post_line = {"type": "text", "rule": True, "text": line}
             sequence = {}
-            if layout >= 3 and m["body_state"] != "deleted":
+            if _provider_version >= 2 and m["body_state"] != "deleted":
                 states = processing_route.provider_states(db, card["project_id"], m["message_id"], cfg=cfg,
                                                           bundle_cache=bundle_cache, sequence_out=sequence)
                 post_line.update(text=_cap_card_text(line, 500), provider_states=states)
@@ -963,7 +964,7 @@ def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=N
             if m["body_state"] != "deleted":
                 blocks.append(_summary_block(db, m["message_id"], cfg=cfg,
                                              progress_by_mid=progress_by_mid,
-                                             label=layout < 2, include_progress=layout < 2))
+                                             label=layout < 2, include_progress=(layout < 2 if _provider_version == 0 else _provider_version in (1, 2))))
             rendered.append(_fit_item(blocks))
         item_shown = [[m["message_id"]] for m in msgs]
         max_count = PAGE_THREAD
@@ -1001,17 +1002,21 @@ def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=N
         max_count = PAGE_DIGEST if kind == "digest" else PAGE_THREAD
         shown_kind = "signal_keys"
     header_placeholder = None
-    if kind == "thread" and layout >= 3:
+    if kind == "thread" and _provider_version >= 2:
         # Reserve the longest possible provider line before packing pages.
-        header_placeholder = (PROCESSING_STATUS_LABELS["attention"] + " · 採用結果の処理順: Anthropic → OpenAI · その他（順序不明） · "
-                              + processing_route.provider_text(
-                                  dict.fromkeys(processing_route.PROVIDERS, "partial"), visible_providers))
+        header_placeholder = processing_route.provider_text(
+            dict.fromkeys(processing_route.PROVIDERS, "partial"),
+            visible_providers if _provider_version == 4 else None)
+        if _provider_version == 4:
+            header_placeholder = (PROCESSING_STATUS_LABELS["attention"] + " · 採用結果の処理順: Anthropic → OpenAI · その他（順序不明） · "
+                                  + header_placeholder)
         if len(containers) > 1 and containers[1]["type"] == "text" and not containers[1].get("rule"):
             containers[1]["text"] += " · " + header_placeholder
         else:
             containers.insert(1, {"type": "text", "text": header_placeholder})
-        containers[1].update(provider_scope="header", visible_providers=list(visible_providers),
-                             provider_states=dict.fromkeys(processing_route.PROVIDERS, "partial"))
+        containers[1].update(provider_scope="header", provider_states=dict.fromkeys(processing_route.PROVIDERS, "partial"))
+        if _provider_version == 4:
+            containers[1]["visible_providers"] = list(visible_providers)
     source_fp = source_fingerprint(db, card)
     generation = render_source_generation(card, source_fp)
     # A long heading shares the old 800-character reserve with the footer.
@@ -1062,24 +1067,32 @@ def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=N
                         processing_route.PROVIDERS, "unknown")))
         states = processing_route.aggregate_provider_states(post_states)
         header = containers[1]
-        before, _, after = header["text"].partition(header_placeholder)
-        prefix = " · ".join(part for part in (before.strip(" ·"), after.strip(" ·")) if part)
+        if _provider_version == 2:
+            prefix = header["text"].replace(header_placeholder, "", 1).strip(" ·")
+        else:
+            before, _, after = header["text"].partition(header_placeholder)
+            prefix = " · ".join(part for part in (before.strip(" ·"), after.strip(" ·")) if part)
         shown_progress = [(progress_by_mid or {}).get(msgs[i]["message_id"])
                           for i in pages_idx[page] if msgs[i]["body_state"] != "deleted"]
         status = _page_processing_status(shown_progress)
-        header["processing_status"] = status
+        if _provider_version == 4:
+            header["processing_status"] = status
         visible_posts = [i for i in pages_idx[page] if msgs[i]["body_state"] != "deleted"]
         sequence = post_sequences[visible_posts[0]] if len(visible_posts) == 1 else None
         if (not isinstance(sequence, list) or len(sequence) != 2 or not all(isinstance(key, str) for key in sequence)
                 or "jev" not in sequence
                 or len(set(sequence)) != 2 or any(key not in visible_providers for key in sequence)):
             sequence = None
-        header["provider_sequence"] = sequence
+        if _provider_version == 4:
+            header["provider_sequence"] = sequence
         names = {"anthropic": "Anthropic", "openai": "OpenAI", "jev": "Jev", "local": "💻"}
         order = " → ".join(names[key] for key in sequence) if sequence else "不明"
-        header["text"] = ((prefix + " · " if prefix else "") + PROCESSING_STATUS_LABELS[status]
-                          + " · 採用結果の処理順: " + order + " · "
-                          + processing_route.provider_text(states, visible_providers, sequence))
+        if _provider_version == 4:
+            header["text"] = ((prefix + " · " if prefix else "") + PROCESSING_STATUS_LABELS[status]
+                              + " · 採用結果の処理順: " + order + " · "
+                              + processing_route.provider_text(states, visible_providers, sequence))
+        else:
+            header["text"] = (prefix + " · " if prefix else "") + processing_route.provider_text(states)
         header["provider_states"] = states
     for i in pages_idx[page]:
         containers.extend(rendered[i])

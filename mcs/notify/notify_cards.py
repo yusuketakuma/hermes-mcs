@@ -939,6 +939,22 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
             if not (ready - delivered) and _presentation_fp(card, content, cfg) == card["content_fp"]:
                 return None  # only the still-waiting posts changed
     gens = _generation_drift(card, content, cfg)
+    render_gens = dict(gens)
+    if (card["kind"] == "thread" and "presentation_generation" in gens
+            and card["source_fp"] is not None and card["source_fp"] == content["source_fp"]
+            and latest is not None):
+        previous = loads_dict(latest["spec_json"]) if latest["spec_json"] is not None else None
+        parts = previous.get("parts") if isinstance(previous, dict) else None
+        known_old = (latest["spec_json"] is None or
+                     isinstance(parts, dict) and parts.get("provider_states_version", 0) in (0, 1, 2))
+        if known_old:
+            for version in (0, 1, 2):
+                old_content = card_content(db, card, cfg=cfg, waiting=waiting,
+                                           _provider_version=version, **content_options)
+                if _presentation_fp(card, old_content, cfg) == card["content_fp"]:
+                    del gens["presentation_generation"]
+                    del gens["content_fp"]
+                    break
     # Old Slack parts were bounded before escaping, and can be definitively
     # rejected even when their source/card fingerprint has not changed.
     # Rebuild only a proven oversized failed plan; pending/unknown parts still
@@ -950,7 +966,7 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
         return None                        # a later sweep issues it
     rev = (latest["render_rev"] + 1) if latest is not None else 1
     _cancel_open_renders(db, card_id, now)
-    card = {**card, **gens}
+    card = {**card, **render_gens}
     spec, budget_hold = _build_spec(db, card, content, op, rev, cfg, now, waiting)
     _persist_render(db, card, spec, op, rev, now)
     if budget_hold:

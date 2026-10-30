@@ -154,8 +154,133 @@ def test_legacy_fingerprints_match_v1022_fixed_vectors(led):
         (2, "lineworks"): "0b01389d53ffea83b21cd44373c9e8fab9e97c88c0e656888621046a0b46f513",
     }
     for (layout, transport), fingerprint in expected.items():
-        content = notify_render.card_content(led.db, {**_card(led), "layout": layout, "transport": transport}, cfg=CFG)
+        content = notify_render.card_content(led.db, {**_card(led), "layout": layout, "transport": transport},
+                                             cfg=CFG, _provider_version=0)
         assert notify_render.content_fingerprint(content) == fingerprint
+
+
+@pytest.mark.parametrize("layout", [1, 2, 3, 4])
+@pytest.mark.parametrize("old_version", [0, 2])
+@pytest.mark.parametrize("collected", [False, True])
+def test_old_provider_generation_waits_for_a_real_update(led, monkeypatch, layout, old_version, collected):
+    from notify_testkit import _deliver
+    import processing_route
+
+    monkeypatch.setattr(processing_route, "visible_providers", lambda: ("jev", "local"))
+    _seed_thread(led, mids=(100,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    _deliver(led)
+    with led.db:
+        led.db.execute("UPDATE notification_cards SET layout=? WHERE card_id=1", (layout,))
+        card = _card(led)
+        old = notify_render.card_content(led.db, card, cfg=CFG, _provider_version=old_version)
+        old_fp = cards._presentation_fp(card, old, CFG)
+        spec = json.loads(_latest_render(led)["spec_json"])
+        if old_version:
+            spec["parts"]["provider_states_version"] = old_version
+        else:
+            spec["parts"].pop("provider_states_version", None)
+        led.db.execute("UPDATE notification_cards SET source_fp=?,content_fp=? WHERE card_id=1",
+                       (old["source_fp"], old_fp))
+        led.db.execute("UPDATE notification_renders SET spec_json=? WHERE card_id=1",
+                       (None if collected else json.dumps(spec),))
+    before = dict(_card(led))
+    assert cards.sweep(led, CFG, now=NOW + 1)["updated"] == 0
+    assert _card(led)["content_fp"] == old_fp
+    assert _card(led)["presentation_generation"] == before["presentation_generation"]
+    monkeypatch.setattr(processing_route, "visible_providers", lambda: ("anthropic", "jev", "local"))
+    if layout % 2:
+        with led.db:
+            specs = []
+            cards.issue_render(led.db, 1, CFG, NOW + 2, specs, force=True)
+        assert len(specs) == 1
+        spec = specs[0]
+    else:
+        _dispatch(led, _intent(led, payload={"message_ids": [100]}), now=NOW + 2)
+        spec = json.loads(_latest_render(led)["spec_json"])
+    assert spec["parts"]["provider_states_version"] == 4
+    assert "anthropic" in next(c for c in spec["parts"]["containers"]
+                               if c.get("provider_scope") == "header")["visible_providers"]
+    assert _card(led)["content_fp"] == cards._presentation_fp(
+        _card(led), notify_render.card_content(led.db, _card(led), cfg=CFG), CFG)
+    _deliver(led)
+    assert cards.sweep(led, CFG, now=NOW + 3)["updated"] == 0
+
+
+@pytest.mark.parametrize("layout", [1, 2, 3])
+@pytest.mark.parametrize("collected", [False, True])
+@pytest.mark.parametrize("held", [False, True])
+def test_v2_multipage_uses_old_separator_and_does_not_reopen(led, monkeypatch, layout, collected, held):
+    from notify_testkit import _deliver
+
+    monkeypatch.setattr(notify_render, "PAGE_THREAD", 1)
+    _seed_thread(led, mids=(100, 101))
+    _dispatch(led, _intent(led))
+    _deliver(led)
+    with led.db:
+        led.db.execute("UPDATE notification_cards SET layout=? WHERE card_id=1", (layout,))
+        card = _card(led)
+        old = notify_render.card_content(led.db, card, cfg=CFG, _provider_version=2)
+        header = next(c for c in old["containers"] if c.get("provider_scope") == "header")
+        assert " ·  · 2/2ページ" in header["text"]
+        old_fp = cards._presentation_fp(card, old, CFG)
+        spec = json.loads(_latest_render(led)["spec_json"])
+        spec["parts"]["provider_states_version"] = 2
+        led.db.execute("UPDATE notification_cards SET source_fp=?,content_fp=? WHERE card_id=1",
+                       (old["source_fp"], old_fp))
+        led.db.execute("UPDATE notification_renders SET spec_json=?,state=? WHERE card_id=1",
+                       (None if collected else json.dumps(spec), "held" if held else "delivered"))
+        if held:
+            led.db.execute("UPDATE notification_cards SET delivery_state='update_failed' WHERE card_id=1")
+    original_id = _latest_render(led)["delivery_id"]
+    assert cards.sweep(led, CFG, now=NOW + 1)["updated"] == 0
+    assert _latest_render(led)["delivery_id"] == original_id
+    assert _card(led)["content_fp"] == old_fp
+
+
+@pytest.mark.parametrize("layout", [2, 3, 4])
+@pytest.mark.parametrize("state,heading,detail", [
+    ("processing", "解析中 1", "解析更新中（3区間中1区間完了）"),
+    ("attention", "解析要確認 1", "解析要確認（3区間中1区間完了）"),
+])
+def test_late_providerless_generation_keeps_old_progress(led, monkeypatch, layout, state, heading, detail):
+    from notify_testkit import _deliver
+
+    monkeypatch.setattr(notify_render, "progress_state",
+                        lambda db, mid, cfg: {"state": state, "completed": 1, "total": 3})
+    _seed_thread(led, mids=(100,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    _deliver(led)
+    with led.db:
+        led.db.execute("UPDATE notification_cards SET layout=? WHERE card_id=1", (layout,))
+        card = _card(led)
+        old = notify_render.card_content(led.db, card, cfg=CFG, _provider_version=1)
+        texts = [c.get("text", "") for c in old["containers"]]
+        # Literal progress labels come from the provider-free renderer at bf6d9bc1^.
+        assert any(heading in text for text in texts)
+        assert any(detail in text for text in texts)
+        assert not any(c.get("provider_scope") for c in old["containers"])
+        old_fp = cards._presentation_fp(card, old, CFG)
+        led.db.execute("UPDATE notification_cards SET source_fp=?,content_fp=? WHERE card_id=1",
+                       (old["source_fp"], old_fp))
+        led.db.execute("UPDATE notification_renders SET spec_json=NULL WHERE card_id=1")
+    assert cards.sweep(led, CFG, now=NOW + 1)["updated"] == 0
+    assert _card(led)["content_fp"] == old_fp
+
+
+def test_current_provider_generation_does_not_hide_key_visibility_change(led, monkeypatch):
+    from notify_testkit import _deliver
+    import processing_route
+
+    monkeypatch.setattr(processing_route, "visible_providers", lambda: ("jev", "local"))
+    _seed_thread(led, mids=(100,))
+    _dispatch(led, _intent(led, payload={"message_ids": [100]}))
+    _deliver(led)
+    monkeypatch.setattr(processing_route, "visible_providers", lambda: ("anthropic", "jev", "local"))
+    assert cards.sweep(led, CFG, now=NOW + 1)["updated"] == 1
+    spec = json.loads(_latest_render(led)["spec_json"])
+    assert "anthropic" in next(c for c in spec["parts"]["containers"]
+                               if c.get("provider_scope") == "header")["visible_providers"]
 
 
 def test_lw_original_write_token_cannot_revive_after_source_aba(led):

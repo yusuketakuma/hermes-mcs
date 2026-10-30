@@ -157,7 +157,7 @@ def test_real_legacy_checkpoint_reaches_private_summary_read_only(led, change):
     assert "SOURCE_CANARY" not in text and "完了は抽出処理のみ" not in text
 
 
-@pytest.mark.parametrize("layout", [1, 2])
+@pytest.mark.parametrize("layout", [1, 2, 3, 4])
 @pytest.mark.parametrize("attempts,state", [(0, "processing"), (1, "processing"), (5, "attention")])
 def test_generation_upgrade_and_retry_status_reaches_summary_and_shared_render(led, attempts, state, layout):
     import json
