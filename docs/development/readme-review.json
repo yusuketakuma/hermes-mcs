@@ -2,7 +2,7 @@
   "version": "1.1.0",
   "sections": {
     "features": {
-      "notes": "2026-10-30: Anthropic/OpenAIの選択・合計/API別予算、クラウド優先の履歴処理とローカル新着処理、患者単位の生成条件、投稿カード上部の解析状態5種・採用結果の証明できる処理順・APIキー登録別の表示と失敗ジョブ診断を実装・ガイドに合わせた。",
+      "notes": "2026-10-30: Anthropic/OpenAIの選択・合計/API別予算、クラウド優先の履歴処理とローカル新着処理、患者単位の生成条件、投稿カード上部の解析状態5種・採用結果の証明できる処理順・APIキー登録別の表示と失敗ジョブ診断を実装・ガイドに合わせた。 通知監視の追加修正は、分割配送の証明と証拠不足の条件をCHANGELOGで説明し、既存の機能一覧と通知の未完了確認の説明を維持した。",
       "sources": [
         "README.md",
         "mcs/llm/cloud_policy.py",
@@ -11,47 +11,59 @@
         "mcs/notify/notify_render.py",
         "docs/guides/ANTHROPIC.md",
         "mcs/notify/processing_route.py",
-        "docs/guides/PROCESSING_PROVIDERS.md"
+        "docs/guides/PROCESSING_PROVIDERS.md",
+        "CHANGELOG.md",
+        "mcs/notify/notify_scope.py",
+        "mcs/notify/notify_cards.py"
       ]
     },
     "demos": {
-      "notes": "2026-10-30: Slackの説明図9点を数え直し、処理サービスと解析状態を患者名の下の見出し行へ配置し、採用結果の順序と順序不明を分けた現行ギャラリーと照合した。実画面のキャプチャとは表現していない。",
+      "notes": "2026-10-30: Slackの説明図9点を数え直し、処理サービスと解析状態を患者名の下の見出し行へ配置し、採用結果の順序と順序不明を分けた現行ギャラリーと照合した。実画面のキャプチャとは表現していない。 今回の通知監視修正は画面部品を変えないため既存9組のSVG/PNGを保持し、保守手順の旧8画面表記を9画面へ整合した。",
       "sources": [
         "README.md",
         "docs/screenshots/slack-gallery/README.md",
         "scripts/development/generate_slack_gallery.py",
-        "adapters/slack/presentation.py"
+        "adapters/slack/presentation.py",
+        "docs/development/README_MAINTENANCE.md"
       ]
     },
     "quickstart": {
-      "notes": "2026-10-30: standaloneの導入例・前提を維持。導入と更新後のAPI登録案内がOpenAI/Anthropic/Jevと通知先に対応することを確認し、既存認証情報の変更制限は残した。 現行のログ確認先は集約先のdata/mcs.logへ合わせた。",
+      "notes": "2026-10-30: standaloneの導入例・前提を維持。導入と更新後のAPI登録案内がOpenAI/Anthropic/Jevと通知先に対応することを確認し、既存認証情報の変更制限は残した。 現行のログ確認先は集約先のdata/mcs.logへ合わせた。 通常更新とgateway再起動の手順を維持し、過去の証拠不足で未完了が残る部品は個別照合が必要という条件を生成要約へ追加した。",
       "sources": [
         "README.md",
         "install.sh",
         "mcs/ops/api_key_setup.py",
         "docs/guides/SETUP_AGENT.md",
         "docs/guides/UPGRADE_AGENT.md",
-        "docs/guides/INSTALLATION.md"
+        "docs/guides/INSTALLATION.md",
+        "CHANGELOG.md",
+        "docs/guides/NOTIFICATION_RECOVERY.md"
       ]
     },
     "safety": {
-      "notes": "2026-10-30: 既存の外部送信先表にAnthropic/OpenAIがあり、匿名化なし・合計/API別上限・明示OFFを保持する説明と照合。合計の既定値25/75を反映。CSDCは未提供とし、Jev省略を検証済みとは表現しない。 分割計画や区間の保存が拒否された後、その回の後続の有料要求を止める条件も確認した。",
+      "notes": "2026-10-30: 既存の外部送信先表にAnthropic/OpenAIがあり、匿名化なし・合計/API別上限・明示OFFを保持する説明と照合。合計の既定値25/75を反映。CSDCは未提供とし、Jev省略を検証済みとは表現しない。 分割計画や区間の保存が拒否された後、その回の後続の有料要求を止める条件も確認した。 分割配送の証明は通知先・本文区間・配送記録の一致を条件とし、本文整理後はハッシュだけを保持する。結果不明の状態と過去の未送信履歴を変更しない境界を確認した。",
       "sources": [
         "README.md",
         "SECURITY.md",
         "mcs/llm/cloud_policy.py",
         "mcs/semantic/semantic_audit.py",
         "docs/guides/ANTHROPIC.md",
-        "mcs/extract/llm/extract_llm.py"
+        "mcs/extract/llm/extract_llm.py",
+        "mcs/notify/notify_scope.py",
+        "mcs/notify/notify_cards.py",
+        "docs/guides/NOTIFICATION_RECOVERY.md"
       ]
     },
     "docs": {
-      "notes": "2026-10-30: 1.1.0資料への導線、設定ガイド、CHANGELOGの生成要約とリンクを照合。1.0.29以前の本文は作業開始時点から変更せず、履歴を保持した。",
+      "notes": "2026-10-30: 1.1.0資料への導線、設定ガイド、CHANGELOGの生成要約とリンクを照合。1.0.29以前の本文は作業開始時点から変更せず、履歴を保持した。 追加の変更記録1件をarchiveへ揃え、384件の対応表・詳細リンクと、受入票のスナップショット時点の383件を区別した。",
       "sources": [
         "README.md",
         "docs/releases/v1.1.0/README.md",
         "docs/guides/ANTHROPIC.md",
-        "docs/development/RELEASE_NOTES.md"
+        "docs/development/RELEASE_NOTES.md",
+        "docs/releases/v1.1.0/change-map.json",
+        "docs/releases/v1.1.0/ACCEPTANCE_1.1.0.md",
+        "changes/archive/1.1.0/notification-split-delivery-evidence-20261030.json"
       ]
     }
   }

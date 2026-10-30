@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 383,
+  "fragment_count": 384,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every original record linked without rewriting",
   "records": [
@@ -2305,6 +2305,12 @@
       "id": "worker-birth-witness-20261030",
       "title": "通知ワーカーの起動記録をプロセスの開始時刻でも照合",
       "sha256": "bb3f400227fa32f669ab4c478aae43688e591f80a593a3251d403b889a8ecabd"
+    },
+    {
+      "path": "changes/archive/1.1.0/notification-split-delivery-evidence-20261030.json",
+      "id": "notification-split-delivery-evidence-20261030",
+      "title": "長文を分割して配送した後も未完了の警報が続く問題を修正",
+      "sha256": "4a57945fec541d1e7ee5eea99daba08c54acda44719ee974e849a381e18b1312"
     }
   ]
 }
