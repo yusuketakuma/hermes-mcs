@@ -156,8 +156,23 @@ def test_later_delivery_resolves_only_the_same_part(stored, kind, difference, re
     assert stored.execute('SELECT state FROM notification_render_parts WHERE delivery_id=?', (old,)).fetchone()[0] == 'unknown'
 
 
-def _split_repair(db, *, new_group='m:100', changed=False):
+def _seal_body_plan(db, delivery, chunks, *, retain):
     from mcs_util import canonical, payload_hash, text_sha256
+
+    render = notify_scope.render_row(db, delivery)
+    rows = db.execute('SELECT * FROM notification_render_parts WHERE delivery_id=? ORDER BY idx', (delivery,)).fetchall()
+    spec = {'delivery_id': delivery, 'render_rev': render['render_rev'], 'op': render['op'],
+            'delivery': {**notify_scope.stored_scope(render), 'route_epoch': render['route_epoch'],
+                         'correlation': render['correlation']},
+            'parts': {'thread_body_parts': chunks, 'manifest': [
+                {'kind': 'body_part', 'part_id': row['part_id'], 'index': row['idx'], 'name': row['name'],
+                 'bytes': row['bytes'], 'sha256': text_sha256(chunk)} for row, chunk in zip(rows, chunks, strict=True)]}}
+    db.execute('UPDATE notification_renders SET spec_json=?,payload_hash=? WHERE delivery_id=?',
+               (canonical(spec).decode() if retain else None, payload_hash(spec), delivery))
+
+
+def _split_repair(db, *, new_group='m:100', changed=False):
+    from mcs_util import text_sha256
 
     text = 'SYNTHETIC_PRIVATE_BODY\n' + 'あ' * 2100 + '\n' + 'é' * 2300
     original = [text[:2200], text[2200:]]
@@ -171,15 +186,7 @@ def _split_repair(db, *, new_group='m:100', changed=False):
                        'WHERE delivery_id=? AND part_id=?',
                        (f'body:{index + 1:04d}', index + 2, f'{group}#{index + 1}',
                         len(chunk.encode('utf-8')), text_sha256(chunk), delivery, f'part-{index}'))
-    render = notify_scope.render_row(db, new)
-    rows = db.execute('SELECT * FROM notification_render_parts WHERE delivery_id=? ORDER BY idx', (new,)).fetchall()
-    spec = {'delivery_id': new, 'render_rev': 2, 'op': 'update',
-            'delivery': {**notify_scope.stored_scope(render), 'route_epoch': 1, 'correlation': new},
-            'parts': {'thread_body_parts': repaired, 'manifest': [
-                {'kind': 'body_part', 'part_id': row['part_id'], 'index': row['idx'], 'name': row['name'],
-                 'bytes': row['bytes'], 'sha256': row['payload_sha256']} for row in rows]}}
-    db.execute('UPDATE notification_renders SET spec_json=?,payload_hash=? WHERE delivery_id=?',
-               (canonical(spec).decode(), payload_hash(spec), new))
+        _seal_body_plan(db, delivery, chunks, retain=delivery == new)
     return old, new
 
 
@@ -288,17 +295,41 @@ def test_compact_split_proof_cannot_move_to_another_matching_scope(led):
     _, other = _render(led.db, [('body_part', 'not_sent', 'msg_too_long')] * 2,
                        card=render['card_id'], revision=3)
     led.db.execute("UPDATE notification_renders SET channel_id='SYNTHETIC_OTHER' WHERE delivery_id=?", (other,))
+    original = ''.join(spec['parts']['thread_body_parts']).encode('utf-8')
+    offset, other_chunks = 0, []
     for index, row in enumerate(led.db.execute(
             'SELECT * FROM notification_render_parts WHERE delivery_id=? ORDER BY idx', (old,)).fetchall()):
         led.db.execute('UPDATE notification_render_parts SET part_id=?,idx=?,name=?,bytes=?,payload_sha256=? '
                        'WHERE delivery_id=? AND part_id=?',
                        (row['part_id'], row['idx'], row['name'], row['bytes'], row['payload_sha256'],
                         other, f'part-{index}'))
+        other_chunks.append(original[offset:offset + row['bytes']].decode('utf-8'))
+        offset += row['bytes']
+    _seal_body_plan(led.db, other, other_chunks, retain=False)
     notify_cards.gc(led, SLACK, now=NOW + 1)
     assert 'body_delivery_coverage' in json.loads(notify_scope.render_row(led.db, new)['spec_json'])
     assert notify_scope.incomplete_parts_health(led.db, NOW + 2, SLACK)['by_state']['not_sent'] == 2
     led.db.execute("UPDATE notification_renders SET channel_id='SYNTHETIC_OTHER' WHERE delivery_id=?", (new,))
     assert notify_scope.incomplete_parts_health(led.db, NOW + 3, SLACK)['by_state']['not_sent'] == 4
+
+
+@pytest.mark.parametrize('side', ['old', 'new'])
+@pytest.mark.parametrize('field,value', [
+    ('correlation', sqlite3.Binary(b'synthetic-correlation')),
+    ('route_epoch', sqlite3.Binary(b'synthetic-epoch')),
+    ('render_rev', sqlite3.Binary(b'synthetic-revision')),
+    ('render_rev', 'synthetic-nonnumeric-revision'),
+])
+def test_invalid_render_metadata_remains_unproven_without_stopping_health_or_gc(led, side, field, value):
+    import notify_cards
+
+    old, new = _split_repair(led.db)
+    delivery = old if side == 'old' else new
+    # Column names are the fixed parameter cases above, never external input.
+    led.db.execute(f'UPDATE notification_renders SET {field}=? WHERE delivery_id=?', (value, delivery))
+    assert notify_scope.incomplete_parts_health(led.db, NOW, SLACK)['by_state']['not_sent'] == 2
+    notify_cards.gc(led, SLACK, now=NOW + 1)
+    assert notify_scope.incomplete_parts_health(led.db, NOW + 2, SLACK)['by_state']['not_sent'] == 2
 
 
 @pytest.mark.parametrize('later_hash', [None, 'b' * 64])

@@ -7,7 +7,7 @@ import math
 import re
 import time
 from mcs_requests import positive
-from mcs_util import loads_dict, payload_hash, text_sha256, valid_hash
+from mcs_util import loads_dict, payload_hash, text_sha256, valid_hash, valid_text
 
 TRANSPORT_VERSIONS = {"discord": 1, "slack": 2, "lineworks": 3}
 SUPPORTED_TRANSPORTS = tuple(TRANSPORT_VERSIONS)
@@ -422,12 +422,24 @@ def _sealed_body_bytes(render, rows, groups):
         return {}
 
 
-def _body_delivery_coverage(db, render, cache):
-    if (render is None or render['transport'] != 'slack' or render['op'] != 'update'
+def _body_render_identity(render):
+    if (render is None or render['transport'] != 'slack'
             or render['state'] != 'delivered' or render['guild_id'] is not None
+            or render['op'] not in ('create', 'update', 'revoke', 'notice')
             or not valid_hash(render['payload_hash'])
-            or any(not isinstance(render[key], str) or not render[key].strip()
-                   for key in scope_fields('slack'))):
+            or any(not positive(render[key]) for key in ('card_id', 'render_rev', 'route_epoch'))
+            or (render['manifest_id'] is not None and not positive(render['manifest_id']))
+            or any(not valid_text(render[key], 128)
+                   for key in ('delivery_id', 'correlation', *scope_fields('slack')))):
+        return None
+    return {key: render[key] for key in (
+        'delivery_id', 'card_id', 'op', 'render_rev', 'manifest_id', 'route_epoch', 'correlation',
+        'transport', 'profile', 'application_id', 'guild_id', 'team_id', 'channel_id', 'payload_hash')}
+
+
+def _body_delivery_coverage(db, render, cache):
+    identity = _body_render_identity(render)
+    if identity is None or render['op'] != 'update':
         return None, set()
     scope = tuple(render[key] for key in scope_fields('slack'))
     key = (render['card_id'], scope)
@@ -441,6 +453,8 @@ def _body_delivery_coverage(db, render, cache):
                 "AND p.kind='body_part' AND p.state='not_sent' "
                 "AND p.error_code IN ('msg_too_long','body_part_wire_too_long'))",
                 (render['card_id'], *scope)).fetchall():
+            if _body_render_identity(old) is None:
+                continue
             rows = [dict(row) for row in db.execute(
                 "SELECT * FROM notification_render_parts WHERE delivery_id=? AND kind='body_part'",
                 (old['delivery_id'],))]
@@ -463,15 +477,16 @@ def _body_delivery_coverage(db, render, cache):
     groups = _body_groups_metadata(rows, delivered=True)
     saved_proofs = _body_witness_proofs(render['spec_json'], render)
     bodies = _sealed_body_bytes(render, rows, groups) if saved_proofs is None else {}
-    identity = {key: render[key] for key in (
-        'delivery_id', 'card_id', 'op', 'render_rev', 'manifest_id', 'route_epoch', 'correlation',
-        'transport', 'profile', 'application_id', 'guild_id', 'team_id', 'channel_id', 'payload_hash')}
-    bindings = {group: payload_hash({'render': identity, 'group': group}) for group in groups}
+    try:
+        bindings = {group: payload_hash({'render': identity, 'group': group}) for group in groups}
+        delivered_hashes = {group: payload_hash(metadata) for group, metadata in groups.items()}
+    except (TypeError, ValueError, RecursionError):
+        return None, set()
     proofs, covered = set(), set()
     for revision, group, old, targets in cache[key]:
         if revision >= render['render_rev'] or group not in groups:
             continue
-        proof = (bindings[group], payload_hash(old), payload_hash(groups[group]))
+        proof = (bindings[group], payload_hash(old), delivered_hashes[group])
         if saved_proofs is not None:
             matches = proof in saved_proofs
         else:
