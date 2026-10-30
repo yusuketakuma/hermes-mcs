@@ -215,8 +215,8 @@ def test_real_spec_validates_and_builds(world):
     (lambda s: s["parts"].update(action_rows=[[{"ui": "button",
         "token": "not-hex", "label": "x", "id": "ack"}]]),
      "bad_button_token"),
-    (lambda s: s["parts"].update(
-        containers=[{"type": "text", "text": "x" * 5000}]),
+    (lambda s: s["parts"]["containers"].append(
+        {"type": "text", "text": "x" * 5000}),
      "container_too_long"),
 ])
 def test_spec_rejects(world, mutate, error):
@@ -234,10 +234,12 @@ def test_spec_text_budget_covers_multiline_quotes(world):
     _, spec = world.spec()
     spec["parts"]["footer"] = []
     spec["parts"]["action_rows"] = []
-    spec["parts"]["containers"] = [
-        {"type": "quote", "text": "x\n" * 1500}]
+    spec["parts"]["containers"].append(
+        {"type": "quote", "text": "x\n" * 1500})
     view = cards.build_view(spec)
-    rendered = sum(len(item.content) for item in view.items[0].children)
+    rendered = sum(len(getattr(item, "content", None) or "")
+                   for child in view.items[0].children
+                   for item in (child, *getattr(child, "children", ())))
     assert rendered > spec_mod.MAX_TOTAL_TEXT
     with pytest.raises(ValueError, match="text_budget"):
         spec_mod.validate(spec)

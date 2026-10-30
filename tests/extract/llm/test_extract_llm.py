@@ -2780,9 +2780,9 @@ def test_v4_publication_between_prepare_and_insert_fences_legacy(tmp_path):
 @pytest.mark.parametrize("second", [None, {"semantic": {"fact_source": "canonical"}}])
 def test_resident_reloads_and_holds_invalid_admission_config(monkeypatch, second):
     now = [0.0]
-    configs = iter([{}, second])
+    config = [{}]
     admitted = []
-    monkeypatch.setattr(extract_llm, "load_config", lambda: next(configs))
+    monkeypatch.setattr(extract_llm, "load_config", lambda: config[0])
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(extract_llm.time, "sleep",
                         lambda seconds: now.__setitem__(0, now[0] + seconds))
@@ -2792,6 +2792,7 @@ def test_resident_reloads_and_holds_invalid_admission_config(monkeypatch, second
 
     def run(*args, **kwargs):
         admitted.append(kwargs["admitted_ids"])
+        config[0] = second
         return {"done": 1, "failed": 0, "left": 1, "selected": 1}
 
     monkeypatch.setattr(extract_llm, "run_pending", run)

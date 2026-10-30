@@ -17,7 +17,7 @@ from semantic_testkit import _ledger, _message, _patient
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
-    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda now=None: True)
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda now=None, *, model=cloud_policy.MODEL: True)
     ledger = _ledger(tmp_path)
     _patient(ledger)
     yield ledger
