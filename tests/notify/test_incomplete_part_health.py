@@ -261,6 +261,46 @@ def test_compact_split_proof_revalidates_saved_evidence(led, difference):
         assert notify_scope.render_row(led.db, new)['spec_json'] is None
 
 
+@pytest.mark.parametrize('difference', ['old_blob', 'new_blob', 'old_large_ordinal', 'new_large_ordinal'])
+def test_malformed_body_names_do_not_stop_health_or_gc(led, difference):
+    import notify_cards
+
+    old, new = _split_repair(led.db)
+    delivery = old if difference.startswith('old_') else new
+    name = sqlite3.Binary(b'synthetic-nontext-name') if difference.endswith('_blob') else 'm:100#' + '9' * 5000
+    led.db.execute("UPDATE notification_render_parts SET name=? WHERE delivery_id=? AND part_id='body:0001'",
+                   (name, delivery))
+    assert notify_scope.incomplete_parts_health(led.db, NOW, SLACK)['by_state']['not_sent'] == 2
+    notify_cards.gc(led, SLACK, now=NOW + 1)
+    assert notify_scope.incomplete_parts_health(led.db, NOW + 2, SLACK)['by_state']['not_sent'] == 2
+
+
+def test_compact_split_proof_cannot_move_to_another_matching_scope(led):
+    import notify_cards
+    from mcs_util import canonical, payload_hash
+
+    old, new = _split_repair(led.db)
+    render = notify_scope.render_row(led.db, new)
+    spec = json.loads(render['spec_json'])
+    spec['render_rev'] = 4
+    led.db.execute('UPDATE notification_renders SET render_rev=4,spec_json=?,payload_hash=? WHERE delivery_id=?',
+                   (canonical(spec).decode(), payload_hash(spec), new))
+    _, other = _render(led.db, [('body_part', 'not_sent', 'msg_too_long')] * 2,
+                       card=render['card_id'], revision=3)
+    led.db.execute("UPDATE notification_renders SET channel_id='SYNTHETIC_OTHER' WHERE delivery_id=?", (other,))
+    for index, row in enumerate(led.db.execute(
+            'SELECT * FROM notification_render_parts WHERE delivery_id=? ORDER BY idx', (old,)).fetchall()):
+        led.db.execute('UPDATE notification_render_parts SET part_id=?,idx=?,name=?,bytes=?,payload_sha256=? '
+                       'WHERE delivery_id=? AND part_id=?',
+                       (row['part_id'], row['idx'], row['name'], row['bytes'], row['payload_sha256'],
+                        other, f'part-{index}'))
+    notify_cards.gc(led, SLACK, now=NOW + 1)
+    assert 'body_delivery_coverage' in json.loads(notify_scope.render_row(led.db, new)['spec_json'])
+    assert notify_scope.incomplete_parts_health(led.db, NOW + 2, SLACK)['by_state']['not_sent'] == 2
+    led.db.execute("UPDATE notification_renders SET channel_id='SYNTHETIC_OTHER' WHERE delivery_id=?", (new,))
+    assert notify_scope.incomplete_parts_health(led.db, NOW + 3, SLACK)['by_state']['not_sent'] == 4
+
+
 @pytest.mark.parametrize('later_hash', [None, 'b' * 64])
 def test_uncaptioned_unavailable_is_incomplete_until_its_later_receipt(stored, later_hash):
     card, old = _render(stored, [('attachment_part', 'not_sent', 'attachment_unavailable')])

@@ -309,7 +309,7 @@ def retired_transports(cfg) -> tuple[str, ...]:
     return tuple(t for t in SUPPORTED_TRANSPORTS if t != active)
 
 
-_BODY_GROUP = re.compile(r"((?:m:[1-9][0-9]*|s:[0-9a-f]{16})(?::header)?)#([1-9][0-9]*)")
+_BODY_GROUP = re.compile(r"((?:m:[1-9][0-9]{0,18}|s:[0-9a-f]{16})(?::header)?)#([1-9][0-9]{0,3})")
 _LENGTH_ERRORS = ("msg_too_long", "body_part_wire_too_long")
 
 # Only fixed keys, an integer version and SHA-256 triples can survive PHI GC.
@@ -336,7 +336,7 @@ BODY_COVERAGE_WITNESS_SQL = """COALESCE((
 def _body_groups_metadata(rows, *, delivered=False):
     groups = {}
     for row in rows:
-        match = _BODY_GROUP.fullmatch(row['name'] or '')
+        match = _BODY_GROUP.fullmatch(row['name']) if isinstance(row['name'], str) else None
         if match:
             groups.setdefault(match[1], []).append((int(match[2]), row))
     out = {}
@@ -445,9 +445,10 @@ def _body_delivery_coverage(db, render, cache):
                 "SELECT * FROM notification_render_parts WHERE delivery_id=? AND kind='body_part'",
                 (old['delivery_id'],))]
             for group, metadata in _body_groups_metadata(rows).items():
+                names = {entry[0] for entry in metadata}
                 targets = {(old['delivery_id'], row['part_id']) for row in rows
                            if row['state'] == 'not_sent' and row['error_code'] in _LENGTH_ERRORS
-                           and (match := _BODY_GROUP.fullmatch(row['name'] or '')) and match[1] == group}
+                           and row['name'] in names}
                 if targets:
                     old_groups.append((old['render_rev'], group, metadata, targets))
         cache[key] = old_groups
@@ -462,11 +463,15 @@ def _body_delivery_coverage(db, render, cache):
     groups = _body_groups_metadata(rows, delivered=True)
     saved_proofs = _body_witness_proofs(render['spec_json'], render)
     bodies = _sealed_body_bytes(render, rows, groups) if saved_proofs is None else {}
+    identity = {key: render[key] for key in (
+        'delivery_id', 'card_id', 'op', 'render_rev', 'manifest_id', 'route_epoch', 'correlation',
+        'transport', 'profile', 'application_id', 'guild_id', 'team_id', 'channel_id', 'payload_hash')}
+    bindings = {group: payload_hash({'render': identity, 'group': group}) for group in groups}
     proofs, covered = set(), set()
     for revision, group, old, targets in cache[key]:
         if revision >= render['render_rev'] or group not in groups:
             continue
-        proof = (text_sha256(group), payload_hash(old), payload_hash(groups[group]))
+        proof = (bindings[group], payload_hash(old), payload_hash(groups[group]))
         if saved_proofs is not None:
             matches = proof in saved_proofs
         else:
