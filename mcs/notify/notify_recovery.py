@@ -519,9 +519,9 @@ def validate_card_part_resolve(req) -> str | None:
 
 
 def _preflight_journal_error(attempts, incomplete, req, render, part):
-    # These two Slack outcomes are emitted only before chat.update. An
-    # incomplete/interrupted attempt or any other outcome cannot establish
-    # that boundary, even when the operator can see the original upload.
+    # These Slack outcomes identify a local refusal or explicit API rejection.
+    # An incomplete attempt or another outcome cannot prove a rejected edit,
+    # even when the operator can see the original upload.
     import notify_cmds
     record = attempts.get(req["attempt_id"])
     if incomplete or not record or record["tainted"]:
