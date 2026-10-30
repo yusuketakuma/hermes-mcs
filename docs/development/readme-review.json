@@ -2,18 +2,20 @@
   "version": "1.1.0",
   "sections": {
     "features": {
-      "notes": "2026-10-30: Anthropic/OpenAIの選択・合計/API別予算、クラウド優先の履歴処理とローカル新着処理、患者単位の生成条件、投稿ごとの処理先表示と失敗ジョブ診断を実装・ガイドに合わせた。",
+      "notes": "2026-10-30: Anthropic/OpenAIの選択・合計/API別予算、クラウド優先の履歴処理とローカル新着処理、患者単位の生成条件、投稿カード上部の解析状態5種・採用結果の証明できる処理順・APIキー登録別の表示と失敗ジョブ診断を実装・ガイドに合わせた。",
       "sources": [
         "README.md",
         "mcs/llm/cloud_policy.py",
         "mcs/patients/patient_context_refresh.py",
         "mcs/ops/job_diagnostics.py",
         "mcs/notify/notify_render.py",
-        "docs/guides/ANTHROPIC.md"
+        "docs/guides/ANTHROPIC.md",
+        "mcs/notify/processing_route.py",
+        "docs/guides/PROCESSING_PROVIDERS.md"
       ]
     },
     "demos": {
-      "notes": "2026-10-30: Slackの説明図9点を数え直し、処理サービスを患者名の下の見出し行へ配置した現行ギャラリーと照合した。実画面のキャプチャとは表現していない。",
+      "notes": "2026-10-30: Slackの説明図9点を数え直し、処理サービスと解析状態を患者名の下の見出し行へ配置し、採用結果の順序と順序不明を分けた現行ギャラリーと照合した。実画面のキャプチャとは表現していない。",
       "sources": [
         "README.md",
         "docs/screenshots/slack-gallery/README.md",
@@ -22,13 +24,14 @@
       ]
     },
     "quickstart": {
-      "notes": "2026-10-30: standaloneの導入例・前提を維持。導入と更新後のAPI登録案内がOpenAI/Anthropic/Jevと通知先に対応することを確認し、既存認証情報の変更制限は残した。",
+      "notes": "2026-10-30: standaloneの導入例・前提を維持。導入と更新後のAPI登録案内がOpenAI/Anthropic/Jevと通知先に対応することを確認し、既存認証情報の変更制限は残した。 現行のログ確認先は集約先のdata/mcs.logへ合わせた。",
       "sources": [
         "README.md",
         "install.sh",
         "mcs/ops/api_key_setup.py",
         "docs/guides/SETUP_AGENT.md",
-        "docs/guides/UPGRADE_AGENT.md"
+        "docs/guides/UPGRADE_AGENT.md",
+        "docs/guides/INSTALLATION.md"
       ]
     },
     "safety": {

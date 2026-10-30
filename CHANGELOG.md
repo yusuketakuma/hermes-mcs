@@ -39,7 +39,7 @@
   OpenAI・Anthropic・JevのAPIキーとSlack・Discord・LINE WORKSの接続情報を、非表示で入力できます。既存の値を保持する選択と、保存前の送信先・実効予算の確認を追加しました。接続方式ごとの保存先は維持し、安全な切替を確認できない登録済み接続情報の変更は保留します。
 
 - **投稿で使われたサービスをアイコンで確認**
-  患者名の下にある日付・件数と同じ行へ、ローカル・Anthropic・OpenAI・Jevの処理サービスを表示します。利用済み・未利用・不明を区別し、複数投稿は確認できた利用先をまとめます。患者名の先頭の固定アイコンは維持します。
+  患者名の下に、処理サービスと「解析中」「結果を準備中」「解析完了」「解析未完了・要確認」「状況不明」を表示します。AnthropicとOpenAIはAPIキーが登録済みのサービスだけを表示します。現在表示する採用結果の生成・検証順を確認できた場合は、その順にアイコンを並べ、ほかのサービスは順序不明の別の群に表示します。複数投稿や証拠不足の場合は処理順を不明とします。患者名の先頭の固定アイコンは維持します。
 
 - **失敗ジョブの理由を調べ、対策後に再試行**
   `mcs jobs failed`で本文を出さずに失敗理由と対策を確認できます。再試行は診断・入力内容のハッシュと、人の確認・理由を照合して予約します。旧世代・保留・送信結果不明などの安全条件は維持します。
@@ -59,9 +59,18 @@
   取得済み投稿を現行の推論と必要な品質確認で処理してから、患者コンテキストを生成します。新着・原文変更・未取得・保留を再確認し、途中結果や品質の異なる確認記録を混ぜません。要約やループを使わない設定でも、現在の抽出・分類を確認して進めます。
 
 - **内部の共通処理と依存を整理**
-  保存・通信・描画・更新の重複経路を既存の共通処理へ集約しました。standaloneの固定依存multidictを7.2.1、検証ツールをpytest 9.2.0・Ruff 0.17.3・uv 0.13.6へ更新しています。
+  保存・通信・描画・更新の重複経路を既存の共通処理へ集約しました。standaloneの固定依存をSlack SDK 3.46.0・multidict 7.2.1、検証ツールをpytest 9.2.0・Ruff 0.17.3・uv 0.13.6へ更新しています。
 
 ### 不具合修正
+
+- **途中の解析と未送達の通知を、完了と混同しないよう修正**
+  解析の制限時間到達を監視へ反映し、集約位置の保存だけが一時的に競合した場合は、残り時間がある範囲で解析を続けます。通知カードだけの更新では未送達の本文・添付を解消せず、同じ通知先と内容の配送記録を確認します。監視できなかった件数は0件ではなく不明として扱います。
+
+- **推論枠と起動状態の確認を改善**
+  送信元の終了だけで、処理中か確認できない推論要求を解放しません。旧形式で送信状況を確認できない記録も保持して受付を閉じ、確認が済むまで新しい処理を混在させません。起動時刻の読取りが子プロセスの回収待ちで止まる問題も修正しました。
+
+- **クラウド応答の出力上限到達を、処理途中として扱う**
+  Anthropicの応答が本文を返す前に出力上限へ達した場合も、形式エラーと区別します。投稿の抽出は本文を分割して完了分から再開し、同じ有料要求を繰り返しません。意味解析や患者コンテキストの要約は、未完了のまま保持します。
 
 - **配送結果の反映がロック競合で止まらないよう修正**
   通知コマンドの処理にも世代・更新確認付きのロック待ちを使い、Hermesの監視処理へ5秒間隔の再試行を追加します。待機は通知コマンドの既存予算に含め、通常収集の処理時間は維持します。送信結果不明の通知を自動で再送する変更ではありません。
@@ -106,7 +115,7 @@
 ### 技術詳細
 
 <details>
-<summary>変更記録364件の詳細・更新条件・根拠を表示</summary>
+<summary>変更記録382件の詳細・更新条件・根拠を表示</summary>
 
 各リンクは、この版の変更記録です。要約・適用条件・更新操作・技術詳細・根拠を原文のまま保存しています。同じ箇所に複数の記録がある場合、後続の修正を含む現行の説明は上の本文と各機能のガイドを確認してください。たとえば、処理方式アイコンの初期配置は後続の見出し行への移動で置き換えています。
 
@@ -399,7 +408,11 @@
 - [1.1.0ではCSDCへ接続しない（コードは同梱・既定OFF）](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/v110-csdc-default-off.json)
 - [Slack返信と添付の照合で不正なメタデータを保留](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/v110-delivery-boundaries.json)
 - [機能追加と不具合修正を版番号で区別](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/version-policy-110.json)
+- [共有中の推論受付でも旧版の解放記録を確認](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/admission-live-fence-20261030.json)
+- [実行元の終了だけで送信済み推論の枠を解放しない](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/admission-owner-retirement-proof-20261030.json)
+- [完了未確認のローカル推論をidle表示だけで終了扱いにしない](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/admission-retirement-proof-20261030.json)
 - [Anthropicの通常速度の使用量を正しく扱う](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/anthropic-usage-compat-20261029.json)
+- [登録済みの外部処理サービスを表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/api-key-provider-icons-20261030.json)
 - [APIキー登録中の設定変更と保存結果を確認](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/api-key-registration-hardening-20261029.json)
 - [アーカイブ済み投稿の内部監査を再開](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archived-context-reprocess-20261029.json)
 - [監査できなかった理由を区別し同じ不正な要約の再試行を停止](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/audit-failure-reasons-20261029.json)
@@ -407,6 +420,7 @@
 - [背景の意味解析と投稿抽出を登録済みクラウドへ接続](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/cloud-backlog-routing-20261029.json)
 - [混雑時の待機を並行要求の成功で早期解除しない](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/cloud-circuit-late-success-20261029.json)
 - [履歴のクラウド処理とローカルへの切り替えを改善](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/cloud-main-local-fallback-20261029.json)
+- [本文が出る前の出力上限到達を契約違反にしない](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/cloud-output-length-20261030.json)
 - [クラウド利用の未精算記録を少量の読取りで照会](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/cloud-outstanding-observation-20261029.json)
 - [アクティブ患者の履歴解析を優先して並列処理](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/cloud-parallel-patient-priority-20261029.json)
 - [クラウド処理の対象が待機したままになる問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/cloud-selection-progress-20261029.json)
@@ -414,11 +428,13 @@
 - [通知の受領記録が書込み待ちのまま残る問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/command-worker-contention-retry-20261030.json)
 - [予算の期間変更で取得済みの患者文脈が破棄される問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/context-budget-window-result.json)
 - [認証情報の保存で不正なファイルと行の混入を拒否](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/credential-writer-boundary-20261029.json)
+- [抽出応答の必須項目の欠落を検出](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/current-response-contract-20261030.json)
 - [薬剤集計で別の記載の辞書注記を結び付ける問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/drug-stat-source-index-20261030.json)
 - [薬剤言及履歴で原文の重複読取りを削減](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/drug-timeline-bindings-20261029.json)
 - [失敗した解析ジョブの理由調査と対策後の再試行を追加](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/failed-job-diagnostics-20261029.json)
 - [過去の失敗理由を対象ジョブの記録から確認](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/failed-job-targeted-evidence-20261029.json)
 - [監視警告のログ案内を統合ログへ修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/health-log-guidance-20261030.json)
+- [通知の完了確認と監視の発報条件を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/health-part-observation-budget-20261030.json)
 - [Bot変更後の初回履歴通知を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/history-application-scope-20261029.json)
 - [保存済みチャットの再処理で完了を確認できるよう修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/inference-reprocess-completion-20261029.json)
 - [導入時の省略項目を設定ファイルに保存](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/install-options-central.json)
@@ -435,11 +451,16 @@
 - [ループのみを使う設定で患者文脈の更新が止まる問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/loop-only-context-readiness-20261030.json)
 - [復元前の照合に未保存の範囲と世代を追加](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/merge-restore-intake-evidence.json)
 - [本文・添付の未完了を通知監視へ反映](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/notification-part-health-20261029.json)
+- [通知本文や添付の未完了を後続のカード更新で見落とす問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/notification-part-health-proof-20261030.json)
+- [配送先が確認できない通知の未完了警告を保持](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/notification-part-scope-proof-20261030.json)
 - [OpenAIの利用先選択とAPI別予算に対応](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/openai-provider-budgets-20261029.json)
 - [OpenAIの使用量を診断で読み取れるよう修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/openai-usage-log-20261029.json)
+- [通知ワーカーの起動確認が子プロセスの回収待ちで止まる問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/owned-process-lost-reap-20261030.json)
 - [患者の全投稿の解析を終えてからコンテキストを生成](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/patient-context-after-inference-20261029.json)
 - [患者コンテキストの進捗集計を改善](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/patient-context-observation-20261029.json)
+- [パターンカード検査時の氏名照合漏れを修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/pattern-denylist-snapshot-20261030.json)
 - [投稿ごとに処理サービスをアイコンで表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/per-post-provider-icons-20261029.json)
+- [投稿カード上部に解析状態を表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/post-processing-status-order-20261030.json)
 - [チャットの見出しで解析方式をアイコン表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/processing-route-icon-20261029.json)
 - [Anthropicの初期費用上限を1日25ドル・1か月75ドルに設定](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/provider-default-budgets-20261029.json)
 - [処理サービスの表示をチャットの見出し行へ移動](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/provider-header-location-20261030.json)
@@ -455,12 +476,17 @@
 - [復元失敗時に常駐処理を再開しないよう修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/rollback-restore-failure-hold-20261030.json)
 - [手動の集約修復に現在の設定を反映](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/rollup-cli-config-20261029.json)
 - [集約走査が無関係なDB更新で未確認になる問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/rollup-concurrent-observation-20261029.json)
+- [巡回位置の保存時にDBが混雑しても患者集計を続行](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/rollup-cursor-busy-20261030.json)
+- [患者集約の確認繰越を先送りとして案内](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/rollup-deadline-classification-20261030.json)
 - [患者情報の集約が期限内に進みやすくなるよう修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/rollup-deadline-fair-progress-20261030.json)
 - [患者集約で実行期限と閲覧用スナップショットの検証時間を確保](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/rollup-stage-budget-20261029.json)
 - [解析の保留を証拠と通知対象を確認して解除](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/semantic-intake-current.json)
 - [初期設定の外部AI送信先の確認表示を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/setup-provider-consent-20261029.json)
+- [シグナル確認の時間切れを監視状態へ反映](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/signals-deadline-health-20261030.json)
 - [検査を省略した要約の事実表示を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/skipped-audit-display-20261030.json)
+- [Slack通知更新時のメンバー名を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/slack-header-member-names-20261030.json)
 - [Slackの新しい返信をチャンネルにも表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/slack-reply-card-broadcast-20261030.json)
+- [Slack独立接続のSDKを3.46.0へ更新](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/slack-sdk-stable-20261030.json)
 - [要約と原文の確認記録が混在する場合の読取りを修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/source-quality-mixed-receipts-20261029.json)
 - [実行環境と検証ツールの依存を更新](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/stable-dependencies-20261029.json)
 - [独立接続の認証情報利用を保護](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/standalone-credential-gate.json)
@@ -474,6 +500,7 @@
 - [更新計画でバックアップ容量の不足を事前に検出](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/update-backup-capacity-precheck-20261030.json)
 - [導入・更新中の更新要求を未実行として返す](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/update-busy-apply.json)
 - [更新時に定期処理の短いロック解放を見逃さないよう修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/update-lock-short-window-20261029.json)
+- [通知ワーカーの起動記録をプロセスの開始時刻でも照合](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/worker-birth-witness-20261030.json)
 
 </details>
 

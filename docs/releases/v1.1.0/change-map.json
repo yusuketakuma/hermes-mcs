@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 364,
+  "fragment_count": 382,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every original record linked without rewriting",
   "records": [
@@ -1743,10 +1743,34 @@
       "sha256": "086fa3e318104682603733c64cde36b2e0bb6c34b8b2985b0293f1f73f3de422"
     },
     {
+      "path": "changes/admission-live-fence-20261030.json",
+      "id": "admission-live-fence-20261030",
+      "title": "共有中の推論受付でも旧版の解放記録を確認",
+      "sha256": "1d716f7a43c2e0f180dde03a0d3fa6e961067c1d33ac2b671fc89d51cfeecdda"
+    },
+    {
+      "path": "changes/admission-owner-retirement-proof-20261030.json",
+      "id": "admission-owner-retirement-proof-20261030",
+      "title": "実行元の終了だけで送信済み推論の枠を解放しない",
+      "sha256": "d245b239e13156ba8cc4f3c358463aa338d4c61a297eb162ef5c72d729246760"
+    },
+    {
+      "path": "changes/admission-retirement-proof-20261030.json",
+      "id": "admission-retirement-proof-20261030",
+      "title": "完了未確認のローカル推論をidle表示だけで終了扱いにしない",
+      "sha256": "cacc9915626969f0b5df9af28a91a82264a68e9899a8bd099ab0de99b0ea3ce7"
+    },
+    {
       "path": "changes/anthropic-usage-compat-20261029.json",
       "id": "anthropic-usage-compat-20261029",
       "title": "Anthropicの通常速度の使用量を正しく扱う",
       "sha256": "f3ec5a78f077c7d9a0b20f64b4ce7bde4488f1251985aaf237112d5ac3ec78b9"
+    },
+    {
+      "path": "changes/api-key-provider-icons-20261030.json",
+      "id": "api-key-provider-icons-20261030",
+      "title": "登録済みの外部処理サービスを表示",
+      "sha256": "e85464c5e63f080f1f157973f86b566b933fbae34b54a5669b426816868e4853"
     },
     {
       "path": "changes/api-key-registration-hardening-20261029.json",
@@ -1791,6 +1815,12 @@
       "sha256": "670e43bcf9423c3c49df509f900c0ec86f22b0a1f5a83fd217c76adf28923048"
     },
     {
+      "path": "changes/cloud-output-length-20261030.json",
+      "id": "cloud-output-length-20261030",
+      "title": "本文が出る前の出力上限到達を契約違反にしない",
+      "sha256": "d8c609f716f8f2673ec1efaafe1702aadb634ef5b6ec346dc15f5b81b0c97091"
+    },
+    {
       "path": "changes/cloud-outstanding-observation-20261029.json",
       "id": "cloud-outstanding-observation-20261029",
       "title": "クラウド利用の未精算記録を少量の読取りで照会",
@@ -1833,6 +1863,12 @@
       "sha256": "2cf04d1360ec4a68d2a0e55a52010ea0d9fd6c1fff91bba34d04c6443b3e2165"
     },
     {
+      "path": "changes/current-response-contract-20261030.json",
+      "id": "current-response-contract-20261030",
+      "title": "抽出応答の必須項目の欠落を検出",
+      "sha256": "245fec3e700e882887ce9b54e793ca7b5816af0706664dfb95072d90626ec03d"
+    },
+    {
       "path": "changes/drug-stat-source-index-20261030.json",
       "id": "drug-stat-source-index-20261030",
       "title": "薬剤集計で別の記載の辞書注記を結び付ける問題を修正",
@@ -1861,6 +1897,12 @@
       "id": "health-log-guidance-20261030",
       "title": "監視警告のログ案内を統合ログへ修正",
       "sha256": "8596473f03187c881e08dd6e98788cadae85a6f35a492a1ca2dc6e6f41605903"
+    },
+    {
+      "path": "changes/health-part-observation-budget-20261030.json",
+      "id": "health-part-observation-budget-20261030",
+      "title": "通知の完了確認と監視の発報条件を修正",
+      "sha256": "ff65189ca600695f291b9ef62383b6c64b747965757d146fe8cdae5f8c99058c"
     },
     {
       "path": "changes/history-application-scope-20261029.json",
@@ -1959,6 +2001,18 @@
       "sha256": "185dc6d9f426dfc695831406ce42b1d80d157b1b0adfb16452ec7701855cb278"
     },
     {
+      "path": "changes/notification-part-health-proof-20261030.json",
+      "id": "notification-part-health-proof-20261030",
+      "title": "通知本文や添付の未完了を後続のカード更新で見落とす問題を修正",
+      "sha256": "d610ddc19c1790b235401c76a03834de28664dbff8688c1de5b3d03f6ca88474"
+    },
+    {
+      "path": "changes/notification-part-scope-proof-20261030.json",
+      "id": "notification-part-scope-proof-20261030",
+      "title": "配送先が確認できない通知の未完了警告を保持",
+      "sha256": "2c5d60923914ab6480f6fea3c9b8547ed5c0c1dd48a5f7b3d01da0c6593a6f70"
+    },
+    {
       "path": "changes/openai-provider-budgets-20261029.json",
       "id": "openai-provider-budgets-20261029",
       "title": "OpenAIの利用先選択とAPI別予算に対応",
@@ -1969,6 +2023,12 @@
       "id": "openai-usage-log-20261029",
       "title": "OpenAIの使用量を診断で読み取れるよう修正",
       "sha256": "c55f98d499dce3a152c36e71a6e931262e8530eae136cd6de4d8dc57ef454aea"
+    },
+    {
+      "path": "changes/owned-process-lost-reap-20261030.json",
+      "id": "owned-process-lost-reap-20261030",
+      "title": "通知ワーカーの起動確認が子プロセスの回収待ちで止まる問題を修正",
+      "sha256": "7f49bf127adef57c0e082b5d443ece0aef59fc88c561b5e0311a3a2a16264a37"
     },
     {
       "path": "changes/patient-context-after-inference-20261029.json",
@@ -1983,10 +2043,22 @@
       "sha256": "bbe2cdd42b8389ffa093d2dc2893589d161a393ff9c75835e4a8566d03e13a05"
     },
     {
+      "path": "changes/pattern-denylist-snapshot-20261030.json",
+      "id": "pattern-denylist-snapshot-20261030",
+      "title": "パターンカード検査時の氏名照合漏れを修正",
+      "sha256": "953be8e41bcd390b800742c0a68aa460fbd0634f3f13390266e05d574fb41a59"
+    },
+    {
       "path": "changes/per-post-provider-icons-20261029.json",
       "id": "per-post-provider-icons-20261029",
       "title": "投稿ごとに処理サービスをアイコンで表示",
       "sha256": "c89c3d055090c94ec18e47d8f63bda743cf5ca9f8baa930515dbc02209e3e6fd"
+    },
+    {
+      "path": "changes/post-processing-status-order-20261030.json",
+      "id": "post-processing-status-order-20261030",
+      "title": "投稿カード上部に解析状態を表示",
+      "sha256": "d1578ec3df7cd5455001758e692aaa2743f6c0ccb3d519dc7fb6c2c8097030b7"
     },
     {
       "path": "changes/processing-route-icon-20261029.json",
@@ -2079,6 +2151,18 @@
       "sha256": "8f8ef29e10e022c900685774149c1e6755e0e0f3e9ef3e0894386b326c21c4d5"
     },
     {
+      "path": "changes/rollup-cursor-busy-20261030.json",
+      "id": "rollup-cursor-busy-20261030",
+      "title": "巡回位置の保存時にDBが混雑しても患者集計を続行",
+      "sha256": "3d2d0040986afd872925af32e16861787852f816b2e9de53da3abd2bef2c7004"
+    },
+    {
+      "path": "changes/rollup-deadline-classification-20261030.json",
+      "id": "rollup-deadline-classification-20261030",
+      "title": "患者集約の確認繰越を先送りとして案内",
+      "sha256": "17cde0e3e9ad805c0404aed7323eb821b80c335ae1df3aaa91d0fc07c628d274"
+    },
+    {
       "path": "changes/rollup-deadline-fair-progress-20261030.json",
       "id": "rollup-deadline-fair-progress-20261030",
       "title": "患者情報の集約が期限内に進みやすくなるよう修正",
@@ -2103,16 +2187,34 @@
       "sha256": "744c216d281ccf6a5dc0cdd8be93376e323ef7cea9102270bda4d5e79bd2d248"
     },
     {
+      "path": "changes/signals-deadline-health-20261030.json",
+      "id": "signals-deadline-health-20261030",
+      "title": "シグナル確認の時間切れを監視状態へ反映",
+      "sha256": "72b9ab0840789c42afef5b125b4f2bd957a9beb9c7d74e136d751a92112895f6"
+    },
+    {
       "path": "changes/skipped-audit-display-20261030.json",
       "id": "skipped-audit-display-20261030",
       "title": "検査を省略した要約の事実表示を修正",
       "sha256": "ef1703372a2680c54c68f865a6ea268efcd18d774cebedcaf8a9e3e367e53601"
     },
     {
+      "path": "changes/slack-header-member-names-20261030.json",
+      "id": "slack-header-member-names-20261030",
+      "title": "Slack通知更新時のメンバー名を修正",
+      "sha256": "7106e5ff8f827100ebf9fcba32eef241f04b32894561bb5e5ac5ba46b7c32848"
+    },
+    {
       "path": "changes/slack-reply-card-broadcast-20261030.json",
       "id": "slack-reply-card-broadcast-20261030",
       "title": "Slackの新しい返信をチャンネルにも表示",
       "sha256": "dbe52f76e59a74750474ab8d7484967b801db09baacb4a958a62264e5bb9dd90"
+    },
+    {
+      "path": "changes/slack-sdk-stable-20261030.json",
+      "id": "slack-sdk-stable-20261030",
+      "title": "Slack独立接続のSDKを3.46.0へ更新",
+      "sha256": "09a0d6a68412c2a80501cb5b52ebecb9fa5faf2eb8bee3c3ec2e2a701e08dd2e"
     },
     {
       "path": "changes/source-quality-mixed-receipts-20261029.json",
@@ -2191,6 +2293,12 @@
       "id": "update-lock-short-window-20261029",
       "title": "更新時に定期処理の短いロック解放を見逃さないよう修正",
       "sha256": "be51c82eae6e6d28c8116c558d7115d2f06302179860735c0e8cda1985d39007"
+    },
+    {
+      "path": "changes/worker-birth-witness-20261030.json",
+      "id": "worker-birth-witness-20261030",
+      "title": "通知ワーカーの起動記録をプロセスの開始時刻でも照合",
+      "sha256": "bb3f400227fa32f669ab4c478aae43688e591f80a593a3251d403b889a8ecabd"
     }
   ]
 }
