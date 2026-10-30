@@ -307,7 +307,7 @@ def retired_transports(cfg) -> tuple[str, ...]:
 
 
 def incomplete_parts_health(db, now: float, cfg=None) -> dict:
-    """Count unfinished parts on each live card's latest delivered render."""
+    """Read unfinished parts, excluding only matching later delivery evidence."""
     retired = retired_transports(cfg)
     live = (f" AND r.transport NOT IN ({','.join('?' * len(retired))})"
             if retired else "")
@@ -323,13 +323,33 @@ def incomplete_parts_health(db, now: float, cfg=None) -> dict:
         "JOIN notification_cards c USING(card_id) "
         "WHERE r.state='delivered' AND c.revoked_at IS NULL "
         "AND c.delivery_state NOT IN ('revoked','message_deleted') "
-        "AND r.render_rev=(SELECT MAX(render_rev) FROM notification_renders "
-        "                  WHERE card_id=r.card_id AND state='delivered') "
         "AND p.kind!='card' AND p.state IN ('pending','unknown','not_sent','held') "
-        # An unavailable source attachment has its visible failure caption;
-        # it is not an unconfirmed delivery of a file we could send.
-        "AND NOT (p.kind='attachment_part' AND p.state='not_sent' "
-        "         AND p.error_code IS 'attachment_unavailable')" + live,
+        "AND NOT EXISTS (SELECT 1 FROM notification_renders done "
+        " JOIN notification_render_parts sent ON sent.delivery_id=done.delivery_id "
+        " WHERE done.card_id=r.card_id AND done.render_rev>r.render_rev "
+        " AND done.state='delivered' AND done.transport IS r.transport "
+        " AND done.profile IS r.profile AND done.application_id IS r.application_id "
+        " AND done.guild_id IS r.guild_id AND done.team_id IS r.team_id "
+        " AND done.channel_id IS r.channel_id AND sent.kind=p.kind "
+        " AND sent.state='delivered' AND typeof(sent.remote_id)='text' AND sent.remote_id!='' "
+        " AND ((typeof(p.payload_sha256)='text' AND length(p.payload_sha256)=64 "
+        "       AND p.payload_sha256 NOT GLOB '*[^0-9a-f]*' "
+        "       AND sent.payload_sha256=p.payload_sha256) "
+        # Unavailable sources have no file hash. A later receipt for that exact
+        # attachment can prove its failure caption or subsequently available file.
+        "   OR (p.kind='attachment_part' AND p.payload_sha256 IS NULL "
+        "       AND (p.error_code IS 'attachment_unavailable' OR EXISTS ("
+        "         SELECT 1 FROM json_each(CASE WHEN json_valid(r.spec_json) "
+        "           THEN r.spec_json ELSE '{}' END,'$.parts.manifest') m "
+        "         WHERE json_extract(CASE WHEN m.type='object' THEN m.value END,'$.part_id')=p.part_id "
+        "           AND json_type(CASE WHEN m.type='object' THEN m.value END,'$.attachment_id')='integer' "
+        "           AND json_extract(CASE WHEN m.type='object' THEN m.value END,'$.attachment_id')=p.attachment_id "
+        "           AND json_type(CASE WHEN m.type='object' THEN m.value END,'$.unavailable')='true')))) "
+        # Body ordinals can move between renders; the source-bound name and
+        # content hash must agree, while attachment IDs identify their source.
+        " AND ((p.kind='body_part' AND p.name IS NOT NULL AND p.name!='' AND sent.name=p.name) "
+        "   OR (p.kind='attachment_part' AND p.attachment_id>0 AND sent.attachment_id=p.attachment_id) "
+        "   OR (p.kind='thread' AND sent.part_id=p.part_id)))" + live,
         retired).fetchone()
     oldest = _finite(row['oldest'])
     return {"total": row['total'], "cards": row['cards'],
