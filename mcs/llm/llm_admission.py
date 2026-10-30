@@ -14,9 +14,10 @@ Design contract:
   unproven owner-death fence, or a dirty epoch flag rotates the epoch
   and stays CLOSED until a trusted caller confirms the backend is empty;
   old-epoch permits are fenced and can never admit again.
-- **Class from route, not payload** — a client authenticates as a
-  named route registered with a fixed class; a caller-supplied class
-  value can never grant RT. Unknown routes are rejected.
+- **Class from route, not payload** — the broker looks up a named route
+  registered with a fixed class; a caller-supplied class value can never
+  grant RT. Unknown routes are rejected. Caller authentication must be
+  enforced separately by the deployment boundary.
 - **Permit lifecycle** — ``admitted → sent → terminal`` (the legacy
   ``reserved`` state is never written but still counts as occupying)
   with the honest side states ``waiting`` (RT registered, backlog
@@ -32,12 +33,11 @@ Design contract:
   Only lease-expired ``reserved``/``admitted``/``waiting`` permits with
   neither a send timestamp nor a token may be fenced as ``owner_dead``
   after confirmed owner loss. A live owner's permit is never reclaimed.
-- **Admission token** — each admitted→sent permit mints a single-use
-  ``epoch:permit:nonce`` token. The backend access control (in
-  production: the backend reachable only through the broker; in the
-  synthetic harness: the fake backend) rejects any request without a
-  live token — direct POSTs, stale-epoch replays and cross-class
-  tokens all fail closed.
+- **Admission token** — each admitted→sent permit mints an
+  ``epoch:permit:nonce`` token bound to its live permit and class.
+  Validation rejects stale epochs and cross-class tokens but does not
+  consume a valid token. Broker-only backend reachability is a separate
+  deployment requirement, not a property established by this module.
 - **Protected BG window** — an RT arrival registers waiting intent and
   closes new BACKLOG admission atomically, then waits for in-flight
   background work to reach a confirmed terminal state (bounded by the

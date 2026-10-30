@@ -318,9 +318,9 @@ def admitted_chat(client_route: str, prompt: str, *,
                   **kw) -> dict | None:
     """One chat call through the RT/BACKLOG admission boundary.
 
-    ``client_route`` is an authenticated route name registered with
-    the broker — its bound class (never a caller value) decides
-    RT vs BACKLOG. Returns ``chat()``'s response on a sent request;
+    ``client_route`` is a route name registered with the broker — its
+    bound class (never a caller value) decides RT vs BACKLOG. This
+    function does not authenticate the caller. Returns ``chat()``'s response on a sent request;
     on admission denial/deferral returns
     ``{"admission": <reason>, "status": None, "text": None, ...}`` —
     a distinct, honest outcome the caller must not confuse with a
