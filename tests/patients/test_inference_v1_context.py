@@ -450,6 +450,17 @@ def test_proven_empty_readiness_retains_source_and_attachment_guards(runtime, mo
             with led.db:
                 led.db.execute("UPDATE messages SET body_state='full' WHERE message_id=1")
             assert ready()
+    if source != 'no_rows':
+        if mode != 'off':
+            job = led.job_add('semantic', 1, 1)
+            assert not ready()
+            led.job_done(job)
+            assert ready()
+        hold = led.artifact_add('semantic_intake_hold_v1', '{}', project_id=1, model='1')
+        assert not ready()
+        with led.db:
+            led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (hold,))
+        assert ready()
     led.artifact_add(loss.KIND, json.dumps({'schema':loss.SCHEMA,'project_id':1,'gap':True,
         'origin':{'message_id':99,'revision':1,'kind':'unanalysed'}}), project_id=1,
         meta={'schema':loss.SCHEMA,'identity':'a'*64,VERSION_KEY:refresh.CURRENT_VERSION})

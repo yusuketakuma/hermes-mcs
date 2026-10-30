@@ -139,6 +139,13 @@ def extract_quantities(text: object) -> list[dict]:
                       if clinical_values.written_day(match[0]) is not None
                       and (match[0].endswith("日") or not re.match(r"[A-Za-zμµ%回]", value[match.end():]))]
 
+    # Blank dates once so every quantity and scope matcher sees the same text.
+    if calendar_spans:
+        characters = list(value)
+        for start, end in calendar_spans:
+            characters[start:end] = " " * (end - start)
+        value = "".join(characters)
+
     known_amount_spans: list[tuple[int, int]] = []
     for match in _AMOUNT_RE.finditer(value):
         prefix = value[:match.start()]
@@ -155,8 +162,6 @@ def extract_quantities(text: object) -> list[dict]:
         start, end = match.span()
         if any(start < known_end and end > known_start
                for known_start, known_end in known_amount_spans):
-            continue
-        if any(date_start <= start and end <= date_end for date_start, date_end in calendar_spans):
             continue
         # 回/日 are frequency/duration tokens, not unsupported amount units;
         # the greedy kanji unit may run on (``3回内服``, ``7日分``).

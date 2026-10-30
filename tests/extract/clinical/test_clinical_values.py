@@ -20,6 +20,21 @@ def test_calendar_date_is_not_a_medication_quantity(calendar):
     assert [(q["kind"], q["value"], q["unit"]) for q in quantities] == [("amount", "5", "mg")]
 
 
+@pytest.mark.parametrize("calendar", ["2026年9月21日", "２０２６年９月２１日"])
+@pytest.mark.parametrize("tail,expected", [
+    ("3mg", [("amount", "3", "mg", None, None)]),
+    ("3回", [("frequency", "3", "count", None, None)]),
+    ("1日3mg", [("frequency", "1", "per_day_total", "1", None),
+                ("amount", "3", "mg", None, "per_day_total")]),
+    ("1日3回3mg", [("frequency", "3", "per_day", "1", None),
+                  ("amount", "3", "mg", None, "per_day")]),
+])
+def test_calendar_fragment_cannot_supply_dose_scope_or_frequency(calendar, tail, expected):
+    quantities = semantic_quantities.extract_quantities(calendar + tail)
+    assert [(q["kind"], q["value"], q["unit"], q.get("period_days"), q.get("scope"))
+            for q in quantities] == expected
+
+
 def test_calendar_exclusion_keeps_unknown_units_invalid_dates_and_multiple_amounts_held():
     for usage, unit in [("5mg/kgを使用しました。", "unknown:mg/kg"),
                         ("5mg/kg使用しました。", "unknown:mg/kg使用")]:

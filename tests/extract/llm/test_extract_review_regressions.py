@@ -5,6 +5,7 @@ import pytest
 
 import extract_llm
 import inference_dependency_loss
+import mcs_queries
 from common_testkit import ledger_fixture
 from extract_testkit import _hash, _message
 from inference_version import CURRENT_VERSION, VERSION_KEY
@@ -61,12 +62,23 @@ def test_thin_retry_does_not_erase_prior_valid_clinical_fact(db, monkeypatch):
                           'evidence': '発熱が持続しています'}],
              'urgency': 'high'}
     db.artifact_add('extract_llm', json.dumps(prior), project_id=1, message_id=1,
-                   meta={'hash': _hash(db), 'extract_version': extract_llm.EXTRACT_VERSION})
-    monkeypatch.setattr(extract_llm, '_llm_call', lambda *a, **kw: {})
+        model=extract_llm.MODEL,
+        meta={'hash': _hash(db), 'extract_version': extract_llm.EXTRACT_VERSION,
+              VERSION_KEY: CURRENT_VERSION,
+              'source_binding': inference_dependency_loss.source_binding(db.db, 1, 1)})
+    calls = []
+    monkeypatch.setattr(extract_llm, '_llm_call', lambda *a, **kw: calls.append(a) or {})
     monkeypatch.setattr(extract_llm, '_llm_up', lambda **kw: True)
-    extract_llm.run_pending(db, limit=10, budget_s=300)
-    out = json.loads(db.artifacts('extract_llm', message_id=1)[0]['content'])
-    assert out.get('symptoms') == prior['symptoms'], out
+    result = extract_llm.run_pending(db, limit=10, budget_s=300)
+    assert result['selected'] == 1 and calls, result
+    retained = [row for row in db.artifacts('extract_llm', message_id=1)
+                if json.loads(row['meta']).get('thin_retried') is True]
+    assert len(retained) == 1 and json.loads(retained[0]['content']) == prior
+    visible = mcs_queries.current_message_extract(db.db, 'extract_llm', 1)
+    assert visible is not None and visible.get('symptoms') == prior['symptoms'], visible
+    first_calls = len(calls)
+    assert extract_llm.run_pending(db, limit=10, budget_s=300)['selected'] == 0
+    assert len(calls) == first_calls
 
 
 def test_thin_repend_does_not_prefilter_away_existing_fact(db, monkeypatch):
