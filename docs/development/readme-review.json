@@ -2,57 +2,52 @@
   "version": "1.1.0",
   "sections": {
     "features": {
-      "notes": "2026-10-26 1.1.0（release/v1.1.0、基点main a27efa15）: 変更記録132件を機能説明へ照合。収集エラーの18分類と、一時的な分類（10種）だけを3回連続で通知する判定を「できること」へ追記（collection_diagnostics.CATEGORIES、health_watch.TRANSIENT_REASONS・STREAK_ALERT=3）。health.jsonのDB容量・バックアップ種類別容量・保守経過時間とdb_maintenance_overdue（日次2日超）を追記（health_report.py、maintenance.py）。本文未取得時の「緊急度: 要確認」を追記。CSDCは任意支援の表にコードのみ同梱・1.1.0では有効化・接続しない・新規は sdc.enabled 未設定で専用ジョブなし・既存の明示設定は更新で変更しない・案内表示は mcs setup features と記載（v110-csdc-default-off、mcs_setup.cmd_features）。返信カードの既定・取得範囲・モデル・取得間隔は変更なし。内部整理（refactor-*）は利用者の機能説明に影響しないため本文は追加しない。",
+      "notes": "2026-10-30: Anthropic/OpenAIの選択・合計/API別予算、クラウド優先の履歴処理とローカル新着処理、患者単位の生成条件、投稿ごとの処理先表示と失敗ジョブ診断を実装・ガイドに合わせた。",
       "sources": [
         "README.md",
-        "CHANGELOG.md",
-        "mcs/ingest/collection_diagnostics.py",
-        "mcs/ingest/health_watch.py",
-        "mcs/ingest/health_report.py",
-        "mcs/core/maintenance.py",
-        "mcs/ops/mcs_setup.py"
+        "mcs/llm/cloud_policy.py",
+        "mcs/patients/patient_context_refresh.py",
+        "mcs/ops/job_diagnostics.py",
+        "mcs/notify/notify_render.py",
+        "docs/guides/ANTHROPIC.md"
       ]
     },
     "demos": {
-      "notes": "2026-10-26 1.1.0: Slack 8画面・Discord・LINE WORKSの表示例と生成元を確認。今回のカード関連の変更（返信カードの本文・操作を投稿ごとにそろえる、親スレッド不明時の保留、緊急度: 要確認、長い本文の分割）は、既存の画面例のカード配置・ボタン・表示条件を変えないため、SVG・PNGとassets.jsonのhashは変更しない。人物・組織・本文は架空の説明用データのまま。版の説明図は新規の docs/releases/v1.1.0/collection-alerts（合成の説明図、実画面ではない）。実画面・公開後の画像表示は未確認。",
+      "notes": "2026-10-30: Slackの説明図9点を数え直し、処理サービスを患者名の下の見出し行へ配置した現行ギャラリーと照合した。実画面のキャプチャとは表現していない。",
       "sources": [
+        "README.md",
         "docs/screenshots/slack-gallery/README.md",
-        "docs/screenshots/slack-gallery/assets.json",
-        "docs/screenshots/lineworks-gallery/README.md",
-        "docs/screenshots/lineworks-gallery/assets.json",
-        "docs/releases/v1.1.0/visual-source.json",
-        "mcs/notify/notify_render.py"
+        "scripts/development/generate_slack_gallery.py",
+        "adapters/slack/presentation.py"
       ]
     },
     "quickstart": {
-      "notes": "2026-10-26 1.1.0: 導入・診断・更新の導線を照合。macOS・Apple silicon・Slackのstandaloneを初回受入候補とする記載は維持。doctor --share（患者件数・設定値・パスを含めない共有用JSON、自動送信なし）を診断の説明へ追記（mcs_setup.py、support_diagnostics.py）。対話の初期設定の保存前確認・AIモデルのSHA256不一致時の停止・通知先準備の失敗時の停止は、CHANGELOGの更新時の注意で案内し、導入コマンド自体は変わらないため本文の手順は変更不要。CSDCの登録案内は既定で表示しない（mcs setup features）ことを任意支援の表に記載。",
+      "notes": "2026-10-30: standaloneの導入例・前提を維持。導入と更新後のAPI登録案内がOpenAI/Anthropic/Jevと通知先に対応することを確認し、既存認証情報の変更制限は残した。",
       "sources": [
         "README.md",
         "install.sh",
-        "mcs/ops/mcs_setup.py",
-        "mcs/ops/support_diagnostics.py",
-        "mcs/ops/setup_wizard.py",
+        "mcs/ops/api_key_setup.py",
+        "docs/guides/SETUP_AGENT.md",
         "docs/guides/UPGRADE_AGENT.md"
       ]
     },
     "safety": {
-      "notes": "2026-10-26 1.1.0: 情報の行き先の表に、公開医薬品情報の照会（PMDA添付文書・Mindsガイドライン）の行を追加。送信は同梱公開マスターと一致した薬品名・一般疾患キーワード・公式URLだけで、患者データ・私有辞書は送らない。TinyFishのトークンファイルがない環境では無料・認証不要のExa MCP（https://mcp.exa.ai/mcp）へ接続し、取得内容は医学的評価を経ていない参考資料（drug_info.py、drug-web-fallback）。status_snapshotは患者情報・本文・ホスト名・IPを含めず送信しない部品で、外部送信の経路を追加しないため表には加えない。CSDCは1.1.0で接続しないため、外部送信の行は追加しない。既読化・人承認・no-redirect/no-proxyの条件に変更なし。",
+      "notes": "2026-10-30: 既存の外部送信先表にAnthropic/OpenAIがあり、匿名化なし・合計/API別上限・明示OFFを保持する説明と照合。合計の既定値25/75を反映。CSDCは未提供とし、Jev省略を検証済みとは表現しない。",
       "sources": [
         "README.md",
         "SECURITY.md",
-        "mcs/ops/drug_info.py",
-        "mcs/ops/status_snapshot.py",
-        "changes/archive/1.1.0/drug-web-fallback.json",
-        "changes/archive/1.1.0/v110-csdc-default-off.json"
+        "mcs/llm/cloud_policy.py",
+        "mcs/semantic/semantic_audit.py",
+        "docs/guides/ANTHROPIC.md"
       ]
     },
     "docs": {
-      "notes": "2026-10-26 1.1.0: ドキュメント表の更新・復旧の行に1.1.0のリリース資料（docs/releases/v1.1.0/README.md）への導線を追加。機能説明から説明図へのリンクも同じ資料へ向ける。既存のガイド・仕様のリンク先は移動・廃止なし。readme_release.py --checkで相対リンクと主要アンカーを検査。ライセンス節（1.1.0からの外部利用は個別の書面契約）は既存の記載のまま。",
+      "notes": "2026-10-30: 1.1.0資料への導線、設定ガイド、CHANGELOGの生成要約とリンクを照合。1.0.29以前の本文は作業開始時点から変更せず、履歴を保持した。",
       "sources": [
         "README.md",
-        "docs/README.md",
         "docs/releases/v1.1.0/README.md",
-        "LICENSE"
+        "docs/guides/ANTHROPIC.md",
+        "docs/development/RELEASE_NOTES.md"
       ]
     }
   }

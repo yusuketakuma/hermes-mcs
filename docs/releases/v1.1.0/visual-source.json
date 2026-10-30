@@ -1,22 +1,47 @@
 {
-  "kind": "synthetic explanation, not a screenshot or measured result",
-  "source": "docs/releases/v1.1.0/collection-alerts.svg",
-  "renderer": "macOS qlmanage -t -s 800 on an 800x800 wrapper (drawing at x=205), then ImageMagick crop 390x800+205+0 -strip",
+  "kind": "synthetic explanation; not a screenshot or measured result",
+  "source": "docs/releases/v1.1.0/cloud-processing.svg",
+  "renderer": "macOS qlmanage -t -s 800 on 800x800 wrapper, drawing translated x=205; magick crop 390x790+205+0 +repage -strip",
+  "comparison": {
+    "before": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
+    "after": "unpublished v1.1.0, final commit recorded by release owner"
+  },
   "evidence": [
-    "mcs/ingest/collection_diagnostics.py",
-    "mcs/ingest/health_watch.py",
-    "mcs/ops/support_diagnostics.py",
-    "docs/guides/COLLECTION_DIAGNOSTICS.md",
-    "changes/archive/1.1.0/collection-error-guidance.json"
+    "mcs/llm/cloud_policy.py",
+    "mcs/semantic/semantic_transport.py",
+    "mcs/patients/patient_context_refresh.py",
+    "docs/guides/ANTHROPIC.md"
   ],
-  "facts_checked": "18 categories in collection_diagnostics.CATEGORIES (10 transient); health_watch.TRANSIENT_REASONS and STREAK_ALERT = 3; stage_errors waits only when every category is transient",
-  "checked": "PNG 390x800 opened locally: no clipped or overlapping labels at 390px width",
+  "facts_checked": "realtime local; history cloud preferred with conditional local fallback; active/latest patient priority; per-patient current inference and quality gates before context; global and per-provider caps; Jev skipped is not PASS",
+  "checked": "PNG opened locally at its native width 390px; labels fit without overlap or clipping",
   "sha256": {
-    "png": "9b5598c56788ac7d07fe0cceeb238ccbc3475da772d4044e01f58a7b5aa14f0d",
-    "svg": "dc45793841460a2822158acf1eba11936f2b312730d9b6727fff1c987c55916a"
+    "svg": "d896313e59b6460dd25255624dd5f9b93e68a0c6f2123645d7ee1c0f5e9e2a0d",
+    "png": "dd3079740aba17ea023bab76da5da02a2cb6a85be51f5ec3edb21cf9632b864d"
   },
   "published_reference": {
-    "changelog_and_release": "https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/v1.1.0/docs/releases/v1.1.0/collection-alerts.png",
-    "status": "repository is private: not reachable until tag v1.1.0 is pushed, and then only to authorized viewers; authenticated GitHub display is verified by the release owner after publication"
+    "changelog_and_release": "https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/v1.1.0/docs/releases/v1.1.0/cloud-processing.png",
+    "status": "private repository; tag URL not yet published; authorized GitHub display unverified"
+  },
+  "preserved_previous_visual": {
+    "kind": "synthetic explanation, not a screenshot or measured result",
+    "source": "docs/releases/v1.1.0/collection-alerts.svg",
+    "renderer": "macOS qlmanage -t -s 800 on an 800x800 wrapper (drawing at x=205), then ImageMagick crop 390x800+205+0 -strip",
+    "evidence": [
+      "mcs/ingest/collection_diagnostics.py",
+      "mcs/ingest/health_watch.py",
+      "mcs/ops/support_diagnostics.py",
+      "docs/guides/COLLECTION_DIAGNOSTICS.md",
+      "changes/archive/1.1.0/collection-error-guidance.json"
+    ],
+    "facts_checked": "18 categories in collection_diagnostics.CATEGORIES (10 transient); health_watch.TRANSIENT_REASONS and STREAK_ALERT = 3; stage_errors waits only when every category is transient",
+    "checked": "PNG 390x800 opened locally: no clipped or overlapping labels at 390px width",
+    "sha256": {
+      "png": "9b5598c56788ac7d07fe0cceeb238ccbc3475da772d4044e01f58a7b5aa14f0d",
+      "svg": "dc45793841460a2822158acf1eba11936f2b312730d9b6727fff1c987c55916a"
+    },
+    "published_reference": {
+      "changelog_and_release": "https://raw.githubusercontent.com/yusuketakuma/hermes-mcs/v1.1.0/docs/releases/v1.1.0/collection-alerts.png",
+      "status": "repository is private: not reachable until tag v1.1.0 is pushed, and then only to authorized viewers; authenticated GitHub display is verified by the release owner after publication"
+    }
   }
 }

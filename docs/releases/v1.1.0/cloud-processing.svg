@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="390" height="790" viewBox="0 0 390 790" role="img" aria-labelledby="title desc">
+  <title id="title">MCS 1.1.0の新着と過去分の処理</title>
+  <desc id="desc">1.0.29のローカル中心の解析から、新着はローカル、過去分はクラウドを優先する処理への変更を示す説明図です。</desc>
+  <rect width="390" height="790" fill="#f4f7fb"/>
+  <g font-family="Hiragino Kaku Gothic ProN, sans-serif" fill="#18324b">
+    <text x="22" y="38" font-size="22" font-weight="700">過去分をクラウドで進める</text>
+    <text x="22" y="62" font-size="13">MCS 1.1.0 · 処理の説明図</text>
+    <rect x="18" y="84" width="354" height="100" rx="12" fill="#e6ebf0"/>
+    <text x="34" y="111" font-size="15" font-weight="700">以前 · 1.0.29</text>
+    <text x="34" y="141" font-size="18">新着・過去分 → ローカル中心</text>
+    <text x="34" y="165" font-size="13">Mac上のLLMとルールで解析</text>
+    <text x="195" y="215" text-anchor="middle" font-size="22">↓</text>
+    <rect x="18" y="232" width="354" height="106" rx="12" fill="#e4f3ec" stroke="#9ac7b3"/>
+    <text x="34" y="260" font-size="15" font-weight="700">今回 · 新着の即時処理</text>
+    <text x="34" y="290" font-size="20" font-weight="700">新着 → ローカル</text>
+    <text x="34" y="316" font-size="13">履歴のクラウド処理と分けて進行</text>
+    <rect x="18" y="354" width="354" height="230" rx="12" fill="#e8f0fd" stroke="#9bb7dd"/>
+    <text x="34" y="383" font-size="15" font-weight="700">今回 · 過去分と患者コンテキスト</text>
+    <text x="34" y="415" font-size="19" font-weight="700">過去分 → 登録済みクラウド</text>
+    <text x="34" y="442" font-size="16">Anthropic / OpenAI</text>
+    <text x="34" y="469" font-size="14">アクティブ患者の新しい記録から</text>
+    <text x="34" y="493" font-size="14">設定枠・メモリ・サービス制限内で並列化</text>
+    <path d="M195 508v18" stroke="#476a99" stroke-width="2"/>
+    <path d="m189 520 6 7 6-7" fill="none" stroke="#476a99" stroke-width="2"/>
+    <text x="34" y="552" font-size="14" font-weight="700">取得済み投稿を確認 → コンテキスト</text>
+    <rect x="18" y="600" width="354" height="160" rx="12" fill="#fff6e8" stroke="#d9ba83"/>
+    <text x="34" y="629" font-size="15" font-weight="700">切替条件と費用を守る</text>
+    <text x="34" y="657" font-size="14">クラウド不可 → 条件を満たせばローカル</text>
+    <text x="34" y="682" font-size="14">合計予算 ＋ API別予算を同時に適用</text>
+    <text x="34" y="707" font-size="14">Jevは利用可能なら検証、不可なら省略</text>
+    <text x="34" y="735" font-size="12">省略を検証済みにせず、結果不明の再送は保留</text>
+  </g>
+</svg>

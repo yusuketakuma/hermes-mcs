@@ -1,398 +1,2196 @@
 {
-  "status": "1.1.0 release candidate docs on release/v1.1.0 (base main a27efa15); final SHA, CI, production and publication recorded separately by the release owner",
+  "status": "unpublished 1.1.0 preparation; pending review and final validation are separate",
   "baseline": {
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
-    "candidate_base": "main a27efa15"
+    "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 132,
-  "public_entries": 17,
+  "fragment_count": 364,
   "comparison_rows": 3,
-  "mapping": [
+  "technical_catalog": "CHANGELOG.md 1.1.0 details; every original record linked without rewriting",
+  "records": [
     {
-      "id": "N1",
-      "changelog_section": "新機能",
-      "title": "DB容量とバックアップの内訳、保守の遅れを確認",
-      "fragment_ids": [
-        "db-capacity-observability",
-        "health-layout-counts"
-      ]
+      "path": "changes/archive/1.1.0/allergy-ambiguous-corrections.json",
+      "id": "allergy-ambiguous-corrections",
+      "title": "アレルギー投稿後の訂正を表示前に確認",
+      "sha256": "8c001c550ec2ea02d8740af0d39a777c8c27c757cabd0f16cd7c918072cf3a6d"
     },
     {
-      "id": "N2",
-      "changelog_section": "新機能",
-      "title": "稼働状況の書き出しと、共有用の診断表示",
-      "fragment_ids": [
-        "status-snapshot",
-        "status-snapshot-configured-llm",
-        "support-diagnostics-share"
-      ]
+      "path": "changes/archive/1.1.0/allergy-posted-record.json",
+      "id": "allergy-posted-record",
+      "title": "アレルギーの投稿時点の記載を確認",
+      "sha256": "8c0bfedec064347925f455a7389d38df26fca4482d4f80bd5581c3c876d177bc"
     },
     {
-      "id": "N3",
-      "changelog_section": "新機能",
-      "title": "TinyFishがない環境でも公開医薬品情報を照会",
-      "fragment_ids": [
-        "drug-web-fallback"
-      ]
+      "path": "changes/archive/1.1.0/anthropic-cloud-route.json",
+      "id": "anthropic-cloud-route",
+      "title": "患者コンテキストと再抽出にAnthropicの処理経路を追加",
+      "sha256": "4b091fc4df0ba0a8b1a35cd5247fff24bef8bf3304f077d1980e6207e1797aa0"
     },
     {
-      "id": "N4",
-      "changelog_section": "新機能",
-      "title": "初期設定の保存前に、送信先と保存内容を確認",
-      "fragment_ids": [
-        "setup-save-confirmation"
-      ]
+      "path": "changes/archive/1.1.0/anthropic-extraction-context.json",
+      "id": "anthropic-extraction-context",
+      "title": "患者コンテキストと旧版の再抽出にAnthropic経路を追加",
+      "sha256": "4bb9bf88016d2b1fb49badcc40d994ac144cb6f9489c459f78d8a297008d31fe"
     },
     {
-      "id": "I1",
-      "changelog_section": "改善",
-      "title": "通知の復旧を複数の添付でまとめて行う",
-      "fragment_ids": [
-        "attachment-preflight-batch-recovery",
-        "recovery-transport-envelope"
-      ]
+      "path": "changes/archive/1.1.0/attachment-preflight-batch-recovery.json",
+      "id": "attachment-preflight-batch-recovery",
+      "title": "複数添付の未送信をまとめて確認して復旧する",
+      "sha256": "cdbd79069bb04914a4120e1cb68c773b67513c0d691db00f5d00ca29fc895c13"
     },
     {
-      "id": "I2",
-      "changelog_section": "改善",
-      "title": "内部処理の整理と読取りの削減",
-      "fragment_ids": [
-        "docs-s7-docstring-corrections",
-        "refactor-backup-b34",
-        "refactor-c1-envelopes-b26",
-        "refactor-chat-action-contracts",
-        "refactor-chat-delivery-contracts",
-        "refactor-core-low-b22",
-        "refactor-download-url-b27",
-        "refactor-drug-info-contracts",
-        "refactor-export-contracts",
-        "refactor-extraction-boundaries",
-        "refactor-foundation-fixtures",
-        "refactor-ingest-parse-contracts",
-        "refactor-ledger-b35",
-        "refactor-ledger-schema-b36",
-        "refactor-lifecycle-b38",
-        "refactor-lineworks-helpers-b32",
-        "refactor-llm-signal-stamp-contracts",
-        "refactor-medication-read-contracts",
-        "refactor-notification-card-contracts",
-        "refactor-notification-dispatch-contracts",
-        "refactor-notification-display-reads",
-        "refactor-notification-receipt-contracts",
-        "refactor-ops-helpers-b33",
-        "refactor-patient-context-contracts",
-        "refactor-query-and-test-foundation",
-        "refactor-read-model-b25",
-        "refactor-read-view-contracts",
-        "refactor-remaining-foundation",
-        "refactor-remove-config-generation",
-        "refactor-reply-job-thread-window",
-        "refactor-request-loops-b24",
-        "refactor-s29a-config-scope",
-        "refactor-s29b-maintenance-imports",
-        "refactor-s33b-recover-mode-reads",
-        "refactor-s33b-update-helpers",
-        "refactor-s33c-upgrade-entry-and-check",
-        "refactor-s33d-updater-helpers",
-        "refactor-semantic-evaluation-contracts",
-        "refactor-semantic-execution",
-        "refactor-semantic-extraction-paths",
-        "refactor-semantic-qc-low-b23",
-        "refactor-setup-b37",
-        "refactor-stamp-write-b29",
-        "refactor-standalone-attachments-b31",
-        "refactor-standalone-config-contracts",
-        "refactor-structured-view-b30",
-        "refactor-worker-hooks-b28",
-        "seven-day-dead-notify-wrapper",
-        "seven-day-dead-view-helper"
-      ]
+      "path": "changes/archive/1.1.0/blood-pressure-date-disambiguation.json",
+      "id": "blood-pressure-date-disambiguation",
+      "title": "血圧の値を日付と誤認する問題を修正",
+      "sha256": "8b7d3f959aeb1eef016596fc0bc84200b3247cb6cdae02b18c67e92f16373036"
     },
     {
-      "id": "I3",
-      "changelog_section": "改善",
-      "title": "版番号の付け方",
-      "fragment_ids": [
-        "version-policy-110"
-      ]
+      "path": "changes/archive/1.1.0/brain-export-missing-rollup.json",
+      "id": "brain-export-missing-rollup",
+      "title": "患者集約の一時欠落による出力ページの削除を防止",
+      "sha256": "c72d45f3320471080fc5ffedbe285d708491dba99d6e1b6e3dff24f785febcbb"
     },
     {
-      "id": "F1",
-      "changelog_section": "不具合修正",
-      "title": "返信カードの本文・操作・配送先を投稿ごとにそろえる",
-      "fragment_ids": [
-        "reply-card-ownership-hotfix",
-        "seven-day-post-edit-receipts",
-        "v110-delivery-boundaries"
-      ]
+      "path": "changes/archive/1.1.0/brain-export-vitals-unknown.json",
+      "id": "brain-export-vitals-unknown",
+      "title": "患者の出力でバイタルの未確認を表示",
+      "sha256": "1d01e421cd8f5054a815ed6b189b6c71e7a29819231712f4b05ebed1900b3b7f"
     },
     {
-      "id": "F2",
-      "changelog_section": "不具合修正",
-      "title": "Slackの長い本文を送信時の容量も考慮して分割",
-      "fragment_ids": [
-        "slack-body-wire-budget"
-      ]
+      "path": "changes/archive/1.1.0/care-event-correction-context.json",
+      "id": "care-event-correction-context",
+      "title": "出来事の訂正と本人が不明な記載を区別",
+      "sha256": "71320144bc43385e3a6911fb1214d064185cc2f2ae0e29ff7e87fb780d38bf72"
     },
     {
-      "id": "F3",
-      "changelog_section": "不具合修正",
-      "title": "独立実行の停止・再接続・再起動で処理を取りこぼさない",
-      "fragment_ids": [
-        "seven-day-orphan-identity",
-        "standalone-delivery-lifecycle",
-        "standalone-delivery-runtime-review-fixes",
-        "standalone-native-admission",
-        "standalone-runtime-admission",
-        "standalone-runtime-delivery-owner"
-      ]
+      "path": "changes/archive/1.1.0/care-event-view.json",
+      "id": "care-event-view",
+      "title": "出来事の記録を患者ごとに確認",
+      "sha256": "43a085e734309591d0c131dc25577b29d44e76acb2c57eb66c743d911dbcbc17"
     },
     {
-      "id": "F4",
-      "changelog_section": "不具合修正",
-      "title": "導入・更新・復旧の失敗を正しく扱う",
-      "fragment_ids": [
-        "csdc-cold-recovery",
-        "existing-model-integrity",
-        "fix-restore-approval-exists",
-        "fix-update-discovery-ls-remote",
-        "refactor-s7-lowfix",
-        "setup-gateway-flags"
-      ]
+      "path": "changes/archive/1.1.0/checked-config-read.json",
+      "id": "checked-config-read",
+      "title": "設定の読取結果を確認できるようにする",
+      "sha256": "d34612d3806cab35f5d92c02fd5dc5a7eca20c9ac16f164919c08d5a47730d84"
     },
     {
-      "id": "F5",
-      "changelog_section": "不具合修正",
-      "title": "検査値の統合と添付文書の変更通知",
-      "fragment_ids": [
-        "seven-day-drug-notice-retry",
-        "seven-day-lab-merge"
-      ]
+      "path": "changes/archive/1.1.0/claude-review-fixes.json",
+      "id": "claude-review-fixes",
+      "title": "丁寧な依頼・理由の「から」・「〜もし」・作業メモの判定を修正",
+      "sha256": "6488801c0db609704a678cf51fabdb44e9f49f0d4247f1ca3a7d449b3fec9b3e"
     },
     {
-      "id": "F6",
-      "changelog_section": "不具合修正",
-      "title": "開発者向け：検証と比較で不完全な結果を合格にしない",
-      "fragment_ids": [
-        "seven-day-verification-boundaries"
-      ]
+      "path": "changes/archive/1.1.0/clinical-additive-condition.json",
+      "id": "clinical-additive-condition",
+      "title": "実施の追加と条件付きの記録を区別する",
+      "sha256": "3425546ae5b6eaa6ff68f05d08027cf21ec49f19a16a2cd11004a997eee32468"
     },
     {
-      "id": "C1",
-      "changelog_section": "動作・設定の変更",
+      "path": "changes/archive/1.1.0/cloud-candidate-provider-binding.json",
+      "id": "cloud-candidate-provider-binding",
+      "title": "外部推論の利用開始時に旧候補の承認を再利用しない",
+      "sha256": "add87e157ac07398a8c55eaae6bd0cbb7dc18b9dc6a8bb11be1447d915115309"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-config-fail-closed.json",
+      "id": "cloud-config-fail-closed",
+      "title": "config.jsonが読めないとき・cloud_llmがnullのときにAnthropicを自動有効化しない",
+      "sha256": "33d75239640cc48ad0b4d9c8758095258235eed045fb2ea35fbcfdbefca92fac"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-cost-budget.json",
+      "id": "cloud-cost-budget",
+      "title": "Anthropicの1日・1か月の費用上限をコマンドで設定",
+      "sha256": "ac768c3babbc8bb9715cf2df96f99368a2d9dc49f700ab03e0dd022058f6d532"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-doctor-observations.json",
+      "id": "cloud-doctor-observations",
+      "title": "外部AIの鍵未登録とドライランの状況を診断に表示",
+      "sha256": "3700070f72f32a2a17da3a8b81caca2824ea8ff0dcad2d1b166ce0ccefd54dd2"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-guardrails-until-cost-limit.json",
+      "id": "cloud-guardrails-until-cost-limit",
+      "title": "外部AIの送信に期間・期間予算と費用上限の必須化を追加",
+      "sha256": "921702ccd09cde200cfd428f69fbc8bd605a2d2f292de0012e0b0385de9e6094"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-length-stop-and-retry.json",
+      "id": "cloud-length-stop-and-retry",
+      "title": "Anthropicの出力上限停止を分割再計画に渡し、失敗した有料要求を次回すぐ再送しない",
+      "sha256": "1647d0b2a61a9c1c45794d6802d900d133802d0f32ec3127d1e11184d64a81ec"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-paid-result-keep.json",
+      "id": "cloud-paid-result-keep",
+      "title": "外部AIの受信済みの結果を保存し、送信済みかもしれない失敗は再送しない",
+      "sha256": "854270df914a7a04b47877867b82c12adee2c3b978baa2d28bdd6f09637e1d6b"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-prompt-cache.json",
+      "id": "cloud-prompt-cache",
+      "title": "Anthropicへの再抽出要求で固定の指示部をprompt cacheに載せる",
+      "sha256": "60819a73c72195d661beb4817654e9a44a0fd1fd02acabca991e53661d8884ab"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-repair-evidence-holds.json",
+      "id": "cloud-repair-evidence-holds",
+      "title": "原典修復の保留に関わる記録の件数を表示",
+      "sha256": "b82cdbb75a96b540966dd2de983f4c93f1f09879e0eea2c5b092cc72be17ad6c"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-repair-receipt-batch.json",
+      "id": "cloud-repair-receipt-batch",
+      "title": "患者情報の修復証拠をまとめて照合",
+      "sha256": "36712702f70fb1c7532f9af66e202188b541a7b3298c0546ae7c027f860fff37"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-reservation-request-sized.json",
+      "id": "cloud-reservation-request-sized",
+      "title": "Anthropicの予約額を要求の大きさで見積もり、未送信の予約を0ドルで精算する",
+      "sha256": "4670c82137aca1f7b6dcfd26f197299995048dabc5edc64227d09f0ecf78ac6a"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-result-accounting-retry.json",
+      "id": "cloud-result-accounting-retry",
+      "title": "クラウド解析の結果不明時に再送を抑制",
+      "sha256": "7666bc587526e44f339e71482ea3ca42d61402c55cc2c69a2250c20031a99d52"
+    },
+    {
+      "path": "changes/archive/1.1.0/collection-error-guidance.json",
+      "id": "collection-error-guidance",
       "title": "収集エラーを細かく分類し、一時的な異常は3回続いたときに通知",
-      "fragment_ids": [
-        "collection-error-guidance"
-      ]
+      "sha256": "62365ccc36890e4849bdb66c878414857a31068b18112ca0e9c8fc432da18a65"
     },
     {
-      "id": "C2",
-      "changelog_section": "動作・設定の変更",
-      "title": "本文が読めない投稿の「緊急度: 高」は要確認として表示",
-      "fragment_ids": [
-        "urgency-missing-source-review"
-      ]
+      "path": "changes/archive/1.1.0/config-edit-concurrency-safety.json",
+      "id": "config-edit-concurrency-safety",
+      "title": "設定編集時の停止と更新の消失を防止",
+      "sha256": "327e2c7c87a0e60fd0b1f0d676a378dd2ca0a1b5bd380e3c85fcaec9bec89c26"
     },
     {
-      "id": "C3",
-      "changelog_section": "動作・設定の変更",
-      "title": "親のスレッドを確認できない返信カードはチャンネルへ投稿しない",
-      "fragment_ids": [
-        "reply-card-ownership-hotfix"
-      ]
+      "path": "changes/archive/1.1.0/config-strict-parse.json",
+      "id": "config-strict-parse",
+      "title": "config.jsonの重複キー・NaNをすべての読取りで同じく不正として扱う",
+      "sha256": "a4a1064999f20252f4bb7f1fa487ff0ecd3869d9ededb6dc40f4f69850830b30"
     },
     {
-      "id": "C4",
-      "changelog_section": "動作・設定の変更",
-      "title": "状態監視・遠隔支援（CSDC）はコードのみ同梱し、新規導入では無効",
-      "fragment_ids": [
-        "optional-feature-defaults",
-        "sdc-consent-auto-connect",
-        "sdc-customer-mode",
-        "sdc-default-off-tick-guard",
-        "sdc-diagnostic-event-sender",
-        "sdc-diagnostics-launcher",
-        "sdc-initial-provision-caller",
-        "sdc-inventory",
-        "sdc-inventory-transport",
-        "sdc-keychain",
-        "sdc-keychain-lost-reap-hold",
-        "sdc-keychain-mutation-owner",
-        "sdc-keychain-read-owner",
-        "sdc-managed-monitor-planning",
-        "sdc-managed-restart-owner",
-        "sdc-managed-support-profiles",
-        "sdc-passive-diagnostic-boundaries",
-        "sdc-provision-diagnostics-contracts",
-        "sdc-provision-operability",
-        "sdc-release-apply",
-        "sdc-restart-contract",
-        "sdc-restart-control",
-        "sdc-restart-execution-state",
-        "sdc-restart-keychain-owner",
-        "sdc-restart-local-state",
-        "sdc-restart-planning-client",
-        "sdc-restart-planning-runtime",
-        "sdc-restart-registration-contract",
-        "sdc-restart-registration-terminal-errors",
-        "sdc-restart-signatures",
-        "sdc-restart-transport",
-        "sdc-runtime-restart-carrier",
-        "sdc-signature-process-owner",
-        "sdc-support-consent-client",
-        "sdc-support-contract",
-        "sdc-support-control-contract",
-        "sdc-support-diagnostic-projection",
-        "sdc-support-diagnostic-provider",
-        "sdc-support-diagnostic-runner",
-        "sdc-support-foreground-poll",
-        "sdc-support-local-state",
-        "sdc-support-operation-binding",
-        "sdc-support-preview",
-        "sdc-support-signatures",
-        "sdc-support-transport",
-        "seven-day-sdc-deadline",
-        "standalone-credential-reap-safety",
-        "standalone-restart-carrier-owner",
-        "standalone-restart-execution",
-        "standalone-restart-pending-cancellation",
-        "standalone-restart-reservation",
-        "v110-csdc-default-off"
-      ]
+      "path": "changes/archive/1.1.0/context-shadow-audit-integrity.json",
+      "id": "context-shadow-audit-integrity",
+      "title": "患者コンテキストの比較監査を欠測と重複から保護",
+      "sha256": "9c13b0032eb5cdb2f26f6d63b9d6a7d6b481a641373870a4a1d84f43ea6d0c01"
+    },
+    {
+      "path": "changes/archive/1.1.0/credential-destination-check.json",
+      "id": "credential-destination-check",
+      "title": "認証情報の設定先を確認",
+      "sha256": "5f122e0cc353d0ce947ee45e65fa5c02ce93d7a6ab5eaa9cb244cd960598f6ce"
+    },
+    {
+      "path": "changes/archive/1.1.0/credential-setup-menu.json",
+      "id": "credential-setup-menu",
+      "title": "認証情報を接続先ごとに対話設定",
+      "sha256": "c9c4c22fa6546a48f186990aaf7e5dd88d48b643caa0f60ebacd19c909d25700"
+    },
+    {
+      "path": "changes/archive/1.1.0/cross-list-compact-json.json",
+      "id": "cross-list-compact-json",
+      "title": "横断リストの保存データを小さくする",
+      "sha256": "b727a8939b40786f65b15718316efb6c2fe3f3dea3e764e766399414967f6564"
+    },
+    {
+      "path": "changes/archive/1.1.0/csdc-cold-recovery.json",
+      "id": "csdc-cold-recovery",
+      "title": "更新中断後の旧コード削除をまたぐ復旧を修正",
+      "sha256": "e2e105e6429044a8bbc6a754f9fab3933a022ca4ca5d02463db3ac6f3e58904d"
+    },
+    {
+      "path": "changes/archive/1.1.0/db-capacity-observability.json",
+      "id": "db-capacity-observability",
+      "title": "health.jsonでDB容量とバックアップの内訳、日次保守の延期を確認可能に",
+      "sha256": "ca3ebd925d46cae099914d354ddeace9d75bde4b1ebb8066d042be2c0b521665"
+    },
+    {
+      "path": "changes/archive/1.1.0/dependency-selected-artifacts.json",
+      "id": "dependency-selected-artifacts",
+      "title": "抽出結果の更新時に対象の記録だけを読み取る",
+      "sha256": "6e6577fc8030b9b0284e5f62b92cf3621a979eb27bb5b4c098f8e924fd5913be"
+    },
+    {
+      "path": "changes/archive/1.1.0/derive-open-transaction.json",
+      "id": "derive-open-transaction",
+      "title": "未確定の取引がある状態で後続処理を続けないよう修正",
+      "sha256": "2ee256d183e5bf121272f87f3fd548f52db6d4564f3cb9fcdad45e2d433e9fc8"
+    },
+    {
+      "path": "changes/archive/1.1.0/discord-face-stamp-rows.json",
+      "id": "discord-face-stamp-rows",
+      "title": "Discord のカードに投稿ごとのスタンプ行を表示",
+      "sha256": "ef870b7b52ab25cb7280e75c1636785198a46b486c2664dfb2460e2805549a4d"
+    },
+    {
+      "path": "changes/archive/1.1.0/discord-late-reply-channel-notice.json",
+      "id": "discord-late-reply-channel-notice",
+      "title": "Discordでもスレッドへの新しい返信をチャンネルに知らせる",
+      "sha256": "69f43a380de730c4a6299013582d407967cc763bb7ad546c4026ab9f682f841f"
+    },
+    {
+      "path": "changes/archive/1.1.0/discord-summary-and-context-view.json",
+      "id": "discord-summary-and-context-view",
+      "title": "Discordに /mcs-summary を追加し、患者の記録をカード形式で表示",
+      "sha256": "ddc5c7c040da609bd7a3daddf7766d4a9d7bd407f9187c569bea9d252bf53be2"
+    },
+    {
+      "path": "changes/archive/1.1.0/docs-s7-docstring-corrections.json",
+      "id": "docs-s7-docstring-corrections",
+      "title": "収集処理の時間上限の説明と内部の説明文を現在のコードに合わせる（動作は変更なし）",
+      "sha256": "f22f78514d3cc2bfe4351f68f5d196f249c0ae12651e713fa0b5f8e383d7704c"
+    },
+    {
+      "path": "changes/archive/1.1.0/drug-alias-config-conflict.json",
+      "id": "drug-alias-config-conflict",
+      "title": "薬剤別名の辞書切り替え時に設定の競合を検出",
+      "sha256": "136b8b1dffa09b0986a1dcb844846f8f6ef4fdcbf59ad40ed0deba13d8f54d63"
+    },
+    {
+      "path": "changes/archive/1.1.0/drug-alias-recovery-status.json",
+      "id": "drug-alias-recovery-status",
+      "title": "薬剤辞書の復旧待ちを表示",
+      "sha256": "5c55678c038b3146a2614bbe453ce645ba27cce7a90d472d781e75de5266dfda"
+    },
+    {
+      "path": "changes/archive/1.1.0/drug-alias-retirement-queue.json",
+      "id": "drug-alias-retirement-queue",
+      "title": "薬剤別名の保留中も他の操作を処理",
+      "sha256": "32ae43476e9dff8eb2740d4b9aed53d22dea8d59635ec08dad1148e703bc7acd"
+    },
+    {
+      "path": "changes/archive/1.1.0/drug-timeline-withdrawn-posts.json",
+      "id": "drug-timeline-withdrawn-posts",
+      "title": "薬剤履歴で削除された投稿があることを表示",
+      "sha256": "80c4dab6453dce883f168937e46f1c671b2cef78c7ff4af0e454851c168d24b0"
+    },
+    {
+      "path": "changes/archive/1.1.0/drug-web-fallback.json",
+      "id": "drug-web-fallback",
+      "title": "TinyFish未設定の環境でも公開医薬品情報を照会",
+      "sha256": "ad89c3f066b0cb4fd66e556fb1967153e681e5ada7aa462d5f33341c2fccd672"
+    },
+    {
+      "path": "changes/archive/1.1.0/env-writer-coordination.json",
+      "id": "env-writer-coordination",
+      "title": "認証情報の同時保存による上書きを防止",
+      "sha256": "9c510d4bfed5cf13d55784f5b9edaef5b54f076b022df5fe531ecd3cc77b8ac6"
+    },
+    {
+      "path": "changes/archive/1.1.0/evaluation-priority-generation.json",
+      "id": "evaluation-priority-generation",
+      "title": "緊急度の評価で現行の推論結果を判定",
+      "sha256": "d8b5a017022484ea6d2b737e38ff20ea7e45151fff7f7944a2d5192c5478ab06"
+    },
+    {
+      "path": "changes/archive/1.1.0/existing-model-integrity.json",
+      "id": "existing-model-integrity",
+      "title": "導入済みのMCS管理AIモデルも整合性を確認",
+      "sha256": "ac9a1a256f221fd780921acecdbc7b6621387273c53c7692222a7ed5d3d11955"
+    },
+    {
+      "path": "changes/archive/1.1.0/extract-checkpoint-dedup.json",
+      "id": "extract-checkpoint-dedup",
+      "title": "抽出の途中保存で同じ記録の増加を抑制",
+      "sha256": "c0cd1618c31ce147925cc998b32bcd5aadfb9726a6d67f28bade9df43891042b"
+    },
+    {
+      "path": "changes/archive/1.1.0/extract-checkpoint-replay.json",
+      "id": "extract-checkpoint-replay",
+      "title": "抽出の再開時に中間記録が重複する問題を修正",
+      "sha256": "df4b9d14a84797c82f1582f74212193a9670ab4cf63e8d7fc705a6f4fab4fb5b"
+    },
+    {
+      "path": "changes/archive/1.1.0/extract-pending-checkpoint-reuse.json",
+      "id": "extract-pending-checkpoint-reuse",
+      "title": "抽出途中の同じ保存記録の重複を抑制",
+      "sha256": "7c734dd5e0c9cb5042db4f2802acfcb33a50707e6187c4ce1d9b95ca5a06f624"
+    },
+    {
+      "path": "changes/archive/1.1.0/extract-replacement-patient-scope.json",
+      "id": "extract-replacement-patient-scope",
+      "title": "抽出結果の更新時に患者の対象範囲を保護",
+      "sha256": "af164af7fc595fa2d6187d616d384c7dbce3fabd433567ec16d5ebfcfa4fa16f"
+    },
+    {
+      "path": "changes/archive/1.1.0/extraction-audit-target-version.json",
+      "id": "extraction-audit-target-version",
+      "title": "抽出監査で保留状態の未確認を表示",
+      "sha256": "7b4fbf36fcd00d9ca8f16ef9e330ad4d9b854b0524e03b06ee535693575fd774"
+    },
+    {
+      "path": "changes/archive/1.1.0/extraction-history-consolidation-wip.json",
+      "id": "extraction-history-consolidation-wip",
+      "title": "抽出後の履歴通知の更新予定を保存",
+      "sha256": "8525353229f8e8dd1d6aca8de48ad7808dca64e28d3756e6998f926091e35578"
+    },
+    {
+      "path": "changes/archive/1.1.0/extraction-progress-batch.json",
+      "id": "extraction-progress-batch",
+      "title": "抽出進捗の照合をまとめて扱う内部処理を追加",
+      "sha256": "5edc9aec0d167af7696db4ff51ba21a18f769cb8a21e16c0d0914eacb1ef33d2"
+    },
+    {
+      "path": "changes/archive/1.1.0/extraction-retry-fact-parity.json",
+      "id": "extraction-retry-fact-parity",
+      "title": "抽出の再処理対象と待機時刻を揃える",
+      "sha256": "2dfc90b815a6c35fa721092656ebb682a8aee7cbeb96082476dd5e86d8236e8b"
+    },
+    {
+      "path": "changes/archive/1.1.0/extraction-source-occurrence-fence.json",
+      "id": "extraction-source-occurrence-fence",
+      "title": "投稿の変更中に古い内容を抽出結果へ保存する問題を修正",
+      "sha256": "90903a073f4b9ba5e62338aac2408a158ccc32e51b74535e2f4a244f680a227a"
+    },
+    {
+      "path": "changes/archive/1.1.0/fact-source-config-conflict.json",
+      "id": "fact-source-config-conflict",
+      "title": "解析結果の採用方法の保存時に設定の競合を検出",
+      "sha256": "28b7d474702565685576d7322eaaefed6efa6ae19a90d3f935199afc44ae2e5d"
+    },
+    {
+      "path": "changes/archive/1.1.0/family-symptom-subject.json",
+      "id": "family-symptom-subject",
+      "title": "家族や他者の症状を本人の状態に混ぜないよう修正",
+      "sha256": "da8e906cb47d818cfc60122eecd1b4e35bc7a614da0a9e27b5b148719ec6c260"
+    },
+    {
+      "path": "changes/archive/1.1.0/features-edit-conflict.json",
+      "id": "features-edit-conflict",
+      "title": "任意機能の設定と他の設定変更が重なった場合に保存を中止",
+      "sha256": "8f175bb5c9e32159f62a9f619625a81e4d5485de9b44a148aa3350c34bbc6dcf"
+    },
+    {
+      "path": "changes/archive/1.1.0/fix-restore-approval-exists.json",
+      "id": "fix-restore-approval-exists",
+      "title": "復元の承認がすでにあるときの失敗理由を明示する",
+      "sha256": "86dcb20fa36ba931fcaf743318924cf191eaf231bb3a6fa7deb201b192b254bd"
+    },
+    {
+      "path": "changes/archive/1.1.0/fix-update-discovery-ls-remote.json",
+      "id": "fix-update-discovery-ls-remote",
+      "title": "更新時の通信失敗を「タグが変わった」と誤って報告しない",
+      "sha256": "3a416f43a724ef513d30e0c884b86b960158b0108e7fee61147aad83715650bc"
+    },
+    {
+      "path": "changes/archive/1.1.0/guided-api-key-setup.json",
+      "id": "guided-api-key-setup",
+      "title": "外部解析のAPIキーを対話で設定",
+      "sha256": "2bb2be4135ceb069e935ed226d1691f82e1501a790904a7f1c3b1de98ceb70c9"
+    },
+    {
+      "path": "changes/archive/1.1.0/health-layout-counts.json",
+      "id": "health-layout-counts",
+      "title": "通知形式の診断集計で同じ配送履歴を繰り返し調べる処理を修正",
+      "sha256": "144b6ddd1a5f8082e52f4bbabeee3bb6560cd0cfe0a3b3478ac0bf3f6a0a2143"
+    },
+    {
+      "path": "changes/archive/1.1.0/hermes-credential-setup.json",
+      "id": "hermes-credential-setup",
+      "title": "Hermes版のSlack・Discord接続トークンを対話で登録・変更",
+      "sha256": "24ec8995388267a77be10a53bb117218bddf11c7e0dea8ba5ceeb0f6dc29597d"
+    },
+    {
+      "path": "changes/archive/1.1.0/hermes-credential-trusted-command.json",
+      "id": "hermes-credential-trusted-command",
+      "title": "Hermesへトークンを渡す前に実行ファイルの安全性を確認",
+      "sha256": "712549f48f15b6d1a58dd7f38a6393ac1e95cb75bd9913deaf50b0227f24daf1"
+    },
+    {
+      "path": "changes/archive/1.1.0/hide-own-stamp-line.json",
+      "id": "hide-own-stamp-line",
+      "title": "投稿ごとのスタンプ行から自分のスタンプ表示を外す",
+      "sha256": "b227a60045ecb5d725c71a88861d96c45f8c76d33726cf30fa2f5556e2d35a9b"
+    },
+    {
+      "path": "changes/archive/1.1.0/html-text-unclosed-tags.json",
+      "id": "html-text-unclosed-tags",
+      "title": "閉じていないHTMLを含む投稿の変換負荷を抑制",
+      "sha256": "7ba3f40330572a511f57d3c0f92cfc002d2bf4e5d45fe9e782b2d648112abd29"
+    },
+    {
+      "path": "changes/archive/1.1.0/inference-engine-v1.json",
+      "id": "inference-engine-v1",
+      "title": "推論エンジンv1.0の再処理と根拠保持を開発候補に追加",
+      "sha256": "a5e4dd95ef97450000d548c3b2f2ec1e3440e8df00394525234452195ee32511"
+    },
+    {
+      "path": "changes/archive/1.1.0/inference-v1-date-conflict.json",
+      "id": "inference-v1-date-conflict",
+      "title": "矛盾する記録日時を確定しないよう修正",
+      "sha256": "9609ac366aac2be2cb237613cf0f5df2149f2ecada2170ee6fd94c1871ff9b95"
+    },
+    {
+      "path": "changes/archive/1.1.0/initial-history-explicit-recovery.json",
+      "id": "initial-history-explicit-recovery",
+      "title": "初回履歴の取込みを再開できない問題を修正",
+      "sha256": "2243b01b562bd4bc28125553ea2f3f4224c8d8aa6898a31dd6f3223230ed4525"
+    },
+    {
+      "path": "changes/archive/1.1.0/initial-history-notifications.json",
+      "id": "initial-history-notifications",
+      "title": "初回履歴を患者ごとの進捗カードに集約",
+      "sha256": "c06b5d68cb44d3fd3069b90295769a93a4a773d39deb4eaeb1a8ca2b01d89db1"
+    },
+    {
+      "path": "changes/archive/1.1.0/initial-history-storage.json",
+      "id": "initial-history-storage",
+      "title": "新しく認識した患者の初回履歴をまとめて管理",
+      "sha256": "60059ce776d51566bf1e380920f8f0e4e54598aa0b1915f6ce2dcd5551f032c4"
+    },
+    {
+      "path": "changes/archive/1.1.0/initial-private-config.json",
+      "id": "initial-private-config",
+      "title": "初回インストール時に個人設定ファイルを作成",
+      "sha256": "b021f9cac692a26ebba9244574ef742dabb667381b4df792d6761a4f688918a8"
+    },
+    {
+      "path": "changes/archive/1.1.0/install-existing-config-race.json",
+      "id": "install-existing-config-race",
+      "title": "導入時の接続方法と復旧用 Python の設定保存で競合を検出",
+      "sha256": "82c52ca1f77e6616a64f5b32b0536dadd5bcef41ad083072f55e5cf139f6a990"
+    },
+    {
+      "path": "changes/archive/1.1.0/intervention-history-navigation.json",
+      "id": "intervention-history-navigation",
+      "title": "職種別の介入記録を古い投稿まで確認できるよう変更",
+      "sha256": "64ee7848cc39c62414338f05f2050382592822177c7cb404916894deb6189236"
+    },
+    {
+      "path": "changes/archive/1.1.0/intervention-reconcile-generations.json",
+      "id": "intervention-reconcile-generations",
+      "title": "旧世代の記録がある患者の介入予定を再照合",
+      "sha256": "1f26e59730544b71170afda5edd231adfc61527f42dc80dbd78cd2a0a4aeef64"
+    },
+    {
+      "path": "changes/archive/1.1.0/intervention-records.json",
+      "id": "intervention-records",
+      "title": "職種別の介入予定の記載を確認",
+      "sha256": "44948029126a3db14a0d3947f6e71faeea97be75fce71e30dd419b65c4f29209"
+    },
+    {
+      "path": "changes/archive/1.1.0/intervention-role-aliases.json",
+      "id": "intervention-role-aliases",
+      "title": "次回介入の職種表記を追加",
+      "sha256": "45d6f12b5e2482dd2286d34c8980dd262d7bfdcbd2131286e7f59b5c7949149c"
+    },
+    {
+      "path": "changes/archive/1.1.0/intervention-source-completeness.json",
+      "id": "intervention-source-completeness",
+      "title": "介入予定の履歴が未確認の場合にその状態を表示",
+      "sha256": "b094515cb794249ed76f2c23a4d8f715e1d7b86025ba87efc2f914dca4f4683d"
+    },
+    {
+      "path": "changes/archive/1.1.0/intervention-source-nul-limit.json",
+      "id": "intervention-source-nul-limit",
+      "title": "介入予定の読取りで不正な本文を保留",
+      "sha256": "54b66b6767c264d4665af96330d52514e47222c65a3b95bf831d27a10b10d1dd"
+    },
+    {
+      "path": "changes/archive/1.1.0/intervention-source-reconcile.json",
+      "id": "intervention-source-reconcile",
+      "title": "修復された投稿の介入予定を再確認",
+      "sha256": "94eac1eb33bc39d82fb463fe40336428d72c4f851aec8e1dc6db4a60fdd3ed63"
+    },
+    {
+      "path": "changes/archive/1.1.0/intervention-unresolved-dates.json",
+      "id": "intervention-unresolved-dates",
+      "title": "日付を確定できない介入予定の記載を表示",
+      "sha256": "d68691f170463b875806f2cdbf085fa26cd2dc9a4d12e46793a551318749fffc"
+    },
+    {
+      "path": "changes/archive/1.1.0/jev-backlog-budget-reserve.json",
+      "id": "jev-backlog-budget-reserve",
+      "title": "Jevのバックログ処理が1日の予算の1割を新着向けに残す",
+      "sha256": "de46af76636b0713965e152b7c1e13d503195e2489f4433d20df6da69364e9ea"
+    },
+    {
+      "path": "changes/archive/1.1.0/jev-daily-cap-10000.json",
+      "id": "jev-daily-cap-10000",
+      "title": "Jevの1日の上限を10000要求に引き上げ",
+      "sha256": "8a7ea1a9dc0ad0a5a571bfe268c7855f66a7717e687165f2c0aaf2e5980cb958"
+    },
+    {
+      "path": "changes/archive/1.1.0/jev-live-budget-range.json",
+      "id": "jev-live-budget-range",
+      "title": "手動のJev評価ツールが設定の範囲外の予算を拒否する",
+      "sha256": "9afb32bfbe7888583cc6d69271c7175cf58460421b26f8d3223381b5416593eb"
+    },
+    {
+      "path": "changes/archive/1.1.0/jev-prefilter-poison-meta.json",
+      "id": "jev-prefilter-poison-meta",
+      "title": "壊れた抽出metaが1行あるとJev評価ジョブが失敗する問題を修正",
+      "sha256": "8c67775ee4a50c267d0028994c900a4c58b11b1c8258d39192c6bbb0e2a7dd7b"
+    },
+    {
+      "path": "changes/archive/1.1.0/jev-request-efficiency.json",
+      "id": "jev-request-efficiency",
+      "title": "Jevへの要求数を減らす",
+      "sha256": "4a3193b0f4bb2e656d191097d5c2f90fc475fd04f34bcb635d556934e1f0e28b"
+    },
+    {
+      "path": "changes/archive/1.1.0/jev-reservation-recheck.json",
+      "id": "jev-reservation-recheck",
+      "title": "Jev送信前の対象と期限を再確認",
+      "sha256": "e96abb3d9ba16aa692b6e64f853b60a15238562c160c6d432ed35c72d7767526"
+    },
+    {
+      "path": "changes/archive/1.1.0/jev-semantic-null-off.json",
+      "id": "jev-semantic-null-off",
+      "title": "config.jsonのsemanticがnullのときJevを自動有効化しない",
+      "sha256": "793587782c3691ff46bff6e735480b5f3a749ff45878e4fbb16d4fe985dffa31"
+    },
+    {
+      "path": "changes/archive/1.1.0/key-auto-enable.json",
+      "id": "key-auto-enable",
+      "title": "APIキーの登録に応じてJevとAnthropicを自動で使用",
+      "sha256": "899b9f04cee34510c5d5a909be65a9d66a1448308ce7406c43b5daa61af2c345"
+    },
+    {
+      "path": "changes/archive/1.1.0/lineworks-credential-dialog.json",
+      "id": "lineworks-credential-dialog",
+      "title": "LINE WORKSの初回認証設定を対話で選択",
+      "sha256": "ab1003a79f7c0f551a85c29068210b6f83b62fa9fbb0fd6852b6d4ff28c4d4cb"
+    },
+    {
+      "path": "changes/archive/1.1.0/lineworks-diagnostics-and-standalone-init.json",
+      "id": "lineworks-diagnostics-and-standalone-init",
+      "title": "LINE WORKSアダプターの起動記録・常駐診断と、独立動作での認証設定に対応",
+      "sha256": "0598d5df6eceb16013daae2032e9ad306e346b1032492bcb49811b51003680d3"
+    },
+    {
+      "path": "changes/archive/1.1.0/lineworks-noecho.json",
+      "id": "lineworks-noecho",
+      "title": "LINE WORKSの秘密値を表示せず入力できない端末では停止",
+      "sha256": "763c45f17ab73e7a0786f4d194a4b650607d93feb5d074f259c08348fdead9e2"
+    },
+    {
+      "path": "changes/archive/1.1.0/lineworks-own-name-default.json",
+      "id": "lineworks-own-name-default",
+      "title": "LINE WORKSで自分の名前を毎回入力しなくてよいように変更",
+      "sha256": "77e99a79e9f5a5e6c1f6790f280371b3d8211fb2a658ebe8e205a7dfbdeddfe9"
+    },
+    {
+      "path": "changes/archive/1.1.0/lineworks-urgency-room-notice.json",
+      "id": "lineworks-urgency-room-notice",
+      "title": "LINE WORKSでも緊急度高の再確認通知を受け取れるように変更",
+      "sha256": "7db43cb4b3860dab956226916605b9442a4d004099d6b7b3f01f94c2126c78eb"
+    },
+    {
+      "path": "changes/archive/1.1.0/maintenance-retention-checkpoint.json",
+      "id": "maintenance-retention-checkpoint",
+      "title": "会計記録の保留中もデータベースの保守を継続",
+      "sha256": "d9c18d59dbaf80a746a519f6d14334e3beb022b35ef980c392968157eccb0517"
+    },
+    {
+      "path": "changes/archive/1.1.0/measurement-adjacent-corrections.json",
+      "id": "measurement-adjacent-corrections",
+      "title": "直後の訂正候補がある測定値を未確認として扱う",
+      "sha256": "b1a28f36aa2dd3f9df9f3f4a765e8dbc545afc5df433ed1683a53ab7a41fa8ef"
+    },
+    {
+      "path": "changes/archive/1.1.0/measurement-batch-error-boundary.json",
+      "id": "measurement-batch-error-boundary",
+      "title": "測定値の一括確認で予期しないエラーを見逃さない",
+      "sha256": "ac8ffd6cae9f0ae95303e3d5434efc9e4acc9a2c596dc00278e533614b731933"
+    },
+    {
+      "path": "changes/archive/1.1.0/measurement-correction-rollup.json",
+      "id": "measurement-correction-rollup",
+      "title": "添付と本文欠落を測定値の確認範囲に反映",
+      "sha256": "4ad949274acf3f2670af641680f89f0067306324508565d80ff14dcedd7ae547"
+    },
+    {
+      "path": "changes/archive/1.1.0/measurement-followup-distinction.json",
+      "id": "measurement-followup-distinction",
+      "title": "測定値と次回の確認を区別",
+      "sha256": "479befe71f56555197fbbbfdf382b18f710d1bc8f4cc8a13b35312a0ada82da0"
+    },
+    {
+      "path": "changes/archive/1.1.0/measurement-rollup-checkpoint.json",
+      "id": "measurement-rollup-checkpoint",
+      "title": "測定時点と原文を照合する集約処理を準備",
+      "sha256": "c8a62ed6c2c27423c9ccdf6481e975365026a65804fee49a69dc75e14a4f4fde"
+    },
+    {
+      "path": "changes/archive/1.1.0/measurement-snapshot-coverage.json",
+      "id": "measurement-snapshot-coverage",
+      "title": "検査値の入力範囲と患者のアクセス状態を確認する",
+      "sha256": "9b3a04d744576b7dfc33bdc6dc0b6cbec200106963950e89b6ae3b7c64998ab1"
+    },
+    {
+      "path": "changes/archive/1.1.0/measurement-source-safety.json",
+      "id": "measurement-source-safety",
+      "title": "検査値の参照元と訂正の確認を強化",
+      "sha256": "69b99f65b954e305474e366282dc89b3b822eb2168d922e5d4abed2d58f662ba"
+    },
+    {
+      "path": "changes/archive/1.1.0/measurement-view-consolidation-wip.json",
+      "id": "measurement-view-consolidation-wip",
+      "title": "測定値のローカル表示と患者まとめの導線を保存",
+      "sha256": "a0a88d225905560ee9723386b4bcdd3e304861d76adbf69c61036cec5a0de853"
+    },
+    {
+      "path": "changes/archive/1.1.0/metadata-compact-json.json",
+      "id": "metadata-compact-json",
+      "title": "診療情報の取得記録を小さく保存",
+      "sha256": "bcdfe9c2bbf6fbbf8e2ec1f179f1c48298c24f26f815ec9cea7476cf11dbb648"
+    },
+    {
+      "path": "changes/archive/1.1.0/new-invite-read-projects.json",
+      "id": "new-invite-read-projects",
+      "title": "未読がない新規招待患者の取込みと通知を修正",
+      "sha256": "66777e55105f42c72c0f1aa0b5921a567af93b061e552d9434066be420baa8b2"
+    },
+    {
+      "path": "changes/archive/1.1.0/notification-cancel-all-transports.json",
+      "id": "notification-cancel-all-transports",
+      "title": "未発行通知の取消をDiscord・LINE WORKSにも対応",
+      "sha256": "ee2fe701194d16b2a409f20eceb218417b3544c8743e8cb38d447828534027bf"
+    },
+    {
+      "path": "changes/archive/1.1.0/observation-series.json",
+      "id": "observation-series",
+      "title": "検査・観測の記載を項目ごとに確認",
+      "sha256": "987fa230e4e6caf466d004980972643dfe995a50e9fb9e16a7f89a9bc8e3f629"
+    },
+    {
+      "path": "changes/archive/1.1.0/ops-check-key-and-admission.json",
+      "id": "ops-check-key-and-admission",
+      "title": "checkのJevキー未取得を警告にし、受付制御の検査を設定値に合わせる",
+      "sha256": "216f27fab5721ecc774643218720306cac824ac26b6e93d8214621ebcbb87bdd"
+    },
+    {
+      "path": "changes/archive/1.1.0/ops-env-duplicate-keys.json",
+      "id": "ops-env-duplicate-keys",
+      "title": ".envに同じキーの行が複数あっても init で1行に直す",
+      "sha256": "2b0ad1ba2169ca14dd11a99331a85d0fe55eafabf9f017b7f3183995d53d751b"
+    },
+    {
+      "path": "changes/archive/1.1.0/optional-feature-defaults.json",
+      "id": "optional-feature-defaults",
+      "title": "初期設定・更新に任意機能（CSDC）のセットアップ案内の選択を追加し、既定は省略",
+      "sha256": "bc5621bc877a2429eee5b8d92850246ace07dfa141bff481601d3a1651cd2439"
+    },
+    {
+      "path": "changes/archive/1.1.0/outpatient-arrival-candidates.json",
+      "id": "outpatient-arrival-candidates",
+      "title": "外来へ行った記載を原文付きの候補として保持",
+      "sha256": "723d4f7cf2dcc61f5faefa95f328e56827960db67f22d49027ab02c3c08c9acd"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-context-history-selection.json",
+      "id": "patient-context-history-selection",
+      "title": "以前の患者情報を読み取る際の重複した読込みを削減",
+      "sha256": "cd3f425649ef2eb547eee19fd3247220963eae177e46552cb3b482fecbca5ac4"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-context-history-view.json",
+      "id": "patient-context-history-view",
+      "title": "患者情報の経過に旧連携サマリーと取得待ちの理由を表示",
+      "sha256": "582d34d5700dc963fd4059b8094a60248ed7269237d69b67d00c1dda835543ca"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-context-midnight-workday.json",
+      "id": "patient-context-midnight-workday",
+      "title": "患者コンテキストの処理日を日本時間の0時に切替",
+      "sha256": "bf0c3d6a3f2ca04e7ff412e56a223b7e756660a0dc96c7d79de1710884514dca"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-context-read-snapshot-sharing.json",
+      "id": "patient-context-read-snapshot-sharing",
+      "title": "患者情報の表示と進捗確認で重複する照合を削減",
+      "sha256": "f4403acda236e06e017e10873f9aeff2f07e346ec6296140e952beaea26e02a9"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-context-refresh-names.json",
+      "id": "patient-context-refresh-names",
+      "title": "患者コンテキストの処理名を終日更新の動作に統一",
+      "sha256": "db8a6e65685b4eb8075e06486301b48f6e86c9b6584f03295ec4a6e8827124c4"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-context-view-and-shadow.json",
+      "id": "patient-context-view-and-shadow",
+      "title": "Anthropicの切替えや鍵の削除で患者コンテキストが非表示にならない",
+      "sha256": "ecab1cea7b41d69349dc9ce1dcb52a6967e5d6879b85781e33e45e56d47a3f43"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-quality-policy-requeue.json",
+      "id": "patient-quality-policy-requeue",
+      "title": "品質判定の設定変更後に患者要約を再確認する",
+      "sha256": "f7a28e660351d6cfcb79a0888324cdb161f147e8217eae0a0eec92283b675768"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-source-finite-repair.json",
+      "id": "patient-source-finite-repair",
+      "title": "原典照合の不合格を一度だけ修復して再確認",
+      "sha256": "30e3c69126f0c0133edca2aa8755b1c53aa4ac4d2aef9e8fa32e79dda0db06ef"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-source-jev-quality.json",
+      "id": "patient-source-jev-quality",
+      "title": "原典ごとのJev照合を患者コンテキストの完了条件に追加",
+      "sha256": "38f6927c1a2a6f4b16a48daf49d32b94fbe2ddff58ddbf994e9d5d12b68b2e25"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-source-question-receipts.json",
+      "id": "patient-source-question-receipts",
+      "title": "原典の質問と元回答を結び付けて再抽選を防止",
+      "sha256": "745fd16094503816106945ebcc80f87ba872c5555bc15051b63804840661a87d"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-source-scan-proof-reuse.json",
+      "id": "patient-source-scan-proof-reuse",
+      "title": "原典の照合で保存記録の重複走査を削減",
+      "sha256": "fdab2d48149dac40e04dde5f46791a027c6fcc26e327ba1f9716678feabf2a40"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-summary-acquisition-scheduling.json",
+      "id": "patient-summary-acquisition-scheduling",
+      "title": "患者要約の処理順序と履歴取得の完了判定を修正",
+      "sha256": "11afd7ffe3132afcdecbb9b913e23f4dbe79e5b94da167e36ec34a0d5e471f9f"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-summary-quality-consolidation-wip.json",
+      "id": "patient-summary-quality-consolidation-wip",
+      "title": "Jevによる患者要約の品質判定と再処理の開発差分を保存",
+      "sha256": "06ad87895bb45ade26bf54ce7c158bd92733bb538d58684bb83e449dfc600406"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-summary-request-receipts.json",
+      "id": "patient-summary-request-receipts",
+      "title": "Jevの結果不明と不合格を再判定してしまう経路を修正",
+      "sha256": "cfe10954843307e4153a09016cac63445284b4a775ade6f718590e6795474ea6"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-timeline-evidence.json",
+      "id": "patient-timeline-evidence",
+      "title": "患者の経過と依頼への返信を根拠付きで表示",
+      "sha256": "ef4cc3a054954bff50006a9d86e29ac9d1f23b2c76b726764357f9dc67c244f1"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-view-source-limits.json",
+      "id": "patient-view-source-limits",
+      "title": "患者情報の原文照合で過大な本文の読込みを抑制",
+      "sha256": "fafe9dde2c7e6015a9c30fcc48b3ea3c07fe1b4c521d43450fc308a3b4544520"
+    },
+    {
+      "path": "changes/archive/1.1.0/professional-intervention-records.json",
+      "id": "professional-intervention-records",
+      "title": "職種ごとの次回介入を投稿に結び付けて保存",
+      "sha256": "ebbc0dda7f94f86b0866f54c23737b1698f5131c6b221ad92aaa5a80db86620c"
+    },
+    {
+      "path": "changes/archive/1.1.0/reconcile-seed-writer-race.json",
+      "id": "reconcile-seed-writer-race",
+      "title": "履歴取込み後の確認ジョブ登録で起きるDB書込み競合を修正",
+      "sha256": "0302e4b74e2e6d8a4ff89040db3b7b64db123c7aafbbc01a489adf85283d73a4"
+    },
+    {
+      "path": "changes/archive/1.1.0/recovery-transport-envelope.json",
+      "id": "recovery-transport-envelope",
+      "title": "SlackとLINE WORKSのカード本体復旧をCLIから受け付ける",
+      "sha256": "e69bcadee0a7fb82c29944d07e590944f3a5b46a5547dd632105e2313745551a"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-backup-b34.json",
+      "id": "refactor-backup-b34",
+      "title": "バックアップ処理の重複計算と未使用の引数・別名を整理（挙動は変更なし）",
+      "sha256": "a7b64fbb9af37554c9a039f62575d0b41440b5bbb8b9c167ba4980b4763d7d57"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-c1-envelopes-b26.json",
+      "id": "refactor-c1-envelopes-b26",
+      "title": "外部送付用の分割データの検証で同じ集計を繰り返さない整理（判定は変更なし）",
+      "sha256": "59f1a380f787ae8121d18f03b7229682960a4f590a7f176f6217c05132df59e5"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-chat-action-contracts.json",
+      "id": "refactor-chat-action-contracts",
+      "title": "Slack・Discord の操作確定と Slack のコマンド判定の重複を整理",
+      "sha256": "c462d81302a2aee00549363f92c0ea634b3c0ae09105bff292081bdb4e1c8a17"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-chat-delivery-contracts.json",
+      "id": "refactor-chat-delivery-contracts",
+      "title": "Slack・Discord の配信で投稿単位の判定とヘッダー判定を共通化",
+      "sha256": "e11e5c03fd757e0453963b4f12f515678b5ef73abe45e4bcbdabbb42c0467d5b"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-core-low-b22.json",
+      "id": "refactor-core-low-b22",
+      "title": "収集・抽出・通知・LINE WORKS・導入スクリプトの重複を整理（挙動は変更なし）",
+      "sha256": "f470dbd5cc4a35ebf5657d9822d9b559d5a3acbf69447ffe816f19a39d23b59d"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-download-url-b27.json",
+      "id": "refactor-download-url-b27",
+      "title": "添付ダウンロードの URL 許可判定を1か所にまとめる整理（判定は変更なし）",
+      "sha256": "325e4bba1edae4587551036c11a1cb1d850804e0a93dfa23a4394d64334c0a57"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-drug-info-contracts.json",
+      "id": "refactor-drug-info-contracts",
+      "title": "公開医薬品情報の照会と同梱マスターの読取りの重複を整理",
+      "sha256": "52941c42d81dbf85b59412d5a0f97fd999d5b91fc2b2a723e8edacf83f84b9bc"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-export-contracts.json",
+      "id": "refactor-export-contracts",
+      "title": "外部連携の送信・受信の検証と記録読取りの重複を整理",
+      "sha256": "e098bc43ea8b04b11ecb2ac145eb06895753ca48ca265003691a8658904c854f"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-extraction-boundaries.json",
+      "id": "refactor-extraction-boundaries",
+      "title": "抽出処理の重複と無駄な読取りを整理（判定結果は変更なし）",
+      "sha256": "b6b4d564df3c148c654d77d528dc26f8a07baddeabc5195c762a29168bfd514b"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-foundation-fixtures.json",
+      "id": "refactor-foundation-fixtures",
+      "title": "保守用の共通処理を整理（利用者向けの挙動は変更なし）",
+      "sha256": "29aae6478e9e232b6435dc4189dc144cbe178392637b49ea5d7e26f9d37819f2"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-ingest-parse-contracts.json",
+      "id": "refactor-ingest-parse-contracts",
+      "title": "MCS取得処理の重複を整理（利用者向けの挙動は変更なし）",
+      "sha256": "fd18356aeda3afb9ef6d32f24d027893678395b2ff2ed5a76344d7af060a23b2"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-ledger-b35.json",
+      "id": "refactor-ledger-b35",
+      "title": "連携サマリーの保存を取得予定の解除と同時に確定し、台帳の重複処理を整理",
+      "sha256": "de85eae6dca5f3a1a8b2d2edc285e0fb21c001e0178e9d0d64c6b7048c35d344"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-ledger-schema-b36.json",
+      "id": "refactor-ledger-schema-b36",
+      "title": "台帳のスキーマ版の更新を移行処理だけに一本化（形式は変更なし）",
+      "sha256": "c35c182248baa0703651576a6604e73a52cec902c7ab91487dc6a48c36baf0dd"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-lifecycle-b38.json",
+      "id": "refactor-lifecycle-b38",
+      "title": "常駐処理の確認と独立実行の監督処理の重複を整理（判定は変更なし）",
+      "sha256": "a8e3ef72821731aa0b384d28f03f782d362bca9b7b229ec846b7debf3acf4703"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-lineworks-helpers-b32.json",
+      "id": "refactor-lineworks-helpers-b32",
+      "title": "LINE WORKS 接続の重複した判定と保存先の指定を整理（挙動は変更なし）",
+      "sha256": "907c2bf590a15fb7379eea9c967cb7d2f374475bc448cfe88fff388b6a805490"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-llm-signal-stamp-contracts.json",
+      "id": "refactor-llm-signal-stamp-contracts",
+      "title": "LLM の受付・可用性判定、確認候補の判定、スタンプ表示の未使用部分と重複を整理",
+      "sha256": "b3f7cc816c4ddd284c15abd9abcc12b0a9418173016dcb838ed66403dad81a2f"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-medication-read-contracts.json",
+      "id": "refactor-medication-read-contracts",
+      "title": "薬剤言及履歴・照合・辞書参照の重複した読取りを整理",
+      "sha256": "b37d7324a22bdc46735b0f84ea91cef140b573f15828e3210ea15ec7c8e67e09"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-notification-card-contracts.json",
+      "id": "refactor-notification-card-contracts",
+      "title": "通知カードの組み立て処理の重複を整理（利用者向けの挙動は変更なし）",
+      "sha256": "47577a833d0255f2e9449485db6a2bf45d4e42b936f85506a074f7ba22094585"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-notification-dispatch-contracts.json",
+      "id": "refactor-notification-dispatch-contracts",
+      "title": "通知の送信・まとめ処理の重複を整理（利用者向けの挙動は変更なし）",
+      "sha256": "7d23e37ac0e86cd745d56d00ed0efc2cada4840d407ad9e58ff6eae7ebc21b1f"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-notification-display-reads.json",
+      "id": "refactor-notification-display-reads",
+      "title": "通知カードと患者まとめの描画で同じ読取りの繰り返しを削減",
+      "sha256": "f86fc2ad8eac52abe608f5a976b8689839ff6c20f32880fa823a18c977c72f55"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-notification-receipt-contracts.json",
+      "id": "refactor-notification-receipt-contracts",
+      "title": "通知の配送・受領処理の重複を整理（利用者向けの挙動は変更なし）",
+      "sha256": "3a00abe990d9c380f1ad9bd044685d1052acd92d028da174e3700fa5b81c7b33"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-ops-helpers-b33.json",
+      "id": "refactor-ops-helpers-b33",
+      "title": "運用コマンドのエラー表示と JSON 検査を共通処理にそろえる整理（挙動は変更なし）",
+      "sha256": "128072d0507054d54a1565616d77b25d952cbfb1fcdb156b20ac755284c0c799"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-patient-context-contracts.json",
+      "id": "refactor-patient-context-contracts",
+      "title": "患者文脈・夜間要約の処理の重複を整理",
+      "sha256": "908104763f770de1f374ffd3c8e1cde283116ab0544347c1a0524b657cb89c8f"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-query-and-test-foundation.json",
+      "id": "refactor-query-and-test-foundation",
+      "title": "照会処理の重複を整理（利用者向けの挙動は変更なし）",
+      "sha256": "177930e8debf18ad2f2df90935666df60ac8b57f0ee86d0b116b3e1ea246810b"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-read-model-b25.json",
+      "id": "refactor-read-model-b25",
+      "title": "患者文脈の根拠一覧で不要な読取りを省く整理（表示内容は変更なし）",
+      "sha256": "2cf4081a989669dd70c0d6481b94f49f414445b4028e0b194f17c4d89e8cebfa"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-read-view-contracts.json",
+      "id": "refactor-read-view-contracts",
+      "title": "閲覧・統計処理の重複を整理",
+      "sha256": "5814d64be2e2a41fa733627019dfdc2233c443774e74170c9e9964ac5a302c08"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-remaining-foundation.json",
+      "id": "refactor-remaining-foundation",
+      "title": "保守用の共通処理とテスト補助を追加整理（利用者向けの挙動は変更なし）",
+      "sha256": "8a3d4e0baee8d7da5ce120a5a109512697e8e6d15f37a726c3f72e8b494bf57f"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-remove-config-generation.json",
+      "id": "refactor-remove-config-generation",
+      "title": "独立実行用の使われていない設定変化の検出処理を削除（動作は変更なし）",
+      "sha256": "0bfe2ff234395b3c779665252ad133a27ef5cc5149614f308f77e108eb419add"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-reply-job-thread-window.json",
+      "id": "refactor-reply-job-thread-window",
+      "title": "返信の取り直しで使われていない取得方法の分岐を削除（動作は変更なし）",
+      "sha256": "b543c2a7a39b32f9832004d265dfcc2d56345bedf4c2e7cc8905a5a3e9ecf9dd"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-request-loops-b24.json",
+      "id": "refactor-request-loops-b24",
+      "title": "依頼ループの関連依頼を患者ごとに1回で読むように整理（表示内容は変更なし）",
+      "sha256": "f58719e68960b04fa54e6e30c73b4f40a86883205f238c194e647b511e6e9cd8"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-s29a-config-scope.json",
+      "id": "refactor-s29a-config-scope",
+      "title": "通知の対象患者範囲の設定チェックを1か所にまとめる（判定は変更なし）",
+      "sha256": "91469e595ddfa7b8bca03927e63a499f01c1d8f183df1e3e7749a510d68084d2"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-s29b-maintenance-imports.json",
+      "id": "refactor-s29b-maintenance-imports",
+      "title": "バックアップ処理の import の重複を整理（動作は変更なし）",
+      "sha256": "b9dbcfd81a98f13acc85c46e4675a5767fb918604f48b5b859d3bd144de77d61"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-s33b-recover-mode-reads.json",
+      "id": "refactor-s33b-recover-mode-reads",
+      "title": "復旧処理が1つの判断の中で実行モードを読み直さないようにする（動作は変更なし）",
+      "sha256": "7fdfb16d430ad4dc2b0de1c2ca4a1a58744ba4c5ac3ba59a98784df12ac44150"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-s33b-update-helpers.json",
+      "id": "refactor-s33b-update-helpers",
+      "title": "更新処理の重複した確認を共通の処理にまとめる（動作は変更なし）",
+      "sha256": "688ebf4e0bb267bcf417fe8a9128b6f05c56ef7470fd1c62b4a35d13c36001c7"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-s33c-upgrade-entry-and-check.json",
+      "id": "refactor-s33c-upgrade-entry-and-check",
+      "title": "更新の入口と更新確認の重複した処理をまとめる（動作は変更なし）",
+      "sha256": "e0c842813dfa42a61f3a23f9c211e773270e3178c4bdb6db200bb17ca42b4535"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-s33d-updater-helpers.json",
+      "id": "refactor-s33d-updater-helpers",
+      "title": "更新処理の繰り返し処理を共通の処理にまとめる（動作は変更なし）",
+      "sha256": "7033e8d5cd8defab0d684c3d377be3cfc8e863d1965bbc18a43902ce978e9370"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-s7-lowfix.json",
+      "id": "refactor-s7-lowfix",
+      "title": "llama.cpp の再起動スクリプトが空白を含む導入先でもログを正しい場所に書く",
+      "sha256": "0e73935a7b8d65ad5d2ce5632cf09fe5eee988f34bf0150c3f97468f0a15e0ec"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-semantic-evaluation-contracts.json",
+      "id": "refactor-semantic-evaluation-contracts",
+      "title": "意味チェックの評価・候補判定の重複を整理",
+      "sha256": "6026e41d1f58ca276f99af6152fbcbb45364a4e02f5962daafacaf64c75366a2"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-semantic-execution.json",
+      "id": "refactor-semantic-execution",
+      "title": "意味チェックの薬剤詳細判定で履歴の読み直しを削減",
+      "sha256": "05b44b0c80044224de096974925a39cfc67f4e9b026c97d3519f5cfca646eaec"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-semantic-extraction-paths.json",
+      "id": "refactor-semantic-extraction-paths",
+      "title": "意味チェックの抽出経路で設定・候補・正規化の読み直しを削減",
+      "sha256": "624839d71c4bc199a6f090d03f3d83d3fc348b095ad3769a2786c7f114c1dda9"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-semantic-qc-low-b23.json",
+      "id": "refactor-semantic-qc-low-b23",
+      "title": "意味チェックの品質確認（QC）・判定接続・要約の定型文の重複を整理（挙動は変更なし）",
+      "sha256": "c478f3fb2560d2c7f0709e90e8454b1313121e1430c0b870d9aaed6af906b229"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-setup-b37.json",
+      "id": "refactor-setup-b37",
+      "title": "設定コマンドのヘルプ処理と設定項目の初期化の重複を整理（表示は変更なし）",
+      "sha256": "0f3902ce2a6af379903c2620a4c4137cfc6e7cdca445c8a181f18e064d2e9209"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-stamp-write-b29.json",
+      "id": "refactor-stamp-write-b29",
+      "title": "スタンプ送信の確認処理と一時ファイル名の定義を整理（承認・判定は変更なし）",
+      "sha256": "52c981f497368b586dc29ba9ccc4c59f3e8c4d85a6616dae23bac1d9b6661a9b"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-standalone-attachments-b31.json",
+      "id": "refactor-standalone-attachments-b31",
+      "title": "独立接続の添付送信で読取り時にも保存先を確認",
+      "sha256": "0e83677058c49638047606109c3531f4b91db9ae55ce92588f5085ac05f56891"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-standalone-config-contracts.json",
+      "id": "refactor-standalone-config-contracts",
+      "title": "独立実行の初期設定・封入添付・設定変更の検知を共通処理に整理",
+      "sha256": "c4429472c02dbbe7f2240a922fc5cfc2f3e4d47b9ad7f5cdff774a4a8c558729"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-structured-view-b30.json",
+      "id": "refactor-structured-view-b30",
+      "title": "投稿の構造化表示で元投稿の読取りを1回にまとめる整理（表示は変更なし）",
+      "sha256": "b08c42de218cc7a3b43587b6f80ea46bee701a1dc903b1f7dabbe9b0b0e0f775"
+    },
+    {
+      "path": "changes/archive/1.1.0/refactor-worker-hooks-b28.json",
+      "id": "refactor-worker-hooks-b28",
+      "title": "Slack・Discord 接続の終了処理と配信の判定の重複を整理（挙動は変更なし）",
+      "sha256": "2ed6bfcb721f01c894f76e7fe1f7f44bd50c25e1aa8b4f50297159411b888a4c"
+    },
+    {
+      "path": "changes/archive/1.1.0/reply-card-ownership-hotfix.json",
+      "id": "reply-card-ownership-hotfix",
+      "title": "返信カードの本文・操作・配送先を投稿ごとにそろえる",
+      "sha256": "dc34f4691485f0ef582a1cc0b78171bfc0ffff35cdc4d5a3280355f44a2ce874"
+    },
+    {
+      "path": "changes/archive/1.1.0/reply-card-wake-after-parent-thread.json",
+      "id": "reply-card-wake-after-parent-thread",
+      "title": "親カードのスレッドができたら返信カードをすぐ送る",
+      "sha256": "40f98865767b2bc9936b4c36c70e9f22c0f8131d6294a115da34ddca55d80f16"
+    },
+    {
+      "path": "changes/archive/1.1.0/request-evidence-matching.json",
+      "id": "request-evidence-matching",
+      "title": "原文に書かれた複数の依頼を区別する",
+      "sha256": "be68942f7adee894bf35dd74d900f3ff907e324b0570854df8aa88590bc6805a"
+    },
+    {
+      "path": "changes/archive/1.1.0/restore-artifact-consent-binding.json",
+      "id": "restore-artifact-consent-binding",
+      "title": "復元の承認を推論履歴の変更にも結び付ける",
+      "sha256": "7e0370a395c46f448ef3fcc1368f555a07a0533411322672474b18a070c7cee6"
+    },
+    {
+      "path": "changes/archive/1.1.0/restore-loss-display.json",
+      "id": "restore-loss-display",
+      "title": "復元承認前に損失報告の範囲を案内",
+      "sha256": "2c144ee52a51158c0ee5389d1d8a5597ee140e742b9b972ed8bfbd23373fc741"
+    },
+    {
+      "path": "changes/archive/1.1.0/restore-loss-read-failures.json",
+      "id": "restore-loss-read-failures",
+      "title": "復元時の損失報告で読取りエラーを検出します",
+      "sha256": "7039fcaa7906444faa53e03036b56765cecd57de951f71df18d8b3f53b740153"
+    },
+    {
+      "path": "changes/archive/1.1.0/rollup-empty-proof-stream.json",
+      "id": "rollup-empty-proof-stream",
+      "title": "空本文を含む患者記録の集約を整理",
+      "sha256": "18bc1f236b5cf78aadd6da982068d5e8eae3493e5cd0b83811e764c38f44232a"
+    },
+    {
+      "path": "changes/archive/1.1.0/rollup-freshness-consolidation-wip.json",
+      "id": "rollup-freshness-consolidation-wip",
+      "title": "患者集約の現行性を確かめる処理を保存",
+      "sha256": "28cf176b5ea30e77d7dbdcda21465ece9472a5f5cd773dbb42b5493cf9e9e46f"
+    },
+    {
+      "path": "changes/archive/1.1.0/rollup-pulse-label.json",
+      "id": "rollup-pulse-label",
+      "title": "患者の記録まとめに脈拍の表記を反映",
+      "sha256": "2519131fce485a3f735fd0a4c5a43a646fea4d51771a7bbcf6fde267068c78d1"
+    },
+    {
+      "path": "changes/archive/1.1.0/rollup-source-pages.json",
+      "id": "rollup-source-pages",
+      "title": "患者まとめの履歴読取りを分割",
+      "sha256": "ba26585bc797cc0fac46774dec6dfc2dc3b293954ef250faf402045ec91d7b9d"
+    },
+    {
+      "path": "changes/archive/1.1.0/rollup-transaction-ownership.json",
+      "id": "rollup-transaction-ownership",
+      "title": "患者集約で呼出元の未確定データを確定しないよう修正",
+      "sha256": "0eeea3764ee087a944b3d5fd0c121bd05fa8b4dcd5f6158e53589729866d3888"
+    },
+    {
+      "path": "changes/archive/1.1.0/schedule-mention-unconfirmed.json",
+      "id": "schedule-mention-unconfirmed",
+      "title": "予定に関する記載を訪問前の確認ノートへ表示",
+      "sha256": "710186f8aa37c7b24deef6b61a14ce558b133c224bfdb48e265ce5fbad11be7a"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-config-write-conflict.json",
+      "id": "sdc-config-write-conflict",
+      "title": "状態監視の設定保存で他の変更を保護",
+      "sha256": "ce3851d85258db0ca512277fed9870dbc2673a94df03f99d8c9885b2f9fee6a7"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-consent-auto-connect.json",
+      "id": "sdc-consent-auto-connect",
+      "title": "状態監視の同意を保存して管理者承認後に接続",
+      "sha256": "2e59b256e12cf63f9a26e097b11e24296fdbfe814b818fc258820a12e07eb365"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-customer-mode.json",
+      "id": "sdc-customer-mode",
+      "title": "顧客の状態監視をKeychainと別の私有領域で登録できるようにする",
+      "sha256": "82f7e1c6702efd8f9258b3db6908c5c8c73a0a954d85d3a3a8e757346730a09d"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-default-off-tick-guard.json",
+      "id": "sdc-default-off-tick-guard",
+      "title": "設定が無効なら残ったCSDCジョブからも新しい送信を開始しない",
+      "sha256": "2d33f3d0fa20cc1c8b60e3f444169b1de023884064405deebf955648c38cd83c"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-diagnostic-event-sender.json",
+      "id": "sdc-diagnostic-event-sender",
+      "title": "固定診断コードを別同意で送信・停止",
+      "sha256": "3826e15e3e73707d10a79a34ae51e7a409ef3e6e4b3f08e2736d49d752ec33f4"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-diagnostics-launcher.json",
+      "id": "sdc-diagnostics-launcher",
+      "title": "mcsコマンドからdiagnosticsを実行できるように修正",
+      "sha256": "51b1c0cd619a45453f391f9066b7b46edf8efd1de3178effce8b4c1ebc9811b9"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-initial-provision-caller.json",
+      "id": "sdc-initial-provision-caller",
+      "title": "初回の監視設定を本人確認付きで取り込み",
+      "sha256": "a97403342a0e92b467dc88794c738b95fc3acd35652d65f21b4a639c4a541540"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-inventory-transport.json",
+      "id": "sdc-inventory-transport",
+      "title": "公開構成情報の送信を通常監視とは別の同意で利用可能に",
+      "sha256": "8f62b109c896b9a1f6b9717104020b5b6000bbb8405c9fb1bc47abe5dba56fad"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-inventory.json",
+      "id": "sdc-inventory",
+      "title": "公開依存関係だけを採取する防御センター向け構成情報を追加",
+      "sha256": "1ab4164fd17092fddf4014a92d7bc0752cf5fa0e30c0abb48c6a6de78bcca48e"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-keychain-lost-reap-hold.json",
+      "id": "sdc-keychain-lost-reap-hold",
+      "title": "資格情報読取りの子の終了確認を失った場合の無限待機を修正",
+      "sha256": "1742efede60ea961333090463e6c43fdf3c23a72faa2214495b86a62b95e60b7"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-keychain-mutation-owner.json",
+      "id": "sdc-keychain-mutation-owner",
+      "title": "顧客Keychainの書込み・削除を記録付きの1回操作に変更",
+      "sha256": "cb6ee0fb7fa115eb338797af4ef2209c3fe2fc414bf875844f697db64909bed4"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-keychain-read-owner.json",
+      "id": "sdc-keychain-read-owner",
+      "title": "顧客用資格情報の通常読取りと終了処理を追跡",
+      "sha256": "639b9467ae13a5173ae30ae6a053e168f18c7a2347276cf12055c9c8e30fcf32"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-keychain.json",
+      "id": "sdc-keychain",
+      "title": "顧客向け防御センター資格情報のKeychain保存基盤を追加",
+      "sha256": "6010794ac5958ab3f5bdbe51ec5439854e4920154a73c693151465ac7fc7ebc4"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-managed-monitor-planning.json",
+      "id": "sdc-managed-monitor-planning",
+      "title": "再起動準備で現在の管理済み接続先を照合",
+      "sha256": "d16e93dde3c309c4728e68062a4b6f974adc73bae416623d2557917e9ae34410"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-managed-restart-owner.json",
+      "id": "sdc-managed-restart-owner",
+      "title": "管理された再起動配布と実行元の照合を修正",
+      "sha256": "7923ff206a987c148e5f7a45bd8f4957ea8785d47a3f7744a6f23958b4a75cbd"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-managed-support-profiles.json",
+      "id": "sdc-managed-support-profiles",
+      "title": "個別配布した支援・再起動設定を同じ端末で利用",
+      "sha256": "a860b0aa0d06654612dcd0df24ffd676f69b6bb04b50077987ec0f3f124a5531"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-passive-diagnostic-boundaries.json",
+      "id": "sdc-passive-diagnostic-boundaries",
+      "title": "受動診断の読取り範囲と締切を維持",
+      "sha256": "4497961ed357e8c56e9b933651c24a088c1ab1a96f8c0d1b40b8d265fd72eb2a"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-provision-diagnostics-contracts.json",
+      "id": "sdc-provision-diagnostics-contracts",
+      "title": "初回接続設定と診断イベントの受入項目を固定",
+      "sha256": "c82da201edda35985ad58255a39dd79a5f4ddaac2def9fbc17d2b3bcd1b3a326"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-provision-operability.json",
+      "id": "sdc-provision-operability",
+      "title": "再起動準備の未導入時処理と配布照合の時間切れ案内を改善",
+      "sha256": "965f23a1d807b0caa897641d2fe70f88c1f0f03a398e7adbadcee0fe2c064c71"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-release-apply.json",
+      "id": "sdc-release-apply",
+      "title": "遠隔更新の契約検査と固定依存の導入部品を追加",
+      "sha256": "e94cb5522d6c17de189fd8f803ae2402b201044cf79b342c3cb040210520204d"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-release-live-owner.json",
+      "id": "sdc-release-live-owner",
+      "title": "開発用の署名付き更新経路を接続",
+      "sha256": "0a908d125bea8712a27355f3bfc235da9f42c556ee473027f1b7ccc282b4e078"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-restart-contract.json",
+      "id": "sdc-restart-contract",
+      "title": "再起動候補の純粋な契約検証部品を追加",
+      "sha256": "03de7ce9e463c143091705ff9462c6f7d4e465aafe969ef67464f6a5997a54e0"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-restart-control.json",
+      "id": "sdc-restart-control",
+      "title": "再起動支援8ルートの純粋な要求・応答検証を追加",
+      "sha256": "ea7ed05999e33fb9ff2b9ecabb1441037ddb5a74ad4f73e200db5525e8480349"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-restart-execution-state.json",
+      "id": "sdc-restart-execution-state",
+      "title": "再起動の受付と一度の開始判断を生存中の担当へ固定",
+      "sha256": "e3485f2f0ff6655fa8b21809567e873c88678fa125f53897a7d5fdee20058b45"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-restart-keychain-owner.json",
+      "id": "sdc-restart-keychain-owner",
+      "title": "遠隔再起動の鍵確認を専用プロセスで追跡",
+      "sha256": "57a77656b0378d775f6650bafed3d84918a01ece90c705cc0d44821eb000cb71"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-restart-local-state.json",
+      "id": "sdc-restart-local-state",
+      "title": "再起動専用の変更同意と受付証拠をローカルに固定",
+      "sha256": "8fb657eeff3c0d917f99559c070948d46c07133b2ec8c8828a818f31bc1dee7f"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-restart-planning-client.json",
+      "id": "sdc-restart-planning-client",
+      "title": "再起動準備と個別変更同意を前景CLIへ接続",
+      "sha256": "4a92d856849c81ad6dff052e8f34f7771f2768bf557e101a427e70b52a0f4301"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-restart-planning-runtime.json",
+      "id": "sdc-restart-planning-runtime",
+      "title": "再起動の準備確認で稼働中Runtimeの状態を照合",
+      "sha256": "414656b702cabc0f559dd198a93e09ac028caed8bdac31b93ff378f67234b81d"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-restart-registration-contract.json",
+      "id": "sdc-restart-registration-contract",
+      "title": "再起動の初回登録情報を取得する契約を追加",
+      "sha256": "7b9c6313c023d3ed5b71cfa7f7446ae2468788393c8f6a29b43179ddc9445bd8"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-restart-registration-terminal-errors.json",
+      "id": "sdc-restart-registration-terminal-errors",
+      "title": "再起動登録の取得が拒否された場合の再試行分類を修正",
+      "sha256": "10e036782735ecf5d0ad75152d83efa68d38efe1ea82fb04dbb116024f8b1f52"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-restart-signatures.json",
+      "id": "sdc-restart-signatures",
+      "title": "再起動専用の署名と独立した対象bindingを検証",
+      "sha256": "5a770f909225a9b9f5837a0b9ead25122df2dc9a4bb8d8ffcd7b4005696b536d"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-restart-transport.json",
+      "id": "sdc-restart-transport",
+      "title": "再起動支援専用の通信部品を追加",
+      "sha256": "7445167839d7abf41c2a6fbb3ba61adc0c61144157fccd25205be769f0345b33"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-runtime-restart-carrier.json",
+      "id": "sdc-runtime-restart-carrier",
+      "title": "遠隔支援の再起動通信を安全に回収する基盤を追加",
+      "sha256": "6eb039fc2e2f30da7140d7fa3ae1dc31cb523b810fab7399403df2a4de14b8f0"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-signature-process-owner.json",
+      "id": "sdc-signature-process-owner",
+      "title": "署名検証の中断時に子プロセスの回収完了を待つ",
+      "sha256": "a4e10769783b7d5c72518116131110963e15a15897098eea1ebe0ca6ecd8a028"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-support-consent-client.json",
+      "id": "sdc-support-consent-client",
+      "title": "遠隔支援の内容確認・同意登録・ローカル停止を追加",
+      "sha256": "5850e97ef14ec3341010845f5f9b02b8a0e1b3dc2c4ecb023ddcbb899e65b939"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-support-contract.json",
+      "id": "sdc-support-contract",
+      "title": "遠隔支援の固定診断契約を純粋に検証する部品を追加",
+      "sha256": "45858ed1a414e4f390d4fc0b554a8e26425ffaae0ba9cbc6c8c0a94b2761bad4"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-support-control-contract.json",
+      "id": "sdc-support-control-contract",
+      "title": "遠隔支援の操作5POSTを固定DTOで検証する部品を追加",
+      "sha256": "3a25584b7f6278225926408919f147d484f92f3aa63400673324ddf52e25f62e"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-support-diagnostic-projection.json",
+      "id": "sdc-support-diagnostic-projection",
+      "title": "遠隔支援用の固定診断を純粋に整形する部品を追加",
+      "sha256": "08fb78a3e2f2eba859de0a0b30d17a4207b76c7ea0bb7fabbf2fbc34525a69cd"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-support-diagnostic-provider.json",
+      "id": "sdc-support-diagnostic-provider",
+      "title": "固定診断で独立動作の新鮮な稼働記録を確認",
+      "sha256": "40cdc7dc047c3844a9b5d88498dfa579d5d56fc9a673ae52d1fe7960dfb2a84f"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-support-diagnostic-runner.json",
+      "id": "sdc-support-diagnostic-runner",
+      "title": "個別承認済みの固定支援診断を前景で1回実行",
+      "sha256": "3eb584a1ac5b0015514d732140a950b250ae9ee28909c338c864bddd82a91d1c"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-support-foreground-poll.json",
+      "id": "sdc-support-foreground-poll",
+      "title": "遠隔支援の前景継続照会を明示起動できるよう追加",
+      "sha256": "ae314ab46f22600a018d88ffb4cf4cafe3b0dd4b7337c44c7b59e4b05e1e0bb8"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-support-local-state.json",
+      "id": "sdc-support-local-state",
+      "title": "遠隔支援のローカル同意と停止を単一記録で保存",
+      "sha256": "26f683fb61bfc99d40c9ca51faddf3ef6193b2b7fc0f384b6fc3ff98ef786486"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-support-operation-binding.json",
+      "id": "sdc-support-operation-binding",
+      "title": "遠隔支援の操作と個別承認・実行grantを照合する部品を追加",
+      "sha256": "c962f6febd24c3a6460af6276b11b502d0d28a267f214519cf02a4b945368897"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-support-preview.json",
+      "id": "sdc-support-preview",
+      "title": "遠隔支援の同意対象を検証するpreview部品を追加",
+      "sha256": "ff452914943ec5b8197fb3f7065ba1943f7f433178075ec7c30ab1e9fc4b1c0f"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-support-signatures.json",
+      "id": "sdc-support-signatures",
+      "title": "遠隔支援の公開鍵署名を検証する独立部品を追加",
+      "sha256": "aedc02bea016df07d9ce9d7f3b617b10c9449d272b2f531e116c59cd8f897078"
+    },
+    {
+      "path": "changes/archive/1.1.0/sdc-support-transport.json",
+      "id": "sdc-support-transport",
+      "title": "遠隔支援専用の固定通信部品を追加",
+      "sha256": "fc9f14127d96376fd0bb8466a2ab8527b896879dbf5efda192ed68e24b60cff7"
+    },
+    {
+      "path": "changes/archive/1.1.0/semantic-bundle-compact.json",
+      "id": "semantic-bundle-compact",
+      "title": "新しい会話履歴の保存量を抑制",
+      "sha256": "25f07a6bf4c6b442c0e9f2644de06db704b48c5f3325c41e1a130caa8904bcce"
+    },
+    {
+      "path": "changes/archive/1.1.0/semantic-extraction-fair-turns.json",
+      "id": "semantic-extraction-fair-turns",
+      "title": "解析の継続中にも過去の投稿を処理する機会を設ける",
+      "sha256": "c15f23a520daa1cffa66de1b39657bdfc9f61f0c0985e859d0924c642bbff1c4"
+    },
+    {
+      "path": "changes/archive/1.1.0/semantic-extraction-transaction-ownership.json",
+      "id": "semantic-extraction-transaction-ownership",
+      "title": "意味解析で未確定データが誤って確定されることを防ぐ",
+      "sha256": "482095313f8c723a3f8eb7cc020ff767ea5c2ec598b88087dd4af72ef0e2eab2"
+    },
+    {
+      "path": "changes/archive/1.1.0/semantic-long-defer-reservation.json",
+      "id": "semantic-long-defer-reservation",
+      "title": "解析の延期記録を保護",
+      "sha256": "e994d035ec5496b07bea31531d4d59b7ad2d78d116cc8e8d177adcb9c337decc"
+    },
+    {
+      "path": "changes/archive/1.1.0/semantic-manifest-current.json",
+      "id": "semantic-manifest-current",
+      "title": "推論条件を戻した後の解析計画の修正を準備",
+      "sha256": "dc1f52b2f51f0d9280d3dbb601caea2745db6a9e52b40c75366462ea388236bf"
+    },
+    {
+      "path": "changes/archive/1.1.0/semantic-reprocess-held-job.json",
+      "id": "semantic-reprocess-held-job",
+      "title": "再処理中の解析待ちを保護",
+      "sha256": "932ddb984342c5632bac4dba87ecb683594126322dfddd66a3b236be37dd1607"
+    },
+    {
+      "path": "changes/archive/1.1.0/semantic-reprocess-rollup-unverified.json",
+      "id": "semantic-reprocess-rollup-unverified",
+      "title": "再処理の完了判定を保留する",
+      "sha256": "fd00062607ae56ef872f3eeae9727b3a560f8fe268fef3b9027bdc4e324b2584"
+    },
+    {
+      "path": "changes/archive/1.1.0/semantic-retry-payload-limit.json",
+      "id": "semantic-retry-payload-limit",
+      "title": "解析ジョブの再試行で巨大な内容を読み込まずに停止",
+      "sha256": "23832c7c986ec0bd6de38dddc955c0f52704da8923194ed6467f6221492cc268"
+    },
+    {
+      "path": "changes/archive/1.1.0/semantic-retry-unknown-version.json",
+      "id": "semantic-retry-unknown-version",
+      "title": "未対応の版の意味解析ジョブを再試行で保持する",
+      "sha256": "0b0cb5d5f5538f23e0e0655bfd7413246b2c85979b3448af70ea55fe80635e43"
+    },
+    {
+      "path": "changes/archive/1.1.0/setup-follow-defaults.json",
+      "id": "setup-follow-defaults",
+      "title": "初期設定で未選択の項目は各版の既定値を使う",
+      "sha256": "75f2e2e25fc334e06dba30d4d02ab6443bb3a60b5363a7305178a8f2ed1daa98"
+    },
+    {
+      "path": "changes/archive/1.1.0/setup-gateway-flags.json",
+      "id": "setup-gateway-flags",
+      "title": "初回の通知接続起動前に通知先設定を準備",
+      "sha256": "a0f430788dc4cae767459f104a000854378389480b4b8d30e23c7a77c6f6697a"
+    },
+    {
+      "path": "changes/archive/1.1.0/setup-init-config-conflict.json",
+      "id": "setup-init-config-conflict",
+      "title": "初期設定中の設定保存の競合を検出",
+      "sha256": "398b04e720af262ea26a9ea7a02a07aab5cd9b621c15185bf4f59b9756a0a7d2"
+    },
+    {
+      "path": "changes/archive/1.1.0/setup-save-confirmation.json",
+      "id": "setup-save-confirmation",
+      "title": "初期設定の保存前に送信先と保存内容を確認",
+      "sha256": "d56312cdded2f6cf4a7872fcfc241734e6a2eb7d4a66e79d4955704f239269b1"
+    },
+    {
+      "path": "changes/archive/1.1.0/seven-day-dead-notify-wrapper.json",
+      "id": "seven-day-dead-notify-wrapper",
+      "title": "通知復旧の内部処理を一本化する",
+      "sha256": "e595e8f7c096de3cb99baf6a4cc6eacee0275f0e50ac403650009a55c3531707"
+    },
+    {
+      "path": "changes/archive/1.1.0/seven-day-dead-view-helper.json",
+      "id": "seven-day-dead-view-helper",
+      "title": "構造化表示に残っていた未使用のJSON読取処理を整理する",
+      "sha256": "66ffae1fe73779093260add722a0bed018959dfbd6fdd5681276f7d486beb625"
+    },
+    {
+      "path": "changes/archive/1.1.0/seven-day-drug-notice-retry.json",
+      "id": "seven-day-drug-notice-retry",
+      "title": "添付文書の変更通知を取得順にかかわらず再試行する",
+      "sha256": "b6ad0adf06cffb4dd7cd1f0c13334b592032fa15b0e30a73be1dd7ec79b2960d"
+    },
+    {
+      "path": "changes/archive/1.1.0/seven-day-lab-merge.json",
+      "id": "seven-day-lab-merge",
+      "title": "長文の検査値を統合するときに異なる測定結果を残す",
+      "sha256": "0269324d4271744d13a08b6943278190e0ffc069bdd3e6dd392b3728b843bb2d"
+    },
+    {
+      "path": "changes/archive/1.1.0/seven-day-orphan-identity.json",
+      "id": "seven-day-orphan-identity",
+      "title": "独立実行の再開時に識別待ちの処理を重複起動しない",
+      "sha256": "a77f5ef649c2a95e9361bddb501812c3b52b38b321bb27b558876e3aaab38952"
+    },
+    {
+      "path": "changes/archive/1.1.0/seven-day-post-edit-receipts.json",
+      "id": "seven-day-post-edit-receipts",
+      "title": "投稿別カードの更新先消失を配送完了として扱わない",
+      "sha256": "23f59ae02c3c45921ef8cafd546c9ed68ebc995cc0c2ba8b3a60f6cb2fb52468"
+    },
+    {
+      "path": "changes/archive/1.1.0/seven-day-sdc-deadline.json",
+      "id": "seven-day-sdc-deadline",
+      "title": "状態監視の通信が低速応答で待ち続ける問題を修正",
+      "sha256": "d56ff68f9e92476e5ca95f780f8a131ae746cea6902621f458c973c9c768e170"
+    },
+    {
+      "path": "changes/archive/1.1.0/seven-day-verification-boundaries.json",
+      "id": "seven-day-verification-boundaries",
+      "title": "ローカル検証と推論比較で不完全な結果を合格扱いしない",
+      "sha256": "32c3c4fae6cfb9ac5d996fccf45d1db50a4a31c76ecc2a0db4ff9602a392653d"
+    },
+    {
+      "path": "changes/archive/1.1.0/slack-body-wire-budget.json",
+      "id": "slack-body-wire-budget",
+      "title": "Slackの長い本文を送信容量も考慮して分割する",
+      "sha256": "73d51ce2ef1a095b8691e184ca63e38bb9abb283a3ba83f9cb8154e2ff31cf3d"
+    },
+    {
+      "path": "changes/archive/1.1.0/slack-meds-face-answer.json",
+      "id": "slack-meds-face-answer",
+      "title": "Slackの薬剤ボタンの回答が、スレッドに返信のないカードで表示されない問題を修正",
+      "sha256": "f52bfcbdee149d89b83260c5e0d7b0fe35f97c6e7f0ca21fc9c92d1591138b57"
+    },
+    {
+      "path": "changes/archive/1.1.0/slack-original-full-width.json",
+      "id": "slack-original-full-width",
+      "title": "Slackの原文の折りたたみを表示幅いっぱいに広げる",
+      "sha256": "5075d1c73c78321979312f72e2d6f44fd349c3dcf819801046c40164c8832382"
+    },
+    {
+      "path": "changes/archive/1.1.0/slack-stamp-selected.json",
+      "id": "slack-stamp-selected",
+      "title": "Slackのスタンプメニューで、押しているスタンプを選択済みに表示",
+      "sha256": "8e9b3e0e6693588fcc015691c49b2394983c9127fbda8b483bff79a27751d5b8"
+    },
+    {
+      "path": "changes/archive/1.1.0/source-bound-request-medication-fixes.json",
+      "id": "source-bound-request-medication-fixes",
+      "title": "薬剤名に続く操作と原文の依頼を取りこぼさないよう修正",
+      "sha256": "921bb3e2e7bcaa01c3d5dee13297a499149982603330805d5b098b08fd1c20ec"
+    },
+    {
+      "path": "changes/archive/1.1.0/sqlite-read-interruption.json",
+      "id": "sqlite-read-interruption",
+      "title": "集約中の保存領域や読取りの障害を正しく伝える",
+      "sha256": "410a80b7e08fdf8d7f53327c97e7d6f3ccebb084da2bc7810576a0a22fc908c1"
+    },
+    {
+      "path": "changes/archive/1.1.0/stale-tick-update-fence.json",
+      "id": "stale-tick-update-fence",
+      "title": "更新を検出した収集処理の実行を保留",
+      "sha256": "16f12fcb2b6ffcaf815f26fa25a53db663efd84cdd77af5a46de29dd0d6f8c2b"
+    },
+    {
+      "path": "changes/archive/1.1.0/standalone-credential-choice.json",
+      "id": "standalone-credential-choice",
+      "title": "独立接続の認証情報を保持するか選択",
+      "sha256": "5ec19d3f33a8ee11e0e5b4f4ef32fbc50721b0bced7995ef5fe1b61398bbb069"
+    },
+    {
+      "path": "changes/archive/1.1.0/standalone-credential-reap-safety.json",
+      "id": "standalone-credential-reap-safety",
+      "title": "遠隔再起動用の資格情報の子プロセスは終了を確認できるまで待つ",
+      "sha256": "d75579b5ef48dd163359b81e99d909333304e8c4158f18a091192662ea5472ee"
+    },
+    {
+      "path": "changes/archive/1.1.0/standalone-delivery-lifecycle.json",
+      "id": "standalone-delivery-lifecycle",
+      "title": "独立実行の再接続・停止時に配送処理の完了を待つ",
+      "sha256": "e05ee314344a175db40b82037d829aa1743f18ae148809322574e5ca5f9b3b16"
+    },
+    {
+      "path": "changes/archive/1.1.0/standalone-delivery-runtime-review-fixes.json",
+      "id": "standalone-delivery-runtime-review-fixes",
+      "title": "独立実行の受付停止中の閲覧回答を修正",
+      "sha256": "e54d6265f56c65a881d35d65efb848ff146c310fe28a380507b3b61ddec66ea1"
+    },
+    {
+      "path": "changes/archive/1.1.0/standalone-native-admission.json",
+      "id": "standalone-native-admission",
+      "title": "独立実行の操作受付と終了待ちを実処理に一致",
+      "sha256": "cb0b6a4f892f22ef3c92152985ceb579f0dddc903dd2b66516392f655d2ea2c4"
+    },
+    {
+      "path": "changes/archive/1.1.0/standalone-restart-carrier-owner.json",
+      "id": "standalone-restart-carrier-owner",
+      "title": "遠隔再起動の通信中も同じ実行主体が予約を保持する部品を追加",
+      "sha256": "cca10c0c1a4931c0ed24a1f26e14fd04e8ed067ef48fdc54db8207f137bcbbfd"
+    },
+    {
+      "path": "changes/archive/1.1.0/standalone-restart-execution.json",
+      "id": "standalone-restart-execution",
+      "title": "承認済みの遠隔再起動を同じ実行元で開始する基盤を追加",
+      "sha256": "e95b2620778e58983e59cb0c534e420767616a3a7ce7d85a386804502ceb5e59"
+    },
+    {
+      "path": "changes/archive/1.1.0/standalone-restart-pending-cancellation.json",
+      "id": "standalone-restart-pending-cancellation",
+      "title": "遠隔再起動の開始直前に届いた取消を反映",
+      "sha256": "be3241e450c61faba076bcafe1c70805d52ec4a1d81d69db1a26b002b1721a1b"
+    },
+    {
+      "path": "changes/archive/1.1.0/standalone-restart-reservation.json",
+      "id": "standalone-restart-reservation",
+      "title": "独立Runtimeのローカル再起動予約部品を追加",
+      "sha256": "a732d1236b024b9570b8c470ab38f200d1a87ca65cf49194d1ccf7668a74c555"
+    },
+    {
+      "path": "changes/archive/1.1.0/standalone-runtime-admission.json",
+      "id": "standalone-runtime-admission",
+      "title": "独立実行の停止時にチャット操作の実終了を確認",
+      "sha256": "dfb76230b3b97cce8659dcc45ab9835c28181415c6e972d7b0af21fee5191a88"
+    },
+    {
+      "path": "changes/archive/1.1.0/standalone-runtime-delivery-owner.json",
+      "id": "standalone-runtime-delivery-owner",
+      "title": "独立実行の終了時に配送の実処理を待つ",
+      "sha256": "8cabb5f82eaa57060507744fa2f911b8b3492fabb02ca3f4809ad71d11922ac8"
+    },
+    {
+      "path": "changes/archive/1.1.0/status-snapshot-configured-llm.json",
+      "id": "status-snapshot-configured-llm",
+      "title": "稼働状況の書き出しで設定済みAI接続先と制限時間の超過秒数を正しく扱う",
+      "sha256": "ecb70da4e6939231cedcef33ba67faee6e00de6e0e1f8baf9105613c9d06add3"
+    },
+    {
+      "path": "changes/archive/1.1.0/status-snapshot.json",
+      "id": "status-snapshot",
+      "title": "稼働状況を数値と状態コードだけで書き出す状態スナップショット",
+      "sha256": "b9f465a4fa6b57091252ffd119a2955a80096caec04e4339e004c3ee960f7548"
+    },
+    {
+      "path": "changes/archive/1.1.0/support-diagnostics-share.json",
+      "id": "support-diagnostics-share",
+      "title": "設定値や患者件数を含めない共有用の診断表示",
+      "sha256": "43e63872efa6ec6d3caed91d49ad2154ed2bc7d8ce24b8940a966c3108a868ed"
+    },
+    {
+      "path": "changes/archive/1.1.0/transport-foundation-lineworks-diagnostics.json",
+      "id": "transport-foundation-lineworks-diagnostics",
+      "title": "LINE WORKSの配送停滞の警告に、アダプター向けの対処を表示",
+      "sha256": "4cbac9567aabeb08ec2a7625c33bbe572ac15259e595c7dd377e8d89fd5a5ac7"
+    },
+    {
+      "path": "changes/archive/1.1.0/transport-integration-budget-fixes.json",
+      "id": "transport-integration-budget-fixes",
+      "title": "Discordのカード描画と文字数の検査を修正",
+      "sha256": "33255cc109f73a2e725200ba1f9dc7a352db9c438007b6f8e107aab5933616ff"
+    },
+    {
+      "path": "changes/archive/1.1.0/unread-save-ack-hold.json",
+      "id": "unread-save-ack-hold",
+      "title": "取得内容の保存失敗後に返信を既読にしない",
+      "sha256": "b2c63db6c5b80c2fcc2e375ebd58ebc9f5ab0ab97359e6b4597b37dd1d641b3d"
+    },
+    {
+      "path": "changes/archive/1.1.0/update-journal-directory.json",
+      "id": "update-journal-directory",
+      "title": "更新記録の保存先を保持したフォルダーに固定",
+      "sha256": "5b923a95d98272afdb6c1f67f98a1cd70c873480363ea1d47ddabb7c7756bde8"
+    },
+    {
+      "path": "changes/archive/1.1.0/update-offer-api-keys.json",
+      "id": "update-offer-api-keys",
+      "title": "更新後にAPIキーの設定を選べるように変更",
+      "sha256": "7a9867bcc96975a33a59fe13c48dea5c5d5442d6ec46dc174cc0888d5e01c252"
+    },
+    {
+      "path": "changes/archive/1.1.0/urgency-missing-source-review.json",
+      "id": "urgency-missing-source-review",
+      "title": "元投稿の本文が読めない「緊急度: 高」を要確認として表示",
+      "sha256": "0472ff9fb3af570a1d281f2f7bf8d5f3e7f7a8650a7d2d0579ce282593ab2583"
+    },
+    {
+      "path": "changes/archive/1.1.0/user-settings-in-config.json",
+      "id": "user-settings-in-config",
+      "title": "抽出の事前判定・ディスク下限・LLM受付制御をconfig.jsonで設定",
+      "sha256": "d5ba76cfdb80c69dba5f4419ea19cf6f491c78221e8a0569e6b26b8dcc48f498"
+    },
+    {
+      "path": "changes/archive/1.1.0/v110-csdc-default-off.json",
+      "id": "v110-csdc-default-off",
+      "title": "1.1.0ではCSDCへ接続しない（コードは同梱・既定OFF）",
+      "sha256": "411c6f9bb2452e129f2ea5381af627226e80f9ae202e9d18a39a32938a46f97f"
+    },
+    {
+      "path": "changes/archive/1.1.0/v110-delivery-boundaries.json",
+      "id": "v110-delivery-boundaries",
+      "title": "Slack返信と添付の照合で不正なメタデータを保留",
+      "sha256": "fc5a3f499ad7969eee2fc1a05ec35622810644df0dd6228b4ff79ee8f98e977b"
+    },
+    {
+      "path": "changes/archive/1.1.0/version-policy-110.json",
+      "id": "version-policy-110",
+      "title": "機能追加と不具合修正を版番号で区別",
+      "sha256": "086fa3e318104682603733c64cde36b2e0bb6c34b8b2985b0293f1f73f3de422"
+    },
+    {
+      "path": "changes/anthropic-usage-compat-20261029.json",
+      "id": "anthropic-usage-compat-20261029",
+      "title": "Anthropicの通常速度の使用量を正しく扱う",
+      "sha256": "f3ec5a78f077c7d9a0b20f64b4ce7bde4488f1251985aaf237112d5ac3ec78b9"
+    },
+    {
+      "path": "changes/api-key-registration-hardening-20261029.json",
+      "id": "api-key-registration-hardening-20261029",
+      "title": "APIキー登録中の設定変更と保存結果を確認",
+      "sha256": "f1def95ebfa7097922c8ef111e038a616fa667996614cb8aa4906594af395db7"
+    },
+    {
+      "path": "changes/archived-context-reprocess-20261029.json",
+      "id": "archived-context-reprocess-20261029",
+      "title": "アーカイブ済み投稿の内部監査を再開",
+      "sha256": "4df323f3f976cccb2a84bc4c364a10d312f96261368623256b326ca52c80fe60"
+    },
+    {
+      "path": "changes/audit-failure-reasons-20261029.json",
+      "id": "audit-failure-reasons-20261029",
+      "title": "監査できなかった理由を区別し同じ不正な要約の再試行を停止",
+      "sha256": "9cc531ef7ff3dc08688a8c6c0ef98ee7b5f0539c8bac66e69528876ebda36e29"
+    },
+    {
+      "path": "changes/cloud-backlog-budget-observation-20261029.json",
+      "id": "cloud-backlog-budget-observation-20261029",
+      "title": "背景処理がJevの予算で待機する理由を表示",
+      "sha256": "24cfc0be2fbb514d511307b190451a49eb9c162b12264de8ddbe0a01a6923eb4"
+    },
+    {
+      "path": "changes/cloud-backlog-routing-20261029.json",
+      "id": "cloud-backlog-routing-20261029",
+      "title": "背景の意味解析と投稿抽出を登録済みクラウドへ接続",
+      "sha256": "3b788c4cc00a7ec414f87dcb406dbe9a5fb1419cdf9efc7d1f44d04ea086329c"
+    },
+    {
+      "path": "changes/cloud-circuit-late-success-20261029.json",
+      "id": "cloud-circuit-late-success-20261029",
+      "title": "混雑時の待機を並行要求の成功で早期解除しない",
+      "sha256": "2d7c7defde5e71d145d6f807fd371e0bb6baad275e6a7a1ac7b1545f9d7b35f3"
+    },
+    {
+      "path": "changes/cloud-main-local-fallback-20261029.json",
+      "id": "cloud-main-local-fallback-20261029",
+      "title": "履歴のクラウド処理とローカルへの切り替えを改善",
+      "sha256": "670e43bcf9423c3c49df509f900c0ec86f22b0a1f5a83fd217c76adf28923048"
+    },
+    {
+      "path": "changes/cloud-outstanding-observation-20261029.json",
+      "id": "cloud-outstanding-observation-20261029",
+      "title": "クラウド利用の未精算記録を少量の読取りで照会",
+      "sha256": "0ee4340f3242a4bb0af9df7de47c62b8b8a000d272986b799a2cdd698f0646c9"
+    },
+    {
+      "path": "changes/cloud-parallel-patient-priority-20261029.json",
+      "id": "cloud-parallel-patient-priority-20261029",
+      "title": "アクティブ患者の履歴解析を優先して並列処理",
+      "sha256": "f598b4b1ddf965dc7aa81ee18b13f8120c475d230fcf5a00c186bb2543d7c656"
+    },
+    {
+      "path": "changes/cloud-selection-progress-20261029.json",
+      "id": "cloud-selection-progress-20261029",
+      "title": "クラウド処理の対象が待機したままになる問題を修正",
+      "sha256": "45ca50d5f3a60a1ecccd65da2ce1bb57103d1ba783e31f5c827b4b6f717ea0c9"
+    },
+    {
+      "path": "changes/cloud-selection-writer-lock-20261030.json",
+      "id": "cloud-selection-writer-lock-20261030",
+      "title": "クラウド処理の候補確認が収集を長時間妨げる問題を修正",
+      "sha256": "3e86403df9ed34b27d25767b44c45f965e55e88ad4840221f28d8f39d89f16a8"
+    },
+    {
+      "path": "changes/command-worker-contention-retry-20261030.json",
+      "id": "command-worker-contention-retry-20261030",
+      "title": "通知の受領記録が書込み待ちのまま残る問題を修正",
+      "sha256": "ba36592ae02a7c2c474639856b581c67ebc746869c52194c55912e57a54bf6b2"
+    },
+    {
+      "path": "changes/context-budget-window-result.json",
+      "id": "context-budget-window-result",
+      "title": "予算の期間変更で取得済みの患者文脈が破棄される問題を修正",
+      "sha256": "cf8ca83ce03e5d886937aa130e889f831adb01e899fc5d0d5ea4d255157859c0"
+    },
+    {
+      "path": "changes/credential-writer-boundary-20261029.json",
+      "id": "credential-writer-boundary-20261029",
+      "title": "認証情報の保存で不正なファイルと行の混入を拒否",
+      "sha256": "2cf04d1360ec4a68d2a0e55a52010ea0d9fd6c1fff91bba34d04c6443b3e2165"
+    },
+    {
+      "path": "changes/drug-stat-source-index-20261030.json",
+      "id": "drug-stat-source-index-20261030",
+      "title": "薬剤集計で別の記載の辞書注記を結び付ける問題を修正",
+      "sha256": "1e715bf1c12a6d340272ef5ac1a1dc91d00447b759aa21d8b711b444164acb69"
+    },
+    {
+      "path": "changes/drug-timeline-bindings-20261029.json",
+      "id": "drug-timeline-bindings-20261029",
+      "title": "薬剤言及履歴で原文の重複読取りを削減",
+      "sha256": "e1e0b2adf0f316a83a14777276f08363c07e471996475d886eb3e1858f44e674"
+    },
+    {
+      "path": "changes/failed-job-diagnostics-20261029.json",
+      "id": "failed-job-diagnostics-20261029",
+      "title": "失敗した解析ジョブの理由調査と対策後の再試行を追加",
+      "sha256": "48fd729746d967005de7d59739ebce6bccaab30abd0f2af7e21bcfb0f96b060f"
+    },
+    {
+      "path": "changes/failed-job-targeted-evidence-20261029.json",
+      "id": "failed-job-targeted-evidence-20261029",
+      "title": "過去の失敗理由を対象ジョブの記録から確認",
+      "sha256": "5e68917dc06ed4d43f8f4b24ab32e6902bebb30bb9c3ea8e75d3bcffab00004e"
+    },
+    {
+      "path": "changes/health-log-guidance-20261030.json",
+      "id": "health-log-guidance-20261030",
+      "title": "監視警告のログ案内を統合ログへ修正",
+      "sha256": "8596473f03187c881e08dd6e98788cadae85a6f35a492a1ca2dc6e6f41605903"
+    },
+    {
+      "path": "changes/history-application-scope-20261029.json",
+      "id": "history-application-scope-20261029",
+      "title": "Bot変更後の初回履歴通知を修正",
+      "sha256": "53ed8a6c0878fb30c50d4153d990d8ce9d5fa2f9ecaa91e87f5a15116baa3513"
+    },
+    {
+      "path": "changes/inference-reprocess-completion-20261029.json",
+      "id": "inference-reprocess-completion-20261029",
+      "title": "保存済みチャットの再処理で完了を確認できるよう修正",
+      "sha256": "c2707ed1d26fb60d3dafee02fd2e779ac69fbc9f654b75a074f5342d29b02085"
+    },
+    {
+      "path": "changes/install-options-central.json",
+      "id": "install-options-central",
+      "title": "導入時の省略項目を設定ファイルに保存",
+      "sha256": "d8fc4af3eafa09eb42f83ad3f12be725f9a7bca0540fec4a9f5a41db7ba40e62"
+    },
+    {
+      "path": "changes/install-settings-durability.json",
+      "id": "install-settings-durability",
+      "title": "導入設定の移行中断を保留として検出",
+      "sha256": "9a646cd41dd7e8de4d0ddeeb65e660c87d08b8b51318bdd80455c950d9434d71"
+    },
+    {
+      "path": "changes/installer-bootstrap-guards-20261028.json",
+      "id": "installer-bootstrap-guards-20261028",
+      "title": "Python未導入の初回導入と事前確認の順序を修正",
+      "sha256": "e4f9cdc388e762a467f0988aeaa50d03571df250056d9397c66847728f82489a"
+    },
+    {
+      "path": "changes/installer-stat-fields-20261028.json",
+      "id": "installer-stat-fields-20261028",
+      "title": "導入時の所有者と権限の読取りを修正",
+      "sha256": "50e5dd21c93c3e0cb358a4e7fa4b37e0c7d09fb53fe8a83296c2e6348c7f1e18"
+    },
+    {
+      "path": "changes/installer-update-exclusion.json",
+      "id": "installer-update-exclusion",
+      "title": "導入と更新の同時実行を防止",
+      "sha256": "f99437f325b67b4135d99dbe30336a2317c26013781f730905d252152432ce07"
+    },
+    {
+      "path": "changes/jev-empty-summary-20261029.json",
+      "id": "jev-empty-summary-20261029",
+      "title": "空の解析結果で再処理が進まなくなる問題を修正",
+      "sha256": "ba05636a405139544edb8e7d2bfbb68535eba120b6b4f9d25fe209665d6008ea"
+    },
+    {
+      "path": "changes/jev-optional-runtime-20261029.json",
+      "id": "jev-optional-runtime-20261029",
+      "title": "Jevを利用できないときもクラウド解析を継続",
+      "sha256": "67170fad8c4ec4002e3090e3ba52fbbee4ee4222d70ccf545bb0b4fa92b3e003"
+    },
+    {
+      "path": "changes/jobs-repository-launcher-20261029.json",
+      "id": "jobs-repository-launcher-20261029",
+      "title": "リポジトリの起動コマンドでジョブの調査を利用可能に修正",
+      "sha256": "88ef59f0e5be054a1856b19aaef9ae7ec4ac56d718c5ec3c525b0306f925953d"
+    },
+    {
+      "path": "changes/latest-audit-send-gate-20261029.json",
+      "id": "latest-audit-send-gate-20261029",
+      "title": "通知前の監査記録の照合を強化",
+      "sha256": "15cb3711f7f00f7bfd62d215c658a02cef892afe782b9a8bf4bd8ff9383cf845"
+    },
+    {
+      "path": "changes/lineworks-registration-boundary-20261029.json",
+      "id": "lineworks-registration-boundary-20261029",
+      "title": "LINE WORKSの認証情報を保存前後に確認",
+      "sha256": "ab3eed98a7f9bb78649218bdad0f6912405d553380fe271ddf3fe503dd1618fa"
+    },
+    {
+      "path": "changes/log-service-ownership-20261030.json",
+      "id": "log-service-ownership-20261030",
+      "title": "ログ統合後も復旧用Pythonを安全に変更できるよう修正",
+      "sha256": "40d812799a763954f274086db8ccb73d62856078e29397ae92dfa5114d4e6a29"
+    },
+    {
+      "path": "changes/loop-only-context-readiness-20261030.json",
+      "id": "loop-only-context-readiness-20261030",
+      "title": "ループのみを使う設定で患者文脈の更新が止まる問題を修正",
+      "sha256": "dc642fbdf2987f3e6f70e792de5ef7dedcde14c400f2abd469ff615d11f6103c"
+    },
+    {
+      "path": "changes/merge-restore-intake-evidence.json",
+      "id": "merge-restore-intake-evidence",
+      "title": "復元前の照合に未保存の範囲と世代を追加",
+      "sha256": "52e928fe141626a1aac8064b27defa211bf63bf38b5570ca29bfd7dafa779ded"
+    },
+    {
+      "path": "changes/notification-part-health-20261029.json",
+      "id": "notification-part-health-20261029",
+      "title": "本文・添付の未完了を通知監視へ反映",
+      "sha256": "185dc6d9f426dfc695831406ce42b1d80d157b1b0adfb16452ec7701855cb278"
+    },
+    {
+      "path": "changes/openai-provider-budgets-20261029.json",
+      "id": "openai-provider-budgets-20261029",
+      "title": "OpenAIの利用先選択とAPI別予算に対応",
+      "sha256": "b82df268c19a88309447f80db6174ec76a91d1a804835b5780cfdc1e983e02df"
+    },
+    {
+      "path": "changes/openai-usage-log-20261029.json",
+      "id": "openai-usage-log-20261029",
+      "title": "OpenAIの使用量を診断で読み取れるよう修正",
+      "sha256": "c55f98d499dce3a152c36e71a6e931262e8530eae136cd6de4d8dc57ef454aea"
+    },
+    {
+      "path": "changes/patient-context-after-inference-20261029.json",
+      "id": "patient-context-after-inference-20261029",
+      "title": "患者の全投稿の解析を終えてからコンテキストを生成",
+      "sha256": "21267e6adf195f84854d78d75c0dea86b5c2e4ef43ba65a1a6999a8fd6402408"
+    },
+    {
+      "path": "changes/patient-context-observation-20261029.json",
+      "id": "patient-context-observation-20261029",
+      "title": "患者コンテキストの進捗集計を改善",
+      "sha256": "bbe2cdd42b8389ffa093d2dc2893589d161a393ff9c75835e4a8566d03e13a05"
+    },
+    {
+      "path": "changes/per-post-provider-icons-20261029.json",
+      "id": "per-post-provider-icons-20261029",
+      "title": "投稿ごとに処理サービスをアイコンで表示",
+      "sha256": "c89c3d055090c94ec18e47d8f63bda743cf5ca9f8baa930515dbc02209e3e6fd"
+    },
+    {
+      "path": "changes/processing-route-icon-20261029.json",
+      "id": "processing-route-icon-20261029",
+      "title": "チャットの見出しで解析方式をアイコン表示",
+      "sha256": "072f831240b79de64a6919d4cd578ebadc334e0af8ec5740067c89ffff6df66e"
+    },
+    {
+      "path": "changes/provider-default-budgets-20261029.json",
+      "id": "provider-default-budgets-20261029",
+      "title": "Anthropicの初期費用上限を1日25ドル・1か月75ドルに設定",
+      "sha256": "ad83331e29f097aa2956ea19aeea1d926bc5eb33b8015ee3a60cd423f2c05f46"
+    },
+    {
+      "path": "changes/provider-header-location-20261030.json",
+      "id": "provider-header-location-20261030",
+      "title": "処理サービスの表示をチャットの見出し行へ移動",
+      "sha256": "27e87a2b3c2087fbe0df67145550d1a257ac36b4257625c291fd587c0c3f4ea6"
+    },
+    {
+      "path": "changes/quality-epoch-invalidation-20261029.json",
+      "id": "quality-epoch-invalidation-20261029",
+      "title": "品質の再点検で問題が見つかった後の完了表示を修正",
+      "sha256": "e4d65c944d92f0ea302d3fceeeb5e66d8b4c20454334aae2cbb2dd78acf28342"
+    },
+    {
+      "path": "changes/recover-cli-log-wrapper-20261030.json",
+      "id": "recover-cli-log-wrapper-20261030",
+      "title": "ログ統合後の復旧コマンドを修正",
+      "sha256": "a7fa86b5c3608add834052cd9f3cafd0029559bf235435c698e8c4cfcca2b764"
+    },
+    {
+      "path": "changes/reinstall-old-updater-parent.json",
+      "id": "reinstall-old-updater-parent",
+      "title": "旧版の更新プログラムからの再導入を最初に止める",
+      "sha256": "5c03eece99c9fbc50aa1606ebf31d590dc735983425218da4d73b996bc9b10f4"
+    },
+    {
+      "path": "changes/release-grant-time-recheck.json",
+      "id": "release-grant-time-recheck",
+      "title": "release更新の開始直前に承認の期限を再確認",
+      "sha256": "6b15e74c46f68f08eeea108963f66b95478ef3ce174852cc44df9a705d36ac08"
+    },
+    {
+      "path": "changes/release-settings-preflight.json",
+      "id": "release-settings-preflight",
+      "title": "release更新の開始前に導入設定の移行を確認",
+      "sha256": "3589cd9703cb8207cb8babcd4626838f83e64cd025ad5d9ff3730c67d854bee2"
+    },
+    {
+      "path": "changes/release-source-ignored-import-20261029.json",
+      "id": "release-source-ignored-import-20261029",
+      "title": "Gitの管理対象外にあるPythonコードの見落としを修正",
+      "sha256": "668c5285f66d04200cbb078dcbd957802e7e1afe45b2c11373d39f9341af3768"
+    },
+    {
+      "path": "changes/release-targeted-sync-20261029.json",
+      "id": "release-targeted-sync-20261029",
+      "title": "リリースノートの同期対象を限定",
+      "sha256": "064a38dae6a434e3c9ff7a95345522f64d723c3160abb35cf615a1941f0ec6b9"
+    },
+    {
+      "path": "changes/reprocess-empty-body-20261029.json",
+      "id": "reprocess-empty-body-20261029",
+      "title": "保存済みチャットの空本文を未取得と区別",
+      "sha256": "b32e9e1672fa470399b8a0d71474b239ca744e8cde00a566417bbf8a813c2992"
+    },
+    {
+      "path": "changes/restore-intake-release-evidence-20261028.json",
+      "id": "restore-intake-release-evidence-20261028",
+      "title": "復元前の比較に保留解除後の記録を追加",
+      "sha256": "be879ee20b4d59b23663f01bda1f2ed31dcd94dcb677374d92e202a310d0217f"
+    },
+    {
+      "path": "changes/rollback-restore-failure-hold-20261030.json",
+      "id": "rollback-restore-failure-hold-20261030",
+      "title": "復元失敗時に常駐処理を再開しないよう修正",
+      "sha256": "82a926ad39968db130e39fd6de341b140922a98d39a666b361e7216fcaffdb8c"
+    },
+    {
+      "path": "changes/rollup-cli-config-20261029.json",
+      "id": "rollup-cli-config-20261029",
+      "title": "手動の集約修復に現在の設定を反映",
+      "sha256": "47afe4ab05bd101b0d4e481ccfb900bafbfaf618d332e26798aa8f248e94da43"
+    },
+    {
+      "path": "changes/rollup-concurrent-observation-20261029.json",
+      "id": "rollup-concurrent-observation-20261029",
+      "title": "集約走査が無関係なDB更新で未確認になる問題を修正",
+      "sha256": "8f8ef29e10e022c900685774149c1e6755e0e0f3e9ef3e0894386b326c21c4d5"
+    },
+    {
+      "path": "changes/rollup-deadline-fair-progress-20261030.json",
+      "id": "rollup-deadline-fair-progress-20261030",
+      "title": "患者情報の集約が期限内に進みやすくなるよう修正",
+      "sha256": "867dd2f06a684b83a0dc963ec3f86bcc0736415db29aabc2262a6eee022ff2e4"
+    },
+    {
+      "path": "changes/rollup-stage-budget-20261029.json",
+      "id": "rollup-stage-budget-20261029",
+      "title": "患者集約で実行期限と閲覧用スナップショットの検証時間を確保",
+      "sha256": "d75622912192dda452c47cbcaaa5c1d4ff5db6c4d573bf9f1222761c0cb7ca78"
+    },
+    {
+      "path": "changes/semantic-intake-current.json",
+      "id": "semantic-intake-current",
+      "title": "解析の保留を証拠と通知対象を確認して解除",
+      "sha256": "e78298691bae307da747e456fe9d5b30cf35f6de1e43e68cc20271cee968582b"
+    },
+    {
+      "path": "changes/setup-provider-consent-20261029.json",
+      "id": "setup-provider-consent-20261029",
+      "title": "初期設定の外部AI送信先の確認表示を修正",
+      "sha256": "744c216d281ccf6a5dc0cdd8be93376e323ef7cea9102270bda4d5e79bd2d248"
+    },
+    {
+      "path": "changes/skipped-audit-display-20261030.json",
+      "id": "skipped-audit-display-20261030",
+      "title": "検査を省略した要約の事実表示を修正",
+      "sha256": "ef1703372a2680c54c68f865a6ea268efcd18d774cebedcaf8a9e3e367e53601"
+    },
+    {
+      "path": "changes/slack-reply-card-broadcast-20261030.json",
+      "id": "slack-reply-card-broadcast-20261030",
+      "title": "Slackの新しい返信をチャンネルにも表示",
+      "sha256": "dbe52f76e59a74750474ab8d7484967b801db09baacb4a958a62264e5bb9dd90"
+    },
+    {
+      "path": "changes/source-quality-mixed-receipts-20261029.json",
+      "id": "source-quality-mixed-receipts-20261029",
+      "title": "要約と原文の確認記録が混在する場合の読取りを修正",
+      "sha256": "39538053b1edb0de5cf91eeb6da1835aa8ae43288415a8f22b18407999a9681a"
+    },
+    {
+      "path": "changes/stable-dependencies-20261029.json",
+      "id": "stable-dependencies-20261029",
+      "title": "実行環境と検証ツールの依存を更新",
+      "sha256": "0c61a6629a59bbddfcf245550f71a1898571746d4ec82b4b1abcc6f16f707710"
+    },
+    {
+      "path": "changes/standalone-credential-gate.json",
+      "id": "standalone-credential-gate",
+      "title": "独立接続の認証情報利用を保護",
+      "sha256": "3cddaf4ca8f088fb019abc644d834b0c8391134282c31be486f73cf2ad01b527"
+    },
+    {
+      "path": "changes/status-unknown-snapshot-20261029.json",
+      "id": "status-unknown-snapshot-20261029",
+      "title": "状態を取得できない場合の表示を修正",
+      "sha256": "c3fead09d10e040b23a86b9b41af19017266c1afbd3c1b92da6448e0ec5fa827"
+    },
+    {
+      "path": "changes/summary-off-context-readiness-20261030.json",
+      "id": "summary-off-context-readiness-20261030",
+      "title": "要約を使わない設定で患者文脈の更新が止まる問題を修正",
+      "sha256": "5f97f8f30455dabc2629602c45c1e5e0cc9ce88db351e81685b9cfa9d85ad65a"
+    },
+    {
+      "path": "changes/unified-log-adapter-sandbox-20261030.json",
+      "id": "unified-log-adapter-sandbox-20261030",
+      "title": "通知接続のログ処理を実行制約に対応",
+      "sha256": "02816a0dae836256767a36097fa3daecedd4358ecfc76fe8e0c64fcae785d30e"
+    },
+    {
+      "path": "changes/unified-log-runtime-upgrade-20261030.json",
+      "id": "unified-log-runtime-upgrade-20261030",
+      "title": "旧版からの更新前に実行環境を確認できるよう修正",
+      "sha256": "eab809f6cd8f2c9921f829a8e0ca4a320a40c6c707d424d0a8b2033ffe45574a"
+    },
+    {
+      "path": "changes/unified-log-update-20261029.json",
+      "id": "unified-log-update-20261029",
+      "title": "導入と更新時に共通ログの保存先を準備",
+      "sha256": "e96ca577f87155075b14d2d236e2b7365d74e6f5cee99b2007b7167fdc112802"
+    },
+    {
+      "path": "changes/unified-log-writers-20261029.json",
+      "id": "unified-log-writers-20261029",
+      "title": "常駐処理と定期処理の出力先を共通ログに統一",
+      "sha256": "d094226d123beb6fa2c8f5c5a37494ab95369dcaedad04351ad5f15d45afe4a8"
+    },
+    {
+      "path": "changes/unified-runtime-log-20261029.json",
+      "id": "unified-runtime-log-20261029",
+      "title": "MCSの運用ログを一つのファイルへ集約",
+      "sha256": "e2fd3640a98ac3cf2a4811d9afa8761ea401309c5b2b89e46252cf5aa4fd3db5"
+    },
+    {
+      "path": "changes/update-backup-capacity-precheck-20261030.json",
+      "id": "update-backup-capacity-precheck-20261030",
+      "title": "更新計画でバックアップ容量の不足を事前に検出",
+      "sha256": "db0d96cf1e9e276d2964b49761e0906367ab681ab0711a3ff5bf0608b9fda441"
+    },
+    {
+      "path": "changes/update-busy-apply.json",
+      "id": "update-busy-apply",
+      "title": "導入・更新中の更新要求を未実行として返す",
+      "sha256": "0430080324e16bed9d57e7bad59a81e8b76024024d2ee19a12730ed0341f07bb"
+    },
+    {
+      "path": "changes/update-lock-short-window-20261029.json",
+      "id": "update-lock-short-window-20261029",
+      "title": "更新時に定期処理の短いロック解放を見逃さないよう修正",
+      "sha256": "be51c82eae6e6d28c8116c558d7115d2f06302179860735c0e8cda1985d39007"
     }
-  ],
-  "fragment_sha256": {
-    "attachment-preflight-batch-recovery": "cdbd79069bb04914a4120e1cb68c773b67513c0d691db00f5d00ca29fc895c13",
-    "collection-error-guidance": "62365ccc36890e4849bdb66c878414857a31068b18112ca0e9c8fc432da18a65",
-    "csdc-cold-recovery": "e2e105e6429044a8bbc6a754f9fab3933a022ca4ca5d02463db3ac6f3e58904d",
-    "db-capacity-observability": "ca3ebd925d46cae099914d354ddeace9d75bde4b1ebb8066d042be2c0b521665",
-    "docs-s7-docstring-corrections": "f22f78514d3cc2bfe4351f68f5d196f249c0ae12651e713fa0b5f8e383d7704c",
-    "drug-web-fallback": "ad89c3f066b0cb4fd66e556fb1967153e681e5ada7aa462d5f33341c2fccd672",
-    "existing-model-integrity": "ac9a1a256f221fd780921acecdbc7b6621387273c53c7692222a7ed5d3d11955",
-    "fix-restore-approval-exists": "86dcb20fa36ba931fcaf743318924cf191eaf231bb3a6fa7deb201b192b254bd",
-    "fix-update-discovery-ls-remote": "3a416f43a724ef513d30e0c884b86b960158b0108e7fee61147aad83715650bc",
-    "health-layout-counts": "144b6ddd1a5f8082e52f4bbabeee3bb6560cd0cfe0a3b3478ac0bf3f6a0a2143",
-    "optional-feature-defaults": "bc5621bc877a2429eee5b8d92850246ace07dfa141bff481601d3a1651cd2439",
-    "recovery-transport-envelope": "e69bcadee0a7fb82c29944d07e590944f3a5b46a5547dd632105e2313745551a",
-    "refactor-backup-b34": "a7b64fbb9af37554c9a039f62575d0b41440b5bbb8b9c167ba4980b4763d7d57",
-    "refactor-c1-envelopes-b26": "59f1a380f787ae8121d18f03b7229682960a4f590a7f176f6217c05132df59e5",
-    "refactor-chat-action-contracts": "c462d81302a2aee00549363f92c0ea634b3c0ae09105bff292081bdb4e1c8a17",
-    "refactor-chat-delivery-contracts": "e11e5c03fd757e0453963b4f12f515678b5ef73abe45e4bcbdabbb42c0467d5b",
-    "refactor-core-low-b22": "f470dbd5cc4a35ebf5657d9822d9b559d5a3acbf69447ffe816f19a39d23b59d",
-    "refactor-download-url-b27": "325e4bba1edae4587551036c11a1cb1d850804e0a93dfa23a4394d64334c0a57",
-    "refactor-drug-info-contracts": "52941c42d81dbf85b59412d5a0f97fd999d5b91fc2b2a723e8edacf83f84b9bc",
-    "refactor-export-contracts": "e098bc43ea8b04b11ecb2ac145eb06895753ca48ca265003691a8658904c854f",
-    "refactor-extraction-boundaries": "b6b4d564df3c148c654d77d528dc26f8a07baddeabc5195c762a29168bfd514b",
-    "refactor-foundation-fixtures": "29aae6478e9e232b6435dc4189dc144cbe178392637b49ea5d7e26f9d37819f2",
-    "refactor-ingest-parse-contracts": "fd18356aeda3afb9ef6d32f24d027893678395b2ff2ed5a76344d7af060a23b2",
-    "refactor-ledger-b35": "de85eae6dca5f3a1a8b2d2edc285e0fb21c001e0178e9d0d64c6b7048c35d344",
-    "refactor-ledger-schema-b36": "c35c182248baa0703651576a6604e73a52cec902c7ab91487dc6a48c36baf0dd",
-    "refactor-lifecycle-b38": "a8e3ef72821731aa0b384d28f03f782d362bca9b7b229ec846b7debf3acf4703",
-    "refactor-lineworks-helpers-b32": "907c2bf590a15fb7379eea9c967cb7d2f374475bc448cfe88fff388b6a805490",
-    "refactor-llm-signal-stamp-contracts": "b3f7cc816c4ddd284c15abd9abcc12b0a9418173016dcb838ed66403dad81a2f",
-    "refactor-medication-read-contracts": "b37d7324a22bdc46735b0f84ea91cef140b573f15828e3210ea15ec7c8e67e09",
-    "refactor-notification-card-contracts": "47577a833d0255f2e9449485db6a2bf45d4e42b936f85506a074f7ba22094585",
-    "refactor-notification-dispatch-contracts": "7d23e37ac0e86cd745d56d00ed0efc2cada4840d407ad9e58ff6eae7ebc21b1f",
-    "refactor-notification-display-reads": "f86fc2ad8eac52abe608f5a976b8689839ff6c20f32880fa823a18c977c72f55",
-    "refactor-notification-receipt-contracts": "3a00abe990d9c380f1ad9bd044685d1052acd92d028da174e3700fa5b81c7b33",
-    "refactor-ops-helpers-b33": "128072d0507054d54a1565616d77b25d952cbfb1fcdb156b20ac755284c0c799",
-    "refactor-patient-context-contracts": "a51aac76f85e941f9c64b2762e2ed300a9cf62ac98c03adabbbc22e773943a78",
-    "refactor-query-and-test-foundation": "177930e8debf18ad2f2df90935666df60ac8b57f0ee86d0b116b3e1ea246810b",
-    "refactor-read-model-b25": "2cf4081a989669dd70c0d6481b94f49f414445b4028e0b194f17c4d89e8cebfa",
-    "refactor-read-view-contracts": "5814d64be2e2a41fa733627019dfdc2233c443774e74170c9e9964ac5a302c08",
-    "refactor-remaining-foundation": "8a3d4e0baee8d7da5ce120a5a109512697e8e6d15f37a726c3f72e8b494bf57f",
-    "refactor-remove-config-generation": "0bfe2ff234395b3c779665252ad133a27ef5cc5149614f308f77e108eb419add",
-    "refactor-reply-job-thread-window": "b543c2a7a39b32f9832004d265dfcc2d56345bedf4c2e7cc8905a5a3e9ecf9dd",
-    "refactor-request-loops-b24": "f58719e68960b04fa54e6e30c73b4f40a86883205f238c194e647b511e6e9cd8",
-    "refactor-s29a-config-scope": "91469e595ddfa7b8bca03927e63a499f01c1d8f183df1e3e7749a510d68084d2",
-    "refactor-s29b-maintenance-imports": "b9dbcfd81a98f13acc85c46e4675a5767fb918604f48b5b859d3bd144de77d61",
-    "refactor-s33b-recover-mode-reads": "7fdfb16d430ad4dc2b0de1c2ca4a1a58744ba4c5ac3ba59a98784df12ac44150",
-    "refactor-s33b-update-helpers": "688ebf4e0bb267bcf417fe8a9128b6f05c56ef7470fd1c62b4a35d13c36001c7",
-    "refactor-s33c-upgrade-entry-and-check": "e0c842813dfa42a61f3a23f9c211e773270e3178c4bdb6db200bb17ca42b4535",
-    "refactor-s33d-updater-helpers": "7033e8d5cd8defab0d684c3d377be3cfc8e863d1965bbc18a43902ce978e9370",
-    "refactor-s7-lowfix": "0e73935a7b8d65ad5d2ce5632cf09fe5eee988f34bf0150c3f97468f0a15e0ec",
-    "refactor-semantic-evaluation-contracts": "6026e41d1f58ca276f99af6152fbcbb45364a4e02f5962daafacaf64c75366a2",
-    "refactor-semantic-execution": "05b44b0c80044224de096974925a39cfc67f4e9b026c97d3519f5cfca646eaec",
-    "refactor-semantic-extraction-paths": "624839d71c4bc199a6f090d03f3d83d3fc348b095ad3769a2786c7f114c1dda9",
-    "refactor-semantic-qc-low-b23": "c478f3fb2560d2c7f0709e90e8454b1313121e1430c0b870d9aaed6af906b229",
-    "refactor-setup-b37": "0f3902ce2a6af379903c2620a4c4137cfc6e7cdca445c8a181f18e064d2e9209",
-    "refactor-stamp-write-b29": "52c981f497368b586dc29ba9ccc4c59f3e8c4d85a6616dae23bac1d9b6661a9b",
-    "refactor-standalone-attachments-b31": "0e83677058c49638047606109c3531f4b91db9ae55ce92588f5085ac05f56891",
-    "refactor-standalone-config-contracts": "c4429472c02dbbe7f2240a922fc5cfc2f3e4d47b9ad7f5cdff774a4a8c558729",
-    "refactor-structured-view-b30": "b08c42de218cc7a3b43587b6f80ea46bee701a1dc903b1f7dabbe9b0b0e0f775",
-    "refactor-worker-hooks-b28": "2ed6bfcb721f01c894f76e7fe1f7f44bd50c25e1aa8b4f50297159411b888a4c",
-    "reply-card-ownership-hotfix": "dc34f4691485f0ef582a1cc0b78171bfc0ffff35cdc4d5a3280355f44a2ce874",
-    "sdc-consent-auto-connect": "2e59b256e12cf63f9a26e097b11e24296fdbfe814b818fc258820a12e07eb365",
-    "sdc-customer-mode": "82f7e1c6702efd8f9258b3db6908c5c8c73a0a954d85d3a3a8e757346730a09d",
-    "sdc-default-off-tick-guard": "2d33f3d0fa20cc1c8b60e3f444169b1de023884064405deebf955648c38cd83c",
-    "sdc-diagnostic-event-sender": "3826e15e3e73707d10a79a34ae51e7a409ef3e6e4b3f08e2736d49d752ec33f4",
-    "sdc-diagnostics-launcher": "51b1c0cd619a45453f391f9066b7b46edf8efd1de3178effce8b4c1ebc9811b9",
-    "sdc-initial-provision-caller": "a97403342a0e92b467dc88794c738b95fc3acd35652d65f21b4a639c4a541540",
-    "sdc-inventory-transport": "8f62b109c896b9a1f6b9717104020b5b6000bbb8405c9fb1bc47abe5dba56fad",
-    "sdc-inventory": "1ab4164fd17092fddf4014a92d7bc0752cf5fa0e30c0abb48c6a6de78bcca48e",
-    "sdc-keychain-lost-reap-hold": "1742efede60ea961333090463e6c43fdf3c23a72faa2214495b86a62b95e60b7",
-    "sdc-keychain-mutation-owner": "cb6ee0fb7fa115eb338797af4ef2209c3fe2fc414bf875844f697db64909bed4",
-    "sdc-keychain-read-owner": "639b9467ae13a5173ae30ae6a053e168f18c7a2347276cf12055c9c8e30fcf32",
-    "sdc-keychain": "6010794ac5958ab3f5bdbe51ec5439854e4920154a73c693151465ac7fc7ebc4",
-    "sdc-managed-monitor-planning": "d16e93dde3c309c4728e68062a4b6f974adc73bae416623d2557917e9ae34410",
-    "sdc-managed-restart-owner": "7923ff206a987c148e5f7a45bd8f4957ea8785d47a3f7744a6f23958b4a75cbd",
-    "sdc-managed-support-profiles": "a860b0aa0d06654612dcd0df24ffd676f69b6bb04b50077987ec0f3f124a5531",
-    "sdc-passive-diagnostic-boundaries": "4497961ed357e8c56e9b933651c24a088c1ab1a96f8c0d1b40b8d265fd72eb2a",
-    "sdc-provision-diagnostics-contracts": "c82da201edda35985ad58255a39dd79a5f4ddaac2def9fbc17d2b3bcd1b3a326",
-    "sdc-provision-operability": "965f23a1d807b0caa897641d2fe70f88c1f0f03a398e7adbadcee0fe2c064c71",
-    "sdc-release-apply": "e94cb5522d6c17de189fd8f803ae2402b201044cf79b342c3cb040210520204d",
-    "sdc-restart-contract": "03de7ce9e463c143091705ff9462c6f7d4e465aafe969ef67464f6a5997a54e0",
-    "sdc-restart-control": "ea7ed05999e33fb9ff2b9ecabb1441037ddb5a74ad4f73e200db5525e8480349",
-    "sdc-restart-execution-state": "e3485f2f0ff6655fa8b21809567e873c88678fa125f53897a7d5fdee20058b45",
-    "sdc-restart-keychain-owner": "57a77656b0378d775f6650bafed3d84918a01ece90c705cc0d44821eb000cb71",
-    "sdc-restart-local-state": "8fb657eeff3c0d917f99559c070948d46c07133b2ec8c8828a818f31bc1dee7f",
-    "sdc-restart-planning-client": "4a92d856849c81ad6dff052e8f34f7771f2768bf557e101a427e70b52a0f4301",
-    "sdc-restart-planning-runtime": "414656b702cabc0f559dd198a93e09ac028caed8bdac31b93ff378f67234b81d",
-    "sdc-restart-registration-contract": "7b9c6313c023d3ed5b71cfa7f7446ae2468788393c8f6a29b43179ddc9445bd8",
-    "sdc-restart-registration-terminal-errors": "10e036782735ecf5d0ad75152d83efa68d38efe1ea82fb04dbb116024f8b1f52",
-    "sdc-restart-signatures": "5a770f909225a9b9f5837a0b9ead25122df2dc9a4bb8d8ffcd7b4005696b536d",
-    "sdc-restart-transport": "7445167839d7abf41c2a6fbb3ba61adc0c61144157fccd25205be769f0345b33",
-    "sdc-runtime-restart-carrier": "6eb039fc2e2f30da7140d7fa3ae1dc31cb523b810fab7399403df2a4de14b8f0",
-    "sdc-signature-process-owner": "a4e10769783b7d5c72518116131110963e15a15897098eea1ebe0ca6ecd8a028",
-    "sdc-support-consent-client": "5850e97ef14ec3341010845f5f9b02b8a0e1b3dc2c4ecb023ddcbb899e65b939",
-    "sdc-support-contract": "45858ed1a414e4f390d4fc0b554a8e26425ffaae0ba9cbc6c8c0a94b2761bad4",
-    "sdc-support-control-contract": "3a25584b7f6278225926408919f147d484f92f3aa63400673324ddf52e25f62e",
-    "sdc-support-diagnostic-projection": "08fb78a3e2f2eba859de0a0b30d17a4207b76c7ea0bb7fabbf2fbc34525a69cd",
-    "sdc-support-diagnostic-provider": "40cdc7dc047c3844a9b5d88498dfa579d5d56fc9a673ae52d1fe7960dfb2a84f",
-    "sdc-support-diagnostic-runner": "3eb584a1ac5b0015514d732140a950b250ae9ee28909c338c864bddd82a91d1c",
-    "sdc-support-foreground-poll": "ae314ab46f22600a018d88ffb4cf4cafe3b0dd4b7337c44c7b59e4b05e1e0bb8",
-    "sdc-support-local-state": "26f683fb61bfc99d40c9ca51faddf3ef6193b2b7fc0f384b6fc3ff98ef786486",
-    "sdc-support-operation-binding": "c962f6febd24c3a6460af6276b11b502d0d28a267f214519cf02a4b945368897",
-    "sdc-support-preview": "ff452914943ec5b8197fb3f7065ba1943f7f433178075ec7c30ab1e9fc4b1c0f",
-    "sdc-support-signatures": "aedc02bea016df07d9ce9d7f3b617b10c9449d272b2f531e116c59cd8f897078",
-    "sdc-support-transport": "fc9f14127d96376fd0bb8466a2ab8527b896879dbf5efda192ed68e24b60cff7",
-    "setup-gateway-flags": "a0f430788dc4cae767459f104a000854378389480b4b8d30e23c7a77c6f6697a",
-    "setup-save-confirmation": "d56312cdded2f6cf4a7872fcfc241734e6a2eb7d4a66e79d4955704f239269b1",
-    "seven-day-dead-notify-wrapper": "e595e8f7c096de3cb99baf6a4cc6eacee0275f0e50ac403650009a55c3531707",
-    "seven-day-dead-view-helper": "66ffae1fe73779093260add722a0bed018959dfbd6fdd5681276f7d486beb625",
-    "seven-day-drug-notice-retry": "b6ad0adf06cffb4dd7cd1f0c13334b592032fa15b0e30a73be1dd7ec79b2960d",
-    "seven-day-lab-merge": "0269324d4271744d13a08b6943278190e0ffc069bdd3e6dd392b3728b843bb2d",
-    "seven-day-orphan-identity": "a77f5ef649c2a95e9361bddb501812c3b52b38b321bb27b558876e3aaab38952",
-    "seven-day-post-edit-receipts": "23f59ae02c3c45921ef8cafd546c9ed68ebc995cc0c2ba8b3a60f6cb2fb52468",
-    "seven-day-sdc-deadline": "d56ff68f9e92476e5ca95f780f8a131ae746cea6902621f458c973c9c768e170",
-    "seven-day-verification-boundaries": "32c3c4fae6cfb9ac5d996fccf45d1db50a4a31c76ecc2a0db4ff9602a392653d",
-    "slack-body-wire-budget": "73d51ce2ef1a095b8691e184ca63e38bb9abb283a3ba83f9cb8154e2ff31cf3d",
-    "standalone-credential-reap-safety": "d75579b5ef48dd163359b81e99d909333304e8c4158f18a091192662ea5472ee",
-    "standalone-delivery-lifecycle": "e05ee314344a175db40b82037d829aa1743f18ae148809322574e5ca5f9b3b16",
-    "standalone-delivery-runtime-review-fixes": "e54d6265f56c65a881d35d65efb848ff146c310fe28a380507b3b61ddec66ea1",
-    "standalone-native-admission": "cb0b6a4f892f22ef3c92152985ceb579f0dddc903dd2b66516392f655d2ea2c4",
-    "standalone-restart-carrier-owner": "cca10c0c1a4931c0ed24a1f26e14fd04e8ed067ef48fdc54db8207f137bcbbfd",
-    "standalone-restart-execution": "e95b2620778e58983e59cb0c534e420767616a3a7ce7d85a386804502ceb5e59",
-    "standalone-restart-pending-cancellation": "be3241e450c61faba076bcafe1c70805d52ec4a1d81d69db1a26b002b1721a1b",
-    "standalone-restart-reservation": "a732d1236b024b9570b8c470ab38f200d1a87ca65cf49194d1ccf7668a74c555",
-    "standalone-runtime-admission": "dfb76230b3b97cce8659dcc45ab9835c28181415c6e972d7b0af21fee5191a88",
-    "standalone-runtime-delivery-owner": "8cabb5f82eaa57060507744fa2f911b8b3492fabb02ca3f4809ad71d11922ac8",
-    "status-snapshot-configured-llm": "ecb70da4e6939231cedcef33ba67faee6e00de6e0e1f8baf9105613c9d06add3",
-    "status-snapshot": "b9f465a4fa6b57091252ffd119a2955a80096caec04e4339e004c3ee960f7548",
-    "support-diagnostics-share": "43e63872efa6ec6d3caed91d49ad2154ed2bc7d8ce24b8940a966c3108a868ed",
-    "urgency-missing-source-review": "0472ff9fb3af570a1d281f2f7bf8d5f3e7f7a8650a7d2d0579ce282593ab2583",
-    "v110-csdc-default-off": "411c6f9bb2452e129f2ea5381af627226e80f9ae202e9d18a39a32938a46f97f",
-    "v110-delivery-boundaries": "fc5a3f499ad7969eee2fc1a05ec35622810644df0dd6228b4ff79ee8f98e977b",
-    "version-policy-110": "086fa3e318104682603733c64cde36b2e0bb6c34b8b2985b0293f1f73f3de422"
-  }
+  ]
 }
