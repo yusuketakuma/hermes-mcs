@@ -222,7 +222,7 @@ def test_snapshot_uses_private_independent_temporary_file(tmp_path, monkeypatch,
     published.write_bytes(b"prior snapshot")
     validate = ledger.valid_mcs_db
 
-    def inspect(path, *, deadline=None):
+    def inspect(path, *, deadline=None, **_kwargs):
         assert Path(path) != concurrent
         assert Path(path).stat().st_mode & 0o777 == 0o600
         assert deadline is not None
@@ -236,7 +236,7 @@ def test_snapshot_uses_private_independent_temporary_file(tmp_path, monkeypatch,
     if not valid:
         assert published.read_bytes() == b"prior snapshot"
     assert sorted(p.name for p in output.iterdir()) == [
-        "ledger-snapshot.db", "snapshot.tmp"]
+        ".snapshot.lock", "ledger-snapshot.db", "snapshot.tmp"]
 
 
 def test_mcs_db_validation_rejects_empty_sqlite(tmp_path):
@@ -254,14 +254,14 @@ def test_snapshot_validation_expiry_keeps_previous_snapshot(tmp_path, monkeypatc
     published.write_bytes(b'synthetic prior snapshot')
     validate = ledger.valid_mcs_db
 
-    def expired(path, *, deadline):
+    def expired(path, *, deadline, **_kwargs):
         assert deadline > ledger.time.monotonic()
         return validate(path, deadline=ledger.time.monotonic() - 1)
 
     monkeypatch.setattr(snapshots, '_valid_snapshot_candidate', expired)
     assert snapshots.publish_snapshot(str(source), str(output)) is None
     assert published.read_bytes() == b'synthetic prior snapshot'
-    assert sorted(p.name for p in output.iterdir()) == ['ledger-snapshot.db']
+    assert sorted(p.name for p in output.iterdir()) == ['.snapshot.lock', 'ledger-snapshot.db']
 
 
 def test_message_refetch_repairs_missing_posted_at(tmp_path):

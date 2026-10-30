@@ -5,6 +5,7 @@ Split from run_check orchestration: these run at the end of every tick
 and must each be independently failure-isolated by the caller.
 """
 import errno
+import fcntl
 import glob
 import hashlib
 import json
@@ -20,6 +21,7 @@ from pathlib import Path
 from contextlib import closing, suppress
 from time import monotonic
 
+import snapshots
 from snapshots import publish_snapshot as _publish_snapshot
 from ledger import valid_mcs_db
 from mcs_util import HOME
@@ -630,18 +632,31 @@ def prune_leftovers() -> int:
     ctime: a quarantine rename keeps the original mtime."""
     cutoff = time.time() - LEFTOVER_KEEP_S
     removed = _prune_spool_temporaries(os.path.join(HOME, "data"), cutoff)
-    for pattern in (os.path.join(HOME, "data", "attachments", ".download-*.part"),
-                    os.path.join(HOME, "data", "cmd", "*.json.invalid"),
-                    os.path.join(HOME, "data", "cmd_int", "*.json.invalid"),
-                    *(os.path.join(directory, stage + sidecar)
-                      for directory, stage in ((BACKUP_DIR, "*.db.tmp"),
-                                               (SNAPSHOT_DIR, ".snapshot.*.tmp"))
-                      for sidecar in ("", "-journal", "-wal", "-shm"))):
-        for path in glob.glob(pattern):
-            with suppress(OSError):
-                if os.stat(path).st_ctime < cutoff:
-                    os.unlink(path)
-                    removed += 1
+    patterns = [os.path.join(HOME, "data", "attachments", ".download-*.part"),
+                os.path.join(HOME, "data", "cmd", "*.json.invalid"),
+                os.path.join(HOME, "data", "cmd_int", "*.json.invalid")]
+    patterns.extend(os.path.join(BACKUP_DIR, "*.db.tmp" + suffix)
+                    for suffix in ("", "-journal", "-wal", "-shm"))
+
+    def prune(patterns):
+        nonlocal removed
+        for pattern in patterns:
+            for path in glob.glob(pattern):
+                with suppress(OSError):
+                    if os.stat(path).st_ctime < cutoff:
+                        os.unlink(path)
+                        removed += 1
+
+    prune(patterns)
+    try:
+        fd = os.open(os.path.join(SNAPSHOT_DIR, ".snapshot.lock"),
+                     os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        with fdopen_owned(fd, "w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            prune(os.path.join(SNAPSHOT_DIR, ".snapshot.*.tmp" + suffix)
+                  for suffix in ("", "-journal", "-wal", "-shm"))
+    except OSError:
+        pass
     return removed
 
 
@@ -693,7 +708,11 @@ def publish_snapshot(db_path: str, *, deadline: float | None = None) -> bool:
 
 # ---------- H4: publish the snapshot only when it would change ----------
 
-def _content_signature(db_path: str) -> dict | None:
+class _SnapshotSignatureDeadline(Exception):
+    pass
+
+
+def _content_signature(db_path: str, *, deadline: float | None = None) -> dict | None:
     """Cheap change marker of the ledger: schema_version plus MAX(rowid)
     of every rowid table (an index seek each, never a scan). Tick
     bookkeeping (runs) is left out so an idle tick reads as unchanged.
@@ -702,35 +721,55 @@ def _content_signature(db_path: str) -> dict | None:
     in-place updates reach readers through the snapshot_dirty flag
     (notification state) or the SNAPSHOT_MAX_AGE_S forced republish. None when unreadable —
     the caller then publishes (fail toward fresh)."""
+    def check_deadline():
+        if deadline is not None and monotonic() >= deadline:
+            raise _SnapshotSignatureDeadline
+
     try:
+        check_deadline()
         uri = Path(db_path).resolve().as_uri() + "?mode=ro"
-        with closing(sqlite3.connect(uri, uri=True, timeout=5)) as con:
-            con.execute("PRAGMA busy_timeout=5000")
-            con.execute("BEGIN")
-            sig = {"": con.execute("PRAGMA schema_version").fetchone()[0]}
-            for name, sql in con.execute(
+        timeout = 5 if deadline is None else min(5, max(0, deadline - monotonic()))
+        with closing(sqlite3.connect(uri, uri=True, timeout=timeout)) as con:
+            if deadline is not None:
+                con.set_progress_handler(lambda: int(monotonic() >= deadline), 1000)
+
+            def execute(sql):
+                check_deadline()
+                if deadline is not None:
+                    ms = int(min(5, max(0, deadline - monotonic())) * 1000)
+                    con.execute(f"PRAGMA busy_timeout={ms}")
+                    check_deadline()
+                return con.execute(sql)
+
+            execute("BEGIN")
+            sig = {"": execute("PRAGMA schema_version").fetchone()[0]}
+            for name, sql in execute(
                     "SELECT name, sql FROM sqlite_master WHERE type='table' "
-                    "AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall():
+                    "AND name NOT LIKE 'sqlite_%' ORDER BY name"):
+                check_deadline()
                 text = (sql or "").upper()
                 if (name in SNAPSHOT_SIG_IGNORED or "WITHOUT ROWID" in text
                         or text.startswith("CREATE VIRTUAL")):
                     continue
-                sig[name] = con.execute(
+                sig[name] = execute(
                     f"SELECT MAX(rowid) FROM {_quote(name)}").fetchone()[0]
             # small tables edited in place: a request status change or a
             # renamed patient must republish without waiting an hour
             if "requests" in sig:
-                sig["requests@updated_at"] = con.execute(
+                sig["requests@updated_at"] = execute(
                     "SELECT MAX(updated_at) FROM requests").fetchone()[0]
             if "patients" in sig:
                 digest = hashlib.sha256()
-                for row in con.execute(
+                for row in execute(
                         "SELECT project_id,project_type,patient_name,disease,"
                         "station_name,url FROM patients ORDER BY project_id"):
+                    check_deadline()
                     digest.update(json.dumps(row).encode())
                 sig["patients@content"] = digest.hexdigest()
+            check_deadline()
             return sig
     except (OSError, sqlite3.Error):
+        check_deadline()
         return None
 
 
@@ -765,17 +804,29 @@ def refresh_snapshot(db_path: str, *, force: bool = False,
     copies a day). Now a publish happens when ``force`` (the notification
     snapshot_dirty flag), the content marker moved since the last
     publish, no published copy exists, or the copy is SNAPSHOT_MAX_AGE_S
-    old — readers are never more than that behind. Returns 'published',
+    old. That age triggers another attempt, not a freshness guarantee
+    when publication fails. Returns 'published',
     'unchanged', or None when a needed publish failed. The marker is
     taken BEFORE the copy: a write landing in between only makes the
     next tick publish again."""
+    snapshots._reset_status()
     now = time.time() if now is None else now
-    sig = _content_signature(db_path)
+    try:
+        sig = _content_signature(db_path, deadline=deadline)
+    except _SnapshotSignatureDeadline:
+        snapshots._fail("signature_deadline")
+        return None
     prev = _load_json(_snapshot_sig_path())
     dest = os.path.join(SNAPSHOT_DIR, "ledger-snapshot.db")
+    if deadline is not None and monotonic() >= deadline:
+        snapshots._fail("signature_deadline")
+        return None
     if (not force and sig is not None and prev.get("sig") == sig
             and _recent(prev.get("published_at"), now, SNAPSHOT_MAX_AGE_S)
             and _plain_file(dest)):
+        if deadline is not None and monotonic() >= deadline:
+            snapshots._fail("signature_deadline")
+            return None
         return "unchanged"
     if not publish_snapshot(db_path, deadline=deadline):
         return None

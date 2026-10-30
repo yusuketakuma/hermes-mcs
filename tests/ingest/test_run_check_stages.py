@@ -3415,3 +3415,37 @@ def test_capped_unread_requires_every_parent_body_in_the_unread_time_range(tmp_p
             result = _capped_run(db, adapter)
         assert marks == [((1, 123), {"fallback_plain": True})]
         assert result["marked_read"] == [1] and result["incomplete"] == []
+
+
+def test_commands_snapshot_keeps_original_deadline_and_dirty_on_failure(tmp_path, monkeypatch, capsys):
+    import maintenance
+    import notify_cards
+    import notify_cmds
+    import notify_spool
+
+    class FakeLedger:
+        def __init__(self, path):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(run_check, "Ledger", FakeLedger)
+    monkeypatch.setattr(run_check, "_config", lambda: {})
+    monkeypatch.setattr(run_check, "_hard_deadline", lambda: None)
+    for name in ("ensure_dirs", "recover", "publish_flags"):
+        monkeypatch.setattr(notify_spool, name, lambda *a, **kw: None)
+    for name in ("restore_awaiting_consent", "restore_pending"):
+        monkeypatch.setattr(notify_spool, name, lambda *a, **kw: None)
+    monkeypatch.setattr(job_ops, "drain_commands", lambda *a, **kw: None)
+    monkeypatch.setattr(notify_cmds, "drain_int_commands", lambda *a, **kw: None)
+    monkeypatch.setattr(notify_cards, "gc", lambda *a, **kw: None)
+    monkeypatch.setattr(notify_cards, "snapshot_dirty", lambda ledger: 42)
+    cleared, calls = [], []
+    monkeypatch.setattr(notify_cards, "clear_snapshot_dirty", lambda *a: cleared.append(a))
+    monkeypatch.setattr(maintenance, "publish_snapshot", lambda db, *, deadline: calls.append(deadline) or False)
+    fd = os.open(str(tmp_path / "synthetic.lock"), os.O_CREAT | os.O_RDWR, 0o600)
+    deadline = time.monotonic() - 1
+    assert run_check._commands_only(fd, deadline) == 1
+    assert calls == [deadline] and not cleared
+    assert "snapshot_publish_failed" in capsys.readouterr().out
