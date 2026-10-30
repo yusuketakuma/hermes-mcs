@@ -82,17 +82,17 @@ def test_low_density_inference_stays_single_and_reference_cannot_supply_evidence
         core = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
         calls.append(core)
         if "独居" in core:
-            return {"patient_context": [{"category": "medication_management", "subject": "family",
+            return {"symptoms": [], "patient_context": [{"category": "medication_management", "subject": "family",
                     "text": "家族の薬", "evidence": "前の文は家族の薬でした。"}]}
-        return {}
+        return {"symptoms": []}
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
     out = extract_llm.llm_extract(source)
     assert out is None or not out.get("patient_context")
     assert len(calls) > 1
     calls.clear()
     monkeypatch.setattr(extract_llm, "_CHUNK_SIZE", 3000)
-    monkeypatch.setattr(extract_llm, "_llm_call", lambda prompt, **kwargs: calls.append("独居です。") or {})
-    assert extract_llm.llm_extract("独居です。") == {}
+    monkeypatch.setattr(extract_llm, "_llm_call", lambda prompt, **kwargs: calls.append("独居です。") or {"symptoms": []})
+    assert extract_llm.llm_extract("独居です。") == {"symptoms": []}
     assert calls == ["独居です。"]
 
 
@@ -105,7 +105,7 @@ def test_actual_model_is_pinned_through_calls_and_final_stamp(db, monkeypatch):
     def infer(prompt, **kwargs):
         calls.append(extract_llm._resolved_llm()[1])
         current[0] = "synthetic-model-b"
-        return {"patient_context": [{"category": "living", "text": "独居です", "evidence": "独居です", "subject": "patient"}]}
+        return {"symptoms": [], "patient_context": [{"category": "living", "text": "独居です", "evidence": "独居です", "subject": "patient"}]}
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
     assert extract_llm.run_pending(db, limit=1, budget_s=30)["done"] == 1
     final = db.db.execute("SELECT model,meta FROM artifacts WHERE kind='extract_llm'").fetchone()
@@ -166,7 +166,7 @@ def test_every_real_adapter_call_uses_pinned_model_during_config_edit(monkeypatc
     def chat(prompt, **kwargs):
         models.append(kwargs["model"])
         current[0] = "synthetic-b"
-        return {"status": 200, "text": '{}', "finish_reason": "stop"}
+        return {"status": 200, "text": '{"symptoms":[]}', "finish_reason": "stop"}
     monkeypatch.setattr(extract_llm.local_llm, "chat", chat)
     assert extract_llm.llm_extract(body) is not None
     assert models == ["synthetic-a", "synthetic-a"]
@@ -184,7 +184,7 @@ def test_dense_planning_bypasses_batch_even_when_source_is_short(db, monkeypatch
         assert "items" not in kwargs.get("schema", {}).get("schema", {}).get("properties", {})
         calls.append(prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0])
         repairs.append("未収載" in prompt)
-        return {}
+        return {"symptoms": []}
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
     pieces = clinical_chunking.plan_chunks(source)
     first = extract_llm.run_pending(db, limit=3, budget_s=200, batch_k=2)

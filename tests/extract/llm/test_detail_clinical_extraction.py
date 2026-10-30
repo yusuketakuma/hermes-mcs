@@ -304,7 +304,8 @@ def test_five_information_groups_and_provenance_survive_inference_and_storage(db
     db.save_messages([_message(body=body)])
     def infer(prompt, **kwargs):
         core = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
-        return {"patient_context": [item for item in source["patient_context"] if item["evidence"] in core]}
+        return {"symptoms": [],
+                "patient_context": [item for item in source["patient_context"] if item["evidence"] in core]}
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
     monkeypatch.setattr(extract_llm, "_llm_up", lambda **kwargs: True)
     assert extract_llm.run_pending(db, limit=1, budget_s=200)["done"] == 1
@@ -394,8 +395,8 @@ def test_piece_hints_and_repair_hints_cannot_include_sibling_details(monkeypatch
         assert all(piece in block and other not in block for block in blocks)
         if piece not in repaired:
             repaired.add(piece)
-            return {"labs": [{"name": "合成項目", "value": "x", "evidence": "ない引用"}]}
-        return {"summary": "合成修復結果"}
+            return {"symptoms": [], "labs": [{"name": "合成項目", "value": "x", "evidence": "ない引用"}]}
+        return {"summary": "合成修復結果", "symptoms": []}
     monkeypatch.setattr(extract_llm, "_llm_call", infer)
     out = extract_llm.llm_extract(body, hints=rules({"body_text": body}))
     assert out is not None and len(prompts) >= 4
@@ -427,7 +428,7 @@ def test_rule_hints_are_included_once_and_only_for_the_target_piece(monkeypatch,
 
     def infer(prompt, **kwargs):
         seen.append(prompt)
-        return {}
+        return {"symptoms": []}
 
     monkeypatch.setattr(extract_llm, "_rule_hints", rules)
     monkeypatch.setattr(extract_llm, "_llm_call", infer)

@@ -44,7 +44,7 @@ def test_repeated_chunk_skips_only_impossible_evidence_repair(monkeypatch):
     ("reply", {"kind": "ack", "evidence": PIECE}),
 ])
 def test_ambiguous_context_and_reply_remain_rejected_without_repair(monkeypatch, field, item):
-    out, calls = run_chunks(monkeypatch, {"summary": "経過の連絡", field: item})
+    out, calls = run_chunks(monkeypatch, {"summary": "経過の連絡", "symptoms": [], field: item})
     assert len(calls) == 2
     assert not out.get(field)
     assert out["_items_dropped"] == 2
@@ -53,7 +53,7 @@ def test_ambiguous_context_and_reply_remain_rejected_without_repair(monkeypatch,
 @pytest.mark.parametrize("extra", [
     {"symptoms": [symptom("本文にない引用")]},
     {"symptoms": "invalid"},
-    {"patient_context": [{"category": "invalid", "subject": "patient",
+    {"symptoms": [], "patient_context": [{"category": "invalid", "subject": "patient",
                            "text": "痛み", "evidence": PIECE}]},
 ])
 def test_local_missing_evidence_and_schema_repairs_are_preserved(monkeypatch, extra):
@@ -116,7 +116,7 @@ def test_ambiguity_inside_one_core_still_requests_a_repair(monkeypatch):
 
 
 def test_ambiguous_urgency_is_still_unclear(monkeypatch):
-    out, calls = run_chunks(monkeypatch, {"summary": "経過の連絡", "urgency": "high",
+    out, calls = run_chunks(monkeypatch, {"summary": "経過の連絡", "symptoms": [], "urgency": "high",
                                         "urgency_evidence": [PIECE]})
     assert len(calls) == 2
     assert out["urgency"] == "unclear"
