@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "シグナル確認の時間切れを監視状態へ反映",
+  "summary": "時間切れでシグナルの確認が一部残った場合、収集結果と監視状態で未完了として確認できるようにしました。",
+  "upgrade": "通常の更新で反映します。追加設定は不要です。検出条件・時間制限・通知先・人承認の条件は変更しません。",
+  "details": [
+    "時間切れで未実施の検出器を実行失敗と分けて返し、既存のdeadline_deferred経路で収集結果と監視状態へ伝えます。",
+    "未実施の検出器が扱う既存シグナルは、解消済みに変更せず保持します。"
+  ],
+  "refs": [
+    "mcs/signals/mcs_signals.py",
+    "mcs/ingest/run_check.py",
+    "tests/signals/test_mcs_signals.py",
+    "tests/ingest/test_health_stalls.py"
+  ]
+}

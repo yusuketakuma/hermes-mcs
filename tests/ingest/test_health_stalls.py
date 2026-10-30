@@ -159,6 +159,52 @@ def test_signal_detector_errors_reach_run_errors(db, monkeypatch):
     assert "signals: handoff:ValueError" in result["errors"]
 
 
+def test_signal_deadline_deferral_reaches_health_before_run_deadline(db, monkeypatch):
+    import drug_map
+    import extract
+    import rollup
+    import snapshots
+
+    clock = [20]
+    monkeypatch.setattr(run_check.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(snapshots, "snapshot_verify_timeout_s", lambda path: 20)
+    monkeypatch.setattr(extract, "run_pending", lambda *a, **k: {"done": 0, "pids": []})
+    monkeypatch.setattr(drug_map, "configured", lambda cfg: (None, None))
+    monkeypatch.setattr(drug_map, "derive", lambda *a, **k: {"pids": [], "status": "complete"})
+    monkeypatch.setattr(rollup, "scan_fair_dirty_projects", lambda *a, **k:
+                        rollup.RollupScan((), (), False, ()))
+    monkeypatch.setattr(rollup, "rebuild_many", lambda *a, **k: 0)
+
+    def finished(*args):
+        clock[0] = 150  # derived-work deadline; the run still has 50 seconds
+        return []
+
+    def unrun(*args):
+        pytest.fail("deadline-deferred detector was called")
+
+    monkeypatch.setattr(mcs_signals, "DETECTORS", (
+        ("request_overdue", finished), ("request_aging", unrun)))
+    result = {"errors": []}
+    cfg = {"signals": {"notify": False}}
+    run_check._run_stage(result, "derive", 200, run_check.stage_derive,
+                         db, result, 200, cfg, llm_budget_cap=0)
+
+    assert result["signals"]["errors"] == []
+    assert result["signals"]["detectors_deferred"] == ["request_aging"]
+    assert result["errors"] == ["deadline_deferred:signals"]
+    assert result["deferred_stages"] == ["signals"]
+    assert result["run"]["overshoot_s"] == 0
+    health = health_report.build_health(db.db, result, "partial", cfg=cfg)
+    assert health["overall"] == "degraded"
+    assert "stage_errors" in health["state_reasons"]
+    assert "run_deadline_exceeded" not in health["state_reasons"]
+    assert health["run"]["deferred_stages"] == ["signals"]
+
+    run_check._run_stage(result, "deliver", 150, unrun)
+    assert result["errors"] == ["deadline_deferred:signals,deliver"]
+    assert result["deferred_stages"] == ["signals", "deliver"]
+
+
 def test_failed_alert_enqueue_is_visible():
     def boom(*a, **k):
         raise OSError("disk")

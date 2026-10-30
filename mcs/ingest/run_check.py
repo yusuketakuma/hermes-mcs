@@ -322,6 +322,8 @@ def stage_derive(ledger, result, deadline, cfg=None,
             ledger, cfg or _config(), deadline=work_deadline)
         result["errors"].extend(
             f"signals: {e}" for e in result["signals"].get("errors") or [])
+        if result["signals"].get("detectors_deferred"):
+            _defer_stage(result, "signals")
     except Exception as e:
         result["errors"].append(f"signals: {type(e).__name__}")
     transaction_pending()
@@ -954,21 +956,25 @@ def _disarm_watchdog() -> None:
     _WATCHDOG_EXIT_AT = None
 
 
+def _defer_stage(result, name):
+    deferred = result.setdefault("deferred_stages", [])
+    deferred.append(name)
+    # skipped work is not success: the run record must be partial.
+    # One compact entry so later errors survive the runs.error [:8] cut.
+    errors = result.setdefault("errors", [])
+    prev = "deadline_deferred:" + ",".join(deferred[:-1])
+    entry = "deadline_deferred:" + ",".join(deferred)
+    if prev in errors:
+        errors[errors.index(prev)] = entry
+    else:
+        errors.append(entry)
+
+
 def _run_stage(result, name, deadline, function, *args, required=False, **kwargs):
     """Measure a stage and defer optional work once the run budget is spent."""
     started = time.monotonic()
     if started >= deadline and not required:
-        deferred = result.setdefault("deferred_stages", [])
-        deferred.append(name)
-        # skipped work is not success: the run record must be partial.
-        # One compact entry so later errors survive the runs.error [:8] cut.
-        errors = result.setdefault("errors", [])
-        prev = "deadline_deferred:" + ",".join(deferred[:-1])
-        entry = "deadline_deferred:" + ",".join(deferred)
-        if prev in errors:
-            errors[errors.index(prev)] = entry
-        else:
-            errors.append(entry)
+        _defer_stage(result, name)
         return None
     try:
         return function(*args, **kwargs)

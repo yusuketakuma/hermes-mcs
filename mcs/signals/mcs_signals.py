@@ -1048,8 +1048,10 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
     current = {}
     ran_types = set()
     errors = []
-    for stype, det in DETECTORS:
+    deferred_types = []
+    for index, (stype, det) in enumerate(DETECTORS):
         if deadline is not None and time.monotonic() >= deadline:
+            deferred_types = [name for name, _ in DETECTORS[index:]]
             break
         try:
             found = dict(det(ledger.db, now, th, sig_cfg))
@@ -1199,6 +1201,7 @@ def evaluate(ledger, cfg: dict, now: float | None = None,
             "notify_digest_merged": dig_merged,
             "notify_enabled": notify,
             "detectors_ran": sorted(ran_types), "errors": errors,
+            "detectors_deferred": deferred_types,
             "warnings": policy_warnings}
 
 

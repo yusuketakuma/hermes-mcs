@@ -853,8 +853,34 @@ def test_deadline_stop_never_resolves_unrun_types(led):
                                deadline=time.monotonic() - 1)
     assert res["resolved"] == 0 and res["open"] == 0
     assert res["detectors_ran"] == []
+    assert res["detectors_deferred"] == [name for name, _ in mcs_signals.DETECTORS]
+    assert res["errors"] == []
     assert _states(led.db)["request_overdue:1:1"] == "open"
     assert _states(led.db)["med_change_no_followup:1:薬A"] == "open"
+
+
+def test_partial_deadline_reports_only_unrun_types_and_keeps_their_state(led, monkeypatch):
+    _req(led.db, "open", due="2026-09-10", created=NOW - 60 * DAY)
+    _ev(led)
+    clock = [0]
+
+    def finished(db, now, th, sig_cfg):
+        clock[0] = 2
+        return []
+
+    def unrun(*args):
+        pytest.fail("deadline-deferred detector was called")
+
+    monkeypatch.setattr(mcs_signals.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(mcs_signals, "DETECTORS", (
+        ("request_overdue", finished), ("request_aging", unrun)))
+    res = mcs_signals.evaluate(led, {}, now=NOW, deadline=2)
+
+    assert res["detectors_ran"] == ["request_overdue"]
+    assert res["detectors_deferred"] == ["request_aging"]
+    assert res["errors"] == []
+    assert _states(led.db)["request_overdue:1:1"] == "resolved"
+    assert _states(led.db)["request_aging:1:1"] == "open"
 
 
 def test_crashed_detector_type_is_not_resolved(led, monkeypatch):
@@ -867,6 +893,7 @@ def test_crashed_detector_type_is_not_resolved(led, monkeypatch):
         ("request_overdue", boom),))
     res = _ev(led)
     assert res["errors"] == ["request_overdue:RuntimeError"]
+    assert res["detectors_deferred"] == []
     assert _states(led.db)["request_overdue:1:1"] == "open"
 
 
