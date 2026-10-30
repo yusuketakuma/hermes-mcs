@@ -70,7 +70,7 @@
   送信元の終了だけで、処理中か確認できない推論要求を解放しません。旧形式で送信状況を確認できない記録も保持して受付を閉じ、確認が済むまで新しい処理を混在させません。起動時刻の読取りが子プロセスの回収待ちで止まる問題も修正しました。
 
 - **クラウド応答の出力上限到達を、処理途中として扱う**
-  Anthropicの応答が本文を返す前に出力上限へ達した場合も、形式エラーと区別します。投稿の抽出は本文を分割して完了分から再開し、同じ有料要求を繰り返しません。意味解析や患者コンテキストの要約は、未完了のまま保持します。
+  Anthropicの応答が本文を返す前に出力上限へ達した場合も、形式エラーと区別します。投稿の抽出は本文を分割し、保存済みの完了区間から再開します。分割計画や完了区間を保存できない場合は、その回の後続の有料要求を止めます。意味解析や患者コンテキストの要約は、未完了のまま保持します。
 
 - **配送結果の反映がロック競合で止まらないよう修正**
   通知コマンドの処理にも世代・更新確認付きのロック待ちを使い、Hermesの監視処理へ5秒間隔の再試行を追加します。待機は通知コマンドの既存予算に含め、通常収集の処理時間は維持します。送信結果不明の通知を自動で再送する変更ではありません。
@@ -115,7 +115,7 @@
 ### 技術詳細
 
 <details>
-<summary>変更記録382件の詳細・更新条件・根拠を表示</summary>
+<summary>変更記録383件の詳細・更新条件・根拠を表示</summary>
 
 各リンクは、この版の変更記録です。要約・適用条件・更新操作・技術詳細・根拠を原文のまま保存しています。同じ箇所に複数の記録がある場合、後続の修正を含む現行の説明は上の本文と各機能のガイドを確認してください。たとえば、処理方式アイコンの初期配置は後続の見出し行への移動で置き換えています。
 
@@ -425,6 +425,7 @@
 - [アクティブ患者の履歴解析を優先して並列処理](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/cloud-parallel-patient-priority-20261029.json)
 - [クラウド処理の対象が待機したままになる問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/cloud-selection-progress-20261029.json)
 - [クラウド処理の候補確認が収集を長時間妨げる問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/cloud-selection-writer-lock-20261030.json)
+- [分割計画を保存できない場合の追加課金を防止](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/cloud-split-checkpoint-ack-20261030.json)
 - [通知の受領記録が書込み待ちのまま残る問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/command-worker-contention-retry-20261030.json)
 - [予算の期間変更で取得済みの患者文脈が破棄される問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/context-budget-window-result.json)
 - [認証情報の保存で不正なファイルと行の混入を拒否](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/credential-writer-boundary-20261029.json)

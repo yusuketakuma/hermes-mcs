@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 382,
+  "fragment_count": 383,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every original record linked without rewriting",
   "records": [
@@ -1843,6 +1843,12 @@
       "id": "cloud-selection-writer-lock-20261030",
       "title": "クラウド処理の候補確認が収集を長時間妨げる問題を修正",
       "sha256": "3e86403df9ed34b27d25767b44c45f965e55e88ad4840221f28d8f39d89f16a8"
+    },
+    {
+      "path": "changes/cloud-split-checkpoint-ack-20261030.json",
+      "id": "cloud-split-checkpoint-ack-20261030",
+      "title": "分割計画を保存できない場合の追加課金を防止",
+      "sha256": "cf6740f40c1ee9f15da6900a878f6ef3e52e3486a49863a350e71ca9254407cf"
     },
     {
       "path": "changes/command-worker-contention-retry-20261030.json",

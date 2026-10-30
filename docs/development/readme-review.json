@@ -35,13 +35,14 @@
       ]
     },
     "safety": {
-      "notes": "2026-10-30: 既存の外部送信先表にAnthropic/OpenAIがあり、匿名化なし・合計/API別上限・明示OFFを保持する説明と照合。合計の既定値25/75を反映。CSDCは未提供とし、Jev省略を検証済みとは表現しない。",
+      "notes": "2026-10-30: 既存の外部送信先表にAnthropic/OpenAIがあり、匿名化なし・合計/API別上限・明示OFFを保持する説明と照合。合計の既定値25/75を反映。CSDCは未提供とし、Jev省略を検証済みとは表現しない。 分割計画や区間の保存が拒否された後、その回の後続の有料要求を止める条件も確認した。",
       "sources": [
         "README.md",
         "SECURITY.md",
         "mcs/llm/cloud_policy.py",
         "mcs/semantic/semantic_audit.py",
-        "docs/guides/ANTHROPIC.md"
+        "docs/guides/ANTHROPIC.md",
+        "mcs/extract/llm/extract_llm.py"
       ]
     },
     "docs": {
