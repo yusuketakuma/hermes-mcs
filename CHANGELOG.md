@@ -30,7 +30,7 @@
   元スレッドのBot所有を確認し、新しい返信カードの初回投稿だけをチャンネルにも表示します。更新・再処理・本文の続き・添付で同じ通知を繰り返しません。設定追加は不要です。通知音やプッシュ通知はSlack側の設定に従います。
 
 - **AnthropicとOpenAIを選び、API別に費用を管理**
-  AnthropicのClaude Haiku 5.5とOpenAIのgpt-6-lunaに対応します。利用先を固定するか、登録済みキーの優先順位を指定でき、合計とAPI別の上限を同時に適用します。選択したAPIの予算到達や失敗を理由に、別APIへ同じ要求を自動再送しません。
+  AnthropicのClaude Haiku 5.5とOpenAIのgpt-6-luna・gpt-6.1-solに対応します。OpenAIの既定は、背景解析にLunaのmedium、患者コンテキストにSolのmedium、正式な品質修復にSolのhighを使います。それぞれの最大出力は8192・16384・32768トークンです。既存の明示モデルと費用上限は保持し、Lunaを明示していた場合の推論度はlowを維持します。利用先を固定するか、登録済みキーの優先順位を指定でき、合計とAPI別の上限を同時に適用します。選択したAPIの予算到達や失敗を理由に、別APIへ同じ要求を自動再送しません。
 
 - **アクティブ患者の履歴を優先してクラウドで並列解析**
   過去の投稿抽出・意味解析と患者コンテキストをクラウド優先で処理します。並列数は設定した1〜32の枠とメモリ・サービス側の制限内です。Jevを使える場合は検証し、未設定・枠切れ等では省略理由を記録します。既知の不一致や承認待ちは解除しません。
@@ -74,6 +74,12 @@
 
 - **更新失敗時の停止確認を修正**
   更新後の確認に失敗し、設定や復旧先を確認できない場合は、起動済みの処理の停止を試み、更新記録を保持します。停止を確認できない場合は、その状態を報告します。
+
+- **修復した結果と処理元の確認を改善**
+  保存した回答と使用記録から処理元を確認し、証拠を確認できない修復結果は未確認として扱います。内部の検証用回答は通常の記録に表示しません。回答の照合情報がない過去の処理は、処理元を確認できない場合があります。
+
+- **利用先を保存した後も認証情報の設定を継続**
+  利用先と予算の保存後も、同じ画面から認証情報を設定できます。利用先の切替では、指定しないほかの利用先の設定を保持します。
 
 - **クラウド処理の料金と応答の扱いを修正**
   使用したサービスと料金版を記録し、過去の予約をその料金版で精算します。送信前に失敗したと確認できるタイムアウトを区別し、通信結果が不明な場合は引き続き保留します。
@@ -133,6 +139,8 @@
 
 - 通常の更新手順を使い、Hermes gateway、利用中の独立実行host・worker・通知アダプター、抽出workerを再起動してください。Gitの差分だけの反映では、旧コードや旧サービス設定が動き続けます。[更新ガイド](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/docs/guides/UPGRADE_AGENT.md)に従ってください。
 
+- 更新時は既存の外部AI設定を検証し、提供元別の私有ファイルへ移します。確認できない設定は移行せず、分離済みの状態を確認できない場合は復旧を保留します。更新後は提供元別の設定を確認してください。
+
 - 外部AIを使う場合は`mcs setup api-keys`でキー・利用先・送信範囲・費用を確認してください。合計の既定上限は日25ドル・月75ドルです。API別予算を設定していない既存環境は合計上限を使い、設定した場合は予算未割当のAPIへ送りません。個別上限を解除する場合は`none`を指定し、`null`として明示保存します。mode未指定で日・月を両方解除し期間予算もない場合は送信しません。[AI設定ガイド](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/docs/guides/ANTHROPIC.md)で確認してください。
 
 - 新着の即時処理はローカルです。クラウドを使えない場合のローカル処理にも受付・期限・原文照合・品質条件を適用します。処理結果や料金の不明な同一要求を自動再送せず、従来の固定対象も自動では継続対象に変えません。Jev省略は検証済みの意味ではありません。
@@ -152,7 +160,7 @@
 ### 技術詳細
 
 <details>
-<summary>変更記録416件の詳細・更新条件・根拠を表示</summary>
+<summary>変更記録423件の詳細・更新条件・根拠を表示</summary>
 
 各リンクは、この版の変更記録です。要約・適用条件・更新操作・技術詳細・根拠を参照できます。同じ箇所に複数の記録がある場合、後続の修正を含む現行の説明は上の本文と各機能のガイドを確認してください。たとえば、処理方式アイコンの初期配置は後続の見出し行への移動で置き換えています。
 
@@ -577,6 +585,14 @@
 - [ジョブの診断履歴を安全に確認する](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/job-diagnostic-history-budget.json)
 - [クラウドの正常な応答を処理できない問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/anthropic-thinking-contract.json)
 - [更新後のHermes再起動を正規手順に合わせる](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/native-gateway-restart-guard.json)
+
+- [AI利用先の設定と要約の再確認を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-final-review-fixes-20261101.json)
+- [OpenAI解析のモデルを用途別に選択](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-model-profiles-20261031.json)
+- [品質確認後の再解析で処理元を確認](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-model-projection-contract-20261101.json)
+- [内部検証用の回答を通常表示から除外](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-replay-private-view-20261101.json)
+- [修復結果の参照前に保存証拠を確認](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-replay-verified-readers-20261101.json)
+- [利用先を保存した後も認証情報の設定を継続](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/credential-provider-save-admission-20261101.json)
+- [提供元別設定への更新手順を追加](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-initial-migration-20261101.json)
 
 </details>
 

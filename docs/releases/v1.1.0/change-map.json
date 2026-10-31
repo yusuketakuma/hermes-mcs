@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 416,
+  "fragment_count": 423,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2503,6 +2503,48 @@
       "id": "semantic-entry-bootstrap-20261031",
       "title": "解析ワーカーの直接起動を修正",
       "sha256": "1ae6b54fb59de3c88c097531f717e4fbecf02071ff97b0cec5bf8afd995d7ca3"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-final-review-fixes-20261101.json",
+      "id": "cloud-final-review-fixes-20261101",
+      "title": "AI利用先の設定と要約の再確認を修正",
+      "sha256": "bcde695274b67cc9639cb33d5318a993d31dd9da3f3b9a7bf33aed5e9a5a5b47"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-model-profiles-20261031.json",
+      "id": "cloud-model-profiles-20261031",
+      "title": "OpenAI解析のモデルを用途別に選択",
+      "sha256": "045254bc987d5360206ed5ba3ca39aa82defb1e074cf84e283d9994442715125"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-model-projection-contract-20261101.json",
+      "id": "cloud-model-projection-contract-20261101",
+      "title": "品質確認後の再解析で処理元を確認",
+      "sha256": "12d55beabc8c69ababc851644d707832371688d5ed49230ebd89560dede84cae"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-replay-private-view-20261101.json",
+      "id": "cloud-replay-private-view-20261101",
+      "title": "内部検証用の回答を通常表示から除外",
+      "sha256": "4f42460bbd1005bc547c75828ef820b2a0a367ed882e4bc2d313317d9f5eb24a"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-replay-verified-readers-20261101.json",
+      "id": "cloud-replay-verified-readers-20261101",
+      "title": "修復結果の参照前に保存証拠を確認",
+      "sha256": "ad899b7bb18649111708dbde3f14b9c84f7a92b0410a057aa0b48a04cde89ad3"
+    },
+    {
+      "path": "changes/archive/1.1.0/credential-provider-save-admission-20261101.json",
+      "id": "credential-provider-save-admission-20261101",
+      "title": "利用先を保存した後も認証情報の設定を継続",
+      "sha256": "1c2d97582573af615b69e0ea6d39283b55d798db54eec94d50c08be656ea13de"
+    },
+    {
+      "path": "changes/archive/1.1.0/provider-initial-migration-20261101.json",
+      "id": "provider-initial-migration-20261101",
+      "title": "提供元別設定への更新手順を追加",
+      "sha256": "b521e30a0494210a65a8d76a1ffd27240154ab62ed0a244b32ce55f5f0f51bac"
     }
   ]
 }
