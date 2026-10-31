@@ -6,6 +6,8 @@ import mcs_config
 import pytest
 import safe_io
 import update_migrations
+import cloud_policy
+import provider_settings
 
 
 def put(path, value):
@@ -75,3 +77,76 @@ def test_older_validator_treats_new_key_as_warning_and_keeps_existing_fields(mon
     assert not errors
     assert any('install_args' in warning for warning in warnings)
     assert legacy.exists()
+
+
+def _provider_root(tmp_path, monkeypatch):
+    tmp_path.chmod(0o700)
+    (tmp_path / 'data').mkdir(mode=0o700)
+    raw = {'mcs_login_id': 'synthetic', 'notify_target': 'local',
+           'cloud_llm': {'mode': 'off', 'provider': 'openai', 'model': 'gpt-6-luna',
+                         'provider_budgets': {'openai': {'daily_cost_limit_usd': 1,
+                                                         'monthly_cost_limit_usd': 10}}},
+           'semantic': {'mode': 'off', 'daily_request_budget': 2},
+           'unknown': {'keep': [1, None]}}
+    put(tmp_path / 'config.json', raw)
+    monkeypatch.setattr(cloud_policy, 'provider_key', lambda *_args: None)
+    return raw
+
+
+def test_provider_initial_migration_keeps_raw_values_and_split_noop(tmp_path, monkeypatch):
+    raw = _provider_root(tmp_path, monkeypatch)
+    assert update_migrations.migrate_provider_settings(tmp_path) is True
+    common = json.loads((tmp_path / 'config.json').read_text())
+    docs = {name: json.loads((tmp_path / 'data' / 'provider_settings' / f'{name}.json').read_text())
+            for name in provider_settings.PROVIDERS}
+    assert common['unknown'] == raw['unknown'] and common['cloud_llm'] == {'mode': 'off', 'provider': 'openai'}
+    assert common['semantic'] == {'mode': 'off'}
+    assert docs['openai'] == {'model': 'gpt-6-luna', 'budget': raw['cloud_llm']['provider_budgets']['openai']}
+    assert docs['jev'] == {'daily_request_budget': 2} and docs['anthropic'] == {}
+    paths = [tmp_path / 'config.json', tmp_path / 'data' / '.provider-settings-authority.json',
+             *(tmp_path / 'data' / 'provider_settings' / f'{name}.json' for name in provider_settings.PROVIDERS)]
+    before = [(p.read_bytes(), p.stat().st_ino) for p in paths]
+    assert update_migrations.migrate_provider_settings(tmp_path) is False
+    assert [(p.read_bytes(), p.stat().st_ino) for p in paths] == before
+    assert not (tmp_path / '.env').exists()
+
+
+@pytest.mark.parametrize('damage', ['pending', 'authority_missing', 'config_missing'])
+def test_provider_initial_migration_refuses_unverified_state(tmp_path, monkeypatch, damage):
+    _provider_root(tmp_path, monkeypatch)
+    if damage == 'pending':
+        put(tmp_path / 'data' / '.provider-settings-pending.json', {'synthetic': True})
+    elif damage == 'authority_missing':
+        (tmp_path / 'data' / 'provider_settings').mkdir(mode=0o700)
+    else:
+        (tmp_path / 'config.json').unlink()
+    with pytest.raises(update_migrations.MigrationError):
+        update_migrations.migrate_provider_settings(tmp_path)
+    if damage == 'pending':
+        assert (tmp_path / 'data' / '.provider-settings-pending.json').exists()
+    assert not (tmp_path / 'data' / '.provider-settings-authority.json').exists()
+
+
+def test_provider_initial_migration_keeps_pending_on_interrupted_publication(tmp_path, monkeypatch):
+    _provider_root(tmp_path, monkeypatch)
+    original = provider_settings._replace
+    def interrupted(*args, **kwargs):
+        original(*args, **kwargs)
+        raise OSError('synthetic interruption')
+    monkeypatch.setattr(provider_settings, '_replace', interrupted)
+    with pytest.raises(update_migrations.MigrationError):
+        update_migrations.migrate_provider_settings(tmp_path)
+    assert (tmp_path / 'data' / '.provider-settings-pending.json').exists()
+    with pytest.raises(update_migrations.MigrationError):
+        update_migrations.migrate_provider_settings(tmp_path)
+
+
+def test_provider_initial_migration_rejects_postcommit_readback_mismatch(tmp_path, monkeypatch):
+    _provider_root(tmp_path, monkeypatch)
+    original = provider_settings.commit
+    def inconsistent(*args, **kwargs):
+        result = original(*args, **kwargs)
+        return {**result, 'common': {}}
+    monkeypatch.setattr(provider_settings, 'commit', inconsistent)
+    with pytest.raises(update_migrations.MigrationError, match='readback_unverified'):
+        update_migrations.migrate_provider_settings(tmp_path)

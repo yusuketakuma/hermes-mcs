@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "提供元別設定への更新手順を追加",
+  "summary": "更新時に既存の外部AI設定を提供元別の私有ファイルへ移します。",
+  "upgrade": "対応する更新経路で設定を検証して移行します。確認できない設定は移行せず、分離済みの状態を確認できない場合は復旧を保留します。",
+  "details": ["既存の明示設定を保持し、未指定の値や認証情報を補いません。"],
+  "refs": ["mcs/ops/update/update_migrations.py", "mcs/ops/mcs_update.py"]
+}
