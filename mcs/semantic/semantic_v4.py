@@ -48,11 +48,143 @@ KIND_V4_STAGE = "v4_stage"
 KIND_V4_DIAG = "v4_diagnostic"
 
 
+def _repaired_projection_producer(db, pid, mid, fp, policy, member, doc, meta):
+    """Verify a retained QC repair by replaying its bound answers without I/O."""
+    import bounded_http
+    import extract_llm
+    import semantic_audit
+    import semantic_extraction
+    import semantic_runtime
+    from inference_dependency_loss import source_binding
+
+    def row(artifact_id, kind):
+        if type(artifact_id) is not int or artifact_id <= 0:
+            raise ValueError('repair_reference_invalid')
+        result = db.execute('SELECT content,meta FROM artifacts WHERE artifact_id=? AND kind=? '
+                            'AND project_id=? AND message_id=?', (artifact_id, kind, pid, mid)).fetchone()
+        if result is None:
+            raise ValueError('repair_reference_missing')
+        return strict_json(result['content']), strict_json(result['meta'])
+
+    try:
+        completed, completed_meta = row(meta.get('repair_artifact_id'), KIND_FACT_REPAIR)
+        evidence = completed['__mcs_internal_proof_v1']
+        if (not isinstance(evidence, dict) or type(evidence.get('version')) is not int
+                or evidence['version'] != 1 or completed.get('repaired') is not True
+                or completed_meta.get('fingerprint') != fp or completed_meta.get('policy_fingerprint') != policy
+                or not is_current(completed_meta) or completed_meta.get('invalidated')
+                or evidence.get('target_revision') != member['revision']
+                or not isinstance(evidence.get('source_binding'), str)
+                or evidence['source_binding'] != source_binding(db, pid, mid)
+                or evidence.get('repaired_doc_hash') != semantic_facts.doc_hash(doc)):
+            return None
+        original, original_meta = row(evidence.get('original_artifact_id'), KIND_FACTS_V2)
+        audit, audit_meta = row(evidence.get('audit_artifact_id'), KIND_FACT_AUDIT)
+        started, started_meta = row(evidence.get('started_artifact_id'), KIND_FACT_REPAIR)
+        if (not all(isinstance(x, dict) for x in (original, original_meta, audit, audit_meta, started, started_meta))
+                or not (evidence['original_artifact_id'] < evidence['audit_artifact_id']
+                        < evidence['started_artifact_id'] < meta['repair_artifact_id'])
+                or any(not is_current(x) or x.get('invalidated') or x.get('fingerprint') != fp
+                       or x.get('policy_fingerprint') != policy for x in (original_meta, audit_meta, started_meta))
+                or original_meta.get('repaired') or semantic_facts.doc_hash(original) != evidence['original_doc_hash']
+                or audit_meta.get('doc_hash') != evidence['original_doc_hash']
+                or started_meta.get('doc_hash') != evidence['original_doc_hash']
+                or started.get('status') != 'started' or started.get('rejected') != completed.get('rejected')
+                or audit.get('status') != 'NEEDS_REVIEW' or audit.get('evaluated') is not True):
+            return None
+        audit_proof = audit_meta.get('jev_provenance')
+        if (not isinstance(audit_proof, dict) or type(audit_proof.get('version')) is not int
+                or audit_proof['version'] != 1 or audit_proof.get('stage') != 'fact_audit'
+                or audit_proof.get('outcome') != 'done' or audit_proof.get('doc_hash') != evidence['original_doc_hash']
+                or audit_proof.get('result_hash') != payload_hash(audit)
+                or audit_proof.get('document_hash') != payload_hash(original)):
+            return None
+        rejected, coverage_missing, candidate = semantic_audit.fact_repair_plan(audit['findings'], 0)
+        if (not candidate or rejected != completed.get('rejected')
+                or coverage_missing is not evidence.get('coverage_missing')):
+            return None
+        base, base_contracts = {}, []
+        rebuilt, error = semantic_extraction.rebuild_facts_v2_cached(
+            member, db, fp, pid, original, original_meta, producer_out=base, contracts_out=base_contracts)
+        if (error is not None or rebuilt is None or payload_hash(rebuilt) != payload_hash(original)
+                or not base.get('complete')):
+            return None
+        answers = evidence.get('answers')
+        chunks = original.get('chunks')
+        if (not isinstance(answers, list) or not answers or not isinstance(chunks, list)
+                or len(answers) > len(chunks)):
+            return None
+        index = 0
+        repair_contracts = []
+        repair_scope = None
+
+        def reply(prompt):
+            nonlocal index, repair_scope
+            if index >= len(answers):
+                raise semantic_runtime.RuntimeStale('repair_evidence_missing')
+            answer = answers[index]
+            index += 1
+            if (not isinstance(answer, dict) or set(answer) != {'text', 'prompt_sha256', 'reservation_id', 'contract', 'unit_key', 'owner'}
+                    or not isinstance(answer['text'], str)
+                    or len(answer['text'].encode('utf-8')) > bounded_http.MAX_RESPONSE_BYTES
+                    or answer['prompt_sha256'] != hashlib.sha256(prompt.encode('utf-8')).hexdigest()
+                    or not isinstance(answer['reservation_id'], str) or not isinstance(answer['unit_key'], str)
+                    or not isinstance(answer['owner'], dict)):
+                raise semantic_runtime.RuntimeStale('repair_answer_invalid')
+            rows = db.execute("SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_reserve' "
+                "AND project_id=? AND message_id=? AND CASE WHEN json_valid(meta) "
+                "THEN json_extract(meta,'$.reservation_id')=? ELSE 0 END LIMIT 2",
+                (pid, mid, answer['reservation_id'])).fetchall()
+            if len(rows) != 1:
+                raise semantic_runtime.RuntimeStale('repair_reservation_invalid')
+            if not evidence['started_artifact_id'] < rows[0]['artifact_id'] < meta['repair_artifact_id']:
+                raise semantic_runtime.RuntimeStale('repair_reservation_order')
+            owner = answer['owner']
+            scope = (answer['unit_key'], owner)
+            if repair_scope is None:
+                repair_scope = scope
+            elif scope != repair_scope:
+                raise semantic_runtime.RuntimeStale('repair_scope_changed')
+            root = db.execute('SELECT COALESCE(parent_id,message_id) FROM messages WHERE project_id=? '
+                              'AND message_id=?', (pid, mid)).fetchone()
+            if (root is None or owner.get('semantic_target_id') != mid
+                    or owner.get('semantic_thread_root') != root[0]
+                    or owner.get('semantic_phase') != 'facts'
+                    or owner.get('semantic_source') != payload_hash([(mid, evidence['source_binding'])])
+                    or not isinstance(owner.get('semantic_generation'), str) or not owner['semantic_generation']
+                    or not answer['unit_key'].startswith('semantic:')):
+                raise semantic_runtime.RuntimeStale('repair_receipt_invalid')
+            try:
+                extract_llm._cloud_repair_answer_evidence(
+                    db, reservation_artifact_id=rows[0]['artifact_id'], reservation_id=answer['reservation_id'],
+                    route='semantic_backlog', project_id=pid, message_id=mid, unit_key=answer['unit_key'],
+                    owner=owner, prompt=prompt, answer_text=answer['text'], contract=answer['contract'])
+            except ValueError:
+                raise semantic_runtime.RuntimeStale('repair_receipt_invalid') from None
+            repair_contracts.append({'provider': answer['contract']['backend'], 'contract': answer['contract'],
+                                     'reservation_id': answer['reservation_id']})
+            return answer['text']
+
+        replay = semantic_extraction.repair_facts_v2(reply, member, original, rejected,
+                                                    coverage_missing=coverage_missing)
+        if (index != len(answers) or not replay['repaired']
+                or replay['owner_chunk_ids'] != completed.get('owner_chunk_ids')
+                or replay['repaired_fact_ids'] != completed.get('repaired_fact_ids')
+                or payload_hash(replay['doc']) != payload_hash(doc)):
+            return None
+        return {'providers': sorted(set(base['providers']) | {p['provider'] for p in repair_contracts}),
+                'base': base_contracts, 'repair': repair_contracts}
+    except (KeyError, TypeError, ValueError, AttributeError, RecursionError, OverflowError, UnicodeError,
+            semantic_runtime.RuntimeGuardError):
+        return None
+
+
 def _projection_provenance(db, pid, mid, fp, policy, member, doc, content, *, sequence_out=None):
     from inference_dependency_loss import source_binding
     from semantic_projection import project_v2_doc_legacy
 
     providers, complete, jev = [], False, "unknown"
+    repair_producers = None
     preflight = None
     if sequence_out is not None:
         sequence_out['sequence'] = None
@@ -73,6 +205,11 @@ def _projection_provenance(db, pid, mid, fp, policy, member, doc, content, *, se
                     or meta.get("policy_fingerprint") != policy):
                 continue
             if kind == KIND_FACTS_V2:
+                if meta.get('repaired') is True and payload_hash(data) == payload_hash(doc):
+                    repair_producers = _repaired_projection_producer(db, pid, mid, fp, policy, member, data, meta)
+                    if repair_producers is not None:
+                        providers, complete = repair_producers['providers'], True
+                    continue
                 proof = meta.get("provider_provenance")
                 if (payload_hash(data) == payload_hash(doc) and isinstance(proof, dict)
                         and type(proof.get("version")) is int and proof["version"] == 1
@@ -124,6 +261,8 @@ def _projection_provenance(db, pid, mid, fp, policy, member, doc, content, *, se
     result = {"version": 1, "stage": "projection", "providers": providers, "complete": complete,
               "result_hash": payload_hash(content), "source_fingerprint": fp, "policy_fingerprint": policy,
               "target_revision": member["revision"], "source_binding": source_binding(db, pid, mid), "jev": jev}
+    if repair_producers is not None:
+        result['producer_stages'] = {'base': repair_producers['base'], 'repair': repair_producers['repair']}
     if sequence_out is not None and complete and len(providers) == 1:
         if preflight == 'complete':
             sequence_out['sequence'] = ['jev', providers[0]]

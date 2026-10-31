@@ -22,7 +22,7 @@ from safe_io import create_exclusive, fdopen_owned
 PROVIDERS = ("anthropic", "openai", "jev")
 _JEV_KEYS = frozenset({"model", "daily_request_budget", "until", "attempt_timeout_seconds",
                        "max_attempts_per_try", "max_questions_per_request"})
-_CLOUD_KEYS = frozenset({"model", "budget"})
+_CLOUD_KEYS = frozenset({"model", "budget", "profiles"})
 _FILES = ("config", *PROVIDERS)
 ALIAS_CONFIG_MAX_BYTES = 8 * 1024 * 1024
 _INDEPENDENT_ROOTS = frozenset({"drug_map", "sdc", "install_args"})
@@ -68,10 +68,22 @@ def _jev_values(value, jev_model):
             raise ValueError("provider_config_invalid") from None
 
 
+def _profiles(value):
+    import openai_client
+    if (not isinstance(value, dict) or value.keys() - openai_client.PROFILE_PURPOSES
+            or any(not isinstance(role, str) or not isinstance(profile, str)
+                   or profile not in openai_client.PROFILE_DEFINITIONS for role, profile in value.items())):
+        raise ValueError("provider_profiles_invalid")
+
+
 def _owner(model, model_owners):
     if not isinstance(model, str) or not isinstance(model_owners, dict):
         raise ValueError("provider_model_invalid")
     name = model_owners.get(model)
+    if name is None:
+        import openai_client
+        if model == openai_client.SOL_MODEL and model_owners.get(openai_client.MODEL) == "openai":
+            name = "openai"
     if name not in ("anthropic", "openai"):
         raise ValueError("provider_model_invalid")
     return name
@@ -88,6 +100,10 @@ def split_legacy(raw, model_owners, *, jev_model=None):
         if "model" in cloud:
             model = cloud.pop("model")
             providers[_owner(model, model_owners)]["model"] = model
+        if "profiles" in cloud:
+            profiles = cloud.pop("profiles")
+            _profiles(profiles)
+            providers["openai"]["profiles"] = deepcopy(profiles)
         if "provider_budgets" in cloud:
             budgets = cloud["provider_budgets"]
             if not isinstance(budgets, dict) or budgets.keys() - {"anthropic", "openai"}:
@@ -121,17 +137,23 @@ def compose(common, providers, *, selected_provider, model_owners, jev_model=Non
             raise ValueError("provider_model_invalid")
         if name != "jev" and "budget" in value:
             _budget(value["budget"])
+        if "profiles" in value:
+            if name != "openai":
+                raise ValueError("provider_profiles_invalid")
+            _profiles(value["profiles"])
         if name == "jev":
             _jev_values(value, jev_model)
     cloud_values = any(providers[name] for name in ("anthropic", "openai"))
     if cloud_values:
         cloud = result.setdefault("cloud_llm", {})
-        if (not isinstance(cloud, dict) or "model" in cloud
+        if (not isinstance(cloud, dict) or "model" in cloud or "profiles" in cloud
                 or "provider_budgets" in cloud and cloud["provider_budgets"] != {}):
             raise ValueError("provider_config_ambiguous")
         model = providers[selected_provider].get("model")
         if model is not None:
             cloud["model"] = model
+        if selected_provider == "openai" and "profiles" in providers["openai"]:
+            cloud["profiles"] = deepcopy(providers["openai"]["profiles"])
         budgets = {name: deepcopy(providers[name]["budget"]) for name in ("anthropic", "openai")
                    if "budget" in providers[name]}
         if budgets:
@@ -160,10 +182,9 @@ def execution_view(common, providers, *, selected_provider, model_owners, jev_mo
             or len(set(order)) != len(order)):
         return result
     if selected_provider in order and selected_provider != order[0]:
-        pinned = [model for model, name in model_owners.items() if name == selected_provider]
-        if len(pinned) != 1 or cloud["model"] != pinned[0]:
+        if _owner(cloud["model"], model_owners) != selected_provider:
             raise ValueError("provider_model_invalid")
-        del cloud["model"]
+        # Preserve an explicit model belonging to the selected provider.
     return result
 
 
@@ -499,6 +520,10 @@ def _read(root, *, model_owners, jev_model, config_limit, allow_unavailable):
                                 raise ValueError("provider_model_invalid")
                             if "budget" in providers[name]:
                                 _budget(providers[name]["budget"])
+                            if "profiles" in providers[name]:
+                                if name != "openai":
+                                    raise ValueError("provider_profiles_invalid")
+                                _profiles(providers[name]["profiles"])
                         if "model" in providers["jev"] and jev_model is None and allow_unavailable:
                             raise ValueError("provider_validation_context_missing")
                         _jev_values(providers["jev"], jev_model)
@@ -511,14 +536,14 @@ def _read(root, *, model_owners, jev_model, config_limit, allow_unavailable):
                     # Without trusted provider documents, reject every possible overlap.
                     if (settings_fd is None or not isinstance(cloud, (dict, type(None)))
                             or not isinstance(semantic, (dict, type(None)))
-                            or isinstance(cloud, dict) and ("model" in cloud
+                            or isinstance(cloud, dict) and ("model" in cloud or "profiles" in cloud
                                 or "provider_budgets" in cloud and cloud["provider_budgets"] != {})
                             or isinstance(semantic, dict) and bool(semantic.keys() & _JEV_KEYS)):
                         raise ValueError("provider_config_ambiguous")
                     providers = None
                     mode = "provider_unavailable"
                 else:
-                    if (isinstance(cloud, dict) and ("model" in cloud
+                    if (isinstance(cloud, dict) and ("model" in cloud or "profiles" in cloud
                             or "provider_budgets" in cloud and cloud["provider_budgets"] != {})
                             or isinstance(semantic, dict) and bool(semantic.keys() & _JEV_KEYS)):
                         raise ValueError("provider_config_ambiguous")

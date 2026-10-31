@@ -9,6 +9,7 @@ from mcs_util import strict_json
 
 AnthropicError = CloudError
 MODEL = "gpt-6-luna"
+SOL_MODEL = "gpt-6.1-sol"
 ENDPOINT = "https://api.openai.com/v1/responses"
 KEY_ENV = "MCS_OPENAI_API_KEY"
 PRICE_VERSION = "openai-gpt-6-luna-2026-10-29"
@@ -20,6 +21,20 @@ PRICES_20261029 = MappingProxyType({"input": "0.1", "output": "0.5", "cached_inp
     "cache_write_30m": "0.125", "long_input_multiplier": "2", "long_output": "0.75",
     "reservation_input": "0.25", "reservation_output": "0.75"})
 PRICES = PRICES_20261029
+SOL_PRICE_VERSION = "openai-gpt-6.1-sol-2026-10-31"
+SOL_PRICES_20261031 = MappingProxyType({"input": "2", "output": "10", "cached_input": "0.10",
+    "cache_write_30m": "2.50", "long_input_multiplier": "2", "long_output": "15",
+    "reservation_input": "5", "reservation_output": "15"})
+CURRENT_PRICE_VERSIONS = MappingProxyType({MODEL: PRICE_VERSION, SOL_MODEL: SOL_PRICE_VERSION})
+PROFILE_DEFINITIONS = MappingProxyType({
+    "luna-medium": (MODEL, "medium"),
+    "sol-medium": (SOL_MODEL, "medium"),
+    "sol-high": (SOL_MODEL, "high"),
+})
+PROFILE_PURPOSES = frozenset({"backlog", "patient_context", "quality_repair"})
+DEFAULT_PROFILES = MappingProxyType({"backlog": "luna-medium", "patient_context": "sol-medium",
+                                     "quality_repair": "sol-high"})
+VALID_MODEL_EFFORTS = frozenset({(MODEL, "low"), *PROFILE_DEFINITIONS.values()})
 QUOTA_ERROR_CODES = frozenset({"insufficient_quota", "credit_balance_exhausted",
                                "organization_spend_limit_exceeded", "project_spend_limit_exceeded",
                                "organization_usage_limit_exceeded"})
@@ -103,6 +118,15 @@ PRICE_SNAPSHOTS = MappingProxyType({
         "prices": PRICES_20261029, "long_input_threshold": 272000,
         "validate_usage": _validate_usage_20261029, "max_tokens": 128000, "legacy_reservation": False,
     }),
+    ("gpt-6.1-sol", "openai-gpt-6.1-sol-2026-10-31"): MappingProxyType({
+        "provider": "openai", "model": "gpt-6.1-sol",
+        "price_version": "openai-gpt-6.1-sol-2026-10-31",
+        "price_checked_on": "2026-10-31", "price_valid_until": "2026-11-30",
+        "price_sources": ("https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+                          "https://developers.openai.com/api/docs/pricing"),
+        "prices": SOL_PRICES_20261031, "long_input_threshold": 272000,
+        "validate_usage": _validate_usage_20261029, "max_tokens": 128000, "legacy_reservation": False,
+    }),
 })
 
 
@@ -110,8 +134,12 @@ class OpenAIClient(CloudClient):
     """Reuse bounded retries, reservations and uncertain-send handling for Responses."""
     MODEL = MODEL
 
-    def __init__(self, api_key, **kwargs):
+    def __init__(self, api_key, *, model=MODEL, effort="low", **kwargs):
+        if not isinstance(model, str) or not isinstance(effort, str) or (model, effort) not in VALID_MODEL_EFFORTS:
+            raise ValueError("openai_profile_invalid")
         super().__init__(api_key, **kwargs)
+        self.model = model
+        self.effort = effort
 
     def request(self, method, body, timeout, *, deadline=None):
         return bounded_http.bounded_http_request(
@@ -151,13 +179,13 @@ class OpenAIClient(CloudClient):
     def body(self, prompt, max_tokens, cache_prefix):
         if cache_prefix and (not isinstance(cache_prefix, str) or not prompt.startswith(cache_prefix)):
             raise ValueError("cache_prefix_invalid")
-        return {"model": MODEL, "instructions": SYSTEM, "input": prompt,
-                "max_output_tokens": max_tokens, "reasoning": {"effort": "low"},
+        return {"model": self.model, "instructions": SYSTEM, "input": prompt,
+                "max_output_tokens": max_tokens, "reasoning": {"effort": self.effort},
                 "store": False, "service_tier": "default",
                 "prompt_cache_options": {"ttl": "30m"}, "tools": []}
 
     def answer(self, obj, meta):
-        if not isinstance(obj, dict) or obj.get("model") != MODEL:
+        if not isinstance(obj, dict) or obj.get("model") != self.model:
             raise AnthropicError("model_mismatch")
         if obj.get("service_tier") != "default":
             raise AnthropicError("pricing_unverified", "service_tier_unknown")
@@ -187,4 +215,4 @@ class OpenAIClient(CloudClient):
                 or status == "completed" and not answer.strip()):
             raise AnthropicError("contract_error", "incomplete_response")
         return {"status": 200, "text": answer, "finish_reason": "length" if length else "stop",
-                "model": MODEL, "usage": meta["usage"]}
+                "model": self.model, "usage": meta["usage"]}

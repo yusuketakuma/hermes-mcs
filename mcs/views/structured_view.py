@@ -77,6 +77,8 @@ def fact_generations(db, mids: list) -> dict:
                 f"(a.kind='extract_v1' {current_extract_pred()}) OR "
                 f"(a.kind IN ({FACT_KINDS_SQL}) "
                 f"{current_fact_pred()})) GROUP BY a.message_id,a.kind", batch):
+            if r['kind'] == 'extract_llm' and not mcs_queries.selected_artifact_proof_valid(db, r['generation']):
+                continue
             result.setdefault(r["message_id"], {})[r["kind"]] = r["generation"]
         ref_mids = db.execute(
             f"SELECT DISTINCT message_id FROM artifacts WHERE kind=? "
@@ -484,7 +486,7 @@ def medication_post_ids(db, mids):
         return
     fields, join = _source_context_columns(db, "source")
     rule = mcs_queries.current_message_artifact_query(mid="source.message_id")
-    fact = mcs_queries.current_message_artifact_query(facts=True, mid="source.message_id")
+    fact = mcs_queries.current_message_artifact_query(facts=True, mid="source.message_id", field='artifact_id')
     # Sort only the bounded ID driver, not the original body/artifact blobs.
     query = (f"SELECT requested.mid,({rule}),({fact}),{fields} "
              "FROM (SELECT value mid FROM json_each(?) ORDER BY key LIMIT -1) requested "
@@ -495,7 +497,12 @@ def medication_post_ids(db, mids):
         try:
             for row in cursor:
                 v1 = loads_dict(row[1]) or {}
-                facts = loads_dict(row[2]) or {}
+                facts = {}
+                if row[2] is not None and mcs_queries.selected_artifact_proof_valid(db, row[2]):
+                    artifact = db.execute('SELECT content FROM artifacts WHERE artifact_id=?', (row[2],)).fetchone()
+                    facts = loads_dict(artifact['content']) if artifact else None
+                    facts = facts or {}
+                    facts.pop('__mcs_internal_proof_v1', None)
                 if any(_med_entries(facts, v1, context=_source_context_row(row[3:]))):
                     yield row[0]
         finally:

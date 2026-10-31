@@ -18,6 +18,10 @@ class ConfigConflict(ValueError):
     """Another configuration writer owns or changed this edit's base."""
 
 
+class ConfigSaveUnverified(ValueError):
+    """The write may have succeeded but could not be verified."""
+
+
 def _require_legacy_settings():
     try:
         active = mcs_util._provider_config_active(mcs_util.CONF_PATH)
@@ -90,7 +94,7 @@ def _split_changes(state, cfg, touched, selected, owners):
         if section == "cloud_llm" and key == "model":
             value = cfg.get(section, {}).get(key)
             if value is not None:
-                provider = owners.get(value)
+                provider = provider_settings._owner(value, owners)
                 if provider not in ("anthropic", "openai"):
                     raise ValueError("provider_model_invalid")
                 providers[provider]["model"] = split_providers[provider]["model"]
@@ -147,7 +151,8 @@ def _edit_lock(path=None):
         os.close(fd)
 
 
-def apply(changes: dict, defaults: dict | None = None, *, expected: dict | None = None) -> tuple[dict | None, list[str]]:
+def apply(changes: dict, defaults: dict | None = None, *, expected: dict | None = None,
+          admission=None, on_saved=None) -> tuple[dict | None, list[str]]:
     """Validate the whole edited config and atomically save against its locked base.
 
     ``defaults`` are set only where the locked config has no value yet.
@@ -155,6 +160,8 @@ def apply(changes: dict, defaults: dict | None = None, *, expected: dict | None 
     the edited section.
     """
     from mcs_config import validate_config
+    if admission is not None and not callable(admission) or on_saved is not None and not callable(on_saved):
+        raise ValueError("config_callback_invalid")
     with _edit_lock() as lock_fd:
         split = mcs_util._provider_config_active(mcs_util.CONF_PATH)
         if split:
@@ -197,7 +204,7 @@ def apply(changes: dict, defaults: dict | None = None, *, expected: dict | None 
                 return None, selection_errors
             selected = selection["provider"]
             requested_model = cfg.get("cloud_llm", {}).get("model")
-            if "cloud_llm.model" in touched and requested_model is not None and owners.get(requested_model) != selected:
+            if "cloud_llm.model" in touched and requested_model is not None and provider_settings._owner(requested_model, owners) != selected:
                 return None, ["config: cloud_llm_model_invalid"]
             cfg = provider_settings.execution_view(common, providers, selected_provider=selected,
                                                     model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
@@ -205,6 +212,15 @@ def apply(changes: dict, defaults: dict | None = None, *, expected: dict | None 
         if errors:  # unknown keys remain warnings and are preserved verbatim
             return None, errors
         if split:
+            if admission is not None:
+                raw_before, stamp_before = _snapshot(root / "config.json")
+                file_before = state["snapshot"]["files"]["config"]
+                ident = file_before["identity"]
+                expected_before = (tuple(ident[index] for index in (0, 1, 2, 5, 6, 7)),
+                                   bytes.fromhex(file_before["sha256"]))
+                if stamp_before != expected_before:
+                    raise ConfigConflict("config_changed")
+                admission(str(root / "config.json"), raw_before, stamp_before)
             try:
                 result = provider_settings.commit_locked(root, state["snapshot"], common, providers,
                     selected_provider=selected, model_owners=owners, jev_model=semantic_jev.JEV_MODEL,
@@ -213,19 +229,52 @@ def apply(changes: dict, defaults: dict | None = None, *, expected: dict | None 
                 if str(error) == "provider_snapshot_changed":
                     raise ConfigConflict("config_changed") from None
                 raise
+            if on_saved is not None:
+                raw_after, stamp_after = _snapshot(root / "config.json")
+                file_after = result["snapshot"]["files"]["config"]
+                ident = file_after["identity"]
+                expected_after = (tuple(ident[index] for index in (0, 1, 2, 5, 6, 7)),
+                                  bytes.fromhex(file_after["sha256"]))
+                if stamp_after != expected_after:
+                    raise ConfigSaveUnverified("config_save_unverified")
+                try:
+                    on_saved(str(root / "config.json"), raw_after, stamp_after)
+                except (OSError, ValueError, RecursionError) as error:
+                    raise ConfigSaveUnverified("config_save_unverified") from error
             return provider_settings.execution_view(result["common"], result["providers"],
                 selected_provider=selected, model_owners=owners, jev_model=semantic_jev.JEV_MODEL), []
         body = json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n"
         if len(body.encode("utf-8")) > mcs_util.CONFIG_MAX_BYTES:
             raise ValueError("config_unreadable")
 
+        intended_identity = None
         def write_checked(stream):
+            nonlocal intended_identity
             stream.write(body)
+            if on_saved is not None:
+                stream.flush()
+                staged = os.fstat(stream.fileno())
+                intended_identity = (staged.st_dev, staged.st_ino)
             _require_legacy_settings()
-            if _snapshot()[1] != base:
+            raw_before, stamp_before = _snapshot()
+            if stamp_before != base:
                 raise ConfigConflict("config_changed")
+            if admission is not None:
+                admission(str(mcs_util.CONF_PATH), raw_before, stamp_before)
+                _require_legacy_settings()
+                if _snapshot()[1] != base:
+                    raise ConfigConflict("config_changed")
         safe_io.atomic_write(mcs_util.CONF_PATH, write_checked, 0o600,
                              tmp_prefix=".svc.", makedirs=False)
+        if on_saved is not None:
+            raw_after, stamp_after = _snapshot()
+            if (stamp_after[0][:2] != intended_identity or raw_after != body.encode("utf-8")
+                    or stamp_after[1] != hashlib.sha256(body.encode("utf-8")).digest()):
+                raise ConfigSaveUnverified("config_save_unverified")
+            try:
+                on_saved(str(mcs_util.CONF_PATH), raw_after, stamp_after)
+            except (OSError, ValueError, RecursionError) as error:
+                raise ConfigSaveUnverified("config_save_unverified") from error
         return cfg, []
 
 

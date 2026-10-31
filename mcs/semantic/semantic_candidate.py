@@ -145,7 +145,15 @@ def _cloud_contract(cfg):
         return None
     if not cloud_policy.selected_key(cfg=cfg):
         return None
-    return {key: settings[key] for key in ("mode", "routes", "project_ids", "exclude_project_ids", "model", "provider", "provider_order")}
+    contract = {key: settings[key] for key in ("mode", "routes", "project_ids", "exclude_project_ids", "model", "provider", "provider_order")}
+    profiles = {}
+    for purpose in ("backlog", "quality_repair"):
+        selection, errors = cloud_policy.resolve_profile(cfg, route="semantic_backlog", purpose=purpose)
+        if errors or selection is None:
+            return None
+        profiles[purpose] = dict(selection)
+    contract["profiles"] = profiles
+    return contract
 
 
 def candidate_fingerprint(cfg: dict) -> str:

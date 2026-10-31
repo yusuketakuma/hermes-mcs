@@ -91,6 +91,7 @@ TYPESAFE_API_KEY・LINE WORKS の Client Secret / Bot Secret / Private Key**。
   接続先IDの取得手順は本書のPhase 4、[導入ガイド](INSTALLATION.md)、
   [LINE WORKS](LINEWORKS.md) の該当する導入手順を参照してください。
 - パスワードとトークンは本人の端末で非表示入力します。AIとの会話へ貼り付けません。
+- Jev・Anthropic・OpenAIのキーは `mcs setup api-keys` の「1」、利用先と予算は「5」で設定できます。 OpenAIを使う場合は用途別モデルと推論度、API別・合計の上限を保存前の確認画面で示します。本文と文脈の送信先、費用、保持条件を利用者に確認してもらいます。
 - 外部Jev APIへ本文を送る追加解析は、`auto`が既定です。このMCSの`.env`に
   キーが登録され、modeが未指定なら`assist`を使います。対象範囲と上限も
   未指定なら全対象・1日10000要求です。明示した`off`・対象範囲・低い上限は

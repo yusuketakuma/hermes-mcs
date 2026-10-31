@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "OpenAI解析のモデルを用途別に選択",
+  "summary": "背景解析、患者コンテキスト、正式な品質修復で用途に合ったOpenAIモデルを使用します。",
+  "upgrade": "更新後は提供元別の私有設定を確認してください。既存の明示モデル、無効設定、対象範囲、費用上限は保持します。",
+  "details": [
+    "既定では背景解析にLunaのmedium、患者コンテキストにSolのmedium、正式な品質修復にSolのhighを使います。",
+    "OpenAIの最大出力は用途ごとに8192・16384・32768トークンとし、既存の明示Lunaモデルはlowを維持します。",
+    "モデル別の使用額を同じOpenAI予算と合計上限に算入し、未精算の送信記録を保持します。"
+  ],
+  "refs": ["mcs/llm/cloud_policy.py", "mcs/llm/openai_client.py"]
+}

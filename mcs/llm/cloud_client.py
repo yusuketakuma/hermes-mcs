@@ -1,6 +1,7 @@
 """Shared bounded cloud-attempt lifecycle and safe error contract."""
 from __future__ import annotations
 
+import hashlib
 import math
 import random
 import re
@@ -106,7 +107,18 @@ class CloudClient:
                     obj = strict_json(raw.decode("utf-8"))
                 except (ValueError, UnicodeError, RecursionError):
                     raise CloudError("protocol_error", "not_json") from None
-                result = self.answer(obj, meta)
+                answer = self.answer(obj, meta)
+                if not isinstance(answer, dict) or not isinstance(answer.get("text"), str):
+                    raise CloudError("contract_error", "answer_text_invalid")
+                try:
+                    encoded_text = answer["text"].encode("utf-8")
+                except UnicodeError:
+                    raise CloudError("contract_error", "answer_text_invalid") from None
+                if answer.get("finish_reason") not in ("stop", "length"):
+                    raise CloudError("contract_error", "finish_reason_invalid")
+                meta["answer_text_sha256_v1"] = hashlib.sha256(encoded_text).hexdigest()
+                meta["answer_finish_reason_v1"] = answer["finish_reason"]
+                result = answer
             except bounded_http.NotSentTimeout:
                 meta["http_class"] = "not_sent"
                 last = CloudError("budget_exceeded", "deadline", retryable=False)

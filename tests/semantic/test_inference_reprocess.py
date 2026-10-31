@@ -668,6 +668,29 @@ def test_operating_budget_change_reuses_completion_without_reseeding(store, monk
     assert after['processed'] == 0 and store.db.total_changes == changes and _job(store) is None
 
 
+def test_completion_contract_tracks_profiles_but_not_operating_budgets(store, monkeypatch):
+    import copy
+    import extract_llm
+
+    monkeypatch.setattr(extract_llm.cloud_policy, 'provider_key',
+                        lambda provider, *_a, **_kw: 'synthetic-key' if provider == 'openai' else None)
+    cfg = _cfg(loop_mode='off')
+    cfg['cloud_llm'] = {'provider': 'openai', 'mode': 'on', 'project_ids': [1],
+                        'profiles': {'backlog': 'luna-medium', 'quality_repair': 'sol-high'}}
+    scfg = semantic_policy.runtime_config(cfg)[0]
+    base = drain._reprocess_proof_generation(store, cfg, scfg)
+    budget = copy.deepcopy(cfg)
+    budget['cloud_llm'].update(daily_cost_limit_usd=7, window_budget_usd=3)
+    assert drain._reprocess_proof_generation(store, budget, scfg) == base
+    for role, profile in (('backlog', 'sol-medium'), ('quality_repair', 'sol-medium')):
+        changed = copy.deepcopy(cfg)
+        changed['cloud_llm']['profiles'][role] = profile
+        assert drain._reprocess_proof_generation(store, changed, scfg) != base
+        changed['cloud_llm']['profiles'][role] = 'unknown-profile'
+        with pytest.raises(extract_llm.CloudFallback):
+            drain._reprocess_proof_generation(store, changed, scfg)
+
+
 @pytest.mark.parametrize('direction', ['expired', 'backward'])
 def test_clock_change_invalidates_a_completed_bookmark(store, monkeypatch, direction):
     now = [time.time()]

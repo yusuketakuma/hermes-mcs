@@ -1,4 +1,5 @@
 """Synthetic Messages wire contract, attempt hooks and safe failure metadata."""
+import hashlib
 import json
 import time
 
@@ -16,6 +17,20 @@ def _reply(**values):
             "content": [{"type": "thinking", "thinking": "ignored"},
                         {"type": "text", "text": '{"synthetic":true}'}],
             "usage": {"input_tokens": 10, "output_tokens": 5}, **values}
+
+
+def test_success_hash_covers_returned_text_not_raw_response():
+    answer = '合成応答 synthetic-canary'
+    raw = json.dumps(_reply(content=[{'type': 'thinking', 'thinking': 'untrusted'},
+                                    {'type': 'text', 'text': answer}]), ensure_ascii=False).encode()
+    recorded = []
+    provider = a.AnthropicClient('synthetic', post_fn=lambda *args: (200, {}, raw))
+    result = provider.complete('synthetic', deadline=time.monotonic() + 10,
+                               after_result=lambda _reservation, meta: recorded.append(meta))
+    assert result['text'] == answer
+    assert recorded[0]['answer_text_sha256_v1'] == hashlib.sha256(answer.encode('utf-8')).hexdigest()
+    assert recorded[0]['answer_finish_reason_v1'] == 'stop'
+    assert answer not in json.dumps(recorded[0], ensure_ascii=False)
 
 
 def test_provider_error_identity_and_neutral_base_are_compatible():

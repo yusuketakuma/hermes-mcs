@@ -95,7 +95,7 @@ def test_setup_entry_detects_config_change_before_save(monkeypatch, tmp_path):
     cfg_path.write_text('{"runtime_mode":"hermes"}', encoding="utf-8")
     monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(cfg_path))
-    def observe(root, cfg, *, current):
+    def observe(root, cfg, *, current, admission=None, on_saved=None):
         assert current()
         cfg_path.write_text('{"runtime_mode":"standalone"}', encoding="utf-8")
         assert not current()
@@ -117,7 +117,7 @@ def test_setup_entry_accepts_private_root_link_and_detects_same_target_replaceme
     monkeypatch.setattr(mcs_setup, "HOME", str(link))
     monkeypatch.setattr(mcs_setup, "CONF_PATH", str(link / "config.json"))
 
-    def observe(root, cfg, *, current):
+    def observe(root, cfg, *, current, admission=None, on_saved=None):
         assert root == str(link)
         assert cfg == {"runtime_mode": "standalone"}
         assert current()

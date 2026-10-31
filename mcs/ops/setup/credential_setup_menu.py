@@ -10,7 +10,7 @@ import mcs_runtime
 import mcs_util
 
 
-def run(root, cfg, *, current=None):
+def run(root, cfg, *, current=None, admission=None, on_saved=None):
     """端末で設定先を選び、各接続の既存の入力手順へ進みます。"""
     if not api_key_setup.is_terminal():
         print("認証情報の設定は本人の端末で mcs setup api-keys を実行してください。")
@@ -34,7 +34,7 @@ def run(root, cfg, *, current=None):
             result = api_key_setup.run(root, admission=current)
         elif choice == "5":
             import cloud_cli
-            result = cloud_cli.provider_dialog(root)
+            result = cloud_cli.provider_dialog(root, admission=admission, on_saved=on_saved)
         elif choice in ("2", "3"):
             if current is not None and not current():
                 print("設定が変更されたため、接続先の認証情報は保存していません。もう一度設定を開いてください。")

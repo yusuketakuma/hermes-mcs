@@ -85,6 +85,8 @@ def test_openai_old_reservation_keeps_price_and_provider_caps_after_rotation(tmp
         monkeypatch.setattr(c, "PRICE_DEFINITIONS", MappingProxyType({**c.PRICE_DEFINITIONS, (model, version): successor}))
         monkeypatch.setitem(c.PROVIDERS, "openai", model)
         monkeypatch.setattr(c.openai_client, "PRICE_VERSION", version)
+        monkeypatch.setattr(c.openai_client, "CURRENT_PRICE_VERSIONS", MappingProxyType({
+            **c.openai_client.CURRENT_PRICE_VERSIONS, model: version}))
 
         pending = c.usage_report(ledger)
         assert Decimal(pending["providers"]["openai"]["cost_usd"]) == maximum

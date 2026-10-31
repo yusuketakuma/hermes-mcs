@@ -108,6 +108,19 @@ def test_explicit_provider_contract_uses_its_own_key(monkeypatch):
     assert "synthetic-openai-key" not in json.dumps(contract)
 
 
+def test_semantic_profiles_are_part_of_candidate_contract(monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'provider_key', lambda *_a, **_kw: 'synthetic-key')
+    cfg = {'cloud_llm': {'mode': 'on', 'project_ids': [1], 'provider': 'openai',
+                         'profiles': {'backlog': 'luna-medium', 'quality_repair': 'sol-high'}}}
+    first = candidate._cloud_contract(cfg)
+    assert first['profiles']['backlog']['effort'] == 'medium'
+    assert first['profiles']['quality_repair']['effort'] == 'high'
+    before = candidate.candidate_fingerprint(cfg)
+    cfg['cloud_llm']['profiles']['quality_repair'] = 'sol-medium'
+    assert candidate.candidate_fingerprint(cfg) != before
+    assert 'synthetic-key' not in json.dumps(candidate._cloud_contract(cfg))
+
+
 def test_loaded_code_contract_never_reads_credentials_and_does_not_lend_mutable_state(monkeypatch):
     import semantic_jev
     captures = []

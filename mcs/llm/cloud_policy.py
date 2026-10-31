@@ -11,6 +11,7 @@ import math
 import re
 import sqlite3
 import time
+from collections.abc import Mapping
 from types import MappingProxyType
 import uuid
 from functools import lru_cache
@@ -61,8 +62,8 @@ def _price_definition(model, price_version=_CURRENT_PRICE):
     if price_version is _CURRENT_PRICE:
         if model == PROVIDERS["anthropic"]:
             price_version = anthropic_client.PRICE_VERSION
-        elif model == PROVIDERS["openai"]:
-            price_version = openai_client.PRICE_VERSION
+        elif model in openai_client.CURRENT_PRICE_VERSIONS:
+            price_version = openai_client.CURRENT_PRICE_VERSIONS[model]
         else:
             raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
     if not isinstance(price_version, str):
@@ -75,7 +76,8 @@ def _price_definition(model, price_version=_CURRENT_PRICE):
 
 
 _BINDING_KEYS = ("reservation_id", "request_fp", "route", "project_id",
-                 "unit_key", "message_id", "model", "price_version", "logical_request_fp", "logical_target_id", "logical_unit_fp")
+                 "unit_key", "message_id", "model", "price_version", "logical_request_fp", "logical_target_id", "logical_unit_fp",
+                 "effort", "profile")
 
 
 def capture_history_tx(db, command_id, now, *, continuous=False):
@@ -310,7 +312,7 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
     block = cfg.get("cloud_llm", {}) if isinstance(cfg, dict) else {}
     if not isinstance(block, dict):
         return out, ["config: cloud_llm_not_object"]
-    if block.keys() - out.keys():
+    if block.keys() - out.keys() - {"profiles"}:
         errors.append("config: cloud_llm_unknown_field")
     mode = block.get("mode", "on" if key_present is True else "off")
     if mode not in ("off", "dry_run", "shadow", "on"):
@@ -345,8 +347,26 @@ def cloud_config(cfg, *, key_present=False, require_cost_limit=True):
     else:
         out["provider_order"] = list(order)
     out["model"] = PROVIDERS.get(provider, PROVIDERS[out["provider_order"][0]])
-    if block.get("model", out["model"]) != out["model"]:
-        errors.append("config: cloud_llm_model_invalid")
+    if "model" in block:
+        candidate = block["model"]
+        allowed = {PROVIDERS["anthropic"], *openai_client.CURRENT_PRICE_VERSIONS}
+        try:
+            owner = _price_definition(candidate)["provider"] if candidate in allowed else None
+        except (AnthropicError, TypeError):
+            owner = None
+        if owner is None or provider != "auto" and owner != provider or provider == "auto" and owner not in out["provider_order"]:
+            errors.append("config: cloud_llm_model_invalid")
+        else:
+            out["model"] = candidate
+    if "profiles" in block:
+        profiles = block["profiles"]
+        if (not isinstance(profiles, dict) or profiles.keys() - openai_client.PROFILE_PURPOSES
+                or any(not isinstance(role, str) or not isinstance(value, str)
+                       or value not in openai_client.PROFILE_DEFINITIONS for role, value in profiles.items())
+                or provider == "anthropic"):
+            errors.append("config: cloud_llm_profiles_invalid")
+        else:
+            out["profiles"] = dict(profiles)
     routes = block.get("routes", list(ROUTES))
     if (not isinstance(routes, list)
             or any(not isinstance(r, str) or r not in ROUTES for r in routes)):
@@ -482,8 +502,59 @@ def resolve_settings(cfg, root=None):
     block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
     if (block is None or isinstance(block, dict) and "mode" not in block) and not errors:
         c, errors = cloud_config(cfg, key_present=bool(provider_key(provider, root)))
-    c["provider"], c["model"] = provider, PROVIDERS[provider]
+    c["provider"] = provider
+    if isinstance(block, dict) and "model" in block:
+        try:
+            if _price_definition(c["model"])["provider"] != provider:
+                errors.append("config: cloud_llm_model_invalid")
+        except AnthropicError:
+            errors.append("config: cloud_llm_model_invalid")
+    else:
+        c["model"] = PROVIDERS[provider]
     return c, errors
+
+
+def resolve_profile(cfg, *, route, purpose, root=None):
+    """Resolve one explicit use to a bounded, immutable provider selection."""
+    settings, errors = resolve_settings(cfg, root)
+    if errors:
+        return None, errors
+    return profile_for_settings(cfg, settings, route=route, purpose=purpose)
+
+
+def profile_for_settings(cfg, settings, *, route, purpose):
+    """Resolve a profile from a provider already selected by the caller."""
+    valid_purposes = {"reextract": {"backlog", "quality_repair"},
+                      "semantic_backlog": {"backlog", "quality_repair"},
+                      "patient_context": {"patient_context", "quality_repair"}}
+    if (not isinstance(route, str) or not isinstance(purpose, str)
+            or route not in valid_purposes or purpose not in valid_purposes[route]):
+        return None, ["config: cloud_profile_purpose_invalid"]
+    provider = settings["provider"]
+    block = cfg.get("cloud_llm") if isinstance(cfg, dict) else None
+    block = block if isinstance(block, dict) else {}
+    if provider != "openai":
+        return MappingProxyType({"provider": provider, "model": settings["model"], "effort": None,
+            "max_tokens": None, "price_version": _price_definition(settings["model"])["price_version"],
+            "profile": None}), []
+    profiles = block.get("profiles", {})
+    if not isinstance(profiles, dict):
+        return None, ["config: cloud_llm_profiles_invalid"]
+    profile = profiles.get(purpose)
+    if profile is None and block.get("model") == openai_client.MODEL:
+        model, effort = openai_client.MODEL, "low"
+        limit = {"backlog": 8192, "patient_context": 16384, "quality_repair": 32768}[purpose]
+    else:
+        profile = profile if profile is not None else (
+            "sol-medium" if block.get("model") == openai_client.SOL_MODEL
+            else openai_client.DEFAULT_PROFILES[purpose])
+        if profile not in openai_client.PROFILE_DEFINITIONS:
+            return None, ["config: cloud_llm_profiles_invalid"]
+        model, effort = openai_client.PROFILE_DEFINITIONS[profile]
+        limit = {"backlog": 8192, "patient_context": 16384, "quality_repair": 32768}[purpose]
+    return MappingProxyType({"provider": provider, "model": model, "effort": effort,
+        "max_tokens": limit, "price_version": _price_definition(model)["price_version"],
+        "profile": profile}), []
 
 
 def selected_key(root=None, cfg=None):
@@ -675,12 +746,30 @@ def _binding(meta):
     return tuple(meta.get(k) for k in _BINDING_KEYS)
 
 
+def _receipt_binding(reservation):
+    return {key: reservation.get(key) for key in _BINDING_KEYS
+            if key not in ("effort", "profile") or key in reservation}
+
+
 def _reserve_valid(meta, row):
     model = meta.get("model")
     price_version = meta.get("price_version")
     if not isinstance(price_version, str):
         raise AnthropicError("pricing_unverified", "reservation_invalid")
     definition = _price_definition(model, price_version)
+    if ("effort" in meta) != ("profile" in meta):
+        raise AnthropicError("pricing_unverified", "reservation_invalid")
+    if "effort" in meta:
+        effort, profile = meta["effort"], meta["profile"]
+        if definition["provider"] == "openai":
+            if (not isinstance(effort, str) or profile is not None and not isinstance(profile, str)
+                    or (model, effort) not in openai_client.VALID_MODEL_EFFORTS
+                    or profile is not None and (openai_client.PROFILE_DEFINITIONS.get(profile) != (model, effort)
+                        or meta.get("max_tokens") not in (8192, 16384, 32768))
+                    or profile is None and (model != openai_client.MODEL or effort != "low")):
+                raise AnthropicError("pricing_unverified", "reservation_invalid")
+        elif effort is not None or profile is not None:
+            raise AnthropicError("pricing_unverified", "reservation_invalid")
     if (not isinstance(meta.get("reservation_id"), str) or len(meta["reservation_id"]) != 32
             or not isinstance(meta.get("request_fp"), str) or len(meta["request_fp"]) != 64
             or meta.get('logical_request_fp') is not None and (not isinstance(meta['logical_request_fp'], str)
@@ -879,6 +968,13 @@ def _reservation_evidence_batch_snapshot(db, ids):
         _, settled = _settled(meta, maximum, [(result_meta, result_row)])
         if not settled or result_meta.get('http_class') != 'http_200' or result_meta.get('error_kind') or result_meta.get('disposition'):
             raise ValueError("cloud_receipt_unresolved")
+        if "answer_text_sha256_v1" in result_meta:
+            answer_hash = result_meta["answer_text_sha256_v1"]
+            if not isinstance(answer_hash, str) or re.fullmatch(r"[0-9a-f]{64}", answer_hash) is None:
+                raise ValueError("cloud_answer_hash_invalid")
+        if ("answer_finish_reason_v1" in result_meta
+                and result_meta["answer_finish_reason_v1"] not in ("stop", "length")):
+            raise ValueError("cloud_answer_finish_reason_invalid")
         result[artifact_id] = {'reservation': meta, 'result': result_meta,
                                'witness': payload_hash([tuple(row) for row, _ in matched])}
     if (db.execute('PRAGMA data_version').fetchone()[0], db.total_changes) != before:
@@ -934,56 +1030,119 @@ def _settled(m, maximum, matching):
     return reported, True
 
 
-def _guard_repeated_request(ledger, candidate):
+def _semantic_financial_target(meta):
+    owner = meta.get('owner')
+    target = meta.get('logical_target_id')
+    if (not isinstance(owner, dict) or type(target) is not int or target <= 0
+            or target != meta.get('message_id') or type(owner.get('semantic_target_id')) is not int
+            or owner.get('semantic_target_id') != target):
+        return None
+    return target
+
+
+def _semantic_financial_identity(meta):
+    """Verify the historical unit fingerprint before comparing raw source and phase."""
+    target = _semantic_financial_target(meta)
+    if target is None:
+        return None
+    owner = meta['owner']
+    source, generation, phase = (owner.get('semantic_source'), owner.get('semantic_generation'),
+                                 owner.get('semantic_phase'))
+    if (not isinstance(source, str) or re.fullmatch(r'[0-9a-f]{64}', source) is None
+            or not isinstance(generation, str) or not generation or len(generation) > 1024
+            or phase not in ('facts', 'summary')):
+        return None
+    expected = payload_hash({'target': target, 'source': source, 'generation': generation, 'phase': phase})
+    if meta.get('logical_unit_fp') != expected:
+        return None
+    return target, source, phase
+
+
+def _legacy_luna_low_proven(previous, current_body):
+    """Prove the old low-effort Responses envelope without persisting the prompt."""
+    if (previous.get('model') != openai_client.MODEL or 'effort' in previous or 'profile' in previous
+            or not isinstance(current_body, dict)
+            or set(current_body) != {'model', 'instructions', 'input', 'max_output_tokens', 'reasoning',
+                                     'store', 'service_tier', 'prompt_cache_options', 'tools'}
+            or current_body.get('model') not in openai_client.CURRENT_PRICE_VERSIONS
+            or current_body.get('instructions') != openai_client.SYSTEM
+            or not isinstance(current_body.get('input'), str)
+            or current_body.get('store') is not False or current_body.get('service_tier') != 'default'
+            or current_body.get('prompt_cache_options') != {'ttl': '30m'} or current_body.get('tools') != []):
+        return False
+    old_body = {**current_body, 'model': openai_client.MODEL,
+                'max_output_tokens': previous['max_tokens'], 'reasoning': {'effort': 'low'}}
+    return payload_hash(old_body) == previous.get('request_fp')
+
+
+def _selection_differs(previous, candidate, current_body):
+    if previous['model'] != candidate['model']:
+        return True
+    new_effort = candidate.get('effort')
+    if not isinstance(new_effort, str):
+        return False
+    old_effort = previous.get('effort')
+    if old_effort is None and _legacy_luna_low_proven(previous, current_body):
+        old_effort = 'low'
+    return isinstance(old_effort, str) and old_effort != new_effort
+
+
+def _guard_repeated_request(ledger, candidate, *, current_body=None):
     """Keep an unresolved or already answered logical request from being sent again."""
     rows = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
         "FROM artifacts WHERE kind=? AND project_id=? AND (message_id IS ? OR ?='semantic_backlog') AND "
         "CASE WHEN typeof(meta)!='text' OR length(meta)>32768 OR NOT json_valid(meta) THEN 1 "
         "WHEN json_type(meta)!='object' THEN 1 "
         "WHEN json_extract(meta,'$.route')=? AND "
-        "(json_extract(meta,'$.unit_key')=? OR ?='semantic_backlog') THEN 1 "
+        "(json_extract(meta,'$.unit_key')=? OR ? IN ('semantic_backlog','patient_context','reextract')) THEN 1 "
         "ELSE EXISTS (SELECT 1 FROM json_tree(meta) "
         "WHERE key IS NOT NULL GROUP BY parent,key HAVING COUNT(*)>1) END ORDER BY artifact_id",
         (KINDS[0], candidate['project_id'], candidate['message_id'], candidate['route'],
          candidate['route'], candidate['unit_key'], candidate['route'])).fetchall()
     result_map = None
+    disposition_ids = None
     for row in rows:
         try:
             previous = _receipt_meta(row['meta'])
             maximum = _reserve_valid(previous, row)
-            old_owner, new_owner = previous.get('owner'), candidate.get('owner')
             if candidate['route'] == 'semantic_backlog':
-                old_target = previous.get('logical_target_id')
-                if type(old_target) is int and old_target != candidate['message_id']:
+                old_target = _semantic_financial_target(previous)
+                new_target = _semantic_financial_target(candidate)
+                if old_target is not None and new_target is not None and old_target != new_target:
                     continue
-                old_unit, new_unit = previous.get('logical_unit_fp'), candidate.get('logical_unit_fp')
-                if old_unit is not None and new_unit is not None:
-                    if old_unit != new_unit:
-                        continue
-                elif previous.get('unit_key') != candidate.get('unit_key'):
-                    root = new_owner.get('semantic_thread_root') if isinstance(new_owner, dict) else None
-                    if (previous.get('message_id') not in (candidate.get('message_id'), root)
-                            or previous.get('request_fp') != candidate.get('request_fp')):
-                        continue
-            if candidate['route'] == 'patient_context' and isinstance(old_owner, dict) and isinstance(new_owner, dict):
-                if any(isinstance(old_owner.get(k), str) and isinstance(new_owner.get(k), str)
-                       and old_owner[k] != new_owner[k] for k in ('night_id', 'source_sig')):
+                old_identity = _semantic_financial_identity(previous)
+                new_identity = _semantic_financial_identity(candidate)
+                if old_identity is not None and new_identity is not None and old_identity != new_identity:
                     continue
             old_fp, new_fp = previous.get('logical_request_fp'), candidate.get('logical_request_fp')
+            prompt_verified = False
             if old_fp is not None and new_fp is not None:
                 if old_fp != new_fp:
                     continue
+                prompt_verified = True
+            elif _legacy_luna_low_proven(previous, current_body):
+                prompt_verified = True
             # Legacy reservations contain only an envelope hash. A model or
             # token-limit change cannot prove that their prompt is different.
             if result_map is None:
                 result_map = {}
+                disposition_ids = set()
                 results = ledger.db.execute("SELECT artifact_id,kind,project_id,message_id,model,meta,created_at "
-                    "FROM artifacts WHERE kind=? AND project_id=? AND (message_id IS ? OR ?='semantic_backlog') "
+                    "FROM artifacts WHERE kind IN (?,?) AND project_id=? AND (message_id IS ? OR ?='semantic_backlog') "
                     "ORDER BY artifact_id",
-                    (KINDS[1], candidate['project_id'], candidate['message_id'], candidate['route']))
+                    (KINDS[1], 'cloud_usage_disposition', candidate['project_id'],
+                     candidate['message_id'], candidate['route']))
                 for result_row in results:
                     result_meta = _receipt_meta(result_row['meta'])
-                    result_map.setdefault(result_meta.get('reservation_id'), []).append((result_meta, result_row))
+                    reservation_id = result_meta.get('reservation_id')
+                    if result_row['kind'] == 'cloud_usage_disposition':
+                        if not isinstance(reservation_id, str) or re.fullmatch(r'[0-9a-f]{32}', reservation_id) is None:
+                            raise ValueError('invalid_disposition')
+                        disposition_ids.add(reservation_id)
+                    else:
+                        result_map.setdefault(reservation_id, []).append((result_meta, result_row))
+            if previous['reservation_id'] in disposition_ids:
+                raise ValueError('discarded')
             matches = result_map.get(previous['reservation_id'], [])
             _, settled = _settled(previous, maximum, matches)
             result = matches[0][0]
@@ -993,9 +1152,8 @@ def _guard_repeated_request(ledger, candidate):
                 continue
             # A confirmed successful result may be deliberately reprocessed
             # with another model. An ambiguous send never grants that retry.
-            if (candidate['route'] == 'semantic_backlog' and old_unit is not None and new_unit is not None
-                    and previous['model'] != candidate['model'] and settled
-                    and result.get('http_class') == 'http_200' and result.get('error_kind') is None):
+            if (prompt_verified and settled and result.get('usage') is not None and result.get('http_class') == 'http_200'
+                    and result.get('error_kind') is None and _selection_differs(previous, candidate, current_body)):
                 continue
             # A validated rate-limit response rejected this attempt. Its
             # reserved cost still remains counted under the existing policy.
@@ -1095,10 +1253,10 @@ def _circuit_result(ledger, error, *, reset=False):
     return record_circuit_result(ledger, error, kind="cloud_circuit", reset=reset)
 
 
-def block_reason(ledger, cfg, route, project_id):
+def block_reason(ledger, cfg, route, project_id, *, model=None):
     if not eligible(cfg, route, project_id):
         return "scope"
-    return global_block_reason(ledger, model=_cfg(cfg)["model"])
+    return global_block_reason(ledger, model=_cfg(cfg)["model"] if model is None else model)
 
 
 def global_block_reason(ledger, *, model=MODEL):
@@ -1287,15 +1445,47 @@ def window_spend(ledger, cfg):
     return tally.total
 
 
-def budget_block_reason(ledger, cfg, *, max_tokens=1600, input_bound=INPUT_RESERVATION_MARGIN):
+def _selection_model(settings, selection, max_tokens):
+    if selection is None:
+        return settings["model"]
+    if (not isinstance(selection, Mapping) or set(selection) !=
+            {"provider", "model", "effort", "max_tokens", "price_version", "profile"}
+            or selection["provider"] != settings["provider"]):
+        raise AnthropicError("contract_error", "cloud_profile_invalid")
+    model, effort, profile = selection["model"], selection["effort"], selection["profile"]
+    if (not isinstance(model, str) or effort is not None and not isinstance(effort, str)
+            or profile is not None and not isinstance(profile, str)
+            or selection["max_tokens"] is not None and type(selection["max_tokens"]) is not int):
+        raise AnthropicError("contract_error", "cloud_profile_invalid")
+    definition = _price_definition(model)
+    if (definition["provider"] != settings["provider"] or selection["price_version"] != definition["price_version"]
+            or selection["max_tokens"] is not None and selection["max_tokens"] != max_tokens):
+        raise AnthropicError("contract_error", "cloud_profile_invalid")
+    if settings["provider"] == "openai":
+        if ((model, effort) not in openai_client.VALID_MODEL_EFFORTS
+                or profile is not None and (openai_client.PROFILE_DEFINITIONS.get(profile) != (model, effort)
+                    or selection["max_tokens"] not in (8192, 16384, 32768))
+                or profile is None and (model != openai_client.MODEL or effort != "low"
+                    or selection["max_tokens"] not in (8192, 16384, 32768))):
+            raise AnthropicError("contract_error", "cloud_profile_invalid")
+    elif effort is not None or profile is not None or model != PROVIDERS["anthropic"]:
+        raise AnthropicError("contract_error", "cloud_profile_invalid")
+    return model
+
+
+def budget_block_reason(ledger, cfg, *, max_tokens=1600, input_bound=INPUT_RESERVATION_MARGIN, selection=None):
     """Read the exact current JST reservation totals without spending or changing state.
     ``input_bound`` is the next request's reserved input (the margin alone for a
     pre-check without a request)."""
     c = _cfg(cfg)
+    try:
+        selected_model = _selection_model(c, selection, max_tokens)
+    except (AnthropicError, TypeError, ValueError):
+        return "profile_invalid"
     reason = setting_block_reason(c)
     if reason:
         return reason
-    if not pricing_valid(model=c["model"]):
+    if not pricing_valid(model=selected_model):
         return "pricing_unverified"
     try:
         tally = _tally(ledger)
@@ -1306,7 +1496,7 @@ def budget_block_reason(ledger, cfg, *, max_tokens=1600, input_bound=INPUT_RESER
     today = tally.days.get(_periods(time.time())[0], [0, Decimal(0)])
     if c["daily_request_budget"] is not None and today[0] >= c["daily_request_budget"]:
         return "daily_cap"
-    cost = max_cost(max_tokens, input_bound=input_bound, model=c["model"])
+    cost = max_cost(max_tokens, input_bound=input_bound, model=selected_model)
     if c["daily_cost_limit_usd"] is not None and today[1] + cost > _decimal(c["daily_cost_limit_usd"]):
         return "daily_cost_cap"
     limit = c["monthly_cost_limit_usd"]
@@ -1341,24 +1531,33 @@ def resume(ledger):
     ledger.artifact_add("cloud_control", "running")
 
 
-def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None, owner=None, on_reserved_tx=None):
+def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None, owner=None, on_reserved_tx=None, selection=None):
     """Bind one unit's accounting; callers supply the same guard before and after this hook."""
     from semantic_runtime import reserve_artifact
     c = _cfg(cfg)
+    if selection is not None:
+        if not isinstance(selection, Mapping):
+            raise AnthropicError("contract_error", "cloud_profile_invalid")
+        selection = MappingProxyType(dict(selection))
     if on_reserved_tx is not None and not callable(on_reserved_tx):
         raise ValueError("cloud_reservation_hook_invalid")
 
     def reserve(body, timeout):
-        model = c["model"]
-        if not isinstance(body, dict) or body.get("model") != model:
+        if not isinstance(body, dict):
             raise AnthropicError("contract_error", "model_not_allowed")
-        if model == openai_client.MODEL and (body.get("service_tier") != "default"
+        body_tokens = body.get("max_output_tokens") if c["provider"] == "openai" else body.get("max_tokens")
+        model = _selection_model(c, selection, body_tokens)
+        if body.get("model") != model:
+            raise AnthropicError("contract_error", "model_not_allowed")
+        if selection is not None and c["provider"] == "openai" and body.get("reasoning") != {"effort": selection["effort"]}:
+            raise AnthropicError("contract_error", "cloud_profile_invalid")
+        if c["provider"] == "openai" and (body.get("service_tier") != "default"
                 or body.get("store") is not False or body.get("prompt_cache_options") != {"ttl": "30m"}):
             raise AnthropicError("contract_error", "openai_price_contract_invalid")
         if ledger.db.in_transaction:
             raise AnthropicError("budget_exceeded", "owner_transaction_active")
         bound = input_bound(body)
-        tokens = body.get("max_output_tokens") if model == openai_client.MODEL else body.get("max_tokens")
+        tokens = body_tokens
         try:
             maximum = max_cost(tokens, input_bound=bound, model=model)
         except AnthropicError as error:
@@ -1374,6 +1573,8 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
                 "input_chars": sum(len(text) for text in _texts(body)),
                 "timeout_seconds": float(timeout),
                 "owner": owner or {}}
+        if selection is not None:
+            meta.update(effort=selection["effort"], profile=selection["profile"])
         if (route == 'semantic_backlog' and isinstance(owner, dict)
                 and owner.get('semantic_target_id') == message_id
                 and all(isinstance(owner.get(k), str) and owner[k]
@@ -1383,11 +1584,11 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
                 'generation': owner['semantic_generation'], 'phase': owner['semantic_phase']})
 
         def check():
-            _guard_repeated_request(ledger, meta)
-            reason = block_reason(ledger, c, route, project_id)
+            _guard_repeated_request(ledger, meta, current_body=body)
+            reason = block_reason(ledger, c, route, project_id, model=model)
             if reason:
                 raise AnthropicError(reason if reason == "pricing_unverified" else "budget_exceeded", reason)
-            reason = budget_block_reason(ledger, c, max_tokens=tokens, input_bound=bound)
+            reason = budget_block_reason(ledger, c, max_tokens=tokens, input_bound=bound, selection=selection)
             if reason:
                 raise AnthropicError("pricing_unverified" if reason == "pricing_unverified" else "budget_exceeded", reason)
 
@@ -1457,7 +1658,7 @@ def record_result(ledger, reservation, metadata):
                 else Decimal(0) if _unbilled(metadata.get("http_class")) else maximum)
         if cost > maximum or (usage is not None and usage["output_tokens"] > reservation["max_tokens"]):
             raise AnthropicError("pricing_unverified", "cost_exceeds_reserve")
-        result = {k: reservation.get(k) for k in _BINDING_KEYS}
+        result = _receipt_binding(reservation)
         request_id = metadata.get("request_id")
         if not isinstance(request_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", request_id):
             request_id = None
@@ -1467,6 +1668,18 @@ def record_result(ledger, reservation, metadata):
             result["openai_error_code"] = metadata["openai_error_code"]
         if "openai_429_diagnostic" in metadata:
             result["openai_429_diagnostic"] = metadata["openai_429_diagnostic"]
+        if "answer_text_sha256_v1" in metadata:
+            answer_hash = metadata["answer_text_sha256_v1"]
+            if (not isinstance(answer_hash, str) or re.fullmatch(r"[0-9a-f]{64}", answer_hash) is None
+                    or http_class != "http_200" or usage is None or error_kind is not None):
+                raise AnthropicError("pricing_unverified", "answer_hash_invalid")
+            result["answer_text_sha256_v1"] = answer_hash
+        if "answer_finish_reason_v1" in metadata:
+            finish_reason = metadata["answer_finish_reason_v1"]
+            if (finish_reason not in ("stop", "length") or http_class != "http_200"
+                    or usage is None or error_kind is not None):
+                raise AnthropicError("pricing_unverified", "finish_reason_invalid")
+            result["answer_finish_reason_v1"] = finish_reason
         if "disposition" in metadata:
             if metadata["disposition"] not in ("discarded_scope", "discarded_workday"):
                 raise AnthropicError("pricing_unverified", "disposition_invalid")
@@ -1527,7 +1740,7 @@ def record_disposition_tx(ledger, reservation, disposition):
     if disposition not in ("discarded_scope", "discarded_workday"):
         raise ValueError("cloud_disposition_invalid")
     _stored_reservation(ledger, reservation)
-    meta = {key: reservation.get(key) for key in _BINDING_KEYS}
+    meta = _receipt_binding(reservation)
     meta["disposition"] = disposition
     existing = _matching_rows(ledger, "cloud_usage_disposition", reservation["reservation_id"])
     if existing:

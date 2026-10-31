@@ -106,7 +106,7 @@ def test_split_auto_edit_preserves_other_provider_jev_and_key(split_conf):
     conf, common, providers, _, key = split_conf
     before_key = key.read_bytes()
     expected = config_edit.read_strict()
-    assert "model" not in expected["cloud_llm"]
+    assert expected["cloud_llm"]["model"] == providers["openai"]["model"]
     budgets = {name: dict(providers[name]["budget"]) for name in ("anthropic", "openai")}
     budgets["openai"]["daily_cost_limit_usd"] = 1
     saved, errors = config_edit.apply({"cloud_llm.provider_budgets": budgets}, expected=expected)
@@ -336,3 +336,74 @@ def test_budget_snapshot_refuses_config_path_change(conf, monkeypatch):
         cloud_cli._settings_for_edit()
     assert len(calls) == 1
     assert (conf.read_bytes(), alternate.read_bytes()) == before
+
+
+@pytest.mark.parametrize('split', [False, True])
+def test_editor_callbacks_report_verified_own_save(request, split):
+    fixture = request.getfixturevalue('split_conf' if split else 'conf')
+    conf = fixture[0] if split else fixture
+    before = config_edit._snapshot(conf)
+    events = []
+    def admission(path, raw, stamp):
+        assert path == str(conf) and (raw, stamp) == before
+        with pytest.raises(config_edit.ConfigConflict, match='config_busy'):
+            with config_edit._edit_lock(conf):
+                pass
+        events.append('admitted')
+    def on_saved(path, raw, stamp):
+        assert path == str(conf) and (raw, stamp) == config_edit._snapshot(conf)
+        assert json.loads(raw)['extract']['prefilter'] is False
+        events.append('saved')
+    result, errors = config_edit.apply({'extract.prefilter': False}, admission=admission, on_saved=on_saved)
+    assert not errors and result['extract']['prefilter'] is False
+    assert events == ['admitted', 'saved']
+
+
+@pytest.mark.parametrize('split', [False, True])
+def test_editor_admission_rejection_and_conflict_never_notify(request, split):
+    fixture = request.getfixturevalue('split_conf' if split else 'conf')
+    conf = fixture[0] if split else fixture
+    before = conf.read_bytes()
+    events = []
+    def reject(*args):
+        raise config_edit.ConfigConflict('config_changed')
+    with pytest.raises(config_edit.ConfigConflict):
+        config_edit.apply({'extract.prefilter': False}, admission=reject, on_saved=lambda *a: events.append(a))
+    assert conf.read_bytes() == before and not events
+    def change(*args):
+        replacement = conf.with_name('synthetic-concurrent')
+        replacement.write_bytes(before)
+        replacement.replace(conf)
+    with pytest.raises((config_edit.ConfigConflict, ValueError)):
+        config_edit.apply({'extract.prefilter': False}, admission=change, on_saved=lambda *a: events.append(a))
+    assert conf.read_bytes() == before and not events
+
+
+def test_legacy_editor_does_not_report_other_same_bytes_inode(conf, monkeypatch):
+    atomic = safe_io.atomic_write
+    events = []
+    def concurrent(path, writer, *args, **kwargs):
+        atomic(path, writer, *args, **kwargs)
+        other = conf.with_name('synthetic-concurrent')
+        other.write_bytes(conf.read_bytes())
+        other.replace(conf)
+    monkeypatch.setattr(safe_io, 'atomic_write', concurrent)
+    with pytest.raises(ValueError, match='config_save_unverified'):
+        config_edit.apply({'extract.prefilter': False}, on_saved=lambda *a: events.append(a))
+    assert not events
+
+
+def test_split_editor_does_not_report_other_same_bytes_inode(split_conf, monkeypatch):
+    conf, _, _, _, _ = split_conf
+    commit = provider_settings.commit_locked
+    events = []
+    def concurrent(*args, **kwargs):
+        result = commit(*args, **kwargs)
+        other = conf.with_name('synthetic-concurrent')
+        other.write_bytes(conf.read_bytes())
+        other.replace(conf)
+        return result
+    monkeypatch.setattr(provider_settings, 'commit_locked', concurrent)
+    with pytest.raises(ValueError, match='config_save_unverified'):
+        config_edit.apply({'extract.prefilter': False}, on_saved=lambda *a: events.append(a))
+    assert not events

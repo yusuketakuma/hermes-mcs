@@ -165,13 +165,16 @@ def test_period_budget_alone_satisfies_the_key_only_cap():
 
 
 def test_period_budget_counts_all_spending_since_its_start_and_refuses_before_it(tmp_path, now):
+    def body(unit):
+        return {"model": c.MODEL, "max_tokens": 100, "system": "synthetic system",
+                "messages": [{"role": "user", "content": unit}]}
+
     def reserve(ledger, cfg, unit):
-        return c.usage_reserver(ledger, cfg, route="reextract", project_id=1, unit_key=unit)(
-            {"model": c.MODEL, "max_tokens": 100}, 2)
+        return c.usage_reserver(ledger, cfg, route="reextract", project_id=1, unit_key=unit)(body(unit), 2)
 
     with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
         reservation = reserve(ledger, _period(), "u1")
-        maximum = c.max_cost(100, input_bound=c.input_bound({"model": c.MODEL, "max_tokens": 100}))
+        maximum = c.max_cost(100, input_bound=c.input_bound(body("u1")))
         assert c.window_spend(ledger, _period()) == maximum          # unsettled: held at its maximum
         c.record_result(ledger, reservation, {"model": c.MODEL, "request_fp": reservation["request_fp"],
                         "usage": {"input_tokens": 10, "output_tokens": 2}, "http_class": "http_200",
@@ -194,7 +197,8 @@ def test_budget_command_sets_any_period_amount_and_end_date(tmp_path, monkeypatc
     from types import SimpleNamespace
     import cloud_cli
     path = tmp_path / "config.json"
-    path.write_text(json.dumps({"mcs_login_id": "synthetic-login", "notify_target": "synthetic-target"}))
+    path.write_text(json.dumps({"mcs_login_id": "synthetic-login", "notify_target": "synthetic-target",
+                                "semantic": {"until": "2026-12-01T23:59:59+09:00"}}))
     path.chmod(0o600)
     monkeypatch.setattr(mcs_util, "CONF_PATH", str(path))
 
@@ -206,7 +210,7 @@ def test_budget_command_sets_any_period_amount_and_end_date(tmp_path, monkeypatc
     saved = json.loads(path.read_text())
     assert saved["cloud_llm"] == {"window_budget_usd": 80.0, "window_start": "2026-10-28T00:00:00+09:00",
                                   "until": "2026-10-30T23:59:59+09:00"}
-    assert saved["semantic"] == {"until": "2026-10-30T23:59:59+09:00"}   # Jev ends with the paid route
+    assert saved["semantic"] == {"until": "2026-12-01T23:59:59+09:00"}   # Jev is independent
     shown = json.loads(capsys.readouterr().out)
     assert (shown["period_budget_usd"], shown["until"]) == (80.0, "2026-10-30T23:59:59+09:00")
     # Changing the amount keeps the existing start, so spending already counted still counts.
@@ -225,7 +229,7 @@ def test_budget_command_sets_any_period_amount_and_end_date(tmp_path, monkeypatc
     assert run(window_from="2026-10-29") == 1 and path.read_text() == before   # no period to move
     assert run(period_usd="none", until="none") == 0
     saved = json.loads(path.read_text())
-    assert saved["cloud_llm"] == {} and saved["semantic"] == {}
+    assert saved["cloud_llm"] == {} and saved["semantic"] == {"until": "2026-12-01T23:59:59+09:00"}
 
 
 def test_doctor_shows_the_run_window_and_planning_assumes_a_cap(tmp_path, now):
@@ -450,7 +454,8 @@ def test_provider_cap_reduction_preserves_paid_result_but_blocks_new_reservation
     assert c.scope_generation(high) == c.scope_generation(low)
     with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
         reserve = c.usage_reserver(ledger, high, route="reextract", project_id=1, unit_key="paid")
-        reservation = reserve({"model": c.MODEL, "max_tokens": 100}, 2)
+        reservation = reserve({"model": c.MODEL, "max_tokens": 100, "system": "synthetic system",
+                               "messages": [{"role": "user", "content": "paid"}]}, 2)
         result = {"model": c.MODEL, "request_fp": reservation["request_fp"],
                   "usage": {"input_tokens": 10, "output_tokens": 2},
                   "http_class": "http_200", "request_id": "synthetic", "error_kind": None}
@@ -459,7 +464,8 @@ def test_provider_cap_reduction_preserves_paid_result_but_blocks_new_reservation
         assert c.budget_block_reason(ledger, low) == "provider_daily_cap"
         with pytest.raises(c.AnthropicError) as raised:
             c.usage_reserver(ledger, low, route="reextract", project_id=1, unit_key="next")(
-                {"model": c.MODEL, "max_tokens": 100}, 2)
+                {"model": c.MODEL, "max_tokens": 100, "system": "synthetic system",
+                 "messages": [{"role": "user", "content": "next"}]}, 2)
         assert raised.value.detail == "provider_daily_cap"
         assert len(ledger.artifacts("cloud_usage_reserve")) == 1
 

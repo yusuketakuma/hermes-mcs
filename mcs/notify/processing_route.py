@@ -142,6 +142,15 @@ def provider_states(db, project_id, message_id, cfg=None, *, bundle_cache=None, 
         if row["kind"] == "extract_llm":
             if proof.get("stage") != "extract":
                 return result()
+            if ("__mcs_internal_proof_v1" in content or "internal_proof_version" in meta
+                    or "internal_proof_hash" in meta):
+                import extract_llm
+                message = db.execute("SELECT * FROM messages WHERE project_id=? AND message_id=?",
+                                     (project_id, message_id)).fetchone()
+                if (message is None or extract_llm.progress_for_message(
+                        db, message, model=row["model"], expected_artifact_id=row["artifact_id"])["state"] != "complete"):
+                    states = dict.fromkeys(PROVIDERS, "unknown")
+                    return result()
         else:
             if proof.get("stage") != "projection" or not isinstance(cfg, dict):
                 return result()
@@ -243,10 +252,13 @@ def _route(row, meta, content):
         return None
     backend = meta.get("backend")
     import cloud_policy
-    if backend is None:
-        return None if row["model"] in cloud_policy.PROVIDERS.values() else "local"
-    if backend not in cloud_policy.PROVIDERS or cloud_policy.PROVIDERS[backend] != row["model"]:
-        return None
     import extract_llm
-    contract = extract_llm._cloud_contract({"cloud_llm": {"mode": "off", "provider": backend}})
-    return "cloud" if all(meta.get(key) == value for key, value in contract.items()) else None
+    if backend is None:
+        try:
+            cloud_policy._price_definition(row["model"])
+        except cloud_policy.AnthropicError:
+            return "local"
+        return None
+    contract = {key: meta.get(key) for key in ("backend", "model", "prompt")}
+    return "cloud" if (backend in cloud_policy.PROVIDERS and contract["model"] == row["model"]
+                       and extract_llm._known_cloud_contract(contract)) else None
