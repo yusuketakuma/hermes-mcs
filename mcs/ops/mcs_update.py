@@ -213,6 +213,10 @@ class UpdateError(Exception):
     """Gate/stage failure with a stable reason token for the journal."""
 
 
+class ProviderRollbackUnverified(UpdateError):
+    """Keep quiesced workers stopped until provider rollback evidence is verified."""
+
+
 class RestoreConsentPending(UpdateError):
     """The schema-bump DB replace is durably held: no ops.restore_approve
     receipt matches the current loss report. Writers/senders stay frozen
@@ -790,6 +794,115 @@ def _ls_tree_paths(tag: str, subdir: str | None = None,
         records.append((parts[0], parts[1], parts[2], path))
     return records
 
+
+
+_SPLIT_SOURCE_ROOTS = ("mcs", "mcs_standalone", "adapters", "hermes_plugin",
+                       "lineworks_adapter", "deployment", "scripts", "install.sh", "pyproject.toml")
+
+
+def _split_source_tree(ref):
+    return [entry for entry in _ls_tree_paths(ref)
+            if any(entry[3] == root or entry[3].startswith(root + "/") for root in _SPLIT_SOURCE_ROOTS)]
+
+
+def _split_target_source_matches(target: str) -> bool:
+    """Prove the target and clean checkout have identical runtime source blobs.
+
+    This intentionally rejects compatible but changed source until a reviewed
+    compatibility witness exists. No candidate code is imported or executed.
+    """
+    if not isinstance(target, str) or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", target) is None:
+        return False
+    head = _head_sha()
+    if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head) is None or len(target) != len(head):
+        return False
+    current = _split_source_tree(head)
+    candidate = _split_source_tree(target)
+    if not current or current != candidate:
+        return False
+    required = {"mcs/core/mcs_util.py", "mcs/core/provider_settings.py", "mcs/core/mcs_config.py",
+                "mcs/core/safe_io.py", "mcs/llm/cloud_policy.py", "mcs/semantic/semantic_jev.py"}
+    if not required.issubset({path for _, _, _, path in current}):
+        return False
+    # Ignore index hide flags and metadata caches: hash each actual file.
+    # Untracked code in any executable tree can shadow a reader. Python does
+    # not import source-less files from __pycache__; ordinary caches are safe.
+    if _git_out(["status", "--porcelain=v1", "-z", "--untracked-files=no", "--", *_SPLIT_SOURCE_ROOTS]):
+        return False
+    extras = _git_out(["ls-files", "--others", "-z", "--", *_SPLIT_SOURCE_ROOTS]).split("\0")
+    if any(path and not (path.endswith(".pyc") and "__pycache__" in path.split("/")) for path in extras):
+        return False
+    root = os.open(REPO, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for mode, kind, blob, path in current:
+            if (kind != "blob" or mode not in ("100644", "100755") or not _safe_relpath(path)
+                    or not any(path == root or path.startswith(root + "/") for root in _SPLIT_SOURCE_ROOTS)
+                    or len(blob) != len(head)
+                    or re.fullmatch(r"[0-9a-f]+", blob) is None):
+                return False
+            parent = os.dup(root)
+            try:
+                parts = path.split("/")
+                for part in parts[:-1]:
+                    child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+                    os.close(parent)
+                    parent = child
+                fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+                with fdopen_owned(fd, "rb") as stream:
+                    before = os.fstat(stream.fileno())
+                    if (not stat.S_ISREG(before.st_mode) or before.st_size > 8 * 1024 * 1024
+                            or before.st_nlink != 1 or before.st_uid != os.getuid()
+                            or bool(before.st_mode & 0o111) != (mode == "100755")):
+                        return False
+                    raw = stream.read(8 * 1024 * 1024 + 1)
+                    after = os.fstat(stream.fileno())
+                    path_info = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+                    def identity(st):
+                        return (st.st_dev, st.st_ino, st.st_mode, st.st_uid, st.st_nlink,
+                                st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+                    if (len(raw) != before.st_size or identity(before) != identity(after)
+                            or identity(after) != identity(path_info)):
+                        return False
+                    digest = hashlib.new("sha1" if len(blob) == 40 else "sha256")
+                    digest.update(b"blob " + str(len(raw)).encode("ascii") + b"\0" + raw)
+                    if digest.hexdigest() != blob:
+                        return False
+            finally:
+                os.close(parent)
+        return _head_sha() == head and _split_source_tree(target) == candidate
+    finally:
+        os.close(root)
+
+
+_PROVIDER_SETTINGS_ONLY = object()
+
+
+def _provider_rollback_preflight(target: str | object) -> bool | None:
+    """Block unproven split-setting rollback before changing code or workers."""
+    try:
+        import cloud_policy
+        import provider_settings
+        import semantic_jev
+        state = provider_settings.probe(HOME)
+        if state["state"] in ("root_missing", "uninitialized_or_legacy_unverified", "legacy_unverified"):
+            return
+        if state["state"] != "requires_checked_read":
+            raise ProviderRollbackUnverified("provider_rollback_settings_unverified")
+        owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+        first = provider_settings.read(HOME, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+        if (first["mode"] != "split" or target is not _PROVIDER_SETTINGS_ONLY
+                and not _split_target_source_matches(target)):
+            raise ProviderRollbackUnverified("provider_rollback_target_unverified")
+        second = provider_settings.read(HOME, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+        if second["mode"] != "split" or second["snapshot"] != first["snapshot"]:
+            raise ProviderRollbackUnverified("provider_rollback_settings_changed")
+        return True
+    except ProviderRollbackUnverified:
+        raise
+    except UpdateError as error:
+        raise ProviderRollbackUnverified("provider_rollback_target_unverified") from error
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError) as error:
+        raise ProviderRollbackUnverified("provider_rollback_settings_unverified") from error
 
 
 def _precheck_target_tree(tag: str, standalone: bool, *, deadline=None, installed_schema=None, expected_target_schema=None) -> tuple[list[str], list]:
@@ -1945,7 +2058,7 @@ def _restore_runtime(entry: dict) -> None:
 
 def _post_merge(state: dict) -> int:
     """Post-merge stages, run as a NEW-code subprocess while the parent
-    (old code) holds both locks (--locks-held)."""
+    holds both locks (--locks-held)."""
     applying = state["applying"]
     if 'release_ref' in applying:
         if applying.get('reinstall') or applying.get('runtime_migration'):
@@ -2345,6 +2458,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 # happened; fall back to the surgical rollback path
                 entry = state["applying"]
                 try:
+                    _provider_rollback_preflight(entry.get("prev_sha"))
                     _check_runtime_restore(entry)
                 except UpdateError as e:
                     rollback_failed = True
@@ -2812,6 +2926,7 @@ def _rollback_tree(entry: dict, on_hold=None, *, expected_rollback=None) -> None
         raise UpdateError("backup_invalid: missing or invalid backup path")
     if expected_rollback is not None:
         _fresh_rollback_state(expected_rollback)
+    _provider_rollback_preflight(prev)
     if mcs_util.load_config().get("runtime_mode") == "standalone" and not _standalone_target_supported(prev):
         raise UpdateError("standalone_runtime_missing_in_target")
     err = _rollback_layout_error(entry)
@@ -2931,6 +3046,7 @@ def rollback(command_id: str | None = None) -> int:
         try:
             if not _tree_clean():
                 raise UpdateError("tree_dirty_before_rollback")
+            _provider_rollback_preflight(prev)
             # an unusable backup aborts before the journal: nothing runs
             err = _rollback_backup_error(entry) or _rollback_layout_error(entry)
             if err:
@@ -2965,6 +3081,7 @@ def rollback(command_id: str | None = None) -> int:
                     **({"expected_rollback": expected_rollback} if schema_hold else {}))
                 if schema_hold:
                     state, _current = _fresh_rollback_state(expected_rollback)
+                _provider_rollback_preflight(_PROVIDER_SETTINGS_ONLY)
                 consent_hold = False
             except RestoreConsentPending as e:
                 # HOLD, don't unwind: drainers stay stopped, senders
@@ -2982,7 +3099,20 @@ def rollback(command_id: str | None = None) -> int:
                 print(restore_evidence.RESTORE_LOSS_NOTICE)
                 consent_hold = True
                 return 2
+            except ProviderRollbackUnverified as e:
+                # The preflight can change after quiesce. Keep the durable
+                # rollback journal and marker; never restart against an
+                # unverified settings generation.
+                consent_hold = True
+                _report("provider_rollback_blocked", str(e))
+                return 2
             except Exception as e:
+                try:
+                    _provider_rollback_preflight(_PROVIDER_SETTINGS_ONLY)
+                except ProviderRollbackUnverified as error:
+                    consent_hold = True
+                    _report("provider_rollback_blocked", str(error))
+                    return 2
                 if consent_hold or _restore_hold_active():
                     consent_hold = True
                     _report("restore_consent_blocked", str(e))
@@ -3371,8 +3501,19 @@ def _journal_consent_from_marker(state: dict, applying: dict) -> None:
         journal_store.save_state(STATE_PATH, state)
 
 
+def _provider_recovery_ready(target=_PROVIDER_SETTINGS_ONLY) -> bool:
+    try:
+        _provider_rollback_preflight(target)
+    except ProviderRollbackUnverified as error:
+        _report("provider_rollback_blocked", str(error))
+        return False
+    return True
+
+
 def _complete_done_bookkeeping(state: dict) -> int:
     """Finish the parent's bookkeeping after the child journaled 'done'."""
+    if not _provider_recovery_ready():
+        return 1
     applied = state.get("applied") or []
     cid = (applied[-1] or {}).get("command_id") if applied else None
     if cid:
@@ -3388,6 +3529,8 @@ def _complete_done_bookkeeping(state: dict) -> int:
 
 def _finish_resumed(state: dict, applying: dict) -> int:
     """Record a resumed apply or rollback as complete and restart services."""
+    if not _provider_recovery_ready():
+        return 1
     if applying.get("rollback"):
         applied = state.get("applied") or []
         if applied and applied[-1].get("sha") == applying.get("prev_sha"):
@@ -3447,6 +3590,15 @@ def recover_interrupted(if_stale: bool = False) -> int:
         stages = [s.get("stage") for s in state.get("stages", [])]
         if if_stale and _journal_is_fresh(state, applying):
             return 0                   # fresh journal — leave it alone
+        try:
+            split = _provider_rollback_preflight(_PROVIDER_SETTINGS_ONLY)
+            if split and (applying or stages):
+                # Recovery normally continues on the current tree. A switch
+                # to another tree is separately checked at that operation.
+                _provider_rollback_preflight(_head_sha())
+        except UpdateError as error:
+            _report("provider_rollback_blocked", str(error))
+            return 1
         schema_rollback = (isinstance(applying, dict) and applying.get("rollback")
                            and applying.get("schema_bump") is not False
                            and (applying.get("schema_bump") is not None
@@ -3478,6 +3630,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
             _report('recovery_incomplete', 'run_log_tail_unverified')
             return 1
         if not applying and not stages:
+            if not _provider_recovery_ready():
+                return 1
             _remove_marker()           # orphan marker — writer is dead
             return 0
         try:
@@ -3553,6 +3707,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
             dkey = _drainers_key(state, head)
             _report("escalate", detail, alert_key=key,
                     notified_at=notified_at, drainers_key=dkey)
+            if not _provider_recovery_ready():
+                return 1
             problems = drainers(dkey)
             _remove_marker()
             # every pass (daily check, consent respawn) re-escalates the
@@ -3586,6 +3742,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
                                 "refusing to classify")
             if not prev:
                 return escalate("MERGE_HEAD without known prev_sha")
+            if not _provider_recovery_ready(prev):
+                return 1
             r = _git(["merge", "--abort"])
             if r.returncode != 0 or _head_sha() != prev:
                 return escalate("merge --abort failed")
@@ -3618,6 +3776,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 if foreign:
                     return escalate("local changes outside update: "
                                     + ",".join(foreign)[:160])
+                if not _provider_recovery_ready(target):
+                    return 1
                 tree_reset = True
                 _git_out(["reset", "--hard", target])
                 if not _tree_clean():
@@ -3698,6 +3858,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     except UpdateError as e:
                         return escalate(str(e))
                 _services_reconcile()
+                if not _provider_recovery_ready():
+                    return 1
                 problems = drainers(_drainers_key(state, head))
                 errors = _postcheck(state, target)
                 if problems or errors:
@@ -3726,6 +3888,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 if foreign:
                     return escalate("local changes outside update: "
                                     + ",".join(foreign)[:160])
+                if not _provider_recovery_ready(prev):
+                    return 1
                 _git_out(["reset", "--hard", prev])
                 if _head_sha() != prev or not _tree_clean():
                     return escalate("prev tree could not be cleaned")
@@ -3769,6 +3933,7 @@ def _undo_interrupted_migration(state, applying, drainers, escalate) -> int:
                if entry.get("schema_bump") and entry.get("backup_path") else {}))
         if entry.get("schema_bump") and entry.get("backup_path"):
             state, _current = _fresh_rollback_state(expected_rollback)
+        _provider_rollback_preflight(_PROVIDER_SETTINGS_ONLY)
     except RestoreConsentPending as e:
         if entry.get("schema_bump") and entry.get("backup_path"):
             try:
@@ -3780,7 +3945,15 @@ def _undo_interrupted_migration(state, applying, drainers, escalate) -> int:
             state = journal_store.load_state(STATE_PATH)
         _consent_hold(state, e, entry.get("backup_path"))
         return 0
+    except ProviderRollbackUnverified as e:
+        _report("provider_rollback_blocked", str(e))
+        return 1
     except Exception as e:
+        try:
+            _provider_rollback_preflight(_PROVIDER_SETTINGS_ONLY)
+        except ProviderRollbackUnverified as error:
+            _report("provider_rollback_blocked", str(error))
+            return 1
         if entry.get("schema_bump") and entry.get("backup_path"):
             _report("restore_writer_state_unverified", str(e))
             return 1
@@ -3806,6 +3979,8 @@ def _undo_interrupted_migration(state, applying, drainers, escalate) -> int:
 
 
 def _finish_recovery(state: dict, result: str, removed: list) -> int:
+    if not _provider_recovery_ready():
+        return 1
     # Keep the journal until workers are verified live; retry healthy workers
     # without bouncing them again for the same journal and checkout.
     _remove_marker()

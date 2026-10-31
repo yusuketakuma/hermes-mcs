@@ -184,7 +184,8 @@ exit 0
     "python3": """#!/bin/sh
 echo "python3 $*" >> "$STUB_LOG"
 case "$*" in
-  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*mcs-installer-inherited-lock*|*requires_python_admits.py*|*install_options.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
+  *install_options.py*) exec "$STUB_PARSE_PYTHON" -B "$STUB_ROOT/install-options-runner.py" "$@" ;;
+  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*mcs-installer-inherited-lock*|*requires_python_admits.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
 esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
@@ -226,7 +227,8 @@ echo "/dev/stub 100000000 1 ${STUB_DF_KB:-50000000} 1% /"
 VENV_PYTHON = """#!/bin/sh
 echo "venv-python $*" >> "$STUB_LOG"
 case "$*" in
-  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*mcs-installer-inherited-lock*|*requires_python_admits.py*|*install_options.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
+  *install_options.py*) exec "$STUB_PARSE_PYTHON" -B "$STUB_ROOT/install-options-runner.py" "$@" ;;
+  *mcs-model-list-probe*|*mcs-runtime-migration-lock*|*mcs-installer-inherited-lock*|*requires_python_admits.py*) exec "$STUB_PARSE_PYTHON" "$@" ;;
 esac
 if [ "$1" = "-I" ] && [ "$2" = "-B" ] && [ "$3" = "-c" ]; then
     exec "$STUB_PARSE_PYTHON" -I -B "$STUB_ROOT/runtime-check.py" "$@"
@@ -251,6 +253,8 @@ VENV_HERMES = """#!/bin/sh
 echo "venv-hermes $*" >> "$STUB_LOG"
 echo "hermes-env HERMES_HOME=$HERMES_HOME" >> "$STUB_LOG"
 case "$1" in
+  cron) [ "$2" = list ] && [ "$3" = --all ] || exit 1
+        echo "No scheduled jobs in profile 'default'." ;;
   config) exit 1 ;;
   plugins) [ -z "$STUB_FAIL_PLUGIN" ] || exit 1 ;;
 esac
@@ -286,14 +290,99 @@ def _world(tmp_path, *, brew=True, git_head=None, path_hermes=False):
                        ("venv-hermes", VENV_HERMES)):
         (stub_root / name).write_text(body)
         (stub_root / name).chmod(0o755)
+    # Every install_options child uses this isolated runner. No command is
+    # spawned: worker and cron listings are synthetic, while the real cron
+    # parser and fresh-install checks still consume their output.
+    (stub_root / "install-options-runner.py").write_text(f"""\
+import os, socket, subprocess, sys
+from pathlib import Path
+root = Path({str(ROOT)!r})
+sys.path.insert(0, str(root / 'mcs'))
+def blocked(*args, **kwargs):
+    raise AssertionError('non-fixture operation denied')
+socket.create_connection = blocked
+socket.getaddrinfo = blocked
+socket.socket.connect = blocked
+socket.socket.connect_ex = blocked
+socket.socket.sendto = blocked
+subprocess.Popen = blocked
+
+def synthetic_run(command, *args, **kwargs):
+    if args or not isinstance(command, list) or kwargs.get('shell'):
+        return blocked()
+    responses = {{
+        ('/bin/ps', '-axo', 'pid=,args='): '',
+        ('/bin/launchctl', 'list'): 'PID Status Label\\n',
+        ('/usr/bin/systemctl', '--user', 'list-units', '--all', '--plain', '--no-legend'): '',
+    }}
+    key = tuple(command)
+    if key in responses:
+        with open(os.environ['STUB_LOG'], 'a') as log:
+            log.write('synthetic-inventory ' + command[0] + '\\n')
+        return subprocess.CompletedProcess(command, 0, responses[key], '')
+    if len(command) == 4 and command[1:] == ['cron', 'list', '--all']:
+        home = Path(os.environ['HOME']).resolve()
+        executable = Path(command[0])
+        try:
+            resolved = executable.resolve(strict=True)
+            resolved.relative_to(home)
+            contents = resolved.read_text()
+        except (OSError, ValueError, UnicodeError):
+            return blocked()
+        fixture = (Path(os.environ['STUB_ROOT']) / 'venv-hermes').read_text()
+        unknown = '#!/bin/sh\\nprintf "synthetic-hermes %s\\\\n" "$*" >> "$STUB_LOG"\\nexit 7\\n'
+        # The installer publishes a shell shim at ~/.local/bin/hermes. Verify
+        # its exact body and its fixture target, but never execute either.
+        if executable == home / '.local' / 'bin' / 'hermes':
+            target = Path(os.environ.get('MCS_FRESH_HERMES_EXE', ''))
+            try:
+                resolved_target = target.resolve(strict=True)
+                resolved_target.relative_to(home)
+                quoted = chr(39) + str(target).replace(chr(39), chr(39) + chr(92) + chr(39) + chr(39)) + chr(39)
+                shim = '#!/usr/bin/env bash\\nunset PYTHONPATH\\nunset PYTHONHOME\\nexec ' + quoted + ' "$@"\\n'
+                if contents == shim and resolved_target.read_text() == fixture:
+                    contents = fixture
+            except (OSError, ValueError, UnicodeError):
+                return blocked()
+        if contents == fixture:
+            with open(os.environ['STUB_LOG'], 'a') as log:
+                log.write('venv-hermes cron list --all\\n')
+            return subprocess.CompletedProcess(command, 0, "No scheduled jobs in profile 'default'.\\n", '')
+        if contents == unknown:
+            with open(os.environ['STUB_LOG'], 'a') as log:
+                log.write('synthetic-hermes cron list --all\\n')
+            return subprocess.CompletedProcess(command, 7, '', '')
+    return blocked()
+subprocess.run = synthetic_run
+if sys.argv[1:] == ['--fixture-self-check']:
+    for command in (['/bin/ps', '-axo', 'pid=,args='], ['/bin/launchctl', 'list'],
+                    ['/usr/bin/systemctl', '--user', 'list-units', '--all', '--plain', '--no-legend']):
+        assert subprocess.run(command, capture_output=True, text=True).returncode == 0
+    for call in (lambda: subprocess.run(['/bin/echo', 'unsafe']),
+                 lambda: subprocess.Popen(['/bin/echo', 'unsafe'])):
+        try:
+            call()
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError('unexpected process allowed')
+    raise SystemExit(0)
+import _mcs_path
+import install_options
+index = next(i for i, arg in enumerate(sys.argv) if Path(arg).name == 'install_options.py')
+with open(os.environ['STUB_LOG'], 'a') as log:
+    log.write('fresh-runner ' + sys.argv[index + 1] + '\\n')
+raise SystemExit(install_options.main(sys.argv[index + 1:]))
+""")
     # Run the production template parser and metadata validator, replacing
     # only the target interpreter's process result with synthetic facts.
     (stub_root / "runtime-check.py").write_text(f"""
 import json, os, runpy, subprocess, sys
 fixture_home = os.environ['HOME']
+fixture_root = os.environ.get('MCS_ROOT', os.path.join(fixture_home, '.mcs'))
 runpy.run_path({str(ROOT / 'tests/conftest.py')!r})
 os.environ['HOME'] = fixture_home
-os.environ['MCS_ROOT'] = os.path.join(fixture_home, '.mcs')
+os.environ['MCS_ROOT'] = fixture_root
 import mcs_util
 mcs_util.HOME = os.environ['MCS_ROOT']
 mcs_util.CONF_PATH = os.path.join(mcs_util.HOME, 'config.json')
@@ -342,6 +431,16 @@ exec(compile(code, '<installer-runtime-check>', 'exec'))
         "MCS_ALLOW_MODEL_SHA_OVERRIDE": "1",
     })
     return home, hermes_home, stub_root, env
+
+
+def test_install_options_fixture_denies_unexpected_subprocesses(tmp_path):
+    _, _, stub_root, env = _world(tmp_path)
+    result = subprocess.run(
+        [sys.executable, '-B', str(stub_root / 'install-options-runner.py'), '--fixture-self-check'],
+        env=env, capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert sum(line.startswith('synthetic-inventory ') for line in _calls(stub_root)) == 3
 
 
 def _run(env, hermes_home, *flags, script=INSTALL, cwd=None, pass_fds=()):
@@ -521,10 +620,25 @@ def test_fresh_install_reaches_bootstrap_without_python(tmp_path, prior_state):
     (stub_root / 'bin/brew').write_text('#!/bin/sh\necho "brew $*" >> "$STUB_LOG"\nexit 1\n')
     result = _run(env, hermes_home, '--no-llm', '--no-recovery')
     assert result.returncode != 0
-    assert any(line.startswith('brew ') for line in _calls(stub_root))
+    if prior_state == 'absent':
+        assert any(line.startswith('brew ') for line in _calls(stub_root))
+        assert (lock.parent / '.provider-bootstrap-fresh.json').is_file()
+    else:
+        assert not any(line.startswith('brew ') for line in _calls(stub_root))
+        assert not (lock.parent / '.provider-bootstrap-fresh.json').exists()
     assert not any(line.startswith('python3 ') for line in _calls(stub_root))
     assert lock.is_file() and lock.stat().st_mode & 0o777 == 0o600
     assert not (home / '.mcs/config.json').exists()
+    assert not any(line.startswith(('git clone', 'uv ', 'launchctl bootstrap')) for line in _calls(stub_root))
+    if prior_state == 'absent':
+        marker = lock.parent / '.provider-bootstrap-fresh.json'
+        before = marker.read_bytes()
+        calls = _calls(stub_root)
+        retry = _run(env, hermes_home, '--no-llm', '--no-recovery')
+        assert retry.returncode != 0
+        assert marker.read_bytes() == before
+        assert [line for line in _calls(stub_root) if line.startswith('brew ')] == [
+            line for line in calls if line.startswith('brew ')]
 
 
 @pytest.mark.parametrize('record', ['legacy', 'pending'])
@@ -658,7 +772,7 @@ def _inject_before_config_persistence(stub_root, code):
                                    "\n" + marker))
 
 
-def _race_config_writer(stub_root, raw, *, symlink=False, mode=0o600, swap_parent=False):
+def _race_config_writer(stub_root, raw, *, symlink=False, mode=0o600, swap_parent=False, hardlink=False):
     script = stub_root / "runtime-check.py"
     text = script.read_text()
     marker = "exec(compile(code, '<installer-runtime-check>', 'exec'))"
@@ -683,10 +797,37 @@ if sys.argv[0] == '-':
         else:
             target.write_text({raw!r})
             target.chmod({mode!r})
+            if {hardlink!r}:
+                original_link(target, target.parent.parent / 'synthetic-linked-config')
         return original_link(src, dst, **kwargs)
     os.link = race_link
 """
     script.write_text(text.replace(marker, inject + marker))
+
+
+@pytest.mark.parametrize('provider_trace', [False, True])
+def test_existing_data_without_config_keeps_legacy_or_holds_provider_trace(tmp_path, provider_trace):
+    home, _, _, env = _world(tmp_path)
+    _real_config_writer(env)
+    data = home / '.mcs/data'
+    data.mkdir(mode=0o700, parents=True)
+    preserved = data / 'synthetic-user-data'
+    preserved.write_bytes(b'preserve')
+    if provider_trace:
+        marker = data / '.provider-settings-pending.json'
+        marker.write_text('{}')
+        marker.chmod(0o600)
+    result = _run(env, None, '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert preserved.read_bytes() == b'preserve'
+    assert not (data / '.provider-bootstrap-fresh.json').exists()
+    if provider_trace:
+        assert result.returncode != 0
+        assert marker.read_text() == '{}'
+        assert not (home / '.mcs/config.json').exists()
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert json.loads((home / '.mcs/config.json').read_text()) == {'install_args': SAVED_FLAGS}
+        assert not (data / '.provider-settings-authority.json').exists()
 
 
 def test_noninteractive_install_creates_private_unconfigured_config(tmp_path):
@@ -729,6 +870,52 @@ def test_existing_explicit_install_preserves_other_settings(tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(config.read_text()) == {**initial, 'runtime_mode': 'standalone', 'install_args': SAVED_FLAGS}
     assert config.stat().st_mode & 0o777 == 0o600
+    data = config.parent / 'data'
+    assert data.is_dir()
+    assert not (data / '.provider-bootstrap-fresh.json').exists()
+    assert not (data / '.provider-bootstrap-complete.json').exists()
+    assert not (data / '.provider-settings-authority.json').exists()
+    assert not (data / 'provider_settings').exists()
+
+
+@pytest.mark.parametrize('option', ['mode', 'recovery'])
+def test_split_runtime_options_stop_before_software_without_changing_authority(tmp_path, option):
+    import provider_settings
+    import cloud_policy
+    import semantic_jev
+
+    home, _, stub, env = _world(tmp_path)
+    root = home / '.mcs'
+    data = root / 'data'
+    settings = data / 'provider_settings'
+    settings.mkdir(mode=0o700, parents=True)
+    data.chmod(0o700)
+    common = {'install_args': [], 'cloud_llm': {'mode': 'off'}, 'semantic': {'mode': 'off'}}
+    config = root / 'config.json'
+    config.write_text(json.dumps(common))
+    config.chmod(0o600)
+    providers = {name: {'model': model} for name, model in cloud_policy.PROVIDERS.items()}
+    providers['jev'] = {'model': semantic_jev.JEV_MODEL, 'daily_request_budget': 0}
+    hashes = {}
+    for name in provider_settings.PROVIDERS:
+        path = settings / (name + '.json')
+        path.write_text(json.dumps(providers[name]))
+        path.chmod(0o600)
+        hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    authority = data / '.provider-settings-authority.json'
+    authority.write_text(json.dumps({'version': 2, 'state': 'committed', 'files': hashes,
+                                     'common_policy_sha256': provider_settings.common_policy_digest(common)}))
+    authority.chmod(0o600)
+    protected = [config, authority, *(settings / (name + '.json') for name in provider_settings.PROVIDERS)]
+    before = {path: path.read_bytes() for path in protected}
+    flags = ('--mode', 'standalone') if option == 'mode' else ('--recovery-python', str(stub / 'bin/python3.14'))
+    result = _run(env, None, *flags, '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    assert {path: path.read_bytes() for path in protected} == before
+    assert 'fresh-runner runtime-edit-decision' in _calls(stub)
+    assert '提供元設定のある環境では' in result.stderr
+    assert not any(line.startswith(('brew ', 'git clone', 'uv ', 'launchctl bootstrap')) for line in _calls(stub))
+    assert '【1/6】' not in result.stdout
 
 
 def test_existing_recovery_selection_preserves_other_settings(tmp_path):
@@ -881,6 +1068,19 @@ def test_config_creation_race_preserves_and_checks_winner(tmp_path, explicit, ra
         assert '既存設定を保持' in result.stderr
 
 
+def test_config_creation_race_rejects_hardlinked_winner(tmp_path):
+    home, _, stub, env = _world(tmp_path)
+    _real_config_writer(env)
+    raw = '{"runtime_mode":"hermes","synthetic":{"keep":true}}'
+    _race_config_writer(stub, raw, hardlink=True)
+    result = _run(env, None, '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    assert (home / '.mcs/config.json').read_text() == raw
+    assert (home / 'synthetic-linked-config').read_text() == raw
+    assert (home / '.mcs/data/.provider-bootstrap-fresh.json').is_file()
+    assert not (home / '.mcs/data/.provider-settings-authority.json').exists()
+
+
 def test_config_creation_race_never_follows_a_symlink(tmp_path):
     home, _, stub, env = _world(tmp_path)
     _real_config_writer(env)
@@ -985,6 +1185,32 @@ def test_config_creation_accepts_private_existing_parent_symlink(tmp_path):
     assert json.loads((target / 'config.json').read_text()) == {'install_args': SAVED_FLAGS}
 
 
+
+def test_fresh_private_root_link_swap_stops_without_writing_new_target(tmp_path):
+    home, _, stub, env = _world(tmp_path)
+    _real_config_writer(env)
+    original = tmp_path / 'synthetic-original-root'
+    alternate = tmp_path / 'synthetic-alternate-root'
+    original.mkdir(mode=0o700)
+    alternate.mkdir(mode=0o700)
+    alias = home / '.mcs'
+    alias.symlink_to(original, target_is_directory=True)
+    brew = stub / 'bin' / 'brew'
+    brew.write_text("#!/bin/sh\n"
+                    "if [ ! -e \"$STUB_STATE/root-swapped\" ]; then\n"
+                    "  rm \"$HOME/.mcs\"\n"
+                    f"  ln -s '{alternate}' \"$HOME/.mcs\"\n"
+                    "  touch \"$STUB_STATE/root-swapped\"\n"
+                    "fi\nexit 0\n")
+    brew.chmod(0o755)
+    result = _run(env, None, '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
+    assert result.returncode != 0
+    assert 'リンクが変更されました' in result.stderr
+    assert (original / 'data' / '.provider-bootstrap-fresh.json').is_file()
+    assert not (alternate / 'data').exists()
+    assert not (alternate / 'config.json').exists()
+
+
 def test_config_creation_race_rejects_different_recovery_selection(tmp_path):
     home, _, stub, env = _world(tmp_path)
     _real_config_writer(env)
@@ -1026,17 +1252,7 @@ def test_interactive_resume_can_choose_mode_after_noninteractive_failure(tmp_pat
     config = home / '.mcs/config.json'
     assert config.read_bytes() == b'{}\n'
     winner = '{"runtime_mode":"hermes","synthetic":"kept"}'
-    if race:
-        script = stub / 'runtime-check.py'
-        text = script.read_text()
-        marker = "exec(compile(code, '<installer-runtime-check>', 'exec'))"
-        assert text.count(marker) == 1
-        inject = f"""
-if os.environ.get('MCS_INSTALL_RESUME_UNCONFIGURED') == '1':
-    from pathlib import Path
-    (Path(os.environ['HOME']) / '.mcs/config.json').write_text({winner!r})
-"""
-        script.write_text(text.replace(marker, inject + marker))
+    baseline_calls = len(_calls(stub))
     master, slave = pty.openpty()
     process = subprocess.Popen(['sh', str(INSTALL), '--no-brew', '--no-llm',
                                 '--no-plugin', '--no-services', '--no-recovery'],
@@ -1055,6 +1271,10 @@ if os.environ.get('MCS_INSTALL_RESUME_UNCONFIGURED') == '1':
                 assert remaining > 0 and select.select([master], [], [], remaining)[0], output
                 output += os.read(master, 4096)
                 assert len(output) < 100000
+            if race and prompt == 'この内容で導入する（推奨）'.encode():
+                # The bootstrap snapshot was captured before this confirmation.
+                # Replace the real config before the checked CAS is attempted.
+                config.write_text(winner)
             os.write(master, answer)
         while process.poll() is None:
             remaining = deadline - time.monotonic()
@@ -1075,9 +1295,89 @@ if os.environ.get('MCS_INSTALL_RESUME_UNCONFIGURED') == '1':
         os.close(master)
     if race:
         assert config.read_text() == winner
+        assert not any('mcs_setup.py services' in call for call in _calls(stub)[baseline_calls:])
     else:
         assert json.loads(config.read_text()) == {'runtime_mode': 'standalone', 'install_args': SAVED_FLAGS}
     assert not hermes_home.joinpath('plugins/mcs-discord-commands').exists()
+
+
+@pytest.mark.parametrize('outcome', ['save', 'cancel', 'race'])
+def test_interactive_bootstrap_runtime_choice_uses_checked_snapshot(tmp_path, outcome):
+    import errno
+    import pty
+    import select
+    import time
+    import provider_settings
+
+    home, _, stub, env = _world(tmp_path)
+    _real_config_writer(env)
+    root = home / '.mcs'
+    data = root / 'data'
+    providers = data / 'provider_settings'
+    providers.mkdir(mode=0o700, parents=True)
+    data.chmod(0o700)
+    common = {'install_args': SAVED_FLAGS, 'synthetic_unknown': {'keep': True}}
+    config = root / 'config.json'
+    config.write_text(json.dumps(common))
+    config.chmod(0o600)
+    hashes = {}
+    for name in provider_settings.PROVIDERS:
+        path = providers / (name + '.json')
+        path.write_text('{}')
+        path.chmod(0o600)
+        hashes[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    authority = data / '.provider-settings-authority.json'
+    authority.write_text(json.dumps({'version': 2, 'state': 'committed',
+        'configuration_state': 'bootstrap', 'files': hashes,
+        'common_policy_sha256': provider_settings.common_policy_digest(common)}))
+    authority.chmod(0o600)
+    before = config.read_bytes()
+    master, slave = pty.openpty()
+    process = subprocess.Popen(['sh', str(INSTALL), '--no-brew', '--no-llm', '--no-plugin',
+                                '--no-services', '--no-recovery'], stdin=slave, stdout=slave,
+                               stderr=slave, env=env)
+    os.close(slave)
+    output = b''
+    deadline = time.monotonic() + 60
+    def answer_when(prompt, answer):
+        nonlocal output
+        while prompt not in output:
+            remaining = deadline - time.monotonic()
+            assert remaining > 0 and select.select([master], [], [], remaining)[0], output
+            output += os.read(master, 4096)
+            assert len(output) < 100000
+        os.write(master, answer)
+    try:
+        answer_when('選択 [1・推奨 / 2 / 0'.encode(), b'2\n')
+        if outcome == 'race':
+            config.write_text(json.dumps({**common, 'synthetic_unknown': {'keep': False}}))
+        answer_when('この内容で導入する（推奨）'.encode(), b'2\n' if outcome == 'cancel' else b'1\n')
+        if outcome == 'save':
+            answer_when('初期設定を始める'.encode(), b'2\n')
+        while process.poll() is None:
+            remaining = deadline - time.monotonic()
+            assert remaining > 0
+            if select.select([master], [], [], remaining)[0]:
+                try:
+                    output += os.read(master, 4096)
+                except OSError as exc:
+                    if exc.errno != errno.EIO:
+                        raise
+                    break
+        status = process.wait(timeout=max(0.1, deadline - time.monotonic()))
+        assert (status == 0) is (outcome == 'save'), output
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        os.close(master)
+    if outcome == 'save':
+        assert json.loads(config.read_text()) == {**common, 'runtime_mode': 'standalone'}
+    elif outcome == 'cancel':
+        assert config.read_bytes() == before
+    else:
+        assert json.loads(config.read_text()) == {**common, 'synthetic_unknown': {'keep': False}}
+    assert not any('mcs_setup.py services' in call for call in _calls(stub))
 
 
 @pytest.mark.parametrize("runtime", ["unsafe", "unknown", "failed", "unsupported"])

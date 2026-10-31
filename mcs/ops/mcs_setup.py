@@ -42,6 +42,7 @@ import subprocess
 import sys
 import time
 from contextlib import closing, suppress
+from copy import deepcopy
 from pathlib import Path
 from typing import Literal, TypedDict
 
@@ -543,7 +544,7 @@ def _config_problem() -> str | None:
     """None when config.json is absent or a JSON object, else why not.
     load_config() maps both cases to {} — a command that REWRITES the
     file must not treat a broken one as empty (it would silently drop
-    every setting). Reads through load_config's own reader, so a symlink,
+    every setting). This checks the common file directly, so a symlink,
     non-regular or oversized file is a problem here, not an empty config."""
     try:
         raw = mcs_util.parse_config(mcs_util._read_local(
@@ -557,28 +558,56 @@ def _config_problem() -> str | None:
         f"top level is {type(raw).__name__}, not an object"
 
 
+class _DiagnosticConfigUnreadable(mcs_util.ProviderSettingsUnreadable):
+    """Legacy configuration exists but is not a readable JSON object."""
+
+
+def _diagnostic_config():
+    # A single strict load supplies both the configuration and its validity.
+    # Missing legacy config remains the unconfigured case; broken config does not.
+    try:
+        cfg = mcs_util._load_config(CONF_PATH)
+    except FileNotFoundError:
+        return {}
+    except mcs_util.ProviderSettingsUnreadable:
+        raise
+    except (OSError, ValueError, TypeError, RecursionError) as error:
+        raise _DiagnosticConfigUnreadable("configuration_unreadable") from error
+    if not isinstance(cfg, dict):
+        raise _DiagnosticConfigUnreadable("configuration_unreadable")
+    return cfg
+
+
 def _credential_config_snapshot():
     """Read the credential setup destination only from a trusted, unchanged config."""
-    parent = Path(CONF_PATH).parent
-    before = os.stat(parent, follow_symlinks=False)
-    if (not stat.S_ISDIR(before.st_mode) or before.st_uid != os.getuid()
-            or before.st_mode & 0o022):
-        raise ValueError('config_parent_untrusted')
-    raw, info = read_regular_nofollow(CONF_PATH, mcs_util.CONFIG_MAX_BYTES, ValueError, with_stat=True)
-    current = os.stat(CONF_PATH, follow_symlinks=False)
-    after = os.stat(parent, follow_symlinks=False)
-    def identity(s):
-        return (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
-    if (len(raw) > mcs_util.CONFIG_MAX_BYTES or info.st_uid != os.getuid()
-            or info.st_mode & 0o022 or info.st_nlink != 1
-            or identity(info) != identity(current)
-            or (before.st_dev, before.st_ino, before.st_mode, before.st_uid)
-            != (after.st_dev, after.st_ino, after.st_mode, after.st_uid)):
-        raise ValueError('config_untrusted')
-    cfg = mcs_util.parse_config(raw)
-    if not isinstance(cfg, dict):
-        raise ValueError('config_invalid')
-    return cfg, (identity(info), (before.st_dev, before.st_ino, before.st_mode, before.st_uid), raw)
+    import provider_settings
+    from safe_io import fdopen_owned
+
+    path = Path(CONF_PATH)
+    root = provider_settings._RootHandle(path.parent)
+    try:
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=root.fd)
+        with fdopen_owned(fd, 'rb') as stream:
+            info = os.fstat(stream.fileno())
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_mode & 0o022 or info.st_nlink != 1
+                    or info.st_size > mcs_util.CONFIG_MAX_BYTES):
+                raise ValueError('config_untrusted')
+            raw = stream.read(mcs_util.CONFIG_MAX_BYTES + 1)
+            after = os.fstat(stream.fileno())
+        current = os.stat(path.name, dir_fd=root.fd, follow_symlinks=False)
+        identity = provider_settings._identity
+        if (len(raw) > mcs_util.CONFIG_MAX_BYTES or identity(info) != identity(after)
+                or identity(info) != identity(current)):
+            raise ValueError('config_untrusted')
+        root.check()
+        cfg = mcs_util.parse_config(raw)
+        if not isinstance(cfg, dict):
+            raise ValueError('config_invalid')
+        root.check()
+        return cfg, (identity(info), root.identity[:4], root.parent_identity, root.link, raw)
+    finally:
+        root.close()
 
 
 def _guard_config(yes: bool) -> bool:
@@ -609,7 +638,7 @@ def _guard_config(yes: bool) -> bool:
     return True
 
 
-def _init_config_snapshot():
+def _init_legacy_snapshot():
     """Capture the initial config or the identity of an unreadable entry."""
     import config_backup
     import config_edit
@@ -647,6 +676,150 @@ def _init_config_snapshot():
     return cfg, ('valid', base)
 
 
+def _init_split_snapshot():
+    import cloud_policy
+    import provider_settings
+    import semantic_jev
+
+    root = Path(os.path.abspath(CONF_PATH)).parent
+    owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+    state = provider_settings.read(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+    if state['mode'] != 'split':
+        raise ValueError('provider_settings_unreadable')
+    snapshot = state['snapshot']
+    data_fd = os.open(root / 'data', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        before = provider_settings._identity(os.fstat(data_fd))
+        if before != snapshot['data']:
+            raise ValueError('provider_settings_changed')
+        names = []
+        with os.scandir(data_fd) as entries:
+            for index, entry in enumerate(entries):
+                if index >= 100000:
+                    raise ValueError('provider_artifact_scan_limit')
+                if entry.name.startswith(('.provider-settings-backup-', '.provider-settings-stage-')):
+                    names.append(entry.name)
+        names.sort()
+        if provider_settings._identity(os.fstat(data_fd)) != before:
+            raise ValueError('provider_settings_changed')
+    finally:
+        os.close(data_fd)
+    if provider_settings.read(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)['snapshot'] != snapshot:
+        raise ValueError('provider_settings_changed')
+    selection, errors = cloud_policy.resolve_settings(state['common'], str(root))
+    if cloud_policy.blocking_errors(errors):
+        raise ValueError('provider_settings_unreadable')
+    selected = selection['provider']
+    view = provider_settings.execution_view(state['common'], state['providers'], selected_provider=selected,
+                                            model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+    return view, ('split', {'root': str(root), 'state': state, 'owners': owners,
+                            'selected': selected, 'view': deepcopy(view), 'artifacts': names})
+
+
+def _init_config_snapshot():
+    import config_edit
+    try:
+        if mcs_util._provider_config_active(CONF_PATH):
+            return _init_split_snapshot()
+        result = _init_legacy_snapshot()
+        if mcs_util._provider_config_active(CONF_PATH):
+            raise config_edit.ConfigConflict('config_changed')
+        return result
+    except mcs_util.ProviderSettingsUnreadable:
+        raise ValueError('provider_settings_unreadable') from None
+
+
+def _init_split_matches(initial, current):
+    if initial[0] != 'split' or current[0] != 'split':
+        return False
+    old, new = initial[1], current[1]
+    a, b = old['state']['snapshot'], new['state']['snapshot']
+    return (old['root'] == new['root'] and old['selected'] == new['selected']
+            and old['artifacts'] == new['artifacts']
+            and mcs_util.canonical(old['view']) == mcs_util.canonical(new['view'])
+            and all(a[key] == b[key] for key in ('files', 'authority', 'pending', 'provider_settings'))
+            and a.get('root_link') == b.get('root_link')
+            and a['root'][:4] == b['root'][:4] and a['data'][:4] == b['data'][:4])
+
+
+def _init_split_changes(initial, cfg):
+    import cloud_policy
+    import provider_settings
+    import semantic_jev
+
+    state, owners = initial['state'], initial['owners']
+    old_common, old_providers = provider_settings.split_legacy(initial['view'], owners, jev_model=semantic_jev.JEV_MODEL)
+    new_common, new_providers = provider_settings.split_legacy(cfg, owners, jev_model=semantic_jev.JEV_MODEL)
+    common, providers = deepcopy(state['common']), deepcopy(state['providers'])
+    def changed(old, new, key):
+        return mcs_util.canonical({key: old[key]} if key in old else {}) != \
+            mcs_util.canonical({key: new[key]} if key in new else {})
+    for key in old_common.keys() | new_common.keys():
+        if changed(old_common, new_common, key):
+            if key in new_common:
+                common[key] = deepcopy(new_common[key])
+            else:
+                common.pop(key, None)
+    selection, errors = cloud_policy.resolve_settings(common, initial['root'])
+    if cloud_policy.blocking_errors(errors):
+        raise ValueError('provider_settings_invalid')
+    selected = selection['provider']
+    for name in provider_settings.PROVIDERS:
+        for key in old_providers[name].keys() | new_providers[name].keys():
+            if key == 'model' and name == initial.get('preserve_model_for'):
+                continue
+            if key == 'model' and initial.get('replace_cloud') and name != selected:
+                continue
+            if changed(old_providers[name], new_providers[name], key):
+                if key in new_providers[name]:
+                    providers[name][key] = deepcopy(new_providers[name][key])
+                else:
+                    providers[name].pop(key, None)
+    if initial.get('replace_cloud') and 'model' not in new_providers[selected]:
+        providers[selected].pop('model', None)
+    actual = provider_settings.execution_view(common, providers, selected_provider=selected,
+                                              model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+    if mcs_util.canonical(actual) != mcs_util.canonical(cfg):
+        raise ValueError('provider_settings_unrepresentable')
+    return common, providers, selected
+
+
+def _init_reselect_provider(cfg, initial, set_args):
+    if initial[0] != 'split':
+        return
+    import cloud_policy
+
+    info = initial[1]
+    before, after = info['view'].get('cloud_llm'), cfg.get('cloud_llm')
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return
+    touched = {item.partition('=')[0].strip() for item in set_args or []}
+    if 'cloud_llm' in touched:
+        info['replace_cloud'] = True
+        return
+    if 'cloud_llm.model' in touched:
+        return
+    if not any(mcs_util.canonical({k: before[k]} if k in before else {}) !=
+               mcs_util.canonical({k: after[k]} if k in after else {})
+               for k in ('provider', 'provider_order')):
+        return
+    if mcs_util.canonical({'model': before['model']} if 'model' in before else {}) != \
+            mcs_util.canonical({'model': after['model']} if 'model' in after else {}):
+        return
+    candidate = deepcopy(cfg)
+    candidate['cloud_llm'].pop('model', None)
+    selection, errors = cloud_policy.resolve_settings(candidate, info['root'])
+    if cloud_policy.blocking_errors(errors) or selection['provider'] == info['selected']:
+        return
+    info['preserve_model_for'] = info['selected']
+    model = info['state']['providers'][selection['provider']].get('model')
+    order = after.get('provider_order', ['anthropic', 'openai'])
+    if model is None or (after.get('provider', 'auto') == 'auto' and selection['provider'] != order[0]):
+        after.pop('model', None)
+    else:
+        after['model'] = model
+
+
 def _init_save_config(cfg, initial, args):
     """Publish the reviewed config under the shared short-lived edit lock."""
     import config_backup
@@ -657,11 +830,21 @@ def _init_save_config(cfg, initial, args):
         raise ValueError('config_too_large')
     parent = os.path.dirname(CONF_PATH) or '.'
     os.makedirs(parent, exist_ok=True)
-    with config_edit._edit_lock(CONF_PATH):
-        if _init_config_snapshot()[1] != initial:
+    with config_edit._edit_lock(CONF_PATH) as lock_fd:
+        current = _init_config_snapshot()[1]
+        if not (_init_split_matches(initial, current) if initial[0] == 'split' else current == initial):
             raise config_edit.ConfigConflict('config_changed')
         kind = initial[0]
-        if kind == 'invalid_backup':
+        if kind == 'split':
+            import provider_settings
+            import semantic_jev
+            common, providers, selected = _init_split_changes(initial[1], cfg)
+            args._config_publication_started = True
+            provider_settings.commit_locked(current[1]['root'], current[1]['state']['snapshot'], common, providers,
+                selected_provider=selected, model_owners=current[1]['owners'], jev_model=semantic_jev.JEV_MODEL,
+                lock_fd=lock_fd)
+            return
+        elif kind == 'invalid_backup':
             args._config_publication_started = True
             backup = config_backup.archive_and_create(CONF_PATH, initial[1], body.encode('utf-8'))
             print(f'設定ファイルの元の内容を {backup} に退避しました')
@@ -950,6 +1133,8 @@ def cmd_init(args) -> int:
             print("\n設定を中止しました。設定ファイルやパスワードは保存していません。"
                   "同じ操作で最初からやり直せます。")
             return 130
+
+    _init_reselect_provider(cfg, initial_config, args.set)
 
     # The wizard can change the selected recovery interpreter.
     why = None if cfg.get("recovery_python") == checked_recovery else runtime_inspection.configured_recovery_problem(cfg, checkout=REPO_ROOT)
@@ -1436,15 +1621,18 @@ def _queue_warnings(cfg: dict | None = None) -> list[str]:
 
 
 def cmd_check(args) -> int:
-    cfg = mcs_util.load_config()
+    try:
+        cfg = _diagnostic_config()
+    except mcs_util.ProviderSettingsUnreadable as error:
+        if isinstance(error, _DiagnosticConfigUnreadable):
+            print("設定確認: 要修正（設定ファイルを読み取れないか、形式が不正です。"
+                  "設定を保持して確認してください）")
+        else:
+            print("設定確認: 要修正（提供元設定を確認できません。設定を保持して確認してください）")
+        return 1
     # blocker priority: what every scheduled job runs on, then the
     # config itself, then machine probes, then deployment drift
     e0, w0 = service_management.check_runtime(cfg, paths=_service_paths())
-    why = _config_problem()
-    if why:
-        e0 = e0 + [f"設定ファイル{CONF_PATH}を読み取れないか、形式が不正です（詳細: {why}）。"
-                   "すべて未設定として扱われています。修正するか、"
-                   "対応する場合は `mcs_setup.py init --yes` で退避して設定し直してください"]
     e1, w1 = validate_config(cfg)
     e2, w2 = check_environment(cfg)
     e3, w3 = service_management.script_drift(paths=_service_paths()) if cfg.get("runtime_mode", "hermes") in ("hermes", "standalone") else ([], [])
@@ -1633,10 +1821,32 @@ def cmd_features(args) -> int:
 
 def cmd_doctor(args) -> int:
     """Local read-only diagnostics; explicit probes return only safe counts."""
-    cfg = mcs_util.load_config()
+    try:
+        cfg = _diagnostic_config()
+    except mcs_util.ProviderSettingsUnreadable as error:
+        legacy_unreadable = isinstance(error, _DiagnosticConfigUnreadable)
+        checks = {scope: {"status": "not_checked", "errors": 0, "warnings": 0}
+                  for scope in ("interpreter", "runtime", "recovery_runtime", "llm", "services",
+                                "credentials", "data", "card_worker", "restore_delivery")}
+        checks["configuration"] = {"status": "blocked", "errors": 1, "warnings": 0}
+        report = {"mode": "invalid", "python": sys.version.split()[0], "sqlite": sqlite3.sqlite_version,
+                  "checks": checks, "collection": {"status": "not_checked", "counts": None},
+                  "runtimes": {"selected": None, "recovery": None, "desired_recovery": None},
+                  "patient_context_nightly": {"status": "not_checked", "enabled": None, "counts": None},
+                  "optional_features": None, "operations": None, "card_worker": None,
+                  "providers": None, "source": None,
+                  "recovery_selection": {"explicit": None, "matches_deployed": None},
+                  "reason": "configuration_unreadable" if legacy_unreadable else "provider_settings_unreadable"}
+        if getattr(args, "share", False):
+            from support_diagnostics import shared_report
+            print(json.dumps(shared_report(report), ensure_ascii=False, indent=2))
+        elif getattr(args, "json", False):
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        else:
+            problem = "設定ファイルを読み取れないか、形式が不正です" if legacy_unreadable else "提供元設定を確認できません"
+            print(f"動作診断: 要修正（{problem}。設定を保持して確認してください）")
+        return 1
     config_errors, config_warnings = validate_config(cfg)
-    if _config_problem():
-        config_errors.append("configuration unreadable")
     import cloud_cli
     providers = cloud_cli.diagnostics(cfg, root=HOME, probe="data" in set(getattr(args, "probe", None) or []))
     checks: dict[str, DoctorCheck] = {

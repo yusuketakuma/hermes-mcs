@@ -630,13 +630,39 @@ def _jev_window_check(retryable: bool = False, *, config_path=None):
     from semantic_jev import JevError
     import mcs_util
     path = mcs_util.CONF_PATH if config_path is None else str(config_path)
-    if not os.path.lexists(path):
-        return
-    cfg = mcs_util.load_config_checked(path)
-    block = cfg.get("semantic") if isinstance(cfg, dict) else None
-    if cfg is None or (block is not None and not isinstance(block, dict)):
-        raise JevError("budget_exceeded", "semantic_config_unreadable", retryable=retryable)
-    until = (block or {}).get("until")
+    absolute_path = os.path.abspath(path)
+    try:
+        # Explicit config paths can name another MCS root. Never inspect the
+        # current installation when the caller bound this request elsewhere.
+        observed = None
+        if os.path.basename(absolute_path) == "config.json":
+            import provider_settings
+            root = os.path.dirname(absolute_path)
+            observed = provider_settings.probe(root)
+            if observed["state"] == "pending":
+                raise ValueError("provider_settings_pending")
+        if observed is not None and observed["state"] == "requires_checked_read":
+            import cloud_policy
+            import semantic_jev
+            owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+            state = provider_settings.read(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+            if state["mode"] != "split":
+                raise ValueError("provider_settings_unverified")
+            until = state["providers"]["jev"].get("until")
+        else:
+            if not os.path.lexists(path):
+                if observed is not None and provider_settings.probe(root) != observed:
+                    raise ValueError("provider_settings_changed")
+                return
+            cfg = mcs_util.load_config_checked(path)
+            if observed is not None and provider_settings.probe(root) != observed:
+                raise ValueError("provider_settings_changed")
+            block = cfg.get("semantic") if isinstance(cfg, dict) else None
+            if cfg is None or (block is not None and not isinstance(block, dict)):
+                raise ValueError("semantic_config_unreadable")
+            until = (block or {}).get("until")
+    except (OSError, ValueError, TypeError, RecursionError):
+        raise JevError("budget_exceeded", "semantic_config_unreadable", retryable=retryable) from None
     if until is None:
         return
     try:

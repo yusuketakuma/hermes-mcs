@@ -1,6 +1,7 @@
 """Validated, atomic edits of selected config.json keys from the command line."""
 from __future__ import annotations
 
+from copy import deepcopy
 import fcntl
 import hashlib
 import json
@@ -15,6 +16,15 @@ import mcs_util
 
 class ConfigConflict(ValueError):
     """Another configuration writer owns or changed this edit's base."""
+
+
+def _require_legacy_settings():
+    try:
+        active = mcs_util._provider_config_active(mcs_util.CONF_PATH)
+    except mcs_util.ProviderSettingsUnreadable:
+        raise ValueError("provider_settings_unreadable") from None
+    if active:
+        raise ValueError("provider_settings_write_unavailable")
 
 
 def _identity(info):
@@ -44,7 +54,73 @@ def _parse(raw):
 
 def read_strict() -> dict:
     """Read one bounded regular no-follow descriptor, refusing an unstable pathname."""
-    return _parse(_snapshot()[0])
+    if mcs_util._provider_config_active(mcs_util.CONF_PATH):
+        return _split_read()[-1]
+    cfg = _parse(_snapshot()[0])
+    _require_legacy_settings()
+    return cfg
+
+
+def _split_read():
+    import cloud_policy
+    import provider_settings
+    import semantic_jev
+
+    root = Path(mcs_util.CONF_PATH).absolute().parent
+    owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+    state = provider_settings.read(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+    if state["mode"] != "split":
+        raise ValueError("provider_settings_unverified")
+    selected, errors = cloud_policy.resolve_settings(state["common"], str(root))
+    if cloud_policy.blocking_errors(errors):
+        raise ValueError("provider_settings_invalid")
+    view = provider_settings.execution_view(state["common"], state["providers"],
+        selected_provider=selected["provider"], model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+    return root, owners, state, selected["provider"], view
+
+
+def _split_changes(state, cfg, touched, selected, owners):
+    import provider_settings
+    import semantic_jev
+
+    split_common, split_providers = provider_settings.split_legacy(cfg, owners, jev_model=semantic_jev.JEV_MODEL)
+    common, providers = deepcopy(state["common"]), deepcopy(state["providers"])
+    for dotted in touched:
+        section, key = dotted.split(".", 1)
+        if section == "cloud_llm" and key == "model":
+            value = cfg.get(section, {}).get(key)
+            if value is not None:
+                provider = owners.get(value)
+                if provider not in ("anthropic", "openai"):
+                    raise ValueError("provider_model_invalid")
+                providers[provider]["model"] = split_providers[provider]["model"]
+            elif not ({"cloud_llm.provider", "cloud_llm.provider_order"} & touched):
+                providers[selected].pop("model", None)
+        elif section == "cloud_llm" and key == "provider_budgets":
+            for name in ("anthropic", "openai"):
+                if "budget" in split_providers[name]:
+                    providers[name]["budget"] = split_providers[name]["budget"]
+                else:
+                    providers[name].pop("budget", None)
+            block = common.setdefault(section, {})
+            if "provider_budgets" in split_common.get(section, {}):
+                block[key] = split_common[section][key]
+            else:
+                block.pop(key, None)
+        elif section == "semantic" and key in provider_settings._JEV_KEYS:
+            if key in split_providers["jev"]:
+                providers["jev"][key] = split_providers["jev"][key]
+            else:
+                providers["jev"].pop(key, None)
+        else:
+            block = common.setdefault(section, {})
+            if not isinstance(block, dict):
+                raise ValueError("config_section_invalid")
+            if key in cfg.get(section, {}):
+                block[key] = deepcopy(cfg[section][key])
+            else:
+                block.pop(key, None)
+    return common, providers
 
 
 @contextmanager
@@ -66,7 +142,7 @@ def _edit_lock(path=None):
             raise ConfigConflict("config_busy") from None
         if _identity(os.stat(path, follow_symlinks=False)) != _identity(info):
             raise ConfigConflict("config_lock_changed")
-        yield
+        yield fd
     finally:
         os.close(fd)
 
@@ -79,11 +155,17 @@ def apply(changes: dict, defaults: dict | None = None, *, expected: dict | None 
     the edited section.
     """
     from mcs_config import validate_config
-    with _edit_lock():
-        raw, base = _snapshot()
-        cfg = _parse(raw)
+    with _edit_lock() as lock_fd:
+        split = mcs_util._provider_config_active(mcs_util.CONF_PATH)
+        if split:
+            root, owners, state, selected, cfg = _split_read()
+        else:
+            raw, base = _snapshot()
+            cfg = _parse(raw)
+            _require_legacy_settings()
         if expected is not None and cfg != expected:
             raise ConfigConflict("config_changed")
+        touched = set()
         for dotted, value in changes.items():
             section, key = dotted.split(".", 1)
             block = cfg.get(section, {})
@@ -95,6 +177,7 @@ def apply(changes: dict, defaults: dict | None = None, *, expected: dict | None 
             else:
                 block[key] = value
             cfg[section] = block
+            touched.add(dotted)
         for dotted, value in (defaults or {}).items():
             section, key = dotted.split(".", 1)
             block = cfg.get(section, {})
@@ -102,15 +185,43 @@ def apply(changes: dict, defaults: dict | None = None, *, expected: dict | None 
                 raise ValueError("config_section_invalid")
             if block.get(key) is None:
                 cfg[section] = {**block, key: value}
+                touched.add(dotted)
+        if split:
+            import cloud_policy
+            import provider_settings
+            import semantic_jev
+
+            common, providers = _split_changes(state, cfg, touched, selected, owners)
+            selection, selection_errors = cloud_policy.resolve_settings(common, str(root))
+            if cloud_policy.blocking_errors(selection_errors):
+                return None, selection_errors
+            selected = selection["provider"]
+            requested_model = cfg.get("cloud_llm", {}).get("model")
+            if "cloud_llm.model" in touched and requested_model is not None and owners.get(requested_model) != selected:
+                return None, ["config: cloud_llm_model_invalid"]
+            cfg = provider_settings.execution_view(common, providers, selected_provider=selected,
+                                                    model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
         errors, _ = validate_config(cfg)
         if errors:  # unknown keys remain warnings and are preserved verbatim
             return None, errors
+        if split:
+            try:
+                result = provider_settings.commit_locked(root, state["snapshot"], common, providers,
+                    selected_provider=selected, model_owners=owners, jev_model=semantic_jev.JEV_MODEL,
+                    lock_fd=lock_fd)
+            except ValueError as error:
+                if str(error) == "provider_snapshot_changed":
+                    raise ConfigConflict("config_changed") from None
+                raise
+            return provider_settings.execution_view(result["common"], result["providers"],
+                selected_provider=selected, model_owners=owners, jev_model=semantic_jev.JEV_MODEL), []
         body = json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n"
         if len(body.encode("utf-8")) > mcs_util.CONFIG_MAX_BYTES:
             raise ValueError("config_unreadable")
 
         def write_checked(stream):
             stream.write(body)
+            _require_legacy_settings()
             if _snapshot()[1] != base:
                 raise ConfigConflict("config_changed")
         safe_io.atomic_write(mcs_util.CONF_PATH, write_checked, 0o600,

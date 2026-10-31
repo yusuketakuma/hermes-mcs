@@ -242,6 +242,46 @@ def test_cli_commands_use_nested_parser_and_never_touch_network(world, capsys):
     assert '"outcome": "applied"' in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("action", ["plan", "outstanding", "stop", "resume"])
+def test_corrupt_provider_settings_never_open_control_or_report(world, monkeypatch, capsys, action):
+    import ledger
+    root, _, _ = world
+    marker = root / "data" / ".provider-settings-pending.json"
+    marker.write_text('{"synthetic-secret-canary": true}')
+    marker.chmod(0o600)
+    monkeypatch.setattr(ledger, "Ledger", lambda *args, **kwargs: pytest.fail("must not open writer"))
+    monkeypatch.setattr(cli, "observe", lambda *args, **kwargs: pytest.fail("must not read reports"))
+    args = ["cloud-llm", action]
+    if action in ("stop", "resume"):
+        args += ["--confirm-human", "--reason", "synthetic"]
+    assert mcs_setup.main(args) != 0
+    captured = capsys.readouterr()
+    assert "synthetic-secret-canary" not in captured.out + captured.err
+    assert "Traceback" not in captured.out + captured.err
+    assert marker.exists()
+
+
+@pytest.mark.parametrize("action", ["stop", "resume"])
+def test_control_rechecks_provider_settings_inside_transaction(world, monkeypatch, action):
+    root, path, _ = world
+    original = mcs_util._load_config
+    calls = [0]
+    def changed(config_path):
+        calls[0] += 1
+        if calls[0] > 1:
+            raise mcs_util.ProviderSettingsUnreadable("synthetic-private-canary")
+        return original(config_path)
+    monkeypatch.setattr(mcs_util, "_load_config", changed)
+    args = ["cloud-llm", action, "--confirm-human", "--reason", "synthetic"]
+    assert mcs_setup.main(args) != 0
+    with closing(Ledger(str(path))) as db:
+        assert not db.artifacts("cloud_control") and not db.artifacts("cloud_circuit")
+        [receipt] = db.db.execute("SELECT outcome,receipt_json FROM command_receipts").fetchall()
+        assert receipt["outcome"] == "rejected"
+        assert json.loads(receipt["receipt_json"])["error"] == "cloud_config_invalid"
+    assert calls[0] >= 2 and root.exists()
+
+
 @pytest.mark.parametrize("obstacle", ["busy", "updating", "code_changed"])
 def test_control_cli_refuses_ledger_open_without_current_exclusive_owner(world, monkeypatch, obstacle):
     import ledger

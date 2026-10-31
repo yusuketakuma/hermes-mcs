@@ -1,5 +1,6 @@
 """Synthetic configuration FD, concurrency and compare-before-publish boundaries."""
 import json
+import hashlib
 import os
 from pathlib import Path
 from threading import Event, Thread
@@ -8,12 +9,15 @@ from types import SimpleNamespace
 import pytest
 
 import cloud_cli
+import cloud_policy
 import config_edit
 import extract_llm
 import llm_availability
 import mcs_config
 import mcs_util
+import provider_settings
 import safe_io
+import semantic_jev
 
 
 @pytest.fixture
@@ -59,6 +63,101 @@ def test_nested_budget_edit_rejects_a_changed_base(conf):
     with pytest.raises(config_edit.ConfigConflict):
         config_edit.apply({"cloud_llm.provider_budgets": {}}, expected=base)
     assert json.loads(conf.read_text()) == changed
+
+
+@pytest.fixture
+def split_conf(conf, monkeypatch):
+    common = json.loads(conf.read_text())
+    common.update(cloud_llm={"mode": "off", "project_ids": [], "provider": "auto",
+                             "provider_order": ["anthropic", "openai"]},
+                  semantic={"mode": "off"})
+    conf.write_text(json.dumps(common))
+    directory = conf.parent / "data" / "provider_settings"
+    directory.mkdir(parents=True, mode=0o700)
+    providers = {"anthropic": {"model": cloud_policy.PROVIDERS["anthropic"], "budget": {
+        "daily_cost_limit_usd": 0, "monthly_cost_limit_usd": 0}},
+        "openai": {"model": cloud_policy.PROVIDERS["openai"], "budget": {
+            "daily_cost_limit_usd": 2, "monthly_cost_limit_usd": 3}},
+        "jev": {"model": semantic_jev.JEV_MODEL, "daily_request_budget": 0, "until": None}}
+    hashes = {}
+    for name, value in providers.items():
+        path = directory / (name + ".json")
+        raw = json.dumps(value).encode()
+        path.write_bytes(raw)
+        path.chmod(0o600)
+        hashes[name] = hashlib.sha256(raw).hexdigest()
+    authority = directory.parent / ".provider-settings-authority.json"
+    authority.write_text(json.dumps({"version": 2, "state": "committed", "files": hashes,
+        "common_policy_sha256": provider_settings.common_policy_digest(common)}))
+    authority.chmod(0o600)
+    key = conf.parent / ".env"
+    key.write_text("SYNTHETIC_KEY=synthetic-secret-canary\n")
+    key.chmod(0o600)
+    monkeypatch.setattr(cloud_policy, "provider_key", lambda name, root=None: "synthetic" if name == "openai" else None)
+    return conf, common, providers, directory, key
+
+
+def _split_state(conf):
+    owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+    return provider_settings.read(conf.parent, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+
+
+def test_split_auto_edit_preserves_other_provider_jev_and_key(split_conf):
+    conf, common, providers, _, key = split_conf
+    before_key = key.read_bytes()
+    expected = config_edit.read_strict()
+    assert "model" not in expected["cloud_llm"]
+    budgets = {name: dict(providers[name]["budget"]) for name in ("anthropic", "openai")}
+    budgets["openai"]["daily_cost_limit_usd"] = 1
+    saved, errors = config_edit.apply({"cloud_llm.provider_budgets": budgets}, expected=expected)
+    assert not errors and saved["cloud_llm"]["provider_budgets"] == budgets
+    state = _split_state(conf)
+    assert state["common"] == common
+    assert state["providers"]["anthropic"] == providers["anthropic"]
+    assert state["providers"]["openai"]["model"] == providers["openai"]["model"]
+    assert state["providers"]["openai"]["budget"] == budgets["openai"]
+    assert state["providers"]["jev"] == providers["jev"] and key.read_bytes() == before_key
+
+
+def test_split_provider_switch_does_not_clear_pinned_models(split_conf):
+    conf, _, providers, _, _ = split_conf
+    before = config_edit.read_strict()
+    saved, errors = config_edit.apply({"cloud_llm.provider": "anthropic", "cloud_llm.model": None},
+                                      expected=before)
+    assert not errors and saved["cloud_llm"]["provider"] == "anthropic"
+    state = _split_state(conf)
+    assert state["providers"] == providers
+
+
+def test_split_visible_expected_conflict_and_pending_refuse_changes(split_conf):
+    conf, _, providers, directory, _ = split_conf
+    before = config_edit.read_strict()
+    changed = dict(before)
+    changed["cloud_llm"] = {**before["cloud_llm"], "mode": "shadow"}
+    with pytest.raises(config_edit.ConfigConflict):
+        config_edit.apply({"extract.prefilter": False}, expected=changed)
+    assert _split_state(conf)["providers"] == providers
+    marker = directory.parent / ".provider-settings-pending.json"
+    marker.write_text('{}')
+    marker.chmod(0o600)
+    with pytest.raises(ValueError, match="provider_settings_pending"):
+        config_edit.apply({"extract.prefilter": False}, expected=before)
+    assert marker.exists()
+
+
+def test_split_cas_refuses_provider_change_after_read(split_conf, monkeypatch):
+    conf, _, _, directory, _ = split_conf
+    original = provider_settings.commit_locked
+    changed = directory / "openai.json"
+    raw = changed.read_bytes() + b" "
+    def concurrent(*args, **kwargs):
+        changed.write_bytes(raw)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(provider_settings, "commit_locked", concurrent)
+    before = conf.read_bytes()
+    with pytest.raises(ValueError):
+        config_edit.apply({"extract.prefilter": False})
+    assert changed.read_bytes() == raw and conf.read_bytes() == before
 
 
 def test_same_content_replacement_after_fd_read_is_rejected(conf, monkeypatch):
@@ -216,3 +315,24 @@ def test_unreadable_config_is_not_reported_as_missing(conf, capsys, command, raw
     conf.unlink()
     assert run() == 1
     assert "init" in capsys.readouterr().out
+
+
+def test_budget_snapshot_refuses_config_path_change(conf, monkeypatch):
+    alternate = conf.parent / "alternate.json"
+    alternate.write_text(json.dumps({"mcs_login_id": "synthetic-other", "notify_target": "local"}))
+    before = conf.read_bytes(), alternate.read_bytes()
+    original = config_edit._snapshot
+    calls = []
+
+    def switch_after_first_read():
+        result = original()
+        calls.append(True)
+        if len(calls) == 1:
+            monkeypatch.setattr(mcs_util, "CONF_PATH", str(alternate))
+        return result
+
+    monkeypatch.setattr(config_edit, "_snapshot", switch_after_first_read)
+    with pytest.raises(config_edit.ConfigConflict, match="config_changed"):
+        cloud_cli._settings_for_edit()
+    assert len(calls) == 1
+    assert (conf.read_bytes(), alternate.read_bytes()) == before

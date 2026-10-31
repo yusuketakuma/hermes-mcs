@@ -68,7 +68,7 @@ def test_doctor_text_distinguishes_dryrun_estimates_and_missing_key_from_usage(l
     monkeypatch.setattr(mcs_setup, "HOME", str(root))
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(root / "LaunchAgents"))
     monkeypatch.setattr(cloud_cli.mcs_util, "HOME", str(root))
-    monkeypatch.setattr(cloud_cli.mcs_util, "load_config", lambda: cfg)
+    monkeypatch.setattr(mcs_setup, "_diagnostic_config", lambda: cfg)
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(mcs_setup.sqlite3, "sqlite_version_info", (3, 51, 3))
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda _: {
@@ -86,6 +86,28 @@ def test_doctor_without_data_probe_does_not_read_any_ledger(local, monkeypatch):
     monkeypatch.setattr(cloud_cli, "_reader", lambda *a: pytest.fail("implicit data access"))
     report = cloud_cli.diagnostics({}, root=str(root))
     assert report["anthropic"]["dry_run"] is None and report["anthropic"]["accounting"] is None
+
+
+def test_empty_config_selects_available_provider_but_stays_off(local, monkeypatch):
+    root, ledger, now = local
+    _dryrun(ledger, now)
+    meta = {"route": "patient_context", "requests": 1, "input_chars": 12,
+            "estimated_input_tokens": 4, "estimated_output_tokens": 200,
+            "price_version": cloud_policy.OPENAI_PRICE_VERSION}
+    with ledger.db:
+        artifact = ledger.artifact_add_tx("cloud_usage_dryrun", "synthetic",
+                                          model=cloud_policy.PROVIDERS["openai"], meta=meta)
+        ledger.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id=?", (now, artifact))
+    monkeypatch.setattr(cloud_policy, "provider_key",
+                        lambda provider, root=None: "synthetic-key" if provider == "openai" else None)
+    report = cloud_cli.diagnostics({}, root=str(root), probe=True)
+    assert "anthropic" not in report
+    assert report["openai"]["mode"] == "off"
+    assert report["openai"]["key_present"] is True
+    assert report["openai"]["model"] == cloud_policy.PROVIDERS["openai"]
+    assert report["openai"]["dry_run"]["days"] == [
+        {"day": "2026-10-26", "units": 1, "requests": 1, "input_chars": 12,
+         "estimated_input_tokens": 4, "estimated_output_tokens": 200}]
 
 
 def test_daily_cost_stop_is_visible_in_readonly_diagnostics_and_forecast(local, monkeypatch):

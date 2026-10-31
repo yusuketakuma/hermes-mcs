@@ -1775,7 +1775,7 @@ def test_standalone_init_never_writes_hermes_config(monkeypatch):
 def test_invalid_runtime_doctor_fails_without_service_probes(monkeypatch, capsys):
     from types import SimpleNamespace
 
-    monkeypatch.setattr(mcs_util, 'load_config', lambda: {"runtime_mode": ["standalone"]})
+    monkeypatch.setattr(mcs_setup, '_diagnostic_config', lambda: {"runtime_mode": ["standalone"]})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(mcs_setup, "_queue_warnings", lambda cfg: [])
     monkeypatch.setattr(mcs_util, 'hermes_exe', lambda cfg: pytest.fail("invalid mode must not probe Hermes"))
@@ -2340,7 +2340,7 @@ def test_doctor_is_local_and_does_not_run_check(monkeypatch, capsys):
     from types import SimpleNamespace
 
     monkeypatch.setattr(mcs_setup.sys, "platform", "linux")
-    monkeypatch.setattr(mcs_util, 'load_config',
+    monkeypatch.setattr(mcs_setup, '_diagnostic_config',
                         lambda: {"mcs_login_id": "synthetic", "notify_target": "local"})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: {

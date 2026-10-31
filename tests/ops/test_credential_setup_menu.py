@@ -104,6 +104,55 @@ def test_setup_entry_detects_config_change_before_save(monkeypatch, tmp_path):
     assert mcs_setup.main(["api-keys"]) == 1
 
 
+def test_setup_entry_accepts_private_root_link_and_detects_same_target_replacement(monkeypatch, tmp_path):
+    import mcs_setup
+
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    (target / "config.json").write_text('{"runtime_mode":"standalone"}', encoding="utf-8")
+    link = tmp_path / "root"
+    link.symlink_to(target, target_is_directory=True)
+    replacement = tmp_path / "replacement"
+    replacement.symlink_to(target, target_is_directory=True)
+    monkeypatch.setattr(mcs_setup, "HOME", str(link))
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(link / "config.json"))
+
+    def observe(root, cfg, *, current):
+        assert root == str(link)
+        assert cfg == {"runtime_mode": "standalone"}
+        assert current()
+        replacement.replace(link)
+        assert not current()
+        return 1
+
+    monkeypatch.setattr(menu, "run", observe)
+    assert mcs_setup.main(["api-keys"]) == 1
+
+
+def test_setup_entry_rejects_root_link_exchange_during_config_read(monkeypatch, tmp_path):
+    import mcs_setup
+
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    (target / "config.json").write_text('{}', encoding="utf-8")
+    link = tmp_path / "root"
+    link.symlink_to(target, target_is_directory=True)
+    replacement = tmp_path / "replacement"
+    replacement.symlink_to(target, target_is_directory=True)
+    monkeypatch.setattr(mcs_setup, "HOME", str(link))
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(link / "config.json"))
+    open_real = mcs_setup.os.open
+
+    def exchange_on_open(path, flags, *args, **kwargs):
+        if path == "config.json" and kwargs.get("dir_fd") is not None:
+            replacement.replace(link)
+        return open_real(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(mcs_setup.os, "open", exchange_on_open)
+    monkeypatch.setattr(menu, "run", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError()))
+    assert mcs_setup.main(["api-keys"]) == 1
+
+
 def test_changed_runtime_stops_before_connector(monkeypatch, tmp_path):
     monkeypatch.setattr(menu.api_key_setup, "is_terminal", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _: "2")

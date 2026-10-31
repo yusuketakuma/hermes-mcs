@@ -32,6 +32,8 @@ with ``--smoke --live`` after a wire change): request {"model","state",
 {"model","answers":{qid: {"type": ..., ...}}, "usage":
 {"input_tokens": ..., "output_tokens": ...}}.
 """
+from __future__ import annotations
+
 import argparse
 import json
 import math
@@ -81,19 +83,21 @@ def api_key(root=None):
 
 
 def _live_request_budget(home):
-    from mcs_util import CONFIG_MAX_BYTES, reject_constant, unique_pairs
-    from safe_io import read_regular_nofollow
-    cfg = {}
+    import mcs_util
+
     config_path = home / "config.json"
     try:
-        if config_path.exists() or config_path.is_symlink():
-            raw = read_regular_nofollow(config_path, CONFIG_MAX_BYTES, ValueError)
-            if len(raw) > CONFIG_MAX_BYTES:
-                raise ValueError
-            cfg = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_pairs,
-                             parse_constant=reject_constant)
-            if not isinstance(cfg, dict):
-                raise ValueError
+        config_seen = os.path.lexists(config_path)
+        try:
+            cfg = mcs_util._load_config(str(config_path))
+        except FileNotFoundError:
+            # Only a genuinely unconfigured legacy installation keeps the old
+            # default; an observed split read failure remains fail-closed.
+            if config_seen or os.path.lexists(config_path) or mcs_util._provider_config_active(str(config_path)):
+                raise ValueError("semantic_config_unreadable") from None
+            cfg = {}
+        if not isinstance(cfg, dict):
+            raise ValueError("semantic_config_unreadable")
         semantic = cfg.get("semantic", {})
         if not isinstance(semantic, dict):
             raise ValueError
@@ -101,7 +105,7 @@ def _live_request_budget(home):
                              0 if "mode" in semantic else DAILY_REQUEST_LIMIT)
         if type(limit) is not int or not 0 <= limit <= DAILY_REQUEST_BUDGET_MAX:
             raise ValueError
-    except (OSError, ValueError, UnicodeError, RecursionError):
+    except (OSError, ValueError, TypeError, RecursionError, mcs_util.ProviderSettingsUnreadable):
         raise JevError("budget_exceeded", "semantic_daily_budget_invalid") from None
     return limit
 

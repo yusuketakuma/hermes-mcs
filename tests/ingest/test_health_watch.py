@@ -19,6 +19,27 @@ import health_watch
 import health_policy
 
 
+@pytest.mark.parametrize("marker", ["pending", "authority"])
+def test_provider_settings_failure_stops_before_health_changes(tmp_path, monkeypatch, capsys, marker):
+    tmp_path.chmod(0o700)
+    data = tmp_path / "data"
+    data.mkdir(mode=0o700)
+    config = tmp_path / "config.json"
+    config.write_text('{"synthetic":"secret-canary"}')
+    config.chmod(0o600)
+    witness = data / (".provider-settings-" + marker + ".json")
+    witness.write_text('{"synthetic":"secret-canary"}')
+    witness.chmod(0o600)
+    before = (config.read_bytes(), witness.read_bytes())
+    monkeypatch.setattr(health_watch, "_watch", lambda *a, **k: pytest.fail("health write or delivery"))
+    assert health_watch.main(["--home", str(tmp_path), "--config", str(config)]) == 1
+    captured = capsys.readouterr()
+    assert json.loads(captured.err) == {"status": "blocked", "reason": "provider_settings_unreadable"}
+    assert "secret-canary" not in captured.err + captured.out
+    assert (config.read_bytes(), witness.read_bytes()) == before
+    assert sorted(path.name for path in data.iterdir()) == [witness.name]
+
+
 def _health_file(home, obj):
     p = Path(home) / "data" / "health.json"
     p.parent.mkdir(parents=True, exist_ok=True)

@@ -33,7 +33,7 @@ import safe_io  # noqa: E402
 
 from mcs_queries import JST
 from health_policy import HEALTH_REL, STATUS_MAX_BYTES, RUN_GRACE_S, freshness_deadline
-from mcs_util import HOME, load_config
+from mcs_util import HOME, CONF_PATH, ProviderSettingsUnreadable, _load_config, load_config
 
 STATE_REL = os.path.join("data", "health_watch.json")
 STATUS_REL = os.path.join("data", "health_watch_status.json")
@@ -1101,7 +1101,13 @@ def main(argv: list | None = None) -> int:
     args = ap.parse_args(argv)
     if args.now is not None and not finite_number(args.now):
         ap.error("now must be a finite number")
-    cfg = load_config(args.config) if args.config else load_config()
+    try:
+        cfg = _load_config(args.config or CONF_PATH) or {}
+    except ProviderSettingsUnreadable:
+        print(json.dumps({"status": "blocked", "reason": "provider_settings_unreadable"}), file=sys.stderr)
+        return 1
+    except (OSError, ValueError, TypeError, RecursionError):
+        cfg = {}
     try:
         directory = os.path.join(args.home, "data")
         os.makedirs(directory, mode=0o700, exist_ok=True)

@@ -584,3 +584,102 @@ safe_io.publish_new_bytes(Path(sys.argv[2]), b'{"approval_id":"synthetic"}')
     assert mcs_requests.apply_command(store, req)["outcome"] == "applied"
     assert mcs_requests.apply_command(store, rollback(req["command_id"]))["outcome"] == "applied"
     assert json.loads(config.read_text()) == cfg
+
+
+@pytest.fixture
+def split_alias(corpus, monkeypatch):
+    import hashlib
+    import cloud_policy
+    import provider_settings
+    import semantic_jev
+
+    store, cfg, config = corpus
+    root = config.parent
+    root.chmod(0o700)
+    cfg.update({"cloud_llm": {"mode": "on", "project_ids": [1], "provider": "openai"},
+                "semantic": {"mode": "off"}})
+    config.write_text(json.dumps(cfg, ensure_ascii=False, indent=2))
+    directory = root / "data" / "provider_settings"
+    directory.mkdir(mode=0o700)
+    zero = {"daily_cost_limit_usd": 0, "monthly_cost_limit_usd": 0}
+    providers = {"anthropic": {"model": cloud_policy.MODEL, "budget": zero},
+                 "openai": {"model": cloud_policy.openai_client.MODEL, "budget": zero},
+                 "jev": {"model": semantic_jev.JEV_MODEL, "daily_request_budget": 0}}
+    files = {}
+    for name, value in providers.items():
+        path = directory / (name + ".json")
+        path.write_text(json.dumps(value, ensure_ascii=False))
+        path.chmod(0o600)
+        files[name] = path.read_bytes()
+    authority = root / "data" / ".provider-settings-authority.json"
+    authority.write_text(json.dumps({"version": 2, "state": "committed",
+        "files": {name: hashlib.sha256(raw).hexdigest() for name, raw in files.items()},
+        "common_policy_sha256": provider_settings.common_policy_digest(cfg)}))
+    authority.chmod(0o600)
+    original = config.read_bytes()
+    authority_raw = authority.read_bytes()
+    owners = {cloud_policy.MODEL: "anthropic", cloud_policy.openai_client.MODEL: "openai"}
+    monkeypatch.setattr(cloud_policy, "pricing_valid", lambda *args, **kwargs: True)
+
+    def check(expected_pin):
+        read = provider_settings.read(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL,
+                                      config_limit=provider_settings.ALIAS_CONFIG_MAX_BYTES)
+        assert read["mode"] == "split" and read["common"]["drug_map"] == expected_pin
+        assert {k: v for k, v in read["common"].items() if k != "drug_map"} == {
+            k: v for k, v in cfg.items() if k != "drug_map"}
+        assert authority.read_bytes() == authority_raw
+        assert all((directory / (name + ".json")).read_bytes() == raw for name, raw in files.items())
+        effective = provider_settings.compose(read["common"], read["providers"], selected_provider="openai",
+                                              model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+        assert cloud_policy.budget_block_reason(store, effective) == "provider_daily_cap"
+        assert effective["semantic"]["daily_request_budget"] == 0
+        assert not (root / "data" / ".provider-settings-pending.json").exists()
+
+    check(cfg["drug_map"])
+    return store, cfg, config, original, check
+
+
+def test_split_alias_apply_and_rollback_preserve_provider_authority_and_caps(split_alias):
+    store, cfg, _, _, check = split_alias
+    proposal = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    req = request(proposal)
+    receipt = mcs_requests.apply_command(store, req)
+    assert receipt["outcome"] == "applied"
+    check(receipt["after_pin"])
+    assert mcs_requests.apply_command(store, rollback(req["command_id"]))["outcome"] == "applied"
+    check(cfg["drug_map"])
+
+
+def test_split_alias_known_receipt_failure_restores_exact_common_bytes(split_alias):
+    import sqlite3
+    store, cfg, config, original, check = split_alias
+    proposal = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    store.db.execute("CREATE TRIGGER reject_split_receipt BEFORE INSERT ON command_receipts "
+                     "BEGIN SELECT RAISE(ABORT,'synthetic failure'); END")
+    with pytest.raises(sqlite3.IntegrityError):
+        mcs_requests.apply_command(store, request(proposal))
+    assert config.read_bytes() == original
+    assert not (config.parent / "data/drug-map/alias-switch.pending.json").exists()
+    check(cfg["drug_map"])
+
+
+@pytest.mark.parametrize("committed", [False, True])
+def test_split_alias_unknown_commit_preserves_journal_and_provider_caps(split_alias, committed):
+    store, cfg, config, _, check = split_alias
+    proposal = drug_alias.proposal(store.db, cfg, "キラナン", "fiction-i1")
+    req = request(proposal)
+    connection = store.db
+    store.db = _commit_fault(connection, committed)
+    try:
+        with pytest.raises(mcs_requests.AliasCommitUnknown):
+            mcs_requests.apply_command(store, req)
+    finally:
+        store.db = connection
+    journal = config.parent / "data/drug-map/alias-switch.pending.json"
+    assert journal.exists()
+    current_pin = json.loads(config.read_text())["drug_map"]
+    assert current_pin["sha256"] == proposal["after_dict_sha"]
+    check(current_pin)
+    assert mcs_requests.apply_command(store, rollback(req["command_id"]))["outcome"] == "applied"
+    assert not journal.exists()
+    check(cfg["drug_map"])

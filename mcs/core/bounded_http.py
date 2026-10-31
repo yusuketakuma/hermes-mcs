@@ -17,6 +17,8 @@ be sent to is the caller's policy, passed in as ``allowed_endpoints``
 ``api_key=None`` request is pinned to an unauthenticated loopback URL
 unless the explicit anonymous public-MCP mode validates a public HTTPS allowlist.
 """
+from __future__ import annotations
+
 import base64
 import json
 import ipaddress

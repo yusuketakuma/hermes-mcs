@@ -321,3 +321,110 @@ def test_kwargs_only_request_needs_explicit_guard_protocol():
     assert not runtime._accepts_explicit_keyword(undeclared, 'reservation_day')
     undeclared.__mcs_guarded_keywords__ = ('reservation_day',)
     assert runtime._accepts_explicit_keyword(undeclared, 'reservation_day')
+
+
+def _private_json(path, value):
+    import hashlib
+
+    raw = json.dumps(value, ensure_ascii=False).encode('utf-8')
+    path.write_bytes(raw)
+    path.chmod(0o600)
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _split_jev_root(root, *, until):
+    import provider_settings
+
+    root.mkdir(mode=0o700)
+    data = root / 'data'
+    data.mkdir(mode=0o700)
+    directory = data / 'provider_settings'
+    directory.mkdir(mode=0o700)
+    common = {'semantic': {'mode': 'off'}, 'cloud_llm': {'mode': 'off', 'project_ids': []}}
+    _private_json(root / 'config.json', common)
+    providers = {'anthropic': {}, 'openai': {}, 'jev': {'until': until}}
+    hashes = {name: _private_json(directory / (name + '.json'), providers[name])
+              for name in provider_settings.PROVIDERS}
+    _private_json(data / '.provider-settings-authority.json', {
+        'version': 2, 'state': 'committed', 'files': hashes,
+        'common_policy_sha256': provider_settings.common_policy_digest(common),
+    })
+
+
+@pytest.mark.parametrize('config_present', [False, True])
+def test_jev_pending_split_refuses_wire_and_reservation_for_explicit_root(tmp_path, monkeypatch, config_present):
+    from contextlib import closing
+    import mcs_util
+    from ledger import Ledger
+
+    other = tmp_path / 'explicit-root'
+    other.mkdir(mode=0o700)
+    data = other / 'data'
+    data.mkdir(mode=0o700)
+    if config_present:
+        _private_json(other / 'config.json', {'semantic': {'mode': 'off'}})
+    _private_json(data / '.provider-settings-pending.json', {'synthetic': True})
+    # A separate, uninitialized default root must not control the explicit root.
+    default = tmp_path / 'default-root'
+    default.mkdir(mode=0o700)
+    monkeypatch.setattr(mcs_util, 'HOME', str(default))
+    monkeypatch.setattr(mcs_util, 'CONF_PATH', str(default / 'config.json'))
+    sent = []
+    client = jev.JevClient(api_key='synthetic', max_attempts=1,
+        post_fn=lambda body, timeout: sent.append(body) or answer(body))
+    bound = runtime.bind_jev(client, lambda _stage: None, config_path=other / 'config.json')
+    with pytest.raises(jev.JevError) as raised:
+        bound.evaluate({}, {'q': jev.noul_question('synthetic', 'yes', 'no')}, time.monotonic() + 10)
+    assert raised.value.detail == 'semantic_config_unreadable' and not sent
+    monkeypatch.setattr(client, 'request', lambda *_args, **_kwargs: pytest.fail('pending GET reached transport'))
+    with pytest.raises(jev.JevError) as raised:
+        bound.models()
+    assert raised.value.detail == 'semantic_config_unreadable'
+    with pytest.raises(jev.JevError) as raised:
+        runtime._jev_window_check(True, config_path=other / 'config.json')
+    assert raised.value.detail == 'semantic_config_unreadable' and raised.value.retryable is True
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        reserve = runtime.manual_usage_reserver(ledger, operation='wire_smoke',
+                                                config_path=other / 'config.json')
+        with pytest.raises(jev.JevError) as raised:
+            reserve({'model': 'synthetic'}, 1)
+        assert raised.value.detail == 'semantic_config_unreadable'
+        assert not ledger.artifacts('semantic_usage')
+
+
+def test_jev_explicit_split_root_uses_its_own_until(tmp_path, monkeypatch):
+    import mcs_util
+
+    other = tmp_path / 'explicit-root'
+    _split_jev_root(other, until='2000-01-01T00:00:00+00:00')
+    default = tmp_path / 'default-root'
+    default.mkdir(mode=0o700)
+    monkeypatch.setattr(mcs_util, 'HOME', str(default))
+    monkeypatch.setattr(mcs_util, 'CONF_PATH', str(default / 'config.json'))
+    with pytest.raises(jev.JevError) as raised:
+        runtime._jev_window_check(config_path=other / 'config.json')
+    assert raised.value.detail == 'semantic_until_expired'
+
+
+def test_jev_unconfigured_legacy_root_still_permits_window_check(tmp_path):
+    root = tmp_path / 'legacy'
+    root.mkdir(mode=0o700)
+    assert runtime._jev_window_check(config_path=root / 'config.json') is None
+
+
+def test_jev_legacy_read_rechecks_provider_state_before_allowing(tmp_path, monkeypatch):
+    import provider_settings
+
+    root = tmp_path / 'legacy'
+    root.mkdir(mode=0o700)
+    _private_json(root / 'config.json', {'semantic': {'mode': 'off'}})
+    original = provider_settings.probe
+    calls = []
+    def changed(path):
+        current = original(path)
+        calls.append(current)
+        return {**current, 'state': 'pending'} if len(calls) == 2 else current
+    monkeypatch.setattr(provider_settings, 'probe', changed)
+    with pytest.raises(jev.JevError) as raised:
+        runtime._jev_window_check(config_path=root / 'config.json')
+    assert raised.value.detail == 'semantic_config_unreadable' and len(calls) == 2

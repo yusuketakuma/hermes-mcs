@@ -33,8 +33,8 @@
 #
 # 通常のユーザーで実行してください（sudo は使いません）。
 # 導入済みのものは確認して維持します。途中で止まった場合は表示された
-# 原因を解消し、同じコマンドを再実行してください。失敗した段階で停止し、
-# その後の段階は実行しません。取得途中のファイルは再開に利用します。
+# 案内に従ってください。保留記録がある場合は設定と記録を保持し、担当者に確認してください。
+# 失敗した段階で停止し、その後の段階は実行しません。取得途中のファイルは再開に利用します。
 # 最後に mcs setup を案内します。ログイン情報や通知先は、そこで
 # 説明を読みながら入力します。パスワード・トークンは画面に表示しません。
 set -eu
@@ -204,10 +204,41 @@ EOF
             _safe_dir "$_lock_data" || _unsafe_dir "データフォルダー"
         fi
     }
+    # Pin a private root symlink before any fresh data or lock is created.
+    # Physical cwd prevents a later replacement of the alias from redirecting
+    # the installer's writes; keep its identity for later conflict checks.
+    _root_alias=""
+    _root_alias_info=""
+    _root_alias_text=""
+    _verify_root_alias() {
+        [ -n "$_root_alias" ] || return 0
+        [ -L "$_root_alias" ] && [ "$(_lock_info "$_root_alias")" = "$_root_alias_info" ] \
+            && [ "$(readlink "$_root_alias")" = "$_root_alias_text" ] \
+            && [ "$(_lock_info "$_root_alias/.")" = "$(_lock_info .)" ]
+    }
+    _safe_dir "$HOME" || _unsafe_dir "ホーム"
+    if [ -L "$MCS_ROOT" ]; then
+        _root_alias="$MCS_ROOT"
+        _root_alias_info="$(_lock_info "$_root_alias")" || _unsafe_dir "設定フォルダー"
+        IFS=' ' read -r _alias_dev _alias_ino _alias_owner _alias_mode _alias_links <<EOF
+$_root_alias_info
+EOF
+        [ "$_alias_owner" = "$_lock_uid" ] || _unsafe_dir "設定フォルダー"
+        _root_alias_text="$(readlink "$_root_alias")" || _unsafe_dir "設定フォルダー"
+        cd -P "$_root_alias" || _unsafe_dir "設定フォルダー"
+        _safe_dir . || _unsafe_dir "設定フォルダー"
+        _verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
+        MCS_ROOT="$(pwd -P)" || _unsafe_dir "設定フォルダー"
+        export MCS_ROOT
+    fi
+    _lock_data="$MCS_ROOT/data"
+    _lock_file="$_lock_data/update.lock"
     _install_lock_held=0
+    _fresh_data_info=""
     acquire_install_lock() {
     [ "$_install_lock_held" -eq 0 ] || return 0
     _check_install_dirs
+    _verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
     if [ ! -e "$MCS_ROOT" ] && [ ! -L "$MCS_ROOT" ]; then
         [ -z "${MCS_UPDATE_REINSTALL:-}" ] || die "更新の設定フォルダーを確認できません"
         mkdir -m 700 "$MCS_ROOT" || die "設定フォルダーを作成できません"
@@ -216,6 +247,7 @@ EOF
     if [ ! -e "$_lock_data" ] && [ ! -L "$_lock_data" ]; then
         [ -z "${MCS_UPDATE_REINSTALL:-}" ] || die "更新のデータフォルダーを確認できません"
         mkdir -m 700 "$_lock_data" || die "データフォルダーを作成できません"
+        _fresh_data_info="$(_lock_info "$_lock_data")" || die "新規データフォルダーを確認できません"
     fi
     _safe_dir "$_lock_data" || _unsafe_dir "データフォルダー"
     if [ -n "${MCS_UPDATE_REINSTALL:-}" ]; then
@@ -274,11 +306,22 @@ EOF
         [ "$(_lock_info "$_lock_file")" = "$(_held_info "$_install_lock_fd")" ] \
             || die "排他制御ファイルが変更されました。担当者に確認してください"
     fi
+    _verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
     MCS_INSTALL_UPDATE_LOCK_FD="$_install_lock_fd"
     export MCS_INSTALL_UPDATE_LOCK_FD
     _install_lock_held=1
     }
     _check_install_dirs
+    # Check interrupted provider migrations before creating or opening a lock.
+    if [ -e "$_lock_data/.provider-settings-pending.json" ] || [ -L "$_lock_data/.provider-settings-pending.json" ] \
+        || [ -e "$_lock_data/.provider-settings-authority.json" ] || [ -L "$_lock_data/.provider-settings-authority.json" ] \
+        || [ -e "$_lock_data/provider_settings" ] || [ -L "$_lock_data/provider_settings" ]; then
+        _provider_py="$MCS_ROOT/venv/bin/python3"
+        [ -x "$_provider_py" ] || _provider_py="$(command -v python3 || true)"
+        [ -n "$_provider_py" ] || die "提供元設定の確認には Python が必要です。変更は行っていません"
+        "$_provider_py" -B "$REPO/mcs/ops/install_options.py" provider-check "$MCS_ROOT/config.json" "$_lock_data/install_options.json" - \
+            || die "提供元設定を確認できないため変更せず中止しました"
+    fi
     # Existing installs and updater children must respect the held lock before
     # reading settings. A fresh install creates its lock only after the guards.
     if [ -e "$_lock_file" ] || [ -L "$_lock_file" ] || [ -n "${MCS_UPDATE_REINSTALL:-}" ]; then
@@ -289,12 +332,12 @@ CONFIG_ABSENT=0
 CONFIG_EMPTY=0
 RESUME_UNCONFIGURED=0
 CONFIG_BASE=""
-if [ -e "$HOME/.mcs/config.json" ] || [ -L "$HOME/.mcs/config.json" ]; then
-    MODE_PY="$HOME/.mcs/venv/bin/python3"
+if [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ]; then
+    MODE_PY="$MCS_ROOT/venv/bin/python3"
     if [ ! -x "$MODE_PY" ]; then MODE_PY="$(command -v python3 || true)"; fi
     [ -n "$MODE_PY" ] || die "既存設定の接続方法を確認するには Python が必要です。Python を導入して再実行してください"
     read_install_config() {
-    "$MODE_PY" - "$HOME/.mcs/config.json" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" <<'PYMODE'
+    "$MODE_PY" - "$MCS_ROOT/config.json" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" <<'PYMODE'
 import json
 import hashlib
 import os
@@ -343,12 +386,25 @@ PYMODE
 else
     CONFIG_ABSENT=1
 fi
+# Only a checked bootstrap authority can authorize a later initial choice.
+_bootstrap_runtime_token=""
+if [ "$MODE" = install ] && [ "$CONFIG_ABSENT" -eq 0 ] \
+        && { [ -e "$MCS_ROOT/data/.provider-settings-authority.json" ] || [ -L "$MCS_ROOT/data/.provider-settings-authority.json" ]; }; then
+    _bootstrap_inspect=$("$MODE_PY" -B "$REPO/mcs/ops/install_options.py" bootstrap-runtime-inspect \
+        "$MCS_ROOT/config.json" "$MCS_ROOT/data/install_options.json" "$CONFIG_BASE") \
+        || die "初回設定を確認できません。設定と記録を保持してください"
+    case "$_bootstrap_inspect" in
+        none) ;;
+        bootstrap:*) _bootstrap_runtime_token="$_bootstrap_inspect" ;;
+        *) die "初回設定を確認できません。設定と記録を保持してください" ;;
+    esac
+fi
 # An interrupted noninteractive first install can have created only {}.
 # A completed install or any other existing settings retain their mode.
 if [ "$RUNTIME_EXPLICIT" -eq 0 ] && [ "$MODE" = install ] && [ -t 0 ] && [ -t 1 ] \
-        && { [ "$CONFIG_ABSENT" -eq 1 ] || { [ "$CONFIG_EMPTY" -eq 1 ] \
-        && [ ! -e "$HOME/.mcs/data/install_options.json" ] \
-        && [ ! -L "$HOME/.mcs/data/install_options.json" ]; }; }; then
+        && { [ "$CONFIG_ABSENT" -eq 1 ] || [ -n "$_bootstrap_runtime_token" ] || { [ "$CONFIG_EMPTY" -eq 1 ] \
+        && [ ! -e "$MCS_ROOT/data/install_options.json" ] \
+        && [ ! -L "$MCS_ROOT/data/install_options.json" ]; }; }; then
     printf '%s\n' "MCS の導入を始めます。番号を入力して Enter キーで進みます。" \
         "Slack / Discord との連携方式を選んでください。" \
         "  1) わからないので推奨を使う — Hermes Agent と連携（標準）" \
@@ -375,7 +431,7 @@ export HERMES_HOME
 RUNTIME_HOME="$HERMES_HOME"
 if [ "$RUNTIME_MODE" = standalone ]; then
     [ -z "$ARG_HOME" ] || die "MCS 単独接続では HERMES_HOME を指定できません。保存先の引数を外してください"
-    RUNTIME_HOME="$HOME/.mcs"
+    RUNTIME_HOME="$MCS_ROOT"
     SKIP_PLUGIN=1
 fi
 
@@ -417,7 +473,7 @@ fi
 AGENTS_DIR="$HOME/Library/LaunchAgents"
 LLAMA_PLIST="$AGENTS_DIR/ai.mcs.llamaserver.plist"
 HERMES_LLAMA_PLIST="$AGENTS_DIR/ai.hermes.llamacpp.plist"
-MCS_DATA="$HOME/.mcs/data"
+MCS_DATA="$MCS_ROOT/data"
 RECOVERY_DIR="$HOME/.mcs-recovery"
 WATCH_PLIST="$AGENTS_DIR/org.mcs.recovery.plist"
 RECOVERY_TEMPLATE="$REPO/deployment/launchagents/org.mcs.recovery.plist"
@@ -597,7 +653,7 @@ if problem:
     print("復旧用 Python に問題があります: " + problem, file=sys.stderr)
     sys.exit(1)
 print(desired)
-' "$REPO" "$RECOVERY_TEMPLATE" "$HOME/.mcs/config.json" "$RECOVERY_OPTION" "$SKIP_RECOVERY" "$AGENTS_DIR" "$RECOVERY_DIR"
+' "$REPO" "$RECOVERY_TEMPLATE" "$MCS_ROOT/config.json" "$RECOVERY_OPTION" "$SKIP_RECOVERY" "$AGENTS_DIR" "$RECOVERY_DIR"
 }
 loaded() { launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; }
 # launchd may still be tearing down a just-booted-out job ("5: Input/
@@ -926,6 +982,90 @@ if [ "$_prechecks_locked" -eq 0 ]; then
             || die "導入前の確認中に設定が変更されました。設定を保持して中止したため、内容を確認して再実行してください"
     fi
 fi
+_fresh_marker="$MCS_DATA/.provider-bootstrap-fresh.json"
+_fresh_authorized=0
+_legacy_uninitialized=0
+if [ -e "$_fresh_marker" ] || [ -L "$_fresh_marker" ]; then
+    die "初回導入が中断された記録があります。設定と記録を保持し、担当者に確認してください"
+fi
+_fresh_complete="$MCS_DATA/.provider-bootstrap-complete.json"
+if [ -e "$_fresh_complete" ] || [ -L "$_fresh_complete" ]; then
+    _complete_py="${MODE_PY:-}"
+    [ -n "$_complete_py" ] || _complete_py="$(command -v python3 || true)"
+    [ -n "$_complete_py" ] || die "初回導入の完了記録を確認できません。記録を保持してください"
+    "$_complete_py" -B "$REPO/mcs/ops/install_options.py" fresh-complete "$MCS_ROOT/config.json" \
+        "$MCS_DATA/install_options.json" - "$MCS_INSTALL_UPDATE_LOCK_FD" \
+        || die "初回導入の完了を確認できません。設定と記録を保持してください"
+fi
+_split_runtime_token=""
+if [ -n "$_bootstrap_runtime_token" ] && { [ "$RUNTIME_EXPLICIT" -eq 1 ] || [ -n "$RECOVERY_OPTION" ]; }; then
+    _bootstrap_result=$("$MODE_PY" -B "$REPO/mcs/ops/install_options.py" bootstrap-runtime-apply \
+        "$MCS_ROOT/config.json" "$MCS_DATA/install_options.json" "$_bootstrap_runtime_token" \
+        "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" "$RECOVERY_OPTION") \
+        || die "初回設定が変更されたため停止しました。設定と記録を保持してください"
+    IFS=' ' read -r CONFIG_BASE _split_runtime_token <<EOF
+$_bootstrap_result
+EOF
+    [ "$_bootstrap_result" = "$CONFIG_BASE $_split_runtime_token" ] || die "初回設定の結果を確認できません"
+    case "$_split_runtime_token" in split:*) ;; *) die "初回設定の結果を確認できません" ;; esac
+elif [ "$CONFIG_ABSENT" -eq 0 ] && { [ "$RUNTIME_EXPLICIT" -eq 1 ] || [ -n "$RECOVERY_OPTION" ]; }; then
+    _guard_py="${MODE_PY:-}"
+    [ -n "$_guard_py" ] || _guard_py="$(command -v python3 || true)"
+    [ -n "$_guard_py" ] || die "設定の変更可否を確認できません。既存設定を保持してください"
+    _runtime_decision=$("$_guard_py" -B "$REPO/mcs/ops/install_options.py" runtime-edit-decision "$MCS_ROOT/config.json" \
+        "$MCS_DATA/install_options.json" - "$CONFIG_BASE" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" "$RECOVERY_OPTION") \
+        || die "提供元設定のある環境では接続方法をここで変更できません。設定を保持してください"
+    case "$_runtime_decision" in
+        legacy) ;;
+        split:*) _split_runtime_token="$_runtime_decision" ;;
+        *) die "設定の変更可否を確認できません。既存設定を保持してください" ;;
+    esac
+fi
+verify_split_runtime() {
+    [ -n "$_split_runtime_token" ] || return 0
+    "$MCS_PY" -B "$REPO/mcs/ops/install_options.py" runtime-noop-verify "$MCS_ROOT/config.json" \
+        "$MCS_DATA/install_options.json" "$_split_runtime_token" "$CONFIG_BASE" "$RUNTIME_EXPLICIT" "$RUNTIME_MODE" "$RECOVERY_OPTION" \
+        || die "提供元設定が変更されたため停止しました。設定と記録を保持して確認してください"
+}
+_verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
+if [ -n "$_fresh_data_info" ] && [ "$CONFIG_ABSENT" -eq 1 ]; then
+    # Refuse known prior state before writing the hold. The clone itself is
+    # permitted; these paths indicate prior runtime credentials or data.
+    for _prior in .env chrome-profile token_cache.json backups exports mcs-exports .install-options-migration.pending; do
+        [ ! -e "$MCS_ROOT/$_prior" ] && [ ! -L "$MCS_ROOT/$_prior" ] \
+            || die "以前の設定またはデータがあるため初回導入できません。更新・復旧の手順を確認してください"
+    done
+    for _prior in "$MCS_ROOT"/.env.* "$MCS_ROOT"/.env-*; do
+        case "$_prior" in "$MCS_ROOT/.env.example"|"$MCS_ROOT/.env.template") continue ;; esac
+        [ ! -e "$_prior" ] && [ ! -L "$_prior" ] \
+            || die "以前の設定があるため初回導入できません。更新・復旧の手順を確認してください"
+    done
+    _fresh_root_info="$(_lock_info "$MCS_ROOT")" || die "初回導入の保存先を確認できません"
+    IFS=' ' read -r _fr_dev _fr_ino _fr_uid _fr_mode _fr_links <<EOF
+$_fresh_root_info
+EOF
+    IFS=' ' read -r _fd_dev _fd_ino _fd_uid _fd_mode _fd_links <<EOF
+$_fresh_data_info
+EOF
+    for _number in "$_fr_dev" "$_fr_ino" "$_fr_uid" "$_fr_mode" "$_fr_links" "$_fd_dev" "$_fd_ino" "$_fd_uid" "$_fd_mode" "$_fd_links"; do
+        case "$_number" in ''|*[!0-9]*) die "初回導入の保存先を確認できません" ;; esac
+    done
+    [ "$_fr_uid" = "$_lock_uid" ] && [ "$_fd_uid" = "$_lock_uid" ] && [ "$_fd_mode" = 700 ] \
+        || die "初回導入の保存先を確認できません"
+    (set -C; printf '{"version":1,"root":[%s,%s,%s,%s],"data":[%s,%s,%s,%s],"config":null}\n' \
+        "$_fr_dev" "$_fr_ino" "$_fr_uid" "$((0$_fr_mode))" \
+        "$_fd_dev" "$_fd_ino" "$_fd_uid" "$((0$_fd_mode))" > "$_fresh_marker") \
+        || die "初回導入の記録を保存できません。データを保持してください"
+    _fresh_authorized=1
+elif [ "$CONFIG_ABSENT" -eq 1 ]; then
+    _legacy_py="${MODE_PY:-}"
+    [ -n "$_legacy_py" ] || _legacy_py="$(command -v python3 || true)"
+    [ -n "$_legacy_py" ] || die "既存データの確認に Python が必要です。記録を保持してください"
+    "$_legacy_py" -B "$REPO/mcs/ops/install_options.py" require-uninitialized-legacy "$MCS_ROOT/config.json" \
+        "$MCS_DATA/install_options.json" - "$MCS_INSTALL_UPDATE_LOCK_FD" \
+        || die "既存データの設定状態を確認できません。記録を保持してください"
+    _legacy_uninitialized=1
+fi
 
 # Inspect the opt-out record before software, service or config changes.
 # The empty state needs no Python until the runtime has been installed.
@@ -937,7 +1077,7 @@ set --
 OPTIONS_BASE=empty
 OPTIONS_ACTION=inspect
 [ -z "${MCS_UPDATE_REINSTALL:-}" ] || OPTIONS_ACTION=inspect-update
-if { [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ] || [ -e "$MCS_DATA/install_options.json" ] || [ -L "$MCS_DATA/install_options.json" ] || [ -e "$MCS_ROOT/.install-options-migration.pending" ] || [ -L "$MCS_ROOT/.install-options-migration.pending" ]; }; then
+if { [ -e "$MCS_ROOT/config.json" ] || [ -L "$MCS_ROOT/config.json" ] || [ -e "$MCS_DATA/install_options.json" ] || [ -L "$MCS_DATA/install_options.json" ] || [ -e "$MCS_ROOT/.install-options-migration.pending" ] || [ -L "$MCS_ROOT/.install-options-migration.pending" ] || [ -e "$MCS_DATA/.provider-settings-pending.json" ] || [ -L "$MCS_DATA/.provider-settings-pending.json" ] || [ -e "$MCS_DATA/.provider-settings-authority.json" ] || [ -L "$MCS_DATA/.provider-settings-authority.json" ] || [ -e "$MCS_DATA/provider_settings" ] || [ -L "$MCS_DATA/provider_settings" ]; }; then
     OPTIONS_PY="${MODE_PY:-}"
     [ -n "$OPTIONS_PY" ] || OPTIONS_PY="$(command -v python3 || true)"
     [ -n "$OPTIONS_PY" ] || die "以前の導入設定の確認には Python が必要です。変更は行っていません"
@@ -952,7 +1092,12 @@ fi
 
 # every non-zero exit from here on is a stopped install, not a usage error
 trap 'if [ "$?" -ne 0 ]; then
-    printf "%s\n" "エラー: 導入を中断しました。失敗した段階の原因を解消し、install.sh を再実行してください" >&2
+    if [ -e "$MCS_DATA/.provider-bootstrap-fresh.json" ] || [ -L "$MCS_DATA/.provider-bootstrap-fresh.json" ] \
+            || [ -e "$MCS_DATA/.provider-settings-pending.json" ] || [ -L "$MCS_DATA/.provider-settings-pending.json" ]; then
+        printf "%s\n" "エラー: 導入は保留中です。設定と記録を保持し、担当者に確認してください。" >&2
+    else
+        printf "%s\n" "エラー: 導入を中断しました。失敗した段階の原因を確認してください。" >&2
+    fi
 fi' EXIT
 
 # ---------------------------------------------------------------- 1. brew
@@ -1239,10 +1384,20 @@ if recovery_wanted; then
     RECOVERY_PYTHON="$(recovery_runtime_ok "$MCS_PY")" \
         || die "指定した復旧用 Python の安全性を確認できません。設定は保存していません"
 fi
+# Make the private hold durable before an initial config can be published.
+if [ "$_fresh_authorized" -eq 1 ]; then
+    "$MCS_PY" -B "$REPO/mcs/ops/install_options.py" fresh-sync "$MCS_ROOT/config.json" \
+        "$MCS_DATA/install_options.json" - "$MCS_INSTALL_UPDATE_LOCK_FD" \
+        || die "初回導入の記録を確認できません。設定と記録を保持してください"
+fi
 # Create the initial local config, or persist explicitly selected settings.
-if [ "$CONFIG_ABSENT" -eq 1 ] || [ "$RUNTIME_EXPLICIT" -eq 1 ] || [ -n "$RECOVERY_OPTION" ]; then
-    MCS_INSTALL_RESUME_UNCONFIGURED="$RESUME_UNCONFIGURED" MCS_INSTALL_CONFIG_BASE="$CONFIG_BASE" "$MCS_PY" - "$REPO" "$RUNTIME_MODE" "$RECOVERY_OPTION" "$CONFIG_ABSENT" "$RUNTIME_EXPLICIT" "$RECOVERY_PYTHON" <<'PYMODE'
-import json, os, secrets, stat, sys
+_verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
+CONFIG_CREATION_PROOF=""
+if [ -n "$_split_runtime_token" ]; then
+    verify_split_runtime
+elif [ "$CONFIG_ABSENT" -eq 1 ] || [ "$RUNTIME_EXPLICIT" -eq 1 ] || [ -n "$RECOVERY_OPTION" ]; then
+    CONFIG_CREATION_PROOF=$(MCS_INSTALL_LEGACY_UNINITIALIZED="$_legacy_uninitialized" MCS_INSTALL_RESUME_UNCONFIGURED="$RESUME_UNCONFIGURED" MCS_INSTALL_CONFIG_BASE="$CONFIG_BASE" "$MCS_PY" - "$REPO" "$RUNTIME_MODE" "$RECOVERY_OPTION" "$CONFIG_ABSENT" "$RUNTIME_EXPLICIT" "$RECOVERY_PYTHON" <<'PYMODE'
+import hashlib, json, os, secrets, stat, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(sys.argv[1]) / "mcs"))
 import _mcs_path
@@ -1264,6 +1419,9 @@ if sys.argv[4] == "1":
         raise SystemExit("復旧用 Python の設定に問題があります: " + why + "。設定は保存していません")
     path = Path(CONF_PATH)
     body = (json.dumps(cfg, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    created = False
+    created_identity = None
+    winner_proof = None
     try:
         home_fd = os.open(path.parent.parent, os.O_RDONLY | os.O_DIRECTORY)
         try:
@@ -1286,7 +1444,15 @@ if sys.argv[4] == "1":
                             or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)):
                         raise ValueError
 
+                def check_legacy():
+                    if os.environ.get("MCS_INSTALL_LEGACY_UNINITIALIZED") == "1":
+                        import install_options
+                        install_options.require_uninitialized_legacy(
+                            CONF_PATH, str(Path(CONF_PATH).parent / "data" / "install_options.json"),
+                            os.environ["MCS_INSTALL_UPDATE_LOCK_FD"], allow_config=True)
+
                 check_parent()
+                check_legacy()
                 staging = ".alias-" + secrets.token_hex(16) + ".tmp"
                 fd = create_exclusive(staging, dir_fd=dir_fd)
                 try:
@@ -1294,10 +1460,14 @@ if sys.argv[4] == "1":
                         stream.write(body)
                         stream.flush()
                         os.fsync(stream.fileno())
+                        created_info = os.fstat(stream.fileno())
+                        created_identity = (created_info.st_dev, created_info.st_ino)
                     check_parent()
+                    check_legacy()
                     try:
                         os.link(staging, path.name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd,
                                 follow_symlinks=False)
+                        created = True
                         os.fsync(dir_fd)
                     except FileExistsError:
                         fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
@@ -1307,13 +1477,15 @@ if sys.argv[4] == "1":
                             if not stat.S_ISREG(opened.st_mode) or opened.st_size > CONFIG_MAX_BYTES:
                                 raise ValueError
                             raw = stream.read(CONFIG_MAX_BYTES + 1)
+                            closed = os.fstat(stream.fileno())
                         current = os.stat(path.name, dir_fd=dir_fd, follow_symlinks=False)
                         check_parent()
-                        identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_size,
+                        identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_nlink, s.st_size,
                                               s.st_mtime_ns, s.st_ctime_ns)
                         if (len(raw) > CONFIG_MAX_BYTES or not stat.S_ISREG(current.st_mode)
                                 or opened.st_uid != os.getuid() or stat.S_IMODE(opened.st_mode) != 0o600
-                                or identity(opened) != identity(current)):
+                                or opened.st_nlink != 1 or identity(opened) != identity(closed)
+                                or identity(closed) != identity(current)):
                             raise ValueError
                         winner = parse_config(raw)
                         if (not isinstance(winner, dict) or winner.get("runtime_mode", "hermes") != sys.argv[2]
@@ -1324,9 +1496,29 @@ if sys.argv[4] == "1":
                         errors, _ = validate_config(winner)
                         if any(not error.startswith("必須の設定項目がありません: ") for error in errors):
                             raise ValueError
+                        winner_proof = (identity(current), hashlib.sha256(raw).hexdigest())
                     check_parent()
+                    check_legacy()
                 finally:
                     os.unlink(staging, dir_fd=dir_fd)
+                if created or winner_proof is not None:
+                    fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dir_fd)
+                    with fdopen_owned(fd, "rb") as stream:
+                        before = os.fstat(stream.fileno())
+                        raw = stream.read(CONFIG_MAX_BYTES + 1)
+                        after = os.fstat(stream.fileno())
+                    current = os.stat(path.name, dir_fd=dir_fd, follow_symlinks=False)
+                    identity = lambda s: (s.st_dev, s.st_ino, s.st_mode, s.st_uid, s.st_nlink, s.st_size,
+                                          s.st_mtime_ns, s.st_ctime_ns)
+                    if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
+                            or stat.S_IMODE(before.st_mode) != 0o600 or before.st_nlink != 1
+                            or created and (before.st_dev, before.st_ino) != created_identity
+                            or identity(before) != identity(after) or identity(after) != identity(current)
+                            or created and raw != body
+                            or not created and (identity(current), hashlib.sha256(raw).hexdigest()) != winner_proof):
+                        raise ValueError
+                    check_parent()
+                    print(json.dumps({"identity": identity(after), "sha256": hashlib.sha256(raw).hexdigest()}))
             finally:
                 os.close(dir_fd)
         finally:
@@ -1341,6 +1533,7 @@ import config_edit
 publication_started = False
 try:
     with config_edit._edit_lock():
+        config_edit._require_legacy_settings()
         raw, base = config_edit._snapshot()
         current = os.stat(CONF_PATH, follow_symlinks=False)
         token = ":".join(str(n) for n in base[0]) + ":" + base[1].hex()
@@ -1362,6 +1555,7 @@ try:
             raise ValueError("config_too_large")
         def write_checked(handle):
             handle.write(body)
+            config_edit._require_legacy_settings()
             if config_edit._snapshot()[1] != base:
                 raise config_edit.ConfigConflict("config_changed")
         publication_started = True
@@ -1373,8 +1567,17 @@ except (OSError, ValueError, TypeError, RecursionError):
         raise SystemExit("設定の保存結果を確認できません。現在の設定を確認してから再実行してください") from None
     raise SystemExit("設定が変更されたか読み取れません。保存せず中止しました。設定を確認してから再実行してください") from None
 PYMODE
+) || die "初期設定を確認できません。既存の設定と記録を保持してください"
 fi
-
+if [ "$_fresh_authorized" -eq 1 ]; then
+    _verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
+    [ -n "$CONFIG_CREATION_PROOF" ] \
+        || die "初回導入の設定作成を確認できません。設定と記録を保持し、担当者に確認してください"
+    MCS_FRESH_RUNTIME_MODE="$RUNTIME_MODE" MCS_FRESH_HERMES_HOME="$HERMES_HOME" MCS_FRESH_HERMES_EXE="$VENV_HERMES" \
+        "$MCS_PY" "$REPO/mcs/ops/install_options.py" bootstrap-fresh "$MCS_ROOT/config.json" \
+        "$MCS_DATA/install_options.json" "$CONFIG_CREATION_PROOF" "$_fresh_data_info" "$MCS_INSTALL_UPDATE_LOCK_FD" \
+        || die "初回導入の安全性を確認できません。設定と保留記録を保持し、担当者に確認してください"
+fi
 # -------------------------------------------------------- 3. plugin
 say "【3/6】Slack／Discord の操作カード用プラグイン"
 if [ "$SKIP_PLUGIN" -eq 1 ]; then
@@ -1520,10 +1723,12 @@ else
 fi
 
 # ------------------------------------------- 5. launchd + hermes cron
+_verify_root_alias || die "設定フォルダーのリンクが変更されました。記録を保持してください"
+verify_split_runtime
 say "【5/6】定期収集などの常駐サービス（${RUNTIME_MODE}）"
 # the agents stage 5/6 load log to / watch these — they must exist first
 # (new ones are 0700 via umask; existing modes are kept)
-mkdir -p "$HOME/.mcs" "$MCS_DATA" "$MCS_DATA/cmd" "$MCS_DATA/cmd_int"
+mkdir -p "$MCS_ROOT" "$MCS_DATA" "$MCS_DATA/cmd" "$MCS_DATA/cmd_int"
 if [ "$SKIP_SERVICES" -eq 1 ]; then
     skip "--no-services のため省略します。後で次のコマンドで登録してください:"
     skip "  $(shell_quote "$MCS_PY") $(shell_quote "$SETUP") services"

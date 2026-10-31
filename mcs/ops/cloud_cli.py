@@ -32,9 +32,9 @@ def pending_key_presence(root=None):
 
 
 def _settings(cfg, root=None):
-    key = bool(policy.selected_key(root, cfg))
     # an unreadable config arrives as {}: fail closed like the runtime, never auto-enable
-    settings, errors = policy.resolve_settings(cfg, root) if cfg else policy.cloud_config({})
+    settings, errors = policy.resolve_settings(cfg if cfg else {"cloud_llm": {"mode": "off"}}, root)
+    key = bool(policy.provider_key(settings["provider"], root))
     return settings, errors, key
 
 
@@ -598,14 +598,17 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
 
 def apply_control_tx(db, req, now):
     """Write global control/circuit and its receipt in the caller's existing transaction."""
+    try:
+        cfg = mcs_util._load_config(str(Path(mcs_util.HOME) / "config.json"))
+    except mcs_util.ProviderSettingsUnreadable:
+        return "cloud_config_invalid", {}
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        if req["cmd"] == "ops.cloud_resume":
+            return "cloud_config_invalid", {}
+        cfg = None
     if req["cmd"] == "ops.cloud_resume":
         from mcs_config import validate_config
-        from safe_io import read_regular_nofollow
         try:
-            raw = read_regular_nofollow(Path(mcs_util.HOME) / "config.json", mcs_util.CONFIG_MAX_BYTES, ValueError)
-            if len(raw) > mcs_util.CONFIG_MAX_BYTES:
-                raise ValueError
-            cfg = mcs_util.parse_config(raw)
             if not isinstance(cfg, dict):
                 raise ValueError
             errors, _ = validate_config(cfg)
@@ -633,8 +636,13 @@ def apply_control_tx(db, req, now):
 
 def command(args):
     action = args.cloud_action
-    cfg = mcs_util.load_config()
     try:
+        try:
+            cfg = mcs_util._load_config(str(Path(mcs_util.HOME) / "config.json")) or {}
+        except mcs_util.ProviderSettingsUnreadable:
+            raise
+        except (OSError, ValueError, TypeError, RecursionError):
+            cfg = {}
         if action in ("stop", "resume"):
             from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
             expected_code = code_stamp()
@@ -691,12 +699,27 @@ def command(args):
         print(json.dumps(result, ensure_ascii=False, indent=2))
         print("件数・文字数からの試算です。Unicode文字数は実トークン数ではなく、修復・再試行・追加文脈の量は確定していません。")
         return 0
-    except (OSError, ValueError, sqlite3.Error, policy.AnthropicError):
+    except (OSError, ValueError, sqlite3.Error, policy.AnthropicError, mcs_util.ProviderSettingsUnreadable):
         print("クラウド処理: 設定または保存記録を確認できません。本文や認証情報は表示していません")
         return 1
 
 
 _BUDGET_KEYS = {"daily_usd": "daily_cost_limit_usd", "monthly_usd": "monthly_cost_limit_usd"}
+
+
+def _settings_for_edit():
+    import config_edit
+
+    path = str(mcs_util.CONF_PATH)
+    if mcs_util._provider_config_active(path):
+        return mcs_util._load_config(path)
+    raw, before = config_edit._snapshot()
+    cfg = mcs_util._load_config(path)
+    if (str(mcs_util.CONF_PATH) != path or mcs_util._provider_config_active(path)
+            or config_edit._snapshot()[1] != before or cfg != config_edit._parse(raw)
+            or str(mcs_util.CONF_PATH) != path):
+        raise config_edit.ConfigConflict("config_changed")
+    return cfg
 
 
 def _budget_value(text):
@@ -760,13 +783,15 @@ def budget_command(args):
         return 1
     import config_edit
     try:
+        cfg = _settings_for_edit()
+        if not isinstance(cfg, dict):
+            raise ValueError("config_unreadable")
         if changes:
             cfg, cloud_errors = config_edit.apply(changes, defaults)
             if cloud_errors:
                 print("設定に誤りがあるため予算を保存していません。mcs_setup.py check で確認してください")
                 return 1
         else:
-            cfg = config_edit.read_strict()
             from mcs_config import validate_config
             if validate_config(cfg)[0]:
                 print("設定に誤りがあるため予算を表示していません。mcs_setup.py check で確認してください")
@@ -777,7 +802,7 @@ def budget_command(args):
     except FileNotFoundError:
         print("予算: 設定ファイルがないため変更していません（先に mcs_setup.py init で設定してください）")
         return 1
-    except (OSError, ValueError, RecursionError):
+    except (OSError, ValueError, RecursionError, mcs_util.ProviderSettingsUnreadable):
         print("予算: 設定ファイルを読み取れないため変更していません。mcs_setup.py check で確認してください")
         return 1
     settings, errors = policy.cloud_config(cfg)
@@ -805,7 +830,9 @@ def providers_command(args):
         if order is not None:
             changes["cloud_llm.provider_order"] = order.split(",")
             changes["cloud_llm.model"] = None
-        cfg = config_edit.read_strict()
+        cfg = _settings_for_edit()
+        if not isinstance(cfg, dict):
+            raise ValueError("config_unreadable")
         settings, errors = policy.cloud_config(cfg)
         if errors:
             raise ValueError
@@ -829,7 +856,7 @@ def providers_command(args):
         settings, errors = policy.resolve_settings(cfg)
         if errors:
             raise ValueError
-    except (OSError, ValueError, RecursionError):
+    except (OSError, ValueError, RecursionError, mcs_util.ProviderSettingsUnreadable):
         print("AI利用先を保存できません。利用先・優先順位・API別の日額/月額と合計上限を確認してください。")
         return 1
     print(json.dumps({"saved": bool(changes), "provider": settings["provider"], "model": settings["model"],

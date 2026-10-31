@@ -310,3 +310,114 @@ def test_budget_lowered_while_reserving_keeps_reservation_without_http(home, mon
             _evaluate(client)
         assert error.value.detail == "semantic_daily_budget_changed"
     assert _used(home) == 1
+
+
+def _synthetic_split_budget(root, budget):
+    import hashlib
+    import provider_settings
+
+    data = root / 'data'
+    data.mkdir(mode=0o700, exist_ok=True)
+    directory = data / 'provider_settings'
+    directory.mkdir(mode=0o700)
+    common = {'mcs_login_id': 'synthetic-login', 'notify_target': 'synthetic-target',
+              'semantic': {'mode': 'off'}, 'cloud_llm': {'mode': 'off', 'project_ids': []}}
+    providers = {'anthropic': {}, 'openai': {}, 'jev': {'daily_request_budget': budget}}
+    def write(path, value):
+        raw = json.dumps(value, ensure_ascii=False).encode('utf-8')
+        path.write_bytes(raw)
+        path.chmod(0o600)
+        return hashlib.sha256(raw).hexdigest()
+    write(root / 'config.json', common)
+    hashes = {name: write(directory / (name + '.json'), providers[name])
+              for name in provider_settings.PROVIDERS}
+    write(data / '.provider-settings-authority.json', {
+        'version': 2, 'state': 'committed', 'files': hashes,
+        'common_policy_sha256': provider_settings.common_policy_digest(common),
+    })
+
+
+@pytest.mark.parametrize('damage', ['missing_config', 'pending', 'pending_missing', 'provider', 'authority'])
+def test_manual_jev_split_missing_pending_or_corrupt_never_sends(home, monkeypatch, damage):
+    import cloud_policy
+
+    _synthetic_split_budget(home, 2)
+    monkeypatch.setattr(cloud_policy, 'provider_key', lambda *_args, **_kwargs: None)
+    config, data = home / 'config.json', home / 'data'
+    if damage in ('missing_config', 'pending_missing'):
+        config.unlink()
+    if damage in ('pending', 'pending_missing'):
+        pending = data / '.provider-settings-pending.json'
+        pending.write_text('{}')
+        pending.chmod(0o600)
+    elif damage == 'provider':
+        (data / 'provider_settings' / 'jev.json').write_text('{broken')
+    elif damage == 'authority':
+        (data / '.provider-settings-authority.json').write_text('{}')
+    with pytest.raises(jev.JevError, match='budget_exceeded'):
+        with jev.live_client('synthetic', operation='jev_value', root=str(home),
+                             post_fn=lambda *_args: pytest.fail('unverified split sent HTTP')):
+            pytest.fail('unverified split entered live scope')
+    assert _used(home) == 0
+
+
+def test_split_read_failure_does_not_fall_back_if_marker_disappears(home, monkeypatch):
+    import provider_settings
+
+    calls = []
+    def active(_path):
+        calls.append(True)
+        return len(calls) == 1
+    def pending(*_args, **_kwargs):
+        raise ValueError('provider_settings_pending')
+    monkeypatch.setattr(mcs_util, '_provider_config_active', active)
+    monkeypatch.setattr(provider_settings, 'read', pending)
+    with pytest.raises(jev.JevError, match='budget_exceeded') as error:
+        with jev.live_client('synthetic', operation='jev_value', root=str(home),
+                             post_fn=lambda *_args: pytest.fail('failed split read sent HTTP')):
+            pytest.fail('failed split read entered live scope')
+    assert error.value.detail == 'semantic_daily_budget_invalid'
+    assert calls and _used(home) == 0
+
+
+def test_manual_jev_reads_separate_root_split_budget(home, tmp_path, monkeypatch):
+    import cloud_policy
+
+    other = tmp_path / 'other-install'
+    other.mkdir(mode=0o700)
+    _synthetic_split_budget(other, 0)
+    Ledger(str(other / 'data' / 'ledger.db')).close()
+    monkeypatch.setattr(cloud_policy, 'provider_key', lambda *_args, **_kwargs: None)
+    assert jev._live_request_budget(other) == 0
+    with jev.live_client('synthetic', operation='jev_value', root=str(other),
+                         post_fn=lambda *_args: pytest.fail('zero budget sent HTTP')) as client:
+        with pytest.raises(jev.JevError, match='budget_exceeded'):
+            _evaluate(client)
+    assert _used(other) == 0 and _used(home) == 0
+
+
+def test_manual_jev_split_budget_lowered_during_reservation_blocks_post(home, monkeypatch):
+    import cloud_policy
+    import provider_settings
+
+    _synthetic_split_budget(home, 2)
+    monkeypatch.setattr(cloud_policy, 'provider_key', lambda *_args, **_kwargs: None)
+    original = runtime.manual_usage_reserver
+    owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+    def factory(*args, **kwargs):
+        reserve = original(*args, **kwargs)
+        def lowered(body, timeout):
+            reservation = reserve(body, timeout)
+            state = provider_settings.read(home, model_owners=owners, jev_model=jev.JEV_MODEL)
+            state['providers']['jev']['daily_request_budget'] = 0
+            provider_settings.commit(home, state['snapshot'], state['common'], state['providers'],
+                                     selected_provider='anthropic', model_owners=owners, jev_model=jev.JEV_MODEL)
+            return reservation
+        return lowered
+    monkeypatch.setattr(runtime, 'manual_usage_reserver', factory)
+    with jev.live_client('synthetic', operation='jev_value', root=str(home),
+                         post_fn=lambda *_args: pytest.fail('lower cap sent HTTP')) as client:
+        with pytest.raises(jev.JevError, match='budget_exceeded') as error:
+            _evaluate(client)
+        assert error.value.detail == 'semantic_daily_budget_changed'
+    assert _used(home) == 1

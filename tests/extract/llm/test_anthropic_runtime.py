@@ -11,10 +11,14 @@ import pytest
 
 from anthropic_client import AnthropicClient
 import cloud_policy
+from cloud_policy import record_disposition_tx as real_record_disposition_tx
+from cloud_policy import record_result as real_record_result
+from cloud_policy import usage_reserver as real_usage_reserver
 import extract_llm as worker
 import inference_dependency_loss as dependency_loss
 import inference_version as inference
 import mcs_queries
+import mcs_util
 from extract_testkit import _hash, _ledger, _message
 
 
@@ -921,6 +925,141 @@ def test_first_scope_rejection_after_http_audits_once_and_keeps_local_fallback(r
     assert "backend" not in meta and "config_generation" not in meta
 
 
+def _use_real_cloud_accounting(monkeypatch):
+    monkeypatch.setattr(cloud_policy, "usage_reserver", real_usage_reserver)
+    monkeypatch.setattr(cloud_policy, "record_result", real_record_result)
+    monkeypatch.setattr(cloud_policy, "record_disposition_tx", real_record_disposition_tx)
+    monkeypatch.setattr(cloud_policy, "pricing_valid", lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker.anthropic_client, "AnthropicClient", AnthropicClient)
+
+
+@pytest.mark.parametrize("error_type", [mcs_util.ProviderSettingsUnreadable, OSError, ValueError])
+def test_paid_response_is_settled_when_guard_cannot_read_settings(routed, monkeypatch, error_type):
+    led, cfg, _, _, _ = routed
+    _use_real_cloud_accounting(monkeypatch)
+    unavailable = [False]
+    posts = []
+
+    def load():
+        if unavailable[0]:
+            raise error_type("synthetic")
+        return cfg
+
+    def request(self, method, body, timeout, **kwargs):
+        posts.append(1)
+        unavailable[0] = True
+        return 200, {}, json.dumps({"model": worker.anthropic_client.MODEL, "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": '{"symptoms":[]}'}],
+            "usage": {"input_tokens": 10, "output_tokens": 5}}).encode()
+
+    monkeypatch.setattr(worker, "load_config", load)
+    monkeypatch.setattr(AnthropicClient, "request", request)
+    deadline = time.monotonic() + 180
+    def provider():
+        return worker._CloudProvider(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
+                                     deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
+
+    first = provider()
+    with pytest.raises(worker.CloudFallback, match="cloud_unit_changed"):
+        first("synthetic", deadline=deadline, max_tokens=100)
+    reserves, results = led.artifacts("cloud_usage_reserve"), led.artifacts("cloud_usage_result")
+    assert len(posts) == len(reserves) == len(results) == 1
+    reservation, result = json.loads(reserves[0]["meta"]), json.loads(results[0]["meta"])
+    assert result["reservation_id"] == reservation["reservation_id"]
+    assert result["http_class"] == "http_200" and result["error_kind"] is None
+    assert result["usage"]["input_tokens"] == 10 and result["usage"]["output_tokens"] == 5
+    assert result["disposition"] == "discarded_scope" and not led.db.in_transaction
+    unavailable[0] = False
+    with pytest.raises(worker.CloudFallback):
+        first("synthetic", deadline=deadline, max_tokens=100)
+    with pytest.raises(worker.CloudFallback):
+        provider()("synthetic", deadline=deadline, max_tokens=100)
+    assert len(posts) == len(led.artifacts("cloud_usage_reserve")) == len(led.artifacts("cloud_usage_result")) == 1
+
+
+@pytest.mark.parametrize("fails_on_read", [1, 2, 3, 4])
+@pytest.mark.parametrize("error_type", [mcs_util.ProviderSettingsUnreadable, OSError, ValueError])
+def test_unreadable_guard_never_posts_and_settles_a_reserved_unsent_attempt(
+        routed, monkeypatch, fails_on_read, error_type):
+    led, cfg, _, _, _ = routed
+    _use_real_cloud_accounting(monkeypatch)
+    reads = [0]
+    def load():
+        reads[0] += 1
+        if reads[0] >= fails_on_read:
+            raise error_type("synthetic")
+        return cfg
+    monkeypatch.setattr(worker, "load_config", load)
+    monkeypatch.setattr(AnthropicClient, "request", lambda *args, **kwargs: pytest.fail("unexpected post"))
+    deadline = time.monotonic() + 180
+    provider = worker._CloudProvider(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
+                                     deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
+    with pytest.raises(worker.CloudFallback, match="cloud_unit_changed"):
+        provider("synthetic", deadline=deadline, max_tokens=100)
+    reserves, results = led.artifacts("cloud_usage_reserve"), led.artifacts("cloud_usage_result")
+    assert len(reserves) == len(results) == (1 if fails_on_read == 4 else 0)
+    if results:
+        result = json.loads(results[0]["meta"])
+        assert result["http_class"] == "not_sent" and result["usage"] is None
+        assert result["reservation_id"] == json.loads(reserves[0]["meta"])["reservation_id"]
+    assert not provider.possibly_sent and not led.db.in_transaction
+
+
+def test_transient_read_error_after_reservation_stays_unsent_and_discarded(routed, monkeypatch):
+    led, cfg, _, _, _ = routed
+    _use_real_cloud_accounting(monkeypatch)
+    reads = [0]
+    def load():
+        reads[0] += 1
+        if reads[0] == 4:
+            raise mcs_util.ProviderSettingsUnreadable("synthetic")
+        return cfg
+    monkeypatch.setattr(worker, "load_config", load)
+    monkeypatch.setattr(AnthropicClient, "request", lambda *args, **kwargs: pytest.fail("unexpected post"))
+    deadline = time.monotonic() + 180
+    provider = worker._CloudProvider(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
+                                     deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
+    with pytest.raises(worker.CloudFallback, match="cloud_unit_changed"):
+        provider("synthetic", deadline=deadline, max_tokens=100)
+    result, = led.artifacts("cloud_usage_result")
+    meta = json.loads(result["meta"])
+    assert meta["http_class"] == "not_sent" and meta["usage"] is None
+    disposition, = led.artifacts("cloud_usage_disposition")
+    assert json.loads(disposition["meta"])["disposition"] == "discarded_scope"
+    assert not provider.possibly_sent and not led.db.in_transaction
+
+
+def test_capacity_read_failure_discards_previously_settled_response(routed, monkeypatch):
+    led, cfg, _, _, _ = routed
+    _use_real_cloud_accounting(monkeypatch)
+    unavailable, posts = [False], []
+    def load():
+        if unavailable[0]:
+            raise mcs_util.ProviderSettingsUnreadable("synthetic")
+        return cfg
+    def request(self, method, body, timeout, **kwargs):
+        posts.append(1)
+        return 200, {}, json.dumps({"model": worker.anthropic_client.MODEL, "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": '{"symptoms":[]}'}],
+            "usage": {"input_tokens": 10, "output_tokens": 5}}).encode()
+    monkeypatch.setattr(worker, "load_config", load)
+    monkeypatch.setattr(AnthropicClient, "request", request)
+    deadline = time.monotonic() + 180
+    provider = worker._CloudProvider(led, cfg, route="reextract", project_id=1, unit_key="synthetic",
+                                     deadline=deadline, current=lambda: True, dispatch=lambda fn, **kwargs: fn())
+    provider("synthetic", deadline=deadline, max_tokens=100)
+    unavailable[0] = True
+    with pytest.raises(worker.CloudFallback, match="cloud_unit_changed"):
+        provider("synthetic", deadline=deadline, max_tokens=100)
+    result, = led.artifacts("cloud_usage_result")
+    meta = json.loads(result["meta"])
+    assert len(posts) == 1 and meta["http_class"] == "http_200"
+    assert meta["usage"]["input_tokens"] == 10 and meta["usage"]["output_tokens"] == 5
+    disposition, = led.artifacts("cloud_usage_disposition")
+    assert json.loads(disposition["meta"])["disposition"] == "discarded_scope"
+    assert not led.db.in_transaction
+
+
 def test_http_deadline_reserves_existing_commit_margin_without_changing_unit_deadline(routed, monkeypatch):
     led, cfg, _, reserved, results = routed
     unit_deadline = time.monotonic() + 180
@@ -1193,3 +1332,132 @@ def test_run_window_end_stops_the_next_post_but_keeps_an_arrived_result(routed, 
     cfg["cloud_llm"]["until"] = "2999-01-02T00:00:00+00:00"
     with pytest.raises(worker.CloudFallback):
         provider.guard()                               # before the period starts nothing is sent
+
+
+@pytest.mark.parametrize("updated_carry", ["omitted", "returned"])
+@pytest.mark.parametrize("release_fails", [False, True])
+def test_lane_two_updated_exits_without_reusing_stale_carry(tmp_path, monkeypatch, updated_carry, release_fails):
+    ledger = _ledger(tmp_path)
+    close = ledger.close
+    events, sleeps = [], []
+    ledger.artifact_add("synthetic_paid_result", "{}", meta={"status": "received"})
+    saved = [dict(row) for row in ledger.artifacts("synthetic_paid_result")]
+    pending = {"project_id": 1, "_cloud_discard": lambda: events.append("discard")}
+    lease = time.time() + 600
+    def no_commit(**kwargs):
+        pytest.fail("stale worker must not commit carried result")
+    carried = [(pending, lease, no_commit)]
+
+    class Pool:
+        def __init__(self, root):
+            assert root == str(tmp_path)
+        def sync(self, cfg, *, ledger):
+            events.append("pool_sync")
+        def close(self):
+            events.append("pool_closed")
+
+    @contextmanager
+    def locked(*args, **kwargs):
+        yield True
+
+    def release(db, row, token):
+        assert db is ledger and row is pending and token == lease
+        events.append("release")
+        if release_fails:
+            raise RuntimeError("synthetic release failure")
+
+    calls = []
+    def run(db, **kwargs):
+        calls.append(list(kwargs["carry"]))
+        if len(calls) == 1:
+            return {"done": 1, "failed": 0, "left": 1, "carry": list(carried)}
+        assert len(calls) == 2 and calls[-1] == carried
+        result = {"done": 0, "failed": 0, "left": None, "updated": True}
+        if updated_carry == "returned":
+            result["carry"] = list(carried)
+        return result
+
+    monkeypatch.setattr(worker, "HOME", str(tmp_path))
+    monkeypatch.setattr(worker, "Ledger", lambda *args: ledger)
+    monkeypatch.setattr(ledger, "close", lambda: events.append("ledger_closed"))
+    monkeypatch.setattr(worker.cloud_backlog, "Pool", Pool)
+    monkeypatch.setattr(worker, "load_config", lambda: {})
+    monkeypatch.setattr(worker, "_cloud_settings", lambda cfg: {"mode": "off", "max_concurrency": 1})
+    monkeypatch.setattr(worker, "legacy_admissions", lambda *args: None)
+    monkeypatch.setattr(worker.extract_validation, "vital_threshold_policy", lambda cfg: None)
+    monkeypatch.setattr(worker.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(worker, "_write_lock", locked)
+    monkeypatch.setattr(worker, "_release", release)
+    monkeypatch.setattr(worker, "run_pending", run)
+    monkeypatch.setattr(worker, "_background_semantic", lambda *args: events.append("semantic") or {"done": 0})
+    monkeypatch.setattr(worker.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setenv("MCS_LLM_SLOT", "synthetic")
+    monkeypatch.setenv(worker.local_llm.TURN_LOCK_ENV, "synthetic")
+    monkeypatch.setattr(worker.sys, "argv", ["extract_llm", "--all", "--lane", "2", "--semantic"])
+    try:
+        assert worker.main() == 0
+        assert len(calls) == 2 and sleeps == [1]
+        assert events.count("semantic") == 1
+        assert events.count("discard") == events.count("release") == 1
+        assert events[-2:] == ["pool_closed", "ledger_closed"]
+        assert [dict(row) for row in ledger.artifacts("synthetic_paid_result")] == saved
+    finally:
+        close()
+
+
+def test_paid_carry_survives_lowered_cap_and_blocks_next_send(routed, monkeypatch, tmp_path):
+    led, cfg, _, _, _ = routed
+    _use_real_cloud_accounting(monkeypatch)
+    monkeypatch.setattr(worker, "HOME", str(tmp_path))
+    cfg["cloud_llm"]["daily_request_budget"] = 5
+    old(led)
+    posts = []
+    blocked = [False]
+
+    def request(self, method, body, timeout, **kwargs):
+        posts.append(1)
+        return 200, {}, json.dumps({
+            "model": worker.anthropic_client.MODEL, "stop_reason": "end_turn",
+            "content": [{"type": "text", "text": '{"symptoms":[]}'}],
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }).encode()
+
+    monkeypatch.setattr(AnthropicClient, "request", request)
+    def acquire():
+        return None if blocked[0] else os.open(tmp_path / "writer", os.O_CREAT | os.O_RDWR, 0o600)
+    original = worker.llm_extract
+    def extract(*args, **kwargs):
+        value = original(*args, **kwargs)
+        blocked[0] = True
+        return value
+    monkeypatch.setattr(worker, "acquire_run_lock", acquire)
+    monkeypatch.setattr(worker, "llm_extract", extract)
+    monkeypatch.setattr(worker.time, "sleep", lambda seconds: None)
+    report = worker.run_pending(led, budget_s=180, per_write_lock=True, write_wait_s=1, carry=[])
+    carry = report["carry"]
+    reserves, results = led.artifacts("cloud_usage_reserve"), led.artifacts("cloud_usage_result")
+    assert len(carry) == len(posts) == len(reserves) == len(results) == 1
+    first_reservation = json.loads(reserves[0]["meta"])
+    first_result = json.loads(results[0]["meta"])
+    assert first_result["reservation_id"] == first_reservation["reservation_id"]
+    assert first_result["http_class"] == "http_200" and first_result["error_kind"] is None
+    assert first_result["usage"]["input_tokens"] == 10 and first_result["usage"]["output_tokens"] == 5
+
+    # The cap is valid and already reached by the first paid request.
+    cfg["cloud_llm"]["daily_request_budget"] = 1
+    assert not cloud_policy.cloud_config(cfg)[1]
+    blocked[0] = False
+    worker._settle_carry(led, carry)
+    assert not carry and len(_current_artifacts(led)) == 1
+    assert json.loads(_current_artifacts(led)[0]["meta"])["backend"] == "anthropic"
+    assert not led.artifacts("cloud_usage_disposition")
+    assert json.loads(led.artifacts("cloud_usage_result")[0]["meta"]) == first_result
+
+    deadline = time.monotonic() + 180
+    next_unit = worker._CloudProvider(led, cfg, route="reextract", project_id=1,
+        message_id=2, unit_key="synthetic-next", deadline=deadline, current=lambda: True,
+        dispatch=lambda fn, **kwargs: fn())
+    with pytest.raises(worker.CloudFallback):
+        next_unit("different synthetic request", deadline=deadline, max_tokens=100)
+    assert len(posts) == len(led.artifacts("cloud_usage_reserve")) == len(led.artifacts("cloud_usage_result")) == 1
+    assert not led.db.in_transaction
