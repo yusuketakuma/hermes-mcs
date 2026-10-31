@@ -4,9 +4,11 @@ import os
 import sqlite3
 import subprocess
 from time import monotonic
+from types import SimpleNamespace
 
 import pytest
 
+from ledger import Ledger
 import snapshots
 
 
@@ -26,6 +28,21 @@ def test_success_leaves_no_failure(db, tmp_path, monkeypatch):
     _child(monkeypatch, "import sys; sys.exit(0)")
     assert snapshots.publish_snapshot(db, str(tmp_path / "out"))
     assert snapshots.last_failure() == {}
+
+
+def test_synthetic_snapshot_child_uses_each_frozen_clock(tmp_path, monkeypatch, snapshot_child_clock):
+    source = str(tmp_path / "synthetic.db")
+    ledger = Ledger(source)
+    ledger.ensure_patient(1)
+    ledger.close()
+    clock = [1790000000.25]
+    monkeypatch.setattr(snapshots, "time", SimpleNamespace(time=lambda: clock[0]))
+    for stamp in (1790000000.25, 1790000060.75):
+        clock[0] = stamp
+        path = snapshots.publish_snapshot(source, str(tmp_path / "out"))
+        assert path is not None
+        with sqlite3.connect(path) as conn:
+            assert conn.execute("SELECT generated_at FROM snapshot_meta").fetchone()[0] == stamp
 
 
 def test_deadline_before_copy(db, tmp_path):

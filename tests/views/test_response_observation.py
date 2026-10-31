@@ -32,7 +32,7 @@ def _post(store, mid=1, sender=SELF, parent=None, at=NOW - 100, **metadata):
 
 
 @pytest.fixture
-def store(tmp_path, monkeypatch):
+def store(tmp_path, monkeypatch, snapshot_child_clock):
     monkeypatch.setattr("ledger.time.time", lambda: NOW)
     ledger = Ledger(str(tmp_path / "synthetic.db"))
     ledger.ensure_patient(1)

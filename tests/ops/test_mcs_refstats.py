@@ -469,7 +469,7 @@ def test_default_paths_follow_mcs_root(tmp_path):
 GEN = 1790000000.6
 
 
-def test_capture_pins_integer_as_of_so_verify_passes(tmp_path, monkeypatch, capsys):
+def test_capture_pins_integer_as_of_so_verify_passes(tmp_path, monkeypatch, capsys, snapshot_child_clock):
     # post exactly on the 7d lower bound at int(GEN): excluded at the
     # float as_of, included at the replayed whole-second as_of
     ts = int(GEN) - 7 * 86400

@@ -15,7 +15,7 @@ AGE = 300
 
 
 @pytest.fixture
-def store(tmp_path, monkeypatch):
+def store(tmp_path, monkeypatch, snapshot_child_clock):
     clock = [NOW]
     monkeypatch.setattr("ledger.time.time", lambda: clock[0])
     ledger = Ledger(str(tmp_path / "synthetic.db"))
