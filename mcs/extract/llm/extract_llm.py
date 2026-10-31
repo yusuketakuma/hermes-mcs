@@ -71,6 +71,7 @@ import llm_availability  # noqa: E402
 import self_identity  # noqa: E402
 import safe_io  # noqa: E402
 import bounded_http
+import cloud_client
 import anthropic_client
 import openai_client
 import cloud_policy
@@ -135,6 +136,7 @@ PATIENT_CONTEXT_VERSION = 4
 _LOADED_SOURCE_DIGESTS = {
     name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
     for name, path in (("extract_llm", __file__),
+                       ("cloud_client", cloud_client.__file__),
                        ("anthropic_client", anthropic_client.__file__),
                        ("openai_client", openai_client.__file__),
                        ("cloud_policy", cloud_policy.__file__),
@@ -2342,7 +2344,7 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
         if isinstance(r, dict) and r.get("_cloud_mode") == "dry_run":
             cloud_policy.dryrun_tx(ledger, route="reextract", project_id=r["project_id"],
                 unit_key=str(r["message_id"]), input_chars=len(r["body_text"] or ""),
-                max_tokens=MAX_TOKENS)
+                max_tokens=MAX_TOKENS, model=(r.get("_cloud_settings") or _cloud_settings(load_config()))["model"])
         if isinstance(r, dict) and r.get("_cloud_mode") == "shadow":
             # the comparison unit commits (pending) with the local result or not at all
             r["_shadow_unit"] = os.urandom(16).hex()
@@ -4457,7 +4459,7 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             blocked += 1
             continue
         r["_cloud_mode"] = mode
-        if mode in ("on", "shadow"):
+        if mode in ("on", "shadow", "dry_run"):
             r["_cloud_settings"] = _cloud_settings(cfg)
         if mode == "on":
             r["_provider_contract"] = _cloud_contract(cfg)
@@ -5779,8 +5781,7 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
     return settled, count, pids
 
 
-_CLOUD_OPERATING_LIMITS = ("daily_request_budget", "daily_cost_limit_usd", "monthly_cost_limit_usd",
-                           "max_concurrency", "usd_jpy", "window_budget_usd", "window_start", "until")
+_CLOUD_OPERATING_LIMITS = semantic_runtime.CLOUD_OPERATING_LIMITS
 
 
 def _same_but_operating_limits(current, cfg):

@@ -292,3 +292,140 @@ def test_legacy_thread_root_reservation_blocks_same_reply_envelope(tmp_path, mon
                  'semantic_generation': 'generation', 'semantic_phase': 'facts'}
         with pytest.raises(anthropic_client.AnthropicError):
             _reserve(ledger, 'synthetic prompt', unit='newer-job', owner=owner, message_id=2)
+
+
+@pytest.mark.parametrize('diagnostic', [
+    'rate_limit_exceeded', 'slow_down', 'rate_limit_error', 'missing_code', 'unknown_code',
+    'unknown_type', 'conflicting_fields', 'invalid_field_type', 'body_not_bytes',
+    'body_too_large', 'body_invalid_utf8', 'body_invalid_json', 'body_duplicate_keys',
+    'body_nonfinite', 'body_too_deep', 'body_not_object', 'error_missing', 'error_not_object',
+])
+def test_openai_rate_diagnostic_keeps_reserved_maximum_and_existing_retry(tmp_path, monkeypatch, diagnostic):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt', 'openai')
+        result = {**_result(reservation, 'http_429', 'rate_limited'),
+                  'openai_429_diagnostic': diagnostic, 'body': 'synthetic-secret-canary'}
+        cloud_policy.record_result(ledger, reservation, result)
+        stored = ledger.artifacts('cloud_usage_result')[0]
+        meta = json.loads(stored['meta'])
+        assert meta['openai_429_diagnostic'] == diagnostic
+        assert meta['cost_usd'] == reservation['max_cost_usd']
+        assert 'synthetic-secret-canary' not in json.dumps(dict(stored))
+        report = cloud_policy.usage_report(ledger)
+        assert report['unresolved_requests'] == 1 and not report['pricing_unverified']
+        _reserve(ledger, 'synthetic prompt', 'openai')
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 2
+
+
+@pytest.mark.parametrize('changes,remove', [
+    ({'openai_429_diagnostic': 'synthetic-secret-canary'}, ()),
+    ({'openai_429_diagnostic': ['slow_down']}, ()),
+    ({'openai_429_diagnostic': None}, ()),
+    ({'http_class': 'http_500'}, ()),
+    ({'error_kind': 'timeout'}, ()),
+    ({'model': anthropic_client.MODEL}, ()),
+    ({'usage': {'input_tokens': 1}}, ()),
+    ({}, ('usage',)),
+    ({'openai_error_code': 'insufficient_quota'}, ()),
+])
+def test_invalid_openai_rate_diagnostic_is_not_saved(tmp_path, monkeypatch, changes, remove):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt', 'openai')
+        result = {**_result(reservation, 'http_429', 'rate_limited'), 'openai_429_diagnostic': 'slow_down'}
+        result.update(changes)
+        for key in remove:
+            result.pop(key)
+        with pytest.raises(cloud_policy.AnthropicError):
+            cloud_policy.record_result(ledger, reservation, result)
+        assert not ledger.artifacts('cloud_usage_result')
+
+
+def test_anthropic_result_cannot_carry_openai_rate_diagnostic(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt', 'anthropic')
+        result = {**_result(reservation, 'http_429', 'rate_limited'), 'openai_429_diagnostic': 'slow_down'}
+        with pytest.raises(cloud_policy.AnthropicError):
+            cloud_policy.record_result(ledger, reservation, result)
+        assert not ledger.artifacts('cloud_usage_result')
+
+
+@pytest.mark.parametrize('bad', ['synthetic-secret-canary', None, ['slow_down']])
+def test_corrupt_stored_openai_rate_diagnostic_cannot_authorize_retry(tmp_path, monkeypatch, bad):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt', 'openai')
+        cloud_policy.record_result(ledger, reservation, {
+            **_result(reservation, 'http_429', 'rate_limited'), 'openai_429_diagnostic': 'slow_down'})
+        row = ledger.db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind='cloud_usage_result'").fetchone()
+        meta = json.loads(row['meta'])
+        meta['openai_429_diagnostic'] = bad
+        with ledger.db:
+            ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), row['artifact_id']))
+        assert cloud_policy.usage_report(ledger)['pricing_unverified'] is True
+        with pytest.raises(cloud_policy.AnthropicError):
+            _reserve(ledger, 'synthetic prompt', 'openai')
+        assert len(ledger.artifacts('cloud_usage_reserve')) == 1
+
+
+def test_conflicting_result_records_pricing_stop_and_keeps_maximum(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        first = {**_result(reservation, 'http_200', None), 'usage': {'input_tokens': 10, 'output_tokens': 2}}
+        cloud_policy.record_result(ledger, reservation, first)
+        conflict = {**first, 'usage': {'input_tokens': 11, 'output_tokens': 2}}
+        with pytest.raises(cloud_policy.AnthropicError) as error:
+            cloud_policy.record_result(ledger, reservation, conflict)
+        assert error.value.kind == 'pricing_unverified'
+        assert len(ledger.artifacts('cloud_usage_result')) == 2
+        report = cloud_policy.usage_report(ledger)
+        assert report['pricing_unverified'] and report['unresolved_requests'] == 1
+        from decimal import Decimal
+        assert Decimal(report['monthly_cost_usd']) == Decimal(reservation['max_cost_usd'])
+        assert cloud_policy.global_block_reason(ledger) == 'pricing_unverified'
+        with pytest.raises(cloud_policy.AnthropicError):
+            _reserve(ledger, 'synthetic prompt', 'openai')
+
+
+def test_success_after_terminal_result_does_not_clear_circuit(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        terminal = _reserve(ledger, 'synthetic first prompt', unit='first')
+        paid = _reserve(ledger, 'synthetic second prompt', unit='second')
+        cloud_policy.record_result(ledger, terminal, _result(terminal, 'http_401', 'auth_error'))
+        before = [dict(row) for row in ledger.artifacts('cloud_circuit')]
+        assert cloud_policy.global_block_reason(ledger) == 'auth_error'
+        success = {**_result(paid, 'http_200', None), 'usage': {'input_tokens': 10, 'output_tokens': 2}}
+        cloud_policy.record_result(ledger, paid, success)
+        assert len(ledger.artifacts('cloud_usage_result')) == 2
+        assert [dict(row) for row in ledger.artifacts('cloud_circuit')] == before
+        assert cloud_policy.global_block_reason(ledger) == 'auth_error'
+        with pytest.raises(cloud_policy.AnthropicError):
+            _reserve(ledger, 'synthetic third prompt', unit='third')
+
+
+@pytest.mark.parametrize('corrupt_kind', ['cloud_usage_reserve', 'cloud_usage_result'])
+def test_corrupt_stored_accounting_forces_pricing_stop_without_overwrite(tmp_path, monkeypatch, corrupt_kind):
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    with closing(_db(tmp_path)) as ledger:
+        reservation = _reserve(ledger, 'synthetic prompt')
+        metadata = {**_result(reservation, 'http_200', None), 'usage': {'input_tokens': 10, 'output_tokens': 2}}
+        if corrupt_kind == 'cloud_usage_result':
+            cloud_policy.record_result(ledger, reservation, metadata)
+        row = ledger.db.execute('SELECT artifact_id,meta FROM artifacts WHERE kind=?', (corrupt_kind,)).fetchone()
+        corrupt = '{"reservation_id":"synthetic-duplicate",' + row['meta'][1:]
+        with ledger.db:
+            ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (corrupt, row['artifact_id']))
+        expected_results = 1 if corrupt_kind == 'cloud_usage_result' else 0
+        with pytest.raises(cloud_policy.AnthropicError) as error:
+            cloud_policy.record_result(ledger, reservation, metadata)
+        assert error.value.kind == 'pricing_unverified'
+        assert ledger.db.execute('SELECT meta FROM artifacts WHERE artifact_id=?', (row['artifact_id'],)).fetchone()[0] == corrupt
+        assert len(ledger.artifacts('cloud_usage_result')) == expected_results
+        assert cloud_policy.global_block_reason(ledger) == 'pricing_unverified'
+        assert cloud_policy.usage_report(ledger)['pricing_unverified'] is True
+        with pytest.raises(cloud_policy.AnthropicError):
+            _reserve(ledger, 'synthetic next prompt', unit='next')

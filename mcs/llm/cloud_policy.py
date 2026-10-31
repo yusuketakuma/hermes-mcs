@@ -15,20 +15,18 @@ from types import MappingProxyType
 import uuid
 from functools import lru_cache
 
-from anthropic_client import AnthropicError, MODEL, MAX_TOKENS, validate_usage
+import anthropic_client
+from anthropic_client import AnthropicError, MODEL
+from anthropic_client import MAX_TOKENS as MAX_TOKENS, validate_usage as validate_usage
 import openai_client
 from llm_retry import http_error
 from mcs_util import canonical, private_env_value, payload_hash, strict_json, until_epoch
 
-PRICE_VERSION = "anthropic-haiku-5-5-2026-10-26"
-PRICE_CHECKED_ON = "2026-10-26"
-# Local 30-day recheck policy, not a provider price guarantee.
-PRICE_VALID_UNTIL = "2026-11-25"
-PRICE_SOURCES = (
-    "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
-    "https://platform.claude.com/docs/en/models/overview",
-    "https://platform.claude.com/docs/en/about-claude/pricing",
-)
+# Compatibility aliases: immutable versioned definitions live with providers.
+PRICE_VERSION = anthropic_client.PRICE_VERSION
+PRICE_CHECKED_ON = anthropic_client.PRICE_CHECKED_ON
+PRICE_VALID_UNTIL = anthropic_client.PRICE_VALID_UNTIL
+PRICE_SOURCES = anthropic_client.PRICE_SOURCES
 # Conservative bound covering decimal/binary interpretations of the public 1M label.
 # This is a reservation bound, not an advertised accepted input capacity.
 INPUT_RESERVATION_BOUND = 1048576
@@ -36,20 +34,46 @@ INPUT_RESERVATION_BOUND = 1048576
 # bytes plus the framing tokens bound its billable input; a reservation at the
 # 1M ceiling would hold ~$0.53 per attempt against a daily/monthly cap.
 INPUT_RESERVATION_MARGIN = 256
-PRICES = {"input": "0.1", "output": "0.5", "long_input": "0.5", "long_output": "2.5",
-          "cache_write_5m_multiplier": "1.25", "cache_write_1h_multiplier": "2",
-          "cache_read_multiplier": "0.1"}
-LONG_INPUT_THRESHOLD = 100000
+PRICES = anthropic_client.PRICES
+LONG_INPUT_THRESHOLD = anthropic_client.LONG_INPUT_THRESHOLD
 JST = timezone(timedelta(hours=9))
 KINDS = ("cloud_usage_reserve", "cloud_usage_result", "cloud_usage_dryrun")
 ROUTES = ("patient_context", "reextract", "semantic_backlog")
 DEFAULT_DAILY_COST_LIMIT_USD = 25
 DEFAULT_MONTHLY_COST_LIMIT_USD = 75
-OPENAI_PRICE_VERSION = "openai-gpt-6-luna-2026-10-29"
-OPENAI_PRICE_CHECKED_ON = "2026-10-29"
-OPENAI_PRICE_VALID_UNTIL = "2026-11-28"
-OPENAI_PRICE_SOURCES = ("https://developers.openai.com/api/docs/models/gpt-6-luna",)
+OPENAI_PRICE_VERSION = openai_client.PRICE_VERSION
+OPENAI_PRICE_CHECKED_ON = openai_client.PRICE_CHECKED_ON
+OPENAI_PRICE_VALID_UNTIL = openai_client.PRICE_VALID_UNTIL
+OPENAI_PRICE_SOURCES = openai_client.PRICE_SOURCES
 PROVIDERS = {"anthropic": MODEL, "openai": openai_client.MODEL}
+if ({model for model, _ in anthropic_client.PRICE_SNAPSHOTS}
+        & {model for model, _ in openai_client.PRICE_SNAPSHOTS}):
+    # Stored receipts predate an explicit provider field; ambiguous models fail closed.
+    raise RuntimeError("duplicate_cloud_price_definition")
+PRICE_DEFINITIONS = MappingProxyType({**anthropic_client.PRICE_SNAPSHOTS,
+                                      **openai_client.PRICE_SNAPSHOTS})
+_CURRENT_PRICE = object()
+
+
+def _price_definition(model, price_version=_CURRENT_PRICE):
+    if not isinstance(model, str):
+        raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
+    if price_version is _CURRENT_PRICE:
+        if model == PROVIDERS["anthropic"]:
+            price_version = anthropic_client.PRICE_VERSION
+        elif model == PROVIDERS["openai"]:
+            price_version = openai_client.PRICE_VERSION
+        else:
+            raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
+    if not isinstance(price_version, str):
+        raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
+    definition = PRICE_DEFINITIONS.get((model, price_version))
+    if (definition is None or definition.get("provider") not in ("anthropic", "openai")
+            or definition.get("model") != model or definition.get("price_version") != price_version):
+        raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
+    return definition
+
+
 _BINDING_KEYS = ("reservation_id", "request_fp", "route", "project_id",
                  "unit_key", "message_id", "model", "price_version", "logical_request_fp", "logical_target_id", "logical_unit_fp")
 
@@ -442,11 +466,11 @@ def scope_generation(cfg):
 
 def api_key(root=None):
     """Read only this MCS installation's dotenv, never process or Hermes keys."""
-    return private_env_value("MCS_ANTHROPIC_API_KEY", root)
+    return private_env_value(anthropic_client.KEY_ENV, root)
 
 
 def provider_key(provider, root=None):
-    return api_key(root) if provider == "anthropic" else private_env_value("MCS_OPENAI_API_KEY", root) if provider == "openai" else None
+    return api_key(root) if provider == "anthropic" else private_env_value(openai_client.KEY_ENV, root) if provider == "openai" else None
 
 
 def resolve_settings(cfg, root=None):
@@ -480,18 +504,20 @@ def eligible(cfg, route, project_id):
 
 
 def pricing_valid(now=None, *, model=MODEL):
+    try:
+        definition = _price_definition(model)
+    except AnthropicError:
+        return False
     day = datetime.fromtimestamp(time.time() if now is None else now, JST).date().isoformat()
-    if model == openai_client.MODEL:
-        return OPENAI_PRICE_CHECKED_ON <= day <= OPENAI_PRICE_VALID_UNTIL
-    return model == MODEL and PRICE_CHECKED_ON <= day <= PRICE_VALID_UNTIL
+    return definition["price_checked_on"] <= day <= definition["price_valid_until"]
 
 
 def price_info(model):
-    if model == openai_client.MODEL:
-        return {"price_version": OPENAI_PRICE_VERSION, "price_checked_on": OPENAI_PRICE_CHECKED_ON,
-                "price_valid_until": OPENAI_PRICE_VALID_UNTIL, "price_valid": pricing_valid(model=model)}
-    return {"price_version": PRICE_VERSION, "price_checked_on": PRICE_CHECKED_ON,
-            "price_valid_until": PRICE_VALID_UNTIL, "price_valid": pricing_valid(model=model)}
+    definition = _price_definition(model)
+    return {"price_version": definition["price_version"],
+            "price_checked_on": definition["price_checked_on"],
+            "price_valid_until": definition["price_valid_until"],
+            "price_valid": pricing_valid(model=model)}
 
 
 def _texts(body):
@@ -537,48 +563,51 @@ def input_bound(body):
                sum(len(text.encode("utf-8")) for text in _texts(body)) + INPUT_RESERVATION_MARGIN)
 
 
-def _reservation_cost(input_bound, max_tokens, *, legacy=False, model=MODEL):
-    if model == openai_client.MODEL:
-        # Default service, global inference and the explicitly requested 30-minute cache.
-        # Reserve the most expensive accepted input (cache write) and long-context output.
-        return (Decimal(input_bound) * Decimal("0.25") + Decimal(max_tokens) * Decimal("0.75")) / Decimal(1000000)
-    # usage_cost accepts cache writes up to the one-hour rate (an unknown TTL is
-    # priced there too), so reserved input carries that rate to stay an upper
-    # bound. legacy: rows reserved before input_bound was stored used plain input.
-    rate = Decimal(PRICES["long_input"]) * (1 if legacy else max(
-        Decimal(1), Decimal(PRICES["cache_write_5m_multiplier"]), Decimal(PRICES["cache_write_1h_multiplier"])))
-    return (Decimal(input_bound) * rate
-            + Decimal(max_tokens) * Decimal(PRICES["long_output"])) / Decimal(1000000)
+def _reservation_cost(input_bound, max_tokens, *, legacy=False, model=MODEL, price_version=_CURRENT_PRICE):
+    definition = _price_definition(model, price_version)
+    prices = definition["prices"]
+    if definition["provider"] == "openai":
+        if legacy:
+            raise AnthropicError("pricing_unverified", "reservation_bound_invalid")
+        return (Decimal(input_bound) * Decimal(prices["reservation_input"])
+                + Decimal(max_tokens) * Decimal(prices["reservation_output"])) / Decimal(1000000)
+    rate = Decimal(prices["long_input"]) * (1 if legacy else max(
+        Decimal(1), Decimal(prices["cache_write_5m_multiplier"]), Decimal(prices["cache_write_1h_multiplier"])))
+    return (Decimal(input_bound) * rate + Decimal(max_tokens) * Decimal(prices["long_output"])) / Decimal(1000000)
 
 
 def max_cost(max_tokens, *, input_bound=INPUT_RESERVATION_BOUND, now=None, model=MODEL):
-    if (not pricing_valid(now, model=model) or type(max_tokens) is not int or not 1 <= max_tokens <= MAX_TOKENS
+    definition = _price_definition(model)
+    if (not pricing_valid(now, model=model) or type(max_tokens) is not int or not 1 <= max_tokens <= definition["max_tokens"]
             or type(input_bound) is not int or not 1 <= input_bound <= INPUT_RESERVATION_BOUND):
         raise AnthropicError("pricing_unverified", "price_or_limit_invalid")
     return _reservation_cost(input_bound, max_tokens, model=model)
 
 
-def usage_cost(usage, *, model=MODEL):
-    if model == openai_client.MODEL:
-        u = openai_client.validate_usage(usage)
-        if u["input_tokens"] > INPUT_RESERVATION_BOUND or u["output_tokens"] > MAX_TOKENS:
+def usage_cost(usage, *, model=MODEL, price_version=_CURRENT_PRICE):
+    definition = _price_definition(model, price_version)
+    prices = definition["prices"]
+    u = definition["validate_usage"](usage)
+    if definition["provider"] == "openai":
+        if u["input_tokens"] > INPUT_RESERVATION_BOUND or u["output_tokens"] > definition["max_tokens"]:
             raise AnthropicError("pricing_unverified", "usage_bounds")
         cached, written = (u["input_tokens_details"][k] for k in ("cached_tokens", "cache_write_tokens"))
-        long = u["input_tokens"] > 272000
-        value = (Decimal(u["input_tokens"] - cached - written) * Decimal("0.1")
-                 + Decimal(cached) * Decimal("0.01") + Decimal(written) * Decimal("0.125")) * (2 if long else 1)
-        return (value + Decimal(u["output_tokens"]) * (Decimal("0.75") if long else Decimal("0.5"))) / Decimal(1000000)
-    u = validate_usage(usage)
+        long = u["input_tokens"] > definition["long_input_threshold"]
+        value = (Decimal(u["input_tokens"] - cached - written) * Decimal(prices["input"])
+                 + Decimal(cached) * Decimal(prices["cached_input"]) + Decimal(written) * Decimal(prices["cache_write_30m"]))
+        if long:
+            value *= Decimal(prices["long_input_multiplier"])
+        return (value + Decimal(u["output_tokens"]) * Decimal(prices["long_output"] if long else prices["output"])) / Decimal(1000000)
     total_input = u["input_tokens"] + u["cache_creation_input_tokens"] + u["cache_read_input_tokens"]
-    if total_input > INPUT_RESERVATION_BOUND or u["output_tokens"] > MAX_TOKENS:
+    if total_input > INPUT_RESERVATION_BOUND or u["output_tokens"] > definition["max_tokens"]:
         raise AnthropicError("pricing_unverified", "usage_bounds")
-    long = total_input > LONG_INPUT_THRESHOLD
-    input_price, output_price = (Decimal(PRICES["long_input"]), Decimal(PRICES["long_output"])) if long else (Decimal(PRICES["input"]), Decimal(PRICES["output"]))
+    long = total_input > definition["long_input_threshold"]
+    input_price, output_price = (Decimal(prices["long_input"]), Decimal(prices["long_output"])) if long else (Decimal(prices["input"]), Decimal(prices["output"]))
     cache = u.get("cache_creation", {})
     cost = (u["input_tokens"] * input_price + u["output_tokens"] * output_price
-            + cache.get("ephemeral_5m_input_tokens", 0) * input_price * Decimal(PRICES["cache_write_5m_multiplier"])
-            + cache.get("ephemeral_1h_input_tokens", 0) * input_price * Decimal(PRICES["cache_write_1h_multiplier"])
-            + u["cache_read_input_tokens"] * input_price * Decimal(PRICES["cache_read_multiplier"]))
+            + cache.get("ephemeral_5m_input_tokens", 0) * input_price * Decimal(prices["cache_write_5m_multiplier"])
+            + cache.get("ephemeral_1h_input_tokens", 0) * input_price * Decimal(prices["cache_write_1h_multiplier"])
+            + u["cache_read_input_tokens"] * input_price * Decimal(prices["cache_read_multiplier"]))
     return cost / Decimal(1000000)
 
 
@@ -648,7 +677,10 @@ def _binding(meta):
 
 def _reserve_valid(meta, row):
     model = meta.get("model")
-    price_version = OPENAI_PRICE_VERSION if model == openai_client.MODEL else PRICE_VERSION
+    price_version = meta.get("price_version")
+    if not isinstance(price_version, str):
+        raise AnthropicError("pricing_unverified", "reservation_invalid")
+    definition = _price_definition(model, price_version)
     if (not isinstance(meta.get("reservation_id"), str) or len(meta["reservation_id"]) != 32
             or not isinstance(meta.get("request_fp"), str) or len(meta["request_fp"]) != 64
             or meta.get('logical_request_fp') is not None and (not isinstance(meta['logical_request_fp'], str)
@@ -657,10 +689,9 @@ def _reserve_valid(meta, row):
                 or re.fullmatch(r'[0-9a-f]{64}', meta['logical_unit_fp']) is None)
             or meta.get('logical_target_id') is not None and (type(meta['logical_target_id']) is not int
                 or meta['logical_target_id'] <= 0 or meta['logical_target_id'] != row['message_id'])
-            or model not in PROVIDERS.values() or row["model"] != model
-            or meta.get("price_version") != price_version
+            or row["model"] != model
             or meta.get("route") not in ROUTES
-            or model == openai_client.MODEL and "input_bound" not in meta
+            or not definition["legacy_reservation"] and "input_bound" not in meta
             or type(meta.get("project_id")) is not int or meta["project_id"] <= 0
             or meta["project_id"] != row["project_id"]
             or meta.get("message_id") != row["message_id"]
@@ -669,9 +700,10 @@ def _reserve_valid(meta, row):
     tokens = meta.get("max_tokens")
     bound = meta.get("input_bound", INPUT_RESERVATION_BOUND)   # rows before the request-sized bound
     maximum = _decimal(meta.get("max_cost_usd"))
-    if (type(tokens) is not int or not 1 <= tokens <= MAX_TOKENS
+    if (type(tokens) is not int or not 1 <= tokens <= definition["max_tokens"]
             or type(bound) is not int or not 1 <= bound <= INPUT_RESERVATION_BOUND
-            or maximum != _reservation_cost(bound, tokens, legacy="input_bound" not in meta, model=model)):
+            or maximum != _reservation_cost(bound, tokens, legacy="input_bound" not in meta,
+                                            model=model, price_version=price_version)):
         raise AnthropicError("pricing_unverified", "reservation_bound_invalid")
     return maximum
 
@@ -854,12 +886,27 @@ def _reservation_evidence_batch_snapshot(db, ids):
     return result
 
 
+def _is_openai_model(model):
+    return (isinstance(model, str)
+            and any(key[0] == model and definition["provider"] == "openai"
+                    for key, definition in PRICE_DEFINITIONS.items()))
+
+
 def _confirmed_openai_quota(result, model):
     code = result.get("openai_error_code")
     return (isinstance(code, str) and code in openai_client.QUOTA_ERROR_CODES
-            and model == openai_client.MODEL
+            and _is_openai_model(model) and "openai_429_diagnostic" not in result
             and result.get("http_class") == "http_429"
             and result.get("error_kind") == "payment_required"
+            and "usage" in result and result["usage"] is None)
+
+
+def _confirmed_openai_rate_diagnostic(result, model):
+    diagnostic = result.get("openai_429_diagnostic")
+    return (isinstance(diagnostic, str) and diagnostic in openai_client.RATE_LIMIT_DIAGNOSTICS
+            and _is_openai_model(model) and "openai_error_code" not in result
+            and result.get("http_class") == "http_429"
+            and result.get("error_kind") == "rate_limited"
             and "usage" in result and result["usage"] is None)
 
 
@@ -874,12 +921,14 @@ def _settled(m, maximum, matching):
         raise ValueError
     if "openai_error_code" in r and not _confirmed_openai_quota(r, m["model"]):
         raise ValueError
+    if "openai_429_diagnostic" in r and not _confirmed_openai_rate_diagnostic(r, m["model"]):
+        raise ValueError
     reported = _decimal(r.get("cost_usd"))
     if r.get("usage") is None:
         if reported != (Decimal(0) if _unbilled(r.get("http_class")) else maximum):
             raise ValueError
         return reported, _unbilled(r.get("http_class"))
-    if (reported != usage_cost(r["usage"], model=m["model"]) or reported > maximum
+    if (reported != usage_cost(r["usage"], model=m["model"], price_version=m["price_version"]) or reported > maximum
             or r["usage"].get("output_tokens", 0) > m["max_tokens"]):
         raise ValueError
     return reported, True
@@ -984,7 +1033,8 @@ def _usage_report_snapshot(ledger, *, now=None, period="month"):
     reserves, results = {}, {}
     daily, invalid = 0, False
     total, settled, unknown = Decimal(0), Decimal(0), 0
-    providers = {name: {"cost_usd": Decimal(0), "unresolved_requests": 0} for name in PROVIDERS}
+    provider_names = set(PROVIDERS) | {definition["provider"] for definition in PRICE_DEFINITIONS.values()}
+    providers = {name: {"cost_usd": Decimal(0), "unresolved_requests": 0} for name in sorted(provider_names)}
     try:
         for row in rows:
             m = _accounting_meta(row["meta"])
@@ -1007,7 +1057,7 @@ def _usage_report_snapshot(ledger, *, now=None, period="month"):
                 except (AnthropicError, ValueError, InvalidOperation, TypeError):
                     invalid = True
             total += cost
-            name = next(name for name, model in PROVIDERS.items() if model == m["model"])
+            name = _price_definition(m["model"], m["price_version"])["provider"]
             providers[name]["cost_usd"] += cost
             providers[name]["unresolved_requests"] += int(not valid_usage)
             if valid_usage:
@@ -1088,11 +1138,11 @@ class _Tally:
         self.total = Decimal(0)
         self.invalid = False
 
-    def _add(self, day, cost, model):
+    def _add(self, day, cost, provider):
         self.days.setdefault(day, [0, Decimal(0)])[1] += cost
         self.total += cost
-        self.provider_days[(model, day)] = self.provider_days.get((model, day), Decimal(0)) + cost
-        self.provider_totals[model] = self.provider_totals.get(model, Decimal(0)) + cost
+        self.provider_days[(provider, day)] = self.provider_days.get((provider, day), Decimal(0)) + cost
+        self.provider_totals[provider] = self.provider_totals.get(provider, Decimal(0)) + cost
 
     def fingerprint(self, ledger, now):
         """Hash all accounting columns, including reservations outside the period."""
@@ -1125,7 +1175,7 @@ class _Tally:
                 day = _periods(row["created_at"])[0]
                 self.open[rid] = (m, maximum, day)
                 self.days.setdefault(day, [0, Decimal(0)])[0] += 1
-                self._add(day, maximum, m["model"])
+                self._add(day, maximum, _price_definition(m["model"], m["price_version"])["provider"])
             elif not isinstance(rid, str):
                 raise AnthropicError("pricing_unverified", "result_invalid")
             elif rid in self.open:
@@ -1135,14 +1185,15 @@ class _Tally:
                 except (AnthropicError, ValueError, InvalidOperation, TypeError):
                     self.invalid = True
                     cost, settled = maximum, False
-                self._add(day, cost - maximum, meta["model"])
-                self.closed[rid] = (maximum, cost, settled, day, meta["model"])
+                provider = _price_definition(meta["model"], meta["price_version"])["provider"]
+                self._add(day, cost - maximum, provider)
+                self.closed[rid] = (maximum, cost, settled, day, provider)
             elif rid in self.closed:
                 # a second result row: the pair no longer settles (usage_report's _settled)
-                maximum, cost, settled, day, model = self.closed[rid]
+                maximum, cost, settled, day, provider = self.closed[rid]
                 self.invalid = True
-                self._add(day, maximum - cost, model)
-                self.closed[rid] = (maximum, maximum, False, day, model)
+                self._add(day, maximum - cost, provider)
+                self.closed[rid] = (maximum, maximum, False, day, provider)
             else:
                 entry = self.orphans.get(rid)
                 if entry is None:
@@ -1265,9 +1316,9 @@ def budget_block_reason(ledger, cfg, *, max_tokens=1600, input_bound=INPUT_RESER
     if c["provider_budgets"] and caps is None:
         return "provider_budget_missing"
     if caps is not None:
-        if tally.provider_days.get((c["model"], _periods(time.time())[0]), Decimal(0)) + cost > _decimal(caps["daily_cost_limit_usd"]):
+        if tally.provider_days.get((c["provider"], _periods(time.time())[0]), Decimal(0)) + cost > _decimal(caps["daily_cost_limit_usd"]):
             return "provider_daily_cap"
-        if tally.provider_totals.get(c["model"], Decimal(0)) + cost > _decimal(caps["monthly_cost_limit_usd"]):
+        if tally.provider_totals.get(c["provider"], Decimal(0)) + cost > _decimal(caps["monthly_cost_limit_usd"]):
             return "provider_monthly_cap"
     if c["window_budget_usd"] is not None:
         if window_history_pruned(ledger, c):
@@ -1315,7 +1366,7 @@ def usage_reserver(ledger, cfg, *, route, project_id, unit_key, message_id=None,
             raise
         meta = {"reservation_id": uuid.uuid4().hex, "route": route, "project_id": project_id,
                 "unit_key": str(unit_key), "message_id": message_id, "model": model,
-                "price_version": OPENAI_PRICE_VERSION if model == openai_client.MODEL else PRICE_VERSION, "request_fp": payload_hash(body),
+                "price_version": _price_definition(model)["price_version"], "request_fp": payload_hash(body),
                 "logical_request_fp": _logical_request_fp(body),
                 "logical_target_id": (message_id if route == 'semantic_backlog' and isinstance(owner, dict)
                                       and owner.get('semantic_target_id') == message_id else None),
@@ -1373,7 +1424,7 @@ def record_result(ledger, reservation, metadata):
     # run while a caller's transaction is open; do not commit or roll it back.
     if ledger.db.in_transaction:
         raise RuntimeError("cloud_result_owner_transaction_active")
-    from semantic_runtime import reserve_artifact
+    from semantic_runtime import reserve_artifact, _record_cloud_circuit_result_tx
     error_kind = metadata.get("error_kind")
     http_class = metadata.get("http_class")
     if http_class == "http_200" and metadata.get("usage") is None:
@@ -1391,15 +1442,18 @@ def record_result(ledger, reservation, metadata):
         # Settle at the price table the reservation was made with: a result that arrives
         # after PRICE_VALID_UNTIL is still saved; only new sends stop (owner decision 2026-10-28).
         model = reservation["model"]
-        if (model not in PROVIDERS.values() or metadata.get("model") != model or metadata.get("request_fp") != reservation["request_fp"]
-                or reservation.get("price_version") != (OPENAI_PRICE_VERSION if model == openai_client.MODEL else PRICE_VERSION)):
+        if not isinstance(reservation.get("price_version"), str):
+            raise AnthropicError("pricing_unverified", "result_mismatch")
+        definition = _price_definition(model, reservation["price_version"])
+        if metadata.get("model") != model or metadata.get("request_fp") != reservation["request_fp"]:
             raise AnthropicError("pricing_unverified", "result_mismatch")
         if "openai_error_code" in metadata and not _confirmed_openai_quota(metadata, model):
             raise AnthropicError("pricing_unverified", "result_mismatch")
-        validator = openai_client.validate_usage if model == openai_client.MODEL else validate_usage
-        usage = validator(metadata["usage"]) if metadata.get("usage") is not None else None
+        if "openai_429_diagnostic" in metadata and not _confirmed_openai_rate_diagnostic(metadata, model):
+            raise AnthropicError("pricing_unverified", "result_mismatch")
+        usage = definition["validate_usage"](metadata["usage"]) if metadata.get("usage") is not None else None
         maximum = _decimal(reservation["max_cost_usd"])
-        cost = (usage_cost(usage, model=model) if usage is not None
+        cost = (usage_cost(usage, model=model, price_version=reservation["price_version"]) if usage is not None
                 else Decimal(0) if _unbilled(metadata.get("http_class")) else maximum)
         if cost > maximum or (usage is not None and usage["output_tokens"] > reservation["max_tokens"]):
             raise AnthropicError("pricing_unverified", "cost_exceeds_reserve")
@@ -1411,36 +1465,57 @@ def record_result(ledger, reservation, metadata):
                       request_id=request_id, error_kind=error_kind)
         if "openai_error_code" in metadata:
             result["openai_error_code"] = metadata["openai_error_code"]
+        if "openai_429_diagnostic" in metadata:
+            result["openai_429_diagnostic"] = metadata["openai_429_diagnostic"]
         if "disposition" in metadata:
             if metadata["disposition"] not in ("discarded_scope", "discarded_workday"):
                 raise AnthropicError("pricing_unverified", "disposition_invalid")
             result["disposition"] = metadata["disposition"]
-
-        def check():
-            _stored_reservation(ledger, reservation, bound_only=True)
-
-        def write():
-            rows = _matching_bound_rows(ledger, KINDS[1], reservation["reservation_id"])
-            if rows:
-                if len(rows) != 1:
-                    raise AnthropicError("pricing_unverified", "duplicate_result")
-                if _accounting_meta(rows[0]["meta"]) == result:
-                    return False
-                # Preserve the conflict durably; accounting must never pick the cheaper result.
-                ledger.artifact_add_tx(KINDS[1], "{}", project_id=reservation["project_id"],
-                                       message_id=reservation.get("message_id"), model=model,
-                                       meta={**result, "usage": None, "cost_usd": str(maximum),
-                                             "error_kind": "pricing_unverified"})
-                return True
-            ledger.artifact_add_tx(KINDS[1], "{}", project_id=reservation["project_id"],
-                                   message_id=reservation.get("message_id"), model=model, meta=result)
-        conflict = reserve_artifact(ledger, check, write)
-        if conflict:
-            raise AnthropicError("pricing_unverified", "result_conflict")
     except (AnthropicError, ValueError, KeyError, TypeError, InvalidOperation):
         _circuit_result(ledger, AnthropicError("pricing_unverified"))
         raise AnthropicError("pricing_unverified", "result_invalid") from None
-    _circuit_result(ledger, error)
+
+    invalid = []
+
+    def check():
+        try:
+            _stored_reservation(ledger, reservation, bound_only=True)
+        except (AnthropicError, ValueError, KeyError, TypeError, InvalidOperation):
+            invalid.append(True)
+
+    def write():
+        rows, stored = [], None
+        if not invalid:
+            try:
+                rows = _matching_bound_rows(ledger, KINDS[1], reservation["reservation_id"])
+                if len(rows) == 1:
+                    stored = _accounting_meta(rows[0]["meta"])
+            except (AnthropicError, ValueError, KeyError, TypeError, InvalidOperation):
+                invalid.append(True)
+        if invalid:
+            _record_cloud_circuit_result_tx(ledger, AnthropicError("pricing_unverified"))
+            return "invalid"
+        if rows:
+            if len(rows) != 1:
+                _record_cloud_circuit_result_tx(ledger, AnthropicError("pricing_unverified"))
+                return "conflict"
+            if stored == result:
+                return "ok"
+            # Preserve the conflict durably; accounting must never pick the cheaper result.
+            ledger.artifact_add_tx(KINDS[1], "{}", project_id=reservation["project_id"],
+                                   message_id=reservation.get("message_id"), model=model,
+                                   meta={**result, "usage": None, "cost_usd": str(maximum),
+                                         "error_kind": "pricing_unverified"})
+            _record_cloud_circuit_result_tx(ledger, AnthropicError("pricing_unverified"))
+            return "conflict"
+        ledger.artifact_add_tx(KINDS[1], "{}", project_id=reservation["project_id"],
+                               message_id=reservation.get("message_id"), model=model, meta=result)
+        _record_cloud_circuit_result_tx(ledger, error)
+        return "ok"
+
+    outcome = reserve_artifact(ledger, check, write)
+    if outcome != "ok":
+        raise AnthropicError("pricing_unverified", "result_" + outcome)
     if error_kind == "pricing_unverified":
         raise AnthropicError("pricing_unverified", "usage_unknown")
 
@@ -1467,19 +1542,20 @@ def record_disposition_tx(ledger, reservation, disposition):
         model=reservation["model"], meta=meta)
 
 
-def dryrun_tx(ledger, *, route, project_id, unit_key, input_chars=0, max_tokens=8192, requests=1):
+def dryrun_tx(ledger, *, route, project_id, unit_key, input_chars=0, max_tokens=8192, requests=1, model=MODEL):
     """Record aggregate estimates in the caller's active success transaction."""
     if not ledger.db.in_transaction:
         raise RuntimeError("cloud_dryrun_transaction_required")
+    definition = _price_definition(model)
     if (route not in ROUTES or type(input_chars) is not int or input_chars < 0
             or type(requests) is not int or requests < 0
-            or type(max_tokens) is not int or not 1 <= max_tokens <= MAX_TOKENS):
+            or type(max_tokens) is not int or not 1 <= max_tokens <= definition["max_tokens"]):
         raise ValueError("dryrun_invalid")
-    return ledger.artifact_add_tx(KINDS[2], "{}", model=MODEL,
+    return ledger.artifact_add_tx(KINDS[2], "{}", model=model,
                         meta={"route": route, "requests": requests, "input_chars": input_chars,
                               "estimated_input_tokens": (input_chars + 2) // 3,
                               "estimated_output_tokens": max_tokens * requests,
-                              "price_version": PRICE_VERSION})
+                              "price_version": definition["price_version"]})
 
 
 # Observations only: a reserved slot older than this may still be in flight

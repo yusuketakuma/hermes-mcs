@@ -3086,7 +3086,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     mode = extract_llm._cloud_mode(ledger, cfg, "patient_context", pid)
     cloud_requested = bool(snapshot["contract"].get("provider"))
     quality_required = cloud_requested or _has_prior_quality_failure(ledger.db, pid)
-    cloud_settings = extract_llm._cloud_settings(cfg) if mode in ("on", "shadow") else None
+    cloud_settings = extract_llm._cloud_settings(cfg) if mode in ("on", "shadow", "dry_run") else None
     estimated_unit = False
     shadow_call = None
     shadow_unit = None
@@ -3612,7 +3612,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             if not failure and estimated_unit:
                 extract_llm.cloud_policy.dryrun_tx(ledger, route="patient_context", project_id=pid,
                     unit_key=lane, input_chars=sum(source.get("body_length", 0) for source in snapshot["sources"]),
-                    max_tokens=1600)
+                    max_tokens=1600, model=cloud_settings["model"])
             if not failure and shadow_call is not None:
                 shadow_unit = os.urandom(16).hex()
                 comparison_sources = [source] if lane != "A" else snapshot["sources"]

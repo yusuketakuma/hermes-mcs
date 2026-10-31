@@ -296,14 +296,17 @@ def test_terminal_circuit_only_resume_clears(tmp_path, now, kind):
 
 def test_openai_quota_429_is_reconstructed_as_terminal(tmp_path, now, monkeypatch):
     import openai_client
+    import semantic_runtime
 
     monkeypatch.setattr(c, "pricing_valid", lambda *args, **kwargs: True)
     seen = []
-    original = c._circuit_result
-    def observe(ledger, error, **kwargs):
+    original = semantic_runtime._record_cloud_circuit_result_tx
+    def observe(ledger, error, *args, **kwargs):
+        assert ledger.db.in_transaction
+        assert len(ledger.artifacts("cloud_usage_result")) == 1
         seen.append(error)
-        return original(ledger, error, **kwargs)
-    monkeypatch.setattr(c, "_circuit_result", observe)
+        return original(ledger, error, *args, **kwargs)
+    monkeypatch.setattr(semantic_runtime, "_record_cloud_circuit_result_tx", observe)
     with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
         cfg = _cfg(provider="openai")
         body = openai_client.OpenAIClient("synthetic").body("synthetic", 100, None)
@@ -313,8 +316,9 @@ def test_openai_quota_429_is_reconstructed_as_terminal(tmp_path, now, monkeypatc
             "model": openai_client.MODEL, "request_fp": reservation["request_fp"],
             "usage": None, "http_class": "http_429", "error_kind": "payment_required",
             "openai_error_code": "credit_balance_exhausted"})
-        assert seen[-1].kind == "payment_required" and seen[-1].retryable is False
-        assert seen[-1].status == 429
+        assert len(seen) == 1 and seen[0].kind == "payment_required" and seen[0].retryable is False
+        assert seen[0].status == 429
+        assert not ledger.db.in_transaction and len(ledger.artifacts("cloud_circuit")) == 1
         assert c.global_block_reason(ledger, model=openai_client.MODEL) == "payment_required"
         assert c.usage_report(ledger)["max_reserved_cost_usd"] == reservation["max_cost_usd"]
 
@@ -884,3 +888,20 @@ def test_evidence_hold_counts_are_bounded_observations_without_ids(tmp_path, now
         assert len(statements) == 2 and all("LIMIT 2)" in sql for sql in statements)
         assert bounded["unattributable_accounting_rows"] is None and bounded["old_reserved_repair_slots"] is None
         assert bounded["unparseable_repair_slots"] is None and bounded["scan_limit"] == 1
+
+
+def test_dryrun_records_selected_provider_model_and_version(tmp_path):
+    with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
+        with ledger.db:
+            ledger.db.execute("BEGIN")
+            c.dryrun_tx(ledger, route="reextract", project_id=1, unit_key="first", input_chars=10)
+            c.dryrun_tx(ledger, route="reextract", project_id=1, unit_key="second", input_chars=20,
+                        model=c.openai_client.MODEL)
+        rows = ledger.artifacts("cloud_usage_dryrun")
+        assert [(row["model"], json.loads(row["meta"])["price_version"]) for row in rows] == [
+            (c.MODEL, c.PRICE_VERSION), (c.openai_client.MODEL, c.OPENAI_PRICE_VERSION)]
+        assert all(row["project_id"] is None for row in rows)
+        with pytest.raises(c.AnthropicError):
+            with ledger.db:
+                ledger.db.execute("BEGIN")
+                c.dryrun_tx(ledger, route="reextract", project_id=1, unit_key="bad", model="unknown")

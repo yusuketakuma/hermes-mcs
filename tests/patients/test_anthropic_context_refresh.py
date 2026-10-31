@@ -825,6 +825,31 @@ def test_dryrun_does_not_count_deferred_or_audit_and_stops_after_completion(runt
     assert len(led.artifacts("cloud_usage_dryrun")) == estimates
 
 
+@pytest.mark.parametrize("provider,model,version", [
+    ("anthropic", worker.cloud_policy.MODEL, worker.cloud_policy.PRICE_VERSION),
+    ("openai", worker.cloud_policy.openai_client.MODEL, worker.cloud_policy.OPENAI_PRICE_VERSION),
+])
+def test_dryrun_context_records_selected_provider_model_and_price(runtime, cloud, monkeypatch,
+                                                                provider, model, version):
+    led, _, local_calls = runtime
+    seed(led)
+    cloud[1][0] = "dry_run"
+    settings, errors = worker.cloud_policy.cloud_config({"cloud_llm": {
+        "mode": "dry_run", "project_ids": [1], "provider": provider}})
+    assert not errors and settings["model"] == model
+    monkeypatch.setattr(worker, "_cloud_settings", lambda cfg: settings)
+
+    assert step(runtime)["status"] == "progressed"
+    estimates = led.artifacts("cloud_usage_dryrun")
+    assert len(estimates) == 1
+    assert estimates[0]["model"] == model
+    meta = json.loads(estimates[0]["meta"])
+    assert meta["price_version"] == version and meta["route"] == "patient_context"
+    assert estimates[0]["project_id"] is None and estimates[0]["message_id"] is None
+    assert local_calls and not cloud[0]
+    assert not led.db.in_transaction
+
+
 
 def test_cloud_budget_wait_uses_verified_local_context(runtime, cloud, monkeypatch):
     led, _, local_calls = runtime
