@@ -34,7 +34,8 @@ def test_sync_cli_refuses_busy_writer_before_opening_database(store, tmp_path, m
         os.close(lock)
 
 
-def test_metadata_is_accessible_through_explicit_snapshot_publication(store, tmp_path, monkeypatch, capsys):
+def test_metadata_is_accessible_through_explicit_snapshot_publication(
+        store, tmp_path, monkeypatch, capsys, snapshot_child_clock):
     monkeypatch.setattr("project_metadata.time.time", lambda: 100.0)
     capture(store, now=100.0)
     path = store.db.execute("PRAGMA database_list").fetchone()[2]

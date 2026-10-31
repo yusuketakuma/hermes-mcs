@@ -63,7 +63,7 @@ def test_receive_never_replaces_a_receipt_created_during_processing(
 
 
 @pytest.fixture(autouse=True)
-def fixed_clock(monkeypatch):
+def fixed_clock(monkeypatch, snapshot_child_clock):
     monkeypatch.setattr(export_delivery.time, "time", lambda: NOW)
 
 
