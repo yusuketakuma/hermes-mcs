@@ -454,6 +454,7 @@
 - [薬剤言及履歴で原文の重複読取りを削減](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/drug-timeline-bindings-20261029.json)
 - [失敗した解析ジョブの理由調査と対策後の再試行を追加](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/failed-job-diagnostics-20261029.json)
 - [過去の失敗理由を対象ジョブの記録から確認](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/failed-job-targeted-evidence-20261029.json)
+- [グループのチャットに正式な名前を表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/group-display-name-20261031.json)
 - [通知状況の確認時間を調整](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/health-aggregate-runtime-budget-20261031.json)
 - [監視警告のログ案内を統合ログへ修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/health-log-guidance-20261030.json)
 - [通知の完了確認と監視の発報条件を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/health-part-observation-budget-20261030.json)

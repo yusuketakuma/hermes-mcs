@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 405,
+  "fragment_count": 406,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2437,6 +2437,12 @@
       "id": "slack-rejection-metrics-20261031",
       "title": "Slackの長さ拒否を調べるための情報を記録",
       "sha256": "9bb6c1360cdc57aaebd3edff8b0cd4acd2174bb4da5588c70c6b8194f77c1004"
+    },
+    {
+      "path": "changes/archive/1.1.0/group-display-name-20261031.json",
+      "id": "group-display-name-20261031",
+      "title": "グループのチャットに正式な名前を表示",
+      "sha256": "345649ba43fe28b5d67f95ecb103aee189731c225aa851f02c19f2827ca7e0dc"
     }
   ]
 }
