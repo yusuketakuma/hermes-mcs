@@ -410,6 +410,21 @@ def _dedup_stamp(record: dict):
     return record.get("health_at")
 
 
+def _cloud_selection(cfg, root):
+    """Return only the currently selected provider and key-presence flag."""
+    if not isinstance(cfg, dict) or not cfg:
+        return None
+    import cloud_policy
+    try:
+        settings, errors = cloud_policy.resolve_settings(cfg, root)
+        provider = settings.get("provider")
+        if errors or settings.get("mode") not in ("on", "shadow") or provider not in ("anthropic", "openai"):
+            return None
+        return {"provider": provider, "key_present": bool(cloud_policy.provider_key(provider, root))}
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
 def evaluate(home: str = HOME, now: float | None = None,
              cfg: dict | None = None) -> dict:
     """Classify current evidence, apply alert dedup, persist state.
@@ -462,6 +477,10 @@ def evaluate(home: str = HOME, now: float | None = None,
     # then also by collection) — a reason that drops and returns stays
     # silent until the episode ends, so flapping codes cannot spam
     reasons = _alert_reasons(obs)
+    if any(reason.split(":")[0].startswith("cloud_llm_") for reason in reasons):
+        selection = _cloud_selection(cfg, home)
+        if selection is not None:
+            obs["cloud_selection"] = selection
     seen = state.get("alerted_reasons")
     if transition:
         seen = set()
@@ -877,6 +896,20 @@ def _backup_local_text(local) -> str:
     return f"（{_BACKUP_LOCAL_JA[local['state']]}）"
 
 
+_CLOUD_REASON_JA = {
+    "cloud_llm_no_api_key": ("記録時点で外部AIのAPIキーを取得できず、ローカルLLMで処理を継続していました",
+                             "MCSの .env に利用先のキーを登録し、ファイル権限を0600にしてください"),
+    "cloud_llm_auth_error": ("外部AIの認証に失敗し、処理を停止しました",
+                            "キーを確認し、cloud-llm resume --confirm-human --reason '確認理由' で再開"),
+    "cloud_llm_payment_required": ("外部AIの支払い条件を確認するため、処理を停止しました",
+                                  "契約・残高を確認し、cloud-llm resume --confirm-human --reason '確認理由' で再開"),
+    "cloud_llm_pricing_unverified": ("外部AIの料金または使用量を確認できず、処理を停止しました",
+                                     "doctor で料金表と使用量を確認し、問題を解消してから承認付きで再開"),
+    "cloud_llm_circuit_open": ("外部AIへの要求が続けて失敗し、一時停止しています",
+                               "doctor で停止理由を確認し、待機期間後に再確認"),
+}
+
+
 def _reason_rows(report: dict, reasons) -> list[str]:
     if reasons is None:
         return ["・理由を特定できません（状態の記録に理由がありません）",
@@ -890,6 +923,8 @@ def _reason_rows(report: dict, reasons) -> list[str]:
     for code in reasons:
         base = code.split(":")[0]
         meaning, action = _REASON_JA.get(base, (code, f"{_CHECK} で確認"))
+        if base in _CLOUD_REASON_JA:
+            meaning, action = _CLOUD_REASON_JA[base]
         if standalone:
             action = _STANDALONE_ACTION.get(base, action)
         elif report.get("notify_transport") == "lineworks":
@@ -946,6 +981,13 @@ def _reason_rows(report: dict, reasons) -> list[str]:
             extra += "（" + " / ".join(details) + "）"
             if base == "stage_errors":
                 guide = guidance(report.get("collection_diagnostics"))
+        if base in _CLOUD_REASON_JA:
+            selection = report.get("cloud_selection")
+            if (isinstance(selection, dict) and selection.get("provider") in ("anthropic", "openai")
+                    and type(selection.get("key_present")) is bool):
+                provider = {"anthropic": "Anthropic", "openai": "OpenAI"}[selection["provider"]]
+                key_status = "登録あり" if selection["key_present"] else "未登録"
+                action += f"（現在の利用先: {provider}、APIキー: {key_status}）"
         if guide:
             # one fixed cause and next step per observed category, most frequent first
             rows.append(f"・{meaning}{extra}")

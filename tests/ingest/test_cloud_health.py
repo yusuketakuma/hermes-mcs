@@ -15,6 +15,34 @@ db = ledger_fixture(name="db")
 CFG = {"cloud_llm": {"daily_cost_limit_usd": 2}}   # no mode: on with a key and a spending cap
 
 
+@pytest.mark.parametrize(("provider", "order", "keys", "selected", "reason"), [
+    ("anthropic", ["openai", "anthropic"], {"anthropic": True, "openai": False}, "anthropic", None),
+    ("openai", ["anthropic", "openai"], {"anthropic": False, "openai": True}, "openai", None),
+    ("anthropic", ["openai", "anthropic"], {"anthropic": False, "openai": True}, "anthropic", "no_api_key"),
+    ("openai", ["anthropic", "openai"], {"anthropic": True, "openai": False}, "openai", "no_api_key"),
+    ("auto", ["openai", "anthropic"], {"anthropic": True, "openai": True}, "openai", None),
+    ("auto", ["openai", "anthropic"], {"anthropic": True, "openai": False}, "anthropic", None),
+    ("auto", ["openai", "anthropic"], {"anthropic": False, "openai": False}, "openai", "no_api_key"),
+])
+def test_cloud_stop_uses_the_passed_provider_snapshot(db, monkeypatch, provider, order, keys, selected, reason):
+    import mcs_util
+
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1],
+                         "provider": provider, "provider_order": order},
+           "semantic": {"mode": "off"}}
+    monkeypatch.setattr(cloud_policy, "provider_key", lambda name, root=None: "synthetic-key" if keys[name] else None)
+    monkeypatch.setattr(mcs_util, "load_config", lambda *_args: pytest.fail("unexpected config reread"))
+    models = []
+    monkeypatch.setattr(cloud_policy, "global_block_reason", lambda _ledger, *, model: models.append(model))
+    monkeypatch.setattr(health_report.llm_availability, "llm_down_for_s", lambda *_args, **_kwargs: None)
+    before = db.db.total_changes
+    assert health_report.cloud_stop_reason(db.db, cfg) == reason
+    expected_reasons = [] if reason is None else ["cloud_llm_" + reason]
+    assert health_report.backlog_stalls(db.db, cfg, time.time()) == expected_reasons
+    assert models == [cloud_policy.PROVIDERS[selected]] * 2
+    assert db.db.total_changes == before
+
+
 @pytest.mark.parametrize("kind", ["auth_error", "payment_required", "pricing_unverified"])
 def test_cloud_stop_is_visible_and_human_reset_clears_it(db, monkeypatch, kind):
     monkeypatch.setattr(cloud_policy, "api_key", lambda root=None: "synthetic-key")

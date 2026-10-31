@@ -1,8 +1,11 @@
 {
   "category": "fixed",
-  "title": "Jev の認証情報の変更を送信前に確認",
+  "title": "外部AIの診断と Jev の認証確認を改善",
   "summary": "Jev の認証情報が処理中に削除または変更された場合、以前の認証情報で新しい要求を送信しません。",
   "upgrade": "更新後に追加操作は不要です。認証情報の変更は次回の処理から反映されます。",
-  "details": ["送信と再試行の前に、現在の認証情報が処理開始時のものと一致するか確認します。"],
-  "refs": ["mcs/semantic/semantic_jev.py", "mcs/semantic/semantic_drain.py"]
+  "details": [
+    "送信と再試行の前に、現在の認証情報が処理開始時のものと一致するか確認します。",
+    "健康診断では外部AIの選択先に応じた状態と設定案内を表示します。"
+  ],
+  "refs": ["mcs/semantic/semantic_jev.py", "mcs/semantic/semantic_drain.py", "mcs/ingest/health_report.py"]
 }
