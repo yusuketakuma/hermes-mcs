@@ -209,7 +209,8 @@ class AnthropicClient:
             if block.get("type") == "text" and isinstance(block.get("text"), str):
                 text.append(block["text"])
             elif (block.get("type") == "thinking" and isinstance(block.get("thinking"), str)
-                  and block["thinking"].strip()):
+                  and (block["thinking"].strip() or block["thinking"] == ""
+                       and isinstance(block.get("signature"), str) and block["signature"])):
                 pass
             elif (block.get("type") == "redacted_thinking" and isinstance(block.get("data"), str)
                   and block["data"].strip()):
