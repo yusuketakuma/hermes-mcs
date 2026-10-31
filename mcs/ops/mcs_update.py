@@ -2104,7 +2104,7 @@ def _restore_runtime(entry: dict) -> None:
             raise UpdateError("runtime_restore_checkout_failed")
 
 
-def _post_merge(state: dict) -> int:
+def _post_merge(state: dict, *, native_provider_migration: bool = False) -> int:
     """Post-merge stages, run as a NEW-code subprocess while the parent
     holds both locks (--locks-held)."""
     applying = state["applying"]
@@ -2125,6 +2125,11 @@ def _post_merge(state: dict) -> int:
         journal(state, "reinstall")      # persists reinstall_done
     if applying.get("runtime_migration"):
         _use_migrated_runtime(applying["runtime_migration"])
+    if native_provider_migration:
+        try:
+            update_migrations.migrate_provider_settings(HOME)
+        except update_migrations.MigrationError as error:
+            raise UpdateError("provider_settings_migration_unverified") from error
     _prepare_run_log(promote=True)
     _services_reconcile()
     journal(state, "services")
@@ -4318,7 +4323,7 @@ def cmd_post_merge() -> int:
         except (OSError, ValueError, ImportError):
             return 2
         with owned_process.lifetime_fds(tuple(locks)), _release_git_scope():
-            return _post_merge(state)
+            return _post_merge(state, native_provider_migration=True)
     return _call_legacy(_post_merge, state)
 
 

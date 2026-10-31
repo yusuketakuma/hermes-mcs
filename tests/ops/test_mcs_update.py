@@ -56,7 +56,8 @@ def test_release_post_merge_requires_native_adoption_and_never_calls_legacy(upda
     monkeypatch.delenv(release_apply_owner.CHILD_FDS_ENV, raising=False)
     monkeypatch.setattr(updater, '_call_legacy', lambda *_: pytest.fail('release fell back to legacy'))
     calls = []
-    monkeypatch.setattr(updater, '_post_merge', lambda value: calls.append(value) or 0)
+    monkeypatch.setattr(updater, '_post_merge',
+                        lambda value, **kwargs: calls.append((value, kwargs)) or 0)
     if not native:
         assert updater.cmd_post_merge() == 2
         assert calls == []
@@ -75,12 +76,42 @@ def test_release_post_merge_requires_native_adoption_and_never_calls_legacy(upda
 
         monkeypatch.setattr(release_apply_owner, '_adopt_post_merge', adopt)
         assert updater.cmd_post_merge() == 0
-        assert calls == [consumed]
+        assert calls == [(consumed, {'native_provider_migration': True})]
         for descriptor in fds:
             os.fstat(descriptor)  # The child scope borrows; it never closes native descriptors.
     finally:
         for descriptor in (*fds, reader, writer):
             os.close(descriptor)
+
+
+@pytest.mark.parametrize('native,failed', [(True, False), (True, True), (False, False)])
+def test_post_merge_provider_migration_precedes_services(updater, monkeypatch, native, failed):
+    calls = []
+    state = updater.journal_store.default_state()
+    state['applying'] = {'tag': 'v1.1.0', 'sha': 'a' * 40, 'prev_sha': 'b' * 40,
+                         **({'release_ref': {'synthetic': True}} if native else {})}
+    def migrate(root):
+        assert root == updater.HOME
+        calls.append('migrate')
+        if failed:
+            raise updater.update_migrations.MigrationError('synthetic')
+        return True
+    monkeypatch.setattr(updater.update_migrations, 'migrate_provider_settings', migrate)
+    monkeypatch.setattr(updater, '_plan_runtime_migration', lambda *_args: None)
+    monkeypatch.setattr(updater, '_prepare_run_log', lambda **_kwargs: calls.append('run_log'))
+    monkeypatch.setattr(updater, '_services_reconcile', lambda: calls.append('services'))
+    monkeypatch.setattr(updater, 'restart_agents', lambda: calls.append('restart') or [])
+    monkeypatch.setattr(updater, '_postcheck', lambda *_args: [])
+    monkeypatch.setattr(updater, 'journal', lambda *_args: None)
+    monkeypatch.setattr(updater.journal_store, 'save_state', lambda *_args: None)
+    monkeypatch.setattr(updater, '_enqueue_notice', lambda *_args, **_kwargs: None)
+    if failed:
+        with pytest.raises(updater.UpdateError, match='provider_settings_migration_unverified'):
+            updater._post_merge(state, native_provider_migration=True)
+        assert calls == ['migrate'] and state['applying'] is not None
+    else:
+        assert updater._post_merge(state, native_provider_migration=native) == 0
+        assert calls == (['migrate'] if native else []) + ['run_log', 'services', 'restart']
 
 
 def test_repo_fixture_clones_main_with_master_default(tmp_path, monkeypatch):
