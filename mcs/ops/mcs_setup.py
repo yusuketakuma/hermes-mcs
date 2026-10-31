@@ -771,6 +771,9 @@ def _init_split_changes(initial, cfg):
                 continue
             if key == 'model' and initial.get('replace_cloud') and name != selected:
                 continue
+            if key == 'profiles' and (initial.get('preserve_openai_profiles')
+                                      or initial.get('replace_cloud') and selected != 'openai'):
+                continue
             if changed(old_providers[name], new_providers[name], key):
                 if key in new_providers[name]:
                     providers[name][key] = deepcopy(new_providers[name][key])
@@ -823,6 +826,8 @@ def _init_reselect_provider(cfg, initial, set_args):
     if initial[0] != 'split':
         return
     import cloud_policy
+    import provider_settings
+    import semantic_jev
 
     info = initial[1]
     before, after = info['view'].get('cloud_llm'), cfg.get('cloud_llm')
@@ -832,27 +837,38 @@ def _init_reselect_provider(cfg, initial, set_args):
     if 'cloud_llm' in touched:
         info['replace_cloud'] = True
         return
-    if 'cloud_llm.model' in touched:
-        return
     if not any(mcs_util.canonical({k: before[k]} if k in before else {}) !=
                mcs_util.canonical({k: after[k]} if k in after else {})
                for k in ('provider', 'provider_order')):
         return
-    if mcs_util.canonical({'model': before['model']} if 'model' in before else {}) != \
-            mcs_util.canonical({'model': after['model']} if 'model' in after else {}):
-        return
     candidate = deepcopy(cfg)
     candidate['cloud_llm'].pop('model', None)
+    candidate['cloud_llm'].pop('profiles', None)
     selection, errors = cloud_policy.resolve_settings(candidate, info['root'])
     if cloud_policy.blocking_errors(errors) or selection['provider'] == info['selected']:
         return
     info['preserve_model_for'] = info['selected']
-    model = info['state']['providers'][selection['provider']].get('model')
-    order = after.get('provider_order', ['anthropic', 'openai'])
-    if model is None or (after.get('provider', 'auto') == 'auto' and selection['provider'] != order[0]):
-        after.pop('model', None)
-    else:
-        after['model'] = model
+    view = provider_settings.execution_view(info['state']['common'], info['state']['providers'],
+        selected_provider=selection['provider'], model_owners=info['owners'], jev_model=semantic_jev.JEV_MODEL)
+    projected = view.get('cloud_llm', {})
+    profile_leaf = any(name.startswith('cloud_llm.profiles.') for name in touched)
+    if (selection['provider'] == 'openai' and profile_leaf and 'cloud_llm.profiles' not in touched
+            and 'profiles' not in before and isinstance(after.get('profiles'), dict)
+            and isinstance(projected.get('profiles'), dict)):
+        after['profiles'] = {**deepcopy(projected['profiles']), **after['profiles']}
+    for key in ('model', 'profiles'):
+        explicit = any(name == 'cloud_llm.' + key or name.startswith('cloud_llm.' + key + '.')
+                       for name in touched)
+        old_value = {key: before[key]} if key in before else {}
+        new_value = {key: after[key]} if key in after else {}
+        if explicit or mcs_util.canonical(old_value) != mcs_util.canonical(new_value):
+            continue
+        if key == 'profiles' and selection['provider'] != 'openai':
+            info['preserve_openai_profiles'] = True
+        if key in projected:
+            after[key] = deepcopy(projected[key])
+        else:
+            after.pop(key, None)
 
 
 def _init_save_config(cfg, initial, args):

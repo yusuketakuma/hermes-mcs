@@ -7,6 +7,7 @@ import pytest
 
 import cloud_policy
 import mcs_setup
+import openai_client
 import provider_settings
 import semantic_jev
 
@@ -47,6 +48,103 @@ def split(tmp_path, monkeypatch):
 
 def _read(root, owners):
     return provider_settings.read(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+
+
+def _set_split(root, common, providers):
+    data = root / 'data'
+    common = {'mcs_login_id': 'synthetic', 'notify_target': 'local', **common}
+    _put(root / 'config.json', common)
+    hashes = {name: _put(data / 'provider_settings' / (name + '.json'), value)
+              for name, value in providers.items()}
+    _put(data / '.provider-settings-authority.json', {'version': 2, 'state': 'committed', 'files': hashes,
+         'common_policy_sha256': provider_settings.common_policy_digest(common)})
+
+
+def test_split_init_auto_selects_nonfirst_private_model_and_profiles(split, monkeypatch):
+    root, providers, owners = split
+    providers['openai']['model'] = openai_client.SOL_MODEL
+    providers['openai']['profiles'] = {'backlog': 'sol-high'}
+    common = {'cloud_llm': {'mode': 'off', 'provider': 'anthropic'}, 'semantic': {'mode': 'off'}}
+    _set_split(root, common, providers)
+    monkeypatch.setattr(cloud_policy, 'provider_key', lambda name, root=None: 'synthetic' if name == 'openai' else None)
+    cfg, initial = mcs_setup._init_config_snapshot()
+    cfg['cloud_llm']['provider'] = 'auto'
+    mcs_setup._init_reselect_provider(cfg, initial, ['cloud_llm.provider="auto"'])
+    assert cfg['cloud_llm']['model'] == openai_client.SOL_MODEL
+    assert cfg['cloud_llm']['profiles'] == providers['openai']['profiles']
+    mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
+    assert _read(root, owners)['providers'] == providers
+
+
+@pytest.mark.parametrize('replacement', [False, True])
+def test_split_init_switch_preserves_unselected_openai_profiles(split, replacement):
+    root, providers, owners = split
+    providers['openai']['profiles'] = {'patient_context': 'sol-medium'}
+    common = {'cloud_llm': {'mode': 'off', 'provider': 'openai'}, 'semantic': {'mode': 'off'}}
+    _set_split(root, common, providers)
+    cfg, initial = mcs_setup._init_config_snapshot()
+    if replacement:
+        cfg['cloud_llm'] = {'mode': 'off', 'provider': 'anthropic',
+                            'provider_budgets': cfg['cloud_llm']['provider_budgets']}
+        touched = ['cloud_llm={}']
+    else:
+        cfg['cloud_llm']['provider'] = 'anthropic'
+        touched = ['cloud_llm.provider="anthropic"']
+    mcs_setup._init_reselect_provider(cfg, initial, touched)
+    assert 'profiles' not in cfg['cloud_llm']
+    mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
+    saved = _read(root, owners)
+    assert saved['providers']['openai'] == providers['openai']
+    assert saved['providers']['anthropic']['budget'] == providers['anthropic']['budget']
+
+
+def test_split_init_explicit_model_and_profile_apply_to_new_selection(split):
+    root, providers, owners = split
+    common = {'cloud_llm': {'mode': 'off', 'provider': 'anthropic'}, 'semantic': {'mode': 'off'}}
+    _set_split(root, common, providers)
+    cfg, initial = mcs_setup._init_config_snapshot()
+    cfg['cloud_llm'].update({'provider': 'openai', 'model': openai_client.SOL_MODEL,
+                             'profiles': {'quality_repair': 'sol-high'}})
+    mcs_setup._init_reselect_provider(cfg, initial, ['cloud_llm.provider="openai"',
+                                     'cloud_llm.model="gpt-6.1-sol"',
+                                     'cloud_llm.profiles.quality_repair="sol-high"'])
+    mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
+    saved = _read(root, owners)
+    assert saved['providers']['anthropic'] == providers['anthropic']
+    assert saved['providers']['openai']['model'] == openai_client.SOL_MODEL
+    assert saved['providers']['openai']['profiles'] == {'quality_repair': 'sol-high'}
+
+
+@pytest.mark.parametrize(('private_profiles', 'overrides', 'expected'), [
+    ({'backlog': 'luna-medium', 'patient_context': 'sol-medium'},
+     ['cloud_llm.profiles.quality_repair="sol-high"'],
+     {'backlog': 'luna-medium', 'patient_context': 'sol-medium', 'quality_repair': 'sol-high'}),
+    ({'backlog': 'luna-medium', 'patient_context': 'sol-medium'},
+     ['cloud_llm.profiles.backlog="sol-high"', 'cloud_llm.profiles.quality_repair="luna-medium"'],
+     {'backlog': 'sol-high', 'patient_context': 'sol-medium', 'quality_repair': 'luna-medium'}),
+    (None, ['cloud_llm.profiles.quality_repair="sol-high"'], {'quality_repair': 'sol-high'}),
+    ({'backlog': 'luna-medium', 'patient_context': 'sol-medium'},
+     ['cloud_llm.profiles={"quality_repair":"sol-high"}'], {'quality_repair': 'sol-high'}),
+    ({'backlog': 'luna-medium'},
+     ['cloud_llm.profiles={}', 'cloud_llm.profiles.quality_repair="sol-high"'],
+     {'quality_repair': 'sol-high'}),
+])
+def test_split_init_provider_switch_applies_profile_overrides_to_private_defaults(
+        split, private_profiles, overrides, expected):
+    root, providers, owners = split
+    if private_profiles is not None:
+        providers['openai']['profiles'] = private_profiles
+    common = {'cloud_llm': {'mode': 'off', 'provider': 'anthropic'}, 'semantic': {'mode': 'off'}}
+    _set_split(root, common, providers)
+    cfg, initial = mcs_setup._init_config_snapshot()
+    set_args = ['cloud_llm.provider="openai"', *overrides]
+    assert mcs_setup._init_apply_set_overrides(cfg, set_args) is None
+    mcs_setup._init_reselect_provider(cfg, initial, set_args)
+    assert cfg['cloud_llm']['profiles'] == expected
+    mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
+    saved = _read(root, owners)
+    assert saved['providers']['openai']['profiles'] == expected
+    assert saved['providers']['anthropic'] == providers['anthropic']
 
 
 def test_split_init_rechecks_after_own_directory_changes(split):

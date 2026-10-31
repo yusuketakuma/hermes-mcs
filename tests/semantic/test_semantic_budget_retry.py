@@ -11,15 +11,19 @@ import semantic
 from semantic_testkit import _FakeJev, _cfg, _ledger, _llm, _message, _patient, _seeded
 
 
-def test_summary_qc_repair_replays_bound_answer_and_rejects_tampering(tmp_path, monkeypatch):
+@pytest.mark.parametrize('case', ['legacy', 'canonical', 'canonical_empty'])
+def test_summary_qc_repair_replays_bound_answer_and_rejects_tampering(tmp_path, monkeypatch, case):
     import copy
     import hashlib
     import extract_llm
     import mcs_util
     import semantic_llm
+    import semantic_projection
+    import semantic_render
     import semantic_store
     from inference_dependency_loss import source_binding
     from inference_version import CURRENT_VERSION, VERSION_KEY
+    from semantic_testkit import v2_doc, v2_fact
 
     db = _seeded(tmp_path)
     try:
@@ -27,8 +31,22 @@ def test_summary_qc_repair_replays_bound_answer_and_rejects_tampering(tmp_path, 
         member = next(m for m in bundle['members'] if m['message_id'] == 1)
         fp, policy, revision = bundle['source_fingerprint'], 'synthetic-policy', member['revision']
         common = {VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp, 'policy_fingerprint': policy}
-        facts, verdicts = [], {}
-        fact_id = db.artifact_add('semantic_facts', json.dumps({'facts': facts}), project_id=1, message_id=1,
+        canonical = case != 'legacy'
+        verdicts = {}
+        if canonical:
+            fact_items = [] if case == 'canonical_empty' else [v2_fact('synthetic-fact', statement='完全合成の事実')]
+            obligations = [] if case == 'canonical_empty' else [
+                {'obligation_id': 'synthetic-open', 'owner_id': 'synthetic-chunk',
+                              'category': 'medication', 'source': 'deterministic', 'importance': 'unknown',
+                              'status': 'open', 'fact_ids': []}]
+            fact_doc = v2_doc(fact_items, obligations=obligations,
+                source={'message_id': '1', 'revision': member['revision'], 'source_fingerprint': fp})
+            fact_kind = 'semantic_facts_v2'
+            facts = semantic_projection.project_v2_facts(fact_doc)
+        else:
+            facts, fact_kind = [], 'semantic_facts'
+            fact_doc = {'facts': facts}
+        fact_id = db.artifact_add(fact_kind, json.dumps(fact_doc), project_id=1, message_id=1,
                                   meta=common)
         assessment_id = db.artifact_add('semantic_assess', json.dumps({'target_message_id': 1,
             'verdicts': verdicts}), project_id=1, message_id=1, meta=common)
@@ -64,7 +82,7 @@ def test_summary_qc_repair_replays_bound_answer_and_rejects_tampering(tmp_path, 
                                               'AND (message_id=1 OR parent_id=1) ORDER BY message_id')]
         owner = {'semantic_target_id': 1, 'semantic_thread_root': 1, 'semantic_phase': 'summary',
                  'semantic_generation': 'synthetic', 'semantic_source': mcs_util.payload_hash(occurrences)}
-        evidence = {'version': 1, 'project_id': 1, 'message_id': 1, 'fact_kind': 'semantic_facts',
+        evidence = {'version': 1, 'project_id': 1, 'message_id': 1, 'fact_kind': fact_kind,
                     'facts_id': fact_id, 'assessment_id': assessment_id, 'original_summary_id': summary_id,
                     'audit_id': audit_id, 'repair_id': repair_id,
                     'answer': {'text': answer_text, 'prompt_sha256': hashlib.sha256(prompts[0].encode()).hexdigest(),
@@ -79,27 +97,96 @@ def test_summary_qc_repair_replays_bound_answer_and_rejects_tampering(tmp_path, 
             return {}
 
         monkeypatch.setattr(extract_llm, '_cloud_repair_answer_evidence', verify)
-        assert semantic_drain._summary_repair_evidence(db.db, bundle, result, evidence, fp, policy, revision)
+        assert semantic_drain._summary_repair_evidence(
+            db.db, bundle, result, evidence, fp, policy, revision, render_phase='pre_render')
+        rendered = copy.deepcopy(result)
+        if canonical:
+            if case == 'canonical':
+                assert not semantic_drain._summary_repair_evidence(db.db, bundle, result, evidence, fp, policy, revision)
+            rendered['audit_status'] = semantic_render.apply_mandatory_render(rendered, [], 'PASS', fact_doc)
+            if case == 'canonical':
+                assert rendered['mandatory_facts'] and rendered['mandatory_fact_ids'] and rendered['mandatory_pages']
+                assert rendered['mandatory_overview'] and rendered['limitations'] and rendered['code_limitations']
+            assert semantic_drain._summary_repair_evidence(db.db, bundle, rendered, evidence, fp, policy, revision)
+            if case == 'canonical':
+                for field in ('mandatory_facts', 'mandatory_fact_ids', 'mandatory_pages', 'mandatory_overview',
+                              'limitations', 'code_limitations'):
+                    changed = copy.deepcopy(rendered)
+                    changed[field] = [] if isinstance(changed[field], list) else '改変'
+                    assert not semantic_drain._summary_repair_evidence(db.db, bundle, changed, evidence, fp, policy, revision)
+        else:
+            assert semantic_drain._summary_repair_evidence(db.db, bundle, rendered, evidence, fp, policy, revision)
         proof_id = db.artifact_add('semantic_repair', json.dumps({'target_message_id': 1,
             '__mcs_internal_proof_v1': evidence}), project_id=1, message_id=1,
             meta={**common, 'repair_count': 1})
         reference = {'artifact_id': proof_id, 'hash': mcs_util.payload_hash(evidence)}
         producer = {'providers': ['openai'], 'complete': True, 'repair_evidence': reference}
-        proof = semantic_drain._summary_provenance(producer, fp, policy, revision, result)
+        if canonical:
+            producer['repair_render_phase'] = 'rendered'
+        proof = semantic_drain._summary_provenance(producer, fp, policy, revision, rendered)
         assert answer_text not in json.dumps(proof, ensure_ascii=False)
-        assert semantic_drain._summary_producer({'content': result, 'meta': {'provider_provenance': proof}},
+        assert semantic_drain._summary_producer({'content': rendered, 'meta': {'provider_provenance': proof}},
                                                 fp, policy, revision, db=db.db, bundle=bundle) == producer
+        if canonical:
+            pending = {**result, 'audit_status': 'PENDING'}
+            pending_producer = {**producer, 'repair_render_phase': 'pending'}
+            pending_result = {'summary': pending, 'findings': [{'code': 'support_unevaluated'}],
+                'repaired': True, 'producer': pending_producer,
+                'claim_input_binding': semantic_drain._claim_input_binding(1, 1, fp, policy, revision, pending, facts)}
+            with db.db:
+                semantic_drain._write_result(db, 1, 1, pending_result, fp, {1: member}, 'PENDING', policy, 'shadow')
+            retained = semantic_store.current_artifact(db.db, 'semantic_summary', 1, fp, policy)
+            assert semantic_drain._summary_producer(retained, fp, policy, revision, db=db.db, bundle=bundle) == pending_producer
+            wrong_phase = copy.deepcopy(retained)
+            wrong_phase['content']['audit_status'] = 'PASS'
+            wrong_phase['meta']['provider_provenance']['result_hash'] = mcs_util.payload_hash(wrong_phase['content'])
+            assert not semantic_drain._summary_producer(wrong_phase, fp, policy, revision, db=db.db, bundle=bundle)['complete']
+            audit_row = db.db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind='semantic_audit' "
+                                      "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+            altered = json.loads(audit_row['meta'])
+            altered['claim_input_binding'] = 'invalid'
+            db.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(altered), audit_row['artifact_id']))
+            assert not semantic_drain._summary_producer(retained, fp, policy, revision, db=db.db, bundle=bundle)['complete']
+            db.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (audit_row['meta'], audit_row['artifact_id']))
+            if case == 'canonical_empty':
+                summary_row = db.db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind='semantic_summary' "
+                                            "ORDER BY artifact_id DESC LIMIT 1").fetchone()
+                old_meta = json.loads(summary_row['meta'])
+                old_meta['provider_provenance'].pop('repair_render_phase')
+                db.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(old_meta), summary_row['artifact_id']))
+                old_pending = semantic_store.current_artifact(db.db, 'semantic_summary', 1, fp, policy)
+                assert semantic_drain._summary_producer(old_pending, fp, policy, revision, db=db.db, bundle=bundle)['complete']
+                altered = json.loads(audit_row['meta'])
+                altered.pop('claim_input_binding')
+                db.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(altered), audit_row['artifact_id']))
+                assert not semantic_drain._summary_producer(old_pending, fp, policy, revision, db=db.db, bundle=bundle)['complete']
+                db.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (audit_row['meta'], audit_row['artifact_id']))
+            resumed_producer = {**pending_producer, 'repair_render_phase': 'rendered'}
+            final_result = {'summary': rendered, 'findings': [], 'repaired': True, 'producer': resumed_producer,
+                'claim_input_binding': semantic_drain._claim_input_binding(1, 1, fp, policy, revision, rendered, facts)}
+            with db.db:
+                semantic_drain._write_result(db, 1, 1, final_result, fp, {1: member}, 'PASS', policy, 'shadow')
+            retained_final = semantic_store.current_artifact(db.db, 'semantic_summary', 1, fp, policy)
+            assert semantic_drain._summary_producer(retained_final, fp, policy, revision, db=db.db, bundle=bundle) == resumed_producer
+            tampered_doc = copy.deepcopy(fact_doc)
+            if tampered_doc['facts']:
+                tampered_doc['facts'][0]['statement'] = '完全合成の変更'
+            else:
+                tampered_doc['obligations'].append({'obligation_id': 'tampered', 'category': 'medication', 'status': 'open'})
+            db.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(tampered_doc), fact_id))
+            assert not semantic_drain._summary_producer(retained_final, fp, policy, revision, db=db.db, bundle=bundle)['complete']
+            db.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(fact_doc), fact_id))
         allowed[0] = False
-        assert not semantic_drain._summary_repair_evidence(db.db, bundle, result, evidence, fp, policy, revision)
+        assert not semantic_drain._summary_repair_evidence(db.db, bundle, rendered, evidence, fp, policy, revision)
         allowed[0] = True
         for key, value in [('audit_id', summary_id), ('original_summary_id', assessment_id),
                            ('message_id', 2), ('facts_id', repair_id)]:
             changed = copy.deepcopy(evidence)
             changed[key] = value
-            assert not semantic_drain._summary_repair_evidence(db.db, bundle, result, changed, fp, policy, revision)
+            assert not semantic_drain._summary_repair_evidence(db.db, bundle, rendered, changed, fp, policy, revision)
         changed = copy.deepcopy(evidence)
         changed['answer']['text'] += 'changed'
-        assert not semantic_drain._summary_repair_evidence(db.db, bundle, result, changed, fp, policy, revision)
+        assert not semantic_drain._summary_repair_evidence(db.db, bundle, rendered, changed, fp, policy, revision)
     finally:
         db.close()
 
@@ -356,5 +443,99 @@ def test_summary_repair_reservation_tracks_actual_dispatch(tmp_path, monkeypatch
         assert resumed["done"] == 1
         assert calls == ["repair"] * (1 if failure == "post_dispatch" else 2)
         assert len(db.artifacts("semantic_repair", message_id=1)) == 1
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('interruption', ['budget', 'not_sent'])
+def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeypatch, interruption):
+    import extract_llm
+    import inference_dependency_loss
+    import mcs_util
+    import semantic_policy
+    import semantic_store
+    import semantic_transport
+    from semantic_testkit import _PassJev, _canonical_cfg, _llm_v2
+
+    db = _ledger(tmp_path)
+    patient = _patient(db)
+    patient.messages = [_message(1, body='アムロジピン5mgを継続します。')]
+    db.save_patient(patient, notify={'source': 'unread'}, semantic=True)
+    state = {'audits': 0, 'repairs': 0, 'requests': [], 'receipt': None}
+    contract = {'backend': 'openai', 'model': 'synthetic-sol', 'prompt': 'synthetic-contract'}
+
+    def llm(prompt, **_kwargs):
+        value = _llm_v2(prompt)
+        if semantic_transport._inference_purpose.get() == 'quality_repair':
+            state['repairs'] += 1
+            rid = 'a' * 32
+            reserve_id = db.artifact_add('cloud_usage_reserve', '{}', project_id=1, message_id=1,
+                                         meta={'reservation_id': rid})
+            mids = db.db.execute('SELECT message_id FROM messages WHERE project_id=1 '
+                                 'AND (message_id=1 OR parent_id=1) ORDER BY message_id').fetchall()
+            occurrences = [(row[0], inference_dependency_loss.source_binding(db.db, 1, row[0])) for row in mids]
+            owner = {'semantic_target_id': 1, 'semantic_thread_root': 1, 'semantic_phase': 'summary',
+                     'semantic_generation': 'synthetic', 'semantic_source': mcs_util.payload_hash(occurrences)}
+            state.update(reserve_id=reserve_id, prompt=prompt, answer=value, owner=owner,
+                         receipt={'reservation_id': rid, 'unit_key': 'semantic:synthetic', 'owner': owner})
+            state['requests'].append(rid)
+            semantic_transport._record_inference('openai')
+        else:
+            semantic_transport._record_inference('local')
+        return value
+
+    def audit(_client, _bundle, summary, *_args, **_kwargs):
+        state['audits'] += 1
+        claim_id = summary['claims'][0]['claim_id']
+        if state['audits'] == 2:
+            error = semantic_runtime.RuntimeBudget if interruption == 'budget' else semantic_runtime.LLMNotSent
+            raise error('synthetic_reaudit')
+        choice = 'not_supported' if state['audits'] == 1 else 'supports'
+        client.requests_made += 1
+        summary['_claim_audit'] = {claim_id: {'choice': choice, 'confidence': 0.95}}
+        return ([{'code': 'claim_not_supported', 'claim': claim_id, 'confidence': 0.95}]
+                if choice == 'not_supported' else []), True
+
+    def verify(_db, **kwargs):
+        if (kwargs['reservation_artifact_id'] != state.get('reserve_id')
+                or kwargs['prompt'] != state.get('prompt') or kwargs['answer_text'] != state.get('answer')
+                or kwargs['owner'] != state.get('owner') or kwargs['contract'] != contract):
+            raise ValueError('synthetic-receipt-invalid')
+        return {}
+
+    monkeypatch.setattr(semantic_audit, 'audit_claims', audit)
+    monkeypatch.setattr(extract_llm, '_cloud_repair_answer_evidence', verify)
+    monkeypatch.setattr(semantic_transport, 'inference_requests', lambda: list(state['requests']))
+    monkeypatch.setattr(semantic_transport, 'inference_receipt', lambda: state['receipt'])
+    monkeypatch.setattr(semantic_transport, 'inference_contract', lambda: (
+        contract if semantic_transport._inference_purpose.get() == 'quality_repair' else None))
+    cfg = _canonical_cfg()
+    client = _PassJev()
+    try:
+        diagnostics = {'errors': []}
+        first = semantic_drain.run_due(db, cfg, diagnostics, time.monotonic() + 600,
+                                      jev_client=client, llm_fn=llm)
+        assert not first['done'] and state['repairs'] == 1 and state['audits'] == 2, (
+            first, diagnostics, {k: state[k] for k in ('repairs', 'audits')})
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
+        fp = bundle['source_fingerprint']
+        policy = semantic_policy.policy_fingerprint(semantic_policy.runtime_config(cfg)[0])
+        revision = next(m['revision'] for m in bundle['members'] if m['message_id'] == 1)
+        pending = semantic_store.current_artifact(db.db, 'semantic_summary', 1, fp, policy)
+        audit_row = semantic_store.current_artifact(db.db, 'semantic_audit', 1, fp, policy)
+        assert pending['content']['audit_status'] == 'PENDING'
+        assert audit_row['meta']['repair_count'] == 1 and audit_row['meta']['claim_input_binding']
+        pending_producer = semantic_drain._summary_producer(pending, fp, policy, revision, db=db.db, bundle=bundle)
+        assert pending_producer['complete'] is True and pending_producer['repair_render_phase'] == 'pending'
+        with db.db:
+            db.db.execute("UPDATE fetch_jobs SET next_try=0 WHERE kind='semantic'")
+        second = semantic_drain.run_due(db, cfg, {'errors': []}, time.monotonic() + 600,
+                                       jev_client=client, llm_fn=llm)
+        assert second['done'] == 1 and state['repairs'] == 1
+        final = semantic_store.current_artifact(db.db, 'semantic_summary', 1, fp, policy)
+        producer = semantic_drain._summary_producer(final, fp, policy, revision, db=db.db, bundle=bundle)
+        assert producer['complete'] is True and producer['repair_render_phase'] == 'rendered'
+        assert final['meta']['provider_provenance']['jev'] == 'done'
+        assert final['content']['mandatory_facts'] and state['requests'] == ['a' * 32]
     finally:
         db.close()

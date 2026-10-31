@@ -107,6 +107,8 @@ def _summary_provenance(producer, fp, policy, revision, summary, jev="unknown"):
             "target_revision": revision, "jev": jev}
     if 'repair_evidence' in producer:
         proof['repair_evidence'] = producer['repair_evidence']
+        if 'repair_render_phase' in producer:
+            proof['repair_render_phase'] = producer['repair_render_phase']
     return proof
 
 
@@ -136,6 +138,19 @@ def _summary_producer(artifact, fp, policy, revision, *, db=None, bundle=None):
                              (reference['artifact_id'], KIND_REPAIR)).fetchone()
             content, meta = (strict_json(row['content']), strict_json(row['meta'])) if row else (None, None)
             evidence = content.get('__mcs_internal_proof_v1') if isinstance(content, dict) else None
+            phase = proof.get('repair_render_phase')
+            if phase not in (None, 'pending', 'rendered'):
+                return unknown
+            if phase is not None and isinstance(evidence, dict) and evidence.get('fact_kind') != KIND_FACTS_V2:
+                return unknown
+            if phase is None and isinstance(evidence, dict) and evidence.get('fact_kind') == KIND_FACTS_V2:
+                if artifact['content'].get('audit_status') == 'PENDING':
+                    if not _summary_repair_pending(db, bundle, artifact['content'], evidence,
+                                                   fp, policy, revision, completed_id=reference['artifact_id']):
+                        return unknown
+                    phase = 'pending'
+                else:
+                    phase = 'rendered'
             if (not isinstance(evidence, dict) or not isinstance(evidence.get('answer'), dict)
                     or not isinstance(evidence['answer'].get('contract'), dict)
                     or row['project_id'] != evidence.get('project_id') or row['message_id'] != evidence.get('message_id')
@@ -145,11 +160,13 @@ def _summary_producer(artifact, fp, policy, revision, *, db=None, bundle=None):
                     or proof['complete'] is not True
                     or proof['providers'] != [evidence['answer']['contract'].get('backend')]
                     or not _summary_repair_evidence(db, bundle, artifact['content'], evidence, fp, policy, revision,
-                                                    completed_id=reference['artifact_id'])):
+                                                    completed_id=reference['artifact_id'], render_phase=phase)):
                 return unknown
         except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
             return unknown
         producer['repair_evidence'] = reference
+        if proof.get('repair_render_phase') is not None:
+            producer['repair_render_phase'] = proof['repair_render_phase']
     return producer
 
 
@@ -172,7 +189,72 @@ def _claim_input_binding(pid, mid, fp, policy, revision, summary, facts):
                                   "claims": summary.get("claims"), "facts": facts})
 
 
-def _summary_repair_evidence(db, bundle, summary, evidence, fp, policy, revision, *, completed_id=None):
+def _summary_repair_pending(db, bundle, summary, evidence, fp, policy, revision, *, completed_id):
+    """Accept an unrendered result only when its interrupted audit is retained."""
+    try:
+        pid, mid = evidence['project_id'], evidence['message_id']
+        if (type(completed_id) is not int or completed_id <= 0
+                or summary.get('audit_status') != 'PENDING' or bundle.get('source_fingerprint') != fp
+                or next(m for m in bundle['members'] if m['message_id'] == mid)['revision'] != revision):
+            return False
+        prior = db.execute('SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? '
+                           'AND message_id=? ORDER BY artifact_id DESC LIMIT 1', (KIND_SUMMARY, pid, mid)).fetchone()
+        audit = db.execute('SELECT content,meta FROM artifacts WHERE kind=? AND project_id=? '
+                           'AND message_id=? ORDER BY artifact_id DESC LIMIT 1', (KIND_AUDIT, pid, mid)).fetchone()
+        if prior is None or audit is None:
+            return False
+        stored, smeta = strict_json(prior['content']), strict_json(prior['meta'])
+        result, ameta = strict_json(audit['content']), strict_json(audit['meta'])
+        fact_kind = evidence.get('fact_kind')
+        if fact_kind not in (KIND_FACTS, KIND_FACTS_V2):
+            return False
+        fact_row = db.execute('SELECT content,meta FROM artifacts WHERE artifact_id=? AND kind=? '
+                              'AND project_id=? AND message_id=?',
+                              (evidence.get('facts_id'), fact_kind, pid, mid)).fetchone()
+        if fact_row is None:
+            return False
+        fact_doc, fact_meta = strict_json(fact_row['content']), strict_json(fact_row['meta'])
+        if (not isinstance(fact_doc, dict) or not isinstance(fact_meta, dict) or not is_current(fact_meta)
+                or fact_meta.get('invalidated') or fact_meta.get('stale')
+                or fact_meta.get('fingerprint') != fp or fact_meta.get('policy_fingerprint') != policy):
+            return False
+        if fact_kind == KIND_FACTS_V2:
+            import semantic_projection
+            facts = semantic_projection.project_v2_facts(fact_doc)
+        else:
+            facts = fact_doc.get('facts')
+        if not isinstance(facts, list):
+            return False
+        findings = result.get('findings') if isinstance(result, dict) else None
+        return (stored == summary and isinstance(smeta, dict) and isinstance(ameta, dict)
+                and is_current(smeta) and is_current(ameta)
+                and not smeta.get('invalidated') and not ameta.get('invalidated')
+                and not smeta.get('stale') and not ameta.get('stale')
+                and smeta.get('fingerprint') == ameta.get('fingerprint') == fp
+                and smeta.get('policy_fingerprint') == ameta.get('policy_fingerprint') == policy
+                and smeta.get('target_revision') == ameta.get('target_revision') == revision
+                and isinstance(smeta.get('provider_provenance'), dict)
+                and smeta['provider_provenance'].get('repair_evidence') == {
+                    'artifact_id': completed_id, 'hash': mcs_util.payload_hash(evidence)}
+                and smeta['provider_provenance'].get('repair_render_phase') in (None, 'pending')
+                and smeta.get('publication_mode') == ameta.get('publication_mode')
+                and smeta.get('audit_status') == ameta.get('audit_status') == 'PENDING'
+                and result.get('status') == 'PENDING' and result.get('target_message_id') == mid
+                and type(ameta.get('repair_count')) is int and ameta['repair_count'] == 1
+                and type(ameta.get('summary_artifact_id')) is int
+                and ameta['summary_artifact_id'] == prior['artifact_id']
+                and ameta.get('summary_hash') == mcs_util.payload_hash(stored)
+                and ameta.get('audit_content_hash') == mcs_util.payload_hash(result)
+                and ameta.get('claim_input_binding') == _claim_input_binding(pid, mid, fp, policy, revision, stored, facts)
+                and isinstance(findings, list)
+                and any(isinstance(item, dict) and item.get('code') == 'support_unevaluated' for item in findings))
+    except (StopIteration, KeyError, TypeError, ValueError, AttributeError, RecursionError,
+            OverflowError, sqlite3.Error):
+        return False
+
+
+def _summary_repair_evidence(db, bundle, summary, evidence, fp, policy, revision, *,
+                             completed_id=None, render_phase=None):
     """Replay a QC summary repair against its retained inputs and settled answer."""
     import bounded_http
     import extract_llm
@@ -295,6 +377,19 @@ def _summary_repair_evidence(db, bundle, summary, evidence, fp, policy, revision
         replay = semantic_llm.summarize(reply, bundle, mid, facts, assessment['verdicts'], feedback=feedback)
         if not called or not isinstance(replay, dict):
             return False
+        if kind == KIND_FACTS_V2:
+            if render_phase == 'pending':
+                if not _summary_repair_pending(db, bundle, summary, evidence, fp, policy, revision,
+                                               completed_id=completed_id):
+                    return False
+            elif render_phase != 'pre_render':
+                if render_phase not in (None, 'rendered'):
+                    return False
+                status = summary.get('audit_status')
+                if status not in ('PASS', 'PENDING', 'NEEDS_REVIEW', 'SKIPPED'):
+                    return False
+                if semantic_render.apply_mandatory_render(replay, [], status, fact_content) != status:
+                    return False
         return ({k: v for k, v in replay.items() if k != 'audit_status'}
                 == {k: v for k, v in summary.items() if k != 'audit_status' and not k.startswith('_')})
     except (StopIteration, KeyError, TypeError, ValueError, AttributeError, RecursionError,
@@ -1814,11 +1909,14 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                             guard, partial_answers=partial, audit_state='held' if partial else 'ready')
                     if _attempt and not empty_repair:
                         summary["audit_status"] = "PENDING"
+                        if fact_source == 'canonical' and producer.get('repair_evidence'):
+                            producer = {**producer, 'repair_render_phase': 'pending'}
                         results[mid] = {
                             "summary": summary, "status": "PENDING",
                             "findings": code_f + [{"code": "support_unevaluated"}],
                             "repaired": True, "fresh": True,
                             "producer": producer, "jev_outcome": "unknown",
+                            "claim_input_binding": claim_input_binding,
                             "jev_requests": (jev_client.requests_made - req0)
                             if jev_client else 0}
                     break
@@ -1977,7 +2075,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                             repair_evidence = {'version': 1, 'project_id': pid, 'message_id': mid,
                                 'fact_kind': fact_kind, **refs, 'repair_id': repair_id, 'answer': repair_answers[0]}
                             if _summary_repair_evidence(ledger.db, bundle, summary2, repair_evidence,
-                                                        fp, policy, members[mid]['revision']):
+                                                        fp, policy, members[mid]['revision'], render_phase='pre_render'):
                                 guard('summary_repair_evidence')
                                 proof_id = ledger.artifact_add(
                                     KIND_REPAIR, json.dumps({'target_message_id': mid,
@@ -2022,6 +2120,8 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
             # summary (C02).
             status = semantic_render.apply_mandatory_render(summary, findings, status,
                                              v2_doc)
+            if producer.get('repair_evidence'):
+                producer = {**producer, 'repair_render_phase': 'rendered'}
         summary["audit_status"] = status
         if fact_source == "canonical":
             v4.record_stage(ledger, pid, mid, fp, policy,
