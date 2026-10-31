@@ -6,8 +6,6 @@ and audit decisions are consumed from their defining modules. This worker
 owns claims, guarded stage commits and job outcomes."""
 from __future__ import annotations
 
-from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
-
 import os
 import sys
 
@@ -35,7 +33,8 @@ import threading
 import time
 
 from mcs_util import load_config, loads_dict, strict_json
-from inference_version import current_meta_pred, read_version, LEGACY_VERSION
+from inference_version import (CURRENT_VERSION, VERSION_KEY, is_current,
+                               current_meta_pred, read_version, LEGACY_VERSION)
 import semantic_jev as jev
 import semantic_runtime as runtime
 import semantic_v4 as v4
