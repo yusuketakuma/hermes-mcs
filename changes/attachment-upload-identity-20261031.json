@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "添付の名前が変わった後も既存の投稿を安全に更新",
+  "summary": "Slackの添付名が変わった場合、同じ添付の配送記録を確認して既存投稿の説明を更新します。確認できない場合は更新を保留します。",
+  "upgrade": "Hermesでは更新後のgateway再起動、独立モードではhost再起動で反映されます。",
+  "details": ["元のアップロード名は配送先・スレッド・添付・内容の証拠が一致するときだけ再利用します。", "送信先や添付を確認できない場合に新しいアップロードや投稿を追加しません。"],
+  "refs": ["mcs/notify/notify_parts.py", "mcs/notify/notify_spool.py", "mcs/notify/notify_recovery.py"]
+}

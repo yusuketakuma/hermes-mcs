@@ -4,10 +4,59 @@ import copy
 from types import SimpleNamespace
 import pytest
 from adapters.slack.delivery import SlackCardAdapter
-from slack_testkit import isolated_slack_ledger as led, _rewrite_world, _updates, FakeClient, ROOT_TS, SCOPE
+from slack_testkit import (isolated_slack_ledger as led, _attach, _granted_card, _mkworld,
+                           _rewrite_world, _updates, FakeClient, ROOT_TS, SCOPE, SLACK)
 
 __all__ = ["led"]
 pytestmark = pytest.mark.thread_bodies
+
+
+def test_renamed_attachment_edits_existing_upload_across_two_updates(led, tmp_path, monkeypatch):
+    import json
+    import notify_cards
+    import notify_spool
+    from notify_testkit import NOW, _dispatch, _intent, _latest_render, _seed_thread
+
+    monkeypatch.setattr(notify_cards.time, "time", lambda: NOW)
+    _seed_thread(led, mids=(100,))
+    attachment_id, path, blob = _attach(led, tmp_path, name="synthetic-original.bin")
+    assert _dispatch(led, _intent(led, payload={"message_ids": [100]}), SLACK)["dispatched"]
+    world = _mkworld(led)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    first = json.loads(_latest_render(led)["spec_json"])
+    first_part = next(p for p in first["parts"]["manifest"] if p["kind"] == "attachment_part")
+    old_name = first_part["name"]
+    assert old_name == "synthetic-original.bin" and len(world.client.upload_calls) == 1
+    file_message = next(m for m in world.client.replies[ROOT_TS] if m.get("files"))
+    remote_id = file_message["files"][0]["id"]
+    target_ts = file_message["ts"]
+    posts = len(world.client.thread_posts)
+    uploads = len(world.client.upload_calls)
+    initial_edits = len([u for u in _updates(world) if u["ts"] == target_ts])
+
+    for revision, new_name in enumerate(("synthetic-renamed.bin", "synthetic-again.bin"), 1):
+        new_path = path.with_name(new_name)
+        new_path.write_bytes(blob)
+        specs = []
+        with led.db:
+            led.db.execute("UPDATE attachments SET name=?,local_path=? WHERE attachment_id=?",
+                           (new_name, str(new_path), attachment_id))
+            notify_cards.issue_render(led.db, 1, SLACK, NOW + revision, specs, force=True)
+        assert len(specs) == 1
+        part = next(p for p in specs[0]["parts"]["manifest"] if p["kind"] == "attachment_part")
+        assert part["name"] == old_name and part["path"] == str(new_path)
+        assert new_name in part["caption"]
+        assert part["prior_remote_id"] == remote_id and part["edit_only"] is True
+        notify_spool.publish_specs(led.db, notify_spool.notify_dirs(str(world.root)), specs, NOW + revision)
+        asyncio.run(_granted_card(world.worker, led, world.root))
+        assert len(world.client.upload_calls) == uploads
+        assert len(world.client.thread_posts) == posts
+        edits = [u for u in _updates(world) if u["ts"] == target_ts]
+        assert len(edits) == initial_edits + revision and new_name in edits[-1]["text"]
+        row = led.db.execute(
+            "SELECT state,remote_id,name FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+            (specs[0]["delivery_id"], part["part_id"])).fetchone()
+        assert tuple(row) == ("delivered", remote_id, old_name)
 
 
 def setup(led):

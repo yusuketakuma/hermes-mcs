@@ -407,7 +407,7 @@ def card_part_resolve_plan(ledger, delivery_id, part_id, *, include_related=Fals
 
 # reasons the planner/worker stores on a held or unknown part; others count as 'unknown'
 PART_HOLD_REASONS = ("part_budget_exceeded", "thread_cleanup_budget_exceeded",
-                     "blank_part_unrepresentable", "card_revoked",
+                     "blank_part_unrepresentable", "attachment_upload_identity_unverified", "card_revoked",
                      *_PREFLIGHT_ERRORS)
 
 

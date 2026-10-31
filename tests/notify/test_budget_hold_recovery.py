@@ -6,11 +6,13 @@ from pathlib import Path
 import pytest
 
 import notify_spool
+import notify_recovery
 from notify_testkit import (CFG, NOW, _begin, _dispatch, _intent, _latest_render,
                             _seed_thread, led as led)
 
 
-@pytest.mark.parametrize("error_code", ["part_budget_exceeded", "thread_cleanup_budget_exceeded"])
+@pytest.mark.parametrize("error_code", ["part_budget_exceeded", "thread_cleanup_budget_exceeded",
+                                        "attachment_upload_identity_unverified"])
 def test_resource_hold_is_never_published_or_granted(led, monkeypatch, error_code):
     _seed_thread(led, mids=(100,))
     monkeypatch.setattr(notify_parts, "MAX_PARTS", 3)
@@ -25,6 +27,7 @@ def test_resource_hold_is_never_published_or_granted(led, monkeypatch, error_cod
         with led.db:
             led.db.execute("UPDATE notification_render_parts SET error_code=? WHERE delivery_id=?",
                            (error_code, held["delivery_id"]))
+    assert notify_recovery.part_hold_report(led)["parts"]["held"][error_code] > 0
     dirs = notify_spool.notify_dirs(notify_spool.data_root(led))
     path = Path(dirs["discord_render"]) / (held["delivery_id"] + ".json")
     assert not path.exists()
