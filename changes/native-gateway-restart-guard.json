@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "更新後のHermes再起動を正規手順に合わせる",
+  "summary": "更新後のHermes gatewayの再起動を、所有先を確認したうえでHermesの正規手順に依頼します。プロセスの切替を確認できない場合は未完了として扱います。",
+  "upgrade": "初回は正式な更新手順で再導入を行い、再起動の結果と稼働状態を確認してください。",
+  "details": [
+    "復元が保留されている場合は再起動しません。",
+    "Hermesの版や設定によって、実行中の処理を理由に再起動を拒否しない場合があります。"
+  ],
+  "refs": [
+    "deployment/recovery/mcs_recover.py",
+    "docs/guides/UPGRADE_AGENT.md"
+  ]
+}

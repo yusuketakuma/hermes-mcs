@@ -170,7 +170,7 @@ launcherの選択runtime追随とbackup lifecycleは合成回帰で検証し、
 - 更新中は収集・抽出・通知が止まる。適用はタグの照合・取得でネットワークが必要。
   再導入（install.sh）を伴う場合はbrew・pipの導入で数分〜最大1時間かかる。認識済みの旧固定版Hermesは
   更新ツールの再導入経路で移行し、未知・変更中のcheckoutは停止する。開始前にユーザーへ伝える。
-- **更新を実行するのは常に移行先版のコード。** 現在の checkout の更新機能は使わない。
+- **更新を実行するのは常に移行先版のコード。** 現在の checkout の更新機能は使わない。§2・§5の起動役は移行先の更新ツールと復旧ヘルパーを取り出します。旧 checkout の更新ツールを直接起動した場合や、旧 SDC owner からの初回適用では、新しいネイティブ再起動経路が使われるとは限りません。
 
 ## 1. 対象と Python の特定
 
@@ -361,7 +361,7 @@ DB を開いて移行（加法 migration）→ 事後検証。失敗時は自動
 
 ## 6. 後処理と検証
 
-1. `restarts` に `gateway` があり Hermes モードなら、apply が再起動を依頼済み。`hermes gateway status` で稼働を確認する。
+1. `restarts` に `gateway` があり Hermes モードなら、apply は再起動を依頼します。`data/gateway_restart.json` が `supervisor_restart_verified` になるまでは再起動未完了として扱い、`hermes gateway status` で稼働も確認してください。`requested`・`failed`・`unknown` は反映の証拠ではありません。Hermes の版によっては、実行中の処理を理由に再起動を拒否しません。再起動を確認できない間は、旧 worker が新しい通知形式を処理する可能性があります。処理状況を確認し、安全に再起動できる時点で管理担当者が対応してください。
 2. `lineworks_adapter` があれば、[LINEWORKS.md](LINEWORKS.md) の手順で独立アダプターを再起動し `python -m lineworks_adapter check`。1.0.15では自動更新・巻戻し・復旧後の再起動を追加しましたが、この版への初回更新後も明示的な再起動と反映確認を行います。
 3. `notes` にある追加操作（承認済みのもの）を実行する。`apply` 経路で `recovery_tool_changed` が true なら §2 の表のとおり install.sh を再実行する。
 4. 使用中のgatewayまたは独立host・通知アダプターと抽出ワーカー2本について、更新後に起動したプロセスであることと稼働状態を確認します。古いworkerが新しい通知形式を保留している場合、保存ファイルを削除して再送させず、更新したworkerで通常の配送を再開します。

@@ -32,11 +32,15 @@ def gateway(tmp_path, monkeypatch):
     running = {'pid': 101}
 
     def run(argv, **kwargs):
-        assert argv[0] == 'launchctl'
         calls.append(argv)
-        if argv[1] == 'kickstart':
+        if argv[-4:] == ['-p', 'default', 'gateway', 'restart']:
+            assert kwargs['stdin'] == kwargs['stdout'] == kwargs['stderr'] == subprocess.DEVNULL
+            assert kwargs['env']['HOME'] == str(home)
+            assert kwargs['env']['HERMES_HOME'] == str(plistlib.loads(plist.read_bytes()).get(
+                'EnvironmentVariables', {}).get('HERMES_HOME', home / '.hermes'))
             running['pid'] = 202
             return subprocess.CompletedProcess(argv, 0)
+        assert argv[0] == 'launchctl'
         if argv[-1].startswith(running.get('domain', 'user') + '/'):
             return subprocess.CompletedProcess(argv, 0,
                                                f'path = {plist}\npid = {running["pid"]}\n')
@@ -51,7 +55,7 @@ def test_owned_domain_jxa_gateway_is_restarted_and_pid_verified(gateway, domain)
     rec, data, agents, _, calls, running = gateway
     running['domain'] = domain
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 0
-    assert ['launchctl', 'kickstart', '-k', f'{domain}/501/ai.hermes.gateway'] in calls
+    assert [str(agents.parent.parent / '.local/bin/hermes'), '-p', 'default', 'gateway', 'restart'] in calls
     report = json.loads((data / 'gateway_restart.json').read_text())
     assert report['status'] == 'supervisor_restart_verified' and report['pid'] == 202
     assert report['previous_pid'] == 101
@@ -73,17 +77,17 @@ def test_unowned_ambiguous_or_held_gateway_is_never_reported_restarted(gateway, 
                 return subprocess.CompletedProcess(argv, 0, 'path = /foreign/service.plist\npid = 101\n')
             if fault == 'ambiguous' and argv[-1].startswith('gui/'):
                 return subprocess.CompletedProcess(argv, 0, f'path = {plist}\npid = 303\n')
-            if fault == 'reject' and argv[1] == 'kickstart':
+            if fault == 'reject' and argv[-4:] == ['-p', 'default', 'gateway', 'restart']:
                 calls.append(argv)
                 return subprocess.CompletedProcess(argv, 1)
             return real(argv, **kwargs)
         monkeypatch.setattr(rec.subprocess, 'run', run)
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
     report = json.loads((data / 'gateway_restart.json').read_text())
-    assert report['status'] == 'failed'
+    assert report['status'] == ('unknown' if fault == 'reject' else 'failed')
     assert 'Application' not in json.dumps(report)
     if fault != 'reject':
-        assert not any(call[1] == 'kickstart' for call in calls)
+        assert not any(call[-4:] == ['-p', 'default', 'gateway', 'restart'] for call in calls)
     assert running['pid'] == 101
 
 
@@ -91,7 +95,7 @@ def test_unchanged_pid_remains_unknown(gateway, monkeypatch):
     rec, data, agents, _, _, running = gateway
     real = rec.subprocess.run
     def run(argv, **kwargs):
-        if argv[1] == 'kickstart':
+        if argv[-4:] == ['-p', 'default', 'gateway', 'restart']:
             return subprocess.CompletedProcess(argv, 0)
         return real(argv, **kwargs)
     monkeypatch.setattr(rec.subprocess, 'run', run)
@@ -128,12 +132,12 @@ def test_spawn_failure_is_recorded_without_raising(gateway, monkeypatch):
     assert json.loads((data / 'gateway_restart.json').read_text())['status'] == 'failed'
 
 
-@pytest.mark.parametrize('stage,expected', [('print', 'failed'), ('kickstart', 'unknown')])
+@pytest.mark.parametrize('stage,expected', [('print', 'failed'), ('restart', 'unknown')])
 def test_timeout_after_restart_request_is_honestly_unknown(gateway, monkeypatch, stage, expected):
     rec, data, agents, _, _, _ = gateway
     real = rec.subprocess.run
     def run(argv, **kwargs):
-        if argv[1] == stage:
+        if (stage == 'print' and argv[1] == 'print') or (stage == 'restart' and argv[-1] == 'restart'):
             raise subprocess.TimeoutExpired(argv, 10)
         return real(argv, **kwargs)
     monkeypatch.setattr(rec.subprocess, 'run', run)
@@ -185,7 +189,7 @@ def test_owned_native_and_current_libc_jxa_commands_are_accepted(gateway, mode):
         argv = ['/usr/bin/osascript', '-l', 'JavaScript', '-e', script]
     _program(gateway, argv, **fields)
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 0
-    assert any(call[1] == 'kickstart' for call in calls)
+    assert any(call[-4:] == ['-p', 'default', 'gateway', 'restart'] for call in calls)
 
 
 @pytest.mark.parametrize('argv', [
@@ -206,7 +210,7 @@ def test_gateway_words_in_foreign_command_never_authorize_restart(gateway, argv)
     rec, data, agents, _, calls, running = gateway
     _program(gateway, argv)
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
-    assert not any(call[1] == 'kickstart' for call in calls)
+    assert not any(call[-4:] == ['-p', 'default', 'gateway', 'restart'] for call in calls)
     assert running['pid'] == 101
     report = json.loads((data / 'gateway_restart.json').read_text())
     assert report['error'] == 'gateway_service_not_owned' and report['status'] == 'failed'
@@ -220,7 +224,7 @@ def test_owned_named_cli_symlink_to_foreign_executable_is_rejected(gateway):
     cli.symlink_to('/bin/echo')
     _program(gateway, [str(cli), 'gateway', 'run'])
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
-    assert not any(call[1] == 'kickstart' for call in calls)
+    assert not any(call[-4:] == ['-p', 'default', 'gateway', 'restart'] for call in calls)
 
 
 def test_foreign_working_directory_is_not_owned(gateway):
@@ -228,7 +232,7 @@ def test_foreign_working_directory_is_not_owned(gateway):
     _program(gateway, [str(_owned_launcher(gateway)), 'gateway', 'run'],
              WorkingDirectory='/foreign')
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
-    assert not any(call[1] == 'kickstart' for call in calls)
+    assert not any(call[-4:] == ['-p', 'default', 'gateway', 'restart'] for call in calls)
 
 
 @pytest.mark.parametrize('mode', ['symlink_console', 'venv_module', 'isolated_bootstrap'])
@@ -260,7 +264,7 @@ def test_known_console_symlink_and_python_entry_positions_are_accepted(gateway, 
             argv = [str(python), '-I', '-c', source, 'gateway', 'run']
     _program(gateway, argv)
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 0
-    assert any(call[1] == 'kickstart' for call in calls)
+    assert any(call[-4:] == ['-p', 'default', 'gateway', 'restart'] for call in calls)
 
 
 @pytest.mark.parametrize('mode', ['foreign_module', 'python_data', 'foreign_bootstrap',
@@ -281,7 +285,7 @@ def test_python_data_other_entrypoints_and_program_override_are_rejected(gateway
         fields = {'Program': '/bin/echo'} if mode == 'program_override' else {'EnvironmentVariables': ['PATH']}
     _program(gateway, argv, **fields)
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
-    assert not any(call[1] == 'kickstart' for call in calls)
+    assert not any(call[-4:] == ['-p', 'default', 'gateway', 'restart'] for call in calls)
 
 
 def test_configured_custom_hermes_home_retains_owned_jxa_shape(gateway):
@@ -293,7 +297,7 @@ def test_configured_custom_hermes_home_retains_owned_jxa_shape(gateway):
              EnvironmentVariables={'PATH': str(agents.parent.parent / '.local/bin'),
                                    'HERMES_HOME': str(custom)})
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 0
-    assert any(call[1] == 'kickstart' for call in calls)
+    assert any(call[-4:] == ['-p', 'default', 'gateway', 'restart'] for call in calls)
 
 
 def _current_bootstrap(install, module='hermes_cli.main'):
@@ -319,6 +323,9 @@ def test_current_exact_bootstrap_keeps_owned_modules_pid_and_restore_gates(gatew
     python = install / 'venv/bin/python3'
     python.parent.mkdir(parents=True)
     python.symlink_to(sys.executable)
+    cli = install / 'venv/bin/hermes'
+    cli.write_text('#!/bin/sh\nexit 0\n')
+    cli.chmod(0o700)
     argv = [str(python), '-I', '-c', _current_bootstrap(install),
             'gateway', 'run', '--external-supervisor']
     logs = selected / 'logs'
@@ -337,10 +344,10 @@ def test_current_exact_bootstrap_keeps_owned_modules_pid_and_restore_gates(gatew
     _program(gateway, argv, **fields)
     (data / 'restore_pending.json').write_text('{"phase":"awaiting_consent"}')
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
-    assert not any(call[1] == 'kickstart' for call in calls)
+    assert not any(call[-4:] == ['-p', 'default', 'gateway', 'restart'] for call in calls)
     (data / 'restore_pending.json').write_text('{"phase":"restored"}')
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 0
-    assert any(call[1] == 'kickstart' for call in calls)
+    assert any(call[-4:] == ['-p', 'default', 'gateway', 'restart'] for call in calls)
     report = json.loads((data / 'gateway_restart.json').read_text())
     assert report['status'] == 'supervisor_restart_verified'
     assert report['previous_pid'] == 101 and report['pid'] == running['pid'] == 202
@@ -366,7 +373,7 @@ def test_current_bootstrap_never_authorizes_extra_code_or_foreign_identity(gatew
         argv.append('--unowned-option')
     _program(gateway, argv)
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
-    assert not any(call[1] == 'kickstart' for call in calls)
+    assert not any(call[-4:] == ['-p', 'default', 'gateway', 'restart'] for call in calls)
     assert running['pid'] == 101
     report = json.loads((data / 'gateway_restart.json').read_text())
     assert report['status'] == 'failed' and report['error'] == 'gateway_service_not_owned'
@@ -382,7 +389,7 @@ def test_frozen_shared_gateway_program_is_python39_compatible(gateway):
     with pytest.raises(SystemExit) as finished:
         exec(source.rsplit('sys.exit(', 1)[0]
              + f'sys.exit(_gateway_restart_run({str(data)!r}, {str(agents)!r}, "501"))', namespace)
-    assert finished.value.code == 0 and any(call[1] == 'kickstart' for call in calls)
+    assert finished.value.code == 0 and any(call[-4:] == ['-p', 'default', 'gateway', 'restart'] for call in calls)
 
 
 @pytest.mark.parametrize('mode', ['console', 'symlink', 'python_module'])
@@ -409,7 +416,7 @@ def test_explicit_custom_install_is_bound_to_environment_and_working_directory(g
     _program(gateway, argv, WorkingDirectory=str(install),
              EnvironmentVariables={'HERMES_HOME': str(custom)})
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 0
-    assert any(call[1] == 'kickstart' for call in calls)
+    assert any(call[-4:] == ['-p', 'default', 'gateway', 'restart'] for call in calls)
 
 
 def test_custom_console_without_matching_environment_and_directory_is_rejected(gateway):
@@ -420,4 +427,56 @@ def test_custom_console_without_matching_environment_and_directory_is_rejected(g
     custom.chmod(0o700)
     _program(gateway, [str(custom), 'gateway', 'run'])
     assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
-    assert not any(call[1] == 'kickstart' for call in calls)
+    assert not any(call[-4:] == ['-p', 'default', 'gateway', 'restart'] for call in calls)
+
+
+def test_native_refusal_does_not_retry_or_kickstart(gateway, monkeypatch):
+    rec, data, agents, _, calls, running = gateway
+    real = rec.subprocess.run
+    def run(argv, **kwargs):
+        if argv[-4:] == ['-p', 'default', 'gateway', 'restart']:
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 1)
+        return real(argv, **kwargs)
+    monkeypatch.setattr(rec.subprocess, 'run', run)
+    assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
+    assert sum(call[-1] == 'restart' for call in calls) == 1
+    assert not any('kickstart' in call for call in calls)
+    assert running['pid'] == 101
+    report = json.loads((data / 'gateway_restart.json').read_text())
+    assert report['status'] == 'unknown' and report['error'] == 'gateway_restart_nonzero'
+
+
+def test_named_profile_home_does_not_target_default(gateway):
+    rec, data, agents, _, calls, _ = gateway
+    profile = agents.parent.parent / '.hermes/profiles/other'
+    _program(gateway, [str(_owned_launcher(gateway)), 'gateway', 'run'],
+             WorkingDirectory=str(profile), EnvironmentVariables={'HERMES_HOME': str(profile)})
+    assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
+    assert not any(call[-1] == 'restart' for call in calls)
+    assert json.loads((data / 'gateway_restart.json').read_text())['error'] == 'gateway_service_not_owned'
+
+
+def test_missing_owned_launcher_does_not_restart(gateway):
+    import sys
+    rec, data, agents, _, calls, _ = gateway
+    (agents.parent.parent / '.local/bin/hermes').unlink()
+    _program(gateway, [sys.executable, '-m', 'hermes_cli.main', 'gateway', 'run'])
+    assert rec._gateway_restart_run(str(data), str(agents), 501) == 1
+    assert not any(call[-1] == 'restart' for call in calls)
+    assert json.loads((data / 'gateway_restart.json').read_text())['error'] == 'gateway_restart_launcher_unavailable'
+
+
+def test_native_restart_keeps_inherited_lifecycle_environment(gateway, monkeypatch):
+    rec, data, agents, _, calls, _ = gateway
+    monkeypatch.setenv('_HERMES_GATEWAY', 'synthetic')
+    real = rec.subprocess.run
+    seen = []
+    def run(argv, **kwargs):
+        if argv[-1] == 'restart':
+            seen.append(kwargs['env']['_HERMES_GATEWAY'])
+        return real(argv, **kwargs)
+    monkeypatch.setattr(rec.subprocess, 'run', run)
+    assert rec._gateway_restart_run(str(data), str(agents), 501) == 0
+    assert seen == ['synthetic']
+    assert not any('kickstart' in call for call in calls)
