@@ -102,6 +102,86 @@ GIT_TERM_GRACE_S = 2      # an owned git removes its own *.lock on SIGTERM
 
 _RELEASE_GATE_FD = None
 
+_RECOVERY_ROOT = None
+
+
+class _RecoveryRootChanged(BaseException):
+    pass
+
+
+def _root_identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid)
+
+
+def _link_identity(info):
+    return (_root_identity(info), info.st_nlink, info.st_size,
+            info.st_mtime_ns, info.st_ctime_ns)
+
+
+class _RecoveryRoot:
+    """Hold both the named root and its target without importing checkout code."""
+
+    def __init__(self, path):
+        self.path = Path(os.path.abspath(path))
+        self.parent_fd = self.fd = None
+        try:
+            self.parent_fd = os.open(self.path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            parent = os.fstat(self.parent_fd)
+            self.parent = _root_identity(parent)
+            named = os.stat(self.path.name, dir_fd=self.parent_fd, follow_symlinks=False)
+            self.link = None
+            if stat.S_ISLNK(named.st_mode):
+                if named.st_uid != os.getuid() or parent.st_uid != os.getuid() or parent.st_mode & 0o022:
+                    raise ValueError('recovery_root_invalid')
+                self.link = (_link_identity(named), os.readlink(self.path.name, dir_fd=self.parent_fd))
+            elif not stat.S_ISDIR(named.st_mode):
+                raise ValueError('recovery_root_invalid')
+            flags = os.O_RDONLY | os.O_DIRECTORY | (os.O_NOFOLLOW if self.link is None else 0)
+            self.fd = os.open(self.path.name, flags, dir_fd=self.parent_fd)
+            info = os.fstat(self.fd)
+            if info.st_uid != os.getuid() or info.st_mode & 0o022:
+                raise ValueError('recovery_root_invalid')
+            self.target = _root_identity(info)
+            self.check()
+        except BaseException:
+            self.close()
+            raise
+
+    def check(self):
+        try:
+            parent = os.fstat(self.parent_fd)
+            named = os.stat(self.path.name, dir_fd=self.parent_fd, follow_symlinks=False)
+            if (_root_identity(parent) != self.parent
+                    or _root_identity(os.stat(self.path.parent)) != self.parent
+                    or _root_identity(os.fstat(self.fd)) != self.target
+                    or _root_identity(os.stat(self.path.name, dir_fd=self.parent_fd)) != self.target):
+                raise _RecoveryRootChanged()
+            if self.link is None:
+                if _root_identity(named) != self.target:
+                    raise _RecoveryRootChanged()
+            elif (self.link != (_link_identity(named), os.readlink(self.path.name, dir_fd=self.parent_fd))
+                  or _link_identity(os.stat(self.path.name, dir_fd=self.parent_fd, follow_symlinks=False))
+                  != self.link[0]):
+                raise _RecoveryRootChanged()
+            if (_root_identity(os.stat(self.path.name, dir_fd=self.parent_fd)) != self.target
+                    or _root_identity(os.stat(self.path.parent)) != self.parent):
+                raise _RecoveryRootChanged()
+        except (OSError, ValueError):
+            raise _RecoveryRootChanged() from None
+
+    def close(self):
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+        if self.parent_fd is not None:
+            os.close(self.parent_fd)
+            self.parent_fd = None
+
+
+def _check_recovery_root():
+    if _RECOVERY_ROOT is not None:
+        _RECOVERY_ROOT.check()
+
 
 def _release_control_root(runtime_home):
     canonical = os.path.realpath(os.path.abspath(os.path.expanduser(runtime_home)))
@@ -170,6 +250,7 @@ def _run_owned(argv, timeout, env, stdin=None):
     session. On timeout or interruption that session is stopped by
     _stop_owned and the exception re-raised. Worst case: timeout +
     GIT_TERM_GRACE_S + the bounded reap."""
+    _check_recovery_root()
     child = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True, env=env,
                              start_new_session=True, **_lifetime_fds())
@@ -205,6 +286,7 @@ def _stop_owned(child):
 
 
 def _git(args, timeout=T_GIT):
+    _check_recovery_root()
     try:
         # never let git walk up into an unrelated parent repository
         # when REPO itself is not a checkout
@@ -216,6 +298,7 @@ def _git(args, timeout=T_GIT):
 
 
 def _git_out(args, timeout=T_GIT):
+    _check_recovery_root()
     r = _git(args, timeout)
     return r.stdout if r and r.returncode == 0 else ""
 
@@ -430,11 +513,13 @@ def _atomic_json(path, value, prefix, suffix=".tmp", **dump_kw):
 
 
 def _save_state(state):
+    _check_recovery_root()
     _atomic_json(STATE_PATH, state, ".ustate.", ensure_ascii=False, sort_keys=True)
 
 
 def _ensure_recovery_marker():
     """Keep or create the launcher hold; it does not prove writers stopped."""
+    _check_recovery_root()
     directory, name = os.path.split(MARKER_PATH)
     dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
@@ -463,6 +548,7 @@ def _ensure_recovery_marker():
 
 
 def _report(result, detail, **extra):
+    _check_recovery_root()
     with suppress(OSError):
         _atomic_json(REPORT_PATH, dict({"result": result, "detail": detail,
                                         "at": time.time()}, **extra), ".rpt.")
@@ -613,16 +699,34 @@ def _report_alert(result, state, detail, text, **extra):
 
 
 def _try_lock(path):
+    _check_recovery_root()
+    data_fd = None
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+        if _RECOVERY_ROOT is None:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+        else:
+            if os.path.dirname(os.path.abspath(path)) != os.path.abspath(DATA):
+                raise _RecoveryRootChanged()
+            data_fd = os.open(os.path.basename(DATA), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                              dir_fd=_RECOVERY_ROOT.fd)
+            if _root_identity(os.fstat(data_fd)) != _root_identity(os.stat(DATA, follow_symlinks=False)):
+                raise _RecoveryRootChanged()
+            fd = os.open(os.path.basename(path), os.O_WRONLY | os.O_CREAT, 0o600, dir_fd=data_fd)
     except OSError:
         return None
+    finally:
+        if data_fd is not None:
+            os.close(data_fd)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _check_recovery_root()
         return fd
     except OSError:
         os.close(fd)
         return None
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def _setup_python():
@@ -738,6 +842,7 @@ def _restart_drainers(bounce=True):
     running drainer alone; start one not running, not loaded or
     unverifiable (hung print — fail closed) via bootstrap unless loaded,
     then `kickstart` without -k (never kills a running job)."""
+    _check_recovery_root()
     mode = _runtime_mode()
     if mode not in ("hermes", "standalone"):
         return ["runtime_mode_unverifiable"]
@@ -1029,6 +1134,7 @@ def _restart_gateway():
     """True when the restart request was saved/started (or none applies).
     Runs after durable bookkeeping — never undo it (mirrors
     mcs_update.restart_gateway, which reports a lost request too)."""
+    _check_recovery_root()
     mode = _runtime_mode()
     if mode == "standalone":
         live = _standalone_status()
@@ -1053,6 +1159,7 @@ def _restart_lineworks():
     holds every new card. A standalone host restarts it as its own
     child; an unknown runtime restarts nothing. False only when the
     request could not be issued."""
+    _check_recovery_root()
     cfg = _runtime_config()
     notify = cfg.get("notify")
     if cfg.get("runtime_mode", "hermes") != "hermes" or not isinstance(notify, dict) \
@@ -1072,6 +1179,7 @@ def _restart_services(result, gateway, lineworks=True):
     """= mcs_update.restart_services after the durable bookkeeping of a
     completed recovery. A lost gateway/host restart request is reported,
     never returned as success (the journal is already consumed)."""
+    _check_recovery_root()
     ok = _restart_gateway() if gateway else True
     if lineworks:
         ok = _restart_lineworks() and ok
@@ -1088,6 +1196,7 @@ def _clean_stale_git_locks():
     """Only locks OLDER than GIT_LOCK_MIN_AGE_S — a fresh lock may
     belong to an unrelated live `git` process. A free update.lock
     proves no updater is alive, not that no git is running (H3)."""
+    _check_recovery_root()
     removed = []
     cutoff = time.time() - GIT_LOCK_MIN_AGE_S
     for path in glob.glob(os.path.join(REPO, ".git", "**", "*.lock"),
@@ -1123,6 +1232,7 @@ def _reconcile_membership(snapshot):
     pre-update manifest snapshot. Union with the CURRENT desired sets
     so a no-op rollback never deletes what it still wants; recreation
     belongs to the repo's own `services` run (old code re-renders)."""
+    _check_recovery_root()
     if snapshot is None:
         snapshot = {}
     if (not isinstance(snapshot, dict)
@@ -1232,6 +1342,7 @@ def _reconcile_membership(snapshot):
 def _notify(text):
     """Best-effort — Hermes/Discord may be the very thing that's down;
     failure is silent by design."""
+    _check_recovery_root()
     cfg = _runtime_config()
     if cfg.get("runtime_mode") == "standalone":
         # best-effort to the system-alert channel (notify_flush's choice)
@@ -1738,6 +1849,7 @@ def _restore_db(backup_path, on_hold=None):
     copy escalates backup_invalid in the same situation; a silent skip
     here would leave OLD code running against a NEWER schema while the
     report claims success)."""
+    _check_recovery_root()
     marker = os.path.join(DATA, "restore_pending.json")
     try:
         current = _read_local_json(marker)
@@ -1852,15 +1964,30 @@ def _recovery_explanation(detail):
 
 
 def recover(if_stale=False):
-    # Gate/fence precedes even the old lock-free reports and alert publication.
-    with ExitStack() as scope:
+    global _RECOVERY_ROOT
+    root = None
+    previous = _RECOVERY_ROOT
+    try:
         try:
-            scope.enter_context(_release_scope(os.path.dirname(DATA)))
-        except BlockingIOError:
-            return 0
-        except (OSError, ValueError):
-            return 2
-        return _recover_legacy(if_stale=if_stale)
+            root = _RecoveryRoot(os.path.dirname(DATA))
+        except FileNotFoundError:
+            if os.path.lexists(os.path.dirname(DATA)):
+                return 2
+        _RECOVERY_ROOT = root
+        # The root anchor precedes the gate and every recovery read.
+        with ExitStack() as scope:
+            try:
+                scope.enter_context(_release_scope(os.path.dirname(DATA)))
+            except BlockingIOError:
+                return 0
+            _check_recovery_root()
+            return _recover_legacy(if_stale=if_stale)
+    except (OSError, ValueError, _RecoveryRootChanged):
+        return 2
+    finally:
+        _RECOVERY_ROOT = previous
+        if root is not None:
+            root.close()
 
 
 def _settings_migration_pending():
@@ -1905,9 +2032,115 @@ def _settings_migration_pending():
         os.close(fd)
 
 
+def _provider_settings_unverified():
+    """Hold recovery whenever split-provider state is present or unprovable."""
+    root = os.path.dirname(os.path.abspath(DATA))
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    try:
+        _check_recovery_root()
+        root_fd = os.dup(_RECOVERY_ROOT.fd) if _RECOVERY_ROOT is not None else os.open(root, flags)
+    except FileNotFoundError:
+        return os.path.lexists(root)
+    except OSError:
+        return True
+    try:
+        root_info = os.fstat(root_fd)
+        root_path = os.stat(root, follow_symlinks=_RECOVERY_ROOT is not None)
+        if (root_info.st_uid != os.getuid() or root_info.st_mode & 0o022
+                or (root_info.st_dev, root_info.st_ino) != (root_path.st_dev, root_path.st_ino)):
+            return True
+        try:
+            data_fd = os.open(os.path.basename(DATA), flags, dir_fd=root_fd)
+        except FileNotFoundError:
+            return os.path.lexists(DATA)
+        try:
+            before = os.fstat(data_fd)
+            current = os.stat(DATA, follow_symlinks=False)
+            if (before.st_uid != os.getuid() or before.st_mode & 0o022
+                    or (before.st_dev, before.st_ino) != (current.st_dev, current.st_ino)):
+                return True
+            for name in ('.provider-settings-pending.json', '.provider-settings-authority.json', 'provider_settings'):
+                try:
+                    os.stat(name, dir_fd=data_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                return True
+            with os.scandir(data_fd) as entries:
+                for index, entry in enumerate(entries):
+                    if index >= 100000 or entry.name.startswith(
+                            ('.provider-settings-backup-', '.provider-settings-stage-')):
+                        return True
+            after = os.fstat(data_fd)
+            current = os.stat(DATA, follow_symlinks=False)
+            def identity(value):
+                return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+                        value.st_mtime_ns, value.st_ctime_ns)
+            root_after = os.fstat(root_fd)
+            _check_recovery_root()
+            root_current = os.stat(root, follow_symlinks=_RECOVERY_ROOT is not None)
+            def root_identity(value):
+                return (value.st_dev, value.st_ino, value.st_mode, value.st_uid)
+            return (identity(before) != identity(after) or identity(after) != identity(current)
+                    or root_identity(root_info) != root_identity(root_after)
+                    or root_identity(root_after) != root_identity(root_current))
+        finally:
+            os.close(data_fd)
+    except OSError:
+        return True
+    finally:
+        os.close(root_fd)
+
+
+def _lock_provider_editor():
+    """Borrow the config editor lock until all recovery effects have finished."""
+    root = os.path.dirname(os.path.abspath(DATA))
+    _check_recovery_root()
+    root_fd = (os.dup(_RECOVERY_ROOT.fd) if _RECOVERY_ROOT is not None else
+               os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC))
+    try:
+        directory = os.fstat(root_fd)
+        current = os.stat(root, follow_symlinks=_RECOVERY_ROOT is not None)
+        if (directory.st_uid != os.getuid() or directory.st_mode & 0o022
+                or (directory.st_dev, directory.st_ino) != (current.st_dev, current.st_ino)):
+            raise ValueError('provider_editor_lock_invalid')
+        fd = os.open('config.json.edit.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                     0o600, dir_fd=root_fd)
+        try:
+            held = os.fstat(fd)
+            if (not stat.S_ISREG(held.st_mode) or held.st_uid != os.getuid()
+                    or stat.S_IMODE(held.st_mode) != 0o600 or held.st_nlink != 1 or held.st_size):
+                raise ValueError('provider_editor_lock_invalid')
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                os.close(fd)
+                return None
+            current = os.stat('config.json.edit.lock', dir_fd=root_fd, follow_symlinks=False)
+            after = os.fstat(fd)
+            _check_recovery_root()
+            root_after = os.stat(root, follow_symlinks=_RECOVERY_ROOT is not None)
+            def identity(value):
+                return (value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+                        value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+            if (identity(held) != identity(after) or identity(after) != identity(current)
+                    or (directory.st_dev, directory.st_ino, directory.st_mode, directory.st_uid)
+                    != (root_after.st_dev, root_after.st_ino, root_after.st_mode, root_after.st_uid)):
+                raise ValueError('provider_editor_lock_invalid')
+            return fd
+        except BaseException:
+            os.close(fd)
+            raise
+    finally:
+        os.close(root_fd)
+
+
 def _recover_legacy(if_stale=False):
+    _check_recovery_root()
     if _settings_migration_pending():
         print('導入設定の移行結果を確認できません。保留記録と設定を保持し、担当者に確認してください。')
+        return 2
+    if _provider_settings_unverified():
+        print('提供元設定を確認できないため復旧を保留します。設定と保留記録を保持してください。')
         return 2
     state = _load_state()
     if state.get("_corrupt"):
@@ -1925,11 +2158,23 @@ def _recover_legacy(if_stale=False):
     upd_fd = _try_lock(UPDATE_LOCK)
     if upd_fd is None:
         return 0                            # an apply is alive
-    run_fd = _try_lock(RUN_LOCK)
+    try:
+        run_fd = _try_lock(RUN_LOCK)
+    except BaseException:
+        os.close(upd_fd)
+        raise
     if run_fd is None:
         os.close(upd_fd)
         return 0                            # a tick is running — retry
+    editor_fd = None
     try:
+        try:
+            editor_fd = _lock_provider_editor()
+        except (OSError, ValueError):
+            return 2
+        if editor_fd is None or _provider_settings_unverified():
+            return 2
+        _check_recovery_root()
         state = _load_state()               # fresh view under the locks
         if _settings_migration_pending():
             return 2
@@ -2270,11 +2515,14 @@ def _recover_legacy(if_stale=False):
         return escalate("unclassifiable repo state — no destructive "
                         f"action taken (HEAD={head[:12]})")
     finally:
+        if editor_fd is not None:
+            os.close(editor_fd)
         os.close(run_fd)
         os.close(upd_fd)
 
 
 def _finish(state, result, removed):
+    _check_recovery_root()
     # Keep the interrupted journal until its stopped workers are verified live.
     _remove_marker()
     dkey = _drainers_key(state, _head())
@@ -2313,6 +2561,7 @@ def _finish(state, result, removed):
 
 
 def _remove_marker():
+    _check_recovery_root()
     try:
         os.unlink(MARKER_PATH)
     except OSError:
