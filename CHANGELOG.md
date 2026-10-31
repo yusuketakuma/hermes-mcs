@@ -108,6 +108,12 @@
 - **通知カードの状態確認とスナップショットの期限切れへの対応を修正**
   通知カードの状態を時間内に確認できない場合は、取得できなかった件数や一覧を不明として監視に表示し、次回の収集で再確認します。スナップショットの準備や検証で期限切れを検知した候補は公開せず、処理が残る間は一時ファイルを保護します。最終的なファイル公開中にディスクが停止した場合は、期限内の終了を保証できません。
 
+- **ジョブ診断とクラウド応答の扱いを修正**
+  ジョブの履歴を新しい順に確認し、途中で読めない記録がある場合は古い理由を確定せず不明とします。署名付きで思考部分が空の正常なクラウド応答も処理し、不正な形式や回答のない完了応答は引き続き拒否します。
+
+- **更新後のHermes再起動を正規手順に合わせる**
+  所有先と復元状態を確認してから、Hermesの正規手順に再起動を依頼します。初回は正式な更新手順で再導入し、再起動の結果と稼働状態を確認してください。Hermesの版や設定によっては、実行中の処理を理由に再起動を拒否しません。
+
 ### 更新時の注意
 
 - 通常の更新手順を使い、Hermes gateway、利用中の独立実行host・worker・通知アダプター、抽出workerを再起動してください。Gitの差分だけの反映では、旧コードや旧サービス設定が動き続けます。[更新ガイド](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/docs/guides/UPGRADE_AGENT.md)に従ってください。
@@ -129,7 +135,7 @@
 ### 技術詳細
 
 <details>
-<summary>変更記録396件の詳細・更新条件・根拠を表示</summary>
+<summary>変更記録399件の詳細・更新条件・根拠を表示</summary>
 
 各リンクは、この版の変更記録です。要約・適用条件・更新操作・技術詳細・根拠を参照できます。同じ箇所に複数の記録がある場合、後続の修正を含む現行の説明は上の本文と各機能のガイドを確認してください。たとえば、処理方式アイコンの初期配置は後続の見出し行への移動で置き換えています。
 
@@ -533,6 +539,10 @@
 
 - [通知カードの状態確認が長引く問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/health-cards-observation-budget.json)
 - [スナップショット処理の期限切れへの対応を改善](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/snapshot-deadline-boundary.json)
+
+- [ジョブの診断履歴を安全に確認する](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/job-diagnostic-history-budget.json)
+- [クラウドの正常な応答を処理できない問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/anthropic-thinking-contract.json)
+- [更新後のHermes再起動を正規手順に合わせる](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/native-gateway-restart-guard.json)
 
 </details>
 

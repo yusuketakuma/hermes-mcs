@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 396,
+  "fragment_count": 399,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2383,6 +2383,24 @@
       "id": "snapshot-deadline-boundary",
       "title": "スナップショット処理の期限切れへの対応を改善",
       "sha256": "5050c5517dd140dc1ce54273958b4cba4b3155f095af3b7c115fd00cec85335d"
+    },
+    {
+      "path": "changes/archive/1.1.0/job-diagnostic-history-budget.json",
+      "id": "job-diagnostic-history-budget",
+      "title": "ジョブの診断履歴を安全に確認する",
+      "sha256": "9ec743d7a1ec8e0d0448c6999fc10e3d6b92b3754b37614a02d65bc16770e419"
+    },
+    {
+      "path": "changes/archive/1.1.0/anthropic-thinking-contract.json",
+      "id": "anthropic-thinking-contract",
+      "title": "クラウドの正常な応答を処理できない問題を修正",
+      "sha256": "c36b7fa971d559488f9695c60b6775548ca8987136596c535f12a60fb6d2a4fc"
+    },
+    {
+      "path": "changes/archive/1.1.0/native-gateway-restart-guard.json",
+      "id": "native-gateway-restart-guard",
+      "title": "更新後のHermes再起動を正規手順に合わせる",
+      "sha256": "6c0650abd8104181aac4430bb8ec4b80e0cebb3ce2cd6a5806a88c0ef06e1f3b"
     }
   ]
 }
