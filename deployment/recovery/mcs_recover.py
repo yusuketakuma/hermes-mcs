@@ -823,7 +823,10 @@ def _gateway_restart_run(data, agents, uid):
                  str(install / ".hermes/bin/hermes")}
     logs = home / ".hermes/logs"
 
+    launcher = None
+
     def owned_command(argv, plist):
+        nonlocal launcher
         if not argv:
             return False
         program = argv[0]
@@ -875,8 +878,21 @@ def _gateway_restart_run(data, agents, uid):
                     or Path(tail[3]) != logs / "gateway.error.log"):
                 return False
             return owned_command(tail[5:], plist)
-        return tail[:2] == ["gateway", "run"] and all(
-            arg in ("--external-supervisor", "--replace") for arg in tail[2:])
+        if tail[:2] != ["gateway", "run"] or not all(
+                arg in ("--external-supervisor", "--replace") for arg in tail[2:]):
+            return False
+        if program in launchers:
+            launcher = program
+        else:
+            selected_install = Path(hermes_home) / "hermes-agent"
+            candidates = [str(selected_install / "venv/bin/hermes"),
+                          str(selected_install / ".hermes/bin/hermes")]
+            if selected_install == install:
+                candidates.append(str(home / ".local/bin/hermes"))
+            launcher = next((path for path in candidates if path in launchers
+                             and os.path.realpath(path) in launchers
+                             and os.path.isfile(path) and os.access(path, os.X_OK)), None)
+        return True
 
     def owned_jxa(argv, plist):
         if argv[:3] != ["/usr/bin/osascript", "-l", "JavaScript"]:
@@ -916,6 +932,9 @@ def _gateway_restart_run(data, agents, uid):
         hermes_home = environment.get("HERMES_HOME", str(home / ".hermes"))
         if not isinstance(hermes_home, str) or not os.path.isabs(hermes_home):
             raise ValueError("gateway_service_not_owned")
+        if (Path(hermes_home).parent.name == "profiles"
+                or Path(hermes_home).resolve().parent.name == "profiles"):
+            raise ValueError("gateway_service_not_owned")
         logs = Path(hermes_home) / "logs"
         cwd = plist.get("WorkingDirectory")
         if "HERMES_HOME" in environment and cwd in (hermes_home, str(Path(hermes_home) / "hermes-agent")):
@@ -926,8 +945,10 @@ def _gateway_restart_run(data, agents, uid):
             raise ValueError("gateway_service_not_owned")
         if not (owned_command(args, plist) or owned_jxa(args, plist)):
             raise ValueError("gateway_service_not_owned")
+        if launcher is None:
+            raise ValueError("gateway_restart_launcher_unavailable")
         found = []
-        for domain in ("user", "gui"):
+        for domain in ("gui", "user"):
             target = f"{domain}/{int(uid)}/{label}"
             pid = snapshot(target)
             if pid is not None:
@@ -946,10 +967,14 @@ def _gateway_restart_run(data, agents, uid):
                     or ("phase" not in restore and "restored_at" in restore)):
                 raise ValueError("gateway_restart_restore_hold")
         issued = True
-        result = subprocess.run(["launchctl", "kickstart", "-k", target],
-                                capture_output=True, timeout=30)
+        env = dict(os.environ, HOME=str(home), HERMES_HOME=hermes_home)
+        result = subprocess.run([launcher, "-p", "default", "gateway", "restart"],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, env=env, cwd="/", timeout=300)
         if result.returncode:
-            raise ValueError("gateway_restart_rejected")
+            _gateway_restart_report(data, "unknown", error="gateway_restart_nonzero",
+                                    service=target, previous_pid=old_pid or None)
+            return 1
         until = time.monotonic() + 30
         while time.monotonic() < until:
             pid = snapshot(target)
@@ -964,7 +989,7 @@ def _gateway_restart_run(data, agents, uid):
             RecursionError, plistlib.InvalidFileException) as exc:
         code = str(exc) if isinstance(exc, ValueError) and str(exc).startswith("gateway_") \
             else "gateway_restart_unverifiable"
-        status = "unknown" if issued and isinstance(exc, (OSError, subprocess.TimeoutExpired)) else "failed"
+        status = "unknown" if issued else "failed"
         _gateway_restart_report(data, status, error=code)
     return 1
 

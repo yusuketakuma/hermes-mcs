@@ -987,6 +987,106 @@ def test_extracted_current_updater_imports_with_recovery_helper(tmp_path, monkey
     assert (tmp_path / helper).read_bytes() == files[helper]
 
 
+def test_candidate_helper_survives_reinstall_sync_and_requests_native_restart(tmp_path, monkeypatch):
+    import plistlib
+    import test_install_sh
+
+    launcher = _launcher()
+    staged = tmp_path / 'candidate'
+    files = {str(p.relative_to(ROOT)): p.read_bytes()
+             for p in (ROOT / 'mcs').rglob('*.py')}
+    helper = 'deployment/recovery/mcs_recover.py'
+    files[helper] = (ROOT / helper).read_bytes()
+
+    def git(_repo, *args, binary=False):
+        if args[0] == 'ls-tree':
+            assert args[4:] == ('mcs', helper)
+            return ''.join(f'100644 blob {name}\t{name}\0' for name in files)
+        assert args[:2] == ('cat-file', 'blob') and binary
+        return files[args[2]]
+
+    monkeypatch.setattr(launcher, '_git', git)
+    launcher.extract('synthetic', 'v1.2.0', str(staged))
+    spec = importlib.util.spec_from_file_location('synthetic_candidate_update', staged / 'mcs/ops/mcs_update.py')
+    candidate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(candidate)
+    assert candidate._request_gateway_restart is not None
+    frozen = candidate._request_gateway_restart.__globals__['_GATEWAY_RESTART_PROGRAM']
+    assert candidate._request_gateway_restart.__globals__['__file__'] == str(staged / helper)
+
+    (staged / 'install.sh').write_bytes((ROOT / 'install.sh').read_bytes())
+    template = staged / 'deployment/launchagents/org.mcs.recovery.plist'
+    template.parent.mkdir(parents=True)
+    template.write_bytes((ROOT / 'deployment/launchagents/org.mcs.recovery.plist').read_bytes())
+    home, hermes_home, _, env = test_install_sh._world(tmp_path / 'installer')
+    env.pop('MCS_ROOT', None)
+    env.pop('MCS_UPDATE_OPTIONS_BASE', None)
+    old = b'# synthetic old recovery generation\n'
+    recovery = home / '.mcs-recovery'
+    recovery.mkdir(mode=0o700)
+    (recovery / 'mcs_recover.py').write_bytes(old)
+    data = home / '.mcs/data'
+    data.mkdir(mode=0o700, parents=True)
+    fd = os.open(data / 'update.lock', os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = test_install_sh._run(
+            {**env, 'MCS_UPDATE_REINSTALL': '1', 'MCS_UPDATE_LOCK_FD': str(fd)},
+            hermes_home, '--no-brew', '--no-llm', '--no-plugin', '--no-services',
+            script=staged / 'install.sh', pass_fds=(fd,))
+    finally:
+        os.close(fd)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (recovery / 'mcs_recover.py.prev').read_bytes() == old
+    assert (recovery / 'mcs_recover.py').read_bytes() == files[helper]
+
+    host = tmp_path / 'restart-home'
+    agents = host / 'Library/LaunchAgents'
+    agents.mkdir(parents=True)
+    restart_data = host / '.mcs/data'
+    restart_data.mkdir(parents=True)
+    command = host / '.local/bin/hermes'
+    command.parent.mkdir(parents=True)
+    command.write_text('#!/bin/sh\nexit 0\n')
+    command.chmod(0o700)
+    plist = agents / 'ai.hermes.gateway.plist'
+    plist.write_bytes(plistlib.dumps({'Label': 'ai.hermes.gateway',
+                                    'ProgramArguments': [str(command), 'gateway', 'run']}))
+    monkeypatch.setattr(candidate, 'DATA', str(restart_data))
+    monkeypatch.setattr(candidate, 'AGENTS_DIR', str(agents))
+    monkeypatch.setattr(candidate, '_uid', lambda: 501)
+    children = []
+    monkeypatch.setattr(subprocess, 'Popen', lambda argv, **kw: children.append((argv, kw)))
+    candidate.restart_gateway({})
+    assert len(children) == 1
+    argv, kwargs = children[0]
+    assert argv[1:4] == ['-I', '-c', frozen] and kwargs['start_new_session']
+    assert json.loads((restart_data / 'gateway_restart.json').read_text())['status'] == 'requested'
+
+    calls = []
+    running = [101]
+    def run(argv, **kwargs):
+        calls.append(argv)
+        if argv == [str(command), '-p', 'default', 'gateway', 'restart']:
+            assert kwargs['stdin'] == kwargs['stdout'] == kwargs['stderr'] == subprocess.DEVNULL
+            assert kwargs['env']['HERMES_HOME'] == str(host / '.hermes')
+            running[0] = 202
+            return subprocess.CompletedProcess(argv, 0)
+        assert argv[:2] == ['launchctl', 'print']
+        if argv[-1].startswith('user/'):
+            return subprocess.CompletedProcess(argv, 0, f'path = {plist}\npid = {running[0]}\n')
+        return subprocess.CompletedProcess(argv, 113, '')
+
+    monkeypatch.setattr(subprocess, 'run', run)
+    namespace = {'__name__': 'synthetic_frozen'}
+    exec(frozen.rsplit('sys.exit(', 1)[0], namespace)
+    assert namespace['_gateway_restart_run'](str(restart_data), str(agents), 501) == 0
+    assert calls.count([str(command), '-p', 'default', 'gateway', 'restart']) == 1
+    assert not any('kickstart' in call for call in calls)
+    report = json.loads((restart_data / 'gateway_restart.json').read_text())
+    assert report['status'] == 'supervisor_restart_verified' and report['pid'] == 202
+
+
 @pytest.mark.parametrize("binary", [False, True])
 def test_launcher_git_failure_never_reports_remote_credential_text(tmp_path, monkeypatch, binary):
     launcher = _launcher()
