@@ -73,6 +73,9 @@ def test_thinking_only_max_tokens_is_one_paid_length_response(types):
     calls, results = [], []
     content = [{"type": kind, "thinking" if kind == "thinking" else "data":
                 "synthetic-private-thinking"} for kind in types]
+    for block in content:
+        if block["type"] == "thinking":
+            block["signature"] = "synthetic-private-signature"
 
     def post(body, timeout):
         calls.append(body)
@@ -87,10 +90,67 @@ def test_thinking_only_max_tokens_is_one_paid_length_response(types):
     assert results[0][1]["error_kind"] is None
     assert result["usage"] == results[0][1]["usage"] and result["usage"]["output_tokens"] == 5
     assert "synthetic-private-thinking" not in json.dumps((result, results))
+    assert "synthetic-private-signature" not in json.dumps((result, results))
+
+
+@pytest.mark.parametrize("stop,include_text", [("end_turn", True), ("max_tokens", False)])
+def test_empty_signed_thinking_is_accepted_without_exposing_opaque_content(stop, include_text):
+    calls, results = [], []
+    signature = "synthetic-private-signature"
+    content = [{"type": "thinking", "thinking": "", "signature": signature}]
+    if include_text:
+        content.append({"type": "text", "text": '{"synthetic":true}'})
+
+    def post(body, timeout):
+        calls.append(body)
+        return 200, {}, json.dumps(_reply(stop_reason=stop, content=content)).encode()
+
+    result = a.AnthropicClient("synthetic", post_fn=post).complete(
+        "synthetic", deadline=time.monotonic() + 10,
+        reserve_fn=lambda *args: "synthetic-reservation",
+        after_result=lambda reservation, meta: results.append((reservation, meta)))
+    assert result["text"] == ('{"synthetic":true}' if include_text else "")
+    assert result["finish_reason"] == ("stop" if include_text else "length")
+    assert len(calls) == len(results) == 1 and results[0][0] == "synthetic-reservation"
+    assert results[0][1]["error_kind"] is None and results[0][1]["usage"] == result["usage"]
+    assert signature not in json.dumps((result, results))
+
+
+def test_signed_thinking_is_not_saved_in_usage_records(cloud, monkeypatch):
+    import cloud_policy
+    from test_semantic_cloud import rows
+
+    ledger, cfg, _, _ = cloud
+    monkeypatch.setattr(cloud_policy, "pricing_valid", lambda *args, **kwargs: True)
+    signature, thinking = "synthetic-private-signature", "synthetic-private-thinking"
+    content = [{"type": "thinking", "thinking": "", "signature": signature},
+               {"type": "thinking", "thinking": thinking, "signature": signature},
+               {"type": "text", "text": '{"synthetic":true}'}]
+    calls = []
+
+    def request(self, method, body, timeout, **kwargs):
+        calls.append(True)
+        return 200, {}, json.dumps(_reply(content=content)).encode()
+
+    monkeypatch.setattr(a.AnthropicClient, "request", request)
+    client = a.AnthropicClient("synthetic")
+    result = client.complete(
+        "synthetic", deadline=time.monotonic() + 10, max_tokens=100,
+        reserve_fn=cloud_policy.usage_reserver(ledger, cfg, route="reextract", project_id=1, unit_key="synthetic"),
+        after_result=lambda reservation, meta: cloud_policy.record_result(ledger, reservation, meta))
+    reserves = rows(ledger, "cloud_usage_reserve")
+    results = rows(ledger, "cloud_usage_result")
+    assert calls == [True] and len(reserves) == len(results) == 1
+    assert result["text"] == '{"synthetic":true}' and result["finish_reason"] == "stop"
+    saved = json.loads(results[0]["meta"])
+    assert saved["error_kind"] is None and saved["usage"] == result["usage"] and float(saved["cost_usd"]) > 0
+    recorded = json.dumps((result, [dict(row) for row in reserves + results]))
+    assert signature not in recorded and thinking not in recorded
 
 
 @pytest.mark.parametrize("stop,content,usage,kind", [
     ("end_turn", [{"type": "thinking", "thinking": "synthetic"}], None, "contract_error"),
+    ("end_turn", [{"type": "thinking", "thinking": "", "signature": "synthetic"}], None, "contract_error"),
     ("end_turn", [{"type": "text", "text": ""}], None, "contract_error"),
     ("end_turn", [{"type": "text", "text": "  "}], None, "contract_error"),
     ("max_tokens", [], None, "contract_error"),
@@ -112,6 +172,10 @@ def test_empty_or_unverified_responses_do_not_gain_the_paid_length_contract(stop
 @pytest.mark.parametrize("block", [
     {"type": "thinking"}, {"type": "thinking", "thinking": None},
     {"type": "thinking", "thinking": 1}, {"type": "thinking", "thinking": ""},
+    {"type": "thinking", "thinking": "", "signature": ""},
+    {"type": "thinking", "thinking": "", "signature": None},
+    {"type": "thinking", "thinking": "", "signature": 1},
+    {"type": "thinking", "thinking": "  ", "signature": "synthetic"},
     {"type": "thinking", "thinking": "  "}, {"type": "redacted_thinking"},
     {"type": "redacted_thinking", "data": {}}, {"type": "redacted_thinking", "data": ""},
 ])
