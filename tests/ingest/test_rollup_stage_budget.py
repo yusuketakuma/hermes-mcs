@@ -195,7 +195,7 @@ def derive_case(tmp_path, monkeypatch):
     monkeypatch.setattr(drug_map, 'derive', lambda *a, **k: {'pids': [], 'status': 'complete'})
     monkeypatch.setattr(mcs_signals, 'evaluate', lambda *a, **k: {'errors': []})
 
-    def run(scan_result, *, changed=(), unknown=()):
+    def run(scan_result, *, changed=(), unknown=(), reasons=None):
         rebuilt = []
 
         def scan(*a, **k):
@@ -203,10 +203,12 @@ def derive_case(tmp_path, monkeypatch):
                 raise scan_result
             return scan_result
 
-        def rebuild(_ledger, project_ids, *, source_changed, source_unknown, **kwargs):
+        def rebuild(_ledger, project_ids, *, source_changed, source_unknown,
+                    source_unknown_reasons, **kwargs):
             rebuilt.extend(project_ids)
             source_changed.extend(changed)
             source_unknown.extend(unknown)
+            source_unknown_reasons.update(reasons or {})
             return len(project_ids) - len(changed) - len(unknown)
 
         monkeypatch.setattr(rollup, 'scan_fair_dirty_projects', scan)
@@ -268,6 +270,48 @@ def test_scan_deferral_uses_the_common_compact_marker_with_later_deferral(derive
     assert result['deferred_stages'] == ['rollup_scan', 'signals']
 
 
+@pytest.mark.parametrize(('reasons', 'expected', 'errors'), [
+    ({'deadline': 2}, {'deadline': 2}, ['deadline_deferred:rollup_rebuild']),
+    ({'source_unverified': 2}, {'source_unverified': 2}, ['rollup: source_unknown']),
+    ({'deadline': 1, 'source_unverified': 1},
+     {'deadline': 1, 'source_unverified': 1}, ['rollup: source_unknown']),
+    ({}, {'source_unverified': 2}, ['rollup: source_unknown']),
+    ({'deadline': True}, {'source_unverified': 2}, ['rollup: source_unknown']),
+    ({'deadline': 2, 'unexpected': 1}, {'source_unverified': 2}, ['rollup: source_unknown']),
+    ({'deadline': 1}, {'source_unverified': 2}, ['rollup: source_unknown']),
+])
+def test_rebuild_unknown_requires_valid_all_deadline_reasons(derive_case, reasons, expected, errors):
+    _ledger, run = derive_case
+    result, rebuilt = run(rollup.RollupScan((1, 2), (), False, ()),
+                          unknown=(1, 2), reasons=reasons)
+    assert rebuilt == [1, 2, 3]
+    assert result['rollup_source_unknown'] == 2
+    assert result['rollup_source_unknown_reasons'] == expected
+    assert result['errors'] == errors
+    if errors[0].startswith('deadline_deferred:'):
+        assert result['deferred_stages'] == ['rollup_rebuild']
+    else:
+        assert 'deferred_stages' not in result
+
+
+def test_rebuild_deadline_does_not_hide_source_changed(derive_case):
+    _ledger, run = derive_case
+    result, _rebuilt = run(rollup.RollupScan((1, 2), (), False, ()),
+                           changed=(1,), unknown=(2,), reasons={'deadline': 1})
+    assert result['rollup_source_changed'] == 1
+    assert result['rollup_source_unknown_reasons'] == {'deadline': 1}
+    assert result['errors'] == ['rollup: source_changed', 'deadline_deferred:rollup_rebuild']
+
+
+def test_scan_and_rebuild_deadline_use_one_deferred_marker(derive_case):
+    _ledger, run = derive_case
+    result, rebuilt = run(rollup.RollupScan((1,), (2,), True, (('deadline', 1),)),
+                          unknown=(1,), reasons={'deadline': 1})
+    assert rebuilt == [1, 3]
+    assert result['errors'] == ['deadline_deferred:rollup_scan,rollup_rebuild']
+    assert result['deferred_stages'] == ['rollup_scan', 'rollup_rebuild']
+
+
 def test_scan_deadline_stays_partial_and_reaches_existing_health_deferred_guidance(
         derive_case, monkeypatch, tmp_path):
     import notify_cards
@@ -297,3 +341,25 @@ def test_scan_deadline_stays_partial_and_reaches_existing_health_deferred_guidan
     assert '時間内に終わらず先送り' in lines and '異常ではありません' in lines
     assert '対処不要。次回以降に実行されます' in lines
     assert '収集後の処理が失敗しました' not in lines
+
+
+def test_rebuild_deadline_stays_partial_and_reaches_existing_health_guidance(
+        derive_case, monkeypatch):
+    import notify_cards
+    import notify_cmds
+    import notify_spool
+
+    ledger, run = derive_case
+    result, _rebuilt = run(rollup.RollupScan((1, 2), (), False, ()),
+                           unknown=(2, 3), reasons={'deadline': 2})
+    monkeypatch.setattr(notify_cmds, 'drain_int_commands', lambda *a, **k: None)
+    monkeypatch.setattr(notify_spool, 'publish_flags', lambda *a, **k: None)
+    monkeypatch.setattr(notify_cards, 'snapshot_dirty', lambda *a, **k: False)
+    monkeypatch.setattr(run_check.maintenance, 'refresh_snapshot', lambda *a, **k: 'unchanged')
+    run_id = ledger.begin_run(None)
+    assert run_check._finish_run(ledger, {}, result, run_id, 200) == 'partial'
+    stored = ledger.db.execute('SELECT status,error FROM runs WHERE run_id=?', (run_id,)).fetchone()
+    assert tuple(stored) == ('partial', 'deadline_deferred:rollup_rebuild')
+    block = health_report.collection_diagnostics_health(ledger.db, result['errors'], 3700)
+    assert block['errors']['categories']['deferred'] == 1
+    assert block['errors']['categories']['postprocess'] == 0

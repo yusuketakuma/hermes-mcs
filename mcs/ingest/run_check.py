@@ -304,15 +304,25 @@ def stage_derive(ledger, result, deadline, cfg=None,
                 result["errors"].append("rollup: scan_unknown")
         source_changed = []
         source_unknown = []
+        source_unknown_reasons = {}
         result["rollups"] = rollup.rebuild_many(
             ledger, rebuild_ids, deadline=work_deadline, source_changed=source_changed,
-            source_unknown=source_unknown, cfg=cfg)
+            source_unknown=source_unknown, source_unknown_reasons=source_unknown_reasons, cfg=cfg)
         if source_changed:
             result["rollup_source_changed"] = len(source_changed)
             result["errors"].append("rollup: source_changed")
         if source_unknown:
             result["rollup_source_unknown"] = len(source_unknown)
-            result["errors"].append("rollup: source_unknown")
+            if (not set(source_unknown_reasons) <= {"deadline", "source_unverified"}
+                    or any(type(count) is not int or count <= 0
+                           for count in source_unknown_reasons.values())
+                    or sum(source_unknown_reasons.values()) != len(source_unknown)):
+                source_unknown_reasons = {"source_unverified": len(source_unknown)}
+            result["rollup_source_unknown_reasons"] = source_unknown_reasons
+            if source_unknown_reasons == {"deadline": len(source_unknown)}:
+                _defer_stage(result, "rollup_rebuild")
+            else:
+                result["errors"].append("rollup: source_unknown")
     except Exception as e:
         result["errors"].append(f"rollup: {type(e).__name__}")
 
