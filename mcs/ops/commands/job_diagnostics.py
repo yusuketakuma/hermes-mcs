@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import sqlite3
 import time
-import json
 
-from mcs_util import payload_hash, positive, strict_json, until_epoch
+from mcs_util import payload_hash, positive, strict_json, until_epoch, valid_hash
 from operation_contract import read_retry_payload, retry_error, retry_job_row
 from semantic_runtime import payload_generation
 import semantic_intake_hold
@@ -52,8 +51,9 @@ def _snapshot(db):
         raise sqlite3.DatabaseError("job_diagnostics_snapshot_required")
 
 
-def _metrics(db, job_ids):
-    # Do not materialize oversized content in Python, and retain code fields only.
+def _metrics(db, job_ids, *, stop_when_bound=False):
+    # Visit artifact IDs in descending order so every returned match has a
+    # completely observed newer prefix, even if the budget later expires.
     deadline = time.monotonic() + 4.0
     exhausted = [False]
     def within_budget():
@@ -64,85 +64,123 @@ def _metrics(db, job_ids):
     db.create_function('mcs_job_metric_budget', 0, within_budget)
     out = []
     try:
-        # Rank identifiers, not document bodies, independently for each job.
-        # SQLite may reject JSON that Python's strict decoder accepts: keep
-        # those opaque records as candidates for every requested job.
-        rows = db.execute("""
-            WITH wanted AS (SELECT value AS job_id FROM json_each(?)),
-            hits AS (
-              SELECT a.artifact_id, json_extract(m.value, '$.job_id') AS job_id
-              FROM main.artifacts a, json_each(CASE
-                WHEN typeof(a.content)='text' AND length(CAST(a.content AS BLOB))<=1048576
-                  AND json_valid(a.content) THEN CASE
-                    WHEN json_type(a.content,'$.job_metrics')='array'
-                      AND json_array_length(a.content,'$.job_metrics')<=64
-                    THEN a.content ELSE '{}' END
-                ELSE '{}' END, '$.job_metrics') m
-              WHERE a.kind='semantic_drain_run' AND mcs_job_metric_budget()=1
-                AND CASE WHEN m.type='object' THEN
-                  CASE WHEN json_type(m.value,'$.job_id')='integer'
-                    THEN json_extract(m.value,'$.job_id') IN (SELECT job_id FROM wanted)
-                    ELSE 0 END ELSE 0 END
-              UNION ALL
-              SELECT a.artifact_id, wanted.job_id FROM main.artifacts a CROSS JOIN wanted
-              WHERE a.kind='semantic_drain_run' AND mcs_job_metric_budget()=1
-                AND typeof(a.content)='text' AND length(CAST(a.content AS BLOB))<=1048576
-                AND NOT json_valid(a.content)
-            ), ranked AS (
-              SELECT artifact_id, ROW_NUMBER() OVER
-                (PARTITION BY job_id ORDER BY artifact_id DESC) AS rank
-              FROM (SELECT DISTINCT artifact_id, job_id FROM hits)
-            )
-            SELECT a.artifact_id, CASE WHEN typeof(content)='text'
-              AND length(CAST(content AS BLOB))<=1048576 THEN content END
-            FROM main.artifacts a JOIN (SELECT DISTINCT artifact_id FROM ranked WHERE rank<=512) r
-              ON a.artifact_id=r.artifact_id ORDER BY a.artifact_id DESC
-        """, (json.dumps(job_ids),))
+        bindings = {}
+        if stop_when_bound:
+            for job_id in job_ids:
+                if time.monotonic() >= deadline:
+                    return out
+                row = db.execute("SELECT job_id,kind,project_id,attempts FROM main.fetch_jobs WHERE job_id=?",
+                                 (job_id,)).fetchone()
+                if row is None or row['kind'] != 'semantic' or not positive(row['project_id']):
+                    continue
+                source, error = retry_job_row(db, row['project_id'], job_id)
+                if error:
+                    continue
+                try:
+                    payload = strict_json(read_retry_payload(db, source))
+                    if not isinstance(payload, dict):
+                        continue
+                    bindings[job_id] = (row, payload_hash(payload), payload_generation(payload))
+                except (TypeError, ValueError, RecursionError, OverflowError):
+                    continue
+            if not bindings or time.monotonic() >= deadline:
+                return out
+        remaining = set(bindings)
+        wanted = set(job_ids)
+        counts = dict.fromkeys(job_ids, 0)
+        query = """
+            SELECT artifact_id, kind FROM main.artifacts NOT INDEXED
+            WHERE artifact_id<=? AND mcs_job_metric_budget()=1
+            ORDER BY artifact_id DESC LIMIT 128
+        """
         bytes_read = 0
-        for artifact_id, raw in rows:
-            if raw is None:
-                continue
-            bytes_read += len(raw) * 4
-            if bytes_read > 16 * 1024 * 1024 or time.monotonic() >= deadline:
-                return []
-            try:
-                doc = strict_json(raw)
-            except (ValueError, TypeError, RecursionError):
-                continue
-            metrics = doc.get("job_metrics") if isinstance(doc, dict) else None
-            if not isinstance(metrics, list) or len(metrics) > 64:
-                continue
-            for metric in reversed(metrics):
-                if not isinstance(metric, dict):
+        before = 2**63 - 1
+        while before >= -(2**63):
+            active = {job_id for job_id in (remaining if stop_when_bound else wanted) if counts[job_id] < 512}
+            if not active or time.monotonic() >= deadline:
+                break
+            rows = db.execute(query, (before,)).fetchall()
+            if not rows:
+                break
+            for artifact_id, kind in rows:
+                if time.monotonic() >= deadline:
+                    return out
+                before = artifact_id - 1
+                if kind != 'semantic_drain_run':
                     continue
-                fields = ("job_id", "project_id", "kind", "generation", "payload_digest", "attempts", "status")
-                values = [metric.get(field) for field in fields]
-                if (any(type(values[index]) is not int for index in (0, 1, 5))
-                        or any(not isinstance(values[index], str) or len(values[index]) > 128
-                               for index in (2, 3, 4, 6))):
-                    continue
-                code = metric.get("retry_reason")
-                if isinstance(code, str) and code.startswith("exception_") and len(code) > len("exception_"):
-                    code = "internal_error"
-                if not isinstance(code, str) or code not in _REASONS:
-                    llm_error = metric.get("llm_error")
-                    code = "llm_" + llm_error if isinstance(llm_error, str) and len(llm_error) <= 64 else None
-                out.append((artifact_id, *values, code if code in _REASONS else None))
+                raw = db.execute("SELECT CASE WHEN typeof(content)='text' "
+                                 "AND length(CAST(content AS BLOB))<=1048576 THEN content END "
+                                 "FROM main.artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()[0]
+                if raw is None:
+                    return out
+                bytes_read += len(raw) * 4
+                if bytes_read > 16 * 1024 * 1024 or time.monotonic() >= deadline:
+                    return out
+                try:
+                    doc = strict_json(raw)
+                except (ValueError, TypeError, RecursionError):
+                    return out
+                metrics = doc.get("job_metrics") if isinstance(doc, dict) else None
+                if not isinstance(metrics, list) or len(metrics) > 64:
+                    return out
+                candidates = {metric.get('job_id') for metric in metrics
+                              if isinstance(metric, dict) and positive(metric.get('job_id'))} & active
+                for job_id in candidates:
+                    counts[job_id] += 1
+                for metric in reversed(metrics):
+                    if not isinstance(metric, dict) or not positive(metric.get('job_id')):
+                        return out
+                    if metric['job_id'] not in candidates:
+                        continue
+                    job_id = metric['job_id']
+                    if stop_when_bound and job_id not in remaining:
+                        continue
+                    fields = ("job_id", "project_id", "kind", "generation", "payload_digest", "attempts", "status")
+                    values = [metric.get(field) for field in fields]
+                    if (any(type(values[index]) is not int for index in (0, 1, 5))
+                            or any(not isinstance(values[index], str) or len(values[index]) > 128
+                                   for index in (2, 3, 4, 6))
+                            or not valid_hash(values[4])):
+                        remaining.discard(job_id)
+                        wanted.discard(job_id)
+                        candidates.discard(job_id)
+                        continue
+                    code = metric.get("retry_reason")
+                    if isinstance(code, str) and code.startswith("exception_") and len(code) > len("exception_"):
+                        code = "internal_error"
+                    if not isinstance(code, str) or code not in _REASONS:
+                        llm_error = metric.get("llm_error")
+                        code = "llm_" + llm_error if isinstance(llm_error, str) and len(llm_error) <= 64 else None
+                    item = (artifact_id, *values, code if code in _REASONS else None)
+                    out.append(item)
+                    if job_id in remaining:
+                        row, digest, generation = bindings[job_id]
+                        if _matches_metric(item, row, digest, generation):
+                            remaining.remove(job_id)
+                active = {job_id for job_id in (remaining if stop_when_bound else wanted) if counts[job_id] < 512}
+                if not active:
+                    return out
+
     except sqlite3.Error:
         if not exhausted[0]:
             raise
-        return []
     finally:
         db.create_function('mcs_job_metric_budget', 0, None)
     return out
 
 
+def _matches_metric(item, row, digest, generation):
+    _, job_id, project_id, kind, gen, fp, attempts, status, _ = item
+    return (job_id == row["job_id"] and project_id == row["project_id"] and kind == row["kind"]
+            and gen == generation and fp == digest and type(row['attempts']) is int
+            and attempts + 1 == row["attempts"] and status in ("retry", "failed", "error"))
+
+
 def _evidence(metrics, row, digest, generation):
-    for artifact_id, job_id, project_id, kind, gen, fp, attempts, status, code in metrics:
-        if (job_id == row["job_id"] and project_id == row["project_id"] and kind == row["kind"]
-                and gen == generation and fp == digest and attempts + 1 == row["attempts"]
-                and status in ("retry", "failed", "error")):
-            return code, artifact_id if code else None
+    for item in metrics:
+        if _matches_metric(item, row, digest, generation):
+            code = item[-1]
+            return code, item[0] if code else None
     return None, None
 
 
@@ -195,7 +233,7 @@ def diagnose_job(db, cfg, job_id, now=None):
     _snapshot(db)
     if not positive(job_id):
         raise ValueError("job_id_invalid")
-    return _diagnose(db, cfg, job_id, now, _metrics(db, [job_id]))
+    return _diagnose(db, cfg, job_id, now, _metrics(db, [job_id], stop_when_bound=True))
 
 
 def _diagnose(db, cfg, job_id, now, metrics):
@@ -304,6 +342,6 @@ def list_failed(db, cfg, limit=50, now=None):
         raise ValueError("job_limit_invalid")
     ids = [row[0] for row in db.execute("SELECT job_id FROM main.fetch_jobs WHERE state='failed' "
                                          "ORDER BY job_id DESC LIMIT ?", (limit + 1,))]
-    metrics = _metrics(db, ids[:limit]) if ids else []
+    metrics = _metrics(db, ids[:limit], stop_when_bound=True) if ids else []
     return {"jobs": [_diagnose(db, cfg, job_id, now, metrics) for job_id in ids[:limit]],
             "truncated": len(ids) > limit}

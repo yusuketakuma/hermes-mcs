@@ -262,7 +262,8 @@ def test_list_reads_bounded_metric_artifacts_once(data):
         ledger.db.set_trace_callback(None)
     matching = [query for query in queries if "CASE WHEN typeof(content)='text'" in query]
     assert len(matching) == 1
-    assert result["jobs"][0]["reason_code"] == "budget_short"
+    assert result["jobs"][0]["reason_code"] == "unknown"
+    assert "reason_unverified" in result["jobs"][0]["warnings"]
 
 
 def test_old_unbound_reason_does_not_hide_unsettled_cloud_send(data):
@@ -296,3 +297,217 @@ def test_bound_audit_failure_codes_are_reported_without_guessing(data, code, rem
     report = _read(ledger, job, cfg)
     assert report['reason_code'] == code and report['remediation_code'] == remedy
     assert report['reason_basis'] == 'bound_job_metric'
+
+
+def test_recent_bound_evidence_does_not_sort_large_old_history(data):
+    ledger, job, payload, cfg = data
+    idle = json.dumps({'job_metrics': []})
+    ledger.db.executemany("INSERT INTO artifacts(kind,content) VALUES('semantic_drain_run',?)", [(idle,)] * 30000)
+    _metric(ledger, job, payload)
+    steps = [0]
+
+    def stop_long_scan():
+        steps[0] += 1
+        return steps[0] > 100
+
+    ledger.db.set_progress_handler(stop_long_scan, 1000)
+    try:
+        assert _read(ledger, job, cfg)['reason_code'] == 'budget_short'
+    finally:
+        ledger.db.set_progress_handler(None, 0)
+
+
+def test_interrupted_prefix_keeps_observed_job_and_leaves_other_unknown(data, monkeypatch):
+    from types import SimpleNamespace
+    ledger, job, payload, cfg = data
+    ledger.db.execute("INSERT INTO messages(message_id,project_id,body_text,body_state) VALUES(43,1,'synthetic','full')")
+    other_payload = {**payload, 'targets': [43]}
+    other = ledger.job_add('semantic', 1, 43, payload=other_payload)
+    ledger.db.execute("UPDATE fetch_jobs SET state='failed',attempts=3 WHERE job_id=?", (other,))
+    ledger.artifact_add('semantic_drain_run', json.dumps({'job_metrics': []}))
+    _metric(ledger, job, payload)
+    clock = [0.0]
+    original = diag.strict_json
+
+    def parse_and_stop(raw):
+        result = original(raw)
+        if isinstance(result, dict) and result.get('job_metrics'):
+            clock[0] = 5.0
+        return result
+
+    monkeypatch.setattr(diag, 'strict_json', parse_and_stop)
+    monkeypatch.setattr(diag, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    before = ledger.db.total_changes
+    ledger.db.execute('BEGIN')
+    try:
+        reports = {entry['job_id']: entry for entry in diag.list_failed(ledger.db, cfg, now=1700000000)['jobs']}
+    finally:
+        ledger.db.rollback()
+    assert reports[job]['reason_code'] == 'budget_short'
+    assert reports[other]['reason_code'] == 'unknown'
+    assert 'reason_unverified' in reports[other]['warnings']
+    assert ledger.db.total_changes == before
+
+
+@pytest.mark.parametrize('bad', ['oversized', 'too_many', 'duplicate', 'invalid', 'nontext', 'missing'])
+def test_unreadable_newer_run_never_reveals_older_reason(data, bad):
+    ledger, job, payload, cfg = data
+    _metric(ledger, job, payload)
+    reasonless = {"job_id": job, "project_id": 1, "kind": "semantic", "generation": payload["generation"],
+                  "payload_digest": payload_hash(payload), "attempts": 2, "status": "retry"}
+    content = {
+        'oversized': json.dumps({'job_metrics': [reasonless], 'padding': 'x' * 1048576}),
+        'too_many': json.dumps({'job_metrics': [reasonless] + [{}] * 64}),
+        'duplicate': '{"job_metrics":[],"job_metrics":[' + json.dumps(reasonless) + ']}',
+        'invalid': '{"job_metrics":',
+        'nontext': b'42',
+        'missing': '{}',
+    }[bad]
+    ledger.db.execute("INSERT INTO artifacts(kind,content) VALUES('semantic_drain_run',?)", (content,))
+    ledger.db.commit()
+    before = ledger.db.total_changes
+    report = _read(ledger, job, cfg)
+    assert report['reason_code'] == 'unknown'
+    assert 'reason_unverified' in report['warnings']
+    assert ledger.db.total_changes == before
+
+
+def test_newer_reasonless_bound_job_and_other_job_survive_unreadable_older_run(data):
+    ledger, job, payload, cfg = data
+    ledger.db.execute("INSERT INTO messages(message_id,project_id,body_text,body_state) VALUES(43,1,'synthetic','full')")
+    other_payload = {**payload, 'targets': [43]}
+    other = ledger.job_add('semantic', 1, 43, payload=other_payload)
+    ledger.db.execute("INSERT INTO messages(message_id,project_id,body_text,body_state) VALUES(44,1,'synthetic','full')")
+    unresolved = ledger.job_add('semantic', 1, 44, payload={**payload, 'targets': [44]})
+    ledger.db.execute("UPDATE fetch_jobs SET state='failed',attempts=3 WHERE job_id IN (?,?)", (other, unresolved))
+    _metric(ledger, job, payload)
+    invalid_id = ledger.artifact_add('semantic_drain_run', '{"job_metrics":')
+    _metric(ledger, other, other_payload)
+    _metric(ledger, job, payload, retry_reason=None, llm_error=None)
+    queries = []
+    ledger.db.set_trace_callback(queries.append)
+    ledger.db.execute('BEGIN')
+    try:
+        reports = {entry['job_id']: entry for entry in diag.list_failed(ledger.db, cfg, now=1700000000)['jobs']}
+    finally:
+        ledger.db.rollback()
+        ledger.db.set_trace_callback(None)
+    assert any(f'FROM main.artifacts WHERE artifact_id={invalid_id}' in query for query in queries)
+    assert reports[job]['reason_code'] == 'unknown'
+    assert 'reason_unverified' in reports[job]['warnings']
+    assert reports[other]['reason_code'] == 'budget_short'
+    assert reports[unresolved]['reason_code'] == 'unknown'
+    assert 'reason_unverified' in reports[unresolved]['warnings']
+
+
+def test_binding_preparation_stops_when_budget_expires(data, monkeypatch):
+    from types import SimpleNamespace
+    ledger, job, payload, cfg = data
+    _metric(ledger, job, payload)
+    clock = [0.0]
+    original = diag.retry_job_row
+
+    def delayed_binding(*args):
+        result = original(*args)
+        clock[0] = 5.0
+        return result
+
+    monkeypatch.setattr(diag, 'retry_job_row', delayed_binding)
+    monkeypatch.setattr(diag, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    queries = []
+    ledger.db.set_trace_callback(queries.append)
+    try:
+        assert _read(ledger, job, cfg)['reason_code'] == 'unknown'
+    finally:
+        ledger.db.set_trace_callback(None)
+    assert not any('SELECT artifact_id, kind FROM main.artifacts' in query for query in queries)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('attempts', None), ('payload_digest', None), ('project_id', True),
+    ('kind', None), ('generation', []), ('status', 1),
+    ('payload_digest', ''), ('payload_digest', 'not-a-digest'),
+    ('payload_digest', '0' * 63), ('payload_digest', 'g' * 64), ('payload_digest', 'A' * 64),
+])
+@pytest.mark.parametrize('same_artifact', [False, True])
+def test_newer_invalid_job_binding_does_not_reveal_older_reason(data, field, value, same_artifact):
+    ledger, job, payload, cfg = data
+    metric = {"job_id": job, "project_id": 1, "kind": "semantic", "generation": payload["generation"],
+              "payload_digest": payload_hash(payload), "attempts": 2, "status": "retry",
+              "retry_reason": "budget_short"}
+    newer = {**metric, field: value}
+    if same_artifact:
+        ledger.artifact_add('semantic_drain_run', json.dumps({'job_metrics': [metric, newer]}))
+    else:
+        _metric(ledger, job, payload)
+        ledger.artifact_add('semantic_drain_run', json.dumps({'job_metrics': [newer]}))
+    report = _read(ledger, job, cfg)
+    assert report['reason_code'] == 'unknown'
+    assert 'reason_unverified' in report['warnings']
+
+
+def test_valid_other_binding_does_not_hide_older_bound_reason(data):
+    ledger, job, payload, cfg = data
+    _metric(ledger, job, payload)
+    _metric(ledger, job, payload, payload_digest='0' * 64)
+    assert _read(ledger, job, cfg)['reason_code'] == 'budget_short'
+
+
+def test_invalid_binding_only_stops_its_job(data):
+    ledger, job, payload, cfg = data
+    ledger.db.execute("INSERT INTO messages(message_id,project_id,body_text,body_state) VALUES(43,1,'synthetic','full')")
+    other_payload = {**payload, 'targets': [43]}
+    other = ledger.job_add('semantic', 1, 43, payload=other_payload)
+    ledger.db.execute("UPDATE fetch_jobs SET state='failed',attempts=3 WHERE job_id=?", (other,))
+    _metric(ledger, job, payload)
+    _metric(ledger, other, other_payload)
+    _metric(ledger, job, payload, attempts=None)
+    ledger.db.execute('BEGIN')
+    try:
+        reports = {entry['job_id']: entry for entry in diag.list_failed(ledger.db, cfg, now=1700000000)['jobs']}
+    finally:
+        ledger.db.rollback()
+    assert reports[job]['reason_code'] == 'unknown'
+    assert reports[other]['reason_code'] == 'budget_short'
+
+
+def test_bound_newest_metric_precedes_invalid_older_metric_in_same_run(data):
+    ledger, job, payload, cfg = data
+    metric = {"job_id": job, "project_id": 1, "kind": "semantic", "generation": payload["generation"],
+              "payload_digest": payload_hash(payload), "attempts": 2, "status": "retry",
+              "retry_reason": "budget_short"}
+    ledger.artifact_add('semantic_drain_run', json.dumps({'job_metrics': [{**metric, 'attempts': None}, metric]}))
+    assert _read(ledger, job, cfg)['reason_code'] == 'budget_short'
+
+
+@pytest.mark.parametrize('ambiguous', [
+    None, 1, {}, {'job_id': None}, {'job_id': True}, {'job_id': '1'},
+    {'job_id': 0}, {'job_id': -1}, {'job_id': 2**63},
+])
+def test_unidentifiable_metric_preserves_newer_binding_and_blocks_older(data, ambiguous):
+    ledger, job, payload, cfg = data
+    ledger.db.execute("INSERT INTO messages(message_id,project_id,body_text,body_state) VALUES(43,1,'synthetic','full')")
+    other_payload = {**payload, 'targets': [43]}
+    other = ledger.job_add('semantic', 1, 43, payload=other_payload)
+    ledger.db.execute("UPDATE fetch_jobs SET state='failed',attempts=3 WHERE job_id=?", (other,))
+    metric = {"job_id": job, "project_id": 1, "kind": "semantic", "generation": payload["generation"],
+              "payload_digest": payload_hash(payload), "attempts": 2, "status": "retry",
+              "retry_reason": "budget_short"}
+    newer = {**metric, 'job_id': other, 'payload_digest': payload_hash(other_payload)}
+    ledger.artifact_add('semantic_drain_run', json.dumps({'job_metrics': [metric, ambiguous, newer]}))
+    ledger.db.execute('BEGIN')
+    try:
+        reports = {entry['job_id']: entry for entry in diag.list_failed(ledger.db, cfg, now=1700000000)['jobs']}
+    finally:
+        ledger.db.rollback()
+    assert reports[job]['reason_code'] == 'unknown'
+    assert 'reason_unverified' in reports[job]['warnings']
+    assert reports[other]['reason_code'] == 'budget_short'
+
+
+def test_idle_and_other_job_metric_do_not_hide_bound_evidence(data):
+    ledger, job, payload, cfg = data
+    _metric(ledger, job, payload)
+    ledger.artifact_add('semantic_drain_run', json.dumps({'job_metrics': []}))
+    ledger.artifact_add('semantic_drain_run', json.dumps({'job_metrics': [{'job_id': job + 100}]}))
+    assert _read(ledger, job, cfg)['reason_code'] == 'budget_short'
