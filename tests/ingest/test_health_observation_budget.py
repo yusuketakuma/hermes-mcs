@@ -6,6 +6,7 @@ import pytest
 
 import health_report
 import health_watch
+import notify_recovery
 import notify_scope
 import status_snapshot
 from ingest_testkit import _ledger
@@ -40,6 +41,75 @@ def _assert_unknown(parts, reason):
                      "status": "unknown", "reason": reason}
 
 
+@pytest.mark.parametrize("reader", ["cards", "parts", "holds"])
+@pytest.mark.parametrize("elapsed,recorded", [(0.5, True), (2.1, False)])
+def test_notification_readers_use_separate_time_budget(stored, monkeypatch, reader, elapsed, recorded):
+    stored.execute("PRAGMA busy_timeout=7000")
+    original_limit = stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
+    stored.execute("INSERT INTO runs(started_at,status,error) VALUES(?,'ok','')", (NOW,))
+    before = stored.total_changes
+    clock = [100.0]
+    monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
+
+    def read(db, *args):
+        assert db is stored
+        assert db.execute("PRAGMA busy_timeout").fetchone()[0] == 2000
+        assert db.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) == min(
+            original_limit, health_report.HEALTH_OBSERVATION_ROW_BYTES)
+        clock[0] += elapsed
+        if reader == "cards":
+            return {"attempts_unsettled": 0, "oldest_unsettled_age_s": None}
+        if reader == "parts":
+            return _empty()
+        return {"parts": {}}
+
+    if reader == "cards":
+        monkeypatch.setattr(notify_scope, "health_cards", read)
+        report = health_report.build_health(stored, {"errors": [], "notify": {}}, "ok", cfg={})["cards"]
+        if recorded:
+            assert report["attempts_unsettled"] == 0
+        else:
+            assert report["status"] == "unknown" and report["reason"] == "observation_limit"
+            assert report["attempts_unsettled"] is None
+    elif reader == "parts":
+        monkeypatch.setattr(notify_scope, "incomplete_parts_health", read)
+        report = health_report.incomplete_parts_health(stored, NOW, {})
+        if recorded:
+            assert report == {**_empty(), "status": "recorded"}
+        else:
+            _assert_unknown(report, "observation_limit")
+    else:
+        monkeypatch.setattr(notify_recovery, "part_hold_report", read)
+        report = health_report.part_holds_health(stored, NOW)
+        if recorded:
+            assert report == {"parts": {}, "status": "recorded", "observed_at": NOW}
+        else:
+            assert report == {"status": "unknown", "observed_at": NOW,
+                              "reason": "observation_limit"}
+
+    assert stored.in_transaction and stored.total_changes == before
+    assert stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) == original_limit
+    assert stored.execute("PRAGMA busy_timeout").fetchone()[0] == 7000
+    assert stored.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 "
+                          "FROM n WHERE x<2000) SELECT SUM(x) FROM n").fetchone()[0] == 2001000
+    stored.commit()
+
+
+def test_other_health_readers_keep_default_time_budget(stored, monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
+
+    def read(db, now, checkpoint):
+        clock[0] += 0.5
+        checkpoint()
+        pytest.fail("pending diagnostics must keep the original time budget")
+
+    monkeypatch.setattr(notify_scope, "pending_breakdown", read)
+    report = health_report.pending_health(stored, NOW)
+    assert report["pending"] == 0
+    assert report["pending_by_reason"]["status"] == "unavailable"
+
+
 def test_build_health_bounds_part_read_and_keeps_observed_zero_healthy(stored, monkeypatch):
     original_limit = stored.getlimit(sqlite3.SQLITE_LIMIT_LENGTH)
     original_wait = stored.execute("PRAGMA busy_timeout").fetchone()[0]
@@ -48,7 +118,7 @@ def test_build_health_bounds_part_read_and_keeps_observed_zero_healthy(stored, m
         assert db.getlimit(sqlite3.SQLITE_LIMIT_LENGTH) == min(
             original_limit, health_report.HEALTH_OBSERVATION_ROW_BYTES)
         assert db.execute("PRAGMA busy_timeout").fetchone()[0] == min(
-            original_wait, int(health_report.HEALTH_OBSERVATION_S * 1000))
+            original_wait, int(health_report.NOTIFICATION_OBSERVATION_S * 1000))
         return _empty(now)
 
     monkeypatch.setattr(notify_scope, "incomplete_parts_health", read)
@@ -94,7 +164,7 @@ def test_sql_deadline_clears_handler_and_preserves_connection(stored, monkeypatc
     monkeypatch.setattr(health_report.time, "monotonic", lambda: clock[0])
 
     def read(db, now, cfg=None):
-        clock[0] += 1
+        clock[0] += health_report.NOTIFICATION_OBSERVATION_S + 0.1
         # Exercise the real SQLite progress handler, not a raised stub timeout.
         db.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 "
                    "FROM n WHERE x<2000) SELECT SUM(x) FROM n").fetchone()
@@ -151,7 +221,7 @@ def test_failed_card_read_is_unknown_and_reaches_monitor(stored, tmp_path, monke
     def read(db, cfg=None):
         if failure == "unavailable":
             raise ValueError("SYNTHETIC_PRIVATE_ERROR")
-        clock[0] += 1
+        clock[0] += health_report.NOTIFICATION_OBSERVATION_S + 0.1
         db.execute("WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 "
                    "FROM n WHERE x<2000) SELECT SUM(x) FROM n").fetchone()
         pytest.fail("card SQL must be interrupted at the observation deadline")

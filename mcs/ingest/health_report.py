@@ -447,6 +447,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
 
 
 HEALTH_OBSERVATION_S = 0.25
+NOTIFICATION_OBSERVATION_S = 2.0
 HEALTH_OBSERVATION_ITEMS = 10002  # 10,000 rows plus the two boundary checks
 HEALTH_OBSERVATION_ROW_BYTES = 2 * 1024 * 1024
 
@@ -567,7 +568,8 @@ def part_holds_health(db, now) -> dict:
     """Held/unknown notification parts by fixed reason and retained specs (counts only)."""
     import notify_recovery
     try:
-        report = bounded_health_read(db, lambda _check: notify_recovery.part_hold_report(db))
+        report = bounded_health_read(db, lambda _check: notify_recovery.part_hold_report(db),
+                                     seconds=NOTIFICATION_OBSERVATION_S)
     except Exception as exc:
         return {"status": "unknown", "observed_at": now, "reason": _observation_failure(exc)}
     return {**report, "status": "recorded", "observed_at": now}
@@ -578,7 +580,8 @@ def incomplete_parts_health(db, now, cfg=None) -> dict:
     import notify_scope
     try:
         report = bounded_health_read(
-            db, lambda _check: notify_scope.incomplete_parts_health(db, now, cfg))
+            db, lambda _check: notify_scope.incomplete_parts_health(db, now, cfg),
+            seconds=NOTIFICATION_OBSERVATION_S)
     except Exception as exc:
         return {"total": None, "cards": None,
                 "by_state": dict.fromkeys(("pending", "unknown", "not_sent", "held")),
@@ -696,7 +699,8 @@ def build_health(db, result: dict, status: str,
         coll['collection'] = 'incomplete'
     free_mb = attachment_free_mb()
     try:
-        cards_health = bounded_health_read(db, lambda _check: notify_scope.health_cards(db, cfg))
+        cards_health = bounded_health_read(db, lambda _check: notify_scope.health_cards(db, cfg),
+                                           seconds=NOTIFICATION_OBSERVATION_S)
     except Exception as exc:
         cards_health = dict.fromkeys((
             "pending", "delivered", "update_failed", "delivery_unknown", "message_deleted",
