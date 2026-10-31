@@ -9,6 +9,7 @@ from slack_testkit import isolated_slack_ledger as led, _rewrite_world, ROOT_TS
 
 from adapters.slack.presentation import render_parts, thread_part_blocks
 from adapters.slack.cards import validate
+from adapters.slack import delivery
 
 __all__ = ["led"]
 pytestmark = pytest.mark.thread_bodies
@@ -478,6 +479,14 @@ def _run(w, spec, text, part):
     return asyncio.run(w.worker._body_part(spec, text, ctx, part))
 
 
+def _run_with_gate(w, spec, part, gate):
+    token = delivery.RETRY_ALLOWED.set(gate)
+    try:
+        return _run(w, spec, BODY, part)
+    finally:
+        delivery.RETRY_ALLOWED.reset(token)
+
+
 def test_body_part_posts_blocks_and_keeps_plain_text_identity(led):
     w, spec, _replies = _rewrite_world(led)
     spec["delivery"]["thread_id"] = ROOT_TS
@@ -513,10 +522,213 @@ def test_invalid_blocks_resends_plain_text_once_without_losing_the_part(led):
         return await original(**kwargs)
 
     w.client.chat_postMessage = post
-    out = _run(w, spec, BODY, {"part_id": "body:0002", "kind": "body_part", "name": "m:100#1"})
+
+    async def allowed():
+        return True
+
+    out = _run_with_gate(w, spec, {"part_id": "body:0002", "kind": "body_part", "name": "m:100#1"}, allowed)
     assert out["result"] == "delivered"
     assert len(attempts) == 2 and "blocks" in attempts[0] and "blocks" not in attempts[1]
+    assert {k: v for k, v in attempts[0].items() if k != "blocks"} == attempts[1]
     assert "blocks" not in w.client.thread_posts[-1]
+
+
+@pytest.mark.parametrize("gate_result", ["missing", "denied", "raises", "timeout", "non_boolean"])
+def test_invalid_blocks_never_falls_back_without_confirmed_authority(led, gate_result):
+    w, spec, _replies = _rewrite_world(led)
+    spec["delivery"]["thread_id"] = ROOT_TS
+    spec["parts"]["manifest"] = [{"name": "m:100:header#1"}, {"name": "m:100#1"}]
+
+    class Response(dict):
+        status_code = 200
+
+    class Rejected(Exception):
+        response = Response(ok=False, error="invalid_blocks")
+
+    attempts = []
+
+    async def post(**kwargs):
+        attempts.append(kwargs)
+        raise Rejected()
+
+    async def gate():
+        if gate_result == "raises":
+            raise RuntimeError("synthetic gate failure")
+        if gate_result == "timeout":
+            raise TimeoutError("synthetic gate timeout")
+        return 1 if gate_result == "non_boolean" else False
+
+    w.client.chat_postMessage = post
+    part = {"part_id": "body:0002", "kind": "body_part", "name": "m:100#1"}
+    out = _run_with_gate(w, spec, part, None if gate_result == "missing" else gate)
+    assert out == {"result": "not_sent", "error_code": "invalid_blocks"}
+    assert len(attempts) == 1 and "blocks" in attempts[0]
+
+
+def test_invalid_blocks_cancellation_does_not_fall_back(led):
+    w, spec, _replies = _rewrite_world(led)
+    spec["delivery"]["thread_id"] = ROOT_TS
+    spec["parts"]["manifest"] = [{"name": "m:100:header#1"}, {"name": "m:100#1"}]
+
+    class Response(dict):
+        status_code = 200
+
+    class Rejected(Exception):
+        response = Response(ok=False, error="invalid_blocks")
+
+    attempts = []
+
+    async def post(**kwargs):
+        attempts.append(kwargs)
+        raise Rejected()
+
+    async def gate():
+        raise asyncio.CancelledError()
+
+    w.client.chat_postMessage = post
+    part = {"part_id": "body:0002", "kind": "body_part", "name": "m:100#1"}
+    with pytest.raises(asyncio.CancelledError):
+        _run_with_gate(w, spec, part, gate)
+    assert len(attempts) == 1
+
+
+@pytest.mark.parametrize("failure", ["revoked", "raises"])
+def test_invalid_blocks_rechecks_current_worker_authority(led, failure):
+    w, spec, _replies = _rewrite_world(led)
+    spec["delivery"]["thread_id"] = ROOT_TS
+    spec["parts"]["manifest"] = [{"name": "m:100:header#1"}, {"name": "m:100#1"}]
+
+    class Response(dict):
+        status_code = 200
+
+    class Rejected(Exception):
+        response = Response(ok=False, error="invalid_blocks")
+
+    attempts, checks = [], []
+
+    async def post(**kwargs):
+        attempts.append(kwargs)
+        raise Rejected()
+
+    async def authority(current_spec):
+        checks.append(current_spec is spec)
+        if failure == "raises":
+            raise RuntimeError("synthetic authority failure")
+        return False
+
+    w.client.chat_postMessage = post
+    w.worker._send_allowed = authority
+    part = {"part_id": "body:0002", "kind": "body_part", "name": "m:100#1"}
+    out = _run_with_gate(w, spec, part, w.worker._retry_gate(spec))
+    assert out == {"result": "not_sent", "error_code": "invalid_blocks"}
+    assert len(attempts) == 1 and checks == [True]
+
+
+@pytest.mark.parametrize("status,ok,expected", [
+    (500, False, "unknown"),
+    (None, False, "unknown"),
+    (200, True, "unknown"),
+    (302, False, "not_sent"),
+    (400, None, "not_sent"),
+    (True, False, "not_sent"),
+])
+def test_unproven_invalid_blocks_response_preserves_original_classification(led, status, ok, expected):
+    w, spec, _replies = _rewrite_world(led)
+    spec["delivery"]["thread_id"] = ROOT_TS
+    spec["parts"]["manifest"] = [{"name": "m:100:header#1"}, {"name": "m:100#1"}]
+
+    class Response(dict):
+        status_code = status
+
+    class Rejected(Exception):
+        response = Response(ok=ok, error="invalid_blocks")
+
+    attempts, checks = [], []
+
+    async def post(**kwargs):
+        attempts.append(kwargs)
+        raise Rejected()
+
+    async def gate():
+        checks.append(True)
+        return True
+
+    w.client.chat_postMessage = post
+    part = {"part_id": "body:0002", "kind": "body_part", "name": "m:100#1"}
+    assert _run_with_gate(w, spec, part, gate) == {"result": expected, "error_code": "invalid_blocks"}
+    assert len(attempts) == 1 and checks == []
+
+
+@pytest.mark.parametrize("failure", ["returned_rejection", "timeout", "fatal_error"])
+def test_unverified_first_attempt_is_never_sent_again(led, failure):
+    w, spec, _replies = _rewrite_world(led)
+    spec["delivery"]["thread_id"] = ROOT_TS
+    spec["parts"]["manifest"] = [{"name": "m:100:header#1"}, {"name": "m:100#1"}]
+
+    class Response(dict):
+        status_code = 200
+
+    class Rejected(Exception):
+        response = Response(ok=False, error="fatal_error")
+
+    attempts = []
+
+    async def post(**kwargs):
+        attempts.append(kwargs)
+        if failure == "returned_rejection":
+            return Response(ok=False, error="invalid_blocks")
+        if failure == "timeout":
+            raise TimeoutError("synthetic transport timeout")
+        raise Rejected()
+
+    async def allowed():
+        return True
+
+    w.client.chat_postMessage = post
+    part = {"part_id": "body:0002", "kind": "body_part", "name": "m:100#1"}
+    out = _run_with_gate(w, spec, part, allowed)
+    assert out["result"] == "unknown"
+    assert out["error_code"] == {"returned_rejection": "bad_slack_response",
+                                 "timeout": "timeouterror", "fatal_error": "fatal_error"}[failure]
+    assert len(attempts) == 1
+
+
+@pytest.mark.parametrize("status", [200, 400, 429])
+@pytest.mark.parametrize("method", ["post", "update"])
+def test_confirmed_invalid_blocks_retries_once_with_same_method_and_scope(led, status, method):
+    w, spec, _replies = _rewrite_world(led)
+
+    class Response(dict):
+        status_code = status
+
+    class Rejected(Exception):
+        response = Response(ok=False, error="invalid_blocks")
+
+    calls, checks = [], []
+
+    async def operation(**kwargs):
+        calls.append((method, kwargs))
+        if len(calls) == 1:
+            raise Rejected()
+        return {"ok": True}
+
+    async def allowed(_spec):
+        checks.append(True)
+        return True
+
+    w.worker._send_allowed = allowed
+    kwargs = {"channel": "SYNTHETIC_CHANNEL", "text": "合成本文",
+              "thread_ts" if method == "post" else "ts": ROOT_TS}
+    gate = w.worker._retry_gate(spec)
+    token = delivery.RETRY_ALLOWED.set(gate)
+    try:
+        result = asyncio.run(w.worker._blocks_call(operation, [{"type": "divider"}], **kwargs))
+    finally:
+        delivery.RETRY_ALLOWED.reset(token)
+    assert result == {"ok": True} and checks == [True]
+    assert len(calls) == 2 and calls[0][0] == calls[1][0] == method
+    assert calls[0][1]["blocks"] == [{"type": "divider"}]
+    assert {k: v for k, v in calls[0][1].items() if k != "blocks"} == calls[1][1] == kwargs
 
 
 @pytest.mark.parametrize("error", ["cant_update_message", "ratelimited"])

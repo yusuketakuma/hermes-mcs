@@ -92,6 +92,8 @@ def _rate_wait(exc) -> float | None:
     None. A rate-limit rejection proves nothing was written, so one
     resend cannot duplicate; any other failure is never retried here."""
     response = getattr(exc, "response", None)
+    if _payload(response).get("error") == "invalid_blocks":
+        return None
     if getattr(response, "status_code", None) != 429 \
             and _payload(response).get("error") != "ratelimited":
         return None
@@ -558,10 +560,9 @@ class DeliveryWorker(_BaseWorker):
         return {"result": "delivered", "remote_id": ts}
 
     async def _blocks_call(self, fn, blocks, **kwargs):
-        """One Slack write carrying ``blocks`` beside the plain text. An
-        ``invalid_blocks`` rejection (a workspace without the block type;
-        nothing was written) resends the same text once without blocks,
-        so a new block never costs a part its send."""
+        """One Slack write carrying ``blocks`` beside the plain text.
+        A confirmed ``invalid_blocks`` rejection can resend the same text
+        without blocks only while the original send authority remains valid."""
         if not blocks:
             return await call_native(fn, **kwargs)
         try:
@@ -569,10 +570,22 @@ class DeliveryWorker(_BaseWorker):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            if _payload(getattr(exc, "response", None)).get("error") != "invalid_blocks":
+            response = getattr(exc, "response", None)
+            data, status = _payload(response), getattr(response, "status_code", None)
+            if (data.get("error") != "invalid_blocks" or data.get("ok") is not False
+                    or type(status) is not int or not (status == 200 or 400 <= status < 500)):
                 raise
-        self._log("blocks_rejected", reason="slack_container_unsupported")
-        return await call_native(fn, **kwargs)
+            try:
+                allowed = RETRY_ALLOWED.get()
+                permitted = allowed is not None and await allowed() is True
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                permitted = False
+            if not permitted:
+                raise
+            self._log("blocks_rejected", reason="slack_container_unsupported")
+            return await call_native(fn, **kwargs)
 
     async def _edit_only_prior(self, spec, part, text, ctx, *, attachment=False, blocks=None):
         """Edit one exact owned reply; no text dedupe, upload or fresh-post fallback."""
