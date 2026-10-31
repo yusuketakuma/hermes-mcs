@@ -2794,6 +2794,159 @@ def test_post_merge_bail_stops_restarted_writers_before_rollback(updater, monkey
         assert not Path(updater.MARKER_PATH).exists()
 
 
+@pytest.mark.parametrize("mode", ["hermes", "standalone"])
+@pytest.mark.parametrize("blocked", ["provider", "runtime"])
+@pytest.mark.parametrize("failure", ["none", "marker_before", "stop", "marker_after", "marker_swap"])
+def test_post_merge_preflight_hold_reestablishes_verified_stop(updater, monkeypatch, mode, blocked, failure):
+    repo = _apply_env(updater, monkeypatch, cfg={"runtime_mode": mode})
+    _git(repo, "reset", "-q", "--hard", "v1.0.0")
+    target = _git(repo, "rev-parse", "v1.1.0^{commit}").stdout.strip()
+    monkeypatch.setattr(update_discovery, "remote_tag_sha", lambda tag, **_kwargs: target)
+    monkeypatch.setattr(updater, "_plan_runtime_migration", lambda *_args: None)
+    events, saved = [], {}
+    restarted = [False]
+
+    def load():
+        if restarted[0]:
+            raise ValueError("synthetic provider pending")
+        return {"runtime_mode": mode}
+
+    def initial_quiesce():
+        events.append("initial_stop")
+        updater._write_marker()
+        return []
+
+    def child(_sha, *, run_lock_fd):
+        assert Path(updater.MARKER_PATH).exists()
+        saved["journal"] = updater.journal_store.load_state(updater.STATE_PATH)
+        updater._remove_marker()
+        restarted[0] = True
+        events.append("child_restarted")
+        raise updater.UpdateError("post_merge_failed: postcheck_failed: synthetic")
+
+    def preflight(_target):
+        events.append("provider_preflight")
+        if blocked == "provider":
+            raise updater.ProviderRollbackUnverified("provider_rollback_settings_unverified")
+
+    def runtime(_entry):
+        events.append("runtime_preflight")
+        if blocked == "runtime":
+            raise updater.UpdateError("runtime_restore_checkout_changed")
+
+    ensure = updater._ensure_recovery_marker
+    def marker():
+        events.append("marker")
+        count = events.count("marker")
+        if failure == ("marker_before" if count == 1 else "marker_after"):
+            raise OSError("synthetic marker failure")
+        return ensure()
+
+    def stop(selected):
+        assert selected == mode and Path(updater.MARKER_PATH).exists()
+        events.append("stop:" + selected)
+        if failure == "stop":
+            raise updater.UpdateError("synthetic stop failure")
+        if failure == "marker_swap":
+            replacement = Path(updater.DATA) / "synthetic-marker-replacement"
+            replacement.write_text("synthetic")
+            replacement.chmod(0o600)
+            os.replace(replacement, updater.MARKER_PATH)
+        return []
+
+    monkeypatch.setattr(mcs_util, "load_config", load)
+    monkeypatch.setattr(updater, "quiesce", initial_quiesce)
+    monkeypatch.setattr(updater, "_run_post_merge", child)
+    monkeypatch.setattr(updater, "_provider_rollback_preflight", preflight)
+    monkeypatch.setattr(updater, "_check_runtime_restore", runtime)
+    monkeypatch.setattr(updater, "_ensure_recovery_marker", marker)
+    monkeypatch.setattr(updater, "_quiesce_for_mode", stop)
+    monkeypatch.setattr(updater, "_rollback_tree", lambda *_a, **_k: pytest.fail("unexpected rollback"))
+    monkeypatch.setattr(updater, "restart_agents", lambda *_a, **_k: pytest.fail("unexpected restart"))
+    monkeypatch.setattr(updater, "_enqueue_notice", lambda *_a, **_k: pytest.fail("unexpected notice"))
+
+    assert updater.apply("v1.1.0", target, "synthetic-command") == 1
+    assert updater._head_sha() == target
+    assert updater.journal_store.load_state(updater.STATE_PATH) == saved["journal"]
+    report = json.loads(Path(updater.REPORT_PATH).read_text())
+    assert report["result"] == "runtime_restore_blocked"
+    assert report["writers_stopped"] is (failure == "none")
+    assert events[:2] == ["initial_stop", "child_restarted"]
+    assert ("provider_preflight" in events) and ("runtime_preflight" in events) is (blocked == "runtime")
+    assert events.count("marker") == (1 if failure in ("marker_before", "stop") else 2)
+    assert ("stop:" + mode in events) is (failure != "marker_before")
+    assert Path(updater.MARKER_PATH).exists() is (failure != "marker_before")
+
+
+@pytest.mark.parametrize("mode", ["hermes", "standalone"])
+def test_quiesce_for_verified_mode_does_not_read_pending_config(updater, monkeypatch, mode):
+    updater._ensure_recovery_marker()
+    monkeypatch.setattr(mcs_util, "load_config", lambda: pytest.fail("pending config was read"))
+    calls = []
+    monkeypatch.setattr(service_contract, "LEGACY_LABELS", ())
+    monkeypatch.setattr(service_contract, "RESIDENT_LABELS", ("synthetic.a", "synthetic.b"))
+    monkeypatch.setattr(updater, "_run", lambda argv: calls.append(argv) or subprocess.CompletedProcess(argv, 0))
+    monkeypatch.setattr(updater, "_agent_pid", lambda *_a, **_k: None)
+    monkeypatch.setattr(updater, "_stray_drainer_pids", lambda: [])
+    monkeypatch.setattr(updater, "_standalone_status", lambda: {
+        "update_in_progress": True, "children": {"update": {"pid": 123}}})
+    stopped = updater._quiesce_for_mode(mode)
+    assert Path(updater.MARKER_PATH).exists()
+    if mode == "standalone":
+        assert stopped == ["extract-0", "extract-2"] and not calls
+    else:
+        assert stopped == ["synthetic.a", "synthetic.b"]
+        assert [argv[0:2] for argv in calls] == [["launchctl", "bootout"]] * 2
+        assert [argv[-1].rsplit("/", 1)[-1] for argv in calls] == stopped
+
+
+@pytest.mark.parametrize("kind", ["symlink", "hardlink"])
+def test_recovery_marker_rejects_links_without_modifying_target(updater, tmp_path, kind):
+    target = tmp_path / "synthetic-marker-target"
+    target.write_text("synthetic unchanged")
+    target.chmod(0o600)
+    marker = Path(updater.MARKER_PATH)
+    if kind == "symlink":
+        marker.symlink_to(target)
+    else:
+        os.link(target, marker)
+    with pytest.raises(OSError):
+        updater._ensure_recovery_marker()
+    assert target.read_text() == "synthetic unchanged"
+    assert os.path.lexists(marker)
+
+
+def test_recovery_marker_pin_survives_unlink_and_closes_both_fds(updater, monkeypatch):
+    marker = Path(updater.MARKER_PATH)
+    expected = updater._ensure_recovery_marker()
+    opened = {}
+    original_open = os.open
+
+    def capture(path, flags, *args, **kwargs):
+        fd = original_open(path, flags, *args, **kwargs)
+        if path == str(marker.parent) and flags & os.O_DIRECTORY:
+            opened["directory"] = fd
+        elif path == marker.name and kwargs.get("dir_fd") == opened.get("directory"):
+            opened["marker"] = fd
+        return fd
+
+    monkeypatch.setattr(updater.os, "open", capture)
+    with pytest.raises(OSError, match="update_marker_unverifiable"):
+        with updater._pin_recovery_marker(expected):
+            assert (os.fstat(opened["marker"]).st_dev, os.fstat(opened["marker"]).st_ino) == expected
+            assert os.fstat(opened["directory"]).st_ino == marker.parent.stat().st_ino
+            marker.unlink()
+            assert os.fstat(opened["marker"]).st_nlink == 0
+            marker.write_text("synthetic replacement")
+            marker.chmod(0o600)
+            assert marker.stat().st_ino != expected[1]
+            assert os.fstat(opened["marker"]).st_ino == expected[1]
+    for fd in opened.values():
+        with pytest.raises(OSError):
+            os.fstat(fd)
+    assert marker.read_text() == "synthetic replacement"
+
+
 def test_drug_info_hook_never_delays_recovery_or_an_execution(updater, monkeypatch):
     monkeypatch.setattr(mcs_util, "load_config", lambda: {"update": {"mode": "notify"}})
     monkeypatch.setattr(update_discovery, "detect_latest", lambda pre, **_paths: (None, None))
