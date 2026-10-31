@@ -19,6 +19,28 @@ import os
 
 import pytest
 
+
+@pytest.fixture
+def snapshot_child_clock():
+    """Pass a test's current mocked clock into each synthetic snapshot child."""
+    import snapshots
+
+    prepare = snapshots._prepare_in_child
+
+    def with_clock(*args, **kwargs):
+        code = snapshots._PREPARE_CODE
+        stamp = snapshots.time.time()
+        snapshots._PREPARE_CODE = f"import time\ntime.time = lambda: {stamp!r}\n" + code
+        try:
+            return prepare(*args, **kwargs)
+        finally:
+            snapshots._PREPARE_CODE = code
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(snapshots, "_prepare_in_child", with_clock)
+        yield
+
+
 # Per-test hang guard (stdlib only): a test whose setup, call and teardown
 # together exceed the limit dumps every thread's traceback and exits the
 # run, so a wedged test cannot hold a CI runner until the job timeout.

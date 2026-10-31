@@ -194,7 +194,7 @@ def test_old_unbound_journal_never_synthesizes_identity_or_resends(tmp_path):
     assert not sink.has(eid)
 
 
-def test_real_synthetic_export_handoff_receive_delete_round_trip(tmp_path):
+def test_real_synthetic_export_handoff_receive_delete_round_trip(tmp_path, snapshot_child_clock):
     import brain_export
     import ledger
     import rollup

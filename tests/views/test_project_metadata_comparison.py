@@ -29,7 +29,7 @@ CHAT_LAB = {"name": "fiction-chat-analyte", "value": 23, "unit": "unit-b",
 
 
 @pytest.fixture
-def store(tmp_path, monkeypatch):
+def store(tmp_path, monkeypatch, snapshot_child_clock):
     monkeypatch.setattr("ledger.time.time", lambda: NOW)
     db = Ledger(str(tmp_path / "fictional.db"))
     for pid, kind, kid in ((1, "medical", 10), (2, "group", None), (3, "medical", None)):

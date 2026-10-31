@@ -88,7 +88,10 @@ def _snapshot(tmp_path, monkeypatch, times=None):
                     " VALUES('signal_v1',1,?,?,?)",
                     (json.dumps(content), json.dumps({"key": f"sig-{n}"}), SNAP_TS))
     monkeypatch.setattr(snapshots, "time", SimpleNamespace(time=lambda: SNAP_TS))
-    published = ledger.publish_snapshot(str(live), str(tmp_path / "snapshots"))
+    with monkeypatch.context() as child_clock:
+        child_clock.setattr(snapshots, "_PREPARE_CODE",
+                            f"import time\ntime.time = lambda: {SNAP_TS!r}\n" + snapshots._PREPARE_CODE)
+        published = ledger.publish_snapshot(str(live), str(tmp_path / "snapshots"))
     assert published is not None
     return live, published
 
