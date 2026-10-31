@@ -139,7 +139,7 @@
 
 - 通常の更新手順を使い、Hermes gateway、利用中の独立実行host・worker・通知アダプター、抽出workerを再起動してください。Gitの差分だけの反映では、旧コードや旧サービス設定が動き続けます。[更新ガイド](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/docs/guides/UPGRADE_AGENT.md)に従ってください。
 
-- 更新時は既存の外部AI設定を検証し、提供元別の私有ファイルへ移します。確認できない設定は移行せず、分離済みの状態を確認できない場合は復旧を保留します。更新後は提供元別の設定を確認してください。
+- 更新時は既存の外部AI設定を検証し、提供元別の私有ファイルへ移します。未移行の環境では、対応する橋渡し版を先に適用してください。旧い復旧監視を導入済みの場合は、その適用を確認して旧監視を停止し、通常の再導入で新しい復旧ツールを配置・起動して確認してください。移行元や処理の停止を確認できない場合は設定を分離せず停止し、分離済みの状態を確認できない場合は復旧を保留します。分離済みの設定は再移行せず整合性を確認します。更新後は提供元別の設定を確認してください。
 
 - 外部AIを使う場合は`mcs setup api-keys`でキー・利用先・送信範囲・費用を確認してください。合計の既定上限は日25ドル・月75ドルです。API別予算を設定していない既存環境は合計上限を使い、設定した場合は予算未割当のAPIへ送りません。個別上限を解除する場合は`none`を指定し、`null`として明示保存します。mode未指定で日・月を両方解除し期間予算もない場合は送信しません。[AI設定ガイド](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/docs/guides/ANTHROPIC.md)で確認してください。
 
@@ -160,7 +160,7 @@
 ### 技術詳細
 
 <details>
-<summary>変更記録423件の詳細・更新条件・根拠を表示</summary>
+<summary>変更記録424件の詳細・更新条件・根拠を表示</summary>
 
 各リンクは、この版の変更記録です。要約・適用条件・更新操作・技術詳細・根拠を参照できます。同じ箇所に複数の記録がある場合、後続の修正を含む現行の説明は上の本文と各機能のガイドを確認してください。たとえば、処理方式アイコンの初期配置は後続の見出し行への移動で置き換えています。
 
@@ -593,6 +593,7 @@
 - [修復結果の参照前に保存証拠を確認](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-replay-verified-readers-20261101.json)
 - [利用先を保存した後も認証情報の設定を継続](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/credential-provider-save-admission-20261101.json)
 - [提供元別設定への更新手順を追加](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-initial-migration-20261101.json)
+- [通常更新時のAI設定移行を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-legacy-update-migration-20261101.json)
 
 </details>
 

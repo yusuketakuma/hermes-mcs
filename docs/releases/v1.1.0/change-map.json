@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 423,
+  "fragment_count": 424,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2545,6 +2545,12 @@
       "id": "provider-initial-migration-20261101",
       "title": "提供元別設定への更新手順を追加",
       "sha256": "b521e30a0494210a65a8d76a1ffd27240154ab62ed0a244b32ce55f5f0f51bac"
+    },
+    {
+      "path": "changes/archive/1.1.0/provider-legacy-update-migration-20261101.json",
+      "id": "provider-legacy-update-migration-20261101",
+      "title": "通常更新時のAI設定移行を修正",
+      "sha256": "af32bd9d81449759d8b7d15a0a4286e9fe3c024b6a63981530d810a40208fe3c"
     }
   ]
 }

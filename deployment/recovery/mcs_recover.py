@@ -2186,6 +2186,34 @@ def _recover_legacy(if_stale=False):
             return 1
         applying = state.get("applying")
         stages = [s.get("stage") for s in state.get("stages", [])]
+
+        def provider_migration_hold():
+            try:
+                _ensure_recovery_marker()
+            except (OSError, ValueError):
+                _report("provider_migration_hold_unverified",
+                        "provider migration hold marker could not be verified",
+                        writers_stopped=False)
+                return 1
+            _report("provider_migration_pending",
+                    "provider migration requires target updater recovery; writer status unverified",
+                    writers_stopped=False)
+            return 1
+
+        if isinstance(applying, dict) and "provider_settings_migration_required" in applying:
+            required = applying["provider_settings_migration_required"]
+            # This independent helper cannot prove that the target updater
+            # completed the first provider split. Only a verified pre-merge
+            # HEAD or the existing rollback path may use legacy recovery.
+            hold = required is not True
+            if not hold and applying.get("rollback") is not True:
+                target, prev = applying.get("sha"), applying.get("prev_sha")
+                head = _head()
+                hold = (not isinstance(target, str) or not target
+                        or not isinstance(prev, str) or not prev
+                        or not head or head != prev or head == target)
+            if hold:
+                return provider_migration_hold()
         if if_stale and (applying or stages):
             last = max([s.get("at", 0) for s in state.get("stages", [])]
                        + [(applying or {}).get("at", 0)])
@@ -2342,6 +2370,10 @@ def _recover_legacy(if_stale=False):
             return _finish(state, "interrupted_pre_merge", removed)
 
         head = _head()
+        if ("provider_settings_migration_required" in applying
+                and applying.get("rollback") is not True
+                and (not head or head != prev or head == target)):
+            return provider_migration_hold()
         if applying.get("restore_incomplete") and head != target:
             # A pre-reset rollback failure may leave HEAD at prev. It is
             # not an interrupted forward merge and must keep writers frozen.

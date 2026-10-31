@@ -791,6 +791,7 @@ def _apply_env(updater, monkeypatch, *, precheck_errors=(),
                cfg=None, sha=None):
     """Stub every apply() external boundary; the temp repo + real
     tags remain real (fetch/rev-parse/merge hit the file remote)."""
+    monkeypatch.setattr(updater, "_provider_migration_needed", lambda: False)
     repo, _ = _make_repo(Path(mcs_update.DATA).parent)
     mcs_update.REPO = str(repo)
     monkeypatch.setattr(mcs_update, "precheck_local", lambda c: [])
@@ -1711,6 +1712,7 @@ def test_apply_bail_consent_hold_keeps_writers_stopped(updater, tmp_path,
     drainers the NEW-code child restarted are quiesced again and the
     update marker stays up until consent."""
     import maintenance
+    monkeypatch.setattr(updater, "_provider_migration_needed", lambda: False)
     repo, _ = _make_repo(tmp_path)
     _git(repo, "reset", "-q", "--hard", "v1.0.0")
     monkeypatch.setattr(mcs_update, "REPO", str(repo))
@@ -1789,6 +1791,7 @@ def test_apply_consent_hold_survives_a_failing_quiesce(updater, tmp_path,
     """Recording the hold comes first: a quiesce failure after it must
     not lose restore_consent or drop the update marker."""
     import maintenance
+    monkeypatch.setattr(updater, "_provider_migration_needed", lambda: False)
     repo, _ = _make_repo(tmp_path)
     _git(repo, "reset", "-q", "--hard", "v1.0.0")
     monkeypatch.setattr(mcs_update, "REPO", str(repo))
@@ -2681,6 +2684,7 @@ def test_check_skips_notice_and_auto_when_head_contains_tag(
 def test_failed_bail_rollback_is_not_finished_as_pre_merge(
         updater, tmp_path, monkeypatch):  # noqa: F811
     import maintenance
+    monkeypatch.setattr(updater, "_provider_migration_needed", lambda: False)
     notices = []
     repo, _ = _make_repo(tmp_path)
     _git(repo, "reset", "-q", "--hard", "v1.0.0")

@@ -805,6 +805,23 @@ def _split_source_tree(ref):
             if any(entry[3] == root or entry[3].startswith(root + "/") for root in _SPLIT_SOURCE_ROOTS)]
 
 
+_PROVIDER_PRIOR_SOURCE_WITNESSES = frozenset({
+    # Reviewed B efd6df5a and C 567de1e3 runtime source trees.
+    "2616bf572075f76f5953c71f8a750a67985fe893a21f3be091954c6f59f97cf7",
+    "705b87543410be322a4ca1ce0ec0dfa22190a78febc125fc252198147527a232",
+})
+
+
+def _provider_prior_source_verified(ref):
+    if not isinstance(ref, str) or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", ref) is None:
+        return False
+    tree = _split_source_tree(ref)
+    if not tree:
+        return False
+    raw = json.dumps(tree, ensure_ascii=True, separators=(",", ":")).encode("ascii")
+    return hashlib.sha256(raw).hexdigest() in _PROVIDER_PRIOR_SOURCE_WITNESSES
+
+
 def _split_target_source_matches(target: str) -> bool:
     """Prove the target and clean checkout have identical runtime source blobs.
 
@@ -875,6 +892,19 @@ def _split_target_source_matches(target: str) -> bool:
 
 
 _PROVIDER_SETTINGS_ONLY = object()
+
+
+def _provider_migration_needed() -> bool:
+    import cloud_policy
+    import provider_settings
+    import semantic_jev
+    owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+    first = provider_settings.read(HOME, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+    second = provider_settings.read(HOME, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+    if (first["mode"] not in ("legacy_unverified", "split")
+            or second["mode"] != first["mode"] or second["snapshot"] != first["snapshot"]):
+        raise ValueError("provider_settings_unverified")
+    return first["mode"] == "legacy_unverified"
 
 
 def _provider_rollback_preflight(target: str | object) -> bool | None:
@@ -2104,32 +2134,146 @@ def _restore_runtime(entry: dict) -> None:
             raise UpdateError("runtime_restore_checkout_failed")
 
 
-def _post_merge(state: dict, *, native_provider_migration: bool = False) -> int:
+@contextmanager
+def _legacy_provider_migration_guard(state, *, recovery_fds=None, expected_mode=None):
+    """Hold and recheck the legacy update evidence while settings are split."""
+    try:
+        from release_apply_owner import _verify_inherited_lock
+        import cloud_policy
+        import provider_settings
+        import semantic_jev
+
+        recovering = recovery_fds is not None
+        if recovering:
+            if (not isinstance(recovery_fds, tuple) or len(recovery_fds) != 2
+                    or any(type(fd) is not int or fd < 3 for fd in recovery_fds)):
+                raise ValueError("provider_update_locks_missing")
+            update_fd, run_fd = recovery_fds
+        else:
+            raw_fds = [os.environ.get(name, "") for name in (UPDATE_LOCK_FD_ENV, RUN_LOCK_FD_ENV)]
+            if any(not raw.isascii() or not raw.isdecimal() or int(raw) < 3 for raw in raw_fds):
+                raise ValueError("provider_update_locks_missing")
+            update_fd, run_fd = map(int, raw_fds)
+        if update_fd == run_fd or type(_RELEASE_GATE_FD.get()) is not int:
+            raise ValueError("provider_update_locks_missing")
+        applying = state["applying"]
+        target, previous = applying["sha"], applying["prev_sha"]
+        if (not isinstance(target, str) or not isinstance(previous, str)
+                or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", target) is None
+                or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", previous) is None
+                or target == previous or len(target) != len(previous)
+                or (not recovering and os.environ.get(_UPDATE_PM_ENV) != target)
+                or (recovering and applying.get("provider_settings_migration_required") is not True)):
+            raise ValueError("provider_update_target_unverified")
+        marker = os.stat(MARKER_PATH, follow_symlinks=False)
+        marker_id = (marker.st_dev, marker.st_ino)
+        owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+        mode = None
+
+        def read_provider():
+            return provider_settings.read(HOME, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+
+        def check(*, prior=False, entry=False):
+            if journal_store.load_state(STATE_PATH) != state or _release_legacy_blocked(state):
+                raise ValueError("provider_update_journal_unverified")
+            stages = state.get("stages")
+            if (not isinstance(stages, list) or not stages
+                    or any(not isinstance(item, dict) for item in stages)):
+                raise ValueError("provider_update_stage_unverified")
+            phases = ("post_merge", "runtime_migration", "reinstall")
+            names = [item.get("stage") for item in stages]
+            if (recovering and (names.count("merge") != 1
+                    or any(name in names[:names.index("merge")]
+                           for name in ("post_merge", "services", "restart", "postcheck", "done")))):
+                raise ValueError("provider_update_stage_unverified")
+            recovery_tail = names[names.index("merge"):] if recovering else []
+            if recovering and (recovery_tail == ["merge"] or (
+                    recovery_tail == ["merge", "runtime_migration"]
+                    and isinstance(applying.get("runtime_migration"), dict)
+                    and applying.get("reinstall") is True and applying.get("reinstall_done") is True)):
+                pass
+            elif "post_merge" in names:
+                tail = names[names.index("post_merge"):]
+                if (any(phase not in phases for phase in tail) or len(set(tail)) != len(tail)
+                        or tail != sorted(tail, key=phases.index)
+                        or entry and not recovering and tail != ["post_merge"]):
+                    raise ValueError("provider_update_stage_unverified")
+            else:
+                raise ValueError("provider_update_stage_unverified")
+            _verify_inherited_lock(update_fd, UPDATE_LOCK)
+            _verify_inherited_lock(run_fd, RUN_LOCK)
+            if _head_sha() != target or not _tree_clean() or not _split_target_source_matches(target):
+                raise ValueError("provider_update_source_unverified")
+            with _pin_recovery_marker(marker_id):
+                pass
+            if mode is not None and mcs_runtime.mode(read_provider()["common"]) != mode:
+                raise ValueError("provider_update_runtime_changed")
+            if prior and (not _provider_prior_source_verified(previous)
+                          or _git(["merge-base", "--is-ancestor", previous, target]).returncode != 0):
+                raise ValueError("provider_update_bridge_required")
+
+        with owned_process.lifetime_fds((update_fd, run_fd)), _release_git_scope(), \
+                _pin_recovery_marker(marker_id):
+            check(entry=True)
+            provider = read_provider()
+            mode = mcs_runtime.mode(provider["common"])
+            if expected_mode is not None and mode != expected_mode:
+                raise ValueError("provider_update_runtime_changed")
+            if provider["mode"] == "legacy_unverified":
+                if applying.get("provider_settings_migration_required") is not True:
+                    raise ValueError("provider_migration_requirement_missing")
+                check(prior=True)
+            elif provider["mode"] != "split":
+                raise ValueError("provider_settings_unverified")
+            check()
+            _quiesce_for_mode(mode)
+            check()
+
+            def before_publication():
+                check(prior=True)
+                _quiesce_for_mode(mode)
+                check(prior=True)
+
+            yield before_publication
+            check()
+    except update_migrations.MigrationError:
+        raise
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, ImportError,
+            RecursionError, OverflowError) as error:
+        raise update_migrations.MigrationError("provider_update_evidence_unverified") from error
+
+
+def _post_merge(state: dict, *, native_provider_migration: bool = False,
+                legacy_provider_migration: bool = False) -> int:
     """Post-merge stages, run as a NEW-code subprocess while the parent
     holds both locks (--locks-held)."""
     applying = state["applying"]
-    if 'release_ref' in applying:
-        if applying.get('reinstall') or applying.get('runtime_migration'):
-            raise UpdateError('release_runtime_change_forbidden')
-    else:
-        if applying.get("reinstall") and not applying.get("reinstall_done"):
-            if not os.environ.get(UPDATE_LOCK_FD_ENV, "").isdecimal():
-                # An older updater parent (1.0.29 run directly) cannot hand
-                # over update.lock: roll back and leave reinstall to the tool.
-                raise UpdateError("reinstall_requires_upgrade_tool: 再導入は更新ツール"
-                                  "（scripts/mcs_upgrade.py apply --reinstall）で実行してください")
-            _verify_install_options_base(applying)
-        _plan_runtime_migration(state)
-    if applying.get("reinstall") and not applying.get("reinstall_done"):
-        _reinstall(applying)
-        journal(state, "reinstall")      # persists reinstall_done
-    if applying.get("runtime_migration"):
-        _use_migrated_runtime(applying["runtime_migration"])
-    if native_provider_migration:
-        try:
-            update_migrations.migrate_provider_settings(HOME)
-        except update_migrations.MigrationError as error:
-            raise UpdateError("provider_settings_migration_unverified") from error
+    try:
+        with ExitStack() as guards:
+            before_publication = (guards.enter_context(_legacy_provider_migration_guard(state))
+                                  if legacy_provider_migration else None)
+            if 'release_ref' in applying:
+                if applying.get('reinstall') or applying.get('runtime_migration'):
+                    raise UpdateError('release_runtime_change_forbidden')
+            else:
+                if applying.get("reinstall") and not applying.get("reinstall_done"):
+                    if not os.environ.get(UPDATE_LOCK_FD_ENV, "").isdecimal():
+                        # An older updater parent cannot hand over update.lock.
+                        raise UpdateError("reinstall_requires_upgrade_tool: 再導入は更新ツール"
+                                          "（scripts/mcs_upgrade.py apply --reinstall）で実行してください")
+                    _verify_install_options_base(applying)
+                _plan_runtime_migration(state)
+            if applying.get("reinstall") and not applying.get("reinstall_done"):
+                _reinstall(applying)
+                journal(state, "reinstall")      # persists reinstall_done
+            if applying.get("runtime_migration"):
+                _use_migrated_runtime(applying["runtime_migration"])
+            if legacy_provider_migration:
+                update_migrations.migrate_provider_settings(HOME, before_publication=before_publication)
+            elif native_provider_migration:
+                update_migrations.migrate_provider_settings(HOME)
+    except update_migrations.MigrationError as error:
+        raise UpdateError("provider_settings_migration_unverified") from error
     _prepare_run_log(promote=True)
     _services_reconcile()
     journal(state, "services")
@@ -2511,6 +2655,9 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 # leave the system running NEW code while claiming nothing
                 # happened; fall back to the surgical rollback path
                 entry = state["applying"]
+                if borrowed is None and entry.get("provider_settings_migration_required") is True:
+                    rollback_failed = True
+                    return _provider_migration_recovery_hold(expected_mode=hold_mode or "")
                 try:
                     _provider_rollback_preflight(entry.get("prev_sha"))
                     _check_runtime_restore(entry)
@@ -2781,6 +2928,10 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 journal_store.save_state(STATE_PATH, state)
                 return 0
 
+            try:
+                provider_migration_needed = _provider_migration_needed()
+            except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
+                return bail("provider_settings_unverified")
             state["applying"] = {
                 "tag": tag, "sha": sha, "prev_sha": _head_sha(**before_args),
                 "plugin_changed": _plugin_changed(target_ref if borrowed is not None else candidate_sha if candidate else tag, cfg, **before_args),
@@ -2789,6 +2940,8 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                 **({"install_options_base": options_base} if borrowed is None else {}),
                 "backup_path": bpath, "manifest_snapshot": snap,
                 "command_id": command_id, "at": time.time()}
+            if provider_migration_needed:
+                state["applying"]["provider_settings_migration_required"] = True
             if borrowed is not None:
                 state['applying'].update(target_kind='release', release_ref=copy.deepcopy(borrowed.reference))
             elif candidate:
@@ -3543,7 +3696,7 @@ def reinstall_done() -> int:
         journal_store.save_state(STATE_PATH, state)
     finally:
         os.close(fd)
-    return recover_interrupted() if applying else 0
+    return recover_interrupted(_resume_provider_migration=True) if applying else 0
 
 
 def _journal_is_fresh(state: dict, applying: dict | None) -> bool:
@@ -3627,8 +3780,34 @@ def _finish_resumed(state: dict, applying: dict) -> int:
     return 0
 
 
+def _provider_migration_recovery_hold(*, allow_resume=False, expected_mode=None) -> int | str:
+    stopped = False
+    try:
+        marker = _ensure_recovery_marker()
+        with _pin_recovery_marker(marker):
+            config_path = Path(DATA).parent / "config.json"
+            if not os.path.lexists(config_path):
+                raise ValueError("runtime_mode_unverifiable")
+            mode = _restart_runtime_mode()
+            if (mode is None or _restart_runtime_mode() != mode
+                    or expected_mode is not None and mode != expected_mode):
+                raise ValueError("runtime_mode_unverifiable")
+            _quiesce_for_mode(mode)
+            if (_restart_runtime_mode() != mode or not os.path.lexists(config_path)
+                    or _ensure_recovery_marker() != marker):
+                raise ValueError("runtime_mode_or_marker_changed")
+        stopped = True
+    except Exception:
+        pass
+    if stopped and allow_resume:
+        return mode
+    _report("provider_migration_recovery_blocked", "provider migration is not verified",
+            writers_stopped=stopped)
+    return 1
+
+
 @_legacy_entry
-def recover_interrupted(if_stale: bool = False) -> int:
+def recover_interrupted(if_stale: bool = False, *, _resume_provider_migration: bool = False) -> int:
     """Journal-driven recovery (⑤). Safe to call any time.
 
     Classification is by MEASUREMENT (MERGE_HEAD / HEAD / tree), never
@@ -3660,6 +3839,33 @@ def recover_interrupted(if_stale: bool = False) -> int:
         stages = [s.get("stage") for s in state.get("stages", [])]
         if if_stale and _journal_is_fresh(state, applying):
             return 0                   # fresh journal — leave it alone
+        provider_recovery_needs_migration = False
+        provider_recovery_mode = None
+        if (isinstance(applying, dict) and not applying.get("rollback")
+                and "provider_settings_migration_required" in applying):
+            try:
+                if applying["provider_settings_migration_required"] is not True:
+                    raise ValueError("provider_migration_requirement_invalid")
+                target, previous = applying.get("sha"), applying.get("prev_sha")
+                if (not isinstance(target, str) or not isinstance(previous, str)
+                        or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", target) is None
+                        or re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", previous) is None
+                        or target == previous or len(target) != len(previous)):
+                    raise ValueError("provider_migration_target_invalid")
+                with _release_git_scope():
+                    head = _head_sha()
+                if head not in (target, previous):
+                    raise ValueError("provider_migration_head_unverified")
+                if head == target:
+                    provider_recovery_needs_migration = _provider_migration_needed()
+            except (UpdateError, OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
+                return _provider_migration_recovery_hold()
+            if provider_recovery_needs_migration:
+                if if_stale or _resume_provider_migration is not True:
+                    return _provider_migration_recovery_hold()
+                provider_recovery_mode = _provider_migration_recovery_hold(allow_resume=True)
+                if provider_recovery_mode not in ("hermes", "standalone"):
+                    return 1
         try:
             split = _provider_rollback_preflight(_PROVIDER_SETTINGS_ONLY)
             if split and (applying or stages):
@@ -3756,6 +3962,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
             stays, so the next check / consent respawn retries. A schema
             rollback apply could not finish (applying.restore_incomplete)
             keeps the same report-only freeze until a pass restores."""
+            if provider_recovery_needs_migration:
+                return _provider_migration_recovery_hold()
             if held():
                 _report("restore_consent_blocked",
                         detail[:240] + " — hold kept, retried next pass")
@@ -3802,6 +4010,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
             return escalate("restore_incomplete without a rollback "
                             "journal — refusing to classify")
         if os.path.exists(os.path.join(REPO, ".git", "MERGE_HEAD")):
+            if provider_recovery_needs_migration:
+                return _provider_migration_recovery_hold()
             if (applying or {}).get("restore_incomplete"):
                 return escalate("restore_incomplete with MERGE_HEAD — "
                                 "refusing to classify")
@@ -3821,6 +4031,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
         journal_route = update_policy.classify_recovery_journal_position(
             has_applying=bool(applying), has_done="done" in stages)
         if journal_route == "complete_done_bookkeeping":
+            if provider_recovery_needs_migration:
+                return _provider_migration_recovery_hold()
             # child wrote 'done' then died before the parent finished
             # bookkeeping — complete it
             return _complete_done_bookkeeping(state)
@@ -3841,6 +4053,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
         clean = _tree_clean()
         if head_route == "target":
             if not clean:
+                if provider_recovery_needs_migration:
+                    return _provider_migration_recovery_hold()
                 # crash during the target checkout — converge to target
                 foreign = _local_changes_outside(prev, target)
                 if foreign:
@@ -3852,6 +4066,13 @@ def recover_interrupted(if_stale: bool = False) -> int:
                 _git_out(["reset", "--hard", target])
                 if not _tree_clean():
                     return escalate("target tree could not be cleaned")
+            if provider_recovery_needs_migration:
+                try:
+                    with _legacy_provider_migration_guard(
+                            state, recovery_fds=(upd_fd, run_fd), expected_mode=provider_recovery_mode):
+                        pass
+                except (update_migrations.MigrationError, UpdateError):
+                    return _provider_migration_recovery_hold()
             if applying.get("rollback") and applying.get("backup_path"):
                 # Old rollback journals may predate the durable freeze.
                 # Persist it before entering any DB restore operation.
@@ -3917,6 +4138,8 @@ def recover_interrupted(if_stale: bool = False) -> int:
                     if problems:
                         return escalate("membership: " + ",".join(problems))
                 elif continuation == "undo_interrupted_migration":
+                    if provider_recovery_needs_migration:
+                        return _provider_migration_recovery_hold()
                     return _undo_interrupted_migration(state, applying, drainers, escalate)
                 elif continuation == "manual_reinstall_required":
                     # an interrupted install.sh is never re-run unattended
@@ -3927,6 +4150,16 @@ def recover_interrupted(if_stale: bool = False) -> int:
                         _use_migrated_runtime(applying["runtime_migration"])
                     except UpdateError as e:
                         return escalate(str(e))
+                if provider_recovery_needs_migration:
+                    try:
+                        with _legacy_provider_migration_guard(
+                                state, recovery_fds=(upd_fd, run_fd),
+                                expected_mode=provider_recovery_mode) as before_publication:
+                            update_migrations.migrate_provider_settings(HOME, before_publication=before_publication)
+                        if _provider_migration_needed():
+                            raise ValueError("provider_migration_incomplete")
+                    except (update_migrations.MigrationError, UpdateError, OSError, ValueError, TypeError, KeyError, RecursionError, ImportError):
+                        return _provider_migration_recovery_hold()
                 _services_reconcile()
                 if not _provider_recovery_ready():
                     return 1
@@ -4302,6 +4535,10 @@ def cmd_plan(args) -> int:
     return 0
 
 
+def _legacy_post_merge(state):
+    return _post_merge(state, legacy_provider_migration=True)
+
+
 def cmd_post_merge() -> int:
     state = journal_store.load_state(STATE_PATH)
     applying = state.get("applying") or {}
@@ -4324,7 +4561,7 @@ def cmd_post_merge() -> int:
             return 2
         with owned_process.lifetime_fds(tuple(locks)), _release_git_scope():
             return _post_merge(state, native_provider_migration=True)
-    return _call_legacy(_post_merge, state)
+    return _call_legacy(_legacy_post_merge, state)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -4360,7 +4597,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("status", help="現在の版と更新履歴を表示する（JSON出力）").set_defaults(fn=lambda args: cmd_status())
     sub.add_parser("rollback", help="直近の更新前の版に戻す（データ復元には承認が必要な場合があります）").set_defaults(fn=lambda args: rollback())
     sub.add_parser("recover", help="更新履歴を確認し、中断した更新を安全に復旧する").set_defaults(
-        fn=lambda args: recover_interrupted())
+        fn=lambda args: recover_interrupted(_resume_provider_migration=True))
     sub.add_parser("reinstall-done",
                    help="中断したinstall.shを手動で完了させた後、完了を記録する"
                    ).set_defaults(fn=lambda args: reinstall_done())

@@ -16,6 +16,7 @@ Hermes経由の導入・更新にはuvが必要です。Hermesのディレクト
 `sh scripts/mcs install`、導入後は`mcs install / update / setup / doctor`を利用できます。
 `install.sh`が`~/.local/bin/mcs`を配置するため、同ディレクトリをPATHへ追加します。
 `mcs setup`は既存の`init`へ委譲し、推奨コース／全項目コースを選べます。既存設定・非表示の秘密入力を維持します。
+新規導入では外部AIの設定を提供元別に保存します。既存環境の`init`だけでは旧設定を自動分離せず、更新時に条件を確認して移行します。
 `mcs update`は更新計画と実行確認、`mcs recover`は中断した更新の状態確認と復旧確認を日本語で案内します。既存の明示サブコマンドと自動監視の動作は維持します。
 下記の`install.sh`、`mcs_setup.py init/check/doctor`、更新bootstrapは引き続き利用できます。
 

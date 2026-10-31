@@ -1,6 +1,7 @@
 """The independent watchdog keeps unverified provider settings untouched."""
 import fcntl
 import importlib.util
+import json
 import os
 from pathlib import Path
 
@@ -18,9 +19,96 @@ def watchdog(tmp_path, monkeypatch):
     data.mkdir(mode=0o700)
     for name, value in {"DATA": data, "STATE_PATH": data / "update_state.json",
                         "UPDATE_LOCK": data / "update.lock", "RUN_LOCK": data / "run.lock",
-                        "MARKER_PATH": data / "update_in_progress.marker"}.items():
+                        "MARKER_PATH": data / "update_in_progress.marker",
+                        "REPORT_PATH": data / "recovery_report.json",
+                        "REPO": tmp_path / "synthetic-repo"}.items():
         monkeypatch.setattr(module, name, str(value))
     return module
+
+
+@pytest.mark.parametrize("flag,head,target,prev", [
+    (True, "target", "target", "previous"),
+    (True, "", "target", "previous"),
+    (True, "other", "target", "previous"),
+    (True, "previous", None, "previous"),
+    (False, "previous", "target", "previous"),
+    (None, "previous", "target", "previous"),
+    (1, "previous", "target", "previous"),
+    ("true", "previous", "target", "previous"),
+])
+@pytest.mark.parametrize("existing_marker", [True, False])
+def test_first_split_forward_recovery_holds(watchdog, monkeypatch, flag, head, target, prev, existing_marker):
+    marker = Path(watchdog.MARKER_PATH)
+    if existing_marker:
+        marker.write_text("synthetic marker")
+    journal = Path(watchdog.STATE_PATH)
+    journal.write_text(json.dumps({"v": 1, "applying": {
+        "sha": target, "prev_sha": prev, "provider_settings_migration_required": flag,
+    }, "stages": [], "applied": []}))
+    before = journal.read_bytes()
+    monkeypatch.setattr(watchdog, "_head", lambda: head)
+    monkeypatch.setattr(watchdog, "_clean_stale_git_locks", lambda: pytest.fail("hold changed git state"))
+    monkeypatch.setattr(watchdog, "_restart_drainers", lambda **_k: pytest.fail("hold restarted drainers"))
+    monkeypatch.setattr(watchdog, "_restart_services", lambda *_a, **_k: pytest.fail("hold restarted services"))
+    assert watchdog._recover_legacy(if_stale=True) == 1
+    assert journal.read_bytes() == before
+    assert marker.is_file()
+    if existing_marker:
+        assert marker.read_text() == "synthetic marker"
+    report = json.loads(Path(watchdog.REPORT_PATH).read_text())
+    assert report["result"] == "provider_migration_pending"
+    assert report["writers_stopped"] is False
+
+
+def test_first_split_hold_with_unverifiable_marker_reports_no_stop_proof(watchdog, monkeypatch):
+    journal = Path(watchdog.STATE_PATH)
+    journal.write_text(json.dumps({"v": 1, "applying": {
+        "sha": "target", "prev_sha": "previous", "provider_settings_migration_required": True,
+    }, "stages": [], "applied": []}))
+    marker = Path(watchdog.MARKER_PATH)
+    marker.symlink_to(Path(watchdog.DATA) / "missing")
+    before = journal.read_bytes()
+    monkeypatch.setattr(watchdog, "_head", lambda: "target")
+    assert watchdog._recover_legacy() == 1
+    assert marker.is_symlink() and journal.read_bytes() == before
+    report = json.loads(Path(watchdog.REPORT_PATH).read_text())
+    assert report["result"] == "provider_migration_hold_unverified"
+    assert report["writers_stopped"] is False
+
+
+def test_first_split_head_changed_before_classification_is_held(watchdog, monkeypatch):
+    journal = Path(watchdog.STATE_PATH)
+    journal.write_text(json.dumps({"v": 1, "applying": {
+        "sha": "target", "prev_sha": "previous", "provider_settings_migration_required": True,
+    }, "stages": [], "applied": []}))
+    before = journal.read_bytes()
+    heads = iter(("previous", "target"))
+    monkeypatch.setattr(watchdog, "_head", lambda: next(heads))
+    monkeypatch.setattr(watchdog, "_clean_stale_git_locks", lambda: [])
+    monkeypatch.setattr(watchdog, "_clean", lambda: pytest.fail("changed HEAD passed hold"))
+    assert watchdog._recover_legacy() == 1
+    assert journal.read_bytes() == before
+    assert Path(watchdog.MARKER_PATH).is_file()
+
+
+@pytest.mark.parametrize("kind", ["old_journal", "pre_merge", "rollback"])
+def test_first_split_guard_preserves_existing_recovery_routes(watchdog, monkeypatch, kind):
+    applying = {"sha": "target", "prev_sha": "previous"}
+    if kind != "old_journal":
+        applying["provider_settings_migration_required"] = True
+    if kind == "rollback":
+        applying.update(rollback=True, backup_path="synthetic-backup", schema_bump=False)
+    Path(watchdog.STATE_PATH).write_text(json.dumps({
+        "v": 1, "applying": applying, "stages": [], "applied": [],
+    }))
+    monkeypatch.setattr(watchdog, "_head", lambda: "previous" if kind == "pre_merge" else "target")
+    class ExistingRouteReached(Exception):
+        pass
+    def reached():
+        raise ExistingRouteReached
+    monkeypatch.setattr(watchdog, "_clean_stale_git_locks", reached)
+    with pytest.raises(ExistingRouteReached):
+        watchdog._recover_legacy()
 
 
 @pytest.mark.parametrize("name,kind", [

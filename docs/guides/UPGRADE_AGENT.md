@@ -219,7 +219,7 @@ git -C "$REPO" show "${TAG}:scripts/mcs_upgrade.py" > "$WORK/mcs_upgrade.py"   #
 1.0.12 以前から更新する場合は init にこのオプションが無いため、`~/.mcs/config.json` に
 `"recovery_python": "<path>"` を手で追記してから `plan` を再実行する。所有済みで停止中の watchdog は
 merge 後の `services` が置き換える。`reinstall` 経路では `--install-arg=--no-recovery` を付けて apply する
-（install.sh は不一致の watchdog を置き換えずに停止するため）。自動で別 Python へは切り替えない。
+（install.sh は不一致の watchdog を置き換えずに停止するため）。ただし、旧形式から提供元別設定を初めて分離し、旧い復旧監視を導入済みの場合は §3-A の手順を優先する。自動で別 Python へは切り替えない。
 
 `${TAG}:scripts/mcs_upgrade.py` が無い（v1.0.10 以前を移行先にした）場合は、その版へはこの手順で更新できない。
 
@@ -235,6 +235,8 @@ git -C "$REPO" show "${CANDIDATE_SHA}:scripts/mcs_upgrade.py" > "$WORK/mcs_upgra
 "$PY" "$WORK/mcs_upgrade.py" --repo "$REPO" plan \
   --candidate-sha "$CANDIDATE_SHA" --base-sha "$BASE_SHA"
 ```
+
+release owner を使わない通常更新で、提供元別設定に未移行の既存環境では、まず橋渡し版 `efd6df5a8870fc15aaf9ce749759f1b02a5f67ff`、続けて今回の候補を適用します。どちらもこの手順の更新プログラムを使い、それぞれの更新開始時点のHEADと導入引数を指定します。移行元を確認できない場合や、処理の停止・ロックを確認できない場合は、設定を分離せず停止します。すでに分離済みの場合も設定の整合性を確認します。承認待ちや送信結果不明の記録は解除しません。
 
 `plan`の`target.kind`は`local_candidate`、`target.tag`は`null`です。`blockers`が空になるまで§3の手順で対処します。候補に`install.sh`等の変更があれば、公開版と同じく`route=reinstall`になります。前回の導入内容とopt-outは§4で確認し、そのまま引き継いでください。復旧watchdogを導入済みなら省略しません。
 
@@ -285,6 +287,21 @@ git -C "$REPO" show "${CANDIDATE_SHA}:scripts/mcs_upgrade.py" > "$WORK/mcs_upgra
 | `standalone_runtime_missing_in_target` | 移行先が独立モード非対応。対象タグを見直す |
 | `plan_failed: …` | 計画中の検査が失敗した。内容を報告し再試行の可否をユーザーと決める |
 | その他（`protected_path`・`unsafe_path`・`ignored_path_tracked` 等） | 移行先タグの異常。適用せず報告 |
+
+### 3-A. 旧形式の設定を初めて分離するときの復旧監視
+
+この手順は、旧形式から提供元別設定へ初めて移行し、旧い `org.mcs.recovery` を導入済みの環境だけに適用します。新規導入や分離済み環境には一律に適用しません。旧い復旧ツールは初回分離の中断状態に対応していないため、次の順序で更新します。
+
+1. 橋渡し版 B を通常の更新経路で適用し、HEAD・更新記録・稼働状態を読み直して B の適用を確認します。続く候補 C の `plan` と事前検査のエラーは解消し、無視して進めません。
+2. C を適用する前に、既存の `org.mcs.recovery` の所有先と状態を確認し、実行中でないことを確かめた上で、この監視だけを計画的に停止します。対象の停止には `launchctl bootout "gui/$(id -u)/org.mcs.recovery"` を使います。失敗した場合や停止を確認できない場合は更新を始めません。
+3. C は通常の `reinstall` 経路で適用し、復旧機能を `--no-recovery` で省略しません。再導入が新しい復旧ツールを原子的に配置して監視を起動・再起動します。適用後に `"$REPO/deployment/recovery/mcs_recover.py"` と `"$HOME/.mcs-recovery/mcs_recover.py"` のhashが一致すること、`org.mcs.recovery` が読み込まれていることを確認します。どちらも確認できなければ正常完了と扱いません。
+
+```bash
+shasum -a 256 "$REPO/deployment/recovery/mcs_recover.py" "$HOME/.mcs-recovery/mcs_recover.py"
+launchctl print "gui/$(id -u)/org.mcs.recovery"
+```
+
+C の適用がコード切替前に失敗した場合は、HEAD が B で、未完了の更新記録がなく、状態を確認できる場合だけ旧い監視を再開できます。コード切替後または切替状態が不明な場合は旧い監視を再開せず、移行先版の正規 `recover` または検証済みの新しい復旧ツールで §7 の保留・復旧手順に従ってください。この順序の実機適用は未確認です。
 
 ## 4. ユーザー確認
 
@@ -382,6 +399,10 @@ rm -r "$WORK"
 ```
 
 ## 7. 失敗時・巻戻し
+
+提供元別設定の初回分離が更新中に止まった場合は、`"$PY" "$REPO/mcs/ops/mcs_update.py" recover` で復旧を再確認します。更新記録・移行元・ロック・処理の停止状態を確認でき、条件がそろった場合に分離を再開します。再導入が未完了の場合は、§3の `reinstall_incomplete` に従って手動で完了し、`"$PY" "$REPO/mcs/ops/mcs_update.py" reinstall-done` で完了を記録して復旧を再確認します。
+
+自動処理と、§3-Aで配置と起動を確認した新しい独立復旧監視は、未検証の初回分離を進めず保留します。設定がpendingの場合、移行元や停止状態を確認できない場合、再導入が未完了の場合も記録と保留を維持します。markerや記録を削除して迂回しないでください。
 
 Pythonや接続用ライブラリの移行中に止まった場合は、**移行先版の**`mcs/ops/mcs_update.py recover`で退避した環境を戻します。通常の`mcs recover`や定期の復旧監視は、この移行を進めず停止します。
 管理担当者は、記録された安全な独立Python（`recovery_python`）と更新記録の移行先SHAを確認してください。MCSのHEADがそのSHAと一致する場合は、そのPythonで`"$REPO/mcs/ops/mcs_update.py" recover`を実行します。HEADが異なる場合や対象コードがない場合は、旧版の更新ツールを代わりに起動せず、記録を保持して管理担当者が移行先コードによる復旧方法を確認します。壊れたvenvのPythonや自動選択した別Pythonは使いません。

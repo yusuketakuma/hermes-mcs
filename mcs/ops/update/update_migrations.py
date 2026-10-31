@@ -37,8 +37,8 @@ def apply(config_path, legacy_path, expected_base, before_publication):
         raise MigrationError('settings_unverified') from None
 
 
-def migrate_provider_settings(root):
-    """Split verified legacy settings after the native updater has quiesced writers."""
+def migrate_provider_settings(root, *, before_publication=None):
+    """Split verified legacy settings after the updater has quiesced writers."""
     try:
         import cloud_policy
         import provider_settings
@@ -58,6 +58,8 @@ def migrate_provider_settings(root):
         if cloud_policy.blocking_errors(errors):
             raise MigrationError("provider_settings_invalid")
         common, providers = provider_settings.split_legacy(raw, owners, jev_model=semantic_jev.JEV_MODEL)
+        if before_publication is not None:
+            before_publication()
         saved = provider_settings.commit(root, before["snapshot"], common, providers,
             selected_provider=settings["provider"], **options)
         checked = provider_settings.read(root, **options)
