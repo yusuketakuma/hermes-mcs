@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "Slackの形式変更後の再送前に権限を再確認",
+  "summary": "Slackがブロック形式を明確に拒否したときだけ、現在の送信権限を確認してから本文を再送します。",
+  "upgrade": "Hermesでは更新後のgateway再起動、独立モードではhost再起動で反映されます。",
+  "details": ["拒否が不明な場合や送信権限を確認できない場合は、再送せず元の結果を保持します。"],
+  "refs": ["adapters/slack/delivery.py"]
+}
