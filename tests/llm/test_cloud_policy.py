@@ -2,6 +2,7 @@
 from contextlib import closing
 from datetime import datetime
 from decimal import Decimal
+import hashlib
 import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
@@ -24,19 +25,62 @@ def _cfg(**kw):
     return {"cloud_llm": {"mode": "on", "project_ids": [1], **kw}}
 
 
+def _body(unit):
+    # Distinct accounting units here represent distinct, provable synthetic prompts.
+    prompt = hashlib.sha256(unit.encode("utf-8")).hexdigest()
+    return {"model": MODEL, "max_tokens": 100, "system": "synthetic system",
+            "messages": [{"role": "user", "content": prompt}]}
+
+
 def _reserve(db, cfg=None, unit="u", **kw):
     return c.usage_reserver(db, cfg or _cfg(), route="reextract", project_id=1,
-                            unit_key=unit, **kw)({"model": MODEL, "max_tokens": 100}, 2)
+                            unit_key=unit, **kw)(_body(unit), 2)
 
 
 def _max():
-    """The maximum one _reserve request may cost: its own size (no messages) plus the margin."""
-    return c.max_cost(100, input_bound=c.input_bound({"model": MODEL, "max_tokens": 100}))
+    """Each synthetic unit has the same input bound and reservation maximum."""
+    return c.max_cost(100, input_bound=c.input_bound(_body("u")))
 
 
 def _result(r, **kw):
     return {"model": MODEL, "request_fp": r["request_fp"], "usage": {"input_tokens": 10, "output_tokens": 2},
             "http_class": "http_200", "request_id": "req_synthetic", "error_kind": None, **kw}
+
+
+@pytest.mark.parametrize('route,purpose,model,effort,limit', [
+    ('reextract', 'backlog', 'gpt-6-luna', 'medium', 8192),
+    ('semantic_backlog', 'backlog', 'gpt-6-luna', 'medium', 8192),
+    ('patient_context', 'patient_context', 'gpt-6.1-sol', 'medium', 16384),
+    ('semantic_backlog', 'quality_repair', 'gpt-6.1-sol', 'high', 32768),
+])
+def test_openai_profile_resolution_is_purpose_bound(route, purpose, model, effort, limit):
+    selection, errors = c.resolve_profile(_cfg(provider='openai'), route=route, purpose=purpose)
+    assert not errors
+    assert (selection['model'], selection['effort'], selection['max_tokens']) == (model, effort, limit)
+    with pytest.raises(TypeError):
+        selection['model'] = 'other'
+
+
+def test_explicit_legacy_model_and_invalid_profile_fail_closed():
+    cfg = _cfg(provider='openai', model='gpt-6-luna')
+    selection, errors = c.resolve_profile(cfg, route='patient_context', purpose='patient_context')
+    assert not errors and (selection['model'], selection['effort'], selection['max_tokens']) == ('gpt-6-luna', 'low', 16384)
+    cfg['cloud_llm']['profiles'] = {'patient_context': 'sol-medium'}
+    selection, errors = c.resolve_profile(cfg, route='patient_context', purpose='patient_context')
+    assert not errors and selection['model'] == 'gpt-6.1-sol'
+    cfg['cloud_llm']['profiles'] = {'patient_context': 'unknown'}
+    assert c.resolve_profile(cfg, route='patient_context', purpose='patient_context')[0] is None
+    assert c.resolve_profile(_cfg(provider='openai'), route='reextract', purpose='patient_context')[0] is None
+
+
+def test_explicit_sol_model_keeps_medium_for_formal_quality_repair():
+    cfg = _cfg(provider='openai', model='gpt-6.1-sol')
+    normal, errors = c.resolve_profile(cfg, route='patient_context', purpose='patient_context')
+    assert not errors and (normal['model'], normal['effort'], normal['max_tokens']) == (
+        'gpt-6.1-sol', 'medium', 16384)
+    repair, errors = c.resolve_profile(cfg, route='patient_context', purpose='quality_repair')
+    assert not errors and (repair['model'], repair['effort'], repair['max_tokens']) == (
+        'gpt-6.1-sol', 'medium', 32768)
 
 
 def test_reservation_covers_the_costliest_accepted_usage_for_the_request():
@@ -135,15 +179,47 @@ def test_discard_receipt_preserves_billing_and_result_idempotence(tmp_path, now,
         results = [dict(row) for row in db.artifacts("cloud_usage_result")]
         with pytest.raises(RuntimeError, match="transaction_required"):
             c.record_disposition_tx(db, reservation, "discarded_scope")
+        # Pre-existing legacy receipt has no profile fields; replay must not rewrite it.
+        assert "effort" not in reservation and "profile" not in reservation
+        old = {key: reservation.get(key) for key in c._BINDING_KEYS if key not in ("effort", "profile")}
+        old["disposition"] = "discarded_scope"
+        receipt = db.artifact_add("cloud_usage_disposition", "{}", project_id=1, model=MODEL, meta=old)
+        old_rows = [dict(row) for row in db.artifacts("cloud_usage_disposition")]
         db.db.execute("BEGIN IMMEDIATE")
-        receipt = c.record_disposition_tx(db, reservation, "discarded_scope")
         assert c.record_disposition_tx(db, reservation, "discarded_scope") == receipt
         db.db.commit()
+        assert [dict(row) for row in db.artifacts("cloud_usage_disposition")] == old_rows
         assert c.usage_report(db) == before
         assert [dict(row) for row in db.artifacts("cloud_usage_result")] == results
         if settled:
             c.record_result(db, reservation, _result(reservation))
             assert c.usage_report(db) == before
+        assert len(db.artifacts("cloud_usage_disposition")) == 1
+
+
+def test_discard_receipt_preserves_new_profile_fields_and_rejects_partial_binding(tmp_path, now):
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        original = _reserve(db)
+        reservation = {**original, "effort": None, "profile": None}
+        db.db.execute("UPDATE artifacts SET meta=? WHERE kind='cloud_usage_reserve'", (json.dumps(reservation),))
+        db.db.commit()
+        db.db.execute("BEGIN IMMEDIATE")
+        receipt = c.record_disposition_tx(db, reservation, "discarded_scope")
+        assert c.record_disposition_tx(db, reservation, "discarded_scope") == receipt
+        db.db.commit()
+        rows = db.artifacts("cloud_usage_disposition")
+        assert len(rows) == 1
+        stored = json.loads(rows[0]["meta"])
+        assert "effort" in stored and stored["effort"] is None
+        assert "profile" in stored and stored["profile"] is None
+        assert c.usage_report(db)["unresolved_requests"] == 1
+        damaged = {key: value for key, value in reservation.items() if key != "profile"}
+        db.db.execute("UPDATE artifacts SET meta=? WHERE kind='cloud_usage_reserve'", (json.dumps(damaged),))
+        db.db.commit()
+        db.db.execute("BEGIN IMMEDIATE")
+        with pytest.raises(AnthropicError, match="pricing_unverified"):
+            c.record_disposition_tx(db, damaged, "discarded_scope")
+        db.db.rollback()
         assert len(db.artifacts("cloud_usage_disposition")) == 1
 
 
@@ -427,7 +503,7 @@ def test_broken_reservation_amount_never_creates_budget(tmp_path, now):
         assert c.usage_report(db)["pricing_unverified"]
         # the reservation gate's incremental tally notices the edited row too
         with pytest.raises(AnthropicError, match="pricing_unverified"):
-            _reserve(db, unit="after_edit")
+            _reserve(db, unit="after_edit", message_id=1)
 
 
 def test_a_reservation_stored_before_input_bound_keeps_its_plain_input_amount(tmp_path, now):
@@ -449,6 +525,36 @@ def test_discarded_result_still_settles_actual_usage(tmp_path, now, disposition)
         meta = json.loads(db.artifacts("cloud_usage_result")[0]["meta"])
         assert meta["disposition"] == disposition
         assert Decimal(c.usage_report(db)["monthly_cost_usd"]) == Decimal("0.000002")
+
+
+def test_legacy_result_replay_preserves_existing_row_without_profile_backfill(tmp_path, now):
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        reservation = _reserve(db)
+        assert "effort" not in reservation and "profile" not in reservation
+        metadata = _result(reservation)
+        usage = c._price_definition(MODEL, reservation["price_version"])["validate_usage"](metadata["usage"])
+        old = {key: reservation.get(key) for key in c._BINDING_KEYS if key not in ("effort", "profile")}
+        old.update(usage=usage, cost_usd=str(c.usage_cost(usage, model=MODEL,
+                    price_version=reservation["price_version"])), http_class="http_200",
+                   request_id="req_synthetic", error_kind=None)
+        db.artifact_add("cloud_usage_result", "{}", project_id=1, model=MODEL, meta=old)
+        before = [dict(row) for row in db.artifacts("cloud_usage_result")]
+        c.record_result(db, reservation, metadata)
+        assert [dict(row) for row in db.artifacts("cloud_usage_result")] == before
+        assert not c.usage_report(db)["pricing_unverified"]
+
+
+@pytest.mark.parametrize("missing", ["effort", "profile"])
+def test_result_rejects_reservation_with_only_one_profile_field(tmp_path, now, missing):
+    with closing(Ledger(str(tmp_path / "l.db"))) as db:
+        reservation = _reserve(db)
+        damaged = {**reservation, "effort": None, "profile": None}
+        del damaged[missing]
+        db.db.execute("UPDATE artifacts SET meta=? WHERE kind='cloud_usage_reserve'", (json.dumps(damaged),))
+        db.db.commit()
+        with pytest.raises(AnthropicError, match="pricing_unverified"):
+            c.record_result(db, damaged, _result(damaged))
+        assert not db.artifacts("cloud_usage_result")
 
 
 def test_matching_rows_filters_in_sql_and_keeps_all_retained_duplicates(tmp_path, now, monkeypatch):
@@ -488,8 +594,8 @@ def _late_results(db, count, reserve_at, result_at):
     for index in range(count):
         prior = {**reservation, "reservation_id": f"{index + 10000:032x}", "unit_key": str(index)}
         reserve_id = db.artifact_add_tx("cloud_usage_reserve", "{}", project_id=1, model=MODEL, meta=prior)
-        result = {key: prior.get(key) for key in ("reservation_id", "request_fp", "route", "project_id",
-                  "unit_key", "message_id", "model", "price_version")}
+        result = {key: prior.get(key) for key in c._BINDING_KEYS
+                  if key not in ("effort", "profile") or key in prior}
         result.update(usage=None, cost_usd=prior["max_cost_usd"], http_class="transport", error_kind="transport")
         result_id = db.artifact_add_tx("cloud_usage_result", "{}", project_id=1, model=MODEL, meta=result)
         db.db.execute("UPDATE artifacts SET created_at=? WHERE artifact_id=?", (reserve_at, reserve_id))
@@ -905,3 +1011,14 @@ def test_dryrun_records_selected_provider_model_and_version(tmp_path):
             with ledger.db:
                 ledger.db.execute("BEGIN")
                 c.dryrun_tx(ledger, route="reextract", project_id=1, unit_key="bad", model="unknown")
+
+
+def test_explicit_sol_model_uses_supported_effort_without_pinning_profiles(monkeypatch):
+    import openai_client
+
+    monkeypatch.setattr(c, 'provider_key', lambda *args, **kwargs: 'synthetic')
+    cfg = {'cloud_llm': {'provider': 'openai', 'mode': 'off', 'model': openai_client.SOL_MODEL}}
+    choice, errors = c.resolve_profile(cfg, route='reextract', purpose='backlog')
+    assert errors == []
+    assert (choice['model'], choice['effort'], choice['profile'], choice['max_tokens']) == (
+        openai_client.SOL_MODEL, 'medium', 'sol-medium', 8192)

@@ -11,6 +11,99 @@ import semantic
 from semantic_testkit import _FakeJev, _cfg, _ledger, _llm, _message, _patient, _seeded
 
 
+def test_summary_qc_repair_replays_bound_answer_and_rejects_tampering(tmp_path, monkeypatch):
+    import copy
+    import hashlib
+    import extract_llm
+    import mcs_util
+    import semantic_llm
+    import semantic_store
+    from inference_dependency_loss import source_binding
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+
+    db = _seeded(tmp_path)
+    try:
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
+        member = next(m for m in bundle['members'] if m['message_id'] == 1)
+        fp, policy, revision = bundle['source_fingerprint'], 'synthetic-policy', member['revision']
+        common = {VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp, 'policy_fingerprint': policy}
+        facts, verdicts = [], {}
+        fact_id = db.artifact_add('semantic_facts', json.dumps({'facts': facts}), project_id=1, message_id=1,
+                                  meta=common)
+        assessment_id = db.artifact_add('semantic_assess', json.dumps({'target_message_id': 1,
+            'verdicts': verdicts}), project_id=1, message_id=1, meta=common)
+        answer_text = json.dumps({'claims': [{'text': '完全合成の要約', 'section': 'other',
+                                             'fact_refs': []}], 'limitations': []}, ensure_ascii=False)
+        original = semantic_llm.summarize(lambda _: answer_text, bundle, 1, facts, verdicts)
+        original['audit_status'] = 'PENDING'
+        summary_id = db.artifact_add('semantic_summary', json.dumps(original), project_id=1, message_id=1,
+                                     meta={**common, 'target_revision': revision})
+        claim_id = original['claims'][0]['claim_id']
+        findings = [{'code': 'claim_not_supported', 'claim': claim_id, 'confidence': 0.9}]
+        audit = {'status': 'PENDING', 'findings': findings, 'target_message_id': 1}
+        audit_id = db.artifact_add('semantic_audit', json.dumps(audit), project_id=1, message_id=1,
+            meta={**common, 'repair_count': 1, 'summary_artifact_id': summary_id,
+                  'summary_hash': mcs_util.payload_hash(original), 'audit_content_hash': mcs_util.payload_hash(audit),
+                  'claim_input_binding': semantic_drain._claim_input_binding(1, 1, fp, policy, revision, original, facts),
+                  'claim_audit': {claim_id: {'choice': 'not_supported', 'confidence': 0.9}}})
+        repair_id = db.artifact_add('semantic_repair', json.dumps({'target_message_id': 1}),
+                                    project_id=1, message_id=1, meta={**common, 'repair_count': 1})
+        rid = 'a' * 32
+        reserve_id = db.artifact_add('cloud_usage_reserve', '{}', project_id=1, message_id=1,
+                                     meta={'reservation_id': rid})
+        prompts = []
+
+        def answer(prompt):
+            prompts.append(prompt)
+            return answer_text
+
+        result = semantic_llm.summarize(answer, bundle, 1, facts, verdicts,
+                                        feedback=['claim_not_supported ' + claim_id])
+        occurrences = [(r['message_id'], source_binding(db.db, 1, r['message_id']))
+                       for r in db.db.execute('SELECT message_id FROM messages WHERE project_id=1 '
+                                              'AND (message_id=1 OR parent_id=1) ORDER BY message_id')]
+        owner = {'semantic_target_id': 1, 'semantic_thread_root': 1, 'semantic_phase': 'summary',
+                 'semantic_generation': 'synthetic', 'semantic_source': mcs_util.payload_hash(occurrences)}
+        evidence = {'version': 1, 'project_id': 1, 'message_id': 1, 'fact_kind': 'semantic_facts',
+                    'facts_id': fact_id, 'assessment_id': assessment_id, 'original_summary_id': summary_id,
+                    'audit_id': audit_id, 'repair_id': repair_id,
+                    'answer': {'text': answer_text, 'prompt_sha256': hashlib.sha256(prompts[0].encode()).hexdigest(),
+                               'reservation_id': rid, 'unit_key': 'semantic:synthetic', 'owner': owner,
+                               'contract': {'backend': 'openai', 'model': 'synthetic-sol', 'prompt': 'synthetic'}}}
+        allowed = [True]
+
+        def verify(_db, **kw):
+            if (not allowed[0] or kw['reservation_artifact_id'] != reserve_id or kw['prompt'] != prompts[0]
+                    or kw['answer_text'] != answer_text or kw['owner'] != owner):
+                raise ValueError('synthetic-receipt-invalid')
+            return {}
+
+        monkeypatch.setattr(extract_llm, '_cloud_repair_answer_evidence', verify)
+        assert semantic_drain._summary_repair_evidence(db.db, bundle, result, evidence, fp, policy, revision)
+        proof_id = db.artifact_add('semantic_repair', json.dumps({'target_message_id': 1,
+            '__mcs_internal_proof_v1': evidence}), project_id=1, message_id=1,
+            meta={**common, 'repair_count': 1})
+        reference = {'artifact_id': proof_id, 'hash': mcs_util.payload_hash(evidence)}
+        producer = {'providers': ['openai'], 'complete': True, 'repair_evidence': reference}
+        proof = semantic_drain._summary_provenance(producer, fp, policy, revision, result)
+        assert answer_text not in json.dumps(proof, ensure_ascii=False)
+        assert semantic_drain._summary_producer({'content': result, 'meta': {'provider_provenance': proof}},
+                                                fp, policy, revision, db=db.db, bundle=bundle) == producer
+        allowed[0] = False
+        assert not semantic_drain._summary_repair_evidence(db.db, bundle, result, evidence, fp, policy, revision)
+        allowed[0] = True
+        for key, value in [('audit_id', summary_id), ('original_summary_id', assessment_id),
+                           ('message_id', 2), ('facts_id', repair_id)]:
+            changed = copy.deepcopy(evidence)
+            changed[key] = value
+            assert not semantic_drain._summary_repair_evidence(db.db, bundle, result, changed, fp, policy, revision)
+        changed = copy.deepcopy(evidence)
+        changed['answer']['text'] += 'changed'
+        assert not semantic_drain._summary_repair_evidence(db.db, bundle, result, changed, fp, policy, revision)
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize('slow_stage', ['jev', 'llm'])
 def test_post_call_deadline_is_bounded(tmp_path, monkeypatch, slow_stage):
     clock = [100.0]
@@ -233,6 +326,9 @@ def test_summary_repair_reservation_tracks_actual_dispatch(tmp_path, monkeypatch
 
     def summarize(*args, **kwargs):
         if kwargs.get("feedback"):
+            import semantic_transport
+            assert semantic_transport._inference_purpose.get() == 'quality_repair'
+            assert db.artifacts('semantic_repair', message_id=1)
             calls.append("repair")
             if blocked[0]:
                 raise failure_type("llm_result" if failure == "post_dispatch" else "llm_next_call")

@@ -15,6 +15,9 @@ def test_first_empty_candidate_gets_one_repair_and_real_audit(tmp_path, monkeypa
     calls = []
 
     def summarize(llm, bundle, mid, *args, **kwargs):
+        if mid == 1 and kwargs.get('feedback'):
+            import semantic_transport
+            assert semantic_transport._inference_purpose.get() == 'backlog'
         result = original(llm, bundle, mid, *args, **kwargs)
         if mid == 1:
             calls.append(bool(kwargs.get('feedback')))

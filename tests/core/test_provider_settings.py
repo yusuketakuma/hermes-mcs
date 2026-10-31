@@ -59,6 +59,26 @@ def test_private_root_link_reads_and_commits_same_target(tmp_path, monkeypatch, 
     assert not (target / "data" / ".provider-settings-pending.json").exists()
 
 
+def test_openai_profiles_roundtrip_in_private_settings_only():
+    owners = {'gpt-6-luna': 'openai', 'claude-haiku-5-5': 'anthropic'}
+    raw = {'cloud_llm': {'provider': 'openai', 'mode': 'off', 'profiles': {
+        'backlog': 'luna-medium', 'patient_context': 'sol-medium', 'quality_repair': 'sol-high'}}}
+    common, providers = settings.split_legacy(raw, owners)
+    assert 'profiles' not in common['cloud_llm']
+    assert providers['openai']['profiles'] == raw['cloud_llm']['profiles']
+    assert settings.compose(common, providers, selected_provider='openai', model_owners=owners) == raw
+    anthropic = settings.compose(common, providers, selected_provider='anthropic', model_owners=owners)
+    assert 'profiles' not in anthropic['cloud_llm']
+
+
+@pytest.mark.parametrize('profiles', [None, [], {'backlog': 'unknown'}, {'unknown': 'luna-medium'},
+                                      {'backlog': None}, {'backlog': True}])
+def test_openai_profiles_refuse_invalid_values(profiles):
+    with pytest.raises(ValueError, match='provider_profiles_invalid'):
+        settings.split_legacy({'cloud_llm': {'profiles': profiles}}, OWNERS)
+
+
+
 def test_root_link_replacement_with_same_target_rejects_stale_snapshot(tmp_path, monkeypatch):
     tmp_path.chmod(0o700)
     target = tmp_path / "target"
@@ -468,13 +488,13 @@ def test_bootstrap_requires_matching_fresh_legacy_snapshot(tmp_path, damage):
 
 
 @pytest.mark.parametrize(("provider", "order", "selected", "kept"), [
-    ("auto", ["anthropic", "openai"], "openai", False),
+    ("auto", ["anthropic", "openai"], "openai", True),
     ("auto", ["anthropic", "openai"], "anthropic", True),
-    ("auto", ["openai", "anthropic"], "anthropic", False),
+    ("auto", ["openai", "anthropic"], "anthropic", True),
     ("auto", ["openai", "anthropic"], "openai", True),
     ("openai", ["anthropic", "openai"], "openai", True),
 ])
-def test_execution_view_omits_only_redundant_auto_model(provider, order, selected, kept):
+def test_execution_view_preserves_explicit_selected_model(provider, order, selected, kept):
     common = {"cloud_llm": {"provider": provider, "provider_order": order,
                             "project_ids": None, "mode": "off"}}
     providers = {"anthropic": {"model": "synthetic-anthropic"},
@@ -489,12 +509,12 @@ def test_execution_view_omits_only_redundant_auto_model(provider, order, selecte
     assert json.dumps([common, providers], sort_keys=True) == before
 
 
-def test_execution_view_refuses_ambiguous_pinned_model_and_preserves_invalid_order():
+def test_execution_view_accepts_known_multiple_models_and_preserves_invalid_order():
     common = {"cloud_llm": {"provider": "auto"}}
     providers = {"anthropic": {}, "openai": {"model": "synthetic-openai"}, "jev": {}}
     owners = {**OWNERS, "synthetic-openai-other": "openai"}
-    with pytest.raises(ValueError, match="provider_model_invalid"):
-        settings.execution_view(common, providers, selected_provider="openai", model_owners=owners)
+    view = settings.execution_view(common, providers, selected_provider="openai", model_owners=owners)
+    assert view["cloud_llm"]["model"] == "synthetic-openai"
     common["cloud_llm"]["provider_order"] = ["anthropic", "anthropic"]
     view = settings.execution_view(common, providers, selected_provider="openai", model_owners=OWNERS)
     assert view["cloud_llm"]["provider_order"] == ["anthropic", "anthropic"]
@@ -521,7 +541,7 @@ def test_auto_execution_view_preserves_all_budgets_and_jev_values():
     view = settings.execution_view(common, providers, selected_provider="openai", model_owners=OWNERS,
                                    jev_model="synthetic-jev")
     assert raw["cloud_llm"]["model"] == "synthetic-openai"
-    assert "model" not in view["cloud_llm"]
+    assert view["cloud_llm"]["model"] == providers["openai"]["model"]
     assert view["cloud_llm"]["provider_budgets"] == {
         "anthropic": providers["anthropic"]["budget"], "openai": providers["openai"]["budget"]}
     assert view["cloud_llm"]["daily_cost_limit_usd"] is None
@@ -529,7 +549,6 @@ def test_auto_execution_view_preserves_all_budgets_and_jev_values():
     assert view["semantic"] == {"mode": "off", **providers["jev"]}
     assert view["extract"] == {"prefilter": False}
     expected = json.loads(raw_before)
-    del expected["cloud_llm"]["model"]
     assert view == expected
     assert json.dumps(raw, sort_keys=True) == raw_before
     assert json.dumps([common, providers], sort_keys=True) == before
@@ -548,7 +567,7 @@ def test_auto_selected_second_provider_uses_its_pinned_model(monkeypatch):
     resolved, errors = cloud_policy.resolve_settings(view, "synthetic-root")
     assert not errors and resolved["provider"] == "openai"
     assert resolved["model"] == cloud_policy.PROVIDERS["openai"]
-    assert "model" not in view["cloud_llm"]
+    assert view["cloud_llm"]["model"] == cloud_policy.PROVIDERS["openai"]
 
 
 def test_unknown_model_or_secret_provider_key_is_rejected():
@@ -792,7 +811,7 @@ def test_commit_validates_execution_view_but_persists_explicit_model(tmp_path, m
     monkeypatch.setattr(mcs_config, "validate_config", lambda view: (seen.append(view) or [], []))
     result = settings.commit(tmp_path, original["snapshot"], original["common"], original["providers"],
                              selected_provider="openai", model_owners=OWNERS)
-    assert len(seen) == 1 and "model" not in seen[0]["cloud_llm"]
+    assert len(seen) == 1 and seen[0]["cloud_llm"]["model"] == "synthetic-openai"
     assert result["providers"]["openai"]["model"] == "synthetic-openai"
     assert result["common"]["cloud_llm"]["provider"] == "auto"
 

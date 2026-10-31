@@ -12,10 +12,11 @@ connection and does no I/O of its own (same contract as mcs_util).
 """
 import json
 import sqlite3
+from contextvars import ContextVar
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from mcs_util import loads_dict, payload_hash, search_fold
+from mcs_util import loads_dict, payload_hash, search_fold, strict_json, valid_hash
 from inference_version import CURRENT_VERSION, current_meta_pred, is_current, read_version, valid_meta_pred
 from patient_context import merged_context
 from semantic_projection import PROJECTION_VERSION
@@ -23,6 +24,58 @@ from semantic_projection import PROJECTION_VERSION
 JST = ZoneInfo("Asia/Tokyo")
 DAY_S = 86400
 UNKNOWN_TIME = -(2**63)
+_proof_read_active = ContextVar('mcs_proof_read_active', default=False)
+_INTERNAL_PROOF = '__mcs_internal_proof_v1'
+
+
+def selected_artifact_proof_valid(db, artifact_id, *, inference_target=CURRENT_VERSION):
+    """Check a marked extraction against its exact retained progress witness."""
+    if type(artifact_id) is not int or artifact_id <= 0:
+        return False
+    db.execute('SAVEPOINT selected_artifact_proof')
+    try:
+        row = db.execute("SELECT kind, CASE WHEN kind='extract_llm' AND ("
+            "CASE WHEN json_valid(content) THEN json_type(content,'$.__mcs_internal_proof_v1') IS NOT NULL ELSE 0 END "
+            "OR CASE WHEN json_valid(meta) THEN json_type(meta,'$.internal_proof_version') IS NOT NULL "
+            "OR json_type(meta,'$.internal_proof_hash') IS NOT NULL ELSE 0 END) THEN 1 ELSE 0 END marked "
+            "FROM artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()
+        if row is None:
+            return False
+        if row['kind'] == 'extract_llm':
+            newer = _newer_marked_extract('a', 'm', inference_target)
+            blocked = db.execute('SELECT 1 FROM artifacts a JOIN messages m ON m.message_id=a.message_id '
+                'AND (a.project_id IS NULL OR a.project_id=m.project_id) WHERE a.artifact_id=? '
+                f'AND EXISTS ({newer})', (artifact_id,)).fetchone()
+            if blocked:
+                return False
+        if not row['marked']:
+            return True
+        if _proof_read_active.get():
+            return False
+        selected = db.execute('SELECT a.content,a.meta,a.model,m.* FROM artifacts a JOIN messages m '
+            'ON a.message_id=m.message_id AND (a.project_id IS NULL OR a.project_id=m.project_id) '
+            'WHERE a.artifact_id=? AND a.kind=\'extract_llm\'', (artifact_id,)).fetchone()
+        if selected is None:
+            return False
+        content, meta = strict_json(selected['content']), strict_json(selected['meta'])
+        if (not isinstance(content, dict) or not isinstance(meta, dict)
+                or not isinstance(content.get(_INTERNAL_PROOF), dict)
+                or type(meta.get('internal_proof_version')) is not int or meta['internal_proof_version'] != 1
+                or not valid_hash(meta.get('internal_proof_hash'))
+                or not isinstance(selected['model'], str) or not selected['model']):
+            return False
+        import extract_llm
+        token = _proof_read_active.set(True)
+        try:
+            result = extract_llm.progress_for_message(db, selected, model=selected['model'],
+                                                       expected_artifact_id=artifact_id)
+            return isinstance(result, dict) and result.get('state') == 'complete'
+        finally:
+            _proof_read_active.reset(token)
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
+        return False
+    finally:
+        db.execute('RELEASE selected_artifact_proof')
 
 # extract_llm med `action` values meaning "the prescription changed"
 # ('none' = mentioned without a change — counted in stats, never a
@@ -93,12 +146,36 @@ def source_extract_pred(art: str = "a", msg: str = "m", *,
             + " AND " + valid_meta_pred(f"{art}.meta"))
 
 
+def _newer_marked_extract(art, msg, inference_target):
+    content_marker = ("CASE WHEN json_valid(proof_hold.content) THEN "
+        "json_type(proof_hold.content,'$.__mcs_internal_proof_v1') IS NOT NULL "
+        "ELSE instr(proof_hold.content,'\"__mcs_internal_proof_v1\"')>0 END")
+    return ("SELECT 1 FROM artifacts proof_hold WHERE proof_hold.kind='extract_llm' "
+        f"AND proof_hold.message_id={art}.message_id AND proof_hold.artifact_id>{art}.artifact_id "
+        f"AND (proof_hold.project_id IS NULL OR proof_hold.project_id={msg}.project_id) "
+        "AND CASE WHEN json_valid(proof_hold.meta) THEN "
+        "(json_type(proof_hold.meta,'$.internal_proof_version') IS NOT NULL "
+        f"OR json_type(proof_hold.meta,'$.internal_proof_hash') IS NOT NULL OR ({content_marker})) "
+        "AND CASE WHEN json_type(proof_hold.meta,'$.hash')='text' "
+        "AND length(json_extract(proof_hold.meta,'$.hash'))=64 "
+        "AND json_extract(proof_hold.meta,'$.hash') NOT GLOB '*[^0-9a-f]*' "
+        f"THEN json_extract(proof_hold.meta,'$.hash')={msg}.content_hash ELSE 1 END "
+        "AND COALESCE(json_extract(proof_hold.meta,'$.invalidated'),0)=0 "
+        f"AND ({current_meta_pred('proof_hold.meta', target=inference_target)} "
+        f"OR NOT {valid_meta_pred('proof_hold.meta')}) ELSE "
+        "(instr(proof_hold.meta,'\"internal_proof_version\"')>0 "
+        "OR instr(proof_hold.meta,'\"internal_proof_hash\"')>0 "
+        f"OR ({content_marker})) END")
+
+
 def current_extract_pred(art: str = "a", msg: str = "m", *,
                          content: bool = True, error_check: bool = True,
                          inference_target: str = CURRENT_VERSION) -> str:
     """Require the exact public inference version as well as source validity."""
+    newer_marked = _newer_marked_extract(art, msg, inference_target)
     return (source_extract_pred(art, msg, content=content, error_check=error_check)
-            + " AND " + current_meta_pred(f"{art}.meta", target=inference_target))
+            + " AND " + current_meta_pred(f"{art}.meta", target=inference_target)
+            + f" AND ({art}.kind!='extract_llm' OR NOT EXISTS ({newer_marked}))")
 
 
 CANONICAL_PROJECTION_KIND = "canonical_projection"
@@ -744,7 +821,7 @@ def _kind_state(rows, content_hash: str, *, engine_version=None,
 
 
 def extraction_kind_map(art_rows, content_hash, *,
-                        inference_target: str = CURRENT_VERSION) -> dict:
+                        inference_target: str = CURRENT_VERSION, db=None) -> dict:
     by_kind: dict = {}
     for kind in EXTRACTION_KINDS:
         kind_rows = [r for r in art_rows if r["kind"] == kind]
@@ -754,6 +831,9 @@ def extraction_kind_map(art_rows, content_hash, *,
                          canonical=kind in ("canonical_projection", "semantic_facts_v4"))
         entry = {"state": st["state"],
                  "artifact_id": st["artifact_id"]}
+        if (db is not None and kind == 'extract_llm' and entry['state'] == 'current'
+                and not selected_artifact_proof_valid(db, entry['artifact_id'], inference_target=inference_target)):
+            entry.update(state='unknown', artifact_id=None, _proof_unverified=True)
         if st["last_error"]:
             entry["last_error"] = True
         cm = st.get("current_meta") or {}
@@ -779,7 +859,7 @@ def _context_inputs(db, message, *, by_kind=None, art_rows=None):
             (message["project_id"], *_LEGACY_UNSCOPED_KINDS, message["message_id"],
              *EXTRACTION_KINDS)).fetchall()
     if by_kind is None:
-        by_kind = extraction_kind_map(art_rows, message["content_hash"])
+        by_kind = extraction_kind_map(art_rows, message["content_hash"], db=db)
     body = message.get("body_text")
     if body is None:
         row = db.execute("SELECT body_text FROM messages WHERE project_id=? AND message_id=?",
@@ -831,18 +911,32 @@ def current_extraction_blobs(db, project_id: int) -> dict:
     No connection, transaction or display limit is owned here. Missing artifacts
     remain absent; projection/current predicates preserve source binding.
     """
-    arts = {}
-    for a in db.execute(f"""
-      SELECT a.message_id, a.kind, a.content FROM artifacts a
-      JOIN messages m ON m.message_id=a.message_id
-      WHERE m.project_id=? AND a.kind IN ({EXTRACTION_KINDS_SQL})
-        {current_extract_pred()}
-        AND (a.kind IN ('extract_v1','extract_llm')
-             OR (1=1 {current_fact_pred()}))
-      ORDER BY a.artifact_id
-    """, (project_id,)):
-        arts.setdefault(a["message_id"], {})[a["kind"]] = a["content"]
-    return arts
+    db.execute('SAVEPOINT current_extraction_blobs')
+    try:
+        candidates = {}
+        for a in db.execute(f"""
+          SELECT a.message_id, a.kind, a.content, a.artifact_id FROM artifacts a
+          JOIN messages m ON m.message_id=a.message_id
+          WHERE m.project_id=? AND a.kind IN ({EXTRACTION_KINDS_SQL})
+            {current_extract_pred()}
+            AND (a.kind IN ('extract_v1','extract_llm')
+                 OR (1=1 {current_fact_pred()}))
+          ORDER BY a.artifact_id
+        """, (project_id,)):
+            candidates.setdefault(a['message_id'], {})[a['kind']] = (a['artifact_id'], a['content'])
+        arts = {}
+        for mid, kinds in candidates.items():
+            for kind, (artifact_id, content) in kinds.items():
+                if kind == 'extract_llm' and not selected_artifact_proof_valid(db, artifact_id):
+                    continue
+                document = loads_dict(content)
+                if document is not None and _INTERNAL_PROOF in document:
+                    document.pop(_INTERNAL_PROOF)
+                    content = json.dumps(document, ensure_ascii=False)
+                arts.setdefault(mid, {})[kind] = content
+        return arts
+    finally:
+        db.execute('RELEASE current_extraction_blobs')
 
 
 def decode_current_extractions(blobs: dict):
@@ -942,8 +1036,10 @@ def source_patient_mentions(db, project_id: int) -> list[dict]:
     return out
 
 
-def current_message_artifact_query(*, facts=False, mid="?"):
+def current_message_artifact_query(*, facts=False, mid="?", field="content"):
     """Build the shared per-message current extraction/fact content read."""
+    if field not in ('content', 'artifact_id'):
+        raise ValueError('current_artifact_field_invalid')
     if facts:
         where = (
             f"a.message_id={mid} AND a.kind IN ({FACT_KINDS_SQL}) "
@@ -953,7 +1049,7 @@ def current_message_artifact_query(*, facts=False, mid="?"):
             f"{current_fact_pred('a', 'm')}")
     else:
         where = f"a.kind=? AND a.message_id={mid} {current_extract_pred()}"
-    return ("SELECT a.content FROM artifacts a JOIN messages m "
+    return (f"SELECT a.{field} FROM artifacts a JOIN messages m "
             "ON m.message_id=a.message_id WHERE " + where +
             " ORDER BY a.artifact_id DESC LIMIT 1")
 
@@ -961,8 +1057,22 @@ def current_message_artifact_query(*, facts=False, mid="?"):
 
 def current_message_extract(db, kind: str, mid: int) -> dict | None:
     """Read one current message extraction document, distinct from global latest IDs."""
-    r = db.execute(current_message_artifact_query(), (kind, mid)).fetchone()
-    return loads_dict(r["content"]) if r else None
+    return _current_message_document(db, (kind, mid), facts=False)
+
+
+def _current_message_document(db, params, *, facts):
+    db.execute('SAVEPOINT current_message_document')
+    try:
+        row = db.execute(current_message_artifact_query(facts=facts, field='artifact_id'), params).fetchone()
+        if row is None or not selected_artifact_proof_valid(db, row[0]):
+            return None
+        selected = db.execute('SELECT content FROM artifacts WHERE artifact_id=?', (row[0],)).fetchone()
+        document = loads_dict(selected['content']) if selected else None
+        if document is not None:
+            document.pop(_INTERNAL_PROOF, None)
+        return document
+    finally:
+        db.execute('RELEASE current_message_document')
 
 
 
@@ -972,8 +1082,7 @@ def current_message_facts(db, mid: int) -> dict | None:
     ``current_fact_pred`` shadow rule every consumer shares); when the
     projection is stale, invalidated, or absent the legacy extraction
     is read instead — never the other way around."""
-    r = db.execute(current_message_artifact_query(facts=True), (mid,)).fetchone()
-    return loads_dict(r["content"]) if r else None
+    return _current_message_document(db, (mid,), facts=True)
 
 
 

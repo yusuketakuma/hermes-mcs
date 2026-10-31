@@ -5,6 +5,82 @@ import pytest
 import semantic_transport as transport
 
 
+def test_cloud_chunk_contract_matches_its_settled_model_and_effort(tmp_path, monkeypatch):
+    import json
+    import cloud_policy
+    import extract_llm
+    import mcs_util
+    import openai_client
+    import semantic_extraction
+    from semantic_testkit import _seeded
+
+    ledger = _seeded(tmp_path)
+    try:
+        rid = 'a' * 32
+        selection = {'provider': 'openai', 'model': openai_client.SOL_MODEL, 'effort': 'high'}
+        contract = extract_llm._cloud_contract(selection=selection)
+        reservation = {'reservation_id': rid, 'model': selection['model'], 'route': 'semantic_backlog',
+                       'project_id': 1, 'message_id': 1, 'effort': 'high', 'profile': 'sol-high',
+                       'price_version': openai_client.SOL_PRICE_VERSION}
+        ledger.artifact_add('cloud_usage_reserve', '{}', project_id=1, message_id=1,
+                            meta={'reservation_id': rid})
+        monkeypatch.setattr(cloud_policy, 'reservation_evidence',
+                            lambda *_: {'reservation': reservation})
+        content = {'facts': []}
+        meta = {'actual_model': selection['model'], 'actual_contract': contract,
+                'inference_requests': [rid]}
+        result_hash = mcs_util.payload_hash(content)
+        binding = semantic_extraction._chunk_provider_binding(meta, 1, 1, 'local-model', 'openai', result_hash, rid)
+        meta['provider_provenance'] = {'version': 1, 'stage': 'chunk', 'provider': 'openai',
+                                       'result_hash': result_hash, 'reservation_id': rid,
+                                       'binding_hash': mcs_util.payload_hash(binding)}
+        row = {'meta': json.dumps(meta), 'content': json.dumps(content),
+               'project_id': 1, 'message_id': 1, 'model': 'local-model'}
+        assert semantic_extraction._cached_provider(ledger.db, row, 'local-model') == 'openai'
+        for field, bad in [('effort', 'medium'), ('profile', 'sol-medium'),
+                           ('price_version', 'unknown'), ('model', openai_client.MODEL)]:
+            old = reservation[field]
+            reservation[field] = bad
+            assert semantic_extraction._cached_provider(ledger.db, row, 'local-model') is None
+            reservation[field] = old
+        meta['actual_contract'] = {**contract, 'prompt': 'different'}
+        binding = semantic_extraction._chunk_provider_binding(meta, 1, 1, 'local-model', 'openai', result_hash, rid)
+        meta['provider_provenance']['binding_hash'] = mcs_util.payload_hash(binding)
+        row['meta'] = json.dumps(meta)
+        assert semantic_extraction._cached_provider(ledger.db, row, 'local-model') is None
+    finally:
+        ledger.close()
+
+
+def test_execution_contract_filters_old_chunks_without_hiding_historical_projection(monkeypatch):
+    import json
+    import extract_llm
+    import openai_client
+    import semantic_extraction as extraction
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+
+    old = extract_llm._cloud_contract(selection={
+        'provider': 'openai', 'model': openai_client.MODEL, 'effort': 'low'})
+    new = extract_llm._cloud_contract(selection={
+        'provider': 'openai', 'model': openai_client.MODEL, 'effort': 'medium'})
+    spec = {'index': 0, 'hash': 'synthetic-hash', 'start': 0, 'end': 1, 'text': 'x'}
+    meta = {VERSION_KEY: CURRENT_VERSION, 'schema': extraction.SCHEMA_VERSION,
+            'generation': 'g', 'status': 'complete', 'source_fingerprint': 'fp',
+            'source_hash': 'body', 'revision': 'r', 'chunks_total': 1,
+            'chunk_index': 0, 'chunk_hash': spec['hash'], 'start_codepoint': 0,
+            'end_codepoint': 1, 'actual_model': openai_client.MODEL, 'actual_contract': old,
+            'provider_provenance': {'reservation_id': 'synthetic'}}
+    row = {'meta': json.dumps(meta), 'content': json.dumps({
+        'chunk_index': 0, 'start_codepoint': 0, 'end_codepoint': 1, 'facts': []})}
+    monkeypatch.setattr(extraction, 'iter_artifacts', lambda *_a, **_kw: [row])
+    monkeypatch.setattr(extraction, '_cached_provider', lambda *_: 'openai')
+    args = (object(), 1, 1, 'fp', 'body', 'r', [spec], 'x')
+    kwargs = {'generation': 'g', 'expected_model': 'local', 'expected_provider': 'openai'}
+    assert extraction._cached_chunks(*args, **kwargs, expected_contract=old)
+    assert extraction._cached_chunks(*args, **kwargs, expected_contract=new) == {}
+    assert extraction._cached_chunks(*args, **kwargs)  # historical read has no current-model filter
+
+
 def test_local_response_is_observed_only_inside_its_stage(monkeypatch):
     monkeypatch.setattr(transport, "llm_conf", lambda: ("http://synthetic.invalid", "synthetic-model"))
     monkeypatch.setattr(transport, "_probe_format", lambda *args: "plain")

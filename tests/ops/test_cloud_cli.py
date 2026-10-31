@@ -683,3 +683,81 @@ def test_dryrun_report_respects_provider_and_historical_versions(world):
             db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(bad), row["artifact_id"]))
         with pytest.raises(ValueError, match="dryrun_observation_invalid"):
             cli._dryrun_report(db.db, float("inf"), now, "anthropic")
+
+
+def test_provider_dialog_keeps_unset_provider_budgets_under_current_shared_cap(tmp_path, monkeypatch, capsys):
+    import api_key_setup
+
+    monkeypatch.setattr(api_key_setup, "is_terminal", lambda: True)
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(cli, "_settings_for_edit", lambda: {
+        "cloud_llm": {"daily_cost_limit_usd": 10, "monthly_cost_limit_usd": 75}})
+    answers = iter(["2", "", "", "", "", "1"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    saved = []
+    monkeypatch.setattr(cli, "providers_command", lambda args: saved.append(vars(args)) or 0)
+
+    assert cli.provider_dialog(tmp_path) == 0
+    assert saved == [{"provider": "openai", "priority": "anthropic,openai"}]
+    assert "合計上限は1日 10 USD、1か月 75 USD" in capsys.readouterr().out
+
+
+def test_provider_dialog_preserves_existing_caps_unless_changed(tmp_path, monkeypatch):
+    import api_key_setup
+
+    monkeypatch.setattr(api_key_setup, "is_terminal", lambda: True)
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(cli, "_settings_for_edit", lambda: {"cloud_llm": {
+        "daily_cost_limit_usd": 10, "monthly_cost_limit_usd": 75,
+        "provider_budgets": {"openai": {"daily_cost_limit_usd": 4, "monthly_cost_limit_usd": 30}}}})
+    answers = iter(["2", "", "", "5", "", "1"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(answers))
+    saved = []
+    monkeypatch.setattr(cli, "providers_command", lambda args: saved.append(vars(args)) or 0)
+
+    assert cli.provider_dialog(tmp_path) == 0
+    assert saved == [{"provider": "openai", "priority": "anthropic,openai", "openai_daily_usd": "5"}]
+
+
+def test_api_menu_accepts_only_its_own_verified_config_save(tmp_path, monkeypatch):
+    import config_edit
+    import credential_setup_menu
+
+    tmp_path.chmod(0o700)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"mcs_login_id": "synthetic", "notify_target": "slack:#synthetic"}))
+    config_path.chmod(0o600)
+    monkeypatch.setattr(mcs_setup, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(config_path))
+    monkeypatch.setattr(mcs_util, "HOME", str(tmp_path))
+    monkeypatch.setattr(mcs_util, "CONF_PATH", str(config_path))
+
+    def run(root, cfg, *, current, admission, on_saved):
+        assert current()
+        _, errors = config_edit.apply({"cloud_llm.provider": "openai"}, admission=admission, on_saved=on_saved)
+        assert errors == []
+        assert current()
+        other = tmp_path / "replacement.json"
+        other.write_bytes(config_path.read_bytes())
+        other.chmod(0o600)
+        os.replace(other, config_path)
+        assert not current()
+        return 0
+
+    monkeypatch.setattr(credential_setup_menu, "run", run)
+    assert mcs_setup.main(["api-keys"]) == 0
+
+
+def test_cloud_budget_until_does_not_change_jev_deadline(monkeypatch):
+    import config_edit
+
+    cfg = {"cloud_llm": {"mode": "off"}, "semantic": {"until": "2026-11-30T23:59:59+09:00"}}
+    monkeypatch.setattr(cli, "_settings_for_edit", lambda: cfg)
+    saved = []
+    def apply(changes, defaults):
+        saved.append(changes)
+        return cfg, []
+    monkeypatch.setattr(config_edit, "apply", apply)
+    assert cli.budget_command(SimpleNamespace(until="2026-11-05")) == 0
+    assert saved == [{"cloud_llm.until": "2026-11-05T23:59:59+09:00"}]
+    assert cfg["semantic"]["until"] == "2026-11-30T23:59:59+09:00"

@@ -113,6 +113,9 @@ def test_repair_receipt_reserved_before_dispatch(tmp_path):
         real = __import__("semantic_extraction").repair_facts_v2
 
         def spied(*a, **k):
+            import semantic_transport
+            assert semantic_transport._inference_purpose.get() == 'quality_repair'
+            assert json.loads(_rows(db, KIND_FACT_REPAIR, 1)[-1]['content'])['status'] == 'started'
             calls.append(1)
             return real(*a, **k)
 
@@ -155,6 +158,125 @@ def test_repair_receipt_reserved_before_dispatch(tmp_path):
         assert calls == []                    # dispatch was consumed
     finally:
         db.close()
+
+
+def test_repaired_projection_replays_bound_answers_and_rejects_tampering(tmp_path, monkeypatch):
+    import copy
+    import hashlib
+    import mcs_util
+    import semantic_extraction
+    import semantic_facts
+    import semantic_transport
+    from inference_dependency_loss import source_binding
+    from semantic_testkit import facts_llm
+
+    db = _seeded_two(tmp_path)
+    try:
+        bundle = semantic_store.thread_bundle(db.db, 1, 1)
+        member = next(m for m in bundle['members'] if m['message_id'] == 1)
+        fp, policy = bundle['source_fingerprint'], 'synthetic-policy'
+        local = facts_llm([])
+
+        def observed(prompt):
+            semantic_transport._record_inference('local')
+            return local(prompt)
+
+        original = semantic_extraction.extract_facts_v2(
+            observed, member, ledger=db, project_id=1, source_fingerprint=fp)['doc']
+        common = {VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp, 'policy_fingerprint': policy}
+        original_meta = {**common, 'provider_provenance': {'version': 1, 'stage': 'facts',
+            'providers': ['local'], 'complete': True, 'result_hash': mcs_util.payload_hash(original),
+            'source_fingerprint': fp, 'policy_fingerprint': policy, 'target_revision': member['revision']}}
+        original_id = db.artifact_add('semantic_facts_v2', json.dumps(original), project_id=1,
+                                      message_id=1, meta=original_meta)
+        original_hash = semantic_facts.doc_hash(original)
+        audit = {'status': 'NEEDS_REVIEW', 'evaluated': True,
+                 'findings': [{'code': 'source_fact_coverage_missing'}], 'fact_verdicts': {}}
+        audit_id = db.artifact_add('semantic_facts_audit', json.dumps(audit), project_id=1, message_id=1,
+            meta={**common, 'doc_hash': original_hash, 'jev_provenance': {
+                  'version': 1, 'stage': 'fact_audit', 'doc_hash': original_hash, 'outcome': 'done',
+                  'result_hash': mcs_util.payload_hash(audit), 'document_hash': mcs_util.payload_hash(original)}})
+        started = db.artifact_add(KIND_FACT_REPAIR, json.dumps({'status': 'started', 'rejected': {}}),
+                                  project_id=1, message_id=1, meta={**common, 'doc_hash': original_hash})
+        text = facts_llm([])('synthetic')
+        prompts = []
+
+        def answer(prompt):
+            prompts.append(prompt)
+            return text
+
+        repaired = semantic_extraction.repair_facts_v2(answer, member, original, {}, coverage_missing=True)
+        assert repaired['repaired'] and len(prompts) == 1
+        rid = 'a' * 32
+        reserve_id = db.artifact_add('cloud_usage_reserve', '{}', project_id=1, message_id=1,
+                                     meta={'reservation_id': rid})
+        binding = source_binding(db.db, 1, 1)
+        owner = {'semantic_target_id': 1, 'semantic_thread_root': 1, 'semantic_phase': 'facts',
+                 'semantic_source': mcs_util.payload_hash([(1, binding)]), 'semantic_generation': 'synthetic'}
+        contract = {'backend': 'openai', 'model': 'synthetic-sol', 'prompt': 'synthetic-contract'}
+        answer_record = {'text': text, 'prompt_sha256': hashlib.sha256(prompts[0].encode()).hexdigest(),
+                         'reservation_id': rid, 'unit_key': 'semantic:synthetic', 'owner': owner,
+                         'contract': contract}
+        evidence = {'version': 1, 'original_artifact_id': original_id, 'audit_artifact_id': audit_id,
+                    'started_artifact_id': started, 'source_binding': binding, 'target_revision': member['revision'],
+                    'original_doc_hash': original_hash, 'repaired_doc_hash': semantic_facts.doc_hash(repaired['doc']),
+                    'coverage_missing': True, 'answers': [answer_record]}
+        completed = {'repaired': True, 'rejected': {}, 'owner_chunk_ids': repaired['owner_chunk_ids'],
+                     'repaired_fact_ids': repaired['repaired_fact_ids'], '__mcs_internal_proof_v1': evidence}
+        completed_id = db.artifact_add(KIND_FACT_REPAIR, json.dumps(completed), project_id=1, message_id=1,
+                                       meta=common)
+        saved = db.db.execute('SELECT content,meta FROM artifacts WHERE artifact_id=?', (completed_id,)).fetchone()
+        assert text not in saved['meta']
+        assert json.loads(saved['content'])['__mcs_internal_proof_v1']['answers'][0]['text'] == text
+        allowed = [True]
+
+        def verify(_db, **kw):
+            if (not allowed[0] or kw['reservation_artifact_id'] != reserve_id or kw['reservation_id'] != rid
+                    or kw['prompt'] != prompts[0] or kw['answer_text'] != text or kw['owner'] != owner):
+                raise ValueError('synthetic-receipt-invalid')
+            return {}
+
+        monkeypatch.setattr(extract_llm, '_cloud_repair_answer_evidence', verify)
+        result_meta = {**common, 'repaired': True, 'repair_artifact_id': completed_id}
+        proof = v4._repaired_projection_producer(db.db, 1, 1, fp, policy, member, repaired['doc'], result_meta)
+        assert proof['providers'] == ['local', 'openai'] and proof['repair'][0]['reservation_id'] == rid
+        allowed[0] = False
+        assert v4._repaired_projection_producer(db.db, 1, 1, fp, policy, member, repaired['doc'], result_meta) is None
+        allowed[0] = True
+        for key, value in [('source_binding', 'wrong-source'), ('target_revision', 'wrong-revision'),
+                           ('original_doc_hash', 'wrong-original'), ('repaired_doc_hash', 'wrong-result'),
+                           ('audit_artifact_id', started), ('started_artifact_id', audit_id)]:
+            changed = copy.deepcopy(completed)
+            changed['__mcs_internal_proof_v1'][key] = value
+            db.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(changed), completed_id))
+            assert v4._repaired_projection_producer(db.db, 1, 1, fp, policy, member, repaired['doc'], result_meta) is None
+        completed['__mcs_internal_proof_v1']['answers'][0]['text'] += 'changed'
+        db.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(completed), completed_id))
+        assert v4._repaired_projection_producer(db.db, 1, 1, fp, policy, member, repaired['doc'], result_meta) is None
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('previous_contract,expected_hold', [(None, True), ('old', True), ('current', False)])
+def test_repaired_document_does_not_revive_spent_repair_for_a_new_profile(
+        monkeypatch, previous_contract, expected_hold):
+    from types import SimpleNamespace
+    import semantic_facts
+    import semantic_transport
+
+    document = {'synthetic': True}
+    previous = {'content': document, 'meta': {'repaired': True}}
+    monkeypatch.setattr(semantic_drain, 'current_artifact', lambda *_: previous)
+    monkeypatch.setattr(semantic_facts, 'cached_facts_plan', lambda *_: (previous, True, False))
+    monkeypatch.setattr(semantic_transport, 'inference_contract', lambda: 'current')
+    proof = None if previous_contract is None else {'base': [{'contract': previous_contract}]}
+    monkeypatch.setattr(v4, '_repaired_projection_producer', lambda *_: proof)
+    early, found, _ = semantic_drain._fact_v2_document(
+        SimpleNamespace(db=object()), {}, 1, 1, 'fp', 'policy', 'shadow', None, None, 1)
+    if expected_hold:
+        assert early['outcome'] == 'incomplete' and found is None
+    else:
+        assert early is None and found == document
 
 
 def _seed_legacy_and_v4(db, mid=1):

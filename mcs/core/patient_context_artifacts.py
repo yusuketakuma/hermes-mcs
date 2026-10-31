@@ -154,7 +154,7 @@ def candidate_rows(db, pid, source_key, candidate_ref, *, source_sig=None, sourc
         raise _invalid()
     rows = staged_rows(db, pid, source_key, candidate_ref['repair_input_key'],
         source_sig=origin['source_sig'], contract=origin['contract'], source_binding=origin['source_binding'],
-        source_occurrence=saved_occurrence, body_size=body_size)
+        source_occurrence=saved_occurrence, body_size=body_size, repair_provider=origin.get('repair_provider'))
     if (origin.get('provider') != origin['contract'].get('provider')
             or origin.get('model') != ((origin.get('provider') or {}).get('model')
                                       if origin.get('provider') is not None else origin['contract'].get('model'))
@@ -165,7 +165,7 @@ def candidate_rows(db, pid, source_key, candidate_ref, *, source_sig=None, sourc
 
 
 def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, contract, source_binding,
-                source_occurrence=None, body_size, require_complete=True):
+                source_occurrence=None, body_size, require_complete=True, repair_provider=None):
     """Validate stored unit parts and origin; incomplete ranges are allowed only for explicit staging reads."""
     source_key = _key(pid, source_key)
     if (not valid_hash(repair_input_key) or not valid_hash(source_sig) or not valid_hash(source_binding)
@@ -177,9 +177,16 @@ def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, contract, 
     if provider is not None and not isinstance(provider, dict):
         raise _invalid()
     model = provider.get('model') if provider is not None else contract.get('model')
+    if repair_provider is not None:
+        import extract_llm
+        if not extract_llm._known_cloud_contract(repair_provider):
+            raise _invalid()
+    repair_model = repair_provider.get('model') if repair_provider is not None else model
     expected = {'repair_input_key': repair_input_key, 'source_key': source_key, 'source_sig': source_sig,
                 'source_binding': source_binding, 'contract': contract, 'provider': provider, 'model': model,
                 'body_length': body_size}
+    if repair_provider is not None:
+        expected['repair_provider'] = repair_provider
     if source_occurrence is not None:
         expected['source_occurrence'] = _occurrence(pid, source_occurrence, source_binding)
     _check_metadata(db, CANDIDATE_KIND, pid, repair=True)
@@ -190,6 +197,9 @@ def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, contract, 
     units, spans = {}, []
     for row in rows:
         meta, doc = decode_document(row['meta'], metadata=True), decode_document(row['content'])
+        if ('repair_response' in doc
+                or doc.get('part') != 0 and '__mcs_internal_proof_v1' in doc):
+            raise _invalid()
         saved_occurrence = _occurrence(pid, meta.get('source_occurrence'), source_binding)
         if 'source_occurrence' not in expected:
             expected['source_occurrence'] = saved_occurrence
@@ -197,7 +207,8 @@ def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, contract, 
                 or not is_current(meta) or meta.get('invalidated') not in (None, False, 0)
                 or type(meta.get('source_occurrence_version')) is not int or meta['source_occurrence_version'] != 1
                 or any(payload_hash(meta.get(key)) != payload_hash(value) for key, value in expected.items())
-                or row['model'] != meta.get('model') or not valid_hash(meta.get('unit_key'))
+                or row['model'] != repair_model or not valid_hash(meta.get('unit_key'))
+                or repair_provider is None and 'repair_provider' in meta
                 or type(meta.get('reservation_artifact_id')) is not int or not 0 < meta['reservation_artifact_id'] < 2**63
                 or not isinstance(meta.get('reservation_id'), str) or re.fullmatch('[0-9a-f]{32}', meta['reservation_id']) is None
                 or not valid_hash(meta.get('request_fp')) or doc.get('phase') not in ('complete', 'split')
@@ -217,10 +228,24 @@ def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, contract, 
             if (reservation['reservation_id'] != meta['reservation_id'] or reservation['request_fp'] != meta['request_fp']
                     or reservation['route'] != 'patient_context' or reservation['project_id'] != pid
                     or reservation['message_id'] != (source_key if type(source_key) is int else None)
-                    or reservation['unit_key'] != meta['unit_key'] or reservation['model'] != model
+                    or reservation['unit_key'] != meta['unit_key'] or reservation['model'] != repair_model
                     or reservation.get('owner') != {'repair_input_key': repair_input_key, 'unit_key': meta['unit_key']}
                     or evidence['witness'] != doc['receipt_sig']):
                 raise _invalid()
+            if repair_provider is None and provider is not None:
+                import extract_llm
+                if reservation.get('profile') is not None:
+                    raise _invalid()
+                effort = reservation.get('effort')
+                if 'effort' not in reservation and provider.get('backend') == 'openai':
+                    effort = 'low'
+                try:
+                    actual = extract_llm._cloud_contract(selection={'provider':provider.get('backend'),
+                        'model':reservation['model'], 'effort':effort})
+                except (extract_llm.CloudFallback, KeyError, TypeError):
+                    raise _invalid() from None
+                if actual != provider:
+                    raise _invalid()
             unit = units[meta['unit_key']] = {'binding': binding, 'seen': set()}
         if unit['binding'] != binding or part in unit['seen']:
             raise _invalid()
@@ -236,6 +261,13 @@ def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, contract, 
         stop = max(stop, end)
     if require_complete and stop != body_size:
         raise _invalid()
+    if repair_provider is not None:
+        from patient_context_refresh import _verify_source_repair_rows
+        headers = _rows(db, "SELECT meta FROM artifacts WHERE kind=? AND project_id=? "
+                        "AND json_extract(meta,'$.repair_input_key')=? LIMIT 2", (REPAIR_KIND, pid, repair_input_key))
+        if len(headers) != 1:
+            raise _invalid()
+        _verify_source_repair_rows(db, pid, source_key, decode_document(headers[0]['meta'], metadata=True), rows)
     _unchanged(db, before)
     return rows
 
@@ -256,6 +288,36 @@ def _repair_trace(db, pid, source_key, source_binding, source_sig, source_occurr
                         and (source_sig is None or meta['source_sig'] == source_sig)
                         and (source_occurrence is None or payload_hash(
                             _occurrence(pid, meta.get('source_occurrence'), meta['source_binding'])) == payload_hash(source_occurrence))):
+                    return True
+    return False
+
+
+def other_repair_spent(db, pid, source_key, repair_input_key, *, source_sig, source_occurrence, body_size):
+    """Keep a raw occurrence's spent repair when its model contract changes."""
+    source_key = _key(pid, source_key)
+    if (not valid_hash(repair_input_key) or not valid_hash(source_sig)
+            or not isinstance(source_occurrence, dict) or type(body_size) is not int or body_size <= 0):
+        raise _invalid()
+    occurrence = _occurrence(pid, source_occurrence, source_occurrence.get('source_binding'))
+    for kind in (REPAIR_KIND, CANDIDATE_KIND):
+        _check_metadata(db, kind, pid, repair=True)
+        with closing(db.execute("SELECT meta FROM artifacts WHERE kind=? AND project_id=? ORDER BY artifact_id",
+                                (kind, pid))) as rows:
+            for (raw,) in rows:
+                meta = decode_document(raw, metadata=True)
+                saved_key = _key(pid, meta.get('source_key'))
+                if type(saved_key) is not type(source_key) or saved_key != source_key:
+                    continue
+                if meta.get('repair_input_key') == repair_input_key:
+                    continue
+                if (not valid_hash(meta.get('source_sig')) or not valid_hash(meta.get('source_binding'))
+                        or type(meta.get('source_occurrence_version')) is not int
+                        or meta['source_occurrence_version'] != 1
+                        or type(meta.get('body_length')) is not int or meta['body_length'] <= 0):
+                    raise _invalid()
+                previous = _occurrence(pid, meta.get('source_occurrence'), meta['source_binding'])
+                if (meta['source_sig'] == source_sig and meta['body_length'] == body_size
+                        and payload_hash(previous) == payload_hash(occurrence)):
                     return True
     return False
 

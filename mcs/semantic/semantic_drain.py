@@ -25,7 +25,8 @@ import semantic_transport
 from functools import wraps, partial
 import json
 import copy
-from contextlib import contextmanager, ExitStack
+import hashlib
+from contextlib import contextmanager, ExitStack, nullcontext
 import math
 import heapq
 import sqlite3
@@ -60,13 +61,19 @@ import semantic_qc
 KIND_LOOP_COMPLETION = 'semantic_loop_completion'
 
 
+def _shadow_v2_generation() -> str:
+    from semantic_extraction import v2_generation
+    generation = v2_generation()
+    contract = semantic_transport.inference_contract()
+    return generation if contract is None else generation + '|producer:' + mcs_util.payload_hash(contract)
+
+
 def _shadow_v2_tried(ledger, mid: int, fp: str, policy: str) -> bool:
     """This source + policy already ran the current v2 extraction in shadow
     and it stayed incomplete — a receipt, never a completed document."""
-    from semantic_extraction import v2_generation
     row = current_artifact(ledger.db, KIND_SHADOW_V2, mid, fp, policy)
     return (row is not None and row["content"].get("status") == "incomplete"
-            and row["meta"].get("generation") == v2_generation())
+            and row["meta"].get("generation") == _shadow_v2_generation())
 
 
 def _jev_fail_flag(error) -> str | None:
@@ -94,13 +101,16 @@ def _why(diagnostics: dict, code: str) -> bool:
 
 
 def _summary_provenance(producer, fp, policy, revision, summary, jev="unknown"):
-    return {"version": 1, "stage": "summary", "providers": producer["providers"],
+    proof = {"version": 1, "stage": "summary", "providers": producer["providers"],
             "complete": producer["complete"], "result_hash": mcs_util.payload_hash(summary),
             "source_fingerprint": fp, "policy_fingerprint": policy,
             "target_revision": revision, "jev": jev}
+    if 'repair_evidence' in producer:
+        proof['repair_evidence'] = producer['repair_evidence']
+    return proof
 
 
-def _summary_producer(artifact, fp, policy, revision):
+def _summary_producer(artifact, fp, policy, revision, *, db=None, bundle=None):
     unknown = {"providers": [], "complete": False}
     if not artifact:
         return unknown
@@ -115,7 +125,32 @@ def _summary_producer(artifact, fp, policy, revision):
             or len(set(proof["providers"])) != len(proof["providers"])
             or (proof["complete"] and not proof["providers"])):
         return unknown
-    return {"providers": proof["providers"], "complete": proof["complete"]}
+    producer = {"providers": proof["providers"], "complete": proof["complete"]}
+    if 'repair_evidence' in proof:
+        reference = proof['repair_evidence']
+        if (not isinstance(reference, dict) or set(reference) != {'artifact_id', 'hash'}
+                or type(reference.get('artifact_id')) is not int or db is None or bundle is None):
+            return unknown
+        try:
+            row = db.execute('SELECT content,meta,project_id,message_id FROM artifacts WHERE artifact_id=? AND kind=?',
+                             (reference['artifact_id'], KIND_REPAIR)).fetchone()
+            content, meta = (strict_json(row['content']), strict_json(row['meta'])) if row else (None, None)
+            evidence = content.get('__mcs_internal_proof_v1') if isinstance(content, dict) else None
+            if (not isinstance(evidence, dict) or not isinstance(evidence.get('answer'), dict)
+                    or not isinstance(evidence['answer'].get('contract'), dict)
+                    or row['project_id'] != evidence.get('project_id') or row['message_id'] != evidence.get('message_id')
+                    or not isinstance(meta, dict) or not is_current(meta) or meta.get('invalidated')
+                    or meta.get('fingerprint') != fp or meta.get('policy_fingerprint') != policy
+                    or mcs_util.payload_hash(evidence) != reference['hash']
+                    or proof['complete'] is not True
+                    or proof['providers'] != [evidence['answer']['contract'].get('backend')]
+                    or not _summary_repair_evidence(db, bundle, artifact['content'], evidence, fp, policy, revision,
+                                                    completed_id=reference['artifact_id'])):
+                return unknown
+        except (sqlite3.Error, ValueError, TypeError, KeyError, AttributeError, RecursionError, OverflowError):
+            return unknown
+        producer['repair_evidence'] = reference
+    return producer
 
 
 def _summarize_observed(*args, **kwargs):
@@ -135,6 +170,136 @@ def _claim_input_binding(pid, mid, fp, policy, revision, summary, facts):
     return mcs_util.payload_hash({"project_id": pid, "message_id": mid, "fingerprint": fp,
                                   "policy": policy, "revision": revision,
                                   "claims": summary.get("claims"), "facts": facts})
+
+
+def _summary_repair_evidence(db, bundle, summary, evidence, fp, policy, revision, *, completed_id=None):
+    """Replay a QC summary repair against its retained inputs and settled answer."""
+    import bounded_http
+    import extract_llm
+    import semantic_llm
+    import semantic_projection
+    from inference_dependency_loss import source_binding
+
+    try:
+        if (not isinstance(evidence, dict) or type(evidence.get('version')) is not int
+                or evidence['version'] != 1 or not isinstance(bundle, dict)
+                or bundle.get('source_fingerprint') != fp):
+            return False
+        pid, mid = evidence['project_id'], evidence['message_id']
+        if type(pid) is not int or type(mid) is not int or pid <= 0 or mid <= 0:
+            return False
+        member = next(m for m in bundle['members'] if m['message_id'] == mid)
+        if member['revision'] != revision or summary.get('target_message_id') != mid:
+            return False
+
+        def row(key, kind):
+            artifact_id = evidence[key]
+            if type(artifact_id) is not int or artifact_id <= 0:
+                raise ValueError('summary_repair_reference_invalid')
+            result = db.execute('SELECT content,meta FROM artifacts WHERE artifact_id=? AND kind=? '
+                                'AND project_id=? AND message_id=?', (artifact_id, kind, pid, mid)).fetchone()
+            if result is None:
+                raise ValueError('summary_repair_reference_missing')
+            content, meta = strict_json(result['content']), strict_json(result['meta'])
+            if (not isinstance(content, dict) or not isinstance(meta, dict) or not is_current(meta)
+                    or meta.get('invalidated') or meta.get('stale') or meta.get('fingerprint') != fp
+                    or meta.get('policy_fingerprint') != policy):
+                raise ValueError('summary_repair_reference_stale')
+            return content, meta
+
+        kind = evidence['fact_kind']
+        if kind not in (KIND_FACTS, KIND_FACTS_V2):
+            return False
+        fact_content, _ = row('facts_id', kind)
+        facts = (semantic_projection.project_v2_facts(fact_content) if kind == KIND_FACTS_V2
+                 else fact_content.get('facts'))
+        assessment, assessment_meta = row('assessment_id', KIND_ASSESS)
+        original, original_meta = row('original_summary_id', KIND_SUMMARY)
+        audit, audit_meta = row('audit_id', KIND_AUDIT)
+        marker, marker_meta = row('repair_id', KIND_REPAIR)
+        if (not isinstance(facts, list) or assessment_meta.get('fact_id') is not None
+                or assessment.get('target_message_id') != mid or not isinstance(assessment.get('verdicts'), dict)
+                or original.get('target_message_id') != mid or original_meta.get('target_revision') != revision
+                or audit.get('target_message_id') != mid or audit.get('status') != 'PENDING'
+                or audit_meta.get('summary_artifact_id') != evidence['original_summary_id']
+                or audit_meta.get('summary_hash') != mcs_util.payload_hash(original)
+                or audit_meta.get('audit_content_hash') != mcs_util.payload_hash(audit)
+                or audit_meta.get('claim_input_binding') != _claim_input_binding(pid, mid, fp, policy, revision, original, facts)
+                or audit_meta.get('repair_count') != 1 or marker != {'target_message_id': mid}
+                or marker_meta.get('empty_repair') is True or marker_meta.get('repair_count') != 1
+                or not (evidence['facts_id'] < evidence['repair_id'] and evidence['assessment_id'] < evidence['repair_id']
+                        and evidence['original_summary_id'] < evidence['audit_id'] < evidence['repair_id'])):
+            return False
+        findings = audit.get('findings')
+        if (not isinstance(findings, list) or not findings
+                or semantic_audit.audit_status_for(findings, [], True, False) != 'REPAIR_REQUIRED'):
+            return False
+        checked = audit_code(bundle, facts, original)
+        raw_audit = audit_meta.get('claim_audit')
+        raw_audit = raw_audit if isinstance(raw_audit, dict) else {}
+        verified_finding = any(
+            finding in checked or (
+                finding.get('code') == 'claim_not_supported'
+                and isinstance(raw_audit.get(finding.get('claim')), dict)
+                and raw_audit[finding['claim']].get('choice') == 'not_supported'
+                and raw_audit[finding['claim']].get('confidence') == finding.get('confidence')
+                and semantic_audit._probability(finding.get('confidence'))
+                and any(claim.get('claim_id') == finding['claim'] for claim in original.get('claims', [])
+                        if isinstance(claim, dict))) for finding in findings if isinstance(finding, dict))
+        if not verified_finding:
+            return False
+        feedback = [f.get('code', '') + ' ' + f.get('statement', f.get('claim', '')) for f in findings]
+        answer = evidence['answer']
+        if (not isinstance(answer, dict) or set(answer) != {'text', 'prompt_sha256', 'reservation_id', 'contract', 'unit_key', 'owner'}
+                or not isinstance(answer['text'], str) or len(answer['text'].encode('utf-8')) > bounded_http.MAX_RESPONSE_BYTES
+                or not isinstance(answer['reservation_id'], str) or not isinstance(answer['owner'], dict)):
+            return False
+        reservations = db.execute("SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_reserve' "
+            "AND project_id=? AND message_id=? AND CASE WHEN json_valid(meta) "
+            "THEN json_extract(meta,'$.reservation_id')=? ELSE 0 END LIMIT 2", (pid, mid, answer['reservation_id'])).fetchall()
+        if len(reservations) != 1 or reservations[0]['artifact_id'] <= evidence['repair_id']:
+            return False
+        if completed_id is not None and (type(completed_id) is not int
+                                         or reservations[0]['artifact_id'] >= completed_id):
+            return False
+        owner = answer['owner']
+        root = db.execute('SELECT COALESCE(parent_id,message_id) FROM messages WHERE project_id=? '
+                          'AND message_id=?', (pid, mid)).fetchone()
+        if root is None:
+            return False
+        members = db.execute('SELECT message_id FROM messages WHERE project_id=? AND (message_id=? OR parent_id=?) '
+                             'ORDER BY message_id', (pid, root[0], root[0])).fetchall()
+        occurrences = [(r[0], source_binding(db, pid, r[0])) for r in members]
+        if (not occurrences or any(binding is None for _, binding in occurrences)
+                or owner.get('semantic_target_id') != mid or owner.get('semantic_thread_root') != root[0]
+                or owner.get('semantic_phase') != 'summary'
+                or owner.get('semantic_source') != mcs_util.payload_hash(occurrences)
+                or not isinstance(owner.get('semantic_generation'), str) or not owner['semantic_generation']
+                or not isinstance(answer['unit_key'], str) or not answer['unit_key'].startswith('semantic:')):
+            return False
+        called = []
+
+        def reply(prompt):
+            if called or answer['prompt_sha256'] != hashlib.sha256(prompt.encode('utf-8')).hexdigest():
+                raise runtime.RuntimeStale('summary_repair_prompt_invalid')
+            called.append(True)
+            try:
+                extract_llm._cloud_repair_answer_evidence(
+                    db, reservation_artifact_id=reservations[0]['artifact_id'], reservation_id=answer['reservation_id'],
+                    route='semantic_backlog', project_id=pid, message_id=mid, unit_key=answer['unit_key'],
+                    owner=owner, prompt=prompt, answer_text=answer['text'], contract=answer['contract'])
+            except ValueError:
+                raise runtime.RuntimeStale('summary_repair_receipt_invalid') from None
+            return answer['text']
+
+        replay = semantic_llm.summarize(reply, bundle, mid, facts, assessment['verdicts'], feedback=feedback)
+        if not called or not isinstance(replay, dict):
+            return False
+        return ({k: v for k, v in replay.items() if k != 'audit_status'}
+                == {k: v for k, v in summary.items() if k != 'audit_status' and not k.startswith('_')})
+    except (StopIteration, KeyError, TypeError, ValueError, AttributeError, RecursionError,
+            OverflowError, UnicodeError, sqlite3.Error, runtime.RuntimeGuardError):
+        return False
 
 
 def _empty_repair_prior(db, pid, mid):
@@ -462,12 +627,30 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
     Returns (early, v2_doc, doc_build): early is the _fact_stage result to
     return as-is, else None with the document (None when not stored) and
     the hint-merge build it carries."""
-    from semantic_extraction import extract_facts_v2, v2_generation
+    from semantic_extraction import extract_facts_v2
     import semantic_projection  # noqa: F401  loaded before any stage write
     v2_doc = None
     prev_v2 = current_artifact(ledger.db, KIND_FACTS_V2, mid, fp)
     prev_v2, spent, coverage_retry = semantic_facts.cached_facts_plan(
         prev_v2, member, mid, fp, fact_source)
+    execution_contract = semantic_transport.inference_contract()
+    if prev_v2 is not None and not coverage_retry and execution_contract is not None:
+        if prev_v2['meta'].get('repaired'):
+            previous = v4._repaired_projection_producer(
+                ledger.db, pid, mid, fp, policy, member, prev_v2['content'], prev_v2['meta'])
+            if (previous is None or any(item.get('contract') != execution_contract for item in previous['base'])):
+                # Historical publication stays intact; do not revive a spent repair.
+                return {"outcome": "incomplete", "v2_doc": None}, None, None
+        else:
+            from semantic_extraction import rebuild_facts_v2_cached
+            producer, contracts = {}, []
+            rebuilt, reason = rebuild_facts_v2_cached(member, ledger.db, fp, pid, prev_v2['content'],
+                prev_v2['meta'], producer_out=producer, contracts_out=contracts)
+            if (reason is not None or rebuilt is None or not producer.get('complete')
+                    or mcs_util.payload_hash(rebuilt) != mcs_util.payload_hash(prev_v2['content'])):
+                return {"outcome": "incomplete", "v2_doc": None}, None, None
+            if any(item.get('contract') != execution_contract for item in contracts):
+                prev_v2 = None
     if fact_source == "canonical":
         # S0: deterministic prep (extract_v1 hints + atom/chunk
         # boundaries inside extract_facts_v2) — no model call
@@ -541,7 +724,7 @@ def _fact_v2_document(ledger, member, pid, mid, fp, policy, fact_source,
                     model=semantic_transport.llm_model(),
                     meta={VERSION_KEY: CURRENT_VERSION, "inference_requests": semantic_transport.inference_requests(), "fingerprint": fp,
                           "policy_fingerprint": policy,
-                          "generation": v2_generation()})
+                          "generation": _shadow_v2_generation()})
         else:
             v2_doc = v2_result["doc"]
             from semantic_extraction import FACTS_V2_BUILD
@@ -721,6 +904,12 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
             # the model call — a crash leaves the 'started'
             # receipt, which permanently consumes this generation's
             # one dispatch (no second repair run)
+            original_row = ledger.db.execute(
+                "SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? "
+                "AND message_id=? ORDER BY artifact_id DESC LIMIT 1", (KIND_FACTS_V2, pid, mid)).fetchone()
+            audit_row = ledger.db.execute(
+                "SELECT artifact_id,content,meta FROM artifacts WHERE kind=? AND project_id=? "
+                "AND message_id=? ORDER BY artifact_id DESC LIMIT 1", (KIND_FACT_AUDIT, pid, mid)).fetchone()
             started = ledger.artifact_add(
                 KIND_FACT_REPAIR,
                 json.dumps({"status": "started",
@@ -736,9 +925,10 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                             "s3_repair", "reserved",
                             doc_hash=doc_hash)
             from semantic_extraction import repair_facts_v2
-            sent = []
+            sent, answers = [], []
 
             def repair_llm(prompt):
+                previous_requests = set(semantic_transport.inference_requests())
                 try:
                     value = llm_fn(prompt)
                 except runtime.RuntimeGuardError as e:
@@ -749,11 +939,24 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                     sent.append(True)
                     raise
                 sent.append(True)
+                receipt = semantic_transport.inference_receipt()
+                contract = semantic_transport.inference_contract()
+                if (isinstance(value, str) and receipt is not None and contract is not None
+                        and receipt.get('reservation_id') not in previous_requests):
+                    import bounded_http
+                    try:
+                        if len(value.encode('utf-8')) <= bounded_http.MAX_RESPONSE_BYTES:
+                            answers.append({'text': value, 'prompt_sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest(),
+                                            'reservation_id': receipt.get('reservation_id'), 'contract': contract,
+                                            'unit_key': receipt.get('unit_key'), 'owner': receipt.get('owner')})
+                    except UnicodeError:
+                        pass
                 return value
             try:
-                repair = repair_facts_v2(
-                    repair_llm, member, v2_doc, rejected, deadline - 5,
-                    **({"coverage_missing": True} if coverage_missing else {}))
+                with semantic_transport.quality_repair():
+                    repair = repair_facts_v2(
+                        repair_llm, member, v2_doc, rejected, deadline - 5,
+                        **({"coverage_missing": True} if coverage_missing else {}))
             except runtime.RuntimeGuardError:
                 if not sent:
                     # stopped before any dispatch — the one repair
@@ -766,7 +969,27 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
             v4.record_stage(ledger, pid, mid, fp, policy,
                             "s3_repair", "completed",
                             repaired=repair["repaired"])
-            ledger.artifact_add(
+            evidence = None
+            if repair['repaired'] and len(answers) == len(sent) and answers and original_row and audit_row:
+                from inference_dependency_loss import source_binding
+                try:
+                    original_meta = strict_json(original_row['meta'])
+                    audit_meta = strict_json(audit_row['meta'])
+                    if (strict_json(original_row['content']) == v2_doc
+                            and original_meta.get('fingerprint') == fp
+                            and original_meta.get('policy_fingerprint') == policy
+                            and audit_meta.get('doc_hash') == doc_hash
+                            and audit_meta.get('fingerprint') == fp
+                            and audit_meta.get('policy_fingerprint') == policy):
+                        evidence = {'version': 1, 'original_artifact_id': original_row['artifact_id'],
+                                    'audit_artifact_id': audit_row['artifact_id'], 'started_artifact_id': started,
+                                    'source_binding': source_binding(ledger.db, pid, mid),
+                                    'target_revision': member['revision'], 'original_doc_hash': doc_hash,
+                                    'repaired_doc_hash': semantic_facts.doc_hash(repair['doc']),
+                                    'coverage_missing': coverage_missing, 'answers': answers}
+                except (TypeError, ValueError, KeyError, RecursionError):
+                    pass
+            completed_id = ledger.artifact_add(
                 KIND_FACT_REPAIR,
                 json.dumps({"rejected": rejected,
                             "repaired": repair["repaired"],
@@ -774,6 +997,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                                 repair["repaired_fact_ids"],
                             "owner_chunk_ids":
                                 repair["owner_chunk_ids"],
+                            **({'__mcs_internal_proof_v1': evidence} if evidence is not None else {}),
                             # pair scan cut by the deadline: the
                             # repaired doc was not kept and the
                             # spent repair parks for review below
@@ -802,6 +1026,7 @@ def _fact_canonical_audit(ledger, scfg, member, pid, mid, fp, policy,
                           "schema": SCHEMA_VERSION,
                           "fact_source": fact_source,
                           "repaired": True,
+                          **({'repair_artifact_id': completed_id} if evidence is not None else {}),
                           "coverage_status":
                               v2_doc["coverage"]["status"],
                           "facts": len(v2_doc["facts"]),
@@ -995,14 +1220,14 @@ def _obtain_summary(ledger, scfg, bundle, llm_fn, guard, pid, mid, fp, policy,
     producer = {"providers": [], "complete": False}
     if existing is not None:
         summary = existing["content"]
-        producer = _summary_producer(existing, fp, policy, revision)
+        producer = _summary_producer(existing, fp, policy, revision, db=ledger.db, bundle=bundle)
         if existing["meta"].get("input_oversize"):
             summary["_input_oversize"] = True
     else:
         candidate = current_artifact(ledger.db, KIND_CANDIDATE, mid, fp, policy)
         if candidate and candidate["meta"].get("publication_mode") == scfg["summary_mode"]:
             summary = candidate["content"]
-            producer = _summary_producer(candidate, fp, policy, revision)
+            producer = _summary_producer(candidate, fp, policy, revision, db=ledger.db, bundle=bundle)
         else:
             format_repair_id = None
             try:
@@ -1689,12 +1914,33 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                 repaired = True
                 if empty_repair:
                     empty_repair_id = repair_id
+                repair_answers = []
+
+                def summary_repair_llm(prompt):
+                    previous_requests = set(semantic_transport.inference_requests())
+                    value = llm_fn(prompt)
+                    receipt = semantic_transport.inference_receipt()
+                    contract = semantic_transport.inference_contract()
+                    if (not empty_repair and isinstance(value, str) and receipt is not None and contract is not None
+                            and receipt.get('reservation_id') not in previous_requests):
+                        import bounded_http
+                        try:
+                            if len(value.encode('utf-8')) <= bounded_http.MAX_RESPONSE_BYTES:
+                                repair_answers.append({'text': value,
+                                    'prompt_sha256': hashlib.sha256(prompt.encode('utf-8')).hexdigest(),
+                                    'reservation_id': receipt.get('reservation_id'), 'contract': contract,
+                                    'unit_key': receipt.get('unit_key'), 'owner': receipt.get('owner')})
+                        except UnicodeError:
+                            pass
+                    return value
+
                 try:
-                    summary2, repair_producer = _summarize_observed(
-                        llm_fn, bundle, mid, facts, verdicts.get(mid, {}),
-                        feedback=[f.get("code", "") + " " +
-                                  f.get("statement", f.get("claim", ""))
-                                  for f in code_f + jev_f])
+                    with (semantic_transport.quality_repair() if not empty_repair else nullcontext()):
+                        summary2, repair_producer = _summarize_observed(
+                            summary_repair_llm, bundle, mid, facts, verdicts.get(mid, {}),
+                            feedback=[f.get("code", "") + " " +
+                                      f.get("statement", f.get("claim", ""))
+                                      for f in code_f + jev_f])
                 except runtime.RuntimeGuardError as error:
                     if not runtime.llm_request_was_dispatched(error):
                         # A proven pre-dispatch stop did not spend the one
@@ -1714,6 +1960,37 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         break
                     raise
                 if summary2 is not None and summary2.get("_input_oversize") is not True:
+                    if not empty_repair and repair_producer.get('providers') in (['openai'], ['anthropic']):
+                        fact_kind = KIND_FACTS_V2 if fact_source == 'canonical' else KIND_FACTS
+                        refs = {}
+                        for key, kind in (('facts_id', fact_kind), ('assessment_id', KIND_ASSESS),
+                                          ('original_summary_id', KIND_SUMMARY), ('audit_id', KIND_AUDIT)):
+                            row = ledger.db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND project_id=? "
+                                "AND message_id=? AND artifact_id<? AND CASE WHEN json_valid(meta) THEN "
+                                "json_extract(meta,'$.fingerprint')=? AND json_extract(meta,'$.policy_fingerprint')=? "
+                                "AND (?!=? OR json_extract(meta,'$.fact_id') IS NULL) ELSE 0 END "
+                                "ORDER BY artifact_id DESC LIMIT 1",
+                                (kind, pid, mid, repair_id, fp, policy, kind, KIND_ASSESS)).fetchone()
+                            if row is not None:
+                                refs[key] = row['artifact_id']
+                        if len(repair_answers) == 1 and len(refs) == 4:
+                            repair_evidence = {'version': 1, 'project_id': pid, 'message_id': mid,
+                                'fact_kind': fact_kind, **refs, 'repair_id': repair_id, 'answer': repair_answers[0]}
+                            if _summary_repair_evidence(ledger.db, bundle, summary2, repair_evidence,
+                                                        fp, policy, members[mid]['revision']):
+                                guard('summary_repair_evidence')
+                                proof_id = ledger.artifact_add(
+                                    KIND_REPAIR, json.dumps({'target_message_id': mid,
+                                        '__mcs_internal_proof_v1': repair_evidence}, ensure_ascii=False),
+                                    project_id=pid, message_id=mid, model=semantic_transport.llm_model(),
+                                    meta={VERSION_KEY: CURRENT_VERSION, 'fingerprint': fp,
+                                          'policy_fingerprint': policy, 'repair_count': 1})
+                                repair_producer['repair_evidence'] = {
+                                    'artifact_id': proof_id, 'hash': mcs_util.payload_hash(repair_evidence)}
+                            else:
+                                repair_producer = {'providers': [], 'complete': False}
+                        else:
+                            repair_producer = {'providers': [], 'complete': False}
                     summary = summary2
                     producer = repair_producer
                     if empty_repair and isinstance(summary.get('claims'), list) and summary['claims']:
@@ -2718,6 +2995,13 @@ def _reprocess_proof_generation(ledger, cfg, scfg):
     import extract_llm
     cloud = cfg.get('cloud_llm', {})
     cloud = cloud if isinstance(cloud, dict) else {'mode': 'invalid'}
+    contract_cfg = dict(cfg)
+    contract_cloud = {key: value for key, value in cloud.items()
+                      if key not in runtime.CLOUD_OPERATING_LIMITS}
+    if contract_cloud:
+        contract_cfg['cloud_llm'] = contract_cloud
+    else:
+        contract_cfg.pop('cloud_llm', None)
     return mcs_util.payload_hash({
         'contract': _REPROCESS_PROOF_CONTRACT, 'target_classification': 'empty-body-v1',
         'execution': runtime.execution_generation(scfg),
@@ -2726,7 +3010,9 @@ def _reprocess_proof_generation(ledger, cfg, scfg):
         'context': patient_context_refresh._contract(cfg),
         'context_options': patient_context_refresh.options(cfg),
         'cloud': {key: cloud.get(key) for key in ('mode', 'routes', 'project_ids', 'exclude_project_ids', 'model')},
-        'cloud_contract': extract_llm._cloud_contract(cfg),
+        'cloud_contract': extract_llm._cloud_contract(contract_cfg),
+        'cloud_repair_contract': extract_llm._cloud_contract(
+            contract_cfg, route='semantic_backlog', purpose='quality_repair'),
         'rollup': rollup.config_generation(cfg),
         'dictionary': rollup.generation_signature(ledger.db),
         'references': tuple(ledger.db.execute('SELECT COUNT(*),MAX(artifact_id) FROM artifacts WHERE kind=?',

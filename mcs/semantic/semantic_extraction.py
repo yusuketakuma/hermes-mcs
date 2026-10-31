@@ -189,9 +189,10 @@ def _cached_provider(db, row, expected_model):
                 or not isinstance(row["model"], str) or row["model"] != expected_model):
             return None
         if provider == "local":
-            return provider if (actual == row["model"] and actual not in cloud_policy.PROVIDERS.values()
+            return provider if (actual == row["model"]
+                                and not any(model == actual for model, _ in cloud_policy.PRICE_DEFINITIONS)
                                 and rid is None) else None
-        if provider not in cloud_policy.PROVIDERS or actual != cloud_policy.PROVIDERS[provider]:
+        if provider not in cloud_policy.PROVIDERS:
             return None
         requests = meta.get("inference_requests")
         if not isinstance(rid, str) or not rid or not isinstance(requests, list) or not requests or requests[-1] != rid:
@@ -202,22 +203,46 @@ def _cached_provider(db, row, expected_model):
         if len(rows) != 1:
             return None
         reservation = cloud_policy.reservation_evidence(db, rows[0]["artifact_id"])["reservation"]
-        return provider if (reservation.get("reservation_id") == rid and reservation.get("model") == actual
+        if not (reservation.get("reservation_id") == rid and reservation.get("model") == actual
                             and reservation.get("route") == "semantic_backlog"
                             and reservation.get("project_id") == row["project_id"]
-                            and reservation.get("message_id") == row["message_id"]) else None
+                            and reservation.get("message_id") == row["message_id"]):
+            return None
+        contract = meta.get("actual_contract")
+        if contract is None:
+            # Older proofs have no effort field and only the original pinned model.
+            return provider if ("effort" not in reservation
+                                and actual == cloud_policy.PROVIDERS[provider]) else None
+        import extract_llm
+        import openai_client
+        effort, profile = reservation.get("effort"), reservation.get("profile")
+        definition = cloud_policy.PRICE_DEFINITIONS.get((actual, reservation.get("price_version")))
+        if definition is None or definition["provider"] != provider:
+            return None
+        if provider == "openai":
+            if (actual, effort) not in openai_client.VALID_MODEL_EFFORTS:
+                return None
+            if profile is not None and openai_client.PROFILE_DEFINITIONS.get(profile) != (actual, effort):
+                return None
+        elif effort is not None or profile is not None:
+            return None
+        selection = {"provider": provider, "model": actual, "effort": effort}
+        return provider if contract == extract_llm._cloud_contract(selection=selection) else None
     except (KeyError, TypeError, ValueError, RecursionError, OverflowError, AttributeError, sqlite3.Error):
         return None
 
 
 def _chunk_provider_binding(meta, project_id, message_id, model, provider, result_hash, reservation_id):
-    return {"version": 1, "stage": "chunk", "project_id": project_id, "message_id": message_id,
+    binding = {"version": 1, "stage": "chunk", "project_id": project_id, "message_id": message_id,
             "provider": provider, "actual_model": meta.get("actual_model"),
             "model": model, "source_fingerprint": meta.get("source_fingerprint"), "source_hash": meta.get("source_hash"),
             "revision": meta.get("revision"), "generation": meta.get("generation"), "chunk_index": meta.get("chunk_index"),
             "chunks_total": meta.get("chunks_total"), "chunk_hash": meta.get("chunk_hash"),
             "start_codepoint": meta.get("start_codepoint"), "end_codepoint": meta.get("end_codepoint"),
             "result_hash": result_hash, "reservation_id": reservation_id}
+    if "actual_contract" in meta:
+        binding["actual_contract"] = meta["actual_contract"]
+    return binding
 
 
 def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
@@ -225,7 +250,7 @@ def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
                    kind: str = KIND_CHUNK,
                    schema: str = SCHEMA_VERSION,
                    extra=None, generation: str | None = None, expected_model=None,
-                   expected_provider=None) -> dict[int, dict]:
+                   expected_provider=None, expected_contract=None) -> dict[int, dict]:
     if db is None:
         return {}
     cached = {}
@@ -286,6 +311,15 @@ def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
             provider = _cached_provider(db, row, expected_model) if expected_model is not None else None
             if expected_provider is not None and provider != expected_provider:
                 continue
+            if expected_contract is not None and expected_provider not in (None, 'local'):
+                actual_contract = meta.get('actual_contract')
+                if actual_contract is None and provider is not None:
+                    import extract_llm
+                    actual_contract = extract_llm._cloud_contract(selection={
+                        'provider': provider, 'model': meta.get('actual_model'),
+                        'effort': 'low' if provider == 'openai' else None})
+                if expected_contract is not None and actual_contract != expected_contract:
+                    continue
             cached[index] = {"facts": content["facts"],
                              "dropped": content.get("dropped", 0),
                              "extra": {k: content[k] for k in content
@@ -295,6 +329,15 @@ def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
                                                     "facts", "dropped"}}}
             if provider is not None:
                 cached[index]["provider"] = provider
+                if provider != 'local':
+                    contract = meta.get('actual_contract')
+                    if contract is None:
+                        import extract_llm
+                        contract = extract_llm._cloud_contract(selection={
+                            'provider': provider, 'model': meta.get('actual_model'),
+                            'effort': 'low' if provider == 'openai' else None})
+                    cached[index]['producer_contract'] = contract
+                    cached[index]['reservation_id'] = meta['provider_provenance']['reservation_id']
         except (KeyError, TypeError, ValueError, RecursionError):
             continue
     return cached
@@ -472,6 +515,10 @@ def _persist_chunk(ledger, project_id, message_id, model, source_fp,
         "actual_model": semantic_transport.inference_model(),
         "inference_requests": semantic_transport.inference_requests(),
     }
+    if provider in ("anthropic", "openai"):
+        contract = semantic_transport.inference_contract()
+        if contract is not None:
+            meta["actual_contract"] = contract
     if provider in ("local", "anthropic", "openai"):
         requests = meta["inference_requests"]
         rid = requests[-1] if provider != "local" and requests else None
@@ -519,7 +566,8 @@ def extract_facts_resumable(llm_fn, member: dict,
     cached = _cached_chunks((ledger.db if ledger is not None else None), project_id, message_id, source_fp,
                             body_hash, revision, specs, source,
                             generation=generation, expected_model=model,
-                            expected_provider=semantic_transport.inference_provider())
+                            expected_provider=semantic_transport.inference_provider(),
+                            expected_contract=semantic_transport.inference_contract())
 
     facts = []
     completed = []
@@ -760,7 +808,8 @@ def extract_facts_v2(llm_fn, member: dict,
                             body_hash, revision, specs, source,
                             kind=KIND_CHUNK_V2, schema=cache_schema,
                             extra=assembly.v2_chunk_ok, generation=generation, expected_model=model,
-                            expected_provider=semantic_transport.inference_provider())
+                            expected_provider=semantic_transport.inference_provider(),
+                            expected_contract=semantic_transport.inference_contract())
 
     atom_owner = {}
     for chunk in manifest["chunks"]:
@@ -893,7 +942,8 @@ def extract_facts_v2(llm_fn, member: dict,
 
 
 def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
-                            project_id, stored_doc: dict, stored_meta: dict, *, producer_out=None, sequence_out=None):
+                            project_id, stored_doc: dict, stored_meta: dict, *, producer_out=None, sequence_out=None,
+                            contracts_out=None):
     """Assemble stored chunks without model/preflight dispatch, writes or transaction ownership."""
     if sequence_out is not None:
         sequence_out['preflight'] = None
@@ -985,6 +1035,11 @@ def rebuild_facts_v2_cached(member: dict, db, source_fingerprint: str,
         providers = [cached[spec["index"]].get("provider") for spec in specs]
         producer_out.update(providers=sorted({p for p in providers if p is not None}),
                             complete=bool(specs) and all(p is not None for p in providers))
+    if contracts_out is not None:
+        contracts_out.extend({'provider': cached[spec['index']].get('provider'),
+                              'contract': cached[spec['index']].get('producer_contract'),
+                              'reservation_id': cached[spec['index']].get('reservation_id')}
+                             for spec in specs)
     if sequence_out is not None and specs and all(p is not None for p in providers):
         fields = [cached[spec['index']]['extra'] for spec in specs]
         if all(isinstance(field.get('jev_preflight'), dict)

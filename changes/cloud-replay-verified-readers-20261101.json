@@ -1,0 +1,8 @@
+{
+  "category": "fixed",
+  "title": "修復結果の参照前に保存証拠を確認",
+  "summary": "修復済みの抽出結果は、保存された証拠を確認できる場合に現在の結果として表示します。",
+  "upgrade": "更新を適用すると反映されます。従来形式の結果は従来の条件で扱います。",
+  "details": ["証拠を確認できない場合は、古い結果へ自動で戻さず未確認として扱います。"],
+  "refs": ["mcs/core/mcs_queries.py", "mcs/views/read_model.py", "mcs/views/structured_view.py"]
+}

@@ -557,7 +557,9 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
     block = cfg.get("cloud_llm")
     if (block is None or isinstance(block, dict) and "mode" not in block) and not cloud_errors:
         cloud, _ = cloud_policy.cloud_config(cfg, key_present=cloud_key)
-    cloud["provider"], cloud["model"] = provider, cloud_policy.PROVIDERS[provider]
+    cloud["provider"] = provider
+    if not isinstance(block, dict) or "model" not in block:
+        cloud["model"] = cloud_policy.PROVIDERS[provider]
     print("\n【保存前の確認】設定した送り先と、この後に保存する内容を確認してください。"
           "\n  ここで中止すると、今回の設定・認証情報・辞書は保存しません。")
     print(f"  実行方法: {shown(mode)}"
@@ -591,6 +593,15 @@ def confirm_save(cfg: dict, *, plugin_profile, key_presence=None) -> bool:
     print("  Jev設定: " + ", ".join(f"{key}={shown(semantic[key])}" for key in features)
           + f" / 1日の要求上限 {semantic['daily_request_budget']} / 対象 {project_scope}")
     print(f"  AI利用先: {cloud['provider']} / モデル {cloud['model']} / API別上限 {cloud['provider_budgets']}")
+    if provider == "openai":
+        for label, route, purpose in (("通常解析", "reextract", "backlog"),
+                                      ("患者コンテキスト", "patient_context", "patient_context"),
+                                      ("品質修復", "reextract", "quality_repair")):
+            selection, profile_errors = cloud_policy.profile_for_settings(cfg, cloud, route=route, purpose=purpose)
+            if profile_errors:
+                print(f"  {label}: 設定を確認できません")
+            else:
+                print(f"  {label}: {selection['model']} / 推論 {selection['effort']}")
     cloud_scope = "全対象" if cloud["project_ids"] is None else shown(cloud["project_ids"])
     if cloud["mode"] in ("on", "shadow") and cloud_key:
         print(f"  外部AI追加処理: {cloud['mode']} / 対象 {cloud_scope}。患者コンテキストと対象の再抽出で、"

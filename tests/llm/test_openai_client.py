@@ -2,6 +2,7 @@
 from contextlib import closing
 from datetime import datetime
 from decimal import Decimal
+import hashlib
 import json
 import time
 
@@ -50,6 +51,234 @@ def test_cache_write_details_survive_success_accounting_and_log(tmp_path, monkey
         assert not report["pricing_unverified"] and report["unresolved_requests"] == 0
         assert Decimal(report["monthly_cost_usd"]) == policy.usage_cost(tokens, model=client.MODEL)
         assert policy.usage_cost(tokens, model=client.MODEL) == policy.usage_cost(usage(), model=client.MODEL)
+
+
+@pytest.mark.parametrize('model,effort', [
+    ('gpt-6-luna', 'medium'), ('gpt-6.1-sol', 'medium'), ('gpt-6.1-sol', 'high'),
+])
+def test_profile_client_binds_model_effort_and_output_limit(model, effort):
+    instance = client.OpenAIClient('synthetic', model=model, effort=effort)
+    body = instance.body('synthetic prompt', 8192, None)
+    assert body['model'] == instance.model == model
+    assert body['reasoning'] == {'effort': effort}
+    assert body['max_output_tokens'] == 8192
+    assert body['store'] is False and body['service_tier'] == 'default'
+
+
+def test_sol_client_answer_uses_selected_model_and_rejects_other_model():
+    instance = client.OpenAIClient('synthetic', model=client.SOL_MODEL, effort='medium')
+    meta = {'usage': None}
+    assert instance.answer(response(model=client.SOL_MODEL), meta)['model'] == client.SOL_MODEL
+    with pytest.raises(AnthropicError, match='model_mismatch'):
+        instance.answer(response(model=client.MODEL), {'usage': None})
+
+
+@pytest.mark.parametrize('model,effort', [('gpt-6.1-sol', 'low'), ('unknown', 'high'),
+                                         ('gpt-6-luna', 'high'), ([], 'low')])
+def test_profile_client_rejects_unverified_model_effort(model, effort):
+    with pytest.raises(ValueError, match='openai_profile_invalid'):
+        client.OpenAIClient('synthetic', model=model, effort=effort)
+
+
+def test_sol_price_has_separate_snapshot_and_reserves_long_cache_write():
+    sol = client.SOL_MODEL
+    bound, tokens = 300000, 1000
+    assert policy.max_cost(tokens, input_bound=bound, model=sol, now=datetime(2026, 11, 1).timestamp()) == Decimal('1.515')
+    usage = {'input_tokens': 272001, 'output_tokens': 100, 'total_tokens': 272101,
+             'input_tokens_details': {'cached_tokens': 1, 'cache_write_tokens': 1}}
+    expected = (Decimal(271999) * 2 + Decimal('0.1') + Decimal('2.5')) * 2 + Decimal(100) * 15
+    assert policy.usage_cost(usage, model=sol) == expected / Decimal(1000000)
+    assert policy._price_definition(client.MODEL)['price_version'] == client.PRICE_VERSION
+    assert policy._price_definition(sol)['price_version'] == client.SOL_PRICE_VERSION
+
+
+def test_success_answer_hash_is_bound_to_settled_result_without_text(tmp_path, monkeypatch):
+    monkeypatch.setattr(policy, 'pricing_valid', lambda *args, **kwargs: True)
+    cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1]}}
+    answer = '合成回答 synthetic-canary'
+    raw = json.dumps(response(output=[{'type': 'message', 'role': 'assistant', 'content': [
+        {'type': 'output_text', 'text': answer}]}]), ensure_ascii=False).encode('utf-8')
+    instance = client.OpenAIClient('synthetic', post_fn=lambda *args: (200, {}, raw))
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        reserve = policy.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='synthetic')
+        result = instance.complete('synthetic prompt', deadline=time.monotonic() + 10, max_tokens=100,
+                                   reserve_fn=reserve,
+                                   after_result=lambda reservation, meta: policy.record_result(ledger, reservation, meta))
+        assert result['text'] == answer
+        row = ledger.artifacts('cloud_usage_result')[0]
+        metadata = json.loads(row['meta'])
+        digest = hashlib.sha256(answer.encode('utf-8')).hexdigest()
+        assert metadata['answer_text_sha256_v1'] == digest
+        assert answer not in row['meta'] and 'synthetic-canary' not in row['meta']
+        reservation_id = ledger.artifacts('cloud_usage_reserve')[0]['artifact_id']
+        evidence = policy.reservation_evidence(ledger.db, reservation_id)
+        assert evidence['result']['answer_text_sha256_v1'] == digest
+        assert evidence['result']['answer_finish_reason_v1'] == 'stop'
+        assert 'answer_text_sha256_v1' not in evidence['reservation']
+
+
+def test_prior_success_without_hash_keeps_accounting_and_has_no_proof(tmp_path, monkeypatch):
+    monkeypatch.setattr(policy, 'pricing_valid', lambda *args, **kwargs: True)
+    cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1]}}
+    instance = client.OpenAIClient('synthetic')
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        reservation = policy.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='synthetic')(
+            instance.body('synthetic prompt', 100, None), 2)
+        policy.record_result(ledger, reservation, {'model': client.MODEL, 'request_fp': reservation['request_fp'],
+            'usage': usage(), 'http_class': 'http_200', 'error_kind': None})
+        reservation_id = ledger.artifacts('cloud_usage_reserve')[0]['artifact_id']
+        evidence = policy.reservation_evidence(ledger.db, reservation_id)
+        assert 'answer_text_sha256_v1' not in evidence['result']
+        assert policy.usage_report(ledger)['pricing_unverified'] is False
+
+
+@pytest.mark.parametrize('bad', [None, True, 7, 'A' * 64, 'z' * 64, 'f' * 63])
+def test_invalid_stored_answer_hash_refuses_evidence_but_preserves_accounting(tmp_path, monkeypatch, bad):
+    monkeypatch.setattr(policy, 'pricing_valid', lambda *args, **kwargs: True)
+    cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1]}}
+    instance = client.OpenAIClient('synthetic')
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        reservation = policy.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='synthetic')(
+            instance.body('synthetic prompt', 100, None), 2)
+        policy.record_result(ledger, reservation, {'model': client.MODEL, 'request_fp': reservation['request_fp'],
+            'usage': usage(), 'http_class': 'http_200', 'error_kind': None})
+        row = ledger.artifacts('cloud_usage_result')[0]
+        metadata = json.loads(row['meta'])
+        metadata['answer_text_sha256_v1'] = bad
+        with ledger.db:
+            ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?',
+                              (json.dumps(metadata), row['artifact_id']))
+        reservation_id = ledger.artifacts('cloud_usage_reserve')[0]['artifact_id']
+        with pytest.raises(ValueError, match='cloud_receipt_invalid'):
+            policy.reservation_evidence(ledger.db, reservation_id)
+        report = policy.usage_report(ledger)
+        assert report['pricing_unverified'] is False
+        assert Decimal(report['monthly_cost_usd']) == policy.usage_cost(usage(), model=client.MODEL)
+
+
+@pytest.mark.parametrize('bad', [None, True, 'A' * 64, 'not-a-hash'])
+def test_result_writer_rejects_invalid_new_answer_hash(tmp_path, monkeypatch, bad):
+    monkeypatch.setattr(policy, 'pricing_valid', lambda *args, **kwargs: True)
+    cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1]}}
+    instance = client.OpenAIClient('synthetic')
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        reservation = policy.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='synthetic')(
+            instance.body('synthetic prompt', 100, None), 2)
+        with pytest.raises(AnthropicError, match='pricing_unverified'):
+            policy.record_result(ledger, reservation, {'model': client.MODEL, 'request_fp': reservation['request_fp'],
+                'usage': usage(), 'http_class': 'http_200', 'error_kind': None, 'answer_text_sha256_v1': bad})
+        assert not ledger.artifacts('cloud_usage_result')
+        assert Decimal(policy.usage_report(ledger)['max_reserved_cost_usd']) == Decimal(reservation['max_cost_usd'])
+
+
+def test_discarded_success_hash_never_becomes_reservation_evidence(tmp_path, monkeypatch):
+    monkeypatch.setattr(policy, 'pricing_valid', lambda *args, **kwargs: True)
+    cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1]}}
+    instance = client.OpenAIClient('synthetic')
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        reservation = policy.usage_reserver(ledger, cfg, route='reextract', project_id=1, unit_key='synthetic')(
+            instance.body('synthetic prompt', 100, None), 2)
+        policy.record_result(ledger, reservation, {'model': client.MODEL, 'request_fp': reservation['request_fp'],
+            'usage': usage(), 'http_class': 'http_200', 'error_kind': None,
+            'answer_text_sha256_v1': hashlib.sha256(b'synthetic').hexdigest()})
+        with ledger.db:
+            ledger.db.execute('BEGIN')
+            policy.record_disposition_tx(ledger, reservation, 'discarded_scope')
+        reservation_id = ledger.artifacts('cloud_usage_reserve')[0]['artifact_id']
+        with pytest.raises(ValueError, match='cloud_receipt_invalid'):
+            policy.reservation_evidence(ledger.db, reservation_id)
+        assert policy.usage_report(ledger)['pricing_unverified'] is False
+
+
+def test_reasoning_only_length_has_hash_for_returned_empty_text():
+    raw = json.dumps(response(status='incomplete', incomplete_details={'reason': 'max_output_tokens'},
+                              output=[{'type': 'reasoning'}])).encode()
+    recorded = []
+    instance = client.OpenAIClient('synthetic', post_fn=lambda *args: (200, {}, raw))
+    result = instance.complete('synthetic prompt', deadline=time.monotonic() + 10, max_tokens=100,
+                               after_result=lambda _reservation, meta: recorded.append(meta))
+    assert result['text'] == '' and result['finish_reason'] == 'length'
+    assert recorded[0]['answer_text_sha256_v1'] == hashlib.sha256(b'').hexdigest()
+    assert recorded[0]['answer_finish_reason_v1'] == 'length'
+
+
+def test_non_utf8_encodable_answer_is_charged_without_proof():
+    result = response(output=[{'type': 'message', 'role': 'assistant', 'content': [
+        {'type': 'output_text', 'text': '\ud800'}]}])
+    recorded = []
+    instance = client.OpenAIClient('synthetic', post_fn=lambda *args: (200, {}, json.dumps(result).encode()))
+    with pytest.raises(AnthropicError, match='contract_error'):
+        instance.complete('synthetic prompt', deadline=time.monotonic() + 10, max_tokens=100,
+                          after_result=lambda _reservation, meta: recorded.append(meta))
+    assert len(recorded) == 1 and recorded[0]['usage'] == usage()
+    assert recorded[0]['error_kind'] == 'contract_error' and 'answer_text_sha256_v1' not in recorded[0]
+
+
+def test_sol_selection_binds_reservation_result_and_budget(tmp_path, monkeypatch):
+    monkeypatch.setattr(policy, 'pricing_valid', lambda *args, **kwargs: True)
+    cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1]}}
+    selection, errors = policy.resolve_profile(cfg, route='patient_context', purpose='patient_context')
+    assert not errors
+    instance = client.OpenAIClient('synthetic', model=selection['model'], effort=selection['effort'])
+    body = instance.body('synthetic prompt', selection['max_tokens'], None)
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        reserve = policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1,
+                                        unit_key='synthetic', selection=selection)
+        invalid = {**body, 'reasoning': {'effort': 'high'}}
+        with pytest.raises(AnthropicError, match='contract_error'):
+            reserve(invalid, 2)
+        assert not ledger.artifacts('cloud_usage_reserve')
+        reservation = reserve(body, 2)
+        assert (reservation['model'], reservation['effort'], reservation['profile']) == (
+            client.SOL_MODEL, 'medium', 'sol-medium')
+        assert reservation['price_version'] == client.SOL_PRICE_VERSION
+        result = {'model': client.SOL_MODEL, 'request_fp': reservation['request_fp'],
+                  'usage': usage(), 'http_class': 'http_200', 'error_kind': None}
+        policy.record_result(ledger, reservation, result)
+        settled = json.loads(ledger.artifacts('cloud_usage_result')[0]['meta'])
+        assert (settled['model'], settled['effort'], settled['profile']) == (
+            client.SOL_MODEL, 'medium', 'sol-medium')
+        assert Decimal(settled['cost_usd']) == policy.usage_cost(usage(), model=client.SOL_MODEL)
+        assert Decimal(policy.usage_report(ledger)['providers']['openai']['cost_usd']) == policy.usage_cost(usage(), model=client.SOL_MODEL)
+
+
+def test_openai_models_share_provider_budget_and_keep_price_versions(tmp_path, monkeypatch):
+    monkeypatch.setattr(policy, 'pricing_valid', lambda *args, **kwargs: True)
+    cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1]}}
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        costs = []
+        for route, purpose in (('reextract', 'backlog'), ('patient_context', 'patient_context')):
+            selection, errors = policy.resolve_profile(cfg, route=route, purpose=purpose)
+            assert not errors
+            instance = client.OpenAIClient('synthetic', model=selection['model'], effort=selection['effort'])
+            body = instance.body('synthetic ' + route, selection['max_tokens'], None)
+            reservation = policy.usage_reserver(ledger, cfg, route=route, project_id=1,
+                                                unit_key=route, selection=selection)(body, 2)
+            policy.record_result(ledger, reservation, {
+                'model': selection['model'], 'request_fp': reservation['request_fp'],
+                'usage': usage(), 'http_class': 'http_200', 'error_kind': None})
+            costs.append(policy.usage_cost(usage(), model=selection['model'],
+                                           price_version=reservation['price_version']))
+        report = policy.usage_report(ledger)
+        assert not report['pricing_unverified']
+        assert Decimal(report['providers']['openai']['cost_usd']) == sum(costs)
+        assert Decimal(report['monthly_cost_usd']) == sum(costs)
+
+
+def test_sol_selection_zero_budget_blocks_before_reservation(tmp_path, monkeypatch):
+    monkeypatch.setattr(policy, 'pricing_valid', lambda *args, **kwargs: True)
+    cfg = {'cloud_llm': {'mode': 'on', 'provider': 'openai', 'project_ids': [1],
+                         'daily_cost_limit_usd': 0}}
+    selection, errors = policy.resolve_profile(cfg, route='patient_context', purpose='patient_context')
+    assert not errors
+    body = client.OpenAIClient('synthetic', model=selection['model'], effort=selection['effort']).body(
+        'synthetic prompt', selection['max_tokens'], None)
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        reserve = policy.usage_reserver(ledger, cfg, route='patient_context', project_id=1,
+                                        unit_key='synthetic', selection=selection)
+        with pytest.raises(AnthropicError):
+            reserve(body, 2)
+        assert not ledger.artifacts('cloud_usage_reserve')
 
 
 @pytest.mark.parametrize("writes", [
@@ -427,7 +656,8 @@ def test_mixed_provider_budgets_keep_legacy_reserves_and_original_receipts(tmp_p
         assert policy.budget_block_reason(ledger, capped) == "provider_daily_cap"
         legacy = {"cloud_llm": {"mode": "on", "project_ids": [1]}}
         policy.usage_reserver(ledger, legacy, route="reextract", project_id=1, unit_key="legacy")(
-            {"model": policy.MODEL, "max_tokens": 100}, 2)
+            {"model": policy.MODEL, "max_tokens": 100, "system": "synthetic system",
+             "messages": [{"role": "user", "content": "another synthetic prompt"}]}, 2)
         tally = policy._tally(ledger)
         assert tally.provider_totals["anthropic"] > 0 and tally.provider_totals["openai"] > 0
         assert policy.usage_report(ledger)["unresolved_requests"] == 1

@@ -31,7 +31,7 @@ def routed(tmp_path, monkeypatch):
     monkeypatch.setattr(worker, "_WRITER_STATE", (False, 1))
     monkeypatch.setattr(worker.extract, "_WRITER_STATE", (False, 1))
     monkeypatch.setattr(cloud_policy, "api_key", lambda *a: "synthetic-key")
-    monkeypatch.setattr(cloud_policy, "block_reason", lambda led, cfg, route, pid:
+    monkeypatch.setattr(cloud_policy, "block_reason", lambda led, cfg, route, pid, **_kwargs:
                         None if cloud_policy.eligible(cfg, route, pid) else "scope")
     monkeypatch.setattr(worker, "disk_free_mb", lambda db: 100000)
     monkeypatch.setattr(worker, "_prefilter_enabled", lambda: False)
@@ -93,6 +93,175 @@ def _bound_source(led):
     row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
     return row
+
+
+@pytest.mark.parametrize(("route", "purpose", "model", "effort", "tokens"), [
+    ("reextract", "backlog", "gpt-6-luna", "medium", 8192),
+    ("patient_context", "patient_context", "gpt-6.1-sol", "medium", 16384),
+    ("patient_context", "quality_repair", "gpt-6.1-sol", "high", 32768),
+])
+def test_cloud_unit_pins_profile_through_body_and_reservation(routed, monkeypatch, route, purpose, model, effort, tokens):
+    from contextlib import nullcontext
+    led, cfg, _calls, reserved, _results = routed
+    cfg["cloud_llm"]["provider"] = "openai"
+    monkeypatch.setattr(cloud_policy, "provider_key", lambda provider, root=None: "synthetic-key")
+    monkeypatch.setattr(worker.cloud_backlog, "request_slot", lambda *_args: nullcontext(True))
+    monkeypatch.setattr(worker.cloud_backlog, "owner_alive", lambda: True)
+    received = []
+    original = worker.openai_client.OpenAIClient
+    class Client(original):
+        def request(self, method, body, timeout, **kwargs):
+            received.append(body)
+            return 200, {}, json.dumps({"status": "completed", "model": model, "service_tier": "default",
+                "output": [{"type": "message", "role": "assistant",
+                            "content": [{"type": "output_text", "text": '{}'}]}],
+                "usage": {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3,
+                          "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}}).encode()
+    monkeypatch.setattr(worker.openai_client, "OpenAIClient", Client)
+    provider = worker._CloudProvider(led, cfg, route=route, purpose=purpose, project_id=1,
+        unit_key="synthetic", deadline=time.monotonic() + 120,
+        current=lambda: True, dispatch=lambda fn, **_kwargs: fn())
+    response = provider("synthetic prompt", deadline=time.monotonic() + 120, max_tokens=1600)
+    assert response["status"] == 200 and len(received) == len(reserved) == 1
+    assert received[0]["model"] == model and received[0]["reasoning"] == {"effort": effort}
+    assert received[0]["max_output_tokens"] == tokens
+    assert dict(reserved[0]["identity"]["selection"]) == dict(provider.selection)
+    assert provider.contract == worker._cloud_contract(selection=provider.selection)
+
+
+@pytest.mark.parametrize("change", ["none", "answer", "prompt", "contract", "owner", "unit", "missing_hash", "missing_finish"])
+def test_repair_answer_evidence_requires_exact_settled_request(tmp_path, monkeypatch, change):
+    import hashlib
+
+    ledger = _ledger(tmp_path)
+    try:
+        ledger.save_messages([_message(1, "完全合成の記録です。", project_id=1)])
+        cfg = {"cloud_llm": {"mode": "on", "provider": "openai", "project_ids": [1]}}
+        selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="quality_repair")
+        assert not errors
+        monkeypatch.setattr(cloud_policy, "pricing_valid", lambda now=None, *, model=None: True)
+        client = worker.openai_client.OpenAIClient("synthetic", model=selection["model"], effort=selection["effort"])
+        prompt, answer = "synthetic prompt", '{"synthetic":"answer"}'
+        body = client.body(prompt, selection["max_tokens"], None)
+        owner = {"lease": "synthetic-lease"}
+        reservation = real_usage_reserver(ledger, cfg, route="reextract", project_id=1, message_id=1,
+            unit_key="synthetic-unit", owner=owner, selection=selection)(body, 30)
+        usage = {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3,
+                 "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}
+        result = {"model": selection["model"], "request_fp": reservation["request_fp"],
+                  "http_class": "http_200", "usage": usage, "error_kind": None,
+                  "answer_finish_reason_v1": "stop"}
+        if change != "missing_hash":
+            result["answer_text_sha256_v1"] = hashlib.sha256(answer.encode()).hexdigest()
+        if change == "missing_finish":
+            result.pop("answer_finish_reason_v1")
+        real_record_result(ledger, reservation, result)
+        row = ledger.db.execute("SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_reserve'").fetchone()
+        contract = worker._cloud_contract(selection=selection)
+        args = {"reservation_artifact_id": row[0], "reservation_id": reservation["reservation_id"],
+                "route": "reextract", "project_id": 1, "message_id": 1,
+                "unit_key": "synthetic-unit", "owner": owner, "prompt": prompt,
+                "answer_text": answer, "contract": contract}
+        if change == "answer":
+            args["answer_text"] += "tampered"
+        elif change == "prompt":
+            args["prompt"] += "tampered"
+        elif change == "contract":
+            args["contract"] = {**contract, "prompt": "0" * 16}
+        elif change == "owner":
+            args["owner"] = {"lease": "changed"}
+        elif change == "unit":
+            args["unit_key"] = "other-unit"
+        if change == "none":
+            assert worker._cloud_repair_answer_evidence(ledger.db, **args)["reservation"] == reservation
+            from types import SimpleNamespace
+            provider = SimpleNamespace(completed_reservations=[reservation], ledger=ledger,
+                contract=contract, purpose="quality_repair", dispatch=lambda fn, **_kwargs: fn())
+            origin = worker._cloud_origin_for_checkpoint(provider, prompt, answer)
+            assert origin["answer_text"] == answer and origin["reservation_artifact_id"] == row[0]
+            assert origin["reservation_id"] == reservation["reservation_id"] and origin["witness"]
+        else:
+            with pytest.raises(ValueError):
+                worker._cloud_repair_answer_evidence(ledger.db, **args)
+    finally:
+        ledger.close()
+
+
+def test_repair_source_span_distinguishes_repeated_split_text(monkeypatch):
+    monkeypatch.setattr(worker, "plan_chunks", lambda text, size: [
+        text[index:index + size] for index in range(0, len(text), size)])
+    assert worker._chunk_span("ABCDABCD", 4, "1:1", {1: 2}) == ("CD", 6)
+    assert worker._chunk_span("ABCDABCD", 4, "0:1", {0: 2}) == ("CD", 2)
+
+
+def test_pending_repair_origin_rebuilds_prompt_from_current_source(tmp_path, monkeypatch):
+    import hashlib
+    from types import SimpleNamespace
+
+    ledger = _ledger(tmp_path)
+    try:
+        ledger.save_messages([_message(1, "完全合成の経過です。", project_id=1)])
+        row = _bound_source(ledger)
+        cfg = {"cloud_llm": {"mode": "on", "provider": "openai", "project_ids": [1]}}
+        selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog")
+        assert not errors
+        monkeypatch.setattr(cloud_policy, "pricing_valid", lambda now=None, *, model=None: True)
+        contract = worker._cloud_contract(selection=selection)
+        row.update(_target=("", selection["model"]), _provider_contract=contract)
+        prefix, _ = worker._extract_prompt_context(None, None, None)
+        hints = worker._rule_hints(row)
+        hint = worker._hint_block(hints) if hints else ""
+        prompt = (prefix + (worker._HINT_HEAD + hint + worker._HINT_TAIL if hint else "")
+                  + worker._target_head(row["posted_at"]) + row["body_text"] + worker._PROMPT_TAIL)
+        answer = json.dumps({"symptoms": []})
+        client = worker.openai_client.OpenAIClient("synthetic", model=selection["model"], effort=selection["effort"])
+        request = client.body(prompt, selection["max_tokens"], None)
+        reservation = real_usage_reserver(ledger, cfg, route="reextract", project_id=1, message_id=1,
+            unit_key="1", owner={"lease": 123.0}, selection=selection)(request, 30)
+        usage = {"input_tokens": 2, "output_tokens": 1, "total_tokens": 3,
+                 "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0}}
+        real_record_result(ledger, reservation, {"model": selection["model"], "request_fp": reservation["request_fp"],
+            "http_class": "http_200", "usage": usage, "error_kind": None,
+            "answer_text_sha256_v1": hashlib.sha256(answer.encode()).hexdigest(), "answer_finish_reason_v1": "stop"})
+        provider = SimpleNamespace(completed_reservations=[reservation], ledger=ledger, contract=contract,
+            purpose="backlog", dispatch=lambda fn, **_kwargs: fn())
+        origin = {**worker._cloud_origin_for_checkpoint(provider, prompt, answer), "qc_src": None}
+        candidate = worker.extract_validation.validate_piece(json.loads(answer), row["body_text"], row["body_text"],
+                                                              {}, False, None, source_offset=0)
+        candidate.pop("reply", None)
+        assert worker._checkpoint_quality_origin(ledger.db, row, None, 0, worker._CHUNK_SIZE, {}, origin, candidate) == origin
+        altered = {**row, "body_text": "別の完全合成の経過です。"}
+        assert worker._checkpoint_quality_origin(ledger.db, altered, None, 0, worker._CHUNK_SIZE, {}, origin, candidate) is None
+        assert worker._checkpoint_quality_origin(ledger.db, row, None, 0, worker._CHUNK_SIZE, {},
+                                                  {**origin, "answer_text": "{}"}, candidate) is None
+    finally:
+        ledger.close()
+
+
+def test_different_quality_profile_is_not_sent_without_final_replay(monkeypatch):
+    from types import SimpleNamespace
+
+    calls, states = [], []
+    monkeypatch.setattr(worker, "_llm_call", lambda *_args, **_kwargs: calls.append("normal") or {"symptoms": []})
+    monkeypatch.setattr(worker.extract_quality, "completeness_issues", lambda *_args: ["synthetic-missing"])
+    monkeypatch.setattr(worker.extract_quality, "is_thin", lambda *_args: False)
+    child = SimpleNamespace(selection={"model": "synthetic-quality"})
+    monkeypatch.setattr(cloud_policy, "resolve_profile", lambda *_args, **_kwargs: (child.selection, []))
+    class Provider:
+        selection = {"model": "synthetic-normal"}
+        _profile_cfg = {}
+        def dispatch(self, fn, **_kwargs):
+            return fn()
+        def spawn_quality_repair(self):
+            return child
+    def checkpoint(_key, value):
+        states.append(value.get("_quality_status"))
+        value.quality_started_id = len(states)
+        return True
+    result = worker.llm_extract("完全合成の経過です。", hints={}, provider=Provider(),
+                                deadline=time.monotonic() + 180, on_chunk=checkpoint)
+    assert result is worker._DEFERRED
+    assert calls == ["normal"] and states == ["pending"]
 
 
 def _assert_legacy_retained(led, before):
@@ -456,7 +625,7 @@ def test_scope_change_while_reserving_never_starts_http(routed, monkeypatch, cha
             if change == "scope":
                 cfg["cloud_llm"]["exclude_project_ids"] = [1]
             elif change == "stop":
-                monkeypatch.setattr(cloud_policy, "block_reason", lambda *args: "paused")
+                monkeypatch.setattr(cloud_policy, "block_reason", lambda *args, **kwargs: "paused")
             elif change == "daily_cap":      # lowered between reservation and the send
                 cfg["cloud_llm"]["daily_request_budget"] = 0
             elif change == "monthly_cap":
@@ -499,8 +668,9 @@ def test_openai_uses_selected_key_model_and_contract(routed, monkeypatch):
     seen = []
 
     class Client:
-        def __init__(self, key):
+        def __init__(self, key, *, model, effort):
             assert key == "synthetic-openai"
+            assert (model, effort) == ("gpt-6-luna", "medium")
 
         def complete(self, prompt, **kwargs):
             kwargs["before_attempt"]()
@@ -1323,7 +1493,7 @@ def test_run_window_end_stops_the_next_post_but_keeps_an_arrived_result(routed, 
     provider.commit_guard()                            # a response that already arrived is still saved
     # A stop or expired pricing after the response stops new sends, not the paid result.
     with monkeypatch.context() as patch:
-        patch.setattr(cloud_policy, "global_block_reason", lambda ledger: "paused")
+        patch.setattr(cloud_policy, "global_block_reason", lambda ledger, **kwargs: "paused")
         with pytest.raises(worker.CloudFallback):
             provider.guard()
         provider.commit_guard()
@@ -1547,3 +1717,156 @@ def test_paid_carry_survives_lowered_cap_and_blocks_next_send(routed, monkeypatc
         next_unit("different synthetic request", deadline=deadline, max_tokens=100)
     assert len(posts) == len(led.artifacts("cloud_usage_reserve")) == len(led.artifacts("cloud_usage_result")) == 1
     assert not led.db.in_transaction
+
+
+@pytest.mark.parametrize('split', ['none', 'initial', 'repair'],
+                         ids=['one-leaf', 'initial-length-split', 'high-repair-length-split'])
+@pytest.mark.parametrize('damage', ['none', 'proof_missing', 'answer_changed', 'repair_answer_changed', 'receipt_missing'])
+def test_high_repair_final_proof_survives_checkpoint_cleanup(routed, monkeypatch, tmp_path, split, damage):
+    """Paid repairs remain verifiable after the original checkpoint rows are removed."""
+    from contextlib import nullcontext
+
+    led, cfg, _, _, _ = routed
+    _use_real_cloud_accounting(monkeypatch)
+    cfg['cloud_llm']['provider'] = 'openai'
+    monkeypatch.setattr(worker, 'HOME', str(tmp_path))
+    monkeypatch.setattr(cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')
+    monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
+    monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
+    unit = '本人に発熱と咳があります。本人の血圧120/80です。'
+    second = '本人は寒気があります。血圧120/80を確認しました。'
+    body = unit + ('\n' + second if split != 'none' else '')
+    led.save_messages([_message(1, body, project_id=1)])
+    led.artifact_add(worker.KIND, '{}', project_id=1, message_id=1,
+        meta={'hash': _hash(led), 'extract_version': worker.EXTRACT_VERSION - 1})
+    with led.db:
+        led.db.execute('UPDATE messages SET first_seen=? WHERE message_id=1', (time.time() - 601,))
+        led.db.execute('UPDATE message_revisions SET observed_at=? WHERE message_id=1', (time.time() - 601,))
+        cloud_policy.capture_history_tx(led.db, 'synthetic-final-proof', time.time())
+
+    sends, states = [], []
+    original_persist = worker._persist_chunks
+    def persist(ledger, row, chunks, context=None, **kwargs):
+        accepted = original_persist(ledger, row, chunks, context, **kwargs)
+        if accepted and kwargs.get('split_size') is None:
+            for value in chunks.values():
+                states.append(value.get('_quality_status') or 'completed')
+        return accepted
+    monkeypatch.setattr(worker, '_persist_chunks', persist)
+    real_client = worker.openai_client.OpenAIClient
+    class Client(real_client):
+        def request(self, method, request, timeout, **kwargs):
+            assert timeout > 0 and not led.db.in_transaction
+            prompt = request['input']
+            piece = prompt.rsplit('<<<\n', 1)[1].split('\n>>>', 1)[0]
+            sends.append((request['model'], request['reasoning']['effort'], piece))
+            truncated = (piece == body and (split == 'initial' and request['reasoning']['effort'] != 'high'
+                         or split == 'repair' and request['reasoning']['effort'] == 'high'))
+            symptoms = [{'text': text, 'status': 'ongoing', 'subject': 'patient', 'evidence': text}
+                        for text in ('発熱', '咳', '寒気') if text in piece]
+            answer = {'symptoms': symptoms}
+            if request['reasoning']['effort'] == 'high' and '血圧120/80' in piece:
+                answer['vitals'] = {'sbp': 120, 'dbp': 80}
+            return 200, {}, json.dumps({
+                'status': 'incomplete' if truncated else 'completed',
+                **({'incomplete_details': {'reason': 'max_output_tokens'}} if truncated else {}),
+                'model': self.model, 'service_tier': 'default',
+                'output': [{'type': 'reasoning'}] if truncated else [{'type': 'message', 'role': 'assistant', 'content': [
+                    {'type': 'output_text', 'text': json.dumps(answer, ensure_ascii=False)}]}],
+                'usage': {'input_tokens': 2, 'output_tokens': 1, 'total_tokens': 3,
+                          'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0}}}).encode()
+    monkeypatch.setattr(worker.openai_client, 'OpenAIClient', Client)
+    monkeypatch.setattr(worker, '_probe_format', lambda **_kwargs: pytest.fail('unexpected local inference'))
+
+    result = worker.run_pending(led, limit=1, workers=1, budget_s=600, cloud_only=True)
+    assert result['done'] == 1, (result, states, sends)
+    assert 'pending' in states and 'started' in states and 'completed' in states
+    assert any(model == 'gpt-6.1-sol' and effort == 'high' for model, effort, _ in sends)
+    assert all(model == 'gpt-6-luna' for model, effort, _ in sends if effort != 'high')
+    if split == 'repair':
+        full_high = [index for index, (model, effort, piece) in enumerate(sends)
+                     if model == 'gpt-6.1-sol' and effort == 'high' and piece == body]
+        assert len(full_high) == 1
+        assert any(piece != body for _, _, piece in sends[full_high[0] + 1:])
+        results = [json.loads(row['meta']) for row in led.artifacts('cloud_usage_result', project_id=1, message_id=1)]
+        assert any(row.get('model') == 'gpt-6.1-sol' and row.get('answer_finish_reason_v1') == 'length'
+                   for row in results)
+    assert not led.artifacts('extract_llm_chunk', message_id=1)
+    [final] = _current_artifacts(led)
+    content = json.loads(final['content'])
+    assert '__mcs_internal_proof_v1' in content
+    assert content['vitals']['sbp'] == 120 and content['vitals']['dbp'] == 80
+    message = led.db.execute('SELECT * FROM messages WHERE message_id=1').fetchone()
+    final_integrity = json.loads(final['meta'])['integrity']
+    assert worker.progress_for_message(led.db, message, model='gpt-6-luna')['state'] == 'complete'
+    assert len(final_integrity['completeness']) == final_integrity['completeness_chunks']
+    if split == 'repair':
+        assert '0' not in final_integrity['completeness']
+    first_sends = len(sends)
+    evidence_failures = []
+
+    if damage == 'proof_missing':
+        content.pop('__mcs_internal_proof_v1')
+    elif damage == 'answer_changed':
+        for checkpoint in content['__mcs_internal_proof_v1']['rows']:
+            checkpoint_content = json.loads(checkpoint['content'])
+            origin = checkpoint_content.get('__quality_origin_v1')
+            if isinstance(origin, dict) and isinstance(origin.get('answer_text'), str):
+                origin['answer_text'] += ' '
+                checkpoint['content'] = json.dumps(checkpoint_content, ensure_ascii=False)
+                break
+        else:
+            pytest.fail('missing paid answer in protected checkpoint')
+    elif damage == 'repair_answer_changed':
+        import hashlib
+        for checkpoint in content['__mcs_internal_proof_v1']['rows']:
+            checkpoint_content = json.loads(checkpoint['content'])
+            checkpoint_meta = json.loads(checkpoint['meta'])
+            repair = checkpoint_content.get('__quality_repair_v1')
+            if not isinstance(repair, dict) or ('split_size' in checkpoint_meta) != (split == 'repair'):
+                continue
+            response = repair['response']
+            receipt = cloud_policy.reservation_evidence(led.db, response['reservation_artifact_id'])
+            expected_finish = 'length' if split == 'repair' else 'stop'
+            assert receipt['result']['answer_finish_reason_v1'] == expected_finish
+            assert receipt['result']['answer_text_sha256_v1'] == hashlib.sha256(response['answer_text'].encode()).hexdigest()
+            response['answer_text'] += ' '
+            checkpoint['content'] = json.dumps(checkpoint_content, ensure_ascii=False)
+            if 'provider_leaf' in checkpoint_meta:
+                checkpoint_meta['provider_leaf']['result_hash'] = worker._provider_result_hash(checkpoint['content'])
+                checkpoint['meta'] = json.dumps(checkpoint_meta, ensure_ascii=False)
+            else:
+                assert expected_finish == 'length'
+            assert receipt['result']['answer_text_sha256_v1'] != hashlib.sha256(response['answer_text'].encode()).hexdigest()
+            break
+        else:
+            pytest.fail('missing requested paid repair answer')
+        original_evidence = worker._cloud_repair_answer_evidence
+        def evidence(*args, **kwargs):
+            try:
+                return original_evidence(*args, **kwargs)
+            except ValueError:
+                evidence_failures.append((kwargs['reservation_id'], kwargs['finish_reason']))
+                raise
+        monkeypatch.setattr(worker, '_cloud_repair_answer_evidence', evidence)
+    if damage in ('proof_missing', 'answer_changed', 'repair_answer_changed'):
+        with led.db:
+            changed_meta = json.loads(final['meta'])
+            if damage in ('answer_changed', 'repair_answer_changed'):
+                changed_meta['internal_proof_hash'] = worker._internal_proof_hash(content['__mcs_internal_proof_v1'])
+            led.db.execute('UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?',
+                           (json.dumps(content, ensure_ascii=False), json.dumps(changed_meta), final['artifact_id']))
+    elif damage == 'receipt_missing':
+        with led.db:
+            rows = led.artifacts('cloud_usage_result', project_id=1, message_id=1)
+            assert rows
+            if split == 'repair':
+                rows = [row for row in rows if json.loads(row['meta']).get('model') == 'gpt-6.1-sol'
+                        and json.loads(row['meta']).get('answer_finish_reason_v1') == 'length']
+                assert len(rows) == 1
+            led.db.execute('DELETE FROM artifacts WHERE artifact_id=?', (rows[-1]['artifact_id'],))
+    expected = 'complete' if damage == 'none' else 'attention'
+    assert worker.progress_for_message(led.db, message, model='gpt-6-luna')['state'] == expected
+    if damage == 'repair_answer_changed':
+        assert evidence_failures == [(response['reservation_id'], expected_finish)]
+    assert len(sends) == first_sends

@@ -19,6 +19,20 @@ _job_model = ContextVar("semantic_job_model", default=None)
 _inference_trace = ContextVar("semantic_inference_trace", default=None)
 _inference_target = ContextVar("semantic_inference_target", default=None)
 _inference_generation = ContextVar("semantic_inference_generation", default=None)
+_inference_purpose = ContextVar("semantic_inference_purpose", default="backlog")
+_job_providers = ContextVar("semantic_job_providers", default=None)
+
+
+@contextmanager
+def quality_repair():
+    """Select the repair profile only while executing a reserved QC repair."""
+    purpose = _inference_purpose.set("quality_repair")
+    model = _job_model.set(_job_model.get())
+    try:
+        yield
+    finally:
+        _job_model.reset(model)
+        _inference_purpose.reset(purpose)
 
 
 @contextmanager
@@ -75,21 +89,38 @@ def inference_model() -> str:
     return provider.model if provider is not None else llm_model()
 
 
+def inference_contract():
+    """Return the fixed request contract of the active cloud producer."""
+    provider = _job_model.get()
+    return dict(provider.contract) if provider is not None else None
+
+
+def inference_receipt():
+    """Return the last completed cloud reservation for the active producer."""
+    provider = _job_model.get()
+    if provider is None or not provider.completed_reservations:
+        return None
+    return dict(provider.completed_reservations[-1])
+
+
 def inference_provider() -> str:
     """Identify the current inference backend without inferring old provenance."""
     provider = _job_model.get()
     if provider is None:
         return 'local'
-    import cloud_policy
-    return next((name for name, model in cloud_policy.PROVIDERS.items()
-                 if provider.model == model), 'unknown')
+    return provider.selection['provider']
 
 
 def inference_requests() -> list:
     """Keep actual paid calls distinct from reused local or cloud stage results."""
-    provider = _job_model.get()
-    return ([r["reservation_id"] for r in provider.completed_reservations]
-            if provider is not None else [])
+    providers = _job_providers.get()
+    if providers is None:
+        provider = _job_model.get()
+        providers = [provider] if provider is not None else []
+    else:
+        current = _job_model.get()
+        providers = [p for p in providers if p is not current] + ([current] if current is not None else [])
+    return [r["reservation_id"] for provider in providers for r in provider.completed_reservations]
 
 
 @contextmanager
@@ -129,10 +160,17 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         return current() and cloud_policy.history_thread_snapshot(
             ledger.db, job["project_id"], job["message_id"]) == scope_snapshot
 
-    provider = extract_llm._CloudProvider(
-        ledger, cfg, route="semantic_backlog", project_id=job["project_id"],
-        message_id=job["message_id"], unit_key=f"semantic:{job['job_id']}:{pl.get('generation', '')}",
-        deadline=deadline, current=scoped_current, dispatch=dispatch, transport=request)
+    providers = {}
+
+    def get_provider(purpose):
+        if purpose not in providers:
+            providers[purpose] = extract_llm._CloudProvider(
+                ledger, cfg, route="semantic_backlog", purpose=purpose, project_id=job["project_id"],
+                message_id=job["message_id"], unit_key=f"semantic:{job['job_id']}:{pl.get('generation', '')}",
+                deadline=deadline, current=scoped_current, dispatch=dispatch, transport=request)
+        return providers[purpose]
+
+    provider = get_provider("backlog")
 
     switched = False
 
@@ -146,7 +184,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
 
     def local(prompt, timeout):
         nonlocal switched
-        if (local_fallback is None or provider.possibly_sent or not scoped_current()
+        if (local_fallback is None or any(p.possibly_sent for p in providers.values()) or not scoped_current()
                 or fallback_current is not None and not fallback_current()):
             raise runtime.LLMNotSent('cloud_fallback_unavailable')
         switched = True
@@ -155,7 +193,13 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
 
     def chat(prompt, timeout=None):
         if switched:
+            _job_model.set(None)
             return call_local(prompt, timeout)
+        try:
+            provider = get_provider(_inference_purpose.get())
+        except extract_llm.CloudFallback:
+            raise runtime.LLMNotSent('cloud_profile_unavailable') from None
+        _job_model.set(provider)
         _failed(None)
         target = _inference_target.get()
         provider.message_id = target[0] if target else job["message_id"]
@@ -179,26 +223,25 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
                                   semantic_generation=_inference_generation.get(), semantic_phase=target[1])
         try:
             response = provider(prompt, deadline=min(deadline, time.monotonic() + (timeout or LLM_TIMEOUT)),
-                                max_tokens=LLM_LONG_MAX_TOKENS)
+                                max_tokens=provider.selection['max_tokens'] or LLM_LONG_MAX_TOKENS)
         except extract_llm.CloudBusy:
             if local_fallback is not None:
                 return local(prompt, timeout)
             raise runtime.LLMNotSent("cloud_capacity") from None
         except extract_llm.CloudFallback as error:
-            if local_fallback is not None and str(error) != 'cloud_unit_changed' and not provider.possibly_sent:
+            if (local_fallback is not None and str(error) != 'cloud_unit_changed'
+                    and not any(p.possibly_sent for p in providers.values())):
                 return local(prompt, timeout)
             current()
             return _failed("cloud_failed")
         error = local_llm.acceptance_error(response)
         if error:
             return _failed(error)
-        import anthropic_client
-        import openai_client
-        provider_name = {anthropic_client.MODEL: "anthropic", openai_client.MODEL: "openai"}.get(provider.model)
-        _record_inference(provider_name)
+        _record_inference(provider.selection['provider'])
         return response["text"]
 
     token = _job_model.set(provider)
+    providers_token = _job_providers.set(providers.values())
     try:
         yield chat
     except runtime.RuntimeBudgetShort:
@@ -206,9 +249,11 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         raise
     except runtime.RuntimeGuardError:
         if lock_lost is None:
-            provider.discard()
+            for selected in providers.values():
+                selected.discard()
         raise
     finally:
+        _job_providers.reset(providers_token)
         _job_model.reset(token)
 # The per-call timeout allows bounded fact documents to finish under
 # shared load. The drain also uses this as timeout_cap, except in the

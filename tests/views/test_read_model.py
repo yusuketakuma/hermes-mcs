@@ -43,6 +43,70 @@ def _hash_of(db, mid):
         (mid,)).fetchone()[0]
 
 
+def test_machine_model_rejects_unverified_latest_marked_extract(tmp_path, monkeypatch):
+    import extract_llm
+    import mcs_queries
+
+    db = _db(tmp_path, (1,))
+    try:
+        source_hash = _hash_of(db, 1)
+        _artifact(db, 'extract_v1', 1, {'symptoms': ['synthetic-rule']}, {'hash': source_hash})
+        _artifact(db, 'extract_llm', 1, {'symptoms': ['synthetic-old']}, {'hash': source_hash})
+        _artifact(db, 'extract_llm', 1, {'symptoms': ['synthetic-new'],
+                  '__mcs_internal_proof_v1': {'answer': 'SYNTHETIC_PRIVATE_PROOF'}},
+                  {'hash': source_hash, 'internal_proof_version': 1, 'internal_proof_hash': 'a' * 64})
+        artifact_id = db.db.execute("SELECT MAX(artifact_id) FROM artifacts WHERE kind='extract_llm'").fetchone()[0]
+        db.db.execute('UPDATE artifacts SET model=? WHERE artifact_id=?', ('synthetic-model', artifact_id))
+        db.db.commit()
+        calls = []
+
+        def progress(_db, _row, *, model, expected_artifact_id):
+            calls.append((model, expected_artifact_id))
+            return {'state': 'attention'}
+
+        monkeypatch.setattr(extract_llm, 'progress_for_message', progress)
+        db.db.execute('PRAGMA query_only=ON')
+        before, transaction = db.db.total_changes, db.db.in_transaction
+        model = read_model.read_model(db.db, scope='detail')
+        record = model['records'][0]
+        assert record['extraction']['extract_llm']['state'] == 'unknown'
+        assert record['extraction']['extract_llm']['artifact_id'] is None
+        assert record['state'] == 'unknown'
+        assert calls and all(call == ('synthetic-model', artifact_id) for call in calls)
+        assert 'synthetic-old' not in json.dumps(model) and 'synthetic-new' not in json.dumps(model)
+        assert 'SYNTHETIC_PRIVATE_PROOF' not in json.dumps(model)
+        assert 'extract_llm' not in mcs_queries.current_extraction_blobs(db.db, 1).get(1, {})
+        assert db.db.total_changes == before and db.db.in_transaction == transaction
+    finally:
+        db.db.execute('PRAGMA query_only=OFF')
+        db.close()
+
+
+@pytest.mark.parametrize('source_hash_kind', ['current', 'missing', 'invalid'])
+def test_machine_model_does_not_revive_old_extract_after_marked_json_corruption(tmp_path, source_hash_kind):
+    db = _db(tmp_path, (1,))
+    try:
+        source_hash = _hash_of(db, 1)
+        _artifact(db, 'extract_llm', 1, {'symptoms': ['synthetic-old']}, {'hash': source_hash})
+        meta = {VERSION_KEY: CURRENT_VERSION, 'internal_proof_version': 1, 'internal_proof_hash': 'a' * 64}
+        if source_hash_kind != 'missing':
+            meta['hash'] = source_hash if source_hash_kind == 'current' else 42
+        db.db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,meta,created_at) '
+                      'VALUES(?,?,?,?,?,?)', ('extract_llm', 1, 1, '{', json.dumps(meta), time.time()))
+        db.db.commit()
+        db.db.execute('PRAGMA query_only=ON')
+        before = db.db.total_changes
+        record = read_model.read_model(db.db, scope='detail')['records'][0]
+        assert record['extraction']['extract_llm']['state'] == 'unknown'
+        assert record['extraction']['extract_llm']['artifact_id'] is None
+        assert record['state'] == 'unknown'
+        assert 'synthetic-old' not in json.dumps(record)
+        assert db.db.total_changes == before
+    finally:
+        db.db.execute('PRAGMA query_only=OFF')
+        db.close()
+
+
 def test_states_current_stale_pending_unknown(tmp_path):
     db = _db(tmp_path, (1, 2, 3, 4))
     h1 = _hash_of(db, 1)

@@ -117,8 +117,13 @@ class Pool:
         if not extract_llm.cloud_policy.selected_key(self.root):
             return
         self.children = [p for p in self.children if p.poll() is None]
-        if ledger is not None and (extract_llm.cloud_policy.global_block_reason(ledger, model=settings["model"])
-                or extract_llm.cloud_policy.budget_block_reason(ledger, settings)):
+        selection, errors = extract_llm.cloud_policy.resolve_profile(
+            cfg, route="reextract", purpose="backlog", root=self.root)
+        if errors or selection is None:
+            return
+        limit = selection["max_tokens"] if selection["max_tokens"] is not None else extract_llm.MAX_TOKENS
+        if ledger is not None and (extract_llm.cloud_policy.global_block_reason(ledger, model=selection["model"])
+                or extract_llm.cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
             return
         directory = self.root / "data"
         if self.lock is None:
@@ -219,9 +224,13 @@ def worker(parent):
                     return
                 cfg = load_config()
                 settings = extract_llm._cloud_settings(cfg)
-                if (settings["mode"] != "on"
-                        or extract_llm.cloud_policy.global_block_reason(ledger, model=settings["model"])
-                        or extract_llm.cloud_policy.budget_block_reason(ledger, settings)):
+                selection, errors = extract_llm.cloud_policy.resolve_profile(
+                    cfg, route="reextract", purpose="backlog")
+                limit = (selection["max_tokens"] if selection is not None and selection["max_tokens"] is not None
+                         else extract_llm.MAX_TOKENS)
+                if (settings["mode"] != "on" or errors or selection is None
+                        or extract_llm.cloud_policy.global_block_reason(ledger, model=selection["model"])
+                        or extract_llm.cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
                     time.sleep(10)
                     continue
                 started = time.monotonic()

@@ -87,7 +87,8 @@ def _message_records(db, project_id, *, inference_target: str = CURRENT_VERSION)
             mid = msg["message_id"]
             art_rows = arts_by_mid.get(mid, [])
             by_kind = extraction_kind_map(art_rows, msg["content_hash"],
-                                           inference_target=inference_target)
+                                           inference_target=inference_target, db=db)
+            proof_unverified = by_kind['extract_llm'].pop('_proof_unverified', False)
             if msg["body_state"] == "deleted":
                 for entry in by_kind.values():
                     if entry["state"] == "current":
@@ -98,7 +99,10 @@ def _message_records(db, project_id, *, inference_target: str = CURRENT_VERSION)
                    "body_state": msg["body_state"],
                    "content_hash": msg["content_hash"],
                    "extraction_eligible": bool(msg["eligible"]),
-                   "state": _record_state(msg, by_kind),
+                   "state": ('unknown' if proof_unverified and msg['body_state'] != 'deleted'
+                             and not any(by_kind[k]['state'] == 'current'
+                                         for k in ('semantic_facts_v4', 'canonical_projection'))
+                             else _record_state(msg, by_kind)),
                    "extraction": by_kind}
             yield rec, by_kind, art_rows
 

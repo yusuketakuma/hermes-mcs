@@ -559,6 +559,7 @@ _CHUNK_SIZE = 3000
 # Progress reads only: bound visited nodes independently of Python recursion.
 # Extraction and checkpoint resume retain their existing contracts.
 _PROGRESS_MAX_NODES = 16384
+_INTERNAL_REPAIR_PROOF = "__mcs_internal_proof_v1"
 
 
 def _opener_request(endpoint: str, method: str, body, timeout: float,
@@ -594,6 +595,13 @@ def _provider_result_hash(content):
         return None
 
 
+def _internal_proof_hash(proof):
+    try:
+        return mcs_util.payload_hash(proof)
+    except (TypeError, ValueError, OverflowError, RecursionError, UnicodeError):
+        return None
+
+
 def _evidence_matches_route(evidence, model, contract):
     names = evidence.get("providers")
     if not isinstance(model, str) or not model or not isinstance(names, list):
@@ -604,11 +612,11 @@ def _evidence_matches_route(evidence, model, contract):
         return False
     if names == ["local"]:
         return contract is None
-    models = {"anthropic": anthropic_client.MODEL, "openai": openai_client.MODEL}
     name = names[0]
-    return (name in models and isinstance(contract, dict)
+    return (name in ("anthropic", "openai") and isinstance(contract, dict)
             and set(contract) == {"backend", "model", "prompt"}
-            and contract.get("backend") == name and contract.get("model") == models[name] == model
+            and contract.get("backend") == name and contract.get("model") == model
+            and _known_cloud_contract(contract)
             and isinstance(contract.get("prompt"), str)
             and re.fullmatch(r"[0-9a-f]{16}", contract["prompt"]) is not None)
 
@@ -642,6 +650,18 @@ class _EvidenceLeaf(dict):
     def __init__(self, value, evidence):
         super().__init__(value)
         self.provider_evidence = evidence
+        self.quality_origin = None
+        self.quality_origin_id = None
+        self.quality_started_id = None
+        self.quality_prior_kind = None
+        self.repair_proof = None
+
+
+class _EvidenceSplit(int):
+    def __new__(cls, value, repair_proof):
+        item = super().__new__(cls, value)
+        item.repair_proof = repair_proof
+        return item
 
 
 def _leaf_evidence(value):
@@ -666,7 +686,8 @@ def _leaf_record(meta, r, evidence, content):
             "piece_sha256": meta["piece_sha256"], "chunk": meta["chunk"],
             "chunk_size": meta["chunk_size"], "plan_version": meta["plan_version"],
             "extract_version": EXTRACT_VERSION, "inference_version": _INFERENCE_VERSION,
-            "model": meta["actual_model"], "provider_contract": r.get("_provider_contract")}
+            "model": meta["actual_model"], "provider_contract": r.get("_provider_contract"),
+            **({"quality_lease": meta["quality_lease"]} if "quality_lease" in meta else {})}
 
 
 @contextlib.contextmanager
@@ -788,10 +809,19 @@ class _CloudProvider:
 
     def __init__(self, ledger, cfg, *, route, project_id, unit_key, deadline,
                  current, dispatch, message_id=None, owner=None, discard_reason=None,
-                 max_attempts=None, on_reserved_tx=None, reserve_dispatch=None, transport=None):
+                 max_attempts=None, on_reserved_tx=None, reserve_dispatch=None, transport=None,
+                 purpose=None, selection=None):
+        purpose = purpose or ("patient_context" if route == "patient_context" else "backlog")
+        raw_cfg = copy.deepcopy(cfg)
+        resolved, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
+        if errors or resolved is None or selection is not None and dict(selection) != dict(resolved):
+            raise CloudFallback("cloud_profile_invalid")
+        self.selection = resolved
+        self.purpose = purpose
+        self._profile_cfg = raw_cfg
         cfg = {**cfg, "cloud_llm": _cloud_settings(cfg)}
-        self.model = cfg["cloud_llm"]["model"]
-        self.contract = _cloud_contract(cfg)
+        self.model = resolved["model"]
+        self.contract = _cloud_contract(cfg, route=route, purpose=purpose, selection=resolved)
         generation = cloud_policy.config_generation(cfg)
         scope = cloud_policy.scope_generation(cfg)
         updater = writer_lock.updater_state()
@@ -799,9 +829,10 @@ class _CloudProvider:
         self.dispatch = dispatch
         self.generation = generation
         self.completed_reservations = []
+        self._children = []
         self.message_id = message_id
         self.owner = owner
-        self.possibly_sent = False
+        self._possibly_sent = False
         self.discard_reason = discard_reason
         self.ledger = ledger
         self.deadline = deadline
@@ -835,16 +866,19 @@ class _CloudProvider:
             if self.final_disposition is not None:
                 raise CloudFallback("cloud_unit_changed")
             try:
-                now = _current_cloud_settings()   # one read: every check judges the same settings
+                live = load_config()
+                now = _cloud_settings(live)
+                chosen, errors = cloud_policy.resolve_profile(live, route=route, purpose=purpose, root=HOME)
                 # The run window gates each new POST (retries included); a result that
                 # already arrived is still judged only by scope, not by the clock.
-                denied = ((inference and (not cloud_backlog.owner_alive() or time.monotonic() >= deadline
+                denied = (errors or chosen is None or dict(chosen) != dict(self.selection)
+                          or (inference and (not cloud_backlog.owner_alive() or time.monotonic() >= deadline
                                           or tightened(caps(now)) or cloud_policy.setting_block_reason(now)))
                           or writer_lock.updater_state() != updater
                           or updater[0] or cloud_policy.selected_key(HOME, {"cloud_llm": now}) != key
                           or cloud_policy.scope_generation({"cloud_llm": now}) != scope
                           # A paid result is kept while its scope holds, even if the send window closes.
-                          or (cloud_policy.block_reason(ledger, now, route, project_id) if inference
+                          or (cloud_policy.block_reason(ledger, now, route, project_id, model=self.model) if inference
                               else not cloud_policy.eligible(now, route, project_id))
                           or not current())
             except Exception:
@@ -854,7 +888,22 @@ class _CloudProvider:
             if denied:
                 raise CloudFallback("cloud_unit_changed")
         self.guard = lambda: dispatch(guard)
-        self.commit_guard = lambda: dispatch(lambda: guard(inference=False), result=True)
+        def commit_guard():
+            dispatch(lambda: guard(inference=False), result=True)
+            for child in self._children:
+                child.commit_guard()
+        self.commit_guard = commit_guard
+        def spawn_quality_repair():
+            if route != "reextract" or purpose != "backlog":
+                raise CloudFallback("cloud_repair_invalid")
+            child = _CloudProvider(ledger, raw_cfg, route=route, project_id=project_id,
+                unit_key=unit_key, deadline=deadline, current=current, dispatch=dispatch,
+                message_id=message_id, owner=owner, discard_reason=discard_reason,
+                max_attempts=max_attempts, reserve_dispatch=reserve_dispatch, transport=transport,
+                purpose="quality_repair")
+            self._children.append(child)
+            return child
+        self.spawn_quality_repair = spawn_quality_repair
         def reserve(body, timeout):
             # every new attempt (retry, repair, next chunk) is judged against the
             # budget in force now, not the one the unit started under
@@ -867,7 +916,8 @@ class _CloudProvider:
             reserved_caps.update(current_caps)
             hook = {"on_reserved_tx": on_reserved_tx} if on_reserved_tx is not None else {}
             return cloud_policy.usage_reserver(ledger, current_cfg, route=route, project_id=project_id,
-                unit_key=unit_key, message_id=self.message_id, owner=self.owner, **hook)(body, timeout)
+                unit_key=unit_key, message_id=self.message_id, owner=self.owner,
+                selection=self.selection, **hook)(body, timeout)
         self.reserve = lambda body, timeout: (reserve_dispatch or dispatch)(lambda: reserve(body, timeout))
         def record(reservation, metadata):
             # The callback also settles a reservation rejected before sending.
@@ -895,11 +945,17 @@ class _CloudProvider:
             client_args["post_fn"] = lambda body, timeout: transport(
                 self.client.request, "POST", body, timeout, deadline=self.deadline)
             client_args["wait_fn"] = lambda delay: transport(time.sleep, delay)
-        client = openai_client.OpenAIClient if self.model == openai_client.MODEL else anthropic_client.AnthropicClient
+        if resolved["provider"] == "openai":
+            client = openai_client.OpenAIClient
+            client_args.update(model=self.model, effort=resolved["effort"])
+        else:
+            client = anthropic_client.AnthropicClient
         self.client = client(key, **client_args)
 
     def discard(self):
         """Append the unit's final disposition without mutating financial results."""
+        for child in self._children:
+            child.discard()
         if not self.completed_reservations or self.discarded:
             return
         def write():
@@ -913,6 +969,14 @@ class _CloudProvider:
             self.final_disposition = reason
             self.discarded = True
         return self.dispatch(write, result=True)
+
+    @property
+    def possibly_sent(self):
+        return self._possibly_sent or any(child.possibly_sent for child in self._children)
+
+    @possibly_sent.setter
+    def possibly_sent(self, value):
+        self._possibly_sent = value
 
     def __call__(self, prompt, *, deadline, max_tokens, **unused):
         try:
@@ -932,7 +996,9 @@ class _CloudProvider:
                 raise CloudFallback("cloud_unit_deadline")
             # the fixed extraction heads are long enough to cache; the small repair head is not
             prefix = next((head for head in (_PROMPT_HEAD, _BATCH_HEAD) if prompt.startswith(head)), None)
-            answer = self.client.complete(prompt, deadline=http_deadline, max_tokens=max_tokens,
+            selected_tokens = self.selection["max_tokens"]
+            answer = self.client.complete(prompt, deadline=http_deadline,
+                max_tokens=max_tokens if selected_tokens is None else selected_tokens,
                 before_attempt=self.guard, reserve_fn=self.reserve, after_result=self.result,
                 cache_prefix=prefix)
             self.commit_guard()
@@ -964,13 +1030,96 @@ _CLOUD_CONTRACT = {"backend": "anthropic", "model": anthropic_client.MODEL,
                    "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": "low"})[:16]}
 
 
-def _cloud_contract(cfg=None):
-    settings = _cloud_settings(load_config() if cfg is None else cfg)
-    if settings["provider"] == "openai":
-        return {"backend": "openai", "model": openai_client.MODEL,
-                "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": "low",
+def _cloud_contract(cfg=None, *, route="reextract", purpose="backlog", selection=None):
+    if selection is None:
+        cfg = load_config() if cfg is None else cfg
+        selection, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
+        if errors or selection is None:
+            raise CloudFallback("cloud_profile_invalid")
+    if selection["provider"] == "openai":
+        if (selection["model"], selection["effort"]) not in openai_client.VALID_MODEL_EFFORTS:
+            raise CloudFallback("cloud_profile_invalid")
+        return {"backend": "openai", "model": selection["model"],
+                "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": selection["effort"],
                                                "service_tier": "default", "cache_ttl": "30m"})[:16]}
+    if selection["provider"] != "anthropic" or selection["model"] != anthropic_client.MODEL:
+        raise CloudFallback("cloud_profile_invalid")
     return dict(_CLOUD_CONTRACT)
+
+
+def _known_cloud_contract(contract):
+    if contract == _CLOUD_CONTRACT:
+        return True
+    if not isinstance(contract, dict) or contract.get("backend") != "openai":
+        return False
+    return any(contract == _cloud_contract(selection={"provider": "openai", "model": model, "effort": effort})
+               for model, effort in openai_client.VALID_MODEL_EFFORTS)
+
+
+def _cloud_repair_answer_evidence(db, *, reservation_artifact_id, reservation_id, route,
+                                  project_id, message_id, unit_key, owner, prompt, answer_text, contract,
+                                  purpose="quality_repair", finish_reason="stop"):
+    """Validate one repaired answer against its settled request and exact response."""
+    if (type(reservation_artifact_id) is not int or not isinstance(reservation_id, str)
+            or not isinstance(unit_key, str) or not unit_key or not isinstance(owner, dict)
+            or not isinstance(prompt, str) or not isinstance(answer_text, str)
+            or purpose not in ("backlog", "patient_context", "quality_repair")
+            or finish_reason not in ("stop", "length")
+            or not _known_cloud_contract(contract)):
+        raise ValueError("cloud_repair_evidence_invalid")
+    try:
+        encoded = answer_text.encode("utf-8")
+        if len(encoded) > bounded_http.MAX_RESPONSE_BYTES:
+            raise ValueError("cloud_repair_evidence_invalid")
+        evidence = cloud_policy.reservation_evidence(db, reservation_artifact_id)
+        reservation, result = evidence["reservation"], evidence["result"]
+        selected = {"provider": contract["backend"], "model": reservation["model"],
+                    "effort": reservation["effort"]}
+        profile = reservation["profile"]
+        expected_request = cloud_policy._logical_request_fp({"instructions": cloud_client.SYSTEM, "input": prompt})
+        if (reservation["reservation_id"] != reservation_id or reservation["route"] != route
+                or reservation["project_id"] != project_id or reservation["message_id"] != message_id
+                or reservation["unit_key"] != unit_key or reservation["owner"] != owner
+                or reservation["logical_request_fp"] != expected_request
+                or _cloud_contract(selection=selected) != contract
+                or selected["provider"] == "openai" and profile is not None
+                and openai_client.PROFILE_DEFINITIONS.get(profile) != (selected["model"], selected["effort"])
+                or selected["provider"] == "openai" and profile is not None
+                and reservation["max_tokens"] != {"backlog": 8192, "patient_context": 16384,
+                                                   "quality_repair": 32768}[purpose]
+                or selected["provider"] == "anthropic" and profile is not None
+                or result.get("answer_text_sha256_v1") != hashlib.sha256(encoded).hexdigest()
+                or result.get("answer_finish_reason_v1") != finish_reason):
+            raise ValueError("cloud_repair_evidence_invalid")
+        return evidence
+    except (KeyError, TypeError, UnicodeError, sqlite3.Error, CloudFallback) as error:
+        raise ValueError("cloud_repair_evidence_invalid") from error
+
+
+def _cloud_origin_for_checkpoint(provider, prompt, answer_text, *, finish_reason="stop"):
+    """Capture one new response only after its settled reservation is proven."""
+    if not provider.completed_reservations:
+        raise ValueError("cloud_repair_evidence_invalid")
+    reservation = provider.completed_reservations[-1]
+    def read():
+        rows = provider.ledger.db.execute(
+            "SELECT artifact_id FROM artifacts WHERE kind=? AND project_id=? AND message_id IS ? "
+            "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.reservation_id')=? END LIMIT 2",
+            (cloud_policy.KINDS[0], reservation["project_id"], reservation["message_id"],
+             reservation["reservation_id"])).fetchall()
+        if len(rows) != 1:
+            raise ValueError("cloud_repair_evidence_invalid")
+        arguments = {"reservation_artifact_id": rows[0][0], "reservation_id": reservation["reservation_id"],
+            "route": reservation["route"], "project_id": reservation["project_id"],
+            "message_id": reservation["message_id"], "unit_key": reservation["unit_key"],
+            "owner": reservation["owner"], "prompt": prompt, "answer_text": answer_text,
+            "contract": provider.contract, "purpose": provider.purpose, "finish_reason": finish_reason}
+        evidence = _cloud_repair_answer_evidence(provider.ledger.db, **arguments)
+        return {"version": 1, "answer_text": answer_text, "reservation_artifact_id": rows[0][0],
+                "reservation_id": reservation["reservation_id"], "contract": provider.contract,
+                "owner": reservation["owner"], "unit_key": reservation["unit_key"],
+                "witness": evidence["witness"]}
+    return provider.dispatch(read, result=True)
 
 
 def _cloud_mode(ledger, cfg, route, project_id):
@@ -978,9 +1127,14 @@ def _cloud_mode(ledger, cfg, route, project_id):
     if not cloud_policy.eligible(settings, route, project_id):
         return "off"
     mode = settings["mode"]
+    purpose = "patient_context" if route == "patient_context" else "backlog"
+    selection, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
+    if errors or selection is None:
+        return "off"
+    limit = selection["max_tokens"] if selection["max_tokens"] is not None else 1600
     if mode in ("on", "shadow") and (not cloud_policy.selected_key(HOME, cfg)
-            or cloud_policy.block_reason(ledger, settings, route, project_id)
-            or cloud_policy.budget_block_reason(ledger, settings)):
+            or cloud_policy.block_reason(ledger, settings, route, project_id, model=selection["model"])
+            or cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
         return "off"   # a reached cap keeps the rows in the local batches
     return mode
 
@@ -1112,6 +1266,8 @@ def _llm_call(prompt: str, deadline: float | None = None,
         response = provider(prompt, deadline=deadline, max_tokens=max_tokens,
                             need_s=need_s, kind=kind)
         _integrity_note(response, kind)
+        if isinstance(provider, _CloudProvider) and isinstance(response, dict) and isinstance(response.get("text"), str):
+            _CALL_NOTES.cloud_response = (provider, prompt, response["text"], response.get("finish_reason"))
         acceptance = local_llm.acceptance_error(response)
         if acceptance == "length_stop":
             return None
@@ -1121,7 +1277,8 @@ def _llm_call(prompt: str, deadline: float | None = None,
         if answer is None:
             raise CloudFallback("cloud_invalid_response")
         if isinstance(provider, _CloudProvider):
-            _CALL_NOTES.provider_response = (
+            selection = getattr(provider, "selection", None)
+            _CALL_NOTES.provider_response = (selection.get("provider") if selection is not None else
                 "openai" if provider.model == openai_client.MODEL else
                 "anthropic" if provider.model == anthropic_client.MODEL else None)
         return answer
@@ -1265,6 +1422,27 @@ def _response_has_required_fields(document):
         key in document for key in extract_schema.SCHEMA["schema"]["required"])
 
 
+def _extract_prompt_context(context, references, feedback):
+    prompt = _PROMPT_HEAD
+    if context and context.startswith(_KARTE_HEAD):
+        end = context.find(_KARTE_TAIL, len(_KARTE_HEAD))
+        if end >= 0:
+            cut = end + len(_KARTE_TAIL)
+            prompt += context[:cut]
+            context = context[cut:]
+    if context:
+        prompt += _CTX_HEAD + context + _CTX_TAIL
+    if references:
+        prompt += ("対象本文の「前と同じ」などが参考情報の項目を一意に指すdetailsだけ、refers_toにその[S番号]のS番号を付ける。"
+                   "value/text/evidenceは対象本文の原文だけとし、以前の値や薬剤名を転記しない。"
+                   "対応が曖昧、別薬剤、別人、参照不要ならrefers_toを省略する。\n")
+    if feedback:
+        flines = [str(x)[:140] for x in feedback if str(x).strip()][:8]
+        if flines:
+            prompt += (_FEEDBACK_HEAD + "\n".join("- " + x for x in flines) + "\n\n")
+    return prompt, context
+
+
 def llm_extract(body: str, *, context: str | None = None,
                 hints: dict | None = None,
                 deadline: float | None = None,
@@ -1276,7 +1454,7 @@ def llm_extract(body: str, *, context: str | None = None,
                 on_chunk=None, on_chunk_replay=None,
                 vital_policy: dict | None = None,
                 chunk_size: int | None = None, on_split=None, splits_in: dict | None = None,
-                references: dict | None = None, provider=None
+                references: dict | None = None, provider=None, quality_qc_src=None
                 ) -> dict | None | object:
     """One message -> validated structured dict, None on failure, or
     _DEFERRED when `deadline` (time.monotonic()) ran out mid-chunk.
@@ -1299,28 +1477,8 @@ def llm_extract(body: str, *, context: str | None = None,
     complete, which is exactly the silent-coverage-loss failure mode
     the error+backoff path exists to avoid."""
     call = _llm_call if provider is None else functools.partial(_llm_call, provider=provider)
-    prompt = _PROMPT_HEAD
     has_ctx = bool(context)   # thread and/or summary: lift guard on
-    if context and context.startswith(_KARTE_HEAD):
-        # _thread_context always pairs head+tail; a caller-built
-        # context without the tail is thread material, not a summary
-        # block — leave it whole instead of raising ValueError
-        end = context.find(_KARTE_TAIL, len(_KARTE_HEAD))
-        if end >= 0:
-            cut = end + len(_KARTE_TAIL)
-            prompt += context[:cut]
-            context = context[cut:]
-    if context:
-        prompt += _CTX_HEAD + context + _CTX_TAIL
-    if references:
-        prompt += ("対象本文の「前と同じ」などが参考情報の項目を一意に指すdetailsだけ、refers_toにその[S番号]のS番号を付ける。"
-                   "value/text/evidenceは対象本文の原文だけとし、以前の値や薬剤名を転記しない。"
-                   "対応が曖昧、別薬剤、別人、参照不要ならrefers_toを省略する。\n")
-    if feedback:
-        flines = [str(x)[:140] for x in feedback if str(x).strip()][:8]
-        if flines:
-            prompt += (_FEEDBACK_HEAD
-                       + "\n".join("- " + x for x in flines) + "\n\n")
+    prompt, context = _extract_prompt_context(context, references, feedback)
     thead = _target_head(posted_at)
     notes = _note_list()
     notes.clear()
@@ -1338,10 +1496,12 @@ def llm_extract(body: str, *, context: str | None = None,
     pending_quality = set()
     accepted_providers = []
 
-    def evidenced_call(*args, **kwargs):
+    def evidenced_call(*args, provider_override=None, **kwargs):
         # A monkeypatched call or a failed dispatch cannot inherit an earlier marker.
         _CALL_NOTES.provider_response = None
-        result = call(*args, **kwargs)
+        _CALL_NOTES.cloud_response = None
+        active_call = call if provider_override is None else functools.partial(_llm_call, provider=provider_override)
+        result = active_call(*args, **kwargs)
         return result, getattr(_CALL_NOTES, "provider_response", None)
 
     def leaf_parts(value):
@@ -1350,11 +1510,16 @@ def llm_extract(body: str, *, context: str | None = None,
             return None
         return evidence["providers"] + ([] if evidence["complete"] else [None])
 
-    def with_leaf(value, providers):
+    def with_leaf(value, providers, origin=None, origin_id=None, repair=None):
         if providers is None:
             return value
-        return _EvidenceLeaf(value, _provider_evidence(
+        leaf = _EvidenceLeaf(value, _provider_evidence(
             providers, bool(providers) and all(providers)))
+        leaf.quality_origin = origin
+        leaf.quality_origin_id = origin_id
+        if repair is not None:
+            leaf.repair_proof = repair
+        return leaf
 
     if meta_out is not None:
         meta_out["completeness"] = {}
@@ -1384,23 +1549,30 @@ def llm_extract(body: str, *, context: str | None = None,
             out.extend(result)
         return out
 
-    def split_piece(key, piece, start, remaining):
+    def split_piece(key, piece, start, remaining, repair=None):
         if len(piece) <= 1:
             if meta_out is not None:
                 meta_out.update(failed_chunk=str(key), failure_reason="split_exhausted")
             return None
         smaller = max(1, len(piece) // 2)
-        splits[key] = smaller
+        if repair is not None:
+            smaller = _EvidenceSplit(smaller, repair)
+        splits[key] = int(smaller)
         bump("length_resplits")
         if on_split is not None:
             if on_split(key, smaller) is False:
                 return _DEFERRED
+        if meta_out is not None:
+            meta_out.get("completeness", {}).pop(str(key), None)
+        pending_quality.discard(key)
         return children(key, piece, start, remaining)
 
     def infer_piece(key, piece, start, remaining):
         if deadline is not None and time.monotonic() > deadline:
             return _DEFERRED
         cached = saved.get(key)
+        origin = getattr(cached, "quality_origin", None)
+        origin_id = getattr(cached, "quality_origin_id", None)
         if key in saved:
             bump("checkpoint_reuses")
         quality_status = cached.get("_quality_status") if isinstance(cached, dict) else None
@@ -1438,6 +1610,7 @@ def llm_extract(body: str, *, context: str | None = None,
             d, first_provider = evidenced_call(scoped_prompt + thead + piece + _PROMPT_TAIL,
                                                deadline=deadline, need_s=_MIN_CALL_S)
             first_provider = [first_provider]
+        first_response = getattr(_CALL_NOTES, "cloud_response", None) if not quality_status else None
         piece_providers = first_provider if isinstance(d, dict) else []
         if deadline is not None and time.monotonic() > deadline:
             # A dispatched failure still consumes its attempt after the deadline.
@@ -1469,6 +1642,7 @@ def llm_extract(body: str, *, context: str | None = None,
         completeness = extract_quality.completeness_issues(v, piece_hints, piece)
 
         quality_record = None
+        repair_proof = None
 
         def quality_note(state):
             nonlocal quality_record
@@ -1503,46 +1677,87 @@ def llm_extract(body: str, *, context: str | None = None,
                     "全て抽出してください")
             repair_deadline = deadline - remaining * _MIN_CALL_S if deadline is not None else None
             if completeness and v is not None:
-                pending = with_leaf({**v, "_quality_status": "pending"}, piece_providers)
+                if origin is None and on_chunk is not None and first_response is not None:
+                    try:
+                        if feedback and quality_qc_src is None:
+                            raise ValueError("cloud_repair_origin_unbound")
+                        first_client, first_prompt, first_text, first_finish = first_response
+                        origin = {**_cloud_origin_for_checkpoint(first_client, first_prompt, first_text,
+                                                                  finish_reason=first_finish), "qc_src": quality_qc_src}
+                    except (ValueError, TypeError, KeyError, CloudFallback, sqlite3.Error):
+                        origin = None
+                pending = with_leaf({**v, "_quality_status": "pending"}, piece_providers,
+                                    origin=origin, origin_id=origin_id)
                 if chunks_out is not None:
                     chunks_out[key] = pending
                 if on_chunk is not None:
                     if on_chunk(key, pending) is False:
                         return _DEFERRED
+                    origin_id = (pending.quality_origin_id or pending.quality_started_id) if origin is not None else None
                 if repair_deadline is not None and repair_deadline - time.monotonic() < _MIN_REPAIR_S:
                     if quality_status == "pending" and not remaining:
                         quality_note("skipped_budget")
                     else:
                         pending_quality.add(key)
                     return finish_piece(key, v, quality_record, pending=key in pending_quality,
-                                        providers=piece_providers)
+                                        providers=piece_providers, origin=origin, origin_id=origin_id)
             if issues and (repair_deadline is None or time.monotonic() < repair_deadline):
+                repair_client = None
+                distinct_profile = False
                 if completeness and v is not None and on_chunk is not None:
-                    if on_chunk(key, with_leaf({**v, "_quality_status": "started"}, piece_providers)) is False:
+                    base_selection = getattr(provider, "selection", None)
+                    profile_cfg = getattr(provider, "_profile_cfg", None)
+                    if base_selection is not None and profile_cfg is not None:
+                        selected, errors = cloud_policy.resolve_profile(
+                            profile_cfg, route="reextract", purpose="quality_repair", root=HOME)
+                        if errors or selected is None:
+                            return _DEFERRED
+                        distinct_profile = dict(selected) != dict(base_selection)
+                        if distinct_profile and (origin is None or origin_id is None):
+                            return _DEFERRED
+                    started = with_leaf({**v, "_quality_status": "started"}, piece_providers,
+                                        origin=origin, origin_id=origin_id)
+                    started.quality_prior_kind = "cached" if quality_status else "raw"
+                    if on_chunk(key, started) is False:
                         # Nothing was dispatched: a start that may still have been
                         # saved is released, so the next run retries the repair.
-                        on_chunk(key, with_leaf({**v, "_quality_status": "pending"}, piece_providers))
+                        on_chunk(key, with_leaf({**v, "_quality_status": "pending"}, piece_providers,
+                                                origin=origin, origin_id=origin_id))
                         return _DEFERRED
                     if repair_deadline is not None and repair_deadline - time.monotonic() < _MIN_REPAIR_S:
                         # The checkpoint wait spent the reserve, before any
                         # inference dispatch. Only this proven unsent start is released.
-                        on_chunk(key, with_leaf({**v, "_quality_status": "pending"}, piece_providers))
+                        on_chunk(key, with_leaf({**v, "_quality_status": "pending"}, piece_providers,
+                                                origin=origin, origin_id=origin_id))
                         if quality_status == "pending" and not remaining:
                             quality_note("skipped_budget")
                         else:
                             pending_quality.add(key)
                         return finish_piece(key, v, quality_record, pending=key in pending_quality,
-                                            providers=piece_providers)
+                                            providers=piece_providers, origin=origin, origin_id=origin_id)
+                    if distinct_profile:
+                        if type(started.quality_started_id) is not int:
+                            return _DEFERRED
+                        repair_client = provider.spawn_quality_repair()
                 repair_start = len(notes)
-                rd, repair_provider = evidenced_call(
-                    _repair_prompt(posted_at, issues, d, piece_hints, reference)
-                    + piece + _PROMPT_TAIL,
-                    deadline=repair_deadline, need_s=_MIN_REPAIR_S, kind="repair")
+                repair_prompt = _repair_prompt(posted_at, issues, d, piece_hints, reference) + piece + _PROMPT_TAIL
+                rd, repair_provider = evidenced_call(repair_prompt, deadline=repair_deadline,
+                    need_s=_MIN_REPAIR_S, kind="repair", provider_override=repair_client)
+                repair_response = getattr(_CALL_NOTES, "cloud_response", None)
                 bump("repairs")
                 if repair_deadline is not None and time.monotonic() > repair_deadline:
                     rd = _DEFERRED
                 if (rd is None and len(notes) > repair_start
                         and notes[-1].get("finish_reason") == "length"):
+                    if distinct_profile:
+                        try:
+                            active, request, answer, finish = repair_response
+                            response = _cloud_origin_for_checkpoint(active, request, answer, finish_reason=finish)
+                            proof = {"version": 1, "started_artifact_id": started.quality_started_id,
+                                     "response": response}
+                        except (ValueError, TypeError, KeyError, CloudFallback, sqlite3.Error):
+                            return _DEFERRED
+                        return split_piece(key, piece, start, remaining, repair=proof)
                     return split_piece(key, piece, start, remaining)
                 if rd is _DEFERRED and v is None:
                     return _DEFERRED
@@ -1554,6 +1769,14 @@ def llm_extract(body: str, *, context: str | None = None,
                     # a replacement must see every change in the message, so only an unsplit body
                     if (extract_quality.quality_improves(rv, v, body, piece_hints if piece == body else None)
                             if completeness else extract_quality.improves(rv, v)):
+                        if distinct_profile:
+                            try:
+                                active, request, answer, finish = repair_response
+                                response = _cloud_origin_for_checkpoint(active, request, answer, finish_reason=finish)
+                                repair_proof = {"version": 1, "started_artifact_id": started.quality_started_id,
+                                                "response": response}
+                            except (ValueError, TypeError, KeyError, CloudFallback, sqlite3.Error):
+                                return _DEFERRED
                         v = rv
                         piece_providers.append(repair_provider)
                         bump("repair_wins")
@@ -1568,21 +1791,22 @@ def llm_extract(body: str, *, context: str | None = None,
                 meta_out.update(failed_chunk=str(key), failure_reason=(
                     "response_or_transport" if d is None else "validation"))
             return None
-        return finish_piece(key, v, quality_record, providers=piece_providers)
+        return finish_piece(key, v, quality_record, providers=piece_providers, repair=repair_proof)
 
-    def finish_piece(key, v, quality_record, *, pending=False, replayed=False, providers=None):
+    def finish_piece(key, v, quality_record, *, pending=False, replayed=False, providers=None,
+                     origin=None, origin_id=None, repair=None):
         accepted_providers.extend(providers if providers else [None])
         if meta_out is not None:
             meta_out.setdefault("completeness", {})[str(key)] = quality_record
         checkpoint = {**v, "_quality_status": "pending"} if pending else (
             {**v, "_quality_result": quality_record} if quality_record is not None else v)
-        checkpoint = with_leaf(checkpoint, providers)
+        checkpoint = with_leaf(checkpoint, providers, origin=origin, origin_id=origin_id, repair=repair)
         if chunks_out is not None:
             chunks_out[key] = checkpoint
         callback = on_chunk_replay if replayed and on_chunk_replay is not None else on_chunk
         if callback is not None:
             accepted = callback(key, checkpoint)
-            if replayed and on_chunk_replay is not None and accepted is False:
+            if accepted is False and (repair is not None or replayed and on_chunk_replay is not None):
                 return _DEFERRED
         return [v]
 
@@ -2286,6 +2510,45 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
                 else:
                     meta.pop(key, None)
             actual_model = prior["model"]
+            retained_document = _provider_strict_dict(content)
+            retained_proof = retained_document.get(_INTERNAL_REPAIR_PROOF) if retained_document is not None else None
+            marked = "internal_proof_version" in prior_meta or "internal_proof_hash" in prior_meta
+            if marked or retained_proof is not None:
+                retained = {**r, "_target": ("", prior["model"]), "_provider_contract":
+                    {key: prior_meta.get(key) for key in ("backend", "model", "prompt")}}
+                retained.pop("_frame", None)
+                retained.pop("qc_src", None)
+                if "context_snapshot" in prior_meta:
+                    retained_frame = patient_state_context.load(ledger.db, prior_meta["context_snapshot"], dict(source))
+                    if retained_frame is None:
+                        return "rejected"
+                    retained["_frame"] = retained_frame
+                    retained_context = retained_frame["text"]
+                else:
+                    retained_context = _thread_context(ledger.db, retained)
+                if (prior["content"] != content or (type(prior_meta.get("internal_proof_version")) is not int or prior_meta["internal_proof_version"] != 1)
+                        or not isinstance(retained_proof, dict)
+                        or not mcs_util.valid_hash(prior_meta.get("internal_proof_hash"))
+                        or prior_meta.get("internal_proof_hash") != _internal_proof_hash(retained_proof)
+                        or prior_meta.get("context_binding") != _chunk_context(retained, retained_context)
+                        or not _verify_inline_extract_proof(ledger.db, retained, retained_context,
+                            {key: value for key, value in retained_document.items() if key != _INTERNAL_REPAIR_PROOF},
+                            retained_proof)):
+                    return "rejected"
+                meta["internal_proof_version"] = 1
+                meta["internal_proof_hash"] = prior_meta["internal_proof_hash"]
+        inline_proof = r.get("_inline_extract_proof") if not retaining_prior else None
+        if inline_proof is not None:
+            clinical = _provider_strict_dict(content)
+            if (clinical is None or _INTERNAL_REPAIR_PROOF in clinical
+                    or not _verify_inline_extract_proof(ledger.db, r, bound_context, clinical, inline_proof)):
+                return "rejected"
+            clinical[_INTERNAL_REPAIR_PROOF] = inline_proof
+            content = json.dumps(clinical, ensure_ascii=False)
+            meta["internal_proof_version"] = 1
+            meta["internal_proof_hash"] = _internal_proof_hash(inline_proof)
+            if meta["internal_proof_hash"] is None:
+                return "rejected"
         proof = (_prior_provider_evidence(prior, content, r["_source_binding"])
                  if retaining_prior else r.get("_provider_evidence"))
         if (not isinstance(proof, dict) or type(proof.get("complete")) is not bool
@@ -2362,9 +2625,15 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
         if changed:
             ledger.bump_inference_analysis_epoch_tx(r["project_id"])
         if isinstance(r, dict) and r.get("_cloud_mode") == "dry_run":
+            selection = r.get("_cloud_selection")
+            if selection is None:
+                selection, errors = cloud_policy.resolve_profile(
+                    r.get("_cloud_config") or load_config(), route="reextract", purpose="backlog", root=HOME)
+                if errors or selection is None:
+                    raise CloudFallback("cloud_profile_invalid")
             cloud_policy.dryrun_tx(ledger, route="reextract", project_id=r["project_id"],
                 unit_key=str(r["message_id"]), input_chars=len(r["body_text"] or ""),
-                max_tokens=MAX_TOKENS, model=(r.get("_cloud_settings") or _cloud_settings(load_config()))["model"])
+                max_tokens=selection["max_tokens"] or MAX_TOKENS, model=selection["model"])
         if isinstance(r, dict) and r.get("_cloud_mode") == "shadow":
             # the comparison unit commits (pending) with the local result or not at all
             r["_shadow_unit"] = os.urandom(16).hex()
@@ -2578,6 +2847,14 @@ def _qc_feedback(ledger, src_artifact_id):
         c = json.loads(row["content"] or "{}")
     except (ValueError, TypeError, RecursionError):
         return None
+    notes = _qc_notes(c)
+    if not notes:
+        return None
+    return {"src": src_artifact_id, "qc": row["artifact_id"], "notes": notes}
+
+
+def _qc_notes(c):
+    """Derive the same bounded feedback from a checked QC document."""
     notes = []
     items = c.get("items")
     for it in items if isinstance(items, list) else []:
@@ -2600,10 +2877,90 @@ def _qc_feedback(ledger, src_artifact_id):
             and urg.get("jev") != urg.get("extracted"):
         notes.append(f"緊急度は「{urg.get('jev')}」が妥当と監査されています"
                      f"(前回の抽出: {urg.get('extracted')})")
-    if not notes:
+    return notes[:6]
+
+
+def _compact_qc_feedback(content):
+    """Keep only the audit elements that generated the bounded feedback."""
+    items = []
+    for item in content.get("items", []) if isinstance(content.get("items"), list) else []:
+        if not isinstance(item, dict) or item.get("verdict") != "NO_MATCH":
+            continue
+        # Use the existing formatter to preserve its exact label semantics
+        # without retaining unrelated audit fields or an unbounded item.
+        note = _qc_notes({"items": [item]})[0]
+        section = str(item.get("section"))
+        prefix = section + "項目「"
+        suffix = "」は本文に裏付けがありません"
+        if not note.startswith(prefix) or not note.endswith(suffix):
+            raise ValueError("extract_proof_qc_invalid")
+        items.append({"section": section, "verdict": "NO_MATCH", "item": note[len(prefix):-len(suffix)]})
+        if len(items) == 6:
+            break
+    compact = {"qc": "done", "items": items}
+    urgency = content.get("urgency")
+    if len(items) < 6 and isinstance(urgency, dict) and urgency.get("jev") is not None:
+        compact["urgency"] = {"jev": urgency.get("jev"), "extracted": urgency.get("extracted")}
+    if _qc_notes(compact) != _qc_notes(content):
+        raise ValueError("extract_proof_qc_invalid")
+    return compact
+
+
+def _snapshot_repair_qc(db, r):
+    """Freeze the selected current audit before its source is replaced."""
+    src = r.get("qc_src")
+    if src is None:
         return None
-    return {"src": src_artifact_id, "qc": row["artifact_id"],
-            "notes": notes[:6]}
+    prior = _prior_extract(db, r)
+    qc = _qc_feedback(SimpleNamespace(db=db), src)
+    if prior is None or prior["artifact_id"] != src or qc is None:
+        raise ValueError("extract_proof_qc_changed")
+    row = db.execute("SELECT * FROM artifacts WHERE artifact_id=? AND kind='extract_qc'",
+                     (qc["qc"],)).fetchone()
+    if row is None or row["message_id"] != r["message_id"] or row["project_id"] not in (None, r["project_id"]):
+        raise ValueError("extract_proof_qc_changed")
+    source_meta, audit_meta, audit = (_provider_strict_dict(prior["meta"]),
+                                      _provider_strict_dict(row["meta"]), _provider_strict_dict(row["content"]))
+    if source_meta is None or audit_meta is None or audit is None:
+        raise ValueError("extract_proof_qc_invalid")
+    result = {"source_id": src, "source_binding": r["_source_binding"], "source_project_id": prior["project_id"],
+              "source_message_id": prior["message_id"], "source_model": prior["model"],
+              "source_content_hash": mcs_util.payload_hash(prior["content"]),
+              "source_meta": {key: source_meta.get(key) for key in ("hash", "extract_version", inference.VERSION_KEY)},
+              "audit_id": row["artifact_id"], "audit_project_id": row["project_id"],
+              "audit_message_id": row["message_id"], "audit_content": _compact_qc_feedback(audit),
+              "audit_meta": {key: audit_meta.get(key) for key in
+                             ("hash", "extract_version", inference.VERSION_KEY, "source_artifact_id")}}
+    if _repair_qc_snapshot_feedback(r, result) != qc:
+        raise ValueError("extract_proof_qc_invalid")
+    return result
+
+
+def _repair_qc_snapshot_feedback(r, snapshot):
+    try:
+        keys = {"source_id", "source_binding", "source_project_id", "source_message_id", "source_model", "source_content_hash",
+                "source_meta", "audit_id", "audit_project_id", "audit_message_id", "audit_content", "audit_meta"}
+        if not isinstance(snapshot, dict) or set(snapshot) != keys:
+            return None
+        sm, qm, content = snapshot["source_meta"], snapshot["audit_meta"], snapshot["audit_content"]
+        if (type(snapshot["source_id"]) is not int or type(snapshot["audit_id"]) is not int
+                or snapshot["source_id"] <= 0 or snapshot["audit_id"] <= snapshot["source_id"]
+                or not isinstance(r.get("_source_binding"), str) or snapshot["source_binding"] != r["_source_binding"]
+                or snapshot["source_project_id"] not in (None, r["project_id"])
+                or snapshot["audit_project_id"] not in (None, r["project_id"])
+                or snapshot["source_message_id"] != r["message_id"] or snapshot["audit_message_id"] != r["message_id"]
+                or not isinstance(snapshot["source_model"], str) or not mcs_util.valid_hash(snapshot["source_content_hash"])
+                or not isinstance(sm, dict) or not isinstance(qm, dict) or not isinstance(content, dict)
+                or sm.get("hash") != r["content_hash"] or qm.get("hash") != r["content_hash"]
+                or sm.get("extract_version") != EXTRACT_VERSION or qm.get("extract_version") != EXTRACT_VERSION
+                or not inference.is_current(sm, target=_INFERENCE_VERSION)
+                or not inference.is_current(qm, target=_INFERENCE_VERSION)
+                or qm.get("source_artifact_id") != snapshot["source_id"] or content.get("qc") != "done"):
+            return None
+        notes = _qc_notes(content)
+        return {"src": snapshot["source_id"], "qc": snapshot["audit_id"], "notes": notes} if notes else None
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
+        return None
 
 
 def _next_retry(ledger, *, after: float | None = None) -> float | None:
@@ -2917,6 +3274,12 @@ def _saved_chunk_size(db, r, context: str | None = None, *, identity=None) -> in
 
 def _chunk_piece(body, chunk_size, key, splits):
     """Resolve a stable original index and split path against the current source."""
+    found = _chunk_span(body, chunk_size, key, splits)
+    return found[0] if found is not None else None
+
+
+def _chunk_span(body, chunk_size, key, splits):
+    """Resolve the exact source offset as well as the split leaf's text."""
     if type(key) is int and key >= 0:
         path = [key]
     elif isinstance(key, str) and re.fullmatch(r"(?:0|[1-9][0-9]*)(?::(?:0|[1-9][0-9]*))+", key):
@@ -2929,6 +3292,7 @@ def _chunk_piece(body, chunk_size, key, splits):
     parts = plan_chunks(body, chunk_size)
     if path[0] >= len(parts):
         return None
+    start = sum(map(len, parts[:path[0]]))
     piece, parent = parts[path[0]], path[0]
     for child in path[1:]:
         size = splits.get(parent)
@@ -2937,19 +3301,201 @@ def _chunk_piece(body, chunk_size, key, splits):
         parts = plan_chunks(piece, size)
         if len(parts) < 2 or "".join(parts) != piece or child >= len(parts):
             return None
+        start += sum(map(len, parts[:child]))
         piece, parent = parts[child], f"{parent}:{child}"
-    return piece
+    return piece, start
+
+
+def _checkpoint_quality_origin(db, r, context, key, chunk_size, splits, origin, candidate):
+    """Rebuild a pending leaf's first request and validate its retained answer."""
+    try:
+        if (not isinstance(origin, dict) or set(origin) != {"version", "answer_text", "reservation_artifact_id",
+                "reservation_id", "contract", "owner", "unit_key", "witness", "qc_src"}
+                or origin["version"] != 1 or not mcs_util.valid_hash(origin["witness"])
+                or origin["contract"] != r.get("_provider_contract")
+                or origin["qc_src"] != (r["qc_src"] if "qc_src" in r.keys() else None)):
+            return None
+        found = _chunk_span(r["body_text"], chunk_size, key, splits)
+        if found is None:
+            return None
+        piece, start = found
+        qc = (_repair_qc_snapshot_feedback(r, r["_proof_qc"]) if r.get("_proof_qc") is not None else
+              _qc_feedback(SimpleNamespace(db=db), origin["qc_src"])) if origin["qc_src"] is not None else None
+        if qc is not None and qc["src"] != origin["qc_src"]:
+            return None
+        if origin["qc_src"] is not None and qc is None:
+            return None
+        references = _frame_refs(r)
+        prefix, trimmed_context = _extract_prompt_context(context, references, qc["notes"] if qc else None)
+        hints = _rule_hints(r) if piece == r["body_text"] else _rule_hints(
+            {"body_text": piece, "posted_at": r["posted_at"]})
+        reference = _piece_reference(r["body_text"], start, len(piece))
+        hint = _hint_block(hints) if hints else ""
+        prompt = prefix + reference + (_HINT_HEAD + hint + _HINT_TAIL if hint else "")
+        prompt += _target_head(r["posted_at"]) + piece + _PROMPT_TAIL
+        evidence = _cloud_repair_answer_evidence(db, reservation_artifact_id=origin["reservation_artifact_id"],
+            reservation_id=origin["reservation_id"], route="reextract", project_id=r["project_id"],
+            message_id=r["message_id"], unit_key=origin["unit_key"], owner=origin["owner"], prompt=prompt,
+            answer_text=origin["answer_text"], contract=origin["contract"], purpose="backlog")
+        if evidence["witness"] != origin["witness"]:
+            return None
+        initial = json_object(origin["answer_text"])
+        if not _response_has_required_fields(initial):
+            return None
+        checked = extract_validation.validate_piece(initial, piece, r["body_text"], {},
+            bool(context) or bool(reference), references, source_offset=start)
+        if checked is None:
+            return None
+        if not trimmed_context:
+            checked.pop("reply", None)
+        if mcs_util.canonical(checked) != mcs_util.canonical(candidate):
+            return None
+        return origin
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError, sqlite3.Error):
+        return None
+
+
+def _checkpoint_origin_ref(db, r, context, key, chunk_size, splits, artifact_id, current_id, candidate, *, records=None):
+    try:
+        if type(artifact_id) is not int or not 0 < artifact_id < current_id:
+            return None
+        row = (records.get(artifact_id) if records is not None else
+               db.execute("SELECT * FROM artifacts WHERE artifact_id=? AND kind='extract_llm_chunk' "
+                          "AND project_id=? AND message_id=?", (artifact_id, r["project_id"], r["message_id"])).fetchone())
+        meta = _provider_strict_dict(row["meta"]) if row is not None else None
+        content = _provider_strict_dict(row["content"]) if row is not None else None
+        if (not isinstance(meta, dict) or not isinstance(content, dict)
+                or row["artifact_id"] != artifact_id or row["kind"] != "extract_llm_chunk"
+                or row["project_id"] != r["project_id"] or row["message_id"] != r["message_id"]):
+            return None
+        origin = content.pop("__quality_origin_v1", None)
+        if ("__quality_origin_ref_v1" in content or meta.get("quality_status") != "pending"
+                or meta.get("hash") != r["content_hash"] or meta.get("chunk") != key
+                or meta.get("chunk_size") != chunk_size or meta.get("context") != _chunk_context(r, context, checkpoint=True)
+                or meta.get("actual_model") != _actual_model(r) or row["model"] != meta.get("actual_model")
+                or not inference.is_current(meta, target=_INFERENCE_VERSION)
+                or meta.get("ver") != EXTRACT_VERSION or mcs_util.canonical(content) != mcs_util.canonical(candidate)):
+            return None
+        proof = meta.get("provider_leaf")
+        evidence = _leaf_evidence(_EvidenceLeaf({}, proof))
+        expected = _leaf_record(meta, r, evidence, row["content"]) if evidence is not None else None
+        if expected is None or mcs_util.canonical(proof) != mcs_util.canonical(expected):
+            return None
+        return _checkpoint_quality_origin(db, r, context, key, chunk_size, splits, origin, content)
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError, sqlite3.Error):
+        return None
+
+
+def _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, candidate, *, records=None,
+                        finish_reason="stop"):
+    """Reconstruct one accepted completeness repair from protected evidence."""
+    try:
+        if (not isinstance(repair, dict) or set(repair) != {"version", "started_artifact_id", "response"}
+                or repair["version"] != 1 or type(repair["started_artifact_id"]) is not int):
+            return False
+        started_id = repair["started_artifact_id"]
+        row = (records.get(started_id) if records is not None else db.execute(
+            "SELECT * FROM artifacts WHERE artifact_id=? AND kind='extract_llm_chunk' "
+            "AND project_id=? AND message_id=?", (started_id, r["project_id"], r["message_id"])).fetchone())
+        meta = _provider_strict_dict(row["meta"]) if row is not None else None
+        prior = _provider_strict_dict(row["content"]) if row is not None else None
+        if (not isinstance(meta, dict) or not isinstance(prior, dict) or row["artifact_id"] != started_id
+                or row["kind"] != "extract_llm_chunk" or row["project_id"] != r["project_id"]
+                or row["message_id"] != r["message_id"]):
+            return False
+        origin_id = prior.pop("__quality_origin_ref_v1", None)
+        prior_kind = prior.pop("__quality_prior_kind_v1", None)
+        if (prior_kind not in ("raw", "cached") or "__quality_origin_v1" in prior
+                or meta.get("quality_status") != "started" or meta.get("chunk") != key
+                or meta.get("hash") != r["content_hash"] or meta.get("chunk_size") != chunk_size
+                or meta.get("context") != _chunk_context(r, context, checkpoint=True)
+                or row["model"] != _actual_model(r) or meta.get("actual_model") != row["model"]
+                or meta.get("ver") != EXTRACT_VERSION or not inference.is_current(meta, target=_INFERENCE_VERSION)
+                or type(meta.get("quality_lease")) not in (int, float)
+                or not math.isfinite(meta["quality_lease"]) or meta["quality_lease"] <= 0):
+            return False
+        old_proof = meta.get("provider_leaf")
+        old_evidence = _leaf_evidence(_EvidenceLeaf({}, old_proof))
+        expected = _leaf_record(meta, r, old_evidence, row["content"]) if old_evidence is not None else None
+        if expected is None or mcs_util.canonical(old_proof) != mcs_util.canonical(expected):
+            return False
+        origin = _checkpoint_origin_ref(db, r, context, key, chunk_size, splits, origin_id, started_id, prior,
+                                        records=records)
+        found = _chunk_span(r["body_text"], chunk_size, key, splits)
+        if origin is None or found is None:
+            return False
+        piece, start = found
+        original = json_object(origin["answer_text"]) if prior_kind == "raw" else prior
+        if not isinstance(original, dict):
+            return False
+        references = _frame_refs(r)
+        reference = _piece_reference(r["body_text"], start, len(piece))
+        hints = _rule_hints(r) if piece == r["body_text"] else _rule_hints(
+            {"body_text": piece, "posted_at": r["posted_at"]})
+        _, trimmed_context = _extract_prompt_context(context, references, None)
+        drops = {}
+        before = extract_validation.validate_piece(original, piece, r["body_text"], drops,
+            bool(context) or bool(reference), references, source_offset=start)
+        if before is None:
+            return False
+        if prior_kind == "cached":
+            for counter in ("_items_dropped", "_evidence_dropped"):
+                if type(prior.get(counter)) is int and prior[counter] >= 0:
+                    before[counter] = max(before.get(counter, 0), prior[counter])
+        if not trimmed_context:
+            before.pop("reply", None)
+        if mcs_util.canonical(before) != mcs_util.canonical(prior):
+            return False
+        completeness = extract_quality.completeness_issues(before, hints, piece)
+        if not completeness:
+            return False
+        issues = extract_quality.repair_issues(drops, before) + completeness
+        if piece == r["body_text"] and extract_quality.is_thin(before, r["body_text"]):
+            issues.append("本文の情報量に対し抽出項目が少なすぎます — 対象本文を"
+                          "再読し、症状・薬剤・依頼・バイタル・検査・今後の予定を全て抽出してください")
+        prompt = _repair_prompt(r["posted_at"], issues, original, hints, reference) + piece + _PROMPT_TAIL
+        response = repair["response"]
+        if (not isinstance(response, dict) or set(response) != {"version", "answer_text", "reservation_artifact_id",
+                "reservation_id", "contract", "owner", "unit_key", "witness"} or response["version"] != 1
+                or response["owner"] != {"lease": meta["quality_lease"]}
+                or response["unit_key"] != str(r["message_id"])):
+            return False
+        evidence = _cloud_repair_answer_evidence(db, reservation_artifact_id=response["reservation_artifact_id"],
+            reservation_id=response["reservation_id"], route="reextract", project_id=r["project_id"],
+            message_id=r["message_id"], unit_key=response["unit_key"], owner=response["owner"], prompt=prompt,
+            answer_text=response["answer_text"], contract=response["contract"], finish_reason=finish_reason)
+        if evidence["witness"] != response["witness"]:
+            return False
+        if finish_reason == "length":
+            return candidate is None
+        repaired = json_object(response["answer_text"])
+        if not _response_has_required_fields(repaired):
+            return False
+        after = extract_validation.validate_piece(repaired, piece, r["body_text"], ctx=bool(context) or bool(reference),
+                                                  references=references, source_offset=start)
+        if after is None:
+            return False
+        if not trimmed_context:
+            after.pop("reply", None)
+        return (extract_quality.quality_improves(after, before, r["body_text"],
+                    hints if piece == r["body_text"] else None)
+                and mcs_util.canonical(after) == mcs_util.canonical(candidate))
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError, sqlite3.Error):
+        return False
 
 
 def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
-                       identity_only=False):
+                       identity_only=False, proof_rows=None):
     """Newest bound node records; invalid parents cannot authorize child coverage."""
     if "_source_binding" not in r.keys():
         r = {**dict(r), "_source_binding": inference_dependency_loss.source_binding(db, r["project_id"], r["message_id"])}
     chunk_size = _CHUNK_SIZE if chunk_size is None else chunk_size
     binding = _chunk_context(r, context, checkpoint=True)
     records = {}
-    rows = mcs_queries.iter_artifacts(db, "extract_llm_chunk", message_id=r["message_id"])
+    rows = (mcs_queries.iter_artifacts(db, "extract_llm_chunk", message_id=r["message_id"])
+            if proof_rows is None else proof_rows)
+    proof_lookup = ({row["artifact_id"]: row for row in proof_rows}
+                    if proof_rows is not None else None)
     for a in rows:
         try:
             meta = json.loads(a["meta"] or "{}")
@@ -2964,14 +3510,14 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
         key = meta.get("chunk")
         if type(key) is int and key >= 0 or isinstance(key, str):
             if not identity_only:
-                records[key] = (meta, a["content"], a["project_id"], a["model"], a["meta"])
+                records[key] = (meta, a["content"], a["project_id"], a["model"], a["meta"], a["artifact_id"])
             if identities is not None:
                 identities[key] = (a["artifact_id"], a["project_id"], a["content"], a["model"], a["meta"])
     if identity_only:
         return {}, {}
     saved, splits = {}, {}
     for key in sorted(records, key=lambda key: (str(key).count(":"), str(key))):
-        meta, content, artifact_project, artifact_model, raw_meta = records[key]
+        meta, content, artifact_project, artifact_model, raw_meta, artifact_id = records[key]
         piece = _chunk_piece(r["body_text"], chunk_size, key, splits)
         if piece is None:
             continue
@@ -2984,6 +3530,13 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
             if type(size) is int and 1 <= size < len(piece):
                 parts = plan_chunks(piece, size)
                 if len(parts) >= 2 and "".join(parts) == piece:
+                    split_content = _provider_strict_dict(content)
+                    split_repair = split_content.get("__quality_repair_v1") if isinstance(split_content, dict) else None
+                    if split_repair is not None and (set(split_content) != {"__quality_repair_v1"}
+                            or size != max(1, len(piece) // 2)
+                            or not _replay_repair_leaf(db, r, context, key, chunk_size, splits, split_repair,
+                                                       None, records=proof_lookup, finish_reason="length")):
+                        continue
                     splits[key] = size
             continue
         raw_content = content
@@ -2991,6 +3544,10 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
             content = json.loads(raw_content)
         except (ValueError, TypeError, RecursionError):
             continue
+        origin = content.pop("__quality_origin_v1", None) if isinstance(content, dict) else None
+        origin_ref = content.pop("__quality_origin_ref_v1", None) if isinstance(content, dict) else None
+        prior_kind = content.pop("__quality_prior_kind_v1", None) if isinstance(content, dict) else None
+        repair = content.pop("__quality_repair_v1", None) if isinstance(content, dict) else None
         validated = extract_validation.validate(content, r["body_text"], references=_frame_refs(r)) if isinstance(content, dict) else None
         if validated is not None and not validated.get("_items_dropped") and not validated.get("_evidence_dropped"):
             for counter in ("_items_dropped", "_evidence_dropped"):
@@ -3006,15 +3563,34 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                     and meta.get("piece_sha256") == sha
                     and meta.get("actual_model") == _actual_model(r)
                     and artifact_model == meta.get("actual_model")
-                    and _provider_result_hash(raw_content) is not None
-                    and _provider_result_hash(raw_content) == _provider_result_hash(json.dumps(validated))):
+                    and _provider_result_hash(json.dumps(content)) is not None
+                    and _provider_result_hash(json.dumps(content)) == _provider_result_hash(json.dumps(validated))):
                 expected = _leaf_record(meta, r, evidence, raw_content)
                 try:
                     matches = expected is not None and mcs_util.canonical(proof) == mcs_util.canonical(expected)
                 except (TypeError, ValueError, OverflowError, RecursionError):
                     matches = False
+                if matches and repair is not None:
+                    matches = _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, content,
+                                                  records=proof_lookup)
+                if repair is not None and not matches:
+                    continue
                 if matches:
                     validated = _EvidenceLeaf(validated, evidence)
+                    validated.repair_proof = repair
+                    if validated.repair_proof is not None:
+                        validated.quality_started_id = artifact_id
+                    if origin is not None and meta.get("quality_status") in ("pending", "started"):
+                        validated.quality_origin = _checkpoint_quality_origin(
+                            db, r, context, key, chunk_size, splits, origin, content)
+                        validated.quality_origin_id = artifact_id if validated.quality_origin is not None else None
+                    elif origin_ref is not None and meta.get("quality_status") in ("pending", "started"):
+                        validated.quality_origin = _checkpoint_origin_ref(
+                            db, r, context, key, chunk_size, splits, origin_ref, artifact_id, content,
+                            records=proof_lookup)
+                        validated.quality_origin_id = origin_ref if validated.quality_origin is not None else None
+                        if meta.get("quality_status") == "started" and prior_kind in ("raw", "cached"):
+                            validated.quality_prior_kind = prior_kind
             if meta.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT and meta.get("quality_status") in ("pending", "started"):
                 validated["_quality_status"] = meta["quality_status"]
             elif meta.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT and meta.get("quality_status") in (
@@ -3104,6 +3680,138 @@ def _checkpoint_matches(db, r, context, keys):
                for key in keys for part in _checkpoint_keys(key))
 
 
+_EXTRACT_PROOF_FIELDS = ("artifact_id", "kind", "project_id", "message_id", "content", "model", "meta")
+
+
+def _extract_inline_proof(db, r, context, keys):
+    """Collect the exact adopted checkpoints before their transactional cleanup."""
+    selected = {part for key in keys for part in _checkpoint_keys(key)}
+    identities = r.get("_checkpoint_identity") or {}
+    rows = {}
+
+    def include(artifact_id):
+        if artifact_id in rows:
+            return rows[artifact_id]
+        row = db.execute("SELECT * FROM artifacts WHERE artifact_id=? AND kind='extract_llm_chunk' "
+                         "AND project_id=? AND message_id=?",
+                         (artifact_id, r["project_id"], r["message_id"])).fetchone()
+        if row is None:
+            raise ValueError("extract_proof_checkpoint_missing")
+        record = {name: row[name] for name in _EXTRACT_PROOF_FIELDS}
+        rows[artifact_id] = record
+        return record
+
+    for key in selected:
+        identity = identities.get(key)
+        if identity is None:
+            raise ValueError("extract_proof_checkpoint_missing")
+        row = include(identity[0])
+        if (row["artifact_id"], row["project_id"], row["content"], row["model"], row["meta"]) != identity:
+            raise ValueError("extract_proof_checkpoint_changed")
+        payload = _provider_strict_dict(row["content"])
+        repair = payload.get("__quality_repair_v1") if isinstance(payload, dict) else None
+        if repair is not None:
+            started = include(repair["started_artifact_id"])
+            previous = _provider_strict_dict(started["content"])
+            if not isinstance(previous, dict) or type(previous.get("__quality_origin_ref_v1")) is not int:
+                raise ValueError("extract_proof_origin_missing")
+            include(previous["__quality_origin_ref_v1"])
+    return {"version": 1, "chunk_size": r["_chunk_size"], "qc": _snapshot_repair_qc(db, r),
+            "vital_policy": r.get("_proof_vital_policy"),
+            "rows": [rows[key] for key in sorted(rows)]}
+
+
+def _verify_inline_extract_proof(db, r, context, document, proof):
+    """Replay protected leaves and compare their deterministic final clinical result."""
+    try:
+        if (not isinstance(proof, dict) or set(proof) != {"version", "chunk_size", "vital_policy", "rows", "qc"}
+                or proof["version"] != 1 or type(proof["chunk_size"]) is not int
+                or not 1 <= proof["chunk_size"] <= _CHUNK_SIZE or not isinstance(proof["rows"], list)
+                or not 1 <= len(proof["rows"]) <= _PROGRESS_MAX_NODES * 3):
+            return False
+        r = dict(r)
+        if proof["qc"] is not None:
+            qc = _repair_qc_snapshot_feedback(r, proof["qc"])
+            if qc is None or r.get("qc_src", qc["src"]) != qc["src"]:
+                return False
+            r["qc_src"] = qc["src"]
+            r["_proof_qc"] = proof["qc"]
+        elif r.get("qc_src") is not None:
+            return False
+        rows = proof["rows"]
+        ids = [row.get("artifact_id") for row in rows if isinstance(row, dict)]
+        if (len(ids) != len(rows) or any(type(item) is not int or item <= 0 for item in ids)
+                or ids != sorted(set(ids)) or any(set(row) != set(_EXTRACT_PROOF_FIELDS)
+                or row["kind"] != "extract_llm_chunk" or row["project_id"] != r["project_id"]
+                or row["message_id"] != r["message_id"] for row in rows)):
+            return False
+        lookup = {row["artifact_id"]: row for row in rows}
+        latest = {}
+        for row in rows:
+            meta = _provider_strict_dict(row["meta"])
+            key = meta.get("chunk") if meta is not None else None
+            if (not _checkpoint_keys(key) or meta.get("hash") != r["content_hash"]
+                    or meta.get("ver") != EXTRACT_VERSION or not inference.is_current(meta, target=_INFERENCE_VERSION)
+                    or meta.get("chunk_size") != proof["chunk_size"]
+                    or meta.get("context") != _chunk_context(r, context, checkpoint=True)):
+                return False
+            latest[key] = row
+        # Only selected (newest per key) records participate in the layout;
+        # older pending/started records are used solely through explicit IDs.
+        splits, saved = _saved_chunk_state(db, r, context, chunk_size=proof["chunk_size"], proof_rows=rows)
+        roots = plan_chunks(r["body_text"], proof["chunk_size"])
+        stack = list(reversed(list(enumerate(roots))))
+        leaves, visited, required = [], 0, set()
+        while stack:
+            key, piece = stack.pop()
+            visited += 1
+            if visited > _PROGRESS_MAX_NODES:
+                return False
+            selected = latest.get(key)
+            if selected is None:
+                return False
+            required.add(selected["artifact_id"])
+            selected_content = _provider_strict_dict(selected["content"])
+            if selected_content is None:
+                return False
+            repair = selected_content.get("__quality_repair_v1")
+            if repair is not None:
+                started_id = repair.get("started_artifact_id") if isinstance(repair, dict) else None
+                started = lookup.get(started_id)
+                started_content = _provider_strict_dict(started["content"]) if started is not None else None
+                origin_id = started_content.get("__quality_origin_ref_v1") if isinstance(started_content, dict) else None
+                if started is None or origin_id not in lookup:
+                    return False
+                required.update((started_id, origin_id))
+            if key in saved:
+                value = saved[key]
+                if (_leaf_evidence(value) is None or "_quality_status" in value
+                        or isinstance(value.get("_quality_result"), dict)
+                        and value["_quality_result"].get("state") != "hint_gaps_resolved"):
+                    return False
+                leaves.append({k: v for k, v in value.items() if k not in ("_quality_result", "_provider_leaf")})
+            elif key in splits:
+                parts = plan_chunks(piece, splits[key])
+                if len(parts) < 2 or "".join(parts) != piece:
+                    return False
+                stack.extend((f"{key}:{index}", part) for index, part in reversed(list(enumerate(parts))))
+            else:
+                return False
+        if not leaves or required != set(ids):
+            return False
+        result = leaves[0] if len(leaves) == 1 else extract_validation.merge(leaves)
+        if proof["vital_policy"]:
+            extract_validation.apply_vital_policy(result, r["body_text"], proof["vital_policy"])
+        if not context:
+            result.pop("reply", None)
+        if len(leaves) > 1:
+            result["_chunks_total"] = len(leaves)
+        result["_model"] = _actual_model(r)
+        return mcs_util.canonical(result) == mcs_util.canonical(document)
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError, sqlite3.Error):
+        return False
+
+
 def _delete_checkpoint_keys_tx(db, r, context, keys):
     selected = {part for key in keys for part in _checkpoint_keys(key)}
     binding = _chunk_context(r, context, checkpoint=True)
@@ -3152,6 +3860,7 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                               used_keys, *, check_current, mark_context=None, expected_prior=None):
     if ledger.db.in_transaction:
         return "rejected"
+    r.pop("_inline_extract_proof", None)
     try:
         with ledger.db:
             ledger.db.execute("BEGIN IMMEDIATE")
@@ -3166,6 +3875,23 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                 if prior is None or _prior_identity(prior) != expected_prior:
                     return "rejected"
             _, _, current = _checkpoint_identity(ledger.db, r, context, r["_chunk_size"])
+            # The existing checkpoint cleanup is safe only after every adopted
+            # repaired leaf has been copied into the protected final artifact.
+            repaired = False
+            for key in (() if r.get("_kept_prior") else
+                        {part for key in used_keys for part in _checkpoint_keys(key)}):
+                identity = current.get(key)
+                payload = _provider_strict_dict(identity[2]) if identity is not None else None
+                repaired = repaired or isinstance(payload, dict) and "__quality_repair_v1" in payload
+            if repaired:
+                try:
+                    inline = _extract_inline_proof(ledger.db, r, context, used_keys)
+                except (ValueError, TypeError, KeyError, sqlite3.Error):
+                    return "rejected"
+                clinical = _provider_strict_dict(content)
+                if clinical is None or not _verify_inline_extract_proof(ledger.db, r, context, clinical, inline):
+                    return "rejected"
+                r["_inline_extract_proof"] = inline
             witness = []
             outcome = _replace_current_tx(ledger, r, content,
                                           ctx=context is not None if mark_context is None else mark_context,
@@ -3179,6 +3905,11 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
             elif outcome == "written":
                 _delete_checkpoint_keys_tx(ledger.db, r, context, used_keys)
                 _verify_atomic_witness(ledger.db, r, witness)
+                if repaired:
+                    stored = _provider_strict_dict(witness[0]["content"])
+                    if (not isinstance(stored, dict) or stored.pop(_INTERNAL_REPAIR_PROOF, None) != inline
+                            or not _verify_inline_extract_proof(ledger.db, r, context, stored, inline)):
+                        raise RuntimeError("extract_proof_readback_failed")
                 _verify_unique_llm_current(ledger.db, r, witness[0]['artifact_id'])
             if outcome in ("held", "written"):
                 extraction_refresh.mark_history_change_tx(ledger.db, r["project_id"], r["message_id"])
@@ -3264,6 +3995,11 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                 meta["split_size"] = split_size
             evidence = _leaf_evidence(value)
             quality_status = value.get("_quality_status")
+            quality_origin = getattr(value, "quality_origin", None)
+            quality_origin_id = getattr(value, "quality_origin_id", None)
+            quality_prior_kind = getattr(value, "quality_prior_kind", None)
+            quality_repair = (getattr(split_size, "repair_proof", None) if split_size is not None
+                              else getattr(value, "repair_proof", None))
             if quality_status in ("pending", "started"):
                 meta.update(quality_pass=extract_quality._QUALITY_CHECKPOINT, quality_status=quality_status)
                 value = {key: item for key, item in value.items() if key != "_quality_status"}
@@ -3273,6 +4009,22 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                             quality_remaining=quality["remaining_hint_candidates"])
                 value = {key: item for key, item in value.items() if key != "_quality_result"}
             value = {key: item for key, item in value.items() if key != "_provider_leaf"}
+            if quality_repair is not None:
+                if not _replay_repair_leaf(ledger.db, r, context, key, chunk_size, splits or {}, quality_repair,
+                                           None if split_size is not None else value,
+                                           finish_reason="length" if split_size is not None else "stop"):
+                    return False
+                value["__quality_repair_v1"] = quality_repair
+            if quality_status in ("pending", "started") and quality_origin_id is not None:
+                value["__quality_origin_ref_v1"] = quality_origin_id
+            elif quality_status == "pending" and quality_origin is not None:
+                value["__quality_origin_v1"] = quality_origin
+            if quality_status == "started" and quality_origin_id is not None:
+                if (quality_prior_kind not in ("raw", "cached") or type(lease) not in (int, float)
+                        or not math.isfinite(lease) or lease <= 0):
+                    raise ValueError("extract_repair_origin_invalid")
+                value["__quality_prior_kind_v1"] = quality_prior_kind
+                meta["quality_lease"] = lease
             content = json.dumps(value, ensure_ascii=False)
             if split_size is None:
                 proof = _leaf_record(meta, r, evidence, content)
@@ -3334,7 +4086,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
     return True
 
 
-def _progress_steps(db, row, *, model: str | None):
+def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None):
     """Apply the shared progress decision, yielding only independent SQL probes."""
     out = {"state": "attention", "completed": 0, "total": 0, "backend": "legacy"}
     if not isinstance(model, str) or not model or not row or row["body_state"] != "full":
@@ -3344,12 +4096,16 @@ def _progress_steps(db, row, *, model: str | None):
     if not isinstance(r.get("body_text"), str) or not r["body_text"]:
         return out
     r["_target"] = ("", model)
-    final = db.execute("SELECT content,meta,model FROM artifacts WHERE kind=? AND message_id=? "
+    final = db.execute("SELECT artifact_id,content,meta,model FROM artifacts WHERE kind=? AND message_id=? "
                        "AND (project_id IS NULL OR project_id=?) AND "
                        + inference.current_meta_pred("meta", target=_INFERENCE_VERSION)
                        + " AND COALESCE(json_extract(" + json_or_null("meta") + ",'$.invalidated'),0)=0 ORDER BY artifact_id DESC LIMIT 1",
                        (KIND, r["message_id"], r["project_id"])).fetchone()
+    if expected_artifact_id is not None and (final is None or final["artifact_id"] != expected_artifact_id):
+        return out
     final_meta = (loads_dict(final["meta"]) or {}) if final else {}
+    if "internal_proof_version" in final_meta or "internal_proof_hash" in final_meta:
+        r["_provider_contract"] = {key: final_meta.get(key) for key in ("backend", "model", "prompt")}
     settled = (final is not None and not final_meta.get("error")
                and final_meta.get("invalidated") in (None, False, 0)
                and final_meta.get("hash") == r["content_hash"]
@@ -3406,7 +4162,17 @@ def _progress_steps(db, row, *, model: str | None):
             meta, document = json.loads(final["meta"]), json.loads(final["content"])
         except (ValueError, TypeError, RecursionError):
             return out
-        if not isinstance(meta, dict):
+        if not isinstance(meta, dict) or not isinstance(document, dict):
+            return out
+        marked = (_INTERNAL_REPAIR_PROOF in document or "internal_proof_version" in meta
+                  or "internal_proof_hash" in meta)
+        inline = document.pop(_INTERNAL_REPAIR_PROOF, None)
+        if marked and (
+                type(meta.get("internal_proof_version")) is not int or meta["internal_proof_version"] != 1
+                or not isinstance(inline, dict)
+                or not mcs_util.valid_hash(meta.get("internal_proof_hash"))
+                or meta.get("internal_proof_hash") != _internal_proof_hash(inline)
+                or not _verify_inline_extract_proof(db, r, context, document, inline)):
             return out
         bound = (isinstance(meta, dict) and meta.get("hash") == r["content_hash"]
                  and inference.is_current(meta, target=_INFERENCE_VERSION)
@@ -3478,9 +4244,9 @@ def _finish_progress(db, iterator, probe=None):
         return done.value
 
 
-def progress_for_message(db, row, *, model: str | None) -> dict:
+def progress_for_message(db, row, *, model: str | None, expected_artifact_id=None) -> dict:
     """Read current bound leaf counts; no source text or payload leaves."""
-    return _finish_progress(db, _progress_steps(db, row, model=model))
+    return _finish_progress(db, _progress_steps(db, row, model=model, expected_artifact_id=expected_artifact_id))
 
 
 def _batch_progress_probes(db, probes):
@@ -4480,9 +5246,15 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             continue
         r["_cloud_mode"] = mode
         if mode in ("on", "shadow", "dry_run"):
+            r["_cloud_config"] = copy.deepcopy(cfg)
             r["_cloud_settings"] = _cloud_settings(cfg)
+            selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog", root=HOME)
+            if errors or selection is None:
+                blocked += 1
+                continue
+            r["_cloud_selection"] = selection
         if mode == "on":
-            r["_provider_contract"] = _cloud_contract(cfg)
+            r["_provider_contract"] = _cloud_contract(selection=selection)
             r["_target"] = (target[0], r["_provider_contract"]["model"])
         qc = _qc_feedback(ledger, r["qc_src"]) if r["qc_src"] else None
         if r["qc_src"] and qc is None:
@@ -4810,12 +5582,16 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             # (_chunk_context), so a deferred post resumes instead of re-paying
             if _owns_current_source(ledger, r, leases[index]):
                 if split:
-                    r["_splits"][chunk] = value
+                    r["_splits"][chunk] = int(value)
                 saved = _persist_chunks(ledger, r, {chunk: {} if split else value}, ctx,
                                 chunk_size=r["_chunk_size"], splits=r["_splits"],
                                 split_size=value if split else None, lease=leases[index],
                                 guard=r.get("_checkpoint_guard"),
                                 **({"replay": True} if replay else {}))
+                if (saved and isinstance(value, _EvidenceLeaf)
+                        and (value.get("_quality_status") in ("pending", "started") or value.repair_proof is not None)):
+                    identity = r.get("_checkpoint_identity", {}).get(chunk)
+                    value.quality_started_id = identity[0] if identity is not None else None
             if not saved:
                 r["_checkpoint_conflict"] = True
             return saved
@@ -4825,7 +5601,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 receipt["event"].set()
 
     def _queue_checkpoint(index, chunk, value, split=False, replay=False):
-        if not replay and not split and "_quality_status" not in value:
+        if (not replay and not split and "_quality_status" not in value
+                and getattr(value, "repair_proof", None) is None):
             checkpoints.put((index, chunk, value, split, None, replay))
             return None
         receipt = {"event": threading.Event(), "saved": False}
@@ -4890,12 +5667,12 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         provider = None
         if r.get("_cloud_mode") == "on":
             r["_cloud_lease"] = leases[index]
-            provider = _owner_call(lambda: _CloudProvider(ledger, {"cloud_llm": r["_cloud_settings"]}, route="reextract",
+            provider = _owner_call(lambda: _CloudProvider(ledger, r["_cloud_config"], route="reextract",
                 project_id=r["project_id"], message_id=r["message_id"],
                 unit_key=str(r["message_id"]), deadline=deadline,
                 current=lambda: not r.get("_checkpoint_conflict")
                     and _owns_current_source(ledger, r, r["_cloud_lease"]),
-                dispatch=_owner_call, owner={"lease": leases[index]}))
+                dispatch=_owner_call, owner={"lease": leases[index]}, selection=r["_cloud_selection"]))
         if provider is not None:
             try:
                 with cloud_slots:
@@ -4945,9 +5722,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             return _infer(r, ctx, saved, hints, qc, index, meta, chunks_out)
 
     def _infer(r, ctx, saved, hints, qc, index, meta, chunks_out, provider=None):
+        r["_proof_vital_policy"] = copy.deepcopy(vital_policy)
         with pin_target(r["_target"]):
             return llm_extract(r["body_text"], context=ctx, hints=hints,
                            **({"references": _frame_refs(r)} if _frame_refs(r) else {}),
+                           quality_qc_src=r.get("qc_src"),
                            deadline=deadline, meta_out=meta,
                            posted_at=r["posted_at"],
                            **({"provider": provider} if provider is not None else {}),
@@ -5496,10 +6275,10 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         cloud_result = None
         provider = None
         try:
-            provider = _CloudProvider(ledger, {"cloud_llm": r["_cloud_settings"]}, route="reextract", project_id=r["project_id"],
+            provider = _CloudProvider(ledger, r["_cloud_config"], route="reextract", project_id=r["project_id"],
                 message_id=r["message_id"], unit_key=str(r["message_id"]), deadline=deadline,
                 current=lambda r=r: _current(ledger, r["message_id"], r["content_hash"]),
-                dispatch=lambda fn, **kw: fn(), owner={"after_commit": True})
+                dispatch=lambda fn, **kw: fn(), owner={"after_commit": True}, selection=r["_cloud_selection"])
             cloud_result = llm_extract(r["body_text"], context=ctx, hints=_rule_hints(r),
                 deadline=deadline, meta_out=comparison_meta, posted_at=r["posted_at"],
                 vital_policy=vital_policy, provider=provider,

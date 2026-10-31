@@ -14,6 +14,8 @@ from test_patient_context_refresh import runtime as runtime, seed, finish, step,
 from semantic_jev import JevError
 from extract_testkit import _ledger, _message
 
+_REAL_CLOUD_PROVIDER = worker._CloudProvider
+
 
 REQUEST_IDENTITY = {'input_key': '1' * 64, 'candidate_key': '2' * 64,
                     'failure_key': '3' * 64, 'audit_key': '4' * 64}
@@ -421,9 +423,11 @@ def repair(tmp_path, monkeypatch):
          facts[1]['id']: {'choice': 'important_missing', 'confidence': 0.99}}, lambda *_: True, 0.8,
         {facts[0]['id']})
     responses, sent, enabled, current = [facts[1]['id']], [], [True], [True]
+    repair_cfg = {'cloud_llm': {'mode': 'on', 'provider': 'anthropic', 'project_ids': [1]}}
     monkeypatch.setattr(worker, '_cloud_mode', lambda *_: 'on' if enabled[0] else 'off')
     monkeypatch.setattr(worker.cloud_policy, 'budget_block_reason', lambda *args, **kwargs: None)
-    monkeypatch.setattr(worker, 'load_config', lambda: {})
+    monkeypatch.setattr(worker.cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')
+    monkeypatch.setattr(worker, 'load_config', lambda: repair_cfg)
     def capture(db, pid, cfg, night_id, repaired, contract, projection):
         assert db.in_transaction and pid == 1 and contract == assessment
         key = refresh._digest(sorted((row['fact_ids'][0], row['text']) for row in repaired))
@@ -446,7 +450,7 @@ def repair(tmp_path, monkeypatch):
                 raise worker.CloudFallback('cloud_unit_changed')
     monkeypatch.setattr(worker, '_CloudProvider', Provider)
     def run():
-        return refresh._quality_repair_candidate(led, 1, {}, '2026-10-27',
+        return refresh._quality_repair_candidate(led, 1, repair_cfg, '2026-10-27',
             {'summary': summary, 'temporal_view': {}}, identity, claim, lambda *_: current[0],
             time.monotonic() + 600, lambda: True, facts, assessment, 0.8,
             {'groups': {}, 'relations': []})
@@ -464,6 +468,143 @@ def test_failed_candidate_repairs_once_and_resume_reuses_saved_ids(repair):
     assert json.loads(saved['content']) == {'fact_ids': [facts[1]['id']]}
     assert '合成の重要な変更。' not in saved['content']
     assert run()[0] == 'candidate' and len(sent) == 1
+
+
+@pytest.mark.parametrize('damage', ['none', 'answer', 'receipt', 'audit'])
+def test_distinct_summary_repair_requires_exact_response_and_receipt(monkeypatch, damage):
+    original = {'input_key': 'a' * 64, 'audit_key': 'b' * 64, 'failure_key': 'c' * 64}
+    repaired = {'candidate_key': 'd' * 64, 'audit_key': 'e' * 64}
+    fact_id = 'f' * 64
+    text = json.dumps({'fact_ids': [fact_id]})
+    proof = {'version': 1, 'answer_text': text, 'reservation_artifact_id': 17,
+             'reservation_id': '1' * 32, 'contract': {'backend': 'openai', 'model': 'synthetic', 'prompt': '2' * 16},
+             'night_id': 'synthetic-night', 'original_audit_key': original['audit_key'],
+             'original_ids': ['3' * 64], 'receipt_sig': '4' * 64}
+    content = {'fact_ids': [fact_id], '__mcs_internal_proof_v1': proof}
+    meta = {'input_key': original['input_key'], 'original_failure_key': original['failure_key'],
+            'candidate_key': repaired['candidate_key'], 'audit_key': repaired['audit_key']}
+    def evidence(_db, **kwargs):
+        assert kwargs['prompt'] == 'synthetic prompt'
+        assert kwargs['owner'] == {'night_id': 'synthetic-night', 'source_sig': original['input_key']}
+        return {'witness': '4' * 64}
+    monkeypatch.setattr(worker, '_cloud_repair_answer_evidence', evidence)
+    if damage == 'answer':
+        proof['answer_text'] = json.dumps({'fact_ids': ['5' * 64]})
+    elif damage == 'receipt':
+        proof['receipt_sig'] = '6' * 64
+    elif damage == 'audit':
+        meta['audit_key'] = '7' * 64
+    if damage == 'none':
+        assert refresh._summary_repair_response(None, 1, original, repaired, content, meta, 'synthetic prompt') == proof
+    else:
+        with pytest.raises(ValueError):
+            refresh._summary_repair_response(None, 1, original, repaired, content, meta, 'synthetic prompt')
+
+
+def test_private_repair_proof_only_uses_reserved_field():
+    proof = {'answer_text': 'synthetic-private-answer'}
+    assert refresh._repair_response({'__mcs_internal_proof_v1': proof}) == proof
+    assert refresh._repair_response({'fact_ids': ['a' * 64]}) is None
+    for value in ({'repair_response': proof},
+                  {'repair_response': proof, '__mcs_internal_proof_v1': proof}):
+        with pytest.raises(ValueError):
+            refresh._repair_response(value)
+
+
+def test_private_repair_candidate_is_omitted_from_view_and_aggregate_export():
+    import export_schema
+    import mcs_view
+
+    content = {'fact_ids': ['a' * 64],
+               '__mcs_internal_proof_v1': {'answer_text': 'synthetic-private-answer'}}
+    _meta, visible = mcs_view._artifact_json({'meta': '{}', 'content': json.dumps(content)})
+    assert visible == {'fact_ids': ['a' * 64]}
+    record = {'type': 'message', 'contract': 'mcs-read-model/1',
+              'snapshot_generation_id': 'synthetic-generation', 'project_id': 1, 'message_id': 1,
+              '__mcs_internal_proof_v1': content['__mcs_internal_proof_v1']}
+    projected = export_schema.project_record(record)
+    assert projected['content_omitted'] is True and 'synthetic-private-answer' not in json.dumps(projected)
+    with pytest.raises(ValueError):
+        export_schema.validate_record(record)
+
+
+def test_summary_repair_slot_is_not_reset_by_profile_or_ambiguous_legacy(repair):
+    led, _run, _facts, _responses, _sent, _enabled, _current = repair
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+    led.artifact_add(refresh.QUALITY_REPAIR, '{}', project_id=1,
+                     meta={VERSION_KEY: CURRENT_VERSION, 'input_key': '1' * 64,
+                           'candidate_key': '2' * 64, 'repair_scope': '3' * 64})
+    assert refresh._other_summary_repair_spent(led.db, 1, {'input_key': '4' * 64, 'repair_scope': '3' * 64})
+    assert not refresh._other_summary_repair_spent(led.db, 1, {'input_key': '4' * 64, 'repair_scope': '5' * 64})
+    led.artifact_add(refresh.QUALITY_REPAIR, '{}', project_id=1,
+                     meta={VERSION_KEY: CURRENT_VERSION, 'input_key': '6' * 64, 'candidate_key': '7' * 64})
+    assert refresh._other_summary_repair_spent(led.db, 1, {'input_key': '4' * 64, 'repair_scope': '5' * 64})
+
+
+@pytest.mark.parametrize('strip_candidate_marker', [False, True])
+def test_summary_profiled_repair_cannot_hide_by_dropping_its_publication_ref(repair, strip_candidate_marker):
+    led, _run, _facts, _responses, _sent, _enabled, _current = repair
+    identity = {'input_key':'a' * 64, 'audit_key':'b' * 64}
+    candidate_meta = {'input_key':identity['input_key'], 'audit_key':identity['audit_key']}
+    if not strip_candidate_marker:
+        candidate_meta['repair_version'] = 1
+    led.artifact_add(refresh.QUALITY_REPAIR_CANDIDATE, json.dumps({'fact_ids':['c' * 64]}),
+                     project_id=1, meta=candidate_meta)
+    led.artifact_add('cloud_usage_reserve', '{}', project_id=1, meta={
+        'route':'patient_context', 'unit_key':'summary_quality_repair',
+        'owner':{'source_sig':identity['input_key']}, 'profile':'sol-high'})
+    assert not refresh._summary_repair_publication(led.db, 1, {}, {}, {}, {'identity':identity}, {}, {}, 0.8)
+
+
+def test_summary_high_repair_retains_response_receipt_for_resume(repair, monkeypatch, tmp_path):
+    from contextlib import nullcontext
+
+    led, _run, facts, _responses, _sent, _enabled, _current = repair
+    cfg = {'cloud_llm': {'mode':'on', 'provider':'openai', 'project_ids':[1]}}
+    monkeypatch.setattr(worker, 'HOME', str(tmp_path))
+    monkeypatch.setattr(worker, 'load_config', lambda: cfg)
+    monkeypatch.setattr(worker.cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')
+    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker.cloud_policy, 'block_reason', lambda *args, **kwargs: None)
+    monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
+    monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
+    monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
+    monkeypatch.setattr(worker, '_CloudProvider', _REAL_CLOUD_PROVIDER)
+    posts = []
+    real_client = worker.openai_client.OpenAIClient
+    class Client(real_client):
+        def request(self, method, body, timeout, **kwargs):
+            posts.append(body)
+            return 200, {}, json.dumps({'status':'completed', 'model':self.model, 'service_tier':'default',
+                'output':[{'type':'message','role':'assistant','content':[{'type':'output_text',
+                    'text':json.dumps({'fact_ids':[facts[1]['id']]})}]}],
+                'usage':{'input_tokens':2,'output_tokens':1,'total_tokens':3,
+                         'input_tokens_details':{'cached_tokens':0,'cache_write_tokens':0}}}).encode()
+    monkeypatch.setattr(worker.openai_client, 'OpenAIClient', Client)
+    fail = json.loads(led.artifacts(refresh.QUALITY_FAIL)[0]['meta'])
+    identity = {key:fail[key] for key in ('input_key','candidate_key','failure_key','audit_key')}
+    identity['fact_ids'] = [fact['id'] for fact in facts]
+    claim_row = led.db.execute('SELECT payload,next_try FROM fetch_jobs WHERE kind=? AND project_id=1',
+                               (refresh.QUALITY_CLAIM,)).fetchone()
+    claim = (json.loads(claim_row['payload'])['token'], claim_row['next_try'])
+    summary = [{'text':facts[0]['quote'], 'fact_ids':[facts[0]['id']]}]
+    def run(night):
+        return refresh._quality_repair_candidate(led, 1, cfg, night,
+            {'summary':summary, 'temporal_view':{}}, identity, claim, lambda *_: True,
+            time.monotonic() + 600, lambda: True, facts, {'model':'synthetic'}, 0.8,
+            {'groups':{}, 'relations':[]})
+    status, candidate = run('synthetic-night')
+    assert status == 'candidate' and len(posts) == 1 and candidate['repair_ref']
+    assert posts[0]['model'] == 'gpt-6.1-sol' and posts[0]['reasoning'] == {'effort':'high'}
+    assert posts[0]['max_output_tokens'] == 32768
+    status, resumed = run('synthetic-next-night')
+    assert status == 'candidate' and resumed['repair_ref'] == candidate['repair_ref'] and len(posts) == 1
+    row = led.artifacts(refresh.QUALITY_REPAIR_CANDIDATE)[0]
+    content = json.loads(row['content'])
+    content['__mcs_internal_proof_v1']['answer_text'] += ' '
+    with led.db:
+        led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(content), row['artifact_id']))
+    assert run('synthetic-next-night') == ('held', None) and len(posts) == 1
 
 
 def test_budget_unavailable_does_not_spend_repair(repair):

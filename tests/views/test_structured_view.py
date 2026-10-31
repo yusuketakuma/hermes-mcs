@@ -28,6 +28,123 @@ def _render(db, llm, rules=None):
     return "\n".join(structured_view.structured_lines(db.db, 1))
 
 
+@pytest.mark.parametrize('marker', ['complete', 'metadata_only', 'content_only', 'null_content'])
+def test_marked_current_extract_requires_exact_proof_without_resurrecting_older(db, monkeypatch, marker):
+    import extract_llm
+    import mcs_queries
+
+    db.db.execute("UPDATE messages SET body_text='完全合成本文' WHERE message_id=1")
+    old = {'meds': [{'name': '合成旧薬', 'action': 'none'}]}
+    db.artifact_add('extract_llm', json.dumps(old), project_id=1, message_id=1, model='synthetic-model',
+                    meta={'hash': 'synthetic-hash', VERSION_KEY: CURRENT_VERSION})
+    content = {'meds': [{'name': '合成新薬', 'action': 'none'}]}
+    meta = {'hash': 'synthetic-hash', VERSION_KEY: CURRENT_VERSION}
+    if marker in ('complete', 'content_only'):
+        content['__mcs_internal_proof_v1'] = {'answer': 'SYNTHETIC_PRIVATE_PROOF'}
+    if marker == 'null_content':
+        content['__mcs_internal_proof_v1'] = None
+    if marker in ('complete', 'metadata_only'):
+        meta.update(internal_proof_version=1, internal_proof_hash='a' * 64)
+    selected = db.artifact_add('extract_llm', json.dumps(content), project_id=1, message_id=1,
+                               model='synthetic-model', meta=meta)
+    calls = []
+
+    def progress(connection, row, *, model, expected_artifact_id):
+        calls.append((model, expected_artifact_id))
+        assert not mcs_queries.selected_artifact_proof_valid(connection, expected_artifact_id)
+        return {'state': 'complete'}
+
+    monkeypatch.setattr(extract_llm, 'progress_for_message', progress)
+    db.db.execute('PRAGMA query_only=ON')
+    before, transaction = db.db.total_changes, db.db.in_transaction
+    try:
+        result = mcs_queries.current_message_facts(db.db, 1)
+        if marker == 'complete':
+            assert result == {'meds': [{'name': '合成新薬', 'action': 'none'}]}
+            assert calls and all(call == ('synthetic-model', selected) for call in calls)
+            assert list(structured_view.medication_post_ids(db.db, [1])) == [1]
+            assert structured_view.fact_generations(db.db, [1])[1]['extract_llm'] == selected
+            assert 'SYNTHETIC_PRIVATE_PROOF' not in json.dumps(mcs_queries.current_extraction_blobs(db.db, 1))
+            monkeypatch.setattr(extract_llm, 'progress_for_message', lambda *_a, **_k: {'state': 'attention'})
+        else:
+            assert result is None and not calls
+        assert mcs_queries.current_message_extract(db.db, 'extract_llm', 1) is None
+        assert mcs_queries.current_message_facts(db.db, 1) is None
+        assert list(structured_view.medication_post_ids(db.db, [1])) == []
+        assert 'extract_llm' not in structured_view.fact_generations(db.db, [1]).get(1, {})
+        assert 'extract_llm' not in mcs_queries.current_extraction_blobs(db.db, 1).get(1, {})
+        assert '合成旧薬' not in '\n'.join(structured_view.structured_lines(db.db, 1))
+        assert db.db.total_changes == before and db.db.in_transaction == transaction
+    finally:
+        db.db.execute('PRAGMA query_only=OFF')
+
+
+@pytest.mark.parametrize('damage', ['content', 'content_marker', 'metadata'])
+def test_malformed_newer_marked_extract_blocks_older_current_result(db, damage):
+    import mcs_queries
+
+    db.db.execute("UPDATE messages SET body_text='完全合成本文' WHERE message_id=1")
+    db.artifact_add('extract_llm', json.dumps({'meds': [{'name': '合成旧薬', 'action': 'none'}]}),
+                    project_id=1, message_id=1, model='synthetic-model',
+                    meta={'hash': 'synthetic-hash', VERSION_KEY: CURRENT_VERSION})
+    meta = {'hash': 'synthetic-hash', VERSION_KEY: CURRENT_VERSION}
+    if damage != 'content_marker':
+        meta.update(internal_proof_version=1, internal_proof_hash='a' * 64)
+    content = '{"__mcs_internal_proof_v1":' if damage == 'content_marker' else '{'
+    selected = db.artifact_add('extract_llm', content, project_id=1, message_id=1,
+                               model='synthetic-model', meta=meta)
+    if damage == 'metadata':
+        db.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', ('{"internal_proof_version":', selected))
+        db.db.commit()
+    db.db.execute('PRAGMA query_only=ON')
+    before = db.db.total_changes
+    try:
+        assert mcs_queries.current_message_extract(db.db, 'extract_llm', 1) is None
+        assert mcs_queries.current_message_facts(db.db, 1) is None
+        assert list(structured_view.medication_post_ids(db.db, [1])) == []
+        assert 'extract_llm' not in structured_view.fact_generations(db.db, [1]).get(1, {})
+        assert 'extract_llm' not in mcs_queries.current_extraction_blobs(db.db, 1).get(1, {})
+        assert db.db.total_changes == before
+    finally:
+        db.db.execute('PRAGMA query_only=OFF')
+
+
+def test_malformed_marked_extract_for_another_source_does_not_hide_current(db):
+    import mcs_queries
+
+    current = {'meds': [{'name': '合成現行薬', 'action': 'none'}]}
+    db.artifact_add('extract_llm', json.dumps(current), project_id=1, message_id=1, model='synthetic-model',
+                    meta={'hash': 'synthetic-hash', VERSION_KEY: CURRENT_VERSION})
+    db.artifact_add('extract_llm', '{', project_id=1, message_id=1, model='synthetic-model',
+                    meta={'hash': 'b' * 64, VERSION_KEY: CURRENT_VERSION,
+                          'internal_proof_version': 1, 'internal_proof_hash': 'a' * 64})
+    assert mcs_queries.current_message_facts(db.db, 1) == current
+
+
+@pytest.mark.parametrize('bad_hash', ['missing', None, 42, [], {}, '', 'not-a-hash', 'A' * 64])
+def test_newer_marked_extract_with_unverified_source_holds_older(db, bad_hash):
+    import mcs_queries
+
+    db.artifact_add('extract_llm', json.dumps({'meds': [{'name': '合成旧薬', 'action': 'none'}]}),
+                    project_id=1, message_id=1, model='synthetic-model',
+                    meta={'hash': 'synthetic-hash', VERSION_KEY: CURRENT_VERSION})
+    meta = {VERSION_KEY: CURRENT_VERSION, 'internal_proof_version': 1, 'internal_proof_hash': 'a' * 64}
+    if bad_hash != 'missing':
+        meta['hash'] = bad_hash
+    db.artifact_add('extract_llm', '{', project_id=1, message_id=1, model='synthetic-model', meta=meta)
+    db.db.execute('PRAGMA query_only=ON')
+    before = db.db.total_changes
+    try:
+        assert mcs_queries.current_message_extract(db.db, 'extract_llm', 1) is None
+        assert mcs_queries.current_message_facts(db.db, 1) is None
+        assert list(structured_view.medication_post_ids(db.db, [1])) == []
+        assert 'extract_llm' not in structured_view.fact_generations(db.db, [1]).get(1, {})
+        assert 'extract_llm' not in mcs_queries.current_extraction_blobs(db.db, 1).get(1, {})
+        assert db.db.total_changes == before
+    finally:
+        db.db.execute('PRAGMA query_only=OFF')
+
+
 def test_filters_and_labels(db):
     joined = _render(db, {
         "meds": [{"name": "家族薬", "subject": "family"},

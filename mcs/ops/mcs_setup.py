@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import json
 import math
 import os
@@ -2187,7 +2188,23 @@ def main(argv: list[str] | None = None) -> int:
                     return _credential_config_snapshot()[1] == original
                 except (OSError, ValueError, RecursionError):
                     return False
-            return credential_setup_menu.run(HOME, cfg, current=current)
+            def matches(snapshot, path, raw, stamp):
+                identity = snapshot[0]
+                return (os.path.abspath(path) == os.path.abspath(CONF_PATH) and snapshot[4] == raw
+                        and tuple(identity[i] for i in (0, 1, 2, 5, 6, 7)) == stamp[0]
+                        and hashlib.sha256(raw).digest() == stamp[1])
+            def admission(path, raw, stamp):
+                import config_edit
+                _, snapshot = _credential_config_snapshot()
+                if snapshot != original or not matches(snapshot, path, raw, stamp):
+                    raise config_edit.ConfigConflict('config_changed')
+            def on_saved(path, raw, stamp):
+                nonlocal original
+                _, snapshot = _credential_config_snapshot()
+                if snapshot[1:4] != original[1:4] or not matches(snapshot, path, raw, stamp):
+                    raise ValueError('config_save_unverified')
+                original = snapshot
+            return credential_setup_menu.run(HOME, cfg, current=current, admission=admission, on_saved=on_saved)
         except (OSError, ValueError, RecursionError):
             print('設定を読み取れないため、認証情報の設定を開始できません。設定を確認してください。')
             return 1

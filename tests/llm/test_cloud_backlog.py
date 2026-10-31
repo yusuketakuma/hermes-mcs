@@ -185,7 +185,7 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
     cfg = {"cloud_llm": {"mode": "on", "project_ids": [1]}}
     monkeypatch.setattr(mcs_util, "load_config", lambda: cfg)
     monkeypatch.setattr(extract_llm.cloud_policy, "global_block_reason", lambda *a, **kw: None)
-    monkeypatch.setattr(extract_llm.cloud_policy, "budget_block_reason", lambda *a: None)
+    monkeypatch.setattr(extract_llm.cloud_policy, "budget_block_reason", lambda *a, **kw: None)
     monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
     monkeypatch.setattr(backlog.time, "sleep", lambda _: None)
     monkeypatch.setattr(semantic_drain, "runtime_config", lambda *a: ({"job_budget_seconds": 1200}, []))
@@ -285,7 +285,7 @@ def carry_worker(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm.cloud_policy, "global_block_reason",
                         lambda *a, **kw: state.block if state.block == "stop" else None)
     monkeypatch.setattr(extract_llm.cloud_policy, "budget_block_reason",
-                        lambda *a: state.block if state.block == "budget" else None)
+                        lambda *a, **kw: state.block if state.block == "budget" else None)
     monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
     monkeypatch.setattr(extract_llm, "_write_lock", lambda *a, **kw: nullcontext(True))
     monkeypatch.setattr(semantic_drain, "runtime_config",

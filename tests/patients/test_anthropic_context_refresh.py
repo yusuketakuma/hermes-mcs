@@ -27,6 +27,66 @@ CFG = {**BASE_CFG, "semantic": {"mode": "assist", "summary_mode": "assist",
                                 "project_ids": [1], "daily_request_budget": 3000}}
 
 
+@pytest.mark.parametrize("kind", ["patient_context_source_quality_repair_v1",
+                                  "patient_context_source_quality_repair_candidate_v1"])
+def test_source_repair_slot_is_bound_to_raw_occurrence_across_contract_changes(runtime, kind):
+    import patient_context_artifacts as artifacts
+    from inference_version import CURRENT_VERSION, VERSION_KEY
+
+    ledger, _clock, _local_calls = runtime
+    seed(ledger)
+    occurrence = {"source_binding": "a" * 64, "first_seen": 123.0,
+                  "scope": {"project_id": 1, "project_type": "medical", "karte_id": None, "is_archived": 0}}
+    meta = {VERSION_KEY: CURRENT_VERSION, "repair_input_key": "b" * 64, "source_key": 1,
+            "source_sig": "c" * 64, "source_binding": occurrence["source_binding"],
+            "source_occurrence_version": 1, "source_occurrence": occurrence, "body_length": 12}
+    ledger.artifact_add(kind, '{}', project_id=1, message_id=1, meta=meta)
+    def spent(key, current):
+        return artifacts.other_repair_spent(ledger.db, 1, 1, key, source_sig="c" * 64,
+                                            source_occurrence=current, body_size=12)
+    assert not spent("b" * 64, occurrence)  # same key can resume its finite plan
+    assert spent("d" * 64, occurrence)      # a new profile cannot create another right
+    changed = {**occurrence, "first_seen": 124.0}
+    assert not spent("d" * 64, changed)    # a different raw occurrence remains distinct
+    with ledger.db:
+        ledger.db.execute("UPDATE artifacts SET meta=? WHERE kind=? AND project_id=1",
+                          (json.dumps({**meta, "source_occurrence": None}), kind))
+    with pytest.raises(ValueError):
+        spent("d" * 64, occurrence)
+
+
+def test_patient_context_accepts_only_known_current_or_historical_cloud_contracts():
+    for model, effort in worker.openai_client.VALID_MODEL_EFFORTS:
+        contract = worker._cloud_contract(selection={"provider": "openai", "model": model, "effort": effort})
+        assert context_refresh._saved_cloud_contract(contract) == contract
+        assert context_refresh._saved_cloud_contract({**contract, "prompt": "0" * 16}) is None
+        assert context_refresh._saved_cloud_contract({**contract, "model": "synthetic-unknown"}) is None
+
+
+def test_patient_request_precheck_uses_selected_repair_limit_and_never_sends_when_exhausted(runtime, monkeypatch):
+    ledger, clock, _ = runtime
+    cfg = {"cloud_llm": {"mode": "on", "provider": "openai", "project_ids": [1]}}
+    selection, errors = worker.cloud_policy.resolve_profile(
+        cfg, route="patient_context", purpose="quality_repair", root="/synthetic")
+    assert not errors
+    seen = []
+    def blocked(_ledger, _cfg, **kwargs):
+        seen.append(kwargs)
+        return "monthly_cap"
+    monkeypatch.setattr(worker.cloud_policy, "budget_block_reason", blocked)
+    class Provider:
+        client = worker.openai_client.OpenAIClient("synthetic-key", model=selection["model"], effort=selection["effort"])
+        def __init__(self):
+            self.ledger = ledger
+            self.selection = selection
+        def __call__(self, *_args, **_kwargs):
+            pytest.fail("budget-blocked request must not be sent")
+    with pytest.raises(context_refresh.Deferred):
+        context_refresh._ask(cfg, {"synthetic": "request"}, clock.mono + 1000, lambda: True, provider=Provider())
+    assert seen[0]["max_tokens"] == 32768 and seen[0]["selection"] == selection
+    assert seen[0]["input_bound"] > 0
+
+
 def step(runtime, **kwargs):
     return base_step(runtime, cfg=CFG, **kwargs)
 
@@ -63,8 +123,8 @@ def cloud(runtime, monkeypatch):
     discarded = []
     led.synthetic_cloud_dispositions = discarded
     monkeypatch.setattr(worker.cloud_policy, "api_key", lambda root=None: "synthetic-key")
-    monkeypatch.setattr(worker, "_cloud_settings", lambda cfg: worker.cloud_policy.cloud_config(
-        {"cloud_llm": {"mode": mode[0], "project_ids": [1]}})[0])
+    monkeypatch.setattr(worker, "_cloud_settings", lambda cfg: worker.cloud_policy.resolve_settings(
+        {"cloud_llm": {"mode": mode[0], "project_ids": [1], "provider": "anthropic"}}, worker.HOME)[0])
     monkeypatch.setattr(worker, "_cloud_mode", lambda *args: mode[0])
     class Provider:
         model = "claude-haiku-5-5"
@@ -834,6 +894,8 @@ def test_dryrun_context_records_selected_provider_model_and_price(runtime, cloud
     led, _, local_calls = runtime
     seed(led)
     cloud[1][0] = "dry_run"
+    monkeypatch.setitem(CFG, "cloud_llm", {"mode": "dry_run", "project_ids": [1],
+                                           "provider": provider, "model": model})
     settings, errors = worker.cloud_policy.cloud_config({"cloud_llm": {
         "mode": "dry_run", "project_ids": [1], "provider": provider}})
     assert not errors and settings["model"] == model
@@ -1726,7 +1788,12 @@ def _source_legacy_storage(led):
 
 def _source_repair_wire_protocol(monkeypatch, cloud):
     """Old negative fixtures use the real repair reservation protocol, never a fake capability."""
+    from contextlib import nullcontext
+
     original = worker._CloudProvider
+    monkeypatch.setitem(CFG, 'cloud_llm', {'mode':'on', 'provider':'anthropic', 'project_ids':[1]})
+    monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
+    monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(worker.cloud_policy, 'pricing_valid',
                         lambda now=None, *, model=worker.anthropic_client.MODEL: model == worker.anthropic_client.MODEL)
@@ -1746,7 +1813,12 @@ def _source_repair_wire_protocol(monkeypatch, cloud):
 @pytest.fixture
 def source_repair(runtime, cloud, monkeypatch):
     """Independent two-fact oracle, real reservations and synthetic wire only."""
+    from contextlib import nullcontext
+
     led, _, _ = runtime
+    monkeypatch.setitem(CFG, 'cloud_llm', {'mode':'on', 'provider':'anthropic', 'project_ids':[1]})
+    monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
+    monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
     original_provider = worker._CloudProvider
     control = {'sent':[], 'fault':None, 'qa_fault':None}
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
@@ -1849,6 +1921,105 @@ def test_source_normal_fail_repairs_all_units_preserving_original_chunks_and_sup
     assert len(reserves) == 2
     assert len({json.loads(row['meta'])['unit_key'] for row in reserves}) == 2
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
+
+
+@pytest.mark.parametrize('stop', ['none', 'length', 'capacity'])
+@pytest.mark.parametrize('tamper', ['answer', 'missing_proof', 'duplicate_proof', 'strip_provider'])
+def test_openai_source_repair_replays_high_response_before_publication(runtime, source_repair, monkeypatch, stop, tamper):
+    from contextlib import nullcontext
+
+    led, _, _ = runtime
+    monkeypatch.setitem(CFG, 'cloud_llm', {'mode':'on', 'provider':'openai', 'project_ids':[1]})
+    monkeypatch.setattr(worker, '_cloud_settings', lambda cfg: worker.cloud_policy.resolve_settings(cfg, worker.HOME)[0])
+    monkeypatch.setattr(worker.cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')
+    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
+    monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
+    sends = []
+    real_client = worker.openai_client.OpenAIClient
+    class Client(real_client):
+        def request(self, method, body, timeout, **kwargs):
+            prompt = json.loads(body['input'])
+            sends.append(body)
+            items = [{'category':'living','subject':'patient','text':text,'evidence':text,'details':[]}
+                     for text in (_REPAIR_HOME, _REPAIR_BED) if text in prompt['source']]
+            if stop == 'capacity' and len(sends) == 1:
+                items = items[:1] * (context_refresh.context_plan.MAX_SCAN_ITEMS + 1)
+            length = stop == 'length' and len(sends) == 1
+            return 200, {}, json.dumps({'status':'incomplete' if length else 'completed',
+                **({'incomplete_details':{'reason':'max_output_tokens'}} if length else {}),
+                'model':self.model, 'service_tier':'default',
+                'output':[{'type':'message','role':'assistant','content':[{'type':'output_text',
+                    'text':json.dumps({'patient_context':items}, ensure_ascii=False)}]}],
+                'usage':{'input_tokens':2,'output_tokens':1,'total_tokens':3,
+                         'input_tokens_details':{'cached_tokens':0,'cache_write_tokens':0}}}, ensure_ascii=False).encode()
+    monkeypatch.setattr(worker.openai_client, 'OpenAIClient', Client)
+    class Initial:
+        def __init__(self, _ledger, cfg, **kwargs):
+            self.current = kwargs['current']
+            self.contract = worker._cloud_contract(cfg, route='patient_context', purpose='patient_context')
+            self.model = self.contract['model']
+            self.possibly_sent = False
+        def guard(self):
+            if not self.current():
+                raise worker.CloudFallback('synthetic_stale')
+        def commit_guard(self):
+            self.guard()
+        def discard(self):
+            pass
+        def __call__(self, prompt, **kwargs):
+            self.guard()
+            payload = json.loads(prompt)
+            if 'reports' in payload:
+                answer = {'fact_ids':[row['id'] for row in payload['reports'][:12]]}
+            else:
+                items = ([{'category':'living','subject':'patient','text':_REPAIR_HOME,
+                           'evidence':_REPAIR_HOME,'details':[]}] if _REPAIR_HOME in payload['source'] else [])
+                answer = {'patient_context':items}
+            self.possibly_sent = True
+            return {'status':200, 'finish_reason':'stop', 'text':json.dumps(answer)}
+    monkeypatch.setattr(worker, '_CloudProvider', lambda *args, **kwargs:
+                        _SOURCE_REPAIR_PROVIDER(*args, **kwargs) if kwargs.get('on_reserved_tx') else Initial(*args, **kwargs))
+    drain(runtime)
+    assert sends and all(body['model'] == 'gpt-6.1-sol' and body['reasoning'] == {'effort':'high'}
+                         and body['max_output_tokens'] == 32768 for body in sends)
+    slots = led.artifacts(context_refresh.SOURCE_REPAIR_CANDIDATE, project_id=1)
+    assert slots and all(json.loads(row['meta'])['repair_provider']['model'] == 'gpt-6.1-sol' for row in slots)
+    import mcs_view
+    for row in slots:
+        stored = json.loads(row['content'])
+        _meta, visible = mcs_view._artifact_json(row)
+        assert 'repair_response' not in stored and '__mcs_internal_proof_v1' not in visible
+        if stored['part'] == 0:
+            assert '__mcs_internal_proof_v1' in stored
+    visible_context = context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    assert visible_context and '__mcs_internal_proof_v1' not in json.dumps(visible_context)
+    import notify_views
+    card = notify_views._patient_context_list(led.db, 1, 'background', cfg=CFG,
+                                               since=None, now=time.time())
+    assert '__mcs_internal_proof_v1' not in json.dumps(card)
+    header = led.artifacts(context_refresh.SOURCE_REPAIR, project_id=1)[0]
+    if tamper != 'strip_provider':
+        first = next(row for row in slots if json.loads(row['content'])['part'] == 0)
+        doc = json.loads(first['content'])
+        if tamper == 'answer':
+            doc['__mcs_internal_proof_v1']['answer_text'] += ' '
+        elif tamper == 'missing_proof':
+            doc.pop('__mcs_internal_proof_v1')
+        else:
+            doc['repair_response'] = doc['__mcs_internal_proof_v1']
+        with led.db:
+            led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?', (json.dumps(doc), first['artifact_id']))
+        changed = [dict(row) for row in led.artifacts(context_refresh.SOURCE_REPAIR_CANDIDATE, project_id=1)]
+        with pytest.raises(ValueError):
+            context_refresh._verify_source_repair_rows(led.db, 1, 1, json.loads(header['meta']), changed)
+    else:
+        with led.db:
+            for row in [header, *slots]:
+                meta = json.loads(row['meta'])
+                meta.pop('repair_provider')
+                led.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (json.dumps(meta), row['artifact_id']))
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
 
 
 @pytest.mark.parametrize('failure', ['timeout','crash_after_reserve','save_failure'])
@@ -2574,3 +2745,120 @@ def test_legacy_source_pass_is_enriched_only_with_original_evidence(runtime, clo
         assert json.loads(after[0][1]) == {**original, 'descriptor': descriptor}
     else:
         assert after[0][1] == legacy_content
+
+
+def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, cloud, monkeypatch, tmp_path):
+    """A paid repair remains bound to its response through publication and later reads."""
+    from contextlib import nullcontext
+
+    led, _, _ = runtime
+    monkeypatch.setitem(CFG, 'cloud_llm', {'mode': 'on', 'provider': 'openai', 'project_ids': [1]})
+    monkeypatch.setattr(worker, 'HOME', str(tmp_path))
+    monkeypatch.setattr(worker, '_cloud_settings', lambda cfg: worker.cloud_policy.resolve_settings(cfg, worker.HOME)[0])
+    monkeypatch.setattr(worker.cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')
+    monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+    monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
+    monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
+    monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
+
+    class Initial:
+        def __init__(self, _ledger, cfg, **kwargs):
+            self.current = kwargs['current']
+            self.contract = worker._cloud_contract(cfg, route='patient_context', purpose='patient_context')
+            self.model = self.contract['model']
+            self.possibly_sent = False
+
+        def guard(self):
+            if not self.current():
+                raise worker.CloudFallback('synthetic_stale')
+
+        def commit_guard(self):
+            self.guard()
+
+        def discard(self):
+            pass
+
+        def __call__(self, prompt, **kwargs):
+            self.guard()
+            payload = json.loads(prompt)
+            if 'reports' in payload:
+                assert len(payload['reports']) == 2
+                answer = {'fact_ids': [payload['reports'][0]['id']]}
+            else:
+                answer = {'patient_context': [
+                    {'category': 'living', 'subject': 'patient', 'text': text,
+                     'evidence': text, 'details': []}
+                    for text in (_REPAIR_HOME, _REPAIR_BED) if text in payload['source']]}
+            self.possibly_sent = True
+            return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps(answer)}
+
+    monkeypatch.setattr(worker, '_CloudProvider', lambda *args, **kwargs:
+                        _SOURCE_REPAIR_PROVIDER(*args, **kwargs)
+                        if kwargs.get('purpose') == 'quality_repair' else Initial(*args, **kwargs))
+    sends = []
+    real_client = worker.openai_client.OpenAIClient
+
+    class Client(real_client):
+        def request(self, method, body, timeout, **kwargs):
+            assert timeout > 0 and not led.db.in_transaction
+            prompt = json.loads(body['input'])
+            assert prompt['previous'] and prompt['findings'] and len(prompt['reports']) == 2
+            sends.append(body)
+            answer = json.dumps({'fact_ids': [row['id'] for row in prompt['reports']]})
+            return 200, {}, json.dumps({'status': 'completed', 'model': self.model, 'service_tier': 'default',
+                'output': [{'type': 'message', 'role': 'assistant', 'content': [
+                    {'type': 'output_text', 'text': answer}]}],
+                'usage': {'input_tokens': 2, 'output_tokens': 1, 'total_tokens': 3,
+                          'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0}}}).encode()
+
+    monkeypatch.setattr(worker.openai_client, 'OpenAIClient', Client)
+
+    def judge(body, timeout):
+        assert timeout > 0 and not led.db.in_transaction
+        led.synthetic_jev_requests.append(body)
+        answers = {}
+        for qid, question in body['questions'].items():
+            options = question['criteria']
+            choice = ('supports' if 'supports' in options else
+                      'complete' if 'complete' in options else 'important_missing')
+            assert choice in options
+            answers[qid] = {'type': 'choice', 'choice': choice, 'confidence': 1.0,
+                            'probabilities': {option: float(option == choice) for option in options}}
+        return 200, {}, json.dumps({'model': _source_repair_jev.JEV_MODEL, 'answers': answers,
+                                   'usage': {'input_tokens': 1, 'output_tokens': 1}}).encode()
+
+    monkeypatch.setattr(_source_repair_jev, 'JevClient', lambda **kwargs: _SOURCE_REPAIR_JEV(post_fn=judge, **kwargs))
+    seed(led, body=_REPAIR_HOME + _REPAIR_BED)
+    drain(runtime)
+    assert len(sends) == 1
+    assert sends[0]['model'] == 'gpt-6.1-sol' and sends[0]['reasoning'] == {'effort': 'high'}
+    assert sends[0]['max_output_tokens'] == 32768
+    assert led.artifacts(context_refresh.QUALITY_FAIL, project_id=1)
+    assert led.artifacts(context_refresh.QUALITY_PASS, project_id=1)
+    candidates = led.artifacts(context_refresh.QUALITY_REPAIR_CANDIDATE, project_id=1)
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    content, candidate_meta = json.loads(candidate['content']), json.loads(candidate['meta'])
+    assert candidate_meta['repair_version'] == 1 and len(content['fact_ids']) == 2
+    assert '__mcs_internal_proof_v1' in content and 'repair_response' not in content
+    import mcs_view
+    _meta, visible = mcs_view._artifact_json(candidate)
+    assert '__mcs_internal_proof_v1' not in visible
+    doc, meta = context_refresh._latest(led.db, context_refresh.KIND, 1)
+    assert [entry['fact_ids'][0] for entry in doc['summary']] == content['fact_ids']
+    assert meta['quality_repair_ref']['artifact_id'] == candidate['artifact_id']
+    visible_context = context_refresh.context_view_input(led.db, 1, cfg=CFG)
+    assert visible_context and '__mcs_internal_proof_v1' not in json.dumps(visible_context)
+    import notify_views
+    card = notify_views._patient_context_list(led.db, 1, 'background', cfg=CFG,
+                                               since=None, now=time.time())
+    assert '__mcs_internal_proof_v1' not in json.dumps(card)
+    step(runtime)
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) and len(sends) == 1
+
+    content['__mcs_internal_proof_v1']['answer_text'] += ' '
+    with led.db:
+        led.db.execute('UPDATE artifacts SET content=? WHERE artifact_id=?',
+                       (json.dumps(content), candidate['artifact_id']))
+    assert context_refresh.context_view_input(led.db, 1, cfg=CFG) is None
+    assert len(sends) == 1

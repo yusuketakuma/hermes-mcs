@@ -545,3 +545,17 @@ def test_reply_keeps_fixed_heading_without_inventing_provider_evidence(led):
     assert heading.startswith('💬 ')
     assert [c['provider_states'] for c in before['containers'] if c.get('rule')] == [
         c['provider_states'] for c in after['containers'] if c.get('rule')]
+
+
+def test_route_recognizes_historical_and_current_openai_contracts():
+    import extract_llm
+    import openai_client
+
+    for model, effort in ((openai_client.MODEL, 'low'), (openai_client.MODEL, 'medium'),
+                          (openai_client.SOL_MODEL, 'medium'), (openai_client.SOL_MODEL, 'high')):
+        contract = extract_llm._cloud_contract(selection={'provider': 'openai', 'model': model, 'effort': effort})
+        row = {'kind': 'extract_llm', 'model': model}
+        assert processing_route._route(row, {**contract, 'actual_model': model}, {'synthetic': True}) == 'cloud'
+        assert processing_route._route(row, {'actual_model': model}, {'synthetic': True}) is None
+        assert processing_route._route(row, {**contract, 'actual_model': model, 'prompt': 'unknown'},
+                                       {'synthetic': True}) is None

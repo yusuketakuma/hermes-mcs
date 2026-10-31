@@ -745,7 +745,7 @@ def _time_value(text, *, end):
 
 
 def budget_command(args):
-    """Show or set the Anthropic daily/monthly/period cost caps and the run window in config.json."""
+    """Show or set cloud cost caps and the run window in config.json."""
     try:
         changes, defaults = {}, {}
         for option, key in _BUDGET_KEYS.items():
@@ -775,8 +775,7 @@ def budget_command(args):
             changes["cloud_llm.window_start"] = _time_value(start, end=False)
         until = getattr(args, "until", None)
         if until is not None:
-            # One end time for both providers: Jev stops with the paid route.
-            changes["cloud_llm.until"] = changes["semantic.until"] = _time_value(until, end=True)
+            changes["cloud_llm.until"] = _time_value(until, end=True)
     except ValueError:
         print("予算: 金額はドル単位の0以上の数値、日時は 2026-10-30 または 2026-10-30T23:59:59+09:00 の形、"
               "解除は none で指定してください")
@@ -850,23 +849,39 @@ def providers_command(args):
                 budgets[name] = caps
                 changes["cloud_llm.provider_budgets"] = budgets
         if changes:
-            cfg, errors = config_edit.apply(changes, expected=cfg)
+            callback_args = {key: getattr(args, key) for key in ("admission", "on_saved")
+                             if getattr(args, key, None) is not None}
+            cfg, errors = config_edit.apply(changes, expected=cfg, **callback_args)
             if errors:
                 raise ValueError
         settings, errors = policy.resolve_settings(cfg)
         if errors:
             raise ValueError
-    except (OSError, ValueError, RecursionError, mcs_util.ProviderSettingsUnreadable):
-        print("AI利用先を保存できません。利用先・優先順位・API別の日額/月額と合計上限を確認してください。")
+    except config_edit.ConfigSaveUnverified:
+        print("AI利用先の保存結果を確認できません。現在の設定を確認してください。")
         return 1
+    except (OSError, ValueError, RecursionError, mcs_util.ProviderSettingsUnreadable):
+        if getattr(args, "on_saved", None) is not None:
+            print("AI利用先の保存結果を確認できません。現在の設定を確認してください。")
+        else:
+            print("AI利用先を保存できません。利用先・優先順位・API別の日額/月額と合計上限を確認してください。")
+        return 1
+    profiles = {}
+    for route, purpose in (("reextract", "backlog"), ("patient_context", "patient_context"),
+                           ("reextract", "quality_repair")):
+        selection, profile_errors = policy.profile_for_settings(cfg, settings, route=route, purpose=purpose)
+        if profile_errors:
+            print("AI利用先: 用途別のモデル設定を確認できません。")
+            return 1
+        profiles[purpose] = {"model": selection["model"], "effort": selection["effort"]}
     print(json.dumps({"saved": bool(changes), "provider": settings["provider"], "model": settings["model"],
-        "provider_order": settings["provider_order"], "provider_budgets": settings["provider_budgets"],
+        "profiles": profiles, "provider_order": settings["provider_order"], "provider_budgets": settings["provider_budgets"],
         "daily_cost_limit_usd": settings["daily_cost_limit_usd"], "monthly_cost_limit_usd": settings["monthly_cost_limit_usd"],
         "keys": {name: bool(policy.provider_key(name)) for name in policy.PROVIDERS}}, ensure_ascii=False))
     return 0
 
 
-def provider_dialog(root):
+def provider_dialog(root, *, admission=None, on_saved=None):
     """Offer fixed providers or key-availability priority with explicit per-provider budgets."""
     import api_key_setup
     if not api_key_setup.is_terminal() or Path(root).resolve() != Path(mcs_util.HOME).resolve():
@@ -879,18 +894,35 @@ def provider_dialog(root):
             return 0
         if choice not in ("1", "2", "3", "4"):
             return 1
+        cfg = _settings_for_edit()
+        settings, errors = policy.cloud_config(cfg)
+        if errors:
+            raise ValueError("config_unreadable")
         values = {}
-        for name, label, defaults in (("anthropic", "Anthropic", (20, 60)), ("openai", "OpenAI", (5, 15))):
-            for suffix, period, default in zip(("_daily_usd", "_monthly_usd"), ("1日", "1か月"), defaults):
-                values[name + suffix] = input(f"{label} {period}の上限 USD [{default}]: ").strip() or str(default)
-        print("合計上限は現在の設定を維持します。API別上限の合計がこれを超える設定は保存しません。")
+        print("空欄では現在のAPI別上限を維持します。新たに設定する場合は日額と月額の両方を入力してください。")
+        for name, label in (("anthropic", "Anthropic"), ("openai", "OpenAI")):
+            caps = settings["provider_budgets"].get(name, {})
+            for suffix, period, key in (("_daily_usd", "1日", "daily_cost_limit_usd"),
+                                        ("_monthly_usd", "1か月", "monthly_cost_limit_usd")):
+                current = caps.get(key, "未設定")
+                answer = input(f"{label} {period}の上限 USD [現在: {current}]: ").strip()
+                if answer:
+                    values[name + suffix] = answer
+        print(f"合計上限は1日 {settings['daily_cost_limit_usd']} USD、1か月 "
+              f"{settings['monthly_cost_limit_usd']} USDです。API別上限の合計がこれを超える設定は保存しません。")
         if input("保存する場合は 1 を入力 [0]: ").strip() != "1":
             return 0
-        from types import SimpleNamespace
+        if admission is not None:
+            values["admission"] = admission
+        if on_saved is not None:
+            values["on_saved"] = on_saved
         return providers_command(SimpleNamespace(provider={"1": "anthropic", "2": "openai", "3": "auto", "4": "auto"}[choice],
             priority="openai,anthropic" if choice == "4" else "anthropic,openai", **values))
     except (EOFError, KeyboardInterrupt):
         return 130
+    except (OSError, ValueError, RecursionError, mcs_util.ProviderSettingsUnreadable):
+        print("AI利用先: 現在の設定を確認できないため変更しません。")
+        return 1
 
 
 def add_parsers(sub):
@@ -918,7 +950,7 @@ def add_parsers(sub):
     q.add_argument("--period-usd", dest="period_usd",
                    help="期間全体の上限（ドル）。開始は --from、未指定なら今。none で解除")
     q.add_argument("--from", dest="window_from", help="期間の開始（2026-10-28 または時差付きISO時刻）")
-    q.add_argument("--until", help="送信の終了（2026-10-30 はその日の23:59:59）。AnthropicとJevの両方に設定。none で解除")
+    q.add_argument("--until", help="送信の終了（2026-10-30 はその日の23:59:59）。AnthropicとOpenAIに設定。Jevの期限は変更しません。none で解除")
     q.set_defaults(fn=budget_command, cloud_action="budget")
     for action in ("stop", "resume"):
         q = actions.add_parser(action, help="人の確認と記録を伴うクラウド処理の" + ("停止" if action == "stop" else "再開"))

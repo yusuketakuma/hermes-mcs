@@ -79,6 +79,47 @@ def rows(led, kind):
     return led.db.execute("SELECT * FROM artifacts WHERE kind=?", (kind,)).fetchall()
 
 
+def test_qc_purpose_uses_separate_fixed_provider_and_restores_context(cloud, monkeypatch):
+    led, cfg, job, _ = cloud
+    calls, created = [], []
+
+    class Provider:
+        def __init__(self, _ledger, _cfg, *, purpose, unit_key, **kwargs):
+            self.selection = {'provider': 'openai', 'model': purpose,
+                              'effort': 'high' if purpose == 'quality_repair' else 'medium',
+                              'max_tokens': 32768 if purpose == 'quality_repair' else 8192}
+            self.model = purpose
+            self.contract = {'backend': 'openai', 'model': purpose, 'prompt': purpose}
+            self.completed_reservations = []
+            self.possibly_sent = False
+            self.unit_key = unit_key
+            created.append(self)
+
+        def __call__(self, prompt, *, deadline, max_tokens):
+            calls.append((self.model, max_tokens))
+            self.completed_reservations.append({'reservation_id': self.model})
+            return {'status': 200, 'text': '{"facts": []}', 'finish_reason': 'stop'}
+
+        def discard(self):
+            pass
+
+    monkeypatch.setattr(extract_llm, '_CloudProvider', Provider)
+    with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                     lambda: True, direct) as chat:
+        chat('normal')
+        with pytest.raises(ValueError), transport.quality_repair():
+            chat('qc repair')
+            assert transport.inference_model() == 'quality_repair'
+            assert transport.inference_requests() == ['backlog', 'quality_repair']
+            raise ValueError('synthetic')
+        assert transport.inference_model() == 'backlog'
+        assert transport._inference_purpose.get() == 'backlog'
+        chat('normal again')
+    assert calls == [('backlog', 8192), ('quality_repair', 32768), ('backlog', 8192)]
+    assert len(created) == 2 and created[0].unit_key == created[1].unit_key
+    assert transport._job_model.get() is None and transport._job_providers.get() is None
+
+
 def test_history_without_false_eligible_uses_cloud_and_settles(cloud):
     led, cfg, job, calls = cloud
     assert "eligible" not in json.loads(job["payload"])

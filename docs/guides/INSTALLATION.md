@@ -161,9 +161,10 @@ B は `install.sh --mode standalone`（[STANDALONE.md](STANDALONE.md)）の場�
 | MCS アカウント | ログイン ID とパスワード（自動再ログイン `auto_login` で使用） |
 | TYPESAFE_API_KEY | Jev用。MCSの `.env`（0600）に登録しmode未指定ならassistで自動使用 |
 | MCS_ANTHROPIC_API_KEY | Anthropic用。MCSの `.env`（0600）に登録し、利用先の設定に従って患者文脈更新・履歴解析に使用 |
-| MCS_OPENAI_API_KEY | OpenAI用。MCSの `.env`（0600）に登録し、選択時はgpt-6-lunaで患者文脈更新・履歴解析に使用 |
+| MCS_OPENAI_API_KEY | OpenAI用。MCSの `.env`（0600）に登録し、選択時は用途別モデルで患者文脈更新・履歴解析に使用 |
 | 通知先アプリ | Slack app・Discord botは両形態で作成・権限設定（付録A/B）。Path Bでは[独立モード](STANDALONE.md#slackとdiscordの接続準備)へ認証情報を登録する。LINE WORKS Botは両形態で[独立接続](LINEWORKS.md)を設定 |
 
+共通設定は `config.json`、提供元別の設定は `data/provider_settings/` の私有JSON、APIキーはMCS専用 `.env` に保持します。設定変更には既存の設定画面またはCLIを使います。
 Jev・Anthropic・OpenAIには患者名を含み得る本文・文脈を匿名化せず送ります。キー登録前に[対象・予算・保持条件](ANTHROPIC.md)を確認してください。明示したOFFと低い予算は維持します。
 
 導入時の取得物と運用中の通信は別です。基本ツールはHomebrew、Python依存はPyPI、Hermes連携本体はGitHub、モデルはHugging Faceから必要に応じて取得します。モデル・Chrome・通知SDKはこのリポジトリへ同梱していません。`--no-llm`はモデル取得とAI常駐の設定を省略しますが、AIの処理が利用可能になったことを意味しません。
@@ -288,7 +289,7 @@ checkout はそのまま残る。`:8080` を占有する自前サーバがある
 - `~/.mcs/config.json` の既存値を保持し、必要な設定を保存（0600）。ファイルがなければ作成
 - Keychain `mcs-adapter` へ MCS パスワードを登録
 - `~/.mcs/.env` に `MCS_PASSWORD`（Keychain ロック中のフォールバック）
-  と `TYPESAFE_API_KEY`（環境変数で渡した場合）を保存
+  と `TYPESAFE_API_KEY`・`MCS_ANTHROPIC_API_KEY`・`MCS_OPENAI_API_KEY`（環境変数で渡した場合）を保存
 - `notify.interactive=slack`/`discord` を選んだ場合、hermes 側へも
   書き込む（Slack は `slack_*` settings キーにマップされる）:
   - プラグイン settings を serving profile の config.yaml へ

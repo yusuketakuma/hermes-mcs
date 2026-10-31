@@ -33,7 +33,9 @@ Jevの自動有効化は `summary_mode`、`loop_mode`、`extract_qc`、canonical
 
 `mcs setup api-keys` の「1」でキーを非表示入力し、「5」で利用先・優先順位・API別予算を設定できます。
 新規導入・更新後のキー設定でもOpenAIを登録できます。キーは既存の認証情報と同じMCS専用 `.env` に保存します。
-OpenAIのモデルは `gpt-6-luna`、Anthropicは `claude-haiku-5-5` に固定しています。
+OpenAIの既定は、背景の抽出・意味解析に `gpt-6-luna`（推論 `medium`）、患者コンテキストに `gpt-6.1-sol`（`medium`）、正式な品質確認で必要になった有限の修復に `gpt-6.1-sol`（`high`）を使います。新着の即時解析はローカルで行います。
+用途別の最大出力は順に8192・16384・32768トークンで、推論トークンも含みます。既存の明示モデルは保持し、用途別の指定があればその設定を優先します。Anthropicは `claude-haiku-5-5` を使います。
+OpenAIの用途別設定は提供元専用の私有設定に保持します。`mcs setup api-keys` の利用先設定画面で実効モデルを確認できます。 利用先と予算を保存した後、同じ画面でキーの設定を続けられます。別の操作で設定が変わった場合は、画面を開き直してください。
 
 `cloud_llm.provider` は `anthropic`、`openai`、`auto` から選びます。省略時は `auto` です。
 `auto` は `provider_order` の順に登録済みキーを探します。既定の順はAnthropic、OpenAIです。
@@ -51,7 +53,7 @@ API別の上限と合計上限を同時に適用します。API別上限の合�
 API別予算を設定していない既存環境は、従来の合計上限を使います。API別予算を設定した場合、予算を割り当てていないAPIには送信しません。
 OpenAIはResponses APIの標準サービスを使い、応答の保存を `store=false`、プロンプトキャッシュを30分に指定します。
 これは保存契約やデータ保持条件を保証する設定ではありません。利用先の条件を確認してください。
-OpenAIの料金表の確認日は2026-10-29、再確認期限は2026-11-28です。出典は[公式モデル資料](https://developers.openai.com/api/docs/models/gpt-6-luna)です。
+OpenAIの料金はモデルごとの版を記録し、LunaとSolの使用額を同じOpenAI予算と合計上限に算入します。価格の確認日と再確認期限は各モデルの料金定義で管理します。出典は[Luna](https://developers.openai.com/api/docs/models/gpt-6-luna)と[Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)の公式資料です。
 入力・キャッシュ読取り・キャッシュ書込み・出力を数え、料金や使用量を検証できない応答は最大予約額を保持して送信を止めます。
 
 ## 背景処理の並列化と患者の優先順
@@ -97,15 +99,15 @@ python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd 80 --from 2026-11-01 
 python3 mcs/ops/mcs_setup.py cloud-llm budget --period-usd none --until none                 # 期間と期間予算を解除
 ```
 
-- `--until` はAnthropic・OpenAI（`cloud_llm.until`）とJev（`semantic.until`）の両方に同じ終了時刻を設定します。日付だけを指定すると、その日の23:59:59（日本時間）までです。
+- `--until` はAnthropic・OpenAIの `cloud_llm.until` を設定します。Jevの `semantic.until` は変更しません。日付だけを指定すると、その日の23:59:59（日本時間）までです。
 - 期間が無いときに `--from` を省略すると、期間は設定した時点から始まります。すでにある期間の金額を変える場合は開始時刻を保ち、使用済みの額も引き続き数えます。開始時刻だけを変える場合は `--from` だけを指定します。Anthropic・OpenAIは開始前と終了後に新しい送信（再試行を含む）を始めません。背景処理と患者文脈の更新は、受付条件と品質条件を満たせばローカルへ切り替えます。送信中の要求は最後まで処理し、その結果は対象範囲や原文などの保存条件を満たす場合に保存します。予算や利用期間だけの変更では取得済みの結果を破棄しません。
 - Jevは終了時刻を過ぎると、新しい要求（再試行と手動の評価ツールを含む）を予約しません。予約した直後、送信の前に終了時刻を過ぎた要求も送信しません。患者情報の照合では、その予約を未送信として記録し、期間を延ばすと同じ質問をもう一度問い合わせます。新着投稿の保存、既存の通知、送信中の結果の保存はそのまま続きます。Jevの開始時刻と期間予算はありません。Jevの量は1日の要求件数で制限します。
-- 時刻は日付（`2026-10-30`）か、時差付きのISO 8601形式（`2026-10-30T18:00:00+09:00`）で指定します。`config.json` に直接書く場合は、`cloud_llm.window_start`・`window_budget_usd`・`until` と `semantic.until` です。
+- 時刻は日付（`2026-10-30`）か、時差付きのISO 8601形式（`2026-10-30T18:00:00+09:00`）で指定します。設定項目は `cloud_llm.window_start`・`window_budget_usd`・`until` と、独立した `semantic.until` です。提供元別設定を使う環境では、認証された設定変更経路を使用してください。
 - 期間予算は、予約時の最大額で判定します。結果が戻ると実際の額で数え直すため、表示額は進行中の予約の分だけ多く見えることがあります。
 - 期間予算の期間は、開始から61日までです。使用額の記録は62日で削除されるため、開始から61日を過ぎると使用額を確かめられないとして送信を止め、`check` に `window_history_unverified` と表示します。
 - `cloud-llm plan`・`estimate` の `period_budget` に、期間の開始・予算・その時点の使用額（予約中の最大額を含む）を表示します。
 
-費用の上限は、次のコマンドで表示・設定できます。CodexやClaude Codeからもそのまま実行でき、値は `config.json` に保存されます。
+費用の上限は、次のコマンドで表示・設定できます。CodexやClaude Codeからもそのまま実行でき、共通の費用設定は認証された設定変更経路で保存されます。
 
 ```bash
 python3 mcs/ops/mcs_setup.py cloud-llm budget                                   # 現在の上限を表示
@@ -116,7 +118,7 @@ python3 mcs/ops/mcs_setup.py cloud-llm budget --daily-usd none                  
 設定ファイルを読み取れない場合、既知の設定項目に誤りがある場合、ほかのCLIによる設定保存と競合した場合は保存しません。競合したときは設定を再確認してから再試行してください。既存の別経路や外部ツールでは同じロックを使わないため、設定の同時編集を避けてください。`max_concurrency` の既定値4は全プロセス共通の上限です。
 `usd_jpy` は円換算の試算に使う任意の固定レートで、自動更新しません。
 
-`config.json` の該当部分を編集する例です。既存設定全体をこの断片で置き換えないでください。
+論理的な設定構造の例です。提供元別設定を使う環境では、この断片をファイルへ直接書かず、設定画面またはCLIを使ってください。
 
 ```json
 {
@@ -133,7 +135,7 @@ python3 mcs/ops/mcs_setup.py cloud-llm budget --daily-usd none                  
 
 手動で有効なmodeを指定する場合は、対象も明示してください。`project_ids` は患者のプロジェクトID一覧、
 `null` は全対象、`[]` は対象なしです。クラウド処理の `exclude_project_ids` は指定した患者を除外します。
-`routes` では `patient_context`、`reextract`、`semantic_backlog` を選べます。省略時はすべてを対象にします。明示した一覧に `semantic_backlog` がなければ、意味解析・要約はローカルのままです。`semantic_backlog` のクラウド利用は `on` の場合だけで、`shadow` と `dry_run` では従来のローカル処理を続けます。モデルは利用先に応じて `claude-haiku-5-5` または `gpt-6-luna` に固定しています。
+`routes` では `patient_context`、`reextract`、`semantic_backlog` を選べます。省略時はすべてを対象にします。明示した一覧に `semantic_backlog` がなければ、意味解析・要約はローカルのままです。`semantic_backlog` のクラウド利用は `on` の場合だけで、`shadow` と `dry_run` では従来のローカル処理を続けます。モデルは利用先と用途に応じて選びます。OpenAIの既定は上記の用途別モデルです。
 
 リアルタイム枠の投稿抽出と意味解析はローカルで処理します。取り込み・通知・編集を観測してから10分未満の処理対象は、即時処理用にローカルへ残します。背景枠に回った過去分は `reextract`・`semantic_backlog` でクラウドを優先します。新着処理の引継ぎ期間が24時間あることや、通知対象だったことだけを理由に、過去分の背景処理をローカルへ固定しません。品質修復、人承認、再試行、保留の既存条件は維持します。
 
