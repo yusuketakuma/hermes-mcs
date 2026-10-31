@@ -51,6 +51,30 @@ def page_has_next(pag: dict, label: str) -> bool:
 
 
 
+def patient_name_info(source: dict, src: str) -> tuple[str, tuple[str, str]]:
+    values, presence = [], []
+    for key in ("last_name", "first_name"):
+        if key not in source:
+            value, state = "", "missing"
+        elif source[key] is None:
+            value, state = "", "null"
+        else:
+            value = text_field(source[key], f"{src}: {key}")
+            state = "value" if value.strip() else "empty"
+        values.append(value)
+        presence.append(state)
+    return f"{values[0]} {values[1]}".strip(), (presence[0], presence[1])
+
+
+def patient_name_karte(source: dict) -> tuple[int | None, str]:
+    if "id" not in source:
+        return None, "missing"
+    value = source["id"]
+    if value is None:
+        return None, "null"
+    return (value, "value") if valid_id(value) else (None, "invalid")
+
+
 def unread_patient(p, src: str) -> UnreadPatient:
     """Project row -> UnreadPatient — shape shared by the /projects
     readers (unread list and full inventory)."""
@@ -61,7 +85,11 @@ def unread_patient(p, src: str) -> UnreadPatient:
         raise SchemaError(f"{src}: karte invalid")
     # a row without a usable karte.id (null/absent/legacy shape) must not
     # take the whole /projects snapshot down — it just gets no 連携サマリー
-    karte_id = k.get("id") if valid_id(k.get("id")) else None
+    karte_id, karte_state = patient_name_karte(k)
+    if "karte" in p and p["karte"] is None:
+        karte_state = "null"
+    elif "karte" in p and not isinstance(p["karte"], (dict, type(None))):
+        karte_state = "invalid"
     st = k.get("station") or {}
     if not isinstance(st, dict):
         raise SchemaError(f"{src}: station invalid")
@@ -73,18 +101,18 @@ def unread_patient(p, src: str) -> UnreadPatient:
     group_name_present = invalid_group or "name" in info
     group_id = info.get("id") if valid_id(info.get("id")) else None
     group_name = valid_group_name(info.get("name"))
+    patient_name, name_presence = patient_name_info(k, src)
     return UnreadPatient(
         project_id=p["id"],
         project_type=text_field(p.get("type"), f"{src}: project type"),
-        patient_name=(
-            f"{text_field(k.get('last_name'), f'{src}: last_name')} "
-            f"{text_field(k.get('first_name'), f'{src}: first_name')}"
-        ).strip(),
+        patient_name=patient_name,
         disease=text_field(k.get("disease"), f"{src}: disease"),
         station_name=text_field(st.get("name"), f"{src}: station name"),
         url=project_url(p['id']), karte_id=karte_id,
         group_id=group_id, group_name=group_name,
-        group_id_present=group_id_present, group_name_present=group_name_present)
+        group_id_present=group_id_present, group_name_present=group_name_present,
+        patient_name_presence=name_presence, patient_name_karte_id=karte_id,
+        patient_name_karte_state=karte_state)
 
 
 

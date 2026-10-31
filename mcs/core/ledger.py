@@ -73,6 +73,36 @@ def job_reason_class(value: object) -> str:
         return "unavailable"
     return "transient"
 
+
+def _patient_name_for_write(patient, previous):
+    """Apply name presence without joining observed and stored components."""
+    from mcs_contract import valid_id
+    presence = getattr(patient, "patient_name_presence", None)
+    if patient.project_type != "medical" or presence is None:
+        return patient.patient_name
+    observed_id = getattr(patient, "patient_name_karte_id", None)
+    incoming_id = getattr(patient, "karte_id", None)
+    prior_id = previous["karte_id"] if previous is not None else None
+    if valid_id(incoming_id) and observed_id != incoming_id:
+        return ""
+    # An unverified or different observation must not attach a name to an
+    # existing medical ID; archived observations do not update karte_id.
+    if valid_id(prior_id) and not valid_id(incoming_id):
+        if valid_id(observed_id) and observed_id != prior_id:
+            return ""
+        if not valid_id(observed_id):
+            return ""
+    if "missing" not in presence:
+        return patient.patient_name
+    if any(part in ("null", "empty") for part in presence):
+        return ""
+    same_scope = (previous is not None and previous["project_type"] == "medical"
+                  and valid_id(prior_id) and valid_id(observed_id)
+                  and prior_id == observed_id)
+    if same_scope and previous["patient_name"]:
+        return previous["patient_name"]
+    return patient.patient_name
+
 # overlap between a verified boundary and an archived patient's final
 # head reconciliation walk
 HEAD_SYNC_OVERLAP_S = 120
@@ -463,7 +493,7 @@ class Ledger:
         invalidated_roots = set()
         with self._intake_transaction():  # commit on success, rollback on exception
             self.db.execute('UPDATE patients SET project_id=project_id WHERE 0')
-            previous = self.db.execute("SELECT fetch_reason,project_type,karte_id,is_archived,fetch_state FROM patients WHERE project_id=?", (p.project_id,)).fetchone()
+            previous = self.db.execute("SELECT fetch_reason,project_type,karte_id,is_archived,fetch_state,patient_name FROM patients WHERE project_id=?", (p.project_id,)).fetchone()
             first = previous is None
             import semantic_intake_hold
             unstored = semantic_intake_hold.has_unstored(self.db, p.project_id)
@@ -505,7 +535,7 @@ class Ledger:
                 -- the unread path only sees live projects: presence here
                 -- is positive proof of reactivation (Oracle F4)
                 is_archived=0
-            """, (p.project_id, p.project_type, p.patient_name, p.disease,
+            """, (p.project_id, p.project_type, _patient_name_for_write(p, previous), p.disease,
                   p.station_name, p.url, getattr(p, "karte_id", None),
                   fetch_state, fetch_reason,
                   now if fetch_state == "complete" else None,
@@ -730,7 +760,7 @@ class Ledger:
         with self.db:
             self.db.execute('UPDATE patients SET project_id=project_id WHERE 0')
             row = self.db.execute(
-                "SELECT is_archived a,project_type,karte_id FROM patients WHERE project_id=?",
+                "SELECT is_archived a,project_type,karte_id,patient_name FROM patients WHERE project_id=?",
                 (p.project_id,)).fetchone()
             prev = bool(row["a"]) if row else False
             import inference_dependency_loss as dependency_loss
@@ -758,7 +788,7 @@ class Ledger:
                 karte_id=COALESCE(excluded.karte_id, patients.karte_id),
                 is_archived=COALESCE(?, patients.is_archived),
                 last_seen=excluded.last_seen
-            """, (p.project_id, p.project_type, p.patient_name, p.disease,
+            """, (p.project_id, p.project_type, _patient_name_for_write(p, row), p.disease,
                   p.station_name, p.url, getattr(p, "karte_id", None),
                   flag, now, now, flag))
             if getattr(p, "project_type", None) == "group":
