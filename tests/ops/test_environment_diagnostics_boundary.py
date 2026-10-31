@@ -80,3 +80,42 @@ def test_invalid_mode_does_not_start_environment_probes(monkeypatch, tmp_path):
         credential_paths=(), agents_dir="synthetic-agents")
     assert len(errors) == 1 and "実行方法が不正" in errors[0]
     assert warnings == []
+
+
+def _synthetic_env(root, content):
+    path = root / ".env"
+    path.write_text(content)
+    path.chmod(0o600)
+
+
+def test_openai_only_auto_selection_controls_budget_and_window_warning(tmp_path, monkeypatch):
+    _synthetic_env(tmp_path, "MCS_OPENAI_API_KEY=synthetic-secret-canary\n")
+    cfg = {"cloud_llm": {"daily_cost_limit_usd": None, "monthly_cost_limit_usd": None}}
+    warnings = environment_diagnostics.cloud_setting_warnings(cfg, tmp_path)
+    assert any("OpenAI" in item and "cost_limit_required" in item for item in warnings)
+    assert all("synthetic-secret-canary" not in item for item in warnings)
+    monkeypatch.setattr(environment_diagnostics.time, "time", lambda: 2000000000)
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": None, "provider": "auto",
+                         "until": "2026-10-26T00:00:00+09:00"}}
+    warnings = environment_diagnostics.cloud_setting_warnings(cfg, tmp_path)
+    assert any("OpenAI" in item and "expired" in item for item in warnings)
+    assert not any("Anthropicへの" in item for item in warnings)
+
+
+def test_auto_provider_fallback_and_openai_key_problem_are_safe(tmp_path, monkeypatch):
+    _synthetic_env(tmp_path, "MCS_ANTHROPIC_API_KEY=synthetic-secret-canary\n"
+                             "MCS_OPENAI_API_KEY=synthetic-invalid-value \n")
+    monkeypatch.setattr(environment_diagnostics.time, "time", lambda: 2000000000)
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": None, "provider": "auto",
+                         "provider_order": ["openai", "anthropic"],
+                         "until": "2026-10-26T00:00:00+09:00"}}
+    warnings = environment_diagnostics.cloud_setting_warnings(cfg, tmp_path)
+    assert any("MCS_OPENAI_API_KEY" in item and "key_whitespace_or_control" in item for item in warnings)
+    assert any("Anthropic" in item and "expired" in item for item in warnings)
+    assert all("synthetic-secret-canary" not in item and "synthetic-invalid-value" not in item for item in warnings)
+
+
+def test_jev_zero_budget_warning_names_existing_semantic_path(tmp_path):
+    cfg = {"semantic": {"mode": "assist", "project_ids": None}}
+    warnings = environment_diagnostics.cloud_setting_warnings(cfg, tmp_path)
+    assert any("semantic.daily_request_budget" in item and "jev_budget_zero" in item for item in warnings)

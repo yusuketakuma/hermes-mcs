@@ -112,26 +112,27 @@ def cloud_setting_warnings(cfg: dict, root) -> list[str]:
     """Explain, without values, why an external-AI key or setting keeps sending off or stopped."""
     import cloud_policy
     out = []
-    for key, label in (("MCS_ANTHROPIC_API_KEY", "Anthropic"), ("TYPESAFE_API_KEY", "Jev")):
+    for key, label in ((cloud_policy.anthropic_client.KEY_ENV, "Anthropic"),
+                       (cloud_policy.openai_client.KEY_ENV, "OpenAI"), ("TYPESAFE_API_KEY", "Jev")):
         reason = mcs_util.private_env_problem(key, root)
         if reason in _KEY_REASONS:   # present but rejected; plain absence is reported elsewhere
             out.append(f"{key}（{label}）を使えません: {_KEY_REASONS[reason]}。"
                        f"このキーは使われず、{label}への送信は行いません。エラーコード: {reason}")
-    anthropic_key = bool(mcs_util.private_env_value("MCS_ANTHROPIC_API_KEY", root))
-    cloud, errors = cloud_policy.cloud_config(cfg, key_present=anthropic_key and bool(cfg))
+    cloud, errors = (cloud_policy.resolve_settings(cfg, root) if cfg else cloud_policy.cloud_config({}))
+    provider = {"anthropic": "Anthropic", "openai": "OpenAI"}.get(cloud.get("provider"), "外部AI")
     if "config: cloud_llm_cost_limit_required" in errors:
-        out.append("Anthropicのキーはありますが、日・月の費用上限を両方解除し、期間予算もないため送信していません。"
+        out.append(f"{provider}のキーはありますが、日・月の費用上限を両方解除し、期間予算もないため送信していません。"
                    "`mcs_setup.py cloud-llm budget --daily-usd 金額 --monthly-usd 金額`、または期間予算"
                    "`--period-usd 金額 --until 日付`で上限を設定してください。"
                    "エラーコード: cost_limit_required")
     window = cloud_policy.setting_block_reason(cloud) if cloud["mode"] in ("on", "shadow") else None
     if window == "expired":
-        out.append("cloud_llm.untilの時刻を過ぎたため、Anthropicへの新しい送信を止めています。"
+        out.append(f"cloud_llm.untilの時刻を過ぎたため、{provider}への新しい送信を止めています。"
                    "再開する場合はuntilを変更するか削除してください。エラーコード: expired")
     elif window == "not_started":
-        out.append("cloud_llm.window_startの開始前のため、Anthropicへの送信はまだ始まりません。エラーコード: not_started")
+        out.append(f"cloud_llm.window_startの開始前のため、{provider}への送信はまだ始まりません。エラーコード: not_started")
     elif window == "window_history_unverified":
-        out.append("期間予算の開始から61日を過ぎ、使用額の記録が保存期間から外れるため、Anthropicへの送信を止めています。"
+        out.append(f"期間予算の開始から61日を過ぎ、使用額の記録が保存期間から外れるため、{provider}への送信を止めています。"
                    "`--period-usd 金額 --from 日付`で61日以内の期間に設定し直してください。"
                    "エラーコード: window_history_unverified")
     block = cfg.get("semantic") if isinstance(cfg, dict) else None
@@ -139,7 +140,7 @@ def cloud_setting_warnings(cfg: dict, root) -> list[str]:
         if block.get("mode", "off") != "off" and "daily_request_budget" not in block:
             out.append("semantic.modeを指定していますが、semantic.daily_request_budgetが未設定のため"
                        "Jevの1日の要求上限が0になり、外部解析は行われません。"
-                       "daily_request_budgetに上限の件数を設定してください。エラーコード: jev_budget_zero")
+                       "semantic.daily_request_budgetに上限の件数を設定してください。エラーコード: jev_budget_zero")
         until = block.get("until")
         try:
             ended = until is not None and time.time() >= mcs_util.until_epoch(until)
