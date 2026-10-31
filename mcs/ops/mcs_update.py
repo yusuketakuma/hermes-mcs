@@ -1282,7 +1282,7 @@ def _write_marker() -> None:
     fsync_dir(DATA, require_dir=False)
 
 
-def _ensure_recovery_marker() -> None:
+def _ensure_recovery_marker() -> tuple[int, int]:
     """Keep or create the launcher hold; it does not prove writers stopped."""
     directory, name = os.path.split(MARKER_PATH)
     dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -1296,18 +1296,58 @@ def _ensure_recovery_marker() -> None:
                 opened = os.fstat(fd)
                 current = os.stat(name, dir_fd=dfd, follow_symlinks=False)
                 if (not stat.S_ISREG(opened.st_mode)
+                        or opened.st_uid != os.getuid() or opened.st_nlink != 1
+                        or stat.S_IMODE(opened.st_mode) != 0o600
                         or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)):
                     raise OSError("update_marker_unverifiable")
             finally:
                 os.close(fd)
-            return
+            return (opened.st_dev, opened.st_ino)
         with fdopen_owned(fd, "w") as f:
             os.fchmod(f.fileno(), 0o600)
             f.write(str(time.time()))
             f.flush()
             os.fsync(f.fileno())
+            opened = os.fstat(f.fileno())
         os.fsync(dfd)
+        current = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+        if (not stat.S_ISREG(current.st_mode) or current.st_uid != os.getuid()
+                or current.st_nlink != 1 or stat.S_IMODE(current.st_mode) != 0o600
+                or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)):
+            raise OSError("update_marker_unverifiable")
+        return (opened.st_dev, opened.st_ino)
     finally:
+        os.close(dfd)
+
+
+@contextmanager
+def _pin_recovery_marker(expected: tuple[int, int]):
+    """Keep the checked marker and its directory open across a stop attempt."""
+    directory, name = os.path.split(MARKER_PATH)
+    dfd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    fd = None
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, dir_fd=dfd)
+
+        def check():
+            marker = os.fstat(fd)
+            path = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+            parent = os.fstat(dfd)
+            parent_path = os.stat(directory, follow_symlinks=False)
+            if (not stat.S_ISREG(marker.st_mode) or marker.st_uid != os.getuid()
+                    or marker.st_nlink != 1 or stat.S_IMODE(marker.st_mode) != 0o600
+                    or (marker.st_dev, marker.st_ino) != expected
+                    or (path.st_dev, path.st_ino) != expected
+                    or not stat.S_ISDIR(parent_path.st_mode)
+                    or (parent.st_dev, parent.st_ino) != (parent_path.st_dev, parent_path.st_ino)):
+                raise OSError("update_marker_unverifiable")
+
+        check()
+        yield
+        check()
+    finally:
+        if fd is not None:
+            os.close(fd)
         os.close(dfd)
 
 
@@ -1399,7 +1439,15 @@ def quiesce() -> list[str]:
     for restart verification. Marker first — helper launchers (cron
     catchup) must see it before any process is stopped (S8)."""
     _write_marker()
-    if mcs_util.load_config().get("runtime_mode") == "standalone":
+    mode = "standalone" if mcs_util.load_config().get("runtime_mode") == "standalone" else "hermes"
+    return _quiesce_for_mode(mode)
+
+
+def _quiesce_for_mode(mode: str) -> list[str]:
+    """Stop the proven runtime after the launcher hold has been established."""
+    if mode not in ("hermes", "standalone"):
+        raise UpdateError("runtime_mode_unverifiable")
+    if mode == "standalone":
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             status = _standalone_status()
@@ -2446,6 +2494,7 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
         rollback_failed = False
         consent_hold = False
         delegated = False
+        hold_mode = None
 
         def bail(reason: str) -> int:
             nonlocal rollback_failed, consent_hold, state
@@ -2462,7 +2511,19 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
                     _check_runtime_restore(entry)
                 except UpdateError as e:
                     rollback_failed = True
-                    _report("runtime_restore_blocked", str(e))
+                    try:
+                        marker = _ensure_recovery_marker()
+                        if hold_mode is None:
+                            raise UpdateError("runtime_mode_unverifiable")
+                        with _pin_recovery_marker(marker):
+                            _quiesce_for_mode(hold_mode)
+                            if _ensure_recovery_marker() != marker:
+                                raise UpdateError("update_marker_changed")
+                    except Exception as stop_error:
+                        _report("runtime_restore_blocked", str(e) + "; stop_unverified: "
+                                + type(stop_error).__name__, writers_stopped=False)
+                        return 1           # retain journal; stopping was not proven
+                    _report("runtime_restore_blocked", str(e), writers_stopped=True)
                     return 1               # retain the original journal and marker
                 if entry.get("schema_bump") and entry.get("backup_path"):
                     # journal rollback-shaped BEFORE the reset, like
@@ -2595,6 +2656,10 @@ def _apply_pipeline(tag: str | None, sha: str | None, command_id: str | None,
             errors = precheck_local(cfg, **before_args)
             if errors:
                 return bail("precheck_local: " + ",".join(errors))
+            try:
+                hold_mode = mcs_runtime.mode(cfg)
+            except (ValueError, TypeError, AttributeError):
+                return bail("runtime_mode_unverifiable")
 
             if borrowed is not None:
                 journal(state, 'release_verify')
