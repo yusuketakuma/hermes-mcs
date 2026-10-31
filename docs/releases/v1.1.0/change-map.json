@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 410,
+  "fragment_count": 411,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2467,6 +2467,12 @@
       "id": "openai-quota-classification-20261031",
       "title": "OpenAIの利用枠不足を区別して再試行を停止",
       "sha256": "14021606af6c56677c422f3832b52265fdf4a96e23c13173f3aa883cb6b687aa"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-worker-entry-bootstrap-20261031.json",
+      "id": "cloud-worker-entry-bootstrap-20261031",
+      "title": "クラウドの過去分処理ワーカーが起動しない問題を修正",
+      "sha256": "5f250589643b565c8dfdb150a96541a5d436bfac1e8cdf4507d9f7b0ca233a28"
     }
   ]
 }

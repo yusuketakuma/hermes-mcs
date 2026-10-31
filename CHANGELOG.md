@@ -66,6 +66,9 @@
 - **途中の解析と未送達の通知を、完了と混同しないよう修正**
   解析の制限時間到達を監視へ反映し、集約位置の保存だけが一時的に競合した場合は、残り時間がある範囲で解析を続けます。通知カードだけの更新では未送達の本文・添付を解消せず、同じ通知先と内容の配送記録を確認します。監視できなかった件数は0件ではなく不明として扱います。
 
+- **クラウドの過去分処理ワーカーの起動を修正**
+  必要なモジュールを読み込めずに起動しない問題を修正しました。更新後は、Hermesモードではゲートウェイを、standaloneモードでは常駐プロセスを再起動してください。
+
 - **Slackの分割配送後に残る警報を修正**
   長さ超過で送れなかった本文を分割して届けた場合、元の各区間と全分割の配送成功を照合して、証明できた古い未送信記録を未完了の件数から除外します。本文整理後も照合用のハッシュを保持し、不正な型や通知先の変更を検出した記録は未証明として残します。
 
@@ -137,7 +140,7 @@
 ### 技術詳細
 
 <details>
-<summary>変更記録399件の詳細・更新条件・根拠を表示</summary>
+<summary>変更記録411件の詳細・更新条件・根拠を表示</summary>
 
 各リンクは、この版の変更記録です。要約・適用条件・更新操作・技術詳細・根拠を参照できます。同じ箇所に複数の記録がある場合、後続の修正を含む現行の説明は上の本文と各機能のガイドを確認してください。たとえば、処理方式アイコンの初期配置は後続の見出し行への移動で置き換えています。
 
@@ -449,6 +452,7 @@
 - [クラウド処理の対象が待機したままになる問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-selection-progress-20261029.json)
 - [クラウド処理の候補確認が収集を長時間妨げる問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-selection-writer-lock-20261030.json)
 - [分割計画を保存できない場合の追加課金を防止](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-split-checkpoint-ack-20261030.json)
+- [クラウドの過去分処理ワーカーが起動しない問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-worker-entry-bootstrap-20261031.json)
 - [通知の受領記録が書込み待ちのまま残る問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/command-worker-contention-retry-20261030.json)
 - [予算の期間変更で取得済みの患者文脈が破棄される問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/context-budget-window-result.json)
 - [認証情報の保存で不正なファイルと行の混入を拒否](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/credential-writer-boundary-20261029.json)
