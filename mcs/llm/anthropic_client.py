@@ -95,6 +95,10 @@ class AnthropicClient:
             ENDPOINT, method, body, timeout, api_key=self.api_key,
             deadline=deadline, allowed_endpoints=(ENDPOINT,), auth="anthropic")
 
+    def response_error(self, status, raw):
+        kind, retryable = http_error(status)
+        return kind, retryable, None
+
     def complete(self, prompt, *, deadline, max_tokens=8192, before_attempt=None,
                  reserve_fn=None, after_result=None, cache_prefix=None):
         """Return the shared chat envelope; every attempted HTTP reports safe metadata.
@@ -149,7 +153,9 @@ class AnthropicClient:
                 if isinstance(rid, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,64}", rid):
                     meta["request_id"] = rid
                 if status != 200:
-                    kind, retryable = http_error(status)
+                    kind, retryable, quota_code = self.response_error(status, raw)
+                    if quota_code is not None:
+                        meta["openai_error_code"] = quota_code
                     wait = retry_after(headers)
                     raise AnthropicError(kind, f"http_{status}", retryable, status)
                 if not isinstance(raw, bytes) or len(raw) > bounded_http.MAX_RESPONSE_BYTES:

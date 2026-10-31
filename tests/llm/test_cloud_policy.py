@@ -294,6 +294,31 @@ def test_terminal_circuit_only_resume_clears(tmp_path, now, kind):
         assert c.block_reason(db, _cfg(), "reextract", 1) == "paused"
 
 
+def test_openai_quota_429_is_reconstructed_as_terminal(tmp_path, now, monkeypatch):
+    import openai_client
+
+    monkeypatch.setattr(c, "pricing_valid", lambda *args, **kwargs: True)
+    seen = []
+    original = c._circuit_result
+    def observe(ledger, error, **kwargs):
+        seen.append(error)
+        return original(ledger, error, **kwargs)
+    monkeypatch.setattr(c, "_circuit_result", observe)
+    with closing(Ledger(str(tmp_path / "l.db"))) as ledger:
+        cfg = _cfg(provider="openai")
+        body = openai_client.OpenAIClient("synthetic").body("synthetic", 100, None)
+        reservation = c.usage_reserver(ledger, cfg, route="reextract", project_id=1,
+                                       unit_key="synthetic")(body, 2)
+        c.record_result(ledger, reservation, {
+            "model": openai_client.MODEL, "request_fp": reservation["request_fp"],
+            "usage": None, "http_class": "http_429", "error_kind": "payment_required",
+            "openai_error_code": "credit_balance_exhausted"})
+        assert seen[-1].kind == "payment_required" and seen[-1].retryable is False
+        assert seen[-1].status == 429
+        assert c.global_block_reason(ledger, model=openai_client.MODEL) == "payment_required"
+        assert c.usage_report(ledger)["max_reserved_cost_usd"] == reservation["max_cost_usd"]
+
+
 def test_borrowed_sqlite_connection_rejects_worker_thread_writes(tmp_path, now):
     with closing(Ledger(str(tmp_path / "l.db"))) as db:
         with ThreadPoolExecutor(max_workers=1) as pool:

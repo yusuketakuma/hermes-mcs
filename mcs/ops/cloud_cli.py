@@ -345,6 +345,10 @@ def _safe_log(row, meta):
              "rate_limited", "transport", "timeout", "contract_error", "protocol_error", "model_mismatch"}
     if isinstance(meta.get("error_kind"), str) and meta["error_kind"] in kinds:
         result["error_kind"] = meta["error_kind"]
+    if (row["kind"] == "cloud_usage_result"
+            and row["model"] == meta.get("model")
+            and policy._confirmed_openai_quota(meta, row["model"])):
+        result["openai_error_code"] = meta["openai_error_code"]
     http = meta.get("http_class")
     if http in ("transport", "timeout") or (isinstance(http, str) and len(http) == 8
                                               and http.startswith("http_") and http[5:].isdigit()):
@@ -464,7 +468,7 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
         if project is not None:
             sql += " AND project_id=?"
             args.append(project)
-        for n, row in enumerate(db.execute("SELECT kind,created_at,meta FROM artifacts WHERE kind IN "
+        for n, row in enumerate(db.execute("SELECT kind,created_at,model,meta FROM artifacts WHERE kind IN "
                 "('cloud_usage_reserve','cloud_usage_result','cloud_usage_dryrun','cloud_usage_disposition','cloud_compare_v1') AND "
                 + sql + " ORDER BY artifact_id LIMIT ?", (*args, READ_ROWS + 1)), 1):
             _checkpoint(deadline, n)
@@ -472,7 +476,13 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
             if not isinstance(meta, dict):
                 continue
             # Explicit projection: IDs, hashes, owner data and content never leave this query.
-            log.append(_safe_log(row, meta))
+            safe = _safe_log(row, meta)
+            if "openai_error_code" in safe:
+                try:
+                    policy._accounting_meta(row["meta"])
+                except policy.AnthropicError:
+                    safe.pop("openai_error_code")
+            log.append(safe)
         _checkpoint(deadline)
         evidence_holds = None
         if evidence_holds_wanted:

@@ -76,6 +76,85 @@ def test_uncertain_send_is_recorded_once_and_never_retried():
     assert len(sent) == len(records) == 1 and records[0][1]["usage"] is None
 
 
+@pytest.mark.parametrize("fields,expected", [
+    ({"code": "insufficient_quota"}, "insufficient_quota"),
+    ({"code": "insufficient_quota", "type": "insufficient_quota"}, "insufficient_quota"),
+    ({"code": "credit_balance_exhausted"}, "credit_balance_exhausted"),
+    ({"code": "organization_spend_limit_exceeded"}, "organization_spend_limit_exceeded"),
+    ({"code": "project_spend_limit_exceeded", "type": "insufficient_quota"}, "project_spend_limit_exceeded"),
+    ({"code": "organization_usage_limit_exceeded"}, "organization_usage_limit_exceeded"),
+    ({"type": "insufficient_quota", "code": None}, "insufficient_quota"),
+])
+def test_quota_429_is_one_attempt_and_only_fixed_metadata(fields, expected):
+    calls, records = [], []
+    body = json.dumps({"error": {**fields, "message": "synthetic-secret-canary"}}).encode()
+    provider = client.OpenAIClient("synthetic-private", post_fn=lambda *args: (
+        calls.append(True) or 429, {"unknown": "synthetic-secret-canary"}, body))
+    with pytest.raises(AnthropicError) as caught:
+        provider.complete("synthetic", deadline=time.monotonic() + 10,
+                          after_result=lambda *args: records.append(args))
+    assert caught.value.kind == "payment_required" and not caught.value.retryable
+    assert len(calls) == len(records) == 1
+    metadata = records[0][1]
+    assert metadata["http_class"] == "http_429" and metadata["usage"] is None
+    assert metadata["error_kind"] == "payment_required" and metadata["openai_error_code"] == expected
+    assert "synthetic-secret-canary" not in repr(records) + repr(caught.value)
+
+
+@pytest.mark.parametrize("body", [
+    b'{"error":{"code":"future_synthetic_secret"}}',
+    b'{"error":{"code":"future_synthetic_secret","type":"insufficient_quota"}}',
+    b'{"error":{"code":"","type":"insufficient_quota"}}',
+    b'{"error":{"code":true,"type":"insufficient_quota"}}',
+    b'{"error":{"code":"rate_limit_exceeded","type":"rate_limit_error"}}',
+    b'{"error":{"code":"insufficient_quota","type":"rate_limit_error"}}',
+    b'{"error":{"code":"insufficient_quota","type":"future_type"}}',
+    b'{"error":{"code":[],"type":{}}}',
+    b'{"error":{"code":"insufficient_quota","code":"other"}}',
+    b'{"error":', b'\xff', b'[]', b'x' * (client.bounded_http.MAX_RESPONSE_BYTES + 1), None,
+])
+def test_unknown_429_keeps_legacy_status_class_without_leaking_body(body):
+    calls, records, delays = [], [], []
+    provider = client.OpenAIClient("synthetic-private", post_fn=lambda *args: (
+        calls.append(True) or 429, {"Retry-After": "0.25", "unknown": "synthetic-secret-canary"}, body),
+        wait_fn=delays.append)
+    with pytest.raises(AnthropicError) as caught:
+        provider.complete("synthetic", deadline=time.monotonic() + 10,
+                          after_result=lambda *args: records.append(args))
+    assert caught.value.kind == "rate_limited" and caught.value.retryable
+    assert len(calls) == len(records) == 3 and delays == [0.25, 0.25]
+    assert all("openai_error_code" not in meta for _, meta in records)
+    assert "synthetic-secret-canary" not in repr(records) + repr(caught.value)
+    assert "future_synthetic_secret" not in repr(records) + repr(caught.value)
+
+
+@pytest.mark.parametrize("change", ["false", "integer", "string", "status", "kind", "usage", "usage_missing", "provider"])
+def test_quota_marker_writer_rejects_inconsistent_evidence(tmp_path, monkeypatch, change):
+    monkeypatch.setattr(policy, "pricing_valid", lambda *args, **kwargs: True)
+    provider = "anthropic" if change == "provider" else "openai"
+    cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "provider": provider}}
+    provider_client = (client.AnthropicClient("synthetic") if provider == "anthropic"
+                       else client.OpenAIClient("synthetic"))
+    with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
+        reservation = policy.usage_reserver(ledger, cfg, route="reextract", project_id=1,
+            unit_key="synthetic")(provider_client.body("synthetic", 100, None), 2)
+        result = {"model": reservation["model"], "request_fp": reservation["request_fp"],
+                  "usage": None, "http_class": "http_429", "error_kind": "payment_required",
+                  "openai_error_code": "project_spend_limit_exceeded"}
+        changes = {"false": {"openai_error_code": False},
+                   "integer": {"openai_error_code": 1},
+                   "string": {"openai_error_code": "synthetic_unknown"},
+                   "status": {"http_class": "http_402"},
+                   "kind": {"error_kind": "rate_limited"}, "usage": {"usage": usage()}}
+        result.update(changes.get(change, {}))
+        if change == "usage_missing":
+            del result["usage"]
+        with pytest.raises(AnthropicError, match="pricing_unverified"):
+            policy.record_result(ledger, reservation, result)
+        assert not ledger.artifacts("cloud_usage_result")
+        assert policy.usage_report(ledger)["unresolved_requests"] == 1
+
+
 def test_transport_pins_endpoint_and_bearer_auth(monkeypatch):
     seen = []
     monkeypatch.setattr(client.bounded_http, "bounded_http_request", lambda *a, **kw: seen.append((a, kw)) or (200, {}, b"{}"))
