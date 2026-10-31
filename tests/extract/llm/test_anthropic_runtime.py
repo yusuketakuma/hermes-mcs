@@ -1386,6 +1386,7 @@ def test_lane_two_updated_exits_without_reusing_stale_carry(tmp_path, monkeypatc
     monkeypatch.setattr(worker, "legacy_admissions", lambda *args: None)
     monkeypatch.setattr(worker.extract_validation, "vital_threshold_policy", lambda cfg: None)
     monkeypatch.setattr(worker.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(worker, "_writer_current", lambda *, full=False: True)
     monkeypatch.setattr(worker, "_write_lock", locked)
     monkeypatch.setattr(worker, "_release", release)
     monkeypatch.setattr(worker, "run_pending", run)
@@ -1398,6 +1399,91 @@ def test_lane_two_updated_exits_without_reusing_stale_carry(tmp_path, monkeypatc
         assert worker.main() == 0
         assert len(calls) == 2 and sleeps == [1]
         assert events.count("semantic") == 1
+        assert events.count("discard") == events.count("release") == 1
+        assert events[-2:] == ["pool_closed", "ledger_closed"]
+        assert [dict(row) for row in ledger.artifacts("synthetic_paid_result")] == saved
+    finally:
+        close()
+
+
+@pytest.mark.parametrize("mode", ["changed", "changed_release_fails", "unchanged", "changed_at_stop"])
+def test_resident_checks_source_before_config_and_stop(tmp_path, monkeypatch, mode):
+    ledger = _ledger(tmp_path)
+    close = ledger.close
+    events, calls, stale = [], [], [False]
+    ledger.artifact_add("synthetic_paid_result", "{}", meta={"status": "received"})
+    saved = [dict(row) for row in ledger.artifacts("synthetic_paid_result")]
+    pending = {"project_id": 1, "_cloud_discard": lambda: events.append("discard")}
+    lease = time.time() + 600
+    def no_commit(**kwargs):
+        pytest.fail("stale worker must not commit carried result")
+    carried = [(pending, lease, no_commit)]
+    source = tmp_path / "synthetic_inference.py"
+    source.write_text("# synthetic generation\n")
+    source_mtime = source.stat().st_mtime_ns
+    clock = [100.0]
+
+    class Pool:
+        def __init__(self, root):
+            assert root == str(tmp_path)
+        def sync(self, cfg, *, ledger):
+            events.append("pool_sync")
+        def close(self):
+            events.append("pool_closed")
+
+    @contextmanager
+    def locked(*args, **kwargs):
+        yield True
+
+    def load():
+        events.append("config_read")
+        if stale[0]:
+            raise RuntimeError("synthetic unreadable configuration")
+        return {}
+
+    def release(db, row, token):
+        assert db is ledger and row is pending and token == lease
+        events.append("release")
+        if mode == "changed_release_fails":
+            raise RuntimeError("synthetic release failure")
+
+    def run(db, **kwargs):
+        calls.append(list(kwargs["carry"]))
+        if len(calls) == 1:
+            if mode != "unchanged":
+                os.utime(source, ns=(source_mtime, source_mtime + 1_000_000_000))
+                stale[0] = True
+                if mode == "changed_at_stop":
+                    clock[0] = 120.0
+            return {"done": 1, "failed": 0, "left": 1, "carry": list(carried)}
+        assert mode == "unchanged" and calls[-1] == carried
+        return {"done": 0, "failed": 0, "left": None, "updated": True}
+
+    monkeypatch.setattr(worker, "HOME", str(tmp_path))
+    monkeypatch.setattr(worker.writer_lock, "HOME", str(tmp_path))
+    monkeypatch.setattr(inference, "__file__", str(source))
+    monkeypatch.setattr(worker, "_INFERENCE_SOURCE_STAT", source_mtime)
+    monkeypatch.setattr(worker, "_WRITER_STATE", (False, 1))
+    monkeypatch.setattr(worker.writer_lock, "updater_state", lambda: (False, 1))
+    monkeypatch.setattr(worker, "Ledger", lambda *args: ledger)
+    monkeypatch.setattr(ledger, "close", lambda: events.append("ledger_closed"))
+    monkeypatch.setattr(worker.cloud_backlog, "Pool", Pool)
+    monkeypatch.setattr(worker, "load_config", load)
+    monkeypatch.setattr(worker, "legacy_admissions", lambda *args: None)
+    monkeypatch.setattr(worker.extract_validation, "vital_threshold_policy", lambda cfg: None)
+    monkeypatch.setattr(worker, "_write_lock", locked)
+    monkeypatch.setattr(worker, "_release", release)
+    monkeypatch.setattr(worker, "run_pending", run)
+    monkeypatch.setattr(worker.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(worker.time, "sleep", lambda seconds: events.append("sleep"))
+    args = ["extract_llm", "--all", "--lane", "2"]
+    if mode == "changed_at_stop":
+        args.extend(["--stop-after", "10"])
+    monkeypatch.setattr(worker.sys, "argv", args)
+    try:
+        assert worker.main() == 0
+        assert len(calls) == (2 if mode == "unchanged" else 1)
+        assert events.count("pool_sync") == (2 if mode == "unchanged" else 1)
         assert events.count("discard") == events.count("release") == 1
         assert events[-2:] == ["pool_closed", "ledger_closed"]
         assert [dict(row) for row in ledger.artifacts("synthetic_paid_result")] == saved

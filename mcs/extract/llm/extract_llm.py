@@ -6030,7 +6030,19 @@ def _main() -> int:
             context_state = writer_lock.updater_state()
             carry: list = []   # finished results waiting for the run lock
 
+            def retire():
+                try:
+                    _settle_carry(led, carry, write=False)
+                except Exception as error:
+                    # Remaining claims stay protected by their leases.
+                    print(json.dumps({"event": "extract_carry_release_error",
+                                      "error": type(error).__name__, "ts": time.time()}),
+                          file=sys.stderr, flush=True)
+                return 0
+
             while True:
+                if not _writer_current(full=True):
+                    return retire()
                 if stop is not None and time.monotonic() > stop:
                     total["stopped"] = "stop_after"
                     break
@@ -6109,15 +6121,7 @@ def _main() -> int:
                         # returned before run_pending could include it.
                         if "carry" in r:
                             carry = r.pop("carry") or []
-                        try:
-                            _settle_carry(led, carry, write=False)
-                        except Exception as error:
-                            # A failed release must not resume stale code; any
-                            # remaining claim stays protected by its lease.
-                            print(json.dumps({"event": "extract_carry_release_error",
-                                              "error": type(error).__name__, "ts": time.time()}),
-                                  file=sys.stderr, flush=True)
-                        return 0
+                        return retire()
                     carry = r.pop("carry", None) or []  # internal; never logged
                     sem = None
                     ran_semantic = False
