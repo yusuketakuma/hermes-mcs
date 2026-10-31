@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 403,
+  "fragment_count": 404,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2425,6 +2425,12 @@
       "id": "health-aggregate-runtime-budget-20261031",
       "title": "通知状況の確認時間を調整",
       "sha256": "d1cb1ae6ceea86ce951af0c19b96de3770e220cdb7bc913f9ba8feb93ff0df66"
+    },
+    {
+      "path": "changes/archive/1.1.0/slack-block-fallback-authority-20261031.json",
+      "id": "slack-block-fallback-authority-20261031",
+      "title": "Slackの形式変更後の再送前に権限を再確認",
+      "sha256": "8ee1ffe7e8cc5dc2b7ccccc32b5a5068abc1a9aebf63bc47561ca95b07d028ab"
     }
   ]
 }

@@ -509,6 +509,7 @@
 - [初期設定の外部AI送信先の確認表示を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/setup-provider-consent-20261029.json)
 - [シグナル確認の時間切れを監視状態へ反映](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/signals-deadline-health-20261030.json)
 - [検査を省略した要約の事実表示を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/skipped-audit-display-20261030.json)
+- [Slackの形式変更後の再送前に権限を再確認](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/slack-block-fallback-authority-20261031.json)
 - [Slack通知更新時のメンバー名を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/slack-header-member-names-20261030.json)
 - [Slackの新しい返信をチャンネルにも表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/slack-reply-card-broadcast-20261030.json)
 - [Slack独立接続のSDKを3.46.0へ更新](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/slack-sdk-stable-20261030.json)
