@@ -132,6 +132,8 @@
 
 - 状態監視・遠隔支援（CSDC）はコードのみ同梱し、1.1.0の提供機能には含めません。新規導入は既定OFFです。既存の明示ONは自動で停止・変更しないため、更新前に設定を確認してください。公開医薬品情報の照会は、TinyFish未設定時にExa MCPへ公開薬品名等を送る既存経路を含み、患者データは送りません。取得資料は人が原典を確認してください。
 
+- OpenAIから利用枠不足が明確に返った場合は自動再試行を停止します。利用枠の回復後、理由を添えた人の承認操作でクラウド処理を再開してください。判別できない429は速度制限として扱い、利用枠不足と断定しません。
+
 ### 技術詳細
 
 <details>
@@ -478,6 +480,7 @@
 - [通知本文や添付の未完了を後続のカード更新で見落とす問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/notification-part-health-proof-20261030.json)
 - [配送先が確認できない通知の未完了警告を保持](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/notification-part-scope-proof-20261030.json)
 - [OpenAIの利用先選択とAPI別予算に対応](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/openai-provider-budgets-20261029.json)
+- [OpenAIの利用枠不足を区別して再試行を停止](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/openai-quota-classification-20261031.json)
 - [OpenAIの使用量を診断で読み取れるよう修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/openai-usage-log-20261029.json)
 - [通知ワーカーの起動確認が子プロセスの回収待ちで止まる問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/owned-process-lost-reap-20261030.json)
 - [患者の全投稿の解析を終えてからコンテキストを生成](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/patient-context-after-inference-20261029.json)
