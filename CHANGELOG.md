@@ -69,6 +69,12 @@
 - **クラウドの過去分処理ワーカーの起動を修正**
   必要なモジュールを読み込めずに起動しない問題を修正しました。更新後は、Hermesモードではゲートウェイを、standaloneモードでは常駐プロセスを再起動してください。
 
+- **クラウド処理の料金と応答の扱いを修正**
+  使用したサービスと料金版を記録し、過去の予約をその料金版で精算します。送信前に失敗したと確認できるタイムアウトを区別し、通信結果が不明な場合は引き続き保留します。
+
+- **解析ワーカーの直接起動を修正**
+  必要なモジュールを読み込めずに終了する問題を修正しました。更新後は、Hermesモードではゲートウェイを、standaloneモードでは常駐プロセスを再起動してください。
+
 - **Slackの分割配送後に残る警報を修正**
   長さ超過で送れなかった本文を分割して届けた場合、元の各区間と全分割の配送成功を照合して、証明できた古い未送信記録を未完了の件数から除外します。本文整理後も照合用のハッシュを保持し、不正な型や通知先の変更を検出した記録は未証明として残します。
 
@@ -140,7 +146,7 @@
 ### 技術詳細
 
 <details>
-<summary>変更記録411件の詳細・更新条件・根拠を表示</summary>
+<summary>変更記録414件の詳細・更新条件・根拠を表示</summary>
 
 各リンクは、この版の変更記録です。要約・適用条件・更新操作・技術詳細・根拠を参照できます。同じ箇所に複数の記録がある場合、後続の修正を含む現行の説明は上の本文と各機能のガイドを確認してください。たとえば、処理方式アイコンの初期配置は後続の見出し行への移動で置き換えています。
 
@@ -449,9 +455,11 @@
 - [本文が出る前の出力上限到達を契約違反にしない](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-output-length-20261030.json)
 - [クラウド利用の未精算記録を少量の読取りで照会](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-outstanding-observation-20261029.json)
 - [アクティブ患者の履歴解析を優先して並列処理](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-parallel-patient-priority-20261029.json)
+- [クラウド処理の料金と応答の扱いを修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-provider-modules-20261031.json)
 - [クラウド処理の対象が待機したままになる問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-selection-progress-20261029.json)
 - [クラウド処理の候補確認が収集を長時間妨げる問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-selection-writer-lock-20261030.json)
 - [分割計画を保存できない場合の追加課金を防止](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-split-checkpoint-ack-20261030.json)
+- [テストから外部クラウドへの接続を遮断](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-test-isolation-20261031.json)
 - [クラウドの過去分処理ワーカーが起動しない問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-worker-entry-bootstrap-20261031.json)
 - [通知の受領記録が書込み待ちのまま残る問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/command-worker-contention-retry-20261030.json)
 - [予算の期間変更で取得済みの患者文脈が破棄される問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/context-budget-window-result.json)
@@ -515,6 +523,7 @@
 - [患者情報の集約が期限内に進みやすくなるよう修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/rollup-deadline-fair-progress-20261030.json)
 - [集約の時間切れとデータの確認不能を区別](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/rollup-rebuild-deadline-reasons-20261031.json)
 - [患者集約で実行期限と閲覧用スナップショットの検証時間を確保](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/rollup-stage-budget-20261029.json)
+- [解析ワーカーの直接起動を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/semantic-entry-bootstrap-20261031.json)
 - [解析処理の実行時間の重複計上を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/semantic-fallback-timing-20261031.json)
 - [解析の保留を証拠と通知対象を確認して解除](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/semantic-intake-current.json)
 - [初期設定の外部AI送信先の確認表示を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/setup-provider-consent-20261029.json)

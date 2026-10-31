@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 411,
+  "fragment_count": 414,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2473,6 +2473,24 @@
       "id": "cloud-worker-entry-bootstrap-20261031",
       "title": "クラウドの過去分処理ワーカーが起動しない問題を修正",
       "sha256": "5f250589643b565c8dfdb150a96541a5d436bfac1e8cdf4507d9f7b0ca233a28"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-test-isolation-20261031.json",
+      "id": "cloud-test-isolation-20261031",
+      "title": "テストから外部クラウドへの接続を遮断",
+      "sha256": "6ad83ee6693eb16991c1ab7bfa052e9eed7671185635d03ecf27922309c43697"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-provider-modules-20261031.json",
+      "id": "cloud-provider-modules-20261031",
+      "title": "クラウド処理の料金と応答の扱いを修正",
+      "sha256": "e9afcf70565dbc17bacab93048c4a88062422c0960cd6fd22f8aab07df38b663"
+    },
+    {
+      "path": "changes/archive/1.1.0/semantic-entry-bootstrap-20261031.json",
+      "id": "semantic-entry-bootstrap-20261031",
+      "title": "解析ワーカーの直接起動を修正",
+      "sha256": "1ae6b54fb59de3c88c097531f717e4fbecf02071ff97b0cec5bf8afd995d7ca3"
     }
   ]
 }
