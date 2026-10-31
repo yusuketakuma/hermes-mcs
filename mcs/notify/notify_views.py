@@ -28,7 +28,7 @@ from mcs_queries import register_search_fold
 from stamp_format import stamp_counts
 import notify_render
 from notify_render import (
-    render_source_generation, posted_hhmm, inline_text, mmdd, patient_label, patient_name,
+    render_source_generation, posted_hhmm, inline_text, mmdd, patient_label, project_display_name,
     source_fingerprint,
     actor_label, card_reaction_lines,
     card_reactions, today_jst)
@@ -38,7 +38,7 @@ def patient_summary_text(db, project_id, *, cfg=None) -> tuple:
     next planned item from the stored patient_rollup, plus the open
     tasks from the requests ledger. Missing material is said plainly —
     the text never implies completeness."""
-    name = patient_name(db, project_id) or f"project {project_id}"
+    name = project_display_name(db, project_id) or f"project {project_id}"
     title = f"{name} — 患者の記録まとめ"
     lines = [_coverage_line(db, project_id)]
     from extraction_progress import summary_lines
@@ -620,7 +620,7 @@ def patient_search_view(db, project_id, query) -> dict:
     question = _question_term(query)
     terms = ([question[0]] if question and question[0] else
              [t for t in str(query or "").split() if search_fold(t)][:5])
-    name = inline_text(patient_name(db, project_id), 30) or f"project {project_id}"
+    name = inline_text(project_display_name(db, project_id), 30) or f"project {project_id}"
     sql = ("SELECT message_id,posted_at,profession,body_text FROM messages "
            "WHERE project_id=? AND body_state='full'")
     args: list = [project_id]
@@ -788,22 +788,19 @@ CONTEXT_PAGE_SIZE = 8
 DISCOVERY_LABELS = (("new_report", "新しい報告"), ("edited", "訂正された報告"),
                     ("retrospective", "後から取得した記録"), ("backfill_found", "過去記録から追加発見"))
 _PARTICIPANTS_SHOWN = 4
-_CARE_EVENT_PATIENT_NAME_BYTES = 1024
-
-
 def _care_event_patient_label(db, project_id):
     """Only materialize a bounded, valid text label from the authorized snapshot."""
-    if "patient_name" not in {row[1] for row in db.execute("PRAGMA table_info(patients)")}:
+    columns = {row[1] for row in db.execute("PRAGMA table_info(patients)")}
+    if "patient_name" not in columns:
         return "患者"
-    row = db.execute(
-        "SELECT CASE WHEN typeof(patient_name)!='text' THEN NULL "
-        "WHEN octet_length(patient_name)>? THEN NULL "
-        "WHEN instr(CAST(patient_name AS BLOB),x'00')>0 THEN NULL "
-        "ELSE patient_name END FROM patients WHERE project_id=?",
-        (_CARE_EVENT_PATIENT_NAME_BYTES, project_id)).fetchone()
-    if row is None or row[0] is None:
+    identity = notify_render.project_identity(db, project_id, bounded_patient=True)
+    if identity is None:
         return "患者"
-    return inline_text(row[0].strip(), 30) or f"project {project_id}"
+    if identity["group"]:
+        return inline_text(identity["group_name"], 30) or f"project {project_id}"
+    if identity["patient_name"] is None:
+        return "患者"
+    return inline_text(identity["patient_name"].strip(), 30) or f"project {project_id}"
 
 
 def _bare_quote(text: str, category) -> str:

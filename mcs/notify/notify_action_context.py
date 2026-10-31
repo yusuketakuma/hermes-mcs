@@ -4,7 +4,7 @@ from __future__ import annotations
 from mcs_queries import current_fact_pred
 from mcs_requests import positive
 from mcs_util import valid_hash
-from notify_render import anchor_keys, own_post, patient_name, signal_evidence
+from notify_render import anchor_keys, own_post, project_identity, signal_evidence
 from notify_scope import latest_signals
 
 TASK_HINT_MAX = 300           # 📝 prefill — the modal field holds 1000
@@ -82,7 +82,11 @@ def render_context(db, card) -> dict:
 
 def _confirm_target(db, ctx):
     """What a confirm preview names: the patient and the pinned post's time."""
-    name = patient_name(db, ctx["project_id"]) or f"患者ID {ctx['project_id']}"
+    identity = project_identity(db, ctx["project_id"])
+    group = identity and identity["group"]
+    label = identity["group_name"] if group else (identity["patient_name"] or "").strip() if identity else ""
+    name = (f"{label} · project {ctx['project_id']}" if group and label else
+            f"project {ctx['project_id']}" if group else label or f"患者ID {ctx['project_id']}")
     r = db.execute("SELECT posted_at FROM messages WHERE message_id=?",
                    (ctx["source_message_id"],)).fetchone()
     at = str(r["posted_at"]) if r and r["posted_at"] else ""

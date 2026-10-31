@@ -54,7 +54,7 @@ from mcs_requests import canonical, payload_hash, positive
 from mcs_util import loads_dict, valid_hash
 from notify_render import (
     anchor_keys, card_content, content_fingerprint,
-    mmdd, patient_name, preview_header, preview_line, signal_evidence,
+    mmdd, project_display_name, preview_header, preview_line, signal_evidence,
     fit_parts,
     own_post, plain_notice, presenter, reply_source)
 import notify_parts
@@ -980,7 +980,7 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
 
 
 def _thread_name(db, card) -> str:
-    name = patient_name(db, card["project_id"]) \
+    name = project_display_name(db, card["project_id"]) \
         or f"project {card['project_id']}"
     d = None
     if card["root_message_id"]:

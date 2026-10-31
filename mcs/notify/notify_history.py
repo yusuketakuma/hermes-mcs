@@ -9,8 +9,18 @@ import initial_import_state
 from mcs_contract import project_url
 from mcs_requests import payload_hash
 from mcs_util import loads_dict
+from notify_render import project_identity
 
 UPDATE_SECONDS = 300
+
+
+def _patient_identity(db, project_id, *, with_group=False):
+    row = project_identity(db, project_id, extra="is_archived")
+    if row is None:
+        return (None, False) if with_group else None
+    name = row["group_name"] if row["group"] else row["patient_name"]
+    identity = [name, row["extra"]]
+    return (identity, row["group"]) if with_group else identity
 
 
 def anchor(card):
@@ -98,8 +108,7 @@ def fingerprint(db, card):
     adopted = ui.get("history_snapshot") or {}
     key = anchor(card)
     state = initial_import_state.load(db, card["project_id"])
-    patient = db.execute("SELECT patient_name,is_archived FROM patients WHERE project_id=?",
-                         (card["project_id"],)).fetchone()
+    patient = _patient_identity(db, card["project_id"])
     if state is None or state["cohort_id"] != key.get("cohort_id"):
         return payload_hash(["missing", key])
     sources = [(row["message_id"], row["content_hash"], row["body_state"])
@@ -125,8 +134,7 @@ def refresh_needed(db, card, now):
     ui = loads_dict(card["ui_state"]) or {}
     latest = ui.get("history_latest") or {}
     state = initial_import_state.load(db, card["project_id"])
-    patient = db.execute("SELECT patient_name,is_archived FROM patients WHERE project_id=?", (card["project_id"],)).fetchone()
-    identity = list(patient) if patient else None
+    identity = _patient_identity(db, card["project_id"])
     in_flight = db.execute("SELECT 1 FROM notification_renders WHERE card_id=? "
                           "AND state IN ('sending','unknown') LIMIT 1", (card["card_id"],)).fetchone()
     if (state is None or not latest or ui.get("history_source_dirty") and not in_flight
@@ -161,7 +169,7 @@ def refresh(db, card, cfg, now, *, force=False):
         if {k: v for k, v in current.items() if k not in ("observed_at", "artifact_cutoff")} != {
                 k: v for k, v in latest.items() if k not in ("observed_at", "artifact_cutoff")}:
             ui.setdefault("history_dirty_since", now)
-        patient = db.execute("SELECT patient_name,is_archived FROM patients WHERE project_id=?", (card["project_id"],)).fetchone()
+        patient = _patient_identity(db, card["project_id"])
         ui.update(history_latest=current, history_checked_at=now, history_analysis_changes=0,
                   history_patient_identity=list(patient) if patient else None)
         latest = current
@@ -196,7 +204,9 @@ def content(db, card):
     """Render adopted counts only, without reading histories, bodies or attachments."""
     ui = loads_dict(card["ui_state"]) or {}
     snap = ui.get("history_snapshot") or {}
-    name = db.execute("SELECT patient_name FROM patients WHERE project_id=?", (card["project_id"],)).fetchone()
+    name, group = _patient_identity(db, card["project_id"], with_group=True)
+    if name is not None and not name[0] and group:
+        name[0] = f"project {card['project_id']}"
     title = {"capturing": "初回履歴の取込み開始", "analyzing": "履歴の保存完了・解析中",
              "complete": "初回履歴の保存・解析完了", "held": "初回履歴の取込みを確認中"}.get(snap.get("phase"), "初回履歴を取得中")
     if snap.get("phase") == "complete" and snap.get("no_body"):

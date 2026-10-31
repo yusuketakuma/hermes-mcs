@@ -328,8 +328,32 @@ def stage_unread(adapter, ledger, result, deadline, run_id, *,
 
     # /projects already lists read rooms too; new invitations need no extra scan.
     known = {r["project_id"] for r in ledger.frontier_patients()}
+    known_groups = None
     for p in snap.listed_patients:
         if p.project_id in known:
+            project_type = getattr(p, "project_type", None)
+            refresh_group = project_type == "group" and (
+                getattr(p, "group_id_present", False) or getattr(p, "group_name_present", False))
+            other_type = isinstance(project_type, str) and bool(project_type.strip()) and project_type != "group"
+            if other_type and known_groups is None:
+                if time.monotonic() > deadline:
+                    result["errors"].append("deadline_exceeded")
+                    break
+                try:
+                    known_groups = {r["project_id"] for r in ledger.db.execute(
+                        "SELECT project_id FROM patients WHERE is_archived=0 AND project_type='group'")}
+                except Exception:
+                    result["errors"].append(f"project {p.project_id}: db_write_failed")
+                    known_groups = set()
+                    continue
+            if refresh_group or other_type and p.project_id in known_groups:
+                if time.monotonic() > deadline:
+                    result["errors"].append("deadline_exceeded")
+                    break
+                try:
+                    ledger.update_group_metadata(p)
+                except Exception:
+                    result["errors"].append(f"project {p.project_id}: db_write_failed")
             continue
         if time.monotonic() > deadline:
             result["errors"].append("deadline_exceeded")

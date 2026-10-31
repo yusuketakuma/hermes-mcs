@@ -17,6 +17,7 @@ import time
 from stamp_read import reaction_actor_summary
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
 from mcs_requests import payload_hash, positive
+from mcs_contract import valid_group_name, valid_id
 from mcs_util import valid_hash
 from message_observations import get_message_metadata
 from message_metadata import is_self_sender, mentions_self
@@ -245,9 +246,61 @@ def patient_name(db, pid) -> str:
     return (r["patient_name"] or "").strip() if r else ""
 
 
+def project_identity(db, pid, *, extra=None, bounded_patient=False, sqlite_id=False):
+    """Read display identity and an optional field from one patient row."""
+    if not valid_id(pid) and not (sqlite_id and type(pid) is int):
+        return None
+    if extra not in (None, "station_name", "is_archived"):
+        raise ValueError("invalid identity field")
+    patient = ("CASE WHEN typeof(patient_name)='text' AND octet_length(patient_name)<=1024 "
+               "AND instr(CAST(patient_name AS BLOB),x'00')=0 THEN patient_name END"
+               if bounded_patient else "patient_name")
+    extra_sql = f",{extra} AS extra" if extra else ",NULL AS extra"
+    group_test = "CASE WHEN typeof(project_type)='text' AND project_type='group' THEN 1 ELSE 0 END"
+    try:
+        row = db.execute(
+            f"SELECT {patient} AS patient_name,{group_test} AS is_group,"
+            "CASE WHEN typeof(group_id)='integer' AND group_id>0 THEN group_id END AS group_id,"
+            "CASE WHEN project_type='group' AND typeof(group_id)='integer' AND group_id>0 "
+            "THEN CASE WHEN typeof(group_name)='text' AND octet_length(group_name)<=512 "
+            "THEN CASE WHEN instr(CAST(group_name AS BLOB),x'00')=0 THEN group_name END END END AS group_name "
+            f"{extra_sql} FROM patients WHERE project_id=?", (pid,)).fetchone()
+    except sqlite3.OperationalError as exc:
+        if str(exc) in {"no such column: group_name", "no such column: group_id",
+                        "no such column: project_type"}:
+            try:
+                row = db.execute(f"SELECT {patient} AS patient_name,{group_test} AS is_group,"
+                                 f"NULL AS group_id,NULL AS group_name {extra_sql} "
+                                 "FROM patients WHERE project_id=?", (pid,)).fetchone()
+            except sqlite3.OperationalError as old_exc:
+                if str(old_exc) != "no such column: project_type":
+                    raise
+                row = db.execute(f"SELECT {patient} AS patient_name,0 AS is_group,"
+                                 f"NULL AS group_id,NULL AS group_name {extra_sql} "
+                                 "FROM patients WHERE project_id=?", (pid,)).fetchone()
+        else:
+            raise
+    if row is None:
+        return None
+    group = row["is_group"] == 1
+    name = valid_group_name(row["group_name"]) if group and valid_id(pid) and valid_id(row["group_id"]) else None
+    return {"group": group, "group_name": plain_notice(name, 120) if name else "",
+            "patient_name": row["patient_name"], "extra": row["extra"]}
+
+
+def project_display_name(db, pid, *, sqlite_id=False) -> str:
+    """Display name only; never use for clinical patient identification."""
+    identity = project_identity(db, pid, sqlite_id=sqlite_id)
+    if identity is None:
+        return ""
+    if identity["group"]:
+        return identity["group_name"]
+    return (identity["patient_name"] or "").strip()
+
+
 def patient_label(db, pid) -> str:
-    """Display label for a patient: the name capped at 30 characters, else ``project <pid>``."""
-    return inline_text(patient_name(db, pid), 30) or f"project {pid}"
+    """Display label capped at 30 characters, else ``project <pid>``."""
+    return inline_text(project_display_name(db, pid), 30) or f"project {pid}"
 
 
 def mmdd(posted_at) -> str:
@@ -577,17 +630,18 @@ def signal_state_suffix(sig: dict) -> str:
 
 
 def patient_heading(db, pid) -> str:
-    """患者名（施設）— plus ``#末尾4桁`` only when another stored
-    patient shares the name, so a same-name room is never mistaken."""
+    """患者名（施設）、または識別子を付けたグループ名を返す。"""
     if not positive(pid):
         return ""
-    r = db.execute("SELECT patient_name, station_name FROM patients "
-                   "WHERE project_id=?", (pid,)).fetchone()
+    r = project_identity(db, pid, extra="station_name")
+    if r and r["group"]:
+        group = r["group_name"]
+        return f"{group} #{pid}" if group else f"project {pid}"
     name = ((r["patient_name"] or "").strip() if r else "")
     if not name:
         return f"project {pid}"
     out = name
-    station = (r["station_name"] or "").strip()
+    station = (r["extra"] or "").strip()
     if station:
         out += f"（{station}）"
     if db.execute("SELECT 1 FROM patients WHERE patient_name=? AND "
@@ -620,13 +674,13 @@ def source_fingerprint(db, card) -> str:
             (m["message_id"], m["content_hash"], m["body_state"],
              ready.get(m["message_id"], {}))
             for m in msgs],
-            "name": patient_name(db, card["project_id"]),
+            "name": project_display_name(db, card["project_id"]),
             "drug_dictionary": structured_view.generation_signature(db), "drug_view_version": 2,
             "drug_thread_unavailable": card.get("transport") == "slack"
             and card.get("thread_state") in ("failed", "deleted")})
     keys = anchor_keys(card)
     sigs = latest_signals(db, keys, card["project_id"])
-    names = sorted({patient_name(db, s["content"].get("project_id"))
+    names = sorted({project_display_name(db, s["content"].get("project_id"))
                     for s in sigs.values()})
     evidence_ids = set()
     for signal in sigs.values():

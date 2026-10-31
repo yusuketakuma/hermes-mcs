@@ -99,6 +99,10 @@ class UnreadPatient:
     karte_id: int | None = None
     # epoch of the last message; only list_projects fills it (0 = unknown)
     last_activity: int = 0
+    group_id: int | None = None
+    group_name: str | None = None
+    group_id_present: bool = False
+    group_name_present: bool = False
 
 
 
@@ -134,6 +138,17 @@ class ReplyBatch:
 
 def valid_id(v) -> bool:
     return type(v) is int and 0 < v < 2**63
+
+
+def valid_group_name(value):
+    """Return a bounded printable group name, or None for unusable input."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    try:
+        return value if value and value.isprintable() and len(value.encode("utf-8")) <= 512 else None
+    except UnicodeEncodeError:
+        return None
 
 
 def describe_error(e: Exception) -> str:

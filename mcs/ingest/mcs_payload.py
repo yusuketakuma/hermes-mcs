@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from stamp_contract import normalize_reactions
-from mcs_contract import Attachment, Message, UnreadPatient, SchemaError, project_url, valid_id
+from mcs_contract import (Attachment, Message, UnreadPatient, SchemaError, project_url,
+                          valid_group_name, valid_id)
 
 
 def text_field(value, label: str) -> str:
@@ -64,6 +65,14 @@ def unread_patient(p, src: str) -> UnreadPatient:
     st = k.get("station") or {}
     if not isinstance(st, dict):
         raise SchemaError(f"{src}: station invalid")
+    group_seen = p.get("type") == "group" and "group" in p
+    group = p.get("group") if group_seen else None
+    invalid_group = group_seen and not isinstance(group, dict)
+    info = group if isinstance(group, dict) and group_seen else {}
+    group_id_present = invalid_group or "id" in info
+    group_name_present = invalid_group or "name" in info
+    group_id = info.get("id") if valid_id(info.get("id")) else None
+    group_name = valid_group_name(info.get("name"))
     return UnreadPatient(
         project_id=p["id"],
         project_type=text_field(p.get("type"), f"{src}: project type"),
@@ -73,7 +82,9 @@ def unread_patient(p, src: str) -> UnreadPatient:
         ).strip(),
         disease=text_field(k.get("disease"), f"{src}: disease"),
         station_name=text_field(st.get("name"), f"{src}: station name"),
-        url=project_url(p['id']), karte_id=karte_id)
+        url=project_url(p['id']), karte_id=karte_id,
+        group_id=group_id, group_name=group_name,
+        group_id_present=group_id_present, group_name_present=group_name_present)
 
 
 

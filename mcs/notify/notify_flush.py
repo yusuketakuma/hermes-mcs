@@ -36,7 +36,7 @@ import structured_view
 from mcs_queries import HOLD_PROGRESS_SET
 from mcs_util import CONF_PATH, file_sha256, html_to_text, load_config
 from mcs_requests import positive
-from notify_render import (SECTION_RULE, extraction_failed, signal_evidence,
+from notify_render import (SECTION_RULE, extraction_failed, project_display_name, project_identity, signal_evidence,
                            thread_stamp_row)
 import clinical_urgency
 TEXT_CHUNK_WIDTH = 1900
@@ -136,10 +136,7 @@ def _signal_text(ledger, payload: dict, latest: dict):
     lines = text.split("\n")
     pid = payload.get("project_id")
     if type(pid) is int and len(lines) > 1:
-        r = ledger.db.execute(
-            "SELECT patient_name FROM patients WHERE project_id=?",
-            (pid,)).fetchone()
-        name = r["patient_name"].strip() if r and r["patient_name"] else ""
+        name = project_display_name(ledger.db, pid, sqlite_id=True)
         if name:
             lines[1] = f"{name}（{lines[1]}）"
         _, m = signal_evidence(ledger.db, {**latest, "project_id": pid})
@@ -348,8 +345,7 @@ def _msg_rows(ledger, payload: dict, project_id) -> list:
     rows = []
     for mid in ids:
         r = ledger.db.execute("""
-          SELECT m.*, p.patient_name FROM messages m
-          LEFT JOIN patients p ON p.project_id = m.project_id
+          SELECT m.* FROM messages m
           WHERE m.message_id=? AND m.body_state IS NOT 'deleted'
             AND (? IS NULL OR m.project_id=?)""",
             (mid, project_id, project_id)).fetchone()
@@ -373,7 +369,11 @@ def _fmt_row(ledger, ev, att_map: dict, r, indent: str,
     parent = " (返信)" if r["parent_id"] and not indent else ""
     state = "" if r["body_state"] == "full" else f" [{r['body_state']}]"
     # urgency stays on the summary's own 🚨 line (one spelling, owner 2026-10-09)
-    head = (f"{indent}**{r['patient_name'] or ev['project_id']}**"
+    pid = r["project_id"]
+    identity = project_identity(ledger.db, pid)
+    name = (identity["group_name"] or f"project {pid}" if identity and identity["group"]
+            else (identity["patient_name"] if identity else None) or ev["project_id"])
+    head = (f"{indent}**{name}**"
             f"{parent}{state}\n"
             f"{indent}{who}{f' ({meta})' if meta else ''} — "
             f"{(r['posted_at'] or '?')[:16]}")

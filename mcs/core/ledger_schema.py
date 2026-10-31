@@ -294,7 +294,7 @@ def _initialize(db, *, schema_version: int) -> bool:
         CREATE TABLE IF NOT EXISTS patients(
           project_id INTEGER PRIMARY KEY,
           project_type TEXT, patient_name TEXT, disease TEXT,
-          station_name TEXT, url TEXT,
+          station_name TEXT, url TEXT, group_id INTEGER, group_name TEXT,
           fetch_state TEXT DEFAULT 'pending',
           fetch_reason TEXT,
           last_complete_fetch REAL,
@@ -757,6 +757,10 @@ def _migrate_body(db, cols, old_version: int):
                       "ALTER TABLE patients ADD COLUMN history_target INTEGER"),
                      ("karte_id",
                       "ALTER TABLE patients ADD COLUMN karte_id INTEGER"),
+                     ("group_id",
+                      "ALTER TABLE patients ADD COLUMN group_id INTEGER"),
+                     ("group_name",
+                      "ALTER TABLE patients ADD COLUMN group_name TEXT"),
                      ("karte_summary_due",
                       "ALTER TABLE patients ADD COLUMN karte_summary_due "
                           "INTEGER NOT NULL DEFAULT 0"),

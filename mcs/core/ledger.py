@@ -487,6 +487,10 @@ class Ledger:
                 last_complete_fetch,last_seen,created_at)
               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
               ON CONFLICT(project_id) DO UPDATE SET
+                group_id=CASE WHEN patients.project_type IS NOT excluded.project_type
+                              THEN NULL ELSE patients.group_id END,
+                group_name=CASE WHEN patients.project_type IS NOT excluded.project_type
+                                THEN NULL ELSE patients.group_name END,
                 project_type=excluded.project_type,
                 patient_name=excluded.patient_name,
                 disease=excluded.disease,
@@ -506,6 +510,8 @@ class Ledger:
                   fetch_state, fetch_reason,
                   now if fetch_state == "complete" else None,
                   now, now))
+            if getattr(p, "project_type", None) == "group":
+                self._update_group_metadata_tx(p)
             if old_karte is not None:
                 dependency_loss.record_tx(self.db, old_karte)
             if (previous is None or (previous[0] == 'forbidden') != (fetch_reason == 'forbidden')
@@ -657,6 +663,52 @@ class Ledger:
             (project_id,)).fetchone()
         return bool(r and r["a"])
 
+    def _update_group_metadata_tx(self, p):
+        """Store only a group identity that belongs to the observed group id."""
+        from mcs_contract import valid_group_name, valid_id
+
+        observed_type = getattr(p, "project_type", None)
+        if observed_type != "group":
+            if isinstance(observed_type, str) and observed_type.strip():
+                self.db.execute(
+                    "UPDATE patients SET group_id=NULL,group_name=NULL WHERE project_id=? "
+                    "AND project_type='group' AND (group_id IS NOT NULL OR group_name IS NOT NULL)",
+                    (p.project_id,))
+            return
+        id_present = getattr(p, "group_id_present", False) is True
+        name_present = getattr(p, "group_name_present", False) is True
+        if not (id_present or name_present):
+            return
+        row = self.db.execute(
+            "SELECT group_id,group_name FROM patients WHERE project_id=? AND project_type='group'",
+            (p.project_id,)).fetchone()
+        if row is None:
+            return
+        old_id, old_name = row["group_id"], row["group_name"]
+        group_id, name = old_id, old_name
+        observed_name = valid_group_name(getattr(p, "group_name", None))
+        if id_present:
+            observed_id = getattr(p, "group_id", None)
+            group_id = observed_id if valid_id(observed_id) else None
+            if group_id is None:
+                name = None
+            elif group_id != old_id:
+                name = observed_name if name_present else None
+            elif name_present:
+                name = observed_name
+        elif name_present and observed_name is None:
+            name = None
+        if group_id != old_id or name != old_name:
+            self.db.execute(
+                "UPDATE patients SET group_id=?,group_name=? WHERE project_id=? "
+                "AND project_type='group' AND group_id IS ? AND group_name IS ?",
+                (group_id, name, p.project_id, old_id, old_name))
+
+    def update_group_metadata(self, p):
+        """Refresh existing group display metadata without changing collection state."""
+        with self.db:
+            self._update_group_metadata_tx(p)
+
     def upsert_patient_info(self, p, is_archived=None, *, notify_new=False,
                             observation_ts: int | None = None, observation_source="server"):
         """Identity fields only — for history imports; does NOT touch
@@ -694,6 +746,10 @@ class Ledger:
                 station_name,url,karte_id,is_archived,last_seen,created_at)
               VALUES(?,?,?,?,?,?,?,COALESCE(?,0),?,?)
               ON CONFLICT(project_id) DO UPDATE SET
+                group_id=CASE WHEN patients.project_type IS NOT excluded.project_type
+                              THEN NULL ELSE patients.group_id END,
+                group_name=CASE WHEN patients.project_type IS NOT excluded.project_type
+                                THEN NULL ELSE patients.group_name END,
                 project_type=excluded.project_type,
                 patient_name=excluded.patient_name,
                 disease=excluded.disease,
@@ -705,6 +761,8 @@ class Ledger:
             """, (p.project_id, p.project_type, p.patient_name, p.disease,
                   p.station_name, p.url, getattr(p, "karte_id", None),
                   flag, now, now, flag))
+            if getattr(p, "project_type", None) == "group":
+                self._update_group_metadata_tx(p)
             if old_karte is not None:
                 dependency_loss.record_tx(self.db, old_karte)
             if (row is None or flag is not None and bool(flag) != prev

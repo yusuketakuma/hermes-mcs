@@ -51,7 +51,7 @@ def test_search_counts_all_matches_without_fetching_all_bodies(led, monkeypatch)
         def execute(self, sql, args):
             return Rows(led.db.execute(sql, args))
 
-    monkeypatch.setattr(notify_views, "patient_name", lambda *a: "SYNTH")
+    monkeypatch.setattr(notify_views, "project_display_name", lambda *a: "SYNTH")
     monkeypatch.setattr(notify_views, "_coverage_line", lambda *a: "synthetic coverage")
     notify_views.register_search_fold(led.db)
     monkeypatch.setattr(notify_views, "register_search_fold", lambda db: None)
@@ -78,7 +78,7 @@ def test_search_finishes_fetch_before_formatting_and_preserves_db_failure(monkey
             return InterruptedRows()
 
     formatted = []
-    monkeypatch.setattr(notify_views, "patient_name", lambda *a: "SYNTH")
+    monkeypatch.setattr(notify_views, "project_display_name", lambda *a: "SYNTH")
     monkeypatch.setattr(notify_views, "register_search_fold", lambda db: None)
     monkeypatch.setattr(notify_views, "_snippet", lambda *a: formatted.append(a) or "preview")
     with pytest.raises(sqlite3.DatabaseError, match="synthetic row failure"):
