@@ -9,6 +9,7 @@ import sys
 
 import pytest
 
+import _mcs_path
 import config_backup
 import mcs_util
 
@@ -359,7 +360,7 @@ os.replace = interrupted_replace
 config_backup.archive_and_create(path, config_backup.snapshot(path), b'{}')
 '''
     result = subprocess.run([sys.executable, '-B', '-c', code,
-                             str(Path(config_backup.__file__).parents[1]), str(path), phase],
+                             str(Path(_mcs_path.__file__).parent), str(path), phase],
                             cwd=tmp_path, capture_output=True, timeout=10)
     assert result.returncode == 73, result.stderr
     assert path.exists()
