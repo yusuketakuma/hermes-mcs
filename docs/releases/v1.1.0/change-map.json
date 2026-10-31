@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 404,
+  "fragment_count": 405,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2431,6 +2431,12 @@
       "id": "slack-block-fallback-authority-20261031",
       "title": "Slackの形式変更後の再送前に権限を再確認",
       "sha256": "8ee1ffe7e8cc5dc2b7ccccc32b5a5068abc1a9aebf63bc47561ca95b07d028ab"
+    },
+    {
+      "path": "changes/archive/1.1.0/slack-rejection-metrics-20261031.json",
+      "id": "slack-rejection-metrics-20261031",
+      "title": "Slackの長さ拒否を調べるための情報を記録",
+      "sha256": "9bb6c1360cdc57aaebd3edff8b0cd4acd2174bb4da5588c70c6b8194f77c1004"
     }
   ]
 }
