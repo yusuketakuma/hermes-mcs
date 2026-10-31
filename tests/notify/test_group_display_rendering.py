@@ -38,6 +38,23 @@ def test_group_name_is_only_a_display_name_and_refreshes_thread_fingerprint(led)
     assert notify_history._patient_identity(led.db, 1) == ["合成別室", 0]
 
 
+def test_ideographic_space_in_group_name_displays_and_rename_changes_fingerprint(led):
+    _seed_thread(led)
+    card = {"kind": "thread", "project_id": 1, "root_message_id": 100}
+    before = notify_render.source_fingerprint(led.db, card)
+    _group(led, name="合成　連絡室")
+    assert notify_render.project_display_name(led.db, 1) == "合成 連絡室"
+    assert notify_render.patient_label(led.db, 1) == "合成 連絡室"
+    assert notify_render.patient_heading(led.db, 1) == "合成 連絡室 #1"
+    assert notify_cards._thread_name(led.db, card).startswith("💬 合成 連絡室")
+    current = notify_render.source_fingerprint(led.db, card)
+    assert current != before
+    led.db.execute("UPDATE patients SET group_name=? WHERE project_id=1", ("合成　別室",))
+    assert notify_render.project_display_name(led.db, 1) == "合成 別室"
+    assert notify_render.patient_heading(led.db, 1) == "合成 別室 #1"
+    assert notify_render.source_fingerprint(led.db, card) != current
+
+
 def test_non_group_fingerprint_and_heading_are_unchanged(led):
     _seed_thread(led)
     card = {"kind": "thread", "project_id": 1, "root_message_id": 100}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import unicodedata
 
 BASE = "https://www.medical-care.net"
 API = f"{BASE}/api/v2t"
@@ -144,11 +145,13 @@ def valid_group_name(value):
     """Return a bounded printable group name, or None for unusable input."""
     if not isinstance(value, str):
         return None
-    value = value.strip()
     try:
-        return value if value and value.isprintable() and len(value.encode("utf-8")) <= 512 else None
+        if len(value.encode("utf-8")) > 512 or any(
+                not ch.isprintable() and unicodedata.category(ch) != "Zs" for ch in value):
+            return None
     except UnicodeEncodeError:
         return None
+    return value.strip() or None
 
 
 def describe_error(e: Exception) -> str:

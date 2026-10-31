@@ -66,13 +66,30 @@ def test_explicit_invalid_group_id_clears_old_pair(tmp_path, bad_id):
         store.close()
 
 
-@pytest.mark.parametrize("bad_name", [None, "", "   ", "a\nb", "x" * 513, 17])
+@pytest.mark.parametrize("bad_name", [
+    None, "", "   ", "\na", "a\n", "a\nb", "\ta", "a\t", "a\tb",
+    "a\x00b", "a\u200bb", "a\u2028b", "a\u2029b", "a\ud800b", "x" * 513, 17,
+])
 def test_invalid_or_empty_group_name_clears_stale_name(tmp_path, bad_name):
     store = make_ledger(tmp_path)
     try:
         store.upsert_patient_info(_project(group={"id": 301, "name": "合成名"}))
         store.upsert_patient_info(_project(group={"id": 301, "name": bad_name}))
         assert _saved(store) == ("group", 301, None)
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("合成　グループ", "合成　グループ"),
+    ("　合成 グループ　", "合成 グループ"),
+    ("x" * 512, "x" * 512),
+])
+def test_group_name_accepts_printable_and_unicode_spaces(tmp_path, name, expected):
+    store = make_ledger(tmp_path)
+    try:
+        store.upsert_patient_info(_project(group={"id": 301, "name": name}))
+        assert _saved(store) == ("group", 301, expected)
     finally:
         store.close()
 
