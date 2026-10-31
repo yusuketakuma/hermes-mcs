@@ -784,6 +784,40 @@ def _init_split_changes(initial, cfg):
     return common, providers, selected
 
 
+def _reviewed_split_current(initial):
+    import config_edit
+    current = _init_split_snapshot()[1]
+    if not _init_split_matches(initial, current):
+        raise config_edit.ConfigConflict('config_changed')
+    return current
+
+
+def _publish_split_config(current, prepared, lock_fd):
+    import provider_settings
+    import semantic_jev
+
+    common, providers, selected = prepared
+    return provider_settings.commit_locked(current[1]['root'], current[1]['state']['snapshot'], common, providers,
+        selected_provider=selected, model_owners=current[1]['owners'], jev_model=semantic_jev.JEV_MODEL,
+        lock_fd=lock_fd)
+
+
+def _cli_legacy_base():
+    import config_edit
+    try:
+        if mcs_util._provider_config_active(CONF_PATH):
+            raise config_edit.ConfigConflict('config_changed')
+        try:
+            base = config_edit._snapshot(CONF_PATH)[1]
+        except FileNotFoundError:
+            base = None
+        if mcs_util._provider_config_active(CONF_PATH):
+            raise config_edit.ConfigConflict('config_changed')
+        return base
+    except mcs_util.ProviderSettingsUnreadable:
+        raise config_edit.ConfigConflict('config_changed') from None
+
+
 def _init_reselect_provider(cfg, initial, set_args):
     if initial[0] != 'split':
         return
@@ -1313,15 +1347,22 @@ def cmd_fact_source(args) -> int:
     """
     import config_edit
     import safe_io
+    split_initial = None
     try:
-        try:
-            os.lstat(CONF_PATH)
-        except FileNotFoundError:
-            base, cfg = None, {}
+        if mcs_util._provider_config_active(CONF_PATH):
+            cfg, split_initial = _init_split_snapshot()
+            base = None
         else:
-            raw_config, base = config_edit._snapshot(CONF_PATH)
-            cfg = config_edit._parse(raw_config)
-    except (OSError, ValueError, RecursionError):
+            try:
+                os.lstat(CONF_PATH)
+            except FileNotFoundError:
+                base, cfg = None, {}
+            else:
+                raw_config, base = config_edit._snapshot(CONF_PATH)
+                cfg = config_edit._parse(raw_config)
+            if mcs_util._provider_config_active(CONF_PATH):
+                raise config_edit.ConfigConflict('config_changed')
+    except (OSError, ValueError, RecursionError, mcs_util.ProviderSettingsUnreadable):
         print("解析結果の採用方法: config.json を読み取れないため保存していません。設定を確認してください")
         return 1
     existing_sem = cfg.get("semantic")
@@ -1402,15 +1443,15 @@ def cmd_fact_source(args) -> int:
     try:
         # Match the former writer's ability to create a missing parent directory.
         os.makedirs(os.path.dirname(CONF_PATH) or ".", exist_ok=True)
-        with config_edit._edit_lock(CONF_PATH):
-            def current_base():
-                try:
-                    return config_edit._snapshot(CONF_PATH)[1]
-                except FileNotFoundError:
-                    return None
+        with config_edit._edit_lock(CONF_PATH) as lock_fd:
+            def current_state():
+                if split_initial is not None:
+                    return _reviewed_split_current(split_initial)
+                if _cli_legacy_base() != base:
+                    raise config_edit.ConfigConflict("config_changed")
+                return None
 
-            if current_base() != base:
-                raise config_edit.ConfigConflict("config_changed")
+            current_state()
             if source == "canonical":
                 approval_attempted = True
                 try:
@@ -1431,16 +1472,19 @@ def cmd_fact_source(args) -> int:
             body = json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + '\n'
             if len(body.encode("utf-8")) > mcs_util.CONFIG_MAX_BYTES:
                 raise ValueError("config_too_large")
-            if current_base() != base:
-                raise config_edit.ConfigConflict("config_changed")
-            publication_started = True
-            if base is None:
+            current = current_state()
+            if split_initial is not None:
+                prepared = _init_split_changes(split_initial[1], cfg)
+                publication_started = True
+                _publish_split_config(current, prepared, lock_fd)
+            elif base is None:
+                publication_started = True
                 safe_io.publish_new_bytes(CONF_PATH, body.encode("utf-8"))
             else:
                 def write_checked(handle):
                     handle.write(body)
-                    if current_base() != base:
-                        raise config_edit.ConfigConflict("config_changed")
+                    current_state()
+                publication_started = True
                 safe_io.atomic_write(CONF_PATH, write_checked, 0o600,
                                      tmp_prefix=".svc.", makedirs=False)
     except config_edit.ConfigConflict:
@@ -1448,7 +1492,7 @@ def cmd_fact_source(args) -> int:
               + ("承認記録が保存された可能性があります。" if approval_attempted else "")
               + "設定を確認してから再実行してください")
         return 1
-    except (OSError, ValueError, TypeError, RecursionError):
+    except (OSError, ValueError, TypeError, RecursionError, mcs_util.ProviderSettingsUnreadable):
         print(("設定の保存結果を確認できません。" if publication_started else "設定は保存していません。")
               + ("承認記録が保存された可能性があります。" if approval_attempted else "")
               + "設定を確認してから再実行してください")
@@ -1750,12 +1794,20 @@ def cmd_features(args) -> int:
         return 1
     import config_edit
     import safe_io
+    split_initial = None
     try:
-        raw, base = config_edit._snapshot(CONF_PATH)
-        cfg = config_edit._parse(raw)
-    except FileNotFoundError:
-        base, cfg = None, {}
-    except (OSError, ValueError, RecursionError):
+        if mcs_util._provider_config_active(CONF_PATH):
+            cfg, split_initial = _init_split_snapshot()
+            base = None
+        else:
+            try:
+                raw, base = config_edit._snapshot(CONF_PATH)
+                cfg = config_edit._parse(raw)
+            except FileNotFoundError:
+                base, cfg = None, {}
+            if mcs_util._provider_config_active(CONF_PATH):
+                raise config_edit.ConfigConflict('config_changed')
+    except (OSError, ValueError, RecursionError, mcs_util.ProviderSettingsUnreadable):
         print("任意機能: config.json を読み取れないため変更しません。mcs_setup.py check で確認してください")
         return 1
     before = json.dumps(cfg.get("optional_features"), sort_keys=True)
@@ -1782,24 +1834,27 @@ def cmd_features(args) -> int:
         body = json.dumps(cfg, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + '\n'
         if len(body.encode("utf-8")) > mcs_util.CONFIG_MAX_BYTES:
             raise ValueError("config_unreadable")
-        with config_edit._edit_lock(CONF_PATH):
-            def current_base():
-                try:
-                    return config_edit._snapshot(CONF_PATH)[1]
-                except FileNotFoundError:
-                    return None
+        with config_edit._edit_lock(CONF_PATH) as lock_fd:
+            def current_state():
+                if split_initial is not None:
+                    return _reviewed_split_current(split_initial)
+                if _cli_legacy_base() != base:
+                    raise config_edit.ConfigConflict("config_changed")
+                return None
 
-            if current_base() != base:
-                raise config_edit.ConfigConflict("config_changed")
-            if base is None:
+            current = current_state()
+            if split_initial is not None:
+                prepared = _init_split_changes(split_initial[1], cfg)
+                publication_started = True
+                _publish_split_config(current, prepared, lock_fd)
+            elif base is None:
                 # Publish an absent base exclusively, without replacing a concurrent creator.
                 publication_started = True
                 safe_io.publish_new_bytes(CONF_PATH, body.encode("utf-8"))
             else:
                 def write_checked(stream):
                     stream.write(body)
-                    if current_base() != base:
-                        raise config_edit.ConfigConflict("config_changed")
+                    current_state()
                 publication_started = True
                 safe_io.atomic_write(CONF_PATH, write_checked, 0o600,
                                      tmp_prefix=".svc.", makedirs=False)
@@ -1807,7 +1862,7 @@ def cmd_features(args) -> int:
         print("任意機能: 別の設定保存と競合したか、質問の間に config.json が変更されたため"
               "保存していません。もう一度実行してください。")
         return 1
-    except (OSError, ValueError, RecursionError):
+    except (OSError, ValueError, RecursionError, mcs_util.ProviderSettingsUnreadable):
         if publication_started:
             print("任意機能: 保存結果を確認できません。端末で mcs setup features を開き、"
                   "表示される現在の選択を確認してください。")
