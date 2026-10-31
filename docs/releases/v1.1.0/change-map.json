@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 399,
+  "fragment_count": 401,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2401,6 +2401,18 @@
       "id": "native-gateway-restart-guard",
       "title": "更新後のHermes再起動を正規手順に合わせる",
       "sha256": "6c0650abd8104181aac4430bb8ec4b80e0cebb3ce2cd6a5806a88c0ef06e1f3b"
+    },
+    {
+      "path": "changes/archive/1.1.0/postapply-health-indexes-20261031.json",
+      "id": "postapply-health-indexes-20261031",
+      "title": "通知状況の確認で時間切れになりやすい問題を修正",
+      "sha256": "05953b44376ff40cf6f4b888b4f4300ca87bd9c90175de6b14096e1b0e95357f"
+    },
+    {
+      "path": "changes/archive/1.1.0/rollup-rebuild-deadline-reasons-20261031.json",
+      "id": "rollup-rebuild-deadline-reasons-20261031",
+      "title": "集約の時間切れとデータの確認不能を区別",
+      "sha256": "dd2f3b8ba2fbcfd299717730e62b988640450cebfcde1b356f326d717c2eb967"
     }
   ]
 }
