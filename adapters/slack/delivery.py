@@ -6,6 +6,7 @@ from collections import OrderedDict
 import contextvars
 import copy
 from html import escape
+import json
 import math
 import re
 import time
@@ -30,6 +31,67 @@ NAME_NEG_S = 900
 NAME_CACHE_MAX = 1024
 # Match the runner's durable Slack wire budget; old sealed specs may predate it.
 BODY_WIRE_MAX = 4000
+_BLOCK_TYPES = frozenset({"section", "divider", "actions", "context", "image", "header",
+                          "input", "file", "video", "rich_text", "table", "markdown", "container"})
+_METRIC_MAX_BYTES = 1024 * 1024
+_METRIC_MAX_NODES = 10000
+_METRIC_MAX_DEPTH = 64
+
+
+def _rejection_metrics(kwargs, blocks, method, variant):
+    """Measure request shape without returning request contents or identifiers."""
+    text = kwargs.get("text")
+    if not isinstance(text, str):
+        raise ValueError("text_unavailable")
+    payload = dict(kwargs)
+    if blocks:
+        payload["blocks"] = blocks
+    stack, count, max_text, nodes, size = [(payload, 0, False, "value")], 0, 0, 0, 0
+    while stack:
+        item, depth, in_blocks, kind = stack.pop()
+        nodes += 1
+        if nodes > _METRIC_MAX_NODES or depth > _METRIC_MAX_DEPTH:
+            raise ValueError("payload_too_complex")
+        if isinstance(item, str):
+            if len(item) > _METRIC_MAX_BYTES:
+                raise ValueError("payload_too_large")
+            size += len(item.encode("utf-8"))
+            if size > _METRIC_MAX_BYTES:
+                raise ValueError("payload_too_large")
+        if isinstance(item, dict):
+            if len(stack) + len(item) + nodes > _METRIC_MAX_NODES:
+                raise ValueError("payload_too_complex")
+            block_type = item.get("type")
+            if kind == "block" and isinstance(block_type, str) and block_type in _BLOCK_TYPES:
+                count += 1
+            value = item.get("text")
+            if in_blocks and isinstance(value, str):
+                max_text = max(max_text, len(value))
+            for key, value in item.items():
+                if not isinstance(key, str):
+                    raise ValueError("payload_key_invalid")
+                if len(key) > _METRIC_MAX_BYTES:
+                    raise ValueError("payload_too_large")
+                size += len(key.encode("utf-8"))
+                if size > _METRIC_MAX_BYTES:
+                    raise ValueError("payload_too_large")
+                block_list = (item is payload and key == "blocks") or (in_blocks and key == "child_blocks")
+                stack.append((value, depth + 1, in_blocks or block_list,
+                              "blocklist" if block_list else "value"))
+        elif isinstance(item, (list, tuple)):
+            if len(stack) + len(item) + nodes > _METRIC_MAX_NODES:
+                raise ValueError("payload_too_complex")
+            stack.extend((value, depth + 1, in_blocks, "block" if kind == "blocklist" else "value")
+                         for value in item)
+        elif type(item) is int and item.bit_length() > 256:
+            raise ValueError("payload_number_too_large")
+    compact = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    if len(compact) > _METRIC_MAX_BYTES:
+        raise ValueError("payload_too_large")
+    return {"slack_method": method if method in ("post", "update") else "unknown",
+            "slack_variant": variant, "text_chars": len(text), "text_bytes": len(text.encode("utf-8")),
+            "blocks_present": int(bool(blocks)), "block_count": count,
+            "max_block_text_chars": max_text, "compact_json_bytes": len(compact)}
 
 
 def _upload_file_id(data) -> str | None:
@@ -541,7 +603,7 @@ class DeliveryWorker(_BaseWorker):
                      if new_reply_announced(spec, part) else {})
         try:
             response = await self._blocks_call(
-                sender.chat_postMessage, blocks,
+                sender.chat_postMessage, blocks, _metric_method="post",
                 channel=self._settings["channel_id"],
                 thread_ts=thread_ts, text=text, link_names=False,
                 mrkdwn=False, unfurl_links=False, unfurl_media=False,
@@ -559,14 +621,27 @@ class DeliveryWorker(_BaseWorker):
                     "error_code": "bad_slack_response"}
         return {"result": "delivered", "remote_id": ts}
 
-    async def _blocks_call(self, fn, blocks, **kwargs):
+    async def _blocks_call(self, fn, blocks, *, _metric_method="unknown", **kwargs):
         """One Slack write carrying ``blocks`` beside the plain text.
         A confirmed ``invalid_blocks`` rejection can resend the same text
         without blocks only while the original send authority remains valid."""
+        async def observed_call(selected_blocks, variant):
+            async def observed_native(**native_kwargs):
+                try:
+                    response = await fn(**native_kwargs)
+                except Exception as exc:
+                    self._observe_length_rejection(exc, kwargs, selected_blocks, _metric_method, variant, failed=True)
+                    raise
+                self._observe_length_rejection(response, kwargs, selected_blocks, _metric_method, variant)
+                return response
+
+            return await call_native(observed_native, **({"blocks": selected_blocks} if selected_blocks else {}),
+                                     **kwargs)
+
         if not blocks:
-            return await call_native(fn, **kwargs)
+            return await observed_call(None, "plain")
         try:
-            return await call_native(fn, blocks=blocks, **kwargs)
+            return await observed_call(blocks, "blocks")
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -585,7 +660,17 @@ class DeliveryWorker(_BaseWorker):
             if not permitted:
                 raise
             self._log("blocks_rejected", reason="slack_container_unsupported")
-            return await call_native(fn, **kwargs)
+            return await observed_call(None, "fallback")
+
+    def _observe_length_rejection(self, result, kwargs, blocks, method, variant, *, failed=False):
+        try:
+            response = getattr(result, "response", None) if failed else result
+            status, data = getattr(response, "status_code", None), _payload(response)
+            if (data.get("ok") is False and data.get("error") == "msg_too_long"
+                    and type(status) is int and (status == 200 or 400 <= status < 500)):
+                self._log("slack_msg_too_long", **_rejection_metrics(kwargs, blocks, method, variant))
+        except Exception:
+            pass  # Diagnostics must never change the delivery outcome.
 
     async def _edit_only_prior(self, spec, part, text, ctx, *, attachment=False, blocks=None):
         """Edit one exact owned reply; no text dedupe, upload or fresh-post fallback."""
@@ -666,7 +751,7 @@ class DeliveryWorker(_BaseWorker):
             return {"result": "not_sent", "error_code": "body_part_wire_too_long"}
         try:
             response = await self._blocks_call(
-                sender.chat_update, blocks, channel=self._settings["channel_id"],
+                sender.chat_update, blocks, _metric_method="update", channel=self._settings["channel_id"],
                 ts=ts, text=text, link_names=False, mrkdwn=False)
         except asyncio.CancelledError:
             raise
@@ -717,7 +802,7 @@ class DeliveryWorker(_BaseWorker):
             return {"result": "not_sent", "error_code": "body_part_wire_too_long"}
         try:
             response = await self._blocks_call(
-                sender.chat_update, blocks,
+                sender.chat_update, blocks, _metric_method="update",
                 channel=self._settings["channel_id"], ts=prior, text=text,
                 link_names=False, mrkdwn=False)
         except asyncio.CancelledError:

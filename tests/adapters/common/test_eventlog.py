@@ -28,9 +28,33 @@ def test_allowlist_drops_unknown_fields(caplog):
 
 def test_every_allowed_field_passes_and_none_is_omitted(caplog):
     caplog.set_level(logging.INFO, logger="mcs.test.eventlog")
-    fields = {name: "code_1" for name in eventlog.ALLOWED_FIELDS}
+    fields = {name: "code_1" for name in eventlog.ALLOWED_FIELDS
+              if name not in eventlog.METRIC_FIELDS and name not in eventlog.ENUM_FIELDS}
     assert json.loads(_line(caplog, "ev", **fields)) == {"event": "ev", **fields}
     assert json.loads(_line(caplog, "ev", error=None, action=None)) == {"event": "ev"}
+
+
+@pytest.mark.parametrize("value", [True, False, -1, 2**31, "123", 1.5, None, [1]])
+def test_metric_fields_reject_non_integer_negative_and_oversized_values(value):
+    fields = dict.fromkeys(eventlog.METRIC_FIELDS, value)
+    assert json.loads(eventlog.render("synthetic_event", fields)) == {"event": "synthetic_event"}
+
+
+@pytest.mark.parametrize("value", [0, 1, 2**31 - 1])
+def test_metric_fields_accept_only_bounded_nonnegative_integers(value):
+    fields = dict.fromkeys(eventlog.METRIC_FIELDS, value)
+    assert json.loads(eventlog.render("synthetic_event", fields)) == {"event": "synthetic_event", **fields}
+
+
+@pytest.mark.parametrize("value", ["patient_identifier", "POST", "", 1, True, None, ["post"]])
+def test_diagnostic_enum_fields_reject_unlisted_or_non_string_values(value):
+    fields = dict.fromkeys(eventlog.ENUM_FIELDS, value)
+    assert json.loads(eventlog.render("synthetic_event", fields)) == {"event": "synthetic_event"}
+
+
+def test_diagnostic_enum_fields_keep_only_fixed_values():
+    fields = {"slack_method": "update", "slack_variant": "fallback"}
+    assert json.loads(eventlog.render("synthetic_event", fields)) == {"event": "synthetic_event", **fields}
 
 
 def test_int_and_bool_pass_through(caplog):

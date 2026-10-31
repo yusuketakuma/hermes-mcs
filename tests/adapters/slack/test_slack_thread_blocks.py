@@ -7,6 +7,7 @@ import pytest
 from slack_card_testkit import _spec
 from slack_testkit import isolated_slack_ledger as led, _rewrite_world, ROOT_TS
 
+from adapters.common import eventlog
 from adapters.slack.presentation import render_parts, thread_part_blocks
 from adapters.slack.cards import validate
 from adapters.slack import delivery
@@ -485,6 +486,204 @@ def _run_with_gate(w, spec, part, gate):
         return _run(w, spec, BODY, part)
     finally:
         delivery.RETRY_ALLOWED.reset(token)
+
+
+class _MetricResponse(dict):
+    def __init__(self, status=200, **fields):
+        super().__init__(**fields)
+        self.status_code = status
+
+
+class _MetricRejection(Exception):
+    def __init__(self, status=200, **fields):
+        super().__init__("SYNTHETIC_PRIVATE_EXCEPTION")
+        self.response = _MetricResponse(status, **fields)
+
+
+@pytest.mark.parametrize("variant", ["plain", "blocks", "fallback"])
+@pytest.mark.parametrize("method", ["post", "update"])
+def test_length_rejection_metrics_are_shape_only_and_preserve_the_exception(variant, method):
+    worker = object.__new__(delivery.DeliveryWorker)
+    lines, calls = [], []
+    worker._log = lambda event, **fields: lines.append(eventlog.render(event, fields))
+    text = "SYNTHETIC_PRIVATE_BODY &amp; あ"
+    block_text = "SYNTHETIC_PRIVATE_BLOCK"
+    blocks = [{"type": "container", "title": {"type": "plain_text", "text": "hidden"},
+               "child_blocks": [{"type": "section", "text": {"type": "plain_text", "text": block_text}}]}]
+    kwargs = {"text": text, "channel": "SYNTHETIC_PRIVATE_ID",
+              "thread_ts" if method == "post" else "ts": "SYNTHETIC_PRIVATE_TS"}
+    rejection = _MetricRejection(ok=False, error="msg_too_long")
+
+    async def operation(**sent):
+        calls.append(sent)
+        if variant == "fallback" and len(calls) == 1:
+            raise _MetricRejection(ok=False, error="invalid_blocks")
+        raise rejection
+
+    async def allowed():
+        return True
+
+    token = delivery.RETRY_ALLOWED.set(allowed)
+    try:
+        with pytest.raises(_MetricRejection) as caught:
+            asyncio.run(worker._blocks_call(operation, None if variant == "plain" else blocks,
+                                            _metric_method=method, **kwargs))
+    finally:
+        delivery.RETRY_ALLOWED.reset(token)
+    assert caught.value is rejection
+    events = [json.loads(line) for line in lines]
+    (metric,) = [event for event in events if event["event"] == "slack_msg_too_long"]
+    selected = blocks if variant == "blocks" else None
+    payload = {**kwargs, **({"blocks": selected} if selected else {})}
+    assert metric == {"event": "slack_msg_too_long", "slack_method": method, "slack_variant": variant,
+                      "text_chars": len(text), "text_bytes": len(text.encode("utf-8")),
+                      "blocks_present": int(selected is not None), "block_count": 2 if selected else 0,
+                      "max_block_text_chars": len(block_text) if selected else 0,
+                      "compact_json_bytes": len(json.dumps(payload, ensure_ascii=False,
+                                                           separators=(",", ":")).encode("utf-8"))}
+    assert len(calls) == (2 if variant == "fallback" else 1)
+    assert all("SYNTHETIC_PRIVATE" not in line for line in lines)
+
+
+@pytest.mark.parametrize("status,ok,error", [
+    (500, False, "msg_too_long"),
+    (None, False, "msg_too_long"),
+    (200, True, "msg_too_long"),
+    (200, False, "fatal_error"),
+])
+def test_length_metrics_ignore_unconfirmed_and_other_failures(status, ok, error):
+    worker = object.__new__(delivery.DeliveryWorker)
+    events = []
+    worker._log = lambda event, **fields: events.append((event, fields))
+    rejection = _MetricRejection(status, ok=ok, error=error)
+
+    async def operation(**_kwargs):
+        raise rejection
+
+    with pytest.raises(_MetricRejection) as caught:
+        asyncio.run(worker._blocks_call(operation, None, _metric_method="post", text="synthetic"))
+    assert caught.value is rejection and events == []
+
+
+@pytest.mark.parametrize("failure", ["metric", "logger"])
+def test_length_diagnostic_failure_never_changes_delivery_exception(monkeypatch, failure):
+    worker = object.__new__(delivery.DeliveryWorker)
+    rejection = _MetricRejection(ok=False, error="msg_too_long")
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("SYNTHETIC_PRIVATE_FAILURE")
+
+    worker._log = fail if failure == "logger" else lambda *_args, **_kwargs: None
+    if failure == "metric":
+        monkeypatch.setattr(delivery, "_rejection_metrics", fail)
+
+    async def operation(**_kwargs):
+        raise rejection
+
+    with pytest.raises(_MetricRejection) as caught:
+        asyncio.run(worker._blocks_call(operation, None, text="synthetic"))
+    assert caught.value is rejection
+
+
+def test_returned_length_rejection_is_observed_without_changing_the_response():
+    worker = object.__new__(delivery.DeliveryWorker)
+    events = []
+    worker._log = lambda event, **fields: events.append((event, fields))
+    response = _MetricResponse(ok=False, error="msg_too_long")
+
+    async def operation(**_kwargs):
+        return response
+
+    result = asyncio.run(worker._blocks_call(operation, None, _metric_method="post", text="synthetic"))
+    assert result is response
+    assert len(events) == 1 and events[0][0] == "slack_msg_too_long"
+
+
+def test_length_diagnostic_failure_does_not_change_returned_response():
+    worker = object.__new__(delivery.DeliveryWorker)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("SYNTHETIC_PRIVATE_FAILURE")
+
+    worker._log = fail
+    response = _MetricResponse(ok=False, error="msg_too_long")
+
+    async def operation(**_kwargs):
+        return response
+
+    result = asyncio.run(worker._blocks_call(operation, None, text="synthetic"))
+    assert result is response
+
+
+def test_cancelled_sdk_attempt_is_not_observed_or_retried():
+    worker = object.__new__(delivery.DeliveryWorker)
+    events, calls = [], []
+    worker._log = lambda event, **fields: events.append((event, fields))
+
+    async def operation(**kwargs):
+        calls.append(kwargs)
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(worker._blocks_call(operation, None, text="synthetic"))
+    assert len(calls) == 1 and events == []
+
+
+def test_length_rejection_is_recorded_before_existing_429_retry(monkeypatch):
+    worker = object.__new__(delivery.DeliveryWorker)
+    events, calls = [], []
+    worker._log = lambda event, **fields: events.append((event, fields))
+    rejection = _MetricRejection(429, ok=False, error="msg_too_long")
+    response = _MetricResponse(ok=True)
+
+    async def operation(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise rejection
+        return response
+
+    async def sleep(_seconds):
+        return None
+
+    async def allowed():
+        return True
+
+    monkeypatch.setattr(delivery.asyncio, "sleep", sleep)
+    token = delivery.RETRY_ALLOWED.set(allowed)
+    try:
+        result = asyncio.run(worker._blocks_call(operation, None, _metric_method="post", text="synthetic"))
+    finally:
+        delivery.RETRY_ALLOWED.reset(token)
+    assert result is response and len(calls) == 2
+    assert len(events) == 1 and events[0][0] == "slack_msg_too_long"
+
+
+@pytest.mark.parametrize("shape", ["oversized", "deep", "cyclic", "wide"])
+def test_unbounded_metric_input_is_skipped_without_changing_rejection(shape):
+    worker = object.__new__(delivery.DeliveryWorker)
+    events = []
+    worker._log = lambda event, **fields: events.append((event, fields))
+    rejection = _MetricRejection(ok=False, error="msg_too_long")
+    text, blocks = "synthetic", None
+    if shape == "oversized":
+        text = "x" * (delivery._METRIC_MAX_BYTES + 1)
+    elif shape == "wide":
+        blocks = [{"type": "section"}] * (delivery._METRIC_MAX_NODES + 1)
+    elif shape == "cyclic":
+        blocks = [{"type": "container"}]
+        blocks[0]["child_blocks"] = blocks
+    else:
+        block = {"type": "section"}
+        for _ in range(delivery._METRIC_MAX_DEPTH + 1):
+            block = {"type": "container", "child_blocks": [block]}
+        blocks = [block]
+
+    async def operation(**_kwargs):
+        raise rejection
+
+    with pytest.raises(_MetricRejection) as caught:
+        asyncio.run(worker._blocks_call(operation, blocks, text=text))
+    assert caught.value is rejection and events == []
 
 
 def test_body_part_posts_blocks_and_keeps_plain_text_identity(led):

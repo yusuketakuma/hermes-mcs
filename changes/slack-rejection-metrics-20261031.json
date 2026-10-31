@@ -1,0 +1,8 @@
+{
+  "category": "changed",
+  "title": "Slackの長さ拒否を調べるための情報を記録",
+  "summary": "Slackが本文の長さを明確に拒否した場合、本文や送信先を含めずに文字数やブロック構成を記録します。",
+  "upgrade": "Hermesでは更新後のgateway再起動、独立モードではhost再起動で反映されます。",
+  "details": ["compact JSONのバイト数はローカルでの概算です。SDKが実際に送るバイト数とは限りません。", "送信結果と再送の条件は変更しません。"],
+  "refs": ["adapters/slack/delivery.py", "adapters/common/eventlog.py"]
+}

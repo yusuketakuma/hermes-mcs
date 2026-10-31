@@ -13,13 +13,20 @@ import os
 import sys
 import re
 
+METRIC_FIELDS = frozenset({
+    "text_chars", "text_bytes", "blocks_present", "block_count",
+    "max_block_text_chars", "compact_json_bytes",
+})
+ENUM_FIELDS = {"slack_method": frozenset({"post", "update", "unknown"}),
+               "slack_variant": frozenset({"blocks", "plain", "fallback"})}
+METRIC_MAX = 2**31 - 1
 ALLOWED_FIELDS = frozenset({
     "error", "reason", "action", "outcome", "result", "command_id",
     "delivery_id", "rows", "receipt_republished", "not_sent", "unknown",
     "job", "code", "failures",
     # standalone runtime supervision: fixed codes and counts, no content
     "file", "retry_in", "state", "age_s", "slot", "stopping", "adopted",
-})
+}) | METRIC_FIELDS | frozenset(ENUM_FIELDS)
 _CODE = re.compile(r"[A-Za-z0-9_.:-]{1,80}")
 REDACTED = "redacted"
 
@@ -36,8 +43,15 @@ def render(event, fields) -> str:
     """Return the JSON line for one event after the allowlist and redaction."""
     record = {"event": _value(event) if isinstance(event, str) else REDACTED}
     for key in sorted(k for k in fields if k in ALLOWED_FIELDS):
-        if fields[key] is not None:
-            record[key] = _value(fields[key])
+        value = fields[key]
+        if key in METRIC_FIELDS:
+            if type(value) is int and 0 <= value <= METRIC_MAX:
+                record[key] = value
+        elif key in ENUM_FIELDS:
+            if type(value) is str and value in ENUM_FIELDS[key]:
+                record[key] = value
+        elif value is not None:
+            record[key] = _value(value)
     return json.dumps(record, ensure_ascii=True)
 
 
