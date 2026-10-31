@@ -4216,8 +4216,10 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
     if llm_fn is None:
         llm_fn = semantic_transport.llm_chat
     if jev_client is None and scfg["daily_request_budget"] > 0:
+        jev_key = jev.api_key()
         jev_client = jev.JevClient(
-            api_key=jev.api_key(), model=scfg["model"],
+            api_key=jev_key, key_current=lambda: bool(jev_key) and jev.api_key() == jev_key,
+            model=scfg["model"],
             attempt_timeout=scfg["attempt_timeout_seconds"],
             job_budget=scfg["job_budget_seconds"],
             max_attempts=scfg["max_attempts_per_try"])

@@ -500,7 +500,9 @@ class JevClient:
     def __init__(self, api_key: str | None = None,
                  model: str = JEV_MODEL, endpoint: str = JEV_ENDPOINT,
                  attempt_timeout: float = 20.0, job_budget: float = 45.0,
-                 max_attempts: int = 3, post_fn=None):
+                 max_attempts: int = 3, post_fn=None, key_current=None):
+        if key_current is not None and not callable(key_current):
+            raise ValueError("key_guard_invalid")
         if model != JEV_MODEL:
             raise ValueError("model_not_allowed")
         if not isinstance(endpoint, str) or endpoint not in JEV_ALLOWED_ENDPOINTS:
@@ -512,6 +514,7 @@ class JevClient:
         self.job_budget = job_budget
         self.max_attempts = max_attempts
         self._post_fn = post_fn or None
+        self._key_current = key_current
         # per-process usage counters — durable rollup lives on the
         # assessment artifacts' meta.usage
         self.requests_made = 0
@@ -530,9 +533,22 @@ class JevClient:
     def supports_attempt_hooks(self):
         return True
 
+    def _check_key_current(self):
+        if self._key_current is None:
+            return
+        try:
+            current = self._key_current() is True
+        except Exception:
+            current = False
+        if not current:
+            error = JevError("no_api_key", "jev_key_changed")
+            self.last_error = error
+            raise error
+
     def request(self, method: str, body, timeout: float,
                 endpoint: str | None = None, *, deadline: float | None = None,
                 reservation_day=None):
+        self._check_key_current()
         return bounded_http.bounded_http_request(
             endpoint or self.endpoint, method, body, timeout,
             api_key=self.api_key if isinstance(self.api_key, str) else "",
@@ -570,6 +586,7 @@ class JevClient:
             timeout = min(self.attempt_timeout, remaining)
             if before_attempt is not None:
                 before_attempt()
+            self._check_key_current()
             reservation = reserve_fn(body, timeout) if reserve_fn is not None else None
             # Reservation can wait for a writer: recheck the caller's source,
             # authorization and deadline before dispatch. A reservation already
@@ -594,6 +611,7 @@ class JevClient:
                 _check_request_day_capability(request, reservation_day,
                                               "POST", body, timeout, deadline=deadline)
             _check_reservation_day(reservation_day)
+            self._check_key_current()
             self.requests_made += 1
             try:
                 if post_fn is not None:
@@ -608,6 +626,10 @@ class JevClient:
             except bounded_http.ReservationDayChanged:
                 self.requests_made -= 1
                 raise JevError("budget_exceeded", "reservation_day_changed", retryable=True) from None
+            except JevError as error:
+                if error.detail == "jev_key_changed":
+                    self.requests_made -= 1
+                raise
             except OSError as e:     # URLError and TimeoutError included
                 kind = "timeout" if isinstance(e, TimeoutError) else "transport"
                 last = JevError(kind, type(e).__name__,
