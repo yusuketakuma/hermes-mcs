@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 406,
+  "fragment_count": 409,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2443,6 +2443,24 @@
       "id": "group-display-name-20261031",
       "title": "グループのチャットに正式な名前を表示",
       "sha256": "345649ba43fe28b5d67f95ecb103aee189731c225aa851f02c19f2827ca7e0dc"
+    },
+    {
+      "path": "changes/archive/1.1.0/attachment-upload-identity-20261031.json",
+      "id": "attachment-upload-identity-20261031",
+      "title": "添付の名前が変わった後も既存の投稿を安全に更新",
+      "sha256": "29a5babbbaf93b9ee5900539f0bdfd81ccb58b0a42bd3af92002343d8d4b9af2"
+    },
+    {
+      "path": "changes/archive/1.1.0/patient-name-presence-20261031.json",
+      "id": "patient-name-presence-20261031",
+      "title": "一部の氏名が未取得でも表示を保持",
+      "sha256": "cff86238efa3026e43f0bed7c2e6e9fc2767be1fd3fdb9e37576867271d3c79b"
+    },
+    {
+      "path": "changes/archive/1.1.0/semantic-fallback-timing-20261031.json",
+      "id": "semantic-fallback-timing-20261031",
+      "title": "解析処理の実行時間の重複計上を修正",
+      "sha256": "d10db0009f6f3c127094740121936e0d45351d0a5a4f90690c2e4a1610c8bd3e"
     }
   ]
 }
