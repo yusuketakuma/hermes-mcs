@@ -2011,11 +2011,14 @@ def _process_job(ledger, scfg, job, jev_client, llm_fn, deadline,
                 if cloud is not None:
                     def cloud_call(prompt, timeout=None):
                         started = time.perf_counter()
+                        before = llm_timing["s"] if llm_timing is not None else 0.0
                         try:
                             return cloud(prompt, timeout=timeout)
                         finally:
                             if llm_timing is not None:
-                                llm_timing["s"] += time.perf_counter() - started
+                                elapsed = time.perf_counter() - started
+                                # A fallback can already have charged this same accumulator.
+                                llm_timing["s"] += max(0.0, elapsed - (llm_timing["s"] - before))
                     llm_fn = cloud_call
             status = _process_job_inner(
                 ledger, scfg, job, jev_client, tracked_llm, deadline,
@@ -4892,7 +4895,7 @@ def main() -> int:
                 totals[k] += out.get(k) or 0
             totals["left"] = out.get("left")
             # ts/pid: a window cut short (e.g. gateway restart kills
-            # the catchup) is judged later from semantic_drain.log
+            # the catchup) is judged later from mcs.log
             print(json.dumps({**out, "batches": totals["batches"],
                               "ts": time.time(), "pid": os.getpid()},
                              ensure_ascii=False, default=str),

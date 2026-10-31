@@ -1275,3 +1275,57 @@ def test_cloud_selection_invalidates_replaced_database_inode(cloud, tmp_path, mo
     assert progress['binding'][0][1:] != old[0][1:]
     assert progress['binding'][1:] == old[1:]
     assert not calls and not led.db.in_transaction
+
+
+@pytest.mark.parametrize("route,fail", [("fallback", False), ("fallback", True),
+                                        ("cloud", False), ("local", False)])
+def test_model_timing_counts_nested_local_fallback_once(cloud, monkeypatch, route, fail):
+    led, cfg, job, _ = cloud
+    clock = [100.0]
+    calls = []
+    monkeypatch.setattr(time, "perf_counter", lambda: clock[0])
+    monkeypatch.setattr(semantic_drain.semantic_store, "refresh_cards_allowed", lambda *a: False)
+
+    def local(prompt, timeout=None):
+        calls.append(("local", prompt, timeout))
+        clock[0] += 2.0
+        if fail and len(calls) == 2:
+            raise ValueError("synthetic failure")
+        return "synthetic response"
+
+    @contextmanager
+    def fake_backlog(*args, local_fallback=None, **kwargs):
+        def call(prompt, timeout=None):
+            clock[0] += 1.0
+            try:
+                if route == "fallback":
+                    return local_fallback(prompt, timeout=timeout)
+                calls.append(("cloud", prompt, timeout))
+                clock[0] += 2.0
+                return "synthetic response"
+            finally:
+                clock[0] += 1.0
+        yield call
+
+    def stages(ledger, scfg, selected, jev, llm, deadline, **kwargs):
+        llm("first", timeout=10)
+        llm("second", timeout=10)
+        return "done"
+
+    monkeypatch.setattr(transport, "backlog_inference", fake_backlog)
+    monkeypatch.setattr(semantic_drain, "_process_job_inner", stages)
+    timed, acc = semantic_drain._timed_llm(local)
+    acc["s"] = 7.0
+    def process():
+        return semantic_drain._process_job(
+            led, semantic_drain.runtime_config(cfg)[0], job, None, timed, 10000,
+            lane="backlog", diagnostics={}, llm_timing=acc,
+            cloud_transport=direct if route != "local" else None)
+    if fail:
+        with pytest.raises(ValueError, match="synthetic failure"):
+            process()
+    else:
+        assert process() == "done"
+    assert calls == [("local" if route != "cloud" else "cloud", "first", 10),
+                     ("local" if route != "cloud" else "cloud", "second", 10)]
+    assert acc["s"] == (11.0 if route == "local" else 15.0)
