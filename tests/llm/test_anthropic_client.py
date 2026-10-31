@@ -310,6 +310,17 @@ def test_shared_jev_retry_classes(monkeypatch, status, kind, retries):
     assert len(calls) == retries
 
 
+def test_anthropic_quota_shaped_429_keeps_existing_rate_limit_behavior(monkeypatch):
+    monkeypatch.setattr(a.time, "sleep", lambda delay: None)
+    calls = []
+    body = b'{"error":{"code":"insufficient_quota"}}'
+    provider = a.AnthropicClient("synthetic", post_fn=lambda *args: (
+        calls.append(True) or 429, {"Retry-After": "0"}, body))
+    with pytest.raises(a.AnthropicError, match="rate_limited"):
+        provider.complete("synthetic", deadline=time.monotonic() + 10)
+    assert len(calls) == 3
+
+
 @pytest.mark.parametrize("request_id,expected", [("req_test-ABC_12", "req_test-ABC_12"),
     ("x" * 64, "x" * 64), ("x" * 65, None), ("req.with.dot", None),
     ("req/fragment", None), ("req synthetic", None), ("req_非ASCII", None), ("", None)])

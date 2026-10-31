@@ -854,6 +854,15 @@ def _reservation_evidence_batch_snapshot(db, ids):
     return result
 
 
+def _confirmed_openai_quota(result, model):
+    code = result.get("openai_error_code")
+    return (isinstance(code, str) and code in openai_client.QUOTA_ERROR_CODES
+            and model == openai_client.MODEL
+            and result.get("http_class") == "http_429"
+            and result.get("error_kind") == "payment_required"
+            and "usage" in result and result["usage"] is None)
+
+
 def _settled(m, maximum, matching):
     """(cost, settled?) of one reservation's single bound result; raises when
     the result is duplicated, unbound or its usage/cost disagrees."""
@@ -862,6 +871,8 @@ def _settled(m, maximum, matching):
     r, row = matching[0]
     if (_binding(m) != _binding(r) or row["project_id"] != m["project_id"]
             or row["message_id"] != m["message_id"] or row["model"] != m["model"]):
+        raise ValueError
+    if "openai_error_code" in r and not _confirmed_openai_quota(r, m["model"]):
         raise ValueError
     reported = _decimal(r.get("cost_usd"))
     if r.get("usage") is None:
@@ -941,6 +952,8 @@ def _guard_repeated_request(ledger, candidate):
             # reserved cost still remains counted under the existing policy.
             if (result.get('http_class') == 'http_429' and result.get('error_kind') == 'rate_limited'
                     and result.get('usage') is None):
+                continue
+            if _confirmed_openai_quota(result, previous['model']):
                 continue
             raise ValueError('already_sent_or_unknown')
         except (AnthropicError, InvalidOperation, ValueError, TypeError, KeyError, OverflowError):
@@ -1370,7 +1383,8 @@ def record_result(ledger, reservation, metadata):
         # Rebuild the attempt's failure with its retry class; semantic_runtime
         # applies the cloud circuit's transient, contract and terminal policy.
         status = int(http_class[5:]) if isinstance(http_class, str) and http_class[5:].isdigit() else 0
-        retryable = (http_error(status)[1] if status and status != 200
+        retryable = (False if error_kind in ("auth_error", "payment_required", "pricing_unverified")
+                     else http_error(status)[1] if status and status != 200
                      else error_kind in ("transport", "timeout"))
         error = AnthropicError(error_kind, retryable=retryable, status=status)
     try:
@@ -1379,6 +1393,8 @@ def record_result(ledger, reservation, metadata):
         model = reservation["model"]
         if (model not in PROVIDERS.values() or metadata.get("model") != model or metadata.get("request_fp") != reservation["request_fp"]
                 or reservation.get("price_version") != (OPENAI_PRICE_VERSION if model == openai_client.MODEL else PRICE_VERSION)):
+            raise AnthropicError("pricing_unverified", "result_mismatch")
+        if "openai_error_code" in metadata and not _confirmed_openai_quota(metadata, model):
             raise AnthropicError("pricing_unverified", "result_mismatch")
         validator = openai_client.validate_usage if model == openai_client.MODEL else validate_usage
         usage = validator(metadata["usage"]) if metadata.get("usage") is not None else None
@@ -1393,6 +1409,8 @@ def record_result(ledger, reservation, metadata):
             request_id = None
         result.update(usage=usage, cost_usd=str(cost), http_class=metadata.get("http_class"),
                       request_id=request_id, error_kind=error_kind)
+        if "openai_error_code" in metadata:
+            result["openai_error_code"] = metadata["openai_error_code"]
         if "disposition" in metadata:
             if metadata["disposition"] not in ("discarded_scope", "discarded_workday"):
                 raise AnthropicError("pricing_unverified", "disposition_invalid")

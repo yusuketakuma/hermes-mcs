@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import bounded_http
 from anthropic_client import AnthropicClient, AnthropicError, SYSTEM
+from mcs_util import strict_json
 
 MODEL = "gpt-6-luna"
 ENDPOINT = "https://api.openai.com/v1/responses"
+QUOTA_ERROR_CODES = frozenset({"insufficient_quota", "credit_balance_exhausted",
+                               "organization_spend_limit_exceeded", "project_spend_limit_exceeded",
+                               "organization_usage_limit_exceeded"})
 
 
 def validate_usage(value):
@@ -43,6 +47,22 @@ class OpenAIClient(AnthropicClient):
         return bounded_http.bounded_http_request(
             ENDPOINT, method, body, timeout, api_key=self.api_key,
             deadline=deadline, allowed_endpoints=(ENDPOINT,), auth="bearer")
+
+    def response_error(self, status, raw):
+        if status == 429 and isinstance(raw, bytes) and len(raw) <= bounded_http.MAX_RESPONSE_BYTES:
+            try:
+                obj = strict_json(raw.decode("utf-8"))
+                error = obj.get("error") if isinstance(obj, dict) else None
+                if isinstance(error, dict):
+                    code, kind = error.get("code"), error.get("type")
+                    if kind is None or kind == "insufficient_quota":
+                        if isinstance(code, str) and code in QUOTA_ERROR_CODES:
+                            return "payment_required", False, code
+                        if code is None and kind == "insufficient_quota":
+                            return "payment_required", False, "insufficient_quota"
+            except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
+                pass
+        return super().response_error(status, raw)
 
     def body(self, prompt, max_tokens, cache_prefix):
         if cache_prefix and (not isinstance(cache_prefix, str) or not prompt.startswith(cache_prefix)):
