@@ -7,12 +7,13 @@ import textwrap
 
 import pytest
 
+import _mcs_path
 import environment_diagnostics
 import lifecycle_io
 
 
 def test_process_start_probe_does_not_enter_a_mutation_lease_hold_after_external_reap():
-    source = Path(environment_diagnostics.__file__).resolve().parents[1]
+    source = Path(_mcs_path.__file__).resolve().parent
     program = textwrap.dedent(f"""
         import json, os, signal, socket, subprocess, sys, time
         sys.path.insert(0, {str(source)!r})
