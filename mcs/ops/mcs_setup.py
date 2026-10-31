@@ -781,6 +781,8 @@ def _init_split_changes(initial, cfg):
                     providers[name].pop(key, None)
     if initial.get('replace_cloud') and 'model' not in new_providers[selected]:
         providers[selected].pop('model', None)
+    if initial.get('replace_cloud') and selected == 'openai' and 'profiles' not in new_providers['openai']:
+        providers['openai'].pop('profiles', None)
     actual = provider_settings.execution_view(common, providers, selected_provider=selected,
                                               model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
     if mcs_util.canonical(actual) != mcs_util.canonical(cfg):
