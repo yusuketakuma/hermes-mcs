@@ -69,6 +69,12 @@
 - **クラウドの過去分処理ワーカーの起動を修正**
   必要なモジュールを読み込めずに起動しない問題を修正しました。更新後は、Hermesモードではゲートウェイを、standaloneモードでは常駐プロセスを再起動してください。
 
+- **外部AIの設定と解析結果の扱いを改善**
+  新規導入時は利用先ごとに設定を分けます。既存環境の設定分離は対応する更新手順で行います。設定や認証情報を確認できない場合は有料処理を停止し、収集・通知の設定と保存済み結果を保持します。
+
+- **更新失敗時の停止確認を修正**
+  更新後の確認に失敗し、設定や復旧先を確認できない場合は、起動済みの処理の停止を試み、更新記録を保持します。停止を確認できない場合は、その状態を報告します。
+
 - **クラウド処理の料金と応答の扱いを修正**
   使用したサービスと料金版を記録し、過去の予約をその料金版で精算します。送信前に失敗したと確認できるタイムアウトを区別し、通信結果が不明な場合は引き続き保留します。
 
@@ -146,7 +152,7 @@
 ### 技術詳細
 
 <details>
-<summary>変更記録414件の詳細・更新条件・根拠を表示</summary>
+<summary>変更記録416件の詳細・更新条件・根拠を表示</summary>
 
 各リンクは、この版の変更記録です。要約・適用条件・更新操作・技術詳細・根拠を参照できます。同じ箇所に複数の記録がある場合、後続の修正を含む現行の説明は上の本文と各機能のガイドを確認してください。たとえば、処理方式アイコンの初期配置は後続の見出し行への移動で置き換えています。
 
@@ -456,6 +462,7 @@
 - [クラウド利用の未精算記録を少量の読取りで照会](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-outstanding-observation-20261029.json)
 - [アクティブ患者の履歴解析を優先して並列処理](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-parallel-patient-priority-20261029.json)
 - [クラウド処理の料金と応答の扱いを修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-provider-modules-20261031.json)
+- [外部AIの設定と解析結果の扱いを改善](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-provider-settings-split-20261031.json)
 - [クラウド処理の対象が待機したままになる問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-selection-progress-20261029.json)
 - [クラウド処理の候補確認が収集を長時間妨げる問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-selection-writer-lock-20261030.json)
 - [分割計画を保存できない場合の追加課金を防止](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-split-checkpoint-ack-20261030.json)
@@ -559,6 +566,7 @@
 
 - [クラウド抽出の重複準備と待機による停滞を改善](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-extraction-claim-progress-20261031.json)
 - [既存カードにも処理元を表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-generation-compat-20261031.json)
+- [更新失敗時の停止確認を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-native-recovery-hold-20261101.json)
 - [解析候補の確認を中断後も続行](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-selection-resume-20261031.json)
 - [不正なクラウド利用履歴がある場合に送信を保留](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-ledger-integrity-20261031.json)
 - [再解析が入力上限を超えた場合も確認結果を保持](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/repair-oversize-preservation-20261031.json)
