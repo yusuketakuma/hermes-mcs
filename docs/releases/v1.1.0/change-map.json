@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 401,
+  "fragment_count": 402,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2413,6 +2413,12 @@
       "id": "rollup-rebuild-deadline-reasons-20261031",
       "title": "集約の時間切れとデータの確認不能を区別",
       "sha256": "dd2f3b8ba2fbcfd299717730e62b988640450cebfcde1b356f326d717c2eb967"
+    },
+    {
+      "path": "changes/archive/1.1.0/postapply-parts-health-20261031.json",
+      "id": "postapply-parts-health-20261031",
+      "title": "未完了の通知部品の確認を改善",
+      "sha256": "356856c80720e8de9bdb235402d2088a9905c313610c8c4de9636ca9004ac2d9"
     }
   ]
 }

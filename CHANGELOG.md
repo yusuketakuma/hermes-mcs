@@ -483,6 +483,7 @@
 - [投稿ごとに処理サービスをアイコンで表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/per-post-provider-icons-20261029.json)
 - [投稿カード上部に解析状態を表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/post-processing-status-order-20261030.json)
 - [通知状況の確認で時間切れになりやすい問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/postapply-health-indexes-20261031.json)
+- [未完了の通知部品の確認を改善](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/postapply-parts-health-20261031.json)
 - [チャット上部に処理サービスの状態を表示](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/processing-route-icon-20261029.json)
 - [Anthropicの初期費用上限を1日25ドル・1か月75ドルに設定](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-default-budgets-20261029.json)
 - [処理サービスの表示をチャットの見出し行へ移動](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-header-location-20261030.json)
