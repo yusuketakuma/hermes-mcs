@@ -11,6 +11,10 @@ import subprocess
 import sys
 import time
 
+if __name__ == "__main__":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import _mcs_path  # noqa: F401
+
 from run_log_install import helper_path, LogInstallError
 
 _parent = None
@@ -294,6 +298,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    import _mcs_path  # noqa: F401
     raise SystemExit(main())
