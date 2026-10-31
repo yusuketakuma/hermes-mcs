@@ -426,6 +426,10 @@ def _initialize(db, *, schema_version: int) -> bool:
             ON notification_render_parts(delivery_id) WHERE state='pending';
           CREATE INDEX IF NOT EXISTS idx_nparts_state_delivery
             ON notification_render_parts(state, delivery_id);
+          CREATE INDEX IF NOT EXISTS idx_nrenders_delivered_scope_rev
+            ON notification_renders(card_id, transport, profile, application_id,
+                                    guild_id, team_id, channel_id, render_rev)
+            WHERE state='delivered';
           CREATE INDEX IF NOT EXISTS idx_nattempts_unsettled_created
             ON notification_delivery_attempts(created_at, delivery_id)
             WHERE state IN ('granted','unknown');
