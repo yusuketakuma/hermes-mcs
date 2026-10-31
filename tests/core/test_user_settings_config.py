@@ -5,11 +5,15 @@ from types import SimpleNamespace
 import pytest
 
 import config_edit
+import cloud_policy
 import extract_llm
 import llm_availability
 import local_llm
 import mcs_config
 import mcs_util
+import provider_settings
+import semantic_jev
+import semantic_policy
 from mcs_config import validate_config
 
 
@@ -151,3 +155,81 @@ def test_unknown_config_keys_are_preserved(conf, capsys):
     assert saved["future_extension"] == cfg["future_extension"]
     assert saved["local_llm"]["future_option"] == {"keep": True}
     assert "SYNTHETIC_PRIVATE_MARKER" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("semantic", [
+    {}, {"mode": "off", "project_ids": [], "daily_request_budget": 0, "until": None},
+    {"mode": "assist", "project_ids": None, "daily_request_budget": 0,
+     "model": semantic_jev.JEV_MODEL},
+])
+def test_provider_split_preserves_user_settings_and_jev_defaults(semantic):
+    raw = {"cloud_llm": {"provider": "openai", "mode": "off", "project_ids": [],
+                         "provider_budgets": {"openai": {"daily_cost_limit_usd": 0,
+                                                          "monthly_cost_limit_usd": 0}}},
+           "semantic": semantic, "extract": {"prefilter": False},
+           "local_llm": {"disk_guard_mb": 0, "admission": False}, "future_setting": {"synthetic": None}}
+    owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+    common, providers = provider_settings.split_legacy(raw, owners, jev_model=semantic_jev.JEV_MODEL)
+    rebuilt = provider_settings.compose(common, providers, selected_provider="openai",
+                                        model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+    assert rebuilt == raw
+    assert semantic_policy.semantic_config(rebuilt, key_present=True) == semantic_policy.semantic_config(raw, key_present=True)
+    assert cloud_policy.cloud_config(rebuilt, key_present=True) == cloud_policy.cloud_config(raw, key_present=True)
+
+
+def test_provider_failure_keeps_local_user_settings_for_existing_consumers(tmp_path, monkeypatch):
+    import hashlib
+
+    tmp_path.chmod(0o700)
+    common = {
+        "cloud_llm": {"mode": "off", "project_ids": []},
+        "semantic": {"mode": "off"},
+        "extract": {"prefilter": False},
+        "local_llm": {"disk_guard_mb": 2048, "admission": False},
+        "notify_target": "synthetic-target", "notify": {"synthetic": True},
+        "future_setting": {"synthetic": None},
+    }
+
+    def write_json(path, value):
+        raw = (json.dumps(value, sort_keys=True) + "\n").encode()
+        path.write_bytes(raw)
+        path.chmod(0o600)
+        return hashlib.sha256(raw).hexdigest()
+
+    config = tmp_path / "config.json"
+    write_json(config, common)
+    data = tmp_path / "data"
+    data.mkdir(mode=0o700)
+    directory = data / "provider_settings"
+    directory.mkdir(mode=0o700)
+    hashes = {name: write_json(directory / (name + ".json"), {}) for name in provider_settings.PROVIDERS}
+    write_json(data / ".provider-settings-authority.json", {
+        "version": 2, "state": "committed", "files": hashes,
+        "common_policy_sha256": provider_settings.common_policy_digest(common),
+    })
+    target = directory / "openai.json"
+    original = target.read_bytes()
+    target.write_bytes(b"{synthetic-invalid")
+    real_load_config = mcs_util.load_config
+    def load_local():
+        return real_load_config(str(config))
+
+    monkeypatch.setattr(extract_llm, "load_config", load_local)
+    monkeypatch.setattr(llm_availability, "load_config", load_local)
+    monkeypatch.setattr(mcs_util, "load_config", load_local)
+    monkeypatch.setenv("MCS_EXTRACT_PREFILTER", "on")
+    monkeypatch.setenv("MCS_DISK_GUARD_MB", "100")
+    monkeypatch.setenv("MCS_LLM_ADMISSION", "1")
+    assert mcs_util.load_config_checked(str(config)) is None
+    assert extract_llm._prefilter_enabled() is False
+    assert llm_availability.disk_floor_mb() == 2048.0
+    assert local_llm.admission_enabled() is False
+    loaded = load_local()
+    assert loaded["notify_target"] == common["notify_target"]
+    assert loaded["notify"] == common["notify"]
+    assert loaded["future_setting"] == common["future_setting"]
+    target.write_bytes(original)
+    target.chmod(0o600)
+    assert mcs_util.load_config_checked(str(config)) is not None
+    assert extract_llm._prefilter_enabled() is False
+    assert llm_availability.disk_floor_mb() == 2048.0

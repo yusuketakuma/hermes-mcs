@@ -84,7 +84,7 @@ def test_lineworks_adapter_older_than_its_sources_needs_restart(monkeypatch, new
 
 def test_doctor_names_the_lineworks_adapter_and_its_remedy(local_config, monkeypatch, capsys):  # noqa: F811
     import card_worker_status
-    monkeypatch.setattr(mcs_util, "load_config", lambda: config())
+    monkeypatch.setattr(mcs_setup, "_diagnostic_config", lambda: config())
     monkeypatch.setattr(card_worker_status, "diagnose", lambda *a, **kw: {
         "state": "disabled", "reason": "worker_start_failed",
         "restore_delivery_held": False, "recovery_scope": None})
@@ -120,7 +120,7 @@ def test_lineworks_update_diagnostic_keeps_one_deadline(monkeypatch):
 def test_doctor_keeps_not_hermes_owned_wording_when_not_applicable(local_config, monkeypatch, capsys):  # noqa: F811
     import card_worker_status
     # diagnose answers not_applicable for standalone; the doctor line must not name the adapter.
-    monkeypatch.setattr(mcs_util, "load_config", lambda: config())
+    monkeypatch.setattr(mcs_setup, "_diagnostic_config", lambda: config())
     monkeypatch.setattr(card_worker_status, "diagnose", lambda *a, **kw: {
         "state": "not_applicable", "reason": "worker_not_hermes_owned",
         "restore_delivery_held": False, "recovery_scope": None})

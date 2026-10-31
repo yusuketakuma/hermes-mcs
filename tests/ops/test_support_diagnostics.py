@@ -112,10 +112,9 @@ def test_doctor_share_cli_does_not_add_probes_or_change_exit(monkeypatch, capsys
     import lifecycle_io
     import local_llm
     import mcs_setup
-    import mcs_util
     import runtime_inspection
 
-    monkeypatch.setattr(mcs_util, "load_config", lambda: {
+    monkeypatch.setattr(mcs_setup, "_diagnostic_config", lambda: {
         "mcs_login_id": "synthetic-private-id", "notify_target": "local"})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda _: {

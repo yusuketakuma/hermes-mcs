@@ -1,4 +1,6 @@
 """Share dependency-light bootstrap, text, JSON and guarded-opener contracts."""
+from __future__ import annotations
+
 import hashlib
 import html
 import json
@@ -52,19 +54,118 @@ def _read_local(path: str, limit: int) -> bytes:
     return raw
 
 
-def load_config_checked(path: str = CONF_PATH) -> dict | None:
-    """Return the parsed config object, or None when it cannot be read or parsed."""
+def _provider_artifact_present(data_fd):
+    """Find an existing migration remnant without reading its contents."""
+    with os.scandir(data_fd) as entries:
+        for index, entry in enumerate(entries):
+            if index >= 100000:
+                raise ValueError("provider_artifact_scan_limit")
+            if entry.name.startswith((".provider-settings-backup-", ".provider-settings-stage-")):
+                return True
+    return False
+
+
+def _provider_config_active(path):
+    path = os.path.abspath(path)
+    if os.path.basename(path) != "config.json":
+        return False
+    data = os.path.join(os.path.dirname(path), "data")
+    for name in (".provider-settings-authority.json", ".provider-settings-pending.json", "provider_settings"):
+        try:
+            os.lstat(os.path.join(data, name))
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise ProviderSettingsUnreadable("provider_settings_unreadable") from error
+        return True
+    try:
+        try:
+            fd = os.open(data, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        except FileNotFoundError:
+            if os.path.lexists(data):
+                raise ValueError("provider_settings_unreadable") from None
+            return False
+        try:
+            before = os.fstat(fd)
+            present = _provider_artifact_present(fd)
+            for name in (".provider-settings-authority.json", ".provider-settings-pending.json", "provider_settings"):
+                try:
+                    os.stat(name, dir_fd=fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                present = True
+                break
+            after = os.fstat(fd)
+            current = os.stat(data, follow_symlinks=False)
+            def identity(info):
+                return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_mtime_ns, info.st_ctime_ns)
+            if identity(before) != identity(after) or identity(after) != identity(current):
+                raise ValueError("provider_settings_changed")
+            return present
+        finally:
+            os.close(fd)
+    except (OSError, ValueError) as error:
+        raise ProviderSettingsUnreadable("provider_settings_unreadable") from error
+
+
+class ProviderSettingsUnreadable(RuntimeError):
+    """Provider settings cannot be read consistently and must not default open."""
+
+
+def _load_config(path, *, allow_provider_unavailable=False):
+    active = _provider_config_active(path)
+    if active:
+        try:
+            import cloud_policy
+            import provider_settings
+            import semantic_jev
+
+            owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+            root = os.path.dirname(os.path.abspath(path))
+            reader = (provider_settings.read_with_verified_common if allow_provider_unavailable
+                      else provider_settings.read)
+            state = reader(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+            if state["mode"] == "provider_unavailable":
+                cfg = dict(state["common"])
+                cloud = cfg.get("cloud_llm", {})
+                semantic = cfg.get("semantic", {})
+                if isinstance(cloud, dict):
+                    cfg["cloud_llm"] = {**cloud, "mode": "off"}
+                if isinstance(semantic, dict):
+                    cfg["semantic"] = {**semantic, "daily_request_budget": 0}
+                return cfg
+            if state["mode"] != "split":
+                raise ValueError("provider_settings_unverified")
+            selected, errors = cloud_policy.resolve_settings(state["common"], root)
+            if cloud_policy.blocking_errors(errors):
+                raise ValueError("provider_settings_invalid")
+            return provider_settings.execution_view(state["common"], state["providers"],
+                selected_provider=selected["provider"], model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+        except (OSError, ValueError, TypeError, RecursionError) as error:
+            raise ProviderSettingsUnreadable("provider_settings_unreadable") from error
     try:
         raw = parse_config(_read_local(path, CONFIG_MAX_BYTES))
-        return raw if isinstance(raw, dict) else None
-    except (OSError, ValueError, RecursionError):
+    finally:
+        if _provider_config_active(path):
+            raise ProviderSettingsUnreadable("provider_settings_changed")
+    return raw if isinstance(raw, dict) else None
+
+
+def load_config_checked(path: str = CONF_PATH) -> dict | None:
+    """Return validated composite settings, or None when a consistent read fails."""
+    try:
+        return _load_config(path)
+    except (ProviderSettingsUnreadable, OSError, ValueError, TypeError, RecursionError):
         return None
 
 
 def load_config(path: str = CONF_PATH) -> dict:
     """config.json -> dict; missing/malformed files fall back to defaults."""
-    config = load_config_checked(path)
-    return config if config is not None else {}
+    try:
+        config = _load_config(path, allow_provider_unavailable=True)
+        return config if config is not None else {}
+    except (OSError, ValueError, TypeError, RecursionError):
+        return {}
 
 
 def env_value(key: str, paths=None, check_env: bool = True) -> str | None:

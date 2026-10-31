@@ -776,6 +776,13 @@ class CloudBusy(CloudFallback):
     """No shared cloud capacity was reserved or sent."""
 
 
+def _current_cloud_settings():
+    try:
+        return _cloud_settings(load_config())
+    except Exception:
+        raise CloudFallback("cloud_unit_changed") from None
+
+
 class _CloudProvider:
     """Bind one unit's guarded HTTP attempts to the ledger's owning thread."""
 
@@ -827,28 +834,37 @@ class _CloudProvider:
             # restoring the old source/scope cannot make its response current.
             if self.final_disposition is not None:
                 raise CloudFallback("cloud_unit_changed")
-            now = _cloud_settings(load_config())   # one read: every check judges the same settings
-            # The run window gates each new POST (retries included); a result that
-            # already arrived is still judged only by scope, not by the clock.
-            if ((inference and (not cloud_backlog.owner_alive() or time.monotonic() >= deadline or tightened(caps(now))
-                                or cloud_policy.setting_block_reason(now)))
-                    or writer_lock.updater_state() != updater
-                    or updater[0] or cloud_policy.selected_key(HOME, {"cloud_llm": now}) != key
-                    or cloud_policy.scope_generation({"cloud_llm": now}) != scope
-                    # A paid result that already arrived is kept while its scope holds: a stop,
-                    # an open circuit or expired pricing stops only new sends (owner decision 2026-10-28).
-                    or (cloud_policy.block_reason(ledger, now, route, project_id) if inference
-                        else not cloud_policy.eligible(now, route, project_id))
-                    or not current()):
+            try:
+                now = _current_cloud_settings()   # one read: every check judges the same settings
+                # The run window gates each new POST (retries included); a result that
+                # already arrived is still judged only by scope, not by the clock.
+                denied = ((inference and (not cloud_backlog.owner_alive() or time.monotonic() >= deadline
+                                          or tightened(caps(now)) or cloud_policy.setting_block_reason(now)))
+                          or writer_lock.updater_state() != updater
+                          or updater[0] or cloud_policy.selected_key(HOME, {"cloud_llm": now}) != key
+                          or cloud_policy.scope_generation({"cloud_llm": now}) != scope
+                          # A paid result is kept while its scope holds, even if the send window closes.
+                          or (cloud_policy.block_reason(ledger, now, route, project_id) if inference
+                              else not cloud_policy.eligible(now, route, project_id))
+                          or not current())
+            except Exception:
+                # An unreadable guard is a denial; the result callback must still
+                # settle any already received or provably unsent attempt.
+                raise CloudFallback("cloud_unit_changed") from None
+            if denied:
                 raise CloudFallback("cloud_unit_changed")
         self.guard = lambda: dispatch(guard)
         self.commit_guard = lambda: dispatch(lambda: guard(inference=False), result=True)
         def reserve(body, timeout):
             # every new attempt (retry, repair, next chunk) is judged against the
             # budget in force now, not the one the unit started under
-            current_cfg = {"cloud_llm": _cloud_settings(load_config())}
+            try:
+                current_cfg = {"cloud_llm": _current_cloud_settings()}
+                current_caps = caps(current_cfg["cloud_llm"])
+            except Exception:
+                raise CloudFallback("cloud_unit_changed") from None
             reserved_caps.clear()
-            reserved_caps.update(caps(current_cfg["cloud_llm"]))
+            reserved_caps.update(current_caps)
             hook = {"on_reserved_tx": on_reserved_tx} if on_reserved_tx is not None else {}
             return cloud_policy.usage_reserver(ledger, current_cfg, route=route, project_id=project_id,
                 unit_key=unit_key, message_id=self.message_id, owner=self.owner, **hook)(body, timeout)
@@ -899,7 +915,11 @@ class _CloudProvider:
         return self.dispatch(write, result=True)
 
     def __call__(self, prompt, *, deadline, max_tokens, **unused):
-        capacity = _cloud_settings(load_config())["max_concurrency"]
+        try:
+            capacity = _current_cloud_settings()["max_concurrency"]
+        except Exception:
+            self.discard()
+            raise CloudFallback("cloud_unit_changed") from None
         with cloud_backlog.request_slot(HOME, capacity) as held:
             if not held:
                 raise CloudBusy("cloud_capacity")
@@ -6084,6 +6104,20 @@ def _main() -> int:
                         semantic_recent_turns = 0
                     elif args.semantic and semantic_has_worked:
                         semantic_recent_turns += 1
+                    if r.get("updated"):
+                        # Preserve an incoming carry when an early fence check
+                        # returned before run_pending could include it.
+                        if "carry" in r:
+                            carry = r.pop("carry") or []
+                        try:
+                            _settle_carry(led, carry, write=False)
+                        except Exception as error:
+                            # A failed release must not resume stale code; any
+                            # remaining claim stays protected by its lease.
+                            print(json.dumps({"event": "extract_carry_release_error",
+                                              "error": type(error).__name__, "ts": time.time()}),
+                                  file=sys.stderr, flush=True)
+                        return 0
                     carry = r.pop("carry", None) or []  # internal; never logged
                     sem = None
                     ran_semantic = False

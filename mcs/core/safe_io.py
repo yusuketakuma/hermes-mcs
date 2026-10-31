@@ -9,6 +9,8 @@ copies it replaced; options exist only where those copies differed.
 Stdlib only and free of side effects at import, so any entry point can
 use it.
 """
+from __future__ import annotations
+
 import errno
 import json
 import os

@@ -2,7 +2,6 @@
 
 import environment_diagnostics
 import lifecycle_io
-import mcs_util
 import service_management
 import runtime_inspection
 import json
@@ -20,7 +19,7 @@ from ops_testkit import bounded_python, git_reads_or
 
 @pytest.fixture
 def local_config(monkeypatch):
-    monkeypatch.setattr(mcs_util, 'load_config', lambda: {
+    monkeypatch.setattr(mcs_setup, '_diagnostic_config', lambda: {
         "mcs_login_id": "synthetic-private-id", "notify_target": "local"})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: {
@@ -32,6 +31,54 @@ def local_config(monkeypatch):
                         lambda *a, **k: pytest.fail("secret access"))
     monkeypatch.setattr(mcs_setup, "_queue_warnings",
                         lambda *a: pytest.fail("DB access"))
+
+
+@pytest.mark.parametrize("marker", ["pending", "authority"])
+@pytest.mark.parametrize("output", ["text", "json", "share"])
+def test_doctor_holds_invalid_provider_without_running_probes(tmp_path, monkeypatch, capsys, marker, output):
+    import cloud_cli
+
+    tmp_path.chmod(0o700)
+    data = tmp_path / "data"
+    data.mkdir(mode=0o700)
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"mcs_login_id": "synthetic-secret-canary", "notify_target": "local"}))
+    config.chmod(0o600)
+    witness = data / (".provider-settings-" + marker + ".json")
+    witness.write_text('{"synthetic":"private-canary"}')
+    witness.chmod(0o600)
+    before = (config.read_bytes(), witness.read_bytes())
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(config))
+    monkeypatch.setattr(cloud_cli, "diagnostics", lambda *a, **k: pytest.fail("provider probe"))
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda *a, **k: pytest.fail("runtime probe"))
+    monkeypatch.setattr(lifecycle_io, "run_bounded", lambda *a, **k: pytest.fail("service probe"))
+    args = SimpleNamespace(json=output == "json", share=output == "share", probe=["data", "services", "llm"])
+    assert mcs_setup.cmd_doctor(args) == 1
+    text = capsys.readouterr().out
+    assert "synthetic-secret-canary" not in text and "private-canary" not in text
+    if output == "text":
+        assert "提供元設定" in text and "要修正" in text
+    else:
+        checks = json.loads(text)["checks"]
+        assert checks["configuration"] == {"status": "blocked", "errors": 1, "warnings": 0}
+        assert all(checks[name]["status"] == "not_checked" for name in ("services", "data", "llm"))
+    assert (config.read_bytes(), witness.read_bytes()) == before
+
+
+def test_check_holds_provider_without_running_services(tmp_path, monkeypatch, capsys):
+    tmp_path.chmod(0o700)
+    data = tmp_path / "data"
+    data.mkdir(mode=0o700)
+    config = tmp_path / "config.json"
+    config.write_text('{}')
+    pending = data / ".provider-settings-pending.json"
+    pending.write_text('{}')
+    pending.chmod(0o600)
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(config))
+    monkeypatch.setattr(service_management, "check_runtime", lambda *a, **k: pytest.fail("service probe"))
+    assert mcs_setup.cmd_check(None) == 1
+    assert "提供元設定" in capsys.readouterr().out
+    assert pending.read_text() == '{}'
 
 
 def test_default_doctor_checks_no_services_secrets_or_network(local_config, monkeypatch, capsys):
@@ -290,3 +337,99 @@ def test_doctor_exposes_worker_and_restore_holds(local_config, monkeypatch, caps
     assert result['card_worker']['recovery_scope'] == 'collect_only'
     assert result['checks']['card_worker']['status'] == 'warning'
     assert result['checks']['restore_delivery']['status'] == 'warning'
+
+
+@pytest.mark.parametrize("command", ["check", "doctor"])
+@pytest.mark.parametrize("output", ["json", "share"])
+def test_diagnostic_split_snapshot_race_blocks_all_probes(tmp_path, monkeypatch, capsys, command, output):
+    import hashlib
+    import cloud_cli
+    import provider_settings
+
+    tmp_path.chmod(0o700)
+    config = tmp_path / "config.json"
+    data = tmp_path / "data"
+    data.mkdir(mode=0o700)
+    directory = data / "provider_settings"
+    directory.mkdir(mode=0o700)
+
+    def write_json(path, value):
+        raw = json.dumps(value, sort_keys=True).encode()
+        path.write_bytes(raw)
+        path.chmod(0o600)
+        return hashlib.sha256(raw).hexdigest()
+
+    common = {"mcs_login_id": "synthetic-canary", "notify_target": "local",
+              "cloud_llm": {"mode": "off", "project_ids": []}, "semantic": {"mode": "off"}}
+    write_json(config, common)
+    hashes = {name: write_json(directory / (name + ".json"), {}) for name in provider_settings.PROVIDERS}
+    write_json(data / ".provider-settings-authority.json", {
+        "version": 2, "state": "committed", "files": hashes,
+        "common_policy_sha256": provider_settings.common_policy_digest(common)})
+    original = provider_settings._read_file
+    changed = False
+
+    def race(parent, name, **kwargs):
+        nonlocal changed
+        result = original(parent, name, **kwargs)
+        if name == "openai.json" and not changed:
+            changed = True
+            write_json(data / ".provider-settings-pending.json", {})
+        return result
+
+    monkeypatch.setattr(provider_settings, "_read_file", race)
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(config))
+    monkeypatch.setattr(mcs_setup, "_config_problem", lambda: pytest.fail("second config read"))
+    monkeypatch.setattr(cloud_cli, "diagnostics", lambda *a, **k: pytest.fail("provider probe"))
+    monkeypatch.setattr(service_management, "check_runtime", lambda *a, **k: pytest.fail("service probe"))
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda *a, **k: pytest.fail("runtime probe"))
+    monkeypatch.setattr(lifecycle_io, "run_bounded", lambda *a, **k: pytest.fail("service probe"))
+    args = SimpleNamespace(json=output == "json", share=output == "share", probe=["data", "services", "llm"])
+    assert (mcs_setup.cmd_check(args) if command == "check" else mcs_setup.cmd_doctor(args)) == 1
+    text = capsys.readouterr().out
+    assert changed and "synthetic-canary" not in text
+    if command == "doctor":
+        checks = json.loads(text)["checks"]
+        assert checks["configuration"]["status"] == "blocked"
+        assert all(checks[name]["status"] == "not_checked" for name in ("llm", "services", "data"))
+
+
+@pytest.mark.parametrize("raw", ["{", "[]", '{"duplicate":1,"duplicate":2}'])
+@pytest.mark.parametrize("command", ["check", "doctor"])
+def test_unreadable_legacy_config_blocks_before_probes(tmp_path, monkeypatch, capsys, raw, command):
+    config = tmp_path / "config.json"
+    config.write_text(raw)
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(config))
+    monkeypatch.setattr(mcs_setup, "_config_problem", lambda: pytest.fail("second config read"))
+    monkeypatch.setattr(service_management, "check_runtime", lambda *a, **k: pytest.fail("service probe"))
+    monkeypatch.setattr(runtime_inspection, "probe_python", lambda *a, **k: pytest.fail("runtime probe"))
+    args = SimpleNamespace(json=True, share=False, probe=["data", "services", "llm"])
+    assert (mcs_setup.cmd_check(args) if command == "check" else mcs_setup.cmd_doctor(args)) == 1
+    out = capsys.readouterr().out
+    if command == "doctor":
+        report = json.loads(out)
+        assert report["checks"]["configuration"]["status"] == "blocked"
+        assert all(report["checks"][name]["status"] == "not_checked" for name in ("llm", "services", "data"))
+    else:
+        assert "読み取れないか、形式が不正" in out
+    assert config.read_text() == raw
+
+
+def test_diagnostic_missing_legacy_config_is_unconfigured(tmp_path, monkeypatch):
+    monkeypatch.setattr(mcs_setup, "CONF_PATH", str(tmp_path / "config.json"))
+    assert mcs_setup._diagnostic_config() == {}
+
+
+def test_check_uses_one_diagnostic_snapshot(monkeypatch, capsys):
+    cfg = {"mcs_login_id": "synthetic", "notify_target": "local"}
+    calls = []
+    monkeypatch.setattr(mcs_setup.mcs_util, "_load_config", lambda path: calls.append(path) or cfg)
+    monkeypatch.setattr(mcs_setup, "_config_problem", lambda: pytest.fail("second config read"))
+    monkeypatch.setattr(service_management, "check_runtime", lambda *a, **k: ([], []))
+    monkeypatch.setattr(service_management, "script_drift", lambda *a, **k: ([], []))
+    monkeypatch.setattr(mcs_setup, "validate_config", lambda value: ([], []))
+    monkeypatch.setattr(mcs_setup, "check_environment", lambda value: ([], []))
+    monkeypatch.setattr(mcs_setup, "_queue_warnings", lambda value: [])
+    assert mcs_setup.cmd_check(None) == 0
+    assert len(calls) == 1
+    assert "設定確認: 正常" in capsys.readouterr().out

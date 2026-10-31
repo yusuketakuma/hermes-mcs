@@ -1,6 +1,5 @@
 """Doctor must report (not crash on) a malformed notify block."""
 import lifecycle_io
-import mcs_util
 import runtime_inspection
 import json
 
@@ -16,7 +15,7 @@ from ops_testkit import git_reads_or
 @pytest.fixture
 def malformed_config(monkeypatch):
     def install(cfg):
-        monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
+        monkeypatch.setattr(mcs_setup, '_diagnostic_config', lambda: cfg)
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: {
         "python": "3.14.8", "sqlite": "3.51.3",

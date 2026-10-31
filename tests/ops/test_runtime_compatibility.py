@@ -127,7 +127,7 @@ def test_unknown_metadata_never_means_healthy(executable, monkeypatch, result):
 ])
 def test_doctor_reports_selected_versions_not_parent(
         monkeypatch, tmp_path, capsys, mode, sqlite, expected):
-    monkeypatch.setattr(mcs_util, 'load_config', lambda: {
+    monkeypatch.setattr(mcs_setup, '_diagnostic_config', lambda: {
         "runtime_mode": mode, "mcs_login_id": "synthetic-private",
         "notify_target": "local"})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
@@ -173,7 +173,7 @@ def test_doctor_blocks_unsafe_recovery_without_touching_services(
         monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(mcs_setup.sys, "platform", "darwin")
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(tmp_path))
-    monkeypatch.setattr(mcs_util, 'load_config', lambda: {
+    monkeypatch.setattr(mcs_setup, '_diagnostic_config', lambda: {
         "mcs_login_id": "synthetic", "notify_target": "local"})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     (tmp_path / "org.mcs.recovery.plist").write_bytes(plistlib.dumps(
@@ -587,7 +587,7 @@ def test_doctor_and_updater_do_not_mask_deployed_drift(
     desired = str(tmp_path / "independent-python")
     cfg = {"recovery_python": desired, "mcs_login_id": "synthetic", "notify_target": "local"}
     monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
-    monkeypatch.setattr(mcs_util, 'load_config', lambda: cfg)
+    monkeypatch.setattr(mcs_setup, '_diagnostic_config', lambda: cfg)
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(runtime_inspection, "probe_python",
                         lambda exe: _facts(sqlite="3.51.0") if exe == old else _facts())

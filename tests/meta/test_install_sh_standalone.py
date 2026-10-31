@@ -7,6 +7,40 @@ import pytest
 from test_install_sh import ROOT, _calls, _run, _world
 
 
+def test_fresh_standalone_without_hermes_bootstraps_before_services(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    result = _run(env, None, '--mode', 'standalone', '--no-llm', '--no-brew', '--no-recovery')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not hermes_home.exists()
+    root = home / '.mcs'
+    assert json.loads((root / 'config.json').read_text())['runtime_mode'] == 'standalone'
+    for provider in ('anthropic', 'openai', 'jev'):
+        assert json.loads((root / 'data' / 'provider_settings' / (provider + '.json')).read_text()) == {}
+    assert (root / 'data' / '.provider-settings-authority.json').is_file()
+    calls = _calls(stub_root)
+    bootstrap = next(i for i, call in enumerate(calls) if call == 'fresh-runner bootstrap-fresh')
+    services = next(i for i, call in enumerate(calls) if 'mcs_setup.py services' in call)
+    assert bootstrap < services
+    assert not any('venv-hermes' in call for call in calls)
+
+
+def test_fresh_standalone_holds_if_existing_hermes_cron_is_unknown(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    executable = hermes_home / 'hermes-agent' / 'venv' / 'bin' / 'hermes'
+    executable.parent.mkdir(parents=True)
+    executable.write_text('#!/bin/sh\nprintf "synthetic-hermes %s\\n" "$*" >> "$STUB_LOG"\nexit 7\n')
+    executable.chmod(0o755)
+    result = _run(env, None, '--mode', 'standalone', '--no-llm', '--no-brew', '--no-recovery')
+    assert result.returncode != 0
+    calls = _calls(stub_root)
+    assert 'synthetic-hermes cron list --all' in calls
+    assert not any('mcs_setup.py services' in call for call in calls)
+    assert not any(call.startswith('launchctl bootstrap') for call in calls)
+    root = home / '.mcs'
+    assert (root / 'data' / '.provider-bootstrap-fresh.json').is_file()
+    assert not (root / 'data' / '.provider-settings-authority.json').exists()
+
+
 def test_standalone_preflight_and_plan_skip_hermes(tmp_path):
     home, _, stub_root, env = _world(tmp_path)
     r = _run(env, None, "--preflight", "--mode", "standalone")

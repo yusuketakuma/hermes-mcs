@@ -2,7 +2,6 @@
 
 import environment_diagnostics
 import lifecycle_io
-import mcs_util
 import service_management
 import runtime_inspection
 import json
@@ -256,7 +255,7 @@ def test_doctor_includes_stored_operations_without_probes_or_exit_change(
     before = health.read_bytes(), health.stat().st_mtime_ns
     monkeypatch.setattr(mcs_setup, "HOME", str(health.parent.parent))
     monkeypatch.setattr(mcs_setup, "AGENTS_DIR", str(health.parent.parent / "agents"))
-    monkeypatch.setattr(mcs_util, 'load_config', lambda: {
+    monkeypatch.setattr(mcs_setup, '_diagnostic_config', lambda: {
         "mcs_login_id": "synthetic-private-id", "notify_target": "local"})
     monkeypatch.setattr(mcs_setup, "_config_problem", lambda: None)
     monkeypatch.setattr(runtime_inspection, "probe_python", lambda exe: {
