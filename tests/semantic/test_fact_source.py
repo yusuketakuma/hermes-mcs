@@ -219,6 +219,85 @@ def test_fact_source_concurrent_change_after_approval_keeps_receipt(tmp_path, mo
     assert '設定は保存していません' in out and '承認記録が保存された可能性' in out
 
 
+def _split_promotion(tmp_path, monkeypatch):
+    from copy import deepcopy
+    from candidate_testkit import approved_config
+    from test_mcs_setup_config_boundary import _synthetic_split
+
+    _, providers = _synthetic_split(monkeypatch, tmp_path)
+    view, _ = mcs_setup._init_split_snapshot()
+    proposed = deepcopy(view)
+    proposed['semantic']['fact_source'] = 'canonical'
+    monkeypatch.setattr(mcs_util, 'HOME', str(tmp_path / 'synthetic-evidence-root'))
+    approved = approved_config(proposed)
+    evidence = tmp_path / 'synthetic-report.json'
+    evidence.write_text(json.dumps(approved['semantic']['fact_source_evidence']))
+    monkeypatch.setattr(mcs_util, 'HOME', str(tmp_path))
+    return evidence, providers
+
+
+def test_split_fact_source_canonical_commits_with_first_approval_receipt(tmp_path, monkeypatch):
+    import semantic_candidate
+    from test_mcs_setup_config_boundary import _split_state
+
+    evidence, providers = _split_promotion(tmp_path, monkeypatch)
+    assert not (tmp_path / 'data' / 'semantic_approvals').exists()
+    assert mcs_setup.cmd_fact_source(_Args('canonical', str(evidence))) == 0
+    state = _split_state(tmp_path)
+    assert state['providers'] == providers
+    cfg, _ = mcs_setup._init_split_snapshot()
+    sem = cfg['semantic']
+    assert sem['fact_source'] == 'canonical'
+    assert semantic_candidate.approval_matches(cfg, sem['fact_source_evidence'], sem['fact_source_approval'])
+    assert len(list((tmp_path / 'data' / 'semantic_approvals').glob('*.json'))) == 1
+    assert not (tmp_path / 'data' / '.provider-settings-pending.json').exists()
+
+
+def test_split_fact_source_pending_refuses_before_creating_approval(tmp_path, monkeypatch):
+    evidence, _ = _split_promotion(tmp_path, monkeypatch)
+    common = (tmp_path / 'config.json').read_bytes()
+    pending = tmp_path / 'data' / '.provider-settings-pending.json'
+    pending.write_text('{"synthetic":true}')
+    pending.chmod(0o600)
+    assert mcs_setup.cmd_fact_source(_Args('canonical', str(evidence))) == 1
+    assert pending.read_text() == '{"synthetic":true}'
+    assert (tmp_path / 'config.json').read_bytes() == common
+    assert not (tmp_path / 'data' / 'semantic_approvals').exists()
+
+
+@pytest.mark.parametrize('when', ['before', 'after'])
+def test_split_fact_source_preserves_approval_and_competing_provider_edit(tmp_path, monkeypatch, when, capsys):
+    import semantic_candidate
+
+    evidence, _ = _split_promotion(tmp_path, monkeypatch)
+    common = (tmp_path / 'config.json').read_bytes()
+    provider = tmp_path / 'data' / 'provider_settings' / 'openai.json'
+    changed = b'{"synthetic":"concurrent"}\n'
+    if when == 'before':
+        original = semantic_candidate.promotion_problem
+        def competing(cfg, report):
+            result = original(cfg, report)
+            provider.write_bytes(changed)
+            return result
+        monkeypatch.setattr(semantic_candidate, 'promotion_problem', competing)
+    else:
+        original = semantic_candidate.record_approval
+        def competing(cfg, report):
+            result = original(cfg, report)
+            provider.write_bytes(changed)
+            return result
+        monkeypatch.setattr(semantic_candidate, 'record_approval', competing)
+    assert mcs_setup.cmd_fact_source(_Args('canonical', str(evidence))) == 1
+    assert provider.read_bytes() == changed
+    assert (tmp_path / 'config.json').read_bytes() == common
+    receipts = list((tmp_path / 'data' / 'semantic_approvals').glob('*.json'))
+    assert len(receipts) == (1 if when == 'after' else 0)
+    out = capsys.readouterr().out
+    assert '設定は保存していません' in out
+    if when == 'after':
+        assert '承認記録が保存された可能性' in out
+
+
 def test_fact_source_busy_lock_does_not_create_approval(tmp_path, monkeypatch, capsys):
     import config_edit
     conf, evidence, initial = _synthetic_promotion(tmp_path, monkeypatch)
