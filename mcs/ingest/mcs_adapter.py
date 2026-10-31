@@ -52,7 +52,7 @@ from mcs_download import disk_error_kind, validate_download_url
 
 from mcs_contract import (API, BASE, BootstrapError, MCSError as MCSError, SessionExpired as SessionExpired, SchemaError as SchemaError, Attachment as Attachment, Message as Message,
                           UnreadPatient as UnreadPatient, UnreadSnapshot as UnreadSnapshot, MessageBatch as MessageBatch, ReplyBatch as ReplyBatch, project_url as project_url, valid_id)
-from mcs_payload import (text_field, sender_name, profession, organization, page_has_next, unread_patient,
+from mcs_payload import (text_field, sender_name, profession, organization, page_has_next, patient_name_info, patient_name_karte, unread_patient,
                          message_metadata, normalize_message, normalize_root, normalize_threads)
 from stamp_contract import REACTION_LABELS, reaction_kind_ok
 # The MCS unread screen (and its unread=1 route) lists at most this many
@@ -1612,19 +1612,19 @@ class MCSAdapter:
                 station = k.get("station") or {}
                 if not isinstance(station, dict):
                     raise SchemaError("kartes: station invalid")
+                patient_name, name_presence = patient_name_info(k, "kartes")
+                name_karte_id, name_karte_state = patient_name_karte(k)
                 out.append(UnreadPatient(
                     # medical_project.id joins the same /projects/medical
                     # namespace — the join itself is the type
                     project_id=pid,
                     project_type="medical",
-                    patient_name=(
-                        f"{text_field(k.get('last_name'), 'kartes: last_name')} "
-                        f"{text_field(k.get('first_name'), 'kartes: first_name')}"
-                    ).strip(),
+                    patient_name=patient_name,
                     disease=text_field(k.get("disease"), "kartes: disease"),
                     station_name=text_field(station.get("name"),
                                        "kartes: station name"),
-                    url=project_url(pid)))
+                    url=project_url(pid), patient_name_presence=name_presence,
+                    patient_name_karte_id=name_karte_id, patient_name_karte_state=name_karte_state))
             if not page_has_next(pag, "kartes"):
                 break
         else:

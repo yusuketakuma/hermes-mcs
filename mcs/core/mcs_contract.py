@@ -104,6 +104,11 @@ class UnreadPatient:
     group_name: str | None = None
     group_id_present: bool = False
     group_name_present: bool = False
+    # None keeps legacy constructors' authoritative patient_name behavior.
+    # Each component is missing, null, empty, or value in the source.
+    patient_name_presence: tuple[str, str] | None = None
+    patient_name_karte_id: int | None = None
+    patient_name_karte_state: str | None = None
 
 
 
