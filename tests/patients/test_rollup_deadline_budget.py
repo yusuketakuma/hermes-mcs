@@ -73,9 +73,30 @@ def test_rebuild_after_build_deadline_writes_nothing_and_keeps_remaining_work(tm
             clock[0] = 10
             return result
         monkeypatch.setattr(rollup, "build_rollup", slow)
-        unknown = []
-        assert rollup.rebuild_many(ledger, [1, 2], deadline=5, source_unknown=unknown) == 0
+        unknown, reasons = [], {}
+        assert rollup.rebuild_many(ledger, [1, 2], deadline=5, source_unknown=unknown,
+                                   source_unknown_reasons=reasons) == 0
         assert unknown == [1, 2] and _stored(ledger) == before
+        assert reasons == {"deadline": 2}
+        assert not ledger.db.in_transaction
+
+
+def test_rebuild_mixed_unverified_and_deadline_preserves_legacy_unknown_list(tmp_path, monkeypatch):
+    with closing(_seed(tmp_path)) as ledger:
+        clock = [0]
+        monkeypatch.setattr(rollup.time, "monotonic", lambda: clock[0])
+
+        def unverified(*args, **kwargs):
+            clock[0] = 10
+            raise rollup.RollupSourceUnverified("SYNTHETIC_PRIVATE_ERROR")
+
+        monkeypatch.setattr(rollup, "rebuild", unverified)
+        unknown, reasons = [], {}
+        assert rollup.rebuild_many(ledger, [1, 2, 3], deadline=5, source_unknown=unknown,
+                                   source_unknown_reasons=reasons) == 0
+        assert unknown == [1, 2, 3]
+        assert reasons == {"source_unverified": 1, "deadline": 2}
+        assert "SYNTHETIC_PRIVATE_ERROR" not in str(reasons)
         assert not ledger.db.in_transaction
 
 

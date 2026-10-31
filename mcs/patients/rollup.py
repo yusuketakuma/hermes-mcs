@@ -1880,11 +1880,12 @@ def _dirty_project_snapshot(db, project_id, now, *, deadline=None):
 
 
 def rebuild_many(ledger, project_ids, *, deadline: float | None = None,
-                 source_changed: list | None = None, source_unknown: list | None = None, cfg=None) -> int:
+                 source_changed: list | None = None, source_unknown: list | None = None,
+                 source_unknown_reasons: dict | None = None, cfg=None) -> int:
     """Rebuild patients, optionally reporting unverified inputs and races.
 
-    Without a collector, preserve the existing exception behavior. A collected
-    race or unverified source was not committed and remains eligible for a later scan.
+    A deadline stops the remaining work; without collectors, source races and
+    unverified inputs still raise. Uncommitted work remains eligible for a later scan.
     """
     project_ids = list(project_ids)
     n = 0
@@ -1895,6 +1896,9 @@ def rebuild_many(ledger, project_ids, *, deadline: float | None = None,
         except RollupDeadlineExceeded:
             if source_unknown is not None:
                 source_unknown.extend(project_ids[index:])
+                if source_unknown_reasons is not None:
+                    source_unknown_reasons["deadline"] = (
+                        source_unknown_reasons.get("deadline", 0) + len(project_ids) - index)
             break
         except RollupSourceChanged:
             if source_changed is None:
@@ -1905,6 +1909,9 @@ def rebuild_many(ledger, project_ids, *, deadline: float | None = None,
             if source_unknown is None:
                 raise
             source_unknown.append(pid)
+            if source_unknown_reasons is not None:
+                source_unknown_reasons["source_unverified"] = (
+                    source_unknown_reasons.get("source_unverified", 0) + 1)
             continue
         n += 1
     return n
