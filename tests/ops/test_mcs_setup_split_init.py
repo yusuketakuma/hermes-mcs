@@ -191,6 +191,28 @@ def test_split_init_can_replace_cloud_block_without_erasing_unselected_model(spl
     assert saved['providers']['jev'] == providers['jev']
 
 
+@pytest.mark.parametrize('explicit_empty', [False, True])
+def test_split_init_replaces_selected_openai_profiles_when_cloud_block_replaced(split, explicit_empty):
+    root, providers, owners = split
+    providers['openai']['profiles'] = {'backlog': 'sol-high'}
+    common = {'cloud_llm': {'mode': 'off', 'provider': 'anthropic'}, 'semantic': {'mode': 'off'}}
+    _set_split(root, common, providers)
+    cfg, initial = mcs_setup._init_config_snapshot()
+    cloud = {'mode': 'off', 'provider': 'openai'}
+    if explicit_empty:
+        cloud['profiles'] = {}
+    set_args = ['cloud_llm=' + json.dumps(cloud)]
+    assert mcs_setup._init_apply_set_overrides(cfg, set_args) is None
+    mcs_setup._init_reselect_provider(cfg, initial, set_args)
+    mcs_setup._init_save_config(cfg, initial, SimpleNamespace(_config_publication_started=False))
+    saved = _read(root, owners)
+    assert saved['providers']['anthropic']['model'] == providers['anthropic']['model']
+    if explicit_empty:
+        assert saved['providers']['openai']['profiles'] == {}
+    else:
+        assert 'profiles' not in saved['providers']['openai']
+
+
 def test_setup_declined_confirmation_has_no_secret_or_config_writes(split, monkeypatch):
     import cloud_cli
     import setup_wizard
