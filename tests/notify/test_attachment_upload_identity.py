@@ -6,6 +6,7 @@ import json
 import pytest
 
 import notify_cards
+import notify_scope
 import notify_spool
 from mcs_util import canonical, payload_hash
 from notify_testkit import NOW, _dispatch, _intent, _latest_render, _seed_thread
@@ -37,6 +38,142 @@ def uploaded(led, tmp_path, monkeypatch):
         led.db.execute("UPDATE attachments SET name=?,local_path=? WHERE attachment_id=?",
                        (new_path.name, str(new_path), attachment_id))
     return world, render, spec, part, attachment_id
+
+
+@pytest.fixture
+def collected_with_edit_witness(led, uploaded):
+    world, original, _spec, part, attachment_id = uploaded
+    emitted = []
+    with led.db:
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 1, emitted, force=True)
+    edit, = emitted
+    edit_part = next(p for p in edit["parts"]["manifest"] if p["part_id"] == part["part_id"])
+    assert edit_part["edit_only"] is True and edit_part["prior_remote_id"]
+    notify_spool.publish_specs(led.db, notify_spool.notify_dirs(str(world.root)), emitted, NOW + 1)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    row = led.db.execute("SELECT state,remote_id FROM notification_render_parts "
+                         "WHERE delivery_id=? AND part_id=?", (edit["delivery_id"], part["part_id"])).fetchone()
+    assert row["state"] == "delivered" and row["remote_id"] == edit_part["prior_remote_id"]
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET updated_at=? WHERE delivery_id=?",
+                       (NOW - 100, original["delivery_id"]))
+        led.db.execute("UPDATE notification_renders SET updated_at=? WHERE delivery_id=?",
+                       (NOW - 10, edit["delivery_id"]))
+    assert notify_cards.gc(led, SLACK, now=NOW + 3, limit=1)["spec_json_cleared"] == 1
+    assert led.db.execute("SELECT spec_json FROM notification_renders WHERE delivery_id=?",
+                          (original["delivery_id"],)).fetchone()[0] is None
+    assert led.db.execute("SELECT spec_json FROM notification_renders WHERE delivery_id=?",
+                          (edit["delivery_id"],)).fetchone()[0] is not None
+    with led.db:
+        led.db.execute("UPDATE attachments SET name='synthetic-third.bin' WHERE attachment_id=?",
+                       (attachment_id,))
+    return world, original, edit, part, attachment_id
+
+
+def test_matching_body_coverage_witness_and_later_edit_allow_same_file_edit(
+        led, collected_with_edit_witness):
+    world, original, _edit, part, _attachment_id = collected_with_edit_witness
+    proof = [hashlib.sha256(f"synthetic-proof-{n}".encode()).hexdigest() for n in range(3)]
+    witness = {"body_delivery_coverage": {"version": 1,
+               "payload_hash": original["payload_hash"], "proofs": [proof]}}
+    raw = canonical(witness).decode()
+    assert notify_scope._body_witness_proofs(raw, original) == {tuple(proof)}
+    uploads, posts = len(world.client.upload_calls), len(world.client.thread_posts)
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET spec_json=? WHERE delivery_id=?",
+                       (raw, original["delivery_id"]))
+        emitted = []
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 4, emitted, force=True)
+    spec, = emitted
+    current = next(p for p in spec["parts"]["manifest"] if p["part_id"] == part["part_id"])
+    assert current["edit_only"] is True and current["prior_remote_id"]
+    assert current["name"] == "synthetic-original.bin" and "synthetic-third.bin" in current["caption"]
+    notify_spool.publish_specs(led.db, notify_spool.notify_dirs(str(world.root)), emitted, NOW + 4)
+    asyncio.run(_granted_card(world.worker, led, world.root))
+    row = led.db.execute("SELECT state FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                         (spec["delivery_id"], part["part_id"])).fetchone()
+    assert row["state"] == "delivered"
+    assert len(world.client.upload_calls) == uploads and len(world.client.thread_posts) == posts
+
+
+@pytest.mark.parametrize("fault", [
+    "all_specs_missing", "no_successor_part", "successor_not_edit", "successor_wrong_prior",
+    "malformed_original", "fake_witness", "malformed_witness",
+    "part_id", "attachment_id", "remote_id", "hash", "bytes", "name", "part_error", "scope", "thread",
+    "unknown", "pending_sending", "pending_delivered",
+])
+def test_collected_upload_with_insufficient_or_conflicting_evidence_is_held(
+        led, collected_with_edit_witness, fault):
+    world, original, edit, part, attachment_id = collected_with_edit_witness
+    did, pid = original["delivery_id"], part["part_id"]
+    uploads, posts = len(world.client.upload_calls), len(world.client.thread_posts)
+    with led.db:
+        if fault == "all_specs_missing":
+            led.db.execute("UPDATE notification_renders SET spec_json=NULL WHERE delivery_id=?",
+                           (edit["delivery_id"],))
+        elif fault == "no_successor_part":
+            led.db.execute("UPDATE notification_render_parts SET state='not_sent',remote_id=NULL "
+                           "WHERE delivery_id=? AND part_id=?", (edit["delivery_id"], pid))
+        elif fault in ("successor_not_edit", "successor_wrong_prior"):
+            successor = json.loads(led.db.execute(
+                "SELECT spec_json FROM notification_renders WHERE delivery_id=?", (edit["delivery_id"],)
+            ).fetchone()[0])
+            successor_part = next(p for p in successor["parts"]["manifest"] if p["part_id"] == pid)
+            if fault == "successor_not_edit":
+                successor_part.pop("edit_only")
+            else:
+                successor_part["prior_remote_id"] = "F_OTHER"
+            led.db.execute("UPDATE notification_renders SET spec_json=?,payload_hash=? WHERE delivery_id=?",
+                           (canonical(successor).decode(), payload_hash(successor), edit["delivery_id"]))
+        elif fault == "malformed_original":
+            led.db.execute("UPDATE notification_renders SET spec_json='{' WHERE delivery_id=?", (did,))
+        elif fault in ("fake_witness", "malformed_witness"):
+            witness = {"body_delivery_coverage": {"version": 1,
+                       "payload_hash": "0" * 64 if fault == "fake_witness" else original["payload_hash"],
+                       "proofs": [["a" * 64, "b" * 64, "c" * 64]] if fault == "fake_witness" else []}}
+            led.db.execute("UPDATE notification_renders SET spec_json=? WHERE delivery_id=?",
+                           (canonical(witness).decode(), did))
+        elif fault == "part_id":
+            led.db.execute("UPDATE notification_render_parts SET part_id='attach:9999' "
+                           "WHERE delivery_id=? AND part_id=?", (did, pid))
+        elif fault == "attachment_id":
+            led.db.execute("UPDATE notification_render_parts SET attachment_id=? "
+                           "WHERE delivery_id=? AND part_id=?", (attachment_id + 1, did, pid))
+        elif fault == "remote_id":
+            led.db.execute("UPDATE notification_render_parts SET remote_id='F_OTHER' "
+                           "WHERE delivery_id=? AND part_id=?", (did, pid))
+        elif fault == "hash":
+            led.db.execute("UPDATE notification_render_parts SET payload_sha256=? "
+                           "WHERE delivery_id=? AND part_id=?", ("f" * 64, did, pid))
+        elif fault == "bytes":
+            led.db.execute("UPDATE notification_render_parts SET bytes=bytes+1 "
+                           "WHERE delivery_id=? AND part_id=?", (did, pid))
+        elif fault == "name":
+            led.db.execute("UPDATE notification_render_parts SET name='different.bin' "
+                           "WHERE delivery_id=? AND part_id=?", (did, pid))
+        elif fault == "part_error":
+            led.db.execute("UPDATE notification_render_parts SET error_code='synthetic_error' "
+                           "WHERE delivery_id=? AND part_id=?", (did, pid))
+        elif fault == "scope":
+            led.db.execute("UPDATE notification_renders SET team_id='T_OTHER' WHERE delivery_id=?", (did,))
+        elif fault == "thread":
+            led.db.execute("UPDATE notification_render_parts SET remote_id='OTHER_THREAD' "
+                           "WHERE delivery_id=? AND kind='thread'", (did,))
+        else:
+            state = "unknown" if fault == "unknown" else "pending"
+            led.db.execute("UPDATE notification_render_parts SET state=?,remote_id=NULL "
+                           "WHERE delivery_id=? AND part_id=?", (state, did, pid))
+            if fault == "pending_sending":
+                led.db.execute("UPDATE notification_renders SET state='sending' WHERE delivery_id=?", (did,))
+        emitted = []
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 4, emitted, force=True)
+    assert emitted == []
+    latest = _latest_render(led)
+    assert latest["delivery_id"] != edit["delivery_id"] and latest["state"] == "held"
+    errors = {r[0] for r in led.db.execute(
+        "SELECT error_code FROM notification_render_parts WHERE delivery_id=?", (latest["delivery_id"],))}
+    assert errors == {"attachment_upload_identity_unverified"}
+    assert len(world.client.upload_calls) == uploads and len(world.client.thread_posts) == posts
 
 
 @pytest.fixture

@@ -57,6 +57,20 @@ def test_renamed_attachment_edits_existing_upload_across_two_updates(led, tmp_pa
             "SELECT state,remote_id,name FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
             (specs[0]["delivery_id"], part["part_id"])).fetchone()
         assert tuple(row) == ("delivered", remote_id, old_name)
+        if revision == 1:
+            # Collect only the original upload; the delivered edit remains sealed.
+            with led.db:
+                led.db.execute("UPDATE notification_renders SET updated_at=? WHERE delivery_id=?",
+                               (NOW - 100, first["delivery_id"]))
+                led.db.execute("UPDATE notification_renders SET updated_at=? WHERE delivery_id=?",
+                               (NOW - 10, specs[0]["delivery_id"]))
+            result = notify_cards.gc(led, SLACK, now=NOW + 3, limit=1)
+            assert result["spec_json_cleared"] == 1
+            old = led.db.execute("SELECT spec_json FROM notification_renders WHERE delivery_id=?",
+                                 (first["delivery_id"],)).fetchone()
+            newer = led.db.execute("SELECT spec_json FROM notification_renders WHERE delivery_id=?",
+                                   (specs[0]["delivery_id"],)).fetchone()
+            assert old[0] is None and newer[0] is not None
 
 
 def setup(led):

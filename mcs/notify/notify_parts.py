@@ -12,7 +12,7 @@ from mcs_requests import canonical, positive
 from mcs_util import payload_hash, strict_json, text_sha256, valid_hash
 from notify_render import card_body_text, preview_header, notification_preview, presenter
 from notify_scope import (active_transport, interactive_enabled, notify_cfg,
-                          scope_matches, stored_scope)
+                          scope_matches, stored_scope, _body_witness_proofs)
 
 THREAD_PART_LIMIT = 1900
 MAX_PARTS = 256
@@ -274,7 +274,7 @@ def _thread_plan_ids(db, card, shown, waiting=frozenset()) -> list:
         if r["message_id"] in wanted]
 
 
-def _prior_remote_ids(db, card) -> tuple[dict, set, dict, set, set]:
+def _prior_remote_ids(db, card) -> tuple[dict, set, dict, set, set, dict]:
     """Return latest remote ids, attachment ids and the remote-id history.
 
     Updates re-plan the thread's attachments; naming the message that already
@@ -285,26 +285,29 @@ def _prior_remote_ids(db, card) -> tuple[dict, set, dict, set, set]:
     remotes = {}
     file_attachment_ids = set()
     uncertain = set()
+    receipt_counts = {}
     for r in db.execute(
             """SELECT p.part_id, p.remote_id, p.payload_sha256, p.attachment_id,p.state
                FROM notification_render_parts p
                JOIN notification_renders r ON r.delivery_id=p.delivery_id
                WHERE r.card_id=?
                  AND p.kind='attachment_part'
-                 AND p.state IN ('delivered','unknown')
+                 AND (p.state IN ('delivered','unknown')
+                      OR (p.state='pending' AND r.state IN ('sending','delivered')))
                ORDER BY r.render_rev, p.idx""", (card["card_id"],)):
-        if r["state"] == "unknown" or not isinstance(r["remote_id"], str) or not r["remote_id"]:
+        if r["state"] != "delivered" or not isinstance(r["remote_id"], str) or not r["remote_id"]:
             uncertain.add(("part", r["part_id"]))
             if type(r["attachment_id"]) is int:
                 uncertain.add(("attachment", r["attachment_id"]))
             continue
         out[r["part_id"]] = (str(r["remote_id"]), r["payload_sha256"])
+        receipt_counts[r["remote_id"]] = receipt_counts.get(r["remote_id"], 0) + 1
         remotes.setdefault((r["part_id"], r["payload_sha256"]), set()).add(str(r["remote_id"]))
         if type(r["attachment_id"]) is int:
             attachment_ids.add(r["attachment_id"])
             if valid_hash(r["payload_sha256"]):
                 file_attachment_ids.add(r["attachment_id"])
-    return out, attachment_ids, remotes, file_attachment_ids, uncertain
+    return out, attachment_ids, remotes, file_attachment_ids, uncertain, receipt_counts
 
 
 def prior_body_posts(db, card) -> dict:
@@ -509,7 +512,32 @@ def _sealed_attachment_identity(row, card):
                 or part.get("edit_only") is True and part.get("prior_remote_id") != row["remote_id"]):
             return None
         return (row["part_id"], row["part_attachment_id"], row["payload_sha256"],
-                row["part_bytes"], row["name"], "unavailable" if unavailable else "file")
+                row["part_bytes"], row["name"], "unavailable" if unavailable else "file",
+                row["render_rev"], part.get("edit_only") is True)
+    except (AttributeError, KeyError, TypeError, ValueError, RecursionError):
+        return None
+
+
+def _collected_attachment_identity(row):
+    """Keep GC metadata only to compare with a later sealed edit receipt."""
+    try:
+        raw = row["spec_json"]
+        if raw is not None:
+            witness = strict_json(raw)
+            if (not isinstance(witness, dict) or set(witness) != {"body_delivery_coverage"}
+                    or _body_witness_proofs(raw, row) is None):
+                return None
+        if (row["part_error"] is not None or not valid_hash(row["payload_hash"])
+                or not valid_hash(row["payload_sha256"])
+                or type(row["part_bytes"]) is not int or row["part_bytes"] < 0
+                or type(row["part_attachment_id"]) is not int or row["part_attachment_id"] <= 0
+                or type(row["render_rev"]) is not int or row["render_rev"] < 1
+                or not isinstance(row["part_id"], str) or not row["part_id"]
+                or not isinstance(row["name"], str) or not 0 < len(row["name"]) <= 200
+                or not isinstance(row["remote_id"], str) or not row["remote_id"]):
+            return None
+        return (row["part_id"], row["part_attachment_id"], row["payload_sha256"],
+                row["part_bytes"], row["name"], "collected", row["render_rev"], False)
     except (AttributeError, KeyError, TypeError, ValueError, RecursionError):
         return None
 
@@ -536,7 +564,7 @@ def _same_thread_delivered_parts(db, card):
         elif row["kind"] == "attachment_part":
             if card["transport"] == "slack":
                 identities.setdefault(str(row["remote_id"]), []).append(
-                    _sealed_attachment_identity(row, card))
+                    _collected_attachment_identity(row) or _sealed_attachment_identity(row, card))
             try:
                 old = json.loads(row["spec_json"])
                 caption = next((part.get("caption") for part in old["parts"]["manifest"]
@@ -814,8 +842,8 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
         keyed += cleanup
     cleanup_keys = {key for key, _text in cleanup}
     parts["thread_body_parts"] = [c for _k, c in keyed]
-    prior, prior_attachment_ids, prior_remotes, prior_file_attachment_ids, uncertain_attachments = (
-        _prior_remote_ids(db, card) if update else ({}, set(), {}, set(), set()))
+    prior, prior_attachment_ids, prior_remotes, prior_file_attachment_ids, uncertain_attachments, receipt_counts = (
+        _prior_remote_ids(db, card) if update else ({}, set(), {}, set(), set(), {}))
     same = _prior_body_sha(db, card) if update and not editable else {}
     for i, (key, chunk) in enumerate(keyed):
         entry = {"part_id": f"body:{i + 1:04d}",
@@ -857,8 +885,11 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 budget_hold = budget_hold or "attachment_upload_identity_unverified"
             elif rid:
                 proofs = attachment_identities.get(rid, [])
+                sealed = [proof for proof in proofs if proof is not None and proof[5] == "file"]
+                collected = [proof for proof in proofs if proof is not None and proof[5] == "collected"]
                 expected = (entry["part_id"], a["attachment_id"], a.get("sha256"), a.get("bytes"))
                 unavailable_only = (sha is None and proofs
+                    and len(proofs) == receipt_counts.get(rid)
                     and all(proof is not None and proof[:4] == (entry["part_id"], a["attachment_id"], None, None)
                             and proof[5] == "unavailable" for proof in proofs)
                     and len({proof[4] for proof in proofs}) == 1
@@ -868,13 +899,17 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 if unavailable_only:
                     rid = None  # the previous receipt was an unavailable-text post, not a file
                 elif (not valid_hash(a.get("sha256")) or type(a.get("bytes")) is not int
-                        or a["bytes"] < 0 or not proofs
+                        or a["bytes"] < 0 or not sealed or len(proofs) != receipt_counts.get(rid)
                         or len(prior_remotes.get((entry["part_id"], sha), ())) != 1
-                        or any(proof is None or proof[:4] != expected or proof[5] != "file" for proof in proofs)
+                        or any(proof is None or proof[:4] != expected or proof[5] not in ("file", "collected")
+                               for proof in proofs)
                         or len({proof[4] for proof in proofs}) != 1 or sha != a.get("sha256")):
                     budget_hold = budget_hold or "attachment_upload_identity_unverified"
+                elif any(not any(later[6] > previous[6] and later[7] for later in sealed)
+                         for previous in collected):
+                    budget_hold = budget_hold or "attachment_upload_identity_unverified"
                 else:
-                    entry["name"] = proofs[0][4]
+                    entry["name"] = sealed[0][4]
             elif a["attachment_id"] in prior_attachment_ids:
                 budget_hold = budget_hold or "attachment_upload_identity_unverified"
         if rid and a.get("unavailable") and entry.get("caption"):
