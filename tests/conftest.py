@@ -205,26 +205,26 @@ _install(subprocess, "Popen", _guarded_popen)
 
 # The bounded-http transport spawns a fresh interpreter for every
 # request, so the in-process socket guard cannot reach it — a call that
-# slips past a test's fakes would hit the real local LLM / Jev for real.
+# slips past a test's fakes could hit a real model endpoint.
 # Synthetic loopback servers stay allowed (real-transport tests exercise
 # the worker against their own fixture endpoints); only the production
 # endpoints are denied at the boundary.
 import bounded_http  # noqa: E402
 import drug_info  # noqa: E402
 import local_llm  # noqa: E402
+import openai_client  # noqa: E402
 import semantic_jev as _jev  # noqa: E402
 
 _LIVE_ENDPOINTS = frozenset(
     {local_llm.ENDPOINT, _jev.JEV_ENDPOINT, _jev.JEV_MODELS_URL,
+     bounded_http.ANTHROPIC_ENDPOINT, openai_client.ENDPOINT,
      drug_info.GATEWAY_URL, *local_llm.probe_urls(local_llm.ENDPOINT)}
     | set(_jev.JEV_ALLOWED_ENDPOINTS))
 _LOOPBACK_NAMES = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 def _live_authority(url):
-    # (loopback, port) of every production endpoint — any path on the
-    # live llama-server/Jev authority (/slots, /v1/models, a localhost
-    # spelling) is as live as the chat endpoint itself
+    # A loopback spelling and port bind every path on that live service.
     try:
         parts = urllib.parse.urlsplit(url)
         port = parts.port
@@ -237,17 +237,20 @@ def _live_authority(url):
 
 _LIVE_AUTHORITIES = frozenset(
     a for a in map(_live_authority, _LIVE_ENDPOINTS) if a is not None)
+_LIVE_CLOUD_HOSTS = frozenset(
+    _live_authority(url)[0] for url in (bounded_http.ANTHROPIC_ENDPOINT, openai_client.ENDPOINT))
 
 
 def _guarded_http_request(endpoint, *args, **kwargs):
     # Only a real spawn can reach a live endpoint — tests that stub
     # Popen (wire-replay fakes, synthetic workers) never touch the
     # network, so they pass through and exercise the transport contract.
-    if ((endpoint in _LIVE_ENDPOINTS
-         or _live_authority(endpoint) in _LIVE_AUTHORITIES)
+    authority = _live_authority(endpoint)
+    if ((endpoint in _LIVE_ENDPOINTS or authority in _LIVE_AUTHORITIES
+         or authority is not None and authority[0] in _LIVE_CLOUD_HOSTS)
             and subprocess.Popen is _guarded_popen):
         raise RuntimeError(
-            "live LLM/Jev endpoints are disabled in MCS tests")
+            "live LLM/Jev/cloud endpoints are disabled in MCS tests")
     return _ORIG_HTTP_REQUEST(endpoint, *args, **kwargs)
 
 
