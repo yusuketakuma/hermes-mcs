@@ -109,9 +109,10 @@ def payload_generation(payload: dict) -> str:
 
 # Run-window and spending settings decide when new requests may start, not how a
 # job's answer is interpreted: editing them must not discard results already received.
-_GENERATION_EXEMPT = {"semantic": ("until",),
-                      "cloud_llm": ("until", "window_start", "window_budget_usd",
-                                    "daily_cost_limit_usd", "monthly_cost_limit_usd")}
+CLOUD_OPERATING_LIMITS = ("daily_request_budget", "daily_cost_limit_usd", "monthly_cost_limit_usd",
+                          "max_concurrency", "usd_jpy", "window_budget_usd", "window_start", "until",
+                          "provider_budgets")
+_GENERATION_EXEMPT = {"semantic": ("until",), "cloud_llm": CLOUD_OPERATING_LIMITS}
 
 
 def config_generation(cfg: dict) -> str:
@@ -451,7 +452,14 @@ def record_circuit_result(ledger, error, now=None, *, kind=_CIRCUIT_ARTIFACT_KIN
         raise RuntimeError("cloud_circuit_transaction_active")
     ledger.db.execute("BEGIN IMMEDIATE")
     with ledger.db:
-        return _record_circuit_result(ledger, error, now, kind=kind, reset=reset)
+        return _record_cloud_circuit_result_tx(ledger, error, now, reset=reset)
+
+
+def _record_cloud_circuit_result_tx(ledger, error, now=None, *, reset=False) -> bool:
+    """Update the cloud circuit inside its caller's active transaction."""
+    if not ledger.db.in_transaction:
+        raise RuntimeError("cloud_circuit_transaction_required")
+    return _record_circuit_result(ledger, error, now, kind="cloud_circuit", reset=reset)
 
 
 def _record_circuit_result(ledger, error, now=None, *, kind=_CIRCUIT_ARTIFACT_KIND, reset=False) -> bool:

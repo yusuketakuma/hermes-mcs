@@ -14,6 +14,30 @@ PRIOR = {"summary": "合成の報告", "symptoms": [
     {"text": "発熱", "negated": False, "status": "ongoing", "subject": "family", "evidence": "家族には軽い発熱があります。"}]}
 
 
+@pytest.mark.parametrize(("field", "value"), [
+    ("daily_request_budget", 3), ("daily_cost_limit_usd", 1), ("monthly_cost_limit_usd", 2),
+    ("max_concurrency", 1), ("usd_jpy", 100), ("window_budget_usd", 3),
+    ("window_start", "2026-10-30T00:00:00+09:00"), ("until", "2026-11-01T00:00:00+09:00"),
+    ("provider_budgets", {"openai": {"daily_cost_limit_usd": 1, "monthly_cost_limit_usd": 2}}),
+])
+def test_context_keeps_received_result_across_cloud_operating_limit_changes(field, value):
+    base = {"semantic": {"mode": "shadow", "project_ids": [1], "daily_request_budget": 10},
+            "cloud_llm": {"mode": "on", "provider": "openai", "project_ids": [1]}}
+    changed = {**base, "cloud_llm": {**base["cloud_llm"], field: value}}
+    assert llm._same_but_operating_limits(changed, base)
+
+
+@pytest.mark.parametrize(("section", "field", "value"), [
+    ("cloud_llm", "mode", "off"), ("cloud_llm", "provider", "anthropic"),
+    ("cloud_llm", "project_ids", [2]), ("semantic", "daily_request_budget", 11),
+])
+def test_context_rejects_changed_scope_mode_provider_or_jev_budget(section, field, value):
+    base = {"semantic": {"mode": "shadow", "project_ids": [1], "daily_request_budget": 10},
+            "cloud_llm": {"mode": "on", "provider": "openai", "project_ids": [1]}}
+    changed = {**base, section: {**base[section], field: value}}
+    assert not llm._same_but_operating_limits(changed, base)
+
+
 def _bound_row(db):
     row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     row["_source_binding"] = inference_dependency_loss.source_binding(db.db, row["project_id"], row["message_id"])
@@ -29,6 +53,36 @@ def seed(tmp_path, *, version=None, body=BODY):
               "source_binding": row["_source_binding"],
               "extract_version": llm.EXTRACT_VERSION - 1 if version is None else version})
     return db, aid, row
+
+
+@pytest.mark.parametrize(("provider", "model", "price_version"), [
+    ("anthropic", llm.anthropic_client.MODEL, llm.cloud_policy.PRICE_VERSION),
+    ("openai", llm.openai_client.MODEL, llm.cloud_policy.OPENAI_PRICE_VERSION),
+])
+def test_dryrun_saves_selected_provider_model_after_job_preparation(
+        tmp_path, monkeypatch, provider, model, price_version):
+    db, _, _ = seed(tmp_path)
+    try:
+        cfg = {"cloud_llm": {"mode": "dry_run", "provider": provider, "project_ids": [1]}}
+        monkeypatch.setattr(llm, "load_config", lambda: cfg)
+        monkeypatch.setattr(llm, "_rerender_cards", lambda *_args: None)
+        monkeypatch.setattr(llm, "_CloudProvider", lambda *_args, **_kwargs: pytest.fail("dry run sent a request"))
+        pending, _ = llm._select_pending(db, 1, None, None, False)
+        jobs, skipped, blocked = llm._prepare_jobs(db, pending, ("", "synthetic-local"), False)
+        assert len(jobs) == 1 and skipped == blocked == 0
+        row = jobs[0][0]
+        assert row["_cloud_mode"] == "dry_run"
+        assert row["_target"][1] == "synthetic-local"
+        assert not db.artifacts("cloud_usage_dryrun")
+        assert llm._replace_current(db, row, json.dumps(PRIOR, ensure_ascii=False))
+        estimates = db.artifacts("cloud_usage_dryrun")
+        assert len(estimates) == 1
+        assert estimates[0]["model"] == model
+        meta = json.loads(estimates[0]["meta"])
+        assert meta["route"] == "reextract"
+        assert meta["price_version"] == price_version
+    finally:
+        db.close()
 
 
 @pytest.mark.parametrize("route", ["upgrade", "thin", "qc"])

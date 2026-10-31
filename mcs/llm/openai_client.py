@@ -1,18 +1,61 @@
 """Call the pinned OpenAI Responses model with the shared guarded attempt lifecycle."""
 from __future__ import annotations
 
+from types import MappingProxyType
+
 import bounded_http
-from anthropic_client import AnthropicClient, AnthropicError, SYSTEM
+from cloud_client import CloudClient, CloudError, MAX_TOKENS, SYSTEM  # noqa: F401
 from mcs_util import strict_json
 
+AnthropicError = CloudError
 MODEL = "gpt-6-luna"
 ENDPOINT = "https://api.openai.com/v1/responses"
+KEY_ENV = "MCS_OPENAI_API_KEY"
+PRICE_VERSION = "openai-gpt-6-luna-2026-10-29"
+PRICE_CHECKED_ON = "2026-10-29"
+PRICE_VALID_UNTIL = "2026-11-28"
+PRICE_SOURCES = ("https://developers.openai.com/api/docs/models/gpt-6-luna",)
+LONG_INPUT_THRESHOLD = 272000
+PRICES_20261029 = MappingProxyType({"input": "0.1", "output": "0.5", "cached_input": "0.01",
+    "cache_write_30m": "0.125", "long_input_multiplier": "2", "long_output": "0.75",
+    "reservation_input": "0.25", "reservation_output": "0.75"})
+PRICES = PRICES_20261029
 QUOTA_ERROR_CODES = frozenset({"insufficient_quota", "credit_balance_exhausted",
                                "organization_spend_limit_exceeded", "project_spend_limit_exceeded",
                                "organization_usage_limit_exceeded"})
+RATE_LIMIT_DIAGNOSTICS = frozenset({"rate_limit_exceeded", "slow_down", "rate_limit_error",
+    "missing_code", "unknown_code", "unknown_type", "conflicting_fields", "invalid_field_type",
+    "body_not_bytes", "body_too_large", "body_invalid_utf8", "body_invalid_json",
+    "body_duplicate_keys", "body_nonfinite", "body_too_deep", "body_not_object",
+    "error_missing", "error_not_object"})
 
 
-def validate_usage(value):
+def _error_429(raw):
+    if not isinstance(raw, bytes):
+        return None, "body_not_bytes"
+    if len(raw) > bounded_http.MAX_RESPONSE_BYTES:
+        return None, "body_too_large"
+    try:
+        obj = strict_json(raw.decode("utf-8"))
+    except UnicodeError:
+        return None, "body_invalid_utf8"
+    except RecursionError:
+        return None, "body_too_deep"
+    except OverflowError:
+        return None, "body_nonfinite"
+    except (ValueError, TypeError) as error:
+        reason = {"duplicate_json_key": "body_duplicate_keys", "nonfinite_json_number": "body_nonfinite"}
+        return None, reason.get(str(error), "body_invalid_json")
+    if not isinstance(obj, dict):
+        return None, "body_not_object"
+    if "error" not in obj:
+        return None, "error_missing"
+    if not isinstance(obj["error"], dict):
+        return None, "error_not_object"
+    return obj["error"], None
+
+
+def _validate_usage_20261029(value):
     """Validate every billable counter, including automatic prompt-cache writes."""
     allowed = {"input_tokens", "input_tokens_details", "output_tokens", "output_tokens_details", "total_tokens"}
     if not isinstance(value, dict) or value.keys() - allowed:
@@ -26,22 +69,49 @@ def validate_usage(value):
     for key, fields in (("input_tokens_details", {"cached_tokens", "cache_write_tokens"}),
                         ("output_tokens_details", {"reasoning_tokens"})):
         details = out.get(key, {})
-        if (not isinstance(details, dict) or details.keys() - fields
+        allowed_details = fields | ({"cache_write_tokens_details"} if key == "input_tokens_details" else set())
+        if (not isinstance(details, dict) or details.keys() - allowed_details
                 or key == "input_tokens_details" and fields - details.keys()
-                or any(type(n) is not int or not 0 <= n <= 2**53 for n in details.values())):
+                or any(type(details.get(field, 0)) is not int or not 0 <= details.get(field, 0) <= 2**53
+                       for field in fields)):
             raise AnthropicError("pricing_unverified", "usage_details_invalid")
-        details = {field: details.get(field, 0) for field in fields}
-        if sum(details.values()) > out[key.removesuffix("_details")]:
+        normalized = {field: details.get(field, 0) for field in fields}
+        if sum(normalized.values()) > out[key.removesuffix("_details")]:
             raise AnthropicError("pricing_unverified", "usage_details_mismatch")
-        out[key] = details
+        if "cache_write_tokens_details" in details:
+            writes = details["cache_write_tokens_details"]
+            write_fields = {"ttl_30m_tokens", "ttl_12h_tokens"}
+            if (not isinstance(writes, dict) or writes.keys() != write_fields
+                    or any(type(n) is not int or not 0 <= n <= 2**53 for n in writes.values())
+                    or sum(writes.values()) != normalized["cache_write_tokens"]
+                    or writes["ttl_12h_tokens"] != 0):
+                raise AnthropicError("pricing_unverified", "cache_write_details_invalid")
+            normalized["cache_write_tokens_details"] = dict(writes)
+        out[key] = normalized
     return out
 
 
-class OpenAIClient(AnthropicClient):
+validate_usage = _validate_usage_20261029
+
+
+PRICE_SNAPSHOTS = MappingProxyType({
+    ("gpt-6-luna", "openai-gpt-6-luna-2026-10-29"): MappingProxyType({
+        "provider": "openai", "model": "gpt-6-luna",
+        "price_version": "openai-gpt-6-luna-2026-10-29",
+        "price_checked_on": "2026-10-29", "price_valid_until": "2026-11-28",
+        "price_sources": ("https://developers.openai.com/api/docs/models/gpt-6-luna",),
+        "prices": PRICES_20261029, "long_input_threshold": 272000,
+        "validate_usage": _validate_usage_20261029, "max_tokens": 128000, "legacy_reservation": False,
+    }),
+})
+
+
+class OpenAIClient(CloudClient):
     """Reuse bounded retries, reservations and uncertain-send handling for Responses."""
+    MODEL = MODEL
+
     def __init__(self, api_key, **kwargs):
         super().__init__(api_key, **kwargs)
-        self.model = MODEL
 
     def request(self, method, body, timeout, *, deadline=None):
         return bounded_http.bounded_http_request(
@@ -49,20 +119,34 @@ class OpenAIClient(AnthropicClient):
             deadline=deadline, allowed_endpoints=(ENDPOINT,), auth="bearer")
 
     def response_error(self, status, raw):
-        if status == 429 and isinstance(raw, bytes) and len(raw) <= bounded_http.MAX_RESPONSE_BYTES:
-            try:
-                obj = strict_json(raw.decode("utf-8"))
-                error = obj.get("error") if isinstance(obj, dict) else None
-                if isinstance(error, dict):
-                    code, kind = error.get("code"), error.get("type")
-                    if kind is None or kind == "insufficient_quota":
-                        if isinstance(code, str) and code in QUOTA_ERROR_CODES:
-                            return "payment_required", False, code
-                        if code is None and kind == "insufficient_quota":
-                            return "payment_required", False, "insufficient_quota"
-            except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
-                pass
-        return super().response_error(status, raw)
+        if status != 429:
+            return super().response_error(status, raw)
+        error, diagnostic = _error_429(raw)
+        if diagnostic is None:
+            code, kind = error.get("code"), error.get("type")
+            if (code is not None and not isinstance(code, str)
+                    or kind is not None and not isinstance(kind, str)):
+                diagnostic = "invalid_field_type"
+            elif kind is None or kind == "insufficient_quota":
+                if code in QUOTA_ERROR_CODES:
+                    return "payment_required", False, {"openai_error_code": code}
+                if code is None and kind == "insufficient_quota":
+                    return "payment_required", False, {"openai_error_code": "insufficient_quota"}
+            if diagnostic is None:
+                if code in QUOTA_ERROR_CODES or kind == "insufficient_quota":
+                    diagnostic = "conflicting_fields"
+                elif code in ("rate_limit_exceeded", "slow_down"):
+                    diagnostic = code
+                elif code is not None:
+                    diagnostic = "unknown_code"
+                elif kind in ("rate_limit_error", "slow_down"):
+                    diagnostic = kind
+                elif kind is not None:
+                    diagnostic = "unknown_type"
+                else:
+                    diagnostic = "missing_code"
+        kind, retryable, _ = super().response_error(status, raw)
+        return kind, retryable, {"openai_429_diagnostic": diagnostic}
 
     def body(self, prompt, max_tokens, cache_prefix):
         if cache_prefix and (not isinstance(cache_prefix, str) or not prompt.startswith(cache_prefix)):
@@ -96,7 +180,11 @@ class OpenAIClient(AnthropicClient):
                 texts.append(part["text"])
         status = obj.get("status")
         length = status == "incomplete" and obj.get("incomplete_details") == {"reason": "max_output_tokens"}
-        if (status != "completed" and not length) or not texts:
+        answer = "".join(texts)
+        reasoning_only = bool(output) and all(item.get("type") == "reasoning" for item in output)
+        if ((status != "completed" and not length) or not output
+                or not texts and not (length and reasoning_only)
+                or status == "completed" and not answer.strip()):
             raise AnthropicError("contract_error", "incomplete_response")
-        return {"status": 200, "text": "".join(texts), "finish_reason": "length" if length else "stop",
+        return {"status": 200, "text": answer, "finish_reason": "length" if length else "stop",
                 "model": MODEL, "usage": meta["usage"]}

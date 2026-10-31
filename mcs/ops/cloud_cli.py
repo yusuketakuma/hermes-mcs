@@ -27,8 +27,8 @@ READ_BYTES = 16 * 1024 * 1024
 def pending_key_presence(root=None):
     """Preview only booleans for keys that init will save, never their values."""
     return {"jev": bool(os.environ.get("TYPESAFE_API_KEY") or jev.api_key(root)),
-            "anthropic": bool(os.environ.get("MCS_ANTHROPIC_API_KEY") or policy.api_key(root)),
-            "openai": bool(os.environ.get("MCS_OPENAI_API_KEY") or policy.provider_key("openai", root))}
+            "anthropic": bool(os.environ.get(policy.anthropic_client.KEY_ENV) or policy.api_key(root)),
+            "openai": bool(os.environ.get(policy.openai_client.KEY_ENV) or policy.provider_key("openai", root))}
 
 
 def _settings(cfg, root=None):
@@ -70,7 +70,7 @@ def _checkpoint(deadline, rows=0):
         raise ValueError("observation_budget_exceeded")
 
 
-def _dryrun_report(db, deadline, now):
+def _dryrun_report(db, deadline, now, provider="anthropic"):
     fields = ("requests", "input_chars", "estimated_input_tokens", "estimated_output_tokens")
     start = now - 62 * 86400
     days = {}
@@ -80,12 +80,19 @@ def _dryrun_report(db, deadline, now):
             (start, READ_ROWS + 1)), 1):
         _checkpoint(deadline, n)
         meta = mcs_util.loads_dict(row["meta"])
-        if (not isinstance(meta, dict) or meta.get("route") not in policy.ROUTES
-                or row["model"] != policy.MODEL
+        if not isinstance(meta, dict):
+            raise ValueError("dryrun_observation_invalid")
+        try:
+            definition = policy._price_definition(row["model"], meta.get("price_version"))
+        except policy.AnthropicError:
+            raise ValueError("dryrun_observation_invalid") from None
+        if (meta.get("route") not in policy.ROUTES
                 or type(row["created_at"]) not in (int, float)
                 or not math.isfinite(row["created_at"]) or not start <= row["created_at"] <= now
                 or any(type(meta.get(k)) is not int or not 0 <= meta[k] <= 2**53 for k in fields)):
             raise ValueError("dryrun_observation_invalid")
+        if definition["provider"] != provider:
+            continue
         day = datetime.fromtimestamp(row["created_at"], policy.JST).date().isoformat()
         item = days.setdefault(day, {"day": day, "units": 0, **dict.fromkeys(fields, 0)})
         item["units"] += 1
@@ -155,7 +162,7 @@ def diagnostics(cfg, *, root=None, probe=False):
             with _reader(root) as (db, deadline):
                 borrowed = SimpleNamespace(db=db)
                 out["anthropic"]["accounting"] = policy.usage_report(borrowed)
-                out["anthropic"]["dry_run"] = _dryrun_report(db, deadline, time.time())
+                out["anthropic"]["dry_run"] = _dryrun_report(db, deadline, time.time(), cloud["provider"])
                 reason = policy.global_block_reason(borrowed, model=cloud["model"]) or policy.budget_block_reason(borrowed, cloud)
                 if reason == "paused":
                     out["anthropic"].update(status="local", block_reason=reason)
@@ -295,10 +302,11 @@ def _calibration(db, since):
                     or row["model"] != reserve["model"] or row["project_id"] != reserve["project_id"]
                     or row["message_id"] != reserve.get("message_id")):
                 return None
-            validator = policy.openai_client.validate_usage if reserve["model"] == policy.openai_client.MODEL else policy.validate_usage
-            usage = validator(usage)
-            if (policy.usage_cost(usage, model=reserve["model"]) != policy._decimal(meta.get("cost_usd"))
-                    or policy.usage_cost(usage, model=reserve["model"]) > policy._decimal(reserve["max_cost_usd"])):
+            definition = policy._price_definition(reserve["model"], reserve["price_version"])
+            usage = definition["validate_usage"](usage)
+            cost = policy.usage_cost(usage, model=reserve["model"], price_version=reserve["price_version"])
+            if (cost != policy._decimal(meta.get("cost_usd"))
+                    or cost > policy._decimal(reserve["max_cost_usd"])):
                 return None
             chars = reserve.get("input_chars")
             if type(chars) is int and 0 < chars <= 2**53:
@@ -313,8 +321,9 @@ def _calibration(db, since):
 
 
 def _costs(item, ratio, fx=None, *, output_limit=1600, output_per_request=None, model=policy.MODEL):
-    prices = ({"input": "0.1", "output": "0.5", "long_input": "0.25", "long_output": "0.75"}
-              if model == policy.openai_client.MODEL else policy.PRICES)
+    definition = policy._price_definition(model)
+    prices = definition["prices"]
+    high_input = prices["reservation_input"] if definition["provider"] == "openai" else prices["long_input"]
     tokens = int((Decimal(item["input_chars"]) * ratio).to_integral_value(rounding="ROUND_CEILING"))
     ceiling = item["requests_estimate"] * output_limit
     output = (min(ceiling, math.ceil(item["requests_estimate"] * output_per_request))
@@ -324,7 +333,7 @@ def _costs(item, ratio, fx=None, *, output_limit=1600, output_per_request=None, 
         output_token_request_ceiling=ceiling,
         output_estimate_basis="observed_usage_mean" if output is not None else "unmeasured",
         estimated_cost_low_usd=str((tokens * Decimal(prices["input"]) + low_output * Decimal(prices["output"])) / 1000000),
-        estimated_cost_high_usd=str((tokens * Decimal(prices["long_input"]) + high_output * Decimal(prices["long_output"])) / 1000000))
+        estimated_cost_high_usd=str((tokens * Decimal(high_input) + high_output * Decimal(prices["long_output"])) / 1000000))
     if fx is not None:
         for bound in ("low", "high"):
             item[f"estimated_cost_{bound}_jpy"] = str(Decimal(item[f"estimated_cost_{bound}_usd"]) * Decimal(str(fx)))
@@ -337,7 +346,7 @@ def _safe_log(row, meta):
         if meta.get("disposition") in ("discarded_scope", "discarded_workday"):
             result["disposition"] = meta["disposition"]
         return result
-    for key, allowed in (("route", policy.ROUTES), ("model", tuple(policy.PROVIDERS.values())),
+    for key, allowed in (("route", policy.ROUTES), ("model", tuple({model for model, _ in policy.PRICE_DEFINITIONS})),
                          ("disposition", ("discarded_scope", "discarded_workday"))):
         if meta.get(key) in allowed:
             result[key] = meta[key]
@@ -349,6 +358,10 @@ def _safe_log(row, meta):
             and row["model"] == meta.get("model")
             and policy._confirmed_openai_quota(meta, row["model"])):
         result["openai_error_code"] = meta["openai_error_code"]
+    if (row["kind"] == "cloud_usage_result"
+            and row["model"] == meta.get("model")
+            and policy._confirmed_openai_rate_diagnostic(meta, row["model"])):
+        result["openai_429_diagnostic"] = meta["openai_429_diagnostic"]
     http = meta.get("http_class")
     if http in ("transport", "timeout") or (isinstance(http, str) and len(http) == 8
                                               and http.startswith("http_") and http[5:].isdigit()):
@@ -357,9 +370,16 @@ def _safe_log(row, meta):
         if key in meta:
             result[key] = str(policy._decimal(meta[key]))
     if isinstance(meta.get("usage"), dict):
-        validator = (policy.openai_client.validate_usage
-                     if meta.get("model") == policy.openai_client.MODEL else policy.validate_usage)
-        result["usage"] = validator(meta["usage"])
+        if "price_version" in meta:
+            try:
+                validator = policy._price_definition(meta.get("model"), meta["price_version"])["validate_usage"]
+            except policy.AnthropicError:
+                validator = None
+        else:
+            validator = (policy.openai_client.validate_usage
+                         if meta.get("model") == policy.openai_client.MODEL else policy.validate_usage)
+        if validator is not None:
+            result["usage"] = validator(meta["usage"])
     for key in ("requests", "input_chars", "estimated_input_tokens", "estimated_output_tokens",
                 "local_facts", "cloud_facts", "matched", "rejected", "held", "repairs",
                 "version", "units", "validated", "validated_units", "rejected_units",
@@ -477,11 +497,12 @@ def observe(cfg, *, root=None, days=14, since=None, project=None, evidence_holds
                 continue
             # Explicit projection: IDs, hashes, owner data and content never leave this query.
             safe = _safe_log(row, meta)
-            if "openai_error_code" in safe:
+            if "openai_error_code" in safe or "openai_429_diagnostic" in safe:
                 try:
                     policy._accounting_meta(row["meta"])
                 except policy.AnthropicError:
-                    safe.pop("openai_error_code")
+                    safe.pop("openai_error_code", None)
+                    safe.pop("openai_429_diagnostic", None)
             log.append(safe)
         _checkpoint(deadline)
         evidence_holds = None

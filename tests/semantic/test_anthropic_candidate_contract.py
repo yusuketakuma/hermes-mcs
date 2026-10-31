@@ -10,9 +10,21 @@ from candidate_testkit import approved_config
 
 
 def test_cloud_sources_cover_client_methods_and_real_modules():
-    assert {"anthropic_client", "cloud_policy", "bounded_http", "patient_context_refresh"} <= set(candidate._MODULES)
+    assert {"cloud_client", "anthropic_client", "cloud_policy", "bounded_http", "patient_context_refresh"} <= set(candidate._MODULES)
     sources = candidate._sources()
-    assert all(sources[name] for name in ("anthropic_client", "cloud_policy", "bounded_http", "patient_context_refresh"))
+    assert all(sources[name] for name in ("cloud_client", "anthropic_client", "cloud_policy", "bounded_http", "patient_context_refresh"))
+
+
+def test_candidate_source_witness_includes_immutable_price_snapshot(monkeypatch):
+    from types import MappingProxyType
+    import openai_client
+
+    before = candidate._sources()["openai_client"]
+    key = (openai_client.MODEL, openai_client.PRICE_VERSION)
+    changed = dict(openai_client.PRICE_SNAPSHOTS)
+    changed[key] = MappingProxyType({**changed[key], "price_valid_until": "2099-01-01"})
+    monkeypatch.setattr(openai_client, "PRICE_SNAPSHOTS", MappingProxyType(changed))
+    assert candidate._sources()["openai_client"] != before
 
 
 def test_explicit_off_and_dry_run_never_read_credentials(monkeypatch):

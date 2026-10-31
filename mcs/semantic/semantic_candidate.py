@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 from mcs_util import payload_hash, valid_hash
 
 # Capture loaded source once; an on-disk update cannot bless an old worker.
-_MODULES = ('inference_version', 'inference_dependency_loss', 'patient_context_artifacts', 'clinical_events', 'patient_context_state', 'rollup', 'measurement_sources', 'measurement_timeline', 'intervention_schedule', 'anthropic_client', 'openai_client', 'cloud_policy', 'cloud_backlog', 'llm_retry', 'mcs_config', 'mcs_util', 'bounded_http', 'patient_context_refresh', 'initial_import_state', 'history_walk', 'semantic_extraction', 'semantic_facts', 'semantic_audit',
+_MODULES = ('inference_version', 'inference_dependency_loss', 'patient_context_artifacts', 'clinical_events', 'patient_context_state', 'rollup', 'measurement_sources', 'measurement_timeline', 'intervention_schedule', 'cloud_client', 'anthropic_client', 'openai_client', 'cloud_policy', 'cloud_backlog', 'llm_retry', 'mcs_config', 'mcs_util', 'bounded_http', 'patient_context_refresh', 'initial_import_state', 'history_walk', 'semantic_extraction', 'semantic_facts', 'semantic_audit',
             'semantic_relations', 'semantic_render', 'semantic_notice', 'semantic_send_gate', 'semantic_llm', 'semantic_jev',
             'semantic', 'semantic_drain', 'semantic_transport', 'semantic_assessment', 'semantic_loops', 'semantic_projection', 'semantic_policy',
             'semantic_acceptance', 'structured_view', 'clinical_display',
@@ -28,7 +28,7 @@ _RUNTIME_STATE = {'semantic_transport': frozenset({'_FMT_MODE', '_FMT_TS', '_LON
                                        '_LONG_MARK_FAILURES', '_LLM_FAILURE'}),
                   'semantic_drain': frozenset({'_BACKLOG_TURN'}),
                   'writer_lock': frozenset({'_MCS_ROOT', 'RUN_LOCK'}),
-                  'cloud_policy': frozenset({'HOME'}),
+                  'cloud_policy': frozenset({'HOME', '_CURRENT_PRICE'}),
                   'mcs_config': frozenset({'REPO', 'CONFIG_RULES'}),
                   'rollup': frozenset({'HOME', 'DB'}),
                   'mcs_util': frozenset({'HOME', 'REPO', 'CONF_PATH', 'DB', 'ATTACH_DIR',
@@ -56,8 +56,14 @@ def _constant(value):
         return ['timezone', value.key]
     def order(item):
         return json.dumps(item, sort_keys=True, ensure_ascii=True, separators=(',', ':'))
-    if kind is dict:
-        return ['dict', sorted([[_constant(k), _constant(v)] for k, v in value.items()], key=order)]
+    if kind in (dict, types.MappingProxyType):
+        return [kind.__name__, sorted([[_constant(k), _constant(v)] for k, v in value.items()], key=order)]
+    if kind is types.FunctionType:
+        if value.__closure__ is not None:
+            raise TypeError('unsupported_candidate_closure')
+        return ['function', value.__module__, value.__qualname__,
+                hashlib.sha256(_code_bytes(value.__code__)).hexdigest(),
+                _constant(value.__defaults__), _constant(value.__kwdefaults__)]
     if kind in (tuple, list, set, frozenset):
         items = [_constant(item) for item in value]
         return [kind.__name__, sorted(items, key=order) if kind in (set, frozenset) else items]

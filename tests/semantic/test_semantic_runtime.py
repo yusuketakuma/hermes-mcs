@@ -26,6 +26,30 @@ def _job(tmp_path):
     return db, dict(row)
 
 
+@pytest.mark.parametrize(("field", "value"), [
+    ("daily_request_budget", 3), ("daily_cost_limit_usd", 1), ("monthly_cost_limit_usd", 2),
+    ("max_concurrency", 1), ("usd_jpy", 100), ("window_budget_usd", 3),
+    ("window_start", "2026-10-30T00:00:00+09:00"), ("until", "2026-11-01T00:00:00+09:00"),
+    ("provider_budgets", {"openai": {"daily_cost_limit_usd": 1, "monthly_cost_limit_usd": 2}}),
+])
+def test_cloud_operating_limit_changes_keep_received_result_generation(field, value):
+    base = {"semantic": {"mode": "shadow", "project_ids": [1], "daily_request_budget": 10},
+            "cloud_llm": {"mode": "on", "provider": "openai", "project_ids": [1]}}
+    changed = {**base, "cloud_llm": {**base["cloud_llm"], field: value}}
+    assert runtime.config_generation(changed) == runtime.config_generation(base)
+
+
+@pytest.mark.parametrize(("section", "field", "value"), [
+    ("cloud_llm", "mode", "off"), ("cloud_llm", "provider", "anthropic"),
+    ("cloud_llm", "project_ids", [2]), ("semantic", "daily_request_budget", 11),
+])
+def test_scope_mode_provider_and_jev_budget_still_change_generation(section, field, value):
+    base = {"semantic": {"mode": "shadow", "project_ids": [1], "daily_request_budget": 10},
+            "cloud_llm": {"mode": "on", "provider": "openai", "project_ids": [1]}}
+    changed = {**base, section: {**base[section], field: value}}
+    assert runtime.config_generation(changed) != runtime.config_generation(base)
+
+
 def test_old_worker_cannot_transition_reused_job_id(tmp_path):
     db, row = _job(tmp_path)
     token = runtime.JobToken.from_row(row)

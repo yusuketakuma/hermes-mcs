@@ -5,6 +5,7 @@ import time
 import pytest
 
 import anthropic_client as a
+import cloud_client
 from test_semantic_cloud import cloud
 
 __all__ = ["cloud"]
@@ -15,6 +16,41 @@ def _reply(**values):
             "content": [{"type": "thinking", "thinking": "ignored"},
                         {"type": "text", "text": '{"synthetic":true}'}],
             "usage": {"input_tokens": 10, "output_tokens": 5}, **values}
+
+
+def test_provider_error_identity_and_neutral_base_are_compatible():
+    assert a.AnthropicError is cloud_client.CloudError
+    assert a.AnthropicClient.__bases__ == (cloud_client.CloudClient,)
+
+
+@pytest.mark.parametrize("kind", ["duplicate", "nan", "infinity"])
+def test_success_with_non_strict_json_is_never_accepted(kind):
+    raw = json.dumps(_reply()).encode()
+    if kind == "duplicate":
+        raw = raw.replace(b'"input_tokens": 10', b'"input_tokens": 10, "input_tokens": 10', 1)
+    else:
+        value = b"NaN" if kind == "nan" else b"1e9999"
+        raw = raw.replace(b'{"model":', b'{"synthetic_invalid":' + value + b',"model":', 1)
+    calls, recorded = [], []
+    provider = a.AnthropicClient("synthetic", post_fn=lambda *args: (calls.append(True) or 200, {}, raw))
+    with pytest.raises(a.AnthropicError, match="protocol_error"):
+        provider.complete("synthetic", deadline=time.monotonic() + 10,
+                          after_result=lambda _reservation, meta: recorded.append(meta))
+    assert len(calls) == len(recorded) == 1
+    assert recorded[0]["http_class"] == "http_200" and recorded[0]["usage"] is None
+
+
+def test_proven_unsent_timeout_is_recorded_once_as_not_sent():
+    calls, recorded = [], []
+    def post(*args):
+        calls.append(True)
+        raise a.bounded_http.NotSentTimeout("synthetic")
+    provider = a.AnthropicClient("synthetic", post_fn=post)
+    with pytest.raises(a.AnthropicError, match="budget_exceeded"):
+        provider.complete("synthetic", deadline=time.monotonic() + 10,
+                          after_result=lambda _reservation, meta: recorded.append(meta))
+    assert len(calls) == len(recorded) == 1
+    assert recorded[0]["http_class"] == "not_sent" and recorded[0]["usage"] is None
 
 
 def test_fixed_body_and_shared_chat_envelope():

@@ -439,3 +439,70 @@ def test_a_result_after_the_price_table_expires_is_settled_at_its_reservation_pr
         assert c.budget_block_reason(ledger, _period()) == "pricing_unverified"
         with pytest.raises(c.AnthropicError):
             c.record_result(ledger, {**reservation, "price_version": "older-table"}, result)
+
+
+def test_provider_cap_reduction_preserves_paid_result_but_blocks_new_reservation(tmp_path, now):
+    high = {"cloud_llm": {"mode": "on", "provider": "anthropic", "project_ids": [1], "daily_cost_limit_usd": 80,
+                          "monthly_cost_limit_usd": 80, "provider_budgets": {"anthropic": {
+                              "daily_cost_limit_usd": 10, "monthly_cost_limit_usd": 10}}}}
+    low = {"cloud_llm": {**high["cloud_llm"], "provider_budgets": {"anthropic": {
+        "daily_cost_limit_usd": 0, "monthly_cost_limit_usd": 0}}}}
+    assert c.scope_generation(high) == c.scope_generation(low)
+    with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
+        reserve = c.usage_reserver(ledger, high, route="reextract", project_id=1, unit_key="paid")
+        reservation = reserve({"model": c.MODEL, "max_tokens": 100}, 2)
+        result = {"model": c.MODEL, "request_fp": reservation["request_fp"],
+                  "usage": {"input_tokens": 10, "output_tokens": 2},
+                  "http_class": "http_200", "request_id": "synthetic", "error_kind": None}
+        c.record_result(ledger, reservation, result)
+        assert len(ledger.artifacts("cloud_usage_result")) == 1
+        assert c.budget_block_reason(ledger, low) == "provider_daily_cap"
+        with pytest.raises(c.AnthropicError) as raised:
+            c.usage_reserver(ledger, low, route="reextract", project_id=1, unit_key="next")(
+                {"model": c.MODEL, "max_tokens": 100}, 2)
+        assert raised.value.detail == "provider_daily_cap"
+        assert len(ledger.artifacts("cloud_usage_reserve")) == 1
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, KeyboardInterrupt, ValueError, TypeError, c.AnthropicError])
+def test_cloud_result_and_circuit_roll_back_together_on_interruption(tmp_path, now, monkeypatch, failure):
+    with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
+        reservation = c.usage_reserver(ledger, _period(), route="reextract", project_id=1, unit_key="atomic")(
+            {"model": c.MODEL, "max_tokens": 100}, 2)
+        c._circuit_result(ledger, c.AnthropicError("timeout", retryable=True))
+        before = [dict(row) for row in ledger.artifacts("cloud_circuit")]
+        original = semantic_runtime._write_circuit_state
+
+        def fail_after_circuit_write(db, state, when, *, kind):
+            assert db.db.in_transaction and len(db.artifacts("cloud_usage_result")) == 1
+            original(db, state, when, kind=kind)
+            assert len(db.artifacts("cloud_circuit")) == len(before) + 1
+            raise failure("synthetic interruption")
+
+        monkeypatch.setattr(semantic_runtime, "_write_circuit_state", fail_after_circuit_write)
+        metadata = {"model": c.MODEL, "request_fp": reservation["request_fp"], "usage": None,
+                    "http_class": "timeout", "error_kind": "timeout"}
+        with pytest.raises(failure, match="synthetic interruption"):
+            c.record_result(ledger, reservation, metadata)
+        assert not ledger.db.in_transaction
+        assert not ledger.artifacts("cloud_usage_result")
+        assert [dict(row) for row in ledger.artifacts("cloud_circuit")] == before
+        report = c.usage_report(ledger)
+        assert report["unresolved_requests"] == 1
+        assert report["max_reserved_cost_usd"] == reservation["max_cost_usd"]
+
+
+def test_replayed_cloud_result_does_not_increment_circuit_twice(tmp_path, now):
+    with closing(Ledger(str(tmp_path / "synthetic.db"))) as ledger:
+        reservation = c.usage_reserver(ledger, _period(), route="reextract", project_id=1, unit_key="replay")(
+            {"model": c.MODEL, "max_tokens": 100}, 2)
+        metadata = {"model": c.MODEL, "request_fp": reservation["request_fp"], "usage": None,
+                    "http_class": "timeout", "error_kind": "timeout"}
+        c.record_result(ledger, reservation, metadata)
+        first = semantic_runtime._circuit_state(ledger, kind="cloud_circuit")
+        circuit_rows = [dict(row) for row in ledger.artifacts("cloud_circuit")]
+        c.record_result(ledger, reservation, metadata)
+        assert first["consecutive_failures"] == 1 and first["failure_class"] == "timeout"
+        assert semantic_runtime._circuit_state(ledger, kind="cloud_circuit") == first
+        assert [dict(row) for row in ledger.artifacts("cloud_circuit")] == circuit_rows
+        assert len(ledger.artifacts("cloud_usage_result")) == 1

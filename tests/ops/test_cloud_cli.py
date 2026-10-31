@@ -12,7 +12,7 @@ import uuid
 
 import pytest
 
-import anthropic_client
+import cloud_client
 import cloud_cli as cli
 import cloud_policy
 import extract_llm
@@ -36,7 +36,7 @@ def world(tmp_path, monkeypatch):
               "cloud_llm": {"mode": "on", "project_ids": [1]}}
     (tmp_path / "config.json").write_text(json.dumps(config))
     monkeypatch.setattr(mcs_util, "load_config", lambda *a, **kw: config)
-    monkeypatch.setattr(anthropic_client.AnthropicClient, "complete", lambda *a, **k: pytest.fail("no API"))
+    monkeypatch.setattr(cloud_client.CloudClient, "complete", lambda *a, **k: pytest.fail("no API"))
     path = tmp_path / "data" / "ledger.db"
     path.parent.mkdir()
     with closing(Ledger(str(path))) as db:
@@ -621,3 +621,25 @@ def test_an_expired_period_older_than_the_usage_history_is_unknown_even_without_
     config["cloud_llm"].update(window_start="2026-08-01T00:00:00+09:00", window_budget_usd=80,
                                until="2026-10-01T00:00:00+09:00")
     assert cli.observe(config, root=str(root))["period_budget"]["spent_or_reserved_usd"] is None
+
+
+def test_dryrun_report_respects_provider_and_historical_versions(world):
+    _, path, _ = world
+    with closing(Ledger(str(path))) as db:
+        with db.db:
+            db.db.execute("BEGIN")
+            cloud_policy.dryrun_tx(db, route="reextract", project_id=1, unit_key="a", input_chars=10)
+            cloud_policy.dryrun_tx(db, route="reextract", project_id=1, unit_key="b", input_chars=20,
+                                   model=cloud_policy.openai_client.MODEL)
+        now = cli.time.time()
+        anthropic = cli._dryrun_report(db.db, float("inf"), now, "anthropic")
+        openai = cli._dryrun_report(db.db, float("inf"), now, "openai")
+        assert anthropic["days"][0]["input_chars"] == 10
+        assert openai["days"][0]["input_chars"] == 20
+        row = db.db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind='cloud_usage_dryrun' ORDER BY artifact_id LIMIT 1").fetchone()
+        bad = json.loads(row["meta"])
+        bad["price_version"] = "synthetic-unknown-version"
+        with db.db:
+            db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?", (json.dumps(bad), row["artifact_id"]))
+        with pytest.raises(ValueError, match="dryrun_observation_invalid"):
+            cli._dryrun_report(db.db, float("inf"), now, "anthropic")
