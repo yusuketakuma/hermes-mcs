@@ -5,7 +5,8 @@
   "upgrade": "更新後に追加操作は不要です。認証情報の変更は次回の処理から反映されます。",
   "details": [
     "送信と再試行の前に、現在の認証情報が処理開始時のものと一致するか確認します。",
-    "健康診断では外部AIの選択先に応じた状態と設定案内を表示します。"
+    "健康診断では外部AIの選択先に応じた状態と設定案内を表示します。",
+    "クラウド解析が途中で予算上限に達した場合、対象や設定が変わっていなければ、保存済みの結果を次回再利用します。"
   ],
-  "refs": ["mcs/semantic/semantic_jev.py", "mcs/semantic/semantic_drain.py", "mcs/ingest/health_report.py"]
+  "refs": ["mcs/semantic/semantic_jev.py", "mcs/semantic/semantic_drain.py", "mcs/semantic/semantic_transport.py", "mcs/ingest/health_report.py"]
 }
