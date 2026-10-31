@@ -1,5 +1,7 @@
 """Synthetic checks for stage-scoped provider observations."""
 
+import pytest
+
 import semantic_transport as transport
 
 
@@ -290,6 +292,148 @@ def test_cached_cloud_chunk_is_unknown_without_independent_receipt(tmp_path, mon
             no_call, member, ledger=ledger, source_fingerprint=bundle['source_fingerprint'], project_id=1)
         assert not stale['reused_chunks'] and not stale['extraction_complete']
         assert stale['producer_evidence'] == {'providers': [], 'complete': False}
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize("change", ["none", "source", "scope", "job", "hard_budget", "hard_off"])
+def test_settled_cloud_prefix_survives_a_send_cutoff_and_is_reused(tmp_path, monkeypatch, change):
+    from contextlib import nullcontext
+    import json
+    import time
+
+    import anthropic_client
+    import cloud_backlog
+    import cloud_policy
+    import extract_llm
+    import semantic_drain
+    import semantic_extraction
+    import semantic_runtime
+    import semantic_store
+    import writer_lock
+    from semantic_testkit import _cfg, _ledger, _llm_v2, _message, _patient
+
+    ledger = _ledger(tmp_path)
+    try:
+        _patient(ledger)
+        ledger.save_messages([_message(body="架空の連絡です。" * 400)])
+        ledger.semantic_seed(1, [1], {"source": "history_import"})
+        with ledger.db:
+            ledger.db.execute("UPDATE messages SET first_seen=?", (time.time() - 601,))
+            ledger.db.execute("UPDATE message_revisions SET observed_at=?", (time.time() - 601,))
+            cloud_policy.capture_history_tx(ledger.db, "synthetic-resume", time.time())
+        job = dict(ledger.db.execute("SELECT * FROM fetch_jobs WHERE kind='semantic'").fetchone())
+        cfg = _cfg("assist", fact_source="shadow", summary_mode="shadow", loop_mode="shadow")
+        cfg["cloud_llm"] = {"mode": "on", "project_ids": [1]}
+        monkeypatch.setattr(extract_llm, "HOME", str(tmp_path))
+        monkeypatch.setattr(extract_llm, "load_config", lambda *a: cfg)
+        monkeypatch.setattr(semantic_drain, "load_config", lambda *a: cfg)
+        monkeypatch.setattr(cloud_policy, "api_key", lambda *a: "synthetic-key")
+        monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 1))
+        monkeypatch.setattr(cloud_backlog, "request_slot", lambda *_: nullcontext(True))
+        monkeypatch.setattr(cloud_backlog, "owner_alive", lambda: True)
+        calls = []
+
+        def request(self, method, body, timeout, **kwargs):
+            calls.append(body)
+            return 200, {}, json.dumps({"model": anthropic_client.MODEL, "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": _llm_v2(body["messages"][0]["content"])}],
+                "usage": {"input_tokens": 10, "output_tokens": 10}}).encode()
+
+        monkeypatch.setattr(anthropic_client.AnthropicClient, "request", request)
+        bundle = semantic_store.thread_bundle(ledger.db, 1, 1)
+        member, fingerprint = bundle["members"][0], bundle["source_fingerprint"]
+        clock = [time.monotonic()]
+        deadline = clock[0] + 120
+        monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+        def direct(fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+        attempts = []
+        def guard(stage):
+            if stage != "llm_attempt":
+                return
+            attempts.append(stage)
+            if len(attempts) == 2 and change == "source":
+                ledger.save_messages([_message(body="変更後の架空の連絡です。")])
+            elif len(attempts) == 2 and change == "scope":
+                cfg["cloud_llm"]["project_ids"] = [2]
+            elif len(attempts) == 2 and change == "job":
+                payload = json.loads(job["payload"])
+                payload["generation"] = "synthetic-changed"
+                with ledger.db:
+                    ledger.db.execute("UPDATE fetch_jobs SET payload=? WHERE job_id=?",
+                                      (json.dumps(payload), job["job_id"]))
+            elif len(attempts) == 2 and change == "hard_budget":
+                raise semantic_runtime.RuntimeBudget("synthetic")
+            elif len(attempts) == 2 and change == "hard_off":
+                raise semantic_runtime.RuntimeOff("synthetic")
+
+        def stages(_ledger, _scfg, _job, _jev, chat, _deadline, **kwargs):
+            transport.set_inference_target(member["message_id"])
+            guarded = semantic_runtime.guarded_llm(chat, guard, deadline, call_reserve=10000)
+            try:
+                semantic_extraction.extract_facts_v2(guarded, member, ledger=ledger, project_id=1,
+                                                     source_fingerprint=fingerprint)
+            except semantic_runtime.RuntimeBudgetShort:
+                clock[0] = deadline + 1
+                raise
+            pytest.fail("the second chunk must be deferred before dispatch")
+
+        monkeypatch.setattr(semantic_drain, "_process_job_inner", stages)
+        status = semantic_drain._process_job(
+            ledger, semantic_drain.runtime_config(cfg)[0], job, None,
+            lambda *_a, **_kw: pytest.fail("local inference must not run"), deadline,
+            lane="backlog", diagnostics=semantic_drain._job_diagnostics(), cloud_transport=direct)
+        assert status == {"hard_budget": "retry", "hard_off": "stale"}.get(change, "deferred_short")
+        chunk = ledger.db.execute("SELECT * FROM artifacts WHERE kind=?",
+                                  (semantic_extraction.KIND_CHUNK_V2,)).fetchone()
+        reserves = ledger.db.execute("SELECT artifact_id,meta FROM artifacts WHERE kind='cloud_usage_reserve'").fetchall()
+        results = ledger.db.execute("SELECT meta FROM artifacts WHERE kind='cloud_usage_result'").fetchall()
+        assert chunk is not None and len(calls) == len(reserves) == len(results) == 1
+        reservation = json.loads(reserves[0]["meta"])
+        assert reservation["logical_target_id"] == member["message_id"]
+        assert reservation["owner"]["semantic_phase"] == "facts"
+        assert reservation["owner"]["semantic_source"] and reservation["owner"]["semantic_generation"]
+        assert reservation["logical_unit_fp"]
+        result = json.loads(results[0]["meta"])
+        assert result["http_class"] == "http_200" and result["usage"]["output_tokens"] == 10
+        dispositions = ledger.db.execute("SELECT * FROM artifacts WHERE kind='cloud_usage_disposition'").fetchall()
+        if change in ("hard_budget", "hard_off"):
+            assert len(dispositions) == 1
+            with pytest.raises(ValueError):
+                cloud_policy.reservation_evidence(ledger.db, reserves[0][0])
+            assert semantic_extraction._cached_provider(ledger.db, chunk, chunk["model"]) is None
+            return
+        assert not dispositions
+        assert cloud_policy.reservation_evidence(ledger.db, reserves[0][0])["result"]["http_class"] == "http_200"
+        if change == "source":
+            updated = semantic_store.thread_bundle(ledger.db, 1, 1)
+            assert updated["source_fingerprint"] != fingerprint
+            with monkeypatch.context() as patch:
+                patch.setattr(transport, "inference_provider", lambda: "anthropic")
+                result = semantic_extraction.extract_facts_v2(
+                    lambda _prompt: None, updated["members"][0], ledger=ledger, project_id=1,
+                    source_fingerprint=updated["source_fingerprint"])
+            assert not result["reused_chunks"] and not result["extraction_complete"]
+            assert len(calls) == 1
+            return
+        if change == "scope":
+            with transport.backlog_inference(ledger, cfg, job, time.monotonic() + 120, lambda: True, direct) as chat:
+                assert chat is None
+            assert len(calls) == 1
+            return
+        if change == "job":
+            assert not semantic_runtime.job_matches(ledger, semantic_runtime.JobToken.from_row(job))
+            return
+        clock[0] = deadline + 2
+        scfg = semantic_drain.runtime_config(cfg)[0]
+        with transport.inference_targets(semantic_runtime.execution_generation(scfg)):
+            transport.set_inference_target(member["message_id"])
+            with transport.backlog_inference(ledger, cfg, job, time.monotonic() + 120, lambda: True, direct) as chat:
+                resumed = semantic_extraction.extract_facts_v2(chat, member, ledger=ledger, project_id=1,
+                                                              source_fingerprint=fingerprint)
+        assert resumed["reused_chunks"] == [0]
+        assert resumed["extraction_complete"] and len(calls) == len(resumed["completed_chunks"])
     finally:
         ledger.close()
 

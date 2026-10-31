@@ -201,6 +201,9 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
     token = _job_model.set(provider)
     try:
         yield chat
+    except runtime.RuntimeBudgetShort:
+        # The next call did not start; previously persisted chunks keep their receipts.
+        raise
     except runtime.RuntimeGuardError:
         if lock_lost is None:
             provider.discard()
