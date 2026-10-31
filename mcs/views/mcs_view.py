@@ -59,6 +59,8 @@ def _artifact_json(r):
         content = json.loads(r["content"])
     except (ValueError, TypeError, RecursionError):
         content = None
+    if isinstance(content, dict):
+        content.pop("__mcs_internal_proof_v1", None)
     return meta, content
 
 

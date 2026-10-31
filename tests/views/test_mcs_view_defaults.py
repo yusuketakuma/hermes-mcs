@@ -62,3 +62,16 @@ def test_coverage_patients_db_error_is_not_hidden(tmp_path):
     assert read_model._coverage(db.db, [], None)["collection"]["patients"] == 1
     with pytest.raises(sqlite3.OperationalError):
         read_model._coverage(_FailingPatients(db.db), [], None)
+
+
+def test_artifact_view_omits_private_replay_proof_without_changing_clinical_content():
+    import json
+
+    raw = json.dumps({"summary": "synthetic clinical result",
+                      "__mcs_internal_proof_v1": {"answer": "synthetic private replay"}})
+    row = {"meta": '{"synthetic":true}', "content": raw}
+    meta, content = mcs_view._artifact_json(row)
+    assert meta == {"synthetic": True}
+    assert content == {"summary": "synthetic clinical result"}
+    assert "synthetic private replay" not in json.dumps(content)
+    assert json.loads(row["content"])["__mcs_internal_proof_v1"]["answer"] == "synthetic private replay"
