@@ -448,6 +448,7 @@ def backlog_stalls(db, cfg, now: float, *, marks: dict | None = None) -> list:
 
 HEALTH_OBSERVATION_S = 0.25
 NOTIFICATION_OBSERVATION_S = 2.0
+HEALTH_SQL_BUDGET_S = 30.0  # one shared window for every SQL read build_health owns
 HEALTH_OBSERVATION_ITEMS = 10002  # 10,000 rows plus the two boundary checks
 HEALTH_OBSERVATION_ROW_BYTES = 2 * 1024 * 1024
 
@@ -502,18 +503,28 @@ def collection_diagnostics_health(db, errors, now):
     return {"observed_at": now, "errors": diagnostics.error_counts(errors), "incomplete": incomplete}
 
 
-def pending_health(db, now):
+def pending_health(db, now, seconds=None):
     """Use the same streamed population for counts and reasons, or keep the old count."""
     import notify_scope
     try:
         breakdown = bounded_health_read(
             db, lambda check: notify_scope.pending_breakdown(db, now, checkpoint=check))
     except Exception:
-        # Optional diagnostics must not hide a real count failure: the original
-        # count still propagates SQLite errors through the existing health path.
-        row = db.execute(
-            "SELECT COUNT(*) c,MIN(created_at) o FROM notify_outbox WHERE "
-            + notify_scope.OUTBOX_PENDING_WHERE, (now,)).fetchone()
+        # Optional diagnostics must not hide a real count failure: a real
+        # SQLite error still propagates through the existing health path;
+        # only a bound stop reports an honest unknown.
+        try:
+            row = bounded_health_read(
+                db, lambda _check: db.execute(
+                    "SELECT COUNT(*) c,MIN(created_at) o FROM notify_outbox WHERE "
+                    + notify_scope.OUTBOX_PENDING_WHERE, (now,)).fetchone(),
+                seconds=seconds)
+        except Exception as exc:
+            if _observation_failure(exc) != "observation_limit":
+                raise
+            return {"pending": None, "oldest_age_s": None,
+                    "pending_by_reason": {"status": "unavailable", "observed_at": now,
+                                          "reason": "observation_limit"}}
         return {"pending": row["c"],
                 "oldest_age_s": round(now - row["o"], 1) if row["o"] else 0,
                 "pending_by_reason": {"status": "unavailable", "observed_at": now,
@@ -602,6 +613,14 @@ def build_health(db, result: dict, status: str,
     import notify_scope
     from mcs_queries import current_extract_pred, json_or_null
     now = time.time()
+    # Every SQL read this build owns shares one window; a slow table spends
+    # the pool and later sections report honest 'unknown' instead of
+    # stalling the tick past the watchdog's patience.
+    observation_end = time.monotonic() + HEALTH_SQL_BUDGET_S
+
+    def remaining():
+        return max(0.05, observation_end - time.monotonic())
+
     notify_res = result.get("notify") or {}
     notify_state = ("incomplete"
                     if notify_res.get("failed") or notify_res.get("skipped")
@@ -609,7 +628,7 @@ def build_health(db, result: dict, status: str,
     # a signal digest scheduled interval_h ahead and never attempted is
     # waiting by design, not pending delivery — everything else counts
     # from its creation, including retries with a future next_try
-    outbox = pending_health(db, now)
+    outbox = pending_health(db, now, seconds=remaining())
     retired = notify_scope.retired_transports(cfg)
     marks = ",".join("?" * len(retired))
     # Preserve retired receipts while excluding only events whose sealed
@@ -620,9 +639,8 @@ def build_health(db, result: dict, status: str,
         f"AND b.transport IN ({marks})) AND NOT EXISTS(SELECT 1 FROM "
         "notification_intent_batches b WHERE b.event_id=o.event_id "
         f"AND b.transport NOT IN ({marks}))") if retired else "0"
-    held_reasons = {}
-    retired_held = 0
-    for row in db.execute(f"""
+    try:
+        _held_rows = bounded_health_read(db, lambda _check: db.execute(f"""
           SELECT CASE
             WHEN code IN ('send_outcome_unknown','restore_text_unverified',
                           'payload_or_progress_invalid','delivery_changed',
@@ -639,54 +657,89 @@ def build_health(db, result: dict, status: str,
                    ({on_retired}) AS retired
             FROM notify_outbox o WHERE state='failed' AND next_try IS NULL
           ) GROUP BY reason, retired ORDER BY reason
-        """, retired * 2):
-        if row["retired"]:
-            retired_held += row["count"]
-        else:
-            held_reasons[row["reason"]] = row["count"]
-    held = sum(held_reasons.values())
+        """, retired * 2).fetchall(), seconds=remaining())
+    except Exception as exc:
+        held = None
+        retired_held = None
+        held_reasons = {"status": "unknown", "observed_at": now,
+                        "reason": _observation_failure(exc)}
+    else:
+        held_reasons = {}
+        retired_held = 0
+        for row in _held_rows:
+            if row["retired"]:
+                retired_held += row["count"]
+            else:
+                held_reasons[row["reason"]] = row["count"]
+        held = sum(held_reasons.values())
+    # an unmeasurable held queue can never read as delivered work
+    if held is None:
+        notify_state = "incomplete"
     # held sends keep their posts' attachments past retention; old ones
     # are counted so files kept for them never sit on disk unnoticed
     held_pins = {"count": 0, "bytes": 0}
     if held:
         notify_state = "incomplete"
-        with suppress(sqlite3.Error):
-            held_pins = maintenance.held_pinned_attachments(db, now)
-    sem = db.execute(
-        "SELECT COUNT(*) c, MIN(created_at) o FROM fetch_jobs "
-        "WHERE kind='semantic' AND state='pending'").fetchone()
-    qc = db.execute(
-        "SELECT COUNT(*) c, MIN(created_at) o FROM fetch_jobs "
-        "WHERE kind='extract_qc' AND state='pending'").fetchone()
+        try:
+            held_pins = bounded_health_read(
+                db, lambda _check: maintenance.held_pinned_attachments(db, now),
+                seconds=remaining())
+        except Exception:
+            held_pins = {"count": None, "bytes": None}
+    try:
+        _pending_rows = bounded_health_read(db, lambda _check: (
+            db.execute(
+                "SELECT COUNT(*) c, MIN(created_at) o FROM fetch_jobs "
+                "WHERE kind='semantic' AND state='pending'").fetchone(),
+            db.execute(
+                "SELECT COUNT(*) c, MIN(created_at) o FROM fetch_jobs "
+                "WHERE kind='extract_qc' AND state='pending'").fetchone()),
+            seconds=remaining())
+    except Exception:
+        _pending_rows = None
     source = ledger_key(db)
     coverage = cached_coverage(extract_llm.EXTRACT_VERSION, now, source)
     if coverage is None:
-        poison = db.execute(
-            f"SELECT COUNT(*) FROM messages m WHERE {ELIGIBLE_MESSAGE} "
-            "AND EXISTS(SELECT 1 FROM artifacts bad "
-            "  WHERE bad.kind='extract_llm' AND bad.message_id=m.message_id"
-            "    AND NOT json_valid(bad.meta))").fetchone()[0]
-        total = db.execute(
-            f"SELECT COUNT(*) FROM messages m WHERE {ELIGIBLE_MESSAGE}"
-        ).fetchone()[0]
-        current = db.execute(f"""
-          SELECT COUNT(*) FROM messages m WHERE {ELIGIBLE_MESSAGE}
-            AND EXISTS(SELECT 1 FROM artifacts a
-              WHERE a.kind='extract_llm' AND a.message_id=m.message_id
-                {current_extract_pred('a', 'm')}
-                AND json_extract({json_or_null('a.meta')},'$.extract_version')=?)
-        """, (extract_llm.EXTRACT_VERSION,)).fetchone()[0]
-        coverage = {
-            "extract_version": extract_llm.EXTRACT_VERSION,
-            "current": current, "eligible": total,
-            "poison_gated": poison,
-            "ratio": round(current / total, 4) if total else None,
-            "counted_at": now, "source": source}
+        try:
+            # join from the rare artifact side: an EXISTS per eligible
+            # message scans the whole table on any data shape
+            poison, total, current = bounded_health_read(db, lambda _check: (
+                db.execute(
+                    f"SELECT COUNT(DISTINCT bad.message_id) FROM artifacts bad "
+                    "JOIN messages m ON m.message_id=bad.message_id "
+                    "WHERE bad.kind='extract_llm' AND NOT json_valid(bad.meta) "
+                    f"AND {ELIGIBLE_MESSAGE}").fetchone()[0],
+                db.execute(
+                    f"SELECT COUNT(*) FROM messages m WHERE {ELIGIBLE_MESSAGE}"
+                ).fetchone()[0],
+                db.execute(f"""
+                  SELECT COUNT(DISTINCT m.message_id) FROM artifacts a
+                    JOIN messages m ON m.message_id=a.message_id
+                    WHERE a.kind='extract_llm' AND {ELIGIBLE_MESSAGE}
+                      {current_extract_pred('a', 'm')}
+                      AND json_extract({json_or_null('a.meta')},'$.extract_version')=?
+                """, (extract_llm.EXTRACT_VERSION,)).fetchone()[0]),
+                seconds=remaining())
+        except Exception as exc:
+            coverage = {
+                "extract_version": extract_llm.EXTRACT_VERSION,
+                "current": None, "eligible": None, "poison_gated": None,
+                "ratio": None, "counted_at": None, "source": source,
+                "status": "unknown", "reason": _observation_failure(exc)}
+        else:
+            coverage = {
+                "extract_version": extract_llm.EXTRACT_VERSION,
+                "current": current, "eligible": total,
+                "poison_gated": poison,
+                "ratio": round(current / total, 4) if total else None,
+                "counted_at": now, "source": source, "status": "recorded"}
     coll = collection(result)
     try:
         import semantic_intake_hold
-        unstored_state = 'present' if semantic_intake_hold.unstored_epoch(db) else 'none_observed'
-    except sqlite3.Error:
+        unstored_state = 'present' if bounded_health_read(
+            db, lambda _check: semantic_intake_hold.unstored_epoch(db),
+            seconds=remaining()) else 'none_observed'
+    except Exception:
         unstored_state = 'unverified'
     previous_intake = prev_health()
     diagnostic_unpersisted = (any(
@@ -722,36 +775,46 @@ def build_health(db, result: dict, status: str,
     # starvation from healthy rotation jobs like reconcile, which
     # progress by payload page with attempts=0), and old unsettled
     # deliveries. Informational only — 'overall' keeps its own rules.
-    _failed_rows = db.execute(
-        "SELECT kind,COUNT(*) c,MAX(updated_at) u FROM fetch_jobs "
-        "WHERE state='failed' AND updated_at>=? GROUP BY kind",
-        (now - 86400,)).fetchall()
-    attention = {
-        "failed_jobs_24h": {r["kind"]: r["c"] for r in _failed_rows},
-        "failed_jobs_latest_at": max(
-            (r["u"] for r in _failed_rows if r["u"] is not None),
-            default=None),
-        "pending_unstarted": {
-            r["kind"]: {"count": r["c"],
-                        "oldest_age_s": round(now - r["o"], 1)}
-            for r in db.execute(
+    try:
+        _failed_rows, _unstarted_rows = bounded_health_read(db, lambda _check: (
+            db.execute(
+                "SELECT kind,COUNT(*) c,MAX(updated_at) u FROM fetch_jobs "
+                "WHERE state='failed' AND updated_at>=? GROUP BY kind",
+                (now - 86400,)).fetchall(),
+            db.execute(
                 "SELECT kind,COUNT(*) c,MIN(created_at) o "
                 "FROM fetch_jobs WHERE state='pending' "
                 # extract_claim rows are leases, not work — an expired
                 # one is a released claim awaiting the daily sweep
                 "AND kind!='extract_claim' "
                 "AND COALESCE(attempts,0)=0 AND updated_at<=created_at "
-                "AND next_try<=? GROUP BY kind", (now,)).fetchall()},
-        "delivery_unsettled": {
-            "attempts": cards_health["attempts_unsettled"],
-            "oldest_age_s": cards_health["oldest_unsettled_age_s"]},
-    }
+                "AND next_try<=? GROUP BY kind", (now,)).fetchall()),
+            seconds=remaining())
+    except Exception as exc:
+        attention = {"status": "unknown", "observed_at": now,
+                     "reason": _observation_failure(exc)}
+    else:
+        attention = {
+            "failed_jobs_24h": {r["kind"]: r["c"] for r in _failed_rows},
+            "failed_jobs_latest_at": max(
+                (r["u"] for r in _failed_rows if r["u"] is not None),
+                default=None),
+            "pending_unstarted": {
+                r["kind"]: {"count": r["c"],
+                            "oldest_age_s": round(now - r["o"], 1)}
+                for r in _unstarted_rows},
+            "delivery_unsettled": {
+                "attempts": cards_health["attempts_unsettled"],
+                "oldest_age_s": cards_health["oldest_unsettled_age_s"]},
+        }
     checked = isinstance(cfg, dict) and cfg is not CONFIG_NOT_LOADED
     # an unchecked run (no config) carries the episode marks forward
     prev_marks = prev_health().get("stall_marks") if not checked else None
     stall_marks: dict = dict(prev_marks) if isinstance(prev_marks, dict) else {}
     try:
-        stalls = (backlog_stalls(db, cfg, now, marks=stall_marks)
+        stalls = (bounded_health_read(
+                      db, lambda _check: backlog_stalls(db, cfg, now, marks=stall_marks),
+                      seconds=remaining())
                   if checked else [])
     except Exception as e:
         # a plain reason code: health_watch validates codes as snake_case
@@ -787,7 +850,12 @@ def build_health(db, result: dict, status: str,
         run["deferred_stages"] = list(result["deferred_stages"])
     run_overdue = run.get("overshoot_s", 0) > 0
     from ledger_audit import guard_status
-    guards = guard_status(db)
+    try:
+        guards = bounded_health_read(db, lambda _check: guard_status(db),
+                                     seconds=remaining())
+    except Exception:
+        # guard_status already fails to this honest 'unverifiable' shape
+        guards = {"state": "unknown", "relations": []}
     guard_violations = any(
         relation["existing_count"] or relation["shadow_count"]
         for relation in guards["relations"])
@@ -861,12 +929,18 @@ def build_health(db, result: dict, status: str,
                    "held_pinned_attachments": held_pins,
                    "incomplete_parts": incomplete_parts,
                    "part_holds": part_holds_health(db, now)},
-        "semantic_jobs": {"pending": sem["c"],
-                          "oldest_age_s": (round(now - sem["o"], 1)
-                                           if sem["o"] else 0)},
-        "extract_qc_jobs": {"pending": qc["c"],
-                            "oldest_age_s": (round(now - qc["o"], 1)
-                                             if qc["o"] else 0)},
+        "semantic_jobs": ({"pending": _pending_rows[0]["c"],
+                           "oldest_age_s": (round(now - _pending_rows[0]["o"], 1)
+                                            if _pending_rows[0]["o"] else 0)}
+                          if _pending_rows is not None else
+                          {"pending": None, "oldest_age_s": None,
+                           "status": "unknown", "observed_at": now}),
+        "extract_qc_jobs": ({"pending": _pending_rows[1]["c"],
+                             "oldest_age_s": (round(now - _pending_rows[1]["o"], 1)
+                                              if _pending_rows[1]["o"] else 0)}
+                            if _pending_rows is not None else
+                            {"pending": None, "oldest_age_s": None,
+                             "status": "unknown", "observed_at": now}),
         # key kept for health.json consumers; the value is the current version
         "extract_v2_coverage": coverage,
         "cards": cards_health,

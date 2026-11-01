@@ -114,22 +114,54 @@ def _digest(fd, end, start=0):
     return result.hexdigest()
 
 
-def _save(directory, state):
-    raw = json.dumps(state, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+def _serialized(state):
+    return json.dumps(state, sort_keys=True, separators=(",", ":"),
+                      allow_nan=False).encode()
+
+
+def _save(directory, backup, state):
+    """Persist state. The canonical file lives inside backups/ so temp+replace
+    churn never changes the data dir's metadata — provider_settings verifies
+    that directory's identity on every settings read and a same-dir rename
+    would read as tampering. data/STATE stays a normalized mirror (pending
+    stripped) republished only on content change, so pinned helpers from
+    older versions still see committed sources and never re-import finished
+    work. A live pending is completed only by the lock holder that recorded
+    it, which is why the mirror never carries one."""
+    raw = _serialized(state)
     if len(raw) > MAX_STATE:
         raise RunLogError("run_log_state_limit")
     temporary = ".mcs-log-state-" + uuid.uuid4().hex
     try:
-        with _file(directory, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL) as fd:
+        with _file(backup, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL) as fd:
             _write(fd, raw)
             os.fsync(fd)
-        os.replace(temporary, STATE, src_dir_fd=directory, dst_dir_fd=directory)
-        os.fsync(directory)
+        os.replace(temporary, STATE, src_dir_fd=backup, dst_dir_fd=backup)
+        os.fsync(backup)
     finally:
         try:
-            os.unlink(temporary, dir_fd=directory)
+            os.unlink(temporary, dir_fd=backup)
         except FileNotFoundError:
             pass
+    mirror = _serialized({**state, "pending": None})
+    try:
+        with _file(directory, STATE) as fd:
+            existing = os.read(fd, MAX_STATE + 1)
+    except FileNotFoundError:
+        existing = None
+    if existing != mirror:
+        temporary = ".mcs-log-state-" + uuid.uuid4().hex
+        try:
+            with _file(directory, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL) as fd:
+                _write(fd, mirror)
+                os.fsync(fd)
+            os.replace(temporary, STATE, src_dir_fd=directory, dst_dir_fd=directory)
+            os.fsync(directory)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except FileNotFoundError:
+                pass
 
 
 def _load(directory):
@@ -170,13 +202,65 @@ def _locked(data_dir):
                              dir_fd=directory)
             try:
                 _check(backup, directory=True)
-                state = _load(directory)
+                state = _load(backup)
+                _adopt(directory, backup, state)
                 _recover(directory, backup, state)
                 yield directory, backup, state
             finally:
                 os.close(backup)
     finally:
         os.close(directory)
+
+
+def _record_current(directory, name, record):
+    """A committed source record still verifying against its live legacy file —
+    the same check migrate() runs before trusting a prior offset."""
+    try:
+        with _legacy(directory, name) as source:
+            info = os.fstat(source)
+            return (record.get("identity") == _identity(info)
+                    and type(record.get("offset")) is int
+                    and 0 <= record["offset"] <= info.st_size
+                    and _digest(source, record["offset"]) == record.get("sha256"))
+    except (OSError, RunLogError):
+        return False
+
+
+def _adopt(directory, backup, state):
+    """Fold foreign state at the legacy location into the canonical state.
+
+    Helpers pinned to older versions still write data/STATE; their committed
+    imports must merge under the lock — never be dropped (re-imports would
+    duplicate log bytes) and never clobber newer progress. Identical content
+    is our own republished mirror and needs no merge."""
+    try:
+        os.stat(STATE, dir_fd=directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    foreign = _load(directory)
+    if foreign == {**state, "pending": None}:
+        return
+    pending = foreign["pending"]
+    if pending is not None and pending != state["pending"]:
+        if state["pending"] is not None:
+            # two staged writes recorded against different log contents;
+            # ordering is ambiguous — fail closed for a human
+            raise RunLogError("run_log_state_conflict")
+        state["pending"] = pending
+    for name, record in foreign["sources"].items():
+        current = state["sources"].get(name)
+        if current is None:
+            state["sources"][name] = record
+        elif (type(record.get("offset")) is int
+                and type(current.get("offset")) is int
+                and record.get("identity") == current.get("identity")
+                and record["offset"] > current["offset"]
+                and _record_current(directory, name, record)):
+            # a verified foreign record proves an applied import this
+            # process missed; an unverifiable or stale one loses to ours
+            state["sources"][name] = record
+    state["rotation_ready"] = state["rotation_ready"] or foreign["rotation_ready"]
+    _save(directory, backup, state)
 
 
 def _stage_name(name):
@@ -234,7 +318,7 @@ def _recover(directory, backup, state):
                     raise RunLogError("run_log_rotation_changed")
                 os.fsync(live)
             state["pending"] = None
-            _save(directory, state)
+            _save(directory, backup, state)
             return
         if pending["kind"] != "append":
             raise RunLogError("run_log_state_invalid")
@@ -271,7 +355,7 @@ def _recover(directory, backup, state):
                 raise RunLogError("run_log_state_invalid")
             state["sources"][pending["source"]] = pending["next_source"]
         state["pending"] = None
-        _save(directory, state)
+        _save(directory, backup, state)
         # Imports remain verified recovery copies; ordinary append staging is disposable only after commit.
         if pending.get("source") is None:
             os.unlink(name, dir_fd=backup)
@@ -289,7 +373,7 @@ def _prepare(directory, backup, state, stage, *, start=0, source=None, next_sour
         if source is not None:
             pending["next_source"] = next_source
         state["pending"] = pending
-        _save(directory, state)
+        _save(directory, backup, state)
     _recover(directory, backup, state)
 
 
@@ -395,9 +479,9 @@ def enable_rotation(data_dir, *, legacy_writers_closed):
     """Accept the lifecycle owner's stop proof; this helper never guesses process ownership."""
     if legacy_writers_closed is not True:
         raise RunLogError("run_log_legacy_writers_unknown")
-    with _locked(data_dir) as (directory, _backup, state):
+    with _locked(data_dir) as (directory, backup, state):
         state["rotation_ready"] = True
-        _save(directory, state)
+        _save(directory, backup, state)
 
 
 def rotate(data_dir, max_bytes=5 * 1024 * 1024):
@@ -415,7 +499,7 @@ def rotate(data_dir, max_bytes=5 * 1024 * 1024):
             os.fsync(live)
             state["pending"] = {"kind": "rotate", "archive": archive, "identity": _identity(info),
                                 "size": info.st_size, "sha256": _digest(live, info.st_size)}
-            _save(directory, state)
+            _save(directory, backup, state)
         _recover(directory, backup, state)
         return {"rotated": True, "archive": BACKUPS + "/" + archive}
 

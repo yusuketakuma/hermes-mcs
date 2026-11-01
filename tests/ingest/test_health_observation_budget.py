@@ -272,6 +272,69 @@ def test_monitor_rechecks_unknown_cards_even_if_producer_reasons_are_missing(tmp
     assert stale["status"] == "stale" and stale["state_reasons"] is None
 
 
+def test_exhausted_sql_budget_reports_unknowns_never_fake_counts(stored, monkeypatch):
+    """When the shared observation window is spent, every health SQL read
+    stops at its bound and reports honest 'unknown' — a slow table can no
+    longer stall the tick, and nothing reads as a healthy zero."""
+    clock = iter(range(100, 10000))
+    monkeypatch.setattr(health_report.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(health_report, "HEALTH_SQL_BUDGET_S", 0.001)
+    report = health_report.build_health(stored, {"errors": [], "notify": {}}, "ok", cfg={})
+    notify = report["notify"]
+    assert notify["held_reasons"]["status"] == "unknown"
+    assert notify["held"] is None and notify["retired_held"] is None
+    assert notify["state"] == "incomplete"
+    assert report["semantic_jobs"]["pending"] is None
+    assert report["extract_qc_jobs"]["status"] == "unknown"
+    assert report["extract_v2_coverage"]["status"] == "unknown"
+    assert report["extract_v2_coverage"]["current"] is None
+    assert report["attention"]["status"] == "unknown"
+    assert report["semantic_intake_unstored"] == "unverified"
+    assert report["overall"] == "degraded"
+    # the tick's connection survived every bound: no leaked savepoint or handler
+    assert stored.execute("SELECT 1").fetchone()[0] == 1
+
+
+def test_pending_count_exhaustion_is_unknown_not_a_fake_zero(stored, monkeypatch):
+    def fail_breakdown(*args, **kwargs):
+        raise RuntimeError("synthetic diagnostic failure")
+    monkeypatch.setattr(notify_scope, "pending_breakdown", fail_breakdown)
+    clock = iter(range(100, 10000))
+    monkeypatch.setattr(health_report.time, "monotonic", lambda: next(clock))
+    report = health_report.pending_health(stored, NOW, seconds=0.001)
+    assert report["pending"] is None
+    assert report["pending_by_reason"]["status"] == "unavailable"
+    assert report["pending_by_reason"]["reason"] == "observation_limit"
+
+
+def test_pending_count_failure_still_propagates_real_errors(stored, monkeypatch):
+    def fail_breakdown(*args, **kwargs):
+        raise RuntimeError("synthetic diagnostic failure")
+    monkeypatch.setattr(notify_scope, "pending_breakdown", fail_breakdown)
+    monkeypatch.setattr(health_report.time, "monotonic", lambda: 100.0)
+    stored.execute("DROP TABLE notify_outbox")
+    with pytest.raises(sqlite3.Error):
+        health_report.pending_health(stored, NOW)
+
+
+def test_coverage_joins_count_distinct_messages(stored, monkeypatch):
+    """The join-driven coverage COUNTs must keep EXISTS semantics: a message
+    with several matching artifacts still counts once."""
+    stored.execute(
+        "INSERT INTO messages(message_id,project_id,body_text,body_state,"
+        "content_hash,first_seen) VALUES(1,1,'body','full','h'*64,1)")
+    for _ in range(2):  # two poison artifacts on ONE message
+        stored.execute(
+            "INSERT INTO artifacts(kind,message_id,project_id,content,meta,created_at) "
+            "VALUES('extract_llm',1,1,'{}','not-json',1)")
+    stored.commit()
+    monkeypatch.setattr(health_report, "prev_health", lambda: {})
+    report = health_report.build_health(stored, {"errors": [], "notify": {}}, "ok", cfg={})
+    coverage = report["extract_v2_coverage"]
+    assert coverage["poison_gated"] == 1 and coverage["eligible"] == 1
+    assert coverage["current"] == 0 and coverage["status"] == "recorded"
+
+
 @pytest.mark.parametrize("unknown", ["cards", "parts", "both", "unread", "intake"])
 def test_unknown_blocks_never_hide_unreadable_reasons_or_delay_alert(tmp_path, unknown):
     health = {"at": NOW, "overall": "degraded", "state_reasons": ["notification_pending:3"]}

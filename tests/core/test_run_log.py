@@ -1,11 +1,13 @@
 """Synthetic private runtime logging, record serialization and failure recovery."""
 import errno
+import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import time
+import uuid
 
 import pytest
 
@@ -26,7 +28,8 @@ def test_large_record_and_partial_final_line_are_preserved(data):
     assert (data / run_log.LOG).read_bytes() == payload
     assert (data / run_log.LOG).stat().st_mode & 0o777 == 0o600
     assert json.loads((data / run_log.STATE).read_text())["pending"] is None
-    assert list((data / run_log.BACKUPS).iterdir()) == []
+    # the canonical state file lives inside backups/; nothing else does
+    assert [path.name for path in (data / run_log.BACKUPS).iterdir()] == [run_log.STATE]
 
 
 @pytest.mark.parametrize("attempt", range(5))
@@ -109,7 +112,10 @@ def test_disk_failure_repairs_original_record_before_next_append(data, monkeypat
         patch.setattr(run_log.os, "write", fail)
         with pytest.raises(OSError):
             run_log.append(data, b"original record\n")
-    assert json.loads((data / run_log.STATE).read_text())["pending"] is not None
+    # pending survives only in the canonical state inside backups/; the
+    # data-dir mirror always normalizes it away
+    assert json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())["pending"] is not None
+    assert json.loads((data / run_log.STATE).read_text())["pending"] is None
     run_log.append(data, b"next\n")
     assert (data / run_log.LOG).read_bytes() == b"before\noriginal record\nnext\n"
 
@@ -117,10 +123,10 @@ def test_disk_failure_repairs_original_record_before_next_append(data, monkeypat
 def test_crash_after_fsync_before_state_commit_never_duplicates_record(data, monkeypatch):
     save = run_log._save
 
-    def crash(directory, state):
+    def crash(directory, backup, state):
         if state["pending"] is None:
             raise KeyboardInterrupt
-        return save(directory, state)
+        return save(directory, backup, state)
 
     with monkeypatch.context() as patch:
         patch.setattr(run_log, "_save", crash)
@@ -209,7 +215,8 @@ def test_rotation_crash_after_rename_is_recovered_before_append(data, monkeypatc
             run_log.rotate(data, 1)
     run_log.append(data, b"new\n")
     assert (data / run_log.LOG).read_bytes() == b"new\n"
-    assert [path.read_bytes() for path in (data / run_log.BACKUPS).iterdir()] == [b"archived\n"]
+    archives = [path for path in (data / run_log.BACKUPS).iterdir() if path.name != run_log.STATE]
+    assert [path.read_bytes() for path in archives] == [b"archived\n"]
 
 
 def test_maintenance_default_never_touches_legacy_or_shared_logs(data, monkeypatch):
@@ -285,12 +292,90 @@ def test_append_io_measurement_is_reported_without_a_speed_claim(data, monkeypat
         calls.append(fd)
         return fsync(fd)
 
+    # the first-ever append also publishes the state mirror once; warm it up
+    # so the measured loop reflects steady-state appends only
+    run_log.append(data, b"warm-up\n")
     monkeypatch.setattr(run_log.os, "fsync", count)
     started = time.monotonic()
     for _ in range(20):
         run_log.append(data, b"synthetic runtime event\n")
     elapsed = time.monotonic() - started
     assert len(calls) == 160
-    assert (data / run_log.LOG).read_bytes() == b"synthetic runtime event\n" * 20
+    assert (data / run_log.LOG).read_bytes() == b"warm-up\n" + b"synthetic runtime event\n" * 20
     print(json.dumps({"fixture": "20 synthetic durable records", "fsync_calls": len(calls),
                       "elapsed_s": elapsed, "speed_claim": False}))
+
+
+def test_appends_never_change_the_data_directory_entry_metadata(data):
+    """provider_settings verifies the data dir's file identity on every
+    settings read; create/replace/unlink entries there read as tampering.
+    Canonical state now lives inside backups/, so a steady-state append
+    leaves the directory's own metadata untouched."""
+    run_log.append(data, b"warm\n")
+    before = os.stat(data)
+    identity = (before.st_mtime_ns, before.st_ctime_ns)
+    for _ in range(5):
+        run_log.append(data, b"steady\n")
+        after = os.stat(data)
+        assert (after.st_mtime_ns, after.st_ctime_ns) == identity
+
+
+def test_canonical_state_lives_in_backups_with_a_normalized_data_mirror(data):
+    run_log.append(data, b"x\n")
+    canonical = json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())
+    mirror = json.loads((data / run_log.STATE).read_text())
+    assert mirror == {**canonical, "pending": None}
+
+
+def _foreign_state(data, **overrides):
+    """A state file written the way a pinned older helper leaves it."""
+    value = {"version": 1, "sources": {}, "pending": None, "rotation_ready": False}
+    value.update(overrides)
+    path = data / run_log.STATE
+    path.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")))
+    path.chmod(0o600)
+    return value
+
+
+def test_foreign_state_from_an_older_helper_is_folded_in(data):
+    run_log.append(data, b"new-side\n")
+    _foreign_state(data, sources={
+        "run.log": {"identity": [1, 2], "offset": 3,
+                    "sha256": "0" * 64, "backup": "a" * 32 + ".bin"}},
+        rotation_ready=True)
+    run_log.append(data, b"after\n")
+    merged = json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())
+    assert merged["sources"]["run.log"]["offset"] == 3
+    assert merged["rotation_ready"] is True
+    # the mirror was republished once, holding the merged committed view
+    assert json.loads((data / run_log.STATE).read_text()) == {**merged, "pending": None}
+
+
+def test_foreign_pending_staged_by_an_older_helper_is_completed(data):
+    run_log.append(data, b"base\n")
+    payload = b"old-side staged bytes\n"
+    stage_name = uuid.uuid4().hex + ".bin"
+    stage = data / run_log.BACKUPS / stage_name
+    stage.write_bytes(payload)
+    stage.chmod(0o600)
+    info = (data / run_log.LOG).stat()
+    _foreign_state(data, pending={
+        "kind": "append", "stage": stage_name, "start": 0, "end": len(payload),
+        "sha256": hashlib.sha256(payload).hexdigest(), "offset": info.st_size,
+        "identity": [info.st_dev, info.st_ino], "source": None})
+    run_log.append(data, b"next\n")
+    assert (data / run_log.LOG).read_bytes() == b"base\nold-side staged bytes\nnext\n"
+    assert json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())["pending"] is None
+    assert not stage.exists()  # ordinary staging is disposable once committed
+
+
+def test_two_live_pending_writes_fail_closed(data):
+    run_log.append(data, b"base\n")
+    canonical = json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())
+    canonical["pending"] = {"kind": "append", "stage": "a" * 32 + ".bin"}
+    path = data / run_log.BACKUPS / run_log.STATE
+    path.write_text(json.dumps(canonical, sort_keys=True, separators=(",", ":")))
+    path.chmod(0o600)
+    _foreign_state(data, pending={"kind": "append", "stage": "b" * 32 + ".bin"})
+    with pytest.raises(run_log.RunLogError, match="state_conflict"):
+        run_log.append(data, b"next\n")

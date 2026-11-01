@@ -31,7 +31,7 @@ def test_import_is_ordered_idempotent_and_originals_are_kept(data):
     assert (data / run_log.LOG).read_bytes() == b"older\nlater\n"
     assert rotated.read_bytes() == b"older\n" and active.read_bytes() == b"later\n"
     assert run_log.migrate(data, ["run.log.1", "run.log"])["imported"] == []
-    backups = list((data / run_log.BACKUPS).iterdir())
+    backups = [path for path in (data / run_log.BACKUPS).iterdir() if path.name != run_log.STATE]
     assert sorted(path.read_bytes() for path in backups) == sorted([b"older\n", b"later\n"])
     assert all(path.stat().st_mode & 0o777 == 0o600 for path in backups)
 
@@ -76,9 +76,9 @@ def test_import_crash_recovery_has_no_duplicate_or_missing_bytes(data, monkeypat
     save, write = run_log._save, run_log.os.write
     prepared, target_writes = False, 0
 
-    def crash_save(directory, state):
+    def crash_save(directory, backup, state):
         nonlocal prepared
-        result = save(directory, state)
+        result = save(directory, backup, state)
         if state["pending"] is not None:
             prepared = True
             if phase == "before_append":
@@ -98,10 +98,10 @@ def test_import_crash_recovery_has_no_duplicate_or_missing_bytes(data, monkeypat
                 return write(fd, raw[:3])
         return write(fd, raw)
 
-    def before_commit(directory, state):
+    def before_commit(directory, backup, state):
         if prepared and state["pending"] is None and phase == "after_append":
             raise KeyboardInterrupt
-        return crash_save(directory, state)
+        return crash_save(directory, backup, state)
 
     with monkeypatch.context() as patch:
         patch.setattr(run_log, "_save", before_commit)
@@ -118,8 +118,8 @@ def test_partial_import_refuses_foreign_destination_tail(data, monkeypatch):
     legacy(data)
     save = run_log._save
 
-    def crash(directory, state):
-        save(directory, state)
+    def crash(directory, backup, state):
+        save(directory, backup, state)
         if state["pending"] is not None:
             raise KeyboardInterrupt
 
