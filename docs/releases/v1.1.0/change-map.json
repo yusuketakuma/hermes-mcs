@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 425,
+  "fragment_count": 427,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2557,6 +2557,18 @@
       "id": "sdc-config-known-key-20261101",
       "title": "SDC設定の診断表示を修正",
       "sha256": "60bdcd8fa57fe30a28dd54d19f33b5ac1a38c485d859a062ae08cb1b7a179ab8"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-gc-lock-deadline-20261101.json",
+      "id": "cloud-gc-lock-deadline-20261101",
+      "title": "抽出前の整理でロック待ちが長引く問題を修正",
+      "sha256": "e167b8115fcf15bfba2beb99b846f518b20c15677e62138b95cb31f55be738db"
+    },
+    {
+      "path": "changes/archive/1.1.0/slack-emoji-remote-match-20261101.json",
+      "id": "slack-emoji-remote-match-20261101",
+      "title": "Slackの返信で絵文字による重複投稿を抑制",
+      "sha256": "8b5d11570a16416f475efad1fa9f918b85a003d244250b2f9f51ae051431fe98"
     }
   ]
 }

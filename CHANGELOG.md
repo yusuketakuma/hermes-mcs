@@ -63,6 +63,12 @@
 
 ### 不具合修正
 
+- **抽出前の整理でロック待ちが長引く問題を修正**
+  古い抽出結果の整理が収集処理のロックを待つ場合、整理の制限時間を超えて抽出対象の選択が遅れる問題を修正します。
+
+- **Slackの返信で絵文字による重複投稿を抑制**
+  Slackの返信履歴で絵文字の表記が変わった場合も、対応する既存の返信を確認して重複投稿を抑えます。
+
 - **途中の解析と未送達の通知を、完了と混同しないよう修正**
   解析の制限時間到達を監視へ反映し、集約位置の保存だけが一時的に競合した場合は、残り時間がある範囲で解析を続けます。通知カードだけの更新では未送達の本文・添付を解消せず、同じ通知先と内容の配送記録を確認します。監視できなかった件数は0件ではなく不明として扱います。
 
@@ -598,6 +604,9 @@
 - [提供元別設定への更新手順を追加](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-initial-migration-20261101.json)
 - [通常更新時のAI設定移行を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-legacy-update-migration-20261101.json)
 - [SDC設定の診断表示を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/sdc-config-known-key-20261101.json)
+
+- [抽出前の整理でロック待ちが長引く問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-gc-lock-deadline-20261101.json)
+- [Slackの返信で絵文字による重複投稿を抑制](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/slack-emoji-remote-match-20261101.json)
 
 </details>
 
