@@ -268,8 +268,14 @@ def worker(parent):
                         "phase": "extract" if phase % 2 == 0 else "semantic", "done": result.get("done", 0),
                         "elapsed_s": round(time.monotonic() - started, 3), "ts": time.time()}
                     record.update({key: result[key] for key in
-                        ("selected", "deferred", "context_blocked", "skipped", "lock_lost", "slow_deferred")
+                        ("selected", "deferred", "context_blocked", "skipped", "lock_lost", "slow_deferred",
+                         "failed", "held_prior", "carried")
                         if type(result.get(key)) is int and result[key] >= 0})
+                    if type(result.get("disk_low")) is bool:
+                        record["disk_low"] = result["disk_low"]
+                    calls = result.get("llm_calls")
+                    if isinstance(calls, dict) and type(calls.get("calls")) is int and calls["calls"] >= 0:
+                        record["llm_calls"] = {"calls": calls["calls"]}
                     if result.get("cloud_selection_incomplete") is True:
                         record["cloud_selection_incomplete"] = True
                         reason = result.get("cloud_selection_reason")

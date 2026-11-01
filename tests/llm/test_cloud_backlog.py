@@ -296,6 +296,42 @@ def carry_worker(tmp_path, monkeypatch):
     return state, fake_ledger
 
 
+@pytest.mark.parametrize('diagnostics,expected', [
+    ({'failed': 0, 'held_prior': 2, 'carried': 3, 'disk_low': False,
+      'llm_calls': {'calls': 0, 'private': 'synthetic-private-detail'}},
+     {'failed': 0, 'held_prior': 2, 'carried': 3, 'disk_low': False, 'llm_calls': {'calls': 0}}),
+    ({'failed': 4, 'held_prior': 0, 'carried': 0, 'disk_low': True, 'llm_calls': {'calls': 5}},
+     {'failed': 4, 'held_prior': 0, 'carried': 0, 'disk_low': True, 'llm_calls': {'calls': 5}}),
+    ({}, {}),
+    ({'failed': True, 'held_prior': -1, 'carried': 1.5, 'disk_low': 1, 'llm_calls': {'calls': True}}, {}),
+    ({'failed': 'synthetic-private-detail', 'held_prior': None,
+      'carried': {'private': 'synthetic-private-detail'}, 'disk_low': 'synthetic-private-detail',
+      'llm_calls': {'calls': -1}}, {}),
+    ({'disk_low': None, 'llm_calls': ['synthetic-private-detail']}, {}),
+    ({'llm_calls': {'calls': 1.5}}, {}),
+    ({'llm_calls': {'calls': 'synthetic-private-detail'}}, {}),
+    ({'llm_calls': {'private': 'synthetic-private-detail'}}, {}),
+])
+def test_worker_logs_only_safe_existing_diagnostics(carry_worker, monkeypatch, capsys, diagnostics, expected):
+    import extract_llm
+    state, _ = carry_worker
+
+    def extract(*args, **kwargs):
+        state.alive = False
+        return {'done': 1, **diagnostics, 'private': 'synthetic-private-detail',
+                'pids': ['synthetic-private-detail']}
+
+    monkeypatch.setattr(extract_llm, 'run_pending', extract)
+    backlog.worker(991)
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    passes = [item for item in records if item['event'] == 'cloud_backlog_pass']
+    assert len(passes) == 1 and state.closed
+    keys = {'failed', 'held_prior', 'carried', 'disk_low', 'llm_calls'}
+    assert {key: passes[0][key] for key in keys if key in passes[0]} == expected
+    assert 'private' not in passes[0] and 'pids' not in passes[0]
+    assert 'synthetic-private-detail' not in json.dumps(records)
+
+
 @pytest.mark.parametrize('block', [None, 'mode', 'stop', 'budget'])
 def test_worker_waits_and_reloads_unreadable_config(carry_worker, monkeypatch, capsys, block):
     import extract_llm
