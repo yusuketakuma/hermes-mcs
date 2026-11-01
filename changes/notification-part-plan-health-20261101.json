@@ -1,0 +1,14 @@
+{
+  "category": "added",
+  "title": "通知部品の未完了集計に、配送計画の新旧による内訳 by_plan を追加",
+  "summary": "稼働状態(health.json)の通知部品の未完了集計に by_plan を追加し、未完了部品を2つに区別します。current は同じカードにより新しい配送成功の計画記録がない計画の未完了部品、superseded はその記録がある古い計画の未完了部品です。unknown を未送達と断定せず、どちらも未完了部品として総数に含めます。未完了の合計件数・警告条件・再送・承認条件は変わりません。",
+  "upgrade": "通常の更新で適用され、追加設定は不要です。通知の再送・承認条件は変わりません。",
+  "details": [
+    "superseded は「同じカードに、より新しい配送成功の計画記録がある」ことだけを示し、部品の配送完了や対応不要を意味しません。同じカード・通知先・部品・内容の送達を後続の記録で確認できない限り未完了の件数に残ります。",
+    "新しい計画が送信待ち・送信中・保留・未送信・取消・送信結果不明なら分類は変わらず current に残ります。分類は計画の新旧だけを示し、通知先の異なる新しい計画でも同じカードの配送成功記録なら superseded です。",
+    "観測に失敗した場合(status=unknown)は by_plan も件数不明(null)で返し、成功時と同じキー構成にします。",
+    "配送状態の読取りだけを変更し、送信・受領記録の書き方は変えません。"
+  ],
+  "refs": ["mcs/notify/notify_scope.py", "mcs/ingest/health_report.py",
+           "tests/notify/test_incomplete_part_health.py", "tests/ingest/test_health_observation_budget.py"]
+}

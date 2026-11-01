@@ -32,11 +32,13 @@ def stored(tmp_path, monkeypatch):
 
 def _empty(now=NOW):
     return {"total": 0, "cards": 0, "by_state": dict.fromkeys(STATES, 0),
+            "by_plan": {"current": 0, "superseded": 0},
             "oldest_age_s": None, "observed_at": now}
 
 
 def _assert_unknown(parts, reason):
     assert parts == {"total": None, "cards": None, "by_state": dict.fromkeys(STATES),
+                     "by_plan": dict.fromkeys(("current", "superseded")),
                      "oldest_age_s": None, "observed_at": NOW,
                      "status": "unknown", "reason": reason}
 

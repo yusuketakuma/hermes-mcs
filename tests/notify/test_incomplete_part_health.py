@@ -381,7 +381,8 @@ def test_matching_malformed_scope_cannot_resolve_an_old_part(stored, transport, 
     report = notify_scope.incomplete_parts_health(stored, NOW)
     assert report['total'] == report['cards'] == 1
     assert report['by_state']['unknown'] == 1 and stored.total_changes == before
-    assert set(report) == {'total', 'cards', 'by_state', 'oldest_age_s', 'observed_at'}
+    assert set(report) == {'total', 'cards', 'by_state', 'by_plan',
+                           'oldest_age_s', 'observed_at'}
     assert stored.execute('SELECT state FROM notification_render_parts WHERE delivery_id=?', (old,)).fetchone()[0] == 'unknown'
 
 
@@ -495,6 +496,116 @@ def test_real_failed_thread_then_card_only_delivery_keeps_the_old_plan_incomplet
     assert report['total'] == len(old_parts) and report['cards'] == 1
     assert report['by_state']['held'] == len(old_parts) - 1
     assert led.db.total_changes == before
+
+
+def test_failed_part_replans_on_the_next_render_without_duplicating(led, tmp_path):
+    """The safe retry path for unsent parts: the next update render reposts a
+    proven-unsent part fresh while delivered parts keep prior_remote_id, and
+    the old failed row clears only once the retry's own delivery is proven."""
+    import notify_cards
+    from notify_testkit import (CFG, NOW as DELIVERY_NOW, _attach, _begin, _dispatch, _intent,
+                                _latest_render, _part_receipt, _receipt, _seed_thread)
+
+    _seed_thread(led, mids=(100,))
+    path = tmp_path / 'synthetic.bin'
+    blob = b'synthetic attachment'
+    path.write_bytes(blob)
+    _attach(led, 100, local_path=str(path),
+            sha256=hashlib.sha256(blob).hexdigest(), nbytes=len(blob))
+    assert _dispatch(led, _intent(led, payload={'message_ids': [100]}))['dispatched']
+    first = _latest_render(led)
+    assert _begin(led, first)['granted']
+    assert _receipt(led, first, f'{1:016x}', message_id='synthetic-card')['applied']
+    assert _part_receipt(led, first, 'thread', remote_id='synthetic-thread')['applied']
+    non_card = [dict(row) for row in led.db.execute(
+        "SELECT part_id,kind FROM notification_render_parts WHERE delivery_id=? AND kind!='card'",
+        (first['delivery_id'],))]
+    failed_part = None
+    n = 60
+    for part in non_card:
+        if part['kind'] == 'thread':
+            continue
+        n += 1
+        if failed_part is None and part['kind'] == 'attachment_part':
+            failed_part = part['part_id']
+            assert _part_receipt(led, first, failed_part, result='not_sent',
+                                 remote_id=None, error_code='http_400', n=n)['applied']
+        else:
+            assert _part_receipt(led, first, part['part_id'], remote_id='r-' + part['part_id'],
+                                 n=n)['applied']
+    assert failed_part is not None
+    with led.db:
+        assert notify_cards.issue_render(led.db, first['card_id'], CFG, DELIVERY_NOW + 1, [], force=True)
+    later = _latest_render(led)
+    assert later['delivery_id'] != first['delivery_id'] and later['state'] == 'queued'
+    manifest = {p['part_id']: p for p in json.loads(later['spec_json'])['parts']['manifest']}
+    retry = manifest[failed_part]
+    assert not retry.get('prior_remote_id')          # unsent: reposted, cannot duplicate
+    assert any(p['kind'] == 'body_part' and p.get('prior_remote_id')
+               for p in manifest.values())           # delivered: never reposted
+    report = notify_scope.incomplete_parts_health(led.db, DELIVERY_NOW + 1, CFG)
+    assert report['total'] == 1                      # still owed until the retry lands
+    assert report['by_plan'] == {'current': 1, 'superseded': 0}
+    assert _begin(led, later, n=2)['granted']
+    assert _receipt(led, later, f'{2:016x}', message_id='synthetic-card-2', n=10)['applied']
+    n = 200
+    for part in led.db.execute(
+            "SELECT part_id FROM notification_render_parts WHERE delivery_id=? AND kind!='card'",
+            (later['delivery_id'],)):
+        n += 1
+        assert _part_receipt(led, later, part['part_id'], remote_id='r2-' + part['part_id'], n=n)['applied']
+    report = notify_scope.incomplete_parts_health(led.db, DELIVERY_NOW + 2, CFG)
+    assert report['total'] == 0
+    assert report['by_plan'] == {'current': 0, 'superseded': 0}
+
+
+def test_by_plan_splits_live_debt_from_superseded_plan_history(stored):
+    card, _ = _render(stored, [('body_part', 'not_sent', 'synthetic_failure')])
+    _render(stored, [('body_part', 'not_sent', 'synthetic_failure')], card=card, revision=2)
+    report = notify_scope.incomplete_parts_health(stored, NOW, SLACK)
+    assert report['total'] == 2 and report['cards'] == 1
+    assert report['by_plan'] == {'current': 1, 'superseded': 1}
+
+
+def test_by_plan_proven_parts_neither_current_nor_superseded(stored):
+    card, _ = _render(stored, [('body_part', 'not_sent', 'synthetic_failure')])
+    _render(stored, [('body_part', 'delivered', None)], card=card, revision=2)
+    report = notify_scope.incomplete_parts_health(stored, NOW, SLACK)
+    assert report['total'] == 0
+    assert report['by_plan'] == {'current': 0, 'superseded': 0}
+
+
+@pytest.mark.parametrize('new_state', ['queued', 'sending', 'held', 'not_sent', 'cancelled', 'unknown'])
+def test_unconfirmed_later_render_keeps_the_delivered_plan_current(stored, new_state):
+    card, _ = _render(stored, [('body_part', 'unknown', None)])
+    _render(stored, [('body_part', 'pending', None)], card=card, revision=2,
+            render_state=new_state)
+    report = notify_scope.incomplete_parts_health(stored, NOW, SLACK)
+    assert report['by_plan'] == {'current': 1, 'superseded': 0}
+
+
+def test_by_plan_marks_only_the_same_card_newer_delivered_render(stored):
+    card, _ = _render(stored, [('body_part', 'unknown', None)])
+    _render(stored, [('body_part', 'unknown', None)])   # a different card's plan proves nothing
+    _render(stored, [('body_part', 'delivered', None)], card=card, revision=2,
+            render_state='queued')
+    report = notify_scope.incomplete_parts_health(stored, NOW, SLACK)
+    assert report['total'] == 2 and report['cards'] == 2
+    assert report['by_plan'] == {'current': 2, 'superseded': 0}
+    _render(stored, [('body_part', 'delivered', None)], card=card, revision=3)
+    report = notify_scope.incomplete_parts_health(stored, NOW, SLACK)
+    assert report['total'] == 1
+    assert report['by_plan'] == {'current': 1, 'superseded': 0}
+
+
+def test_by_plan_is_card_level_even_when_the_newer_scope_differs(stored):
+    card, _ = _render(stored, [('body_part', 'unknown', None)])
+    _, moved = _render(stored, [('body_part', 'delivered', None)], card=card, revision=2)
+    stored.execute("UPDATE notification_renders SET channel_id='synthetic-channel-2' "
+                   "WHERE delivery_id=?", (moved,))
+    report = notify_scope.incomplete_parts_health(stored, NOW, SLACK)
+    assert report['total'] == 1
+    assert report['by_plan'] == {'current': 0, 'superseded': 1}
 
 
 def test_mixed_parts_count_cards_once_and_preserve_borrowed_transaction(stored):

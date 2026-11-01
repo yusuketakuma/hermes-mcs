@@ -589,7 +589,10 @@ def incomplete_parts_health(db, now: float, cfg=None) -> dict:
                          for _ in scope_fields(transport))
     rows = db.execute(
         "SELECT p.delivery_id,p.part_id,p.state,p.kind,p.error_code,r.card_id,"
-        "COALESCE(p.updated_at,r.created_at) oldest "
+        "COALESCE(p.updated_at,r.created_at) oldest,"
+        "EXISTS(SELECT 1 FROM notification_renders newer "
+        "WHERE newer.card_id=r.card_id AND newer.render_rev>r.render_rev "
+        "AND newer.state='delivered') superseded "
         "FROM notification_render_parts p "
         "JOIN notification_renders r USING(delivery_id) "
         "JOIN notification_cards c USING(card_id) "
@@ -625,6 +628,7 @@ def incomplete_parts_health(db, now: float, cfg=None) -> dict:
         "   OR (p.kind='thread' AND sent.part_id=p.part_id)))" + live,
         proof_params + retired)
     states = dict.fromkeys(('pending', 'unknown', 'not_sent', 'held'), 0)
+    by_plan = {"current": 0, "superseded": 0}
     cards, checked, covered, cache = set(), set(), set(), {}
     oldest = None
     for row in rows:
@@ -638,12 +642,13 @@ def incomplete_parts_health(db, now: float, cfg=None) -> dict:
             if (row['delivery_id'], row['part_id']) in covered:
                 continue
         states[row['state']] += 1
+        by_plan["superseded" if row['superseded'] else "current"] += 1
         cards.add(row['card_id'])
         at = _finite(row['oldest'])
         if at is not None:
             oldest = min(oldest, at) if oldest is not None else at
     return {"total": sum(states.values()), "cards": len(cards),
-            "by_state": states,
+            "by_state": states, "by_plan": by_plan,
             "oldest_age_s": max(0.0, now - oldest) if oldest is not None else None,
             "observed_at": now}
 

@@ -585,6 +585,7 @@ def incomplete_parts_health(db, now, cfg=None) -> dict:
     except Exception as exc:
         return {"total": None, "cards": None,
                 "by_state": dict.fromkeys(("pending", "unknown", "not_sent", "held")),
+                "by_plan": dict.fromkeys(("current", "superseded")),
                 "oldest_age_s": None, "observed_at": now,
                 "status": "unknown", "reason": _observation_failure(exc)}
     return {**report, "status": "recorded"}
