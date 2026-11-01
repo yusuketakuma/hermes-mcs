@@ -407,15 +407,23 @@ def test_update_stop_does_not_commit_old_carried_result(tmp_path, monkeypatch):
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
+    monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 123))
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "2", "--semantic", "--stop-after", "10"])
-    monkeypatch.setattr(extract_llm, "run_pending", lambda *a, **kw: {
-        "done": 0, "failed": 0, "left": 1, "selected": 1, "carry": carry})
+    reached = []
+
+    def run(*args, **kwargs):
+        reached.append("run_pending")
+        return {"done": 0, "failed": 0, "left": 1, "selected": 1, "carry": carry}
+
+    monkeypatch.setattr(extract_llm, "run_pending", run)
 
     def updated(*args):
+        reached.append("updated")
         monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 124))
         return {"run_lock_lost": "updated"}
     monkeypatch.setattr(extract_llm, "_background_semantic", updated)
     assert extract_llm.main() == 0
+    assert reached == ["run_pending", "updated"]
     assert db.artifacts("extract_llm", message_id=1) == []
     assert _claims(db) == []
     db.db.close()
@@ -432,15 +440,20 @@ def test_context_lane_checks_update_fence_before_settling_carry(tmp_path, monkey
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
+    monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 123))
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "3", "--stop-after", "10"])
 
+    reached = []
+
     def run(*a, **kw):
+        reached.append("run_pending")
         monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 124))
         return {"done": 0, "failed": 0, "left": 1, "selected": 1, "carry": carry}
     monkeypatch.setattr(extract_llm, "run_pending", run)
     monkeypatch.setattr(extract_llm, "_background_context_refresh",
                         lambda *a: {"status": "deferred", "done": 0})
     assert extract_llm.main() == 0
+    assert reached == ["run_pending"]
     assert db.artifacts("extract_llm", message_id=1) == []
     assert _claims(db) == []
     db.db.close()
@@ -457,6 +470,7 @@ def test_lane3_rechecks_update_after_acquiring_settlement_lock(tmp_path, monkeyp
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
     generation = [123]
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, generation[0]))
+    monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 123))
     monkeypatch.setattr(extract_llm.sys, "argv", [
         "extract_llm", "--all", "--lane", "3", "--stop-after", "10"])
     armed = [False]
