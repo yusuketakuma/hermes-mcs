@@ -457,6 +457,10 @@ def bounded_health_read(db, read, seconds=None):
     """Bound additive reads on the tick-owned connection; preserve its transaction."""
     seconds = HEALTH_OBSERVATION_S if seconds is None else seconds  # read at call time
     deadline = time.monotonic() + seconds
+    # a depleted window starts no read at all — the callback, the SQL and
+    # the savepoint all stay untouched so the tick can finish on time
+    if time.monotonic() >= deadline:
+        raise RuntimeError("observation_limit")
     items = 0
 
     def checkpoint():

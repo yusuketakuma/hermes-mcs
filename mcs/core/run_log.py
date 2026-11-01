@@ -149,6 +149,21 @@ def _publish(directory, raw):
     os.fsync(directory)
 
 
+def _write_canonical(backup, raw):
+    temporary = ".mcs-log-state-" + uuid.uuid4().hex
+    try:
+        with _file(backup, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL) as fd:
+            _write(fd, raw)
+            os.fsync(fd)
+        os.replace(temporary, STATE, src_dir_fd=backup, dst_dir_fd=backup)
+        os.fsync(backup)
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=backup)
+        except FileNotFoundError:
+            pass
+
+
 def _save(directory, backup, state):
     """Persist state. The canonical file lives inside backups/ so temp+replace
     churn never changes the data dir's metadata — provider_settings verifies
@@ -162,18 +177,7 @@ def _save(directory, backup, state):
     if len(raw) > MAX_STATE:
         raise RunLogError("run_log_state_limit")
     _publish(directory, raw)
-    temporary = ".mcs-log-state-" + uuid.uuid4().hex
-    try:
-        with _file(backup, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL) as fd:
-            _write(fd, raw)
-            os.fsync(fd)
-        os.replace(temporary, STATE, src_dir_fd=backup, dst_dir_fd=backup)
-        os.fsync(backup)
-    finally:
-        try:
-            os.unlink(temporary, dir_fd=backup)
-        except FileNotFoundError:
-            pass
+    _write_canonical(backup, raw)
 
 
 def _load(directory):
@@ -330,7 +334,17 @@ def _adopt(directory, backup, state):
             state["sources"][name] = record
     if foreign is not None:
         state["rotation_ready"] = state["rotation_ready"] or foreign["rotation_ready"]
-    _save(directory, backup, state)
+    raw = _serialized(state)
+    if len(raw) > MAX_STATE:
+        raise RunLogError("run_log_state_limit")
+    # The merge must be durable before the mirror — the foreign record's
+    # only other copy — is overwritten; a torn republish is then simply
+    # regenerated from this canonical write on the next lock. Ordering is
+    # still safe for pinned helpers: the pre-publish mirror IS the foreign
+    # helper's own last-committed view, so a crash between the two writes
+    # leaves it a consistent state it can resume from.
+    _write_canonical(backup, raw)
+    _publish(directory, raw)
 
 
 def _stage_name(name):

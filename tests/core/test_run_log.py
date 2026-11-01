@@ -388,27 +388,10 @@ def test_two_live_pending_writes_fail_closed(data):
 
 
 # --- pre-migration helpers -------------------------------------------------
-# A pinned older helper shares this module's semantics but persists state at
-# data/STATE only (canonical-in-backups did not exist): same lock, same stage
-# directory, state written by atomic replace.
-
-
-@contextmanager
-def _old_locked(data):
-    directory = run_log._directory(data)
-    try:
-        with run_log._file(directory, run_log.LOCK, os.O_RDWR) as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            backup = os.open(run_log.BACKUPS, os.O_RDONLY | os.O_DIRECTORY
-                             | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory)
-            try:
-                state = run_log._load(directory)
-                run_log._recover(directory, backup, state)
-                yield directory, backup, state
-            finally:
-                os.close(backup)
-    finally:
-        os.close(directory)
+# Faithful copies of the pinned helper's own code (state lives at data/STATE
+# only — canonical-in-backups did not exist): same lock, same stage dir,
+# state written by atomic replace. They deliberately do NOT reuse the
+# current _recover/_prepare, so differences between generations stay visible.
 
 
 def _old_save(directory, _backup, state):
@@ -428,13 +411,159 @@ def _old_save(directory, _backup, state):
             pass
 
 
-def _old_append(data, payload, monkeypatch):
-    with monkeypatch.context() as patch:
-        patch.setattr(run_log, "_save", _old_save)
-        with _old_locked(data) as (directory, backup, state):
-            with run_log._new_stage(backup) as (name, stage):
-                run_log._write(stage, payload)
-            run_log._prepare(directory, backup, state, name)
+def _old_recover(directory, backup, state):
+    """The pinned helper's own _recover: strict recorded-window bounds (the
+    live log may never outgrow it), stage files must exist, and import
+    receipts land unconditionally."""
+    pending = state["pending"]
+    if pending is None:
+        return
+    if pending["kind"] == "rotate":
+        name = run_log._stage_name(pending["archive"])
+        try:
+            with run_log._file(backup, name) as archived:
+                if (run_log._identity(os.fstat(archived)) != pending["identity"]
+                        or os.fstat(archived).st_size != pending["size"]
+                        or run_log._digest(archived, pending["size"]) != pending["sha256"]):
+                    raise run_log.RunLogError("run_log_rotation_changed")
+        except FileNotFoundError:
+            with run_log._file(directory, run_log.LOG) as live:
+                if (run_log._identity(os.fstat(live)) != pending["identity"]
+                        or os.fstat(live).st_size != pending["size"]
+                        or run_log._digest(live, pending["size"]) != pending["sha256"]):
+                    raise run_log.RunLogError("run_log_rotation_changed")
+            os.rename(run_log.LOG, name, src_dir_fd=directory, dst_dir_fd=backup)
+            os.fsync(backup)
+            os.fsync(directory)
+        with run_log._file(directory, run_log.LOG, os.O_WRONLY | os.O_CREAT) as live:
+            if os.fstat(live).st_size:
+                raise run_log.RunLogError("run_log_rotation_changed")
+            os.fsync(live)
+        state["pending"] = None
+        _old_save(directory, backup, state)
+        return
+    if pending["kind"] != "append":
+        raise run_log.RunLogError("run_log_state_invalid")
+    name = run_log._stage_name(pending["stage"])
+    start, end, offset = pending["start"], pending["end"], pending["offset"]
+    if any(type(n) is not int or n < 0 for n in (start, end, offset)) or start > end:
+        raise run_log.RunLogError("run_log_state_invalid")
+    with run_log._file(backup, name) as source, \
+            run_log._file(directory, run_log.LOG, os.O_RDWR | os.O_CREAT | os.O_APPEND) as target:
+        if (os.fstat(source).st_size != end or run_log._digest(source, end) != pending["sha256"]
+                or run_log._identity(os.fstat(target)) != pending["identity"]):
+            raise run_log.RunLogError("run_log_pending_changed")
+        size = os.fstat(target).st_size
+        if not offset <= size <= offset + end - start:
+            raise run_log.RunLogError("run_log_pending_changed")
+        checked = 0
+        while checked < size - offset:
+            amount = min(run_log.BLOCK, size - offset - checked)
+            if os.pread(target, amount, offset + checked) != os.pread(source, amount, start + checked):
+                raise run_log.RunLogError("run_log_pending_changed")
+            checked += amount
+        position = start + size - offset
+        while position < end:
+            raw = os.pread(source, min(run_log.BLOCK, end - position), position)
+            if not raw:
+                raise run_log.RunLogError("run_log_pending_changed")
+            run_log._write(target, raw)
+            position += len(raw)
+        os.fsync(target)
+        if (os.fstat(target).st_size != offset + end - start
+                or run_log._digest(target, offset + end - start, offset) != run_log._digest(source, end, start)):
+            raise run_log.RunLogError("run_log_pending_changed")
+    if pending.get("source") is not None:
+        if pending["source"] not in run_log.LEGACY_NAMES or not isinstance(pending.get("next_source"), dict):
+            raise run_log.RunLogError("run_log_state_invalid")
+        state["sources"][pending["source"]] = pending["next_source"]
+    state["pending"] = None
+    _old_save(directory, backup, state)
+    # Imports remain verified recovery copies; ordinary append staging is
+    # disposable only after commit.
+    if pending.get("source") is None:
+        os.unlink(name, dir_fd=backup)
+        os.fsync(backup)
+
+
+def _old_prepare(directory, backup, state, stage, *, start=0, source=None, next_source=None):
+    with run_log._file(backup, stage) as staged, \
+            run_log._file(directory, run_log.LOG, os.O_RDWR | os.O_CREAT | os.O_APPEND) as live:
+        end = os.fstat(staged).st_size
+        pending = {"kind": "append", "stage": stage, "start": start, "end": end,
+                   "sha256": run_log._digest(staged, end),
+                   "offset": os.fstat(live).st_size,
+                   "identity": run_log._identity(os.fstat(live)), "source": source}
+        if source is not None:
+            pending["next_source"] = next_source
+        state["pending"] = pending
+        _old_save(directory, backup, state)
+    _old_recover(directory, backup, state)
+
+
+@contextmanager
+def _old_locked(data):
+    directory = run_log._directory(data)
+    try:
+        with run_log._file(directory, run_log.LOCK, os.O_RDWR | os.O_CREAT) as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                os.mkdir(run_log.BACKUPS, 0o700, dir_fd=directory)
+            except FileExistsError:
+                pass
+            backup = os.open(run_log.BACKUPS, os.O_RDONLY | os.O_DIRECTORY
+                             | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory)
+            try:
+                state = run_log._load(directory)
+                _old_recover(directory, backup, state)
+                yield directory, backup, state
+            finally:
+                os.close(backup)
+    finally:
+        os.close(directory)
+
+
+def _old_append(data, payload):
+    with _old_locked(data) as (directory, backup, state):
+        with run_log._new_stage(backup) as (name, stage):
+            run_log._write(stage, payload)
+        _old_prepare(directory, backup, state, name)
+
+
+def _old_migrate(data, names):
+    """The pinned helper's migrate(): verified-prefix import of allowlisted
+    legacy logs with the receipt written at data/STATE."""
+    with _old_locked(data) as (directory, backup, state):
+        for name in names:
+            with run_log._legacy(directory, name) as source:
+                info = os.fstat(source)
+                old = state["sources"].get(name)
+                offset = 0
+                if old is not None:
+                    if (not isinstance(old, dict) or old.get("identity") != run_log._identity(info)
+                            or type(old.get("offset")) is not int
+                            or not 0 <= old["offset"] <= info.st_size
+                            or run_log._digest(source, old["offset"]) != old.get("sha256")):
+                        raise run_log.RunLogError("run_log_legacy_changed")
+                    offset = old["offset"]
+                if offset == info.st_size:
+                    continue
+                with run_log._new_stage(backup) as (stage_name, stage):
+                    position = 0
+                    while position < info.st_size:
+                        raw = os.pread(source, min(run_log.BLOCK, info.st_size - position), position)
+                        if not raw:
+                            raise run_log.RunLogError("run_log_legacy_changed")
+                        run_log._write(stage, raw)
+                        position += len(raw)
+                    digest = run_log._digest(stage, info.st_size)
+                if (run_log._identity(os.fstat(source)) != run_log._identity(info)
+                        or run_log._digest(source, info.st_size) != digest):
+                    raise run_log.RunLogError("run_log_legacy_changed")
+                next_source = {"identity": run_log._identity(info), "offset": info.st_size,
+                               "sha256": digest, "backup": stage_name}
+                _old_prepare(directory, backup, state, stage_name, start=offset,
+                             source=name, next_source=next_source)
 
 
 def _crash_mid_record(data, monkeypatch, payload):
@@ -464,13 +593,13 @@ def test_old_helper_finishes_a_crashed_record_before_its_own_append(data, monkey
     pinned helper must see the pending in the mirror, complete it, then
     append — and the new side must accept the resolution, never fail or
     duplicate it."""
-    run_log.append(data, b"before\n")
+    _old_append(data, b"before\n")
     _crash_mid_record(data, monkeypatch, b"record\n")
     # the crash left a live pending — visible verbatim to older helpers
     canonical = json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())
     assert canonical["pending"] is not None
     assert json.loads((data / run_log.STATE).read_text()) == canonical
-    _old_append(data, b"legacy following\n", monkeypatch)
+    _old_append(data, b"legacy following\n")
     assert (data / run_log.LOG).read_bytes() == b"before\nrecord\nlegacy following\n"
     run_log.append(data, b"next\n")
     assert (data / run_log.LOG).read_bytes() == b"before\nrecord\nlegacy following\nnext\n"
@@ -480,26 +609,61 @@ def test_old_helper_finishes_a_crashed_record_before_its_own_append(data, monkey
 def test_foreign_pending_is_adopted_once_our_pending_is_applied(data, monkeypatch):
     """The helper resolved our crashed record, staged its own write, then
     died: its pending folds in and completes — no conflict, no gap."""
-    run_log.append(data, b"before\n")
+    _old_append(data, b"before\n")
     _crash_mid_record(data, monkeypatch, b"record\n")
     # old helper finishes ours, then dies mid-way through its own record
-    with monkeypatch.context() as patch:
-        patch.setattr(run_log, "_save", _old_save)
-        with _old_locked(data) as (directory, backup, state):
-            with run_log._new_stage(backup) as (name, stage):
-                run_log._write(stage, b"old-side\n")
-            with run_log._file(backup, name) as staged, \
-                    run_log._file(directory, run_log.LOG, os.O_RDWR | os.O_CREAT | os.O_APPEND) as live:
-                end = os.fstat(staged).st_size
-                state["pending"] = {
-                    "kind": "append", "stage": name, "start": 0, "end": end,
-                    "sha256": run_log._digest(staged, end),
-                    "offset": os.fstat(live).st_size,
-                    "identity": run_log._identity(os.fstat(live)), "source": None}
-                _old_save(directory, backup, state)
+    with _old_locked(data) as (directory, backup, state):
+        with run_log._new_stage(backup) as (name, stage):
+            run_log._write(stage, b"old-side\n")
+        with run_log._file(backup, name) as staged, \
+                run_log._file(directory, run_log.LOG, os.O_RDWR | os.O_CREAT | os.O_APPEND) as live:
+            end = os.fstat(staged).st_size
+            state["pending"] = {
+                "kind": "append", "stage": name, "start": 0, "end": end,
+                "sha256": run_log._digest(staged, end),
+                "offset": os.fstat(live).st_size,
+                "identity": run_log._identity(os.fstat(live)), "source": None}
+            _old_save(directory, backup, state)
     assert (data / run_log.LOG).read_bytes() == b"before\nrecord\n"
     run_log.append(data, b"next\n")
     assert (data / run_log.LOG).read_bytes() == b"before\nrecord\nold-side\nnext\n"
+
+
+def test_torn_republish_never_loses_a_folded_foreign_receipt(data, monkeypatch):
+    """The merge's canonical write must land before the mirror — the foreign
+    receipt's only other copy — is overwritten. Reproduce: old append, our
+    append dies mid-record, the helper finishes it and imports a legacy
+    line, we fold the receipt in, the republish tears after 40 bytes — the
+    import must still be receipted afterwards, never re-imported."""
+    _old_append(data, b"before\n")
+    _crash_mid_record(data, monkeypatch, b"record\n")
+    legacy = data / "run.log"
+    legacy.write_bytes(b"legacy one\n")
+    legacy.chmod(0o600)
+    _old_migrate(data, ["run.log"])
+    assert (data / run_log.LOG).read_bytes() == b"before\nrecord\nlegacy one\n"
+
+    def torn(directory, raw):
+        with run_log._file(directory, run_log.STATE, os.O_RDWR) as fd:
+            os.write(fd, raw[:40])
+            os.fsync(fd)
+        raise OSError(errno.EIO, "synthetic torn mirror publish")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(run_log, "_publish", torn)
+        with pytest.raises(OSError):
+            run_log.append(data, b"new\n")
+    # the merge reached the canonical copy before the mirror was touched
+    canonical = json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())
+    assert "run.log" in canonical["sources"]
+    run_log.append(data, b"new\n")
+    assert json.loads((data / run_log.STATE).read_text()) == json.loads(
+        (data / run_log.BACKUPS / run_log.STATE).read_text())
+    imported = run_log.migrate(data, ["run.log"])
+    assert imported["imported"] == []
+    log = (data / run_log.LOG).read_bytes()
+    assert log == b"before\nrecord\nlegacy one\nnew\n"
+    assert log.count(b"legacy one\n") == 1
 
 
 def test_a_torn_mirror_is_regenerated_from_canonical(data):

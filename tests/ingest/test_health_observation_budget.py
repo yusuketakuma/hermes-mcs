@@ -317,6 +317,21 @@ def test_pending_count_failure_still_propagates_real_errors(stored, monkeypatch)
         health_report.pending_health(stored, NOW)
 
 
+def test_depleted_budget_never_starts_the_read(stored):
+    """seconds<=0 is a depleted window: no SQL, no callback, no savepoint —
+    the 'stop at the deadline' contract holds before any work begins."""
+    calls = []
+    with pytest.raises(RuntimeError, match="observation_limit"):
+        health_report.bounded_health_read(
+            stored, lambda check: calls.append(check), seconds=0)
+    with pytest.raises(RuntimeError, match="observation_limit"):
+        health_report.bounded_health_read(
+            stored, lambda check: calls.append(check), seconds=-1)
+    assert calls == []
+    # nothing touched the connection: no busy_timeout change, no savepoint
+    assert stored.execute("SELECT 1").fetchone()[0] == 1
+
+
 def test_unobserved_pending_count_is_incomplete_never_ok(stored, tmp_path, monkeypatch):
     """Breakdown stops at its bound and the fallback count exhausts too:
     an unmeasured pending queue is incomplete work, never a healthy zero —
