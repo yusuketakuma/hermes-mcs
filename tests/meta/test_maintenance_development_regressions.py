@@ -252,3 +252,9 @@ def test_shadow_cli_malformed_cases_stop_before_model(monkeypatch, tmp_path, cap
     assert module.main() == 1
     assert calls == [] and not output.exists()
     assert "Traceback" not in capsys.readouterr().err
+
+
+def test_initial_history_gallery_uses_current_identity_schema():
+    module = _load("generate_slack_gallery")
+    svg = module.initial_history()
+    assert "初回の履歴" in svg and "120" in svg

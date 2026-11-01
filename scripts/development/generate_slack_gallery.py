@@ -394,8 +394,10 @@ def initial_history():
     import _mcs_path  # noqa: F401
     import notify_history
     with closing(sqlite3.connect(":memory:")) as db:
-        db.execute("CREATE TABLE patients(project_id INTEGER PRIMARY KEY,patient_name TEXT)")
-        db.execute("INSERT INTO patients VALUES(1,'山田 花子')")
+        db.row_factory = sqlite3.Row
+        db.execute("CREATE TABLE patients(project_id INTEGER PRIMARY KEY,patient_name TEXT,"
+                   "project_type TEXT,group_id INTEGER,group_name TEXT,is_archived INTEGER DEFAULT 0)")
+        db.execute("INSERT INTO patients(project_id,patient_name) VALUES(1,'山田 花子')")
         card = {"project_id": 1,
                 "anchor_key": json.dumps({"source": "initial_history", "cohort_id": "0" * 32}),
                 "ui_state": json.dumps({"history_snapshot": {

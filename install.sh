@@ -278,7 +278,9 @@ except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
 ' "$_install_lock_fd" "$_lock_file" || die "更新の排他制御を確認できません。記録を保持して担当者に確認してください"
     else
         if [ -e "$_lock_file" ] || [ -L "$_lock_file" ]; then
-            [ -f "$_lock_file" ] && [ ! -L "$_lock_file" ] || die "排他制御ファイルを確認できません"
+            if [ ! -f "$_lock_file" ] || [ -L "$_lock_file" ]; then
+                die "排他制御ファイルを確認できません"
+            fi
         fi
         if [ "${MCS_UPDATE_RUN_LOCK_FD:-}" = 9 ]; then
             exec 8>>"$_lock_file" || die "排他制御ファイルを開けません"
@@ -293,9 +295,10 @@ except (OSError, ValueError, OverflowError): raise SystemExit(1) from None
         IFS=' ' read -r _lock_dev _lock_inode _lock_owner _lock_mode _lock_links <<EOF
 $_lock_stat
 EOF
-        [ "$_lock_stat" = "$_lock_dev $_lock_inode $_lock_owner $_lock_mode $_lock_links" ] \
-            && [ "$_lock_owner" = "$_lock_uid" ] && [ "$_lock_mode" = 600 ] && [ "$_lock_links" = 1 ] \
-            || die "排他制御ファイルの所有者または権限を確認できません"
+        if ! { [ "$_lock_stat" = "$_lock_dev $_lock_inode $_lock_owner $_lock_mode $_lock_links" ] \
+            && [ "$_lock_owner" = "$_lock_uid" ] && [ "$_lock_mode" = 600 ] && [ "$_lock_links" = 1 ]; }; then
+            die "排他制御ファイルの所有者または権限を確認できません"
+        fi
         if command -v lockf >/dev/null 2>&1; then
             lockf -s -t 0 "$_install_lock_fd" || die "別の導入または更新が進行中です。完了後に再実行してください"
         elif command -v flock >/dev/null 2>&1; then
@@ -1032,13 +1035,15 @@ if [ -n "$_fresh_data_info" ] && [ "$CONFIG_ABSENT" -eq 1 ]; then
     # Refuse known prior state before writing the hold. The clone itself is
     # permitted; these paths indicate prior runtime credentials or data.
     for _prior in .env chrome-profile token_cache.json backups exports mcs-exports .install-options-migration.pending; do
-        [ ! -e "$MCS_ROOT/$_prior" ] && [ ! -L "$MCS_ROOT/$_prior" ] \
-            || die "以前の設定またはデータがあるため初回導入できません。更新・復旧の手順を確認してください"
+        if [ -e "$MCS_ROOT/$_prior" ] || [ -L "$MCS_ROOT/$_prior" ]; then
+            die "以前の設定またはデータがあるため初回導入できません。更新・復旧の手順を確認してください"
+        fi
     done
     for _prior in "$MCS_ROOT"/.env.* "$MCS_ROOT"/.env-*; do
         case "$_prior" in "$MCS_ROOT/.env.example"|"$MCS_ROOT/.env.template") continue ;; esac
-        [ ! -e "$_prior" ] && [ ! -L "$_prior" ] \
-            || die "以前の設定があるため初回導入できません。更新・復旧の手順を確認してください"
+        if [ -e "$_prior" ] || [ -L "$_prior" ]; then
+            die "以前の設定があるため初回導入できません。更新・復旧の手順を確認してください"
+        fi
     done
     _fresh_root_info="$(_lock_info "$MCS_ROOT")" || die "初回導入の保存先を確認できません"
     IFS=' ' read -r _fr_dev _fr_ino _fr_uid _fr_mode _fr_links <<EOF
@@ -1050,8 +1055,9 @@ EOF
     for _number in "$_fr_dev" "$_fr_ino" "$_fr_uid" "$_fr_mode" "$_fr_links" "$_fd_dev" "$_fd_ino" "$_fd_uid" "$_fd_mode" "$_fd_links"; do
         case "$_number" in ''|*[!0-9]*) die "初回導入の保存先を確認できません" ;; esac
     done
-    [ "$_fr_uid" = "$_lock_uid" ] && [ "$_fd_uid" = "$_lock_uid" ] && [ "$_fd_mode" = 700 ] \
-        || die "初回導入の保存先を確認できません"
+    if ! { [ "$_fr_uid" = "$_lock_uid" ] && [ "$_fd_uid" = "$_lock_uid" ] && [ "$_fd_mode" = 700 ]; }; then
+        die "初回導入の保存先を確認できません"
+    fi
     (set -C; printf '{"version":1,"root":[%s,%s,%s,%s],"data":[%s,%s,%s,%s],"config":null}\n' \
         "$_fr_dev" "$_fr_ino" "$_fr_uid" "$((0$_fr_mode))" \
         "$_fd_dev" "$_fd_ino" "$_fd_uid" "$((0$_fd_mode))" > "$_fresh_marker") \
