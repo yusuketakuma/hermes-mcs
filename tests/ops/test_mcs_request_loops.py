@@ -12,16 +12,17 @@ import pytest
 import ledger
 import mcs_requests as requests
 import mcs_view
+import request_loops
 import semantic_loops
 from semantic_testkit import _cfg, _message, _pending_fact, _seeded
 
 
-def _candidate_setup(tmp_path):
+def _candidate_setup(tmp_path, *, local_model=None):
     db = _seeded(tmp_path)
     cfg, _ = semantic_policy.semantic_config(_cfg())
     policy = semantic_policy.policy_fingerprint(cfg)
     db.artifact_add("semantic_policy", policy)
-    bundle = semantic_store.thread_bundle(db.db, 1, 1, [1])
+    bundle = semantic_store.thread_bundle(db.db, 1, 1, [1], local_model=local_model)
     semantic_loops.update_loops(
         db, 1, bundle, {1: _pending_fact(bundle["members"][0])},
         None, cfg, time.monotonic() + 30)
@@ -157,5 +158,28 @@ def test_loop_adoption_requires_exact_original_quote(tmp_path):
             assert candidate["current"] and not candidate["adoption_eligible"]
         finally:
             view.close()
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize('batch', [False, True])
+def test_loop_state_uses_explicit_model_without_host_config(tmp_path, monkeypatch, batch):
+    model = 'synthetic-snapshot-model'
+    db, row, _, policy, _ = _candidate_setup(tmp_path, local_model=model)
+    try:
+        monkeypatch.setattr(semantic_store.semantic_transport, 'load_config',
+                            lambda: pytest.fail('explicit model read host config'))
+
+        def state(local_model):
+            if batch:
+                return request_loops.effective_loop_states(
+                    db.db, [row], policy=policy, local_model=local_model)[0]
+            return request_loops.effective_loop_state(
+                db.db, row, policy=policy, local_model=local_model)
+
+        current = state(model)
+        assert current['current'] and current['adoption_eligible']
+        stale = state('synthetic-other-model')
+        assert not stale['current'] and not stale['adoption_eligible']
     finally:
         db.close()

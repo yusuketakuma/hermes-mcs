@@ -115,7 +115,7 @@ def test_deadline_after_epoch_write_rolls_back_entire_rollup(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("target_changes", [False, True])
-def test_external_commit_still_rejects_rebuild_even_when_unrelated(tmp_path, monkeypatch, target_changes):
+def test_external_commit_rejects_only_changed_patient_inputs(tmp_path, monkeypatch, target_changes):
     with closing(_seed(tmp_path)) as ledger:
         ledger.db.execute("CREATE TABLE synthetic_marker(value INTEGER)")
         ledger.db.commit()
@@ -130,9 +130,14 @@ def test_external_commit_still_rejects_rebuild_even_when_unrelated(tmp_path, mon
             return result
         monkeypatch.setattr(rollup, "build_rollup", change)
         monkeypatch.setattr(rollup.time, "monotonic", lambda: 0)
-        with pytest.raises(rollup.RollupSourceChanged):
-            rollup.rebuild(ledger, 1, deadline=5)
-        assert _stored(ledger) == [] and not ledger.db.in_transaction
+        if target_changes:
+            with pytest.raises(rollup.RollupSourceChanged):
+                rollup.rebuild(ledger, 1, deadline=5)
+            assert _stored(ledger) == []
+        else:
+            assert rollup.rebuild(ledger, 1, deadline=5) > 0
+            assert len(_stored(ledger)) == 1
+        assert not ledger.db.in_transaction
 
 
 def test_normal_rebuild_completes_within_budget(tmp_path, monkeypatch):

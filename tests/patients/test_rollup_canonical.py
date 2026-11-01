@@ -352,7 +352,7 @@ def _thread(db, rows, *, bodies=None):
                         meta={"hash": _hash(db, mid), inference.VERSION_KEY: inference.CURRENT_VERSION})
 
 
-def _seed_relations(db, origin, action, events):
+def _seed_relations(db, origin, action, events, *, local_model=None):
     """Store only explicitly specified relations against matching synthetic source text."""
     import hashlib
     import semantic_store
@@ -362,7 +362,7 @@ def _seed_relations(db, origin, action, events):
     assert body.count(action) == 1
     start = body.index(action)
     root = source["parent_id"] or source["message_id"]
-    bundle = semantic_store.thread_bundle(db.db, 1, root)
+    bundle = semantic_store.thread_bundle(db.db, 1, root, local_model=local_model)
     assert bundle
     policy = hashlib.sha256(b"synthetic-explicit-relations").hexdigest()
     db.artifact_add("semantic_policy", policy)

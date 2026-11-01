@@ -520,9 +520,10 @@ def _noncurrent_vital_reference(body, values):
     return None
 
 
-def _match_request_replies(db, project_id, req_thread, requests, messages, now):
+def _match_request_replies(db, project_id, req_thread, requests, messages, now, *, cfg=None):
     """Annotate only uniquely matched requests with current Loop relation evidence."""
     from request_loops import effective_loop_states, latest_policy
+    from semantic_transport import llm_model
     import semantic_jev as jev
 
     kinds = {"acknowledges": "ack", "progress_report": "progress",
@@ -550,7 +551,8 @@ def _match_request_replies(db, project_id, req_thread, requests, messages, now):
         "json_extract(requested.value,'$[1]'))", (project_id, json.dumps(sorted(wanted)))).fetchall()
     source_mids = {source["artifact_id"]: source["message_id"] for source in sources}
     for loop in effective_loop_states(db, sources, policy=policy,
-                                     relation_limit=None, eligible_only=True):
+                                     relation_limit=None, eligible_only=True,
+                                     local_model=llm_model(cfg)):
         key = (source_mids[loop["artifact_id"]], loop["description"])
         candidates.setdefault(key, []).append(loop)
     by_id = {m["message_id"]: m for m in messages}
@@ -964,7 +966,7 @@ def _build_rollup(db, project_id: int, *, request_limit: int | None = 15, cfg=No
                 and fact["temporal"].get("symptom_state") == "present"]
     if symptoms:
         out["recent_symptoms"] = symptoms[:20]
-    _match_request_replies(db, project_id, req_thread, requests, msgs, out["generated_at"])
+    _match_request_replies(db, project_id, req_thread, requests, msgs, out["generated_at"], cfg=cfg)
     if requests:
         out["recent_requests"] = requests[:request_limit]
     if canonical:
@@ -1405,6 +1407,19 @@ def _completion_valid_until(db, project_id, now, content):
                               (STALE_DAYS * 86400, project_id, STALE_DAYS * 86400, now)).fetchone()[0]
         if crossing is not None:
             bounds.append(crossing)
+    if content.get('registered_data'):
+        from snapshot_access import snapshot_meta
+        # Published snapshots freeze metadata age; a live ledger uses wall time.
+        if snapshot_meta(db)['generated_at'] is None:
+            for row in db.execute(
+                    "SELECT CASE WHEN json_valid(content) THEN json_extract(content,'$.attempted_at') END "
+                    "FROM artifacts WHERE kind='project_metadata_v1' AND project_id=?", (project_id,)):
+                fetched = row[0]
+                if type(fetched) in (int, float) and math.isfinite(fetched) and fetched >= 0:
+                    if fetched > now:
+                        bounds.append(fetched)
+                    if fetched + 86400 >= now:
+                        bounds.append(fetched + 86400)
     if any(type(value) not in (int, float) or not math.isfinite(value)
            or not now < value < 1e12 for value in bounds):
         return None
@@ -1522,6 +1537,83 @@ class RollupSourceChanged(sqlite3.OperationalError):
     """A rollup was discarded because its source changed while it was built."""
 
 
+def _publication_source_signature(db, project_id, *, deadline=None):
+    """Bind patient rows and shared policies without retaining their source text."""
+    def schema_text(value):
+        return value.decode('utf-8') if isinstance(value, bytes) else value
+
+    # Conservatively include unused patient rows: indirect progress/Loop readers
+    # also depend on chunks, frozen context, attachments and withdrawal proofs.
+    members = 'message_id IN (SELECT message_id FROM messages WHERE project_id=?)'
+    scopes = (('patients', 'project_id=?', (project_id,)),
+              ('messages', 'project_id=?', (project_id,)),
+              ('message_revisions', members, (project_id,)),
+              ('attachments', members, (project_id,)),
+              ('fetch_jobs', 'project_id=? OR ' + members, (project_id, project_id)),
+              ('requests', 'project_id=?', (project_id,)),
+              ('artifacts', 'project_id=? OR ' + members
+               + " OR kind IN ('semantic_policy','med_ref_progress')", (project_id, project_id)),
+              ('snapshot_meta', '1=1', ()))
+    if (schema_text(db.execute('PRAGMA encoding').fetchone()[0]) != 'UTF-8'
+            or getattr(db, 'text_factory', str) not in (str, bytes)):
+        raise RollupSourceUnverified('rollup_encoding_unverified')
+    digest = hashlib.sha256()
+    for table, scope, params in scopes:
+        _check_deadline(deadline)
+        schema = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        digest.update(table.encode('ascii') + b'\0')
+        if schema is None:
+            if table != 'snapshot_meta':
+                raise RollupSourceUnverified('rollup_publication_schema_unverified')
+            digest.update(b'missing\0')
+            continue
+        definition = schema_text(schema[0])
+        columns = [schema_text(row[1]) for row in db.execute('PRAGMA table_info(' + table + ')')]
+        if (not isinstance(definition, str) or re.search(r'\bWITHOUT\s+ROWID\b', definition, re.IGNORECASE)
+                or not columns or any(not re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', field)
+                                      or field.lower() in ('rowid', 'oid', '_rowid_') for field in columns)):
+            raise RollupSourceUnverified('rollup_publication_schema_unverified')
+        digest.update(definition.encode('utf-8') + b'\0')
+        selected = ','.join(f'typeof("{field}"),octet_length("{field}"),'
+                            f'CASE WHEN typeof("{field}") NOT IN (\'text\',\'blob\') THEN "{field}" END'
+                            for field in columns)
+        with contextlib.closing(db.execute(
+                f'SELECT _rowid_,{selected} FROM {table} WHERE {scope} ORDER BY _rowid_', params)) as rows:
+            for row in rows:
+                _check_deadline(deadline)
+                if type(row[0]) is not int:
+                    raise RollupSourceUnverified('rollup_publication_rowid_unverified')
+                digest.update(b'row\0' + str(row[0]).encode('ascii') + b'\0')
+                for offset, field in enumerate(columns):
+                    kind, size, value = row[1 + 3 * offset:4 + 3 * offset]
+                    kind = schema_text(kind)
+                    digest.update(kind.encode('ascii') + b'\0')
+                    if kind not in ('text', 'blob'):
+                        encoded = repr(value).encode('ascii')
+                        digest.update(len(encoded).to_bytes(8, 'big') + encoded)
+                        continue
+                    if (type(size) is not int or size < 0 or not callable(getattr(db, 'blobopen', None))):
+                        raise RollupSourceUnverified('rollup_publication_blob_unavailable')
+                    digest.update(size.to_bytes(8, 'big'))
+                    decoder = codecs.getincrementaldecoder('utf-8')('strict') if kind == 'text' else None
+                    with db.blobopen(table, field, row[0], readonly=True) as blob:
+                        remaining = size
+                        while remaining:
+                            _check_deadline(deadline)
+                            chunk = blob.read(min(32768, remaining))
+                            if not chunk or len(chunk) > remaining:
+                                raise RollupSourceUnverified('rollup_publication_blob_truncated')
+                            if decoder is not None:
+                                decoder.decode(chunk, final=False)
+                            digest.update(chunk)
+                            remaining -= len(chunk)
+                        if decoder is not None:
+                            decoder.decode(b'', final=True)
+        digest.update(b'end\0')
+    _check_deadline(deadline)
+    return digest.hexdigest()
+
+
 def rebuild(ledger, project_id: int, *, cfg=None, deadline=None) -> int:
     """Atomic replace — a crash between delete and insert must not leave
     a patient with NO rollup (Oracle B22). An unchanged rebuild (all
@@ -1536,25 +1628,58 @@ def rebuild(ledger, project_id: int, *, cfg=None, deadline=None) -> int:
     # Guard all inputs, including withdrawal witnesses, without holding a writer during aggregation.
     data_version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
     changes = ledger.db.total_changes
-    ref_generation = generation_signature(ledger.db)
-    message_sig = _message_source_signature(ledger.db, project_id, time.time(), **timed)
-    has_projection = _has_projection(ledger.db, project_id)
-    ref_sig = ledger.db.execute(_REF_SIG_SQL.format(pid="?"),
-                                (REF_KIND, project_id)).fetchone()[0]
-    d = build_rollup(ledger.db, project_id, cfg=cfg, **timed)
-    _check_deadline(deadline)
-    valid_until = _completion_valid_until(ledger.db, project_id, d["generated_at"], d)
+    ledger.db.execute('SAVEPOINT rollup_rebuild_read')
+    try:
+        source_sig = _publication_source_signature(ledger.db, project_id, **timed)
+        ref_generation = generation_signature(ledger.db)
+        message_sig = _message_source_signature(ledger.db, project_id, time.time(), **timed)
+        has_projection = _has_projection(ledger.db, project_id)
+        ref_sig = ledger.db.execute(_REF_SIG_SQL.format(pid="?"),
+                                    (REF_KIND, project_id)).fetchone()[0]
+        d = build_rollup(ledger.db, project_id, cfg=cfg, **timed)
+        _check_deadline(deadline)
+        valid_until = _completion_valid_until(ledger.db, project_id, d["generated_at"], d)
+        if ledger.db.total_changes != changes:
+            raise RollupSourceChanged('inference_rollup_source_changed')
+    except BaseException as error:
+        try:
+            ledger.db.execute('ROLLBACK TO rollup_rebuild_read')
+            ledger.db.execute('RELEASE rollup_rebuild_read')
+        except sqlite3.Error:
+            pass  # Preserve the original failure after an automatic rollback.
+        if isinstance(error, UnicodeError) or _invalid_sqlite_text(error):
+            raise RollupSourceUnverified('rollup_source_utf8_unverified') from None
+        raise
+    else:
+        ledger.db.execute('RELEASE rollup_rebuild_read')
     # compare in JSON space (tuples→lists, int keys→str) like the stored row
     new = json.loads(json.dumps(d, ensure_ascii=False))
     new.pop("generated_at", None)
-    with ledger.db:
+
+    def check_publication():
         _check_deadline(deadline)
+        if valid_until is None:
+            raise RollupSourceUnverified('rollup_expiry_unverified')
+        if not d['generated_at'] <= time.time() < valid_until:
+            raise RollupSourceChanged('inference_rollup_source_changed')
+
+    with ledger.db:
+        check_publication()
         if not ledger.db.in_transaction:
             ledger.db.execute("BEGIN IMMEDIATE")
-        _check_deadline(deadline)
-        if (ledger.db.total_changes != changes
-                or ledger.db.execute("PRAGMA data_version").fetchone()[0] != data_version):
+        check_publication()
+        if ledger.db.total_changes != changes:
             raise RollupSourceChanged("inference_rollup_source_changed")
+        if ledger.db.execute("PRAGMA data_version").fetchone()[0] != data_version:
+            try:
+                current_sig = _publication_source_signature(ledger.db, project_id, **timed)
+            except (UnicodeError, sqlite3.Error) as error:
+                if isinstance(error, UnicodeError) or _invalid_sqlite_text(error):
+                    raise RollupSourceUnverified('rollup_source_utf8_unverified') from None
+                raise
+            if current_sig != source_sig:
+                raise RollupSourceChanged("inference_rollup_source_changed")
+        check_publication()
         old = ledger.db.execute(
             "SELECT artifact_id, content, meta FROM artifacts"
             " WHERE kind=? AND project_id=? AND " + inference.current_meta_pred("meta"),
@@ -1596,9 +1721,9 @@ def rebuild(ledger, project_id: int, *, cfg=None, deadline=None) -> int:
                             "UPDATE artifacts SET meta=? WHERE artifact_id=?",
                             (json.dumps(om), old[0]["artifact_id"]))
                         ledger.bump_inference_analysis_epoch_tx()
-                    _check_deadline(deadline)
+                    check_publication()
                     return old[0]["artifact_id"]
-        _check_deadline(deadline)
+        check_publication()
         ledger.db.execute(
             "DELETE FROM artifacts WHERE kind=? AND project_id=? AND "
             + inference.current_meta_pred("meta"),
@@ -1621,7 +1746,7 @@ def rebuild(ledger, project_id: int, *, cfg=None, deadline=None) -> int:
                          "med_ref_sig": ref_sig,
                          "med_ref_generation": ref_generation}), time.time()))
         ledger.bump_inference_analysis_epoch_tx()
-        _check_deadline(deadline)
+        check_publication()
     return cur.lastrowid
 
 

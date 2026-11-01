@@ -176,7 +176,7 @@ def loop_links(db, pid, *, request_id=None, loop_id=None):
     return [item for _, item in _link_items(db, pid, request_id, loop_id)]
 
 
-def _loop_source_state(db, candidate_row, policy, bundles, sources):
+def _loop_source_state(db, candidate_row, policy, bundles, sources, *, local_model=None):
     """Validate source and adoption before reading any relation history."""
     r = candidate_row
     pid = r["project_id"]
@@ -195,7 +195,7 @@ def _loop_source_state(db, candidate_row, policy, bundles, sources):
     source = sources[key]
     root = source["root"] if source else None
     if root not in bundles:
-        bundles[root] = semantic_store.thread_bundle(db, pid, root) if root else None
+        bundles[root] = semantic_store.thread_bundle(db, pid, root, local_model=local_model) if root else None
     bundle = bundles[root]
     candidate_fp = candidate_meta.get(
         "source_fingerprint", candidate_meta.get("fingerprint"))
@@ -211,11 +211,11 @@ def _loop_source_state(db, candidate_row, policy, bundles, sources):
     return cand, origin, current, bundle, members
 
 
-def effective_loop_state(db, candidate_row, *, policy=None, bundles=None, relation_limit=5):
+def effective_loop_state(db, candidate_row, *, policy=None, bundles=None, relation_limit=5, local_model=None):
     """Derive a candidate's current display state with the view's exact source and policy guards."""
     policy = latest_policy(db) if policy is None else policy
     state = _loop_source_state(db, candidate_row, policy,
-                               {} if bundles is None else bundles, {})
+                               {} if bundles is None else bundles, {}, local_model=local_model)
     if state is None:
         return None
     return _effective_loop_state(db, candidate_row, state, policy, relation_limit)
@@ -331,13 +331,13 @@ def _effective_loop_state(db, r, state, policy, relation_limit,
 
 
 def effective_loop_states(db, candidate_rows, *, policy=None, bundles=None,
-                          relation_limit=5, eligible_only=False):
+                          relation_limit=5, eligible_only=False, local_model=None):
     """Evaluate candidates with one history query per project, sharing source guards."""
     policy = latest_policy(db) if policy is None else policy
     bundles = {} if bundles is None else bundles
     states, sources, projects = {}, {}, {}
     for row in candidate_rows:
-        state = _loop_source_state(db, row, policy, bundles, sources)
+        state = _loop_source_state(db, row, policy, bundles, sources, local_model=local_model)
         if state is None or (eligible_only and not state[0]["adoption_eligible"]):
             continue
         states[row["artifact_id"]] = state

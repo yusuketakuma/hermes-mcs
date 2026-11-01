@@ -499,7 +499,7 @@ def test_future_reply_rejects_old_proof_then_normal_scan_repairs_it(saved):
     _thread(ledger, [(1, None, 'SYNTH-A', request_time, _REQ),
                      (2, 1, 'SYNTH-B', reply_time, {})],
             bodies={1: _REQUEST_BODY, 2: _DONE_BODY})
-    _seed_relations(ledger, 1, '処方変更を確認', [_DONE])
+    _seed_relations(ledger, 1, '処方変更を確認', [_DONE], local_model=cfg['local_llm']['model'])
     rollup.rebuild(ledger, 1, cfg=cfg)
     before = json.loads(_rows(ledger.db)[0][1])
     assert before['recent_requests'][0].get('reply_state') is None
