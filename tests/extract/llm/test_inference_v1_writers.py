@@ -276,7 +276,7 @@ def test_gc_keeps_historical_generations_and_unrelated_receipts(source, monkeypa
     with led.db:
         led.db.execute("UPDATE messages SET content_hash='changed' WHERE message_id=1")
     monkeypatch.setattr(llm, "_stale_gc_at", 0)
-    llm._gc_stale_artifacts(led, lambda *a: nullcontext(True), False)
+    llm._gc_stale_artifacts(led, lambda *a, **kw: nullcontext(True), False)
     ids = {r[0] for r in led.db.execute("SELECT artifact_id FROM artifacts")}
     assert {legacy, future, receipt} <= ids and current not in ids
 
@@ -1278,7 +1278,7 @@ def test_stale_gc_preserves_foreign_and_legacy_and_captures_null(source, monkeyp
 
     monkeypatch.setattr(dependency_loss, 'capture_tx', track)
     monkeypatch.setattr(llm, '_stale_gc_at', 0)
-    llm._gc_stale_artifacts(led, lambda *_args: nullcontext(True), False)
+    llm._gc_stale_artifacts(led, lambda *_args, **_kwargs: nullcontext(True), False)
     assert not led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id IN (?,?)', (owned, null_scope)).fetchone()
     assert tuple(led.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (foreign,)).fetchone()) == foreign_before
     assert led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (legacy,)).fetchone()
@@ -1474,7 +1474,7 @@ def test_gc_earlier_delete_trigger_cannot_delete_changed_later_candidate(source,
                    f'BEGIN {action} END')
     led.db.commit()
     monkeypatch.setattr(llm, '_stale_gc_at', 0)
-    llm._gc_stale_artifacts(led, lambda *_args: nullcontext(True), False)
+    llm._gc_stale_artifacts(led, lambda *_args, **_kwargs: nullcontext(True), False)
     assert not led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (first,)).fetchone()
     assert led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (second,)).fetchone()
 
@@ -1494,7 +1494,7 @@ def test_gc_dependency_change_after_capture_rolls_back_all_deletions(source, mon
     monkeypatch.setattr(dependency_loss, 'record_tx', modify_after_record)
     monkeypatch.setattr(llm, '_stale_gc_at', 0)
     with pytest.raises(RuntimeError, match='extract_stale_gc_unverified'):
-        llm._gc_stale_artifacts(led, lambda *_args: nullcontext(True), False)
+        llm._gc_stale_artifacts(led, lambda *_args, **_kwargs: nullcontext(True), False)
     assert [tuple(a) for a in led.db.execute('SELECT * FROM artifacts ORDER BY artifact_id')] == before
 
 
@@ -1544,7 +1544,7 @@ def test_stale_gc_keeps_oversize_witness_without_blocking_other_rows(source, mon
         led.db.execute('UPDATE artifacts SET ' + field + '=? WHERE artifact_id=?', (replacement, retained))
     before = tuple(led.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (retained,)).fetchone())
     monkeypatch.setattr(llm, '_stale_gc_at', 0)
-    llm._gc_stale_artifacts(led, lambda *_args: nullcontext(True), False)
+    llm._gc_stale_artifacts(led, lambda *_args, **_kwargs: nullcontext(True), False)
     assert tuple(led.db.execute('SELECT * FROM artifacts WHERE artifact_id=?', (retained,)).fetchone()) == before
     assert not led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (removable,)).fetchone()
 
@@ -1585,7 +1585,7 @@ def _add_stale_rows(led, row, count):
 
 def _gc_tick(led, monkeypatch, **kwargs):
     from contextlib import nullcontext
-    return llm._gc_stale_artifacts(led, lambda *_args: nullcontext(True), False, **kwargs)
+    return llm._gc_stale_artifacts(led, lambda *_args, **_kwargs: nullcontext(True), False, **kwargs)
 
 
 def test_gc_fixed_highwater_resumes_and_preserves_claims_until_pass_completed(source, monkeypatch):
@@ -1935,3 +1935,42 @@ def test_gc_error_with_unclosed_transaction_is_not_hidden(source, monkeypatch):
         assert led.db.in_transaction
     finally:
         led.db.rollback()
+
+
+@pytest.mark.parametrize(("budget", "elapsed"), [(10, 0.25), (0.125, 0.125)])
+def test_gc_busy_lock_obeys_local_deadline_and_selection_continues(source, monkeypatch, budget, elapsed):
+    led, row = source
+    target = _add_stale_rows(led, row, 1)[0]
+    clock = {'value': 100.0}
+    attempts = []
+    monkeypatch.setattr(llm, '_stale_gc_at', 0)
+    monkeypatch.setattr(llm, '_STALE_GC_BUDGET_S', 0.25)
+    monkeypatch.setattr(llm, '_writer_current', lambda **_kwargs: True)
+    monkeypatch.setattr(llm.time, 'monotonic', lambda: clock['value'])
+    monkeypatch.setattr(llm.time, 'sleep', lambda seconds: clock.update(value=clock['value'] + seconds))
+    monkeypatch.setattr(llm, 'acquire_run_lock', lambda: attempts.append(clock['value']))
+
+    class SelectionReached(Exception):
+        pass
+
+    original_select = llm._select_pending
+    selected_ids = []
+
+    def selected(*args, **kwargs):
+        rows, _fresh = original_select(*args, **kwargs)
+        selected_ids.extend(row['message_id'] for row in rows)
+        raise SelectionReached
+
+    monkeypatch.setattr(llm, '_select_pending', selected)
+    with pytest.raises(SelectionReached):
+        llm.run_pending(led, limit=1, budget_s=budget, per_write_lock=True, write_wait_s=60)
+    assert selected_ids == [row['message_id']]
+    assert attempts and clock['value'] == pytest.approx(100 + elapsed)
+    assert llm._stale_gc_at == 0 and not led.db.in_transaction
+    assert led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (target,)).fetchone()
+    assert led.db.execute('SELECT 1 FROM fetch_jobs WHERE kind=?', (llm._STALE_GC_KIND,)).fetchone() is None
+
+    monkeypatch.setattr(llm, '_STALE_GC_BUDGET_S', 60)
+    _gc_tick(led, monkeypatch)
+    assert not led.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (target,)).fetchone()
+    assert llm._stale_gc_at > 0

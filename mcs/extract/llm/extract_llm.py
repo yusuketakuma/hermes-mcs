@@ -4734,7 +4734,7 @@ def _gc_stale_artifacts(ledger, lock, per_write_lock: bool, *, deadline=None) ->
     work_deadline = deadline - min(_STALE_GC_CURSOR_RESERVE_S, (deadline - started) / 4)
     completed = False
     try:
-        with lock(per_write_lock) as held:
+        with lock(per_write_lock, deadline=deadline) as held:
             if not held or not _writer_current() or time.monotonic() >= deadline:
                 return
             with ledger.db:

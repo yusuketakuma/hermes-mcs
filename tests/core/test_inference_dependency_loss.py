@@ -59,7 +59,7 @@ def test_deleted_stop_survives_pruning_restart_and_old_source_reanalysis(store, 
     assert state.project([original], dependency_losses=proof['losses'])['groups']['unknown'] == [original['id']]
     monkeypatch.setattr(llm, '_writer_current', lambda **kw: True)
     monkeypatch.setattr(llm, '_stale_gc_at', 0)
-    llm._gc_stale_artifacts(store, lambda enabled: nullcontext(True), False)
+    llm._gc_stale_artifacts(store, lambda enabled, **kwargs: nullcontext(True), False)
     assert not store.db.execute('SELECT 1 FROM artifacts WHERE artifact_id=?', (old_id,)).fetchone()
     path = store.db.execute('PRAGMA database_list').fetchone()[2]
     with sqlite3.connect(f'file:{path}?mode=ro', uri=True) as reopened:
