@@ -65,6 +65,75 @@ def test_unit_can_forbid_transport_retry_without_releasing_unknown_cost(
     assert provider.possibly_sent
 
 
+def test_second_attempt_reserve_refusal_is_a_definite_unsent(routed, monkeypatch):
+    """A 429 settles its reservation; a later pre-send refusal is the only
+    definite not-sent — it never re-sends and never becomes a local unit."""
+    led, cfg, *_ = routed
+    sent, reserves = [], []
+    monkeypatch.setattr(cloud_policy, 'record_result', _REAL_RESULT)
+
+    def reserve_factory(*args, **kwargs):
+        reserve = _REAL_RESERVE(*args, **kwargs)
+        def maybe_refuse(body, timeout):
+            if reserves:
+                raise worker.anthropic_client.AnthropicError('budget_exceeded', 'synthetic refusal')
+            reservation = reserve(body, timeout)
+            reserves.append(reservation)
+            return reservation
+        return maybe_refuse
+    monkeypatch.setattr(cloud_policy, 'usage_reserver', reserve_factory)
+    monkeypatch.setattr(worker.anthropic_client.time, 'sleep', lambda _: None)
+
+    def post(body, timeout):
+        sent.append(True)
+        return 429, {}, b'{}'
+    monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
+                        lambda key, **kw: AnthropicClient(key, post_fn=post, max_attempts=2, **kw))
+    provider = worker._CloudProvider(led, cfg, route='patient_context', project_id=1,
+        unit_key='synthetic-retry-refusal', deadline=time.monotonic() + 180,
+        current=lambda: True, dispatch=lambda fn, **kwargs: fn())
+    with pytest.raises(worker.cloud_client.CloudNotSent, match='budget_exceeded'):
+        provider('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
+    assert sent == [True] and len(reserves) == 1
+    # the sent attempt keeps its settled reservation; the refusal created none
+    assert len(provider.completed_reservations) == 1 and provider.possibly_sent
+    assert cloud_policy.usage_report(led)['daily_requests'] == 1
+
+
+def test_reserve_refusal_defers_without_send_or_local_fallback(routed, monkeypatch):
+    led, cfg, *_ = routed
+    old(led)
+    sent = []
+    monkeypatch.setattr(cloud_policy, 'record_result', _REAL_RESULT)
+    monkeypatch.setattr(cloud_policy, 'record_disposition_tx', _REAL_DISPOSITION)
+
+    def refuse(*args, **kwargs):
+        def reservation(body, timeout):
+            raise worker.anthropic_client.AnthropicError('budget_exceeded', 'synthetic refusal')
+        return reservation
+    monkeypatch.setattr(cloud_policy, 'usage_reserver', refuse)
+
+    def post(body, timeout):
+        sent.append(True)
+        pytest.fail('a refused reservation still sent')
+    monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
+                        lambda key: AnthropicClient(key, post_fn=post, max_attempts=1))
+    monkeypatch.setattr(worker, 'circuit_open_s', lambda db: 60)
+
+    def infer(body, **kwargs):
+        if kwargs.get('provider') is not None:
+            kwargs['provider']('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
+        pytest.fail('a refused unit fell back to local')
+    monkeypatch.setattr(worker, 'llm_extract', infer)
+    report = worker.run_pending(led, budget_s=180)
+    assert report['deferred'] == 1 and not sent
+    assert not [row for row in led.artifacts('cloud_usage_reserve')]
+    assert not [row for row in led.artifacts(worker.KIND) if json.loads(row['meta']).get('error')]
+    assert cloud_policy.usage_report(led)['unresolved_requests'] == 0
+    worker.run_pending(led, budget_s=180)
+    assert not sent
+
+
 def test_post_reservation_guard_refusal_never_sends_or_burns_retry(routed, monkeypatch):
     led, cfg, *_ = routed
     old(led)

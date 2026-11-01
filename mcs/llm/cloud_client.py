@@ -23,6 +23,11 @@ class CloudError(Exception):
         self.retryable, self.status = retryable, status
 
 
+class CloudNotSent(CloudError):
+    """A reservation-layer refusal before any HTTP byte left: the only definite
+    not-sent — callers may defer without burning an attempt or falling back."""
+
+
 class CloudClient:
     """Own the guarded provider-neutral attempt lifecycle."""
     def __init__(self, api_key, *, attempt_timeout=120.0, max_attempts=3, post_fn=None,
@@ -65,7 +70,10 @@ class CloudClient:
             timeout = min(self.attempt_timeout, remaining)
             if before_attempt:
                 before_attempt()
-            reservation = reserve_fn(body, timeout) if reserve_fn else None
+            try:
+                reservation = reserve_fn(body, timeout) if reserve_fn else None
+            except CloudError as error:
+                raise CloudNotSent(error.kind, error.detail, status=error.status) from error
             meta = {"usage": None, "http_class": "transport", "request_id": None,
                     "model": self.model, "request_fp": payload_hash(body), "error_kind": None}
             unsent = {**meta, "http_class": "not_sent", "error_kind": "budget_exceeded"}

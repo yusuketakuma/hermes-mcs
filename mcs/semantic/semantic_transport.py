@@ -224,6 +224,8 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         try:
             response = provider(prompt, deadline=min(deadline, time.monotonic() + (timeout or LLM_TIMEOUT)),
                                 max_tokens=provider.selection['max_tokens'] or LLM_LONG_MAX_TOKENS)
+        except extract_llm.cloud_client.CloudNotSent as error:
+            raise runtime.LLMNotSent("cloud_not_sent") from error
         except extract_llm.CloudBusy:
             if local_fallback is not None:
                 return local(prompt, timeout)

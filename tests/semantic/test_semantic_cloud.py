@@ -162,7 +162,10 @@ def test_thinking_only_length_holds_summary_without_format_repair_or_paid_resend
         assert not rows(led, semantic_drain.KIND_SUMMARY_FORMAT_REPAIR)
         assert len(calls) == 1
         prompt = calls[0]["messages"][0]["content"]
-        assert chat(prompt) is None  # the same paid logical request remains fenced
+        # the same paid logical request stays fenced: the refusal is a definite
+        # not-sent that defers the unit instead of failing or falling back
+        with pytest.raises(transport.runtime.LLMNotSent, match='cloud_not_sent'):
+            chat(prompt)
     reserves, results = rows(led, "cloud_usage_reserve"), rows(led, "cloud_usage_result")
     assert len(calls) == len(reserves) == len(results) == 1
     result = json.loads(results[0]["meta"])

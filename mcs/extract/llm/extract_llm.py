@@ -1011,6 +1011,8 @@ class _CloudProvider:
             raise
         except writer_lock.RunLockLost:
             raise
+        except cloud_client.CloudNotSent:
+            raise
         except Exception as exc:
             # Client errors contain fixed categories; no remote body enters local errors.
             raise CloudFallback("cloud_unit_failed") from exc
@@ -5702,7 +5704,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     if result is None:
                         raise CloudFallback("cloud_validation_failed")
                     return result
-            except CloudBusy:
+            except (cloud_client.CloudNotSent, CloudBusy):
                 return _DEFERRED
             except CloudFallback as error:
                 if str(error) == "cloud_unit_changed":
@@ -6302,6 +6304,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 vital_policy=vital_policy, provider=provider,
                 **({"references": _frame_refs(r)} if _frame_refs(r) else {}))
             provider.commit_guard()
+        except cloud_client.CloudNotSent:
+            cloud_result = None
         except CloudFallback as error:
             if provider is not None and str(error) == "cloud_unit_changed":
                 provider.discard()

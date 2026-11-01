@@ -3536,6 +3536,10 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 meta["provider"] = provider.contract
                 meta["model"] = provider.model
                 return value
+            except extract_llm.cloud_client.CloudNotSent as error:
+                # nothing left the wire: defer the unit — it must not take a
+                # local slot or re-send next tick as if the refusal never ran
+                raise Deferred("nightly_cloud_not_sent") from error
             except (extract_llm.CloudFallback, ValueError) as error:
                 changed = isinstance(error, extract_llm.CloudFallback) and str(error) == "cloud_unit_changed"
                 paid = provider.possibly_sent
@@ -4031,6 +4035,8 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             comparison = cloud_for(unit_key, mid, after_commit=True)
             cloud_value = fn(comparison, False, measured, True)
             comparison.commit_guard()
+        except extract_llm.cloud_client.CloudNotSent:
+            cloud_value = None
         except extract_llm.CloudFallback as error:
             if comparison is not None and str(error) == "cloud_unit_changed":
                 comparison.discard()
