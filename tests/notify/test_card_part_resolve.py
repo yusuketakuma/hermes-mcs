@@ -315,6 +315,291 @@ def recovery_state(led):
     return {name: [tuple(row) for row in led.db.execute("SELECT * FROM " + name)] for name in tables}
 
 
+@pytest.mark.parametrize("original_collected", [False, True])
+def test_manually_confirmed_caption_edit_keeps_sealed_upload_for_next_render(led, monkeypatch, original_collected):
+    from slack_testkit import SLACK
+
+    req, original, target, _, _ = preflight_recovery(led, monkeypatch, missing_spec=False)
+    req.update(result="mark_delivered", remote_id=target["prior_remote_id"])
+    req["evidence"].pop("proof")
+    with led.db:
+        if original_collected:
+            led.db.execute("UPDATE notification_renders SET spec_json=NULL WHERE delivery_id=?", (original["delivery_id"],))
+        led.db.execute("UPDATE messages SET body_text=?,content_hash=? WHERE message_id=100",
+                       ("synthetic changed body", "c" * 64))
+    receipt = notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 2)
+    assert receipt["outcome"] == "applied"
+    latest = _latest_render(led)
+    assert latest["delivery_id"] != req["delivery_id"]
+    assert latest["state"] == "queued"
+    part = next(p for p in json.loads(latest["spec_json"])["parts"]["manifest"]
+                if p["part_id"] == target["part_id"])
+    assert part["prior_remote_id"] == target["prior_remote_id"]
+    assert part["edit_only"] is True
+
+
+@pytest.mark.parametrize("fault", ["receipt_missing", "receipt_hash", "receipt_evidence", "receipt_duplicate_keys",
+                                   "duplicate_receipt", "remote_id",
+                                   "manual_scope", "manual_thread", "original_operator"])
+def test_manual_caption_edit_requires_receipt_and_original_upload(led, monkeypatch, fault):
+    import notify_cards
+    from slack_testkit import SLACK
+
+    req, original, target, _, _ = preflight_recovery(led, monkeypatch, missing_spec=False)
+    req.update(result="mark_delivered", remote_id=target["prior_remote_id"])
+    req["evidence"].pop("proof")
+    assert notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 2)["outcome"] == "applied"
+    with led.db:
+        if fault == "receipt_missing":
+            led.db.execute("DELETE FROM command_receipts WHERE command_id=?", (req["command_id"],))
+        elif fault == "receipt_hash":
+            led.db.execute("UPDATE command_receipts SET payload_hash=? WHERE command_id=?",
+                           ("f" * 64, req["command_id"]))
+        elif fault == "receipt_evidence":
+            saved = led.db.execute("SELECT receipt_json FROM command_receipts WHERE command_id=?",
+                                   (req["command_id"],)).fetchone()[0]
+            saved = json.loads(saved)
+            saved["evidence"]["worker_stopped"] = False
+            led.db.execute("UPDATE command_receipts SET receipt_json=? WHERE command_id=?",
+                           (json.dumps(saved), req["command_id"]))
+        elif fault == "receipt_duplicate_keys":
+            raw = led.db.execute("SELECT receipt_json FROM command_receipts WHERE command_id=?",
+                                 (req["command_id"],)).fetchone()[0]
+            led.db.execute("UPDATE command_receipts SET receipt_json=? WHERE command_id=?",
+                           (raw[:-1] + ',"reason":"duplicate"}', req["command_id"]))
+        elif fault == "duplicate_receipt":
+            led.db.execute("INSERT INTO command_receipts SELECT ?,payload_hash,project_id,request_id,outcome,"
+                           "receipt_json,processed_at FROM command_receipts WHERE command_id=?",
+                           (_uuid(992), req["command_id"]))
+        elif fault == "remote_id":
+            led.db.execute("UPDATE notification_render_parts SET remote_id='F_OTHER' WHERE delivery_id=? AND part_id=?",
+                           (req["delivery_id"], req["part_id"]))
+        elif fault == "manual_scope":
+            led.db.execute("UPDATE notification_renders SET team_id='T_OTHER' WHERE delivery_id=?", (req["delivery_id"],))
+        elif fault == "manual_thread":
+            led.db.execute("UPDATE notification_render_parts SET remote_id='OTHER_THREAD' WHERE delivery_id=? AND kind='thread'",
+                           (req["delivery_id"],))
+        else:
+            led.db.execute("UPDATE notification_render_parts SET error_code='operator_part_resolve' "
+                           "WHERE delivery_id=? AND part_id=?", (original["delivery_id"], req["part_id"]))
+        emitted = []
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 3, emitted, force=True)
+    assert emitted == []
+    assert _latest_render(led)["state"] == "held"
+
+
+def test_prior_native_edit_alone_does_not_prove_the_original_upload(led, monkeypatch):
+    from slack_testkit import SLACK
+
+    req, original, target, _, _ = preflight_recovery(led, monkeypatch, missing_spec=False, repeated=True)
+    req.update(result="mark_delivered", remote_id=target["prior_remote_id"])
+    req["evidence"].pop("proof")
+    with led.db:
+        led.db.execute("DELETE FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
+                       (original["delivery_id"], req["part_id"]))
+        led.db.execute("UPDATE messages SET body_text=?,content_hash=? WHERE message_id=100",
+                       ("synthetic changed body", "e" * 64))
+    assert notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 2)["outcome"] == "applied"
+    assert _latest_render(led)["state"] == "held"
+
+
+def test_legacy_collected_update_upload_with_later_native_edit_remains_usable(led, monkeypatch):
+    from slack_testkit import SLACK
+
+    req, original, target, _, _ = preflight_recovery(led, monkeypatch, missing_spec=False, repeated=True)
+    req.update(result="mark_delivered", remote_id=target["prior_remote_id"])
+    req["evidence"].pop("proof")
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET spec_json=NULL,op='update' WHERE delivery_id=?",
+                       (original["delivery_id"],))
+        native = led.db.execute("SELECT delivery_id,spec_json FROM notification_renders WHERE render_rev=2").fetchone()
+        spec = json.loads(native["spec_json"])
+        part = next(p for p in spec["parts"]["manifest"] if p["part_id"] == req["part_id"])
+        assert part["prior_remote_id"] == target["prior_remote_id"]
+        part["edit_only"] = True
+        led.db.execute("UPDATE notification_renders SET spec_json=?,payload_hash=? WHERE delivery_id=?",
+                       (mcs_requests.canonical(spec).decode(), mcs_requests.payload_hash(spec), native["delivery_id"]))
+        led.db.execute("UPDATE messages SET body_text=?,content_hash=? WHERE message_id=100",
+                       ("synthetic changed body", "f" * 64))
+    assert notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 2)["outcome"] == "applied"
+    assert _latest_render(led)["state"] == "queued"
+
+
+@pytest.mark.parametrize("obstacle", [None, "missing_receipt", "attempt", "published", "previously_published",
+                                      "part_attempt", "part_remote"])
+def test_held_manual_caption_replans_only_after_proof_is_valid(led, monkeypatch, obstacle):
+    import notify_cards
+    import notify_parts
+    from slack_testkit import SLACK
+
+    req, _, target, _, _ = preflight_recovery(led, monkeypatch, missing_spec=False)
+    req.update(result="mark_delivered", remote_id=target["prior_remote_id"])
+    req["evidence"].pop("proof")
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text=?,content_hash=? WHERE message_id=100",
+                       ("synthetic changed body", "d" * 64))
+    with monkeypatch.context() as patch:
+        patch.setattr(notify_parts, "_manual_edit_receipts", lambda db, rows: {})
+        assert notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 2)["outcome"] == "applied"
+    held = _latest_render(led)
+    assert held["state"] == "held"
+    with led.db:
+        if obstacle == "missing_receipt":
+            led.db.execute("DELETE FROM command_receipts WHERE command_id=?", (req["command_id"],))
+        elif obstacle == "published":
+            led.db.execute("UPDATE notification_renders SET spec_published=1 WHERE delivery_id=?", (held["delivery_id"],))
+        elif obstacle == "previously_published":
+            led.db.execute("UPDATE notification_renders SET first_published_at=? WHERE delivery_id=?", (NOW, held["delivery_id"]))
+        elif obstacle in ("part_attempt", "part_remote"):
+            column = "attempt_id" if obstacle == "part_attempt" else "remote_id"
+            led.db.execute("UPDATE notification_render_parts SET " + column + "='synthetic-prior' "
+                           "WHERE delivery_id=? AND kind='attachment_part'", (held["delivery_id"],))
+        elif obstacle == "attempt":
+            led.db.execute("INSERT INTO notification_delivery_attempts "
+                           "(attempt_id,delivery_id,begin_command_id,state,created_at) VALUES (?,?,?,?,?)",
+                           ("synthetic-held-attempt", held["delivery_id"], _uuid(991), "not_sent", NOW))
+        emitted = []
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 3, emitted)
+    latest = _latest_render(led)
+    if obstacle is None:
+        assert len(emitted) == 1 and latest["state"] == "queued"
+        assert latest["delivery_id"] != held["delivery_id"]
+    else:
+        assert not emitted and latest["delivery_id"] == held["delivery_id"]
+        assert latest["state"] == "held"
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_manual_caption_witness_survives_gc_without_text(led, monkeypatch, corrupt):
+    import notify_cards
+    from slack_testkit import SLACK
+
+    req, original, target, _, _ = preflight_recovery(led, monkeypatch, missing_spec=False)
+    req.update(result="mark_delivered", remote_id=target["prior_remote_id"])
+    req["evidence"].pop("proof")
+    assert notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 2)["outcome"] == "applied"
+    notify_cards.gc(led, SLACK, now=NOW + 3, limit=100)
+    raw = led.db.execute("SELECT spec_json FROM notification_renders WHERE delivery_id=?",
+                         (req["delivery_id"],)).fetchone()[0]
+    witness = json.loads(raw)
+    assert "attachment_identity" in witness
+    assert "synthetic original description" not in raw and "synthetic.pdf" not in raw
+    original_witness = led.db.execute("SELECT spec_json FROM notification_renders WHERE delivery_id=?",
+                                      (original["delivery_id"],)).fetchone()[0]
+    assert "attachment_identity" in json.loads(original_witness)
+    assert "synthetic.pdf" not in original_witness
+    with led.db:
+        if corrupt:
+            witness["attachment_identity"]["proofs"][0] = "f" * 64
+            led.db.execute("UPDATE notification_renders SET spec_json=? WHERE delivery_id=?",
+                           (json.dumps(witness), req["delivery_id"]))
+        emitted = []
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 4, emitted, force=True)
+    if corrupt:
+        assert not emitted and _latest_render(led)["state"] == "held"
+    else:
+        assert len(emitted) == 1 and _latest_render(led)["state"] == "queued"
+        part = next(p for p in emitted[0]["parts"]["manifest"] if p["part_id"] == target["part_id"])
+        assert part["prior_remote_id"] == target["prior_remote_id"]
+
+
+def test_manual_then_native_edit_remain_reusable_after_both_specs_are_collected(led, monkeypatch):
+    from adapters.common import envelopes
+    import notify_cards
+    from slack_testkit import SLACK
+
+    req, _, target, _, _ = preflight_recovery(led, monkeypatch, missing_spec=False)
+    req.update(result="mark_delivered", remote_id=target["prior_remote_id"])
+    req["evidence"].pop("proof")
+    assert notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 2)["outcome"] == "applied"
+    notify_cards.gc(led, SLACK, now=NOW + 3, limit=100)
+    with led.db:
+        specs = []
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 4, specs, force=True)
+    spec, = specs
+    notify_spool.publish_specs(led.db, notify_spool.notify_dirs(notify_spool.data_root(led)), specs, NOW + 4)
+    claim = {"spec": spec, "attempt_id": "e" * 16, "worker_id": "b" * 16, "payload_hash": mcs_requests.payload_hash(spec)}
+    assert transport.apply_transport_begin(led, envelopes.transport_begin(claim), SLACK, now=NOW + 4)["granted"]
+    assert transport.apply_transport_receipt(led, envelopes.transport_receipt(
+        claim, "delivered", message_id="1790000000.000001"), SLACK, now=NOW + 4)["applied"]
+    for part in spec["parts"]["manifest"][1:]:
+        remote = ("1790000000.000001" if part["kind"] == "thread" else
+                  target["prior_remote_id"] if part["kind"] == "attachment_part" else f"synthetic-{part['index']}")
+        assert transport.apply_part_receipt(led, envelopes.part_receipt(
+            claim, part, "delivered", remote_id=remote), SLACK, now=NOW + 4)["applied"]
+    notify_cards.gc(led, SLACK, now=NOW + 5, limit=100)
+    with led.db:
+        later = []
+        notify_cards.issue_render(led.db, 1, SLACK, NOW + 6, later, force=True)
+    assert len(later) == 1 and _latest_render(led)["state"] == "queued"
+    part = next(p for p in later[0]["parts"]["manifest"] if p["part_id"] == target["part_id"])
+    assert part["prior_remote_id"] == target["prior_remote_id"]
+
+
+@pytest.mark.parametrize("invalid", [None, "body", "attachment", "duplicate_body", "escaped_duplicate_body",
+                                     "duplicate_attachment"])
+def test_compound_gc_witness_requires_both_existing_proof_formats(led, monkeypatch, invalid):
+    import notify_cards
+    import notify_scope
+    from slack_testkit import SLACK
+
+    req, _, target, _, _ = preflight_recovery(led, monkeypatch, missing_spec=False)
+    req.update(result="mark_delivered", remote_id=target["prior_remote_id"])
+    req["evidence"].pop("proof")
+    assert notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 2)["outcome"] == "applied"
+    notify_cards.gc(led, SLACK, now=NOW + 3, limit=100)
+    row = led.db.execute("SELECT * FROM notification_renders WHERE delivery_id=?", (req["delivery_id"],)).fetchone()
+    witness = json.loads(row["spec_json"])
+    witness["body_delivery_coverage"] = {"version": 1, "payload_hash": row["payload_hash"],
+                                         "proofs": [["a" * 64, "b" * 64, "c" * 64]]}
+    if invalid == "body":
+        witness["body_delivery_coverage"]["payload_hash"] = "f" * 64
+    elif invalid == "attachment":
+        witness["attachment_identity"]["proofs"] = ["invalid"]
+    elif invalid in ("duplicate_body", "escaped_duplicate_body"):
+        witness["body_delivery_coverage"]["proofs"] *= 2
+    elif invalid == "duplicate_attachment":
+        witness["attachment_identity"]["proofs"] *= 2
+    raw = json.dumps(witness)
+    if invalid == "escaped_duplicate_body":
+        raw = raw.replace('"' + "a" * 64 + '"', '"\\u0061' + "a" * 63 + '"', 1)
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET spec_json=? WHERE delivery_id=?", (raw, req["delivery_id"]))
+    row = led.db.execute("SELECT * FROM notification_renders WHERE delivery_id=?", (req["delivery_id"],)).fetchone()
+    body = notify_scope._body_witness_proofs(raw, row)
+    attachment = notify_scope._attachment_identity_witness_proofs(raw, row)
+    sql = led.db.execute(f"SELECT {notify_scope.BODY_COVERAGE_WITNESS_SQL}, "
+                         f"{notify_scope.ATTACHMENT_IDENTITY_WITNESS_SQL} "
+                         "FROM notification_renders r WHERE delivery_id=?", (req["delivery_id"],)).fetchone()
+    assert (body is not None) == (invalid is None)
+    assert (attachment is not None) == (invalid is None)
+    assert tuple(sql) == ((1, 1) if invalid is None else (0, 0))
+
+
+@pytest.mark.parametrize("field", ["op", "route_epoch", "correlation", "card_kind"])
+def test_collected_attachment_witness_rejects_changed_sealed_binding(led, monkeypatch, field):
+    import notify_cards
+    import notify_parts
+    import notify_scope
+    from slack_testkit import SLACK
+
+    req, original, target, _, _ = preflight_recovery(led, monkeypatch, missing_spec=False)
+    req.update(result="mark_delivered", remote_id=target["prior_remote_id"])
+    req["evidence"].pop("proof")
+    assert notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 2)["outcome"] == "applied"
+    notify_cards.gc(led, SLACK, now=NOW + 3, limit=100)
+    with led.db:
+        if field == "card_kind":
+            led.db.execute("UPDATE notification_cards SET kind='signal' WHERE card_id=1")
+        else:
+            value = {"op": "update", "route_epoch": 99, "correlation": "f" * 32}[field]
+            led.db.execute("UPDATE notification_renders SET " + field + "=? WHERE delivery_id=?",
+                           (value, original["delivery_id"]))
+        card = notify_scope.card_row(led.db, 1)
+        _, _, identities = notify_parts._same_thread_delivered_parts(led.db, card)
+    assert any(proof is None for proofs in identities.values() for proof in proofs)
+
+
 def reject_preflight(led, req, monkeypatch, expected):
     from slack_testkit import SLACK
     before = recovery_state(led)
@@ -339,7 +624,7 @@ def test_local_preflight_recovery_uses_current_caption_and_only_exact_edits(led,
                                                        (original["delivery_id"],))]
     assert mcs_requests.validate(req) is None
     receipt = notify_recovery.apply_card_part_resolve(led, req, SLACK, NOW + 2)
-    assert receipt["outcome"] == "applied" and receipt["part_state"] == "not_sent"
+    assert receipt["outcome"] == "applied" and receipt["part_state"] == "not_sent", receipt.get("error")
     latest = _latest_render(led)
     spec = json.loads(latest["spec_json"])
     assert validate(spec) == spec

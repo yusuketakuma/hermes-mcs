@@ -81,7 +81,12 @@ def test_gc_retains_slack_caption_specs_until_unknown_is_resolved(led, monkeypat
     result = notify_cards.gc(led, SLACK, now=NOW + 4)
     assert result["spec_json_cleared"] == 1 and result["spec_files"] == 1
     current = _latest_render(led)
-    assert current["spec_json"] is None and current["spec_published"] == 0
+    if resolved == "delivered":
+        assert "attachment_identity" in json.loads(current["spec_json"])
+        assert "synthetic.pdf" not in current["spec_json"]
+    else:
+        assert current["spec_json"] is None
+    assert current["spec_published"] == 0
     assert current["payload_hash"] == render["payload_hash"]
     assert not path.exists()
 
@@ -98,7 +103,12 @@ def test_gc_still_clears_other_terminal_unknown_specs(led, monkeypatch, cfg, err
     render, _, target, path = caption_update(led, monkeypatch, cfg, error, kind)
     notify_cards.gc(led, cfg, now=NOW + 2)
     current = _latest_render(led)
-    assert current["spec_json"] is None and current["spec_published"] == 0
+    if cfg is SLACK and kind == "body_part":
+        assert "attachment_identity" in json.loads(current["spec_json"])
+        assert "synthetic.pdf" not in current["spec_json"]
+    else:
+        assert current["spec_json"] is None
+    assert current["spec_published"] == 0
     assert current["payload_hash"] == render["payload_hash"]
     assert not path.exists()
     assert led.db.execute("SELECT state FROM notification_render_parts WHERE delivery_id=? AND part_id=?",
