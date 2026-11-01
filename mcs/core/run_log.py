@@ -119,18 +119,49 @@ def _serialized(state):
                       allow_nan=False).encode()
 
 
+def _republish(fd, raw):
+    existing = os.read(fd, MAX_STATE + 1)
+    if existing == raw:
+        return
+    os.lseek(fd, 0, os.SEEK_SET)
+    _write(fd, raw)
+    os.ftruncate(fd, len(raw))
+    os.fsync(fd)
+
+
+def _publish(directory, raw):
+    """Republish the full state (pending included) at the legacy location
+    in place — file content changes only, never a directory entry, so the
+    data dir's metadata stays stable for provider_settings' identity
+    checks and pinned older helpers keep seeing live pending records to
+    recover before appending. A crash mid-write can tear the file; only
+    this in-place path can tear it (helpers publish atomically), so an
+    unreadable legacy state file is always our own partial republish and
+    _adopt regenerates it from the canonical copy."""
+    try:
+        with _file(directory, STATE, os.O_RDWR) as fd:
+            _republish(fd, raw)
+        return
+    except FileNotFoundError:
+        pass
+    with _file(directory, STATE, os.O_RDWR | os.O_CREAT) as fd:
+        _republish(fd, raw)
+    os.fsync(directory)
+
+
 def _save(directory, backup, state):
     """Persist state. The canonical file lives inside backups/ so temp+replace
     churn never changes the data dir's metadata — provider_settings verifies
     that directory's identity on every settings read and a same-dir rename
-    would read as tampering. data/STATE stays a normalized mirror (pending
-    stripped) republished only on content change, so pinned helpers from
-    older versions still see committed sources and never re-import finished
-    work. A live pending is completed only by the lock holder that recorded
-    it, which is why the mirror never carries one."""
+    would read as tampering. data/STATE is the same bytes republished in
+    place FIRST: helpers pinned to older versions read pending there and
+    run their own recovery before appending, so they can never write past
+    a partial record; and if the canonical write is lost to a crash the
+    newer mirror is folded back in by _adopt under the same lock."""
     raw = _serialized(state)
     if len(raw) > MAX_STATE:
         raise RunLogError("run_log_state_limit")
+    _publish(directory, raw)
     temporary = ".mcs-log-state-" + uuid.uuid4().hex
     try:
         with _file(backup, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL) as fd:
@@ -143,25 +174,6 @@ def _save(directory, backup, state):
             os.unlink(temporary, dir_fd=backup)
         except FileNotFoundError:
             pass
-    mirror = _serialized({**state, "pending": None})
-    try:
-        with _file(directory, STATE) as fd:
-            existing = os.read(fd, MAX_STATE + 1)
-    except FileNotFoundError:
-        existing = None
-    if existing != mirror:
-        temporary = ".mcs-log-state-" + uuid.uuid4().hex
-        try:
-            with _file(directory, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL) as fd:
-                _write(fd, mirror)
-                os.fsync(fd)
-            os.replace(temporary, STATE, src_dir_fd=directory, dst_dir_fd=directory)
-            os.fsync(directory)
-        finally:
-            try:
-                os.unlink(temporary, dir_fd=directory)
-            except FileNotFoundError:
-                pass
 
 
 def _load(directory):
@@ -226,28 +238,85 @@ def _record_current(directory, name, record):
         return False
 
 
+def _applied(directory, backup, pending):
+    """Prove a recorded pending already committed: its postcondition verified
+    against the real files, used only to tell 'a foreign helper finished our
+    staged write then staged its own' from a genuine two-live-pending
+    conflict."""
+    try:
+        if pending["kind"] == "rotate":
+            name = _stage_name(pending["archive"])
+            try:
+                with _file(backup, name) as archived:
+                    info = os.fstat(archived)
+                    return (_identity(info) == pending["identity"]
+                            and info.st_size == pending["size"]
+                            and _digest(archived, pending["size"]) == pending["sha256"])
+            except FileNotFoundError:
+                return False
+        if pending["kind"] != "append":
+            return False
+        name = _stage_name(pending["stage"])
+        start, end, offset = pending["start"], pending["end"], pending["offset"]
+        if (any(type(n) is not int or n < 0 for n in (start, end, offset))
+                or start > end or not isinstance(pending["sha256"], str)):
+            return False
+        with _file(directory, LOG) as target:
+            info = os.fstat(target)
+            if (_identity(info) != pending["identity"]
+                    or info.st_size < offset + end - start):
+                return False
+            try:
+                with _file(backup, name) as staged:
+                    if (os.fstat(staged).st_size != end
+                            or _digest(staged, end) != pending["sha256"]):
+                        return False
+                    checked = 0
+                    while checked < end - start:
+                        amount = min(BLOCK, end - start - checked)
+                        if (os.pread(target, amount, offset + checked)
+                                != os.pread(staged, amount, start + checked)):
+                            return False
+                        checked += amount
+                    return True
+            except FileNotFoundError:
+                # ordinary-append staging is disposable once committed;
+                # start==0 makes the pending digest cover the appended range
+                return (not start
+                        and _digest(target, offset + end, offset) == pending["sha256"])
+    except (KeyError, TypeError, ValueError, RecursionError, OSError, RunLogError):
+        return False
+
+
 def _adopt(directory, backup, state):
     """Fold foreign state at the legacy location into the canonical state.
 
     Helpers pinned to older versions still write data/STATE; their committed
     imports must merge under the lock — never be dropped (re-imports would
     duplicate log bytes) and never clobber newer progress. Identical content
-    is our own republished mirror and needs no merge."""
+    is our own republished mirror and needs no merge. A foreign pending can
+    always be adopted when ours is already applied (the helper saw it in the
+    mirror and finished it) or when we hold none; two different unapplied
+    pendings are ambiguous — fail closed for a human."""
     try:
-        os.stat(STATE, dir_fd=directory, follow_symlinks=False)
-    except FileNotFoundError:
+        foreign = _load(directory)
+    except RunLogError as error:
+        if str(error) != "run_log_state_invalid":
+            raise
+        foreign = None        # only _republish can tear this file; regenerate
+    if foreign == state:
         return
-    foreign = _load(directory)
-    if foreign == {**state, "pending": None}:
-        return
-    pending = foreign["pending"]
+    pending = foreign["pending"] if foreign is not None else None
     if pending is not None and pending != state["pending"]:
-        if state["pending"] is not None:
+        if state["pending"] is None:
+            state["pending"] = pending
+        elif _applied(directory, backup, state["pending"]):
+            state["pending"] = pending
+        else:
             # two staged writes recorded against different log contents;
             # ordering is ambiguous — fail closed for a human
             raise RunLogError("run_log_state_conflict")
-        state["pending"] = pending
-    for name, record in foreign["sources"].items():
+    for name, record in (foreign["sources"].items() if foreign is not None else ()):
         current = state["sources"].get(name)
         if current is None:
             state["sources"][name] = record
@@ -259,7 +328,8 @@ def _adopt(directory, backup, state):
             # a verified foreign record proves an applied import this
             # process missed; an unverifiable or stale one loses to ours
             state["sources"][name] = record
-    state["rotation_ready"] = state["rotation_ready"] or foreign["rotation_ready"]
+    if foreign is not None:
+        state["rotation_ready"] = state["rotation_ready"] or foreign["rotation_ready"]
     _save(directory, backup, state)
 
 
@@ -313,10 +383,12 @@ def _recover(directory, backup, state):
                 os.rename(LOG, name, src_dir_fd=directory, dst_dir_fd=backup)
                 os.fsync(backup)
                 os.fsync(directory)
-            with _file(directory, LOG, os.O_WRONLY | os.O_CREAT) as live:
-                if os.fstat(live).st_size:
-                    raise RunLogError("run_log_rotation_changed")
-                os.fsync(live)
+                with _file(directory, LOG, os.O_WRONLY | os.O_CREAT) as live:
+                    if os.fstat(live).st_size:
+                        raise RunLogError("run_log_rotation_changed")
+                    os.fsync(live)
+            # a verified archive proves the rename committed — records
+            # folded in from a helper may already sit in the fresh log
             state["pending"] = None
             _save(directory, backup, state)
             return
@@ -326,39 +398,73 @@ def _recover(directory, backup, state):
         start, end, offset = pending["start"], pending["end"], pending["offset"]
         if any(type(n) is not int or n < 0 for n in (start, end, offset)) or start > end:
             raise RunLogError("run_log_state_invalid")
-        with _file(backup, name) as source, _file(directory, LOG, os.O_RDWR | os.O_CREAT | os.O_APPEND) as target:
-            if (os.fstat(source).st_size != end or _digest(source, end) != pending["sha256"]
-                    or _identity(os.fstat(target)) != pending["identity"]):
+        try:
+            os.stat(name, dir_fd=backup, follow_symlinks=False)
+            staged = True
+        except FileNotFoundError:
+            staged = False
+        if not staged:
+            # ordinary-append staging is disposable once committed: a helper
+            # that folded in and finished this pending already unlinked it —
+            # start==0 keeps the recorded digest covering the whole range
+            if start:
                 raise RunLogError("run_log_pending_changed")
-            size = os.fstat(target).st_size
-            if not offset <= size <= offset + end - start:
-                raise RunLogError("run_log_pending_changed")
-            checked = 0
-            while checked < size - offset:
-                amount = min(BLOCK, size - offset - checked)
-                if os.pread(target, amount, offset + checked) != os.pread(source, amount, start + checked):
+            with _file(directory, LOG) as target:
+                info = os.fstat(target)
+                if (_identity(info) != pending["identity"]
+                        or info.st_size < offset + end
+                        or _digest(target, offset + end, offset) != pending["sha256"]):
                     raise RunLogError("run_log_pending_changed")
-                checked += amount
-            position = start + size - offset
-            while position < end:
-                raw = os.pread(source, min(BLOCK, end - position), position)
-                if not raw:
+        else:
+            with _file(backup, name) as source, \
+                    _file(directory, LOG, os.O_RDWR | os.O_CREAT | os.O_APPEND) as target:
+                if (os.fstat(source).st_size != end or _digest(source, end) != pending["sha256"]
+                        or _identity(os.fstat(target)) != pending["identity"]):
                     raise RunLogError("run_log_pending_changed")
-                _write(target, raw)
-                position += len(raw)
-            os.fsync(target)
-            if (os.fstat(target).st_size != offset + end - start
-                    or _digest(target, offset + end - start, offset) != _digest(source, end, start)):
-                raise RunLogError("run_log_pending_changed")
+                size = os.fstat(target).st_size
+                if size < offset:
+                    raise RunLogError("run_log_pending_changed")
+                # a folded-in helper finishes our pending before its own
+                # appends: growth past the recorded window is legal once the
+                # whole window verifies — anything shorter must still match
+                # the staged prefix before we extend it
+                checked = 0
+                window = min(size - offset, end - start)
+                while checked < window:
+                    amount = min(BLOCK, window - checked)
+                    if os.pread(target, amount, offset + checked) != os.pread(source, amount, start + checked):
+                        raise RunLogError("run_log_pending_changed")
+                    checked += amount
+                position = start + size - offset
+                while position < end:
+                    raw = os.pread(source, min(BLOCK, end - position), position)
+                    if not raw:
+                        raise RunLogError("run_log_pending_changed")
+                    _write(target, raw)
+                    position += len(raw)
+                os.fsync(target)
+                if (os.fstat(target).st_size < offset + end - start
+                        or _digest(target, offset + end - start, offset) != _digest(source, end, start)):
+                    raise RunLogError("run_log_pending_changed")
         if pending.get("source") is not None:
             if pending["source"] not in LEGACY_NAMES or not isinstance(pending.get("next_source"), dict):
                 raise RunLogError("run_log_state_invalid")
-            state["sources"][pending["source"]] = pending["next_source"]
+            current = state["sources"].get(pending["source"])
+            next_source = pending["next_source"]
+            # a folded helper may have imported further; never regress it
+            if (current is None or current.get("identity") != next_source.get("identity")
+                    or type(current.get("offset")) is not int
+                    or type(next_source.get("offset")) is not int
+                    or current["offset"] < next_source["offset"]):
+                state["sources"][pending["source"]] = next_source
         state["pending"] = None
         _save(directory, backup, state)
         # Imports remain verified recovery copies; ordinary append staging is disposable only after commit.
         if pending.get("source") is None:
-            os.unlink(name, dir_fd=backup)
+            try:
+                os.unlink(name, dir_fd=backup)
+            except FileNotFoundError:
+                pass          # a folded helper already disposed of it
             os.fsync(backup)
     except (KeyError, TypeError, ValueError, RecursionError):
         raise RunLogError("run_log_state_invalid") from None

@@ -2300,6 +2300,32 @@ def test_scheduled_worker_keeps_full_budget_after_waiting_for_writer(
         os.fstat(fd)
 
 
+def test_health_write_survives_a_watchdog_deadline_mid_observation(tmp_path, monkeypatch):
+    """Once the watchdog's hard deadline is reached, every health observation
+    must stop at it — health.json is still published with honest unknowns,
+    on a live connection, instead of the process dying mid-write (the 30s
+    pool may not claim more than the watchdog leaves)."""
+    db = _ledger(tmp_path)
+    monkeypatch.setattr(health_report, 'HEALTH_FILE',
+                        str(tmp_path / "health.json"))
+    monkeypatch.setattr(health_report, 'attachment_free_mb',
+                        lambda path=None: 10_000)
+    # the deadline already passed: no SQL read may claim a fresh 30s window
+    monkeypatch.setattr(run_check, "_hard_deadline",
+                        lambda: time.monotonic() - 1)
+    result = {"errors": [], "notify": {}}
+    run_check._write_health(db, result, "ok", run_id=7)
+    health = json.loads((tmp_path / "health.json").read_text())
+    assert health["notify"]["pending"] is None
+    assert health["notify"]["pending_by_reason"]["reason"] == "observation_limit"
+    assert health["notify"]["state"] == "incomplete"
+    assert health["overall"] == "degraded"
+    assert "notification_pending_unavailable" in health["state_reasons"]
+    # the tick's connection survived: no leaked savepoint or progress handler
+    assert db.db.execute("SELECT 1").fetchone()[0] == 1
+    db.close()
+
+
 def test_jobs_only_health_keeps_last_unread_time(tmp_path, monkeypatch):
     """A --jobs-only deep run refreshes `at` but not `unread_at`, so the
     health watcher still sees a stopped unread check as stale."""

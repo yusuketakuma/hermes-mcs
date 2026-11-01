@@ -492,12 +492,13 @@ def bounded_health_read(db, read, seconds=None):
             db.execute(f"PRAGMA busy_timeout={previous_wait}")
 
 
-def collection_diagnostics_health(db, errors, now):
+def collection_diagnostics_health(db, errors, now, seconds=None):
     """Observe collection details within the existing reader budget without changing the verdict."""
     import collection_diagnostics as diagnostics
     try:
         incomplete = bounded_health_read(
-            db, lambda checkpoint: diagnostics.incomplete_counts(db, now, checkpoint))
+            db, lambda checkpoint: diagnostics.incomplete_counts(db, now, checkpoint),
+            seconds=HEALTH_OBSERVATION_S if seconds is None else min(seconds, HEALTH_OBSERVATION_S))
     except (sqlite3.Error, RuntimeError, ValueError, TypeError):
         incomplete = diagnostics.unknown_incomplete()
     return {"observed_at": now, "errors": diagnostics.error_counts(errors), "incomplete": incomplete}
@@ -508,7 +509,8 @@ def pending_health(db, now, seconds=None):
     import notify_scope
     try:
         breakdown = bounded_health_read(
-            db, lambda check: notify_scope.pending_breakdown(db, now, checkpoint=check))
+            db, lambda check: notify_scope.pending_breakdown(db, now, checkpoint=check),
+            seconds=None if seconds is None else min(seconds, HEALTH_OBSERVATION_S))
     except Exception:
         # Optional diagnostics must not hide a real count failure: a real
         # SQLite error still propagates through the existing health path;
@@ -548,7 +550,7 @@ def _observation_failure(exc) -> str:
     return "observation_limit" if limited else "observation_unavailable"
 
 
-def patient_context_health(db, checked_cfg, now, source) -> dict:
+def patient_context_health(db, checked_cfg, now, source, seconds=None) -> dict:
     """Counts only, never patients: context refresh lane outcomes, extraction-complete
     and patient-focus counts, stored published contexts. Counts are reused for
     COVERAGE_COUNT_S on the same db and extraction generation; publication is
@@ -567,7 +569,7 @@ def patient_context_health(db, checked_cfg, now, source) -> dict:
     try:
         counts = bounded_health_read(db, lambda _check: {
             **patient_context_refresh.lane_metrics(db), **extract_llm.patient_progress_counts(db)},
-            seconds=PATIENT_CONTEXT_S)
+            seconds=min(PATIENT_CONTEXT_S, seconds) if seconds is not None else PATIENT_CONTEXT_S)
     except Exception as exc:
         return {"status": "unknown", "observed_at": now, "reason": _observation_failure(exc),
                 "publication": publication}
@@ -575,24 +577,26 @@ def patient_context_health(db, checked_cfg, now, source) -> dict:
             "observed_at": now, **key}
 
 
-def part_holds_health(db, now) -> dict:
+def part_holds_health(db, now, seconds=None) -> dict:
     """Held/unknown notification parts by fixed reason and retained specs (counts only)."""
     import notify_recovery
     try:
         report = bounded_health_read(db, lambda _check: notify_recovery.part_hold_report(db),
-                                     seconds=NOTIFICATION_OBSERVATION_S)
+                                     seconds=NOTIFICATION_OBSERVATION_S if seconds is None
+                                     else min(seconds, NOTIFICATION_OBSERVATION_S))
     except Exception as exc:
         return {"status": "unknown", "observed_at": now, "reason": _observation_failure(exc)}
     return {**report, "status": "recorded", "observed_at": now}
 
 
-def incomplete_parts_health(db, now, cfg=None) -> dict:
+def incomplete_parts_health(db, now, cfg=None, seconds=None) -> dict:
     """Observe unfinished notification counts within the existing reader budget."""
     import notify_scope
     try:
         report = bounded_health_read(
             db, lambda _check: notify_scope.incomplete_parts_health(db, now, cfg),
-            seconds=NOTIFICATION_OBSERVATION_S)
+            seconds=NOTIFICATION_OBSERVATION_S if seconds is None
+            else min(seconds, NOTIFICATION_OBSERVATION_S))
     except Exception as exc:
         return {"total": None, "cards": None,
                 "by_state": dict.fromkeys(("pending", "unknown", "not_sent", "held")),
@@ -603,23 +607,31 @@ def incomplete_parts_health(db, now, cfg=None) -> dict:
 
 
 def build_health(db, result: dict, status: str,
-            run_id: int | None = None, *, cfg: dict | None = None) -> dict:
+            run_id: int | None = None, *, cfg: dict | None = None,
+            deadline: float | None = None) -> dict:
     """Per-subsystem machine-readable state: collection completeness,
     notification completion, extract/QC backlog lag, and current
     extraction-generation coverage. New observations expose only counts,
     fixed reasons and timestamps; message bodies are never queried here.
-    `run_id` binds this evidence to the source run that produced it."""
+    `run_id` binds this evidence to the source run that produced it.
+    `deadline` (monotonic, e.g. the watchdog's hard deadline) bounds every
+    observation together with the shared pool — past it each section must
+    report honest unknown, never keep reading while the process is killed."""
     import extract_llm
     import notify_scope
     from mcs_queries import current_extract_pred, json_or_null
     now = time.time()
     # Every SQL read this build owns shares one window; a slow table spends
     # the pool and later sections report honest 'unknown' instead of
-    # stalling the tick past the watchdog's patience.
+    # stalling the tick past the watchdog's patience. The caller's hard
+    # deadline caps the same window — a read started with ten seconds left
+    # never claims a fresh thirty.
     observation_end = time.monotonic() + HEALTH_SQL_BUDGET_S
+    if deadline is not None:
+        observation_end = min(observation_end, deadline)
 
     def remaining():
-        return max(0.05, observation_end - time.monotonic())
+        return max(0.0, observation_end - time.monotonic())
 
     notify_res = result.get("notify") or {}
     notify_state = ("incomplete"
@@ -629,6 +641,10 @@ def build_health(db, result: dict, status: str,
     # waiting by design, not pending delivery — everything else counts
     # from its creation, including retries with a future next_try
     outbox = pending_health(db, now, seconds=remaining())
+    # an unmeasurable pending count can never read as delivered work
+    pending_unknown = outbox["pending"] is None
+    if pending_unknown:
+        notify_state = "incomplete"
     retired = notify_scope.retired_transports(cfg)
     marks = ",".join("?" * len(retired))
     # Preserve retired receipts while excluding only events whose sealed
@@ -753,8 +769,9 @@ def build_health(db, result: dict, status: str,
         coll['collection'] = 'incomplete'
     free_mb = attachment_free_mb()
     try:
-        cards_health = bounded_health_read(db, lambda _check: notify_scope.health_cards(db, cfg),
-                                           seconds=NOTIFICATION_OBSERVATION_S)
+        cards_health = bounded_health_read(
+            db, lambda _check: notify_scope.health_cards(db, cfg),
+            seconds=min(NOTIFICATION_OBSERVATION_S, remaining()))
     except Exception as exc:
         cards_health = dict.fromkeys((
             "pending", "delivered", "update_failed", "delivery_unknown", "message_deleted",
@@ -764,7 +781,7 @@ def build_health(db, result: dict, status: str,
             "last_delivered_at"))
         cards_health.update(status="unknown", observed_at=now, reason=_observation_failure(exc))
     cards_unknown = cards_health.get("status") == "unknown"
-    incomplete_parts = incomplete_parts_health(db, now, cfg)
+    incomplete_parts = incomplete_parts_health(db, now, cfg, seconds=remaining())
     parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(incomplete_parts['total'])
     if parts_incomplete or cards_unknown:
         notify_state = "incomplete"
@@ -842,7 +859,8 @@ def build_health(db, result: dict, status: str,
     from operational_status import interrupted_runs
     try:
         run["last_interrupt"] = bounded_health_read(
-            db, lambda _check: interrupted_runs(db, now=now))
+            db, lambda _check: interrupted_runs(db, now=now),
+            seconds=min(HEALTH_OBSERVATION_S, remaining()))
     except Exception:
         run["last_interrupt"] = {"status": "unavailable", "observed_at": now,
                                  "reason": "observation_unavailable"}
@@ -899,6 +917,7 @@ def build_health(db, result: dict, status: str,
             ("notification_parked", bool(notify_res.get("parked"))),
             ("notification_held", bool(held)),
             ("notification_pending", bool(outbox["pending"])),
+            ("notification_pending_unavailable", pending_unknown),
             ("notification_parts_incomplete", parts_incomplete),
             ("notification_cards_unavailable", cards_unknown),
             ("disk_low", disk_low),
@@ -918,7 +937,8 @@ def build_health(db, result: dict, status: str,
         "semantic_intake_unstored": unstored_state,
         "semantic_intake_diagnostic_unpersisted": diagnostic_unpersisted,
         "semantic_intake_source": source,
-        "collection_diagnostics": collection_diagnostics_health(db, real_errors, now),
+        "collection_diagnostics": collection_diagnostics_health(
+            db, real_errors, now, seconds=remaining()),
         "disk_free_mb": round(free_mb) if free_mb is not None else None,
         "disk_low": disk_low,
         "notify": {"state": notify_state,
@@ -928,7 +948,7 @@ def build_health(db, result: dict, status: str,
                    "retired_held": retired_held,
                    "held_pinned_attachments": held_pins,
                    "incomplete_parts": incomplete_parts,
-                   "part_holds": part_holds_health(db, now)},
+                   "part_holds": part_holds_health(db, now, seconds=remaining())},
         "semantic_jobs": ({"pending": _pending_rows[0]["c"],
                            "oldest_age_s": (round(now - _pending_rows[0]["o"], 1)
                                             if _pending_rows[0]["o"] else 0)}
@@ -946,7 +966,8 @@ def build_health(db, result: dict, status: str,
         "cards": cards_health,
         "metadata_shadow": shadow_health,
         "attention": attention,
-        "patient_context": patient_context_health(db, cfg if checked else None, now, source),
+        "patient_context": patient_context_health(
+            db, cfg if checked else None, now, source, seconds=remaining()),
         "stall_marks": stall_marks,
         **early_warnings(db, result, free_mb),
         "errors": list(result.get("errors") or []),

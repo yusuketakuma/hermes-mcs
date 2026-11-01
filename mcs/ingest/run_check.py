@@ -87,7 +87,9 @@ def _write_health(ledger, result: dict, status: str,
     must not be silent either: a durable 'health_write_failed' incident
     is queued so the gap is itself visible (GAP-1)."""
     try:
-        health = health_report.build_health(ledger.db, result, status, run_id=run_id, cfg=cfg)
+        health = health_report.build_health(
+            ledger.db, result, status, run_id=run_id, cfg=cfg,
+            deadline=_hard_deadline())
         if ledger.db.in_transaction:
             result["errors"].append("tick: transaction_open")
             return

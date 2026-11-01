@@ -1,5 +1,7 @@
 """Synthetic private runtime logging, record serialization and failure recovery."""
+from contextlib import contextmanager
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -28,8 +30,7 @@ def test_large_record_and_partial_final_line_are_preserved(data):
     assert (data / run_log.LOG).read_bytes() == payload
     assert (data / run_log.LOG).stat().st_mode & 0o777 == 0o600
     assert json.loads((data / run_log.STATE).read_text())["pending"] is None
-    # the canonical state file lives inside backups/; nothing else does
-    assert [path.name for path in (data / run_log.BACKUPS).iterdir()] == [run_log.STATE]
+    assert list((data / run_log.BACKUPS).iterdir()) == [data / run_log.BACKUPS / run_log.STATE]
 
 
 @pytest.mark.parametrize("attempt", range(5))
@@ -112,10 +113,11 @@ def test_disk_failure_repairs_original_record_before_next_append(data, monkeypat
         patch.setattr(run_log.os, "write", fail)
         with pytest.raises(OSError):
             run_log.append(data, b"original record\n")
-    # pending survives only in the canonical state inside backups/; the
-    # data-dir mirror always normalizes it away
-    assert json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())["pending"] is not None
-    assert json.loads((data / run_log.STATE).read_text())["pending"] is None
+    # pending survives in the canonical state inside backups/ and the
+    # data-dir mirror carries it verbatim so older helpers can recover
+    mirror = json.loads((data / run_log.STATE).read_text())
+    canonical = json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())
+    assert canonical["pending"] is not None and mirror == canonical
     run_log.append(data, b"next\n")
     assert (data / run_log.LOG).read_bytes() == b"before\noriginal record\nnext\n"
 
@@ -159,11 +161,14 @@ def test_symlinked_parent_and_malformed_state_fail_closed(data, tmp_path):
     linked.symlink_to(data, target_is_directory=True)
     with pytest.raises(OSError):
         run_log.append(linked, b"never")
-    (data / run_log.STATE).write_bytes(b"not json")
-    (data / run_log.STATE).chmod(0o600)
+    # the canonical copy (backups/) still fails closed; only the data-root
+    # mirror is regenerable (see test_a_torn_mirror_is_regenerated_from_canonical)
+    run_log.append(data, b"initial\n")
+    (data / run_log.BACKUPS / run_log.STATE).write_bytes(b"not json")
+    (data / run_log.BACKUPS / run_log.STATE).chmod(0o600)
     with pytest.raises(run_log.RunLogError, match="state_invalid"):
         run_log.append(data, b"never")
-    assert not (data / run_log.LOG).exists()
+    assert (data / run_log.LOG).read_bytes() == b"initial\n"
 
 
 def test_zero_write_is_failure_and_created_descriptor_is_closed(data, monkeypatch):
@@ -300,7 +305,8 @@ def test_append_io_measurement_is_reported_without_a_speed_claim(data, monkeypat
     for _ in range(20):
         run_log.append(data, b"synthetic runtime event\n")
     elapsed = time.monotonic() - started
-    assert len(calls) == 160
+    # 10 fsyncs per append: stage+dir, mirror+canonical save x2, log fsync, unlink fsync
+    assert len(calls) == 200
     assert (data / run_log.LOG).read_bytes() == b"warm-up\n" + b"synthetic runtime event\n" * 20
     print(json.dumps({"fixture": "20 synthetic durable records", "fsync_calls": len(calls),
                       "elapsed_s": elapsed, "speed_claim": False}))
@@ -320,11 +326,11 @@ def test_appends_never_change_the_data_directory_entry_metadata(data):
         assert (after.st_mtime_ns, after.st_ctime_ns) == identity
 
 
-def test_canonical_state_lives_in_backups_with_a_normalized_data_mirror(data):
+def test_canonical_state_lives_in_backups_with_a_verbatim_data_mirror(data):
     run_log.append(data, b"x\n")
     canonical = json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())
     mirror = json.loads((data / run_log.STATE).read_text())
-    assert mirror == {**canonical, "pending": None}
+    assert mirror == canonical
 
 
 def _foreign_state(data, **overrides):
@@ -347,8 +353,8 @@ def test_foreign_state_from_an_older_helper_is_folded_in(data):
     merged = json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())
     assert merged["sources"]["run.log"]["offset"] == 3
     assert merged["rotation_ready"] is True
-    # the mirror was republished once, holding the merged committed view
-    assert json.loads((data / run_log.STATE).read_text()) == {**merged, "pending": None}
+    # the mirror was republished once, verbatim with the canonical view
+    assert json.loads((data / run_log.STATE).read_text()) == merged
 
 
 def test_foreign_pending_staged_by_an_older_helper_is_completed(data):
@@ -379,3 +385,132 @@ def test_two_live_pending_writes_fail_closed(data):
     _foreign_state(data, pending={"kind": "append", "stage": "b" * 32 + ".bin"})
     with pytest.raises(run_log.RunLogError, match="state_conflict"):
         run_log.append(data, b"next\n")
+
+
+# --- pre-migration helpers -------------------------------------------------
+# A pinned older helper shares this module's semantics but persists state at
+# data/STATE only (canonical-in-backups did not exist): same lock, same stage
+# directory, state written by atomic replace.
+
+
+@contextmanager
+def _old_locked(data):
+    directory = run_log._directory(data)
+    try:
+        with run_log._file(directory, run_log.LOCK, os.O_RDWR) as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            backup = os.open(run_log.BACKUPS, os.O_RDONLY | os.O_DIRECTORY
+                             | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory)
+            try:
+                state = run_log._load(directory)
+                run_log._recover(directory, backup, state)
+                yield directory, backup, state
+            finally:
+                os.close(backup)
+    finally:
+        os.close(directory)
+
+
+def _old_save(directory, _backup, state):
+    raw = run_log._serialized(state)
+    temporary = ".mcs-log-state-" + uuid.uuid4().hex
+    try:
+        with run_log._file(directory, temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL) as fd:
+            run_log._write(fd, raw)
+            os.fsync(fd)
+        os.replace(temporary, run_log.STATE,
+                   src_dir_fd=directory, dst_dir_fd=directory)
+        os.fsync(directory)
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=directory)
+        except FileNotFoundError:
+            pass
+
+
+def _old_append(data, payload, monkeypatch):
+    with monkeypatch.context() as patch:
+        patch.setattr(run_log, "_save", _old_save)
+        with _old_locked(data) as (directory, backup, state):
+            with run_log._new_stage(backup) as (name, stage):
+                run_log._write(stage, payload)
+            run_log._prepare(directory, backup, state, name)
+
+
+def _crash_mid_record(data, monkeypatch, payload):
+    """Stage an append, write only its first 4 bytes, then die — the new
+    code's canonical pending while a pinned helper is about to run."""
+    live = (data / run_log.LOG).stat()
+    burst = False
+    real_write = os.write
+
+    def partial(fd, raw):
+        nonlocal burst
+        info = os.fstat(fd)
+        if not burst and (info.st_dev, info.st_ino) == (live.st_dev, live.st_ino):
+            burst = True
+            real_write(fd, raw[:4])
+            raise OSError(errno.EIO, "synthetic mid-record crash")
+        return real_write(fd, raw)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(run_log.os, "write", partial)
+        with pytest.raises(OSError):
+            run_log.append(data, payload)
+
+
+def test_old_helper_finishes_a_crashed_record_before_its_own_append(data, monkeypatch):
+    """Mixed-generation reproduction: a new append dies mid-record; the
+    pinned helper must see the pending in the mirror, complete it, then
+    append — and the new side must accept the resolution, never fail or
+    duplicate it."""
+    run_log.append(data, b"before\n")
+    _crash_mid_record(data, monkeypatch, b"record\n")
+    # the crash left a live pending — visible verbatim to older helpers
+    canonical = json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())
+    assert canonical["pending"] is not None
+    assert json.loads((data / run_log.STATE).read_text()) == canonical
+    _old_append(data, b"legacy following\n", monkeypatch)
+    assert (data / run_log.LOG).read_bytes() == b"before\nrecord\nlegacy following\n"
+    run_log.append(data, b"next\n")
+    assert (data / run_log.LOG).read_bytes() == b"before\nrecord\nlegacy following\nnext\n"
+    assert json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())["pending"] is None
+
+
+def test_foreign_pending_is_adopted_once_our_pending_is_applied(data, monkeypatch):
+    """The helper resolved our crashed record, staged its own write, then
+    died: its pending folds in and completes — no conflict, no gap."""
+    run_log.append(data, b"before\n")
+    _crash_mid_record(data, monkeypatch, b"record\n")
+    # old helper finishes ours, then dies mid-way through its own record
+    with monkeypatch.context() as patch:
+        patch.setattr(run_log, "_save", _old_save)
+        with _old_locked(data) as (directory, backup, state):
+            with run_log._new_stage(backup) as (name, stage):
+                run_log._write(stage, b"old-side\n")
+            with run_log._file(backup, name) as staged, \
+                    run_log._file(directory, run_log.LOG, os.O_RDWR | os.O_CREAT | os.O_APPEND) as live:
+                end = os.fstat(staged).st_size
+                state["pending"] = {
+                    "kind": "append", "stage": name, "start": 0, "end": end,
+                    "sha256": run_log._digest(staged, end),
+                    "offset": os.fstat(live).st_size,
+                    "identity": run_log._identity(os.fstat(live)), "source": None}
+                _old_save(directory, backup, state)
+    assert (data / run_log.LOG).read_bytes() == b"before\nrecord\n"
+    run_log.append(data, b"next\n")
+    assert (data / run_log.LOG).read_bytes() == b"before\nrecord\nold-side\nnext\n"
+
+
+def test_a_torn_mirror_is_regenerated_from_canonical(data):
+    """Only the in-place republish can tear data/STATE; the next lock heals
+    it from the canonical copy instead of wedging the log."""
+    run_log.append(data, b"base\n")
+    path = data / run_log.STATE
+    with path.open("r+b") as fd:
+        fd.write(b"{ not json")  # torn mid-write, invalid JSON
+    run_log.append(data, b"next\n")
+    mirror = json.loads(path.read_text())
+    canonical = json.loads((data / run_log.BACKUPS / run_log.STATE).read_text())
+    assert mirror == canonical
+    assert (data / run_log.LOG).read_bytes() == b"base\nnext\n"

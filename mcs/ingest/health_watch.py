@@ -45,7 +45,8 @@ REALERT_S = 4 * 3600        # unchanged bad state re-alerts every 4h
 TRANSIENT_REASONS = frozenset({"stage_errors", "run_deadline_exceeded", "collection_incomplete",
                                "notification_deferred", "notification_parked",
                                "notification_pending", "notification_parts_incomplete",
-                               "notification_cards_unavailable"})
+                               "notification_cards_unavailable",
+                               "notification_pending_unavailable"})
 STREAK_ALERT = 3
 DELIVERY_RETRY_S = 60       # only provably unsent alerts may retry
 UNKNOWN_HISTORY = 50        # retained uncertain-delivery records
@@ -189,6 +190,11 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
     cards_unknown = isinstance(cards, dict) and cards.get('status') == 'unknown'
     if cards_unknown and report['status'] == 'ok':
         report['status'] = 'degraded'
+    # a pending count the producer could not observe is unmeasured work,
+    # never 'none' — same rule as the other unknown observations
+    pending_unknown = 'pending' in notify and notify.get('pending') is None
+    if pending_unknown and report['status'] == 'ok':
+        report['status'] = 'degraded'
     # explain non-ok from the producer's own codes/counters (never text):
     # absent or malformed fields stay unknown (None), never "no reason"
     reasons = h.get("state_reasons")
@@ -211,6 +217,10 @@ def classify_health(path: str, now: float, deadline_s: int) -> dict:
         reasons = list(reasons)
         if 'notification_cards_unavailable' not in reasons:
             reasons.append('notification_cards_unavailable')
+    if reasons is not None and pending_unknown and report['status'] in ('degraded', 'failed'):
+        reasons = list(reasons)
+        if 'notification_pending_unavailable' not in reasons:
+            reasons.append('notification_pending_unavailable')
     if report["status"] == "stale":
         # the stale file's codes describe its own run, not the current
         # staleness: keep them labelled as recorded, the cause unknown
@@ -726,6 +736,8 @@ _REASON_JA = {
                                       "配送記録と通知先を照合。送信結果が不明な部品は自動で再送しません"),
     "notification_cards_unavailable": ("通知カードの配送状況を確認できません",
                                        "次回の収集で再確認します。続く場合は収集ログを確認"),
+    "notification_pending_unavailable": ("通知の送信待ち件数を確認できません",
+                                         "次回の収集で再確認します。続く場合は収集ログを確認"),
     "disk_low": ("ディスクの空き容量が不足しています", "不要なファイルを削除するか保存先を広げる"),
     "card_delivery_stalled": ("カードの配送が30分以上止まっています",
                               "slack_profile / profile と worker_started の記録を確認。設定が正しくworkerが停止している場合は hermes gateway restart"),

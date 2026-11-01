@@ -317,6 +317,54 @@ def test_pending_count_failure_still_propagates_real_errors(stored, monkeypatch)
         health_report.pending_health(stored, NOW)
 
 
+def test_unobserved_pending_count_is_incomplete_never_ok(stored, tmp_path, monkeypatch):
+    """Breakdown stops at its bound and the fallback count exhausts too:
+    an unmeasured pending queue is incomplete work, never a healthy zero —
+    producer reasons and the monitor's own recheck must both show it."""
+    monkeypatch.setattr(
+        health_report, "pending_health",
+        lambda *a, **k: {"pending": None, "oldest_age_s": None,
+                         "pending_by_reason": {"status": "unavailable", "observed_at": NOW,
+                                               "reason": "observation_limit"}})
+    report = health_report.build_health(stored, {"errors": [], "notify": {}}, "ok", cfg={})
+    assert report["notify"]["pending"] is None
+    assert report["notify"]["state"] == "incomplete"
+    assert report["overall"] == "degraded"
+    assert "notification_pending_unavailable" in report["state_reasons"]
+    assert "notification_pending" not in report["state_reasons"]
+    path = tmp_path / "health.json"
+    path.write_text(json.dumps(report))
+    watched = health_watch.classify_health(str(path), NOW + 1, 1800)
+    assert watched["status"] == "degraded"
+    assert watched["notify_pending"] is None
+    assert "notification_pending_unavailable" in watched["state_reasons"]
+
+
+@pytest.mark.parametrize("overall,expected", [("ok", "degraded"), ("degraded", "degraded"),
+                                             ("failed", "failed")])
+def test_monitor_rechecks_unknown_pending_even_if_producer_reasons_are_missing(
+        tmp_path, overall, expected):
+    path = tmp_path / "health.json"
+    path.write_text(json.dumps({"at": NOW, "overall": overall, "state_reasons": [],
+                                "notify": {"pending": None}}))
+    watched = health_watch.classify_health(str(path), NOW + 1, 1800)
+    assert watched["status"] == expected
+    assert watched["state_reasons"] == ["notification_pending_unavailable"]
+    stale = health_watch.classify_health(str(path), NOW + 1801, 1800)
+    assert stale["status"] == "stale" and stale["state_reasons"] is None
+
+
+def test_observed_pending_zero_stays_healthy(stored, tmp_path):
+    report = health_report.build_health(stored, {"errors": [], "notify": {}}, "ok", cfg={})
+    assert report["notify"]["pending"] == 0
+    assert report["notify"]["state"] == report["overall"] == "ok"
+    assert "notification_pending_unavailable" not in report["state_reasons"]
+    path = tmp_path / "health.json"
+    path.write_text(json.dumps(report))
+    watched = health_watch.classify_health(str(path), NOW + 1, 1800)
+    assert watched["status"] == "ok" and watched["notify_pending"] == 0
+
+
 def test_coverage_joins_count_distinct_messages(stored, monkeypatch):
     """The join-driven coverage COUNTs must keep EXISTS semantics: a message
     with several matching artifacts still counts once."""
