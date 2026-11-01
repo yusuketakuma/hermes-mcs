@@ -124,7 +124,13 @@ def _load_config(path, *, allow_provider_unavailable=False):
             root = os.path.dirname(os.path.abspath(path))
             reader = (provider_settings.read_with_verified_common if allow_provider_unavailable
                       else provider_settings.read)
-            state = reader(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+            try:
+                state = reader(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+            except ValueError as error:
+                if str(error) != "provider_settings_changed":
+                    raise
+                # Discard the conflicted snapshot and verify a fresh one once.
+                state = reader(root, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
             if state["mode"] == "provider_unavailable":
                 cfg = dict(state["common"])
                 cloud = cfg.get("cloud_llm", {})

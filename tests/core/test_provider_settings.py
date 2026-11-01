@@ -8,6 +8,7 @@ import pytest
 
 import cloud_policy
 import mcs_config
+import mcs_util
 import provider_settings as settings
 import safe_io
 
@@ -1185,3 +1186,49 @@ def test_verified_common_rejects_concurrent_change(tmp_path, monkeypatch, target
     with pytest.raises((ValueError, OSError)):
         settings.read_with_verified_common(tmp_path, model_owners=OWNERS)
     assert changed
+
+
+@pytest.mark.parametrize('allow_unavailable', [False, True])
+def test_runtime_config_retries_after_unrelated_atomic_data_update(tmp_path, monkeypatch, allow_unavailable):
+    common, data, _ = tree(tmp_path, split=True)
+    original = settings._read_file
+    changed = False
+
+    def read_then_update(parent, name, **kwargs):
+        nonlocal changed
+        value = original(parent, name, **kwargs)
+        if name == 'openai.json' and not changed:
+            changed = True
+            temp = data / 'synthetic-runtime.tmp'
+            temp.write_text('synthetic')
+            os.replace(temp, data / 'synthetic-runtime.json')
+        return value
+
+    monkeypatch.setattr(settings, '_read_file', read_then_update)
+    monkeypatch.setattr(mcs_util, '_provider_config_active', lambda path: True)
+    monkeypatch.setattr(cloud_policy, 'resolve_settings', lambda common, root: ({'provider': 'openai'}, []))
+    assert mcs_util._load_config(str(tmp_path / 'config.json'),
+                                 allow_provider_unavailable=allow_unavailable) == common
+    assert changed
+
+
+@pytest.mark.parametrize(('failure', 'expected_calls'), [
+    ('provider_settings_changed', 2),
+    ('provider_settings_pending', 1),
+    ('provider_authority_invalid', 1),
+])
+@pytest.mark.parametrize('allow_unavailable', [False, True])
+def test_runtime_config_retry_is_bounded_and_never_defaults_open(
+        tmp_path, monkeypatch, failure, expected_calls, allow_unavailable):
+    calls = []
+
+    def fail_reader(*args, **kwargs):
+        calls.append(True)
+        raise ValueError(failure)
+
+    monkeypatch.setattr(mcs_util, '_provider_config_active', lambda path: True)
+    reader = 'read_with_verified_common' if allow_unavailable else 'read'
+    monkeypatch.setattr(settings, reader, fail_reader)
+    with pytest.raises(mcs_util.ProviderSettingsUnreadable):
+        mcs_util._load_config(str(tmp_path / 'config.json'), allow_provider_unavailable=allow_unavailable)
+    assert len(calls) == expected_calls
