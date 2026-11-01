@@ -172,7 +172,7 @@ def worker(parent):
     import writer_lock
     from writer_lock import acquire_run_lock
     from ledger import Ledger
-    from mcs_util import DB, CONF_PATH, load_config
+    from mcs_util import DB, CONF_PATH, ProviderSettingsUnreadable, load_config
     initial = writer_lock.updater_state()
     phase = 0
     print(json.dumps({"event": "cloud_worker_started", "pid": os.getpid(), "parent": parent,
@@ -222,7 +222,13 @@ def worker(parent):
                         continue
                 if not extract_llm._context_memory_available():
                     return
-                cfg = load_config()
+                try:
+                    cfg = load_config()
+                except ProviderSettingsUnreadable:
+                    print(json.dumps({"event": "cloud_backlog_deferred",
+                                      "reason": "provider_settings_unreadable"}), flush=True)
+                    time.sleep(10)
+                    continue
                 settings = extract_llm._cloud_settings(cfg)
                 selection, errors = extract_llm.cloud_policy.resolve_profile(
                     cfg, route="reextract", purpose="backlog")

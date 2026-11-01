@@ -296,6 +296,71 @@ def carry_worker(tmp_path, monkeypatch):
     return state, fake_ledger
 
 
+@pytest.mark.parametrize('block', [None, 'mode', 'stop', 'budget'])
+def test_worker_waits_and_reloads_unreadable_config(carry_worker, monkeypatch, capsys, block):
+    import extract_llm
+    import mcs_util
+    state, _ = carry_worker
+    state.block = block
+    original = mcs_util.load_config
+    reads, waits = [], []
+
+    def load():
+        reads.append(True)
+        if len(reads) == 1:
+            raise mcs_util.ProviderSettingsUnreadable('synthetic-private-detail')
+        return original()
+
+    def extract(*args, **kwargs):
+        state.events.append('extract')
+        state.alive = False
+        return {'done': 1}
+
+    def sleep(seconds):
+        waits.append(seconds)
+        if len(reads) == 2:
+            state.alive = False
+
+    monkeypatch.setattr(mcs_util, 'load_config', load)
+    monkeypatch.setattr(extract_llm, 'run_pending', extract)
+    monkeypatch.setattr(backlog.time, 'sleep', sleep)
+    backlog.worker(991)
+    assert len(reads) == 2
+    assert waits == ([10] if block is None else [10, 10])
+    assert state.events == (['extract'] if block is None else [])
+    assert state.closed
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert {'event': 'cloud_backlog_deferred', 'reason': 'provider_settings_unreadable'} in records
+    assert 'synthetic-private-detail' not in json.dumps(records)
+
+
+def test_worker_keeps_unreadable_config_closed_without_work(carry_worker, monkeypatch, capsys):
+    import extract_llm
+    import mcs_util
+    state, _ = carry_worker
+    reads, waits = [], []
+
+    def load():
+        reads.append(True)
+        raise mcs_util.ProviderSettingsUnreadable('synthetic-private-detail')
+
+    def sleep(seconds):
+        waits.append(seconds)
+        if len(waits) == 2:
+            state.alive = False
+
+    monkeypatch.setattr(mcs_util, 'load_config', load)
+    monkeypatch.setattr(extract_llm, 'run_pending', lambda *a, **kw: pytest.fail('unreadable config admitted'))
+    monkeypatch.setattr(backlog.time, 'sleep', sleep)
+    backlog.worker(991)
+    assert len(reads) == 2 and waits == [10, 10]
+    assert state.events == [] and state.closed
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    holds = [item for item in records if item['event'] == 'cloud_backlog_deferred']
+    assert holds == [{'event': 'cloud_backlog_deferred', 'reason': 'provider_settings_unreadable'}] * 2
+    assert 'synthetic-private-detail' not in json.dumps(records)
+
+
 @pytest.mark.parametrize("block", ["stop", "budget", "mode"])
 def test_worker_settles_paid_carry_before_no_new_send_gate(carry_worker, monkeypatch, block):
     import extract_llm

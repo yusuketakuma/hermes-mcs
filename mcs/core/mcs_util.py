@@ -78,34 +78,45 @@ def _provider_config_active(path):
         except OSError as error:
             raise ProviderSettingsUnreadable("provider_settings_unreadable") from error
         return True
-    try:
+    def identity(info):
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_mtime_ns, info.st_ctime_ns)
+    retry_identity = None
+    for attempt in range(2):
         try:
-            fd = os.open(data, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-        except FileNotFoundError:
-            if os.path.lexists(data):
-                raise ValueError("provider_settings_unreadable") from None
-            return False
-        try:
-            before = os.fstat(fd)
-            present = _provider_artifact_present(fd)
-            for name in (".provider-settings-authority.json", ".provider-settings-pending.json", "provider_settings"):
-                try:
-                    os.stat(name, dir_fd=fd, follow_symlinks=False)
-                except FileNotFoundError:
-                    continue
-                present = True
-                break
-            after = os.fstat(fd)
-            current = os.stat(data, follow_symlinks=False)
-            def identity(info):
-                return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_mtime_ns, info.st_ctime_ns)
-            if identity(before) != identity(after) or identity(after) != identity(current):
-                raise ValueError("provider_settings_changed")
-            return present
-        finally:
-            os.close(fd)
-    except (OSError, ValueError) as error:
-        raise ProviderSettingsUnreadable("provider_settings_unreadable") from error
+            try:
+                fd = os.open(data, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+            except FileNotFoundError:
+                if retry_identity is not None:
+                    raise ValueError("provider_settings_changed") from None
+                if os.path.lexists(data):
+                    raise ValueError("provider_settings_unreadable") from None
+                return False
+            try:
+                before = os.fstat(fd)
+                if retry_identity is not None and identity(before)[:4] != retry_identity:
+                    raise ValueError("provider_settings_changed")
+                present = _provider_artifact_present(fd)
+                for name in (".provider-settings-authority.json", ".provider-settings-pending.json", "provider_settings"):
+                    try:
+                        os.stat(name, dir_fd=fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        continue
+                    present = True
+                    break
+                after = os.fstat(fd)
+                current = os.stat(data, follow_symlinks=False)
+                if identity(before) != identity(after) or identity(after) != identity(current):
+                    # Runtime files also change directory times; never rebaseline ownership or replacement.
+                    if (attempt == 0 and not present
+                            and identity(before)[:4] == identity(after)[:4] == identity(current)[:4]):
+                        retry_identity = identity(before)[:4]
+                        continue
+                    raise ValueError("provider_settings_changed")
+                return present
+            finally:
+                os.close(fd)
+        except (OSError, ValueError) as error:
+            raise ProviderSettingsUnreadable("provider_settings_unreadable") from error
 
 
 class ProviderSettingsUnreadable(RuntimeError):

@@ -3,6 +3,7 @@ import fcntl
 import hashlib
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -1232,3 +1233,165 @@ def test_runtime_config_retry_is_bounded_and_never_defaults_open(
     with pytest.raises(mcs_util.ProviderSettingsUnreadable):
         mcs_util._load_config(str(tmp_path / 'config.json'), allow_provider_unavailable=allow_unavailable)
     assert len(calls) == expected_calls
+
+
+@pytest.mark.parametrize('scan_number', [1, 2])
+@pytest.mark.parametrize('allow_unavailable', [False, True])
+def test_legacy_config_retries_unrelated_atomic_data_update(
+        tmp_path, monkeypatch, scan_number, allow_unavailable):
+    common, data, _ = tree(tmp_path)
+    original = mcs_util._provider_artifact_present
+    scans = []
+
+    def scan_then_update(fd):
+        present = original(fd)
+        scans.append(True)
+        if len(scans) == scan_number:
+            temp = data / 'synthetic-runtime.tmp'
+            temp.write_text('synthetic')
+            os.replace(temp, data / 'synthetic-runtime.json')
+        return present
+
+    monkeypatch.setattr(mcs_util, '_provider_artifact_present', scan_then_update)
+    assert mcs_util._load_config(str(tmp_path / 'config.json'),
+                                allow_provider_unavailable=allow_unavailable) == common
+    assert len(scans) == 3
+
+
+@pytest.mark.parametrize('allow_unavailable', [False, True])
+def test_legacy_config_stops_after_repeated_data_changes(tmp_path, monkeypatch, allow_unavailable):
+    _, data, _ = tree(tmp_path)
+    scans = []
+
+    def scan_then_update(fd):
+        scans.append(True)
+        temp = data / 'synthetic-runtime.tmp'
+        temp.write_text('synthetic')
+        os.replace(temp, data / 'synthetic-runtime.json')
+        return False
+
+    monkeypatch.setattr(mcs_util, '_provider_artifact_present', scan_then_update)
+    with pytest.raises(mcs_util.ProviderSettingsUnreadable) as error:
+        mcs_util._load_config(str(tmp_path / 'config.json'), allow_provider_unavailable=allow_unavailable)
+    assert str(error.value.__cause__) == 'provider_settings_changed'
+    assert len(scans) == 2
+
+
+@pytest.mark.parametrize('scan_number', [1, 2])
+@pytest.mark.parametrize('marker', ['.provider-settings-pending.json', '.provider-settings-authority.json',
+                                  'provider_settings', '.provider-settings-backup-synthetic'])
+@pytest.mark.parametrize('allow_unavailable', [False, True])
+def test_legacy_config_never_ignores_provider_state_created_during_scan(
+        tmp_path, monkeypatch, scan_number, marker, allow_unavailable):
+    _, data, _ = tree(tmp_path)
+    original = mcs_util._provider_artifact_present
+    scans = []
+
+    def scan_then_create(fd):
+        present = original(fd)
+        scans.append(True)
+        if len(scans) == scan_number:
+            if marker == 'provider_settings':
+                (data / marker).mkdir(mode=0o755)
+            else:
+                private_json(data / marker, {})
+        return present
+
+    monkeypatch.setattr(mcs_util, '_provider_artifact_present', scan_then_create)
+    with pytest.raises(mcs_util.ProviderSettingsUnreadable):
+        mcs_util._load_config(str(tmp_path / 'config.json'), allow_provider_unavailable=allow_unavailable)
+    assert len(scans) <= 3
+
+
+@pytest.mark.parametrize('failure', ['provider_artifact_scan_limit', 'provider_directory_invalid'])
+def test_legacy_config_does_not_retry_other_scan_failures(tmp_path, monkeypatch, failure):
+    tree(tmp_path)
+    scans = []
+
+    def fail_scan(fd):
+        scans.append(True)
+        raise ValueError(failure)
+
+    monkeypatch.setattr(mcs_util, '_provider_artifact_present', fail_scan)
+    with pytest.raises(mcs_util.ProviderSettingsUnreadable) as error:
+        mcs_util.load_config(str(tmp_path / 'config.json'))
+    assert str(error.value.__cause__) == failure
+    assert len(scans) == 1
+
+
+@pytest.mark.parametrize('change', ['replacement', 'permissions', 'ownership'])
+def test_legacy_config_never_rebaselines_directory_identity_change(tmp_path, monkeypatch, change):
+    _, data, _ = tree(tmp_path)
+    original = mcs_util._provider_artifact_present
+    fstat = os.fstat
+    inode = data.stat().st_ino
+    scans = []
+
+    def scan_then_change(fd):
+        present = original(fd)
+        scans.append(True)
+        if change == 'replacement':
+            data.rename(tmp_path / 'synthetic-old-data')
+            data.mkdir(mode=0o700)
+        elif change == 'permissions':
+            data.chmod(0o777)
+        return present
+
+    def changed_owner(fd):
+        info = fstat(fd)
+        if change == 'ownership' and info.st_ino == inode and scans:
+            return SimpleNamespace(**{name: getattr(info, name) for name in (
+                'st_dev', 'st_ino', 'st_mode', 'st_mtime_ns', 'st_ctime_ns')}, st_uid=info.st_uid + 1)
+        return info
+
+    monkeypatch.setattr(mcs_util, '_provider_artifact_present', scan_then_change)
+    monkeypatch.setattr(mcs_util.os, 'fstat', changed_owner)
+    with pytest.raises(mcs_util.ProviderSettingsUnreadable):
+        mcs_util.load_config(str(tmp_path / 'config.json'))
+    assert len(scans) == 1
+
+
+@pytest.mark.parametrize('change', ['replacement', 'permissions', 'ownership', 'missing'])
+def test_legacy_config_preserves_directory_identity_between_retry_attempts(tmp_path, monkeypatch, change):
+    _, data, _ = tree(tmp_path)
+    scan, fstat, stat, close = mcs_util._provider_artifact_present, os.fstat, os.stat, os.close
+    inode = data.stat().st_ino
+    scans, changed = [], []
+
+    def scan_then_update(fd):
+        present = scan(fd)
+        scans.append(True)
+        if len(scans) == 1:
+            temp = data / 'synthetic-runtime.tmp'
+            temp.write_text('synthetic')
+            os.replace(temp, data / 'synthetic-runtime.json')
+        return present
+
+    def close_then_change(fd):
+        info = fstat(fd)
+        close(fd)
+        if info.st_ino != inode or changed:
+            return
+        changed.append(True)
+        if change in ('replacement', 'missing'):
+            data.rename(tmp_path / 'synthetic-old-data')
+            if change == 'replacement':
+                data.mkdir(mode=0o700)
+        elif change == 'permissions':
+            data.chmod(0o777)
+
+    def owner(info):
+        if change == 'ownership' and changed and info.st_ino == inode:
+            values = {name: getattr(info, name) for name in dir(info) if name.startswith('st_')}
+            values['st_uid'] += 1
+            return SimpleNamespace(**values)
+        return info
+
+    monkeypatch.setattr(mcs_util, '_provider_artifact_present', scan_then_update)
+    monkeypatch.setattr(mcs_util.os, 'close', close_then_change)
+    monkeypatch.setattr(mcs_util.os, 'fstat', lambda fd: owner(fstat(fd)))
+    monkeypatch.setattr(mcs_util.os, 'stat', lambda *args, **kwargs: owner(stat(*args, **kwargs)))
+    with pytest.raises(mcs_util.ProviderSettingsUnreadable) as error:
+        mcs_util.load_config(str(tmp_path / 'config.json'))
+    assert str(error.value.__cause__) == 'provider_settings_changed'
+    assert changed and len(scans) == 1
