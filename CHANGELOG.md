@@ -63,6 +63,9 @@
 
 ### 不具合修正
 
+- **更新後の抽出ワーカーを正しい順序で再開**
+  全対象の停止を確認してから停止記録を解除し、新しいワーカーを起動します。更新と中断時の復旧で、起動直後に終了して完了を確認できない競合を修正します。停止や停止記録の解除を確認できない場合は起動を保留します。
+
 - **抽出前の整理でロック待ちが長引く問題を修正**
   古い抽出結果の整理が収集処理のロックを待つ場合、整理の制限時間を超えて抽出対象の選択が遅れる問題を修正します。
 
@@ -616,6 +619,8 @@
 - [設定読取りの一時的な競合を改善](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-reader-directory-race-20261101.json)
 - [手動確認した添付説明の後続更新を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/manual-caption-successor-20261101.json)
 
+
+- [更新後の抽出ワーカー起動と復旧の競合を修正](changes/archive/1.1.0/restart-marker-order-20261101.json)
 </details>
 
 ## [1.0.29] — 2026-10-23

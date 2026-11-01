@@ -814,10 +814,10 @@ def _launchctl(args, **kw):
         return None
 
 
-def _agent_pid(label):
+def _agent_pid(label, unknown=None):
     r = _launchctl(["print", f"gui/{os.getuid()}/{label}"], text=True)
     if r is None or r.returncode != 0:
-        return None
+        return None if r is not None and r.returncode == 113 else unknown
     m = re.search(r"^\s*pid\s*=\s*(\d+)", r.stdout, re.M)
     return int(m.group(1)) if m else None
 
@@ -838,8 +838,10 @@ def _bootstrap_agent(label, plist):
 
 
 def _restart_drainers(bounce=True):
-    """bounce=False = mcs_update.restart_agents(bounce=False): leave a
-    running drainer alone; start one not running, not loaded or
+    """Release the update hold before launching replacement workers.
+
+    Without a marker, bounce=False leaves a running drainer alone;
+    start one not running, not loaded or
     unverifiable (hung print — fail closed) via bootstrap unless loaded,
     then `kickstart` without -k (never kills a running job)."""
     _check_recovery_root()
@@ -848,6 +850,8 @@ def _restart_drainers(bounce=True):
         return ["runtime_mode_unverifiable"]
     if mode == "standalone":
         _remove_marker()
+        if os.path.lexists(MARKER_PATH):
+            return ["update_marker_unverifiable"]
         if _standalone_status() is None:
             if sys.platform == "darwin":
                 target = f"gui/{os.getuid()}/ai.mcs.standalone"
@@ -864,14 +868,29 @@ def _restart_drainers(bounce=True):
             time.sleep(0.2)
         return _standalone_drainer_problems()
     problems = []
+    # Match the updater: marker-bound workers must retire before new imports.
+    bounce = bounce or os.path.lexists(MARKER_PATH)
+    if bounce:
+        for label in RESIDENT_LABELS:
+            _launchctl(["bootout", f"gui/{os.getuid()}/{label}"])
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                if _agent_pid(label, unknown=-1) in (None, -1):
+                    break
+                time.sleep(0.5)
+            if _agent_pid(label, unknown=-1) is not None:
+                problems.append(label)
+        if problems:
+            return problems
+    _remove_marker()
+    if os.path.lexists(MARKER_PATH):
+        return ["update_marker_unverifiable"]
     for label in RESIDENT_LABELS:
         plist = os.path.join(AGENTS_DIR, label + ".plist")
         target = f"gui/{os.getuid()}/{label}"
-        if bounce:
-            _launchctl(["bootout", target])
-        elif _agent_pid(label):
+        if not bounce and _agent_pid(label):
             continue                        # running — never bounce it
-        else:
+        elif not bounce:
             r = _launchctl(["print", target])
             if r is not None and r.returncode == 0:
                 plist = None                # loaded: kickstart only

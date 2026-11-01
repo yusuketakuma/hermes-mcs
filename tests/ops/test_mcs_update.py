@@ -1875,7 +1875,7 @@ def test_restart_agents_retries_transient_bootstrap(
     monkeypatch.setattr(service_contract, 'RESIDENT_LABELS', ("ai.mcs.x",))
     monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ())
     monkeypatch.setattr(mcs_update, "_agent_pid",
-                        lambda label: 4242 if fake.loaded else None)
+                        lambda label, unknown=None: 4242 if fake.loaded else None)
     monkeypatch.setattr(mcs_update, "_remove_marker", lambda: None)
     assert mcs_update.restart_agents() == problems
     assert fake.calls[0] == "bootout"
@@ -1947,7 +1947,7 @@ _HANG_EXCS = [subprocess.TimeoutExpired(["launchctl"], 30),
 @pytest.mark.parametrize("label,verb,problems", [
     ("ai.mcs.a", "bootout", []),
     ("ai.mcs.a", "bootstrap", ["bootstrap_failed:ai.mcs.a"]),
-    ("ai.mcs.a", "print", ["bootstrap_failed:ai.mcs.a"]),
+    ("ai.mcs.a", "print", ["drainer_stop_failed:ai.mcs.a"]),
     ("local.mcs-w", "print", ["watcher_not_loaded:local.mcs-w"]),
     ("local.mcs-w", "bootstrap", ["watcher_not_loaded:local.mcs-w"]),
 ])
@@ -1964,10 +1964,13 @@ def test_restart_agents_survives_hung_launchctl(
     monkeypatch.setattr(service_contract, 'WATCHER_LABELS', ("local.mcs-w",))
     Path(mcs_update.MARKER_PATH).write_text("1")
     assert mcs_update.restart_agents() == problems
-    # the loop went on past the wedged label to every later agent
-    assert ("bootstrap", "ai.mcs.b") in fake.calls
-    assert fake.calls[-1][1] == "local.mcs-w"
-    assert not os.path.exists(mcs_update.MARKER_PATH)
+    if problems == ["drainer_stop_failed:ai.mcs.a"]:
+        assert not any(verb == "bootstrap" for verb, _ in fake.calls)
+        assert os.path.exists(mcs_update.MARKER_PATH)
+    else:
+        assert ("bootstrap", "ai.mcs.b") in fake.calls
+        assert fake.calls[-1][1] == "local.mcs-w"
+        assert not os.path.exists(mcs_update.MARKER_PATH)
 
 
 def test_launchd_waits_ignore_wall_clock_jump(updater, monkeypatch):
@@ -2021,11 +2024,11 @@ def test_quiesce_never_takes_unverifiable_stop_as_stopped(
 
 
 @pytest.mark.parametrize("exc", _HANG_EXCS)
-def test_rollback_partial_quiesce_restarts_despite_hung_launchctl(
+def test_rollback_partial_quiesce_reports_unverified_restart(
         updater, tmp_path, monkeypatch, exc):
     """quiesce stops drainer a, then b's stop is unverifiable: rollback
-    must still restart a (H4), report b, consume the receipt and drop
-    the marker — not escape with a raw TimeoutExpired/OSError."""
+    must report the unverified restart and consume the receipt without
+    launching new workers before every stop is verified."""
     from types import SimpleNamespace
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(mcs_update, "_acquire_run_lock_wait",
@@ -2060,11 +2063,11 @@ def test_rollback_partial_quiesce_restarts_despite_hung_launchctl(
                          "at": time.time()}]
     updater.journal_store.save_state(updater.STATE_PATH, state)
     assert updater.rollback("cid-rb") == 1
-    assert ("bootstrap", "ai.mcs.a") in fake.calls   # a brought back
-    assert "ai.mcs.a" in fake.loaded
+    assert not any(verb == "bootstrap" for verb, _ in fake.calls)
+    assert "ai.mcs.a" not in fake.loaded
     detail = updater.journal_store.load_state(updater.STATE_PATH)["executed"]["cid-rb"]["detail"]
     assert "drainer_stop_failed: ai.mcs.b" in detail
-    assert "bootstrap_failed:ai.mcs.b" in detail
+    assert "drainer_stop_failed:ai.mcs.b" in detail
     assert not os.path.exists(mcs_update.MARKER_PATH)
     assert len(fake.calls) < 100  # finite stop polling and restart retries
 
@@ -2283,10 +2286,8 @@ def test_restart_agents_all_hung_stays_within_budget(
     # 78s more; services 120 + postcheck 206 follow in the same child
     assert clock[0] <= mcs_update.RESTART_BUDGET_S + 78
     assert mcs_update.RESTART_BUDGET_S + 78 + 326 < mcs_update.T_POST_MERGE
-    assert problems == ["bootstrap_failed:ai.mcs.a",
-                        "bootstrap_failed:ai.mcs.b",
-                        "watcher_not_loaded:local.mcs-w",
-                        "restart_deadline:local.mcs-v"]
+    assert problems == ["drainer_stop_failed:ai.mcs.a",
+                        "drainer_stop_failed:ai.mcs.b"]
 
 
 # ------------------- apply delegating to recover never bails its journal

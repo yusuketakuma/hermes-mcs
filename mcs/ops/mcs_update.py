@@ -1543,14 +1543,14 @@ def _restart_runtime_mode():
 
 
 def restart_agents(bounce: bool = True) -> list[str]:
-    """Re-bootstrap resident drainers and verify a NEW pid; watchers are
+    """Stop resident drainers before releasing the hold, then verify startup; watchers are
     verified loaded only (R20). Returns list of verify failures. Labels
     not yet started when RESTART_BUDGET_S runs out are reported as
     restart_deadline:<label> (see the T_LAUNCHCTL budget).
 
     bounce=False is the idempotent ensure-running pass (a repeated
     escalation of the same condition — H4 only needs drainers UP): a
-    drainer launchd shows running is never touched; one not running,
+    without an update marker, a running drainer is never touched; one not running,
     not loaded or unverifiable (hung print — fail closed) is started:
     bootstrap unless loaded, then `kickstart` without -k, which starts
     a stopped job and never kills a running one."""
@@ -1559,6 +1559,8 @@ def restart_agents(bounce: bool = True) -> list[str]:
         return ["runtime_mode_unverifiable"]
     if mode == "standalone":
         _remove_marker()
+        if os.path.lexists(MARKER_PATH):
+            return ["update_marker_unverifiable"]
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             if not _standalone_drainer_problems():
@@ -1567,15 +1569,30 @@ def restart_agents(bounce: bool = True) -> list[str]:
         return _standalone_drainer_problems()
     problems = []
     deadline = time.monotonic() + RESTART_BUDGET_S
+    # A worker that imported under the marker cannot resume after its removal.
+    bounce = bounce or os.path.lexists(MARKER_PATH)
+    if bounce:
+        for label in service_contract.RESIDENT_LABELS:
+            _run(["launchctl", "bootout", f"gui/{_uid()}/{label}"])
+            until = min(deadline, time.monotonic() + 15)
+            while time.monotonic() < until:
+                if _agent_pid(label, unknown=-1) in (None, -1):
+                    break
+                time.sleep(0.5)
+            if _agent_pid(label, unknown=-1) is not None:
+                problems.append(f"drainer_stop_failed:{label}")
+        if problems:
+            return problems
+    _remove_marker()
+    if os.path.lexists(MARKER_PATH):
+        return ["update_marker_unverifiable"]
     for label in service_contract.RESIDENT_LABELS:
         if time.monotonic() >= deadline:
             problems.append(f"restart_deadline:{label}")
             continue
         plist = os.path.join(AGENTS_DIR, label + ".plist")
         target = f"gui/{_uid()}/{label}"
-        if bounce:
-            _run(["launchctl", "bootout", target])
-        elif _agent_pid(label):
+        if not bounce and _agent_pid(label):
             continue                   # running — never bounce it
         if (bounce or _run(["launchctl", "print", target]).returncode != 0) \
                 and not _bootstrap_agent(label, plist):
@@ -1607,7 +1624,6 @@ def restart_agents(bounce: bool = True) -> list[str]:
         if r.returncode != 0 and not _bootstrap_agent(
                 label, os.path.join(AGENTS_DIR, label + ".plist")):
             problems.append(f"watcher_not_loaded:{label}")
-    _remove_marker()
     return problems
 
 

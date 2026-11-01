@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 429,
+  "fragment_count": 430,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2581,6 +2581,12 @@
       "id": "manual-caption-successor-20261101",
       "title": "手動確認した添付説明の後続更新を修正",
       "sha256": "3fa94f489d26fab3cdf7dc44b09dafe286a8fb9ec5f423f69b7182d55dc67633"
+    },
+    {
+      "id": "restart-marker-order-20261101",
+      "path": "changes/archive/1.1.0/restart-marker-order-20261101.json",
+      "sha256": "06574d597500a77500f90ed6257019e2a39d31f7ed457d6364e16a2e8dbc885f",
+      "title": "更新後の抽出ワーカー起動と復旧の競合を修正"
     }
   ]
 }

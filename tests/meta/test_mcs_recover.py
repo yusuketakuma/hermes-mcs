@@ -719,6 +719,7 @@ def test_reconcile_reports_failed_service_command(rec, tmp_path, monkeypatch):
     setup = tmp_path / "repo" / "mcs" / "ops" / "mcs_setup.py"
     setup.parent.mkdir(parents=True)
     setup.write_text("# synthetic")
+    monkeypatch.setattr(rec, "_setup_python", lambda: "synthetic-python")
     monkeypatch.setattr(rec, "_run_owned", lambda *a, **k:
                         subprocess.CompletedProcess(a, 1, "", "failed"))
     assert "services_reconcile_failed" in rec._reconcile_membership(None)
@@ -1289,7 +1290,7 @@ def test_restart_drainers_wait_ignores_wall_clock_jump(rec, monkeypatch):
     monkeypatch.setattr(rec, "time", SimpleNamespace(
         time=lambda: wall[0], monotonic=lambda: mono[0], sleep=sleep))
     monkeypatch.setattr(rec, "_launchctl", lambda args: None)
-    monkeypatch.setattr(rec, "_agent_pid", lambda label: next(pids))
+    monkeypatch.setattr(rec, "_agent_pid", lambda label, unknown=None: next(pids))
     monkeypatch.setattr(rec, "RESIDENT_LABELS", ("ai.mcs.x",))
     assert rec._restart_drainers() == []
 
