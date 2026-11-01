@@ -1,0 +1,12 @@
+{
+  "category": "fixed",
+  "title": "SDC設定の診断表示を修正",
+  "summary": "正しいSDC設定を、診断で未対応の項目として表示しないよう修正します。",
+  "upgrade": "設定値や有効状態を自動で変更しません。",
+  "details": [
+    "既存のSDC設定を診断対象の項目として扱います。"
+  ],
+  "refs": [
+    "mcs/core/mcs_config.py"
+  ]
+}

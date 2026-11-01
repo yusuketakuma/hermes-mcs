@@ -151,9 +151,17 @@ def test_bool_strictness_int_is_not_bool():
 def test_unknown_keys_warn_not_fail():
     errors, warnings = mcs_setup.validate_config({
         "mcs_login_id": "u", "notify_target": "slack",
-        "future_key": True})
+        "sdc": {"enabled": False}, "future_key": True})
     assert errors == []
     assert warnings == ["未対応の設定項目: future_key（この版では使いません）"]
+
+
+@pytest.mark.parametrize("value", [None, "enabled", [], True])
+def test_sdc_requires_object(value):
+    errors, warnings = mcs_setup.validate_config({
+        "mcs_login_id": "u", "notify_target": "slack", "sdc": value})
+    assert any(error.startswith("sdc:") for error in errors)
+    assert warnings == []
 
 
 def test_semantic_block_delegates_to_production_validator():

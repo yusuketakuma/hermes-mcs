@@ -144,6 +144,7 @@ CONFIG_RULES = {
     "metadata_actors":       (False, _bool),
     "stamps":                (False, _stamps_config),
     "optional_features":     (False, _optional_features),
+    "sdc":                   (False, _dict),
     "clinical_metadata":     (False, _bool),
     "notify":                (False, _dict),
     "signals":               (False, _dict),

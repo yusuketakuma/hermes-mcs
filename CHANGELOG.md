@@ -81,6 +81,9 @@
 - **利用先を保存した後も認証情報の設定を継続**
   利用先と予算の保存後も、同じ画面から認証情報を設定できます。利用先の切替では、指定しないほかの利用先の設定を保持します。
 
+- **SDC設定の診断表示を修正**
+  正しいSDC設定を、診断で未対応の項目として表示しないよう修正します。設定値や有効状態は自動で変更しません。
+
 - **クラウド処理の料金と応答の扱いを修正**
   使用したサービスと料金版を記録し、過去の予約をその料金版で精算します。送信前に失敗したと確認できるタイムアウトを区別し、通信結果が不明な場合は引き続き保留します。
 
@@ -160,7 +163,7 @@
 ### 技術詳細
 
 <details>
-<summary>変更記録424件の詳細・更新条件・根拠を表示</summary>
+<summary>変更記録425件の詳細・更新条件・根拠を表示</summary>
 
 各リンクは、この版の変更記録です。要約・適用条件・更新操作・技術詳細・根拠を参照できます。同じ箇所に複数の記録がある場合、後続の修正を含む現行の説明は上の本文と各機能のガイドを確認してください。たとえば、処理方式アイコンの初期配置は後続の見出し行への移動で置き換えています。
 
@@ -594,6 +597,7 @@
 - [利用先を保存した後も認証情報の設定を継続](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/credential-provider-save-admission-20261101.json)
 - [提供元別設定への更新手順を追加](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-initial-migration-20261101.json)
 - [通常更新時のAI設定移行を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-legacy-update-migration-20261101.json)
+- [SDC設定の診断表示を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/sdc-config-known-key-20261101.json)
 
 </details>
 
