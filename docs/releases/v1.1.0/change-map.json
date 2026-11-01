@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 427,
+  "fragment_count": 428,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2569,6 +2569,12 @@
       "id": "slack-emoji-remote-match-20261101",
       "title": "Slackの返信で絵文字による重複投稿を抑制",
       "sha256": "8b5d11570a16416f475efad1fa9f918b85a003d244250b2f9f51ae051431fe98"
+    },
+    {
+      "path": "changes/archive/1.1.0/provider-reader-directory-race-20261101.json",
+      "id": "provider-reader-directory-race-20261101",
+      "title": "設定読取りの一時的な競合を改善",
+      "sha256": "fc7e06c2531c57c81c98e6312f4bcad52333c75d4e9d70930894e4e1c447888a"
     }
   ]
 }
