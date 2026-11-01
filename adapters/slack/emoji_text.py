@@ -15,7 +15,9 @@ def _data():
 
 
 def _continuation(char):
-    return char in "\u200d\ufe0e\ufe0f\u20e3" or "\U0001f3fb" <= char <= "\U0001f3ff"
+    return (char in "\u200d\ufe0e\ufe0f\u20e3"
+            or "\U0001f3fb" <= char <= "\U0001f3ff"
+            or "\U000e0020" <= char <= "\U000e007f")
 
 
 def slack_emoji_pattern(text):
@@ -29,7 +31,9 @@ def slack_emoji_pattern(text):
         sequence = match.group()
         left = text[match.start() - 1] if match.start() else ""
         right = text[match.end()] if match.end() < len(text) else ""
-        if sequence in blocked or (left and _continuation(left)) or (right and _continuation(right)):
+        # shortcut: multi-tone sequences stay literal until Slack documents their text spelling.
+        if (sequence in blocked or (len(sequence) == 1 and _continuation(sequence))
+                or (left and _continuation(left)) or (right and _continuation(right))):
             continue
         # A single regional indicator inside an unknown flag is not a flag mapping.
         if len(sequence) == 1 and "\U0001f1e6" <= sequence <= "\U0001f1ff" and (

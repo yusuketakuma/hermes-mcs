@@ -163,6 +163,9 @@ def test_emoji_match_prefers_exact_history_before_equivalent_and_consumes_once(w
     ("👋🏻", ":wave::skin-tone-3:"),
     ("👨🏻‍❤️‍👨🏼", ":man-heart-man::skin-tone-2::skin-tone-3:"),
     ("🎉‍🚀", ":tada:‍:rocket:"),
+    ("🎉🏻", "🎉:skin-tone-2:"),
+    ("🏴\U000e0061\U000e007f", ":waving_black_flag:\U000e0061\U000e007f"),
+    ("🎉🏻 hi 🎉", "🎉:skin-tone-2: hi :tada:"),
 ])
 def test_slack_emoji_does_not_guess_other_or_unknown_sequences(world, original, remote):
     ctx = {"consumed": set(), "history": [
