@@ -1376,6 +1376,8 @@ def _schema_bump_world(updater, tmp_path, monkeypatch):
     """applied v1.1.0 entry flagged schema_bump with a real v7 backup;
     live DB sits one schema ahead at v8. Every external boundary is
     stubbed; git reset and the DB files stay real."""
+    # Provider migration has separate hold tests; this fixture isolates DB rollback.
+    monkeypatch.setattr(updater, "_provider_migration_needed", lambda: False)
     repo, _ = _make_repo(tmp_path)
     monkeypatch.setattr(mcs_update, "REPO", str(repo))
     before = _git(repo, "rev-parse", "v1.0.0").stdout.strip()

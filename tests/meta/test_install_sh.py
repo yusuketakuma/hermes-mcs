@@ -265,7 +265,7 @@ exit 0
 STUB_MODEL_SHA256 = hashlib.sha256(b"stub-model-bytes\n").hexdigest()
 
 
-def _world(tmp_path, *, brew=True, git_head=None, path_hermes=False):
+def _world(tmp_path, *, brew=True, git_head=None, path_hermes=False, configured=False):
     home = tmp_path / "home"
     hermes_home = home / ".hermes"
     stub_root = tmp_path / "stub"
@@ -273,6 +273,12 @@ def _world(tmp_path, *, brew=True, git_head=None, path_hermes=False):
     bin_dir.mkdir(parents=True)
     (stub_root / "state").mkdir(parents=True)
     home.mkdir(parents=True)
+    if configured:
+        data = home / '.mcs/data'
+        data.mkdir(mode=0o700, parents=True)
+        config = data.parent / 'config.json'
+        config.write_text('{"runtime_mode":"hermes"}')
+        config.chmod(0o600)
     stubs = dict(STUBS)
     if not brew:
         del stubs["brew"]
@@ -333,7 +339,7 @@ def synthetic_run(command, *args, **kwargs):
         unknown = '#!/bin/sh\\nprintf "synthetic-hermes %s\\\\n" "$*" >> "$STUB_LOG"\\nexit 7\\n'
         # The installer publishes a shell shim at ~/.local/bin/hermes. Verify
         # its exact body and its fixture target, but never execute either.
-        if executable == home / '.local' / 'bin' / 'hermes':
+        if resolved == home / '.local' / 'bin' / 'hermes':
             target = Path(os.environ.get('MCS_FRESH_HERMES_EXE', ''))
             try:
                 resolved_target = target.resolve(strict=True)
@@ -1566,7 +1572,7 @@ def test_partial_states_resume_without_duplicates(tmp_path):
     """Interrupt-style pre-seeded state at three boundaries, then a
     rerun: plugin symlink survives, recovery .prev keeps the old
     generation, watchdog plist is replaced once and reloaded once."""
-    home, hermes_home, stub_root, env = _world(tmp_path)
+    home, hermes_home, stub_root, env = _world(tmp_path, configured=True)
     (hermes_home / "plugins").mkdir(parents=True)
     link = hermes_home / "plugins" / "mcs-discord-commands"
     link.symlink_to(ROOT / "hermes_plugin")            # killed after 3/6
@@ -1814,7 +1820,7 @@ def test_same_release_rerun_keeps_the_real_previous_generation(tmp_path):
 
 
 def test_custom_hermes_home_refused_with_services(tmp_path):
-    home, _hermes_home, stub_root, env = _world(tmp_path)
+    home, _hermes_home, stub_root, env = _world(tmp_path, configured=True)
     custom = tmp_path / "elsewhere"
     r = _run(env, custom)
     assert r.returncode == 2 and "HERMES_HOME" in r.stderr
@@ -1887,10 +1893,24 @@ def test_checkout_with_venv_missing_python_is_rebuilt(tmp_path):
     assert any(c.startswith("uv pip install") for c in _calls(stub_root))
 
 
+def test_fresh_pip_failure_keeps_bootstrap_hold_on_rerun(tmp_path):
+    home, hermes_home, stub_root, env = _world(tmp_path)
+    failed = _run({**env, "STUB_FAIL_PIP": "1"}, hermes_home)
+    assert failed.returncode == 1 and "Hermes 導入に失敗" in failed.stderr
+    marker = home / ".mcs/data/.provider-bootstrap-fresh.json"
+    before, calls = marker.read_bytes(), _calls(stub_root)
+    retried = _run(env, hermes_home)
+    assert retried.returncode != 0 and "初回導入が中断された記録" in retried.stderr
+    assert marker.read_bytes() == before
+    assert not any(line.startswith(("brew install", "git clone", "uv ", "launchctl bootstrap"))
+                   for line in _calls(stub_root)[len(calls):])
+    assert not (home / ".mcs/config.json").exists()
+
+
 def test_failed_pip_install_converges_on_rerun(tmp_path):
     """F2: `uv venv` succeeded, `uv pip install` failed — the re-run
     reuses the venv and retries only the install."""
-    home, hermes_home, stub_root, env = _world(tmp_path)
+    home, hermes_home, stub_root, env = _world(tmp_path, configured=True)
     r1 = _run({**env, "STUB_FAIL_PIP": "1"}, hermes_home)
     assert r1.returncode == 1
     assert "Hermes 導入に失敗" in r1.stderr
@@ -1907,7 +1927,7 @@ def test_failed_pip_install_converges_on_rerun(tmp_path):
 def test_interrupted_checkout_is_resumed_and_never_called_pinned(tmp_path):
     """F3: clone ok, pinned checkout failed. The re-run redoes the clone
     (marker) instead of accepting the default-branch HEAD."""
-    home, hermes_home, stub_root, env = _world(tmp_path)
+    home, hermes_home, stub_root, env = _world(tmp_path, configured=True)
     r1 = _run({**env, "STUB_FAIL_CHECKOUT_ONCE": "1", "STUB_FAIL_FETCH": "1"}, hermes_home)
     assert r1.returncode == 1
     assert "固定版" not in r1.stdout
@@ -1976,7 +1996,7 @@ exec "$STUB_REAL_GIT" "$@"
 
 
 def test_interrupted_clone_is_redone(tmp_path):
-    home, hermes_home, stub_root, env = _world(tmp_path)
+    home, hermes_home, stub_root, env = _world(tmp_path, configured=True)
     r1 = _run({**env, "STUB_FAIL_CLONE": "1"}, hermes_home)
     assert r1.returncode == 1 and "取得に失敗しました" in r1.stderr
     r2 = _run(env, hermes_home)
@@ -2011,7 +2031,7 @@ def test_shim_symlink_is_replaced_not_written_through(tmp_path):
 
 
 def test_foreign_shim_file_is_left_alone(tmp_path):
-    home, hermes_home, stub_root, env = _world(tmp_path)
+    home, hermes_home, stub_root, env = _world(tmp_path, configured=True)
     shim = home / ".local" / "bin" / "hermes"
     shim.parent.mkdir(parents=True)
     shim.write_text("#!/bin/sh\n# my own hermes launcher\n")
@@ -2147,7 +2167,7 @@ def test_model_checksum_mismatch_is_fatal(tmp_path):
 
 @pytest.mark.parametrize("model_bytes", [b"", b"corrupt-existing-model"])
 def test_existing_invalid_model_is_preserved_and_stops_before_llm_publication(tmp_path, model_bytes):
-    home, hermes_home, stub_root, env = _world(tmp_path)
+    home, hermes_home, stub_root, env = _world(tmp_path, configured=True)
     models = hermes_home / "models"
     models.mkdir(parents=True)
     model = models / "Qwen3.5-9B-Q4_K_M.gguf"
@@ -2329,7 +2349,7 @@ def test_foreign_mcs_launcher_blocks_preflight_and_install_before_stage1(tmp_pat
     assert shim.read_text() == "#!/bin/sh\n# some other tool\n"
 
 
-STOPPED = "導入を中断しました。失敗した段階の原因を解消し、install.sh を再実行してください"
+STOPPED = "導入を中断しました。失敗した段階の原因を確認してください。"
 
 
 @pytest.mark.parametrize("switch,message", [
@@ -2508,13 +2528,23 @@ def test_missing_uv_stops_before_hermes_checkout_or_venv_changes(tmp_path, mode)
 
 
 def test_new_install_updates_opt_outs_without_a_legacy_record(tmp_path):
+    import cloud_policy
+    import config_edit
+    import provider_settings
+    import semantic_jev
+
     home, hermes_home, _stub, env = _world(tmp_path)
     first = _run(env, hermes_home, '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
     assert first.returncode == 0, first.stderr
     config = home / '.mcs' / 'config.json'
-    before = json.loads(config.read_text())
-    before['unknown_example'] = {'synthetic': 1}
-    config.write_text(json.dumps(before))
+    owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
+    # Complete synthetic setup through the checked writer, preserving split authority.
+    with config_edit._edit_lock(config) as fd:
+        state = provider_settings.read(config.parent, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
+        common = {**state['common'], 'mcs_login_id': 'synthetic', 'notify_target': 'local',
+                  'unknown_example': {'synthetic': 1}}
+        provider_settings.commit_locked(config.parent, state['snapshot'], common, state['providers'],
+            selected_provider='openai', model_owners=owners, lock_fd=fd, jev_model=semantic_jev.JEV_MODEL)
     second = _run(env, hermes_home, '--no-brew', '--no-llm', '--no-plugin', '--no-services', '--no-recovery')
     assert second.returncode == 0, second.stderr
     after = json.loads(config.read_text())

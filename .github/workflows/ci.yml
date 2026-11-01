@@ -22,23 +22,41 @@ concurrency:
 jobs:
   lint-test:
     runs-on: ubuntu-latest
-    # the suite takes ~16 min; a single hung test is cut by the root
-    # conftest.py guard (MCS_TEST_TIMEOUT), this bounds everything else
-    timeout-minutes: 45
+    # The 2026-11-01 suite was still progressing at 93% after 45 min.
+    # Keep the per-test MCS_TEST_TIMEOUT guard and bound the whole job.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.14"
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.6"
+          cache-python: true
+          cache-dependency-glob: |
+            Makefile
+            .github/workflows/ci.yml
+            deployment/requirements-standalone.txt
       - name: ruff
-        # lint scope lives in the Makefile (LINT_PATHS); keep the pin equal to
-        # the Makefile RUFF pin
-        run: pip install "ruff==0.17.3" && make lint
+        # Lint scope and the ruff pin live in the Makefile.
+        run: make lint
       - name: Check bundled public medicine master
         run: python3 scripts/development/check_drug_master_bundle.py
       # no -x: every failure of the run is reported, not only the first
       - name: pytest
-        run: pip install "pytest==9.2.0" "uv==0.13.6" && scripts/run_tests.sh
+        run: |
+          uv venv --python 3.14 --managed-python .venv
+          uv pip install --python .venv/bin/python "pytest==9.2.0"
+          python3 ci/run_pytest_groups.py linux
+      - name: pytest diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: pytest-linux-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mcs-pytest-*/
+          retention-days: 7
+          if-no-files-found: ignore
       - name: check generated docs on PR
         if: github.event_name == 'pull_request'
         run: |
@@ -93,8 +111,15 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.14"
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.6"
+          cache-dependency-glob: |
+            Makefile
+            .github/workflows/ci.yml
+            deployment/requirements-standalone.txt
       - name: pinned standalone SDKs
-        run: pip install "pytest==9.2.0" -r deployment/requirements-standalone.txt
+        run: uv pip install --python "$(command -v python)" "pytest==9.2.0" -r deployment/requirements-standalone.txt
       # pinned-version assertion + required-collection check + test guards
       - name: standalone SDK integration
         run: MCS_TEST_PYTHON="$(command -v python)" sh scripts/development/check_pinned_sdks.sh standalone
@@ -125,10 +150,28 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.14"
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.6"
+          cache-python: true
+          cache-dependency-glob: |
+            Makefile
+            .github/workflows/ci.yml
+            deployment/requirements-standalone.txt
       - name: pytest (installer, updater, setup and launchd)
         run: |
-          python3 -m pip install "pytest==9.2.0" "uv==0.13.6"
-          scripts/run_tests.sh tests/meta tests/ops -r fEs
+          # python.org's macOS build can link an unpatched SQLite release.
+          uv venv --python 3.14 --managed-python .venv
+          uv pip install --python .venv/bin/python "pytest==9.2.0"
+          python3 ci/run_pytest_groups.py macos
+      - name: pytest diagnostics
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: pytest-macos-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/mcs-pytest-*/
+          retention-days: 7
+          if-no-files-found: ignore
 
   hermes-integration:
     runs-on: ubuntu-latest
@@ -151,9 +194,12 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
         with:
           python-version: "3.14"
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.13.6"
+          cache-dependency-glob: hermes-agent/uv.lock
       - name: install hermes (pinned ref) + integration test deps
         run: |
-          python -m pip install "uv==0.13.6"
           uv venv --python python hermes-agent/.venv
           # Match install.sh: Hermes owns the security overrides for voice/crypto.
           cd hermes-agent

@@ -37,10 +37,18 @@ def stage(tmp_path, *, broken=False, no_services=False):
     script = (REPO / 'install.sh').read_text()
     start = script.index('# Install the independent helper before either llama')
     end = script.index('# --------------------------------- 6. update recovery', start)
+    guard_start = script.index('    _root_alias=""')
+    guard_end = script.index('    _safe_dir "$HOME" ||', guard_start)
+    lock_start = script.index('    _lock_info() {')
+    lock_end = script.index('    _held_info() {', lock_start)
+    runtime_start = script.index('verify_split_runtime() {')
+    runtime_end = script.index('\n_verify_root_alias ||', runtime_start)
     harness = tmp_path / 'service-stage.sh'
     harness.write_text('set -eu\nsay() { :; }\nskip() { :; }\nsum() { :; }\nok() { :; }\n'
                        'shell_quote() { printf "%s" "$1"; }\n'
                        'die() { printf "%s\\n" "$*" >&2; exit 1; }\n'
+                       + script[lock_start:lock_end] + script[guard_start:guard_end]
+                       + '_split_runtime_token=""\n' + script[runtime_start:runtime_end] + '\n'
                        + 'SETUP=' + shlex.quote(str(setup)) + '\n' + script[start:end])
     trace = tmp_path / 'services.trace'
     environment = {**os.environ, 'HOME': str(home), 'MCS_ROOT': str(home / '.mcs'),

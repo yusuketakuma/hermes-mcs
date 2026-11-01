@@ -369,6 +369,7 @@ def test_incomplete_restore_never_finishes_without_restoring_target(
     state.update(applying=applying, stages=[{"stage": "rollback", "at": 1}])
     updater.journal_store.save_state(updater.STATE_PATH, state)
     Path(updater.MARKER_PATH).write_text("synthetic writer freeze")
+    Path(updater.MARKER_PATH).chmod(0o600)
     if shape == "merge_head":
         git_dir = Path(updater.REPO, ".git")
         git_dir.mkdir(parents=True)
@@ -481,6 +482,7 @@ def test_python314_pin_refresh_crashes_restore_original_dependencies(
                     backup_path=str(tmp_path / "synthetic-schema-backup.db"))
     updater.journal_store.save_state(updater.STATE_PATH, state)
     Path(updater.MARKER_PATH).write_text("synthetic writer freeze")
+    Path(updater.MARKER_PATH).chmod(0o600)
     held = []
     if consent_pending:
         def needs_consent(*args, **kwargs):
@@ -555,6 +557,7 @@ def test_pin_refresh_restore_preserves_source_drift_and_both_environments(
         state["stages"] = []
     updater.journal_store.save_state(updater.STATE_PATH, state)
     Path(updater.MARKER_PATH).write_text("synthetic writer freeze")
+    Path(updater.MARKER_PATH).chmod(0o600)
     journal = Path(updater.STATE_PATH).read_bytes()
     source = (checkout / "f").read_bytes()
     head = _git(checkout, "rev-parse", "HEAD").stdout.strip()
@@ -637,6 +640,7 @@ def test_invalid_runtime_migration_is_preserved_before_any_action(
     state.update(applying=applying, stages=[{"stage": "runtime_migration", "at": 1}])
     updater.journal_store.save_state(updater.STATE_PATH, state)
     Path(updater.MARKER_PATH).write_text("synthetic writer freeze")
+    Path(updater.MARKER_PATH).chmod(0o600)
     journal = Path(updater.STATE_PATH).read_bytes()
 
     def forbidden(*args, **kwargs):
@@ -691,6 +695,7 @@ def _synthetic_flagless_rollback(updater, tmp_path, monkeypatch, engine):
     state["stages"] = [{"stage": "rollback", "at": 1}]
     updater.journal_store.save_state(updater.STATE_PATH, state)
     Path(updater.MARKER_PATH).write_text("synthetic writer hold")
+    Path(updater.MARKER_PATH).chmod(0o600)
     if engine == "updater":
         monkeypatch.setattr(updater, "_migrate_log_tail", lambda: None)
         return updater, updater.recover_interrupted, repo, live, back, before, restarts

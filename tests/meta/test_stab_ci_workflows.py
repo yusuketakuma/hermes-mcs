@@ -44,7 +44,28 @@ def test_ci_has_a_macos_lane_with_the_pinned_actions():
         pin = re.search(re.escape(action) + r"[0-9a-f]{40}", linux)[0]
         assert pin in mac[0]
     assert 'python-version: "3.14"' in mac[0]
-    assert re.search(r"scripts/run_tests\.sh tests/meta tests/ops", mac[0])
+    assert "python3 ci/run_pytest_groups.py macos" in mac[0]
+
+
+def test_parallel_test_lanes_keep_diagnostics_and_pinned_dependency_caches():
+    jobs = _jobs((ROOT / ".github/workflows/ci.yml").read_text())
+    setup_uv = "astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2"
+    for name in ("lint-test", "macos", "standalone-sdk", "hermes-integration"):
+        assert setup_uv in jobs[name]
+        assert 'version: "0.13.6"' in jobs[name]
+        # Keep setup-uv's event-aware cache policy; never cache venvs or results.
+        assert "enable-cache: true" not in jobs[name]
+    assert setup_uv not in jobs["hygiene"] and setup_uv not in jobs["incident-gates"]
+    for name, lane in (("lint-test", "linux"), ("macos", "macos")):
+        block = jobs[name]
+        assert f"python3 ci/run_pytest_groups.py {lane}" in block
+        assert "uv venv --python 3.14 --managed-python .venv" in block
+        assert "cache-python: true" in block
+        diagnostics = block.split("      - name: pytest diagnostics\n", 1)[1]
+        assert "if: always()" in diagnostics
+        assert "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" in diagnostics
+        assert "path: ${{ runner.temp }}/mcs-pytest-*/" in diagnostics
+        assert "retention-days: 7" in diagnostics and "if-no-files-found: ignore" in diagnostics
 
 
 @pytest.mark.parametrize('changed_vector,other_key,expected', [

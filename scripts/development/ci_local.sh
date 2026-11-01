@@ -75,7 +75,8 @@ workflow=$src/.github/workflows/ci.yml
 pin() { grep -oE "$1" "$workflow" | head -n 1 | sed -E "s/$2//g"; }
 py_pin=$(pin 'python-version: "[0-9.]+"' '^python-version: "|"$')
 pytest_pin=$(pin 'pytest==[0-9.]+' '^pytest==')
-uv_pin=$(pin 'uv==[0-9.]+' '^uv==')
+uv_pin=$(awk '/uses: astral-sh\/setup-uv@/{uv=1;next} uv && /^[[:space:]]+-/{exit}
+    uv && /^[[:space:]]+version: "[0-9.]+"/{gsub(/"/, "", $2);print $2;exit}' "$workflow")
 job_block() { awk -v j="  $1:" '$0==j{f=1;next} f&&/^  [a-z]/{exit} f' "$workflow"; }
 hermes_repo=$(job_block hermes-integration | sed -nE 's/^ *repository: *//p' | head -n 1)
 hermes_ref=$(job_block hermes-integration | sed -nE 's/^ *ref: *([0-9a-f]{40}).*/\1/p' | head -n 1)
@@ -176,7 +177,7 @@ prereq_hermes_integration() {
 job_lint_test() {
     make lint
     python3 scripts/development/check_drug_master_bundle.py
-    scripts/run_tests.sh
+    python3 ci/run_pytest_groups.py linux
     # PR-only step regenerates and diffs; --check proves the same without writing
     python3 scripts/development/update_readme.py --check
 }
@@ -214,7 +215,7 @@ job_incident_gates() {
     python3 ci/mine_gates.py --check
 }
 job_macos() {
-    scripts/run_tests.sh tests/meta tests/ops -r fEs
+    python3 ci/run_pytest_groups.py macos
 }
 job_hermes_integration() {
     MCS_TEST_PYTHON=$hermes/.venv/bin/python MCS_HERMES_SOURCE=$hermes MCS_HERMES_REFERENCE=$hermes \

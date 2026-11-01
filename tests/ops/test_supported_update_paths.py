@@ -427,6 +427,8 @@ def test_update_and_rollback_preserve_settings_and_follow_release_defaults(
 @pytest.mark.parametrize("path", ELIGIBLE, ids=_id)
 def test_failed_reinstall_rolls_back_before_schema_migration(
         tmp_path, monkeypatch, updater, path):
+    # Isolate reinstall rollback from the separately tested provider migration hold.
+    monkeypatch.setattr(updater, "_provider_migration_needed", lambda: False)
     objects, source, config, calls, installer = _world(tmp_path, monkeypatch, updater, path, install=True)
     before = (_sha(source), _records(Path(updater.LEDGER)), config.read_bytes())
     installer.returncode = 1

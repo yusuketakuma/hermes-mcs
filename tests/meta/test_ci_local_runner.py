@@ -94,7 +94,10 @@ SYNTHETIC_WORKFLOW = """jobs:
       - uses: actions/setup-python@x
         with:
           python-version: "3.14"
-      - run: pip install "pytest==9.1.1" "uv==0.13.1"
+      - uses: astral-sh/setup-uv@x
+        with:
+          version: "0.13.1"
+      - run: pip install "pytest==9.1.1"
   macos:
     runs-on: macos-latest
   hermes-integration:
@@ -156,6 +159,15 @@ def test_python_pin_is_unquoted_and_passes_a_real_interpreter_probe(tmp_path):
     _run(repo, Path(sys.executable), out, "incident-gates")
     assert _summary(out)["incident-gates"] == ["pass", "0"]
     assert f"pins: python={version} pytest=" in (out / "meta.txt").read_text()
+
+
+def test_uv_pin_comes_from_setup_uv_instead_of_another_actions_version(tmp_path):
+    workflow = SYNTHETIC_WORKFLOW.replace(
+        "jobs:\n", 'metadata:\n  version: "99.0"\njobs:\n', 1)
+    repo, stub = _synthetic_repo(tmp_path, 0, workflow)
+    out = tmp_path / "out"
+    _run(repo, stub, out, "incident-gates")
+    assert "uv=0.13.1 " in (out / "meta.txt").read_text()
 
 
 @pytest.mark.parametrize("path", ["scripts/development/ci_local.sh",

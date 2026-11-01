@@ -1,0 +1,18 @@
+{
+  "category": "changed",
+  "title": "CIを2群で並列実行し、失敗時の診断を保存",
+  "summary": "LinuxとmacOSの開発テストを、対象を減らさず同じジョブ内の2群で並列実行します。失敗時も各群のログとJUnitを保存し、原因を確認しやすくします。",
+  "upgrade": "CIを利用する開発者向けの変更です。MCSの設定変更や追加操作は不要です。",
+  "details": [
+    "既存の6ジョブ名、SDK統合、安全ゲートと一時HOMEの隔離を維持し、片方の失敗後も全群を実行します。",
+    "uvの固定版とイベントに応じた依存キャッシュを使い、仮想環境は毎回作成します。LinuxとmacOSのテスト用PythonにはSQLiteの安全性要件を満たすuv管理版を使います。",
+    "合成テストの署名鍵は不変の素材だけを再利用し、ケースごとのファイル・権限・署名・台帳は独立させます。",
+    "遅い30件の実行時間を出力し、診断ファイルを7日間保持します。Linuxジョブ全体の制限を45分から60分へ変更し、テスト単位の停止監視は維持します。"
+  ],
+  "refs": [
+    ".github/workflows/ci.yml",
+    "ci/run_pytest_groups.py",
+    "scripts/development/ci_local.sh",
+    "tests/ops/test_release_apply_owner.py"
+  ]
+}

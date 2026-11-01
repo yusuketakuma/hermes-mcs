@@ -1248,10 +1248,28 @@ def test_apply_control_signing_rejects_admin_registration_cross_kind_and_unknown
         assert 'SYNTHETIC_CANARY' not in str(error.value)
 
 
+@pytest.fixture(scope='module')
+def native_signing_keys(tmp_path_factory):
+    import sdc_support_signatures as signatures
+
+    signing = tmp_path_factory.mktemp('synthetic-signing-keys')
+    signing.chmod(0o700)
+    keys = []
+    for name in ('release', 'operator', 'registration'):
+        private = signing / (name + '.pem')
+        private.touch(mode=0o600)
+        subprocess.run([signatures.OPENSSL, 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:3072', '-out', str(private)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
+        public = subprocess.check_output([signatures.OPENSSL, 'pkey', '-in', str(private), '-pubout', '-outform', 'DER'], stderr=subprocess.DEVNULL, timeout=10)
+        keys.append((private.read_bytes(), public))
+    assert len({public for _, public in keys}) == 3
+    return tuple(keys)
+
+
 @pytest.mark.parametrize('failure', [None, 'global-hook', 'signature', 'artifact', 'schema', 'disabled', 'uncertain_write',
     'run-registration', 'run-operation', 'run-grant', 'run-cancel', 'run-epoch', 'run-fsync-expiry', 'run-fsync-rollback', 'run-start-uncertain', 'run-unfinished-journal', 'run-git-attributes', 'run-git-grafts',
     'run-settings-required', 'run-settings-unverified', 'run-settings-late', 'run-settings-expiry'])
-def test_native_plan_freezes_independent_report_after_real_tty_signature_and_artifact_checks(native_product, registered, tmp_path, failure):
+def test_native_plan_freezes_independent_report_after_real_tty_signature_and_artifact_checks(native_product, registered, tmp_path, native_signing_keys, failure):
     # Development-only accepted root and synthetic credentials; no authorization or crypto is mocked.
     import base64
     import hashlib
@@ -1278,24 +1296,14 @@ def test_native_plan_freezes_independent_report_after_real_tty_signature_and_art
         audience='sdc:support', case_id='00000000-0000-4000-8000-000000000009')
     signing = tmp_path / 'synthetic-signing'
     signing.mkdir(mode=0o700)
-    private = signing / 'test-only-key.pem'
-    descriptor = os.open(private, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    os.close(descriptor)
-    subprocess.run([signatures.OPENSSL, 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:3072', '-out', str(private)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
-    public = subprocess.check_output([signatures.OPENSSL, 'pkey', '-in', str(private), '-pubout', '-outform', 'DER'], stderr=subprocess.DEVNULL, timeout=10)
+    private, operator_private, registration_private = (
+        signing / name for name in ('test-only-key.pem', 'test-only-operator.pem', 'test-only-registration.pem'))
+    for path, (pem, _) in zip((private, operator_private, registration_private), native_signing_keys):
+        path.touch(mode=0o600, exist_ok=False)
+        path.write_bytes(pem)
+    public, operator_public, registration_public = (public for _, public in native_signing_keys)
     b64 = lambda raw: base64.urlsafe_b64encode(raw).rstrip(b'=').decode('ascii')  # noqa: E731
-    operator_private = signing / 'test-only-operator.pem'
-    operator_private.touch(mode=0o600)
-    subprocess.run([signatures.OPENSSL, 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:3072', '-out', str(operator_private)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
-    operator_public = subprocess.check_output([signatures.OPENSSL, 'pkey', '-in', str(operator_private), '-pubout', '-outform', 'DER'], stderr=subprocess.DEVNULL, timeout=10)
     operation_pins = [dict(kid='synthetic-operator', spki=b64(operator_public), purposes=APPLY['pins'][0]['purposes'], not_before=NOW - 1000, expires_at=NOW + 600000)]
-    registration_private = signing / 'test-only-registration.pem'
-    registration_private.touch(mode=0o600)
-    subprocess.run([signatures.OPENSSL, 'genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:3072', '-out', str(registration_private)],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True, timeout=30)
-    registration_public = subprocess.check_output([signatures.OPENSSL, 'pkey', '-in', str(registration_private), '-pubout', '-outform', 'DER'], stderr=subprocess.DEVNULL, timeout=10)
     registration_pins = [dict(kid='synthetic-registration', spki=b64(registration_public), purposes=['release-apply-registration-current'], not_before=NOW - 1000, expires_at=NOW + 600000)]
     spki = b64(public)
     kid = signatures.release_key_fingerprint(spki)

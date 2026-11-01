@@ -75,6 +75,7 @@ def test_reconciliation_launcher_runs_verified_target_helper_without_fetch(
 def test_reconciliation_launcher_extracts_the_real_helper_and_dependencies(tmp_path, monkeypatch, capfd):
     repo, bare = _make_repo(tmp_path)
     files = ('mcs/_mcs_path.py', 'mcs/core/safe_io.py', 'mcs/core/mcs_util.py',
+             'mcs/core/provider_settings.py',
              'mcs/core/install_options_contract.py', 'mcs/ops/setup/config_edit.py',
              'mcs/ops/install_options.py', 'mcs/ops/update/settings_migration_receipt.py',
              'mcs/ops/settings_migration_reconcile.py', 'mcs/ops/update/update_journal.py',
@@ -909,8 +910,13 @@ def test_reinstall_done_clears_a_promoted_unfinished_reinstall(
 def test_reinstall_done_lets_recover_finish_the_journal(updater, monkeypatch):
     monkeypatch.setattr(updater, "_head_sha", lambda: "a" * 40)
     calls = []
-    monkeypatch.setattr(updater, "recover_interrupted",
-                        lambda: calls.append(updater.journal_store.load_state(updater.STATE_PATH)) or 0)
+
+    def recover(*, _resume_provider_migration):
+        assert _resume_provider_migration is True
+        calls.append(updater.journal_store.load_state(updater.STATE_PATH))
+        return 0
+
+    monkeypatch.setattr(updater, "recover_interrupted", recover)
     state = updater.journal_store.default_state()
     state["applying"] = {"tag": "v1.1.0", "sha": "a" * 40, "reinstall": True}
     updater.journal_store.save_state(updater.STATE_PATH, state)
