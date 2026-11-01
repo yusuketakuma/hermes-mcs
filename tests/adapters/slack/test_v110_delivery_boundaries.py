@@ -120,3 +120,67 @@ def test_exact_remote_size_guard_is_preserved(world, size):
     out = asyncio.run(world.worker._attachment_part(_spec(part, update=True), part, context))
     assert out["result"] == ("delivered" if size == 10 else "unknown")
     assert [op for op, _ in world.client.calls] == (["auth_test", "update"] if size == 10 else ["auth_test"])
+
+
+@pytest.mark.parametrize(("original", "remote"), [
+    ("Synthetic 🎉 done", "Synthetic :tada: done"),
+    ("👋🏻", ":wave::skin-tone-2:"),
+    ("👩‍⚕️", ":female-doctor:"),
+    ("❤️", ":heart:"),
+    ("before :literal: 🎉", "before :literal: :tada:"),
+])
+def test_slack_emoji_history_spelling_binds_without_another_post(world, original, remote):
+    prior = "1790000000.000020"
+    part = {"kind": "body_part", "name": "synthetic"}
+    spec = _spec(part, update=True)
+    spec["card_key"] = "synthetic-legacy"
+    spec["parts"].pop("post_source_id")
+    ctx = {"thread_id": ROOT_TS, "consumed": set(), "history": [
+        {"ts": prior, "thread_ts": ROOT_TS, "bot_id": world.client.bot_id, "text": remote}]}
+    assert asyncio.run(world.worker._body_part(spec, original, ctx, part)) == {
+        "result": "delivered", "remote_id": prior}
+    assert [op for op, _ in world.client.calls] == ["auth_test"]
+    assert ctx["consumed"] == {prior}
+
+
+def test_emoji_match_prefers_exact_history_before_equivalent_and_consumes_once(world):
+    earlier, exact = "1790000000.000020", "1790000000.000021"
+    ctx = {"consumed": set(), "history": [
+        {"ts": earlier, "thread_ts": ROOT_TS, "bot_id": world.client.bot_id, "text": ":tada:"},
+        {"ts": exact, "thread_ts": ROOT_TS, "bot_id": world.client.bot_id, "text": "🎉"},
+    ]}
+    assert asyncio.run(world.worker._remote_match(ROOT_TS, "🎉", ctx)) == exact
+    assert asyncio.run(world.worker._remote_match(ROOT_TS, "🎉", ctx)) == earlier
+    assert asyncio.run(world.worker._remote_match(ROOT_TS, "🎉", ctx)) is None
+    assert ctx["consumed"] == {earlier, exact}
+
+
+@pytest.mark.parametrize(("original", "remote"), [
+    ("🎉", ":rocket:"),
+    ("🎉", ":unknown_custom:"),
+    (":unknown_custom:", ":tada:"),
+    (":tada:", "🎉"),
+    ("👋🏻", ":wave::skin-tone-3:"),
+    ("👨🏻‍❤️‍👨🏼", ":man-heart-man::skin-tone-2::skin-tone-3:"),
+    ("🎉‍🚀", ":tada:‍:rocket:"),
+])
+def test_slack_emoji_does_not_guess_other_or_unknown_sequences(world, original, remote):
+    ctx = {"consumed": set(), "history": [
+        {"ts": "1790000000.000020", "thread_ts": ROOT_TS,
+         "bot_id": world.client.bot_id, "text": remote}]}
+    assert asyncio.run(world.worker._remote_match(ROOT_TS, original, ctx)) is None
+    assert ctx["consumed"] == set()
+
+
+def test_emoji_normalization_keeps_author_thread_root_and_prior_guards(world):
+    valid = "1790000000.000024"
+    ctx = {"consumed": set(), "history": [
+        {"ts": ROOT_TS, "thread_ts": ROOT_TS, "bot_id": world.client.bot_id, "text": ":tada:"},
+        {"ts": "1790000000.000021", "thread_ts": ROOT_TS, "bot_id": "foreign", "text": ":tada:"},
+        {"ts": "1790000000.000022", "thread_ts": "1790000000.000999",
+         "bot_id": world.client.bot_id, "text": ":tada:"},
+        {"ts": valid, "thread_ts": ROOT_TS, "bot_id": world.client.bot_id, "text": ":tada:"},
+    ]}
+    assert asyncio.run(world.worker._remote_match(ROOT_TS, "🎉", ctx, prior="1790000000.000021")) is None
+    assert asyncio.run(world.worker._remote_match(ROOT_TS, "🎉", ctx, prior=valid)) == valid
+    assert ctx["consumed"] == {valid}

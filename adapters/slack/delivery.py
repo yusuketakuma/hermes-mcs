@@ -18,6 +18,7 @@ from adapters.common.spec import post_scoped, reply_card_key, token_map
 from adapters.common.worker import WorkspaceDeliveryWorker as _BaseWorker
 
 from .cards import render, validate
+from .emoji_text import slack_emoji_pattern
 from adapters.common.announce import new_reply_announced
 from .presentation import mention_ids, thread_part_blocks
 from .paths import notify_dirs
@@ -954,17 +955,27 @@ class DeliveryWorker(_BaseWorker):
         chunks dedupe one-for-one instead of collapsing."""
         if ctx.get("history") is None:
             ctx["history"] = await self._replies(thread_ts)
+        candidates = []
         for m in ctx["history"]:
             mid = m.get("ts")
             if not isinstance(mid, str) or mid == thread_ts \
-                    or mid in ctx["consumed"] or m.get("text") != text \
+                    or mid in ctx["consumed"] \
                     or m.get("thread_ts", thread_ts) != thread_ts \
                     or (prior is not None and mid != prior):
                 continue
             if not self._sender.authored(m):
                 continue                # not ours — never binds a part
-            ctx["consumed"].add(mid)
-            return mid
+            if m.get("text") == text:
+                ctx["consumed"].add(mid)
+                return mid
+            if isinstance(m.get("text"), str):
+                candidates.append(m)
+        pattern = slack_emoji_pattern(text) if candidates else None
+        if pattern is not None:
+            for m in candidates:
+                if pattern.fullmatch(m["text"]):
+                    ctx["consumed"].add(m["ts"])
+                    return m["ts"]
         return None
 
     async def _replies(self, thread_ts: str):

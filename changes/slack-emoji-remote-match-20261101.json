@@ -1,0 +1,11 @@
+{
+  "category": "fixed",
+  "title": "Slackの返信で絵文字による重複投稿を抑制",
+  "summary": "Slackの返信履歴で絵文字の表記が変わった場合も、対応する既存の返信を確認して重複投稿を抑えます。",
+  "upgrade": "更新後にHermes gatewayを再起動すると反映されます。独立実行ではSlackアダプターを再起動してください。",
+  "details": [
+    "Slackが参照する公開絵文字データの対応関係で照合し、完全一致を優先します。",
+    "対応を確認できない複数色の絵文字や独自絵文字は推測して変換しません。"
+  ],
+  "refs": ["adapters/slack/delivery.py", "adapters/slack/emoji_text.py"]
+}
