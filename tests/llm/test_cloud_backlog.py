@@ -217,16 +217,16 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
     monkeypatch.setattr(semantic_drain, "run_due", semantic)
     monkeypatch.setattr(backlog, "_parent", None)
     backlog.worker(parent)
-    # one busy lock retries the semantic turn once; only a second failure
-    # advances the phase and lets the next extract select
-    assert seen == ["extract", "extract" if semantic_busy == 'twice' else "semantic"]
-    assert len(acquisitions) == 2 + bool(semantic_busy)
+    # a busy run lock never bounces the turn: the worker keeps short
+    # wait/reacquire cycles until the unexecuted semantic job goes first
+    assert seen == ["extract", "semantic"]
+    assert len(acquisitions) == 2 + retries
     idle = [2] if done == 0 else []
     assert waits == idle + [1] * retries + idle
     passes = [json.loads(line) for line in capsys.readouterr().out.splitlines()
               if json.loads(line).get('event') == 'cloud_backlog_pass']
     assert passes[0].get('reason') == selection_reason
-    budget_held = selection_reason is None and budget is True and semantic_busy != 'twice'
+    budget_held = selection_reason is None and budget is True
     assert passes[1].get('reason') == (selection_reason or ('jev_backlog_budget_reserved' if budget_held else None))
     assert passes[1].get('jev_effect') == ('skipped_if_eligible' if budget_held else None)
     assert [item.get('cloud_selection_incomplete') for item in passes] == (

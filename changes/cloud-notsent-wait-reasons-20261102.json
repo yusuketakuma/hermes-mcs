@@ -1,14 +1,15 @@
 {
   "category": "fixed",
   "title": "クラウド送信前拒否の未送信判定・semantic待機の往復・待機理由の記録を修正",
-  "summary": "クラウド利用の送信前に予約層が拒否した場合、これまでは送信失敗と同じ扱いで再予約・ローカル代替の対象になり得ました。拒否は送信前境界の型(CloudNotSent)として伝播するようになり、確実に送信していないことが分かるため、試行回数を消費せず・有料/部分完了のクラウド単位をローカル作業へ混ぜず・同じ要求を送り直さず、次回まで待機します。semantic処理の実行ロック取得失敗で、その worker が900秒の抽出待機へ戻されていた問題を修正し、1回の失敗後は短い待機で同じ semantic 順番を再試行してから抽出選択を許します。worker・semantic drain の待機理由は固定コードだけを理由が変わった時だけ記録し、通常0件と観測不能を区別します。抽出では、一部だけ改善した正当な終端記録が証跡不一致として保存拒否される問題を修正し、品質記録の終端状態と残り件数を実際の本文から再計算して照合するため、attention のまま正しく保存されます。",
+  "summary": "クラウド利用の送信前に予約層が拒否した場合、これまでは送信失敗と同じ扱いで再予約・ローカル代替の対象になり得ました。拒否は送信前境界の型(CloudNotSent)として伝播するようになり、確実に送信していないことが分かるため、試行回数を消費せず・有料/部分完了のクラウド単位をローカル作業へ混ぜず・同じ要求を送り直さず、次回まで待機します。semantic処理の実行ロック取得失敗で、その worker が900秒の抽出待機へ戻されていた問題を修正し、ロック競合が続いても短い待機/再獲得を繰り返して未実行の semantic を次の抽出試行より先に保ちます。worker・semantic drain の待機理由は固定コードだけを理由が変わった時だけ記録し、通常0件と観測不能を区別します。抽出では、一部だけ改善した正当な終端記録が証跡不一致として保存拒否される問題を修正し、品質記録の終端状態と残り件数を実際の本文から再計算して照合するため、attention のまま正しく保存されます。",
   "upgrade": "通常の更新で適用され、追加の設定変更は不要です。待機理由の出力コードが増えた以外、既存のイベント名・記録形式・承認・配送・受領記録の意味は変わりません。",
   "details": [
-    "cloud_client.CloudClient.complete は、予約関数(reserve_fn)が型付きの拒否を返した場合だけ CloudNotSent として伝播します。HTTP 実行・結果不明・確定済み受領は従来どおり送信済みの可能性を保ちます。AnthropicClient・OpenAIClient の両方で同じ境界です。",
-    "抽出の provider 呼出では、CloudNotSent はその単位を待機へ回します(再選択・再送信・ローカル代替なし)。semantic の backlog 推論では LLMNotSent(cloud_not_sent) として無料の待機へ、患者コンテキスト更新では Deferred(nightly_cloud_not_sent) へ、クラウド比較監査ではその回の監査だけをスキップします。いずれもローカル代替へ有料または部分完了のクラウド単位を混ぜません。",
-    "cloud_backlog の worker は、semantic の実行ロック取得に失敗しても位相を進めず、短い待機で同じ順番を1回だけ再試行します。連続して失敗した場合だけ位相を進めて抽出選択を許します。親終了・更新世代・メモリ条件は変わりません。",
+    "cloud_client.CloudClient.complete は、同一呼出の最初の試行で予約関数(reserve_fn)が型付きの拒否を返した場合だけ CloudNotSent として伝播します。先に HTTP 試行が送られた後の予約拒否は、直前の送信失敗(例: 429/529)がそのまま結果を運び、無料の待機扱いには変換しません。HTTP 実行・結果不明・確定済み受領は従来どおり送信済みの可能性を保ちます。AnthropicClient・OpenAIClient の両方で同じ境界です。",
+    "抽出の provider 呼出では、CloudNotSent はその単位を待機へ回します(再選択・再送信・ローカル代替なし)。semantic の backlog 推論では LLMNotSent(cloud_not_sent) として無料の待機へ、患者コンテキスト更新では Deferred(nightly_cloud_not_sent) へ、クラウド比較監査ではその回の監査だけをスキップします。いずれもローカル代替へ有料または部分完了のクラウド単位を混ぜません。この予算待機では、既に確定した成功断片・受領記録は破棄されません。スコープ・リース喪失など送信元の無効化は従来どおり全 provider を破棄します。",
+    "cloud_backlog の worker は、semantic の実行ロック取得に失敗しても位相を進めず、短い待機/再獲得を繰り返して未実行の semantic を次の抽出試行より先に保ちます。2回以上の連続競合でも抽出選択へ戻りません。親終了・更新世代・メモリ・carry の条件は変わりません。",
     "worker の待機は cloud_backlog_deferred イベントに固定コード(provider_settings_unreadable, cloud_mode_off, cloud_profile_unavailable, paused, circuit_open, pricing_unverified, daily_cap 等の allowlist 内ブロック理由、それ以外は cloud_blocked)で記録し、同じ理由の継続中は繰り返し記録しません。実ID・本文・秘密・設定値は記録されません。semantic_drain の cloud_only 選択が期限内に完了しない場合も、初回・補充の両経路で cloud_selection_reason(deadline, active_transaction, reader_unavailable, reader_changed, memory, selection_busy 等)を返し、worker の記録はそのまま固定コードへ写します。観測不能(cloud_selection_incomplete)と、選択できたが0件だった通常の待ちは引き続き区別されます。",
-    "extract_llm の inline proof 照合では、品質記録を証拠の正当性と分けて検証します。hint_gaps_resolved・unresolved・dispatch_unknown・skipped_budget の終端状態のみが保存対象で、pending・started は再開マーカーとして拒否します。記録はちょうど state と remaining_hint_candidates の2キーを持ち、残り件数はその断片の実本文から再計算して一致を要求します。型の逸脱・余分なキー・件数不一致・改ざんされた終端状態はすべて拒否し、進行表示は attention のままです。"
+    "extract_llm の inline proof 照合では、品質記録を証拠の正当性と分けて検証します。hint_gaps_resolved・unresolved・dispatch_unknown・skipped_budget の終端状態のみが保存対象で、pending・started は再開マーカーとして拒否します。記録はちょうど state と remaining_hint_candidates の2キーを持ち、残り件数はその断片の実本文から再計算して一致を要求します。dispatch_unknown・skipped_budget は実行履歴として保存値を保ち、内容が解決していても解決済みへ昇格させません。型の逸脱・余分なキー・件数不一致・改ざんされた終端状態はすべて拒否し、進行表示は attention のままです。",
+    "最終成果物の integrity.completeness・completeness_chunks は、採用された全断片のキー・状態・件数・断片数が、保存済み断片の本文とヒントから再計算した結果と一致する場合だけ書き込まれます。臨床文書の一致だけでなく、1項目でも一致しない記録・過不足のあるキー・断片数の不一致はコミットを拒否します。"
   ],
   "refs": ["mcs/llm/cloud_client.py", "mcs/extract/llm/extract_llm.py",
            "mcs/llm/cloud_backlog.py", "mcs/semantic/semantic_drain.py",

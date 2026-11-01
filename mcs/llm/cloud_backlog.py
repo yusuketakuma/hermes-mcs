@@ -219,7 +219,6 @@ def worker(parent):
                 preserve_on_fence_loss=True, deadline=deadline)
 
         try:
-            lock_waited = False
             while os.getppid() == parent and writer_lock.updater_state() == initial and not initial[0]:
                 if carry:
                     try:
@@ -277,18 +276,13 @@ def worker(parent):
                     else:
                         lock = writer_lock.acquire_run_lock()
                         if lock is None:
-                            # a busy run lock must not bounce this worker back
-                            # into a full extract wait: retry this semantic turn
-                            # once after a short pause, then let the alternating
-                            # extract selection proceed.
-                            if lock_waited:
-                                lock_waited = False
-                                phase += 1
-                            else:
-                                lock_waited = True
+                            # a busy run lock keeps this worker on the same
+                            # semantic turn: short wait/reacquire cycles under
+                            # the usual parent/fence/memory guards, so an
+                            # unexecuted semantic job stays ahead of the next
+                            # extract attempt.
                             time.sleep(1)
                             continue
-                        lock_waited = False
                         try:
                             scfg = semantic_drain.runtime_config(cfg)[0]
                             result = semantic_drain.run_due(ledger, cfg, {"errors": []},
