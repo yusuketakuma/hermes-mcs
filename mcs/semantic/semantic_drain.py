@@ -4330,8 +4330,9 @@ def _refill_due(ledger, lane, kinds, qc_active, max_jobs, long_defers,
         try:
             batch = select(ledger, lane, kinds, qc_active, remaining,
                                 long_defers, excluded=inspected, turns=turns, held_after=held_after)
-        except _CloudSelectionIncomplete:
+        except _CloudSelectionIncomplete as error:
             out['cloud_selection_incomplete'] = True
+            out['cloud_selection_reason'] = str(error)
             return
         except _SchedulerUnavailable:
             out['long_defer_reservation_failed'] = True
@@ -4722,8 +4723,9 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     partial(_select_due, prioritize_patients=True) if prioritize_patients else _select_due)
         first_batch = selector(ledger, lane, kinds, qc_active, max_jobs, long_defers,
                                   **cursor_arg)
-    except _CloudSelectionIncomplete:
+    except _CloudSelectionIncomplete as error:
         out['cloud_selection_incomplete'] = True
+        out['cloud_selection_reason'] = str(error)
         return out
     except _SchedulerUnavailable:
         result['errors'].append('semantic: long_defer_reservation_failed')

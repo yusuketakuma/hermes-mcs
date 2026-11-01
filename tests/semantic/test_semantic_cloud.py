@@ -844,6 +844,7 @@ def test_cloud_selection_refill_deadline_does_not_count_remaining_jobs(cloud, tm
                                      lane="backlog", max_jobs=1, cloud_only=True, run_lock_fd=lock_fd)
         assert len(attempted) == 9 and selections == [deadline, deadline]
         assert out.get("cloud_selection_incomplete") is True and out["left"] is None
+        assert out["cloud_selection_reason"] == "deadline"
         assert not any("SELECT COUNT(*) FROM fetch_jobs WHERE kind IN (" in sql for sql in statements)
         assert not calls and not rows(led, "cloud_usage_reserve") and not rows(led, "semantic_usage")
     finally:

@@ -154,7 +154,7 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('budget', [True, False, None, 'synthetic'])
-@pytest.mark.parametrize('semantic_busy', [False, True])
+@pytest.mark.parametrize('semantic_busy', [False, 'once', 'twice'])
 @pytest.mark.parametrize('counters,expected,done,selection_reason', [
     ({'selected': 64, 'deferred': 3, 'context_blocked': 1, 'skipped': 0,
       'lock_lost': 2, 'slow_deferred': 4},
@@ -177,7 +177,8 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
     import semantic_drain
     import writer_lock
     parent = 991
-    parents = iter([parent] * (5 if semantic_busy else 4) + [1])
+    retries = {'once': 1, 'twice': 2}.get(semantic_busy, 0)
+    parents = iter([parent] * (4 + retries) + [1])
     monkeypatch.setattr(backlog.os, "getppid", lambda: next(parents))
     monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: True)
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 1))
@@ -187,12 +188,14 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
     monkeypatch.setattr(extract_llm.cloud_policy, "global_block_reason", lambda *a, **kw: None)
     monkeypatch.setattr(extract_llm.cloud_policy, "budget_block_reason", lambda *a, **kw: None)
     monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
-    monkeypatch.setattr(backlog.time, "sleep", lambda _: None)
     monkeypatch.setattr(semantic_drain, "runtime_config", lambda *a: ({"job_budget_seconds": 1200}, []))
+    waits = []
+    monkeypatch.setattr(backlog.time, "sleep", waits.append)
     acquisitions = []
+    fail_at = {'once': (2,), 'twice': (2, 3)}.get(semantic_busy, ())
     def acquire():
         acquisitions.append(True)
-        if semantic_busy and len(acquisitions) == 2:
+        if len(acquisitions) in fail_at:
             return None
         return os.open(tmp_path / "lock", os.O_CREAT | os.O_RDWR, 0o600)
     monkeypatch.setattr(writer_lock, "acquire_run_lock", acquire)
@@ -214,11 +217,16 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
     monkeypatch.setattr(semantic_drain, "run_due", semantic)
     monkeypatch.setattr(backlog, "_parent", None)
     backlog.worker(parent)
-    assert seen == ["extract", "extract" if semantic_busy else "semantic"]
+    # one busy lock retries the semantic turn once; only a second failure
+    # advances the phase and lets the next extract select
+    assert seen == ["extract", "extract" if semantic_busy == 'twice' else "semantic"]
+    assert len(acquisitions) == 2 + bool(semantic_busy)
+    idle = [2] if done == 0 else []
+    assert waits == idle + [1] * retries + idle
     passes = [json.loads(line) for line in capsys.readouterr().out.splitlines()
               if json.loads(line).get('event') == 'cloud_backlog_pass']
     assert passes[0].get('reason') == selection_reason
-    budget_held = selection_reason is None and budget is True and not semantic_busy
+    budget_held = selection_reason is None and budget is True and semantic_busy != 'twice'
     assert passes[1].get('reason') == (selection_reason or ('jev_backlog_budget_reserved' if budget_held else None))
     assert passes[1].get('jev_effect') == ('skipped_if_eligible' if budget_held else None)
     assert [item.get('cloud_selection_incomplete') for item in passes] == (
@@ -393,7 +401,53 @@ def test_worker_keeps_unreadable_config_closed_without_work(carry_worker, monkey
     assert state.events == [] and state.closed
     records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     holds = [item for item in records if item['event'] == 'cloud_backlog_deferred']
-    assert holds == [{'event': 'cloud_backlog_deferred', 'reason': 'provider_settings_unreadable'}] * 2
+    assert holds == [{'event': 'cloud_backlog_deferred', 'reason': 'provider_settings_unreadable'}]
+    assert 'synthetic-private-detail' not in json.dumps(records)
+
+
+@pytest.mark.parametrize('gate,code', [
+    ('mode', 'cloud_mode_off'),
+    ('profile', 'cloud_profile_unavailable'),
+    ('global-paused', 'paused'),
+    ('global-circuit', 'circuit_open'),
+    ('global-unknown', 'cloud_blocked'),
+    ('budget-daily_cap', 'daily_cap'),
+    ('budget-unknown', 'cloud_blocked'),
+])
+def test_worker_reports_each_wait_reason_once_per_change(carry_worker, monkeypatch, capsys, gate, code):
+    import extract_llm
+    state, _ = carry_worker
+    if gate == 'mode':
+        state.block = 'mode'
+    elif gate == 'profile':
+        monkeypatch.setattr(extract_llm.cloud_policy, 'resolve_profile',
+                            lambda *a, **kw: (None, ['synthetic-private-detail']))
+    elif gate == 'global-paused':
+        monkeypatch.setattr(extract_llm.cloud_policy, 'global_block_reason', lambda *a, **kw: 'paused')
+    elif gate == 'global-circuit':
+        monkeypatch.setattr(extract_llm.cloud_policy, 'global_block_reason', lambda *a, **kw: 'circuit_open')
+    elif gate == 'global-unknown':
+        monkeypatch.setattr(extract_llm.cloud_policy, 'global_block_reason',
+                            lambda *a, **kw: 'synthetic-private-detail')
+    elif gate == 'budget-daily_cap':
+        monkeypatch.setattr(extract_llm.cloud_policy, 'budget_block_reason', lambda *a, **kw: 'daily_cap')
+    else:
+        monkeypatch.setattr(extract_llm.cloud_policy, 'budget_block_reason',
+                            lambda *a, **kw: 'synthetic-private-detail')
+    waits = []
+
+    def sleep(seconds):
+        waits.append(seconds)
+        if len(waits) == 2:
+            state.alive = False
+
+    monkeypatch.setattr(backlog.time, 'sleep', sleep)
+    monkeypatch.setattr(extract_llm, 'run_pending', lambda *a, **kw: pytest.fail('blocked work ran'))
+    backlog.worker(991)
+    assert waits == [10, 10] and state.events == [] and state.closed
+    records = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    holds = [item for item in records if item['event'] == 'cloud_backlog_deferred']
+    assert holds == [{'event': 'cloud_backlog_deferred', 'reason': code}]
     assert 'synthetic-private-detail' not in json.dumps(records)
 
 

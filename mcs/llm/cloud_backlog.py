@@ -162,6 +162,14 @@ class Pool:
             self.lock = None
 
 
+# Fixed waiting-reason codes: a worker may only report one of these — never a
+# raw block reason, config value, id or any provider detail.
+_WAIT_CODES = {"paused", "circuit_open", "pricing_unverified", "profile_invalid",
+               "daily_cap", "daily_cost_cap", "monthly_cap", "provider_budget_missing",
+               "provider_daily_cap", "provider_monthly_cap", "window_history_unverified",
+               "window_cap"}
+
+
 def worker(parent):
     """Alternate guarded cloud extraction and semantic jobs with an independent ledger."""
     global _parent
@@ -193,6 +201,15 @@ def worker(parent):
     with closing(ledger):
         carry = []
         allow_exit_settle = True
+        waiting = {"code": None}
+
+        def wait(code):
+            # a persistent wait logs once on entry and again only when the
+            # reason changes — not on every loop
+            if code != waiting["code"]:
+                waiting["code"] = code
+                print(json.dumps({"event": "cloud_backlog_deferred", "reason": code}), flush=True)
+            time.sleep(10)
 
         def settle_carry():
             deadline = time.monotonic() + 3.0
@@ -202,6 +219,7 @@ def worker(parent):
                 preserve_on_fence_loss=True, deadline=deadline)
 
         try:
+            lock_waited = False
             while os.getppid() == parent and writer_lock.updater_state() == initial and not initial[0]:
                 if carry:
                     try:
@@ -225,20 +243,26 @@ def worker(parent):
                 try:
                     cfg = load_config()
                 except ProviderSettingsUnreadable:
-                    print(json.dumps({"event": "cloud_backlog_deferred",
-                                      "reason": "provider_settings_unreadable"}), flush=True)
-                    time.sleep(10)
+                    wait("provider_settings_unreadable")
                     continue
                 settings = extract_llm._cloud_settings(cfg)
                 selection, errors = extract_llm.cloud_policy.resolve_profile(
                     cfg, route="reextract", purpose="backlog")
                 limit = (selection["max_tokens"] if selection is not None and selection["max_tokens"] is not None
                          else extract_llm.MAX_TOKENS)
-                if (settings["mode"] != "on" or errors or selection is None
-                        or extract_llm.cloud_policy.global_block_reason(ledger, model=selection["model"])
-                        or extract_llm.cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
-                    time.sleep(10)
+                if settings["mode"] != "on":
+                    wait("cloud_mode_off")
                     continue
+                if errors or selection is None:
+                    wait("cloud_profile_unavailable")
+                    continue
+                blocked = (extract_llm.cloud_policy.global_block_reason(ledger, model=selection["model"])
+                           or extract_llm.cloud_policy.budget_block_reason(
+                               ledger, settings, max_tokens=limit, selection=selection))
+                if blocked:
+                    wait(blocked if blocked in _WAIT_CODES else "cloud_blocked")
+                    continue
+                waiting["code"] = None
                 started = time.monotonic()
                 try:
                     if phase % 2 == 0:
@@ -253,9 +277,18 @@ def worker(parent):
                     else:
                         lock = writer_lock.acquire_run_lock()
                         if lock is None:
-                            phase += 1
+                            # a busy run lock must not bounce this worker back
+                            # into a full extract wait: retry this semantic turn
+                            # once after a short pause, then let the alternating
+                            # extract selection proceed.
+                            if lock_waited:
+                                lock_waited = False
+                                phase += 1
+                            else:
+                                lock_waited = True
                             time.sleep(1)
                             continue
+                        lock_waited = False
                         try:
                             scfg = semantic_drain.runtime_config(cfg)[0]
                             result = semantic_drain.run_due(ledger, cfg, {"errors": []},
@@ -278,10 +311,15 @@ def worker(parent):
                         record["llm_calls"] = {"calls": calls["calls"]}
                     if result.get("cloud_selection_incomplete") is True:
                         record["cloud_selection_incomplete"] = True
-                        reason = result.get("cloud_selection_reason")
-                        record["reason"] = ("cloud_selection_" + reason if reason in (
-                            "deadline", "active_transaction", "reader_unavailable", "reader_changed", "reader_close_failed")
-                            else "cloud_selection_incomplete")
+                        record["reason"] = {
+                            "deadline": "cloud_selection_deadline",
+                            "active_transaction": "cloud_selection_active_transaction",
+                            "reader_unavailable": "cloud_selection_reader_unavailable",
+                            "reader_changed": "cloud_selection_reader_changed",
+                            "reader_close_failed": "cloud_selection_reader_close_failed",
+                            "memory": "cloud_selection_memory",
+                            "selection_busy": "cloud_selection_busy",
+                        }.get(result.get("cloud_selection_reason"), "cloud_selection_incomplete")
                     elif phase % 2 and result.get("budget_exhausted") is True:
                         record["reason"] = "jev_backlog_budget_reserved"
                         record["jev_effect"] = "skipped_if_eligible"
