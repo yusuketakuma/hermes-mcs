@@ -3725,6 +3725,68 @@ def _extract_inline_proof(db, r, context, keys):
             "rows": [rows[key] for key in sorted(rows)]}
 
 
+def _quality_record_consistent(record, expected):
+    """A stored terminal record must reproduce from the leaf content: the
+    remaining count always, a resolved claim only when the content resolves,
+    an unresolved claim only when issues remain. dispatch_unknown and
+    skipped_budget are execution history kept as stored — never promoted to
+    resolved and never required to match the recomputed state."""
+    if not isinstance(record, dict) or set(record) != {"state", "remaining_hint_candidates"}:
+        return False
+    state = record["state"]
+    return (state in _QUALITY_TERMINAL
+            and type(record["remaining_hint_candidates"]) is int
+            and record["remaining_hint_candidates"] == expected["remaining_hint_candidates"]
+            and (state == "hint_gaps_resolved") == (expected["state"] == "hint_gaps_resolved")
+            and (state != "unresolved" or expected["state"] == "unresolved"))
+
+
+def _verify_completeness_claim(db, r, context, integrity, used_keys):
+    """Bind the final integrity completeness claim to the adopted leaves:
+    one terminal record per leaf key whose count and resolved/unresolved
+    claims reproduce from the persisted leaf content, plus the committed
+    leaf count. Run-time metadata alone cannot mint a resolved claim."""
+    try:
+        completeness = integrity.get("completeness")
+        chunks_n = integrity.get("completeness_chunks")
+        if (not isinstance(completeness, dict) or type(chunks_n) is not int
+                or chunks_n != len(used_keys)
+                or set(completeness) != {str(key) for key in used_keys}):
+            return False
+        splits, saved = _saved_chunk_state(db, r, context, chunk_size=r["_chunk_size"])
+        stack = list(reversed(list(enumerate(plan_chunks(r["body_text"], r["_chunk_size"])))))
+        pieces, seen = {}, 0
+        while stack:
+            key, piece = stack.pop()
+            seen += 1
+            if seen > _PROGRESS_MAX_NODES:
+                return False
+            if key in saved:
+                pieces[key] = piece
+            elif key in splits:
+                parts = plan_chunks(piece, splits[key])
+                if len(parts) < 2 or "".join(parts) != piece:
+                    return False
+                stack.extend((f"{key}:{index}", part)
+                             for index, part in reversed(list(enumerate(parts))))
+            else:
+                return False
+        for key in used_keys:
+            value = saved.get(key)
+            piece = pieces.get(key)
+            if value is None or piece is None or "_quality_status" in value:
+                return False
+            leaf = {k: v for k, v in value.items()
+                    if k not in ("_quality_result", "_provider_leaf")}
+            expected = _hint_coverage(
+                leaf, _rule_hints({"body_text": piece, "posted_at": r.get("posted_at")}), piece)
+            if not _quality_record_consistent(completeness.get(str(key)), expected):
+                return False
+        return True
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError, sqlite3.Error):
+        return False
+
+
 def _verify_inline_extract_proof(db, r, context, document, proof):
     """Replay protected leaves and compare their deterministic final clinical result."""
     try:
@@ -3797,17 +3859,12 @@ def _verify_inline_extract_proof(db, r, context, document, proof):
                 if record is not None or (isinstance(marked, dict)
                         and marked.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT):
                     # Completeness is a content claim, separate from evidence
-                    # validity: a legal terminal record stays final, but state
-                    # and remaining must reproduce from the actual piece.
-                    state = record.get("state") if isinstance(record, dict) else None
+                    # validity: a legal terminal record stays final, but its
+                    # count and resolved claim must reproduce from the actual
+                    # piece; dispatch history stays as stored.
                     expected = _hint_coverage(
                         leaf, _rule_hints({"body_text": piece, "posted_at": r.get("posted_at")}), piece)
-                    if (state not in _QUALITY_TERMINAL
-                            or set(record) != {"state", "remaining_hint_candidates"}
-                            or type(record.get("remaining_hint_candidates")) is not int
-                            or record["remaining_hint_candidates"] != expected["remaining_hint_candidates"]
-                            or (state == "hint_gaps_resolved") != (expected["state"] == "hint_gaps_resolved")
-                            or (expected["state"] == "dispatch_unknown") != (state == "dispatch_unknown")):
+                    if not _quality_record_consistent(record, expected):
                         return False
                 leaves.append(leaf)
             elif key in splits:
@@ -3912,6 +3969,13 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                 if clinical is None or not _verify_inline_extract_proof(ledger.db, r, context, clinical, inline):
                     return "rejected"
                 r["_inline_extract_proof"] = inline
+            if (not r.get("_kept_prior") and isinstance(integrity, dict)
+                    and ("completeness" in integrity or "completeness_chunks" in integrity)
+                    and not _verify_completeness_claim(ledger.db, r, context, integrity, used_keys)):
+                # The stored completeness claim must reproduce from the
+                # adopted leaves' content — run-time metadata alone cannot
+                # mint a resolved result over unresolved leaves.
+                return "rejected"
             witness = []
             outcome = _replace_current_tx(ledger, r, content,
                                           ctx=context is not None if mark_context is None else mark_context,

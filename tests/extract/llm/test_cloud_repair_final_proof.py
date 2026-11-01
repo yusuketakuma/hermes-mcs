@@ -240,6 +240,75 @@ def test_partial_repair_still_commits_as_terminal_unresolved(routed, monkeypatch
     assert not rows and len(sends) == 2
 
 
+@pytest.mark.parametrize("damage", ["state_resolved", "remaining_wrong", "extra_key",
+                                    "chunks_wrong", "missing_leaf"])
+def test_final_integrity_rejects_tampered_completeness(routed, monkeypatch, tmp_path, damage):  # noqa: F811
+    """The committed completeness claim is bound to the adopted leaves'
+    content: altering a single record — or the leaf count — rejects the
+    write, and unresolved leaves can never mint a resolved claim."""
+    led, row, context, result, meta, qc_id, prior, chunks, sends = _repair_run(
+        routed, monkeypatch, tmp_path, {"sbp": 120})
+    completeness = meta["completeness"]
+    if damage == "chunks_wrong":
+        meta["completeness_chunks"] = len(completeness) + 1
+    elif damage == "missing_leaf":
+        completeness.pop(next(iter(completeness)))
+    else:
+        key = next(k for k, v in completeness.items() if v["state"] == "unresolved")
+        if damage == "state_resolved":
+            completeness[key] = {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}
+        elif damage == "remaining_wrong":
+            completeness[key]["remaining_hint_candidates"] = 0
+        elif damage == "extra_key":
+            completeness[key] = {**completeness[key], "injected": True}
+    outcome = worker._commit_extraction_atomic(led, row, json.dumps(result, ensure_ascii=False), context,
+        meta, {"qc": qc_id, "applied": True}, None, tuple(chunks), check_current=False,
+        expected_prior=prior)
+    assert outcome == "rejected"
+    # nothing replaced the prior artifact — the rejected write left it current
+    assert [json.loads(row["content"])["symptoms"][0]["text"]
+            for row in _current_artifacts(led)] == ["頭痛"]
+
+
+def test_dispatch_unknown_history_leaf_commits_and_stays_attention(tmp_path, monkeypatch):
+    """A leaf whose optional repair dispatch was interrupted keeps the
+    dispatch-unknown execution history as a legal terminal record — the
+    integrity claim binds to the persisted content, progress stays
+    attention, nothing reselects, and the history is never promoted."""
+    import copy
+    from extract_testkit import _ledger
+
+    db = _ledger(tmp_path)
+    body = "本人に発熱と咳があります。本人の血圧120/80です。"
+    db.save_messages([_message(body=body)])
+    observations = {"symptoms": [
+        {"text": "発熱", "status": "ongoing", "subject": "patient", "evidence": "発熱"},
+        {"text": "咳", "status": "ongoing", "subject": "patient", "evidence": "咳"}]}
+    calls = []
+
+    def model(*args, **kwargs):
+        calls.append(args)
+        if len(calls) == 2:
+            raise KeyboardInterrupt("synthetic interruption after optional dispatch reservation")
+        return copy.deepcopy(observations)
+
+    monkeypatch.setattr(worker, "_llm_call", model)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            worker.run_pending(db, budget_s=300)
+        result = worker.run_pending(db, budget_s=300)
+        assert result["done"] == 1 and len(calls) == 2
+        [row] = db.artifacts("extract_llm")
+        integrity = json.loads(row["meta"])["integrity"]
+        assert {entry["state"] for entry in integrity["completeness"].values()} == {
+            "dispatch_unknown"}
+        source = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+        assert worker.progress_for_message(db.db, source, model=worker.MODEL)["state"] == "attention"
+        assert worker.run_pending(db, budget_s=300)["selected"] == 0 and len(calls) == 2
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("damage", ["state_resolved", "remaining_wrong", "state_bogus",
                                     "remaining_bool", "extra_key", "state_pending"])
 def test_inline_proof_rejects_tampered_terminal_records(routed, monkeypatch, tmp_path, damage):  # noqa: F811
