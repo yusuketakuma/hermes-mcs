@@ -93,6 +93,9 @@
 - **クラウド処理の料金と応答の扱いを修正**
   使用したサービスと料金版を記録し、過去の予約をその料金版で精算します。送信前に失敗したと確認できるタイムアウトを区別し、通信結果が不明な場合は引き続き保留します。
 
+- **手動確認した添付説明の後続更新を修正**
+  元の添付と人の承認記録を照合できる場合、同じ添付を再利用して通知を更新します。整理後も本文やファイル名を含まない照合用ハッシュを保持し、証拠が足りない場合は保留します。
+
 - **設定読取りの一時的な競合を改善**
   実行中の別ファイル更新と設定の読取りが重なった場合、設定全体を一度だけ読み直します。再び競合した場合や安全性を確認できない場合は処理を停止します。
 
@@ -611,6 +614,7 @@
 - [抽出前の整理でロック待ちが長引く問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-gc-lock-deadline-20261101.json)
 - [Slackの返信で絵文字による重複投稿を抑制](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/slack-emoji-remote-match-20261101.json)
 - [設定読取りの一時的な競合を改善](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/provider-reader-directory-race-20261101.json)
+- [手動確認した添付説明の後続更新を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/manual-caption-successor-20261101.json)
 
 </details>
 

@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 428,
+  "fragment_count": 429,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every archived record linked; unpublished descriptions may be revised",
   "records": [
@@ -2575,6 +2575,12 @@
       "id": "provider-reader-directory-race-20261101",
       "title": "設定読取りの一時的な競合を改善",
       "sha256": "fc7e06c2531c57c81c98e6312f4bcad52333c75d4e9d70930894e4e1c447888a"
+    },
+    {
+      "path": "changes/archive/1.1.0/manual-caption-successor-20261101.json",
+      "id": "manual-caption-successor-20261101",
+      "title": "手動確認した添付説明の後続更新を修正",
+      "sha256": "3fa94f489d26fab3cdf7dc44b09dafe286a8fb9ec5f423f69b7182d55dc67633"
     }
   ]
 }
