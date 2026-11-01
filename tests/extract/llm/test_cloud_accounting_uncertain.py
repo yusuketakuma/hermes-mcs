@@ -65,9 +65,37 @@ def test_unit_can_forbid_transport_retry_without_releasing_unknown_cost(
     assert provider.possibly_sent
 
 
-def test_second_attempt_reserve_refusal_is_a_definite_unsent(routed, monkeypatch):
-    """A 429 settles its reservation; a later pre-send refusal is the only
-    definite not-sent — it never re-sends and never becomes a local unit."""
+def test_first_attempt_reserve_refusal_is_the_only_typed_not_sent(routed, monkeypatch):
+    """A pre-send refusal on the first attempt is the only definite not-sent:
+    no POST leaves, no attempt is charged, nothing becomes a local unit."""
+    led, cfg, *_ = routed
+    sent = []
+    monkeypatch.setattr(cloud_policy, 'record_result', _REAL_RESULT)
+
+    def refuse(*args, **kwargs):
+        def reservation(body, timeout):
+            raise worker.anthropic_client.AnthropicError('budget_exceeded', 'synthetic refusal')
+        return reservation
+    monkeypatch.setattr(cloud_policy, 'usage_reserver', refuse)
+
+    def post(body, timeout):
+        sent.append(True)
+        pytest.fail('a refused reservation still sent')
+    monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
+                        lambda key, **kw: AnthropicClient(key, post_fn=post, max_attempts=3, **kw))
+    provider = worker._CloudProvider(led, cfg, route='patient_context', project_id=1,
+        unit_key='synthetic-first-refusal', deadline=time.monotonic() + 180,
+        current=lambda: True, dispatch=lambda fn, **kwargs: fn())
+    with pytest.raises(worker.cloud_client.CloudNotSent, match='budget_exceeded'):
+        provider('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
+    assert not sent and not provider.completed_reservations
+    assert not provider.possibly_sent
+    assert cloud_policy.usage_report(led)['daily_requests'] == 0
+
+
+def test_sent_attempt_failure_survives_a_later_reserve_refusal(routed, monkeypatch):
+    """A 429 settles its reservation; a later pre-send refusal does not turn
+    the whole call into a free defer — the sent failure carries the outcome."""
     led, cfg, *_ = routed
     sent, reserves = [], []
     monkeypatch.setattr(cloud_policy, 'record_result', _REAL_RESULT)
@@ -92,7 +120,7 @@ def test_second_attempt_reserve_refusal_is_a_definite_unsent(routed, monkeypatch
     provider = worker._CloudProvider(led, cfg, route='patient_context', project_id=1,
         unit_key='synthetic-retry-refusal', deadline=time.monotonic() + 180,
         current=lambda: True, dispatch=lambda fn, **kwargs: fn())
-    with pytest.raises(worker.cloud_client.CloudNotSent, match='budget_exceeded'):
+    with pytest.raises(worker.CloudFallback, match='cloud_unit_failed'):
         provider('synthetic prompt', deadline=time.monotonic() + 180, max_tokens=100)
     assert sent == [True] and len(reserves) == 1
     # the sent attempt keeps its settled reservation; the refusal created none

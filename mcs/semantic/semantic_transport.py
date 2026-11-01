@@ -249,8 +249,11 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
     except runtime.RuntimeBudgetShort:
         # The next call did not start; previously persisted chunks keep their receipts.
         raise
-    except runtime.RuntimeGuardError:
-        if lock_lost is None:
+    except runtime.RuntimeGuardError as error:
+        # A definite pre-send refusal ("cloud_not_sent") is a harmless budget
+        # wait: already settled chunks/receipts stay. Scope or lease loss and
+        # every other guard failure still discards the unit's dispositions.
+        if lock_lost is None and getattr(error, "stage", None) != "cloud_not_sent":
             for selected in providers.values():
                 selected.discard()
         raise

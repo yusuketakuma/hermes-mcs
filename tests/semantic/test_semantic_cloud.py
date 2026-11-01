@@ -174,6 +174,45 @@ def test_thinking_only_length_holds_summary_without_format_repair_or_paid_resend
     assert semantic_runtime._circuit_state(led, kind="cloud_circuit")["consecutive_failures"] == 0
 
 
+def test_budget_refusal_keeps_settled_receipts_without_discard(cloud, monkeypatch):
+    """A pre-send refusal is a harmless budget wait: the provider that already
+    settled a chunk keeps its receipt — only scope/lease loss may discard."""
+    import extract_llm
+    led, cfg, job, _ = cloud
+    calls, created = [], []
+
+    class Provider:
+        def __init__(self, _ledger, _cfg, *, unit_key=None, **kwargs):
+            self.selection = {'provider': 'openai', 'model': 'synthetic',
+                              'effort': 'medium', 'max_tokens': 8192}
+            self.model = 'synthetic'
+            self.contract = {'backend': 'openai', 'model': 'synthetic', 'prompt': 'synthetic'}
+            self.completed_reservations = []
+            self.possibly_sent = False
+            self.unit_key = unit_key
+            self.discarded = False
+            created.append(self)
+
+        def __call__(self, prompt, *, deadline, max_tokens):
+            calls.append(prompt)
+            if len(calls) == 1:
+                self.completed_reservations.append({'reservation_id': 'synthetic'})
+                return {'status': 200, 'text': '{"facts": []}', 'finish_reason': 'stop'}
+            raise extract_llm.cloud_client.CloudNotSent('budget_exceeded', 'synthetic refusal')
+
+        def discard(self):
+            self.discarded = True
+
+    monkeypatch.setattr(extract_llm, '_CloudProvider', Provider)
+    with pytest.raises(transport.runtime.LLMNotSent, match='cloud_not_sent'):
+        with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
+                                         lambda: True, direct) as chat:
+            assert json.loads(chat('synthetic first')) == {'facts': []}
+            chat('synthetic second')
+    assert len(created) == 1 and created[0].completed_reservations
+    assert not created[0].discarded
+
+
 def test_same_prompt_for_distinct_targets_has_separate_reservations(cloud):
     led, cfg, job, calls = cloud
     led.save_messages([_message(2, parent=1, body='synthetic reply')])

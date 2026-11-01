@@ -73,6 +73,10 @@ class CloudClient:
             try:
                 reservation = reserve_fn(body, timeout) if reserve_fn else None
             except CloudError as error:
+                if attempt:
+                    # An earlier attempt already went out: the sent failure —
+                    # not a fresh free defer — carries the outcome of this call.
+                    raise last from error
                 raise CloudNotSent(error.kind, error.detail, status=error.status) from error
             meta = {"usage": None, "http_class": "transport", "request_id": None,
                     "model": self.model, "request_fp": payload_hash(body), "error_kind": None}
