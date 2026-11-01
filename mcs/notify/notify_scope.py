@@ -7,7 +7,7 @@ import math
 import re
 import time
 from mcs_requests import positive
-from mcs_util import loads_dict, payload_hash, text_sha256, valid_hash, valid_text
+from mcs_util import loads_dict, payload_hash, strict_json, text_sha256, valid_hash, valid_text
 
 TRANSPORT_VERSIONS = {"discord": 1, "slack": 2, "lineworks": 3}
 SUPPORTED_TRANSPORTS = tuple(TRANSPORT_VERSIONS)
@@ -313,9 +313,8 @@ _BODY_GROUP = re.compile(r"((?:m:[1-9][0-9]{0,18}|s:[0-9a-f]{16})(?::header)?)#(
 _LENGTH_ERRORS = ("msg_too_long", "body_part_wire_too_long")
 
 # Only fixed keys, an integer version and SHA-256 triples can survive PHI GC.
-BODY_COVERAGE_WITNESS_SQL = """COALESCE((
+_BODY_COVERAGE_CORE_SQL = """(
     json_type(r.spec_json,'$.body_delivery_coverage')='object'
-    AND (SELECT COUNT(*) FROM json_each(r.spec_json))=1
     AND (SELECT COUNT(*) FROM json_each(r.spec_json,'$.body_delivery_coverage'))=3
     AND json_type(r.spec_json,'$.body_delivery_coverage.version')='integer'
     AND json_extract(r.spec_json,'$.body_delivery_coverage.version')=1
@@ -323,6 +322,12 @@ BODY_COVERAGE_WITNESS_SQL = """COALESCE((
     AND length(r.payload_hash)=64 AND r.payload_hash NOT GLOB '*[^0-9a-f]*'
     AND json_type(r.spec_json,'$.body_delivery_coverage.proofs')='array'
     AND json_array_length(r.spec_json,'$.body_delivery_coverage.proofs')>0
+    AND (SELECT COUNT(DISTINCT
+           json_extract(CASE WHEN proof.type='array' THEN proof.value ELSE '[]' END,'$[0]') ||
+           json_extract(CASE WHEN proof.type='array' THEN proof.value ELSE '[]' END,'$[1]') ||
+           json_extract(CASE WHEN proof.type='array' THEN proof.value ELSE '[]' END,'$[2]'))
+         FROM json_each(r.spec_json,'$.body_delivery_coverage.proofs') proof)
+        =json_array_length(r.spec_json,'$.body_delivery_coverage.proofs')
     AND NOT EXISTS (
       SELECT 1 FROM json_each(r.spec_json,'$.body_delivery_coverage.proofs') proof
       WHERE proof.type!='array'
@@ -330,7 +335,34 @@ BODY_COVERAGE_WITNESS_SQL = """COALESCE((
         OR EXISTS (
           SELECT 1 FROM json_each(CASE WHEN proof.type='array' THEN proof.value ELSE '[]' END) item
           WHERE item.type!='text' OR length(item.value)!=64 OR item.value GLOB '*[^0-9a-f]*'))
-),0)"""
+)"""
+
+_ATTACHMENT_IDENTITY_CORE_SQL = """(
+    json_type(r.spec_json,'$.attachment_identity')='object'
+    AND (SELECT COUNT(*) FROM json_each(r.spec_json,'$.attachment_identity'))=3
+    AND json_type(r.spec_json,'$.attachment_identity.version')='integer'
+    AND json_extract(r.spec_json,'$.attachment_identity.version')=1
+    AND json_extract(r.spec_json,'$.attachment_identity.payload_hash')=r.payload_hash
+    AND length(r.payload_hash)=64 AND r.payload_hash NOT GLOB '*[^0-9a-f]*'
+    AND json_type(r.spec_json,'$.attachment_identity.proofs')='array'
+    AND json_array_length(r.spec_json,'$.attachment_identity.proofs')>0
+    AND (SELECT COUNT(DISTINCT proof.value) FROM json_each(r.spec_json,'$.attachment_identity.proofs') proof)
+        =json_array_length(r.spec_json,'$.attachment_identity.proofs')
+    AND NOT EXISTS (
+      SELECT 1 FROM json_each(r.spec_json,'$.attachment_identity.proofs') proof
+      WHERE proof.type!='text' OR length(proof.value)!=64 OR proof.value GLOB '*[^0-9a-f]*')
+)"""
+
+_WITNESS_KEYS_SQL = """(
+    (SELECT COUNT(*) FROM json_each(r.spec_json)) IN (1,2)
+    AND NOT EXISTS (SELECT 1 FROM json_each(r.spec_json)
+                    WHERE key NOT IN ('body_delivery_coverage','attachment_identity'))
+    AND (SELECT COUNT(DISTINCT key) FROM json_each(r.spec_json))=(SELECT COUNT(*) FROM json_each(r.spec_json))
+)"""
+BODY_COVERAGE_WITNESS_SQL = f"""COALESCE(({_WITNESS_KEYS_SQL} AND {_BODY_COVERAGE_CORE_SQL}
+    AND (json_type(r.spec_json,'$.attachment_identity') IS NULL OR {_ATTACHMENT_IDENTITY_CORE_SQL})),0)"""
+ATTACHMENT_IDENTITY_WITNESS_SQL = f"""COALESCE(({_WITNESS_KEYS_SQL} AND {_ATTACHMENT_IDENTITY_CORE_SQL}
+    AND (json_type(r.spec_json,'$.body_delivery_coverage') IS NULL OR {_BODY_COVERAGE_CORE_SQL})),0)"""
 
 
 def _body_groups_metadata(rows, *, delivered=False):
@@ -363,9 +395,15 @@ def _body_groups_metadata(rows, *, delivered=False):
     return out
 
 
-def _body_witness_proofs(raw, render):
-    spec = loads_dict(raw)
-    if spec is None or set(spec) != {'body_delivery_coverage'}:
+def _body_witness_proofs(raw, render, *, _check_manual=True):
+    try:
+        spec = strict_json(raw)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if (not isinstance(spec, dict) or 'body_delivery_coverage' not in spec
+            or set(spec) - {'body_delivery_coverage', 'attachment_identity'}
+            or _check_manual and 'attachment_identity' in spec
+            and _attachment_identity_witness_proofs(raw, render) is None):
         return None
     witness = spec['body_delivery_coverage']
     if (not isinstance(witness, dict)
@@ -381,6 +419,26 @@ def _body_witness_proofs(raw, render):
                 or not all(valid_hash(value) for value in proof)):
             return None
         proofs.add(tuple(proof))
+    return proofs if len(proofs) == len(witness['proofs']) else None
+
+
+def _attachment_identity_witness_proofs(raw, render):
+    try:
+        spec = strict_json(raw)
+    except (ValueError, TypeError, RecursionError):
+        return None
+    if (not isinstance(spec, dict) or 'attachment_identity' not in spec
+            or set(spec) - {'body_delivery_coverage', 'attachment_identity'}
+            or 'body_delivery_coverage' in spec and _body_witness_proofs(raw, render, _check_manual=False) is None):
+        return None
+    witness = spec['attachment_identity']
+    if (not isinstance(witness, dict) or set(witness) != {'version', 'payload_hash', 'proofs'}
+            or type(witness['version']) is not int or witness['version'] != 1
+            or not valid_hash(witness['payload_hash']) or witness['payload_hash'] != render['payload_hash']
+            or not isinstance(witness['proofs'], list) or not witness['proofs']
+            or not all(valid_hash(proof) for proof in witness['proofs'])):
+        return None
+    proofs = set(witness['proofs'])
     return proofs if len(proofs) == len(witness['proofs']) else None
 
 

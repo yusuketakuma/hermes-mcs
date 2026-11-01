@@ -836,7 +836,37 @@ def _persist_render(db, card, spec, op, rev, now):
          rev, now, card["card_id"]))
 
 
-def issue_render(db, card_id, cfg, now, specs, force=False):
+def _manual_attachment_hold_ready(db, card, latest, content, gens, cfg, now, waiting):
+    """Recheck an unpublished identity hold without retaining a trial plan."""
+    if (card["transport"] != "slack" or card["delivery_state"] != "update_failed"
+            or latest is None or latest["state"] != "held" or latest["op"] != "update"
+            or latest["spec_published"] != 0 or latest["first_published_at"] is not None
+            or resend_exhausted(db, card["card_id"])
+            or db.execute("SELECT 1 FROM notification_delivery_attempts WHERE delivery_id=? LIMIT 1",
+                          (latest["delivery_id"],)).fetchone()):
+        return False
+    parts = db.execute("SELECT kind,part_id,state,error_code,attempt_id,remote_id FROM notification_render_parts WHERE delivery_id=?",
+                       (latest["delivery_id"],)).fetchall()
+    if (not parts or any(p["state"] != "held" or p["error_code"] != "attachment_upload_identity_unverified"
+                         or p["attempt_id"] is not None or p["remote_id"] is not None
+                         for p in parts)):
+        return False
+    held_attachments = {p["part_id"] for p in parts if p["kind"] == "attachment_part"}
+    _, _, identities = notify_parts._same_thread_delivered_parts(db, card)
+    if not any(proof is not None and proof[0] in held_attachments and proof[5] == "operator_edit"
+               for proofs in identities.values() for proof in proofs):
+        return False
+    db.execute("SAVEPOINT manual_attachment_replan")
+    try:
+        _, hold = _build_spec(db, {**card, **gens}, content, "update", latest["render_rev"] + 1,
+                              cfg, now, waiting)
+    finally:
+        db.execute("ROLLBACK TO manual_attachment_replan")
+        db.execute("RELEASE manual_attachment_replan")
+    return hold is None
+
+
+def issue_render(db, card_id, cfg, now, specs, force=False, *, _preflight_candidate=False):
     """Issue and append a spec inside the caller-owned transaction, returning its ID.
 
     Never open/close db or publish files; the caller publishes specs after commit.
@@ -960,6 +990,11 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
     # Rebuild only a proven oversized failed plan; pending/unknown parts still
     # pass through the existing in-flight gate below without being released.
     force = force or notify_parts.needs_wire_replan(db, card, latest)
+    if _manual_attachment_hold_ready(db, card, latest, content, render_gens, cfg, now, waiting):
+        _cancel_render(db, latest["delivery_id"], now)
+        latest = db.execute("SELECT * FROM notification_renders WHERE delivery_id=?",
+                            (latest["delivery_id"],)).fetchone()
+        force = True
     if not _render_needed(db, card, latest, gens, cfg, now, force, waiting):
         return None                        # delivered/terminal & no drift
     if op == "update" and _parts_in_flight(db, latest):
@@ -974,6 +1009,9 @@ def issue_render(db, card_id, cfg, now, specs, force=False):
         db.execute("UPDATE notification_render_parts SET state='held',error_code=? WHERE delivery_id=?",
                    (budget_hold, spec["delivery_id"]))
         db.execute("UPDATE notification_cards SET delivery_state='update_failed' WHERE card_id=?", (card_id,))
+        if _preflight_candidate and budget_hold == "attachment_upload_identity_unverified":
+            specs.append(spec)  # caller must seal or roll back this unpublished candidate
+            return spec["delivery_id"]
         return None
     specs.append(spec)
     return spec["delivery_id"]
@@ -2376,7 +2414,8 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                        json_type(r.spec_json,'$.signal_thread_route') IS NOT NULL
                        AND json_type(r.spec_json,'$.thread_id') IS NOT NULL
                        AND (SELECT COUNT(*) FROM json_each(r.spec_json))=2)
-                       AND NOT {notify_scope.BODY_COVERAGE_WITNESS_SQL} ELSE 1 END
+                       AND NOT {notify_scope.BODY_COVERAGE_WITNESS_SQL}
+                       AND NOT {notify_scope.ATTACHMENT_IDENTITY_WITNESS_SQL} ELSE 1 END
                      AND NOT EXISTS (
                        SELECT 1 FROM notification_delivery_attempts a
                        JOIN notification_renders active
@@ -2414,6 +2453,11 @@ def gc(ledger, cfg=None, now=None, limit=500) -> dict:
                        and r["op"] == "create" and r["state"] == "delivered" else None)
             if witness is None and r['op'] == 'update':
                 witness = notify_scope.body_coverage_witness(db, r['delivery_id'], coverage_cache)
+            attachment = notify_parts.attachment_identity_witness(db, r['delivery_id'])
+            if attachment is not None:
+                if witness is not None and 'signal_thread_route' in witness:
+                    continue
+                witness = {**(witness or {}), 'attachment_identity': attachment}
             db.execute(
                 "UPDATE notification_renders SET spec_json=?,"
                 "updated_at=? WHERE delivery_id=?",

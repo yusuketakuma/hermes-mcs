@@ -769,8 +769,10 @@ def _seal_preflight_update(db, candidates, delivery_id, render, card, targets):
     spec = candidates[0]
     current = render_row(db, delivery_id)
     delivery = spec.get("delivery", {})
-    if (current is None or current["state"] != "queued" or current["spec_published"] != 0
+    if (current is None or current["state"] not in ("queued", "held") or current["spec_published"] != 0
             or current["first_published_at"] is not None or current["card_id"] != card["card_id"]
+            or current["render_rev"] <= render["render_rev"]
+            or current["state"] == "held" and current["parts_state"] != "held"
             or current["payload_hash"] != payload_hash(spec) or current["spec_json"] != canonical(spec).decode()
             or spec.get("op") != "update" or not scope_matches(card, delivery)
             or delivery.get("message_id") != card["message_id"] or delivery.get("thread_id") != card["thread_id"]
@@ -786,9 +788,11 @@ def _seal_preflight_update(db, candidates, delivery_id, render, card, targets):
         return "preflight_replan_unsafe"
     found_targets = set()
     used_remotes = set()
+    held = current["state"] == "held"
     for part in manifest:
         row = saved.get(part.get("part_id"))
-        if (row is None or row["state"] != "pending" or row["attempt_id"] is not None
+        if (row is None or row["state"] != ("held" if held else "pending") or row["attempt_id"] is not None
+                or held and row["error_code"] != "attachment_upload_identity_unverified"
                 or any(row[key] != part.get(field) for key, field in (
                     ("kind", "kind"), ("idx", "index"), ("payload_sha256", "sha256"),
                     ("bytes", "bytes"), ("name", "name"), ("attachment_id", "attachment_id")))):
@@ -811,6 +815,12 @@ def _seal_preflight_update(db, candidates, delivery_id, render, card, targets):
         return "preflight_replan_unsafe"
     db.execute("UPDATE notification_renders SET spec_json=?,payload_hash=? WHERE delivery_id=?",
                (canonical(spec).decode(), payload_hash(spec), delivery_id))
+    if held:
+        db.execute("UPDATE notification_renders SET state='queued',parts_state='pending' WHERE delivery_id=?",
+                   (delivery_id,))
+        db.execute("UPDATE notification_render_parts SET state='pending',error_code=NULL WHERE delivery_id=?",
+                   (delivery_id,))
+        db.execute("UPDATE notification_cards SET delivery_state='delivered' WHERE card_id=?", (card["card_id"],))
     return None
 
 
@@ -884,7 +894,8 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
                         or cards.resend_exhausted(db, card["card_id"])):
                     error = "preflight_replan_blocked"
                 else:
-                    replacement = cards.issue_render(db, card["card_id"], cfg, now, candidates, force=True)
+                    replacement = cards.issue_render(db, card["card_id"], cfg, now, candidates, force=True,
+                                                     _preflight_candidate=True)
                     error = _seal_preflight_update(db, candidates, replacement, render, card, targets)
             if error is not None:
                 db.execute("ROLLBACK TO part_resolution")
@@ -906,14 +917,14 @@ def apply_card_part_resolve(ledger, req, cfg=None, now=None) -> dict:
                             for plan, item in zip(plans, settlements)]
                 if req["transport"] == "lineworks" and req["evidence"].get("proof") == "remote_absent":
                     receipt["evidence_limit"] = _LINEWORKS_ABSENT_LIMIT
-                if (not preflight and card is not None and card["delivery_state"] != "update_failed"
-                        and notify_spool.restore_pending(notify_spool.data_root(ledger)) is None
-                        and not cards.resend_exhausted(db, card["card_id"])):
-                    cards.issue_render(db, card["card_id"], cfg, now, specs, force=req["result"] == "mark_not_sent")
         if error is not None:
             receipt.update(outcome="rejected", error=error)
         db.execute("INSERT INTO command_receipts VALUES(?,?,?,?,?,?,?)",
                    (req["command_id"], digest, None, None, receipt["outcome"], canonical(receipt).decode(), now))
+        if (error is None and not preflight and card is not None and card["delivery_state"] != "update_failed"
+                and notify_spool.restore_pending(notify_spool.data_root(ledger)) is None
+                and not cards.resend_exhausted(db, card["card_id"])):
+            cards.issue_render(db, card["card_id"], cfg, now, specs, force=req["result"] == "mark_not_sent")
         cards.mark_snapshot_dirty(db)
     if specs:
         notify_spool.publish_specs(db, notify_spool.notify_dirs(notify_spool.data_root(ledger)), specs, now)

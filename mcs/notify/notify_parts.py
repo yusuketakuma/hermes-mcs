@@ -12,7 +12,8 @@ from mcs_requests import canonical, positive
 from mcs_util import payload_hash, strict_json, text_sha256, valid_hash
 from notify_render import card_body_text, preview_header, notification_preview, presenter
 from notify_scope import (active_transport, interactive_enabled, notify_cfg,
-                          scope_matches, stored_scope, _body_witness_proofs)
+                          scope_matches, stored_scope, _body_witness_proofs,
+                          _attachment_identity_witness_proofs)
 
 THREAD_PART_LIMIT = 1900
 MAX_PARTS = 256
@@ -468,14 +469,16 @@ def _attachment_captions(db, card, attachments) -> dict:
     return out
 
 
-def _sealed_attachment_identity(row, card):
+def _sealed_attachment_identity(row, card, *, manual_edit=False):
     """Validate one delivered part against its sealed render and receipt."""
     try:
         spec = strict_json(row["spec_json"])
         delivery = spec["delivery"]
         manifest = spec["parts"]["manifest"]
         if (not isinstance(spec, dict) or not isinstance(delivery, dict)
-                or not isinstance(manifest, list) or row["part_error"] is not None
+                or not isinstance(manifest, list)
+                or (row["part_error"] is not None and not (
+                    manual_edit and row["part_error"] == "operator_part_resolve"))
                 or type(row["part_attachment_id"]) is not int or row["part_attachment_id"] <= 0
                 or not isinstance(row["name"], str) or not 0 < len(row["name"]) <= 200
                 or type(spec.get("render_rev")) is not int or spec["render_rev"] < 1
@@ -509,11 +512,13 @@ def _sealed_attachment_identity(row, card):
                     or not isinstance(part.get("caption"), str) or not part["caption"].strip()))
                 or any(part.get(key) != row[column] for key, column in expected)
                 or part.get("prior_remote_id") not in (None, row["remote_id"])
-                or part.get("edit_only") is True and part.get("prior_remote_id") != row["remote_id"]):
+                or part.get("edit_only") is True and part.get("prior_remote_id") != row["remote_id"]
+                or manual_edit and (row["op"] != "update" or unavailable or part.get("edit_only") is not True)):
             return None
         return (row["part_id"], row["part_attachment_id"], row["payload_sha256"],
-                row["part_bytes"], row["name"], "unavailable" if unavailable else "file",
-                row["render_rev"], part.get("edit_only") is True)
+                row["part_bytes"], row["name"], "operator_edit" if manual_edit else "unavailable" if unavailable else "file",
+                row["render_rev"], part.get("edit_only") is True,
+                not unavailable and part.get("prior_remote_id") is None)
     except (AttributeError, KeyError, TypeError, ValueError, RecursionError):
         return None
 
@@ -524,8 +529,10 @@ def _collected_attachment_identity(row):
         raw = row["spec_json"]
         if raw is not None:
             witness = strict_json(raw)
-            if (not isinstance(witness, dict) or set(witness) != {"body_delivery_coverage"}
-                    or _body_witness_proofs(raw, row) is None):
+            if (not isinstance(witness, dict) or not witness
+                    or set(witness) - {"body_delivery_coverage", "attachment_identity"}
+                    or "body_delivery_coverage" in witness and _body_witness_proofs(raw, row) is None
+                    or "attachment_identity" in witness and _attachment_identity_witness_proofs(raw, row) is None):
                 return None
         if (row["part_error"] is not None or not valid_hash(row["payload_hash"])
                 or not valid_hash(row["payload_sha256"])
@@ -537,9 +544,98 @@ def _collected_attachment_identity(row):
                 or not isinstance(row["remote_id"], str) or not row["remote_id"]):
             return None
         return (row["part_id"], row["part_attachment_id"], row["payload_sha256"],
-                row["part_bytes"], row["name"], "collected", row["render_rev"], False)
+                row["part_bytes"], row["name"], "collected", row["render_rev"], False, row["op"] == "create")
     except (AttributeError, KeyError, TypeError, ValueError, RecursionError):
         return None
+
+
+def _manual_edit_receipts(db, rows):
+    """Bind a manual caption edit to the exact human-approved command digest."""
+    from notify_recovery import validate_card_part_resolve
+    if not any(row["part_error"] == "operator_part_resolve" for row in rows):
+        return {}
+    matches = {}
+    for saved in db.execute(
+            "SELECT command_id,payload_hash,receipt_json,"
+            "json_extract(receipt_json,'$.delivery_id') AS target_delivery,"
+            "json_extract(receipt_json,'$.part_id') AS target_part FROM command_receipts WHERE outcome='applied' "
+            "AND CASE WHEN json_valid(receipt_json) THEN "
+            "json_extract(receipt_json,'$.kind')='ops.card_part_resolve' AND "
+            "json_extract(receipt_json,'$.delivery_id') IN "
+            "(SELECT delivery_id FROM notification_renders WHERE card_id=?) ELSE 0 END", (rows[0]["card_id"],)):
+        key = (saved["target_delivery"], saved["target_part"])
+        try:
+            receipt = strict_json(saved["receipt_json"])
+        except (ValueError, TypeError, RecursionError):
+            receipt = None
+        matches.setdefault(key, []).append((saved, receipt))
+    verified = {}
+    for row in rows:
+        if row["part_error"] != "operator_part_resolve":
+            continue
+        key = (row["delivery_id"], row["part_id"])
+        candidates = matches.get(key, [])
+        if len(candidates) != 1:
+            continue
+        saved, receipt = candidates[0]
+        try:
+            if (receipt["outcome"] != "applied" or receipt["part_state"] != "delivered"
+                    or receipt["command_id"] != saved["command_id"]
+                    or receipt["attempt_id"] != row["part_attempt"]
+                    or receipt["manifest_sha256"] != row["payload_hash"]
+                    or receipt["payload_sha256"] != row["payload_sha256"]
+                    or not scope_matches(row, receipt["scope"])):
+                continue
+            req = {"version": 1, "cmd": "ops.card_part_resolve", "human_confirmed": True,
+                   "expected_state": "unknown", "result": "mark_delivered", "remote_id": row["remote_id"],
+                   **receipt["scope"], **{k: receipt[k] for k in (
+                       "command_id", "actor", "reason", "delivery_id", "part_id", "attempt_id",
+                       "manifest_sha256", "payload_sha256", "evidence")}}
+            if validate_card_part_resolve(req) is None and payload_hash(req) == saved["payload_hash"]:
+                verified[key] = True
+        except (ValueError, TypeError, KeyError, AttributeError):
+            continue
+    return verified
+
+
+def _attachment_identity_proof(row, card, kind, edit_only, uploaded):
+    return payload_hash({"delivery_id": row["delivery_id"], "render_rev": row["render_rev"],
+                         "payload_hash": row["payload_hash"], "scope": stored_scope(row),
+                         "op": row["op"], "route_epoch": row["route_epoch"], "correlation": row["correlation"],
+                         "card_key": card["card_key"], "card_kind": card["kind"], "thread_id": card["thread_id"],
+                         "message_id": card["message_id"], "part_id": row["part_id"],
+                         "index": row["part_index"], "attachment_id": row["part_attachment_id"],
+                         "sha256": row["payload_sha256"], "bytes": row["part_bytes"],
+                         "name": row["name"], "remote_id": row["remote_id"], "attempt": row["part_attempt"],
+                         "kind": kind, "edit_only": edit_only, "uploaded": uploaded})
+
+
+def attachment_identity_witness(db, delivery_id):
+    """Keep hash-bound sealed attachment identities after GC."""
+    from notify_scope import card_row, render_row
+    render = render_row(db, delivery_id)
+    card = card_row(db, render["card_id"]) if render is not None and render["card_id"] else None
+    if (card is None or card["transport"] != "slack" or not card["thread_id"]
+            or not scope_matches(render, stored_scope(card))):
+        return None
+    rows = db.execute("""SELECT p.kind,p.part_id,p.name,p.remote_id,p.payload_sha256,
+        p.bytes AS part_bytes,p.attachment_id AS part_attachment_id,p.idx AS part_index,
+        p.error_code AS part_error,p.attempt_id AS part_attempt,r.*
+        FROM notification_render_parts p JOIN notification_renders r ON r.delivery_id=p.delivery_id
+        WHERE r.delivery_id=? AND r.state='delivered' AND p.kind='attachment_part'
+          AND p.state='delivered' AND p.remote_id IS NOT NULL
+          AND EXISTS(SELECT 1 FROM notification_render_parts t WHERE t.delivery_id=r.delivery_id
+                     AND t.kind='thread' AND t.state='delivered' AND t.remote_id=?)""",
+                      (delivery_id, card["thread_id"])).fetchall()
+    approved = _manual_edit_receipts(db, rows)
+    proofs = set()
+    for row in rows:
+        manual = approved.get((row["delivery_id"], row["part_id"]), False)
+        identity = _sealed_attachment_identity(row, card, manual_edit=manual)
+        if identity is not None:
+            proofs.add(_attachment_identity_proof(row, card, identity[5], identity[7], identity[8]))
+    proofs = sorted(proofs)
+    return {"version": 1, "payload_hash": render["payload_hash"], "proofs": proofs} if proofs else None
 
 
 def _same_thread_delivered_parts(db, card):
@@ -549,13 +645,14 @@ def _same_thread_delivered_parts(db, card):
         return body, attachments, identities
     rows = db.execute("""SELECT p.kind,p.part_id,p.name,p.remote_id,p.payload_sha256,
         p.bytes AS part_bytes,p.attachment_id AS part_attachment_id,p.idx AS part_index,
-        p.error_code AS part_error,r.*
+        p.error_code AS part_error,p.attempt_id AS part_attempt,r.*
         FROM notification_render_parts p JOIN notification_renders r ON r.delivery_id=p.delivery_id
         WHERE r.card_id=? AND r.state='delivered' AND p.kind IN ('body_part','attachment_part')
           AND p.state='delivered' AND p.remote_id IS NOT NULL
           AND EXISTS(SELECT 1 FROM notification_render_parts t WHERE t.delivery_id=r.delivery_id
                      AND t.kind='thread' AND t.state='delivered' AND t.remote_id=?)
         ORDER BY r.render_rev,p.idx""", (card["card_id"], card["thread_id"])).fetchall()
+    manual = _manual_edit_receipts(db, rows) if card["transport"] == "slack" else {}
     for row in rows:
         if not scope_matches(row, stored_scope(card)):
             continue
@@ -563,8 +660,32 @@ def _same_thread_delivered_parts(db, card):
             body[row["name"]] = (str(row["remote_id"]), row["payload_sha256"])
         elif row["kind"] == "attachment_part":
             if card["transport"] == "slack":
+                operator = manual.get((row["delivery_id"], row["part_id"]), False)
+                identity = _sealed_attachment_identity(row, card, manual_edit=operator)
+                proofs = None
+                if identity is None and (row["part_error"] is None or operator):
+                    proofs = _attachment_identity_witness_proofs(row["spec_json"], row)
+                    collected = _collected_attachment_identity({**dict(row), "part_error": None, "spec_json": None})
+                    if (collected is None and not operator and row["payload_sha256"] is None
+                            and row["part_bytes"] is None and type(row["part_attachment_id"]) is int
+                            and row["part_attachment_id"] > 0 and isinstance(row["name"], str)
+                            and 0 < len(row["name"]) <= 200 and isinstance(row["part_id"], str)
+                            and row["part_id"] and type(row["render_rev"]) is int and row["render_rev"] > 0
+                            and valid_hash(row["payload_hash"])):
+                        collected = (row["part_id"], row["part_attachment_id"], None, None,
+                                     row["name"], "collected", row["render_rev"], False, False)
+                    candidates = (("operator_edit", True, False),) if operator else (
+                        ("file", False, True), ("file", False, False), ("file", True, False),
+                        ("unavailable", False, False), ("unavailable", True, False))
+                    if proofs is not None and collected is not None:
+                        for kind, edit_only, uploaded in candidates:
+                            if _attachment_identity_proof(row, card, kind, edit_only, uploaded) in proofs:
+                                identity = (*collected[:5], kind, collected[6], edit_only, uploaded)
+                                break
+                if identity is None and not operator and proofs is None:
+                    identity = _collected_attachment_identity(row)
                 identities.setdefault(str(row["remote_id"]), []).append(
-                    _collected_attachment_identity(row) or _sealed_attachment_identity(row, card))
+                    identity)
             try:
                 old = json.loads(row["spec_json"])
                 caption = next((part.get("caption") for part in old["parts"]["manifest"]
@@ -887,6 +1008,7 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 proofs = attachment_identities.get(rid, [])
                 sealed = [proof for proof in proofs if proof is not None and proof[5] == "file"]
                 collected = [proof for proof in proofs if proof is not None and proof[5] == "collected"]
+                manual_edits = [proof for proof in proofs if proof is not None and proof[5] == "operator_edit"]
                 expected = (entry["part_id"], a["attachment_id"], a.get("sha256"), a.get("bytes"))
                 unavailable_only = (sha is None and proofs
                     and len(proofs) == receipt_counts.get(rid)
@@ -899,17 +1021,24 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 if unavailable_only:
                     rid = None  # the previous receipt was an unavailable-text post, not a file
                 elif (not valid_hash(a.get("sha256")) or type(a.get("bytes")) is not int
-                        or a["bytes"] < 0 or not sealed or len(proofs) != receipt_counts.get(rid)
+                        or a["bytes"] < 0 or not (sealed or collected and manual_edits)
+                        or len(proofs) != receipt_counts.get(rid)
                         or len(prior_remotes.get((entry["part_id"], sha), ())) != 1
-                        or any(proof is None or proof[:4] != expected or proof[5] not in ("file", "collected")
+                        or any(proof is None or proof[:4] != expected or proof[5] not in ("file", "collected", "operator_edit")
                                for proof in proofs)
                         or len({proof[4] for proof in proofs}) != 1 or sha != a.get("sha256")):
                     budget_hold = budget_hold or "attachment_upload_identity_unverified"
-                elif any(not any(later[6] > previous[6] and later[7] for later in sealed)
+                elif any(not any(later[6] > previous[6] and later[7] for later in sealed + manual_edits)
                          for previous in collected):
                     budget_hold = budget_hold or "attachment_upload_identity_unverified"
+                elif any(not any(previous[6] < edit[6] and (
+                                     previous[8] or previous[5] == "collected" and any(
+                                         native[7] and previous[6] < native[6] < edit[6] for native in sealed))
+                                 for previous in sealed + collected)
+                         for edit in manual_edits):
+                    budget_hold = budget_hold or "attachment_upload_identity_unverified"
                 else:
-                    entry["name"] = sealed[0][4]
+                    entry["name"] = (sealed or collected)[0][4]
             elif a["attachment_id"] in prior_attachment_ids:
                 budget_hold = budget_hold or "attachment_upload_identity_unverified"
         if rid and a.get("unavailable") and entry.get("caption"):

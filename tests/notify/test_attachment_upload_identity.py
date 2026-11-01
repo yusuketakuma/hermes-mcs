@@ -60,8 +60,13 @@ def collected_with_edit_witness(led, uploaded):
         led.db.execute("UPDATE notification_renders SET updated_at=? WHERE delivery_id=?",
                        (NOW - 10, edit["delivery_id"]))
     assert notify_cards.gc(led, SLACK, now=NOW + 3, limit=1)["spec_json_cleared"] == 1
-    assert led.db.execute("SELECT spec_json FROM notification_renders WHERE delivery_id=?",
-                          (original["delivery_id"],)).fetchone()[0] is None
+    witness = led.db.execute("SELECT spec_json FROM notification_renders WHERE delivery_id=?",
+                             (original["delivery_id"],)).fetchone()[0]
+    assert "attachment_identity" in json.loads(witness)
+    assert "synthetic-original.bin" not in witness
+    # Simulate data collected by the older GC, before identity witnesses existed.
+    with led.db:
+        led.db.execute("UPDATE notification_renders SET spec_json=NULL WHERE delivery_id=?", (original["delivery_id"],))
     assert led.db.execute("SELECT spec_json FROM notification_renders WHERE delivery_id=?",
                           (edit["delivery_id"],)).fetchone()[0] is not None
     with led.db:
