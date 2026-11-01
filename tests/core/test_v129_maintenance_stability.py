@@ -48,6 +48,23 @@ def test_prune_leftovers_removes_stale_atomic_temporaries(tmp_path, monkeypatch)
     assert not any(f.exists() for f in stale)
 
 
+def test_prune_snapshot_refuses_symlinked_fence(tmp_path, monkeypatch):
+    monkeypatch.setattr(maintenance, "HOME", str(tmp_path))
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(tmp_path / "backups"))
+    snaps = tmp_path / "snapshots"
+    snaps.mkdir()
+    monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(snaps))
+    monkeypatch.setattr(maintenance, "LEFTOVER_KEEP_S", -60)
+    target = tmp_path / "outside"
+    target.write_bytes(b"synthetic")
+    (snaps / ".snapshot.lock").symlink_to(target)
+    candidate = snaps / ".snapshot.abc.tmp"
+    candidate.write_bytes(b"synthetic")
+    assert maintenance.prune_leftovers() == 0
+    assert candidate.exists()
+    assert target.read_bytes() == b"synthetic"
+
+
 def test_signature_moves_on_in_place_request_and_patient_edits(tmp_path):
     path = str(tmp_path / "ledger.db")
     db = ledger.Ledger(path)

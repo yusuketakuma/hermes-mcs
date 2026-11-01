@@ -448,3 +448,15 @@ def test_generated_summary_is_cut_at_a_word_boundary():
     # Unspaced text after an early space must not collapse to the first word.
     cjk = "MCS の" + "合成" * 65
     assert ur._first_sentence(cjk) == cjk[:118] + "…"
+
+
+def test_snapshot_write_exemption_is_only_preparation(monkeypatch, tmp_path):
+    gates = _load("ci_snapshot_writer", "ci/gates.py")
+    path = tmp_path / "core" / "snapshots.py"
+    path.parent.mkdir()
+    path.write_text("def _prepare_snapshot():\n sqlite3.connect('candidate')\n"
+                    "def adjacent():\n sqlite3.connect('ledger')\n")
+    monkeypatch.setattr(gates, "MCS", tmp_path)
+    monkeypatch.setattr(gates, "_py_files", lambda *args: [path])
+    errors = gates.gate_snapshot_readonly()
+    assert len(errors) == 1 and ":4 " in errors[0]

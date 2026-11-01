@@ -1,9 +1,12 @@
 """Preupdate backup retention/disk check, overdue
 housekeeping, batched attachment prune, leftover cleanup, log targets
 and lookup indexes. Temp files and synthetic rows only."""
+import fcntl
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import time
 from contextlib import closing
 from pathlib import Path
@@ -201,7 +204,8 @@ def test_prune_leftovers_removes_stranded_backup_and_snapshot_copies(tmp_path, m
     assert maintenance.prune_leftovers() == 3
     assert sorted(p.name for p in backups.iterdir()) == [
         "ledger-20260101.db", "preupdate-x-2.db"]
-    assert [p.name for p in snaps.iterdir()] == ["ledger-snapshot.db"]
+    assert sorted(p.name for p in snaps.iterdir()) == [".snapshot.lock", "ledger-snapshot.db"]
+    assert (snaps / ".snapshot.lock").stat().st_mode & 0o777 == 0o600
 
 
 def test_prune_leftovers_removes_stranded_staging_sidecars(tmp_path, monkeypatch):
@@ -223,7 +227,45 @@ def test_prune_leftovers_removes_stranded_staging_sidecars(tmp_path, monkeypatch
     assert maintenance.prune_leftovers() == 0               # in-flight copies stay
     monkeypatch.setattr(maintenance, "LEFTOVER_KEEP_S", -60)
     assert maintenance.prune_leftovers() == len(stranded)
-    assert sorted(p for p in [*backups.iterdir(), *snaps.iterdir()]) == sorted(kept)
+    assert sorted(p for p in [*backups.iterdir(), *snaps.iterdir()]) == sorted(
+        [*kept, snaps / ".snapshot.lock"])
+
+
+def test_prune_leftovers_keeps_snapshot_candidates_while_child_holds_fence(tmp_path, monkeypatch):
+    monkeypatch.setattr(maintenance, "HOME", str(tmp_path))
+    monkeypatch.setattr(maintenance, "BACKUP_DIR", str(tmp_path / "backups"))
+    snaps = tmp_path / "snapshots"
+    snaps.mkdir()
+    monkeypatch.setattr(maintenance, "SNAPSHOT_DIR", str(snaps))
+    monkeypatch.setattr(maintenance, "LEFTOVER_KEEP_S", -60)
+    candidates = [snaps / (".snapshot.abc.tmp" + suffix)
+                  for suffix in ("", "-journal", "-wal", "-shm")]
+    for path in candidates:
+        path.write_bytes(b"synthetic")
+    fence = snaps / ".snapshot.lock"
+    fd = os.open(fence, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        child = subprocess.Popen(
+            [sys.executable, "-I", "-c", "import sys; sys.stdin.buffer.read(1)"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            pass_fds=(fd,))
+    finally:
+        os.close(fd)
+    try:
+        assert child.poll() is None
+        assert maintenance.prune_leftovers() == 0
+        assert all(path.exists() for path in candidates)
+        assert fence.stat().st_mode & 0o777 == 0o600
+        child.communicate(input=b"x", timeout=10)
+        assert child.returncode == 0
+        assert maintenance.prune_leftovers() == len(candidates)
+        assert not any(path.exists() for path in candidates)
+        assert fence.exists()
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
 
 
 def test_rotate_log_refuses_symlinked_copy_and_still_rotates_the_rest(monkeypatch, tmp_path):

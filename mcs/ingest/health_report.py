@@ -695,10 +695,20 @@ def build_health(db, result: dict, status: str,
     if unstored_state != 'none_observed':
         coll['collection'] = 'incomplete'
     free_mb = attachment_free_mb()
-    cards_health = notify_scope.health_cards(db, cfg)
+    try:
+        cards_health = bounded_health_read(db, lambda _check: notify_scope.health_cards(db, cfg))
+    except Exception as exc:
+        cards_health = dict.fromkeys((
+            "pending", "delivered", "update_failed", "delivery_unknown", "message_deleted",
+            "revoked", "oldest_pending_age_s", "layout_inventory", "unknown_parts",
+            "unknown_part_resolution", "renders_queued", "renders_unknown", "attempts_unsettled",
+            "retired_unsettled", "retired_items", "oldest_unsettled_age_s", "unsettled",
+            "last_delivered_at"))
+        cards_health.update(status="unknown", observed_at=now, reason=_observation_failure(exc))
+    cards_unknown = cards_health.get("status") == "unknown"
     incomplete_parts = incomplete_parts_health(db, now, cfg)
     parts_incomplete = incomplete_parts['status'] == 'unknown' or bool(incomplete_parts['total'])
-    if parts_incomplete:
+    if parts_incomplete or cards_unknown:
         notify_state = "incomplete"
     # Itemized attention separates synthetic job and delivery populations;
     # an aggregate status alone cannot identify which saved work needs review.
@@ -817,6 +827,7 @@ def build_health(db, result: dict, status: str,
             ("notification_held", bool(held)),
             ("notification_pending", bool(outbox["pending"])),
             ("notification_parts_incomplete", parts_incomplete),
+            ("notification_cards_unavailable", cards_unknown),
             ("disk_low", disk_low),
             ("backup_deferred_deadline", backup_deferred),
         ) if present] + stalls

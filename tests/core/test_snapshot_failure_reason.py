@@ -1,6 +1,8 @@
 """An unpublished snapshot records which branch refused it, without paths or content. Synthetic DB only."""
 import fcntl
+import os
 import sqlite3
+import subprocess
 from time import monotonic
 
 import pytest
@@ -92,7 +94,7 @@ def test_real_child_reports_its_own_deadline_as_timeout(tmp_path):
 def test_verify_budget_follows_a_slow_copy_within_the_cap(db, tmp_path, monkeypatch):
     seen, clock = {}, {"t": 0.0}
 
-    def verify(path, *, deadline):
+    def verify(path, *, deadline, **_kwargs):
         seen["budget"] = deadline - clock["t"]
         return True
     monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", verify)
@@ -105,8 +107,149 @@ def test_verify_budget_follows_a_slow_copy_within_the_cap(db, tmp_path, monkeypa
             clock["t"] += 100.0
         return real_connect(*a, **k)
     monkeypatch.setattr(snapshots.sqlite3, "connect", connect)
+    monkeypatch.setattr(snapshots, "_prepare_in_child",
+                        lambda db, tmp, deadline, fd, state: (
+                            snapshots._prepare_snapshot(db, tmp, deadline) is None))
     assert snapshots.publish_snapshot(db, str(tmp_path / "out"))
     assert seen["budget"] == 150.0                    # 1.5 x copy, not the ~30 s size floor
     clock["t"] = 0.0
     assert snapshots.publish_snapshot(db, str(tmp_path / "out"), deadline=120.0)
     assert seen["budget"] == 20.0                     # never past the caller's hard deadline
+
+
+def test_unreaped_copy_is_fenced_and_cannot_publish_late(db, tmp_path, monkeypatch):
+    output = tmp_path / "out"
+    output.mkdir()
+    published = output / "ledger-snapshot.db"
+    published.write_bytes(b"synthetic old snapshot")
+    monkeypatch.setattr(snapshots, "_PREPARE_CODE", "import time; time.sleep(3)")
+    spawn = snapshots.subprocess.Popen
+    children = []
+
+    def record(*args, **kwargs):
+        child = spawn(*args, **kwargs)
+        if args[0][3] == snapshots._PREPARE_CODE:
+            children.append((child, child.kill))
+            monkeypatch.setattr(child, "kill", lambda: None)
+        return child
+
+    monkeypatch.setattr(snapshots.subprocess, "Popen", record)
+    try:
+        assert snapshots.publish_snapshot(db, str(output), deadline=monotonic() + 0.2) is None
+        assert snapshots.last_failure()["reason"] == "copy_timeout"
+        assert snapshots.last_failure()["child_unreaped"] is True
+        assert len(children) == 1 and children[0][0].poll() is None
+        assert len(list(output.glob(".snapshot.*.tmp"))) == 1
+        assert snapshots.publish_snapshot(db, str(output), deadline=monotonic() + 5) is None
+        assert snapshots.last_failure()["reason"] == "snapshot_lock_busy"
+        children[0][0].wait(timeout=5)
+        assert published.read_bytes() == b"synthetic old snapshot"
+    finally:
+        for child, kill in children:
+            if child.poll() is None:
+                kill()
+                child.wait(timeout=5)
+
+
+def test_expiry_during_candidate_fsync_prevents_replace(db, tmp_path, monkeypatch):
+    output = tmp_path / "out"
+    output.mkdir()
+    published = output / "ledger-snapshot.db"
+    published.write_bytes(b"synthetic old snapshot")
+    clock = [0.0]
+    monkeypatch.setattr(snapshots, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(snapshots, "_prepare_in_child",
+                        lambda db, tmp, deadline, fd, state:
+                        snapshots._prepare_snapshot(db, tmp, deadline) is None)
+    monkeypatch.setattr(snapshots, "_valid_snapshot_candidate", lambda *a, **kw: True)
+    monkeypatch.setattr(snapshots.os, "fsync", lambda fd: clock.__setitem__(0, 10.0))
+    assert snapshots.publish_snapshot(db, str(output), deadline=10.0) is None
+    assert snapshots.last_failure()["reason"] == "publish_deadline"
+    assert published.read_bytes() == b"synthetic old snapshot"
+
+
+def test_directory_fsync_failure_reports_uncertain_publication(db, tmp_path, monkeypatch):
+    output = tmp_path / "out"
+    output.mkdir()
+    published = output / "ledger-snapshot.db"
+    published.write_bytes(b"synthetic old snapshot")
+    monkeypatch.setattr(snapshots, "_SNAPSHOT_VALIDATION_CODE", "import sys; sys.exit(0)")
+
+    def fail(_path):
+        raise OSError("synthetic fsync failure")
+
+    monkeypatch.setattr(snapshots, "fsync_dir", fail)
+    assert snapshots.publish_snapshot(db, str(output), deadline=monotonic() + 10) is None
+    assert snapshots.last_failure()["reason"] == "publication_uncertain"
+    assert published.read_bytes() != b"synthetic old snapshot"
+    assert snapshots.last_timing() == {}
+
+
+def test_snapshot_lock_open_failure_has_fixed_reason(db, tmp_path, monkeypatch):
+    real_open = snapshots.os.open
+
+    def fail_lock(path, *args, **kwargs):
+        if str(path).endswith(".snapshot.lock"):
+            raise OSError(13, "synthetic private error")
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(snapshots.os, "open", fail_lock)
+    assert snapshots.publish_snapshot(db, str(tmp_path / "out")) is None
+    assert snapshots.last_failure() == {"reason": "snapshot_setup_oserror", "errno": 13}
+
+
+def test_snapshot_lock_failure_has_fixed_reason(db, tmp_path, monkeypatch):
+    def fail_lock(*_args):
+        raise OSError(5, "synthetic private error")
+
+    monkeypatch.setattr(snapshots.fcntl, "flock", fail_lock)
+    assert snapshots.publish_snapshot(db, str(tmp_path / "out")) is None
+    assert snapshots.last_failure() == {"reason": "snapshot_lock_error", "errno": 5}
+
+
+def test_snapshot_temp_creation_failure_has_fixed_reason(db, tmp_path, monkeypatch):
+    def fail_temp(*_args, **_kwargs):
+        raise OSError(28, "synthetic private error")
+
+    monkeypatch.setattr(snapshots.tempfile, "mkstemp", fail_temp)
+    assert snapshots.publish_snapshot(db, str(tmp_path / "out")) is None
+    assert snapshots.last_failure() == {"reason": "snapshot_setup_oserror", "errno": 28}
+
+
+def test_pending_cleanup_keeps_fence_until_child_exits(db, tmp_path, monkeypatch):
+    _child(monkeypatch, "import sys; sys.exit(1)")
+    spawn = snapshots.subprocess.Popen
+    pending = []
+
+    class CleanupChild:
+        def __init__(self, args, **kwargs):
+            self.fd = os.dup(kwargs["pass_fds"][0])
+            self.waits = []
+            pending.append(self)
+
+        def wait(self, timeout=None):
+            self.waits.append(timeout)
+            raise subprocess.TimeoutExpired("synthetic cleanup", timeout)
+
+    def spawn_cleanup(args, **kwargs):
+        if args[3] == snapshots._CLEANUP_CODE:
+            return CleanupChild(args, **kwargs)
+        return spawn(args, **kwargs)
+
+    monkeypatch.setattr(snapshots.subprocess, "Popen", spawn_cleanup)
+    output = tmp_path / "out"
+    try:
+        assert snapshots.publish_snapshot(db, str(output), deadline=monotonic() + 10) is None
+        assert snapshots.last_failure()["reason"] == "validator_rejected"
+        assert snapshots.last_failure()["cleanup_pending"] is True
+        assert len(pending) == 1 and pending[0].waits == [1]
+        with (output / ".snapshot.lock").open() as lock:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.close(pending[0].fd)
+            pending[0].fd = None
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        for child in pending:
+            if child.fd is not None:
+                os.close(child.fd)
