@@ -88,6 +88,9 @@ import present_lineworks  # noqa: E402,F401 - restored card presentation
 import local_llm  # noqa: E402,F401 - postcheck model/admission diagnostics
 import llm_admission  # noqa: E402,F401 - postcheck admission diagnostics
 import mcs_restore  # noqa: E402,F401 - existing backup-adoption marker gate
+import provider_settings  # noqa: E402 - rollback settings checks after tree reset
+import cloud_policy  # noqa: E402 - rollback provider model ownership
+import semantic_jev  # noqa: E402 - rollback Jev model validation
 try:
     from release_apply_owner import _legacy_scope as _release_legacy_scope  # noqa: E402
 except ImportError:
@@ -895,9 +898,6 @@ _PROVIDER_SETTINGS_ONLY = object()
 
 
 def _provider_migration_needed() -> bool:
-    import cloud_policy
-    import provider_settings
-    import semantic_jev
     owners = {model: name for name, model in cloud_policy.PROVIDERS.items()}
     first = provider_settings.read(HOME, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
     second = provider_settings.read(HOME, model_owners=owners, jev_model=semantic_jev.JEV_MODEL)
@@ -910,9 +910,6 @@ def _provider_migration_needed() -> bool:
 def _provider_rollback_preflight(target: str | object) -> bool | None:
     """Block unproven split-setting rollback before changing code or workers."""
     try:
-        import cloud_policy
-        import provider_settings
-        import semantic_jev
         state = provider_settings.probe(HOME)
         if state["state"] in ("root_missing", "uninitialized_or_legacy_unverified", "legacy_unverified"):
             return
@@ -2155,9 +2152,6 @@ def _legacy_provider_migration_guard(state, *, recovery_fds=None, expected_mode=
     """Hold and recheck the legacy update evidence while settings are split."""
     try:
         from release_apply_owner import _verify_inherited_lock
-        import cloud_policy
-        import provider_settings
-        import semantic_jev
 
         recovering = recovery_fds is not None
         if recovering:
