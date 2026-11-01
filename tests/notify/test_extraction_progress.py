@@ -157,7 +157,7 @@ def test_real_legacy_checkpoint_reaches_private_summary_read_only(led, change):
     assert "SOURCE_CANARY" not in text and "完了は抽出処理のみ" not in text
 
 
-@pytest.mark.parametrize("layout", [1, 2])
+@pytest.mark.parametrize("layout", [1, 2, 3, 4])
 @pytest.mark.parametrize("attempts,state", [(0, "processing"), (1, "processing"), (5, "attention")])
 def test_generation_upgrade_and_retry_status_reaches_summary_and_shared_render(led, attempts, state, layout):
     import json
@@ -184,6 +184,13 @@ def test_generation_upgrade_and_retry_status_reaches_summary_and_shared_render(l
     assert ("解析更新中" in text) == (state == "processing")
     assert "SOURCE_CANARY" not in text
     content = notify_render.card_content(led.db, card, cfg=cfg)
+    if layout < 3:
+        assert not any(item.get("provider_scope") == "header" for item in content["containers"])
+        body = notify_render.card_body_text(led.db, card, {"shown": "[1]"}, cfg=cfg)[1]
+        assert "SOURCE_CANARY" in body
+        assert ("解析更新中" in body) == (layout == 1 and state == "processing")
+        assert ("解析要確認" in body) == (layout == 1 and state == "attention")
+        return
     header = next(item for item in content["containers"] if item.get("provider_scope") == "header")
     states = dict.fromkeys(processing_route.PROVIDERS, "unknown")
     assert header["provider_states"] == states

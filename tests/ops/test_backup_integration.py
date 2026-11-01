@@ -214,11 +214,16 @@ def test_rendered_wrapper_consumes_only_explicit_static_generation(
     (root / "data").mkdir(mode=0o700, parents=True)
     (root / "venv/bin").mkdir(parents=True)
     repo = Path(__file__).resolve().parents[2]
+    import run_log_install
+    recovery = root / "private-recovery"
+    run_log_install.prepare(root, repo, recovery, promote=True)
     calls = tmp_path / "wrapper-argv.json"
     driver = root / "venv/bin/python3"
     driver.write_text(
         f"#!{sys.executable}\n"
-        "import json,runpy,sys\n"
+        "import json,os,runpy,sys\n"
+        "if sys.argv[1:2] == ['-I']:\n"
+        "    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])\n"
         f"runpy.run_path({str(repo / 'tests/conftest.py')!r})\n"
         "import mcs_backup\n"
         f"mcs_backup.time.time=lambda:{NOW!r}\n"
@@ -232,6 +237,7 @@ def test_rendered_wrapper_consumes_only_explicit_static_generation(
         "enabled": True, "policy": str(policy_path), "snapshot": str(source),
         "schedule": "17 3,15 * * *", "verify_interval_s": 3600, "drill_interval_s": 86400}}
     monkeypatch.setattr(mcs_setup, "HOME", str(root))
+    monkeypatch.setattr(mcs_setup, "RECOVERY_DIR", str(recovery))
     monkeypatch.setattr(mcs_setup, "HERMES_PY", str(driver))
     wrapper = root / "wrapper.sh"
     wrapper.write_text(dict(service_management.rendered_scripts(service_management.service_substitutions(cfg, paths=mcs_setup._service_paths()), paths=mcs_setup._service_paths()))[

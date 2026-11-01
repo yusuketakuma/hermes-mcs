@@ -207,7 +207,7 @@ job_hygiene() {
 }
 job_standalone_sdk() {
     PATH="$(shim standalone "$standalone_python"):$PATH"
-    MCS_TEST_PYTHON="$(command -v python)" sh scripts/check_pinned_sdks.sh standalone
+    MCS_TEST_PYTHON="$(command -v python)" sh scripts/development/check_pinned_sdks.sh standalone
 }
 job_incident_gates() {
     python3 ci/gates.py
@@ -218,7 +218,7 @@ job_macos() {
 }
 job_hermes_integration() {
     MCS_TEST_PYTHON=$hermes/.venv/bin/python MCS_HERMES_SOURCE=$hermes MCS_HERMES_REFERENCE=$hermes \
-        sh scripts/check_pinned_sdks.sh hermes
+        sh scripts/development/check_pinned_sdks.sh hermes
 }
 
 summary=$out/summary.tsv

@@ -216,7 +216,7 @@ def test_header_status_uses_only_visible_nondeleted_posts(led, monkeypatch):
     mids = (100, 101, 102, 103, 104)
     _seed_thread(led, mids=mids)
     assert _dispatch(led, _intent(led, payload={"message_ids": list(mids)}))["dispatched"]
-    card = {**_card(led), "layout": 2}
+    card = {**_card(led), "layout": 3}
     with led.db:
         led.db.execute("UPDATE messages SET body_state='deleted' WHERE message_id=104")
     progress = {100: {"state": "complete", "completed": 1, "total": 1},

@@ -685,6 +685,9 @@ def test_services_rejects_nonobject_recovery_plist_without_mutation(
     calls, args = _services_env(monkeypatch, tmp_path)
     monkeypatch.setattr(os, "getuid", lambda: real_uid)
     path, _ = _owned_recovery(monkeypatch, tmp_path)
+    import run_log_install
+    run_log_install.prepare(tmp_path, mcs_setup.REPO_ROOT, mcs_setup.RECOVERY_DIR,
+                            promote=True)
     path.write_bytes(plistlib.dumps(plist))
     cfg = {"recovery_python": str(tmp_path / "independent-python")}
     monkeypatch.setattr(mcs_util, 'load_config',

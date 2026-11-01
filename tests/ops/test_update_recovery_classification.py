@@ -154,7 +154,7 @@ def test_incomplete_wrong_head_refuses_before_clean(updater, monkeypatch):
     assert updater.recover_interrupted() == 1
     assert trace == ["runtime_gate", "cleanup", "adopt_marker", "marker", "head",
                      "marker", ("report", "escalate")]
-    assert reports[0][2]["writers_stopped"] is True
+    assert "writers_stopped" not in reports[0][2]
 
 
 @pytest.mark.parametrize("clean,detail", [(True, "unclassifiable repo state"),
@@ -172,7 +172,8 @@ def test_unknown_head_keeps_required_clean_observation(updater, monkeypatch, cle
 
 def test_previous_route_rereads_marker_and_escalation_rereads_again(updater, monkeypatch):
     trace, reports = _trace_world(updater, monkeypatch,
-        applying={"sha": "t", "prev_sha": "p", "rollback": True, "backup_path": "synthetic.db"},
+        applying={"sha": "t", "prev_sha": "p", "rollback": True, "backup_path": "synthetic.db",
+                  "schema_bump": False},
         markers=(None, {"phase": "awaiting_consent"}, {"phase": "awaiting_consent"}))
     assert updater.recover_interrupted() == 1
     assert trace == ["runtime_gate", "cleanup", "adopt_marker", "marker", "head", "clean",

@@ -234,7 +234,7 @@ def test_bench_offline_validation_keeps_custom_fully_synthetic_cases(tmp_path):
 def test_offline_entrypoints_bootstrap_outside_the_repository(tmp_path, script, args):
     root = extract_bench.Path(extract_bench.DEFAULT_CASES).parent.parent
     target = (extract_bench.Path(extract_bench.__file__) if script == "benchmark"
-              else root / "evaluation" / "request_following_review.py")
+              else root / "scripts" / "evaluation" / "request_following_review.py")
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "VIRTUAL_ENV")}
     result = subprocess.run([sys.executable, str(target), *args], cwd=tmp_path,
                             env=env, capture_output=True, text=True, timeout=30)

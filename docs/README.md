@@ -42,7 +42,7 @@
 | 種類 | 置き場所 |
 |---|---|
 | 現在の画面説明 | [画面例](screenshots/) · [Slack画像の更新手順](screenshots/slack-gallery/README.md) · [LINE WORKS画像の更新手順](screenshots/lineworks-gallery/README.md) |
-| 構成や処理の説明図 | [図](assets/) · [HTML原稿とSVGの対応](assets/diagrams/README.md) |
+| 構成や処理の説明図 | [図](assets/diagrams/) · [HTML原稿とSVGの対応](assets/diagrams/README.md) |
 | 版ごとの計画・受入・公開時の画像 | [リリース記録の索引](releases/README.md) |
 | 版をまたぐ調査・不具合・検証の証跡 | [開発記録の索引](dev-records/README.md) |
 

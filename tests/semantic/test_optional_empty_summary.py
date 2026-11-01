@@ -365,6 +365,119 @@ def test_empty_repair_keeps_negative_before_later_jev_skip(tmp_path, monkeypatch
         db.close()
 
 
+def _assert_target_unpublished(db, summary_row):
+    import semantic_send_gate
+    import semantic_store
+
+    meta = json.loads(summary_row["meta"])
+    bundle = semantic_store.thread_bundle(db.db, 1, 1)
+    assert semantic_send_gate.current_summary(
+        db.db, 1, 1, bundle, meta["policy_fingerprint"]) is None
+    assert not db.db.execute(
+        "SELECT 1 FROM notify_outbox WHERE kind='semantic_notice' "
+        "AND json_extract(payload,'$.target_message_id')=1").fetchone()
+
+
+@pytest.mark.parametrize("oversize", ["char_limit", "backend_rejected"])
+def test_oversize_repair_preserves_negative_pair_after_restart(tmp_path, monkeypatch, oversize):
+    import mcs_util
+    import semantic_audit
+    import semantic_llm
+    import semantic_runtime
+    import semantic_transport
+    from semantic_testkit import _FakeJev, _ledger
+
+    db = _seeded(tmp_path)
+    original_summary = semantic_drain.summarize
+    original_audit = semantic_audit.audit_claims
+    summary_calls, audit_calls, llm_calls = [], [], []
+    repairing = [False]
+    negative = [{"code": "claim_not_supported", "claim": "synthetic"},
+                {"code": "claim_contradicts", "claim": "synthetic-negative"}]
+    if oversize == "char_limit":
+        negative[0]["claim"] += "x" * semantic_llm.PROMPT_CHAR_LIMIT
+
+    def llm(prompt):
+        llm_calls.append(repairing[0])
+        if repairing[0] and oversize == "backend_rejected":
+            raise semantic_runtime.LLMRejected("synthetic_context_limit")
+        result = _llm(prompt)
+        if result is not None:
+            semantic_transport._record_inference("local")
+        return result
+
+    def summarize(llm_fn, bundle, mid, *args, **kwargs):
+        repairing[0] = mid == 1 and bool(kwargs.get("feedback"))
+        if mid == 1:
+            summary_calls.append(repairing[0])
+        try:
+            result = original_summary(llm_fn, bundle, mid, *args, **kwargs)
+            if repairing[0]:
+                assert result["_input_oversize"] is True
+            return result
+        finally:
+            repairing[0] = False
+
+    def audit(client, bundle, summary, *args):
+        findings, evaluated = original_audit(client, bundle, summary, *args)
+        if summary["target_message_id"] == 1:
+            audit_calls.append(True)
+            assert evaluated
+            findings += negative
+        return findings, evaluated
+
+    def run():
+        semantic_drain.run_due(db, _cfg("enforce", budget=100, loop_mode="off"),
+                               {"errors": []}, time.monotonic() + 300,
+                               jev_client=_FakeJev(), llm_fn=llm)
+
+    monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    monkeypatch.setattr(semantic_audit, "audit_claims", audit)
+    try:
+        run()
+        before_summary, latest_summary = db.artifacts("semantic_summary", message_id=1)
+        before_audit, latest_audit = db.artifacts("semantic_audit", message_id=1)
+        before_content = json.loads(before_summary["content"])
+        content = json.loads(latest_summary["content"])
+        audit_content = json.loads(latest_audit["content"])
+        before_meta, meta = json.loads(before_audit["meta"]), json.loads(latest_audit["meta"])
+        proof = json.loads(latest_summary["meta"])["provider_provenance"]
+        assert before_content["claims"]
+        assert content == {**before_content, "audit_status": "NEEDS_REVIEW"}
+        assert audit_content["status"] == "NEEDS_REVIEW"
+        assert audit_content["findings"] == json.loads(before_audit["content"])["findings"] + [
+            {"code": "repair_unavailable"}]
+        assert all(finding in audit_content["findings"] for finding in negative)
+        assert meta["claim_input_binding"] == before_meta["claim_input_binding"]
+        assert meta["claim_audit"] == before_meta["claim_audit"] and meta["claim_audit"]
+        assert meta["summary_artifact_id"] == latest_summary["artifact_id"]
+        assert meta["summary_hash"] == mcs_util.payload_hash(content)
+        assert proof == {**json.loads(before_summary["meta"])["provider_provenance"],
+                         "result_hash": mcs_util.payload_hash(content)}
+        assert proof["providers"] == ["local"] and proof["complete"] is True
+        assert meta["repair_count"] == 1
+        assert len(db.artifacts("semantic_repair", message_id=1)) == 1
+        assert summary_calls == [False, True] and audit_calls == [True]
+        assert llm_calls.count(True) == (oversize == "backend_rejected")
+        _assert_target_unpublished(db, latest_summary)
+        saved_summary, saved_audit = dict(latest_summary), dict(latest_audit)
+        calls_before_restart = list(llm_calls)
+        db.close()
+        db = _ledger(tmp_path)
+        for _ in range(2):
+            db.db.execute("UPDATE fetch_jobs SET state='pending',next_try=0 WHERE kind='semantic'")
+            db.db.commit()
+            run()
+            assert dict(db.artifacts("semantic_summary", message_id=1)[-1]) == saved_summary
+            assert dict(db.artifacts("semantic_audit", message_id=1)[-1]) == saved_audit
+            assert llm_calls == calls_before_restart
+            assert summary_calls == [False, True] and audit_calls == [True]
+            assert len(db.artifacts("semantic_repair", message_id=1)) == 1
+            _assert_target_unpublished(db, saved_summary)
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("interruption", ["unavailable", "budget", "not_sent"])
 def test_empty_repair_candidate_survives_interrupted_audit(
         tmp_path, monkeypatch, interruption):
@@ -595,6 +708,49 @@ def interrupted_empty_repair(tmp_path, monkeypatch):
         yield state
     finally:
         state.db.close()
+
+
+def test_oversize_empty_repair_keeps_prior_pair_after_restart(interrupted_empty_repair, monkeypatch):
+    import semantic_llm
+
+    state = interrupted_empty_repair
+    original_summary = semantic_drain.summarize
+    oversize_results = []
+
+    def summarize(llm, bundle, mid, *args, **kwargs):
+        repair = mid == 1 and bool(kwargs.get("feedback"))
+        if repair:
+            kwargs["feedback"] = [*kwargs["feedback"], "x" * semantic_llm.PROMPT_CHAR_LIMIT]
+        result = original_summary(llm, bundle, mid, *args, **kwargs)
+        if repair:
+            assert result["_input_oversize"] is True
+            oversize_results.append(True)
+        return result
+
+    monkeypatch.setattr(semantic_drain, "summarize", summarize)
+    state.phase = "unavailable"
+    llm_calls = state.llm_calls
+    state.retry()
+    state.run()
+
+    def assert_held():
+        assert dict(state.db.artifacts("semantic_summary", message_id=1)[-1]) == state.old_summary
+        assert dict(state.db.artifacts("semantic_audit", message_id=1)[-1]) == state.old_audit
+        assert state.llm_calls == llm_calls
+        assert state.summaries == [False, True] and state.audits == ["negative"]
+        assert oversize_results == [True]
+        [repair] = state.db.artifacts("semantic_repair", message_id=1)
+        assert json.loads(repair["meta"])["empty_repair"] is True
+        assert state.db.job_state("semantic", 1, 1) == "pending"
+        _assert_target_unpublished(state.db, state.old_summary)
+
+    assert_held()
+    state.restart()
+    state.phase = "recovered"
+    for _ in range(2):
+        state.retry()
+        state.run()
+        assert_held()
 
 
 def test_partial_negative_empty_repair_stays_held_after_restart(interrupted_empty_repair):

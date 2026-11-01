@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def lane(request):
     value = request.config.getoption("--sdk-lane", default=None)
     if value is None:
-        pytest.skip("explicit SDK lane: sh scripts/check_pinned_sdks.sh")
+        pytest.skip("explicit SDK lane: sh scripts/development/check_pinned_sdks.sh")
     assert (3, 14) <= sys.version_info[:2] < (3, 15)
     return value
 

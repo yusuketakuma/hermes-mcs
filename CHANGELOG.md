@@ -99,6 +99,12 @@
 - **認証情報と更新処理の境界を強化**
   キー登録中の設定変更、保存先のリンク・特殊ファイル・権限不正、別設定行になる入力を拒否します。導入と更新の競合、バックアップに必要な空き容量、承認の期限、移行中断を反映前に確認します。
 
+- **取得済みの空投稿・日付・旧形式カードの扱いを修正**
+  取得完了の証拠がある空投稿や削除済み投稿で患者コンテキストが止まる問題と、日付を薬剤量として扱う問題を修正しました。入力超過は要確認として保存し、外部AIを無効にした候補では鍵を探索しません。旧形式カードは表示版だけの変更で一斉再送せず、移行中の復旧記録と復元承認待ちも保護します。
+
+- **クラウド抽出の重複準備と待機による停滞を改善**
+  他のワーカーが先頭候補を確保済みでも次の候補へ進み、必要な件数だけ文脈を準備します。周回ごとの全投稿集計や予算履歴の重複走査を減らし、意味解析のロック待ちやAPIの再試行待機がほかの処理を止める経路を修正しました。候補検索の期限切れを確認未完了として記録し、予算履歴の同じ文字数での変更や並行更新も正しく扱います。予算・モデル・原文照合・二重課金防止は維持し、周回ログに選択・延期などの集計を残します。実環境での改善幅は未測定です。
+
 ### 更新時の注意
 
 - 通常の更新手順を使い、Hermes gateway、利用中の独立実行host・worker・通知アダプター、抽出workerを再起動してください。Gitの差分だけの反映では、旧コードや旧サービス設定が動き続けます。[更新ガイド](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/docs/guides/UPGRADE_AGENT.md)に従ってください。
@@ -120,7 +126,7 @@
 ### 技術詳細
 
 <details>
-<summary>変更記録385件の詳細・更新条件・根拠を表示</summary>
+<summary>変更記録390件の詳細・更新条件・根拠を表示</summary>
 
 各リンクは、この版の変更記録です。要約・適用条件・更新操作・技術詳細・根拠を原文のまま保存しています。同じ箇所に複数の記録がある場合、後続の修正を含む現行の説明は上の本文と各機能のガイドを確認してください。たとえば、処理方式アイコンの初期配置は後続の見出し行への移動で置き換えています。
 
@@ -510,6 +516,13 @@
 - [長文を分割して配送した後も未完了の警報が続く問題を修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/notification-split-delivery-evidence-20261030.json)
 
 - [導入・更新の案内を現行の設定と保護条件に合わせる](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/install-update-guidance-20261030.json)
+
+- [機能別の配置へ整理し、入口と保存データを保持](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/repository-layout-organization-20261030.json)
+- [移行中の復旧記録と復元承認待ちの状態を保護](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/baseline-lifecycle-recovery-20261031.json)
+- [取得済みの空投稿と日付の扱いを修正](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/baseline-empty-readiness-calendar-20261031.json)
+- [無効なクラウドの鍵探索と旧通知形式の変更を防止](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/baseline-semantic-notify-20261031.json)
+
+- [クラウド抽出の重複準備と待機による停滞を改善](https://github.com/yusuketakuma/hermes-mcs/blob/v1.1.0/changes/archive/1.1.0/cloud-extraction-claim-progress-20261031.json)
 
 </details>
 

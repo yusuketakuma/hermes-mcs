@@ -1921,6 +1921,14 @@ def _recover_legacy(if_stale=False):
                        + [(applying or {}).get("at", 0)])
             if last and time.time() - last < STALE_S:
                 return 0                    # newest locked journal is still fresh
+        if isinstance(applying, dict) and "runtime_migration" in applying:
+            # Only the target updater may change an interrupted source+venv migration.
+            _report_alert("runtime_migration_pending", state,
+                          "runtime_migration interrupted — recover with the target mcs_update",
+                          "[MCS] 実行環境の移行中に更新が中断しました。復旧ツールは何も変更せず、"
+                          "常駐処理の状態は未確認です。移行先の版の更新ツール"
+                          "（mcs_update.py recover）で復旧してください")
+            return 1
         schema_rollback = (isinstance(applying, dict) and applying.get("rollback")
                            and applying.get("schema_bump") is not False
                            and (applying.get("schema_bump") is not None or applying.get("backup_path")))
@@ -1943,14 +1951,6 @@ def _recover_legacy(if_stale=False):
         if not applying and not stages:
             _remove_marker()                # orphan — writer is dead
             return 0
-        if isinstance(applying, dict) and "runtime_migration" in applying:
-            # Only the target updater may restore an interrupted source+venv migration.
-            _report_alert("runtime_migration_pending", state,
-                          "runtime_migration interrupted — recover with the target mcs_update",
-                          "[MCS] 実行環境の移行中に更新が中断しました。復旧ツールは何も変更せず、"
-                          "常駐処理の状態は未確認です。移行先の版の更新ツール"
-                          "（mcs_update.py recover）で復旧してください")
-            return 1
         removed = _clean_stale_git_locks()
         prev = (applying or {}).get("prev_sha")
         target = (applying or {}).get("sha")
@@ -1996,20 +1996,16 @@ def _recover_legacy(if_stale=False):
             # DB may still be the newer schema: never restart drainers,
             # keep both markers, 'applying' and the receipt, and never
             # write notify_outbox (it is in the loss report's digest —
-            # a write voids the pending consent). Report + a direct
-            # `hermes send` (bypasses the ledger) only; next pass retries.
+            # a write voids the pending consent). Report only; next pass retries
+            # without claiming writers stopped.
+            if held():
+                _report("restore_consent_blocked",
+                        detail[:240] + " — hold kept, retried next pass")
+                return 1
             if (applying or {}).get("restore_incomplete"):
                 # A hold is not evidence that writers have stopped.
                 # Keep the journal and marker without sending a notice.
                 _report("escalate", detail, alert_key=_alert_key(state, detail))
-                return 1
-            if held():
-                _report_alert("restore_consent_blocked", state,
-                              detail[:240]
-                              + " — hold kept, retried next pass",
-                              "[MCS] 復元承認待ちの保留中に復旧を進め"
-                              "られません（保留は維持・自動再試行・"
-                              f"要確認）: {_recovery_explanation(detail)}")
                 return 1
             cid = (applying or {}).get("command_id")
             if cid:

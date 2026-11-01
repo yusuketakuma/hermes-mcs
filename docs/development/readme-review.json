@@ -7,7 +7,7 @@
         "README.md",
         "mcs/llm/cloud_policy.py",
         "mcs/patients/patient_context_refresh.py",
-        "mcs/ops/job_diagnostics.py",
+        "mcs/ops/commands/job_diagnostics.py",
         "mcs/notify/notify_render.py",
         "docs/guides/ANTHROPIC.md",
         "mcs/notify/processing_route.py",
@@ -32,7 +32,7 @@
       "sources": [
         "README.md",
         "install.sh",
-        "mcs/ops/api_key_setup.py",
+        "mcs/ops/setup/api_key_setup.py",
         "docs/guides/SETUP_AGENT.md",
         "docs/guides/UPGRADE_AGENT.md",
         "docs/guides/INSTALLATION.md",
@@ -55,7 +55,7 @@
       ]
     },
     "docs": {
-      "notes": "2026-10-30: 1.1.0資料への導線、設定ガイド、CHANGELOGの生成要約とリンクを照合。1.0.29以前の本文は作業開始時点から変更せず、履歴を保持した。 追加の変更記録1件をarchiveへ揃え、385件の対応表・詳細リンクと、受入票のスナップショット時点の383件を区別した。 導入・更新の案内と配置説明を現行コードに合わせ、機能・既定値・人承認の条件を保持した。",
+      "notes": "2026-10-30: 1.1.0資料への導線、設定ガイド、CHANGELOGの生成要約とリンクを照合。1.0.29以前の本文は作業開始時点から変更せず、履歴を保持した。 追加の変更記録1件をarchiveへ揃え、385件の対応表・詳細リンクと、受入票のスナップショット時点の383件を区別した。 導入・更新の案内と配置説明を現行コードに合わせ、機能・既定値・人承認の条件を保持した。 2026-10-31: 配置整理と基準テストで見つかった3群の修正記録を追加し、配置整理までの対応表を389件へ更新した。新旧パスの呼出元、取得済みの空投稿、日付の用量判定、旧形式カードと復元待ちの説明を現行コードへ合わせた。 並列抽出の候補競合対策を追加して390件へ揃え、日付の量・頻度の判定も共通化した。速度の改善幅は本番で未測定のため、10倍とは記載していない。",
       "sources": [
         "README.md",
         "docs/releases/v1.1.0/README.md",
@@ -68,7 +68,13 @@
         "docs/guides/UPGRADE_AGENT.md",
         "deployment/README.md",
         "adapters/README.md",
-        "changes/archive/1.1.0/install-update-guidance-20261030.json"
+        "changes/archive/1.1.0/install-update-guidance-20261030.json",
+        "docs/development/REPOSITORY_STRUCTURE.md",
+        "changes/archive/1.1.0/repository-layout-organization-20261030.json",
+        "changes/archive/1.1.0/baseline-lifecycle-recovery-20261031.json",
+        "changes/archive/1.1.0/baseline-empty-readiness-calendar-20261031.json",
+        "changes/archive/1.1.0/baseline-semantic-notify-20261031.json",
+        "changes/archive/1.1.0/cloud-extraction-claim-progress-20261031.json"
       ]
     }
   }

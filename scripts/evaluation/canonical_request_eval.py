@@ -10,7 +10,7 @@ import time
 from datetime import date, timedelta
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "mcs"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mcs"))
 import _mcs_path  # noqa: F401,E402
 import semantic_evaluation as evaluation  # noqa: E402
 import semantic_facts as facts  # noqa: E402
@@ -19,6 +19,7 @@ from mcs_util import loads_dict  # noqa: E402
 from semantic_projection import project_v2_doc_legacy  # noqa: E402
 
 VERSION = "canonical-request-evaluation/1"
+ASSET_ROOT = Path(__file__).resolve().parents[2] / "evaluation"
 REQUEST_FIELDS = ("to", "from", "action", "kind", "condition", "due", "due_text")
 REPLY_KINDS = ("none", "ack", "intent", "progress", "answer", "done", "cancel")
 CANONICAL_DETAILS = ("request_to", "request_from", "request_kind", "condition", "due_text")
@@ -401,10 +402,8 @@ def evaluate(corpus, criteria):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", type=Path, default=Path(__file__).with_name(
-        "canonical_request_cases.json"))
-    parser.add_argument("--criteria", type=Path, default=Path(__file__).with_name(
-        "g6-criteria-v1.json"))
+    parser.add_argument("--input", type=Path, default=ASSET_ROOT / "canonical_request_cases.json")
+    parser.add_argument("--criteria", type=Path, default=ASSET_ROOT / "g6-criteria-v1.json")
     parser.add_argument("--shadow-db", type=Path,
                         help="read-only 20-D shadow comparison of a ledger file")
     args = parser.parse_args(argv)

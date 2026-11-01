@@ -1,0 +1,16 @@
+{
+  "category": "changed",
+  "title": "機能別の配置へ整理し、入口と保存データを保持",
+  "summary": "運用補助・評価コマンド・説明図を役割ごとのフォルダへ整理しました。既存のMCSコマンドとモジュール名を維持します。",
+  "upgrade": "通常の更新手順で反映します。公開CLIの入口、個人設定・認証情報・DB・バックアップ・移行履歴は変更しません。移動した評価スクリプトを直接呼ぶ場合はscripts/evaluation/の同名ファイルを使ってください。",
+  "details": [
+    "mcs/opsの補助をupdate・setup・backup・diagnostics・commands・servicesへ分け、薬剤情報はmcs/medicationsへ配置します。",
+    "SDK検査はscripts/development、評価の実行コードはscripts/evaluation、説明図はdocs/assets/diagramsへ移動します。",
+    "flat importと旧版からの更新経路を維持し、凍結した評価資産と履歴の原本は保持します。"
+  ],
+  "refs": [
+    "docs/development/REPOSITORY_STRUCTURE.md",
+    "mcs/_mcs_path.py",
+    "mcs/ops/update/update_policy.py"
+  ]
+}

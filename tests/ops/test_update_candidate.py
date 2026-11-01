@@ -13,6 +13,7 @@ import test_mcs_update
 from test_mcs_update import _apply_env
 
 updater = test_mcs_update.updater
+prepared_run_log = test_mcs_update.prepared_run_log
 _REAL_PRECHECK_TAG = mcs_update.precheck_tag
 
 
@@ -149,7 +150,7 @@ def test_candidate_uses_all_normal_content_gates(updater, monkeypatch, problem):
 
 
 def test_candidate_applies_under_locks_and_records_human_reason_without_fetch(
-        updater, monkeypatch):
+        updater, prepared_run_log, monkeypatch):
     repo, base, target = _candidate_env(updater, monkeypatch)
     trace = []
     git = updater._git

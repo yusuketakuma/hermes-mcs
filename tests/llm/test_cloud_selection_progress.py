@@ -2,6 +2,7 @@
 from contextlib import closing
 from decimal import Decimal
 import json
+import sqlite3
 import threading
 import time
 from types import SimpleNamespace
@@ -49,11 +50,12 @@ def blocked_prefix(tmp_path, monkeypatch):
     led.close()
 
 
-def _select(led, lane):
+def _select(led, lane, *, deadline=None):
     if lane == "semantic":
-        return semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 1)[0]
+        return semantic_drain._select_cloud_due(led, "backlog", ("semantic",), False, 1,
+            deadline=deadline, isolated=deadline is not None)[0]
     return extract_llm._select_pending(led, 64, None, None, False,
-        cloud_only=True, prioritize_patients=True)[0]
+        cloud_only=True, prioritize_patients=True, deadline=deadline)[0]
 
 
 @pytest.mark.parametrize("lane", ["semantic", "extract"])
@@ -71,28 +73,29 @@ def test_receipted_work_behind_large_invalid_prefix_eventually_selected(blocked_
     assert all(row["message_id"] == 513 for row in observed)
 
 
-def test_isolated_semantic_selection_reaches_receipted_tail(blocked_prefix):
+@pytest.mark.parametrize("lane", ["semantic", "extract"])
+def test_isolated_selection_reaches_receipted_tail(blocked_prefix, lane):
     led, _ = blocked_prefix
-    selected = semantic_drain._select_cloud_due(
-        led, "backlog", ("semantic",), False, 1,
-        deadline=time.monotonic() + 60, isolated=True)[0]
+    selected = _select(led, lane, deadline=time.monotonic() + 60)
     assert [row["project_id"] for row in selected] == [513]
     assert cloud_policy.history_thread_allowed(led.db, 513, 513)
 
 
-def test_expired_selection_deadline_is_not_an_empty_success(blocked_prefix):
+@pytest.mark.parametrize("lane", ["semantic", "extract"])
+def test_expired_selection_deadline_is_not_an_empty_success(blocked_prefix, lane):
     led, _ = blocked_prefix
-    with pytest.raises(semantic_drain._CloudSelectionIncomplete):
-        semantic_drain._select_cloud_due(
-            led, "backlog", ("semantic",), False, 1,
-            deadline=time.monotonic() - 1, isolated=True)
+    module = semantic_drain if lane == "semantic" else extract_llm
+    with pytest.raises(module._CloudSelectionIncomplete, match="^deadline$"):
+        _select(led, lane, deadline=time.monotonic() - 1)
 
 
-def test_selection_deadline_during_candidate_scan_is_incomplete(blocked_prefix, monkeypatch):
+@pytest.mark.parametrize("lane", ["semantic", "extract"])
+def test_selection_deadline_during_candidate_scan_is_incomplete(blocked_prefix, monkeypatch, lane):
     led, _ = blocked_prefix
     clock = [time.monotonic()]
     deadline = clock[0] + 10
-    monkeypatch.setattr(semantic_drain, "time", SimpleNamespace(
+    module = semantic_drain if lane == "semantic" else extract_llm
+    monkeypatch.setattr(module, "time", SimpleNamespace(
         monotonic=lambda: clock[0], time=time.time, perf_counter=time.perf_counter))
     original = cloud_policy.history_target_ready
     checked = []
@@ -104,11 +107,62 @@ def test_selection_deadline_during_candidate_scan_is_incomplete(blocked_prefix, 
         return result
 
     monkeypatch.setattr(cloud_policy, "history_target_ready", expire_after_first)
-    with pytest.raises(semantic_drain._CloudSelectionIncomplete):
-        semantic_drain._select_cloud_due(
-            led, "backlog", ("semantic",), False, 1,
-            deadline=deadline, isolated=True)
+    with pytest.raises(module._CloudSelectionIncomplete, match="^deadline$"):
+        _select(led, lane, deadline=deadline)
     assert checked
+
+
+def test_extract_selection_interrupts_sql_before_candidate_iteration(blocked_prefix, monkeypatch):
+    led, _ = blocked_prefix
+    clock = [time.monotonic()]
+    deadline = clock[0] + 10
+    connect, opened = sqlite3.connect, []
+
+    def reader(*args, **kwargs):
+        db = connect(*args, **kwargs)
+        opened.append(db)
+        def expire(sql):
+            if sql.lstrip().startswith("SELECT m.message_id, m.project_id,"):
+                clock[0] = deadline + 1
+        db.set_trace_callback(expire)
+        return db
+
+    monkeypatch.setattr(extract_llm.sqlite3, "connect", reader)
+    monkeypatch.setattr(extract_llm, "time", SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    with pytest.raises(extract_llm._CloudSelectionIncomplete, match="^deadline$") as error:
+        _select(led, "extract", deadline=deadline)
+    assert isinstance(error.value.__cause__, sqlite3.OperationalError)
+    assert "interrupt" in str(error.value.__cause__)
+    assert len(opened) == 1 and not led.db.in_transaction
+    with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+        opened[0].execute("SELECT 1")
+
+
+@pytest.mark.parametrize("kind", ["memory", "transaction"])
+def test_bounded_extract_selection_never_falls_back_to_the_owner_connection(tmp_path, kind):
+    led = SimpleNamespace(db=sqlite3.connect(":memory:")) if kind == "memory" else _ledger(tmp_path)
+    try:
+        if kind == "transaction":
+            led.db.execute("BEGIN")
+        reason = "reader_unavailable" if kind == "memory" else "active_transaction"
+        with pytest.raises(extract_llm._CloudSelectionIncomplete, match="^" + reason + "$"):
+            _select(led, "extract", deadline=time.monotonic() + 60)
+        assert led.db.in_transaction is (kind == "transaction")
+        assert led.db.execute("SELECT 1").fetchone()[0] == 1
+    finally:
+        led.db.close()
+
+
+def test_bounded_extract_selection_preserves_owner_cancellation(tmp_path):
+    with closing(_ledger(tmp_path)) as led:
+        led.db.set_progress_handler(lambda: 1, 1)
+        try:
+            with pytest.raises(sqlite3.OperationalError, match="interrupt"):
+                _select(led, "extract", deadline=time.monotonic() + 60)
+            with pytest.raises(sqlite3.OperationalError, match="interrupt"):
+                led.db.execute("SELECT 1").fetchone()
+        finally:
+            led.db.set_progress_handler(None, 0)
 
 
 @pytest.mark.parametrize("lane", ["semantic", "extract"])
@@ -154,6 +208,107 @@ def _cloud_pass(led, *, limit=1):
 
 def _claim_count(led):
     return led.db.execute("SELECT COUNT(*) FROM fetch_jobs WHERE kind='extract_claim'").fetchone()[0]
+
+
+def test_bounded_extract_selection_preserves_owner_cursor_and_handler(cloud_candidates, monkeypatch):
+    led, *_ = cloud_candidates
+    connect, opened, progress = sqlite3.connect, [], []
+
+    def reader(database, **kwargs):
+        assert database.endswith("?mode=ro") and kwargs == {"uri": True, "timeout": 0}
+        db = connect(database, **kwargs)
+        opened.append(db)
+        return db
+
+    monkeypatch.setattr(extract_llm.sqlite3, "connect", reader)
+    led.db.set_progress_handler(lambda: progress.append(1) and 0, 1)
+    cursor = led.db.execute("SELECT 10 UNION ALL SELECT 20 UNION ALL SELECT 30")
+    try:
+        assert cursor.fetchone()[0] == 10
+        assert len(_select(led, "extract", deadline=time.monotonic() + 60)) == 64
+        assert [row[0] for row in cursor] == [20, 30]
+        before = len(progress)
+        led.db.execute("SELECT 1").fetchone()
+        assert len(progress) > before and not led.db.in_transaction
+        assert len(opened) == 1
+        with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+            opened[0].execute("SELECT 1")
+    finally:
+        cursor.close()
+        led.db.set_progress_handler(None, 0)
+
+
+@pytest.mark.parametrize("primary", [None, ValueError, KeyboardInterrupt])
+def test_selection_reader_close_failure_preserves_the_primary_error(cloud_candidates, monkeypatch, primary):
+    led, *_ = cloud_candidates
+    connect, closed = sqlite3.connect, []
+
+    class Reader(sqlite3.Connection):
+        def close(self):
+            super().close()
+            closed.append(True)
+            raise sqlite3.OperationalError("synthetic-close")
+
+    monkeypatch.setattr(extract_llm.sqlite3, "connect",
+                        lambda *a, **kw: connect(*a, **kw, factory=Reader))
+    if primary is not None:
+        def failed(*args, **kwargs):
+            raise primary("synthetic-primary")
+        monkeypatch.setattr(extract_llm, "_select_pending_impl", failed)
+    expected = primary or extract_llm._CloudSelectionIncomplete
+    reason = "synthetic-primary" if primary is not None else "reader_close_failed"
+    with pytest.raises(expected, match="^" + reason + "$"):
+        _select(led, "extract", deadline=time.monotonic() + 60)
+    assert closed == [True] and led.db.execute("SELECT 1").fetchone()[0] == 1
+
+
+def test_selection_rejects_a_replaced_reader_file(cloud_candidates, monkeypatch):
+    led, *_ = cloud_candidates
+    identities = iter([SimpleNamespace(st_dev=1, st_ino=1), SimpleNamespace(st_dev=1, st_ino=2)])
+    monkeypatch.setattr(extract_llm, "os", SimpleNamespace(stat=lambda _: next(identities)))
+    with pytest.raises(extract_llm._CloudSelectionIncomplete, match="^reader_changed$"):
+        _select(led, "extract", deadline=time.monotonic() + 60)
+    assert led.db.execute("SELECT 1").fetchone()[0] == 1
+
+
+def test_isolated_receipt_snapshot_still_requires_fresh_authority_before_preparation(cloud_candidates, monkeypatch):
+    led, _, calls, reservations, results = cloud_candidates
+    ready, revoked = cloud_policy.history_target_ready, []
+
+    def revoke(db, pid, mid):
+        allowed = ready(db, pid, mid)
+        if db is not led.db and not revoked:
+            led.artifact_add("cloud_history_scope", '{"version":1,"sources":{}}')
+            revoked.append(True)
+        return allowed
+
+    monkeypatch.setattr(cloud_policy, "history_target_ready", revoke)
+    report = _cloud_pass(led)
+    assert revoked == [True] and report["selected"] == report["context_blocked"] == 64
+    assert report["done"] == 0 and not led.artifacts(extract_llm.patient_state_context.KIND)
+    assert calls == reservations == results == [] and _claim_count(led) == 0
+
+
+def test_incomplete_extract_selection_preserves_carry_and_unknown_counts(cloud_candidates, monkeypatch):
+    led, _, calls, reservations, results = cloud_candidates
+    clock = [time.monotonic()]
+    deadline = clock[0] + 180
+    carry = [object()]
+    observed = []
+
+    def incomplete(*args, **kwargs):
+        observed.append(kwargs.get("deadline"))
+        raise extract_llm._CloudSelectionIncomplete("deadline")
+
+    monkeypatch.setattr(extract_llm, "time", SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    monkeypatch.setattr(extract_llm, "_select_pending", incomplete)
+    monkeypatch.setattr(extract_llm, "_prepare_jobs", lambda *a, **kw: pytest.fail("incomplete selection prepared work"))
+    report = extract_llm.run_pending(led, limit=1, budget_s=180, cloud_only=True, carry=carry)
+    assert observed == [deadline] and report["carry"] is carry
+    assert report["cloud_selection_incomplete"] is True and report["cloud_selection_reason"] == "deadline"
+    assert report["selected"] is report["fresh_selected"] is report["left"] is report["left_estimate"] is None
+    assert report["left_estimate_age_s"] is None and report["queue_ages_s"] == {"oldest": None, "newest": None}
+    assert report["done"] == 0 and calls == reservations == results == [] and _claim_count(led) == 0
 
 
 @pytest.mark.parametrize("blocked_count", [0, 3])

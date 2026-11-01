@@ -17,7 +17,7 @@ def test_hermes_ci_runs_the_guarded_sdk_lane():
     # The guard verifies distribution versions and source against the CI pin,
     # installs process isolation before collection, and rejects missing tests.
     assert "working-directory: hermes-mcs" in step
-    assert re.search(r"run:\s+sh scripts/check_pinned_sdks\.sh hermes\s*$", step)
+    assert re.search(r"run:\s+sh scripts/development/check_pinned_sdks\.sh hermes\s*$", step)
     install = job.split("      - name: install hermes (pinned ref) + integration test deps\n", 1)[1]
     assert "cd hermes-agent\n" in install
     assert "uv pip install --python .venv/bin/python -e '.[messaging]'" in install

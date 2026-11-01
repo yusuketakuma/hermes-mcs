@@ -114,7 +114,7 @@ def test_failed_schema_rollback_hold_survives_independent_recovery(
     assert rec.recover() == 1
     assert calls == [] and Path(rec.MARKER_PATH).exists()
     report = json.loads(Path(rec.REPORT_PATH).read_text())
-    assert report["result"] == "escalate" and report["writers_stopped"] is True
+    assert report["result"] == "escalate" and "writers_stopped" not in report
     assert "backup_unreadable" in report["detail"]
     assert json.loads(Path(rec.STATE_PATH).read_text())["applying"]["restore_incomplete"]
     assert live.read_bytes() == before
@@ -134,7 +134,7 @@ def test_failed_schema_rollback_hold_survives_independent_recovery(
     held = rec._load_state()
     assert held["applying"]["rollback"] and held["applying"]["restore_incomplete"]
     assert held["restore_consent"]["report_id"] == report["report_id"]
-    assert held["executed"]["cid-rb"]["result"] == "escalated"  # prior missing-backup outcome
+    assert "cid-rb" not in held["executed"]  # the incomplete restore keeps its receipt unconsumed
     assert json.loads(Path(rec.REPORT_PATH).read_bytes())["result"] == "restore_reconcile_pending"
     assert not Path(rec.DATA, notify_spool.RESTORE_RECEIPT).exists()
     stable = {path: path.read_bytes() for path in (

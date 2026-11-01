@@ -91,7 +91,7 @@ def test_doctor_names_the_lineworks_adapter_and_its_remedy(local_config, monkeyp
     mcs_setup.main(["doctor"])
     out = capsys.readouterr().out
     assert "通知の配送処理（LINE WORKSアダプター）: 停止・無効（配送処理の起動に失敗しました）" in out
-    assert "ai.mcs.lineworks" in out and "service.stderr.log" in out
+    assert "ai.mcs.lineworks" in out and "data/mcs.log" in out
 
 
 def test_lineworks_update_diagnostic_keeps_one_deadline(monkeypatch):

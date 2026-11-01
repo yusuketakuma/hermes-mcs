@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "移行中の復旧記録と復元承認待ちの状態を保護",
+  "summary": "Python等の実行環境の移行中は、独立した復旧監視が更新記録を書き換える前に停止します。復元承認待ちと復元失敗を区別して報告します。",
+  "upgrade": "通常の更新手順で復旧補助を同期します。移行中断は移行先の更新ツールで復旧してください。保留の存在だけで常駐処理の停止を確認済みとは扱わず、承認・照合が済むまで強制再開しないでください。",
+  "details": [
+    "runtime_migrationの担当確認を、schema巻戻しの記録変更より前に行います。",
+    "明示された復元承認待ちはrestore_consent_blockedとしてローカルへ記録し、独立監視から通知送信や未確認のwriters_stopped宣言を行いません。"
+  ],
+  "refs": [
+    "deployment/recovery/mcs_recover.py",
+    "docs/guides/UPGRADE_AGENT.md"
+  ]
+}

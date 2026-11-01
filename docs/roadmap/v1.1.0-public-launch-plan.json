@@ -21,7 +21,7 @@
     "Codex-root": [
       "mcs/ops/mcs_cli.py",
       "mcs/ops/mcs_setup.py",
-      "mcs/ops/setup_wizard.py",
+      "mcs/ops/setup/setup_wizard.py",
       "install.sh",
       "mcs/ops/mcs_update.py",
       "tests/conftest.py",
@@ -30,8 +30,8 @@
       "README.md最終統合",
       "SECURITY.md",
       "mcs/ops/sdc_cli.py",
-      "mcs/ops/service_contract.py",
-      "mcs/ops/service_management.py",
+      "mcs/ops/services/service_contract.py",
+      "mcs/ops/services/service_management.py",
       "docs/guides/SDC_SELF_MONITORING.md"
     ],
     "delivery-owner": [
@@ -51,7 +51,7 @@
       "scripts/development/generate_slack_gallery.py"
     ],
     "drug-info-owner": [
-      "mcs/ops/drug_info.py",
+      "mcs/medications/drug_info.py",
       "mcs/ops/mcs_drug.py"
     ],
     "rule": "同じ正本は1owner。文書やshared testsはownerへhunk提案して順次統合、各taskのproposalは編集予約ではない。 SDCのsdc_cli/setup/serviceはCodex-root、storage/connector/protocol/transportはsdc-storage-ownerが単一所有。他taskからはhunk提案とし、proposed_ownerに複数名がいても同時編集予約ではない。 新ERR/SUP taskのproposed_ownerは領域責任候補で編集予約ではない。adapters/sdcはsdc-storage-owner、sdc_cli/setup/service/gatesはCodex-rootが一意所有。中央console/API/repository/cryptoの各共有pathも単一writerをCSDC所有者が割当て、他担当はhunk提案のみ。",
@@ -416,7 +416,7 @@
       "delta": "既存install/mcs setup/doctorを使い、単独利用と既存Hermes連携のPython・コマンド誤選択を防ぐ。",
       "paths": [
         "mcs/ops/mcs_cli.py",
-        "mcs/ops/setup_wizard.py",
+        "mcs/ops/setup/setup_wizard.py",
         "mcs/ops/mcs_setup.py",
         "docs/guides/EASY_SETUP.md",
         "docs/guides/INSTALLATION.md",
@@ -453,7 +453,7 @@
       "status": "implemented_targeted_verified_release_acceptance_pending",
       "delta": "既存の施設許可/非表示入力/scope/操作者/辞書承認を整理し、確認画面で実際の経路を示す。",
       "paths": [
-        "mcs/ops/setup_wizard.py",
+        "mcs/ops/setup/setup_wizard.py",
         "mcs/ops/mcs_setup.py",
         "SECURITY.md",
         "docs/guides/EASY_SETUP.md",
@@ -815,7 +815,7 @@
       "status": "implementation_and_limited_real_wire_acceptance_verified",
       "delta": "TinyFish専用の現状から通常検索の利用可能な接続先・無課金条件・取得契約を確認する。",
       "paths": [
-        "mcs/ops/drug_info.py",
+        "mcs/medications/drug_info.py",
         "mcs/ops/mcs_drug.py",
         "docs/guides/USER_GUIDE.md"
       ],
@@ -844,7 +844,7 @@
       "status": "implementation_and_limited_real_wire_acceptance_verified",
       "delta": "WEB-01で既存認可providerが確定した場合だけTinyFish未設定時の切替を接続する。",
       "paths": [
-        "mcs/ops/drug_info.py",
+        "mcs/medications/drug_info.py",
         "mcs/ops/mcs_drug.py",
         "tests/ops/test_drug_info.py",
         "docs/guides/USER_GUIDE.md",
@@ -1130,7 +1130,7 @@
       "delta": "既存wizardの保存前取消と保存後部分成功を、未設定の通知先/新Keychainで確認する。",
       "paths": [
         "mcs/ops/mcs_setup.py",
-        "mcs/ops/setup_wizard.py",
+        "mcs/ops/setup/setup_wizard.py",
         "tests/ops/test_setup_guided.py",
         "tests/ops/test_mcs_setup_standalone.py"
       ],
@@ -1162,7 +1162,7 @@
       "paths": [
         "docs/guides/INSTALLATION.md",
         "mcs/ingest/mcs_adapter.py",
-        "mcs/ops/environment_diagnostics.py",
+        "mcs/ops/diagnostics/environment_diagnostics.py",
         "tests/ops/"
       ],
       "depends_on": [
@@ -1193,8 +1193,8 @@
       "delta": "installer stage5→setup→services/doctorの順序と、未設定時停止→設定後進行を確認する。",
       "paths": [
         "install.sh",
-        "mcs/ops/service_management.py",
-        "mcs/ops/service_contract.py",
+        "mcs/ops/services/service_management.py",
+        "mcs/ops/services/service_contract.py",
         "mcs/ops/mcs_setup.py",
         "tests/meta/test_install_sh.py",
         "tests/ops/"
@@ -1263,7 +1263,7 @@
         "mcs/ops/sdc_cli.py",
         "adapters/sdc/storage.py",
         "adapters/sdc/protocol.py",
-        "mcs/ops/setup_wizard.py",
+        "mcs/ops/setup/setup_wizard.py",
         "tests/adapters/sdc/test_sdc_transport_cli.py"
       ],
       "depends_on": [
@@ -1376,7 +1376,7 @@
       "status": "implemented_targeted_independent_verified_bootstrap_and_manual_acceptance_pending",
       "delta": "本体setup後に既存connectのclaim/statusを使い、新規インストール時の別作業を案内・自動連携する。",
       "paths": [
-        "mcs/ops/setup_wizard.py",
+        "mcs/ops/setup/setup_wizard.py",
         "mcs/ops/mcs_setup.py",
         "mcs/ops/sdc_cli.py",
         "adapters/sdc/connector.py",
@@ -1450,8 +1450,8 @@
       "delta": "新しい常駐基盤を作らず、既存専用jobに登録照合モードとactive heartbeatモードを分けて持たせる。",
       "paths": [
         "mcs/ops/sdc_cli.py",
-        "mcs/ops/service_management.py",
-        "mcs/ops/service_contract.py",
+        "mcs/ops/services/service_management.py",
+        "mcs/ops/services/service_contract.py",
         "deployment/launchagents/local.mcs-sdc.plist",
         "adapters/sdc/connector.py",
         "tests/adapters/sdc/"
@@ -1490,7 +1490,7 @@
       "paths": [
         "adapters/sdc/connector.py",
         "mcs/ops/sdc_cli.py",
-        "mcs/ops/service_management.py",
+        "mcs/ops/services/service_management.py",
         "tests/adapters/sdc/"
       ],
       "depends_on": [
@@ -1971,7 +1971,7 @@
       "paths": [
         "adapters/sdc/connector.py",
         "adapters/sdc/storage.py",
-        "mcs/ops/service_contract.py",
+        "mcs/ops/services/service_contract.py",
         "mcs_standalone/service.py",
         "deployment/recovery/mcs_recover.py"
       ],
@@ -2039,7 +2039,7 @@
       "status": "runtime_components_independent_accepted_production_caller_and_manual_acceptance_pending",
       "delta": "検証済みservice_idだけを既存の通常再起動へ接続する。R4aとは別受入・別同意で有効化する。",
       "paths": [
-        "mcs/ops/service_contract.py",
+        "mcs/ops/services/service_contract.py",
         "deployment/recovery/mcs_recover.py",
         "mcs_standalone/service.py",
         "CSDC: support console",

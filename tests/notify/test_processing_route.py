@@ -140,7 +140,7 @@ def test_multiple_posts_aggregate_each_provider_independently():
 
 
 @pytest.mark.parametrize('route', ['local', 'cloud'])
-@pytest.mark.parametrize('layout', [1, 2, 4])
+@pytest.mark.parametrize('layout', [1, 2, 3, 4])
 def test_thread_heading_keeps_fixed_icon_and_states_are_per_post(led, route, layout):
     _seed_thread(led, mids=(100,))
     _artifact(led, 100, route)
@@ -150,7 +150,11 @@ def test_thread_heading_keeps_fixed_icon_and_states_are_per_post(led, route, lay
     assert content['shown'] == [100]
     assert 'synthetic-local' not in heading and 'anthropic' not in heading
     [post] = [c for c in content['containers'] if c.get('rule')]
-    assert post['provider_states'] == dict.fromkeys(processing_route.PROVIDERS, 'unknown')
+    if layout < 3:
+        assert 'provider_states' not in post
+        assert not any(c.get('provider_scope') == 'header' for c in content['containers'])
+    else:
+        assert post['provider_states'] == dict.fromkeys(processing_route.PROVIDERS, 'unknown')
 
 
 def test_legacy_route_does_not_claim_provider_without_result_evidence(led):
@@ -216,7 +220,7 @@ def test_post_states_are_separate_and_update_the_visible_fingerprint(led, monkey
     monkeypatch.setattr(processing_route, 'provider_states',
                         lambda db, pid, mid, cfg=None, **kwargs: dict(current[mid]))
     card = _card(led)
-    before, heading = _heading(led, card, 2)
+    before, heading = _heading(led, card, 3)
     posts = [c for c in before['containers'] if c.get('rule')]
     assert heading.startswith('💬 ') and len(posts) == 2
     assert posts[0]['provider_states']['anthropic'] == 'done'
@@ -224,7 +228,7 @@ def test_post_states_are_separate_and_update_the_visible_fingerprint(led, monkey
     assert posts[1]['provider_states']['local'] == 'done'
     assert posts[1]['provider_states']['jev'] == 'skipped'
     current[101]['jev'] = 'done'
-    after, _ = _heading(led, card, 2)
+    after, _ = _heading(led, card, 3)
     assert notify_render.content_fingerprint(before) != notify_render.content_fingerprint(after)
 
 
@@ -241,7 +245,7 @@ def test_provider_heading_aggregates_only_visible_page_posts(led, monkeypatch):
     monkeypatch.setattr(processing_route, 'provider_states',
                         lambda db, pid, mid, cfg=None, **kwargs: dict(states[mid]))
     monkeypatch.setattr(processing_route, 'visible_providers', lambda: processing_route.PROVIDERS)
-    card = {**_card(led), 'layout': 2}
+    card = {**_card(led), 'layout': 3}
 
     expected = [
         {'anthropic': 'used', 'openai': 'unknown', 'jev': 'unknown', 'local': 'used'},
@@ -276,7 +280,7 @@ def test_single_post_page_preserves_exact_status_and_deleted_page_is_unknown(led
         return dict(actual)
 
     monkeypatch.setattr(processing_route, 'provider_states', provider_states)
-    card = {**_card(led), 'layout': 2}
+    card = {**_card(led), 'layout': 3}
     first = notify_render.card_content(led.db, {**card, 'ui_state': json.dumps({'page': 0})}, cfg=CFG)
     assert first['shown'] == [100] and first['containers'][0]['text'].startswith('💬 ')
     [header] = [c for c in first['containers'] if c.get('provider_scope') == 'header']

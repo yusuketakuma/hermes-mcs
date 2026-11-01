@@ -40,6 +40,7 @@ import sys
 import functools
 import threading
 import time
+from types import SimpleNamespace
 
 # flat-import bootstrap: put mcs/ root on sys.path, then _mcs_path
 # registers every module dir (any depth) as an import root
@@ -4084,25 +4085,68 @@ def patient_progress_counts(db) -> dict:
             "focus_eligible": focus, "focus_targets": min(focus, _FOCUS_PATIENTS)}
 
 
+class _CloudSelectionIncomplete(Exception):
+    """A cloud selection could not finish safely within the current pass."""
+
+
 def _select_pending(ledger, limit: int, admitted_ids: set | None,
                     shard: tuple[int, int] | None,
                     oldest_first: bool, *, archived_first: bool = False,
                     fair_oldest: bool = False, prioritize_patients: bool = False,
-                    cloud_only: bool = False) -> tuple[list, int | None]:
-    check = (cloud_policy.history_selection_check(ledger.db) if cloud_only
-             else contextlib.nullcontext(None))
-    with check as receipt_check:
-        return _select_pending_impl(ledger, limit, admitted_ids, shard, oldest_first,
-            archived_first=archived_first, fair_oldest=fair_oldest,
-            prioritize_patients=prioritize_patients, cloud_only=cloud_only,
-            receipt_check=receipt_check)
+                    cloud_only: bool = False, deadline: float | None = None) -> tuple[list, int | None]:
+    deadline = deadline if cloud_only else None
+    reader = None
+    if deadline is not None:
+        if time.monotonic() >= deadline:
+            raise _CloudSelectionIncomplete('deadline')
+        if ledger.db.in_transaction:
+            raise _CloudSelectionIncomplete('active_transaction')
+        # A caller-owned cancellation handler remains authoritative on this read.
+        path = ledger.db.execute('PRAGMA database_list').fetchone()[2]
+        if not path:
+            raise _CloudSelectionIncomplete('reader_unavailable')
+    try:
+        if deadline is not None:
+            before = os.stat(path)
+            reader = sqlite3.connect(Path(path).absolute().as_uri() + '?mode=ro', uri=True, timeout=0)
+            after = os.stat(path)
+            if (before.st_dev, before.st_ino) != (after.st_dev, after.st_ino):
+                raise _CloudSelectionIncomplete('reader_changed')
+            reader.row_factory = sqlite3.Row
+            reader.set_progress_handler(lambda: int(time.monotonic() >= deadline), 1000)
+            ledger = SimpleNamespace(db=reader)
+        check = (cloud_policy.history_selection_check(ledger.db) if cloud_only
+                 else contextlib.nullcontext(None))
+        with check as receipt_check:
+            result = _select_pending_impl(ledger, limit, admitted_ids, shard, oldest_first,
+                archived_first=archived_first, fair_oldest=fair_oldest,
+                prioritize_patients=prioritize_patients, cloud_only=cloud_only,
+                receipt_check=receipt_check, deadline=deadline)
+        if deadline is not None and time.monotonic() >= deadline:
+            raise _CloudSelectionIncomplete('deadline')
+    except BaseException as error:
+        if reader is not None:
+            with contextlib.suppress(sqlite3.Error):
+                reader.close()
+        if deadline is not None and isinstance(error, (sqlite3.OperationalError, OSError)):
+            reason = 'deadline' if time.monotonic() >= deadline else 'reader_unavailable'
+            raise _CloudSelectionIncomplete(reason) from error
+        raise
+    else:
+        if reader is not None:
+            try:
+                reader.close()
+            except sqlite3.Error as error:
+                raise _CloudSelectionIncomplete('reader_close_failed') from error
+        return result
 
 
 def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                          shard: tuple[int, int] | None,
                          oldest_first: bool, *, archived_first: bool = False,
                          fair_oldest: bool = False, prioritize_patients: bool = False,
-                         cloud_only: bool = False, receipt_check=None) -> tuple[list, int | None]:
+                         cloud_only: bool = False, receipt_check=None,
+                         deadline: float | None = None) -> tuple[list, int | None]:
     """Select the claimable pending rows for one run_pending pass ->
     (rows, how many of them are new arrivals; None for oldest_first)."""
     # pending = no current-version artifact, plus retriable CURRENT-
@@ -4152,6 +4196,8 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
     # never SQLite's unixepoch(), which can disagree with it.
     now = time.time()
     def _select(fresh, n, archived, rehold=None, scope="", scope_params=()):
+        if deadline is not None and time.monotonic() >= deadline:
+            raise _CloudSelectionIncomplete('deadline')
         cursor = ledger.db.execute(_selection_sql(ledger.db, order, adm_sql + scope,
                                                fresh, archived, rehold, bounded=not cloud_only,
                                                prioritize_patients=prioritize_patients), (
@@ -4168,11 +4214,15 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
                 return cursor.fetchall()
             selected = []
             for row in cursor:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise _CloudSelectionIncomplete('deadline')
                 if (cloud_policy.history_target_ready(ledger.db, row["project_id"], row["message_id"])
                         and receipt_check(row["project_id"], row["message_id"])):
                     selected.append(row)
                     if len(selected) >= n:
                         break
+            if deadline is not None and time.monotonic() >= deadline:
+                raise _CloudSelectionIncomplete('deadline')
             return selected
         finally:
             cursor.close()
@@ -4436,7 +4486,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     separate semaphore. All DB access stays on the calling thread: cloud
     contexts are prepared as candidates are claimed, and writes land in
     the serial commit loop as each message/chunk completes. `budget_s`
-    bounds inference and cloud claim admission, not the selection SQL.
+    bounds inference and cloud claim admission; cloud-only selection also
+    cooperatively interrupts SQL and receipt checks on a separate reader.
 
     `batch_k` groups context-free single-chunk rows K-to-a-call — the
     fixed per-call cost (queue wait, spec eval, decode ramp) amortizes
@@ -4465,11 +4516,20 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         if ledger.db.in_transaction:
             raise
         gc_error = 'extract_stale_gc_failed'
-    rows, fresh_selected = _select_pending(ledger, limit * 64 if cloud_only else limit, admitted_ids,
-                                           shard, oldest_first,
-                                           archived_first=archived_first,
-                                           fair_oldest=fair_oldest, cloud_only=cloud_only,
-                                           prioritize_patients=prioritize_patients)
+    try:
+        rows, fresh_selected = _select_pending(ledger, limit * 64 if cloud_only else limit, admitted_ids,
+                                               shard, oldest_first,
+                                               archived_first=archived_first,
+                                               fair_oldest=fair_oldest, cloud_only=cloud_only,
+                                               prioritize_patients=prioritize_patients,
+                                               **({'deadline': deadline} if cloud_only else {}))
+    except _CloudSelectionIncomplete as error:
+        return {"done": 0, "failed": 0, "left": None, "deferred": 0, "pids": [],
+                "carry": carry if carry is not None else [], "selected": None, "fresh_selected": None,
+                "left_estimate": None, "left_estimate_age_s": None,
+                "queue_ages_s": {"oldest": None, "newest": None},
+                "cloud_selection_incomplete": True, "cloud_selection_reason": str(error),
+                **({'gc_error': gc_error} if gc_error else {})}
     done = failed = deferred = lock_lost = held_prior = 0
     done_pids = set()
     endpoint_down = False

@@ -153,17 +153,22 @@ def test_pool_owns_one_group_and_only_stops_its_children(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('budget', [True, False, None, 'synthetic'])
 @pytest.mark.parametrize('semantic_busy', [False, True])
-@pytest.mark.parametrize('counters,expected,done', [
+@pytest.mark.parametrize('counters,expected,done,selection_reason', [
     ({'selected': 64, 'deferred': 3, 'context_blocked': 1, 'skipped': 0,
       'lock_lost': 2, 'slow_deferred': 4},
      {'selected': 64, 'deferred': 3, 'context_blocked': 1, 'skipped': 0,
-      'lock_lost': 2, 'slow_deferred': 4}, 1),
-    ({}, {}, 0),
+      'lock_lost': 2, 'slow_deferred': 4}, 1, None),
+    ({}, {}, 0, None),
     ({'selected': True, 'deferred': -1, 'context_blocked': 'synthetic-private-extra',
-      'skipped': 1.5, 'lock_lost': None, 'slow_deferred': {'private': 'synthetic-private-extra'}}, {}, 0),
+      'skipped': 1.5, 'lock_lost': None, 'slow_deferred': {'private': 'synthetic-private-extra'},
+      'cloud_selection_incomplete': 'synthetic-private-extra', 'cloud_selection_reason': 'deadline'}, {}, 0, None),
+    ({'selected': None, 'cloud_selection_incomplete': True, 'cloud_selection_reason': 'deadline'},
+     {}, 0, 'cloud_selection_deadline'),
+    ({'selected': None, 'cloud_selection_incomplete': True, 'cloud_selection_reason': 'synthetic-private-extra'},
+     {}, 0, 'cloud_selection_incomplete'),
 ])
 def test_worker_alternates_cloud_only_units_without_local_calls(
-        tmp_path, monkeypatch, capsys, budget, counters, expected, done, semantic_busy):
+        tmp_path, monkeypatch, capsys, budget, counters, expected, done, semantic_busy, selection_reason):
     import extract_llm
     import ledger
     import mcs_util
@@ -210,9 +215,12 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
     assert seen == ["extract", "extract" if semantic_busy else "semantic"]
     passes = [json.loads(line) for line in capsys.readouterr().out.splitlines()
               if json.loads(line).get('event') == 'cloud_backlog_pass']
-    assert 'reason' not in passes[0]
-    assert passes[1].get('reason') == ('jev_backlog_budget_reserved' if budget is True and not semantic_busy else None)
-    assert passes[1].get('jev_effect') == ('skipped_if_eligible' if budget is True and not semantic_busy else None)
+    assert passes[0].get('reason') == selection_reason
+    budget_held = selection_reason is None and budget is True and not semantic_busy
+    assert passes[1].get('reason') == (selection_reason or ('jev_backlog_budget_reserved' if budget_held else None))
+    assert passes[1].get('jev_effect') == ('skipped_if_eligible' if budget_held else None)
+    assert [item.get('cloud_selection_incomplete') for item in passes] == (
+        [True, True] if selection_reason is not None else [None, None])
     keys = {'selected', 'deferred', 'context_blocked', 'skipped', 'lock_lost', 'slow_deferred'}
     assert [item['done'] for item in passes] == [done, done]
     assert [{key: item[key] for key in keys if key in item} for item in passes] == [expected, expected]

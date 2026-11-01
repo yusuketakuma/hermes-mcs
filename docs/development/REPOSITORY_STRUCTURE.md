@@ -34,14 +34,32 @@
 | `mcs/signals/` | 原文と抽出に基づく候補評価・根拠 | 候補artifact/通知状態の更新を持つ。表示や単なる未記録と臨床判断を混同しない |
 | `mcs/export/` | C1 schema・レコード選択、`export_contract`の承認/envelope/receipt検証、`export_delivery`のjournal/配送/撤回/health | 純粋な検証と専用保存先への配送を区別。`ext_contract`は操作CLI・参照受信入口に限定。viewは呼出元の同一snapshotを借用し、搬出処理のために再openしない |
 | `mcs/ops/` | 設定対話・診断・導入・更新・backup/restore・repair・CLI | `setup_wizard`は対話、`lifecycle_io`は秘密値/安全I/O、`runtime_inspection`は読取観測、`service_contract`は管理対象・実行環境選択・cron計画、`service_management`は実際の照合・適用・管理記録、`update_policy`は判断、`update_journal`は更新記録。`owned_process`は所有する子プロセスの停止/回収、`update_discovery`は期限付きGit実行と版探索、`update_launch`はwrapper起動を所有 |
-| `mcs/ops/environment_diagnostics.py` | 接続・認証・プロセス源泉の診断 | 有限のpath/実行環境を受け、既存の期限付き観測を実行する。setupは対話・結果表示、updaterはbaseline比較を所有。旧setup診断入口は旧updater互換だけに残す |
-| `mcs/ops/backup_evidence.py`・`restore_evidence` | backup記録/inventory/復元準備と、損失report/一致する人承認receipt | 専用read-only接続の終了と、終了後のhash/atomic公開を所有。暗号化・操作を囲むロックはbackup統括、hold・journal・DB置換はupdaterが引き続き所有 |
+| `mcs/ops/diagnostics/environment_diagnostics.py` | 接続・認証・プロセス源泉の診断 | 有限のpath/実行環境を受け、既存の期限付き観測を実行する。setupは対話・結果表示、updaterはbaseline比較を所有。旧setup診断入口は旧updater互換だけに残す |
+| `mcs/ops/backup/backup_evidence.py`・`restore_evidence` | backup記録/inventory/復元準備と、損失report/一致する人承認receipt | 専用read-only接続の終了と、終了後のhash/atomic公開を所有。暗号化・操作を囲むロックはbackup統括、hold・journal・DB置換はupdaterが引き続き所有 |
 | `adapters/common/` | 接続先共通の認可・患者scope・command/preview/confirm・配送worker | workerがscope lock/claim/再試行、registryが永続slot記録、journalが配送事実を所有 |
 | `adapters/common/forms.py`・`card_controls.py` | フォーム定義と入力値検証、カード操作の分類とスタンプ表示名 | runnerが発行した選択肢・tokenを借用する純粋処理。フォームの保管・期限は各actions/registry、最終認可・適用はrunnerが所有 |
 | `adapters/slack/presentation.py` | 本文・スレッド・患者情報のBlock Kit描画、表示上限と文字/リンクの安全な変換 | SDK・通信・保存を持たない。`cards.py`がspec検証と操作部品の組立て、`actions.py`が本人向け回答、`delivery.py`が配送を所有 |
 | `adapters/{slack,discord,lineworks}/` | 接続先固有のUI・SDK・送信/受信 | 承認と共通scope検証を通し、SDKの許可ファイルと遅延importを維持 |
 | `hermes_plugin/` | plugin登録・遅延bootstrap・host設定/identity変換・worker接続 | import時点ではadapterを読込まず、正しいcheckoutを解決して接続 |
 | `mcs_standalone/` | 独立host・service・Runtime・ネイティブ接続 | Runtimeが子プロセス/slot/停止/回収を所有。共通設定はsetup CLIへ依存しない |
+
+## 運用コードと開発資産の配置
+
+`mcs/ops/`直下は公開CLI、旧版の更新ツールが起動する入口、固定パスや隣接ファイルの契約を持つものを保持します。内部ヘルパーは用途ごとに置き、従来のflat import名を維持します。
+
+| 配置 | まとめる処理 |
+|---|---|
+| `mcs/ops/setup/` | 設定対話、APIキー入力、設定の保存・退避、安全な導入時I/O |
+| `mcs/ops/update/` | 更新方針、版の探索、起動、移行、journalと移行receipt |
+| `mcs/ops/backup/` | バックアップ設定、記録の照合、復元準備と人承認の証明 |
+| `mcs/ops/diagnostics/` | 添付・クラウド・環境・実行状態の読取り診断 |
+| `mcs/ops/commands/` | 操作・依頼・失敗ジョブのCLIと共通契約 |
+| `mcs/ops/services/` | 常駐処理の構成と照合・適用 |
+| `mcs/medications/drug_info.py` | 公開医薬品情報の照会 |
+
+`settings_migration_reconcile.py`は旧ランチャーの固定入口として直下に残します。`status_fields.json`は固定CLIとの隣接読取りを維持します。CSDC専用コードの配置は専任担当の所有範囲を保ちます。
+
+SDKチェックは`scripts/development/`、オフライン評価の実行コードは`scripts/evaluation/`へまとめます。評価入力・基準・manifestは`evaluation/`に保持し、内容とハッシュを変えません。説明図のHTML原稿とSVGは`docs/assets/diagrams/`にそろえます。履歴記録と過去版のfixtureは、当時のパスを保持します。
 
 ## 主要な依存方向
 

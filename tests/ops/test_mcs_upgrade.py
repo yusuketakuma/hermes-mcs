@@ -31,6 +31,7 @@ import mcs_requests
 import update_policy
 
 updater = test_mcs_update.updater   # shared fixture
+prepared_run_log = test_mcs_update.prepared_run_log
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -74,9 +75,9 @@ def test_reconciliation_launcher_runs_verified_target_helper_without_fetch(
 def test_reconciliation_launcher_extracts_the_real_helper_and_dependencies(tmp_path, monkeypatch, capfd):
     repo, bare = _make_repo(tmp_path)
     files = ('mcs/_mcs_path.py', 'mcs/core/safe_io.py', 'mcs/core/mcs_util.py',
-             'mcs/core/install_options_contract.py', 'mcs/ops/config_edit.py',
-             'mcs/ops/install_options.py', 'mcs/ops/settings_migration_receipt.py',
-             'mcs/ops/settings_migration_reconcile.py', 'mcs/ops/update_journal.py',
+             'mcs/core/install_options_contract.py', 'mcs/ops/setup/config_edit.py',
+             'mcs/ops/install_options.py', 'mcs/ops/update/settings_migration_receipt.py',
+             'mcs/ops/settings_migration_reconcile.py', 'mcs/ops/update/update_journal.py',
              'mcs/ops/release_apply_owner.py')
     _release(tmp_path / 'remote-work', bare, 'v1.2.0', {name: (ROOT / name).read_text() for name in files})
     _git(repo, 'fetch', '-q', '--tags')
@@ -594,7 +595,7 @@ def _fake_install(monkeypatch, rc=0):
     return calls
 
 
-def test_reinstall_runs_install_before_services(updater, monkeypatch, tmp_path):
+def test_reinstall_runs_install_before_services(updater, prepared_run_log, monkeypatch, tmp_path):
     repo, sha = _install_tag(updater, monkeypatch, tmp_path)
     Path(mcs_util.CONF_PATH).write_text('{"install_args": ["--no-brew"]}')
     assert updater._install_options_snapshot()[1] == ["--no-brew"]
@@ -611,7 +612,7 @@ def test_reinstall_runs_install_before_services(updater, monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize('reinstall', [False, True])
-def test_update_runs_same_root_settings_migration_before_merge_once(updater, monkeypatch, tmp_path, reinstall):
+def test_update_runs_same_root_settings_migration_before_merge_once(updater, prepared_run_log, monkeypatch, tmp_path, reinstall):
     repo = _apply_env(updater, monkeypatch, precheck_errors=['install_sh_changed'] if reinstall else [])
     sha = _release(tmp_path / 'remote-work', tmp_path / 'remote.git', 'v1.2.0', {'f.txt': 'new synthetic release'})
     monkeypatch.setattr(update_discovery, 'remote_tag_sha', lambda *_a, **_k: sha)
@@ -794,7 +795,7 @@ def test_data_replacement_after_config_publication_keeps_root_receipt(updater, m
     assert updater.apply('v1.2.0', sha, None) == 2
 
 
-def test_update_rollback_keeps_legacy_record_and_migrated_settings(updater, monkeypatch, tmp_path):
+def test_update_rollback_keeps_legacy_record_and_migrated_settings(updater, prepared_run_log, monkeypatch, tmp_path):
     repo = _apply_env(updater, monkeypatch)
     old_head = _git(repo, 'rev-parse', 'HEAD').stdout.strip()
     sha = _release(tmp_path / 'remote-work', tmp_path / 'remote.git', 'v1.2.0', {'f.txt': 'new synthetic release'})

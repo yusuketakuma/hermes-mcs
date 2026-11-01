@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from decimal import Decimal, InvalidOperation
+import hashlib
+from itertools import chain
 import json
 import math
 import re
@@ -16,7 +18,7 @@ from functools import lru_cache
 from anthropic_client import AnthropicError, MODEL, MAX_TOKENS, validate_usage
 import openai_client
 from llm_retry import http_error
-from mcs_util import private_env_value, payload_hash, strict_json, until_epoch
+from mcs_util import canonical, private_env_value, payload_hash, strict_json, until_epoch
 
 PRICE_VERSION = "anthropic-haiku-5-5-2026-10-26"
 PRICE_CHECKED_ON = "2026-10-26"
@@ -973,9 +975,8 @@ def global_block_reason(ledger, *, model=MODEL):
 
 class _Tally:
     """usage_report's month totals kept incrementally for the reservation gate:
-    every usage row is decoded once per process instead of once per reservation
-    (the gate runs under the write lock). Rows are append-only within a month;
-    an unreadable row stops the gate and is read again next time."""
+    unchanged rows are hashed without decoding their metadata again; changed
+    history rebuilds the tally, and unreadable history stops the gate."""
 
     def __init__(self, month, connection):
         self.month = month
@@ -986,6 +987,8 @@ class _Tally:
         self.open = {}       # rid -> (meta, maximum, day): reserved, no result yet
         self.closed = {}     # rid -> (maximum, cost, settled, day): one result seen
         self.orphans = {}    # rid -> (prior-month reservation rows, results)
+        self.checked_at = None
+        self.history_valid_until = math.inf
         self.days = {}       # day -> [requests, cost]
         self.provider_days = {}
         self.provider_totals = {}
@@ -998,13 +1001,21 @@ class _Tally:
         self.provider_days[(model, day)] = self.provider_days.get((model, day), Decimal(0)) + cost
         self.provider_totals[model] = self.provider_totals.get(model, Decimal(0)) + cost
 
-    def fingerprint(self, ledger):
-        """Cheap check that the tallied rows are still there unchanged (the
-        runtime only appends; a same-length in-place edit is not detected)."""
-        return tuple(ledger.db.execute(
-            "SELECT count(*), total(length(meta)), total(created_at) FROM artifacts "
+    def fingerprint(self, ledger, now):
+        """Hash all accounting columns, including reservations outside the period."""
+        digest = hashlib.sha256()
+        with closing(ledger.db.execute(
+            "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
             "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
-            "AND artifact_id<=?", (self.month, self.last_id)).fetchone())
+            "AND artifact_id<=? ORDER BY artifact_id", (self.month, self.last_id))) as rows:
+            prior = _matching_rows_many(ledger, KINDS[0], self.orphans, now=now)
+            try:
+                for row in chain(rows, sorted(prior, key=lambda row: row['artifact_id'])):
+                    digest.update(canonical(tuple(row)))
+                    digest.update(b'\n')
+            except (TypeError, ValueError, UnicodeError):
+                raise AnthropicError('pricing_unverified', 'usage_invalid') from None
+        return digest.digest()
 
     def update(self, ledger, now):
         rows = ledger.db.execute(
@@ -1044,6 +1055,8 @@ class _Tally:
                 if entry is None:
                     prior = [(_loads(r["meta"]), r) for r in _matching_rows_many(ledger, KINDS[0], [rid], now=now)]
                     entry = self.orphans[rid] = (prior, [])
+                    for _, reserved in prior:
+                        self.history_valid_until = min(self.history_valid_until, reserved['created_at'] + 62 * 86400)
                 entry[1].append((m, row))
                 try:
                     if len(entry[0]) != 1:
@@ -1052,7 +1065,8 @@ class _Tally:
                 except (AnthropicError, ValueError, InvalidOperation, TypeError):
                     self.invalid = True
             self.last_id = row["artifact_id"]
-        self.prefix = self.fingerprint(ledger)
+        self.prefix = self.fingerprint(ledger, now)
+        self.checked_at = now
 
 
 def _tally_precheck(db, start):
@@ -1065,15 +1079,28 @@ def _current_tally(ledger, start, attribute, now):
     tally = getattr(ledger, attribute, None)
     before = _tally_precheck(ledger.db, start)
     previous = tally.precheck if tally is not None else None
-    if before is not None and before == previous and not tally.invalid:
+    if (before is not None and before == previous and not tally.invalid
+            and (not tally.orphans or tally.checked_at <= now <= tally.history_valid_until)):
         return tally
     if tally is not None:
         tally.precheck = None
-    if (tally is None or tally.connection is not ledger.db or tally.month != start or tally.invalid
-            or (tally.prefix is not None and tally.prefix != tally.fingerprint(ledger))):
-        tally = _Tally(start, ledger.db)
-        setattr(ledger, attribute, tally)
-    tally.update(ledger, now)
+    # Leave a row pending to retain one read snapshot without taking ownership
+    # of the caller's transaction or its cancellation/progress handler.
+    anchor = ledger.db.execute("SELECT artifact_id FROM (SELECT artifact_id FROM artifacts "
+        "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') LIMIT 1) "
+        "UNION ALL SELECT NULL UNION ALL SELECT NULL")
+    try:
+        anchor.fetchone()
+        if (tally is None or tally.connection is not ledger.db or tally.month != start or tally.invalid
+                or (tally.prefix is not None and tally.prefix != tally.fingerprint(ledger, now))):
+            tally = _Tally(start, ledger.db)
+            setattr(ledger, attribute, tally)
+        tally.update(ledger, now)
+    except BaseException:
+        setattr(ledger, attribute, None)
+        raise
+    finally:
+        anchor.close()
     if before is not None:
         if before == _tally_precheck(ledger.db, start) and not tally.invalid:
             tally.precheck = before

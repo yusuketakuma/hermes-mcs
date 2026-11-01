@@ -11,7 +11,7 @@ from inference_version import CURRENT_VERSION, VERSION_KEY
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
-    "canonical_request_eval", ROOT / "evaluation" / "canonical_request_eval.py")
+    "canonical_request_eval", ROOT / "scripts" / "evaluation" / "canonical_request_eval.py")
 assert SPEC is not None and SPEC.loader is not None
 support = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(support)

@@ -4,7 +4,7 @@
     "previous_release": "v1.0.29 1feb9fd121272f9a8a59397ebc36cbfb4676ac48",
     "candidate_base": "42364dc790deebb88fdcfe3b8fbbb3e894cc76ac"
   },
-  "fragment_count": 385,
+  "fragment_count": 390,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.0 details; every original record linked without rewriting",
   "records": [
@@ -2317,6 +2317,36 @@
       "id": "install-update-guidance-20261030",
       "title": "導入・更新の案内を現行の設定と保護条件に合わせる",
       "sha256": "f86981f8e26c2cf6bf8870a7af56e4d6b13a7ec1c00a1a884d59e0d6caf61cfe"
+    },
+    {
+      "path": "changes/archive/1.1.0/repository-layout-organization-20261030.json",
+      "id": "repository-layout-organization-20261030",
+      "title": "機能別の配置へ整理し、入口と保存データを保持",
+      "sha256": "040db12c4d7c68a995a122b1d89de8026ccab92ec40eaf8cd535fbba3dfba734"
+    },
+    {
+      "path": "changes/archive/1.1.0/baseline-lifecycle-recovery-20261031.json",
+      "id": "baseline-lifecycle-recovery-20261031",
+      "title": "移行中の復旧記録と復元承認待ちの状態を保護",
+      "sha256": "3578e132ec20c4ab1f4fd2cf11a3de2bdf7ecd80b44b1faa9d9a8d50954436fc"
+    },
+    {
+      "path": "changes/archive/1.1.0/baseline-empty-readiness-calendar-20261031.json",
+      "id": "baseline-empty-readiness-calendar-20261031",
+      "title": "取得済みの空投稿と日付の扱いを修正",
+      "sha256": "4334e26df1b8e19bd06850a7f6767227cd0b209145d51a8db8b9f166b791d2a5"
+    },
+    {
+      "path": "changes/archive/1.1.0/baseline-semantic-notify-20261031.json",
+      "id": "baseline-semantic-notify-20261031",
+      "title": "無効なクラウドの鍵探索と旧通知形式の変更を防止",
+      "sha256": "ea2a6171b6ee243161c5239c0e3f923739443f2cfe3002964ab2374a9659ac27"
+    },
+    {
+      "path": "changes/archive/1.1.0/cloud-extraction-claim-progress-20261031.json",
+      "id": "cloud-extraction-claim-progress-20261031",
+      "title": "クラウド抽出の重複準備と待機による停滞を改善",
+      "sha256": "39c0b6645e9fa7e74a92b008bf026be88b0b339bd13284c512a88556a0ab2d5a"
     }
   ]
 }

@@ -219,7 +219,13 @@ def worker(parent):
                 record.update({key: result[key] for key in
                     ("selected", "deferred", "context_blocked", "skipped", "lock_lost", "slow_deferred")
                     if type(result.get(key)) is int and result[key] >= 0})
-                if phase % 2 and result.get("budget_exhausted") is True:
+                if result.get("cloud_selection_incomplete") is True:
+                    record["cloud_selection_incomplete"] = True
+                    reason = result.get("cloud_selection_reason")
+                    record["reason"] = ("cloud_selection_" + reason if reason in (
+                        "deadline", "active_transaction", "reader_unavailable", "reader_changed", "reader_close_failed")
+                        else "cloud_selection_incomplete")
+                elif phase % 2 and result.get("budget_exhausted") is True:
                     record["reason"] = "jev_backlog_budget_reserved"
                     record["jev_effect"] = "skipped_if_eligible"
                 print(json.dumps(record), flush=True)

@@ -1712,7 +1712,7 @@ def _process_job_inner(ledger, scfg, job, jev_client, llm_fn, deadline,
                         incomplete = True
                         break
                     raise
-                if summary2 is not None:
+                if summary2 is not None and summary2.get("_input_oversize") is not True:
                     summary = summary2
                     producer = repair_producer
                     if empty_repair and isinstance(summary.get('claims'), list) and summary['claims']:

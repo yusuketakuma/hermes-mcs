@@ -1307,8 +1307,8 @@ def test_services_skips_loaded_agents_and_existing_cron(
                        "script": sc}
                       for i, (n, s, sc) in enumerate(scheduled_jobs.CRON_JOBS)])
     # pre-render identical plists so 'loaded + unchanged' is exercised
-    subs = {"PYTHON": mcs_setup.HERMES_PY, "REPO": mcs_setup.REPO_ROOT,
-            "DATA": str(tmp_path / "data")}
+    subs = service_management.service_substitutions(
+        mcs_util.load_config(), paths=mcs_setup._service_paths())
     (tmp_path / "agents").mkdir(parents=True)
     for label in service_contract.AGENT_LABELS:
         body = scheduled_jobs.render_template(
@@ -1337,6 +1337,10 @@ def test_service_templates_preserve_literal_paths(monkeypatch, tmp_path):
     unusual = str(tmp_path / "space & <tag> $(touch SHOULD_NOT_EXIST) 'quote'")
     monkeypatch.setattr(mcs_setup, "HERMES_PY", unusual + "/python")
     monkeypatch.setattr(mcs_setup, "HOME", unusual)
+    import run_log_install
+    Path(unusual, "data").mkdir(mode=0o700, parents=True)
+    run_log_install.prepare(unusual, mcs_setup.REPO_ROOT, mcs_setup.RECOVERY_DIR,
+                            promote=True)
     assert mcs_setup.cmd_services(args) == 0
     script = (tmp_path / "scripts" / "mcs_health.sh").read_text()
     # Replace just the final invocation with a literal-value print; no service runs.

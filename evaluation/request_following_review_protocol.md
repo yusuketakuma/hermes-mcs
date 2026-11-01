@@ -8,9 +8,9 @@ proposalsファイルです。提案は正解でも本人確認済みラベル�
 ## 固定集合と操作
 
 ```sh
-python3 evaluation/request_following_review.py validate
-python3 evaluation/request_following_review.py export
-python3 evaluation/request_following_review.py export-proposals
+python3 scripts/evaluation/request_following_review.py validate
+python3 scripts/evaluation/request_following_review.py export
+python3 scripts/evaluation/request_following_review.py export-proposals
 ```
 
 validateは件数・独立した原文・focus coverage・完全一致引用・pending状態とmanifestの

@@ -40,9 +40,15 @@ def test_runtime_stream_failure_preserves_the_failure_and_closes_fd(
         else:
             host.start("extract-0", "background", 1)
 
+    def unavailable_helper(*_args, **_kwargs):
+        raise failure
+
     try:
         with monkeypatch.context() as patch:
-            patch.setattr(safe_io.os, "fdopen", refuse)
+            if operation == "child_log":
+                patch.setattr(runtime, "helper_path", unavailable_helper)
+            else:
+                patch.setattr(safe_io.os, "fdopen", refuse)
             if operation == "child_log" and fault is OSError:
                 invoke()
                 assert host.restarting
@@ -50,10 +56,13 @@ def test_runtime_stream_failure_preserves_the_failure_and_closes_fd(
                 with pytest.raises(fault) as caught:
                     invoke()
                 assert caught.value is failure
-        assert len(opened) == 1
-        with pytest.raises(OSError) as caught:
-            os.fstat(opened[0])
-        assert caught.value.errno == errno.EBADF
+        if operation == "child_log":
+            assert opened == []  # Runtime delegates log streams to the verified helper.
+        else:
+            assert len(opened) == 1
+            with pytest.raises(OSError) as caught:
+                os.fstat(opened[0])
+            assert caught.value.errno == errno.EBADF
         assert host.children == {}
         assert source.read_text() == '{"v":1}'
     finally:

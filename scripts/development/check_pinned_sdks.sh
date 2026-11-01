@@ -1,7 +1,7 @@
 #!/bin/sh
 # Exact SDK lanes. Prepare isolated pinned dependencies offline first.
 set -eu
-repo=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
+repo=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd -P)
 : "${MCS_TEST_PYTHON:?select an isolated pinned SDK interpreter}"
 case "${1:-}" in
     standalone)
@@ -25,7 +25,7 @@ case "${1:-}" in
             -o addopts= -q -s -r fEs
         ;;
     *)
-        printf '%s\n' 'Usage: sh scripts/check_pinned_sdks.sh standalone|hermes' >&2
+        printf '%s\n' 'Usage: sh scripts/development/check_pinned_sdks.sh standalone|hermes' >&2
         exit 2
         ;;
 esac

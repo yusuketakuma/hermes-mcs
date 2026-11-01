@@ -13,7 +13,7 @@ cmd/cmd_int取込、抽出worker2本と接続を所有する。Hermes cronや個
 
 下表がジョブ一覧の唯一の表（`docs/guides/INSTALLATION.md` §6 はここを参照する）。
 正本はコード — hermes cronは `mcs/core/scheduled_jobs.py` の `CRON_JOBS`、
-services所有のlaunchdは `mcs/ops/service_contract.py` の `AGENT_LABELS`。変更時は両方を合わせる。
+services所有のlaunchdは `mcs/ops/services/service_contract.py` の `AGENT_LABELS`。変更時は両方を合わせる。
 
 | ジョブ | スケジュール | 実行系 |
 |---|---|---|

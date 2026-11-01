@@ -1,4 +1,5 @@
 """認証設定の選択と保存先の振り分けを合成環境で確かめる。"""
+from pathlib import Path
 from types import SimpleNamespace
 
 import credential_setup_menu as menu
@@ -18,6 +19,7 @@ def test_standalone_routes_each_selection_to_its_own_entry(monkeypatch, tmp_path
     assert seen[1][0][-2:] == ["--transport", "slack"]
     assert seen[2][0][-2:] == ["--transport", "discord"]
     assert all(str(tmp_path) in row[0] for row in seen[1:])
+    assert all(row[1]["cwd"] == Path(__file__).resolve().parents[2] for row in seen[1:])
 
 
 def test_hermes_uses_explicit_profile_and_reports_failure(monkeypatch, tmp_path):
