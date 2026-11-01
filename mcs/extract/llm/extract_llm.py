@@ -560,6 +560,8 @@ _CHUNK_SIZE = 3000
 # Extraction and checkpoint resume retain their existing contracts.
 _PROGRESS_MAX_NODES = 16384
 _INTERNAL_REPAIR_PROOF = "__mcs_internal_proof_v1"
+# Legal terminal quality records; pending/started are resumption markers, never final.
+_QUALITY_TERMINAL = ("hint_gaps_resolved", "unresolved", "dispatch_unknown", "skipped_budget")
 
 
 def _opener_request(endpoint: str, method: str, body, timeout: float,
@@ -3594,7 +3596,7 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
             if meta.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT and meta.get("quality_status") in ("pending", "started"):
                 validated["_quality_status"] = meta["quality_status"]
             elif meta.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT and meta.get("quality_status") in (
-                    "hint_gaps_resolved", "unresolved", "dispatch_unknown", "skipped_budget"):
+                    _QUALITY_TERMINAL):
                 validated["_quality_result"] = {"state": meta["quality_status"],
                                                 "remaining_hint_candidates": meta.get("quality_remaining")}
             saved[key] = validated
@@ -3785,11 +3787,27 @@ def _verify_inline_extract_proof(db, r, context, document, proof):
                 required.update((started_id, origin_id))
             if key in saved:
                 value = saved[key]
-                if (_leaf_evidence(value) is None or "_quality_status" in value
-                        or isinstance(value.get("_quality_result"), dict)
-                        and value["_quality_result"].get("state") != "hint_gaps_resolved"):
+                if _leaf_evidence(value) is None or "_quality_status" in value:
                     return False
-                leaves.append({k: v for k, v in value.items() if k not in ("_quality_result", "_provider_leaf")})
+                leaf = {k: v for k, v in value.items() if k not in ("_quality_result", "_provider_leaf")}
+                record = value.get("_quality_result")
+                marked = _provider_strict_dict(selected["meta"])
+                if record is not None or (isinstance(marked, dict)
+                        and marked.get("quality_pass") == extract_quality._QUALITY_CHECKPOINT):
+                    # Completeness is a content claim, separate from evidence
+                    # validity: a legal terminal record stays final, but state
+                    # and remaining must reproduce from the actual piece.
+                    state = record.get("state") if isinstance(record, dict) else None
+                    expected = _hint_coverage(
+                        leaf, _rule_hints({"body_text": piece, "posted_at": r.get("posted_at")}), piece)
+                    if (state not in _QUALITY_TERMINAL
+                            or set(record) != {"state", "remaining_hint_candidates"}
+                            or type(record.get("remaining_hint_candidates")) is not int
+                            or record["remaining_hint_candidates"] != expected["remaining_hint_candidates"]
+                            or (state == "hint_gaps_resolved") != (expected["state"] == "hint_gaps_resolved")
+                            or (expected["state"] == "dispatch_unknown") != (state == "dispatch_unknown")):
+                        return False
+                leaves.append(leaf)
             elif key in splits:
                 parts = plan_chunks(piece, splits[key])
                 if len(parts) < 2 or "".join(parts) != piece:
