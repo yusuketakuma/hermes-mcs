@@ -166,7 +166,7 @@ def test_thinking_only_length_holds_summary_without_format_repair_or_paid_resend
         prompt = calls[0]["messages"][0]["content"]
         # the same paid logical request stays fenced: the refusal is a definite
         # not-sent that defers the unit instead of failing or falling back
-        with pytest.raises(transport.runtime.LLMNotSent, match='cloud_not_sent'):
+        with pytest.raises(transport.runtime.LLMNotSent, match='cloud_unit_unresolved'):
             chat(prompt)
     reserves, results = rows(led, "cloud_usage_reserve"), rows(led, "cloud_usage_result")
     assert len(calls) == len(reserves) == len(results) == 1
@@ -1050,7 +1050,7 @@ def test_resident_history_turn_selects_cloud_batch_without_expanding_realtime(mo
     monkeypatch.setattr(extract_llm, "load_config", lambda: cfg)
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(extract_llm, "_open_current_ledger",
-                        lambda: type("DB", (), {"close": lambda s: None})())
+                        lambda **kwargs: type("DB", (), {"close": lambda s: None})())
     monkeypatch.setattr(extract_llm, "_writer_current", lambda **kw: True)
     monkeypatch.setattr(extract_llm.writer_lock, "updater_state", lambda: (False, 1))
     monkeypatch.setattr(extract_llm.cloud_backlog.CloudBacklogPool, "sync", lambda *a, **kw: None)
@@ -1427,3 +1427,17 @@ def test_model_timing_counts_nested_local_fallback_once(cloud, monkeypatch, rout
     assert calls == [("local" if route != "cloud" else "cloud", "first", 10),
                      ("local" if route != "cloud" else "cloud", "second", 10)]
     assert acc["s"] == (11.0 if route == "local" else 15.0)
+
+
+@pytest.mark.parametrize('reason,expected', [('cloud_unit_unresolved', 'cloud_unit_unresolved'),
+                                             ('synthetic-private-reason', 'unclassified')])
+def test_semantic_defer_counts_are_fixed_and_do_not_expose_unknown_reason(cloud, monkeypatch, reason, expected):
+    led, cfg, _, calls = cloud
+    def process(*args, **kwargs):
+        kwargs['diagnostics']['not_sent'] = reason
+        return 'deferred'
+    monkeypatch.setattr(semantic_drain, '_process_job', process)
+    out = semantic_drain.run_due(led, cfg, {'errors': []}, time.monotonic() + 1200,
+                                lane='backlog', max_jobs=1, cloud_only=True)
+    assert out['deferred'] == 1 and out['defer_reasons'] == {expected: 1}
+    assert not calls and not rows(led, 'cloud_usage_reserve')

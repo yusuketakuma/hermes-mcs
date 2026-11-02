@@ -183,6 +183,9 @@ _DEFER_REASONS = {"deadline", "probe_unobserved", "admission", "endpoint_down",
                   "commit_rejected", "prior_unavailable", "worker_error", "write_unavailable",
                   "update_fence", "lease_renewal_failed", "checkpoint_unverified",
                   "repair_unavailable", "unclassified",
+                  "cloud_unit_unresolved", "cloud_owner_transaction", "cloud_deadline",
+                  "cloud_budget_blocked", "cloud_pricing_unverified",
+                  "cloud_not_sent", "cloud_scope_or_budget", "llm_turn_busy", "budget_short",
                   "other"}
 
 
@@ -204,6 +207,8 @@ def worker(parent):
     print(json.dumps({"event": "cloud_worker_started", "pid": os.getpid(), "parent": parent,
                       "source_digests": extract_llm._LOADED_SOURCE_DIGESTS}), flush=True)
     while os.getppid() == parent and writer_lock.updater_state() == initial and not initial[0]:
+        if not extract_llm._context_memory_available():
+            return
         startup_lock = acquire_run_lock()
         if startup_lock is not None:
             break

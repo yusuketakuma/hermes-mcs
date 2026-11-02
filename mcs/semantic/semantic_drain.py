@@ -5261,6 +5261,13 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                     meta={"jev_requests": used})
             if status is None:
                 continue
+            if status in ("deferred", "deferred_short", "deferred_backoff", "retry", "stale"):
+                import cloud_backlog
+                reason = diagnostics.get("not_sent") or diagnostics.get("code")
+                if reason not in cloud_backlog._DEFER_REASONS:
+                    reason = "unclassified"
+                counts = out.setdefault("defer_reasons", {})
+                counts[reason] = counts.get(reason, 0) + 1
             if _apply_job_status(ledger, token, limit, status,
                                  budget_short, out):
                 break

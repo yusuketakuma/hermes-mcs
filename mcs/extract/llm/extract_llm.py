@@ -5876,8 +5876,8 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     if result is None:
                         raise cloud_inference.CloudFallback("cloud_validation_failed")
                     return result
-            except cloud_client.CloudNotSent:
-                _CALL_NOTES.defer_reason = "not_sent"
+            except cloud_client.CloudNotSent as error:
+                _CALL_NOTES.defer_reason = cloud_client.not_sent_reason(error)
                 return _DEFERRED
             except cloud_inference.CloudBusy:
                 _CALL_NOTES.defer_reason = "busy"
@@ -6025,6 +6025,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
             if d is _DEFERRED:
                 deferred += 1
                 _defer_note(r.get("_defer_reason") or "other")
+                # Keep the existing finite claim for an unresolved paid unit;
+                # repeated refusals must not monopolize a single-job cloud pass.
+                if cloud_only and r.get("_defer_reason") == "cloud_unit_unresolved":
+                    keep_lease = True
+                    keep_claims.add(id(r))
                 if r.get("_cloud_failed"):
                     cloud_retry()
                 # answered then deferred (no time left to repair) is still
