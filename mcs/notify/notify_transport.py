@@ -468,7 +468,6 @@ def apply_transport_receipt(ledger, req, cfg, now=None) -> dict:
                            "attempt_state": result}
                 if render["card_id"] is not None:
                     cards.issue_render(db, render["card_id"], cfg, now, specs)
-        cards.mark_snapshot_dirty(db)
     notify_spool.publish_committed(ledger, db, specs, now)
     return receipt
 

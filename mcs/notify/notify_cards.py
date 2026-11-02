@@ -334,7 +334,8 @@ def _stamp_target(db, card, content):
 
 
 def _action_rows(db, card, content, now, context=None,
-                 in_thread_body=False, reserve=0, cfg=None, mint=True):
+                 in_thread_body=False, reserve=0, cfg=None, mint=True,
+                 _read_choices=None):
     """Button rows for a render; every button carries a fresh token.
     Buttons whose modal flow cannot pin a source (no context) are not
     emitted — a button that can never succeed is worse than none."""
@@ -414,10 +415,15 @@ def _action_rows(db, card, content, now, context=None,
     # row 2b — 💊 medication check / dictionary search (read-only views)
     if positive(pid) and (in_thread_body
                           or not presenter(card["transport"]).DRUG_ROW_NEEDS_THREAD):
-        meds_mid = action_context.meds_message(db, card, context)
+        choices = {} if _read_choices is None else _read_choices
+        if "meds_mid" not in choices:
+            choices["meds_mid"] = action_context.meds_message(db, card, context)
+        if "drug_search" not in choices:
+            choices["drug_search"] = drug_search_available(db)
+        meds_mid = choices["meds_mid"]
         if meds_mid is not None:
             btn("meds", {"message_id": meds_mid})
-        if drug_search_available(db):
+        if choices["drug_search"]:
             btn("drugsearch")
     flush()
     # row 3 — paging
@@ -684,10 +690,11 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     # Discord answers a card-face click in the channel, so where the
     # thread body carries the 💊 buttons (THREAD_DRUG_ACTIONS) the card
     # face gets none — drug details stay inside the thread (owner rule)
+    read_choices = {}  # one render shares reads; every action still mints its own token
     post_mids = (_post_action_targets(db, card, content, sum(
                      len(r) + 1 for r in _action_rows(
                          db, card, content, now, context, in_thread_body=in_thread_body,
-                         cfg=cfg, mint=False)))
+                         cfg=cfg, mint=False, _read_choices=read_choices)))
                  if present.POST_ACTIONS and card["kind"] == "thread"
                  and card["delivery_state"] != "revoked"
                  and (in_thread_body or not present.DRUG_ROW_NEEDS_THREAD)
@@ -697,7 +704,8 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
         "containers": containers,
         "action_rows": _action_rows(db, card, content, now, context,
                                     in_thread_body=in_thread_body,
-                                    reserve=2 * len(post_mids), cfg=cfg),
+                                    reserve=2 * len(post_mids), cfg=cfg,
+                                    _read_choices=read_choices),
         "footer": footer
                   + [{"type": "meta", "correlation": correlation}],
         "manifest_id": content["manifest_id"],

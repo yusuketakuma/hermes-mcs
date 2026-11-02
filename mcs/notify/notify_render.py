@@ -65,7 +65,7 @@ def preview_line(header, summary, limit=600):
     return f"{patient}: {summary} / {source}"
 
 
-def notification_preview(db, card, content, *, limit=600) -> str:
+def notification_preview(db, card, content, *, limit=600, _urgencies=None) -> str:
     """表示対象の患者・発信者・所属・時刻・内容を通知プレビュー向けに短く示す。"""
     if card["kind"] == "thread":
         rows = []                                   # newest first
@@ -81,7 +81,7 @@ def notification_preview(db, card, content, *, limit=600) -> str:
         if not rows:
             patient = patient_label(db, card["project_id"])
             return f"{patient}: 投稿本文を確認できません。"
-        urgencies = {}      # one verdict per post for this preview
+        urgencies = dict(_urgencies or {})  # this preview owns its bounded read cache
 
         def urgency_of(m):
             if m not in urgencies:
@@ -945,6 +945,7 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
         return notify_history.content(db, card)
     ui = card["ui_state"]
     progress_by_mid = None
+    preview_urgencies = {}
     urgent = False
     layout = card["layout"] if "layout" in card.keys() else 1
     if kind == "thread":
@@ -967,8 +968,14 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
             progress_by_mid = {m["message_id"]: progress_state(db, m["message_id"], cfg)
                                for m in msgs if m["body_state"] != "deleted"}
         first = msgs[0] if msgs else {}
-        urgency = {clinical_urgency.message_urgency(db, m["message_id"])
-                   for m in msgs if m["body_state"] != "deleted"}
+        urgency = set()
+        for m in msgs:
+            if m["body_state"] != "deleted":
+                verdict = clinical_urgency.message_urgency(db, m["message_id"])
+                urgency.add(verdict)
+                if len(preview_urgencies) == PAGE_THREAD:
+                    preview_urgencies.pop(next(iter(preview_urgencies)))
+                preview_urgencies[m["message_id"]] = verdict
         tag = next((URGENCY_PLAIN[u] for u in ("llm", "rule") if u in urgency), "")
         urgent = bool(tag)
         context = _thread_context(db, card, msgs, waiting)
@@ -1192,7 +1199,9 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
     if isinstance(cfg, dict):
         content["progress_fp"] = payload_hash([
             (mid, progress_by_mid[mid]) for mid in sorted(progress_by_mid)])
-    content["preview_text"] = notification_preview(db, card, content)
+    content["preview_text"] = notification_preview(
+        db, card, content, _urgencies={mid: preview_urgencies[mid]
+                                     for mid in shown if mid in preview_urgencies})
     return content
 
 
