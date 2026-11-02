@@ -4101,6 +4101,26 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None):
                 if (completeness != leaf_claims
                         or integrity.get("completeness_chunks") != len(leaf_claims)):
                     return out
+                # The seal keeps the meta claim honest, but the document is
+                # only bound through the recorded provider evidence: content
+                # edited under an unchanged seal cannot keep reading as the
+                # original provider result. The provenance shape mirrors
+                # _prior_provider_evidence without the provider identity —
+                # an honestly unknown provider stays readable.
+                proof = meta.get("provider_provenance")
+                if (not isinstance(proof, dict)
+                        or meta.get("source_binding") != r["_source_binding"]
+                        or type(proof.get("version")) is not int or proof["version"] != 1
+                        or proof.get("stage") != "extract"
+                        or proof.get("source_binding") != r["_source_binding"]
+                        or proof.get("result_hash") != _provider_result_hash(final["content"])
+                        or type(proof.get("complete")) is not bool
+                        or not isinstance(proof.get("providers"), list)
+                        or any(name not in ("local", "anthropic", "openai")
+                               for name in proof["providers"])
+                        or len(set(proof["providers"])) != len(proof["providers"])
+                        or (proof["complete"] and not proof["providers"])):
+                    return out
             else:
                 proof_state = None
                 if marked and isinstance(inline, dict):
