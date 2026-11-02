@@ -215,10 +215,45 @@ def format_state(reports, *, budget=STATE_MAX):
     return (text if refs else ""), refs
 
 
-def _binding(target, model, contract, attempt, enabled):
-    return _digest({"target": _source(target),
+def _binding(target, model, contract, attempt, enabled, medication_hints=None):
+    payload = {"target": _source(target),
         "source_binding": target.get("_source_binding"),
-        "model": model, "contract": contract, "attempt": attempt, "enabled": enabled})
+        "model": model, "contract": contract, "attempt": attempt, "enabled": enabled}
+    if medication_hints is not None:
+        payload["medication_hints"] = medication_hints
+    return _digest(payload)
+
+
+def _medication_hints_valid(snapshot, body):
+    if snapshot is None:
+        return False
+    try:
+        import extraction_medications
+        return extraction_medications.valid(snapshot, body) is True
+    except (ImportError, AttributeError, TypeError, ValueError, KeyError, RecursionError):
+        return False
+
+
+def _frame_payload(frame):
+    payload = {key: frame.get(key) for key in ("binding", "source", "text", "refs", "enabled")}
+    if "medication_hints" in frame:
+        payload["medication_hints"] = frame["medication_hints"]
+    return payload
+
+
+def matches_attempt(frame, target, *, model, contract, attempt, enabled):
+    """Match a frozen frame to its attempt without consulting the active dictionary."""
+    if not isinstance(frame, dict) or not isinstance(target, dict) or type(enabled) is not bool:
+        return False
+    snapshot = frame.get("medication_hints")
+    if "medication_hints" in frame and not _medication_hints_valid(snapshot, target.get("body_text")):
+        return False
+    try:
+        return (frame.get("source") == _source(target) and frame.get("enabled") is enabled
+                and frame.get("digest") == _digest(_frame_payload(frame))
+                and frame.get("binding") == _binding(target, model, contract, attempt, enabled, snapshot))
+    except (TypeError, ValueError, RecursionError):
+        return False
 
 
 def load(db, artifact_id, target):
@@ -239,7 +274,9 @@ def load(db, artifact_id, target):
     if (not isinstance(current_binding, str) or meta.get("source_binding") != current_binding
             or target.get("_source_binding", current_binding) != current_binding):
         return None
-    payload = {key: doc.get(key) for key in ("binding", "source", "text", "refs", "enabled")}
+    if "medication_hints" in doc and not _medication_hints_valid(doc["medication_hints"], target.get("body_text")):
+        return None
+    payload = _frame_payload(doc)
     if (meta.get("hash") != target["content_hash"] or not patient_context.valid_reference_hash(doc.get("binding"))
             or not isinstance(doc.get("text"), (str, type(None))) or type(doc.get("enabled")) is not bool
             or not isinstance(doc.get("refs"), dict) or doc.get("source") != _source(target)
@@ -258,7 +295,7 @@ def _source(target):
         "project_id", "message_id", "content_hash", "posted_at", "posted_at_ts", "parent_id")}
 
 
-def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, version):
+def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, version, medication_hints=None):
     """Persist the full attempt frame before inference; retries reuse it byte for byte."""
     if ledger.db.in_transaction:
         raise ValueError("context_transaction_owned")
@@ -272,7 +309,11 @@ def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, 
         raise ValueError("invalid_context_options")
     if base_context is not None and len(base_context) > TOTAL_MAX:
         raise ValueError("context_budget_exceeded")
-    binding = _binding(target, model, contract, attempt, enabled)
+    if medication_hints is not None:
+        if not _medication_hints_valid(medication_hints, target.get("body_text")):
+            raise ValueError("context_medication_hints_invalid")
+        medication_hints = json.loads(json.dumps(medication_hints, allow_nan=False))
+    binding = _binding(target, model, contract, attempt, enabled, medication_hints)
     # Do not include mutable history or summary text in the lookup binding.
     with ledger.db:
         if not ledger.db.in_transaction:
@@ -305,7 +346,8 @@ def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, 
             doc, meta = loads_dict(row["content"]), loads_dict(row["meta"])
             if isinstance(meta, dict) and patient_context.valid_reference_hash(meta.get("hash")) and meta["hash"] != target["content_hash"]:
                 continue
-            if not isinstance(doc, dict) or not isinstance(meta, dict) or doc.get("binding") == binding:
+            if (not isinstance(doc, dict) or not isinstance(meta, dict) or doc.get("binding") == binding
+                    or "medication_hints" in doc and old is None):
                 raise ValueError("context_snapshot_invalid")
         prefix = (base_context or "") + ("\n" if base_context and not base_context.endswith("\n") else "")
         state, refs = (format_state(history(ledger.db, target, version=version),
@@ -315,6 +357,8 @@ def prepare(ledger, target, *, model, contract, attempt, enabled, base_context, 
         else:
             text = base_context
         payload = {"binding": binding, "source": _source(target), "text": text, "refs": refs, "enabled": enabled}
+        if medication_hints is not None:
+            payload["medication_hints"] = medication_hints
         doc = {**payload, "digest": _digest(payload)}
         aid = ledger.artifact_add_tx(KIND, json.dumps(doc, ensure_ascii=False),
                                     project_id=target["project_id"], message_id=target["message_id"],
