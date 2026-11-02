@@ -140,7 +140,7 @@ def recovery_runtime(plist_path: str | Path, *, checkout: str | Path, deadline=N
             return None
         argv = plist.get("ProgramArguments")
         if isinstance(argv, list) and argv[1:2] == ["-I"]:
-            from run_log_install import helper_path, LogInstallError
+            from run_log_install import verify_installed_helper, LogInstallError
             helper, data, tool = argv[2], argv[5], argv[8]
             if (not all(os.path.isabs(path) for path in (helper, data, tool))
                     or Path(data).name != "data"
@@ -148,10 +148,8 @@ def recovery_runtime(plist_path: str | Path, *, checkout: str | Path, deadline=N
                     or tool != str(Path(helper).parent / "mcs_recover.py")):
                 return None
             try:
-                trusted = helper_path(Path(data).parent, Path(helper).parent, require_installed=True)
+                verify_installed_helper(Path(data).parent, Path(helper).parent, helper)
             except LogInstallError:
-                return None
-            if helper != trusted:
                 return None
     except (OSError, ValueError, TypeError, AttributeError, RuntimeError, plistlib.InvalidFileException):
         return None
