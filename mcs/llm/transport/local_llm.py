@@ -670,8 +670,10 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
     A mode is accepted only when the probe reply parses as a JSON object
     — a 200 with prose means the constraint silently failed open.
     Returns the accepted mode, or ``"plain"`` when every constraint was
-    rejected; transport failure aborts probing and also yields
-    ``"plain"`` (callers cache the result for a bounded cooldown).
+    rejected; transport failure after the request left aborts probing
+    and also yields ``"plain"`` (callers cache the result for a bounded
+    cooldown), while a probe that never reached the wire returns
+    ``None`` so callers can defer instead of caching a blind verdict.
     *slot* pins the probe's wire ``id_slot``; ``None`` resolves it via
     :func:`request_slot`, so the per-process ``MCS_LLM_SLOT`` override —
     or the caller's own slot decision — governs probes exactly as it
