@@ -39,6 +39,11 @@ ORIGINS = json.loads((FIXTURES / "origins.json").read_text(encoding="utf-8"))
 RELEASES = ORIGINS["releases"]
 HISTORICAL = [*RELEASES, *ORIGINS["pre_release_shapes"]]
 ATTACHMENT = b"synthetic attachment data\n"
+INITIAL_IMPORT = json.dumps({
+    "version": 1, "cohort_id": "0" * 32, "boundary_ts": 1700000000,
+    "boundary_source": "server", "started_at": 50,
+    "capture_phase": "held", "saved_count": 0, "updated_at": 100,
+}, sort_keys=True)
 
 
 class Origin(TypedDict):
@@ -88,7 +93,13 @@ def _historical(root: Path, origin: Origin) -> Path:
         assert ("reason_code" in columns) is (origin["schema_version"] >= 9)
         if origin["schema_version"] >= 9:
             db.execute("UPDATE fetch_jobs SET reason_code='network_error' WHERE job_id=502")
-            db.commit()
+        if origin["schema_version"] >= 10:
+            db.execute("UPDATE patients SET initial_import=? WHERE project_id=102",
+                       (INITIAL_IMPORT,))
+            assert db.execute(
+                "SELECT initial_import FROM patients WHERE project_id=102"
+            ).fetchone()[0] == INITIAL_IMPORT
+        db.commit()
     (root / "attachments").mkdir()
     (root / "attachments" / "synthetic.txt").write_bytes(ATTACHMENT)
     assert ledger.valid_mcs_db(str(path))

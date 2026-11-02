@@ -209,11 +209,19 @@ def test_manifest_preserves_exact_historical_26_and_supported_sources():
                  for t in (11, 12) for mode in ("hermes", "standalone")}
     expected |= {("v1.0.11", "v1.0.12", mode) for mode in ("hermes", "standalone")}
     assert historical == expected and len(historical) == 26
-    assert MANIFEST["target"]["version"] == "v1.1.0"
-    assert set(FEATURES) == set(ORIGINS) == {f"v1.0.{n}" for n in range(30)}
-    assert {(p["source"], p["runtime"]) for p in PATHS} == {
+    assert MANIFEST["target"]["version"] == "v1.1.1"
+    assert RELEASES[-1]["release"] == "v1.1.0"
+    assert RELEASES[-1]["schema_version"] == 10
+    assert RELEASES[-1]["fixture"] == "shape-14.sql"
+    expected_sources = {f"v1.0.{n}" for n in range(30)} | {"v1.1.0"}
+    assert {origin["release"] for origin in RELEASES} == expected_sources
+    assert set(FEATURES) == set(ORIGINS) == {origin["release"] for origin in RELEASES}
+    assert len(FEATURES) == len(MANIFEST["source_features"]) == len(RELEASES)
+    expected_paths = {
         (release, mode) for release, flags in FEATURES.items()
         for mode in (["hermes", "standalone"] if flags["standalone"] else ["hermes"])}
+    assert {(p["source"], p["runtime"]) for p in PATHS} == expected_paths
+    assert len(PATHS) == len(expected_paths)
     assert all(len(o["commit"]) == 40 for o in RELEASES)
 
 
@@ -308,7 +316,7 @@ def test_apply_reapply_and_bound_rollback_preserve_released_records(
             denied = notify_transport.apply_transport_begin(con, {"command_id": "synthetic-path-before-consent"}, {})
             assert denied["granted"] is False and denied["error"] == "denied_restore_pending"
         _seed_consent(updater.LEDGER, str(backup), report=report)
-        # Loaded schema9 must not open/migrate the restored historical DB.
+        # The loaded current writer must not migrate the restored historical DB.
         assert updater.recover_interrupted() == 1
         marker = notify_spool.restore_pending(str(live.parent))
         assert marker is not None and marker["phase"] == "restored"
@@ -349,7 +357,7 @@ def test_apply_reapply_and_bound_rollback_preserve_released_records(
 def test_update_and_rollback_preserve_settings_and_follow_release_defaults(
         tmp_path, monkeypatch, updater, choice):
     path = next(p for p in ELIGIBLE
-                if p["source"] == "v1.0.29" and p["runtime"] == "hermes")
+                if p["source"] == RELEASES[-1]["release"] and p["runtime"] == "hermes")
     objects, _, config, _, _ = _world(tmp_path, monkeypatch, updater, path)
     # Isolate settings from schema rollback: this synthetic live DB already
     # uses the target schema, so rollback does not restore an older backup.
