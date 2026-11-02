@@ -9,6 +9,7 @@ network client is created here.
 from __future__ import annotations
 
 from inference_version import CURRENT_VERSION, VERSION_KEY, is_current
+from inference_dependency_loss import fatal_read_error
 import clinical_values
 from mcs_queries import iter_artifacts
 import mcs_util
@@ -16,6 +17,7 @@ import semantic_llm
 import semantic_transport
 
 import copy
+from contextlib import closing
 import json
 import re
 import sqlite3
@@ -30,6 +32,8 @@ import clinical_chunking
 
 KIND_CHUNK = "semantic_extraction_chunk"
 SCHEMA_VERSION = "semantic-extraction/v1"
+PROVIDER_RECEIPT_PAGE = 64
+PROVIDER_RECEIPT_PAGE_BYTES = 2 * 1024 * 1024
 
 
 def _require_idle_ledger(ledger):
@@ -172,7 +176,7 @@ def _preflight_verdict(jev_client, text: str, deadline, chunk_id):
         return "failed"
 
 
-def _cached_provider(db, row, expected_model):
+def _provider_input(row, expected_model):
     try:
         import cloud_policy
         meta = mcs_util.strict_json(row["meta"])
@@ -189,7 +193,7 @@ def _cached_provider(db, row, expected_model):
                 or not isinstance(row["model"], str) or row["model"] != expected_model):
             return None
         if provider == "local":
-            return provider if (actual == row["model"]
+            return (meta, provider, actual, rid) if (actual == row["model"]
                                 and not any(model == actual for model, _ in cloud_policy.PRICE_DEFINITIONS)
                                 and rid is None) else None
         if provider not in cloud_policy.PROVIDERS:
@@ -197,12 +201,23 @@ def _cached_provider(db, row, expected_model):
         requests = meta.get("inference_requests")
         if not isinstance(rid, str) or not rid or not isinstance(requests, list) or not requests or requests[-1] != rid:
             return None
-        rows = db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND project_id IS ? AND message_id IS ? "
-                          "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.reservation_id')=? ELSE 0 END LIMIT 2",
-                          (cloud_policy.KINDS[0], row["project_id"], row["message_id"], rid)).fetchall()
-        if len(rows) != 1:
-            return None
-        reservation = cloud_policy.reservation_evidence(db, rows[0]["artifact_id"])["reservation"]
+        return meta, provider, actual, rid
+    except (KeyError, TypeError, ValueError, RecursionError, OverflowError, AttributeError):
+        return None
+
+
+def _provider_reservation_id(db, row, rid):
+    import cloud_policy
+    rows = db.execute("SELECT artifact_id FROM artifacts WHERE kind=? AND project_id IS ? AND message_id IS ? "
+                      "AND CASE WHEN json_valid(meta) THEN json_extract(meta,'$.reservation_id')=? ELSE 0 END LIMIT 2",
+                      (cloud_policy.KINDS[0], row["project_id"], row["message_id"], rid)).fetchall()
+    return rows[0]["artifact_id"] if len(rows) == 1 else None
+
+
+def _provider_from_reservation(row, prepared, reservation):
+    try:
+        import cloud_policy
+        meta, provider, actual, rid = prepared
         if not (reservation.get("reservation_id") == rid and reservation.get("model") == actual
                             and reservation.get("route") == "semantic_backlog"
                             and reservation.get("project_id") == row["project_id"]
@@ -228,8 +243,57 @@ def _cached_provider(db, row, expected_model):
             return None
         selection = {"provider": provider, "model": actual, "effort": effort}
         return provider if contract == cloud_inference._cloud_contract(selection=selection) else None
-    except (KeyError, TypeError, ValueError, RecursionError, OverflowError, AttributeError, sqlite3.Error):
+    except (KeyError, TypeError, ValueError, RecursionError, OverflowError, AttributeError):
         return None
+
+
+def _cached_provider(db, row, expected_model):
+    """Keep the single-candidate provider oracle for direct and ordered fallback reads."""
+    try:
+        import cloud_policy
+        prepared = _provider_input(row, expected_model)
+        if prepared is None or prepared[1] == "local":
+            return None if prepared is None else "local"
+        artifact_id = _provider_reservation_id(db, row, prepared[3])
+        if artifact_id is None:
+            return None
+        reservation = cloud_policy.reservation_evidence(db, artifact_id)["reservation"]
+        return _provider_from_reservation(row, prepared, reservation)
+    except sqlite3.Error as error:
+        if fatal_read_error(error):
+            raise
+        return None
+    except (KeyError, TypeError, ValueError, RecursionError, OverflowError, AttributeError):
+        return None
+
+
+def _cached_providers(db, rows, expected_model):
+    """Validate one bounded page against one financial read, preserving single outcomes."""
+    import cloud_policy
+    prepared = [_provider_input(row, expected_model) for row in rows]
+    references = {}
+    try:
+        for row, candidate in zip(rows, prepared):
+            if candidate is None or candidate[1] == "local":
+                continue
+            key = (row["project_id"], row["message_id"], candidate[3])
+            if key not in references:
+                references[key] = _provider_reservation_id(db, row, candidate[3])
+        ids = list(dict.fromkeys(aid for aid in references.values() if aid is not None))
+        proofs = cloud_policy._reservation_evidence_batch(db, ids) if ids else {}
+    except ValueError:
+        # One missing/unknown receipt must not hide another candidate's valid
+        # proof. Replay the original decisions in their original order.
+        return [_cached_provider(db, row, expected_model) for row in rows]
+    result = []
+    for row, candidate in zip(rows, prepared):
+        if candidate is None or candidate[1] == "local":
+            result.append(None if candidate is None else "local")
+            continue
+        aid = references[(row["project_id"], row["message_id"], candidate[3])]
+        result.append(None if aid is None else _provider_from_reservation(
+            row, candidate, proofs[aid]["reservation"]))
+    return result
 
 
 def _chunk_provider_binding(meta, project_id, message_id, model, provider, result_hash, reservation_id):
@@ -253,8 +317,22 @@ def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
                    expected_provider=None, expected_contract=None) -> dict[int, dict]:
     if db is None:
         return {}
-    cached = {}
-    rows = iter_artifacts(db, kind, project_id=project_id, message_id=message_id)
+    options = dict(kind=kind, schema=schema, extra=extra, generation=generation,
+                   expected_model=expected_model, expected_provider=expected_provider,
+                   expected_contract=expected_contract)
+    if expected_model is not None and hasattr(db, "execute"):
+        # Candidate rows, reservation references and every financial page
+        # share one view. No proof survives this read or commits a caller TX.
+        with closing(db.execute('SELECT artifact_id FROM (SELECT artifact_id FROM artifacts LIMIT 1) '
+                                'UNION ALL SELECT NULL UNION ALL SELECT NULL')) as anchor:
+            anchor.fetchone()
+            return _read_cached_chunks(db, project_id, message_id, source_fp, body_hash,
+                                       revision, specs, source, **options)
+    return _read_cached_chunks(db, project_id, message_id, source_fp, body_hash,
+                               revision, specs, source, **options)
+
+
+def _chunk_candidates(rows, specs, source, source_fp, body_hash, revision, schema, generation, extra):
     wanted = {spec["index"]: spec for spec in specs}
     for row in rows:
         try:
@@ -308,39 +386,72 @@ def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
                         raise ValueError("cached_evidence_invalid")
             if extra is not None and not extra(content):
                 continue
-            provider = _cached_provider(db, row, expected_model) if expected_model is not None else None
-            if expected_provider is not None and provider != expected_provider:
-                continue
-            if expected_contract is not None and expected_provider not in (None, 'local'):
-                actual_contract = meta.get('actual_contract')
-                if actual_contract is None and provider is not None:
-                    import cloud_inference
-                    actual_contract = cloud_inference._cloud_contract(selection={
-                        'provider': provider, 'model': meta.get('actual_model'),
-                        'effort': 'low' if provider == 'openai' else None})
-                if expected_contract is not None and actual_contract != expected_contract:
-                    continue
-            cached[index] = {"facts": content["facts"],
-                             "dropped": content.get("dropped", 0),
-                             "extra": {k: content[k] for k in content
-                                       if k not in {"schema", "chunk_index",
-                                                    "start_codepoint",
-                                                    "end_codepoint",
-                                                    "facts", "dropped"}}}
-            if provider is not None:
-                cached[index]["provider"] = provider
-                if provider != 'local':
-                    contract = meta.get('actual_contract')
-                    if contract is None:
-                        import cloud_inference
-                        contract = cloud_inference._cloud_contract(selection={
-                            'provider': provider, 'model': meta.get('actual_model'),
-                            'effort': 'low' if provider == 'openai' else None})
-                    cached[index]['producer_contract'] = contract
-                    cached[index]['reservation_id'] = meta['provider_provenance']['reservation_id']
+            yield row, meta, content, index
         except (KeyError, TypeError, ValueError, RecursionError):
             continue
+
+
+def _chunk_candidate_pages(candidates):
+    page, size = [], 0
+    for candidate in candidates:
+        row = candidate[0]
+        cost = sum(4 * len(row[field]) if isinstance(row[field], str) else len(row[field])
+                   if isinstance(row[field], bytes) else 0 for field in ("meta", "content"))
+        if page and (len(page) >= PROVIDER_RECEIPT_PAGE or size + cost > PROVIDER_RECEIPT_PAGE_BYTES):
+            yield page
+            page, size = [], 0
+        page.append(candidate)
+        size += cost
+    if page:
+        yield page
+
+
+def _read_cached_chunks(db, project_id, message_id, source_fp, body_hash, revision, specs, source, *,
+                        kind, schema, extra, generation, expected_model, expected_provider, expected_contract):
+    cached = {}
+    rows = iter_artifacts(db, kind, project_id=project_id, message_id=message_id)
+    candidates = _chunk_candidates(rows, specs, source, source_fp, body_hash, revision, schema, generation, extra)
+    for page in _chunk_candidate_pages(candidates):
+        providers = (_cached_providers(db, [item[0] for item in page], expected_model)
+                     if expected_model is not None else [None] * len(page))
+        for (_, meta, content, index), provider in zip(page, providers):
+            _adopt_cached_chunk(cached, index, content, meta, provider, expected_provider, expected_contract)
     return cached
+
+
+def _adopt_cached_chunk(cached, index, content, meta, provider, expected_provider, expected_contract):
+    try:
+        if expected_provider is not None and provider != expected_provider:
+            return
+        if expected_contract is not None and expected_provider not in (None, 'local'):
+            actual_contract = meta.get('actual_contract')
+            if actual_contract is None and provider is not None:
+                import cloud_inference
+                actual_contract = cloud_inference._cloud_contract(selection={
+                    'provider': provider, 'model': meta.get('actual_model'),
+                    'effort': 'low' if provider == 'openai' else None})
+            if expected_contract is not None and actual_contract != expected_contract:
+                return
+        cached[index] = {"facts": content["facts"],
+                         "dropped": content.get("dropped", 0),
+                         "extra": {k: content[k] for k in content
+                                   if k not in {"schema", "chunk_index",
+                                                "start_codepoint",
+                                                "end_codepoint",
+                                                "facts", "dropped"}}}
+        if provider is not None:
+            cached[index]["provider"] = provider
+            if provider != 'local':
+                contract = meta.get('actual_contract')
+                if contract is None:
+                    import cloud_inference
+                    contract = cloud_inference._cloud_contract(selection={
+                        'provider': provider, 'model': meta.get('actual_model'),
+                        'effort': 'low' if provider == 'openai' else None})
+                cached[index]['producer_contract'] = contract
+                cached[index]['reservation_id'] = meta['provider_provenance']['reservation_id']
+    except (KeyError, TypeError, ValueError, RecursionError):
+        return
 
 
 def _normalise_facts(items: list, member: dict, source: str,

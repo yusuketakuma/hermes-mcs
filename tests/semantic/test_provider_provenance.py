@@ -72,7 +72,7 @@ def test_execution_contract_filters_old_chunks_without_hiding_historical_project
     row = {'meta': json.dumps(meta), 'content': json.dumps({
         'chunk_index': 0, 'start_codepoint': 0, 'end_codepoint': 1, 'facts': []})}
     monkeypatch.setattr(extraction, 'iter_artifacts', lambda *_a, **_kw: [row])
-    monkeypatch.setattr(extraction, '_cached_provider', lambda *_: 'openai')
+    monkeypatch.setattr(extraction, '_cached_providers', lambda _db, rows, *_: ['openai'] * len(rows))
     args = (object(), 1, 1, 'fp', 'body', 'r', [spec], 'x')
     kwargs = {'generation': 'g', 'expected_model': 'local', 'expected_provider': 'openai'}
     assert extraction._cached_chunks(*args, **kwargs, expected_contract=old)
