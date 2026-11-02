@@ -24,8 +24,7 @@ class CloudError(Exception):
 
 
 class CloudNotSent(CloudError):
-    """A reservation-layer refusal before any HTTP byte left: the only definite
-    not-sent — callers may defer without burning an attempt or falling back."""
+    """A proven refusal or deadline before any attempt sent HTTP bytes."""
 
 
 class CloudClient:
@@ -62,7 +61,7 @@ class CloudClient:
         if not isinstance(self.api_key, str) or not self.api_key:
             raise CloudError("no_api_key")
         body = self.body(prompt, max_tokens, cache_prefix)
-        last = CloudError("budget_exceeded", "deadline", retryable=True)
+        last = CloudNotSent("budget_exceeded", "deadline", retryable=True)
         for attempt in range(self.max_attempts):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -90,7 +89,6 @@ class CloudClient:
                 raise
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                last = CloudError("budget_exceeded", "deadline", retryable=True)
                 if after_result:   # nothing was sent: settle the reservation as unsent
                     after_result(reservation, unsent)
                 raise last
@@ -133,7 +131,8 @@ class CloudClient:
                 result = answer
             except bounded_http.NotSentTimeout:
                 meta["http_class"] = "not_sent"
-                last = CloudError("budget_exceeded", "deadline", retryable=False)
+                failure = CloudError if attempt else CloudNotSent
+                last = failure("budget_exceeded", "deadline", retryable=False)
             except OSError as error:
                 # No transport exception proves the request never left (bounded_http maps a
                 # refusal while reading the response to the same type), and a sent request

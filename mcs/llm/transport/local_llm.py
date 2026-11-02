@@ -652,6 +652,8 @@ def acceptance_error(response: dict | None) -> str | None:
         return "http_status"
     if response.get("finish_reason") == "length":
         return "length_stop"
+    if response.get("finish_reason") != "stop":
+        return "finish_reason_invalid"
     text = response.get("text")
     if not isinstance(text, str) or not text.strip():
         return "empty"

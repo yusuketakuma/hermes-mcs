@@ -619,3 +619,53 @@ def test_an_unexpected_transport_exception_still_reports_its_result():
             "synthetic", deadline=time.monotonic() + 10, reserve_fn=lambda *args: {"r": 1},
             after_result=lambda r, meta: results.append(meta))
     assert results[0]["error_kind"] == "transport" and results[0]["usage"] is None
+
+
+@pytest.mark.parametrize("phase", ["initial", "reservation", "wire"])
+def test_proven_first_attempt_expiry_is_free_defer(monkeypatch, phase):
+    clock = [10.0 if phase == "initial" else 0.0]
+    monkeypatch.setattr(cloud_client.time, "monotonic", lambda: clock[0])
+    calls, results = [], []
+
+    def reserve(*args):
+        if phase == "reservation":
+            clock[0] = 10.0
+        return "synthetic-reservation"
+
+    def post(*args):
+        calls.append(1)
+        raise a.bounded_http.NotSentTimeout("synthetic")
+
+    provider = a.AnthropicClient("synthetic", post_fn=post)
+    with pytest.raises(cloud_client.CloudNotSent):
+        provider.complete("synthetic", deadline=10.0, reserve_fn=reserve,
+                          after_result=lambda r, meta: results.append((r, meta)))
+    assert len(calls) == (phase == "wire")
+    assert len(results) == (phase != "initial")
+    assert all(meta["http_class"] == "not_sent" for _, meta in results)
+
+
+@pytest.mark.parametrize("phase", ["reservation", "wire"])
+def test_presend_expiry_after_sent_retry_is_not_free_defer(monkeypatch, phase):
+    clock = [0.0]
+    monkeypatch.setattr(cloud_client.time, "monotonic", lambda: clock[0])
+    reservations, calls, results = [], [], []
+
+    def reserve(*args):
+        reservations.append(1)
+        if len(reservations) == 2 and phase == "reservation":
+            clock[0] = 10.0
+        return len(reservations)
+
+    def post(*args):
+        calls.append(1)
+        if len(calls) == 1:
+            return 429, {"Retry-After": "0"}, b"{}"
+        raise a.bounded_http.NotSentTimeout("synthetic")
+
+    provider = a.AnthropicClient("synthetic", post_fn=post)
+    with pytest.raises(cloud_client.CloudError) as caught:
+        provider.complete("synthetic", deadline=10.0, reserve_fn=reserve,
+                          after_result=lambda r, meta: results.append((r, meta)))
+    assert not isinstance(caught.value, cloud_client.CloudNotSent)
+    assert [meta["http_class"] for _, meta in results] == ["http_429", "not_sent"]

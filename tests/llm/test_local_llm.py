@@ -67,6 +67,12 @@ def test_canonical_length_is_distinct_from_empty_after_the_http_gate(text):
         {"status": 500, "text": text, "finish_reason": "length"}) == "http_status"
 
 
+@pytest.mark.parametrize("finish", [None, "tool_calls", "content_filter", "error", "", True, 1])
+def test_canonical_acceptance_requires_explicit_normal_completion(finish):
+    response = {"status": 200, "text": '{"synthetic": true}', "finish_reason": finish}
+    assert local_llm.acceptance_error(response) == "finish_reason_invalid"
+
+
 def test_non_loopback_endpoint_and_bad_args_fail_closed():
     with pytest.raises(ValueError, match="local_endpoint_not_allowed"):
         local_llm.chat("p", endpoint="https://example.com/v1/chat")
