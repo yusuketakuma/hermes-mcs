@@ -90,6 +90,7 @@ import llm_admission  # noqa: E402,F401 - postcheck admission diagnostics
 import mcs_restore  # noqa: E402,F401 - existing backup-adoption marker gate
 import provider_settings  # noqa: E402 - rollback settings checks after tree reset
 import cloud_policy  # noqa: E402 - rollback provider model ownership
+import cloud_inference  # noqa: E402,F401 - rollback cloud-contract validation
 import semantic_jev  # noqa: E402 - rollback Jev model validation
 try:
     from release_apply_owner import _legacy_scope as _release_legacy_scope  # noqa: E402

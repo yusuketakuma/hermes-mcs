@@ -4,6 +4,7 @@ from test_patient_context_refresh import runtime as runtime
 from test_anthropic_context_refresh import cloud as cloud
 
 import patient_context_refresh as refresh
+import cloud_inference
 import pytest
 
 
@@ -114,6 +115,7 @@ def test_post_semantic_and_qc_skips_admit_patient_context(runtime, cloud, monkey
     ledger.semantic_seed(1, [1], {'source': 'history_import', 'notification_free': True})
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *args: None)
     monkeypatch.setattr(extract_llm, 'load_config', lambda *args: cfg)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda *args: cfg)
     import json
     def llm(prompt):
         if '要約器' in prompt:

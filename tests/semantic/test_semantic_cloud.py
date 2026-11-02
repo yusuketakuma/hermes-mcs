@@ -14,6 +14,7 @@ import pytest
 import anthropic_client
 import cloud_policy
 import extract_llm
+import cloud_inference
 import inference_dependency_loss
 import semantic_drain
 import semantic_transport as transport
@@ -53,6 +54,7 @@ def cloud(tmp_path, monkeypatch):
                loop_mode="shadow", job_budget_seconds=1260)
     cfg["cloud_llm"] = {"mode": "on", "project_ids": [1]}
     monkeypatch.setattr(extract_llm, "load_config", lambda *a: cfg)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda *a: cfg)
     monkeypatch.setattr(semantic_drain, "load_config", lambda *a: cfg)
     monkeypatch.setattr(cloud_policy, "api_key", lambda *a: "synthetic-key")
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 1))
@@ -103,7 +105,7 @@ def test_qc_purpose_uses_separate_fixed_provider_and_restores_context(cloud, mon
         def discard(self):
             pass
 
-    monkeypatch.setattr(extract_llm, '_CloudProvider', Provider)
+    monkeypatch.setattr(cloud_inference, '_CloudProvider', Provider)
     with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                      lambda: True, direct) as chat:
         chat('normal')
@@ -203,7 +205,7 @@ def test_budget_refusal_keeps_settled_receipts_without_discard(cloud, monkeypatc
         def discard(self):
             self.discarded = True
 
-    monkeypatch.setattr(extract_llm, '_CloudProvider', Provider)
+    monkeypatch.setattr(cloud_inference, '_CloudProvider', Provider)
     with pytest.raises(transport.runtime.LLMNotSent, match='cloud_not_sent'):
         with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                          lambda: True, direct) as chat:
@@ -235,7 +237,7 @@ def test_not_sent_cloud_falls_back_locally_for_the_rest_of_the_unit(cloud, monke
         attempts.append(True)
         raise extract_llm.CloudFallback('synthetic_unavailable')
 
-    monkeypatch.setattr(extract_llm._CloudProvider, '__call__', unavailable)
+    monkeypatch.setattr(cloud_inference._CloudProvider, '__call__', unavailable)
     def local_chat(prompt, **kwargs):
         local.append(transport.inference_model())
         return '{"facts": []}'
@@ -260,7 +262,7 @@ def test_local_fallback_rechecks_scope_on_each_call(cloud, monkeypatch, change):
         if change == 'during':
             state['current'] = False
         return '{"facts": []}'
-    monkeypatch.setattr(extract_llm._CloudProvider, '__call__', unavailable)
+    monkeypatch.setattr(cloud_inference._CloudProvider, '__call__', unavailable)
     with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                      lambda: state['current'], direct, local_fallback=local_chat,
                                      fallback_current=lambda: True) as chat:
@@ -280,7 +282,7 @@ def test_cloud_fallback_never_mixes_a_paid_or_existing_partial_unit(cloud, monke
         provider.possibly_sent = state == 'paid_unknown'
         raise extract_llm.CloudFallback('synthetic_unavailable')
 
-    monkeypatch.setattr(extract_llm._CloudProvider, '__call__', unavailable)
+    monkeypatch.setattr(cloud_inference._CloudProvider, '__call__', unavailable)
     with transport.backlog_inference(led, cfg, job, time.monotonic() + 120,
                                      lambda: True, direct, local_fallback=lambda *a, **kw: pytest.fail('local'),
                                      fallback_current=lambda: state != 'partial') as chat:
@@ -1046,6 +1048,7 @@ def test_resident_history_turn_selects_cloud_batch_without_expanding_realtime(mo
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(extract_llm.time, "sleep", lambda s: now.__setitem__(0, now[0] + s))
     monkeypatch.setattr(extract_llm, "load_config", lambda: cfg)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: type("DB", (), {"close": lambda s: None})())
     monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
     monkeypatch.setattr(extract_llm, "_recent_arrivals", lambda *a: {99})
@@ -1087,6 +1090,7 @@ def test_cloud_selection_resumes_pages_and_preserves_sql_order(cloud, monkeypatc
     monkeypatch.setattr(semantic_drain, '_CLOUD_SELECTION_PAGE', 2)
     clock = [0.0]
     monkeypatch.setattr(semantic_drain, 'time', SimpleNamespace(time=time.time, monotonic=lambda: clock[0]))
+    monkeypatch.setattr(cloud_inference, 'time', semantic_drain.time)
     cursors = []
     for _ in range(3):
         clock[0] = 0.0
@@ -1117,6 +1121,7 @@ def test_cloud_selection_rechecks_scope_and_deleted_job_after_incomplete(cloud, 
     monkeypatch.setattr(semantic_drain, '_CLOUD_SELECTION_PAGE', 1)
     clock = [0.0]
     monkeypatch.setattr(semantic_drain, 'time', SimpleNamespace(time=time.time, monotonic=lambda: clock[0]))
+    monkeypatch.setattr(cloud_inference, 'time', semantic_drain.time)
     led.db.set_trace_callback(lambda sql: clock.__setitem__(0, 1.0)
         if sql.startswith('SELECT j.job_id,j.kind') else None)
     try:
@@ -1159,6 +1164,7 @@ def test_cloud_selection_revalidates_partial_batch_after_deadline(cloud, monkeyp
     snapshot(led)
     clock = [0.0]
     monkeypatch.setattr(semantic_drain, 'time', SimpleNamespace(time=time.time, monotonic=lambda: clock[0]))
+    monkeypatch.setattr(cloud_inference, 'time', semantic_drain.time)
     ready = cloud_policy.history_target_ready
     checked = []
 
@@ -1191,6 +1197,7 @@ def test_cloud_selection_invalidates_progress_when_config_changes(cloud, monkeyp
     monkeypatch.setattr(semantic_drain, '_CLOUD_SELECTION_PAGE', 1)
     clock = [0.0]
     monkeypatch.setattr(semantic_drain, 'time', SimpleNamespace(time=time.time, monotonic=lambda: clock[0]))
+    monkeypatch.setattr(cloud_inference, 'time', semantic_drain.time)
     led.db.set_trace_callback(lambda sql: clock.__setitem__(0, 1.0)
         if sql.startswith('SELECT j.job_id,j.kind') else None)
     try:
@@ -1229,6 +1236,7 @@ def test_cloud_selection_incomplete_invalid_suffix_advances(cloud, monkeypatch):
     snapshot(led)
     clock = [0.0]
     monkeypatch.setattr(semantic_drain, 'time', SimpleNamespace(time=time.time, monotonic=lambda: clock[0]))
+    monkeypatch.setattr(cloud_inference, 'time', semantic_drain.time)
     ready = cloud_policy.history_target_ready
     observed = Counter()
 
@@ -1296,6 +1304,7 @@ def test_cloud_selection_highwater_defers_new_job_to_next_cycle(cloud, monkeypat
     monkeypatch.setattr(semantic_drain, '_CLOUD_SELECTION_PAGE', 1)
     clock = [0.0]
     monkeypatch.setattr(semantic_drain, 'time', SimpleNamespace(time=time.time, monotonic=lambda: clock[0]))
+    monkeypatch.setattr(cloud_inference, 'time', semantic_drain.time)
     led.db.set_trace_callback(lambda sql: clock.__setitem__(0, 1.0)
         if sql.startswith('SELECT j.job_id,j.kind') else None)
     try:
@@ -1328,6 +1337,7 @@ def test_cloud_selection_invalidates_replaced_database_inode(cloud, tmp_path, mo
     monkeypatch.setattr(semantic_drain, '_CLOUD_SELECTION_PAGE', 1)
     clock = [0.0]
     monkeypatch.setattr(semantic_drain, 'time', SimpleNamespace(time=time.time, monotonic=lambda: clock[0]))
+    monkeypatch.setattr(cloud_inference, 'time', semantic_drain.time)
 
     def interrupt_after_page():
         clock[0] = 0.0

@@ -3,6 +3,7 @@ import time
 
 import drug_map
 import extract_llm
+import cloud_inference
 from extract_testkit import _ledger, _message
 
 _TRUNCATED = ('{"summary":"x","meds":[{"name":"A","dose":"1","evidence":"A"},'
@@ -55,6 +56,7 @@ def test_resident_loop_survives_a_transient_error(monkeypatch, capsys):
     now = [0.0]
     calls = []
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(extract_llm.time, "sleep",
                         lambda seconds: now.__setitem__(0, now[0] + seconds))
@@ -94,6 +96,7 @@ def test_unusable_dictionary_scans_only_existing_refs(tmp_path):
 def test_resident_exits_when_semantic_lost_the_run_lock(monkeypatch):
     calls = []
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.sys, "argv",
                         ["extract_llm", "--all", "--semantic", "--stop-after", "600"])
     monkeypatch.setattr(extract_llm, "Ledger",
@@ -111,6 +114,7 @@ def _resident(monkeypatch, result):
     """Run the --all loop on a stubbed pass; return the pauses it took."""
     now, sleeps = [0.0], []
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
 
     def sleep(seconds):

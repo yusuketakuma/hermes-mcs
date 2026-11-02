@@ -128,6 +128,8 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
                       fallback_current=None):
     """Route historical semantic inference through the existing cloud budget guards."""
     import extract_llm
+    import cloud_inference
+    import cloud_client
     import cloud_policy
     import writer_lock
     pl = runtime.parse_payload(job)
@@ -164,7 +166,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
 
     def get_provider(purpose):
         if purpose not in providers:
-            providers[purpose] = extract_llm._CloudProvider(
+            providers[purpose] = cloud_inference._CloudProvider(
                 ledger, cfg, route="semantic_backlog", purpose=purpose, project_id=job["project_id"],
                 message_id=job["message_id"], unit_key=f"semantic:{job['job_id']}:{pl.get('generation', '')}",
                 deadline=deadline, current=scoped_current, dispatch=dispatch, transport=request)
@@ -197,7 +199,7 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
             return call_local(prompt, timeout)
         try:
             provider = get_provider(_inference_purpose.get())
-        except extract_llm.CloudFallback:
+        except cloud_inference.CloudFallback:
             raise runtime.LLMNotSent('cloud_profile_unavailable') from None
         _job_model.set(provider)
         _failed(None)
@@ -224,13 +226,13 @@ def backlog_inference(ledger, cfg, job, deadline, current, transport, *, local_f
         try:
             response = provider(prompt, deadline=min(deadline, time.monotonic() + (timeout or LLM_TIMEOUT)),
                                 max_tokens=provider.selection['max_tokens'] or LLM_LONG_MAX_TOKENS)
-        except extract_llm.cloud_client.CloudNotSent as error:
+        except cloud_client.CloudNotSent as error:
             raise runtime.LLMNotSent("cloud_not_sent") from error
-        except extract_llm.CloudBusy:
+        except cloud_inference.CloudBusy:
             if local_fallback is not None:
                 return local(prompt, timeout)
             raise runtime.LLMNotSent("cloud_capacity") from None
-        except extract_llm.CloudFallback as error:
+        except cloud_inference.CloudFallback as error:
             if (local_fallback is not None and str(error) != 'cloud_unit_changed'
                     and not any(p.possibly_sent for p in providers.values())):
                 return local(prompt, timeout)

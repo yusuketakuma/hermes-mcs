@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 import extract_llm
+import cloud_inference
 from extract_testkit import _hash, _ledger, _message
 from inference_version import CURRENT_VERSION, VERSION_KEY
 
@@ -48,6 +49,7 @@ def _loop(db, monkeypatch, flags, result=None, *, carry=None, settle=None):
     monkeypatch.setattr(extract_llm.time, "time", lambda: WALL0 + mono[0])
     monkeypatch.setattr(extract_llm.time, "sleep", sleep)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(db, "close", lambda: None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)

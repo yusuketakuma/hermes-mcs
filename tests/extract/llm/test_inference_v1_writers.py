@@ -8,6 +8,7 @@ import pytest
 
 import extract
 import extract_llm as llm
+import cloud_inference
 import inference_version as inference
 import inference_dependency_loss as dependency_loss
 import mcs_queries
@@ -414,6 +415,7 @@ def test_selection_fence_rejects_stale_prefilter_input(source, monkeypatch, muta
         "SELECT content_hash FROM messages WHERE message_id=1").fetchone()[0]
     assert binding != dependency_loss.source_binding(led.db, 1, 1)
     monkeypatch.setattr(llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(llm, "_ensure_v1", lambda *_args: pytest.fail("stale rule write"))
     monkeypatch.setattr(llm, "_mark_prefiltered", lambda *_args: pytest.fail("stale prefilter write"))
     jobs, skipped, blocked = llm._prepare_jobs(led, rows, llm._resolved_llm(), True)

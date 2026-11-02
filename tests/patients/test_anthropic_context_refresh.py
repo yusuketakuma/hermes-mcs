@@ -11,13 +11,14 @@ from pathlib import Path
 import pytest
 
 import extract_llm as worker
+import cloud_inference
 import patient_context_refresh as context_refresh
 from extract_testkit import _message
 from test_patient_context_refresh import CFG as BASE_CFG, _semantic_proof, document, runtime, seed, stamp, step as base_step
 
 import semantic_jev as _source_repair_jev
 
-_SOURCE_REPAIR_PROVIDER = worker._CloudProvider
+_SOURCE_REPAIR_PROVIDER = cloud_inference._CloudProvider
 _SOURCE_REPAIR_CLIENT = worker.anthropic_client.AnthropicClient
 _SOURCE_REPAIR_JEV = _source_repair_jev.JevClient
 
@@ -57,7 +58,7 @@ def test_source_repair_slot_is_bound_to_raw_occurrence_across_contract_changes(r
 
 def test_patient_context_accepts_only_known_current_or_historical_cloud_contracts():
     for model, effort in worker.openai_client.VALID_MODEL_EFFORTS:
-        contract = worker._cloud_contract(selection={"provider": "openai", "model": model, "effort": effort})
+        contract = cloud_inference._cloud_contract(selection={"provider": "openai", "model": model, "effort": effort})
         assert context_refresh._saved_cloud_contract(contract) == contract
         assert context_refresh._saved_cloud_contract({**contract, "prompt": "0" * 16}) is None
         assert context_refresh._saved_cloud_contract({**contract, "model": "synthetic-unknown"}) is None
@@ -97,6 +98,7 @@ def cloud(runtime, monkeypatch):
     import semantic_jev
     clock.mono = time.monotonic()
     monkeypatch.setattr(worker, "load_config", lambda: CFG)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: CFG)
     monkeypatch.setattr(worker, "_writer_current", lambda **_kwargs: True)
     monkeypatch.setattr(semantic_jev, "api_key", lambda *_: "synthetic-jev-key")
     jev_requests = []
@@ -123,7 +125,7 @@ def cloud(runtime, monkeypatch):
     discarded = []
     led.synthetic_cloud_dispositions = discarded
     monkeypatch.setattr(worker.cloud_policy, "api_key", lambda root=None: "synthetic-key")
-    monkeypatch.setattr(worker, "_cloud_settings", lambda cfg: worker.cloud_policy.resolve_settings(
+    monkeypatch.setattr(cloud_inference, "_cloud_settings", lambda cfg: worker.cloud_policy.resolve_settings(
         {"cloud_llm": {"mode": mode[0], "project_ids": [1], "provider": "anthropic"}}, worker.HOME)[0])
     monkeypatch.setattr(worker, "_cloud_mode", lambda *args: mode[0])
     class Provider:
@@ -132,7 +134,7 @@ def cloud(runtime, monkeypatch):
             assert ledger is led
             self.current = kwargs["current"]
             self.discard_reason = kwargs.get("discard_reason")
-            self.contract = worker._cloud_contract()
+            self.contract = cloud_inference._cloud_contract()
             self.final_disposition = None
             self.possibly_sent = False
         def guard(self):
@@ -157,7 +159,7 @@ def cloud(runtime, monkeypatch):
                 result = {"patient_context": [{"category": "living", "text": body,
                     "evidence": body, "subject": "unspecified", "details": []}]}
             return {"status": 200, "finish_reason": "stop", "text": json.dumps(result)}
-    monkeypatch.setattr(worker, "_CloudProvider", Provider)
+    monkeypatch.setattr(cloud_inference, "_CloudProvider", Provider)
     return requests, mode, failure
 
 
@@ -189,7 +191,7 @@ def test_daytime_cloud_needs_no_local_gpu_capacity(runtime, cloud):
     assert context_refresh.context_view_input(led.db, 1, cfg=CFG)
     scan = led.db.execute("SELECT meta FROM artifacts WHERE kind=?", (context_refresh.SCAN,)).fetchone()
     meta = json.loads(scan[0])
-    assert meta["provider"] == worker._cloud_contract()
+    assert meta["provider"] == cloud_inference._cloud_contract()
     assert meta["model"] == "claude-haiku-5-5"
     assert meta["contract"] == context_refresh._contract(CFG, 1)
 
@@ -732,7 +734,7 @@ def test_shadow_runs_only_after_local_commit_and_never_publishes_cloud(runtime, 
     led, _, local_calls = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
     cloud[1][0] = "shadow"
-    original = worker._CloudProvider
+    original = cloud_inference._CloudProvider
     class Shadow(original):
         def __call__(self, prompt, **kwargs):
             assert not led.db.in_transaction
@@ -740,7 +742,7 @@ def test_shadow_runs_only_after_local_commit_and_never_publishes_cloud(runtime, 
             kind = context_refresh.KIND if "reports" in payload else context_refresh.SCAN
             assert led.db.execute("SELECT 1 FROM artifacts WHERE kind=?", (kind,)).fetchone()
             return super().__call__(prompt, **kwargs)
-    monkeypatch.setattr(worker, "_CloudProvider", Shadow)
+    monkeypatch.setattr(cloud_inference, "_CloudProvider", Shadow)
     drain(runtime)
     assert local_calls and cloud[0]
     assert led.artifacts("cloud_compare_v1")
@@ -752,14 +754,14 @@ def test_crossing_midnight_preserves_cloud_publication_and_progress(runtime, clo
     led, clock, _ = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
     clock.wall = stamp("2026-10-17T23:59:30")
-    original = worker._CloudProvider
+    original = cloud_inference._CloudProvider
     class Crossing(original):
         def __call__(self, prompt, **kwargs):
             answer = super().__call__(prompt, **kwargs)
             clock.wall = stamp("2026-10-18T00:00:01")
             clock.mono += 31
             return answer
-    monkeypatch.setattr(worker, "_CloudProvider", Crossing)
+    monkeypatch.setattr(cloud_inference, "_CloudProvider", Crossing)
     # First cloud unit scans the original source before any summary is published.
     result = step(runtime)
     assert result["status"] == "progressed"
@@ -826,7 +828,7 @@ def test_scope_is_rechecked_after_writer_acquisition(runtime, cloud, monkeypatch
     seed(led, body="見出しのない完全合成の居住記録。")
     # The first selected cloud scan must be revoked after its HTTP response.
     assert not cloud[0] and not led.synthetic_cloud_dispositions
-    original = worker._CloudProvider
+    original = cloud_inference._CloudProvider
     checked = []
     class RevokedAtCommit(original):
         def guard(self):
@@ -834,7 +836,7 @@ def test_scope_is_rechecked_after_writer_acquisition(runtime, cloud, monkeypatch
             if led.db.in_transaction:
                 raise worker.CloudFallback("synthetic_changed_while_waiting")
             return super().guard()
-    monkeypatch.setattr(worker, "_CloudProvider", RevokedAtCommit)
+    monkeypatch.setattr(cloud_inference, "_CloudProvider", RevokedAtCommit)
     result = step(runtime)
     assert result["status"] == "deferred" and len(cloud[0]) == 1
     assert False in checked and True in checked
@@ -899,7 +901,7 @@ def test_dryrun_context_records_selected_provider_model_and_price(runtime, cloud
     settings, errors = worker.cloud_policy.cloud_config({"cloud_llm": {
         "mode": "dry_run", "project_ids": [1], "provider": provider}})
     assert not errors and settings["model"] == model
-    monkeypatch.setattr(worker, "_cloud_settings", lambda cfg: settings)
+    monkeypatch.setattr(cloud_inference, "_cloud_settings", lambda cfg: settings)
 
     assert step(runtime)["status"] == "progressed"
     estimates = led.artifacts("cloud_usage_dryrun")
@@ -927,7 +929,7 @@ def test_cloud_budget_wait_uses_verified_local_context(runtime, cloud, monkeypat
 def test_saved_cloud_context_survives_budget_changes_but_not_code_change(runtime, cloud, monkeypatch):
     led, _, _ = runtime
     settings = {"mode": "on", "project_ids": [1]}
-    monkeypatch.setattr(worker, "_cloud_settings", lambda cfg: worker.cloud_policy.cloud_config(
+    monkeypatch.setattr(cloud_inference, "_cloud_settings", lambda cfg: worker.cloud_policy.cloud_config(
         {"cloud_llm": settings})[0])
     seed(led, body="見出しのない完全合成の居住記録。")
     drain(runtime)
@@ -1018,11 +1020,11 @@ def test_shadow_scan_does_not_count_local_prefix_as_cloud_work(runtime, cloud, m
         context_refresh._replace(led, context_refresh.PROGRESS, 0, {"cursor": 6}, {})
     answer = {"status": 200, "finish_reason": "stop", "text": '{"patient_context":[]}'}
     monkeypatch.setattr(context_refresh.local_llm, "admitted_chat", lambda *args, **kwargs: answer)
-    original = worker._CloudProvider
+    original = cloud_inference._CloudProvider
     class Empty(original):
         def __call__(self, prompt, **kwargs):
             return answer
-    monkeypatch.setattr(worker, "_CloudProvider", Empty)
+    monkeypatch.setattr(cloud_inference, "_CloudProvider", Empty)
     assert step(runtime)["lane"] == "B"
     comparison = json.loads(led.artifacts("cloud_compare_v1")[0]["meta"])
     assert comparison["local_facts"] == comparison["cloud_facts"] == comparison["matched"] == 0
@@ -1133,7 +1135,7 @@ def test_context_shadow_post_validation_revocation_records_discard(runtime, clou
     led, _, _ = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
     cloud[1][0] = "shadow"
-    original = worker._CloudProvider
+    original = cloud_inference._CloudProvider
     class RevokedAfterResponse(original):
         def __call__(self, *args, **kwargs):
             answer = super().__call__(*args, **kwargs)
@@ -1143,7 +1145,7 @@ def test_context_shadow_post_validation_revocation_records_discard(runtime, clou
             if getattr(self, "revoked", False):
                 raise worker.CloudFallback("cloud_unit_changed")
             return super().commit_guard()
-    monkeypatch.setattr(worker, "_CloudProvider", RevokedAfterResponse)
+    monkeypatch.setattr(cloud_inference, "_CloudProvider", RevokedAfterResponse)
     for _ in range(5):
         assert step(runtime)["status"] == "progressed"
         if led.synthetic_cloud_dispositions:
@@ -1209,7 +1211,7 @@ def test_shadow_audit_is_a_single_short_lock_attempt_and_keeps_pending_when_unav
     def release(fd):
         held.discard(fd)
         close(fd)
-    original_provider = worker._CloudProvider
+    original_provider = cloud_inference._CloudProvider
     class Provider(original_provider):
         def __call__(self,*args,**kwargs):
             assert held == set(), 'shadow HTTP must not retain the local commit lock'
@@ -1221,7 +1223,7 @@ def test_shadow_audit_is_a_single_short_lock_attempt_and_keeps_pending_when_unav
         return compare(*args,**kwargs)
     monkeypatch.setattr(context_refresh,'acquire_run_lock',acquire)
     monkeypatch.setattr(context_refresh.os,'close',release)
-    monkeypatch.setattr(worker,'_CloudProvider',Provider)
+    monkeypatch.setattr(cloud_inference, '_CloudProvider',Provider)
     monkeypatch.setattr(context_refresh,'_comparison_context',grounded)
     assert step(runtime)['lane']=='B'
     assert len(attempts)==(2 if finish=='busy' else 1) and held==set()
@@ -1268,13 +1270,13 @@ def test_paid_cloud_failure_without_local_capacity_records_the_retry(runtime, cl
     led, _, local_calls = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
     sent = []
-    original = worker._CloudProvider
+    original = cloud_inference._CloudProvider
     class Paid(original):
         def __call__(self, prompt, **kwargs):
             sent.append(prompt)
             self.possibly_sent = True
             raise worker.CloudFallback("synthetic_failure")
-    monkeypatch.setattr(worker, "_CloudProvider", Paid)
+    monkeypatch.setattr(cloud_inference, "_CloudProvider", Paid)
     for _ in range(3):   # the rotation reaches the scan (lane B) after the fact-less summary
         result = step(runtime, local_admit=lambda: False)
         if result["status"] == "failed":
@@ -1298,13 +1300,13 @@ def test_unsettled_cloud_attempt_without_local_capacity_records_the_retry(runtim
     led, _, local_calls = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
     calls = []
-    original = worker._CloudProvider
+    original = cloud_inference._CloudProvider
     class Unknown(original):
         def __call__(self, prompt, **kwargs):
             calls.append(True)
             self.possibly_sent = True
             raise worker.CloudFallback("cloud_unit_failed")
-    monkeypatch.setattr(worker, "_CloudProvider", Unknown)
+    monkeypatch.setattr(cloud_inference, "_CloudProvider", Unknown)
     for _ in range(3):
         result = step(runtime, local_admit=lambda: False)
         if result["status"] == "failed":
@@ -1321,7 +1323,7 @@ def test_scope_change_after_unknown_attempt_fences_retry_to_source(runtime, clou
     led, _, local_calls = runtime
     seed(led, body="見出しのない完全合成の居住記録。")
     calls = []
-    original = worker._CloudProvider
+    original = cloud_inference._CloudProvider
     class Changed(original):
         def __call__(self, prompt, **kwargs):
             self.possibly_sent = True
@@ -1329,7 +1331,7 @@ def test_scope_change_after_unknown_attempt_fences_retry_to_source(runtime, clou
             if source_changed:
                 led.save_messages([_message(1, "完全合成の別の新しい本文。", project_id=1)])
             raise worker.CloudFallback("cloud_unit_changed")
-    monkeypatch.setattr(worker, "_CloudProvider", Changed)
+    monkeypatch.setattr(cloud_inference, "_CloudProvider", Changed)
     for _ in range(3):
         result = step(runtime, local_admit=lambda: False)
         if calls:
@@ -1354,13 +1356,13 @@ def test_paid_failure_of_a_partial_cloud_scan_keeps_its_cloud_pin(runtime, cloud
         context_refresh._replace(led, context_refresh.SCAN, 1,
                                  {"cursor": 1, "chunks": 2, "complete": False, "facts": []}, meta, 1)
     sent = []
-    original = worker._CloudProvider
+    original = cloud_inference._CloudProvider
     class Paid(original):
         def __call__(self, prompt, **kwargs):
             sent.append(prompt)
             self.possibly_sent = True
             raise worker.CloudFallback("synthetic_failure")
-    monkeypatch.setattr(worker, "_CloudProvider", Paid)
+    monkeypatch.setattr(cloud_inference, "_CloudProvider", Paid)
     for _ in range(3):
         result = step(runtime, local_admit=lambda: False)
         if result["status"] == "failed":
@@ -1378,14 +1380,14 @@ def test_shadow_unit_stays_pending_when_the_run_lock_is_busy_after_measuring(run
     seed(led, body="見出しのない完全合成の居住記録。")
     cloud[1][0] = "shadow"
     measured = [False]
-    original = worker._CloudProvider
+    original = cloud_inference._CloudProvider
     class Measured(original):
         def __call__(self, prompt, **kwargs):
             value = super().__call__(prompt, **kwargs)
             measured[0] = True
             clock.mono += 600          # the lock wait runs into the unit deadline
             return value
-    monkeypatch.setattr(worker, "_CloudProvider", Measured)
+    monkeypatch.setattr(cloud_inference, "_CloudProvider", Measured)
     monkeypatch.setattr(context_refresh, "acquire_run_lock",
                         lambda: None if measured[0] else os.open(os.devnull, os.O_RDONLY))
     for _ in range(3):   # the rotation reaches the scan (lane B) after the fact-less summary
@@ -1594,7 +1596,7 @@ def test_paired_read_retains_distinct_pinned_and_current_contracts(runtime, clou
     drain(runtime)
     if route == 'key_removed':
         monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *a, **k: None)
-        monkeypatch.setattr(worker, '_cloud_settings', lambda cfg: worker.cloud_policy.cloud_config(
+        monkeypatch.setattr(cloud_inference, '_cloud_settings', lambda cfg: worker.cloud_policy.cloud_config(
             cfg, key_present=bool(worker.cloud_policy.api_key()))[0])
     else:
         cloud[1][0] = route
@@ -1632,8 +1634,9 @@ def test_context_only_early_return_never_reads_a_runtime_route_or_credentials(ru
         cfg = None
     def forbidden(*args, **kwargs):
         pytest.fail('context-only early return read credentials or a new runtime route')
-    monkeypatch.setattr(worker, '_cloud_settings', forbidden)
+    monkeypatch.setattr(cloud_inference, '_cloud_settings', forbidden)
     monkeypatch.setattr(worker, 'load_config', forbidden)
+    monkeypatch.setattr(cloud_inference, 'load_config', forbidden)
     monkeypatch.setattr(worker.cloud_policy, 'api_key', forbidden)
     monkeypatch.setattr(semantic_jev, 'api_key', forbidden)
     assert context_refresh.context_view_input(led.db, 1, cfg=cfg) is None
@@ -1790,7 +1793,7 @@ def _source_repair_wire_protocol(monkeypatch, cloud):
     """Old negative fixtures use the real repair reservation protocol, never a fake capability."""
     from contextlib import nullcontext
 
-    original = worker._CloudProvider
+    original = cloud_inference._CloudProvider
     monkeypatch.setitem(CFG, 'cloud_llm', {'mode':'on', 'provider':'anthropic', 'project_ids':[1]})
     monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
@@ -1806,7 +1809,7 @@ def _source_repair_wire_protocol(monkeypatch, cloud):
             'stop_reason':'end_turn','content':[{'type':'text','text':json.dumps(answer)}]}).encode()
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
         lambda key, **kwargs:_SOURCE_REPAIR_CLIENT(key, post_fn=post, **kwargs))
-    monkeypatch.setattr(worker, '_CloudProvider', lambda *args, **kwargs:
+    monkeypatch.setattr(cloud_inference, '_CloudProvider', lambda *args, **kwargs:
         _SOURCE_REPAIR_PROVIDER(*args, **kwargs) if kwargs.get('on_reserved_tx') else original(*args, **kwargs))
 
 
@@ -1819,7 +1822,7 @@ def source_repair(runtime, cloud, monkeypatch):
     monkeypatch.setitem(CFG, 'cloud_llm', {'mode':'on', 'provider':'anthropic', 'project_ids':[1]})
     monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
-    original_provider = worker._CloudProvider
+    original_provider = cloud_inference._CloudProvider
     control = {'sent':[], 'fault':None, 'qa_fault':None}
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(worker.cloud_policy, 'pricing_valid',
@@ -1859,7 +1862,7 @@ def source_repair(runtime, cloud, monkeypatch):
         return 200, {}, raw
     monkeypatch.setattr(worker.anthropic_client, 'AnthropicClient',
         lambda key, **kwargs: _SOURCE_REPAIR_CLIENT(key, post_fn=post, **kwargs))
-    monkeypatch.setattr(worker, '_CloudProvider', lambda *args, **kwargs:
+    monkeypatch.setattr(cloud_inference, '_CloudProvider', lambda *args, **kwargs:
         _SOURCE_REPAIR_PROVIDER(*args, **kwargs) if kwargs.get('on_reserved_tx') else InitialProvider(*args, **kwargs))
     def judge(body, timeout):
         assert not led.db.in_transaction and timeout > 0
@@ -1930,7 +1933,7 @@ def test_openai_source_repair_replays_high_response_before_publication(runtime, 
 
     led, _, _ = runtime
     monkeypatch.setitem(CFG, 'cloud_llm', {'mode':'on', 'provider':'openai', 'project_ids':[1]})
-    monkeypatch.setattr(worker, '_cloud_settings', lambda cfg: worker.cloud_policy.resolve_settings(cfg, worker.HOME)[0])
+    monkeypatch.setattr(cloud_inference, '_cloud_settings', lambda cfg: worker.cloud_policy.resolve_settings(cfg, worker.HOME)[0])
     monkeypatch.setattr(worker.cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')
     monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
@@ -1957,7 +1960,7 @@ def test_openai_source_repair_replays_high_response_before_publication(runtime, 
     class Initial:
         def __init__(self, _ledger, cfg, **kwargs):
             self.current = kwargs['current']
-            self.contract = worker._cloud_contract(cfg, route='patient_context', purpose='patient_context')
+            self.contract = cloud_inference._cloud_contract(cfg, route='patient_context', purpose='patient_context')
             self.model = self.contract['model']
             self.possibly_sent = False
         def guard(self):
@@ -1978,7 +1981,7 @@ def test_openai_source_repair_replays_high_response_before_publication(runtime, 
                 answer = {'patient_context':items}
             self.possibly_sent = True
             return {'status':200, 'finish_reason':'stop', 'text':json.dumps(answer)}
-    monkeypatch.setattr(worker, '_CloudProvider', lambda *args, **kwargs:
+    monkeypatch.setattr(cloud_inference, '_CloudProvider', lambda *args, **kwargs:
                         _SOURCE_REPAIR_PROVIDER(*args, **kwargs) if kwargs.get('on_reserved_tx') else Initial(*args, **kwargs))
     drain(runtime)
     assert sends and all(body['model'] == 'gpt-6.1-sol' and body['reasoning'] == {'effort':'high'}
@@ -2090,6 +2093,7 @@ def test_source_repair_rejects_changed_evidence_before_adoption(runtime, source_
         monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *a, **k: None)
     elif tamper == 'budget':
         monkeypatch.setattr(worker, 'load_config', lambda: {**CFG, 'semantic':{**CFG['semantic'], 'daily_request_budget':0}})
+        monkeypatch.setattr(cloud_inference, 'load_config', lambda: {**CFG, 'semantic':{**CFG['semantic'], 'daily_request_budget':0}})
     with led.db:
         if tamper in ('duplicate_slot','duplicate_header'):
             led.db.execute('INSERT INTO artifacts(kind,project_id,message_id,content,model,meta,created_at) '
@@ -2477,7 +2481,7 @@ def test_thinking_only_length_holds_summary_and_consumes_no_second_repair(runtim
         monkeypatch.setattr(context_refresh, '_quality_failed', lambda *args:True)
         monkeypatch.setattr(context_refresh, '_quality_answers', lambda *args:{
             'a':{'choice':'supports','confidence':1},'b':{'choice':'important_missing','confidence':1}})
-        original = worker._CloudProvider
+        original = cloud_inference._CloudProvider
 
         class LengthOnly(original):
             def __call__(self, prompt, **kwargs):
@@ -2485,7 +2489,7 @@ def test_thinking_only_length_holds_summary_and_consumes_no_second_repair(runtim
                 self.possibly_sent = True
                 return length_only(prompt, **kwargs)
 
-        monkeypatch.setattr(worker, '_CloudProvider', LengthOnly)
+        monkeypatch.setattr(cloud_inference, '_CloudProvider', LengthOnly)
         identity = {'fact_ids':['a','b'],'input_key':'1'*64,'audit_key':'2'*64,
                     'candidate_key':'3'*64,'failure_key':'4'*64}
         doc = {'summary':[{'text':facts[0]['text'],'fact_ids':['a']}]}
@@ -2754,7 +2758,7 @@ def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, 
     led, _, _ = runtime
     monkeypatch.setitem(CFG, 'cloud_llm', {'mode': 'on', 'provider': 'openai', 'project_ids': [1]})
     monkeypatch.setattr(worker, 'HOME', str(tmp_path))
-    monkeypatch.setattr(worker, '_cloud_settings', lambda cfg: worker.cloud_policy.resolve_settings(cfg, worker.HOME)[0])
+    monkeypatch.setattr(cloud_inference, '_cloud_settings', lambda cfg: worker.cloud_policy.resolve_settings(cfg, worker.HOME)[0])
     monkeypatch.setattr(worker.cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')
     monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
@@ -2764,7 +2768,7 @@ def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, 
     class Initial:
         def __init__(self, _ledger, cfg, **kwargs):
             self.current = kwargs['current']
-            self.contract = worker._cloud_contract(cfg, route='patient_context', purpose='patient_context')
+            self.contract = cloud_inference._cloud_contract(cfg, route='patient_context', purpose='patient_context')
             self.model = self.contract['model']
             self.possibly_sent = False
 
@@ -2792,7 +2796,7 @@ def test_openai_summary_high_repair_is_audited_published_and_rechecked(runtime, 
             self.possibly_sent = True
             return {'status': 200, 'finish_reason': 'stop', 'text': json.dumps(answer)}
 
-    monkeypatch.setattr(worker, '_CloudProvider', lambda *args, **kwargs:
+    monkeypatch.setattr(cloud_inference, '_CloudProvider', lambda *args, **kwargs:
                         _SOURCE_REPAIR_PROVIDER(*args, **kwargs)
                         if kwargs.get('purpose') == 'quality_repair' else Initial(*args, **kwargs))
     sends = []

@@ -13,6 +13,7 @@ import time
 import pytest
 
 import extract_llm
+import cloud_inference
 import semantic_v4 as v4
 import semantic_v4_cohort as cohort
 from inference_version import CURRENT_VERSION, VERSION_KEY
@@ -236,7 +237,7 @@ def test_repaired_projection_replays_bound_answers_and_rejects_tampering(tmp_pat
                 raise ValueError('synthetic-receipt-invalid')
             return {}
 
-        monkeypatch.setattr(extract_llm, '_cloud_repair_answer_evidence', verify)
+        monkeypatch.setattr(cloud_inference, '_cloud_repair_answer_evidence', verify)
         result_meta = {**common, 'repaired': True, 'repair_artifact_id': completed_id}
         proof = v4._repaired_projection_producer(db.db, 1, 1, fp, policy, member, repaired['doc'], result_meta)
         assert proof['providers'] == ['local', 'openai'] and proof['repair'][0]['reservation_id'] == rid

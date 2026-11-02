@@ -7,6 +7,7 @@ import pytest
 import config_edit
 import cloud_policy
 import extract_llm
+import cloud_inference
 import llm_availability
 import local_llm
 import mcs_config
@@ -215,6 +216,7 @@ def test_provider_failure_keeps_local_user_settings_for_existing_consumers(tmp_p
         return real_load_config(str(config))
 
     monkeypatch.setattr(extract_llm, "load_config", load_local)
+    monkeypatch.setattr(cloud_inference, 'load_config', load_local)
     monkeypatch.setattr(llm_availability, "load_config", load_local)
     monkeypatch.setattr(mcs_util, "load_config", load_local)
     monkeypatch.setenv("MCS_EXTRACT_PREFILTER", "on")

@@ -1,6 +1,7 @@
 """Synthetic checks for stage-scoped provider observations."""
 
 import pytest
+import cloud_inference
 
 import semantic_transport as transport
 
@@ -8,7 +9,6 @@ import semantic_transport as transport
 def test_cloud_chunk_contract_matches_its_settled_model_and_effort(tmp_path, monkeypatch):
     import json
     import cloud_policy
-    import extract_llm
     import mcs_util
     import openai_client
     import semantic_extraction
@@ -18,7 +18,7 @@ def test_cloud_chunk_contract_matches_its_settled_model_and_effort(tmp_path, mon
     try:
         rid = 'a' * 32
         selection = {'provider': 'openai', 'model': openai_client.SOL_MODEL, 'effort': 'high'}
-        contract = extract_llm._cloud_contract(selection=selection)
+        contract = cloud_inference._cloud_contract(selection=selection)
         reservation = {'reservation_id': rid, 'model': selection['model'], 'route': 'semantic_backlog',
                        'project_id': 1, 'message_id': 1, 'effort': 'high', 'profile': 'sol-high',
                        'price_version': openai_client.SOL_PRICE_VERSION}
@@ -54,14 +54,13 @@ def test_cloud_chunk_contract_matches_its_settled_model_and_effort(tmp_path, mon
 
 def test_execution_contract_filters_old_chunks_without_hiding_historical_projection(monkeypatch):
     import json
-    import extract_llm
     import openai_client
     import semantic_extraction as extraction
     from inference_version import CURRENT_VERSION, VERSION_KEY
 
-    old = extract_llm._cloud_contract(selection={
+    old = cloud_inference._cloud_contract(selection={
         'provider': 'openai', 'model': openai_client.MODEL, 'effort': 'low'})
-    new = extract_llm._cloud_contract(selection={
+    new = cloud_inference._cloud_contract(selection={
         'provider': 'openai', 'model': openai_client.MODEL, 'effort': 'medium'})
     spec = {'index': 0, 'hash': 'synthetic-hash', 'start': 0, 'end': 1, 'text': 'x'}
     meta = {VERSION_KEY: CURRENT_VERSION, 'schema': extraction.SCHEMA_VERSION,
@@ -403,6 +402,7 @@ def test_settled_cloud_prefix_survives_a_send_cutoff_and_is_reused(tmp_path, mon
         cfg["cloud_llm"] = {"mode": "on", "project_ids": [1]}
         monkeypatch.setattr(extract_llm, "HOME", str(tmp_path))
         monkeypatch.setattr(extract_llm, "load_config", lambda *a: cfg)
+        monkeypatch.setattr(cloud_inference, 'load_config', lambda *a: cfg)
         monkeypatch.setattr(semantic_drain, "load_config", lambda *a: cfg)
         monkeypatch.setattr(cloud_policy, "api_key", lambda *a: "synthetic-key")
         monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 1))

@@ -12,6 +12,7 @@ import time
 
 import local_llm
 import initial_import_state
+import cloud_inference
 import inference_dependency_loss as dependency_loss
 import patient_context_artifacts as context_artifacts
 from clinical_chunking import PLAN_VERSION
@@ -48,7 +49,7 @@ _FAILURE_CODE = re.compile(r"nightly_[a-z_]{1,60}")
 _CHECKS = hashlib.sha256(Path(context_plan.__file__).read_bytes()).hexdigest()
 _STATE_CODE = hashlib.sha256(Path(context_state.__file__).read_bytes()).hexdigest()
 _DEPENDENCY_CODE = hashlib.sha256(Path(dependency_loss.__file__).read_bytes()).hexdigest()
-COMMIT_MARGIN = 5
+COMMIT_MARGIN = cloud_inference.COMMIT_MARGIN
 
 
 def _quality_kind(kind, identity):
@@ -199,6 +200,8 @@ def _adoption_epoch_expected(db):
 
 def _contract(cfg, pid=None):
     import extract_llm
+    import cloud_inference
+    import cloud_policy
     import extract
     contract = {"version": CONTRACT, VERSION_KEY: CURRENT_VERSION, "chunks": PLAN_VERSION,
             "facts": 2, "context_checks": _CHECKS, "state_code": _STATE_CODE, "dependency_code": _DEPENDENCY_CODE,
@@ -206,10 +209,10 @@ def _contract(cfg, pid=None):
             "context": extract_llm.PATIENT_CONTEXT_VERSION,
             "model": local_llm.resolve(cfg)[1]}
     if pid is not None:
-        settings = extract_llm._cloud_settings(cfg)
+        settings = cloud_inference._cloud_settings(cfg)
         if (settings["mode"] == "on"
-                and extract_llm.cloud_policy.eligible(settings, "patient_context", pid)):
-            contract["provider"] = extract_llm._cloud_contract(cfg, route="patient_context", purpose="patient_context")
+                and cloud_policy.eligible(settings, "patient_context", pid)):
+            contract["provider"] = cloud_inference._cloud_contract(cfg, route="patient_context", purpose="patient_context")
     return contract
 
 
@@ -833,8 +836,8 @@ def _inference_coverage(db, pid, cfg, snapshot, *, read_proof=None):
 
 
 def _saved_cloud_contract(provider):
-    import extract_llm
-    return provider if extract_llm._known_cloud_contract(provider) else None
+    import cloud_inference
+    return provider if cloud_inference._known_cloud_contract(provider) else None
 
 
 def _publication_contract(cfg, meta):
@@ -1767,7 +1770,7 @@ def _quality_reserve_repair(ledger, pid, identity, claim, current, receipt_fence
 
 
 def _new_summary_repair_response(db, pid, identity, provider, prompt, response, summary):
-    import extract_llm
+    import cloud_inference
     if (len(response) != 1 or response[0][0] != prompt or len(provider.completed_reservations) != 1):
         raise ValueError("patient_summary_repair_evidence_invalid")
     reservation = provider.completed_reservations[0]
@@ -1784,7 +1787,7 @@ def _new_summary_repair_response(db, pid, identity, provider, prompt, response, 
              "reservation_id": rid, "contract": provider.contract, "night_id": owner["night_id"],
              "original_audit_key": identity["audit_key"],
              "original_ids": [row["fact_ids"][0] for row in summary]}
-    evidence = extract_llm._cloud_repair_answer_evidence(
+    evidence = cloud_inference._cloud_repair_answer_evidence(
         db, reservation_artifact_id=proof["reservation_artifact_id"], reservation_id=rid,
         route="patient_context", project_id=pid, message_id=None, unit_key="summary_quality_repair",
         owner=owner, prompt=prompt, answer_text=proof["answer_text"], contract=proof["contract"])
@@ -1800,7 +1803,7 @@ def _repair_response(content):
 
 
 def _summary_repair_response(db, pid, original, repaired, content, meta, prompt):
-    import extract_llm
+    import cloud_inference
     proof = _repair_response(content)
     if (not isinstance(proof, dict) or set(proof) != {"version", "answer_text", "reservation_artifact_id",
             "reservation_id", "contract", "night_id", "original_audit_key", "original_ids", "receipt_sig"}
@@ -1819,7 +1822,7 @@ def _summary_repair_response(db, pid, original, repaired, content, meta, prompt)
     if answer != {"fact_ids": content.get("fact_ids")}:
         raise ValueError("patient_summary_repair_evidence_invalid")
     owner = {"night_id": proof["night_id"], "source_sig": original["input_key"]}
-    evidence = extract_llm._cloud_repair_answer_evidence(
+    evidence = cloud_inference._cloud_repair_answer_evidence(
         db, reservation_artifact_id=proof["reservation_artifact_id"], reservation_id=proof["reservation_id"],
         route="patient_context", project_id=pid, message_id=None, unit_key="summary_quality_repair",
         owner=owner, prompt=prompt, answer_text=proof["answer_text"], contract=proof["contract"])
@@ -1836,6 +1839,8 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
     spent reservation remains spent if the provider result or commit is unknown.
     """
     import extract_llm
+    import cloud_inference
+    import cloud_policy
 
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
@@ -1953,22 +1958,22 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
     # repair prompt's reservation bound before consuming the logical repair.
     request_texts = {"system": extract_llm.anthropic_client.SYSTEM,
                      "messages": [{"content": prompt}]}
-    selection, errors = extract_llm.cloud_policy.resolve_profile(
+    selection, errors = cloud_policy.resolve_profile(
         cfg, route="patient_context", purpose="quality_repair", root=extract_llm.HOME)
     if errors or selection is None:
         return "deferred", None
     distinct = (selection['provider'] == 'openai' and selection['profile'] is not None
-                or extract_llm._cloud_contract(selection=selection) != _contract(cfg, pid).get("provider"))
+                or cloud_inference._cloud_contract(selection=selection) != _contract(cfg, pid).get("provider"))
     selected_tokens = selection["max_tokens"] if selection["max_tokens"] is not None else 1600
-    if extract_llm.cloud_policy.budget_block_reason(
-            ledger, extract_llm._cloud_settings(cfg), max_tokens=selected_tokens,
-            input_bound=extract_llm.cloud_policy.input_bound(request_texts), selection=selection):
+    if cloud_policy.budget_block_reason(
+            ledger, cloud_inference._cloud_settings(cfg), max_tokens=selected_tokens,
+            input_bound=cloud_policy.input_bound(request_texts), selection=selection):
         return "deferred", None
     if not _quality_reserve_repair(ledger, pid, identity, claim, current, receipt_fence):
         return "held", None
     if not current() or not _quality_owns(ledger.db, pid, identity["input_key"], claim):
         return "held", None
-    provider = extract_llm._CloudProvider(ledger, cfg, route="patient_context", project_id=pid,
+    provider = cloud_inference._CloudProvider(ledger, cfg, route="patient_context", project_id=pid,
         unit_key="summary_quality_repair", deadline=deadline,
         current=lambda: current() and _quality_owns(ledger.db, pid, identity["input_key"], claim),
         dispatch=lambda fn, **_kwargs: fn(), owner={"night_id": night_id, "source_sig": identity["input_key"]},
@@ -1979,7 +1984,7 @@ def _quality_repair_candidate(ledger, pid, cfg, night_id, doc, identity, claim, 
                       **({"evidence_out": response} if distinct else {}))
         repaired = context_plan.summary_selection(answer, reports)
         provider.commit_guard()
-    except (extract_llm.CloudFallback, Deferred, ValueError):
+    except (cloud_inference.CloudFallback, Deferred, ValueError):
         return "held", None
     new_ids = [row["fact_ids"][0] for row in repaired]
     if set(new_ids) == selected or not missing <= set(new_ids) or rejected & set(new_ids):
@@ -2187,13 +2192,13 @@ def _source_repair_inputs(db, pid, captured, threshold):
 
 
 def _verify_source_repair_rows(db, pid, source_key, origin, rows):
-    import extract_llm
+    import cloud_inference
     import semantic_audit
     assessment, threshold = origin.get('quality_assessment'), origin.get('quality_threshold')
     if (not isinstance(assessment, dict) or set(assessment) != {'code', 'policy'}
             or any(not valid_hash(value) for value in assessment.values())
             or type(threshold) not in (int, float) or not math.isfinite(threshold) or not 0 <= threshold <= 1
-            or not extract_llm._known_cloud_contract(origin.get('repair_provider'))):
+            or not cloud_inference._known_cloud_contract(origin.get('repair_provider'))):
         raise ValueError('nightly_source_repair_invalid')
     db.execute('SAVEPOINT source_repair_replay')
     try:
@@ -2271,7 +2276,7 @@ def _verify_source_repair_rows(db, pid, source_key, origin, rows):
                                              proof['split'], PLAN_VERSION])):
                 raise ValueError('nightly_source_repair_invalid')
             def replay(payload):
-                evidence = extract_llm._cloud_repair_answer_evidence(db,
+                evidence = cloud_inference._cloud_repair_answer_evidence(db,
                     reservation_artifact_id=meta['reservation_artifact_id'], reservation_id=meta['reservation_id'],
                     route='patient_context', project_id=pid, message_id=source['message_id'] or None,
                     unit_key=unit_key, owner={'repair_input_key':origin['repair_input_key'],'unit_key':unit_key},
@@ -2303,6 +2308,7 @@ def _verify_source_repair_rows(db, pid, source_key, origin, rows):
 def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, current, deadline, admit, threshold):
     """Advance one reserved source repair unit; no saved slot may dispatch again."""
     import extract_llm
+    import cloud_inference
     import cloud_policy
     identity, source = captured['identity'], captured['sources'][0]
     repair_key = identity['source_input_key']
@@ -2342,7 +2348,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
         'original_receipts_sig':receipt_sig, 'plan':PLAN_VERSION}
     if origin['contract'].get('provider'):
         origin.update(provider=origin['contract']['provider'], model=origin['contract']['provider']['model'])
-    repair_provider = extract_llm._cloud_contract(selection=selection)
+    repair_provider = cloud_inference._cloud_contract(selection=selection)
     distinct = (selection['provider'] == 'openai' and selection['profile'] is not None
                 or repair_provider != origin.get('provider'))
     if distinct:
@@ -2420,7 +2426,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
             return fn()
         finally:
             os.close(fd)
-    provider = extract_llm._CloudProvider(ledger, cfg, route='patient_context', project_id=pid,
+    provider = cloud_inference._CloudProvider(ledger, cfg, route='patient_context', project_id=pid,
         message_id=source['message_id'] or None, unit_key=unit_key, deadline=deadline,
         current=lambda: current() and _quality_owns(ledger.db, pid, identity['input_key'], claim),
         dispatch=lambda fn, **_kwargs:fn(), reserve_dispatch=reserve_dispatch, on_reserved_tx=on_reserved,
@@ -2434,7 +2440,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
                            'historical_by_id':{fact['id']:{'historical':fact['historical']} if 'historical' in fact else {}
                                                for fact in captured['facts']}})
         provider.commit_guard()
-    except (extract_llm.CloudFallback, Deferred, ValueError):
+    except (cloud_inference.CloudFallback, Deferred, ValueError):
         return ('unknown' if slot[0] is not None else 'deferred'), None
     if slot[0] is None or not current():
         return 'unknown', None
@@ -2452,7 +2458,7 @@ def _source_quality_repair_step(ledger, pid, cfg, night_id, captured, claim, cur
         if finish_reason not in ('stop', 'length'):
             return 'unknown', None
         try:
-            verified = extract_llm._cloud_repair_answer_evidence(
+            verified = cloud_inference._cloud_repair_answer_evidence(
                 ledger.db, reservation_artifact_id=owned[0]['meta']['reservation_artifact_id'],
                 reservation_id=owned[0]['meta']['reservation_id'], route='patient_context', project_id=pid,
                 message_id=source['message_id'] or None, unit_key=unit_key,
@@ -2575,6 +2581,7 @@ def _source_repair_seal(ledger, pid, source, contract, protected, header, identi
 def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=None, base_meta=None, source=None, source_candidate_ref=None):
     """Audit one bounded page of the current candidate outside DB and run locks."""
     import extract_llm
+    import cloud_policy
     import semantic_audit
     import semantic_jev
     import semantic_policy
@@ -2584,7 +2591,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
     if ledger.db.in_transaction:
         raise RuntimeError("patient_summary_transaction_active")
     key = semantic_jev.api_key()
-    cloud_key = extract_llm.cloud_policy.selected_key(extract_llm.HOME, cfg)
+    cloud_key = cloud_policy.selected_key(extract_llm.HOME, cfg)
     scfg, errors = semantic_policy.semantic_config(cfg, key_present=bool(key))
     local_quality = bool(isinstance(base_meta, dict) and not base_meta.get('provider')
                          and (base_meta.get('route_contract') or not _contract(cfg, pid).get('provider')))
@@ -2668,7 +2675,7 @@ def _quality_step(ledger, pid, cfg, night_id, doc, deadline, admit, *, base_doc=
                     return False
             if (time.monotonic() >= deadline or not admit() or not extract_llm._writer_current(full=True)
                     or live_key != key or problems or live_semantic["mode"] == "off" and not local_quality or paused(ledger.db, pid)
-                    or extract_llm.cloud_policy.selected_key(extract_llm.HOME, live) != cloud_key
+                    or cloud_policy.selected_key(extract_llm.HOME, live) != cloud_key
                     or live_semantic["project_ids"] is not None and pid not in live_semantic["project_ids"]
                     or _quality_assessment(live_semantic) != assessment):
                 denied = True
@@ -3100,11 +3107,12 @@ def _ask(cfg, payload, deadline, admit, *, provider=None, evidence_out=None):
         selected_tokens = selection.get("max_tokens") if selection is not None else None
         max_tokens = 1600 if selected_tokens is None else selected_tokens
         if selection is not None:
-            import extract_llm
+            import cloud_inference
+            import cloud_policy
             body = provider.client.body(prompt, max_tokens, None)
-            if extract_llm.cloud_policy.budget_block_reason(
-                    provider.ledger, extract_llm._cloud_settings(cfg), max_tokens=max_tokens,
-                    input_bound=extract_llm.cloud_policy.input_bound(body), selection=selection):
+            if cloud_policy.budget_block_reason(
+                    provider.ledger, cloud_inference._cloud_settings(cfg), max_tokens=max_tokens,
+                    input_bound=cloud_policy.input_bound(body), selection=selection):
                 raise Deferred("nightly_cloud_budget")
         response = provider(prompt, deadline=deadline, max_tokens=max_tokens)
     else:
@@ -3376,6 +3384,9 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     ``complete(project_id)`` may add an extraction gate to the current
     post-level inference and acquisition evidence required for every patient."""
     import extract_llm
+    import cloud_inference
+    import cloud_client
+    import cloud_policy
     if ledger.db.in_transaction:
         return {"status": "deferred", "done": 0, "reason": "transaction_active"}
     local_admit = local_admit or admit
@@ -3462,10 +3473,10 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     mode = extract_llm._cloud_mode(ledger, cfg, "patient_context", pid)
     cloud_requested = bool(snapshot["contract"].get("provider"))
     quality_required = cloud_requested or _has_prior_quality_failure(ledger.db, pid)
-    cloud_settings = extract_llm._cloud_settings(cfg) if mode in ("on", "shadow", "dry_run") else None
+    cloud_settings = cloud_inference._cloud_settings(cfg) if mode in ("on", "shadow", "dry_run") else None
     cloud_selection = None
     if cloud_settings is not None:
-        cloud_selection, errors = extract_llm.cloud_policy.resolve_profile(
+        cloud_selection, errors = cloud_policy.resolve_profile(
             cfg, route="patient_context", purpose="patient_context", root=extract_llm.HOME)
         if errors or cloud_selection is None:
             return {"status": "source_changed", "done": 0, **stats}
@@ -3494,7 +3505,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                      and _digest(_source_occurrence(ledger.db, pid, actual)) == _digest(selected_occurrence[0])))
 
     def cloud_for(unit_key, mid=None, *, after_commit=False):
-        return extract_llm._CloudProvider(ledger, cfg, route="patient_context", project_id=pid,
+        return cloud_inference._CloudProvider(ledger, cfg, route="patient_context", project_id=pid,
             message_id=mid, unit_key=unit_key, deadline=deadline,
             current=(lambda: admit()
                 and _snapshot(ledger.db, pid, cfg, hydrate=False)["source_sig"] == snapshot["source_sig"]
@@ -3508,7 +3519,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
         if provider is not None:
             try:
                 provider.commit_guard()
-            except extract_llm.CloudFallback:
+            except cloud_inference.CloudFallback:
                 provider.discard()
 
     def local_route():
@@ -3536,12 +3547,12 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 meta["provider"] = provider.contract
                 meta["model"] = provider.model
                 return value
-            except extract_llm.cloud_client.CloudNotSent as error:
+            except cloud_client.CloudNotSent as error:
                 # nothing left the wire: defer the unit — it must not take a
                 # local slot or re-send next tick as if the refusal never ran
                 raise Deferred("nightly_cloud_not_sent") from error
-            except (extract_llm.CloudFallback, ValueError) as error:
-                changed = isinstance(error, extract_llm.CloudFallback) and str(error) == "cloud_unit_changed"
+            except (cloud_inference.CloudFallback, ValueError) as error:
+                changed = isinstance(error, cloud_inference.CloudFallback) and str(error) == "cloud_unit_changed"
                 paid = provider.possibly_sent
                 if changed:
                     provider.discard()
@@ -3852,7 +3863,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 except (ValueError, TypeError, KeyError, UnicodeError, RecursionError, RuntimeError):
                     repair_verified = False
                 if (problems or not _quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
-                        or quality_keys != (semantic_jev.api_key(), extract_llm.cloud_policy.selected_key(extract_llm.HOME, live_cfg))
+                        or quality_keys != (semantic_jev.api_key(), cloud_policy.selected_key(extract_llm.HOME, live_cfg))
                         or quality_identity["assessment"] != _quality_assessment(live_policy)
                         or (not _quality_skip_receipt(ledger.db, pid, quality_identity,
                                 {row["fact_ids"][0] for row in result["summary"]}, live_policy["match_threshold"])
@@ -3866,7 +3877,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                 live_policy, problems = semantic_policy.runtime_config(live_cfg)
                 import semantic_jev
                 if (problems or not _quality_scope_allowed(ledger.db, pid, live_policy, fresh["sources"])
-                        or source_quality_keys != (semantic_jev.api_key(), extract_llm.cloud_policy.selected_key(extract_llm.HOME, live_cfg))
+                        or source_quality_keys != (semantic_jev.api_key(), cloud_policy.selected_key(extract_llm.HOME, live_cfg))
                         or source_quality_identity["assessment"] != _quality_assessment(live_policy)
                         or (not _quality_skip_receipt(ledger.db, pid, source_quality_identity,
                                 set(), live_policy["match_threshold"]) if source_quality_skipped else
@@ -3877,7 +3888,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             if provider is not None:
                 try:
                     provider.commit_guard()
-                except extract_llm.CloudFallback:
+                except cloud_inference.CloudFallback:
                     ledger.db.rollback()
                     provider.discard()
                     return {"status": "deferred", "done": 0}
@@ -3997,7 +4008,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     and final_source is not None and context_plan.source_signature(final_source) == context_plan.source_signature(source)
                     and _digest(_source_occurrence(ledger.db, pid, final_source)) == _digest(selected_occurrence[0])
                     and _digest(extract_llm.load_config()) == adoption_cfg
-                    and source_quality_keys == (semantic_jev.api_key(), extract_llm.cloud_policy.selected_key(extract_llm.HOME, extract_llm.load_config()))
+                    and source_quality_keys == (semantic_jev.api_key(), cloud_policy.selected_key(extract_llm.HOME, extract_llm.load_config()))
                     and _quality_scope_allowed(ledger.db, pid, live_policy, [final_source])
                     and context_queries.patient_context_scope(ledger.db, pid).get('fetch_reason') not in ('forbidden', 'permission_denied', 'access_revoked')
                     and admit() and extract_llm._writer_current(full=True) and time.monotonic() < deadline
@@ -4007,7 +4018,7 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0}
             if not failure and estimated_unit:
-                extract_llm.cloud_policy.dryrun_tx(ledger, route="patient_context", project_id=pid,
+                cloud_policy.dryrun_tx(ledger, route="patient_context", project_id=pid,
                     unit_key=lane, input_chars=sum(source.get("body_length", 0) for source in snapshot["sources"]),
                     max_tokens=cloud_selection["max_tokens"] or 1600, model=cloud_selection["model"])
             if not failure and shadow_call is not None:
@@ -4035,9 +4046,9 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
             comparison = cloud_for(unit_key, mid, after_commit=True)
             cloud_value = fn(comparison, False, measured, True)
             comparison.commit_guard()
-        except extract_llm.cloud_client.CloudNotSent:
+        except cloud_client.CloudNotSent:
             cloud_value = None
-        except extract_llm.CloudFallback as error:
+        except cloud_inference.CloudFallback as error:
             if comparison is not None and str(error) == "cloud_unit_changed":
                 comparison.discard()
             cloud_value = None

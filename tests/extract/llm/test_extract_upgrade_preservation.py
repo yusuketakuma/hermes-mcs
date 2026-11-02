@@ -4,6 +4,7 @@ import json
 import pytest
 
 import extract_llm as llm
+import cloud_inference
 import inference_dependency_loss
 from inference_version import CURRENT_VERSION, LEGACY_VERSION, VERSION_KEY
 from extract_testkit import _hash, _ledger, _message, _qc_artifact
@@ -65,8 +66,9 @@ def test_dryrun_saves_selected_provider_model_after_job_preparation(
     try:
         cfg = {"cloud_llm": {"mode": "dry_run", "provider": provider, "project_ids": [1]}}
         monkeypatch.setattr(llm, "load_config", lambda: cfg)
+        monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
         monkeypatch.setattr(llm, "_rerender_cards", lambda *_args: None)
-        monkeypatch.setattr(llm, "_CloudProvider", lambda *_args, **_kwargs: pytest.fail("dry run sent a request"))
+        monkeypatch.setattr(cloud_inference, "_CloudProvider", lambda *_args, **_kwargs: pytest.fail("dry run sent a request"))
         pending, _ = llm._select_pending(db, 1, None, None, False)
         jobs, skipped, blocked = llm._prepare_jobs(db, pending, ("", "synthetic-local"), False)
         assert len(jobs) == 1 and skipped == blocked == 0

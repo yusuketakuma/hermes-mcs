@@ -8,6 +8,7 @@ import pytest
 
 import clinical_chunking
 import extract_llm
+import cloud_inference
 import inference_dependency_loss
 from inference_version import LEGACY_VERSION, VERSION_KEY
 from mcs_util import text_chunks
@@ -101,6 +102,7 @@ def test_actual_model_is_pinned_through_calls_and_final_stamp(db, monkeypatch):
     db.save_messages([_message(body=body)])
     current = ["synthetic-model-a"]
     monkeypatch.setattr(extract_llm, "load_config", lambda: {"local_llm": {"model": current[0]}})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {"local_llm": {"model": current[0]}})
     calls = []
     def infer(prompt, **kwargs):
         calls.append(extract_llm._resolved_llm()[1])
@@ -160,6 +162,7 @@ def test_every_real_adapter_call_uses_pinned_model_during_config_edit(monkeypatc
     models = []
     monkeypatch.setattr(extract_llm, "_CHUNK_SIZE", 90)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {"local_llm": {"model": current[0]}})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {"local_llm": {"model": current[0]}})
     monkeypatch.setattr(extract_llm, "_probe_format", lambda **kwargs: "plain")
     monkeypatch.setattr(extract_llm, "_choose_slot", lambda **kwargs: 0)
     monkeypatch.setattr(extract_llm.local_llm, "admission_enabled", lambda: False)

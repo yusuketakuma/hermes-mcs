@@ -16,6 +16,7 @@ import cloud_client
 import cloud_cli as cli
 import cloud_policy
 import extract_llm
+import cloud_inference
 import inference_version as inference
 import mcs_operations
 import mcs_requests
@@ -392,7 +393,7 @@ def _complete_context(db, config):
         db.db.execute("UPDATE patients SET fetch_state='complete',fetch_reason=NULL,history_floor=-1 "
                       "WHERE project_id=1")
     contract = context._contract({**config, "cloud_llm": {"mode": "off"}})
-    contract["provider"] = extract_llm._cloud_contract()
+    contract["provider"] = cloud_inference._cloud_contract()
     policy, errors = semantic_policy.semantic_config(config, key_present=True)
     assert not errors
     assessment = context._quality_assessment(policy)

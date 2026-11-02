@@ -6,6 +6,7 @@ import json
 import pytest
 
 import extract_llm as llm
+import cloud_inference
 import patient_state_context as state
 import inference_dependency_loss as dependency_loss
 from test_patient_state_context import seed, target
@@ -124,6 +125,7 @@ def test_worker_saves_frame_before_call_and_completed_progress_ignores_backgroun
         row = dict(led.db.execute("SELECT * FROM messages WHERE message_id=999").fetchone())
         row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
         monkeypatch.setattr(llm, "load_config", lambda: {"extract": {"patient_state_context": True}})
+        monkeypatch.setattr(cloud_inference, 'load_config', lambda: {"extract": {"patient_state_context": True}})
         seen = []
 
         def infer(body, **kwargs):
@@ -143,6 +145,7 @@ def test_worker_saves_frame_before_call_and_completed_progress_ignores_backgroun
         assert llm.progress_for_message(led.db, row, model=llm.MODEL)["state"] == "complete"
         seed(led, 2, body="本人の合成薬Aの残薬は8錠。", value="8錠", date="2026-10-02T10:00:00+09:00")
         monkeypatch.setattr(llm, "load_config", lambda: {"extract": {"patient_state_context": False}})
+        monkeypatch.setattr(cloud_inference, 'load_config', lambda: {"extract": {"patient_state_context": False}})
         assert llm.progress_for_message(led.db, row, model=llm.MODEL)["state"] == "complete"
     finally:
         led.close()
@@ -154,6 +157,7 @@ def test_malformed_saved_context_defers_without_any_model_call(tmp_path, monkeyp
         target(led)
         calls = []
         monkeypatch.setattr(llm, "load_config", lambda: {})
+        monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
         rows, _ = llm._select_pending(led, 1, {999}, None, False)
         jobs, _, _ = llm._prepare_jobs(led, rows, ("", llm.MODEL), False)
         assert len(jobs) == 1
@@ -175,6 +179,7 @@ def test_interrupted_worker_resumes_the_first_snapshot_after_history_changes(tmp
         row["_source_binding"] = dependency_loss.source_binding(led.db, row["project_id"], row["message_id"])
         led.save_messages([_message(mid=999, body=BODY, posted_at=row["posted_at"])])
         monkeypatch.setattr(llm, "load_config", lambda: {"extract": {"patient_state_context": True}})
+        monkeypatch.setattr(cloud_inference, 'load_config', lambda: {"extract": {"patient_state_context": True}})
         calls = []
 
         def infer(body, **kwargs):
@@ -249,6 +254,7 @@ def test_a_full_thread_never_blocks_preparation(tmp_path, monkeypatch, enabled):
                           + [_message(mid=mid, body=body, parent_id=1,
                                       posted_at=f"2026-09-19T00:0{mid}:00+09:00") for mid in range(2, 6)])
         monkeypatch.setattr(llm, "load_config", lambda: {"extract": {"patient_state_context": enabled}})
+        monkeypatch.setattr(cloud_inference, 'load_config', lambda: {"extract": {"patient_state_context": enabled}})
         rows, _ = llm._select_pending(led, 10, {5}, None, False)
         jobs, _, blocked = llm._prepare_jobs(led, rows, llm._resolved_llm(), False)
         assert blocked == 0 and len(jobs) == 1

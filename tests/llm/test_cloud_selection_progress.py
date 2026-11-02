@@ -11,6 +11,7 @@ import pytest
 
 import cloud_policy
 import extract_llm
+import cloud_inference
 from anthropic_client import AnthropicClient
 from ledger import Ledger
 import semantic_drain
@@ -30,6 +31,7 @@ def blocked_prefix(tmp_path, monkeypatch):
     cfg = _cfg("assist", fact_source="shadow", summary_mode="shadow", loop_mode="shadow")
     cfg["cloud_llm"] = {"mode": "on", "project_ids": None}
     monkeypatch.setattr(extract_llm, "load_config", lambda *a: cfg)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda *a: cfg)
     monkeypatch.setattr(semantic_drain, "load_config", lambda *a: cfg)
     monkeypatch.setattr(cloud_policy, "api_key", lambda *a: "synthetic-key")
     for pid in range(1, 514):
@@ -97,6 +99,7 @@ def test_selection_deadline_during_candidate_scan_is_incomplete(blocked_prefix, 
     module = semantic_drain if lane == "semantic" else extract_llm
     monkeypatch.setattr(module, "time", SimpleNamespace(
         monotonic=lambda: clock[0], time=time.time, perf_counter=time.perf_counter))
+    monkeypatch.setattr(cloud_inference, 'time', module.time)
     original = cloud_policy.history_target_ready
     checked = []
 
@@ -129,6 +132,7 @@ def test_extract_selection_interrupts_sql_before_candidate_iteration(blocked_pre
 
     monkeypatch.setattr(extract_llm.sqlite3, "connect", reader)
     monkeypatch.setattr(extract_llm, "time", SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     with pytest.raises(extract_llm._CloudSelectionIncomplete, match="^deadline$") as error:
         _select(led, "extract", deadline=deadline)
     assert isinstance(error.value.__cause__, sqlite3.OperationalError)
@@ -300,6 +304,7 @@ def test_incomplete_extract_selection_preserves_carry_and_unknown_counts(cloud_c
         raise extract_llm._CloudSelectionIncomplete("deadline")
 
     monkeypatch.setattr(extract_llm, "time", SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     monkeypatch.setattr(extract_llm, "_select_pending", incomplete)
     monkeypatch.setattr(extract_llm, "_prepare_jobs", lambda *a, **kw: pytest.fail("incomplete selection prepared work"))
     report = extract_llm.run_pending(led, limit=1, budget_s=180, cloud_only=True,
@@ -355,6 +360,7 @@ def test_cloud_deadline_stops_preparation_and_claims(cloud_candidates, monkeypat
         return result
 
     monkeypatch.setattr(extract_llm, "time", SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     monkeypatch.setattr(extract_llm, "_select_pending", selected)
     monkeypatch.setattr(extract_llm, "_prepare_jobs", preparing)
     monkeypatch.setattr(extract_llm, "_claim", lambda *a: pytest.fail("expired pass claimed a source"))
@@ -674,6 +680,7 @@ def test_cloud_priority_walk_resumes_across_deadlines_and_unrelated_writes(cloud
     monkeypatch.setattr(extract_llm.sqlite3, 'connect', connect)
     monkeypatch.setattr(extract_llm, '_CLOUD_PRIORITY_PAGE', 8)
     monkeypatch.setattr(extract_llm, 'time', SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     positions, observed = [], []
     for _ in range(200):
         try:
@@ -714,6 +721,7 @@ def test_cloud_priority_scope_change_invalidates_the_saved_walk(cloud_candidates
     monkeypatch.setattr(extract_llm.sqlite3, 'connect', connect)
     monkeypatch.setattr(extract_llm, '_CLOUD_PRIORITY_PAGE', 8)
     monkeypatch.setattr(extract_llm, 'time', SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     inode = [1]
     if change == 'db':
         monkeypatch.setattr(extract_llm, 'os', SimpleNamespace(stat=lambda _: SimpleNamespace(st_dev=1, st_ino=inode[0])))
@@ -747,6 +755,7 @@ def test_cloud_priority_retained_candidate_is_revalidated_after_deadline(cloud_c
             clock[0] += 10
         return result
     monkeypatch.setattr(extract_llm, 'time', SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     monkeypatch.setattr(cloud_policy, 'history_target_ready', expires_after_second)
     with pytest.raises(extract_llm._CloudSelectionIncomplete, match='deadline'):
         _select(led, 'extract', deadline=clock[0] + 5)
@@ -771,6 +780,7 @@ def test_cloud_priority_interrupted_metadata_query_retries_same_page(cloud_candi
         return db
     monkeypatch.setattr(extract_llm.sqlite3, 'connect', connect)
     monkeypatch.setattr(extract_llm, 'time', SimpleNamespace(monotonic=lambda: clock[0], time=time.time))
+    monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     with pytest.raises(extract_llm._CloudSelectionIncomplete, match='deadline'):
         _select(led, 'extract', deadline=clock[0] + 10)
     assert interrupted and led._cloud_priority_progress['after'] is None
@@ -848,6 +858,7 @@ def test_incomplete_selection_renews_then_saves_carried_paid_result(cloud_candid
     wall = [time.time()]
     monkeypatch.setattr(extract_llm, 'time', SimpleNamespace(
         monotonic=time.monotonic, time=lambda: wall[0], perf_counter=time.perf_counter))
+    monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     def incomplete(*args, **kwargs):
         raise extract_llm._CloudSelectionIncomplete('deadline')
     monkeypatch.setattr(extract_llm, '_select_pending', incomplete)
@@ -881,6 +892,7 @@ def test_short_incomplete_ticks_preserve_carry_but_expired_lease_is_never_commit
     wall = [time.time()]
     monkeypatch.setattr(extract_llm, 'time', SimpleNamespace(
         monotonic=time.monotonic, time=lambda: wall[0], perf_counter=time.perf_counter))
+    monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     def incomplete(*args, **kwargs):
         raise extract_llm._CloudSelectionIncomplete('deadline')
     monkeypatch.setattr(extract_llm, '_select_pending', incomplete)
@@ -957,6 +969,7 @@ def test_deadline_lock_wait_is_bounded_with_real_contended_lock(tmp_path, monkey
     monkeypatch.setattr(extract_llm, 'acquire_run_lock', acquire)
     monkeypatch.setattr(extract_llm, '_writer_current', lambda **kw: True)
     monkeypatch.setattr(extract_llm, 'time', SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep))
+    monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     try:
         with extract_llm._write_lock(True, wait_s=wait_s, deadline=100.1) as held:
             assert not held
@@ -987,6 +1000,7 @@ def test_carry_deadline_keeps_unprocessed_paid_result_and_lease(cloud_candidates
     lock['held'] = True
     monkeypatch.setattr(extract_llm, 'time', SimpleNamespace(
         monotonic=lambda: clock[0], time=time.time, perf_counter=time.perf_counter))
+    monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     settled, count, _ = extract_llm._settle_carry(led, carry, final=False,
         fence=extract_llm._WRITER_STATE, preserve_on_fence_loss=True, deadline=101.0,
         lock_context=extract_llm._write_lock(True), report=False)
@@ -1044,6 +1058,7 @@ def test_successful_selection_short_budget_never_waits_past_deadline_for_carry(
     monkeypatch.setattr(extract_llm, '_gc_stale_artifacts', lambda *a, **kw: None)
     monkeypatch.setattr(extract_llm, 'time', SimpleNamespace(
         monotonic=lambda: clock[0], sleep=sleep, time=time.time, perf_counter=time.perf_counter))
+    monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     try:
         report = extract_llm.run_pending(led, limit=1, budget_s=0.5, background=True,
             cloud_only=True, prioritize_patients=True, per_write_lock=True, carry=carry)
@@ -1129,6 +1144,7 @@ def test_cloud_tail_lock_contention_respects_observed_update_fence(
     monkeypatch.setattr(extract_llm, '_release', release)
     monkeypatch.setattr(extract_llm, 'time', SimpleNamespace(
         monotonic=lambda: clock[0], sleep=sleep, time=time.time, perf_counter=time.perf_counter))
+    monkeypatch.setattr(cloud_inference, 'time', extract_llm.time)
     try:
         report = extract_llm.run_pending(led, limit=1, budget_s=180, workers=1,
             background=True, cloud_only=True, prioritize_patients=True,

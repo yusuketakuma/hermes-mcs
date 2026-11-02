@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 import extract_llm as worker
+import cloud_inference
 import patient_context_refresh
 from extract_testkit import _hash, _ledger, _message, _v2_artifact
 from semantic_testkit import _canonical_cfg, _drain, _PassJev, _seeded_two
@@ -20,6 +21,7 @@ def capacity(tmp_path, monkeypatch):
     cfg = {"extract": {"patient_context_nightly": {"enabled": True}}}
     monkeypatch.setattr(worker, "_SLOT_OVERRIDE", LANES[3])
     monkeypatch.setattr(worker, "load_config", lambda: cfg)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(worker, "circuit_open_s", lambda led: 0)
     monkeypatch.setattr(worker, "disk_free_mb", lambda led: 100000)
@@ -99,6 +101,7 @@ def test_context_result_survives_budget_window_edit_only(
         cfg["semantic"] = {"mode": "assist", "until": None}
     current = [cfg]
     monkeypatch.setattr(worker, "load_config", lambda: current[0])
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: current[0])
 
     def run_due(ledger, config, *, admit, **kwargs):
         assert admit()
@@ -188,6 +191,7 @@ def test_resident_integration(monkeypatch, idle, lane, context_refresh_first):
     monkeypatch.setattr(worker.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(worker.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
     monkeypatch.setattr(worker, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(worker, "Ledger", lambda *args: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(worker.sys, "argv", ["extract_llm", "--all", "--lane", lane, "--stop-after", "1"])
 
@@ -218,6 +222,7 @@ def test_resident_exits_when_context_refresh_sees_update(monkeypatch):
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     monkeypatch.delenv(worker.local_llm.TURN_LOCK_ENV, raising=False)
     monkeypatch.setattr(worker, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(worker, "Ledger", lambda *args: SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(worker.sys, "argv", ["extract_llm", "--all", "--lane", "3", "--stop-after", "1"])
     monkeypatch.setattr(worker, "run_pending", lambda *a, **k: pytest.fail("extraction after update"))
@@ -230,6 +235,7 @@ def test_resident_exits_when_context_refresh_sees_update(monkeypatch):
 
 def test_config_failure_isolated(capacity, monkeypatch):
     monkeypatch.setattr(worker, "load_config", lambda: (_ for _ in ()).throw(ValueError("private")))
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: (_ for _ in ()).throw(ValueError("private")))
     assert run(capacity) == {"status": "error", "done": 0, "error": "ValueError"}
 
 

@@ -213,7 +213,7 @@ def _cached_provider(db, row, expected_model):
             # Older proofs have no effort field and only the original pinned model.
             return provider if ("effort" not in reservation
                                 and actual == cloud_policy.PROVIDERS[provider]) else None
-        import extract_llm
+        import cloud_inference
         import openai_client
         effort, profile = reservation.get("effort"), reservation.get("profile")
         definition = cloud_policy.PRICE_DEFINITIONS.get((actual, reservation.get("price_version")))
@@ -227,7 +227,7 @@ def _cached_provider(db, row, expected_model):
         elif effort is not None or profile is not None:
             return None
         selection = {"provider": provider, "model": actual, "effort": effort}
-        return provider if contract == extract_llm._cloud_contract(selection=selection) else None
+        return provider if contract == cloud_inference._cloud_contract(selection=selection) else None
     except (KeyError, TypeError, ValueError, RecursionError, OverflowError, AttributeError, sqlite3.Error):
         return None
 
@@ -314,8 +314,8 @@ def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
             if expected_contract is not None and expected_provider not in (None, 'local'):
                 actual_contract = meta.get('actual_contract')
                 if actual_contract is None and provider is not None:
-                    import extract_llm
-                    actual_contract = extract_llm._cloud_contract(selection={
+                    import cloud_inference
+                    actual_contract = cloud_inference._cloud_contract(selection={
                         'provider': provider, 'model': meta.get('actual_model'),
                         'effort': 'low' if provider == 'openai' else None})
                 if expected_contract is not None and actual_contract != expected_contract:
@@ -332,8 +332,8 @@ def _cached_chunks(db, project_id, message_id, source_fp, body_hash,
                 if provider != 'local':
                     contract = meta.get('actual_contract')
                     if contract is None:
-                        import extract_llm
-                        contract = extract_llm._cloud_contract(selection={
+                        import cloud_inference
+                        contract = cloud_inference._cloud_contract(selection={
                             'provider': provider, 'model': meta.get('actual_model'),
                             'effort': 'low' if provider == 'openai' else None})
                     cached[index]['producer_contract'] = contract

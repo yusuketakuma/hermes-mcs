@@ -257,7 +257,7 @@ def _summary_repair_evidence(db, bundle, summary, evidence, fp, policy, revision
                              completed_id=None, render_phase=None):
     """Replay a QC summary repair against its retained inputs and settled answer."""
     import bounded_http
-    import extract_llm
+    import cloud_inference
     import semantic_llm
     import semantic_projection
     from inference_dependency_loss import source_binding
@@ -366,7 +366,7 @@ def _summary_repair_evidence(db, bundle, summary, evidence, fp, policy, revision
                 raise runtime.RuntimeStale('summary_repair_prompt_invalid')
             called.append(True)
             try:
-                extract_llm._cloud_repair_answer_evidence(
+                cloud_inference._cloud_repair_answer_evidence(
                     db, reservation_artifact_id=reservations[0]['artifact_id'], reservation_id=answer['reservation_id'],
                     route='semantic_backlog', project_id=pid, message_id=mid, unit_key=answer['unit_key'],
                     owner=owner, prompt=prompt, answer_text=answer['text'], contract=answer['contract'])
@@ -3092,7 +3092,7 @@ def _reprocess_proof_generation(ledger, cfg, scfg):
     """Bind completion to interpretation and scope, never credentials or spending caps."""
     import patient_context_refresh
     import rollup
-    import extract_llm
+    import cloud_inference
     cloud = cfg.get('cloud_llm', {})
     cloud = cloud if isinstance(cloud, dict) else {'mode': 'invalid'}
     contract_cfg = dict(cfg)
@@ -3110,8 +3110,8 @@ def _reprocess_proof_generation(ledger, cfg, scfg):
         'context': patient_context_refresh._contract(cfg),
         'context_options': patient_context_refresh.options(cfg),
         'cloud': {key: cloud.get(key) for key in ('mode', 'routes', 'project_ids', 'exclude_project_ids', 'model')},
-        'cloud_contract': extract_llm._cloud_contract(contract_cfg),
-        'cloud_repair_contract': extract_llm._cloud_contract(
+        'cloud_contract': cloud_inference._cloud_contract(contract_cfg),
+        'cloud_repair_contract': cloud_inference._cloud_contract(
             contract_cfg, route='semantic_backlog', purpose='quality_repair'),
         'rollup': rollup.config_generation(cfg),
         'dictionary': rollup.generation_signature(ledger.db),
@@ -4103,7 +4103,7 @@ def _cloud_selection_memory_guard(fn):
 def _select_cloud_due(ledger, lane, kinds, qc_active, max_jobs, long_defers=None, *,
                       excluded=(), turns=None, held_after=None, deadline=None, isolated=False):
     """Choose active patients and their newest activity before archived cloud work."""
-    import extract_llm
+    import cloud_inference
     import cloud_policy
     global _cloud_selection_progress
     if deadline is not None and time.monotonic() >= deadline:
@@ -4141,7 +4141,7 @@ def _select_cloud_due(ledger, lane, kinds, qc_active, max_jobs, long_defers=None
         except OSError as error:
             raise _CloudSelectionIncomplete('reader_unavailable') from error
     cfg = load_config()
-    settings = extract_llm._cloud_settings(cfg)
+    settings = cloud_inference._cloud_settings(cfg)
     if (lane != "backlog" or settings["mode"] != "on" or "semantic_backlog" not in settings["routes"]
             or not cloud_policy.selected_key()):
         _cloud_selection_progress = None
@@ -4773,11 +4773,11 @@ def run_due(ledger, cfg: dict, result: dict, deadline: float,
                 # Selection ran without the writer lock. Re-read the full job
                 # and its live admission before any transition or model call.
                 import cloud_policy
-                import extract_llm
+                import cloud_inference
                 fresh = ledger.db.execute('SELECT * FROM fetch_jobs WHERE job_id=?',
                                           (job['job_id'],)).fetchone()
                 live_cfg = load_config(cfg_path) if cfg_path is not None else load_config()
-                live_settings = extract_llm._cloud_settings(live_cfg)
+                live_settings = cloud_inference._cloud_settings(live_cfg)
                 live_scfg, live_errors = runtime_config(live_cfg)
                 project = job['project_id']
                 if (time.monotonic() >= deadline or fresh is None or tuple(fresh) != tuple(job) or live_errors
