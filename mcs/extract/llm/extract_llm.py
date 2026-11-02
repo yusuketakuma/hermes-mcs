@@ -560,6 +560,9 @@ _CHUNK_SIZE = 3000
 # Extraction and checkpoint resume retain their existing contracts.
 _PROGRESS_MAX_NODES = 16384
 _INTERNAL_REPAIR_PROOF = "__mcs_internal_proof_v1"
+# Durable copy of the committed completeness claim, embedded in the artifact
+# content so a meta-only edit cannot promote stored execution history.
+_INTERNAL_LEAF_CLAIMS = "__mcs_leaf_claims_v1"
 # Legal terminal quality records; pending/started are resumption markers, never final.
 _QUALITY_TERMINAL = ("hint_gaps_resolved", "unresolved", "dispatch_unknown", "skipped_budget")
 
@@ -2536,7 +2539,8 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
                         or prior_meta.get("internal_proof_hash") != _internal_proof_hash(retained_proof)
                         or prior_meta.get("context_binding") != _chunk_context(retained, retained_context)
                         or not _verify_inline_extract_proof(ledger.db, retained, retained_context,
-                            {key: value for key, value in retained_document.items() if key != _INTERNAL_REPAIR_PROOF},
+                            {key: value for key, value in retained_document.items()
+                             if key not in (_INTERNAL_REPAIR_PROOF, _INTERNAL_LEAF_CLAIMS)},
                             retained_proof)):
                     return "rejected"
                 meta["internal_proof_version"] = 1
@@ -2553,6 +2557,23 @@ def _replace_current_tx(ledger, r, content: str, ctx: bool = False,
             meta["internal_proof_hash"] = _internal_proof_hash(inline_proof)
             if meta["internal_proof_hash"] is None:
                 return "rejected"
+        claims = meta["integrity"].get("completeness") if isinstance(meta.get("integrity"), dict) else None
+        if isinstance(claims, dict):
+            # Persist the verified leaf claim inside freshly written content:
+            # the claim travels with every retained/replayed result, so a
+            # meta-only edit cannot mint resolved over stored execution
+            # history. A retained prior is never re-sealed — rewriting its
+            # content would void the stored provider evidence.
+            clinical = _provider_strict_dict(content)
+            if clinical is None:
+                return "rejected"
+            existing = clinical.get(_INTERNAL_LEAF_CLAIMS)
+            if existing is not None:
+                if existing != claims:
+                    return "rejected"
+            elif not retaining_prior:
+                clinical[_INTERNAL_LEAF_CLAIMS] = claims
+                content = json.dumps(clinical, ensure_ascii=False)
         proof = (_prior_provider_evidence(prior, content, r["_source_binding"])
                  if retaining_prior else r.get("_provider_evidence"))
         if (not isinstance(proof, dict) or type(proof.get("complete")) is not bool
@@ -3753,20 +3774,51 @@ def _verify_completeness_claim(db, r, context, content, integrity, used_keys,
     leaf count. used_keys also carries superseded pending/started parents —
     they are cleanup targets, not adopted leaves — and an unsplit document
     commits no chunk checkpoints at all, so its only leaf is the artifact
-    itself. Run-time metadata alone cannot mint a resolved claim."""
+    itself. When no adopted-leaf evidence remains — a pre-seal result whose
+    checkpoints were already cleaned — only the floor provable from the
+    merged document is checked: well-formed terminal records whose claimed
+    remainder still covers the document's unresolved hints. Run-time
+    metadata alone cannot mint a resolved claim."""
     try:
         completeness = integrity.get("completeness")
         chunks_n = integrity.get("completeness_chunks")
         if not used_keys:
-            if (not isinstance(completeness, dict) or type(chunks_n) is not int
-                    or chunks_n != 1 or set(completeness) != {"0"}):
-                return False
             document = (content if isinstance(content, dict)
                         else _provider_strict_dict(content))
-            if document is None:
+            if document is None or not isinstance(completeness, dict) or not completeness:
                 return False
             expected = _hint_coverage(document, _rule_hints(r), r["body_text"])
-            return _quality_record_consistent(completeness["0"], expected)
+            if set(completeness) == {"0"}:
+                if type(chunks_n) is not int or chunks_n != 1:
+                    return False
+                claim = completeness["0"]
+                if (not isinstance(claim, dict) or not set(claim) <= {
+                        "state", "remaining_hint_candidates", "checked_hint_candidates"}):
+                    return False
+                return _quality_record_consistent(
+                    {k: claim[k] for k in ("state", "remaining_hint_candidates")}, expected)
+            # Older committed results carry per-leaf claims whose checkpoint
+            # evidence was already cleaned. Prove what the merged document
+            # still binds: well-formed terminal records — a resolved record
+            # holds no remainder — and a claimed remainder that still covers
+            # the document's unresolved hints. The per-leaf attribution
+            # beyond that floor is history detail the content alone cannot
+            # prove, and the claim is still rejected when it resolves work
+            # the document does not.
+            if type(chunks_n) is not int or chunks_n != len(completeness):
+                return False
+            total = 0
+            for claim in completeness.values():
+                if (not isinstance(claim, dict)
+                        or set(claim) != {"state", "remaining_hint_candidates"}
+                        or claim["state"] not in _QUALITY_TERMINAL
+                        or type(claim["remaining_hint_candidates"]) is not int
+                        or claim["remaining_hint_candidates"] < 0
+                        or (claim["state"] == "hint_gaps_resolved"
+                            and claim["remaining_hint_candidates"] != 0)):
+                    return False
+                total += claim["remaining_hint_candidates"]
+            return total >= expected["remaining_hint_candidates"]
         size = r["_chunk_size"] if chunk_size is None else chunk_size
         splits, saved = (saved_state if saved_state is not None
                          else _saved_chunk_state(db, r, context, chunk_size=size))
@@ -3808,7 +3860,19 @@ def _verify_completeness_claim(db, r, context, content, integrity, used_keys,
             expected = _hint_coverage(
                 leaf, _rule_hints({"body_text": pieces[key], "posted_at": r.get("posted_at")}),
                 pieces[key])
-            if not _quality_record_consistent(completeness.get(str(key)), expected):
+            claim = completeness.get(str(key))
+            durable = saved[key].get("_quality_result")
+            if durable is not None:
+                # The claim derives from the leaf's durable terminal record:
+                # it must match verbatim, except when recorded drops demote a
+                # stored resolved record to unresolved for the claim.
+                allowed = durable
+                if (durable.get("state") == "hint_gaps_resolved"
+                        and any(leaf.get(field) for field in ("_items_dropped", "_evidence_dropped"))):
+                    allowed = {**durable, "state": "unresolved"}
+                if claim != allowed:
+                    return False
+            if not _quality_record_consistent(claim, expected):
                 return False
         return True
     except (ValueError, TypeError, KeyError, OverflowError, RecursionError, sqlite3.Error):
@@ -4020,7 +4084,11 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                 _verify_atomic_witness(ledger.db, r, witness)
                 if repaired:
                     stored = _provider_strict_dict(witness[0]["content"])
-                    if (not isinstance(stored, dict) or stored.pop(_INTERNAL_REPAIR_PROOF, None) != inline
+                    stored_proof = stored.pop(_INTERNAL_REPAIR_PROOF, None) if isinstance(stored, dict) else None
+                    stored_claims = stored.pop(_INTERNAL_LEAF_CLAIMS, None) if isinstance(stored, dict) else None
+                    if (not isinstance(stored, dict) or stored_proof != inline
+                            or (isinstance(integrity, dict) and integrity.get("completeness") is not None
+                                and stored_claims != integrity["completeness"])
                             or not _verify_inline_extract_proof(ledger.db, r, context, stored, inline)):
                         raise RuntimeError("extract_proof_readback_failed")
                 _verify_unique_llm_current(ledger.db, r, witness[0]['artifact_id'])
@@ -4280,6 +4348,9 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None):
         marked = (_INTERNAL_REPAIR_PROOF in document or "internal_proof_version" in meta
                   or "internal_proof_hash" in meta)
         inline = document.pop(_INTERNAL_REPAIR_PROOF, None)
+        leaf_claims = document.pop(_INTERNAL_LEAF_CLAIMS, None)
+        if leaf_claims is not None and not isinstance(leaf_claims, dict):
+            return out
         if marked and (
                 type(meta.get("internal_proof_version")) is not int or meta["internal_proof_version"] != 1
                 or not isinstance(inline, dict)
@@ -4312,17 +4383,31 @@ def _progress_steps(db, row, *, model: str | None, expected_artifact_id=None):
             return out
         if (bound and isinstance(integrity, dict)
                 and ("completeness" in integrity or "completeness_chunks" in integrity)):
-            # The completeness claim is mutable metadata: binding it to the
-            # same replayed-leaf proof the commit required keeps a tampered
-            # final meta from promoting progress on its own.
+            # The completeness claim is mutable metadata: the durable copy
+            # committed inside the content — or the same replayed-leaf proof
+            # the commit required — keeps a tampered final meta from
+            # promoting progress on its own.
             completeness = integrity.get("completeness")
-            used = (tuple(int(k) if type(k) is str and k.isdigit() else k
-                          for k in completeness)
-                    if isinstance(completeness, dict) and (saved or splits) else ())
-            if not _verify_completeness_claim(
-                    db, r, context, document, integrity, used,
-                    chunk_size=size, saved_state=(splits, saved)):
-                return out
+            if leaf_claims is not None:
+                if (completeness != leaf_claims
+                        or integrity.get("completeness_chunks") != len(leaf_claims)):
+                    return out
+            else:
+                proof_state = None
+                if marked and isinstance(inline, dict):
+                    # Checkpoints may already be cleaned: the protected proof
+                    # rows replay the adopted leaves they recorded.
+                    proof_state = _saved_chunk_state(
+                        db, r, context, chunk_size=inline["chunk_size"],
+                        proof_rows=inline["rows"])
+                ps, sv = proof_state if proof_state is not None else (splits, saved)
+                used = (tuple(int(k) if type(k) is str and k.isdigit() else k
+                              for k in completeness)
+                        if isinstance(completeness, dict) and (sv or ps) else ())
+                if not _verify_completeness_claim(
+                        db, r, context, document, integrity, used,
+                        chunk_size=size, saved_state=(ps, sv)):
+                    return out
         if (bound and not meta.get("error") and valid is not None
                 and not valid.get("_items_dropped") and not valid.get("_evidence_dropped")
                 and not any(isinstance(meta.get(key), dict) and meta[key].get("applied") is False

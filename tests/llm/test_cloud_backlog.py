@@ -240,6 +240,62 @@ def test_worker_alternates_cloud_only_units_without_local_calls(
     assert 'synthetic-private-extra' not in json.dumps(passes)
 
 
+@pytest.mark.parametrize("changed", ["parent", "generation"])
+def test_semantic_recheck_after_lock_wait_skips_stale_work(tmp_path, monkeypatch, changed):
+    """A parent exit or update-generation change landing in the run-lock
+    wait closes the window before run_due: no semantic pass runs, the held
+    lock fd is released, and the worker exits without another extract."""
+    import extract_llm
+    import ledger
+    import mcs_util
+    import semantic_drain
+    import writer_lock
+    parent = 991
+    # getppid: startup wait, owner check, one extract + three semantic loop
+    # checks around the two refused acquisitions, then the post-acquire
+    # re-check — the point where the change lands.
+    parents = iter([parent] * 6 + ([1] if changed == "parent" else [parent]) + [parent])
+    monkeypatch.setattr(backlog.os, "getppid", lambda: next(parents))
+    monkeypatch.setattr(extract_llm, "_context_memory_available", lambda: True)
+    generations = iter([(False, 1)] * 7 + [(False, 2)] * 4)
+    monkeypatch.setattr(writer_lock, "updater_state", lambda: next(generations))
+    closed_ledger = []
+    monkeypatch.setattr(ledger, "Ledger",
+                        lambda *a: SimpleNamespace(close=lambda: closed_ledger.append(True)))
+    monkeypatch.setattr(mcs_util, "load_config",
+                        lambda: {"cloud_llm": {"mode": "on", "project_ids": [1]}})
+    monkeypatch.setattr(extract_llm.cloud_policy, "global_block_reason", lambda *a, **kw: None)
+    monkeypatch.setattr(extract_llm.cloud_policy, "budget_block_reason", lambda *a, **kw: None)
+    monkeypatch.setattr(extract_llm, "legacy_admissions", lambda *a: None)
+    monkeypatch.setattr(semantic_drain, "runtime_config", lambda *a: ({"job_budget_seconds": 1200}, []))
+    waits = []
+    monkeypatch.setattr(backlog.time, "sleep", waits.append)
+    acquisitions, fds = [], []
+
+    def acquire():
+        acquisitions.append(True)
+        if len(acquisitions) in (2, 3):
+            return None
+        fd = os.open(tmp_path / "lock", os.O_CREAT | os.O_RDWR, 0o600)
+        fds.append(fd)
+        return fd
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", acquire)
+    seen = []
+    monkeypatch.setattr(extract_llm, "run_pending",
+                        lambda *a, **kw: (seen.append("extract"), {"done": 1})[1])
+    monkeypatch.setattr(semantic_drain, "run_due",
+                        lambda *a, **kw: (seen.append("semantic"), {"done": 1})[1])
+    monkeypatch.setattr(backlog, "_parent", None)
+    backlog.worker(parent)
+    assert seen == ["extract"]
+    assert len(acquisitions) == 4
+    assert waits == [1, 1]
+    assert closed_ledger == [True]
+    for fd in fds:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
 def test_worker_never_opens_database_without_startup_lock(monkeypatch):
     import ledger
     import writer_lock

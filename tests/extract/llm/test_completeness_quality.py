@@ -273,6 +273,143 @@ def test_execution_history_with_resolved_content_is_a_legitimate_terminal():
         "state": "unresolved", "remaining_hint_candidates": 1})
 
 
+def test_settled_unknown_zero_history_cannot_be_promoted_by_final_meta(tmp_path, monkeypatch):
+    """The durable claim committed inside the content defeats a meta-only
+    promotion: a settled dispatch_unknown leaf with no remaining hints stays
+    attention through the thin retain, and flipping only the stored meta
+    state to resolved cannot mint a complete progress."""
+    body = "本人には咳があります。" + "完全合成の通常経過を記録します。" * 24
+    document = {
+        "symptoms": [{"text": "咳", "subject": "patient", "status": "ongoing", "evidence": "咳"}],
+        "summary": "完全合成の咳の経過",
+    }
+    assert 300 <= len(body) < extract_llm._CHUNK_SIZE
+    validated = extract_validation.validate(document, body)
+    assert not validated.get("_items_dropped") and not validated.get("_evidence_dropped")
+    assert extract_quality.is_thin(validated, body)
+    assert not extract_quality.completeness_issues(
+        validated, extract_llm._rule_hints({"body_text": body, "posted_at": "2026-09-19"}), body)
+    calls = []
+
+    def synthetic_model(prompt, **kwargs):
+        kind = kwargs.get("kind", "first")
+        calls.append(kind)
+        return None if kind == "repair" else copy.deepcopy(document)
+
+    monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(extract_llm, "_llm_call", synthetic_model)
+    db = _ledger(tmp_path)
+    try:
+        db.ensure_patient(1)
+        db.save_messages([_message(mid=1, body=body)], project_id=1)
+        assert extract_llm.run_pending(db, limit=1, budget_s=300)["done"] == 1
+        first = db.artifacts(extract_llm.KIND, message_id=1)[0]
+        first_meta = json.loads(first["meta"])
+        expected_history = {"state": "dispatch_unknown", "remaining_hint_candidates": 0}
+        assert first_meta["integrity"]["completeness"] == {"0": expected_history}
+        assert not db.artifacts("extract_llm_chunk", message_id=1)
+        # The existing one-time thin retry keeps an identical prior result.
+        assert extract_llm.run_pending(db, limit=1, budget_s=300)["done"] == 1
+        final, = db.artifacts(extract_llm.KIND, message_id=1)
+        meta = json.loads(final["meta"])
+        assert meta["thin_retried"] is True
+        assert meta["integrity"]["completeness"] == {"0": expected_history}
+        assert not db.artifacts("extract_llm_chunk", message_id=1)
+        assert calls == ["first", "repair", "first", "repair"]
+        source = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+        assert extract_llm.progress_for_message(db.db, source, model=extract_llm.MODEL)["state"] == "attention"
+        assert extract_llm.run_pending(db, limit=1, budget_s=300)["selected"] == 0
+        count_before = len(calls)
+        content_before = final["content"]
+        # Change one final-meta state only: the durable claim inside the
+        # content still records dispatch_unknown.
+        meta["integrity"]["completeness"]["0"]["state"] = "hint_gaps_resolved"
+        with db.db:
+            db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                          (json.dumps(meta, ensure_ascii=False), final["artifact_id"]))
+        assert db.db.execute("SELECT content FROM artifacts WHERE artifact_id=?",
+                             (final["artifact_id"],)).fetchone()[0] == content_before
+        actual = extract_llm.progress_for_message(db.db, source, model=extract_llm.MODEL)
+        assert len(calls) == count_before
+        assert actual["state"] == "attention", actual
+    finally:
+        db.close()
+
+
+def _legacy_unsealed_multileaf(tmp_path, monkeypatch, *, with_vitals):
+    """Commit a real multi-leaf result, then drop only the embedded claim
+    field — modelling a final artifact written before the leaf-claim seal
+    existed, with its checkpoints already cleaned."""
+    db = _ledger(tmp_path)
+    pieces = [f"本人に合成{tag}の発熱と咳があります。本人の血圧{sbp}/{dbp}です。\n"
+              for tag, sbp, dbp in (("A", 120, 80), ("B", 125, 85), ("C", 130, 90))]
+    db.save_messages([_message(body="".join(pieces))])
+    monkeypatch.setattr(extract_llm, "_CHUNK_SIZE", len(pieces[0]))
+
+    def model(prompt, **kwargs):
+        piece = prompt.rsplit("<<<\n", 1)[1].split("\n>>>", 1)[0]
+        index = "ABC".index(next(tag for tag in "ABC" if f"合成{tag}" in piece))
+        return {"symptoms": [{"text": text, "evidence": piece} for text in ("発熱", "咳")],
+                **({"vitals": {"sbp": 120 + 5 * index, "dbp": 80 + 5 * index}}
+                   if with_vitals else {})}
+
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    for _ in range(4):
+        if extract_llm.run_pending(db, limit=1, budget_s=200)["done"]:
+            break
+    [final] = db.artifacts(extract_llm.KIND, message_id=1)
+    content = json.loads(final["content"])
+    content.pop(extract_llm._INTERNAL_LEAF_CLAIMS)
+    with db.db:
+        db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
+                      (json.dumps(content, ensure_ascii=False), final["artifact_id"]))
+    assert not db.artifacts("extract_llm_chunk", message_id=1)
+    return db, final
+
+
+def test_legacy_unsealed_multileaf_result_stays_complete_after_cleanup(tmp_path, monkeypatch):
+    """A pre-seal multi-leaf result whose checkpoints were cleaned keeps the
+    progress it already earned: the claim floor provable from the merged
+    document is enough — it must not strand at attention with selected 0."""
+    db, final = _legacy_unsealed_multileaf(tmp_path, monkeypatch, with_vitals=True)
+    try:
+        meta = json.loads(final["meta"])
+        assert meta["integrity"]["completeness_chunks"] == 3
+        assert set(meta["integrity"]["completeness"]) == {"0", "1", "2"}
+        source = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+        assert extract_llm.progress_for_message(
+            db.db, source, model=extract_llm.MODEL)["state"] == "complete"
+        assert extract_llm.run_pending(db, limit=1, budget_s=200)["selected"] == 0
+    finally:
+        db.close()
+
+
+def test_legacy_unsealed_multileaf_claim_still_bounds_meta_forgery(tmp_path, monkeypatch):
+    """The same compatibility floor rejects a meta-only edit that mints
+    resolved over hints the merged document still misses — without the
+    floor the forged claim would satisfy every other gate."""
+    db, final = _legacy_unsealed_multileaf(tmp_path, monkeypatch, with_vitals=False)
+    try:
+        meta = json.loads(final["meta"])
+        honest = meta["integrity"]["completeness"]
+        assert any(c["remaining_hint_candidates"] for c in honest.values())
+        source = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+        # The honest claim already reports the remainder: attention is earned,
+        # not stranded — the forged mint is what must stay rejected.
+        assert extract_llm.progress_for_message(
+            db.db, source, model=extract_llm.MODEL)["state"] == "attention"
+        forged = {key: {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}
+                  for key in honest}
+        meta["integrity"]["completeness"] = forged
+        with db.db:
+            db.db.execute("UPDATE artifacts SET meta=? WHERE artifact_id=?",
+                          (json.dumps(meta, ensure_ascii=False), final["artifact_id"]))
+        assert extract_llm.progress_for_message(
+            db.db, source, model=extract_llm.MODEL)["state"] != "complete"
+    finally:
+        db.close()
+
+
 @pytest.mark.parametrize("workers", [1, 2])
 def test_lost_source_or_lease_never_authorizes_the_optional_dispatch(tmp_path, monkeypatch, workers):
     db = _ledger(tmp_path)

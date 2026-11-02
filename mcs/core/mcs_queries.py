@@ -26,6 +26,7 @@ DAY_S = 86400
 UNKNOWN_TIME = -(2**63)
 _proof_read_active = ContextVar('mcs_proof_read_active', default=False)
 _INTERNAL_PROOF = '__mcs_internal_proof_v1'
+_INTERNAL_LEAF_CLAIMS = '__mcs_leaf_claims_v1'
 
 
 def selected_artifact_proof_valid(db, artifact_id, *, inference_target=CURRENT_VERSION):
@@ -930,8 +931,9 @@ def current_extraction_blobs(db, project_id: int) -> dict:
                 if kind == 'extract_llm' and not selected_artifact_proof_valid(db, artifact_id):
                     continue
                 document = loads_dict(content)
-                if document is not None and _INTERNAL_PROOF in document:
-                    document.pop(_INTERNAL_PROOF)
+                if document is not None and (_INTERNAL_PROOF in document or _INTERNAL_LEAF_CLAIMS in document):
+                    document.pop(_INTERNAL_PROOF, None)
+                    document.pop(_INTERNAL_LEAF_CLAIMS, None)
                     content = json.dumps(document, ensure_ascii=False)
                 arts.setdefault(mid, {})[kind] = content
         return arts
@@ -1070,6 +1072,7 @@ def _current_message_document(db, params, *, facts):
         document = loads_dict(selected['content']) if selected else None
         if document is not None:
             document.pop(_INTERNAL_PROOF, None)
+            document.pop(_INTERNAL_LEAF_CLAIMS, None)
         return document
     finally:
         db.execute('RELEASE current_message_document')
