@@ -19,8 +19,8 @@ from medications_testkit import DOCUMENT
 __all__ = ["led", "pinned_clock"]
 pytestmark = pytest.mark.usefixtures("pinned_clock")
 
-def _dictionary(tmp_path, led, *, activate=True):
-    raw = json.dumps(DOCUMENT, ensure_ascii=False).encode()
+def _dictionary(tmp_path, led, *, activate=True, document=None):
+    raw = json.dumps(DOCUMENT if document is None else document, ensure_ascii=False).encode()
     path = tmp_path / "fictional-drug-map.json"
     path.write_bytes(raw)
     path.chmod(0o600)
@@ -74,7 +74,8 @@ def test_meds_view_shows_the_active_candidate_and_offers_search(led, tmp_path):
     texts = [i["text"] for i in view["items"]]
     # family mention stays out — same rule as the card's 薬剤 line
     assert texts == ["・キラナ 5mg[開始]\n　→ 候補: 架空成分甲（成分・fiction-i1）",
-                     "・共通架空 5mg[開始]\n　→ 複数の候補（2件）: 用量・剤形を原文で確認してください"]
+                     "・共通架空 5mg[開始]\n　→ 複数の候補（2件）: 用量・剤形を原文で確認してください"
+                     "\n　辞書の一致候補・未確認: 2件\n　・架空成分甲（成分）\n　・架空成分乙（成分）"]
     assert "候補の名称・別名は「薬剤を検索」で確認できます。" in view["notes"]
 
 
@@ -243,7 +244,7 @@ def test_all_medications_and_old_post_candidates_are_reachable_privately(led, tm
     assert all("navigation" not in row and "token_ctx" not in row and "list" not in row for row in stored)
 
 
-@pytest.mark.parametrize("state", ["off", "failed", "deleted"])
+@pytest.mark.parametrize("state", ["failed", "deleted"])
 def test_slack_without_a_usable_thread_hides_drug_actions(led, tmp_path, state):
     from slack_testkit import SLACK
     _seed_thread(led)
@@ -323,3 +324,303 @@ def test_identical_search_input_from_another_member_is_not_a_replay(led, tmp_pat
     other = _drug_click(led, spec, "drugsearch", {"query": "ｷﾗﾅ"}, cfg=cfg, actor="discord:2002")
     assert other["command_id"] != hits["command_id"]
     assert other["actor"] == "discord:2002" and hits["actor"] == CLICKER
+
+
+def test_reference_suggestions_only_search_visible_page_and_never_write(led, tmp_path, monkeypatch):
+    import notify_views
+    _seed_thread(led)
+    _llm_extract(led, 101, {"meds": [{**MED, "name": name} for name in
+                                   ("キラ", "ｷﾗ", "キラナタ", "共通架空", "存在しない架空", "キラーナ未一致")]})
+    cfg = _dictionary(tmp_path, led)
+    calls = []
+    original = drug_map.DrugMap.search
+    def search(self, query, *, limit=20):
+        calls.append((query, limit))
+        return original(self, query, limit=limit)
+    monkeypatch.setattr(drug_map.DrugMap, "search", search)
+    before = led.db.total_changes
+    view = notify_views.meds_view(led.db, 1, 101, cfg=cfg, page=0)
+    assert view["pages"] == 2 and len(view["items"]) == 5
+    assert len(calls) == 4 and all(limit == 3 for _, limit in calls)
+    text = "\n".join(i["text"] for i in view["items"])
+    assert "参考候補・未確認・部分一致: 2件" in text
+    assert "参考候補・未確認・部分一致: 0件" in text
+    calls.clear()
+    view = notify_views.meds_view(led.db, 1, 101, cfg=cfg, page=99)
+    assert view["page"] == 1 and len(view["items"]) == 1 and len(calls) == 1
+    assert led.db.total_changes == before
+
+
+def test_llm_extraction_to_source_bound_reference_view(led, tmp_path, monkeypatch):
+    import extract_llm
+    import notify_views
+
+    body = "本人はキラを1日2回服用しています。"
+    _seed_thread(led)
+    with led.db:
+        led.db.execute("UPDATE messages SET body_text=? WHERE message_id=101", (body,))
+    prompts = []
+
+    def stub(prompt, **_kwargs):
+        prompts.append(prompt)
+        return {"symptoms": [], "meds": [{"name": "キラ", "freq": "1日2回",
+                "action": "none", "status": "current", "subject": "patient",
+                "negated": False, "evidence": body}]}
+
+    monkeypatch.setattr(extract_llm, "_llm_call", stub)
+    extracted = extract_llm.llm_extract(body)
+    assert prompts and extracted["meds"][0]["name"] == "キラ"
+    assert extracted["meds"][0]["evidence"] == body
+    _llm_extract(led, 101, extracted)
+    cfg = _dictionary(tmp_path, led)
+    before = led.db.total_changes
+    view = notify_views.meds_view(led.db, 1, 101, cfg=cfg)
+    assert len(view["items"]) == 1
+    text = view["items"][0]["text"]
+    assert "キラ" in text and "1日2回" in text
+    assert "参考候補・未確認・部分一致: 2件" in text
+    assert "架空成分甲" in text and "架空成分乙" in text
+    assert led.db.total_changes == before
+
+
+@pytest.mark.parametrize("fault", ["no_cfg", "unapproved", "generation", "invalid_name", "stale_ref"])
+def test_reference_suggestions_require_current_approved_dictionary(led, tmp_path, monkeypatch, fault):
+    import notify_views
+    from dataclasses import replace
+    _seed_thread(led)
+    _llm_extract(led, 101, {"meds": [{**MED, "name": "キラ"}]})
+    cfg = _dictionary(tmp_path, led)
+    dictionary, state = drug_map.active_dictionary(led.db, cfg)
+    if fault == "no_cfg":
+        cfg = CFG
+    elif fault == "generation":
+        with led.db:
+            led.db.execute("DELETE FROM artifacts WHERE kind=?", (drug_map.PROGRESS_KIND,))
+    elif fault == "unapproved":
+        dictionary = replace(dictionary, source=replace(dictionary.source, approved_by=""))
+        monkeypatch.setattr(drug_map, "active_dictionary", lambda *a: (dictionary, state))
+    else:
+        real = notify_views.structured_view.medication_entries
+        def entries(*a):
+            groups = real(*a)
+            return tuple([(text, {**ref, "name": ""} if fault == "invalid_name" else
+                                  {**ref, "dict_sha256": "0" * 64}) for text, ref in group] for group in groups)
+        monkeypatch.setattr(notify_views.structured_view, "medication_entries", entries)
+    monkeypatch.setattr(drug_map.DrugMap, "search", lambda *a, **kw: pytest.fail("unexpected reference search"))
+    view = notify_views.meds_view(led.db, 1, 101, cfg=cfg)
+    assert not any("参考候補" in item["text"] for item in view["items"])
+
+
+def test_reference_many_candidates_are_bounded_without_strength_inference(led, tmp_path):
+    import notify_views
+    from copy import deepcopy
+    document = deepcopy(DOCUMENT)
+    document["entries"] = [{"id": f"fiction-{i}", "kind": "ingredient",
+        "display": f"架空薬{i}錠{5 + i}mg", "aliases": [f"架空候補{i}"], "codes": {}, "forms": []}
+        for i in range(8)]
+    _seed_thread(led)
+    _llm_extract(led, 101, {"meds": [{**MED, "name": "架空候補"}, {**MED, "name": "架空候補9液50mg"}]})
+    cfg = _dictionary(tmp_path, led, document=document)
+    view = notify_views.meds_view(led.db, 1, 101, cfg=cfg)
+    text = view["items"][0]["text"]
+    assert "参考候補・未確認・部分一致: 8件" in text and "他5件は省略" in text
+    assert text.count("\n　・") == 3 and "候補: " not in text
+    assert "部分一致: 0件" in view["items"][1]["text"]
+    assert all(len(item["text"]) < 2000 for item in view["items"])
+
+
+def test_exact_official_candidate_keeps_product_name_strength_and_unit(led, tmp_path):
+    import notify_views
+    from medications_testkit import _source_document
+    document = _source_document()
+    entry = document["entries"][0]
+    entry["products"] = [{"medicine": "900000001", "name": "架空製品錠5mg", "unit": "錠", "form_code": "1"}]
+    _seed_thread(led)
+    _llm_extract(led, 101, {"meds": [{**MED, "name": "架空製品"}]})
+    cfg = _dictionary(tmp_path, led, document=document)
+    before = led.db.total_changes
+    view = notify_views.meds_view(led.db, 1, 101, cfg=cfg)
+    assert "辞書の製品情報（未確認）:" in view["items"][0]["text"]
+    assert "架空製品錠5mg（単位: 錠）" in view["items"][0]["text"]
+    assert led.db.total_changes == before
+
+
+def test_reference_long_names_keep_tail_and_mark_omission(led, tmp_path, monkeypatch):
+    import notify_views
+    from copy import deepcopy
+    document = deepcopy(DOCUMENT)
+    document["entries"][0]["display"] = "架空" + "長い製品名" * 30 + "徐放錠10mg"
+    _seed_thread(led)
+    _llm_extract(led, 101, {"meds": [{**MED, "name": "ｷﾗ"}]})
+    cfg = _dictionary(tmp_path, led, document=document)
+    view = notify_views.meds_view(led.db, 1, 101, cfg=cfg)
+    text = view["items"][0]["text"]
+    assert "参考候補・未確認・部分一致" in text
+    assert "徐放錠10mg（名称省略）" in text
+    assert "薬剤を検索で絞り込んでください" in text
+    assert all(len(line) <= 80 for line in text.splitlines() if line.startswith("　・"))
+    before = led.db.total_changes
+    monkeypatch.setattr(drug_map.DrugMap, "search", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("synthetic")))
+    failed = notify_views.meds_view(led.db, 1, 101, cfg=cfg)
+    assert "ｷﾗ" in failed["items"][0]["text"] and "参考候補" not in failed["items"][0]["text"]
+    assert led.db.total_changes == before
+
+
+def test_slack_thread_option_off_keeps_drug_search_available(led, tmp_path):
+    from slack_testkit import SLACK
+    _seed_thread(led)
+    _llm_extract(led, 101, {"meds": [MED]})
+    cfg = {**SLACK, "drug_map": _dictionary(tmp_path, led)["drug_map"],
+           "notify": {**SLACK["notify"], "card_thread": False}}
+    _dispatch(led, _intent(led), cfg)
+    ids = _ids(_spec(led))
+    assert "drugsearch" in ids and "body" in ids
+
+
+@pytest.mark.parametrize("fault", ["unset", "bad_pin", "changed_config", "ref_id", "ref_sha", "ref_generation"])
+def test_meds_view_never_displays_old_reference_after_config_change(led, tmp_path, monkeypatch, fault):
+    import notify_views
+    from copy import deepcopy
+    _seed_thread(led)
+    _llm_extract(led, 101, {"meds": [MED]})
+    cfg = _dictionary(tmp_path, led)
+    original = notify_views.meds_view(led.db, 1, 101, cfg=cfg)
+    assert "架空成分甲" in original["items"][0]["text"]
+    if fault == "unset":
+        cfg = CFG
+    elif fault == "bad_pin":
+        cfg = {**cfg, "drug_map": {**cfg["drug_map"], "sha256": "0" * 64}}
+    elif fault == "changed_config":
+        document = deepcopy(DOCUMENT)
+        document["dict_id"] = "fictional-v2"
+        cfg = _dictionary(tmp_path, led, activate=False, document=document)
+    else:
+        real = notify_views.structured_view.medication_entries
+        key, value = {"ref_id": ("dict_id", "wrong-id"), "ref_sha": ("dict_sha256", "0" * 64),
+                      "ref_generation": ("resolver_version", "old-resolver")}[fault]
+        def entries(*args):
+            return tuple([(text, {**ref, key: value}) for text, ref in group] for group in real(*args))
+        monkeypatch.setattr(notify_views.structured_view, "medication_entries", entries)
+    before = led.db.total_changes
+    view = notify_views.meds_view(led.db, 1, 101, cfg=cfg)
+    text = json.dumps(view, ensure_ascii=False)
+    assert "キラナ 5mg[開始]" in text
+    assert "架空成分甲" not in text and "fictional-v1@" not in text
+    assert "参考候補" not in text and "→ 候補:" not in text
+    if fault.startswith("ref_"):
+        assert "辞書照合はまだありません" in text
+    else:
+        assert "候補は表示できません" in text
+    assert led.db.total_changes == before
+
+
+def test_no_config_compatibility_uses_source_bound_refs_without_reference_search(led, tmp_path, monkeypatch):
+    import notify_views
+    _seed_thread(led)
+    _llm_extract(led, 101, {"meds": [MED]})
+    _dictionary(tmp_path, led)
+    monkeypatch.setattr(drug_map.DrugMap, "search", lambda *a, **kw: pytest.fail("no live pin"))
+    view = notify_views.meds_view(led.db, 1, 101)
+    assert "候補: 架空成分甲" in view["items"][0]["text"]
+    assert "参考候補" not in view["items"][0]["text"]
+
+
+def test_ambiguous_exact_candidates_precede_misleading_partial_names(led, tmp_path, monkeypatch):
+    import notify_views
+    from copy import deepcopy
+    from medications_testkit import _source_document
+    document = _source_document()
+    for entry in document["entries"]:
+        entry["aliases"] = ["共通架空名"]
+    exact_names = [e["display"] for e in document["entries"]]
+    template = document["entries"][0]
+    for i in range(3):
+        extra = deepcopy(template)
+        medicine = str(800000001 + i)
+        extra.update(id="mhlw:medicine:" + medicine, display=f"紛らわしい架空製品{i}",
+                     aliases=[f"共通架空名の別製品{i}"], codes={"medicine": medicine})
+        extra["source_codes"][0]["medicine"] = medicine
+        document["entries"].insert(0, extra)
+    _seed_thread(led)
+    _llm_extract(led, 101, {"meds": [{**MED, "name": "共通架空名"}]})
+    cfg = _dictionary(tmp_path, led, document=document)
+    monkeypatch.setattr(drug_map.DrugMap, "search", lambda *a, **kw: pytest.fail("exact ambiguity must not substring-search"))
+    before = led.db.total_changes
+    view = notify_views.meds_view(led.db, 1, 101, cfg=cfg)
+    text = view["items"][0]["text"]
+    assert "辞書の一致候補・未確認: 2件" in text
+    assert all(name in text for name in exact_names)
+    assert "紛らわしい" not in text and "部分一致" not in text
+    assert "（製品）" in text and "（一般名処方）" in text
+    assert led.db.total_changes == before
+
+
+def test_ambiguous_exact_candidates_have_three_item_limit(led, tmp_path):
+    import notify_views
+    from copy import deepcopy
+    document = deepcopy(DOCUMENT)
+    document["entries"] = [{"id": f"fiction-{i}", "kind": "ingredient", "display": f"架空成分{i}",
+                            "aliases": ["共通架空名"], "codes": {}, "forms": []} for i in range(5)]
+    _seed_thread(led)
+    _llm_extract(led, 101, {"meds": [{**MED, "name": "共通架空名"}]})
+    cfg = _dictionary(tmp_path, led, document=document)
+    view = notify_views.meds_view(led.db, 1, 101, cfg=cfg)
+    text = view["items"][0]["text"]
+    assert "辞書の一致候補・未確認: 5件" in text and "他2件は省略" in text
+    assert text.count("\n　・") == 3 and "部分一致" not in text
+
+
+def test_ambiguous_stem_candidates_are_labeled_by_match_method(led, tmp_path):
+    import notify_views
+    from copy import deepcopy
+    document = deepcopy(DOCUMENT)
+    document["entries"] = [{"id": f"fiction-{i}", "kind": "ingredient", "display": f"架空成分{i}",
+                            "aliases": ["共通架空名"], "codes": {}, "forms": []} for i in range(2)]
+    _seed_thread(led)
+    _llm_extract(led, 101, {"meds": [{**MED, "name": "共通架空名錠5mg"}]})
+    cfg = _dictionary(tmp_path, led, document=document)
+    view = notify_views.meds_view(led.db, 1, 101, cfg=cfg)
+    text = view["items"][0]["text"]
+    assert "辞書の基底名による候補・未確認: 2件" in text
+    assert "辞書の一致候補・未確認" not in text
+    assert "架空成分0" in text and "架空成分1" in text
+
+    dictionary, _ = drug_map.active_dictionary(led.db, cfg)
+    ref = dictionary.resolve("共通架空名錠5mg")
+    ref.update(dict_id=dictionary.dict_id, dict_sha256=dictionary.sha256,
+               resolver_version=drug_map.RESOLVER_VERSION)
+    ref["cands"][0]["method"] = "alias"
+    mixed = notify_views._medication_reference_lines(ref, dictionary)
+    assert "辞書の候補（照合方法混在）・未確認: 2件" in mixed
+    assert "辞書の一致候補・未確認" not in mixed
+
+
+@pytest.mark.parametrize("fault", ["display", "code", "kind", "method", "order", "shape", "resolve_error"])
+def test_live_meds_revalidates_annotation_against_exact_dictionary(led, tmp_path, monkeypatch, fault):
+    import notify_views
+    from copy import deepcopy
+    _seed_thread(led)
+    _llm_extract(led, 101, {"meds": [{**MED, "name": "共通架空"}]})
+    cfg = _dictionary(tmp_path, led)
+    real = notify_views.structured_view.medication_entries
+    def entries(*args):
+        groups = deepcopy(real(*args))
+        for group in groups:
+            for _, ref in group:
+                if fault in ("display", "code", "kind", "method"):
+                    ref["cands"][0][fault] = "改変した架空値"
+                elif fault == "order":
+                    ref["cands"].reverse()
+                elif fault == "shape":
+                    ref["cands"] = {"invalid": True}
+        return groups
+    monkeypatch.setattr(notify_views.structured_view, "medication_entries", entries)
+    if fault == "resolve_error":
+        monkeypatch.setattr(drug_map.DrugMap, "resolve", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("synthetic")))
+    before = led.db.total_changes
+    view = notify_views.meds_view(led.db, 1, 101, cfg=cfg)
+    text = json.dumps(view, ensure_ascii=False)
+    assert "共通架空" in text and "辞書照合はまだありません" in text
+    assert "架空成分" not in text and "改変した架空値" not in text and "fictional-v1@" not in text
+    assert "辞書の一致候補" not in text
+    assert led.db.total_changes == before

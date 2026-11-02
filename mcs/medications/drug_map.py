@@ -486,6 +486,8 @@ def active_dictionary(db: sqlite3.Connection, cfg) -> tuple["DrugMap | None", st
         return None, "invalid"
     if dictionary is None:
         return None, "unconfigured"
+    if not dictionary.approved:
+        return None, "inactive"
     progress = read_annotation_progress(db)
     if (not progress or progress.get("invalid") or progress.get("dictionary")
             != [dictionary.dict_id, dictionary.sha256, False, RESOLVER_VERSION]):

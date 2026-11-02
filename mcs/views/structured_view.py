@@ -29,12 +29,13 @@ from __future__ import annotations
 import hashlib
 from itertools import islice
 import json
+import re
 import sqlite3
 
 from drug_map import KIND as REF_KIND, candidate_note, current_refs, generation_signature
 from mcs_queries import (FACT_KINDS_SQL, current_extract_pred, current_fact_pred,
                          med_is_patient_current, item_unverified)
-from mcs_util import loads_dict
+from mcs_util import loads_dict, search_fold
 from clinical_display import item_scope, scoped_vitals, vital_line
 from semantic_render import FACT_ATTRIBUTE_LABELS
 import clinical_urgency
@@ -387,6 +388,19 @@ def _symptom_line(llm: dict, v1: dict, *, context=(None, None, "patient")):
     return line
 
 
+def _med_display_name(item):
+    name, dose = str(item["name"]), item.get("dose")
+    if not isinstance(dose, str) or not dose.strip():
+        return name + (f" {dose}" if dose else "")
+    folded_name, folded_dose = search_fold(name), search_fold(dose)
+    if not re.search(r"(?<![0-9.])" + re.escape(folded_dose) + r"(?![0-9.a-z])", folded_name):
+        return f"{name} {dose}"
+
+    # Product strength does not prove dose; a short quote also cannot
+    # disprove a separate dose elsewhere in the original message.
+    return f"{name}（用量要確認: {dose}）"
+
+
 def _med_entries(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient")) -> tuple[list, list]:
     """(confirmed, unverified) medication entries as ``(text, ref)`` —
     ``ref`` is the current dictionary annotation of exactly that mention
@@ -409,7 +423,7 @@ def _med_entries(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"
         scope = item_scope(m, context, str(m["name"]))
         if scope != "patient" and not (scope == "planned" and m.get("status") == "planned"):
             continue
-        d = str(m["name"]) + (f" {m['dose']}" if m.get("dose") else "")
+        d = _med_display_name(m)
         if (action := _label(RX_LABEL, m.get("action"))):
             d += f"[{action}]"
         if m.get("status") == "planned":
@@ -430,7 +444,7 @@ def _med_entries(llm: dict, v1: dict, refs=(), *, context=(None, None, "patient"
         # but all were filtered (negated/family/past), falling back to
         # v1 would re-display the very mentions that were filtered out
         unverified.extend(
-            (str(m["name"]) + (f" {m['dose']}" if m.get("dose") else ""),
+            (_med_display_name(m),
              ref_of(True, i, m))
             for i, m in enumerate(_items(v1, "medications"))
             if isinstance(m, dict) and m.get("name")

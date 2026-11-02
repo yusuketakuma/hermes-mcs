@@ -689,7 +689,73 @@ def _candidate_line(ref, dictionary_active: bool) -> str:
         return f"\n　→ 複数の候補（{len(cands)}件）: 用量・剤形を原文で確認してください"
     if status == "generic":
         return "\n　→ 総称のため個別の薬剤は特定できません"
-    return "\n　→ 辞書に一致する候補はありません（似た名前から推定しません）"
+    return "\n　→ 辞書に完全一致する候補はありません（似た名前から推定しません）"
+
+
+def _drug_reference_name(value, limit=72):
+    text = inline_text(value, 512)
+    if len(text) <= limit:
+        return text, False
+    tail = min(20, limit // 3)
+    return text[:limit - tail - 9] + "…" + text[-tail:] + "（名称省略）", True
+
+
+def _medication_reference_lines(ref, dictionary) -> str:
+    if (dictionary is None or not dictionary.approved or not isinstance(ref, dict)
+            or ref.get("dict_id") != dictionary.dict_id
+            or ref.get("dict_sha256") != dictionary.sha256
+            or ref.get("resolver_version") != drug_map.RESOLVER_VERSION
+            or not drug_map.valid_text(ref.get("name"))):
+        return ""
+    name = ref["name"]
+    if ref.get("status") in ("unresolved", "ambiguous"):
+        if ref["status"] == "ambiguous":
+            candidates = ref.get("cands") or []
+            found = {"total": len(candidates), "items": candidates[:3]}
+            methods = {candidate.get("method") for candidate in candidates}
+            heading = ("辞書の一致候補・未確認" if methods == {"alias"} else
+                       "辞書の基底名による候補・未確認" if methods == {"stem"} else
+                       "辞書の候補（照合方法混在）・未確認")
+        else:
+            try:
+                found = dictionary.search(name, limit=3)
+            except (ValueError, TypeError, KeyError, RuntimeError, OSError):
+                return ""
+            heading = "参考候補・未確認・部分一致"
+        lines = [f"\n　{heading}: {found['total']}件"]
+        shortened = False
+        for item in found["items"]:
+            label, clipped = _drug_reference_name(item["display"], 62)
+            shortened = shortened or clipped
+            lines.append(f"\n　・{label}（{DRUG_KIND_JA.get(item['kind'], item['kind'])}）")
+        if shortened:
+            lines.append("\n　名称を一部省略しています。薬剤を検索で絞り込んでください。")
+        if found["total"] > len(found["items"]):
+            lines.append(f"\n　他{found['total'] - len(found['items'])}件は省略（薬剤を検索で確認）")
+        return "".join(lines)
+    if ref.get("status") == "resolved" and candidate_note(ref):
+        try:
+            related = dictionary.related_names(name, limit=3)
+        except (ValueError, TypeError, KeyError, RuntimeError, OSError):
+            return ""
+        if (related["status"] != "resolved" or not related["official_identity"]
+                or related["identities"] != sorted(c["code"] for c in ref["cands"])
+                or not related["metadata_available"]):
+            return ""
+        lines = ["\n　辞書の製品情報（未確認）:"]
+        shortened = False
+        for product in related["products"]:
+            label, clipped = _drug_reference_name(product["name"], 48)
+            unit, unit_clipped = _drug_reference_name(product["unit"], 16)
+            shortened = shortened or clipped or unit_clipped
+            lines.append(f"\n　・{label}（単位: {unit or '記載なし'}）")
+        if shortened:
+            lines.append("\n　製品名・単位を一部省略しています。薬剤を検索で絞り込んでください。")
+        omitted = related["product_count"] - len(related["products"])
+        if omitted:
+            lines.append(f"\n　他{omitted}件の製品情報は省略")
+        return "".join(lines)
+    return ""
 
 
 def meds_view(db, project_id, message_id, *, can_report=False,
@@ -706,8 +772,32 @@ def meds_view(db, project_id, message_id, *, can_report=False,
                 "empty": "この投稿の薬剤情報を確認できません（削除・移動の可能性）。",
                 "notes": []}
     meds, unverified = structured_view.medication_entries(db, message_id)
+    dictionary, dictionary_state = drug_map.active_dictionary(db, cfg) if cfg is not None else (None, "inactive")
+    if dictionary is not None and not dictionary.approved:
+        dictionary, dictionary_state = None, "inactive"
+    active = dictionary is not None if cfg is not None else drug_search_available(db)
+    if cfg is not None:
+        # Live actions supply cfg; discard stale annotations before every
+        # candidate label, detail and dictionary-version display.
+        def current(ref):
+            if (dictionary is None or not isinstance(ref, dict)
+                    or ref.get("dict_id") != dictionary.dict_id
+                    or ref.get("dict_sha256") != dictionary.sha256
+                    or ref.get("resolver_version") != drug_map.RESOLVER_VERSION
+                    or type(ref.get("i")) is not int or not drug_map.valid_text(ref.get("name"))):
+                return None
+            try:
+                expected = dictionary.resolve(ref["name"], ref["i"])
+                if (ref.get("status") != expected["status"]
+                        or json.dumps(ref.get("cands"), sort_keys=True, allow_nan=False)
+                        != json.dumps(expected["cands"], sort_keys=True, allow_nan=False)):
+                    return None
+            except (ValueError, TypeError, KeyError, RuntimeError, OSError, RecursionError):
+                return None
+            return ref
+        meds = [(text, current(ref)) for text, ref in meds]
+        unverified = [(text, current(ref)) for text, ref in unverified]
     refs = [ref for _, ref in meds + unverified if ref]
-    active = drug_search_available(db)
     when = f"{mmdd(row['posted_at'])} {posted_hhmm(row['posted_at'])}"
     head = [f"{'日時不明' if '?' in when else when} "
             f"{inline_text(row['profession'], 20) or '職種不明'}の投稿 — "
@@ -717,12 +807,17 @@ def meds_view(db, project_id, message_id, *, can_report=False,
     elif not active:
         # the reason needs cfg; without it the old generic wording stays
         head.append(_DICTIONARY_STATE[
-            drug_map.active_dictionary(db, cfg)[1] if cfg is not None else "inactive"])
+            dictionary_state])
+    entries = [(text, ref, label)
+               for group, label in ((meds, ""), (unverified, "（未確認）"))
+               for text, ref in group]
+    pages = max(1, (len(entries) + MEDS_PAGE_SIZE - 1) // MEDS_PAGE_SIZE)
+    page = min(max(page, 0), pages - 1)
     items = [{"project_id": project_id,
               "text": f"・{inline_text(text, 120)}{label}"
-                      f"{_candidate_line(ref, active)}"}
-             for entries, label in ((meds, ""), (unverified, "（未確認）"))
-             for text, ref in entries]
+                      f"{_candidate_line(ref, active)}"
+                      f"{_medication_reference_lines(ref, dictionary)}"}
+             for text, ref, label in entries[page * MEDS_PAGE_SIZE:(page + 1) * MEDS_PAGE_SIZE]]
     notes = []
     if refs:
         notes.append(f"辞書 {refs[0]['dict_id']}@{refs[0]['dict_sha256'][:8]}")
@@ -730,12 +825,10 @@ def meds_view(db, project_id, message_id, *, can_report=False,
         notes.append("候補の名称・別名は「薬剤を検索」で確認できます。")
     if can_report:
         notes.append("抽出の誤りは「誤りを報告」→「薬」から報告できます。")
-    pages = max(1, (len(items) + MEDS_PAGE_SIZE - 1) // MEDS_PAGE_SIZE)
-    page = min(max(page, 0), pages - 1)
     if pages > 1:
-        head.append(f"薬剤 {page + 1}/{pages}ページ（全{len(items)}件）")
+        head.append(f"薬剤 {page + 1}/{pages}ページ（全{len(entries)}件）")
     return {"title": title, "head": head,
-            "items": items[page * MEDS_PAGE_SIZE:(page + 1) * MEDS_PAGE_SIZE],
+            "items": items,
             "more": 0, "page": page, "pages": pages,
             "empty": "この投稿から抽出された薬剤はありません。", "notes": notes}
 
