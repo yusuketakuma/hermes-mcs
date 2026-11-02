@@ -232,9 +232,12 @@ def test_resident_idle_wait_honors_stop_and_reports_loaded_generation(monkeypatc
         "done": 0, "failed": 0, "left": 0, "selected": 0})
     assert extract_llm.main() == 0
     assert clock.now == 2
-    record = json.loads(capsys.readouterr().err)
-    assert record["extract_version"] == extract_llm.EXTRACT_VERSION
-    assert record["source_digests"] == extract_llm._LOADED_SOURCE_DIGESTS
+    records = [json.loads(line) for line in capsys.readouterr().err.splitlines()]
+    assert [record["event"] for record in records] == ["extractor_started", "extractor_ledger_opened"]
+    started, opened = records
+    assert started["extract_version"] == extract_llm.EXTRACT_VERSION
+    assert started["source_digests"] == extract_llm._LOADED_SOURCE_DIGESTS
+    assert type(started["pid"]) is int and started["pid"] > 0 and opened["pid"] == started["pid"]
 
 
 def test_chunk_checkpoint_requires_same_interpretation_context(db):
