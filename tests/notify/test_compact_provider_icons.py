@@ -2,6 +2,14 @@
 from adapters.slack.presentation import _provider_context, _PROVIDERS
 
 
+def test_local_indicator_is_compact_without_changing_legacy_text():
+    states = {"anthropic": "unused", "openai": "unused", "jev": "unused", "local": "done"}
+    compact = _provider_context(states, visible=["local"], compact=True)
+    legacy = _provider_context(states, visible=["local"])
+    assert compact["elements"] == [{"type": "plain_text", "text": "💻 ✓"}]
+    assert legacy["elements"] == [{"type": "plain_text", "text": "💻 ✓ 実行済み"}]
+
+
 def test_compact_icons_keep_alt_text_and_do_not_claim_running():
     states = {"anthropic": "unused", "openai": "done", "jev": "pending", "local": "unused"}
     block = _provider_context(states, "1投稿 · 解析中 · 採用結果の処理順: OpenAI → Jev",

@@ -63,7 +63,10 @@ def _provider_context(states, prefix=None, visible=None, sequence=None, *, compa
         if not compact and sequence is not None and index == len(sequence):
             elements.append({"type": "plain_text", "text": "その他（順序不明）"})
         if key == "local":
-            elements.append({"type": "plain_text", "text": f"💻 {marks[states[key]]} {_STATE_LABELS[states[key]]}"})
+            text = f"💻 {marks[states[key]]}"
+            if not compact:
+                text += f" {_STATE_LABELS[states[key]]}"
+            elements.append({"type": "plain_text", "text": text})
         else:
             name, url = providers[key]
             elements.append({"type": "image", "image_url": url,

@@ -1,0 +1,9 @@
+{
+  "category": "fixed",
+  "title": "ローカルLLMの状態表示を短くする",
+  "summary": "Slackのコンパクトな解析状態表示で、ローカルLLMの状態をアイコンと記号で表示します。",
+  "upgrade": "追加の設定操作は不要です。更新した表示は、既存の更新手順で反映した後に利用できます。",
+  "refs": [
+    "adapters/slack/presentation.py"
+  ]
+}

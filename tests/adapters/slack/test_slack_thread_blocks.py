@@ -690,15 +690,22 @@ def test_body_part_posts_blocks_and_keeps_plain_text_identity(led):
     w, spec, _replies = _rewrite_world(led)
     spec["delivery"]["thread_id"] = ROOT_TS
     spec["parts"]["manifest"] = [{"name": "m:100:header#1"}, {"name": "m:100#1"}]
-    out = _run(w, spec, BODY, {"part_id": "body:0002", "kind": "body_part", "name": "m:100#1"})
+    unrelated = "1790000000.000777"
+    w.client.replies[ROOT_TS].insert(0, {"ts": unrelated, "text": BODY, "bot_id": w.client.bot_id})
+    part = {"part_id": "body:0002", "kind": "body_part", "name": "m:100#1"}
+    out = _run(w, spec, BODY, part)
     assert out["result"] == "delivered"
     posted = w.client.thread_posts[-1]
     assert posted["text"] == BODY and posted["blocks"][0]["type"] == "container"
-    # the same chunk again binds to the reply by its plain text, no second post
+    assert posted["thread_ts"] == ROOT_TS and not posted.get("reply_broadcast", False)
+    assert out["remote_id"] != unrelated
+    # A later update can bind only the recorded prior, even if another post has identical text.
     n = len(w.client.thread_posts)
-    again = _run(w, spec, BODY, {"part_id": "body:0002", "kind": "body_part", "name": "m:100#1"})
+    calls = len(w.client.calls)
+    again = _run(w, spec, BODY, {**part, "prior_remote_id": out["remote_id"]})
     assert again == {"result": "delivered", "remote_id": out["remote_id"]}
     assert len(w.client.thread_posts) == n
+    assert not any(kind in {"create", "update"} for kind, _ in w.client.calls[calls:])
 
 
 def test_invalid_blocks_resends_plain_text_once_without_losing_the_part(led):
