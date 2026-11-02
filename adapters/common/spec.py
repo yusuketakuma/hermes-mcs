@@ -132,7 +132,7 @@ def _known_keys(obj: dict, allowed: frozenset, where: str) -> None:
     named = sorted(k for k in unknown
                    if isinstance(k, str) and _KEY_NAME.fullmatch(k))
     if len(named) == len(unknown):
-        _err(f"unsupported_{where}_key:{','.join(named)}")
+        _err(f"unsupported_{where}_key:{'.'.join(named)}")
     _err(f"unsupported_{where}_key")
 
 
