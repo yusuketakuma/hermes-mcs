@@ -98,6 +98,14 @@ def test_request_and_patient_sign_across_sentences_keep_independent_source_scope
     ("本人の発熱はありません。", "clinical", None),
     ("本人の意識がない。", "clinical", "llm"),
     ("本人の呼吸がない。", "clinical", "llm"),
+    ("本人は呼びかけに反応がありません。", "clinical", "llm"),
+    ("本人は呼びかけても反応がない。", "clinical", "llm"),
+    ("本人は刺激に対する反応を認めません。", "clinical", "llm"),
+    ("本人は薬剤への反応がありません。", "clinical", None),
+    ("本人からチャットへの返信がありません。", "clinical", None),
+    ("母は呼びかけに反応がありません。", "clinical", None),
+    ("本人の過去の呼びかけへの反応はありませんでした。", "clinical", None),
+    ("本人が呼びかけに反応がない場合は連絡してください。", "clinical", None),
 ])
 def test_clinical_emergency_is_distinct_from_request_or_denied_sign(tmp_path, body, expected_kind, source):
     db = _db(tmp_path, ())
@@ -127,6 +135,22 @@ def test_clinical_emergency_is_distinct_from_request_or_denied_sign(tmp_path, bo
 ])
 def test_rule_alerts_use_the_same_scoped_predicate(body, high):
     assert (extract.extract_message(body, "2026-10-07").get("urgency") == "high") is high
+
+
+def test_absent_response_to_call_keeps_llm_high_with_original_quote(tmp_path):
+    db = _db(tmp_path, ())
+    try:
+        from semantic_testkit import _message
+        body = "本人は呼びかけに反応がありません。至急対応してください。"
+        db.save_messages([_message(1, body=body)], project_id=1)
+        _artifact(db, "extract_llm", 1,
+                  {"urgency": "high", "urgency_evidence": ["呼びかけに反応がありません"]},
+                  {VERSION_KEY: CURRENT_VERSION, "hash": _hash_of(db, 1)})
+        details = clinical_urgency.message_urgency_details(db.db, 1)
+        assert details["source"] == "llm" and details["subject"] == "patient"
+        assert details["reasons"] == ["呼びかけに反応がありません"]
+    finally:
+        db.close()
 
 
 @pytest.mark.parametrize("kind", ["extract_llm", "canonical_projection", "semantic_facts_v4"])
