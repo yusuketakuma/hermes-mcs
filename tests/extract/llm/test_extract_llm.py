@@ -751,7 +751,7 @@ def test_prompt_concat_handles_percent_body(monkeypatch):
         def open(self, req, timeout=None):
             captured["req"] = req
             return io.BytesIO(json.dumps(
-                {"choices": [{"message": {"content": '{"symptoms":[]}'}}]}
+                {"choices": [{"message": {"content": '{"symptoms":[]}'}, "finish_reason": "stop"}]}
             ).encode())
 
     monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(FakeOpener()))
@@ -925,7 +925,7 @@ def test_llm_extract_context_block_boundaries(monkeypatch):
         def open(self, req, timeout=None):
             captured["req"] = req
             return io.BytesIO(json.dumps(
-                {"choices": [{"message": {"content": '{"symptoms":[]}'}}]}
+                {"choices": [{"message": {"content": '{"symptoms":[]}'}, "finish_reason": "stop"}]}
             ).encode())
 
     monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(FakeOpener()))
@@ -1015,7 +1015,7 @@ def test_rule_hints_ride_the_prompt_as_candidates(monkeypatch):
         def open(self, req, timeout=None):
             captured["req"] = req
             return io.BytesIO(json.dumps(
-                {"choices": [{"message": {"content": '{"symptoms":[]}'}}]}
+                {"choices": [{"message": {"content": '{"symptoms":[]}'}, "finish_reason": "stop"}]}
             ).encode())
 
     monkeypatch.setattr(extract_llm, "_opener_request",
@@ -1255,7 +1255,7 @@ def test_karte_block_changes_ctx_hash_and_prompt_placement(tmp_path, monkeypatch
         def open(self, req, timeout=None):
             captured["req"] = req
             return io.BytesIO(json.dumps(
-                {"choices": [{"message": {"content": '{"symptoms":[]}'}}]}
+                {"choices": [{"message": {"content": '{"symptoms":[]}'}, "finish_reason": "stop"}]}
             ).encode())
 
     monkeypatch.setattr(extract_llm, "_opener_request",
@@ -1308,7 +1308,7 @@ class _Opener:
                    if probe.get("name") == "mcs_format_probe"
                    else '{"ok":true}')
         return io.BytesIO(json.dumps(
-            {"choices": [{"message": {"content": content}}]}
+            {"choices": [{"message": {"content": content}, "finish_reason": "stop"}]}
         ).encode())
 
 
@@ -1378,7 +1378,7 @@ def test_extract_degrades_mid_run_on_format_reject(monkeypatch):
                 raise _http_error(400)
             return io.BytesIO(json.dumps(
                 {"choices": [{"message":
-                              {"content": '{"symptoms":[],"summary":"ok"}'}}]}
+                              {"content": '{"symptoms":[],"summary":"ok"}'}, "finish_reason": "stop"}]}
             ).encode())
 
     op = Swap()
@@ -1781,7 +1781,7 @@ def test_posted_at_reaches_prompt(monkeypatch):
         def open(self, req, timeout=None):
             captured["req"] = req
             return io.BytesIO(json.dumps(
-                {"choices": [{"message": {"content": '{"symptoms":[]}'}}]}
+                {"choices": [{"message": {"content": '{"symptoms":[]}'}, "finish_reason": "stop"}]}
             ).encode())
 
     monkeypatch.setattr(extract_llm, "_opener_request", _request_from_opener(FakeOpener()))
