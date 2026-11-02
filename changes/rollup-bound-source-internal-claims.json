@@ -1,11 +1,11 @@
 {
   "category": "fixed",
   "title": "測定カバレッジが常に「未取得・不完全」扱いになる問題を修正",
-  "summary": "内部証明（leaf claims）を含む抽出artifactが、rollupのsource-bound判定で常に「未束縛」として扱われ、measurement_coverageが常にincomplete・latest_vitals/recent_labsが出ない状態になっていました。artifact参照の照合をconsumer形式同士で比較するよう修正し、正しく束縛された抽出が測定カバレッジ・最新バイタル・検査レポートへ反映されるようになります。",
+  "summary": "内部証明（leaf claims）を含む抽出artifactが、rollup/measurement_sourcesのsource-bound判定で常に「未束縛」として扱われ、measurement_coverageが常にincomplete・latest_vitals/recent_labsが出ない状態になっていました。artifact参照の照合を、生content一致を優先・consumer形式（内部キー除去済み）同士の比較は不一致時のみとする形に修正し、追加のJSON再デコードを伴わずに正しく束縛された抽出が測定カバレッジ・最新バイタル・検査レポートへ反映されるようになります。",
   "upgrade": "追加操作は不要です。",
   "details": [
-    "_clinical_artifact_refs の照合で、内部証明キーを含むartifact contentと読出し済みblobの比較が常に不一致になり、bound_sourceが全件Falseになっていた。",
-    "比較を両側ともextraction_consumer_content（内部キー除去済み形式）に揃え、同一行のcontentであることを正しく検証する。"
+    "_clinical_artifact_refs と measurement_sources の照合で、内部証明キーを含むartifact contentと読出し済みblobの比較が常に不一致になり、bound_sourceが全件Falseになっていた。",
+    "生content一致を優先して比較し、不一致時だけ両側をconsumer形式に正規化して比較。同一行のcontentであることを再デコードなしで検証する。"
   ],
-  "refs": ["mcs/patients/rollup.py"]
+  "refs": ["mcs/patients/rollup.py", "mcs/patients/measurement_sources.py"]
 }

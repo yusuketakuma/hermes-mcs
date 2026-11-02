@@ -636,7 +636,11 @@ def _collect_measurements(db, project_id, msgs, arts, refs, *, cfg=None, truncat
             counts["canonical_unverified"] += 1
             continue
         row = selected.get(ref)
-        if not has_fact or row is None or row["message_id"] != mid or row["kind"] != kind or extraction_consumer_content(row["content"]) != blobs.get(kind):
+        blob = blobs.get(kind)
+        if (not has_fact or row is None or row["message_id"] != mid or row["kind"] != kind
+                or (row["content"] != blob
+                    and extraction_consumer_content(row["content"])
+                    != extraction_consumer_content(blob))):
             counts["unprocessed"] += 1
             continue
         if isinstance(doc.get("labs"), list) and len(doc["labs"]) > _MAX_PER_SOURCE:

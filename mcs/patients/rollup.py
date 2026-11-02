@@ -1114,8 +1114,11 @@ def _clinical_artifact_refs(db, project_id, blobs, message_ids=None):
         {current_extract_pred()}
         AND (a.kind IN ('extract_v1','extract_llm') OR (1=1 {current_fact_pred()}))
         {scope} ORDER BY a.artifact_id""", params)
-    if extraction_consumer_content(row["content"]) == extraction_consumer_content(
-            blobs.get(row["message_id"], {}).get(row["kind"]))}
+    # raw bytes first — the consumer-form comparison only rescues a blob
+    # already stripped of internal proof keys; it must not re-decode.
+    if (row["content"] == blobs.get(row["message_id"], {}).get(row["kind"])
+            or extraction_consumer_content(row["content"]) == extraction_consumer_content(
+                blobs.get(row["message_id"], {}).get(row["kind"])))}
 
 
 
