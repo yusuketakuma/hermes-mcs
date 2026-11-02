@@ -197,7 +197,7 @@ def history_thread_allowed(db, project_id, message_id):
     return _history_thread_allowed(db, project_id, message_id, _history_scope(db, scope))
 
 
-def _history_thread_allowed(db, project_id, message_id, sources):
+def _history_thread_allowed(db, project_id, message_id, sources, bindings=None):
     from inference_dependency_loss import source_binding
     target = db.execute("SELECT COALESCE(parent_id,message_id) FROM messages "
                         "WHERE project_id=? AND message_id=?", (project_id, message_id)).fetchone()
@@ -205,16 +205,17 @@ def _history_thread_allowed(db, project_id, message_id, sources):
         return False
     members = db.execute("SELECT message_id FROM messages WHERE project_id=? "
                          "AND (message_id=? OR parent_id=?)", (project_id, target[0], target[0])).fetchall()
-    if sources is None:
-        return bool(members) and all(source_binding(db, project_id, row[0]) is not None for row in members)
-    return bool(members) and all(
-        sources.get(f"{project_id}:{row[0]}") == source_binding(db, project_id, row[0])
-        and sources.get(f"{project_id}:{row[0]}") is not None for row in members)
+    for row in members:
+        binding = source_binding(db, project_id, row[0])
+        if binding is None or sources is not None and sources.get(f"{project_id}:{row[0]}") != binding:
+            return False
+        if bindings is not None:
+            bindings.append((row[0], binding))
+    return bool(members)
 
 
 def history_thread_snapshot(db, project_id, message_id):
     """Bind the active scope and every current thread occurrence to one read snapshot."""
-    from inference_dependency_loss import source_binding
     anchor = db.execute("SELECT artifact_id,content,meta FROM (SELECT artifact_id,content,meta FROM artifacts "
                         "WHERE kind='cloud_history_scope' ORDER BY artifact_id DESC LIMIT 1) "
                         "UNION ALL SELECT NULL,NULL,NULL UNION ALL SELECT NULL,NULL,NULL")
@@ -223,18 +224,10 @@ def history_thread_snapshot(db, project_id, message_id):
         if scope is None or scope[0] is None:
             return None
         sources = _history_scope(db, (scope[1], scope[2]))
-        if not _history_thread_allowed(db, project_id, message_id, sources):
+        bindings = []
+        if not _history_thread_allowed(db, project_id, message_id, sources, bindings):
             return None
-        target = db.execute("SELECT COALESCE(parent_id,message_id) FROM messages "
-                            "WHERE project_id=? AND message_id=?", (project_id, message_id)).fetchone()
-        if target is None:
-            return None
-        members = db.execute("SELECT message_id FROM messages WHERE project_id=? "
-                             "AND (message_id=? OR parent_id=?) ORDER BY message_id",
-                             (project_id, target[0], target[0])).fetchall()
-        bindings = [(row[0], source_binding(db, project_id, row[0])) for row in members]
-        if not bindings or any(binding is None for _, binding in bindings):
-            return None
+        bindings.sort()
         return payload_hash({'scope_id': scope[0], 'project_id': project_id,
                              'target_id': message_id, 'members': bindings})
     finally:
