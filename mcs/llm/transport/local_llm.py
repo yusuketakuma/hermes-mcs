@@ -406,9 +406,11 @@ def admitted_probe_format(client_route: str, endpoint: str, model: str,
     """``probe_format`` through the admission boundary — the probe's
     ladder sends real inference POSTs, so it acquires one class permit
     for the whole bounded probe (≤2 sequential sends, same class) and
-    injects the token into each. Returns the probe mode, or
-    ``"plain"`` — a denied/held admission also yields ``"plain"``
-    (callers cache with a bounded cooldown, and the verdict is
+    injects the token into each. Returns the probe mode, ``"plain"``
+    when probing proved every constraint unusable, or ``None`` when
+    nothing was sent — a denied/held admission or a deadline spent
+    before the first send is an unobserved probe, never a plain
+    verdict (callers defer instead of caching; the verdict itself is
     visible in the permit ledger)."""
     broker = _broker(broker_path)
     cls = broker.routes.get(client_route)
@@ -420,16 +422,16 @@ def admitted_probe_format(client_route: str, endpoint: str, model: str,
     if not acq.get("admitted"):
         if acq.get("reason") == "waiting" and acq.get("permit_id") is not None:
             broker.cancel(acq["permit_id"])
-        return "plain"
+        return None
     pid = acq["permit_id"]
     sent = broker.sent(pid)
     if not sent.get("sent"):
         broker.terminal(pid, "not_sent", proof=sent.get("reason"))
-        return "plain"
+        return None
     deadline = kw.get("deadline")
     if deadline is not None and time.monotonic() >= deadline:
         broker.terminal(pid, "not_sent", proof="deadline")
-        return "plain"
+        return None
     err_out = kw.pop("error_out", None)
     if err_out is None:
         err_out = {}
@@ -700,10 +702,12 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
     operation_deadline = time.monotonic() + timeout
     if deadline is not None:
         operation_deadline = min(operation_deadline, deadline)
+    attempted = False
     for mode, rf in candidates:
         remaining = operation_deadline - time.monotonic()
         if remaining <= 0:
             break
+        attempted = True
         try:
             payload = {"id_slot": id_slot}
             if admission_token is not None:
@@ -731,7 +735,9 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
         except (OSError, ValueError):
             error_out.setdefault("kind", "transport")
             break                   # transport dead — stop probing
-    return "plain"
+    # a deadline spent before the first send is an unobserved probe —
+    # None defers it like a busy GPU turn, never a cached "plain" verdict
+    return "plain" if attempted else None
 
 
 def _json_obj(text: str):

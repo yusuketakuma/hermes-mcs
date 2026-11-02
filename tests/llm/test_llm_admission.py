@@ -777,9 +777,10 @@ def test_admitted_probe_rt_deferral_releases_waiting_flag(admitted_env):
     backlog = broker.acquire("mcs.extract", "BACKLOG")
     assert broker.sent(backlog["permit_id"])["sent"]
     calls = []
+    # an unprobed probe is deferred (None), never cached as "plain"
     assert local_llm.admitted_probe_format(
         "gbrain.query", local_llm.ENDPOINT, "synthetic", None,
-        request_fn=lambda *args: calls.append(args)) == "plain"
+        request_fn=lambda *args: calls.append(args)) is None
     assert calls == []
     broker.terminal(backlog["permit_id"], "done")
     assert broker.status()["rt_waiting"] == 0
@@ -846,10 +847,11 @@ def test_expired_deadline_chat_frees_slot(broker_path):
 
 def test_expired_deadline_probe_frees_slot(broker_path):
     import local_llm
+    # a deadline spent before any send leaves the probe unobserved
     mode = local_llm.admitted_probe_format(
         "mcs.extract", local_llm.ENDPOINT, "m", None,
         deadline=time.monotonic() - 0.001, request_fn=_expired_send)
-    assert mode == "plain"
+    assert mode is None
     b = local_llm._broker(broker_path)
     row = b.db.execute("SELECT state,outcome FROM permits").fetchone()
     assert row["state"] == "terminal" and row["outcome"] == "not_sent"
@@ -881,3 +883,73 @@ def test_malformed_200_probe_retires_permit(broker_path):
     b = local_llm._broker(broker_path)
     row = b.db.execute("SELECT state,outcome FROM permits").fetchone()
     assert row["state"] == "terminal" and row["outcome"] == "done"
+
+
+# A probe denied by the admission gate never sent anything: callers must
+# defer (None), never record a "plain" verdict. Once capacity returns the
+# next probe runs for real and adopts the accepted mode.
+
+
+def _format_probe_reply(endpoint, method, body, timeout, deadline=None):
+    fmt = body.get("response_format") or {}
+    content = ('{"probe": "schema"}' if fmt.get("type") == "json_schema"
+               else '{"ok": true}')
+    return 200, {}, json.dumps({
+        "choices": [{"message": {"content": content},
+                     "finish_reason": "stop"}]}).encode()
+
+
+def test_extract_probe_denial_defers_and_reprobes_after_capacity(
+        admitted_env, monkeypatch):
+    import extract_llm
+    broker = _live_broker(admitted_env)
+    rt = broker.acquire("gbrain.query", "RT")
+    assert broker.sent(rt["permit_id"])["sent"]
+    monkeypatch.setattr(extract_llm, "_FMT_MODE", None)
+    monkeypatch.setattr(extract_llm, "_FMT_TS", 0.0)
+    calls = []
+    monkeypatch.setattr(extract_llm, "_opener_request",
+                        lambda *a, **k: calls.append(a))
+    assert extract_llm._probe_format() is None
+    assert extract_llm._FMT_MODE is None   # no unobserved plain verdict
+    assert calls == []                     # nothing left the process
+    # the deferred message call also takes the free hold path
+    assert extract_llm._llm_call("synthetic") is extract_llm._DEFERRED
+    broker.terminal(rt["permit_id"], "done")
+    monkeypatch.setattr(extract_llm, "_opener_request", _format_probe_reply)
+    assert extract_llm._probe_format() == "schema"
+
+
+def test_semantic_probe_denial_defers_and_reprobes_after_capacity(
+        admitted_env, monkeypatch):
+    import local_llm
+    import semantic_runtime
+    import semantic_transport
+    broker = _live_broker(admitted_env)
+    rt = broker.acquire("gbrain.query", "RT")
+    assert broker.sent(rt["permit_id"])["sent"]
+    monkeypatch.setattr(semantic_transport, "llm_conf",
+                        lambda: (local_llm.ENDPOINT, "synthetic-model"))
+    monkeypatch.setattr(semantic_transport, "_FMT_MODE", None)
+    monkeypatch.setattr(semantic_transport, "_FMT_TS", 0.0)
+    calls = []
+    monkeypatch.setattr(local_llm, "bounded_request",
+                        lambda *a, **k: calls.append(a))
+    with pytest.raises(semantic_runtime.LLMNotSent):
+        semantic_transport.llm_chat("完全合成の本文", timeout=30)
+    assert semantic_transport._FMT_MODE is None   # no unobserved plain verdict
+    assert calls == []
+    broker.terminal(rt["permit_id"], "done")
+    monkeypatch.setattr(local_llm, "bounded_request", _format_probe_reply)
+    assert semantic_transport.llm_chat("完全合成の本文", timeout=30) \
+        == '{"ok": true}'
+
+
+def test_probe_format_deadline_before_any_send_returns_unprobed():
+    import local_llm
+    calls = []
+    assert local_llm.probe_format(
+        local_llm.ENDPOINT, "m", None,
+        deadline=time.monotonic() - 0.001,
+        request_fn=lambda *a, **k: calls.append(a)) is None
+    assert calls == []

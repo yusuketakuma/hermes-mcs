@@ -1,0 +1,13 @@
+{
+  "category": "fixed",
+  "title": "LLM枠の一時拒否で形式probeが「plain判定」として600秒固定される問題を修正",
+  "summary": "共有brokerの一時的な占有や送信前期限切れで1バイトも送られなかった形式probeが「形式非対応（plain）」として600秒キャッシュされ、枠が復帰してもjson_schema/json_objectが再確認されず、semantic側は未観測のままplain送信へ進んでいました。未送信のprobeは「未観測」として既存の無料保留経路（失敗回数を消費しない延期）へ返し、次回呼出しでprobeをやり直します。実際にHTTPで拒否された形式の降格と600秒の再probe・未知routeの認可拒否・waiting permitのcancelは従来どおりです。",
+  "upgrade": "追加操作は不要です。既存の形式キャッシュはそのまま有効です。",
+  "details": [
+    "admitted_probe_formatがadmission拒否・未送信・送信前期限切れでNone（未観測）を返し、呼出元の既存保留経路に委ねる。未知routeの拒否は従来どおり。",
+    "probe_formatが最初の送信前に期限切れした場合もNoneを返す（一度でも送信した後の降格判定は維持）。",
+    "semanticのllm_chatがprobe未送信時にLLMNotSentへ返し、plain送信へ進まない。probe例外時もplain判定を記録しない。",
+    "extract側は既存の_DEFERRED経路がそのまま再利用される。"
+  ],
+  "refs": ["mcs/llm/transport/local_llm.py", "mcs/semantic/semantic_transport.py", "tests/llm/test_llm_admission.py"]
+}

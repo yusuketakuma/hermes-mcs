@@ -344,7 +344,7 @@ def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
                   verify=lambda text: json_object(text) is not None)
         if local_llm.admission_enabled():
             # T20: the probe sends real inference POSTs — it takes a
-            # class permit (a held verdict yields "plain")
+            # class permit (a held/deferred verdict yields None)
             mode = local_llm.admitted_probe_format(
                 "mcs.semantic", endpoint, model, None, **kw)
         else:
@@ -353,7 +353,8 @@ def _probe_format(endpoint: str, model: str, timeout: float = 10) -> str:
             return _FMT_MODE  # GPU turn busy: nothing sent, probe again next call
         _FMT_MODE = mode
     except Exception:
-        _FMT_MODE = "plain"
+        # an unobserved probe is not a plain verdict — stay unprobed
+        return _FMT_MODE
     _FMT_TS = time.monotonic()
     return _FMT_MODE
 
@@ -478,8 +479,12 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
     # the probe spends the caller's budget, never adds to it: the
     # runtime sized ``timeout`` to the job deadline (absolute)
     call_deadline = time.monotonic() + timeout
-    rf = {"type": "json_object"} \
-        if _probe_format(endpoint, model, timeout) == "object" else None
+    fmt = _probe_format(endpoint, model, timeout)
+    if fmt is None:
+        # the probe never left — an unobserved format defers the real
+        # call like any other admission hold, never a silent plain send
+        raise runtime.LLMNotSent("probe_unsent")
+    rf = {"type": "json_object"} if fmt == "object" else None
     key = _long_key(model, prompt)
     level = _long_marks().get(key, 0)
     if level >= 2:
