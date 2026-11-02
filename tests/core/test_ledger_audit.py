@@ -23,7 +23,8 @@ def _database(tmp_path):
             CREATE TABLE runs(run_id INTEGER PRIMARY KEY,started_at REAL,
                 finished_at REAL,snapshot_ts INTEGER,status TEXT,error TEXT);
             CREATE TABLE patients(project_id INTEGER PRIMARY KEY,project_type TEXT,
-                patient_name TEXT,disease TEXT,station_name TEXT,url TEXT,last_seen REAL);
+                patient_name TEXT,disease TEXT,station_name TEXT,url TEXT,last_seen REAL,
+                initial_import TEXT);
             CREATE TABLE messages(message_id INTEGER PRIMARY KEY,project_id INTEGER,
                 parent_id INTEGER,sender_id INTEGER,sender_name TEXT,sender_type TEXT,
                 profession TEXT,organization TEXT,posted_at TEXT,body_html TEXT,
@@ -159,6 +160,8 @@ def test_supported_generations_and_legacy_missing_fields(tmp_path, version):
         sql += "DROP TABLE fetch_jobs; ALTER TABLE messages DROP COLUMN body_state;"
     if version < 8:
         sql += "DROP TABLE message_metadata;"
+    if version < 10:
+        sql += "ALTER TABLE patients DROP COLUMN initial_import;"
     _damage(path, sql)
     before = _hash(path)
     # When.

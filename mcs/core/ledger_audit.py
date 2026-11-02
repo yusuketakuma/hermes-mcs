@@ -159,7 +159,7 @@ def audit_db(path: str | Path, *, max_steps: int = 10_000_000) -> AuditReport:
             mandatory = static_required_tables(version)
             for table, present in columns.items():
                 record(f"schema_{table}",
-                       0 if static_required_columns(table, present) <= present else
+                       0 if static_required_columns(table, present, version=version) <= present else
                        1 if table in mandatory or present else None)
             record("sqlite_foreign_key", db.execute(
                 "SELECT COUNT(*) FROM pragma_foreign_key_check").fetchone()[0])
