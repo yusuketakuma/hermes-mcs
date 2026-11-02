@@ -6665,12 +6665,41 @@ def main() -> int:
             os.environ[local_llm.TURN_LOCK_ENV] = turn
 
 
-def _open_current_ledger(*, deadline=None):
+_RESIDENT_FENCE_LOST = object()
+_RESIDENT_SOURCE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _resident_source_state():
+    def fail(error):
+        raise error
+
+    files = []
+    for base, _dirs, names in os.walk(_RESIDENT_SOURCE_ROOT, onerror=fail):
+        for name in names:
+            if name.endswith(".py"):
+                path = os.path.join(base, name)
+                st = os.stat(path)
+                files.append((os.path.relpath(path, _RESIDENT_SOURCE_ROOT), st.st_dev, st.st_ino,
+                              st.st_mode, st.st_size, st.st_mtime_ns, st.st_ctime_ns))
+    if not files:
+        raise OSError("resident_source_unavailable")
+    return tuple(sorted(files))
+
+
+def _open_current_ledger(*, deadline=None, distinguish_fence=False, source_state=None):
     fd = writer_lock.acquire_run_lock()
     if fd is None:
         return None
     try:
-        if not _writer_current(full=True) or (deadline is not None and time.monotonic() >= deadline):
+        if not _writer_current(full=True):
+            return _RESIDENT_FENCE_LOST if distinguish_fence else None
+        if source_state is not None:
+            try:
+                if _resident_source_state() != source_state or not _writer_current(full=True):
+                    return _RESIDENT_FENCE_LOST if distinguish_fence else None
+            except OSError:
+                return _RESIDENT_FENCE_LOST if distinguish_fence else None
+        if deadline is not None and time.monotonic() >= deadline:
             return None
         return Ledger(DB)
     finally:
@@ -6683,10 +6712,16 @@ _RESIDENT_STARTUP_POLL_S = 0.5
 
 def _open_resident_ledger(deadline):
     waiting = False
+    try:
+        source_state = _resident_source_state()
+    except OSError:
+        return None
     while _writer_current(full=True):
         if time.monotonic() >= deadline:
             return None
-        led = _open_current_ledger(deadline=deadline)
+        led = _open_current_ledger(deadline=deadline, distinguish_fence=True, source_state=source_state)
+        if led is _RESIDENT_FENCE_LOST:
+            return None
         if led is not None:
             print(json.dumps({"event": "extractor_ledger_opened", "pid": os.getpid()}),
                   file=sys.stderr, flush=True)

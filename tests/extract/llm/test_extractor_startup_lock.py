@@ -136,6 +136,68 @@ def test_generation_change_during_lock_acquire_blocks_ledger(tmp_path, monkeypat
     os.close(fd)
 
 
+def test_transient_fence_loss_after_lock_is_not_retried(tmp_path, monkeypatch):
+    lock = str(tmp_path / "transient-fence.lock")
+    real_acquire = writer_lock.acquire_run_lock
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda: real_acquire(lock))
+    observed = []
+
+    def current(**_):
+        observed.append(True)
+        return len(observed) != 2
+
+    monkeypatch.setattr(extract_llm, "_writer_current", current)
+    monkeypatch.setattr(extract_llm, "Ledger", lambda _: pytest.fail("opened after fence loss"))
+    assert extract_llm._open_resident_ledger(time.monotonic() + 2) is None
+    assert len(observed) == 2
+    fd = real_acquire(lock)
+    assert fd is not None
+    os.close(fd)
+
+
+def test_source_change_during_wait_is_detected_when_max_mtime_is_unchanged(tmp_path, monkeypatch):
+    root = tmp_path / "source"
+    root.mkdir()
+    newest, changed = root / "newest.py", root / "changed.py"
+    newest.write_text("newest")
+    changed.write_text("before")
+    future = time.time() + 3600
+    os.utime(newest, (future, future))
+    old_max = max(p.stat().st_mtime_ns for p in root.glob("*.py"))
+    now, attempts = [0.0], []
+    real_acquire = writer_lock.acquire_run_lock
+    lock = str(tmp_path / "source.lock")
+
+    def acquire():
+        attempts.append(True)
+        return None if len(attempts) == 1 else real_acquire(lock)
+
+    def change(seconds):
+        now[0] += seconds
+        changed.write_text("changed synthetic source")
+
+    monkeypatch.setattr(extract_llm, "_RESIDENT_SOURCE_ROOT", str(root))
+    monkeypatch.setattr(extract_llm, "_writer_current", lambda **_: True)
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", acquire)
+    monkeypatch.setattr(extract_llm, "Ledger", lambda _: pytest.fail("opened after source change"))
+    monkeypatch.setattr(extract_llm, "time", SimpleNamespace(monotonic=lambda: now[0], sleep=change))
+    assert extract_llm._open_resident_ledger(2.0) is None
+    assert len(attempts) == 2 and max(p.stat().st_mtime_ns for p in root.glob("*.py")) == old_max
+    fd = real_acquire(lock)
+    assert fd is not None
+    os.close(fd)
+
+
+def test_unreadable_source_state_fails_before_ledger(monkeypatch):
+    def unavailable():
+        raise OSError("synthetic source unavailable")
+
+    monkeypatch.setattr(extract_llm, "_resident_source_state", unavailable)
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda: pytest.fail("unexpected lock"))
+    monkeypatch.setattr(extract_llm, "Ledger", lambda _: pytest.fail("unexpected ledger"))
+    assert extract_llm._open_resident_ledger(time.monotonic() + 2) is None
+
+
 def test_resident_stop_after_bounds_startup_wait(tmp_path, monkeypatch, capsys):
     now = [0.0]
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "3", "--stop-after", "2"])
