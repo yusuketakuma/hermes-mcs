@@ -360,10 +360,17 @@ def _legacy_unsealed_multileaf(tmp_path, monkeypatch, *, with_vitals):
     [final] = db.artifacts(extract_llm.KIND, message_id=1)
     content = json.loads(final["content"])
     content.pop(extract_llm._INTERNAL_LEAF_CLAIMS)
+    legacy_content = json.dumps(content, ensure_ascii=False)
+    meta = json.loads(final["meta"])
+    # Rebind the stored provider evidence to the unsealed bytes: a genuine
+    # pre-seal artifact's result_hash was computed over this exact content.
+    meta["provider_provenance"]["result_hash"] = extract_llm._provider_result_hash(legacy_content)
     with db.db:
-        db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?",
-                      (json.dumps(content, ensure_ascii=False), final["artifact_id"]))
+        db.db.execute("UPDATE artifacts SET content=?, meta=? WHERE artifact_id=?",
+                      (legacy_content, json.dumps(meta, ensure_ascii=False),
+                       final["artifact_id"]))
     assert not db.artifacts("extract_llm_chunk", message_id=1)
+    final = db.artifacts(extract_llm.KIND, message_id=1)[0]
     return db, final
 
 
@@ -406,6 +413,21 @@ def test_legacy_unsealed_multileaf_claim_still_bounds_meta_forgery(tmp_path, mon
                           (json.dumps(meta, ensure_ascii=False), final["artifact_id"]))
         assert extract_llm.progress_for_message(
             db.db, source, model=extract_llm.MODEL)["state"] != "complete"
+    finally:
+        db.close()
+
+
+def test_legacy_unsealed_claim_fails_closed_when_hints_cannot_run(tmp_path, monkeypatch):
+    """A transient rule-hint lookup failure must not read as coverage: with
+    nothing provable the compat floor keeps the message at attention."""
+    db, final = _legacy_unsealed_multileaf(tmp_path, monkeypatch, with_vitals=True)
+    try:
+        source = db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone()
+        assert extract_llm.progress_for_message(
+            db.db, source, model=extract_llm.MODEL)["state"] == "complete"
+        monkeypatch.setattr(extract_llm, "_rule_hints", lambda *a, **kw: None)
+        assert extract_llm.progress_for_message(
+            db.db, source, model=extract_llm.MODEL)["state"] == "attention"
     finally:
         db.close()
 

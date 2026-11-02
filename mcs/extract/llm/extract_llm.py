@@ -3801,10 +3801,11 @@ def _verify_completeness_claim(db, r, context, content, integrity, used_keys,
             # evidence was already cleaned. Prove what the merged document
             # still binds: well-formed terminal records — a resolved record
             # holds no remainder — and a claimed remainder that still covers
-            # the document's unresolved hints. The per-leaf attribution
-            # beyond that floor is history detail the content alone cannot
-            # prove, and the claim is still rejected when it resolves work
-            # the document does not.
+            # the document's unresolved hints. When the hint lookup itself
+            # cannot run the floor proves nothing and stays rejected. The
+            # per-leaf attribution beyond that floor is history detail the
+            # content alone cannot prove, and the claim is still rejected
+            # when it resolves work the document does not.
             if type(chunks_n) is not int or chunks_n != len(completeness):
                 return False
             total = 0
@@ -3818,7 +3819,8 @@ def _verify_completeness_claim(db, r, context, content, integrity, used_keys,
                             and claim["remaining_hint_candidates"] != 0)):
                     return False
                 total += claim["remaining_hint_candidates"]
-            return total >= expected["remaining_hint_candidates"]
+            return (expected["state"] != "dispatch_unknown"
+                    and total >= expected["remaining_hint_candidates"])
         size = r["_chunk_size"] if chunk_size is None else chunk_size
         splits, saved = (saved_state if saved_state is not None
                          else _saved_chunk_state(db, r, context, chunk_size=size))
