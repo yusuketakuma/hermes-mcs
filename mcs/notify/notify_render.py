@@ -463,12 +463,12 @@ def _signal_tier(sig) -> str | None:
     return mcs_signals.SIGNAL_TIERS.get(sig.get("type"))
 
 
-def _thread_context(db, card, msgs, waiting=frozenset()) -> str:
+def _thread_context(db, card, msgs, waiting=frozenset(), *, legacy_scope=False) -> str:
     """② 投稿数 · 未取得の返信 · 添付件数 · 自分宛て — only facts that
     are present; '' when there is nothing to say beyond the posts."""
     live = [m for m in msgs if m["body_state"] != "deleted"]
     parts = [f"{len(msgs)}投稿"] if msgs else []
-    own = own_post(card)
+    own = own_post(card, legacy_scope=legacy_scope)
     replies = (msgs[0].get("reply_count") or 0) if msgs else 0
     if waiting or own == card["root_message_id"]:
         root = db.execute("SELECT reply_count FROM messages WHERE message_id=? AND project_id=?",
@@ -560,7 +560,7 @@ def _page_processing_status(progresses):
 
 
 def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True,
-                   include_progress=True) -> dict:
+                   include_progress=True, compact_progress=True) -> dict:
     """📋 要約 of one post, or its visible empty state — a post with no
     usable extraction says whether it is still queued or exhausted its
     retries instead of silently showing nothing."""
@@ -576,8 +576,14 @@ def _summary_block(db, mid, *, cfg=None, progress_by_mid=None, label=True,
         block = {"type": "text", "text": ("📋 要約 " if label else "要約 ") + empty}
     if (include_progress and (label or progress_by_mid is not None)
             and state and state["state"] != "complete"):
-        from extraction_progress import compact_label
-        block["text"] += "\n" + compact_label(state)
+        if compact_progress:
+            from extraction_progress import compact_label
+            progress = compact_label(state)
+        else:
+            progress = "解析更新中" if state["state"] == "processing" else "解析要確認"
+            if state["total"]:
+                progress += f"（{state['total']}区間中{state['completed']}区間完了）"
+        block["text"] += "\n" + progress
     return block
 
 
@@ -652,7 +658,7 @@ def patient_heading(db, pid) -> str:
     return out
 
 
-def source_fingerprint(db, card) -> str:
+def source_fingerprint(db, card, *, legacy_scope=False) -> str:
     """Fingerprint of the source material a card renders — a change here
     bumps source_generation."""
     card = dict(card)
@@ -661,7 +667,7 @@ def source_fingerprint(db, card) -> str:
         import notify_history
         return notify_history.fingerprint(db, card)
     if kind == "thread":
-        own = own_post(card)
+        own = own_post(card, legacy_scope=legacy_scope)
         msgs = db.execute(
             "SELECT message_id,content_hash,body_state FROM messages "
             "WHERE (message_id=? OR parent_id=?) AND project_id=? "
@@ -727,13 +733,13 @@ def reply_source(card):
     return source if type(source) is int and source > 0 else None
 
 
-def own_post(card):
+def own_post(card, *, legacy_scope=False):
     """The one post a layout-4 thread card is about (its reply, or the root),
     or None for cards that cover their whole thread."""
     if card["kind"] != "thread":
         return None
     layout = (card["layout"] if "layout" in card.keys() else 1) or 1
-    if "transport" in card.keys() and card["transport"] == "slack":
+    if not legacy_scope and "transport" in card.keys() and card["transport"] == "slack":
         return reply_source(card) or card["root_message_id"]
     return (reply_source(card) or card["root_message_id"]) if layout >= 4 else None
 
@@ -951,12 +957,13 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
     preview_urgencies = {}
     urgent = False
     layout = card["layout"] if "layout" in card.keys() else 1
+    legacy_scope = _provider_version < 4
     if kind == "thread":
         import processing_route
         if visible_providers is None:
             visible_providers = processing_route.visible_providers()
         # layout 4: a reply card shows its one reply, the root card its root only
-        only = own_post(card)
+        only = own_post(card, legacy_scope=legacy_scope)
         msgs = [dict(m) for m in db.execute(
             """SELECT message_id,sender_id,sender_name,profession,organization,
                       posted_at,body_state,first_seen,
@@ -981,7 +988,7 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
                 preview_urgencies[m["message_id"]] = verdict
         tag = next((URGENCY_PLAIN[u] for u in ("llm", "rule") if u in urgency), "")
         urgent = bool(tag)
-        context = _thread_context(db, card, msgs, waiting)
+        context = _thread_context(db, card, msgs, waiting, legacy_scope=legacy_scope)
         if layout >= 2:
             # the title is the patient alone (never cut on a phone); the
             # urgency leads the line under it, then start date and counts
@@ -1038,7 +1045,8 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
             if m["body_state"] != "deleted":
                 blocks.append(_summary_block(db, m["message_id"], cfg=cfg,
                                              progress_by_mid=progress_by_mid,
-                                             label=layout < 2, include_progress=(layout < 2 if _provider_version == 0 else _provider_version in (1, 2))))
+                                             label=layout < 2, include_progress=(layout < 2 if _provider_version == 0 else _provider_version in (1, 2)),
+                                             compact_progress=_provider_version >= 4))
             rendered.append(_fit_item(blocks))
         item_shown = [[m["message_id"]] for m in msgs]
         max_count = PAGE_THREAD
@@ -1091,13 +1099,17 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
         containers[1].update(provider_scope="header", provider_states=dict.fromkeys(processing_route.PROVIDERS, "partial"))
         if _provider_version == 4:
             containers[1]["visible_providers"] = list(visible_providers)
-    source_fp = source_fingerprint(db, card)
+    source_fp = source_fingerprint(db, card, legacy_scope=legacy_scope)
     generation = render_source_generation(card, source_fp)
     # A long heading shares the old 800-character reserve with the footer.
     # Any physical truncation retains the existing explicit original/body link.
-    containers = _fit_item(containers, CARD_TEXT_BUDGET - PAGE_TEXT_BUDGET)
+    reserve_rules = (layout >= 3 and not legacy_scope and "transport" in card.keys()
+                     and card["transport"] == "discord")
+    def divider_cost(blocks):
+        return 14 * sum(bool(c.get("rule")) and c.get("type") != "meta" for c in blocks) if reserve_rules else 0
+    containers = _fit_item(containers, CARD_TEXT_BUDGET - PAGE_TEXT_BUDGET - divider_cost(containers))
     budget = PAGE_TEXT_BUDGET
-    pages_idx = _pack_pages([_blocks_len(b) for b in rendered], max_count)
+    pages_idx = _pack_pages([_blocks_len(b) + divider_cost(b) for b in rendered], max_count)
     stamp_details = (kind == "thread" and layout >= 3
                      and "transport" in card.keys()
                      and getattr(presenter(card["transport"]), "STAMP_DETAILS", False)
@@ -1113,20 +1125,22 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
             shown = [key for i in indices for key in item_shown[i]]
             key = tuple(shown)
             if key not in footer_memo:
-                footer_memo[key] = _footer(db, card, shown, generation, stamp_details=stamp_details)
+                footer_memo[key] = _footer(db, card, shown, generation, stamp_details=stamp_details,
+                                           **({"legacy_scope": True} if legacy_scope else {}))
             footer, toggles = footer_memo[key]
             page_states.append((shown, footer, toggles))
         # the page marker joins the context line after paging; reserve it
         budget = min(budget, CARD_TEXT_BUDGET - _blocks_len(containers)
+                     - divider_cost(containers)
                      - _PAGE_RESERVE
                      - max(_footer_len(state[1]) for state in page_states))
-        if all(sum(_blocks_len(rendered[i]) for i in indices) <= budget
+        if all(sum(_blocks_len(rendered[i]) + divider_cost(rendered[i]) for i in indices) <= budget
                for indices in pages_idx):
             break
         # The budget only decreases: pages split without dropping/reordering items.
-        rendered = [_fit_item(blocks, budget) for blocks in rendered]
+        rendered = [_fit_item(blocks, max(0, budget - divider_cost(blocks))) for blocks in rendered]
         pages_idx = _pack_pages(
-            [_blocks_len(b) for b in rendered], max_count, budget)
+            [_blocks_len(b) + divider_cost(b) for b in rendered], max_count, budget)
     pages = len(pages_idx)
     page = _page(ui, pages, default=pages - 1 if kind == "thread" else 0)
     shown, footer, toggles = page_states[page]
@@ -1172,7 +1186,8 @@ def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=
         containers.extend(rendered[i])
     reactions = []
     stamp_time = "transport" not in card.keys() or card["transport"] != "lineworks"
-    for mid, meta in card_reactions(db, card, None if kind == "thread" else shown):
+    for mid, meta in card_reactions(db, card, None if kind == "thread" else shown,
+                                    legacy_scope=legacy_scope):
         if mid in waiting:
             continue
         actors = reaction_actor_summary(db, mid)
@@ -1275,7 +1290,7 @@ def current_ackers(db, card_id, generation, shown) -> list:
         (card_id, generation, json.dumps(shown, ensure_ascii=False)))]
 
 
-def open_tasks(db, card) -> list:
+def open_tasks(db, card, *, legacy_scope=False) -> list:
     """Open/in-progress requests anchored to a thread card's messages —
     the same anchor the task list view uses."""
     if card["kind"] != "thread" or not positive(card["root_message_id"]) \
@@ -1289,16 +1304,17 @@ def open_tasks(db, card) -> list:
              WHERE (message_id=? OR parent_id=?) AND (? IS NULL OR message_id=?))
            ORDER BY due_date IS NULL, due_date, request_id""",
         (card["project_id"], card["root_message_id"],
-         card["root_message_id"], own_post(card), own_post(card))).fetchall()
+         card["root_message_id"], own_post(card, legacy_scope=legacy_scope),
+         own_post(card, legacy_scope=legacy_scope))).fetchall()
 
 
 FOOTER_ACKERS = 8
 
 
-def card_reactions(db, card, shown=None) -> list:
+def card_reactions(db, card, shown=None, *, legacy_scope=False) -> list:
     """カードが参照する同患者の未削除投稿についてcaptureの反応だけを読む。"""
     if card["kind"] == "thread":
-        own = own_post(card)
+        own = own_post(card, legacy_scope=legacy_scope)
         params = [card["project_id"], card["root_message_id"], card["root_message_id"], own, own]
         selected = ""
         if shown is not None:
@@ -1364,7 +1380,7 @@ def today_jst(now=None) -> str:
                                   JST).date().isoformat()
 
 
-def feedback_pending(db, card) -> bool:
+def feedback_pending(db, card, *, legacy_scope=False) -> bool:
     """A ⚠ report still pins a current extraction of this card's
     messages — the mark clears once a newer extraction replaced it or
     a v4 read model became the message's current extraction."""
@@ -1378,8 +1394,8 @@ def feedback_pending(db, card) -> bool:
               AND (? IS NULL OR hm.message_id=?)
               AND {feedback_current('h')}
             LIMIT 1""", (card["project_id"], card["root_message_id"],
-                         card["root_message_id"], own_post(card),
-                         own_post(card))).fetchone() is not None
+                         card["root_message_id"], own_post(card, legacy_scope=legacy_scope),
+                         own_post(card, legacy_scope=legacy_scope))).fetchone() is not None
 
 
 def plain_notice(text, cap) -> str:
@@ -1397,7 +1413,7 @@ def inline_text(text, cap) -> str:
     return t if len(t) <= cap else t[:cap - 1] + "…"
 
 
-def _footer(db, card, shown, generation, *, stamp_details) -> tuple:
+def _footer(db, card, shown, generation, *, stamp_details, legacy_scope=False) -> tuple:
     """(footer items, toggles) — ``toggles`` is the same card state the
     button faces show (acked / assigned / has_tasks), handed to
     notify_cards._action_rows so a render queries it once. Not part of
@@ -1423,7 +1439,7 @@ def _footer(db, card, shown, generation, *, stamp_details) -> tuple:
     if who:
         lines.append(" · ".join(who))
     work = []
-    tasks = open_tasks(db, card)
+    tasks = open_tasks(db, card, **({"legacy_scope": True} if legacy_scope else {}))
     if tasks:
         today = today_jst()
         late = sum(1 for t in tasks if t["due_date"] and t["due_date"] < today)
@@ -1431,10 +1447,11 @@ def _footer(db, card, shown, generation, *, stamp_details) -> tuple:
                     + (f"（期限切れ {late}）" if late else ""))
     # Keep the only stamp summary when per-post details cannot be displayed.
     if not stamp_details:
-        work.extend(card_reaction_lines(card_reactions(db, card, shown)))
+        work.extend(card_reaction_lines(card_reactions(db, card, shown,
+                                                      **({"legacy_scope": True} if legacy_scope else {}))))
     if work:
         lines.append(" · ".join(work))
-    if feedback_pending(db, card):
+    if feedback_pending(db, card, **({"legacy_scope": True} if legacy_scope else {})):
         lines.append("⚠ 誤り報告あり・再抽出待ち")
     if card["kind"] == "thread" and db.execute(
             "SELECT 1 FROM patients WHERE project_id=? "

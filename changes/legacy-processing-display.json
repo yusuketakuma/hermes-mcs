@@ -1,0 +1,10 @@
+{
+  "category": "fixed",
+  "title": "従来の解析表示の更新判定を維持",
+  "summary": "旧形式カードの解析状況と投稿範囲を旧版どおりに照合し、表示が変わっていないカードの不要な更新を防ぎます。",
+  "upgrade": "既存の更新手順に従って反映してください。Slackの旧返信配置は現行方針で照合し、送信結果が不明な通知は保留します。",
+  "refs": [
+    "mcs/notify/notify_render.py",
+    "mcs/notify/notify_cards.py"
+  ]
+}

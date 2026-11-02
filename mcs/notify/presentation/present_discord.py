@@ -87,4 +87,6 @@ def face_text_cost(parts, face_posts=()) -> int:
             n += len(c["text"]) + 4
         elif c["type"] == "field":
             n += len(c["name"]) + len(c["value"]) + 6
+    if parts.get("section_divider_version") == 1:
+        n += 14 * sum(bool(c.get("rule")) and c.get("type") != "meta" for c in parts["containers"])
     return n + sum(len(ln) + 4 for p in face_posts for ln in p["stamps"])

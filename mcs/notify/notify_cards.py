@@ -723,6 +723,8 @@ def _build_spec(db, card, content, op, rev, cfg, now, waiting=frozenset()) -> tu
     set_provider_version(spec["parts"])
     if spec["parts"].get("provider_states_version") == 4:
         spec["parts"]["processing_display_version"] = 1
+    if card["layout"] >= 3 and op != "revoke":
+        spec["parts"]["section_divider_version"] = 1
     post_source_id = own_post(card)
     if card["transport"] == "slack" and card["kind"] == "thread":
         spec["parts"]["slack_thread_policy"] = 1
@@ -987,9 +989,13 @@ def issue_render(db, card_id, cfg, now, specs, force=False, *, _preflight_candid
         previous = loads_dict(latest["spec_json"]) if latest["spec_json"] is not None else None
         parts = previous.get("parts") if isinstance(previous, dict) else None
         known_old = (latest["spec_json"] is None or
-                     isinstance(parts, dict) and parts.get("provider_states_version", 0) in (0, 1, 2))
+                     isinstance(parts, dict) and parts.get("provider_states_version", 0) in (0, 1, 2, 3))
+        if card["transport"] == "slack" and (not isinstance(parts, dict)
+                or parts.get("slack_thread_policy") != 1
+                or parts.get("post_source_id") != own_post(card)):
+            known_old = False
         if known_old:
-            for version in (0, 1, 2):
+            for version in (0, 1, 2, 3):
                 old_content = card_content(db, card, cfg=cfg, waiting=waiting,
                                            _provider_version=version, **content_options)
                 if _presentation_fp(card, old_content, cfg) == card["content_fp"]:

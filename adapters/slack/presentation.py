@@ -124,9 +124,15 @@ def thread_part_blocks(spec, part, text):
     unescaped chunk — plain_text blocks never parse it."""
     name = str((part or {}).get("name") or "")
     if is_header_part(name):
+        parts = spec.get("parts") or {}
+        suffix = "\n" + "─" * 12
+        divider = parts.get("section_divider_version") == 1 and text.endswith(suffix)
+        if divider:
+            text = text[:-len(suffix)]
+            if not text:
+                return contexts(suffix.strip())
         lines = text.split("\n")
         rest = [ln for ln in lines[1:] if ln]
-        parts = spec.get("parts") or {}
         version = parts.get("provider_states_version")
         visible = None
         if version in (3, 4):
@@ -142,6 +148,8 @@ def thread_part_blocks(spec, part, text):
         for ln in rest:
             if ln.startswith(_STAMP_LINE):
                 blocks.extend(contexts(ln))
+        if divider:
+            blocks.append({"type": "divider"})
         return blocks
     found = _BODY_PART.fullmatch(name)
     if not found or not has_header_part(spec, found.group(1)):

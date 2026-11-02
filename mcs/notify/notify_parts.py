@@ -10,7 +10,7 @@ from functools import partial
 
 from mcs_requests import canonical, positive
 from mcs_util import payload_hash, strict_json, text_sha256, valid_hash
-from notify_render import card_body_text, own_post, preview_header, notification_preview, presenter
+from notify_render import SECTION_RULE, card_body_text, own_post, preview_header, notification_preview, presenter
 from notify_scope import (active_transport, interactive_enabled, notify_cfg,
                           scope_matches, stored_scope, _body_witness_proofs,
                           _attachment_identity_witness_proofs)
@@ -878,6 +878,8 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
         visible["preview_text"] = parts["preview_text"]
     if "processing_display_version" in parts:
         visible["processing_display_version"] = parts["processing_display_version"]
+    if "section_divider_version" in parts:
+        visible["section_divider_version"] = parts["section_divider_version"]
     if "slack_thread_policy" in parts:
         visible["slack_thread_policy"] = parts["slack_thread_policy"]
     card_payload = canonical(visible)
@@ -935,7 +937,7 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
         body = card_body_text(db, card, man, max_chars=None, cfg=cfg,
                               visible_providers=visible_providers)[1]
         # lossless — no chunk dropped
-        header, divider, original = body.partition("\n" + "─" * 12 + "\n")
+        header, divider, original = body.partition("\n" + SECTION_RULE + "\n")
         header_chunks = []
         if mids and set(mids) <= face_mids:
             chunks = []                    # the card face carries this post whole
@@ -949,6 +951,15 @@ def build_manifest(db, card, spec, content, in_thread_body, *, cfg=None,
                 header_chunks = [notice]
         elif divider and card["layout"] >= 3:
             header_chunks = split_chunks(header)
+            if parts.get("section_divider_version") == 1 and header_chunks:
+                suffix = "\n" + SECTION_RULE
+                combined = header_chunks[-1] + suffix
+                if (len(combined) <= THREAD_PART_LIMIT
+                        and (not hasattr(present, "THREAD_PART_WIRE_LIMIT")
+                             or present.thread_part_wire_size(combined) <= present.THREAD_PART_WIRE_LIMIT)):
+                    header_chunks[-1] = combined
+                else:
+                    header_chunks.append(suffix)
             chunks = split_chunks(original)
         else:
             # Existing names remain stable until a new source post is issued.

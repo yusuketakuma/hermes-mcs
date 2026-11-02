@@ -25,7 +25,7 @@ def test_new_header_is_independent_from_long_original(led):
     parts = spec["parts"]
     assert _card(led)["layout"] == 3
     assert parts["manifest"][2]["name"] == "m:100:header#1"
-    assert notify_render.SECTION_RULE not in parts["thread_body_parts"][0]
+    assert parts["thread_body_parts"][0].endswith("\n" + notify_render.SECTION_RULE)
     assert "".join(parts["thread_body_parts"][1:]) == "合成" * 2300
     assert spec_module.validate(spec) is spec
 
