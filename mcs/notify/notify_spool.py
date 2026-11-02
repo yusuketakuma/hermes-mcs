@@ -101,6 +101,22 @@ def restore_awaiting_consent(root: str) -> dict | None:
     return None
 
 
+def restore_writer_hold(root: str) -> dict | None:
+    """Writers must stay stopped while a restore is unresolved: an
+    awaiting_consent or unreadable restore phase, or an updater/recover-owned
+    unfinished restore witness. An adopted backup restore resumes writers
+    through writers_resumed while delivery stays held, so it never answers
+    here. Kept beside the other restore gates so standalone, CLI entry
+    points and the updater share one reading."""
+    marker = restore_awaiting_consent(root)
+    if marker is not None:
+        return marker
+    marker = restore_pending(root)
+    if marker is not None and marker.get("by") in ("mcs_update", "mcs_recover"):
+        return marker
+    return None
+
+
 def clear_restore_pending(root: str) -> None:
     marker = restore_pending(root)
     if ((marker or {}).get("by") == "mcs_backup_restore"

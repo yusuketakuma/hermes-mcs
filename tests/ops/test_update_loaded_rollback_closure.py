@@ -266,6 +266,30 @@ def test_writer_hold_distinguishes_updater_restore_from_backup_adoption(
     assert json.loads((tmp_path / "restore_pending.json").read_text()) == marker
 
 
+@pytest.mark.parametrize("owner,phase,adopted,expected", [
+    ("mcs_update", "restored", False, True),
+    ("mcs_recover", "restored", False, True),
+    ("manual", "restored", False, False),
+    ("mcs_backup_restore", "awaiting_consent", False, True),
+    ("mcs_backup_restore", "awaiting_consent", True, False),
+    ("mcs_backup_restore", "restored", False, True),
+    ("mcs_backup_restore", "restored", True, True),
+])
+def test_shared_writer_hold_gate_matches_the_updater_reading(
+        tmp_path, monkeypatch, owner, phase, adopted, expected):
+    """standalone and CLI entry points read the same hold matrix through
+    notify_spool.restore_writer_hold without importing the updater."""
+    import json
+    import mcs_restore
+    import notify_spool
+
+    monkeypatch.setattr(mcs_restore, "writers_resumed", lambda path: adopted)
+    marker = {"v": 1, "by": owner, "phase": phase,
+              "restored_at": 1, "report_id": "synthetic-report"}
+    (tmp_path / "restore_pending.json").write_text(json.dumps(marker))
+    assert (notify_spool.restore_writer_hold(str(tmp_path)) is not None) is expected
+
+
 @pytest.mark.parametrize("missing", [False, True])
 @pytest.mark.parametrize("owner", ["mcs_update", "mcs_recover"])
 def test_empty_journal_retry_keeps_updater_restore_witness(tmp_path, monkeypatch,

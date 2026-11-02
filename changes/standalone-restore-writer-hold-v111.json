@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "standaloneが未完了DB復元の writer hold を解除し得た問題と、cloud/job コマンドの復元中 writer 起動を修正",
+  "summary": "更新マーカー(update_in_progress.marker)が残ったまま更新ジャーナルが空・消失した場合、これまでは standalone が「孤児」と判断してマーカーを削除し、復元の writer 停止がまだ有効な間に通常ジョブや DB マイグレーションを再開し得ました。復元目撃情報(restore_pending.json)が updater/独立復旧(mcs_update・mcs_recover)由来で未完了の場合、または awaiting_consent・破損・読取不能の場合は、マーカーを保持してジョブを停止し続けます。復旧経路が完了処理を行うまでは writer が再起動しません。あわせて `ops cloud stop/resume`・`ops job` の書込み経路でも、run.lock 取得直後かつ Ledger を開く前に同じ復元 writer-hold を確認し、復元中は書込みを拒否するようになりました。",
+  "upgrade": "通常の更新で適用され、追加の設定変更は不要です。バックアップ復元の採用(writers_resumed)後は、これまでどおり writer のみ再開でき、配送の停止は別ゲートで継続します。復元目撃情報の読み方・マーカー保持の意味・承認条件は変わりません。",
+  "details": [
+    "notify_spool.restore_writer_hold は、復元の writer 停止が有効かを返す共有ゲートです。restore_awaiting_consent が返す awaiting_consent・読取不能(unreadable)の目撃情報、および by=mcs_update|mcs_recover で phase=restored の未完了復元目撃を「保持」と判定します。by=mcs_backup_restore の採用済み復元は writers_resumed が許可すれば保持対象外で、配送の停止は従来どおり restore_pending 側が独立して管理します。",
+    "mcs_standalone の定期 tick は、更新マーカーの孤児判定で update.lock・run.lock が取れてジャーナルが空の場合でも、restore_writer_hold が有効ならマーカーを削除せず journal_pending として保持します。共有ゲートを import できない・想定外の形の場合も fail-closed で保持します。正当な孤児(復元目撃なし)は従来どおり削除して再開します。",
+    "ops cloud stop/resume・ops job の Ledger 書込み経路は、run.lock 取得・更新マーカー/コード一致の確認に加えて、同じ restore_writer_hold が有効な間は restore_in_progress で拒否します。復元中に新規 Ledger を開く・書き込む経路が塞がれます。既存の --confirm-human・reason・receipt の承認経路は変わりません。",
+    "updater 側の _restore_writer_hold_marker は、ロールバックで旧ツリー上を動く可能性があるため、従来どおりローカルな読み方を保持します。共有ゲートは同じ保持条件を返し、判定行列(updater/recover 由来は保持、manual 由来は保持しない、採用済み backup 復元は writer のみ再開)をテストで一致させています。"
+  ],
+  "refs": ["mcs/notify/notify_spool.py", "mcs_standalone/runtime.py",
+           "mcs/ops/cloud_cli.py", "mcs/ops/commands/job_cli.py",
+           "tests/adapters/standalone/test_stab_runtime_supervision.py",
+           "tests/ops/test_update_loaded_rollback_closure.py"]
+}

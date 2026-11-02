@@ -73,6 +73,7 @@ def main(argv=None):
             raise ValueError("job_invalid")
         from writer_lock import acquire_run_lock, wait_run_lock, code_stamp
         from ledger import Ledger
+        import notify_spool
         expected_code = code_stamp()
         path = Path(mcs_util.HOME) / "data" / "ledger.db"
         if path.is_symlink() or not path.is_file():
@@ -87,6 +88,8 @@ def main(argv=None):
         try:
             if (path.parent / "update_in_progress.marker").exists() or code_stamp() != expected_code:
                 raise ValueError("update_in_progress")
+            if notify_spool.restore_writer_hold(str(path.parent)) is not None:
+                raise ValueError("restore_in_progress")
             # Reload under the writer lock: a changed scope must invalidate the diagnosis.
             cfg = _config()
             with closing(Ledger(str(path))) as ledger:

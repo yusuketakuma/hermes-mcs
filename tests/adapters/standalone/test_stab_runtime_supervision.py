@@ -246,6 +246,50 @@ def test_own_running_updater_keeps_the_marker_without_probing(tmp_path, monkeypa
     assert host._updating(QUIET + 7200) is True and marker.exists()
 
 
+def test_restore_witness_keeps_an_otherwise_orphan_update_marker(tmp_path, monkeypatch):
+    events = []
+    host = _host(tmp_path, monkeypatch, events)
+    data = tmp_path / "data"
+    marker = data / UPDATE_MARKER_NAME
+    restore = data / "restore_pending.json"
+    marker.write_text("synthetic")
+    import os
+    os.utime(marker, (QUIET, QUIET))
+    assert host._updating(QUIET + 10) is True    # seeds host.marker
+    # An empty/missing journal is not proof that the updater's restore
+    # writer-hold finished: the witness keeps the marker and pauses jobs.
+    for witness in (
+        {"v": 1, "phase": "restored", "by": "mcs_update", "at": QUIET, "restored_at": QUIET},
+        {"v": 1, "phase": "restored", "by": "mcs_recover", "at": QUIET, "restored_at": QUIET},
+        {"v": 1, "phase": "awaiting_consent", "by": "mcs_update", "at": QUIET},
+    ):
+        restore.write_text(json.dumps(witness))
+        host.marker["probed_at"] = None
+        assert host._updating(QUIET + 3600) is True
+        assert marker.exists() and host.marker["state"] == "journal_pending"
+    # A corrupt or unreadable witness fails closed — still held.
+    restore.write_text("{not json")
+    host.marker["probed_at"] = None
+    assert host._updating(QUIET + 3600) is True and marker.exists()
+    restore.unlink()
+    restore.symlink_to(data / "missing_target.json")
+    host.marker["probed_at"] = None
+    assert host._updating(QUIET + 3600) is True and marker.exists()
+    # A backup restore awaiting consent without its resume keeps the hold.
+    restore.unlink()
+    restore.write_text(json.dumps({"v": 1, "phase": "awaiting_consent",
+                                   "by": "mcs_backup_restore", "at": QUIET}))
+    host.marker["probed_at"] = None
+    assert host._updating(QUIET + 3600) is True and marker.exists()
+    # Adoption resumes writers: the update marker is an orphan again and is
+    # cleared while delivery stays held by the restore marker itself.
+    import mcs_restore
+    monkeypatch.setattr(mcs_restore, "writers_resumed", lambda destination: True)
+    host.marker["probed_at"] = None
+    assert host._updating(QUIET + 3600) is False and not marker.exists()
+    assert any(e == "update_marker_orphan_cleared" for e, _ in events)
+
+
 # ------------------------------------------------------- M9 missed slots
 
 def test_missed_slot_runs_one_catch_up_after_a_restart(tmp_path, monkeypatch):

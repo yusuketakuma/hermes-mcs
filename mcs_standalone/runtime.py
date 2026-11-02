@@ -986,6 +986,15 @@ class Runtime:
                 if state.get("applying") or state.get("stages"):
                     return "journal_pending"
                 try:
+                    import notify_spool
+                    held = notify_spool.restore_writer_hold(str(self.data))
+                except (ImportError, AttributeError):
+                    # Cannot verify the restore witness: an empty journal
+                    # is not proof the updater's restore hold is done.
+                    return "journal_unreadable"
+                if held is not None:
+                    return "journal_pending"
+                try:
                     os.unlink(path)
                 except FileNotFoundError:
                     pass

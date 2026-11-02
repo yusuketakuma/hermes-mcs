@@ -651,6 +651,7 @@ def command(args):
                 return 1
             from ledger import Ledger
             import mcs_requests
+            import notify_spool
             req = {"version": 1, "cmd": "ops.cloud_" + action,
                 "command_id": args.command_id or str(uuid.uuid4()), "actor": args.actor,
                 "human_confirmed": True, "project_id": None, "reason": args.reason}
@@ -673,6 +674,8 @@ def command(args):
             try:
                 if (path.parent / "update_in_progress.marker").exists() or code_stamp() != expected_code:
                     raise ValueError("update_in_progress")
+                if notify_spool.restore_writer_hold(str(path.parent)) is not None:
+                    raise ValueError("restore_in_progress")
                 with closing(Ledger(str(path))) as ledger:
                     receipt = mcs_requests.apply_command(ledger, req)
             finally:
