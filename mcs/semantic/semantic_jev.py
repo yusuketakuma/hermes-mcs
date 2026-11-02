@@ -113,6 +113,7 @@ def _live_request_budget(home):
 def _reserve_live_usage(home, operation, expected_code_stamp, body, timeout, config_seen=False):
     """Own a short writer interval for one HTTP reservation, never its transport."""
     from ledger import Ledger
+    from notify_spool import restore_writer_hold
     from semantic_runtime import manual_usage_reserver
     from writer_lock import acquire_run_lock, code_stamp
     lock_fd = acquire_run_lock(str(home / "data" / "run.lock"))
@@ -123,6 +124,8 @@ def _reserve_live_usage(home, operation, expected_code_stamp, body, timeout, con
         if ((home / "data" / "update_in_progress.marker").exists()
                 or code_stamp() != expected_code_stamp):
             raise JevError("budget_exceeded", "usage_code_changed")
+        if restore_writer_hold(str(home / "data")) is not None:
+            raise JevError("budget_exceeded", "usage_restore_in_progress")
         path = home / "data" / "ledger.db"
         if path.is_symlink() or not path.is_file():
             raise JevError("budget_exceeded", "usage_ledger_unavailable")
@@ -137,6 +140,8 @@ def _reserve_live_usage(home, operation, expected_code_stamp, body, timeout, con
             if ((home / "data" / "update_in_progress.marker").exists()
                     or code_stamp() != expected_code_stamp):
                 raise JevError("budget_exceeded", "usage_code_changed")
+            if restore_writer_hold(str(home / "data")) is not None:
+                raise JevError("budget_exceeded", "usage_restore_in_progress")
             if _live_request_budget(home) < limit:
                 # A lower cap may arrive while BEGIN waited; keep the reservation but do not send.
                 raise JevError("budget_exceeded", "semantic_daily_budget_changed")
