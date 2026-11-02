@@ -4,7 +4,7 @@ import json
 from itertools import accumulate
 
 from clinical_chunking import plan_chunks
-from patient_context import CATEGORIES, context_items
+from patient_context import CATEGORIES, DETAIL_KEYS, context_items
 import patient_context_state as context_state
 from mcs_util import locate_quote_span
 
@@ -18,6 +18,11 @@ MAX_PROMPT_CHARS = 18000
 SCAN_CHUNK = 3000
 MAX_SCAN_SPLIT = 3
 MAX_SCAN_ITEMS = 1024  # Bounded answer validation, independent of storage-shard size.
+
+
+def scan_schema():
+    """List the canonical context categories and grounded detail keys for each scan."""
+    return {"categories": sorted(CATEGORIES), "detail_keys": sorted(DETAIL_KEYS)}
 
 
 def select_facts(facts):

@@ -21,7 +21,6 @@ from mcs_queries import JST
 from mcs_util import html_to_text, loads_dict, strict_json, valid_hash
 from inference_version import CURRENT_VERSION, VERSION_KEY, current_meta_pred, read_version
 from writer_lock import acquire_run_lock
-from patient_context import CATEGORIES
 import patient_context_plan as context_plan
 import mcs_queries as context_queries
 import patient_context_state as context_state
@@ -1034,10 +1033,11 @@ def _quality_input(db, pid, snapshot, all_facts, state, summary, assessment_cont
                 raise ValueError("patient_summary_quality_source")
         else:
             revision = None
-        bound.append([key, context_plan.source_signature(source), revision,
-                      hashlib.sha256(body.encode("utf-8")).hexdigest() if body is not None else None])
+        source_sig = context_plan.source_signature(source)
+        body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest() if body is not None else None
+        bound.append([key, source_sig, revision, body_hash])
         raw_occurrences.append([key, source.get('content_hash'), source.get('first_seen'), revision,
-                                hashlib.sha256(body.encode('utf-8')).hexdigest() if body is not None else None])
+                                body_hash])
     by_id = {}
     for fact in all_facts:
         if not isinstance(fact, dict) or not isinstance(fact.get("id"), str) or fact["id"] in by_id:
@@ -3191,7 +3191,7 @@ def _scan(cfg, source, saved, night_id, deadline, admit, *, provider=None, metri
             "一つの項目は一つの事実とし、異なる対象・値・時点・否定は別項目に分ける。"
             "JSON {\"patient_context\":[{category,text,evidence,subject,details:[]}]}。"
             "text/evidenceは同じ完全な引用。対象不明はsubject=unspecified。該当なしは空配列。",
-            "categories": sorted(CATEGORIES), "already_found": items, "source": chunk}
+            **context_plan.scan_schema(), "already_found": items, "source": chunk}
         if source_repair is not None:
             payload["source_quality_findings"] = source_repair["codes"]
         def asked(body):
