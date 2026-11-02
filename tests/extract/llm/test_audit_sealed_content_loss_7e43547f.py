@@ -2,6 +2,8 @@
 import copy
 import json
 
+import pytest
+
 import extract_llm
 import extract_quality
 import extract_validation
@@ -10,7 +12,8 @@ from extract_testkit import _ledger, _message
 from test_completeness_quality import OBSERVATIONS, PREFIX
 
 
-def test_sealed_normal_final_rejects_content_only_vital_loss(tmp_path, monkeypatch):
+@pytest.mark.parametrize("malformed_digest", [False, True])
+def test_sealed_normal_final_rejects_content_only_vital_loss(tmp_path, monkeypatch, malformed_digest):
     body = PREFIX + "本人の血圧120/80です。" + "完全合成の通常経過を記録します。" * 24
     assert 300 <= len(body) < extract_llm._CHUNK_SIZE
     document = {**copy.deepcopy(OBSERVATIONS), "vitals": {"sbp": 120, "dbp": 80}}
@@ -58,15 +61,23 @@ def test_sealed_normal_final_rejects_content_only_vital_loss(tmp_path, monkeypat
         gaps = extract_quality.completeness_issues(remaining, hints, body)
         assert gaps and extract_quality.facts(remaining) < extract_quality.facts(validated)
         assert extract_llm._provider_result_hash(damaged) != meta["provider_provenance"]["result_hash"]
+        expected_meta = final["meta"]
+        if malformed_digest:
+            # Ordinary JSON parsing accepts this; strict result hashing must reject it.
+            damaged = damaged[:-1] + ',"synthetic_duplicate":1,"synthetic_duplicate":2}'
+            meta["provider_provenance"]["result_hash"] = None
+            expected_meta = json.dumps(meta, ensure_ascii=False)
+            assert extract_llm._provider_result_hash(damaged) is None
         with db.db:
-            db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (damaged, final["artifact_id"]))
-        assert db.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (final["artifact_id"],)).fetchone()[0] == final["meta"]
+            db.db.execute("UPDATE artifacts SET content=?,meta=? WHERE artifact_id=?",
+                          (damaged, expected_meta, final["artifact_id"]))
+        assert db.db.execute("SELECT meta FROM artifacts WHERE artifact_id=?", (final["artifact_id"],)).fetchone()[0] == expected_meta
         after = extract_llm.progress_for_message(db.db, source, model=extract_llm.MODEL)
         after_ready, _ = patient_context_refresh._raw_extraction_current(db.db, source, {})
         assert len(calls) == call_count
         print(json.dumps({"body_chars": len(body), "before": before["state"], "before_ready": before_ready,
                           "after": after["state"], "after_ready": after_ready, "missing_hint_count": len(gaps),
-                          "meta_unchanged": True, "provider_hash_matches": False,
+                          "meta_unchanged": not malformed_digest, "malformed_digest": malformed_digest,
                           "additional_model_calls": len(calls) - call_count}, sort_keys=True))
         assert (after["state"], after_ready) == ("attention", False), (after, after_ready)
     finally:
