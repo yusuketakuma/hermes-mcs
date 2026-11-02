@@ -5391,10 +5391,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     ``write_wait_s`` bounds each per-write lock wait. With ``carry`` (a
     list from the previous call's ``result["carry"]``) a finished result
     whose lock wait timed out keeps its claim lease and rides to the
-    next call instead of being deferred, so the GPU moves on while the
-    tick holds the run lock for minutes; the carried commit is retried
-    under the next call's end-of-run lock and dropped only when its
-    lease nears expiry or the source moved (then re-extracted later).
+    next call instead of being deferred. A call with carry only saves or
+    renews that previous pass: it admits no new inference, so a prolonged
+    run-lock wait cannot accumulate more completed passes in memory.
+    The result is dropped only when its lease nears expiry or its source
+    moved, under the existing ownership and provider checks.
 
     `workers` bounds local calls; resident lanes may pin a local slot.
     Cloud configuration can widen the pool while local calls retain their
@@ -5424,18 +5425,27 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     lock = functools.partial(_write_lock, wait_s=write_wait_s)
     carry_settled = dict.fromkeys(('done', 'held_prior', 'deferred'), 0)
     carry_count, carry_pids = 0, set()
-    if cloud_only and carry and deadline - time.monotonic() > 1:
-        # Settle or renew paid work before a bounded selection can defer.
-        # The supplied lock follows the caller's existing lock ownership.
-        wait_s = min(write_wait_s, max(0.0, deadline - time.monotonic() - 1.0))
-        carry_settled, carry_count, carry_pids = _settle_carry(
-            ledger, carry, final=False, fence=_WRITER_STATE,
-            lock_context=_write_lock(per_write_lock, wait_s=wait_s, deadline=deadline), report=False,
-            preserve_on_fence_loss=True, deadline=deadline)
+    if carry:
+        # A retained pass owns the admission window until it is saved or
+        # rejected by the existing source/lease/provider checks. Never
+        # append new paid results while its run-lock wait is unresolved.
+        if deadline - time.monotonic() > 1:
+            wait_s = min(write_wait_s, max(0.0, deadline - time.monotonic() - 1.0))
+            carry_settled, carry_count, carry_pids = _settle_carry(
+                ledger, carry, final=False, fence=_WRITER_STATE,
+                lock_context=_write_lock(per_write_lock, wait_s=wait_s, deadline=deadline), report=False,
+                preserve_on_fence_loss=True, deadline=deadline)
         if not _writer_current(full=True):
             return {'done': carry_settled['done'], 'failed': 0, 'left': None,
                     'deferred': carry_settled['deferred'], 'pids': sorted(carry_pids),
                     'carry': carry, 'updated': True}
+        return {**carry_settled, 'failed': 0, 'left': None, 'carried': carry_count,
+                'carry': carry, 'carry_waiting': bool(carry), 'pids': sorted(carry_pids),
+                'selected': 0, 'fresh_selected': 0, 'context_blocked': 0,
+                'skipped': 0, 'lock_lost': 0, 'slow_deferred': 0,
+                'left_estimate': None, 'left_estimate_age_s': None,
+                'queue_ages_s': {'oldest': None, 'newest': None},
+                'llm_calls': None}
     # A damaged maintenance cursor must not stop unrelated fresh extraction.
     # Only continue if the GC transaction was fully unwound.
     gc_error = None
@@ -6805,10 +6815,29 @@ def _main() -> int:
             while True:
                 if not _writer_current(full=True):
                     return retire()
-                if stop is not None and time.monotonic() > stop:
+                if stop is not None and time.monotonic() >= stop:
                     total["stopped"] = "stop_after"
                     break
                 try:
+                    if carry and not context_lane:
+                        resume_budget = _RESIDENT_WRITE_WAIT_S + 1
+                        if stop is not None:
+                            resume_budget = min(resume_budget, max(0.0, stop - time.monotonic()))
+                        if resume_budget <= 0:
+                            total["stopped"] = "stop_after"
+                            break
+                        resumed = run_pending(led, limit=1, budget_s=resume_budget,
+                            per_write_lock=True, write_wait_s=_RESIDENT_WRITE_WAIT_S, carry=carry)
+                        carry = resumed.pop("carry", carry)
+                        if resumed.get("updated"):
+                            return retire()
+                        total["done"] += resumed["done"]
+                        total["failed"] += resumed["failed"]
+                        total["left"] = resumed["left"]
+                        print(json.dumps({**resumed, "ts": time.time()}, ensure_ascii=False), flush=True)
+                        if carry:
+                            pause(2)
+                            continue
                     if cloud_pool is not None:
                         cloud_pool.sync(load_config(), ledger=led)
                     if context_lane:
@@ -6823,6 +6852,9 @@ def _main() -> int:
                             _settle_carry(led, carry, write=False)
                             return 0
                         _settle_carry(led, carry, final=False, fence=context_state)
+                        if carry:
+                            pause(2)
+                            continue
                         context_refresh = _background_context_refresh(led, context_state, stop)
                         if context_refresh.get("status") != "off":
                             print(json.dumps({"nightly": context_refresh, "ts": time.time()},
@@ -6887,7 +6919,7 @@ def _main() -> int:
                     carry = r.pop("carry", None) or []  # internal; never logged
                     sem = None
                     ran_semantic = False
-                    if args.semantic:
+                    if args.semantic and not carry:
                         sem = _background_semantic(led, stop)
                         print(json.dumps({"semantic": sem,
                                           "ts": time.time()},
