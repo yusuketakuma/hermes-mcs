@@ -549,7 +549,7 @@ def llm_chat(prompt: str, timeout: int = LLM_TIMEOUT,
         # nothing sent, endpoint healthy — a short defer, no backoff
         _failed("busy")
         raise runtime.LLMNotSent("llm_turn_busy")
-    if response is None and err_out.get("kind") == "unreachable":
+    if response is None and err_out.get("kind") in ("unreachable", "not_sent"):
         _failed("unreachable")
         raise runtime.LLMNotSent("llm_unreachable")
     if response is not None and response.get("status") == 503:

@@ -1040,7 +1040,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
         status = response.get("status") if response else None
         _CALL_NOTES.transport = (
             "unreachable" if response is None
-            and err_out.get("kind") == "unreachable"
+            and err_out.get("kind") in ("unreachable", "not_sent")
             else "busy" if response is None and err_out.get("kind") == "busy"
             else "unavailable" if status == 503
             else "transport" if response is None and not expired
@@ -1054,7 +1054,7 @@ def _llm_call(prompt: str, deadline: float | None = None,
         if _CALL_NOTES.transport == "expired":
             _integrity_note(response, kind, probe, downgrades, err_out)
             return None  # a sent timeout consumes an attempt, not endpoint health
-        if response is None and (err_out.get("kind") in ("unreachable", "busy")
+        if response is None and (err_out.get("kind") in ("unreachable", "busy", "not_sent")
                                  or expired) \
                 or response is not None and response.get("status") == 503:
             # Connection refused or 503 (still loading the model) — the

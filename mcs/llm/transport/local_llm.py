@@ -461,8 +461,9 @@ def _retire_failed_send(broker, pid: int, kind: str | None,
     and only an HTTP 200 with an unusable body proves it finished; any
     other failure leaves the permit ``unknown`` so it keeps occupying
     its class (the module's fail-closed rule)."""
-    if kind in ("unreachable", "busy"):
-        # refused connection, or the GPU turn never came: never sent
+    if kind in ("unreachable", "busy", "not_sent"):
+        # refused connection, pre-send deadline, or the GPU turn never
+        # came: never sent
         broker.terminal(pid, "not_sent", proof=kind)
     elif kind == "protocol":
         broker.terminal(pid, "done", proof=f"{proof_prefix}malformed_200")
@@ -545,7 +546,8 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
     (status, headers, raw)`` seam — tests inject a fake loopback here
     and ``semantic.llm_chat`` passes ``bounded_request`` to keep
     worker isolation.  ``error_out``, when given, receives
-    ``{"kind": "unreachable"|"transport"}`` on the exception path, or
+    ``{"kind": "unreachable"|"not_sent"|"transport"}`` on the exception
+    path, or
     ``{"kind": "protocol"}`` when an HTTP 200 body is unusable —
     "unreachable" means the server refused the connection outright
     (never started / down), which callers may treat as free-of-cost
@@ -586,9 +588,9 @@ def chat(prompt: str, *, endpoint: str = ENDPOINT, model: str = MODEL,
             if error.__class__.__name__ == "RuntimeGuardError":
                 raise
             reason = getattr(error, "reason", error)
-            kind = ("unreachable"
+            kind = ("not_sent" if isinstance(error, bounded_http.NotSentTimeout)
+                    else "unreachable"
                     if isinstance(reason, ConnectionRefusedError)
-                    or isinstance(error, bounded_http.NotSentTimeout)
                     else "transport")
             if error_out is not None:
                 error_out["kind"] = kind
@@ -719,7 +721,7 @@ def probe_format(endpoint: str, model: str, schema: dict | None,
                 request_fn=request_fn, error_out=error_out,
                 turn_min_s=PROBE_TURN_MIN_S)
             if response is None:
-                if error_out.get("kind") == "busy":
+                if error_out.get("kind") in ("busy", "not_sent"):
                     return None  # nothing sent: probe again next call
                 error_out.setdefault("kind", "transport")
                 break

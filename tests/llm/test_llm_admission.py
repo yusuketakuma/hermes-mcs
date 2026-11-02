@@ -953,3 +953,50 @@ def test_probe_format_deadline_before_any_send_returns_unprobed():
         deadline=time.monotonic() - 0.001,
         request_fn=lambda *a, **k: calls.append(a)) is None
     assert calls == []
+
+
+# A pre-send deadline at the transport seam (NotSentTimeout) never put a
+# byte on the wire — it is an unobserved probe like a busy turn, not a
+# rejected constraint. Zero HTTP sends must defer, never cache "plain".
+
+
+def _deadline_refused(*args, **kwargs):
+    import bounded_http
+    raise bounded_http.NotSentTimeout("synthetic pre-send deadline")
+
+
+def test_probe_format_presend_deadline_returns_unprobed():
+    import local_llm
+    err = {}
+    assert local_llm.probe_format(
+        local_llm.ENDPOINT, "m", None, error_out=err,
+        request_fn=_deadline_refused) is None
+    assert err["kind"] == "not_sent"
+
+
+def test_admitted_probe_presend_deadline_retires_not_sent(admitted_env):
+    import local_llm
+    assert local_llm.admitted_probe_format(
+        "mcs.extract", local_llm.ENDPOINT, "m", None,
+        request_fn=_deadline_refused) is None
+    row = _live_broker(admitted_env).db.execute(
+        "SELECT state,outcome FROM permits").fetchone()
+    assert row["state"] == "terminal" and row["outcome"] == "not_sent"
+
+
+def test_semantic_probe_presend_deadline_defers_without_plain_cache(
+        admitted_env, monkeypatch):
+    import local_llm
+    import semantic_runtime
+    import semantic_transport
+    broker = _live_broker(admitted_env)
+    monkeypatch.setattr(semantic_transport, "llm_conf",
+                        lambda: (local_llm.ENDPOINT, "synthetic-model"))
+    monkeypatch.setattr(semantic_transport, "_FMT_MODE", None)
+    monkeypatch.setattr(semantic_transport, "_FMT_TS", 0.0)
+    monkeypatch.setattr(local_llm, "bounded_request", _deadline_refused)
+    with pytest.raises(semantic_runtime.LLMNotSent):
+        semantic_transport.llm_chat("完全合成の本文", timeout=30)
+    assert semantic_transport._FMT_MODE is None
+    row = broker.db.execute("SELECT state,outcome FROM permits").fetchone()
+    assert row["state"] == "terminal" and row["outcome"] == "not_sent"
