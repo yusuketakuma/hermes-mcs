@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 import time
+import weakref
 from types import SimpleNamespace
 
 import pytest
@@ -18,6 +19,28 @@ __all__ = ['now']
 
 def _read(ledger, period, now):
     return c._tally(ledger, now) if period == 'month' else c._window_tally(ledger, now - 10)
+
+
+@pytest.mark.parametrize('completion_fails', [False, True])
+def test_close_releases_accounting_caches_even_when_completed_cleanup_fails(tmp_path, now, completion_fails):
+    ledger = Ledger(str(tmp_path / 'synthetic.db'))
+    _reserve(ledger)
+    monthly = weakref.ref(c._tally(ledger, now))
+    window = weakref.ref(c._window_tally(ledger, now - 10))
+    class Completed:
+        def close(self):
+            raise RuntimeError('synthetic_cleanup_failure')
+    if completion_fails:
+        ledger._patient_context_completed = Completed()
+        with pytest.raises(RuntimeError, match='synthetic_cleanup_failure'):
+            ledger.close()
+    else:
+        ledger.close()
+    assert monthly() is None and window() is None
+    assert '_patient_context_completed' not in ledger.__dict__
+    with pytest.raises(sqlite3.ProgrammingError, match='closed'):
+        ledger.db.execute('SELECT 1')
+    ledger.close()
 
 
 @pytest.mark.parametrize('period', ['month', 'window'])

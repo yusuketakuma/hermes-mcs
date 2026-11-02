@@ -2400,6 +2400,8 @@ class Ledger:
             if completed is not None:
                 completed.close()
         finally:
+            self.__dict__.pop("_cloud_usage_tally", None)
+            self.__dict__.pop("_cloud_window_tally", None)
             self.db.close()
 
 
