@@ -254,8 +254,8 @@ def test_claim_refreshes_a_checkpoint_advanced_after_preparation(source, monkeyp
     def claim_after_other_owner(current_ledger, current_row, *args, **kwargs):
         if not advanced:
             assert llm._persist_chunks(current_ledger, current_row, {0: _completed("合成B")},
-                                       current_row["_context"], chunk_size=current_row["_chunk_size"],
-                                       splits=current_row["_splits"])
+                                       current_row["_context"], chunk_size=row["_chunk_size"],
+                                       splits=row["_splits"])
             advanced.append(True)
         return original_claim(current_ledger, current_row, *args, **kwargs)
 

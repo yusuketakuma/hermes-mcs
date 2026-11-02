@@ -3010,13 +3010,13 @@ def _saved_chunk_size(db, r, context: str | None = None, *, identity=None) -> in
     return _CHUNK_SIZE
 
 
-def _chunk_piece(body, chunk_size, key, splits):
+def _chunk_piece(body, chunk_size, key, splits, *, root_plan=None):
     """Resolve a stable original index and split path against the current source."""
-    found = _chunk_span(body, chunk_size, key, splits)
+    found = _chunk_span(body, chunk_size, key, splits, root_plan=root_plan)
     return found[0] if found is not None else None
 
 
-def _chunk_span(body, chunk_size, key, splits):
+def _chunk_span(body, chunk_size, key, splits, *, root_plan=None):
     """Resolve the exact source offset as well as the split leaf's text."""
     if type(key) is int and key >= 0:
         path = [key]
@@ -3027,10 +3027,14 @@ def _chunk_span(body, chunk_size, key, splits):
             return None
     else:
         return None
-    parts = plan_chunks(body, chunk_size)
+    if root_plan is None:
+        parts = plan_chunks(body, chunk_size)
+        starts = None
+    else:
+        parts, starts = root_plan
     if path[0] >= len(parts):
         return None
-    start = sum(map(len, parts[:path[0]]))
+    start = starts[path[0]] if starts is not None else sum(map(len, parts[:path[0]]))
     piece, parent = parts[path[0]], path[0]
     for child in path[1:]:
         size = splits.get(parent)
@@ -3254,9 +3258,14 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
     if identity_only:
         return {}, {}
     saved, splits = {}, {}
+    roots = plan_chunks(r["body_text"], chunk_size) if records else []
+    starts, offset = [], 0
+    for piece in roots:
+        starts.append(offset)
+        offset += len(piece)
     for key in sorted(records, key=lambda key: (str(key).count(":"), str(key))):
         meta, content, artifact_project, artifact_model, raw_meta, artifact_id = records[key]
-        piece = _chunk_piece(r["body_text"], chunk_size, key, splits)
+        piece = _chunk_piece(r["body_text"], chunk_size, key, splits, root_plan=(roots, starts))
         if piece is None:
             continue
         sha = hashlib.sha256(piece.encode()).hexdigest()
@@ -3301,8 +3310,8 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                     and meta.get("piece_sha256") == sha
                     and meta.get("actual_model") == _actual_model(r)
                     and artifact_model == meta.get("actual_model")
-                    and _provider_result_hash(json.dumps(content)) is not None
-                    and _provider_result_hash(json.dumps(content)) == _provider_result_hash(json.dumps(validated))):
+                    and (content_hash := _provider_result_hash(json.dumps(content))) is not None
+                    and content_hash == _provider_result_hash(json.dumps(validated))):
                 expected = _leaf_record(meta, r, evidence, raw_content)
                 try:
                     matches = expected is not None and mcs_util.canonical(proof) == mcs_util.canonical(expected)
@@ -3926,6 +3935,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                 proof = _leaf_record(meta, r, evidence, content)
                 if proof is not None:
                     meta["provider_leaf"] = proof
+            meta_json = json.dumps(meta, ensure_ascii=False)
             if (split_size is None and (
                     quality_status is None and meta.get("quality_status") == "hint_gaps_resolved"
                     or quality_status == "pending" and meta.get("quality_status") == "pending"
@@ -3939,7 +3949,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                     ("extract_llm_chunk", r["message_id"])).fetchone()
                 if (latest is not None and latest["project_id"] == r["project_id"]
                         and latest["model"] == meta["actual_model"] and latest["content"] == content
-                        and latest["meta"] == json.dumps(meta, ensure_ascii=False)):
+                        and latest["meta"] == meta_json):
                     continue
             inserted_id = ledger.artifact_add_tx("extract_llm_chunk", content,
                                                 project_id=r["project_id"], message_id=r["message_id"],
@@ -3954,7 +3964,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                     or inserted_row['project_id'] != r['project_id']
                     or inserted_row['message_id'] != r['message_id']
                     or inserted_row['content'] != content or inserted_row['model'] != meta['actual_model']
-                    or inserted_row['meta'] != json.dumps(meta, ensure_ascii=False)):
+                    or inserted_row['meta'] != meta_json):
                 raise RuntimeError('extract_insert_unverified')
             inserted_witness = dict(inserted_row)
             if guarded:
@@ -3963,7 +3973,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                     "WHERE kind='extract_llm_chunk' AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
                     (r["message_id"],)).fetchone()
                 inserted = (inserted_id, r["project_id"], content, meta["actual_model"],
-                            json.dumps(meta, ensure_ascii=False))
+                            meta_json)
                 if latest is not None and tuple(latest) == inserted:
                     r["_checkpoint_identity"][key] = inserted
                 else:
@@ -5162,7 +5172,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
 
 
 def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
-                  background=False, cloud_only=False) -> tuple[list, int, int]:
+                  background=False, cloud_only=False, load_checkpoints=True) -> tuple[list, int, int]:
     """Load contexts/checkpoints on the calling thread; settle prefiltered rows."""
     jobs = []
     skipped = 0
@@ -5236,8 +5246,10 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             blocked += 1
             continue
         context = r["_context"] = r["_frame"]["text"]
-        r["_chunk_size"] = _saved_chunk_size(ledger.db, r, context)
-        r["_splits"], saved = _saved_chunk_state(ledger.db, r, context, chunk_size=r["_chunk_size"])
+        saved = {}
+        if load_checkpoints:
+            r["_chunk_size"] = _saved_chunk_size(ledger.db, r, context)
+            r["_splits"], saved = _saved_chunk_state(ledger.db, r, context, chunk_size=r["_chunk_size"])
         jobs.append((r, context, saved, hints, qc))
     return jobs, skipped, blocked
 
@@ -5500,7 +5512,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     prefilter = _prefilter_enabled() and admitted_ids is None
     jobs, skipped, context_blocked = ([], 0, 0) if cloud_only else _prepare_jobs(
         ledger, rows, target, prefilter, allow_cloud=allow_cloud, background=background,
-        cloud_only=cloud_only)
+        cloud_only=cloud_only, load_checkpoints=False)
     deferred += context_blocked
     metas = [None] * len(jobs)
     batch_metas = []
@@ -5650,7 +5662,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     r.pop("_cloud_generation", None)
                     r["_cloud_mode"] = "off"
                     r["_target"] = target
-                    fresh, _, _ = _prepare_jobs(ledger, [r], target, False, allow_cloud=False)
+                    fresh, _, _ = _prepare_jobs(ledger, [r], target, False, allow_cloud=False, load_checkpoints=False)
                     if not fresh:
                         raise CloudFallback("cloud_local_context_unavailable")
                     local_r, local_ctx, local_saved, _, _ = fresh[0]
@@ -5939,7 +5951,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 # Lookahead replenishes lost claims without freezing unused attempt frames.
                 prepared, row_skipped, row_blocked = _prepare_jobs(
                     ledger, [candidate], target, prefilter, allow_cloud=allow_cloud,
-                    background=background, cloud_only=True)
+                    background=background, cloud_only=True, load_checkpoints=False)
                 skipped += row_skipped
                 context_blocked += row_blocked
                 deferred += row_blocked
