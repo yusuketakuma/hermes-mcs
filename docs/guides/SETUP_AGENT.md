@@ -196,7 +196,7 @@ cat ~/.mcs-recovery/repo_path                    # この checkout の絶対パ�
 【失敗時】install.sh は失敗したステージで止まり、`エラー: <原因と直し方>`
 と `エラー: 導入を中断しました。失敗した段階の原因を解消し、install.sh を再実行してください` を出す（後続ステージは実行されない）。`エラー:` 行の指示を
 実行し、同じフラグで `./install.sh` を再実行する — 完了済みの部分は
-skip され、中断した clone/checkout・venv・pip install・モデル DL
+skip され、中断した clone/checkout・venv・依存導入・モデル DL
 （`.part` から再開）は続きから進む。よくある原因と対処は
 INSTALLATION.md §7-1。`注意:` 行（`~/.local/bin` が PATH に無い、
 llama plist の再読込保留、hermes 管理 LLM agent の未ロード等）は
@@ -443,7 +443,7 @@ Chromeは[両モード共通の初回準備](INSTALLATION.md#初回の専用chro
 導入・外部配信・既読化の承認は§0の実行契約に従います。既に承認された範囲は
 聞き直さず、未知のMCSログイン・通知先・操作ユーザー・プロジェクト範囲だけ確認します。
 Bot token等は端末の非表示入力に委ね、チャットやargvへ含めません。既存の秘密値は保持します。
-`--yes`では秘密値を環境から推測せず、不足時は`credentials_missing`で停止します。
+`init --yes`も、§0-1で本人が準備した指定名の環境変数を認証情報登録の入力として使います。既存の保存値を優先し、必要な値が足りなければ新しい資格情報を保存せず停止します。実行時の`run`・`send`はroot配下の私有JSONを優先し、私有`.env`を互換経路として読むだけで、環境変数からトークンを推測しません。
 
 SlackはBot/App token、DiscordはBot tokenを専用0600ファイルへ保存します。
 LINE WORKSの認証・HTTPS Callbackは[専用手順](LINEWORKS.md)に従います。

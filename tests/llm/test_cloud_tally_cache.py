@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 import time
+import weakref
 from types import SimpleNamespace
 
 import pytest
@@ -18,6 +19,28 @@ __all__ = ['now']
 
 def _read(ledger, period, now):
     return c._tally(ledger, now) if period == 'month' else c._window_tally(ledger, now - 10)
+
+
+@pytest.mark.parametrize('completion_fails', [False, True])
+def test_close_releases_accounting_caches_even_when_completed_cleanup_fails(tmp_path, now, completion_fails):
+    ledger = Ledger(str(tmp_path / 'synthetic.db'))
+    _reserve(ledger)
+    monthly = weakref.ref(c._tally(ledger, now))
+    window = weakref.ref(c._window_tally(ledger, now - 10))
+    class Completed:
+        def close(self):
+            raise RuntimeError('synthetic_cleanup_failure')
+    if completion_fails:
+        ledger._patient_context_completed = Completed()
+        with pytest.raises(RuntimeError, match='synthetic_cleanup_failure'):
+            ledger.close()
+    else:
+        ledger.close()
+    assert monthly() is None and window() is None
+    assert '_patient_context_completed' not in ledger.__dict__
+    with pytest.raises(sqlite3.ProgrammingError, match='closed'):
+        ledger.db.execute('SELECT 1')
+    ledger.close()
 
 
 @pytest.mark.parametrize('period', ['month', 'window'])
@@ -90,8 +113,10 @@ def test_same_length_invalid_metadata_blocks_next_reservation(tmp_path, now, ext
         with closing(sqlite3.connect(path)) if external else nullcontext(ledger.db) as writer:
             with writer:
                 writer.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (changed, row['artifact_id']))
-        with pytest.raises(AnthropicError, match='pricing_unverified'):
+        with pytest.raises(AnthropicError, match='budget_exceeded') as caught:
             _reserve(ledger, unit='next')
+        assert caught.value.detail == 'cloud_unit_unresolved'
+        assert c.usage_report(ledger)['pricing_unverified']
         assert len(ledger.artifacts(c.KINDS[0])) == 1
 
 
@@ -155,7 +180,7 @@ def test_ambiguous_accounting_metadata_is_unverified(tmp_path, now, kind, damage
             raw = raw[:-1] + ',"unused":' + ('1e999' if damage == 'overflow' else 'NaN') + '}'
         with ledger.db:
             ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (raw, row['artifact_id']))
-        expected = 'budget_exceeded' if kind == c.KINDS[0] and damage in ('duplicate', 'nan') else 'pricing_unverified'
+        expected = 'budget_exceeded' if kind == c.KINDS[0] else 'pricing_unverified'
         _assert_unverified_without_http(ledger, _window_cfg(), expected_kind=expected)
         assert ledger.db.execute('SELECT meta FROM artifacts WHERE artifact_id=?', (row['artifact_id'],)).fetchone()[0] == raw
 
@@ -173,7 +198,7 @@ def test_corrupt_prior_period_orphan_reservation_is_unverified(tmp_path, now, da
                 raw = ('{"project_id":2,' + row['meta'][1:] if damage == 'duplicate'
                        else row['meta'][:-1] + ',"unused":1e999}')
                 ledger.db.execute('UPDATE artifacts SET meta=? WHERE artifact_id=?', (raw, row['artifact_id']))
-        expected = 'budget_exceeded' if damage == 'duplicate' else 'pricing_unverified'
+        expected = 'pricing_unverified' if damage == 'timestamp' else 'budget_exceeded'
         _assert_unverified_without_http(ledger, _window_cfg(), expected_kind=expected)
 
 
@@ -305,13 +330,13 @@ def test_unrelated_write_and_append_preserve_incremental_tally(tmp_path, monkeyp
         original = _read(ledger, period, now)
         last_id, total = original.last_id, original.total
         decoded = []
-        original_loads = c._loads
+        original_loads = c._accounting_meta
 
         def loads(raw):
             decoded.append(raw)
             return original_loads(raw)
 
-        monkeypatch.setattr(c, '_loads', loads)
+        monkeypatch.setattr(c, '_accounting_meta', loads)
         ledger.artifact_add('synthetic_observation', '{}')
         assert _read(ledger, period, now) is original
         assert original.last_id == last_id and original.total == total
@@ -505,7 +530,8 @@ def test_invalid_total_is_revalidated_instead_of_cached(tmp_path, now):
         assert first.precheck is None and second.precheck is None
 
 
-def test_matching_semantic_history_does_not_walk_json_twice():
+@pytest.mark.parametrize('identified', [True, False])
+def test_matching_semantic_history_does_not_walk_json_twice(identified):
     with closing(sqlite3.connect(':memory:')) as db:
         db.row_factory = sqlite3.Row
         db.execute('CREATE TABLE artifacts(artifact_id INTEGER PRIMARY KEY,kind TEXT,project_id INTEGER,'
@@ -516,15 +542,21 @@ def test_matching_semantic_history_does_not_walk_json_twice():
                      'logical_target_id': 1, 'logical_unit_fp': 'd' * 64, 'route': 'semantic_backlog',
                      'project_id': 1, 'message_id': 1, 'model': MODEL, 'price_version': c.PRICE_VERSION,
                      'unit_key': 'synthetic', 'max_cost_usd': str(maximum), 'max_tokens': 100,
-                     'input_bound': 300, 'owner': {}}
-        unrelated = {**candidate, 'message_id': 2, 'logical_target_id': 2}
+                     'input_bound': 300, 'owner': {'semantic_target_id': 1} if identified else {}}
+        unrelated = {**candidate, 'message_id': 2, 'logical_target_id': 2,
+                     'owner': {'semantic_target_id': 2} if identified else {}}
         db.executemany('INSERT INTO artifacts(kind,project_id,message_id,model,meta,created_at) VALUES(?,?,?,?,?,?)',
                        [(c.KINDS[0], 1, 2, MODEL, json.dumps({**unrelated, 'reservation_id': f'{i:032x}'}), 0)
                         for i in range(2000)])
         steps = [0]
         db.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1) or 0, 1000)
         try:
-            c._guard_repeated_request(SimpleNamespace(db=db), candidate)
+            if identified:
+                c._guard_repeated_request(SimpleNamespace(db=db), candidate)
+            else:
+                with pytest.raises(AnthropicError, match='budget_exceeded') as caught:
+                    c._guard_repeated_request(SimpleNamespace(db=db), candidate)
+                assert caught.value.detail == 'cloud_unit_unresolved'
         finally:
             db.set_progress_handler(None, 0)
         assert steps[0] < 300
@@ -542,3 +574,77 @@ def test_duplicate_keys_cannot_hide_reservation_after_predicate_reordering(tmp_p
             ledger.db.execute('UPDATE artifacts SET meta=? WHERE kind=?', (meta, c.KINDS[0]))
         with pytest.raises(AnthropicError, match='budget_exceeded'):
             c._guard_repeated_request(ledger, {**reservation, 'route': 'semantic_backlog'})
+
+
+@pytest.mark.parametrize('raw', ['{}', b'{"amount":1.25}', '{"nested":{"value":2}}'])
+def test_accounting_metadata_decodes_once(monkeypatch, raw):
+    loads = json.loads
+    calls = []
+
+    def counted(*args, **kwargs):
+        calls.append(True)
+        return loads(*args, **kwargs)
+
+    monkeypatch.setattr(json, 'loads', counted)
+    assert c._accounting_meta(raw) == loads(raw)
+    assert calls == [True]
+
+
+@pytest.mark.parametrize('raw', [None, '[]', 'null', '1', '"text"', '{',
+                                      '{"x":1,"x":2}', '{"x":NaN}', '{"x":1e999}', b'\xff'])
+def test_accounting_metadata_preserves_strict_object_boundary(raw):
+    with pytest.raises(AnthropicError) as caught:
+        c._accounting_meta(raw)
+    assert (caught.value.kind, caught.value.detail) == ('pricing_unverified', 'usage_invalid')
+
+
+@pytest.mark.parametrize('interrupted', [False, True])
+def test_incremental_tally_streams_and_closes_rows(tmp_path, now, interrupted):
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        _reserve(ledger, unit='first')
+        _reserve(ledger, unit='second')
+        expected = c.usage_report(ledger, now=now)
+        cursors = []
+
+        class Rows:
+            def __init__(self, cursor):
+                self.cursor, self.read, self.closed = cursor, 0, False
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                if interrupted and self.read == 1:
+                    raise sqlite3.OperationalError('interrupted')
+                self.read += 1
+                return next(self.cursor)
+
+            def fetchall(self):
+                pytest.fail('accounting rows must not be materialized')
+
+            def close(self):
+                self.closed = True
+                self.cursor.close()
+
+        class Connection:
+            def __getattr__(self, name):
+                return getattr(ledger.db, name)
+
+            def execute(self, sql, *args):
+                cursor = ledger.db.execute(sql, *args)
+                if 'AND artifact_id>? ORDER BY artifact_id' in sql:
+                    cursor = Rows(cursor)
+                    cursors.append(cursor)
+                return cursor
+
+        reader = SimpleNamespace(db=Connection())
+        if interrupted:
+            with pytest.raises(sqlite3.OperationalError, match='interrupted'):
+                c._tally(reader, now)
+            assert reader._cloud_usage_tally is None
+        else:
+            tally = c._tally(reader, now)
+            assert str(tally.total) == expected['monthly_cost_usd']
+            assert len(tally.open) == expected['unresolved_requests'] == 2
+        assert len(cursors) == 1 and cursors[0].closed
+        assert not ledger.db.in_transaction

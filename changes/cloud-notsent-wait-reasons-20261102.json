@@ -13,10 +13,11 @@
     "進行表示の reader 側でも、最終成果物の completeness 主張は保存済み断片の本文へ結合されます。新規コミットでは照合済みの主張を成果物本文の内部フィールド(__mcs_leaf_claims_v1)へ埋め込んで保存し、成果物メタだけを書き換えて未解決の断片や実行履歴へ解決済み主張を作っても進行状態は complete に昇格せず attention のままです。残り件数0の内容解決済み断片が dispatch_unknown・skipped_budget の実行履歴を持つ場合、件数が再計算と一致すれば正当な終端記録として受理し、履歴は解決済みへ昇格しません。埋め込みフィールドは内部専用で、公開の抽出投影からは取り除かれます。",
     "seal 導入前に保存された成果物(本文に主張の写しを持たず、チェックポイント証跡も清掃済みのもの)については、合併済み文書から証明できる範囲だけを検証します。各主張が終端状態の2キー記録であること・解決済み主張が残り0を持つこと・記録された残り件数の合計が合併文書の未解決ヒント再計算を下回らないことを確認し、内容だけでは判別できない断片ごとの帰属差(例: 内容解決済みの dispatch_unknown と解決済み)は従来どおり履歴として扱います。これにより正常な旧結果は attention へ固定されず再選択もされませんが、メタ書換えで未解決の内容へ解決済みを捏造する試みは引き続き拒否します。旧成果物の保持結果を再コミットする際は内容を書き換えないため、保存済みの provider 証跡はそのまま維持されます。",
     "cloud_backlog の worker は、semantic 実行ロックの獲得に成功した直後・run_due 開始前に、親プロセスと更新世代がロック待機中に変わっていないことを再検証します。変化があればロックを持ったまま stale な semantic 作業を実行せず終了します。既存のソース・リース・所有者・世代境界の意味は変わりません。",
-    "seal 埋め込み(__mcs_leaf_claims_v1)付きの最終成果物は、メタの completeness 主張と本文内の耐久記録が一致しても、記録された provider_provenance の result_hash・source_binding が保存時の本文へ一致しない限り完了扱いしません。seal・メタ・provider 証跡・source を変えずに本文の臨床内容だけを削除・改変した場合、既存の result_hash 検証と同じ仕組みで attention・準備未完了へ戻り、再推論や再送信は行いません。provider 不明の履歴・旧形式の未 seal 成果物・受領・課金・予約の意味は変わりません。"
+    "seal 埋め込み(__mcs_leaf_claims_v1)付きの最終成果物は、メタの completeness 主張と本文内の耐久記録が一致しても、記録された provider_provenance の result_hash・source_binding が保存時の本文へ一致しない限り完了扱いしません。seal・メタ・provider 証跡・source を変えずに本文の臨床内容だけを削除・改変した場合、既存の result_hash 検証と同じ仕組みで attention・準備未完了へ戻り、再推論や再送信は行いません。provider 不明の履歴・旧形式の未 seal 成果物・受領・課金・予約の意味は変わりません。",
+    "保存済み本文の厳格なハッシュ計算が失敗した場合は、記録されたハッシュも欠落していても完了と判定しません。"
   ],
   "refs": [
-    "mcs/llm/cloud_client.py",
+    "mcs/llm/transport/cloud_client.py",
     "mcs/extract/llm/extract_llm.py",
     "mcs/llm/cloud_backlog.py",
     "mcs/semantic/semantic_drain.py",

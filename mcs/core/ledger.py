@@ -2395,7 +2395,14 @@ class Ledger:
                               descending=descending)
 
     def close(self):
-        self.db.close()
+        completed = self.__dict__.pop("_patient_context_completed", None)
+        try:
+            if completed is not None:
+                completed.close()
+        finally:
+            self.__dict__.pop("_cloud_usage_tally", None)
+            self.__dict__.pop("_cloud_window_tally", None)
+            self.db.close()
 
 
 class LedgerReader(Ledger):

@@ -200,7 +200,7 @@ def _writer_current(*, full: bool = False) -> bool:
     """Fence update boundaries; lockless bookkeeping checks only the version source."""
     try:
         current = (not _WRITER_STATE[0]
-            and not os.path.exists(os.path.join(writer_lock.HOME, "data", writer_lock.UPDATE_MARKER_NAME))
+            and not writer_lock.writer_blocked()
             and os.stat(inference.__file__).st_mtime_ns == _INFERENCE_SOURCE_STAT
             and inference.CURRENT_VERSION == _INFERENCE_VERSION)
     except OSError:
@@ -1820,6 +1820,9 @@ def revive_failed(ledger, now: float | None = None) -> dict:
         meta.update({"attempts": 4, "next_try": now, "auto_retry": n + 1})
         updated_meta = json.dumps(meta, ensure_ascii=False)
         with ledger.db:
+            if not _writer_current(full=True):
+                ledger.db.rollback()
+                return out
             cur = ledger.db.execute(
                 "UPDATE artifacts SET meta=? WHERE artifact_id=? AND meta=? AND kind IS ? "
                 "AND project_id IS ? AND message_id IS ? AND created_at IS ? AND content IS ? AND model IS ? "
@@ -1835,6 +1838,9 @@ def revive_failed(ledger, now: float | None = None) -> dict:
                 (row["artifact_id"], updated_meta, row["kind"], row["project_id"],
                  row["message_id"], row["created_at"], row["content"], row["model"])).fetchone() is None:
                 raise RuntimeError("extract_revive_unverified")
+            if not _writer_current(full=True):
+                ledger.db.rollback()
+                return out
         # Another drainer/revival may have changed or removed the snapshot.
         out["revived"] += cur.rowcount
     return out
@@ -3004,13 +3010,13 @@ def _saved_chunk_size(db, r, context: str | None = None, *, identity=None) -> in
     return _CHUNK_SIZE
 
 
-def _chunk_piece(body, chunk_size, key, splits):
+def _chunk_piece(body, chunk_size, key, splits, *, root_plan=None):
     """Resolve a stable original index and split path against the current source."""
-    found = _chunk_span(body, chunk_size, key, splits)
+    found = _chunk_span(body, chunk_size, key, splits, root_plan=root_plan)
     return found[0] if found is not None else None
 
 
-def _chunk_span(body, chunk_size, key, splits):
+def _chunk_span(body, chunk_size, key, splits, *, root_plan=None):
     """Resolve the exact source offset as well as the split leaf's text."""
     if type(key) is int and key >= 0:
         path = [key]
@@ -3021,10 +3027,14 @@ def _chunk_span(body, chunk_size, key, splits):
             return None
     else:
         return None
-    parts = plan_chunks(body, chunk_size)
+    if root_plan is None:
+        parts = plan_chunks(body, chunk_size)
+        starts = None
+    else:
+        parts, starts = root_plan
     if path[0] >= len(parts):
         return None
-    start = sum(map(len, parts[:path[0]]))
+    start = starts[path[0]] if starts is not None else sum(map(len, parts[:path[0]]))
     piece, parent = parts[path[0]], path[0]
     for child in path[1:]:
         size = splits.get(parent)
@@ -3248,9 +3258,14 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
     if identity_only:
         return {}, {}
     saved, splits = {}, {}
+    roots = plan_chunks(r["body_text"], chunk_size) if records else []
+    starts, offset = [], 0
+    for piece in roots:
+        starts.append(offset)
+        offset += len(piece)
     for key in sorted(records, key=lambda key: (str(key).count(":"), str(key))):
         meta, content, artifact_project, artifact_model, raw_meta, artifact_id = records[key]
-        piece = _chunk_piece(r["body_text"], chunk_size, key, splits)
+        piece = _chunk_piece(r["body_text"], chunk_size, key, splits, root_plan=(roots, starts))
         if piece is None:
             continue
         sha = hashlib.sha256(piece.encode()).hexdigest()
@@ -3295,8 +3310,8 @@ def _saved_chunk_state(db, r, context=None, *, chunk_size=None, identities=None,
                     and meta.get("piece_sha256") == sha
                     and meta.get("actual_model") == _actual_model(r)
                     and artifact_model == meta.get("actual_model")
-                    and _provider_result_hash(json.dumps(content)) is not None
-                    and _provider_result_hash(json.dumps(content)) == _provider_result_hash(json.dumps(validated))):
+                    and (content_hash := _provider_result_hash(json.dumps(content))) is not None
+                    and content_hash == _provider_result_hash(json.dumps(validated))):
                 expected = _leaf_record(meta, r, evidence, raw_content)
                 try:
                     matches = expected is not None and mcs_util.canonical(proof) == mcs_util.canonical(expected)
@@ -3920,6 +3935,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                 proof = _leaf_record(meta, r, evidence, content)
                 if proof is not None:
                     meta["provider_leaf"] = proof
+            meta_json = json.dumps(meta, ensure_ascii=False)
             if (split_size is None and (
                     quality_status is None and meta.get("quality_status") == "hint_gaps_resolved"
                     or quality_status == "pending" and meta.get("quality_status") == "pending"
@@ -3933,7 +3949,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                     ("extract_llm_chunk", r["message_id"])).fetchone()
                 if (latest is not None and latest["project_id"] == r["project_id"]
                         and latest["model"] == meta["actual_model"] and latest["content"] == content
-                        and latest["meta"] == json.dumps(meta, ensure_ascii=False)):
+                        and latest["meta"] == meta_json):
                     continue
             inserted_id = ledger.artifact_add_tx("extract_llm_chunk", content,
                                                 project_id=r["project_id"], message_id=r["message_id"],
@@ -3948,7 +3964,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                     or inserted_row['project_id'] != r['project_id']
                     or inserted_row['message_id'] != r['message_id']
                     or inserted_row['content'] != content or inserted_row['model'] != meta['actual_model']
-                    or inserted_row['meta'] != json.dumps(meta, ensure_ascii=False)):
+                    or inserted_row['meta'] != meta_json):
                 raise RuntimeError('extract_insert_unverified')
             inserted_witness = dict(inserted_row)
             if guarded:
@@ -3957,7 +3973,7 @@ def _persist_chunks(ledger, r, chunks_out: dict, context: str | None = None, *,
                     "WHERE kind='extract_llm_chunk' AND message_id=? ORDER BY artifact_id DESC LIMIT 1",
                     (r["message_id"],)).fetchone()
                 inserted = (inserted_id, r["project_id"], content, meta["actual_model"],
-                            json.dumps(meta, ensure_ascii=False))
+                            meta_json)
                 if latest is not None and tuple(latest) == inserted:
                     r["_checkpoint_identity"][key] = inserted
                 else:
@@ -5156,7 +5172,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
 
 
 def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
-                  background=False, cloud_only=False) -> tuple[list, int, int]:
+                  background=False, cloud_only=False, load_checkpoints=True) -> tuple[list, int, int]:
     """Load contexts/checkpoints on the calling thread; settle prefiltered rows."""
     jobs = []
     skipped = 0
@@ -5230,8 +5246,10 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
             blocked += 1
             continue
         context = r["_context"] = r["_frame"]["text"]
-        r["_chunk_size"] = _saved_chunk_size(ledger.db, r, context)
-        r["_splits"], saved = _saved_chunk_state(ledger.db, r, context, chunk_size=r["_chunk_size"])
+        saved = {}
+        if load_checkpoints:
+            r["_chunk_size"] = _saved_chunk_size(ledger.db, r, context)
+            r["_splits"], saved = _saved_chunk_state(ledger.db, r, context, chunk_size=r["_chunk_size"])
         jobs.append((r, context, saved, hints, qc))
     return jobs, skipped, blocked
 
@@ -5373,10 +5391,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     ``write_wait_s`` bounds each per-write lock wait. With ``carry`` (a
     list from the previous call's ``result["carry"]``) a finished result
     whose lock wait timed out keeps its claim lease and rides to the
-    next call instead of being deferred, so the GPU moves on while the
-    tick holds the run lock for minutes; the carried commit is retried
-    under the next call's end-of-run lock and dropped only when its
-    lease nears expiry or the source moved (then re-extracted later).
+    next call instead of being deferred. A call with carry only saves or
+    renews that previous pass: it admits no new inference, so a prolonged
+    run-lock wait cannot accumulate more completed passes in memory.
+    The result is dropped only when its lease nears expiry or its source
+    moved, under the existing ownership and provider checks.
 
     `workers` bounds local calls; resident lanes may pin a local slot.
     Cloud configuration can widen the pool while local calls retain their
@@ -5401,23 +5420,32 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 "pids": [], "transaction_active": True, "carry": carry or []}
     if not _writer_current(full=True):
         return {"done": 0, "failed": 0, "left": None, "deferred": 0,
-                "pids": [], "updated": True}
+                "pids": [], "updated": True, "carry": carry or []}
     deadline = time.monotonic() + budget_s
     lock = functools.partial(_write_lock, wait_s=write_wait_s)
     carry_settled = dict.fromkeys(('done', 'held_prior', 'deferred'), 0)
     carry_count, carry_pids = 0, set()
-    if cloud_only and carry and deadline - time.monotonic() > 1:
-        # Settle or renew paid work before a bounded selection can defer.
-        # The supplied lock follows the caller's existing lock ownership.
-        wait_s = min(write_wait_s, max(0.0, deadline - time.monotonic() - 1.0))
-        carry_settled, carry_count, carry_pids = _settle_carry(
-            ledger, carry, final=False, fence=_WRITER_STATE,
-            lock_context=_write_lock(per_write_lock, wait_s=wait_s, deadline=deadline), report=False,
-            preserve_on_fence_loss=True, deadline=deadline)
+    if carry:
+        # A retained pass owns the admission window until it is saved or
+        # rejected by the existing source/lease/provider checks. Never
+        # append new paid results while its run-lock wait is unresolved.
+        if deadline - time.monotonic() > 1:
+            wait_s = min(write_wait_s, max(0.0, deadline - time.monotonic() - 1.0))
+            carry_settled, carry_count, carry_pids = _settle_carry(
+                ledger, carry, final=False, fence=_WRITER_STATE,
+                lock_context=_write_lock(per_write_lock, wait_s=wait_s, deadline=deadline), report=False,
+                preserve_on_fence_loss=True, deadline=deadline)
         if not _writer_current(full=True):
             return {'done': carry_settled['done'], 'failed': 0, 'left': None,
                     'deferred': carry_settled['deferred'], 'pids': sorted(carry_pids),
                     'carry': carry, 'updated': True}
+        return {**carry_settled, 'failed': 0, 'left': None, 'carried': carry_count,
+                'carry': carry, 'carry_waiting': bool(carry), 'pids': sorted(carry_pids),
+                'selected': 0, 'fresh_selected': 0, 'context_blocked': 0,
+                'skipped': 0, 'lock_lost': 0, 'slow_deferred': 0,
+                'left_estimate': None, 'left_estimate_age_s': None,
+                'queue_ages_s': {'oldest': None, 'newest': None},
+                'llm_calls': None}
     # A damaged maintenance cursor must not stop unrelated fresh extraction.
     # Only continue if the GC transaction was fully unwound.
     gc_error = None
@@ -5494,7 +5522,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     prefilter = _prefilter_enabled() and admitted_ids is None
     jobs, skipped, context_blocked = ([], 0, 0) if cloud_only else _prepare_jobs(
         ledger, rows, target, prefilter, allow_cloud=allow_cloud, background=background,
-        cloud_only=cloud_only)
+        cloud_only=cloud_only, load_checkpoints=False)
     deferred += context_blocked
     metas = [None] * len(jobs)
     batch_metas = []
@@ -5644,7 +5672,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                     r.pop("_cloud_generation", None)
                     r["_cloud_mode"] = "off"
                     r["_target"] = target
-                    fresh, _, _ = _prepare_jobs(ledger, [r], target, False, allow_cloud=False)
+                    fresh, _, _ = _prepare_jobs(ledger, [r], target, False, allow_cloud=False, load_checkpoints=False)
                     if not fresh:
                         raise CloudFallback("cloud_local_context_unavailable")
                     local_r, local_ctx, local_saved, _, _ = fresh[0]
@@ -5933,7 +5961,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 # Lookahead replenishes lost claims without freezing unused attempt frames.
                 prepared, row_skipped, row_blocked = _prepare_jobs(
                     ledger, [candidate], target, prefilter, allow_cloud=allow_cloud,
-                    background=background, cloud_only=True)
+                    background=background, cloud_only=True, load_checkpoints=False)
                 skipped += row_skipped
                 context_blocked += row_blocked
                 deferred += row_blocked
@@ -6467,13 +6495,15 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
     reason — an updater may finish while we wait for the lock."""
     settled = dict.fromkeys(("done", "held_prior", "deferred"), 0)
     count, pids = 0, set()
-    if not carry:
+    if not carry or writer_lock.writer_blocked():
         return settled, count, pids
     keep = []
     shadow = []
     context = lock_context if lock_context is not None else _write_lock(
         True, wait_s=60 if final else _RESIDENT_WRITE_WAIT_S)
     with context as held:
+        if writer_lock.writer_blocked():
+            return settled, count, pids
         if preserve_on_fence_loss and (not _writer_current(full=True) or
                 (fence is not None and writer_lock.updater_state() != fence)):
             return settled, count, pids
@@ -6611,6 +6641,18 @@ def main() -> int:
             os.environ[local_llm.TURN_LOCK_ENV] = turn
 
 
+def _open_current_ledger():
+    fd = writer_lock.acquire_run_lock()
+    if fd is None:
+        return None
+    try:
+        if not _writer_current(full=True):
+            return None
+        return Ledger(DB)
+    finally:
+        os.close(fd)
+
+
 def _main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--upgrade-status", action="store_true", help="read-only aggregate upgrade status; no LLM calls")
@@ -6652,13 +6694,16 @@ def _main() -> int:
             led.close()
         return 0
     if args.revive_failed:
-        # DB-only bookkeeping: no LLM call, no run lock needed (a single
-        # UPDATE per row; drainers re-select revived rows on their own)
-        led = Ledger(DB)
-        try:
-            print(json.dumps(revive_failed(led), ensure_ascii=False))
-        finally:
-            led.close()
+        # Keep the constructor and its bookkeeping in the same writer lifetime.
+        with _write_lock(True, wait_s=0) as locked:
+            if not locked or not _writer_current(full=True):
+                print(json.dumps({"ok": False, "error": "writer_unavailable"}))
+                return 1
+            led = Ledger(DB)
+            try:
+                print(json.dumps(revive_failed(led), ensure_ascii=False))
+            finally:
+                led.close()
         return 0
     if (not math.isfinite(args.budget) or not math.isfinite(args.stop_after)
             or args.stop_after < 0):
@@ -6701,7 +6746,10 @@ def _main() -> int:
                       "extract_version": EXTRACT_VERSION, inference.VERSION_KEY: _INFERENCE_VERSION,
                       "source_digests": _LOADED_SOURCE_DIGESTS}),
           file=sys.stderr, flush=True)
-    led = Ledger(DB)
+    led = _open_current_ledger()
+    if led is None:
+        print(json.dumps({"ok": False, "error": "writer_unavailable"}))
+        return 1
     # T18: under the v4 engine (fact_source=canonical) the legacy
     # extractor admits nothing: conversion manifests are v4 jobs. The
     # standalone daemon obeys the same boundary as the tick path, and
@@ -6767,10 +6815,29 @@ def _main() -> int:
             while True:
                 if not _writer_current(full=True):
                     return retire()
-                if stop is not None and time.monotonic() > stop:
+                if stop is not None and time.monotonic() >= stop:
                     total["stopped"] = "stop_after"
                     break
                 try:
+                    if carry and not context_lane:
+                        resume_budget = _RESIDENT_WRITE_WAIT_S + 1
+                        if stop is not None:
+                            resume_budget = min(resume_budget, max(0.0, stop - time.monotonic()))
+                        if resume_budget <= 0:
+                            total["stopped"] = "stop_after"
+                            break
+                        resumed = run_pending(led, limit=1, budget_s=resume_budget,
+                            per_write_lock=True, write_wait_s=_RESIDENT_WRITE_WAIT_S, carry=carry)
+                        carry = resumed.pop("carry", carry)
+                        if resumed.get("updated"):
+                            return retire()
+                        total["done"] += resumed["done"]
+                        total["failed"] += resumed["failed"]
+                        total["left"] = resumed["left"]
+                        print(json.dumps({**resumed, "ts": time.time()}, ensure_ascii=False), flush=True)
+                        if carry:
+                            pause(2)
+                            continue
                     if cloud_pool is not None:
                         cloud_pool.sync(load_config(), ledger=led)
                     if context_lane:
@@ -6785,6 +6852,9 @@ def _main() -> int:
                             _settle_carry(led, carry, write=False)
                             return 0
                         _settle_carry(led, carry, final=False, fence=context_state)
+                        if carry:
+                            pause(2)
+                            continue
                         context_refresh = _background_context_refresh(led, context_state, stop)
                         if context_refresh.get("status") != "off":
                             print(json.dumps({"nightly": context_refresh, "ts": time.time()},
@@ -6849,7 +6919,7 @@ def _main() -> int:
                     carry = r.pop("carry", None) or []  # internal; never logged
                     sem = None
                     ran_semantic = False
-                    if args.semantic:
+                    if args.semantic and not carry:
                         sem = _background_semantic(led, stop)
                         print(json.dumps({"semantic": sem,
                                           "ts": time.time()},

@@ -6,6 +6,7 @@ import pytest
 
 import anthropic_client
 import cloud_policy
+import cloud_client
 import extract_llm as worker
 import cloud_inference
 import ledger as ledger_module
@@ -27,7 +28,7 @@ _REAL_WRITER_CURRENT = worker._writer_current
 ])
 def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, monkeypatch, start, finish, unknown):
     led, clock, _ = runtime
-    settings = cloud_policy.cloud_config({'cloud_llm': {'mode': 'on', 'project_ids': [1],
+    settings = cloud_policy.cloud_config({'cloud_llm': {'mode': 'on', 'provider': 'anthropic', 'project_ids': [1],
                                                         'daily_request_budget': 1}})[0]
     cfg = {**CFG, 'cloud_llm': settings,
            'semantic': {**CFG['semantic'], 'project_ids': [1], 'daily_request_budget': 3000}}
@@ -58,12 +59,14 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, mon
     fake_time = SimpleNamespace(time=lambda: clock.wall, monotonic=lambda: clock.mono,
                                 perf_counter=lambda: clock.mono,
                                 sleep=lambda seconds: setattr(clock, 'mono', clock.mono + seconds))
-    for module in (worker, cloud_policy, anthropic_client, ledger_module, semantic_runtime):
+    for module in (worker, cloud_policy, cloud_client, anthropic_client, ledger_module, semantic_runtime):
         monkeypatch.setattr(module, 'time', fake_time)
         monkeypatch.setattr(cloud_inference, 'time', module.time)
     monkeypatch.setattr(cloud_inference, '_cloud_settings', lambda _cfg: settings)
     monkeypatch.setattr(worker, '_cloud_mode', lambda *_args: 'on')
     monkeypatch.setattr(cloud_policy, 'api_key', lambda *_args: 'synthetic-key')
+    # Fixed calendar boundaries exercise accounting, not the live price-table date.
+    monkeypatch.setattr(cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     calls = []
 
     def request(_client, method, body, timeout, *, deadline):
@@ -85,7 +88,7 @@ def test_real_owner_reservation_and_response_across_midnight(runtime, cloud, mon
 
     monkeypatch.setattr(anthropic_client.AnthropicClient, 'request', request)
     result = step(runtime, cfg=cfg, local_admit=lambda: False)
-    assert len(calls) == 1 and result.get('lane') == 'A'
+    assert len(calls) == 1 and result.get('lane') == 'A', result
     reserves, results = led.artifacts('cloud_usage_reserve'), led.artifacts('cloud_usage_result')
     assert len(reserves) == len(results) == 1
     assert reserves[0]['created_at'] < stamp(finish) <= results[0]['created_at']

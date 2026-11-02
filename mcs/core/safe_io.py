@@ -14,6 +14,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import plistlib
 import stat
 import tempfile
 from pathlib import Path
@@ -120,6 +121,32 @@ def read_regular_nofollow(path, limit: int, error, *,
             raise error()
         raw = stream.read(limit + 1)
         return (raw, st) if with_stat else raw
+
+
+def open_lock_file(path, *, dir_fd: int | None = None) -> int:
+    """Open an owned regular lock leaf without following links or waiting on a FIFO."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    fd = os.open(path, flags, 0o600, **({} if dir_fd is None else {"dir_fd": dir_fd}))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, "lock_file_not_regular")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def read_plist_nofollow(path, limit: int = 1024 * 1024):
+    """Decode a bounded regular plist without following its leaf or waiting on a FIFO."""
+    from xml.parsers.expat import ExpatError
+
+    raw = read_regular_nofollow(path, limit, ValueError)
+    if len(raw) > limit:
+        raise ValueError("plist_too_large")
+    try:
+        return plistlib.loads(raw)
+    except ExpatError as error:
+        raise ValueError("plist_invalid") from error
 
 
 def publish_new_bytes(path, raw):

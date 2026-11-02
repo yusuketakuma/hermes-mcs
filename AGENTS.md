@@ -48,7 +48,9 @@ python3 ci/mine_gates.py --check
 
 - `mcs/`: `core/`（保存基盤）・`llm/`（共通推論）・`ingest/`・`extract/`・`patients/`・`medications/`・`signals/`・`semantic/`・`stamps/`・`notify/`・`views/`・`export/`・`ops/`。
   flat import を維持する。エントリポイントは `mcs/` を sys.path に追加して `_mcs_path` を import する（`.py` のある配下を任意の深さで登録）。
-  `mcs/` 直下の import モジュールは `_mcs_path.py` だけ。旧配置に同名モジュールが残ると誤読込せず停止する。
+  `mcs/` 直下の import モジュールは `_mcs_path.py` だけ。登録対象のサブディレクトリ間で同名モジュールが重複すると停止する。直下の旧ファイルはこの重複検査の対象外なので、配備時に残さない。
+- 共通推論: `llm/providers/` はprovider固有の通信、`llm/transport/` は共通通信・再試行・ローカルturn lock、`llm/admission/` は共有枠・接続/回路状態を所有する。
+  `cloud_inference`・`cloud_policy`・`cloud_backlog` は `llm/` 直下に置き、従来のflat import名を維持する。
 - 抽出: `extract/rules/`＝ルール（v1）、`extract/llm/`＝現行LLM（旧配置v4）、`extract/clinical/`＝臨床値の共通処理。`patients/rollup.py` と
   `semantic/` は世代横断。世代番号は配置名と独立し、v2/v3 は git 履歴にだけある。`extract/eval/`・`semantic/eval/` は定期処理から読まない。
   LLM 枠は新着・対話1、バックログ2。抽出世代・QC・公開条件・モデルの既定は `mcs/extract/`・`mcs/semantic/` と仕様で確かめ、要約から固定しない。

@@ -5,6 +5,7 @@ import time
 from contextlib import contextmanager, suppress
 
 from mcs_util import HOME
+from safe_io import open_lock_file
 
 RUN_LOCK = os.path.join(HOME, "data", "run.lock")
 UPDATE_MARKER_NAME = "update_in_progress.marker"
@@ -26,7 +27,7 @@ def acquire_run_lock(path: str | None = None) -> int | None:
     ``extract_llm._write_lock``)."""
     path = path or RUN_LOCK
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+    fd = open_lock_file(path)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -84,9 +85,20 @@ class RunLockLost(BaseException):
         self.updated = updated
 
 
+def writer_blocked() -> bool:
+    """Block writers for update/restore holds or an unverifiable restore state."""
+    data = os.path.join(HOME, "data")
+    if os.path.lexists(os.path.join(data, UPDATE_MARKER_NAME)):
+        return True
+    try:
+        from notify_spool import restore_writer_hold
+        return restore_writer_hold(data) is not None
+    except Exception:
+        return True
+
+
 def updater_state() -> tuple:
-    return (os.path.exists(os.path.join(HOME, "data", UPDATE_MARKER_NAME)),
-            code_stamp())
+    return (writer_blocked(), code_stamp())
 
 
 @contextmanager

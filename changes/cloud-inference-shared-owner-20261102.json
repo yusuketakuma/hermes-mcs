@@ -11,17 +11,6 @@
   "refs": [
     "mcs/llm/cloud_inference.py",
     "mcs/extract/llm/extract_llm.py",
-    "mcs/llm/cloud_backlog.py",
-    "mcs/semantic/semantic_candidate.py",
-    "mcs/semantic/semantic_drain.py",
-    "mcs/semantic/semantic_extraction.py",
-    "mcs/semantic/semantic_transport.py",
-    "mcs/semantic/semantic_v4.py",
-    "mcs/patients/patient_context_refresh.py",
-    "mcs/core/patient_context_artifacts.py",
-    "mcs/notify/processing_route.py",
-    "mcs/ops/mcs_update.py",
-    "tests/ops/test_update_loaded_rollback_closure.py",
-    "tests/semantic/test_semantic_cloud.py"
+    "mcs/ops/mcs_update.py"
   ]
 }

@@ -1,4 +1,5 @@
 """Retain compact negative-use dependencies before source or derivative destruction."""
+from contextlib import closing
 import hashlib
 import json
 import sqlite3
@@ -110,41 +111,27 @@ def source_bindings(db, pairs):
         prepared.append((pair[0], pair[1]))
     if not prepared:
         return []
-    db.execute('SAVEPOINT source_bindings_read')
-    try:
+    # A live read cursor borrows the snapshot without a SAVEPOINT whose
+    # RELEASE can itself be interrupted by the caller's progress handler.
+    with closing(db.execute('SELECT message_id FROM (SELECT message_id FROM messages LIMIT 1) '
+                            'UNION ALL SELECT NULL UNION ALL SELECT NULL')) as anchor:
+        anchor.fetchone()
         try:
-            result = _source_bindings_page(db, prepared)
+            return _source_bindings_page(db, prepared)
         except Exception as error:
             if not retryable_batch_read_error(error):
                 raise
-            # Replay singles in order if a grouped query fails on a later row.
-            result = [source_binding(db, pid, mid) for pid, mid in prepared]
-    except BaseException:
-        try:
-            db.execute('RELEASE source_bindings_read')
-        except sqlite3.Error:
-            pass  # SQLite may already have rolled back the savepoint.
-        raise
-    else:
-        db.execute('RELEASE source_bindings_read')
-        return result
+            return [source_binding(db, pid, mid) for pid, mid in prepared]
 
 
 def _source_bindings_page(db, pairs):
     unique = list(dict.fromkeys(pairs))
     where = ' OR '.join('(m.project_id=? AND m.message_id=?)' for _ in unique)
     params = [part for pair in unique for part in pair]
-    columns = ','.join('m.' + field for field in _SOURCE_FIELDS)
-    rows = {(row[0], row[1]): list(row[2:]) for row in db.execute(
-        'SELECT m.project_id,m.message_id,' + columns + ' FROM messages m WHERE ' + where, params)}
-    if not rows:
-        return [None] * len(pairs)
-    mids = sorted({mid for _, mid in rows})
-    marks = ','.join('?' for _ in mids)
-    revisions = {row[0]: row[1] for row in db.execute(
-        'SELECT message_id,COALESCE(MAX(seq),1) FROM message_revisions '
-        'WHERE message_id IN (' + marks + ') GROUP BY message_id', mids)}
-    return [_digest([rows[pair], revisions.get(pair[1], 1)]) if pair in rows else None for pair in pairs]
+    with closing(db.execute('SELECT m.project_id,m.message_id,' + SOURCE_BINDING_COLUMNS
+                            + ' FROM messages m WHERE ' + where, params)) as selected:
+        rows = {(row[0], row[1]): list(row[2:]) for row in selected}
+    return [_digest([rows[pair][:-1], rows[pair][-1]]) if pair in rows else None for pair in pairs]
 
 
 def support_binding(db, pid, mid):

@@ -2477,19 +2477,18 @@ def test_thinking_only_length_holds_summary_and_consumes_no_second_repair(runtim
             context_refresh._summary(CFG, facts, deadline, lambda:True, provider=length_only)
     else:
         # Seed the negative assessment/owner boundary; retain the real one-use repair reservation.
+        from contextlib import nullcontext
         monkeypatch.setattr(context_refresh, '_quality_owns', lambda *args:True)
         monkeypatch.setattr(context_refresh, '_quality_failed', lambda *args:True)
         monkeypatch.setattr(context_refresh, '_quality_answers', lambda *args:{
             'a':{'choice':'supports','confidence':1},'b':{'choice':'important_missing','confidence':1}})
-        original = cloud_inference._CloudProvider
-
-        class LengthOnly(original):
-            def __call__(self, prompt, **kwargs):
-                self.guard()
-                self.possibly_sent = True
-                return length_only(prompt, **kwargs)
-
-        monkeypatch.setattr(cloud_inference, '_CloudProvider', LengthOnly)
+        monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
+        monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
+        monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
+        monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_: nullcontext(True))
+        monkeypatch.setattr(worker.anthropic_client.AnthropicClient, 'request',
+                            lambda _self, method, body, timeout, **kwargs: post(body, timeout))
+        monkeypatch.setattr(cloud_inference, '_CloudProvider', _SOURCE_REPAIR_PROVIDER)
         identity = {'fact_ids':['a','b'],'input_key':'1'*64,'audit_key':'2'*64,
                     'candidate_key':'3'*64,'failure_key':'4'*64}
         doc = {'summary':[{'text':facts[0]['text'],'fact_ids':['a']}]}
@@ -2497,6 +2496,7 @@ def test_thinking_only_length_holds_summary_and_consumes_no_second_repair(runtim
                 lambda *args:True, deadline, lambda:True, facts, {}, .9, {'groups':[],'relations':[]})
         assert context_refresh._quality_repair_candidate(*args) == ('held', None)
         assert len(led.artifacts(context_refresh.QUALITY_REPAIR, project_id=1)) == 1
+        results.extend(json.loads(row['meta']) for row in led.artifacts('cloud_usage_result', project_id=1))
         assert context_refresh._quality_repair_candidate(*args) == ('held', None)
         assert not led.artifacts(context_refresh.QUALITY_REPAIR_CANDIDATE, project_id=1)
     assert len(calls) == len(results) == 1 and results[0]['error_kind'] is None

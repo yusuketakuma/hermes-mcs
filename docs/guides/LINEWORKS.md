@@ -168,8 +168,9 @@ systemctl --user status hermes-mcs-lineworks.service
 
 ユーザーのログインセッションを超える稼働は OS のサービス運用設定に
 従います。`run` の手動プロセスとサービスを同時に起動しません。
-起動時の診断ログは `~/.mcs/data/lineworks_state/service.stdout.log` と
-`service.stderr.log` に保存します。公開 HTTPS Callback の reverse proxy は
+生成したサービスの診断ログは、共通ログhelper経由で既定の
+`~/.mcs/data/mcs.log` に記録します。旧`lineworks_state/service.stdout.log`・
+`service.stderr.log`は移行元のログとして扱い、現在の保存先と区別します。公開 HTTPS Callback の reverse proxy は
 別途維持します。Hermes gateway の導入・再起動で代用しません。
 
 LINE WORKSアダプターを更新した場合は `check` の後に独立プロセスを再起動します。

@@ -64,6 +64,31 @@ def _complete_identity(host, monkeypatch, job, identity, now, operation=None):
     return result
 
 
+@pytest.mark.parametrize("witness", ["restored", "awaiting", "corrupt", "journal", "adopted"])
+def test_writer_restore_hold_does_not_require_an_update_marker(tmp_path, monkeypatch, witness):
+    import notify_spool
+    import mcs_restore
+    import update_journal
+
+    host = _host(tmp_path, monkeypatch)
+    data = tmp_path / "data"
+    marker = data / "restore_pending.json"
+    if witness == "journal":
+        state = update_journal.default_state()
+        state["restore_consent"] = {"report_id": "synthetic"}
+        (data / "update_state.json").write_text(json.dumps(state))
+    elif witness == "corrupt":
+        marker.write_text("{invalid")
+    else:
+        marker.write_text(json.dumps({"by": "mcs_backup_restore" if witness == "adopted" else "mcs_update",
+            "phase": "restored" if witness == "restored" else "awaiting_consent"}))
+    monkeypatch.setattr(mcs_restore, "writers_resumed", lambda destination: witness == "adopted")
+    assert not (data / UPDATE_MARKER_NAME).exists()
+    assert host._updating(QUIET) is (witness != "adopted")
+    if witness == "adopted":
+        assert notify_spool.restore_pending(str(data)) is not None
+
+
 # ---------------------------------------------------------------- H1 connector
 
 def test_connector_failure_backs_off_without_stopping_the_host(tmp_path, monkeypatch):

@@ -87,3 +87,28 @@ def test_health_evidence_rechecks_bound_after_read(tmp_path, monkeypatch, reader
     else:
         monkeypatch.setattr(health_report, 'HEALTH_FILE', str(tmp_path / "synthetic.json"))
         assert health_report.prev_health() == {}
+
+
+@pytest.mark.parametrize("kind", ["fifo", "symlink", "directory"])
+def test_health_lock_refuses_unsafe_leaf_before_observation(tmp_path, monkeypatch, kind):
+    data = tmp_path / "data"
+    data.mkdir()
+    path = data / "health_watch.lock"
+    if kind == "fifo":
+        os.mkfifo(path)
+    elif kind == "directory":
+        path.mkdir()
+    else:
+        target = tmp_path / "other"
+        target.write_bytes(b"synthetic untouched")
+        path.symlink_to(target)
+    original = os.open
+
+    def checked_open(name, flags, *args, **kwargs):
+        assert flags & os.O_NONBLOCK and flags & os.O_NOFOLLOW
+        return original(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(safe_io.os, "open", checked_open)
+    monkeypatch.setattr(health_watch, "_load_config", lambda *a: {})
+    monkeypatch.setattr(health_watch, "_watch", lambda *a: pytest.fail("untrusted lock reached observation"))
+    assert health_watch.main(["--home", str(tmp_path)]) == 1

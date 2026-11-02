@@ -8,10 +8,9 @@ place relations may activate is the ATOMIC_FACT_PROMOTION stage, which
 checks ``relation_set_fingerprint`` against the persisted value before
 committing.
 
-Classification is deterministic — given the same inputs it always picks
-the same type, in RELATION_TYPES priority order:
-EXACT_DUPLICATE > EXPLICIT_SUPERSESSION > TRANSITION > CONTRADICTION >
-COMPLEMENTS > UNRESOLVED.
+Classification is deterministic: after exact duplicates, action and polarity
+conflicts are resolved by ordering evidence before workflow transitions are
+considered. RELATION_TYPES enumerates outputs, not decision priority.
 """
 from __future__ import annotations
 

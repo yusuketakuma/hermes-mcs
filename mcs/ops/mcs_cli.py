@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import os
-import plistlib
 from pathlib import Path
 import subprocess
 import sys
@@ -45,8 +44,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("配備済みの復旧ツールは対話形式に未対応です。担当者にツールの更新を依頼してください。")
                 return 1
             plist = Path.home() / "Library/LaunchAgents/org.mcs.recovery.plist"
-            with plist.open("rb") as stream:
-                installed = plistlib.load(stream)
+            installed = runtime_inspection.read_recovery_plist(plist)
             command = installed.get("ProgramArguments")
             python = runtime_inspection.recovery_executable(installed)
             if ("Program" in installed or not isinstance(command, list)

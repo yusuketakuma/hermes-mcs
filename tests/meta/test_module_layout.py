@@ -9,8 +9,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 MODULES = {
-    'local_llm': 'llm/local_llm.py',
-    'llm_admission': 'llm/llm_admission.py',
+    'anthropic_client': 'llm/providers/anthropic_client.py',
+    'openai_client': 'llm/providers/openai_client.py',
+    'cloud_client': 'llm/transport/cloud_client.py',
+    'local_llm': 'llm/transport/local_llm.py',
+    'llm_retry': 'llm/transport/llm_retry.py',
+    'llm_admission': 'llm/admission/llm_admission.py',
+    'llm_availability': 'llm/admission/llm_availability.py',
     'extract': 'extract/rules/extract.py',
     'extract_llm': 'extract/llm/extract_llm.py',
     'clinical_values': 'extract/clinical/clinical_values.py',

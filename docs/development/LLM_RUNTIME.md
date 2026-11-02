@@ -19,7 +19,7 @@
 | 根拠が失われた場合の保全 | [inference_dependency_loss](../../mcs/core/inference_dependency_loss.py)が原文・派生物の破棄前に依存を捕捉 | 呼出元の既存transactionで、本文・引用・用量を含まない記録を保存。読取りでは現在状態への誤昇格を防ぎ、削除された原典の代わりに使わない |
 | 任意の意味チェック・抽出監査 | [semantic_jev](../../mcs/semantic/semantic_jev.py)が固定Jevモデルの通信・応答契約を所有 | drainのscope・予算・pause・回路と、各評価/QCの根拠検証を通して結果を保存 |
 
-共通のローカル通信は[local_llm](../../mcs/llm/local_llm.py)、
+共通のローカル通信は[local_llm](../../mcs/llm/transport/local_llm.py)、
 短命子プロセスによるHTTPの期限・kill/reap・環境隔離・応答上限は
 [bounded_http](../../mcs/core/bounded_http.py)が所有します。
 借用したDBを通信層がcloseしたり、推論成功だけで公開済みにしたりしません。
@@ -37,7 +37,7 @@
 [3レーン構成](../../deployment/launchagents/README.md#3レーン構成)を参照してください。
 
 共有brokerは `config.json` の `local_llm.admission: true`（または従来の環境変数 `MCS_LLM_ADMISSION`）によるopt-inです。
-[llm_admission.DEFAULT_ROUTES](../../mcs/llm/llm_admission.py)では、MCSのextract・semantic・QC・benchは
+[llm_admission.DEFAULT_ROUTES](../../mcs/llm/admission/llm_admission.py)では、MCSのextract・semantic・QC・benchは
 `BACKLOG`、Hermes対話等は`RT`へ束縛されます。レーン1という名前からbrokerの`RT`や有効状態を推測しません。
 送信後のtimeoutや`unknown`はbackendの終了証拠と区別し、permitを無条件に再利用しません。
 

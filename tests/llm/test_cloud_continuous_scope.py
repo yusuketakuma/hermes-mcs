@@ -128,3 +128,21 @@ def test_continuous_scope_selects_history_with_a_later_reply(history, monkeypatc
         rows, _ = extract_llm._select_pending(history, 4, None, None, False,
                                                cloud_only=True, prioritize_patients=True)
     assert any(row['message_id'] == 1 for row in rows)
+
+
+def test_snapshot_reuses_exact_authorized_occurrences_once(history, monkeypatch):
+    import inference_dependency_loss as loss
+    from mcs_util import payload_hash
+    history.save_messages([_message(2, parent=1, body='synthetic reply')])
+    _continuous(history)
+    mids = [r[0] for r in history.db.execute('SELECT message_id FROM messages ORDER BY message_id')]
+    scope = history.db.execute("SELECT MAX(artifact_id) FROM artifacts WHERE kind='cloud_history_scope'").fetchone()[0]
+    expected = payload_hash({'scope_id': scope, 'project_id': 1, 'target_id': 1,
+                             'members': [(mid, loss.source_binding(history.db, 1, mid)) for mid in mids]})
+    read, calls = loss.source_binding, []
+    def counted(db, pid, mid):
+        calls.append((pid, mid))
+        return read(db, pid, mid)
+    monkeypatch.setattr(loss, 'source_binding', counted)
+    assert cloud_policy.history_thread_snapshot(history.db, 1, 1) == expected
+    assert calls == [(1, mid) for mid in mids]

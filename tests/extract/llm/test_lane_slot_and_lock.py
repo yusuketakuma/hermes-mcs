@@ -19,10 +19,12 @@ def test_batch_default_off():
 
 def _lock_stub(monkeypatch, tmp_path, blocked_after_call):
     """acquire_run_lock stub: free, until the LLM call starts — then the
-    tick holds it for `blocked_after_call` attempts."""
+    tick holds it for that many attempts, or until explicit release for None."""
     state = {"blocked": 0}   # returned so a test can free/block it later
 
     def acquire():
+        if state["blocked"] is None:
+            return None
         if state["blocked"] > 0:
             state["blocked"] -= 1
             return None
@@ -58,7 +60,7 @@ def test_lock_lost_twice_defers_without_burning_attempts(tmp_path,
                                                          monkeypatch):
     db = _ledger(tmp_path)
     db.save_messages([_message(body="合成の本文です。" * 20)])
-    _lock_stub(monkeypatch, tmp_path, blocked_after_call=10 ** 6)
+    _lock_stub(monkeypatch, tmp_path, blocked_after_call=None)
     res = extract_llm.run_pending(db, limit=10, budget_s=30,
                                   per_write_lock=True)
     assert res["lock_lost"] == 1 and res["deferred"] == 1
@@ -79,7 +81,7 @@ def _carry_one(db, monkeypatch, tmp_path):
     """First resident call: the lock stays held, so the finished result
     rides out in res["carry"] with its claim lease intact."""
     db.save_messages([_message(body="合成の本文です。" * 20)])
-    state = _lock_stub(monkeypatch, tmp_path, blocked_after_call=10 ** 6)
+    state = _lock_stub(monkeypatch, tmp_path, blocked_after_call=None)
     res = extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True,
                                   write_wait_s=1, carry=[])
     assert len(res["carry"]) == 1 and res["lock_lost"] == 1
@@ -120,7 +122,9 @@ def test_carried_result_near_lease_expiry_is_dropped(tmp_path, monkeypatch):
     assert res["deferred"] == 1 and res["carried"] == 0 and res["carry"] == []
     assert db.artifacts("extract_llm", message_id=1) == []
     assert _claims(db) == []
-    assert res["left"] == 1
+    assert res["left"] is None  # a save-only pass does not rescan the backlog
+    rows, _ = extract_llm._select_pending(db, 1, None, None, False)
+    assert len(rows) == 1
     db.close()
 
 
@@ -227,7 +231,7 @@ def test_transient_error_after_a_renewal_keeps_the_renewed_lease(tmp_path, monke
     import sqlite3
     db = _ledger(tmp_path)
     db.save_messages([_message(mid=i, body="合成の本文です。" * 20) for i in (1, 2)])
-    state = _lock_stub(monkeypatch, tmp_path, blocked_after_call=10 ** 6)
+    state = _lock_stub(monkeypatch, tmp_path, blocked_after_call=None)
     carry = extract_llm.run_pending(db, limit=10, budget_s=30, per_write_lock=True,
                                     write_wait_s=1, carry=[])["carry"]
     assert len(carry) == 2
@@ -418,14 +422,14 @@ def test_update_stop_does_not_commit_old_carried_result(tmp_path, monkeypatch):
 
     def run(*args, **kwargs):
         reached.append("run_pending")
+        reached.append("updated")
+        monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 124))
         return {"done": 0, "failed": 0, "left": 1, "selected": 1, "carry": carry}
 
     monkeypatch.setattr(extract_llm, "run_pending", run)
 
     def updated(*args):
-        reached.append("updated")
-        monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 124))
-        return {"run_lock_lost": "updated"}
+        pytest.fail("a completed result waiting for its save must not start semantic work")
     monkeypatch.setattr(extract_llm, "_background_semantic", updated)
     assert extract_llm.main() == 0
     assert reached == ["run_pending", "updated"]
@@ -549,6 +553,7 @@ def test_lane3_survives_transient_settle_error(monkeypatch, capsys):
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
     monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
+    monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 123))
     monkeypatch.setattr(extract_llm.sys, "argv", [
         "extract_llm", "--all", "--lane", "3", "--stop-after", "100"])
     monkeypatch.setattr(extract_llm, "Ledger",
@@ -593,7 +598,7 @@ def test_carried_safety_hold_is_reported_in_the_settling_pass(tmp_path, monkeypa
             "text": "咳", "negated": True, "subject": "patient",
             "evidence": "本人に咳はありません。"}]}), project_id=1, message_id=1,
             meta={"hash": row[0], "extract_version": extract_llm.EXTRACT_VERSION - 1})
-        state = _lock_stub(monkeypatch, tmp_path, blocked_after_call=10 ** 6)
+        state = _lock_stub(monkeypatch, tmp_path, blocked_after_call=None)
         first = extract_llm.run_pending(db, limit=1, budget_s=30,
             per_write_lock=True, write_wait_s=1, carry=[])
         carry = first["carry"]

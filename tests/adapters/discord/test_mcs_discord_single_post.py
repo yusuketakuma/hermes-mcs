@@ -9,6 +9,7 @@ import asyncio
 import json
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -326,7 +327,10 @@ def test_card_create_retries_after_429(tmp_path, faults, posts):
     # delivery, not a duplicate
     bot = WireBot(faults=faults)
     w, _ = _mk(tmp_path, bot)
-    out = asyncio.run(worker_mod._outcome_of(w._perform(_claim(_spec([])))))
+    spec = _spec([])
+    paths.atomic_write(str(Path(w._dirs["render"], spec["delivery_id"] + ".json")),
+                       json.dumps(spec).encode())
+    out = asyncio.run(worker_mod._outcome_of(w._perform(_claim(spec))))
     assert out["result"] == "delivered"
     assert len(bot.wire.posts()) == posts and bot.wire.committed == 1
 
@@ -338,7 +342,10 @@ def test_card_create_retry_after_non_429_is_suppressed(tmp_path, faults,
                                                        posts):
     bot = WireBot(faults=faults)
     w, _ = _mk(tmp_path, bot)
-    out = asyncio.run(worker_mod._outcome_of(w._perform(_claim(_spec([])))))
+    spec = _spec([])
+    paths.atomic_write(str(Path(w._dirs["render"], spec["delivery_id"] + ".json")),
+                       json.dumps(spec).encode())
+    out = asyncio.run(worker_mod._outcome_of(w._perform(_claim(spec))))
     assert len(bot.wire.posts()) == posts
     assert out == {"result": "unknown", "error_code": SUPPRESSED}
 

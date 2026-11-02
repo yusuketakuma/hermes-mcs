@@ -425,9 +425,7 @@ def _record_executed(state: dict, command_id: str, result: str,
 
 def _restore_hold_active() -> bool:
     """A writer-hold marker, a pending restore consent or an incomplete restore."""
-    return bool(_restore_writer_hold_marker() is not None
-                or journal_store.load_state(STATE_PATH).get("restore_consent")
-                or (journal_store.load_state(STATE_PATH).get("applying") or {}).get("restore_incomplete"))
+    return _restore_writer_hold_marker() is not None
 
 
 def _freeze_schema_rollback(state: dict, entry: dict) -> bool:
@@ -1380,41 +1378,13 @@ def _pin_recovery_marker(expected: tuple[int, int]):
 
 
 def _awaiting_consent_marker() -> dict | None:
-    """notify_spool.restore_awaiting_consent, kept local: recover runs on
-    whatever tree HEAD is (a rolled-back prev may predate that helper),
-    and a failed import there would leave drainers down. Same fail-closed
-    reading: an awaiting_consent phase, or a marker present but
-    unreadable/unknown, holds."""
-    path = os.path.join(DATA, "restore_pending.json")
-    try:
-        data = journal_store.read_control_json(path)
-    except FileNotFoundError:
-        return {"unreadable": True} if os.path.lexists(path) else None
-    except (OSError, ValueError, RecursionError):
-        return {"unreadable": True}
-    if not isinstance(data, dict):
-        return {"unreadable": True}
-    if data.get("by") == "mcs_backup_restore":
-        # Adoption may resume writers while delivery remains quarantined.
-        # This canonical check is captured before any checkout rollback.
-        return notify_spool.restore_awaiting_consent(DATA)
-    if data.get("phase") == "awaiting_consent":
-        return data
-    if data.get("phase") == "restored" \
-            or ("phase" not in data and "restored_at" in data):
-        return None
-    return {"unreadable": True}
+    """Use the restore gate captured by the finite startup preload before rollback."""
+    return notify_spool.restore_awaiting_consent(DATA)
 
 
 def _restore_writer_hold_marker() -> dict | None:
     """Keep updater-owned unfinished restores frozen without revoking adoption."""
-    marker = _awaiting_consent_marker()
-    if marker is not None:
-        return marker
-    marker = notify_spool.restore_pending(DATA)
-    if marker is not None and marker.get("by") in ("mcs_update", "mcs_recover"):
-        return marker
-    return None
+    return notify_spool.restore_writer_hold(DATA)
 
 
 def _remove_marker() -> None:

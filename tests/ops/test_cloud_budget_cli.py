@@ -1,4 +1,4 @@
-"""cloud-llm budget writes the Anthropic cost caps into config.json (synthetic only)."""
+"""cloud-llm budget writes shared cloud cost caps into config.json (synthetic only)."""
 import hashlib
 import json
 from types import SimpleNamespace

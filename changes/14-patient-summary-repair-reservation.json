@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "患者背景の修復回数を課金予約と同時に確定",
+  "summary": "患者背景の要約を修復する回数の記録を、クラウドの課金予約と同じDB transactionで保存するようにしました。通信枠・予算・保存ロックなどの予約前の拒否では修復回数を消費せず、後で処理を再開できます。",
+  "upgrade": "追加操作は不要です。予約が確定した後の送信結果が不明な場合は消費済みの記録を保持し、同じ修復を再送しません。既存の修復・課金記録は保持します。",
+  "details": [
+    "既存のon_reserved_txを使い、原典と処理の所有権を同じ予約内で検証します。",
+    "修復回数の記録に課金予約IDと要求のhashを結び付けます。",
+    "推論エンジンの公開版1.0と内部版11、モデル、予算、品質検証の条件は維持します。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_refresh.py",
+    "tests/patients/test_patient_summary_quality.py",
+    "tests/patients/test_anthropic_context_refresh.py"
+  ]
+}

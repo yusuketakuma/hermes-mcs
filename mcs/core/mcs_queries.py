@@ -7,11 +7,12 @@ and — where the schema marks failures — not an error record. Both
 readers used to carry private copies of these predicates; this module
 keeps one definition so they cannot drift.
 
-Constants, SQL fragments, and row iterators only — the module holds no
-connection and does no I/O of its own (same contract as mcs_util).
+SQL fragments and bounded reads borrow the caller's connection. Read scopes
+hold no connection or memo after the caller's synchronous operation returns.
 """
 import json
 import sqlite3
+from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -27,6 +28,87 @@ UNKNOWN_TIME = -(2**63)
 _proof_read_active = ContextVar('mcs_proof_read_active', default=False)
 _INTERNAL_PROOF = '__mcs_internal_proof_v1'
 _INTERNAL_LEAF_CLAIMS = '__mcs_leaf_claims_v1'
+_message_reads = ContextVar('mcs_current_message_reads', default=None)
+_MESSAGE_CACHE_ENTRIES = 128
+_MESSAGE_CACHE_BYTES = 256 * 1024
+
+
+def _message_read_stamp(db):
+    cursor = db.execute('SELECT data_version,schema_version '
+                        'FROM pragma_data_version,pragma_schema_version')
+    try:
+        row = cursor.fetchone()
+        return (db.total_changes, db.in_transaction, row[0], row[1])
+    finally:
+        cursor.close()
+
+
+class _MessageReads:
+    def __init__(self, db):
+        self.db = db
+        self.stamp = _message_read_stamp(db)
+        self.cache = {}
+        self.bytes = 0
+
+    def clear(self):
+        self.db = None
+        self.stamp = None
+        self.cache.clear()
+        self.bytes = 0
+
+    def current(self):
+        if self.stamp is None:
+            return False
+        try:
+            stamp = _message_read_stamp(self.db)
+        except BaseException:
+            self.clear()
+            raise
+        if stamp != self.stamp:
+            # A caller write, rollback/new view or DDL ends memo use for this
+            # entire call. A later equal stamp never revives an older proof.
+            self.clear()
+            return False
+        return True
+
+    def remember(self, key, raw):
+        if raw is not None and type(raw) not in (str, bytes):
+            return
+        values = (*key[1], raw)
+        cost = sum(4 * len(value) if type(value) is str else len(value)
+                   if type(value) is bytes else 0 for value in values)
+        if len(self.cache) < _MESSAGE_CACHE_ENTRIES and self.bytes + cost <= _MESSAGE_CACHE_BYTES:
+            self.cache[key] = raw
+            self.bytes += cost
+
+
+@contextmanager
+def current_message_read_scope(db):
+    """Share current documents only within one borrowed, bounded read snapshot."""
+    if not isinstance(db, sqlite3.Connection) or _proof_read_active.get():
+        yield
+        return
+    # Leave a row pending even for an empty table. Closing this statement ends
+    # only our read anchor, never a caller transaction or progress handler.
+    anchor = db.execute('SELECT message_id FROM (SELECT message_id FROM messages LIMIT 1) '
+                        'UNION ALL SELECT NULL UNION ALL SELECT NULL')
+    try:
+        anchor.fetchone()
+        scope = _MessageReads(db)
+        token = _message_reads.set(scope)
+        try:
+            yield
+        finally:
+            scope.clear()
+            _message_reads.reset(token)
+    except BaseException:
+        try:
+            anchor.close()
+        except sqlite3.Error:
+            pass  # Preserve the original read/body failure.
+        raise
+    else:
+        anchor.close()
 
 
 def selected_artifact_proof_valid(db, artifact_id, *, inference_target=CURRENT_VERSION):
@@ -1063,19 +1145,50 @@ def current_message_extract(db, kind: str, mid: int) -> dict | None:
 
 
 def _current_message_document(db, params, *, facts):
-    db.execute('SAVEPOINT current_message_document')
+    scope = _message_reads.get()
+    if (scope is not None and scope.db is db and not _proof_read_active.get()
+            and ((facts and len(params) == 1 and type(params[0]) is int)
+                 or (not facts and len(params) == 2
+                     and type(params[0]) is str and type(params[1]) is int))
+            and scope.current()):
+        key = (facts, params)
+        try:
+            if key in scope.cache:
+                return _message_document(scope.cache[key])
+            raw = _current_message_content(db, params, facts=facts)
+            document = _message_document(raw)
+            if scope.current():
+                scope.remember(key, raw if document is not None else None)
+            return document
+        except BaseException:
+            scope.clear()
+            raise
     try:
-        row = db.execute(current_message_artifact_query(facts=facts, field='artifact_id'), params).fetchone()
-        if row is None or not selected_artifact_proof_valid(db, row[0]):
-            return None
-        selected = db.execute('SELECT content FROM artifacts WHERE artifact_id=?', (row[0],)).fetchone()
-        document = loads_dict(selected['content']) if selected else None
-        if document is not None:
-            document.pop(_INTERNAL_PROOF, None)
-            document.pop(_INTERNAL_LEAF_CLAIMS, None)
-        return document
-    finally:
-        db.execute('RELEASE current_message_document')
+        db.execute('SAVEPOINT current_message_document')
+        try:
+            return _message_document(_current_message_content(db, params, facts=facts))
+        finally:
+            db.execute('RELEASE current_message_document')
+    except BaseException:
+        if scope is not None and scope.db is db:
+            scope.clear()
+        raise
+
+
+def _current_message_content(db, params, *, facts):
+    row = db.execute(current_message_artifact_query(facts=facts, field='artifact_id'), params).fetchone()
+    if row is None or not selected_artifact_proof_valid(db, row[0]):
+        return None
+    selected = db.execute('SELECT content FROM artifacts WHERE artifact_id=?', (row[0],)).fetchone()
+    return selected['content'] if selected else None
+
+
+def _message_document(raw):
+    document = loads_dict(raw) if raw is not None else None
+    if document is not None:
+        document.pop(_INTERNAL_PROOF, None)
+        document.pop(_INTERNAL_LEAF_CLAIMS, None)
+    return document
 
 
 

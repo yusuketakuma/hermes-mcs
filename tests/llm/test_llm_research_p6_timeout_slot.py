@@ -149,19 +149,20 @@ def test_unpinned_request_skips_the_wait(turn):
 
 def test_admitted_chat_keeps_permit_unknown_after_confirmed_idle(turn, tmp_path, monkeypatch):
     import llm_admission as adm
+    monkeypatch.setattr(adm, "_proc_started", lambda pid: "proc:1")
+    monkeypatch.setattr(adm, "_pid_alive", lambda pid: True)
     path = str(tmp_path / "adm.db")
     monkeypatch.setenv("MCS_LLM_ADMISSION", path)
-    monkeypatch.setattr(local_llm, "_RECONCILED_AT", {})
     broker = local_llm._broker(path)
     broker.open_epoch(lambda: True)
     assert isinstance(broker, adm.Broker)
     send, state = _fake(turn, [False, False])
     err = {}
-    assert local_llm.admitted_chat("mcs.extract", "prompt", request_fn=send, error_out=err,
-                                   extra_payload={"id_slot": 1}) is None
+    result = local_llm.admitted_chat("mcs.extract", "prompt", request_fn=send, error_out=err,
+                                     extra_payload={"id_slot": 1})
+    assert result is None, json.dumps(result)
     assert err["slot_wait_confirmed"] == 1 and state["gets"] == 2
     assert broker._permit(1)["state"] == "unknown"
-    assert local_llm._RECONCILED_AT == {}
 
 
 def test_worker_restart_releases_the_turn(turn, tmp_path):

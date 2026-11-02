@@ -1,0 +1,15 @@
+{
+  "category": "fixed",
+  "title": "患者背景の属性と根拠引用の返却形式を明示",
+  "summary": "患者背景の再点検で、服薬管理者や支援方法などの属性を値と根拠引用付きで返す形式を明示しました。原文に明示された情報だけを採用し、引用内にない値は従来どおり拒否します。",
+  "upgrade": "通常の更新で適用されます。推論入力の変更は既存の契約hashで検出し、必要な再点検を通常処理で行います。推論エンジンv1.0・内部世代11・モデル・予算は維持します。",
+  "details": [
+    "点検の指示文を既存の計画モジュールへ移し、属性定義と同じ契約hashで管理する。",
+    "属性がない場合は空配列を返し、否定・予定・対象不明の条件を維持する。"
+  ],
+  "refs": [
+    "mcs/patients/patient_context_plan.py",
+    "mcs/patients/patient_context_refresh.py",
+    "tests/patients/test_context_refresh_prompt_input_equivalence.py"
+  ]
+}

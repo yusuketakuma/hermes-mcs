@@ -1,0 +1,12 @@
+{
+  "category": "changed",
+  "title": "解析再開時の重複した分割と読取りを削減",
+  "summary": "ローカル・クラウド解析の再開時に、同じ本文の分割計画と保存内容の検証を繰り返す処理を減らしました。処理担当を確保してから最新の保存状態を読み取り、区間ごとの分割計画と同一内容のhash計算を再利用します。",
+  "upgrade": "通常の更新で適用されます。推論エンジンv1.0・内部版11・分割境界・保存形式・モデルは変わりません。追加設定や過去結果の再解析は不要です。",
+  "details": [
+    "処理担当を確保できなかった候補のチェックポイント全文検証を省き、確保後の原典・所有権・競合確認を維持します。",
+    "原文の文字位置・根拠・分割親の検証を保ったまま、1回の保存状態読取りで本文の先頭分割と位置計算を共有します。",
+    "保存前後の確認に使う同じJSON文字列とhashを、内容が変わらない範囲だけで再利用します。"
+  ],
+  "refs": ["mcs/extract/llm/extract_llm.py", "tests/extract/test_checkpoint_read_efficiency.py", "tests/extract/test_chunk_dedup_growth.py", "tests/extract/test_checkpoint_commit_atomicity.py"]
+}

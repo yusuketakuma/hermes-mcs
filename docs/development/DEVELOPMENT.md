@@ -340,7 +340,7 @@ Hermes cronとは併用しません。以下のcron・wrapper配置先はHermes�
 モード選択と停止・再開は[独立モード](../guides/STANDALONE.md)を参照してください。
 
 - スケジューラ: hermes cron `MCS unread check`（`*/10 * * * *`,
-  `--no-agent` script `~/.hermes/scripts/mcs_check.sh`） — ログ `data/run.log`。
+  `--no-agent` script `~/.hermes/scripts/mcs_check.sh`） — ログ `data/mcs.log`。
   実行履歴・incident は `hermes cron runs` / `hermes cron incidents` に残る。
   MCSサーバーの負荷対策として、収集は24時間10分間隔に変更した。
   health watcher 自身は5分間隔でローカルの状態を確認し、
@@ -726,15 +726,17 @@ $PY mcs/views/mcs_view.py signals --project 123
   `request_overdue`/`request_aging`/`rx_period_expiry`/`rx_period_lapsed`
   を除外して型別件数。滞留行は open 3日超かつカードで一度も ack
   されていないシグナルキー（`STALE_ALERT_D`）を数える。
-- 緊急度: `clinical_urgency.message_urgency()` が唯一の判定 —
-  現行 extract_llm が `urgency:high` なら `llm`、`urgency:routine` なら
+- 緊急度: `clinical_urgency.message_urgency()` が表示用の判定を集約する。
+  現行 extract_llm の `urgency:high` は、根拠引用と本人・時点を照合し、
+  臨床的な緊急性を示す根拠が残る場合に `llm` とする。`urgency:routine` は
   `None`（本文側の LLM 判定が語彙ルールより優先）、`urgency:unclear`
   は棄権でありクリアランスではないため `rule` 評価へ落ちる
-  （extract_v1 が緊急とすれば `rule`、しなければ `None`）。ルール抽出
-  だけが緊急とし LLM 判定が無いときも `rule`。カードの
+  （extract_v1 の緊急候補も同じ根拠確認を通れば `rule`、通らなければ `None`）。
+  ルール抽出だけが緊急とし LLM 判定が無い場合も、この確認を通す。カードの
   `📋 構造化` には `🚨 緊急度高`（LLM 判定）/ `🚨`（ルール照合）で表示し、
-  テキスト通知の ⚠️ とシグナルの即時化も同じ判定を使う。ルール抽出は
-  キーワード照合のため「急変なし」のような否定表現でも立つことがある。
+  テキスト通知の ⚠️ とシグナルの即時化も同じ判定を使う。ルール候補は
+  本人・現在の文脈を照合し、否定・条件・仮定・過去などを除いてから表示する。
+  生の抽出flagだけで表示せず、語句に基づく候補判定を臨床判断の確定とは扱わない。
   extract v5 から `high` は本文引用の `urgency_evidence`（最大2件）を
   必須とし、定位できない `high` は `unclear` へ降格する。
   Jev監査の不一致（`urgency_qc_disagreement()`）は表示注記
@@ -779,7 +781,7 @@ $PY mcs/views/mcs_view.py signals --project 123
 
 カードの `誤りを報告` は preview → 本人確認を経て human command
 `ops.extract_feedback`（`message_id`・カードが表示した `artifact_id`・
-`field` = summary/urgency/meds/symptoms/requests/vitals/other・`reason`）を
+`field` = summary/urgency/meds/symptoms/requests/vitals/patient_context/labs/events/other・`reason`）を
 enqueue する。runner は対象が今もその投稿の現行 extract_llm のときだけ
 `extract_feedback_v1` artifact（message_id・artifact_id・hash・field・
 note・actor・at）を追記する（違えば `extraction_changed`）。

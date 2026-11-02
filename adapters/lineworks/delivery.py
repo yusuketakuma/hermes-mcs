@@ -225,20 +225,6 @@ class DeliveryWorker(BaseWorker):
     def _validate_spec(self, spec):
         cards.validate(spec)
 
-    def _verify_grant(self, claim, result):
-        return super()._verify_grant(claim, result) and self._sender.route_current(claim["spec"])
-
-    def _retry_gate(self, spec):
-        """Borrow worker authority and the runner's live spec before another write."""
-        async def allowed():
-            if not await self._send_allowed(spec):
-                return False
-            # The runner withdraws the spec when its source/card is revoked.
-            # Match the initial part gate after a cooldown as well.
-            return await asyncio.to_thread(os.path.isfile, os.path.join(
-                self._dirs["render"], spec["delivery_id"] + ".json"))
-        return allowed
-
     async def _perform(self, claim):
         spec = claim["spec"]
         if not self._ours(spec["delivery"]) or not self._sender.route_current(spec):

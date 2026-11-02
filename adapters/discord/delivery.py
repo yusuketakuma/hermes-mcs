@@ -34,6 +34,7 @@ _GUARD_MARK = "_mcs_single_post"
 # own sends (other tasks, default context) pass untouched
 _POSTS: contextvars.ContextVar[list[int | None] | None] = contextvars.ContextVar(
     "mcs_discord_single_post", default=None)
+_AUTHORITY = contextvars.ContextVar("mcs_discord_post_authority", default=None)
 
 class RetryPolicyUnknown(RuntimeError):
     """The bound client is not a verified discord.py — a create POST
@@ -50,12 +51,31 @@ class _StatusRecorder:
     the call's POST log once the response arrives (None if it never
     did — reset, timeout), so only a definitive 429 lets a retry through."""
 
-    def __init__(self, cm, posts, i):
-        self._cm, self._posts, self._i = cm, posts, i
+    def __init__(self, factory, posts, authority):
+        self._factory, self._posts, self._authority = factory, posts, authority
+        self._cm = None
 
     async def __aenter__(self):
+        if self._posts and self._posts[-1] != 429:
+            raise DiscordRetrySuppressed("discord.py retry of a create POST suppressed")
+        if self._authority is not None:
+            try:
+                allowed = await self._authority(retry=bool(self._posts))
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                allowed = False
+            if allowed is not True:
+                raise worker.SendNotAdmitted(self._posts[-1] if self._posts else None)
+        # The authority read can yield. Never let another POST in the same
+        # invocation turn a possibly committed result into a retry right.
+        if self._posts and self._posts[-1] != 429:
+            raise DiscordRetrySuppressed("discord.py retry of a create POST suppressed")
+        self._posts.append(None)
+        index = len(self._posts) - 1
+        self._cm = self._factory()
         resp = await self._cm.__aenter__()
-        self._posts[self._i] = getattr(resp, "status", None)
+        self._posts[index] = getattr(resp, "status", None)
         return resp
 
     async def __aexit__(self, *exc):
@@ -74,9 +94,8 @@ def _guarded(request):
         if posts and posts[-1] != 429:
             raise DiscordRetrySuppressed(
                 "discord.py retry of a create POST suppressed")
-        posts.append(None)
-        return _StatusRecorder(request(method, *args, **kwargs), posts,
-                               len(posts) - 1)
+        return _StatusRecorder(lambda: request(method, *args, **kwargs),
+                               posts, _AUTHORITY.get())
     setattr(guarded, _GUARD_MARK, True)
     return guarded
 
@@ -97,16 +116,18 @@ def single_post_ready(bot) -> bool:
     return True
 
 
-async def single_post(bot, factory):
+async def single_post(bot, factory, *, retry_allowed=None):
     """Await ``factory()`` allowing exactly one committable POST onto the
     wire — the SDK's in-call re-POST after a 429 goes out, after 5xx or
     ECONNRESET it raises DiscordRetrySuppressed before the session."""
     if not single_post_ready(bot):
         raise RetryPolicyUnknown("discord.py retry policy unverified")
     token = _POSTS.set([])
+    authority_token = _AUTHORITY.set(retry_allowed)
     try:
         return await factory()
     finally:
+        _AUTHORITY.reset(authority_token)
         _POSTS.reset(token)
 
 
@@ -229,7 +250,8 @@ class DeliveryWorker(worker.DeliveryWorker):
             return {"result": "delivered", "message_id": mid}
         sent = await single_post(           # create / notice
             self._bot, partial(channel.send, **cards.message_payload(spec),
-                               allowed_mentions=cards.no_pings()))
+                               allowed_mentions=cards.no_pings()),
+            retry_allowed=self._retry_gate(spec))
         return {"result": "delivered",
                 "message_id": str(sent.id)}
 
@@ -305,7 +327,8 @@ class DeliveryWorker(worker.DeliveryWorker):
             with io.BytesIO(blob) as source:
                 sent = await single_post(self._bot, partial(
                     cards.send_attachment, thread, source,
-                    part.get("name") or "file", **extra))
+                    part.get("name") or "file", **extra),
+                    retry_allowed=self._retry_gate(spec))
             rid = getattr(sent, "id", None)
             if not rid:
                 return {"result": "unknown",
@@ -347,7 +370,8 @@ class DeliveryWorker(worker.DeliveryWorker):
         sent = await single_post(
             self._bot, partial(thread.send, body,
                                allowed_mentions=cards.no_pings(),
-                               **({"view": view} if view is not None else {})))
+                               **({"view": view} if view is not None else {})),
+            retry_allowed=self._retry_gate(spec))
         rid = getattr(sent, "id", None)
         if not rid:
             # the wire call completed but carries no provable
@@ -370,7 +394,10 @@ class DeliveryWorker(worker.DeliveryWorker):
             channel = await self._channel(spec["delivery"]["channel_id"])
             await single_post(self._bot, partial(
                 channel.send, f"↳ スレッドに新しい返信: {head}\n{link}",
-                allowed_mentions=cards.no_pings()))
+                allowed_mentions=cards.no_pings()),
+                # This is already an additional post after a delivered body;
+                # withdrawal must also block its first SDK attempt.
+                retry_allowed=lambda **_kw: self._retry_gate(spec)())
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -398,7 +425,8 @@ class DeliveryWorker(worker.DeliveryWorker):
             msg = await _read(channel.fetch_message(int(ctx["card_message_id"])))
             try:
                 thread = await single_post(self._bot, partial(
-                    msg.create_thread, name=part["name"]))
+                    msg.create_thread, name=part["name"]),
+                    retry_allowed=self._retry_gate(spec))
             except Exception as create_exc:
                 # the goal may already hold — a thread bound under the
                 # card message by a crashed or older-generation worker

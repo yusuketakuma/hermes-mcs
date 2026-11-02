@@ -23,7 +23,6 @@ import fcntl
 import json
 import os
 import re
-import stat
 import sys
 import time
 
@@ -1124,11 +1123,7 @@ def main(argv: list | None = None) -> int:
     try:
         directory = os.path.join(args.home, "data")
         os.makedirs(directory, mode=0o700, exist_ok=True)
-        fd = os.open(os.path.join(directory, "health_watch.lock"),
-                     os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600)
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            os.close(fd)
-            return 1                     # a non-regular lock path is a state-store failure
+        fd = safe_io.open_lock_file(os.path.join(directory, "health_watch.lock"))
         with safe_io.fdopen_owned(fd, "w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return _watch(args, cfg)

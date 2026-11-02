@@ -112,7 +112,6 @@ def test_idle_observations_cannot_supply_retirement_evidence(monkeypatch):
 def test_admitted_chat_holds_queued_work_until_confirmed_retirement(tmp_path, monkeypatch):
     path = str(tmp_path / "adm2.db")
     monkeypatch.setenv("MCS_LLM_ADMISSION", path)
-    monkeypatch.setattr(local_llm, "_RECONCILED_AT", {})
     broker = local_llm._broker(path)
     broker.open_epoch(lambda: True)
     queued = [_unknown(broker, adm.UNKNOWN_HOLD_S + 5) for _ in range(broker.slots)]
@@ -126,8 +125,11 @@ def test_admitted_chat_holds_queued_work_until_confirmed_retirement(tmp_path, mo
         return {"text": "{}", "finish_reason": "stop", "usage": None, "status": 200}
 
     monkeypatch.setattr(local_llm, "chat", chat)
-    out = local_llm.admitted_chat("mcs.extract", "synthetic prompt")
-    assert out["admission"] == "class_full" and probes == [] and sends == []
+    monkeypatch.setattr(broker, "reconcile_unknown",
+                        lambda *_: pytest.fail("admission denial must not run read-only reconciliation"))
+    for _ in range(3):
+        out = local_llm.admitted_chat("mcs.extract", "synthetic prompt")
+        assert out["admission"] == "class_full" and probes == [] and sends == []
     assert local_llm.admission_status(path)["unresolved"] == broker.slots
     retired = tuple(queued)
     queued.clear()

@@ -68,6 +68,57 @@ def _req(action, **kw):
             "reason": "synthetic maintenance", **kw}
 
 
+@pytest.mark.parametrize("action", ["stop", "resume"])
+@pytest.mark.parametrize("witness", ["restored", "awaiting", "corrupt", "journal"])
+def test_control_restore_hold_precedes_writer_under_the_lock(world, monkeypatch, action, witness):
+    import ledger
+    import notify_spool
+    import update_journal
+    import writer_lock
+
+    root, path, _ = world
+    data = path.parent
+    marker = data / "restore_pending.json"
+    if witness == "journal":
+        state = update_journal.default_state()
+        state["restore_consent"] = {"report_id": "synthetic"}
+        (data / "update_state.json").write_text(json.dumps(state))
+    elif witness == "corrupt":
+        marker.write_text("{invalid")
+    else:
+        marker.write_text(json.dumps({"by": "mcs_update", "phase":
+                                     "restored" if witness == "restored" else "awaiting_consent"}))
+    before = path.read_bytes()
+    gate = notify_spool.restore_writer_hold
+    observed = []
+
+    def locked_gate(destination):
+        assert destination == str(data)
+        assert writer_lock.acquire_run_lock(str(data / "run.lock")) is None
+        observed.append(True)
+        return gate(destination)
+
+    monkeypatch.setattr(notify_spool, "restore_writer_hold", locked_gate)
+    monkeypatch.setattr(ledger, "Ledger", lambda *a, **k: pytest.fail("restore-held CLI opened a writer"))
+    assert mcs_setup.main(["cloud-llm", action, "--confirm-human", "--reason", "synthetic"]) == 1
+    assert observed == [True]
+    assert path.read_bytes() == before
+
+
+def test_control_allows_adopted_backup_writer_but_keeps_delivery_hold(world, monkeypatch):
+    import mcs_restore
+    import notify_spool
+
+    _, path, _ = world
+    marker = path.parent / "restore_pending.json"
+    marker.write_text(json.dumps({"by": "mcs_backup_restore", "phase": "awaiting_consent"}))
+    before = marker.read_bytes()
+    monkeypatch.setattr(mcs_restore, "writers_resumed", lambda destination: destination == str(path.parent))
+    assert mcs_setup.main(["cloud-llm", "stop", "--confirm-human", "--reason", "synthetic"]) == 0
+    assert notify_spool.restore_pending(str(path.parent)) is not None
+    assert marker.read_bytes() == before
+
+
 def test_plan_is_readonly_keyless_and_outputs_only_estimates(world):
     root, path, config = world
     before = hashlib.sha256(path.read_bytes()).hexdigest()

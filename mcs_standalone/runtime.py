@@ -84,8 +84,7 @@ def _try_lock(path, *, require_known=False):
     fd = None
     retained = False
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC
-                     | os.O_NONBLOCK, 0o600)
+        fd = safe_io.open_lock_file(path)
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
             raise OSError(errno.EPERM, "standalone_lock_invalid")
@@ -946,7 +945,11 @@ class Runtime:
             since = os.lstat(path).st_mtime
         except FileNotFoundError:
             self.marker = None
-            return False
+            try:
+                import notify_spool
+                return notify_spool.restore_writer_hold(str(self.data)) is not None
+            except Exception:
+                return True
         except OSError:
             since = now
         if self.marker is None:
@@ -1170,8 +1173,7 @@ async def serve(root, cfg, connector=None, *, restart_provision=None):
     if runtime.data.is_symlink() or runtime.data.stat().st_uid != os.getuid():
         raise config.ConfigError("standalone_data_directory_invalid")
     os.chmod(runtime.data, 0o700)
-    fd = os.open(runtime.data / "standalone.lock",
-                 os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    fd = safe_io.open_lock_file(runtime.data / "standalone.lock")
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode) or os.fstat(fd).st_uid != os.getuid():
             raise config.ConfigError("standalone_lock_invalid")

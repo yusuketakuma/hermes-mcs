@@ -1,0 +1,36 @@
+{
+  "category": "fixed",
+  "title": "復元中の書込み停止と制御ファイルの安全な読取りを統一",
+  "summary": "制御ファイルやロックがFIFOなどに置き換わると、導入・更新・復旧や監視が待ち続ける問題を修正します。復元マーカーが欠けても、更新記録に同意待ちや復元未完了が残る間は書込みを停止します。cross-list取得と独立動作の起動でも同じ停止条件を確認し、採用済みバックアップ復元のwriter再開と配送の保留を分けます。",
+  "upgrade": "既存の導入・更新手順で反映します。ソース変更だけでは配備済みの独立復旧ツールへ反映されません。同意待ち・破損・読取不能による保留は削除せず、復旧手順で確認してください。既存の人承認・receipt・取得範囲・モデル・抽出世代は変わりません。",
+  "details": [
+    "共有readerは制御ファイルの末端をO_NOFOLLOW・O_NONBLOCKで開き、regular fileと読取り上限を確認します。復元マーカーと配備済みplistは1MiB、更新journalは16MiB、repo_pathは64KiBを超える場合に読取不能として扱います。祖先ディレクトリのaliasは従来どおり利用でき、末端のsymlinkは拒否します。",
+    "run.lock・update.lock・health_watch.lock・standalone.lockは、FIFO等を待たずに拒否します。新規lockの0600と非待機flock、失敗時のFD閉鎖を維持します。",
+    "独立復旧ツールはcheckoutのmoduleをimportせず、同じ制約のreaderとlock処理を内部に保持します。切り離し起動する再起動処理にもreader本体を含め、更新後に旧treeへ戻った場合の依存を増やしません。",
+    "共有restore_writer_holdは、復元目撃に加えて更新journalのrestore_consent・applying.restore_incompleteを確認します。マーカー欠落・空の同意記録・破損journalも、書込み再開の根拠にはしません。updaterの互換入口は、起動時に読み込んだ共有gateへ委譲します。",
+    "バックアップ復元の採用済みreceiptがwriter再開を許可する場合は、ほかに保留がなければwriterだけを再開できます。配送の停止はrestore_pendingで別に維持し、採用を送信許可へ読み替えません。",
+    "cross-list取得はrun.lock取得後、AdapterとLedgerを開く前に共有gateを確認します。cloud stop/resumeとjob retryも、実際のCLI入口から同じ停止条件とlock保持を回帰で確認します。",
+    "独立動作は更新マーカーがなくても復元保留中にジョブを開始しません。直接sendも配送保留を確認して接続前に停止します。writer_lockの共通判定は更新・復元のどちらでも書込みを禁止し、判定不能な場合も再開しません。"
+  ],
+  "refs": [
+    "mcs/core/safe_io.py",
+    "mcs/core/writer_lock.py",
+    "mcs/notify/notify_spool.py",
+    "mcs/ops/update/update_journal.py",
+    "mcs/ops/mcs_update.py",
+    "mcs/ops/diagnostics/runtime_inspection.py",
+    "mcs/ops/services/service_management.py",
+    "mcs/ops/mcs_setup.py",
+    "mcs/ops/mcs_cli.py",
+    "deployment/recovery/mcs_recover.py",
+    "install.sh",
+    "mcs/ingest/health_watch.py",
+    "mcs/ingest/cross_lists.py",
+    "mcs_standalone/__main__.py",
+    "mcs_standalone/runtime.py",
+    "tests/core/test_control_lock_boundaries.py",
+    "tests/ops/test_restore_control_boundaries.py",
+    "tests/ops/test_independent_recovery_control_boundaries.py",
+    "tests/adapters/standalone/test_restore_startup_boundaries.py"
+  ]
+}

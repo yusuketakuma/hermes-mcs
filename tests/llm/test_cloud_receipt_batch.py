@@ -93,7 +93,7 @@ def test_batch_proof_tracks_its_borrowed_snapshot_and_next_read(tmp_path, now):
             cloud_policy._reservation_evidence_batch(db.db, ids)
 
 
-def test_batch_keeps_original_sqlite_error_when_savepoint_was_unwound(tmp_path, monkeypatch):
+def test_batch_keeps_original_sqlite_error_when_caller_rolls_back(tmp_path, monkeypatch):
     with closing(Ledger(str(tmp_path / 'synthetic.db'))) as db:
         def interrupted(connection, _ids):
             connection.rollback()
@@ -101,3 +101,29 @@ def test_batch_keeps_original_sqlite_error_when_savepoint_was_unwound(tmp_path, 
         monkeypatch.setattr(cloud_policy, '_reservation_evidence_batch_snapshot', interrupted)
         with pytest.raises(sqlite3.OperationalError, match='synthetic interruption'):
             cloud_policy._reservation_evidence_batch(db.db, [1])
+
+
+@pytest.mark.parametrize('borrowed', [False, True])
+def test_batch_persistent_cancel_preserves_caller_transaction_and_handler(tmp_path, monkeypatch, borrowed):
+    with closing(Ledger(str(tmp_path / 'synthetic.db'))) as ledger:
+        db = ledger.db
+        db.execute('CREATE TEMP TABLE synthetic_marker(value INTEGER)')
+        if borrowed:
+            db.execute('INSERT INTO synthetic_marker VALUES(7)')
+        def interrupted(connection, _ids):
+            connection.set_progress_handler(lambda: 1, 1)
+            return connection.execute('SELECT value FROM synthetic_marker').fetchall()
+        monkeypatch.setattr(cloud_policy, '_reservation_evidence_batch_snapshot', interrupted)
+        try:
+            with pytest.raises(sqlite3.OperationalError) as caught:
+                cloud_policy._reservation_evidence_batch(db, [1])
+            assert caught.value.sqlite_errorcode == sqlite3.SQLITE_INTERRUPT
+            assert db.in_transaction is borrowed
+            with pytest.raises(sqlite3.OperationalError):
+                db.execute('SELECT 1')
+        finally:
+            db.set_progress_handler(None, 0)
+        assert [r[0] for r in db.execute('SELECT value FROM synthetic_marker')] == ([7] if borrowed else [])
+        if borrowed:
+            db.rollback()
+            assert db.execute('SELECT COUNT(*) FROM synthetic_marker').fetchone()[0] == 0
