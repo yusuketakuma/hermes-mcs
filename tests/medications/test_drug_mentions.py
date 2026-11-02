@@ -205,3 +205,43 @@ def test_snapshot_validation_rejects_bad_structure_and_source(store, tmp_path, f
     else:
         snapshot["matches"][0]["unexpected"] = True
     assert not drug_mentions.validate(snapshot, body)
+
+
+@pytest.mark.parametrize("fault", ["candidate_removed", "count", "boundary", "empty", "truncated", "deadline"])
+def test_dictionary_snapshot_replay_rejects_self_consistent_forgery(store, tmp_path, monkeypatch, fault):
+    cfg = configured(store, tmp_path)
+    body = "本人は共通架空を服用。"
+    snapshot = drug_mentions.build(store.db, cfg, body, deadline=time.monotonic() + 10)
+    dictionary, state = drug_map.active_dictionary(store.db, cfg)
+    assert state == "active"
+    monkeypatch.setattr(drug_map, "active_dictionary", lambda *args: pytest.fail("unexpected dictionary read"))
+    assert drug_mentions.matches_snapshot(dictionary, snapshot, body, deadline=time.monotonic() + 10)
+    row = snapshot["matches"][0]
+    if fault == "candidate_removed":
+        row["candidates"].pop()
+        row["candidate_count"] = 1
+    elif fault == "count":
+        row["candidate_count"] = 3
+        row["candidates"].append({**row["candidates"][-1], "id": "fiction-i3"})
+    elif fault == "boundary":
+        row["span"][1] -= 1
+        row["surface"] = row["surface"][:-1]
+        for candidate in row["candidates"]:
+            candidate["matched_surface"] = row["surface"]
+    elif fault == "empty":
+        snapshot["matches"] = []
+    elif fault == "truncated":
+        snapshot["status"] = "partial"
+    deadline = time.monotonic() - 1 if fault == "deadline" else time.monotonic() + 10
+    assert drug_mentions.validate(snapshot, body)
+    assert not drug_mentions.matches_snapshot(dictionary, snapshot, body, deadline=deadline)
+
+
+def test_dictionary_snapshot_replay_rejects_unknown_dictionary_and_exhausted_scan(store, tmp_path, monkeypatch):
+    cfg = configured(store, tmp_path)
+    body = "本人は共通架空を服用。"
+    snapshot = drug_mentions.build(store.db, cfg, body, deadline=time.monotonic() + 10)
+    dictionary, _ = drug_map.active_dictionary(store.db, cfg)
+    assert not drug_mentions.matches_snapshot(None, snapshot, body, deadline=time.monotonic() + 10)
+    monkeypatch.setattr(drug_mentions, "MAX_ALIASES", 1)
+    assert not drug_mentions.matches_snapshot(dictionary, snapshot, body, deadline=time.monotonic() + 10)
