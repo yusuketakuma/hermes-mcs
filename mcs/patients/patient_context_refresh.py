@@ -1,6 +1,7 @@
 """患者コンテキストを原文の根拠から作り、調査の続きと公開条件を保持する。"""
 from contextlib import closing, contextmanager
 from datetime import datetime, timedelta
+import copy
 import hashlib
 import json
 import math
@@ -3385,11 +3386,52 @@ def _inference_ready(ledger, pid, cfg, *, deadline, complete=None, allow_depende
             db.rollback()
 
 
+def _completed_cloud_receipts(ledger, provider):
+    """Recheck the existing paid receipts before retaining or adopting a unit."""
+    import cloud_policy
+    reservations = provider.completed_reservations
+    wanted = {r["reservation_id"]: r for r in reservations}
+    rows = ledger.db.execute(
+        "SELECT artifact_id FROM artifacts WHERE kind='cloud_usage_reserve' AND "
+        "CASE WHEN json_valid(meta) THEN json_extract(meta,'$.reservation_id') END "
+        "IN (SELECT value FROM json_each(?))", (json.dumps(sorted(wanted)),)).fetchall()
+    evidence = cloud_policy._reservation_evidence_batch(ledger.db, [r[0] for r in rows])
+    if (not wanted or len(wanted) != len(reservations) or len(evidence) != len(wanted)
+            or {r["reservation"]["reservation_id"] for r in evidence.values()} != set(wanted)
+            or any(r["reservation"] != wanted[r["reservation"]["reservation_id"]]
+                   for r in evidence.values())):
+        raise ValueError("nightly_cloud_receipt_changed")
+    return evidence
+
+
 def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     """Advance one fair idle-lane unit, freezing inputs across inference and commit.
 
     ``complete(project_id)`` may add an extraction gate to the current
     post-level inference and acquisition evidence required for every patient."""
+    if ledger.db.in_transaction:
+        return {"status": "deferred", "done": 0, "reason": "transaction_active"}
+    unit = ledger.__dict__.pop("_patient_context_completed", None)
+    resumed = unit is not None
+    if unit is None:
+        unit = _run_due(ledger, cfg, deadline=deadline, admit=admit,
+                        complete=complete, local_admit=local_admit)
+    try:
+        outcome = unit.send((cfg, deadline, admit, complete)) if resumed else next(unit)
+    except StopIteration as finished:
+        return finished.value
+    except BaseException:
+        unit.close()
+        raise
+    # Only a completed paid A/B unit may yield. No TX, cursor, run lock,
+    # request slot or transport is held across this suspension. Ledger.close
+    # pops and closes this one unit without running any save/disposition code.
+    ledger.__dict__["_patient_context_completed"] = unit
+    return outcome
+
+
+def _run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
+    """Keep one completed unit's existing save path resumable within its deadline."""
     import extract_llm
     import cloud_inference
     import cloud_client
@@ -3838,10 +3880,49 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
     # the run lock for minutes, and dropping the result would send the
     # same prompt again on the next iteration.
     waited = 0
+    completed_receipts = None
+    completed_cfg = None
     while (fd := acquire_run_lock()) is None:
+        retainable = (lane in ("A", "B") and failure is None and deferred_reason is None
+                      and result is not None and provider is not None
+                      and bool(getattr(provider, "completed_reservations", ())))
+        if retainable and completed_receipts is None:
+            try:
+                completed_receipts = _completed_cloud_receipts(ledger, provider)
+            except ValueError:
+                return {"status": "source_changed", "done": 0}
+            completed_cfg = copy.deepcopy(cfg)
         # the cap, the unit deadline and a withdrawn
         # admission (updater, config, breaker, disk) all end the wait
         if waited >= 60 or time.monotonic() + COMMIT_MARGIN >= deadline or not admit():
+            if (retainable and waited >= 60 and time.monotonic() + COMMIT_MARGIN < deadline
+                    and admit()):
+                resume_cfg, resume_deadline, admit, complete = yield {
+                    "status": "deferred", "done": 0, "reason": "run_lock", "lock_wait_s": waited}
+                # A new tick grants time to save, never more time to keep this
+                # old response. Expiry drops only the in-memory body; its paid
+                # receipt remains and cannot authorize another POST.
+                deadline = min(deadline, resume_deadline)
+                if time.monotonic() + COMMIT_MARGIN >= deadline:
+                    return {"status": "deferred", "done": 0, "reason": "nightly_completed_expired"}
+                import notify_spool
+                if (not admit() or not extract_llm._writer_current(full=True)
+                        or not extract_llm._same_but_operating_limits(resume_cfg, completed_cfg)
+                        or notify_spool.restore_writer_hold(notify_spool.data_root(ledger)) is not None):
+                    return {"status": "source_changed", "done": 0}
+                try:
+                    provider.commit_guard()
+                    if _completed_cloud_receipts(ledger, provider) != completed_receipts:
+                        raise ValueError("nightly_cloud_receipt_changed")
+                except (cloud_inference.CloudFallback, ValueError):
+                    discard_if_changed()
+                    return {"status": "source_changed", "done": 0}
+                version = ledger.db.execute("PRAGMA data_version").fetchone()[0]
+                changes = ledger.db.total_changes
+                fresh = _snapshot(ledger.db, pid, cfg, hydrate=False)
+                scans_now = _scan_sig(ledger.db, pid)
+                waited = 0
+                continue
             discard_if_changed()
             return {"status": "deferred", "done": 0, "reason": "run_lock", "lock_wait_s": waited}
         time.sleep(1)
@@ -3893,12 +3974,26 @@ def run_due(ledger, cfg, *, deadline, admit, complete=None, local_admit=None):
                     ledger.db.rollback()
                     return {"status": "source_changed", "done": 0}
             if provider is not None:
+                if completed_receipts is not None:
+                    import notify_spool
+                    if (not extract_llm._writer_current(full=True)
+                            or notify_spool.restore_writer_hold(notify_spool.data_root(ledger)) is not None):
+                        ledger.db.rollback()
+                        return {"status": "source_changed", "done": 0}
                 try:
                     provider.commit_guard()
+                    if completed_receipts is not None:
+                        if _completed_cloud_receipts(ledger, provider) != completed_receipts:
+                            raise cloud_inference.CloudFallback("cloud_unit_changed")
                 except cloud_inference.CloudFallback:
                     ledger.db.rollback()
-                    provider.discard()
+                    if (completed_receipts is None or extract_llm._writer_current(full=True)
+                            and notify_spool.restore_writer_hold(notify_spool.data_root(ledger)) is None):
+                        provider.discard()
                     return {"status": "deferred", "done": 0}
+                except ValueError:
+                    ledger.db.rollback()
+                    return {"status": "source_changed", "done": 0}
             if ledger.db.execute("PRAGMA data_version").fetchone()[0] != version:
                 # An unrelated writer does not invalidate completed inference.
                 fresh = _snapshot(ledger.db, pid, cfg, hydrate=False)
