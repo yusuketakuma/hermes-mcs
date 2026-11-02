@@ -4,7 +4,7 @@
 needs: ~/.mcs/config.json, ~/.mcs/.env secrets, and the macOS Keychain
 entry the adapter reads at re-login (service 'mcs-adapter'). Existing values
 are merged, never silently overwritten. An interactive run offers recommended or detailed setup
-(sectioned, defaults shown, Enter keeps the current value); `--yes` runs flags only and `--set KEY=JSON` covers
+(sectioned, defaults shown, Enter keeps the current value); `--yes` skips prompts and `--set KEY=JSON` covers
 any key non-interactively. With notify.interactive="slack"/"discord",
 init also mirrors the plugin settings + bot token into hermes through
 the public `hermes [-p profile] config set` CLI — never hermes-agent
@@ -25,7 +25,8 @@ Exit 1 on any error so it can gate automation.
 Secrets are never accepted as argv flags (they would persist in shell
 history and `ps`). MCS / Jev and the existing Hermes integration keep
 their environment or interactive inputs. Standalone connector tokens
-use hidden prompts and private files; they are not inferred from the environment.
+use hidden prompts or explicitly named init environment inputs and private files.
+Runtime connectors read private JSON first, then the compatible private .env file.
 """
 from __future__ import annotations
 

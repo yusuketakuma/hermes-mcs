@@ -1,5 +1,5 @@
 """mcs_standalone without SDKs: the same Supervisor settings and /mcs
-context Hermes provides, tokens only from ~/.mcs/.env, and the send
+context Hermes provides, private JSON tokens before the compatible .env file, and the send
 CLI's exit-code contract."""
 import threading
 
