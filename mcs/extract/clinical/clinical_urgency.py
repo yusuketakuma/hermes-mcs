@@ -46,11 +46,14 @@ _URGENT_INACTIVE = re.compile(
 
 _CLINICAL_REASON_CUE = re.compile(r"救急(?:搬送|受診)|搬送|急変|意識|反応|呼吸|SpO2|血圧|体温|発熱|高熱|疼痛|痛み|[胸腹頭背腰]痛|苦し|出血|転倒|死亡|逝去|心肺|酸素|けいれん|痙攣|脱水|嘔吐|吐血|血尿|冷汗|(?:Cr|eGFR|K|Na|血糖|BP|BS|Glu)\s*\d", re.I)
 # An absent response to a call or stimulus is the acute sign itself, not a
-# symptom denial — the stimulus word must sit in the same clause before the
-# negated 「反応」 (「呼びかけに反応がない」), so 「薬剤への反応なし」 or a
-# chat-reply denial still reads as an ordinary denial.
+# symptom denial — the stimulus word must own the negated 「反応」 directly
+# (「呼びかけに反応がない」). An intervening object (「声かけをしたが、
+# 薬剤への反応なし」) or a chat-reply denial still reads as ordinary denial.
 _RESPONSE_ABSENCE_STIMULUS = re.compile(
     r"呼びかけ|呼び掛け|呼び出し|声かけ|声掛け|問いかけ|問い掛け|刺激|揺さぶり")
+_RESPONSE_ABSENCE_TARGET = re.compile(
+    _RESPONSE_ABSENCE_STIMULUS.pattern
+    + r"(?:に|へ|に対して?|を|ても|て|で|でも)?$")
 _CLAUSE_BREAK_CHARS = "。！？!?;；\n"
 
 
@@ -69,7 +72,7 @@ def clinical_urgency_quote(quote, *, symptom=None):
             clause_start = max((quote.rfind(c, 0, match.start()) for c in _CLAUSE_BREAK_CHARS),
                                default=-1) + 1
             if (match[0] == "反応"
-                    and _RESPONSE_ABSENCE_STIMULUS.search(quote[clause_start:match.start()])):
+                    and _RESPONSE_ABSENCE_TARGET.search(quote[clause_start:match.start()])):
                 return True
             continue
         return True
@@ -95,7 +98,8 @@ def patient_clinical_quotes(body, *, patient_name=None):
         # into a clinical emergency. Cross-sentence linkage requires an
         # explicit acute event, not a new numeric severity heuristic.
         if not re.search(r"急変|救急(?:搬送|受診)|意識(?:を失|がない|消失|障害|低下)|呼吸(?:がない|困難|停止)|心肺停止|(?:"
-                         + _RESPONSE_ABSENCE_STIMULUS.pattern + r")[^。]*反応", clause):
+                         + _RESPONSE_ABSENCE_STIMULUS.pattern
+                         + r")(?:に|へ|に対して?|を|ても|て|で|でも)?反応", clause):
             continue
         if not clinical_urgency_quote(clause):
             continue

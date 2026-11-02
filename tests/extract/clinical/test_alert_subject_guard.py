@@ -137,6 +137,16 @@ def test_rule_alerts_use_the_same_scoped_predicate(body, high):
     assert (extract.extract_message(body, "2026-10-07").get("urgency") == "high") is high
 
 
+@pytest.mark.parametrize("body", [
+    # A stimulus word elsewhere in the clause must not bind an unrelated
+    # negated 反応 (medication response, chat reply) into an acute quote.
+    "本人は声かけをしたが、薬剤への反応はありません。至急対応してください。",
+    "本人に声かけした後、外用薬への反応はありません。至急対応してください。",
+])
+def test_unrelated_response_denials_add_no_clinical_quote(body):
+    assert clinical_urgency.patient_clinical_quotes(body) == []
+
+
 def test_absent_response_to_call_keeps_llm_high_with_original_quote(tmp_path):
     db = _db(tmp_path, ())
     try:
@@ -149,6 +159,24 @@ def test_absent_response_to_call_keeps_llm_high_with_original_quote(tmp_path):
         details = clinical_urgency.message_urgency_details(db.db, 1)
         assert details["source"] == "llm" and details["subject"] == "patient"
         assert details["reasons"] == ["呼びかけに反応がありません"]
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize("body,quote", [
+    ("本人は声かけをしたが、薬剤への反応はありません。", "薬剤への反応はありません"),
+    ("本人に声かけした後、外用薬への反応はありません。", "外用薬への反応はありません"),
+])
+def test_unrelated_response_denials_do_not_keep_llm_high(tmp_path, body, quote):
+    db = _db(tmp_path, ())
+    try:
+        from semantic_testkit import _message
+        db.save_messages([_message(1, body=body)], project_id=1)
+        _artifact(db, "extract_llm", 1,
+                  {"urgency": "high", "urgency_evidence": [quote]},
+                  {VERSION_KEY: CURRENT_VERSION, "hash": _hash_of(db, 1)})
+        details = clinical_urgency.message_urgency_details(db.db, 1)
+        assert details["held"] and details["verdict"] == "unclear"
     finally:
         db.close()
 
