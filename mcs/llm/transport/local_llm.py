@@ -415,7 +415,7 @@ def admitted_probe_format(client_route: str, endpoint: str, model: str,
     broker = _broker(broker_path)
     cls = broker.routes.get(client_route)
     if cls is None:
-        return "plain"
+        return None   # unregistered route: nothing sent — unobserved, not a plain verdict
     _validate_chat_args('Reply with {"ok": true}', endpoint,
                         kw.get("timeout", 10), 20, kw.get("deadline"))
     acq = broker.acquire(client_route, cls)

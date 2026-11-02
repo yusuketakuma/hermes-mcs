@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "未登録routeの形式probeが偽の「plain判定」としてキャッシュされる問題を修正",
+  "summary": "共有brokerに未登録のrouteからの形式確認を、送信せずに形式非対応と誤判定していた問題を修正します。形式を確認できなかった場合として扱い、誤判定を新たにキャッシュしません。",
+  "upgrade": "更新時は保留済み推論の再評価と候補承認の状態を確認してください。既存の形式キャッシュは変更しません。",
+  "details": [
+    "admitted_probe_formatが未登録route（routesに無いclient_route）でNoneを返す。拒否・保留・送信前期限切れと同じ未観測扱いで、偽のplain判定はキャッシュされない。",
+    "送信されるprobe要求・permitの作成は従来どおり一切行われない（_validate_chat_argsより前で返る）。"
+  ],
+  "refs": [
+    "mcs/llm/transport/local_llm.py",
+    "tests/llm/test_llm_admission.py"
+  ]
+}

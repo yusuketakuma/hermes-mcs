@@ -412,6 +412,23 @@ def test_admitted_chat_unknown_client_fails_closed(admitted_env):
     assert calls == []          # the request never fired
 
 
+def test_admitted_probe_unknown_client_is_unobserved_not_plain(admitted_env):
+    import local_llm
+    calls = []
+
+    def fake(*a):
+        calls.append(a)
+        return 200, {}, b"{}"
+
+    mode = local_llm.admitted_probe_format(
+        "rogue.route", local_llm.ENDPOINT, "m", None,
+        request_fn=fake)
+    assert mode is None         # unobserved probe — never a cached plain verdict
+    assert calls == []
+    b = _live_broker(admitted_env)
+    assert b.db.execute("SELECT COUNT(*) AS n FROM permits").fetchone()["n"] == 0
+
+
 def test_admitted_chat_held_when_rt_occupies(admitted_env):
     import local_llm
     b = _live_broker(admitted_env)
