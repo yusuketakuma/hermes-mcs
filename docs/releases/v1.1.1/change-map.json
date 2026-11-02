@@ -1,10 +1,10 @@
 {
-  "status": "unpublished preparation; performance criterion remains unmet; no main merge or deployment",
+  "status": "unpublished locally accepted candidate; main integration and production application pending",
   "baseline": {
     "previous_release": "v1.1.0",
     "production_sha": "2b3ecd02b1412868eb2fb92d3124345dd3d606e6"
   },
-  "fragment_count": 36,
+  "fragment_count": 38,
   "comparison_rows": 3,
   "technical_catalog": "CHANGELOG.md 1.1.1 details",
   "records": [
@@ -147,6 +147,12 @@
       "sha256": "1e6252b3f9a4d28068626cb78bc910ea6fde9f8b2b221aa1144b7c9368075c20"
     },
     {
+      "path": "changes/archive/1.1.1/notification-dispatch-groups.json",
+      "id": "notification-dispatch-groups",
+      "title": "新着通知の生成と公開記録を小単位に集約",
+      "sha256": "086b0987fd903ee6e7b35c5b0a8c49f5b09f481e5d7b9ee0cfb178081dbfaa23"
+    },
+    {
       "path": "changes/archive/1.1.1/notification-part-plan-health-20261101.json",
       "id": "notification-part-plan-health-20261101",
       "title": "通知部品の未完了集計に、配送計画の新旧による内訳 by_plan を追加",
@@ -163,6 +169,12 @@
       "id": "notification-performance-scoped-reads",
       "title": "通知作成時の重複した読取りを削減",
       "sha256": "f7bbb5586559ce7b81f15d46b359b800779a82d540792f196d75dff1e3162432"
+    },
+    {
+      "path": "changes/archive/1.1.1/notification-transaction-groups.json",
+      "id": "notification-transaction-groups",
+      "title": "通知の送信許可と配信結果を小単位でまとめて記録",
+      "sha256": "29977e68e4ec2e2a3a105cb54e9eb16c9ab86c6bd0ce9701d4455c42eea1e8cd"
     },
     {
       "path": "changes/archive/1.1.1/patient-context-grounded-detail-prompt.json",

@@ -4,8 +4,8 @@
   "renderer": "macOS qlmanage -t -s 1000 on 1000x1000 wrapper, drawing translated x=305; magick crop 390x940+305+0 +repage -strip",
   "comparison": "No before/after comparison. Current development implementation only.",
   "source_checkout": {
-    "head": "21b96ff28bfb559f8bee5ec4fae0069b34ff7432",
-    "status": "development working tree; evidence hashes below fix the inspected bytes"
+    "head": "a910c7ee3d427e9dacdfce77e743257ec93dbd9c",
+    "status": "committed implementation; release metadata and deployment tracked separately"
   },
   "evidence": [
     {
@@ -38,7 +38,7 @@
     },
     {
       "path": "mcs/notify/notify_transport.py",
-      "sha256": "ebb57313705ed0486e2930285f21a0f726e223a7e3050b6412dcf193b96c4622"
+      "sha256": "0c68f2f41982c1ae8d00e99189db5b79af81e5708739e4999d5a8abc2c57a032"
     },
     {
       "path": "docs/development/LLM_RUNTIME.md",
