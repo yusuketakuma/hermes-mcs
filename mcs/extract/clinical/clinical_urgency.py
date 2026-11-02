@@ -51,9 +51,10 @@ _CLINICAL_REASON_CUE = re.compile(r"救急(?:搬送|受診)|搬送|急変|意識
 # 薬剤への反応なし」) or a chat-reply denial still reads as ordinary denial.
 _RESPONSE_ABSENCE_STIMULUS = re.compile(
     r"呼びかけ|呼び掛け|呼び出し|声かけ|声掛け|問いかけ|問い掛け|刺激|揺さぶり")
+_RESPONSE_ABSENCE_LINK = r"(?:に|へ|に対して?|に対する|を|ても|て|で|でも)?"
 _RESPONSE_ABSENCE_TARGET = re.compile(
-    _RESPONSE_ABSENCE_STIMULUS.pattern
-    + r"(?:に|へ|に対して?|を|ても|て|で|でも)?$")
+    r"(?:" + _RESPONSE_ABSENCE_STIMULUS.pattern + r")"
+    + _RESPONSE_ABSENCE_LINK + r"$")
 _CLAUSE_BREAK_CHARS = "。！？!?;；\n"
 
 
@@ -98,8 +99,8 @@ def patient_clinical_quotes(body, *, patient_name=None):
         # into a clinical emergency. Cross-sentence linkage requires an
         # explicit acute event, not a new numeric severity heuristic.
         if not re.search(r"急変|救急(?:搬送|受診)|意識(?:を失|がない|消失|障害|低下)|呼吸(?:がない|困難|停止)|心肺停止|(?:"
-                         + _RESPONSE_ABSENCE_STIMULUS.pattern
-                         + r")(?:に|へ|に対して?|を|ても|て|で|でも)?反応", clause):
+                         + _RESPONSE_ABSENCE_STIMULUS.pattern + r")"
+                         + _RESPONSE_ABSENCE_LINK + r"反応", clause):
             continue
         if not clinical_urgency_quote(clause):
             continue

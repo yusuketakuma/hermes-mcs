@@ -164,8 +164,12 @@ def test_absent_response_to_call_keeps_llm_high_with_original_quote(tmp_path):
 
 
 @pytest.mark.parametrize("body,quote", [
-    ("本人は声かけをしたが、薬剤への反応はありません。", "薬剤への反応はありません"),
-    ("本人に声かけした後、外用薬への反応はありません。", "外用薬への反応はありません"),
+    # Full-source quotes as the LLM would emit them — a trimmed quote can
+    # hide a stimulus binding that only holds inside the original text.
+    ("本人は声かけをしたが、薬剤への反応はありません。",
+     "本人は声かけをしたが、薬剤への反応はありません"),
+    ("本人に声かけした後、外用薬への反応はありません。",
+     "本人に声かけした後、外用薬への反応はありません"),
 ])
 def test_unrelated_response_denials_do_not_keep_llm_high(tmp_path, body, quote):
     db = _db(tmp_path, ())
