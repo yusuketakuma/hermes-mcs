@@ -13,6 +13,7 @@ import json
 import re
 import sqlite3
 import time
+import mcs_queries
 
 from stamp_read import reaction_actor_summary
 from mcs_queries import EXTRACT_FEEDBACK_KIND, JST, feedback_current
@@ -925,6 +926,15 @@ def card_body_text(db, card, man, max_chars=BODY_MAX_CHARS,
 
 
 def card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=None,
+                 _provider_version=4) -> dict:
+    """Build a deterministic card display on one bounded current-document snapshot."""
+    with mcs_queries.current_message_read_scope(db):
+        return _card_content(db, card, cfg=cfg, waiting=waiting,
+                             visible_providers=visible_providers,
+                             _provider_version=_provider_version)
+
+
+def _card_content(db, card, *, cfg=None, waiting=frozenset(), visible_providers=None,
                  _provider_version=4) -> dict:
     """The deterministic display model for a card at its current page:
     containers + footer + shown-set + pages. Tokens/buttons are added
