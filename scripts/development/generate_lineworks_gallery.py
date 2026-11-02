@@ -102,7 +102,8 @@ def delivery():
     # Layout 3 separates the header and original; later header updates reuse the original.
     y = s.block(610, 286, [(f"↳ 山田 花子 · 10-01 09:40 {SENDER}", INK, True),
                           ("・次回訪問時に残薬を確認してほしいとの連絡", INK, False),
-                          ("スタンプ 👀2 🙆1 · 投稿時点", MUTED, False)])
+                          ("スタンプ 👀2 🙆1 · 投稿時点", MUTED, False),
+                          (RULE, MUTED, False)])
     y = s.block(610, y + 14, [(BODY, INK, False)])
     s.rect(610, y + 14, 422, 74, "#fff", 9, "#d5e1e5")
     s.text(626, y + 43, "添付ファイル", 17, INK, True)
@@ -111,6 +112,7 @@ def delivery():
     y = s.block(610, y + 143, [(f"↳ 更新 山田 花子 · 10-01 09:40 {SENDER}", INK, True),
                               ("・次回訪問時に残薬を確認してほしいとの連絡", INK, False),
                               ("スタンプ 👀3 🙆1 · 投稿時点", MUTED, False),
+                              (RULE, MUTED, False),
                               ("（本文は変更なし）", MUTED, False)])
     s.paragraph(588, y + 35, "この更新では原文・添付・カードを再投稿しません。", 468, 15, GREEN)
     return s.finish()

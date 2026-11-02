@@ -17,16 +17,14 @@
   <text x="92" y="156" font-size="11" fill="#b5bac1">🆕 返信+1</text>
   <line x1="92" y1="168" x2="750" y2="168" stroke="#4e5058" stroke-width="1"/>
   <text x="92" y="189" font-size="12" fill="#dbdee1" font-weight="bold">10-01 09:40 佐藤さん（訪問看護・あおぞら）</text>
-  <text x="92" y="208" font-size="11" fill="#7fc8a9" font-weight="bold">📋 要約</text>
-  <text x="92" y="226" font-size="11" fill="#dbdee1">・次回訪問時に残薬を確認してほしいとの連絡</text>
-  <text x="92" y="244" font-size="11" fill="#dbdee1">・要点: 残薬の確認 / 服薬カレンダーを共有</text>
-  <text x="92" y="262" font-size="11" fill="#dbdee1">・区分: 依頼・添付</text>
-  <text x="92" y="280" font-size="11" fill="#dbdee1">・依頼: 確認依頼:次回訪問時に残薬を確認(期限:次回訪問時)</text>
+  <text x="92" y="208" font-size="11" fill="#dbdee1">・次回訪問時に残薬を確認してほしいとの連絡</text>
+  <text x="92" y="226" font-size="11" fill="#dbdee1">・要点: 残薬の確認 / 服薬カレンダーを共有</text>
+  <text x="92" y="244" font-size="11" fill="#dbdee1">・区分: 依頼・添付</text>
+  <text x="92" y="262" font-size="11" fill="#dbdee1">・依頼: 確認依頼:次回訪問時に残薬を確認(期限:次回訪問時)</text>
   <line x1="92" y1="292" x2="750" y2="292" stroke="#4e5058" stroke-width="1"/>
   <text x="92" y="313" font-size="12" fill="#dbdee1" font-weight="bold">10-01 10:05 鈴木さん（ケアマネ・ひなた）</text>
-  <text x="92" y="332" font-size="11" fill="#7fc8a9" font-weight="bold">📋 要約</text>
-  <text x="92" y="350" font-size="11" fill="#dbdee1">・確認結果を担当者会議で共有してほしいとの連絡</text>
-  <text x="92" y="368" font-size="11" fill="#dbdee1">・区分: 連絡</text>
+  <text x="92" y="332" font-size="11" fill="#dbdee1">・確認結果を担当者会議で共有してほしいとの連絡</text>
+  <text x="92" y="350" font-size="11" fill="#dbdee1">・区分: 連絡</text>
   <line x1="92" y1="380" x2="750" y2="380" stroke="#4e5058" stroke-width="1"/>
   <text x="92" y="401" font-size="11" fill="#b5bac1">👤 担当: 田中 · ✅ 確認: 田中</text>
   <text x="92" y="419" font-size="11" fill="#b5bac1">📝 タスク 1件 · スタンプ 👀5 🙆2 · 自分 2投稿</text>
@@ -62,7 +60,7 @@
   <text x="40" y="615" font-size="11" fill="#b5bac1">概要 — 患者名・施設・起点日・緊急度、投稿数・添付・自分宛て・新しい返信</text>
   <circle cx="24" cy="631" r="8" fill="#5865f2"/>
   <text x="24" y="635" font-size="9" fill="#fff" text-anchor="middle">2</text>
-  <text x="40" y="635" font-size="11" fill="#b5bac1">投稿ごとの要約 — 送信者行と 📋 要約（Separator で投稿ごとに分かれる）</text>
+  <text x="40" y="635" font-size="11" fill="#b5bac1">投稿ごとの要約 — 送信者行と要約（区切り線で投稿ごとに分かれる）</text>
   <circle cx="24" cy="651" r="8" fill="#5865f2"/>
   <text x="24" y="655" font-size="9" fill="#fff" text-anchor="middle">3</text>
   <text x="40" y="655" font-size="11" fill="#b5bac1">状態 — 担当・確認・タスク件数・スタンプ</text>
