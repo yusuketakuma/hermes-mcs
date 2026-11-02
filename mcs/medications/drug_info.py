@@ -2,8 +2,7 @@
 """公開医薬品情報（PMDA添付文書・Mindsガイドライン・公式マスター一覧）を同梱マスター起点で照会する。
 
 Web access uses the operator's local free TinyFish gateway (loopback ``/call``
-with its local bearer token), or the fixed anonymous free Exa MCP endpoint only
-when that token file does not exist. Both use ``bounded_http``: no proxy,
+with its local bearer token). It uses ``bounded_http``: no proxy,
 no redirect, bounded size and time. Only names that exactly match the bundled
 public MHLW master, and general disease keywords, are ever sent. Patient
 messages, attributes, the ledger and private dictionaries are never read or
@@ -96,14 +95,12 @@ def _token():
 
 
 def call(name, arguments, timeout=75.0, deadline=None):
-    """Request public reference data through the configured gateway or absent-token fallback.
+    """Request public reference data through the configured gateway.
 
     ``deadline`` is a time.monotonic() bound: no request starts at or after it."""
     import bounded_http
     if deadline is not None and deadline - time.monotonic() <= 0:
         raise DrugInfoError("budget_exhausted")
-    if _gateway_absent():
-        return _exa_call(name, arguments, deadline, timeout)
     token = _token()
     try:
         status, _headers, raw = _request(bounded_http, name, arguments, timeout, token, deadline)
@@ -126,17 +123,6 @@ def _request(bounded_http, name, arguments, timeout, token, deadline=None):
     return bounded_http.bounded_http_request(
         GATEWAY_URL, "POST", {"name": name, "arguments": arguments}, timeout,
         api_key=token, deadline=deadline, allowed_endpoints=(GATEWAY_URL,))
-
-
-def _gateway_absent():
-    # lstat keeps dangling links and unreadable/invalid token files on the refusal path.
-    try:
-        TOKEN_PATH.lstat()
-    except FileNotFoundError:
-        return True
-    except OSError:
-        return False
-    return False
 
 
 def _exa_text(tool, arguments, deadline=None, timeout=30.0):

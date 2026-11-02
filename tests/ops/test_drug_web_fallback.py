@@ -13,7 +13,10 @@ def mcp(tmp_path, monkeypatch):
     monkeypatch.setattr(drug_info.time, "monotonic", lambda: 100.0)
     calls = []
 
-    def install(text="Title: 架空\nURL: https://www.pmda.go.jp/example", *, status=200, envelope=None, sse=False):
+    def install(text="Title: 架空\nURL: https://www.pmda.go.jp/example", *, status=200, envelope=None, sse=False,
+                legacy=True):
+        if legacy:
+            monkeypatch.setattr(drug_info, "call", drug_info._exa_call)
         answer = envelope if envelope is not None else {
             "jsonrpc": "2.0", "id": 1,
             "result": {"content": [{"type": "text", "text": text}]}}
@@ -31,7 +34,7 @@ def mcp(tmp_path, monkeypatch):
     return install
 
 
-def test_absent_token_uses_only_fixed_anonymous_search_and_filters_domain(mcp):
+def test_legacy_search_parser_filters_domain(mcp):
     calls = mcp("Title: 架空\nURL: https://www.pmda.go.jp/example\n---\n"
                 "Title: 外部\nURL: https://example.org/private\n---\n"
                 "Title: 偽装\nURL: https://pmda.go.jp.evil.example/x")
@@ -42,6 +45,17 @@ def test_absent_token_uses_only_fixed_anonymous_search_and_filters_domain(mcp):
     assert body == {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
         "name": "web_search_exa", "arguments": {"query": "site:pmda.go.jp 架空 添付文書", "numResults": 5}}}
     assert timeout == 30.0 and deadline == 175.0
+
+
+def test_absent_token_stops_without_external_request(mcp, monkeypatch):
+    calls = mcp(legacy=False)
+    gateway_calls = []
+    monkeypatch.setattr(drug_info, "_request", lambda *a, **k: gateway_calls.append((a, k)))
+    for action in (lambda: drug_info.search("架空", drug_info.PMDA),
+                   lambda: drug_info.fetch_page("https://www.pmda.go.jp/example")):
+        with pytest.raises(drug_info.DrugInfoError, match="^gateway_unconfigured$"):
+            action()
+    assert calls == [] and gateway_calls == []
 
 
 def test_sse_fetch_retains_source_text_and_deadline(mcp):
@@ -57,7 +71,7 @@ def test_sse_fetch_retains_source_text_and_deadline(mcp):
 
 @pytest.mark.parametrize("case", ["symlink", "directory", "loose", "invalid"])
 def test_existing_invalid_token_never_switches(mcp, tmp_path, case):
-    calls = mcp()
+    calls = mcp(legacy=False)
     token = drug_info.TOKEN_PATH
     if case == "symlink":
         token.symlink_to(tmp_path / "absent-target")
@@ -73,7 +87,7 @@ def test_existing_invalid_token_never_switches(mcp, tmp_path, case):
 
 @pytest.mark.parametrize("failure", ["unauthorized", "shared_free_quota_exhausted", "gateway_unavailable"])
 def test_configured_gateway_failures_never_switch(mcp, monkeypatch, failure):
-    calls = mcp()
+    calls = mcp(legacy=False)
     token = drug_info.TOKEN_PATH
     token.write_text("A" * 64)
     token.chmod(0o600)
@@ -135,7 +149,7 @@ def test_fresh_watch_requests_do_not_claim_unsupported_freshness(mcp):
 
 
 def test_elapsed_budget_starts_neither_transport(mcp, monkeypatch):
-    calls = mcp()
+    calls = mcp(legacy=False)
     monkeypatch.setattr(drug_info.time, "monotonic", lambda: 100.0)
     with pytest.raises(drug_info.DrugInfoError, match="^budget_exhausted$"):
         drug_info.call("search", {}, deadline=99.0)
