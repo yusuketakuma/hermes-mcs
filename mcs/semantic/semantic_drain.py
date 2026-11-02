@@ -1195,7 +1195,8 @@ def _prefiltered(ledger, mid) -> bool:
 
 def _partial_assessment(answers, scfg):
     """Validate and reduce previously answered proposition chunks to codes."""
-    if not isinstance(answers, dict) or set(answers) - set(jev.PROPOSITIONS):
+    if (not isinstance(answers, dict)
+            or set(answers) - set(jev.active_propositions(scfg))):
         raise ValueError("semantic_partial_assessment_invalid")
     out = {}
     for name, answer in answers.items():
@@ -1205,6 +1206,53 @@ def _partial_assessment(answers, scfg):
         out[name] = {"noul": value, "verdict": jev.verdict_for(
             value, scfg["match_threshold"], scfg["nomatch_threshold"])}
     return out
+
+
+def proposition_quality_report(ledger, project_id: int, scfg: dict) -> dict:
+    """Per-proposition noul/verdict distribution over current assessment rows.
+
+    Read-only aggregation for threshold/registry tuning: only each
+    message's newest COMPLETE row whose verdict set matches the ACTIVE
+    proposition set contributes, so a verdict written under a different
+    enabled set counts under "superseded" instead of skewing a prop."""
+    active = jev.active_propositions(scfg)
+    latest, superseded = {}, 0
+    for stored in ledger.db.execute(
+            'SELECT message_id,content,meta FROM artifacts WHERE kind=? AND project_id=? '
+            'ORDER BY artifact_id', (KIND_ASSESS, project_id)):
+        content, meta = strict_json(stored['content']), strict_json(stored['meta'])
+        if (not isinstance(content, dict) or not isinstance(meta, dict)
+                or meta.get('fact_id') is not None):
+            continue
+        mid, verdicts = stored['message_id'], content.get('verdicts')
+        if meta.get('technical_status') != 'complete' or meta.get('invalidated'):
+            latest.pop(mid, None)
+            continue
+        if not isinstance(verdicts, dict) or set(verdicts) != set(active):
+            superseded += 1
+            continue
+        latest[mid] = verdicts
+    props = {}
+    for pid, prop in active.items():
+        buckets, nouls = {"MATCH": 0, "NO_MATCH": 0, "UNDETERMINED": 0}, []
+        invalid = 0
+        for verdicts in latest.values():
+            entry = verdicts.get(pid)
+            verdict = entry.get('verdict') if isinstance(entry, dict) else None
+            noul = entry.get('noul') if isinstance(entry, dict) else None
+            if verdict not in buckets:
+                invalid += 1
+                continue
+            buckets[verdict] += 1
+            if type(noul) in (int, float) and math.isfinite(noul):
+                nouls.append(float(noul))
+        props[pid] = {"label_ja": prop.get("label_ja", pid),
+                      "verdicts": {**buckets, "invalid": invalid},
+                      "noul_mean": sum(nouls) / len(nouls) if nouls else None,
+                      "noul_min": min(nouls) if nouls else None,
+                      "noul_max": max(nouls) if nouls else None}
+    return {"project_id": project_id, "messages": len(latest),
+            "superseded": superseded, "propositions": props}
 
 
 def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
@@ -1236,7 +1284,7 @@ def _assess_target(ledger, scfg, bundle, jev_client, pid, mid, fp, policy,
     if jev_client is not None and state is not None:
         qs = {k: jev.noul_question(p["instructions"], p["true"],
                                    p["false"])
-              for k, p in jev.PROPOSITIONS.items()}
+              for k, p in jev.active_propositions(scfg).items()}
         try:
             out = jev.evaluate_chunked(
                 jev_client, state, qs, deadline,
@@ -2886,7 +2934,7 @@ def _classification_only_state(ledger, row, scfg, cfg, bundle, fp, policy):
         if meta.get('technical_status') == 'complete':
             if meta.get('registry') != jev.REGISTRY_VERSION or meta.get('model') != jev.JEV_MODEL:
                 return 'held'
-            if set(verdicts) == set(jev.PROPOSITIONS):
+            if set(verdicts) == set(jev.active_propositions(scfg)):
                 return 'current'
             if (verdicts == {} and meta.get('skipped') == 'prefilter_no_signal'
                     and meta.get('jev_requests') == 0 and raw_meta.get('prefilter') == 'no_signal'

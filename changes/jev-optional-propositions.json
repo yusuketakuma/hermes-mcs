@@ -1,0 +1,21 @@
+{
+  "category": "changed",
+  "title": "semantic.extra_propositions で任意Jev命題群を有効化可能に（皮膚・転倒・感染・摂食・睡眠・注入検知）",
+  "summary": "Jev命題の必須12件はそのままに、config.json の semantic.extra_propositions に命題IDを列挙すると任意命題を追加評価できるようになりました。提供する任意命題は E01 皮膚・褥瘡、E02 転倒、E03 発熱・感染、E04 摂食・水分、E05 睡眠、E06 評価者への指示文（プロンプト注入の監視用。MATCH判定は本文に評価者向け指示が含まれる合図です）。各命題は評価対象メッセージあたり +1 質問（チャンク化で複数リクエストになり得る）を消費するため、有効化はJev予算との相談になります。判定結果は既存の verdicts アーティファクトに同じ形式で耐久記録され、要約器への参照シグナルにもIDの日本語ラベル付きで表示されます。あわせて命題別の判定分布（verdict件数・noul平均/最小/最大）を集計する proposition_quality_report を追加しました（読取専用の診断関数）。",
+  "upgrade": "既定は従来どおり必須12命題のみで追加操作は不要です。有効化する場合は config.json の semantic.extra_propositions に [\"E01\", ...] の形式でIDを列挙します。無効なID・重複・非リスト値は semantic_extra_propositions_invalid として報告され、設定は fail-closed で拒否されます。有効セットが変わると旧セットで書かれた verdicts 行は不変条件を満たさず再評価対象になります（過去の行が新セットを偽装することはありません）。",
+  "details": [
+    "semantic_jev.py に OPTIONAL_PROPOSITIONS（E01-E06）と active_propositions() を追加。必須 PROPOSITIONS は不変。",
+    "semantic_policy.py: extra_propositions を既知IDの重複なしリストとして検証。policy_fingerprint は変更せず、正しさは verdicts 集合の完全一致不変条件で担保する。",
+    "semantic_drain.py: _assess_target/_partial_assessment/_classification_only_state の全経路が active 集合を使用。proposition_quality_report(ledger, project_id, scfg) を追加 — メッセージ毎の最新 COMPLETE 行だけを集計し、active 集合と一致しない行は superseded として分離。",
+    "semantic_llm.py: _verdicts_brief のラベル解決が任意命題も表示。",
+    "E06（evaluator_instruction_mention）はプロンプト注入監視用: context を無視して target 本文の評価者向け指示だけを判定する。",
+    "推論エンジン v1.0・Jevモデル固定・日次上限・request_cap・fail-closed 契約は不変。"
+  ],
+  "refs": [
+    "mcs/semantic/semantic_jev.py",
+    "mcs/semantic/semantic_policy.py",
+    "mcs/semantic/semantic_drain.py",
+    "mcs/semantic/semantic_llm.py",
+    "tests/semantic/test_jev_extra_propositions.py"
+  ]
+}

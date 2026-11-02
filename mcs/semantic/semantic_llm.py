@@ -183,7 +183,8 @@ def _verdicts_brief(verdicts: dict) -> str:
     writer — advisory context, never forced truth (§15.3)."""
     lines = []
     for pid, v in (verdicts or {}).items():
-        label = jev.PROPOSITIONS.get(pid, {}).get("label_ja", pid)
+        label = (jev.PROPOSITIONS.get(pid) or jev.OPTIONAL_PROPOSITIONS.get(pid)
+                 or {}).get("label_ja", pid)
         lines.append(f"{pid} {label}: {v.get('verdict', '?')}")
     return "\n".join(lines) or "(なし)"
 
