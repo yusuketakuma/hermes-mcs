@@ -224,12 +224,6 @@ def _broker(path: str | None = None):
         return b
 
 
-# Legacy reconciliation cadence/cache; neither age nor idle observations
-# provide retirement evidence.
-RECONCILE_INTERVAL_S = 300.0
-_RECONCILED_AT: dict = {}
-
-
 def _slots_idle(endpoint: str, deadline: float | None, request=None,
                 slot: int | None = None) -> bool:
     # resolved per call: tests monkeypatch module-level bounded_request
@@ -284,24 +278,6 @@ def backend_idle_evidence(endpoint: str = ENDPOINT,
     return None
 
 
-def _maybe_reconcile(broker, path: str, endpoint: str,
-                     deadline: float | None) -> bool:
-    """Preserve the reconciliation entry point without retiring unproven work."""
-    last = _RECONCILED_AT.get(path)
-    if last is not None and time.monotonic() - last < RECONCILE_INTERVAL_S:
-        return False
-
-    def evidence():
-        # the throttle counts probes, not the cheap candidate query
-        _RECONCILED_AT[path] = time.monotonic()
-        return backend_idle_evidence(endpoint, deadline)
-    try:
-        out = broker.reconcile_unknown(evidence)
-    except Exception:
-        return False
-    return bool(out.get("reconciled"))
-
-
 def admission_status(broker_path: str | None = None) -> dict | None:
     """Broker occupancy for health/alerting (None when admission is off):
     ``unresolved`` permits and ``oldest_unresolved_age_s`` show width held
@@ -345,12 +321,6 @@ def admitted_chat(client_route: str, prompt: str, *,
     extra = dict(kw.pop("extra_payload", None) or {})
     extra.setdefault("id_slot", request_slot())
     acq = broker.acquire(client_route, cls)
-    if not acq.get("admitted") \
-            and acq.get("reason") in ("class_full", "rt_pending") \
-            and _maybe_reconcile(broker, broker_path or _admission_db_path(),
-                                 kw.get("endpoint", ENDPOINT), deadline):
-        # Retry only when the broker itself reports a completed reconciliation.
-        acq = broker.acquire(client_route, cls)
     pid = acq.get("permit_id")
     if not acq.get("admitted") and acq.get("reason") == "waiting" \
             and wait_s > 0 and pid is not None:
