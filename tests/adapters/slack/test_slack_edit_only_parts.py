@@ -3,6 +3,7 @@ import asyncio
 import copy
 from types import SimpleNamespace
 import pytest
+from adapters.common.spec import post_scoped
 from adapters.slack.delivery import SlackCardAdapter
 from slack_testkit import (isolated_slack_ledger as led, _attach, _granted_card, _mkworld,
                            _rewrite_world, _updates, FakeClient, ROOT_TS, SCOPE, SLACK)
@@ -70,7 +71,10 @@ def test_renamed_attachment_edits_existing_upload_across_two_updates(led, tmp_pa
                                  (first["delivery_id"],)).fetchone()
             newer = led.db.execute("SELECT spec_json FROM notification_renders WHERE delivery_id=?",
                                    (specs[0]["delivery_id"],)).fetchone()
-            assert old[0] is None and newer[0] is not None
+            witness = json.loads(old[0])
+            assert set(witness) == {"attachment_identity"}
+            assert witness["attachment_identity"]["proofs"]
+            assert newer[0] is not None
 
 
 def setup(led):
@@ -149,8 +153,12 @@ def test_slack_file_id_in_two_owned_replies_is_unverified_without_writes(led):
 
 
 @pytest.mark.parametrize("reply", ["gone", "echo", "channel", "403", "429"])
-def test_slack_edit_response_preserves_gone_rejection_and_unknown_outcomes(led, reply, monkeypatch):
+@pytest.mark.parametrize("scoped", [False, True])
+def test_slack_edit_response_preserves_gone_rejection_and_unknown_outcomes(led, reply, scoped, monkeypatch):
     w, spec, _, target, part = setup(led)
+    if not scoped:
+        spec["parts"].pop("post_source_id", None)
+    assert post_scoped(spec) is scoped
     class Response(dict):
         status_code = int(reply) if reply.isdigit() else 200
     class Rejected(Exception):
@@ -167,7 +175,8 @@ def test_slack_edit_response_preserves_gone_rejection_and_unknown_outcomes(led, 
     monkeypatch.setattr(delivery, "_rate_wait", lambda exc: None)
     posted = len(w.client.thread_posts)
     out = run(w, spec, part)
-    assert out["result"] == ("delivered" if reply == "gone" else "not_sent" if reply.isdigit() else "unknown")
+    assert out["result"] == ("delivered" if reply == "gone" and not scoped
+                             else "not_sent" if reply.isdigit() else "unknown")
     assert len(w.client.thread_posts) == posted
 
 

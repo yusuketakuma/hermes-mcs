@@ -1,10 +1,12 @@
 """Synthetic upload provenance survives receipt publication failure without a resend."""
 import asyncio
+import copy
 import hashlib
 import json
 
 import pytest
 from adapters.common import envelopes, journal
+from adapters.common.spec import post_scoped
 import notify_cmds
 from notify_testkit import NOW, _dispatch, _intent, _latest_render, _seed_thread
 from slack_testkit import ROOT_TS, SLACK, _attach, _granted_card, _mkworld
@@ -49,9 +51,12 @@ def test_upload_origin_is_bound_to_sealed_part_and_remote_identity(led, tmp_path
     assert env["team_id"] == spec["delivery"]["team_id"]
     assert "path" not in row["attachment_origin"] and "caption" not in row["attachment_origin"]
     uploads = len(world.client.upload_calls)
-    part = next(p for p in spec["parts"]["manifest"] if p["kind"] == "attachment_part")
-    asyncio.run(world.worker._attempt_part({"spec": {**spec, "op": "update"},
-        "payload_hash": envelopes.payload_hash({**spec, "op": "update"})}, part,
+    update = copy.deepcopy(spec)
+    update.update(op="update", delivery_id="00000000-0000-4000-8000-000000000222")
+    part = next(p for p in update["parts"]["manifest"] if p["kind"] == "attachment_part")
+    part["prior_remote_id"] = row["remote_id"]
+    asyncio.run(world.worker._attempt_part({"spec": update,
+        "payload_hash": envelopes.payload_hash(update)}, part,
         {"thread_id": ROOT_TS, "history": None, "consumed": set()}))
     latest = _rows(world)[-1]
     assert latest["attachment_origin"]["method"] == "remote_match"
@@ -100,11 +105,15 @@ def test_ambiguous_upload_has_no_claim_of_upload_provenance(led, tmp_path):
 
 
 @pytest.mark.parametrize("missing", [404, 410, "message_not_found"])
-def test_missing_file_caption_target_is_not_recorded_as_a_successful_edit(led, tmp_path, missing):
+@pytest.mark.parametrize("scoped", [False, True])
+def test_missing_file_caption_target_is_not_recorded_as_a_successful_edit(led, tmp_path, missing, scoped):
     from types import SimpleNamespace
     world, _, _ = _world(led, tmp_path)
     asyncio.run(_granted_card(world.worker, led, world.root))
     spec = json.loads(_latest_render(led)["spec_json"])
+    if not scoped:
+        spec["parts"].pop("post_source_id", None)
+    assert post_scoped(spec) is scoped
     part = next(p for p in spec["parts"]["manifest"] if p["kind"] == "attachment_part")
     fid = _rows(world)[0]["remote_id"]
 
@@ -120,6 +129,7 @@ def test_missing_file_caption_target_is_not_recorded_as_a_successful_edit(led, t
         {**spec, "op": "update", "delivery": {**spec["delivery"], "thread_id": ROOT_TS}},
         {**part, "edit_only": True, "prior_remote_id": fid, "caption": "changed"},
         {"thread_id": ROOT_TS, "history": None, "consumed": set()}))
-    assert out == {"result": "delivered", "remote_id": fid}  # existing deleted-target contract
+    assert out == ({"result": "unknown", "error_code": "edit_target_unverified"} if scoped
+                   else {"result": "delivered", "remote_id": fid})
     assert "attachment_origin" not in out
     assert len(world.client.upload_calls) == 1

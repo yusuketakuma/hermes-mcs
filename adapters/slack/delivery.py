@@ -587,6 +587,9 @@ class DeliveryWorker(_BaseWorker):
             if mid is not None:
                 return {"result": "delivered", "remote_id": mid}
             return await self._edit_only_prior(spec, part, text, ctx, blocks=blocks)
+        if scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id")) and ctx.get("history") is None:
+            # Identical sibling posts are not evidence for this source post.
+            ctx["history"] = await self._replies(thread_ts)
         if not scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id")):
             # writing into an existing thread — an identical reply
             # authored by this bot binds the part to its real ts
@@ -864,6 +867,11 @@ class DeliveryWorker(_BaseWorker):
         if upload is None:
             return {"result": "not_sent",
                     "error_code": "sdk_capability_missing"}
+        if (scoped and not part.get("prior_remote_id")
+                and (spec["op"] == "update" or spec["delivery"].get("thread_id"))
+                and ctx.get("history") is None):
+            # File identity alone cannot bind a different source post.
+            ctx["history"] = await self._replies(thread_ts)
         if (not scoped and (spec["op"] == "update" or spec["delivery"].get("thread_id"))) \
                 or (scoped and part.get("prior_remote_id")):
             # an identical file already remote in this thread binds the

@@ -20,10 +20,12 @@ def test_card_face_carries_the_fold_and_the_thread_stays_empty(led):
     asyncio.run(_granted_card(w.worker, led, w.root))
     card = next(kw for kind, kw in w.client.calls if kind == "create" and "thread_ts" not in kw)
     folds = [b for b in card["blocks"] if b.get("type") == "container"]
-    assert [b["title"]["text"] for b in folds] == ["原文（6字）", "原文（2字）"]
+    assert [b["title"]["text"] for b in folds] == ["原文（6字）"]
     assert folds[0]["child_blocks"][0]["text"]["text"] == "合成の元投稿"
-    # the fallback text may say 「原文・要約処理待ち」; the fold title and body must not leak into it
-    assert "原文（" not in str(card.get("text") or "") and "合成の元投稿" not in str(card.get("text") or "")
+    # Pending summaries use a short original excerpt in the notification preview.
+    fallback = str(card.get("text") or "")
+    assert "原文（" not in fallback and "原文・要約処理待ち" in fallback
+    assert "合成の元投稿" in fallback
     assert w.client.thread_posts == []
 
 
@@ -42,7 +44,8 @@ def test_face_post_growing_past_limit_keeps_its_full_thread_body(led, monkeypatc
     _dispatch(led, _intent(led), SLACK)
     w = _mkworld(led)
     asyncio.run(_granted_card(w.worker, led, w.root))
-    assert w.client.thread_posts
+    # The oversized reply belongs to its own reply card, not the root card.
+    assert not w.client.thread_posts
     before = len(w.client.thread_posts)
     issued = []
     original = "GROWN_ORIGINAL" * 5
