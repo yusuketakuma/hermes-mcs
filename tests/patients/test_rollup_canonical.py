@@ -699,21 +699,14 @@ def test_canonical_fact_requires_current_generation_and_source(db, invalid):
     assert rollup.build_rollup(db.db, 1).get("canonical_facts", []) == []
 
 
-@pytest.mark.parametrize("kind", ["extract_v1", "extract_llm", "canonical_projection"])
+@pytest.mark.parametrize("kind", ["extract_v1", "canonical_projection"])
 def test_rollup_depth_limit_preserves_bound_vital_or_other_source_fields(db, monkeypatch, kind):
     body = "本人の2026-09-17測定で体温37.1℃でした。"
-    if kind == "extract_llm":
-        _complete_history(db, monkeypatch)
-        db.save_messages([_message(mid=1, body=body, posted_at="2026-09-18T00:00:00+09:00")])
-        _save_bound_extraction(db, 1, {"vitals": {"bt": 37.1}})
-    else:
-        content = ({"next_planned": "合成訪問の予定"} if kind == "extract_v1"
-                   else {"summary": "合成要約"})
-        _add(db, 1, kind, content, "2026-09-18T00:00:00+09:00", body=body + "合成訪問の予定。合成要約。")
+    content = ({"next_planned": "合成訪問の予定"} if kind == "extract_v1"
+               else {"summary": "合成要約"})
+    _add(db, 1, kind, content, "2026-09-18T00:00:00+09:00", body=body + "合成訪問の予定。合成要約。")
     initial = rollup.build_rollup(db.db, 1, cfg={})
-    if kind == "extract_llm":
-        assert initial["latest_vitals"]["bt"] == 37.1
-    elif kind == "extract_v1":
+    if kind == "extract_v1":
         assert not initial.get("latest_vitals")
         assert initial["next_planned"] == "合成訪問の予定"
     else:
@@ -735,9 +728,7 @@ def test_rollup_depth_limit_preserves_bound_vital_or_other_source_fields(db, mon
     changes = db.db.total_changes
     out = rollup.build_rollup(db.db, 1, cfg={})
     assert out["msg_count"] == 1
-    if readable and kind == "extract_llm":
-        assert out["latest_vitals"]["bt"] == 37.1
-    elif not readable:
+    if not readable:
         assert "latest_vitals" not in out
         assert "next_planned" not in out and "summary" not in out
     elif kind == "extract_v1":
@@ -746,6 +737,62 @@ def test_rollup_depth_limit_preserves_bound_vital_or_other_source_fields(db, mon
         assert out["summary"]["text"] == "合成要約" and "latest_vitals" not in out
     assert tuple(db.db.iterdump()) == before
     assert db.db.total_changes == changes
+
+
+def _deep_extraction_text(document: dict) -> str:
+    text = json.dumps(document, ensure_ascii=False)
+    return text[:-1] + ',"synthetic_unused":' + "[" * 999 + "0" + "]" * 999 + "}"
+
+
+def _save_bound_extraction_text(db, mid, content: str):
+    row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=?", (mid,)).fetchone())
+    row["_source_binding"] = inference_dependency_loss.source_binding(db.db, 1, mid)
+    row["_target"] = ("", extract_llm.resolved_model({}))
+    quality = {"validation": {"items_dropped": 0, "evidence_dropped": 0},
+               "completeness_chunks": 1,
+               "completeness": {"0": {"state": "hint_gaps_resolved", "remaining_hint_candidates": 0}}}
+    assert extract_llm._replace_current(db, row, content, integrity=quality)
+
+
+def test_rollup_depth_limit_bound_vitals_via_normal_save(db, monkeypatch):
+    # A deep document saved through the normal path gets a consistent seal —
+    # depth tolerance is exercised on a sealed artifact, not a mutated one.
+    _complete_history(db, monkeypatch)
+    body = "本人の2026-09-17測定で体温37.1℃でした。"
+    db.save_messages([_message(mid=1, body=body, posted_at="2026-09-18T00:00:00+09:00")])
+    deep = _deep_extraction_text({"vitals": {"bt": 37.1}})
+    assert db.db.execute("SELECT json_valid(?)", (deep,)).fetchone()[0] == 1
+    try:
+        json.loads(deep)
+    except RecursionError:
+        readable = False
+    else:
+        readable = True
+    _save_bound_extraction_text(db, 1, deep)
+    out = rollup.build_rollup(db.db, 1, cfg={})
+    assert out["msg_count"] == 1
+    if readable:
+        assert out["latest_vitals"]["bt"] == 37.1
+    else:
+        assert "latest_vitals" not in out
+
+
+def test_rollup_mutated_content_under_unchanged_seal_is_rejected(db, monkeypatch):
+    # Editing stored content while the recorded seal stays unchanged must not
+    # read as the original provider result — tamper rejection is explicit.
+    _complete_history(db, monkeypatch)
+    body = "本人の2026-09-17測定で体温37.1℃でした。"
+    db.save_messages([_message(mid=1, body=body, posted_at="2026-09-18T00:00:00+09:00")])
+    _save_bound_extraction(db, 1, {"vitals": {"bt": 37.1}})
+    assert rollup.build_rollup(db.db, 1, cfg={})["latest_vitals"]["bt"] == 37.1
+    source_id, original = db.db.execute(
+        "SELECT artifact_id,content FROM artifacts WHERE kind='extract_llm' AND message_id=1").fetchone()
+    deep = _deep_extraction_text(json.loads(original))
+    db.db.execute("UPDATE artifacts SET content=? WHERE artifact_id=?", (deep, source_id))
+    db.db.commit()
+    out = rollup.build_rollup(db.db, 1, cfg={})
+    assert out["msg_count"] == 1
+    assert "latest_vitals" not in out
 
 
 def test_rollup_decodes_in_bounded_pages_and_preserves_source_order(monkeypatch):
