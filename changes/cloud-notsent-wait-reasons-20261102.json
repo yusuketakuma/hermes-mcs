@@ -17,7 +17,7 @@
     "保存済み本文の厳格なハッシュ計算が失敗した場合は、記録されたハッシュも欠落していても完了と判定しません。"
   ],
   "refs": [
-    "mcs/llm/cloud_client.py",
+    "mcs/llm/transport/cloud_client.py",
     "mcs/extract/llm/extract_llm.py",
     "mcs/llm/cloud_backlog.py",
     "mcs/semantic/semantic_drain.py",

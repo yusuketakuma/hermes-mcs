@@ -36,7 +36,14 @@ def test_retired_extraction_leftovers_are_not_import_roots(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("old_path,new_path,module", [
-    ("core/local_llm.py", "llm/local_llm.py", "local_llm"),
+    ("core/local_llm.py", "llm/transport/local_llm.py", "local_llm"),
+    ("llm/anthropic_client.py", "llm/providers/anthropic_client.py", "anthropic_client"),
+    ("llm/openai_client.py", "llm/providers/openai_client.py", "openai_client"),
+    ("llm/cloud_client.py", "llm/transport/cloud_client.py", "cloud_client"),
+    ("llm/local_llm.py", "llm/transport/local_llm.py", "local_llm"),
+    ("llm/llm_retry.py", "llm/transport/llm_retry.py", "llm_retry"),
+    ("llm/llm_admission.py", "llm/admission/llm_admission.py", "llm_admission"),
+    ("llm/llm_availability.py", "llm/admission/llm_availability.py", "llm_availability"),
     ("extract/v1/extract.py", "extract/rules/extract.py", "extract"),
     ("extract/v4/extract_llm.py", "extract/llm/extract_llm.py", "extract_llm"),
 ])

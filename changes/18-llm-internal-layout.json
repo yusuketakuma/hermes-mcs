@@ -1,0 +1,11 @@
+{
+  "category": "changed",
+  "title": "共通推論の内部ファイルを責務ごとに整理",
+  "summary": "共通推論の内部ファイルをprovider固有の通信・共通通信と再試行・共有枠と回路状態の3領域に整理します。7ファイルの本文と従来のflat import名を維持し、公開CLI・設定・保存形式・モデル・予算・品質検証の条件は変更しません。",
+  "upgrade": "通常の更新手順で適用し、保存済みの証跡はコード位置を含む同一性を照合する既存の契約に従って評価します。推論や再送信の許可条件を増やさず、公開推論エンジン1.0と内部抽出契約11を維持します。",
+  "details": [
+    "providers/にanthropic_client・openai_client、transport/にcloud_client・local_llm・llm_retry、admission/にllm_admission・llm_availabilityを置く。cloud_inference・cloud_policy・cloud_backlogはllm/直下に保持する。",
+    "再帰bootstrapと更新時の世代照合を維持し、旧パスに同名のソースが残る場合の停止条件を配置テストに追加する。"
+  ],
+  "refs": ["mcs/llm/providers/", "mcs/llm/transport/", "mcs/llm/admission/", "tests/meta/test_module_layout.py", "tests/meta/test_mcs_path_retired_extraction.py"]
+}

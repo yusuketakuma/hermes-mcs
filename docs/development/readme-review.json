@@ -15,7 +15,7 @@
         "CHANGELOG.md",
         "mcs/notify/notify_scope.py",
         "mcs/notify/notify_cards.py",
-        "mcs/llm/openai_client.py",
+        "mcs/llm/providers/openai_client.py",
         "mcs/semantic/semantic_drain.py",
         "mcs/extract/llm/extract_llm.py",
         "adapters/slack/delivery.py",
