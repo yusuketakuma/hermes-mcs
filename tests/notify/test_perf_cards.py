@@ -1,15 +1,15 @@
 """D4 load measurement — RC20/RC26 §7 intervals at synthetic scale.
 
-Real runner + real worker against fake Discord transport; synthetic
-rows and a temp ledger only. Records:
+Real notification dispatch, worker and receipt settlement against fake
+Discord transport; synthetic rows and a temp ledger only. Records:
 
-- カード配送: spec atomic publish -> successful receipt DB commit
-- 操作適用:  click command file -> applied/rejected receipt commit
+- Card delivery: first atomic spec publish -> final receipt drain return
+- Operation apply: click command file -> applied/rejected receipt commit
 - queue/lock/sweep/gc/snapshot breakdown at 100 / 1,000 / 10,000 cards
 
 The p95 budgets (30s delivery / 6s op-apply, non-contended) are
-asserted on the local pipeline — the remainder is what real Discord
-HTTP consumes, verified separately in D5.
+asserted on this local pipeline. Delivery samples share the batch finish
+time; real Discord HTTP and SDK performance are outside this measurement.
 """
 from __future__ import annotations
 
@@ -200,14 +200,25 @@ def _report(title, samples, budget_s=None):
 
 # ---------- the pipeline measurement ---------------------------------
 
-def _measure_pipeline(world, n):
-    """Dispatch n intents, then drive the whole claim->send->settle
-    loop. Returns per-stage wall times and per-card e2e latencies."""
+def _measure_pipeline(world, n, monkeypatch):
+    """Measure each spec's first publication through the final receipt drain."""
     led, data, worker, reg = world
-
-    # stage 1: dispatch -> spec files exist (the §7 start point)
-    t0 = time.perf_counter()
     starts = {}
+    render_dir = data / "discord_render"
+    publish_file = notify_spool.publish_file
+
+    def observe_publish(directory, name, raw):
+        path = publish_file(directory, name, raw)
+        published_at = time.perf_counter()
+        published = Path(path)
+        if published.parent == render_dir and published.suffix == ".json":
+            starts.setdefault(published.stem, published_at)
+        return path
+
+    monkeypatch.setattr(notify_spool, "publish_file", observe_publish)
+
+    # Stage 1: dispatch; observe each successful atomic render publication.
+    t0 = time.perf_counter()
     for i in range(n):
         eid = led.outbox_add("new_messages", 1 + i,
                              {"message_ids": [10_000 + i]})
@@ -219,8 +230,7 @@ def _measure_pipeline(world, n):
     # the worker only claims once the runner publishes interactive=on
     # (as the runner does, after dispatch created the flags dir)
     notify_spool.publish_flags(CFG, str(data))
-    for f in (data / "discord_render").glob("*.json"):
-        starts[f.stem] = time.time()    # publish observation point
+    assert set(starts) == {f.stem for f in render_dir.glob("*.json")}
     cpu0 = time.process_time()
 
     async def run():
@@ -242,15 +252,15 @@ def _measure_pipeline(world, n):
         t = time.perf_counter()
         notify_cmds.drain_int_commands(
             led, res, CFG, str(data), limit=n * 2)
-        t_settle = time.perf_counter() - t
-        return t_claim, t_grant, t_send, t_settle
+        finished = time.perf_counter()
+        t_settle = finished - t
+        return t_claim, t_grant, t_send, t_settle, finished
 
-    t_claim, t_grant, t_send, t_settle = asyncio.run(run())
+    t_claim, t_grant, t_send, t_settle, finished = asyncio.run(run())
     cpu = time.process_time() - cpu0
-    end = time.time()
     # per-card e2e: spec publish -> settle drain finished. In batch mode
     # all specs share the finish line; report the batch envelope.
-    e2e = [end - starts[k] for k in starts]
+    e2e = [finished - start for start in starts.values()]
     return {"dispatch": t_dispatch, "claim_begin": t_claim,
             "grant_drain": t_grant, "send": t_send,
             "settle_drain": t_settle, "e2e": e2e,
@@ -273,7 +283,7 @@ def test_perf_delivery_pipeline(tmp_path, monkeypatch, n):
         root=str(data), reg=reg,
         worker_id=registry.new_worker_id(),
         log=lambda e, **f: None)
-    out = _measure_pipeline((led, data, worker, reg), n)
+    out = _measure_pipeline((led, data, worker, reg), n, monkeypatch)
     # timing alone proves nothing if nothing was sent: every card must
     # be delivered exactly once and bound to the message the bot posted
     cards = [dict(r) for r in led.db.execute(
@@ -291,13 +301,59 @@ def test_perf_delivery_pipeline(tmp_path, monkeypatch, n):
               "settle_drain"):
         print(f"  {k:<44} {out[k]:>8.4f}s")
     assert len(out["e2e"]) == n     # every spec was observed published
-    r = _report("card delivery e2e (batch envelope, wall)",
+    r = _report("card delivery e2e (batch envelope, monotonic)",
                 out["e2e"], 30)
     # CPU is diagnostic only: a latency budget must also see IO/wait
-    _report("card delivery e2e (batch envelope, CPU)", out["e2e_cpu"])
+    _report("delivery worker + settle (batch CPU)", out["e2e_cpu"])
     led.close()
     # RC26: non-contended p95 for spec publish -> receipt commit
     assert r["p95"] <= 30.0
+
+
+def test_pipeline_clock_includes_dispatch_wait_and_first_publication(tmp_path, monkeypatch):
+    """Keep the first publish time across dispatch gaps and identical republication."""
+    monkeypatch.setitem(sys.modules, "discord", _fake_discord())
+    led, data = _mk_ledger(tmp_path)
+    for i in range(2):
+        _seed_patient(led, 1 + i)
+        _seed_msg(led, 10_000 + i, 1 + i)
+    led.db.commit()
+    bot = FakeBot(http=FakeHTTPClient())
+    reg = registry.Registry(str(data / "discord_state"))
+    worker = delivery.DeliveryWorker(
+        bot=bot, settings=SETTINGS, root=str(data), reg=reg,
+        worker_id=registry.new_worker_id(), log=lambda e, **f: None)
+
+    clock = [0.0]
+    # Replace this test module's clock, leaving production leases/asyncio alone.
+    monkeypatch.setattr(sys.modules[__name__], "time", SimpleNamespace(
+        perf_counter=lambda: clock[0], process_time=time.process_time,
+        time=lambda: NOW - 100 * clock[0]))
+    dispatch = notify_cards.dispatch_intent
+    dispatched = 0
+
+    def dispatch_with_wait(*args, **kwargs):
+        nonlocal dispatched
+        result = dispatch(*args, **kwargs)
+        dispatched += 1
+        clock[0] = 4.0 if dispatched == 1 else 6.0
+        if dispatched == 1:
+            first = next((data / "discord_render").glob("*.json"))
+            notify_spool.publish_file(str(first.parent), first.name, first.read_bytes())
+        return result
+
+    monkeypatch.setattr(notify_cards, "dispatch_intent", dispatch_with_wait)
+    try:
+        out = _measure_pipeline((led, data, worker, reg), 2, monkeypatch)
+        assert out["e2e"] == [6.0, 2.0]
+        cards = led.db.execute(
+            "SELECT delivery_state,message_id FROM notification_cards").fetchall()
+        sent_ids = {str(m.id) for m in bot.channels[42].sent}
+        assert len(cards) == len(bot.channels[42].sent) == len(sent_ids) == 2
+        assert {(r["delivery_state"], str(r["message_id"])) for r in cards} == {
+            ("delivered", mid) for mid in sent_ids}
+    finally:
+        led.close()
 
 
 def test_perf_operation_apply(tmp_path, monkeypatch):
