@@ -200,7 +200,7 @@ def _writer_current(*, full: bool = False) -> bool:
     """Fence update boundaries; lockless bookkeeping checks only the version source."""
     try:
         current = (not _WRITER_STATE[0]
-            and not os.path.exists(os.path.join(writer_lock.HOME, "data", writer_lock.UPDATE_MARKER_NAME))
+            and not writer_lock.writer_blocked()
             and os.stat(inference.__file__).st_mtime_ns == _INFERENCE_SOURCE_STAT
             and inference.CURRENT_VERSION == _INFERENCE_VERSION)
     except OSError:
@@ -1820,6 +1820,9 @@ def revive_failed(ledger, now: float | None = None) -> dict:
         meta.update({"attempts": 4, "next_try": now, "auto_retry": n + 1})
         updated_meta = json.dumps(meta, ensure_ascii=False)
         with ledger.db:
+            if not _writer_current(full=True):
+                ledger.db.rollback()
+                return out
             cur = ledger.db.execute(
                 "UPDATE artifacts SET meta=? WHERE artifact_id=? AND meta=? AND kind IS ? "
                 "AND project_id IS ? AND message_id IS ? AND created_at IS ? AND content IS ? AND model IS ? "
@@ -1835,6 +1838,9 @@ def revive_failed(ledger, now: float | None = None) -> dict:
                 (row["artifact_id"], updated_meta, row["kind"], row["project_id"],
                  row["message_id"], row["created_at"], row["content"], row["model"])).fetchone() is None:
                 raise RuntimeError("extract_revive_unverified")
+            if not _writer_current(full=True):
+                ledger.db.rollback()
+                return out
         # Another drainer/revival may have changed or removed the snapshot.
         out["revived"] += cur.rowcount
     return out
@@ -5401,7 +5407,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                 "pids": [], "transaction_active": True, "carry": carry or []}
     if not _writer_current(full=True):
         return {"done": 0, "failed": 0, "left": None, "deferred": 0,
-                "pids": [], "updated": True}
+                "pids": [], "updated": True, "carry": carry or []}
     deadline = time.monotonic() + budget_s
     lock = functools.partial(_write_lock, wait_s=write_wait_s)
     carry_settled = dict.fromkeys(('done', 'held_prior', 'deferred'), 0)
@@ -6467,13 +6473,15 @@ def _settle_carry(ledger, carry: list, *, final: bool = True,
     reason — an updater may finish while we wait for the lock."""
     settled = dict.fromkeys(("done", "held_prior", "deferred"), 0)
     count, pids = 0, set()
-    if not carry:
+    if not carry or writer_lock.writer_blocked():
         return settled, count, pids
     keep = []
     shadow = []
     context = lock_context if lock_context is not None else _write_lock(
         True, wait_s=60 if final else _RESIDENT_WRITE_WAIT_S)
     with context as held:
+        if writer_lock.writer_blocked():
+            return settled, count, pids
         if preserve_on_fence_loss and (not _writer_current(full=True) or
                 (fence is not None and writer_lock.updater_state() != fence)):
             return settled, count, pids
@@ -6611,6 +6619,18 @@ def main() -> int:
             os.environ[local_llm.TURN_LOCK_ENV] = turn
 
 
+def _open_current_ledger():
+    fd = writer_lock.acquire_run_lock()
+    if fd is None:
+        return None
+    try:
+        if not _writer_current(full=True):
+            return None
+        return Ledger(DB)
+    finally:
+        os.close(fd)
+
+
 def _main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--upgrade-status", action="store_true", help="read-only aggregate upgrade status; no LLM calls")
@@ -6652,13 +6672,16 @@ def _main() -> int:
             led.close()
         return 0
     if args.revive_failed:
-        # DB-only bookkeeping: no LLM call, no run lock needed (a single
-        # UPDATE per row; drainers re-select revived rows on their own)
-        led = Ledger(DB)
-        try:
-            print(json.dumps(revive_failed(led), ensure_ascii=False))
-        finally:
-            led.close()
+        # Keep the constructor and its bookkeeping in the same writer lifetime.
+        with _write_lock(True, wait_s=0) as locked:
+            if not locked or not _writer_current(full=True):
+                print(json.dumps({"ok": False, "error": "writer_unavailable"}))
+                return 1
+            led = Ledger(DB)
+            try:
+                print(json.dumps(revive_failed(led), ensure_ascii=False))
+            finally:
+                led.close()
         return 0
     if (not math.isfinite(args.budget) or not math.isfinite(args.stop_after)
             or args.stop_after < 0):
@@ -6701,7 +6724,10 @@ def _main() -> int:
                       "extract_version": EXTRACT_VERSION, inference.VERSION_KEY: _INFERENCE_VERSION,
                       "source_digests": _LOADED_SOURCE_DIGESTS}),
           file=sys.stderr, flush=True)
-    led = Ledger(DB)
+    led = _open_current_ledger()
+    if led is None:
+        print(json.dumps({"ok": False, "error": "writer_unavailable"}))
+        return 1
     # T18: under the v4 engine (fact_source=canonical) the legacy
     # extractor admits nothing: conversion manifests are v4 jobs. The
     # standalone daemon obeys the same boundary as the tick path, and
