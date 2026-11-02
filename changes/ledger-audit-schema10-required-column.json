@@ -1,0 +1,14 @@
+{
+  "category": "fixed",
+  "title": "DB監査で初期取込状態の保存欄の欠落を検知",
+  "summary": "schema 10のDBで初期取込状態を保存する列が欠けている場合に、監査が正常と判定していた問題を修正しました。監査と復旧用の検証で共通の必須列判定を使い、schema 9以前のDBとの互換性を維持します。",
+  "upgrade": "追加操作は不要です。この変更によるDBの書き換えや修復は行いません。",
+  "details": [
+    "実DBのuser_versionに応じてpatients.initial_importの有無を検証します。",
+    "列の有無とschema 9・10を組み合わせ、監査・復旧・バックアップ検証の一致とDB内容の不変を確認します。"
+  ],
+  "refs": [
+    "mcs/core/ledger_audit.py",
+    "mcs/core/ledger_schema.py"
+  ]
+}

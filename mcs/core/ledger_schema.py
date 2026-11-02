@@ -1055,11 +1055,13 @@ def static_required_tables(version: int) -> set[str]:
     return required
 
 
-def static_required_columns(table: str, columns: set[str]) -> frozenset[str]:
+def static_required_columns(table: str, columns: set[str], *, version: int) -> frozenset[str]:
     """Columns a present contract table needs, given the columns it has."""
     if table == "attachments" and "attachment_id" not in columns:
         return LEGACY_ATTACHMENT_COLUMNS
     required = STATIC_SOURCE_COLUMNS.get(table) or STATIC_BASE_COLUMNS[table]
+    if table == "patients" and version >= 10:
+        required |= {"initial_import"}
     if table == "read_marks" and "id" in columns:
         required |= {"status"}
     return required
@@ -1090,14 +1092,11 @@ def static_contract_ok(db: sqlite3.Connection, *, schema_version: int) -> bool:
     if ({"attachments_v1", "read_marks_v1"} & tables
             or not static_required_tables(version) <= tables):
         return False
-    if version >= 10 and "initial_import" not in {
-            r[1] for r in db.execute("PRAGMA table_info(patients)")}:
-        return False
     for table in (*STATIC_SOURCE_COLUMNS, *STATIC_BASE_COLUMNS):
         if table not in tables:
             continue  # initialize creates absent tables for older backups.
         columns = {row[1] for row in db.execute(f'PRAGMA table_info("{table}")')}
-        if (not static_required_columns(table, columns) <= columns
+        if (not static_required_columns(table, columns, version=version) <= columns
                 or _key_fence_breached(db, table, columns)):
             return False
     return True

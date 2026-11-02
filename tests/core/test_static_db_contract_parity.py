@@ -1,6 +1,8 @@
 """The recovery gate, the bounded backup inventory and the audit apply one
 static-DB schema contract. Synthetic temp databases only."""
 import sqlite3
+import hashlib
+from pathlib import Path
 
 import ledger_schema
 from contextlib import closing
@@ -98,6 +100,29 @@ def test_current_schema_passes_every_consumer(tmp_path):
     assert _audit_accepts_schema(path)
     assert ledger_schema.static_required_tables(ledger.SCHEMA_VERSION) <= {
         *ledger_schema.STATIC_SOURCE_COLUMNS, *ledger_schema.STATIC_BASE_COLUMNS}
+
+
+@pytest.mark.parametrize("version,has_initial_import,expected", [
+    (9, False, True), (9, True, True), (10, False, False), (10, True, True),
+])
+def test_initial_import_requirement_is_versioned_and_readonly(
+        tmp_path, version, has_initial_import, expected):
+    path = _current(tmp_path)
+    with closing(sqlite3.connect(path)) as db:
+        db.execute(f"PRAGMA user_version={version}")
+        if not has_initial_import:
+            db.execute("ALTER TABLE patients DROP COLUMN initial_import")
+        db.commit()
+    before = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    files = sorted(p.name for p in tmp_path.iterdir())
+    assert ledger.valid_mcs_db(path) is expected
+    assert _backup_accepts(path) is expected
+    report = ledger_audit.audit_db(path)
+    assert report["complete"] and report["ok"] is expected
+    assert report["checks"]["schema_patients"] == {
+        "status": "ok" if expected else "violation", "count": 0 if expected else 1}
+    assert hashlib.sha256(Path(path).read_bytes()).hexdigest() == before
+    assert sorted(p.name for p in tmp_path.iterdir()) == files
 
 
 @pytest.mark.parametrize("ddl, fenced", [
