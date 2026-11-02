@@ -711,12 +711,13 @@ def _loads(value):
 
 
 def _accounting_meta(value):
-    result = _loads(value)
     try:
-        strict_json(value)
+        result = strict_json(value)
+        if not isinstance(result, dict):
+            raise ValueError
+        return result
     except (ValueError, TypeError, UnicodeError, RecursionError, OverflowError):
         raise AnthropicError("pricing_unverified", "usage_invalid") from None
-    return result
 
 
 @contextmanager
@@ -1319,55 +1320,55 @@ class _Tally:
         return digest.digest()
 
     def update(self, ledger, now):
-        rows = ledger.db.execute(
+        with closing(ledger.db.execute(
             "SELECT artifact_id,kind,project_id,message_id,model,meta,created_at FROM artifacts "
             "WHERE kind IN ('cloud_usage_reserve','cloud_usage_result') AND created_at>=? "
-            "AND artifact_id>? ORDER BY artifact_id", (self.month, self.last_id)).fetchall()
-        for row in rows:
-            m = _accounting_meta(row["meta"])
-            rid = m.get("reservation_id")
-            if row["kind"] == "cloud_usage_reserve":
-                maximum = _reserve_valid(m, row)
-                if rid in self.open or rid in self.closed:
-                    raise AnthropicError("pricing_unverified", "duplicate_reservation")
-                day = _periods(row["created_at"])[0]
-                self.open[rid] = (m, maximum, day)
-                self.days.setdefault(day, [0, Decimal(0)])[0] += 1
-                self._add(day, maximum, _price_definition(m["model"], m["price_version"])["provider"])
-            elif not isinstance(rid, str):
-                raise AnthropicError("pricing_unverified", "result_invalid")
-            elif rid in self.open:
-                meta, maximum, day = self.open.pop(rid)
-                try:
-                    cost, settled = _settled(meta, maximum, [(m, row)])
-                except (AnthropicError, ValueError, InvalidOperation, TypeError):
+            "AND artifact_id>? ORDER BY artifact_id", (self.month, self.last_id))) as rows:
+            for row in rows:
+                m = _accounting_meta(row["meta"])
+                rid = m.get("reservation_id")
+                if row["kind"] == "cloud_usage_reserve":
+                    maximum = _reserve_valid(m, row)
+                    if rid in self.open or rid in self.closed:
+                        raise AnthropicError("pricing_unverified", "duplicate_reservation")
+                    day = _periods(row["created_at"])[0]
+                    self.open[rid] = (m, maximum, day)
+                    self.days.setdefault(day, [0, Decimal(0)])[0] += 1
+                    self._add(day, maximum, _price_definition(m["model"], m["price_version"])["provider"])
+                elif not isinstance(rid, str):
+                    raise AnthropicError("pricing_unverified", "result_invalid")
+                elif rid in self.open:
+                    meta, maximum, day = self.open.pop(rid)
+                    try:
+                        cost, settled = _settled(meta, maximum, [(m, row)])
+                    except (AnthropicError, ValueError, InvalidOperation, TypeError):
+                        self.invalid = True
+                        cost, settled = maximum, False
+                    provider = _price_definition(meta["model"], meta["price_version"])["provider"]
+                    self._add(day, cost - maximum, provider)
+                    self.closed[rid] = (maximum, cost, settled, day, provider)
+                elif rid in self.closed:
+                    # a second result row: the pair no longer settles (usage_report's _settled)
+                    maximum, cost, settled, day, provider = self.closed[rid]
                     self.invalid = True
-                    cost, settled = maximum, False
-                provider = _price_definition(meta["model"], meta["price_version"])["provider"]
-                self._add(day, cost - maximum, provider)
-                self.closed[rid] = (maximum, cost, settled, day, provider)
-            elif rid in self.closed:
-                # a second result row: the pair no longer settles (usage_report's _settled)
-                maximum, cost, settled, day, provider = self.closed[rid]
-                self.invalid = True
-                self._add(day, maximum - cost, provider)
-                self.closed[rid] = (maximum, maximum, False, day, provider)
-            else:
-                entry = self.orphans.get(rid)
-                if entry is None:
-                    prior = [(_accounting_meta(r["meta"]), r) for r in _matching_rows_many(
-                        ledger, KINDS[0], [rid], now=now, _timestamps_checked=True)]
-                    entry = self.orphans[rid] = (prior, [])
-                    for _, reserved in prior:
-                        self.history_valid_until = min(self.history_valid_until, reserved['created_at'] + 62 * 86400)
-                entry[1].append((m, row))
-                try:
-                    if len(entry[0]) != 1:
-                        raise ValueError
-                    _settled(entry[0][0][0], _reserve_valid(*entry[0][0]), entry[1])
-                except (AnthropicError, ValueError, InvalidOperation, TypeError):
-                    self.invalid = True
-            self.last_id = row["artifact_id"]
+                    self._add(day, maximum - cost, provider)
+                    self.closed[rid] = (maximum, maximum, False, day, provider)
+                else:
+                    entry = self.orphans.get(rid)
+                    if entry is None:
+                        prior = [(_accounting_meta(r["meta"]), r) for r in _matching_rows_many(
+                            ledger, KINDS[0], [rid], now=now, _timestamps_checked=True)]
+                        entry = self.orphans[rid] = (prior, [])
+                        for _, reserved in prior:
+                            self.history_valid_until = min(self.history_valid_until, reserved['created_at'] + 62 * 86400)
+                    entry[1].append((m, row))
+                    try:
+                        if len(entry[0]) != 1:
+                            raise ValueError
+                        _settled(entry[0][0][0], _reserve_valid(*entry[0][0]), entry[1])
+                    except (AnthropicError, ValueError, InvalidOperation, TypeError):
+                        self.invalid = True
+                self.last_id = row["artifact_id"]
         self.prefix = self.fingerprint(ledger, now)
         self.checked_at = now
 
