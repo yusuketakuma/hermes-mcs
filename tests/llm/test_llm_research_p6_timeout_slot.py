@@ -130,7 +130,7 @@ def test_no_wait_without_turn_lock_env(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("error, kind", [
-    (bounded_http.NotSentTimeout("not sent"), "unreachable"),
+    (bounded_http.NotSentTimeout("not sent"), "not_sent"),
     (ValueError("bad"), "transport"),
 ])
 def test_not_sent_timeout_and_non_transport_errors_skip_the_wait(turn, error, kind):
@@ -179,7 +179,7 @@ def send(endpoint, method, body, timeout, deadline):
     return 200, {}, json.dumps([{"id": 1, "is_processing": True}]).encode()
 local_llm.chat("prompt", request_fn=send, extra_payload={"id_slot": 1})
 """
-    root = os.path.dirname(os.path.dirname(local_llm.__file__))
+    root = os.path.dirname(os.path.dirname(os.path.dirname(local_llm.__file__)))
     child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True,
                              env={**os.environ, "MCS_TEST_MODULE_ROOT": root})
     assert child.stdout.readline().strip() == "polling"
