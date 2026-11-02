@@ -1,6 +1,7 @@
 """Synthetic, source-bound dictionary hint construction."""
 
 from copy import deepcopy
+import sqlite3
 import time
 
 import pytest
@@ -55,15 +56,90 @@ def test_only_approved_current_pinned_dictionary_is_used(store, tmp_path, fault)
     assert drug_mentions.validate(result, "キラナ")
 
 
-def test_short_substring_and_overlapping_aliases_are_not_promoted(store, tmp_path):
+def test_short_substring_and_overlapping_aliases_are_handled_conservatively(store, tmp_path):
     doc = deepcopy(DOCUMENT)
     doc["entries"][0]["aliases"] = ["アア", "キラナ", "キラナ錠", "架空薬甲"]
     cfg = configured(store, tmp_path, doc)
     result = drug_mentions.build(store.db, cfg, "アアとニセキラナ、キラナ錠を服用。架空薬甲を服用。",
                                  deadline=time.monotonic() + 10)
     assert result["status"] == "active"
-    assert [row["surface"] for row in result["matches"]] == ["架空薬甲"]
-    assert result["overlapping_spans_omitted"] == 2
+    assert [row["surface"] for row in result["matches"]] == ["キラナ錠", "架空薬甲"]
+    assert result["matches"][0]["candidates"][0]["matched_surface"] == "キラナ錠"
+    assert result["overlapping_spans_omitted"] == 0
+
+
+def test_product_forms_and_strengths_remain_source_grounded(store, tmp_path):
+    doc = deepcopy(DOCUMENT)
+    doc["entries"] = [
+        {"id": f"fiction-{i}", "kind": "ingredient", "display": f"架空成分{i}",
+         "aliases": aliases, "codes": {}, "forms": []}
+        for i, aliases in enumerate((["架空ナリン"], ["架空セリン", "架空セリン錠"]))]
+    cfg = configured(store, tmp_path, doc)
+    body = "本人は架空ナリン5mgと架空セリン錠60mgを服用。"
+    result = drug_mentions.build(store.db, cfg, body, deadline=time.monotonic() + 10)
+    assert [row["surface"] for row in result["matches"]] == ["架空ナリン5mg", "架空セリン錠60mg"]
+    assert [row["candidates"][0]["matched_surface"] for row in result["matches"]] == ["架空ナリン", "架空セリン錠"]
+    assert drug_mentions.validate(result, body)
+
+
+def test_short_name_needs_medication_context_and_whole_word(store, tmp_path):
+    doc = deepcopy(DOCUMENT)
+    doc["entries"][0]["aliases"] = ["アア", "キラナ"]
+    cfg = configured(store, tmp_path, doc)
+    body = "ああアアた。本人はアアを服用。ひらがなキラナた。ＡキラナＢ。"
+    result = drug_mentions.build(store.db, cfg, body, deadline=time.monotonic() + 10)
+    assert [row["surface"] for row in result["matches"]] == ["アア"]
+    assert drug_mentions.validate(result, body)
+
+
+def test_many_candidates_for_one_alias_do_not_exhaust_occurrence_limit(store, tmp_path):
+    doc = deepcopy(DOCUMENT)
+    doc["entries"] = [{"id": f"fiction-{i:03}", "kind": "ingredient", "display": f"架空成分{i}",
+                       "aliases": ["共通架空"], "codes": {}, "forms": []} for i in range(129)]
+    cfg = configured(store, tmp_path, doc)
+    body = "本人は共通架空を服用。"
+    result = drug_mentions.build(store.db, cfg, body, deadline=time.monotonic() + 10)
+    row, = result["matches"]
+    assert result["status"] == "active" and row["candidate_count"] == 129
+    assert row["candidates_truncated"] is True and len(row["candidates"]) == 3
+    assert drug_mentions.validate(result, body)
+
+
+def test_contained_aliases_keep_both_unconfirmed_identities(store, tmp_path):
+    doc = deepcopy(DOCUMENT)
+    doc["entries"] = [{"id": f"fiction-{i}", "kind": "ingredient", "display": f"架空成分{i}",
+                       "aliases": [alias], "codes": {}, "forms": []}
+                      for i, alias in enumerate(("キラナ", "キラナ錠"))]
+    cfg = configured(store, tmp_path, doc)
+    body = "本人はキラナ錠を服用。"
+    result = drug_mentions.build(store.db, cfg, body, deadline=time.monotonic() + 10)
+    row, = result["matches"]
+    assert row["surface"] == "キラナ錠" and row["candidate_count"] == 2
+    assert {candidate["matched_surface"] for candidate in row["candidates"]} == {"キラナ", "キラナ錠"}
+    assert drug_mentions.validate(result, body)
+
+
+def test_match_limit_returns_partial_snapshot(store, tmp_path, monkeypatch):
+    cfg = configured(store, tmp_path)
+    monkeypatch.setattr(drug_mentions, "MAX_MATCHES", 1)
+    body = "本人はキラナを服用。共通架空は未確認。"
+    result = drug_mentions.build(store.db, cfg, body, deadline=time.monotonic() + 10)
+    assert result["status"] == "partial" and len(result["matches"]) == 1
+    assert drug_mentions.validate(result, body)
+
+
+def test_unsafe_candidate_label_and_database_error_fail_closed(store, tmp_path, monkeypatch):
+    doc = deepcopy(DOCUMENT)
+    doc["entries"][0]["display"] = "架空\u202e改変"
+    cfg = configured(store, tmp_path, doc)
+    body = "本人はキラナを服用。"
+    result = drug_mentions.build(store.db, cfg, body, deadline=time.monotonic() + 10)
+    assert result["status"] == "partial" and not result["matches"]
+    assert drug_mentions.validate(result, body)
+    monkeypatch.setattr(drug_map, "active_dictionary", lambda *args: (_ for _ in ()).throw(sqlite3.Error("private")))
+    result = drug_mentions.build(store.db, cfg, body, deadline=time.monotonic() + 10)
+    assert result["status"] == "invalid" and result["matches"] == []
+    assert drug_mentions.validate(result, body)
 
 
 def test_candidate_cap_reports_omission_without_selecting_identity(store, tmp_path):
