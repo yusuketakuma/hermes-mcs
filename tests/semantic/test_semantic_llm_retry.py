@@ -191,6 +191,7 @@ def _held_admission(monkeypatch, calls):
 def _refused_connection(monkeypatch, calls):
     import local_llm
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(semantic_transport, "_probe_format", lambda *args: "plain")
 
     def refused(prompt, error_out=None, **kw):
         calls.append(prompt)
@@ -203,6 +204,7 @@ def _refused_connection(monkeypatch, calls):
 def _turn_busy(monkeypatch, calls):
     import local_llm
     monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    monkeypatch.setattr(semantic_transport, "_probe_format", lambda *args: "plain")
 
     def busy(prompt, error_out=None, **kw):
         calls.append(prompt)
@@ -224,7 +226,20 @@ def test_turn_wait_expiry_is_not_an_outage(monkeypatch):
         semantic_transport.llm_chat("synthetic prompt")
     assert info.value.stage == "llm_turn_busy"
     assert info.value.stage not in semantic_drain._LLM_DOWN_REASONS
-    assert calls[-1] == "synthetic prompt"  # a format probe may precede it
+    assert calls == ["synthetic prompt"]
+
+
+def test_unobserved_probe_defers_without_sending_prompt(monkeypatch):
+    import local_llm
+    monkeypatch.setattr(semantic_transport, "_probe_format", lambda *args: None)
+    monkeypatch.setattr(local_llm, "admission_enabled", lambda: False)
+    calls = []
+    monkeypatch.setattr(local_llm, "chat", lambda *args, **kwargs: calls.append(args))
+    with pytest.raises(semantic_runtime.LLMNotSent) as info:
+        semantic_transport.llm_chat("synthetic prompt")
+    assert info.value.stage == "probe_unsent"
+    assert info.value.stage not in semantic_drain._LLM_DOWN_REASONS
+    assert calls == []
 
 
 @pytest.mark.parametrize("not_sent", [_held_admission, _refused_connection, _turn_busy])
