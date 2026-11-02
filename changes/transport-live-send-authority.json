@@ -1,0 +1,16 @@
+{
+  "category": "fixed",
+  "title": "通知停止中の再送とLINE WORKSの配送停滞を修正",
+  "summary": "Discordは、送信待ちの間に通知が停止されたり配送先が変わったりした場合、SDK内の再試行でも送信条件を確認します。LINE WORKSは一時停止中も受領済みの正しい配送許可を保持し、現在の送信条件を満たすまで待機します。",
+  "upgrade": "変更を反映するには、利用中の通知接続（Hermes gateway、standalone、LINE WORKSアダプター）を既存の更新手順に従って再起動してください。モデル・予算・人承認の条件は変わりません。",
+  "details": [
+    "DiscordのHTTP 429後の再試行で、停止状態・配送先・復元待機と、公開中の送信指示を再確認します。権限を確認できない場合は送信しません。",
+    "スレッド本文の送信後に追加案内を停止しても、本文の配送記録を保持し、本文を再送しません。",
+    "LINE WORKSの配送許可の照合と現在の送信条件を分離します。送信結果が不明な場合の自動再送禁止は維持します。"
+  ],
+  "refs": [
+    "adapters/common/worker.py",
+    "adapters/discord/delivery.py",
+    "adapters/lineworks/delivery.py"
+  ]
+}

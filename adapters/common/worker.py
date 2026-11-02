@@ -101,10 +101,21 @@ async def await_settled(coroutine, *, on_cancel=None):
     return result
 
 
+class SendNotAdmitted(RuntimeError):
+    """Current authority refused a write before it reached the transport."""
+
+    def __init__(self, last_status=None):
+        super().__init__("current send authority unavailable")
+        # A preceding 429 is an observed refusal, never an ambiguous send.
+        self.status = 429 if last_status == 429 else None
+
+
 def err_code(exc: BaseException) -> str:
     status = getattr(exc, "status", None)
     if isinstance(status, int):
         return f"http_{status}"
+    if isinstance(exc, SendNotAdmitted):
+        return "denied_current_authority"
     return type(exc).__name__.lower()
 
 
@@ -112,7 +123,8 @@ def is_definitive_reject(exc: BaseException) -> bool:
     """A 4xx status is an explicit answer — the send never committed.
     Timeouts, disconnects and cancellations cannot prove that."""
     status = getattr(exc, "status", None)
-    return isinstance(status, int) and status in NOT_SENT_STATUS
+    return (isinstance(exc, SendNotAdmitted)
+            or isinstance(status, int) and status in NOT_SENT_STATUS)
 
 
 async def _outcome_of(awaitable):
@@ -864,6 +876,15 @@ class DeliveryWorker:
                     None if spec is None else spec["delivery"]["route_epoch"],
                     check_epoch=spec is not None, int_epoch=True,
                     default_transport="discord"))
+
+    def _retry_gate(self, spec):
+        """Recheck live authority; a retry also needs the runner's live spec."""
+        async def allowed(*, retry=True):
+            if not await self._send_allowed(spec):
+                return False
+            return not retry or await asyncio.to_thread(os.path.isfile, os.path.join(
+                self._dirs["render"], spec["delivery_id"] + ".json"))
+        return allowed
 
     async def _step_claim(self, claim: dict, *, allow_parts: bool = True) -> None:
         spec = claim["spec"]

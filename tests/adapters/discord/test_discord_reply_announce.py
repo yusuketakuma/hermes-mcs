@@ -29,7 +29,7 @@ def _worker(monkeypatch, channel):
         return channel
     worker._channel = lookup
 
-    async def direct(_bot, factory):
+    async def direct(_bot, factory, **_kwargs):
         return await factory()
     monkeypatch.setattr(delivery, "single_post", direct)
     monkeypatch.setattr(delivery.cards, "no_pings", lambda: None)
