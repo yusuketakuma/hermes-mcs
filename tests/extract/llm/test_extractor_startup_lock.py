@@ -1,5 +1,6 @@
 """Resident extraction waits for the writer without crossing update fences."""
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -196,6 +197,41 @@ def test_unreadable_source_state_fails_before_ledger(monkeypatch):
     monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda: pytest.fail("unexpected lock"))
     monkeypatch.setattr(extract_llm, "Ledger", lambda _: pytest.fail("unexpected ledger"))
     assert extract_llm._open_resident_ledger(time.monotonic() + 2) is None
+
+
+@pytest.mark.parametrize("damage", ["changed_before_snapshot", "unreadable", "none"])
+def test_loaded_source_digest_is_checked_under_lock(tmp_path, monkeypatch, damage):
+    root = tmp_path / "source"
+    root.mkdir()
+    path = root / "synthetic.py"
+    path.write_bytes(b"synthetic source before")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    if damage == "changed_before_snapshot":
+        path.write_bytes(b"synthetic source after")
+    elif damage == "unreadable":
+        path.unlink()
+        (root / "other.py").write_text("synthetic")
+    monkeypatch.setattr(extract_llm, "_RESIDENT_SOURCE_ROOT", str(root))
+    monkeypatch.setattr(extract_llm, "_LOADED_SOURCE_PATHS", {"module": str(path)})
+    monkeypatch.setattr(extract_llm, "_LOADED_SOURCE_DIGESTS", {"module": digest})
+    monkeypatch.setattr(extract_llm, "_writer_current", lambda **_: True)
+    lock = str(tmp_path / "digest.lock")
+    real_acquire = writer_lock.acquire_run_lock
+    monkeypatch.setattr(writer_lock, "acquire_run_lock", lambda: real_acquire(lock))
+    ledger, opened = object(), []
+
+    def construct(_):
+        assert real_acquire(lock) is None
+        opened.append(True)
+        return ledger
+
+    monkeypatch.setattr(extract_llm, "Ledger", construct)
+    result = extract_llm._open_resident_ledger(time.monotonic() + 2)
+    assert result is (ledger if damage == "none" else None)
+    assert opened == ([True] if damage == "none" else [])
+    fd = real_acquire(lock)
+    assert fd is not None
+    os.close(fd)
 
 
 def test_resident_stop_after_bounds_startup_wait(tmp_path, monkeypatch, capsys):

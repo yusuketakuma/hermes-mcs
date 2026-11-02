@@ -134,9 +134,7 @@ TIMEOUT = 300
 # v8: v1.0.21 pharmacy details, person/time-scoped vitals and source-bound repair feedback.
 EXTRACT_VERSION = inference.LLM_EXTRACT_VERSION
 PATIENT_CONTEXT_VERSION = 4
-_LOADED_SOURCE_DIGESTS = {
-    name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
-    for name, path in (("extract_llm", __file__),
+_LOADED_SOURCE_PATHS = dict((("extract_llm", __file__),
                        ("cloud_client", cloud_client.__file__),
                        ("anthropic_client", anthropic_client.__file__),
                        ("openai_client", openai_client.__file__),
@@ -190,7 +188,10 @@ _LOADED_SOURCE_DIGESTS = {
                        ("local_llm", local_llm.__file__),
                        ("extract_schema", extract_schema.__file__),
                        ("extract_validation", extract_validation.__file__),
-                       ("extract_quality", extract_quality.__file__))}
+                       ("extract_quality", extract_quality.__file__)))
+_LOADED_SOURCE_DIGESTS = {
+    name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    for name, path in _LOADED_SOURCE_PATHS.items()}
 _WRITER_STATE = writer_lock.updater_state()
 _INFERENCE_VERSION = inference.CURRENT_VERSION
 _INFERENCE_SOURCE_STAT = os.stat(inference.__file__).st_mtime_ns
@@ -6686,6 +6687,16 @@ def _resident_source_state():
     return tuple(sorted(files))
 
 
+def _resident_loaded_sources_current():
+    if _LOADED_SOURCE_PATHS.keys() != _LOADED_SOURCE_DIGESTS.keys():
+        return False
+    try:
+        return all(hashlib.sha256(Path(path).read_bytes()).hexdigest() == _LOADED_SOURCE_DIGESTS[name]
+                   for name, path in _LOADED_SOURCE_PATHS.items())
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def _open_current_ledger(*, deadline=None, distinguish_fence=False, source_state=None):
     fd = writer_lock.acquire_run_lock()
     if fd is None:
@@ -6695,7 +6706,8 @@ def _open_current_ledger(*, deadline=None, distinguish_fence=False, source_state
             return _RESIDENT_FENCE_LOST if distinguish_fence else None
         if source_state is not None:
             try:
-                if _resident_source_state() != source_state or not _writer_current(full=True):
+                if (_resident_source_state() != source_state or not _resident_loaded_sources_current()
+                        or not _writer_current(full=True)):
                     return _RESIDENT_FENCE_LOST if distinguish_fence else None
             except OSError:
                 return _RESIDENT_FENCE_LOST if distinguish_fence else None
