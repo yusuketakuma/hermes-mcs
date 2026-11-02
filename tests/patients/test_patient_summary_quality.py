@@ -8,13 +8,14 @@ import pytest
 
 import patient_context_refresh as refresh
 import extract_llm as worker
+import cloud_inference
 import semantic_jev
 import semantic_runtime as semantic_runtime
 from test_patient_context_refresh import runtime as runtime, seed, finish, step, document, CFG
 from semantic_jev import JevError
 from extract_testkit import _ledger, _message
 
-_REAL_CLOUD_PROVIDER = worker._CloudProvider
+_REAL_CLOUD_PROVIDER = cloud_inference._CloudProvider
 
 
 REQUEST_IDENTITY = {'input_key': '1' * 64, 'candidate_key': '2' * 64,
@@ -334,6 +335,7 @@ def quality_owner(runtime, monkeypatch):
     cfg = {**CFG, 'cloud_llm': {'mode': 'off'},
            'semantic': {'mode': 'assist', 'project_ids': [1], 'daily_request_budget': 3000}}
     monkeypatch.setattr(worker, 'load_config', lambda: cfg)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(worker, '_writer_current', lambda **kwargs: True)
     monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *_: 'synthetic-anthropic-key')
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: 'synthetic-jev-key')
@@ -388,11 +390,12 @@ def test_requested_cloud_with_missing_key_falls_back_to_local(runtime, monkeypat
     cfg = {**CFG, 'cloud_llm': {'mode': 'on', 'project_ids': [1]}}
     monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *_: None)
     monkeypatch.setattr(worker, 'load_config', lambda: cfg)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(worker, '_writer_current', lambda **_kwargs: True)
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: None)
     result = refresh.run_due(led, cfg, deadline=runtime[1].mono + 600, admit=lambda: True)
     assert result['status'] == 'progressed' and local_calls
-    assert refresh._contract(cfg, 1).get('provider') == worker._cloud_contract()
+    assert refresh._contract(cfg, 1).get('provider') == cloud_inference._cloud_contract()
     for _ in range(60):
         result = step(runtime, cfg=cfg)
         if result['status'] == 'complete':
@@ -428,6 +431,7 @@ def repair(tmp_path, monkeypatch):
     monkeypatch.setattr(worker.cloud_policy, 'budget_block_reason', lambda *args, **kwargs: None)
     monkeypatch.setattr(worker.cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')
     monkeypatch.setattr(worker, 'load_config', lambda: repair_cfg)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: repair_cfg)
     def capture(db, pid, cfg, night_id, repaired, contract, projection):
         assert db.in_transaction and pid == 1 and contract == assessment
         key = refresh._digest(sorted((row['fact_ids'][0], row['text']) for row in repaired))
@@ -448,7 +452,7 @@ def repair(tmp_path, monkeypatch):
         def commit_guard(self):
             if not self.current():
                 raise worker.CloudFallback('cloud_unit_changed')
-    monkeypatch.setattr(worker, '_CloudProvider', Provider)
+    monkeypatch.setattr(cloud_inference, '_CloudProvider', Provider)
     def run():
         return refresh._quality_repair_candidate(led, 1, repair_cfg, '2026-10-27',
             {'summary': summary, 'temporal_view': {}}, identity, claim, lambda *_: current[0],
@@ -487,7 +491,7 @@ def test_distinct_summary_repair_requires_exact_response_and_receipt(monkeypatch
         assert kwargs['prompt'] == 'synthetic prompt'
         assert kwargs['owner'] == {'night_id': 'synthetic-night', 'source_sig': original['input_key']}
         return {'witness': '4' * 64}
-    monkeypatch.setattr(worker, '_cloud_repair_answer_evidence', evidence)
+    monkeypatch.setattr(cloud_inference, '_cloud_repair_answer_evidence', evidence)
     if damage == 'answer':
         proof['answer_text'] = json.dumps({'fact_ids': ['5' * 64]})
     elif damage == 'receipt':
@@ -563,13 +567,14 @@ def test_summary_high_repair_retains_response_receipt_for_resume(repair, monkeyp
     cfg = {'cloud_llm': {'mode':'on', 'provider':'openai', 'project_ids':[1]}}
     monkeypatch.setattr(worker, 'HOME', str(tmp_path))
     monkeypatch.setattr(worker, 'load_config', lambda: cfg)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(worker.cloud_policy, 'provider_key', lambda *_args: 'synthetic-key')
     monkeypatch.setattr(worker.cloud_policy, 'pricing_valid', lambda *args, **kwargs: True)
     monkeypatch.setattr(worker.cloud_policy, 'block_reason', lambda *args, **kwargs: None)
     monkeypatch.setattr(worker.writer_lock, 'updater_state', lambda: (False, 1))
     monkeypatch.setattr(worker.cloud_backlog, 'request_slot', lambda *_args: nullcontext(True))
     monkeypatch.setattr(worker.cloud_backlog, 'owner_alive', lambda: True)
-    monkeypatch.setattr(worker, '_CloudProvider', _REAL_CLOUD_PROVIDER)
+    monkeypatch.setattr(cloud_inference, '_CloudProvider', _REAL_CLOUD_PROVIDER)
     posts = []
     real_client = worker.openai_client.OpenAIClient
     class Client(real_client):

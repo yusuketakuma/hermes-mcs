@@ -15,6 +15,7 @@ from contextlib import contextmanager
 import pytest
 
 import extract_llm
+import cloud_inference
 import local_llm
 import run_check
 import semantic
@@ -117,6 +118,7 @@ def test_updater_during_an_expiring_wait_is_reported(held_lock, monkeypatch, con
 
 def _resident(monkeypatch, calls, background, argv_extra=()):
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.sys, "argv",
                         ["extract_llm", "--all", "--semantic", "--stop-after", "600",
                          *argv_extra])
@@ -184,6 +186,7 @@ def test_direct_background_pass_keeps_the_default_lane(monkeypatch, tmp_path):
     monkeypatch.setattr(extract_llm, "acquire_run_lock",
                         lambda *a, **k: writer_lock.acquire_run_lock(lock))
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
     monkeypatch.setattr(drain, "run_due", lambda *a, **k: seen.append(
         local_llm.request_slot()) or {"done": 0})

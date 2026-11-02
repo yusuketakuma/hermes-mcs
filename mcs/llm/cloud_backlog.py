@@ -105,25 +105,27 @@ class Pool:
         self.last_sync = 0.0
 
     def sync(self, cfg, *, ledger=None):
+        import cloud_inference
+        import cloud_policy
         import extract_llm
         now = time.monotonic()
         if now - self.last_sync < 10:
             return
         self.last_sync = now
-        settings = extract_llm._cloud_settings(cfg)
+        settings = cloud_inference._cloud_settings(cfg)
         if settings["mode"] != "on":
             self.close()
             return
-        if not extract_llm.cloud_policy.selected_key(self.root):
+        if not cloud_policy.selected_key(self.root):
             return
         self.children = [p for p in self.children if p.poll() is None]
-        selection, errors = extract_llm.cloud_policy.resolve_profile(
+        selection, errors = cloud_policy.resolve_profile(
             cfg, route="reextract", purpose="backlog", root=self.root)
         if errors or selection is None:
             return
         limit = selection["max_tokens"] if selection["max_tokens"] is not None else extract_llm.MAX_TOKENS
-        if ledger is not None and (extract_llm.cloud_policy.global_block_reason(ledger, model=selection["model"])
-                or extract_llm.cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
+        if ledger is not None and (cloud_policy.global_block_reason(ledger, model=selection["model"])
+                or cloud_policy.budget_block_reason(ledger, settings, max_tokens=limit, selection=selection)):
             return
         directory = self.root / "data"
         if self.lock is None:
@@ -174,6 +176,8 @@ def worker(parent):
     """Alternate guarded cloud extraction and semantic jobs with an independent ledger."""
     global _parent
     _parent = parent
+    import cloud_inference
+    import cloud_policy
     import extract_llm
     import semantic_drain
     import semantic_runtime
@@ -244,8 +248,8 @@ def worker(parent):
                 except ProviderSettingsUnreadable:
                     wait("provider_settings_unreadable")
                     continue
-                settings = extract_llm._cloud_settings(cfg)
-                selection, errors = extract_llm.cloud_policy.resolve_profile(
+                settings = cloud_inference._cloud_settings(cfg)
+                selection, errors = cloud_policy.resolve_profile(
                     cfg, route="reextract", purpose="backlog")
                 limit = (selection["max_tokens"] if selection is not None and selection["max_tokens"] is not None
                          else extract_llm.MAX_TOKENS)
@@ -255,8 +259,8 @@ def worker(parent):
                 if errors or selection is None:
                     wait("cloud_profile_unavailable")
                     continue
-                blocked = (extract_llm.cloud_policy.global_block_reason(ledger, model=selection["model"])
-                           or extract_llm.cloud_policy.budget_block_reason(
+                blocked = (cloud_policy.global_block_reason(ledger, model=selection["model"])
+                           or cloud_policy.budget_block_reason(
                                ledger, settings, max_tokens=limit, selection=selection))
                 if blocked:
                     wait(blocked if blocked in _WAIT_CODES else "cloud_blocked")

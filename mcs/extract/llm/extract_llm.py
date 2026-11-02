@@ -76,6 +76,7 @@ import anthropic_client
 import openai_client
 import cloud_policy
 import cloud_backlog
+import cloud_inference
 import llm_retry
 import mcs_config
 import clinical_values
@@ -141,6 +142,7 @@ _LOADED_SOURCE_DIGESTS = {
                        ("openai_client", openai_client.__file__),
                        ("cloud_policy", cloud_policy.__file__),
                        ("cloud_backlog", cloud_backlog.__file__),
+                       ("cloud_inference", cloud_inference.__file__),
                        ("llm_retry", llm_retry.__file__),
                        ("mcs_config", mcs_config.__file__),
                        ("mcs_queries", mcs_queries.__file__),
@@ -621,7 +623,7 @@ def _evidence_matches_route(evidence, model, contract):
     return (name in ("anthropic", "openai") and isinstance(contract, dict)
             and set(contract) == {"backend", "model", "prompt"}
             and contract.get("backend") == name and contract.get("model") == model
-            and _known_cloud_contract(contract)
+            and cloud_inference._known_cloud_contract(contract)
             and isinstance(contract.get("prompt"), str)
             and re.fullmatch(r"[0-9a-f]{16}", contract["prompt"]) is not None)
 
@@ -794,313 +796,18 @@ def _integrity_summary(notes: list) -> dict:
     return summary
 
 
-class CloudFallback(Exception):
-    """Discard this provider's unit and retry under the local contract."""
-
-
-class CloudBusy(CloudFallback):
-    """No shared cloud capacity was reserved or sent."""
-
-
-def _current_cloud_settings():
-    try:
-        return _cloud_settings(load_config())
-    except Exception:
-        raise CloudFallback("cloud_unit_changed") from None
-
-
-class _CloudProvider:
-    """Bind one unit's guarded HTTP attempts to the ledger's owning thread."""
-
-    def __init__(self, ledger, cfg, *, route, project_id, unit_key, deadline,
-                 current, dispatch, message_id=None, owner=None, discard_reason=None,
-                 max_attempts=None, on_reserved_tx=None, reserve_dispatch=None, transport=None,
-                 purpose=None, selection=None):
-        purpose = purpose or ("patient_context" if route == "patient_context" else "backlog")
-        raw_cfg = copy.deepcopy(cfg)
-        resolved, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
-        if errors or resolved is None or selection is not None and dict(selection) != dict(resolved):
-            raise CloudFallback("cloud_profile_invalid")
-        self.selection = resolved
-        self.purpose = purpose
-        self._profile_cfg = raw_cfg
-        cfg = {**cfg, "cloud_llm": _cloud_settings(cfg)}
-        self.model = resolved["model"]
-        self.contract = _cloud_contract(cfg, route=route, purpose=purpose, selection=resolved)
-        generation = cloud_policy.config_generation(cfg)
-        scope = cloud_policy.scope_generation(cfg)
-        updater = writer_lock.updater_state()
-        key = cloud_policy.selected_key(HOME, cfg)
-        self.dispatch = dispatch
-        self.generation = generation
-        self.completed_reservations = []
-        self._children = []
-        self.message_id = message_id
-        self.owner = owner
-        self._possibly_sent = False
-        self.discard_reason = discard_reason
-        self.ledger = ledger
-        self.deadline = deadline
-        self.discarded = False
-        self.final_disposition = None
-
-        reserved_caps = {}
-
-        def caps(settings):
-            out = {k: settings[k] for k in ("daily_request_budget", "daily_cost_limit_usd",
-                                            "monthly_cost_limit_usd", "window_budget_usd")}
-            # an earlier period start counts more spending, like a lower cap
-            start = settings["window_start"]
-            out["window_start"] = None if start is None else mcs_util.until_epoch(start)
-            budgets = settings["provider_budgets"]
-            provider_caps = budgets.get(settings["provider"], {})
-            for key in ("daily_cost_limit_usd", "monthly_cost_limit_usd"):
-                out["provider_" + key] = provider_caps.get(key, 0 if budgets else None)
-            return out
-
-        def tightened(now):
-            # a cap set or lowered after this attempt's reservation stops the send it
-            # has not made yet; the reservation itself stays counted at its maximum
-            return any(reserved_caps.get(k, now[k]) is None and now[k] is not None
-                       or None not in (reserved_caps.get(k), now[k]) and now[k] < reserved_caps[k]
-                       for k in now)
-
-        def guard(*, inference=True):
-            # A denial observed after the response is sticky for this unit:
-            # restoring the old source/scope cannot make its response current.
-            if self.final_disposition is not None:
-                raise CloudFallback("cloud_unit_changed")
-            try:
-                live = load_config()
-                now = _cloud_settings(live)
-                chosen, errors = cloud_policy.resolve_profile(live, route=route, purpose=purpose, root=HOME)
-                # The run window gates each new POST (retries included); a result that
-                # already arrived is still judged only by scope, not by the clock.
-                denied = (errors or chosen is None or dict(chosen) != dict(self.selection)
-                          or (inference and (not cloud_backlog.owner_alive() or time.monotonic() >= deadline
-                                          or tightened(caps(now)) or cloud_policy.setting_block_reason(now)))
-                          or writer_lock.updater_state() != updater
-                          or updater[0] or cloud_policy.selected_key(HOME, {"cloud_llm": now}) != key
-                          or cloud_policy.scope_generation({"cloud_llm": now}) != scope
-                          # A paid result is kept while its scope holds, even if the send window closes.
-                          or (cloud_policy.block_reason(ledger, now, route, project_id, model=self.model) if inference
-                              else not cloud_policy.eligible(now, route, project_id))
-                          or not current())
-            except Exception:
-                # An unreadable guard is a denial; the result callback must still
-                # settle any already received or provably unsent attempt.
-                raise CloudFallback("cloud_unit_changed") from None
-            if denied:
-                raise CloudFallback("cloud_unit_changed")
-        self.guard = lambda: dispatch(guard)
-        def commit_guard():
-            dispatch(lambda: guard(inference=False), result=True)
-            for child in self._children:
-                child.commit_guard()
-        self.commit_guard = commit_guard
-        def spawn_quality_repair():
-            if route != "reextract" or purpose != "backlog":
-                raise CloudFallback("cloud_repair_invalid")
-            child = _CloudProvider(ledger, raw_cfg, route=route, project_id=project_id,
-                unit_key=unit_key, deadline=deadline, current=current, dispatch=dispatch,
-                message_id=message_id, owner=owner, discard_reason=discard_reason,
-                max_attempts=max_attempts, reserve_dispatch=reserve_dispatch, transport=transport,
-                purpose="quality_repair")
-            self._children.append(child)
-            return child
-        self.spawn_quality_repair = spawn_quality_repair
-        def reserve(body, timeout):
-            # every new attempt (retry, repair, next chunk) is judged against the
-            # budget in force now, not the one the unit started under
-            try:
-                current_cfg = {"cloud_llm": _current_cloud_settings()}
-                current_caps = caps(current_cfg["cloud_llm"])
-            except Exception:
-                raise CloudFallback("cloud_unit_changed") from None
-            reserved_caps.clear()
-            reserved_caps.update(current_caps)
-            hook = {"on_reserved_tx": on_reserved_tx} if on_reserved_tx is not None else {}
-            return cloud_policy.usage_reserver(ledger, current_cfg, route=route, project_id=project_id,
-                unit_key=unit_key, message_id=self.message_id, owner=self.owner,
-                selection=self.selection, **hook)(body, timeout)
-        self.reserve = lambda body, timeout: (reserve_dispatch or dispatch)(lambda: reserve(body, timeout))
-        def record(reservation, metadata):
-            # The callback also settles a reservation rejected before sending.
-            # Capture the other cases before owner-thread dispatch: acquiring the
-            # owner or saving accounting can fail after the HTTP attempt.
-            not_sent = metadata.get("http_class") == "not_sent"
-            if not not_sent:
-                self.possibly_sent = True
-            def write():
-                try:
-                    guard(inference=False)
-                except CloudFallback:
-                    if self.final_disposition is None:
-                        self.final_disposition = discard_reason() if discard_reason else "discarded_scope"
-                    outcome = {**metadata, "disposition": self.final_disposition}
-                else:
-                    outcome = dict(metadata)
-                value = cloud_policy.record_result(ledger, reservation, outcome)
-                self.completed_reservations.append(reservation)
-                return value
-            return dispatch(write, result=True)
-        self.result = record
-        client_args = {} if max_attempts is None else {"max_attempts": max_attempts}
-        if transport is not None:
-            client_args["post_fn"] = lambda body, timeout: transport(
-                self.client.request, "POST", body, timeout, deadline=self.deadline)
-            client_args["wait_fn"] = lambda delay: transport(time.sleep, delay)
-        if resolved["provider"] == "openai":
-            client = openai_client.OpenAIClient
-            client_args.update(model=self.model, effort=resolved["effort"])
-        else:
-            client = anthropic_client.AnthropicClient
-        self.client = client(key, **client_args)
-
-    def discard(self):
-        """Append the unit's final disposition without mutating financial results."""
-        for child in self._children:
-            child.discard()
-        if not self.completed_reservations or self.discarded:
-            return
-        def write():
-            if self.ledger.db.in_transaction:
-                raise RuntimeError("cloud_disposition_owner_transaction_active")
-            with self.ledger.db:
-                self.ledger.db.execute("BEGIN IMMEDIATE")
-                reason = self.final_disposition or (self.discard_reason() if self.discard_reason else "discarded_scope")
-                for reservation in self.completed_reservations:
-                    cloud_policy.record_disposition_tx(self.ledger, reservation, reason)
-            self.final_disposition = reason
-            self.discarded = True
-        return self.dispatch(write, result=True)
-
-    @property
-    def possibly_sent(self):
-        return self._possibly_sent or any(child.possibly_sent for child in self._children)
-
-    @possibly_sent.setter
-    def possibly_sent(self, value):
-        self._possibly_sent = value
-
-    def __call__(self, prompt, *, deadline, max_tokens, **unused):
-        try:
-            capacity = _current_cloud_settings()["max_concurrency"]
-        except Exception:
-            self.discard()
-            raise CloudFallback("cloud_unit_changed") from None
-        with cloud_backlog.request_slot(HOME, capacity) as held:
-            if not held:
-                raise CloudBusy("cloud_capacity")
-            return self._complete(prompt, deadline=deadline, max_tokens=max_tokens)
-
-    def _complete(self, prompt, *, deadline, max_tokens):
-        try:
-            http_deadline = min(self.deadline, deadline) - patient_context_refresh.COMMIT_MARGIN
-            if time.monotonic() >= http_deadline:
-                raise CloudFallback("cloud_unit_deadline")
-            # the fixed extraction heads are long enough to cache; the small repair head is not
-            prefix = next((head for head in (_PROMPT_HEAD, _BATCH_HEAD) if prompt.startswith(head)), None)
-            selected_tokens = self.selection["max_tokens"]
-            answer = self.client.complete(prompt, deadline=http_deadline,
-                max_tokens=max_tokens if selected_tokens is None else selected_tokens,
-                before_attempt=self.guard, reserve_fn=self.reserve, after_result=self.result,
-                cache_prefix=prefix)
-            self.commit_guard()
-            return answer
-        except CloudFallback as error:
-            if str(error) == "cloud_unit_changed":
-                self.discard()
-            raise
-        except writer_lock.RunLockLost:
-            raise
-        except cloud_client.CloudNotSent:
-            raise
-        except Exception as exc:
-            # Client errors contain fixed categories; no remote body enters local errors.
-            raise CloudFallback("cloud_unit_failed") from exc
-
-
-def _cloud_settings(cfg):
-    if not cfg:
-        # an unreadable config (load_config's {}) never auto-enables the paid
-        # route: a real config always carries mcs_login_id, so {} means unread
-        return cloud_policy.cloud_config({})[0]
-    return cloud_policy.resolve_settings(cfg, HOME)[0]
-
-
-# Reuse key: the provider and its fixed request shape. The inference rule
-# versions live in each caller's own contract (EXTRACT_VERSION, the context
-# CONTRACT/plan/rule), so a rule change rebuilds every patient while code
-# releases that leave the rules alone do not re-send or hide results.
-_CLOUD_CONTRACT = {"backend": "anthropic", "model": anthropic_client.MODEL,
-                   "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": "low"})[:16]}
-
-
-def _cloud_contract(cfg=None, *, route="reextract", purpose="backlog", selection=None):
-    if selection is None:
-        cfg = load_config() if cfg is None else cfg
-        selection, errors = cloud_policy.resolve_profile(cfg, route=route, purpose=purpose, root=HOME)
-        if errors or selection is None:
-            raise CloudFallback("cloud_profile_invalid")
-    if selection["provider"] == "openai":
-        if (selection["model"], selection["effort"]) not in openai_client.VALID_MODEL_EFFORTS:
-            raise CloudFallback("cloud_profile_invalid")
-        return {"backend": "openai", "model": selection["model"],
-                "prompt": mcs_util.payload_hash({"system": anthropic_client.SYSTEM, "effort": selection["effort"],
-                                               "service_tier": "default", "cache_ttl": "30m"})[:16]}
-    if selection["provider"] != "anthropic" or selection["model"] != anthropic_client.MODEL:
-        raise CloudFallback("cloud_profile_invalid")
-    return dict(_CLOUD_CONTRACT)
-
-
-def _known_cloud_contract(contract):
-    if contract == _CLOUD_CONTRACT:
-        return True
-    if not isinstance(contract, dict) or contract.get("backend") != "openai":
-        return False
-    return any(contract == _cloud_contract(selection={"provider": "openai", "model": model, "effort": effort})
-               for model, effort in openai_client.VALID_MODEL_EFFORTS)
-
-
-def _cloud_repair_answer_evidence(db, *, reservation_artifact_id, reservation_id, route,
-                                  project_id, message_id, unit_key, owner, prompt, answer_text, contract,
-                                  purpose="quality_repair", finish_reason="stop"):
-    """Validate one repaired answer against its settled request and exact response."""
-    if (type(reservation_artifact_id) is not int or not isinstance(reservation_id, str)
-            or not isinstance(unit_key, str) or not unit_key or not isinstance(owner, dict)
-            or not isinstance(prompt, str) or not isinstance(answer_text, str)
-            or purpose not in ("backlog", "patient_context", "quality_repair")
-            or finish_reason not in ("stop", "length")
-            or not _known_cloud_contract(contract)):
-        raise ValueError("cloud_repair_evidence_invalid")
-    try:
-        encoded = answer_text.encode("utf-8")
-        if len(encoded) > bounded_http.MAX_RESPONSE_BYTES:
-            raise ValueError("cloud_repair_evidence_invalid")
-        evidence = cloud_policy.reservation_evidence(db, reservation_artifact_id)
-        reservation, result = evidence["reservation"], evidence["result"]
-        selected = {"provider": contract["backend"], "model": reservation["model"],
-                    "effort": reservation["effort"]}
-        profile = reservation["profile"]
-        expected_request = cloud_policy._logical_request_fp({"instructions": cloud_client.SYSTEM, "input": prompt})
-        if (reservation["reservation_id"] != reservation_id or reservation["route"] != route
-                or reservation["project_id"] != project_id or reservation["message_id"] != message_id
-                or reservation["unit_key"] != unit_key or reservation["owner"] != owner
-                or reservation["logical_request_fp"] != expected_request
-                or _cloud_contract(selection=selected) != contract
-                or selected["provider"] == "openai" and profile is not None
-                and openai_client.PROFILE_DEFINITIONS.get(profile) != (selected["model"], selected["effort"])
-                or selected["provider"] == "openai" and profile is not None
-                and reservation["max_tokens"] != {"backlog": 8192, "patient_context": 16384,
-                                                   "quality_repair": 32768}[purpose]
-                or selected["provider"] == "anthropic" and profile is not None
-                or result.get("answer_text_sha256_v1") != hashlib.sha256(encoded).hexdigest()
-                or result.get("answer_finish_reason_v1") != finish_reason):
-            raise ValueError("cloud_repair_evidence_invalid")
-        return evidence
-    except (KeyError, TypeError, UnicodeError, sqlite3.Error, CloudFallback) as error:
-        raise ValueError("cloud_repair_evidence_invalid") from error
+# The cloud-provider contract and the guarded send lifecycle are owned by
+# cloud_inference so extract, semantic and patient-context callers share one
+# implementation; these same-identity aliases keep the established private
+# entry points without a second owner.
+CloudFallback = cloud_inference.CloudFallback
+CloudBusy = cloud_inference.CloudBusy
+_CloudProvider = cloud_inference._CloudProvider
+_current_cloud_settings = cloud_inference._current_cloud_settings
+_cloud_settings = cloud_inference._cloud_settings
+_cloud_contract = cloud_inference._cloud_contract
+_known_cloud_contract = cloud_inference._known_cloud_contract
+_cloud_repair_answer_evidence = cloud_inference._cloud_repair_answer_evidence
 
 
 def _cloud_origin_for_checkpoint(provider, prompt, answer_text, *, finish_reason="stop"):
@@ -1121,7 +828,7 @@ def _cloud_origin_for_checkpoint(provider, prompt, answer_text, *, finish_reason
             "message_id": reservation["message_id"], "unit_key": reservation["unit_key"],
             "owner": reservation["owner"], "prompt": prompt, "answer_text": answer_text,
             "contract": provider.contract, "purpose": provider.purpose, "finish_reason": finish_reason}
-        evidence = _cloud_repair_answer_evidence(provider.ledger.db, **arguments)
+        evidence = cloud_inference._cloud_repair_answer_evidence(provider.ledger.db, **arguments)
         return {"version": 1, "answer_text": answer_text, "reservation_artifact_id": rows[0][0],
                 "reservation_id": reservation["reservation_id"], "contract": provider.contract,
                 "owner": reservation["owner"], "unit_key": reservation["unit_key"],
@@ -1130,7 +837,7 @@ def _cloud_origin_for_checkpoint(provider, prompt, answer_text, *, finish_reason
 
 
 def _cloud_mode(ledger, cfg, route, project_id):
-    settings = _cloud_settings(cfg)
+    settings = cloud_inference._cloud_settings(cfg)
     if not cloud_policy.eligible(settings, route, project_id):
         return "off"
     mode = settings["mode"]
@@ -3358,7 +3065,7 @@ def _checkpoint_quality_origin(db, r, context, key, chunk_size, splits, origin, 
         hint = _hint_block(hints) if hints else ""
         prompt = prefix + reference + (_HINT_HEAD + hint + _HINT_TAIL if hint else "")
         prompt += _target_head(r["posted_at"]) + piece + _PROMPT_TAIL
-        evidence = _cloud_repair_answer_evidence(db, reservation_artifact_id=origin["reservation_artifact_id"],
+        evidence = cloud_inference._cloud_repair_answer_evidence(db, reservation_artifact_id=origin["reservation_artifact_id"],
             reservation_id=origin["reservation_id"], route="reextract", project_id=r["project_id"],
             message_id=r["message_id"], unit_key=origin["unit_key"], owner=origin["owner"], prompt=prompt,
             answer_text=origin["answer_text"], contract=origin["contract"], purpose="backlog")
@@ -3485,7 +3192,7 @@ def _replay_repair_leaf(db, r, context, key, chunk_size, splits, repair, candida
                 or response["owner"] != {"lease": meta["quality_lease"]}
                 or response["unit_key"] != str(r["message_id"])):
             return False
-        evidence = _cloud_repair_answer_evidence(db, reservation_artifact_id=response["reservation_artifact_id"],
+        evidence = cloud_inference._cloud_repair_answer_evidence(db, reservation_artifact_id=response["reservation_artifact_id"],
             reservation_id=response["reservation_id"], route="reextract", project_id=r["project_id"],
             message_id=r["message_id"], unit_key=response["unit_key"], owner=response["owner"], prompt=prompt,
             answer_text=response["answer_text"], contract=response["contract"], finish_reason=finish_reason)
@@ -5249,7 +4956,7 @@ def _select_pending_impl(ledger, limit: int, admitted_ids: set | None,
             adm_sql = " AND m.message_id IN (SELECT value FROM json_each(?))"
             adm_params = [json.dumps(sorted(admitted_ids))]
     if cloud_only:
-        cfg = _cloud_settings(load_config())
+        cfg = cloud_inference._cloud_settings(load_config())
         if cfg["mode"] != "on" or "reextract" not in cfg["routes"]:
             owner = getattr(ledger, '_cloud_state_owner', None)
             if owner is not None and prioritize_patients:
@@ -5460,14 +5167,14 @@ def _prepare_jobs(ledger, rows, target, prefilter: bool, *, allow_cloud=True,
         r["_cloud_mode"] = mode
         if mode in ("on", "shadow", "dry_run"):
             r["_cloud_config"] = copy.deepcopy(cfg)
-            r["_cloud_settings"] = _cloud_settings(cfg)
+            r["_cloud_settings"] = cloud_inference._cloud_settings(cfg)
             selection, errors = cloud_policy.resolve_profile(cfg, route="reextract", purpose="backlog", root=HOME)
             if errors or selection is None:
                 blocked += 1
                 continue
             r["_cloud_selection"] = selection
         if mode == "on":
-            r["_provider_contract"] = _cloud_contract(selection=selection)
+            r["_provider_contract"] = cloud_inference._cloud_contract(selection=selection)
             r["_target"] = (target[0], r["_provider_contract"]["model"])
         qc = _qc_feedback(ledger, r["qc_src"]) if r["qc_src"] else None
         if r["qc_src"] and qc is None:
@@ -5773,7 +5480,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
     checkpoints = queue.SimpleQueue()
     checkpoint_stopped = threading.Event()
     cfg = load_config()
-    cloud_workers = _cloud_settings(cfg)["max_concurrency"] if cloud_only or any(
+    cloud_workers = cloud_inference._cloud_settings(cfg)["max_concurrency"] if cloud_only or any(
         r.get("_cloud_mode") == "on" for r, *_ in jobs) else 1
     pool_workers = max(workers, cloud_workers)
     local_slots = threading.BoundedSemaphore(max(1, workers))
@@ -5880,12 +5587,13 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         provider = None
         if r.get("_cloud_mode") == "on":
             r["_cloud_lease"] = leases[index]
-            provider = _owner_call(lambda: _CloudProvider(ledger, r["_cloud_config"], route="reextract",
+            provider = _owner_call(lambda: cloud_inference._CloudProvider(ledger, r["_cloud_config"], route="reextract",
                 project_id=r["project_id"], message_id=r["message_id"],
                 unit_key=str(r["message_id"]), deadline=deadline,
                 current=lambda: not r.get("_checkpoint_conflict")
                     and _owns_current_source(ledger, r, r["_cloud_lease"]),
-                dispatch=_owner_call, owner={"lease": leases[index]}, selection=r["_cloud_selection"]))
+                dispatch=_owner_call, owner={"lease": leases[index]}, selection=r["_cloud_selection"],
+                cache_heads=(_PROMPT_HEAD, _BATCH_HEAD)))
         if provider is not None:
             try:
                 with cloud_slots:
@@ -6488,10 +6196,11 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
         cloud_result = None
         provider = None
         try:
-            provider = _CloudProvider(ledger, r["_cloud_config"], route="reextract", project_id=r["project_id"],
+            provider = cloud_inference._CloudProvider(ledger, r["_cloud_config"], route="reextract", project_id=r["project_id"],
                 message_id=r["message_id"], unit_key=str(r["message_id"]), deadline=deadline,
                 current=lambda r=r: _current(ledger, r["message_id"], r["content_hash"]),
-                dispatch=lambda fn, **kw: fn(), owner={"after_commit": True}, selection=r["_cloud_selection"])
+                dispatch=lambda fn, **kw: fn(), owner={"after_commit": True}, selection=r["_cloud_selection"],
+                cache_heads=(_PROMPT_HEAD, _BATCH_HEAD))
             cloud_result = llm_extract(r["body_text"], context=ctx, hints=_rule_hints(r),
                 deadline=deadline, meta_out=comparison_meta, posted_at=r["posted_at"],
                 vital_policy=vital_policy, provider=provider,
@@ -6695,7 +6404,7 @@ def _background_semantic(ledger, stop=None):
         out = semantic_drain.run_due(
             ledger, cfg, result, deadline, max_jobs=1,
             cfg_path=CONF_PATH, run_lock_fd=lock_fd, lane="backlog",
-            prioritize_patients=_cloud_settings(cfg)["mode"] == "on")
+            prioritize_patients=cloud_inference._cloud_settings(cfg)["mode"] == "on")
         out["errors"] = result["errors"]
         return out
     finally:
@@ -6848,7 +6557,7 @@ def _background_context_refresh(ledger, initial_state, stop=None):
         return admit() and not circuit_open_s(ledger.db) and _context_memory_available()
 
     try:
-        cloud_cfg = _cloud_settings(cfg)
+        cloud_cfg = cloud_inference._cloud_settings(cfg)
         cloud_enabled = cloud_cfg["mode"] != "off"
         if time.monotonic() >= deadline or not (admit() if cloud_enabled else local_admit()):
             result = {"status": "deferred", "done": 0}
@@ -7087,7 +6796,7 @@ def _main() -> int:
                         recent = _recent_arrivals(led)
                         adm = recent if adm is None else adm & recent
                     cloud_turn = oldest_turn or not args.semantic
-                    cloud_cfg = _cloud_settings(load_config())
+                    cloud_cfg = cloud_inference._cloud_settings(load_config())
                     extract_limit = (cloud_cfg["max_concurrency"] if cloud_turn
                                      and cloud_cfg["mode"] == "on" else 1)
                     r = run_pending(led, limit=extract_limit if args.semantic else 8,

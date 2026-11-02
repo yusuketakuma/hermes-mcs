@@ -6,6 +6,7 @@ import sqlite3
 import pytest
 
 import extract_llm as llm
+import cloud_inference
 import extract_quality
 import extract_validation as validation
 import inference_version as inference
@@ -109,6 +110,7 @@ def writer(tmp_path, monkeypatch):
     ledger = _ledger(tmp_path)
     ledger.save_messages([_message(body=BODY)])
     monkeypatch.setattr(llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(llm, "_resolved_llm", lambda: ("synthetic", "synthetic"))
     row = dict(ledger.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
     row["_source_binding"] = dependency_loss.source_binding(ledger.db, row["project_id"], row["message_id"])
@@ -180,6 +182,7 @@ def test_replay_only_refresh_never_adopts_completed_history_deliveries(writer, m
     calls = []
     monkeypatch.setattr(llm.extraction_refresh, "refresh_extraction_cards", lambda *a, **k: calls.append(1))
     monkeypatch.setattr(llm, "load_config", lambda: pytest.fail("replay refresh read config"))
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: pytest.fail("replay refresh read config"))
     llm._rerender_cards(ledger, 1, 2 if reply else row["message_id"])
     assert calls == [] and before == [tuple(r) for r in ledger.db.execute("SELECT * FROM fetch_jobs")]
 

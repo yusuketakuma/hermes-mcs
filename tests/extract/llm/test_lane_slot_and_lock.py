@@ -9,6 +9,7 @@ import time
 import pytest
 
 import extract_llm
+import cloud_inference
 from extract_testkit import _ledger, _message
 
 
@@ -294,6 +295,7 @@ def test_resident_threads_carry_and_settles_on_exit(monkeypatch, capsys):
     monkeypatch.setattr(extract_llm.time, "sleep",
                         lambda s: now.__setitem__(0, now[0] + s))
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.sys, "argv", [
         "extract_llm", "--all", "--lane", "2", "--stop-after", "100"])
     monkeypatch.setattr(extract_llm, "Ledger",
@@ -328,6 +330,7 @@ def test_resident_threads_carry_and_settles_on_exit(monkeypatch, capsys):
 @pytest.mark.parametrize("lane", ["1", "4"])
 def test_unknown_lane_is_rejected(monkeypatch, capsys, lane):
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.sys, "argv",
                         ["extract_llm", "--all", "--lane", lane])
     assert extract_llm.main() == 2
@@ -351,6 +354,7 @@ def test_real_carry_is_not_serialized_or_crashes_resident(monkeypatch):
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(extract_llm.time, "sleep", lambda s: now.__setitem__(0, now[0] + s))
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "2", "--stop-after", "10"])
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: type("DB", (), {"close": lambda self: None})())
     monkeypatch.delenv("MCS_LLM_SLOT", raising=False)
@@ -406,6 +410,7 @@ def test_update_stop_does_not_commit_old_carried_result(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "close", lambda: None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 123))
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "2", "--semantic", "--stop-after", "10"])
@@ -439,6 +444,7 @@ def test_context_lane_checks_update_fence_before_settling_carry(tmp_path, monkey
     monkeypatch.setattr(db, "close", lambda: None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *a: db)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 123))
     monkeypatch.setattr(extract_llm.sys, "argv", ["extract_llm", "--all", "--lane", "3", "--stop-after", "10"])
@@ -468,6 +474,7 @@ def test_lane3_rechecks_update_after_acquiring_settlement_lock(tmp_path, monkeyp
     monkeypatch.setattr(db, "close", lambda: None)
     monkeypatch.setattr(extract_llm, "Ledger", lambda *args: db)
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     generation = [123]
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, generation[0]))
     monkeypatch.setattr(extract_llm, "_WRITER_STATE", (False, 123))
@@ -540,6 +547,7 @@ def test_lane3_survives_transient_settle_error(monkeypatch, capsys):
     monkeypatch.setattr(extract_llm.time, "sleep",
                         lambda s: now.__setitem__(0, now[0] + s))
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(writer_lock, "updater_state", lambda: (False, 123))
     monkeypatch.setattr(extract_llm.sys, "argv", [
         "extract_llm", "--all", "--lane", "3", "--stop-after", "100"])

@@ -5,6 +5,7 @@ import pytest
 
 import extract
 import extract_llm as worker
+import cloud_inference
 import inference_dependency_loss
 import mcs_util
 from extract_testkit import _ledger, _message
@@ -24,7 +25,7 @@ def _local(monkeypatch, outputs):
 
 @pytest.mark.parametrize("name", ["anthropic", "openai"])
 def test_cloud_result_is_identified_by_the_actual_provider(name):
-    class Provider(worker._CloudProvider):
+    class Provider(cloud_inference._CloudProvider):
         model = worker.anthropic_client.MODEL if name == "anthropic" else worker.openai_client.MODEL
 
         def __init__(self):
@@ -179,7 +180,7 @@ def test_prior_evidence_requires_exact_content_and_source():
              "complete": True, "result_hash": mcs_util.payload_hash(json.loads(content)),
              "source_binding": "source-1"}
     prior = {"content": content, "model": worker.anthropic_client.MODEL,
-             "meta": json.dumps({"source_binding": "source-1", **worker._CLOUD_CONTRACT,
+             "meta": json.dumps({"source_binding": "source-1", **cloud_inference._CLOUD_CONTRACT,
                                  "actual_model": worker.anthropic_client.MODEL,
                                  "provider_provenance": proof})}
     assert worker._prior_provider_evidence(prior, content, "source-1") == {
@@ -316,9 +317,10 @@ def test_failed_cloud_falls_back_to_local_without_cloud_evidence(tmp_path, monke
         monkeypatch.setattr(extract, "_WRITER_STATE", (False, 1))
         monkeypatch.setattr(worker, "_rerender_cards", lambda *a, **kw: None)
         monkeypatch.setattr(worker, "load_config", lambda: {})
+        monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
         monkeypatch.setattr(worker, "_cloud_reextract", lambda *a, **kw: True)
         monkeypatch.setattr(worker, "_cloud_mode", lambda *a, **kw: "on")
-        monkeypatch.setattr(worker, "_cloud_settings", lambda cfg: {"provider": "anthropic", "max_concurrency": 1})
+        monkeypatch.setattr(cloud_inference, "_cloud_settings", lambda cfg: {"provider": "anthropic", "max_concurrency": 1})
         monkeypatch.setattr(worker, "_prefilter_enabled", lambda: False)
         monkeypatch.setattr(worker, "circuit_open_s", lambda db: 0)
         monkeypatch.setattr(worker, "disk_free_mb", lambda db: 100000)
@@ -331,7 +333,7 @@ def test_failed_cloud_falls_back_to_local_without_cloud_evidence(tmp_path, monke
             def __call__(self, *args, **kwargs):
                 raise worker.CloudFallback("cloud_unit_failed")
 
-        monkeypatch.setattr(worker, "_CloudProvider", FailedCloud)
+        monkeypatch.setattr(cloud_inference, "_CloudProvider", FailedCloud)
         outcome = worker.run_pending(ledger, budget_s=300)
         assert outcome["done"] == 1
         proof = json.loads(ledger.artifacts(worker.KIND, message_id=1)[-1]["meta"])["provider_provenance"]

@@ -1,4 +1,4 @@
-"""extract_llm tests (current v4 engine, mcs/extract/llm/extract_llm.py).
+"""extract_llm tests (current LLM extraction, public engine 1.0 / internal version 11; v4 was the old layout name).
 
 Covers: strict output validation (polarity/status/evidence fields),
 lazy replacement of older-version rows, backoff and claims, thread
@@ -18,6 +18,7 @@ import urllib.request
 import pytest
 
 import extract_llm
+import cloud_inference
 import inference_dependency_loss as dependency_loss
 from inference_version import CURRENT_VERSION, VERSION_KEY
 import mcs_signals
@@ -781,6 +782,7 @@ def test_replace_current_rerenders_card_once_written(tmp_path, monkeypatch):
     refused write does nothing and a render failure never undoes it."""
     import notify_cards
     monkeypatch.setattr(extract_llm, "load_config", lambda: {"notify": {"interactive": "slack"}})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {"notify": {"interactive": "slack"}})
     db = _ledger(tmp_path)
     db.save_messages([_message()])
     row = dict(db.db.execute("SELECT * FROM messages WHERE message_id=1").fetchone())
@@ -2836,6 +2838,7 @@ def test_resident_reloads_and_holds_invalid_admission_config(monkeypatch, second
     config = [{}]
     admitted = []
     monkeypatch.setattr(extract_llm, "load_config", lambda: config[0])
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: config[0])
     monkeypatch.setattr(extract_llm.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(extract_llm.time, "sleep",
                         lambda seconds: now.__setitem__(0, now[0] + seconds))

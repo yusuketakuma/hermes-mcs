@@ -2,6 +2,7 @@
 import json
 
 import extract_llm
+import cloud_inference
 from test_extraction_review import _message, db
 
 __all__ = ["db"]
@@ -12,6 +13,7 @@ _CFG = {"local_llm": {"model": "synthetic-configured-model"}}
 def test_success_content_records_the_configured_model(db, monkeypatch):
     db.save_messages([_message(body="独居です。")])
     monkeypatch.setattr(extract_llm, "load_config", lambda: _CFG)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: _CFG)
     monkeypatch.setattr(extract_llm, "_llm_call", lambda prompt, **kw: {
         "symptoms": [], "patient_context": [{"category": "living", "text": "独居です",
                              "evidence": "独居です", "subject": "patient"}]})

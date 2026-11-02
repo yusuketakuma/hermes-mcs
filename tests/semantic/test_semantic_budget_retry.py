@@ -7,6 +7,7 @@ import time
 
 import pytest
 
+import cloud_inference
 import semantic
 from semantic_testkit import _FakeJev, _cfg, _ledger, _llm, _message, _patient, _seeded
 
@@ -15,7 +16,6 @@ from semantic_testkit import _FakeJev, _cfg, _ledger, _llm, _message, _patient, 
 def test_summary_qc_repair_replays_bound_answer_and_rejects_tampering(tmp_path, monkeypatch, case):
     import copy
     import hashlib
-    import extract_llm
     import mcs_util
     import semantic_llm
     import semantic_projection
@@ -96,7 +96,7 @@ def test_summary_qc_repair_replays_bound_answer_and_rejects_tampering(tmp_path, 
                 raise ValueError('synthetic-receipt-invalid')
             return {}
 
-        monkeypatch.setattr(extract_llm, '_cloud_repair_answer_evidence', verify)
+        monkeypatch.setattr(cloud_inference, '_cloud_repair_answer_evidence', verify)
         assert semantic_drain._summary_repair_evidence(
             db.db, bundle, result, evidence, fp, policy, revision, render_phase='pre_render')
         rendered = copy.deepcopy(result)
@@ -449,7 +449,6 @@ def test_summary_repair_reservation_tracks_actual_dispatch(tmp_path, monkeypatch
 
 @pytest.mark.parametrize('interruption', ['budget', 'not_sent'])
 def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeypatch, interruption):
-    import extract_llm
     import inference_dependency_loss
     import mcs_util
     import semantic_policy
@@ -504,7 +503,7 @@ def test_canonical_summary_repair_survives_interrupted_reaudit(tmp_path, monkeyp
         return {}
 
     monkeypatch.setattr(semantic_audit, 'audit_claims', audit)
-    monkeypatch.setattr(extract_llm, '_cloud_repair_answer_evidence', verify)
+    monkeypatch.setattr(cloud_inference, '_cloud_repair_answer_evidence', verify)
     monkeypatch.setattr(semantic_transport, 'inference_requests', lambda: list(state['requests']))
     monkeypatch.setattr(semantic_transport, 'inference_receipt', lambda: state['receipt'])
     monkeypatch.setattr(semantic_transport, 'inference_contract', lambda: (

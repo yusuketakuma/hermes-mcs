@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import extract_llm
+import cloud_inference
 import extraction_refresh
 import notify_cards
 from notify_testkit import (CFG, NOW, _begin, _card, _deliver, _dispatch, _extract, _intent,
@@ -112,6 +113,7 @@ def test_postcommit_renderer_failure_does_not_hide_commit(monkeypatch, capsys, e
     db = sqlite3.connect(':memory:')
     monkeypatch.setattr(extract_llm.semantic_store, 'refresh_cards_allowed', lambda *a: True)
     monkeypatch.setattr(extract_llm, 'load_config', lambda: CFG)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: CFG)
     def broken(*args, **kwargs):
         raise error
     monkeypatch.setattr(extraction_refresh, 'refresh_extraction_cards', broken)

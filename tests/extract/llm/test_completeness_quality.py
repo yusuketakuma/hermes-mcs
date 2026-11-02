@@ -11,6 +11,7 @@ import time
 import pytest
 
 import extract_llm
+import cloud_inference
 from extract_testkit import _hash, _ledger, _message
 from inference_version import LLM_EXTRACT_VERSION
 
@@ -297,6 +298,7 @@ def test_settled_unknown_zero_history_cannot_be_promoted_by_final_meta(tmp_path,
         return None if kind == "repair" else copy.deepcopy(document)
 
     monkeypatch.setattr(extract_llm, "load_config", lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(extract_llm, "_llm_call", synthetic_model)
     db = _ledger(tmp_path)
     try:

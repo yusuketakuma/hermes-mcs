@@ -6,6 +6,7 @@ import pytest
 
 import cloud_policy
 import extract_llm
+import cloud_inference
 import semantic_drain
 from semantic_testkit import _cfg, _ledger, _message, _patient
 
@@ -115,6 +116,7 @@ def test_continuous_scope_selects_history_with_a_later_reply(history, monkeypatc
     cfg = _cfg('assist', fact_source='shadow', summary_mode='shadow', loop_mode='shadow')
     cfg['cloud_llm'] = {'mode': 'on', 'project_ids': [1]}
     monkeypatch.setattr(extract_llm, 'load_config', lambda *args: cfg)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda *args: cfg)
     monkeypatch.setattr(semantic_drain, 'load_config', lambda *args: cfg)
     monkeypatch.setattr(cloud_policy, 'api_key', lambda *args: 'synthetic-key')
     history.semantic_seed(1, [1], {'source': 'history_import'})

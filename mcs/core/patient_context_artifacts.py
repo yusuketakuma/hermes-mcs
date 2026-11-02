@@ -178,8 +178,8 @@ def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, contract, 
         raise _invalid()
     model = provider.get('model') if provider is not None else contract.get('model')
     if repair_provider is not None:
-        import extract_llm
-        if not extract_llm._known_cloud_contract(repair_provider):
+        import cloud_inference
+        if not cloud_inference._known_cloud_contract(repair_provider):
             raise _invalid()
     repair_model = repair_provider.get('model') if repair_provider is not None else model
     expected = {'repair_input_key': repair_input_key, 'source_key': source_key, 'source_sig': source_sig,
@@ -233,16 +233,16 @@ def staged_rows(db, pid, source_key, repair_input_key, *, source_sig, contract, 
                     or evidence['witness'] != doc['receipt_sig']):
                 raise _invalid()
             if repair_provider is None and provider is not None:
-                import extract_llm
+                import cloud_inference
                 if reservation.get('profile') is not None:
                     raise _invalid()
                 effort = reservation.get('effort')
                 if 'effort' not in reservation and provider.get('backend') == 'openai':
                     effort = 'low'
                 try:
-                    actual = extract_llm._cloud_contract(selection={'provider':provider.get('backend'),
+                    actual = cloud_inference._cloud_contract(selection={'provider':provider.get('backend'),
                         'model':reservation['model'], 'effort':effort})
-                except (extract_llm.CloudFallback, KeyError, TypeError):
+                except (cloud_inference.CloudFallback, KeyError, TypeError):
                     raise _invalid() from None
                 if actual != provider:
                     raise _invalid()

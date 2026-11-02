@@ -23,7 +23,13 @@ subprocess.run = forbidden
 subprocess.Popen = forbidden
 if case == "missing_gate":
     (checkout / "mcs/ops/release_apply_owner.py").unlink()
+if case == "cloud_owner_missing":
+    (checkout / "mcs/llm/cloud_inference.py").unlink()
 import mcs_update as updater
+# The shared cloud-contract owner must already be captured from this
+# generation: a lazy import after the tree reset cannot satisfy it.
+cloud_owner = sys.modules.get("cloud_inference")
+assert cloud_owner is not None
 if case == "missing_gate":
     import contextlib, io
     assert updater._release_legacy_scope is None
@@ -108,6 +114,11 @@ loaded = {name: module for name, module in sys.modules.items()
                       "notify_sender", "local_llm", "llm_admission", "mcs_restore",
                       "present_discord", "present_slack", "present_lineworks", "release_apply_owner"}}
 loaded.update({name: sys.modules[name] for name in ("provider_settings", "cloud_policy", "semantic_jev")})
+loaded["cloud_inference"] = cloud_owner
+# processing_route reaches the shared owner only lazily through _route;
+# importing it before the cut keeps this probe on the loaded generation.
+import processing_route
+known_contract = cloud_owner._known_cloud_contract
 gate_scope = updater._release_legacy_scope
 gate_globals = gate_scope.__wrapped__.__globals__
 assert gate_globals is sys.modules["release_apply_owner"].__dict__
@@ -120,6 +131,22 @@ def cut(args):
     (checkout / "mcs" / "core" / "ledger.py").write_text("raise AssertionError('mixed generation import')\n")
     assert updater._release_legacy_scope is gate_scope
     assert updater._release_legacy_scope.__wrapped__.__globals__ is gate_globals
+    # The shared owner must stay the loaded generation and a lazy consumer
+    # must still reach its real contract validation after the cut.
+    assert sys.modules.get("cloud_inference") is cloud_owner
+    called = []
+    def spy(contract):
+        called.append(True)
+        return known_contract(contract)
+    cloud_owner._known_cloud_contract = spy
+    try:
+        contract = dict(cloud_owner._CLOUD_CONTRACT)
+        row = {"kind": "extract_llm", "model": contract["model"]}
+        meta = {**contract, "actual_model": contract["model"]}
+        assert processing_route._route(row, meta, {"unit": 1}) == "cloud"
+        assert called
+    finally:
+        cloud_owner._known_cloud_contract = known_contract
 updater._git_out = cut
 if case == "postcheck":
     cut(["reset", "--hard", "old"])
@@ -221,10 +248,7 @@ print("synthetic cross-generation closure ok")
 '''
 
 
-@pytest.mark.parametrize("case", ["missing_gate", "hold", "approved", "postcheck", "rollback", "recover",
-                                      "rollback:save_failure", "rollback:unreadable",
-                                      "recover:save_failure", "recover:unreadable"])
-def test_cold_updater_uses_loaded_restore_and_postcheck_after_old_tree_cut(tmp_path, case):
+def _cold_child(tmp_path, case):
     source = Path(__file__).resolve().parents[2]
     checkout = tmp_path / "checkout"
     shutil.copytree(source / "mcs", checkout / "mcs", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
@@ -232,11 +256,27 @@ def test_cold_updater_uses_loaded_restore_and_postcheck_after_old_tree_cut(tmp_p
     recovery.mkdir(parents=True)
     (recovery / "mcs_recover.py").write_text("def request_gateway_restart(*args, **kwargs):\n    raise AssertionError('unexpected restart')\n")
     root = tmp_path / "runtime"
-    result = subprocess.run(
+    return subprocess.run(
         [sys.executable, "-I", "-B", "-c", _CHILD, str(checkout), str(root), case],
         cwd=tmp_path, env={**os.environ, "MCS_ROOT": str(root)},
-        capture_output=True, text=True, timeout=45, check=True)
+        capture_output=True, text=True, timeout=45)
+
+
+@pytest.mark.parametrize("case", ["missing_gate", "hold", "approved", "postcheck", "rollback", "recover",
+                                      "rollback:save_failure", "rollback:unreadable",
+                                      "recover:save_failure", "recover:unreadable"])
+def test_cold_updater_uses_loaded_restore_and_postcheck_after_old_tree_cut(tmp_path, case):
+    result = _cold_child(tmp_path, case)
+    assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "synthetic cross-generation closure ok"
+
+
+def test_cold_updater_fails_when_the_shared_cloud_owner_is_absent(tmp_path):
+    """The preload is load-bearing: without cloud_inference in the synthetic
+    tree the cold updater must refuse to run rather than mix generations."""
+    result = _cold_child(tmp_path, "cloud_owner_missing")
+    assert result.returncode != 0
+    assert "cloud_inference" in result.stderr
 
 
 @pytest.mark.parametrize("owner,phase,adopted,expected", [

@@ -2,6 +2,7 @@
 from contextlib import closing
 from datetime import datetime
 import json
+import cloud_inference
 import sqlite3
 
 import pytest
@@ -158,6 +159,7 @@ def test_reply_matching_uses_explicit_configuration_instead_of_host_settings(mon
 
     selected = []
     monkeypatch.setattr(semantic_transport, 'load_config', lambda: pytest.fail('unexpected host settings read'))
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: pytest.fail('unexpected host settings read'))
     monkeypatch.setattr(request_loops, 'latest_policy', lambda _: 'synthetic-policy')
     monkeypatch.setattr(request_loops, 'effective_loop_states',
                         lambda *_args, **kwargs: selected.append(kwargs['local_model']) or [])

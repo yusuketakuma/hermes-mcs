@@ -5,6 +5,7 @@ import time
 import pytest
 
 import extract_llm as worker
+import cloud_inference
 import initial_import_state
 import patient_context_refresh as refresh
 from test_patient_context_refresh import CFG, document, finish, runtime, seed, step
@@ -20,7 +21,7 @@ def cloud_schedule(runtime, monkeypatch):
     class Cloud:
         def __init__(self, ledger, config, **kwargs):
             assert ledger is led
-            self.contract = worker._cloud_contract()
+            self.contract = cloud_inference._cloud_contract()
             self.model = self.contract['model']
             self.possibly_sent = False
         def __call__(self, prompt, **kwargs):
@@ -37,7 +38,7 @@ def cloud_schedule(runtime, monkeypatch):
             return None
         def discard(self):
             return None
-    monkeypatch.setattr(worker, '_CloudProvider', Cloud)
+    monkeypatch.setattr(cloud_inference, '_CloudProvider', Cloud)
     return runtime, cfg
 
 
@@ -50,6 +51,7 @@ def test_cloud_draft_waits_for_two_source_scans_and_audits_before_quality(cloud_
     cfg = {**cfg, 'semantic': {**CFG['semantic'], 'project_ids': [1, 2], 'daily_request_budget': 3000}}
     clock.mono = time.monotonic()
     monkeypatch.setattr(worker, 'load_config', lambda: cfg)
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: cfg)
     monkeypatch.setattr(worker, '_writer_current', lambda **_kwargs: True)
     monkeypatch.setattr(semantic_jev, 'api_key', lambda *_: 'synthetic-jev-key')
     monkeypatch.setattr(worker.cloud_policy, 'api_key', lambda *_: 'synthetic-anthropic-key')

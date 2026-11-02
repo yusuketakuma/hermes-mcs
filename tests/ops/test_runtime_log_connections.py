@@ -9,6 +9,7 @@ import sys
 import time
 from types import SimpleNamespace
 
+import cloud_inference
 import pytest
 
 from adapters.common import eventlog
@@ -134,7 +135,7 @@ def test_cloud_pool_exec_preserves_parent_and_worker_arguments(tmp_path, monkeyp
     import extract_llm
     (tmp_path / "data").mkdir()
     cfg = {"cloud_llm": {"mode": "on", "project_ids": [1], "max_concurrency": 1}}
-    monkeypatch.setattr(extract_llm, "_cloud_settings", lambda cfg: cfg["cloud_llm"])
+    monkeypatch.setattr(cloud_inference, "_cloud_settings", lambda cfg: cfg["cloud_llm"])
     monkeypatch.setattr(extract_llm.cloud_policy, "selected_key", lambda *a, **k: "synthetic")
     monkeypatch.setattr(cloud_backlog, "memory_workers", lambda limit: 1)
     monkeypatch.delenv("MCS_RUN_LOG_HELPER", raising=False)

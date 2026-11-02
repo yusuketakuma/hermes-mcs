@@ -252,7 +252,7 @@ def _route(row, meta, content):
         return None
     backend = meta.get("backend")
     import cloud_policy
-    import extract_llm
+    import cloud_inference
     if backend is None:
         try:
             cloud_policy._price_definition(row["model"])
@@ -261,4 +261,4 @@ def _route(row, meta, content):
         return None
     contract = {key: meta.get(key) for key in ("backend", "model", "prompt")}
     return "cloud" if (backend in cloud_policy.PROVIDERS and contract["model"] == row["model"]
-                       and extract_llm._known_cloud_contract(contract)) else None
+                       and cloud_inference._known_cloud_contract(contract)) else None

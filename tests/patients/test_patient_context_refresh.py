@@ -10,6 +10,7 @@ import pytest
 
 from extract_testkit import _ledger, _message
 from mcs_queries import JST
+import cloud_inference
 import patient_context_refresh as context_refresh
 
 
@@ -54,7 +55,7 @@ def _raw_proof(led, pid, mid, *, cloud=False):
     from inference_version import CURRENT_VERSION, VERSION_KEY
     row = dict(led.db.execute('SELECT * FROM messages WHERE project_id=? AND message_id=?', (pid, mid)).fetchone())
     row['_source_binding'] = inference_dependency_loss.source_binding(led.db, pid, mid)
-    contract = extract_llm._cloud_contract() if cloud else None
+    contract = cloud_inference._cloud_contract() if cloud else None
     model = contract['model'] if cloud else 'synthetic'
     row['_target'] = ('', model)
     if cloud:

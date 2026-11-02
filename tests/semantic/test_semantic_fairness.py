@@ -10,6 +10,7 @@ All synthetic: stub LLM/Jev, temp SQLite. Covers:
     with None (unknown) instead of fake zeros where unmeasured
 """
 import writer_lock
+import cloud_inference
 import json
 import time
 from datetime import datetime, timezone
@@ -166,6 +167,7 @@ def test_drain_cli_does_not_initialize_writer_before_lock(tmp_path, monkeypatch)
     monkeypatch.setattr(semantic_drain.time, 'monotonic', lambda: clock[0])
     monkeypatch.setattr(semantic_drain.time, 'sleep', lambda seconds: None)
     monkeypatch.setattr(semantic_drain, 'load_config', lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(semantic_drain.sys, 'argv', ['semantic_drain', '--drain', '--stop-after', '1'])
     def no_lock():
         clock[0] = 2.0
@@ -186,6 +188,7 @@ def test_drain_cli_output_lines_carry_ts_and_pid(tmp_path, monkeypatch, capsys):
     import ledger
     monkeypatch.setattr(semantic_drain.time, 'sleep', lambda seconds: None)
     monkeypatch.setattr(semantic_drain, 'load_config', lambda: {})
+    monkeypatch.setattr(cloud_inference, 'load_config', lambda: {})
     monkeypatch.setattr(semantic_drain.sys, 'argv', ['semantic_drain', '--drain', '--stop-after', '60'])
     monkeypatch.setattr(writer_lock, 'acquire_run_lock',
                         lambda: os.open(tmp_path / 'lock', os.O_CREAT | os.O_RDWR))
