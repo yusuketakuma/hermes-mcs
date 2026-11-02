@@ -639,3 +639,27 @@ def test_same_key_trigger_cannot_replace_the_acknowledged_value(prepared):
         guard=row["_checkpoint_guard"])
     assert row["_checkpoint_conflict"]
     assert ledger.db.execute("SELECT COUNT(*) FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()[0] == 1
+
+
+def test_final_reads_checkpoint_identity_once_inside_its_transaction(prepared, monkeypatch):
+    ledger, row, value = prepared
+    reads, original = [], llm._checkpoint_identity
+
+    def read(db, *args, **kwargs):
+        reads.append(db.in_transaction)
+        return original(db, *args, **kwargs)
+
+    monkeypatch.setattr(llm, "_checkpoint_identity", read)
+    assert _final(ledger, row, {"summary": value["summary"]}) == "written"
+    assert reads == [True]
+    assert not ledger.db.in_transaction
+
+
+def test_final_without_captured_identity_rejects_before_checkpoint_read(prepared, monkeypatch):
+    ledger, row, value = prepared
+    row.pop("_checkpoint_identity")
+    monkeypatch.setattr(llm, "_checkpoint_identity", lambda *args, **kwargs:
+                        pytest.fail("missing checkpoint witness must reject before reading"))
+    assert _final(ledger, row, {"summary": value["summary"]}) == "rejected"
+    assert not ledger.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_llm'").fetchone()
+    assert ledger.db.execute("SELECT 1 FROM artifacts WHERE kind='extract_llm_chunk'").fetchone()

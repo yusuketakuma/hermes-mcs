@@ -3411,7 +3411,12 @@ def _checkpoint_matches(db, r, context, keys):
     expected = r.get("_checkpoint_identity")
     if expected is None:
         return False
-    size, layout, current = _checkpoint_identity(db, r, context, r["_chunk_size"])
+    return _checkpoint_state_matches(r, expected, keys,
+                                     _checkpoint_identity(db, r, context, r["_chunk_size"]))
+
+
+def _checkpoint_state_matches(r, expected, keys, state):
+    size, layout, current = state
     if size != r["_chunk_size"] or layout != r.get("_checkpoint_layout"):
         return False
     return all(current.get(part) == expected.get(part)
@@ -3749,8 +3754,13 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
         with ledger.db:
             ledger.db.execute("BEGIN IMMEDIATE")
             if (r.get("_checkpoint_conflict") or not _source_writable(ledger.db, r)
-                    or not _owns_current_source(ledger, r, r.get("_current_lease"))
-                    or not _checkpoint_matches(ledger.db, r, context, used_keys)):
+                    or not _owns_current_source(ledger, r, r.get("_current_lease"))):
+                return "rejected"
+            expected = r.get("_checkpoint_identity")
+            if expected is None:
+                return "rejected"
+            state = _checkpoint_identity(ledger.db, r, context, r["_chunk_size"])
+            if not _checkpoint_state_matches(r, expected, used_keys, state):
                 return "rejected"
             if check_current and _current(ledger, r["message_id"], r["content_hash"]):
                 return "current"
@@ -3758,7 +3768,7 @@ def _commit_extraction_atomic(ledger, r, content, context, integrity, qc_fix, ex
                 prior = _prior_extract(ledger.db, r)
                 if prior is None or _prior_identity(prior) != expected_prior:
                     return "rejected"
-            _, _, current = _checkpoint_identity(ledger.db, r, context, r["_chunk_size"])
+            _, _, current = state
             # The existing checkpoint cleanup is safe only after every adopted
             # repaired leaf has been copied into the protected final artifact.
             repaired = False
@@ -6136,18 +6146,7 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                             (index, (r, ctx, saved, hints, qc)))
                         _handle(r, ctx, d, metas[index], lease,
                                 chunks_out, qc)
-        if cloud_only and carry:
-            final_settled, final_carried, final_pids = _settle_carry(
-                ledger, carry, final=False, fence=_WRITER_STATE,
-                lock_context=_write_lock(per_write_lock, wait_s=write_wait_s, deadline=deadline),
-                report=False, preserve_on_fence_loss=True, deadline=deadline)
-            done += final_settled['done']
-            held_prior += final_settled['held_prior']
-            deferred += final_settled['deferred']
-            carried += final_carried
-            done_pids.update(final_pids)
-            carry_out.extend(carry)
-        if pending_writes or (carry and not cloud_only):
+        if pending_writes:
             tail_lock = (_write_lock(per_write_lock, wait_s=write_wait_s, deadline=deadline)
                          if cloud_only else lock(per_write_lock))
             with tail_lock as held:
@@ -6157,39 +6156,6 @@ def run_pending(ledger, limit: int = 20, budget_s: float = 180,
                         carry_out.append((r, lease, functools.partial(
                             _commit, r, d, ctx, integrity, qc, used_keys)))
                 else:
-                    for i, (r, lease, commit) in enumerate(carry if carry and not cloud_only else ()):
-                        if held and _owns_current_source(ledger, r, lease):
-                            settled = dict.fromkeys(("done", "held_prior", "deferred"), 0)
-                            commit(settled=settled, shadow=shadow_tasks)
-                            # The thunk closes over its original pass's counters.
-                            done += settled["done"]
-                            held_prior += settled["held_prior"]
-                            deferred += settled["deferred"]
-                            if settled["done"]:
-                                done_pids.add(r["project_id"])
-                            _release(ledger, r, lease)
-                            carried += 1
-                        elif held or lease <= time.time() + _CARRY_MARGIN_S:
-                            if r.get("_cloud_discard") and not _owns_current_source(ledger, r, lease):
-                                r["_cloud_discard"]()
-                            # the source moved / lease lapsed, or no time
-                            # left to wait: stays pending, no attempt burned
-                            _release(ledger, r, lease)
-                            deferred += 1
-                        else:
-                            renewed = _renew(ledger, r, lease)
-                            if renewed is None:
-                                if r.get("_cloud_discard"):
-                                    r["_cloud_discard"]()
-                                # body changed or lease lost: our old claim
-                                # must not keep hiding the new body
-                                _release(ledger, r, lease)
-                                deferred += 1
-                            else:
-                                # the caller keeps this list if we raise
-                                # below: its lease must match the DB now
-                                carry[i] = (r, renewed, commit)
-                                carry_out.append((r, renewed, commit))
                     for r, d, ctx, integrity, qc, lease, used_keys in pending_writes:
                         # still lock-bound, or the body changed/lease lapsed
                         # while we waited: the row stays pending for the
