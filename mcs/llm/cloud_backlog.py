@@ -25,17 +25,21 @@ def owner_alive():
 
 
 def _lock(path):
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-    info = os.fstat(fd)
-    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o077:
-        os.close(fd)
-        raise ValueError("cloud_lock_untrusted")
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK, 0o600)
+    held = False
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        os.close(fd)
-        return None
-    return fd
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1 or info.st_mode & 0o077:
+            raise ValueError("cloud_lock_untrusted")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return None
+        held = True
+        return fd
+    finally:
+        if not held:
+            os.close(fd)
 
 
 @contextmanager
