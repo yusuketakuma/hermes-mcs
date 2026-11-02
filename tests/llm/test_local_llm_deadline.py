@@ -192,7 +192,7 @@ def test_post_popen_pre_communicate_expiry_is_not_sent(monkeypatch):
 
 
 @pytest.mark.parametrize("error,kind", [
-    (bounded_http.NotSentTimeout("x"), "unreachable"),
+    (bounded_http.NotSentTimeout("x"), "not_sent"),
     (TimeoutError("x"), "transport"),
 ])
 def test_chat_classifies_not_sent_timeout(error, kind):
