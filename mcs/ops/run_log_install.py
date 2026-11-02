@@ -120,7 +120,18 @@ def _read_at(directory, name, limit=MAX_SOURCE):
     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
                  dir_fd=directory)
     try:
-        return _read(fd, limit)
+        before = _checked(fd)
+        raw = _read(fd, limit)
+        held = _checked(fd)
+        named = os.stat(name, dir_fd=directory, follow_symlinks=False)
+
+        def snapshot(info):
+            return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_nlink,
+                    info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+        if snapshot(before) != snapshot(held) or snapshot(held) != snapshot(named):
+            raise LogInstallError('run_log_helper_changed')
+        return raw
     finally:
         os.close(fd)
 
@@ -207,6 +218,34 @@ def helper_path(root, recovery_dir=None, *, checkout=None, require_installed=Fal
             raise LogInstallError('run_log_source_unavailable')
         digest = hashlib.sha256(source).hexdigest()
         return os.path.join(recovery_dir, _pointer(root)[:-5] + '-' + digest + '.py')
+    except Exception:
+        raise LogInstallError('run_log_helper_unverified') from None
+
+
+def verify_installed_helper(root, recovery_dir, helper):
+    """Verify a deployed immutable generation while retaining the current receipt checks."""
+    try:
+        root, recovery_dir = _root(root), _canonical_leaf(recovery_dir)
+        if not os.path.isabs(helper):
+            raise LogInstallError('run_log_helper_unverified')
+        helper = _canonical_leaf(helper)
+        prefix = _pointer(root)[:-5] + '-'
+        name = Path(helper).name
+        if (Path(helper).parent != Path(recovery_dir) or not name.startswith(prefix)
+                or re.fullmatch(r'[0-9a-f]{64}\.py', name[len(prefix):]) is None):
+            raise LogInstallError('run_log_helper_unverified')
+        with _directory(recovery_dir, write=False) as directory:
+            receipt, _ = _receipt(directory, root)
+            raw = _read_at(directory, name)
+            if hashlib.sha256(raw).hexdigest() != name[len(prefix):-3]:
+                raise LogInstallError('run_log_helper_hash_mismatch')
+            if _receipt(directory, root)[0] != receipt:
+                raise LogInstallError('run_log_helper_changed')
+            held = _checked(directory, directory=True)
+            named = os.stat(recovery_dir, follow_symlinks=False)
+            if (held.st_dev, held.st_ino) != (named.st_dev, named.st_ino):
+                raise LogInstallError('run_log_helper_changed')
+        return helper
     except Exception:
         raise LogInstallError('run_log_helper_unverified') from None
 

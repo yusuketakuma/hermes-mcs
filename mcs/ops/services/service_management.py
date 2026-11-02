@@ -123,8 +123,8 @@ def recovery_owned(*, paths: ServicePaths) -> bool:
         return (len(argv) == 10 and argv[1] == '-I'
                 and argv[5] == str(Path(paths.root, 'data'))
                 and argv[8] == str(root / 'mcs_recover.py')
-                and argv[2] == run_log_install.helper_path(
-                    paths.root, paths.recovery_dir, require_installed=True))
+                and argv[2] == run_log_install.verify_installed_helper(
+                    paths.root, paths.recovery_dir, argv[2]))
     except (OSError, ValueError, TypeError, RuntimeError):
         return False
 
