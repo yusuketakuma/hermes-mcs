@@ -3078,7 +3078,8 @@ _PRIOR_CONTEXT_SOURCE = "3140265acfed995e8f65528714af0365f302a33a10870621e00fdd7
 def _pending_context_frame(db, r, *, attempt, enabled):
     """Resume the exact frozen attempt before creating any new medication reference inputs."""
     records = []
-    for row in db.execute("SELECT meta FROM artifacts WHERE kind='extract_llm_chunk' "
+    legacy_binding = None
+    for row in db.execute("SELECT meta,content FROM artifacts WHERE kind='extract_llm_chunk' "
                           "AND project_id=? AND message_id=? AND model=?",
                           (r["project_id"], r["message_id"], r["_target"][1])):
         meta = loads_dict(row[0])
@@ -3086,6 +3087,23 @@ def _pending_context_frame(db, r, *, attempt, enabled):
                 and meta.get("ver") == EXTRACT_VERSION
                 and inference.is_current(meta, target=_INFERENCE_VERSION)
                 and meta.get("invalidated") in (None, False, 0)):
+            # Only a proven old local envelope may discard an unusable value;
+            # unknown provider/repair records retain their hold and receipts.
+            if (not r.get("_provider_contract") and r.get("_cloud_mode") in (None, "off")
+                    and meta.get("actual_model") == r["_target"][1]
+                    and not any(key in meta for key in ("provider_leaf", "backend", "prompt", "config_generation",
+                        "quality_status", "quality_pass", "quality_lease", "split_size", "context_snapshot"))):
+                try:
+                    decoded = strict_json(row[1])
+                except (ValueError, TypeError, RecursionError):
+                    decoded = {}
+                if not isinstance(decoded, dict):
+                    if legacy_binding is None:
+                        legacy = {key: value for key, value in r.items() if key != "_frame"}
+                        context = r["_input_context"] if "_input_context" in r else _thread_context(db, r)
+                        legacy_binding = _chunk_context(legacy, context, checkpoint=True)
+                    if meta.get("context") == legacy_binding:
+                        continue
             if not mcs_util.valid_hash(meta.get("context")):
                 raise ValueError("pending_context_unverifiable")
             records.append(meta)

@@ -499,7 +499,7 @@ def test_lost_source_or_lease_never_authorizes_the_optional_dispatch(tmp_path, m
                         calls.append(args) or copy.deepcopy(OBSERVATIONS))
     try:
         result = extract_llm.run_pending(db, budget_s=300, workers=workers)
-        assert len(calls) == workers and result["done"] == 0
+        assert calls == [] and result["done"] == 0
         assert result["deferred"] == workers
         assert not db.artifacts("extract_llm") and not db.artifacts("extract_llm_chunk")
     finally:
@@ -515,6 +515,8 @@ def test_parallel_cancellation_releases_checkpoint_waiters_before_executor_shutd
     first = threading.Event()
     calls, lock = [], threading.Lock()
     monkeypatch.setattr(extract_llm, "_probe_format", lambda **kwargs: "plain")
+    # Exercise the legacy checkpoint-wait phase without the new pre-dispatch owner read.
+    monkeypatch.setattr(extract_llm, "_frame_medications", lambda _: None)
 
     def model(*args, **kwargs):
         with lock:
@@ -534,6 +536,56 @@ def test_parallel_cancellation_releases_checkpoint_waiters_before_executor_shutd
         with pytest.raises(KeyboardInterrupt):
             extract_llm.run_pending(db, budget_s=300, workers=2)
         assert time.monotonic() - started < 10 and len(calls) == 2
+        assert not db.artifacts("extract_llm")
+        assert db.db.execute("SELECT count(*) FROM fetch_jobs WHERE kind='extract_claim'").fetchone()[0] == 0
+    finally:
+        db.close()
+
+
+def test_source_lost_by_first_answer_never_dispatches_the_optional_repair(tmp_path, monkeypatch):
+    db = _ledger(tmp_path)
+    body = PREFIX + "本人の血圧120/80です。"
+    db.save_messages([_message(body=body)])
+    owned, calls = [True], []
+    monkeypatch.setattr(extract_llm, "_probe_format", lambda **kwargs: "plain")
+    monkeypatch.setattr(extract_llm, "_owns_current_source", lambda *args: owned[0])
+    def model(*args, **kwargs):
+        calls.append(args)
+        owned[0] = False
+        return copy.deepcopy(OBSERVATIONS)
+    monkeypatch.setattr(extract_llm, "_llm_call", model)
+    try:
+        result = extract_llm.run_pending(db, budget_s=300)
+        assert len(calls) == 1 and result["done"] == 0 and result["deferred"] == 1
+        assert not db.artifacts("extract_llm") and not db.artifacts("extract_llm_chunk")
+    finally:
+        db.close()
+
+
+def test_parallel_cancellation_releases_medication_owner_waiters(tmp_path, monkeypatch):
+    from concurrent import futures
+    import queue
+    db = _ledger(tmp_path)
+    db.save_messages([_message(mid=i, body=PREFIX + "本人の血圧120/80です。") for i in (1, 2)])
+    queued = threading.Event()
+    real_queue = queue.SimpleQueue
+    class ObservedQueue(real_queue):
+        def put(self, item, *args, **kwargs):
+            super().put(item, *args, **kwargs)
+            if isinstance(item, tuple) and item[0] == "owner":
+                queued.set()
+    monkeypatch.setattr(extract_llm.queue, "SimpleQueue", ObservedQueue)
+    monkeypatch.setattr(extract_llm, "_probe_format", lambda **kwargs: "plain")
+    monkeypatch.setattr(extract_llm, "_llm_call", lambda *a, **k: pytest.fail("model ran before owner read"))
+    def cancel(*args, **kwargs):
+        assert queued.wait(5)
+        raise KeyboardInterrupt("synthetic cancellation during owner read")
+    monkeypatch.setattr(futures, "wait", cancel)
+    started = time.monotonic()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            extract_llm.run_pending(db, budget_s=300, workers=2)
+        assert time.monotonic() - started < 10
         assert not db.artifacts("extract_llm")
         assert db.db.execute("SELECT count(*) FROM fetch_jobs WHERE kind='extract_claim'").fetchone()[0] == 0
     finally:
